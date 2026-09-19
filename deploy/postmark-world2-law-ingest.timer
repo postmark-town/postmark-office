@@ -1,0 +1,22 @@
+[Unit]
+Description=World 2.0 law projection poll, every 15 minutes — the rulebook's own clock (postmark#2893)
+
+[Timer]
+# :04/:19/:34/:49 — the SAME marks postmark-world2-ingest.timer carries, kept
+# deliberately rather than chosen fresh. Two reasons. The first is the one that
+# put them there: these are off the :07/:22/:37/:52 that office-rehydrate and
+# stripe-watch occupy, so four lanes are not contending at once. The second is
+# that this unit is the parked one's law half and nothing else — a different
+# cadence here would be a second decision riding along with the split, and the
+# founder ruled the split, not a new schedule.
+OnCalendar=*-*-* *:04,19,34,49:00 UTC
+RandomizedDelaySec=45
+# A box that was down through a tick does NOT owe that tick. The pen re-derives
+# the whole projection from the repo head every run, so a missed 15 minutes is
+# repaired by the next fire and a catch-up burst at boot would buy nothing but
+# contention. Same reasoning as the poll this is split from.
+Persistent=false
+AccuracySec=15s
+
+[Install]
+WantedBy=timers.target

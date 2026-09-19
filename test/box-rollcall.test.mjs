@@ -1651,7 +1651,11 @@ test("the manifest refuses a tree row that cannot say who owns it, what breaks, 
 
 test("the shipped manifest carries a tree row for every world2 lane, all pinned to the release", () => {
   const m = manifest();
-  for (const lane of ["clearing", "notary", "backup", "ingest"]) {
+  // `law-ingest` joined on 2026-09-19 (postmark#2893, the law pen's own unit).
+  // This list is written by hand while the test's own sentence says EVERY lane,
+  // so a new world2 unit that never reaches this line gets a tree row nothing
+  // checks — which is how the check stops reading the behaviour it names.
+  for (const lane of ["clearing", "notary", "backup", "ingest", "law-ingest"]) {
     const row = m.trees.rows.find((r) => r.unit === "postmark-world2-" + lane + ".service");
     assert.ok(row, "no tree row for the " + lane + " lane");
     assert.equal(row.env_key, "WORLD2_OFFICE");
