@@ -449,7 +449,15 @@ export async function rideViaOffice(worldClone, payload = {}, key = null, deps =
       "a ride is measured from the door you entered by, and no enter of this vehicle carrying a `via` stands for you. exit and enter again at a stop, and the timer has an origin");
 
   const from = anchorOfStop(origin.stop, service);
-  const distanceM = straightLineM(from, anchorOfStop(to, service));
+  // ⚑ ROUNDED FIRST, THEN TIMED, and its own falsifier found this. The payload
+  // stores `distance_m` as a whole number and `arrives_at` as an instant; timing
+  // the UNROUNDED line made the two disagree by 24 ms on the Pando leg — small,
+  // and the wrong kind of small: a reader re-deriving the arrival from the
+  // distance the row itself publishes would get a different answer from the one
+  // the row publishes. A stored answer that cannot be re-derived from its own
+  // stored inputs is the defect, not the milliseconds.
+  const exact = straightLineM(from, anchorOfStop(to, service));
+  const distanceM = exact == null ? null : Math.round(exact);
   const ms = rideMillis(distanceM, service.pace);
   if (ms == null)
     throw bounce(500, "the ride could not be timed",
@@ -459,7 +467,7 @@ export async function rideViaOffice(worldClone, payload = {}, key = null, deps =
   const arrivesAt = new Date(nowMs + ms).toISOString();
   const ride = {
     origin: origin.stop, to,
-    distance_m: Math.round(distanceM),
+    distance_m: distanceM,
     pace_km_per_crossing: Number(service.pace),
     declared_at: declaredAt, arrives_at: arrivesAt,
   };

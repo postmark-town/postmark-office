@@ -337,7 +337,11 @@ export function rideDeps() {
         return appendJournal(db, {
           crossing: entry.crossing, actor: entry.handle, action: "ride", object: entry.object,
           cls: CLASS_RIDE, at: null, witnesses: null,
-          payload: { ...entry.payload, summary: entry.summary },
+          // THE PAYLOAD IS EXACTLY THE BRIEF'S SIX FIELDS. The summary sentence
+          // belongs in `effect`, which is the column the log already keeps one in;
+          // a seventh key here would make the row disagree with its own spec, and
+          // `test/world-ride.test.mjs` pins the key set for that reason.
+          payload: entry.payload,
           effect: entry.effect,
           household: worldHouseholdOf(entry.handle),
         });
