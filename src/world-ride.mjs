@@ -282,6 +282,110 @@ export function vehicleGroundExtras({ service, entryStop = null, standingRide = 
   };
 }
 
+// ── visibility (§ 11) — all of it DERIVED, none of it a new store ───────────
+//
+// Keemin: how a resident learns the vehicle exists is "just as important as the
+// functionality". The numbers say why: 2,077 journal acts by 75 actors since
+// 2026-09-11, 638 of them walks, and ZERO naming the Post Office — while nine
+// of those walks ended standing on a wharf she calls at. Residents were walking
+// to her doors and finding nothing that said what the door was for.
+//
+// Every line below is a function of the timetable and a standpoint. Nothing is
+// written anywhere, and nothing is written on residents' own moorings: a stop is
+// a stop because the wheelhouse names it, and a mark that stopped being named
+// stops carrying the sentence in the same read.
+
+/** Is this mark a stop a vehicle calls at — the derived annotation a card adds
+ *  when it describes a mark (§ 11 item 5). Null when it is not one, so an
+ *  ordinary mark's card is byte-identical to what it was. */
+export function stopAnnotationFor(markId, service, worldState = null) {
+  if (!service || !isVehicleStop(markId, service)) return null;
+  const vessel = vesselIdOf(service);
+  if (String(markId) === String(vessel)) return null;
+  const body = (worldState?.marks ?? []).find((m) => m.id === vessel) ?? null;
+  if (worldState && String(body?.class ?? "") !== "vehicle") return null;
+  return `a ${vessel} stop — enter this mark to board her, wherever her hull is`;
+}
+
+/**
+ * THE STOP A STANDPOINT IS AT, or null.
+ *
+ * ⚑ MEASURED WITH THE ENTER DOOR'S REACH, not the stop-answers' 25 m. A resident
+ * forty metres from a mooring may enter it — the reach rule is the mark's extent
+ * or EARSHOT_M (60) of its anchor — and telling them nothing at a distance the
+ * door would admit them from is exactly the invisibility § 11 exists to end. The
+ * two numbers answer different questions: `STOP_EARSHOT_M` is "close enough to
+ * hear the bell", this is "close enough to board".
+ */
+export function stopUnderfoot(standpoint, service, worldState = null, { earshotM = 60 } = {}) {
+  const x = Number(standpoint?.x), y = Number(standpoint?.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !service) return null;
+  const byId = new Map((worldState?.marks ?? []).map((m) => [m.id, m]));
+  for (const s of stopsOfService(service)) {
+    if (s.markId === vesselIdOf(service)) continue;
+    const m = byId.get(s.markId);
+    const e = m?.extent;
+    const inside = e && e.w > 0 && e.h > 0
+      && x >= s.at.x - e.w / 2 && x <= s.at.x + e.w / 2 && y >= s.at.y - e.h / 2 && y <= s.at.y + e.h / 2;
+    if (inside || Math.hypot(x - s.at.x, y - s.at.y) <= earshotM) return s.markId;
+  }
+  return null;
+}
+
+/**
+ * THE TRANSPORT LINE (§ 11 item 1) — what a resident standing at a wharf is
+ * told the wharf is for, with the ride times measured FROM HERE.
+ *
+ * Null away from a stop, so an answer from anywhere else is unchanged.
+ */
+export function transportAt(markId, service, worldState = null) {
+  if (!stopAnnotationFor(markId, service, worldState)) return null;
+  const vessel = vesselIdOf(service);
+  const from = anchorOfStop(markId, service);
+  const pace = Number(service?.pace);
+  const onward = stopsOfService(service)
+    .filter((s) => s.markId !== markId && s.markId !== vessel)
+    .map((s) => {
+      const ms = rideMillis(straightLineM(from, s.at), pace);
+      return { mark: s.markId, ride_minutes: ms == null ? null : Math.round(ms / 60000) };
+    });
+  return {
+    stop: markId,
+    vehicle: vessel,
+    line: `${vessel} calls here — enter ${markId} to board her, wherever her hull is; from aboard, ride to: ${onward.map((o) => `${o.mark} (~${o.ride_minutes} min)`).join(", ") || "(nowhere else on her timetable)"}.`,
+    ride_to: onward,
+  };
+}
+
+/**
+ * THE STANDING DOORSTEP LINE (§ 11 item 2) — one sentence for a resident who is
+ * NOT aboard: that she exists, how many places she calls at, and which of them
+ * is nearest to where they stand.
+ */
+export function doorstepTransport(service, standpoint = null, worldState = null) {
+  if (!service) return null;
+  const vessel = vesselIdOf(service);
+  const body = (worldState?.marks ?? []).find((m) => m.id === vessel) ?? null;
+  if (worldState && String(body?.class ?? "") !== "vehicle") return null;
+  const stops = stopsOfService(service).filter((s) => s.markId !== vessel);
+  if (!stops.length) return null;
+  const here = standpoint && Number.isFinite(standpoint.x) && Number.isFinite(standpoint.y)
+    ? { x: Number(standpoint.x), y: Number(standpoint.y) } : null;
+  let nearest = null;
+  if (here) {
+    for (const s of stops) {
+      const d = straightLineM(here, s.at);
+      if (d != null && (!nearest || d < nearest.distance_m)) nearest = { mark: s.markId, distance_m: Math.round(d) };
+    }
+  }
+  return {
+    vehicle: vessel,
+    stops: stops.length,
+    ...(nearest ? { nearest } : {}),
+    line: `${vessel}: stops at ${stops.length} place${stops.length === 1 ? "" : "s"}${nearest ? ` (nearest to you: ${nearest.mark}, ${nearest.distance_m} m away)` : ""}. Enter a stop to board.`,
+  };
+}
+
 // ── the door ────────────────────────────────────────────────────────────────
 
 /** Which resident is acting — the crossing door's discipline, unchanged. */

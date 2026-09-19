@@ -73,7 +73,7 @@ import { CROSSING_EXEC, CROSSING_TOOLS, VEHICLE_CLASS, enterViaOffice, exitViaOf
 // and for the same reason: an apex action's `fields` come from the flat
 // tool it dispatches to, so an action with no schema is an action whose card
 // cannot say what it takes (seam 4).
-import { RIDE_TOOLS, rideViaOffice } from "./world-ride.mjs";
+import { RIDE_TOOLS, arrivedNotice, depositAt, rideStateFrom, rideViaOffice, vehicleGroundExtras } from "./world-ride.mjs";
 import { servedEnterExitLedger } from "./enter-exit-ledger.mjs";
 // POS-5's consent verb. STANCE_TOOLS ride the schema lookup without joining
 // the flat tool list, exactly as CROSSING_TOOLS do and for the same reason.
@@ -2000,8 +2000,39 @@ async function frameBlock(oriented, key) {
       // it is forbidden.
       how_to_leave: "world_walk anywhere off her footprint. While she is under way that step puts you in the water where she left you — v0 does not stop you, and the walk answer says so before you take it.",
       terms: "standing in her frame when she departs means riding — that is the contract of stepping aboard, and it needs no declaration from you.",
+      // ── THE VEHICLE'S OWN HALF (#2986 § 6) ──────────────────────────────
+      //
+      // Present only when the frame is a VEHICLE, which is what makes this
+      // additive: an attachment riding the hull still reads exactly the block it
+      // read before. The arrived notice "rides every world answer" (§ 6 item a)
+      // because this block does, and it is DERIVED — a replay at the same
+      // instant says the same thing, and an exit ends it by ending the ride.
+      ...(await vehicleFrameExtras(who, here, w)),
     };
   } catch { return null; }
+}
+
+/** The ride, the arrived notice, and how to leave a VEHICLE — or nothing. */
+async function vehicleFrameExtras(who, here, worldState) {
+  try {
+    const body = (worldState?.marks ?? []).find((m) => m.id === here.frame) ?? null;
+    if (String(body?.class ?? "") !== VEHICLE_CLASS) return {};
+    const { service } = await vesselServiceFrom(worldState, { repo: WORLD_CLONE });
+    const acts = await actsOfActor(who);
+    const { entryStop, standingRide } = rideStateFrom(acts, { vesselId: here.frame });
+    const arrived = arrivedNotice(standingRide, Date.now());
+    const where = depositAt({ entryStop, standingRide, nowMs: Date.now() });
+    return {
+      vehicle: here.frame,
+      entered_via: entryStop,
+      ride: standingRide ?? null,
+      ...(arrived ? { arrived } : {}),
+      ...(service ? { can_ride_to: vehicleGroundExtras({ service, entryStop, standingRide }).stops } : {}),
+      how_to_leave: where.stop
+        ? `world { do: "exit" } sets you down at ${where.stop}${where.arrived ? " — your ride has come due" : ", the stop you came in through, because no ride of yours has come due"}. Staying aboard is allowed; nothing shoves you off.`
+        : "world { do: \"exit\" } steps you out of her where she is. This office cannot say which stop you came in through, so it will not set you down anywhere you cannot prove you came from.",
+    };
+  } catch { return {}; }
 }
 
 /** The three shelves. Complete for you, capped around you, pointers for the town. */
