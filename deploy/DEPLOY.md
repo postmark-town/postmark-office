@@ -891,12 +891,22 @@ Neither is run by this change. Verify either with:
 
     ssh meepo-ec2 'grep -n W2_WORLD_BRANCH /srv/world2-lab/ops/world2-refresh-clone.sh'
 
-**The ingest timer is `disabled`/`inactive` on the box as of 2026-09-05 21:19Z**,
-so the every-15-minutes row in the table above describes the unit's schedule, not
-what is running. The last ingest was the hand-run re-ingest of the same day
-(`FETCH_HEAD` names `branch 'main'`, `state/ingest.json` at 19:44:52Z, exit 0 on
-both pens). Enabling the timer before the branch fix is carried is exactly the
-sequence that resets the checkout off the law, so carry the script first.
+**The branch fix has since been carried.** Verified read-only on the box
+2026-09-19: `/srv/world2-lab/ops/world2-refresh-clone.sh:58` reads
+`BRANCH="${W2_WORLD_BRANCH:-main}"`. The "carry the script first" warning below
+was written while it was not, and it is no longer the blocker it was — but the
+ORDER it teaches is still the rule, for a second reason, and the law pen's
+section above is where that reason now lives.
+
+**The ingest timer is `disabled`/`inactive` on the box** (unchanged since
+2026-09-05, re-verified 2026-09-19 18:44Z), so the table above no longer gives it
+a cadence at all. Its last run was a one-shot by hand on **2026-09-17 23:43Z** —
+`state/ingest.json` at `23:43:09Z`, exit 0 on both pens, law `1688a5af`, town
+`276f1d20` — not the 09-05 pass this paragraph used to name. Enabling the timer
+before the branch fix was carried was the sequence that reset the checkout off
+the law; today the reason not to enable it is the one in the law-pen section:
+it would run the law pen a second time on the same marks, and re-adopt the
+stamp pen the founder parked.
 
 ### Where things live
 
