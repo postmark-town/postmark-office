@@ -92,9 +92,55 @@ export const isVehicleStop = (markId, service) =>
 /** The vessel a service moves — the thing you are inside when you board. */
 export const vesselIdOf = (service) => service?.vessel?.markId ?? null;
 
-/** A stop's anchor, or null. The deposit point: you stand ON the mooring. */
+/** A stop's anchor, or null. */
 export const anchorOfStop = (markId, service) =>
   stopsOfService(service).find((s) => s.markId === String(markId ?? ""))?.at ?? null;
+
+/**
+ * THE LEG OF THE RING THAT ARRIVES AT THIS STOP — `{ from, to }`, or null.
+ *
+ * The timetable's `stops[]` IS the ring in order, so the leg into `stops[i]`
+ * comes from `stops[i-1]`, wrapping. Derived from the published word and not
+ * from the clock, which is the property that matters: a deposit point that
+ * wobbled with the hour would put two riders stepping off an hour apart in two
+ * different places. Measured against world main `6625d737`: all four legs
+ * arriving at the quay in a two-day window come from the Snug mooring and give
+ * one and the same point.
+ */
+export function ringLegInto(markId, service) {
+  const stops = stopsOfService(service);
+  const i = stops.findIndex((s) => s.markId === String(markId ?? ""));
+  if (i < 0 || stops.length < 2) return null;
+  const from = stops[(i - 1 + stops.length) % stops.length];
+  return { from: { at: from.at, markId: from.markId }, to: { at: stops[i].at, markId: stops[i].markId } };
+}
+
+/**
+ * WHERE AN EXIT PUTS YOUR FEET at a given stop.
+ *
+ * Every stop deposits on its own anchor — you stand on the mooring — with ONE
+ * exception, ruled by Wright 2026-09-19: the vessel's own berth. Her anchor lies
+ * INSIDE HER OWN FOOTPRINT, so depositing there would set a rider down inside
+ * the hull they just left, which is the whole of what an exit is not. The point
+ * is `tools/vessel.mjs § ashoreOf` — the old anti-conveyor landing, still there
+ * and still tested over there — reused rather than a second offset invented
+ * here. Its own comment is the reason: "the side is derived from the crossing
+ * itself … nothing about the landing has to be stored, and it is the same
+ * answer in every clone."
+ *
+ * `ashore` is injected because it lives in the world clone and this module is
+ * pure. Given none, the vessel's berth answers null rather than her anchor — a
+ * deposit this office cannot compute is one it declines to make, never one it
+ * guesses at.
+ */
+export function depositPointFor(markId, service, { ashore = null } = {}) {
+  const id = String(markId ?? "");
+  if (!id) return null;
+  if (id !== vesselIdOf(service)) return anchorOfStop(id, service);
+  const leg = ringLegInto(id, service);
+  if (!leg || typeof ashore !== "function") return null;
+  try { return ashore(service, leg) ?? null; } catch { return null; }
+}
 
 // ── the arithmetic ──────────────────────────────────────────────────────────
 
@@ -238,9 +284,13 @@ export function rideRefusal({ to, origin = null, service = null } = {}) {
   if (!names.includes(want))
     return { defect: `${want} is not a stop on this vehicle's timetable`,
              hint: `she calls at ${names.join(", ") || "(nowhere — her timetable names no stops)"}. The destinations you may pick are the stops of the published word, nothing else` };
-  if (want === vesselIdOf(service))
-    return { defect: "that is the vehicle you are standing in, not a place she calls at",
-             hint: `her own berth is on the timetable because she is alongside there; from aboard, name somewhere to go: ${names.filter((n) => n !== want).join(", ") || "(nowhere else on her timetable)"}` };
+  // ⚑ HER OWN ID IS A VALID DESTINATION (Wright-ruled 2026-09-19, after this
+  // lane reported the quay stop as her own mark). Keemin listed "the Town
+  // Centre" among the places a rider picks, and the quay stop IS her own mark in
+  // the timetable — so a ride from the Snug, the wharf or the landing to
+  // `the-town/the-post-office` is the ride HOME, not a refusal. The draft
+  // refused it, on the reading that a vehicle cannot be a place; the ruling is
+  // that on this ring she is both. THE ONLY REFUSAL LEFT IS `to === origin`.
   if (origin && want === String(origin))
     return { defect: `you are already bound from ${origin} — riding there is a ride to where you already are`,
              hint: `name a different stop, or exit to be set down at ${origin}` };
@@ -266,8 +316,11 @@ export function vehicleGroundExtras({ service, entryStop = null, standingRide = 
   const from = origin ? anchorOfStop(origin, service) : null;
   const pace = Number(service?.pace);
   return {
+    // EVERY STOP BUT THE ONE YOU ARE BOUND FROM — her own berth included, since
+    // the ruling makes it the ride home. The filter is the refusal's own
+    // condition (`to === origin`) rather than a second rule beside it.
     stops: stops
-      .filter((s) => s.markId !== vessel)
+      .filter((s) => s.markId !== origin)
       .map((s) => {
         const d = from ? straightLineM(from, s.at) : null;
         const ms = d == null ? null : rideMillis(d, pace);
@@ -295,15 +348,36 @@ export function vehicleGroundExtras({ service, entryStop = null, standingRide = 
 // a stop because the wheelhouse names it, and a mark that stopped being named
 // stops carrying the sentence in the same read.
 
+/**
+ * THE ONE GATE: is the thing this timetable moves a VEHICLE?
+ *
+ * The portal physics is the vehicle class's law, so a world whose Keeping Works
+ * has not planted it has no portals and every line below answers nothing. Split
+ * out of `stopAnnotationFor` when her own berth became a destination, because
+ * the two questions had been riding one function and stopped agreeing: a card is
+ * annotated only for a WHARF, but a transport line is owed at every stop
+ * including her own.
+ */
+function vehicleOf(service, worldState = null) {
+  const vessel = vesselIdOf(service);
+  if (!vessel) return null;
+  if (!worldState) return vessel;
+  const body = (worldState.marks ?? []).find((m) => m.id === vessel) ?? null;
+  return String(body?.class ?? "") === "vehicle" ? vessel : null;
+}
+
 /** Is this mark a stop a vehicle calls at — the derived annotation a card adds
  *  when it describes a mark (§ 11 item 5). Null when it is not one, so an
- *  ordinary mark's card is byte-identical to what it was. */
+ *  ordinary mark's card is byte-identical to what it was.
+ *
+ *  HER OWN CARD IS NOT ANNOTATED, and that survives the ruling that made her a
+ *  destination: this sentence tells a resident what a WHARF is for, and on the
+ *  vehicle's own card it would be her pointing at herself. What she is, and that
+ *  you may board her, her entry terms and the ground block already say. */
 export function stopAnnotationFor(markId, service, worldState = null) {
-  if (!service || !isVehicleStop(markId, service)) return null;
-  const vessel = vesselIdOf(service);
+  const vessel = vehicleOf(service, worldState);
+  if (!vessel || !isVehicleStop(markId, service)) return null;
   if (String(markId) === String(vessel)) return null;
-  const body = (worldState?.marks ?? []).find((m) => m.id === vessel) ?? null;
-  if (worldState && String(body?.class ?? "") !== "vehicle") return null;
   return `a ${vessel} stop — enter this mark to board her, wherever her hull is`;
 }
 
@@ -322,7 +396,9 @@ export function stopUnderfoot(standpoint, service, worldState = null, { earshotM
   if (!Number.isFinite(x) || !Number.isFinite(y) || !service) return null;
   const byId = new Map((worldState?.marks ?? []).map((m) => [m.id, m]));
   for (const s of stopsOfService(service)) {
-    if (s.markId === vesselIdOf(service)) continue;
+    // HER OWN BERTH IS A STOP A RESIDENT CAN BE STANDING AT — the quay. It was
+    // skipped while her id was not a destination; now that it is, a resident on
+    // the quay is owed the same sentence as one on a wharf.
     const m = byId.get(s.markId);
     const e = m?.extent;
     const inside = e && e.w > 0 && e.h > 0
@@ -339,20 +415,25 @@ export function stopUnderfoot(standpoint, service, worldState = null, { earshotM
  * Null away from a stop, so an answer from anywhere else is unchanged.
  */
 export function transportAt(markId, service, worldState = null) {
-  if (!stopAnnotationFor(markId, service, worldState)) return null;
-  const vessel = vesselIdOf(service);
+  const vessel = vehicleOf(service, worldState);
+  if (!vessel || !isVehicleStop(markId, service)) return null;
   const from = anchorOfStop(markId, service);
   const pace = Number(service?.pace);
+  // Every stop but the one underfoot — her own berth included, because the ride
+  // home is a ride like any other.
   const onward = stopsOfService(service)
-    .filter((s) => s.markId !== markId && s.markId !== vessel)
+    .filter((s) => s.markId !== markId)
     .map((s) => {
       const ms = rideMillis(straightLineM(from, s.at), pace);
       return { mark: s.markId, ride_minutes: ms == null ? null : Math.round(ms / 60000) };
     });
+  const boarding = markId === vessel
+    ? `${vessel} lies alongside here — enter ${markId} to board her`
+    : `${vessel} calls here — enter ${markId} to board her, wherever her hull is`;
   return {
     stop: markId,
     vehicle: vessel,
-    line: `${vessel} calls here — enter ${markId} to board her, wherever her hull is; from aboard, ride to: ${onward.map((o) => `${o.mark} (~${o.ride_minutes} min)`).join(", ") || "(nowhere else on her timetable)"}.`,
+    line: `${boarding}; from aboard, ride to: ${onward.map((o) => `${o.mark} (~${o.ride_minutes} min)`).join(", ") || "(nowhere else on her timetable)"}.`,
     ride_to: onward,
   };
 }
@@ -363,11 +444,12 @@ export function transportAt(markId, service, worldState = null) {
  * is nearest to where they stand.
  */
 export function doorstepTransport(service, standpoint = null, worldState = null) {
-  if (!service) return null;
-  const vessel = vesselIdOf(service);
-  const body = (worldState?.marks ?? []).find((m) => m.id === vessel) ?? null;
-  if (worldState && String(body?.class ?? "") !== "vehicle") return null;
-  const stops = stopsOfService(service).filter((s) => s.markId !== vessel);
+  const vessel = vehicleOf(service, worldState);
+  if (!vessel) return null;
+  // ALL of them, her own berth included: it is a door you can be standing at and
+  // a place you can ride to, so counting three where the timetable names four
+  // would be the doorstep disagreeing with the door.
+  const stops = stopsOfService(service);
   if (!stops.length) return null;
   const here = standpoint && Number.isFinite(standpoint.x) && Number.isFinite(standpoint.y)
     ? { x: Number(standpoint.x), y: Number(standpoint.y) } : null;

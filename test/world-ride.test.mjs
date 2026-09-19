@@ -12,35 +12,44 @@
 // and `tools/vessel.mjs` are the ones this office deploys against, so a drift
 // between the two repos reds here rather than in front of a resident.
 //
-// The CLASS ROWS are a fixture, and they have to be until the world half lands:
-// `class: vehicle` does not stand on `the-town/the-post-office` in any checkout
-// while this is written (measured against world main 5beca99a — she carries no
-// `class:` line at all), and `the-town/vehicle` stands at version 0 with an
-// EMPTY roster. So the fixture adds exactly the two things Wright's world PR
-// adds and nothing else: the class line on her, and the Snug mooring on the
-// wheelhouse's stop list. When the law lands, the fixture becomes the record and
-// these tests run against it unchanged.
+// THE FIXTURE BECAME THE RECORD on 2026-09-19 at 18:31 EDT — world main
+// `6625d737` (PR #113) plants `class: vehicle` on `the-town/the-post-office`,
+// the `vehicle` and `ride` class marks, and the Snug mooring on the wheelhouse.
+// `vehicleWorld()` below no longer patches anything: it FOLDS THE REAL WORKS
+// with the world's own `tools/marks-fold.mjs`, so what these tests run against
+// is the town's law rather than this lane's idea of it.
 //
-// ⚑ AND THE STOP LIST IS THREE, NOT FIVE. Measured off world main: the
-// wheelhouse names `the-town/the-post-office` (her own berth), the Pando landing
-// and the Garrison's grove wharf. Vermillion's landing and the brass-otter
-// mooring are places residents have WALKED to, which is a different fact.
+// ⚑ AND `WORLD/world-state.json` AT THAT SHA IS STALE, which is why the fold is
+// run here rather than the committed file read. The merged PR changed the Works
+// SOURCE (`WORLD/marks/**/mark.md`) and the fold is regenerated at the
+// settlement — its last three commits are all "settlement: sweep …" — so at
+// `6625d737` the committed fold still carries the pre-PR marks: no `class:` on
+// her, three stops, no `ride` mark. `plainWorld()` reads that committed file and
+// is the control every "the law gates the physics" leg needs.
+//
+// ⚑ AND THE STOP LIST IS FOUR, NOT FIVE. Folded off `6625d737`: the wheelhouse
+// names `the-town/the-post-office` (her own berth), the Pando landing, the
+// Garrison's grove wharf and the Snug mooring. Vermillion's landing and the
+// brass-otter mooring are places residents have WALKED to, which is a different
+// fact.
 
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import {
   CROSSING_MS, anchorOfStop, arrivedNotice, depositAt, doorstepTransport, hasArrived,
   isVehicleStop, rideMillis, rideOrigin, rideRefusal, rideStateFrom, rideViaOffice,
-  stopAnnotationFor, stopUnderfoot, stopsOfService, straightLineM, transportAt,
-  vehicleGroundExtras, vesselIdOf,
+  depositPointFor, ringLegInto, stopAnnotationFor, stopUnderfoot, stopsOfService,
+  straightLineM, transportAt, vehicleGroundExtras, vesselIdOf,
 } from "../src/world-ride.mjs";
 import { VEHICLE_CLASS, enterViaOffice, exitViaOffice, groundBlockOf, portalEntryFor } from "../src/world-crossings.mjs";
 import { spineWithVehicles } from "../src/world-apex.mjs";
 import { entriesOfClass, guardsPass, resolveGrants } from "../src/world-grants.mjs";
 import { vehicleStandpoint, vehicleWithin, worldHasVehicle } from "../src/world-movement.mjs";
+import { carriersFrom } from "../src/world-frames.mjs";
 
 const CLONE = process.env.WORLD_CLONE ?? join(process.cwd(), "..", "postmark-world");
 const GRAMMAR = ["enter-exit.mjs", "thresholds.mjs"].find((n) => existsSync(join(CLONE, "tools", n)));
@@ -54,20 +63,31 @@ const SNUG = "current-the-reader/the-snug-mooring";
 
 const key = (...handles) => ({ handles: new Set(handles) });
 
-/** The real fold, plus exactly the two rows the world half plants. */
+// The world's own fold, imported from the clone like every other engine module
+// this suite leans on.
+const FOLD = HAVE_CLONE ? await import(pathToFileURL(join(CLONE, "tools", "marks-fold.mjs")).href) : null;
+
+/** THE REAL WORKS, folded by the world's own tool. Nothing patched. */
+let _folded = null;
 function vehicleWorld() {
-  const raw = JSON.parse(readFileSync(join(CLONE, "WORLD", "world-state.json"), "utf8"));
-  const marks = raw.marks.map((m) => {
-    if (m.id === SHIP) return { ...m, class: VEHICLE_CLASS };
-    if (m.id === WHEELHOUSE) {
-      return { ...m, timetable: { ...m.timetable, stops: [...m.timetable.stops, { mark: SNUG, departs: ["06:20Z", "18:20Z"] }] } };
-    }
-    return m;
+  if (_folded) return _folded;
+  const read = (p) => (existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : null);
+  const stakesRaw = read(join(CLONE, "WORLD", "stakes.json"));
+  _folded = FOLD.fold({
+    marks: FOLD.loadMarks(join(CLONE, "WORLD", "marks")),
+    terrain: read(join(CLONE, "WORLD", "terrain.json")),
+    stakes: Array.isArray(stakesRaw) ? stakesRaw : (stakesRaw?.stakes ?? []),
+    prev: read(join(CLONE, "WORLD", "world-state.json")),
+    tick: 0,
+    households: read(join(CLONE, "WORLD", "households.json"))?.households ?? null,
   });
-  return { ...raw, marks };
+  return _folded;
 }
 
-/** The fold with NO vehicle anywhere — the control every "it is inert" leg needs. */
+/** The COMMITTED fold at this sha — pre-PR, no vehicle anywhere. The control
+ *  every "the law gates the physics" leg needs, and a real artifact rather than
+ *  a hand-emptied copy: this is the file the office reads until the settlement
+ *  regenerates it. */
 function plainWorld() {
   return JSON.parse(readFileSync(join(CLONE, "WORLD", "world-state.json"), "utf8"));
 }
@@ -325,7 +345,14 @@ test("the three refusals a destination can earn, each its own sentence", { skip:
   const service = await serviceOf(vehicleWorld());
   assert.match(rideRefusal({ to: "", service }).defect, /ride where/);
   assert.match(rideRefusal({ to: "the-town/the-lochan", service }).defect, /not a stop/);
-  assert.match(rideRefusal({ to: SHIP, service }).defect, /the vehicle you are standing in/);
+  // ⚑ HER OWN ID IS A VALID DESTINATION (Wright-ruled 2026-09-19). The draft
+  // refused it, on the reading that a vehicle cannot be a place; the ruling is
+  // that on this ring she is both — the quay stop IS her own mark, and a ride
+  // from the wharf to `the-town/the-post-office` is the ride home.
+  assert.equal(rideRefusal({ to: SHIP, origin: WHARF, service }), null,
+    "the ride home must not be refused");
+  assert.match(rideRefusal({ to: SHIP, origin: SHIP, service }).defect, /already bound from/,
+    "and the ONE refusal left applies to her exactly as to any other stop");
   assert.match(rideRefusal({ to: PANDO, origin: PANDO, service }).defect, /already bound from/);
   assert.equal(rideRefusal({ to: PANDO, origin: WHARF, service }), null);
 });
@@ -579,7 +606,8 @@ test("a resident standing at a wharf is TOLD what the wharf is for", { skip: !HA
   assert.match(t.line, /the-town\/the-post-office calls here/);
   assert.match(t.line, /enter sol-of-garrison\/grove-wharf to board her/);
   assert.ok(t.ride_to.some((r) => r.mark === PANDO && r.ride_minutes > 0));
-  assert.ok(!t.ride_to.some((r) => r.mark === SHIP), "her own berth is not somewhere to ride to");
+  assert.ok(t.ride_to.some((r) => r.mark === SHIP), "her own berth IS somewhere to ride to — the ride home");
+  assert.ok(!t.ride_to.some((r) => r.mark === WHARF), "but not the stop you are standing on");
   assert.equal(transportAt("the-town/the-lochan", service, w), null, "and away from a stop there is no line at all");
   assert.equal(transportAt(WHARF, service, plainWorld()), null, "nor in a world whose law has not planted the class");
 });
@@ -606,7 +634,7 @@ test("the doorstep's standing line names her, her stops, and the nearest one to 
   const service = await serviceOf(w);
   const d = doorstepTransport(service, { x: -1380, y: -2500 }, w);
   assert.equal(d.vehicle, SHIP);
-  assert.equal(d.stops, 3, "her own berth is not a place she 'stops at' for this sentence");
+  assert.equal(d.stops, 4, "all four, her own berth included: it is a door you can stand at AND a place you can ride to, so counting three would be the doorstep disagreeing with the door");
   assert.equal(d.nearest.mark, WHARF);
   assert.match(d.line, /Enter a stop to board/);
   assert.equal(doorstepTransport(service, null, w).nearest, undefined, "with no standpoint there is no nearest, and none is invented");
@@ -633,6 +661,121 @@ test("the ground block's vehicle extras name the stops with the minutes from YOU
   const b = fromSnug.stops.find((s) => s.mark === PANDO).ride_minutes;
   assert.notEqual(a, b, "the minutes are measured from where YOU are, not from her berth");
   assert.equal(fromWharf.standing_ride, null);
+});
+
+// == THE RIDE HOME, AND WHERE IT SETS YOU DOWN (Wright-ruled 2026-09-19) ==
+
+test("her own berth is a destination, and the ride home is timed like any other leg", { skip: !HAVE_CLONE && "no world clone" }, async () => {
+  const o = await officeWith({ standing: { x: -1380, y: -2543 } });   // the grove wharf
+  await enterViaOffice(CLONE, { mark: WHARF, handle: "rider", accept: true }, key("rider"), o.deps);
+  const r = await rideViaOffice(CLONE, { to: SHIP, handle: "rider" }, key("rider"), o.deps);
+  assert.equal(r.ride.to, SHIP);
+  assert.equal(r.ride.origin, WHARF);
+  // Wright's measured leg for this ring: wharf -> quay 2.9 km.
+  assert.ok(Math.abs(r.ride.distance_m / 1000 - 2.9) < 0.1, `wharf -> quay measured ${r.ride.distance_m} m`);
+  assert.ok(Math.abs(r.minutes - 5) <= 1, `~5 min, measured ${r.minutes}`);
+});
+
+test("THE ONE STOP WHOSE ANCHOR IS THE WRONG ANSWER: exiting at the quay sets you down ASHORE, outside her footprint", { skip: !HAVE_CLONE && "no world clone" }, async () => {
+  // Her anchor lies INSIDE her own footprint, so depositing there would put a
+  // rider back in the hull they just left. `tools/vessel.mjs § ashoreOf` is the
+  // old anti-conveyor landing, reused rather than a second offset invented here.
+  const w = vehicleWorld();
+  const o = await officeWith({ standing: { x: -1380, y: -2543 } });
+  await enterViaOffice(CLONE, { mark: WHARF, handle: "rider", accept: true }, key("rider"), o.deps);
+  const r = await rideViaOffice(CLONE, { to: SHIP, handle: "rider" }, key("rider"), o.deps);
+  o.setClock(Date.parse(r.ride.arrives_at));
+  const out = await exitViaOffice(CLONE, { mark: SHIP, handle: "rider" }, key("rider"), o.deps);
+
+  assert.equal(out.set_down.at, SHIP);
+  assert.equal(out.set_down.arrived, true);
+  const po = markIn(w, SHIP);
+  const half = { w: po.extent.w / 2, h: po.extent.h / 2 };
+  const within = (pt) => pt.x >= po.at.x - half.w && pt.x <= po.at.x + half.w
+                      && pt.y >= po.at.y - half.h && pt.y <= po.at.y + half.h;
+  assert.equal(within({ x: out.set_down.x, y: out.set_down.y }), false,
+    `set down at (${out.set_down.x}, ${out.set_down.y}), inside her ${po.extent.w}x${po.extent.h} footprint at (${po.at.x}, ${po.at.y})`);
+  // THE POSITIVE CONTROL: her ANCHOR -- what every other stop deposits on -- IS
+  // inside it, so this test can tell the fix from the bug rather than merely
+  // observing that some point exists.
+  assert.equal(within(po.at), true, "her anchor is inside her footprint -- that is the whole reason this stop is special");
+  assert.deepEqual(o.stops.at(-1), { who: "rider", x: out.set_down.x, y: out.set_down.y });
+});
+
+test("the quay's deposit point is derived from the RING, so it does not wobble with the clock", { skip: !HAVE_CLONE && "no world clone" }, async () => {
+  const w = vehicleWorld();
+  const service = await serviceOf(w);
+  const vessel = await import(pathToFileURL(join(CLONE, "tools", "vessel.mjs")).href);
+  const walkMod = await import(pathToFileURL(join(CLONE, "tools", "walk.mjs")).href);
+
+  const leg = ringLegInto(SHIP, service);
+  assert.equal(leg.from.markId, SNUG, "the leg into the quay comes from the Snug mooring -- the ring, in the timetable's own order");
+  const mine = depositPointFor(SHIP, service, { ashore: vessel.ashoreOf });
+
+  // Every REAL sailing that arrives at the quay over two days, and they must all
+  // agree with the ring-derived point.
+  const fc = walkMod.fractionalCrossing(Date.UTC(2026, 8, 20, 12, 0, 0));
+  const arrivals = vessel.sailingsBetween(service, fc - 2, fc + 2).filter((l) => l.to.markId === SHIP);
+  assert.ok(arrivals.length >= 2, `only ${arrivals.length} arrivals at the quay in the window -- widen it rather than trusting one`);
+  for (const l of arrivals)
+    assert.deepEqual(vessel.ashoreOf(service, l), mine, "a real arrival disagrees with the ring-derived deposit");
+
+  // And every OTHER stop still deposits on its own anchor, as the brief says.
+  for (const id of [PANDO, WHARF, SNUG])
+    assert.deepEqual(depositPointFor(id, service, { ashore: vessel.ashoreOf }), anchorOfStop(id, service));
+
+  // With no `ashore` injected the quay answers NULL rather than her anchor: a
+  // deposit this office cannot compute is one it declines to make.
+  assert.equal(depositPointFor(SHIP, service, {}), null);
+});
+
+test("boarding her at the quay the ordinary way still names the door you came through", { skip: !HAVE_CLONE && "no world clone" }, async () => {
+  // `vehicle/stops-are-doors` includes herself, and the quay stop IS her own
+  // mark -- so a resident who enters her the way the town has always entered her
+  // must be able to ride out. Without the `via`, they would be the one resident
+  // who could not.
+  const w = vehicleWorld();
+  const po = markIn(w, SHIP);
+  const o = await officeWith({ standing: { x: po.at.x, y: po.at.y } });
+  const went = await enterViaOffice(CLONE, { mark: SHIP, handle: "quayside", accept: true }, key("quayside"), o.deps);
+  assert.ok(went.entered.includes(SHIP));
+  const entered = o.journal.filter((j) => j.action === "enter").at(-1);
+  assert.equal(entered.payload.via, SHIP, "the door she came through is her own berth");
+  const r = await rideViaOffice(CLONE, { to: SNUG, handle: "quayside" }, key("quayside"), o.deps);
+  assert.equal(r.ride.origin, SHIP, "and the origin rule has something to measure from");
+});
+
+// == SEAM RULE 4 . the class row carriersFrom must treat as a no-op ==
+
+test("a mechanic-less, extent-less `vehicle` class row is a NO-OP in carriersFrom -- not a crash, not a phantom carrier", { skip: !HAVE_CLONE && "no world clone" }, async () => {
+  // Wright flagged this when the world half landed: `the-town/vehicle` now
+  // declares `mobility: derived` with no `mechanic:` and no extent, and
+  // `world-frames.mjs § carriersFrom` reads mobility off CLASS marks and finds
+  // the body through MECHANIC_BODY. Measured here rather than reasoned about.
+  const w = vehicleWorld();
+  // The store's own projection, as `classFieldsFromStore` would hand it over.
+  const classFields = new Map([
+    ["the-town/vehicle", { class: VEHICLE_CLASS, mobility: "derived" }],
+    [SHIP, { class: VEHICLE_CLASS, mobility: null }],
+    [WHEELHOUSE, { class: "timetable", mobility: null }],
+    ["the-town/timetable", { class: "timetable", mobility: "derived" }],
+  ]);
+  let carriers, threw = null;
+  try { carriers = carriersFrom(w, { classFields }); } catch (e) { threw = String(e?.message ?? e); }
+  assert.equal(threw, null, `carriersFrom threw on the new class rows: ${threw}`);
+
+  const ids = carriers.map((c) => c.id);
+  assert.ok(!ids.includes("the-town/vehicle"),
+    "the CLASS MARK became a carrier -- a bare class declares what its instances do without doing it itself, and it has no extent to have an inside");
+  assert.deepEqual(ids, [SHIP],
+    "exactly one carrier, and she reaches it through the WHEELHOUSE's `mechanic: timetable` as she always has -- the class row adds nobody");
+  assert.equal(carriers[0].declaredBy, WHEELHOUSE,
+    "declared by the wheelhouse, not by `the-town/vehicle`: the new class row changed no carrier's provenance");
+
+  // THE POSITIVE CONTROL, so this is not a test that passes on an empty read:
+  // drop the timetable class's mobility and the ONE carrier disappears.
+  const without = carriersFrom(w, { classFields: new Map([...classFields].filter(([k]) => k !== "the-town/timetable")) });
+  assert.deepEqual(without.map((c) => c.id), [], "the probe can print a different answer");
 });
 
 // ── "FROM HERE YOU CAN: … RIDE" (§ 11 item 4) ────────────────────────────────
@@ -678,7 +821,10 @@ test("the composed transport block: a vehicle world answers at a wharf, the real
   const t = await transportBlock(vehicleWorld(), wharf);
   assert.equal(t.stop, WHARF);
   assert.match(t.line, /calls here/);
-  assert.equal(await transportBlock(vehicleWorld(), { x: 0, y: 0 }), null, "away from a stop, nothing");
+  // ⚑ NOT THE ORIGIN. (0,0) is 36.6 m from her quay berth — inside the enter
+  // door's reach — so since her berth became a stop it is emphatically NOT
+  // "away from a stop", and the first run against the real tree said so.
+  assert.equal(await transportBlock(vehicleWorld(), { x: 20000, y: 20000 }), null, "away from every stop, nothing");
   // THE POSITIVE CONTROL'S OPPOSITE: measured live against the world as it
   // stands today, `world_orient` and `world_open_your_eyes` at this exact point
   // answer with NO `transport` key at all, because no mark carries

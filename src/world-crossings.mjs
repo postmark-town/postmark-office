@@ -19,7 +19,7 @@
 
 import { worldFreezeBounce } from "./freeze.mjs";
 import { standsWithin } from "./reach.mjs"; // the ONE "do you truly stand there" test — shared with the hold door (the-town/the-reach)
-import { anchorOfStop, arrivedNotice, depositAt, isVehicleStop, rideStateFrom, stopsOfService, vehicleGroundExtras, vesselIdOf } from "./world-ride.mjs";
+import { anchorOfStop, arrivedNotice, depositAt, depositPointFor, isVehicleStop, rideStateFrom, stopsOfService, vehicleGroundExtras, vesselIdOf } from "./world-ride.mjs";
 import { vesselServiceFrom } from "./world-movement.mjs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -449,6 +449,19 @@ export async function enterViaOffice(worldClone, payload = {}, key = null, deps 
     };
   }
 
+  // ⚑ BOARDING HER AT THE QUAY IS BOARDING THROUGH A DOOR, AND THE DOOR IS HER
+  // OWN BERTH. `vehicle/stops-are-doors` includes herself (Wright, 2026-09-19),
+  // and the quay stop IS `the-town/the-post-office` in the timetable — so a
+  // resident who enters her the ordinary way, standing on her, came in through
+  // that stop and must be able to ride out of it. Without this line their
+  // `entryStop` would be null, the origin rule would have nothing to measure
+  // from, and the one resident who boarded the way the town has always boarded
+  // would be the one resident who could not ride.
+  const viaOrdinary = answer.entered.find((id) => {
+    const m = (w.marks ?? []).find((x) => x.id === id);
+    return String(m?.class ?? "") === VEHICLE_CLASS && isVehicleStop(id, service);
+  }) ?? null;
+
   // THE SUMMARY MUST NOT CALL AN UN-REFUSED ACT A REFUSAL. Entering nothing has
   // three different causes and only one of them is a refusal: the door said no,
   // the door asked for terms, or there was no door to cross because you were
@@ -474,7 +487,7 @@ export async function enterViaOffice(worldClone, payload = {}, key = null, deps 
     // `state-log-from-store.mjs § compareWindow`'s pairing key both get STRICTLY
     // FINER, which reaps and mis-pairs less rather than more; `world-hold.mjs`
     // reads it only for `drop`. Checked, all five.
-    ? await deps.record({ handle: who, act: "enter", at, lines: answer.rows, mark: markId, summary })
+    ? await deps.record({ handle: who, act: "enter", at, lines: answer.rows, mark: markId, ...(viaOrdinary ? { via: viaOrdinary } : {}), summary })
     : { within: [...(occupancy.get(who) ?? [])] };
 
   // ENTERING ENDS THE WALK (Keemin-ruled 2026-09-12 01:1x EDT; postmark-town/postmark
@@ -587,7 +600,7 @@ export async function exitViaOffice(worldClone, payload = {}, key = null, deps =
   // a second pen: a position written by anything but the movement record is a
   // position half the office cannot see.
   const nowMs = deps.nowMs ? deps.nowMs() : Date.now();
-  const { service } = await serviceFor(worldClone, w, deps);
+  const { service, mod } = await serviceFor(worldClone, w, deps);
   const vessel = vesselIdOf(service);
   const target = (w.marks ?? []).find((m) => m.id === markId) ?? null;
   const isVehicle = Boolean(vessel) && markId === vessel && String(target?.class ?? "") === VEHICLE_CLASS;
@@ -599,7 +612,13 @@ export async function exitViaOffice(worldClone, payload = {}, key = null, deps =
     // old way — standing on her at the quay — and owes no deposit at all. Their
     // exit is byte-identical to what it has always been, which is the point: the
     // portal is additive, and a crossing made before it existed still reads.
-    if (where.stop) deposit = { ...where, anchor: anchorOfStop(where.stop, service), ride: state.standingRide ?? null };
+    // ⚑ THE POINT IS NOT ALWAYS THE ANCHOR (Wright-ruled 2026-09-19). Every
+    // stop deposits on its own anchor except her own berth, whose anchor lies
+    // INSIDE HER FOOTPRINT — setting a rider down there would put them back in
+    // the hull they just left. `depositPointFor` reaches the world's own
+    // `ashoreOf` for that one case, injected because it lives in the clone.
+    if (where.stop)
+      deposit = { ...where, anchor: depositPointFor(where.stop, service, { ashore: mod?.ashoreOf ?? null }), ride: state.standingRide ?? null };
   }
 
   const written = await deps.record({
