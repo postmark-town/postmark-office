@@ -49,7 +49,7 @@ import { VEHICLE_CLASS, enterViaOffice, exitViaOffice, groundBlockOf, portalEntr
 import { spineWithVehicles } from "../src/world-apex.mjs";
 import { entriesOfClass, guardsPass, resolveGrants } from "../src/world-grants.mjs";
 import { vehicleStandpoint, vehicleWithin, worldHasVehicle } from "../src/world-movement.mjs";
-import { carriersFrom } from "../src/world-frames.mjs";
+import { carriersFrom, inRect } from "../src/world-frames.mjs";
 
 const CLONE = process.env.WORLD_CLONE ?? join(process.cwd(), "..", "postmark-world");
 const GRAMMAR = ["enter-exit.mjs", "thresholds.mjs"].find((n) => existsSync(join(CLONE, "tools", n)));
@@ -663,6 +663,28 @@ test("the ground block's vehicle extras name the stops with the minutes from YOU
   assert.equal(fromWharf.standing_ride, null);
 });
 
+test("can_ride_to lists the quay from every stop but the quay itself", { skip: !HAVE_CLONE && "no world clone" }, async () => {
+  // Wright's review, verbatim: the ground block's `can_ride_to` must list the
+  // quay "from every stop but the quay itself". Driven over all four stops
+  // rather than one, because a filter that happened to be right at the wharf and
+  // wrong at the Snug would pass a single-origin check.
+  const service = await serviceOf(vehicleWorld());
+  const all = [SHIP, PANDO, WHARF, SNUG];
+  for (const origin of all) {
+    const listed = vehicleGroundExtras({ service, entryStop: origin }).stops.map((x) => x.mark);
+    assert.deepEqual(listed.slice().sort(), all.filter((x) => x !== origin).sort(),
+      `from ${origin} the block offers ${listed.join(", ")}`);
+    assert.equal(listed.includes(origin), false, "the stop you are bound FROM is the one refusal, and the list says so");
+    if (origin !== SHIP)
+      assert.ok(listed.includes(SHIP), `the ride home is missing from ${origin}`);
+  }
+  // And every offered leg carries a real number, so "listed" is not the same as
+  // "offered with nothing behind it".
+  for (const x of vehicleGroundExtras({ service, entryStop: WHARF }).stops)
+    assert.ok(Number.isFinite(x.distance_m) && Number.isFinite(x.ride_minutes) && x.ride_minutes > 0,
+      `${x.mark} is offered with ${x.distance_m} m / ${x.ride_minutes} min`);
+});
+
 // == THE RIDE HOME, AND WHERE IT SETS YOU DOWN (Wright-ruled 2026-09-19) ==
 
 test("her own berth is a destination, and the ride home is timed like any other leg", { skip: !HAVE_CLONE && "no world clone" }, async () => {
@@ -689,16 +711,25 @@ test("THE ONE STOP WHOSE ANCHOR IS THE WRONG ANSWER: exiting at the quay sets yo
 
   assert.equal(out.set_down.at, SHIP);
   assert.equal(out.set_down.arrived, true);
+
+  // ⛑ THE FOOTPRINT IS THE WORLD'S OWN, NOT A RECT BUILT HERE. Wright named
+  // `footprintOf(service, QUAY)` in the review, and he is right that it has to
+  // be that one: a copy of the rect arithmetic in this file would agree with the
+  // engine the day it was written and disagree the first time either moved, and
+  // the whole claim of this test is that a point is OUTSIDE a shape the engine
+  // defines. `inRect` is likewise the office's own shared predicate.
+  const service = await serviceOf(w);
+  const vessel = await import(pathToFileURL(join(CLONE, "tools", "vessel.mjs")).href);
   const po = markIn(w, SHIP);
-  const half = { w: po.extent.w / 2, h: po.extent.h / 2 };
-  const within = (pt) => pt.x >= po.at.x - half.w && pt.x <= po.at.x + half.w
-                      && pt.y >= po.at.y - half.h && pt.y <= po.at.y + half.h;
-  assert.equal(within({ x: out.set_down.x, y: out.set_down.y }), false,
-    `set down at (${out.set_down.x}, ${out.set_down.y}), inside her ${po.extent.w}x${po.extent.h} footprint at (${po.at.x}, ${po.at.y})`);
+  const hull = vessel.footprintOf(service, po.at);
+
+  assert.equal(inRect({ x: out.set_down.x, y: out.set_down.y }, hull), false,
+    `set down at (${out.set_down.x}, ${out.set_down.y}), inside her ${hull.w}x${hull.h} footprint at (${hull.x}, ${hull.y})`);
   // THE POSITIVE CONTROL: her ANCHOR -- what every other stop deposits on -- IS
   // inside it, so this test can tell the fix from the bug rather than merely
   // observing that some point exists.
-  assert.equal(within(po.at), true, "her anchor is inside her footprint -- that is the whole reason this stop is special");
+  assert.equal(inRect(po.at, hull), true,
+    "her anchor is inside her own footprint -- that is the whole reason this stop is special, and if it ever stops being true this test is measuring nothing");
   assert.deepEqual(o.stops.at(-1), { who: "rider", x: out.set_down.x, y: out.set_down.y });
 });
 
