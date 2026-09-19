@@ -672,6 +672,42 @@ test("a human is not lent `ride` — the roster carries no `for: human` entry", 
   assert.match(String(asHuman.refused[0].refused), /resident/);
 });
 
+test("the composed transport block: a vehicle world answers at a wharf, the real world answers nothing", { skip: !HAVE_CLONE && "no world clone" }, async () => {
+  const { transportBlock } = await import("../src/world.mjs");
+  const wharf = { x: -1380, y: -2543 };
+  const t = await transportBlock(vehicleWorld(), wharf);
+  assert.equal(t.stop, WHARF);
+  assert.match(t.line, /calls here/);
+  assert.equal(await transportBlock(vehicleWorld(), { x: 0, y: 0 }), null, "away from a stop, nothing");
+  // THE POSITIVE CONTROL'S OPPOSITE: measured live against the world as it
+  // stands today, `world_orient` and `world_open_your_eyes` at this exact point
+  // answer with NO `transport` key at all, because no mark carries
+  // `class: vehicle` yet. That is the correct answer and it is why this office
+  // half can ship ahead of the Keeping Works half.
+  assert.equal(await transportBlock(plainWorld(), wharf), null);
+});
+
+test("the transport line rides the NARRATIVE eyes shape, not only the diagnostic one", () => {
+  // A visibility line that appeared only under `diagnostic: true` would be the
+  // invisibility § 11 exists to close — and the first draft of this lane had
+  // exactly that defect, which is why this reads the source rather than trusting
+  // the diff. world.mjs's own ruling one screen above: "`diagnostic` is a
+  // DIAGNOSTIC. Nothing the town's pages run is allowed to depend on it."
+  const src = readFileSync(new URL("../src/world.mjs", import.meta.url), "utf8");
+  const sites = [
+    ["orient", "  return { standpoint: { ...at, stance: choice.stance }, crossing: { n: crossing, derivation: CROSSING_DERIVATION }, note, primer,"],
+    ["eyes · diagnostic", "  const full = {"],
+    ["eyes · narrative", "    stance: choice.stance, telling, objects,"],
+  ];
+  for (const [name, needle] of sites) {
+    const i = src.indexOf(needle);
+    assert.notEqual(i, -1, `the ${name} return site moved — re-aim this check, do not delete it`);
+    const window = src.slice(i, i + 900);
+    assert.ok(window.includes("...(transport ? { transport } : {})"),
+      `${name} does not carry the transport line`);
+  }
+});
+
 // ── ZERO CHANGE TO WALKS (§ 8 item 4) ────────────────────────────────────────
 
 test("the movements table's schema is untouched — column for column", async () => {

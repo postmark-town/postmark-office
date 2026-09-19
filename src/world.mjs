@@ -1159,7 +1159,7 @@ export async function worldSummary(key = null) {
 // from any stop and null in a world with no vehicle, so every other answer this
 // office gives is byte-identical. Never throws: a telling must not be takeable
 // down by a timetable.
-async function transportBlock(worldState, standpoint) {
+export async function transportBlock(worldState, standpoint) {
   try {
     if (!worldHasVehicle(worldState)) return null;
     const { service } = await vesselServiceFrom(worldState, { repo: WORLD_CLONE });
@@ -1506,6 +1506,12 @@ export async function worldEyes(args = {}, key = null, { roll = [] } = {}) {
   });
   return {
     stance: choice.stance, telling, objects,
+    // THE TRANSPORT LINE RIDES THE NARRATIVE SHAPE TOO (#2986 § 11 item 1), and
+    // it has to: `diagnostic` is a diagnostic — nothing a resident actually
+    // reads is allowed to depend on it, which is the ruling one screen up. A
+    // visibility line that only appeared under a debug flag would be exactly the
+    // invisibility this closes.
+    ...(transport ? { transport } : {}),
     // THE RECORDS THIS ANSWER NAMES (2026-09-10). `objects` is the only list
     // here that names ids, so this is exactly those plus the ground.
     records: await markRecords(objects.map((o) => o.id), w),
