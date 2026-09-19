@@ -105,7 +105,20 @@ async function main() {
     const entry = {
       crossing: p.at, actor: p.handle, action: p.act ?? "enter", object: p.mark ?? null,
       cls: CLASS_FRAME, at: null, witnesses: null,
-      payload: { ledger: LEDGER_NAME.replace(/\\/g, "/"), lines: p.lines, summary: p.summary },
+      payload: {
+        ledger: LEDGER_NAME.replace(/\\/g, "/"), lines: p.lines, summary: p.summary,
+        // ── THE PORTAL'S THREE FIELDS (#2986, 2026-09-19) ──────────────────
+        // `via` is which door of a vehicle you came in by; `set_down_at` and
+        // `arrived` are where an exit put you and whether the ride had come due.
+        // They are FIELDS and not prose because the deposit rule reads them back
+        // — a door that had to parse its own summary sentence to find a machine
+        // fact is the class this office keeps a museum of. Spread conditionally
+        // so a crossing that is not a portal's writes the payload it always
+        // wrote, byte for byte.
+        ...(p.via ? { via: String(p.via) } : {}),
+        ...(p.set_down_at ? { set_down_at: String(p.set_down_at) } : {}),
+        ...(p.arrived == null ? {} : { arrived: Boolean(p.arrived) }),
+      },
       effect: "the crossing is declared; the record receives it at the save",
     };
     try {
