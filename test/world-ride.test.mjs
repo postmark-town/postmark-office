@@ -39,6 +39,7 @@ import {
 } from "../src/world-ride.mjs";
 import { VEHICLE_CLASS, enterViaOffice, exitViaOffice, groundBlockOf, portalEntryFor } from "../src/world-crossings.mjs";
 import { spineWithVehicles } from "../src/world-apex.mjs";
+import { entriesOfClass, guardsPass, resolveGrants } from "../src/world-grants.mjs";
 import { vehicleStandpoint, vehicleWithin, worldHasVehicle } from "../src/world-movement.mjs";
 
 const CLONE = process.env.WORLD_CLONE ?? join(process.cwd(), "..", "postmark-world");
@@ -632,6 +633,43 @@ test("the ground block's vehicle extras name the stops with the minutes from YOU
   const b = fromSnug.stops.find((s) => s.mark === PANDO).ride_minutes;
   assert.notEqual(a, b, "the minutes are measured from where YOU are, not from her berth");
   assert.equal(fromWharf.standing_ride, null);
+});
+
+// ── "FROM HERE YOU CAN: … RIDE" (§ 11 item 4) ────────────────────────────────
+
+test("the vehicle's roster lends `ride` through the GROUND channel, and the guard fences it to her", () => {
+  // § 11 item 4 says this line is FREE — "the existing affordance sentence, no
+  // new code" — and free is a claim, not a fact, so here is the fact. The apex
+  // builds that sentence from `entries.map((e) => e.action)` at
+  // world-apex.mjs § the warm bounce, and `entries` is what the calculus below
+  // returns. Nothing in this lane writes the sentence; this is what puts `ride`
+  // into it.
+  const vehicleClass = { id: "the-town/vehicle", class: VEHICLE_CLASS,
+    actions: JSON.stringify([{ action: "ride", residue: "the-town/ride" }]) };
+  const candidates = entriesOfClass(vehicleClass, { channel: "ground", ground: SHIP });
+  const { entries } = resolveGrants(candidates, { kind: "resident" });
+  assert.deepEqual(entries.map((e) => e.action), ["ride"]);
+  assert.equal(entries[0].ground, SHIP, "the door names the ground that opened it");
+
+  // And the residue's own gate, which is what stops `ride` following a resident
+  // ashore: `the-town/ride` carries requires: {"within_class":"vehicle"}.
+  const requires = { within_class: VEHICLE_CLASS };
+  assert.deepEqual(guardsPass(requires, { spineClasses: [VEHICLE_CLASS] }), { ok: true });
+  const off = guardsPass(requires, { spineClasses: ["parcel"] });
+  assert.equal(off.ok, false);
+  assert.match(off.why, /within a vehicle/, "the refusal names the CLASS, which is the sentence a resident reads");
+});
+
+test("a human is not lent `ride` — the roster carries no `for: human` entry", () => {
+  // Brief § 10 item 3: "ride for humans: NO for w39 (humans are parcels-only
+  // since 08-30; not reopened here)." The fence is the record's, not a list.
+  const vehicleClass = { id: "the-town/vehicle", class: VEHICLE_CLASS,
+    actions: JSON.stringify([{ action: "ride", residue: "the-town/ride" }]) };
+  const candidates = entriesOfClass(vehicleClass, { channel: "ground", ground: SHIP });
+  const asHuman = resolveGrants(candidates, { kind: "human" });
+  assert.deepEqual(asHuman.entries, []);
+  assert.equal(asHuman.refused.length, 1, "and they are TOLD, rather than left to infer it from an absence");
+  assert.match(String(asHuman.refused[0].refused), /resident/);
 });
 
 // ── ZERO CHANGE TO WALKS (§ 8 item 4) ────────────────────────────────────────

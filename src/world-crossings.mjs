@@ -461,7 +461,20 @@ export async function enterViaOffice(worldClone, payload = {}, key = null, deps 
     : answer.already ? `already within ${markId} — nothing to cross`
     : `crossed nothing at ${markId}`;
   const written = answer.rows.length
-    ? await deps.record({ handle: who, act: "enter", at, lines: answer.rows, summary })
+    // ⚑ `object` WAS ALWAYS NULL ON A CROSSING ROW, and only by omission: the
+    // exec has read `p.mark` since the single log shipped and no door ever
+    // passed one, so the SUBJECT·ACTION·OBJECT grammar had a hole in it at the
+    // one verb whose whole subject is a mark. The portal needs it (the ride fold
+    // matches an enter to its vessel by this column), so it is filled here too
+    // rather than only on the portal path — a column that is right for one
+    // caller and null for its twin is worse than a column that is null for both.
+    // CONSUMERS NAMED: `world-drain.mjs § logLine` passes it through to the
+    // JSONL (additive); `world-drain.mjs:167` skips every non-mark class, so the
+    // drain's own routing is untouched; `journal-reaper.mjs`'s twin key and
+    // `state-log-from-store.mjs § compareWindow`'s pairing key both get STRICTLY
+    // FINER, which reaps and mis-pairs less rather than more; `world-hold.mjs`
+    // reads it only for `drop`. Checked, all five.
+    ? await deps.record({ handle: who, act: "enter", at, lines: answer.rows, mark: markId, summary })
     : { within: [...(occupancy.get(who) ?? [])] };
 
   // ENTERING ENDS THE WALK (Keemin-ruled 2026-09-12 01:1x EDT; postmark-town/postmark
