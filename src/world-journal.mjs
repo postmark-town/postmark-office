@@ -141,6 +141,16 @@ export const CLASS_HOLDING = "holding";
 // `frame`; walk gets its own word so the log does not have to be read twice to
 // tell them apart.
 export const CLASS_MOVE = "move";
+// `ride` is naming a destination from inside a vehicle (Keemin, 2026-09-19:
+// "have the journal write the act as 'ride' not 'board'", and "the log should
+// differentiate between walking and taking a vehicle"). It is deliberately NOT
+// `move`: a walk is a line with a pace and a clock that a position reader
+// interpolates along, and a ride has no line and no intermediate points — the
+// rider sits still while a hull follows its own timetable somewhere else. It is
+// not `frame` either: the reparenting already happened at the `enter`, and a
+// ride changes only where the rider may step off. Its own word, so the log does
+// not have to be read twice to tell the two apart. Machinery: world-ride.mjs.
+export const CLASS_RIDE = "ride";
 
 // ── THE LEDGER CONTRACT (POS-5 §3's finisher) ───────────────────────────────
 //

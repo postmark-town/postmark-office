@@ -58,7 +58,8 @@ import { declareMovement, declareMovementFlipped } from "./dynamic-entities.mjs"
 import { emissionFromVoice } from "./dynamic-emissions.mjs"; // stage 2: speech also becomes an emission instance
 import { world2Enabled } from "./world2-acts.mjs"; // the write-path closure: is the shadow mirror on at all
 import { VESSEL_HANDLE, ridesTheVessel } from "./dynamic-entities.mjs"; // the aboard test, one home for two readers
-import { carriersFrom, carriersWithDisclosure, carrierReader, heardFromV2, inRect, movementStandpoint, leavingWhileOccupying, movementV2Enabled, recordsAcrossEras, roadTerms, storedDepartures, storedRecordsFor, vesselPositionAt as vesselFromTimetable, vesselServiceFrom } from "./world-movement.mjs"; // stage D: carriers carry, frames compose
+import { carriersFrom, carriersWithDisclosure, carrierReader, heardFromV2, inRect, movementStandpoint, leavingWhileOccupying, movementV2Enabled, recordsAcrossEras, roadTerms, storedDepartures, storedRecordsFor, vehicleStandpoint, vesselPositionAt as vesselFromTimetable, vesselServiceFrom, worldHasVehicle } from "./world-movement.mjs"; // stage D: carriers carry, frames compose; #2986: aboard is occupancy
+import { arrivedNotice, doorstepTransport, rideStateFrom, stopAnnotationFor, stopUnderfoot, transportAt } from "./world-ride.mjs"; // #2986 § 11: the derived visibility of a vehicle, off the same timetable
 import { byBand, presenceEnabled, presentNear, near as presenceNear, everyone as presenceEveryone, PRESENCE_DIALS } from "./dynamic-presence.mjs"; // stage 2: residents revealed to each other
 import { MEDIA_BASE, mediaUrlOk } from "./media.mjs"; // the mark door's image allowlist: only the town's own media hangs on marks
 import { imageFormat, MEDIA_FORMATS } from "./edit.mjs"; // the bytes decide the type, never the filename (with_image, below)
@@ -447,6 +448,38 @@ export async function residentStandpoint(handle, w = null) {
   let departures = [];
   try { departures = await departuresNow(WORLD_CLONE); }
   catch { /* no ledger and no store — ground is still an honest answer */ }
+
+  // ── ABOARD BY OCCUPANCY (#2986, Keemin-ruled 2026-09-19) ──────────────────
+  //
+  // FIRST, because it is the one answer the derivations below cannot reach. A
+  // rider entered through a wharf a hundred kilometres from the hull: their walk
+  // record ends at that wharf, `foldFrames` will never put them inside her, and
+  // both derivations below would answer the wharf — truthfully about the record
+  // and falsely about the town. The enter-exit ledger is the record that knows,
+  // and this is the office asking it.
+  //
+  // GATED ON THE FOLD, so nothing is paid for in a world with no vehicle: a
+  // world whose Keeping Works has not planted `class: vehicle` on anything
+  // skips the ledger read entirely and every standpoint below is byte-identical
+  // to what it was. That is also the state of world main until #2986's law
+  // lands, which is why this seam can ship ahead of it.
+  if (worldHasVehicle(world_)) {
+    try {
+      const { crossingLaw } = await import("./world-crossings.mjs");
+      const { crossingDeps } = await import("./world-apex.mjs");
+      const law = await crossingLaw(WORLD_CLONE).catch(() => null);
+      if (law?.thresholds) {
+        const stack = await occupiedNowBy(handle, law.thresholds, crossingDeps());
+        const aboard = await vehicleStandpoint(handle, world_, { repo: WORLD_CLONE, stack });
+        if (aboard) return aboard;
+      }
+    } catch (e) {
+      // A standpoint that could be taken down by an unreadable ledger would be a
+      // worse bargain than a rider reading as ashore for one call. Said out
+      // loud, never swallowed.
+      console.error(`[world] the aboard-by-occupancy standpoint tripped (${String(e?.message ?? e).slice(0, 160)}) — falling back to the frame derivation`);
+    }
+  }
 
   // ── STAGE D (WORLD_MOVEMENT_V2) ───────────────────────────────────────────
   // The boat runs on her timetable, and riding her is a declared attachment.
@@ -1117,6 +1150,26 @@ export async function worldSummary(key = null) {
   };
 }
 
+// ── THE TRANSPORT LINE (#2986 § 11 item 1, Keemin-ruled 2026-09-19) ──────────
+//
+// "A resident standing on the Garrison's wharf is TOLD what the wharf is for."
+//
+// Derived at the read's instant from the wheelhouse and the standpoint, the way
+// `the-stop-answers` already derives the next departures beside it. Null away
+// from any stop and null in a world with no vehicle, so every other answer this
+// office gives is byte-identical. Never throws: a telling must not be takeable
+// down by a timetable.
+export async function transportBlock(worldState, standpoint) {
+  try {
+    if (!worldHasVehicle(worldState)) return null;
+    const { service } = await vesselServiceFrom(worldState, { repo: WORLD_CLONE });
+    if (!service) return null;
+    const stop = stopUnderfoot(standpoint, service, worldState);
+    if (!stop) return null;
+    return transportAt(stop, service, worldState);
+  } catch { return null; }
+}
+
 export async function worldOrient(args = {}, key = null, { roll = [] } = {}) {
   const choice = chooseStandpoint(args, key);
   if (choice.bounce) return choice.bounce; // a multi-resident key must name a handle
@@ -1177,7 +1230,8 @@ export async function worldOrient(args = {}, key = null, { roll = [] } = {}) {
     // with no roll gets the two-term union it always had.
     roll,
   });
-  return { standpoint: { ...at, stance: choice.stance }, crossing: { n: crossing, derivation: CROSSING_DERIVATION }, note, primer, ...o, ...(present ? { present } : {}) };
+  const transport = await transportBlock(w, at);
+  return { standpoint: { ...at, stance: choice.stance }, crossing: { n: crossing, derivation: CROSSING_DERIVATION }, note, primer, ...o, ...(present ? { present } : {}), ...(transport ? { transport } : {}) };
 }
 
 // The telling's own line grammar, for residents: `  · <m> <bearing> — <who>`,
@@ -1415,7 +1469,9 @@ export async function worldEyes(args = {}, key = null, { roll = [] } = {}) {
   });
   const section = presenceTelling(present);
   const telling = section ? `${engineTelling ?? ""}\n\n${section}` : engineTelling;
+  const transport = await transportBlock(w, at);
   const full = {
+    ...(transport ? { transport } : {}),
     standpoint: { ...at, stance: choice.stance }, crossing: { n: crossing, derivation: CROSSING_DERIVATION },
     telling, ...rest, ...(present ? { present } : {}),
   };
@@ -1450,6 +1506,12 @@ export async function worldEyes(args = {}, key = null, { roll = [] } = {}) {
   });
   return {
     stance: choice.stance, telling, objects,
+    // THE TRANSPORT LINE RIDES THE NARRATIVE SHAPE TOO (#2986 § 11 item 1), and
+    // it has to: `diagnostic` is a diagnostic — nothing a resident actually
+    // reads is allowed to depend on it, which is the ruling one screen up. A
+    // visibility line that only appeared under a debug flag would be exactly the
+    // invisibility this closes.
+    ...(transport ? { transport } : {}),
     // THE RECORDS THIS ANSWER NAMES (2026-09-10). `objects` is the only list
     // here that names ids, so this is exactly those plus the ground.
     records: await markRecords(objects.map((o) => o.id), w),
@@ -1665,7 +1727,22 @@ export async function worldInvestigate(args = {}, key = null) {
   // effective ✦ figure here too. Adding a translation layer is how the two words
   // drifted apart in the first place.
   const stands = await thingStandsBlock(String(args.mark), w, r);
-  return { ...r, ...(receipt ? { receipt } : {}), ...(stands ? { stands } : {}) };
+  // ── "A POST OFFICE STOP" (#2986 § 11 item 5) ────────────────────────────
+  //
+  // One derived sentence on the card of any mark a vehicle's timetable names.
+  // NOTHING IS WRITTEN ON RESIDENTS' OWN MOORINGS, which is the whole reason it
+  // is derived: the Snug mooring is Current's mark and the Garrison's wharf is
+  // Sol's, and a stop that the wheelhouse stops naming stops carrying the
+  // sentence in the very next read rather than leaving a fossil on somebody
+  // else's property.
+  let transportNote = null;
+  try {
+    if (worldHasVehicle(w)) {
+      const { service } = await vesselServiceFrom(w, { repo: WORLD_CLONE });
+      transportNote = service ? stopAnnotationFor(String(args.mark), service, w) : null;
+    }
+  } catch { transportNote = null; }
+  return { ...r, ...(receipt ? { receipt } : {}), ...(stands ? { stands } : {}), ...(transportNote ? { transport: transportNote } : {}) };
 }
 
 /**
@@ -2114,11 +2191,52 @@ export async function worldBlockForHandle(handle, key = null) {
   // the id when it exists and is actually placed (26 residents read that way and
   // it is the more specific answer); otherwise name the ground itself.
   const home = homeOf(handle, w);
-  if (!home.placed) return { mark_id: id, x: null, y: null, sited: false };
+  const transport = await doorstepTransportFor(handle, w);
+  if (!home.placed) return { mark_id: id, x: null, y: null, sited: false, ...(transport ? { transport } : {}) };
   const house = id ? w.marks.find((m) => m.id === id && m.at) : null;
   return house
-    ? { mark_id: id, x: house.at.x, y: house.at.y, sited: true }
-    : { mark_id: home.mark_id, x: home.x, y: home.y, sited: true };
+    ? { mark_id: id, x: house.at.x, y: house.at.y, sited: true, ...(transport ? { transport } : {}) }
+    : { mark_id: home.mark_id, x: home.x, y: home.y, sited: true, ...(transport ? { transport } : {}) };
+}
+
+/**
+ * THE DOORSTEP'S TRANSPORT LINE (#2986 § 11 item 2 + § 6 item b).
+ *
+ * Two shapes and they are mutually exclusive, because they answer two different
+ * moments. NOT ABOARD: one standing line under the town's notices — she exists,
+ * she calls at n places, the nearest one to you is that far. ABOARD: what you
+ * are in, where she is, and — when a ride of yours has come due — the arrived
+ * notice, which is the thing "waiting for residents" that ruling 9 asks for.
+ *
+ * DERIVED, both of them. The arrived line is a function of the standing ride and
+ * the clock: a replay at the same instant says the same thing, an exit ends it
+ * by ending the ride, and nothing anywhere is marked read.
+ *
+ * Never throws and returns null in a world with no vehicle, so the doorstep of
+ * every town that does not run one is byte-identical to what it was.
+ */
+async function doorstepTransportFor(handle, w) {
+  try {
+    if (!worldHasVehicle(w)) return null;
+    const { service } = await vesselServiceFrom(w, { repo: WORLD_CLONE });
+    if (!service) return null;
+    const here = await residentStandpoint(handle, w).catch(() => null);
+    if (here?.aboard && here.vehicle) {
+      const { crossingLaw } = await import("./world-crossings.mjs");
+      const { crossingDeps } = await import("./world-apex.mjs");
+      const deps = crossingDeps();
+      const acts = deps.acts ? await deps.acts(handle) : [];
+      const { standingRide } = rideStateFrom(acts, { vesselId: here.vehicle });
+      const arrived = arrivedNotice(standingRide, Date.now());
+      return {
+        aboard: here.vehicle,
+        line: `You are aboard ${here.vehicle} — ${here.narration ?? "wherever her hull is"}.`,
+        ...(standingRide ? { standing_ride: standingRide } : {}),
+        ...(arrived ? { arrived } : {}),
+      };
+    }
+    return doorstepTransport(service, here?.placed ? here : null, w);
+  } catch { return null; }
 }
 
 // ── the draft-branch lane (tier 1) ───────────────────────────────────────────
@@ -3564,6 +3682,7 @@ export async function walkViaOffice(worldClone, payload = {}, key = null) {
   // WHERE TO — ruling 2's order.
   let toward = null, targetExtent = null, targetMarkId = null, targetFrom = "";
   let exitedFirst = null; // DEC-5: the marks exited on this walker's own `exit: true`, for the answer
+  let setDownFirst = null; // #2986: where a vehicle's deposit rule put this walker before the road began
   const px = Number(payload.x), py = Number(payload.y);
   if (payload.mark_id) {
     const id = String(payload.mark_id);
@@ -3749,8 +3868,23 @@ export async function walkViaOffice(worldClone, payload = {}, key = null) {
       const w = stack.length ? await deps.world() : null;
       const byId = new Map((w?.marks ?? []).map((m) => [m.id, m]));
       const leaving = leavingWhileOccupying(stack, toward, (pt, id) => { const m = byId.get(id); return m ? law.verbs.pointWithinMark(pt, m) : null; });
+      // ── A WALK DECLARED ABOARD IS THE CHOICE TO GO ASHORE (#2986) ────────
+      //
+      // ENGINE.md has said since the timetable mechanic shipped that "a walk
+      // declared from her deck is the choice to go ashore", and the brief makes
+      // it one act: the walk handler, seeing occupancy within a vehicle-class
+      // mark, performs the exit under the deposit rule and then walks FROM THE
+      // DEPOSIT POINT. No refusal — DEC-5's refusal exists so that a resident
+      // cannot be carried out of a room without leaving it, and stepping off a
+      // boat you are aboard is not that: it is the leaving, declared.
+      //
+      // The narrowing matters. If the stack also holds a mark that is NOT a
+      // vehicle, the refusal stands exactly as it did: this only ever spares a
+      // caller the `exit: true` for a hull, never for a room.
+      const vehicleLeaving = leaving.filter((id) => String(byId.get(id)?.class ?? "") === "vehicle");
+      const allVehicles = leaving.length > 0 && vehicleLeaving.length === leaving.length;
       if (leaving.length) {
-        if (payload.exit !== true) {
+        if (payload.exit !== true && !allVehicles) {
           throw bounce(409, `you are within ${leaving[0]} — this walk would carry you out of it without leaving`,
             `the-town/the-occupancy-invariant: "You occupy a mark only by entering, and only while your feet stand inside it; a walk that would carry you out is refused until you exit." Step out first — world { do: "exit"${leaving.length > 1 ? ", args: { mark }" : ""} } — or pass exit: true on this walk to exit (${leaving.join(" → ")}) and walk in one call.`,
             { law: "the-town/the-occupancy-invariant (DEC-5, founder-ruled 2026-09-03)", within: stack, leaving });
@@ -3758,6 +3892,15 @@ export async function walkViaOffice(worldClone, payload = {}, key = null) {
         for (const markId of leaving) {
           const stepped = await exitViaOffice(worldClone, { handle: who, mark: markId }, key, deps);
           if (stepped?.error) throw bounce(stepped.error.code ?? 409, `could not exit ${markId} before walking: ${stepped.error.defect ?? stepped.error}`, stepped.error.hint ?? "exit first, then walk");
+          // THE ROAD STARTS WHERE THE DEPOSIT PUT YOU. A rider's standpoint was
+          // the hull's, and the hull is not where they have just been set down
+          // — walking from it would draw a line across open water from a boat
+          // that is somewhere else entirely. The exit's own answer names the
+          // point, so there is no second derivation of it here.
+          if (stepped?.set_down?.recorded && Number.isFinite(stepped.set_down.x)) {
+            from = { x: stepped.set_down.x, y: stepped.set_down.y };
+            setDownFirst = { at: stepped.set_down.at, arrived: stepped.set_down.arrived, x: from.x, y: from.y };
+          }
         }
         // The exits stand as their own acts on the record; the walk below is the
         // second act of one call. If the walk's pen refuses, the exits remain —
@@ -3862,7 +4005,10 @@ export async function walkViaOffice(worldClone, payload = {}, key = null) {
       // Which store is the RECORD for this act — said in the answer, as every
       // flipped door says it.
       ...(walkFlipped ? { log: "acts", seq: flippedRow?.seq ?? null } : {}),
-      ...(exitedFirst ? { exited_first: exitedFirst, note: "DEC-5: you stepped out of these before walking (exit: true); each exit stands as its own act on the record" } : {}),
+      ...(exitedFirst ? { exited_first: exitedFirst, note: setDownFirst
+        ? `a walk declared aboard is the choice to go ashore: you stepped off at ${setDownFirst.at}${setDownFirst.arrived ? ", where your ride came due" : " — the stop you came in through"} and the road begins there. The exit stands as its own act on the record.`
+        : "DEC-5: you stepped out of these before walking (exit: true); each exit stands as its own act on the record" } : {}),
+      ...(setDownFirst ? { set_down_first: setDownFirst } : {}),
     };
   } else {
     const exec = join(HERE, "walk-exec.mjs");

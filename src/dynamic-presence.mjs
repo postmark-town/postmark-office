@@ -216,6 +216,47 @@ async function framesForPresence({ db, world, repo, atMs, walk, stored = null })
   return out;
 }
 
+/**
+ * THE RIDERS, ADDED TO THE SAME FRAME MAP (#2986, Keemin-ruled 2026-09-19).
+ *
+ * A rider's frame cannot be folded out of their departures — they entered
+ * through a wharf the hull is nowhere near, which is ruling 1 — so it is read
+ * off the enter-exit ledger, ONCE for the whole town rather than per resident,
+ * and merged into the map `withFrames` already applies.
+ *
+ * It lands HERE, beside `framesForPresence`, for the reason positions.mjs gives
+ * about itself: if the walkers door placed a rider at the hull and presence
+ * placed them back on the quay they entered from, somebody would write them a
+ * letter opening "you aren't home" all over again. One map, both doors.
+ *
+ * ⚑ RIDERS OVERWRITE, and they must. A resident who walked aboard at the quay
+ * has BOTH a folded frame and an occupancy row; the two agree while she is
+ * alongside and disagree the moment she sails with somebody who boarded through
+ * a distant wharf. Occupancy is the record the law now reads, so it wins.
+ */
+async function withVehicleRiders(frames, { world, repo, atMs }) {
+  const [{ crossingLaw }, { crossingDeps }, { vehicleWithin, vesselPositionAt }] = await Promise.all([
+    import("./world-crossings.mjs"), import("./world-apex.mjs"), import("./world-movement.mjs"),
+  ]);
+  const law = await crossingLaw(repo).catch(() => null);
+  if (!law?.thresholds) return frames;
+  const deps = crossingDeps();
+  const at = law.thresholds.stampAt(deps.now());
+  const acts = law.thresholds.parseEnterExitLedger(await deps.ledger()).acts;
+  const occupancy = law.thresholds.occupancyAt(acts, at);
+  let hull = null;
+  const out = frames ? new Map(frames) : new Map();
+  for (const [handle, stack] of occupancy) {
+    const vessel = vehicleWithin(stack, world);
+    if (!vessel) continue;
+    hull ??= await vesselPositionAt(world, atMs, { repo });
+    if (!hull) break;
+    out.set(handle, { frame: vessel, local: { x: 0, y: 0 }, world: { x: hull.x, y: hull.y },
+                      provenance: hull.moving ? "carried" : "aboard" });
+  }
+  return out.size ? out : frames;
+}
+
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
 /**
@@ -262,6 +303,14 @@ async function readPresence({ dbPath = null, repo = WORLD_CLONE, atMs = Date.now
         try { frames = await framesForPresence({ db, world, repo, atMs, walk: w, stored }); }
         catch { frames = null; }  // a frame read must never cost anyone their presence
       }
+    }
+    // Gated on the fold: a world with no vehicle-class mark pays nothing and
+    // reads exactly as it did. Never throws, for the same reason the fold above
+    // does not — a ledger this office cannot read must not cost the town its
+    // presence answer.
+    if (world && (await import("./world-movement.mjs")).worldHasVehicle(world)) {
+      try { frames = await withVehicleRiders(frames, { world, repo, atMs }); }
+      catch { /* the riders read as ashore for this call, and nobody loses presence */ }
     }
     rows = positionsAt(db, atMs, w, vessel, { world, where: whereMod, frames, stored, roll });
     db.close();

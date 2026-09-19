@@ -104,6 +104,18 @@ const LANE_OF = Object.freeze({
   // 2026-09-02, the first census run against an apex that dispatches them
   // (the C1 flip night); until then check 0 had never been asked.
   strike: "journal", cast: "journal", guard: "journal", lift: "journal", loot: "journal",
+  // THE VEHICLE'S ACT (#2986, 2026-09-19). Which lane: journal. Which table:
+  // `journal`, class `ride`. Which pen: `appendJournal`, which carries the
+  // World 2.0 mirror into `acts` itself — the same path enter/exit take, so
+  // this is the parity falsifier's territory and needs no closure check of its
+  // own. It is NOT `move`: a walk is a line with a pace that position readers
+  // interpolate along, and a ride has no line and no intermediate points.
+  //
+  // ⚑ THIS ROW IS HERE BECAUSE THE CENSUS ASKED FOR IT AND THE LANE HAD NOT
+  // ANSWERED. Adding `ride` to DISPATCH reddened check 0 on the first full-suite
+  // run — the guard doing exactly what gold §3 says it is for: "every change
+  // answers which lane, which table, which pen — or it is refused."
+  ride: "journal",
 
   // own pen, mirrored by mirrorLaneAct — checked below
   say: "lane",   // check 1 · voices-log.jsonl
@@ -166,6 +178,7 @@ const CLASS_LANE_OF = Object.freeze({
   move: "journal",        // walk, flag-off arm (the flag-on arm is check 3)
   stance: "journal",      // declare-stance-on
   "arena-act": "journal", // gold §1: "LIVE — acts: ... throws, arena beats"
+  ride: "journal",        // #2986 — naming a destination from inside a vehicle
   voice: "lane",          // check 1 — never written to the journal; see world-journal.mjs
   holding: "lane",        // check 2 — likewise
 });
