@@ -754,6 +754,22 @@ and runs both pens silently, and a new one refuses with exit 2. The
 `world2-ops-scripts` roll-call row already watches that directory as bytes, so a
 drift between the shipped script and the box's copy reddens on its own.
 
+⚑ **THE INSTALL-DAY PREDICTION, and it is the acceptance proof** — the same
+shape `box-rollcall.sh` already carries for the settlement shadow. The manifest
+row for this timer reaches the box with the **tag**; the unit reaches it by the
+**hand-carry above**. Between those two moments the roll-call is expected to
+exit 1 with exactly one new alarm:
+
+    ALARM-missing  postmark-world2-law-ingest.timer  … NOT ON THE BOX
+
+That is the manifest and the box telling the truth about each other, and it
+clears the moment the carry lands. If it is still red after the carry, the unit
+did not install or `daemon-reload` was not run — read
+`systemctl cat postmark-world2-law-ingest.service` before touching anything
+else. Shipping the row as `parked` to keep the board quiet would be the worse
+trade: a parked row is a DECISION in this file's grammar, and this one is a
+two-day gap.
+
 **Do NOT enable `postmark-world2-ingest.timer`** to get the law pen back. It
 carries the identical `:04/:19/:34/:49` marks, so adopting it now would run the
 law pen twice and the parked stamp pen once. Its row says so.
