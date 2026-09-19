@@ -689,13 +689,74 @@ one line, named below.
 | unit | what it runs | when |
 |---|---|---|
 | `postmark-world2-clearing.timer` | `world2-clearing.sh` → `clearing-job.mjs` | 05:45 / 17:45 UTC |
-| `postmark-world2-ingest.timer` | `world2-ingest.sh` → `law-ingest.mjs` + `stamp-ingest.mjs` | every 15 min, :04/:19/:34/:49 |
+| `postmark-world2-ingest.timer` | `world2-ingest.sh` → `law-ingest.mjs` + `stamp-ingest.mjs` | **PARKED** since 2026-08-31 — the stamp pen's unit now (below) |
+| `postmark-world2-law-ingest.timer` | `world2-ingest.sh law` → `law-ingest.mjs` only | every 15 min, :04/:19/:34/:49 |
 | `postmark-world2-notary.timer` | `world2-notary.sh` → `snapshot-export.mjs` + `falsifier-canon-locks.mjs` (postmark#2594, nightly — the section below) | 07:20 UTC (office#83, from 03:20) |
 | `postmark-world2-backup.timer` | `world2-backup.sh` → `pg_dump` + ship, `pg_basebackup` | 08:10 UTC (office#83, from 04:10) |
 
-All four carry rows in `deploy/box-rollcall-manifest.json`. `world2-restore-rehearse.sh`
+All five carry rows in `deploy/box-rollcall-manifest.json`. `world2-restore-rehearse.sh`
 is a hand-run, deliberately: it drops and recreates a database, and nothing that
 does that belongs on a clock.
+
+### The law pen keeps its own clock (2026-09-19, postmark#2893)
+
+**What happened.** `postmark-world2-ingest` ran two pens — `law-ingest` (the
+rulebook → `law_projection` + `identities`) and `stamp-ingest` (the ledger →
+`stamp_projection`). On 2026-08-31 the founder parked the timer, for a reason
+about the world's **outcomes**: a re-lift from git *"would launder v1's record
+into v2's and destroy the writer comparison the shadow era exists to make."*
+Neither pen writes an outcome — they copy repo-first inputs the store may not
+author — but the park took the whole unit, and `law-ingest.mjs` is the **only**
+writer of `law_projection` anywhere in the office.
+
+So the rulebook copy stopped. `a23a8d17` (2026-09-05), one hand-run to
+`1688a5af` on 09-17, then frozen again: **37 commits behind world main** by
+2026-09-19, measured on prod's `/world2/status`.
+
+**Why nothing went red.** The designed alarm is the clearing refusing on a
+**null** world-law pin. The final pass of 09-05 wrote a *valid* pin, and a frozen
+valid pin is never null, so for fourteen days the guard had nothing to fire on.
+That is the shape worth carrying away: **a guard against absence does not watch
+for staleness.**
+
+**The ruling** (Keemin, 2026-09-19): *"split for now is good."* The law pen gets
+its own unit and timer. The parked unit and its files are **untouched**, and
+`stamp-ingest` stays parked with them.
+
+**The split is a mode argument, not a second copy of the pen.**
+`world2-ingest.sh` takes `law` | `stamps` | `both`, and no argument is `both` —
+today's behaviour, unchanged. Each mode writes **its own state file**
+(`ingest-law.json`, `ingest-stamps.json`, `ingest.json`), which is not tidiness:
+a roll-call heartbeat has to be able to say which thing it measured, and one
+shared path would let the law row go green on a run that was not the law pen's,
+race two units on the same `mv -f`, and overwrite the parked rail's last receipt
+every fifteen minutes. A pen that did not run gets **no line** in the state,
+rather than a zero-exit line that reads like a receipt.
+
+**Install — the script goes FIRST, and the order is not a suggestion.** A box
+whose `/srv/world2-lab/ops` copy predates the mode argument ignores `law` and
+runs **both** pens, which re-runs the one the founder parked. Hand-carry after
+Sunday's tag:
+
+    scp deploy/world2-ingest.sh meepo-ec2:/srv/world2-lab/ops/
+    ssh meepo-ec2 'chmod +x /srv/world2-lab/ops/world2-ingest.sh'
+    ssh meepo-ec2 'bash /srv/world2-lab/ops/world2-ingest.sh nonsense; echo "expect 2, got $?"'
+    scp deploy/postmark-world2-law-ingest.{service,timer} meepo-ec2:/tmp/
+    ssh meepo-ec2 'sudo install -m0644 -o root -g root /tmp/postmark-world2-law-ingest.* /etc/systemd/system/'
+    ssh meepo-ec2 'sudo install -d -m0755 /etc/systemd/system/postmark-world2-law-ingest.service.d && \
+                   sudo install -m0644 -o root -g root /srv/postmark-office/deploy/postmark-world2-office-tree.conf \
+                     /etc/systemd/system/postmark-world2-law-ingest.service.d/office-tree.conf'
+    ssh meepo-ec2 'sudo systemctl daemon-reload && sudo systemctl enable --now postmark-world2-law-ingest.timer'
+    ssh meepo-ec2 'sh /srv/postmark-office/deploy/box-rollcall.sh'
+
+The third line is the whole carry check: an old copy takes an unknown argument
+and runs both pens silently, and a new one refuses with exit 2. The
+`world2-ops-scripts` roll-call row already watches that directory as bytes, so a
+drift between the shipped script and the box's copy reddens on its own.
+
+**Do NOT enable `postmark-world2-ingest.timer`** to get the law pen back. It
+carries the identical `:04/:19/:34/:49` marks, so adopting it now would run the
+law pen twice and the parked stamp pen once. Its row says so.
 
 ### Finishing a refused crossing by hand (2026-09-14, postmark#2786)
 
@@ -868,8 +929,15 @@ sequence that resets the checkout off the law, so carry the script first.
     ssh meepo-ec2 'chmod +x /srv/world2-lab/ops/*.sh'
     scp deploy/postmark-world2-*.{service,timer} meepo-ec2:/tmp/
     ssh meepo-ec2 'sudo install -m0644 -o root -g root /tmp/postmark-world2-* /etc/systemd/system/ && sudo systemctl daemon-reload'
-    ssh meepo-ec2 'for u in clearing ingest notary backup; do sudo systemctl enable --now postmark-world2-$u.timer; done'
+    ssh meepo-ec2 'for u in clearing law-ingest notary backup; do sudo systemctl enable --now postmark-world2-$u.timer; done'
     ssh meepo-ec2 'sh /srv/postmark-office/deploy/box-rollcall.sh'
+
+> **`ingest` left this loop on 2026-09-19** and the omission is the point.
+> `postmark-world2-ingest.timer` is PARKED at the founder's word of 2026-08-31
+> (`deploy/box-rollcall-manifest.json`, that row); a re-install block that
+> enables it would recommit a ruling by muscle memory. `law-ingest` takes its
+> place — the law half, split out on postmark#2893, section below. The parked
+> unit's files still ship, so `scp`ing them is right; enabling it is not.
 
 ### ONE TREE PER BOX — the office-tree drop-in (2026-09-10)
 

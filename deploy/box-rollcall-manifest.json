@@ -288,11 +288,26 @@
    "label": "the World 2.0 projection poll",
    "stage": "parked",
    "activation_owner": "Keemin — PARKED at his word 2026-08-31 ~03:45Z ('arm it, disable git ingest'): the World2 shadow mirror is armed on the prod office and is the store's SOLE feeder; the seam closed lawfully (mirror live, one final ingest pass, then this timer disabled). Every sentence in this row was rewritten with the word, per this file's own stripe-watch scar.",
-   "parked_because": "the shadow writer is the store's sole pen (founder-ruled 2026-08-31) — a re-lift from git would launder v1's record into v2's and destroy the writer comparison the shadow era exists to make",
-   "adopt_command": "sudo systemctl enable --now postmark-world2-ingest.timer — ONLY at Keemin's word; re-adopting silently would recommit the ruling this row records",
+   "parked_because": "CORRECTED 2026-09-19 (postmark#2893, founder-ruled): the 08-31 sentence here read 'a re-lift from git would launder v1's record into v2's and destroy the writer comparison the shadow era exists to make'. That is true of the world's OUTCOMES — acts, claims, marks, what the shadow mirror writes and what a replay-ingest would lift — and this unit's two pens write none of them. They copy the rulebook (law_projection + identities) and the ledger (stamp_projection), repo-first inputs the store may not author. The mirror's reason was written onto this row when the seam closed in one gesture, and it named a danger these pens cannot cause. What HOLDS this unit parked now is narrower and still the founder's: the STAMP pen stays parked because the town's record is the shadow writer's and the clearing already lifts the ledger at every close. The LAW pen was resumed 2026-09-19 on its own unit (postmark-world2-law-ingest.timer) — see that row.",
+   "adopt_command": "sudo systemctl enable --now postmark-world2-ingest.timer — ONLY at Keemin's word; re-adopting silently would recommit the ruling this row records. NOTE 2026-09-19: adopting THIS unit now would run the law pen a second time, on top of postmark-world2-law-ingest.timer's identical :04/:19/:34/:49 marks. The law pen has its own unit; this one is the stamp pen's.",
    "cadence": "none while parked (the unit file keeps its :04/:19/:34/:49 UTC OnCalendar for the day it is re-adopted)",
    "cadence_source": "the unit file — disabled with no next fire is this row's healthy state",
    "stale_means": "not judged while parked. The store's freshness belongs to the SHADOW WRITER now — a mirror failure surfaces in the office journal (loud, fire-and-forget) and the dead-letter queue, never here. When this rail was live its staleness only degraded the doors' advisory reads; the clearing pins its own reads at the candle and refuses on a null law pin regardless."
+  },
+  {
+   "unit": "postmark-world2-law-ingest.timer",
+   "label": "the World 2.0 law pen",
+   "stage": "live",
+   "activation_owner": "Keemin — RULED 2026-09-19 ~14:4x EDT on postmark#2893, 'split for now is good'. The law pen rode postmark-world2-ingest, parked at his 08-31 word for a reason about the world's outcomes that neither pen touches; law-ingest.mjs is the only writer of law_projection anywhere in the office, so the park froze the rulebook copy — a23a8d17 (09-05), one hand-run to 1688a5af (09-17), then 37 commits behind world main by 09-19. This unit is the law half resumed on its own clock. Unit source: deploy/postmark-world2-law-ingest.{service,timer}, script deploy/world2-ingest.sh in `law` mode. The stamp pen stays parked on the original unit.",
+   "cadence": "every 15 minutes, :04/:19/:34/:49 UTC — the same marks the parked poll carries, kept deliberately: they are off the :07/:22/:37/:52 that office-rehydrate and stripe-watch occupy, and a new cadence here would be a second decision riding along with the split",
+   "cadence_source": "systemctl show postmark-world2-law-ingest.timer -p TimersCalendar",
+   "heartbeat": {
+    "kind": "state_file",
+    "path": "/srv/world2-lab/state/ingest-law.json",
+    "stamp_field": "at",
+    "stale_after_minutes": 45
+   },
+   "stale_means": "The rulebook copy stops advancing and the store answers under a law the tree has amended. This is the alarm postmark#2893 asked for, and it is worth saying WHY it had to be asked for: the designed guard is the clearing's refusal on a NULL world-law pin, and a pin that was written once and then froze is never null — so between 09-05 and 09-19 nothing anywhere went red while law_projection fell 37 commits behind. The allowance is 45 minutes, three ticks: one missed fire is weather, three is the rail. THIS FILE IS THIS UNIT'S ALONE and that is the point — the parked poll writes /srv/world2-lab/state/ingest.json, so a heartbeat here can never go green on a run that was not the law pen's. Read the `law.sha` line beside the stamp: a fresh `at` with an ALARM-failed exit means the pen ran and could not ingest, and the detail names which."
   },
   {
    "unit": "postmark-world2-notary.timer",
@@ -585,6 +600,16 @@
     "must_be": "release",
     "why": "law-ingest.mjs and stamp-ingest.mjs exec out of this tree, and they are the pens that write the projections the candle then reads. An ingest on an old tree is the escrow class from the upstream side: rows written to a schema the deployed clearing no longer expects. The unit is PARKED today, so this row reports PARKED and alarms on nothing; it exists so that adopting the timer does not also silently adopt a tree.",
     "activation_owner": "Wright — installed 2026-08-29, timer disabled since 2026-09-05 pending the world-branch carry (DEPLOY.md § Which branch the ingest lane reads)."
+   },
+   {
+    "id": "world2-law-ingest",
+    "unit": "postmark-world2-law-ingest.service",
+    "label": "the World 2.0 law pen's office tree",
+    "env_key": "WORLD2_OFFICE",
+    "require_env": "/etc/systemd/system/postmark-world2-law-ingest.service.d/office-tree.conf (deploy/postmark-world2-office-tree.conf)",
+    "must_be": "release",
+    "why": "law-ingest.mjs execs out of this tree, and it is the only writer of law_projection anywhere in the office. A law pen on an old tree writes the rulebook to a schema the deployed clearing no longer expects — the escrow class from the upstream side, and worse here than on the parked poll it was split from, because this one is LIVE. The row carries require_env rather than a default so it refuses to guess: a unit whose drop-in went missing must redden, not fall back to a tree that happens to be right today.",
+    "activation_owner": "Keemin — the split is his ruling of 2026-09-19 (postmark#2893); the drop-in and this row are the same install."
    },
    {
     "id": "world2-ops-scripts",

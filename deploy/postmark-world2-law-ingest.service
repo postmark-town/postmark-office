@@ -1,0 +1,43 @@
+[Unit]
+# THE LAW PEN'S OWN UNIT (postmark#2893, founder-ruled 2026-09-19 "split for now
+# is good"). One pen, one clock.
+#
+# WHY THIS EXISTS AND THE OTHER UNIT STAYS PARKED. postmark-world2-ingest ran
+# BOTH pens — law-ingest (the rulebook) and stamp-ingest (the ledger). It was
+# parked at the founder's word on 2026-08-31 for a reason about the world's
+# OUTCOMES: a re-lift from git "would launder v1's record into v2's". Neither
+# pen writes an outcome, but the park took the unit, and law-ingest.mjs is the
+# ONLY writer of law_projection anywhere in the office. So the law copy froze —
+# 2026-09-05, one hand-run on 09-17, then 37 commits behind world main by 09-19.
+# The designed alarm (the clearing refuses on a NULL law pin) could not fire,
+# because the pin was not null; it was valid and frozen.
+#
+# This unit resumes the law pen alone. postmark-world2-ingest.{service,timer}
+# are untouched and still parked, and stamp-ingest stays with them.
+Description=World 2.0 law projection — law-ingest only (world repo -> law_projection + identities)
+Documentation=file:///srv/world2-lab/ops/world2-ingest.sh
+Documentation=https://github.com/postmark-town/postmark/issues/2893
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=oneshot
+User=meepo
+# /etc/postmark-world2-dev.env is root:root 0600 and this runs as meepo, so
+# systemd (which is root) does the reading and hands the values in. The file is
+# never loosened to make a lane work, and meepo never opens it.
+# THIS LINE IS THE PROD RENAME: point it at a prod credential file whose
+# WORLD2_DB says `world2`, and every unit here follows without another edit.
+EnvironmentFile=/etc/postmark-world2-dev.env
+# `law` is the whole of the split — ONE copy of the pen, one script, a mode.
+# A box whose /srv/world2-lab/ops copy PREDATES the mode argument ignores it and
+# runs BOTH pens, which is the parked one. Carry the script before installing
+# this unit (DEPLOY.md § Install, and the order there is not a suggestion).
+# Exit 0 the law pen ingested · 1 it FAILED (the reason is in
+# /srv/world2-lab/state/ingest-law.json) · 2 the lane could not run.
+ExecStart=/bin/bash /srv/world2-lab/ops/world2-ingest.sh law
+TimeoutStartSec=600
+Nice=10
+
+[Install]
+WantedBy=multi-user.target
