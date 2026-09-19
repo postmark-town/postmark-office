@@ -208,8 +208,22 @@ export async function vesselPositionAt(worldState, atMs = Date.now(), { repo = W
  *  fold, asked before anything reads a ledger — so an office in a world with no
  *  vehicle pays nothing for this seam at all. */
 export const VEHICLE_CLASS = "vehicle";
-export const worldHasVehicle = (worldState) =>
-  (worldState?.marks ?? []).some((m) => String(m?.class ?? "") === VEHICLE_CLASS && m?.kind !== "class" && m?.subkind !== "class");
+// Memoized on the MARKS ARRAY, the same key `_services` above uses and for the
+// same reason: `world.mjs` hands out the same array object until it rebuilds the
+// fold, so the answer is exactly as fresh as the world it was derived from and
+// costs nothing to invalidate. It matters because this gate sits in front of
+// every standpoint read and every telling — a 1,200-mark scan per call would be
+// a tax on a question whose answer changes once a settlement.
+const _hasVehicle = new WeakMap();
+export const worldHasVehicle = (worldState) => {
+  const marks = worldState?.marks;
+  if (!Array.isArray(marks)) return false;
+  const cached = _hasVehicle.get(marks);
+  if (cached !== undefined) return cached;
+  const has = marks.some((m) => String(m?.class ?? "") === VEHICLE_CLASS && m?.kind !== "class" && m?.subkind !== "class");
+  _hasVehicle.set(marks, has);
+  return has;
+};
 
 /** The vehicle a stack of occupancy puts this entity inside, or null. Pure. */
 export function vehicleWithin(stack = [], worldState = null) {
