@@ -45,10 +45,10 @@ import {
   depositPointFor, ringLegInto, stopAnnotationFor, stopUnderfoot, stopsOfService,
   straightLineM, transportAt, vehicleGroundExtras, vesselIdOf,
 } from "../src/world-ride.mjs";
-import { VEHICLE_CLASS, enterViaOffice, exitViaOffice, groundBlockOf, portalEntryFor } from "../src/world-crossings.mjs";
+import { VEHICLE_CLASS, crossingLaw, enterViaOffice, exitViaOffice, groundBlockOf, portalEntryFor } from "../src/world-crossings.mjs";
 import { spineWithVehicles } from "../src/world-apex.mjs";
 import { entriesOfClass, guardsPass, resolveGrants } from "../src/world-grants.mjs";
-import { vehicleStandpoint, vehicleWithin, worldHasVehicle } from "../src/world-movement.mjs";
+import { leavingWhileOccupying, vehicleStandpoint, vehicleWithin, worldHasVehicle } from "../src/world-movement.mjs";
 import { carriersFrom, inRect } from "../src/world-frames.mjs";
 
 const CLONE = process.env.WORLD_CLONE ?? join(process.cwd(), "..", "postmark-world");
@@ -478,6 +478,28 @@ test("#3019: a deposit that would carry the rider out of rooms they boarded from
     "the deposit carries DEC-5's `exit: true`, so the walk door exits those rooms under the ledger's own discipline "
     + "before setting the rider down — without it the walk is refused 409 AFTER the exit is already written, which is "
     + "the stuck state dom-pidgey is in on prod (postmark#3019)");
+
+  // ── TWO ROOMS MEANS TWO `exits` LINES, and that is asserted rather than
+  // assumed (Wright, 2026-09-20: "the test's fixture should carry both … so the
+  // two exits lines are asserted, not one").
+  //
+  // The exits themselves are written by the WALK door, and `deps.stop` here is a
+  // fake, so this suite cannot observe the ledger rows. What it CAN do is ask
+  // the walk door's own pure predicate — the same `leavingWhileOccupying` the
+  // door calls, over the same remainder and the same deposit point — how many
+  // marks this deposit leaves. Two, both named, and NEITHER a vehicle, which is
+  // why `allVehicles` cannot spare the refusal and the flag is load-bearing.
+  const law = await crossingLaw(CLONE);
+  const byId = new Map((w.marks ?? []).map((m) => [m.id, m]));
+  const stop = o.stops.at(-1);
+  const leaving = leavingWhileOccupying(o.within("dom"), { x: stop.x, y: stop.y },
+    (pt, id) => { const m = byId.get(id); return m ? law.verbs.pointWithinMark(pt, m) : null; });
+  assert.deepEqual(leaving, ["the-town/the-quay-reach", "the-town/the-town-centre"],
+    "the deposit leaves BOTH rooms, innermost outward — so the walk door writes an `exits` line for each, "
+    + "which is exactly the pair dom-pidgey had to write by hand at 14:55:01 and 14:55:02");
+  assert.equal(leaving.filter((id) => String(byId.get(id)?.class ?? "") === VEHICLE_CLASS).length, 0,
+    "and neither is a vehicle, so the `allVehicles` narrowing cannot spare this walk the refusal — "
+    + "without the flag DEC-5 bounces it, which is the defect");
 });
 
 test("#3019: a boarding from open ground carries NO `exit` — the flag is the remainder's, not the deposit's", { skip: !HAVE_CLONE && "no world clone" }, async () => {
