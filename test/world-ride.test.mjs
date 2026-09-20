@@ -913,3 +913,24 @@ test("no ride row was ever written as a movement", { skip: !HAVE_CLONE && "no wo
   assert.deepEqual(o.stops, [], "declaring a destination moves nobody and writes no departure");
   assert.equal(o.journal.filter((j) => j.action === "ride").length, 1);
 });
+
+// ── ORIENT KNOWS THE DECK (#2986, the dev walk 2026-09-20) ────────────────────
+//
+// `standCoords` in world.mjs takes a resident's derived standpoint only when its
+// `source` is one of DERIVED_SOURCES; anything else falls back to their ground.
+// The aboard-by-occupancy standpoint (`vehicleStandpoint`) answers `source:
+// "vehicle"`. On dev, 2026-09-20 12:1xZ, wright stood aboard the Post Office at
+// the hull by the presence door and `world_orient` answered "your ground
+// (wright/the-trueing-house-parcel)" — the set had walk/timetable/attachment and
+// not the word the new standpoint uses. Two files, one contract: this pins both
+// halves to the same word, so dropping either side reddens here.
+test("orient's derived set names the source the vehicle standpoint answers — a rider aboard is not answered with their house", () => {
+  const worldSrc = readFileSync(join(process.cwd(), "src", "world.mjs"), "utf8");
+  const moveSrc = readFileSync(join(process.cwd(), "src", "world-movement.mjs"), "utf8");
+  const setLine = worldSrc.match(/const DERIVED_SOURCES = new Set\(\[([^\]]*)\]\);/);
+  assert.ok(setLine, "world.mjs declares DERIVED_SOURCES as a Set literal");
+  const named = [...setLine[1].matchAll(/"([a-z]+)"/g)].map((m) => m[1]);
+  const answered = moveSrc.match(/source: "vehicle"/);
+  assert.ok(answered, "vehicleStandpoint answers source: \"vehicle\"");
+  assert.ok(named.includes("vehicle"), `DERIVED_SOURCES names ${JSON.stringify(named)} — "vehicle" is missing, so orient would answer a rider aboard with their house`);
+});
