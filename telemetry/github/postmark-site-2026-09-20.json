@@ -1,0 +1,225 @@
+{
+  "repo": "postmark-town/postmark-site",
+  "captured_at": "2026-09-20T18:51:52-04:00",
+  "views": {
+    "count": 161,
+    "uniques": 3,
+    "views": [
+      {
+        "timestamp": "2026-09-06T00:00:00Z",
+        "count": 0,
+        "uniques": 0
+      },
+      {
+        "timestamp": "2026-09-07T00:00:00Z",
+        "count": 0,
+        "uniques": 0
+      },
+      {
+        "timestamp": "2026-09-08T00:00:00Z",
+        "count": 9,
+        "uniques": 1
+      },
+      {
+        "timestamp": "2026-09-09T00:00:00Z",
+        "count": 7,
+        "uniques": 1
+      },
+      {
+        "timestamp": "2026-09-10T00:00:00Z",
+        "count": 0,
+        "uniques": 0
+      },
+      {
+        "timestamp": "2026-09-11T00:00:00Z",
+        "count": 0,
+        "uniques": 0
+      },
+      {
+        "timestamp": "2026-09-12T00:00:00Z",
+        "count": 0,
+        "uniques": 0
+      },
+      {
+        "timestamp": "2026-09-13T00:00:00Z",
+        "count": 4,
+        "uniques": 1
+      },
+      {
+        "timestamp": "2026-09-14T00:00:00Z",
+        "count": 3,
+        "uniques": 2
+      },
+      {
+        "timestamp": "2026-09-15T00:00:00Z",
+        "count": 34,
+        "uniques": 2
+      },
+      {
+        "timestamp": "2026-09-16T00:00:00Z",
+        "count": 37,
+        "uniques": 2
+      },
+      {
+        "timestamp": "2026-09-17T00:00:00Z",
+        "count": 32,
+        "uniques": 2
+      },
+      {
+        "timestamp": "2026-09-18T00:00:00Z",
+        "count": 15,
+        "uniques": 2
+      },
+      {
+        "timestamp": "2026-09-19T00:00:00Z",
+        "count": 20,
+        "uniques": 2
+      }
+    ]
+  },
+  "clones": {
+    "count": 1017,
+    "uniques": 409,
+    "clones": [
+      {
+        "timestamp": "2026-09-06T00:00:00Z",
+        "count": 24,
+        "uniques": 16
+      },
+      {
+        "timestamp": "2026-09-07T00:00:00Z",
+        "count": 43,
+        "uniques": 27
+      },
+      {
+        "timestamp": "2026-09-08T00:00:00Z",
+        "count": 38,
+        "uniques": 12
+      },
+      {
+        "timestamp": "2026-09-09T00:00:00Z",
+        "count": 56,
+        "uniques": 24
+      },
+      {
+        "timestamp": "2026-09-10T00:00:00Z",
+        "count": 80,
+        "uniques": 38
+      },
+      {
+        "timestamp": "2026-09-11T00:00:00Z",
+        "count": 105,
+        "uniques": 43
+      },
+      {
+        "timestamp": "2026-09-12T00:00:00Z",
+        "count": 79,
+        "uniques": 39
+      },
+      {
+        "timestamp": "2026-09-13T00:00:00Z",
+        "count": 187,
+        "uniques": 92
+      },
+      {
+        "timestamp": "2026-09-14T00:00:00Z",
+        "count": 104,
+        "uniques": 58
+      },
+      {
+        "timestamp": "2026-09-15T00:00:00Z",
+        "count": 41,
+        "uniques": 26
+      },
+      {
+        "timestamp": "2026-09-16T00:00:00Z",
+        "count": 20,
+        "uniques": 12
+      },
+      {
+        "timestamp": "2026-09-17T00:00:00Z",
+        "count": 112,
+        "uniques": 52
+      },
+      {
+        "timestamp": "2026-09-18T00:00:00Z",
+        "count": 61,
+        "uniques": 28
+      },
+      {
+        "timestamp": "2026-09-19T00:00:00Z",
+        "count": 67,
+        "uniques": 37
+      }
+    ]
+  },
+  "popular_paths": [
+    {
+      "path": "/keeminlee/postmark-site",
+      "title": "Overview",
+      "count": 36,
+      "uniques": 2
+    },
+    {
+      "path": "/keeminlee/postmark-site/pulls",
+      "title": "/pulls",
+      "count": 16,
+      "uniques": 2
+    },
+    {
+      "path": "/keeminlee/postmark-site/issues",
+      "title": "/issues",
+      "count": 7,
+      "uniques": 2
+    },
+    {
+      "path": "/postmark-town/postmark-site/issues/99",
+      "title": "/issues/99",
+      "count": 6,
+      "uniques": 2
+    },
+    {
+      "path": "/postmark-town/postmark-site",
+      "title": "Overview",
+      "count": 5,
+      "uniques": 2
+    },
+    {
+      "path": "/keeminlee/postmark-site/blob/main/src/lib/household.mjs",
+      "title": "/blob/main/src/lib/household.mjs",
+      "count": 4,
+      "uniques": 1
+    },
+    {
+      "path": "/keeminlee/postmark-site/pull/90",
+      "title": "/pull/90",
+      "count": 3,
+      "uniques": 2
+    },
+    {
+      "path": "/keeminlee/postmark-site/pull/91",
+      "title": "/pull/91",
+      "count": 3,
+      "uniques": 2
+    },
+    {
+      "path": "/keeminlee/postmark-site/blob/main/town/pages/residents/[handle].astro",
+      "title": "/blob/main/town/pages/residents/[handle].astro",
+      "count": 3,
+      "uniques": 1
+    },
+    {
+      "path": "/keeminlee/postmark-site/issues/99",
+      "title": "/issues/99",
+      "count": 3,
+      "uniques": 1
+    }
+  ],
+  "popular_referrers": [
+    {
+      "referrer": "github.com",
+      "count": 27,
+      "uniques": 2
+    }
+  ]
+}
