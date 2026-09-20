@@ -62,9 +62,54 @@
 // "the six lanes it should govern" is C1–C6 of the runbook's lane table
 // (stance · hold · walk · say · frame · mark); the arena is the row beneath them
 // and the only exemption, because its refusal is a RULING and not a to-do.
+//
+// That sentence describes the map DEC-2 governed, and it stays as written
+// because it is the ruling's own scope. Two of the six have since CLOSED — see
+// the closure record above the map, which names each one's instrument. A lane
+// leaving this map is the obligation ending, never the ruling narrowing.
 
 /** The governed lanes' shared backstop. Keemin may move it; it may not vanish. */
 export const MIRROR_EXPIRES = "2026-09-30";
+
+// ── CLOSED LANES: WHAT LEAVING IS, AND WHAT IT IS NOT (POS-125, 2026-09-20) ──
+//
+// `walk` (C3) and `say` (C4) are GONE from this map, per rule 6 and DEC-2's
+// "what ends a lane's obligation is DELETING its row". Both were measured at
+// office `2f6c4b2` by the only question that settles it: does anything still
+// read that lane's rows OUT OF THE SQLITE JOURNAL?
+//
+//   · walk — nothing. No `readJournal` call site filters CLASS_MOVE. The 1.0
+//     read source is `dynamic.db/movements`, written by its own INSERT
+//     (dynamic-entities.mjs) and never by the reverse mirror; the store port is
+//     live-reads.mjs, held to 1.0's law by falsifier-live-equality.
+//   · say  — nothing. No `readJournal` call site filters CLASS_VOICE. The 1.0
+//     read source is `voices-log.jsonl` (voices.mjs), written by voices.mjs and
+//     never by the reverse mirror; the store port landed as
+//     world2/tools/conversations.mjs + /world2/conversations, held by
+//     falsifier-conversations-equality.
+//
+// WHAT THIS DELETION DOES NOT DO, said here because the map's own name invites
+// the opposite reading: it does NOT stop the reverse mirror. The INSERT in
+// `appendActFlipped` (world-journal.mjs) is unconditional and consults nothing
+// here — every consumer of this map is an EXPIRY consumer. The mirror is one
+// shared code path that cannot die per lane, so a row's removal is exactly the
+// bookkeeping DEC-2 designed it to be: this lane is owed no twin any more. The
+// shim itself dies in G2, with the journal INSERT and `acts.journal_seq`.
+//
+// THE FOUR THAT STAYED, and what each still needs (POS-125's MEASUREMENT.md):
+//   · stance — world-stance.mjs's merged read; the register overwrites where
+//     both hold an act, but whether `acts` holds a twin for EVERY standing
+//     journal row is a question about the live store. falsifier-acts-parity
+//     answers it on the box; green there closes this row.
+//   · hold   — the `since:` shelf reads `cls: "holding"` out of sqlite as its
+//     SOLE source, at three call sites. Needs a holding port.
+//   · frame  — enter/exit rows are CLASS_FRAME, and two live readers fold them
+//     out of sqlite: every crossing's occupancy (enter-exit-ledger.mjs) and the
+//     ride's entry stop (world-apex.mjs § actsOfActor). Deleting this row's
+//     mirror today sets residents down nowhere.
+//   · mark   — world-drain.mjs still photographs the journal to git, and
+//     postmark-crossing-save.timer is still deployed. Its replacement exists
+//     (state-log-from-store.mjs); the retirement is G2's.
 
 /**
  * ONE ROW PER LANE, in world2-pen.mjs's `laneOf` vocabulary.
@@ -78,8 +123,6 @@ export const MIRROR_EXPIRES = "2026-09-30";
 export const LANE_MIRROR = Object.freeze({
   stance: Object.freeze({ expires: MIRROR_EXPIRES }),
   hold: Object.freeze({ expires: MIRROR_EXPIRES }),
-  walk: Object.freeze({ expires: MIRROR_EXPIRES }),
-  say: Object.freeze({ expires: MIRROR_EXPIRES }),
   frame: Object.freeze({ expires: MIRROR_EXPIRES }),
   mark: Object.freeze({ expires: MIRROR_EXPIRES }),
   arena: Object.freeze({
