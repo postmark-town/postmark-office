@@ -3730,6 +3730,17 @@ export async function walkViaOffice(worldClone, payload = {}, key = null) {
   // `from` is the ledger's own derivation, unchanged.
   if (movementV2Enabled() && standing?.placed) from = { x: standing.x, y: standing.y };
 
+  // THE DEPOSIT'S OWN ORIGIN (#2986, 2026-09-20). A vehicle's exit sets a rider
+  // down AT a stop as a zero-length departure through this pen. The record has
+  // this body wherever it last WALKED — the stop they boarded at — so a set-down
+  // that took `from` off the record would be a leg from the boarding stop to the
+  // landing (12.5 km on dev's first walk), with the rider "on the road" for hours
+  // after the exit said "you stand on the mooring". `__from` is the office's own
+  // key, set only by the crossing deps' `stop` (like `__seated_ground`): the
+  // door's schema does not admit it, so a resident cannot teleport with it.
+  if (payload.__from && Number.isFinite(Number(payload.__from.x)) && Number.isFinite(Number(payload.__from.y)))
+    from = { x: Number(payload.__from.x), y: Number(payload.__from.y) };
+
   // WHERE TO — ruling 2's order.
   let toward = null, targetExtent = null, targetMarkId = null, targetFrom = "";
   let exitedFirst = null; // DEC-5: the marks exited on this walker's own `exit: true`, for the answer

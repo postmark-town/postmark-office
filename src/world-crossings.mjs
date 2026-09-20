@@ -634,7 +634,13 @@ export async function exitViaOffice(worldClone, payload = {}, key = null, deps =
   let setDown = null;
   if (deposit?.anchor && deps.stop) {
     try {
-      await deps.stop(who, { x: deposit.anchor.x, y: deposit.anchor.y }, key);
+      // THE ORIGIN IS THE DEPOSIT POINT, said out loud. Without it the walk act
+      // starts the leg from wherever the movement record last had this body —
+      // the stop they boarded at — and "stand here" becomes a 12.5 km road
+      // (dev, 2026-09-20 08:35Z: exit at the Snug, feet still at grove-wharf,
+      // "your walk in progress (12508 m to go)"). A deposit is a departure OF
+      // zero length AT the stop, so both ends are the anchor.
+      await deps.stop(who, { x: deposit.anchor.x, y: deposit.anchor.y }, key, { from: { x: deposit.anchor.x, y: deposit.anchor.y } });
       setDown = { at: deposit.stop, x: deposit.anchor.x, y: deposit.anchor.y, arrived: deposit.arrived, recorded: true };
     } catch (e) {
       setDown = { at: deposit.stop, x: deposit.anchor.x, y: deposit.anchor.y, arrived: deposit.arrived, recorded: false,

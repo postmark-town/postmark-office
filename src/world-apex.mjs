@@ -372,7 +372,12 @@ export function crossingDeps() {
       const here = await residentStandpoint(who).catch(() => null);
       return here?.placed && Number.isFinite(here.x) ? { live: here.moving === true, x: here.x, y: here.y } : null;
     },
-    stop: async (who, here, key) => walkViaOffice(WORLD_CLONE, { handle: who, x: here.x, y: here.y }, key),
+    // `from` is given only by the vehicle's deposit (world-crossings.mjs § exit): a
+    // set-down is a zero-length departure AT the stop, so the leg's origin is the
+    // stop and not where the record last had the body. It rides as `__from`, the
+    // office's own key like `__seated_ground` — the door's schema admits neither.
+    stop: async (who, here, key, opts = {}) => walkViaOffice(WORLD_CLONE, { handle: who, x: here.x, y: here.y,
+      ...(opts?.from && Number.isFinite(Number(opts.from.x)) && Number.isFinite(Number(opts.from.y)) ? { __from: { x: Number(opts.from.x), y: Number(opts.from.y) } } : {}) }, key),
     now: () => (Date.now() - Date.UTC(2026, 5, 12)) / (12 * 3600 * 1000),
     // THE JOURNAL ROWS THIS ACTOR HAS WRITTEN, oldest first — the ride fold's
     // one input (world-ride.mjs § rideStateFrom). Read from the live journal,
