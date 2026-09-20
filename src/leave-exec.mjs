@@ -84,7 +84,8 @@ async function main() {
 
   const tools = join(CLONE, "tools");
   const tEngine = performance.now();
-  const { loadMarks, marksContain, containmentParents, PARCEL_CLAIM_CAP, PARCEL_CAP_LAW_DATE, PARCEL_EXTENT_M,
+  const { loadMarks, marksContain, containmentParents, containmentParentOf, placementParent, worldRootOf,
+          PARCEL_CLAIM_CAP, PARCEL_CAP_LAW_DATE, PARCEL_EXTENT_M,
           worldToFile, ringToFile, COORDS_FIELD, COORDS_RELATIVE } =
     await import(pathToFileURL(join(tools, "marks-fold.mjs")));
   phases.push(`engine=${Math.round(performance.now() - tEngine)}ms`);
@@ -323,6 +324,22 @@ async function main() {
   // serialization is how two eras come to disagree about the same declaration
   // in a way that still parses.
   const record = markRecord(fileRec, p.body);
+
+  // ── PREVIEW (founder-ruled 2026-09-14, postmark#2692): every guard above has
+  // run and the record is composed; a preview answers where it would nest, by
+  // the engine's own containment rule over the sketchbook's marks plus the
+  // candidate, and writes nothing — no file, no commit, no push.
+  if (p.preview === true) {
+    const candidate = { id, kind: p.kind, by: p.by, at: p.at ?? null, extent: p.extent ?? null, ...(p.points ? { points: p.points } : {}) };
+    const all = [...marks.filter((m) => m.id !== id), candidate];
+    const parent = typeof containmentParentOf === "function" ? (containmentParentOf(candidate, all) ?? null)
+      : typeof placementParent === "function" ? (placementParent(candidate, all) ?? worldRootOf?.(all)?.id ?? null)
+      : null;
+    return answer({ preview: true, id, kind: p.kind, parent, would: amending ? "amend" : "leave",
+      dir: relative(MARKS_DIR, dir).replace(/\\/g, "/"), at: p.at ?? null, extent: p.extent ?? null, branch,
+      ...(amending ? { amended: true, moved: amendMoves } : {}),
+      nothing_written: "a preview: no file, no commit, no push — leave the mark without preview: true to write it" });
+  }
 
   if (amending && amendMoves) rmSync(oldDir, { recursive: true, force: true }); // one copy, ever
   mkdirSync(dir, { recursive: true });

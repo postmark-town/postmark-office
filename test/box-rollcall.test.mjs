@@ -45,6 +45,7 @@ import {
   loadManifest,
   rollcall,
   classifyRow,
+  outcomeCounts,
   heartbeatOf,
   readStampField,
   parseSystemdStamp,
@@ -224,6 +225,9 @@ function healthy(m = manifest()) {
           // manifest that names a second flag must not go green here because
           // nobody remembered to widen a fixture.
           ...Object.fromEntries((row.outcome.alarm_on_false ?? []).map((f) => [f, true])),
+          // …and a row that declares a COUNT gets a number, which is its only
+          // healthy shape: a count is printed, never judged (postmark#2935).
+          ...Object.fromEntries((row.outcome.report_counts ?? []).map((f) => [f, 0])),
         }));
       }
       files[row.outcome.history_path] = { exists: true, mtime_ms: beatAt, text: `${lines.join("\n")}\n` };
@@ -1222,6 +1226,11 @@ test("the shipped manifest's NOTARY row declares the list alarm, and an empty de
   assert.equal(manifest().units.find((u) => u.unit === "postmark-world2-clearing.timer").outcome, undefined,
     "the clearing row must NOT carry this alarm — it would judge a read taken before the push");
   assert.deepEqual(row.outcome.alarm_on_nonempty, ["canon_absent", "unmaterialized", "escrow_unbacked"]);
+  // …and the unjudgeable count is a COUNT, declared, and in no alarm list
+  // (postmark#2935): if it ever moves into `alarm_on_nonempty`, 227 marks
+  // locked before the projection existed alarm every morning again.
+  assert.deepEqual(row.outcome.report_counts, ["escrow_unjudgeable"]);
+  assert.ok(row.outcome.count_means, "a count with no sentence is a bare number");
   assert.match(row.outcome.history_path, /canon-locks\.jsonl$/);
   // A list-alarm that names no field would pass every other assertion in
   // loadManifest and watch nothing forever.
@@ -1244,6 +1253,88 @@ test("the shipped manifest's NOTARY row declares the list alarm, and an empty de
 // THE CAN-FAIL FLIP: delete the `alarm_on_false` block in `judgeOutcome`. Row 2
 // goes back to OK and this test reds; rows 1, 3 and 4 stay as they are, which is
 // what makes them controls.
+
+// ── THE COUNT THAT IS NOT AN ALARM (postmark#2935; 2026-09-18) ──────────────
+//
+// The notary's escrow read judges each commons mark at the town sha of the
+// window that locked it; the projection holds no rows for any window before
+// 181, so 227 marks locked at 150–179 read ESCROW-ABSENT every morning for
+// eight nights, and the true unbacked count under them was zero. Those marks
+// are UNJUDGEABLE, not ✦0: the read writes `escrow_unjudgeable: <n>` on the
+// line, the row declares it under `report_counts`, and the board PRINTS it
+// beside the verdict — on a green tick and on an alarm alike — and never
+// alarms on it.
+//
+// THE CAN-FAIL FLIP: in `classifyRow`, drop `${tail}` from the OK reason. The
+// "prints beside a green tick" test reds; the alarm test and the refusals stay
+// green.
+const COUNT_ROW = Object.freeze({
+  ...LIST_ROW,
+  outcome: { ...LIST_ROW.outcome, report_counts: ["escrow_unjudgeable"], count_means: "COUNT-MEANS." },
+});
+const countLine = (o) => ({ at: "2026-09-18T07:22:00Z", canon_absent: [], unmaterialized: [], escrow_unbacked: [], escrow_checked: true, escrow_unjudgeable: 227, escrow_oldest_projected: "9e1cd85eacae397af4fcc5ac86c2d4ad91e77349", ...o });
+
+test("227 escrow_unjudgeable is a COUNT on the line, not a verdict — judgeOutcome stays null", () => {
+  assert.equal(judgeOutcome(COUNT_ROW, logOf(countLine({}))), null, "the count must not alarm — that is the whole of the repair");
+  const said = outcomeCounts(COUNT_ROW, logOf(countLine({})));
+  assert.match(said, /^227 escrow_unjudgeable — COUNT-MEANS\.$/);
+});
+
+test("the count prints beside a GREEN tick, on the row's own reason", () => {
+  const m = manifest();
+  const notary = m.units.find((u) => u.unit === "postmark-world2-notary.timer");
+  // The planted healthy line carries the count as 0; rewrite the LATEST line to
+  // prod's 227 and leave everything else healthy.
+  const snap = mutate(healthy(m), (s) => {
+    const f = s.files[notary.outcome.history_path];
+    const lines = f.text.trim().split("\n");
+    lines[lines.length - 1] = JSON.stringify({ ...JSON.parse(lines[lines.length - 1]), escrow_unjudgeable: 227 });
+    f.text = lines.join("\n") + "\n";
+  });
+  const row = rowFor(rollcall(m, snap, T0), "postmark-world2-notary.timer");
+  assert.equal(row.verdict, OK, "a count is not a verdict");
+  assert.match(row.reason, /ticked .* · 227 escrow_unjudgeable — /);
+});
+
+test("the count rides beside an ALARM too — the finding first, the count after it", () => {
+  const snap = logOf(countLine({ escrow_unbacked: ["someone/a-judgeable-zero"] }));
+  const alarm = judgeOutcome(COUNT_ROW, snap);
+  assert.ok(alarm && /escrow_unbacked/.test(alarm), "a judgeable zero still alarms exactly as before");
+  assert.match(outcomeCounts(COUNT_ROW, snap), /^227 escrow_unjudgeable — COUNT-MEANS\.$/);
+});
+
+test("a count the latest line does not carry is said in words — and is still not an alarm", () => {
+  const snap = logOf({ at: "old", canon_absent: [], unmaterialized: [], escrow_unbacked: [], escrow_checked: true });
+  assert.equal(judgeOutcome(COUNT_ROW, snap), null);
+  assert.match(outcomeCounts(COUNT_ROW, snap), /escrow_unjudgeable not counted on the latest line — COUNT-MEANS\./);
+  // `null` is the read's own word for "the projection was not checked, so
+  // nothing was counted" — not zero, and said the same way.
+  assert.match(outcomeCounts(COUNT_ROW, logOf(countLine({ escrow_unjudgeable: null, escrow_checked: false }))), /not counted on the latest line/);
+});
+
+test("a row declaring no counts prints no count line, and an empty log leaves it to the empty-log alarm", () => {
+  // LIST_ROW spreads the SHIPPED outcome, which now declares the count — so a
+  // row with none has to be built by taking it away, not assumed.
+  const { report_counts, count_means, ...rest } = LIST_ROW.outcome;
+  assert.ok(report_counts, "the shipped row declares it; this test removes it");
+  assert.equal(outcomeCounts({ ...LIST_ROW, outcome: rest }, logOf(countLine({}))), null);
+  assert.equal(outcomeCounts(COUNT_ROW, { files: {} }), null);
+});
+
+test("the manifest refuses a count that names no field, has no sentence, or is ALSO an alarm", () => {
+  const dir = mkdtempSync(join(tmpdir(), "rollcall-manifest-"));
+  const bad = join(dir, "m.json");
+  const notaryOf = (m) => m.units.find((u) => u.unit === "postmark-world2-notary.timer").outcome;
+  let m = manifest(); notaryOf(m).report_counts = [];
+  writeFileSync(bad, JSON.stringify(m));
+  assert.throws(() => loadManifest(bad), /report_counts that names no field/);
+  m = manifest(); delete notaryOf(m).count_means;
+  writeFileSync(bad, JSON.stringify(m));
+  assert.throws(() => loadManifest(bad), /report_counts with no count_means/);
+  m = manifest(); notaryOf(m).report_counts = ["escrow_unbacked"];
+  writeFileSync(bad, JSON.stringify(m));
+  assert.throws(() => loadManifest(bad), /in report_counts AND in an alarm list/);
+});
 
 const line = (o) => ({ at: "2026-09-09T03:20:00Z", canon_absent: [], unmaterialized: [], escrow_unbacked: [], escrow_checked: true, ...o });
 const judge = (o) => judgeOutcome(LIST_ROW, logOf(line(o)));
@@ -1560,7 +1651,11 @@ test("the manifest refuses a tree row that cannot say who owns it, what breaks, 
 
 test("the shipped manifest carries a tree row for every world2 lane, all pinned to the release", () => {
   const m = manifest();
-  for (const lane of ["clearing", "notary", "backup", "ingest"]) {
+  // `law-ingest` joined on 2026-09-19 (postmark#2893, the law pen's own unit).
+  // This list is written by hand while the test's own sentence says EVERY lane,
+  // so a new world2 unit that never reaches this line gets a tree row nothing
+  // checks — which is how the check stops reading the behaviour it names.
+  for (const lane of ["clearing", "notary", "backup", "ingest", "law-ingest"]) {
     const row = m.trees.rows.find((r) => r.unit === "postmark-world2-" + lane + ".service");
     assert.ok(row, "no tree row for the " + lane + " lane");
     assert.equal(row.env_key, "WORLD2_OFFICE");

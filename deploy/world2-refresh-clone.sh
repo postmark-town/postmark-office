@@ -55,7 +55,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HERE/world2-lib.sh"
 
 case "${1:-}" in
-  world) URL="https://github.com/keeminlee/postmark-world.git"; BRANCH="${W2_WORLD_BRANCH:-main}" ;;
+  world) URL="https://github.com/postmark-town/postmark-world.git"; BRANCH="${W2_WORLD_BRANCH:-main}" ;;
   town)  URL="https://github.com/postmark-town/postmark.git";   BRANCH="${W2_TOWN_BRANCH:-main}" ;;
   *) echo "usage: world2-refresh-clone.sh world|town" >&2; exit 2 ;;
 esac

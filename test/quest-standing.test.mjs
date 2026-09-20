@@ -41,6 +41,7 @@ const REGISTRY = JSON.stringify({
     { id: "first-letter-out", title: "Send your first letter", cadence: "one-time", validation: "automatic", target: 1, reward: "no stamp", door: { tool: "send_letter" } },
     { id: "first-answer", title: "Someone writes back", cadence: "one-time", validation: "automatic", target: 1, reward: "no stamp", door: null, awaits: "another resident's reply" },
     { id: "walk-the-world", title: "Leave your home mark", cadence: "one-time", validation: "automatic", target: 1, reward: "no stamp", door: { tool: "world_leave_mark" } },
+    { id: "welcome-to-postmark", title: "Welcome to Postmark", cadence: "one-time", validation: "automatic", target: 1, reward: "5 stamps", door: null, awaits: "the town's own hand" },
   ],
 });
 
@@ -49,14 +50,14 @@ const row = (id, over = {}) => ({ id, target: 1, ...over });
 // A resident 125 days in who has done everything the record can settle — the
 // founder's own shape, which is the shape the board got wrong.
 const SETTLED = {
-  card: true, home: true, window: true, sent: true, received: true,
+  card: true, home: true, window: true, sent: true, received: true, welcomed: true,
   sent_since: "2026-06-12", sent_via: "wright-2026-06-12-first-post",
   received_since: "2026-06-12", received_via: "postmaster-2026-06-12-receipt-confirmed",
   depth: { eachWay: 8, best: 5, since: "2026-08-04", friends: [{ with: "little-bird", threshold: 5, date: "2026-08-04" }] },
 };
 // Someone who arrived this morning: the record looked and found nothing.
 const FRESH = {
-  card: false, home: false, window: false, sent: false, received: false,
+  card: false, home: false, window: false, sent: false, received: false, welcomed: false,
   sent_since: null, sent_via: null, received_since: null, received_via: null,
   depth: { eachWay: 0, best: 0, since: null, friends: [] },
 };
@@ -110,6 +111,46 @@ test("the three paper rows say the record holds the fact and not its date", () =
   }
 });
 
+// ── the seventh row: settled by the town's hand, and undated ─────────────────
+//
+// ⚑ THESE EXIST BECAUSE THE ONE-LINE FIX WAS WRONG BY ITSELF. Adding
+// `welcome-to-postmark` to STANDING_FACT is all the id-map gate above needs, and
+// it silently handed this row `since: "2026-06-12"` — the day SETTLED's first
+// letter ARRIVED — because the `since` ternary treats every non-paper row as a
+// mail row. A bundle the town paid on 2026-09-14 read as three months older than
+// the row itself, on the founder's own board, with no red anywhere: the gate
+// asserts the KEYS of the map and says nothing about what the rows then carry.
+// The first test below is the one that fails if the `isWelcome` arm is dropped.
+
+test("the welcome row is undated, and never wears the day a letter arrived", () => {
+  const p = standingJoin(row("welcome-to-postmark"), SETTLED);
+  assert.equal(p.complete, true, "the town paid this household; the row is met");
+  assert.equal(p.progress, 1, "1 of 1 — a settled row earns the number, like every other settled row");
+  assert.equal(p.since, null,
+    `the welcome row must carry NO date. It read ${JSON.stringify(p.since)}, and SETTLED's received_since is ${JSON.stringify(SETTLED.received_since)} — if those are equal, this row is wearing the first-answer's day, which is the exact shape the id-note rule above exists to prevent.`);
+  assert.notEqual(p.since, SETTLED.received_since,
+    "the welcome row borrowed first-answer's date");
+});
+
+test("the welcome row says the TOWN paid it — not that the resident did it", () => {
+  const p = standingJoin(row("welcome-to-postmark"), SETTLED);
+  assert.equal(p.note, STANDING_NOTES.welcome_paid,
+    "a settled, undated row with a silent null date reads as a row nobody looked at");
+  assert.notEqual(p.note, STANDING_NOTES.no_date,
+    "the papers note opens with `you have done this`, and the whole of this row is that the resident did NOT — the registry says the reward comes by `the town's hand, not yours`");
+  assert.notEqual(p.note, STANDING_NOTES.self_mail_only,
+    "the self-mail note is about a delivery; this row is a mint");
+});
+
+test("an unwelcomed household reads 0 of 1 and is told nothing about a date", () => {
+  const p = standingJoin(row("welcome-to-postmark"), FRESH);
+  assert.equal(p.complete, false);
+  assert.equal(p.progress, 0, "the record looked and found no bundle — that is an answer, not a silence");
+  assert.equal(p.since, null);
+  assert.equal(p.note, undefined,
+    "the note is about a paid bundle with no day; an unpaid one has nothing to say");
+});
+
 test("an UNMET paper row carries no undated note — the note is about a date, not a gap", () => {
   const p = standingJoin(row("write-your-card"), FRESH);
   assert.equal(p.complete, false);
@@ -158,12 +199,42 @@ test("an unsealed ladder is a rule that has not started, not a milestone missed"
 
 // ── the two rows this index does not settle, and the disclosure they carry ───
 
-test("the world row names the surface that answers it, and claims nothing itself", () => {
-  const p = standingJoin(row("walk-the-world"), SETTLED);
+test("#2773 the world row is SETTLED when the office could look — sited true, sited false", () => {
+  // THE DEFECT THIS CLOSES. The row answered `complete: null` for everyone, and
+  // the resident page files every uncounted row that is not `complete: true`
+  // under STILL TO DO — so a resident whose home mark had stood for weeks was
+  // told to go and leave it. "Not looked" rendered as "not done".
+  const sited = standingJoin(row("walk-the-world"), SETTLED, { worldSited: true });
+  assert.equal(sited.complete, true, "a home standing in the world is a row that is DONE");
+  assert.equal(sited.progress, 1, "…and measured, or the page files it under Still to do anyway");
+  assert.equal(sited.note, undefined, "a row the office read needs no note about where the answer is — it IS the answer");
+
+  // The other pole, without which `complete: true` could be a constant.
+  const unsited = standingJoin(row("walk-the-world"), SETTLED, { worldSited: false });
+  assert.equal(unsited.complete, false, "a home founded but not sited is honestly NOT done");
+  assert.equal(unsited.progress, 0);
+
+  // No day is invented. The block carries a place, not a date, and `no_date`'s
+  // sentence ("the town does not keep the day") would be false here — the world
+  // keeps it; this read does not fetch it.
+  assert.equal(sited.since, null);
+});
+
+test("#2773 the world row keeps its honest note when the office COULD NOT look", () => {
+  // `the-town/the-disclosure` — refuse or disclose absent inputs, never quietly
+  // substitute. An office that cannot see the world this minute must not say
+  // the mark is missing, and a floor read here would tell a placed resident to
+  // go and get placed, which is the #1864 defect wearing this row's clothes.
+  const p = standingJoin(row("walk-the-world"), SETTLED, { worldSited: null });
   assert.equal(p.note, STANDING_NOTES.world_elsewhere);
   assert.equal(p.progress, undefined, "the board must not answer a row it did not read; an unmeasured row stays unmeasured");
   assert.equal(p.complete, undefined);
   assert.match(p.note, /doorstep/, "the note must name WHERE the answer is, or it is a shrug with better grammar");
+
+  // …and a caller that never passes the fact at all gets the same honest
+  // answer. The unreadable case and the not-asked case are the same sentence on
+  // purpose: both mean nobody looked.
+  assert.equal(standingJoin(row("walk-the-world"), SETTLED).note, STANDING_NOTES.world_elsewhere);
 });
 
 test("first-idea takes its number and its day from the store, and SAYS SO when the store did not answer", () => {
@@ -303,9 +374,112 @@ test("the founder's own board: every settled row measured, with its day", async 
   }
   assert.equal(q(board, "first-letter-out").since, "2026-06-12");
   assert.equal(q(board, "correspond-depth").since, "2026-08-04");
-  // and the one that honestly cannot be settled here
-  assert.equal(q(board, "walk-the-world").measured, false);
-  assert.equal(q(board, "walk-the-world").note, STANDING_NOTES.world_elsewhere);
+  // ── AND THE ONE ROW THIS INDEX DOES NOT OWN (#2773) ───────────────────────
+  //
+  // `walk-the-world` is settled from the WORLD, not from the standing fold, so
+  // its value here depends on whether the box running this suite has a world
+  // clone — which is a fact about a machine and not about the office. This leg
+  // used to assert `measured: false` and passed only because no world was
+  // readable under it; the day one was, it would have reddened for a reason
+  // that had nothing to do with the office.
+  //
+  // So it asserts the LAW, which holds on every box: the row is EITHER read and
+  // settled, OR unread and carrying the note that names the surface that can
+  // answer. What it must never be is the third shape — unread and silent, which
+  // is what the resident page files under Still to do. The two values are pinned
+  // by the injected legs below, where the fixture owns its own world.
+  const world = q(board, "walk-the-world");
+  if (world.measured) {
+    assert.equal(typeof world.complete, "boolean", "a measured row must carry a real boolean, never a null wearing a number");
+    assert.equal(world.note, undefined, "a row the office read needs no note about where the answer is");
+  } else {
+    assert.equal(world.complete, null, "unread is null — never false, which reads as 'you have not done this'");
+    assert.equal(world.note, STANDING_NOTES.world_elsewhere, "an unread row must name the surface that answers it");
+  }
+});
+
+// ── #2773 · THE WIRING, WHICH IS THE HALF A PURE TEST CANNOT SEE ────────────
+//
+// `standingJoin` is pure and the three legs above drive it directly. That
+// proves the derivation and nothing about whether the board ever ASKS. A seam
+// that computes the right answer and hands the row `undefined` looks exactly
+// like the bug it replaced, so these drive the real `questBoardFor` with the
+// world reader injected — the same injection point `nextStepsFor` uses to keep
+// the doorstep down to one world read.
+//
+// CAN-FAIL FLIP: return `{ note: STANDING_NOTES.world_elsewhere }` from the
+// `walk-the-world` branch again, and the first two of these redden.
+
+const boardWithWorld = async (block) => {
+  const day = await today();
+  return questBoardFor(dbWith(SETTLED, day), meta(day), "wright", TOWN, { worldBlock: async () => block });
+};
+
+test("#2773 the served board carries the world row the office actually read", async () => {
+  const standing = await boardWithWorld({ mark_id: "wright/the-house", x: 10, y: 20, sited: true });
+  assert.equal(q(standing, "walk-the-world").complete, true, "the board did not ask the world, or did not carry its answer");
+  assert.equal(q(standing, "walk-the-world").measured, true, "an unmeasured row is filed under Still to do whatever `complete` says");
+  assert.equal(q(standing, "walk-the-world").note, undefined);
+
+  const founded = await boardWithWorld({ mark_id: "wright/the-house", x: null, y: null, sited: false });
+  assert.equal(q(founded, "walk-the-world").complete, false, "a home founded but unsited must read false, not true and not null");
+  assert.equal(q(founded, "walk-the-world").measured, true);
+
+  const blind = await boardWithWorld({ mark_id: null, x: null, y: null, sited: false, unreadable: true, unreadable_reason: "no world clone" });
+  assert.equal(q(blind, "walk-the-world").complete, null, "an unreadable world is NOT a missing mark");
+  assert.equal(q(blind, "walk-the-world").measured, false);
+  assert.equal(q(blind, "walk-the-world").note, STANDING_NOTES.world_elsewhere);
+});
+
+test("#2773 a decided verdict is used VERBATIM and the board reads nothing — the 08-15 gate, one layer down", async () => {
+  // Keemin's ruling, 2026-08-15: "the gaps are yours to see, not theirs to be
+  // seen by" — and whether a home is sited is one of the two gap-shaped facts
+  // named under it. `nextStepsFor` honours that by SKIPPING the world read on a
+  // stranger's doorstep, and its own falsifier counts the calls to prove the
+  // skip is a skip and not a filter.
+  //
+  // This board is embedded in that doorstep. Handed a reader it would go and ask
+  // the very question the gate declined, one layer down where the counting spy
+  // upstairs cannot see it — a skip that turns into a read is not a skip. So the
+  // doorstep hands down its VERDICT, and this leg pins that the verdict is taken
+  // at its word with no read of any kind behind it.
+  //
+  // CAN-FAIL: make `questBoardFor` recompute `worldSited` instead of using the
+  // one it was given, and both halves of this redden — the count, and the row.
+  const day = await today();
+  let asks = 0;
+  const spy = async () => { asks += 1; return { sited: true }; };
+
+  const withheld = await questBoardFor(dbWith(SETTLED, day), meta(day), "wright", TOWN,
+    { worldSited: null, worldBlock: spy });
+  assert.equal(asks, 0, "a board handed a verdict must not go and ask anyway — that is the gate leaking");
+  assert.equal(q(withheld, "walk-the-world").complete, null, "nobody looked, so the row says nobody looked");
+  assert.equal(q(withheld, "walk-the-world").note, STANDING_NOTES.world_elsewhere);
+
+  // …and a verdict of `true` is equally taken at its word, so the leg above is
+  // not passing on the strength of null being falsy somewhere.
+  const told = await questBoardFor(dbWith(SETTLED, day), meta(day), "wright", TOWN,
+    { worldSited: true, worldBlock: spy });
+  assert.equal(asks, 0);
+  assert.equal(q(told, "walk-the-world").complete, true);
+});
+
+test("#2773 the board's world fact comes from the same reader the doorstep uses", async () => {
+  // One office, one answer to "is this home standing". `worldSitedFor` is the
+  // three-way the doorstep's onboarding row already calls; the board calls the
+  // same function rather than re-deriving `sited === true` beside it, so the
+  // two surfaces cannot come to disagree on a resident's own page.
+  const { worldSitedFor } = await import("../src/household-apex.mjs");
+  const block = { mark_id: "wright/the-house", x: 10, y: 20, sited: true };
+  const direct = await worldSitedFor("wright", { worldBlock: async () => block });
+  const onBoard = q(await boardWithWorld(block), "walk-the-world").complete;
+  assert.equal(onBoard, direct, "the board's answer must BE the doorstep's, not a second reading of the same block");
+  // and the reader is asked exactly once per board, because the world is not free
+  let asks = 0;
+  const day = await today();
+  await questBoardFor(dbWith(SETTLED, day), meta(day), "wright", TOWN,
+    { worldBlock: async () => { asks += 1; return block; } });
+  assert.equal(asks, 1, `the board opened the world ${asks} times for one row`);
 });
 
 test("a board served off an index without the fold is exactly as unmeasured as it was", async () => {
@@ -394,7 +568,7 @@ test("a settled milestone leaves the doorstep list entirely", async () => {
     "correspond-depth has no door; it belongs on the board, not on a list of what is left to do");
 });
 
-test("the doorstep and the board agree about the six arrival rows", async () => {
+test("the doorstep and the board agree about the seven arrival rows", async () => {
   const { readFileSync } = await import("node:fs");
   const db = fixtureDb();
   db.prepare("INSERT INTO quest_standing (handle, json) VALUES (?, ?)").run("wright", JSON.stringify(SETTLED));

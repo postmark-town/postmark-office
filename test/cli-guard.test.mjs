@@ -117,7 +117,7 @@ const ROSTER = {
   // argument, so it reads `DEFAULT_DB` (`OFFICE_ROOT/world.db`) and never looks
   // at WORLD_STORE_DB — the key its three siblings do read. The proof therefore
   // exits 1 only where no `world.db` has ever been hydrated; on the box and on
-  // G:/Postmark/office (world.db, hydration_status OK, 1406 nodes) it exits 0
+  // G:/Postmark/repo-clones/wright/office (world.db, hydration_status OK, 1406 nodes) it exits 0
   // and this goes red. It cannot be fixed from the roster: making it honest
   // needs either a second expected code here or the tail reading a path, and
   // both are additions this train is not for. Left named rather than papered
@@ -125,6 +125,7 @@ const ROSTER = {
   "src/world-store.mjs": { args: [], code: 1, needle: "" },
   // tools/
   "tools/backfill-home-shelf.mjs": { args: ["--manifest", NOWHERE], code: 2, needle: "no manifest at" },
+  "tools/media-thumbnails-backfill.mjs": { args: ["--from-record", NOWHERE], code: 2, needle: "no record at" },
   "tools/box-rollcall.mjs": { args: ["--manifest", NOWHERE], code: 2, needle: "the roll-call itself could not run" },
   "tools/capture-household-golden.mjs": { args: [], code: 0, needle: "{" },
   "tools/crossing-replay-check.mjs": { args: ["--db", NOWHERE_DB, "--world", NOWHERE], code: 2, needle: "GATE REFUSED" },
@@ -148,6 +149,9 @@ const ROSTER = {
   // --recurring answers with an exit code and no words, by design (settlement-auto.sh reads it
   // as a POSIX `if`); exit 1 against a never-true guard's 0 is the whole proof here.
   "deploy/settlement-history.mjs": { args: ["--recurring", "3", "--history", NOWHERE], code: 1, needle: "", silent: true },
+  // A safe entry proof for a tool that SIGNS: no --town, so it refuses before it
+  // reads a plan, spawns a mint or touches a key. The needle is that refusal.
+  "deploy/welcome-pass.mjs": { args: [], code: 1, needle: "--town <town-clone> is required" },
   // world2/tools/
   "world2/tools/await-clearing.mjs": { args: [], env: NO_PG, code: 2, needle: "--since <iso8601> is required" },
   "world2/tools/backfill-register.mjs": { args: [], env: NO_PG, code: 2, needle: "--class must be one of" },
@@ -165,10 +169,17 @@ const ROSTER = {
   "world2/tools/review-rule.mjs": { args: [], env: NO_PG, code: 2, needle: "review-rule.mjs: which claim?" },
   "world2/tools/roll-ingest.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: roll-ingest.mjs" },
   "world2/tools/seed-import.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: seed-import.mjs" },
+  // No --world-repo: stops on usage before any git or Postgres (postmark#2897).
+  "world2/tools/settlements-backfill.mjs": { args: [], env: NO_PG, code: 2, needle: "--world-repo <checkout> is required" },
   "world2/tools/snapshot-export.mjs": { args: ["--help"], env: NO_PG, code: 2, needle: "usage:" },
   "world2/tools/stamp-ingest.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: stamp-ingest.mjs" },
   "world2/tools/state-log-rederive.mjs": { args: [], env: { ...NO_PG, WORLD2_PG_URL: "postgres://nobody@localhost/not_scratch" }, code: 2, needle: "REFUSED · WORLD2_PG_URL must name" },
   "world2/tools/state-log-write.mjs": { args: [], env: NO_PG, code: 2, needle: "--world <checkout> and --windows" },
+  // A safe entry proof for a tool that WRITES to the live world store: no flag,
+  // so it stops on usage. The store is opened lazily precisely so this refusal
+  // never reaches Postgres — NO_PG below would make a connection fail anyway,
+  // but the tool must not have tried.
+  "world2/tools/window-reanchor.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: window-reanchor.mjs --dry-run | --apply" },
 };
 
 // ── the scan: which files carry an entry guard at all ────────────────────────

@@ -273,6 +273,51 @@ test('F5 · OPERATIONS.md: "REST: stable/simple for frozen consumers" — the RE
   assert.ok(existsSync(GOLDEN), `the golden is the receipt; without it this test proves nothing (${GOLDEN})`);
   assert.deepEqual(shapeOf(full), JSON.parse(readFileSync(GOLDEN, "utf8")),
     "a pane in the wild reads named keys off this answer. A key REMOVED or RETYPED is the break the shape rule names. A key ADDED reddens this too, and is meant to: additive growth is lawful but 'shape changes ship with a PSA' (founder, 2026-08-31), so the golden is regenerated deliberately, with the PSA, rather than drifting quietly — which is exactly what the old byte golden let the profile act do");
+  // ⚑ REGENERATED 2026-09-17 FOR POS-83, and named here because a regenerated
+  // golden otherwise asserts that the change equals the change. What grew: the
+  // stake act's card gained `preview`, the founder's opt-in confirmation step
+  // for acts that move stamps (#2814). ADDITIVE and proven so rather than
+  // asserted — the capture diff added exactly two keys
+  // (`fields/preview/{type,description}`) and removed or retyped none, which is
+  // what makes it lawful under the shape rule. PSA for the release notes: "a
+  // stamps preview is live — pass preview: true to any stake and read what it
+  // would do before it does it."
+  //
+  // This is the WITNESS the regeneration would otherwise have no room for, and
+  // it is positional-independent on purpose: the stake act is found by the one
+  // field only it carries, so a reordering of the acts list cannot make it pass
+  // by looking at somebody else's card.
+  const frozen = JSON.parse(readFileSync(GOLDEN, "utf8"));
+  const stakeCard = frozen.acts.find((a) => a.fields && "pot" in a.fields);
+  assert.ok(stakeCard, "the stake act is the only one carrying a `pot` field");
+  assert.equal(stakeCard.fields.preview?.type, "string",
+    "the frozen shape carries the preview field's own type — shapeOf records the TYPE NAME, so a boolean field reads as the string 'boolean' here");
+  // …AND THE LIVE DOOR, not only the frozen copy of it. The deepEqual above
+  // cannot tell a matched drop-and-regenerate from a door that never changed:
+  // lose the field and re-capture, and the golden agrees with the loss. This one
+  // reads the answer the door just gave, so it reds on the drop whatever the
+  // golden says.
+  assert.equal(full.acts.find((a) => a.fields && "pot" in a.fields)?.fields?.preview?.type, "boolean",
+    "the live stake card still takes preview — the confirmation step the founder ruled is only live while the card advertises it");
+  // ⚑ REGENERATED 2026-09-18 FOR #2921 (POS-106), and named here for the same
+  // reason. What grew: the window act's card gained `file_path` — the pane read
+  // from a file the town already holds, the way upload_media takes image_path.
+  // What went: `html.required`, because html is now ONE OF TWO roads and a card
+  // still marking it required would refuse a lawful file_path call. The capture
+  // diff, key by key: +2 (`fields/file_path/{type,description}`), −1
+  // (`fields/html/required`), 0 retyped. The removal is the one the shape rule
+  // names, so it is said out loud rather than folded into "additive": a pane
+  // that read `fields.html.required` off this answer now reads undefined, which
+  // is the truth of the door. PSA for the release notes: "household do: window
+  // takes file_path — hang the pane from a file in your own house instead of
+  // re-sending it; html is no longer required, one of the two is."
+  const windowCard = frozen.acts.find((a) => a.fields && "blueprint" in a.fields);
+  assert.ok(windowCard, "the window act is the only one carrying a `blueprint` field");
+  assert.equal(windowCard.fields.file_path?.type, "string");
+  assert.equal(windowCard.fields.html?.required, undefined, "the frozen shape no longer marks html required");
+  const liveWindow = full.acts.find((a) => a.fields && "blueprint" in a.fields);
+  assert.equal(liveWindow?.fields?.file_path?.type, "string", "the live window card takes file_path");
+  assert.equal(liveWindow?.fields?.html?.required, undefined, "and the live card does not mark html required — a card that did would refuse the road it advertises");
 });
 
 test(`F5c · and the answer stays BOUNDED — REST under ${REST_CEILING}B, the connector's bare answer under ${SLIM_CEILING}B`, async () => {
@@ -773,8 +818,12 @@ test("F13b · and a send with NO nonce is byte-for-byte the receipt it always wa
     // comparing the two must see the difference rather than infer it from an
     // absent key — so one sentence was added that says whose question they
     // answer. The list moves by hand, and this comment is why.
+    // `next_crossing` joined 2026-09-18 (postmark#2922, Pica): the boat's
+    // number, when it sails, how many minutes off, and the sentence — beside
+    // `expected_crossing`, which stays because frozen consumers read it. One
+    // boat, two spellings; test/next-crossing.test.mjs holds them equal.
     assert.deepEqual(Object.keys(r),
-      ["letter_id", "commit", "standing", "expected_crossing", "logged", "pushed", "office_bookkeeping"],
+      ["letter_id", "commit", "standing", "expected_crossing", "next_crossing", "logged", "pushed", "office_bookkeeping"],
       "the receipt's shape is pinned; a key added without a reason reds here");
     odb.close();
   });

@@ -240,9 +240,9 @@ test("the fixture's crossing arithmetic is the town's, not this file's", () => {
 
 // ── the doorstep's eighth segment ──────────────────────────────────────────
 
-test("the manifest names eight, and `rulings` is one of them", async () => {
+test("the manifest names nine, and `rulings` is one of them", async () => {
   const { DOORSTEP_SEGMENTS } = await import("../src/queries.mjs");
-  assert.equal(DOORSTEP_SEGMENTS.length, 8);
+  assert.equal(DOORSTEP_SEGMENTS.length, 9, "nine since 2026-09-18 — `stakes` joined (postmark#2919)");
   assert.ok(DOORSTEP_SEGMENTS.includes("rulings"),
     "a manifest that did not name it would hide the segment that carries a refusal");
 });

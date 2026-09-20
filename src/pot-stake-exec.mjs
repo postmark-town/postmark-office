@@ -65,6 +65,23 @@ export function clipPotStake({ state, pots, handle, pot, n, date }) {
   return result;
 }
 
+/**
+ * THE CLIP'S TWO INPUTS, BUILT ONCE (POS-83).
+ *
+ * `main` below and the pot door's PREVIEW (`household-stamps.mjs
+ * § potStakePreview`) both need the ballot state and the pot list to reach
+ * `clipPotStake`, and a preview that assembled its own pair would be a second
+ * answer to "what is this pot and what does this resident hold" — the drift
+ * class this whole file is written against. So the pair is built here, taking
+ * the clone as a PARAMETER (main passes its module-level one), and both callers
+ * ask for it.
+ */
+export async function potStakeInputs(clone) {
+  const { ballotState } = await import(pathToFileURL(join(clone, "tools", "ballot.mjs")));
+  const { readPots } = await import(pathToFileURL(join(HERE, "funding.mjs")));
+  return { state: ballotState(clone), pots: readPots(clone).pots };
+}
+
 async function main() {
   const payload = JSON.parse(process.argv[2] ?? "{}");
   if (!existsSync(KEY_PATH)) {
@@ -72,15 +89,12 @@ async function main() {
     return;
   }
   const keyPem = readFileSync(KEY_PATH, "utf8");
-  const { ballotState } = await import(pathToFileURL(join(CLONE, "tools", "ballot.mjs")));
   const { potStakeLine, appendSigned } = await import(pathToFileURL(join(CLONE, "tools", "stamp-mint.mjs")));
-  const { readPots } = await import(pathToFileURL(join(HERE, "funding.mjs")));
 
   if (process.env.TOWN_PUSH === "1")
     execFileSync("git", ["-C", CLONE, "pull", "--rebase", "-q"], { encoding: "utf8" });
 
-  const { pots } = readPots(CLONE);
-  const state = ballotState(CLONE);
+  const { state, pots } = await potStakeInputs(CLONE);
   const result = clipPotStake({ state, pots, ...payload });
   if (result.error) { console.log(JSON.stringify(result)); return; }
 

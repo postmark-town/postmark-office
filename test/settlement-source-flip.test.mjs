@@ -20,16 +20,16 @@
 // invocation with its full argument list, in order — captured by putting stub
 // wrappers ahead of the real binaries on PATH.
 //
-// The train's script is read out of git (`origin/train/2026-w38:deploy/
-// settlement-auto.sh`) rather than kept as a copy in the test tree, so this test
-// cannot drift away from what is actually shipping.
+// The train's script is read out of git from the current open train: by
+// default the newest `origin/train/*` ref by name, or `TRAIN_REF` when release
+// tooling deliberately pins one. The baseline follows the train instead of a
+// calendar literal, so this instrument cannot decay merely because a week turned.
 //
 // ── THE CAN-FAIL FLIP ───────────────────────────────────────────────────────
 //
-// F-flip below is the control, and it is the reason to trust the equality test:
-// it re-runs the same comparison with the branch script's git path deliberately
-// perturbed by one command, and asserts the comparison NOTICES. An equality
-// assertion that has never been shown to fail is a green light wired to nothing.
+// F-flip below is the control. It removes the ghost sweep from an otherwise
+// identical git crossing and proves the relation check notices the missing safety
+// net. A guard that has never been shown to fail is a green light wired to nothing.
 
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
@@ -51,11 +51,50 @@ const has = (cmd) => { try { execFileSync("sh", ["-c", cmd], { stdio: "ignore" }
 // the "check reached for something easier than the behaviour" defect.
 const SH_OK = has("sh -c 'true'");
 
-const TRAIN_REF = "origin/train/2026-w38";
+// ── "NEWEST BY NAME" IS NOT A STRING SORT, BECAUSE THE WEEK IS NOT PADDED ────
+//
+// Trains are named `train/YYYY-wNN` with NO zero padding — `tools/train-week-
+// check.mjs` writes `train/${year}-w${open}` straight from the number, and the
+// live refs read `2026-w35 · 2026-w35b · 2026-w36 … 2026-w39`. Under git's own
+// `--sort=-refname` that ordering breaks the moment a year reaches week 10:
+//
+//   $ git for-each-ref --sort=-refname 'refs/remotes/origin/train/*'
+//   origin/train/2027-w9      ← picked
+//   origin/train/2027-w2
+//   origin/train/2027-w11     ← the actual open train
+//   origin/train/2027-w10
+//   origin/train/2027-w1
+//
+// Which is this file's own defect one layer down: a baseline that goes stale
+// because the calendar turned. The week is compared as a NUMBER, the year
+// before it, and a re-cut suffix (`w35b`) after it, so the order is the order
+// trains actually open in. A ref that does not parse as a train name sorts last
+// rather than being dropped — it can still be the only one there is.
+export function newestTrainRef(refs) {
+  const key = (ref) => {
+    const m = /(?:^|\/)(\d{4})-w(\d+)([a-z]*)$/.exec(ref);
+    return m ? { ok: 1, year: Number(m[1]), week: Number(m[2]), suffix: m[3] } : { ok: 0, year: 0, week: 0, suffix: "" };
+  };
+  return [...refs].sort((a, b) => {
+    const [x, y] = [key(a), key(b)];
+    return (y.ok - x.ok) || (y.year - x.year) || (y.week - x.week) || y.suffix.localeCompare(x.suffix);
+  })[0];
+}
+
+function openTrainRef() {
+  const explicit = String(process.env.TRAIN_REF ?? "").trim();
+  if (explicit) return explicit;
+  const refs = execFileSync("git", [
+    "-C", OFFICE, "for-each-ref",
+    "--format=%(refname:short)", "refs/remotes/origin/train/*",
+  ], { encoding: "utf8" }).split(/\r?\n/).map((r) => r.trim()).filter(Boolean);
+  if (!refs.length) throw new Error("no open train ref under refs/remotes/origin/train/*");
+  return newestTrainRef(refs);
+}
 
 /** The train's shipping script, read from git so this test cannot drift from it. */
 function trainScript() {
-  return execFileSync("git", ["-C", OFFICE, "show", `${TRAIN_REF}:deploy/settlement-auto.sh`], {
+  return execFileSync("git", ["-C", OFFICE, "show", `${openTrainRef()}:deploy/settlement-auto.sh`], {
     encoding: "utf8", maxBuffer: 8 * 1024 * 1024,
   });
 }
@@ -128,7 +167,11 @@ process.stdout.write(JSON.stringify({
   sketchbooks_seen: drafts,
 }) + "\\n");
 `);
-  writeFileSync(join(seed, "package.json"), JSON.stringify({ name: "world-fixture", scripts: { test: "node -e \"\"" } }));
+  // the harm gate (2026-09-16) is the crossing's refusing gate; a fixture world that
+  // carries none is a crossing that cannot gate and refuses, so the bottle answers it
+  writeFileSync(join(seed, "tools", "harm-gate.mjs"),
+    'process.stdout.write(JSON.stringify({ ok: true, base: "HEAD", before: 1, after: 1, checks: [] }) + "\\n");\n');
+  writeFileSync(join(seed, "package.json"), JSON.stringify({ name: "world-fixture", scripts: { test: "node -e \"\"", "test:candle": "node -e \"\"" } }));
   g(".", "init", "-q", "-b", "main", seed);
   g(seed, "config", "user.email", "seed@postmark.invalid");
   g(seed, "config", "user.name", "seed");
@@ -274,7 +317,11 @@ function normalize(commands, root) {
     .replace(/\\/g, "/"));
 }
 
-test("F-git · SETTLEMENT_SOURCE=git issues the train's chain plus the ghost sweep, and nothing else", { skip: !SH_OK && "no POSIX sh" }, () => {
+const GHOST_SWEEP_SENTINEL = /^git -C <root>\/sweep rev-parse main\^\{tree\}$/;
+const ghostSweepPresent = (commands, root) =>
+  normalize(commands, root).some((c) => GHOST_SWEEP_SENTINEL.test(c));
+
+test("F-git · SETTLEMENT_SOURCE=git matches the open train and runs the ghost sweep", { skip: !SH_OK && "no POSIX sh" }, () => {
   const train = crossing("train", trainScript());
   const branch = crossing("branch", readFileSync(join(OFFICE, "deploy", "settlement-auto.sh"), "utf8"),
     { env: { SETTLEMENT_SOURCE: "git" } });
@@ -284,28 +331,23 @@ test("F-git · SETTLEMENT_SOURCE=git issues the train's chain plus the ghost swe
   assert.ok(train.commands.length > 20,
     `the fixture must actually exercise the chain, not exit early; got ${train.commands.length} commands`);
 
-  // ── THE CLAIM CHANGED AT REPAIR 1, AND THE CHANGE IS THE POINT ─────────────
+  // ── THE BASELINE MOVES WITH THE OPEN TRAIN; THE RELATION DOES NOT ────────
   //
-  // Until repair 1 this asserted raw equality: the rollback issued the train's
-  // exact sequence. It cannot any more, and it MUST not — the train's git path
-  // has a defect (it deletes no local draft ref) that a rollback after a store
-  // crossing must not inherit, because that is precisely when the leftovers
-  // exist. So the rollback is now the train's chain PLUS the ghost sweep.
-  //
-  // Weakening the assertion to "roughly the same" would have been the easy move
-  // and would have retired the only instrument that watches this seam. Instead
-  // the claim is made narrower and stronger in both directions: NOTHING the
-  // train issues may go missing, and every ADDED command must belong to the
-  // ghost sweep by name. An addition this test does not recognise fails it.
+  // This used to compare against a calendar-pinned train from before repair 1,
+  // so the ghost sweep was expected to appear in `added`. The moment that repair
+  // itself reached the next train, the baseline contained it too and the control
+  // decayed. The command diff still guards both directions against undeclared
+  // drift; the safety relation is asserted independently below, where a week
+  // turning cannot make it disappear.
   const trainCmds = normalize(train.commands, train.root);
   const branchCmds = normalize(branch.commands, branch.root);
 
   // ── THE REGISTRY REFRESH, NAMED COMMAND BY COMMAND (2026-09-09) ───────────
   //
-  // The branch re-derives `WORLD/households.json` before the fold, so it issues
-  // commands the train does not. Listing them here rather than loosening the
-  // comparison is the whole point of this test: an addition it cannot name is a
-  // change to the crossing that nobody declared.
+  // The current checkout re-derives `WORLD/households.json` before the fold.
+  // If that behaviour is ahead of the open train, these patterns name the allowed
+  // delta rather than loosening the comparison. Once the train catches up the list
+  // is inert, while the direct presence assertion below still guards the behaviour.
   //
   // `git rev-parse main` appears because the quiet-pass test now asks the SWEEP
   // whether it published, not `main` — the refresh can move main before the fold
@@ -377,15 +419,12 @@ test("F-git · SETTLEMENT_SOURCE=git issues the train's chain plus the ghost swe
   assert.deepEqual(unexplained, [],
     "every command the rollback adds must belong to the ghost sweep (repair 1) or to the registry refresh "
     + `(2026-09-09). An addition this test cannot name is a change to the crossing nobody declared: ${JSON.stringify(unexplained)}`);
-  // COUNTED OVER GHOST_SWEEP ALONE, and that is a repair rather than a detail.
-  // This used to ask `added.length > 0`. The registry refresh (2026-09-09) makes
-  // `added` non-empty for a reason that has nothing to do with the ghost sweep,
-  // so the unqualified form would have turned this assertion green while the
-  // thing it names was still absent — a check quietly satisfied by an unrelated
-  // change is worse than one that fails.
-  assert.ok(added.some((c) => GHOST_SWEEP.some((re) => re.test(c))),
+  // Presence is asserted on the crossing itself, never inferred from `added`.
+  // Once a repair reaches the open train it correctly vanishes from the delta, but
+  // the git-source path must still run it and the store-source path must not.
+  assert.ok(ghostSweepPresent(branch.commands, branch.root),
     "and the ghost sweep must actually run, or repair 1 is not in this tree");
-  assert.ok(added.some((c) => REGISTRY_REFRESH.some((re) => re.test(c))),
+  assert.ok(branchCmds.some((c) => REGISTRY_REFRESH.some((re) => re.test(c))),
     "and the registry refresh must actually run — a crossing that folds on whatever WORLD/households.json "
     + "world main happens to carry is the state this whole step exists to end");
 
@@ -393,23 +432,22 @@ test("F-git · SETTLEMENT_SOURCE=git issues the train's chain plus the ghost swe
   assert.equal(branch.receipt.source, "git", "and it says which path it took");
 });
 
-test("F-flip · the comparison NOTICES a one-command difference", { skip: !SH_OK && "no POSIX sh" }, () => {
-  // The control. Without this, F-git is an equality assertion that has never
-  // been shown capable of failing, which is a green light wired to nothing.
+test("F-flip · removing the ghost sweep makes the relation fail", { skip: !SH_OK && "no POSIX sh" }, () => {
+  // The control removes the exact safety net F-git requires. If this no
+  // longer goes dark, the relation check has stopped measuring its own claim.
   const train = crossing("flip-train", trainScript());
   const perturbed = crossing("flip-branch", readFileSync(join(OFFICE, "deploy", "settlement-auto.sh"), "utf8"), {
     env: { SETTLEMENT_SOURCE: "git" },
-    // One extra command on the git path, nothing else.
+    // Remove the ghost sweep itself: this control falsifies the relation F-git asserts.
     perturb: (s) => s.replace(
-      'TOWN_SHA="$(git -C "$TOWN" rev-parse origin/main)"',
-      'TOWN_SHA="$(git -C "$TOWN" rev-parse origin/main)"\ngit -C "$TOWN" status --porcelain >/dev/null',
+      'GHOSTS=0\nKEPT_UNDELIVERED=0\nRESETS=0\nif [ "$SOURCE" = "git" ]; then',
+      'GHOSTS=0\nKEPT_UNDELIVERED=0\nRESETS=0\nif false; then',
     ),
   });
-  assert.notDeepEqual(
-    normalize(perturbed.commands, perturbed.root),
-    normalize(train.commands, train.root),
-    "if this passes, F-git proves nothing",
-  );
+  assert.equal(ghostSweepPresent(train.commands, train.root), true,
+    "the open train must exercise the ghost sweep in git mode");
+  assert.equal(ghostSweepPresent(perturbed.commands, perturbed.root), false,
+    "the can-fail control must go red when the ghost sweep is removed");
 });
 
 test("F-store · the store path fetches no sketchbook and pushes no draft branch", { skip: !SH_OK && "no POSIX sh" }, () => {
@@ -419,6 +457,9 @@ test("F-store · the store path fetches no sketchbook and pushes no draft branch
   // issued before it must contain no sketchbook fetch.
   const store = crossing("store", readFileSync(join(OFFICE, "deploy", "settlement-auto.sh"), "utf8"),
     { env: { SETTLEMENT_SOURCE: "store" } });
+
+  assert.equal(ghostSweepPresent(store.commands, store.root), false,
+    "the store-source chain must not run the rollback ghost sweep");
 
   const fetches = store.commands.filter((c) => c.includes("fetch"));
   assert.ok(fetches.length > 0, "the crossing still fetches");
@@ -679,4 +720,55 @@ test("F-mode · an unrecognised SETTLEMENT_SOURCE refuses rather than defaulting
   assert.match(bad.res.stderr, /is not `store` or `git`/);
   assert.ok(!bad.commands.some((c) => c.includes("world-drain.mjs")),
     "it refuses before touching anything");
+});
+
+// ── F-newest · THE DERIVATION ITSELF, ON THE WEEK IT WOULD HAVE DECAYED ──────
+//
+// The rest of this file reads the open train out of git. That derivation is the
+// one thing here no crossing fixture can falsify, because today's refs (w35…w39)
+// happen to order correctly under any comparator. This test hands it the refs a
+// January does: it needs no repo, no shell, and no crossing, and it is the only
+// place the "newest train" claim is actually measured.
+test("F-newest · the open train is the newest by WEEK, not by string — the 2027-w9-beats-w11 decay", () => {
+  // Verified against git itself: `for-each-ref --sort=-refname` returns this set
+  // as w9, w2, w11, w10, w1 — the stale baseline first.
+  assert.equal(
+    newestTrainRef([
+      "origin/train/2027-w1", "origin/train/2027-w2", "origin/train/2027-w9",
+      "origin/train/2027-w10", "origin/train/2027-w11",
+    ]),
+    "origin/train/2027-w11",
+    "week 11 is open; a string sort picks week 9 and this instrument goes back to comparing against a stale train",
+  );
+
+  // The year outranks the week, or the first train of a new year loses to the
+  // last of the old one.
+  assert.equal(
+    newestTrainRef(["origin/train/2026-w52", "origin/train/2027-w1"]),
+    "origin/train/2027-w1",
+  );
+
+  // A re-cut train is newer than the week it re-cuts. `2026-w35b` is a real ref
+  // in this repo, so this is the live shape, not a hypothetical one.
+  assert.equal(
+    newestTrainRef(["origin/train/2026-w35", "origin/train/2026-w35b"]),
+    "origin/train/2026-w35b",
+  );
+
+  // Today's actual refs still resolve the way they did before this repair.
+  assert.equal(
+    newestTrainRef([
+      "origin/train/2026-w35", "origin/train/2026-w35b", "origin/train/2026-w36",
+      "origin/train/2026-w37", "origin/train/2026-w38", "origin/train/2026-w39",
+    ]),
+    "origin/train/2026-w39",
+  );
+
+  // A name this cannot parse is sorted last rather than dropped — it can still
+  // be the only ref there is, and an unusable answer beats no answer at all.
+  assert.equal(newestTrainRef(["origin/train/hotfix"]), "origin/train/hotfix");
+  assert.equal(
+    newestTrainRef(["origin/train/hotfix", "origin/train/2026-w39"]),
+    "origin/train/2026-w39",
+  );
 });

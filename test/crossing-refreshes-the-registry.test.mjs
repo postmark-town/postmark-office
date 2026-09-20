@@ -156,7 +156,12 @@ process.stdout.write(JSON.stringify({
   surveyed: { branches: drafts.length, delta_rows: drafts.length, escrow_backed_deltas: 0 },
 }) + "\\n");
 `);
-  writeFileSync(join(seed, "package.json"), JSON.stringify({ name: "world-fixture", scripts: { test: "node -e \"\"" } }));
+  // the harm gate (2026-09-16) is the crossing's refusing gate; a fixture world
+  // that carries none is a crossing that cannot gate and refuses, so the bottle
+  // answers it: no harm, nothing to name
+  writeFileSync(join(seed, "tools", "harm-gate.mjs"),
+    'process.stdout.write(JSON.stringify({ ok: true, base: "HEAD", before: 1, after: 1, checks: [] }) + "\\n");\n');
+  writeFileSync(join(seed, "package.json"), JSON.stringify({ name: "world-fixture", scripts: { test: "node -e \"\"", "test:candle": "node -e \"\"" } }));
   g(".", "init", "-q", "-b", "main", seed);
   g(seed, "config", "user.email", "seed@postmark.invalid");
   g(seed, "config", "user.name", "seed");

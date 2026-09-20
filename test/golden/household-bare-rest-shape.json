@@ -150,9 +150,12 @@
      "description": "string",
      "type": "string"
     },
+    "file_path": {
+     "description": "string",
+     "type": "string"
+    },
     "html": {
      "description": "string",
-     "required": "boolean",
      "type": "string"
     }
    },
@@ -267,6 +270,10 @@
     "pot": {
      "description": "string",
      "required": "boolean",
+     "type": "string"
+    },
+    "preview": {
+     "description": "string",
      "type": "string"
     },
     "stamps": {

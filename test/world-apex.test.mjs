@@ -1278,8 +1278,77 @@ test("PARITY · an unknown envelope field on a shadow read bounces BY NAME, with
   assert.equal(r.error, "bounce");
   assert.equal(r.code, 422);
   assert.equal(r.defect, 'unknown argument "bogus" for world { read: "say" }');
-  assert.equal(r.hint, "this read takes: text", "and the hint names what this shadow does answer to");
-  assert.deepEqual(r.accepted, ["text"]);
+  assert.equal(r.hint, "this read takes: text, since", "and the hint names what this shadow does answer to");
+  assert.deepEqual(r.accepted, ["text", "since"]);
+});
+
+// ── #2559 · THE SHADOW CARRIES THE CURSOR IT WAS HANDED ─────────────────────
+//
+// `case "say"` called the flat tool with `{}`. The flat `world_say` takes three
+// fields: `handle` rides in from `call` itself, `text` is refused by name one
+// line above, and `since` was dropped — so the ONE field left over was the one
+// thrown away. A resident polling the quay through this shadow re-bought the
+// whole room on every call, with a 200 and no field saying the cursor was
+// ignored. A door that refuses unknown fields by name and silently discards a
+// known one is the worse half of that pair.
+//
+// CAN-FAIL FLIP: restore `call("world_say", {})` and the first leg reddens by
+// handing back a room the cursor should have emptied.
+
+test("#2559 a say-read threads its cursor: the shadow answers what the flat tool answers for the same cursor", async () => {
+  on();
+  const { worldSay } = await import("../src/world.mjs");
+
+  // THE ROOM MUST HOLD A VOICE, or the cursored read below empties nothing and
+  // the leg passes for free. Whatever is already in earshot will do; a quiet
+  // room gets one line spoken into it. The speaker's own rate dial
+  // (`speak_every_s`) refuses a second line from the same handle inside the
+  // window, so this asks the room what it has before adding to it.
+  let heard = (await worldApex({ read: "say" }, KEY_ALPHA)).heard;
+  if (!(heard?.voices ?? []).length) {
+    await worldApex({ do: "say", args: { text: "a line to be past" } }, KEY_ALPHA);
+    heard = (await worldApex({ read: "say" }, KEY_ALPHA)).heard;
+  }
+  assert.ok((heard?.voices ?? []).length,
+    `nothing is in earshot, so a cursor could not empty anything and this leg cannot fail: ${JSON.stringify(heard).slice(0, 300)}`);
+  const cursor = heard.latest;
+  assert.ok(Number.isFinite(cursor), `the room must hand back a cursor to read with: ${JSON.stringify(heard).slice(0, 300)}`);
+
+  const viaApex = await worldApex({ read: "say", args: { since: cursor } }, KEY_ALPHA);
+  assert.ok(!viaApex.error, JSON.stringify(viaApex).slice(0, 300));
+  const flat = await worldSay({ since: cursor }, KEY_ALPHA);
+
+  // EQUALITY OF THE ANSWER, not of its words. Three fields are read off the
+  // wall clock on every call and would differ between any two reads at all,
+  // cursor or no cursor: `latest` falls back to now when nothing newer was
+  // heard, and `ago`/`started` are sentences about the gap since something was
+  // said. Everything else must match, because the shadow is supposed to BE the
+  // flat tool — one machinery, not a second listening path.
+  const clockless = (r) => JSON.parse(JSON.stringify(r ?? null,
+    (k, v) => (k === "latest" || k === "ago" || k === "started" ? undefined : v)));
+  assert.deepEqual(clockless(viaApex.heard), clockless(flat),
+    "the shadow must answer what the flat tool answers for the same cursor");
+
+  // And the cursor did something: past the room's own latest, nothing is left.
+  assert.deepEqual(viaApex.heard.voices ?? [], [],
+    "a cursor at the room's latest stamp must leave no voices behind it");
+});
+
+test("#2559 the shadow carries every field the flat tool takes, and drops none", async () => {
+  // The rule the fix is an instance of. `world_say`'s schema is the authority:
+  // whatever it accepts, this shadow either carries or refuses BY NAME — never
+  // silently discards. `handle` is the standpoint and rides in from the top
+  // level; `text` is the teaching refusal. That leaves `since`, and if the flat
+  // tool ever grows a fourth field this leg goes red until somebody decides
+  // which of the two it is.
+  const { TOOLS } = await import("../src/mcp.mjs");
+  const { WORLD_READ_FIELDS } = await import("../src/world-apex.mjs");
+  const flat = TOOLS.find((t) => t.name === "world_say");
+  assert.ok(flat, "world_say must be a tool for this leg to be about anything");
+  const unaccounted = Object.keys(flat.inputSchema.properties)
+    .filter((f) => f !== "handle" && !Object.hasOwn(WORLD_READ_FIELDS.say, f));
+  assert.deepEqual(unaccounted, [],
+    `world_say takes ${unaccounted.join(", ")} and the say-shadow neither carries nor refuses them by name — they would be dropped`);
 });
 
 test("PARITY · `text` on a say-read still meets the TEACHING bounce, not the generic one", async () => {

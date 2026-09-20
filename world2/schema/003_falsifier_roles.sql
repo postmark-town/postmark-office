@@ -30,6 +30,12 @@ lawful AS (
     -- other state here is a public fact, and a public fact is retracted, never
     -- deleted. 007's header carries the full argument.
     ('office_api',   'claims',           'DELETE'),
+    -- 018_settlements.sql. One row per settlement/S<n> tag, INSERT only — a
+    -- blessing is canon and is never rewritten, so no pen holds UPDATE or DELETE.
+    -- office_api because the row is written from the office's own world clone,
+    -- under the office's own connection, after the keeper's tag lands there;
+    -- the pen is named in 018's header and is one word to move if ruled otherwise.
+    ('office_api',   'settlements',      'INSERT'),
     ('clearing_job', 'claims',           'UPDATE'),
     ('clearing_job', 'windows',          'INSERT'),
     ('clearing_job', 'windows',          'UPDATE'),

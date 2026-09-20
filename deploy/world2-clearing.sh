@@ -6,8 +6,29 @@
 # cadence, it is a habit, and a habit does not survive the person. This is the
 # runner that ends it.
 #
-# LAW (census.md Decision 3 — the candle cadence): windows close 05:45Z and
-# 17:45Z. The timer carries those two marks and nothing else.
+# LAW (world main, `LOGOS/classes.md § crossing ②` — the keeper's settlement,
+# amended 2026-09-17 by keeminlee/postmark-world#96): windows close 06:00Z and
+# 18:00Z from the w39 ship (2026-09-21), 05:45Z and 17:45Z until then. The timer
+# carries those two marks and nothing else.
+#
+# THE LAW LIVES IN THE WORLD TREE, NOT IN A PLAN. Earlier drafts of this header
+# cited `census.md Decision 3`; that is the postmark-world-2 gold plan, signed
+# 2026-08-28, kept in Starstory PULSE and absent from the world repo entirely —
+# and its Decision 3 still reads "05:45Z / 17:45Z, one cadence for all claim
+# classes", unamended. A plan that proposed a cadence is not the line that
+# carries it, and a citation pointing at the plan cannot be checked by anyone
+# holding the world.
+#
+# They were 05:45Z / 17:45Z from the cadence's birth until the w39 ship — fifteen
+# minutes of head start so the Worldkeeper's :00 heartbeat would read a finished
+# receipt — while his own constitution (Rulings 8 and 9) and the World's bulletin
+# both said the town crosses at 06:00 and 18:00. The statement is now true. The
+# heartbeat moved to :20 to keep its side of the bargain.
+#
+# ⚑ THE TIMER MOVE ALONE DOES NOT MOVE THE WINDOWS — see the chaining note
+# below, which is the same property read from the other side. One deliberate
+# write re-anchors the chain: `world2/tools/window-reanchor.mjs --apply`, by
+# hand, once.
 #
 # ── WHICH WINDOW, AND WHY THE SCRIPT AND NOT THE TIMER DECIDES ──────────────
 # clearing-job.mjs takes `--window N`. A timer cannot know N. So this asks the
@@ -23,8 +44,16 @@
 #     INSERT INTO windows (id, opens_at, closes_at, status)
 #     VALUES ($1, $2, $2::timestamptz + interval '12 hours', 'open')
 #
-# so a window closed eight hours late still leaves its successor on the 05:45/
-# 17:45 marks. A late run costs lateness, never alignment.
+# so a window closed eight hours late still leaves its successor on the marks it
+# already had. A late run costs lateness, never alignment.
+#
+# ⚑ AND THAT IS WHY MOVING THE TIMER CANNOT MOVE THE WINDOWS. The same property
+# that makes the cadence immune to a late box makes a DELIBERATE move impossible
+# from here: a timer at :00 finds a window still due at :45, closes it fifteen
+# minutes after its own boundary, and writes a successor due at :45 again —
+# forever, with the store's rows contradicting the law. `world2/tools/window-
+# reanchor.mjs` is the one write that moves the chain onto the law's mark; the
+# `+ 12 hours` rule above is untouched and carries it from there.
 #
 # ── THE FIRST STEP IS NOT THIS TOOL ─────────────────────────────────────────
 # clearing-job.mjs § its own header, verbatim:
@@ -76,6 +105,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 MAX_CATCHUP="${W2_MAX_CATCHUP:-6}"
 TOWN_CLONE_DIR="$WORLD2_LAB/ingest-clones/town"
+WORLD_CLONE_DIR="$WORLD2_LAB/ingest-clones/world"
 
 # PG* becomes the LAW INGESTER, for the first step the clearing shells out to
 # (world2-lib.sh § two connection shapes — the WORLD2_INGEST_URL hand-off in
@@ -166,17 +196,52 @@ due_window() {
 }
 
 # ── THE BOUNDARY WAIT (the founder's clock catch, 2026-09-02) ───────────────
-# The windows' boundaries ride at :45:40 — the genesis offset — while the
-# timer fires on the :45:00 marks. So "the open window whose closes_at has
+# The windows' boundaries rode at :45:40 — the genesis offset — while the
+# timer fired on the :45:00 marks. So "the open window whose closes_at has
 # passed" found only the PREVIOUS window, and every close ran a full cycle
 # late: 163 closed 09-02 05:45Z, twelve hours after its own boundary; 164 the
-# same at 17:45Z. The marks stay the timer's (census Decision 3 is law); this
+# same at 17:45Z. The marks stay the timer's (`LOGOS/classes.md § crossing ②`
+# is the law); this
 # waits out the offset instead of moving the marks. Bounded at 90s, and a run
 # that starts with a window already due (catch-up, a hand run) waits zero.
+#
+# ⚑ AFTER THE w39 SHIP, IN TWO STAGES, AND THIS LOOP IS RIGHT FOR BOTH. With the
+# timer on :00 and the chain still on :45:40, the boundary is fourteen minutes
+# BEHIND the timer, so `due_window` answers on the first check and this waits
+# zero. Once `window-reanchor.mjs` puts the chain on :00:00 the genesis offset is
+# gone entirely and boundary and timer coincide, which is a race of milliseconds
+# rather than forty seconds — still a race, so the loop stays exactly as it is.
 for _ in $(seq 1 18); do
   due_window; [ -n "$DUE" ] && break
   sleep 5
 done
+
+# ── THE WORLD CHECKOUT THE PARCEL CAP IS READ FROM (POS-98 box 4) ───────────
+#
+# The candle's new step 5.6 asks the world's own `PARCEL_CLAIM_CAP`,
+# `PARCEL_CAP_LAW_DATE` and `PARCEL_CAP_EXCEPTIONS` out of a checkout — the same
+# route the notary already takes for `falsifier-canon-locks.mjs --world-repo`,
+# and the same clone. It is an ARGUMENT and not an env key: `WORLD_CLONE` lives
+# in /etc/postmark-office.env and this unit reads
+# /etc/postmark-world2-dev.env plus -/etc/postmark-world2-clearing.env, so an env
+# key would simply have been absent and the gate would have been quietly off.
+#
+# ⚑ A REFRESH THAT FAILS OMITS THE ARGUMENT RATHER THAN PASSING A STALE TREE,
+# and that direction is the whole judgement here. A stale checkout is not a
+# slightly-old cap — it is an old EXCEPTIONS MAP, and the exceptions are the
+# founder's individual rulings: Mari's parcel, the Reeves' gauge house, deva's
+# household's five. Asking a law that predates a grant refuses ground its owner
+# was given by name. Omitting the argument instead leaves the claim to lock and
+# the sweep to judge it, which is exactly what happens today — no worse than the
+# state this step improves on, and the window's receipt says `checked: false`
+# with the reason rather than going quiet.
+if "$HERE/world2-refresh-clone.sh" world >/tmp/w2-clearing-world.log 2>&1; then
+  WORLD_REPO_ARG=(--world-repo "$WORLD_CLONE_DIR")
+else
+  WORLD_REPO_ARG=()
+  echo "[world2-clearing] world checkout refresh FAILED — the parcel cap will not be asked this run; parcel claims lock unchecked and the sweep remains their gate. The window receipt carries \`parcel_cap.checked: false\`." >&2
+  cat /tmp/w2-clearing-world.log >&2
+fi
 
 closed=0
 last_out=""
@@ -192,7 +257,7 @@ for _ in $(seq 1 "$MAX_CATCHUP"); do
   # die at the call site with nothing written down.
   last_out="$(cd "$WORLD2_OFFICE" && \
     WORLD2_CLEARING_URL="$CLEARING_URL" \
-    node world2/tools/clearing-job.mjs --window "$win" --town-repo "$TOWN_CLONE_DIR" 2>&1)"
+    node world2/tools/clearing-job.mjs --window "$win" --town-repo "$TOWN_CLONE_DIR" "${WORLD_REPO_ARG[@]}" 2>&1)"
   rc=$?          # BEFORE any pipe. $? after `cmd | tee` is tee's, not the tool's.
   echo "$last_out"
 

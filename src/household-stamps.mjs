@@ -28,6 +28,7 @@
 import { stampsDetail, questBoardFor, potBoard } from "./queries.mjs";
 import { intakeDisclosure } from "./fund.mjs";
 import { readIntakeMap } from "./intake-map.mjs";
+import { heldFor, stampsBlock, toConfirm, NOTHING_MOVED } from "./stamps-preview.mjs"; // POS-83: one grammar for every act that moves stamps
 
 const bounce = (code, defect, hint, extra = {}) => ({ error: "bounce", code, defect, hint, ...extra });
 
@@ -57,6 +58,13 @@ export const POT_STAKEABLE_BODY =
   "A pot accepts pot-mode stakes only: they come home whole at its own close, and what they lent sizes the givers' mint.";
 // Still citable as the underlying keeping law; stake-pot is the primary residue.
 export const KEEPING_STAKE_MARK = "the-town/keeping-stake";
+
+// THE RULE A POT STAKE CONSENTS TO, for the POS-83 block — the OBJECT's own
+// published menu, which is the axis a caller is consenting to when they name a
+// pot (the edge's mode, `STAKE_POT_BODY`, rides the answer beside it as it
+// always has). Assembled from the two constants above rather than restated, so
+// the block and the consent payload cannot come apart.
+export const POT_RULE = Object.freeze({ mark: POT_STAKEABLE_SLOT, says: POT_STAKEABLE_BODY });
 
 // Your own residents, and nobody else's. The estate read is your BOOKS — the
 // public roster is read_stamps and stays exactly where it was.
@@ -207,7 +215,7 @@ export async function questsRead(handle, { db, meta, clone }) {
 // ── tenant 3 · the pot-mode stake ────────────────────────────────────────────
 // stakeViaOffice's twin, and deliberately so: same flock, same subprocess
 // contract, same bounce shape. One pen, one law, never a second writer.
-export async function potStakeViaOffice(clone, { from, pot, stamps }, key, { channel } = {}) {
+export async function potStakeViaOffice(clone, { from, pot, stamps, preview }, key, { channel } = {}) {
   const { execUnderTownLock, lockTimedOut, LOCK_BUSY } = await import("./town-lock.mjs");
   const { townDay } = await import("./votes.mjs");
   const { join, dirname } = await import("node:path");
@@ -220,12 +228,61 @@ export async function potStakeViaOffice(clone, { from, pot, stamps }, key, { cha
     return bounce(403, `"${from}" is not one of your residents`,
       `this key acts for: ${[...(key?.handles ?? [])].join(", ") || "nobody"}`);
   }
+
+  // ── PREVIEW (POS-83; the founder's word 2026-09-14, postmark#2814) ────────
+  //
+  // SAY IT, MOVE NOTHING — and at this door the preview runs EVERY check the
+  // real act runs, not most of them, because the judgment is already a pure
+  // function. The whole of it lives in `clipPotStake` (the pot exists, it is
+  // open, meeps neither mint nor stake, and the clip against liquid), which the
+  // exec calls and which this calls with the same two inputs from the same
+  // builder (`potStakeInputs`). What the exec adds past that point is the pen,
+  // the flock and the append — the three things a preview must not do.
+  //
+  // The consent payload rides the preview as it rides the receipt: what a caller
+  // is being asked to consent to is the whole point of asking first, and the
+  // menu and the mode are quoted, never paraphrased.
+  if (preview === true) {
+    const { potStakeInputs, clipPotStake } = await import("./pot-stake-exec.mjs");
+    let clipped;
+    try {
+      const { state, pots } = await potStakeInputs(clone);
+      clipped = clipPotStake({ state, pots, handle: from, pot, n: stamps, date: townDay() });
+    } catch (e) {
+      return bounce(503, "not-yet-open",
+        `the office could not read the ballot state or the pot board, so this stake could not be previewed: ${String(e?.message ?? e).slice(0, 160)}`);
+    }
+    if (clipped.error) return bounce(clipped.error.code ?? 500, clipped.error.defect, clipped.error.hint);
+    const held = await heldFor(clone, from);
+    return {
+      preview: true, did: "stake", pot, handle: from,
+      stamps: stampsBlock({
+        held, moves: clipped.applied > 0 ? clipped.applied : 0, requested: Number(stamps),
+        direction: "stake", rule: POT_RULE,
+        ...(clipped.reason ? { reason: clipped.reason } : {}),
+        to_confirm: toConfirm(`household { do: "stake", args: { from: "${from}", pot: "${pot}", stamps: ${stamps} } }`),
+      }),
+      stakeable: { slot: "stakeable", value: "pot-mode — returns whole at the published close", mark: POT_STAKEABLE_SLOT, says: POT_STAKEABLE_BODY },
+      mode: { mark: STAKE_POT_MARK, says: STAKE_POT_BODY },
+      keeping_law: KEEPING_STAKE_MARK,
+      why_no_mode: "the object publishes the menu and the edge records the choice — a pot's menu is sealed to pot-mode, so the mode was implied by the pot you named",
+      nothing_written: NOTHING_MOVED,
+    };
+  }
+
   const exec = join(dirname(fileURLToPath(import.meta.url)), "pot-stake-exec.mjs");
   // THE PROVENANCE. The stake grammar already owns `via:` — an ordinary
   // stake still says `via: api`, and one driven from a browser says
   // `via: web`. The row is the record; nothing else needs to remember.
   const { viaFor } = await import("./channel.mjs");
   const payload = JSON.stringify({ handle: from, pot, n: stamps, via: viaFor(channel), date: townDay() });
+  // READ BEFORE THE MOVE (POS-83). The staked tense is not on the clip's answer
+  // — it carries balances — so it is folded here, and folding it afterwards
+  // would be reading the world this act has just changed. The liquid half is
+  // taken from the clip's own `balance_before` in the answer below, because that
+  // number is folded inside the flock and a receipt carrying two different
+  // "before" figures for one resident would be contradicting itself.
+  const heldBefore = await heldFor(clone, from);
   let out;
   try {
     out = await execUnderTownLock(exec, payload, { ...process.env, TOWN_CLONE: clone });
@@ -238,6 +295,15 @@ export async function potStakeViaOffice(clone, { from, pot, stamps }, key, { cha
   return {
     did: "stake",
     ...result,
+    // THE SAME BLOCK THE PREVIEW SHOWS (POS-83) — the half that reaches every
+    // existing caller without changing their flow: an agent that skipped the
+    // preview still reads, right here, what it just did to its stamps.
+    stamps: stampsBlock({
+      held: { ...heldBefore, liquid: Number(result?.balance_before ?? heldBefore.liquid) },
+      moves: Number(result?.applied ?? 0) > 0 ? Number(result.applied) : 0,
+      requested: Number(stamps), direction: "stake", rule: POT_RULE,
+      ...(result?.reason ? { reason: result.reason } : {}),
+    }),
     // WHAT YOU JUST CONSENTED TO, in the planted marks' own words. The menu the
     // object published, and the edge your choice recorded — quoted, never
     // paraphrased, because a paraphrase of a consent term is not the term.

@@ -30,7 +30,7 @@ import { MultiDirectedGraph } from "graphology";
 export const SCHEMA = `
   CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
 
-  -- at_x/at_y are ABSOLUTE grid metres (origin = the Ferry's crossing, x east,
+  -- at_x/at_y are ABSOLUTE grid metres (origin = the Origin, {0,0}, x east,
   -- y south) — the coordinate the mark record itself carries. Relative
   -- coordinates and the transform chain are Stage D; this table stores what the
   -- repo says, at the sha named in meta.

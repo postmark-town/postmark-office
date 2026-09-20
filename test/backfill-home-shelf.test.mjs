@@ -35,6 +35,10 @@ const BIG_JPG = Buffer.concat([Buffer.from([0xff, 0xd8]), Buffer.alloc(200, 0x41
 
 const odb = () => new DatabaseSync(":memory:");
 const stubPut = () => { const calls = []; return { calls, put: async (...a) => { calls.push(a); } }; };
+// The PUTs of ORIGINALS. Since postmark#2940 a raster upload also puts its two
+// small copies (-96, -256) beside the original — held to account in
+// test/media-thumbnails.test.mjs; the counts here are about the original.
+const originals = (calls) => calls.filter(([k]) => !/-(?:96|256)\.[a-z]+$/.test(k));
 
 // a staging dir shaped exactly as the world repo's selector writes one
 function staging(files) {
@@ -62,7 +66,7 @@ test('THE MEDIA DOOR IS THE ONLY MINT: "Every URL written is a `https://media.po
     // same one — a tool composing its own URL could not keep those two agreeing
     const sha = createHash("sha256").update(PNG).digest("hex");
     assert.equal(urls.resident, `${MEDIA_BASE}/media/gh-user/${sha}.png`);
-    assert.equal(calls.length, 1, "exactly one object reached storage");
+    assert.equal(originals(calls).length, 1, "exactly one object reached storage");
     assert.equal(calls[0][0], `media/gh-user/${sha}.png`, "and the object key is the URL's own path");
     assert.equal(calls[0][2], "image/png", "and the media type is the one the BYTES named");
     assert.deepEqual(skipped, { noHousehold: [], missingBytes: [], refused: [] });
@@ -112,7 +116,7 @@ test("NO SECOND VALIDATION LANE: bytes the door refuses are refused here, with t
     assert.equal(skipped.refused[0].handle, "prose");
     assert.equal(skipped.refused[0].code, 422, "the code is the DOOR's, not a code this tool invented");
     assert.match(skipped.refused[0].why, /JPEG, PNG, WebP, or SVG/, "and so is the reason");
-    assert.equal(calls.length, 1, "the refused bytes never reached storage");
+    assert.equal(originals(calls).length, 1, "the refused bytes never reached storage");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -130,7 +134,7 @@ test("SAME CONTENT-ADDRESSED DEDUP: two handles of one household leading with th
     });
     assert.equal(urls.one, urls.two, "the same bytes are the same media door entry");
     assert.deepEqual(dedup, ["two"], "the second is reported as already on the media door");
-    assert.equal(calls.length, 1, "and only one object was ever written");
+    assert.equal(originals(calls).length, 1, "and only one object was ever written");
     const spent = db.prepare("SELECT COALESCE(SUM(bytes),0) AS u FROM media WHERE household = ?").get("garrison").u;
     assert.equal(spent, PNG.length, "the quota was spent exactly once");
   } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -149,7 +153,7 @@ test("SAME PER-HOUSEHOLD QUOTA LEDGER IN ODB: the media door's own wall stops th
     assert.equal(urls.b, undefined, "the next one does not");
     assert.equal(skipped.refused[0].code, 413);
     assert.match(skipped.refused[0].why, /media is full/);
-    assert.equal(calls.length, 1);
+    assert.equal(originals(calls).length, 1);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -245,7 +249,7 @@ test("A FAILED PUT WRITES NO LEDGER ROW, NO URL, AND LANDS IN skipped.refused �
     assert.ok(again.urls.a, "the retry mints");
     assert.deepEqual(again.dedup, [], "and it is NOT reported as already on the media door");
     assert.deepEqual(again.minted, ["a"]);
-    assert.equal(calls.length, 1, "one object really was written this time");
+    assert.equal(originals(calls).length, 1, "one object really was written this time");
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM media").get().n, 1);
     rmSync(dir, { recursive: true, force: true });
   })();
@@ -270,7 +274,7 @@ test("THE OBJECT COUNTER COUNTS OBJECTS THAT REACHED STORAGE — in a run with a
     assert.equal(Object.keys(r.urls).length, 3, "three handles got a URL");
     assert.deepEqual(r.dedup, ["two"], "two shares one's bytes");
     assert.deepEqual(r.minted.sort(), ["one", "three"]);
-    assert.equal(r.minted.length, calls.length, "THE COUNT IS THE NUMBER OF CALLS STORAGE ACTUALLY TOOK");
+    assert.equal(r.minted.length, originals(calls).length, "THE COUNT IS THE NUMBER OF CALLS STORAGE ACTUALLY TOOK");
     assert.notEqual(r.minted.length, Object.keys(r.urls).length, "and it is not simply the URL count — that is the conflation that hid the real number");
     rmSync(dir, { recursive: true, force: true });
   })();

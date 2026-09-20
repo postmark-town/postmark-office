@@ -20,7 +20,7 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "nod
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-const SOURCE_WORLD = "G:/postmark/postmark-world";
+const SOURCE_WORLD = "G:/Postmark/repo-clones/wright/postmark-world";
 const MEDIA_URL = "https://media.postmark.town/media/fixture/aaaabbbbccccdddd.jpg";
 const OFF_MEDIA_URL = "https://evil.example.test/steal.png";
 

@@ -327,17 +327,17 @@ test("the-anchor — a mark, an entity, or the world; and the offset survives th
   assert.deepEqual(composeAnchor(world, centreOf), nowhere);
 });
 
-test("the-anchor — an unplaced actor gets a NULL offset, never Ferry's crossing", () => {
+test("the-anchor — an unplaced actor gets a NULL offset, never the Origin", () => {
   // {x:0,y:0} is a real place somebody could be standing. A deriver that
   // substitutes it for "we do not know" is the customs-house law broken:
   // REFUSE OR DISCLOSE, NEVER QUIETLY SUBSTITUTE.
   const unplaced = anchorAt(null, { chain: [], centreOf });
   assert.equal(unplaced.unplaced, true);
-  assert.equal(unplaced.dx, null, "not zero — zero is Ferry's crossing");
+  assert.equal(unplaced.dx, null, "not zero — zero is the Origin");
   assert.equal(composeAnchor(unplaced, centreOf), null, "and nothing composes a position out of it");
 });
 
-test("the-witnessed-line — an UNPLACED actor's line keeps a null offset; the store never writes Ferry's crossing", () => {
+test("the-witnessed-line — an UNPLACED actor's line keeps a null offset; the store never writes the Origin", () => {
   // The law says the line carries where the actor stood. It does not license
   // inventing one. Number(null) is 0 and 0 is finite, so the guard has to be
   // explicit at the WRITE too, not only at the read — a constitutional line
@@ -696,6 +696,80 @@ test("THE DOOR, flag on — the slug guard is a STORE lookup, and amend/withdraw
     "three declarations, three lines, none of them an edit of another");
   assert.equal(draftsForKey(repo, houseA).marks.some((m) => m.id === "alpha/twice"), false,
     "and the withdrawn draft never crossed, so the overlay has nothing to draw");
+});
+
+// ── PREVIEW (founder-ruled 2026-09-14, postmark#2692): say it, write nothing ──
+//
+// Keith's third oddity: the ordinary path (walk to your parcel, leave the house
+// where you stand) files a house that straddles the parcel line, nests one
+// level out, and the remedy the door prints is one the door refuses on a
+// published mark. Rather than refusing at the door, the door can SAY where a
+// mark would nest before anything is written. These pin the preview on both
+// pens: the journal (prod) and the git executor.
+test("PREVIEW, flag on — says where the mark would nest and writes no row, no branch, no stake", async () => {
+  process.env.WORLD_SINGLE_LOG = "1";
+  const { leaveMarkViaOffice } = await import("../src/world.mjs");
+  const before = git("rev-parse", "draft/alpha").trim();
+  const shape = { kind: "sited", at: { x: 110, y: 105 }, extent: { w: 2, h: 2 }, body: "would this sit in the square?" };
+  const seen = await leaveMarkViaOffice(repo, { slug: "previewed", ...shape, preview: true, stamps: 1 }, houseA);
+  assert.equal(seen.preview, true, "the answer says it is a preview");
+  assert.equal(seen.id, "alpha/previewed");
+  assert.equal(seen.parent, "the-town/town-square",
+    "the one fact no door said before the write: where it would NEST, by the engine's own containment rule");
+  assert.equal(seen.would, "leave");
+  assert.ok(seen.nothing_written, "and it says in words that nothing was written");
+  assert.ok(seen.publishing?.heads_up, "the publish note rides the preview: the square is the town's ground, so this would be commons-class");
+  assert.equal(seen.overhang, undefined, "nested where alpha stands — no overhang to disclose");
+  assert.equal(seen.staked, undefined, "stamps: 1 on a preview stakes nothing");
+  assert.equal(seen.stake_bounce, undefined);
+  // POS-83: …and it says WHAT the stake would do to the stamps, which is the one
+  // thing this preview ran the verdict for and never told anyone. Gated on
+  // `put_forward`, so the block rides exactly when the ledger move would.
+  assert.equal(seen.put_forward, true, "the fixture's inline ✦1 clears the square's minimum");
+  assert.ok(seen.stamps, "the stamps block rides the preview of an act that would move stamps");
+  assert.deepEqual(Object.keys(seen.stamps), ["you_hold", "this_act", "after", "to_confirm"],
+    "one grammar on every door — the same four keys the stake door answers with");
+  assert.equal(seen.stamps.this_act.law, "the-town/stake-mark");
+  assert.match(seen.stamps.to_confirm, /without preview: true/);
+  assert.equal(withDb((db) => readJournal(db).length), 0, "NO ROW — a preview is not a declaration");
+  assert.equal(git("rev-parse", "draft/alpha").trim(), before, "and the sketchbook did not move");
+  // ⚑ THE FLIP: drop the preview branch in journalLeaveMark and the row count reads 1.
+  const real = await leaveMarkViaOffice(repo, { slug: "previewed", ...shape }, houseA);
+  assert.equal(real.preview, undefined, "the same call without preview: true is the write");
+  assert.equal(real.seq, 1, "…and it is the first row, because the preview left none");
+});
+
+test("PREVIEW, flag on — a mark outside the ground you stand in nests at the root, and still no row", async () => {
+  process.env.WORLD_SINGLE_LOG = "1";
+  const { leaveMarkViaOffice } = await import("../src/world.mjs");
+  const seen = await leaveMarkViaOffice(repo, {
+    slug: "over-the-line", kind: "sited", at: { x: 130, y: 100 }, extent: { w: 2, h: 2 }, body: "past the square's edge", preview: true,
+  }, houseA);
+  assert.equal(seen.preview, true);
+  assert.equal(seen.parent, "the-town/let-there-be-light", "outside the square, so it nests at the world's root");
+  // No overhang here by the door's own rule: the disclosure fires only for a
+  // mark left WHERE YOU STAND (overhangOf's first guard), and this one is placed
+  // twenty metres from alpha's feet on purpose. The remedy's wording is pinned
+  // in test/world.test.mjs on the pure function.
+  assert.equal(seen.overhang, undefined);
+  assert.equal(withDb((db) => readJournal(db).length), 0, "still no row");
+});
+
+test("PREVIEW, flag off — the git executor answers the same shape and commits nothing", async () => {
+  assert.equal(process.env.WORLD_SINGLE_LOG, undefined);
+  const { leaveMarkViaOffice } = await import("../src/world.mjs");
+  const before = git("rev-parse", "draft/alpha").trim();
+  const seen = await leaveMarkViaOffice(repo, {
+    slug: "git-previewed", kind: "sited", at: { x: 12, y: 12 }, extent: { w: 2, h: 2 }, body: "on the old pen", preview: true,
+  }, houseA);
+  assert.equal(seen.preview, true);
+  assert.equal(seen.id, "alpha/git-previewed");
+  assert.equal(seen.parent, "the-town/let-there-be-light",
+    "the fixture's files carry no geometry that contains (12,12), so the engine's own rule answers the root");
+  assert.equal(seen.commit, undefined, "no commit");
+  assert.ok(seen.nothing_written);
+  assert.equal(git("rev-parse", "draft/alpha").trim(), before, "the sketchbook branch did not move");
+  assert.equal(git("branch", "--show-current").trim(), "main");
 });
 
 test("THE DOOR, flag off — a mark named in the FROZEN MANIFEST amends in place, and a new one lands at its id", async () => {

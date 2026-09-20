@@ -46,6 +46,7 @@ import { join } from "node:path";
 import { STAKE_LANES, ELSEWHERE, laneBounce, townStake, townUnstake, townStakeRead, TOWN_STAKE_TOOLS }
   from "../src/town-stake.mjs";
 import { markClass } from "../src/world-classes.mjs";
+import { WORLD_STAKE_TOOLS } from "../src/world-stake.mjs"; // POS-83: the one-owner check reads the world card rather than a typed copy of it
 
 // THE CLASS BLURBS, verbatim, read by the falsifiers below rather than
 // paraphrased into an assertion's message. A law a test spells in its own words
@@ -297,11 +298,24 @@ test("ONE OWNER: the town verbs are wrappers over the world door's own act, not 
     assert.ok(!src.includes(forbidden),
       `town-stake.mjs must not touch ${forbidden} — a second path to the ledger is a second custody rule, whatever its author intended`);
   }
-  // and the fields ride through unrenamed, which is what leaves nothing to drift
+  // and the fields ride through unrenamed, which is what leaves nothing to drift.
+  //
+  // ⚑ ASKED OF THE WORLD DOOR'S OWN CARD, not of a typed list (POS-83). This
+  // read `["mark", "stamps", "handle"]` — a second hardcoded copy of the very
+  // thing it exists to stop drifting, and it reddened the day the world card
+  // grew `preview` even though both cards grew it together, which is the drift
+  // NOT happening. A check that names the other door's fields cannot tell a
+  // divergence from a matched addition; one that READS them can.
   const tool = TOWN_STAKE_TOOLS.find((t) => t.name === "town_stake");
-  assert.deepEqual(Object.keys(tool.inputSchema.properties), ["mark", "stamps", "handle"],
+  const worldTool = WORLD_STAKE_TOOLS.find((t) => t.name === "world_stake");
+  assert.deepEqual(Object.keys(tool.inputSchema.properties), Object.keys(worldTool.inputSchema.properties),
     "the world stake card's own words — a translation layer would be a place for the two doors to disagree");
-  assert.deepEqual(tool.inputSchema.required, ["mark", "stamps"]);
+  assert.deepEqual(tool.inputSchema.required, worldTool.inputSchema.required);
+  assert.deepEqual(tool.inputSchema.required, ["mark", "stamps"], "…and they are still these two");
+  const untool = TOWN_STAKE_TOOLS.find((t) => t.name === "town_unstake");
+  const worldUntool = WORLD_STAKE_TOOLS.find((t) => t.name === "world_unstake");
+  assert.deepEqual(Object.keys(untool.inputSchema.properties), Object.keys(worldUntool.inputSchema.properties),
+    "the withdrawal half rides through unrenamed too — it was never asked, and it is the half that returns a resident's stamps");
 });
 
 test("THE PAIR, quoting the class: placing and withdrawal both stand at this door", () => {

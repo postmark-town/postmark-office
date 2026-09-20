@@ -62,4 +62,20 @@ test("the door's gate calls the decision, so the pure answer is the wire's answe
   assert.match(src, /if \(visitorBounces\(name, args, ctx\.key\)\) \{/, "the gate line asks visitorBounces");
   assert.doesNotMatch(src, /name !== "request_residency" && name !== "declare_household" && ctx\.key\?\.visitor/,
     "the old wire-name comparison is gone");
+  assert.match(src, /defect: VISITOR_BOUNCE\.defect,\s*hint: VISITOR_BOUNCE\.hint/, "…and the words come from the one constant");
+});
+
+// ── THE SWEEP (2026-09-15): the same decision on every door that takes an act ──
+test("the town door's acts resolve too: a visitor's town { do: \"post\" } is refused as town_post would be", () => {
+  assert.equal(visitorBounces("town", { do: "post", args: { text: "an idea" } }, VISITOR), true);
+  assert.equal(visitorBounces("town", { read: "bulletin" }, VISITOR), false, "a town read is a read");
+});
+
+test("the REST skin asks the same decision on its two apex routes, with the same words", () => {
+  const server = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "src", "server.mjs"), "utf8");
+  assert.match(server, /import \{[^}]*visitorBounces[^}]*VISITOR_BOUNCE[^}]*\} from "\.\/mcp\.mjs"/, "server.mjs imports the decision and the words");
+  assert.match(server, /visitorBounces\("household", payload, key\)/, "POST /household asks it before the household apex acts");
+  assert.match(server, /visitorBounces\("world", payload, key\)/, "POST /world/apex asks it in the do: branch");
+  assert.equal((server.match(/VISITOR_BOUNCE\.defect, VISITOR_BOUNCE\.hint/g) ?? []).length, 2, "both routes answer with the one constant's words");
+  // ⚑ THE FLIP: drop either route's line and its match reads zero.
 });

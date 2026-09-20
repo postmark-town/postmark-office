@@ -110,10 +110,17 @@ test("a resident absent from the index reads a clean zero with empty lists", asy
 //
 // The registry here carries a THIRD row NO FOLD ON THIS BOARD CAN COUNT, which
 // is the whole point: `COUNTABLE_FIELD` names `send` and `receive` and nothing
-// else, and the standing join (`standingJoin` in queries.mjs) has no fact for
-// `walk-the-world` — it attaches a note naming the surface that can answer, and
-// nothing else. That is the town's own mechanism, not a shape invented for the
-// test.
+// else, and `walk-the-world` is settled from the world rather than from either
+// fold on this board — so with the world unreadable (see BLIND_WORLD below) it
+// attaches a note naming the surface that can answer, and nothing else. That is
+// the town's own mechanism, not a shape invented for the test.
+//
+// ⚑ THAT SENTENCE USED TO READ "the standing join has no fact for it", and it
+// stopped being true on 2026-09-14 (#2773): the join settles this row from the
+// home's world block now, because a page that filed "not looked" under "still
+// to do" was telling placed residents to go and get placed. What makes the row
+// an exemplar here is the UNREADABLE world the fixture hands it, not an absence
+// in the office — and the fixture says so rather than relying on the box.
 //
 // ⚑ WHY NOT `first-idea`, which stood here until the w37 continuation ship
 // (2026-09-08). Since the standing join, that row is settled from the WORLD
@@ -135,19 +142,41 @@ const MIXED_REGISTRY = JSON.stringify({
 });
 const mixedMeta = (day) => ({ quest_registry: MIXED_REGISTRY, quest_day: day });
 
+// ── THE FIXTURE OWNS ITS WORLD (#2773) ──────────────────────────────────────
+//
+// `walk-the-world` is this file's exemplar of an UNCOUNTED row, and it earned
+// that role because no fold on the board could settle it. One now can: the
+// board reads the home's world block and answers `complete` from `sited`. So
+// the row is uncounted only where the world cannot be read — and whether the
+// world can be read is a fact about the BOX this suite runs on, not about the
+// office. Left alone these legs would pass on a machine with no world clone and
+// red on one that has it, for a reason that has nothing to do with `measured`.
+//
+// So the fixture hands the board a world it cannot see, and the exemplar is an
+// exemplar again on every box. What these legs are about is unchanged: a row no
+// fold can count must SAY so.
+//
+// ⚑ AND WHAT THE TOWN'S TABLE IS AN ORACLE FOR, now that there are two folds.
+// `COUNTABLE_FIELD` is the DAILY fold's table; `measured` is the union of that
+// fold and the standing join. The two agree here because this fixture's third
+// row is unreadable, and that is a precondition rather than a coincidence — a
+// board whose world answered would carry a measured row the town's table does
+// not name, correctly.
+const BLIND_WORLD = { worldBlock: async () => ({ mark_id: null, x: null, y: null, sited: false, unreadable: true, unreadable_reason: "this fixture has no world" }) };
+
 test("every quest row says whether it is measured — a number is measured, a null is not", async () => {
   const day = await today();
   const db = dbWith({
     handle: "alice", send: 2, receive: 1, house_size: 1, house_send: 2, house_receive: 1,
     sent_to: JSON.stringify(["bob", "carol"]), heard_from: JSON.stringify(["dave"]),
   }, day);
-  const board = await questBoardFor(db, mixedMeta(day), "alice", TOWN);
+  const board = await questBoardFor(db, mixedMeta(day), "alice", TOWN, BLIND_WORLD);
 
   assert.equal(board.quests.length, 3, "the board is every registry row (BOARD_LAW), or this proves nothing");
   assert.equal(q(board, "correspond-send").measured, true);
   assert.equal(q(board, "correspond-receive").measured, true);
   assert.equal(q(board, "walk-the-world").measured, false,
-    "the daily fold names no field for this row and the standing join has no fact for it, so no fold on this board can count it and the door must say so");
+    "the daily fold names no field for this row and the world it is settled from is unreadable here, so no fold on this board can count it and the door must say so");
 
   // TWO ORACLES, and the second is the one that will still be doing work in six
   // months. Stated plainly because the obvious flip does NOT catch it: replacing
@@ -178,7 +207,7 @@ test("`measured` is ADDITIVE — progress survives, null and all, for the reader
   // asked for the key to go, and a key removed is a shape change every reader
   // has to survive.
   const day = await today();
-  const board = await questBoardFor(dbWith(null, day), mixedMeta(day), "nobody", TOWN);
+  const board = await questBoardFor(dbWith(null, day), mixedMeta(day), "nobody", TOWN, BLIND_WORLD);
 
   const uncounted = q(board, "walk-the-world");
   assert.ok("progress" in uncounted, "the `progress` key is still on the row");
@@ -201,7 +230,7 @@ test("a stale snapshot does not make a countable row unmeasured — the two are 
     handle: "alice", send: 4, receive: 0, house_size: 1, house_send: 4, house_receive: 0,
     sent_to: JSON.stringify(["bob", "carol", "dave", "erin"]), heard_from: JSON.stringify([]),
   }, day);
-  const board = await questBoardFor(db, mixedMeta("2000-01-01"), "alice", TOWN);
+  const board = await questBoardFor(db, mixedMeta("2000-01-01"), "alice", TOWN, BLIND_WORLD);
   assert.equal(q(board, "correspond-send").progress, 0, "the stale snapshot is zeroed");
   assert.equal(q(board, "correspond-send").measured, true, "and it is still a row the fold can count");
   assert.equal(q(board, "walk-the-world").measured, false, "while the uncounted row is unchanged by the staleness");

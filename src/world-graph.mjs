@@ -221,7 +221,7 @@ function buildPayload(dbPath, st) {
     // only the office can read: a viewer that gets this backwards draws a
     // mirrored town and has no way to know.
     coordinates: {
-      units: "metres, absolute grid; origin = the Ferry's crossing",
+      units: "metres, absolute grid; origin = the Origin, {0,0}",
       x: "east positive",
       y: "SOUTH positive — pass through unchanged to any renderer whose y runs down the screen (Cytoscape, canvas); flip it for one whose y runs up (GEXF/Gephi)",
     },

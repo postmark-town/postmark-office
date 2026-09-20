@@ -604,3 +604,52 @@ test("markStanding on a bare record still answers, and answers market", () => {
   assert.equal(markStanding(null, new Map()), "market");
   assert.equal(markStanding({ id: "x", kind: "sited" }, new Map()), "market");
 });
+
+// ── the docket pen's spelling of the parent edge (postmark#2895) ─────────────
+//
+// THE TEN, on prod, 2026-09-17: six were candle-born predicates whose only
+// edge is `data.parent_id` — `marks.parent` NULL, no `_parentMarkId` — and the
+// walk climbed nothing, stopped at the world root, and said market where the
+// fold, reading the same line as `parent:`, said home. The rows below are the
+// store's rows as `pg` hands them over: `vermillion/pando-peak-home`'s shape,
+// key for key, standing on a parcel the same household holds.
+//
+// THE FLIP, run 2026-09-17 against this branch: in `standing.mjs § recordOf`,
+// restore `_parentMarkId: data._parentMarkId ?? null` and drop `_parentId` —
+// the first case reds `'market' !== 'home'` and the second reds on the stop.
+// Restore with `git checkout -- world2/tools/standing.mjs`.
+
+/** A row the DOCKET PEN wrote: `parent` NULL, the edge in `data.parent_id`, no loader keys. */
+const docketRow = ({ slug, kind, owner, household, parentId, tier = "market" }) => ({
+  id: uuid(), slug, kind, owner, household, geometry: { slug }, parent: null, status: "standing",
+  data: { by: owner, kind, tier, slot: "home", value: "yes", parent_id: parentId, _journal_seq: 9 },
+});
+
+test("a candle-born predicate carries its parent as `data.parent_id`, and the walk climbs it (#2895)", () => {
+  const home = docketRow({ slug: "wright/pando-peak-home", kind: "predicated", owner: "wright", household: WRIGHT, parentId: PARCEL.slug });
+  assert.equal(tierOf([...base(), home]).get("wright/pando-peak-home"), "home",
+    "the walk stopped at the world root: it did not read the edge the docket pen wrote");
+  // and a naming mark, the other kind the pen files this way (3 of the 16)
+  const name = docketRow({ slug: "wright/the-fitting-room", kind: "naming", owner: "wright", household: WRIGHT, parentId: HOUSE.slug });
+  assert.equal(tierOf([...base(), name]).get("wright/the-fitting-room"), "home");
+});
+
+test("the walk stops where 1.0 stops: the parent the pen named, not the root", () => {
+  const rec = recordOf(docketRow({ slug: "wright/pando-peak-home", kind: "predicated", owner: "wright", household: WRIGHT, parentId: PARCEL.slug }));
+  assert.equal(rec._parentId, PARCEL.slug);
+  assert.equal(rec._parentMarkId, PARCEL.slug, "the filing agrees with the line — the drain files a predicate under the mark it describes");
+  // the uuid column, when present, still wins: the seed's rows never change answer
+  const seeded = recordOf({ id: uuid(), slug: "wright/a-seeded-one", kind: "predicated", owner: "wright", household: WRIGHT, geometry: null,
+    parent: PARCEL.id, status: "standing", data: { tier: "home", _parentMarkId: PARCEL.slug } });
+  assert.equal(seeded._parentId, null);
+  assert.equal(seeded._parentMarkId, PARCEL.slug);
+});
+
+test("a guest's candle-born predicate on another's ground is still market — the edge is read, the verdict is the ground's", () => {
+  // The fix reads an edge; it confers nothing. rei's predicate on wright's
+  // parcel now climbs to the parcel and reads the holder's word, which is absent.
+  const guest = docketRow({ slug: "rei/a-plaque", kind: "predicated", owner: "rei", household: REI, parentId: PARCEL.slug });
+  assert.equal(tierOf([...base(), guest]).get("rei/a-plaque"), "market");
+  const welcoming = { ...PARCEL, data: { ...PARCEL.data, consent: { "rei/a-plaque": "welcomed" } } };
+  assert.equal(computeStanding([ROOT, welcoming, HOUSE, guest]).get("rei/a-plaque"), "home", "and the holder's word reaches it, exactly as it reaches a seeded predicate");
+});

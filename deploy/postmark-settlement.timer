@@ -1,9 +1,9 @@
 [Unit]
-Description=Postmark settlement sweep, twice daily — 05:45/17:45 UTC, ahead of the Worldkeeper's 06:00/18:00 heartbeats so his blessing certifies fresh work
+Description=Postmark settlement sweep, twice daily — 06:00/18:00 UTC on the dot, the law's own marks (world LOGOS/classes.md § crossing ②, amended 2026-09-17 by postmark-world#96); the Worldkeeper's heartbeat moved to :20 so his blessing still certifies a finished receipt
 
 [Timer]
-OnCalendar=*-*-* 05:45:00 UTC
-OnCalendar=*-*-* 17:45:00 UTC
+OnCalendar=*-*-* 06:00:00 UTC
+OnCalendar=*-*-* 18:00:00 UTC
 Persistent=true
 
 [Install]

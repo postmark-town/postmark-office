@@ -4,7 +4,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { fixtureDb } from "./fixture.mjs";
-import { townSummary, TOWN_OFFICES_CAP, residentList, residentPage, resident, mailList, letter, letterList, doorstep, search, bulletinList, bulletinTeaser, bulletinEntry, repoLog, indexAsOf } from "../src/queries.mjs";
+import { townSummary, TOWN_OFFICES_CAP, residentList, residentPage, resident, mailList, letter, letterList, doorstep, search, bulletinList, bulletinTeaser, bulletinEntry, repoLog, indexAsOf, metricsMail } from "../src/queries.mjs";
 
 const db = fixtureDb();
 const meta = Object.fromEntries(db.prepare("SELECT key, value FROM meta").all().map((r) => [r.key, r.value]));
@@ -48,6 +48,51 @@ test("townSummary caps the office handle list and says it capped", () => {
   // the table happened to hand back
   assert.deepEqual(t.offices, [...t.offices].sort());
   assert.equal(t.offices[0], "desk-00");
+});
+
+// ── ONE ROLL: THE THREE READS AGREE ON ONE NUMBER (#1981) ───────────────────
+//
+// The defect was visible without leaving the door: `town` said 166 residents in
+// the same minute that `metrics` and `residents` said 165, and nothing on
+// either surface said which was true. Two numbers that are both published and
+// cannot both be right.
+//
+// THE FIXTURE OWNS ITS DATA and reproduces the live shape exactly, which is a
+// SNAPSHOT ONE ABOVE THE TABLE: hydration counts the vendored roll, which
+// enumerates WHITE_PAGES by a name list and so counts `_archived`, the
+// retirement shelf; the residents table is filled through the door's admission
+// grammar and does not. So the stamp says four where three were admitted. No
+// row is added for the shelf — that is the point: it was never a resident, and
+// only the count ever thought otherwise.
+//
+// THE ASSERTION IS THE RELATION, NEVER A PINNED NUMBER. Three reads must answer
+// the same number, and that number must be the count of the rows that were
+// actually admitted. Pinning 3 here would go green again the day the fixture
+// grows a fourth resident and the snapshot is left behind.
+test("#1981 the town read, the metrics read and the roster door count ONE roll", () => {
+  const one = fixtureDb();
+  const admitted = residentList(one).length;
+  // the vendored roll's count, one above the admitted set — `_archived` walked
+  // through the name list and was counted as a person
+  one.prepare("UPDATE meta SET value = ? WHERE key = 'hydrated_counts'")
+    .run(JSON.stringify({ residents: admitted + 1, letters: 6, threads: 1, ledger: 4, bulletin: 1 }));
+  const oneMeta = Object.fromEntries(one.prepare("SELECT key, value FROM meta").all().map((r) => [r.key, r.value]));
+
+  // the control: the stamp really is the wrong number, so the leg is reading a
+  // door that had something to get wrong. Without this the test passes against
+  // a fixture where nothing ever disagreed.
+  assert.equal(JSON.parse(oneMeta.hydrated_counts).residents, admitted + 1,
+    "the fixture must carry the defect it is testing — a snapshot one above the table");
+
+  const town = townSummary(one, oneMeta).counts.residents;
+  const metrics = metricsMail(one).totals.residents;
+  const roster = residentPage(one).total;
+
+  assert.equal(town, admitted, `the town read must count the roll it serves, not the hydration stamp — ${town} vs ${admitted}`);
+  assert.equal(metrics, admitted);
+  assert.equal(roster, admitted);
+  assert.deepEqual(new Set([town, metrics, roster]).size, 1,
+    `three doors, one town, one number — got town ${town}, metrics ${metrics}, roster ${roster}`);
 });
 
 test("residentList: roster with github binding + office flag", () => {

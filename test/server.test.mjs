@@ -332,7 +332,7 @@ test("GET /doorstep/{h} serves the v0.8 BUNDLE over HTTP — the same one MCP se
   // away and the doorstep showed one of them without saying which.
   assert.equal(d.stamps.serves, "town.stamps");
   assert.equal(d.stamps.liquid, 4, "the doorstep still carries the resident's spendable balance");
-  assert.deepEqual(d.segments, ["mail", "awaiting", "stamps", "bulletin", "town_pulse", "window", "stances", "rulings"]);
+  assert.deepEqual(d.segments, ["mail", "awaiting", "stamps", "bulletin", "town_pulse", "window", "stances", "rulings", "stakes"]);
   // The seventh reaches BOTH skins from the one implementation. Its content
   // depends on a world engine this fixture has no checkout of, so what is
   // asserted here is that it is PRESENT and names its read — a segment that
@@ -673,13 +673,21 @@ test("world_leave_mark law bounces keep their exact defect through REST and MCP"
     body: JSON.stringify(mark),
   });
   assert.equal(rest.status, 422);
-  assert.equal((await rest.json()).defect, "body is 163 chars; the cap is 150");
+  const restBounce = await rest.json();
+  assert.equal(restBounce.defect, "body is 163 chars; the cap is 150");
 
   const { body } = await rpc("tools/call", { name: "world_leave_mark", arguments: mark });
   assert.equal(body.result.isError, true);
   const mcp = JSON.parse(body.result.content[0].text);
   assert.equal(mcp.code, 422);
   assert.equal(mcp.defect, "body is 163 chars; the cap is 150");
+  // #2918: the split rides the hint, and the hint reaches BOTH doors in the same
+  // words — field names, this mark's id in parent_id, no tool name (POS-101).
+  for (const hint of [restBounce.hint, mcp.hint]) {
+    assert.match(hint, /kind: "predicated"/);
+    assert.match(hint, /parent_id: "wright\/too-long"/);
+  }
+  assert.equal(restBounce.hint, mcp.hint, "one sentence at both doors");
 });
 
 // ── argument validation at the door (the little-bird finding, 2026-07-20) ───
@@ -818,4 +826,28 @@ test("no memo keys on a bare stampOf() — the call needs a path, and without on
   // Keying on the file caches the OLD roll under the NEW stamp.
   assert.match(body, /function townRoll\(\)\s*\{\s*const stamp = indexStamp;/,
     "townRoll's memo is not keyed on `indexStamp` — the only stamp that names the index the roll is actually read from");
+});
+
+// ── THE LENGTH, SAID (Mari, office#45; founder-ruled 2026-09-14) ─────────────
+//
+// An MCP reply is one JSON body built before any header is written, so the
+// door can say its length. It used to `writeHead` without one, which is how a
+// Node response becomes `transfer-encoding: chunked` — framing a strict client
+// or a tunnel that tears down at a chunk boundary can lose the tail of. Mari's
+// 96 single shots put the cut on her egress, not here; this still removes the
+// one way a whole body can arrive short of its terminator.
+test("POST /mcp answers with content-length and no chunked framing", async () => {
+  const res = await fetch(`${BASE}/mcp`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json", accept: "application/json, text/event-stream" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 9001, method: "tools/list", params: {} }),
+  });
+  assert.equal(res.status, 200);
+  const text = await res.text();
+  assert.equal(res.headers.get("transfer-encoding"), null, "no chunked framing on an MCP reply");
+  assert.equal(Number(res.headers.get("content-length")), Buffer.byteLength(text),
+    "the header is the body's own byte length, so a short read is detectable at the client");
+  assert.ok(JSON.parse(text).result?.tools?.length > 0, "and the body is the tools list it always was");
+  // ⚑ THE FLIP: drop `content-length` from the reply's headers in mcp.mjs and the
+  //   transfer-encoding line reads "chunked".
 });

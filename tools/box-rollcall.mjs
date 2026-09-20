@@ -255,6 +255,19 @@ export function loadManifest(path = DEFAULT_MANIFEST) {
       if (!row.outcome.unchecked_means)
         throw new Error(`${row.unit} declares alarm_on_false with no unchecked_means — a check that did not run has a different repair from a check that found something`);
     }
+    // And for the count that is NOT an alarm (postmark#2935): a declaration
+    // naming no field prints nothing forever, and one with no sentence prints a
+    // bare number the operator cannot read.
+    if (Object.prototype.hasOwnProperty.call(row.outcome, "report_counts")) {
+      const c = row.outcome.report_counts;
+      if (!Array.isArray(c) || !c.length || c.some((x) => typeof x !== "string" || !x))
+        throw new Error(`${row.unit} declares report_counts that names no field — a count line reporting nothing is a line nobody reads`);
+      if (!row.outcome.count_means)
+        throw new Error(`${row.unit} declares report_counts with no count_means — a bare number on the board is a number nobody can read`);
+      const alarmed = c.filter((x) => (row.outcome.alarm_on_nonempty ?? []).includes(x) || (row.outcome.alarm_on_false ?? []).includes(x));
+      if (alarmed.length)
+        throw new Error(`${row.unit} names ${alarmed.join(", ")} in report_counts AND in an alarm list — a count is not an alarm, and one field cannot be both`);
+    }
   }
   return m;
 }
@@ -894,15 +907,20 @@ export function classifyRow(row, snapshot, now) {
   // not happen, and this says it happened and was wrong. A stale row must not
   // be relabelled by its own stale contents.
   const outcome = judgeOutcome(row, snapshot);
+  // The count line rides on BOTH verdicts below — beside an alarm it is the
+  // context on the finding, beside a green tick it is the whole of what the
+  // rail had to say — and on neither is it a verdict (postmark#2935).
+  const counts = outcomeCounts(row, snapshot);
+  const tail = counts ? ` · ${counts}` : "";
   if (outcome) {
-    return { unit: row.unit, label, verdict: ALARM_OUTCOME, reason: `${label} ${outcome}` };
+    return { unit: row.unit, label, verdict: ALARM_OUTCOME, reason: `${label} ${outcome}${tail}` };
   }
 
   return {
     unit: row.unit,
     label,
     verdict: OK,
-    reason: `${label} ticked ${humanAge(age)} (${row.cadence}) [${beat.source}]`,
+    reason: `${label} ticked ${humanAge(age)} (${row.cadence}) [${beat.source}]${tail}`,
   };
 }
 
@@ -1156,6 +1174,42 @@ export function judgeOutcome(row, snapshot) {
   }
 
   return sentences.length ? sentences.join(" ") : null;
+}
+
+/**
+ * THE COUNT THAT IS NOT AN ALARM (postmark#2935).
+ *
+ * `report_counts` names number fields on the latest line that the board PRINTS
+ * beside the row's verdict and never alarms on. The case it exists for: the
+ * notary's escrow read judges each commons mark at the town sha of the window
+ * that locked it, and the projection holds no rows for any window before 181 —
+ * so 227 marks locked at windows 150–179 read ESCROW-ABSENT every morning for
+ * eight nights, while the number of true unbacked marks was zero. An alarm that
+ * is always on teaches its reader to skim, which is the failure `list_means`'s
+ * own paragraph names. Those marks are UNJUDGEABLE, not ✦0 (the doorstep's
+ * rule): a count, with its one sentence, on the same line as the verdict.
+ *
+ * A field that is not a number on the latest line is said so, in words, and is
+ * still not an alarm: a writer that stops emitting a count loses a count line,
+ * not a verdict — the alarms above keep their own "carries none of them" rule
+ * for the lists, whose absence IS the alarm. `null` is the read's own word for
+ * "the projection was not checked, so nothing was counted", which is not zero.
+ *
+ * Returns the line, or null when the row declares no counts or has no history
+ * (the empty-log alarm in `judgeOutcome` already speaks to that).
+ */
+export function outcomeCounts(row, snapshot) {
+  const spec = row.outcome;
+  const fields = spec && Array.isArray(spec.report_counts) ? spec.report_counts : [];
+  if (!fields.length) return null;
+  const history = outcomeHistory(row, snapshot);
+  if (!history.length) return null;
+  const latest = history[history.length - 1];
+  const parts = fields.map((f) =>
+    (typeof latest[f] === "number" && Number.isFinite(latest[f]))
+      ? `${latest[f]} ${f}`
+      : `${f} not counted on the latest line`);
+  return `${parts.join(", ")} — ${spec.count_means}`;
 }
 
 // ── §5c judging custody ─────────────────────────────────────────────────────

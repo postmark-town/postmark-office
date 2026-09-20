@@ -175,7 +175,7 @@ had simply not been recorded yet.
 
 ## Current receipts — world `f233ceb`, office `ce70458`, 2026-08-09
 
-Hydration green on the real clone (`G:/postmark/postmark-world`) at main, 7.8s.
+Hydration green on the real clone (`G:/Postmark/repo-clones/wright/postmark-world`) at main, 7.8s.
 
 - **686 nodes** — 582 marks (256 sited · 267 predicated · 53 parcel · 6 naming), 84 code, 12 class, 8 doctrine
 - **805 edges** — 308 contains · 274 describes · 99 imports · 60 reads · 53 instance-of · 9 implements · 2 stop-of

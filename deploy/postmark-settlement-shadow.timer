@@ -1,5 +1,5 @@
 [Unit]
-Description=Hourly settlement shadow at :23 — off the real crossing's 05:45/17:45 marks, so rehearsal never races the pen
+Description=Hourly settlement shadow at :23 — off the real crossing's 06:00/18:00 marks, so rehearsal never races the pen
 
 [Timer]
 OnCalendar=*-*-* 10:23:00 UTC

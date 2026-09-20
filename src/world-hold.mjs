@@ -828,13 +828,34 @@ function dressReceipt(did, { reached = null, stood = null } = {}) {
 export async function callHoldTool(name, args = {}, key = null) {
   if (name === "world_hold") { const fz = worldFreezeBounce(); if (fz) return fz; }
   const actor = actingHandle(args, key);
-  const db = openDynamic();
+  // ⚑ THE READ ASKS FOR A READ HANDLE, AND ONLY THE WRITE ASKS FOR A WRITE ONE
+  // (#2599, carried in the same commit that woke `GET /world/holdings`).
+  //
+  // This function opened the dynamic store in WRITE mode before it branched, so
+  // `world_holdings` — a pure read, and the shadow of the other three verbs —
+  // held a write-mode handle for the whole call. DEC-4 forbids a read worker to
+  // hold one, and the only reason nobody had met the contradiction is that the
+  // REST route into here was dead: waking it would have made this the sixth
+  // write-mode reader. So the mode follows the verb.
+  //
+  // ⚑ NULL IS THE ANSWER, NOT A FAULT. `openDynamicReadOnly` answers null on an
+  // absent store, and its own docblock rules what that means: "an absent journal
+  // means NOTHING HAS BEEN JOURNALLED, which is a fact a reader can state …
+  // every caller treats null as EMPTY — which is byte-for-byte the answer the
+  // write-mode default produced, minus the write." So the read's ANSWER is
+  // unchanged on every store, present or absent; what changed is that it no
+  // longer creates one to find out.
+  const db = name === "world_holdings" ? openDynamicReadOnly() : openDynamic();
   try {
     if (name === "world_holdings") {
       // B1: give/drop/take's own holder fold, read from `acts` under W2_GUARDS=1.
       // This read is the SHADOW of those three verbs — one answer, one source.
-      const { guardedAttachments } = await import("./world2-guards.mjs");
-      const rows = await guardedAttachments(db);
+      //
+      // Under the guards the rows come from Postgres and the sqlite handle is
+      // not consulted at all, so an absent sqlite store must NOT short-circuit
+      // the flipped read — `guardStatus()` is what tells the two apart.
+      const { guardedAttachments, guardStatus } = await import("./world2-guards.mjs");
+      const rows = (db || guardStatus().flipped) ? await guardedAttachments(db) : [];
       const held = holdingsOf(rows, actor);
       // ── THE HOLDINGS BOUND (2026-08-25) ─────────────────────────────
       //
@@ -960,7 +981,7 @@ export async function callHoldTool(name, args = {}, key = null) {
     const stood = await standpointOfActor(actor);
     mirrorHoldingAct(did, key);
     return dressReceipt(did, { reached, stood });
-  } finally { db.close(); }
+  } finally { try { db?.close(); } catch { /* a reader that cannot close is still a reader that read */ } }
 }
 
 // ── THE HOLDING GAP, CLOSED (2026-08-28) ────────────────────────────────────

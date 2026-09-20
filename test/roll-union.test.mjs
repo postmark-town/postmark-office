@@ -79,16 +79,36 @@ async function engineWhereIs(t) {
   return null;
 }
 
-test("A4: through the door, the unplaced answer at the quay and SAY it is the porch (the-standing-porch)", async (t) => {
+// ⚑ THE ANSWER MOVED, THE ASKING DID NOT (#2900, ruled 2026-09-17: "Agreed with
+// the Origin"). This test was written to hold the thing this suite is about —
+// that the office ASKS about residents it could not place — and it pinned the
+// answer it got at the time, the engine's porch. The founder has since ruled
+// that a groundless resident stands at the ORIGIN everywhere the office answers,
+// so the office corrects the porch at `everyonePlaced` (src/positions.mjs).
+//
+// What this file exists to prove is unchanged and still asserted below: the
+// three residents with no walk and no ground APPEAR. Where they appear is the
+// half that moved. The engine's own answer is asserted here too, in the same
+// test, so this can never go green by the correction having quietly become the
+// engine's opinion — the office overrides a porch it can still read.
+test("A4: through the door, the unplaced APPEAR, and they stand at the Origin (#2900) over an engine that still says porch", async (t) => {
   const where = await engineWhereIs(t);
   if (!where) return;
   const rows = everyonePlaced({ world, departures, at: 135, where, roll: ROLL });
   const byHandle = Object.fromEntries(rows.map((r) => [r.handle, r]));
   for (const h of ["adam-rhys", "athena", "beau"]) {
     assert.ok(byHandle[h], `${h} must appear at all — absence with nothing disclosing it is the defect`);
-    assert.equal(byHandle[h].source, "quay");
-    assert.equal(byHandle[h].mark_id, QUAY_ID);
+    assert.deepEqual({ x: byHandle[h].x, y: byHandle[h].y }, { x: 0, y: 0 },
+      "a groundless resident stands at the Origin, everywhere the office answers");
+    assert.equal(byHandle[h].source, "origin");
+    assert.equal(byHandle[h].mark_id, null, "the Origin is the grid's corner, not a mark to borrow");
+    assert.equal(byHandle[h].placeholder, true, "and the row says it is a default, not a place they chose");
   }
+  // THE ENGINE IS UNTOUCHED, and this is the line that proves the office is
+  // overriding rather than agreeing. the-town/the-standing-porch is still world
+  // law and the-town/the-quay is still a mark at (1390, 5665).
+  assert.equal(where.whereIs("adam-rhys", { world, departures, at: 135 }).source, "quay");
+  assert.equal(where.whereIs("adam-rhys", { world, departures, at: 135 }).mark_id, QUAY_ID);
   // the union did not disturb the rows that already worked
   assert.equal(byHandle["sol-of-garrison"].source, "parcel");
   assert.equal(byHandle["dylan"].source, "walk");

@@ -423,10 +423,103 @@ test("THE HOLE: a different id wearing a recycled login is refused where an id i
     "the owner keeps their house across their own rename — that is the same law's other half");
 });
 
-test("no household named and no known account → no registry diff at all", () => {
-  assert.equal(planRegistryJoin(REGISTRY(), {
+// ── A NAMELESS JOIN MINTS A HOUSE OF ONE (#2791, 2026-09-14) ────────────────
+//
+// ⚑ THE TEST THAT STOOD HERE ASSERTED THE DEFECT. It read "no household named
+// and no known account → no registry diff at all", and held that
+// `planRegistryJoin` returns null for a nameless first join — "a join that
+// declares nothing stays the plain three-file join". That sentence is the bug
+// #2791 names: a nameless first join wrote no row, so the account never got its
+// first house, and every LATER handle on the same account fell through the same
+// branch, because appending needs a house to append to. Six pinned handles are
+// in no household row today for exactly that reason. The expectation is false by
+// design now, so it is replaced rather than relaxed.
+
+test("FALSIFIER 1 · a nameless join by an unknown account MINTS a house of one", () => {
+  const plan = planRegistryJoin(REGISTRY(), {
     handle: "newcomer", household: "", ghId: 424242, ghLogin: "some-stranger", date: "2026-08-07",
-  }), null, "a join that declares nothing stays the plain three-file join");
+  });
+  assert.equal(plan.action, "created", "a join with no name is still a join with a house");
+  assert.equal(plan.slug, "some-stranger", "keyed by the account login the town already knows");
+
+  const rec = plan.registry.households["some-stranger"];
+  assert.deepEqual(rec.residents, ["newcomer"]);
+  assert.deepEqual(rec.accounts, [{ login: "some-stranger", id: 424242 }]);
+  assert.equal(rec.since, "2026-08-07");
+  assert.equal("name" in rec, false,
+    "NO name is written: the house exists, and the card says truthfully that nobody has said what it is called");
+  assert.match(rec.declared_by, /^admission of newcomer through the office door \(2026-08-07\) — a house of one, keyed by its account$/);
+
+  // And the card's own line. `null` here is what makes `buildJoinFiles` fall
+  // through to "(unstated — ask them)" — the same word `update_address_fields`
+  // clears a field back to. A slug written onto the card instead would be the
+  // town putting words in a resident's mouth.
+  assert.equal(plan.houseLine, null);
+
+  // The rest of the registry is untouched — a mint is a mint, not a rewrite.
+  assert.deepEqual(Object.keys(plan.registry.households).sort(),
+    ["some-stranger", "the-rookery", "the-trueing-house"]);
+});
+
+test("FALSIFIER 2 · a nameless join by an ALREADY-HOUSED account still appends, unchanged", () => {
+  // The shared drawer has always worked once a first house exists — this is the
+  // half that was never broken, and the mint above must not have moved it. It is
+  // also the half the bug made unreachable for six handles: their account had no
+  // first house to append to.
+  const plan = planRegistryJoin(REGISTRY(), {
+    handle: "tulip", household: "", ghId: 999, ghLogin: "keeminlee", date: "2026-09-14",
+  });
+  assert.equal(plan.action, "appended");
+  assert.equal(plan.slug, "the-trueing-house");
+  assert.equal(plan.vouched, true, "the key IS the vouch — this account is already one of that house's");
+  assert.deepEqual(plan.registry.households["the-trueing-house"].residents, ["wright", "tulip"]);
+  assert.equal(plan.registry.households["the-trueing-house"].name, "The Trueing House",
+    "an appended-to house keeps its own name — nothing here writes a nameless row over a named one");
+  assert.equal("keeminlee" in plan.registry.households, false,
+    "and NO second house is minted under the login: the account already has one");
+});
+
+test("FALSIFIER 3 · a NAMED join is byte-identical to what it was", () => {
+  // The whole mint lives behind `if (!household?.trim())`, so a named join must
+  // not have moved by one byte. Asserted as the serialized blob rather than by
+  // field, because the blob is what the PR diff is made of: a reordered key or a
+  // changed spacing would be a whole-file diff on every join PR.
+  const plan = planRegistryJoin(REGISTRY(), {
+    handle: "newcomer", household: "Liz's Rookery!", ghId: 424242, ghLogin: "some-stranger", date: "2026-08-07",
+  });
+  assert.equal(plan.action, "created");
+  assert.equal(plan.slug, "lizs-rookery", "the slug is still derived from the NAME, never from the login");
+  assert.equal(plan.houseLine, "Liz's Rookery!");
+  assert.equal(plan.name, "Liz's Rookery!");
+  assert.equal(serializeRegistry(plan.registry.households["lizs-rookery"]),
+    serializeRegistry({
+      name: "Liz's Rookery!",
+      accounts: [{ login: "some-stranger", id: 424242 }],
+      residents: ["newcomer"],
+      since: "2026-08-07",
+      declared_by: "admission of newcomer through the office door (2026-08-07) — the house's own ADDRESS household: line, opened by the office pen",
+    }));
+});
+
+test("FALSIFIER 4 · a login that collides with a declared house BOUNCES, naming it", () => {
+  // The login-derived key is not privileged: if some other house already answers
+  // to it, minting would silently rewrite a declared row. Appending would be no
+  // better — the resident never named that house, so the match is an accident and
+  // an accident is not a vouch.
+  const before = serializeRegistry(REGISTRY());
+  let err = null;
+  try {
+    planRegistryJoin(REGISTRY(), {
+      handle: "newcomer", household: "", ghId: 777777, ghLogin: "the-rookery", date: "2026-09-14",
+    });
+  } catch (e) { err = e; }
+  assert.ok(err, "it must BOUNCE — returning a plan here is the silent overwrite");
+  assert.equal(err.code, 409);
+  assert.match(err.defect, /"the-rookery" already answers to the name "the-rookery"/,
+    "the bounce NAMES the house, so the resident can see whose door they walked into");
+  assert.match(err.hint, /name your own house on the household: line/,
+    "and it says what to do instead — care, not refusal");
+  assert.equal(serializeRegistry(REGISTRY()), before, "and nothing was rewritten");
 });
 
 test("signed-in B2: the house's own key opens a pre-vouched PR with the right diff", async () => {

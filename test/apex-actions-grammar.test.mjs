@@ -148,10 +148,16 @@ test("every act's fields are generated, never empty-by-accident", async () => {
   // The apex-only acts have no flat tool to borrow from — their own schema is
   // the source, and it must describe rather than merely exist.
   const stake = at("stake").fields;
-  assert.deepEqual(Object.keys(stake).sort(), ["from", "pot", "stamps"]);
+  assert.deepEqual(Object.keys(stake).sort(), ["from", "pot", "preview", "stamps"]);
   assert.equal(stake.stamps.type, "number");
   assert.equal(stake.from.required, true);
   assert.ok(stake.pot.description.length > 0, "a field with no description teaches nothing");
+  // POS-83's opt-in, and the grammar has to carry it or the unknown-field
+  // validator refuses a preview by name on the one act with no flat tool to
+  // borrow the field from. Described, like every other field on this card.
+  assert.equal(stake.preview.type, "boolean");
+  assert.equal(stake.preview.required, undefined, "the founder ruled opt-in, not a forced two-step");
+  assert.ok(stake.preview.description.length > 0, "a field with no description teaches nothing");
 
   // The paper acts borrow their fields from the flat tool they dispatch to, and
   // those must arrive non-empty — an empty `fields` block does not read as "the
@@ -162,12 +168,20 @@ test("every act's fields are generated, never empty-by-accident", async () => {
     assert.ok(Object.keys(f).length > 0, `${act} must carry the fields its flat tool declares`);
   }
   assert.ok("body" in at("home").fields, "home's body is the thing a caller actually writes");
-  // And the borrowed fields must arrive MARKED, not merely copied: these two
+  // And the borrowed fields must arrive MARKED, not merely copied: these
   // requirements live in the flat tools' own `required` lists, so a generator
   // that forwards properties and drops the required pass shows up right here.
-  assert.equal(at("window").fields.html.required, true, "update_window requires html");
   assert.equal(at("address").fields.body.required, true, "update_address_body requires body");
+  assert.equal(at("add-resident").fields.handle.required, true, "request_residency requires handle");
   assert.equal(at("home").fields.body.required, undefined, "update_home does not require body — and the grammar must not say it does");
+  // #2921 (2026-09-18): window's html stopped being required the day file_path
+  // arrived — the pane rides as ONE of the two, and the door refuses none-of and
+  // both-of by name (edit.mjs § paneSourceOf), the way upload_media's three
+  // inputs are. This line used to assert `html.required === true`; a grammar
+  // that still marked html required would refuse a lawful file_path call.
+  assert.equal(at("window").fields.html.required, undefined, "update_window does not require html — file_path is the other road");
+  assert.equal(at("window").fields.file_path.type, "string", "file_path is on the card");
+  assert.match(at("window").fields.file_path.description, /your own house/, "and it says whose house it reads");
 
   assert.equal(at("fund-verify").fields.txhash.required, true);
   assert.equal(at("fund-verify").fields.handle.required, undefined,

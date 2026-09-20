@@ -79,9 +79,10 @@ import { DISPATCH_TOOLS, fieldsFor } from "../../src/world-apex.mjs";
 // `DEPARTURE_ORDER_SQL`: a shape and the ORDER it must arrive in are one fact,
 // and splitting them is how the 44-handle order trap happened one lane over.
 
-/** Every standing mark, with everything the fold's shape needs. */
+/** Every standing mark, with everything the fold's shape needs — `id` rides so
+ *  the `parent` uuid can be resolved back to a slug from the same rows. */
 export const MARK_ROWS_SQL = `
-  SELECT slug, kind, owner, household, body, geometry, data, status, parent
+  SELECT id::text, slug, kind, owner, household, body, geometry, data, status, parent::text
     FROM marks WHERE status = 'standing' ORDER BY slug`;
 
 /** The law at ONE sha. Never `max(law_sha)` — see `lawShaFor` below. */
@@ -140,9 +141,10 @@ const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
  * and it speaks the fold's vocabulary: `id` (not `slug`), `by` (not `owner`),
  * `at`/`extent`/`points` lifted out of `geometry`.
  */
-export function markRecordOf(row) {
+export function markRecordOf(row, { parentSlug = null } = {}) {
   const g = row?.geometry ?? null;
   const d = row?.data ?? {};
+  const continues = row?.kind === "predicated" || row?.kind === "naming";
   return {
     // ⚑ THE WHOLE RECORD RIDES, and an allowlist here was a live defect.
     //
@@ -178,10 +180,32 @@ export function markRecordOf(row) {
     body: row.body ?? "",
     tier: d.tier ?? null,
     class: d.class ?? null,
-    // `parent` is the FOLD's name for what the parser stamps as
-    // `_parentMarkId`; the table's own `parent` column is a UUID and would be
-    // meaningless to a reader that speaks mark ids.
-    parent: d._parentMarkId ?? null,
+    // `parent` is the AUTHORED continuation edge — the `parent:` line a
+    // predicated or naming mark carries, which is what the fold publishes under
+    // this name (marks-fold.mjs § the published mark: `parent: mk.parent`) and
+    // what the engine's `investigate` reads (`m.parent === markId`). It is NOT
+    // the directory edge: `_parentMarkId` is the loader's filing, and a sited
+    // mark filed under another's directory carries it while publishing no
+    // `parent` at all — the first cut read the directory here, so every nested
+    // sited mark grew a parent 1.0 never gave it (#2896, measured at 365 of 365
+    // records on prod).
+    //
+    // THREE SPELLINGS OF ONE EDGE, in the order the store writes them:
+    //   1. the `parent` uuid column, resolved to a slug by the caller — the
+    //      seed and the backfill lift the authored line into it (seed-import
+    //      § resolveParent);
+    //   2. `data.parent_id` — the door's own word for the same line, which the
+    //      docket pen spills into `claims.data` and `materializeClaims` copies
+    //      whole, never resolving it into the column (world2-claims.mjs's
+    //      INSERT names no `parent`; measured 2026-09-17: 16 standing rows
+    //      carry this spelling and no other — the ten of #2895 among them);
+    //   3. `data._parent_is_law` — the edge to a CLASS mark, which has no row.
+    // The directory is the last fallback and only for a mark that CONTINUES
+    // something: the door files a predicate under the mark it describes
+    // (world-drain.mjs § toFileFrame), so for those two kinds the filing and
+    // the line agree; for sited/parcel the line is absent and so is this.
+    parent: parentSlug
+      ?? (continues ? (d.parent_id ?? d._parent_is_law ?? d._parentMarkId ?? null) : null),
     // ⚠ THE ONE HOLE, said out loud. See the header: no escrow view exists, so
     // the effective weight the FOV ranks by is unavailable and 0 is the honest
     // stand-in — NOT an estimate. `apexDisclosures` carries the sentence into
@@ -193,7 +217,12 @@ export function markRecordOf(row) {
 
 /** `{ marks, parcels }` — `assembleWorld`'s `worldState` argument, from rows. */
 export function worldStateFromMarkRows(rows = []) {
-  const marks = rows.map(markRecordOf);
+  // The `parent` uuid column speaks in ids nobody else does; resolved back to
+  // the slug the fold and the engine speak, from the same rows, so the edge
+  // never has to be asked for twice.
+  const slugByUuid = new Map();
+  for (const r of rows) if (r?.id != null) slugByUuid.set(String(r.id), r.slug);
+  const marks = rows.map((r) => markRecordOf(r, { parentSlug: r?.parent != null ? (slugByUuid.get(String(r.parent)) ?? null) : null }));
   // The fold's parcels list, which `assembleWorld` passes straight through and
   // `where-is.mjs parcelsFor` reads. Admissibility (overlap, the per-household
   // cap) is the CLEARING's job in 2.0 and it has already run: a row standing in
@@ -201,6 +230,179 @@ export function worldStateFromMarkRows(rows = []) {
   // adjudication of a settled fact.
   const parcels = marks.filter((m) => m.kind === "parcel" && Number.isFinite(num(m.at?.x)));
   return { marks, parcels };
+}
+
+// ── `records` — the full mark record, in the fold's PUBLISHED shape (#2896) ──
+//
+// 1.0's apex answers `records`: "the full mark record for everything `within`
+// and `nearby` just named, plus the town's ground (its region rings and its
+// water), so a reader never has to go and fetch what this answer already told
+// them about" (world-apex.mjs § APEX_DESCRIPTION; composed by world.mjs §
+// markRecords). Each value is a mark exactly as `WORLD/world-state.json`
+// carries it — the fold's published record — plus `signal`, which
+// `assembleWorld` stamps on every mark it is handed.
+//
+// The engine record above (`markRecordOf`) is NOT that shape: it spreads the
+// parser's whole residue so no engine reader goes hungry, and the fold
+// publishes a NAMED set. So this is a second, narrower projection over the same
+// record, and the set is VENDORED from the fold with its source named — the
+// same discipline standing.mjs applies to the containment geometry. When the
+// fold grows a key (it grew `loot` on 2026-08-29 and `dials` on 2026-08-21), A8
+// in falsifier-apex-equality.mjs reds on the key 1.0 carries and this does not,
+// which is the tripwire that keeps a vendored list from rotting in silence.
+//
+// ── WHAT THE STORE CANNOT ANSWER, BY NAME, AND WHY IT IS ABSENT NOT ZERO ─────
+//
+// Two groups of the fold's fields are not on any row, and `records` leaves them
+// OUT rather than filling them with a number that would read as real:
+//
+//   THE ESCROW FIELDS   `stamps` · `weight` · `weight_parts` · `ledger_weight`
+//     The fold reads the town's stamp ledger (`fold({ stakes })` § the breadth
+//     split) and fans weight up the consent-gated tree. The engine record
+//     carries `weight: 0` because `lodScore` must be handed A number; a `0`
+//     in a reader's `records[id].weight` would be a resident's ✦ figure
+//     reported as nothing. Absent, and declared. Closes with P-006's escrow
+//     view (RULED, unbuilt) and a stamp-ingest that runs on a cadence — the
+//     `escrow_projection` this store holds is pinned at whatever town head was
+//     last ingested by hand (2026-09-17: once, 23:43Z, the timer disabled).
+//   THE WALK'S RECEIPTS   `sovereign` · `placementParent` · `kept`
+//     The standing walk derives all three on its way to `tier` (marks-fold.mjs
+//     § sovereignty, § the containment answer, consent.kept); the clearing's
+//     recompute writes back `tier` alone (materialize.mjs § recomputeStanding).
+//     They are a query away — `standing.mjs` computes the first two on every
+//     recompute — but that walk is the clearing's, not a read's. Closes with the
+//     standing flip writing the walk's whole answer to the row.
+//
+// Everything else is a column or a `data` key of the row, spelled the way the
+// fold spells it.
+export const PUBLISHED_SOURCE = Object.freeze({
+  repo: "keeminlee/postmark-world",
+  path: "tools/marks-fold.mjs",
+  where: "§ the published mark — the `marks:` map of fold()'s return",
+  blob: "1c4a844d851facca8a4b8f90ab48744eb416ab26",
+  at: "1688a5afbf93d00d858864cb0c00441035a1230f",
+});
+
+/** The fold's published keys this store can answer, in the fold's own order. */
+export const PUBLISHED_KEYS = Object.freeze([
+  "id", "kind", "by", "tier", "household", "declared_household", "date",
+  "at", "extent", "parent", "slot", "value", "far",
+  "body", "mechanic", "top_m", "feature", "points", "timetable", "entry",
+  "class", "ask", "reward", "status", "threshold", "dials", "image", "loot",
+  "signal",
+]);
+
+/** The fold's published keys this store does NOT hold, with the reason each is absent. */
+export const RECORD_FIELDS_NOT_ANSWERED = Object.freeze({
+  stamps: "the town's stamp ledger, folded — not on a row (see § the escrow fields)",
+  weight: "own escrow + breadth bonus + everything fanning up — the fold's ✦ figure, not on a row",
+  weight_parts: "the ✦ figure's receipt — absent with it",
+  ledger_weight: "raw escrow + breadth bonus — absent with the escrow fields",
+  sovereign: "the walk's own-ground flag — derived at recompute, `tier` alone is written back",
+  placementParent: "the walk's containment answer — derived at recompute, not written back",
+  kept: "`welcomed` across a household line — the consent fold's flag, not on a row",
+});
+
+/**
+ * One engine record → the fold's published record.
+ *
+ * `undefined` keys are DROPPED, because `world-state.json` is JSON and JSON has
+ * no undefined: a fold that computed `far: undefined` publishes no `far`. The
+ * engine record spells several of these as `null` (`at`, `extent`, `class`,
+ * `parent`) so the engine can read them without guarding; the fold spells them
+ * as absent, and 1.0's `records` is the fold's spelling. `null` therefore also
+ * drops — except `tier`, which 1.0 publishes on every mark and which the store
+ * holds on every row.
+ */
+export function publishedRecordOf(mark) {
+  if (!mark) return null;
+  const out = {};
+  for (const k of PUBLISHED_KEYS) {
+    const v = k === "declared_household" ? mark._cred : mark[k];
+    if (v === undefined || v === null) continue;
+    out[k] = v;
+  }
+  if (!("tier" in out)) out.tier = mark.tier ?? null;
+  return out;
+}
+
+/**
+ * The town's ground set: the region rings and the water, as mark ids.
+ *
+ * PORTED from src/world.mjs § groundMarkIds (the 1.0 composition), with the
+ * engine's own readers INJECTED rather than imported here — this file is pure
+ * and holds no checkout. The selection is the original's: for each region slug
+ * in the roster's order, the first mark whose leaf slug matches AND carries a
+ * ground ring; then each water feature the skeleton selects (the sea appended
+ * if the feature list omits it), by the same leaf-slug match. A ring with any
+ * point past the positionless sentinel is not ground.
+ */
+export const GROUND_SENTINEL_M = 50000;   // world.mjs § groundRing — the positionless marker's magnitude
+export function groundMarkIdsOf({ marks = [], skeleton = null, regionSlugs = [], polygonOf, waterFeatures, seaFeature } = {}) {
+  const slugOf = (m) => String(m?.id ?? "").split("/")[1];
+  const ring = (m) => {
+    const r = m ? polygonOf(m) : null;
+    if (!r?.length) return null;
+    return r.some((p) => Math.abs(p.x) > GROUND_SENTINEL_M || Math.abs(p.y) > GROUND_SENTINEL_M) ? null : r;
+  };
+  const ids = [];
+  for (const slug of regionSlugs) {
+    const mark = marks.find((m) => slugOf(m) === slug && ring(m));
+    if (mark) ids.push(mark.id);
+  }
+  const feats = skeleton ? [...waterFeatures(skeleton)] : [];
+  const sea = skeleton ? seaFeature(skeleton) : null;
+  if (sea && !feats.some((f) => f.id === sea.id)) feats.push(sea);
+  for (const f of feats) {
+    const mark = marks.find((m) => slugOf(m) === f.id && ring(m));
+    if (mark && !ids.includes(mark.id)) ids.push(mark.id);
+  }
+  return ids;
+}
+
+/**
+ * The `records` block: every id named, keyed by id, in the published shape.
+ *
+ * PORTED from world.mjs § markRecords: keyed because "the only question any
+ * caller asks of it is 'what is this id'"; an id with no mark behind it is
+ * SKIPPED rather than carried as null — "a null would be the door asserting that
+ * a named thing has no record, which it cannot know". `extra` is the ground set
+ * and the mover's own class, appended after the named ids exactly as 1.0
+ * appends them (the class every reader IS travels with them, the way the town's
+ * ground does — 2026-09-13).
+ */
+export function recordsBlock({ marks = [], ids = [], extra = [] } = {}) {
+  const byId = new Map(marks.map((m) => [m.id, m]));
+  const out = {};
+  for (const id of [...ids, ...extra]) {
+    if (id == null || out[id]) continue;
+    const mark = byId.get(id);
+    if (mark) out[id] = publishedRecordOf(mark);
+  }
+  return out;
+}
+
+/**
+ * A CLASS mark, as the fold publishes it — for the one class every answer
+ * carries (`the-town/resident`, the mover's stride). Class marks are law and
+ * live in `law_projection`, never in `marks`; their `data` is the parser's
+ * record of the class mark file, which is the same record the fold folds. The
+ * fold gives a class mark no geometry and the constitution tier; `household` is
+ * the town's own hand and `declared_household` the town's own household.
+ */
+export function classRecordOf(lawRow) {
+  if (!lawRow || lawRow.kind !== "class") return null;
+  // law-ingest.mjs § recordData keeps the parser's whole record but `_dir`, so
+  // the authored lines (`parent`, `date`, `dials`, `class`) are already here
+  // under the fold's own names.
+  const d = lawRow.data ?? {};
+  const by = d.by ?? "the-town";
+  return publishedRecordOf({
+    ...d,
+    id: d.id ?? null, kind: d.kind ?? "class", by, household: d.household ?? by,
+    _cred: `solo:${by}`, tier: d.tier ?? "constitution", class: d.class ?? lawRow.key,
+    body: d.body ?? "", signal: false,
+  });
 }
 
 /** The terrain skeleton, reassembled from its per-top-level-key law rows. */
@@ -504,8 +706,9 @@ export const DISCLOSURES = Object.freeze({
   law_pin: "granted / actions / terms are composed from law_projection at ONE pinned law_sha, named in `law.law_sha`; the repo is the author and this is the projection the clearing computes against.",
   keyless: "this door is keyless, like 1.0's GET /world/apex?x=&y=: the spine, the salient marks and the affordances in force at a point are published facts. The held channel is empty by construction — nothing is carried by nobody.",
   engine: "the containment chain and the field of view are the world engine's own functions (world-verbs.mjs orient / openYourEyes) run over a world assembled from Postgres rows — the derivation is 1.0's, the data is 2.0's.",
+  records: `\`records\` carries each named mark in the fold's published shape, from its row. Seven of the fold's fields are ABSENT rather than approximated, because no row holds them: ${Object.keys(RECORD_FIELDS_NOT_ANSWERED).join(", ")} — the four escrow figures are the town's stamp ledger folded (P-006's escrow view, ruled and unbuilt), the three walk receipts are derived at every recompute and only \`tier\` is written back.`,
 });
 
-export function apexDisclosures({ weightless = true } = {}) {
-  return [DISCLOSURES.law_pin, DISCLOSURES.keyless, DISCLOSURES.engine, ...(weightless ? [DISCLOSURES.weight] : [])];
+export function apexDisclosures({ weightless = true, records = true } = {}) {
+  return [DISCLOSURES.law_pin, DISCLOSURES.keyless, DISCLOSURES.engine, ...(weightless ? [DISCLOSURES.weight] : []), ...(records ? [DISCLOSURES.records] : [])];
 }

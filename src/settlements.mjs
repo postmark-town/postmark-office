@@ -137,8 +137,11 @@ const git = (repo, args) => execFileSync("git", ["-C", repo, ...args], {
  *
  * `--show-toplevel` rather than `--is-inside-work-tree`: the latter is true for
  * every subdirectory, which is exactly the case being refused.
+ *
+ * Exported for `world2/tools/settlements-backfill.mjs`, which reads the same
+ * tags from a caller-supplied checkout and must refuse the same wrong answer.
  */
-function isRepoRoot(repo) {
+export function isRepoRoot(repo) {
   let top;
   try { top = git(repo, ["rev-parse", "--show-toplevel"]).trim(); }
   catch { return false; }                     // not a repo anywhere above it

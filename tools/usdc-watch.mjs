@@ -115,6 +115,26 @@ export const RAIL = "usdc";
 // by shape with no list to consult.
 export const OUTSIDE_FROM = "outside:usdc";
 
+// ── WHERE THIS RAIL'S STATE LIVES, owned HERE (postmark#2972) ───────────────
+//
+// The sibling of the card rail's twin, and named by the same issue. On
+// 2026-09-19 the funding report printed "usdc-watch · never · ⚠ has never run"
+// while `systemctl list-timers` showed the timer at 13:50:17Z that day: the
+// report carried its own default of <office>/.usdc-watch-state.json and the
+// unit writes /srv/postmark-usdc/state.json. Two files answering "when did this
+// rail last tick" is one file too many, and the one the report chose was the
+// one nobody writes.
+//
+// ONE OWNER, AND IT IS THE FILE THAT WRITES THE STATE — the CLI default below
+// is this same constant, so the tool and the constant cannot disagree, and
+// deploy/postmark-usdc-watch.service's `--state` is now agreement rather than
+// instruction. Off the box the path does not exist and `readState` answers {},
+// which is the honest answer: off the box there is no live tick.
+export const STATE_PATH = "/srv/postmark-usdc/state.json";
+// The arrivals report has always been written beside the state — `--out` in the
+// same unit line — so the report derives it from here rather than typing a
+// fourth literal.
+export const REPORT_NAME = "arrivals.json";
 
 // ── the sink rule: implemented, and OFF ─────────────────────────────────────
 export const SINK_FLAG = "USDC_SINK_UNCLAIMED";
@@ -434,7 +454,7 @@ function arg(name, dflt = null) {
 
 async function main() {
   const clone = arg("clone", process.env.TOWN_CLONE ?? resolve(HERE, "..", "town-clone"));
-  const statePath = arg("state", join(HERE, "..", ".usdc-watch-state.json"));
+  const statePath = arg("state", STATE_PATH);
   const outPath = arg("out", null);
   const dryRun = process.argv.includes("--dry-run");
 

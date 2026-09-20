@@ -178,8 +178,8 @@ jobs:
           # landed. With it, the order is: merge (nothing changes) -> dispatch
           # against dev -> dispatch against prod -> then flip the variable.
           #
-          #   adopt:  gh variable set OFFICE_AUTODEPLOY --body on  -R keeminlee/postmark-office
-          #   revert: gh variable set OFFICE_AUTODEPLOY --body off -R keeminlee/postmark-office
+          #   adopt:  gh variable set OFFICE_AUTODEPLOY --body on  -R postmark-town/postmark-office
+          #   revert: gh variable set OFFICE_AUTODEPLOY --body off -R postmark-town/postmark-office
           #
           # workflow_dispatch is never gated: it is a human deliberately asking
           # for this deploy, on a target they picked, which is the whole point.

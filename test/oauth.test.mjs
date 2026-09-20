@@ -104,13 +104,22 @@ after(async () => {
 const REDIRECT = "https://mock-client.example/callback";
 const s256 = (v) => createHash("sha256").update(v).digest("base64url");
 
+// REGISTERED ONCE, SHARED. The office rate-limits /oauth/register to ten per
+// IP per hour (oauth.mjs § regLimited, in-memory), and this file spent seven of
+// them registering a fresh client per test before the manual-finish tests
+// (#2764, below) needed three more and hit the eleventh: a 429 that reads
+// exactly like a defect in the door. A client is a redirect set, not a session;
+// every dance below works against the same one.
+let redirectClientId = null;
 async function registerClient() {
+  if (redirectClientId) return redirectClientId;
   const res = await fetch(`${BASE}/oauth/register`, {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ client_name: "test connector", redirect_uris: [REDIRECT] }),
   });
   assert.equal(res.status, 201);
-  return (await res.json()).client_id;
+  redirectClientId = (await res.json()).client_id;
+  return redirectClientId;
 }
 
 async function danceToCode(clientId, verifier) {
@@ -361,4 +370,279 @@ test("key desk: a PINNED static key CAN mint, and that is the right answer", asy
 test("key desk: anonymous mint is a 401 at the write tier", async () => {
   const r = await fetch(`${BASE}/keys`, { method: "POST" });
   assert.equal(r.status, 401);
+});
+
+// ── the manual finish (#2764 friction 3, under #2754 box 2) ──────────────────
+//
+// Mari's report: "DCR + PKCE + GitHub sign-in all worked from a bare shell,
+// but the final redirect targets a loopback listener that a headless agent
+// can't always hold open." Measured on dev 2026-09-17 at 92fd2b7: registering
+// `urn:ietf:wg:oauth:2.0:oob` was refused 400 invalid_client_metadata, and the
+// consent's 302 (oauth.mjs § /oauth/consent) was the only way a code left the
+// office. These pin the one manual path: the code is SHOWN, once, on the
+// consent's own answer; the exchange is the same PKCE exchange.
+
+const OOB = "urn:ietf:wg:oauth:2.0:oob";
+
+// one registration, shared — see registerClient above for the budget
+let manualClientId = null;
+async function registerManualClient() {
+  if (manualClientId) return manualClientId;
+  const res = await fetch(`${BASE}/oauth/register`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ client_name: "a shell with no listener", redirect_uris: [OOB] }),
+  });
+  assert.equal(res.status, 201, "an out-of-band redirect registers");
+  const client = await res.json();
+  assert.deepEqual(client.redirect_uris, [OOB]);
+  manualClientId = client.client_id;
+  return manualClientId;
+}
+
+// everything up to the consent form — the same road as danceToCode, but the
+// approval is answered as a PAGE, not a redirect, so it stops one step short
+async function danceToConsent(clientId, verifier) {
+  const authorize = new URL(`${BASE}/oauth/authorize`);
+  authorize.searchParams.set("response_type", "code");
+  authorize.searchParams.set("client_id", clientId);
+  authorize.searchParams.set("redirect_uri", OOB);
+  authorize.searchParams.set("state", "shell-state-abc");
+  authorize.searchParams.set("code_challenge", s256(verifier));
+  authorize.searchParams.set("code_challenge_method", "S256");
+  const r1 = await fetch(authorize, { redirect: "manual" });
+  assert.equal(r1.status, 302, "authorize still bounces the human to GitHub — the manual finish changes nothing before consent");
+  const r2 = await fetch(r1.headers.get("location"), { redirect: "manual" });
+  assert.equal(r2.status, 302);
+  const r3 = await fetch(r2.headers.get("location"));
+  const consentHtml = await r3.text();
+  assert.equal(r3.status, 200);
+  assert.match(consentHtml, /Authorize/);
+  return {
+    pending_id: /name="pending_id" value="([^"]+)"/.exec(consentHtml)[1],
+    nonce: /name="nonce" value="([^"]+)"/.exec(consentHtml)[1],
+  };
+}
+
+const consent = (form, decision) => fetch(`${BASE}/oauth/consent`, {
+  method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
+  body: new URLSearchParams({ ...form, decision }),
+  redirect: "manual",
+});
+
+const CODE_ON_PAGE = /<code data-authorization-code[^>]*>([^<]+)<\/code>/;
+
+test("#2764 the manual finish: an out-of-band client is SHOWN the code once, and the PKCE exchange succeeds", async () => {
+  ghIdentity = { id: 999, login: "keeminlee" };
+  const clientId = await registerManualClient();
+  const verifier = randomBytes(32).toString("base64url");
+  const form = await danceToConsent(clientId, verifier);
+
+  // approval answers a page carrying the code — NOT a 302 to a listener
+  const r = await consent(form, "approve");
+  assert.equal(r.status, 200, "consent for an out-of-band client is answered on the page, not redirected");
+  assert.equal(r.headers.get("location"), null, "no redirect leaves the office for an out-of-band client");
+  const pageHtml = await r.text();
+  const m = CODE_ON_PAGE.exec(pageHtml);
+  assert.ok(m, "the page shows the authorization code for the human to paste back");
+  const code = m[1];
+  assert.match(pageHtml, /Shown once/, "the page says the code is shown once");
+
+  // ONCE: the same form again is refused — the pending row is gone
+  const again = await consent(form, "approve");
+  assert.equal(again.status, 400, "re-submitting the consent form does not show a second code");
+  assert.ok(!CODE_ON_PAGE.test(await again.text()), "and no code is on the refusal");
+
+  // the exchange is the same PKCE exchange as every other client's
+  const tok = await fetch(`${BASE}/oauth/token`, {
+    method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ grant_type: "authorization_code", code, client_id: clientId,
+      redirect_uri: OOB, code_verifier: verifier }),
+  });
+  assert.equal(tok.status, 200, "the pasted code exchanges with the verifier");
+  const grant = await tok.json();
+  assert.ok(grant.access_token && grant.refresh_token);
+  assert.equal(grant.expires_in, 30 * 24 * 3600, "[pin] the token's life is the one every client gets — the manual finish did not touch it");
+
+  const me = await (await fetch(`${BASE}/me`, { headers: { authorization: `Bearer ${grant.access_token}` } })).json();
+  assert.equal(me.household, "keeminlee");
+  assert.deepEqual(me.handles, ["wright"]);
+  assert.equal(me.key_kind, "oauth");
+});
+
+test("#2764 the manual finish: the shown code is refused WITHOUT the PKCE verifier, and burned", async () => {
+  ghIdentity = { id: 999, login: "keeminlee" };
+  const clientId = await registerManualClient();
+  const verifier = randomBytes(32).toString("base64url");
+  const form = await danceToConsent(clientId, verifier);
+  const code = CODE_ON_PAGE.exec(await (await consent(form, "approve")).text())[1];
+
+  const bare = await fetch(`${BASE}/oauth/token`, {
+    method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ grant_type: "authorization_code", code, client_id: clientId, redirect_uri: OOB }),
+  });
+  assert.equal(bare.status, 400, "a pasted code with no verifier is refused");
+  assert.equal((await bare.json()).error, "invalid_grant");
+
+  // single use even on failure — the same floor as the redirect path
+  const late = await fetch(`${BASE}/oauth/token`, {
+    method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ grant_type: "authorization_code", code, client_id: clientId,
+      redirect_uri: OOB, code_verifier: verifier }),
+  });
+  assert.equal(late.status, 400, "the code was burned by the failed exchange, verifier or not");
+  assert.equal((await late.json()).error_description, "code unknown or expired");
+});
+
+test("#2764 the manual finish: a denial shows no code and sends nothing anywhere", async () => {
+  ghIdentity = { id: 999, login: "keeminlee" };
+  const clientId = await registerManualClient();
+  const form = await danceToConsent(clientId, randomBytes(32).toString("base64url"));
+  const r = await consent(form, "deny");
+  assert.equal(r.status, 200);
+  assert.equal(r.headers.get("location"), null);
+  const pageHtml = await r.text();
+  assert.match(pageHtml, /Not authorized/);
+  assert.ok(!CODE_ON_PAGE.test(pageHtml), "a denial carries no code");
+});
+
+test("#2764 the manual finish: registration accepts ONLY the one out-of-band URN — other URNs are still refused", async () => {
+  // CAN FAIL: widen the redirect check to any urn: and this names it.
+  for (const bad of [["urn:ietf:wg:oauth:2.0:oob:auto"], ["urn:example:anything", "http://evil.example/callback"]]) {
+    const res = await fetch(`${BASE}/oauth/register`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ client_name: "x", redirect_uris: bad }),
+    });
+    assert.equal(res.status, 400, `${bad.join(" / ")} must still be refused at registration`);
+    assert.equal((await res.json()).error, "invalid_client_metadata");
+  }
+});
+
+// The other direction — a redirect client is STILL redirected, never shown the
+// page — is the "full dance" test at the top of this file: danceToCode asserts
+// the consent's 302 and reads the code off it, so answering every consent on
+// the page reds that test by name. Not duplicated here.
+
+// ── every name the office did not choose is escaped on its pages ─────────────
+//
+// Wright's review of #97: `client_name` comes from dynamic registration —
+// anyone, ten an hour — and was interpolated raw into the consent pages and the
+// two manual-finish pages, so `<img src=x onerror=…>` as a client name ran on
+// the postmark.town origin in the human's browser at consent. The same class in
+// the same file: a berth's declared household and its card's first line, shown
+// to the human at the berth co-sign. Escaped at the interpolation; what is
+// STORED is what was said (the registration echoes the name back verbatim).
+
+const TAGGED = "<b>x</b>";
+const ESCAPED = "&lt;b&gt;x&lt;/b&gt;";
+
+let taggedClientId = null;
+async function registerTaggedClient() {
+  if (taggedClientId) return taggedClientId;
+  const res = await fetch(`${BASE}/oauth/register`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ client_name: TAGGED, redirect_uris: [OOB] }),
+  });
+  assert.equal(res.status, 201);
+  const client = await res.json();
+  assert.equal(client.client_name, TAGGED, "the store keeps the name as it was said — escaping is the page's job");
+  taggedClientId = client.client_id;
+  return taggedClientId;
+}
+
+// CAN FAIL: drop esc() from any one of the four client_name sites and the
+// matching assertion names the page.
+test("a client named with a tag is rendered as text on the household consent page and the manual page", async () => {
+  ghIdentity = { id: 999, login: "keeminlee" };
+  const clientId = await registerTaggedClient();
+  const verifier = randomBytes(32).toString("base64url");
+  const authorize = new URL(`${BASE}/oauth/authorize`);
+  authorize.searchParams.set("response_type", "code");
+  authorize.searchParams.set("client_id", clientId);
+  authorize.searchParams.set("redirect_uri", OOB);
+  authorize.searchParams.set("code_challenge", s256(verifier));
+  authorize.searchParams.set("code_challenge_method", "S256");
+  const r1 = await fetch(authorize, { redirect: "manual" });
+  const r2 = await fetch(r1.headers.get("location"), { redirect: "manual" });
+  const r3 = await fetch(r2.headers.get("location"));
+  const consentHtml = await r3.text();
+  assert.equal(r3.status, 200);
+  assert.ok(consentHtml.includes(ESCAPED), "the household consent page shows the client's name as text");
+  assert.ok(!consentHtml.includes(TAGGED), "the household consent page renders the client's name as a tag");
+
+  const form = {
+    pending_id: /name="pending_id" value="([^"]+)"/.exec(consentHtml)[1],
+    nonce: /name="nonce" value="([^"]+)"/.exec(consentHtml)[1],
+  };
+  const approved = await consent(form, "approve");
+  const manualHtml = await approved.text();
+  assert.equal(approved.status, 200);
+  assert.ok(CODE_ON_PAGE.test(manualHtml), "the manual page still carries the code");
+  assert.ok(manualHtml.includes(ESCAPED), "the manual page shows the client's name as text");
+  assert.ok(!manualHtml.includes(TAGGED), "the manual page renders the client's name as a tag");
+});
+
+test("a client named with a tag is rendered as text on the visitor-pass consent page and the denial page", async () => {
+  ghIdentity = { id: 424242, login: "some-stranger" };
+  const clientId = await registerTaggedClient();
+  const form = await danceToConsent(clientId, randomBytes(32).toString("base64url"));
+  // danceToConsent asserted the visitor-pass page answered 200 with "Authorize";
+  // read it again for the name — the pending row is still parked
+  const authorize = new URL(`${BASE}/oauth/authorize`);
+  authorize.searchParams.set("response_type", "code");
+  authorize.searchParams.set("client_id", clientId);
+  authorize.searchParams.set("redirect_uri", OOB);
+  authorize.searchParams.set("code_challenge", s256("another-verifier-for-the-visitor"));
+  authorize.searchParams.set("code_challenge_method", "S256");
+  const r1 = await fetch(authorize, { redirect: "manual" });
+  const r2 = await fetch(r1.headers.get("location"), { redirect: "manual" });
+  const visitorHtml = await (await fetch(r2.headers.get("location"))).text();
+  assert.match(visitorHtml, /visitor pass/i, "this is the visitor-pass consent page");
+  assert.ok(visitorHtml.includes(ESCAPED), "the visitor-pass consent page shows the client's name as text");
+  assert.ok(!visitorHtml.includes(TAGGED), "the visitor-pass consent page renders the client's name as a tag");
+
+  const denied = await consent(form, "deny");
+  const deniedHtml = await denied.text();
+  assert.equal(denied.status, 200);
+  assert.match(deniedHtml, /Not authorized/);
+  assert.ok(deniedHtml.includes(ESCAPED), "the denial page shows the client's name as text");
+  assert.ok(!deniedHtml.includes(TAGGED), "the denial page renders the client's name as a tag");
+});
+
+// The berth co-sign consent shows the human what the agent declared — the
+// household's name and the card's first line, both the agent's own words. No
+// registration is spent here: a berth is keyless, and the co-sign is denied at
+// the form, so nothing is founded and nothing is written to the clone.
+test("a berth's declared household and card are rendered as text on the co-sign consent page", async () => {
+  ghIdentity = { id: 999, login: "keeminlee" };
+  const boarded = await fetch(`${BASE}/berth`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ slug: "tagged-berth" }),
+  });
+  assert.equal(boarded.status, 201, "a berth boards keyless");
+  const { key } = await boarded.json();
+  const begun = await fetch(`${BASE}/household`, {
+    method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+    body: JSON.stringify({ do: "begin", args: { household: `House ${TAGGED}`, card: `${TAGGED} first line\nsecond line` } }),
+  });
+  assert.equal(begun.status, 200, `begin parks the declaration: ${await begun.clone().text()}`);
+
+  const r1 = await fetch(`${BASE}/oauth/berth-cosign?slug=tagged-berth`, { redirect: "manual" });
+  assert.equal(r1.status, 302, "the co-sign link sends the human to GitHub");
+  const r2 = await fetch(r1.headers.get("location"), { redirect: "manual" });
+  const r3 = await fetch(r2.headers.get("location"));
+  const cosignHtml = await r3.text();
+  assert.equal(r3.status, 200);
+  assert.match(cosignHtml, /Co-sign this residency/);
+  assert.equal(cosignHtml.split(ESCAPED).length - 1, 2,
+    "the household's name and the card's first line are both shown as text");
+  assert.ok(!cosignHtml.includes(TAGGED), "the co-sign page renders the agent's words as a tag");
+
+  // deny: nothing founded, nothing written
+  const form = {
+    pending_id: /name="pending_id" value="([^"]+)"/.exec(cosignHtml)[1],
+    nonce: /name="nonce" value="([^"]+)"/.exec(cosignHtml)[1],
+  };
+  const denied = await consent(form, "deny");
+  assert.equal(denied.status, 200);
+  assert.match(await denied.text(), /Not co-signed/);
 });

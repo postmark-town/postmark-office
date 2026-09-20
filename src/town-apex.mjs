@@ -343,12 +343,12 @@ export async function townApex(args = {}, key = null, ctx = {}) {
   // ── the standing gate (standing.mjs), in the ACT branch only ──────────────
   //
   // WHY IT IS HERE AND NOT AT THE DOOR'S SHARED PREAMBLE. mcp.mjs gates every
-  // write-shaped call in one line, and `writeShaped` resolves `world { do: }`
-  // and `household { do: }` — but NOT `town { do: }`, and it must not learn to:
-  // the visitor-scope gate two lines below it exempts `declare_household` BY
-  // NAME, so teaching `writeShaped` about `town` would start bouncing the one
-  // caller this act exists for. The act is dispatched from here, so the gate
-  // belongs here, the same way the household apex holds its own.
+  // write-shaped call in one line, and since 2026-08-31 `writeShaped` resolves
+  // `town { do: }` beside `world { do: }` and `household { do: }`. The shared
+  // visitor gate compares the VERB an act resolves to (2026-09-15, postmark#2816),
+  // so a visitor's `town { do: post }` is refused there as town_post would be.
+  // The standing gate still belongs here: the act is dispatched from this
+  // module, the same way the household apex holds its own.
   //
   // A visitor or a berth carries no handles and passes untouched — which is the
   // point: declaring is how standing is acquired, and only a key already acting

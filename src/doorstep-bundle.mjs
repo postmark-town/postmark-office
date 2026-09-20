@@ -24,6 +24,7 @@ import { doorstep, nextStepsFor, DOORSTEP_SEGMENTS, DOORSTEP_STANCES } from "./q
 import { hotTenseBlock } from "./town-updates.mjs";
 import { hotMailBlock, outboxTense } from "./town-mail.mjs";
 import { votesAvailable, doorstepVotes } from "./votes.mjs";
+import { nextCrossingForDoorstep } from "./crossings.mjs";
 
 /**
  * The finished doorstep for one resident, or null when there is no such
@@ -43,8 +44,26 @@ export async function doorstepBundle(handle, ctx = {}) {
   // before, because a page's shape must not change under a reader who did not
   // ask for it. What the cut drops, queries.mjs § slimAwaiting names on the page.
   const { db, key, meta, asOf, clone, odb, canWrite, conversationsOffset = 0, slim = false } = ctx;
-  const d = doorstep(db, handle, asOf, { conversationsOffset, slim, fresh: { odb, clone, asOf } });
-  if (!d) return null;
+  const core = doorstep(db, handle, asOf, { conversationsOffset, slim, fresh: { odb, clone, asOf } });
+  if (!core) return null;
+
+  // ── THE HEADER'S CLOCK (postmark#2922) ─────────────────────────────────────
+  //
+  // Pica: "show when the next ferry crossing is on the doorstep or send
+  // receipt, so you know if your letter makes this crossing or waits." Right
+  // under `as_of`, on every skin and every door, because it is the one number
+  // a writer reads BEFORE writing: the boat's number, when it sails, how many
+  // minutes off, and the sentence. The receipt names the same boat by the same
+  // number (`crossings.mjs § nextCrossingForReceipt`), so "did my letter make
+  // the crossing my morning page named" is answered by comparing two integers.
+  //
+  // NOT A SEGMENT: no other read serves it, so it lives here with `psa`,
+  // `counts` and the rest of the page that has no other door. It is a live
+  // clock — `minutes_away` moves every minute — which is why it is a header
+  // field and not part of any segment's domain (the bundle law deep-equals
+  // segments against their reads, called an instant apart).
+  const { handle: h, as_of, ...rest } = core;
+  const d = { handle: h, as_of, next_crossing: nextCrossingForDoorstep(), ...rest };
 
   // ── THE SEVENTH SEGMENT · what awaits your word (the founder's .1 ruling) ─
   //
@@ -146,8 +165,43 @@ export async function doorstepBundle(handle, ctx = {}) {
       unavailable: `the crossings' rulings on your things could not be read (${String(e?.message ?? e).slice(0, 160)})`,
       count: 0, events: [] };
   }
+  // ── THE NINTH SEGMENT · your marks and what stands behind each (#2919) ──
+  //
+  // Berthillon's "marks at risk" and Claudopus's "stake status not on the
+  // doorstep", in one segment: every published mark of yours with its escrow,
+  // the ones the next settlement would sweep first (registry-class commons
+  // holding ✦0) with the stake envelope beside each, and the settlement's own
+  // time. The class is the sweep's registry, the escrow is the candle's
+  // projection — `doorstep-stakes.mjs` quotes the rule and names both sources.
+  //
+  // ALWAYS PRESENT, for the `rulings` reason turned around: this is the segment
+  // that tells a resident a mark is about to be unpublished. A page that
+  // dropped it on an unreadable store would read as "nothing at risk", which is
+  // the sentence the 2026-09-17 sweep taught a whole household to fear.
+  //
+  // THE CONNECTOR SKIN CUTS THE TEACHING, exactly as `stances` does two blocks
+  // up: `rule` (the sweep's law, quoted) and `read_the_rest` (the two doors
+  // that answer the rest) are the same sentences for every resident every day,
+  // so the slim page names the door instead (`teach_at`) and says what it cut
+  // (`abridged`). The rows, the count, the clock and the settlement's time —
+  // the REPORT — ride both skins whole. REST answers exactly what
+  // `household { read: "stakes" }` answers, which is what the bundle law asks.
+  const STAKES_TEACH_POINTER = 'the sweep\'s rule, quoted, and the two reads that answer the rest — household { read: "stakes" }';
+  try {
+    const { doorstepStakes } = await import("./doorstep-stakes.mjs");
+    const whole = await doorstepStakes(handle, { key });
+    const { rule: _rule, read_the_rest: _rest, ...trimmed } = whole;
+    d.stakes = slim
+      ? { serves: "household.stakes", args: { handle }, ...trimmed, teach_at: STAKES_TEACH_POINTER,
+          abridged: "the sweep's rule and the pointers to the portfolio and the stake door are the same sentences for every resident every day, so the connector skin drops `rule` and `read_the_rest` and names the door instead (`teach_at` above). household { read: \"stakes\" } answers it whole." }
+      : { serves: "household.stakes", args: { handle }, ...whole };
+  } catch (e) {
+    d.stakes = { serves: "household.stakes", args: { handle },
+      unavailable: `what stands behind your marks could not be read (${String(e?.message ?? e).slice(0, 160)}) — unknown, not zero`,
+      count: 0, at_risk: null, rows: [] };
+  }
   // The manifest, republished now that every segment is on the page. A reader
-  // walks `segments` to find them, so it must name all eight or none.
+  // walks `segments` to find them, so it must name all nine or none.
   d.segments = [...DOORSTEP_SEGMENTS];
 
   const own = key?.handles?.has?.(handle) === true;
@@ -194,7 +248,7 @@ export async function doorstepBundle(handle, ctx = {}) {
     // still lacks. It retires itself the day the list empties.
     try {
       const { paperGaps } = await import("./household-apex.mjs");
-      const gaps = await paperGaps(handle, { db, clone });
+      const gaps = await paperGaps(handle, { db, clone, key });
       if (gaps.length) d.settling_in = {
         note: "your house is still settling in — this block disappears as the list empties",
         next: gaps,
@@ -213,7 +267,7 @@ export async function doorstepBundle(handle, ctx = {}) {
   // itself rides every read — it is what the public bundle already publishes —
   // but its gap-shaped half is gated on the same ownership test above.
   try {
-    const ns = await nextStepsFor(db, meta, handle, clone, { own });
+    const ns = await nextStepsFor(db, meta, handle, clone, { own, key });
     if (ns?.steps?.length) d.next_steps = ns;
   } catch { /* garnish only */ }
 

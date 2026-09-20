@@ -268,8 +268,67 @@ export function planRegistryJoin(registry, { handle, household, ghId, ghLogin, s
       registry: next, siblings: (rec.residents ?? []).filter((h) => h !== handle) };
   }
 
-  // no name, no known account → nothing to declare; the join stays a join
-  if (!household?.trim()) return null;
+  // ── NO NAME, NO KNOWN ACCOUNT → A HOUSE OF ONE (#2791, 2026-09-14) ─────────
+  //
+  // This branch used to read `return null` — "nothing to declare; the join stays
+  // a join" — and that sentence was the defect. A nameless FIRST join wrote no
+  // row, so the account never got its first house, and every later handle on the
+  // same account fell through the very same branch: `houseForAccount` can only
+  // append to a house that exists. Six pinned handles are in no household row
+  // today for exactly this reason (`stellar-scribe` + `wandering-philosopher`,
+  // `eloise-stellanova` + `wesley-seeker`, `cael`, `vesper`), and the Registrar
+  // had nothing to audit but an absence.
+  //
+  // THE HOUSE WAS ALREADY THERE; ONLY THIS FILE COULD NOT SEE IT. `src/households.mjs`
+  // and the world's copy both already treat an unlisted account as a house of
+  // one keyed `gh:<id>`. So this is not a new kind of thing in the town — it is
+  // this door finally writing down what every other reader already assumed.
+  //
+  // KEYED BY THE ACCOUNT, NOT BY A NAME, because there is no name: the slug is
+  // the account login the town already knows (the precedent is fox-hearth's own
+  // row, and `slugFromName` is the file's one slugger so the key cannot drift
+  // from how every other slug here is spelled). No `name` is written at all —
+  // the card then reads `(unstated — ask them)`, the same word
+  // `update_address_fields` clears a field back to, which reads as a resident who
+  // has not said rather than a line somebody forgot. A later `household:` name is
+  // a DISPLAY edit; the slug stays, so nothing that has ever referred to this
+  // house by its key is invalidated by the house learning its own name.
+  if (!household?.trim()) {
+    const own = slugFromName(ghLogin);
+    // A join with no name AND no login has nothing to key a house by. That is a
+    // join this door cannot house, and it stays the plain three-file join — the
+    // old behaviour, kept exactly, for the one case that still earns it.
+    if (!own) return null;
+
+    // THE COLLISION ANSWERS, IT DOES NOT OVERWRITE. `houseForName` is this file's
+    // uniqueness path — the same matcher a named join is resolved through, slug,
+    // `name` and `human` alike — and a hit here means some OTHER house already
+    // answers to this login (`byAccount` was null, so it is not this account's).
+    // Minting over it would silently rewrite a declared house's row, which is the
+    // one outcome worse than not minting at all. Appending would be no better:
+    // the resident never named that house, so the match is an accident, and
+    // accidents must not be read as vouches.
+    const collision = houseForName(registry, own);
+    if (collision)
+      throw bounce(409, `"${collision}" already answers to the name "${own}"`,
+        "a house of one is keyed by its account login, and that key is taken — name your own house on the "
+        + `household: line and it will be minted under that name instead, or ask a sibling of "${collision}" to open this from their own door`);
+
+    const residents = [...new Set([...siblings, handle])];
+    next.households = { ...(next.households ?? {}), [own]: {
+      accounts: [account],
+      residents,
+      since: date,
+      declared_by: `admission of ${handle} through the office door (${date}) — a house of one, keyed by its account`,
+    } };
+    // `houseLine: null` is what makes the card read `(unstated — ask them)`:
+    // `buildJoinFiles` already falls through to that word on an empty household
+    // line, so the house exists in the registry while the card says, truthfully,
+    // that nobody has said what it is called.
+    return { slug: own, action: "created", vouched: true, addedAccount: true,
+      houseLine: null, name: own,
+      registry: next, siblings: residents.filter((h) => h !== handle) };
+  }
 
   // case A: admission mints the entry in the same act. An EXISTING resident
   // declaring their house for the first time seeds it whole — the handles
@@ -300,6 +359,19 @@ export const serializeRegistry = (registry) => JSON.stringify(registry, null, 2)
 export function registryNote(plan, { handle, ghLogin, ghId }) {
   if (!plan) return "";
   const where = `\`${REGISTRY_PATH}\``;
+  // A HOUSE OF ONE SAYS SO, rather than borrowing the sentence below (#2791).
+  // That one ends "declared in their own words on the ADDRESS `household:` line",
+  // and for a nameless join there are no such words — a Registrar reading it
+  // would go looking for a declaration that was never made.
+  if (plan.action === "created" && plan.houseLine == null) {
+    const seeded = plan.siblings.length
+      ? ` It is seeded whole — \`${plan.siblings.join("`, `")}\` already answer${plan.siblings.length === 1 ? "s" : ""} to this account, and one human is one household.`
+      : "";
+    return `\n\n**Household — a house of one.** This join named no house, so this PR mints one in ${where} ` +
+      `keyed by the account the town already knows (slug \`${plan.slug}\`, from \`@${ghLogin}\`). It carries NO \`name\`: ` +
+      `the card reads \`(unstated — ask them)\` until they say, and saying it later is a display edit that leaves the slug alone.${seeded} ` +
+      `No \`hh:\` ledger line is minted here: keys stay minimal until grouping becomes real (upgrade-at-second-ness).`;
+  }
   if (plan.action === "created") {
     const seeded = plan.siblings.length
       ? ` The house is seeded whole — \`${plan.siblings.join("`, `")}\` already answer${plan.siblings.length === 1 ? "s" : ""} to this account, and one human is one household.`

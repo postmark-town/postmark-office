@@ -53,6 +53,16 @@
 //   A7 THE KEY SET    every top-level key one answer carries and the other does
 //                     not. The equality nobody writes, and the one that catches
 //                     a field quietly going missing rather than going wrong.
+//   A8 RECORDS        the `records` block (#2896): the id SET both answers name
+//                     — the spine, the field of view, the town's ground, the
+//                     mover's class — and every published field of every
+//                     record, id by id. A7 catches the block going missing;
+//                     this catches a record inside it going missing or going
+//                     wrong: a `parent` read off the directory instead of the
+//                     authored line, a `tier` the store has not recomputed, a
+//                     `declared_household` the clearing wrote from a stale
+//                     roster. The seven fields no row holds are acknowledged
+//                     BY NAME (AD-5, AD-6) and absent, never zero.
 //
 // ── EXIT CODES ──────────────────────────────────────────────────────────────
 //
@@ -146,8 +156,8 @@ const pool = new pg.Pool({ connectionString: process.env.WORLD2_PG_URL, max: 3 }
 // them, and so a reader can see the whole list without reading the comparator.
 // Each names the 1.0 line that produces it — the report's own requirement.
 const ACKNOWLEDGED = Object.freeze([
-  { id: "AD-1", field: "nearby[].members / nearby[].members[] / nearby[].order / nearby[].order[]",
-    because: "world-engine.mjs § lodScore: `const stamp = 1 + dials.weight_lod_k * Math.log1p(Math.max(0, weight))` — the FOV ranks by angular size MODULATED BY STAMPS, and 2.0's stamp_projection holds per-handle balances, not per-mark escrow. The port emits weight: 0 on every mark (apex-reads.mjs § markRecordOf), so ranking is unweighted and the budget cap can admit a different tail.",
+  { id: "AD-1", field: "nearby[].members / nearby[].members[] / nearby[].order / nearby[].order[] / records.ids / records.ids[]",
+    because: "world-engine.mjs § lodScore: `const stamp = 1 + dials.weight_lod_k * Math.log1p(Math.max(0, weight))` — the FOV ranks by angular size MODULATED BY STAMPS, and 2.0's stamp_projection holds per-handle balances, not per-mark escrow. The port emits weight: 0 on every mark (apex-reads.mjs § markRecordOf), so ranking is unweighted and the budget cap can admit a different tail. `records` is keyed by exactly the ids `nearby` names (plus the ground and the mover's class, which both sides select identically), so its id set carries the same tail — measured 2026-09-17 on prod: every id in one block and not the other was in that side's own `nearby`, at all fourteen standpoints.",
     closes_with: "parity P-006's escrow view over stamp_projection (RULED, unbuilt) — then weight is a query and this row dies." },
   { id: "AD-2", field: "present.residents[].standing / present.residents[].aboard",
     because: "live-reads.mjs § What is NOT here: the FRAME half is refused. dynamic-presence.mjs's readPresence composes `standing` and `aboard` from positions.mjs § withFrames, which needs the vessel's frame fold. The port omits both rather than emitting false.",
@@ -158,6 +168,12 @@ const ACKNOWLEDGED = Object.freeze([
   { id: "AD-3", field: "law.hydrated_at / law.as_of_world / law.source",
     because: "world-apex.mjs:  `law: { as_of_world: store.meta?.as_of_world, hydrated_at: store.meta?.hydrated_at, source: \"world.db\" }` — 1.0 names the bake. There is no bake in this tier; the block names the law PIN instead. A divergence by design, and the one field where equality would be the defect.",
     closes_with: "nothing — this is the cutover difference, and G2's read-path deletion is where 1.0's spelling goes." },
+  { id: "AD-5", field: "records[].stamps / records[].weight / records[].weight_parts / records[].ledger_weight",
+    because: "marks-fold.mjs § the published mark: `stamps: stakeByMark.get(mk.id) ?? 0, weight: weight.get(mk.id) ?? 0, ...partsField(mk.id)` and `...ledgerWeightField(mk.id)` — the town's stamp ledger folded, with breadth and fan-up. No row holds them (AD-1's hole, seen from the record's side), and `records` leaves them ABSENT rather than emitting a 0 that would read as a resident's ✦ figure (apex-reads.mjs § RECORD_FIELDS_NOT_ANSWERED). Reported as `(absent)` on the 2.0 side of every mark that carries one.",
+    closes_with: "parity P-006's escrow view over stamp_projection (RULED, unbuilt) and a stamp-ingest on a cadence — then stamps and ledger_weight are a query, and weight/weight_parts a fold over it." },
+  { id: "AD-6", field: "records[].sovereign / records[].placementParent / records[].kept",
+    because: "marks-fold.mjs § the published mark: `sovereign: !!mk._sovereign`, `placementParent: containedBy.get(mk.id)`, `kept: consent.kept.has(mk.id)` — three receipts of the standing walk, derived on the way to `tier`. materialize.mjs § recomputeStanding writes back `tier` alone, so no row carries them; `records` leaves them absent rather than re-walking the world inside a read.",
+    closes_with: "the standing flip (DESIGN-standing-flip.md) writing the walk's whole answer to the row — then all three are columns." },
 ]);
 // ⚠ EXACT, NEVER PREFIX. The first cut matched a divergence to an
 // acknowledgement by prefix, and it immediately swallowed four real ones:
@@ -211,10 +227,10 @@ async function buildSample() {
   // one that grows `frame`, and the one this port most needs measured.
   need("S2-vessel", "the-town/the-post-office — aboard the carrier", bySlug.get("the-town/the-post-office"));
 
-  // S3 FERRY'S CROSSING. The grid origin and the default standpoint for
+  // S3 THE ORIGIN. The grid origin and the default standpoint for
   // everyone unplaced, and the AB report's own probe point ("apex granted.here
   // at 0,0 | 12 actions | 12 resident/* grants").
-  want.push({ id: "S3-origin", why: "{0,0} — Ferry's crossing, the default standpoint", at: { x: 0, y: 0 }, mark: null });
+  want.push({ id: "S3-origin", why: "{0,0} — the Origin, the default standpoint", at: { x: 0, y: 0 }, mark: null });
 
   // S4 THE COMMONS. The harbor reach — public ground nobody's household holds,
   // which is where an ambient grant must stand alone with no ground channel
@@ -558,6 +574,18 @@ async function runOne(sp, { breakage = null } = {}) {
   // A7 · the key set
   bump("A7", "compared", 1);
   record("A7", sp.id, diffs(Object.keys(one).sort(), Object.keys(two).filter((k) => k !== "disclosed").sort(), "keys"));
+
+  // A8 · records — the id SET first (a record missing from the block is the
+  // whole floor going missing under one tile), then every record both sides
+  // carry, field by field, under a path the acknowledgements can name. The
+  // per-id path is `records[<id>]` on purpose: `ackFor` folds every bracket to
+  // `[]`, so an absence the store owns by name (AD-5, AD-6) is amber on every
+  // mark and a wrong value on any mark is red.
+  const oneRec = one.records ?? {}, twoRec = two.records ?? {};
+  const oneIds = Object.keys(oneRec).sort(), twoIds = Object.keys(twoRec).sort();
+  bump("A8", "compared", oneIds.length);
+  record("A8", sp.id, diffs(oneIds, twoIds, "records.ids"));
+  for (const id of oneIds) if (id in twoRec) record("A8", sp.id, diffs(oneRec[id], twoRec[id], `records[${id}]`));
 }
 
 const sortGranted = (g) => Object.fromEntries(Object.entries(g ?? {}).map(([k, v]) => [k, [...(v ?? [])].sort()]));
@@ -609,6 +637,13 @@ const BREAKS = [
     fn: (b) => { if (b.present) b.present.radius_m = 999; return b; } },
   { id: "A7", why: "a top-level key going quietly missing — the failure a value comparison cannot see",
     fn: (b) => { delete b.granted; return b; } },
+  // ⚑ NOT "delete b.records" — that is A7's break wearing a different key, and
+  // it would prove A7 twice. This is the defect A8 exists to see: the block is
+  // present, the ids are right, and ONE record inside it is wrong — the
+  // `parent` read off the directory instead of the authored line, which is
+  // exactly the shape the first cut shipped (apex-reads.mjs § markRecordOf).
+  { id: "A8", why: "a record inside `records` going wrong while the block and its id set stay right — a nested sited mark handed the directory edge as its `parent`",
+    fn: (b) => { for (const r of Object.values(b.records ?? {})) if (r.kind === "sited" && !("parent" in r)) { r.parent = "the-town/let-there-be-light"; break; } return b; } },
 ];
 
 async function proveCanFail(sample) {

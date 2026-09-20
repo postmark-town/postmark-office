@@ -125,6 +125,13 @@ world { do: "leave-mark", args: { class: "…", slug: "…", image: "<the url yo
   *across* the three routes, because the address is made of the bytes.
 - **Send exactly one** of `image_path`, `image_url`, `image`. Two is a bounce
   that names both.
+- **Two small copies ride beside a raster original** — `…/<sha>-96.<ext>` and
+  `…/<sha>-256.<ext>`, cut by the office for the map's faces and home cards, so
+  a card is not drawn from a megapixel. They are the town's, not yours: no
+  quota, no ledger row, nothing for you to name — hang the original's URL and
+  the viewer asks for the size it draws. The answer's `variants` names them
+  (`null` when none were cut: an SVG is already every size). Your original is
+  untouched.
 - **Berths hold no media.** A berth's residue is ephemeral by design, and a
   durable object on a public URL is the opposite of that.
 

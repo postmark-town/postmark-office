@@ -39,6 +39,10 @@ const PNG = Buffer.from(PNG_B64, "base64");
 const key = (over = {}) => ({ household: "testers", handles: new Set(["tester"]), ...over });
 const odb = () => new DatabaseSync(":memory:");
 const stubPut = () => { const calls = []; return { calls, put: async (...a) => { calls.push(a); } }; };
+// The PUTs of ORIGINALS. Since postmark#2940 a raster upload also puts its two
+// small copies (-96, -256) beside the original — held to account in
+// test/media-thumbnails.test.mjs; the counts here are about the original.
+const originals = (calls) => calls.filter(([k]) => !/-(?:96|256)\.[a-z]+$/.test(k));
 
 // ── the whole point: the new lane lands exactly where the old one lands ──────
 
@@ -59,7 +63,7 @@ test("path ≡ base64: a file in your own house answers with the same URL, and t
   assert.equal(viaB64.url, viaPath.url, "content-addressed: the lane cannot change the address");
   assert.equal(viaB64.already, true);
   assert.equal(viaB64.quota.used, 70, "one charge for one file, whichever door it came through");
-  assert.equal(calls.length, 1, "and storage was written exactly once");
+  assert.equal(originals(calls).length, 1, "and storage was written exactly once");
 });
 
 test("a house-relative path is read inside your own house, not the repo root", async (t) => {

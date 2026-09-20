@@ -52,8 +52,34 @@ trap 'rm -rf "$SNAP"' EXIT
   # non-fatal — the tick's real job is never held hostage by the mint, and a
   # red ledger stays the keeper's gate's finding. Same key the crossing signs
   # with, same flock we are already holding.
+  # welcome-on-tick (2026-09-17): the welcome bundle (founder-ruled 09-14) is
+  # ✦5 to every household once, at its first resident. It is NOT derived from
+  # the mail, so `--append` above does not and cannot write it — the town's own
+  # registry row, its grammar note and its `--welcome` header all say "the
+  # office writes the bundle at a crossing", and until this line nothing did.
+  # Measured on the train tip: 6 households admitted after the 09-14 by-hand
+  # pass held no bundle and no scheduled thing would ever have paid them.
+  #
+  # ORDER IS LOAD-BEARING, and it is the town's refusals that fix it: `--welcome`
+  # declines onto an unsettled tail ("run --append first") and declines a date
+  # before the ledger's last. So it runs AFTER the mint pass and BEFORE verify,
+  # inside this same flock, with the same key — its rows are verified and pushed
+  # by the commit already below rather than sitting unsealed until the next tick.
+  #
+  # It mints only households the town's own `--welcome-plan` names, and the
+  # town's once-per-household law refuses a second bundle on its own.
+  #
+  # ⚑ ITS EXIT IS SWALLOWED ON PURPOSE, and the first draft of this line got it
+  # wrong. Chained with `&&`, one refused bundle would have stopped `stamp-verify`
+  # and the commit below — stranding the `--append` rows that DID land, unsealed
+  # and unpushed, until a later tick. A refusal means one household waits one
+  # crossing; it must never hold the mint pass hostage. Bad rows are still caught:
+  # anything this writes goes through the verify on the next line.
   ( cd "$TOWN_CLONE" && \
     node tools/stamp-mint.mjs --append --key /srv/postmark-office/stamp-key.pem && \
+    { node /srv/postmark-office/deploy/welcome-pass.mjs \
+        --town "$TOWN_CLONE" --key /srv/postmark-office/stamp-key.pem \
+      || echo "[office-tick] welcome pass had refusals (non-fatal) — the lines above name each one; the household keeps its claim and the next crossing asks again" >&2; } && \
     node tools/stamp-verify.mjs && \
     { git diff --quiet -- WHITE_PAGES/stamp-ledger.md || { \
         git add WHITE_PAGES/stamp-ledger.md && \
@@ -61,6 +87,25 @@ trap 'rm -rf "$SNAP"' EXIT
   ) || echo "[office-tick] mint catch-up FAILED (non-fatal) — run stamp-verify in the town clone" >&2
   git clone --local --quiet "$TOWN_CLONE" "$SNAP/town"
 ) 9>>"$LOCK"
+
+# ── settlements-on-tick (postmark#2897, Wright-ruled 2026-09-17) ─────────────
+# The store's `settlements` row FOLLOWS the keeper's tag, and the world fetch
+# under the lock above is what carries the tag in: measured 2026-09-17, a plain
+# `git fetch --prune origin` re-follows an annotated tag whose commit is already
+# local (S71 deleted locally, back as a `tag` object on the next plain fetch).
+# So the office learns of a blessing within one tick of it, which is exactly
+# the freshness 1.0's own tag read has had all along ("tags ride the tick's
+# existing fetch", src/settlements.mjs). Outside the lock, because the tool
+# reads refs and a Postgres, never the clone's working tree, and the lock's
+# hold is what the write path waits on. Idempotent: a present row is skipped,
+# a moved tag is REFUSED with its number and nothing partial lands. NON-FATAL
+# like the mint and the world hydrate — the tick's real work never waits on
+# the store — and its one receipt line lands in this journal either way.
+if settled="$(node world2/tools/settlements-backfill.mjs --apply --prod --quiet --world-repo "$WORLD_CLONE" 2>&1)"; then
+  echo "[office-tick] settlements: $settled"
+else
+  echo "[office-tick] settlements row NOT written (non-fatal) — $settled — the next tick tries again; world2/tools/settlements-backfill.mjs --verify says where the table stands" >&2
+fi
 
 # ── outside the lock: derive from the frozen snapshot (however long) ─────────
 node src/hydrate.mjs --town "$SNAP/town" --db office.db.new

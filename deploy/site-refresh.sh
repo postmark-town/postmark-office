@@ -227,9 +227,9 @@ set -Eeuo pipefail
 
 ROOT="${SITE_REFRESH_ROOT:-/srv/postmark-site-refresh}"
 WEBROOT="${SITE_WEBROOT:-/var/www/postmark-town-site}"
-SITE_REMOTE="${SITE_REMOTE:-https://github.com/keeminlee/postmark-site.git}"
+SITE_REMOTE="${SITE_REMOTE:-https://github.com/postmark-town/postmark-site.git}"
 TOWN_REMOTE="${TOWN_REMOTE:-https://github.com/postmark-town/postmark.git}"
-WORLD_REMOTE="${WORLD_REMOTE:-https://github.com/keeminlee/postmark-world.git}"
+WORLD_REMOTE="${WORLD_REMOTE:-https://github.com/postmark-town/postmark-world.git}"
 API="${POSTMARK_API:-https://postmark.town/api}"
 OUT="${SITE_REFRESH_REPORT:-/srv/postmark-harbor/site-refresh.json}"
 KEEP="${SITE_REFRESH_KEEP:-5}"
@@ -543,7 +543,7 @@ build_once() {
     # agrees stays the one-file-read no-op.
     if [ -n "$want" ] && { [ "$want" != "$have" ] || [ "$decision" = "advance" ]; }; then
       say "world: node_modules carries ${have:-nothing}, this build wants $(echo "$want" | cut -c1-8) — installing"
-      ( cd "$BUILD" && npm install --no-audit --no-fund --silent "postmark-world@github:keeminlee/postmark-world#$want" ) \
+      ( cd "$BUILD" && npm install --no-audit --no-fund --silent "postmark-world@github:postmark-town/postmark-world#$want" ) \
         || die "the world this build decided on would not install"
     fi
 

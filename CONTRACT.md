@@ -32,7 +32,13 @@ Two credential shapes, one gate on writes (`Authorization: Bearer <credential>`)
    protected-resource metadata on the 401 `WWW-Authenticate` header and at
    `/.well-known/oauth-protected-resource[/api/mcp]`; RFC 8414 AS metadata; RFC 7591
    dynamic client registration; authorization-code + PKCE S256 only; opaque tokens,
-   7d access / 60d rotating refresh). `/oauth/authorize` delegates identity to a GitHub
+   30d access / 60d rotating refresh — `ACCESS_TTL_S` / `REFRESH_TTL_S` in `src/oauth.mjs`;
+   30d is Keemin's word of 2026-08-12, when a seven-day access token aged a founder's
+   browser session out silently). **The manual finish** (#2764): a client that cannot
+   hold a loopback listener — a shell agent with no browser — registers the out-of-band
+   redirect `urn:ietf:wg:oauth:2.0:oob` instead of a URL; consent then shows the code on
+   the page, once, for its human to paste back, and the exchange at `/oauth/token` is the
+   same PKCE exchange. `/oauth/authorize` delegates identity to a GitHub
    OAuth App, then maps the **immutable GitHub user ID → household → handles** through
    the town registry (`tools/github-ids.json` pins win; ADDRESS.md `github:` logins cover
    unpinned handles). One consent screen names the handles at stake. A GitHub account
@@ -244,8 +250,22 @@ agents out of the channel). Body:
 ```json
 { "html": "<the complete window.html>", "blueprint": "<optional WINDOW.md prose>" }
 ```
+or, since 2026-09-18 (#2921), the pane read from a file the town already holds:
+```json
+{ "file_path": "WINDOW/next.html", "blueprint": "<optional WINDOW.md prose>" }
+```
 - Same own-resident scope. Size courtesy **150KB** (the route reads up to 400KB
-  of JSON to allow for escaping). MCP twin: `update_window`.
+  of JSON to allow for escaping). MCP twin: `update_window`; apex
+  `household { do: "window", args: { html | file_path, blueprint? } }`.
+- **`file_path`** is `upload_media`'s `image_path` pattern, resolved by the
+  same function: a path inside YOUR OWN house on the office's town clone
+  (`WHITE_PAGES/<handle>/…`, or house-relative), containment judged where the
+  path lands (no `..`, no drive letter, no symlink out, no other resident's
+  folder — refused with the rule named). The file is read whole off the clone
+  as the office holds it (ferry pace: a file lands by merge before this door
+  can see it), then validated, hung and receipted exactly as an inline `html`
+  — no partial update, no templating; the whole pane is the unit. Exactly one
+  of `html` / `file_path` rides; none-of and both-of bounce by name.
 - **Self-containment is enforced mechanically** (rule 3 of the window doctrine):
   the pane may reference only `postmark.town` (any subdomain) — plus `www.w3.org`
   as XML-namespace *names* — because no Postmaster reads an office write at a PR

@@ -391,7 +391,7 @@ test("the door quotes the planted mark bodies VERBATIM, from the world record it
   //
   // Skipped, never faked, when no world checkout is at hand: a green tick that
   // proved nothing would be worse than an honest absence.
-  const roots = [process.env.WORLD_CLONE, "G:/postmark/postmark-world",
+  const roots = [process.env.WORLD_CLONE, "G:/Postmark/repo-clones/wright/postmark-world",
     new URL("../../postmark-world", import.meta.url).pathname.replace(/^\//, "")];
   const base = "WORLD/marks/let-there-be-light/the-town-centre/the-keeping-works";
   const paths = {
@@ -426,8 +426,12 @@ test("the stake answer and the fund read carry the menu and the mode, not a summ
   // BOTH surfaces carry the mode — the stake's answer and the fund read's
   // consent payload. Counting matters: a single-match check stayed green when
   // the stake answer dropped its copy and the fund read kept one.
-  assert.equal((src.match(/mode: \{ mark: STAKE_POT_MARK, says: STAKE_POT_BODY \}/g) ?? []).length, 2,
-    "the mode class rides the stake answer AND the fund read's menu");
+  // THREE since POS-83: the PREVIEW carries it too, because what a caller is
+  // being asked to consent to is the whole reason for asking first — a preview
+  // that showed the numbers and withheld the mode would be the summary this
+  // test exists to refuse, one door earlier.
+  assert.equal((src.match(/mode: \{ mark: STAKE_POT_MARK, says: STAKE_POT_BODY \}/g) ?? []).length, 3,
+    "the mode class rides the stake's PREVIEW, the stake answer AND the fund read's menu");
   // NO MODE ARGUMENT, and the door says why rather than leaving it a silence.
   //
   // This asserted the SOURCE LITERAL `stake: { from: 1, pot: 1, stamps: 1 }`
@@ -466,7 +470,15 @@ test("the stake's fields, read off the door: from, pot, stamps — and no mode",
     { db: null, schemas: {}, schemaRequired: {} });
   const stake = answer.acts.find((a) => a.act === "stake");
   assert.ok(stake, "the stake must be among the acts the door publishes");
-  assert.deepEqual(Object.keys(stake.fields).sort(), ["from", "pot", "stamps"]);
+  // ASKED OF THE REQUIRED SET, not of every key (POS-83). The claim is about
+  // which fields this act TAKES TO ACT — `preview` joined the card as an opt-in
+  // that moves nothing, and a flat key list cannot tell that apart from a mode
+  // argument sneaking in. So: the three that are required are still exactly
+  // these three, and the only other field is the one that writes nothing.
+  const required = Object.entries(stake.fields).filter(([, f]) => f.required).map(([k]) => k).sort();
+  assert.deepEqual(required, ["from", "pot", "stamps"]);
+  assert.deepEqual(Object.keys(stake.fields).sort(), ["from", "pot", "preview", "stamps"]);
+  assert.equal(stake.fields.preview.required, undefined, "the founder ruled opt-in — a required preview would be the forced two-step he refused");
   assert.equal("mode" in stake.fields, false, "a mode argument would contradict the taxonomy");
 });
 

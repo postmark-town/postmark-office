@@ -63,7 +63,7 @@ test("a live say composes its point from the WITNESSED LINE — anchor plus offs
 });
 
 test("a live say whose anchor does not resolve is REFUSED, never placed at {0,0}", () => {
-  // "{x:0,y:0} is Ferry's crossing, a real place somebody could be standing, and
+  // "{x:0,y:0} is the Origin, a real place somebody could be standing, and
   //  a deriver that substitutes it for 'unknown' is the exact quiet substitution
   //  the customs-house law forbids."
   const r = voiceOf(say(), () => null);

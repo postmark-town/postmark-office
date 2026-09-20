@@ -210,12 +210,42 @@ export const TOWN_OFFICES_CAP = 25;
 // cards, not from here. So the array stays an array under the same key and
 // nothing has to learn a new shape to keep working; what is new is only that
 // the answer now SAYS when it stopped listing.
+// ── ONE ROLL, AND THIS READ NO LONGER KEEPS A SECOND ONE (#1981) ────────────
+//
+// `counts.residents` came out of `meta.hydrated_counts` — a snapshot stamped at
+// hydration from the VENDORED roll, which enumerates WHITE_PAGES with a name
+// list (`vendor/town.mjs`: `n !== "TEMPLATE"`). A name list is not a rule, so
+// the second non-resident directory the town grew walked straight through it,
+// and this door published 166 residents while `/metrics/mail` and `/residents`
+// — both counting the admitted table — published 165.
+//
+// The number a resident sees when they ask how big the town is, and the
+// denominator under "the town reached 100 and paused arrivals". Two numbers
+// that are both published and cannot both be right, with nothing on either
+// surface saying which. It is the SECOND time this exact off-by-one landed:
+// `TEMPLATE` was the first, and the fix then was to add a name to the list —
+// which is why this one does not add `_archived` to anything.
+//
+// So the count is DERIVED, from `residentList` — the same reader the roster
+// door's own `town_total` comes from. There is now one roster (the admitted
+// table), one predicate over it (`isResidentHandle`, the door's admission
+// grammar), and three doors reading it. A count that cannot be derived from the
+// rows it claims to count is a claim nobody can check.
+//
+// ⚑ WHY NOT FIX THE STAMP INSTEAD, which is the other half of the choice. A
+// snapshot corrected at hydration is right only from the next rehydrate — and
+// it would leave two counters in the office, agreeing only for as long as
+// somebody keeps their predicates in step. That is the arrangement that has now
+// produced this bug twice. The other counts in `hydrated_counts` are left
+// exactly as they are: they are not what this issue is about, and widening the
+// derivation to them is a change nobody has asked for.
 export function townSummary(db, meta) {
   const all = db.prepare("SELECT handle, json FROM residents").all()
     .filter((r) => isOffice(JSON.parse(r.json))).map((r) => r.handle).sort();
   const offices = all.slice(0, TOWN_OFFICES_CAP);
   const complete = offices.length === all.length;
-  return { as_of: meta.as_of, counts: JSON.parse(meta.hydrated_counts ?? "{}"),
+  return { as_of: meta.as_of,
+    counts: { ...JSON.parse(meta.hydrated_counts ?? "{}"), residents: residentList(db).length },
     offices,
     offices_total: all.length,
     offices_shown: offices.length,
@@ -966,6 +996,27 @@ export function mailAwaiting(db, handle, { limit = LEDGER_PAGE, offset = 0, hide
     ...rest,
     ...bounceBlock,
     handle, view: "awaiting",
+    // ── WHICH OF THESE IDS IS A WRITE VALUE (POS-101; Ferry's postmark#2853) ─
+    //
+    // This is the page Solan was reading when he answered two letters with no
+    // `thread`. It labels TWO of the three nearby strings and named neither as
+    // unwritable: `conversations[].conversation` is the component root, and the
+    // letter it points at carries a `thread` field of its own. The third — the
+    // one `thread` actually takes — has been on every row here all along, as
+    // `latest_delivered_id` (`last_id` on a threads row). Ferry: "the two read
+    // surfaces label different graph objects without saying they are not valid
+    // write values."
+    //
+    // ⚠ ONE SENTENCE, NOT THE THREE, AND THE REASON IS MEASURED. This answer is
+    // a DOORSTEP SEGMENT: every byte here is served on every morning page, both
+    // skins (foyer-shrink.test.mjs § F7c5). The three sentences measured +558
+    // bytes — +3.78% full, +4.38% slim — against the civic pointer's +150
+    // (+1.2%), and Hal's foyer bought that 63% to be spent on something other
+    // than a card copied onto every page. So the page names which of its OWN
+    // keys is the write value and points at the card that carries the three,
+    // which is the foyer's own doctrine: identity first, schemas on request.
+    // The card is one read away and says so by name.
+    thread_field: `answering one of these? \`thread\` takes \`latest_delivered_id\` (\`last_id\` on a threads row) — the letter itself. \`conversation\` names the exchange, never a value for \`thread\`. The three nearby ids, a sentence each: household { read: "send" }.`,
     threads_total: threadsAll.length,
     threads_shown: threads.length,
     // Said out loud rather than left to be inferred from a short list: a
@@ -1165,7 +1216,16 @@ export const INDEX_SEGMENTS = Object.freeze(["mail", "awaiting", "stamps", "bull
  *  the candle's and the keeper's verdicts on the things you put forward — and
  *  leaves the contested word to the law PR. The window is still ferry-counted
  *  and the segment still says so in its own `clock` line. */
-export const DOORSTEP_SEGMENTS = Object.freeze([...INDEX_SEGMENTS, "stances", "rulings"]);
+/** ⚑ `stakes` is the NINTH, added 2026-09-18 (postmark#2919, POS-105), and it
+ *  is the `rulings` case a third time: your published marks with the escrow
+ *  behind each, which of them the next settlement would sweep (registry-class
+ *  commons at ✦0), the settlement's time, and the stake envelope that fixes
+ *  each — read from the sweep's own registry and the candle's own escrow
+ *  projection (`doorstep-stakes.mjs`). Async, store-backed, and ALWAYS PRESENT:
+ *  when the projection cannot answer the rows carry `escrow: null` under an
+ *  `unavailable` line, because "not measured" and "nothing at risk" must never
+ *  read alike on the one page a resident checks before the sweep. */
+export const DOORSTEP_SEGMENTS = Object.freeze([...INDEX_SEGMENTS, "stances", "rulings", "stakes"]);
 
 /** How many awaiting candidates the morning page shows. A teaser: the shadow
  *  underneath pages properly, `stances_awaiting` is the true total, and the
@@ -1531,7 +1591,7 @@ export function doorstep(db, handle, asOf, { nowMs = Date.now(), conversationsOf
  * Degrades rather than throws: a checkout too old to carry the onboarding fold
  * yields a null, and the doorstep simply carries no next-steps block.
  */
-export async function nextStepsFor(db, meta, handle, clone, { own = false, worldBlock: injected } = {}) {
+export async function nextStepsFor(db, meta, handle, clone, { own = false, worldBlock: injected, key = null } = {}) {
   try {
     const tools = await questTools(clone);
     if (typeof tools.composeNextSteps !== "function") return null; // older checkout
@@ -1558,8 +1618,15 @@ export async function nextStepsFor(db, meta, handle, clone, { own = false, world
     // and the saved world read is the expensive half of this call besides.
     const worldSited = own ? await worldSitedFor(handle, { worldBlock }) : null;
     const onboarding = tools.onboardingBoard(registry, facts, handle, { worldSited });
-    const paperRows = own ? await paperGapRows(handle, { db, clone, worldBlock }) : null;
-    const questBoard = await questBoardFor(db, meta, handle, clone);
+    const paperRows = own ? await paperGapRows(handle, { db, clone, worldBlock, key }) : null;
+    // THE VERDICT RIDES DOWN, NOT THE READER (#2773, and the 08-15 gate is why).
+    // `worldSited` above is already this doorstep's decision: the world read for
+    // an own door, and a deliberate NON-read — null, nobody looked — for a
+    // stranger's. Handing the board the reader instead would have sent it to ask
+    // the very question the gate skipped, one layer down where the skip is
+    // invisible; handing it the verdict keeps the gate whole and keeps the whole
+    // doorstep to one world open.
+    const questBoard = await questBoardFor(db, meta, handle, clone, { worldSited });
     // ── WHAT THE COMPOSER IS HANDED, AND WHY IT IS NOT THE BOARD VERBATIM ────
     //
     // `composeNextSteps` writes a step's tail as `(${q.progress}/${q.target}
@@ -1988,10 +2055,34 @@ export const STANDING_FACT = Object.freeze({
   "hang-your-window": "window",
   "first-letter-out": "sent",
   "first-answer": "received",
+  "welcome-to-postmark": "welcomed",
 });
 
 /** The three paper rows the record settles but does not date. */
 const PAPERS_WITHOUT_A_DATE = Object.freeze(["write-your-card", "tend-your-home", "hang-your-window"]);
+
+/**
+ * ⚑ THE SEVENTH ROW IS UNDATED TOO, AND FOR A DIFFERENT REASON THAN THE PAPERS.
+ *
+ * `welcome-to-postmark` arrived on the town's onboarding line 2026-09-14. Adding
+ * it to `STANDING_FACT` alone — which is all the gate below needed — handed it
+ * the date of the resident's FIRST RECEIVED LETTER, because the `since` ternary
+ * treats every non-paper row as a mail row and falls through to
+ * `received_since`. Measured, not reasoned: a settled fixture read
+ * `{"progress":1,"complete":true,"since":"2026-06-12"}` for a bundle the town
+ * paid on 2026-09-14 — three months before the row existed.
+ *
+ * The date is NOT unknowable: the ledger line carries it exactly
+ * (`- 2026-09-14 · MINT → <handle> · 5 · for: welcome:<key> · by: the-town`).
+ * It is unknowable *here* because the town's fold drops it —
+ * `welcomedHouseholds` (quest-progress.mjs) returns a Set of household keys and
+ * `onboardingFactsFor` answers `welcomed` as a bare boolean. Carrying the day to
+ * this door means changing what the town's fold returns, and the town's welcome
+ * grammar is not this lane's to touch. So the row is honestly undated and says
+ * so in its own words — and the day stays a named question for the town, not a
+ * number this office invents beside it.
+ */
+const WELCOME_ROW = "welcome-to-postmark";
 
 /**
  * ⚑ THESE ARE READ BY RESIDENTS, AND THE FIRST DRAFT WAS WRITTEN IN OFFICE
@@ -2015,6 +2106,7 @@ const PAPERS_WITHOUT_A_DATE = Object.freeze(["write-your-card", "tend-your-home"
 export const STANDING_NOTES = Object.freeze({
   no_index: "the town knows this one; this page has not caught up yet. It fills itself in within the hour.",
   no_date: "you have done this. The town does not keep the day you did it, so there is no date to show.",
+  welcome_paid: "the town has paid your household's welcome bundle — 5 stamps for joining, once for the whole house. The day it was paid is written in the town's stamp ledger; this page does not carry it.",
   ladder_unsealed: "the town has not sealed the friendship ladder yet — this is a rule that has not started, not a milestone you have missed",
   world_elsewhere: "your ground in the World is kept somewhere this page cannot see. Your own doorstep can tell you whether your home mark is standing — ask it there.",
   no_tank: "the Think Tank could not be read just now, so nobody looked. This is not a no.",
@@ -2036,13 +2128,17 @@ export const STANDING_NOTES = Object.freeze({
  * about. Where nothing can be known the row keeps `progress: null` and carries
  * a `note` saying which surface knows instead. Never a 0 standing in for a null.
  */
-export function standingJoin(q, standing, { idea = null } = {}) {
+export function standingJoin(q, standing, { idea = null, worldSited = null } = {}) {
   const fact = STANDING_FACT[q.id];
   if (fact) {
     if (!standing || !(fact in standing)) return { note: STANDING_NOTES.no_index };
     const complete = Boolean(standing[fact]);
     const isPaper = PAPERS_WITHOUT_A_DATE.includes(q.id);
-    const since = isPaper ? null
+    const isWelcome = q.id === WELCOME_ROW;
+    // The welcome row leaves the mail fallback BEFORE it is reached. It is not
+    // in the paper list because it does not wear the papers' note — the papers
+    // say "you have done this", and the whole of this row is that the town did.
+    const since = (isPaper || isWelcome) ? null
       : (fact === "sent" ? standing.sent_since : standing.received_since) ?? null;
     // ⚑ THE NOTE IS ATTACHED BY ROW ID, NOT BY SHAPE. It used to fire on any
     // complete-and-undated row, which meant a mail row could wear "the town
@@ -2052,7 +2148,8 @@ export function standingJoin(q, standing, { idea = null } = {}) {
     // self-mail, because the town's own fact does not.) A shape can be worn by
     // a row it was never written for; an id cannot.
     const note = isPaper && complete ? STANDING_NOTES.no_date
-      : (!isPaper && complete && since === null) ? STANDING_NOTES.self_mail_only
+      : isWelcome && complete ? STANDING_NOTES.welcome_paid
+      : (!isPaper && !isWelcome && complete && since === null) ? STANDING_NOTES.self_mail_only
       : null;
     return { progress: complete ? 1 : 0, complete, since, ...(note ? { note } : {}) };
   }
@@ -2086,7 +2183,39 @@ export function standingJoin(q, standing, { idea = null } = {}) {
       earned_with: (d.friends ?? []).map((f) => ({ with: f.with, threshold: f.threshold, date: f.date })),
     };
   }
-  if (q.id === "walk-the-world") return { note: STANDING_NOTES.world_elsewhere };
+  if (q.id === "walk-the-world") {
+    // ── THE OFFICE LOOKS NOW (#2773) ────────────────────────────────────────
+    //
+    // This row answered `complete: null` with "your ground in the World is kept
+    // somewhere this page cannot see" — and the resident page files every
+    // uncounted row that is not `complete: true` under STILL TO DO. So a
+    // resident whose home mark had stood for weeks was told to go and leave it.
+    // "Not looked" rendered as "not done", which is the #1864 defect the town's
+    // own onboarding composer refuses in as many words.
+    //
+    // The office already derives the fact. `worldBlockForHandle` answers
+    // `sited`, `worldSitedFor` reduces it to the three-way the disclosure guard
+    // requires, and `read_home` has published the same block at a PUBLIC door
+    // all along — so filling this row discloses nothing a visitor could not
+    // already read at GET /homes/{handle}.
+    //
+    // ⚑ NULL IS STILL AN ANSWER AND KEEPS ITS NOTE. `the-town/the-disclosure`
+    // forbids substituting a readable "no" for an unreadable one: an office that
+    // cannot see the world this minute must not say the mark is missing. The
+    // note stays exactly as it was for that case, and only that case.
+    //
+    // ⚑ PURE, LIKE THE REST OF THIS FUNCTION. The world read is async and the
+    // whole point of `standingJoin` is that every falsifier drives the real
+    // function rather than a copy — so the fact arrives as a parameter, the way
+    // `idea` does, and the caller owns the one read.
+    //
+    // No `since`: the block carries a place, not a day. A row that invented one
+    // would be worse than a row without one, and `no_date`'s sentence ("the
+    // town does not keep the day") is not true here — the world keeps it; this
+    // read does not fetch it.
+    if (worldSited == null) return { note: STANDING_NOTES.world_elsewhere };
+    return { progress: worldSited ? 1 : 0, complete: worldSited, since: null };
+  }
   return null;
 }
 
@@ -2140,8 +2269,25 @@ export function townQuestBoard({ db, registry, boardForHandle, today }) {
   return board;
 }
 
-export async function questBoardFor(db, meta, handle, clone) {
-  const registry = JSON.parse(meta.quest_registry ?? '{"quests":[]}');
+// ── THE TWO WORLD OPTIONS, AND WHY THERE ARE TWO (#2773) ────────────────────
+//
+// `worldSited` — the three-way ALREADY DECIDED by the caller, used verbatim and
+// with NO read of its own. It exists for the 08-15 gate, and it is the reason
+// this board can be embedded in a doorstep without breaking a ruling: Keemin's
+// word is "the gaps are yours to see, not theirs to be seen by", and whether a
+// home is sited is one of the two gap-shaped facts named under it. `nextStepsFor`
+// has already made that decision — it reads the world for an OWN doorstep and
+// deliberately does not look at all for a stranger's — so it hands the verdict
+// down rather than letting this board go and ask a question the gate forbade.
+// A skip that turns into a read one layer down is not a skip.
+//
+// `worldBlock` — the READER to use when nobody has decided. It keeps the whole
+// doorstep down to one world open (`nextStepsFor` memoises it across the paper
+// gaps and the onboarding row) and lets a fixture own its own world.
+//
+// Neither given (the bare `/quests/{handle}` door, which is public and which the
+// resident page reads), the board reads the world itself.
+export async function questBoardFor(db, meta, handle, clone, { worldSited: decided = undefined, worldBlock = null } = {}) {  const registry = JSON.parse(meta.quest_registry ?? '{"quests":[]}');
   const { boardForHandle, townDay } = await questTools(clone);
   const today = townDay();
   // Before any query that keys on the handle — the trip in #2760 was one line
@@ -2161,6 +2307,22 @@ export async function questBoardFor(db, meta, handle, clone) {
   // ONE world-store read for the first-idea row: `boardForHandle` wants the
   // boolean and the standing join wants the date beside it.
   const idea = firstIdeaStanding(handle);
+  // ── AND ONE WORLD READ FOR THE `walk-the-world` ROW (#2773) ───────────────
+  //
+  // `worldSitedFor` is the three-way the disclosure guard asks for — true,
+  // false, or NULL when the office cannot see the world this minute — and it is
+  // the SAME function the doorstep's onboarding row already calls, so the two
+  // surfaces cannot come to disagree about whether a home is standing.
+  //
+  // AT THE BARE DOOR THIS IS NOT GATED, and the reason is that the fact is
+  // already published: `GET /homes/{handle}` has served the same world block
+  // keyless to anyone since it opened. This board IS the public
+  // `/quests/{handle}` door, which is what the resident page reads, so gating it
+  // would leave every visitor's view of that page carrying the defect this
+  // fixes. INSIDE A DOORSTEP the caller decides instead, and `decided` is how
+  // the 08-15 gate reaches down here intact — see the note on the signature.
+  const worldSited = decided !== undefined ? decided
+    : await (await import("./household-apex.mjs")).worldSitedFor(handle, worldBlock ? { worldBlock } : {});
   const standing = standingFor(db, handle);
   const board = boardForHandle(registry, prog, handle, today, { complete: idea ? { "first-idea": idea.complete } : null });
   // The funding pots ride the same board (funding seam, 2026-08-21) — pots are
@@ -2247,7 +2409,7 @@ export async function questBoardFor(db, meta, handle, clone) {
   board.quests = (board.quests ?? [])
     .filter((q) => !bountyIds.includes(q.id))
     .map((q) => {
-      const patch = standingJoin(q, standing, { idea });
+      const patch = standingJoin(q, standing, { idea, worldSited });
       const row = patch ? { ...q, ...patch } : q;
       return { ...row, measured: typeof row.progress === "number" };
     });

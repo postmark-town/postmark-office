@@ -5,7 +5,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, rmSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, rmSync, readFileSync, writeFileSync, mkdirSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { fixtureDb, editClone, fixtureKey } from "./fixture.mjs";
@@ -410,6 +410,110 @@ test("update_window: size courtesy (413) and empty pane (422); blueprint rides a
       fixtureKey, db, clone);
     assert.equal(r.hung, true);
     assert.match(read(clone, "WHITE_PAGES", "wright", "WINDOW", "WINDOW.md"), /What this household wanted/);
+  } finally { rmSync(clone, { recursive: true, force: true }); }
+});
+
+// ── #2921: the pane from a file the town already holds (file_path) ──────────
+//
+// The same pattern as upload_media's image_path, resolved by the SAME function
+// (media.mjs § readHouseFile): a path inside the caller's own house on the
+// office's town clone, containment judged where it lands. Then the same
+// validation, the same write, the same receipt as an inline html:.
+
+const plant = (clone, rel, text) => {
+  const file = join(clone, ...rel.split("/"));
+  mkdirSync(join(file, ".."), { recursive: true });
+  writeFileSync(file, text);
+  const git = (...a) => execFileSync("git", ["-C", clone, ...a], { encoding: "utf8" });
+  git("add", "-A");
+  git("-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-q", "-m", `plant ${rel}`);
+  return file;
+};
+
+test("update_window file_path: the pane equals the file's bytes, and the receipt is the inline door's", () => {
+  const clone = editClone();
+  try {
+    const pane = PANE("<p>from a file</p>");
+    plant(clone, "WHITE_PAGES/wright/WINDOW/next.html", pane);
+    const r = updateWindow({ handle: "wright", file_path: "WHITE_PAGES/wright/WINDOW/next.html" }, fixtureKey, db, clone);
+    assert.equal(r.hung, true);
+    assert.equal(r.file, "WHITE_PAGES/wright/WINDOW/window.html");
+    assert.ok(r.commit, "a pen commit, exactly as inline");
+    assert.deepEqual(Object.keys(r).sort(), ["commit", "file", "hung", "pushed", "updated"], "the receipt carries the inline door's keys and no more");
+    assert.equal(read(clone, "WHITE_PAGES", "wright", "WINDOW", "window.html"), pane, "the pane is the file's bytes");
+    assert.match(lastLog(clone), /wright: window hung .*key household keemin/);
+
+    // house-relative spelling reads inside the house, as image_path does
+    plant(clone, "WHITE_PAGES/wright/WINDOW/v2.html", PANE("<p>v2</p>"));
+    const v2 = updateWindow({ handle: "wright", file_path: "WINDOW/v2.html" }, fixtureKey, db, clone);
+    assert.equal(v2.hung, false);
+    assert.match(read(clone, "WHITE_PAGES", "wright", "WINDOW", "window.html"), /v2/);
+
+    // the blueprint rides beside a file-read pane too
+    const bp = updateWindow({ handle: "wright", file_path: "WINDOW/v2.html", blueprint: "# blueprint\n\nFrom a file." }, fixtureKey, db, clone);
+    assert.ok(bp.commit);
+    assert.match(read(clone, "WHITE_PAGES", "wright", "WINDOW", "WINDOW.md"), /From a file/);
+  } finally { rmSync(clone, { recursive: true, force: true }); }
+});
+
+test("update_window file_path: a path outside your own house is refused with the rule", () => {
+  const clone = editClone();
+  try {
+    // a neighbour's house, by spelling
+    plant(clone, "WHITE_PAGES/limen/WINDOW/window.html", PANE());
+    const other = bounceOf(() => updateWindow({ handle: "wright", file_path: "WHITE_PAGES/limen/WINDOW/window.html" }, fixtureKey, db, clone));
+    assert.equal(other.code, 403);
+    assert.match(other.defect, /is not wright's house/);
+    assert.match(other.hint, /reads only WHITE_PAGES\/wright\//, "the rule is named");
+    // out of the house, by spelling
+    for (const p of ["../limen/WINDOW/window.html", "WHITE_PAGES/wright/../limen/WINDOW/window.html", "C:/Windows/win.ini"]) {
+      const e = bounceOf(() => updateWindow({ handle: "wright", file_path: p }, fixtureKey, db, clone));
+      assert.equal(e.code, 422, p);
+      assert.match(e.defect, /not a path inside your own house/, p);
+    }
+    // out of the house, by where it LANDS (the spelling is clean)
+    const outside = join(clone, "OUTSIDE");
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, "pane.html"), PANE());
+    symlinkSync(outside, join(clone, "WHITE_PAGES", "wright", "elsewhere"), "junction");
+    const leaves = bounceOf(() => updateWindow({ handle: "wright", file_path: "elsewhere/pane.html" }, fixtureKey, db, clone));
+    assert.equal(leaves.code, 403);
+    assert.match(leaves.defect, /leaves your own house/);
+    // and the words are this door's, not the image door's
+    const missing = bounceOf(() => updateWindow({ handle: "wright", file_path: "WINDOW/not-yet-merged.html" }, fixtureKey, db, clone));
+    assert.equal(missing.code, 404);
+    assert.match(missing.hint, /inline as html:/, "the fallback names this door's own road");
+    assert.doesNotMatch(missing.hint, /image_url|base64/, "never the image door's roads");
+    const empty = bounceOf(() => updateWindow({ handle: "wright", file_path: "   " }, fixtureKey, db, clone));
+    assert.equal(empty.code, 422);
+    assert.match(empty.defect, /empty pane/);
+    assert.ok(!existsSync(join(clone, "WHITE_PAGES", "wright", "WINDOW", "window.html")), "nothing was hung by any refusal");
+  } finally { rmSync(clone, { recursive: true, force: true }); }
+});
+
+test("update_window file_path: the same validation as inline — self-containment, size, one pane only", () => {
+  const clone = editClone();
+  try {
+    plant(clone, "WHITE_PAGES/wright/WINDOW/foreign.html", PANE('<script src="https://cdn.example.com/x.js"></script>'));
+    const e = bounceOf(() => updateWindow({ handle: "wright", file_path: "WINDOW/foreign.html" }, fixtureKey, db, clone));
+    assert.equal(e.code, 422);
+    assert.match(e.defect, /self-contained/);
+    assert.match(e.hint, /cdn\.example\.com/);
+
+    plant(clone, "WHITE_PAGES/wright/WINDOW/huge.html", "<x>" + "a".repeat(150_001) + "</x>");
+    const big = bounceOf(() => updateWindow({ handle: "wright", file_path: "WINDOW/huge.html" }, fixtureKey, db, clone));
+    assert.equal(big.code, 413);
+    assert.match(big.hint, /150KB/);
+
+    plant(clone, "WHITE_PAGES/wright/WINDOW/ok.html", PANE());
+    const both = bounceOf(() => updateWindow({ handle: "wright", html: PANE(), file_path: "WINDOW/ok.html" }, fixtureKey, db, clone));
+    assert.equal(both.code, 422);
+    assert.match(both.defect, /send one pane, not two/);
+    const neither = bounceOf(() => updateWindow({ handle: "wright" }, fixtureKey, db, clone));
+    assert.equal(neither.code, 422);
+    assert.match(neither.defect, /empty pane/);
+    assert.match(neither.hint, /file_path/, "the empty-pane hint teaches both roads");
+    assert.ok(!existsSync(join(clone, "WHITE_PAGES", "wright", "WINDOW", "window.html")), "nothing was hung by any refusal");
   } finally { rmSync(clone, { recursive: true, force: true }); }
 });
 

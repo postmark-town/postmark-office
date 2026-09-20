@@ -8,9 +8,11 @@
 # (MEEPS/worldkeeper/memory/topics/the-settlement.md, steps 4-5-8):
 #   fetch world main + every sketchbook to its exact remote tip · DRAIN the
 #   journal into those sketchbooks and deliver them · derive the town stakes at
-#   a pinned town read · run tools/settlement-sweep.mjs · run the world's FULL
-#   grammar suite on the result · and only on green, push main (ff-only) plus
-#   each rebased sketchbook under an explicit lease on the tip inspected. No
+#   a pinned town read · run tools/settlement-sweep.mjs · run the world's HARM
+#   GATE on the result (founder-ruled 2026-09-16: the crossing refuses only for
+#   what it did to residents) · and only on no harm, push main (ff-only) plus
+#   each rebased sketchbook under an explicit lease on the tip inspected · then
+#   run the grammar suite as a CHECKER whose red is a warning, not a hold. No
 #   lock is held: a door write landing mid-run makes a lease push FAIL SAFE
 #   (exit 2 — rerun; the keeper's caught-race-restart, mechanized) instead of
 #   making resident letters queue behind a long hold (the write-starvation
@@ -222,6 +224,7 @@ report() { # status detail
   SETTLEMENT_SWEEP_JSON="${SWEEP_JSON:-}" SETTLEMENT_DRAIN_JSON="${DRAIN_JSON:-}" \
   SETTLEMENT_RETIRE_JSON="${RETIRE_JSON:-}" \
   SETTLEMENT_ISOLATE_JSON="${ISOLATE_JSON:-}" SETTLEMENT_REFUSAL_JSON="${REFUSAL_JSON:-}" \
+  SETTLEMENT_HARM_JSON="${HARM_JSON:-}" SETTLEMENT_SUITE_JSON="${SUITE_JSON:-}" \
   SETTLEMENT_SOURCE_MODE="$SOURCE" SETTLEMENT_STORE_JSON="${STORE_JSON:-}" \
   SETTLEMENT_BY_HAND="$BY_HAND" \
   SETTLEMENT_GHOSTS="${GHOSTS:-}" SETTLEMENT_KEPT_UNDELIVERED="${KEPT_UNDELIVERED:-}" \
@@ -694,7 +697,7 @@ fi
 # to git: a receipt saying `source: store` over a git fold would be a worse lie
 # than a refused crossing, and the rollback is an operator's deliberate act
 # (`SETTLEMENT_SOURCE=git`), never something this script decides for itself at
-# 05:45Z with nobody watching.
+# 06:00Z with nobody watching.
 STORE_JSON=""
 DOCKET_JSON=""
 if [ "$SOURCE" = "store" ]; then
@@ -954,43 +957,54 @@ SWEEP_JSON="$WORK/sweep.json"
 # run own its residue whether or not the tests ever learn to.
 SUITE_TMP="$WORK/tmp"; mkdir -p "$SUITE_TMP"
 ISOLATE_JSON=""
-if ! (cd "$SWEEP" && TMPDIR="$SUITE_TMP" TMP="$SUITE_TMP" TEMP="$SUITE_TMP" npm test --silent) > "$WORK/suite.log" 2>&1; then
-  cp "$WORK/suite.log" "$OFFICE/settlement-last-suite.log" 2>/dev/null || true
-  # ── THE ISOLATION PASS (2026-08-27) ────────────────────────────────────────
-  # A red suite used to mean nobody settles. It now means: find out WHOSE mark
-  # did it. The isolator bisects the marks this crossing published, restoring
-  # subsets to their pre-sweep state and re-running the gate, until the suite is
-  # green with the smallest attributable set held back. If it finds one, that
-  # set is quarantined LOUDLY and the rest of the town settles. If it cannot
-  # attribute the red to any candidate — a machinery failure rather than a bad
-  # mark — the town still refuses, exactly as before.
-  if [ "${SETTLEMENT_ISOLATE:-1}" = "1" ]; then
-    ISOLATE_JSON="$WORK/isolate.json"
-    # Its stderr is deliberately NOT captured: the round-by-round narration is
-    # the shout, and it belongs in the unit's journal where an operator reading
-    # `journalctl -u postmark-settlement` finds it, not in a temp file that dies
-    # with the run.
-    if (cd "$SWEEP" && node tools/settlement-isolate.mjs \
-          --sweep "$SWEEP_JSON" --before "$WORK/before.json" --stakes "$WORK/stakes.json" --json) \
-        > "$ISOLATE_JSON"; then
-      # THE SWEEP REPORT IS NOW THE ISOLATOR'S WINNING CROSSING, not the first
-      # attempt's. Leaving the old one standing would make every channel in the
-      # receipt describe a crossing that never published.
-      node -e 'const fs=require("fs");const r=require(process.argv[1]);if(r.report)fs.writeFileSync(process.argv[2],JSON.stringify(r.report,null,2))' "$ISOLATE_JSON" "$SWEEP_JSON"
-      echo "[settlement-auto] QUARANTINED $(node -e 'const r=require(process.argv[1]);process.stdout.write(String((r.quarantined||[]).length)+" mark(s): "+(r.quarantined||[]).map(q=>q.id+" ("+q.household+")").join(", "))' "$ISOLATE_JSON") — the suite is green without them and the rest of the town settles" >&2
-    else
-      ISOLATE_JSON=""
-      report refused "grammar suite red and the isolation pass could not attribute it to a mark this crossing carried — a finding for the keeper, not a retry"
-      echo "[settlement-auto] SUITE RED, UNATTRIBUTABLE — publishing nothing" >&2
-      grep -E "^not ok" "$WORK/suite.log" >&2 || tail -40 "$WORK/suite.log" >&2
-      exit 1
-    fi
+# ── THE HARM GATE (founder-ruled 2026-09-16) ─────────────────────────────────
+#
+#   "A failed settlement should be a crisis. Under that definition we face
+#    crises almost every day. That's dangerous because that dilutes the urgency
+#    of a real crisis."
+#
+# So the crossing REFUSES only for what it did to residents: a mark moved or
+# lost with no act naming it, the sweep's word not matching the tree, a fold
+# that ran stampless, two parcels on one ground. The world's own gate says
+# which marks — `tools/harm-gate.mjs`, five data-shaped checks over the tree
+# the sweep produced against $WORLD_BASE, reading $SWEEP_JSON as the declared
+# acts; nothing in it compares today's world with August's, so nothing in it
+# needs a hand list. A red names the marks, so the ISOLATION PASS that used to
+# bisect a red suite has nothing left to attribute and is retired from this
+# chain (its tool stays in the world for now; `isolated` stays null on the
+# receipt). The grammar suite still runs — AFTER the push, as a checker, below.
+#
+# Until 2026-09-16 the suite WAS this gate, and the 17:45Z crossing that day
+# refused on a test's ledger of an August path while every resident's mark
+# stood exactly where it should. Two things exit 1 here: harm, named; and a
+# gate that could not run — exit 2 from the tool (no report, no fold), or no
+# tool at this world sha — which is never a pass.
+HARM_JSON="$WORK/harm.json"
+if [ ! -f "$SWEEP/tools/harm-gate.mjs" ]; then
+  HARM_JSON=""
+  report refused "the harm gate could not gate: world $(git -C "$SWEEP" rev-parse --short main 2>/dev/null) carries no tools/harm-gate.mjs — nothing measured, nothing published"
+  echo "[settlement-auto] HARM GATE COULD NOT GATE (no tools/harm-gate.mjs at this world sha) — publishing nothing" >&2
+  node "$OFFICE/deploy/settlement-escalate.mjs" --class harm --receipt "$OUT" >&2 || true
+  exit 1
+fi
+if (cd "$SWEEP" && node tools/harm-gate.mjs --repo "$SWEEP" --sweep "$SWEEP_JSON" --base "$WORLD_BASE" --stakes "$WORK/stakes.json" --json) > "$HARM_JSON" 2>"$WORK/harm.err"; then
+  echo "[settlement-auto] harm gate: NO HARM — $(node -e 'const r=require(process.argv[1]);process.stdout.write(r.checks.map(c=>c.name+(c.note?" ("+c.note+")":"")).join(" · "))' "$HARM_JSON" 2>/dev/null)" >&2
+else
+  HARM_RC=$?
+  cat "$WORK/harm.err" >&2
+  if [ "$HARM_RC" = "1" ] && [ -s "$HARM_JSON" ]; then
+    report refused "HARM NAMED — $(node -e 'const r=require(process.argv[1]);process.stdout.write(r.checks.filter(c=>!c.ok).map(c=>c.name+": "+c.rows.slice(0,3).join("; ")+(c.count>3?" … and "+(c.count-3)+" more":"")).join(" | "))' "$HARM_JSON" 2>/dev/null || echo 'see the receipt')"
+    echo "[settlement-auto] HARM NAMED — publishing nothing" >&2
   else
-    report refused "grammar suite red — a finding for the keeper, not a retry"
-    echo "[settlement-auto] SUITE RED — publishing nothing" >&2
-    grep -E "^not ok" "$WORK/suite.log" >&2 || tail -40 "$WORK/suite.log" >&2
-    exit 1
+    HARM_JSON=""
+    report refused "the harm gate could not gate: $(head -c 300 "$WORK/harm.err" | tr '\n"' ' .') — nothing measured, nothing published"
+    echo "[settlement-auto] HARM GATE COULD NOT GATE — publishing nothing" >&2
   fi
+  # A crisis reaches a person on the first occurrence (#2793's rule, kept).
+  # `|| true`: a crossing is never failed by its own alarm; the refusal above is
+  # already the finding.
+  node "$OFFICE/deploy/settlement-escalate.mjs" --class harm --receipt "$OUT" >&2 || true
+  exit 1
 fi
 
 # ── PUBLISHING MAIN, IN ONE PLACE ────────────────────────────────────────────
@@ -1142,6 +1156,32 @@ else
     "$RETIRE_JSON" "$([ "${SETTLEMENT_RETIRE:-1}" = "1" ] && echo "WORLD2_CLEARING_URL is unset — the crossing holds no store pen" || echo "SETTLEMENT_RETIRE=0")" 2>/dev/null || RETIRE_JSON=""
 fi
 
+# ── THE GRAMMAR SUITE, AFTER THE PUSH, AS A CHECKER (founder-ruled 2026-09-16) ─
+#
+# Everything the harm gate does not ask — the tier falsifier's August ledger,
+# the carve table, the region caution, the browser rigs, every hand list —
+# still runs here, over the tree that just published. A red is a WARNING: it
+# goes on the receipt (`suite.red`), it files an issue on the first occurrence
+# (settlement-escalate.mjs `suite-warning`), and it holds nothing — the world is
+# already on origin at this line, and the fix is a world pull request whose own
+# CI runs the same suite. `test:candle` is still the runner (postmark#2790): the
+# source pins stay on the pull request, where they always belonged.
+SUITE_JSON="$WORK/suite.json"
+if (cd "$SWEEP" && TMPDIR="$SUITE_TMP" TMP="$SUITE_TMP" TEMP="$SUITE_TMP" npm run test:candle --silent) > "$WORK/suite.log" 2>&1; then
+  node -e 'const fs=require("node:fs");fs.writeFileSync(process.argv[1],JSON.stringify({ran:true,red:false,reds:[],reds_total:0,log:null},null,1)+"\n")' "$SUITE_JSON" 2>/dev/null || SUITE_JSON=""
+  SUITE_WORD="suite green"
+else
+  cp "$WORK/suite.log" "$OFFICE/settlement-last-suite.log" 2>/dev/null || true
+  node -e 'const fs=require("node:fs");const log=fs.readFileSync(process.argv[2],"utf8");const reds=log.split(/\r?\n/).filter((l)=>/^not ok\b/.test(l));fs.writeFileSync(process.argv[1],JSON.stringify({ran:true,red:true,reds:reds.slice(0,40),reds_total:reds.length,log:"settlement-last-suite.log"},null,1)+"\n")' "$SUITE_JSON" "$WORK/suite.log" 2>/dev/null || SUITE_JSON=""
+  echo "[settlement-auto] SUITE WARNING — the town is published; the grammar suite went red after the push, and a person is told" >&2
+  grep -E "^not ok" "$WORK/suite.log" >&2 || tail -40 "$WORK/suite.log" >&2
+  SUITE_WORD="suite RED after the push — a warning, filed"
+fi
 report published "$(node -e 'const s=require(process.argv[1]);const n=(k)=>((s[k]||[]).length);process.stdout.write([n("published")+" published",n("unpublished")+" unpublished",n("left_drafted")+" left drafted",n("withdrawn")+" withdrawn",n("quarantined")+" quarantined",n("dropped")+" dropped"].join(", "))' "$SWEEP_JSON" 2>/dev/null || echo 'published')"
-echo "[settlement-auto] published: $WORLD_FROM -> $WORLD_TO (suite green, leases held)"
+if [ -n "$SUITE_JSON" ] && [ "$(node -e 'const r=require(process.argv[1]);process.stdout.write(String(r.red===true))' "$SUITE_JSON" 2>/dev/null)" = "true" ]; then
+  # after the receipt, so the issue quotes a receipt that says `published` with
+  # `suite.red: true` — a warning over a crossing that landed, in its own words
+  node "$OFFICE/deploy/settlement-escalate.mjs" --class suite-warning --receipt "$OUT" --suite-log "$WORK/suite.log" >&2 || true
+fi
+echo "[settlement-auto] published: $WORLD_FROM -> $WORLD_TO ($SUITE_WORD, leases held)"
 exit 0

@@ -17,7 +17,7 @@
 // Playwright is not a dependency of this repo — this is a HAND-RUN proof, not
 // a CI test. Point it at an install and at a viewer.mjs:
 //
-//   PLAYWRIGHT=file:///G:/Wright-HQ/node_modules/playwright/index.js \n//   VIEWER=file:///G:/Postmark/postmark-world/spectator/viewer.mjs \n//   SHOTS=. node deploy/svg-render-context-proof.mjs
+//   PLAYWRIGHT=file:///G:/Wright-HQ/node_modules/playwright/index.js \n//   VIEWER=file:///G:/Postmark/repo-clones/wright/postmark-world/spectator/viewer.mjs \n//   SHOTS=. node deploy/svg-render-context-proof.mjs
 
 import { createServer } from "node:http";
 import { writeFileSync } from "node:fs";
@@ -25,7 +25,7 @@ import { writeFileSync } from "node:fs";
 const pw = await import(process.env.PLAYWRIGHT ?? "playwright");
 const chromium = pw.chromium ?? pw.default?.chromium;   // the package is CJS
 
-const VIEWER = process.env.VIEWER ?? "file:///G:/Postmark/postmark-world/spectator/viewer.mjs";
+const VIEWER = process.env.VIEWER ?? "file:///G:/Postmark/repo-clones/wright/postmark-world/spectator/viewer.mjs";
 const { placedArtSVG } = await import(VIEWER);
 const PORT = 4885;
 const SHOTS = process.env.SHOTS ?? ".";

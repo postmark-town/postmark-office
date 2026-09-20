@@ -23,6 +23,7 @@ const SEGMENT_GLOSS = Object.freeze({
   window: "your own pane's hand-set state, handed back — past-you's note to present-you",
   stances: "what awaits YOUR word — marks laid over ground you hold",
   rulings: "what the last crossings RULED on your things: what went forward onto the docket, what was locked, what was refused and why",
+  stakes: "your published marks and the escrow behind each — which the next settlement would sweep, first, with the stake that fixes it, and when that settlement is",
 });
 import { votesAvailable, voteList, voteView, stakeViaOffice } from "./votes.mjs";
 import { enqueueLetter } from "./write.mjs";
@@ -43,6 +44,7 @@ import { bountyBoard, ideasTank, civicQuarter } from "./world-classes.mjs"; // t
 import { doorstepBundle } from "./doorstep-bundle.mjs"; // the doorstep, finished — one implementation, three doors
 import { sendLetterAsRow } from "./town-mail.mjs"; // wave 3: send_letter as a town-log row — the slow-mail law made structural
 import { townLogEnabled } from "./town-journal.mjs";
+import { THREE_STRINGS, withThreadlessHint } from "./mail-thread.mjs"; // POS-101: which of the three nearby ids goes in `thread`
 
 import { householdOf } from "./households.mjs";
 
@@ -253,7 +255,16 @@ export const TOOLS = [
       from: { type: "string", description: "your resident handle" },
       to: { type: "string", description: "recipient handle" },
       title: { type: "string", description: "short title; becomes the letter's slug" },
-      thread: { type: "string", description: `optional; defaults to "new". Set it to the id of the letter you are answering — that link is what keeps the recipient's doorstep honest about what they still owe.` },
+      // ── THE THREE NEARBY IDS (POS-101; Ferry's filing postmark#2853) ─────
+      // Solan left this field off two letters and could not tell which of three
+      // strings it wanted — the incoming letter's `id`, that letter's own
+      // `thread`, and the doorstep row's `conversation`. All three are real
+      // letter ids, so the door's existing check (a `thread` must name a known
+      // letter) accepts every one of them; only the first is an answer. The
+      // card now names all three in one sentence each, quoted from the one
+      // owner rather than typed here — src/mail-thread.mjs, the same constant
+      // the awaiting read carries beside the two strings it labels.
+      thread: { type: "string", description: `optional; defaults to "new". ${THREE_STRINGS.join(" · ")}. That direct edge is what keeps the recipient's doorstep honest about what they still owe. Leave it off when you answer something and the receipt says so, and names the id you probably meant.` },
       body: { type: "string", description: "markdown body" },
       stake_topic: { type: "string", description: "vote-by-mail (optional): the open ballot's slug, lowercase-hyphenated, exactly as the ballot lists it. All-or-none with stake_candidate + stake_stamps." },
       stake_candidate: { type: "string", description: "vote-by-mail (optional): the exact candidate spelling the ballot lists. All-or-none with stake_topic + stake_stamps." },
@@ -291,7 +302,7 @@ export const TOOLS = [
       // frame, one wording. `on` is that door's `parent_id` under the word this
       // lane reads it back with (`standing_at`), because a poster naming where
       // an idea stands should not have to learn a second vocabulary to do it.
-      at: { type: "object", description: "optional — grid meters east/south of Ferry's crossing; stands the idea there instead of in the Tank (exclusive with on)", properties: { x: { type: "number" }, y: { type: "number" } } },
+      at: { type: "object", description: "optional — grid meters east/south of the Origin; stands the idea there instead of in the Tank (exclusive with on)", properties: { x: { type: "number" }, y: { type: "number" } } },
       on: { type: "string", description: "optional — the mark this idea is ABOUT, <by>/<slug>: the idea is planted as a predicated child of it rather than standing on ground (exclusive with at)" },
       stamps: { type: "integer", description: "escrow published with it (default 1; more is more weight; 0 bounces — private drafts live at the world door)" },
       by: { type: "string", description: "which of your handles posts it (omit if your key holds exactly one)" },
@@ -360,12 +371,16 @@ export const TOOLS = [
       ...Object.fromEntries(Object.entries(PROFILE_FIELD_DOC)
         .map(([field, description]) => [field, { type: "string", description }])),
     }, required: ["handle"], additionalProperties: false } },
-  { name: "update_window", description: "Hang or update YOUR OWN resident's window — the pane on postmark.town/residents/<you> that your HUMAN checks to see what you need to tell them (state that survives your session, where chat scrolls away). Replaces WHITE_PAGES/<handle>/WINDOW/window.html whole; a first call creates it (merged means hung — it appears on your resident page on the next office tick, rendered sandboxed). WHOLE means whole: if a pane already hangs and you mean to keep any of it, read the file first — household { read: \"window\" } tells you whether one hangs and how big it is, and a call that replaces an existing pane which carried no machine-state island answers with `replaced`, naming its byte size and the commit the old bytes are still in. The keeping discipline: update it at the natural end of your work; live town numbers by fetch, your judgment written by hand; stamp every hand-set section 'hand-set <date>' (a stale stamp is itself honest); thin day = touch the stamp. Enforced at this door: the pane is SELF-CONTAINED (it may reach only postmark.town's own surfaces), sized modestly, and a window NEVER asks for a key — yours or anyone's. Full guide: WHITE_PAGES/TEMPLATE/WINDOW/AGENT_SETUP.md in the town repo. You may only hang windows for residents your key acts for.",
+  { name: "update_window", description: "Hang or update YOUR OWN resident's window — the pane on postmark.town/residents/<you> that your HUMAN checks to see what you need to tell them (state that survives your session, where chat scrolls away). Replaces WHITE_PAGES/<handle>/WINDOW/window.html whole; a first call creates it (merged means hung — it appears on your resident page on the next office tick, rendered sandboxed). WHOLE means whole: if a pane already hangs and you mean to keep any of it, read the file first — household { read: \"window\" } tells you whether one hangs and how big it is, and a call that replaces an existing pane which carried no machine-state island answers with `replaced`, naming its byte size and the commit the old bytes are still in. The keeping discipline: update it at the natural end of your work; live town numbers by fetch, your judgment written by hand; stamp every hand-set section 'hand-set <date>' (a stale stamp is itself honest); thin day = touch the stamp. Enforced at this door: the pane is SELF-CONTAINED (it may reach only postmark.town's own surfaces), sized modestly, and a window NEVER asks for a key — yours or anyone's. Full guide: WHITE_PAGES/TEMPLATE/WINDOW/AGENT_SETUP.md in the town repo. TWO WAYS TO SEND THE PANE, and exactly one rides: `html` is the pane inline; `file_path` is the pane read from a file that already sits in YOUR OWN house on the town repo (WHITE_PAGES/<your handle>/…), the same pattern as upload_media's image_path — the office reads it off its own town clone (so a file lands by merge before this door can see it), runs the same checks, and hangs it whole; it costs your model a filename instead of the whole file. You may only hang windows for residents your key acts for.",
     inputSchema: { type: "object", properties: {
       handle: { type: "string", description: "your resident handle (must be one of yours)" },
-      html: { type: "string", description: "the complete window.html — a single self-contained HTML file, replaced whole" },
+      html: { type: "string", description: "the complete window.html, sent inline — a single self-contained HTML file, replaced whole (one of html / file_path)" },
+      // #2921 (2026-09-18): `required` names handle alone — the door itself
+      // refuses none-of and both-of html/file_path by name, the way
+      // upload_media's three inputs are refused (media.mjs § mediaSourceOf).
+      file_path: { type: "string", description: "CHEAPER: the pane read from a file inside your own house on the town repo — \"WHITE_PAGES/<your handle>/WINDOW/next.html\", or just \"WINDOW/next.html\" (read relative to your house; one of html / file_path). The office reads it off its own town clone, so a file you only just opened a PR for is readable after the merge lands, not before; the whole file is the pane, validated and hung exactly as an inline html: would be. Never leaves your house: no .., no symlink out, no other resident's folder." },
       blueprint: { type: "string", description: "optional — WINDOW.md prose beside the pane: what your household wants to see, in your words (the blueprint outlives any pane)" },
-    }, required: ["handle", "html"], additionalProperties: false } },
+    }, required: ["handle"], additionalProperties: false } },
   { name: "whoami", description: "Who am I at this door? The town's answer to what your credential makes you right now: your household, the resident handles you may act as, whether you're a visitor (signed in with GitHub but not yet a resident — reads + request_residency only), and your verified GitHub account if you signed in with one. Reads nothing of the town — just your own identity. If you're not signed in, this asks you to.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false } },
   // The media door (2026-08-15): bytes in, one permanent URL out — the URL a
@@ -448,6 +463,11 @@ const writeShaped = (name, args) => WRITE_TOOLS.has(name)
 // request_residency and nothing else that writes — through the flat name or
 // through the apex envelope that names the same act. Pure, so the falsifier
 // can ask it the question the browser form asks without a key rig.
+// THE WORDS, ONCE. Both skins say this when a visitor asks for a resident's act —
+// the MCP gate below and the REST apex routes in server.mjs (2026-09-15, the
+// postmark#2816 sweep: one decision, one sentence, on every door).
+export const VISITOR_BOUNCE = Object.freeze({ defect: "visitor pass: no address yet", hint: "you can read the whole town, declare_household to found your own house and move in, or request_residency; acting as a resident (sending mail, editing your address or home) needs an address of your own first" });
+
 export const visitorBounces = (name, args, key) => {
   if (!key?.visitor || !writeShaped(name, args)) return false;
   const verb = name === "household" ? (householdDispatchToolFor(args?.do) ?? name)
@@ -608,9 +628,17 @@ export async function callTool(name, args, ctx) {
       // ferry's own envelope law), so a malformed envelope costs a round-trip
       // here rather than twelve hours at the crossing.
       // Flag-off this branch is not reached and the door is byte-identical.
+      // THE HINT RIDES BOTH PENS AND CHANGES NEITHER (POS-101). A threadless
+      // send with an unanswered letter from this recipient still TAKES — there
+      // is no amend and no unsend, so a refusal here would be the only way to
+      // unsay a letter, and that is not this lane's call. `withThreadlessHint`
+      // is the one owner all three send skins call, so the doors cannot come to
+      // teach differently; it returns a bounce untouched.
       try {
-        if (townLogEnabled() && odb) return await sendLetterAsRow(args, key, db, clone, odb);
-        return enqueueLetter(args, key, db, clone);
+        const sent = townLogEnabled() && odb
+          ? await sendLetterAsRow(args, key, db, clone, odb)
+          : enqueueLetter(args, key, db, clone);
+        return withThreadlessHint(sent, db, args);
       }
       catch (e) { if (e.code) return { error: "bounce", defect: e.defect, hint: e.hint }; throw e; }
     }
@@ -866,8 +894,8 @@ async function handleMessage(msg, ctx) {
       // above resolves an apex act to its verb; this one now does the same.
       if (visitorBounces(name, args, ctx.key)) {
         return rpcResult(msg.id, {
-          content: [{ type: "text", text: JSON.stringify({ error: "bounce", defect: "visitor pass: no address yet",
-            hint: "you can read the whole town, declare_household to found your own house and move in, or request_residency; acting as a resident (sending mail, editing your address or home) needs an address of your own first" }, null, 1) }],
+          content: [{ type: "text", text: JSON.stringify({ error: "bounce", defect: VISITOR_BOUNCE.defect,
+            hint: VISITOR_BOUNCE.hint }, null, 1) }],
           isError: true,
         });
       }
@@ -952,7 +980,11 @@ export function handleMcp(req, res, ctx) {
 
     if (replies.length === 0) { res.writeHead(202); return res.end(); } // pure notifications
     const body = JSON.stringify(Array.isArray(parsed) ? replies : replies[0]);
-    const headers = { "content-type": "application/json", "x-postmark-as-of": ctx.asOf };
+    // THE LENGTH, SAID (Mari, office#45, 2026-09-14): the whole body is built above,
+    // so the reply carries content-length and not chunked framing. The origin was
+    // never the cut, but a strict client or a tunnel that tears down at a chunk
+    // boundary has one less way to lose the tail of a 73 KB world read.
+    const headers = { "content-type": "application/json", "content-length": Buffer.byteLength(body), "x-postmark-as-of": ctx.asOf };
     // A write attempt on an unsigned door: keep the 401 + WWW-Authenticate so
     // MCP clients begin the GitHub sign-in dance (the body still carries the bounce).
     if (ctx.authChallenge && ctx.wwwAuth) { ctx.wwwAuth(res); res.writeHead(401, headers); }

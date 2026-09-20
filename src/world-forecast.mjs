@@ -33,13 +33,22 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { foldedStateAtRef, mainRef, readJsonAtRef } from "./world-branches.mjs";
 
-// The sweep's own clock: deploy/postmark-settlement.timer — OnCalendar 05:45 and
-// 17:45 UTC, "ahead of the Worldkeeper's 06:00/18:00 heartbeats".
+// The sweep's own clock: deploy/postmark-settlement.timer — OnCalendar 06:00 and
+// 18:00 UTC, on the dot (POS-80, the founder 2026-09-14: "make it 6 and 18 UTC
+// on the dot"; the law is world `LOGOS/classes.md § crossing ②`, amended by
+// postmark-world#96: "S1, S2, … at 06:00 and 18:00 UTC from the w39 ship
+// (2026-09-21), 05:45 and 17:45 UTC until then"). This constant read 05:45/17:45
+// until 2026-09-18 — the timer in this same tree had moved to 06:00/18:00 on
+// 2026-09-17 (commit 1095279) and nothing bound the two — so every forecast's
+// `at` and, from today, the doorstep's stakes segment would have named a
+// settlement fifteen minutes before the one that runs. One clock, read by both
+// (postmark#2919 found it; the stakes segment is its second reader).
 //
 // NOT write.mjs's `nextCrossing`, which is the MAIL ferry at 00:00Z/12:00Z. Two
 // crossings on two clocks; a weight lands at this one. Reusing the ferry's helper
 // would have put a plausible, wrong time on every forecast.
-const SETTLEMENTS_UTC = [[5, 45], [17, 45]];
+export const SETTLEMENTS_UTC = Object.freeze([[6, 0], [18, 0]]);
+export const SETTLEMENT_CLOCK = "the keeper's settlement, 06:00/18:00Z (the sweep's own timer) — not the ferry's 00:00/12:00Z crossing, and not the candle's window";
 
 export function nextSettlement(now = new Date()) {
   for (const day of [0, 1]) {

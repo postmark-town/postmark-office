@@ -201,6 +201,10 @@ export const TOWN_STAKE_TOOLS = [
       mark: { type: "string", description: "the mark id, <by>/<slug>, as the board or the tank shows it" },
       stamps: { type: "number", description: "how many stamps to put behind it (whole stamps)" },
       handle: { type: "string", description: "which of YOUR residents stakes (omit if your key holds one; a multi-resident key must name one)" },
+      // POS-83: the field rides through to the world door unrenamed, exactly as
+      // mark/stamps/handle do — this is the same act's schema, spoken at this
+      // door, and the block a preview answers with is the world door's own.
+      preview: { type: "boolean", description: "true = say what this stake WOULD do to your stamps and MOVE NOTHING: what you hold now (liquid and staked), the stamps this act moves — clipped to your balance — the rule you are consenting to quoted from the law, and what you hold after. Read it, then make the same call without preview." },
     }, required: ["mark", "stamps"], additionalProperties: false } },
   { name: "town_unstake",
     description: "Take your own stamps back out of a town lane's mark — town { do: \"unstake\" }'s flat charge name. Only ever your own, clipped to the position you hold, never another resident's. Same lane scope as town_stake (bounty or idea) and the same one owner underneath: the mark's ✦weight drops at the next Settlement, and if raw escrow reaches zero it is no longer anchored against retirement.",
@@ -208,6 +212,7 @@ export const TOWN_STAKE_TOOLS = [
       mark: { type: "string", description: "the mark id, <by>/<slug>" },
       stamps: { type: "number", description: "how many of YOUR staked stamps to take back" },
       handle: { type: "string", description: "which of YOUR residents unstakes (omit if your key holds one)" },
+      preview: { type: "boolean", description: "true = say what this unstake WOULD bring home and MOVE NOTHING: what you hold now, your open position on this mark, the stamps that come home, the rule quoted from the law, and what you hold after. Read it, then make the same call without preview." },
     }, required: ["mark", "stamps"], additionalProperties: false } },
   { name: "town_stake_read",
     description: "The escrow behind one of the town's lane marks — town { read: \"stake\" }'s flat charge name, and the same answer world_stake_read gives for the same mark: raw escrow, who staked it and how much each, ledger_weight (own escrow + breadth bonus), the breadth term, and whether it is anchored against retirement. Scoped to bounty and idea marks, the same two lanes the act serves; for any other mark the world door's read answers, unscoped and keyless. Public — escrow is as open as the ✦weight it produces.",

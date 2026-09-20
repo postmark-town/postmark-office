@@ -57,6 +57,10 @@ import { materializeClaims, recomputeStanding, slugOf, ownerHouseholdFor } from 
 // The escrow PRESENCE gate — the sweep's own rule, ported to the candle before
 // G1 deletes the path it lives on. See step 5.5.
 import { escrowAbsentAmong, escrowPresenceAt, escrowLines } from "./escrow-presence.mjs";
+// THE PARCEL CAP — the sweep's own gate, ported to the candle before the sweep
+// has to be the one to say no. The law itself is the WORLD's and is imported
+// from a checkout, never copied. See step 5.6.
+import { parcelCapLawAt, parcelCapRefusals, parcelCapLines, heldParcelsByCred } from "./parcel-cap.mjs";
 import { computeStanding, gistContainment } from "./standing.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -64,7 +68,18 @@ const arg = (n) => { const i = process.argv.indexOf(n); return i === -1 ? null :
 const has = (n) => process.argv.includes(n);
 
 const windowId = Number(arg("--window"));
-if (!Number.isInteger(windowId)) { console.error("usage: clearing-job.mjs --window <N> [--town-repo <checkout>] [--dry-run]"); process.exit(2); }
+if (!Number.isInteger(windowId)) { console.error("usage: clearing-job.mjs --window <N> [--town-repo <checkout>] [--world-repo <checkout>] [--dry-run]"); process.exit(2); }
+// THE WORLD CHECKOUT THE PARCEL CAP IS READ FROM, by argument and not by env.
+//
+// `WORLD_CLONE` lives in /etc/postmark-office.env and this unit does not read
+// that file — measured on the box: postmark-world2-clearing.service carries
+// EnvironmentFile=/etc/postmark-world2-dev.env and -/etc/postmark-world2-clearing.env
+// and one Environment= line (WORLD2_OFFICE). So an env key would have been
+// silently absent, and a cap gate that silently does not run is worse than no
+// cap gate at all. The runner passes the lab's own ingest clone, exactly as it
+// already passes --town-repo, and exactly as the notary already hands
+// falsifier-canon-locks.mjs a --world-repo.
+const worldRepo = arg("--world-repo");
 if (!process.env.WORLD2_CLEARING_URL) { console.error("WORLD2_CLEARING_URL missing (role clearing_job)"); process.exit(2); }
 
 // ── first step: the stamp ingest (census amendment), its own pen ─────────────
@@ -296,6 +311,83 @@ try {
     }
   }
 
+  // 5.6 · THE PARCEL CLAIM CAP — the sweep's gate, asked at the close (POS-98).
+  //
+  //     THE INSTANCE: window 191 cleared and LOCKED `mari/marigold-house-parcel`
+  //     at 2026-09-15T17:45:46Z. The sweep, three minutes later, refused it —
+  //     the cap counts per credential household, hers resolves to the founder's,
+  //     and that one held five. The store stood the parcel while canon lacked
+  //     it, and every crossing since has carried it forward as canon-absent
+  //     ("CARRIED 1 canon-absent mark(s) from earlier window(s):
+  //     mari/marigold-house-parcel", windows 192, 193, 194 on the box).
+  //
+  //     Two gates, two answers. The candle admitted what the sweep would refuse
+  //     because steps 1-5.5 above ask about slugs, supersession, escrow and
+  //     geometry, and none of them counts a household's parcels.
+  //
+  //     LAST OF THE GATES, deliberately. A claim already refused for overlap or
+  //     held for a counterclaim must not consume a household's headroom — it is
+  //     not getting ground this window either way, and spending the cap on it
+  //     would refuse a sibling claim that should have stood.
+  //
+  //     THE SWEEP'S OWN CHECK IS UNTOUCHED. It stays as the gate of last resort:
+  //     this side reads the store and the sweep reads the tree, and the day they
+  //     disagree the conservative one is the one that should win.
+  //
+  //     AND IT DEGRADES LOUDLY RATHER THAN EITHER WAY SILENTLY — the same shape
+  //     step 5.5 above already argues for itself. Without `--world-repo` (or with
+  //     a checkout that cannot answer) the cap is reported UNCHECKED and parcel
+  //     claims lock as they did before this step existed. It is not read as "the
+  //     cap is 0", which would refuse every parcel in the town on a missing
+  //     argument, and it is not silent: the crossing prints it and the window's
+  //     receipt carries it. (If the conductor would rather the crossing REFUSE
+  //     while it cannot check, that is this block's `unchecked` arm and one throw.)
+  let capSeen = null;
+  {
+    const parcels = pending.filter((c) => !outcomes.has(c.id) && c.class === "parcel" && slugOf(c));
+    if (parcels.length) {
+      let law = null;
+      let why = null;
+      if (!worldRepo) why = "no --world-repo was given, so the world's cap could not be read";
+      else {
+        try { law = await parcelCapLawAt(worldRepo); }
+        catch (err) { why = err.message; }
+      }
+      if (!law) {
+        capSeen = { checked: false, reason: why, claims: parcels.map((c) => slugOf(c)) };
+        console.log(`  ⚑ parcel cap: ${parcels.length} parcel claim(s) LOCKED UNCHECKED — ${why}`);
+      } else {
+        const heldByCred = await heldParcelsByCred(q);
+        const candidates = [];
+        for (const c of parcels) {
+          candidates.push({
+            id: c.id, slug: slugOf(c),
+            cred: await ownerHouseholdFor(q, c.claimant),
+            // The RECORD's own date, which is what the fold compares against the
+            // law date — never `submitted_at`. The drain queue dates a parcel at
+            // seating and the two are different facts; the exceptions map exists
+            // precisely because they can disagree.
+            date: c.data?.date ?? null,
+            // An amendment of a parcel the household already holds is a
+            // relocation, not a second claim (POS-88, and marks-fold.mjs's own
+            // `!mk._replacing`). Step 1 above already resolved which claims those
+            // are, into `amends`.
+            amending: amends.has(String(c.id)),
+          });
+        }
+        const verdict = parcelCapRefusals(candidates, { heldByCred, law });
+        capSeen = {
+          checked: true, cap: law.cap, law_date: law.lawDate, world_sha: law.sha,
+          refused: verdict.refused.map((r) => ({ slug: r.slug, held: r.held })),
+          excepted: verdict.admitted.filter((a) => a.excepted).map((a) => a.slug),
+          judged: candidates.length,
+        };
+        for (const r of verdict.refused) decide(r.id, "refused", r.check);
+        for (const line of parcelCapLines(verdict, law)) console.log(`  ⚑ ${line}`);
+      }
+    }
+  }
+
   // 6 · everything still undecided LOCKS and materializes. The materialization
   //     itself is `materialize.mjs`'s — the same code the REVIEW lane's ruling
   //     runs, so a mark that arrives by a mind's ruling and one that arrives by
@@ -372,6 +464,12 @@ try {
       // crossing that locked commons claims unchecked must say so on the record
       // and not only on a console nobody kept.
       ...(escrowSeen ? { escrow_presence: escrowSeen } : {}),
+      // THE PARCEL CAP's own account, including the crossing that could not ask
+      // it. Same rule as the escrow gate one line up: a window that locked parcel
+      // claims unchecked must say so on the record and not only on a console
+      // nobody kept. `world_sha` is here because a gate that refuses a resident's
+      // ground has to name the law-as-of it refused against.
+      ...(capSeen ? { parcel_cap: capSeen } : {}),
       standing: {
         recomputed: standing.length, moved: moved.length,
         // Capped, because the receipt is evidence and not an export: the first

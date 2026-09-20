@@ -33,6 +33,11 @@
 // itself takes a world and a ledger. That is what lets the walkers door (ledger
 // departures, read at main) and the presence layer (governing departures, read
 // from the dynamic store) share one answer without sharing a source.
+//
+// The one import below is a pure sibling and holds that law: `groundless.mjs`
+// is constants and two shape functions, no fs, no git, no engine.
+
+import { isGroundlessDefault, atOrigin } from "./groundless.mjs"; // the Origin is where the groundless stand (#2900)
 
 /**
  * WHO TO ASK ABOUT: everyone with a walk on record, plus every household
@@ -79,7 +84,26 @@ export function positionRoster({ departures = [], world = null, roll = [] } = {}
  */
 export function everyonePlaced({ world = null, departures = [], at, where = null, roll = [] } = {}) {
   if (typeof where?.publicResidents !== "function") return [];
-  return where.publicResidents(positionRoster({ departures, world, roll }), { world, departures, at });
+  const rows = where.publicResidents(positionRoster({ departures, world, roll }), { world, departures, at });
+  // ── ONE STANDPOINT FOR THE GROUNDLESS (#2900, ruled 2026-09-17) ───────────
+  //
+  // The roll is what finally put the question — and the engine answered it with
+  // the porch, so the third term the union gained placed all 28 of them at the
+  // quay. The founder ruled the Origin: "a groundless resident stands at the
+  // Origin everywhere the office answers the question."
+  //
+  // THE CORRECTION BELONGS HERE, in the file whose whole subject is that one
+  // question must not have two derivations that disagree. `presence` and
+  // `world_walkers` are both downstream of this line, so they move together; a
+  // fix in `dynamic-presence.mjs` would have moved presence alone and left the
+  // walkers door answering the quay — manufacturing, one layer down, the exact
+  // split-brain this file was written to end.
+  //
+  // It is a MAP over the engine's rows, not a second derivation: `whereIs` still
+  // decides who is placed and who is moving and where a walker is, and only the
+  // rows it labelled with its own groundless default are rewritten. A resident
+  // with ground reads `parcel` and passes through untouched.
+  return rows.map((r) => (isGroundlessDefault(r) ? atOrigin(r) : r));
 }
 
 /**

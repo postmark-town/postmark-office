@@ -178,6 +178,95 @@ export async function vesselPositionAt(worldState, atMs = Date.now(), { repo = W
   };
 }
 
+// ── ABOARD BY OCCUPANCY, NOT BY GEOMETRY (#2986, Keemin-ruled 2026-09-19) ────
+//
+// THIS IS WHAT § 7 RETIRES, and it is worth being exact about what survives.
+// The frame law above still decides where you stand when you LEAVE a thing that
+// carries things — a keystone riding a house, a held lantern riding its holder,
+// an attachment riding the hull. What it stops deciding is THE PASSENGER CASE.
+//
+// The frame law's answer to "is this resident aboard" is `foldFrames`: your
+// endpoint at arrival landed inside her footprint. Keemin's ruling 1 —
+// "decouple the geometric movement of the Post Office from the residents'
+// ability to ride it" — makes that answer unreachable for a rider by
+// construction: you enter through a wharf a hundred kilometres from her hull,
+// your walk record ends at that wharf, and no fold over your departures will
+// ever put you inside her. So the question moves to the record that actually
+// knows: the enter-exit ledger, which is the office's one answer to "what are
+// you inside" and has been since the pair shipped.
+//
+//   "wherever a resident boards … they can take it to their destination at Post
+//    Office speed as if it was going directly there"
+//   "we need the residents sitting still in a Post Office interior"
+//
+// So: your standpoint IS the hull's, you are not moving (nothing you declared is
+// in progress — the timer is not a leg), and THERE IS NO INTERPOLATION TOWARD
+// THE DESTINATION. That last one is not an omission; it is ruling 6 falling out
+// of one branch. A lobby has no intermediate points.
+
+/** Does this world hold a mark of the vehicle class? The cheap gate, off the
+ *  fold, asked before anything reads a ledger — so an office in a world with no
+ *  vehicle pays nothing for this seam at all. */
+export const VEHICLE_CLASS = "vehicle";
+// Memoized on the MARKS ARRAY, the same key `_services` above uses and for the
+// same reason: `world.mjs` hands out the same array object until it rebuilds the
+// fold, so the answer is exactly as fresh as the world it was derived from and
+// costs nothing to invalidate. It matters because this gate sits in front of
+// every standpoint read and every telling — a 1,200-mark scan per call would be
+// a tax on a question whose answer changes once a settlement.
+const _hasVehicle = new WeakMap();
+export const worldHasVehicle = (worldState) => {
+  const marks = worldState?.marks;
+  if (!Array.isArray(marks)) return false;
+  const cached = _hasVehicle.get(marks);
+  if (cached !== undefined) return cached;
+  const has = marks.some((m) => String(m?.class ?? "") === VEHICLE_CLASS && m?.kind !== "class" && m?.subkind !== "class");
+  _hasVehicle.set(marks, has);
+  return has;
+};
+
+/** The vehicle a stack of occupancy puts this entity inside, or null. Pure. */
+export function vehicleWithin(stack = [], worldState = null) {
+  const byId = new Map((worldState?.marks ?? []).map((m) => [m.id, m]));
+  for (const id of [...(stack ?? [])].reverse()) {
+    const m = byId.get(id);
+    if (m && String(m.class ?? "") === VEHICLE_CLASS) return id;
+  }
+  return null;
+}
+
+/**
+ * The standpoint of a resident whose occupancy says they are inside a vehicle —
+ * the hull's position, or null when they are not.
+ *
+ * `stack` is the occupancy chain, outermost first (enter-exit.mjs §
+ * occupancyAt's own order). The caller reads it; this composes, which is the
+ * same split `positions.mjs` keeps between deriving a frame and applying one.
+ */
+export async function vehicleStandpoint(handle, worldState, { repo = WORLD_CLONE, atMs = Date.now(), stack = [] } = {}) {
+  const vessel = vehicleWithin(stack, worldState);
+  if (!vessel) return null;
+  const { service, mod } = await vesselServiceFrom(worldState, { repo });
+  // A vehicle whose body this world's timetable does not move has no derived
+  // position, and answering one from her static anchor would be a photograph of
+  // a boat — the exact failure the frame law's own header catalogues.
+  if (!service || !mod || service.vessel?.markId !== vessel) return null;
+  const v = await vesselPositionAt(worldState, atMs, { repo });
+  if (!v) return null;
+  return {
+    handle, x: v.x, y: v.y, placed: true,
+    source: "vehicle",
+    // SITTING STILL. `moving` means "a leg you declared is still in progress",
+    // and a rider has declared no leg — the ride is a timer, not a road. The
+    // HULL may be under way, and `provenance` is where that is said.
+    moving: false, remaining_m: 0,
+    aboard: true, frame: vessel, frame_offset: { x: 0, y: 0 },
+    provenance: v.moving ? "carried" : "aboard",
+    narration: `aboard ${vessel}${v.moving ? ", under way on her timetable" : `, alongside${v.atStop ? ` at ${v.atStop}` : ""}`}`,
+    mark_id: vessel, vehicle: vessel,
+  };
+}
+
 // ── the store's own movement record ──────────────────────────────────────────
 
 /**

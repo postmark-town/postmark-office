@@ -8,7 +8,7 @@
 //   node tools/preview-deploy.mjs <branch> [options]
 //
 // Options:
-//   --site <path>      town site clone   (default: G:/postmark/site — keeminlee/postmark-site since the P3 flip 2026-07-27)
+//   --site <path>      town site clone   (default: G:/Postmark/repo-clones/wright/site — keeminlee/postmark-site since the P3 flip 2026-07-27)
 //   --worktree <path>  throwaway build dir (default: G:/pmprev-wt) — SHORT on purpose
 //   --host <ssh>       box ssh alias     (default: meepo-ec2)
 //   --webroot <path>   box preview root  (default: /var/www/postmark-preview)
@@ -59,7 +59,7 @@ const flag = (name) => argv.includes(`--${name}`);
 const branch = argv.find((a) => !a.startsWith("--") && argv[argv.indexOf(a) - 1] !== "--site"
   && argv[argv.indexOf(a) - 1] !== "--worktree" && argv[argv.indexOf(a) - 1] !== "--host"
   && argv[argv.indexOf(a) - 1] !== "--webroot");
-const SITE = opt("site", "G:/postmark/site"); // keeminlee/postmark-site — the extraction moved the town here (P3 flip 2026-07-27)
+const SITE = opt("site", "G:/Postmark/repo-clones/wright/site"); // keeminlee/postmark-site — the extraction moved the town here (P3 flip 2026-07-27)
 const WT = opt("worktree", "G:/pmprev-wt");
 const HOST = opt("host", "meepo-ec2");
 const WEBROOT = opt("webroot", "/var/www/postmark-preview");

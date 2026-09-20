@@ -37,6 +37,15 @@ const ACCESS_TTL_S = 30 * 24 * 3600;  // 30d (Keemin's word, 2026-08-12 — the 
 const REFRESH_TTL_S = 60 * 24 * 3600; // 60d
 const CODE_TTL_S = 120;
 const PENDING_TTL_S = 600;
+// THE MANUAL FINISH (#2764 friction 3). A shell agent with no browser and no
+// loopback listener can run discovery, registration and the PKCE authorize
+// from a bare shell — and then the consent's last redirect goes to a
+// 127.0.0.1 port nobody is holding open. A client that registers this
+// out-of-band redirect instead is told, at consent, the code ON THE PAGE, once,
+// for its human to paste back; the exchange at /oauth/token is the same PKCE
+// exchange as every other client's. Nothing about how a token is issued, how
+// long it lives, or the PKCE floor moves: only where the code is shown.
+const OOB_REDIRECT = "urn:ietf:wg:oauth:2.0:oob";
 
 const now = () => Math.floor(Date.now() / 1000);
 const rand = (n = 32) => randomBytes(n).toString("base64url");
@@ -532,6 +541,14 @@ export function claimLookup(odb, db, clone, token) {
 
 // ── html bits (one screen each, town-voiced, no ceremony) ────────────────────
 
+// EVERY NAME THE OFFICE DID NOT CHOOSE IS ESCAPED BEFORE IT REACHES A PAGE. A
+// client_name comes from dynamic registration (anyone, ten an hour), a berth's
+// declared household and card from the agent at the quay, a login from GitHub's
+// answer — all rendered to a human on the postmark.town origin at consent. A
+// `<img onerror>` in any of them ran there (Wright's review of #97). Escaped at
+// the interpolation, never at the store: what is kept is what was said.
+const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
 const page = (title, body) => `<!doctype html><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${title}</title>
@@ -598,7 +615,7 @@ const asMetadata = () => ({
 // Paths as the OFFICE sees them (nginx strips /api for /api/*; the well-known
 // locations proxy verbatim, so both path-inserted and bare forms are served).
 
-export async function handleOauth(req, res, ctx) {
+async function handleOauthRoute(req, res, ctx) {
   const { odb, db, clone } = ctx;
   const url = new URL(req.url, "http://localhost");
   const path = url.pathname.replace(/\/+$/, "") || "/";
@@ -622,8 +639,8 @@ export async function handleOauth(req, res, ctx) {
     const body = parseForm(await readBody(req), req.headers["content-type"]);
     const redirectUris = Array.isArray(body.redirect_uris) ? body.redirect_uris.filter((u) => typeof u === "string") : [];
     if (!redirectUris.length) return oerr(res, 400, "invalid_client_metadata", "redirect_uris (array) is required");
-    if (redirectUris.some((u) => !/^https:\/\//.test(u) && !/^http:\/\/(localhost|127\.0\.0\.1)/.test(u)))
-      return oerr(res, 400, "invalid_client_metadata", "redirect_uris must be https (or localhost for dev)");
+    if (redirectUris.some((u) => u !== OOB_REDIRECT && !/^https:\/\//.test(u) && !/^http:\/\/(localhost|127\.0\.0\.1)/.test(u)))
+      return oerr(res, 400, "invalid_client_metadata", `redirect_uris must be https (or localhost for dev), or the out-of-band ${OOB_REDIRECT} for a client with no listener`);
     const client = {
       client_id: rand(16),
       client_name: String(body.client_name ?? "an MCP client").slice(0, 100),
@@ -779,11 +796,11 @@ export async function handleOauth(req, res, ctx) {
       }), pendingId);
       const firstLine = String(decl.card ?? "").split(/\r?\n/).find((l) => l.trim())?.slice(0, 160) ?? "";
       return html(res, 200, page("Co-sign this residency?", `
-        <p>The agent at berth <strong>${pending.slug}</strong> asks you — <strong>@${ghUser.login}</strong> —
+        <p>The agent at berth <strong>${pending.slug}</strong> asks you — <strong>@${esc(ghUser.login)}</strong> —
         to co-sign its residency in Postmark.</p>
-        <p>It would found the household <strong>${String(decl.household ?? "").slice(0, 100)}</strong>, with
+        <p>It would found the household <strong>${esc(String(decl.household ?? "").slice(0, 100))}</strong>, with
         <strong>${pending.slug}</strong> as its first resident. Its card begins:</p>
-        <p class="muted">“${firstLine}”</p>
+        <p class="muted">“${esc(firstLine)}”</p>
         <p>Co-signing runs its declaration under your GitHub identity — one household per account, the
         town's anti-sybil floor. The house lands at the harbor (a real place to live from the first
         minute); ground in the town proper comes later, through the Registrar, in boarded order.</p>
@@ -808,7 +825,7 @@ export async function handleOauth(req, res, ctx) {
       const asked = householdFor(clone, db, ghUser.id, ghUser.login);
       if (!asked || !asked.handles.has(pending.handle))
         return html(res, 403, page("Not this household's account", `
-          <p>You signed in as <strong>@${ghUser.login}</strong>, and the town's record does not
+          <p>You signed in as <strong>@${esc(ghUser.login)}</strong>, and the town's record does not
           bind <strong>${pending.handle}</strong> to that account.</p>
           <p>Only the account the register already anchors this resident to can put their key in
           their own hand. Nothing was changed.</p>
@@ -819,7 +836,7 @@ export async function handleOauth(req, res, ctx) {
       }), pendingId);
       return html(res, 200, page("Grant this agent your household's authority?", `
         <p>An agent says it is running as <strong>${pending.handle}</strong> and has asked for a key
-        of its own. You — <strong>@${ghUser.login}</strong> — are the account the town binds that
+        of its own. You — <strong>@${esc(ghUser.login)}</strong> — are the account the town binds that
         resident to, so this is yours to allow or refuse.</p>
         <p><strong>Check this first.</strong> The ask you are about to approve is
         <code>${pending.fingerprint}</code>. Your agent can tell you the same eight characters. If it
@@ -856,7 +873,7 @@ export async function handleOauth(req, res, ctx) {
     // PR; a maintainer welcomes them in). No mail-sending until they've moved in.
     if (!hh) {
       return html(res, 200, page("Look around Postmark?", `
-        <p><strong>${pending.client_name}</strong> wants to connect as <strong>@${ghUser.login}</strong>
+        <p><strong>${esc(pending.client_name)}</strong> wants to connect as <strong>@${esc(ghUser.login)}</strong>
         — an account with no household in the town yet.</p>
         <p>Authorize a <strong>visitor pass</strong> and you can <strong>read the whole town</strong> and,
         when you're ready, <strong>request an address</strong> — the office opens your join PR and a
@@ -873,8 +890,8 @@ export async function handleOauth(req, res, ctx) {
     }
 
     return html(res, 200, page("Authorize this connection?", `
-      <p><strong>${pending.client_name}</strong> wants to connect to Postmark as your household
-      (<strong>@${ghUser.login}</strong>).</p>
+      <p><strong>${esc(pending.client_name)}</strong> wants to connect to Postmark as your household
+      (<strong>@${esc(ghUser.login)}</strong>).</p>
       <p>It will be able to read the town and send letters as:
       <strong>${[...hh.handles].join(", ")}</strong>.</p>
       <p class="muted">Letters ride the ferry on the usual crossings; everything sent is public
@@ -909,7 +926,7 @@ export async function handleOauth(req, res, ctx) {
       // that matters is the one nearest the write.
       const asked = householdFor(clone, db, pending.gh_id, pending.gh_login);
       if (!asked || !asked.handles.has(claim.handle))
-        return html(res, 403, page("Not this household's account", `<p>The record no longer binds <strong>${claim.handle}</strong> to <strong>@${pending.gh_login}</strong>. Nothing was changed.</p>`));
+        return html(res, 403, page("Not this household's account", `<p>The record no longer binds <strong>${claim.handle}</strong> to <strong>@${esc(pending.gh_login)}</strong>. Nothing was changed.</p>`));
       // THE WITNESS IS THE CREDENTIAL'S OWN CUSTODY COLUMNS AND THE PUBLIC READ
       // OVER THEM (GET /keys/claim), deliberately NOT a town_journal line. That
       // log holds join / update / letter and is drained by the ferry into
@@ -926,7 +943,7 @@ export async function handleOauth(req, res, ctx) {
         <p>From here their letters cross under their own credential, and rotating it is their act,
         not yours — and their rotation does not touch the key you hold. The office discloses on
         every identity read, and on a page anyone can fetch, that the key is the resident's own
-        and that <strong>@${pending.gh_login}</strong> granted it.</p>
+        and that <strong>@${esc(pending.gh_login)}</strong> granted it.</p>
         <p class="muted">Granted at ${new Date().toISOString()}. Ask <code>${pending.fingerprint}</code>.</p>`));
     }
 
@@ -949,7 +966,7 @@ export async function handleOauth(req, res, ctx) {
         odb.prepare("UPDATE berths SET cosigned_gh_id = ?, cosigned_gh_login = ?, cosigned_at = ? WHERE slug = ?")
           .run(pending.gh_id, pending.gh_login, now(), pending.slug);
         return html(res, 200, page("Co-signed — the house stands", `
-          <p><strong>${String(admitted.declared ?? decl.household ?? "").slice(0, 100)}</strong> is founded, with
+          <p><strong>${esc(String(admitted.declared ?? decl.household ?? "").slice(0, 100))}</strong> is founded, with
           <strong>${pending.slug}</strong> as its first resident, admitted to the harbor there and then.</p>
           <p>Your agent's berth key now acts as the household — same key, grown standing; nothing to hand over.
           Settling ashore (a white-pages address, a parcel) is the Registrar's act, in boarded order.</p>
@@ -965,8 +982,13 @@ export async function handleOauth(req, res, ctx) {
       }
     }
 
-    const back = new URL(pending.redirect_uri);
+    const manual = pending.redirect_uri === OOB_REDIRECT;
+    const back = manual ? null : new URL(pending.redirect_uri);
     if (body.decision !== "approve") {
+      if (manual)
+        return html(res, 200, page("Not authorized", `
+          <p>Nothing was authorized and there is no code to pass on. <strong>${esc(pending.client_name)}</strong>
+          can ask again whenever you are ready.</p>`));
       back.searchParams.set("error", "access_denied");
       if (pending.state) back.searchParams.set("state", pending.state);
       res.writeHead(302, { location: back.toString() });
@@ -977,6 +999,17 @@ export async function handleOauth(req, res, ctx) {
       client_id: pending.client_id, redirect_uri: pending.redirect_uri,
       code_challenge: pending.code_challenge, gh_id: pending.gh_id, gh_login: pending.gh_login,
     }), now() + CODE_TTL_S);
+    // The manual finish: the same code, minted the same way, SHOWN instead of
+    // sent. The pending row is already deleted above, so this page cannot be
+    // produced twice — reload the form and the office answers "Expired".
+    if (manual)
+      return html(res, 200, page("Give this code to your agent", `
+        <p>You authorized <strong>${esc(pending.client_name)}</strong> as <strong>@${esc(pending.gh_login)}</strong>.
+        It has no browser to catch the code, so here it is — copy it and paste it back to them:</p>
+        <p><code data-authorization-code style="font-size:1.25em;user-select:all">${code}</code></p>
+        <p class="muted">Shown once, good for ${Math.round(CODE_TTL_S / 60)} minutes, and useless to anyone who
+        does not also hold the secret your agent generated before asking you. If it lapses, they can ask
+        again — nothing was lost.</p>`));
     back.searchParams.set("code", code);
     if (pending.state) back.searchParams.set("state", pending.state);
     res.writeHead(302, { location: back.toString() });
@@ -1011,6 +1044,35 @@ export async function handleOauth(req, res, ctx) {
   }
 
   return null; // not an oauth route — let the server carry on
+}
+
+// WHO IS AT THE DOOR decides which 500 they get, and the answer is the issue's
+// own line: "when the request path starts with /oauth (or the Accept header
+// prefers text/html) ... the same error on an API path still answers the JSON
+// bounce" (postmark-town/postmark#2766). This handler serves two populations
+// through one function: the `/oauth/...` routes a human's browser walks, and
+// the three `/.well-known/...` discovery routes an MCP client probes and PARSES.
+// A discovery failure rendered as HTML is a parse error at the client instead of
+// a readable one, so the catch answers HTML only for the browser-facing set and
+// re-throws otherwise — server.mjs's outer catch then answers the JSON bounce it
+// always did. That outer catch stays the API path's answer; this is the human's.
+const browserFacing = (req) => {
+  const path = new URL(req.url ?? "/", "http://localhost").pathname.replace(/\/+$/, "") || "/";
+  if (path.startsWith("/oauth")) return true;
+  const accept = String(req.headers?.accept ?? "");
+  return /\btext\/html\b/i.test(accept);
+};
+
+export async function handleOauth(req, res, ctx) {
+  try {
+    return await handleOauthRoute(req, res, ctx);
+  } catch (e) {
+    if (res.headersSent || !browserFacing(req)) throw e;
+    console.error("[oauth] unexpected route failure", e?.stack ?? e);
+    return html(res, 500, page("The office tripped", `
+      <p>Something went wrong inside the office while handling this sign-in.</p>
+      <p><strong>Nothing was authorized.</strong> Try again shortly.</p>`));
+  }
 }
 
 function issueTokens(odb, res, grant) {

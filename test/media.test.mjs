@@ -26,6 +26,10 @@ const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwA
 const key = (over = {}) => ({ household: "testers", handles: new Set(["tester"]), ...over });
 const odb = () => new DatabaseSync(":memory:");
 const stubPut = () => { const calls = []; return { calls, put: async (...a) => { calls.push(a); } }; };
+// The PUTs of ORIGINALS. Since postmark#2940 a raster upload also puts its two
+// small copies (-96, -256) beside the original — held to account in
+// test/media-thumbnails.test.mjs; the counts here are about the original.
+const originals = (calls) => calls.filter(([k]) => !/-(?:96|256)\.[a-z]+$/.test(k));
 
 test("the gates: no key, a berth, no household, the wrong by", async () => {
   await assert.rejects(uploadMedia({ image: PNG }, null, odb()), (e) => e.code === 401);
@@ -56,7 +60,7 @@ test("the happy path: content-addressed key, URL on the media host, ledger row",
   assert.match(r.url, new RegExp(`^${MEDIA_BASE.replace(/[/.]/g, "\\$&")}/media/testers/[0-9a-f]{64}\\.png$`));
   assert.equal(r.bytes, 70);
   assert.equal(r.type, "image/png");
-  assert.equal(calls.length, 1);
+  assert.equal(originals(calls).length, 1);
   assert.equal(calls[0][2], "image/png");
   assert.ok(mediaUrlOk(r.url), "the media door's own URL passes the mark door's allowlist");
   assert.equal(r.quota.used, 70);
@@ -70,7 +74,7 @@ test("dedup: the same bytes answer with the same URL and never spend twice", asy
   const again = await uploadMedia({ image: PNG }, key(), db, { put });
   assert.equal(again.url, first.url);
   assert.equal(again.already, true);
-  assert.equal(calls.length, 1, "storage was written once");
+  assert.equal(originals(calls).length, 1, "storage was written once");
   assert.equal(again.quota.used, 70, "quota unchanged by the re-send");
 });
 

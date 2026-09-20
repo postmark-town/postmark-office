@@ -170,7 +170,7 @@ test("THE BUNDLE: every segment carries the DOMAIN of the read its `serves` name
   // falsifier goes vacuous after a restructure.
   const d = await doorstepBundle(HANDLE, ctx);
   assert.deepEqual(d.segments, [...DOORSTEP_SEGMENTS], "the manifest lists its own segments");
-  assert.equal(d.segments.length, 8, "eight — a manifest that shrank would be hiding one (crossings joined 2026-09-07, #2526)");
+  assert.equal(d.segments.length, 9, "nine — a manifest that shrank would be hiding one (crossings joined 2026-09-07, #2526; stakes 2026-09-18, #2919)");
   for (const name of DOORSTEP_SEGMENTS) {
     const seg = d[name];
     assert.ok(seg && typeof seg === "object", `segment "${name}" is missing from the bundle`);

@@ -21,7 +21,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { escalate, titleFor, bodyFor, tokenFrom, DEFAULT_REPO } from "../deploy/settlement-escalate.mjs";
+import {
+  escalate, titleFor, bodyFor, tokenFrom, DEFAULT_REPO, isSuiteRedRefusal, notOkLines,
+} from "../deploy/settlement-escalate.mjs";
 
 const REPO = "postmark-town/postmark";
 
@@ -214,4 +216,148 @@ test("its title is its own, so it never lands on the canon-bad issue", () => {
   // would file a recurring drawer fault under a heading about world main.
   assert.equal(titleFor("recurring-refusal"), "settlement refusal: recurring-refusal");
   assert.notEqual(titleFor("recurring-refusal"), titleFor("canon-bad"));
+});
+
+// ── §4 A SUITE RED ESCALATES ON THE FIRST OCCURRENCE (#2793) ────────────────
+//
+// THE INSTANCE. 2026-09-14 05:45Z, the S70 crossing: "grammar suite red and the
+// isolation pass could not attribute it to a mark this crossing carried — a
+// finding for the keeper, not a retry". That run's journal carries the refusal
+// and nothing else — no `[settlement-escalate]` line, no issue, no ping — because
+// the only path to this file for a suite red was `recurring-refusal`, i.e. the
+// THIRD unsettled crossing in a row. The operator round found it at 12:35Z.
+
+/** The receipt the UNATTRIBUTABLE exit writes, in settlement-receipt.mjs's shape. */
+const SUITE_RECEIPT = {
+  at: "2026-09-14T05:45:00Z",
+  status: "refused",
+  // ⚑ VERBATIM from `deploy/settlement-auto.sh`'s own `report refused` line. The
+  // gate below matches on these words, so this string is the law it quotes: a
+  // reworded refusal must redden here rather than quietly turn the alarm off.
+  detail: "grammar suite red and the isolation pass could not attribute it to a mark this crossing carried — a finding for the keeper, not a retry",
+  class: null,
+  next_step: null,
+  isolated: null,
+  channels: { published: 0, left_drafted: 0 },
+};
+
+/** And the isolate-off exit's, whose wording is the shorter of the two. */
+const SUITE_RECEIPT_NO_ISOLATE = {
+  ...SUITE_RECEIPT,
+  detail: "grammar suite red — a finding for the keeper, not a retry",
+};
+
+const SUITE_LOG = [
+  "TAP version 13",
+  "ok 1 - the town's own grammar",
+  "not ok 12 - WORLD/marks/the-town/pledges names a mark canon does not carry",
+  "  ---",
+  "  operator: deepEqual",
+  "  ...",
+  "not ok 40 - a household line the register has no row for",
+  "1..41",
+].join("\n");
+
+test("FALSIFIER 1 · the suite-red body quotes the `not ok` lines and the isolate's verdict", async () => {
+  // The two things a person needs before they can act, and neither is in the
+  // receipt: the receipt says the suite was red, and every question after that —
+  // red at WHAT, and is it one mark's — is answered by these and nothing else.
+  const { calls, fetchStub } = stubGithub({ issues: [] });
+  const r = await withFetch(fetchStub, () => escalate({
+    klass: "suite-red", receipt: SUITE_RECEIPT, token: "t", repo: REPO, log: quiet,
+    suiteLog: SUITE_LOG, isolate: "unattributable",
+  }));
+
+  assert.equal(r.filed, true, "the FIRST suite red must reach a person — that is the whole of #2793");
+  const created = calls.filter((c) => c.method === "POST" && c.url.endsWith("/issues"));
+  assert.equal(created.length, 1);
+  assert.equal(created[0].body.title, "settlement refusal: suite-red");
+
+  const body = created[0].body.body;
+  assert.match(body, /not ok 12 - WORLD\/marks\/the-town\/pledges names a mark canon does not carry/);
+  assert.match(body, /not ok 40 - a household line the register has no row for/);
+  assert.doesNotMatch(body, /ok 1 - the town's own grammar/,
+    "the greens are not the finding, and a body that carries the whole log is a body nobody reads");
+  assert.doesNotMatch(body, /TAP version 13/);
+
+  assert.match(body, /### The isolation pass/);
+  assert.match(body, /IT RAN AND ATTRIBUTED NOTHING/,
+    "without the isolator's verdict the reader cannot tell a law-level red from one mark's");
+  assert.match(body, /postmark-settlement-by-hand\.service/,
+    "and it must say how to finish the crossing once the repair lands, or the fix waits for the clock");
+
+  // The receipt still goes in whole, below: a summary of a refusal is how an
+  // operator ends up debugging the summary.
+  assert.ok(body.includes(JSON.stringify(SUITE_RECEIPT, null, 1)));
+});
+
+test("FALSIFIER 2 · the isolate-off exit says the pass DID NOT RUN, not that it found nothing", () => {
+  // `isolated: null` on the receipt for BOTH exits — a pass that attributed
+  // nothing writes no isolate report — so the two are indistinguishable from the
+  // receipt alone. Reading one as the other would send a person hunting a
+  // law-level red when nothing had looked at the marks yet.
+  const ran = bodyFor("suite-red", SUITE_RECEIPT, { suiteLog: SUITE_LOG, isolate: "unattributable" });
+  const never = bodyFor("suite-red", SUITE_RECEIPT_NO_ISOLATE, { suiteLog: SUITE_LOG, isolate: "not-run" });
+  assert.match(never, /IT DID NOT RUN/);
+  assert.match(never, /SETTLEMENT_ISOLATE=0/);
+  assert.doesNotMatch(never, /ATTRIBUTED NOTHING/);
+  assert.notEqual(ran, never, "one verdict wearing the other's words is the freshness-stamp defect");
+
+  // And a caller that names no verdict is told so rather than guessed at.
+  assert.match(bodyFor("suite-red", SUITE_RECEIPT, { suiteLog: SUITE_LOG }), /NOT SAID/);
+});
+
+test("FALSIFIER 3 · a receipt that is not a suite-red refusal FILES NOTHING", async () => {
+  // `--class` is an argument. A stale `settlement-auto.json` from the crossing
+  // that PUBLISHED, a half-written one, a hand-typed rerun of the escalator —
+  // each would file an issue about a red that is not there, and a queue that
+  // cries wolf is this file's own silence wearing a louder coat.
+  const cases = [
+    ["a published crossing", { at: "x", status: "published", detail: "14 published" }],
+    ["a refusal of another kind", { at: "x", status: "refused", detail: "sweep tripped: lint said 2 errors" }],
+    ["a receipt that could not be read", null],
+  ];
+  for (const [what, receipt] of cases) {
+    const { calls, fetchStub } = stubGithub({ issues: [] });
+    const r = await withFetch(fetchStub, () => escalate({
+      klass: "suite-red", receipt, token: "t", repo: REPO, log: quiet,
+      suiteLog: SUITE_LOG, isolate: "unattributable",
+    }));
+    assert.equal(r.filed, false, `${what} filed an issue`);
+    assert.equal(r.reason, "not-a-suite-red-refusal");
+    assert.deepEqual(calls, [], `${what} reached GitHub at all — the gate must come before the request`);
+  }
+
+  // The control: the same gate PASSES both real suite-red refusals, or the test
+  // above would be satisfied by a gate that refuses everything.
+  assert.equal(isSuiteRedRefusal(SUITE_RECEIPT), true);
+  assert.equal(isSuiteRedRefusal(SUITE_RECEIPT_NO_ISOLATE), true);
+});
+
+test("FALSIFIER 4 · the `not ok` cap names its own denominator", () => {
+  // A capped list that stops silently reads as the whole list, and the count is
+  // the thing an operator is judging. (List caps are silent denominators.)
+  const many = Array.from({ length: 57 }, (_, i) => `not ok ${i + 1} - a red`).join("\n");
+  const lines = notOkLines(many);
+  assert.equal(lines.length, 41, "forty reds plus the line that says how many were left out");
+  assert.match(lines.at(-1), /17 more `not ok` line\(s\) — 57 in total/);
+
+  // An empty log and an unreadable one are different facts, and the body says
+  // them differently: one is a suite that named no test, the other a missing
+  // instrument.
+  assert.deepEqual(notOkLines(""), []);
+  assert.deepEqual(notOkLines(null), []);
+  assert.match(bodyFor("suite-red", SUITE_RECEIPT, { suiteLog: "", isolate: "not-run" }),
+    /carries NO `not ok` line/);
+  assert.match(bodyFor("suite-red", SUITE_RECEIPT, { suiteLog: null, isolate: "not-run" }),
+    /could not be read at escalation time/);
+});
+
+test("FALSIFIER 5 · its title is its own, so it never lands on another class's issue", () => {
+  // Different findings, different removal lanes — and this one recurs every
+  // twelve hours like canon-bad does, so it needs its own standing issue to
+  // comment on rather than burying a world-main fault under a suite heading.
+  assert.equal(titleFor("suite-red"), "settlement refusal: suite-red");
+  assert.notEqual(titleFor("suite-red"), titleFor("canon-bad"));
+  assert.notEqual(titleFor("suite-red"), titleFor("recurring-refusal"));
 });

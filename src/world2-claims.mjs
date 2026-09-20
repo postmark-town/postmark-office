@@ -763,3 +763,35 @@ export async function claimRowsSince(since, { claimants = [], slugs = [], key = 
   if (!household) return (await p.query(sql, args)).rows;
   return (await withHousehold(p, household, (c) => c.query(sql, args))).rows;
 }
+
+/**
+ * The resident's newest PARCEL claim still in transit — `draft`, `pending` or
+ * `locked` — or null (#2817, the settling-in line).
+ *
+ * A parcel claim is on the docket for a window, then `locked` in this store
+ * until a settlement writes it to world main; through all of that the world's
+ * own `homeOf` still answers unplaced, and the doorstep's checklist used to
+ * read that as "go leave your home mark". This is the one question that line
+ * needs answered — is the act already done and waiting — and it is asked
+ * inside the household's own row policy exactly as `claimRowsSince` is, so a
+ * private draft is visible to its own house and to nobody else.
+ *
+ * `class` is the mark's kind (the promotion writes `kind` into it), so the
+ * predicate is the column, not a slug pattern.
+ */
+export async function parcelClaimFor(handle, { key = null, env = process.env } = {}) {
+  if (!handle) return null;
+  const p = await pool(env);
+  const sql = `SELECT slug, status, window_id, submitted_at
+                 FROM claims
+                WHERE claimant = $1 AND class = 'parcel'
+                  AND status IN ('draft','pending','locked')
+                ORDER BY submitted_at DESC, id DESC
+                LIMIT 1`;
+  const args = [handle];
+  const read = async (c) => (await c.query(sql, args)).rows[0] ?? null;
+  if (!key) return read(p);
+  const household = await householdKeyForKey(p, key);
+  if (!household) return read(p);
+  return withHousehold(p, household, read);
+}

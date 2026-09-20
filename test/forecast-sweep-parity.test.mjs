@@ -32,7 +32,7 @@ const OFFICE_SOURCE = readFileSync(join(HERE, "..", "src", "world-forecast.mjs")
 // where a world clone might be; the office reads one at runtime from WORLD_CLONE
 const SWEEP_CANDIDATES = [
   process.env.WORLD_CLONE && join(process.env.WORLD_CLONE, "tools", "settlement-sweep.mjs"),
-  "G:/Postmark/postmark-world/tools/settlement-sweep.mjs",
+  "G:/Postmark/repo-clones/wright/postmark-world/tools/settlement-sweep.mjs",
   join(HERE, "..", "..", "postmark-world", "tools", "settlement-sweep.mjs"),
 ].filter(Boolean);
 const sweepPath = SWEEP_CANDIDATES.find((p) => existsSync(p)) ?? null;

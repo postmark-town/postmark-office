@@ -35,6 +35,14 @@
 //                  step 5.5 stops a new one and this lists the ones already
 //                  standing. Its repair is a STAKE, not a retire — which is why
 //                  it is a third class and not folded into canon-absent.
+//   escrow-unjudgeable  A COUNT, NOT A FINDING (postmark#2935). Commons marks
+//                  locked at a window whose town sha the projection holds NO
+//                  rows for — every window before 181, migration 014's first
+//                  ingest — cannot be judged there, and are counted by window
+//                  with the oldest projected sha named beside them. Unavailable,
+//                  never ✦0. Before this, 227 such marks read ESCROW-ABSENT on
+//                  the roll-call every morning for eight nights, and the number
+//                  of TRUE unbacked marks under them was zero.
 //
 // EACH MARK IS JUDGED AT ITS OWN LOCKING SHA, never at today's town. A mark
 // locked at window 150 and one locked at 177 are answerable to different reads
@@ -42,7 +50,8 @@
 // September and invent findings. And `escrow_checked: false` — the projection
 // absent (migration 014) or uningested — is REPORTED: zero findings from a check
 // that could not run looks exactly like a clean town, and that is the whole
-// failure this file exists to end.
+// failure this file exists to end. The unjudgeable count is that same
+// distinction drawn per sha: `escrow_unbacked` lists only judgeable zeros.
 //
 // A RETIRED MARK IS NOT LISTED. A mark the world published and later UNPUBLISHED
 // also stands with a locked claim and no file — the retire path (G1 lane 1)
@@ -84,11 +93,14 @@
 //
 //   --json                machine-readable
 //   --history <path>      append one JSONL line for the box roll-call's outcome
-//                         rule (deploy/box-rollcall-manifest.json § the clearing
+//                         rule (deploy/box-rollcall-manifest.json § the notary
 //                         row). The line is written on EVERY run, including the
 //                         clean ones: "ran and found nothing" and "did not run"
 //                         must not look alike, which is the whole of why the
-//                         roll-call can judge this at all.
+//                         roll-call can judge this at all. The three lists are
+//                         its `alarm_on_nonempty`; `escrow_unjudgeable` is a
+//                         number on the line and the row's `report_counts` — a
+//                         count the board prints, never an alarm.
 
 import { resolve } from "node:path";
 import { appendFileSync } from "node:fs";
@@ -98,7 +110,7 @@ import { causeOf } from "../../src/mark-receipt.mjs";
 // script: it exits at the top on a missing argument, so anything that imported it
 // to test the judgement would be killed by it. `canon-locks.mjs` is the pure half
 // and `test/canon-locks.test.mjs` is what watches the rules.
-import { STANDING_SELECT, UNMATERIALIZED_SELECT, ESCROW_BY_SHA_SELECT, canonLockFindings } from "./canon-locks.mjs";
+import { STANDING_SELECT, UNMATERIALIZED_SELECT, ESCROW_BY_SHA_SELECT, ESCROW_OLDEST_SELECT, canonLockFindings, unjudgeableByWindow } from "./canon-locks.mjs";
 
 const arg = (n) => { const i = process.argv.indexOf(n); return i === -1 ? null : process.argv[i + 1]; };
 const has = (n) => process.argv.includes(n);
@@ -126,15 +138,22 @@ try {
   // not applied or nothing is ingested — REPORTED rather than silently producing
   // zero findings, which would look exactly like a clean town.
   let escrowBySha = null;
+  // The boundary the unjudgeable count is measured against — the projection's
+  // oldest sha, named on the line so the count can be read without the store.
+  let oldestProjected = null;
   try {
     const { rows: has } = await client.query("SELECT to_regclass('public.escrow_projection') IS NOT NULL AS ok");
     if (has[0]?.ok) {
       const { rows: e } = await client.query(ESCROW_BY_SHA_SELECT);
-      if (e.length) escrowBySha = new Map(e.map((r) => [`${r.town_sha}|${r.mark}`, Number(r.n)]));
+      if (e.length) {
+        escrowBySha = new Map(e.map((r) => [`${r.town_sha}|${r.mark}`, Number(r.n)]));
+        const { rows: o } = await client.query(ESCROW_OLDEST_SELECT);
+        if (o[0]) oldestProjected = { town_sha: o[0].town_sha, ingested_at: o[0].ingested_at, window: o[0].window_id ?? null };
+      }
     }
   } catch { /* an unreadable projection is an unanswered question, not an empty one */ }
 
-  const { absent, unbacked, unmaterialized, compared, escrow_compared, escrow_checked } =
+  const { absent, unbacked, unjudgeable, unmaterialized, compared, escrow_compared, escrow_checked } =
     canonLockFindings(rows, register, { unmaterializedRows, escrowBySha });
   if (!compared) die(
     `no standing mark carries a slug, so nothing was compared against the register at ${register.sha.slice(0, 8)} — ` +
@@ -162,6 +181,13 @@ try {
     escrow_unbacked: unbacked.map((r) => ({
       slug: r.slug, tier: r.tier, locked_window: r.locked_window, town_sha: r.locking_town_sha,
     })),
+    // THE COUNT, not a list of slugs: 227 names on a line every night is the
+    // skim the alarm was teaching, and the windows are what a reader can act
+    // on. `null` when the projection was not checked — nothing was counted,
+    // which is not the same as counting zero.
+    escrow_unjudgeable: escrow_checked ? unjudgeable.length : null,
+    escrow_unjudgeable_windows: unjudgeableByWindow(unjudgeable),
+    escrow_oldest_projected: oldestProjected,
     unreadable: register.unreadable,
   };
 } catch (err) {
@@ -184,6 +210,8 @@ if (historyPath) {
       unmaterialized: out.unmaterialized.map((u) => u.slug),
       escrow_unbacked: out.escrow_unbacked.map((u) => u.slug),
       escrow_checked: out.escrow_checked,
+      escrow_unjudgeable: out.escrow_unjudgeable,
+      escrow_oldest_projected: out.escrow_oldest_projected ? out.escrow_oldest_projected.town_sha : null,
     }) + "\n");
   } catch (e) {
     console.error(`  ⚑ could not append to ${historyPath}: ${e.message} — the finding below still stands`);
@@ -198,6 +226,15 @@ else {
     console.log(`  ✗ UNMATERIALIZED · claim ${u.claim_id.slice(0, 8)} locked at window ${u.window} names ${u.slug} and no mark carries that slug`);
   if (!out.escrow_checked)
     console.log("  ⚑ escrow: NOT CHECKED — escrow_projection is absent or holds no rows (migration 014, lane 2). Zero findings below is a question unanswered, not a clean town.");
+  if (out.escrow_unjudgeable) {
+    const o = out.escrow_oldest_projected;
+    const windows = out.escrow_unjudgeable_windows.map((w) => `${w.locked_window ?? "?"} ×${w.marks}`).join(", ");
+    const oldest = o
+      ? `${String(o.town_sha).slice(0, 8)}${o.window != null ? ` (window ${o.window}` : " ("}${o.ingested_at ? `, ingested ${new Date(o.ingested_at).toISOString()})` : ")"}`
+      : "unknown";
+    console.log(`  ⚑ escrow: ${out.escrow_unjudgeable} commons mark(s) UNJUDGEABLE — locked at ${out.escrow_unjudgeable_windows.length} window(s) whose town sha the projection holds no rows for (${windows}); ` +
+      `the oldest projected town sha is ${oldest}. Unavailable, never ✦0 — a count, not a finding.`);
+  }
   for (const u of out.escrow_unbacked)
     console.log(`  ✗ ESCROW-ABSENT · ${u.slug} stands as ${u.tier} (commons), locked at window ${u.locked_window}, with nothing staked on it at that window's town ${String(u.town_sha).slice(0, 8)}`);
   for (const a of out.absent)
@@ -207,6 +244,8 @@ else {
   console.log(n
     ? `\nRED · ${n} row(s) the world does not carry or does not back`
     : `\nGREEN · every standing mark has a file in canon at ${out.canon_sha.slice(0, 8)}, every locked claim made one` +
-      `${out.escrow_checked ? `, and all ${out.escrow_compared} commons mark(s) carry a stake` : " — but escrow was NOT checked"}`);
+      `${out.escrow_checked
+        ? `, and all ${out.escrow_compared} judgeable commons mark(s) carry a stake${out.escrow_unjudgeable ? ` (${out.escrow_unjudgeable} more lock before the projection's oldest sha and are unjudgeable, not ✦0)` : ""}`
+        : " — but escrow was NOT checked"}`);
 }
 process.exit(out.absent.length + out.unmaterialized.length + out.escrow_unbacked.length ? 1 : 0);

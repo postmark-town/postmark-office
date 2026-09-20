@@ -309,6 +309,50 @@ test("§2 the worker-safe doors still answer — the role is a gate, not a wall"
   assert.equal(bad.length, 0, `read doors that stopped answering: ${bad.join(", ")}`);
 });
 
+test("§2c GET /world/holdings is a door and not a rumour (#2599)", async () => {
+  // ⚑ THIS LEG EXISTS BECAUSE § 3 WAS DRIVING A DOOR THAT WAS NOT THERE. The
+  // handler sat in the write tier, 380 lines below the GET catch-all, so every
+  // GET was answered by "no such door" while the manifest advertised the route
+  // — and § 3's "not a 500" held just as firmly against a 404 as it would have
+  // with the whole store on fire. The route is alive now, so it gets a leg that
+  // asks whether it ANSWERS rather than one that asks whether it did not trip.
+  //
+  // It is asked HERE, on a read worker, on purpose: this read used to hold a
+  // write-mode handle on the dynamic store, which is the handle DEC-4 forbids
+  // this process. Waking the route without changing the mode would have made it
+  // the sixth write-mode reader, so the door and the handle are one claim.
+  const keyed = await call("/world/holdings");
+  const body = await keyed.json().catch(() => ({}));
+  assert.equal(keyed.status, 200, `the manifest advertises this read: ${JSON.stringify(body).slice(0, 160)}`);
+  assert.equal(body.handle, "wright", "it answers for the key's own resident");
+  assert.ok(Array.isArray(body.holding), "and in the shape the tool describes: a list of things in hand");
+  assert.equal(typeof body.count, "number", "with the true count beside the page");
+
+  // The other pole. Without it a handler that answered 200 to everything would
+  // pass the line above — and the point of the fix is that the request is
+  // ADJUDICATED, which a stranger can only observe as a refusal that names
+  // itself. What must never come back is the catch-all: that is the answer the
+  // dead route gave, and it is indistinguishable from the door not existing.
+  const anon = await fetch(`${BASE}/world/holdings`, { signal: AbortSignal.timeout(FETCH_MS) });
+  const anonBody = await anon.json().catch(() => ({}));
+  assert.notEqual(anon.status, 404,
+    `a stranger was told the door does not exist — that is the #2599 answer: ${JSON.stringify(anonBody).slice(0, 160)}`);
+  assert.equal(anon.status, 401, `these hands are somebody's: ${JSON.stringify(anonBody).slice(0, 160)}`);
+  assert.doesNotMatch(String(anonBody.defect ?? ""), /no such door/,
+    "the refusal must be this door's own sentence, not the catch-all's");
+
+  // AND THE TWO ROUTE LISTS MUST AGREE ABOUT IT. The office publishes the read
+  // twice — in the manifest at GET /, and in the hint the catch-all hands
+  // whoever knocked on nothing — and the whole shape of #2599 was those two
+  // lists disagreeing with nobody able to say which was true.
+  const manifest = await (await call("/")).json();
+  assert.ok(manifest.reads.includes("/world/holdings"), "the manifest names the read");
+  const missing = await call("/world/no-such-door-at-all");
+  const hint = String((await missing.json().catch(() => ({}))).hint ?? "");
+  assert.match(hint, /\/world\/holdings\b/,
+    "the catch-all's door list must name it too — one office, one answer to 'what can I read'");
+});
+
 test("§2b HEAD is judged as the GET it mirrors", async () => {
   // The refusal sits after the HEAD→GET rewrite deliberately. If it sat before,
   // every HEAD would be refused as a non-GET method — and a HEAD probe of a
@@ -357,13 +401,17 @@ test("§3 the store is unwritable underneath the worker and the reads keep worki
 
   try {
     // ⚑ THE DOOR THIS DRIVES MUST BE ALIVE, AND THE OLD ONE WAS NOT (reviewer's
-    // repair 4). This leg used to call `GET /world/holdings`, which is DEAD at
-    // every office: its handler sits in the write tier at server.mjs:1657,
-    // below the GET tier's catch-all 404 at :1295, so a GET can never reach it
-    // — while the manifest at :622 advertises it as a read. So the assertion
-    // "not a 500" was being made about a 404 from the catch-all, and would have
-    // held just as firmly with the whole store on fire. (The dead route itself
-    // is pre-existing and handed up as its own issue; it is not this lane's.)
+    // repair 4). This leg used to call `GET /world/holdings`, which was DEAD at
+    // every office: its handler sat in the write tier, below the GET tier's
+    // catch-all 404 — while the manifest advertised it as a read. So the
+    // assertion "not a 500" was being made about a 404 from the catch-all, and
+    // would have held just as firmly with the whole store on fire.
+    //
+    // THAT ROUTE IS ALIVE NOW (#2599, fixed on the w39 train) and § 2c drives
+    // it. This leg stays on `/world/dynamic` regardless: the two ask different
+    // questions, and a leg about an unwritable store should not also be the
+    // only leg holding a route honest. The reasoning below is kept because it
+    // is the reasoning, not because the route is still dead.
     //
     // `/world/dynamic` is live in the GET tier (:1058) and its answer reports
     // the store by path, so it is a door that actually looks at the thing this
@@ -389,7 +437,7 @@ test("§3 the store is unwritable underneath the worker and the reads keep worki
   }
 });
 
-test("§3b ALL SIX store readers ask for a READ handle, and the ask is load-bearing", async () => {
+test("§3b ALL SEVEN store readers ask for a READ handle, and the ask is load-bearing", async () => {
   // ⚑ THE TITLE SAID FOUR AND THE BODY DROVE ONE (reviewer's repair C, lap 5).
   // And my first fix of that said FIVE over a loop of SIX — the same defect,
   // committed inside the repair for it, which is how little attention a title
@@ -438,6 +486,15 @@ test("§3b ALL SIX store readers ask for a READ handle, and the ask is load-bear
         const { weaponInHand } = await import(`../src/arena.mjs?p=${m}`);
         return weaponInHand(null, "wright");
       }],
+      // SEVEN, not six: `callHoldTool`'s `world_holdings` branch is a reader
+      // too, and it was opening the store in WRITE mode — it just had no way in
+      // over HTTP, because the REST route into it was dead (#2599). Waking that
+      // route without this would have made it the sixth write-mode reader, so
+      // the two land together and this is the guard on the second half.
+      ["callHoldTool-world_holdings", async (m) => {
+        const { callHoldTool } = await import(`../src/world-hold.mjs?p=${encodeURIComponent(m)}`);
+        return callHoldTool("world_holdings", { handle: "wright" }, { handles: new Set(["wright"]) });
+      }],
     ]) {
       const missing = join(tmp, `no-store-${name}`, "dynamic.db");
       process.env.WORLD_DYNAMIC_DB = missing;
@@ -458,7 +515,7 @@ test("§3b ALL SIX store readers ask for a READ handle, and the ask is load-bear
   assert.equal(throwers.length, 0,
     "a reader met an absent store and threw instead of answering empty: "
     + throwers.map((r) => `${r.name} (${r.threw})`).join(", "));
-  assert.equal(results.length, 6, "the count in the title must be the count in the loop");
+  assert.equal(results.length, 7, "the count in the title must be the count in the loop");
 });
 
 test("§3c readHoldEffects says UNREADABLE on an absent store, not empty", async () => {

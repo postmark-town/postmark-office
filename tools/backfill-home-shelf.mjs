@@ -244,8 +244,12 @@ if (isMain) {
   // In dry mode the mock saw every call the real PUT would have taken, so the
   // two numbers must agree. If they ever do not, the count above is describing
   // something other than what reaches storage and should not be believed.
-  if (DRY && mockedPuts.length !== minted.length)
-    console.error(`  ⚠ the mocked PUT saw ${mockedPuts.length} call(s) but ${minted.length} object(s) were counted — the counter and the storage call disagree`);
+  // …counting ORIGINALS: since postmark#2940 the door also puts two small
+  // copies (-96, -256) beside each raster original, and those are not objects
+  // this tool counts.
+  const mockedOriginals = mockedPuts.filter((p) => !/-(?:96|256)\.[a-z]+$/.test(p.objectKey));
+  if (DRY && mockedOriginals.length !== minted.length)
+    console.error(`  ⚠ the mocked PUT saw ${mockedOriginals.length} original(s) but ${minted.length} object(s) were counted — the counter and the storage call disagree`);
   for (const [name, rows] of Object.entries(skipped)) {
     if (!rows.length) continue;
     console.log(`  ${name} (${rows.length}):`);

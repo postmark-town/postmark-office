@@ -31,7 +31,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { canonLockFindings, STANDING_SELECT, UNMATERIALIZED_SELECT, ESCROW_BY_SHA_SELECT } from "../world2/tools/canon-locks.mjs";
+import { canonLockFindings, projectedShas, unjudgeableByWindow, STANDING_SELECT, UNMATERIALIZED_SELECT, ESCROW_BY_SHA_SELECT, ESCROW_OLDEST_SELECT } from "../world2/tools/canon-locks.mjs";
 
 const register = (...slugs) => ({ slugs: new Set(slugs), sha: "0123456789abcdef0123456789abcdef01234567" });
 
@@ -169,7 +169,13 @@ test("the stake is read at the LOCKING window's town sha, not at another one", (
   // Staked at a DIFFERENT sha: that is a fact about a different read of the
   // ledger and must not excuse this mark. The first shape I considered keyed the
   // map on the mark alone, which would have silently passed this.
-  const r = canonLockFindings([DRIFT], anyRegister, { escrowBySha: new Map([["e34e5fa0|lupi/the-drift-room", 9]]) });
+  //
+  // MOVED 2026-09-18 (postmark#2935): the map also carries a row for the LOCKING
+  // sha, on another mark. Before, this fixture's locking sha had no rows at all
+  // — which now reads as unjudgeable, not unbacked (the block below) — and the
+  // question this test asks needs a sha the projection actually holds.
+  const r = canonLockFindings([DRIFT], anyRegister,
+    { escrowBySha: new Map([["e34e5fa0|lupi/the-drift-room", 9], ["723005e5|somebody/else", 4]]) });
   assert.deepEqual(r.unbacked.map((u) => u.slug), ["lupi/the-drift-room"]);
   const ok = canonLockFindings([DRIFT], anyRegister, { escrowBySha: new Map([["723005e5|lupi/the-drift-room", 1]]) });
   assert.deepEqual(ok.unbacked, [], "staked at its OWN locking sha, so it stands");
@@ -205,6 +211,103 @@ test("STANDING_SELECT reads the tier and the LOCKING window's town sha", () => {
   assert.match(STANDING_SELECT, /LEFT JOIN windows w ON w\.id = m\.locked_window/);
   assert.match(STANDING_SELECT, /w\.town_sha AS locking_town_sha/);
   assert.match(ESCROW_BY_SHA_SELECT, /GROUP BY town_sha, mark/);
+});
+
+// ── THE UNJUDGEABLE WINDOW (postmark#2935; 2026-09-18) ──────────────────────
+//
+// `escrowBySha.get(...) ?? 0` read a sha the projection NEVER HELD as ✦0. The
+// projection's oldest row is window 181 (2026-09-10T17:45Z, migration 014's
+// first ingest); 227 standing commons marks lock at windows 150–179, and every
+// one of them read ESCROW-ABSENT on the roll-call every morning for eight
+// nights — 233 on 09-18, 290 on 09-17, 283 on 09-16. Measured against prod on
+// 2026-09-18 the number of TRUE unbacked marks (a zero at a sha the projection
+// holds) was ZERO. The rows below are prod's, verbatim, that morning.
+//
+// THE RULE: a locking sha with NO projection rows at all is UNJUDGEABLE —
+// counted, grouped by window, never listed as unbacked. `escrow_unbacked`
+// lists only judgeable zeros. Unavailable, never ✦0.
+//
+// THE CAN-FAIL FLIP: in `canon-locks.mjs § canonLockFindings`, delete
+//
+//     -    if (!projected.has(r.locking_town_sha)) { unjudgeable.push(r); continue; }
+//
+// The first test reds (ORIENT lists as unbacked, the count is 0); the backed
+// and drift controls stay green.
+
+// the-town/orient — locked at window 150, town 830a6996…; no projection row
+// carries that sha. One of 153 marks at that window.
+const ORIENT = {
+  slug: "the-town/orient", mark_status: "standing", tier: "market",
+  locked_window: 150, locking_town_sha: "830a69963d8e4801ad4ed8bb80da38e79fd3fdbf", claim_id: "26eec02c", claim_status: "locked", window_id: 150,
+};
+// vermillion/pando-peak-home — the peak the issue names; window 164, 9cef0774….
+const PEAK = {
+  slug: "vermillion/pando-peak-home", mark_status: "standing", tier: "market",
+  locked_window: 164, locking_town_sha: "9cef0774164b97af31fec61cd6bef21e8790e2b5", claim_id: "d2dc5a93", claim_status: "locked", window_id: 164,
+};
+// berthillon/le-petit-berthillon — locked at window 196, 422dbe6f…, ✦3 at that
+// sha: the BACKED specimen, and the row the seam rule calls Berthillon's.
+const PETIT = {
+  slug: "berthillon/le-petit-berthillon", mark_status: "standing", tier: "market",
+  locked_window: 196, locking_town_sha: "422dbe6f2b5b4fc0eaae69c5f2c8058d259d8d98", claim_id: "petit001", claim_status: "locked", window_id: 196,
+};
+const PROJECTION = new Map([
+  ["422dbe6f2b5b4fc0eaae69c5f2c8058d259d8d98|berthillon/le-petit-berthillon", 3],
+  ["422dbe6f2b5b4fc0eaae69c5f2c8058d259d8d98|somebody/else", 1],
+  ["723005e5|somebody/else", 4],   // DRIFT's locking sha, held — on another mark
+]);
+const bigRegister = { slugs: new Set([ORIENT.slug, PEAK.slug, PETIT.slug, DRIFT.slug]), sha: "0".repeat(40) };
+
+test("THE BRIEF'S FALSIFIER: a sha the projection never held is UNJUDGEABLE; a held sha with ✦0 is UNBACKED", () => {
+  const r = canonLockFindings([ORIENT, DRIFT], bigRegister, { escrowBySha: PROJECTION });
+  assert.deepEqual(r.unjudgeable.map((u) => u.slug), ["the-town/orient"], "150's sha has no rows at all — not judged, never ✦0");
+  assert.deepEqual(r.unbacked.map((u) => u.slug), ["lupi/the-drift-room"], "177's sha IS held (on another mark) and carries nothing for this slug — a judgeable zero");
+  assert.equal(r.escrow_checked, true, "the projection exists; unjudgeable is a fact about ONE sha, not the whole read");
+  assert.equal(r.escrow_compared, 1, "only the judgeable mark is compared — an unjudgeable one is not a comparison that happened");
+});
+
+test("the backed specimen stays backed, and the counts partition the commons rows", () => {
+  const r = canonLockFindings([ORIENT, PEAK, PETIT, DRIFT], bigRegister, { escrowBySha: PROJECTION });
+  assert.deepEqual(r.unjudgeable.map((u) => u.slug).sort(), ["the-town/orient", "vermillion/pando-peak-home"]);
+  assert.deepEqual(r.unbacked.map((u) => u.slug), ["lupi/the-drift-room"]);
+  assert.equal(r.escrow_compared, 2, "PETIT and DRIFT were judged; ORIENT and PEAK were not");
+  assert.equal(r.unjudgeable.length + r.escrow_compared, 4, "every commons row is exactly one of judged or unjudgeable");
+});
+
+test("with the projection ABSENT nothing is unjudgeable either — that is escrow_checked:false, the whole read's word", () => {
+  const r = canonLockFindings([ORIENT, DRIFT], bigRegister, { escrowBySha: null });
+  assert.deepEqual(r.unjudgeable, []);
+  assert.deepEqual(r.unbacked, []);
+  assert.equal(r.escrow_checked, false);
+});
+
+test("home and law rows are never unjudgeable — the class exempts them before the sha is asked", () => {
+  const home = { ...ORIENT, slug: "current-the-reader/the-mantel", tier: "home" };
+  const r = canonLockFindings([home], { slugs: new Set([home.slug]), sha: "0".repeat(40) }, { escrowBySha: PROJECTION });
+  assert.deepEqual(r.unjudgeable, []);
+  assert.equal(r.escrow_compared, 0);
+});
+
+test("projectedShas reads the shas off the map's own keys, and a key with no bar is not a sha", () => {
+  assert.deepEqual([...projectedShas(PROJECTION)].sort(), ["422dbe6f2b5b4fc0eaae69c5f2c8058d259d8d98", "723005e5"]);
+  assert.deepEqual([...projectedShas(null)], []);
+  assert.deepEqual([...projectedShas(new Map([["nobar", 1], ["|leading", 1]]))], []);
+});
+
+test("unjudgeableByWindow groups by locking window, oldest first, and counts the marks", () => {
+  const twin = { ...ORIENT, slug: "the-town/quay-steps", claim_id: "twin0001" };
+  assert.deepEqual(unjudgeableByWindow([PEAK, ORIENT, twin]), [
+    { locked_window: 150, town_sha: ORIENT.locking_town_sha, marks: 2 },
+    { locked_window: 164, town_sha: PEAK.locking_town_sha, marks: 1 },
+  ]);
+  assert.deepEqual(unjudgeableByWindow([]), []);
+});
+
+test("ESCROW_OLDEST_SELECT names the projection's oldest sha with its first ingest and its window", () => {
+  assert.match(ESCROW_OLDEST_SELECT, /FROM escrow_projection e/);
+  assert.match(ESCROW_OLDEST_SELECT, /min\(e\.ingested_at\) AS ingested_at/);
+  assert.match(ESCROW_OLDEST_SELECT, /SELECT min\(w\.id\) FROM windows w WHERE w\.town_sha = e\.town_sha/);
+  assert.match(ESCROW_OLDEST_SELECT, /ORDER BY 2 LIMIT 1/, "oldest by first ingest, exactly one row");
 });
 
 // ── THE PHAENOLEPIS CASE, KEPT AS A TEST OF THE READ (ruled 2026-09-08) ─────

@@ -30,6 +30,7 @@ import { publishedState } from "./world-branches.mjs";
 import { guardedDraftsForKey } from "./world2-guards.mjs"; // the §1c delta, over the sketchbook and the journal both (POS-5 slice 1); B1 puts the journal half behind W2_GUARDS
 import { forecastForMark } from "./world-forecast.mjs";
 import { execUnderTownLock, lockTimedOut, LOCK_BUSY } from "./town-lock.mjs";
+import { heldFor, clipTo, stampsBlock, toConfirm, RULE_MARK, NOTHING_MOVED } from "./stamps-preview.mjs"; // POS-83: the confirmation step for every act that moves stamps
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TOWN_CLONE = process.env.TOWN_CLONE ?? resolve(HERE, "..", "town-clone");
@@ -402,6 +403,12 @@ export async function worldStakeViaOffice(args = {}, key = null, deps = {}) {
     ledger = runExec,
     promote = async (p) => (await import("./world2-claims.mjs")).promoteDraftOnStake(p),
     standing = async (p) => (await import("./world2-claims.mjs")).markStandingStatus(p),
+    // THE FOURTH COLLABORATOR (POS-83), injectable for the same reason as the
+    // other three: `TOWN_CLONE` is fixed at MODULE LOAD, so a falsifier that
+    // could not pass its own clone in would be asserting whichever ledger
+    // happened to be on the box — and the clip case, which is the founder's
+    // whole reason for asking, is only reachable against a balance you control.
+    held = (handle) => heldFor(TOWN_CLONE, handle),
   } = deps;
   const who = actingAs(args.handle, key);
   if (who.bounce) return who.bounce;
@@ -422,6 +429,51 @@ export async function worldStakeViaOffice(args = {}, key = null, deps = {}) {
   if (ex.known && !ex.exists)
     return bounce(404, `no mark "${args.mark}" in the world you can see`,
       "ids are <by>/<slug> as the telling shows them — you can back published marks and your own household's drafts; another household's draft becomes stakeable when Settlement publishes it");
+
+  // ── PREVIEW (POS-83; the founder's word 2026-09-14, postmark#2814) ────────
+  //
+  // SAY IT, MOVE NOTHING — the same grammar the mark preview keeps (#2692,
+  // world.mjs § PREVIEW): every gate above has run, and what a real stake does
+  // from here is promote the draft and move the escrow. A preview does neither,
+  // so it stops here and answers with the thing no door said before the write:
+  // what you hold, what this act moves, the rule you are consenting to, and what
+  // you hold after.
+  //
+  // THE ONE REFUSAL IT CAN STILL RUN is the retirement gate, because
+  // `stakeRefusalFor` is pure and the standing read is a read. It is asked with
+  // `promoted: false` — the answer for every stake on an already-public mark,
+  // which `promoteDraftOnStake` itself calls "the ordinary answer … and never an
+  // error". On a retired mark whose promotion WOULD carry it forward that makes
+  // the preview stricter than the act, which is the safe direction this file
+  // argues for everywhere else: the cost is a resident who calls anyway and
+  // succeeds, never a resident charged for a claim that was never filed.
+  //
+  // NOT RUN, and named here rather than faked: the promotion's own refusal (it
+  // requires MAKING the promotion) and the unbacked-claim refusal (it reads what
+  // the ledger actually moved). A preview whose `this_act` shows ✦0 is the same
+  // fact from the other side, and it shows it without charging anyone.
+  if (args.preview === true) {
+    let status = { known: false };
+    try { status = await standing({ slug: args.mark }); }
+    catch (e) { console.error(`[world-stake] preview could not read the store's standing for "${args.mark}": ${String(e?.message ?? e)}`); }
+    const refusal = stakeRefusalFor({ mark: args.mark, n, promoted: false, status, refused: null });
+    if (refusal) return { ...refusal, preview: true };
+    const now = await held(who.handle);
+    const { moves } = clipTo(n, now.liquid);
+    return {
+      preview: true, mark: args.mark, handle: who.handle,
+      stamps: stampsBlock({
+        held: now, moves, requested: n, direction: "stake", rule: RULE_MARK,
+        // ✦0 IS LAWFUL ON YOUR OWN GROUND and moves nothing either way, so the
+        // block says so in the door's own two-case sentence rather than showing
+        // a bare zero. Which case you are in is the promotion's ruling, and the
+        // promotion is exactly what a preview does not make.
+        ...(n === 0 ? { reason: "a zero stake moves no stamps — on your own household's ground it still puts the mark forward, and on the commons it is refused with your draft left standing" } : {}),
+        to_confirm: toConfirm(`world { do: "stake", args: { mark: "${args.mark}", stamps: ${n} } }`),
+      }),
+      nothing_written: NOTHING_MOVED,
+    };
+  }
 
   // ── THE BOUNDARY, ARRIVING ON ITS OWN ───────────────────────────────────
   //
@@ -493,6 +545,15 @@ export async function worldStakeViaOffice(args = {}, key = null, deps = {}) {
   const refusal = stakeRefusalFor({ mark: args.mark, n, promoted: !!putForward?.promoted, status, refused: promotionRefused });
   if (refusal) return refusal;
 
+  // THE RECEIPT'S OWN BLOCK, READ BEFORE THE MOVE (POS-83). The staked tense is
+  // not on the engine's answer — `worldStakeApply` returns balances, not the
+  // open-stake total — so it has to be read here, and reading it AFTER would be
+  // reading the world this act has just changed. The liquid half is taken from
+  // the engine's own `balance_before` below where it gives one, because those
+  // numbers are folded under the ferry's flock and an answer carrying two
+  // different "before" figures for one resident would be contradicting itself.
+  const heldBefore = await held(who.handle);
+
   const staked = await ledger({ verb: "stake", handle: who.handle, mark: args.mark, n, via: "api", date: townDay() });
   if (staked?.error) return staked;
 
@@ -510,6 +571,16 @@ export async function worldStakeViaOffice(args = {}, key = null, deps = {}) {
   // mark door's own rule, asked rather than copied. It is imported lazily
   // because world.mjs imports this file.
   const applied = Number(staked?.applied ?? 0);
+  // THE SAME BLOCK THE PREVIEW SHOWS (POS-83) — this is the half that reaches
+  // every existing caller without changing their flow, so an agent that skipped
+  // the preview still reads, right then, what it just did to its stamps.
+  const stampsAt = stampsBlock({
+    held: { ...heldBefore, liquid: Number(staked?.balance_before ?? heldBefore.liquid) },
+    moves: applied, requested: n, direction: "stake", rule: RULE_MARK,
+    // The engine's own sentence when it moved nothing, carried rather than
+    // paraphrased — it is the reason the numbers below look the way they do.
+    ...(staked?.reason ? { reason: staked.reason } : {}),
+  });
   if (putForward?.promoted && n >= 1 && applied === 0) {
     let ownGround = null;
     try {
@@ -554,7 +625,7 @@ export async function worldStakeViaOffice(args = {}, key = null, deps = {}) {
   // carried `applied` and `clipped`; the prose was the half that had not been
   // told.
   return putForward?.promoted
-    ? { ...staked, put_forward: true, claim: putForward.claim,
+    ? { ...staked, stamps: stampsAt, put_forward: true, claim: putForward.claim,
         // A DRAFT THAT SLEPT THROUGH A CROSSING SAYS SO (postmark#2722). The
         // deed files into the window the resident put it forward in, keeping
         // the crossing it was composed in on its payload — so the answer names
@@ -564,10 +635,29 @@ export async function worldStakeViaOffice(args = {}, key = null, deps = {}) {
           ? `your draft from crossing ${putForward.late_from} is put forward in window ${putForward.window} with ✦${applied} behind it — it is on the public docket now, and locks or is refused by name at the next crossing.`
           : `✦${applied} stands behind it and that is what put it forward — it is on the public docket now, and locks or is refused by name at the next crossing.`)
           + (applied < n ? ` You asked for ✦${n}; your balance carried ✦${applied}, and ✦${applied} is what the ledger moved.` : "") }
-    : staked;
+    : { ...staked, stamps: stampsAt };
 }
 
-export async function worldUnstakeViaOffice(args = {}, key = null) {
+// `deps` here for the reason it exists on the stake door one function up: the
+// POS-83 block is computed beside a subprocess and a pen, and a falsifier that
+// could only reach it through both would be asserting the fixture. Defaults are
+// the real ones, so no caller changes.
+export async function worldUnstakeViaOffice(args = {}, key = null, deps = {}) {
+  const {
+    ledger = runExec,
+    // The resident's OWN open position on this mark — the ceiling an unstake
+    // clips to. The town's own exported read; the office never folds positions.
+    position = async (mark, handle) => {
+      const enginePath = join(TOWN_CLONE, "tools", "world-stake.mjs");
+      if (!existsSync(enginePath)) return null;
+      const mod = await import(pathToFileURL(enginePath));
+      return mod.markPosition(TOWN_CLONE, mark, handle);
+    },
+    // Injectable for the same reason as on the stake door: `TOWN_CLONE` is fixed
+    // at module load, so a falsifier could not otherwise put a known ledger in
+    // front of the block it is asserting about.
+    held = (handle) => heldFor(TOWN_CLONE, handle),
+  } = deps;
   const who = actingAs(args.handle, key);
   if (who.bounce) return who.bounce;
   if (!args.mark) return bounce(422, "which mark?", "pass mark: '<by>/<slug>'");
@@ -576,7 +666,60 @@ export async function worldUnstakeViaOffice(args = {}, key = null) {
   // No mark-existence gate here on purpose: taking your stamps back out of a mark
   // must never be blocked by the state of the world record. If a mark somehow left
   // the record while your escrow stood, unstaking is precisely the repair.
-  return runExec({ verb: "unstake", handle: who.handle, mark: args.mark, n, date: townDay() });
+
+  // ── PREVIEW (POS-83) ─────────────────────────────────────────────────────
+  // The same shape as the stake's, one ceiling different: an unstake clips to
+  // the position you HOLD on that mark, never to your balance ("you can never
+  // take out more than you put in", the engine's own words). A position that
+  // cannot be read is stated rather than guessed at — a preview claiming ✦3 come
+  // home when the office could not see the escrow would be the precise lie this
+  // door exists to stop.
+  if (args.preview === true) {
+    const now = await held(who.handle);
+    let open = null;
+    try { open = await position(args.mark, who.handle); }
+    catch (e) { console.error(`[world-stake] preview could not read the position on "${args.mark}": ${String(e?.message ?? e)}`); }
+    if (open == null)
+      return { preview: true, mark: args.mark, handle: who.handle,
+        you_hold: { liquid: now.liquid, staked: now.staked },
+        unread: "the office has no town clone carrying the world-stake engine, so your open position on this mark could not be read — what an unstake would bring home cannot be previewed here",
+        nothing_written: NOTHING_MOVED };
+    const { moves } = clipTo(n, open);
+    return {
+      preview: true, mark: args.mark, handle: who.handle, position: open,
+      stamps: stampsBlock({
+        held: now, moves, requested: n, direction: "unstake", rule: RULE_MARK,
+        to_confirm: toConfirm(`world { do: "unstake", args: { mark: "${args.mark}", stamps: ${n} } }`),
+      }),
+      nothing_written: NOTHING_MOVED,
+    };
+  }
+
+  const heldBefore = await held(who.handle);
+  const out = await ledger({ verb: "unstake", handle: who.handle, mark: args.mark, n, date: townDay() });
+  if (out?.error) return out;
+  // The engine answers an unstake with POSITIONS, never balances — so both halves
+  // of the block are derived from the fold above, unlike the stake path where
+  // `balance_before` arrives with the receipt. The arithmetic is the law's:
+  // stamps that come out of escrow come home to liquid.
+  return { ...out, stamps: stampsBlock({
+    held: heldBefore, moves: Number(out?.applied ?? 0), requested: n, direction: "unstake", rule: RULE_MARK,
+    ...(out?.reason ? { reason: out.reason } : {}),
+  }) };
+}
+
+/**
+ * THE MARK-STAKE BLOCK, FOR A DOOR THAT IS NOT THIS ONE (POS-83).
+ *
+ * The inline `stamps: N` on `world_leave_mark` is a stake — it reaches the
+ * ledger through `worldStakeViaOffice` above — so its preview owes the same
+ * block, and `world.mjs` has no town clone of its own to read it from. One
+ * owner, asked; never a second copy of the read and the clip beside it.
+ */
+export async function markStakeBlock({ handle, stamps, to_confirm = null, clone = TOWN_CLONE }) {
+  const held = await heldFor(clone, handle);
+  const { moves } = clipTo(stamps, held.liquid);
+  return stampsBlock({ held, moves, requested: stamps, direction: "stake", rule: RULE_MARK, to_confirm });
 }
 
 export const WORLD_STAKE_TOOLS = [
@@ -586,6 +729,7 @@ export const WORLD_STAKE_TOOLS = [
       mark: { type: "string", description: "the mark id, <by>/<slug>, as the telling shows it" },
       stamps: { type: "number", description: "how many stamps to put behind it (whole stamps)" },
       handle: { type: "string", description: "which of YOUR residents stakes (omit if your key holds one; a multi-resident key must name one)" },
+      preview: { type: "boolean", description: "true = say what this stake WOULD do to your stamps and MOVE NOTHING: what you hold now (liquid and staked), the stamps this act moves — clipped to your balance, and the clip stated as a clip — the rule you are consenting to quoted from the law, and what you hold after. No escrow, no ledger row, no promotion. Read it, then make the same call without preview." },
     }, required: ["mark", "stamps"], additionalProperties: false } },
   { name: "world_unstake",
     description: "Take your own stamps back out of a mark. Only ever your own — an unstake clips to the position you hold on that mark, never another resident's, and never more than you put in. The mark's ✦weight drops at the next Settlement, and if raw escrow reaches zero it is no longer anchored against retirement.",
@@ -593,6 +737,7 @@ export const WORLD_STAKE_TOOLS = [
       mark: { type: "string", description: "the mark id, <by>/<slug>" },
       stamps: { type: "number", description: "how many of YOUR staked stamps to take back" },
       handle: { type: "string", description: "which of YOUR residents unstakes (omit if your key holds one)" },
+      preview: { type: "boolean", description: "true = say what this unstake WOULD bring home and MOVE NOTHING: what you hold now (liquid and staked), your open position on this mark, the stamps that come home — clipped to that position — the rule quoted from the law, and what you hold after. Read it, then make the same call without preview." },
     }, required: ["mark", "stamps"], additionalProperties: false } },
   { name: "world_stake_read",
     description: "What a mark carries on the LEDGER: its raw escrow (`stamps`/`escrow`), who staked it and how much each, `ledger_weight` (own escrow + breadth bonus), the `breadth` term that separates the two — k paid once per unique EXTERNAL household, never to the mark's own — and whether it is currently anchored against retirement. `ledger_weight` is NOT the ✦weight a telling prints: the effective ✦weight also includes marks sitting inside this one fanning up, which lives on world_investigate (`weight` and its `weight_parts` breakdown). Public — escrow is as open as the ✦weight it produces.",

@@ -23,7 +23,7 @@ runs the other way — it is the only one that reads the DB and writes the repo.
 | `falsifier-review-closure.mjs` | a ruled claim ends in exactly one lawful state, with a receipt naming who ruled |
 | `canon-register.mjs` | does canon carry this slug, and at which state — ONE predicate, two backends (`git` today, `fold` after G1), asked by the nightly read and by the review door's naming line so they cannot disagree. NOT asked at the candle: the lock-time refusal was ruled and WITHDRAWN the same day (2026-09-08), because the crossing's settlement pushes its mark files to origin three to four minutes AFTER the candle clears — seven crossings measured, never once before — so no checkout the candle can hold carries the marks its own crossing is locking (the header carries the table). There is no grace: `graceVerdict` / `GRACE_CROSSINGS` were dropped unpushed, dead by construction once every settlement is "late". It reads the WORLD CHECKOUT's own head, deliberately not `projection_heads['world-law']`: that pin is frozen by the 2026-08-31 parking ruling, and on 2026-09-08 twenty-six of the twenty-seven standing marks absent from it were on world main. |
 | `canon-locks.mjs` | which STANDING MARKS the world carries no file for, with the claim that locked each (it walks `marks`, not `claims` — `claims.slug` is NULL on every seed-imported claim) — the judgement, pure, so it is testable without a store. A RETIRED mark is not a finding: that is the retire path's lane, already recorded. |
-| `falsifier-canon-locks.mjs` | the standing read for postmark#2594 — the instrument that would have found the three on the day. Runs NIGHTLY on the notary rail — `world2-notary.sh`, 03:20 UTC, when the 17:45 push is nine hours old — never on the clearing, whose checkout cannot yet carry the marks the crossing just locked (`test/box-rollcall.test.mjs` holds the clearing row free of this alarm). Its lists are `alarm_on_nonempty` on the `postmark-world2-notary.timer` row of the roll-call, and `escrow_checked:false` is that row's `alarm_on_false` — a read that could not run is never a clean town. Its RED does not fail the notary. |
+| `falsifier-canon-locks.mjs` | the standing read for postmark#2594 — the instrument that would have found the three on the day. Runs NIGHTLY on the notary rail — `world2-notary.sh`, 07:20 UTC (office#83; was 03:20), after the morning crossing has published — never on the clearing, whose checkout cannot yet carry the marks the crossing just locked (`test/box-rollcall.test.mjs` holds the clearing row free of this alarm). Its lists are `alarm_on_nonempty` on the `postmark-world2-notary.timer` row of the roll-call, and `escrow_checked:false` is that row's `alarm_on_false` — a read that could not run is never a clean town. `escrow_unbacked` lists only JUDGEABLE zeros: a commons mark locked at a window whose town sha the escrow projection holds no rows for (every window before 181, migration 014's first ingest) is UNJUDGEABLE — counted on the line as `escrow_unjudgeable`, the row's `report_counts`, printed and never alarmed; unavailable, never ✦0 (postmark#2935: 227 such marks read ESCROW-ABSENT every morning for eight nights while the true unbacked count was zero). Its RED does not fail the notary. |
 | `conversations.mjs` | 1.0's thread derivation over voice `acts` — what `/world/conversations` becomes when the voices log dies |
 | `falsifier-conversations-equality.mjs` | that port vs `voices.mjs` itself, on identical inputs, era by era |
 | `falsifier-acts-lane-closure.mjs` | every WRITE lane reaches `acts`, checked from each lane's own pen — and a census that reds when a new act appears that nobody has ruled on. STANDING INVOCATION CARRIES `--since 2026-08-29T00:20Z` (the fix's lab deploy): exactly ONE act was lost before the lanes closed — wright's say at 2026-08-28T16:18:38.744Z, the lab's first witnessed act, which lives in voices-log.jsonl and never reached `acts`. The exclusion is dated at the deploy so it excuses only the pre-fix era and nothing after; the loss itself is recorded here, in the merge commit (87f4fe65), and in the epic — a red nobody can act on is a falsifier nobody reads (the discarded-draft lesson), but a loss nobody wrote down is worse. THE MIRROR EXPIRY IS PER LANE (DEC-2, ruled 2026-08-29): this tool and `falsifier-acts-parity.mjs` red past a lane's own backstop in `LANE_MIRROR` (`src/world2-acts.mjs`) and NAME the lanes, and the arena is exempt by P-143's ruling. A lane's obligation ends by removing its row — its read ports landed, its deletion ruled — never by moving a date. |
@@ -1851,7 +1851,7 @@ sqlite.
 
 | door | question | 1.0's equivalent |
 |---|---|---|
-| `/world2/walks` | every departure the record holds, in the ledger's grammar | `WORLD/walk-ledger.md` (the site's one still-baked record) |
+| `/world2/walks[?since=][&last=]` | every departure the record holds, in the ledger's grammar | `WORLD/walk-ledger.md` (the site's one still-baked record) |
 | `/world2/positions[?at=]` | every walker's derived position at one instant | `walk.mjs positionsAt` |
 | `/world2/present[?at=][&x=&y=&radius=&limit=]` | every PLACED resident: a walk, else ground, else the porch | `GET /world/present` · `world_walkers` |
 | `/world2/say?at=&x=&y=[&radius=&mode=]` | what is still in the air, and what reaches this point | `presentEmissions` |
@@ -1890,6 +1890,28 @@ against the OUTPUT column list first, so a caller selecting `id::text` sorts the
 ids as TEXT — "1019" before "102". That is what this falsifier's own first run
 did, and the order guard is what caught it.
 
+### `/world2/walks` takes a window (POS-84, 2026-09-16)
+
+The door answered the whole record and only the whole record — 2,498 rows /
+1.17 MB on 2026-09-16, growing by ~100 a day — so its one live consumer, the
+world viewer's Lately pane, read a file frozen 2026-08-10 instead. `?since=<ISO>`
+cuts to the departures at or after an instant; `?last=<n>` keeps the last n
+rows. Neither given, the answer is byte-for-byte what it was, including `count`
+and `eras`.
+
+Three properties the window holds and a reader should not have to re-derive:
+
+- **It filters, it never re-sorts.** The order stays the record's own append
+  order, so `last` is the most recently **appended** n. Measured on prod
+  2026-09-16 that differs from the n latest instants in exactly one place, the
+  08-08 sailing documented above. The answer carries a `window.note` saying so.
+- **The cut is on the rendered rows, not in SQL.** `departureRecords` refuses a
+  row it cannot read rather than skipping it, and censuses the eras over
+  everything; a `WHERE` clause would make both depend on who asked, and a fifth
+  pen's act sitting outside the window would quietly stop bouncing.
+- **`count` and `eras` are always about the rows returned**, and `window.count_all`
+  says how big the record is behind them.
+
 ### The four eras of a movement act
 
 | era | how identified | payload | the mapping's source |
@@ -1912,12 +1934,23 @@ Every oracle is 1.0's OWN function, imported live — never a re-expression.
 
 ```sh
 export WORLD2_PG_URL="postgres://snapshot_reader:…@localhost:5432/world2_dev"
-git -C ~/world-full worktree add --detach ~/live-lane/w-s50 settlement/S50
-node world2/tools/falsifier-live-equality.mjs --world-repo ~/live-lane/w-s50 --can-fail-proof
+# THE PIN IS DERIVED, NOT TYPED. A tag written into a recipe is a fixture that
+# decays at the next crossing, and this recipe's own S50 pin is what hid #2894
+# for nineteen days: S50 still carries `WORLD/threshold-ledger.md`, so the run
+# that was supposed to prove the pen worked was the one checkout where its
+# filename bug could not appear. Resolve the current settlement instead.
+TAG=$(git -C ~/world-full tag --list 'settlement/S*' | sort -V | tail -1)
+git -C ~/world-full worktree add --detach ~/live-lane/w-now "$TAG"
+node world2/tools/falsifier-live-equality.mjs --world-repo ~/live-lane/w-now --can-fail-proof
 ```
 
-Run against `world2_dev` on 2026-08-28, at `settlement/S50` (the store's own
-state — run it at the FLOOR and E5b reds on marks the replay legitimately moved):
+Run against `world2_dev` on 2026-08-28, at `settlement/S50` — kept below as the
+historical reading, because it is the last one taken before the pen went blind.
+On 2026-09-17 the derived pin resolves to `settlement/S71` (2026-09-17T05:46Z),
+which carries `WORLD/enter-exit-ledger.md` and not the retired name, and is
+therefore the first checkout in the recipe's history where E6occupancy is
+exercised as residents' checkouts actually stand. (Run it at the FLOOR and E5b
+reds on marks the replay legitimately moved.)
 
 ```
 world 0c1aa924 · 1090 departures (ledger 304 · journal 786 · live 0) · 158 passages
@@ -1950,6 +1983,18 @@ Two scoping decisions are worth knowing, because both started as false findings:
   verbatim. Rows from later eras are reported beside it as the named delta they
   are. The store carrying more record than the frozen tag is the store being
   right.
+- **E6 follows the ledger's rename, and says when it did** (#2894, 2026-09-17).
+  The frozen acts name `WORLD/threshold-ledger.md` in `payload._ledger`; that
+  file was deleted from world main on **2026-08-28** by `2a9042d4b` ("the passage
+  record keeps one file, and the retired twin is deleted", #2152) and its record
+  is `WORLD/enter-exit-ledger.md` — byte-identical at `settlement/S50`, where
+  both still stand. A frozen record keeps the vocabulary of the day it was
+  frozen, so the reader maps the retired spelling forward through
+  `world2/tools/ledger-names.mjs` and reports `ledger_followed_rename` when it
+  does; where the named file exists it is read untouched and that field is null.
+  Note that the founder's ENTEREXIT ruling (2026-08-29, world `3ef755913`) is
+  the WORD and not the removal: that commit is not an ancestor of world main, and
+  #2894's body misattributes the deletion to it.
 
 ### The can-fail proof
 
@@ -2176,6 +2221,70 @@ holding row to bend. The alternative was leaving that era's sharpest trap
 untested until the first give, which is the wrong side of the record to discover
 it on. The unit suite (`test/world2-guard-reads.test.mjs`, 17 tests) covers the
 same mapping directly.
+
+### In CI — the run that has no prod (POS-107)
+
+**Ruled (Keemin, 2026-09-17, D-A of `DESIGN-standing-flip.md` § 6): "local
+postgres is fine to CI."** The scratch database this falsifier needs would be
+`CREATE DATABASE` on prod's own server, and that write was refused on 09-17
+(postmark#2892 § 1). So `.github/workflows/guard-falsifier.yml` runs it on every
+pull request (and on dispatch) against a `postgres:16` service that lives for
+one job: the five roles, both databases floored from `world2/schema/` (every
+`NNN_*.sql` in name order as `world2_owner`, 003 skipped — it is a falsifier
+query, not a migration), a shallow read-only checkout of `keeminlee/postmark-world`
+at `main` for `--world-repo`, the run with `--json`. ~2 minutes, most of it
+`npm ci`. The floor loop lives in `.github/scripts/guard-falsifier-floor.sh`
+and the receipt printer in `guard-falsifier-report.mjs`; both are workflow
+machinery, listed by no unit.
+
+**The roles are created nowhere else.** No file in this repo `CREATE ROLE`s
+anything — 002 GRANTs to five names the box made by hand. The workflow's list
+(`world2_owner`, `office_api`, `clearing_job`, `law_ingester`,
+`snapshot_reader`) is derived from 002's grantees and is now the only written
+record of them.
+
+**`world2_dev` is SEEDED, and G5 is the reason.** G1–G4 and G6 write their own
+population and are the same equality on any machine. G5 reads a real store —
+`acts` against 1.0's recovery over the checkout's `STATE/` — and a floored,
+empty `world2_dev` reds it on every holder (measured 2026-09-18: *"1.0's
+recovery yields 109 attachment rows, the port yields 0"*, 38 findings, exit 1).
+So the job runs the genesis pen first, `seed-import.mjs --with-acts` at the
+checkout's own sha (the pen that wrote prod's `legacy:attachment` rows on
+2026-08-28; ~3 s at main). G5's verdict in CI is therefore **the port's
+legacy-era parse of the seed's rows against 1.0's recovery over the same
+STATE** — a real equality, and not a verdict about prod's `acts`. That one
+still needs prod's store; box 1 of #2892 records what CI can and cannot say.
+
+**Exit 2 cannot read green.** Every non-zero exit fails its step, and the step
+after the run reads the receipt a second time: `unchecked` must be empty and
+every equality must have compared something.
+
+**The workflow proves it can go red — twice, on purpose.** Two steps are
+expected to FAIL (`continue-on-error`) and the step after each asserts that
+they did, and how:
+
+- a `claims` row planted in the scratch store that 1.0's journal never wrote
+  (`guards-alfa/the-planted-shed`) → exit **1**, and the slug must appear in the
+  log (G1 and G4 name it);
+- `--world-repo` with no `STATE/` → exit **2**, and the step must fail on it.
+
+An exit 2 in the first proof would not satisfy it: a run that could not run is
+not a run that found the divergence, so the code is captured and asserted, not
+just the outcome.
+
+**`--prove-can-fail` is the tool's proof, not the workflow's, and it is GREEN
+when it holds.** It breaks the port in memory seven ways and exits 0 when every
+break is noticed, 1 only when one goes silent. The job runs it as its own step
+on a fresh scratch and asserts every break read RED — none SILENT, INERT or
+THREW. Each run after the first gets a fresh scratch (`--fresh`): the falsifier
+plants its population through the live pen, and a rerun over the first run's
+rows reads green today but would be measuring leftovers.
+
+**What CI does not do.** Nothing reaches prod or the box; the only token is the
+default `GITHUB_TOKEN`, used to read a public repo. 003 is not run as a gate: on
+any fresh floor it prints 014's two `escrow_projection` rows, the same red prod
+carries (Wright's, named on #2897). The rest of the office suite is not in CI
+(a separate decision; the office still has no suite workflow).
 
 ### What the falsifier found
 
@@ -2568,7 +2677,7 @@ x,y because that is the photograph the crossing log took, and the live one store
 an anchor and an offset because the witnessed-line ruling says a bare world x,y
 is *"a photograph of a moving thing"*. A live say whose anchor does not resolve
 is REFUSED, never placed at `{0,0}` — `composeAnchor`'s own refusal, carried up,
-and Ferry's crossing is a real place somebody could be standing.
+and the Origin is a real place somebody could be standing.
 
 An act no era explains refuses the whole read, by name. That is the live lane's
 rule and it earned itself twice there.
@@ -2715,7 +2824,7 @@ node world2/tools/falsifier-apex-equality.mjs --world-repo /srv/world2-lab/world
 ```
 
 Run 2026-09-03 against `world2_dev` + the frozen lab office, 14 standpoints
-derived from the store (a berth, the vessel, Ferry's crossing, the commons, a
+derived from the store (a berth, the vessel, the Origin, the commons, a
 minting ground, a mark inside a parcel, a parcel centre, open ground, six spread
 parcels):
 
@@ -2736,6 +2845,26 @@ Exit **0** green · **1** RED · **2** cannot run. Every equality reports its ow
 `compared`; any that compared zero exits 2. `--strict` promotes every
 acknowledged divergence to RED and the same run then exits 1 — which is what
 keeps the acknowledgements from becoming a blindfold.
+
+**`records`, and A8 (postmark#2896, 2026-09-17).** A7 on prod found the door
+answering twelve top-level keys to 1.0's thirteen at all fourteen standpoints,
+and the missing one was `records` — "the full mark record for everything
+`within` and `nearby` just named, plus the town's ground". The door now
+composes it the way `world.mjs § markRecords` does (the named ids, then the
+region rings and the water by the engine's own readers, then the mover's
+class), each record in the FOLD'S PUBLISHED SHAPE — `apex-reads.mjs §
+records` vendors the fold's key set from `marks-fold.mjs § the published mark`
+with the blob named. Seven of the fold's fields are on no row and are ABSENT,
+never zero: the escrow figures (`stamps` `weight` `weight_parts`
+`ledger_weight`) and the walk's receipts (`sovereign` `placementParent` `kept`);
+the answer's `disclosed` names them. **A8** compares the id set and then every
+record field by field under `records[<id>].<field>`, so those seven are
+acknowledged by name (AD-5, AD-6) and amber, and any other field going wrong
+is red — a `parent` read off the directory instead of the authored line (the
+first cut's shape, 365 of 365 records), a `tier` the store has not recomputed
+(#2895's ten), a `declared_household` the clearing wrote from a stale roster.
+A8's break in the can-fail proof is a record inside a right block going wrong,
+not the block going missing — that is A7's, and would prove A7 twice.
 
 **The sample is DERIVED, never typed in.** A hardcoded coordinate list rots the
 first time a mark relocates and would keep reporting greens for a class it had

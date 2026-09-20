@@ -47,6 +47,11 @@ test("THE CONTROL: a decided crossing lands as exactly one line, carrying the fi
   const line = lineFor(receipt());
   assert.deepEqual(line, {
     at: "2026-08-31T05:45:00Z", status: "published", class: null,
+    // `by_hand: false` on a receipt that did not say otherwise — the timer's
+    // crossing, said out loud rather than implied by an absence. (Added with
+    // #2974, after the by-hand door's first live run wrote a refused receipt
+    // that the log could not tell from a scheduled refusal.)
+    by_hand: false,
     published: 4, left_drafted: 20, quarantined: 1,
     // `retired: null` on a receipt with no retire block — the crossing did not
     // run the step, which is not the same fact as running it and retiring none.

@@ -69,7 +69,12 @@ import { carriedLegsFor, happenedBlock, latestSettlement, readCrossingLogs } fro
 import { WORLD_STAKE_TOOLS, callWorldStakeTool } from "./world-stake.mjs";
 // DEMO SLICE (step 5) — the crossings. Imported for the dispatch table and the
 // `fields` lookup; unreachable in production because no class mark grants them.
-import { CROSSING_EXEC, CROSSING_TOOLS, enterViaOffice, exitViaOffice } from "./world-crossings.mjs";
+import { CROSSING_EXEC, CROSSING_TOOLS, VEHICLE_CLASS, enterViaOffice, exitViaOffice } from "./world-crossings.mjs";
+// The vehicle's act. RIDE_TOOLS ride the SCHEMA lookup beside CROSSING_TOOLS
+// and for the same reason: an apex action's `fields` come from the flat
+// tool it dispatches to, so an action with no schema is an action whose card
+// cannot say what it takes (seam 4).
+import { RIDE_TOOLS, arrivedNotice, depositAt, rideStateFrom, rideViaOffice, vehicleGroundExtras } from "./world-ride.mjs";
 import { servedEnterExitLedger } from "./enter-exit-ledger.mjs";
 // POS-5's consent verb. STANCE_TOOLS ride the schema lookup without joining
 // the flat tool list, exactly as CROSSING_TOOLS do and for the same reason.
@@ -152,6 +157,200 @@ export const apexEnabled = () => process.env.WORLD_APEX === "1";
 // A second copy of this wiring in world.mjs would be two answers to "how does
 // the office reach the threshold ledger" — the drift this repo keeps closing.
 // world.mjs imports it lazily, so the edge back to the apex is not a cycle.
+// ── THE FRAME TRAVELS WITH THE STANDPOINT (postmark#2712) ──────────────────
+//
+// What the crossing doors are told about where a resident is. It answered
+// `{ x, y, name }` and nothing else, which was enough for as long as every
+// threshold was measured against canonical geometry.
+//
+// It stopped being enough the moment a door could be aboard something that
+// moves. `enterViaOffice` composes a nested threshold into the carrier's live
+// frame before measuring reach (world-crossings.mjs § thresholdAtStandpointFrame,
+// kadakatzenberg's #2712 repair), and to do that it has to know there IS a
+// carrier, WHICH one, and where inside it the resident stands. Those three facts
+// exist on `residentStandpoint` — `aboard`, `frame`, `frame_offset` come off
+// `movementStandpoint`'s frame fold — and this projection was dropping all of
+// them on the floor. The composition was therefore unreachable through the real
+// door while passing its own tests, which is the worst of the two ways to be
+// wrong: a correct repair, inert.
+//
+// A NAMED PROJECTION rather than an object literal, so a falsifier can hand the
+// door exactly what the office hands it and the two cannot drift. The engine
+// reads only `x` and `y` off this object (world-verbs.mjs § pointWithinMark), so
+// the extra fields are inert everywhere that does not ask for them.
+export function standpointForCrossing(here, who) {
+  if (!here || !Number.isFinite(here.x)) return { x: 0, y: 0, name: who };
+  return {
+    x: here.x, y: here.y, name: who,
+    // Booleans rather than pass-through: `aboard` is a fact the door branches
+    // on, and `undefined` there reads as "ashore" by accident rather than by
+    // answer. The two ids stay null when absent, for the same reason.
+    aboard: here.aboard === true,
+    moving: here.moving === true,
+    frame: here.frame ?? null,
+    frame_offset: here.frame_offset ?? null,
+  };
+}
+
+// ── THE RIDE'S TWO READS (#2986, 2026-09-19) ────────────────────────────────
+//
+// Both live HERE rather than in `world-crossings.mjs` / `world-ride.mjs`,
+// because both need a store handle and those two modules are deliberately pure
+// over their inputs — which is what lets the whole origin rule, the deposit rule
+// and the ground block be falsified without standing up a world.
+
+/**
+ * One actor's journal rows, oldest first, in the shape `rideStateFrom` folds.
+ *
+ * ⚑ THE JOURNAL IS TRUNCATED AT THE DRAIN, and that is a fact about this read
+ * worth writing down rather than discovering. `world-drain.mjs` deletes every
+ * row at or below its cursor once the write-down is on disk, so an act older
+ * than the last drain is NOT here — it is in the world record's STATE/log. This
+ * reader does not chase it there, and the consequence is bounded and safe by
+ * construction: a rider whose `enter` has been drained away has no known entry
+ * stop, so the deposit rule declines to move them (`depositAt` answers a null
+ * stop and the exit writes no departure) rather than setting them down somewhere
+ * they cannot prove they came from. Measured on prod 2026-09-19: the cursor sat
+ * at seq 1536 with 2,103 rows standing back to 2026-09-11, so in practice every
+ * act of a ride's lifetime is here. The exposure is the enter/exit pair's own
+ * and this act inherits it; it is not a new one.
+ */
+function actsOfActor(who) {
+  let db = null;
+  try {
+    db = openDynamicRead();
+    const has = db.prepare("SELECT name n FROM sqlite_master WHERE type='table' AND name='journal'").get();
+    if (!has) return [];
+    const rows = db.prepare(
+      "SELECT action, object, payload FROM journal WHERE actor = ? ORDER BY seq").all(String(who));
+    return rows.map((r) => ({
+      action: r.action, object: r.object ?? null,
+      payload: (() => { try { return JSON.parse(r.payload ?? "null") ?? {}; } catch { return {}; } })(),
+    }));
+  } catch { return []; }
+  finally { try { db?.close(); } catch { /* already gone */ } }
+}
+
+/**
+ * What the CLASS of this mark lends a resident — the § 5 roster, resolved.
+ *
+ * Asked through the same three-channel calculus every other door asks, filtered
+ * to the GROUND channel and to this one mark: a block that listed a resident's
+ * ambient verbs would tell them the portal lends `say`, which it does not — the
+ * world does.
+ */
+function lendsAt(markId) {
+  const id = String(markId ?? "").trim();
+  if (!id) return [];
+  const store = openStore();
+  if (!store.db) return [];
+  try {
+    const ground = gatherGroundActions(store.db, { spineIds: [id], reachIds: [] });
+    const { entries } = resolveGrants(ground.entries, { kind: "resident" });
+    return entries.filter((e) => e.ground === id).map((e) => e.action);
+  } catch { return []; }
+  finally { try { store.db.close(); } catch { /* same */ } }
+}
+
+/**
+ * THE MARKS A RESIDENT'S OCCUPANCY SAYS THEY ARE INSIDE, outermost first.
+ *
+ * The enter-exit ledger's own derivation, read through the crossing deps so
+ * there is exactly one answer to this question in the office. Never throws: a
+ * clone that cannot hand over its grammar must not be able to cost a caller the
+ * verbs they are actually standing in — it costs them the vehicle's, which they
+ * will be told about by the refusal's own sentence.
+ */
+export async function occupiedMarksOf(handle) {
+  const who = String(handle ?? "").trim();
+  if (!who) return [];
+  try {
+    const { crossingLaw } = await import("./world-crossings.mjs");
+    const { thresholds } = await crossingLaw(WORLD_CLONE);
+    const d = crossingDeps();
+    const at = thresholds.stampAt(d.now());
+    const acts = thresholds.parseEnterExitLedger(await d.ledger()).acts;
+    return [...(thresholds.occupancyAt(acts, at).get(who) ?? [])];
+  } catch { return []; }
+}
+
+/**
+ * THE SPINE A GRANT IS ASKED AGAINST — geometry, plus the vehicles you are in.
+ *
+ * ⚑ WHY THE UNION IS NARROWED TO ONE CLASS, deliberately. The natural sentence
+ * is "your spine is your occupancy", and DEC-5 makes it nearly true already:
+ * "you occupy a mark only by entering, and only while your feet stand inside
+ * it", so for every ordinary mark occupancy is a SUBSET of geometry and the
+ * union would be a no-op. Nearly. A stale row — the ghost class DEC-5 was ruled
+ * to close — would, under the broad union, hand a resident the verbs of a ground
+ * they are no longer standing on, and a permission spine is not the place to
+ * take that bet for tidiness. A VEHICLE is the one mark where the disagreement
+ * is the LAW rather than a defect: the rider's feet are at a hull they never
+ * walked to, which is Keemin's ruling 2 in one sentence. So the widening is
+ * exactly as wide as the ruling and no wider, and `test/world-ride.test.mjs`
+ * asserts a non-vehicle occupancy adds nothing.
+ *
+ * Pure over (ids, classOf) so the narrowing itself can be falsified.
+ */
+export function spineWithVehicles(geometricIds = [], occupied = [], classOf = () => null) {
+  const out = [...geometricIds];
+  for (const id of occupied) {
+    if (!id || out.includes(id)) continue;
+    if (String(classOf(id) ?? "") !== VEHICLE_CLASS) continue;
+    out.push(id);
+  }
+  return out;
+}
+
+/** The three channels' spine for one caller, with the vehicle union applied. */
+async function apexSpineIds(db, spine, args, key) {
+  const geometric = (spine ?? []).map((m) => m.id);
+  const occupied = await occupiedMarksOf(standingHandle(args, key));
+  if (!occupied.length) return geometric;
+  const { byId } = groundClassesAt(db, occupied);
+  return spineWithVehicles(geometric, occupied, (id) => byId.get(id)?.class ?? null);
+}
+
+/** The ride door's plumbing — the crossing deps' siblings, one act over. */
+export function rideDeps() {
+  const crossing = crossingDeps();
+  return {
+    world: crossing.world,
+    within: async (who) => {
+      // OCCUPANCY, from the enter-exit ledger's own derivation — the office's
+      // one answer to "what are you inside", borrowed rather than re-derived.
+      const { crossingLaw } = await import("./world-crossings.mjs");
+      const { thresholds } = await crossingLaw(WORLD_CLONE);
+      const at = thresholds.stampAt(crossing.now());
+      const acts = thresholds.parseEnterExitLedger(await crossing.ledger()).acts;
+      return [...(thresholds.occupancyAt(acts, at).get(who) ?? [])];
+    },
+    acts: crossing.acts,
+    nowMs: () => Date.now(),
+    crossing: () => currentCrossing(),
+    record: async (entry) => {
+      // `appendJournal` carries the World 2.0 mirror itself (its own header:
+      // "mirror the row into Postgres `acts`"), so a ride reaches `acts` by the
+      // same path a walk and a crossing do. No second pen, no second queue.
+      const { appendJournal, CLASS_RIDE } = await import("./world-journal.mjs");
+      const db = openDynamic();
+      try {
+        return appendJournal(db, {
+          crossing: entry.crossing, actor: entry.handle, action: "ride", object: entry.object,
+          cls: CLASS_RIDE, at: null, witnesses: null,
+          // THE PAYLOAD IS EXACTLY THE BRIEF'S SIX FIELDS. The summary sentence
+          // belongs in `effect`, which is the column the log already keeps one in;
+          // a seventh key here would make the row disagree with its own spec, and
+          // `test/world-ride.test.mjs` pins the key set for that reason.
+          payload: entry.payload,
+          effect: entry.effect,
+          household: worldHouseholdOf(entry.handle),
+        });
+      } finally { try { db.close(); } catch { /* already gone */ } }
+    },
+  };
+}
+
 export function crossingDeps() {
   return {
     world: async () => await worldStateRaw(),
@@ -162,10 +361,7 @@ export function crossingDeps() {
     // entered again was adjudicated as though he had never been inside.
     // src/enter-exit-ledger.mjs is the one deriver; this is one of its readers.
     ledger: async () => { try { return (await servedEnterExitLedger(WORLD_CLONE)).ledger; } catch { return ""; } },
-    standpointOf: async (who) => {
-      const here = await residentStandpoint(who).catch(() => null);
-      return here && Number.isFinite(here.x) ? { x: here.x, y: here.y, name: who } : { x: 0, y: 0, name: who };
-    },
+    standpointOf: async (who) => standpointForCrossing(await residentStandpoint(who).catch(() => null), who),
     // ENTERING ENDS THE WALK (Keemin-ruled 2026-09-12; postmark-town/postmark #2685).
     // `walking` is the ONE reader of "where is this resident" (residentStandpoint:
     // moving = the derived leg has not arrived); `stop` is the door's own walk act to
@@ -176,13 +372,31 @@ export function crossingDeps() {
       const here = await residentStandpoint(who).catch(() => null);
       return here?.placed && Number.isFinite(here.x) ? { live: here.moving === true, x: here.x, y: here.y } : null;
     },
-    stop: async (who, here, key) => walkViaOffice(WORLD_CLONE, { handle: who, x: here.x, y: here.y }, key),
+    // `from` is given only by the vehicle's deposit (world-crossings.mjs § exit): a
+    // set-down is a zero-length departure AT the stop, so the leg's origin is the
+    // stop and not where the record last had the body. It rides as `__from`, the
+    // office's own key like `__seated_ground` — the door's schema admits neither.
+    stop: async (who, here, key, opts = {}) => walkViaOffice(WORLD_CLONE, { handle: who, x: here.x, y: here.y,
+      ...(opts?.from && Number.isFinite(Number(opts.from.x)) && Number.isFinite(Number(opts.from.y)) ? { __from: { x: Number(opts.from.x), y: Number(opts.from.y) } } : {}) }, key),
     now: () => (Date.now() - Date.UTC(2026, 5, 12)) / (12 * 3600 * 1000),
-    record: async ({ handle, act, at, lines, summary }) => {
+    // THE JOURNAL ROWS THIS ACTOR HAS WRITTEN, oldest first — the ride fold's
+    // one input (world-ride.mjs § rideStateFrom). Read from the live journal,
+    // which is where every act since the last drain stands; a store that cannot
+    // be opened answers with no history, and the deposit rule then falls back to
+    // "you came in nowhere" and leaves a resident exactly where they are rather
+    // than setting them down somewhere they never earned.
+    acts: async (who) => actsOfActor(who),
+    // What the class of a mark LENDS, resolved for a resident — the § 5 roster.
+    // It lives here and not in world-crossings.mjs because the roster is in the
+    // hydrated store and that module is deliberately store-free.
+    lends: async (markId) => lendsAt(markId),
+    nowMs: () => Date.now(),
+    crossing: () => currentCrossing(),
+    record: async ({ handle, act, at, lines, summary, mark = null, via = null, set_down_at = null, arrived = null }) => {
       const { execUnderTownLock, lockTimedOut, LOCK_BUSY } = await import("./town-lock.mjs");
       let out;
       try {
-        out = await execUnderTownLock(CROSSING_EXEC, JSON.stringify({ handle, act, at, lines, summary }),
+        out = await execUnderTownLock(CROSSING_EXEC, JSON.stringify({ handle, act, at, lines, summary, mark, via, set_down_at, arrived }),
           { ...process.env, WORLD_CLONE });
       } catch (e) {
         if (lockTimedOut(e)) { const err = new Error(LOCK_BUSY.defect); Object.assign(err, LOCK_BUSY); throw err; }
@@ -878,6 +1092,23 @@ const DISPATCH = {
   // dispatch table exists to prevent.
   enter: { tool: "world_enter", run: (args, key) => enterViaOffice(WORLD_CLONE, args, key, crossingDeps()) },
   exit: { tool: "world_exit", run: (args, key) => exitViaOffice(WORLD_CLONE, args, key, crossingDeps()) },
+  // ── the vehicle's own act (#2986, Keemin-ruled 2026-09-19) ────────────────
+  //
+  // `ride` is GROUND-GRANTED: the `vehicle` class carries
+  // `actions: [{"action":"ride","residue":"the-town/ride"}]`, and the residue
+  // class `the-town/ride` carries `requires: {"within_class":"vehicle"}`. So the
+  // gate is the calculus's, not a condition written here — `gatherGroundActions`
+  // resolves the marks on the caller's spine to their classes, `guardsPass`
+  // asks the containment spine for the class word, and a caller who is not in a
+  // vehicle is answered "not afforded where you stand" by the same sentence
+  // every other off-ground verb gets.
+  //
+  // ⚑ AND THE SPINE HAS TO INCLUDE HER. A rider's feet are at the hull and the
+  // hull is nowhere they walked, so the geometric spine cannot contain the
+  // vessel — see `apexSpineIds`, where occupancy joins it. Without that the law
+  // would be written, loaded and unreachable, which is the exact shape of the
+  // eleven-day ground-channel gap seam 5 exists to have closed.
+  ride: { tool: "world_ride", run: (args, key) => rideViaOffice(WORLD_CLONE, args, key, rideDeps()) },
   // ── the consent door (POS-5) ───────────────────────────────────────────────
   //
   // The single log's first new verb. `witnessStamp` is passed in rather than
@@ -1003,7 +1234,7 @@ function flatSchemas() {
   // fields an act takes must still come from the act's own schema — the seam-4
   // discipline — and inventing a second grammar here for two verbs would be
   // exactly the drift that seam exists to close.
-  for (const tool of [...WORLD_TOOLS, ...WORLD_STAKE_TOOLS, ...CROSSING_TOOLS, ...STANCE_TOOLS, ...ARENA_TOOLS]) {
+  for (const tool of [...WORLD_TOOLS, ...WORLD_STAKE_TOOLS, ...CROSSING_TOOLS, ...RIDE_TOOLS, ...STANCE_TOOLS, ...ARENA_TOOLS]) {
     _flatSchemas.set(tool.name, actionFields(tool?.inputSchema?.properties, tool?.inputSchema?.required));
   }
   return _flatSchemas;
@@ -1016,7 +1247,7 @@ let _fullProps = null;
 function fullPropsFor(toolName) {
   if (!_fullProps) {
     _fullProps = new Map();
-    for (const t of [...WORLD_TOOLS, ...WORLD_STAKE_TOOLS, ...CROSSING_TOOLS, ...STANCE_TOOLS, ...ARENA_TOOLS]) _fullProps.set(t.name, t?.inputSchema?.properties ?? {});
+    for (const t of [...WORLD_TOOLS, ...WORLD_STAKE_TOOLS, ...CROSSING_TOOLS, ...RIDE_TOOLS, ...STANCE_TOOLS, ...ARENA_TOOLS]) _fullProps.set(t.name, t?.inputSchema?.properties ?? {});
   }
   return _fullProps.get(toolName) ?? null;
 }
@@ -1779,8 +2010,39 @@ async function frameBlock(oriented, key) {
       // it is forbidden.
       how_to_leave: "world_walk anywhere off her footprint. While she is under way that step puts you in the water where she left you — v0 does not stop you, and the walk answer says so before you take it.",
       terms: "standing in her frame when she departs means riding — that is the contract of stepping aboard, and it needs no declaration from you.",
+      // ── THE VEHICLE'S OWN HALF (#2986 § 6) ──────────────────────────────
+      //
+      // Present only when the frame is a VEHICLE, which is what makes this
+      // additive: an attachment riding the hull still reads exactly the block it
+      // read before. The arrived notice "rides every world answer" (§ 6 item a)
+      // because this block does, and it is DERIVED — a replay at the same
+      // instant says the same thing, and an exit ends it by ending the ride.
+      ...(await vehicleFrameExtras(who, here, w)),
     };
   } catch { return null; }
+}
+
+/** The ride, the arrived notice, and how to leave a VEHICLE — or nothing. */
+async function vehicleFrameExtras(who, here, worldState) {
+  try {
+    const body = (worldState?.marks ?? []).find((m) => m.id === here.frame) ?? null;
+    if (String(body?.class ?? "") !== VEHICLE_CLASS) return {};
+    const { service } = await vesselServiceFrom(worldState, { repo: WORLD_CLONE });
+    const acts = await actsOfActor(who);
+    const { entryStop, standingRide } = rideStateFrom(acts, { vesselId: here.frame });
+    const arrived = arrivedNotice(standingRide, Date.now());
+    const where = depositAt({ entryStop, standingRide, nowMs: Date.now() });
+    return {
+      vehicle: here.frame,
+      entered_via: entryStop,
+      ride: standingRide ?? null,
+      ...(arrived ? { arrived } : {}),
+      ...(service ? { can_ride_to: vehicleGroundExtras({ service, entryStop, standingRide }).stops } : {}),
+      how_to_leave: where.stop
+        ? `world { do: "exit" } sets you down at ${where.stop}${where.arrived ? " — your ride has come due" : ", the stop you came in through, because no ride of yours has come due"}. Staying aboard is allowed; nothing shoves you off.`
+        : "world { do: \"exit\" } steps you out of her where she is. This office cannot say which stop you came in through, so it will not set you down anywhere you cannot prove you came from.",
+    };
+  } catch { return {}; }
 }
 
 /** The three shelves. Complete for you, capped around you, pointers for the town. */
@@ -1907,7 +2169,7 @@ async function apexRead(args, key, ctx = {}) {
     // STAND) ∪ held (what you CARRY), filtered by actor kind, resolved by
     // specificity. Before this the union had one member and the second clause
     // of § Class-nodes reached nothing.
-    const spineIds = spine.map((m) => m.id);
+    const spineIds = await apexSpineIds(store.db, spine, args, key);
     const reachIds = nearby.map((o) => o.id);
     const amb = gatherActions(store.db, { spineIds, reachIds });
     rows = amb.rows;
@@ -2194,7 +2456,7 @@ async function apexDo(args, key, ctx = {}) {
     // gathering: "read: is every action's shadow … anything you can do, you can
     // read, and never the reverse." A door that admits an act the read did not
     // show is precisely the reverse that law forbids.
-    const spineIds = spine.map((m) => m.id);
+    const spineIds = await apexSpineIds(store.db, spine, args, key);
     const reachIds = (seen.objects ?? []).map((o) => o.id);
     const amb = gatherActions(store.db, { spineIds, reachIds });
     const ground = gatherGroundActions(store.db, { spineIds, reachIds });
@@ -2575,7 +2837,12 @@ async function apexDo(args, key, ctx = {}) {
  * `handle` is exempt everywhere: it is the standpoint field, merged in from the
  * top level a few lines below and read by `call` itself.
  */
-const WORLD_READ_FIELDS = Object.freeze({
+// ⛔ EXPORTED SO A PROBE CAN DRIVE IT, the same reason `readDomainFor` is
+// (#2559). A source-text scan can see that a field is DECLARED; only the object
+// can be compared against the flat tool's own schema, which is the check that
+// says whether a field the tool takes is carried, refused by name, or dropped.
+// `HOUSEHOLD_READ_FIELDS` is exported for the same reason one door over.
+export const WORLD_READ_FIELDS = Object.freeze({
   // `text` here and `stance` below are DECLARED so that `readDomainFor`'s own
   // teaching bounce is the one the caller meets. They are not "accepted": each
   // is answered with "a read never performs" and the door that does perform it
@@ -2583,7 +2850,23 @@ const WORLD_READ_FIELDS = Object.freeze({
   // caller who typed read: where they meant do: actually needs. Declared on the
   // ONE read that teaches about them, so `read: "walk", args: { text }` still
   // bounces by name.
-  say: { text: { type: "string", description: "refused — a read never performs; speak with do: \"say\"" } },
+  // ⚑ `since` IS THE ROOM'S CURSOR AND IT IS NOT THE TOP-LEVEL `since:` (#2559).
+  //
+  // The two are different clocks that share a name, and saying so here is the
+  // whole repair: top-level `since:` is a CROSSING NUMBER and buys `happened`,
+  // the delta that rides every read; THIS one is the `latest` stamp the flat
+  // `world_say` hands back, in milliseconds, and buys a room with only what is
+  // new in it. A resident who passed the crossing cursor and watched the whole
+  // room come back with a 200 had asked the right question of the wrong clock,
+  // and nothing at this door said which was which.
+  //
+  // Threading the top-level number into the room instead would have been worse
+  // than dropping it: a crossing number compared against millisecond stamps
+  // filters nothing, silently, and the read would look cursored while doing
+  // exactly what it does today. So the room's cursor rides where a read's own
+  // fields ride — in `args:` — and says what it is.
+  say: { text: { type: "string", description: "refused — a read never performs; speak with do: \"say\"" },
+         since: { type: "number", description: "the `latest` stamp from your previous say-read — you hear only voices newer than it, and the room's shape rides either way. Milliseconds, and NOT the top-level since: (which is a crossing number, and buys `happened`)." } },
   walk: {},
   "leave-mark": { mark: { type: "string", description: "one mark to look into — <by>/<slug>" },
                   depth: { type: "number", description: "how far down to descend into that mark" },
@@ -2626,7 +2909,15 @@ export async function readDomainFor(action, fields, key, oriented, ctx = {}) {
   switch (action) {
     case "say": {
       if (fields?.text) return { error: "bounce", code: 422, defect: "a read never performs", hint: `to speak, use do: — world { do: "say", args: { text: … } }. read: "say" only listens.` };
-      return { heard: await call("world_say", {}) };
+      // ⚑ THE CURSOR TRAVELS (#2559). This call was `{}` — the flat tool takes
+      // three fields, `handle` rides in from `call` itself, `text` is refused by
+      // name above, and `since` was simply dropped. So the one field left was
+      // the one thrown away: a resident polling the quay through this shadow
+      // re-bought the whole room every call, with a 200 and nothing saying so.
+      // A field a door does not carry must be refused by name; this one it can
+      // carry, so it does. The shadow now hands over everything `world_say`
+      // takes and drops nothing.
+      return { heard: await call("world_say", fields?.since == null ? {} : { since: fields.since }) };
     }
     case "walk": {
       // BOUND BY RADIUS, NOT BY TRUNCATING THE ROLL. This read was 33 KB
@@ -2723,7 +3014,7 @@ async function apexReadAction(args, key, ctx = {}) {
     // it — the exact reverse that law forbids, and the one asymmetry nobody
     // would have found until a human tried to read the card for the act they
     // had just performed.
-    const spineIds = spine.map((m) => m.id);
+    const spineIds = await apexSpineIds(store.db, spine, args, key);
     const reachIds = (seen.objects ?? []).map((o) => o.id);
     const amb = gatherActions(store.db, { spineIds, reachIds });
     const ground = gatherGroundActions(store.db, { spineIds, reachIds });

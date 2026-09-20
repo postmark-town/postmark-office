@@ -26,7 +26,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-const SOURCE_WORLD = "G:/postmark/postmark-world";
+const SOURCE_WORLD = "G:/Postmark/repo-clones/wright/postmark-world";
 const HAVE_SOURCE = existsSync(join(SOURCE_WORLD, "WORLD", "world-state.json"));
 
 const repo = mkdtempSync(join(tmpdir(), "pm-receipt-fixture-"));

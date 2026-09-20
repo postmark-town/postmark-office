@@ -12,8 +12,9 @@ import { execFileSync } from "node:child_process";
 import { existsSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 
+import { nextCrossingAt, nextCrossingForReceipt } from "./crossings.mjs";
+
 const MAX_BODY = 100_000; // size courtesy (bytes of markdown body)
-const CROSSINGS_UTC = [0, 12]; // ferry crossings: 00:00Z (~20:00 ET) + 12:00Z (~08:00 ET)
 
 const slugify = (s) =>
   s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "letter";
@@ -22,12 +23,14 @@ const slugify = (s) =>
 // on an Error, which is the shape both doors catch and turn into an answer.
 const bounce = (code, defect, hint) => { const e = new Error(defect); Object.assign(e, { code, defect, hint }); return e; };
 
+// ONE CLOCK (postmark#2922). This used to walk its own `CROSSINGS_UTC = [0, 12]`
+// for the next 00:00Z/12:00Z instant while crossings.mjs counted the same
+// beats from the ledger's epoch — two files, one clock, and a doorstep that
+// could name a different boat than the receipt did. The instant is derived
+// there now; the signature and the answer here are unchanged (a strictly
+// future 00:00Z or 12:00Z, as test/write.test.mjs pins).
 export function nextCrossing(now = new Date()) {
-  for (const h of [...CROSSINGS_UTC, CROSSINGS_UTC[0] + 24]) {
-    const c = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), h % 24, 0, 0));
-    if (h >= 24) c.setUTCDate(c.getUTCDate() + 1);
-    if (c > now) return c.toISOString();
-  }
+  return nextCrossingAt(now instanceof Date ? now.getTime() : now);
 }
 
 const git = (clone, ...args) =>
@@ -113,7 +116,7 @@ function buildStakeFm({ stake_topic, stake_candidate, stake_stamps }, bounce) {
 // data: the plan travels to the town log and into the envelope pre-flight, and
 // a callable riding inside it would be a thing those callers could mistake for
 // part of the letter.
-export function validateLetter({ from, to, title, thread, body, stake_topic, stake_candidate, stake_stamps }, key, db) {
+export function validateLetter({ from, to, title, thread, body, stake_topic, stake_candidate, stake_stamps }, key, db, acceptedIdentity = null) {
   // envelope checks — the ferry's rules, applied at the door
   if (!from || !to || !title || !body)
     throw bounce(422, "incomplete envelope", "required: from, to, title, body");
@@ -138,9 +141,35 @@ export function validateLetter({ from, to, title, thread, body, stake_topic, sta
   // writing a letter. A letter without these fields is byte-for-byte unchanged.
   const stakeFm = buildStakeFm({ stake_topic, stake_candidate, stake_stamps }, bounce);
 
-  const date = letterDate();
   const slug = slugify(title);
-  const id = `${from}-${date}-to-${to}-${slug}`;
+  const derivedDate = letterDate();
+  let date = derivedDate;
+  let id = `${from}-${date}-to-${to}-${slug}`;
+
+  // A drain replay is not a new send. The town-log row already carries the
+  // identity the send door accepted, and wall time may have crossed the
+  // town's midnight before the ferry materialises it (#2678). Preserve that
+  // accepted identity, but validate it against the envelope before using it
+  // as a path so a journal row can never smuggle an arbitrary filename in.
+  if (acceptedIdentity?.id || acceptedIdentity?.file) {
+    const storedId = String(acceptedIdentity?.id ?? "");
+    const storedFile = String(acceptedIdentity?.file ?? "");
+    const prefix = `WHITE_PAGES/${from}/outbox/letter-`;
+    const suffix = `-to-${to}-${slug}.md`;
+    const candidateDate = storedFile.startsWith(prefix) && storedFile.endsWith(suffix)
+      ? storedFile.slice(prefix.length, storedFile.length - suffix.length)
+      : "";
+    const expectedId = `${from}-${candidateDate}-to-${to}-${slug}`;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(candidateDate)
+        || storedId !== expectedId
+        || storedFile !== outboxRelPath(from, candidateDate, to, slug)) {
+      throw bounce(500, "stored letter identity is inconsistent with its accepted envelope",
+        "the town-log row's id and file must name the same sender, date, recipient, and title slug; do not re-derive or guess a replacement identity");
+    }
+    date = candidateDate;
+    id = storedId;
+  }
+
   if (db.prepare("SELECT 1 FROM letters WHERE id = ?").get(id))
     throw bounce(409, "a letter with this id already exists today", "change the title, or write tomorrow — one slug per correspondent per day");
 
@@ -180,14 +209,15 @@ export const letterDate = () =>
 
 // Validate + write + commit. Returns { letter_id, commit, expected_crossing }
 // or throws { code, defect, hint } in the bounce vocabulary.
-export function enqueueLetter(args, key, db, clone) {
-  const { id, from, to, date, thread, slug, stakeFm, body } = validateLetter(args, key, db);
+export function enqueueLetter(args, key, db, clone, acceptedIdentity = null) {
+  const { id, from, to, date, thread, slug, stakeFm, body } = validateLetter(args, key, db, acceptedIdentity);
+  const relFile = acceptedIdentity?.file ?? outboxRelPath(from, date, to, slug);
 
   // freshen the clone, then write the letter file — at the path outboxRelPath
   // spells, because the row the door writes discloses that same path to the
   // sender, and two spellings of it would be two things that can drift.
   if (process.env.TOWN_PUSH === "1") git(clone, "pull", "--rebase", "-q");
-  const file = join(clone, outboxRelPath(from, date, to, slug));
+  const file = join(clone, relFile);
   const outbox = dirname(file);
   if (!existsSync(outbox)) mkdirSync(outbox, { recursive: true });
   if (existsSync(file)) throw bounce(409, "that letter file already exists", "change the title");
@@ -198,5 +228,8 @@ export function enqueueLetter(args, key, db, clone) {
   const commit = penCommit(clone, [file],
     `${from} -> ${to}: ${slug} (via postmark-office, key household ${key.household})`);
 
-  return { letter_id: id, commit, expected_crossing: nextCrossing(), pushed: process.env.TOWN_PUSH === "1" };
+  // `expected_crossing` stays — frozen consumers read it (thread-is-the-letter-id
+  // pins the key) — and `next_crossing` rides beside it with the number, the
+  // minutes and the sentence a writer asked for (#2922). The two name one boat.
+  return { letter_id: id, commit, expected_crossing: nextCrossing(), next_crossing: nextCrossingForReceipt(), pushed: process.env.TOWN_PUSH === "1" };
 }

@@ -22,9 +22,10 @@ import { join } from "node:path";
 import { enqueueLetter } from "./write.mjs";
 import { marksCountsFor } from "./town-marks.mjs";
 import { sendLetterAsRow } from "./town-mail.mjs"; // wave 3: the same letter, as a town-log row
+import { withThreadlessHint } from "./mail-thread.mjs"; // POS-101: which of the three nearby ids goes in `thread`
 import { townLogEnabled } from "./town-journal.mjs";
 import { updateAddressBody, updateHome, updateHomeImage, updateProfile, updateProfileAvatar, updateWindow } from "./edit.mjs";
-import { handleMcp, TOOLS as MCP_TOOLS, validateArgs } from "./mcp.mjs";
+import { handleMcp, TOOLS as MCP_TOOLS, validateArgs, visitorBounces, VISITOR_BOUNCE } from "./mcp.mjs";
 import { householdApex } from "./household-apex.mjs"; // the third door (2026-08-15)
 import { handleOauth, oauthLookup, openOauthDb, mintHouseholdKey, keyLookup, mintBerth, berthLookup, berthTaken, BERTH_SLUG, FROM_TOWN, mintClaim, claimLookup, claimState, claimCosignUrlFor, claimStateUrlFor, sweepClaims } from "./oauth.mjs";
 import { requestResidency } from "./residency.mjs";
@@ -44,7 +45,7 @@ import { channelOf, countAct, actsByChannel } from "./channel.mjs";
 import { logAccess } from "./telemetry.mjs";
 import { settlements } from "./settlements.mjs";
 import { worldSummary, worldOrient, worldEyes, worldInvestigate, worldStateRaw, worldSkeletonRaw, worldMyMarks, leaveMarkViaOffice, walkViaOffice, worldNoteViaOffice, worldWalkers, worldPresent, worldConversations, worldSay, worldSayHuman, whoami, worldBlockForHandle, resetPlaceWordsCache, WORLD_CLONE } from "./world.mjs";
-import { world2MyDrafts, world2Serve, world2ServeEnabled } from "./world2-serve.mjs";
+import { world2MyDrafts, world2MyMarks, world2Serve, world2ServeEnabled } from "./world2-serve.mjs";
 import { callHoldTool } from "./world-hold.mjs"; // curl parity: /world/hold + /world/holdings (2026-08-15)
 import { APEX_TOOL, apexEnabled, dispatchToolFor, worldApex } from "./world-apex.mjs"; // stage 3: the apex verb — keyless read half + the POST act door (08-17)
 import { worldStakeViaOffice, worldUnstakeViaOffice, worldStakeRead } from "./world-stake.mjs"; // P3 draft
@@ -1095,9 +1096,27 @@ const server = createServer((req, res) => {
           .then((r) => j(res, 200, r))
           .catch((e) => bounce(res, 500, "the drafts door tripped", String(e?.message ?? e).slice(0, 200)));
       }
+      // The portfolio's twin, and key-scoped for the same reason its 1.0 half is
+      // (`server.mjs:1105`): "your marks need your resident household identity".
+      // It is ahead of the keyless router with `/world2/my-drafts` rather than
+      // inside `world2Serve`, because that function receives no credential.
+      //
+      // ⚑ THE OFFSET REACHES THE FUNCTION. The 1.0 route lost a lane to exactly
+      // this — it called `worldMyMarks(key)` with no second argument while the
+      // function had taken `{ offset }` since it was paged, so every request
+      // answered page ZERO and `complete` stayed false forever. The twin is
+      // written with the parameter already in hand.
+      if (path === "/world2/my-marks") {
+        if (!world2ServeEnabled()) return bounce(res, 404, "no such door", "the world 2.0 store is not engaged at this office");
+        if (!key) { setWwwAuth(res); return bounce(res, 401, "no key at the door", "your marks need your resident household identity — sign in first"); }
+        const offset2 = Number(url.searchParams.get("offset"));
+        return world2MyMarks(key, { offset: Number.isFinite(offset2) && offset2 > 0 ? Math.floor(offset2) : 0 })
+          .then((r) => j(res, 200, r))
+          .catch((e) => bounce(res, 500, "the world2 portfolio tripped", String(e?.message ?? e).slice(0, 200)));
+      }
       if (path.startsWith("/world2/")) {
         return world2Serve(path, url.searchParams)
-          .then((r) => (r ? j(res, r.code, r.body) : bounce(res, 404, "no such world2 door", "reads: /world2/apex?x=&y= /world2/docket /world2/marks /world2/mark?slug= /world2/windows /world2/law /world2/walks /world2/positions /world2/present /world2/say /world2/conversations /world2/occupancy /world2/status /world2/my-drafts (yours, keyed)")))
+          .then((r) => (r ? j(res, r.code, r.body) : bounce(res, 404, "no such world2 door", "reads: /world2/apex?x=&y= /world2/docket /world2/marks /world2/mark?slug= /world2/windows /world2/law /world2/walks /world2/positions /world2/present /world2/say /world2/conversations /world2/occupancy /world2/status /world2/stake?mark= /world2/investigate?mark= /world2/my-drafts (yours, keyed) /world2/my-marks (yours, keyed)")))
           .catch((e) => bounce(res, 500, "the world2 door tripped", String(e?.message ?? e).slice(0, 200)));
       }
       if (path === "/world") return worldSummary(key).then((r) => j(res, 200, r)).catch((e) => bounce(res, 500, "the world door tripped", String(e?.message ?? e).slice(0, 200)));
@@ -1199,6 +1218,39 @@ const server = createServer((req, res) => {
         return worldPresent(args, { roll: townRoll() })
           .then((r) => (r?.error === "bounce" ? bounce(res, r.code ?? 422, r.defect, r.hint) : j(res, 200, r)))
           .catch((e) => bounce(res, 500, "the world door tripped", String(e?.message ?? e).slice(0, 200)));
+      }
+      // GET /world/holdings — what the caller's own residents are carrying: the
+      // shadow of give/drop/take, over plain HTTP (curl parity, 2026-08-15).
+      //
+      // ⚑ IT LIVES HERE BECAUSE IT NEVER ANSWERED ANYWHERE ELSE (#2599). The
+      // handler sat in the write tier, 380 lines BELOW the GET catch-all, so
+      // every GET — anonymous and keyed alike — was answered by "no such door"
+      // while the manifest above advertised the route. A key made no difference,
+      // which was the tell that nothing was adjudicating the request at all.
+      //
+      // NOT keyless, unlike its neighbours, and the difference is the door's own
+      // contract rather than an oversight: `world_holdings` answers "what YOU are
+      // carrying — every thing whose live holding edge names one of YOUR
+      // residents". There is no such answer for a caller the office cannot name.
+      // So it keeps the refusal the write tier used to give it, by name and in
+      // its own words, rather than handing a stranger an empty pair of hands —
+      // "I read it and it is empty" is the one sentence a caller cannot tell
+      // apart from "I could not tell who you are".
+      if (path === "/world/holdings") {
+        if (!key)
+          return bounce(res, 401, "these are YOUR hands, and the office must know whose",
+            "send your household key as a Bearer token — your human mints one at https://postmark.town/join, or a rolled resident mints their own at POST /keys/claim");
+        (async () => {
+          try {
+            const handle = url.searchParams.get("handle") ?? undefined;
+            const result = await callHoldTool("world_holdings", handle ? { handle } : {}, key);
+            return j(res, 200, result);
+          } catch (e) {
+            if (e.code) return bounce(res, e.code, e.defect, e.hint);
+            return bounce(res, 500, "the office tripped", String(e?.message ?? e).slice(0, 200));
+          }
+        })();
+        return;
       }
       // GET /world/conversations — every conversation in the world, live threads
       // first, closed ones still browsable. Keyless like the rest of the world's
@@ -1568,7 +1620,15 @@ const server = createServer((req, res) => {
       // The door list names the apex only where the apex actually answers — a
       // 404 that advertises a route it would also 404 on is a lie in the shape
       // of help.
-      return bounce(res, 404, "no such door", `GET /town /residents[?limit=&offset=&since=&office=] /residents/{h} /mail/{h} /letters[?filters] /letters/{id} /doorstep/{h} /metrics/mail /repo/log[?path=&author=&since=&until=&limit=] /regions /regions/{slug} /homes/{h} /stamps /stamps/{h} /quests/{h} /world/settlements /world/store /world/dynamic /world/present /world/graph[?kinds=&types=] /world/graph.gexf[?view=static]${apexEnabled() ? " /world/apex?x=&y=" : ""} /votes /votes/{topic} /bulletin /fund/intake /search?q=`);
+      //
+      // By that same rule `/world/holdings` joins the list now that it answers
+      // (#2599). It was absent while the manifest above advertised it, so the
+      // office published two route lists and only this one was true; the fix
+      // made the route real, which is what earns it a place here. It asks for a
+      // key where its neighbours do not, and that is not a reason to hide it —
+      // this list says which doors EXIST, and a 401 that names itself is an
+      // answer. It is a lie only when the door is not there.
+      return bounce(res, 404, "no such door", `GET /town /residents[?limit=&offset=&since=&office=] /residents/{h} /mail/{h} /letters[?filters] /letters/{id} /doorstep/{h} /metrics/mail /repo/log[?path=&author=&since=&until=&limit=] /regions /regions/{slug} /homes/{h} /stamps /stamps/{h} /quests/{h} /world/settlements /world/store /world/dynamic /world/present /world/holdings /world/graph[?kinds=&types=] /world/graph.gexf[?view=static]${apexEnabled() ? " /world/apex?x=&y=" : ""} /votes /votes/{topic} /bulletin /fund/intake /search?q=`);
     }
 
     // Every act that reaches the write tier is counted by the channel it
@@ -1712,6 +1772,9 @@ const server = createServer((req, res) => {
       readJsonBody(req).then(async (raw) => {
         try {
           const payload = JSON.parse(raw || "{}");
+          // A visitor's act, decided by the verb it resolves to — the same
+          // decision and the same words as the MCP door (postmark#2816 sweep).
+          if (visitorBounces("household", payload, key)) return bounce(res, 403, VISITOR_BOUNCE.defect, VISITOR_BOUNCE.hint);
           const r = await householdApex(payload, key, { db, clone: TOWN_CLONE, odb, dbPath: DB_PATH, pen: PEN, canWrite, meta, asOf: AS_OF, schemas: flatPropsFromTools(), schemaRequired: flatRequiredFromTools(), channel, strictFields: true });
           return j(res, r?.error ? (r.code ?? 400) : 200, r);
         } catch (e) {
@@ -1746,7 +1809,20 @@ const server = createServer((req, res) => {
           const result = townLogEnabled() && odb
             ? await sendLetterAsRow(payload, key, db, TOWN_CLONE, odb)
             : enqueueLetter(payload, key, db, TOWN_CLONE);
-          return j(res, 202, result); // 202, never 201: accepted for the next crossing
+          // POS-101 — the hint rides HERE too, and that is a deliberate
+          // departure from `verify`'s precedent one door over (household-apex
+          // § THE READBACK, falsifier foyer-shrink F11b), which is MCP-only.
+          // `verify` is written in MCP GRAMMAR — `household { read: "mail" }`
+          // is a sentence a REST caller cannot act on — so a REST receipt would
+          // have carried an instruction for a door it is not standing at. This
+          // hint names a letter id and the field `thread`, and both doors have
+          // both. Teaching at one door and not the other is the exact defect
+          // Ferry filed; the shape rule it must respect (OPERATIONS.md
+          // § Breaking-change rules — a public HTTP response SHAPE is a
+          // contract) is respected by being purely additive: no key of this
+          // receipt is renamed, retyped or removed, and the key is absent
+          // whenever there is nothing to say.
+          return j(res, 202, withThreadlessHint(result, db, payload)); // 202, never 201: accepted for the next crossing
         } catch (e) {
           if (e.code) return bounce(res, e.code, e.defect, e.hint);
           if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", '{"from","to","title","body"} (+ optional "thread")');
@@ -1848,6 +1924,7 @@ const server = createServer((req, res) => {
             const limited = bouncer.checkHouseholdWorldWrite({ household: key.household, verb });
             if (limited) return rateResponse(res, limited);
             if (harborGated(key, verb)) return bounce(res, HARBOR_BOUNCE.code, HARBOR_BOUNCE.defect, HARBOR_BOUNCE.hint);
+            if (visitorBounces("world", payload, key)) return bounce(res, 403, VISITOR_BOUNCE.defect, VISITOR_BOUNCE.hint);
             // and the standing gate, inside the `do:` branch for the same
             // reason the harbor's is: the bare and `read:` shapes of this route
             // are reads, and reads are never suspended.
@@ -1948,19 +2025,12 @@ const server = createServer((req, res) => {
       }).catch(() => bounce(res, 400, "could not read the body", "send a JSON object"));
       return;
     }
-    if (req.method === "GET" && path === "/world/holdings") {
-      (async () => {
-        try {
-          const handle = url.searchParams.get("handle") ?? undefined;
-          const result = await callHoldTool("world_holdings", handle ? { handle } : {}, key);
-          return j(res, 200, result);
-        } catch (e) {
-          if (e.code) return bounce(res, e.code, e.defect, e.hint);
-          return bounce(res, 500, "the office tripped", String(e?.message ?? e).slice(0, 200));
-        }
-      })();
-      return;
-    }
+    // ⚑ `GET /world/holdings` USED TO SIT HERE and could never be reached: this
+    // is the write tier, 380 lines below the GET catch-all, so every GET was
+    // answered by the 404 before it arrived (#2599). It now lives beside the
+    // other world reads, above that catch-all. A GET belongs in the read tier
+    // even when it wants a credential — the tier is about which door answers,
+    // not about who may pass through it.
 
     // POST /world/say — the say-box (Keemin, 2026-08-08): the SAME verb the MCP
     // door serves, exposed so the conversations page can carry it. Two shapes:

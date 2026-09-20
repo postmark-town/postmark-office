@@ -308,13 +308,22 @@ test("FALSIFIER 4b — an unreadable engine discloses, and fabricates nothing", 
 });
 
 // ── the chip's time ─────────────────────────────────────────────────────────
-test("the forecast names the next Settlement — 05:45/17:45Z, never the mail ferry's crossing", async () => {
+test("the forecast names the next Settlement — 06:00/18:00Z, the timer's own marks, never the mail ferry's crossing", async () => {
   const { nextSettlement } = await import("../src/world-forecast.mjs");
-  // deploy/postmark-settlement.timer: OnCalendar 05:45 and 17:45 UTC. The office
+  // deploy/postmark-settlement.timer: OnCalendar 06:00 and 18:00 UTC. The office
   // already had a `nextCrossing` (write.mjs) and it is the MAIL ferry at 00:00Z
   // and 12:00Z — a different clock. Putting the ferry's time on a weight that
   // lands at the sweep would be a lie with a plausible shape.
-  assert.equal(nextSettlement(new Date("2026-08-18T04:00:00Z")), "2026-08-18T05:45:00.000Z");
-  assert.equal(nextSettlement(new Date("2026-08-18T05:45:00Z")), "2026-08-18T17:45:00.000Z", "on the boundary the next one is the next one");
-  assert.equal(nextSettlement(new Date("2026-08-18T23:59:00Z")), "2026-08-19T05:45:00.000Z", "and it rolls the day");
+  // 06:00/18:00Z since 2026-09-18 — the timer in this tree moved to the law's
+  // marks on 2026-09-17 (POS-80) and this constant had not followed; see
+  // world-forecast.mjs § SETTLEMENTS_UTC. The pins move with it, and the
+  // timer file is read below so the two cannot part again unnoticed.
+  assert.equal(nextSettlement(new Date("2026-08-18T04:00:00Z")), "2026-08-18T06:00:00.000Z");
+  assert.equal(nextSettlement(new Date("2026-08-18T06:00:00Z")), "2026-08-18T18:00:00.000Z", "on the boundary the next one is the next one");
+  assert.equal(nextSettlement(new Date("2026-08-18T23:59:00Z")), "2026-08-19T06:00:00.000Z", "and it rolls the day");
+  const { readFileSync } = await import("node:fs");
+  const timer = readFileSync(new URL("../deploy/postmark-settlement.timer", import.meta.url), "utf8");
+  const marks = [...timer.matchAll(/^OnCalendar=\*-\*-\* (\d\d):(\d\d):00 UTC$/gm)].map((m) => [Number(m[1]), Number(m[2])]);
+  const { SETTLEMENTS_UTC } = await import("../src/world-forecast.mjs");
+  assert.deepEqual(marks, [...SETTLEMENTS_UTC], "the forecast's clock IS the timer's OnCalendar lines — a move in one without the other reds here");
 });

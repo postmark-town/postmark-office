@@ -1,8 +1,10 @@
 [Unit]
-Description=World 2.0 backup, nightly at 04:10 UTC — after the notary, so the shipped bundle carries that night's certification
+Description=World 2.0 backup, nightly at 08:10 UTC — after the notary, so the shipped bundle carries that night's certification
 
 [Timer]
-OnCalendar=*-*-* 04:10:00 UTC
+# 08:10 UTC (moved from 04:10 with the notary, office#83, 2026-09-17): this
+# row's own reason is "after the notary", and the notary moved to 07:20.
+OnCalendar=*-*-* 08:10:00 UTC
 Persistent=true
 RandomizedDelaySec=300
 

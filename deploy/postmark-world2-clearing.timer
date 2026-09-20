@@ -1,12 +1,32 @@
 [Unit]
-Description=World 2.0 candle at 05:45 and 17:45 UTC — census Decision 3's own marks
+Description=World 2.0 candle at 06:00 and 18:00 UTC — the crossing law's own marks
 
 [Timer]
-# The census's cadence, verbatim, and nothing else. These are the same two
+# The crossing law's cadence, verbatim, and nothing else. These are the same two
 # marks postmark-settlement.timer carries for 1.0; that is not a coincidence to
 # be tidied away, it is the town having one clock.
-OnCalendar=*-*-* 05:45:00 UTC
-OnCalendar=*-*-* 17:45:00 UTC
+#
+# THE LAW LINE IS `LOGOS/classes.md § crossing ②` ON WORLD MAIN — amended
+# 2026-09-17 by keeminlee/postmark-world#96 to read "S1, S2, … at 06:00 and
+# 18:00 UTC from the w39 ship (2026-09-21), 05:45 and 17:45 UTC until then".
+# deploy/world2-clearing.sh § LAW carries the same citation and says why it is
+# that line and not the gold plan that proposed the cadence.
+#
+# These were 05:45/17:45 from the cadence's birth: fifteen
+# minutes of head start so the Worldkeeper's :00 heartbeat would read a finished
+# receipt, while his own constitution and the World's bulletin both said 06:00 /
+# 18:00. The town now keeps the hour it publishes, and the heartbeat moved to
+# :20 instead (the founder's console, not a repo change).
+#
+# ⚑ MOVING THESE MARKS DOES NOT MOVE THE WINDOWS. The candle chains each
+# window's close from the previous close, never from the clock —
+# clearing-job.mjs:389-393 opens N+1 at `win.closes_at + 12 hours` — so a timer
+# at :00 finds a window still due at :45, closes it fifteen minutes late, and
+# writes a successor due at :45 again, forever. One deliberate write moves the
+# chain onto the mark: `world2/tools/window-reanchor.mjs --apply`, the founder's
+# hand, once, on ship day.
+OnCalendar=*-*-* 06:00:00 UTC
+OnCalendar=*-*-* 18:00:00 UTC
 # A box that was down through a close still owes that close. Persistent makes
 # systemd fire on boot for a missed mark; the script's own catch-up loop is
 # what handles more than one window being owed.

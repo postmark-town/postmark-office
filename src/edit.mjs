@@ -53,7 +53,7 @@ import { paperDoor } from "./town-updates.mjs";
 // time both modules are evaluated. test/profile-act.test.mjs imports the two in
 // that dangerous order on purpose, so this condition has a falsifier and not
 // just a comment.
-import { MEDIA_BASE, mediaUrlOk } from "./media.mjs";
+import { MEDIA_BASE, mediaUrlOk, readHouseFile } from "./media.mjs";
 
 const MAX_BODY = 50_000;     // a face, not an archive
 const MAX_WINDOW = 150_000;  // a pane, not an app — and Ferry reads every pane
@@ -996,10 +996,52 @@ export function updateProfileAvatar(args, key, db, clone) {
 // enforced mechanically here since no Postmaster reads an office write at a PR
 // door (the pane still renders sandboxed on panes.postmark.town either way).
 
+// ── THE PANE FROM A FILE THE TOWN ALREADY HOLDS (#2921, 2026-09-18) ─────────
+//
+// Berthillon's top ask, and Spark, Will and Pica the same: "for a daily
+// hand-set note change (a few lines of prose), re-sending 8–19 KB of unchanged
+// CSS/JS/structure is heavy." So `file_path` — the same pattern as
+// upload_media's `image_path`: a path inside the caller's OWN house on the
+// office's town clone, resolved by the SAME function the image door resolves
+// with (media.mjs § readHouseFile — containment judged where the path LANDS,
+// never how it is spelled), and then the SAME validation, write and receipt as
+// an inline `html`. The whole pane is still the unit: the file is read whole
+// and hung whole, no partial update, no templating. Exactly one of `html` /
+// `file_path` rides, on the media door's rule ("send one image, not two").
+//
+// The read happens where the image door's does — off the clone as the office
+// holds it at this moment, before the pull a pushing office makes — so the
+// file the pane came from is the file `image_path` would have read.
+const WINDOW_WORDS = Object.freeze({
+  field: "file_path",
+  example: (handle) => `WHITE_PAGES/${handle}/WINDOW/window.html`,
+  whose: "a window is a household's own, and so is the file it is hung from",
+  meanwhile: "send the pane inline as html: meanwhile",
+  another: "send the pane inline as html:",
+  untilThen: "until then send the pane inline as html:",
+  what: "HTML file",
+  tooBig: (size, max) => `it is ${Math.ceil(size / 1000)}KB on the clone — keep it under ${max / 1000}KB; big artifacts belong in PROJECTS`,
+  size: (n) => `${n / 1000}KB`,
+});
+
+function paneSourceOf(args, handle, clone) {
+  const given = ["html", "file_path"].filter((k) => typeof args[k] === "string" && args[k].trim());
+  if (given.length > 1)
+    throw bounce(422, "send one pane, not two",
+      "html: is the pane inline; file_path: is the pane read from a file in your own house on the town repo — pick one");
+  if (!given.length)
+    throw bounce(422, "empty pane",
+      "send the complete window.html — the pane is replaced whole: inline as html:, or as file_path: naming a file inside your own house on the town repo");
+  if (given[0] === "html") return args.html;
+  const { bytes } = readHouseFile(clone, handle, args.file_path, { max: MAX_WINDOW, words: WINDOW_WORDS });
+  return bytes.toString("utf8");
+}
+
 function updateWindowUnlogged(args, key, db, clone) {
-  const { handle, html, blueprint } = args;
+  const { handle, blueprint } = args;
   scope(handle, key);
-  if (typeof html !== "string" || !html.trim())
+  const html = paneSourceOf(args, handle, clone);
+  if (!html.trim())
     throw bounce(422, "empty pane", "send the complete window.html — the pane is replaced whole");
   sizeOk(html, "window.html", MAX_WINDOW);
   selfContainedOnly(html);

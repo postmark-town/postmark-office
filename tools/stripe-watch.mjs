@@ -196,6 +196,38 @@ export const COLDSTART_DAYS = 30;
 export const PAGE_LIMIT = 100;
 export const MAX_PAGES = 50;
 
+// ── WHERE THIS RAIL'S STATE LIVES, owned HERE (postmark#2972) ───────────────
+//
+// On 2026-09-19 `tools/funding-report.mjs` told the operator the card rail had
+// not ticked in 33,573 minutes — three weeks — while the timer was ticking every
+// fifteen and the journal carried witnessed rows from that morning. Two files
+// answered "when did this rail last tick": this watcher writes
+// /srv/postmark-stripe/state.json (the path its unit passes), and the report
+// carried its own default of <office>/.stripe-watch-state.json, last written
+// 2026-08-27 and never again. The report read the one nobody writes.
+//
+// The report's own header says a rail that has not ticked makes every queue
+// below it a lie — so the false ⚠ was not cosmetic: read literally it said the
+// town had been blind to cards for three weeks, and it trains the reader to
+// skim the warning that will matter the day a watcher really dies.
+//
+// ONE OWNER, AND IT IS THE FILE THAT WRITES THE STATE. The report imports these
+// rather than keeping a twin. This is also the CLI's own default, because a
+// constant that disagrees with the default beside it is the same two answers
+// again in one file — deploy/postmark-stripe-watch.service still passes
+// `--state` explicitly, which is now agreement rather than instruction, and
+// test/funding-report.test.mjs pins the two against each other so they cannot
+// drift apart a second time.
+//
+// Off the box this path does not exist. `readState` answers {} for a file that
+// is not there, which is the honest answer — off the box there IS no live tick
+// — and an operator with their own state file passes `--state`.
+export const STATE_PATH = "/srv/postmark-stripe/state.json";
+// The journal has always lived beside the state, derived rather than typed
+// (see `main()` below, which keeps deriving it from whatever `--state` says).
+export const JOURNAL_NAME = "stripe-intake.jsonl";
+export const JOURNAL_PATH = join(dirname(STATE_PATH), JOURNAL_NAME);
+
 const iso = (unixSeconds) => new Date(unixSeconds * 1000).toISOString();
 
 // ── the Stripe read ─────────────────────────────────────────────────────────
@@ -449,26 +481,106 @@ function potGateOf(engine, clone, pot) {
 }
 
 /**
+ * THE ROWS THE CURSOR FORGOT — every session the journal remembers as SEEN and
+ * has never recorded as WITNESSED.
+ *
+ * ── WHY THIS EXISTS (postmark#2973, 2026-09-19) ────────────────────────────
+ *
+ * A held session is journalled `seen` and decided again on the next tick only
+ * while the live listing still returns it — and the listing starts at the
+ * cursor, which `decide` moves to the NEWEST session it was shown. So the
+ * moment a newer session shares a listing with a held one, the held one falls
+ * behind the cursor and `created[gte]` never returns it again. soren's $10.28
+ * to `keeping-ec2` sat that way for three days while every tick printed
+ * "holding: 0" over it, because nothing re-read the journal.
+ *
+ * THE CURSOR IS FOR FINDING NEW SESSIONS. THE JOURNAL IS FOR REMEMBERING HELD
+ * ONES. The header above already promised half of that — "the journal remembers
+ * what was SEEN; the ledger decides what was DONE" — and it was true of dedupe
+ * and false of re-decision. This is the other half.
+ *
+ * `tools/funding-report.mjs § stripeQueue` has decided from exactly this set
+ * since it was written, which is why the report re-read soren's session as
+ * Ready to witness on the third day while the watcher could not see it at all.
+ * Nothing changes for that reader: this makes the tick agree with it rather
+ * than adding a second rule beside it.
+ *
+ * A `refused` row STAYS in the set. A refusal spends nothing — the ref is
+ * unspent and the code that wrote the row says so in those words ("the next
+ * tick tries again") — so a refusal is a delay, not a verdict.
+ *
+ * A `witnessed` row drops OUT, and that is the point of asking the journal
+ * rather than only the ledger. `resolveSession` would answer `already` for it
+ * and the ledger's ref-uniqueness would bounce a second write regardless; the
+ * watcher must not even try.
+ *
+ * Pure, and takes raw journal rows so a torn line costs nothing.
+ */
+export function unwitnessedSeen(rows) {
+  const seen = new Map();
+  const witnessed = new Set();
+  for (const r of rows ?? []) {
+    if (!r || !r.session) continue;
+    if (r.kind === "seen") { if (!seen.has(r.session)) seen.set(r.session, r); }
+    else if (r.kind === "witnessed") witnessed.add(r.session);
+  }
+  for (const id of witnessed) seen.delete(id);
+  return [...seen.values()];
+}
+
+/**
  * One tick, decided and NOT performed.
  *
  * Returns { report, cursor, todo } and writes nothing — the caller records and
  * persists, so a falsifier can run the whole tick and prove no ledger row was
  * written. `todo` is the ordered list of witnesses to perform.
+ *
+ * TWO READS, ONE DECISION. `sessions` is the live listing from the cursor;
+ * `journal` is `unwitnessedSeen(...)` — the rows the cursor has left behind.
+ * THE LIVE READ WINS where both carry the same session, because a journal row
+ * is a snapshot of the session as it was FIRST seen and `payment_status` can
+ * still move from unpaid to paid. Letting the snapshot win would freeze a
+ * session at the moment it was worst understood — the same shape of failure
+ * one layer down.
+ *
+ * THE CURSOR IS COMPUTED FROM THE LIVE LISTING ALONE, deliberately: it means
+ * "what Stripe has shown us", and this is a fix TO a cursor bug, so it must not
+ * quietly be a second change to what the cursor means.
  */
-export function decide({ sessions, engine, entries, clone, households, loginHands = null, now = Date.now(), graceMs = CROSSING_MS, minUsd = MIN_USD, allowTestmode = false, cursor = null }) {
-  const decoded = sessions.map(decodeSession);
+export function decide({ sessions, journal = [], engine, entries, clone, households, loginHands = null, now = Date.now(), graceMs = CROSSING_MS, minUsd = MIN_USD, allowTestmode = false, cursor = null }) {
+  const live = sessions.map(decodeSession);
+  const maxCreated = live.reduce((a, s) => Math.max(a, s.created), cursor ?? 0);
+
+  const byId = new Map(live.map((s) => [s.session, s]));
+  let rechecked = 0;
+  for (const row of journal) {
+    if (!row?.session || byId.has(row.session)) continue;
+    // `kind` and `at` are the JOURNAL's fields, not the session's, and
+    // resolveSession spreads whatever it is handed into the row the operator
+    // reads. Strip them so a re-decided row is shaped like a freshly decoded
+    // one and no reader has to learn a second shape.
+    const { kind: _kind, at: _at, ...s } = row;
+    byId.set(s.session, s);
+    rechecked += 1;
+  }
+  const decoded = [...byId.values()].sort((a, b) => a.created - b.created || String(a.session).localeCompare(String(b.session)));
+
   const buckets = { already: [], hold: [], witness: [], anomaly: [] };
   for (const s of decoded) {
     const r = resolveSession(s, { engine, entries, clone, households, loginHands, now, graceMs, minUsd, allowTestmode });
     buckets[r.disposition].push(r);
   }
-  const maxCreated = decoded.reduce((a, s) => Math.max(a, s.created), cursor ?? 0);
   return {
     report: {
       generated_at: new Date(now).toISOString(),
       rail: RAIL,
       read_from: cursor == null ? null : iso(cursor),
-      sessions: decoded.length,
+      // WHAT STRIPE RETURNED, and nothing else. The CLI's headline sentence is
+      // "N completed session(s) since <cursor>", and a count inflated by journal
+      // rows would read as a Stripe read that never happened. The journal's
+      // contribution is `rechecked`, on its own line, in its own words.
+      sessions: live.length,
+      rechecked,
       grace: `one crossing (${graceMs / 3_600_000}h) after the session was created`,
       witnessed_now: buckets.witness.length,
       holding: buckets.hold.length,
@@ -477,7 +589,7 @@ export function decide({ sessions, engine, entries, clone, households, loginHand
       witness: buckets.witness,
       anomaly: buckets.anomaly,
       already: buckets.already.map((a) => ({ session: a.session, pot: a.pot, from: a.from, usd_recorded: a.usd_recorded, date: a.date })),
-      posture: "every card payment resolves by rule: the pot comes from the session's own client_reference_id, the hand from its `handle` field matched against the town's registry, and an unmatched hand is a gift rather than a guess. Only the anomaly list waits on a person.",
+      posture: "every card payment resolves by rule: the pot comes from the session's own client_reference_id, the hand from its `handle` field matched against the town's registry, and an unmatched hand is a gift rather than a guess. Only the anomaly list waits on a person. The cursor finds new sessions; the journal's seen-and-unwitnessed rows are re-decided every tick whatever the cursor says, so a held session cannot be orphaned behind it.",
     },
     todo: buckets.witness,
     cursor: maxCreated || null,
@@ -538,8 +650,8 @@ const sinceUnix = (v) => {
 
 async function main() {
   const clone = arg("clone", process.env.TOWN_CLONE ?? resolve(HERE, "..", "town-clone"));
-  const statePath = arg("state", join(HERE, "..", ".stripe-watch-state.json"));
-  const journalPath = arg("journal", join(dirname(statePath), "stripe-intake.jsonl"));
+  const statePath = arg("state", STATE_PATH);
+  const journalPath = arg("journal", join(dirname(statePath), JOURNAL_NAME));
   const outPath = arg("out", null);
   const dryRun = process.argv.includes("--dry-run");
 
@@ -568,11 +680,20 @@ async function main() {
   // The second channel's map, derived by the town's own resolver. Built here
   // and handed down so the rule stays pure and a falsifier can withhold it.
   const loginHands = townLoginHands(clone, engine);
-  const { report, todo, cursor: next } = decide({ sessions, engine, entries, clone, households, loginHands, cursor });
+
+  // THE SECOND READ. The journal is read ONCE here and used twice: to re-decide
+  // the rows the cursor has left behind (#2973), and immediately below to
+  // decide which of this listing's sessions are new enough to journal. One read
+  // because two reads of an append-only file inside one tick can disagree, and
+  // a dedupe set that disagrees with the re-decide set is a double-witness.
+  const journalRows = readJournal(journalPath);
+  const { report, todo, cursor: next } = decide({
+    sessions, journal: unwitnessedSeen(journalRows), engine, entries, clone, households, loginHands, cursor,
+  });
   if (coldStart) report.coldstart = `no cursor: this run read only the last ${COLDSTART_DAYS} days. A session older than ${iso(coldFloor)} was NOT read — sweep it with --since.`;
 
   // journal every session not already known, plus every disposition this tick
-  const known = new Set(readJournal(journalPath).filter((r) => r.kind === "seen").map((r) => r.session));
+  const known = new Set(journalRows.filter((r) => r.kind === "seen").map((r) => r.session));
   const seenRows = sessions.map(decodeSession)
     .filter((s) => !known.has(s.session))
     .map((s) => ({ kind: "seen", at: report.generated_at, ...s }));
@@ -608,6 +729,11 @@ async function main() {
   if (process.argv.includes("--json")) { console.log(JSON.stringify(report, null, 2)); return; }
 
   console.log(`stripe-watch · ${report.sessions} completed session(s) since ${report.read_from ?? "the cold-start floor"}`);
+  // Printed only when there were any, and named as a SECOND read rather than
+  // folded into the headline — the line above is about what Stripe returned,
+  // and an operator who cannot tell the two reads apart cannot tell a quiet
+  // account from a cursor that has run away from a held session.
+  if (report.rechecked) console.log(`  plus ${report.rechecked} seen-and-unwitnessed session(s) re-decided from the journal, behind the cursor`);
   if (report.coldstart) console.log(`  ${report.coldstart}`);
   console.log(`  witnessed now: ${written.filter((w) => w.kind === "witnessed").length}   holding: ${report.holding}   already on the ledger: ${report.already.length}   anomalies: ${report.anomalies}`);
   for (const h of report.hold)

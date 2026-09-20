@@ -55,8 +55,11 @@ import { townLoginHands } from "../src/household-logins.mjs";
 // the town day, from the one place that owns it — a receipt's date is the
 // town's clock and never the operator's laptop's
 import { townDay } from "../src/ops.mjs";
-import { readIntakeMap, SINK_RULE } from "./usdc-watch.mjs";
-import { resolveSession, decodeSession, listCompleteSessions, stripeReader, readJournal, readState, COLDSTART_DAYS } from "./stripe-watch.mjs";
+import { readIntakeMap, SINK_RULE, STATE_PATH as USDC_STATE, REPORT_NAME as USDC_REPORT_NAME } from "./usdc-watch.mjs";
+import {
+  resolveSession, decodeSession, listCompleteSessions, stripeReader, readJournal, readState, COLDSTART_DAYS,
+  STATE_PATH as STRIPE_STATE, JOURNAL_PATH as STRIPE_JOURNAL,
+} from "./stripe-watch.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -391,8 +394,13 @@ async function main() {
     readWalletRegistry(arg("wallet-registry", undefined), { households });
   const { map, invalid: mapInvalid } = readIntakeMap();
 
-  const usdcState = readState(arg("usdc-state", join(HERE, "..", ".usdc-watch-state.json")));
-  const usdcReport = readJson(arg("usdc-report", "/srv/postmark-usdc/arrivals.json"));
+  // THE PATHS COME FROM THE FILES THAT WRITE THEM (#2972). A default typed here
+  // is a second answer to "where does this rail keep its state", and the one
+  // this file used to carry had been dead since 2026-08-27 while the rail
+  // ticked every fifteen minutes. Each watcher exports its own; nothing in this
+  // file names one.
+  const usdcState = readState(arg("usdc-state", USDC_STATE));
+  const usdcReport = readJson(arg("usdc-report", join(dirname(USDC_STATE), USDC_REPORT_NAME)));
 
   // ── THE CARD RAIL, READ LIVE (this is what makes Stage A stateless) ────────
   // With a key, the report asks Stripe itself: no cursor, no journal, nothing
@@ -402,7 +410,7 @@ async function main() {
   // quiet rail are different answers and only one of them is good news.
   let stripe = { hold: [], witness: [], anomaly: [], already: [] };
   let stripeRail = { rail: "stripe (live read)", ok: false, last_run: null, note: "no STRIPE_KEY in the environment and no watcher journal on disk — the card rail was NOT read, so nothing below is a claim about card payments" };
-  const journalPath = arg("stripe-journal", "/srv/postmark-stripe/stripe-intake.jsonl");
+  const journalPath = arg("stripe-journal", STRIPE_JOURNAL);
   const decided = (sessions) => stripeQueue({ journal: sessions, engine, entries, clone, households, loginHands, now });
 
   if (engine && process.env.STRIPE_KEY) {
@@ -425,7 +433,7 @@ async function main() {
     }
   } else if (engine && existsSync(journalPath)) {
     stripe = decided(readJournal(journalPath).filter((r) => r.kind === "seen"));
-    const st = readState(arg("stripe-state", join(HERE, "..", ".stripe-watch-state.json")));
+    const st = readState(arg("stripe-state", STRIPE_STATE));
     stripeRail = railHealth("stripe-watch (journal)", st, { now });
   }
 

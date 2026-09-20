@@ -1,0 +1,260 @@
+name: Guard falsifier (the write-path guard port, against a CI Postgres)
+
+# THE GUARD FALSIFIER RUNS HERE, NOT ON PROD'S SERVER (Keemin, 2026-09-17, D-A of
+# world2/DESIGN-standing-flip.md § 6: "local postgres is fine to CI"; POS-107).
+#
+# `world2/tools/falsifier-guard-equality.mjs` compares the write-path guard PORT
+# (`world2/tools/guard-reads.mjs`, over `claims` and `acts`) against 1.0's own
+# functions, imported live out of this office. It needs a scratch database it
+# writes (`world2_guards_lane`) beside a store it only reads (`world2_dev`), and
+# on the box the scratch would be `CREATE DATABASE` on prod's own Postgres — a
+# write, refused on 2026-09-17 (postmark#2892). So both databases are made here,
+# on a `postgres:16` service that exists for one run and is gone after it.
+#
+# ── WHAT THIS JOB PROVES, AND WHAT IT CANNOT ────────────────────────────────
+#
+# G1–G4 and G6 are pure port equalities: the falsifier WRITES its own population
+# through 1.0's `appendJournal` (both pens at once) and compares the two sides.
+# Their verdict here is the verdict.
+#
+# G5 (the holder fold) reads a real store: `acts` in `world2_dev` against 1.0's
+# recovery chain over the world checkout's STATE. This job has no prod rows, so
+# `world2_dev` is SEEDED from the same world checkout with the office's own
+# genesis pen (`seed-import.mjs --with-acts`, the pen that wrote prod's
+# `legacy:attachment` rows on 2026-08-28). G5 here therefore says: the port's
+# legacy-era parse of the seed's rows equals 1.0's recovery over the STATE the
+# seed read. It does NOT say anything about prod's `acts`; that verdict still
+# needs prod's store. Measured before this file existed: with `world2_dev`
+# floored and NOT seeded, G5 reds on every holder ("1.0's recovery yields 109
+# attachment rows, the port yields 0"), so the seed step is load-bearing.
+#
+# ── EXIT CODES, AND THE ONE THAT MUST NEVER READ GREEN ───────────────────────
+#
+# The tool exits 0 green · 1 RED (a divergence, named) · 2 CANNOT RUN. Any
+# non-zero exit fails its step, so 2 is red by construction — and the step
+# after the run reads the JSON a second time and refuses an empty `unchecked`
+# that is not empty, so a green needs both the exit code and the receipt.
+#
+# ── THE WORKFLOW'S OWN FALSIFIER ─────────────────────────────────────────────
+#
+# A check that cannot fail is an act, so this job also proves it can go red,
+# twice, on purpose, each in a step whose failure is EXPECTED and asserted by
+# the step after it:
+#
+#   · a claim planted in the scratch store that 1.0's journal never wrote →
+#     the tool must exit 1 and name the slug (G1 catches it);
+#   · a `--world-repo` with no STATE/ → the tool must exit 2, and 2 must fail
+#     the step, not pass it.
+#
+# The tool's own `--prove-can-fail` is a different instrument and is run as
+# well: it breaks the PORT in memory seven ways and requires the falsifier to
+# notice each. It exits 0 when the proof HOLDS ("can-fail PROVEN") and 1 only
+# when a break goes unnoticed — so that step is green when it works, and the
+# assertion on it is that every break read RED (none SILENT, INERT or THREW).
+#
+# Nothing here reaches prod or the box. The world checkout is a public repo
+# read with the default token; no other secret is used.
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: guard-falsifier-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  guard-falsifier:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    env:
+      # libpq's own variables: psql and the office's `pg` both read them. The
+      # superuser is the service's; the five roles below get the same throwaway
+      # password, which is a CI service's and nothing else's.
+      PGHOST: 127.0.0.1
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: ci
+      PGCLIENTENCODING: UTF8
+      W2_PW: ci
+      WORLD: ${{ github.workspace }}/world-checkout
+      # The falsifier's four URLs (its § RUNNING IT). `WORLD2_PG_URL` is the
+      # read-only store G5 and G6 read; the tool re-points it at the scratch
+      # before importing the pens. `W2_OWNER_URL` is optional and feeds G6's
+      # disclosure count on the real store.
+      WORLD2_PG_URL: postgres://snapshot_reader:ci@127.0.0.1:5432/world2_dev
+      W2_OWNER_URL: postgres://world2_owner:ci@127.0.0.1:5432/world2_dev
+      W2_GUARDS_OWNER_URL: postgres://world2_owner:ci@127.0.0.1:5432/world2_guards_lane
+      W2_GUARDS_URL: postgres://office_api:ci@127.0.0.1:5432/world2_guards_lane
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # `node:sqlite` (src/dynamic-store.mjs) needs Node 22; package.json says so.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # The world, read-only, shallow, at main. Both the seed (G5's port side)
+      # and the falsifier's oracle (`attachmentsFromState` over STATE/) read it.
+      # `world-checkout` is not the office's conventional `world-clone/` on
+      # purpose: nothing in the office should find this by default and treat
+      # it as the clone the box serves from.
+      - uses: actions/checkout@v4
+        with:
+          repository: keeminlee/postmark-world
+          ref: main
+          path: world-checkout
+          fetch-depth: 1
+
+      # The five roles 002_grants.sql GRANTs to. No file in this repo CREATEs
+      # them — the box's were made by hand — so this is the list, derived from
+      # 002's grantees: the owner (migrations only) and the four pens.
+      - name: Roles
+        run: |
+          for r in world2_owner office_api clearing_job law_ingester snapshot_reader; do
+            psql -v ON_ERROR_STOP=1 -d postgres -qc "CREATE ROLE $r LOGIN PASSWORD '$W2_PW'"
+          done
+          echo "five roles created"
+
+      # The floor on BOTH databases — every world2/schema/NNN_*.sql in name
+      # order, as world2_owner; 003 skipped (it is the three-pens falsifier
+      # query, not a migration). The script is the one writer of that loop.
+      - name: The floor on both databases
+        run: |
+          bash .github/scripts/guard-falsifier-floor.sh world2_dev
+          bash .github/scripts/guard-falsifier-floor.sh world2_guards_lane
+
+      # G5's port side. The genesis pen, at the checkout's own sha, with the
+      # legacy acts (`--with-acts` is what writes `legacy:attachment`). ~3 s.
+      - name: Seed world2_dev from the world checkout
+        run: |
+          SHA=$(git -C "$WORLD" rev-parse HEAD)
+          PGUSER=world2_owner PGDATABASE=world2_dev \
+            node world2/tools/seed-import.mjs --world-repo "$WORLD" --sha "$SHA" --with-acts
+          psql -d world2_dev -Atc "SELECT 'acts holding rows: ' || count(*) FROM acts WHERE action IN ('legacy:attachment','give','drop','take')"
+
+      # ── THE RUN ──────────────────────────────────────────────────────────
+      - name: The run
+        id: run
+        run: |
+          set +e
+          node world2/tools/falsifier-guard-equality.mjs --world-repo "$WORLD" --json > run.json
+          code=$?
+          set -e
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          node .github/scripts/guard-falsifier-report.mjs run.json
+          exit $code
+
+      # The second reader. The exit code already failed the step on 1 and 2;
+      # this refuses a 0 whose receipt says something was not compared.
+      - name: Assert the receipt
+        run: |
+          node -e '
+            const o = JSON.parse(require("fs").readFileSync("run.json", "utf8"));
+            if (!Array.isArray(o.unchecked) || o.unchecked.length) { console.error("unchecked:", o.unchecked); process.exit(1); }
+            if (o.findings.length) { console.error("findings:", o.findings.length); process.exit(1); }
+            const eq = Object.entries(o.equalities);
+            if (!eq.length || eq.some(([, r]) => !r.compared)) { console.error("an equality compared nothing"); process.exit(1); }
+            console.log(`GREEN · ${eq.length} equalities, every one compared`);
+          '
+
+      # ── THE TOOL'S OWN PROOF ─────────────────────────────────────────────
+      # A fresh scratch for every further run: the falsifier plants its
+      # population through the live pen, and a rerun over the first run's rows
+      # would be measuring leftovers.
+      - name: Prove-can-fail (the tool's own; green when it holds)
+        run: |
+          bash .github/scripts/guard-falsifier-floor.sh world2_guards_lane --fresh
+          set +e
+          node world2/tools/falsifier-guard-equality.mjs --world-repo "$WORLD" --prove-can-fail --json > proof.json
+          code=$?
+          set -e
+          node .github/scripts/guard-falsifier-report.mjs proof.json
+          [ "$code" -eq 0 ] || { echo "::error::--prove-can-fail exited $code"; exit "$code"; }
+          node -e '
+            const o = JSON.parse(require("fs").readFileSync("proof.json", "utf8"));
+            const cf = o.can_fail;
+            if (!cf || !cf.results.length) { console.error("no can-fail results"); process.exit(1); }
+            const notRed = cf.results.filter((r) => !(r.findings > 0));
+            if (notRed.length) { console.error("breaks that did not read RED:", notRed.map((r) => r.mangle)); process.exit(1); }
+            console.log(`can-fail PROVEN · ${cf.results.length} breaks, every one RED`);
+          '
+
+      # ── THE WORKFLOW'S OWN FALSIFIER ─────────────────────────────────────
+      # Expected to FAIL. `continue-on-error` keeps the job alive so the step
+      # after can assert that it failed, and failed the right way (exit 1, the
+      # slug named) — an exit 2 here would be a run that could not run, which
+      # is not a run that found the divergence.
+      - name: Red on a planted row (expected to fail)
+        id: planted
+        continue-on-error: true
+        run: |
+          bash .github/scripts/guard-falsifier-floor.sh world2_guards_lane --fresh
+          PGUSER=world2_owner psql -v ON_ERROR_STOP=1 -d world2_guards_lane -qc "
+            INSERT INTO windows (id, opens_at, closes_at, status)
+              VALUES (1, now() - interval '2 days', now() - interval '1 day', 'closed');
+            INSERT INTO claims (window_id, class, claimant, household, status, body, geometry, slug, stake)
+              VALUES (1, 'sited', 'guards-alfa', 'gh:9000001', 'draft', 'a shed that stands in no journal',
+                      '{\"slug\":\"guards-alfa/the-planted-shed\",\"at\":{\"x\":90,\"y\":90},\"extent\":{\"w\":2,\"h\":2}}',
+                      'guards-alfa/the-planted-shed', 0);"
+          echo "planted guards-alfa/the-planted-shed in claims — 1.0's journal never wrote it"
+          set +e
+          node world2/tools/falsifier-guard-equality.mjs --world-repo "$WORLD" > planted.txt 2>&1
+          code=$?
+          set -e
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          cat planted.txt
+          exit $code
+
+      - name: Assert the planted row went red
+        run: |
+          [ "${{ steps.planted.outcome }}" = "failure" ] || { echo "::error::the planted-row step did not fail — the workflow cannot go red"; exit 1; }
+          [ "${{ steps.planted.outputs.code }}" = "1" ] || { echo "::error::expected exit 1 (RED), got ${{ steps.planted.outputs.code }}"; exit 1; }
+          grep -q "guards-alfa/the-planted-shed" planted.txt || { echo "::error::the divergence was not named in the log"; exit 1; }
+          echo "red as expected: exit 1, the planted slug named"
+
+      - name: Red on cannot-run (expected to fail)
+        id: cannotrun
+        continue-on-error: true
+        run: |
+          bash .github/scripts/guard-falsifier-floor.sh world2_guards_lane --fresh
+          EMPTY=$(mktemp -d)
+          set +e
+          node world2/tools/falsifier-guard-equality.mjs --world-repo "$EMPTY" > cannotrun.txt 2>&1
+          code=$?
+          set -e
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          cat cannotrun.txt
+          exit $code
+
+      - name: Assert cannot-run went red
+        run: |
+          [ "${{ steps.cannotrun.outcome }}" = "failure" ] || { echo "::error::exit 2 read as green"; exit 1; }
+          [ "${{ steps.cannotrun.outputs.code }}" = "2" ] || { echo "::error::expected exit 2 (CANNOT RUN), got ${{ steps.cannotrun.outputs.code }}"; exit 1; }
+          grep -q "CANNOT RUN" cannotrun.txt || { echo "::error::the refusal was not named in the log"; exit 1; }
+          echo "red as expected: exit 2, CANNOT RUN named"

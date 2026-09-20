@@ -42,17 +42,41 @@
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { readDraftClaims } from "./world2-claims.mjs";
+import { readDraftClaims, householdKeyForKey, withHousehold } from "./world2-claims.mjs";
 import * as live from "../world2/tools/live-reads.mjs";
+// ── THE GROUNDLESS STANDPOINT, AT THE 2.0 DOOR (#2900, ruled 2026-09-17) ─────
+//
+// `live-reads.mjs` is a VERBATIM port of the world engine's tools/where-is.mjs
+// (VENDOR.whereIs, blob 83e6a766…), held to the original by
+// world2/tools/falsifier-live-equality.mjs. It must keep answering the porch,
+// because being byte-for-byte the engine's law is the whole of what it promises
+// — so the ruling is applied where 1.0 applies it: on the DOOR's answer, one
+// layer above the port, exactly as src/positions.mjs does over the real engine.
+//
+// Same module, same predicate, same rewrite. One owner, now four readers.
+import { isGroundlessDefault, atOrigin } from "./groundless.mjs";
 import * as talk from "../world2/tools/conversations.mjs";
 import * as apex from "../world2/tools/apex-reads.mjs";
+import * as stakeRead from "../world2/tools/stake-reads.mjs";
+import * as portfolio from "../world2/tools/portfolio-reads.mjs";
+import * as guards from "../world2/tools/guard-reads.mjs";
+import { stakesFromStore } from "../world2/tools/fold-input.mjs";
 // The CANDLE'S OWN escrow reader, not a second one — § THE DOCKET ROW says why.
 import { escrowPresenceAt } from "../world2/tools/escrow-presence.mjs";
 import { blessedRef, materializeAtRef } from "./world-branches.mjs";
-import { WORLD_CLONE, placeWordsFrom } from "./world.mjs";
+import { WORLD_CLONE, placeWordsFrom, markPage } from "./world.mjs";
+// 1.0's own backed row, imported rather than restated — see portfolio-reads.mjs
+// § THE DECISIONS ARE NOT RE-EXPRESSED HERE.
+import { backedRow } from "./world-stake.mjs";
+// 1.0's own settlements rules — which tags count, the order, the cap — imported
+// rather than restated; see § THE SETTLEMENTS TWIN below.
+import { settlementsFrom } from "./settlements.mjs";
 import { CROSSING_DERIVATION, currentCrossing } from "./crossings.mjs";
 import { actorRoster } from "./human-actor.mjs";
 import { stopDepartures } from "./world-movement.mjs";
+// The class every reader IS — 1.0's own constant, so the two apexes name the
+// same mark in `records` (world.mjs § markRecords).
+import { STRIDE_MARK_ID } from "./world-classes.mjs";
 
 const state = { pool: null };
 
@@ -98,9 +122,14 @@ async function engine() {
   if (_engine) return _engine;
   const dir = materializeAtRef(WORLD_CLONE, blessedRef(WORLD_CLONE), "tools"); // the blessed engine, as world.mjs engineDir (postmark#2934)
   const at = (f) => import(pathToFileURL(join(dir, "tools", f)).href);
-  const [verbs, build, engineMod] = await Promise.all([
-    at("world-verbs.mjs"), at("world-build.mjs"), at("world-engine.mjs")]);
-  _engine = { verbs, build, engine: engineMod, dir };
+  // The three readers the ground set is selected with (`records`, #2896) ride
+  // beside the verbs: the region roster, the ring reader, the water selection —
+  // the same three src/world.mjs § groundMarkIds imports, from the same
+  // published ref, so the twin's floor is chosen by the town's own rules.
+  const [verbs, build, engineMod, regions, geometry, water] = await Promise.all([
+    at("world-verbs.mjs"), at("world-build.mjs"), at("world-engine.mjs"),
+    at("region-outsiders.mjs"), at("geometry.mjs"), at("water.mjs")]);
+  _engine = { verbs, build, engine: engineMod, regions, geometry, water, dir };
   return _engine;
 }
 
@@ -131,6 +160,103 @@ export async function world2MyDrafts(key) {
 }
 
 /**
+ * GET /world2/my-marks — the portfolio, out of rows. The SECOND key-scoped door
+ * in this tier, and it is here beside `world2MyDrafts` for that function's own
+ * reason: `world2Serve`'s signature is `(path, searchParams)`, which has nowhere
+ * to put a credential, so server.mjs calls this directly with the key it holds.
+ *
+ * THE SCOPING IS THE POLICY'S, NOT THIS FUNCTION'S — `world2MyDrafts`'s design,
+ * unchanged: the live read runs inside `withHousehold`, so 007's row policy is
+ * what makes another household's drafts unreturnable and a bug in this file
+ * cannot widen the answer.
+ *
+ * Every list is composed by `portfolio-reads.mjs` and every decision it makes is
+ * 1.0's own function — `markPage` for the bound, `backedRow` for the backed row.
+ * The two fields 1.0 answers that this tier cannot are named on the answer under
+ * `tree_only`; see that module's header for why each is absent rather than
+ * approximated.
+ */
+export async function world2MyMarks(key, { offset = 0, p: injected = null } = {}) {
+  const p = injected ?? await pool();
+  const household = await householdKeyForKey(p, key);
+
+  // The household's roster, from the store's own `identities` projection — the
+  // registry `roll-ingest.mjs` writes ("census decision 1: roster is
+  // REVIEW-class, repo-first"). 1.0 resolves the same question through the town
+  // clone's dated `currentHouseholdOf`; this is that resolution, already made
+  // at the ingested sha and stored.
+  const { rows: handleRows } = await p.query(portfolio.HOUSEHOLD_HANDLES_SQL, [household]);
+  const handles = new Set(handleRows.map((r) => r.handle));
+  const belongs = (h) => handles.has(h);
+
+  // ── the live overlay, inside the policy ──────────────────────────────────
+  const publishedIds = await guards.publishedIdsFrom(p);
+  const publishedMarkOf = await guards.publishedMarkFrom(p);
+  const liveDelta = await withHousehold(p, household, (client) =>
+    guards.pgDraftsForKey(client, {
+      household,
+      // Both spellings, for `pgDraftsForKey`'s own reason: `acts.household`
+      // carried the office key's NAME on every row the mirror wrote, and handing
+      // the port one spelling returns every added and modified mark and no
+      // deleted ones, silently.
+      journalHousehold: household,
+      publishedIds, publishedMarkOf,
+    }));
+
+  // ── canon: what this household's residents have standing ─────────────────
+  const { rows: markRows } = await p.query(portfolio.PORTFOLIO_MARKS_SQL, [[...handles]]);
+  const residents = [...new Set(markRows.map((r) => r.owner).filter(belongs))].sort();
+
+  // ── the ledger: what is staked, and by whom ──────────────────────────────
+  //
+  // `null` is a REFUSAL and never an empty town — `escrowPresenceAt`'s own
+  // discipline, and the reason `backed` may be absent rather than empty here.
+  const { rows: [townHead] } = await p.query("SELECT sha FROM projection_heads WHERE repo = 'town'");
+  let stakeRows = null;
+  let escrowByMark = null;
+  if (townHead?.sha) {
+    try {
+      stakeRows = await stakesFromStore(p, { townSha: townHead.sha });
+      escrowByMark = await escrowPresenceAt((sql, params) => p.query(sql, params), { townSha: townHead.sha });
+    } catch { stakeRows = null; escrowByMark = null; }
+  }
+
+  const stampsOf = (slug) => (escrowByMark == null ? 0 : Number(escrowByMark.get(slug) ?? 0));
+  const liveMarks = liveDelta.marks ?? [];
+  const draftIds = new Set(liveMarks.map((m) => m.id).filter(Boolean));
+  const backedSource = (stakeRows ?? []).filter((row) => belongs(row.holder));
+  const backedIds = new Set(backedSource.map((row) => row.mark));
+
+  // Canon first, the caller's own live layer second — `worldPortfolioStakeSlice`'s
+  // own ordering, and its reason: "canon wins on a shared id, because a published
+  // mark's fields are the town's answer and a draft copy of one is the author's
+  // proposal."
+  const canonRows = markRows.map((r) => portfolio.publishedRowOf(r, { stampsOf }));
+  const byId = new Map([...liveMarks, ...canonRows].map((m) => [m.id, m]));
+  const backed = backedSource
+    .map((row) => backedRow(row, { mark: byId.get(row.mark), belongs }))
+    .sort((a, b) => a.id.localeCompare(b.id) || a.holder.localeCompare(b.holder));
+
+  const published = canonRows
+    .filter((m) => residents.includes(m.by) && !draftIds.has(m.id) && !backedIds.has(m.id))
+    .sort((a, b) => a.id.localeCompare(b.id));
+
+  const body = portfolio.portfolioAnswerFrom({
+    household, residents, live: liveMarks, published, backed, offset, pager: markPage,
+  });
+
+  return {
+    ...body,
+    // NAMED, NOT SILENT — and `backed` says which absence it is, because a
+    // refusal and an empty ledger are different facts.
+    ...(stakeRows == null ? { backed_unavailable:
+      "the escrow projection could not be read at the ingested town head, so what you have staked is UNKNOWN — not nothing. `backed` and `counts.backed` are empty for that reason and not because you back nothing." } : {}),
+    ...(townHead?.sha ? { escrow_at_town_sha: townHead.sha } : {}),
+    tree_only: portfolio.PORTFOLIO_TREE_ONLY,
+  };
+}
+
+/**
  * THE CLOCK, for every live-lane read. `?at=<ISO>` or now.
  *
  * A bad `at` BOUNCES rather than falling back to now. Silently answering a
@@ -149,6 +275,59 @@ function clockOf(searchParams) {
   return { ms };
 }
 
+// ── THE WALK WINDOW (POS-84) ────────────────────────────────────────────────
+//
+// `/world2/walks` answers the WHOLE record and has since it opened: 2,498
+// departures / 1.17 MB on 2026-09-16, growing by ~100 a day. Its one live
+// consumer — the world viewer's Lately pane — wants a fortnight, and had no way
+// to ask for one, so it read a file frozen 2026-08-10 instead. `?since=<ISO>`
+// and `?last=<n>` are that ask. Neither given, the answer is what it was.
+//
+// THE WINDOW FILTERS; IT NEVER RE-SORTS. This read's order is the record's own
+// APPEND order (§ DEPARTURE_ORDER_SQL), which is not instant order — measured
+// on prod 2026-09-16, the 2,498 rows carry exactly one inversion, and it is the
+// documented one: the 08-08 sailing filed every passenger at 18:00:00.000Z and
+// those lines were appended after walks stamped 18:16. So `last` is the most
+// recently APPENDED n, not the n latest instants, and the answer says so rather
+// than letting a reader assume they are the same thing.
+//
+// `since` is an INSTANT filter over that order, which is a different question
+// from `at` — `at` is the clock the answer is evaluated at (this read ignores
+// it, since a departure record does not move), `since` is a cut on the rows.
+/**
+ * `?since=<ISO>` / `?last=<n>` — the walk read's window, or the whole record.
+ *
+ * Returns `{ asked, since, sinceMs, last }`, or `{ error }` shaped like
+ * `clockOf`'s. An unreadable value BOUNCES rather than being ignored: a door
+ * that silently serves 2,498 rows to a caller who asked for 40 has answered a
+ * question nobody put to it.
+ */
+function walkWindowOf(searchParams) {
+  const rawSince = searchParams?.get("since");
+  const rawLast = searchParams?.get("last");
+  if (rawSince == null && rawLast == null) return { asked: false, since: null, sinceMs: null, last: null };
+
+  let sinceMs = null;
+  if (rawSince != null) {
+    sinceMs = Date.parse(rawSince);
+    if (!Number.isFinite(sinceMs)) {
+      return { error: { code: 422, body: { error: "bounce", defect: `"${rawSince}" is not an instant`,
+        hint: "?since=<ISO-8601>, e.g. ?since=2026-09-02T00:00:00Z — omit it for the whole record" } } };
+    }
+  }
+
+  let last = null;
+  if (rawLast != null) {
+    last = Number(rawLast);
+    if (!Number.isInteger(last) || last < 1) {
+      return { error: { code: 422, body: { error: "bounce", defect: `"${rawLast}" is not a count of rows`,
+        hint: "?last=<n>, a whole number of rows, 1 or more — omit it for the whole record" } } };
+    }
+  }
+
+  return { asked: true, since: rawSince ?? null, sinceMs, last };
+}
+
 /** `?x=&y=[&radius=][&limit=]` — the standpoint a read is taken from, or null. */
 function pointOf(searchParams) {
   const xs = searchParams?.get("x"), ys = searchParams?.get("y");
@@ -156,7 +335,7 @@ function pointOf(searchParams) {
   const x = Number(xs), y = Number(ys);
   if (!Number.isFinite(x) || !Number.isFinite(y)) {
     return { error: { code: 422, body: { error: "bounce", defect: "x and y must both be numbers",
-      hint: "?x=<m>&y=<m> — the town's grid, metres from Ferry's crossing" } } };
+      hint: "?x=<m>&y=<m> — the town's grid, metres from the Origin" } } };
   }
   const r = Number(searchParams.get("radius"));
   const l = Number(searchParams.get("limit"));
@@ -235,6 +414,15 @@ export async function docketEscrow(p) {
 }
 
 /**
+ * The same triple, on the office's own pool — for a reader that holds no pool
+ * of its own (the doorstep's `stakes` segment, postmark#2919). `p` is the test
+ * seam, exactly as `docketEscrow`'s is; the office never passes one.
+ */
+export async function escrowAtTownHead({ p: injected = null } = {}) {
+  return docketEscrow(injected ?? await pool());
+}
+
+/**
  * ONE ROW OF THE DOCKET. Pure, and exported so a falsifier can read it.
  *
  * `escrowLines`'s lesson, taken literally: a string composed at a call site
@@ -264,10 +452,16 @@ export function docketRow(row = {}, { byMark = null } = {}) {
 /**
  * Route a GET under /world2/*. Returns null when the path is not ours
  * (server.mjs falls through), else { code, body }.
+ *
+ * `{ p }` injects the connection, exactly as `world2Apex` below already takes
+ * it, so a door's own shape can be exercised against canned `acts` rows without
+ * a Postgres. It is a test seam and nothing else: the env gate above still
+ * decides whether these doors exist at all, and every caller in `src/` passes
+ * no pool and gets the real one.
  */
-export async function world2Serve(path, searchParams) {
+export async function world2Serve(path, searchParams, { p: injected = null } = {}) {
   if (!world2ServeEnabled()) return null;
-  const p = await pool();
+  const p = injected ?? await pool();
 
   if (path === "/world2/docket") {
     const { rows } = await p.query(DOCKET_SELECT);
@@ -332,6 +526,70 @@ export async function world2Serve(path, searchParams) {
     return { code: 200, body: { what: "the candle's ledger — newest first, receipts carried", windows: rows } };
   }
 
+  // ── THE SETTLEMENTS TWIN (postmark#2897, POS-104 box 4) ───────────────────
+  //
+  // `GET /world/settlements` out of the `settlements` table instead of out of
+  // the world clone's tags. Keyless, exactly as 1.0 is: which settlements have
+  // landed is the most public fact the town has.
+  //
+  // THE DECISIONS ARE 1.0'S OWN, IMPORTED. `settlementsFrom` is the pure half
+  // of `src/settlements.mjs` — which rows count, ordered by NUMBER and never by
+  // date or by the order the store hands them over, `current` = the highest
+  // number that landed, a gap left as the refusal it was, and the recent-list
+  // cap. The store rows are rendered into the exact `{tag, sha, date}` lines
+  // `readSettlementTags` produces from git, and handed to the same function, so
+  // a changed rule moves both doors or neither. Nothing here decides anything.
+  //
+  // TWO REPRESENTATIONS DIFFER FROM 1.0 AND BOTH ARE SAID HERE:
+  //   · `sha` is the WHOLE commit sha. 1.0 prints `rev-parse --short`, whose
+  //     length is git's auto-abbreviation for the clone at hand (8 today) —
+  //     a value that grows with the repo. The store keeps the commit whole and
+  //     the twin serves it whole; 1.0's short is a prefix of it, always.
+  //   · `date` is the same INSTANT rendered in UTC, `YYYY-MM-DDTHH:MM:SSZ`. 1.0
+  //     prints `%cI` in the COMMITTER's own offset — `-04:00` for the 37
+  //     keeper-era tags (S1–S43, committed from an EDT machine), `Z` for the 34
+  //     box-era ones. A timestamptz keeps the instant and not the offset. No
+  //     day boundary moves: the latest EDT commit of any day is 16:08.
+  //
+  // WHAT THE STORE CARRIES THAT THE TAG LIST CANNOT is on each row beside 1.0's
+  // three fields: `window` (the candle window that crossing closed; null for
+  // every tag older than the store's first window) and `blessed_at` (the tag
+  // object's own date — the keeper's bless, which 1.0 conflates with the push).
+  //
+  // FRESHNESS NAMES ITS SOURCE. A row exists once `settlements-backfill.mjs
+  // --apply` ran after the tag landed, and the office's tick runs it every
+  // 15 minutes right after the world fetch that carries the tag in
+  // (deploy/office-tick.sh § settlements-on-tick, Wright-ruled 2026-09-17 on
+  // postmark#2897). So `current.n` is at most one tick behind a bless — the
+  // same freshness 1.0's own tag read has always had — and `what` says so.
+  if (path === "/world2/settlements") {
+    const { rows } = await p.query(
+      `SELECT number, tag_sha, published_at, window_id, blessed_at
+       FROM settlements ORDER BY number DESC`);
+    // The whole-second UTC form, with no milliseconds: byte-equal to `%cI` for
+    // a commit whose committer sat on UTC, the same instant for one who did not.
+    const isoZ = (t) => (t == null ? null : new Date(t).toISOString().replace(/\.\d{3}Z$/, "Z"));
+    const extra = new Map(rows.map((r) => [Number(r.number), {
+      window: r.window_id == null ? null : Number(r.window_id),
+      blessed_at: isoZ(r.blessed_at),
+    }]));
+    const lines = rows.map((r) => ({ tag: `settlement/S${r.number}`, sha: r.tag_sha, date: isoZ(r.published_at) }));
+    const { current, recent } = settlementsFrom(lines);
+    const withStore = (s) => (s == null ? null : { ...s, ...extra.get(s.n) });
+    return { code: 200, body: {
+      what: "which settlements have actually LANDED, from the store's `settlements` table — one row per "
+        + "`settlement/S<n>` tag, written after the keeper's tag lands, the tags kept as the git-side receipt. "
+        + "`n`, `sha`, `date` are 1.0's own fields under 1.0's own rules (src/settlements.mjs); `sha` is the "
+        + "blessed COMMIT in full where 1.0 abbreviates it, and `date` is the crossing's push in UTC. "
+        + "`window` is the candle window that crossing closed (null before the store's first window); "
+        + "`blessed_at` is the tag's own date, the keeper's bless. `current.n` is the newest number the "
+        + "table holds — as current as the office's tick, which runs settlements-backfill.mjs right after "
+        + "its world fetch, so at most ~15 minutes behind a bless.",
+      current: withStore(current),
+      recent: recent.map(withStore),
+    } };
+  }
+
   if (path === "/world2/law") {
     // A/B finding 6: grants, classes, dials, skeleton, roster were present and
     // correct in the store and reachable by nothing but a SQL client. This door
@@ -354,6 +612,151 @@ export async function world2Serve(path, searchParams) {
     } };
   }
 
+  // ── THE ESCROW DOOR ───────────────────────────────────────────────────────
+  //
+  // `GET /world/stake?mark=` out of `escrow_projection` instead of out of the
+  // town clone's ledger fold. Keyless, exactly as 1.0 is and for 1.0's own
+  // reason, carried verbatim from `server.mjs:1180`: "escrow is as public as the
+  // ✦weight it produces".
+  //
+  // THE ARITHMETIC IS `stake-reads.mjs`'s and it is the TOWN's, quoted there.
+  // Nothing in this block derives anything — it pins the sha, queries, and
+  // renders, which is this file's whole contract (§ THE LIVE LANE, above).
+  if (path === "/world2/stake") {
+    const mark = searchParams?.get("mark");
+    if (!mark) return { code: 422, body: { error: "bounce", defect: "which mark?", hint: "?mark=<by>/<slug>" } };
+
+    // THE SAME HEAD THE DOCKET NAMES, and for the same reason — see
+    // § docketEscrow: `projection_heads['town']` is what `clearing-job.mjs`
+    // derives its own `townSha` from, so this figure is as-of the sha the next
+    // crossing will also judge on. An un-ingested town REFUSES: "an empty stake
+    // set is indistinguishable from a town where nobody stakes".
+    const { rows: [head] } = await p.query("SELECT sha FROM projection_heads WHERE repo = 'town'");
+    if (!head?.sha) return { code: 503, body: { error: "bounce",
+      defect: "no town sha is ingested",
+      hint: "escrow is as-of a town commit and there is no 'latest'. Until a town head is ingested this door cannot tell an unstaked mark from an unread store, so it refuses rather than answering zero. Run stamp-ingest.mjs." } };
+
+    let answer;
+    try {
+      const { rows } = await p.query(stakeRead.STAKE_ROWS_SQL, [head.sha, mark]);
+      answer = stakeRead.stakeAnswerFrom(rows, { mark, townSha: head.sha });
+    } catch (e) {
+      // A torn ingest is a REFUSAL, never a fold with whichever k came back
+      // first — `stakesFromStore`'s rule, applied to one mark's slice.
+      return { code: 503, body: { error: "bounce", defect: "the escrow projection cannot be folded at this sha",
+        hint: String(e?.message ?? e).slice(0, 240) } };
+    }
+
+    return { code: 200, body: {
+      what: "what the town's stamp ledger holds open on one mark, from escrow_projection at the ingested town head — "
+        + "`stamps` is what residents put in, `ledger_weight` is what the mark carries because of it, and `breadth` is "
+        + "the difference with its reason attached. As-of `escrow_at_town_sha`, not the instant you asked: a stake made "
+        + "since that sha arrives when the town is next ingested, which is the same lag the candle judges under.",
+      ...answer,
+      // THE FRESHNESS STAMP NAMES ITS OWN SOURCE. 1.0 has no equivalent field
+      // because its answer is a live fold of a clone it just read; this tier's
+      // answer is as-of a pinned sha, and a number whose as-of is invisible is
+      // the staleness class this whole lane exists to kill.
+      escrow_at_town_sha: head.sha,
+      // ABSENT AND SAID SO, rather than absent and silent. Both are facts about
+      // a working tree; see stake-reads.mjs § WHAT THE STORE CANNOT ANSWER.
+      tree_only: {
+        retirement: "world-stake.mjs § worldStakeRead calls the town clone's retirementBlocked(TOWN_CLONE, mark, state) — a whole-ledger read, not a per-mark position",
+        proposed: "world-forecast.mjs § forecastForMark folds WORLD/world-state.json at the world clone's main ref to say what the NEXT crossing would make of this mark — two clones, no rows",
+        "holders[] tie order": "1.0 walks the stamp ledger's own APPEND order and then sorts by stamps descending, so equal holders come back in file order. escrow_projection stores a SET of positions; this door breaks ties by holder, declared rather than inherited from the planner",
+      },
+    } };
+  }
+
+  // ── THE INVESTIGATE DOOR ──────────────────────────────────────────────────
+  //
+  // `GET /world/investigate?mark=&depth=` with the world assembled FROM ROWS.
+  //
+  // ⚑ THE ENGINE IS 1.0'S OWN, not a port of it. `verbs.investigate` is the
+  // world repo's function and this door calls it — the only thing that changes
+  // is what it is handed: `apex.worldStateFromMarkRows(markRows)` +
+  // `build.assembleWorld` instead of a folded `WORLD/world-state.json`. That is
+  // exactly the substitution `/world2/apex` already makes one door over, so a
+  // divergence here is about the ROWS and never about the judgment.
+  if (path === "/world2/investigate") {
+    const mark = searchParams?.get("mark");
+    if (!mark) return { code: 422, body: { error: "bounce", defect: "which mark?",
+      hint: "?mark=<by>/<slug> — ids are <by>/<slug>; /world2/marks lists them" } };
+    const askedDepth = Number(searchParams?.get("depth"));
+    const depth = Number.isFinite(askedDepth) ? askedDepth : 1;
+
+    // ⚑ THE SKELETON IS NOT OPTIONAL, AND THE FIRST CUT OF THIS DOOR ASSUMED IT
+    // WAS. `investigate` asks about a MARK rather than a standpoint, so passing
+    // `skeleton: null` looked harmless and reads that way. It is not: the world
+    // is assembled before any verb runs, and `assembleWorld` builds the
+    // heightfield unconditionally —
+    //
+    //     world-build.mjs:75  export function waterControlPoints(skeleton) {
+    //       const wet = (skeleton.features ?? [])…
+    //
+    // — an unguarded dereference, so `skeleton: null` is a TypeError inside the
+    // engine and not a thinner world. Measured 2026-09-17 by this door's own
+    // falsifier before a line of it was believed:
+    //
+    //     TypeError: Cannot read properties of null (reading 'features')
+    //         at waterControlPoints (…/world-build.mjs:75:25)
+    //         at Module.assembleWorld (…/world-build.mjs:133:8)
+    //
+    // So this door pins the law exactly as `/world2/apex` does, and refuses for
+    // the same reason: a world with no terrain is not a smaller answer, it is no
+    // answer at all.
+    const [{ rows: [open] }, { rows: [closed] }, { rows: [lawHead] }] = await Promise.all([
+      p.query("SELECT id, law_sha FROM windows WHERE status = 'open' ORDER BY id DESC LIMIT 1"),
+      p.query("SELECT id, law_sha FROM windows WHERE status <> 'open' AND law_sha IS NOT NULL ORDER BY id DESC LIMIT 1"),
+      p.query("SELECT sha FROM projection_heads WHERE repo = 'world-law'"),
+    ]);
+    const pin = apex.lawShaFor({ asked: searchParams?.get("law_sha"), openWindow: open, lastClosed: closed, head: lawHead?.sha });
+    if (!pin.law_sha) return { code: 503, body: { error: "bounce", defect: "no law projection ingested yet",
+      hint: "the map is law (census.md D1) and the world cannot be assembled without the terrain skeleton it carries. Run law-ingest." } };
+
+    const [{ rows: markRows }, { rows: lawRows }] = await Promise.all([
+      p.query(apex.MARK_ROWS_SQL),
+      p.query(apex.LAW_ROWS_SQL, [pin.law_sha, apex.LAW_KINDS_FOR_APEX]),
+    ]);
+    const worldState = apex.worldStateFromMarkRows(markRows);
+    const skeleton = apex.skeletonFromLawRows(lawRows);
+    if (!skeleton) return { code: 503, body: { error: "bounce",
+      defect: `the law at ${pin.law_sha.slice(0, 8)} carries no skeleton`,
+      hint: "the world is assembled around its terrain before any mark is judged; a skeleton-less projection cannot be assembled at all." } };
+
+    let eng;
+    try { eng = await engine(); }
+    catch (e) {
+      return { code: 503, body: { error: "bounce", defect: "the world engine cannot be read at this office",
+        hint: `${String(e?.message ?? e).slice(0, 160)}. investigate is the engine's judgment about a mark and its neighbourhood; this door refuses rather than composing one of its own.` } };
+    }
+
+    const world = eng.build.assembleWorld({ worldState, skeleton });
+    const r = eng.verbs.investigate(String(mark), world, { depth });
+
+    // THE MISS IS `r.error`, NOT `!r` — 1.0's own repair, 2026-09-07, found by
+    // its door falsifier: the engine answers a missing mark with a TRUTHY
+    // `{ error: … }`, so a `!r` test never fires. Carried here so the port does
+    // not re-introduce the dead branch the original spent a lane removing.
+    if (!r || r.error) {
+      return { code: 404, body: { error: "bounce", defect: `no mark "${mark}"`,
+        hint: "ids are <by>/<slug> — see /world2/marks",
+        ...(r?.error ? { engine: String(r.error) } : {}) } };
+    }
+
+    return { code: 200, body: {
+      ...r,
+      // The two blocks 1.0 spreads beside the engine's answer are NOT here, and
+      // each is absent for its own reason rather than for one shared excuse.
+      tree_only: {
+        "receipt.crossing · receipt.settlement_sha · receipt.published_at":
+          "mark-receipt.mjs derives the settlement epoch from the world repo's own `settlement/S<n>` git TAGS (settlements.mjs: \"the truth is the world repo's own git TAGS … which exist only when a settlement actually landed\") and from the filing index at a published sha. The store carries no tag and no settlement row — `acts` holds none and there is no settlements table — so the S-number, the sha it blessed and its date cannot be answered here at all. The rest of the receipt (`claims`, canon, the sketchbook) is store-readable and is a second lane's wiring, not a second lane's finding.",
+        stands:
+          "world.mjs § thingStandsBlock reads the DYNAMIC sqlite store (attachments + the holding journal). The rows exist in `acts` and the port exists (`guard-reads.mjs § pgAttachmentsFor` / `pgHolderOf`), so this one is unported rather than unportable — it is wiring, and wiring it inside a read-equality lane would ship an unfalsified answer.",
+      },
+    } };
+  }
+
   // ── THE LIVE LANE ─────────────────────────────────────────────────────────
 
   if (path === "/world2/walks") {
@@ -365,13 +768,15 @@ export async function world2Serve(path, searchParams) {
     // rather than passing a reconstruction off as the record.
     const at = clockOf(searchParams);
     if (at.error) return at.error;
+    const win = walkWindowOf(searchParams);
+    if (win.error) return win.error;
     const { rows } = await p.query(
       `SELECT id, at, crossing, actor, action, payload FROM acts
         WHERE action = ANY($1) ${live.DEPARTURE_ORDER_SQL}`, [live.DEPARTURE_ACTIONS]);
     let derived;
     try { derived = live.departureRecords(rows); }
     catch (e) { return { code: 500, body: { error: "bounce", defect: "a departure act matches no known era", hint: String(e.message).slice(0, 400) } }; }
-    const walks = derived.records.map((d) => ({
+    const all = derived.records.map((d) => ({
       iso: d.iso, handle: d.handle,
       from: d.from, toward: d.toward, at: d.at,
       within: d.targetExtent, to: d.targetMarkId, pace: d.pace,
@@ -379,10 +784,41 @@ export async function world2Serve(path, searchParams) {
       line: d.line ?? live.formatDeparture({ ...d, iso: d.iso }),
       ...(d.line ? {} : { line_derived: true }),
     }));
+    // THE CUT IS MADE ON THE RENDERED ROWS, NOT IN SQL, and the reason is this
+    // derivation's own law. `departureRecords` REFUSES a row it cannot read
+    // rather than skipping it, and censuses the eras over everything; a WHERE
+    // clause would make both depend on who asked — an act from a fifth pen
+    // sitting outside the window would stop bouncing, and the door's honesty
+    // would become a function of the query. The instant to cut on is also only
+    // knowable after derivation: `acts.at` and the record's own `iso` are not
+    // the same quantity (a journal payload carries its own).
+    let walks = all;
+    if (win.sinceMs != null) {
+      // Refused by name, never skipped — a row with no readable instant cannot
+      // be placed inside or outside a window, and dropping it would answer with
+      // a record short by exactly the rows nobody looks for. `acts.at` is NOT
+      // NULL and all 2,498 prod rows parse (measured 2026-09-16), so this is
+      // vacuous today and is here so it stays vacuous loudly.
+      const undated = all.find((w) => !Number.isFinite(Date.parse(w.iso)));
+      if (undated) return { code: 500, body: { error: "bounce",
+        defect: `departure act ${undated.act_id} carries no readable instant, so a window cannot place it`,
+        hint: "the unwindowed read still answers — listing a row does not require dating it. Fix the act, not the query." } };
+      walks = walks.filter((w) => Date.parse(w.iso) >= win.sinceMs);
+    }
+    if (win.last != null) walks = walks.slice(-win.last);
     return { code: 200, body: {
-      what: "every departure the record holds, oldest first — the walk ledger's grammar, served from acts",
+      what: win.asked
+        ? "the departures the record holds inside the window you asked for, oldest first — the walk ledger's grammar, served from acts"
+        : "every departure the record holds, oldest first — the walk ledger's grammar, served from acts",
       order: "the record's own append order: the frozen ledger's era first (in file order), then the journal's. NOT by row id, and not by instant.",
-      count: walks.length, eras: derived.eras,
+      // The census is of the rows RETURNED, so `count` and `eras` are always
+      // answers about the same list. With no window that is every record, which
+      // is what this field has always been.
+      count: walks.length, eras: live.departureCensus(walks),
+      ...(win.asked ? { window: {
+        since: win.since, last: win.last, count_all: all.length,
+        note: "a window FILTERS the record's own append order; it never re-sorts it. `last` is therefore the most recently APPENDED n, which where file order and instant order disagree is not the n latest instants.",
+      } } : {}),
       evaluated_at: new Date(at.ms).toISOString(),
       walks,
     } };
@@ -449,7 +885,14 @@ export async function world2Serve(path, searchParams) {
     const world = live.worldFromRows({ marks: markRows, identities: idRows });
     const fc = live.fractionalCrossing(at.ms);
     const roll = rollRows.map((r) => r.handle);
-    const residents = live.everyonePlaced({ world, departures: derived.records, at: fc, roll });
+    // ON THE ANSWER, BEFORE ANYTHING READS A COORDINATE (#2900). The `near`
+    // render below filters by distance from these rows, so a map applied after
+    // it would filter the set at the quay and then relabel the survivors at the
+    // Origin — the right label over the wrong set, which is worse than the
+    // defect it replaces. The rewrite rides `everyonePlaced`'s return and
+    // nothing downstream sees the porch.
+    const residents = live.everyonePlaced({ world, departures: derived.records, at: fc, roll })
+      .map((r) => (isGroundlessDefault(r) ? atOrigin(r) : r));
     const notes = live.admissionNotes({ marks: markRows, identities: idRows, roll, departureRecords: derived.records, world });
     const body = {
       what: "every placed resident at one instant — a walk if they have one, else their ground, else the town's porch",
@@ -645,7 +1088,7 @@ export async function world2Apex(searchParams, { p: injected = null } = {}) {
   const near = pointOf(searchParams);
   if (near?.error) return { error: near.error };
   if (!near) return bounce(422, "an apex answer is taken from somewhere",
-    "?x=<m>&y=<m> — the town's grid, metres from Ferry's crossing. This is the keyless spectator read; the embodied one is 1.0's `world {}` verb with a key.");
+    "?x=<m>&y=<m> — the town's grid, metres from the Origin. This is the keyless spectator read; the embodied one is 1.0's `world {}` verb with a key.");
   const askedCrossing = Number(searchParams?.get("crossing"));
   const n = Number.isFinite(askedCrossing) ? askedCrossing : currentCrossing();
 
@@ -743,6 +1186,35 @@ export async function world2Apex(searchParams, { p: injected = null } = {}) {
   try { departures = await stopDepartures(worldState, { x: near.x, y: near.y }, { repo: WORLD_CLONE }); }
   catch { departures = null; }   // a schedule that cannot be read must not cost anyone their standpoint
 
+  // ── THE RECORDS THIS READ NAMES (#2896) ──────────────────────────────────
+  //
+  // 1.0's thirteenth key, and the one A7 found missing at all fourteen
+  // standpoints: "the full mark record for everything `within` and `nearby`
+  // just named, plus the town's ground (its region rings and its water), so a
+  // reader never has to go and fetch what this answer already told them
+  // about" — then the mover's own class, so the walk desk can price a stride
+  // (world.mjs § markRecords, 2026-09-13). Same ids, same order, from the
+  // world this answer was just judged over. `nearby` here is the final list:
+  // this door composes no portal, so there is no loose-thing injection to
+  // take the ids after (1.0's note on `withLoose` applies to the standpoint
+  // classes this door does not serve).
+  //
+  // Each record is the fold's PUBLISHED shape, projected from the row —
+  // `apex-reads.mjs § records` names the seven fields no row holds and why
+  // they are absent rather than zero. The mover's class is law, not a row, so
+  // it is read from the same `law_projection` rows the affordances were.
+  const ground = apex.groundMarkIdsOf({
+    marks: world.marks, skeleton, regionSlugs: eng.regions.REGION_SLUGS,
+    polygonOf: eng.geometry.polygonOf, waterFeatures: eng.water.waterFeatures, seaFeature: eng.water.seaFeature,
+  });
+  const records = apex.recordsBlock({
+    marks: world.marks, ids: [...spine.map((m) => m.id), ...nearby.map((o) => o.id)], extra: ground,
+  });
+  if (!records[STRIDE_MARK_ID]) {
+    const stride = apex.classRecordOf(lawRows.find((r) => r.kind === "class" && r.data?.id === STRIDE_MARK_ID));
+    if (stride) records[STRIDE_MARK_ID] = stride;
+  }
+
   return { body: {
     standpoint: { x: near.x, y: near.y, stance: "nobody" },
     crossing: { n, derivation: CROSSING_DERIVATION },
@@ -752,6 +1224,9 @@ export async function world2Apex(searchParams, { p: injected = null } = {}) {
     note: null,
     within: spine,
     nearby,
+    // Every id `within` and `nearby` name, plus the town's ground set and the
+    // mover's class — the one small whole a painting needs for its floor.
+    records,
     ...(departures ? { departures } : {}),
     ...(present ? { present } : {}),
     actions: law.actions,
@@ -812,7 +1287,13 @@ export async function world2Apex(searchParams, { p: injected = null } = {}) {
  * default would have made the new door disagree with the old one by 48
  * residents at the town's front door and called it a fix.
  */
-async function apexPresent(p, { world, at, engine: eng, roster = "roll" }) {
+// EXPORTED for the reason `world2Apex` itself gives one screen up — "the
+// equality falsifier compares ANSWERS, and making it go through HTTP would put
+// a server between the two derivations it is trying to hold to each other". The
+// apex route refuses without a law projection, which is correct and is not what
+// #2900's cross-tier equality is about; a law fixture built only to reach this
+// block would be scaffolding the check could pass against instead of the thing.
+export async function apexPresent(p, { world, at, engine: eng, roster = "roll" }) {
   const { bearingDeg, quantizeBearing, distanceBand } = eng.engine;
   const [{ rows: depRows }, { rows: rollRows }] = await Promise.all([
     p.query(`SELECT id, at, crossing, actor, action, payload FROM acts
@@ -825,7 +1306,13 @@ async function apexPresent(p, { world, at, engine: eng, roster = "roll" }) {
   catch (e) { return { unavailable: "a departure act matches no known era", detail: String(e?.message ?? e).slice(0, 200) }; }
   const fc = live.fractionalCrossing(Date.now());
   const roll = roster === "roll" ? rollRows.map((r) => r.handle) : [];
-  const residents = live.everyonePlaced({ world, departures: derived.records, at: fc, roll });
+  // BEFORE THE 500 m FILTER, and that ordering is the whole of it (#2900). The
+  // porch is 5,833 m from the Origin, so a groundless resident filtered at the
+  // quay and relabelled afterwards would be absent from the Origin's list and
+  // present in the quay's — the two answers this lane exists to join, swapped
+  // rather than reconciled. Rewrite first, measure distance second.
+  const residents = live.everyonePlaced({ world, departures: derived.records, at: fc, roll })
+    .map((r) => (isGroundlessDefault(r) ? atOrigin(r) : r));
 
   const radiusM = live.PRESENCE_DIALS.near_radius_m, limit = live.PRESENCE_DIALS.near_cap;
   const dist = (r) => Math.hypot((r.x ?? 0) - at.x, (r.y ?? 0) - at.y);

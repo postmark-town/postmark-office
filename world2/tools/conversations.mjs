@@ -226,7 +226,7 @@ export function threadOf(cluster, { live, voiceCap }) {
  *
  * The `dx == null` check is FIRST and not folded into `isFinite`, for the reason
  * that file states: `Number(null)` is 0, not NaN, so an unplaced actor's null
- * offset would compose to {0,0} — Ferry's crossing, a real place somebody could
+ * offset would compose to {0,0} — the Origin, a real place somebody could
  * be standing.
  */
 export const WORLD_ANCHOR = "world";
@@ -301,7 +301,7 @@ export function voiceOf(row, centreOf = null) {
       return { refused: true, reason:
         `act ${row?.id} is a say whose witnessed line does not compose to a point ` +
         `(anchor ${JSON.stringify(row.at_anchor)}, offset ${row.at_dx},${row.at_dy}) — ` +
-        `a voice with no place cannot be clustered, and {0,0} is Ferry's crossing, a real place somebody could be standing` };
+        `a voice with no place cannot be clustered, and {0,0} is the Origin, a real place somebody could be standing` };
     }
     return { era: "live", voice: {
       handle, text: String(p?.text ?? ""), at, x: point.x, y: point.y,

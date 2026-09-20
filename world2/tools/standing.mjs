@@ -52,10 +52,41 @@
 // | `at` / `extent` / `points` | `geometry`        | `{at:{x,y},extent:{w,h},points?}` |
 // | `tier`            | `data.tier`                | see § the constitution shortcut |
 // | `consent`         | `data.consent`             | the authored word map |
-// | `parent`          | `parent` (uuid → slug)     | the CONTINUATION edge |
-// | `_parentMarkId`   | `data._parentMarkId`       | the loader's directory edge — historical filing since the 2026-08-25 freeze, and the last thing the walk believes |
+// | `parent`          | `parent` (uuid → slug), else `data.parent_id` | the CONTINUATION edge — see § the docket pen's spelling |
+// | `_parentMarkId`   | `data._parentMarkId`, else `data.parent_id` | the loader's directory edge — historical filing since the 2026-08-25 freeze, and the last thing the walk believes; a docket-born predicate is filed under the mark it describes, so its filing IS its `parent_id` |
 // | `_sovereign`      | derived here               | § sovereignty |
 // | `_containedBy`    | derived here               | § the containment answer |
+//
+// ── THE DOCKET PEN'S SPELLING OF THE PARENT EDGE (postmark#2895, 2026-09-17) ──
+//
+// The standing falsifier ran RED on prod on ten marks — "the fold says home,
+// the port says market, and it still disagrees with the store-only ground
+// removed AND the checkout-only ground added — this is the walk". Six of the
+// ten were predicated or naming marks born through the CANDLE, and every one
+// of them walked to the world root and stopped: `marks.parent` NULL, no
+// `data._parentMarkId`, so the chain the walk climbs had no first link.
+//
+// The rows were not edgeless. The door's grammar names the mark a predicate
+// describes `parent_id` (world.mjs § leaveMark: "predicated/naming: the mark
+// this describes"); the docket pen spills it into `claims.data` with the
+// `...rest` of the payload (world2-claims.mjs § the stake crossing the
+// boundary — its INSERT names no `parent` column); `materializeClaims` copies
+// `c.data` whole and `c.parent` NULL. So a candle-born predicate carries its
+// authored edge under exactly one key, `data.parent_id`, and this port read
+// two others. Measured on prod 2026-09-17: 16 standing rows carry the edge
+// this way and no other (13 predicated, 3 naming); the seed and the backfill
+// lift the same line into the uuid column, so their rows never showed it.
+// guard-reads.mjs § liveChildrenOf has read `data.parent_id` since the guards
+// lane ("`parent_id` rides `claims.data`") — one edge, and this was the
+// reader that spelled it one way fewer.
+//
+// So `recordOf` reads the edge in the order the store writes it: the uuid
+// column, then `data.parent_id`. It is the same line 1.0's `parent` carries,
+// and the directory edge falls back to it too, because the office files a
+// predicate under the mark it describes (world-drain.mjs § toFileFrame) —
+// which is what `_parentMarkId` would say once the drain has written the
+// file. The COLUMN staying NULL on those rows is the pen's, reported with
+// the lane, not repaired here: a row rewrite is a prod write.
 //
 // ── THE CONSTITUTION SHORTCUT READS THE COLUMN IT WRITES ─────────────────────
 //
@@ -256,7 +287,9 @@ export function recordOf(row) {
     at: g?.at ?? undefined,
     extent: g?.extent ?? undefined,
     ...(Array.isArray(g?.points) ? { points: g.points } : {}),
-    _parentMarkId: data._parentMarkId ?? null,
+    // § the docket pen's spelling: a candle-born predicate's only edge.
+    _parentMarkId: data._parentMarkId ?? data.parent_id ?? null,
+    _parentId: data.parent_id ?? null,
     _parent_is_law: data._parent_is_law ?? null,
     _uuid: row.id ?? null,
     _parentUuid: row.parent ?? null,
@@ -582,10 +615,12 @@ export function computeStanding(rows, { only = null, containment = null } = {}) 
   // The continuation edge, resolved from the uuid column back to the slug the
   // walk speaks. `marks.parent` is 1.0's authored `parent:` and nothing else —
   // "`parent` is the CONTINUATION edge, never containment" (the seed's ruling).
+  // When the column is NULL the same line may still be on the row under the
+  // docket pen's spelling, `data.parent_id` — § the docket pen's spelling.
   const slugByUuid = new Map();
   for (const row of rows) if (row.id != null) slugByUuid.set(String(row.id), row.slug);
   for (const [i, row] of rows.entries())
-    records[i]._parentSlug = row.parent != null ? (slugByUuid.get(String(row.parent)) ?? null) : null;
+    records[i]._parentSlug = row.parent != null ? (slugByUuid.get(String(row.parent)) ?? null) : (records[i]._parentId ?? null);
 
   // ── sovereignty (marks-fold.mjs:674) ────────────────────────────────────────
   //   "sited marks fully inside their OWN household's parcel are sovereign

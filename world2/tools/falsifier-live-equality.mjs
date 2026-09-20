@@ -78,6 +78,7 @@ import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
 import * as live from "./live-reads.mjs";
+import { resolveLedgerRel } from "./ledger-names.mjs";
 
 const arg = (n) => { const i = process.argv.indexOf(n); return i === -1 ? null : process.argv[i + 1]; };
 const has = (n) => process.argv.includes(n);
@@ -588,12 +589,24 @@ export function e6Occupancy(passages, at, ledgerRel) {
   // claiming to be one archive is the twin phase 0 just killed"). It does not
   // have to be refused here: `payload._ledger` says which file these rows came
   // out of, and reading any other one would compare the store to a record it was
-  // not built from.
+  // not built from. That still holds where the named file stands; what it did
+  // NOT cover is a checkout where the named file is GONE, which is every
+  // checkout since 2026-08-28 — see the rename note below.
   const rel = ledgerRel;
   if (!rel) return { findings: ["E6 no passage act names its source ledger — occupancy is unchecked"], compared: 0 };
-  if (!existsSync(join(REPO, rel)))
-    return { findings: [`E6 the acts name ${rel} as their source and this checkout has no such file — occupancy is unchecked`], compared: 0 };
-  const { acts } = parseEnterExit(readFileSync(join(REPO, rel), "utf8"));
+  // A FROZEN RECORD KEEPS THE VOCABULARY OF THE DAY IT WAS FROZEN (#2894). The
+  // acts still name `WORLD/threshold-ledger.md`, deleted from main 2026-08-28,
+  // so the existsSync that used to stand here returned `compared: 0` — and a
+  // compared-0 equality lands in `unchecked`, which exits the WHOLE RUN 2. This
+  // pen was unable to complete on any current checkout for nineteen days and
+  // nothing said so. `resolveLedgerRel` maps the retired spelling forward from a
+  // dated, evidenced table; where the named file still EXISTS (settlement/S50
+  // carries both sides of the rename) it is returned untouched, so no verdict
+  // that was reachable before can change.
+  const resolved = resolveLedgerRel(REPO, rel);
+  if (!resolved)
+    return { findings: [`E6 the acts name ${rel} as their source, this checkout has no such file, and no rename this pen knows leads to one — occupancy is unchecked`], compared: 0 };
+  const { acts } = parseEnterExit(readFileSync(join(REPO, resolved.rel), "utf8"));
   const frozen = passages.filter((p) => p.era === "ledger");
   const beyond = passages.filter((p) => p.era !== "ledger");
   const oracle = eeMod.occupancyAt(acts, at);
@@ -608,7 +621,16 @@ export function e6Occupancy(passages, at, ledgerRel) {
   for (const h of mine.keys()) if (!oracle.has(h)) findings.push(`E6 the port puts ${h} inside something and 1.0 does not: ${JSON.stringify(mine.get(h))}`);
   if (acts.length !== frozen.length)
     findings.push(`E6 the frozen ledger holds ${acts.length} crossings and the store ${frozen.length} ledger-era passages — AB-P2's own count`);
-  return { findings, compared, ledger: rel, ledger_rows: acts.length, frozen_act_rows: frozen.length,
+  // AN INSTRUMENT MUST SAY WHICH THING IT MEASURED. `ledger` is the file this
+  // run actually opened; `ledger_named_by_acts` is what the record asked for;
+  // `ledger_followed_rename` is null on every checkout that still carries the
+  // named file, so a reader can tell a straight read from a forwarded one
+  // instead of inferring it from the two paths being equal.
+  return { findings, compared, ledger: resolved.rel, ledger_named_by_acts: rel,
+    ledger_followed_rename: resolved.followed
+      ? `${resolved.followed.from} → ${resolved.followed.to} (removed ${resolved.followed.on}, world ${resolved.followed.by.slice(0, 9)})`
+      : null,
+    ledger_rows: acts.length, frozen_act_rows: frozen.length,
     beyond_the_frozen_era: beyond.length ? `${beyond.length} passage(s) from later eras, outside this comparison by design` : null };
 }
 

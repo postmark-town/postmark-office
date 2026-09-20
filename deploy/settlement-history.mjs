@@ -55,6 +55,30 @@ export function lineFor(receipt) {
     at: receipt?.at ?? null,
     status: receipt?.status ?? null,
     class: receipt?.class ?? null,
+    // WHOSE ACT THIS WAS (#2974, 2026-09-19; the rule is #2786's).
+    //
+    // The by-hand door's first live run — release/2026-w38.15, 14:05:02Z — wrote
+    // a receipt saying `status: refused · by_hand: true · nothing-unfolded`,
+    // exactly as designed, and a history line saying `"status":"refused"` and
+    // nothing else. The receipt honoured the distinction and the log did not, so
+    // settlement-history's own refusal query, the roll-call manifest and
+    // anything else counting refusals from this file read an operator's
+    // "nothing to publish" as a crossing that refused. A week of by-hand probes
+    // would have shown as a week of refusals.
+    //
+    // ON EVERY LINE, `false` INCLUDED — the receipt composer's own argument for
+    // the same field, quoted because it is the same argument: "a field that
+    // appears only when the answer is interesting teaches its reader that
+    // absence means scheduled, and then the first receipt missing it for some
+    // other reason hands them a wrong answer about who published the town."
+    //
+    // `=== true` and not a truthy read: this is a boolean on the receipt, and a
+    // line built from a receipt that predates the field must come out `false`
+    // rather than `undefined`. Contrast `retired` two fields down, where null
+    // and 0 are DIFFERENT facts and the absence has to survive — here there is
+    // no third state, because a crossing is either a person's act or the
+    // timer's.
+    by_hand: receipt?.by_hand === true,
     published: ch.published ?? 0,
     left_drafted: ch.left_drafted ?? 0,
     quarantined: ch.quarantined ?? 0,
@@ -95,6 +119,26 @@ export function append(existingText, receipt, retain = RETAIN) {
 export const UNSETTLED = new Set(["refused", "starving", "race"]);
 
 /**
+ * Was this line a PERSON'S act rather than the timer's? (#2974)
+ *
+ * A MISSING KEY IS SCHEDULED, and that is a decision rather than a default.
+ * Every line written before 2026-09-19 has no `by_hand` key at all, including
+ * the one line that really was by-hand — the door's first live run at 14:05:02Z,
+ * which is the fixture this tolerance was written against. Reading an absence
+ * as by-hand would silently mute those, and muting a real refusal is the one
+ * wrong answer a starvation check must never give; reading it as scheduled is
+ * exactly today's behaviour for exactly today's lines, and the new field starts
+ * doing its work as soon as a crossing writes it. No install-day exception.
+ */
+export const isByHand = (row) => row?.by_hand === true;
+
+/**
+ * The lines the TIMER wrote — the only ones a question about the schedule can
+ * honestly be asked of.
+ */
+export const scheduledRuns = (rows) => (rows ?? []).filter((r) => !isByHand(r));
+
+/**
  * Have the last `n` DECIDED crossings all ended without completing?
  *
  * The same question tools/box-rollcall.mjs asks on the operator round, asked
@@ -110,10 +154,26 @@ export const UNSETTLED = new Set(["refused", "starving", "race"]);
  * Deliberately false on a SHORT history: a fresh log with two lines has not yet
  * shown a pattern, and escalating on it would file an issue about the log's
  * age rather than about the town.
+ *
+ * BY-HAND LINES ARE NOT IN THE WINDOW AT ALL (#2974). The question is whether
+ * the SCHEDULE is stuck, and an operator's act is not evidence either way:
+ *
+ *   a by-hand refusal ("nothing to publish") is not the timer refusing, and a
+ *   week of by-hand probes must not read as a week of refusals;
+ *
+ *   and a by-hand PUBLICATION does not clear a streak either — before this, a
+ *   person publishing by hand between two refusals broke the run and silenced
+ *   the escalation, which is precisely the reading #2786 exists to forbid: a
+ *   person rescuing the town by hand is not the timer being healthy.
+ *
+ * Filtered rather than skipped, so the window is the last `n` SCHEDULED
+ * crossings and not the last `n` lines with some of them thrown away — a
+ * by-hand line between two refusals must not shorten the evidence.
  */
 export function recurringUnsettled(rows, n) {
-  if (!Number.isFinite(n) || n <= 0 || rows.length < n) return false;
-  return rows.slice(-n).every((r) => UNSETTLED.has(String(r.status)));
+  const runs = scheduledRuns(rows);
+  if (!Number.isFinite(n) || n <= 0 || runs.length < n) return false;
+  return runs.slice(-n).every((r) => UNSETTLED.has(String(r.status)));
 }
 
 /**

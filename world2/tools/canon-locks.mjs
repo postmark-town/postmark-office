@@ -65,6 +65,51 @@ export const ESCROW_BY_SHA_SELECT = `
   SELECT town_sha, mark, sum(n)::int AS n FROM escrow_projection GROUP BY town_sha, mark`;
 
 /**
+ * The projection's OLDEST town sha — the boundary the unjudgeable count is
+ * measured against (§ the unjudgeable window, below). Named on every run so a
+ * reader of the count knows which windows it covers without opening the store:
+ * on prod that is window 181, ingested 2026-09-10T17:45Z, migration 014's birth.
+ * The window id rides along where one window pinned that sha (a by-hand ingest
+ * at a sha no window pinned answers null there, and that is a true answer).
+ */
+export const ESCROW_OLDEST_SELECT = `
+  SELECT e.town_sha, min(e.ingested_at) AS ingested_at,
+         (SELECT min(w.id) FROM windows w WHERE w.town_sha = e.town_sha) AS window_id
+    FROM escrow_projection e GROUP BY e.town_sha ORDER BY 2 LIMIT 1`;
+
+/**
+ * The town shas the projection HOLDS ROWS FOR, read off the map's own keys.
+ *
+ * Derived from the map rather than passed beside it so a caller that built the
+ * map from `ESCROW_BY_SHA_SELECT` and a test that built it by hand describe the
+ * projection the same way: a sha is projected iff some (sha, mark) has a row.
+ * That is exact — `escrow_projection.n` is CHECK (n > 0), a closed position is
+ * an absence and not a zero (escrow-ingest.mjs § who gets a row), so a sha the
+ * ingest wrote has rows, and a sha with no rows was never ingested.
+ */
+export function projectedShas(escrowBySha) {
+  const shas = new Set();
+  if (!escrowBySha) return shas;
+  for (const key of escrowBySha.keys()) {
+    const i = key.indexOf("|");
+    if (i > 0) shas.add(key.slice(0, i));
+  }
+  return shas;
+}
+
+/** The unjudgeable rows grouped by locking window, oldest first — the shape the read prints and reports. */
+export function unjudgeableByWindow(rows) {
+  const by = new Map();
+  for (const r of rows) {
+    const k = `${r.locked_window ?? "?"}|${r.locking_town_sha}`;
+    const g = by.get(k) ?? { locked_window: r.locked_window ?? null, town_sha: r.locking_town_sha, marks: 0 };
+    g.marks += 1;
+    by.set(k, g);
+  }
+  return [...by.values()].sort((a, b) => (a.locked_window ?? Infinity) - (b.locked_window ?? Infinity));
+}
+
+/**
  * The other class: a claim that locked and produced no mark.
  *
  * AN AMEND IS NOT UNMATERIALIZED, and this is the second thing the rehearsal
@@ -128,8 +173,10 @@ export const UNMATERIALIZED_SELECT = `
 export function canonLockFindings(rows, register, { unmaterializedRows = [], escrowBySha = null } = {}) {
   const absent = [];
   const unbacked = [];
+  const unjudgeable = [];
   let compared = 0;
   let escrowCompared = 0;
+  const projected = projectedShas(escrowBySha);
   for (const r of rows) {
     // A mark row with no slug is not a thing canon could carry.
     if (!r.slug) continue;
@@ -151,12 +198,39 @@ export function canonLockFindings(rows, register, { unmaterializedRows = [], esc
     if (!escrowBySha) continue;
     if (rowClassOf(r.tier) !== "commons") continue;
     if (!r.locking_town_sha) continue;   // a mark whose window pinned no town read cannot be judged
+
+    // ── THE UNJUDGEABLE WINDOW (postmark#2935) ─────────────────────────────
+    //
+    // `escrowBySha.get(...) ?? 0` reads a sha the projection NEVER HELD as ✦0,
+    // and for eight nights it did: the projection's oldest row is window 181
+    // (2026-09-10T17:45Z, migration 014's first ingest), and 227 standing
+    // commons marks lock at windows 150–179 — `the-town/*`'s class nodes,
+    // Vermillion's peak, Wright's terrace. Every one of them read
+    // ESCROW-ABSENT on the roll-call every morning (233 on 09-18, 290 on 09-17,
+    // 283 on 09-16), and measured against the store on 2026-09-18 the number of
+    // TRUE unbacked marks — a zero at a sha the projection holds — was ZERO.
+    // An alarm that is always on teaches its reader to skim, which is the
+    // failure this file's sibling names in its own header.
+    //
+    // So a locking sha with NO projection rows at all is UNJUDGEABLE: counted,
+    // named by window, never listed as unbacked. The doorstep's rule (POS-105):
+    // unavailable, never ✦0. It is the same distinction `escrow_checked: false`
+    // draws for the whole projection, drawn per sha — and it is NOT a grace or
+    // a hold: nothing about the mark is excused, the question is simply one the
+    // store cannot answer for that window. A mark leaves this count only when
+    // it is retired or re-locked by an amend at a projected window (which is
+    // how `current-the-reader/the-taproom` left it on 09-18), never by a stake
+    // — a stake today is read at today's sha, not at the locking one.
+    //
+    // `unbacked` below therefore lists ONLY judgeable zeros: a sha the
+    // projection holds rows for and none for this slug.
+    if (!projected.has(r.locking_town_sha)) { unjudgeable.push(r); continue; }
     escrowCompared += 1;
     const n = Number(escrowBySha.get(`${r.locking_town_sha}|${r.slug}`) ?? 0);
     if (n === 0) unbacked.push(r);
   }
   return {
-    absent, unbacked, compared, escrow_compared: escrowCompared,
+    absent, unbacked, unjudgeable, compared, escrow_compared: escrowCompared,
     escrow_checked: Boolean(escrowBySha),
     unmaterialized: unmaterializedRows.filter((r) => r.slug),
   };
