@@ -119,7 +119,7 @@ async function officeWith({ standing = { x: -1380, y: -2543 }, ledger = "", at =
     nowMs: () => clock,
     crossing: () => at,
     walking: async () => null,
-    stop: async (who, pt, _key, opts) => { stops.push({ who, ...pt, ...(opts?.from ? { from: { x: opts.from.x, y: opts.from.y } } : {}) }); where = { x: pt.x, y: pt.y }; return { ok: true }; },
+    stop: async (who, pt, _key, opts) => { stops.push({ who, ...pt, ...(opts?.from ? { from: { x: opts.from.x, y: opts.from.y } } : {}) , ...(opts?.exit === true ? { exit: true } : {}) }); where = { x: pt.x, y: pt.y }; return { ok: true }; },
     record: async (entry) => {
       const { handle, act, lines = [], mark = null, via = null, set_down_at = null, arrived = null, action, object, payload } = entry;
       if (action === "ride") {
@@ -437,6 +437,63 @@ test("exit AT OR AFTER the timer sets you down at the destination", { skip: !HAV
     "the deposit point is the stop mark's own anchor — you stand ON the mooring");
   assert.deepEqual(o.stops.at(-1).from, { x: anchor.x, y: anchor.y },
     "and the leg's origin is that same anchor — a set-down at the landing, not a walk to it from the wharf");
+});
+
+// == postmark#3019 . THE DEPOSIT LEAVES THE REACH IT WAS BOARDED FROM ==
+//
+// dom-pidgey boarded her at the quay the ORDINARY way — walking to her hull at
+// (-9, 35.5) and entering — which crosses the geometric chain and files them
+// within `the-town/the-town-centre` and `the-town/the-quay-reach` as well as
+// the hull. The vessel exit removes only the hull; the deposit then walks 9.9 km
+// to the Snug, which carries them out of BOTH rooms, and DEC-5 refused it: "you
+// are within the-town/the-quay-reach — this walk would carry you out of it
+// without leaving". The exit was already on the ledger, so the rider was left
+// out of the boat with no ground — `set_down.recorded: false`, standpoint at
+// the Origin, and every door afterwards disagreeing about where they were.
+//
+// The deposit IS the leaving of whatever the boarding stop stood within, so it
+// says so to the walk door in the door's own grammar (DEC-5's `exit: true`, the
+// documented route for a caller who is within a room). The walk door keeps the
+// judgement about WHAT is left — `leavingWhileOccupying` is its predicate and
+// there is no second copy of it here.
+test("#3019: a deposit that would carry the rider out of rooms they boarded from DECLARES the leaving", { skip: !HAVE_CLONE && "no world clone" }, async () => {
+  const w = vehicleWorld();
+  const po = markIn(w, SHIP);
+  // Standing on her hull at the quay — inside the-quay-reach, which is inside
+  // the-town-centre. This is the reporter's own boarding, not a constructed one.
+  const o = await officeWith({ standing: { x: po.at.x, y: po.at.y } });
+  await enterViaOffice(CLONE, { mark: SHIP, handle: "dom", accept: true }, key("dom"), o.deps);
+  assert.deepEqual(o.within("dom"), ["the-town/the-town-centre", "the-town/the-quay-reach", SHIP],
+    "the ordinary entry crosses the whole chain — this test is measuring nothing if the rider is only within the hull");
+
+  const r = await rideViaOffice(CLONE, { to: SNUG, handle: "dom" }, key("dom"), o.deps);
+  o.setClock(Date.parse(r.ride.arrives_at));
+  const out = await exitViaOffice(CLONE, { mark: SHIP, handle: "dom" }, key("dom"), o.deps);
+
+  assert.equal(out.set_down.at, SNUG);
+  assert.equal(out.set_down.arrived, true);
+  assert.deepEqual(o.within("dom"), ["the-town/the-town-centre", "the-town/the-quay-reach"],
+    "the vessel exit removes the hull and leaves the rooms standing — that remainder is the whole cause of #3019");
+  assert.equal(o.stops.at(-1).exit, true,
+    "the deposit carries DEC-5's `exit: true`, so the walk door exits those rooms under the ledger's own discipline "
+    + "before setting the rider down — without it the walk is refused 409 AFTER the exit is already written, which is "
+    + "the stuck state dom-pidgey is in on prod (postmark#3019)");
+});
+
+test("#3019: a boarding from open ground carries NO `exit` — the flag is the remainder's, not the deposit's", { skip: !HAVE_CLONE && "no world clone" }, async () => {
+  // Grove Wharf is a stop standing inside no room, and the portal crossing files
+  // ONE row. Nothing is left behind by the exit, so the deposit declares nothing
+  // and the call is byte-identical to w39.1's. This is the half that says the
+  // flag is conditional on what the rider remains within rather than always-on.
+  const o = await officeWith();
+  await enterViaOffice(CLONE, { mark: WHARF, handle: "rider", accept: true }, key("rider"), o.deps);
+  const r = await rideViaOffice(CLONE, { to: SNUG, handle: "rider" }, key("rider"), o.deps);
+  o.setClock(Date.parse(r.ride.arrives_at));
+  await exitViaOffice(CLONE, { mark: SHIP, handle: "rider" }, key("rider"), o.deps);
+
+  assert.deepEqual(o.within("rider"), [], "nothing remains, so there is nothing to declare");
+  assert.equal(Object.prototype.hasOwnProperty.call(o.stops.at(-1), "exit"), false,
+    "no `exit` key at all on the stop call — a deposit from open ground is unchanged by this fix");
 });
 
 test("the exit's journal row carries set_down_at and arrived as FIELDS", { skip: !HAVE_CLONE && "no world clone" }, async () => {
