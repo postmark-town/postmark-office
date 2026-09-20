@@ -84,7 +84,7 @@ async function main() {
 
   const tools = join(CLONE, "tools");
   const tEngine = performance.now();
-  const { loadMarks, marksContain, containmentParents, containmentParentOf, placementParent, worldRootOf,
+  const { loadMarks, containmentParents, containmentParentOf, placementParent, worldRootOf,
           PARCEL_CLAIM_CAP, PARCEL_CAP_LAW_DATE, PARCEL_EXTENT_M,
           worldToFile, ringToFile, COORDS_FIELD, COORDS_RELATIVE } =
     await import(pathToFileURL(join(tools, "marks-fold.mjs")));
@@ -274,23 +274,19 @@ async function main() {
     return err(409, "a mark already sits in that spot", `the directory ${relative(MARKS_DIR, dir)} exists — pick another slug`);
 
   // sovereignty guard — REPEALED for sited marks (Keemin-ruled 2026-08-17,
-  // party night; little-bird's cup was the test case). The old law refused any
-  // mark inside another household's walls; the consent law supersedes it: a
-  // gift indoors stands NEUTRAL until the owner speaks, welcome couples it,
-  // opposed returns it honorably — the same regime parcels already live under.
-  // The guard REMAINS for parcel claims: claiming GROUND inside another's
-  // walls is a land claim, not a gift, and the return machinery is built for
-  // marks, not ground. (Guard era: 2026-08-12 → 2026-08-17.)
-  if (p.kind === "parcel") {
-    let manifest = null;
-    try { manifest = JSON.parse(readFileSync(join(CLONE, "seeding", "manifest.json"), "utf8")); } catch { /* no manifest → no homes to protect */ }
-    for (const h of manifest?.homes ?? []) {
-      if (h.household === p.by) continue;
-      const home = byId.get(`${h.household}/${h.home_id}`);
-      if (home?.at && marksContain(home, { at: p.at, extent: p.extent, points: p.points }))
-        return err(403, `that spot is inside ${h.household}'s home`, "leave a mark near a home if you like, but not within someone else's walls — pick a spot outside them");
-    }
-  }
+  // party night; little-bird's cup was the test case), and now GONE for parcels
+  // too (postmark#3025, 2026-09-20). It read the July atlas painting
+  // `seeding/manifest.json` and refused a parcel contained by another
+  // household's painted house. Measured over the live fold before deletion: of
+  // the 74 painted houses still in the record, only four can contain a 25 m
+  // dial and all four ARE parcels, which `tools/marks-fold.mjs § admissibility`
+  // already refuses by overlap — the wider test. No sited painted house is as
+  // large as the dial, so this could not fire on a house at all.
+  //
+  // DELETED HERE IN THE SAME COMMIT as its twin in `world.mjs`'s leave-mark, so
+  // the two holders of this door cannot disagree about it — the #2888
+  // split-brain shape, where one law lived in one executor for a month and the
+  // sibling's falsifiers stayed green over the gap.
 
   // SCHEMA v3, feature-detected: in a relative tree a nested record's at:/points:
   // are offsets from the PARENT'S CENTRE. The resident speaks world coordinates

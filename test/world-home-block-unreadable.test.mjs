@@ -60,14 +60,16 @@ export function householdOf(handle, world) {
   const own = (world?.marks ?? []).find((m) => m.by === handle && m.household);
   return own?.household ?? handle;
 }
-export function parcelFor(handle, world) {
+export function parcelsFor(handle, world) {
   const hh = householdOf(handle, world);
-  return (world?.parcels ?? []).find((p) => p.household === hh) ?? null;
+  return (world?.parcels ?? []).filter((p) => p.household === hh);
 }
+export function parcelFor(handle, world) { return parcelsFor(handle, world)[0] ?? null; }
 export function homeOf(handle, world) {
   const parcel = parcelFor(handle, world);
   if (!parcel) return { ...NOWHERE };
-  return { x: parcel.at.x, y: parcel.at.y, placed: true, source: "parcel", mark_id: parcel.id, parcel };
+  return { x: parcel.at.x, y: parcel.at.y, placed: true, source: "parcel", mark_id: parcel.id, parcel,
+           household_parcels: parcelsFor(handle, world).map((p) => p.id) };
 }
 export function whereIs(handle, { world = null } = {}) { return homeOf(handle, world); }
 `);
@@ -75,7 +77,10 @@ put("WORLD/skeleton.json", JSON.stringify({ features: [], physics_registry: {} }
 put("WORLD/world-state.json", JSON.stringify({
   tick: 0,
   dials: {},
-  marks: [{ id: "placed/the-placed-house", by: "placed", household: "placed", kind: "sited", tier: "market", at: { x: 10, y: 20 }, extent: { w: 4, h: 4 }, body: "a house" }],
+  // `tier: "home"` + `placementParent` are what make this the RECORD's house
+  // rather than the painting's (postmark#3025) — the fold's standing walk is
+  // the one rule, and the office reads the fold's word for it.
+  marks: [{ id: "placed/the-placed-house", by: "placed", household: "placed", kind: "sited", tier: "home", placementParent: "placed/the-placed-house-parcel", at: { x: 10, y: 20 }, extent: { w: 12, h: 12 }, body: "a house" }],
   parcels: [{ id: "placed/the-placed-house-parcel", household: "placed", at: { x: 10, y: 20 }, extent: { w: 25, h: 25 } }],
   determined: {}, vague: [], rivalries: [], portfolios: {}, terrain_weight: {}, errors: [],
 }));
@@ -108,6 +113,13 @@ test("engine unreadable: the block DISCLOSES, and says it is not about your grou
   assert.equal(w.x, null);
   assert.equal(w.y, null);
   assert.ok("mark_id" in w);
+  // ── #3025 · the one field that used to answer anyway ──────────────────────
+  // The id came from `seeding/manifest.json`, a file read without the engine,
+  // so on main this branch still named a house while every other field said
+  // "I cannot see". A disclosure with one field still talking is the shape the
+  // `unreadable` flag exists to end; the painting is gone and so is the leak.
+  assert.equal(w.mark_id, null,
+    "on main this is 'placed/the-placed-house', read out of the painting the engine was never needed for");
 });
 
 test("CONTROL — engine readable: a PLACED resident carries no disclosure field", () => {
