@@ -68,6 +68,12 @@
 // last fold composed it. One derivation, two doors; the refusal word and the
 // sentence are minted here so they cannot drift apart.
 
+// The move guard's own "did the ground move" test. Imported rather than
+// restated: the two guards run in the same branch of the same door, and a
+// private second opinion about what "moved" means would show up as one firing
+// where the other does not.
+import { geometryMoved } from "./world-move-guard.mjs";
+
 /** THE WORD. Both doors refuse under it; nothing else in the office uses it. */
 export const OUTSIDE_DECLARED_PARENT = "mark-outside-declared-parent";
 
@@ -196,6 +202,84 @@ export function outsideDeclaredParent({ id, at, points, parentId, parent, pointW
     return { id, parentId, which, point, extent: extentOf(parent), parentAt: parent.at ?? null };
   }
   return null;
+}
+
+// ── THE NARROWING (Keemin's ruling carried by Wright, 2026-09-20) ────────────
+//
+// The first cut of this guard asked only "is the point outside?", and measuring
+// it against the live record said what that costs: NINE standing marks would
+// have had their next amend refused, and EIGHT of them declare a REGION whose
+// ring the founder himself redrew on 2026-08-24. `WORLD/region-outsiders.md`
+// says it plainly — *"Nothing has been moved and nothing is lost — the ground is
+// exactly where its owner put it; only the region boundary changed."* Because an
+// amend rewrites `data` whole from the claim, those eight owners would have met
+// a 409 for changing a picture, over a boundary change that was not their act.
+//
+// The ruling: *"the ruling is against INTRODUCING or MOVING a displacement; the
+// founder's own ring redraw is not the owner's act, and a words-only amend of
+// one of those eight must go through."* So the containment question is asked
+// only of an amend that actually moves the mark.
+//
+// ONE FUNCTION, BOTH DOORS. `declaredParentRefusal` is what the amend door and
+// the crossing's write-down each call — not the raw predicate above, which stays
+// as the pure containment primitive its unit tests drive. A gate that lived at
+// two call sites is a gate one of them will eventually forget.
+
+/**
+ * Did this amend move the mark's GROUND, as opposed to its words?
+ *
+ * `geometryMoved` is the move guard's own — imported, not restated, because the
+ * two guards sit in the same branch of the same door and a disagreement about
+ * what "moved" means would show up as one firing where the other does not.
+ *
+ * ONE ADDITION, DELIBERATE AND DISCLOSED: `geometryMoved` reads `at` and
+ * `extent` and does not look at `points`. This guard DOES test ring points for
+ * containment, so gating it on a mover that cannot see a ring would leave an
+ * amend that drags a ring outside its parent — a real displacement, introduced
+ * by the owner — admitted by a guard that then checks the very points it was
+ * told had not moved. The ring arm is named `"points"` and tested. It was not in
+ * the word given; it is here because the ruling's own sentence is "introducing
+ * or moving a displacement", and a ring move is one. Strike it by deleting the
+ * ring branch below and its test, and nothing else changes.
+ *
+ * Returns the move guard's own vocabulary — `"at"` · `"extent"` · `"points"` —
+ * or null for an amend that moved nothing.
+ */
+export function amendMovedGround(prior, next) {
+  if (!prior) return null;                       // nothing standing to have moved
+  const moved = geometryMoved(prior, next);
+  if (moved) return moved;
+  if (next?.points !== undefined && ringChanged(prior?.points, next?.points)) return "points";
+  return null;
+}
+
+/** Ring equality, positionally — a reordered ring is a different ring. */
+function ringChanged(a, b) {
+  const norm_ = (ring) => (Array.isArray(ring)
+    ? ring.map((p) => `${Number(Array.isArray(p) ? p[0] : p?.x)},${Number(Array.isArray(p) ? p[1] : p?.y)}`).join(" ")
+    : "");
+  return norm_(a) !== norm_(b);
+}
+
+/**
+ * THE ONE ENTRY BOTH DOORS USE: the narrowing, then the containment question.
+ *
+ * `prior` is the mark as it stands — the journal's word or canon's at the door,
+ * the last fold's record at the crossing. `next` is what the amend carries.
+ *
+ * Returns null to admit, or the finding. An absent `prior` admits: at the door
+ * that is a mark nothing is standing on, and at the crossing a nested path with
+ * no folded record is a mark that is not standing at all. A create never reaches
+ * either, because Gate B files it root-framed at its own id and geometry places
+ * it — the ruling's second sentence, untouched.
+ */
+export function declaredParentRefusal({ id, prior, next, parentId, parent, pointWithinMark }) {
+  const moved = amendMovedGround(prior, next);
+  if (!moved) return null;                       // words only — always free
+  const finding = outsideDeclaredParent({
+    id, at: next?.at ?? null, points: next?.points ?? null, parentId, parent, pointWithinMark,
+  });
+  return finding ? { ...finding, moved } : null;
 }
 
 /** The write-down's sentence — the style of the three frame refusals beside it. */

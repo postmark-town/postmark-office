@@ -62,7 +62,7 @@ import { fileFramer } from "../src/world-drain.mjs";
 import { FoldInputRefusal, planStoreWriteDown, normalizeMark, storeWriteDown } from "../src/store-writedown.mjs";
 import { frameOfRow, renderedMark } from "../world2/tools/mark-render.mjs";
 import { declaredParentGuard } from "../src/world.mjs";
-import { declaredParentIdOf, idOfMarkFileFrom, outsideDeclaredParent, outsideParentBounce } from "../src/mark-declared-parent.mjs";
+import { amendMovedGround, declaredParentIdOf, idOfMarkFileFrom, outsideDeclaredParent, outsideParentBounce } from "../src/mark-declared-parent.mjs";
 
 const OFFICE = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -312,8 +312,12 @@ test("THE DOOR ADMITS what the ruling leaves alone: inside the parent, filed at 
   const canon = canonOf(repo);
   const guard = (id, at) => declaredParentGuard(id, { at }, canon, repo);
 
-  assert.equal(await guard("current-the-reader/the-snug-mooring", { ...MOORING_WORLD }), null,
-    "the owner's own 09-14 amend: inside the harbour, admitted");
+  // A prior OUT at sea, so this amend genuinely MOVES the ground and the gate
+  // opens: what admits it is containment and nothing else. Without the moved
+  // prior this line would pass on the narrowing alone and stop testing "inside".
+  assert.equal(await declaredParentGuard("current-the-reader/the-snug-mooring", { at: { ...MOORING_WORLD }, extent: { ...MOORING_EXTENT } },
+    canon, repo, { id: "current-the-reader/the-snug-mooring", at: { ...AT_SEA }, extent: { ...MOORING_EXTENT } }), null,
+    "the owner's own 09-14 amend: it moves the ground, and the point is inside the harbour — admitted on containment");
   assert.equal(await guard("current-the-reader/the-snug-harbour", { ...HARBOUR_WORLD }), null,
     "the harbour is filed under the coast and stands in it");
   assert.equal(await guard("spar/the-doubled-coast", { x: -9000, y: -9000 }), null,
@@ -398,38 +402,6 @@ test("THE NEGATIVE: a FILE-framed row at the frozen path is untouched — the gu
   assert.equal(kept.counts.framed, 0);
 });
 
-test("THE CONSEQUENCE, stated rather than discovered: a WORDS-ONLY amend of an already-displaced mark is refused too", async (t) => {
-  // The ruling's condition is the payload's `at`, and an amend rewrites `data`
-  // whole from the claim — so a mark that is ALREADY outside its declared parent
-  // carries an outside `at` even when its owner only changed a picture.
-  //
-  // Measured on the live record at world `6625d737`: NINE standing marks are
-  // outside the parent their frozen filing declares, and EIGHT of them declare a
-  // REGION whose ring was redrawn by the founder's 2026-08-24 ruling —
-  // `WORLD/region-outsiders.md` says so in its own words: "Nothing has been moved
-  // and nothing is lost — the ground is exactly where its owner put it; only the
-  // region boundary changed."
-  //
-  // This test argues neither way. It makes the consequence EXECUTABLE, so that
-  // whichever shape is ruled, the change is a change to a red line rather than to
-  // a silence. The narrowing, if it is taken, is one condition — the move guard's
-  // own `geometryMoved(prior, next)` from `world-move-guard.mjs`, beside it — and
-  // it is proposed in the lane's report, not taken here.
-  const { repo } = snugShapedWorld(t);
-  const canon = canonOf(repo);
-  const out = await declaredParentGuard("current-the-reader/the-snug-mooring",
-    { at: { ...AT_SEA }, image: "a-new-picture.jpg" }, canon, repo);
-  assert.ok(out, "TODAY'S SHAPE: the point is outside, so the amend is refused whether or not it moved anything");
-});
-
-// ── THE RING ARM, WHICH IS THE COMMON CASE AND NOT THE EXOTIC ONE ───────────
-//
-// Measured on the live record at world `6625d737`: of the nine standing marks
-// outside the parent their frozen filing declares, EIGHT declare a REGION — an
-// irregular mark with a `points` ring — and only the Snug mooring declares a
-// plain rect. So the ring arm carries most of this guard's real traffic and is
-// tested against the clone's own predicate rather than assumed.
-
 test("THE RING: the clone's predicate answers the DRAWN shape, and the sentence says its bounds are a bounding box", { skip: WHY_SKIP }, async () => {
   const { pointWithinMark } = await import(pathToFileURL(join(WORLD, "tools", "world-verbs.mjs")).href);
 
@@ -506,4 +478,147 @@ test("THE ANCESTOR WALK stops where the framer's does, and the world root is nev
   assert.equal(declaredParentIdOf("WORLD/marks/current-the-reader/a-cone/mark.md", idOf), null,
     "a mark born after the freeze is filed at its own id — root-framed, no declared parent");
   assert.equal(declaredParentIdOf("", idOf), null);
+});
+
+// ── THE NARROWING (Keemin's ruling, carried 2026-09-20) ─────────────────────
+//
+// The first cut asked only "is the point outside?". Measured over the live
+// record at world `6625d737`, that would have refused NINE standing marks' next
+// amend — and EIGHT of them declare a REGION whose ring the founder redrew on
+// 2026-08-24. `WORLD/region-outsiders.md`: *"Nothing has been moved and nothing
+// is lost — the ground is exactly where its owner put it; only the region
+// boundary changed."* An amend rewrites `data` whole from the claim, so those
+// eight owners would have met a 409 for changing a picture.
+//
+// The ruling: the law is against INTRODUCING or MOVING a displacement. A words-
+// only amend of an already-displaced mark goes through; an amend that moves the
+// ground to a displaced point still bounces, under the same word.
+//
+// Both doors run the gate through ONE function, `declaredParentRefusal`, so that
+// neither can hold it while the other forgets it — and the test below drives
+// both of them over the same four cases rather than asserting it of one.
+
+const DISPLACED = { ...AT_SEA };  // a mark already standing outside its declared parent
+
+/** The mooring as it stands, already out at sea — the eight region outsiders' shape. */
+const standingOutside = () => ({
+  id: "current-the-reader/the-snug-mooring", kind: "sited",
+  at: { ...DISPLACED }, extent: { ...MOORING_EXTENT },
+});
+
+test("THE NARROWING, at the door: a WORDS-ONLY amend of an already-displaced mark GOES THROUGH", async (t) => {
+  const { repo } = snugShapedWorld(t);
+  const canon = canonOf(repo);
+  const prior = standingOutside();
+
+  // Same numbers the mark already stands at; only the picture changed. This is
+  // the amend the eight region outsiders would make, and it must not bounce.
+  const wordsOnly = await declaredParentGuard("current-the-reader/the-snug-mooring",
+    { at: { ...DISPLACED }, extent: { ...MOORING_EXTENT }, image: "a-new-picture.jpg" }, canon, repo, prior);
+  assert.equal(wordsOnly, null,
+    "the founder's ring redraw is not the owner's act — a words-only amend of a displaced mark must go through");
+
+  // An amend carrying no extent at all says nothing about it, so it is still
+  // words-only (the move guard's own rule, which this gate borrows rather than
+  // restates).
+  const noExtent = await declaredParentGuard("current-the-reader/the-snug-mooring",
+    { at: { ...DISPLACED }, image: "another.jpg" }, canon, repo, prior);
+  assert.equal(noExtent, null, "an amend that states no extent is not shrinking the mark to nothing");
+});
+
+test("THE NARROWING, at the door: an amend that MOVES the ground to a displaced point still bounces, same word", async (t) => {
+  const { repo } = snugShapedWorld(t);
+  const canon = canonOf(repo);
+
+  // Standing INSIDE, moved OUT — the 2026-09-14 amend, which is the act the
+  // ruling is actually against.
+  const introduces = await declaredParentGuard("current-the-reader/the-snug-mooring",
+    { at: { ...AT_SEA }, extent: { ...MOORING_EXTENT } }, canon, repo,
+    { id: "current-the-reader/the-snug-mooring", at: { ...MOORING_WORLD }, extent: { ...MOORING_EXTENT } });
+  assert.ok(introduces, "introducing a displacement is refused");
+  assert.equal(introduces.reason, "mark-outside-declared-parent", "the same word, not a second one");
+  assert.equal(introduces.finding.moved, "at", "and the refusal says WHAT moved");
+
+  // Already displaced, and MOVED further out — still the owner's act, still refused.
+  const movesAgain = await declaredParentGuard("current-the-reader/the-snug-mooring",
+    { at: { x: DISPLACED.x - 40, y: DISPLACED.y + 40 }, extent: { ...MOORING_EXTENT } }, canon, repo, standingOutside());
+  assert.ok(movesAgain, "moving a displacement is refused too — the ruling names both");
+  assert.equal(movesAgain.finding.moved, "at");
+
+  // A RESIZE that leaves the centre alone is still a move of the ground.
+  const resize = await declaredParentGuard("current-the-reader/the-snug-mooring",
+    { at: { ...DISPLACED }, extent: { w: 40, h: 40 } }, canon, repo, standingOutside());
+  assert.ok(resize, "an extent change is a move (the move guard's own vocabulary)");
+  assert.equal(resize.finding.moved, "extent");
+
+  // AND THE REPAIR PATH MUST BE OPEN: moving a displaced mark back INSIDE its
+  // parent moves the ground, so the gate opens — and containment then admits it.
+  // If this ever bounced, a displaced owner could never fix their own mark.
+  const repair = await declaredParentGuard("current-the-reader/the-snug-mooring",
+    { at: { ...MOORING_WORLD }, extent: { ...MOORING_EXTENT } }, canon, repo, standingOutside());
+  assert.equal(repair, null, "moving back inside the parent is the repair, and it must go through");
+});
+
+test("THE NARROWING, at the crossing: the write-down gates on the same move, from the fold's own record", async (t) => {
+  const { repo } = snugShapedWorld(t);
+  const toFileFrame = await fileFramer(repo);
+  const plan = (at) => {
+    try {
+      return {
+        ok: planStoreWriteDown([normalizeMark(entryFor(storeRow(at)))], {
+          publishedPathOf: () => MOORING_FILE, canonBytesAt: () => null, toFileFrame,
+        }),
+      };
+    } catch (e) { return { err: e }; }
+  };
+
+  // The fixture's mooring stands INSIDE (at (-358, 4972)), so a row carrying the
+  // sea point is a MOVE, and it refuses — the case this hotfix exists for.
+  const moved = plan(AT_SEA);
+  assert.equal(moved.err?.reason, "mark-outside-declared-parent", "introducing the displacement still refuses at the crossing");
+
+  // And the row that changes nothing about the ground is written, framed.
+  const unmoved = plan(MOORING_WORLD);
+  assert.equal(unmoved.err, undefined, "a row standing where the mark stands is written");
+  assert.deepEqual(unmoved.ok.households[0].upserts[0].fileRec.at, MOORING_FILE_AT);
+
+  // THE EIGHT'S CASE at the crossing, built by standing the fixture's mark OUT
+  // to sea first: now the sea point is where it already IS, the row moves
+  // nothing, and the write-down carries it instead of refusing the crossing.
+  const displacedWorld = snugShapedWorld(t, { mooringFileAt: MOORING_WORLD });   // file number read raw → composes to AT_SEA
+  const framer2 = await fileFramer(displacedWorld.repo);
+  assert.deepEqual(framer2.standingMark("current-the-reader/the-snug-mooring").at, AT_SEA,
+    "the control: in this world the mooring really does stand out at sea");
+  const wordsOnly = (() => {
+    try {
+      return planStoreWriteDown([normalizeMark(entryFor(storeRow(AT_SEA)))], {
+        publishedPathOf: () => MOORING_FILE, canonBytesAt: () => null, toFileFrame: framer2,
+      });
+    } catch (e) { return { err: e }; }
+  })();
+  assert.equal(wordsOnly.err, undefined,
+    "a crossing must not be refused over a displacement the owner did not introduce and is not moving");
+});
+
+test("amendMovedGround: the move guard's own answer, plus the ring it cannot see", () => {
+  const at = (x, y) => ({ at: { x, y }, extent: { w: 8, h: 10 } });
+
+  assert.equal(amendMovedGround(null, at(0, 0)), null, "nothing standing to have moved");
+  assert.equal(amendMovedGround(at(0, 0), at(0, 0)), null, "same ground, words only");
+  assert.equal(amendMovedGround(at(0, 0), { ...at(0, 0), image: "new.jpg" }), null, "a picture is not ground");
+  assert.equal(amendMovedGround(at(0, 0), at(1, 0)), "at");
+  assert.equal(amendMovedGround(at(0, 0), { at: { x: 0, y: 0 }, extent: { w: 9, h: 10 } }), "extent");
+  assert.equal(amendMovedGround(at(0, 0), { at: { x: 0, y: 0 } }), null,
+    "an amend that states no extent says nothing about it — the move guard's rule, borrowed not restated");
+
+  // THE RING ARM, which `geometryMoved` does not look at. Disclosed in the
+  // module's own header as an addition beyond the word given: dragging a ring
+  // out of its parent IS introducing a displacement, and this guard tests ring
+  // points for containment, so gating it on a mover blind to rings would check
+  // points it had just been told had not moved.
+  const ring = (pts) => ({ at: { x: 0, y: 0 }, extent: { w: 8, h: 10 }, points: pts });
+  assert.equal(amendMovedGround(ring([[0, 0], [1, 1], [2, 2]]), ring([[0, 0], [1, 1], [2, 2]])), null, "the same ring is not a move");
+  assert.equal(amendMovedGround(ring([[0, 0], [1, 1], [2, 2]]), ring([[0, 0], [1, 1], [9, 9]])), "points", "a changed ring is");
+  assert.equal(amendMovedGround(ring([[0, 0], [1, 1], [2, 2]]), at(0, 0)), null,
+    "an amend carrying no points says nothing about the ring, exactly as with extent");
 });

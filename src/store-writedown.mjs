@@ -72,7 +72,7 @@ import { markRecord } from "./mark-record.mjs";
 import { ROOT_PREFIX, pathFor } from "./world-journal.mjs";
 // The declared-parent law (postmark#3020) — the word, the predicate and the
 // sentence, minted once and shared with the amend door.
-import { OUTSIDE_DECLARED_PARENT, outsideDeclaredParent, outsideParentDetail } from "./mark-declared-parent.mjs";
+import { OUTSIDE_DECLARED_PARENT, declaredParentRefusal, outsideParentDetail } from "./mark-declared-parent.mjs";
 import { draftBranch, mainRef } from "./world-branches.mjs";
 import { fileFramer, sketchbookBase, writeDownHousehold } from "./world-drain.mjs";
 import { WORLD_CLONE } from "./world-store.mjs";
@@ -475,9 +475,19 @@ export function planStoreWriteDown(marks, { publishedPathOf = null, canonBytesAt
       // the door runs the same one over the same parent and refuses under the
       // same word, and `mark-outside-declared-parent.test.mjs` asserts the two
       // agree on these numbers rather than trusting that they do.
+      // THE NARROWING (Keemin, 2026-09-20): only an amend that actually MOVES
+      // the ground is asked the containment question. Measured over the live
+      // record, the unnarrowed guard would have refused nine standing marks'
+      // next amend, and eight of them are outside a region whose ring the
+      // FOUNDER redrew on 2026-08-24 — not their owners' act, and a words-only
+      // amend of one of those must go through. `declaredParentRefusal` carries
+      // the gate so that neither door can hold it and the other forget it; the
+      // prior here is the last published fold's own record for the mark, which
+      // is in world coordinates exactly as this row's numbers are.
       const declared = typeof toFileFrame.declaredParentOf === "function" ? toFileFrame.declaredParentOf(path) : null;
-      const outside = declared && outsideDeclaredParent({
-        id: m.id, at: rec.at ?? null, points: rec.points ?? null,
+      const standing = typeof toFileFrame.standingMark === "function" ? toFileFrame.standingMark(m.id) : null;
+      const outside = declared && declaredParentRefusal({
+        id: m.id, prior: standing, next: rec,
         parentId: declared.parentId, parent: declared.parent, pointWithinMark: toFileFrame.pointWithinMark,
       });
       if (outside) throw new FoldInputRefusal(OUTSIDE_DECLARED_PARENT, outsideParentDetail(outside, path));

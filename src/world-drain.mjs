@@ -816,6 +816,13 @@ export async function fileFramer(repo) {
     const parentId = declaredParentIdOf(path, idOfMarkFile);
     return parentId ? { parentId, parent: markOfId.get(parentId) ?? null } : null;
   };
+  // THE MARK AS IT STANDS — the crossing's half of the narrowing. The door has
+  // `priorLive ?? priorCanon`; here the last published fold IS the prior, and it
+  // is in world coordinates exactly as a world-framed row's numbers are, so the
+  // two are comparable without a conversion. Absent means the mark is not
+  // standing, and an amend of a mark that is not standing is admitted rather
+  // than refused — the same direction every other arm of this guard takes.
+  toFileFrame.standingMark = (id) => markOfId.get(String(id)) ?? null;
   try {
     const dir = materializeAtRef(repo, mainRef(repo), "tools");
     const verbs = await import(pathToFileURL(join(dir, "tools", "world-verbs.mjs")));

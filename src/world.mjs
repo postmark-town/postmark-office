@@ -42,7 +42,7 @@ import { moveGuard } from "./world-move-guard.mjs"; // the drain night: moving a
 import { ACTION_AMEND, ACTION_LEAVE, ACTION_WITHDRAW, CLASS_MARK, CLASS_MOVE, CLASS_VOICE, anchorAt, appendActFlipped, appendJournal, filedPathOfAt, frozenFilingAt, laneFlipped, mirrorLaneAct, pathFor, pinWitnesses, singleLogEnabled } from "./world-journal.mjs"; // POS-5 slice 1: the one append-only log
 // The declared-parent law (postmark#3020) — the word, the predicate and the
 // sentence, minted once and shared with the crossing's write-down.
-import { declaredParentIdOf, idOfMarkFileFrom, outsideDeclaredParent, outsideParentBounce } from "./mark-declared-parent.mjs";
+import { declaredParentIdOf, declaredParentRefusal, idOfMarkFileFrom, outsideParentBounce } from "./mark-declared-parent.mjs";
 import { guardedDraftsForKey, guardedLiveChildrenOf, guardedLiveMarks } from "./world2-guards.mjs"; // B1: the door guards' own reads, behind W2_GUARDS (runbook §4 B1)
 import { WORLD_STAKE_TOOLS, callWorldStakeTool, worldPortfolioStakeSlice, markStakeBlock } from "./world-stake.mjs"; // P3 draft, append-shaped
 import { toConfirm } from "./stamps-preview.mjs"; // POS-83: the inline stake's half of the confirmation step
@@ -2369,7 +2369,7 @@ function canonForGuards() {
  * next door, which returns null-not-empty precisely because a missing file there
  * would silently stop a guard that was already load-bearing.
  */
-export async function declaredParentGuard(id, clean, canon = null, repo = WORLD_CLONE) {
+export async function declaredParentGuard(id, clean, canon = null, repo = WORLD_CLONE, prior = null) {
   try {
     const board = canon ?? canonForGuards();
     const frozen = frozenFilingAt(repo, String(mainRef(repo)));
@@ -2378,8 +2378,13 @@ export async function declaredParentGuard(id, clean, canon = null, repo = WORLD_
     const parentId = declaredParentIdOf(markFile, idOfMarkFileFrom(frozen));
     if (!parentId) return null;                       // filed under the root: the frame, not a parent
     const { verbs } = await mods();
-    const finding = outsideDeclaredParent({
-      id, at: clean?.at ?? null, points: clean?.points ?? null,
+    // `prior` is the SAME value the move guard is handed two lines up — the
+    // journal's word for a mark amended since the last drain, else canon's.
+    // Defaulting it out of `canon` keeps a caller that does not pass one honest
+    // rather than silently ungated.
+    const standing = prior ?? board.byId.get(String(id)) ?? null;
+    const finding = declaredParentRefusal({
+      id, prior: standing, next: clean,
       parentId, parent: board.byId.get(parentId) ?? null, pointWithinMark: verbs?.pointWithinMark,
     });
     return finding ? outsideParentBounce(finding) : null;
@@ -2698,7 +2703,10 @@ async function journalLeaveMark(clean, { crossing = currentCrossing() } = {}) {
       // geometry of our own — `pointWithinMark` is the CLONE'S, the same
       // function the enter door adjudicates with. The 2026-08-22 ruling that
       // took the fold gate off this door is not reopened.
-      const parentRefusal = await declaredParentGuard(id, clean, canon);
+      // The SAME `prior` the move guard was handed on the line above — one
+      // reading of what is standing, two guards, so they cannot disagree about
+      // whether this amend moved anything.
+      const parentRefusal = await declaredParentGuard(id, clean, canon, WORLD_CLONE, priorLive ?? priorCanon);
       if (parentRefusal) throw bounce(parentRefusal.code, parentRefusal.defect, parentRefusal.hint);
     }
 
