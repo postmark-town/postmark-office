@@ -39,7 +39,10 @@ import {
   resolvedWorldHousehold,
 } from "./world-branches.mjs";
 import { moveGuard } from "./world-move-guard.mjs"; // the drain night: moving a mark moves what stands on it
-import { ACTION_AMEND, ACTION_LEAVE, ACTION_WITHDRAW, CLASS_MARK, CLASS_MOVE, CLASS_VOICE, anchorAt, appendActFlipped, appendJournal, filedPathOfAt, laneFlipped, mirrorLaneAct, pathFor, pinWitnesses, singleLogEnabled } from "./world-journal.mjs"; // POS-5 slice 1: the one append-only log
+import { ACTION_AMEND, ACTION_LEAVE, ACTION_WITHDRAW, CLASS_MARK, CLASS_MOVE, CLASS_VOICE, anchorAt, appendActFlipped, appendJournal, filedPathOfAt, frozenFilingAt, laneFlipped, mirrorLaneAct, pathFor, pinWitnesses, singleLogEnabled } from "./world-journal.mjs"; // POS-5 slice 1: the one append-only log
+// The declared-parent law (postmark#3020) — the word, the predicate and the
+// sentence, minted once and shared with the crossing's write-down.
+import { declaredParentIdOf, declaredParentRefusal, idOfMarkFileFrom, outsideParentBounce } from "./mark-declared-parent.mjs";
 import { guardedDraftsForKey, guardedLiveChildrenOf, guardedLiveMarks } from "./world2-guards.mjs"; // B1: the door guards' own reads, behind W2_GUARDS (runbook §4 B1)
 import { WORLD_STAKE_TOOLS, callWorldStakeTool, worldPortfolioStakeSlice, markStakeBlock } from "./world-stake.mjs"; // P3 draft, append-shaped
 import { toConfirm } from "./stamps-preview.mjs"; // POS-83: the inline stake's half of the confirmation step
@@ -2339,6 +2342,56 @@ function canonForGuards() {
 }
 
 /**
+ * THE DECLARED-PARENT GUARD at the amend door (postmark#3020, Keemin 2026-09-20).
+ *
+ * Returns null to admit, or `{ code, defect, hint }` to bounce — the move
+ * guard's shape next door, and for the move guard's reason: the caller owns the
+ * bounce grammar, and a test can assert the sentence a resident actually reads.
+ *
+ * THE THREE READS, and none of them is a fold:
+ *
+ *   1. the mark's frozen filing path, from `WORLD/filing-freeze.json` at main
+ *      (`frozenFilingAt` caches by sha, so this is one read per world revision);
+ *   2. the parent that path declares — the nearest enclosing directory the
+ *      manifest names, stopping BEFORE the world root, because a mark filed
+ *      under the root declares the frame and not a parent;
+ *   3. that parent as the last published fold composed it, out of the SAME
+ *      `canon` the move guard and the parcel cap already hold.
+ *
+ * The verdict is the clone's `pointWithinMark` — `tools/world-verbs.mjs`, the
+ * function the enter door adjudicates with and `leavingWhileOccupying` walks
+ * with. The office does not own a definition of "inside" and must not grow one.
+ *
+ * IT ADMITS WHENEVER IT CANNOT ASK. No manifest, no frozen path, a root-level
+ * filing, a parent canon does not carry, a parent with no ground, no predicate:
+ * all admit. This guard ADDS a refusal to a door that works today, so an
+ * unanswerable question must never become a "no" — the opposite of `dependentsOf`
+ * next door, which returns null-not-empty precisely because a missing file there
+ * would silently stop a guard that was already load-bearing.
+ */
+export async function declaredParentGuard(id, clean, canon = null, repo = WORLD_CLONE, prior = null) {
+  try {
+    const board = canon ?? canonForGuards();
+    const frozen = frozenFilingAt(repo, String(mainRef(repo)));
+    const markFile = frozen.get(String(id));
+    if (!markFile) return null;                       // no frozen filing → a create, or born after the freeze: geometry decides
+    const parentId = declaredParentIdOf(markFile, idOfMarkFileFrom(frozen));
+    if (!parentId) return null;                       // filed under the root: the frame, not a parent
+    const { verbs } = await mods();
+    // `prior` is the SAME value the move guard is handed two lines up — the
+    // journal's word for a mark amended since the last drain, else canon's.
+    // Defaulting it out of `canon` keeps a caller that does not pass one honest
+    // rather than silently ungated.
+    const standing = prior ?? board.byId.get(String(id)) ?? null;
+    const finding = declaredParentRefusal({
+      id, prior: standing, next: clean,
+      parentId, parent: board.byId.get(parentId) ?? null, pointWithinMark: verbs?.pointWithinMark,
+    });
+    return finding ? outsideParentBounce(finding) : null;
+  } catch { return null; }                            // could not look → admit, never refuse on a read failure
+}
+
+/**
  * WHERE THE ACTOR STOOD, AND WHO SAW — the-witnessed-line, at the write instant.
  *
  * Never throws and never refuses the write. A mark that could be lost because
@@ -2625,6 +2678,36 @@ async function journalLeaveMark(clean, { crossing = currentCrossing() } = {}) {
     if (amending) {
       const refusal = moveGuard(WORLD_CLONE, { id, prior: priorLive ?? priorCanon, next: clean });
       if (refusal) throw bounce(refusal.code, refusal.defect, refusal.hint);
+
+      // ── THE DECLARED PARENT (postmark#3020, Keemin-ruled 2026-09-20) ──────
+      //
+      // "if marks DECLARE their parent, refuse at that lands outside the parent.
+      //  If they DON'T, dont, and parent just gets computed by geometry."
+      //
+      // A mark declares its parent by its FROZEN FILING PATH, and `at` is
+      // absolute (the schema's word, and the owner's). So an amend whose `at`
+      // lands outside the mark it is filed inside is a contradiction the office
+      // must not resolve on the owner's behalf — the Snug mooring, filed in the
+      // harbour and amended to a point five kilometres out to sea, which the
+      // 2026-09-15 crossing wrote and three settlements answered with.
+      //
+      // WHY HERE AND NOT ONLY AT THE CROSSING. The write-down refuses the same
+      // row under the same word, but a crossing refusal reaches the owner hours
+      // later as a line in a receipt they do not read. This is the door they are
+      // standing at; the sentence names the parent, the point, the ground and
+      // the two ways on.
+      //
+      // The cost is the move guard's, not the fold gate's: one manifest read
+      // (cached by sha), one walk up the path's own directories, and one
+      // point-in-mark test against the last fold's composed parent. No fold, no
+      // geometry of our own — `pointWithinMark` is the CLONE'S, the same
+      // function the enter door adjudicates with. The 2026-08-22 ruling that
+      // took the fold gate off this door is not reopened.
+      // The SAME `prior` the move guard was handed on the line above — one
+      // reading of what is standing, two guards, so they cannot disagree about
+      // whether this amend moved anything.
+      const parentRefusal = await declaredParentGuard(id, clean, canon, WORLD_CLONE, priorLive ?? priorCanon);
+      if (parentRefusal) throw bounce(parentRefusal.code, parentRefusal.defect, parentRefusal.hint);
     }
 
     // ── the parcel dial and the claim cap, as lookups ────────────────────────
