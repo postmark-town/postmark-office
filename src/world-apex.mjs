@@ -376,8 +376,14 @@ export function crossingDeps() {
     // set-down is a zero-length departure AT the stop, so the leg's origin is the
     // stop and not where the record last had the body. It rides as `__from`, the
     // office's own key like `__seated_ground` — the door's schema admits neither.
+    // `exit` is DEC-5's own documented flag on the walk door, and it rides the
+    // same channel `from` does (postmark#3019). The deposit passes it when the
+    // rider remains within something after stepping off; the walk door keeps the
+    // judgement of WHAT that walk actually leaves — `leavingWhileOccupying` is
+    // its predicate and there is no second copy of it on this side.
     stop: async (who, here, key, opts = {}) => walkViaOffice(WORLD_CLONE, { handle: who, x: here.x, y: here.y,
-      ...(opts?.from && Number.isFinite(Number(opts.from.x)) && Number.isFinite(Number(opts.from.y)) ? { __from: { x: Number(opts.from.x), y: Number(opts.from.y) } } : {}) }, key),
+      ...(opts?.from && Number.isFinite(Number(opts.from.x)) && Number.isFinite(Number(opts.from.y)) ? { __from: { x: Number(opts.from.x), y: Number(opts.from.y) } } : {}),
+      ...(opts?.exit === true ? { exit: true } : {}) }, key),
     now: () => (Date.now() - Date.UTC(2026, 5, 12)) / (12 * 3600 * 1000),
     // THE JOURNAL ROWS THIS ACTOR HAS WRITTEN, oldest first — the ride fold's
     // one input (world-ride.mjs § rideStateFrom). Read from the live journal,
