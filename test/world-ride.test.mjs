@@ -502,6 +502,26 @@ test("#3019: a deposit that would carry the rider out of rooms they boarded from
     + "without the flag DEC-5 bounces it, which is the defect");
 });
 
+// THE HALF NO BEHAVIOURAL TEST IN THIS SUITE CAN REACH, pinned because a flip
+// proved it (2026-09-20). Removing `src/world-apex.mjs`'s forwarding line and
+// running this whole file is GREEN 49/49: the harness supplies its own `stop`,
+// so `crossingDeps()` is never on the path. A fix wired at the crossings end and
+// dropped at the apex end would therefore ship looking fully tested, and the
+// defect would come straight back on prod while the suite said nothing.
+//
+// This is a SOURCE pin and it is weaker than a behavioural one — it proves the
+// line exists, not that the door honours it. What proves the whole chain is the
+// dev rehearsal (2026-09-20 18:37Z): `recorded: true` where the same walk
+// answered `recorded: false` eight minutes earlier on the base. The pin exists
+// so a later hand cannot delete the wiring in silence between rehearsals.
+test("#3019: the apex forwards `exit` to the walk door — the wiring no fake `stop` can exercise", () => {
+  const src = readFileSync(new URL("../src/world-apex.mjs", import.meta.url), "utf8");
+  assert.ok(/opts\?\.exit\s*===\s*true\s*\?\s*\{\s*exit:\s*true\s*\}/.test(src),
+    "crossingDeps().stop must forward `opts.exit` into walkViaOffice's payload, and only when true. "
+    + "Without this line the deposit declares its leaving to nobody: the crossings half passes the flag, "
+    + "the walk door never sees it, DEC-5 refuses the deposit, and #3019 is back with every test green.");
+});
+
 test("#3019: a boarding from open ground carries NO `exit` — the flag is the remainder's, not the deposit's", { skip: !HAVE_CLONE && "no world clone" }, async () => {
   // Grove Wharf is a stop standing inside no room, and the portal crossing files
   // ONE row. Nothing is left behind by the exit, so the deposit declares nothing
