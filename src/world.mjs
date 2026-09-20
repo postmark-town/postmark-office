@@ -411,14 +411,19 @@ export const departuresNow = async (worldClone = WORLD_CLONE, opts = {}) =>
 // means "your ground". Flag-off only `walk` ever occurs, so this set changes
 // nothing; Stage D adds the two the timetable owns, and without naming them here
 // a passenger mid-crossing would be answered with their house.
-const DERIVED_SOURCES = new Set(["walk", "timetable", "attachment"]);
+// `vehicle` (#2986, the dev walk 2026-09-20): the aboard-by-occupancy standpoint
+// (`world-movement.mjs § vehicleStandpoint`) answers `source: "vehicle"` — a rider
+// inside the hull, placed at the hull. Left off this set, orient answered a rider
+// aboard the Post Office with their house, exactly the sentence above, one era on.
+const DERIVED_SOURCES = new Set(["walk", "timetable", "attachment", "vehicle"]);
 
 async function standCoords(handle, w) {
   try {
     const here = await residentStandpoint(handle, w);
     if (here.placed && DERIVED_SOURCES.has(here.source)) {
       return { x: here.x, y: here.y,
-        from: here.moving ? `${here.narration} (${Math.round(here.remaining_m)} m to go)` : "where your walk arrived" };
+        from: here.source === "vehicle" ? here.narration
+          : here.moving ? `${here.narration} (${Math.round(here.remaining_m)} m to go)` : "where your walk arrived" };
     }
   } catch { /* no ledger or no engine — home is the honest fallback */ }
   return homeCoords(handle, w);
