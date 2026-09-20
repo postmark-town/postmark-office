@@ -98,12 +98,30 @@ if (wrote.length) {
     console.error(`! office clone is on '${branch}', not main — refusing to commit telemetry off-main (checkout main, or set TRAFFIC_ALLOW_BRANCH=1 knowingly). Files written: ${wrote.length}.`);
     process.exit(1);
   }
+  // office#83's sibling, office#84 (2026-09-17): main moves under this clone
+  // between rounds (hotfix merges), and a refused non-fast-forward push read
+  // as a green run — two days of telemetry sat committed and unpushed while
+  // the round's tail said exit 0. Rebase onto origin/main BEFORE staging (the
+  // telemetry files never conflict: one new file per repo per day; a rebase
+  // refuses with staged changes, so it goes first), and after the push ASSERT
+  // the remote moved: committed-but-not-pushed is its own exit (3), never 0,
+  // and the box ship below still runs because the files are on disk.
+  run("git", ["-C", OFFICE, "pull", "--rebase", "--quiet", "origin", "main"]);
   run("git", ["-C", OFFICE, "add", "telemetry/github"]);
   const staged = run("git", ["-C", OFFICE, "diff", "--cached", "--name-only"]).trim();
   if (staged) {
     run("git", ["-C", OFFICE, "commit", "-m", `telemetry: github traffic ${date}`]);
-    run("git", ["-C", OFFICE, "push"]);
-    console.log(`office repo: committed + pushed (${staged.split("\n").length} file(s))`);
+    let refusal = null;
+    try { run("git", ["-C", OFFICE, "push"], { stdio: ["ignore", "pipe", "pipe"] }); }
+    catch (e) { refusal = String(e?.stderr ?? e?.message ?? e).trim().split("\n").filter(Boolean).slice(-1)[0] ?? "push failed"; }
+    const head = run("git", ["-C", OFFICE, "rev-parse", "HEAD"]).trim();
+    const remote = run("git", ["-C", OFFICE, "rev-parse", "origin/main"]).trim();
+    if (refusal || head !== remote) {
+      console.error(`! office repo: committed but NOT pushed — HEAD ${head.slice(0, 9)}, origin/main ${remote.slice(0, 9)}${refusal ? ` (${refusal})` : ""}. Rebase and push by hand; the snapshots are on disk and ship to the box below. (office#84)`);
+      process.exitCode = 3;
+    } else {
+      console.log(`office repo: committed + pushed (${staged.split("\n").length} file(s)) — origin/main ${remote.slice(0, 9)}`);
+    }
   } else {
     console.log("office repo: nothing new to commit");
   }

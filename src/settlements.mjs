@@ -60,6 +60,52 @@ export function settlementsFrom(rows, { limit = RECENT_MAX } = {}) {
   };
 }
 
+// ── the newest blessing, from ONE git spawn ─────────────────────────────────
+//
+// `readSettlementTags` above spends two spawns per tag (71 tags = 143 spawns)
+// and is right for a door asked a few times an hour. The READ tier asks "which
+// settlement do I serve" on every request, so it gets a reader shaped like
+// `freshestMainRef`: one `git for-each-ref` over `refs/tags/settlement/`, parsed
+// here. The format is `%(refname:short) %(objectname) %(*objectname)` — the
+// peeled atom LAST because it is EMPTY for a lightweight tag, and split on
+// whitespace (for-each-ref does not share `log --format`'s escape dialect;
+// measured 2026-09-04, a `%x1f` separator came through as four literal bytes).
+export const NEWEST_SETTLEMENT_FORMAT = "%(refname:short) %(objectname) %(*objectname)";
+
+/** Parse `for-each-ref` lines in NEWEST_SETTLEMENT_FORMAT into the newest `{ n, tag, sha }`, or null. */
+export function newestSettlementFromRefLines(text) {
+  const rows = [];
+  for (const line of String(text ?? "").split("\n")) {
+    const [tag, object, peeled] = line.trim().split(/\s+/);
+    if (!tag) continue;
+    // annotated: the peeled atom is the commit; lightweight: the object IS the commit
+    rows.push({ tag, sha: peeled || object || null });
+  }
+  const newest = parseSettlementTags(rows)[0] ?? null;
+  return newest && newest.sha ? { n: newest.n, tag: `settlement/S${newest.n}`, sha: newest.sha } : null;
+}
+
+// ── the chip's clock ────────────────────────────────────────────────────────
+//
+// The viewer's settlement chip already says "S71 · next attempt in 3h 12m"
+// (`postmark-world/spectator/viewer.mjs § msToNextSettlementAttempt`,
+// SETTLEMENT_HOURS_UTC = [6, 18] — the keeper's bless, POS-80's law line). The
+// office cannot import the viewer, so the same two constants and the same
+// arithmetic live here, and the header carries the INSTANT rather than a
+// countdown: an answer is read later than it was written, and the chip already
+// knows how to count down from an instant.
+export const SETTLEMENT_HOURS_UTC = [6, 18];
+
+export function nextSettlementAttemptAt(nowMs = Date.now()) {
+  const now = new Date(nowMs);
+  for (const hour of SETTLEMENT_HOURS_UTC) {
+    const t = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hour);
+    if (t > nowMs) return new Date(t).toISOString();
+  }
+  // past the last attempt of the day: the first one tomorrow
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, SETTLEMENT_HOURS_UTC[0])).toISOString();
+}
+
 // ── the reading half: the clone's own tags ──────────────────────────────────
 
 const git = (repo, args) => execFileSync("git", ["-C", repo, ...args], {

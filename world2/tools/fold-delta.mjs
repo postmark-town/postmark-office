@@ -129,7 +129,7 @@
 // `canonRegisterAt` reads a git checkout and this function has never touched a
 // filesystem — which is what keeps every rule below provable on hand-built rows
 // with no Postgres and no clone.
-import { renderRecord, MARK_COLUMNS } from "./mark-render.mjs";
+import { renderedMark, MARK_COLUMNS } from "./mark-render.mjs";
 import { stakesFromStore } from "./fold-input.mjs";
 import { STANDING_SELECT, canonLockFindings } from "./canon-locks.mjs";
 
@@ -473,7 +473,10 @@ export async function foldDelta(
       // covers all five of the-town's docket marks, but filtering on it would be
       // a second selector arguing with the docket).
       founder_commit: r.data?.founder_commit ?? null,
-      bytes: renderRecord(r),
+      // The bytes, the record they came from, and the frame its numbers are in
+      // (`mark-render.mjs § renderedMark`). The write-down frames a world-framed
+      // record landing at a nested frozen path; bytes alone cannot be framed.
+      ...renderedMark(r),
     })),
     stakes,
     as_of: { window: w, town_sha: sha, world_sha: worldSha },

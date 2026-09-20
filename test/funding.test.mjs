@@ -21,8 +21,29 @@
 // carry — the mark that a receipt's ref had been consumed — now rides the holo
 // row, which is why its count is `(\d+)` and 0 is lawful.
 //
+// AMENDED 2026-09-17 — THE FOUNDER'S RULING, verbatim: "non-spendable is
+// repealed; the stamps are like any other, but are holo to signify the special
+// source." And: "I'm good to let funding minted stamps contribute to the max
+// stamps you can get from another fund. it compounds by design." Holo is fresh
+// mint to a giver, liquid like any stamp; the word names its source and its ink.
+//
+// WHAT THAT DOES TO THIS FILE, and it is worth stating because it is not what
+// the sweep's brief expected: the office gained NO holo arm, because the office
+// holds no balance fold. `balance` / `mint_count` / `staked` come off the
+// `stamps` table, which src/hydrate.mjs writes from the TOWN's own foldBalances
+// / foldMintCount / foldStaked, imported live from the checkout; both stake
+// clips take their balance from the town's ballotState. So the tense numbers
+// change by DERIVATION when the town's folds credit holo by kind
+// (postmark-town/postmark #2811), and the fixtures below seed the `stamps` table
+// the way that amended fold will write it. The one arithmetic the office really
+// owned — D1's ownership sum — DID have to change: it added holo to a
+// mint_count that now already contains it.
+//
 // The laws these tests pin:
-//   - holo is soulbound: it never sums into assets, and the caption is exact
+//   - holo is LIQUID: it is inside minted and liquid, inside assets, and the
+//     caption is exact (was: holo is soulbound and never sums into assets)
+//   - and it is counted ONCE — the ownership read does not add a holo that is
+//     already inside the town's mint_count
 //   - a zero-holo household reads a WELL-FORMED empty section, not an absence
 //   - a pot's contributor roll carries every holo row on it, joined to the
 //     pot-receipt that row's `ref:` names
@@ -46,7 +67,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { SCHEMA } from "../src/schema.mjs";
-import { parseLedgerText, foldFunding, classifyFundingRow, readPots, HOLO_CAPTION, HOLO_EXPANSION, TEACH } from "../src/funding.mjs";
+import { parseLedgerText, foldFunding, classifyFundingRow, readPots, HOLO_CAPTION, HOLO_EXPANSION, WHAT_THIS_BUYS, TEACH } from "../src/funding.mjs";
 import { stampsDetail, potBoard, questBoardFor } from "../src/queries.mjs";
 
 // ── the landed grammar, one row of every kind ────────────────────────────────
@@ -157,8 +178,17 @@ test("the fold reads every landed row kind: receipts, escrow, burn, holo, and th
 
 test("the grammar the office guessed before the town landed its own is now invalid", () => {
   const f = fold();
+  // AMENDED 2026-09-17: the REFUSAL is unchanged, the REASON is re-aimed.
+  // Soulbound is repealed, so "holo has no verbs" is no longer why this row is
+  // bad; a holo ROW is a MINT and not a movement, and an arrow would have the
+  // movement folds read it as a transfer while the by-kind credit also minted
+  // it — the payer paid twice.
   assert.match(reasonFor(f, "holo-mint → mallory"), /ARROW-FREE/,
-    "the movement-shaped holo row is refused by the law that makes holo soulbound, not by a typo");
+    "the movement-shaped holo row is refused by the shape law, not by a typo");
+  assert.match(reasonFor(f, "holo-mint → mallory"), /MINT, not a movement/,
+    "and it is refused for the reason that SURVIVED the ruling — a mint wearing a movement arrow pays twice");
+  assert.doesNotMatch(reasonFor(f, "holo-mint → mallory"), /has no verbs/,
+    "the repealed reason must not be the one a resident is told");
   assert.match(reasonFor(f, "ch_guessed"), /NO space after the colon/,
     "`pot: x` (loose) is not `pot:x` (tight) — the receipt names no readable pot");
   assert.match(reasonFor(f, "· keeping-burn ·"), /no standalone keeping-burn row/,
@@ -361,8 +391,17 @@ test("readPots reads the town's real pot file and surfaces the malformed one", (
 function fundingDb() {
   const db = new DatabaseSync(":memory:");
   db.exec(SCHEMA);
-  // keemin: 4 liquid, 6 staked, 10 ever minted → assets 10; holo entirely apart
-  db.prepare("INSERT INTO stamps (handle, balance, mint_count, staked) VALUES (?,?,?,?)").run("keemin", 4, 10, 6);
+  // THE `stamps` TABLE IS THE TOWN'S FOLD, MATERIALIZED — src/hydrate.mjs
+  // § Stamps writes it from the town's own foldBalances / foldMintCount /
+  // foldStaked. So these rows are seeded as that AMENDED fold will write them
+  // (postmark-town/postmark #2811): a holo row of n is credited to the payer by
+  // kind, so it is already inside both `mint_count` and `balance` here. That is
+  // the whole reason no office fold gained a holo arm on 2026-09-17 — adding one
+  // would count the same n twice.
+  //
+  // keemin: 10 primary mint + 1 holo = 11 ever minted, 6 staked → 5 liquid,
+  // assets 11. (Before the ruling: 10 minted, 4 liquid, assets 10, holo apart.)
+  db.prepare("INSERT INTO stamps (handle, balance, mint_count, staked) VALUES (?,?,?,?)").run("keemin", 5, 11, 6);
   db.prepare("INSERT INTO stamps (handle, balance, mint_count, staked) VALUES (?,?,?,?)").run("limen", 3, 3, 0);
   // wright: the staker whose 4 burned — 2 minted for keeping came home, and none
   // of it may show up in any of his four tense numbers
@@ -384,14 +423,21 @@ function fundingDb() {
   return db;
 }
 
-test("a household with holo reads four tenses that sum sanely — and holo is never balance", () => {
+test("a household with holo reads four tenses that sum sanely — and holo is IN the balance, once", () => {
+  // AMENDED 2026-09-17 — the founder: "non-spendable is repealed; the stamps are
+  // like any other, but are holo to signify the special source." This test used
+  // to assert `assets === 10` under the words "holo is NOT in assets — soulbound
+  // means outside the arithmetic". It now asserts the opposite, out loud.
   const d = stampsDetail(fundingDb(), "keemin");
   assert.deepEqual(
     { minted: d.tenses.minted, liquid: d.tenses.liquid, staked: d.tenses.staked, holo: d.tenses.holo },
-    { minted: 10, liquid: 4, staked: 6, holo: 1 },
+    { minted: 11, liquid: 5, staked: 6, holo: 1 },
+    "10 primary + 1 holo minted; the holo stamp is spendable, so it is in liquid too",
   );
   assert.equal(d.liquid + d.staked, d.assets, "stamp arithmetic: liquid + staked = assets");
-  assert.equal(d.assets, 10, "holo is NOT in assets — soulbound means outside the arithmetic");
+  assert.equal(d.assets, 11, "holo IS in assets now — it is a stamp like any other");
+  assert.equal(d.tenses.minted - d.tenses.holo, 10,
+    "and holo is a SUBSET of minted, not a pile beside it — take it out and the primary mint is what is left");
   assert.equal(d.stamps, d.liquid, "the back-compat alias survives the seam");
   assert.equal(d.holo.caption, "a record of contribution, not a promise of profit", "the caption is law, byte for byte");
   assert.equal(d.holo.caption, HOLO_CAPTION);
@@ -417,6 +463,42 @@ test("a household with holo reads four tenses that sum sanely — and holo is ne
   // stake burns rather than returns. It now asserts the opposite, out loud.
   assert.match(d.tenses.teach, /nothing burns/, "the staked tense says out loud that a keeping stake comes home whole — nothing burns");
   assert.doesNotMatch(d.tenses.teach, /BURNS/, "the repealed sentence must not be taught");
+  // AMENDED 2026-09-17: and the same discipline for the sentence THIS ruling
+  // repealed. The tenses caption said holo was "a record, never a balance" and
+  // "outside that arithmetic"; the holo caption said it "cannot be spent,
+  // staked, transferred, or redeemed". A door that still teaches that is
+  // telling a giver their stamps do not work.
+  assert.doesNotMatch(d.tenses.teach, /soulbound|never a balance|outside that arithmetic/,
+    "the repealed soulbound sentence must not be taught on the tenses");
+  assert.doesNotMatch(d.holo.teach, /soulbound|cannot be spent|never spent as postage|no door will ever count it as balance/,
+    "nor on the holo section");
+  assert.match(d.holo.teach, /liquid like any stamp/,
+    "and the holo section carries the ruling's own one-line rule");
+  assert.match(d.tenses.teach, /a subset of minted and of liquid, never a pile beside them/,
+    "the tenses say where holo now lives: inside minted and inside liquid, not beside them");
+});
+
+test("THE MONEY MOMENT says holo votes, and names the cap in the same breath", () => {
+  // THE FOUNDER, 2026-09-17, verbatim: "holo does anything a normal stamp can;
+  //   staking vs voting is a nondistiction."
+  // THE SENTENCE THIS REPEALS, which was live on this door until today: "this
+  //   buys ownership and memory, NEVER VOICE, and converts to real value only
+  //   if the town someday does."
+  //
+  // This is the one place the office made a promise about VOICE, and it made it
+  // at the instant a patron is about to send money. A test that only compared
+  // the door's field to the constant would go green on any wording at all, so
+  // this reads the CLAIM.
+  assert.doesNotMatch(WHAT_THIS_BUYS, /never voice|no voice|not voice|never standing/i,
+    "the repealed promise must not be made at the money moment");
+  assert.match(WHAT_THIS_BUYS, /including vote/,
+    "it says the stamps vote, because they do — a vote is a stake and clips against a fungible balance");
+  assert.match(WHAT_THIS_BUYS, /capped/,
+    "AND it names the bound in the same breath: a patron told their stamps vote and NOT told their share is capped has been told half the truth");
+  assert.match(WHAT_THIS_BUYS, /ownership and memory/,
+    "the two things that did not change are still promised");
+  assert.match(WHAT_THIS_BUYS, /converts to real value only if the town someday does/,
+    "and so is the conversion caveat, which this ruling never touched");
 });
 
 test("minted · for keeping reads as its own section — no liquid coin, and no fifth tense", () => {
@@ -445,9 +527,49 @@ test("minted · for keeping reads as its own section — no liquid coin, and no 
   assert.equal(d.keeping_mint.counted_in, "ownership", "it is counted — deliberately, in the ownership read");
 });
 
-test("D1: ownership is a derived READ — minted (all sources) + holo, with its parts shown", () => {
+test("THE DOUBLE-COUNT FALSIFIER: ownership counts holo ONCE, because the town's mint fold already did", () => {
+  // THE FOUNDER, 2026-09-17: "non-spendable is repealed; the stamps are like any
+  // other, but are holo to signify the special source." And: "funding minted
+  // stamps contribute to the max stamps you can get from another fund. it
+  // compounds by design."
+  //
+  // This is the one arithmetic the office really owned, and the ruling broke it.
+  // D1 (2026-08-21) defined ownership as "minted (all sources) + holo" — correct
+  // while holo sat OUTSIDE the mint count. It does not sit outside any more: the
+  // `stamps` table is the TOWN's foldMintCount, which credits a holo row by
+  // kind, so `mint_count` already contains it and the old sum added it twice.
+  //
+  // HOW TO FLIP THIS RED (it was flipped before it was trusted): restore
+  // `total: mint_count + keeping_total + holo` in src/queries.mjs § stampsDetail
+  // and keemin reads 12 against a true 11 — a giver's own gift counted twice on
+  // their own page.
+  const db = fundingDb();
+  const k0 = stampsDetail(db, "keemin");
+  assert.equal(k0.tenses.minted, 11, "the town's fold put the holo inside minted");
+  assert.equal(k0.holo.total, 1, "and the holo readout still says how much of it came from giving");
+  assert.equal(k0.ownership.total, 11,
+    "ownership is that number, ONCE — 12 here is the gift counted twice");
+  assert.equal(k0.ownership.total, k0.tenses.minted + k0.ownership.minted_keeping,
+    "ownership = minted (holo inside it) + the keeping leg, and nothing else");
+  assert.notEqual(k0.ownership.total, k0.tenses.minted + k0.ownership.minted_keeping + k0.holo.total,
+    "the pre-ruling sum is now a double-count and must not be what this read returns");
+  // AND HOLO IS SPENDABLE, so ownership is no longer strictly above assets: for
+  // a household with no keeping leg and nothing staked they are the same number.
+  // The old assertion `ownership.total !== assets` held only because holo was
+  // fenced out of the balance; it is kept here re-aimed at the reason that
+  // survives — staked stamps are not spendable.
+  assert.equal(k0.assets, 11, "assets carry the holo stamp too");
+  assert.equal(k0.ownership.total, k0.assets,
+    "with no keeping leg, ownership and assets agree — holo is in both, staked is in both, nothing is fenced");
+  assert.equal(k0.liquid, 5, "and liquid is what is actually free to spend: minted 11 − staked 6");
+  assert.ok(k0.liquid < k0.assets, "ownership is still not a spendable number — a staked stamp is not free");
+});
+
+test("D1: ownership is a derived READ — minted (all sources), holo inside it, with its parts shown", () => {
   // LAW D1 (Keemin, 2026-08-21): "ownership is a derived READ = minted (all
-  //         sources) + holo — NOT a tense; no fifth tense node."
+  //         sources) + holo — NOT a tense; no fifth tense node." The "+ holo"
+  //         half is AMENDED 2026-09-17 (see the falsifier above); the rest of
+  //         D1 — a READ, not a tense, with its parts shown — stands.
   // LAW R12: the σ leg "COUNTS toward the ρ base" and IS mint — so it is inside
   //          "minted (all sources)", which is the whole reason this block exists.
   const db = fundingDb();
@@ -458,15 +580,22 @@ test("D1: ownership is a derived READ — minted (all sources) + holo, with its 
   assert.equal(w.ownership.minted_keeping, 2);
   assert.equal(w.ownership.minted, 11, "minted = all sources");
   assert.equal(w.ownership.holo, 0);
-  assert.equal(w.ownership.total, 11, "ownership = minted + holo");
+  assert.equal(w.ownership.total, 11, "ownership = minted (all sources) + the keeping leg");
   assert.notEqual(w.ownership.total, 9, "leaving the keeping leg out would under-read what wright owns");
 
-  // keemin paid: 10 earned, no keeping, 1 holo
+  // keemin paid: 10 primary + 1 holo = 11 minted (the town's fold), no keeping.
+  // ⚠ `minted_earned` IS `mint_count`, and since 2026-09-17 that number carries
+  // holo — so the field's NAME now over-promises. Fixing the name is a RENAME on
+  // a live door's answer, which this lane may not do; it is reported up on
+  // postmark-town/postmark#2885 instead. The value is right and is checked here
+  // against what it actually holds, so a future rename starts from a true test.
   const k = stampsDetail(db, "keemin");
-  assert.equal(k.ownership.minted, 10);
+  assert.equal(k.ownership.minted_earned, 11,
+    "the town's mint_count, holo inside it — the `_earned` in the name is the drift this ruling created");
+  assert.equal(k.ownership.minted, 11);
   assert.equal(k.ownership.minted_keeping, 0);
-  assert.equal(k.ownership.total, 11, "10 minted + 1 holo");
-  assert.notEqual(k.ownership.total, k.assets, "ownership is not a balance — holo is in it and staked stamps are not spendable");
+  assert.equal(k.ownership.holo, 1, "and holo says how much of the 11 came from giving");
+  assert.equal(k.ownership.total, 11, "11 minted, holo counted once inside it");
 
   // and the promise on it is the same one holo carries everywhere
   assert.equal(k.ownership.caption, HOLO_CAPTION, "a record of contribution, not a promise of profit");
@@ -480,6 +609,70 @@ test("a household with zero holo reads a well-formed empty section, not an absen
   assert.deepEqual(d.holo.mints, []);
   assert.equal(d.holo.caption, HOLO_CAPTION, "the caption stands even at zero");
   assert.equal(d.stamps, 3, "the old numbers are untouched");
+});
+
+// ── THE RULING'S OWN ESTATE FALSIFIER (the sweep brief, 2026-09-17) ──────────
+//
+// "an estate with primary 10, holo 3, staked 4 reads `minted 13 · liquid 9 ·
+// holo 3`". Seeded the way the town's amended folds write the `stamps` table —
+// a holo row of n credited to the payer by kind, so it is inside mint_count and
+// inside balance before this read ever sees it.
+//
+// ⚠ WHAT THIS PROVES AND WHAT IT DOES NOT. It proves the office does not fence
+// holo out and does not add it twice. It CANNOT prove the credit itself: the
+// fold that does the crediting is the town's (tools/stamp-mint.mjs, imported
+// live by src/hydrate.mjs), and this repo has no copy of it to flip. The
+// office-side flip that DOES red is the double-count one, above.
+test("THE ESTATE FALSIFIER: primary 10 + holo 3, staked 4 reads minted 13 · liquid 9 · holo 3", () => {
+  const db = new DatabaseSync(":memory:");
+  db.exec(SCHEMA);
+  // 10 primary + 3 holo = 13 minted; 4 staked, so 9 free to spend
+  db.prepare("INSERT INTO stamps (handle, balance, mint_count, staked) VALUES (?,?,?,?)").run("giver", 9, 13, 4);
+  const insHolo = db.prepare("INSERT INTO funding_holo (party, pot, holo, epoch, date, receipt) VALUES (?,?,?,?,?,?)");
+  insHolo.run("giver", "keeping-ec2", 2, "2026-09", "2026-09-30", "ch_one");
+  insHolo.run("giver", "keeping-ec2", 1, "2026-09", "2026-09-30", "ch_two");
+
+  const d = stampsDetail(db, "giver");
+  assert.deepEqual(
+    { minted: d.tenses.minted, liquid: d.tenses.liquid, staked: d.tenses.staked, holo: d.tenses.holo },
+    { minted: 13, liquid: 9, staked: 4, holo: 3 },
+    "the brief's own numbers, off the office's own read",
+  );
+  assert.equal(d.assets, 13, "liquid + staked — the holo stamps are in there");
+  assert.equal(d.ownership.total, 13, "and ownership is the same 13, not 16: holo counted once");
+  assert.equal(d.tenses.minted - d.tenses.holo, 10, "primary mint is what is left when the gift is taken out");
+});
+
+// THE CLIP, AND AN HONEST NOTE ABOUT WHAT IT MEASURES. The brief asked for "a
+// stake of 12 by that household is admitted by the office's clip (it was 10
+// before) — quote the door's clip line". The line is src/pot-stake-exec.mjs
+// § clipPotStake:
+//
+//     const balance = state.balances.get(handle) ?? 0;
+//     const applied = Math.min(n, balance);
+//
+// and `state` is the TOWN's ballotState, whose `balances` is the town's
+// foldBalances (tools/ballot.mjs L53). So the office's clip admits 12 for the
+// same reason its estate read says 13: the town's fold credited the holo. This
+// test pins that the clip reads the balance it is handed and clips to nothing
+// else — it is NOT a proof of the holo credit, and saying so is the point.
+test("the clip admits a stake the holo made affordable — it clips to the town's balance and to nothing else", async () => {
+  const { clipPotStake } = await import("../src/pot-stake-exec.mjs");
+  const pots = [{ id: "keeping-ec2", data: { ...POT_FILE, status: "open" } }];
+  const state = { balances: new Map([["giver", 13]]), lawAt: () => ({ meeps: new Set() }) };
+  const r = clipPotStake({ state, pots, handle: "giver", pot: "keeping-ec2", n: 12, date: "2026-10-01" });
+  assert.equal(r.applied, 12, "12 of 13 — with the pre-ruling 10 this would have clipped to 10");
+  assert.equal(r.clipped, false);
+  assert.equal(r.balance_before, 13);
+  assert.equal(r.balance_after, 1);
+  // the same door on the pre-ruling balance, so the number above is a change and
+  // not a coincidence
+  const before = clipPotStake({
+    state: { balances: new Map([["giver", 10]]), lawAt: () => ({ meeps: new Set() }) },
+    pots, handle: "giver", pot: "keeping-ec2", n: 12, date: "2026-10-01",
+  });
+  assert.equal(before.applied, 10, "and it clipped, which is what a giver used to be told");
+  assert.equal(before.clipped, true);
 });
 
 test("the pot board carries the landed pot file's own fields, the roll, and the escrow", () => {
@@ -511,6 +704,18 @@ test("the pot board carries the landed pot file's own fields, the roll, and the 
   assert.match(pot.escrow.teach, /comes home whole/, "the escrow teaches that a stake comes home whole");
   assert.match(pot.escrow.teach, /minted fresh to the givers/, "and that the funded share of the mass sizes the givers' mint — support that returns is only half the story");
   assert.doesNotMatch(pot.escrow.teach, /BURNS/, "the repealed sentence must not be taught");
+  // AMENDED 2026-09-17. The escrow teach is the pot board's own account of what a
+  // close does, and the ruling changed two things in it: the mint's SHAPE (the
+  // givers' reward IS the holo row, one per receipt settled — there is no
+  // `for: funding:` row and never was one) and the cap's BASE (the founder:
+  // "funding minted stamps contribute to the max stamps you can get from another
+  // fund. it compounds by design"). Both are asserted, because a teach line with
+  // no reader is the drift class this lane has found three times today.
+  assert.match(pot.escrow.teach, /HOLO ROWS, one per receipt the close settles, 0 included/,
+    "the escrow names the row the close actually writes, zeros included — the mark that a receipt is settled");
+  assert.match(pot.escrow.teach, /rho-capped against their mint from every source/,
+    "and the cap's base, which the ruling widened; 'rho-capped' alone hid which base");
+  assert.match(pot.escrow.teach, /compounds by design/, "in the founder's own words");
   assert.ok(b.invalid_rows.list.length >= 9, "every forged and guessed-grammar row is surfaced on the community read");
   assert.ok(pot.teach && pot.patrons.teach && pot.escrow.teach && pot.receipts.teach && b.invalid_rows.teach);
 });
@@ -519,7 +724,17 @@ test("the pot board carries the landed pot file's own fields, the roll, and the 
 const BOUNTY_ROW = {
   id: "keeping-ec2", title: "Keep the lights on (the town box)", subtype: "bounty",
   cadence: "ongoing", validation: "needs-review", status: "draft", target: 150,
-  reward: "minted back to the stakers, source-tagged for keeping; soulbound holo to the payers",
+  // ⚠ RE-TRANSCRIBED 2026-09-17, and it was stale on TWO counts, only one of
+  // them this ruling's. It said "minted back to the stakers, source-tagged for
+  // keeping; soulbound holo to the payers" — but the town's own row was
+  // rewritten by the 2026-09-14 amendment (nothing burns; there is no keeping
+  // mint) and nothing here noticed, because nothing in the office READS this
+  // string for meaning: it is fed through questBoardFor only to prove a bounty
+  // comes off the card deck. A transcription with no reader drifts silently.
+  // Below is the town's live row at postmark-town/postmark@9468d6e34
+  // (quest-registry.json § keeping-ec2) with the rho spelled out, which is the
+  // one thing a JSON fixture cannot carry verbatim.
+  reward: "every stake comes home whole at the close; the share of the staked mass the month's dollars funded is minted fresh to the givers by dollar share (own household excluded, rho-capped). Stakes are lent, never burned.",
 };
 
 async function board(db, quests) {
@@ -554,11 +769,22 @@ test("the holo teach says what holo is short for, once, from the one constant", 
   // constant, so the wording is law — this asserts the words themselves, not
   // just that some expansion exists, because a paraphrase would drift the two
   // surfaces apart silently.
+  //
+  // AMENDED 2026-09-17. The etymology is the founder's 2026-08-26 sentence and
+  // stands; its closing clause — "never spent as postage" — was the repealed law
+  // wearing the metaphor's clothes ("non-spendable is repealed; the stamps are
+  // like any other, but are holo to signify the special source"), so exactly
+  // that clause moved and nothing else did. ⚠ THE SITE'S TWIN MOVES WITH IT:
+  // postmark-site src/lib/funding.mjs § HOLO_NAME_LINE and its own falsifier at
+  // test/funding.test.mjs. Nothing cross-checks the two repos, so if one of the
+  // two PRs lands alone the town teaches two sentences and no suite says so.
   assert.equal(
     HOLO_EXPANSION,
-    "short for holographic stamp — the collector's shiny kind, kept in the album and shown, never spent as postage.",
+    "short for holographic stamp — the collector's shiny kind, kept in the album and shown; unlike the collector's, this one still spends.",
     "the expansion is law, byte for byte",
   );
+  assert.doesNotMatch(HOLO_EXPANSION, /never spent as postage/,
+    "the repealed clause must not survive inside the name-teaching, which is the sentence most residents meet first");
   assert.ok(TEACH.holo.includes(HOLO_EXPANSION), "the holo teach composes the constant, never a retyped copy");
 
   // FIRST MENTION ONLY: every other teach line stays bare "holo", so the

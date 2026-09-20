@@ -46,7 +46,7 @@ import { existsSync, mkdirSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { OFFICE_ROOT, WORLD_CLONE } from "./world-store.mjs";
-import { publishedMainSha } from "./world-serve.mjs";
+import { servedCanonSha } from "./world-serve.mjs";
 // THE CODE FALLBACK IS AN EDGE, NOT A COPY. The no-literals law says a class
 // constant has exactly one home; until every reader edges to the class mark,
 // the office's shipped constants are the second-best home, and this module
@@ -415,7 +415,7 @@ export function soundClass({ worldDb = null, repo = WORLD_CLONE } = {}) {
       }
     }
     // Freshness is measured but never withheld — see the ruling above.
-    try { fresh = asOfWorld != null && asOfWorld === publishedMainSha(repo); }
+    try { fresh = asOfWorld != null && asOfWorld === servedCanonSha(repo); }   // the blessed sha, as every gate (postmark#2934)
     catch { fresh = null; }
   }
 

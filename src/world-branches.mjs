@@ -21,6 +21,8 @@ import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 
+import { NEWEST_SETTLEMENT_FORMAT, newestSettlementFromRefLines } from "./settlements.mjs";
+
 const HOUSEHOLD_RE = /^[a-z0-9][a-z0-9._-]*$/i;
 const viewCache = new Map();
 
@@ -275,6 +277,73 @@ export function freshestMainRef(repo) {
   throw new Error("world clone has no main ref");
 }
 
+// ── THE BLESS OVERRIDES THE TICK (Keemin, 2026-09-18; postmark#2934) ─────────
+//
+// "Shouldn't the bless override the tick?" — yes. The crossing commits its
+// candidate to world main and the tick fetches it within fifteen minutes, so
+// every read above served a tree the keeper had not yet judged — while the
+// viewer, the site, the parcel drain and live claims waited for his tag. Two
+// truths; this morning Berthillon's shop at (167, 16) on the doors and
+// (221, 95.5) on the map. The model: the candle burns live in the store, the
+// clearing at the close LOCKS standing, the sweep materialises the receipt, the
+// bless is JUDGMENT on the receipt. The doors' standing follows the last state
+// a judgment accepted; the docket is untouched.
+//
+// So the READ tier's canon ref is no longer main's freshest line but the newest
+// `settlement/S<n>` tag, peeled to the commit it blesses. The number counts
+// blessings, not beats (`settlements.mjs`): a refused crossing never reaches
+// the doors, because nothing is tagged. The pen is untouched — `mainRef()` still
+// forks a draft from the freshest local main, because a draft must rebase onto
+// what the crossing will actually sweep, not onto what was last blessed.
+//
+// FALLBACK, said in the answer: a clone with no settlement tag at all (a fresh
+// box, a fixture, a shallow clone) serves `freshestMainRef` and reports
+// `source: "main"`. Anything else — a tag that will not peel, a `for-each-ref`
+// that fails — is the same fallback with the same disclosure, never a throw:
+// a read tier that goes dark because a tag is malformed serves nobody.
+//
+// `candidate_ahead` names main's commit when it is not the blessed one — the
+// crossing's candidate the keeper has not (yet) accepted. The header cannot say
+// "refused" or "unblessed": a refusal leaves no record the clone can read, and
+// "not yet" and "never" look identical from here. It says the sha and lets the
+// keeper's tag, or its absence at the next attempt, say which.
+//
+// NOT MEMOISED, for freshestMainRef's reason above: this is a law, and a law
+// that answers from five seconds ago is not the law. One `for-each-ref` spawn
+// plus main's resolution; the callers that ask per request already pay
+// `publishedState`'s spawns, so the cadence is theirs to fix, not this reading's.
+//
+// Interim (Wright, #2934): retires with the read flip (POS-104), when standing
+// comes from the clearing's lock rather than from a git tag.
+export function blessed(repo) {
+  const mainRefName = freshestMainRef(repo);
+  const mainSha = git(repo, ["rev-parse", `${mainRefName}^{commit}`]).trim();
+  let newest = null;
+  try {
+    newest = newestSettlementFromRefLines(
+      git(repo, ["for-each-ref", `--format=${NEWEST_SETTLEMENT_FORMAT}`, "refs/tags/settlement/"]));
+  } catch { newest = null; }
+  if (!newest) {
+    return {
+      ref: mainRefName, sha: mainSha, n: null, tag: null, source: "main",
+      main_ref: mainRefName, main_sha: mainSha, candidate_ahead: null,
+      disclosed: "no settlement tag in the world clone — the read tier is serving main, not a blessing",
+    };
+  }
+  return {
+    ref: `refs/tags/${newest.tag}`, sha: newest.sha, n: newest.n, tag: newest.tag, source: "settlement",
+    main_ref: mainRefName, main_sha: mainSha,
+    candidate_ahead: mainSha === newest.sha ? null : mainSha,
+    disclosed: null,
+  };
+}
+
+/** The READ tier's ref: the newest blessing, or main when there is none (see `blessed`). */
+export function blessedRef(repo) { return blessed(repo).ref; }
+
+/** The READ tier's sha — what the store must be hydrated at to be fresh. */
+export function blessedSha(repo) { return blessed(repo).sha; }
+
 // Materialise a directory AT A REF into a sha-keyed cache, and hand back a path
 // safe to import from.
 //
@@ -294,7 +363,10 @@ export function freshestMainRef(repo) {
 // out together — which is why this copies a DIRECTORY rather than one file.
 const ENGINE_CACHE = join(tmpdir(), "postmark-engine");
 export function materializeAtRef(repo, ref, subdir, cacheRoot = ENGINE_CACHE) {
-  const sha = git(repo, ["rev-parse", ref]).trim();
+  // ^{commit}: a settlement tag is an ANNOTATED tag object, and a cache keyed on
+  // the tag object rather than the commit it blesses would be keyed on a thing
+  // no `git log` can find (settlements.mjs:120 learned the same lesson).
+  const sha = git(repo, ["rev-parse", `${ref}^{commit}`]).trim();
   const dir = join(cacheRoot, `${sha}--${subdir.replace(/[^\w.-]/g, "_")}`);
   const stamp = join(dir, ".materialized");
   if (existsSync(stamp)) return dir;
@@ -601,11 +673,15 @@ export function foldedStateAtRef(repo, ref, { stakes = null } = {}) {
 // crossing-save pulled at 12:02Z, while the same answer's `law.as_of_world` —
 // off `world.db`, hydrated from `origin/main` — already named the newer world.
 export function publishedState(repo) {
-  const main = freshestMainRef(repo);
+  // The READ tier's ref is the newest blessing (see `blessed`); the record it
+  // returns rides along so the answer can say WHICH settlement it served and
+  // whether main holds a candidate ahead of it.
+  const canon = blessed(repo);
   return {
-    ref: main,
-    sha: git(repo, ["rev-parse", `${main}^{commit}`]).trim(),
-    state: readJsonAtRef(repo, main, "WORLD/world-state.json"),
+    ref: canon.ref,
+    sha: canon.sha,
+    state: readJsonAtRef(repo, canon.ref, "WORLD/world-state.json"),
+    blessed: canon,
   };
 }
 
@@ -613,8 +689,8 @@ export function publishedState(repo) {
 // world's own record, and a sketchbook holds marks. It followed the draft ref
 // only because the read tier once did.
 export function publishedSkeleton(repo) {
-  const main = freshestMainRef(repo);
-  return { ref: main, skeleton: readJsonAtRef(repo, main, "WORLD/skeleton.json") };
+  const ref = blessedRef(repo);
+  return { ref, skeleton: readJsonAtRef(repo, ref, "WORLD/skeleton.json") };
 }
 
 function parseDeltaRecord(text, path) {
@@ -660,7 +736,7 @@ export function draftDeltaForKey(repo, key) {
   // `mainRef` a mark the settlement published six hours ago is still "added",
   // so the drafts list and the focus disagreed about the same mark — the shape
   // walk #2 read as "the focus says no mark, the shadow says draft".
-  const base = freshestMainRef(repo);
+  const base = blessedRef(repo);
   const ref = draftRefForHousehold(repo, household);
   const mainSha = git(repo, ["rev-parse", `${base}^{commit}`]).trim();
   if (!ref) return {

@@ -470,7 +470,13 @@ test("the health surface names the mode, the shas, and whether the store is fres
   assert.equal(h.db.present, true);
   assert.equal(h.db.as_of_world, MAIN_SHA);
   assert.equal(h.main.sha, MAIN_SHA);
-  assert.equal(h.main.fresh, true);
+  // `fresh` moved to the blessed block (postmark#2934): the gate compares the
+  // store to what the read tier serves; this fixture has no settlement tag, so
+  // the blessing IS main and the panel says so
+  assert.equal(h.blessed.sha, MAIN_SHA);
+  assert.equal(h.blessed.source, "main");
+  assert.equal(h.blessed.fresh, true);
+  assert.equal(h.main.ahead_of_blessed, false);
   assert.equal(h.counters.compared, 1);
   assert.equal(h.db.ring_carrying_marks, 1);
   assert.equal(h.shadow_log.path, logPath);
@@ -480,7 +486,7 @@ test("the health surface reports a stale store as not fresh", () => {
   buildStore({ sha: "f".repeat(40) });
   serve.resetStoreSnapshot();
   const h = serve.worldStoreHealth({ repo });
-  assert.equal(h.main.fresh, false);
+  assert.equal(h.blessed.fresh, false);
   assert.equal(h.db.as_of_world, "f".repeat(40));
   buildStore();
   serve.resetStoreSnapshot();

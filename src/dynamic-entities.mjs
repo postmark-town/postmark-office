@@ -33,7 +33,7 @@ import { pathToFileURL } from "node:url";
 
 import { OFFICE_ROOT, WORLD_CLONE } from "./world-store.mjs";
 import { freshestMainRef, materializeAtRef } from "./world-branches.mjs";
-import { publishedMainSha } from "./world-serve.mjs";
+import { servedCanonSha } from "./world-serve.mjs";
 import { movementV2Enabled, openDynamic, putMeta } from "./dynamic-store.mjs";
 
 // The vessel appears in the walk ledger as an actor — she is a mark that moves,
@@ -104,6 +104,10 @@ export async function worldToolModule(file, { repo = WORLD_CLONE } = {}) {
   const hit = _toolModules.get(key);
   if (hit && Date.now() - hit.at < TOOL_TTL_MS) return hit.mod;
 
+  // DELIBERATELY NOT `blessedRef` (postmark#2934's carve-out): this module
+  // feeds the LIVE reads — `dynamic-presence` (/world/present) and
+  // `world-movement` (walkers now) — whose physics must match the pen that is
+  // writing departures on main this minute, not the engine of the last bless.
   const ref = freshestMainRef(repo);
   if (hit && hit.ref === ref) { hit.at = Date.now(); return hit.mod; }
 
@@ -238,9 +242,12 @@ export function readDepartureEvents({ worldDb = null, repo = WORLD_CLONE } = {})
   // so that is what is compared: the ledger's blob at the hydrated sha against
   // its blob at published main. A commit that touched STATE/, a mark, or a law
   // leaves this equal, correctly.
+  // …and "published main" is now the SERVED canon — the newest blessing, the
+  // sha the tick hydrates at (postmark#2934). The ledger comparison is kept:
+  // a bless that touched no walk leaves this equal, correctly.
   let fresh = null, mainSha = null;
   try {
-    mainSha = publishedMainSha(repo);
+    mainSha = servedCanonSha(repo);
     if (meta.as_of_world === mainSha) fresh = true;
     else fresh = ledgerBlob(repo, meta.as_of_world) === ledgerBlob(repo, mainSha);
   } catch { fresh = null; }

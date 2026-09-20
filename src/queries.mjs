@@ -1711,12 +1711,28 @@ export function stampsFor(db, handle) {
 // back-compat (the resident page + read_stamps have always read it).
 //
 // The funding seam (2026-08-21) grows this read a fourth tense: `tenses` names
-// minted/liquid/staked/holo side by side, and `holo` is the household's
-// soulbound record of contribution (NEVER a balance — it lives outside assets,
-// and the caption on the section is law). Each of its rows carries what the
+// minted/liquid/staked/holo side by side, and `holo` is how many of the
+// household's minted stamps came from giving. Each of its rows carries what the
 // household funded and how many dollars it paid, read off the pot-receipt the
 // row's `ref:` names — the founder's 2026-08-26 ruling keeps `pot-receipt` the
 // only money row, so this read joins rather than duplicating.
+//
+// AMENDED 2026-09-17 — THE FOUNDER'S RULING, verbatim: "non-spendable is
+// repealed; the stamps are like any other, but are holo to signify the special
+// source." Holo is fresh mint to a giver, liquid like any stamp; the word names
+// its source and its ink. This read does NOT gain a holo arm for it: `balance`,
+// `mint_count` and `staked` come off the `stamps` table, which src/hydrate.mjs
+// writes from the TOWN's own foldBalances / foldMintCount / foldStaked imported
+// live from the checkout. So `minted` and `liquid` here carry holo BY
+// DERIVATION the moment the town's folds credit it (postmark-town/postmark
+// #2811) and the box rehydrates — and adding a second credit here would pay the
+// payer twice.
+//
+// WHAT DID HAVE TO CHANGE is one sum the old law had made harmless. `ownership`
+// was D1's "minted (all sources) + holo" while holo sat OUTSIDE minted; now
+// holo is INSIDE `mint_count`, so adding it again double-counts. The block
+// keeps every field and every name, `holo` still reads the household's holo,
+// and `total` counts it exactly once.
 // Household-keyed rows answer to the declared slug when the registry resolves it
 // AND to the handle itself (fixtures, named outsiders, pre-registry rows).
 //
@@ -1750,19 +1766,24 @@ export function stampsDetail(db, handle) {
     return {
       ...base,
       // Four tenses, and keeping mint is deliberately NOT a fifth — D1 rules
-      // ownership a READ, not a tense. `minted` here stays the EARNED primary
-      // number, because it is the one the tense arithmetic reconciles against
-      // (liquid = minted − staked); the keeping leg carries no coin, so folding
-      // it in would break that invariant while looking plausible. It is named
-      // beside the tenses, and summed in the `ownership` block below.
+      // ownership a READ, not a tense. `minted` is the town's own mint_count,
+      // which since the 2026-09-17 ruling is primary mint PLUS holo — the
+      // number the tense arithmetic reconciles against (liquid = minted −
+      // staked). The keeping leg still carries no coin, so folding IT in would
+      // break that invariant while looking plausible; it is named beside the
+      // tenses and summed in the `ownership` block below.
       tenses: { minted: mint_count, liquid, staked, holo, minted_keeping: keeping_total, teach: TEACH.tenses },
-      // D1: "ownership is a derived READ = minted (all sources) + holo."
+      // D1: "ownership is a derived READ = minted (all sources) + holo" —
+      // AMENDED 2026-09-17. Holo is now inside the town's mint_count, so it is
+      // counted ONCE, here, and `holo` beside it says how much of the minted
+      // number came from giving. Adding it again was right while soulbound
+      // stood and is a double-count now.
       ownership: {
         minted_earned: mint_count,
         minted_keeping: keeping_total,
         minted: mint_count + keeping_total,
         holo,
-        total: mint_count + keeping_total + holo,
+        total: mint_count + keeping_total,
         caption: HOLO_CAPTION,
         teach: TEACH.ownership,
       },

@@ -22,6 +22,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 
+import { WHAT_THIS_BUYS } from "../src/funding.mjs";
 import { verifyUsdcPayment, INTAKE, USDC, TRANSFER_TOPIC, MIN_CONF } from "../src/usdc-witness.mjs";
 import { fundVerify, fundGuards, intakeDisclosure } from "../src/fund.mjs";
 
@@ -170,7 +171,11 @@ test("the happy path: a witnessed payment lands as a real pot-receipt row", asyn
   assert.equal(rec.receipt_ref, `usdc:base:${HASH}`);
   assert.equal(rec.headroom_after, 50, "$100 of a $150 need leaves $50");
   assert.equal(rec.caption, "a record of contribution, not a promise of profit");
-  assert.match(rec.what_this_buys, /ownership and memory, never voice/);
+  // AMENDED 2026-09-17 (the founder: "holo does anything a normal stamp can;
+  // staking vs voting is a nondistiction"). It read /ownership and memory,
+  // never voice/ -- the repealed law, on the live door at the money moment.
+  assert.equal(rec.what_this_buys, WHAT_THIS_BUYS,
+    "the verify receipt serves the one disclosure, never a second copy of it");
 
   // the row is REAL: the town's own classifier reads it, and the ledger verifies
   const rows = entriesOf(town.repo).map((e) => ENGINE.classifyEntry(e.canonical));
@@ -332,8 +337,8 @@ test("every answer this door gives carries the two sentences the money moment ow
     record: cliRecorder(town),
   });
   assert.equal(rec.caption, "a record of contribution, not a promise of profit");
-  assert.equal(rec.what_this_buys,
-    "this buys ownership and memory, never voice, and converts to real value only if the town someday does");
+  assert.equal(rec.what_this_buys, WHAT_THIS_BUYS,
+    "and so does the recorded path -- one sentence, one home, two callers");
 });
 
 // ════════════════════════════════════════════════════════════════════════════

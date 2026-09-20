@@ -581,6 +581,20 @@ test("F7c5 · THE MORNING PAGE DID NOT FATTEN — the doorstep bundle is byte-id
   // whole reason the block is two strings instead of a page. Hal's foyer bought
   // that 63% and it is not being spent back a field at a time.
   //
+  // ⚠ AND REGENERATED A THIRD TIME, 2026-09-17, for the holo-is-liquid ruling
+  // ("non-spendable is repealed; the stamps are like any other, but are holo to
+  // signify the special source"). Same discipline, same note, and the diff was
+  // run leaf by leaf BEFORE the capture: 616 paths before, 616 after, none added
+  // and none removed, and exactly FOUR changed — `full.stamps.tenses.teach`,
+  // `full.stamps.holo.teach`, `full.stamps.ownership.teach` and
+  // `full.stamps.keeping_mint.teach`, the four sentences the ruling repealed.
+  // The ceiling it moves: 14690 -> 14995 on the full skin (+305, +2.08%), and
+  // the SLIM skin is BYTE-IDENTICAL at 12699 — the connector's morning page did
+  // not move at all, because its abridgement already cuts the stamps teaching.
+  // The ruling is taught in FULL on the holo section alone (holo's home, the
+  // first-mention rule HOLO_EXPANSION already follows); the other three carry
+  // only the fact that changed, which is what kept +840 down to +305.
+  //
   // So the assertion below is the one that actually carries the promise, and it
   // is stated separately so a future regeneration cannot quietly absorb a card:
   assert.equal(JSON.stringify(now).includes('"card"'), false,

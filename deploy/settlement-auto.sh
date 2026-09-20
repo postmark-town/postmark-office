@@ -810,6 +810,15 @@ if [ "$SOURCE" = "store" ]; then
     exit 1
   fi
   echo "[settlement-auto] store: $(node -e 'const r=require(process.argv[1]);const a=r.as_of||{};const g=r.ingest||{};process.stdout.write(String(r.written||0)+" of "+String(r.marks||0)+" mark(s) written into "+String((r.households||[]).length)+" sketchbook(s) at window "+String(a.window)+" ("+String(r.unchanged_skipped||0)+" unchanged, not re-materialized)"+(function(c){return c&&c.checked?(c.count?"; CARRIED "+c.count+" canon-absent mark(s) from earlier window(s): "+c.slugs.join(", "):((c.skipped_no_household||[]).length?"; carried 0 of "+(c.count+(c.skipped_no_household||[]).length)+" canon-absent mark(s)":"; carried 0, canon complete at "+String(c.canon_sha||"?").slice(0,9)))+((c.skipped_no_household||[]).length?"; SKIPPED "+c.skipped_no_household.length+" canon-absent mark(s) with NO HOUSEHOLD (needs a person, not a crossing): "+c.skipped_no_household.join(", "):""):"; CARRY NOT CHECKED (no --world-repo)";})(((r.selection||{}).carried_absent)||null)+"; escrow ingested at town "+String(g.storeSha||"?").slice(0,9)+" ("+String(g.reason||"?")+(Number.isFinite(g.behind)?", behind "+g.behind:"")+"); cleared "+String((r.sketchbooks_cleared||{}).removed_remote||0)+" origin + "+String((r.sketchbooks_cleared||{}).removed_local||0)+" local git-era draft ref(s)")' "$STORE_JSON")" >&2
+  # THE FRAMER'S ROWS, SHOUTED. A world-framed record carried into a nested
+  # frozen filing is re-expressed in that filing's frame by the drain's one
+  # framer (postmark#2865, the third bite, 2026-09-18: without it Berthillon's
+  # image-only amend moved the shop 54 m under a green suite). Every such row is
+  # named here with both numbers, so the keeper can check the carriage against
+  # the fold's placement rather than discover it in the tier falsifier.
+  if [ "$(node -e 'const r=require(process.argv[1]);process.stdout.write(String(((r.framed||[]).length) > 0))' "$STORE_JSON" 2>/dev/null)" = "true" ]; then
+    echo "[settlement-auto] FRAMED $(node -e 'const r=require(process.argv[1]);const f=r.framed||[];process.stdout.write(f.length+" world-framed record(s) at nested filing(s): "+f.map((x)=>x.id+" "+JSON.stringify(x.from.at)+" -> "+JSON.stringify(x.to.at)).join("; "))' "$STORE_JSON")" >&2
+  fi
   # THE INGEST DISTANCE, SHOUTED WHEN IT IS NOT ZERO. The crossing is lawful and
   # publishes: its escrow is honestly as-of the ingested sha. But an ingest that
   # quietly stopped is the starving-crossing shape one layer up, and a receipt

@@ -121,6 +121,47 @@ export function renderRecord(row) {
   return markRecord(recordFromRow(row), row.body ?? "");
 }
 
+/**
+ * WHICH FRAME the record's `at`/`points` are written in — `"file"` when the row
+ * still carries the file's own numbers (`_fileAt`, left by the loader at seed),
+ * `"world"` when it does not, which is every row the door has written since:
+ * `materialize.mjs § materializeClaims` rewrites `data` from the claim on an
+ * amend, and the door's payload has no `_fileAt`.
+ *
+ * It is named beside the bytes because the bytes cannot say. `at: { x: 221,
+ * y: 95.5 }` reads the same whether it is a world position or an offset from a
+ * frame, and on 2026-09-18T05:45Z the difference moved a shop 54 m west and
+ * 79.5 m north: Berthillon's image-only amend of `le-petit-berthillon` was
+ * rendered from `geometry.at` (world), filed by Gate A at its frozen path under
+ * `the-town-centre` (whose origin is (-54, -79.5)), and the fold read the world
+ * number as a file number. The write-down (`store-writedown.mjs`) frames a
+ * `"world"` record landing at a nested path through the drain's one framer; a
+ * `"file"` record is left as the file's own numbers, which is what they are.
+ * `null` geometry has no frame to name.
+ */
+export function frameOfRow(row) {
+  const g = row?.geometry ?? null;
+  if (!(g && g.at && g.extent)) return null;
+  const f = row.data?._fileAt;
+  return f && Number.isFinite(f.x) && Number.isFinite(f.y) ? "file" : "world";
+}
+
+/**
+ * The fold's mark entry for one row — the bytes, AND the record and body they
+ * were rendered from, AND the frame the record's numbers are in. One helper
+ * because two entry points build these (`fold-delta.mjs § foldDelta`, the
+ * crossing's; `fold-input.mjs § foldInputFromStore`) and a shape assembled twice
+ * is a shape that drifts. The record rides so the write-down can re-derive the
+ * bytes after framing (and so `normalizeMark`'s serialization check has both
+ * sides — `supplied_bytes_only` on the receipt was 3 of 3 on the crossing that
+ * moved the shop, and the receipt's own comment says it should be 0).
+ */
+export function renderedMark(row) {
+  const fileRec = recordFromRow(row);
+  const body = row.body ?? "";
+  return { fileRec, body, at_frame: frameOfRow(row), bytes: markRecord(fileRec, body) };
+}
+
 const MARK_COLUMNS = "id, slug, kind, owner, household, body, geometry, status, locked_window, retired_window, data";
 
 /**

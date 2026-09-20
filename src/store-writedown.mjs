@@ -69,9 +69,9 @@ import { resolve } from "node:path";
 
 import { sketchbookNameForKey } from "./household-logins.mjs";
 import { markRecord } from "./mark-record.mjs";
-import { pathFor } from "./world-journal.mjs";
+import { ROOT_PREFIX, pathFor } from "./world-journal.mjs";
 import { draftBranch, mainRef } from "./world-branches.mjs";
-import { sketchbookBase, writeDownHousehold } from "./world-drain.mjs";
+import { fileFramer, sketchbookBase, writeDownHousehold } from "./world-drain.mjs";
 import { WORLD_CLONE } from "./world-store.mjs";
 // THE ONE COPY of "what is a docket count", from the module that produces the
 // field. The CLI's incomplete-selection refusal reads the same predicate, so the
@@ -235,6 +235,14 @@ export function normalizeMark(m) {
     // `writeDownHousehold` still overrides both when the branch already files
     // this mark somewhere, which is the freeze and is not ours to weaken.
     plannedPath: m.path ?? null,
+    // WHICH FRAME the record's `at`/`points` are in — `"world"` (the door's
+    // grammar: a position as the resident spoke it) or `"file"` (the file's own
+    // numbers, kept from the seed). Named by the supplier (`mark-render.mjs §
+    // frameOfRow`), because the bytes cannot say and the plan must: a world
+    // number landing at a nested frozen path is framed there, once; a file
+    // number is left alone. `null` is a supplier that did not say, and at a
+    // nested path that refuses rather than guessing — see § THE ONE FRAMER.
+    at_frame: m.at_frame === "world" || m.at_frame === "file" ? m.at_frame : null,
   };
 }
 
@@ -330,7 +338,7 @@ export function normalizeFoldInput(input) {
  * rather than read, so the pure half stays pure. GATE A before GATE B, exactly
  * as `planDrain` does it.
  */
-export function planStoreWriteDown(marks, { publishedPathOf = null, canonBytesAt = null } = {}) {
+export function planStoreWriteDown(marks, { publishedPathOf = null, canonBytesAt = null, toFileFrame = null } = {}) {
   const byHousehold = new Map();
   const bucket = (h) => {
     if (!byHousehold.has(h)) byHousehold.set(h, { household: h, upserts: [], removals: [] });
@@ -338,6 +346,7 @@ export function planStoreWriteDown(marks, { publishedPathOf = null, canonBytesAt
   };
 
   const unchanged = [];
+  const framed = [];
   for (const m of marks) {
     // `kind` RIDES SEPARATELY AND IT IS LOAD-BEARING. `pathFor` takes GATE A/B —
     // the freeze's "an existing filing never moves", then "a new mark files at
@@ -374,6 +383,80 @@ export function planStoreWriteDown(marks, { publishedPathOf = null, canonBytesAt
         "mark-without-path",
         `${m.id} resolves to no path — neither canon's filing nor its id can place it`,
       );
+    }
+
+    // ── THE ONE FRAMER, at the one place a row becomes a file (2026-09-18) ────
+    //
+    // The rule is #2151's: the record stores what the resident spoke — WORLD
+    // coordinates — and the carriage into a filing path converts exactly once,
+    // at the moment it decides the path. In the git era that moment was
+    // `planDrain`, with `fileFramer` injected; G1 (2026-09-08) put this module
+    // in the drain's place and carried the bytes without the framer. It could
+    // not have framed them: the fold's entry handed it bytes alone, and bytes
+    // do not say which frame their numbers are in.
+    //
+    // THE THIRD BITE (postmark#2865, the Worldkeeper's 2026-09-18 02:01 EDT
+    // refusal of S72): Berthillon's image-only amend of `le-petit-berthillon`
+    // carried `at: (221, 95.5)` — the shop's WORLD position — in a record
+    // `materialize.mjs` had rewritten from the claim (no `_fileAt`); Gate A
+    // filed it at its frozen path under `the-town-centre`, whose origin is
+    // (-54, -79.5); the fold read 221/95.5 as an offset. World (167, 16): the
+    // shop 54 m west and 79.5 m north, `chez-antoine` no longer its parent,
+    // the cones reparented. Suite green, relation wrong, S72 refused twice.
+    // A CREATE never reaches this: Gate B files it at `WORLD/marks/<by>/<slug>/`,
+    // which is root-framed, so the world number IS the file number.
+    //
+    // So: a WORLD-framed record landing at a NESTED path is framed here, by
+    // the drain's own `fileFramer` (path first, `parent_id` the fallback), and
+    // its bytes re-derived by `markRecord` — the same serializer, once. A
+    // FILE-framed record (the seed's `_fileAt`) is the file's own numbers in
+    // the file's own frame and is left as it is. The nested test is
+    // `planDrain`'s, verbatim. What this module will NOT do is write a world
+    // number raw at a nested path because nobody handed it a framer or a
+    // frame: that is the bug, and it refuses instead — a stopped crossing is a
+    // finding; a moved shop under a green suite is the thing this exists to
+    // make impossible.
+    const nested = path.startsWith(`${ROOT_PREFIX}/`)
+      && path.slice(ROOT_PREFIX.length + 1).split("/").length > 2;
+    const rec = m.fileRec ?? null;
+    // Bytes alone can still be SEEN to carry a position, even if they cannot be
+    // framed: a bytes-only supplier at a nested path is refused below, not
+    // waved through as "nothing to frame".
+    const positioned = rec ? !!(rec.at || rec.points) : /^(at|points):/m.test(String(m.bytes ?? ""));
+    let fileRec = rec, body = m.body, bytes = m.bytes;
+    if (nested && positioned && m.at_frame !== "file") {
+      if (!rec || m.at_frame !== "world") {
+        throw new FoldInputRefusal(
+          "mark-frame-unnamed",
+          `${m.id} lands at the nested filing ${path} carrying \`at\`/\`points\`, and its supplier `
+          + (rec ? "did not say which frame those numbers are in (`at_frame` is neither `world` nor `file`)"
+            : "handed bytes with no record to frame (`fileRec`/`body` absent)")
+          + ". A world number written raw into a frame-relative file is the 2026-09-18 Berthillon carriage "
+          + "(postmark#2865); refusing rather than guessing.",
+        );
+      }
+      if (typeof toFileFrame !== "function") {
+        throw new FoldInputRefusal(
+          "mark-frame-unavailable",
+          `${m.id} lands at the nested filing ${path} with world-framed \`at\`/\`points\` and no framer was available `
+          + "(`fileFramer` returned null: the world tree does not declare `coords: relative`, or its fold could not be "
+          + "read). The drain would have written the world number raw here — the pando-peak and Berthillon carriages — "
+          + "so this refuses instead.",
+        );
+      }
+      const shifted = toFileFrame({ at: rec.at ?? null, points: rec.points ?? null, parent_id: rec.parent_id ?? null, path });
+      if (!shifted || !Object.keys(shifted).length) {
+        throw new FoldInputRefusal(
+          "mark-frame-unresolved",
+          `${m.id} lands at the nested filing ${path} with world-framed \`at\`/\`points\`, and the framer could not `
+          + "resolve a frame for that path (no enclosing mark the fossil manifest names carries a centre in the folded "
+          + "state). Null means do not convert, and an unconverted world number at a nested path is a moved mark.",
+        );
+      }
+      fileRec = { ...rec, ...shifted };
+      body = String(m.body ?? "");
+      bytes = markRecord(fileRec, body);
+      framed.push({ id: m.id, path, from: { at: rec.at ?? null, points: rec.points ?? null }, to: shifted });
     }
 
     // ── A CROSSING NEVER RE-MATERIALIZES A MARK IT IS NOT CHANGING ────────────
@@ -414,14 +497,14 @@ export function planStoreWriteDown(marks, { publishedPathOf = null, canonBytesAt
     // rewrite a docket mark whose bytes canon already holds — which is worth
     // doing (23 of 33 at window 177) and is worth nothing on its own.
     const canon = typeof canonBytesAt === "function" ? canonBytesAt(path) : null;
-    if (canon !== null && canon === m.bytes) {
+    if (canon !== null && canon === bytes) {
       unchanged.push({ id: m.id, path, household: m.household, locked_window: m.locked_window });
       continue;
     }
 
     bucket(m.household).upserts.push({
       id: m.id, by: m.by, slug: m.slug, path,
-      fileRec: m.fileRec, body: m.body, bytes: m.bytes,
+      fileRec, body, bytes,
     });
   }
 
@@ -437,10 +520,16 @@ export function planStoreWriteDown(marks, { publishedPathOf = null, canonBytesAt
   return {
     households: [...byHousehold.values()].sort((a, b) => a.household.localeCompare(b.household)),
     unchanged,
+    // THE ROWS THE FRAMER TOUCHED, each with the number that arrived and the
+    // number that was written. On the receipt because the failure this closes
+    // was silent: a crossing that framed nothing while a nested amend was in
+    // its docket is the moved shop, and this is the surface on which it shows.
+    framed,
     counts: {
       marks: marks.length,
       written: written.length,
       unchanged: unchanged.length,
+      framed: framed.length,
       households: byHousehold.size,
       // WHICH WINDOWS THE WRITTEN MARKS WERE LOCKED AT. The delta contract says a
       // crossing's fold should carry the window's own locked marks; this is the
@@ -832,6 +921,12 @@ export function storeWriteDown({
   input,
   at = Date.now(),
   clearSketchbooks = true,
+  // THE FRAMER, injected (`world-drain.mjs § fileFramer`, built over the same
+  // clone at main — the CLI below builds it). Injected rather than built here
+  // because `fileFramer` imports the world's fold and is async, and this
+  // function's callers are not. Omitted, a world-framed record at a nested
+  // path REFUSES rather than landing raw — § THE ONE FRAMER in the plan.
+  toFileFrame = null,
 } = {}) {
   const world = resolve(repo);
   const whenIso = new Date(at).toISOString();
@@ -969,7 +1064,7 @@ export function storeWriteDown({
     carried.push(m);
   }
 
-  const plan = planStoreWriteDown(carried, { publishedPathOf, canonBytesAt });
+  const plan = planStoreWriteDown(carried, { publishedPathOf, canonBytesAt, toFileFrame });
 
   const naming = plan.households.map((h) => ({
     household: h.household,
@@ -1022,6 +1117,12 @@ export function storeWriteDown({
     // them is evidence.
     starving_check: starving,
     written_by_locked_window: plan.counts.written_by_locked_window,
+    // WHAT THE FRAMER TOUCHED: every world-framed record that landed at a
+    // nested frozen path, with the number that arrived and the number written.
+    // `framer: false` is a write-down run with no framer at all — lawful only
+    // while no nested amend is in the docket, and refused the moment one is.
+    framed: plan.framed,
+    framer: typeof toFileFrame === "function",
     serialized_here: normalized.marks.filter((m) => m.serialized_here).length,
     supplied_bytes_only: normalized.marks.filter((m) => !m.serialized_here).length,
     sketchbooks_cleared: cleared,
@@ -1078,12 +1179,16 @@ if (process.argv[1] && (await import("node:fs")).realpathSync(process.argv[1]).r
   if (!inputPath) { console.error("--input <fold-input.json> is required"); process.exit(2); }
   if (!Number.isFinite(at)) { console.error(`unparseable --at: ${atIso}`); process.exit(2); }
   const { readFileSync } = await import("node:fs");
+  const world = resolve(argOf("--world", process.env.WORLD_CLONE ?? WORLD_CLONE));
   let report;
   try {
     report = storeWriteDown({
-      repo: resolve(argOf("--world", process.env.WORLD_CLONE ?? WORLD_CLONE)),
+      repo: world,
       input: JSON.parse(readFileSync(inputPath, "utf8")),
       at,
+      // The drain's framer, over the same clone at main — the one converter,
+      // reached from the crossing's store path exactly as the drain reached it.
+      toFileFrame: await fileFramer(world),
     });
   } catch (e) {
     report = e instanceof FoldInputRefusal

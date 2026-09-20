@@ -189,7 +189,9 @@ export const ACTION_WITHDRAW = "withdraw";
 
 const MARK_ACTIONS = new Set([ACTION_LEAVE, ACTION_AMEND, ACTION_WITHDRAW]);
 
-const ROOT_PREFIX = "WORLD/marks/let-there-be-light";
+// Exported for the store write-down, whose nested-path test is `planDrain`'s
+// verbatim and must spell the root the same way.
+export const ROOT_PREFIX = "WORLD/marks/let-there-be-light";
 
 // THE FREEZE (founder-ruled 2026-08-25; LOGOS/state-and-time.md § "The freeze —
 // filing is static, and the tree is a fossil"):

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // world-hydrate.mjs — build world.db from the world clone at a sha.
 //
-//   node src/world-hydrate.mjs [--world <path>] [--ref <ref|sha>] [--office <path>]
+//   node src/world-hydrate.mjs [--world <path>] [--ref <ref|sha>|blessed] [--office <path>]
 //                              [--db <path>] [--no-lints] [--no-gexf] [--json]
 //
 // The pattern is src/hydrate.mjs's, extended from tables-per-thing to
@@ -40,6 +40,7 @@ import {
   SCHEMA, EDGE_TYPES, WORLD_CLONE, OFFICE_ROOT, DEFAULT_DB,
   git, materializeWorldAtSha, geometryIndex,
 } from "./world-store.mjs";
+import { blessed } from "./world-branches.mjs";
 
 const argOf = (name, fallback) => { const i = process.argv.indexOf(name); return i !== -1 ? process.argv[i + 1] : fallback; };
 const flag = (name) => process.argv.includes(name);
@@ -47,8 +48,22 @@ const flag = (name) => process.argv.includes(name);
 const WORLD = resolve(argOf("--world", WORLD_CLONE));
 const OFFICE = resolve(argOf("--office", OFFICE_ROOT));
 const DB_PATH = resolve(argOf("--db", DEFAULT_DB));
-const REF = argOf("--ref", null);
+const REF_ARG = argOf("--ref", null);
 const JSON_OUT = flag("--json");
+
+// `--ref blessed` (postmark#2934): the newest `settlement/S<n>` tag, peeled to
+// its commit — the same resolution the read tier's fold serves, so store and
+// fold cannot disagree about which world this is. A clone with no settlement
+// tag falls back to main and the store says so in `meta.canon_disclosed`.
+// Resolved ONCE here and passed down as a sha, because `blessed` is a law that
+// is deliberately not memoised and the gates below would otherwise ask twice.
+let BLESSED = null;
+const REF = (() => {
+  if (REF_ARG !== "blessed") return REF_ARG;
+  try { BLESSED = blessed(WORLD); }
+  catch (e) { return "blessed"; }   // the world-git gate names the failure below
+  return BLESSED.sha;
+})();
 
 // ── the gate law ─────────────────────────────────────────────────────────────
 
@@ -83,7 +98,9 @@ const requiredGates = () => {
     if (e instanceof GateRefusal) throw e;
     gateRefuse("world-git", WORLD, `git cannot resolve ${REF ?? "HEAD"} (${String(e.message).split("\n")[0]})`);
   }
-  gatePresent("world-git", WORLD, `${REF ?? "HEAD"} = ${head.slice(0, 12)}`);
+  gatePresent("world-git", WORLD, BLESSED
+    ? `blessed ${BLESSED.tag ?? "(no settlement tag — main)"} = ${head.slice(0, 12)}${BLESSED.candidate_ahead ? ` · main ahead at ${BLESSED.candidate_ahead.slice(0, 12)}` : ""}`
+    : `${REF ?? "HEAD"} = ${head.slice(0, 12)}`);
 
   // The history has to be WALKABLE, not merely present: geometry_versions is
   // derived from it, and a shallow or grafted clone would silently produce a
@@ -1109,7 +1126,13 @@ for (const c of codeFiles) {
 const hydratedAt = new Date().toISOString();
 putMeta.run("as_of_world", worldSha);
 putMeta.run("as_of_office", officeSha ?? "");
-putMeta.run("world_ref", REF ?? "HEAD");
+putMeta.run("world_ref", BLESSED ? BLESSED.ref : (REF ?? "HEAD"));
+// THE TAG SERVED (postmark#2934): `as_of_settlement` is the number the town
+// uses; `candidate_ahead` is main's commit when the keeper has not accepted it.
+// Both null when the store was hydrated at an explicit ref rather than blessed.
+putMeta.run("as_of_settlement", BLESSED?.n == null ? "" : `S${BLESSED.n}`);
+putMeta.run("candidate_ahead", BLESSED?.candidate_ahead ?? "");
+putMeta.run("canon_disclosed", BLESSED?.disclosed ?? "");
 putMeta.run("world_path", WORLD);
 putMeta.run("world_tree_path", TREE);
 putMeta.run("office_path", OFFICE);
@@ -1235,7 +1258,7 @@ if (JSON_OUT) {
 } else {
   for (const w of warn) console.warn(`WARN: ${w}`);
   console.log(`hydrated ${DB_PATH} in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
-  console.log(`  as_of world ${worldSha.slice(0, 12)} (${REF ?? "HEAD"}) · office ${(officeSha ?? "?").slice(0, 12)}`);
+  console.log(`  as_of world ${worldSha.slice(0, 12)} (${BLESSED ? `${BLESSED.tag ?? "main"}, blessed` : (REF ?? "HEAD")}) · office ${(officeSha ?? "?").slice(0, 12)}`);
   console.log(`  nodes ${counts.nodes_total} ${JSON.stringify(counts.nodes_by_kind)}`);
   console.log(`  edges ${counts.edges_total} ${JSON.stringify(counts.edges_by_type)}`);
   console.log(`  events ${counts.events_total} departures (${badLedgerLines.length} lines unparseable)`);

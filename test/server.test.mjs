@@ -510,9 +510,9 @@ test("GET /world/store is a keyless read that reports mode off when nothing is f
   assert.equal(h.mode, "off");
   assert.equal(h.counters.reads, 0);
   assert.equal(h.counters.served_from_store, 0);
-  assert.match(h.eligibility, /published-main reads only/);
+  assert.match(h.eligibility, /blessed reads only/);   // the bless overrides the tick (postmark#2934)
   // no world clone here, so freshness cannot be established — and says so
-  assert.ok(h.main.error || h.main.fresh === false, `expected an honest main answer, got ${JSON.stringify(h.main)}`);
+  assert.ok(h.main.error || h.blessed?.fresh === false, `expected an honest main answer, got ${JSON.stringify(h.main)}`);
   // flag-off equivalence at the HTTP layer: no extra header appears on ANY
   // response, so a flags-off office is byte-identical on the wire too
   assert.equal(res.headers.get("x-postmark-world-store-as-of"), null);

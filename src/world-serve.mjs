@@ -50,7 +50,8 @@ import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 
 import { DEFAULT_DB, OFFICE_ROOT, loadWorldGraph, containmentSpine } from "./world-store.mjs";
-import { draftRefForKey, refExists } from "./world-branches.mjs";
+import { blessed, draftRefForKey, refExists } from "./world-branches.mjs";
+import { nextSettlementAttemptAt } from "./settlements.mjs";
 
 // ── flags ────────────────────────────────────────────────────────────────────
 // Read from the environment on every call rather than latched at import: a test
@@ -312,6 +313,13 @@ export function publishedMainSha(repo) {
   return origin;                                  // diverged: what the world can clone wins
 }
 
+// The sha the READ tier serves — the newest blessing's commit, or main's when
+// the clone carries no settlement tag (`world-branches.mjs § blessed`). Every
+// freshness gate in the office compares the store to THIS, because this is what
+// the fold beside the store is reading (postmark#2934). `publishedMainSha` above
+// stays what it is — main's published line — and names the candidate.
+export function servedCanonSha(repo) { return blessed(repo).sha; }
+
 /**
  * May this read be answered from the store? Returns `{ ok, reason, snap, sha }`.
  *
@@ -328,8 +336,13 @@ export function eligibility({ key = null, repo }) {
   const snap = storeSnapshot();
   if (snap.error) return { ok: false, reason: "store-unavailable", detail: snap.error };
 
+  // THE BLESS OVERRIDES THE TICK (postmark#2934): "the very commit the fold
+  // would have served" is now the newest settlement's, not main's — the fold
+  // reads at `blessedRef`, and the tick hydrates `--ref blessed`, so this gate
+  // compares the store to the same resolution. `main` stays in the fall-through
+  // record as `candidate_ahead` so an operator can see WHY the two differ.
   let sha;
-  try { sha = publishedMainSha(repo); }
+  try { sha = servedCanonSha(repo); }
   catch (e) { return { ok: false, reason: "no-main-sha", detail: String(e?.message ?? e) }; }
   if (!snap.asOfWorld) return { ok: false, reason: "store-unstamped" };
   if (snap.asOfWorld !== sha) return { ok: false, reason: "store-stale", store: snap.asOfWorld, main: sha };
@@ -488,19 +501,30 @@ export function worldStoreHealth({ repo = null } = {}) {
       loaded_at: snap.loadedAt,
     };
 
-  let main = null;
+  // Two blocks, two questions (postmark#2934). `blessed` is what the read tier
+  // serves and what the store must be hydrated at to be fresh; `main` is the
+  // crossing's candidate line, kept so an operator can see the gap between
+  // the tick and the bless — `fresh` moved to the blessed block because that is
+  // the comparison the eligibility gate actually makes now.
+  let main = null, canon = null;
   if (repo) {
     try {
-      const sha = publishedMainSha(repo);
-      main = { repo, sha, fresh: !snap.error && snap.asOfWorld === sha };
+      const b = blessed(repo);
+      canon = {
+        as_of_settlement: b.n == null ? null : `S${b.n}`, ref: b.ref, sha: b.sha, source: b.source,
+        candidate_ahead: b.candidate_ahead, next_attempt_at: nextSettlementAttemptAt(),
+        fresh: !snap.error && snap.asOfWorld === b.sha,
+        ...(b.disclosed ? { disclosed: b.disclosed } : {}),
+      };
+      main = { repo, sha: b.main_sha, ref: b.main_ref, ahead_of_blessed: b.candidate_ahead != null };
     } catch (e) { main = { repo, error: String(e?.message ?? e) }; }
   }
 
   return {
     mode,
     flags: { WORLD_STORE_READS: process.env.WORLD_STORE_READS ?? null, WORLD_STORE_SHADOW: process.env.WORLD_STORE_SHADOW ?? null },
-    eligibility: "published-main reads only — a resolved household folds its draft branch and is never served from the store (ruling 9); the store must also be hydrated at the exact sha main points at",
-    db, main,
+    eligibility: "blessed reads only — a resolved household folds its draft branch and is never served from the store (ruling 9); the store must also be hydrated at the exact sha the newest settlement tag blesses (main, when the clone has no settlement tag)",
+    db, blessed: canon, main,
     counters: COUNT,
     shadow_log: { path: shadowLogPath(), lines_written: LOG_STATE.lines, suppressed: LOG_STATE.suppressed, distinct_diffs: LOGGED.size },
     recent_diffs: RECENT.slice(-RECENT_MAX),

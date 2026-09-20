@@ -110,12 +110,21 @@ fi
 # ── outside the lock: derive from the frozen snapshot (however long) ─────────
 node src/hydrate.mjs --town "$SNAP/town" --db office.db.new
 mv -f office.db.new office.db
-# world.db rides the same tick (dial 8: hydrate on every main-advance; the
-# public clock stays the crossing). origin/main, never HEAD — the pen parks
-# this clone on draft branches, and a draft-stamped store can never be
-# eligible. Non-fatal like the mint: the tick's real job is never held
-# hostage, and a stale-but-good world.db beats no world.db.
-( node src/world-hydrate.mjs --world "$WORLD_CLONE" --ref origin/main --db world.db.new \
+# world.db rides the same tick — AT THE NEWEST BLESSING, never main (Keemin,
+# 2026-09-18, postmark#2934: "shouldn't the bless override the tick?" — yes).
+# The crossing commits its candidate to main and this tick's fetch carries it
+# in within fifteen minutes; the keeper's `settlement/S<n>` tag is his
+# judgment on it, and a refused crossing is never tagged. `--ref blessed`
+# resolves the newest tag peeled to its commit (src/world-branches.mjs §
+# blessed — the same resolution the fold serves, so store and fold agree), and
+# the store stamps `as_of_settlement` / `candidate_ahead` for the doors. The
+# fetch above is what carries a fresh tag in (a plain fetch re-follows an
+# annotated tag whose commit is already local — measured 2026-09-17). Never
+# HEAD — the pen parks this clone on draft branches, and a draft-stamped store
+# can never be eligible. Non-fatal like the mint: the tick's real job is never
+# held hostage, and a stale-but-good world.db beats no world.db. Interim until
+# the read flip (POS-104) takes standing from the clearing's lock.
+( node src/world-hydrate.mjs --world "$WORLD_CLONE" --ref blessed --db world.db.new \
     && mv -f world.db.new world.db ) \
   || echo "[office-tick] world hydrate FAILED (non-fatal) — world.db stays at its last good build" >&2
 node deploy/publish-windows.mjs --town "$SNAP/town" --out /var/www/postmark-panes/live

@@ -215,7 +215,9 @@ test("RED CONTROL: HEAD is a draft branch that cannot see S59 — the box's shap
 test("latestSettlement reads the READ tier's ref, and names the S-NUMBER", () => {
   const s = latestSettlement(repo);
   assert.equal(s.sha, S59, "the newest settlement on published main, not on the pen's branch");
-  assert.equal(s.ref, "refs/heads/main");
+  // the READ tier's ref is the newest BLESSING since postmark#2934 (the bless
+  // overrides the tick) — here S59's tag, which is also where main stands
+  assert.equal(s.ref, "refs/tags/settlement/S59");
   assert.equal(s.s, 59, "a resident was being handed a sha for a thing the town numbers");
 });
 

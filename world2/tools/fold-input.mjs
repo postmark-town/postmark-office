@@ -24,7 +24,7 @@
 // reason"). So every precondition below throws with the sha or window it wanted
 // and the sentence for why, and none of them returns an empty answer.
 
-import { standingMarkRows, renderRecord } from "./mark-render.mjs";
+import { standingMarkRows, renderedMark } from "./mark-render.mjs";
 
 /**
  * The fold's stake rows — `{ tick, holder, mark, n, weight }` — from the store.
@@ -202,7 +202,9 @@ export async function foldInputFromStore(client, { townSha = null, worldSha = nu
       by: r.owner,
       household: r.household,
       locked_window: r.locked_window,
-      bytes: renderRecord(r),
+      // The bytes, the record and body they came from, and the frame the
+      // record's numbers are in — see `mark-render.mjs § renderedMark`.
+      ...renderedMark(r),
     })),
     stakes,
     as_of: { window: at.window, town_sha: sha, world_sha: worldSha },

@@ -99,8 +99,11 @@ test("a PUBLISHED mark carries its receipt, naming the settlement that carried i
 
 test("ONE STAMP FOR ONE ANSWER: the receipt names the ref and sha the answer was folded from", { skip }, async () => {
   const r = await (await door())({ mark: STANDING }, KEY);
-  assert.equal(r.receipt.read_at.ref, "refs/heads/main");
-  assert.equal(r.receipt.read_at.sha, git("rev-parse", "refs/heads/main^{commit}").trim());
+  // the READ tier's ref is the newest BLESSING (postmark#2934, the bless
+  // overrides the tick): this fixture's S1 tag stands where main stands
+  assert.equal(r.receipt.read_at.ref, "refs/tags/settlement/S1");
+  assert.equal(r.receipt.read_at.sha, S1);
+  assert.equal(r.receipt.read_at.sha, git("rev-parse", "refs/heads/main^{commit}").trim(), "and main has not moved past it here");
 });
 
 test("THE STOPPER, ended: a mark the record has seen is NOT answered 'no mark'", { skip }, async () => {

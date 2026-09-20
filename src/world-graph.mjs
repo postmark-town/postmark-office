@@ -195,6 +195,8 @@ function buildPayload(dbPath, st) {
       world: meta.as_of_world ?? null,
       office: meta.as_of_office ?? null,
       world_ref: meta.world_ref ?? null,
+      as_of_settlement: meta.as_of_settlement || null,     // the tag served (postmark#2934)
+      candidate_ahead: meta.candidate_ahead || null,       // main's commit when the keeper has not accepted it
       hydrated_at: meta.hydrated_at ?? null,
       hydration_status: meta.hydration_status ?? null,
     },

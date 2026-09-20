@@ -57,10 +57,19 @@ export const SCHEMA = `
   CREATE TABLE homes (handle TEXT PRIMARY KEY, region TEXT, json TEXT);
   -- The funding seam (2026-08-21): pots are bounty files on the quest board;
   -- holo / receipts / escrow fold from the stamp-ledger's funding rows
-  -- (src/funding.mjs). holo is SOULBOUND — indexed apart from stamps so no
-  -- read can ever sum it into a balance by accident. funding_invalid holds the
-  -- rows that claimed a funding kind and failed its field law: surfaced at the
-  -- door, never silently rendered.
+  -- (src/funding.mjs). AMENDED 2026-09-17 at the founder's ruling ("non-
+  -- spendable is repealed; the stamps are like any other, but are holo to
+  -- signify the special source"): holo is fresh mint to a giver, liquid like
+  -- any stamp. funding_holo is STILL a separate table, and the reason inverted
+  -- — it used to keep holo out of a balance, and it now keeps it from being
+  -- added to one TWICE. The balance and the mint count arrive in the stamps
+  -- table from the town's own folds (src/hydrate.mjs § Stamps), holo already
+  -- inside them;
+  -- this table is the per-gift readout (which pot, which receipt, how many),
+  -- never a second credit. No migration: the whole index rebuilds from the
+  -- sealed ledger at every tick. funding_invalid holds the rows that claimed a
+  -- funding kind and failed its field law: surfaced at the door, never
+  -- silently rendered.
   CREATE TABLE pots (id TEXT PRIMARY KEY, json TEXT);
   -- funding_roll is the JOIN, materialized: each holo row against the
   -- pot-receipt its ref names, so a patron page can read who paid, how many
@@ -74,9 +83,11 @@ export const SCHEMA = `
   CREATE TABLE funding_holo (seq INTEGER PRIMARY KEY AUTOINCREMENT, party TEXT, pot TEXT, holo INTEGER, epoch TEXT, date TEXT, receipt TEXT);
   CREATE INDEX funding_holo_party ON funding_holo (party);
   -- The sigma leg (R12, 2026-08-21): ordinary mint, source-tagged to the pot,
-  -- with no liquid coin. Its own table for the same reason holo has one --
-  -- indexed apart from stamps so no read can sum it into a balance by accident.
-  -- The ownership read counts it deliberately; no tense does.
+  -- with no liquid coin. Retired 2026-09-14 (nothing burns) and reads 0 for
+  -- everyone; the table stands so an old row still surfaces under its own name.
+  -- Its own table for what USED to be holo's reason too -- but unlike holo,
+  -- this leg really does carry no coin, so keeping it out of a balance is still
+  -- the law here. The ownership read counts it deliberately; no tense does.
   CREATE TABLE funding_keeping_mint (seq INTEGER PRIMARY KEY AUTOINCREMENT, party TEXT, pot TEXT, n INTEGER, epoch TEXT, date TEXT);
   CREATE INDEX funding_keeping_mint_party ON funding_keeping_mint (party);
   -- payer is the receipt's own from: field, and it is the ONE place attribution

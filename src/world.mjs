@@ -23,12 +23,13 @@ import { DatabaseSync } from "node:sqlite";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isPrincipal } from "./ops.mjs";
+import { nextSettlementAttemptAt } from "./settlements.mjs";
 import { execUnderTownLock, lockTimedOut, LOCK_BUSY } from "./town-lock.mjs";
 import {
   // draftDeltaForKey is reached through world-journal's draftsForKey, which unions it with the live log (POS-5 slice 1)
+  blessedRef,
   draftBranch,
   draftRefForKey,
-  freshestMainRef,
   mainRef,
   materializeAtRef,
   publishedSkeleton,
@@ -101,7 +102,10 @@ const _worlds = new Map(); // ref+sha -> assembled composed view
 // whole change exists to end.
 function engineDir() {
   try {
-    return materializeAtRef(WORLD_CLONE, freshestMainRef(WORLD_CLONE), "tools");
+    // At the BLESSED ref (postmark#2934): the engine that folds a settlement is
+    // the engine that settlement was blessed with — the site already runs the
+    // pinned package the same way ("the pin follows the blessing", POS-55).
+    return materializeAtRef(WORLD_CLONE, blessedRef(WORLD_CLONE), "tools");
   } catch (e) {
     console.error(`[world] engine materialise FAILED (${String(e?.message ?? e).slice(0, 120)}) — falling back to the working tree, which may be a draft branch`);
     return WORLD_CLONE;
@@ -145,7 +149,7 @@ async function world() {
   // receipt stamps the answer with the sha it was folded from, and reading it
   // back out of `publishedState` would be a second `git show` of a 1 MiB
   // world-state.json on every focus. It is already in hand here; carry it.
-  assembled._raw = { worldState, skeleton, ref: selected.ref, sha: selected.sha };
+  assembled._raw = { worldState, skeleton, ref: selected.ref, sha: selected.sha, blessed: selected.blessed ?? null };
   _worlds.set(selected.ref, { sha: selected.sha, world: assembled });
   _places.clear(); // place words are a fold over these marks — a new world, new names
   return assembled;
@@ -1145,8 +1149,10 @@ export async function worldSummary(key = null) {
     crossing: { n: currentCrossing(), derivation: CROSSING_DERIVATION },
     mechanics: Object.fromEntries(Object.entries(w._raw.skeleton.physics_registry ?? {})
       .map(([k, v]) => [k, v.honored])),
-    exposure: w._raw.ref.includes("/draft/") ? "published main + your household drafts" : "published main",
-    read_me: "told, not drawn — GET /world/eyes?x=&y=&crossing= for the telling; /world/state for this caller's composed view. Signed-in residents see published main plus their own household drafts; anonymous and unresolved callers see published main.",
+    // the words follow the ref (postmark#2934): canon is the last blessed settlement now, not main
+    exposure: w._raw.ref.includes("/draft/") ? "published main + your household drafts"
+      : (w._raw.blessed?.tag ? `the last blessed settlement (${w._raw.blessed.tag})` : "published main"),
+    read_me: "told, not drawn — GET /world/eyes?x=&y=&crossing= for the telling; /world/state for this caller's composed view. Every caller sees the last blessed settlement; signed-in residents also see their own household drafts as a delta.",
   };
 }
 
@@ -1927,6 +1933,23 @@ export async function pointWithinMarkFn() {
 }
 
 export async function worldStateRaw() { return (await world())._raw.worldState; }
+
+// THE WORLD READ'S HEADER (postmark#2934): which settlement this answer stands
+// on, whether main holds a candidate the keeper has not accepted, and when the
+// next attempt is — the viewer's chip already counts down to that instant.
+// Read off the fold's own `blessed` record, so the header and the marks beside
+// it come from ONE resolution, never a second `git` read that could disagree.
+export async function worldCanon() {
+  const b = (await world())._raw.blessed ?? null;
+  return {
+    as_of_settlement: b?.n == null ? null : `S${b.n}`,
+    canon_ref: b?.ref ?? null,
+    canon_sha: b?.sha ?? null,
+    candidate_ahead: b?.candidate_ahead ?? null,
+    next_attempt_at: nextSettlementAttemptAt(),
+    ...(b?.disclosed ? { disclosed: b.disclosed } : {}),
+  };
+}
 export async function worldSkeletonRaw() { return (await world())._raw.skeleton; }
 // B1: the signed-in draft overlay's journal half comes from `claims` + the
 // withdraw acts under W2_GUARDS=1; the SKETCHBOOK half is unchanged either way
@@ -2615,7 +2638,35 @@ async function journalLeaveMark(clean, { crossing = currentCrossing() } = {}) {
       // journal would let them claim past it until the drain.
       const held = new Map([...canon.marks, ...live].filter((m) => m.kind === "parcel").map((m) => [m.id, m]));
       const mine = [...held.values()].filter((m) => credOf(m.by ?? m.household) === cred && m.id !== id).length;
-      if (mine >= cap)
+      // ── THE CAP ASKS ONLY OF NEW GROUND, ON THIS DOOR TOO (#2888) ────────
+      //
+      // The law is #2614 / Linear POS-88, ruled on the 2026-09-14 instance and
+      // landed 2026-09-15 in `6f7a889a`: "the CAP applies only to a parcel the
+      // household does not yet hold. An amendment of a held parcel is not a
+      // claim." That commit put the guard in `leave-exec.mjs` and nowhere else
+      // — the condemned git-era door. THIS door, the one prod runs under
+      // WORLD_SINGLE_LOG=1, never received it. One law, two holders, and only
+      // one of them obeyed it; the sibling's falsifiers stayed green over the
+      // gap because they drive the other executor.
+      //
+      // THE INSTANCE, #2888: Current re-amended his flat and was told "your
+      // household already holds four parcels" AFTER POS-88 shipped. #2888 read
+      // that as an id mismatch — the flat is filed under the founder's region
+      // tree, so the door was thought to be looking `<by>/<slug>` up against a
+      // region path and missing. It is not. A mark's id is `by` plus the LEAF
+      // directory (`tools/marks-fold.mjs`: "id = by + leaf"); the filing is a
+      // location, never a namespace; and every parcel in canon carries a
+      // two-segment id. The door FOUND the flat every time.
+      //
+      // The arithmetic is what gives it away, and it is why the exclusion below
+      // is not the fix. That household holds FIVE parcels across seven handles.
+      // `m.id !== id` dropped the one being amended and left FOUR — the very
+      // number he was shown. The exclusion was WORKING. It says a mark may not
+      // count ITSELF against the cap, which is a different sentence from the
+      // ruling above, so it stays exactly as it is and `!amending` carries the
+      // law. Both are needed: without the exclusion a household under the cap
+      // would still lose a slot to its own amendment.
+      if (!amending && mine >= cap)
         throw bounce(403, `your household already holds ${mine} parcel${mine === 1 ? "" : "s"}`,
           `parcel claiming is capped at ${cap} per household (ruled ${PARCEL_CAP_LAW_DATE ?? "2026-07-30"}; prior holdings stand) — new ground for this household is the founder's word, not the door's`);
 

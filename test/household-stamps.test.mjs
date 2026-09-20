@@ -12,7 +12,7 @@ import { readFileSync, writeFileSync, mkdirSync, mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { readPots, foldFunding, parseLedgerText } from "../src/funding.mjs";
+import { readPots, foldFunding, parseLedgerText, WHAT_THIS_BUYS } from "../src/funding.mjs";
 import { escrowDetail, fundRead, KEEPING_STAKE_MARK, STAKE_POT_BODY, POT_STAKEABLE_BODY } from "../src/household-stamps.mjs";
 import { clipPotStake } from "../src/pot-stake-exec.mjs";
 import { intakeDisclosure, INTAKE } from "../src/fund.mjs";
@@ -303,8 +303,11 @@ test("the disclosure has ONE home, and it carries both mandated sentences", () =
   // disclosure is two things that can drift.
   const d = intakeDisclosure();
   assert.equal(d.caption, "a record of contribution, not a promise of profit");
-  assert.equal(d.what_this_buys,
-    "this buys ownership and memory, never voice, and converts to real value only if the town someday does");
+  // AMENDED 2026-09-17: and the SENTENCE has one home too now, not just the
+  // object. funding.mjs owns it; both fund.mjs sites import it, where they used
+  // to type it out — two copies of a § 10 consent disclosure is two things that
+  // can drift, which is the claim the test above this one already makes.
+  assert.equal(d.what_this_buys, WHAT_THIS_BUYS);
   assert.match(d.address, /^0x[0-9a-fA-F]{40}$/);
   // Aimed at the CLAIM, not the spelling: the route must hand back
   // intakeDisclosure's own object and never assemble a second one. It grew a
@@ -339,21 +342,43 @@ test("fund-verify wraps the eight-guard door and never reimplements it", () => {
     "and the apex holds no guard of its own");
 });
 
-test("the mandated caption is imported, never hand-typed, on every money surface", () => {
+test("the mandated sentences are imported, never hand-typed, on every money surface", () => {
   // funding.mjs owns the sentence ("exact wording is law — Keemin's word, seam
   // night 2026-08-21"). fund.mjs carried TWO hand-typed copies of it until this
   // door was built, which is two things that can drift on the surface that can
   // least afford drift. Found by this probe's own can-fail flip: mutating one
   // copy left the other green.
+  //
+  // WIDENED 2026-09-17: the money-moment disclosure `what_this_buys` was in
+  // EXACTLY the same state — typed out twice in fund.mjs with nothing
+  // cross-checking the copies — and it went unnoticed because this probe named
+  // only the caption. It is now `WHAT_THIS_BUYS` in funding.mjs, imported at
+  // both sites, and under the same discipline here. A probe that guards one
+  // mandated sentence on a surface that carries two is a probe with a hole.
+  const HAND_TYPED = [
+    [/caption: "a record of contribution, not a promise of profit"/g, "HOLO_CAPTION"],
+    [/what_this_buys: "this buys /g, "WHAT_THIS_BUYS"],
+  ];
   for (const f of ["../src/fund.mjs", "../src/household-stamps.mjs"]) {
     const src = readFileSync(new URL(f, import.meta.url), "utf8");
-    const typed = src.match(/caption: "a record of contribution, not a promise of profit"/g) ?? [];
-    assert.deepEqual(typed, [], `${f} hand-types the caption instead of importing HOLO_CAPTION`);
+    for (const [re, name] of HAND_TYPED) {
+      assert.deepEqual(src.match(re) ?? [], [],
+        `${f} hand-types a mandated sentence instead of importing ${name}`);
+    }
   }
   const fund = readFileSync(new URL("../src/fund.mjs", import.meta.url), "utf8");
-  assert.match(fund, /import \{ HOLO_CAPTION \} from "\.\/funding\.mjs";/);
+  // Aimed at the IMPORT, not at the exact spelling of the import line: this
+  // pinned the whole line and went red the moment a second mandated constant
+  // joined it, which is a pin reading its neighbours rather than its subject.
+  const imported = fund.match(/import \{([^}]*)\} from "\.\/funding\.mjs";/g) ?? [];
+  const names = imported.join(" ");
+  for (const n of ["HOLO_CAPTION", "WHAT_THIS_BUYS"]) {
+    assert.ok(names.includes(n), `fund.mjs must import ${n} from funding.mjs`);
+  }
   assert.equal((fund.match(/caption: HOLO_CAPTION,/g) ?? []).length, 2,
-    "both money answers read the one constant");
+    "both money answers read the one caption constant");
+  assert.equal((fund.match(/what_this_buys: WHAT_THIS_BUYS,/g) ?? []).length, 2,
+    "and both read the one disclosure constant");
 });
 
 // ── the planted taxonomy, quoted verbatim ────────────────────────────────────

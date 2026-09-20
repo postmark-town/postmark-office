@@ -56,7 +56,7 @@ import { isResidentHandle } from "./residency.mjs";
 // The caption is LAW, and funding.mjs is where it lives. Two hand-typed
 // copies stood here until the household door was built — the exact drift
 // the single home exists to prevent, on the surface that can least afford it.
-import { HOLO_CAPTION } from "./funding.mjs";
+import { HOLO_CAPTION, WHAT_THIS_BUYS } from "./funding.mjs";
 import { TREASURY_POT, classifyFundingRow } from "./funding.mjs";
 
 export const POT_RE = /^[a-z0-9][a-z0-9-]*$/;
@@ -288,7 +288,7 @@ export async function fundVerify(clone, body, {
     line: written?.line ?? null,
     commit: written?.commit ?? null,
     caption: HOLO_CAPTION,
-    what_this_buys: "this buys ownership and memory, never voice, and converts to real value only if the town someday does",
+    what_this_buys: WHAT_THIS_BUYS,
   };
 }
 
@@ -371,7 +371,7 @@ export function intakeDisclosure(pot = null, { map = null } = {}) {
     whole_dollars: "the ledger records whole dollars; cents that arrive are money the town holds that priced nothing",
     recovery: "a wrong-network or wrong-token send is not recoverable by the town — best effort only, never a promise",
     caption: HOLO_CAPTION,
-    what_this_buys: "this buys ownership and memory, never voice, and converts to real value only if the town someday does",
+    what_this_buys: WHAT_THIS_BUYS,
     verify: "POST /fund/verify { txhash, pot, handle }",
   };
 }

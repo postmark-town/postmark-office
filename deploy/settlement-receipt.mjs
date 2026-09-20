@@ -299,6 +299,15 @@ const receipt = {
         changed: (store.households ?? []).filter((h) => h.changed).length,
         serialized_here: store.serialized_here ?? null,
         supplied_bytes_only: store.supplied_bytes_only ?? null,
+        // WHAT THE FRAMER TOUCHED (2026-09-18, postmark#2865 the third bite):
+        // every world-framed record the write-down carried into a NESTED frozen
+        // filing, with the number that arrived and the number written. The
+        // failure this reports was silent — Berthillon's image-only amend moved
+        // the shop 54 m under a green suite because the store path carried the
+        // world number raw — so the count rides even when it is zero, and
+        // `framer: false` names a write-down that ran with no framer at all.
+        framed: store.framed ?? null,
+        framer: store.framer ?? null,
         sketchbooks_cleared: store.sketchbooks_cleared ?? null,
       }
     : { ran: false, reason: "the store write-down did not run for this crossing" },

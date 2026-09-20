@@ -53,10 +53,13 @@
 //     `usd: `, `from: `, `ref: `, `staker: `, `via: ` and `for: ` are LOOSE. A
 //     tolerant field reader that demands a space drops the pot off every
 //     receipt and every holo row in the ledger.
-//   - the holo row and the pot-receipt are both ARROW-FREE. For
-//     holo that is the enforcement, not a formatting choice: holo has no verbs,
-//     so it must never wear the movement shape that balance/mint/stake folds
-//     read. A movement-shaped holo row is not holo, and this module says so.
+//   - the holo row and the pot-receipt are both ARROW-FREE. For holo that is
+//     still the enforcement and not a formatting choice, though the reason
+//     changed on 2026-09-17: not "holo has no verbs" (soulbound, repealed — a
+//     holo STAMP spends like any other) but that the ROW is a mint and not a
+//     movement. Wearing the movement shape would have the balance/mint folds
+//     read it as a transfer AND the by-kind credit mint it, paying twice. A
+//     movement-shaped holo row is not holo, and this module says so.
 //
 // Dollars are whole: `usd` is [1-9]\d* in the landed grammar. $10.50 is not a
 // smaller payment, it is not a row.
@@ -88,16 +91,57 @@
 // D1 (same day): "ownership is a derived READ = minted (all sources) + holo —
 // NOT a tense; no fifth tense node." So the door does not invent a fifth tense
 // and does not quietly widen `minted`: it returns an `ownership` block that does
-// the summing in the open. `tenses.minted` stays the EARNED PRIMARY number,
-// because that is the one the tense arithmetic reconciles against (the town's own
-// invariant: liquid = mint_count − staked). Widening it would break that
-// invariant for a leg that carries no coin — which is the whole reason R12 keeps
-// the row arrow-free.
+// the summing in the open.
 //
-// THE ONE LAW THIS MODULE MUST NEVER BREAK: holo is SOULBOUND. It is a record
-// of contribution — never spendable, never stakeable, never a balance. No fold
-// here may ever sum holo into stamps, and no read built on this fold may
-// present holo as something an agent can use.
+// ⚠ `tenses.minted` NO LONGER STAYS THE EARNED PRIMARY NUMBER, and this note
+// said it did until 2026-09-17. It is the town's `foldMintCount`, which gains a
+// holo arm at the founder's ruling (postmark-town/postmark#2886), so it is
+// primary mint PLUS holo. The invariant the old sentence was protecting —
+// `liquid = mint_count − staked` — SURVIVES, and it survives for a specific
+// reason worth writing down: a holo row credits BOTH sides, the mint count and
+// the balance, so widening `minted` by `n` widens `liquid` by the same `n` and
+// the subtraction still closes. That is exactly what made the keeping leg
+// different: it is mint with NO liquid coin, so folding IT in would widen one
+// side only and break the invariant while looking plausible. Holo is a whole
+// stamp; the keeping leg is a record. Hence holo is inside `minted` and the
+// keeping leg is still named beside it.
+//
+// SOULBOUND IS REPEALED — THE FOUNDER'S RULING, 2026-09-17, verbatim: "non-
+// spendable is repealed; the stamps are like any other, but are holo to signify
+// the special source." And, on the cap: "I'm good to let funding minted stamps
+// contribute to the max stamps you can get from another fund. it compounds by
+// design."
+//
+// So the sentence this block carried until today — holo is SOULBOUND, never
+// spendable, never stakeable, never a balance — is GONE, not softened. Holo is
+// fresh mint to a giver, liquid like any stamp; the word names its source and
+// its ink. A holo row of `n` is `n` stamps in the payer's balance and in
+// minted-cumulative, it stakes and votes and pays and transfers like any stamp,
+// and it counts inside the ρ base at the next close.
+//
+// THE LAW THIS MODULE MUST NEVER BREAK IS NOW THE OTHER ONE, AND IT IS THE
+// REASON THIS FILE GAINS NO ARITHMETIC TODAY: this module does not hold a
+// balance and never has. Every stamp number the office serves is the TOWN's own
+// fold, imported live from the checkout —
+//
+//   - the `stamps` table (balance/mint_count/staked) is written by
+//     src/hydrate.mjs § Stamps from the town's foldBalances / foldMintCount /
+//     foldStaked, and src/queries.mjs § stampsDetail reads that table;
+//   - both stake clips take their balance from the town's ballotState —
+//     src/pot-stake-exec.mjs § clipPotStake and src/stake-exec.mjs via
+//     tools/ballot.mjs § clipApply.
+//
+// `foldFunding` below folds holo as a READOUT — who gave, to which pot, against
+// which receipt — and a readout is all it may ever be. Crediting holo to a
+// balance HERE would credit it TWICE, because the town's fold already did it
+// upstream. The office's numbers therefore change BY DERIVATION at the next
+// rehydrate once the town's folds gain their holo arm (postmark-town/postmark
+// #2811); what changes in this repo is the words, and one double-count the old
+// law had made harmless (src/queries.mjs § ownership).
+//
+// The arrow-free row shape STAYS, and its reason is now the surviving half of
+// the old one: a holo row is a MINT, not a movement. `diagnose` still refuses a
+// movement-shaped holo row, under that reason rather than under soulbound.
 //
 // Malformed rows are SURFACED, never silently rendered or silently dropped: a
 // line that claims a funding kind but fails its field law lands in `invalid`
@@ -133,19 +177,50 @@ export const HOLO_CAPTION = "a record of contribution, not a promise of profit";
 // it, and do not retype it: import it. FIRST-MENTION RULE — the first teach
 // line that teaches holo composes this in; every other mention stays bare
 // "holo", so the expansion is taught once and never becomes boilerplate.
-export const HOLO_EXPANSION = "short for holographic stamp — the collector's shiny kind, kept in the album and shown, never spent as postage.";
+// AMENDED 2026-09-17 at the founder's ruling ("non-spendable is repealed").
+// The etymology is his 2026-08-26 sentence and stands; its closing clause —
+// "never spent as postage" — was the repealed law wearing the metaphor's
+// clothes, so it is replaced by the one word the ruling changes. The SITE ships
+// the twin of this sentence (postmark-site src/lib/funding.mjs § HOLO_NAME_LINE)
+// and moves with it: one sentence, two repos, never two spellings.
+export const HOLO_EXPANSION = "short for holographic stamp — the collector's shiny kind, kept in the album and shown; unlike the collector's, this one still spends.";
+
+// THE DISCLOSURE AT THE MONEY MOMENT — what a patron is told their dollars buy,
+// at the instant they are about to send them. The world carries the same
+// sentence in `LOGOS/the-derivation.md § 10`; this is its live instance.
+//
+// AMENDED 2026-09-17 at the founder's ruling, verbatim: "holo does anything a
+// normal stamp can; staking vs voting is a nondistiction." It read "this buys
+// ownership and memory, NEVER VOICE" — the repealed law, stated on the live
+// door at the one moment it most matters. A vote is a stake (`stake:vote/…`)
+// clipping against a fungible balance no door can sort by origin, so the
+// stamps money earns vote; what bounds money is rho, the cap on its share of a
+// household, and the disclosure now says THAT instead of promising a verb
+// withheld. Naming the cap is not optional here: a patron told their stamps
+// vote and not told their share is bounded has been told half the truth.
+//
+// HOISTED to one owner in the same commit. It was typed out twice in
+// src/fund.mjs (the verify receipt and the intake card) with nothing
+// cross-checking the copies — the exact drift shape the 2026-09-17 citation
+// sweep found between this repo and the site. One sentence, one home, two
+// callers.
+export const WHAT_THIS_BUYS = "this buys stamps that do everything a stamp does, including vote, plus ownership and memory; money's share of your household is capped, and it converts to real value only if the town someday does";
 
 // Teach lines — agents learn at the point of contact, so every new surface
 // carries one short self-describing sentence. One home for the wording.
 export const TEACH = {
-  tenses: "four tenses of one economy: minted is cumulative stamps ever earned (only rises), liquid is spendable now, staked is escrowed in open stakes, holo is soulbound funding recognition — a record, never a balance; liquid + staked = assets, and holo is outside that arithmetic. A vote stake returns whole at close, and so does a keeping stake — nothing burns (amended 2026-09-14); what a keeping stake lent, scaled by how funded the pot was, sizes the fresh stamps minted to the givers at the close. `minted` here is the earned number the tense arithmetic reconciles against; for the all-sources total see the `ownership` block",
-  holo: `holo is ${HOLO_EXPANSION} It is the record's older keepsake for a gift — soulbound, so it cannot be spent, staked, transferred, or redeemed, and no door will ever count it as balance. Since 2026-09-14 no close mints it: the givers are minted ordinary stamps instead, sized by the pot's staked mass and shared by dollar. Every witnessed payment still gets its row, naming which pot, when, how many dollars; 0 is a real answer, because grant, treasury and outside dollars are remembered even when they mint nothing`,
-  keeping_mint: "minted · for keeping is RETIRED (2026-09-14): nothing burns, so there is no keeping mint. The row shape stands in the ledger's grammar and reads 0 for everyone. A keeping stake comes home whole, and the close's fresh mint goes to the givers, source-tagged for: funding:<pot> — ordinary liquid stamps, inside the earned number",
-  ownership: "ownership is a READ, not a tense: everything you have ever minted (earned from the mail, plus minted · for keeping) plus your holo. Nothing is stored for it — it is derived from the same signed ledger every time you ask, and no part of it is a claim on money",
+  tenses: "four tenses of one economy: minted is cumulative stamps ever minted to you (only rises), liquid is spendable now, staked is escrowed in open stakes, holo is how much of your minted came from giving — a subset of minted and of liquid, never a pile beside them; liquid + staked = assets. A vote stake returns whole at close, and so does a keeping stake — nothing burns (amended 2026-09-14); what a keeping stake lent, scaled by how funded the pot was, sizes the fresh stamps minted to the givers at the close. `minted` here is primary mint plus holo, the number the tense arithmetic reconciles against; for the whole see the `ownership` block",
+  // HOLO'S HOME, and the ONE place the 2026-09-17 ruling is taught in full —
+  // the same first-mention discipline HOLO_EXPANSION follows. The tenses,
+  // ownership and keeping_mint lines carry only the fact that changed, because
+  // four recitals of one ruling is boilerplate on every morning page served.
+  holo: `holo is ${HOLO_EXPANSION} It is the record's keepsake for a gift, and since 2026-09-17 one that spends: the founder repealed non-spendable — "the stamps are like any other, but are holo to signify the special source" — so a holo row of n is n stamps in your balance and in minted-cumulative, staking, voting, paying and transferring like any other, and counting toward your cap at the next close. Holo is fresh mint to a giver, liquid like any stamp; the word names its source and its ink, and the town draws them in holo ink. Every witnessed payment gets its row, naming which pot, when, how many dollars; 0 is a real answer, and it is also the mark that the receipt is settled`,
+  keeping_mint: "minted · for keeping is RETIRED (2026-09-14): nothing burns, so there is no keeping mint. The row shape stands in the ledger's grammar and reads 0 for everyone. A keeping stake comes home whole, and the close's fresh mint goes to the givers as holo rows — one per receipt it settles, 0 included — ordinary liquid stamps, inside the minted number",
+  ownership: "ownership is a READ, not a tense: everything you have ever minted — primary mint from the mail, holo minted to you for giving, plus minted · for keeping — with holo inside the minted number and counted once. Nothing is stored for it: it is derived from the same signed ledger every time you ask, and no part of it is a claim on money",
   pots_section: "the funding pots open on this board — each gathers real dollars toward a named need; anyone can read who funded what, and stamps staked on a pot signal support without becoming the pot's money",
   pot: "a pot is a funding bounty on the quest board: real dollars gathered toward a named need for a named keeper, epoch by epoch; status says where it stands, and a draft pot may not name its keeper yet",
   patrons: "the patrons who funded this pot — each of the ledger's holo rows joined to the pot-receipt its `ref:` names: who paid, how many dollars, when, and the holo minted to them for it",
-  escrow: "stamps residents currently have staked on this pot — a stake signals that the need matters to you and never becomes the pot's dollars; at the epoch close every stake comes home whole, and the share of the staked mass that the epoch's dollars funded (fund the whole posted need and the whole mass counts, fund half and half of it does) is minted fresh to the givers by dollar share — a giver's own household's stakes left out, rho-capped, the remainder un-minted. Nothing burns (amended 2026-09-14)",
+  escrow: "stamps residents currently have staked on this pot — a stake signals that the need matters to you and never becomes the pot's dollars; at the epoch close every stake comes home whole, and the share of the staked mass that the epoch's dollars funded (fund the whole posted need and the whole mass counts, fund half and half of it does) is minted fresh to the givers by dollar share as HOLO ROWS, one per receipt the close settles, 0 included — a giver's own household's stakes left out, rho-capped against their mint from every source, the remainder un-minted. Nothing burns (amended 2026-09-14), and holo stamps are liquid like any other and count toward that cap themselves (amended 2026-09-17: it compounds by design)",
   funding: "how much of this pot's posted need the payers have actually met — dollars the ledger has witnessed that no close has settled yet, over the pot's per-epoch target. This fraction is the ONLY thing dollars are priced against: there is no dollar-to-stamp rate anywhere in the town, so how much a pot matters is measured by how much the community stakes on it, not by what the money says it is worth",
   receipts: "the witnessed payments behind this pot's dollars — rail (stripe, usdc, or grant), whole dollars, and the receipt ref that is unique forever; the pot file's received and this sum are two clocks, disclosed side by side, never silently reconciled",
   invalid: "rows that claim a funding kind but fail its field law — surfaced here by name rather than rendered as if they were good; a forged row cannot buy legitimacy by being listed",
@@ -264,12 +339,18 @@ const epochReason = (kind) => `${kind} names no readable epoch — the segment r
 function diagnose(kind, canonical) {
   const L = loose(canonical);
   if (!L.date) return NO_DATE;
-  // Before any field talk: a holo row that moves is refused by the law that
-  // makes holo soulbound, not by whatever else it also got wrong. Saying
-  // "your colon has a space" to a row that gave holo a verb would be answering
-  // the smaller question.
+  // Before any field talk: a holo row that moves is refused by the shape law,
+  // not by whatever else it also got wrong. Saying "your colon has a space" to a
+  // row that wears an arrow would be answering the smaller question.
+  //
+  // AMENDED 2026-09-17: the REFUSAL is unchanged and the REASON is not. It used
+  // to be "holo has no verbs" — that was soulbound, and soulbound is repealed
+  // (holo stamps stake, vote, pay and transfer like any stamp). What survives is
+  // the other half, and it is why the shape still cannot move: a holo row is a
+  // MINT, not a movement. An arrow would put one row inside the movement folds
+  // AND inside the by-kind mint credit, and the payer would be paid twice.
   if (kind === "holo" && /→/.test(canonical))
-    return "a holo row is ARROW-FREE by design — holo has no verbs (it cannot stake, vote, pay or transfer), so a movement-shaped holo row is not holo and no fold will read it as one";
+    return "a holo row is ARROW-FREE by design — it is a MINT, not a movement (holo stamps spend like any other, but the row that creates them is not a transfer), so an arrow would have the movement folds and the by-kind mint credit both read it and pay the payer twice";
   // Then the likeliest authoring mistake, and the one a field-by-field reason
   // would otherwise hide behind a later field: on the three ARROW-FREE kinds
   // `pot:` and `epoch:` are tight, so a space after either colon means a reader
