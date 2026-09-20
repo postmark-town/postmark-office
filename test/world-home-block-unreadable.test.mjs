@@ -103,6 +103,30 @@ function blockUnder(worldClone, handle) {
 
 const MISSING = join(repo, "no-such-clone-here");
 
+// ── THE CLONE THAT IS THERE AND CANNOT BE READ ───────────────────────────────
+//
+// `MISSING` is the easy unreadable: no clone at all. It is NOT the shape of the
+// 2026-08-18 incident, and it cannot test #3025's leak — a manifest read from a
+// path that does not exist fails too, so the id was null on main here as well.
+// The box resize left the clone exactly where it was and broke the ENGINE, and
+// that is the only shape where a file read without the engine can still answer.
+// So: a real clone, a real painting, an engine that throws on assembly.
+const broken = mkdtempSync(join(tmpdir(), "postmark-home-broken-engine-"));
+after(() => rmSync(broken, { recursive: true, force: true }));
+{
+  const bgit = (...args) => execFileSync("git", ["-C", broken, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  const bput = (path, text) => { const full = join(broken, path); mkdirSync(dirname(full), { recursive: true }); writeFileSync(full, text); };
+  bput("seeding/manifest.json", JSON.stringify({ homes: [{ household: "placed", home_id: "the-placed-house" }] }));
+  bput("tools/world-build.mjs", `export function assembleWorld() { throw new Error("the engine cannot assemble this world"); }\n`);
+  bput("tools/world-verbs.mjs", `export function orient() { return { seen: [] }; }\nexport function investigate() { return null; }\n`);
+  bput("tools/where-is.mjs", `export const NOWHERE = Object.freeze({ x: null, y: null, placed: false, source: null, mark_id: null });\nexport function homeOf() { return { ...NOWHERE }; }\nexport function whereIs() { return { ...NOWHERE }; }\n`);
+  bput("WORLD/skeleton.json", JSON.stringify({ features: [], physics_registry: {} }));
+  bput("WORLD/world-state.json", JSON.stringify({ tick: 0, dials: {}, marks: [], parcels: [], determined: {}, vague: [], rivalries: [], portfolios: {}, terrain_weight: {}, errors: [] }));
+  bgit("init", "-q", "-b", "main");
+  bgit("add", "-A");
+  bgit("-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-q", "-m", "a clone whose engine throws");
+}
+
 test("engine unreadable: the block DISCLOSES, and says it is not about your ground", () => {
   const w = blockUnder(MISSING, "placed");
   assert.equal(w.unreadable, true, "an unreadable engine must not answer in the grammar of an unplaced resident");
@@ -113,13 +137,27 @@ test("engine unreadable: the block DISCLOSES, and says it is not about your grou
   assert.equal(w.x, null);
   assert.equal(w.y, null);
   assert.ok("mark_id" in w);
-  // ── #3025 · the one field that used to answer anyway ──────────────────────
-  // The id came from `seeding/manifest.json`, a file read without the engine,
-  // so on main this branch still named a house while every other field said
-  // "I cannot see". A disclosure with one field still talking is the shape the
-  // `unreadable` flag exists to end; the painting is gone and so is the leak.
+  // NON-DISCRIMINATING, and said so: with no clone at all the manifest read
+  // fails too, so main answered null here as well. The leg that discriminates
+  // is the next one.
+  assert.equal(w.mark_id, null);
+});
+
+// ── #3025 · THE ONE FIELD THAT USED TO ANSWER ANYWAY ────────────────────────
+//
+// The clone is THERE, the painting is in it, and the engine throws — the
+// 2026-08-18 box-resize shape. On main the house id came from
+// `seeding/manifest.json`, a plain file read the engine was never needed for,
+// so this branch still named a house while every other field said "I cannot
+// see". A disclosure with one field still talking is exactly what the
+// `unreadable` flag exists to end. Red on main; green here.
+
+test("THE FIX: a readable clone with an UNREADABLE engine names no house either", () => {
+  const w = blockUnder(broken, "placed");
+  assert.equal(w.unreadable, true, "the engine threw — the block must say so");
   assert.equal(w.mark_id, null,
-    "on main this is 'placed/the-placed-house', read out of the painting the engine was never needed for");
+    "on main this is 'placed/the-placed-house', read out of the painting beside an engine nobody could load");
+  assert.equal(w.sited, false);
 });
 
 test("CONTROL — engine readable: a PLACED resident carries no disclosure field", () => {

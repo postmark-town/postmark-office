@@ -24,10 +24,17 @@
 // origin, and that resident could not walk at all (vermillion, 2026-08-04;
 // #1044 is the same bug on wren-winter).
 //
-// THE CAN-FAIL FLIP: restore the manifest read in src/world.mjs and LEG 2, LEG 3
-// and LEG 5 red — LEG 2 and LEG 5 by naming a painted house the record does not
-// stand, LEG 3 by naming a garden shed's painted id over the house. Flip receipt
-// in the PR.
+// THE CAN-FAIL FLIP: restore the manifest read in src/world.mjs and LEG 2 and
+// LEG 5 red — the painted house the record does not stand, and the painted
+// household the record never placed. Flip receipt in the PR.
+//
+// LEG 3 IS NOT A DISCRIMINATOR AGAINST MAIN AND SAYS SO. `crowded`'s painting
+// names the same mark the new rule picks, so main answers it too; the flip
+// leaves LEG 3 green. It discriminates against the WRONG DERIVATIONS — fold
+// order, and any rule that would let a room drawn larger than its house win —
+// which is what the measurement actually had to choose between. A leg that
+// pins a choice no flip of the shipped change can reach is still worth having;
+// calling it a falsifier when it is not is what is not.
 
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
@@ -158,7 +165,12 @@ test("THE FIX: a painted house the record does not stand on the household's grou
     "with no house of theirs standing on their ground, the block names the ground");
 });
 
-// ── LEG 3 · THE DISCRIMINATOR · largest, and it was measured ────────────────
+// ── LEG 3 · THE DISCRIMINATOR BETWEEN RULES, not against main ───────────────
+//
+// Green on either side of the flip, deliberately: the painting names the same
+// mark here, so main agrees. What this leg refuses is the OTHER derivations the
+// measurement had to choose between — fold order, and anything that would let
+// a room drawn larger than its house win.
 //
 // Four marks of crowded's stand `home`: three on the parcel (house 144 m²,
 // shed 9 m², walk 6 m²) and one INSIDE the house (the kitchen, drawn 400 m² —
