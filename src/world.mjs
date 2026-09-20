@@ -205,48 +205,37 @@ function berthAboard(slug) {
   catch { return false; }
 }
 
-// ── THE HOUSE THE RECORD NAMES (postmark#3025, 2026-09-20) ──────────────────
+// ── WHERE YOU LIVE IS YOUR PARCEL, AND THE ENGINE ALREADY SAID SO ───────────
+//                                       (postmark#3025, Keemin 2026-09-20)
 //
-// This used to read `seeding/manifest.json` — the July atlas painting, 88
-// households, a build intermediate whose own first line says "not world canon".
-// A painting cannot be amended by living here, so through this one lookup a
-// July drawing outranked the record for four months: `current-the-reader` read
-// "the Snug harbour" while the fold said that mark stands on spar's coast and
-// is MARKET, and fourteen of the painted houses had already stopped being marks
-// at all.
+// There used to be a `homesIndex()` here reading the world's
+// `seeding/manifest.json` — the July atlas painting, 88 households, a build
+// intermediate whose own first line says "not world canon". `worldBlockForHandle`
+// already fell through to `homeOf`'s answer whenever the painting named nothing,
+// so the painting was never the derivation: it was an OVERRIDE of the record's
+// answer with a seeded house's id, kept because it looked like "the more
+// specific answer".
 //
-// The record's own answer, and it needs nothing the fold does not already
-// publish: among the marks this household has standing `home` — the fold's
-// standing walk (`tools/mark-standing.mjs`, Keemin 2026-08-12: the ground
-// decides, and it is derived in ONE place) — the one standing directly on
-// ground the household holds.
+// It was also a wrong one, and could not be corrected by living here. A painting
+// is not amendable, so for four months it outranked the record:
+// `current-the-reader` read "the Snug harbour" while the fold stands that mark
+// on spar's coast and calls it MARKET, and fourteen of the painted house ids had
+// already stopped being marks at all.
 //
-// LARGEST IS THE DISCRIMINATOR, AND IT WAS MEASURED RATHER THAN PICKED. Several
-// marks stand on a parcel: rei has six, aion-solare four. Scored over the live
-// fold at `settlement/S74` against the 68 seeded households whose painted house
-// is still a mark of theirs standing on their own ground — fold order agreed on
-// 64, earliest-declared 67, most-marks-standing-inside-it 67, and LARGEST
-// FOOTPRINT on 68 of 68. Your house is the biggest thing you built on your
-// ground, and where the record has a house to name it names the same one the
-// painter drew. Ties break on the id so the answer is a function of the record
-// and not of fold order.
+// SO THE OVERRIDE IS SIMPLY GONE, AND NOTHING REPLACES IT. `tools/where-is.mjs §
+// homeOf` answers the question this field asks — it returns the household's
+// parcel with `source: "parcel"`, the law the town already carries ("the parcel
+// IS the home", ruling 7). The office now says what the engine says, for
+// everyone, which is also the founder's rule for the map: the parcel's own name.
 //
-// WHERE NO SUCH MARK STANDS, THIS ANSWERS null AND THE CALLER NAMES THE GROUND
-// — the parcel, which is what the block has always answered for every household
-// the seeding missed ("the parcel IS the home", ruling 7). Nobody goes from
-// ground to nothing; they go from a painted house to their own ground.
-const markArea = (m) => (m?.extent?.w ?? 0) * (m?.extent?.h ?? 0);
-function houseOnOwnGround(handle, w, home) {
-  // The parcels this household holds, read off the answer `homeOf` already
-  // gave, so there is one reading of their ground and not two. An engine too
-  // old to publish the full holding still names the one parcel it chose.
-  const ground = new Set(home?.household_parcels ?? (home?.mark_id ? [home.mark_id] : []));
-  if (!ground.size) return null;
-  return (w?.marks ?? [])
-    .filter((m) => m.kind === "sited" && m.tier === "home" && m.at
-      && (m.household === handle || m.by === handle) && ground.has(m.placementParent))
-    .sort((a, b) => markArea(b) - markArea(a) || String(a.id).localeCompare(String(b.id)))[0] ?? null;
-}
+// AND NO PICKER WENT IN ITS PLACE, deliberately. I measured one first — the
+// largest mark of yours standing `home` on your own ground, which reproduces the
+// painting on 68 of 68 households where the painting is still true. It also
+// hands a 4 m² door light to lupi and a 6 m² table to solan as "their house",
+// because the record carries no DWELLING KIND and so any picker must guess.
+// Keemin's word on reading that table: use the parcel's name. A guess with a
+// good score is still a guess; the parcel is a fact.
+
 
 // Where to stand — split so the decision (which resident / coords / bounce) is
 // pure over (args, key) and settles BEFORE the engine loads. A multi-resident
@@ -2249,17 +2238,13 @@ export async function worldBlockForHandle(handle, key = null) {
              unreadable: true, unreadable_reason: `${HOME_BLOCK_UNREADABLE} (${String(e?.message ?? e).slice(0, 120)})` };
   }
 
-  // ONE derivation, shared with world_orient. The house the RECORD names, when
-  // this household has one standing on its own ground (§ houseOnOwnGround);
-  // otherwise the ground itself — which is the answer every household the
-  // seeding never painted has read all along.
+  // ONE derivation, shared with world_orient, and now it is the ONLY one: the
+  // engine's answer, unedited. This used to be the fallback branch, reached
+  // only when the painting named nothing; it is the whole function now.
   const home = homeOf(handle, w);
   const transport = await doorstepTransportFor(handle, w);
   if (!home.placed) return { mark_id: null, x: null, y: null, sited: false, ...(transport ? { transport } : {}) };
-  const house = houseOnOwnGround(handle, w, home);
-  return house
-    ? { mark_id: house.id, x: house.at.x, y: house.at.y, sited: true, ...(transport ? { transport } : {}) }
-    : { mark_id: home.mark_id, x: home.x, y: home.y, sited: true, ...(transport ? { transport } : {}) };
+  return { mark_id: home.mark_id, x: home.x, y: home.y, sited: true, ...(transport ? { transport } : {}) };
 }
 
 /**

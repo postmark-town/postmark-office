@@ -60,16 +60,14 @@ export function householdOf(handle, world) {
   const own = (world?.marks ?? []).find((m) => m.by === handle && m.household);
   return own?.household ?? handle;
 }
-export function parcelsFor(handle, world) {
+export function parcelFor(handle, world) {
   const hh = householdOf(handle, world);
-  return (world?.parcels ?? []).filter((p) => p.household === hh);
+  return (world?.parcels ?? []).find((p) => p.household === hh) ?? null;
 }
-export function parcelFor(handle, world) { return parcelsFor(handle, world)[0] ?? null; }
 export function homeOf(handle, world) {
   const parcel = parcelFor(handle, world);
   if (!parcel) return { ...NOWHERE };
-  return { x: parcel.at.x, y: parcel.at.y, placed: true, source: "parcel", mark_id: parcel.id, parcel,
-           household_parcels: parcelsFor(handle, world).map((p) => p.id) };
+  return { x: parcel.at.x, y: parcel.at.y, placed: true, source: "parcel", mark_id: parcel.id, parcel };
 }
 export function whereIs(handle, { world = null } = {}) { return homeOf(handle, world); }
 `);
@@ -77,10 +75,7 @@ put("WORLD/skeleton.json", JSON.stringify({ features: [], physics_registry: {} }
 put("WORLD/world-state.json", JSON.stringify({
   tick: 0,
   dials: {},
-  // `tier: "home"` + `placementParent` are what make this the RECORD's house
-  // rather than the painting's (postmark#3025) — the fold's standing walk is
-  // the one rule, and the office reads the fold's word for it.
-  marks: [{ id: "placed/the-placed-house", by: "placed", household: "placed", kind: "sited", tier: "home", placementParent: "placed/the-placed-house-parcel", at: { x: 10, y: 20 }, extent: { w: 12, h: 12 }, body: "a house" }],
+  marks: [{ id: "placed/the-placed-house", by: "placed", household: "placed", kind: "sited", tier: "market", at: { x: 10, y: 20 }, extent: { w: 4, h: 4 }, body: "a house" }],
   parcels: [{ id: "placed/the-placed-house-parcel", household: "placed", at: { x: 10, y: 20 }, extent: { w: 25, h: 25 } }],
   determined: {}, vague: [], rivalries: [], portfolios: {}, terrain_weight: {}, errors: [],
 }));
@@ -162,7 +157,9 @@ test("THE FIX: a readable clone with an UNREADABLE engine names no house either"
 
 test("CONTROL — engine readable: a PLACED resident carries no disclosure field", () => {
   const w = blockUnder(repo, "placed");
-  assert.deepEqual(w, { mark_id: "placed/the-placed-house", x: 10, y: 20, sited: true });
+  // The id is the PARCEL now (#3025) — on main this reads
+  // `placed/the-placed-house`, the painting's override of the engine's answer.
+  assert.deepEqual(w, { mark_id: "placed/the-placed-house-parcel", x: 10, y: 20, sited: true });
 });
 
 test("CONTROL — engine readable: a GENUINELY groundless resident carries no disclosure field", () => {
