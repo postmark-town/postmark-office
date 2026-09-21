@@ -284,9 +284,22 @@ test("a class that LENDS answers its body and its roster at the threshold — te
   assert.equal(terms.ground.class, VEHICLE_CLASS);
   assert.deepEqual(terms.ground.lends, ["ride"]);
   assert.ok(terms.ground.rules, "`rules` IS the class mark's own body — edit the law and the door follows");
-  assert.equal(terms.ground.your_origin, null, "nobody has entered yet, so there is no origin to measure from");
-  assert.ok(terms.ground.stops.some((s) => s.mark === PANDO && s.ride_minutes === null),
-    "with no origin the minutes are null rather than invented");
+  assert.equal(terms.ground.your_origin, null, "nobody has entered yet, so an origin — a RIDE's concept — is still null");
+  // POS-161: the law that used to stand here read "with no origin the minutes
+  // are null rather than invented". Invented was never the alternative — the
+  // stop being KNOCKED at is where the rider is standing, and the block now
+  // measures from it and names it.
+  assert.equal(terms.ground.measured_from, WHARF,
+    "with no origin the numbers are taken from the stop being knocked at, and the block says which");
+  const stopAt = Object.fromEntries(stopsOfService(await serviceOf(vehicleWorld())).map((s) => [s.markId, s.at]));
+  const pandoM = Math.round(Math.hypot(stopAt[PANDO].x - stopAt[WHARF].x, stopAt[PANDO].y - stopAt[WHARF].y));
+  assert.ok(pandoM > 1000, "the fixture's own premise: the landing and the wharf are two different places");
+  const pando = terms.ground.stops.find((s) => s.mark === PANDO);
+  assert.equal(pando.distance_m, pandoM,
+    "the straight line WHARF -> PANDO out of the fixture's own timetable, rounded");
+  assert.ok(pando.ride_minutes > 0, "and a ride time a rider deciding whether to board can actually read");
+  assert.equal(terms.ground.stops.some((s) => s.mark === WHARF), false,
+    "you cannot ride to the stop you are knocking at");
 
   const went = await enterViaOffice(CLONE, { mark: WHARF, handle: "rider", accept: true }, key("rider"), o.deps);
   assert.equal(went.ground.class, VEHICLE_CLASS, "the block rides the ACCEPTING call too, not only the terms");
@@ -665,6 +678,52 @@ test("the ground block's vehicle extras name the stops with the minutes from YOU
   const b = fromSnug.stops.find((s) => s.mark === PANDO).ride_minutes;
   assert.notEqual(a, b, "the minutes are measured from where YOU are, not from her berth");
   assert.equal(fromWharf.standing_ride, null);
+});
+
+// == THE BOARDING ANSWER, WITH NO ORIGIN (POS-161) ============================
+//
+// Pure-function legs, so the failure can be expressed without an office
+// standing behind it: no entry stop, no standing ride, one knocked stop.
+
+test("with NO origin the block measures from the stop being knocked at, and names it", { skip: !HAVE_CLONE && "no world clone" }, async () => {
+  const service = await serviceOf(vehicleWorld());
+  const g = vehicleGroundExtras({ service, entryStop: null, standingRide: null, knockedAt: WHARF });
+  assert.equal(g.your_origin, null, "an origin is a RIDE's concept, and nobody has entered");
+  assert.equal(g.measured_from, WHARF, "an instrument must say which thing it measured");
+  const stopAt = Object.fromEntries(stopsOfService(service).map((s) => [s.markId, s.at]));
+  for (const to of [SHIP, PANDO, SNUG]) {
+    const row = g.stops.find((s) => s.mark === to);
+    const d = Math.round(Math.hypot(stopAt[to].x - stopAt[WHARF].x, stopAt[to].y - stopAt[WHARF].y));
+    assert.ok(d > 0, `the fixture's premise: ${to} and the wharf are two different places`);
+    assert.equal(row.distance_m, d, `${to} is ${d} m from the wharf, off the fixture's own timetable`);
+    assert.ok(Number.isFinite(row.ride_minutes) && row.ride_minutes > 0,
+      `${to} is offered with ${row.ride_minutes} min, not a null a rider cannot decide on`);
+  }
+  assert.equal(g.stops.some((s) => s.mark === WHARF), false, "you cannot ride to the stop you are knocking at");
+  assert.deepEqual(g.stops.map((s) => s.mark).slice().sort(), [SHIP, PANDO, SNUG].slice().sort(),
+    "and every OTHER stop is still offered");
+});
+
+test("a mark that is not a stop measures nothing — the nulls stay, and measured_from says so", { skip: !HAVE_CLONE && "no world clone" }, async () => {
+  // Her wheelhouse CARRIES the timetable and is not on it. Knocking somewhere
+  // that is not a stop keeps exactly today's answer rather than inventing an
+  // anchor for it.
+  const service = await serviceOf(vehicleWorld());
+  assert.equal(isVehicleStop(WHEELHOUSE, service), false,
+    "the fixture's premise: the wheelhouse is not one of her stops");
+  const g = vehicleGroundExtras({ service, entryStop: null, standingRide: null, knockedAt: WHEELHOUSE });
+  assert.equal(g.measured_from, null, "nothing was measured, so the field names nothing");
+  assert.equal(g.your_origin, null);
+  assert.deepEqual(g.stops.map((s) => s.mark).slice().sort(), [SHIP, PANDO, WHARF, SNUG].slice().sort(),
+    "every stop is still listed — a mark that measures nothing filters nothing out");
+  for (const s of g.stops) assert.equal(s.distance_m, null, `${s.mark} has no distance to give`);
+  for (const s of g.stops) assert.equal(s.ride_minutes, null, `${s.mark} has no minutes to give`);
+  // And the call that passes NOTHING — every caller that does not know a
+  // knocked stop, the apex's `can_ride_to` among them — is what it always was.
+  const bare = vehicleGroundExtras({ service });
+  assert.deepEqual(bare.stops, g.stops);
+  assert.equal(bare.measured_from, null);
+  assert.equal(bare.your_origin, null);
 });
 
 test("can_ride_to lists the quay from every stop but the quay itself", { skip: !HAVE_CLONE && "no world clone" }, async () => {

@@ -308,19 +308,47 @@ export function rideRefusal({ to, origin = null, service = null } = {}) {
  * the enter door's, because it is true of every ground that lends anything.
  * This function is only what a VEHICLE adds, and it is here rather than there so
  * that adding a second lending class costs a function and not an `if`.
+ *
+ * ⚑ WITH NO ORIGIN, MEASURE FROM THE STOP BEING KNOCKED AT (POS-161).
+ * `rideOrigin` folds an origin out of a RIDE, so on the terms call — `enter`
+ * without `accept`, where nobody has entered anything — it answers null and
+ * every distance and every minute answered null with it. That made the one
+ * answer a rider reads BEFORE deciding to board the one answer that could not
+ * tell them how far anything was. The stop they are knocking at is where they
+ * are standing, so it is the honest thing to measure from — and the office
+ * already says so a hundred lines down: `transportAt` has quoted ride times
+ * from the mark underfoot since § 11. Two answers at one wharf disagreed
+ * (a transport line offering the Pando landing at ~233 min, beside a ground
+ * block whose Pando row read null); now they do not.
+ *
+ * `your_origin` STAYS NULL, and that is not an oversight. An origin is a RIDE's
+ * concept — what a redeclared destination is measured from, what an exit
+ * deposits you at — and nobody has entered. `measured_from` is the separate,
+ * smaller fact: which stop these numbers were taken from. An instrument must
+ * say which thing it measured, so the block names it rather than leaving a
+ * reader to infer it from whichever stop is missing off the list.
  */
-export function vehicleGroundExtras({ service, entryStop = null, standingRide = null, nowMs = Date.now() } = {}) {
+export function vehicleGroundExtras({ service, entryStop = null, standingRide = null, nowMs = Date.now(), knockedAt = null } = {}) {
   const stops = stopsOfService(service);
   const vessel = vesselIdOf(service);
   const origin = rideOrigin({ entryStop, standingRide, nowMs }).stop;
-  const from = origin ? anchorOfStop(origin, service) : null;
+  // THE STOP THESE NUMBERS ARE TAKEN FROM: the origin when a ride's fold gives
+  // one, else the knocked stop when it is a stop this vehicle calls at. A mark
+  // on her ground that is NOT on the timetable measures nothing and keeps the
+  // nulls it has always had — `anchorOfStop` would answer null for it anyway,
+  // and a field naming a mark whose anchor was never used would be a worse
+  // answer than no field at all.
+  const measuredFrom = origin ?? (isVehicleStop(knockedAt, service) ? String(knockedAt) : null);
+  const from = measuredFrom ? anchorOfStop(measuredFrom, service) : null;
   const pace = Number(service?.pace);
   return {
-    // EVERY STOP BUT THE ONE YOU ARE BOUND FROM — her own berth included, since
-    // the ruling makes it the ride home. The filter is the refusal's own
-    // condition (`to === origin`) rather than a second rule beside it.
+    // EVERY STOP BUT THE ONE THESE NUMBERS ARE TAKEN FROM — her own berth
+    // included, since the ruling makes it the ride home. With an origin the
+    // filter is the refusal's own condition (`to === origin`) rather than a
+    // second rule beside it; with none it is that same sentence one step
+    // earlier, because you cannot ride to the stop you are knocking at.
     stops: stops
-      .filter((s) => s.markId !== origin)
+      .filter((s) => s.markId !== measuredFrom)
       .map((s) => {
         const d = from ? straightLineM(from, s.at) : null;
         const ms = d == null ? null : rideMillis(d, pace);
@@ -331,6 +359,7 @@ export function vehicleGroundExtras({ service, entryStop = null, standingRide = 
         };
       }),
     your_origin: origin,
+    measured_from: measuredFrom,
     standing_ride: standingRide ?? null,
   };
 }
