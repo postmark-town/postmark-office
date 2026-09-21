@@ -516,16 +516,46 @@ test("the freeze names who the seam would move, and offers the FILING REPAIR", a
     departure({ handle: "on-deck", from: { x: 2, y: 3 }, toward: { x: 2, y: 3 }, at: 10 }),
     departure({ handle: "ashore", from: { x: 500, y: 500 }, toward: { x: 500, y: 500 }, at: 10 }),
   ];
+  // 1. GEOMETRY, and under the agreement law the only thing a deck still says.
+  // Who is standing inside her footprint at a berthed instant — never who is
+  // going anywhere, which since the agreement law is block 3's business and no
+  // longer follows from this one.
   const deck = standingOnDeck({ departures, service, walk, vessel, geometry, atFc });
   assert.deepEqual(deck.residents.map((r) => r.handle), ["on-deck"]);
 
-  const moved = seamDiff({ departures, service, walk, vessel, atFc: 10.6 });
-  assert.deepEqual(moved.map((m) => m.handle), ["on-deck"]);
-
+  // 2. THE FILING REPAIR, ahead of the carriage question rather than behind it.
+  // `ashoreFor` is where the freeze would set someone down; it does not depend
+  // on who is carried, and it sat behind an assertion that threw, so it never
+  // ran. It runs first now so no verdict about carriage can hide it again.
   const ashore = ashoreFor({ service, vessel, atFc });
   assert.ok(ashore, "the repair has somewhere to put them");
   assert.equal(geometry.pointInRect(ashore.x, ashore.y, vessel.footprintOf(service, service.stops[0].at)), false,
     "ashore means OUTSIDE her footprint, or the next departure collects them again");
+
+  // 3. BOARDING IS DECLARED, NEVER INFERRED — so the seam moves NOBODY.
+  // This assertion used to expect ["on-deck"]: standing inside her footprint at
+  // the cast-off was boarding. Keemin repealed that on 2026-08-11 (world commit
+  // 64e66ed7, "boarding is declared, never inferred — the agreement law replaces
+  // boarding-is-presence"): "The footprint test is gone; standing on her deck at
+  // the hour does nothing, and an agreement carries you from anywhere. Default
+  // empty list = nobody rides, so any reader that has not learned to pass
+  // agreements gets the correct answer rather than the old one."
+  //
+  // The office is one of those readers. `seamDiff` calls the world's
+  // `positionAt(departure, instant, service)` with three arguments and never the
+  // fourth, `agreements`, so the empty list governs and nobody is carried. The
+  // empty answer is therefore CORRECT, not a defect — and it is correct twice
+  // over, because no office store can hold a passenger agreement yet
+  // (`declareAttachment` admits only cascade|detach; the boarding verb lands
+  // with the vessel work). Restoring the old expectation would be
+  // re-implementing the one thing the ruling forbids.
+  //
+  // What this pins is the refusal, which is live: the carry mechanism fires when
+  // an agreement IS passed, and the freeze still cannot see it. See the
+  // agreement-blindness note at `seamDiff` in tools/ledger-freeze.mjs.
+  const moved = seamDiff({ departures, service, walk, vessel, atFc: 10.6 });
+  assert.deepEqual(moved.map((m) => m.handle), [],
+    "with no agreement declared, standing on her deck carries nobody — the seam must report an empty list");
 });
 
 // ── the town's own numbers ───────────────────────────────────────────────────
