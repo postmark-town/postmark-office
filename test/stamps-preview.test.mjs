@@ -44,6 +44,7 @@
 // asserting the fixture.
 
 import test, { after } from "node:test";
+import { townClone, worldClone } from "./fixture-paths.mjs";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, existsSync, rmSync } from "node:fs";
@@ -56,7 +57,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 
 // The town checkout the fixture copies its engine out of. Same resolution order
 // `test/funding-report.test.mjs` uses, plus the pool path this lane runs on.
-const TOWN = [process.env.TOWN_CLONE, resolve(HERE, "..", "town-clone"), "G:/postmark/pool/town-1", "G:/postmark/seam-overnight/town-clone"]
+const TOWN = [townClone()]
   .find((p) => p && existsSync(join(p, "tools", "stamp-mint.mjs")));
 
 const litter = [];
@@ -429,8 +430,7 @@ test("the rule the block quotes is the world record's own text, read from the ma
   // door quotes it, never its own prose." So this reads the MARK FILE, not the
   // door's copy of it. Skipped, never faked, when no world checkout is at hand:
   // a green tick that proved nothing would be worse than an honest absence.
-  const roots = [process.env.WORLD_CLONE, "G:/postmark/pool/world-1", "G:/Postmark/repo-clones/wright/postmark-world",
-    resolve(HERE, "..", "world-clone")];
+  const roots = [worldClone()];
   const rel = "WORLD/marks/let-there-be-light/the-town-centre/the-keeping-works/postmark-edge/stake/stake-mark/mark.md";
   let text = null;
   for (const root of roots) { if (!root) continue; try { text = readFileSync(join(root, rel), "utf8"); break; } catch { /* next */ } }

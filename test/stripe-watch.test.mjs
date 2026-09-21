@@ -27,6 +27,7 @@ import { execFileSync } from "node:child_process";
 import { isResidentHandle } from "../src/residency.mjs";
 import { CROSSING_MS } from "../src/crossings.mjs";
 import { townLoginHands } from "../src/household-logins.mjs";
+import { NO_TOWN, townClone, townModuleUrl } from "./fixture-paths.mjs";
 import {
   decide, decodeSession, resolveSession, listCompleteSessions, stripeReader,
   OUTSIDE_FROM, HANDLE_FIELD, RAIL, MIN_USD,
@@ -37,9 +38,12 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 // always used. No process.env read: this suite carries an env-invariance guard
 // (test/freshness-ladder.test.mjs) and a fixture that changes shape with an
 // exported variable is the exact thing it exists to catch.
-const TOWN = [resolve(HERE, "..", "town-clone"), "G:/postmark/seam-overnight/town-clone"]
+const TOWN = [townClone()]
   .find((p) => existsSync(join(p, "tools", "stamp-mint.mjs")));
-const ENGINE = await import(`file:///${TOWN}/tools/stamp-mint.mjs`);
+// Guarded: a top-level await import of a clone that is not there takes the
+// whole module down at load, and its cases then neither pass nor fail.
+const ENGINE = TOWN ? await import(townModuleUrl("tools", "stamp-mint.mjs")) : null;
+const SKIP = !TOWN && NO_TOWN;
 
 const CS_A = "cs_test_a11111111111111111111111";
 const CS_B = "cs_test_b22222222222222222222222";
@@ -131,7 +135,7 @@ const cliRecorder = ({ repo, keyFile }, rail = RAIL) => async ({ pot, usd, from,
 // THE POT — from the session, never from a guess
 // ════════════════════════════════════════════════════════════════════════════
 
-test("the pot comes from the session's own client_reference_id, and a session without one is never guessed at", async () => {
+test("the pot comes from the session's own client_reference_id, and a session without one is never guessed at", { skip: SKIP }, async () => {
   // LAW (tools/epoch-close.mjs --receipt, verbatim): `no pot file
   //     WHITE_PAGES/pot-${pot}.json — a receipt needs the pot it pays`.
   //
@@ -171,7 +175,7 @@ test("the pot comes from the session's own client_reference_id, and a session wi
 // THE HAND — a match, or a gift; never a near-match
 // ════════════════════════════════════════════════════════════════════════════
 
-test("an exactly-matching handle becomes the payer, and anything else becomes a gift that mints no holo", async () => {
+test("an exactly-matching handle becomes the payer, and anything else becomes a gift that mints no holo", { skip: SKIP }, async () => {
   // LAW (the fund page, the card rail's own warning, verbatim): "Tell the town
   //     which handle it was for when you pay, or write and say so — a payment
   //     the office cannot attach to a hand can still be a gift, but it cannot
@@ -200,7 +204,7 @@ test("an exactly-matching handle becomes the payer, and anything else becomes a 
   assert.match(none.gift_note, /no handle was given/);
 });
 
-test("the gift spelling can never collide with a handle, and the ledger still takes it", async () => {
+test("the gift spelling can never collide with a handle, and the ledger still takes it", { skip: SKIP }, async () => {
   // LAW (src/funding.mjs, the pot-receipt grammar, verbatim): the payer rides
   //     `from: (\S+)` — anything without whitespace. And (src/residency.mjs) a
   //     handle is lowercase letters, digits and single hyphens.
@@ -233,7 +237,7 @@ test("the gift spelling can never collide with a handle, and the ledger still ta
 // reading it is reading the record, and the only thing being added is that the
 // office stops throwing away an answer it already has.
 
-test("a typed GitHub login the town has pinned to ONE household with ONE hand is the hand — attributed, not guessed", async () => {
+test("a typed GitHub login the town has pinned to ONE household with ONE hand is the hand — attributed, not guessed", { skip: SKIP }, async () => {
   // LAW (tools/world-households-export.mjs, verbatim): "logins: lowercased
   //     GitHub login → household key … Pinned handles contribute their pin's
   //     login; login-keyed households bind their own name by construction."
@@ -261,7 +265,7 @@ test("a typed GitHub login the town has pinned to ONE household with ONE hand is
   assert.equal(r.handle_typed, "pazmartina");
 });
 
-test("a login whose household holds SEVERAL hands is a household and not a hand, so it stays a gift that says why", async () => {
+test("a login whose household holds SEVERAL hands is a household and not a hand, so it stays a gift that says why", { skip: SKIP }, async () => {
   // LAW (tools/stripe-watch.mjs, the header, verbatim): "a payment the office
   //     cannot attach to a hand can still be a gift, but it cannot mint your
   //     holo." A pin that names six people names no one of them.
@@ -286,7 +290,7 @@ test("a login whose household holds SEVERAL hands is a household and not a hand,
   assert.match(r.gift_note, /cannot mint your holo/);
 });
 
-test("a resident handle OUTRANKS a login of the same spelling — the handle channel is asked first", async () => {
+test("a resident handle OUTRANKS a login of the same spelling — the handle channel is asked first", { skip: SKIP }, async () => {
   // LAW (tools/stripe-watch.mjs, the header, verbatim): the hand is "the
   //     session's custom field `handle`, if it EXACTLY names a registered
   //     household". Exact match is the first question and it keeps its
@@ -309,7 +313,7 @@ test("a resident handle OUTRANKS a login of the same spelling — the handle cha
   assert.equal(r.pin_note, undefined, "nothing was resolved through a pin, so nothing claims it was");
 });
 
-test("the login channel is case-insensitive, because a login is not case-sensitive and a payer types what they remember", async () => {
+test("the login channel is case-insensitive, because a login is not case-sensitive and a payer types what they remember", { skip: SKIP }, async () => {
   // LAW (tools/world-households-export.mjs, verbatim): "logins: LOWERCASED
   //     GitHub login → household key". The map is built lowercased, so the
   //     lookup must be too, or the map's own spelling silently excludes the
@@ -326,7 +330,7 @@ test("the login channel is case-insensitive, because a login is not case-sensiti
   }
 });
 
-test("a login TWO different accounts claim is ambiguous, and ambiguity is a gift rather than a winner", async () => {
+test("a login TWO different accounts claim is ambiguous, and ambiguity is a gift rather than a winner", { skip: SKIP }, async () => {
   // LAW (src/household-logins.mjs, verbatim): "A consumer that picks the first
   //     of several is guessing with somebody's deed."
   //
@@ -344,7 +348,7 @@ test("a login TWO different accounts claim is ambiguous, and ambiguity is a gift
   assert.equal(r.attributed, false);
 });
 
-test("an unknown string is still a gift, and the pin channel did not loosen the old rule", async () => {
+test("an unknown string is still a gift, and the pin channel did not loosen the old rule", { skip: SKIP }, async () => {
   // LAW (the fund page, the card rail's own warning, verbatim): "a payment the
   //     office cannot attach to a hand can still be a gift, but it cannot mint
   //     your holo."
@@ -367,7 +371,7 @@ test("an unknown string is still a gift, and the pin channel did not loosen the 
   assert.match(none.gift_note, /no handle was given/);
 });
 
-test("the disclosure rides the PLAN through decide(), so the held row the operator reads carries it too", async () => {
+test("the disclosure rides the PLAN through decide(), so the held row the operator reads carries it too", { skip: SKIP }, async () => {
   // LAW (tools/stripe-watch.mjs, the header, verbatim): "A HELD session carries
   //     its provisional resolution, not just 'wait'. That is the whole value of
   //     the window: the operator round must be able to read [the resolution]
@@ -395,7 +399,7 @@ test("the disclosure rides the PLAN through decide(), so the held row the operat
   assert.match(plan.pin_note, /attributed, not guessed/);
 });
 
-test("with NO pins map handed in, the rule is exactly the rule it was before this lane", async () => {
+test("with NO pins map handed in, the rule is exactly the rule it was before this lane", { skip: SKIP }, async () => {
   // LAW (src/household-logins.mjs, verbatim): "An engine without
   //     `currentHouseholds` yields an EMPTY map, which is the honest answer: no
   //     pins were read, so no login is a hand."
@@ -419,7 +423,7 @@ test("with NO pins map handed in, the rule is exactly the rule it was before thi
 // THE GRACE WINDOW
 // ════════════════════════════════════════════════════════════════════════════
 
-test("a session younger than one crossing is HELD, and the hold carries the plan the operator must be able to veto", async () => {
+test("a session younger than one crossing is HELD, and the hold carries the plan the operator must be able to veto", { skip: SKIP }, async () => {
   // LAW (src/crossings.mjs, the ratified derivation, verbatim): "crossings run
   //     00:00 / 12:00 UTC (the ferry's clock), counted from the mail-ledger's
   //     first delivery day (2026-06-12). This derivation IS the town clock".
@@ -443,7 +447,7 @@ test("a session younger than one crossing is HELD, and the hold carries the plan
   assert.equal(ripe.disposition, "witness", "one crossing exactly is old enough — the boundary is >=, not >");
 });
 
-test("the grace is ELAPSED AGE, not a crossing boundary — a payment made a minute before 12:00 UTC still gets its window", async () => {
+test("the grace is ELAPSED AGE, not a crossing boundary — a payment made a minute before 12:00 UTC still gets its window", { skip: SKIP }, async () => {
   // The interpretive call, asserted so it cannot be quietly changed back. "≥1
   // crossing old" could have meant "a boundary has passed", and under that
   // reading a session created at 11:59 UTC would witness one minute later —
@@ -461,7 +465,7 @@ test("the grace is ELAPSED AGE, not a crossing boundary — a payment made a min
 // THE CAP
 // ════════════════════════════════════════════════════════════════════════════
 
-test("an over-target arrival on a capped pot journals as an anomaly rather than witnessing", async () => {
+test("an over-target arrival on a capped pot journals as an anomaly rather than witnessing", { skip: SKIP }, async () => {
   // LAW (D5, Keemin 2026-08-21, verbatim as the /fund door quotes it): "intake
   //     refuses dollars past a pot's posted target, mechanically (recording
   //     tool / door bounce), except pots explicitly marked uncapped."
@@ -486,7 +490,7 @@ test("an over-target arrival on a capped pot journals as an anomaly rather than 
 // IDEMPOTENCE — the ledger decides, not the journal
 // ════════════════════════════════════════════════════════════════════════════
 
-test("once the ref is a receipt the same session reports `already`, and a second tick writes nothing", async () => {
+test("once the ref is a receipt the same session reports `already`, and a second tick writes nothing", { skip: SKIP }, async () => {
   // LAW (stamp-mint.mjs, the pot-receipt grammar, verbatim): "ref is unique
   //     forever: one dollar, one mint chance, a re-recorded receipt bounces."
   //
@@ -521,7 +525,7 @@ test("once the ref is a receipt the same session reports `already`, and a second
 // WHAT IS NEVER A RECEIPT
 // ════════════════════════════════════════════════════════════════════════════
 
-test("test-mode money, unpaid sessions, foreign currency and sub-dollar amounts are named, never witnessed", async () => {
+test("test-mode money, unpaid sessions, foreign currency and sub-dollar amounts are named, never witnessed", { skip: SKIP }, async () => {
   // LAW (fund.mjs, guard 5, verbatim): "the ledger records whole dollars, so a
   //     payment under $1 cannot be witnessed as a receipt. It reached the town
   //     and it is not lost — write to the postmaster."
@@ -540,7 +544,7 @@ test("test-mode money, unpaid sessions, foreign currency and sub-dollar amounts 
   assert.equal(at({ id: CS_A, amount: 100 }).disposition, "witness");
 });
 
-test("cents are witnessed as whole dollars and the remainder is disclosed, never dropped in silence", async () => {
+test("cents are witnessed as whole dollars and the remainder is disclosed, never dropped in silence", { skip: SKIP }, async () => {
   // LAW (src/funding.mjs, verbatim): "Dollars are whole: `usd` is [1-9]\\d* in
   //     the landed grammar. $10.50 is not a smaller payment, it is not a row."
   const town = seamTown();
@@ -554,7 +558,7 @@ test("cents are witnessed as whole dollars and the remainder is disclosed, never
 // THE READ
 // ════════════════════════════════════════════════════════════════════════════
 
-test("only COMPLETED sessions are asked for, and the pages are followed to the end", async () => {
+test("only COMPLETED sessions are asked for, and the pages are followed to the end", { skip: SKIP }, async () => {
   // The refusing is done by Stripe rather than by our incuriosity: an open or
   // expired session is never in the answer because it was never in the request.
   const created = 1_700_000_000;
@@ -572,7 +576,7 @@ test("only COMPLETED sessions are asked for, and the pages are followed to the e
   assert.deepEqual(got.map((s) => s.created), got.map((s) => s.created).slice().sort((a, b) => a - b));
 });
 
-test("the cursor is INCLUSIVE, so two sessions in the same second cannot fall through it", async () => {
+test("the cursor is INCLUSIVE, so two sessions in the same second cannot fall through it", { skip: SKIP }, async () => {
   const created = 1_700_000_000;
   const twins = [sess({ id: CS_A, created }), sess({ id: CS_B, created })];
   const acct = stripeAccount({ sessions: twins });
@@ -581,7 +585,7 @@ test("the cursor is INCLUSIVE, so two sessions in the same second cannot fall th
   assert.equal(acct.calls[0].params["created[gte]"], created);
 });
 
-test("the page cap REFUSES rather than truncating — a partial read decides nothing", async () => {
+test("the page cap REFUSES rather than truncating — a partial read decides nothing", { skip: SKIP }, async () => {
   // LAW (tools/usdc-watch.mjs, on an unreachable chain, verbatim): "a silent
   //     empty report from a blind watcher is indistinguishable from a quiet day,
   //     and the second one is a lie." A watcher that quietly stopped paginating
@@ -599,7 +603,7 @@ test("the page cap REFUSES rather than truncating — a partial read decides not
   assert.equal(all.length, 20);
 });
 
-test("a Stripe read that fails throws, and no key means no reader at all", async () => {
+test("a Stripe read that fails throws, and no key means no reader at all", { skip: SKIP }, async () => {
   // Same law as usdc-watch's unreachable chain: "a silent empty report from a
   // blind watcher is indistinguishable from a quiet day, and the second one is
   // a lie."
@@ -608,7 +612,7 @@ test("a Stripe read that fails throws, and no key means no reader at all", async
   assert.throws(() => stripeReader({ key: null }), /no STRIPE_KEY/);
 });
 
-test("the ref is stripe:<session id>, and it is the only ref this rail can ever mint", async () => {
+test("the ref is stripe:<session id>, and it is the only ref this rail can ever mint", { skip: SKIP }, async () => {
   // LAW (stamp-mint.mjs, the pot-receipt grammar, verbatim): "ref is unique
   //     forever: one dollar, one mint chance, a re-recorded receipt bounces."
   //     The card rail has no payer paste-path (the fund page: "Step 2 — there
@@ -618,7 +622,7 @@ test("the ref is stripe:<session id>, and it is the only ref this rail can ever 
   assert.ok(!/\s|·/.test(d.receipt_ref), "the town CLI refuses a ref carrying whitespace or the field separator");
 });
 
-test("NO DOOR IN THE TOWN CAN MINT A `stripe:` REF — the premise the whole auto-witness rests on", async () => {
+test("NO DOOR IN THE TOWN CAN MINT A `stripe:` REF — the premise the whole auto-witness rests on", { skip: SKIP }, async () => {
   // LAW (the fund page, the card rail's step 2, verbatim): "There is nothing
   //     for you to paste. The hash form belongs to the USDC rail — it reads
   //     Base directly and cannot see a card payment."
@@ -656,7 +660,7 @@ test("NO DOOR IN THE TOWN CAN MINT A `stripe:` REF — the premise the whole aut
   assert.ok(!w.receipt_ref.startsWith(`${RAIL}:`));
 });
 
-test("the payer's email is journalled for the operator and never reaches a ledger row", async () => {
+test("the payer's email is journalled for the operator and never reaches a ledger row", { skip: SKIP }, async () => {
   // The journal is a private operator surface; the ledger is public forever.
   const town = seamTown();
   const now = 2_000_000_000_000;

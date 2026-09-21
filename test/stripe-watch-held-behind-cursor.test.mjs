@@ -61,6 +61,7 @@ import { promisify } from "node:util";
 
 import { CROSSING_MS } from "../src/crossings.mjs";
 import { HANDLE_FIELD, decodeSession } from "../tools/stripe-watch.mjs";
+import { townClone } from "./fixture-paths.mjs";
 // `unwitnessedSeen` is imported inside F5 rather than here ON PURPOSE. A static
 // import of a symbol the train tip does not export is a LOAD error, and a load
 // error reds every case in the file for a reason none of them is about — the
@@ -73,7 +74,7 @@ const run = promisify(execFile);
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI = join(HERE, "..", "tools", "stripe-watch.mjs");
-const TOWN = [resolve(HERE, "..", "town-clone"), "G:/postmark/seam-overnight/town-clone"]
+const TOWN = [townClone()]
   .find((p) => existsSync(join(p, "tools", "stamp-mint.mjs")));
 
 const KEY = "rk_test_thisisnotarealkey";

@@ -22,6 +22,7 @@ import { HANDLE_FIELD } from "../tools/stripe-watch.mjs";
 import { tmpdir } from "node:os";
 import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
+import { townClone } from "./fixture-paths.mjs";
 
 // execFileSync BLOCKS THE EVENT LOOP, so the in-process fake Stripe below could
 // never accept the child's connection and every run died on the fetch timeout.
@@ -31,7 +32,7 @@ const run = promisify(execFile);
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI = join(HERE, "..", "tools", "stripe-watch.mjs");
-const TOWN = [resolve(HERE, "..", "town-clone"), "G:/postmark/seam-overnight/town-clone"]
+const TOWN = [townClone()]
   .find((p) => existsSync(join(p, "tools", "stamp-mint.mjs")));
 
 const KEY = "rk_test_thisisnotarealkey";

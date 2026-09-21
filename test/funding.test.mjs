@@ -69,6 +69,9 @@ import { DatabaseSync } from "node:sqlite";
 import { SCHEMA } from "../src/schema.mjs";
 import { parseLedgerText, foldFunding, classifyFundingRow, readPots, HOLO_CAPTION, HOLO_EXPANSION, WHAT_THIS_BUYS, TEACH } from "../src/funding.mjs";
 import { stampsDetail, potBoard, questBoardFor } from "../src/queries.mjs";
+import { NO_TOWN, townClone, townModuleUrl } from "./fixture-paths.mjs";
+
+const SKIP = !townClone() && NO_TOWN;
 
 // ── the landed grammar, one row of every kind ────────────────────────────────
 
@@ -738,15 +741,15 @@ const BOUNTY_ROW = {
 };
 
 async function board(db, quests) {
-  const TOWN = "G:/Wright-HQ/postmark"; // same live-checkout convention as quests.test.mjs
-  const { townDay } = await import("file:///G:/Wright-HQ/postmark/tools/quest-progress.mjs");
+  const TOWN = townClone(); // same live-checkout convention as quests.test.mjs
+  const { townDay } = await import(townModuleUrl("tools", "quest-progress.mjs"));
   const meta = { quest_day: townDay(), quest_registry: JSON.stringify({ version: 1, quests }) };
   return questBoardFor(db, meta, "keemin", TOWN);
 }
 
 const DAILY = { id: "correspond-send", title: "Reach out", cadence: "daily", validation: "automatic", target: 5, reward: "1 stamp per unit" };
 
-test("a pot's bounty row is a board posting, never a resident's quest card", async () => {
+test("a pot's bounty row is a board posting, never a resident's quest card", { skip: SKIP }, async () => {
   const b = await board(fundingDb(), [DAILY, BOUNTY_ROW]);
   assert.deepEqual(b.quests.map((q) => q.id), ["correspond-send"],
     "the bounty comes off the card deck — left on, it renders to every resident as a daily quest stuck at 0/150");
@@ -755,7 +758,7 @@ test("a pot's bounty row is a board posting, never a resident's quest card", asy
   assert.ok(b.pots.teach, "the section explains itself where it is read");
 });
 
-test("a bounty posting with no pot file behind it is surfaced, not dropped between the two reads", async () => {
+test("a bounty posting with no pot file behind it is surfaced, not dropped between the two reads", { skip: SKIP }, async () => {
   const b = await board(fundingDb(), [DAILY, { ...BOUNTY_ROW, id: "ghost-pot" }]);
   assert.equal(b.quests.some((q) => q.id === "ghost-pot"), false, "still off the card deck");
   const ghost = b.pots.invalid_rows.list.find((i) => i.row_kind === "pot-posting");
