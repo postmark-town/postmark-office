@@ -339,6 +339,64 @@ export async function guardedAttachments(db, { until = null } = {}) {
     }));
 }
 
+// ═════════════════════════════════════════════════════════════════════════════
+// NOT A GUARD · the investigate door's `stands` block, read from the store
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// POS-162, under Everything Reads the Store. `world.mjs § thingStandsBlock` used
+// to open `dynamic.db` read-only for BOTH halves of a holder question — the
+// `attachments` table and the holding-class `journal`. The rows are in `acts`,
+// the ports exist, and this is the wire.
+//
+// ⚑ IT TAKES NO FLAG, AND THAT IS THE POINT. `guardedAttachments` above carries
+// a `W2_GUARDS` branch because a GUARD flipping is a thing an operator rolls
+// back by removing a flag. This is a READ with one right answer: the holding
+// record lives in `acts`, the sqlite journal truncates at every drain, and a
+// switch here would be the office maintaining two answers to one question —
+// which is the thing the project exists to stop. Replace, never layer: there is
+// no sqlite fallback under this and a store that cannot be read is an ABSENT
+// block, which is the door's own ruled answer for an unreadable record.
+//
+// ⚑ ONE TRANSACTION, BOTH HALVES. `officeRead`'s `BEGIN READ ONLY` wraps the
+// pair, so the holder and the set-down are read from one snapshot rather than
+// from two the town may have moved between — and it is one round trip, not two.
+//
+// ⚑ DEC-4 GETS STRONGER, NOT WEAKER. The rule is that a read worker holds no
+// writable handle; the old road held a read-only sqlite handle and closed it in
+// a `finally`. This road opens no sqlite handle at all, and `BEGIN READ ONLY`
+// makes "this never writes" a property Postgres enforces rather than one a
+// comment asserts.
+//
+// ⚑ NOT WRAPPED IN `refusing`. `GuardsUnreachableError` carries the PEN's
+// sentence — "nothing was written, and nothing was lost" — which is the wrong
+// thing to say about a read that wrote nothing by construction. The caller's
+// ruled answer for an unreadable record is an absent block, and it reaches that
+// answer from any throw. So the port's own error travels, and the door's catch
+// is the one place it becomes an answer.
+
+/**
+ * Both halves of a holder question for ONE thing, from `acts`, in the shapes
+ * `world-hold.mjs § whereThingStands` already takes.
+ *
+ * `attachments` is narrowed to this target in SQL — the port offers it and says
+ * why it is safe ("`liveHolder` reads the last row FOR THAT TARGET, so a
+ * filtered read is safe, while a filtered read that also dropped the order would
+ * not be"), and both of this door's consumers filter by the same id anyway.
+ *
+ * Returns `null` when the register is not configured, which is `actsQuery`'s own
+ * distinction: null is "I could not look", never "the answer is none".
+ */
+export async function standsRowsFromStore(thingId) {
+  if (!world2Enabled()) return null;
+  return reading(async (client) => {
+    const [held, holding] = await Promise.all([
+      port.pgAttachmentsFor(client, { target: String(thingId) }),
+      port.pgHoldingRowsFor(client, String(thingId)),
+    ]);
+    return { attachments: held.rows, journal: holding.rows };
+  });
+}
+
 /** What the doors say about the read half, for the status surfaces. */
 export function guardStatus(env = process.env) {
   return { flipped: guardsFlipped(env), flag: "W2_GUARDS", source: guardsFlipped(env) ? "postgres" : "sqlite" };

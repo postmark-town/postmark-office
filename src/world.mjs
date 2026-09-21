@@ -1776,27 +1776,39 @@ export async function worldInvestigate(args = {}, key = null) {
  * unreadable receipt is absent rather than empty.
  */
 async function thingStandsBlock(id, w, r) {
-  let dyn = null;
   try {
-    // ⚑ READ-ONLY, AND THIS ONE WAS A LIVE BREACH OF DEC-4 (found by the g3
-    // reviewer, driven on a booted `--role read` worker at the previous pin):
-    // `GET /world/investigate` for a mark that EXISTS reached here, opened the
-    // dynamic store in WRITE mode, and re-created a dropped `emissions` table
-    // on a worker that is supposed to hold no writable handle at all.
+    // ⚑ IT READS THE STORE (POS-162, Everything Reads the Store). Both halves —
+    // who holds it and where it was set down — come from `acts`, in ONE read-only
+    // transaction, through `world2-guards.mjs § standsRowsFromStore`. There is no
+    // flag on it and no sqlite under it: the holding record lives in `acts`, the
+    // sqlite journal TRUNCATES at every drain, and a set-down older than the
+    // drain cursor was simply not there to be read.
     //
-    // My own § 2.1 sweep drove all 41 GET routes and saw nothing, because it
-    // drove this one with a mark that does not exist and got a 422 before the
-    // store was ever opened. A sweep whose inputs bounce early cannot see the
-    // code underneath them.
-    const [{ openDynamicReadOnly }, { readAttachments }, { readJournal }, hold] = await Promise.all([
-      import("./dynamic-store.mjs"), import("./dynamic-entities.mjs"),
-      import("./world-journal.mjs"), import("./world-hold.mjs"),
+    // ⚑ AND DEC-4 IS NOW STRUCTURAL. This function was a live breach of it
+    // (found by the g3 reviewer, driven on a booted `--role read` worker):
+    // `GET /world/investigate` for a mark that EXISTS reached here, opened the
+    // dynamic store in WRITE mode, and re-created a dropped `emissions` table on
+    // a worker that is supposed to hold no writable handle at all. My own § 2.1
+    // sweep drove all 41 GET routes and saw nothing, because it drove this one
+    // with a mark that does not exist and got a 422 before the store was ever
+    // opened — a sweep whose inputs bounce early cannot see the code underneath
+    // them. The repair was `openDynamicReadOnly`; the store road holds no sqlite
+    // handle at all, and its transaction is `BEGIN READ ONLY`, which Postgres
+    // enforces.
+    //
+    // ⚑ AN UNREADABLE RECORD IS AN ABSENT BLOCK, unchanged. A register that is
+    // not configured answers `null` here, a register that will not answer throws
+    // into the catch below, and both land where `dyn == null` landed: no block on
+    // the card. `whereThingStands`' `unreadable` source is not reachable from
+    // this door and was not reachable before it either — the block is absent
+    // rather than present-and-empty, which is the same distinction one level up.
+    const [{ standsRowsFromStore }, hold] = await Promise.all([
+      import("./world2-guards.mjs"), import("./world-hold.mjs"),
     ]);
-    dyn = openDynamicReadOnly();
-    if (!dyn) return null; // no journal means nothing is held, which is the same answer
-    const attachments = readAttachments(dyn);
+    const rows = await standsRowsFromStore(id);
+    if (!rows) return null; // the register was not asked — the same answer an absent store gave
+    const { attachments, journal } = rows;
     if (!attachments.some((a) => a.target === id)) return null; // never held — nothing new to say
-    const journal = readJournal(dyn, { cls: "holding" });
     const marks = w?.marks ?? [];
     const centreOf = (mid) => marks.find((m) => m.id === mid)?.at ?? null;
     return await hold.whereThingStands(id, {
@@ -1809,7 +1821,6 @@ async function thingStandsBlock(id, w, r) {
       },
     });
   } catch { return null; }
-  finally { try { dyn?.close(); } catch { /* a reader that cannot close still read */ } }
 }
 
 /**

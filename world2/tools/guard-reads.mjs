@@ -901,6 +901,93 @@ export async function pgAttachmentsFor(client, { target = null, until = null, st
   return until == null ? read : { ...read, rows: read.rows.filter((a) => Date.parse(a.born_at) <= until) };
 }
 
+// ── THE HOLDING JOURNAL, over `acts` (POS-162) ──────────────────────────────
+//
+// `readJournal(db, { cls: "holding" })` is the OTHER half of what a holder
+// question needs, and the two are not the same read. The attachments half above
+// answers WHO HOLDS IT; this one answers WHERE IT WAS SET DOWN — world-hold.mjs
+// § latestDrop reads a `drop` act's witnessed line, and the-town/the-reach makes
+// that position canon at the next fold rather than a fall-back to the last place
+// the thing was folded.
+//
+// ⚑ THE ANCHOR IS THREE COLUMNS, NOT A PAYLOAD KEY, and this is the fact the
+// port has to carry. A journal row's witnessed line is stored as
+// `at_anchor / at_dx / at_dy` (world-journal.mjs § ROW_COLUMNS) and `hydrateRow`
+// reassembles it into the one `at` field the ruling named. `holdingEntry`'s
+// payload is `{thing, holder, previous_holder, made_by, policy}` and has never
+// carried the line at all. `acts` holds the SAME three columns
+// (001_tables.sql § acts), written by both pens — `mirrorAct` and `insertAct`
+// name them in their INSERT lists — so the composition here is `hydrateRow`'s
+// own expression and not a second reading of a payload.
+//
+// ⚑ THE ORDER IS `(at, id)` AND NOT `journal_seq`. 001's own words call
+// `journal_seq` the shadow-era pairing key that dies at cutover, and a flipped
+// lane writes Postgres FIRST — so at insert there is no sqlite rowid to carry
+// and the column is null on exactly the rows a flipped town writes. D6 ruled
+// replay order is `(at, id)`; ordering a holding read by a pairing key would put
+// a town's own set-downs last, or nowhere.
+//
+// ⚑ THE PREDICATE IS `class`, BECAUSE THAT IS THE PREDICATE. `readJournal`'s
+// `cls` filter is `class = ?` and nothing narrower; an `action IN (…)` filter
+// here would be a DIFFERENT predicate wearing this one's name, and it would
+// silently drop the first holding verb somebody adds.
+//
+// SECOND READER OF THIS CLASS, said out loud so POS-153 can share it:
+// `world-hold.mjs § readHoldEffects` reads the same `class = 'holding'` rows out
+// of sqlite for a different question (the effects shelf, scoped by handle rather
+// than by thing). When that one ports, it wants this function with the `thing`
+// narrowing dropped and a handle filter in its place — not a second query.
+
+/** `readJournal(db, { cls: "holding" })` for ONE thing, oldest first, over `acts`. */
+export async function pgHoldingRowsFor(client, thingId) {
+  const { rows } = await client.query(
+    `SELECT id, at, actor, action, object, at_anchor, at_dx, at_dy, class, payload, household
+       FROM acts
+      WHERE class = $1
+        AND COALESCE(object, payload->>'thing') = $2
+      ORDER BY at, id`,
+    [CLASS_HOLDING, String(thingId)]);
+  return { rows: rows.map(holdingRowOf) };
+}
+
+/** The class name `readJournal` is asked for — 1.0's own constant, restated here because the port imports nothing from `src/`. */
+export const CLASS_HOLDING = "holding";
+
+/**
+ * One `acts` row in `hydrateRow`'s vocabulary.
+ *
+ * `seq` IS THE ACT'S OWN ID, AND IT IS A DIFFERENT REGISTRY'S COUNTER. 1.0 put
+ * the sqlite journal rowid here and the door hands it on as `act_seq`. The
+ * record that answers now is `acts`, so the honest line number is `acts.id`;
+ * carrying null instead would dim a field that has an answer. Nothing in the
+ * office reads `act_seq` — it is a receipt a resident reads — so this changes
+ * which registry the number comes from and no derivation anywhere.
+ *
+ * NOT COMPARABLE TO A sqlite SEQ, which is why it is never used as an ORDER key
+ * here (`attachmentRowOf` refuses it in `seq` for exactly that reason, and it is
+ * right: there the field feeds `ATTACHMENT_ORDER_SQL`). The ordering above is
+ * done in SQL; this field is carried into the answer and read by nobody else.
+ */
+export const holdingRowOf = (r) => ({
+  seq: r.id == null ? null : Number(r.id),
+  actor: r.actor,
+  action: r.action,
+  object: r.object ?? null,
+  at: { anchor: r.at_anchor ?? null, dx: r.at_dx ?? null, dy: r.at_dy ?? null },
+  class: r.class,
+  // `acts.payload` is `jsonb`, so the driver hands back a PARSED OBJECT and
+  // 1.0's `JSON.parse` line would throw on every row. The string arm is the
+  // dead one here, kept only so a driver configured to hand over text does not
+  // silently answer null; the null fallback is `hydrateRow`'s own (`parse(text,
+  // null)`) and is parity, not a swallow — `whereThingStands` reads `object`,
+  // `action`, `at`, `actor` and `seq`, and never this field.
+  payload: r.payload == null ? null
+    : typeof r.payload === "object" ? r.payload
+      : (() => { try { return JSON.parse(String(r.payload)); } catch { return null; } })(),
+  household: r.household ?? null,
+  written_at: r.at instanceof Date ? r.at.toISOString() : r.at == null ? null : String(r.at),
+});
+
 // ═════════════════════════════════════════════════════════════════════════════
 // THE TRIPWIRES — premises that are FACTS OF TODAY'S STORE, not law
 // ═════════════════════════════════════════════════════════════════════════════
