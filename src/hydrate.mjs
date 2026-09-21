@@ -282,23 +282,24 @@ if (existsSync(questTool) && existsSync(registryPath)) {
   // This block is now the WIRING only: read the town's folds, hand them to the
   // pure reduction, write what comes back.
   if (typeof questMod.onboardingFactsFor === "function" && typeof questMod.foldFriendships === "function") {
-    const { onboardingFactsFor, foldFriendships } = questMod;
-    const { parseDeliveries } = await import(pathToFileURL(join(TOWN, "tools", "stamp-mint.mjs")));
-    const { standingRowsFor } = await import("./quest-standing.mjs");
+    const { onboardingFactsFor, foldFriendships, welcomedHouseholds } = questMod;
+    const { parseDeliveries, currentHouseholds } = await import(pathToFileURL(join(TOWN, "tools", "stamp-mint.mjs")));
+    const { standingRowsFromTown } = await import("./quest-standing.mjs");
 
-    // ONE ledger parse, shared by the onboarding facts and the two first-letter
-    // dates. `foldOnboarding` would parse it a second time for the same answer.
-    const deliveries = parseDeliveries(TOWN);
-    const friendships = foldFriendships(TOWN);
     // `isResidentHandle` is the office's own admission grammar and the reason
     // this iterates it rather than `town.residents` raw: the raw list carries
     // `_archived`, which the daily fold already excludes, so an unfiltered loop
     // wrote a standing row nothing would ever read.
     const handles = town.residents.map((r) => r.handle).filter(isResidentHandle);
-    const rows = standingRowsFor(handles, {
-      deliveries, friendships,
-      factsFor: (h) => onboardingFactsFor(TOWN, h, { deliveries }),
-    });
+    // EVERY town fold ONCE per rehydrate — the deliveries parse this block
+    // already shared, and the households roll + welcomed set the welcome row
+    // needs, which `onboardingFactsFor` otherwise re-resolves per resident at
+    // three ledger parses each. `foldOnboarding` is not the call because it
+    // would parse the mail ledger a second time for the same `deliveries`.
+    // The rule lives in quest-standing.mjs; this line is the wiring.
+    const { rows, friendships } = standingRowsFromTown(
+      { parseDeliveries, foldFriendships, currentHouseholds, welcomedHouseholds, onboardingFactsFor },
+      TOWN, handles);
 
     const insS = db.prepare("INSERT OR REPLACE INTO quest_standing (handle, json) VALUES (?, ?)");
     for (const [h, row] of rows) insS.run(h, JSON.stringify(row));
