@@ -117,13 +117,17 @@
 //
 // Over prod's 2,397 non-ledger departure acts that is a NO-OP TODAY: zero
 // instant inversions among 2,396 adjacent id-ascending pairs, zero positions
-// changed, zero handles whose governing departure moves. The CASE is there
-// because the ledger era must keep its file order — the 2026-08-08 sailing
-// filed every passenger at 18:00:00.000Z and those lines were appended after
-// walks stamped 18:16, which is the case the clause's own comment names. That
-// era's no-op is NOT proven here: the 304 ledger rows were not in the census
-// this lane was given, so the CASE keeps them on `acts.id` alone rather than
-// resting on a measurement nobody took.
+// changed, zero handles whose governing departure moves. `world2/tools/README.md`
+// § the append order measured the same question on `world2_dev` before the walk
+// era existed and got the same answer — "era-then-id vs by-instant: 0 of 73",
+// "journal era, id vs instant: 0 of 72 (786 of 786 rows monotone in `at`)". The
+// two measurements together cover both eras and 2,397 rows.
+//
+// The CASE is there anyway, because the ledger era's file order is the one place
+// the two genuinely diverge: the 2026-08-08 sailing filed every passenger at
+// 18:00:00.000Z and those lines were appended after walks stamped 18:16. Ties
+// would fall back to `acts.id` and hold, but an era whose own comment says its
+// order is not its instants keeps `acts.id` here rather than resting on that.
 //
 // ── IDEMPOTENCE ─────────────────────────────────────────────────────────────
 //
