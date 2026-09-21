@@ -87,7 +87,15 @@ const declaration = ({ origin, to, at, ms }) => ({
   arrives_at: new Date(at + ms).toISOString(),
 });
 
-const T0 = Date.UTC(2026, 8, 21, 12, 0, 0);
+// DELIBERATELY A MONTH IN THE PAST, and this is load-bearing. Every case below
+// passes `nowMs` explicitly, so the instant's VALUE changes no assertion — what
+// it changes is whether the un-threaded defect can be caught. A composition
+// that reads the real clock behind your back agrees with a `nowMs` sitting in
+// today's window and disagrees with one outside it, so an instant near now
+// would hide exactly the bug the threading fixed, and only some hours of the
+// day. A ride that came due a month ago is past for any clock this suite is
+// ever run under.
+const T0 = Date.UTC(2026, 7, 21, 12, 0, 0);
 const HOUR = 3_600_000;
 
 // ── THROUGH THE READ ────────────────────────────────────────────────────────
