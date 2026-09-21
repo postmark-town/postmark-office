@@ -210,7 +210,7 @@ const classMarkIn = (worldState, className) =>
  * that cannot read it answers null rather than an empty block: a portal whose
  * rules could not be read must not look like a portal that lends nothing.
  */
-async function groundBlockFor(targetId, { w, service, deps, entryStop = null, standingRide = null, nowMs = Date.now() }) {
+async function groundBlockFor(targetId, { w, service, deps, entryStop = null, standingRide = null, nowMs = Date.now(), knockedAt = null }) {
   if (!deps.lends) return null;
   const target = (w?.marks ?? []).find((m) => m.id === targetId) ?? null;
   const className = String(target?.class ?? "").trim();
@@ -218,7 +218,7 @@ async function groundBlockFor(targetId, { w, service, deps, entryStop = null, st
   let lends = [];
   try { lends = (await deps.lends(targetId)) ?? []; } catch { return null; }
   const extras = className === VEHICLE_CLASS && service
-    ? vehicleGroundExtras({ service, entryStop, standingRide, nowMs })
+    ? vehicleGroundExtras({ service, entryStop, standingRide, nowMs, knockedAt })
     : null;
   return groundBlockOf({ classMark: classMarkIn(w, className), lends, extras });
 }
@@ -251,7 +251,13 @@ async function enterViaPortal(portal, { who, w, at, occupancy, here, thresholds,
 
   const acts = deps.acts ? (await deps.acts(who)) ?? [] : [];
   const state = rideStateFrom(acts, { vesselId: vessel });
-  const ground = await groundBlockFor(vessel, { w, service, deps, entryStop: state.entryStop, standingRide: state.standingRide, nowMs });
+  // THE STOP BEING KNOCKED AT rides along (POS-161), because this block is
+  // built BEFORE the enter act is written a few lines down — so on the terms
+  // call AND on the accepting one `state.entryStop` is still null, and without
+  // it every distance here was null for the rider deciding whether to board.
+  // `stop` is the mark the enter call named, and `portalEntryFor` has already
+  // proved it is one of her stops.
+  const ground = await groundBlockFor(vessel, { w, service, deps, entryStop: state.entryStop, standingRide: state.standingRide, nowMs, knockedAt: stop });
 
   if (held.includes(vessel))
     return {
