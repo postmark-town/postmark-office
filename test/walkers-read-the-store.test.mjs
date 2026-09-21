@@ -45,12 +45,18 @@
 //
 // Run: node --test test/walkers-read-the-store.test.mjs
 
-import { test, before, after, beforeEach, afterEach } from "node:test";
+import { test, before, after, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import { storedDepartures, storedRecordsFor, recordsAcrossEras } from "../src/world-movement.mjs";
 import { useGuardReader } from "../src/world2-guards.mjs";
+import { WORLD_CLONE } from "../src/world-store.mjs";
+
+const restoreEnvFlag = (was) => {
+  if (was === undefined) delete process.env.WORLD_MOVEMENT_V2; else process.env.WORLD_MOVEMENT_V2 = was;
+};
 
 // The read asks `world2Enabled()` before it asks the road anything — an office
 // with no record configured spends no socket discovering that. So these two are
@@ -284,6 +290,52 @@ test("rows out of the record's append order REFUSE by name rather than answering
   assert.deepEqual(read.records, []);
   assert.match(String(read.absent), /append order|id-ascending/,
     `an out-of-order read answered normally: ${read.absent}`);
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// THE DOOR ITSELF — `/world/walkers` places a walker the record alone knows
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// Everything above proves what the READER does. These drive the public door end
+// to end over the real clone's engine, because "the reader returned a row" and
+// "the town's map draws a person there" are two claims, and only the second is
+// the one a resident sees.
+
+test("THE DOOR: `/world/walkers` places a walker whose only record is the store", async (t) => {
+  if (!WORLD_CLONE || !existsSync(join(WORLD_CLONE, "WORLD", "walk-ledger.md"))) {
+    return t.skip("no world clone on this machine — the door needs the engine, and a silent pass here would read as coverage");
+  }
+  const was = process.env.WORLD_MOVEMENT_V2;
+  process.env.WORLD_MOVEMENT_V2 = "1";
+  install(fixtureStore());
+  try {
+    const { worldWalkers } = await import("../src/world.mjs");
+    const r = await worldWalkers(WORLD_CLONE);
+    const ghost = r.walkers.find((w) => w.handle === "ghost-walker");
+    assert.ok(ghost, "the door did not place a walker the record alone knows about");
+    assert.deepEqual({ x: ghost.x, y: ghost.y }, THERE,
+      "the door placed him, but not where his own record put him");
+  } finally { restoreEnvFlag(was); }
+});
+
+test("THE DOOR, CONTROL: with the record unreachable he is gone, and the door still answers", async (t) => {
+  if (!WORLD_CLONE || !existsSync(join(WORLD_CLONE, "WORLD", "walk-ledger.md"))) {
+    return t.skip("no world clone on this machine");
+  }
+  // Without this, the case above could be green off the clone's own ledger — a
+  // door that places everybody would place him too. Same door, same instant, one
+  // thing changed: the record refuses.
+  const was = process.env.WORLD_MOVEMENT_V2;
+  process.env.WORLD_MOVEMENT_V2 = "1";
+  install(fixtureStore({ throws: new Error("the record is not reachable from here") }));
+  try {
+    const { worldWalkers } = await import("../src/world.mjs");
+    const r = await worldWalkers(WORLD_CLONE);
+    assert.equal(r.walkers.some((w) => w.handle === "ghost-walker"), false,
+      "he is on the map with no record behind him — the case above proves nothing");
+    assert.ok(r.walkers.length > 0,
+      "an unreachable record emptied the whole door — era one must still answer");
+  } finally { restoreEnvFlag(was); }
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
