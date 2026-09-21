@@ -201,22 +201,46 @@ test("the row the MIRROR already wrote is caught by the instant pair, not by a s
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("one act stands for ONE walk — two movements a whisker apart do not both claim it", () => {
-  const { dir, path } = fixtureStore();
-  try {
-    // nyx's real cadence: two walks 2,977 ms apart, closer than the first draft's 5 s window.
-    const derived = [
-      departureRowFrom({ seq: 10, actor: "nyx", at: "2026-08-29T02:00:00.000Z", from_x: 0, from_y: 0, toward_x: 1, toward_y: 1, crossing: 156.1, pace: 60 }),
-      departureRowFrom({ seq: 11, actor: "nyx", at: "2026-08-29T02:00:02.977Z", from_x: 1, from_y: 1, toward_x: 2, toward_y: 2, crossing: 156.1, pace: 60 }),
-    ];
-    // The store holds only the FIRST of the two.
-    const pool = [act(4001, { at: "2026-08-29T02:00:00.413Z", actor: "nyx", crossing: 156.1, from: { x: 0, y: 0 }, toward: { x: 1, y: 1 } })];
-    const plan = planFrom(derived, pool);
-    assert.equal(plan[0].state, "present", "the walk the act was written for");
-    assert.equal(plan[1].state, "new", "the second walk is MISSING and must be planned, not swallowed by its neighbour's act");
-    assert.equal(plan[0].have_id, 4001);
-    assert.equal(plan[1].have_id, undefined);
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+test("one act stands for ONE walk — two movements INSIDE the tolerance do not both claim it", () => {
+  // `stella-letta`'s real cadence, seq 656 → 657: 462 ms apart, well inside the
+  // 2,000 ms pair window. 341 same-actor pairs in the store are this close, so
+  // the tolerance alone cannot separate them and the one-to-one consumption is
+  // the only thing that can. A gap WIDER than the tolerance would be separated
+  // by the tolerance and would test nothing here.
+  const derived = [
+    departureRowFrom({ seq: 656, actor: "stella-letta", at: "2026-08-25T11:00:59.721Z", from_x: 0, from_y: 0, toward_x: 1, toward_y: 1, crossing: 148.5, pace: 60 }),
+    departureRowFrom({ seq: 657, actor: "stella-letta", at: "2026-08-25T11:01:00.183Z", from_x: 1, from_y: 1, toward_x: 2, toward_y: 2, crossing: 148.5, pace: 60 }),
+  ];
+  assert.ok(Date.parse(derived[1].at) - Date.parse(derived[0].at) < PAIR_TOLERANCE_MS,
+    "the two walks must be closer together than the tolerance, or this case is not the case");
+  // The store holds only the FIRST of the two, stamped 779 ms after it — which
+  // is 317 ms after the SECOND, so both walks reach it and only the consumption
+  // can decide. An act stamped between them would be separated by the one-sided
+  // window instead, and would test that guard rather than this one.
+  const pool = [act(4001, { at: "2026-08-25T11:01:00.500Z", actor: "stella-letta", crossing: 148.5, from: { x: 0, y: 0 }, toward: { x: 1, y: 1 } })];
+  assert.equal(matchOf(derived[1], pool)?.by, "pair",
+    "without the consumption the second walk reaches the first walk's act — which is the defect");
+  const plan = planFrom(derived, pool);
+  assert.equal(plan[0].state, "present", "the walk the act was written for");
+  assert.equal(plan[0].have_id, 4001);
+  assert.equal(plan[1].state, "new", "the second walk is MISSING and must be planned, not swallowed by its neighbour's act");
+  assert.equal(plan[1].have_id, undefined);
+});
+
+test("when one act is contended by two walks the plan REFUSES rather than writing past it", () => {
+  // The same contention with the act belonging to the SECOND walk: the first
+  // claims it in store order, disagrees with it, and the whole apply refuses.
+  // A wrong guess here is a CONFLICT a person reads, never a duplicate filed in
+  // silence — which is the direction a backfill must fail in.
+  const derived = [
+    departureRowFrom({ seq: 656, actor: "stella-letta", at: "2026-08-25T11:00:59.721Z", from_x: 0, from_y: 0, toward_x: 1, toward_y: 1, crossing: 148.5, pace: 60 }),
+    departureRowFrom({ seq: 657, actor: "stella-letta", at: "2026-08-25T11:01:00.183Z", from_x: 1, from_y: 1, toward_x: 2, toward_y: 2, crossing: 148.5, pace: 60 }),
+  ];
+  const pool = [act(4002, { at: "2026-08-25T11:01:00.500Z", actor: "stella-letta", crossing: 148.5, from: { x: 1, y: 1 }, toward: { x: 2, y: 2 } })];
+  const plan = planFrom(derived, pool);
+  assert.equal(plan[0].state, "CONFLICT");
+  assert.deepEqual(plan[0].drift, ["from", "toward"]);
+  assert.equal(plan[1].state, "new");
 });
 
 test("the pair window is one-sided — an act stamped BEFORE a movement is a different walk", () => {
