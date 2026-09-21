@@ -104,7 +104,7 @@ import { NO_TOWN, townClone, townModuleUrl } from "./fixture-paths.mjs";
 // fail for its own reason. (The card rail's F5 pays for this lesson in words.)
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const TOWN = [townClone()]
+const TOWN = [townClone()].filter(Boolean)
   .find((p) => existsSync(join(p, "tools", "stamp-mint.mjs")));
 // Guarded: a top-level await import of a clone that is not there takes the
 // whole module down at load, and its cases then neither pass nor fail.

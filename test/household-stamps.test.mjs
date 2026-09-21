@@ -392,7 +392,7 @@ test("the door quotes the planted mark bodies VERBATIM, from the world record it
   //
   // Skipped, never faked, when no world checkout is at hand: a green tick that
   // proved nothing would be worse than an honest absence.
-  const roots = [worldClone()];
+  const roots = [worldClone()].filter(Boolean);
   const base = "WORLD/marks/let-there-be-light/the-town-centre/the-keeping-works";
   const paths = {
     [STAKE_POT_BODY]: `${base}/postmark-edge/stake/stake-pot/mark.md`,

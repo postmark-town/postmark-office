@@ -45,7 +45,11 @@ const dir = mkdtempSync(join(tmpdir(), "pm-hh-quests-"));
 // THE TWO-RESIDENT HOUSEHOLD, and the two must differ or the test proves
 // nothing: `architect` sorts first and has done nothing today; `wright` is the
 // one who wrote a letter and the one the caller names.
-const day = townDay();
+// `townDay` is the town's own, so with no checkout there is nobody to ask. The
+// whole fixture below is built from it, and every case here is skipped in that
+// state — so the fallback is a placeholder nothing reads, never a second
+// opinion about what day it is.
+const day = townDay ? townDay() : "1970-01-01";
 const db = new DatabaseSync(join(dir, "quests.db"));
 db.exec(SCHEMA);
 const put = db.prepare("INSERT INTO meta VALUES (?, ?)");

@@ -26,7 +26,7 @@ import { townLoginHands } from "../src/household-logins.mjs";
 import { NO_TOWN, townClone, townModuleUrl } from "./fixture-paths.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const TOWN = [townClone()]
+const TOWN = [townClone()].filter(Boolean)
   .find((p) => existsSync(join(p, "tools", "stamp-mint.mjs")));
 
 // The town engine, imported once — the same one the fixture copies into each

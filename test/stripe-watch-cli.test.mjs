@@ -22,7 +22,7 @@ import { HANDLE_FIELD } from "../tools/stripe-watch.mjs";
 import { tmpdir } from "node:os";
 import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
-import { townClone } from "./fixture-paths.mjs";
+import { NO_TOWN, townClone } from "./fixture-paths.mjs";
 
 // execFileSync BLOCKS THE EVENT LOOP, so the in-process fake Stripe below could
 // never accept the child's connection and every run died on the fetch timeout.
@@ -32,8 +32,9 @@ const run = promisify(execFile);
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI = join(HERE, "..", "tools", "stripe-watch.mjs");
-const TOWN = [townClone()]
+const TOWN = [townClone()].filter(Boolean)
   .find((p) => existsSync(join(p, "tools", "stamp-mint.mjs")));
+const SKIP = !TOWN && NO_TOWN;
 
 const KEY = "rk_test_thisisnotarealkey";
 const CS = "cs_test_cli111111111111111111111";
@@ -108,7 +109,7 @@ const session = (over = {}) => ({
   payment_intent: "pi_cli", ...over,
 });
 
-test("the CLI runs end to end: env → reader → pages → journal → state, and writes no ledger row", async (t) => {
+test("the CLI runs end to end: env → reader → pages → journal → state, and writes no ledger row", { skip: SKIP }, async (t) => {
   // ONE session object, fed and then asserted against. `session()` derives
   // `created` from `Date.now()` at second resolution, so calling it a second
   // time at assert time asks a different question of the clock — and the answer
@@ -156,7 +157,7 @@ test("the CLI runs end to end: env → reader → pages → journal → state, a
   assert.equal(readFileSync(ledger, "utf8"), before);
 });
 
-test("a second run journals the SAME session once — the journal is append-only, not append-again", async (t) => {
+test("a second run journals the SAME session once — the journal is append-only, not append-again", { skip: SKIP }, async (t) => {
   const { port } = await fakeStripe([session()], t);
   const town = seamTown();
   const state = join(town.repo, "state.json");
@@ -172,7 +173,7 @@ test("a second run journals the SAME session once — the journal is append-only
   assert.equal(rows.filter((r) => r.kind === "seen").length, 1, "the boundary second is re-read and the session is re-seen, but journalled once");
 });
 
-test("no key is a loud refusal, not a quiet empty tick", async () => {
+test("no key is a loud refusal, not a quiet empty tick", { skip: SKIP }, async () => {
   const town = seamTown();
   execFileSync(process.execPath, [join(TOWN, "tools", "stamp-mint.mjs"), "--append", "--key", town.keyFile, "--repo", town.repo], { encoding: "utf8" });
   let err = null;
@@ -185,7 +186,7 @@ test("no key is a loud refusal, not a quiet empty tick", async () => {
   assert.match(String(err.stderr), /no STRIPE_KEY/);
 });
 
-test("no town clone with the funding seam is a loud refusal too", async () => {
+test("no town clone with the funding seam is a loud refusal too", { skip: SKIP }, async () => {
   const bare = mkdtempSync(join(tmpdir(), "no-seam-"));
   let err = null;
   try {

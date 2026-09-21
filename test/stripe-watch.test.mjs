@@ -38,7 +38,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 // always used. No process.env read: this suite carries an env-invariance guard
 // (test/freshness-ladder.test.mjs) and a fixture that changes shape with an
 // exported variable is the exact thing it exists to catch.
-const TOWN = [townClone()]
+const TOWN = [townClone()].filter(Boolean)
   .find((p) => existsSync(join(p, "tools", "stamp-mint.mjs")));
 // Guarded: a top-level await import of a clone that is not there takes the
 // whole module down at load, and its cases then neither pass nor fail.

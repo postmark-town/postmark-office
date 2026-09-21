@@ -626,7 +626,7 @@ test("PRE-FLIGHT: the duplicate family is a 409, the rest a 422 — the office's
 // The REAL law, from the office's own town checkout. The repo's idiom for a
 // test that needs the town's tools (economy-report.test.mjs, next-steps.test.mjs):
 // find the checkout, and SKIP BY NAME rather than assert against an invented one.
-const TOWN = [townClone()]
+const TOWN = [townClone()].filter(Boolean)
   .filter(Boolean).find((p) => existsSync(join(p, "tools", "envelope.mjs")));
 const lawSkip = TOWN ? false : "no town checkout carrying tools/envelope.mjs — set TOWN_CLONE";
 

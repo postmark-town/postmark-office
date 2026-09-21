@@ -349,7 +349,7 @@ test("an ordinary resident's walk is untouched by the human guard", async () => 
 
 test("the class mark's own body is quoted verbatim, from the world record", () => {
   // A paraphrase of a law sentence is the drift class the quote law kills.
-  const roots = [worldClone()];
+  const roots = [worldClone()].filter(Boolean);
   const rel = "WORLD/marks/let-there-be-light/the-town-centre/the-keeping-works/postmark-node/entity/human/mark.md";
   let text = null;
   for (const root of roots) {
