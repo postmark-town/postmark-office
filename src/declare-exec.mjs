@@ -27,7 +27,7 @@ import { execFileSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { penCommit } from "./write.mjs";
 import { conformance, planDeclaration, readJson, PINS_PATH } from "./declare.mjs";
-import { REGISTRY_PATH } from "./residency.mjs";
+import { REGISTRY_PATH, gangwayState } from "./residency.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLONE = process.env.TOWN_CLONE ?? resolve(HERE, "..", "town-clone");
@@ -60,12 +60,21 @@ async function main() {
     return err(e.code ?? 422, e.field ?? null, e.defect, e.hint);
   }
 
-  const plan = planDeclaration(registry, pins, decl);
+  // The gangway is re-read HERE, under the lock, against the clone we just
+  // freshened — not carried in from the door's earlier read. Settling at the
+  // door (POS-178) made this door a settlement road, and a breaker that is read
+  // outside the lock is a breaker a race can walk past: the founder's commit
+  // raising the gangway may have arrived in the pull above. Same reason
+  // conformance runs twice — the check inside the lock is the one that decides.
+  const plan = planDeclaration(registry, pins, decl, { gangway: gangwayState(CLONE) });
 
-  // Berth + registry entry + identity pin go down together and are staged
-  // together, so the single commit below is the atomicity: both or neither. A
+  // Berth + registry entry + identity pin — and, for a household settling at
+  // the door, its white-pages file set — go down together and are staged
+  // together, so the single commit below is the atomicity: all or none. A
   // household standing in the registry whose credential resolves to nobody is
-  // precisely the state this must never produce.
+  // precisely the state this must never produce, and so is an address card with
+  // no row behind it. Adding the settlement to `plan.files` bought that
+  // guarantee for free: it is the same list, the same staging, the same commit.
   const paths = [];
   for (const f of plan.files) {
     const abs = join(CLONE, f.path);
@@ -74,10 +83,16 @@ async function main() {
     paths.push(abs);
   }
 
-  const commit = penCommit(CLONE, paths,
-    `harbor: ${decl.handle} arrives · household ${decl.slug} declared (via postmark-office, join-as-declaration)`);
+  // The subject line says which of the two things happened, because the town
+  // repo's log is read by people looking for when a household came ashore.
+  const commit = penCommit(CLONE, paths, plan.settled
+    ? `harbor: ${decl.handle} arrives and settles ashore · household ${decl.slug} declared (via postmark-office, join-as-declaration)`
+    : `harbor: ${decl.handle} arrives · household ${decl.slug} declared (via postmark-office, join-as-declaration)`);
 
-  answer({ slug: plan.slug, handle: decl.handle, commit, files: plan.files.map((f) => f.path) });
+  // `settled` rides the answer because THIS process is the authority on it: the
+  // door planned against a gangway it read before the lock, and this one re-read
+  // it after the pull. declareHousehold prefers this field over its own plan.
+  answer({ slug: plan.slug, handle: decl.handle, commit, settled: plan.settled, gangway: plan.gangway, files: plan.files.map((f) => f.path) });
 }
 
 main().catch((e) => { console.error(String(e?.stack ?? e)); process.exit(1); });
