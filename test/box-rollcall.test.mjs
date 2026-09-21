@@ -1032,6 +1032,95 @@ test("FALSIFIER (i5): three raced-out crossings count as unsettled too", () => {
   assert.match(row.reason, /race, race, race/);
 });
 
+// ── ONE READER OF THE SETTLEMENT LOG (postmark#2979, POS-130) ───────────────
+//
+// postmark#2974 gave deploy/settlement-history.mjs a `by_hand` field and taught
+// the crossing's own 05:45Z escalation to ask its question of SCHEDULED lines
+// only, for a reason it states in its own words: a person rescuing the town by
+// hand is not the timer being healthy.
+//
+// This file kept a SECOND copy of that law — its own `UNSETTLED` set and its own
+// unfiltered `history.slice(-n)` — so the escalation and the board an operator
+// reads at 8am could disagree about the same log. Measured on the code as it
+// stood at bcdede7: (o1) and (o3) were SILENT and (o2) ALARMED, which is all
+// three of them wrong, and (o2) was wrong by printing the exact sentence (o1)
+// should have printed. Both windows now judge `scheduledRuns(history)`.
+//
+// THE WINDOW IS MANIFEST DATA, so each fixture asserts the threshold it was
+// built against before it asserts any verdict. A falsifier that quietly stops
+// covering its own case when a number moves is worse than no falsifier.
+//
+// THE CAN-FAIL FLIP: in `judgeOutcome`, restore `const UNSETTLED = new Set([
+// "refused", "starving", "race"])` and slice `history` in place of
+// `scheduledRuns(history)` in both windows. (o1) and (o3) go green-to-red;
+// (o2) reddens the other way, which is why all three are here.
+
+const outcomeOf = (m, unit = SETTLEMENT) => m.units.find((u) => u.unit === unit).outcome;
+
+test("FALSIFIER (o1): a by-hand publication between refusals does not break the timer's streak", () => {
+  // THE READING #2786 EXISTS TO FORBID. Before this, a person publishing by hand
+  // between two refusals broke the run and silenced the board — the operator
+  // rescuing the town by hand read back as the town being well.
+  const m = manifest();
+  assert.equal(Number(outcomeOf(m).unsettled_runs), 3, "this fixture is built for a window of 3");
+
+  const rescued = plantHistory(healthy(m), m, [
+    { at: "2026-08-29T17:45:00Z", status: "refused", class: "input-bad", published: 0, left_drafted: 40 },
+    { at: "2026-08-30T05:45:00Z", status: "refused", class: "input-bad", published: 0, left_drafted: 44 },
+    { at: "2026-08-30T11:02:00Z", status: "published", class: null, published: 9, left_drafted: 35, by_hand: true },
+    { at: "2026-08-30T17:45:00Z", status: "refused", class: "input-bad", published: 0, left_drafted: 39 },
+  ]);
+
+  const row = rowFor(rollcall(m, rescued, T0), SETTLEMENT);
+  assert.equal(row.verdict, ALARM_OUTCOME);
+  // The statuses inside the sentence are the discriminator: three refusals, not
+  // the last three LINES, which would read "refused, published, refused".
+  assert.match(row.reason, /has not completed a crossing in its last 3 attempts — refused, refused, refused/);
+  assert.match(row.reason, /upstream of the rerun/);
+});
+
+test("FALSIFIER (o2): a run of BY-HAND refusals is not the timer refusing, and the board stays quiet", () => {
+  // The control for (o1), and the half that can only be got wrong in the other
+  // direction: a week of by-hand probes ("nothing to publish") must not read as
+  // a week of refusals. The schedule is not stuck; nobody asked it anything.
+  //
+  // left_drafted is flat on purpose. It keeps the starvation rule out of the
+  // answer, so a green here is the unsettled window being silent rather than a
+  // second rule happening not to fire.
+  const m = manifest();
+  assert.equal(Number(outcomeOf(m).unsettled_runs), 3, "this fixture is built for a window of 3");
+
+  const probes = plantHistory(healthy(m), m, [
+    { at: "2026-08-29T14:05:02Z", status: "refused", class: "input-bad", published: 0, left_drafted: 0, by_hand: true },
+    { at: "2026-08-30T14:05:02Z", status: "refused", class: "input-bad", published: 0, left_drafted: 0, by_hand: true },
+    { at: "2026-08-31T14:05:02Z", status: "refused", class: "input-bad", published: 0, left_drafted: 0, by_hand: true },
+  ]);
+
+  assert.equal(rowFor(rollcall(m, probes, T0), SETTLEMENT).verdict, OK);
+});
+
+test("FALSIFIER (o3): a by-hand publication inside an otherwise-empty window does not mask a starving timer", () => {
+  // The same gap from the other side. A by-hand publication is still a published
+  // crossing, so one of them anywhere in the last three lines made `noneOut`
+  // false and the starvation alarm went quiet — while the timer published
+  // nothing and left_drafted climbed.
+  const m = manifest();
+  assert.equal(Number(outcomeOf(m).zero_published_runs), 3, "this fixture is built for a window of 3");
+
+  const masked = plantHistory(healthy(m), m, [
+    { at: "2026-08-25T17:45:00Z", status: "quiet", class: null, published: 0, left_drafted: 12 },
+    { at: "2026-08-26T11:02:00Z", status: "published", class: null, published: 7, left_drafted: 20, by_hand: true },
+    { at: "2026-08-26T17:45:00Z", status: "quiet", class: null, published: 0, left_drafted: 30 },
+    { at: "2026-08-27T05:45:00Z", status: "quiet", class: null, published: 0, left_drafted: 42 },
+  ]);
+
+  const row = rowFor(rollcall(m, masked, T0), SETTLEMENT);
+  assert.equal(row.verdict, ALARM_OUTCOME);
+  // 12 -> 42 are the SCHEDULED window's own ends. The unfiltered last three
+  // lines would read 20 -> 42, so this string is what proves which was judged.
+  assert.match(row.reason, /published nothing across its last 3 crossings while left_drafted grew 12 -> 42/);
+});
+
 test("a row judged by its output must declare unsettled_runs — the manifest refuses one that does not", () => {
   // Without it a refusal that returns twice a day forever reads green, which is
   // the exact silence this whole block exists to end.
