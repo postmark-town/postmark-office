@@ -122,9 +122,18 @@ const odb = openOauthDb(OAUTH_DB_PATH, { readOnly: READ_ONLY_ROLE });
 //
 // Driven, two workers side by side, one pointed at the real store and one at a
 // path that does not exist: BOTH boot and BOTH answer 200, and the misconfigured
-// one silently drops the whole `stands` block — `stands: null` where its twin
-// has an answer. Behind nginx that is a pool member serving quietly wrong
-// readings to a share of the town, and nothing in the answer says so.
+// one silently drops a whole derived block where its twin has an answer. Behind
+// nginx that is a pool member serving quietly wrong readings to a share of the
+// town, and nothing in the answer says so.
+//
+// ⚑ THE SYMPTOM THAT DROVE THIS GUARD HAS MOVED, AND THE GUARD HAS NOT.
+// `stands` was the block measured going dark, and POS-162 moved it off this
+// store onto `acts` — so a worker pointed at a missing `dynamic.db` now answers
+// `stands` correctly and drops OTHER readings instead (world-hold.mjs §
+// readHoldEffects' hold events, the apex's held-things and arena reads). The
+// rule this guard states is unchanged and so is its exit code; only the example
+// is restated, because a guard whose named symptom has stopped being true reads
+// as a guard nobody has checked.
 //
 // So the guard goes UPSTREAM, at boot, beside the key store's — because the
 // distinction that matters is not "is the store there" but WHOSE MISTAKE ITS
@@ -140,13 +149,13 @@ const odb = openOauthDb(OAUTH_DB_PATH, { readOnly: READ_ONLY_ROLE });
 // resolve to the same string today, which is exactly what makes a second copy
 // dangerous: it agrees until it doesn't, and the failure it produces is a guard
 // that PASSES on a path the readers never open — a boot check policing the
-// wrong file while the workers serve `stands: null`. A guard must ask the
+// wrong file while the workers serve a null block. A guard must ask the
 // question in the words of the thing it guards.
 const DYNAMIC_DB_PATH = dynamicDbPath();
 if (READ_ONLY_ROLE && !existsSync(DYNAMIC_DB_PATH)) {
   console.error(`FATAL: --role read needs an existing dynamic store at ${DYNAMIC_DB_PATH}, and a read worker will not create one.`);
   console.error("       Start the writer first, or point WORLD_DYNAMIC_DB at the writer's file (npm run dynamic:rebuild creates it).");
-  console.error("       Booting anyway would serve 200s with the `stands` block silently missing, which nginx cannot tell from a good answer.");
+  console.error("       Booting anyway would serve 200s with the hold-effects and held-things readings silently missing, which nginx cannot tell from a good answer.");
   process.exit(78); // EX_CONFIG
 }
 
