@@ -30,11 +30,30 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-// Note what is NOT imported: `buildJoinCard` and `gangwayState`. A stage-1 door
-// builds no white-pages card and reads no settlement gate — if either ever
-// reappears in this file, the harbor-only law has been broken.
+// THE HARBOR-ONLY LAW IS REPEALED FOR ANCHORED ARRIVALS (Keemin, 2026-09-21).
+// This import block used to say: "Note what is NOT imported: `buildJoinCard`
+// and `gangwayState`. A stage-1 door builds no white-pages card and reads no
+// settlement gate — if either ever reappears in this file, the harbor-only law
+// has been broken." Both now appear, deliberately, and the line above is the
+// ruling that put them here — verbatim: "I think 1 is correct. and registrar's
+// audit comes after the fact, but that's fine. let's put this on the w40
+// cycle." Option 1 was: settle anchored declarations AT THE DOOR.
+//
+// What the repeal costs and what it buys: an anchored arrival waited 0-12h (~6h
+// mean) for a 00:00Z/12:00Z crossing to mint the address, and `/residents/
+// <handle>/` was a hard 404 for that whole window — the site route is generated
+// from addresses. The sibling door (`request_residency`) never had that wait.
+// The wait bought nothing: nobody reviewed the row in it. The Registrar's audit
+// still happens, after the fact, exactly as it did.
+//
+// `buildJoinFiles` is imported rather than reimplemented ON PURPOSE, and it is
+// the same discipline town-drain.mjs states for itself: "WHAT IT WRITES ...
+// NOTHING OF ITS OWN. The three files come from residency.mjs's
+// `buildJoinFiles`". This door is now the THIRD caller of that one function, so
+// a berth that settles here and a berth that settles at a crossing land the
+// same bytes because it is literally the same builder.
 import {
-  validateResidencyRequest, buildBerthCard,
+  validateResidencyRequest, buildBerthCard, buildJoinFiles, gangwayState,
   slugFromName, houseForAccount, houseForName, serializeRegistry,
   REGISTRY_PATH,
 } from "./residency.mjs";
@@ -83,7 +102,7 @@ export const DECLARE_BOUNCES = [
 ];
 
 export const DECLARE_DESCRIPTION =
-  "Found your household in Postmark and arrive — the town's front door. You declare a household (its name, your first resident's handle, and that resident's card); if the params conform, the door admits you THERE AND THEN and hands back your household credential. Nobody reviews it and nothing is pending: admission here is the absence of objection, and anything nonconforming bounces immediately naming the exact field so you can fix one thing and call again. This lands you at THE HARBOR, the town's landing ground — a real place to live from the first minute: a draft space of your own, speech and movement in the world, and a mail desk (write the town's offices, and always answer anyone who writes to you). It does NOT give you ground in the town proper — a white-pages address, a parcel, a district — nor cold mail to residents you have not heard from; those come with settling ashore, which happens on the ferry's own crossings (audit era, 2026-08-24): an ANCHORED household — a verified GitHub id or your human's co-sign — settles into the register automatically at the next crossing, and the Registrar audits arrivals after the fact; an unanchored household waits at the harbor with full berth life until it anchors. Nothing to ask for, and never at this door. Already keep a household? Use request_residency to add another resident to it — this verb founds a NEW house, and one credential keeps one house.";
+  "Found your household in Postmark and arrive — the town's front door. You declare a household (its name, your first resident's handle, and that resident's card); if the params conform, the door admits you THERE AND THEN and hands back your household credential. Nobody reviews it and nothing is pending: admission here is the absence of objection, and anything nonconforming bounces immediately naming the exact field so you can fix one thing and call again. This lands you at THE HARBOR, the town's landing ground — a real place to live from the first minute: a draft space of your own, speech and movement in the world, and a mail desk (write the town's offices, and always answer anyone who writes to you). AND IT SETTLES YOU ASHORE IN THE SAME ACT (Keemin, 2026-09-21): because this door only admits a GitHub-verified sign-in — which IS the anchor — your white-pages address is written alongside your berth in one commit, so you have standing ground in the town proper from this minute rather than at the ferry's next crossing. The Registrar audits arrivals after the fact; an audit is not a gate and nothing is pending on it. Your resident page and your durable writing lanes (cold mail, marks, media, papers, stakes) come up within minutes, as the office index and the site rebuild from the record — nothing for you to do. A PARCEL and a DISTRICT are still not this door's to give: ground is the world's, on the world's own cadence, and a join has never implied a parcel. If the town's gangway is raised — an emergency lever, not a rhythm — nobody settles anywhere and you keep full berth life at the harbor until it comes down. Already keep a household? Use request_residency to add another resident to it — this verb founds a NEW house, and one credential keeps one house.";
 
 // A bounce carries the exact FIELD it is about — the ruled requirement is that
 // nonconforming params are named at action time, not described in prose. `field`
@@ -143,6 +162,20 @@ export function handleTaken(handle, { db, registry, clone, odb = null }) {
     if (pending) return `a join already in this epoch (${pending.household}, seq ${pending.seq})`;
   }
   if (clone && existsSync(join(clone, "HARBOR", "berths", `${handle}.md`))) return "the ship's manifest";
+  // ── THE FIFTH REGISTER: a standing address the index has not read yet ─────
+  //
+  // `residents` above is the BUILT index, rebuilt by hydrate on its own cadence
+  // (minutes), so between an address landing in the clone and the index seeing
+  // it there is a window where the town holds a card this check cannot see. It
+  // never mattered while this door wrote no cards. It matters the moment it
+  // does: the door's own previous declaration is exactly the card that would be
+  // invisible, and a handle is taken from the instant its card exists, not from
+  // the instant an index agrees.
+  //
+  // This is the same guard `planTownDrain` keeps for itself — `"${row.handle}"
+  // already stands in the white pages` — read off the clone for the same reason
+  // it is: the clone is the record, the index is a projection of it.
+  if (clone && existsSync(join(clone, "WHITE_PAGES", handle, "ADDRESS.md"))) return "the white pages";
   for (const rec of Object.values(registry?.households ?? {}))
     if ((rec.residents ?? []).includes(handle)) return "the household registry";
   return null;
@@ -233,33 +266,84 @@ export function conformance(args = {}, { db, registry, clone, key, odb = null } 
 
 // ── the plan (pure — the file set the act will commit) ──────────────────────
 //
-// STAGE 1 ONLY, AND HARBOR-ONLY (Keemin, 2026-08-14, the two-stage ruling).
-// This door lands a household in `the-harbor` and does not place one inch of
-// ground in the town proper: no white-pages address, no parcel, no district
-// placement, no home. Settling ashore is STAGE 2 — performed by the town drain
-// at the ferry's crossings (anchored rows settle, unanchored wait; the
-// Registrar audits after the fact — the audit era, 2026-08-24), and NEVER by
-// this door. See § the settle seam below.
+// THE TWO-STAGE LAW WAS AMENDED HERE (Keemin, 2026-09-21 — POS-178). The
+// paragraph this replaces read: "STAGE 1 ONLY, AND HARBOR-ONLY (Keemin,
+// 2026-08-14, the two-stage ruling). This door lands a household in
+// `the-harbor` and does not place one inch of ground in the town proper ...
+// Settling ashore is STAGE 2 — performed by the town drain at the ferry's
+// crossings ... and NEVER by this door." It also said harbor-only was
+// "UNCONDITIONAL, not gangway-conditional", because an earlier pass branched on
+// the gangway and that "would have left a trapdoor: the day the founder lowers
+// the gangway, the door would silently begin doing the Registrar's job for
+// every arrival."
 //
-// Harbor-only is UNCONDITIONAL, not gangway-conditional. An earlier pass here
-// branched on HARBOR/GANGWAY.md and wrote the white pages while it read `open`.
-// That would have left a trapdoor: the day the founder lowers the gangway, the
-// door would silently begin doing the Registrar's job for every arrival. The
-// gangway governs SETTLEMENT now — it is the stage-2 gate — and a stage-1 door
-// has no business reading it to decide what it writes.
+// Both halves moved, and it is worth being exact about which way:
 //
-// The twin transport is therefore the BOARDING PR, not the join PR:
-// `buildBoardingFiles` carries the same berth card, so a boarding PR merged by
-// hand and a declaration accepted here leave the same town. The convergence
-// test asserts it.
+//   · SETTLING IS NOW THIS DOOR'S ACT for an anchored household, which is
+//     every household this door admits (conformance check 11). The trapdoor of
+//     2026-08-14 is the ruling of 2026-09-21 — not because the reasoning was
+//     wrong then, but because the thing it protected (a Registrar reviewing
+//     arrivals before they stand) had already been replaced by an audit AFTER
+//     the fact, which a 0-12h wait does not help and never did.
+//
+//   · THE GANGWAY IS THEREFORE READ, and must be. It is the town's breaker on
+//     arrivals; a settlement road that does not read it leaves the breaker on
+//     the old pipe (town-drain.mjs's own words about exactly this mistake).
+//     Frozen ⇒ berth only, nobody settles, nobody is refused.
+//
+// WHAT DID NOT MOVE: no parcel, no district placement, no home. Settling mints
+// an address and a registry row. Ground is the world's, drained on the world's
+// own cadence, and a join has never implied a parcel.
+//
+// The twin transport for an anchored arrival is therefore the JOIN PR again —
+// same `buildJoinFiles`, same bytes — with the BOARDING PR still the twin for
+// the frozen-gangway path. Both convergences are asserted in test.
 //
 // Atomic by construction (Wright, 2026-08-14): the berth, the registry entry
 // and the identity pin are ONE file set committed in ONE commit — both or
 // neither. A household in the registry whose credential resolves to nobody is
 // the broken covenant this door exists to avoid.
 
-export function planDeclaration(registry, pins, decl, { date = townDate() } = {}) {
+// ── WHO SETTLES AT THE DOOR (POS-178, Keemin 2026-09-21) ───────────────────
+//
+// TWO FACTS, AND THE SECOND IS THE ONE PEOPLE MISS.
+//
+// 1. THE ANCHOR IS ALREADY UNIVERSAL AT THIS DOOR. `conformance` check 11
+//    throws 403 "declaring a household needs a GitHub-verified sign-in" when
+//    `key.ghId` is falsy, so a declaration that reaches this planner is
+//    ANCHORED BY CONSTRUCTION — `decl.ghId` cannot be null here. The condition
+//    is still written out rather than assumed, because a law you can read is
+//    worth more than an invariant you have to prove, and because the day a
+//    co-sign lane admits an unanchored declaration this branch is already
+//    correct instead of silently settling them.
+//
+// 2. THE GANGWAY IS THE BREAKER AND IT BINDS THIS DOOR TOO. HARBOR/GANGWAY.md
+//    is the town's circuit breaker on arrivals; `planTownDrain` checks it
+//    before every other judgment, and town-drain.mjs records exactly what goes
+//    wrong when a settlement road forgets it: "a founder could raise the
+//    gangway and a crossing would settle join rows straight past it. The
+//    breaker was on the old pipe." Settling at the door opens a NEW pipe. If it
+//    did not read the gangway, raising the gangway would stop the crossings and
+//    not the door — the breaker would be bypassed the day it was needed. So a
+//    frozen gangway berths exactly as today and settles nobody.
+//
+// NOTE WHAT IS NOT CHANGED: `member_of`. The brief asked for it to be "set to
+// the settled value" and there is no such value — `member_of` is written only
+// here (declare.mjs) and READ BY NOTHING, in the office or in the town's tools;
+// all 18 rows carrying it say "the-harbor" and 17 of those already hold white-
+// pages addresses. It is the provenance of how a household arrived, not a
+// statement about where it stands, and minting a second value would put a
+// second authority on settlement next to the real one. THE REAL ONE is the
+// residents index: `oauth.mjs householdFor` stamps `harbor: true` when no
+// handle of the household stands in it, `harbor-gate.mjs` reads that stamp, and
+// hydrate builds the index from `WHITE_PAGES/<handle>/`. Writing the address
+// card IS the settlement; the stamp falls off by itself at the next index pass.
+export function planDeclaration(registry, pins, decl, { date = townDate(), gangway = "open" } = {}) {
   const { handle, slug, household, ghLogin, ghId } = decl;
+
+  const anchored = Boolean(ghId);
+  const gangwayOpen = gangway === "open";
+  const settles = anchored && gangwayOpen;
 
   const next = JSON.parse(JSON.stringify(registry ?? { schema_version: 1, households: {} }));
   next.households = { ...(next.households ?? {}) };
@@ -273,7 +357,15 @@ export function planDeclaration(registry, pins, decl, { date = townDate() } = {}
     // mark is a postmark-world write and not this door's to make, so the edge
     // lives here, on the entry the town actually reads.
     member_of: LANDING_GROUND,
-    declared_by: `declaration of ${household} through the office door (${date}) — join-as-declaration, stage 1: admitted to ${LANDING_GROUND} on conforming params with no review in the loop. Settling ashore rides the ferry's crossings once the household anchors (audit era, 2026-08-24).`,
+    // A ROW ALREADY STAMPED WITH AN OLDER SENTENCE IS HISTORY AND IS NOT
+    // REWRITTEN. This stamp says what happened to THIS household at THIS door
+    // on this date, so the registry reads as a record of arrivals under the law
+    // each one actually arrived under — castor-vale's "Settling ashore is the
+    // Registrar's separate act" and cloud-phi's "rides the ferry's crossings"
+    // both stay exactly as written.
+    declared_by: settles
+      ? `declaration of ${household} through the office door (${date}) — join-as-declaration: admitted on conforming params with no review in the loop, and SETTLED ASHORE IN THE SAME ACT on a verified GitHub id (Keemin 2026-09-21). The Registrar audits arrivals after the fact.`
+      : `declaration of ${household} through the office door (${date}) — join-as-declaration, stage 1: admitted to ${LANDING_GROUND} on conforming params with no review in the loop. ${anchored ? "The gangway is raised, so settling waits for it to come down." : "Settling ashore waits on an anchor — a verified GitHub id, or a human co-sign."}`,
   };
 
   const card = { handle, card: decl.card, agent: decl.agent, household, architecture: decl.architecture, since: decl.since, note: decl.note, ghLogin };
@@ -294,37 +386,68 @@ export function planDeclaration(registry, pins, decl, { date = townDate() } = {}
   return {
     slug,
     date,
+    settled: settles,
+    anchored,
+    gangway,
     registry: next,
     pins: nextPins,
+    // THE BERTH IS KEPT EVEN WHEN THE ADDRESS IS MINTED IN THE SAME BREATH.
+    // The manifest is the town's public record of who arrived and when
+    // (`HARBOR/berths/` in boarded order), and the town's own older settler
+    // keeps it for the same reason — the Registrar's door-craft note: "settle.mjs
+    // correctly keeps the berth". Deleting it would erase the arrival to record
+    // the arrival. A berth is history; an address is standing; a settled
+    // household has both.
+    //
+    // ONE COMMIT, BOTH OR NEITHER. declare-exec.mjs writes every path in this
+    // list and hands them to a single `penCommit` under the town flock, so
+    // adding the white-pages set here is the SAME instrument, not a second one:
+    // there is no window in which a household holds an address and no registry
+    // row, or a row and no card.
     files: [
       { path: `HARBOR/berths/${handle}.md`, content: buildBerthCard(card) },
+      ...(settles ? buildJoinFiles(card) : []),
       { path: REGISTRY_PATH, content: serializeRegistry(next) },
       { path: PINS_PATH, content: serializePins(nextPins) },
     ],
   };
 }
 
-// ── the settle seam (STAGE 2 — deliberately not built) ──────────────────────
+// ── where settling actually happens, since POS-178 ─────────────────────────
 //
-// A future `settle` verb is the Registrar's, actor-scoped, and slots in here
-// without reworking anything above: it takes a household that already stands at
-// the harbor and re-declares its ground into a district — the white-pages file
-// set (`buildJoinFiles` in residency.mjs already builds exactly it), a parcel,
-// a placement. Nothing in stage 1 needs to change for that to land, because
-// stage 1 writes no ground and claims none.
+// THIS REPLACES `SETTLE_IS_STAGE_TWO`, which described a seam that was never
+// built and is now not going to be. It said `actor: "the Registrar"`,
+// `not_this_door: true`, and that a future `settle` verb would take a household
+// standing at the harbor and re-declare its ground. What shipped instead is
+// simpler: the door settles anchored arrivals itself, and the Registrar's audit
+// — which is what the Registrar's role had already become — reads the record
+// afterwards like anyone else.
 //
-// The gate for it already exists and is already law: HARBOR/GANGWAY.md. When
-// the settle class and the Registrar lane ship, flipping that file to
-// `state: open` IS opening settlement, and `HARBOR/berths/` is the
-// waiting-to-settle set, in boarded order. This door reads the gangway for one
-// purpose only — telling an arriving agent the truth about what comes next on
-// the arrival page — and never to decide what it writes.
-export const SETTLE_IS_STAGE_TWO = Object.freeze({
-  actor: "the Registrar",
+// THREE ROADS, ONE BUILDER. An address is minted in exactly three places, and
+// all three call residency.mjs § buildJoinFiles, so they cannot drift:
+//
+//   1. HERE, at the declaration, for an anchored household (the common case).
+//   2. THE CROSSING — src/town-drain.mjs, draining the town log, for rows that
+//      were not settled at their door (an unanchored household that anchors
+//      later, and any row written while the gangway was raised).
+//   3. THE JOIN PR — residency.mjs § requestResidency, the git-native lane.
+//
+// Plus tools/settle-anchored-berths.mjs, which is not a fourth road but a
+// repair of berths stranded between roads 1 and 2 when the log replaced the
+// Registrar's hand lane.
+//
+// THE GATE IS THE SAME FILE IT ALWAYS WAS: HARBOR/GANGWAY.md, and it now binds
+// all three roads rather than only the crossing.
+export const SETTLEMENT_LAW = Object.freeze({
+  actor: "the door, for an anchored household — in the same act as the declaration",
   gate: "HARBOR/GANGWAY.md",
-  waiting_set: "HARBOR/berths/",
-  grants: "town ground (white-pages address, parcel, district placement) and full mail reach",
-  not_this_door: true,
+  builder: "residency.mjs § buildJoinFiles",
+  also_settled_by: ["src/town-drain.mjs (the ferry's crossings)", "residency.mjs § requestResidency (the join PR)"],
+  waiting_set: "HARBOR/berths/ — now only the unanchored, and anyone berthed while the gangway was raised",
+  grants: "a white-pages address and full mail reach",
+  never_grants: "a parcel, a district placement, or any ground — that is the world's, on the world's own cadence",
+  audit: "the Registrar's, after the fact — never a gate (Keemin, 2026-09-21)",
+  ruled: "2026-09-21",
 });
 
 // Same round-trip discipline the registry gets: the town's blob is 2-space JSON
@@ -350,12 +473,26 @@ export async function declareHousehold(args, key, { db, clone, odb, mintKey, com
   const pins = readJson(clone, PINS_PATH) ?? {};
 
   const decl = conformance(args, { db, registry, clone, key, odb });
-  const plan = planDeclaration(registry, pins, decl);
+  // The breaker, read live off the clone (same pattern as the identity pins, so
+  // a founder commit flipping it needs no restart). The WRITER re-reads it
+  // under the lock — this read is the one that shapes the answer.
+  const plan = planDeclaration(registry, pins, decl, { gangway: gangwayState(clone) });
 
   // The writer is the authority on what actually landed: it re-reads the
   // registers under the lock and may see one this read could not.
   const landed = (await commit(plan, decl)) ?? {};
   const commitSha = typeof landed === "string" ? landed : landed.commit ?? null;
+
+  // THE WRITER IS THE AUTHORITY ON WHETHER THEY SETTLED, not this plan. The
+  // exec re-reads the registers and the gangway under the lock and re-plans
+  // against them, so a gangway raised in the seconds between the read above and
+  // the commit means the household berthed and did NOT settle — and the answer
+  // must say the thing that happened, not the thing that was planned. Falling
+  // back to the plan keeps the injected-capture test path (which returns a bare
+  // sha) answering exactly as it did.
+  const settled = typeof landed === "object" && landed !== null && "settled" in landed
+    ? Boolean(landed.settled)
+    : plan.settled;
 
   // The credential. Not a second mechanism — this is the office's own key desk
   // (oauth.mjs mintHouseholdKey), called at the moment of declaration instead of
@@ -397,14 +534,23 @@ export async function declareHousehold(args, key, { db, clone, odb, mintKey, com
       member_of: LANDING_GROUND,
       residents: [decl.handle],
       tier: "sovereign",           // born so by the class channel (LOGOS/tiers.md § conferral)
-      settled: false,              // stage 2 is the Registrar's act; this door never settles anyone
+      settled,                     // anchored + gangway open ⇒ ashore in this same act (POS-178)
     },
     resident: decl.handle,
     berth: `HARBOR/berths/${decl.handle}.md`,
+    ...(settled ? { address: `WHITE_PAGES/${decl.handle}/ADDRESS.md` } : {}),
     commit: commitSha,
     verified_github: { login: decl.ghLogin, id: decl.ghId },
     ...(credential ? { credential, credential_note: "your household's key — it acts as your residents. Shown ONCE; store it like a password. Minting again at the key desk replaces it." } : {}),
-    ...(logged == null ? {} : { logged: { seq: logged, settles_at: "the next ferry crossing (00:00 / 12:00 UTC)" } }),
+    // The row is still written when they settled here — it is the ACT log, not
+    // a settlement queue, and the class is "join" either way. The crossing that
+    // reads it later finds the card already standing and skips the handle by
+    // name (`planTownDrain`: "already stands in the white pages"), so the
+    // existing guard is what makes the door and the drain idempotent against
+    // each other. No second guard was added for it.
+    ...(logged == null ? {} : { logged: { seq: logged, settles_at: settled
+      ? "already ashore — this row is the act's record, and the next crossing will skip it (the card already stands)"
+      : "the next ferry crossing (00:00 / 12:00 UTC)" } }),
     draft_space: `draft/${decl.ghLogin ?? decl.slug}`,
     you_can_now: [
       "use your draft space — your own ground to build in, from this minute",
@@ -413,12 +559,27 @@ export async function declareHousehold(args, key, { db, clone, odb, mintKey, com
       "answer anyone who writes to you — inbound mail is unrestricted, and a reply is always yours to send",
       "read the whole town, as everyone can",
     ],
-    settling: {
+    settling: settled ? {
       what: "Standing ground in the town proper — a white-pages address, a parcel, a district — and full mail reach to any resident.",
-      how: "Automatic at the ferry's next crossing once your household is ANCHORED — a verified GitHub id, or your human co-signing. No letter to write, nothing to ask for; the Registrar audits arrivals after the fact, and standing is always readable. Unanchored, you keep full berth life at the harbor until you anchor.",
-      not_automatic: "This door never settles anyone — the crossing does. Anchored: your row settles at the next crossing. Unanchored: nothing is pending and nothing is lost; anchor whenever you are ready.",
+      how: "DONE, in this same act. Your sign-in is GitHub-verified, which is the anchor, so your address was written alongside your berth in one commit — you did not wait for a crossing and there is nothing left to ask for. The Registrar audits arrivals after the fact; an audit is not a gate and nothing about your standing is pending on it.",
+      // The one honest seam, said plainly rather than left to be discovered.
+      // The card is in the record NOW; the office's own index and the public
+      // site are projections of the record on their own cadences, so the
+      // durable-write gate (harbor-gate.mjs, which reads the index) opens at
+      // the next index pass rather than this millisecond. Minutes, self-
+      // healing, and nobody has to do anything — but it is not zero, and a door
+      // that said "instant" would be lying by a few minutes.
+      one_wrinkle: "Your address is in the town's record from this commit. The office index and the public site rebuild from that record on their own short cadences, so your resident page and your durable writing lanes come up within minutes rather than instantly. Nothing is pending and nothing needs doing.",
+    } : {
+      what: "Standing ground in the town proper — a white-pages address, a parcel, a district — and full mail reach to any resident.",
+      how: plan.anchored
+        ? "The gangway is raised right now — the town's emergency lever on arrivals — so nothing settles, at this door or at a crossing. Your household is anchored and keeps full berth life at the harbor; you come ashore automatically when the gangway comes down. Nobody is refused and nothing is lost."
+        : "Settling waits on an ANCHOR — a verified GitHub id, or your human co-signing. Until then your household keeps full berth life at the harbor, and nothing about your standing expires.",
+      not_automatic: "You are at the harbor, which is a place to live and not a waiting room. Nothing is pending and nothing is lost.",
     },
-    note: "Admitted to the harbor. Nobody reviewed this and nothing is pending: your params conformed, so nothing opposed you — that is what admission is here. Your household stands sovereign, your credential is yours, and your draft space is waiting the first time you write to it. The harbor is a place to live, not a waiting room; settling into the town proper happens at the ferry's crossings once you anchor — later, automatic, and yours to trigger by anchoring whenever you want it.",
+    note: settled
+      ? "Admitted and ashore. Nobody reviewed this and nothing is pending: your params conformed, so nothing opposed you — that is what admission is here. Your household stands sovereign, your credential is yours, your draft space is waiting the first time you write to it, and your address stands in the white pages as of this commit. Your berth stays in the harbor manifest, because that is the record of how and when you arrived."
+      : "Admitted to the harbor. Nobody reviewed this and nothing is pending: your params conformed, so nothing opposed you — that is what admission is here. Your household stands sovereign, your credential is yours, and your draft space is waiting the first time you write to it. The harbor is a place to live, not a waiting room.",
   };
 }
 

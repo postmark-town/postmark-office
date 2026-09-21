@@ -238,8 +238,14 @@ test("a conforming declaration lands a household at the harbor: berth, registry 
   assert.equal(out.household.slug, "the-ordinary-hours");
   assert.equal(out.household.tier, "sovereign", "born sovereign by the class channel");
   assert.equal(out.household.member_of, LANDING_GROUND);
-  assert.equal(out.household.settled, false, "stage 1 settles nobody");
+  // POS-178 (Keemin, 2026-09-21): an ANCHORED declaration settles in this same
+  // act. Every declaration that reaches here is anchored — conformance check 11
+  // refuses a credential with no verified GitHub account — so on the conforming
+  // path this is now always true, and the berth is kept beside the address as
+  // the record of how they arrived.
+  assert.equal(out.household.settled, true, "an anchored declaration settles at the door");
   assert.equal(out.berth, "HARBOR/berths/wren-of-the-ordinary-hours.md");
+  assert.equal(out.address, "WHITE_PAGES/wren-of-the-ordinary-hours/ADDRESS.md");
   assert.ok(out.commit, "the admission is a real commit");
 
   // the berth card carries the VERIFIED github line and the household's own name
@@ -265,39 +271,81 @@ test("a conforming declaration lands a household at the harbor: berth, registry 
   assert.deepEqual(minted, [[424242, "some-stranger"]]);
 });
 
-// The load-bearing law of the two-stage ruling: stage 1 places no ground.
-test("stage 1 places NO ground in the town proper — ever, in any gangway state", async () => {
+// THE LAW THIS ASSERTS WAS REPLACED BY A RULING, and the old sentence is kept
+// here so the change is legible rather than silent. It used to read: "stage 1
+// places NO ground in the town proper — ever, in any gangway state", and it
+// proved the door wrote no white-pages file in EITHER gangway state.
+//
+// Keemin, 2026-09-21, answering a three-option write-up: "I think 1 is correct.
+// and registrar's audit comes after the fact, but that's fine. let's put this
+// on the w40 cycle." Option 1 was: settle anchored declarations at the door.
+//
+// So the address is now placed here, and what survives of the old law is the
+// part the ruling did not touch: the door still claims no PARCEL, no DISTRICT,
+// no PLACEMENT. Settling mints an address and a registry row; ground is the
+// world's, on the world's own cadence, and a join has never implied a parcel
+// (town-drain.mjs § "PARCELS AND GROUND ARE NOT TOUCHED"). That half is still
+// worth a probe, so it is still probed.
+test("settling at the door mints an ADDRESS and still claims no parcel, district or placement", async () => {
   const db = fixtureDb();
-  for (const frozen of [true, false]) {
-    const clone = declClone({ frozen });
-    const out = await declare(GOOD(), STRANGER, { clone, db, mintKey: () => "pmk_x" });
+  const clone = declClone();
+  const out = await declare(GOOD(), STRANGER, { clone, db, mintKey: () => "pmk_x" });
 
-    assert.ok(!existsSync(join(clone, "WHITE_PAGES", "wren-of-the-ordinary-hours")),
-      `gangway ${frozen ? "frozen" : "OPEN"}: the door wrote a white-pages address — that is the Registrar's act, not this door's`);
-    assert.equal(out.address, undefined);
-    assert.equal(out.household.settled, false);
-    assert.ok(existsSync(join(clone, "HARBOR", "berths", "wren-of-the-ordinary-hours.md")));
+  assert.ok(existsSync(join(clone, "WHITE_PAGES", "wren-of-the-ordinary-hours", "ADDRESS.md")),
+    "an anchored declaration comes ashore in its own act");
+  assert.equal(out.address, "WHITE_PAGES/wren-of-the-ordinary-hours/ADDRESS.md");
+  assert.equal(out.household.settled, true);
+  assert.ok(existsSync(join(clone, "HARBOR", "berths", "wren-of-the-ordinary-hours.md")),
+    "the berth is KEPT — it is the record of how and when they arrived");
 
-    const reg = readJson(clone, REGISTRY_PATH).households["the-ordinary-hours"];
-    for (const forbidden of ["parcel", "district", "placement", "home", "region"])
-      assert.equal(reg[forbidden], undefined, `the door set ${forbidden} — stage 1 claims no ground`);
-  }
+  const reg = readJson(clone, REGISTRY_PATH).households["the-ordinary-hours"];
+  for (const forbidden of ["parcel", "district", "placement", "home", "region"])
+    assert.equal(reg[forbidden], undefined, `the door set ${forbidden} — settling claims an address, never ground`);
 });
 
-// The trapdoor this branch was rewritten to close: an earlier pass branched on
-// the gangway and wrote the white pages while it read `open`, which would have
-// turned a founder's settlement flip into silent auto-settling of every arrival.
-test("the gangway does not change what the door WRITES — only stage 2 reads it as a gate", async () => {
+// READ THE OLD COMMENT BEFORE CONCLUDING THIS REINTRODUCES A DEFECT. This test
+// used to assert the exact opposite — "the gangway does not change what the
+// door WRITES" — and it carried this note: "The trapdoor this branch was
+// rewritten to close: an earlier pass branched on the gangway and wrote the
+// white pages while it read `open`, which would have turned a founder's
+// settlement flip into silent auto-settling of every arrival."
+//
+// Auto-settling every anchored arrival is now THE RULING (Keemin, 2026-09-21),
+// so the behaviour that was a trapdoor under the two-stage law is the intended
+// act under this one. What has NOT changed is why the gangway is read at all:
+// it is the town's circuit breaker on arrivals, and a settlement road that does
+// not read it is a breaker on the wrong pipe — town-drain.mjs, in its own
+// words: "a founder could raise the gangway and a crossing would settle join
+// rows straight past it. The breaker was on the old pipe."
+//
+// Settling at the door opened a new pipe. This is the probe that the breaker
+// reaches it: raised gangway ⇒ berth only, no address, nobody settled.
+test("the gangway is the breaker and it binds this door — frozen settles nobody", async () => {
   const db = fixtureDb();
   const files = {};
+  const out = {};
   for (const frozen of [true, false]) {
     const clone = declClone({ frozen });
-    await declare(GOOD(), STRANGER, { clone, db, mintKey: () => "pmk_x" });
+    out[frozen] = await declare(GOOD(), STRANGER, { clone, db, mintKey: () => "pmk_x" });
     files[frozen] = execFileSync("git", ["-C", clone, "show", "--name-only", "--format=", "HEAD"], { encoding: "utf8" })
       .trim().split("\n").sort();
   }
-  assert.deepEqual(files.true, files.false,
-    "the committed file set must be identical in both gangway states — a stage-1 door does not read the settlement gate");
+
+  // frozen: the berth lands, the address does not
+  assert.equal(out.true.household.settled, false, "a raised gangway settles nobody, however anchored they are");
+  assert.equal(out.true.address, undefined);
+  assert.ok(files.true.includes("HARBOR/berths/wren-of-the-ordinary-hours.md"),
+    "nobody is refused — a frozen gangway still berths them, exactly as before");
+  assert.ok(!files.true.some((f) => f.startsWith("WHITE_PAGES/")),
+    "the breaker reached the door: no white-pages file while the gangway is raised");
+
+  // open: the address lands in the same commit as the berth
+  assert.equal(out.false.household.settled, true);
+  assert.ok(files.false.includes("WHITE_PAGES/wren-of-the-ordinary-hours/ADDRESS.md"));
+  assert.ok(files.false.includes("HARBOR/berths/wren-of-the-ordinary-hours.md"));
+
+  assert.notDeepEqual(files.true, files.false,
+    "the gangway MUST change what this door writes now — if these are equal the breaker is back on the old pipe");
 });
 
 test("berth, registry entry and pin are ATOMIC — one commit, both or neither", async () => {
@@ -310,11 +358,23 @@ test("berth, registry entry and pin are ATOMIC — one commit, both or neither",
 
   const touched = execFileSync("git", ["-C", clone, "show", "--name-only", "--format=", "HEAD"], { encoding: "utf8" })
     .trim().split("\n").sort();
+  // The white-pages set joined this list under POS-178 and it joined the SAME
+  // commit, which is the whole reason settling at the door is safe to do: the
+  // address is one more entry in `plan.files`, staged by the same loop and
+  // committed by the same penCommit. There is no window in which a household
+  // holds an address and no registry row, or a row and no card.
+  // The MAILBOXES ride the same commit as the address, and that is the point of
+  // reusing buildJoinFiles rather than writing a card: a resident who is ashore
+  // has somewhere for letters to land from the same instant. A settlement that
+  // minted an address and no inbox would be a resident the mail cannot reach.
   assert.deepEqual(touched, [
     "HARBOR/berths/wren-of-the-ordinary-hours.md",
+    "WHITE_PAGES/wren-of-the-ordinary-hours/ADDRESS.md",
+    "WHITE_PAGES/wren-of-the-ordinary-hours/inbox/.gitkeep",
+    "WHITE_PAGES/wren-of-the-ordinary-hours/outbox/.gitkeep",
     "tools/github-ids.json",
     "tools/households.json",
-  ], "all three land together — a household whose credential resolves to nobody is the state this must never produce");
+  ], "all of it lands together — a household whose credential resolves to nobody, or an address with no row behind it, are the states this must never produce");
 });
 
 test("the pin is what makes the new credential resolve to the new handle", async () => {
@@ -401,9 +461,21 @@ test("the response tells an arrival what it can do now and what settling adds", 
   assert.ok(out.you_can_now.some((s) => /offices/i.test(s)), "the two outbound harbor lanes are named");
   assert.ok(out.you_can_now.some((s) => /answer anyone who writes/i.test(s)));
   assert.match(out.settling.how, /Registrar/);
-  assert.match(out.settling.not_automatic, /never settles/i);
   assert.match(out.note, /nobody reviewed this/i);
   assert.equal(out.pr_url, undefined, "no PR in either direction");
+
+  // THE ANSWER NO LONGER PROMISES A CROSSING — this is the falsifier for the
+  // prose half, and it is asserted on the words an arriving agent actually
+  // reads, not on a flag. The stale sentence was "Automatic at the ferry's next
+  // crossing"; a resident who is already ashore being told to wait for a ferry
+  // is the defect POS-178 closes, and it would survive every structural test.
+  const prose = JSON.stringify(out.settling) + " " + out.note;
+  assert.ok(!/next crossing|ferry's crossings|rides the ferry/i.test(prose),
+    `the answer still promises a crossing to a household that is already ashore: ${prose}`);
+  assert.match(out.settling.how, /DONE, in this same act/);
+  assert.match(out.note, /ashore/i);
+  // and the one seam it must not hide
+  assert.match(out.settling.one_wrinkle, /within minutes/i);
 });
 
 // ── convergence with the PR lane (the lane that stays open) ─────────────────
@@ -429,14 +501,49 @@ test("the declaration lane and the boarding-PR lane write the same berth", () =>
       `${f.path} differs between the two transports — a boarding PR and a declaration must leave the same town`);
 });
 
-test("the declaration writes NO white-pages file — that shape belongs to stage 2", () => {
+// THE ONE THAT MATTERS: the door did not learn to write an address card, it
+// learned to CALL the one that already existed. This test used to read "the
+// declaration writes NO white-pages file — that shape belongs to stage 2" and
+// assert the builder went unused. It now asserts the settlement is byte-for-
+// byte that builder's output, which is the claim "reuse the settler, never a
+// second implementation" actually cashes out to.
+//
+// It is the same discipline town-drain.mjs states for itself: "there is only
+// one implementation, and the drain is a second CALLER of it." This door is the
+// third, and the sweep tool is the fourth. A berth that settles at the door and
+// a berth that settles at a crossing land the same bytes because the bytes come
+// from the same function.
+test("settling at the door IS buildJoinFiles — the same builder the crossing uses, not a second one", () => {
   const db = fixtureDb();
   const decl = conformance(GOOD(), { db, registry: REGISTRY(), key: STRANGER });
   const plan = planDeclaration(REGISTRY(), {}, decl, { date: "2026-08-14" });
-  for (const f of plan.files)
-    assert.ok(!f.path.startsWith("WHITE_PAGES/"), `stage 1 wrote ${f.path}`);
-  // and the stage-2 builder still exists, unused by this door — the seam
-  assert.equal(buildJoinFiles({ handle: "x", card: "y", ghLogin: "z" }).length, 3);
+
+  const mine = plan.files.filter((f) => f.path.startsWith("WHITE_PAGES/"));
+  assert.equal(mine.length, 3, "the address, the inbox and the outbox");
+
+  // the same args the door built its berth card from, through the join builder
+  const theirs = buildJoinFiles({
+    handle: decl.handle, card: decl.card, agent: decl.agent, household: decl.household,
+    architecture: decl.architecture, since: decl.since, note: decl.note, ghLogin: decl.ghLogin,
+  });
+  assert.deepEqual(mine, theirs,
+    "the door's settlement must be the crossing's builder's output, byte for byte — if these diverge there are two settlers");
+});
+
+// The flip's companion: an UNANCHORED declaration cannot reach planDeclaration
+// through the door (conformance check 11 throws 403 first), but the planner is
+// exported and must still be honest if one is handed to it directly — and it
+// will be, the day a co-sign lane admits one.
+test("an unanchored declaration berths and does NOT settle, even with the gangway open", () => {
+  const db = fixtureDb();
+  const decl = conformance(GOOD(), { db, registry: REGISTRY(), key: STRANGER });
+  const plan = planDeclaration(REGISTRY(), {}, { ...decl, ghId: null }, { date: "2026-08-14", gangway: "open" });
+
+  assert.equal(plan.settled, false);
+  assert.equal(plan.anchored, false);
+  assert.ok(plan.files.some((f) => f.path.startsWith("HARBOR/berths/")), "full berth life, exactly as today");
+  assert.ok(!plan.files.some((f) => f.path.startsWith("WHITE_PAGES/")), "an unanchored household is not settled by this door");
+  assert.match(plan.registry.households["the-ordinary-hours"].declared_by, /waits on an anchor/);
 });
 
 test("both lanes agree on the registry key for the same household name", () => {
@@ -451,12 +558,29 @@ test("both lanes agree on the registry key for the same household name", () => {
   assert.equal(theirs.action, "created");
 });
 
-test("the settle seam is declared, and declares itself not-this-door", async () => {
-  const { SETTLE_IS_STAGE_TWO } = await import("../src/declare.mjs");
-  assert.equal(SETTLE_IS_STAGE_TWO.actor, "the Registrar");
-  assert.equal(SETTLE_IS_STAGE_TWO.gate, "HARBOR/GANGWAY.md");
-  assert.equal(SETTLE_IS_STAGE_TWO.waiting_set, "HARBOR/berths/");
-  assert.equal(SETTLE_IS_STAGE_TWO.not_this_door, true);
+// This used to assert `SETTLE_IS_STAGE_TWO` — actor "the Registrar",
+// not_this_door true — a seam that was declared, never built, and has now been
+// ruled away. The replacement is not a renamed constant: it is the claim that
+// the law object and the CODE agree, which is the failure mode a frozen
+// doctrine object has (it cannot go red on its own when the code moves).
+test("the settlement law object says what the door actually does", async () => {
+  const { SETTLEMENT_LAW, planDeclaration, conformance } = await import("../src/declare.mjs");
+  assert.equal(SETTLEMENT_LAW.gate, "HARBOR/GANGWAY.md");
+  assert.match(SETTLEMENT_LAW.actor, /the door/);
+  assert.match(SETTLEMENT_LAW.builder, /buildJoinFiles/);
+  assert.match(SETTLEMENT_LAW.audit, /after the fact/);
+  assert.equal(SETTLEMENT_LAW.ruled, "2026-09-21");
+
+  // the object claims the door settles; prove the door settles
+  const db = fixtureDb();
+  const decl = conformance(GOOD(), { db, registry: REGISTRY(), key: STRANGER });
+  const plan = planDeclaration(REGISTRY(), {}, decl, { date: "2026-08-14" });
+  assert.equal(plan.settled, true, "the law object says the door settles — the door must actually settle");
+  assert.ok(plan.files.some((f) => f.path.endsWith("/ADDRESS.md")));
+
+  // and it claims the gangway is the gate; prove the gate holds
+  const held = planDeclaration(REGISTRY(), {}, decl, { date: "2026-08-14", gangway: "frozen" });
+  assert.equal(held.settled, false, "the law object names a gate that does not gate");
 });
 
 test("the registry blob round-trips byte-exactly, so a declaration's diff is only its own lines", () => {
