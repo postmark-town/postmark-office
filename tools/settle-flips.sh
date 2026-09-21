@@ -1,5 +1,15 @@
 #!/usr/bin/env bash
-# pos178-flip.sh — restore the crossing-queue path and prove the falsifiers red.
+# settle-flips.sh — the settlement flips: put an older settlement law back and
+# prove the falsifiers that claim the current one actually go red.
+#
+# Named for the FEATURE, not for the row that introduced it (the office's own
+# precedent: tools/arena-flips.mjs, tools/birthday-flips.mjs). A flip named for
+# a ticket is an orphan the week that ticket closes — nobody remembers what it
+# guards, and nobody dares delete it. Its companion is
+# tools/settle-anchored-berths.mjs, and a second settlement law that ever wants
+# a flip belongs in THIS file as another case rather than a new one beside it.
+#
+# CASE 1 — SETTLE-AT-THE-DOOR (the law Keemin ruled 2026-09-21).
 #
 # THE CLAIM UNDER TEST IS THAT THE PROBES CAN FAIL. A suite that goes green
 # against both the old law and the new one has not measured the change; it has
@@ -14,7 +24,7 @@
 # and it restores from a SAVED COPY rather than `git checkout` — the tree may
 # hold work that is not committed, and a checkout would take it with the flip.
 #
-#   bash tools/pos178-flip.sh
+#   bash tools/settle-flips.sh
 #
 # Exit 0 = the flip reddened the falsifiers (the probes are real).
 # Exit 1 = the patch matched nothing, or the suite stayed GREEN under the old
@@ -24,8 +34,8 @@ set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 
 TARGET="src/declare.mjs"
-SAVE="$(mktemp -t pos178-flip-save.XXXXXX)"
-OUT="$(mktemp -t pos178-flip-out.XXXXXX)"
+SAVE="$(mktemp -t settle-flips-save.XXXXXX)"
+OUT="$(mktemp -t settle-flips-out.XXXXXX)"
 
 cp "$TARGET" "$SAVE"
 restore() { cp "$SAVE" "$TARGET"; rm -f "$SAVE"; echo "[flip] restored $TARGET"; }
