@@ -127,6 +127,7 @@ const ROSTER = {
   "tools/backfill-home-shelf.mjs": { args: ["--manifest", NOWHERE], code: 2, needle: "no manifest at" },
   "tools/media-thumbnails-backfill.mjs": { args: ["--from-record", NOWHERE], code: 2, needle: "no record at" },
   "tools/box-rollcall.mjs": { args: ["--manifest", NOWHERE], code: 2, needle: "the roll-call itself could not run" },
+  "tools/capture-doorstep-golden.mjs": { args: [], code: 0, needle: "{" },
   "tools/capture-household-golden.mjs": { args: [], code: 0, needle: "{" },
   "tools/crossing-replay-check.mjs": { args: ["--db", NOWHERE_DB, "--world", NOWHERE], code: 2, needle: "GATE REFUSED" },
   "tools/crossing-save.mjs": { args: ["--world", NOWHERE], code: 1, needle: "GATE REFUSED world-clone" },
