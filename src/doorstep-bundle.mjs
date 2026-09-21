@@ -43,8 +43,27 @@ export async function doorstepBundle(handle, ctx = {}) {
   // The REST handlers pass nothing and answer byte-for-byte what they answered
   // before, because a page's shape must not change under a reader who did not
   // ask for it. What the cut drops, queries.mjs § slimAwaiting names on the page.
-  const { db, key, meta, asOf, clone, odb, canWrite, conversationsOffset = 0, slim = false } = ctx;
-  const core = doorstep(db, handle, asOf, { conversationsOffset, slim, fresh: { odb, clone, asOf } });
+  // ── ONE CLOCK FOR THE WHOLE PAGE (POS-168) ─────────────────────────────────
+  //
+  // Four places under this function read the wall clock — `doorstep`'s PSA
+  // window, `nextCrossingForDoorstep`, `doorstepRulings`' crossing cursor and
+  // `stakesFor`'s next settlement. Every one of them ALREADY took an injectable
+  // instant; none of them was ever handed one from here, so the page was
+  // composed against four clocks read milliseconds apart and nothing could pin
+  // it. `nowMs` is that one instant, and the default is the wall clock, so a
+  // caller who passes nothing gets what it always got.
+  //
+  // It is spelled `nowMs`, not `now`, because both spellings already mean
+  // something in this chain and they are DIFFERENT TYPES: `queries.doorstep`
+  // takes `nowMs`, a number, and `doorstep-stakes.stakesFor` takes `now`, a
+  // Date. One name for two types is how a caller hands a Date to arithmetic.
+  // The conversion happens once, at the stakes seam below.
+  //
+  // The one behaviour delta on the live door, and it is a repair: a
+  // composition that straddles a crossing could previously name boat N in
+  // `rulings` and boat N+1 in `next_crossing`. It cannot now.
+  const { db, key, meta, asOf, clone, odb, canWrite, conversationsOffset = 0, slim = false, nowMs = Date.now() } = ctx;
+  const core = doorstep(db, handle, asOf, { conversationsOffset, slim, fresh: { odb, clone, asOf }, nowMs });
   if (!core) return null;
 
   // ── THE HEADER'S CLOCK (postmark#2922) ─────────────────────────────────────
@@ -63,7 +82,7 @@ export async function doorstepBundle(handle, ctx = {}) {
   // field and not part of any segment's domain (the bundle law deep-equals
   // segments against their reads, called an instant apart).
   const { handle: h, as_of, ...rest } = core;
-  const d = { handle: h, as_of, next_crossing: nextCrossingForDoorstep(), ...rest };
+  const d = { handle: h, as_of, next_crossing: nextCrossingForDoorstep(nowMs), ...rest };
 
   // ── THE SEVENTH SEGMENT · what awaits your word (the founder's .1 ruling) ─
   //
@@ -159,7 +178,7 @@ export async function doorstepBundle(handle, ctx = {}) {
   try {
     const { doorstepRulings } = await import("./claim-effects.mjs");
     d.rulings = { serves: "household.rulings", args: { handle },
-      ...(await doorstepRulings(handle, { key })) };
+      ...(await doorstepRulings(handle, { key, nowMs })) };
   } catch (e) {
     d.rulings = { serves: "household.rulings", args: { handle },
       unavailable: `the crossings' rulings on your things could not be read (${String(e?.message ?? e).slice(0, 160)})`,
@@ -189,7 +208,10 @@ export async function doorstepBundle(handle, ctx = {}) {
   const STAKES_TEACH_POINTER = 'the sweep\'s rule, quoted, and the two reads that answer the rest — household { read: "stakes" }';
   try {
     const { doorstepStakes } = await import("./doorstep-stakes.mjs");
-    const whole = await doorstepStakes(handle, { key });
+    // THE ONE CONVERSION. `stakesFor` reads calendar fields off a Date
+    // (`nextSettlement` calls `getUTCFullYear`), so the page's instant becomes
+    // a Date here and nowhere else — see the `nowMs` note at the top.
+    const whole = await doorstepStakes(handle, { key, now: new Date(nowMs) });
     const { rule: _rule, read_the_rest: _rest, ...trimmed } = whole;
     d.stakes = slim
       ? { serves: "household.stakes", args: { handle }, ...trimmed, teach_at: STAKES_TEACH_POINTER,

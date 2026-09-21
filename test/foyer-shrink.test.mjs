@@ -559,8 +559,14 @@ test("F7c5 · THE MORNING PAGE DID NOT FATTEN — the doorstep bundle is byte-id
   const GOLD = join(import.meta.dirname, "golden", "doorstep-bundle.json");
   assert.ok(existsSync(GOLD), `the golden is the receipt; without it this test proves nothing (${GOLD})`);
   const { doorstepBundle } = await import("../src/doorstep-bundle.mjs");
+  // THE INSTANT IS THE TOOL'S OWN (POS-168). Six leaves of this page are a
+  // function of the wall clock, so the golden and the door must be driven at
+  // ONE instant or the receipt is red by the next crossing — which is what had
+  // been happening. It is imported rather than re-spelled: a second copy of an
+  // instant is how a doorstep and a receipt come to name different boats.
+  const { GOLDEN_NOW_MS } = await import("../tools/capture-doorstep-golden.mjs");
   const meta = { as_of: "fixturesha000000000000000000000000000000" };
-  const bctx = { db, key: null, meta, asOf: meta.as_of, canWrite: false, clone: null, pen: null, odb: null, dbPath: null };
+  const bctx = { db, key: null, meta, asOf: meta.as_of, canWrite: false, clone: null, pen: null, odb: null, dbPath: null, nowMs: GOLDEN_NOW_MS };
   const now = { full: await doorstepBundle("wright", bctx), slim: await doorstepBundle("wright", { ...bctx, slim: true }) };
   assert.equal(JSON.stringify(now), readFileSync(GOLD, "utf8"),
     "the morning page moved — every byte here is served on every doorstep, and this design exists to keep that number still");
@@ -595,10 +601,136 @@ test("F7c5 · THE MORNING PAGE DID NOT FATTEN — the doorstep bundle is byte-id
   // first-mention rule HOLO_EXPANSION already follows); the other three carry
   // only the fact that changed, which is what kept +840 down to +305.
   //
+  // ⚠ AND REGENERATED A FOURTH TIME, 2026-09-21 (POS-168), because it had
+  // stopped gating anything: it was RED at the baseline of every lane for days
+  // and three lanes reported it red-both-sides and untouched. Two ruled
+  // segments had landed after the third capture and the page also carried live
+  // clock values, so no capture taken at a real instant could survive to the
+  // next crossing. The fix was the instrument, not the rule — the door now
+  // composes from ONE injectable instant and this case drives it at the
+  // capture tool's own `GOLDEN_NOW_MS`, so the byte-exact rule can hold.
+  //
+  // Same discipline, same note, and the diff was run leaf by leaf BEFORE the
+  // capture: 630 paths before, 922 after, NONE REMOVED, and every added path
+  // traced to a numbered merged ruling — `stakes`, the ninth segment
+  // (postmark#2919, `fb36916`), and `next_crossing` (postmark#2922,
+  // `bba0361`). The two changed values outside them are the clock:
+  // `rulings.since_crossing` 192 -> 200 and `through_crossing` 194 -> 202, the
+  // crossing counter advancing, no shape moved.
+  //
+  // The ceiling it moves, and every byte of it is accounted for (residual 0):
+  //
+  //   full  15255 -> 18906 (+3651, +23.93%) = stakes +3423, next_crossing
+  //                                            +211, segments[] +9, law +8
+  //   slim  12959 -> 16538 (+3579, +27.62%) = stakes +3351, next_crossing
+  //                                            +211, segments[] +9, law +8
+  //
+  // The slim skin is NOT abridged here the way it is for stamps: `stakes`
+  // drops only `rule` and `read_the_rest` and rides the connector whole,
+  // because the rows are the report (doorstep-bundle.mjs § the ninth segment).
+  // That is the largest single jump this golden has taken, and it is one
+  // segment's worth — the next one to arrive gets the same arithmetic printed
+  // beside it or this ceiling stops being a number anyone can check.
+  //
   // So the assertion below is the one that actually carries the promise, and it
   // is stated separately so a future regeneration cannot quietly absorb a card:
   assert.equal(JSON.stringify(now).includes('"card"'), false,
     "a card reached the doorstep — a token on every morning page ever served, and the cost this whole design was shaped to avoid");
+});
+
+/**
+ * Run `fn` with the WALL clock forced to `ms`: `Date.now()` and a bare
+ * `new Date()` both answer it, every other `Date` form (including `Date.parse`
+ * and `Date.UTC`, inherited statics) is untouched. Restored in a `finally`.
+ *
+ * Top-level tests in one file run one at a time, so no other case sees the
+ * swap — and this is the only instrument that can tell a threaded clock read
+ * from an unthreaded one, because both look identical in the source of a
+ * function that takes a default.
+ */
+async function underWallClock(ms, fn) {
+  const Real = Date;
+  class Frozen extends Real {
+    constructor(...a) { if (a.length === 0) { super(ms); return; } super(...a); }
+    static now() { return ms; }
+  }
+  globalThis.Date = Frozen;
+  try { return await fn(); } finally { globalThis.Date = Real; }
+}
+
+test("F7c5b · THE PAGE READS THE CLOCK IT WAS HANDED — two wall clocks twenty hours apart, one instant, identical bytes", async () => {
+  const { doorstepBundle } = await import("../src/doorstep-bundle.mjs");
+  const { GOLDEN_NOW_MS } = await import("../tools/capture-doorstep-golden.mjs");
+  const meta = { as_of: "fixturesha000000000000000000000000000000" };
+  const base = { db, key: null, meta, asOf: meta.as_of, canWrite: false, clone: null, pen: null, odb: null, dbPath: null };
+  const compose = (extra) => async () => JSON.stringify({
+    full: await doorstepBundle("wright", { ...base, ...extra }),
+    slim: await doorstepBundle("wright", { ...base, ...extra, slim: true }),
+  });
+
+  // TWENTY HOURS, not the obvious one. The page's windows are six hours wide
+  // (crossings 00:00/12:00Z, settlements 06:00/18:00Z), so a one-hour shift
+  // stays inside one window about five sixths of the time and the whole case
+  // would pass on UNFIXED code most of the day. Twenty hours crosses both a
+  // crossing and a settlement from any starting point, so every one of the six
+  // clock leaves is obliged to move.
+  const T1 = Date.parse("2026-09-21T09:00:00.000Z");
+  const T2 = T1 + 20 * 3600 * 1000;
+
+  // THE CONTROL, FIRST, and the leg below means nothing without it: handed NO
+  // instant, the two wall clocks must give DIFFERENT pages. If they do not,
+  // the swap is not reaching the door and the law leg would be a green over a
+  // dead instrument — the exact triumph this lane was written to produce.
+  const loose1 = await underWallClock(T1, compose({}));
+  const loose2 = await underWallClock(T2, compose({}));
+  assert.notEqual(loose1, loose2,
+    "the wall-clock swap never reached the door, so the assertion below proves nothing — fix the instrument before believing it");
+
+  // THE LAW: handed one instant, the page is the same under either wall clock.
+  const held1 = await underWallClock(T1, compose({ nowMs: GOLDEN_NOW_MS }));
+  const held2 = await underWallClock(T2, compose({ nowMs: GOLDEN_NOW_MS }));
+  assert.equal(held1, held2,
+    "a clock read on the doorstep is not threaded from `nowMs` — thread it, or the golden above goes red at some future hour on a lane that never touched this page");
+});
+
+test("F7c5c · THE FATTENING ARM CAN FAIL — the golden is the exact serialisation, so one more byte on the page is one more byte here", async () => {
+  const GOLD = join(import.meta.dirname, "golden", "doorstep-bundle.json");
+  const gold = readFileSync(GOLD, "utf8");
+  // A reformatted golden reds F7c5 on whitespace while saying "the morning
+  // page moved" — a true-sounding red about the wrong thing.
+  assert.equal(JSON.stringify(JSON.parse(gold)), gold,
+    "the golden is not the capture tool's own serialisation — regenerate it with the tool, never by hand or through a formatter");
+  const fattened = JSON.parse(gold);
+  fattened.full.handle += "x";
+  assert.notEqual(JSON.stringify(fattened), gold, "one byte more on the page and the comparison must refuse it");
+  assert.equal(JSON.stringify(fattened).length, gold.length + 1,
+    "the arm measures BYTES, not shape — if this is not exactly one, F7c5 is not the ceiling it claims to be");
+});
+
+test("F7c5d · EVERY CLOCK READ ON THE PAGE IS THREADED — the bare forms are absent from the source", async () => {
+  // A source pin, and it is the weaker leg: F7c5b above is the behavioural
+  // proof. This one exists because each of these four reads takes a DEFAULTED
+  // instant, so a hand that drops the argument gets today's behaviour back
+  // with every assertion green until the next capture — the defaulted-parameter
+  // silent caller, one file over.
+  const SRC = join(import.meta.dirname, "..", "src", "doorstep-bundle.mjs");
+  const raw = readFileSync(SRC, "utf8");
+  // Comments first: a pin that forbids a token in prose forbids ever
+  // explaining the change. Both controls, because a strip that ate nothing and
+  // a strip that ate code print the same green.
+  const code = raw.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+  assert.ok(code.length < raw.length, "the comment strip ate nothing — every pin below is reading prose");
+  assert.ok(code.includes("export async function doorstepBundle"), "the comment strip ate code — every pin below is reading a hole");
+
+  for (const [present, absent, what] of [
+    [/nextCrossingForDoorstep\(\s*nowMs\s*\)/, /nextCrossingForDoorstep\(\s*\)/, "the header's boat"],
+    [/doorstepRulings\([^)]*\bnowMs\b/, /doorstepRulings\(\s*handle\s*,\s*\{\s*key\s*\}\s*\)/, "the rulings segment's crossing cursor"],
+    [/doorstepStakes\([^)]*\bnow:\s*new Date\(\s*nowMs\s*\)/, /doorstepStakes\(\s*handle\s*,\s*\{\s*key\s*\}\s*\)/, "the stakes segment's settlement"],
+    [/doorstep\(\s*db\s*,\s*handle\s*,\s*asOf\s*,[^;]*\bnowMs\b/, null, "the index's PSA window"],
+  ]) {
+    assert.match(code, present, `${what} is no longer threaded from the page's one instant`);
+    if (absent) assert.ok(!absent.test(code), `${what} is called with no instant somewhere in this file — the default puts the wall clock back`);
+  }
 });
 
 test("F7d · and the REST bare answer keeps its shape — nothing in this grammar reached a frozen consumer", async () => {
