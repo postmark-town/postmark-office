@@ -136,6 +136,11 @@ const ROSTER = {
   "tools/harbor-watch.mjs": { args: [], code: 2, needle: "usage: harbor-watch.mjs" },
   "tools/hydrate-equivalence.mjs": { args: ["--a", NOWHERE, "--b", `${NOWHERE}-b`], code: 2, needle: "not a world checkout:" },
   "tools/ledger-freeze.mjs": { args: ["--at", "not-a-date"], code: 2, needle: "unparseable --at" },
+  // POS-178. A safe entry proof for a tool that WRITES THE WHITE PAGES: a clone
+  // that is not a town checkout, so it refuses before it reads a berth, plans a
+  // settlement or reaches the pen. --apply is not passed and could not write
+  // anyway; the dry run is the default and the refusal comes first.
+  "tools/settle-anchored-berths.mjs": { args: ["--clone", NOWHERE], code: 1, needle: "not a town checkout" },
   "tools/site-sentinel.mjs": { args: ["--now", "not-a-date", "--dry-run", "--state", NOWHERE_OUT, "--out", NOWHERE_OUT], env: { SENTINEL_DISCORD_WEBHOOK: undefined }, code: 1, needle: "site-sentinel" },
   "tools/stripe-watch.mjs": { args: ["--clone", NOWHERE], code: 1, needle: "no town clone with the funding seam" },
   "tools/thread-parity.mjs": { args: ["--log", NOWHERE, "--db", NOWHERE_DB, "--json"], code: 2, needle: "voices-log" },

@@ -52,9 +52,9 @@
 // --dry-run IS THE DEFAULT AND --apply IS THE ONLY WRITER. Running this with no
 // flags cannot change a byte.
 
-import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { buildJoinFiles, gangwayState, REGISTRY_PATH, PINS_PATH } from "../src/residency.mjs";
 import { penCommit } from "../src/write.mjs";
@@ -230,7 +230,21 @@ export function applySweep(clone, plan) {
 
 // ── the entrypoint ──────────────────────────────────────────────────────────
 
-if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith("settle-anchored-berths.mjs")) {
+// THE JUNCTION LESSON (HQ memory `junctions-defeat-main-guards`):
+// `pathToFileURL(process.argv[1]).href === import.meta.url` is FALSE when the
+// entry reaches this file through a Windows junction — the ESM loader realpaths
+// the entry, argv[1] does not — and the tool then exits 0 having done nothing,
+// which for a sweep reads exactly like "nothing to settle". Compare REAL paths;
+// the URL compare is only the fallback for an argv[1] that cannot be
+// realpath'd. test/cli-guard.test.mjs imports this file and spawns it through a
+// junction, and this tool is on that roster.
+const isMain = (() => {
+  if (!process.argv[1]) return false;
+  try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); }
+  catch { return pathToFileURL(process.argv[1]).href === import.meta.url; }
+})();
+
+if (isMain) {
   if (!existsSync(join(CLONE, "WHITE_PAGES"))) {
     console.error(`not a town checkout (no WHITE_PAGES): ${CLONE}`);
     process.exit(1);
