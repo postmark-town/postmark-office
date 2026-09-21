@@ -207,6 +207,24 @@ export function execCallers(dir = OFFICE_SRC) {
  * alone, no timetable consulted. `after` is Stage D's — `vessel.positionAt`,
  * the same record read with the schedule running. A resident whose two answers
  * differ is a resident the seam would move, and the freeze names them.
+ *
+ * ⚑ THIS SEAM IS AGREEMENT-BLIND, AND SILENTLY SO. The world's
+ * `positionAt(departure, instant, service, agreements)` takes a fourth
+ * argument; the call below passes three, and `main()` passes none either, so
+ * the default empty list governs every read this instrument makes. Under the
+ * agreement law (Keemin, 2026-08-11; world commit 64e66ed7, "boarding is
+ * declared, never inferred") an empty list means NOBODY RIDES — so today this
+ * function's "0 residents moved" is the true answer, because the office holds
+ * no passenger agreements at all: `declareAttachment` admits only
+ * cascade|detach, and the boarding verb lands with the vessel work.
+ *
+ * The day that verb ships, this stops being true and nothing here will say so.
+ * The seam will keep reporting "0 residents moved" while residents are being
+ * carried, and no test will red, because the blindness is in the call and not
+ * in the arithmetic. BEFORE the boarding verb ships, `seamDiff` must take an
+ * `agreementsOf` reader and pass its rows as the fourth argument — here and at
+ * `main()`. The office test that guards this pins the refusal, not the carry:
+ * see `the freeze names who the seam would move` in test/world-movement.test.mjs.
  */
 export function seamDiff({ departures, service, walk, vessel, atFc, toleranceM = 1 }) {
   const handles = [...new Set(departures.map((d) => d.handle))];
