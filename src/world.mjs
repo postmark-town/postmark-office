@@ -3580,6 +3580,54 @@ export async function occupiedNowBy(who, thresholds, deps) {
   return [...(thresholds.occupancyAt(acts, atNow).get(who) ?? [])];
 }
 
+// ── THE RECEIPT IS WRITTEN AT DEPARTURE, SO IT SPEAKS IN DEPARTURE'S TENSE ──
+//
+// (POS-171, Keemin-ruled 2026-09-21 on Kogane's letter — postmark#3010. The
+// MECHANISM is POS-172's; this is the SENTENCE only.)
+//
+// Kogane walked 6,865 m with `enter_on_arrival` and was handed `entered:
+// [spar/the-doubled-coast, current-the-reader/the-snug-harbour]` and "arrived,
+// and stepped inside" beside `position: { arrived: false, remainingM: 6865 }`.
+// The receipt was eighty minutes early.
+//
+// THE ENTRY ITSELF IS NOT EARLY, and that is why this is a wording fix. The act
+// is written now and STAMPED at the arrival crossing, so it is not occupancy
+// until the walker gets there — #2690 is that law and
+// test/dec5-walk-clock-behaviour.test.mjs drives it with a row from the future.
+// The `entered` list is a true record of rows written; what was false at
+// departure was only the tense of the sentence around it.
+//
+// So: a walk that has NOT arrived reads QUEUED, and a zero-distance walk — you
+// were already standing there, `position.arrived` is true, the arrival instant
+// IS this instant — keeps today's words untouched.
+//
+// THE DOOR'S OWN WORDS RIDE EITHER SHAPE. `entered` and `within` are the two
+// keys that assert a present fact, and only they are withheld; a refusal and a
+// counter-edge door's terms are facts at departure whatever the tense, and the
+// walk tool's own description promises the resident both of them by name
+// (test/walk-grammar.test.mjs, ruling 3). A queued receipt that dropped them
+// would trade an early sentence for a missing one.
+//
+// `eta` is the ARRIVAL CROSSING itself — the instant the entry was adjudicated
+// against — not the `eta_crossings` duration the same answer already carries.
+//
+// CONSUMERS: `walkViaOffice`'s own reply, and nothing else. `arrived_note` has
+// one writer and no reader in the office; `grep` over postmark-site,
+// postmark-world and the town repo finds the receipt's `entry` block read by no
+// door at all (the town hits are residents' letters, which are content).
+export function walkEntryReceipt(entry, { arrived, stop, eta } = {}) {
+  if (!entry) return {};
+  if (arrived) return {
+    entry,
+    arrived_note: entry.refused
+      ? `arrived; entry refused: ${entry.refused}`
+      : "arrived, and stepped inside — the entry was adjudicated at the arrival instant, by its own door",
+  };
+  const { entered, within, ...doorsWords } = entry;
+  return { entry: { queued_for_arrival: true, stop, eta, ...doorsWords,
+    note: "the entry is adjudicated when you arrive; nothing has been entered yet" } };
+}
+
 export async function walkViaOffice(worldClone, payload = {}, key = null) {
   { const fz = worldFreezeBounce(); if (fz) return fz; }
   const bounce = (code, defect, hint, extra = {}) => {
@@ -4194,8 +4242,9 @@ export async function walkViaOffice(worldClone, payload = {}, key = null) {
   // module, and a top-level edge would be a cycle for a leg most walks never
   // take.
   let entry = null;
+  let arrivedAtCrossing = null;
   if (enterOnArrival) {
-    const arrivedAtCrossing = at + (result.position.etaCrossings ?? 0);
+    arrivedAtCrossing = at + (result.position.etaCrossings ?? 0);
     try {
       const { enterViaOffice } = await import("./world-crossings.mjs");
       const { crossingDeps } = await import("./world-apex.mjs");
@@ -4232,9 +4281,7 @@ export async function walkViaOffice(worldClone, payload = {}, key = null) {
           acted_by_note: `this walk was ${String(payload.as_human)}'s act, recorded under ${who} — the seat is the body the world can place, and ${seatedGround} is the ground that seats them` }
       : {}),
     departed_at_crossing: at,
-    ...(entry ? { entry, arrived_note: entry.refused
-      ? `arrived; entry refused: ${entry.refused}`
-      : "arrived, and stepped inside — the entry was adjudicated at the arrival instant, by its own door" } : {}),
+    ...walkEntryReceipt(entry, { arrived: result.position.arrived === true, stop: targetMarkId, eta: arrivedAtCrossing }),
     leg_m: legM,
     via_crossings: via,
     eta_crossings: result.position.etaCrossings,
@@ -4555,7 +4602,7 @@ export const WORLD_TOOLS = [
       mode: { type: "string", enum: ["rim", "center"], description: "where ON the destination you stop — NOT the destination itself (that is mark_id: or x:/y:). \"rim\" (the default if omitted): stop at the first point of its ground, standing on its edge — right for a mountain. \"center\": walk to its middle — right for a plaza or anywhere you mean to arrive AT. Meaningless for x/y targets; a coordinate is already a point." },
       handle: { type: "string", description: "which of YOUR residents is walking (omit if your key holds one; a multi-resident key must name one, or it bounces with the list)" },
       exit: { type: "boolean", description: "DEC-5: if this walk would carry you OUT of a mark you are within, pass true to step out of it (innermost outward) and walk in one call; without it such a walk is refused and names the mark. Walking INTO a footprint never enters — entry stays your own act." },
-      enter_on_arrival: { type: "boolean", description: "step inside the mark you are walking to, at the moment you arrive. Only meaningful with mark_id — a coordinate is not enterable, and pairing it with x/y bounces by name. The entry fires AS ITSELF: its own threshold law, its own terms, its own consent-at-thresholds delivery, adjudicated at the ARRIVAL instant rather than this one, so nothing is bypassed by riding a walk. A door that declares a counter-edge still shows you its terms and records nothing until you pass accept: true. IF THE ENTRY REFUSES, THE WALK STILL STANDS — you arrived, and the answer says so alongside the door's own words." },
+      enter_on_arrival: { type: "boolean", description: "step inside the mark you are walking to, at the moment you arrive. Only meaningful with mark_id — a coordinate is not enterable, and pairing it with x/y bounces by name. The entry fires AS ITSELF: its own threshold law, terms and consent-at-thresholds delivery, adjudicated at the ARRIVAL instant rather than this one, so riding a walk bypasses nothing — until you arrive the receipt reads queued_for_arrival, never entered. A counter-edge door shows its terms and records nothing until you pass accept: true. IF THE ENTRY REFUSES, THE WALK STILL STANDS, alongside the door's own words." },
       accept: { type: "boolean", description: "your explicit word at the threshold, for use with enter_on_arrival where the door declares a counter-edge (the Post Office's `aboard`). Walk once without it to READ the terms on arrival; walk again with it to cross." },
     }, additionalProperties: false } },
   { name: "world_withdraw_mark",
