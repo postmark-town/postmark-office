@@ -43,6 +43,7 @@ import { parityRows, marksAsOf, BERTH_TOLERANCE_M } from "../tools/vessel-parity
 import { freezeSeamLine, isFrozen, seamDiff, standingOnDeck, ashoreFor, ledgerWriters, unflaggedWriters, execCallers } from "../tools/ledger-freeze.mjs";
 import { atCrossing, departure, fixtureMarks, makeWorldClone, QUAY, FAR_SHORE } from "./movement-fixture.mjs";
 import { WORLD_CLONE } from "../src/world-store.mjs";
+import { useGuardReader } from "../src/world2-guards.mjs";
 
 const clone = makeWorldClone();
 const dbDir = mkdtempSync(join(tmpdir(), "stageD-dyn-"));
@@ -438,11 +439,27 @@ test("no frames map means the rows pass through byte-identical — the flag-off 
 // ── 9. the two eras, and the freeze ──────────────────────────────────────────
 
 test("the store's records and the ledger's merge into one ordered history", async () => {
-  const db = openDynamic(DB);
+  // POS-154: era two is `acts` now, so the departure is filed as the act the
+  // movement-store pen writes rather than into a sqlite file. The claim — one
+  // ordered history across the seam — is untouched.
   const late = new Date(atCrossing(11)).toISOString();
-  declareMovement(db, { actor: "mover", at: late, from: FAR_SHORE, toward: FAR_SHORE, crossing: 11, declaredBy: "mover" });
-  db.close();
-  const stored = storedRecordsFor("mover", { dbPath: DB, atMs: atCrossing(12) });
+  const pg = process.env.WORLD2_PG, url = process.env.WORLD2_PG_URL;
+  process.env.WORLD2_PG = "1"; process.env.WORLD2_PG_URL = "postgres://world-movement-test/none";
+  const restore = useGuardReader(async (fn) => fn({
+    query: async (sql, params) => (/FROM acts/i.test(String(sql))
+      ? { rows: [{
+          id: 77, at: new Date(late), crossing: "11", actor: "mover", action: "walk",
+          payload: { from: FAR_SHORE, toward: FAR_SHORE, within: null, to: null, pace: null, declared_by: "mover" },
+        }] }
+      : { rows: [] }),
+  }));
+  let stored;
+  try { stored = await storedRecordsFor("mover", { atMs: atCrossing(12) }); }
+  finally {
+    restore();
+    if (pg == null) delete process.env.WORLD2_PG; else process.env.WORLD2_PG = pg;
+    if (url == null) delete process.env.WORLD2_PG_URL; else process.env.WORLD2_PG_URL = url;
+  }
   assert.equal(stored.length, 1);
 
   const merged = recordsAcrossEras(

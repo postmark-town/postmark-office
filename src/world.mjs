@@ -54,7 +54,10 @@ import { cannotAnswer, pointAnswerable, servedRead, storeEpoch, storeShadowEnabl
 // how fine is its floor. arena.mjs imports world-hold.mjs and world-journal.mjs
 // and never world.mjs, so this edge closes no cycle.
 import { arenaGroundAt, adversaryIn, arrivalOnGround, groundAtPoint } from "./arena.mjs";
-import { emissionsEnabled, openDynamic, openDynamicReadOnly } from "./dynamic-store.mjs"; // stage 2: the dynamic layer's flag
+// `openDynamicReadOnly` IS GONE FROM THIS IMPORT (POS-154): `framesByHandle` was
+// its last caller here, and it opened the store for the departure read alone.
+// The remaining `openDynamic` calls are other readers' and other rows'.
+import { emissionsEnabled, openDynamic } from "./dynamic-store.mjs"; // stage 2: the dynamic layer's flag
 import { declareMovement, declareMovementFlipped } from "./dynamic-entities.mjs"; // stage D: the pen after the ledger's freeze
 import { emissionFromVoice } from "./dynamic-emissions.mjs"; // stage 2: speech also becomes an emission instance
 import { world2Enabled } from "./world2-acts.mjs"; // the write-path closure: is the shadow mirror on at all
@@ -368,9 +371,12 @@ const walkLedgerAtMain = (repo) => readAtRef(repo, mainRef(repo), "WORLD/walk-le
 // means the freeze assumption has broken, and it is disclosed instead of being
 // quietly mis-ordered.
 //
-// FEATURE-DETECTED, DISCLOSED, ERA-1 ON ANY FAILURE. With the flag off the store
-// is not opened at all and this returns exactly what `parseWalkLedger` returned.
-export async function departuresAcrossEras(worldClone = WORLD_CLONE, { atMs = Date.now(), db = null } = {}) {
+// FEATURE-DETECTED, DISCLOSED, ERA-1 ON ANY FAILURE. With the flag off the record
+// is not read at all and this returns exactly what `parseWalkLedger` returned.
+//
+// `db` IS GONE (POS-154): era two came from a sqlite handle a caller could pass
+// in, and it comes from the record now, which has no handle to hand over.
+export async function departuresAcrossEras(worldClone = WORLD_CLONE, { atMs = Date.now() } = {}) {
   const disclosed = [];
   let ledger = [], ledgerUnreadable = null;
   try {
@@ -382,9 +388,13 @@ export async function departuresAcrossEras(worldClone = WORLD_CLONE, { atMs = Da
   }
   if (!movementV2Enabled()) return { departures: ledger, eras: ["ledger"], disclosed, ledgerUnreadable };
 
-  const { records, absent } = storedDepartures({ db, atMs });
+  const { records, absent } = await storedDepartures({ atMs });
   if (absent) {
-    disclosed.push(`movements-unreadable: ${absent} — reading the founding era alone`);
+    // NAMES THE RECORD, NOT THE TABLE (POS-154). This said
+    // `movements-unreadable`, which was true of a sqlite file and is false of
+    // the store — a disclosure that names the wrong thing sends whoever reads it
+    // to look in a place that cannot be the cause.
+    disclosed.push(`record-unreadable: ${absent} — reading the founding era alone`);
     return { departures: ledger, eras: ["ledger"], disclosed, ledgerUnreadable };
   }
   if (!records.length) return { departures: ledger, eras: ["ledger", "store"], disclosed, ledgerUnreadable };
@@ -4280,39 +4290,44 @@ async function framesByHandle(w, departures, atMs) {
     byHandle.get(d.handle).push(d);
   }
   const out = new Map();
-  // Read-only: this is a pure reader on `GET /world/walkers` (latent — it
-  // returns before the open when the vessel carriers are absent, which is why
-  // it had not fired). Same class as thingStandsBlock, found by the lap-3 sweep.
-  const store = openDynamicReadOnly();
-  try {
-    // THE STORE IS READ ONCE, NOT ONCE PER RESIDENT. `storedRecordsFor` is a
-    // filter over the whole movements table, so calling it inside this loop
-    // scanned that table seventy times to answer one public GET. Read it once
-    // and slice.
-    //
-    // `departures` already spans both eras (the doors merge before they call),
-    // so the store half is passed in twice — once inside `ledgerRecords`, once
-    // here. `recordsAcrossEras` de-dupes deliberately rather than leaving that
-    // to the accident of `foldFrames` being idempotent over repeated arrivals;
-    // `transitions` is a COUNT and the `happened` shelf reads it.
-    const all = store ? storedDepartures({ db: store, atMs }).records : [];
-    const storeByHandle = new Map();
-    for (const r of all) {
-      if (!storeByHandle.has(r.handle)) storeByHandle.set(r.handle, []);
-      storeByHandle.get(r.handle).push(r);
-    }
-    // A resident whose ONLY record is era two — someone who first moved after
-    // the freeze — has no ledger line to be grouped by, so the roster above
-    // would never reach them. They are added here.
-    for (const h of storeByHandle.keys()) {
-      if (h !== service.vessel.handle && !byHandle.has(h)) byHandle.set(h, []);
-    }
-    for (const [h, ledgerRecords] of byHandle) {
-      const records = recordsAcrossEras(ledgerRecords, storeByHandle.get(h) ?? []);
-      const fold = await foldFrames(records, { carriers, carrierAt, walk, atMs });
-      if (fold.frame) out.set(h, fold);
-    }
-  } finally { store.close(); }
+  // NO SQLITE HANDLE HERE ANY MORE (POS-154). This opened `dynamic.db` read-only
+  // for one reason — to hand `storedDepartures` a handle — and that read is the
+  // record's now, so the open, the `try`/`finally` and the close all go with it.
+  //
+  // It also takes a latent throw with it: `openDynamicReadOnly` answers NULL when
+  // the file is missing, the `store ?` guard covered only the read, and the
+  // `finally { store.close() }` did not — a TypeError on an office with no store,
+  // unfired only because this function returns early when the vessel carriers are
+  // absent.
+  //
+  // THE RECORD IS READ ONCE, NOT ONCE PER RESIDENT — the old rule, unchanged in
+  // force and now about a round trip rather than a table scan. `storedRecordsFor`
+  // inside this loop would be seventy reads to answer one public GET.
+  //
+  // `departures` already spans both eras (the doors merge before they call), so
+  // the store half arrives twice — once inside `ledgerRecords`, once here.
+  // `recordsAcrossEras` de-dupes deliberately rather than leaving that to the
+  // accident of `foldFrames` being idempotent over repeated arrivals;
+  // `transitions` is a COUNT and the `happened` shelf reads it. Both copies come
+  // from this same function, so they still agree field for field and the dedupe
+  // still bites.
+  const all = (await storedDepartures({ atMs })).records;
+  const storeByHandle = new Map();
+  for (const r of all) {
+    if (!storeByHandle.has(r.handle)) storeByHandle.set(r.handle, []);
+    storeByHandle.get(r.handle).push(r);
+  }
+  // A resident whose ONLY record is era two — someone who first moved after
+  // the freeze — has no ledger line to be grouped by, so the roster above
+  // would never reach them. They are added here.
+  for (const h of storeByHandle.keys()) {
+    if (h !== service.vessel.handle && !byHandle.has(h)) byHandle.set(h, []);
+  }
+  for (const [h, ledgerRecords] of byHandle) {
+    const records = recordsAcrossEras(ledgerRecords, storeByHandle.get(h) ?? []);
+    const fold = await foldFrames(records, { carriers, carrierAt, walk, atMs });
+    if (fold.frame) out.set(h, fold);
+  }
   return out;
 }
 

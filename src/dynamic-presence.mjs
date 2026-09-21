@@ -194,7 +194,7 @@ export function positionsAt(db, atMs, walk, vessel = null, { world = null, where
  * equal.
  */
 async function framesForPresence({ db, world, repo, atMs, walk, stored = null }) {
-  const [{ carrierReader, recordsAcrossEras, storedRecordsFor, vesselServiceFrom }, { foldFrames }] =
+  const [{ carrierReader, recordsAcrossEras, vesselServiceFrom }, { foldFrames }] =
     await Promise.all([import("./world-movement.mjs"), import("./world-frames.mjs")]);
   const { service, mod, carriers } = await vesselServiceFrom(world, { repo });
   if (!service || !mod || !carriers.length) return null;
@@ -208,7 +208,13 @@ async function framesForPresence({ db, world, repo, atMs, walk, stored = null })
     // ashore record that ended it. `stored` is read once by the caller and
     // sliced here rather than re-opened per resident.
     const ledgerRecords = [{ handle, iso: dep.iso, ...toWalkRecord(dep) }];
-    const mine = stored ? stored.filter((r) => r.handle === handle) : storedRecordsFor(handle, { db, atMs });
+    // `stored` IS NULL ONLY WHEN THE ONE READ ALREADY REFUSED, and the old
+    // fallback re-opened sqlite per resident to ask again. Against the record
+    // that is one round trip per head to re-ask a question that just answered
+    // "I cannot be reached" — so it is `[]`, and `storeAbsent` carries the
+    // reason to the disclosure. An EMPTY list is truthy and still takes the
+    // slice path, so a town that simply has not walked is unaffected.
+    const mine = stored ? stored.filter((r) => r.handle === handle) : [];
     const records = recordsAcrossEras(ledgerRecords, mine);
     const fold = await foldFrames(records, { carriers, carrierAt, walk, atMs });
     if (fold.frame) out.set(handle, fold);
@@ -295,7 +301,10 @@ async function readPresence({ dbPath = null, repo = WORLD_CLONE, atMs = Date.now
     if (movementV2Enabled()) {
       try {
         const { storedDepartures } = await import("./world-movement.mjs");
-        const read = storedDepartures({ db, atMs });
+        // AWAITED (POS-154). The read is the record's now, and the un-awaited
+        // form is silent: `read.records` on a Promise is `undefined`, `stored`
+        // goes null, and every resident reads as never having walked.
+        const read = await storedDepartures({ atMs });
         stored = read.records;
         storeAbsent = read.absent;
       } catch (e) { stored = null; storeAbsent = String(e?.message ?? e).slice(0, 160); }

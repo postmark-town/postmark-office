@@ -419,6 +419,59 @@ export async function storeAttachmentRows({ until = null } = {}) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
+// NOT A GUARD · the town's departure record, read from the store
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// POS-154, under Everything Reads the Store. `world-movement.mjs §
+// storedDepartures` opened `dynamic.db` and folded the `movements` table for
+// `GET /world/orient`, `/world/present`, `/world/walkers` and the say door's
+// earshot. The rows are in `acts`, the derivation exists, and this is the wire —
+// the same shape and the same reasons as the stands block below, so the two sit
+// together rather than growing a second road apiece.
+//
+// ⚑ THE FOUNDING ERA IS EXCLUDED, and it is the one clause that cannot be left
+// out. `DEPARTURE_ACTIONS` matches the backfilled walk ledger too, and era one
+// ALREADY reaches every one of those callers by another road entirely —
+// `world.mjs § departuresAcrossEras` parses `WORLD/walk-ledger.md` out of the
+// clone and merges the two itself. Returning `_ledger` rows here would hand that
+// merge the founding era twice, and `recordsAcrossEras`' own de-dupe could not
+// see it: `dedupeRecords` keys on `era`, the clone's copy is stamped `ledger` and
+// this one would be stamped `store`, so both survive and the LAST one wins. That
+// is not a duplicate row in a list; it is a different resident's governing leg.
+//
+// ⚑ ONE CONVERTER, WHICH IS `live-reads`'. `departureRecordOf` reads all four
+// pens (ledger / journal / live / movement-store) and REFUSES a row it cannot
+// read rather than skipping it. Writing the mapping again here is the thing
+// every file in this derivation forbids about itself, and a second copy would
+// drift on exactly the pen nobody is looking at.
+//
+// ⚑ `strict` STAYS ON. A refused act throws out of `departureRecords`, this
+// throws, and `storedDepartures` turns it into a named `absent` — which is the
+// same bargain the sqlite read kept, where a payload that would not parse landed
+// in its catch. An answer short by the rows nobody looks for is the one outcome
+// neither store is allowed to produce.
+//
+// ⚑ NO FLAG. `guardedAttachments` carries a `W2_GUARDS` branch because a GUARD
+// flipping is a thing an operator rolls back. This is a READ with one right
+// answer, and a switch here would be the office keeping two answers to one
+// question — the thing the project exists to stop.
+export async function storeDepartureRows() {
+  const off = unconfigured("departures");
+  if (off) throw off;
+  return reading(async (client) => {
+    const live = await import("../world2/tools/live-reads.mjs");
+    const { rows } = await client.query(
+      `SELECT id, at, crossing, actor, action, payload FROM acts
+        WHERE action = ANY($1) AND payload->>'_ledger' IS NULL ${live.DEPARTURE_ORDER_SQL}`,
+      [live.DEPARTURE_ACTIONS]);
+    // `assertDepartureOrder` runs inside this — the 44-handle `ORDER BY id` trap
+    // stays a refusal by name rather than a quietly wrong governing leg, and it
+    // still has something to say with era one filtered out: ids must ascend.
+    return live.departureRecords(rows);
+  });
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
 // NOT A GUARD · the investigate door's `stands` block, read from the store
 // ═════════════════════════════════════════════════════════════════════════════
 //

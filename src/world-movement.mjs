@@ -35,11 +35,14 @@
 // movement arithmetic from the tree would mean the office computed where the
 // boat is from whatever the last writer left behind.
 
-import { existsSync } from "node:fs";
-
+// NOTHING FROM `node:fs` OR `dynamic-store` IS IMPORTED HERE ANY MORE, and the
+// absence is the receipt: `existsSync`, `openDynamic`, `dynamicDbPath` and
+// `readMovements` existed in this module for `storedDepartures` alone, which
+// reads `acts` now (POS-154). A module that keeps the handle to a store it no
+// longer reads is one edit away from reading it again.
 import { WORLD_CLONE } from "./world-store.mjs";
-import { movementV2Enabled, openDynamic, dynamicDbPath } from "./dynamic-store.mjs";
-import { readMovements, VESSEL_HANDLE, worldToolModule } from "./dynamic-entities.mjs";
+import { movementV2Enabled } from "./dynamic-store.mjs";
+import { VESSEL_HANDLE, worldToolModule } from "./dynamic-entities.mjs";
 import { boundariesOnRoad, carriersFrom, carriersWithDisclosure, carrierStateAt, foldFrames, gunwaleWarning, inRect } from "./world-frames.mjs";
 
 // The flag is read from the environment on every call and never latched at
@@ -270,57 +273,83 @@ export async function vehicleStandpoint(handle, worldState, { repo = WORLD_CLONE
 // ── the store's own movement record ──────────────────────────────────────────
 
 /**
- * Every movement this entity has declared into the STORE, oldest first, in the
+ * Every movement this entity has declared into the RECORD, oldest first, in the
  * shape `walk.mjs` and `vessel.mjs` read.
  *
- * Never throws, for the reason every store read here does not: an unopenable
- * store must not be able to unplace a resident whose ledger line is sitting
- * right there in the world repo.
+ * POS-154, Everything Reads the Store: this folded the sqlite `movements` table
+ * and it reads `acts` now, through the read worker's one road
+ * (`world2-guards § storeDepartureRows`). There is no sqlite open left under it
+ * and no flag over it — a switch would be the office keeping two answers to one
+ * question.
+ *
+ * Never throws, for the reason the sqlite read did not: an unreachable record
+ * must not be able to unplace a resident whose ledger line is sitting right
+ * there in the world repo. The caller DISCLOSES `absent` instead, and it is
+ * never a silent `[]` — an office pointed at no record and a pool that will not
+ * answer both come back with a reason attached.
+ *
+ * ⚑ ASYNC NOW, and the un-awaited form is silent: `read.records` on a Promise is
+ * `undefined`, which reads downstream as "this town has never walked". The four
+ * callers await it and a source pin in `test/walkers-read-the-store.test.mjs`
+ * holds the sqlite open out.
  */
-export function storedDepartures({ db = null, dbPath = null, atMs = Date.now() } = {}) {
-  const path = dbPath ?? dynamicDbPath();
-  // FEATURE-DETECTED, NOT VERSION-MATCHED. A store written before the movements
-  // table existed, a store that will not open, a `movements` table that is not
-  // there yet: all of them mean "era two has nothing to say", which is a true
-  // sentence about a town that has not had its freeze yet. Era-1-only is the
-  // answer, and the caller discloses it — never a throw, because a reader that
-  // could take down `orient` over an absent second era would have made the seam
-  // more fragile than the thing it replaced.
-  if (!db && !existsSync(path)) return { records: [], absent: `no dynamic store at ${path}` };
-  let h = db, own = false;
+export async function storedDepartures({ atMs = Date.now() } = {}) {
   try {
-    if (!h) { h = openDynamic(path, { readOnly: true }); own = true; }
-    const rows = readMovements(h, { until: atMs });
-    if (own) h.close();
-    return {
-      records: rows.map((r) => {
-        const p = JSON.parse(r.payload);
-        return {
-          // THE LEDGER'S OWN SHAPE, so a merged list is one vocabulary. `within`
-          // and `to` are the store's column names; `targetExtent` and
-          // `targetMarkId` are what walk.mjs reads. One converter, here.
-          iso: r.at, handle: r.actor,
-          from: p.from, toward: p.toward, at: p.crossing,
-          targetExtent: p.within ?? null, targetMarkId: p.to ?? null, pace: p.pace ?? null,
-          source: "store",
-        };
-      }),
-      absent: null,
-    };
+    const { storeDepartureRows } = await import("./world2-guards.mjs");
+    const { records } = await storeDepartureRows();
+    const cut = [];
+    for (const r of records) {
+      // THE CUT IS ON THE RECORD'S OWN INSTANT, never on `acts.at`. They are not
+      // the same quantity — a journal-era payload carries its own `at`, one level
+      // down — which is the reason `/world2/walks` also cuts its window on the
+      // DERIVED rows rather than in SQL.
+      const ms = Date.parse(r.iso);
+      // REFUSED BY NAME, NEVER SKIPPED. A record whose instant will not parse
+      // cannot be placed inside or outside the cut, and dropping it silently
+      // would answer with a history short by exactly the rows nobody looks for.
+      // Measured 0 of prod's 2,397 on 2026-09-21; if that ever stops being true
+      // the doors say so rather than quietly shrinking.
+      if (!Number.isFinite(ms)) {
+        return { records: [], absent: `a departure record carries an unreadable instant: ${String(r.iso).slice(0, 60)}` };
+      }
+      if (ms > atMs) continue;
+      cut.push({
+        // THE LEDGER'S OWN SHAPE, so a merged list is one vocabulary — and the
+        // port's own bookkeeping (`line`, `era`, `act_id`) is dropped here rather
+        // than passed on. `era` is the trap: the name collides with the era
+        // `recordsAcrossEras` stamps and carries a different vocabulary
+        // (`journal`/`movement-store` against `store`/`ledger`), so a
+        // pass-through would re-key `dedupeRecords` in silence.
+        iso: r.iso, handle: r.handle,
+        from: r.from, toward: r.toward, at: r.at,
+        targetExtent: r.targetExtent ?? null, targetMarkId: r.targetMarkId ?? null, pace: r.pace ?? null,
+        // LOAD-BEARING, not decoration. `recordsAcrossEras` maps era one with
+        // `era: r.source === "store" ? "store" : "ledger"`, `dedupeRecords` keys
+        // on that era, and `dynamic-presence.mjs` puts `era: "store"` in front of
+        // a resident off this exact value.
+        source: "store",
+      });
+    }
+    return { records: cut, absent: null };
   } catch (e) {
-    if (own && h) { try { h.close(); } catch { /* already gone */ } }
-    return { records: [], absent: String(e?.message ?? e).slice(0, 160) };
+    // THE CAUSE IS CARRIED, NOT SWALLOWED. `GuardsUnreachableError` says the same
+    // ruled sentence to every resident whatever went wrong ("the office's record
+    // cannot be reached"), and it puts the real reason on `cause`. A disclosure
+    // that printed only the outer sentence would send an operator looking at the
+    // pool when the office is simply pointed at no record.
+    const why = e?.cause?.message ? `${e.message} (${e.cause.message})` : String(e?.message ?? e);
+    return { records: [], absent: why.slice(0, 200) };
   }
 }
 
 /** One entity's stored records, oldest first. The per-handle slice of the above. */
-export function storedRecordsFor(handle, opts = {}) {
-  return storedDepartures(opts).records.filter((r) => r.handle === handle);
+export async function storedRecordsFor(handle, opts = {}) {
+  return (await storedDepartures(opts)).records.filter((r) => r.handle === handle);
 }
 
 /** The single governing record — the last one. Kept for surfaces that want only that. */
-export function storedDepartureFor(handle, opts = {}) {
-  return storedRecordsFor(handle, opts).at(-1) ?? null;
+export async function storedDepartureFor(handle, opts = {}) {
+  return (await storedRecordsFor(handle, opts)).at(-1) ?? null;
 }
 
 /**
@@ -397,7 +426,7 @@ export function dedupeRecords(records) {
  * use the derivation it has always used.
  */
 export async function movementStandpoint(handle, worldState, {
-  repo = WORLD_CLONE, atMs = Date.now(), recordsOf = null, db = null, dbPath = null,
+  repo = WORLD_CLONE, atMs = Date.now(), recordsOf = null,
 } = {}) {
   const { service, mod, carriers } = await vesselServiceFrom(worldState, { repo });
   if (!service || !mod) return null;
@@ -416,7 +445,7 @@ export async function movementStandpoint(handle, worldState, {
   }
 
   const ledgerRecords = recordsOf ? (await recordsOf(handle)) ?? [] : [];
-  const storeRecords = storedRecordsFor(handle, { db, dbPath, atMs });
+  const storeRecords = await storedRecordsFor(handle, { atMs });
   const records = recordsAcrossEras(ledgerRecords, storeRecords);
   if (!records.length) return null;
 
@@ -496,7 +525,7 @@ export async function movementStandpoint(handle, worldState, {
  * Returns `{ x, y, frame }` — the point to hear it from — or null, meaning
  * "heard where it was spoken", the ordinary case for everyone ashore.
  */
-export async function heardFromV2(voice, worldState, { repo = WORLD_CLONE, atMs = Date.now(), db = null, dbPath = null, recordsOf = null } = {}) {
+export async function heardFromV2(voice, worldState, { repo = WORLD_CLONE, atMs = Date.now(), recordsOf = null } = {}) {
   const { service, mod, carriers } = await vesselServiceFrom(worldState, { repo });
   if (!service || !mod || !carriers.length) return null;
   const spokenMs = Number(voice?.at);
@@ -506,7 +535,7 @@ export async function heardFromV2(voice, worldState, { repo = WORLD_CLONE, atMs 
   // WHICH FRAME THE SPEAKER WAS IN WHEN THEY SPOKE — not now. A voice records
   // where it happened; the question is what it was riding at that instant.
   const ledgerRecords = recordsOf ? (await recordsOf(voice.handle)) ?? [] : [];
-  const storeRecords = storedRecordsFor(voice.handle, { db, dbPath, atMs: spokenMs });
+  const storeRecords = await storedRecordsFor(voice.handle, { atMs: spokenMs });
   const records = recordsAcrossEras(ledgerRecords, storeRecords).filter((r) => Date.parse(r.iso) <= spokenMs);
 
   let frame = null, local = null;
@@ -544,12 +573,12 @@ export async function heardFromV2(voice, worldState, { repo = WORLD_CLONE, atMs 
  * before the step. Plus the gunwale warning when the step leaves a moving
  * carrier. Both are DISCLOSURE, never refusal: v0 water does not block.
  */
-export async function roadTerms({ handle, from, toward, worldState, repo = WORLD_CLONE, atMs = Date.now(), recordsOf = null, db = null, dbPath = null }) {
+export async function roadTerms({ handle, from, toward, worldState, repo = WORLD_CLONE, atMs = Date.now(), recordsOf = null }) {
   const { service, mod, carriers } = await vesselServiceFrom(worldState, { repo });
   if (!service || !mod || !carriers.length) return null;
   const carrierAt = carrierReader(worldState, { repo, service, mod });
 
-  const here = await movementStandpoint(handle, worldState, { repo, atMs, recordsOf, db, dbPath });
+  const here = await movementStandpoint(handle, worldState, { repo, atMs, recordsOf });
   const frameCarrier = here?.frame ? carriers.find((c) => c.id === here.frame) ?? null : null;
 
   const crossings = await boundariesOnRoad(from, toward, carriers, atMs, { carrierAt, mod, service });
