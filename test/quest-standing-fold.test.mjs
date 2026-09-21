@@ -194,10 +194,16 @@ function countingTools({ welcome = true } = {}) {
     foldFriendships: () => { calls.foldFriendships++; return { active: true, pairs: [pair("a", "b")] }; },
     onboardingFactsFor: (repo, handle, opts) => {
       calls.facts.push({ handle, opts });
-      // The town's own expression for the welcome row, so a fold that hands
-      // down the wrong roll answers a different boolean rather than the same one.
-      const roll = opts?.households ?? HOUSEHOLDS;
-      const paid = opts?.welcomed ?? WELCOMED;
+      // THE STUB ANSWERS THE TOWN'S REAL ENVELOPE, and that is the whole reason
+      // the count case above can fail. `onboardingFactsFor`'s own body is
+      // `households ?? currentHouseholds(repo)` / `welcomed ??
+      // welcomedHouseholds(repo, roll)` — it RE-RESOLVES when the arguments are
+      // absent, which is the defect. A stub that fell back to a captured
+      // constant instead would leave the fold count at one under the flip too,
+      // and the case would be a decorative assertion. Measured on the live
+      // clone, this fallback is three ledger parses per head.
+      const roll = opts?.households ?? (tools.currentHouseholds ? tools.currentHouseholds(repo) : HOUSEHOLDS);
+      const paid = opts?.welcomed ?? (tools.welcomedHouseholds ? tools.welcomedHouseholds(repo, roll) : WELCOMED);
       return { ...FACTS, welcomed: paid.has(roll.get(handle)?.key ?? `solo:${handle}`) };
     },
   };
@@ -224,7 +230,7 @@ test("POS-133 · the town's folds are asked for ONCE, however many residents the
   assert.deepEqual(
     { d: one.calls.parseDeliveries, f: one.calls.foldFriendships, c: one.calls.currentHouseholds, w: one.calls.welcomedHouseholds },
     { d: many.calls.parseDeliveries, f: many.calls.foldFriendships, c: many.calls.currentHouseholds, w: many.calls.welcomedHouseholds },
-    "and one resident costs exactly what fifty do — the count is constant, not per-resident. Flip: drop `households`/`welcomed` from the object handed to onboardingFactsFor and the town resolves its own, 3 ledger parses per head");
+    "and one resident costs exactly what fifty do — the count is constant, not per-resident. Flip: drop `households`/`welcomed` from the object handed to onboardingFactsFor and this reads 51 against 2, because the stub re-resolves exactly as the town's own body does");
 });
 
 test("POS-133 · every resident's facts call carries the SAME folded roll and welcomed set", () => {
