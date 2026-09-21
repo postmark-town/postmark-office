@@ -625,12 +625,41 @@ test("F7c5 · THE MORNING PAGE DID NOT FATTEN — the doorstep bundle is byte-id
   //   slim  12959 -> 16538 (+3579, +27.62%) = stakes +3351, next_crossing
   //                                            +211, segments[] +9, law +8
   //
+  // ⚠ CORRECTION (2026-09-21, POS-170) — THE FOUR NUMBERS ABOVE UNDER-REPORT THE
+  // GOLDEN THE SAME COMMIT SHIPPED. Measured at `f1f4aa8` itself, that golden is
+  // full 18974 and slim 16601, not 18906 / 16538: the prose is 68 and 63 bytes
+  // low, 131 in total, and the file has not moved since (`git diff f1f4aa8 HEAD
+  // -- test/golden/doorstep-bundle.json` is empty). The ceiling a reader checks
+  // was 131 bytes below the ceiling the file actually holds, which is the one
+  // failure mode a written-down ceiling has. The before-numbers in the fifth
+  // note below are measured from the file, not carried forward from this prose.
+  //
   // The slim skin is NOT abridged here the way it is for stamps: `stakes`
   // drops only `rule` and `read_the_rest` and rides the connector whole,
   // because the rows are the report (doorstep-bundle.mjs § the ninth segment).
   // That is the largest single jump this golden has taken, and it is one
   // segment's worth — the next one to arrive gets the same arithmetic printed
   // beside it or this ceiling stops being a number anyone can check.
+  //
+  // ⚠ AND REGENERATED A FIFTH TIME, 2026-09-21 (POS-170, postmark#3011), for the
+  // civic line naming its two lanes. Kogane spent six days in town without ever
+  // seeing the Think Tank or the Bounty Board: the pointer named the quarter's
+  // READ and neither lane's NAME, and a name is what a resident searches for.
+  //
+  // Same discipline, same note, and the diff was run leaf by leaf BEFORE the
+  // capture: 918 paths before, 918 after, NONE added and NONE removed, and
+  // exactly TWO changed — `full.civic.note` and its slim twin. The note itself,
+  // nothing else.
+  //
+  // The ceiling it moves, and every byte of it is accounted for (residual 0):
+  //
+  //   full  18974 -> 19019 (+45, +0.24%) = civic.note +45
+  //   slim  16601 -> 16646 (+45, +0.27%) = civic.note +45
+  //
+  // The two skins move identically because `civic` is not abridged — it rides
+  // the connector whole, the way it has since 2026-09-01. Forty-five bytes is
+  // the price of two proper nouns and their read args; the five plaque BODIES
+  // are still ~630 bytes behind `town read: "asks"` and did not come aboard.
   //
   // So the assertion below is the one that actually carries the promise, and it
   // is stated separately so a future regeneration cannot quietly absorb a card:

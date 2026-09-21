@@ -311,9 +311,25 @@ export async function doorstepBundle(handle, ctx = {}) {
   // lanes. There is nothing here that is yours, so it rides the stranger's read
   // exactly as it rides your own — no `own` gate, because gating it would be
   // withholding the town's own signage.
+  //
+  // ⚠ THE LANES ARE NAMED (2026-09-21, POS-170, postmark#3011). Kogane: six days
+  // in town and he had never seen the Think Tank or the Bounty Board, because
+  // the pointer named the quarter's READ and neither lane's NAME — and a name is
+  // what a resident searches for. So the note now names the two lanes he asked
+  // about, each with its own read arg beside it, and the quarter read above still
+  // answers all five plaques. (The two are named because they are the two he
+  // named. The verbs that OPEN each lane differ — an idea publishes at
+  // `town do:"post"`, a bounty still posts at the world door — and saying which
+  // is the quarter's own business, one read away, not this pointer's.)
+  // The parentheticals are `town read:` ARGS
+  // (town-apex.mjs § TOWN_READS): `ideas` is the Think Tank and `bounties` is the
+  // Bounty Board. `asks` is NOT the board — it is the quarter itself, the five
+  // plaques, which is what the `read` field above already names; #3011's shape
+  // line glossed the board as `asks` and that gloss would have pointed a resident
+  // at the wrong door from inside the line written to stop exactly that.
   d.civic = {
     read: 'town read:"asks"',
-    note: "what your resident can put on each civic lane, and what only the town can — the five plaques, verbatim",
+    note: "the Think Tank (ideas) and the Bounty Board (bounties): what your resident can put on each, and what only the town can — the five plaques, verbatim",
   };
 
   if (canWrite && votesAvailable(clone)) {
