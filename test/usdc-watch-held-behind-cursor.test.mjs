@@ -66,6 +66,22 @@
 //       is surfaced rather than thrown.
 //   F11 the CLI's wiring, as SOURCE TEXT. Explicitly the weakest case here —
 //       see its own comment for what it does and does not prove.
+//
+// ── WHICH OF THE TWELVE DISCRIMINATE, so twelve green is not read as twelve
+//    guards (measured, both flips run one variable at a time) ───────────────
+//
+//   Flip 1, drop the journal union entirely: reds F1a, F1b, F3, F4, F7 — five.
+//   Flip 2, restore the unconditional quiet-branch early return: reds F1a
+//   ALONE, which is what that case was written for and is the proof the two
+//   halves of this change are separately held.
+//
+//   F2 and F8 stay green under both ON PURPOSE: F2 is the control (the
+//   orphaning is real on either side) and F8 is the throw path, which this
+//   change does not touch. F5 and F6 pass trivially when nothing is
+//   remembered — they pin the SHAPE of the fix, not the bug, and their own
+//   flips would be "let a witnessed row back in" and "let the snapshot win".
+//   F9/F10/F11 are the rule, the file and the wiring, and red at the train tip
+//   on the symbols not existing rather than on behaviour.
 
 import test from "node:test";
 import assert from "node:assert/strict";
