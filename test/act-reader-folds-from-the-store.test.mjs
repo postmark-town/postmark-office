@@ -28,6 +28,8 @@
 //       row and every ride vanishes. REDS ON MAIN.
 //   F5  the fail-safe, kept exactly: a store that cannot be opened answers with
 //       no history, and the deposit rule then declines to move the rider.
+//       NON-REGRESSION, not discriminating — the sqlite reader satisfied this
+//       too, which is the point: the promise survives the change of source.
 //   F6  ORDER BY `journal_seq` would be the tempting spelling and it is wrong —
 //       under the pen flip that column is NULL for the whole flipped era.
 //       Measured on prod 2026-09-21: 486 of 606 `frame` rows carry none.
@@ -38,6 +40,13 @@
 // ⚑ THE CONTROL EVERY IDENTITY CLAIM HERE CARRIES: an assertion that two
 // derived lists match says the same sentence when both are empty. Where this
 // file compares populations it asserts non-emptiness in the same breath.
+//
+// ⚑ WHICH OF THESE DISCRIMINATE, measured rather than asserted. Restoring the
+// sqlite read (the flip, docs/2026-09-20/everything-reads-the-store/pos-152/
+// flip.sh) reds EIGHT of the eleven: F2, F3, F4, F4b, F4c, F6, F6b, F7. The
+// three that stay green — F1, F5, F5b — are the statement of the problem and
+// the fail-safe that survives the change, and they are non-regression by
+// construction. Said here so nobody reads eleven green as eleven guards.
 
 import test from "node:test";
 import assert from "node:assert/strict";
