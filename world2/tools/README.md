@@ -691,17 +691,16 @@ walk that pen files — and no departure reader selects any of the three.
 
 **The apply is gated, and the gate reads the reader.** `governingDepartures`
 takes the last row in `DEPARTURE_ORDER_SQL` order, which inside the non-ledger
-era is the highest `acts.id`; `acts.id` is `GENERATED ALWAYS AS IDENTITY` and the
-window's own ids are long spent on the 729 other acts that did land there. So a
-backfilled row can only be appended, above every walk September filed — and 41 of
-the 52 actors in the gap hold a departure later than a row the plan would append.
-A plain apply moves all 41 back to where they stood on 08-29, on the public
-doors, with nothing in the read path able to see it (`assertDepartureOrder`
-passes: the rows ARE id-ascending). The tool therefore refuses the apply while
-the clause carries no instant key, and it asks the clause rather than a flag.
+era WAS the highest `acts.id`; `acts.id` is `GENERATED ALWAYS AS IDENTITY` and
+the window's own ids are long spent on the 729 other acts that did land there.
+So a backfilled row can only be appended, above every walk September filed — and
+41 of the 52 actors in the gap hold a departure later than a row the plan
+appends. A plain apply would have moved all 41 back to where they stood on
+08-29, on the public doors, with nothing in the read path able to see it (the old
+`assertDepartureOrder` passed: the rows ARE id-ascending).
 
-The clause that would open it — **not shipped with the tool; it is a reader
-change and a ruling:**
+**Ruled 2026-09-21 (Wright): "a departure's order is its INSTANT, never its
+insertion id."** The clause as shipped, in `live-reads.mjs § the instant key`:
 
 ```sql
 ORDER BY ((payload->>'_ledger') IS NULL),
@@ -709,12 +708,20 @@ ORDER BY ((payload->>'_ledger') IS NULL),
          acts.id
 ```
 
-Measured a no-op twice over, in two eras: § the append order above got "0 of 73"
-for era-then-id against by-instant on `world2_dev` before the walk era existed,
-and POS-154 got zero instant inversions among 2,397 non-ledger departure acts
-with zero governing departures moved. The `CASE` keeps the ledger era on
-`acts.id` alone because that is the era whose own comment says its file order is
-not its instants (the 08-08 sailing).
+The same `at, id` the runbook's D6 replay already uses for the holding rows
+(POS-153/162). Measured a no-op twice over, in two eras: § the append order above
+got "0 of 73" for era-then-id against by-instant on `world2_dev` before the walk
+era existed, and POS-154 got zero instant inversions among 2,397 non-ledger
+departure acts, all 2,397 holding position, zero governing departures moved. The
+`CASE` keeps the ledger era on `acts.id` alone because that is the era whose own
+comment says its file order is not its instants (the 08-08 sailing).
+
+So the gate is now OPEN — it asks the clause rather than a flag, and stays in the
+tool as the standing falsifier: revert the clause and the apply refuses again.
+With the fill in, 0 residents move back, 8 move forward onto a newer leg, and 3
+gain a first one. `PASSAGE_ORDER_SQL` deliberately does NOT take the instant key:
+the ruling was about walks, passages were not measured, and that read keeps the
+clause it has always carried.
 
 Idempotence is `payload._backfill` + `payload._backfill_seq` — the underscore
 per 017 — plus a one-sided, one-to-one instant pairing for the rows the mirror
