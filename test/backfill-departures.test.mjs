@@ -73,6 +73,9 @@ function fixtureStore() {
   return { dir, path };
 }
 
+/** Ascending compare with SQL's NULL-is-a-tie, for sorting a pool the way the clause does. */
+const cmp = (a, b) => (a == null || b == null ? 0 : a < b ? -1 : a > b ? 1 : 0);
+
 /** An act as the mirror files one — the shape `/world2/walks` selects. */
 const act = (id, { at, actor, crossing, from, toward, pace = 60, within = null, to = null, extra = {} }) => ({
   id, at: new Date(at), crossing: String(crossing), actor, action: "walk",
@@ -300,24 +303,80 @@ test("an appended row outranks a later act, and displacedActors counts exactly w
     const d = displacedActors(plan, later);
     assert.deepEqual(d.map((x) => x.actor), ["domovoi", "little-bird"], "vellix and cipher have nothing later — they are the residents the backfill is FOR");
     assert.equal(d.find((x) => x.actor === "little-bird").latest, "2026-09-19T09:00:00.000Z");
-    // And the harm, stated as the read itself states it.
-    const ordered = [...later, ...plan.filter((r) => r.state === "new").map((r, i) => act(9000 + i, {
-      at: r.at, actor: r.actor, crossing: r.crossing, from: r.payload.from, toward: r.payload.toward, pace: r.payload.pace, within: r.payload.within, to: r.payload.to,
-    }))];
-    const gov = live.governingDepartures(live.departureRecords(ordered).records);
-    assert.equal(gov.get("domovoi").iso, "2026-08-27T16:44:25.856Z",
-      "appended last, the 08-27 walk governs — the resident is moved back off their September position");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("the gate reads the clause the doors use, not a flag — and a clause with an instant key opens it", () => {
-  // The negative: today's clause, which orders the non-ledger era by id alone.
-  assert.equal(live.DEPARTURE_ORDER_SQL, "ORDER BY ((payload->>'_ledger') IS NULL), acts.id");
-  assert.equal(orderClauseCarriesInstant(live.DEPARTURE_ORDER_SQL), false,
-    "while this is false a plan that displaces anybody must not apply");
-  // The positive control: the clause that would place these rows.
-  assert.equal(orderClauseCarriesInstant(
-    "ORDER BY ((payload->>'_ledger') IS NULL), (CASE WHEN payload->>'_ledger' IS NULL THEN acts.at END), acts.id"), true);
+test("THE RULING — a backfilled row files where it HAPPENED, and the later walk still governs", () => {
+  const { dir, path } = fixtureStore();
+  try {
+    const derived = departureRowsFrom(readMovementRows(path, { from: LO, to: HI }));
+    const fresh = planFrom(derived, []).filter((r) => r.state === "new");
+    const later = [
+      act(3000, { at: "2026-09-02T09:00:00.000Z", actor: "domovoi", crossing: 164.2, from: { x: 1, y: 1 }, toward: { x: 2, y: 2 } }),
+      act(3001, { at: "2026-09-19T09:00:00.000Z", actor: "little-bird", crossing: 190.1, from: { x: 3, y: 3 }, toward: { x: 4, y: 4 } }),
+    ];
+    // Appended: ids 9000+, above every act already filed — which is the only
+    // thing `GENERATED ALWAYS AS IDENTITY` will give a backfill.
+    const appended = fresh.map((r, i) => act(9000 + i, {
+      at: r.at, actor: r.actor, crossing: r.crossing, from: r.payload.from, toward: r.payload.toward,
+      pace: r.payload.pace, within: r.payload.within, to: r.payload.to,
+      extra: { _backfill: r.payload._backfill, _backfill_seq: r.payload._backfill_seq },
+    }));
+    // The store returns them in the CLAUSE's order, which is what the door gets.
+    const ordered = [...later, ...appended].sort((a, b) =>
+      live.DEPARTURE_ORDER_KEYS.reduce((acc, k) => acc || cmp(k.of(a), k.of(b)), 0));
+    const gov = live.governingDepartures(live.departureRecords(ordered).records);
+    assert.equal(gov.get("domovoi").iso, "2026-09-02T09:00:00.000Z",
+      "the September walk governs: the 08-27 row files at its own instant, not last");
+    assert.equal(gov.get("little-bird").iso, "2026-09-19T09:00:00.000Z");
+    // And the residents the fill is FOR gain their leg.
+    assert.equal(gov.get("cipher").iso, "2026-08-30T08:00:00.000Z");
+    assert.equal(gov.get("vellix").iso, "2026-08-29T02:00:00.000Z");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("the guard is driven by the same keys as the clause — it cannot bless an order the query never asked for", () => {
+  assert.deepEqual(live.DEPARTURE_ORDER_KEYS.map((k) => k.name), ["era", "instant", "id"]);
+  assert.equal(live.DEPARTURE_ORDER_SQL, `ORDER BY ${live.DEPARTURE_ORDER_KEYS.map((k) => k.sql).join(", ")}`,
+    "the clause is BUILT from the keys — a second copy is how a guard comes to bless the wrong order");
+  const a = act(10, { at: "2026-08-29T02:00:00.000Z", actor: "w", crossing: 156.1, from: { x: 0, y: 0 }, toward: { x: 1, y: 1 } });
+  const b = act(11, { at: "2026-08-28T02:00:00.000Z", actor: "w", crossing: 155.1, from: { x: 0, y: 0 }, toward: { x: 1, y: 1 } });
+  // id-ascending but instant-DESCENDING: the old guard passed this, and it is
+  // exactly the shape an appended backfill takes.
+  assert.throws(() => live.departureRecords([a, b]), /not instant-ascending within the non-ledger era/);
+  assert.doesNotThrow(() => live.departureRecords([b, a]));
+});
+
+test("the ledger era keeps its file order — the 08-08 sailing is not re-sorted by instant", () => {
+  const ledger = (id, iso, at) => ({
+    id, at: new Date(iso), crossing: null, actor: "w", action: "legacy:departure",
+    payload: { _ledger: "WORLD/walk-ledger.md", iso, handle: "w", from: { x: 0, y: 0 }, toward: { x: id, y: 0 }, at,
+      line: `- ${iso} · w · from 0,0 · toward ${id},0 · at ${at}` },
+  });
+  // The sailing: the 18:00 line was APPENDED after the 18:16 walk.
+  const rows = [ledger(1, "2026-08-08T18:16:00.000Z", 120), ledger(2, "2026-08-08T18:00:00.000Z", 121)];
+  assert.doesNotThrow(() => live.departureRecords(rows), "the instant key must not reach this era");
+  const gov = live.governingDepartures(live.departureRecords(rows).records);
+  assert.equal(gov.get("w").toward.x, 2, "the later-APPENDED ledger line still governs");
+});
+
+test("the passage read does NOT inherit the departure ruling", () => {
+  assert.deepEqual(live.PASSAGE_ORDER_KEYS.map((k) => k.name), ["era", "id"]);
+  assert.equal(live.PASSAGE_ORDER_SQL, "ORDER BY ((payload->>'_ledger') IS NULL), acts.id",
+    "byte-for-byte the clause the passage read has always carried — passages were not measured and were not ruled");
+  assert.notEqual(live.PASSAGE_ORDER_SQL, live.DEPARTURE_ORDER_SQL);
+});
+
+test("the gate reads the clause the doors use, not a flag — and the shipped clause OPENS it", () => {
+  // The clause as ruled 2026-09-21. The gate passes on it, which is what lets
+  // the apply run at all.
+  assert.equal(live.DEPARTURE_ORDER_SQL,
+    "ORDER BY ((payload->>'_ledger') IS NULL), (CASE WHEN payload->>'_ledger' IS NULL THEN acts.at END), acts.id");
+  assert.equal(orderClauseCarriesInstant(live.DEPARTURE_ORDER_SQL), true,
+    "the shipped clause places a backfilled row by its instant, so the apply may run");
+  // The negative control: the clause as it stood before the ruling. The gate is
+  // the standing falsifier against a revert — put this back and the apply refuses.
+  assert.equal(orderClauseCarriesInstant("ORDER BY ((payload->>'_ledger') IS NULL), acts.id"), false);
   assert.equal(orderClauseCarriesInstant("ORDER BY at, acts.id"), true);
   // And it is not fooled by the word inside a quoted literal.
   assert.equal(orderClauseCarriesInstant("ORDER BY ((payload->>'at_anchor') IS NULL), acts.id"), false);

@@ -84,12 +84,22 @@
 // exports acts whole, and a reader of that export will see three empty fields
 // beside a `_backfill` stamp that says why.
 //
-// ── THE ORDERING GATE, AND WHY THE APPLY CAN REFUSE ─────────────────────────
+// ── THE ORDERING GATE — RULED, AND NOW OPEN ─────────────────────────────────
 //
-// `DEPARTURE_ORDER_SQL` is `ORDER BY ((payload->>'_ledger') IS NULL), acts.id`
+// **Ruled 2026-09-21 (Wright): "a departure's order is its INSTANT, never its
+// insertion id."** `DEPARTURE_ORDER_SQL` now carries the instant key, the same
+// `at, id` the runbook's D6 replay already uses for the holding rows
+// (POS-153/162) — one law, not a new one. The gate below therefore PASSES, and
+// it stays in the tool as the standing falsifier: revert the clause and the
+// apply refuses again, without anyone having to remember why.
+//
+// What follows is the state that forced the ruling, kept because it is the
+// reason the gate exists at all.
+//
+// `DEPARTURE_ORDER_SQL` was `ORDER BY ((payload->>'_ledger') IS NULL), acts.id`
 // and `governingDepartures` takes the LAST row per handle in that order. So the
-// governing departure is the highest `acts.id` — APPEND order, deliberately, not
-// instant order.
+// governing departure was the highest `acts.id` — APPEND order, not instant
+// order.
 //
 // `acts.id` is `GENERATED ALWAYS AS IDENTITY`, and the ids across the hole's own
 // four days are long since spent on the 729 other acts that DID land there. A
@@ -97,37 +107,40 @@
 // September filed. Under the clause as it stands that makes an 08-29 walk the
 // governing record for anyone who has walked since: measured on the snapshot
 // against prod's 2,397 departure acts, 52 actors have a movement in the gap and
-// 41 of them have a departure at or after the upper bound. A plain apply moves
-// 41 residents back to where they stood on 08-29, on the public doors, and no
-// guard in the read path can see it — `assertDepartureOrder` passes, because
-// the rows ARE id-ascending.
+// 41 of them have a departure at or after the upper bound. A plain apply would
+// have moved 41 residents back to where they stood on 08-29, on the public
+// doors, and no guard in the read path could see it — the old
+// `assertDepartureOrder` passed, because the rows ARE id-ascending.
 //
 // So the apply is gated on the reader being able to place these rows, and the
 // gate READS THE READER rather than a flag: it asks whether
 // `DEPARTURE_ORDER_SQL` carries an instant key, and refuses while it does not
-// and the plan would displace anybody. Nothing to remember and nothing to pass
-// — when the clause gains the key, this gate opens by itself.
+// and the plan would displace anybody. Nothing to remember and nothing to pass.
 //
-// THE CLAUSE THAT WOULD OPEN IT, measured but NOT shipped here (it is a reader
-// change and a ruling, not this tool's to make):
+// THE CLAUSE AS SHIPPED (live-reads.mjs § DEPARTURE_ORDER_KEYS):
 //
 //   ORDER BY ((payload->>'_ledger') IS NULL),
 //            (CASE WHEN payload->>'_ledger' IS NULL THEN acts.at END),
 //            acts.id
 //
-// Over prod's 2,397 non-ledger departure acts that is a NO-OP TODAY: zero
-// instant inversions among 2,396 adjacent id-ascending pairs, zero positions
-// changed, zero handles whose governing departure moves. `world2/tools/README.md`
-// § the append order measured the same question on `world2_dev` before the walk
-// era existed and got the same answer — "era-then-id vs by-instant: 0 of 73",
+// Over prod's 2,397 non-ledger departure acts that is a NO-OP: zero instant
+// inversions among 2,396 adjacent id-ascending pairs, zero positions changed,
+// zero handles whose governing departure moves. `world2/tools/README.md` § the
+// append order measured the same question on `world2_dev` before the walk era
+// existed and got the same answer — "era-then-id vs by-instant: 0 of 73",
 // "journal era, id vs instant: 0 of 72 (786 of 786 rows monotone in `at`)". The
 // two measurements together cover both eras and 2,397 rows.
 //
-// The CASE is there anyway, because the ledger era's file order is the one place
-// the two genuinely diverge: the 2026-08-08 sailing filed every passenger at
-// 18:00:00.000Z and those lines were appended after walks stamped 18:16. Ties
-// would fall back to `acts.id` and hold, but an era whose own comment says its
-// order is not its instants keeps `acts.id` here rather than resting on that.
+// The CASE keeps the ledger era on `acts.id`, because that era's file order is
+// the one place the two genuinely diverge: the 2026-08-08 sailing filed every
+// passenger at 18:00:00.000Z and those lines were appended after walks stamped
+// 18:16. `world2-live-reads.test.mjs § latest wins is LAST IN ARRAY ORDER` is
+// that case and stays green because of it.
+//
+// AND THE BACKFILLED ROW'S INSTANT IS NOW LOAD-BEARING. It carries the
+// DECLARED instant (§ above), which is what files it between the journal era
+// and the walk era where it belongs. Under the old clause that choice was
+// cosmetic; under this one it is the placement.
 //
 // ── IDEMPOTENCE ─────────────────────────────────────────────────────────────
 //
@@ -317,13 +330,10 @@ export function planFrom(derived, existing) {
 }
 
 /**
- * Whose governing departure a plain append would DISPLACE.
- *
- * The governing record is the last in `DEPARTURE_ORDER_SQL` order, which inside
- * the non-ledger era is the highest `acts.id` — so an appended row outranks
- * every act already filed for that actor, whatever its instant. An actor who
- * has walked at or after the window's end therefore has their position moved
- * BACK to the backfilled walk. This counts them.
+ * Whose governing departure an append WOULD displace, if the read ordered by
+ * append — which is the question the gate below turns on, not a claim that it
+ * does. With the instant key in the clause these actors are not displaced at
+ * all; the number is what the refusal quotes when the key is missing.
  */
 export function displacedActors(plan, existingAll) {
   const fresh = plan.filter((r) => r.state === "new");
@@ -357,7 +367,7 @@ export function orderClauseCarriesInstant(sql = DEPARTURE_ORDER_SQL) {
 
 const iso = (d) => (d == null ? "—" : new Date(d).toISOString());
 
-function render(plan, { dbName, user, sqlitePath, mode, from, to, displaced }) {
+function render(plan, { dbName, user, sqlitePath, mode, from, to, displaced, placeable }) {
   const count = (s) => plan.filter((r) => r.state === s).length;
   const lines = [
     `backfill-departures · ${mode} · ${sqlitePath} → ${dbName} as ${user}`,
@@ -371,10 +381,14 @@ function render(plan, { dbName, user, sqlitePath, mode, from, to, displaced }) {
       + (r.state === "present" ? `  ← act ${r.have_id} (by ${r.matched_by})` : "")
       + (r.state === "CONFLICT" ? `  ← act ${r.have_id} differs on ${r.drift.join(", ")}` : ""));
   }
-  if (displaced.length) {
+  if (displaced.length && !placeable) {
     lines.push("", `ORDERING: ${displaced.length} actor(s) already hold a departure LATER than a row this plan would append,`,
       "and the read's governing record is the highest acts.id, not the latest instant — so appending moves them BACK:");
     for (const d of displaced) lines.push(`  ${d.actor.padEnd(24)} ${String(d.rows).padStart(3)} row(s) planned · ${d.later} later act(s), newest ${d.latest}`);
+  } else if (displaced.length) {
+    lines.push("", `ORDERING: the read places these rows by their instant, so the ${displaced.length} actor(s) holding a later`,
+      "departure keep it — an appended row with an early `at` files where it happened, not last.",
+      `  ${DEPARTURE_ORDER_SQL}`);
   }
   return lines.join(NL);
 }
@@ -448,7 +462,7 @@ if (isMain) {
     const displaced = displacedActors(plan, existingAll);
     const placeable = orderClauseCarriesInstant();
 
-    const text = render(plan, { dbName: who.d, user: who.u, sqlitePath, mode, from, to, displaced });
+    const text = render(plan, { dbName: who.d, user: who.u, sqlitePath, mode, from, to, displaced, placeable });
     if (!json && !quiet) console.log(text);
     if (quiet && !json) console.log(text.split(NL)[2]);
 
