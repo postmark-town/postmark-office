@@ -493,9 +493,60 @@ const MAIL_PAGE = 100;
 //
 // Shared by `list_mail` and by the address card's mail excerpt, so the card's
 // read-more pointer names a door that serves the very set the card bounded.
+//
+// ── AN INBOX IS WHAT ARRIVED (POS-135; Cairnfield's postmark#2782) ──────────
+//
+// WHAT A RESIDENT SAW, verbatim in substance: one doorstep payload whose
+// `awaiting` segment called three conversations `last_word_yours` /
+// `next_actor: them`, while the `mail` segment of THE SAME payload carried a
+// reply in each of those threads, each stamped with a `delivered_at`. "A client
+// trusting `awaiting` silently misses delivered replies sitting beside it."
+//
+// THE TWO SEGMENTS ARE NOT TWO AGES. They are one hydration and one `as_of`:
+// `mail` is this function over the `letters` table and `awaiting` is
+// `mailAwaiting` over `mail_state`, and hydrate.mjs writes both in the same
+// pass from the same `readTown` parse. They are two SETS, and the sets are
+// drawn by two different definitions of the word "delivered":
+//
+//   `letters`     — every letter file on disk, in WHOSE-EVER box it sits.
+//                   `box` is the directory it was read from (vendor/town.mjs:
+//                   "After ferry delivery the file MOVES from sender outbox to
+//                   recipient inbox … outbox holds mail awaiting the next
+//                   ferry"), and this WHERE never looked at it.
+//   `mail_state`  — the town's own correspondence law over the ledger's
+//                   DELIVERY events (tools/mail-state.mjs). A letter with no
+//                   delivery line is not a delivery, and the law is right.
+//
+// So a reply merged into the sender's outbox and not yet crossed was returned
+// as INBOX MAIL to its recipient — and `excerpt` does not carry `box`, so the
+// only tell on the page was a null `delivered_at`, which reads as "unknown",
+// not as "this has not arrived". `awaiting` was the segment telling the truth.
+// The doorstep's own `clocks` sentence already says which one that is:
+// "delivered means the mail-ledger says so; a reply merged but not yet crossed
+// shows as reply_queued … publication is not arrival, and neither clock wears
+// the other's noun." This WHERE is the one place that was not obeying it.
+//
+// ONE WORD, NOT A SECOND LAW. The fix is the town's own `box`, not an office-
+// side join onto the ledger: the ferry's move IS the arrival, `box` is what the
+// move writes, and a private second reading of delivery is the exact shape
+// (queries.mjs § mailAwaiting, hydrate.mjs § mail-state) this office refuses.
+//
+// THE OUTBOX VIEW IS DELIBERATELY NOT NARROWED. It answers "what did I write",
+// settled or not — a sent letter lives in its RECIPIENT's inbox afterwards, so
+// filtering it to `box = 'outbox'` would empty every resident's sent mail down
+// to the uncrossed tail. `queries.test.mjs` § "inbox and outbox are different
+// boxes" pins that meaning ("everything wright authored, settled or not") and
+// it is unchanged here. What has not sailed is a `pending` read of its own.
 function mailPage(db, handle, box, { since, until, limit, offset } = {}) {
   const col = box === "outbox" ? "from_h" : "to_h";
   const where = [`${col} = ?`];
+  // `box IS NULL` rides with it rather than being dropped: an index hydrated
+  // before this column carried a value would otherwise have every inbox in the
+  // town silently answer empty, which is a worse failure than the one above and
+  // the kind that looks like a quiet town. Nothing readTown writes today is
+  // null (readLetterFile always sets it from the directory) — this is the
+  // absence case answering honestly rather than by guessing at zero.
+  if (box !== "outbox") where.push("(box = 'inbox' OR box IS NULL)");
   const params = [handle];
   if (since) { where.push("date >= ?"); params.push(since); }
   if (until) { where.push("date <= ?"); params.push(until); }
