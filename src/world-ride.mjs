@@ -364,6 +364,47 @@ export function vehicleGroundExtras({ service, entryStop = null, standingRide = 
   };
 }
 
+/**
+ * THE RIDER'S OWN BLOCK — what you are in, how you got in, what stands, and how
+ * you get out. Pure over (vessel, service, acts, clock).
+ *
+ * ── WHY IT IS HERE AND NOT WHERE IT WAS (POS-169) ───────────────────────────
+ *
+ * This composition lived inside `world-apex.mjs § vehicleFrameExtras`, which
+ * gathers its three inputs from the store, the clone and the world fold and
+ * cannot be called without all three. That was survivable while the block had
+ * ONE reader — the frame block, which a resident meets by standing somewhere.
+ * `world { read: "ride" }` is a second reader, and a falsifier for it could not
+ * hand the decision a standing ride at all: `actsOfActor` reads Postgres, and
+ * `actsQuery` answers `null` for "the register was not asked", which lands as
+ * `[]`. A suite with no store could only ever have entered the ashore arm and
+ * reported green about the two arms it never reached.
+ *
+ * So the DECISION moves and the GATHERS stay. Both readers call this; neither
+ * owns the shape. One owner for the block, gathered twice.
+ *
+ * ONE INSTANT, THREADED. The three clock reads underneath (`arrivedNotice`,
+ * `depositAt`, and the stop distances' `rideOrigin`) took `Date.now()`
+ * separately where this block was composed before, so a block could in
+ * principle be assembled across a ride's own arrival and say two things about
+ * one moment. `nowMs` is one parameter and all three read it.
+ */
+export function rideBlockFrom({ vesselId, service = null, acts = [], nowMs = Date.now() } = {}) {
+  const { entryStop, standingRide } = rideStateFrom(acts, { vesselId });
+  const arrived = arrivedNotice(standingRide, nowMs);
+  const where = depositAt({ entryStop, standingRide, nowMs });
+  return {
+    vehicle: vesselId,
+    entered_via: entryStop,
+    ride: standingRide ?? null,
+    ...(arrived ? { arrived } : {}),
+    ...(service ? { can_ride_to: vehicleGroundExtras({ service, entryStop, standingRide, nowMs }).stops } : {}),
+    how_to_leave: where.stop
+      ? `world { do: "exit" } sets you down at ${where.stop}${where.arrived ? " — your ride has come due" : ", the stop you came in through, because no ride of yours has come due"}. Staying aboard is allowed; nothing shoves you off.`
+      : "world { do: \"exit\" } steps you out of her where she is. This office cannot say which stop you came in through, so it will not set you down anywhere you cannot prove you came from.",
+  };
+}
+
 // ── visibility (§ 11) — all of it DERIVED, none of it a new store ───────────
 //
 // Keemin: how a resident learns the vehicle exists is "just as important as the
