@@ -657,6 +657,79 @@ alongside, ab-compare's idiom, so the check proves it can still go red.
 > named on `KNOWN_LAB_ACT_ACTIONS` instead. Run the suite without `lab.env` unless
 > you mean to write to the lab.
 
+## The departure backfill — the four-day hole (POS-154)
+
+`backfill-departures.mjs` is the ledger backfill's sibling one era later.
+`acts` holds no departure between `2026-08-27T09:57:00.374Z` and
+`2026-08-31T03:35:20.069Z`: the walk lane's pen was `dynamic.db/movements`
+throughout, the journal those walks also reached was truncated by
+`world-drain.mjs` before the journal era was seeded, and the acts mirror did not
+begin carrying this pen until 08-31. One pen's rows exist in exactly one place,
+and this tool is the only road from it.
+
+Three counts, three questions — say which bound you asked:
+
+```
+440   at >= 09:57:00.374Z AND at <= 03:35:20.069Z   both bounds INCLUSIVE
+439   at >  09:57:00.374Z AND at <  03:35:20.069Z   the OPEN gap
+438   the rows `acts` actually lacks
+```
+
+The two that fall away are one event each, already filed: `fabel-of-garrison`
+movement seq 773 **is** act 2918, the last `legacy:departure`; `little-bird`
+seq 1212 **is** act 2941, the first `walk`, stamped 908 ms later by the mirror.
+`movements.at` is when the resident declared and `acts.at` is when the mirror
+wrote — different quantities wearing the same name, measured +908 / +413 / +407
+/ +365 ms apart on four paired walks.
+
+A derived row is `world.mjs § walkEntry`'s shape, field for field. Three columns
+a movement row cannot carry land NULL and the file says so at length: the
+witness stamp (`anchorAt` over the marks **as they stood**), the earshot list
+(`presentNear`, not reconstructible), and the caller's resolved household. NULL
+is this table's own shape for a walk act — `walk-exec.mjs:131` writes it on every
+walk that pen files — and no departure reader selects any of the three.
+
+**The apply is gated, and the gate reads the reader.** `governingDepartures`
+takes the last row in `DEPARTURE_ORDER_SQL` order, which inside the non-ledger
+era WAS the highest `acts.id`; `acts.id` is `GENERATED ALWAYS AS IDENTITY` and
+the window's own ids are long spent on the 729 other acts that did land there.
+So a backfilled row can only be appended, above every walk September filed — and
+41 of the 52 actors in the gap hold a departure later than a row the plan
+appends. A plain apply would have moved all 41 back to where they stood on
+08-29, on the public doors, with nothing in the read path able to see it (the old
+`assertDepartureOrder` passed: the rows ARE id-ascending).
+
+**Ruled 2026-09-21 (Wright): "a departure's order is its INSTANT, never its
+insertion id."** The clause as shipped, in `live-reads.mjs § the instant key`:
+
+```sql
+ORDER BY ((payload->>'_ledger') IS NULL),
+         (CASE WHEN payload->>'_ledger' IS NULL THEN acts.at END),
+         acts.id
+```
+
+The same `at, id` the runbook's D6 replay already uses for the holding rows
+(POS-153/162). Measured a no-op twice over, in two eras: § the append order above
+got "0 of 73" for era-then-id against by-instant on `world2_dev` before the walk
+era existed, and POS-154 got zero instant inversions among 2,397 non-ledger
+departure acts, all 2,397 holding position, zero governing departures moved. The
+`CASE` keeps the ledger era on `acts.id` alone because that is the era whose own
+comment says its file order is not its instants (the 08-08 sailing).
+
+So the gate is now OPEN — it asks the clause rather than a flag, and stays in the
+tool as the standing falsifier: revert the clause and the apply refuses again.
+With the fill in, 0 residents move back, 8 move forward onto a newer leg, and 3
+gain a first one. `PASSAGE_ORDER_SQL` deliberately does NOT take the instant key:
+the ruling was about walks, passages were not measured, and that read keeps the
+clause it has always carried.
+
+Idempotence is `payload._backfill` + `payload._backfill_seq` — the underscore
+per 017 — plus a one-sided, one-to-one instant pairing for the rows the mirror
+already wrote. One-sided because the mirror writes after the declaration; 2,000
+ms because 341 same-actor pairs in the store sit closer together than that and
+the closest is 462 ms; one-to-one because a tolerance alone cannot separate them.
+A contended act is a CONFLICT a person reads, never a duplicate filed in silence.
+
 ## The derived fields, and why the FOLD answers them
 
 `tier` and `household` are not fields on a record. They are what the **fold** says
