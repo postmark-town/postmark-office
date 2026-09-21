@@ -687,44 +687,43 @@ export function holdEffectsFrom({ rows = [], handles = [], sinceCrossing, nowCro
 }
 
 /**
- * The hold events for one resident, out of the journal. Never throws.
+ * The hold events for one resident, out of the record. Never throws.
  *
- * The journal is the office's own record of these acts (`CLASS_HOLDING`), and
- * it is the SAME rows the flipped pen's reverse-mirror writes — so this shelf
- * reads one place whichever pen is live, which is the property the mirror was
- * built to give and nothing had yet used.
+ * ── IT READS `acts`, AND THE SQLITE READ IS DELETED (POS-153) ───────────────
+ *
+ * This shelf used to open the sqlite journal, and the journal was never the
+ * record for a holding — it was a window onto one, and a narrow one twice over.
+ * Before the hold lane's pen flipped (2026-09-03T18:58:05Z) a holding act took
+ * NO journal row at all: `mirrorHoldingAct` wrote `acts` and nothing else, by
+ * world-journal.mjs's own § THE LANE HOOK. After the flip the journal row is
+ * the reverse mirror's best-effort copy, and `world-drain.mjs` truncates it at
+ * every drain. So walk #11's certified zero had a second way to happen that
+ * fixing the wiring never touched: the give was real, the shelf was reading a
+ * window the drain had already closed.
+ *
+ * The store read is the whole read. No flag, no fallback underneath — one
+ * question, one owner.
+ *
+ * The bounds are pushed because this shelf narrows by crossing anyway
+ * (`holdEffectsFrom` skips a row outside them), and `holdEffectsFrom` still
+ * runs afterwards and is still the one that decides: the port pushes a bound
+ * only when it is finite, which is what makes the narrowed read and the
+ * unnarrowed one the same answer on a call with no cursor.
+ *
+ * ⚑ `readable` IS A CLAIM ABOUT WHETHER THE RECORD WAS READ, not about whether
+ * this function threw (reviewer's repair 2, lap 4). An unreachable record gets
+ * the catch's shape with its own reason, exactly as an absent sqlite file did:
+ * "I read the holding record and it is empty" is a different sentence from "I
+ * could not read it", and a caller must be able to tell them apart.
  */
 export async function readHoldEffects({ handles = [], sinceCrossing, nowCrossing } = {}) {
-  let db = null;
   try {
-    // Read-only. Not a worker breach TODAY — it is reached only when `since:`
-    // resolves, and `since` is not a query parameter on GET /world/apex, so it
-    // arrives only through the MCP door or a POST, both 405 on a worker. But it
-    // is a pure reader holding a writable handle on the writer's hottest keyed
-    // path, and it is one query parameter away from being a breach with nothing
-    // in the code tying those two facts together. (The g3 reviewer scoped this
-    // one correctly after first over-reading it; the scoping is why it is a
-    // hygiene fix rather than a blocker.)
-    const [{ openDynamicReadOnly }, { readJournal }] = await Promise.all([
-      import("./dynamic-store.mjs"), import("./world-journal.mjs"),
-    ]);
-    db = openDynamicReadOnly();
-    // ⚑ `readable` IS A CLAIM ABOUT WHETHER THE RECORD WAS READ, not about
-    // whether this function threw (reviewer's repair 2, lap 4). My first pass
-    // turned a null store into an empty row list and fell through to
-    // `readable: true`, which says "I read the holding record and it is empty"
-    // about a store that is not there. That is the same sentence a genuinely
-    // empty store produces, and a caller cannot tell them apart — the exact
-    // shape this file's own catch was written to avoid.
-    //
-    // An absent store gets the catch's shape, with its own reason. Empty and
-    // unreadable are different answers and the door must keep saying which.
-    if (!db) return { readable: false, events: [], reason: "the holding record could not be read (no dynamic store at this office)" };
-    const rows = readJournal(db, { cls: "holding" });
+    const { storeHoldingRows } = await import("./world2-guards.mjs");
+    const rows = await storeHoldingRows({ since: sinceCrossing, until: nowCrossing });
     return { readable: true, events: holdEffectsFrom({ rows, handles, sinceCrossing, nowCrossing }) };
   } catch (e) {
     return { readable: false, events: [], reason: `the holding record could not be read (${String(e?.message ?? e).slice(0, 160)})` };
-  } finally { try { db?.close(); } catch { /* a reader that cannot close still read */ } }
+  }
 }
 
 /**

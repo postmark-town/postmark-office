@@ -339,6 +339,77 @@ export async function guardedAttachments(db, { until = null } = {}) {
     }));
 }
 
+// ═════════════════════════════════════════════════════════════════════════════
+// THE HOLD SHELF'S READS · no flag, one source (POS-153)
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// The three functions below are NOT guards. A guard adjudicates a write and is
+// allowed a flag while its port is proven; these are plain reads that used to
+// open sqlite and now read the record, and Everything Reads the Store says the
+// flag is the disease — "one question, one owner". So there is no
+// `guardsFlipped()` branch here and no sqlite fallback underneath: a store that
+// cannot be reached THROWS, and each of the three callers turns that into the
+// answer it has always given for an unreadable record (POS-153 finding 5).
+//
+// They sit in this file because `reading` and `refusing` do — the read worker's
+// road (`officeRead`: one pooled connection, `BEGIN READ ONLY`, released) is
+// DEC-4's whole guarantee that a read worker holds no writable handle, and a
+// second pool opened beside it would be the fourth copy of a word this office
+// already knows four times.
+//
+// ⚑ `world2Enabled` HERE IS NOT A SOURCE SWITCH. There is no second source to
+// switch to. It is the question "is there a record to reach at all" — `pool()`
+// builds its pg.Pool from `WORLD2_PG_URL`, so an office with none would spend a
+// socket timeout discovering that on every read. `actsQuery` already draws this
+// exact line ("`null` means 'not asked'; `[]` means 'asked, and the answer is
+// none'"), and every arm of it lands on the same three refusal answers an
+// unreachable pool does.
+
+const unconfigured = (which) => {
+  if (world2Enabled()) return null;
+  return new GuardsUnreachableError(which,
+    new Error("WORLD2_PG/WORLD2_PG_URL are unset — this office is not pointed at the record"));
+};
+
+/**
+ * `readJournal(db, { cls: "holding" })`, from the record. Oldest first.
+ *
+ * `since` / `until` are crossing bounds, both optional and both pushed only
+ * when finite (the port's own § explains why that IS the equality).
+ */
+export async function storeHoldingRows({ since = null, until = null } = {}) {
+  const off = unconfigured("holding");
+  if (off) throw off;
+  return refusing("holding", async () =>
+    reading(async (client) => port.pgHoldingRows(client, { since, until })));
+}
+
+/**
+ * `readAttachments(db)`, from the record — the whole town's edge, never
+ * narrowed, for `pgAttachmentsFor`'s own reason: "narrowing it to one target
+ * would change the answer, not just the cost."
+ *
+ * ⚑ RETURNS THE ARRAY, NOT THE PORT'S ENVELOPE. `readAttachments` answers a
+ * bare array and `pgAttachmentsFor` answers `{ rows, refusals, eras }`; handing
+ * the envelope to `holdingsOf` would throw inside a caller whose catch answers
+ * `[]`, so "you are holding nothing" would ship green. The unwrap is here, once,
+ * rather than at each of the three call sites.
+ *
+ * `guardedAttachments` above still carries its flag: it is the WRITE guard, its
+ * port is row 29 of the reader inventory and its flip is not this lane's. Both
+ * call the same `pgAttachmentsFor` underneath, so there is one answer with two
+ * doors to it, and the doors collapse when row 29 lands.
+ */
+export async function storeAttachmentRows({ until = null } = {}) {
+  const off = unconfigured("holder");
+  if (off) throw off;
+  return refusing("holder", async () =>
+    reading(async (client) => {
+      const { rows } = await port.pgAttachmentsFor(client, { until });
+      return rows;
+    }));
+}
+
 /** What the doors say about the read half, for the status surfaces. */
 export function guardStatus(env = process.env) {
   return { flipped: guardsFlipped(env), flag: "W2_GUARDS", source: guardsFlipped(env) ? "postgres" : "sqlite" };

@@ -902,6 +902,153 @@ export async function pgAttachmentsFor(client, { target = null, until = null, st
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
+// HOLDING, THE OTHER SHELF — `readJournal(db, { cls: "holding" })` over `acts`
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// The section above answers "who holds what" out of the ATTACHMENTS edge. This
+// one answers a different question out of the same acts: what HAPPENED to a
+// thing — the give/drop/take events themselves, in the journal's own row shape.
+// Three 1.0 readers wanted it (POS-153): `groundWithinReach`'s set-down source,
+// `whereThingStands`'s `latestDrop`, and the `since:` shelf's hold effects.
+//
+// ── WHY THIS IS NOT A LIKE-FOR-LIKE PORT — THE STORE HOLDS MORE ─────────────
+//
+// The sqlite journal's holding rows are a WINDOW, and a narrow one, for two
+// independent reasons that compound:
+//
+//   1. UNFLIPPED, A HOLDING ACT TAKES NO JOURNAL ROW AT ALL. `declareHolding`
+//      writes the `attachments` edge and `mirrorHoldingAct` calls
+//      `mirrorLaneAct` → `mirrorAct` → INSERT INTO `acts`, and nothing else.
+//      world-journal.mjs names this itself (§ THE LANE HOOK · "an act the
+//      sqlite journal never held"): a SAY, a HOLDING and a movement-v2 WALK are
+//      the three acts with no journal row. So every holding act written before
+//      the hold lane's pen flipped is in `acts` and in no journal, ever.
+//   2. FLIPPED, THE JOURNAL ROW IS A BEST-EFFORT COPY. `LANE_FLIPPED_AT.hold`
+//      is 2026-09-03T18:58:05Z: since then `appendActFlipped` commits Postgres
+//      FIRST and then writes the sqlite row, and a failure there is logged and
+//      swallowed by design ("the record is already committed; the convenience
+//      copy failed"). And `world-drain.mjs` truncates the journal at each drain.
+//
+// So reading `acts` is a widening, not a translation, and the readers that take
+// it stop losing set-downs to the drain.
+//
+// ── THE ORDER IS `(at, id)`, AND `journal_seq` IS THE TRAP ──────────────────
+//
+// POS-152's finding, and it binds harder here: `hold` flipped BEFORE `frame`
+// did, so every flipped-era holding row was written Postgres-first with no
+// sqlite seq in hand — `journal_seq` is NULL for the whole live era by the
+// write path's own design (world2-pen.mjs § `seq` IS NULL HERE, AND THAT IS THE
+// POINT). Ordering by the column whose NAME says "the order" would sort the
+// live era into one undefined heap. `(at, id)` is D6's ruled replay order.
+//
+// ── CLASS ONLY, NEVER AN ACTION LIST ────────────────────────────────────────
+//
+// `readJournal(db, { cls })` filters on the class column and nothing else, so
+// this does too. An `action IN ('give','drop','take')` narrowing would read as
+// harmless today and would silently DROP a fourth face the day the hold lane
+// grows one — a narrowing the reader being replaced does not have. The frozen
+// era cannot leak in through the class: `seed-import.mjs` files every imported
+// event as `class = 'legacy'` ("one word that is in neither census keeps 2,400
+// imported rows from voting in a vocabulary they predate"), so a
+// `legacy:attachment` act is invisible here and reaches `liveHolder` through
+// `pgAttachmentsFor` above, where its own era mapping is written.
+
+/** The journal's `class` for a holding act — world-journal.mjs § CLASS_HOLDING. */
+export const HOLDING_CLASS = "holding";
+
+/** `readJournal`'s order, in the store's terms. NEVER `journal_seq` (§ above). */
+export const HOLDING_ORDER_SQL = "ORDER BY acts.at, acts.id";
+
+/**
+ * One `acts` row → one `hydrateRow` row, field for field.
+ *
+ * Two columns changed TYPE across the stores and both are silent when read
+ * wrong, which is why this is one function rather than an inline map:
+ *
+ *   · `payload` and `witnesses` are TEXT in the journal and `jsonb` in `acts`,
+ *     so the driver hands back a PARSED OBJECT where `hydrateRow` called
+ *     `JSON.parse`. Porting the parse would throw on every row — and inside
+ *     `readHoldEffects`' own catch that becomes `readable: false` for a store
+ *     that answered perfectly. `jsonOf` takes either, so a store migrated with
+ *     a text column does not quietly answer `{}`.
+ *   · `at` is TEXT in the journal and `timestamptz` in `acts`, so the driver
+ *     hands back a **Date** where `holdEffectsFrom` puts `r.written_at`
+ *     straight into the event it returns. `isoOf` restores the string. The one
+ *     visible difference is precision: the journal held the stamp exactly as
+ *     the door wrote it (`…:16Z`) and a Date round-trips to milliseconds
+ *     (`…:16.000Z`). Same instant, one more field of it — disclosed rather
+ *     than hidden, because it is the only thing about a hold event that reads
+ *     differently after this port.
+ */
+export function holdingJournalRow(act) {
+  return {
+    // `acts.id` is the journal.seq ROLE (001_tables.sql's own words), not the
+    // same number: sqlite's autoincrement and Postgres' identity are different
+    // sequences over different populations. Its one reader is
+    // `whereThingStands`'s informational `act_seq`, and no derivation compares
+    // it across stores.
+    seq: act.id == null ? null : Number(act.id),
+    crossing: act.crossing == null ? null : Number(act.crossing),
+    actor: act.actor,
+    action: act.action,
+    object: act.object ?? null,
+    at: { anchor: act.at_anchor ?? null, dx: act.at_dx ?? null, dy: act.at_dy ?? null },
+    witnesses: jsonOf(act.witnesses, null),
+    class: act.class,
+    payload: jsonOf(act.payload, null),
+    effect: act.effect ?? null,
+    household: act.household ?? null,
+    written_at: isoOf(act.at),
+  };
+}
+
+/** A `jsonb` column as the derivations want it, whichever way the driver hands it over. */
+function jsonOf(v, fallback) {
+  if (v == null) return fallback;
+  if (typeof v === "object") return v;
+  try { return JSON.parse(String(v)); } catch { return fallback; }
+}
+
+/**
+ * `readJournal(db, { cls: "holding" })`, over `acts`. Oldest first.
+ *
+ * `since` / `until` are CROSSING bounds and both are optional. They exist
+ * because the `since:` shelf already narrows by crossing in JS
+ * (`holdEffectsFrom`: `c < sinceCrossing || c > nowCrossing` → skip), and
+ * pushing a bound it is going to apply anyway costs one clause and saves the
+ * whole frozen prefix.
+ *
+ * ⚑ A BOUND IS PUSHED ONLY WHEN IT IS A FINITE NUMBER, and that is not defensive
+ * typing — it is the equality. `holdEffectsFrom` is called with `sinceCrossing`
+ * UNDEFINED on every read that carries no cursor, and `c < undefined` is false,
+ * so an undefined bound filters NOTHING there. `crossing >= NULL` in SQL matches
+ * nothing at all. The two would disagree completely on the commonest call, so
+ * the guard is what makes the narrowed read and the unnarrowed one the same
+ * answer. The JS filter still runs afterwards and is still the one that decides.
+ *
+ * A row with a NULL crossing is dropped by a bound here and by
+ * `holdEffectsFrom`'s own `c == null` line there — but only the unbounded read
+ * reaches `latestDrop`, which wants every row whether or not it carries a
+ * crossing. That is why the ground readers ask for no bounds.
+ */
+export async function pgHoldingRows(client, { since = null, until = null } = {}) {
+  const args = [HOLDING_CLASS];
+  let sql = `SELECT id, at, crossing, actor, action, object,
+                    at_anchor, at_dx, at_dy, witnesses, class, payload, effect, household
+             FROM acts WHERE class = $1`;
+  if (Number.isFinite(Number(since)) && since != null) {
+    args.push(Number(since));
+    sql += ` AND crossing >= $${args.length}`;
+  }
+  if (Number.isFinite(Number(until)) && until != null) {
+    args.push(Number(until));
+    sql += ` AND crossing <= $${args.length}`;
+  }
+  const { rows } = await client.query(`${sql} ${HOLDING_ORDER_SQL}`, args);
+  return rows.map(holdingJournalRow);
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
 // THE TRIPWIRES — premises that are FACTS OF TODAY'S STORE, not law
 // ═════════════════════════════════════════════════════════════════════════════
 //
