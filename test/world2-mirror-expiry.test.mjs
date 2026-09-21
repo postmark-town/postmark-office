@@ -48,8 +48,13 @@ import * as journalClasses from "../src/world-journal.mjs";
 import * as stanceClasses from "../src/world-stance.mjs";
 import * as arenaClasses from "../src/arena.mjs";
 
-const BEFORE = new Date("2026-09-30T12:00:00Z");
-const AFTER = new Date("2026-10-01T12:00:00Z");
+// RE-READ AT THE NEW BACKSTOP (2026-09-21, Keemin ROLLOVER 29 / postmark#2743):
+// the shared backstop moved 2026-09-30 → 2026-10-05, so the two instants that
+// straddle it moved with it. They are derived from nothing — a literal on each
+// side is what makes this file fail LOUDLY when the constant moves and these do
+// not, which is the check that caught this edit in the first place.
+const BEFORE = new Date("2026-10-05T12:00:00Z");
+const AFTER = new Date("2026-10-06T12:00:00Z");
 const FAR = new Date("2099-01-01T00:00:00Z");
 
 // The runbook's lane table C1–C6 is "the six lanes it should govern". Two of
@@ -239,32 +244,42 @@ test("a lane's backstop ends when the TOWN's day ends, not when the wire's does"
   //    writer in this repo derives the day from TOWN_TZ (ops.townDay, declare,
   //    residency, the mint engine itself)."
   //
-  // 2026-10-01T02:00Z is 2026-09-30, 22:00, in America/New_York. The town's own
-  // 09-30 has two hours left to run, so a lane whose backstop IS 09-30 is not
-  // past it. Under `toISOString().slice(0, 10)` this instant read 2026-10-01 and
-  // every governed lane reported expired — the backstop firing four hours early,
-  // on every single one of them, every night of its last day.
-  const townStillTheThirtieth = new Date("2026-10-01T02:00:00Z");
-  assert.equal(MIRROR_EXPIRES, "2026-09-30", "this test is written against that backstop specifically");
+  // 2026-10-06T02:00Z is 2026-10-05, 22:00, in America/New_York (EDT holds
+  // until 2026-11-01, so the offset is -4 on both of these instants). The
+  // town's own 10-05 has two hours left to run, so a lane whose backstop IS
+  // 10-05 is not past it. Under `toISOString().slice(0, 10)` this instant reads
+  // 2026-10-06 and every governed lane reports expired — the backstop firing
+  // four hours early, on every single one of them, every night of its last day.
+  //
+  // THE DATES HERE MOVED WITH THE CONSTANT (2026-09-21, ROLLOVER 29): they were
+  // 2026-10-01T02:00Z / T04:00Z against the old 09-30 backstop. The assertion
+  // below is what forces that — it names the backstop this test is written
+  // against, so moving the constant without moving these reds HERE rather than
+  // leaving a town-day check quietly measuring the wrong midnight.
+  const townStillTheFifth = new Date("2026-10-06T02:00:00Z");
+  assert.equal(MIRROR_EXPIRES, "2026-10-05", "this test is written against that backstop specifically");
 
   for (const lane of GOVERNED) {
-    assert.equal(laneMirrorExpired(lane, townStillTheThirtieth), false,
-      `${lane} reported past its 2026-09-30 backstop while it is still 2026-09-30 in town`);
+    assert.equal(laneMirrorExpired(lane, townStillTheFifth), false,
+      `${lane} reported past its 2026-10-05 backstop while it is still 2026-10-05 in town`);
   }
-  assert.deepEqual(expiredLanes(townStillTheThirtieth), []);
+  assert.deepEqual(expiredLanes(townStillTheFifth), []);
 
   // …and it DOES fire once the town's day is actually over: 04:00Z is 00:00 ET.
-  const townNowTheFirst = new Date("2026-10-01T04:00:00Z");
-  assert.deepEqual(expiredLanes(townNowTheFirst), GOVERNED,
+  const townNowTheSixth = new Date("2026-10-06T04:00:00Z");
+  assert.deepEqual(expiredLanes(townNowTheSixth), GOVERNED,
     "a backstop that never fires is not a backstop — the shim would become furniture");
 });
 
 test("a day already written down is not re-derived — a string passes through", () => {
-  // `new Date("2026-09-30")` is midnight UTC, which is 2026-09-29 in town. If a
+  // `new Date("2026-10-05")` is midnight UTC, which is 2026-10-04 in town. If a
   // caller hands a DAY and the derivation treats it as an INSTANT, the day moves
   // backwards by one and the backstop slips a whole extra day. A day is derived
   // from an instant and only from an instant.
-  assert.equal(laneMirrorExpired("stance", "2026-09-30"), false, "its own backstop day is not past it");
-  assert.equal(laneMirrorExpired("stance", "2026-10-01"), true, "the day after is");
-  assert.equal(laneMirrorExpired("stance", "2026-09-29"), false);
+  //
+  // These three moved with the constant on 2026-09-21 (ROLLOVER 29); they were
+  // 09-30 / 10-01 / 09-29 against the old backstop.
+  assert.equal(laneMirrorExpired("stance", "2026-10-05"), false, "its own backstop day is not past it");
+  assert.equal(laneMirrorExpired("stance", "2026-10-06"), true, "the day after is");
+  assert.equal(laneMirrorExpired("stance", "2026-10-04"), false);
 });

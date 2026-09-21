@@ -68,8 +68,34 @@
 // the closure record above the map, which names each one's instrument. A lane
 // leaving this map is the obligation ending, never the ruling narrowing.
 
-/** The governed lanes' shared backstop. Keemin may move it; it may not vanish. */
-export const MIRROR_EXPIRES = "2026-09-30";
+/**
+ * The governed lanes' shared backstop. Keemin may move it; it may not vanish.
+ *
+ * MOVED 2026-09-21 — 2026-09-30 → 2026-10-05, the end of cycle #6. Keemin's
+ * ruling, ROLLOVER 29 option (b); the ruling is written on postmark#2743.
+ *
+ * DEC-2 is quoted above saying "Do not simply move the date", and that quote
+ * stays exactly as it is, because it is the ruling's own words about the thing
+ * it was protecting: a shim kept breathing by a clock while a lane still owed a
+ * read port. That is not this case, and the difference is measurable rather
+ * than argued. Every lane this map still names now reads the STORE — frame and
+ * the ride's entry stop in POS-152, hold in POS-153, stands in POS-162, walkers
+ * in flight in POS-154. What is left in this file is expiry BOOKKEEPING over
+ * lanes whose ports have landed, and the map itself is deleted whole by G1
+ * (POS-156), with the journal INSERT and `acts.journal_seq` following in G2.
+ * So the date is not buying the shim more life; it is keeping two falsifiers
+ * from reddening the suite for four days while the deletion that actually ends
+ * the obligation is a week out.
+ *
+ * WHAT MOVING THIS DOES NOT DO, said here because the map's own history invites
+ * the opposite reading: it does not end any lane's obligation, and it does not
+ * narrow DEC-2's scope. A row still ends by being DELETED. This file's own
+ * falsifier holds that line independently of whatever this constant says —
+ * "a lane's obligation ends by removing its row, not by moving a date" asks the
+ * question over DEC-2's original six at the year 2099, and a later date is
+ * still a date.
+ */
+export const MIRROR_EXPIRES = "2026-10-05";
 
 // ── CLOSED LANES: WHAT LEAVING IS, AND WHAT IT IS NOT (POS-125, 2026-09-20) ──
 //

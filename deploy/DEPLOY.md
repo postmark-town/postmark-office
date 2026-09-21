@@ -92,7 +92,7 @@ reach by construction: `town-clone/`, `world-clone/`, `world-clone-pool/`,
 root-level `town.lock`, `office.db`, `oauth.db`, `dynamic.db`,
 `.git-credentials`, `git-metrics-token`, `stamp-key.pem`.
 
-Two directories are excluded by name:
+Three directories are excluded by name:
 
 - **`telemetry/`** — the trap. It is tracked (`telemetry/github/*.json`) *and*
   box-written (`access-*.jsonl`, plus fresh gh snapshots the hourly cron writes
@@ -100,6 +100,14 @@ Two directories are excluded by name:
   logs and roll the snapshots back to whenever the train was cut. The box is the
   writer here; the repo is the archive.
 - **`.github/`** — CI config; nothing on the box reads it.
+- **`.omc/`** — the orchestration layer's per-operator session state, untracked
+  and gitignored since 2026-09-21 (Keemin, ROLLOVER 25). The exclusion is the
+  second net, not the fix: the first net is that the tag no longer carries the
+  directory, so `git archive` never puts it in `stage/` and this list never sees
+  it. **The box's own copy is not deleted by this.** A directory absent from
+  `dirs.txt` gets no `--delete` sync, and root-level files sync without
+  `--delete` — so whatever `/srv/postmark-office/.omc/` holds on dev and prod
+  stays until somebody removes it by hand.
 
 **Nothing is installed into `/etc`.** `deploy/*.service`, `deploy/*.timer` and
 the nginx confs land in `/srv/postmark-office/deploy/` as ordinary files and go
