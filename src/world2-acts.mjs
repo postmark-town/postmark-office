@@ -101,8 +101,13 @@ export const MIRROR_EXPIRES = "2026-09-30";
 //     both hold an act, but whether `acts` holds a twin for EVERY standing
 //     journal row is a question about the live store. falsifier-acts-parity
 //     answers it on the box; green there closes this row.
-//   · hold   — the `since:` shelf reads `cls: "holding"` out of sqlite as its
-//     SOLE source, at three call sites. Needs a holding port.
+//   · hold   — PORTED. This note used to say the `since:` shelf read
+//     `cls: "holding"` out of sqlite as its SOLE source at three call sites;
+//     POS-162 took `world.mjs § thingStandsBlock` and POS-153 took the other
+//     three (`groundWithinReach`, `holdingsFor`, `readHoldEffects`), so NO live
+//     sqlite reader of that class remains and the lane is portable. The row and
+//     its date are untouched here on purpose — deleting it is POS-156's act, and
+//     a lane that retires its own obligation is the shape rule 6 forbids.
 //   · frame  — enter/exit rows are CLASS_FRAME. This note used to name TWO live
 //     sqlite readers of them; as of POS-152 there is ONE. The ride's entry stop
 //     (world-apex.mjs § actsOfActor) now folds from `acts`, so the drain can no

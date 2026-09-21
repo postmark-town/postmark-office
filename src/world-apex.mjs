@@ -1761,20 +1761,29 @@ export async function groundWithinReach(oriented, key = null) {
     return { unavailable: "the record does not place you anywhere, so there is no ground underfoot to read — walk somewhere first" };
   const at = { x: Number(here.x), y: Number(here.y) };
   const store = openStore();
-  let dyn = null;
   try {
     if (!store?.db) return { unavailable: "the office could not read the world store — this is not an answer about what lies underfoot" };
-    const [{ readJournal }, hold, reach, { readAttachments: readAtt }] = await Promise.all([
-      import("./world-journal.mjs"), import("./world-hold.mjs"), import("./reach.mjs"),
-      import("./dynamic-entities.mjs"),
+    const [hold, reach] = await Promise.all([
+      import("./world-hold.mjs"), import("./reach.mjs"),
     ]);
-    // NULL IS "NOTHING HAS BEEN JOURNALLED", NOT "I CANNOT SEE" — the answer
-    // the write-mode default used to produce by creating an empty store and
-    // reading it, minus the write. `test/hold-wirings.test.mjs` WIRING 1 is the
-    // caller my lap-1 report wrongly said did not exist.
-    dyn = openDynamicRead();
-    const attachments = dyn ? readAtt(dyn) : [];
-    const journal = dyn ? readJournal(dyn, { cls: "holding" }) : [];
+    // THE HOLDING RECORD IS `acts` NOW, AND THE SQLITE READ IS GONE RATHER THAN
+    // KEPT UNDERNEATH (POS-153, Everything Reads the Store). What this buys the
+    // ground read is the set-down: a `drop` older than the last drain was
+    // simply not in the journal, so a thing set down at the track answered from
+    // canon's fold — walk #12's complaint, in the one read written to end it.
+    // `acts` is never truncated, and it also holds every holding act written
+    // before the hold lane's pen flipped, which took no journal row at all.
+    //
+    // EMPTY LISTS ON AN UNREADABLE RECORD, UNCHANGED AND DELIBERATE. "NULL IS
+    // 'NOTHING HAS BEEN JOURNALLED', NOT 'I CANNOT SEE'" was this read's own
+    // answer for an absent sqlite store, and it stays its answer for an
+    // unreachable Postgres: `whereThingStands` reads `attachments: []` as "no
+    // holder on the record" and falls through to canon's fold, where
+    // `attachments: null` would make every row say `unreadable`. Letting the
+    // throw out would turn the whole block into `{ unavailable }`, which is a
+    // THIRD answer this function has never given. `test/hold-wirings.test.mjs`
+    // WIRING 1 drives exactly this path.
+    const { attachments, journal } = await holdingRecord();
     const rows = store.db.prepare(GROUND_THINGS).all();
     const marks = rows.map((r) => ({ id: r.id, at: { x: Number(r.at_x), y: Number(r.at_y) }, extent: { w: Number(r.extent_w) || 1, h: Number(r.extent_h) || 1 } }));
     const centreOf = (id) => marks.find((m) => m.id === id)?.at ?? null;
@@ -1817,9 +1826,27 @@ export async function groundWithinReach(oriented, key = null) {
   } catch (e) {
     return { unavailable: `the ground could not be read (${String(e?.message ?? e).slice(0, 120)}) — this is not an answer about what lies underfoot` };
   } finally {
-    try { dyn?.close(); } catch { /* a reader that cannot close still read */ }
-    try { store?.db?.close(); } catch { /* same */ }
+    try { store?.db?.close(); } catch { /* a reader that cannot close still read */ }
   }
+}
+
+/**
+ * The two holding shelves the ground read folds, from the record.
+ *
+ * ONE PLACE THE TWO READS FAIL TOGETHER. They are asked in parallel and a
+ * failure of either lands on the same pair of empty lists, because the ground
+ * read's contract is that an unreadable holding record is "nothing journalled"
+ * rather than "I cannot see" — and a half-answered fold (an edge with no
+ * set-downs) would be worse than both: it would move a thing to its holder and
+ * then lose the drop that put it down.
+ */
+async function holdingRecord() {
+  const guards = await import("./world2-guards.mjs");
+  const [attachments, journal] = await Promise.all([
+    guards.storeAttachmentRows().catch(() => null),
+    guards.storeHoldingRows().catch(() => null),
+  ]);
+  return (attachments && journal) ? { attachments, journal } : { attachments: [], journal: [] };
 }
 
 /**
@@ -1832,16 +1859,25 @@ export async function groundWithinReach(oriented, key = null) {
  *
  * An unreadable store returns NO HOLDINGS, which closes the held channel rather
  * than opening it. A capability channel that fails open is not a channel.
+ *
+ * ── IT READS THE RECORD, AND IT IS ASYNC NOW (POS-153) ──────────────────────
+ *
+ * The edge lives in `acts` and the sqlite read is deleted, not layered under.
+ * The cost is the signature: this was synchronous and every caller has to
+ * `await` it. THE UN-AWAITED FORM IS SILENT — `gatherHeldActions(db, <Promise>)`
+ * reads `!holding.length` as `!undefined`, answers `{ entries: [], rows: [] }`,
+ * and ships as "you are holding nothing" with the suite green. That is why the
+ * three call sites are pinned by SOURCE TEXT in `test/hold-wirings.test.mjs`
+ * beside the behavioural probes: a defaulted-away argument is a defect no
+ * assertion about the answer can see (POS-90's lesson, one shape over).
  */
-export function holdingsFor(args = {}, key = null) {
+export async function holdingsFor(args = {}, key = null) {
   const who = standingHandle(args, key);
   if (!who) return [];
-  let db = null;
   try {
-    db = openDynamicRead();
-    return db ? holdingsOf(readAttachments(db), who) : [];
+    const { storeAttachmentRows } = await import("./world2-guards.mjs");
+    return holdingsOf(await storeAttachmentRows(), who);
   } catch { return []; }
-  finally { try { db?.close(); } catch { /* a reader that cannot close is still a reader that read */ } }
 }
 
 /** What the things in this caller's hands lend them. `holding` is the hold
@@ -2202,7 +2238,7 @@ async function apexRead(args, key, ctx = {}) {
     const amb = gatherActions(store.db, { spineIds, reachIds });
     rows = amb.rows;
     const ground = gatherGroundActions(store.db, { spineIds, reachIds });
-    const held = gatherHeldActions(store.db, holdingsFor(args, key));
+    const held = gatherHeldActions(store.db, await holdingsFor(args, key));
     // THE SEAT, and the read must gather it the same way the act does — "read:
     // is every action's shadow ... anything you can do, you can read, and never
     // the reverse." A read that showed a seated human less than the door admits
@@ -2488,7 +2524,7 @@ async function apexDo(args, key, ctx = {}) {
     const reachIds = (seen.objects ?? []).map((o) => o.id);
     const amb = gatherActions(store.db, { spineIds, reachIds });
     const ground = gatherGroundActions(store.db, { spineIds, reachIds });
-    const held = gatherHeldActions(store.db, holdingsFor(args, key));
+    const held = gatherHeldActions(store.db, await holdingsFor(args, key));
     const kind = actorKindOf(args);
     const { entries, refused: refusedGrants, seated: seatedAt, handoff: handoffSeat } = resolveForActor(
       [...held.entries, ...ground.entries, ...amb.entries], {
@@ -3046,7 +3082,7 @@ async function apexReadAction(args, key, ctx = {}) {
     const reachIds = (seen.objects ?? []).map((o) => o.id);
     const amb = gatherActions(store.db, { spineIds, reachIds });
     const ground = gatherGroundActions(store.db, { spineIds, reachIds });
-    const held = gatherHeldActions(store.db, holdingsFor(args, key));
+    const held = gatherHeldActions(store.db, await holdingsFor(args, key));
     const { entries } = resolveGrants([...held.entries, ...ground.entries, ...amb.entries], {
       kind: actorKindOf(args),
       actorHousehold: worldHouseholdOf(standingHandle(args, key)),
