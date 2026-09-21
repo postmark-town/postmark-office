@@ -1655,7 +1655,39 @@ export async function nextStepsFor(db, meta, handle, clone, { own = false, world
     const worldBlock = (h) => (pending ??= real(h));
 
     const registry = JSON.parse(meta.quest_registry ?? '{"quests":[]}');
-    const facts = tools.onboardingFactsFor(clone, handle);
+    // ── THE FACTS COME OFF THE FOLD THE REHYDRATE ALREADY WROTE (POS-167) ──
+    //
+    // This line was `tools.onboardingFactsFor(clone, handle)` with no options,
+    // and on the SERVING path that is THREE parses of the 13k-line stamp ledger
+    // per doorstep request: `currentHouseholds` twice (once inside
+    // `householdKeys` -> `sealedRegistryDates`, once for its own `parseLaws`)
+    // and `welcomedHouseholds` once more. Every doorstep read paid it.
+    //
+    // THE FACTS WERE ALREADY IN THIS CALL. `standingRowsFromTown` folds the same
+    // six at every rehydrate into `quest_standing`, and `questBoardFor` below
+    // reads that row for its board — so this function was reading these six
+    // facts TWICE, from two different clocks, and `composeNextSteps` then threw
+    // the row's copy away ("the onboarding line is the voice for the six
+    // one-time rows"). Measured: a row folded at the last tick and a live fold
+    // disagree on card / home / window, because `src/edit.mjs`'s pen lands those
+    // three on the LIVE clone between snapshots while the row comes from the
+    // tick's frozen `git clone --local` (deploy/office-tick.sh).
+    //
+    // So the live fold was the one field on this page FRESHER than the `as_of`
+    // sha the page itself prints. Reading the row puts the checklist on the
+    // page's own clock, at the price of one tick: a paper act done through the
+    // office pen now leaves the list at the next rehydrate rather than at once.
+    //
+    // THE FALLBACK IS TODAY'S BEHAVIOUR, NOT A NEW ROAD. `standingFor`'s own
+    // header names the case — "null when the index predates the seam" — and
+    // between a deploy and the first rehydrate that is every resident. Reading
+    // an absent row as six false facts would print six finished chores back onto
+    // the checklist of a resident who did them, which is #1864 in a new mouth.
+    // Absent means ASK, exactly as before, at exactly the old cost, for exactly
+    // that case. (Measured on a fresh index of the live town: 182 of 182 rows
+    // carry all six, so this is the deploy window and not the common path.)
+    const facts = onboardingFactsFromStanding(standingFor(db, handle))
+      ?? tools.onboardingFactsFor(clone, handle);
     // THE 08-15 GATE. Keemin's ruling, verbatim: "the gaps are yours to see, not
     // theirs to be seen by." A stranger's read of your doorstep gets exactly
     // what a stranger can already read on the public bundle at
@@ -2268,6 +2300,38 @@ export function standingJoin(q, standing, { idea = null, worldSited = null } = {
     return { progress: worldSited ? 1 : 0, complete: worldSited, since: null };
   }
   return null;
+}
+
+/**
+ * The six onboarding facts, read off the standing row the rehydrate wrote — or
+ * null when this index cannot answer them and the caller must ask the checkout.
+ *
+ * ONE OWNER OF THE ID MAP. The keys are `STANDING_FACT`'s own values, and those
+ * are BOUND to the town's exported `ONBOARDING_IDS` by a falsifier in
+ * test/quest-standing.test.mjs. A fact list typed out here by hand would be a
+ * third copy of a map the town holds privately — and the whole point of reading
+ * the row is that there is one derivation, not a new place for it to drift.
+ *
+ * ABSENT IS NOT FALSE, and the `in` test is the load-bearing half. A row written
+ * by an office that predates a fact carries five of the six — `welcomed` joined
+ * the fold on 2026-09-14 — and `Boolean(undefined)` would read that resident
+ * back as un-welcomed. That is the silent substitution `standingJoin` refuses
+ * one function up with the same `!(fact in standing)` guard. A partial row is
+ * refused WHOLE rather than patched per field, because half a fold and a live
+ * fold are two different answers and the caller can still get the true one.
+ *
+ * The values ride through untouched. `onboardingBoard` owns the coercion (it
+ * already does `Boolean(f[FACT_OF[q.id]])`), and a second one here would be a
+ * second place the store's value could be laundered on its way to the reader.
+ */
+export function onboardingFactsFromStanding(standing) {
+  if (!standing) return null;
+  const facts = {};
+  for (const fact of Object.values(STANDING_FACT)) {
+    if (!(fact in standing)) return null;
+    facts[fact] = standing[fact];
+  }
+  return facts;
 }
 
 /** This handle's standing row, or null when the index predates the seam. */
