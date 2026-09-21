@@ -24,10 +24,15 @@ import { appendTownJournal, ensureTownJournal, townDrainCursor } from "../src/to
 import { planTownDrain, writeTownDrain } from "../src/town-drain.mjs";
 import { runTownDrain } from "../src/town-bridge.mjs";
 import { REGISTRY_PATH } from "../src/residency.mjs";
+import { NO_TOWN, townClone, townModuleUrl } from "./fixture-paths.mjs";
 
-const TOWN = "G:/postmark/seam-overnight/town-clone";
-const VERIFY = await import(`file:///${TOWN}/tools/stamp-verify.mjs`);
-const ENGINE = await import(`file:///${TOWN}/tools/stamp-mint.mjs`);
+const TOWN = townClone();
+// The town's own verifier and mint, imported live. CONDITIONALLY, because a
+// top-level await import of a clone that is not there takes the whole module
+// down at load and its cases neither pass nor fail — they vanish.
+const VERIFY = TOWN ? await import(townModuleUrl("tools", "stamp-verify.mjs")) : null;
+const ENGINE = TOWN ? await import(townModuleUrl("tools", "stamp-mint.mjs")) : null;
+const SKIP = !TOWN && NO_TOWN;
 import { createPrivateKey, sign as edSign } from "node:crypto";
 
 const odb = () => {
@@ -66,7 +71,7 @@ const withEnv = (over, fn) => {
   finally { for (const [k, v] of Object.entries(prev)) { if (v == null) delete process.env[k]; else process.env[k] = v; } }
 };
 
-test("GREEN, the real pipe: a drained join appends a registry line the town's own verifier seals green", () => {
+test("GREEN, the real pipe: a drained join appends a registry line the town's own verifier seals green", { skip: SKIP }, () => {
   const { dir, keyFile } = sealedTown();
   const db = odb();
   appendTownJournal(db, joinRow());
@@ -82,7 +87,7 @@ test("GREEN, the real pipe: a drained join appends a registry line the town's ow
   rmSync(dir, { recursive: true, force: true });
 });
 
-test("CAN-FAIL: a mangled sig on the drain's line turns the town's verifier red — the oracle sees this line", () => {
+test("CAN-FAIL: a mangled sig on the drain's line turns the town's verifier red — the oracle sees this line", { skip: SKIP }, () => {
   const { dir, keyFile } = sealedTown();
   const db = odb();
   appendTownJournal(db, joinRow());
@@ -101,7 +106,7 @@ test("CAN-FAIL: a mangled sig on the drain's line turns the town's verifier red 
   rmSync(dir, { recursive: true, force: true });
 });
 
-test("REFUSE, never degrade: with the pen key absent the crossing writes NOTHING and every row stays queued", () => {
+test("REFUSE, never degrade: with the pen key absent the crossing writes NOTHING and every row stays queued", { skip: SKIP }, () => {
   const { dir } = sealedTown();
   const db = odb();
   appendTownJournal(db, joinRow());

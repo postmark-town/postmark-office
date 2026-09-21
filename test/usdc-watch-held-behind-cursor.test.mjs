@@ -95,6 +95,7 @@ import { execFileSync } from "node:child_process";
 import { INTAKE, USDC, TRANSFER_TOPIC, MIN_CONF } from "../src/usdc-witness.mjs";
 import { CROSSING_MS } from "../src/crossings.mjs";
 import { watch, decodeArrival, SINK_POT, SINK_AGE_DAYS, OUTSIDE_FROM, sinkEnabled } from "../tools/usdc-watch.mjs";
+import { NO_TOWN, townClone, townModuleUrl } from "./fixture-paths.mjs";
 // `unresolvedSeen`, `journalRef` and the journal's two file functions are
 // imported INSIDE the cases that need them, on purpose. A static import of a
 // symbol the train tip does not export is a LOAD error, and a load error reds
@@ -103,9 +104,12 @@ import { watch, decodeArrival, SINK_POT, SINK_AGE_DAYS, OUTSIDE_FROM, sinkEnable
 // fail for its own reason. (The card rail's F5 pays for this lesson in words.)
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const TOWN = [resolve(HERE, "..", "town-clone"), "G:/postmark/seam-overnight/town-clone"]
+const TOWN = [townClone()].filter(Boolean)
   .find((p) => existsSync(join(p, "tools", "stamp-mint.mjs")));
-const ENGINE = await import(`file:///${TOWN}/tools/stamp-mint.mjs`);
+// Guarded: a top-level await import of a clone that is not there takes the
+// whole module down at load, and its cases then neither pass nor fail.
+const ENGINE = TOWN ? await import(townModuleUrl("tools", "stamp-mint.mjs")) : null;
+const SKIP = !TOWN && NO_TOWN;
 
 const pad32 = (a) => "0x" + "0".repeat(24) + String(a).replace(/^0x/, "").toLowerCase();
 const usdcHex = (u) => "0x" + BigInt(Math.round(u * 1e6)).toString(16);
@@ -209,7 +213,7 @@ const HELD_LOG = transfer({ txhash: HASH_HELD, block: ARRIVAL_BLOCK, usd: 10 });
 // F1 — THE BUG, IN BOTH OF ITS BRANCHES
 // ════════════════════════════════════════════════════════════════════════════
 
-test("F1a · the QUIET branch: nothing new settled, and the held arrival is STILL held", async () => {
+test("F1a · the QUIET branch: nothing new settled, and the held arrival is STILL held", { skip: SKIP }, async () => {
   const town = seamTown();
   const c1 = chain({ head: HEAD_1, logs: [HELD_LOG], blockTs: () => MINED });
   const t1 = await tick({ rpc: c1.rpc, town, cursor: null, journal: [] });
@@ -235,7 +239,7 @@ test("F1a · the QUIET branch: nothing new settled, and the held arrival is STIL
   assert.equal(t2.cursor, t1.cursor, "a quiet tick still moves the cursor over nothing");
 });
 
-test("F1b · the SCANNING branch: the head has moved on, and the held arrival is STILL held", async () => {
+test("F1b · the SCANNING branch: the head has moved on, and the held arrival is STILL held", { skip: SKIP }, async () => {
   const town = seamTown();
   const c1 = chain({ head: HEAD_1, logs: [HELD_LOG], blockTs: () => MINED });
   const t1 = await tick({ rpc: c1.rpc, town, cursor: null, journal: [] });
@@ -256,7 +260,7 @@ test("F1b · the SCANNING branch: the head has moved on, and the held arrival is
   assert.equal(t2.cursor, HEAD_2 - MIN_CONF, "the cursor still follows the chain");
 });
 
-test("F2 · THE CONTROL — the same two ticks with NO journal lose it, on both sides of the fix", async () => {
+test("F2 · THE CONTROL — the same two ticks with NO journal lose it, on both sides of the fix", { skip: SKIP }, async () => {
   // Without this, F1 going green would be indistinguishable from a harness that
   // never reproduced anything. This is the assertion that can only pass while
   // the orphaning is real, and it must pass at the tip AND after the fix.
@@ -277,7 +281,7 @@ test("F2 · THE CONTROL — the same two ticks with NO journal lose it, on both 
 // F3/F4 — WHAT THE MEMORY IS FOR: the rules that need time to come due
 // ════════════════════════════════════════════════════════════════════════════
 
-test("F3 · the grace comes due BEHIND the cursor: a remembered arrival is witnessed into `todo`", async () => {
+test("F3 · the grace comes due BEHIND the cursor: a remembered arrival is witnessed into `todo`", { skip: SKIP }, async () => {
   const town = seamTown();
   const c = chain({ head: HEAD_2, logs: [HELD_LOG], blockTs: () => MINED });
   const t = await tick({ rpc: c.rpc, town, cursor: HEAD_1 - MIN_CONF, journal: [seenRow(HELD_LOG)], now: DUE });
@@ -292,7 +296,7 @@ test("F3 · the grace comes due BEHIND the cursor: a remembered arrival is witne
   assert.equal(t.report.rechecked, 1);
 });
 
-test("F4 · SINK_AGE_DAYS is reachable on an ordinary tick, because the arrival is still in the tick", async () => {
+test("F4 · SINK_AGE_DAYS is reachable on an ordinary tick, because the arrival is still in the tick", { skip: SKIP }, async () => {
   // The rule's own default is asserted first, so this case can never pass by
   // having quietly flipped the rail's posture rather than by remembering a row.
   assert.equal(sinkEnabled({}), false, "the sink rule is OFF unless the founder's flag says otherwise");
@@ -321,7 +325,7 @@ test("F4 · SINK_AGE_DAYS is reachable on an ordinary tick, because the arrival 
 // F5/F6/F7 — the shape of the fix
 // ════════════════════════════════════════════════════════════════════════════
 
-test("F5 · an arrival the journal records as WITNESSED is not decided again at all", async () => {
+test("F5 · an arrival the journal records as WITNESSED is not decided again at all", { skip: SKIP }, async () => {
   const { unresolvedSeen } = await import("../tools/usdc-watch.mjs");
   const town = seamTown();
   const rows = [
@@ -338,7 +342,7 @@ test("F5 · an arrival the journal records as WITNESSED is not decided again at 
   assert.equal(t.report.witnessed.length, 0, "and it is not smuggled in under another bucket");
 });
 
-test("F6 · an arrival in BOTH the scan and the journal is decided from the LIVE decode", async () => {
+test("F6 · an arrival in BOTH the scan and the journal is decided from the LIVE decode", { skip: SKIP }, async () => {
   // The journal remembers it as $10. The chain says $10 too — it must, because a
   // confirmed transfer is immutable. What the snapshot COULD get wrong is
   // everything derived beside it, so the test plants a wrong amount in the
@@ -355,7 +359,7 @@ test("F6 · an arrival in BOTH the scan and the journal is decided from the LIVE
   assert.equal(t.report.hold[0].plan.from, "paz", "the live payer, not the one the snapshot claimed");
 });
 
-test("F7 · the cursor is still computed from the SCAN alone — a journal row cannot move it", async () => {
+test("F7 · the cursor is still computed from the SCAN alone — a journal row cannot move it", { skip: SKIP }, async () => {
   // This is a fix TO a cursor bug; it must not quietly also be a second change
   // to what the cursor means.
   const town = seamTown();
@@ -378,7 +382,7 @@ test("F7 · the cursor is still computed from the SCAN alone — a journal row c
 // F8/F9/F10/F11 — the throw, the rule, the file, and the wiring
 // ════════════════════════════════════════════════════════════════════════════
 
-test("F8 · a tick that cannot reach the chain returns nothing to journal and no cursor to persist", async () => {
+test("F8 · a tick that cannot reach the chain returns nothing to journal and no cursor to persist", { skip: SKIP }, async () => {
   const town = seamTown();
   const c = chain({ head: HEAD_2, throws: true });
   let thrown = null;
@@ -394,7 +398,7 @@ test("F8 · a tick that cannot reach the chain returns nothing to journal and no
   // await, so a throw appends nothing and moves nothing. F11 pins that order.
 });
 
-test("F9 · unresolvedSeen is the whole rule, and it is pure", async () => {
+test("F9 · unresolvedSeen is the whole rule, and it is pure", { skip: SKIP }, async () => {
   const { unresolvedSeen, journalRef } = await import("../tools/usdc-watch.mjs");
   assert.equal(typeof unresolvedSeen, "function", "the tick's journal rule is exported, so it can be read and tested on its own");
 
@@ -421,7 +425,7 @@ test("F9 · unresolvedSeen is the whole rule, and it is pure", async () => {
   assert.equal(journalRef({}), null);
 });
 
-test("F10 · the journal round-trips on a real file, and a torn line is surfaced rather than thrown", async () => {
+test("F10 · the journal round-trips on a real file, and a torn line is surfaced rather than thrown", { skip: SKIP }, async () => {
   const { readUsdcJournal, appendUsdcJournal, USDC_JOURNAL_NAME, USDC_JOURNAL_PATH, STATE_PATH } =
     await import("../tools/usdc-watch.mjs");
 
@@ -450,7 +454,7 @@ test("F10 · the journal round-trips on a real file, and a torn line is surfaced
   assert.match(rows[2].malformed, /not json/, "a torn line is handed back as one, so it cannot take the tick down with it");
 });
 
-test("F11 · the CLI appends what the tick saw AFTER the tick and BEFORE the cursor moves", () => {
+test("F11 · the CLI appends what the tick saw AFTER the tick and BEFORE the cursor moves", { skip: SKIP }, () => {
   // ── THE WEAKEST CASE IN THIS FILE, DELIBERATELY ─────────────────────────
   // `main()` cannot be driven here: the CLI's only chain is `baseRpc`, whose
   // three endpoints are hardcoded in src/usdc-witness.mjs with no injection

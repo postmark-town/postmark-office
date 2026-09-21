@@ -23,15 +23,19 @@ import { railHealth, anomalies, render, readyToWitness, witnessCommand, STALE_MI
 import { stripeQueue } from "../tools/funding-report.mjs";
 import { decide, decodeSession, OUTSIDE_FROM, HANDLE_FIELD } from "../tools/stripe-watch.mjs";
 import { townLoginHands } from "../src/household-logins.mjs";
+import { NO_TOWN, townClone, townModuleUrl } from "./fixture-paths.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const TOWN = [resolve(HERE, "..", "town-clone"), "G:/postmark/seam-overnight/town-clone"]
+const TOWN = [townClone()].filter(Boolean)
   .find((p) => existsSync(join(p, "tools", "stamp-mint.mjs")));
 
 // The town engine, imported once — the same one the fixture copies into each
 // throwaway repo, so the falsifiers below read households through the town s own
 // resolver rather than a second answer.
-const ENGINE = await import(`file:///${TOWN}/tools/stamp-mint.mjs`);
+// Guarded: a top-level await import of a clone that is not there takes the
+// whole module down at load, and its cases then neither pass nor fail.
+const ENGINE = TOWN ? await import(townModuleUrl("tools", "stamp-mint.mjs")) : null;
+const SKIP = !TOWN && NO_TOWN;
 
 const NOW = Date.UTC(2026, 7, 26, 12, 0, 0);
 const minsAgo = (m) => new Date(NOW - m * 60_000).toISOString();
@@ -77,7 +81,7 @@ const foldOf = (repo) => foldFunding(parseLedgerText(readFileSync(join(repo, "WH
 // A DEAD WATCHER IS THE LOUDEST ANOMALY
 // ════════════════════════════════════════════════════════════════════════════
 
-test("a rail that has not ticked is reported as one, and its silence is refused as evidence", () => {
+test("a rail that has not ticked is reported as one, and its silence is refused as evidence", { skip: SKIP }, () => {
   // LAW (tools/usdc-watch.mjs, on an unreachable chain, verbatim): "a silent
   //     empty report from a blind watcher is indistinguishable from a quiet day,
   //     and the second one is a lie." A report built on a stale watcher's
@@ -97,7 +101,7 @@ test("a rail that has not ticked is reported as one, and its silence is refused 
   assert.notEqual(never.note, stale.note);
 });
 
-test("the rendered report carries the warning banner whenever any rail is down, and not when none is", () => {
+test("the rendered report carries the warning banner whenever any rail is down, and not when none is", { skip: SKIP }, () => {
   const down = render({
     now: NOW, pots: [], potsInvalid: [], fold: foldFunding([]), anomalyRows: [],
     rails: [railHealth("stripe-watch", {}, { now: NOW }), railHealth("usdc-watch", { last_run: minsAgo(1) }, { now: NOW })],
@@ -117,7 +121,7 @@ test("the rendered report carries the warning banner whenever any rail is down, 
 // EVERY STUCK ROW SAYS WHAT UNSTICKS IT
 // ════════════════════════════════════════════════════════════════════════════
 
-test("every anomaly, from every source, carries a rule AND what resolves it", () => {
+test("every anomaly, from every source, carries a rule AND what resolves it", { skip: SKIP }, () => {
   const rows = anomalies({
     fold: { invalid: [{ row_kind: "pot-receipt", line: "- 2026-08-01 · pot-receipt · pot: keep · …", reason: "a space after the colon" }] },
     potsInvalid: [{ row_kind: "pot-file", line: "WHITE_PAGES/pot-x.json", reason: "unparseable JSON" }],
@@ -144,7 +148,7 @@ test("every anomaly, from every source, carries a rule AND what resolves it", ()
   assert.match(unclaimed.resolves, /PROPOSED, NOT ENABLED/);
 });
 
-test("a clean town says so plainly, and the clean sentence is not reachable while anything is stuck", () => {
+test("a clean town says so plainly, and the clean sentence is not reachable while anything is stuck", { skip: SKIP }, () => {
   const clean = render({
     now: NOW, pots: [], potsInvalid: [], fold: foldFunding([]), anomalyRows: [],
     rails: [railHealth("x", { last_run: minsAgo(1) }, { now: NOW })],
@@ -162,7 +166,7 @@ test("a clean town says so plainly, and the clean sentence is not reachable whil
   assert.match(stuck, /0xc/);
 });
 
-test("`Needs a person` sits above the rails and above the books", () => {
+test("`Needs a person` sits above the rails and above the books", { skip: SKIP }, () => {
   // The founder's own test for this lane: read it in sixty seconds and have zero
   // matching work, only vetoes. A report you have to search for the broken thing
   // fails that whether or not the broken thing is in it. (`Ready to witness` sits
@@ -181,7 +185,7 @@ test("`Needs a person` sits above the rails and above the books", () => {
 // THE BOOKS
 // ════════════════════════════════════════════════════════════════════════════
 
-test("the pot file's received_usd and the ledger's rows are disclosed SIDE BY SIDE, never reconciled", () => {
+test("the pot file's received_usd and the ledger's rows are disclosed SIDE BY SIDE, never reconciled", { skip: SKIP }, () => {
   // LAW (src/funding.mjs § TEACH.receipts, verbatim): "the pot file's received
   //     and this sum are two clocks, disclosed side by side, never silently
   //     reconciled".
@@ -202,7 +206,7 @@ test("the pot file's received_usd and the ledger's rows are disclosed SIDE BY SI
   assert.match(md, /\| 2026-08-01 \| stripe \| paz \| \$10 \|/);
 });
 
-test("a pot file that will not read is surfaced by name rather than dropped from the books", () => {
+test("a pot file that will not read is surfaced by name rather than dropped from the books", { skip: SKIP }, () => {
   // LAW (src/funding.mjs, verbatim): "A file that will not parse, or misses a
   //     money field, is surfaced invalid — a pot with no target is not a smaller
   //     pot, it is not a pot."
@@ -220,7 +224,7 @@ test("a pot file that will not read is surfaced by name rather than dropped from
   assert.match(md, /Pot files that will not read/);
 });
 
-test("a card payment in the grace window is shown with the typo the operator must catch", () => {
+test("a card payment in the grace window is shown with the typo the operator must catch", { skip: SKIP }, () => {
   const md = render({
     now: NOW, pots: [], potsInvalid: [], fold: foldFunding([]), anomalyRows: [],
     rails: [railHealth("x", { last_run: minsAgo(1) }, { now: NOW })],
@@ -237,7 +241,7 @@ test("a card payment in the grace window is shown with the typo the operator mus
   assert.match(md, /patron@example\.test/, "and how to reach them inside the window");
 });
 
-test("a table cell can never break the table, however the reason was worded", () => {
+test("a table cell can never break the table, however the reason was worded", { skip: SKIP }, () => {
   // A reason carrying a pipe would silently shear a row into gibberish, and a
   // report that mangles the one line explaining why money is stuck is worse than
   // no report.
@@ -257,7 +261,7 @@ test("a table cell can never break the table, however the reason was worded", ()
 // STAGE A — one command per payment, and it must actually work
 // ════════════════════════════════════════════════════════════════════════════
 
-test("THE PRINTED COMMAND ACTUALLY RECORDS THE PAYMENT — run, not asserted", async () => {
+test("THE PRINTED COMMAND ACTUALLY RECORDS THE PAYMENT — run, not asserted", { skip: SKIP }, async () => {
   // Stage A's entire write path is a line this report prints and a person pastes.
   // A report that printed a plausible-looking command nobody had ever executed
   // would be [[states-with-no-receipt]] in its purest form: the founder would
@@ -301,7 +305,7 @@ test("THE PRINTED COMMAND ACTUALLY RECORDS THE PAYMENT — run, not asserted", a
   assert.equal(readFileSync(join(town.repo, "WHITE_PAGES", "stamp-ledger.md"), "utf8").split("pot-receipt").length - 1, 1, "one payment, one receipt");
 });
 
-test("a payload that could break out of its own quoting is REFUSED, never printed", () => {
+test("a payload that could break out of its own quoting is REFUSED, never printed", { skip: SKIP }, () => {
   // The command is single-quoted in the shell, so a single quote in the payload
   // would end the quoting and hand the rest of the line to the shell. Pots,
   // handles, refs and dates cannot contain one — and this says so rather than
@@ -311,7 +315,7 @@ test("a payload that could break out of its own quoting is REFUSED, never printe
     /refusing to print an unquotable command/);
 });
 
-test("STAGE A HAS NO TIMER, so a fresh payment is listed anyway — and says the operator is the window", () => {
+test("STAGE A HAS NO TIMER, so a fresh payment is listed anyway — and says the operator is the window", { skip: SKIP }, () => {
   // The grace window is a STAGE B mechanism. In Stage A nothing will ever witness
   // a held session later, so hiding it behind a clock would hide it forever. Both
   // are listed; the fresh one carries what the window was for.
@@ -331,7 +335,7 @@ test("STAGE A HAS NO TIMER, so a fresh payment is listed anyway — and says the
   assert.ok(ready.every((r) => r.command.includes("fund-exec.mjs")));
 });
 
-test("`Ready to witness` is the first section — it is the founder's actual work", () => {
+test("`Ready to witness` is the first section — it is the founder's actual work", { skip: SKIP }, () => {
   const md = render({
     now: NOW, pots: [], potsInvalid: [], fold: foldFunding([]), anomalyRows: [],
     rails: [railHealth("x", { last_run: minsAgo(1) }, { now: NOW })],
@@ -345,7 +349,7 @@ test("`Ready to witness` is the first section — it is the founder's actual wor
   assert.match(md, /Re-running one is safe/, "and it says so, because the operator will wonder");
 });
 
-test("an UNREAD card rail is never presented as a quiet one", () => {
+test("an UNREAD card rail is never presented as a quiet one", { skip: SKIP }, () => {
   // The Stage A live read can fail (no key, refused key, Stripe down). Reporting
   // an empty card queue then is the same lie as a blind watcher reporting a quiet
   // day — usdc-watch.mjs's own words: "indistinguishable from a quiet day, and
@@ -360,7 +364,7 @@ test("an UNREAD card rail is never presented as a quiet one", () => {
   assert.match(md, /A rail that has not ticked is not a quiet rail/);
 });
 
-test("the report names the OFFICE-SIDE registry and never a town path", () => {
+test("the report names the OFFICE-SIDE registry and never a town path", { skip: SKIP }, () => {
   const md = render({
     now: NOW, pots: [], potsInvalid: [], fold: foldFunding([]), anomalyRows: [],
     rails: [railHealth("x", { last_run: minsAgo(1) }, { now: NOW })],
@@ -376,7 +380,7 @@ test("the report names the OFFICE-SIDE registry and never a town path", () => {
 // THE TWO STAGES MUST REACH THE SAME HAND
 // ════════════════════════════════════════════════════════════════════════════
 
-test("Stage A's report and Stage B's tick resolve the SAME payment to the SAME hand", () => {
+test("Stage A's report and Stage B's tick resolve the SAME payment to the SAME hand", { skip: SKIP }, () => {
   // LAW (tools/funding-report.mjs, verbatim): the queue is decided "through the
   //     WATCHER'S OWN pure resolver — one copy of the rule, so this report and
   //     the tick that may later act on it cannot disagree."
@@ -417,7 +421,7 @@ test("Stage A's report and Stage B's tick resolve the SAME payment to the SAME h
 });
 
 
-test("a payment resolved through a PIN says so on the page a person actually reads", () => {
+test("a payment resolved through a PIN says so on the page a person actually reads", { skip: SKIP }, () => {
   // LAW (tools/stripe-watch.mjs, the header, verbatim): "AND IT SAYS SO ON THE
   //     ROW. The pin is the only channel that pays a hand the payer did not
   //     type, so a resolution through it carries `attributed_via: "login-pin"`
