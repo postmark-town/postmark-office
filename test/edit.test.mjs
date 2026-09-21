@@ -20,21 +20,31 @@ const visitorKey = { household: "some-stranger", handles: new Set(), visitor: tr
 const read = (clone, ...rel) => readFileSync(join(clone, ...rel), "utf8");
 const lastLog = (clone) => execFileSync("git", ["-C", clone, "log", "-1", "--format=%an %s"], { encoding: "utf8" }).trim();
 const bounceOf = (fn) => { try { fn(); } catch (e) { return e; } assert.fail("expected a bounce"); };
+// THE IMAGE DOORS ARE ASYNC SINCE POS-150 (edit.mjs § decodeWhole), so a
+// refusal is a REJECTION and the synchronous bounceOf above cannot see it —
+// it would run the door, get a Promise back, and fall through to
+// assert.fail("expected a bounce"). Loud, not silent, which is why every image
+// call in this file moved to this one instead of quietly passing.
+const bounceOfAsync = async (fn) => { try { await fn(); } catch (e) { return e; } assert.fail("expected a bounce"); };
 const b64 = (bytes) => bytes.toString("base64");
-const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xdb, 0xff, 0xd9]);
-const PNG = Buffer.from([
-  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
-  0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
-]);
-const WEBP = (() => {
-  const bytes = Buffer.alloc(12);
-  bytes.write("RIFF", 0, "ascii"); bytes.writeUInt32LE(4, 4); bytes.write("WEBP", 8, "ascii");
-  return bytes;
-})();
+
+// REAL PICTURES, NOT HEADERS (POS-150). These were three hand-built byte
+// sequences — a 6-byte "JPEG" of SOI+DQT+EOI, a 20-byte "PNG" of signature +
+// empty IEND, a 12-byte RIFF/WEBP header — chosen when the office only ever
+// read a file's edges. They passed the magic-byte sniff and the enclosure
+// check and decoded to nothing, which is precisely the shape the thirteen
+// broken originals on the media shelf have (postmark#3022). Now that every
+// door decodes whole before storing, a fixture that cannot decode is a fixture
+// that tests the refusal instead of the act. These three are minted 2×2
+// pictures in the same three formats: same magic bytes, same enclosures, same
+// assertions — and they are images.
+const JPEG = Buffer.from("/9j/2wBDAAoHBwgHBgoICAgLCgoLDhgQDg0NDh0VFhEYIx8lJCIfIiEmKzcvJik0KSEiMEExNDk7Pj4+JS5ESUM8SDc9Pjv/2wBDAQoLCw4NDhwQEBw7KCIoOzs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozv/wAARCAACAAIDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAb/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAwb/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwCXACnH/9k=", "base64");
+const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAEElEQVR42mMQKHAAIgYIBQAUTgMBVe7jVwAAAABJRU5ErkJggg==", "base64");
+const WEBP = Buffer.from("UklGRjYAAABXRUJQVlA4ICoAAACwAQCdASoCAAIAAkA4JaACdAEO/gLsAP7wuGy0iH1f/IMf6Gv8Fd2AAAA=", "base64");
 
 // ── scope (the same own-resident binding letters use) ────────────────────────
 
-test("a household edits only its own residents (other → 403, visitor → 403)", () => {
+test("a household edits only its own residents (other → 403, visitor → 403)", async () => {
   const clone = editClone();
   try {
     const v = bounceOf(() => updateAddressBody({ handle: "wright", body: "x" }, visitorKey, db, clone));
@@ -43,7 +53,7 @@ test("a household edits only its own residents (other → 403, visitor → 403)"
     assert.equal(bounceOf(() => updateAddressBody({ handle: "wright", body: "x" }, otherKey, db, clone)).code, 403);
     assert.equal(bounceOf(() => updateHome({ handle: "wright", body: "x" }, otherKey, db, clone)).code, 403);
     assert.equal(bounceOf(() => updateProfile({ handle: "wright", bio: "x" }, otherKey, db, clone)).code, 403);
-    assert.equal(bounceOf(() => updateProfileAvatar({ handle: "wright", image: b64(JPEG), type: "image/jpeg" }, otherKey, db, clone)).code, 403);
+    assert.equal((await bounceOfAsync(() => updateProfileAvatar({ handle: "wright", image: b64(JPEG), type: "image/jpeg" }, otherKey, db, clone))).code, 403);
   } finally { rmSync(clone, { recursive: true, force: true }); }
 });
 
@@ -106,11 +116,11 @@ test("update_profile heals the empty fence instead of wedging on it (the rei fou
   } finally { rmSync(clone, { recursive: true, force: true }); }
 });
 
-test("update_profile_avatar stamps its field through the empty fence too", () => {
+test("update_profile_avatar stamps its field through the empty fence too", async () => {
   const clone = editClone();
   try {
     writeFileSync(join(clone, "WHITE_PAGES", "wright", "PROFILE.md"), "---\n---\n");
-    const r = updateProfileAvatar({ handle: "wright", image: b64(JPEG), type: "image/jpeg" }, fixtureKey, db, clone);
+    const r = await updateProfileAvatar({ handle: "wright", image: b64(JPEG), type: "image/jpeg" }, fixtureKey, db, clone);
     assert.equal(r.avatar, "avatar.jpg");
     assert.match(read(clone, "WHITE_PAGES", "wright", "PROFILE.md"), /avatar: "avatar\.jpg"/);
   } finally { rmSync(clone, { recursive: true, force: true }); }
@@ -143,7 +153,7 @@ test("update_profile names text caps and empty strings clear fields", () => {
 
 // ── profile avatar: magic bytes, complete enclosure, fixed basename ─────────
 
-test("update_profile_avatar writes the detected image + field, removes fixed-name variants, and preserves profile-owned bytes", () => {
+test("update_profile_avatar writes the detected image + field, removes fixed-name variants, and preserves profile-owned bytes", async () => {
   const clone = editClone();
   try {
     const dir = join(clone, "WHITE_PAGES", "wright");
@@ -154,7 +164,7 @@ test("update_profile_avatar writes the detected image + field, removes fixed-nam
 
     const before = read(clone, "WHITE_PAGES", "wright", "PROFILE.md");
     const body = before.slice(before.indexOf("\n---\n") + 5);
-    const r = updateProfileAvatar({ handle: "wright", image: b64(JPEG), type: "image/png" }, fixtureKey, db, clone);
+    const r = await updateProfileAvatar({ handle: "wright", image: b64(JPEG), type: "image/png" }, fixtureKey, db, clone);
     assert.equal(r.file, "WHITE_PAGES/wright/avatar.jpg");
     assert.equal(r.avatar, "avatar.jpg");
     assert.equal(r.media_type, "image/jpeg", "the false caller type is ignored");
@@ -174,11 +184,11 @@ test("update_profile_avatar writes the detected image + field, removes fixed-nam
   } finally { rmSync(clone, { recursive: true, force: true }); }
 });
 
-test("update_profile_avatar founds a minimal PROFILE.md skeleton when absent", () => {
+test("update_profile_avatar founds a minimal PROFILE.md skeleton when absent", async () => {
   const clone = editClone();
   try {
     const key = { household: "keemin", handles: new Set(["newprofile"]) };
-    const r = updateProfileAvatar({ handle: "newprofile", image: b64(PNG), type: "text/plain" }, key, db, clone);
+    const r = await updateProfileAvatar({ handle: "newprofile", image: b64(PNG), type: "text/plain" }, key, db, clone);
     assert.equal(r.founded, true);
     assert.equal(r.media_type, "image/png");
     assert.equal(read(clone, "WHITE_PAGES", "newprofile", "PROFILE.md"), "---\navatar: \"avatar.png\"\n---\n");
@@ -186,30 +196,30 @@ test("update_profile_avatar founds a minimal PROFILE.md skeleton when absent", (
   } finally { rmSync(clone, { recursive: true, force: true }); }
 });
 
-test("update_profile_avatar bounces decoded images over the witness's 1.5 MB line before format inspection", () => {
+test("update_profile_avatar bounces decoded images over the witness's 1.5 MB line before format inspection", async () => {
   const clone = editClone();
   try {
-    const e = bounceOf(() => updateProfileAvatar({
+    const e = (await bounceOfAsync(() => updateProfileAvatar({
       handle: "wright", image: b64(Buffer.alloc(1.5 * 1024 * 1024 + 1, 0x61)), type: "image/jpeg",
-    }, fixtureKey, db, clone));
+    }, fixtureKey, db, clone)));
     assert.equal(e.code, 413);
     assert.match(e.defect, /1\.5 MB/);
   } finally { rmSync(clone, { recursive: true, force: true }); }
 });
 
-test("update_profile_avatar detects format from magic bytes and bounces unsupported files", () => {
+test("update_profile_avatar detects format from magic bytes and bounces unsupported files", async () => {
   const clone = editClone();
   try {
-    const e = bounceOf(() => updateProfileAvatar({
+    const e = (await bounceOfAsync(() => updateProfileAvatar({
       handle: "wright", image: b64(Buffer.from("GIF89a")), type: "image/jpeg",
-    }, fixtureKey, db, clone));
+    }, fixtureKey, db, clone)));
     assert.equal(e.code, 422);
     assert.match(e.defect, /JPEG, PNG, or WebP/);
     assert.match(e.hint, /bytes, not its filename or type label/);
   } finally { rmSync(clone, { recursive: true, force: true }); }
 });
 
-test("update_profile_avatar bounces truncated JPEG, PNG, and WebP enclosures without writing", () => {
+test("update_profile_avatar bounces truncated JPEG, PNG, and WebP enclosures without writing", async () => {
   const clone = editClone();
   try {
     const profile = read(clone, "WHITE_PAGES", "wright", "PROFILE.md");
@@ -220,7 +230,7 @@ test("update_profile_avatar bounces truncated JPEG, PNG, and WebP enclosures wit
       truncatedWebp,
     ];
     for (const bytes of cases) {
-      const e = bounceOf(() => updateProfileAvatar({ handle: "wright", image: b64(bytes), type: "image/png" }, fixtureKey, db, clone));
+      const e = (await bounceOfAsync(() => updateProfileAvatar({ handle: "wright", image: b64(bytes), type: "image/png" }, fixtureKey, db, clone)));
       assert.equal(e.code, 422);
       assert.equal(e.defect, "the file ends mid-stream");
       assert.equal(e.hint, "re-export it and try again");
@@ -727,11 +737,11 @@ test("#865 assets: neither body nor assets is a bounce, not a silent no-op", () 
   } finally { rmSync(clone, { recursive: true, force: true }); }
 });
 
-test("#865 image door: an upload lands in HOME/ and DECLARES itself", () => {
+test("#865 image door: an upload lands in HOME/ and DECLARES itself", async () => {
   const clone = editClone();
   try {
     setFm(clone, "---\nresident: wright\ntitle: the Trueing-House\n---");
-    const r = updateHomeImage({ handle: "wright", image: b64(PNG), name: "my-house.png" }, fixtureKey, db, clone);
+    const r = await updateHomeImage({ handle: "wright", image: b64(PNG), name: "my-house.png" }, fixtureKey, db, clone);
     assert.equal(r.image, "my-house.png");
     assert.equal(r.media_type, "image/png");
     assert.deepEqual(r.assets, ["my-house.png"]);
@@ -741,56 +751,56 @@ test("#865 image door: an upload lands in HOME/ and DECLARES itself", () => {
   } finally { rmSync(clone, { recursive: true, force: true }); }
 });
 
-test("#865 image door: the bytes decide the extension, never the caller's label", () => {
+test("#865 image door: the bytes decide the extension, never the caller's label", async () => {
   const clone = editClone();
   try {
-    const e = bounceOf(() => updateHomeImage({ handle: "wright", image: b64(PNG), name: "house.jpg" }, fixtureKey, db, clone));
+    const e = (await bounceOfAsync(() => updateHomeImage({ handle: "wright", image: b64(PNG), name: "house.jpg" }, fixtureKey, db, clone)));
     assert.equal(e.code, 422);
     assert.match(e.defect, /bytes are a PNG, not a JPG/);
     assert.match(e.hint, /"house\.png"/);
   } finally { rmSync(clone, { recursive: true, force: true }); }
 });
 
-test("#865 image door: a second upload adds to the declaration, never replaces the first", () => {
+test("#865 image door: a second upload adds to the declaration, never replaces the first", async () => {
   const clone = editClone();
   try {
     setFm(clone, "---\nresident: wright\n---");
-    updateHomeImage({ handle: "wright", image: b64(PNG), name: "exterior.png" }, fixtureKey, db, clone);
-    const r = updateHomeImage({ handle: "wright", image: b64(JPEG), name: "library.jpg" }, fixtureKey, db, clone);
+    await updateHomeImage({ handle: "wright", image: b64(PNG), name: "exterior.png" }, fixtureKey, db, clone);
+    const r = await updateHomeImage({ handle: "wright", image: b64(JPEG), name: "library.jpg" }, fixtureKey, db, clone);
     assert.deepEqual(r.assets, ["exterior.png", "library.jpg"]);   // sol's two-image case
     assert.match(homeMd(clone), /^assets: \["exterior\.png", "library\.jpg"\]$/m);
   } finally { rmSync(clone, { recursive: true, force: true }); }
 });
 
-test("#865 image door: re-uploading the same name replaces the file and declares once", () => {
+test("#865 image door: re-uploading the same name replaces the file and declares once", async () => {
   const clone = editClone();
   try {
     setFm(clone, "---\nresident: wright\n---");
-    updateHomeImage({ handle: "wright", image: b64(PNG), name: "house.png" }, fixtureKey, db, clone);
-    const r = updateHomeImage({ handle: "wright", image: b64(PNG), name: "house.png" }, fixtureKey, db, clone);
+    await updateHomeImage({ handle: "wright", image: b64(PNG), name: "house.png" }, fixtureKey, db, clone);
+    const r = await updateHomeImage({ handle: "wright", image: b64(PNG), name: "house.png" }, fixtureKey, db, clone);
     assert.equal(r.replaced, true);
     assert.deepEqual(r.assets, ["house.png"]);
     assert.equal(homeMd(clone).match(/house\.png/g).length, 1);
   } finally { rmSync(clone, { recursive: true, force: true }); }
 });
 
-test("#865 image door: no home yet points at the founding door instead of guessing", () => {
+test("#865 image door: no home yet points at the founding door instead of guessing", async () => {
   const clone = editClone();
   try {
     rmSync(join(clone, "WHITE_PAGES", "wright", "HOME", "HOME.md"));
-    const e = bounceOf(() => updateHomeImage({ handle: "wright", image: b64(PNG) }, fixtureKey, db, clone));
+    const e = (await bounceOfAsync(() => updateHomeImage({ handle: "wright", image: b64(PNG) }, fixtureKey, db, clone)));
     assert.equal(e.code, 404);
     assert.match(e.hint, /PATCH \/home\/wright/);
   } finally { rmSync(clone, { recursive: true, force: true }); }
 });
 
-test("#865 image door: a fenceless HOME.md is named as such (fabel) — never silently rewritten", () => {
+test("#865 image door: a fenceless HOME.md is named as such (fabel) — never silently rewritten", async () => {
   const clone = editClone();
   try {
     // fabel's real file: tab-separated keys, no --- fence anywhere
     writeFileSync(join(clone, "WHITE_PAGES", "wright", "HOME", "HOME.md"),
       "resident\twright\ntitle\tThe Heart House\nassets\t\nHeartHouse_by_Sol.png\n");
-    const e = bounceOf(() => updateHomeImage({ handle: "wright", image: b64(PNG) }, fixtureKey, db, clone));
+    const e = (await bounceOfAsync(() => updateHomeImage({ handle: "wright", image: b64(PNG) }, fixtureKey, db, clone)));
     assert.equal(e.code, 422);
     assert.match(e.defect, /no frontmatter to preserve/);
     // and the declaration door refuses the same file for the same honest reason
@@ -799,19 +809,19 @@ test("#865 image door: a fenceless HOME.md is named as such (fabel) — never si
   } finally { rmSync(clone, { recursive: true, force: true }); }
 });
 
-test("#865 image door: one ceiling for both image doors, and over it names the other way in", () => {
+test("#865 image door: one ceiling for both image doors, and over it names the other way in", async () => {
   const clone = editClone();
   try {
     // 1.5 MB parity, Keemin's call 2026-08-04. The town holds 184 images; five
     // exceed this and nothing sits between 1.0 and 1.5 MB, so the cap clears
     // the real distribution rather than clipping it.
     const over = Buffer.concat([PNG.subarray(0, 8), Buffer.alloc(1.6 * 1024 * 1024), PNG.subarray(8)]);
-    const e = bounceOf(() => updateHomeImage({ handle: "wright", image: b64(over), name: "big.png" }, fixtureKey, db, clone));
+    const e = (await bounceOfAsync(() => updateHomeImage({ handle: "wright", image: b64(over), name: "big.png" }, fixtureKey, db, clone)));
     assert.equal(e.code, 413);
     assert.match(e.defect, /larger than 1\.5 MB/);
     assert.match(e.hint, /by PR/);                  // never a dead end
     // the avatar door refuses at the identical ceiling — no looser side door
-    const a = bounceOf(() => updateProfileAvatar({ handle: "wright", image: b64(over) }, fixtureKey, db, clone));
+    const a = (await bounceOfAsync(() => updateProfileAvatar({ handle: "wright", image: b64(over) }, fixtureKey, db, clone)));
     assert.equal(a.code, 413);
     assert.match(a.defect, /larger than 1\.5 MB/);
     // and an existing oversized file on disk stays declarable — the cap is on
@@ -822,10 +832,10 @@ test("#865 image door: one ceiling for both image doors, and over it names the o
   } finally { rmSync(clone, { recursive: true, force: true }); }
 });
 
-test("#865 image door: scope binds it like every other edit verb", () => {
+test("#865 image door: scope binds it like every other edit verb", async () => {
   const clone = editClone();
   try {
-    assert.equal(bounceOf(() => updateHomeImage({ handle: "wright", image: b64(PNG) }, otherKey, db, clone)).code, 403);
-    assert.equal(bounceOf(() => updateHomeImage({ handle: "wright", image: b64(PNG) }, visitorKey, db, clone)).code, 403);
+    assert.equal((await bounceOfAsync(() => updateHomeImage({ handle: "wright", image: b64(PNG) }, otherKey, db, clone))).code, 403);
+    assert.equal((await bounceOfAsync(() => updateHomeImage({ handle: "wright", image: b64(PNG) }, visitorKey, db, clone))).code, 403);
   } finally { rmSync(clone, { recursive: true, force: true }); }
 });

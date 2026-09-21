@@ -57,7 +57,7 @@ import { lookup as dnsLookup } from "node:dns/promises";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { join, resolve as resolvePath, sep } from "node:path";
-import { decodeImage, imageFormat, MAX_IMAGE, MEDIA_FORMATS, MEDIA_TYPE_BY_EXT } from "./edit.mjs";
+import { decodeWhole, imageFormat, loadSharp, MAX_IMAGE, MEDIA_FORMATS, MEDIA_TYPE_BY_EXT } from "./edit.mjs";
 
 const bounce = (code, defect, hint) => Object.assign(new Error(defect), { code, defect, hint });
 
@@ -154,9 +154,16 @@ export const thumbUrlFor = (household, sha, ext, size) => `${MEDIA_BASE}/${thumb
 
 // sharp is loaded on first use, not at module load: it is a native dependency
 // (libvips), and the office's front door must open even on a box whose binary
-// failed to land — the upload takes the original and logs that no copy was cut.
-let sharpModule = null;
-const loadSharp = () => (sharpModule ??= import("sharp").then((m) => m.default));
+// failed to land.
+//
+// THE LOADER MOVED (POS-150). It lives in edit.mjs now, beside the whole-decode
+// that every image door calls, and this module imports it rather than keeping a
+// second copy — one module, one answer to "is libvips here yet".
+//
+// What a missing binary now costs is no longer symmetrical, and that is the
+// point: a thumbnail is a nicety, so a failed copy is still a log line and
+// `variants: null` below, but a decode is the law, so a door that cannot decode
+// REFUSES rather than admitting bytes it could not read.
 
 /**
  * Cut the small copies from one original. Pure over its inputs: bytes in,
@@ -244,7 +251,7 @@ export function mediaLedgerRows(odb, household) {
     }));
 }
 
-// ── THE THREE WAYS BYTES REACH THIS DOOR ────────────────────────────────────
+// ── THE TWO WAYS BYTES REACH THIS DOOR ──────────────────────────────────────
 //
 // The door opened (2026-08-15) with exactly one: `image`, raw base64 IN the
 // call's arguments. That is fine for a browser and a liability for an agent,
@@ -254,7 +261,8 @@ export function mediaLedgerRows(odb, household) {
 // file as output tokens: a 1 MB JPEG is ~1.4 M base64 characters, hundreds of
 // thousands of output tokens, minutes of generation, and over the argument
 // ceiling of several harnesses. The bytes never needed to pass through a model
-// at all. So two more ways in, ordered here by strength:
+// at all. So two more ways in were added on 2026-09-10, and on 2026-09-20 the
+// original was removed:
 //
 //   image_path  a path inside the caller's OWN house on the town clone the
 //               office already holds. Costs the model a filename. Its price is
@@ -262,13 +270,21 @@ export function mediaLedgerRows(odb, household) {
 //               office's clone can see it.
 //   image_url   an https URL the office fetches itself. Costs the model a URL,
 //               and works the instant the file is hosted anywhere public.
-//   image       base64, unchanged, and now the LAST resort — for a harness
-//               that can neither host a file nor land one in the town.
 //
-// All three converge on the same Buffer and the same rest of the handler: byte
-// checks, quota, dedupe, R2 put, ledger row. There is one validation path, not
-// three, and that is the whole design — a new way IN must never become a new
-// way AROUND the byte law.
+// WHY `image` IS GONE (POS-150, Keemin 2026-09-20: "can we just remove the
+// base64 route for upload? and only allow the link based route?"). Cost was
+// only ever half of it. The other half is that a model CANNOT CARRY A REAL
+// IMAGE THROUGH ITS OWN OUTPUT — so what actually arrived through this field
+// was a header the model knew followed by a body it invented. All thirteen
+// undecodable originals the town holds came in this way (postmark#3022), 68 B to
+// 51 KB against 715 KB for a real upload. A door whose every LLM-client use
+// produced a broken file is not a last resort; it is a trap, and removing it
+// is cheaper than teaching every client not to walk through it.
+//
+// Both ways converge on the same Buffer and the same rest of the handler: byte
+// checks, the whole decode, quota, dedupe, R2 put, ledger row. There is one
+// validation path, not two, and that is the whole design — a new way IN must
+// never become a new way AROUND the byte law.
 
 export const MEDIA_FETCH_TIMEOUT_MS = 20_000;
 export const MEDIA_FETCH_MAX_REDIRECTS = 3;
@@ -389,7 +405,7 @@ export async function guardFetchUrl(raw, { lookup = dnsLookup } = {}) {
   try { u = new URL(String(raw ?? "").trim()); }
   catch {
     throw bounce(422, "image_url is not a URL",
-      "send one absolute https:// URL that answers with the image bytes — or send the file as base64 (image:), or name a path in your own house (image_path:)");
+      "send one absolute https:// URL that answers with the image bytes — or name a path in your own house (image_path:)");
   }
   if (u.protocol !== "https:")
     throw bounce(422, `the media door fetches https only, not ${u.protocol.replace(/:$/, "")}`,
@@ -440,7 +456,7 @@ export async function fetchImageBytes(rawUrl, {
       } catch (e) {
         if (ctrl.signal.aborted)
           throw bounce(504, `${u.host} did not answer within ${Math.round(timeoutMs / 1000)} seconds`,
-            "host the file somewhere that answers promptly, or send the bytes as base64 (image:)");
+            "host the file somewhere that answers promptly, or put the file in your own house and send image_path:");
         throw bounce(502, `the office could not reach ${u.host}`, String(e?.message ?? e).slice(0, 120));
       }
       const location = resp.status >= 300 && resp.status < 400 ? resp.headers.get("location") : null;
@@ -523,9 +539,9 @@ const IMAGE_WORDS = Object.freeze({
   field: "image_path",
   example: (handle) => `WHITE_PAGES/${handle}/HOME/my-house.png`,
   whose: "media is a household's own, and so is the file it comes from",
-  meanwhile: "send the bytes as base64 (image:) or an https URL (image_url:) meanwhile",
+  meanwhile: "send an https URL (image_url:) meanwhile",
   another: "send the bytes another way",
-  untilThen: "until then send image_url: or image:",
+  untilThen: "until then send image_url:",
   what: "image file",
   tooBig: (size, max) => `it is ${fmtMB(size)} on the clone — crop or re-export it under ${fmtMB(max)}`,
   size: fmtMB,
@@ -597,15 +613,24 @@ export function readHouseImage(clone, handle, rawPath, { max = MAX_IMAGE } = {})
   return readHouseFile(clone, handle, rawPath, { max, words: IMAGE_WORDS });
 }
 
-/** Which of the three inputs this call carries — exactly one, or a named bounce. */
+/** Which of the two inputs this call carries — exactly one, or a named bounce. */
 export function mediaSourceOf(args = {}) {
-  const given = ["image_path", "image_url", "image"].filter((k) => typeof args[k] === "string" && args[k].trim());
+  const given = ["image_path", "image_url"].filter((k) => typeof args[k] === "string" && args[k].trim());
   if (given.length > 1)
     throw bounce(422, `send one image, not ${given.length}`,
-      `this call carries ${given.join(" and ")} — pick the one that costs you least: image_path (a file in your own house), then image_url, then image (base64)`);
+      `this call carries ${given.join(" and ")} — pick the one that costs you least: image_path (a file in your own house), then image_url`);
+  // THE RETIRED DOOR ANSWERS FOR ITSELF (POS-150). A call still carrying
+  // `image` would otherwise fall into "no image", which is true and useless:
+  // the caller sent an image, and what changed is that this door no longer
+  // takes it that way. Naming the retirement and both live doors in one
+  // sentence is the difference between a resident fixing their call and a
+  // resident filing a bug.
+  if (typeof args.image === "string" && args.image.trim())
+    throw bounce(422, "the media door no longer takes inline base64",
+      "send image_path (a path inside your own house on the town repo) or image_url (an https URL the office fetches for you) — the two ways in; base64 made your own model emit the whole encoded file as output tokens, and every image it ever carried through an LLM client arrived broken");
   if (!given.length)
     throw bounce(422, "no image",
-      "send image_path (a path inside your own house on the town repo), image_url (an https URL the office fetches for you), or image (base64 — the last resort, because it costs your model the whole file in tokens)");
+      "send image_path (a path inside your own house on the town repo) or image_url (an https URL the office fetches for you)");
   return given[0];
 }
 
@@ -645,8 +670,21 @@ export async function r2Put(objectKey, bytes, mediaType) {
 // everything around the storage call without a bucket; `fetchImpl` and `lookup`
 // are injectable for the same reason, so the SSRF wall is provable offline.
 // `clone` is the office's own town checkout — the ONLY tree image_path reads.
+//
+// `bytes` IS NOT A DOOR, AND THE PLACE IT SITS IS THE PROOF (POS-150). It rides
+// in the INJECTABLES — the fourth argument, beside `put` and `clone` — and never
+// in `args`, which is the only object any skin can fill. The MCP schema, the
+// REST body and `mediaSourceOf` cannot reach it: a resident who sends
+// {"bytes": …} is sending an unknown property and is refused for having named
+// no image at all. It exists for ONE caller, the office's own backfill tool
+// (the home-image backfill under tools/), which reads originals off a staging
+// directory on the box and needs the quota, the dedupe, the ledger row and the
+// whole decode that only this handler performs. Removing inline base64 from the
+// resident doors would otherwise have taken an operator's tool with it, and
+// re-implementing the handler inside that tool is the second validation lane
+// this module's header exists to forbid.
 export async function uploadMedia(args = {}, key = null, odb = null,
-  { put = r2Put, clone = null, fetchImpl, lookup } = {}) {
+  { put = r2Put, clone = null, fetchImpl, lookup, bytes: rawBytes = null } = {}) {
   if (!key) throw bounce(401, "no key at the door", "media upload is a resident's act — sign in or send your household key");
   const household = String(key?.household ?? "").trim();
   if (key.berth && !household)
@@ -662,21 +700,22 @@ export async function uploadMedia(args = {}, key = null, odb = null,
     throw bounce(409, "the media door is not yet open",
       "the office has no storage credentials configured — the door is built and waiting on them; try again after the next announcement");
 
-  // ONE of three ways in, and from here down exactly one path — the byte
-  // checks, the quota, the dedupe, the put and the ledger row cannot tell which
-  // door the bytes walked through, and that is deliberate.
-  const source = mediaSourceOf(args);
+  // ONE of two ways in — plus the in-process seam above, which is nobody's
+  // door — and from here down exactly one path: the byte checks, the whole
+  // decode, the quota, the dedupe, the put and the ledger row cannot tell where
+  // the bytes walked in from, and that is deliberate.
+  const source = rawBytes ? "bytes" : mediaSourceOf(args);
   let bytes, read_at = null;
-  if (source === "image_path") {
+  if (source === "bytes") {
+    bytes = rawBytes;
+  } else if (source === "image_path") {
     const r = readHouseImage(clone, by, args.image_path);
     bytes = r.bytes;
     read_at = { path: r.path, town_sha: r.town_sha };
-  } else if (source === "image_url") {
+  } else {
     bytes = await fetchImageBytes(args.image_url, {
       ...(fetchImpl ? { fetchImpl } : {}), ...(lookup ? { lookup } : {}),
     });
-  } else {
-    bytes = decodeImage(args.image, MAX_IMAGE, "mark"); // size first, then magic bytes + enclosure
   }
   // THIS IS THE ONE DOOR THAT TAKES SVG (the SVG ruling, 2026-08-20), and
   // it says so here rather than in the gate, so the avatar and home-image doors
@@ -685,6 +724,12 @@ export async function uploadMedia(args = {}, key = null, odb = null,
   // art, through <img src> or <image href>, where the spec disables scripting.
   // An avatar or a home image travels other roads.
   const { ext, mediaType } = imageFormat(bytes, MEDIA_FORMATS);
+  // AND THEN THE MIDDLE (POS-150). The sniff above reads the edges; this reads
+  // every pixel, and it sits BEFORE the hash on purpose — a file that cannot
+  // decode never gets an identity, never reaches the bucket, never earns a
+  // ledger row, and the small copies below are cut from a stream already proven
+  // whole rather than discovering the break and logging it away.
+  await decodeWhole(bytes, ext, "image");
   void args.type; // caller-declared MIME is deliberately never authoritative (same law as the avatar door)
   const sha = sha256hex(bytes);
   const objectKey = mediaObjectKey(household, sha, ext);
