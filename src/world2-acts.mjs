@@ -103,10 +103,13 @@ export const MIRROR_EXPIRES = "2026-09-30";
 //     answers it on the box; green there closes this row.
 //   · hold   — the `since:` shelf reads `cls: "holding"` out of sqlite as its
 //     SOLE source, at three call sites. Needs a holding port.
-//   · frame  — enter/exit rows are CLASS_FRAME, and two live readers fold them
-//     out of sqlite: every crossing's occupancy (enter-exit-ledger.mjs) and the
-//     ride's entry stop (world-apex.mjs § actsOfActor). Deleting this row's
-//     mirror today sets residents down nowhere.
+//   · frame  — enter/exit rows are CLASS_FRAME. This note used to name TWO live
+//     sqlite readers of them; as of POS-152 there is ONE. The ride's entry stop
+//     (world-apex.mjs § actsOfActor) now folds from `acts`, so the drain can no
+//     longer cost a rider their set-down. What is left is every crossing's
+//     occupancy (enter-exit-ledger.mjs § readJournal), which still reads the
+//     journal, so deleting this row's mirror today still costs the town its
+//     occupancy. The row stays; POS-156 is where it goes.
 //   · mark   — world-drain.mjs still photographs the journal to git, and
 //     postmark-crossing-save.timer is still deployed. Its replacement exists
 //     (state-log-from-store.mjs); the retirement is G2's.
