@@ -339,44 +339,40 @@ test("WIRING 3 — `world_investigate` itself carries the `stands` block, driven
   // THE REAL DOOR, on a REAL canon mark. The temp world store cannot serve this
   // one: `worldInvestigate` folds canon out of WORLD_CLONE, not `world.db`, so
   // a fixture id would answer "no mark" and never reach the block. So the probe
-  // takes a thing that genuinely stands in canon, writes a holding edge for it
-  // into a TEMP dynamic store, and asks the focus.
-  const prev = process.env.WORLD_DYNAMIC_DB;
-  const dir = mkdtempSync(join(TMP, "focus-"));
-  process.env.WORLD_DYNAMIC_DB = join(dir, "dynamic.db");
-  try {
-    const { worldMarkById, worldInvestigate } = await import("../src/world.mjs");
-    const CANON = "quill-stem/candle-for-the-trail";
-    const { mark } = await worldMarkById(CANON);
-    assert.ok(mark, `${CANON} must stand in canon for this probe to mean anything`);
+  // takes a thing that genuinely stands in canon, puts a holding edge for it in
+  // front of the door, and asks the focus.
+  //
+  // ⚑ THE HOLDING EDGE MOVED STORES (POS-162). This probe wrote a
+  // `declareAttachment` into a temp `dynamic.db` until 2026-09-21, and that is
+  // the read the block no longer makes: both halves come from `acts` now, with
+  // no flag and no sqlite under them. The CLAIM is unchanged — the wiring is
+  // driven, not the deriver — and only the record the fixture writes to moved.
+  // The store legs live in `test/investigate-stands-reads-the-store.test.mjs`.
+  const { holdingAct, withActs } = await import("./stands-store-fixture.mjs");
+  const { worldMarkById, worldInvestigate } = await import("../src/world.mjs");
+  const CANON = "quill-stem/candle-for-the-trail";
+  const { mark } = await worldMarkById(CANON);
+  assert.ok(mark, `${CANON} must stand in canon for this probe to mean anything`);
 
-    // Before: no holding edge, so the block is ABSENT and the focus is exactly
-    // what it always was. This is the "additive, and absent is the default"
-    // claim, driven rather than asserted.
-    const before = await worldInvestigate({ mark: CANON });
-    assert.ok(!before.error, `the focus bounced: ${before.defect}`);
-    assert.equal(before.stands, undefined,
-      "a mark nobody has ever held must answer byte-for-byte what it answered before this lane");
+  // Before: no holding edge anywhere, so the block is ABSENT and the focus is
+  // exactly what it always was. This is the "additive, and absent is the
+  // default" claim, driven rather than asserted.
+  const before = await withActs([], () => worldInvestigate({ mark: CANON }));
+  assert.ok(!before.error, `the focus bounced: ${before.defect}`);
+  assert.equal(before.stands, undefined,
+    "a mark nobody has ever held must answer byte-for-byte what it answered before this lane");
 
-    // Now somebody holds it.
-    const { openDynamic } = await import("../src/dynamic-store.mjs");
-    const { declareAttachment } = await import("../src/dynamic-entities.mjs");
-    const db = openDynamic();
-    try {
-      declareAttachment(db, { entity: "wright", target: CANON, policy: "cascade", declaredBy: "wright", bornAt: "2026-09-07T21:53:00Z" });
-    } finally { db.close(); }
-
-    const after = await worldInvestigate({ mark: CANON });
-    assert.ok(after.stands, "the holding record knows this thing and the focus does not — walk #12's 536 m, back");
-    assert.equal(after.stands.source, "holder");
-    assert.equal(after.stands.holder, "wright");
-    assert.match(String(after.stands.says), /rides its holder/);
-    // AND `at` IS UNTOUCHED. The block sits BESIDE canon's own answer; quietly
-    // substituting one for the other is the complaint, not the repair.
-    assert.deepEqual(after.at, before.at, "canon's own `at` must not be rewritten by the derived read");
-  } finally {
-    if (prev === undefined) delete process.env.WORLD_DYNAMIC_DB; else process.env.WORLD_DYNAMIC_DB = prev;
-  }
+  // Now somebody holds it.
+  const after = await withActs(
+    [holdingAct({ id: 1, at: "2026-09-07T21:53:00Z", actor: "wright", action: "take", thing: CANON, holder: "wright" })],
+    () => worldInvestigate({ mark: CANON }));
+  assert.ok(after.stands, "the holding record knows this thing and the focus does not — walk #12's 536 m, back");
+  assert.equal(after.stands.source, "holder");
+  assert.equal(after.stands.holder, "wright");
+  assert.match(String(after.stands.says), /rides its holder/);
+  // AND `at` IS UNTOUCHED. The block sits BESIDE canon's own answer; quietly
+  // substituting one for the other is the complaint, not the repair.
+  assert.deepEqual(after.at, before.at, "canon's own `at` must not be rewritten by the derived read");
 });
 
 test("...and the three sources answer in the law's own order", async () => {

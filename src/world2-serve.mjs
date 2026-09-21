@@ -752,7 +752,7 @@ export async function world2Serve(path, searchParams, { p: injected = null } = {
         "receipt.crossing · receipt.settlement_sha · receipt.published_at":
           "mark-receipt.mjs derives the settlement epoch from the world repo's own `settlement/S<n>` git TAGS (settlements.mjs: \"the truth is the world repo's own git TAGS … which exist only when a settlement actually landed\") and from the filing index at a published sha. The store carries no tag and no settlement row — `acts` holds none and there is no settlements table — so the S-number, the sha it blessed and its date cannot be answered here at all. The rest of the receipt (`claims`, canon, the sketchbook) is store-readable and is a second lane's wiring, not a second lane's finding.",
         stands:
-          "world.mjs § thingStandsBlock reads the DYNAMIC sqlite store (attachments + the holding journal). The rows exist in `acts` and the port exists (`guard-reads.mjs § pgAttachmentsFor` / `pgHolderOf`), so this one is unported rather than unportable — it is wiring, and wiring it inside a read-equality lane would ship an unfalsified answer.",
+          "world.mjs § thingStandsBlock now reads the STORE for both halves (POS-162: `guard-reads.mjs § pgAttachmentsFor` for the holder, `§ pgHoldingRowsFor` for the set-down, one read-only transaction), so this block is no longer unportable OR unported — it is UNWIRED HERE. Emitting it would mean this door composing a holder answer of its own beside the engine's judgment, which is a second lane's wiring and wants its own falsifier; the read it would use already exists and is proven at the 1.0 door.",
       },
     } };
   }
