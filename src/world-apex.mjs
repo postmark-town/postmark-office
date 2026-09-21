@@ -200,35 +200,63 @@ export function standpointForCrossing(here, who) {
 // and the ground block be falsified without standing up a world.
 
 /**
- * One actor's journal rows, oldest first, in the shape `rideStateFrom` folds.
+ * One actor's acts, oldest first, in the shape `rideStateFrom` folds.
  *
- * ⚑ THE JOURNAL IS TRUNCATED AT THE DRAIN, and that is a fact about this read
- * worth writing down rather than discovering. `world-drain.mjs` deletes every
- * row at or below its cursor once the write-down is on disk, so an act older
- * than the last drain is NOT here — it is in the world record's STATE/log. This
- * reader does not chase it there, and the consequence is bounded and safe by
- * construction: a rider whose `enter` has been drained away has no known entry
- * stop, so the deposit rule declines to move them (`depositAt` answers a null
- * stop and the exit writes no departure) rather than setting them down somewhere
- * they cannot prove they came from. Measured on prod 2026-09-19: the cursor sat
- * at seq 1536 with 2,103 rows standing back to 2026-09-11, so in practice every
- * act of a ride's lifetime is here. The exposure is the enter/exit pair's own
- * and this act inherits it; it is not a new one.
+ * ── IT READS THE STORE, AND THE DRAIN IS NO LONGER A HOLE IN IT (POS-152) ───
+ *
+ * This used to open the sqlite journal, and the journal is TRUNCATED at the
+ * drain: `world-drain.mjs` deletes every row at or below its cursor once the
+ * write-down is on disk, so an `enter` older than the last drain was simply not
+ * here. The consequence was bounded but it was a hole — a rider whose entry had
+ * been drained away had no known entry stop, and the deposit rule declined to
+ * move them (`depositAt` answers a null stop, the exit writes no departure)
+ * rather than setting them down somewhere they could not prove they came from.
+ * Safe, and still a passage that was written and could not be read back.
+ *
+ * `acts` is never truncated, so the hole closes by reading the record instead
+ * of the window onto it. The sqlite read is GONE rather than kept underneath:
+ * one question, one owner. Two facts about the store that this read depends on,
+ * both measured on prod at 2026-09-21T00:4x (paperwork:
+ * docs/2026-09-20/everything-reads-the-store/pos-152/):
+ *
+ *   · ORDER BY `at, id`, which is D6's ruled replay order, NEVER `journal_seq`.
+ *     Under the pen flip (prod runs `W2_PEN=…,frame`) an enter/exit is written
+ *     to Postgres FIRST and the sqlite row after, so at insert time there is no
+ *     seq to carry and the column is NULL — 486 of the store's 606 `frame` rows
+ *     hold none. Ordering by it would sort the entire flipped era into one
+ *     undefined heap. `at, id` reproduced sqlite's own `seq` order exactly, row
+ *     for row, for both live riders with history (wright 6/6, sophia 156/156),
+ *     against a non-emptiness control.
+ *   · `acts.payload` is `jsonb`, so the driver hands back a PARSED object where
+ *     the journal handed back a string. `JSON.parse` on it would throw on every
+ *     row. The coercion below takes either, because a store migrated with a
+ *     text column must not silently answer `{}` for every ride.
+ *
+ * A STORE THAT CANNOT BE OPENED STILL ANSWERS WITH NO HISTORY, unchanged and
+ * deliberately: `actsQuery` answers `null` for "not configured" and throws when
+ * the pool cannot be reached, and both land here as `[]` — which is the input
+ * that makes the deposit rule decline to move the rider. That is the same
+ * fail-safe this function has always had, now with one source rather than two.
  */
-function actsOfActor(who) {
-  let db = null;
+async function actsOfActor(who) {
   try {
-    db = openDynamicRead();
-    const has = db.prepare("SELECT name n FROM sqlite_master WHERE type='table' AND name='journal'").get();
-    if (!has) return [];
-    const rows = db.prepare(
-      "SELECT action, object, payload FROM journal WHERE actor = ? ORDER BY seq").all(String(who));
+    const { actsQuery } = await import("./world2-acts.mjs");
+    const rows = await actsQuery(
+      "SELECT action, object, payload FROM acts WHERE actor = $1 ORDER BY at, id", [String(who)]);
+    // `null` is "the register was not asked" (actsQuery's contract); an array is
+    // the answer. Only the array may be folded.
+    if (!Array.isArray(rows)) return [];
     return rows.map((r) => ({
-      action: r.action, object: r.object ?? null,
-      payload: (() => { try { return JSON.parse(r.payload ?? "null") ?? {}; } catch { return {}; } })(),
+      action: r.action, object: r.object ?? null, payload: actPayload(r.payload),
     }));
   } catch { return []; }
-  finally { try { db?.close(); } catch { /* already gone */ } }
+}
+
+/** A `jsonb` payload as the fold wants it — an object, whichever way the driver hands it over. */
+function actPayload(p) {
+  if (p == null) return {};
+  if (typeof p === "object") return p;
+  try { return JSON.parse(String(p)) ?? {}; } catch { return {}; }
 }
 
 /**
@@ -379,12 +407,12 @@ export function crossingDeps() {
     stop: async (who, here, key, opts = {}) => walkViaOffice(WORLD_CLONE, { handle: who, x: here.x, y: here.y,
       ...(opts?.from && Number.isFinite(Number(opts.from.x)) && Number.isFinite(Number(opts.from.y)) ? { __from: { x: Number(opts.from.x), y: Number(opts.from.y) } } : {}) }, key),
     now: () => (Date.now() - Date.UTC(2026, 5, 12)) / (12 * 3600 * 1000),
-    // THE JOURNAL ROWS THIS ACTOR HAS WRITTEN, oldest first — the ride fold's
-    // one input (world-ride.mjs § rideStateFrom). Read from the live journal,
-    // which is where every act since the last drain stands; a store that cannot
-    // be opened answers with no history, and the deposit rule then falls back to
-    // "you came in nowhere" and leaves a resident exactly where they are rather
-    // than setting them down somewhere they never earned.
+    // THE ACTS THIS ACTOR HAS WRITTEN, oldest first — the ride fold's one input
+    // (world-ride.mjs § rideStateFrom). Read from the STORE (POS-152), which is
+    // never truncated, so an entry older than the drain cursor is still here; a
+    // store that cannot be opened answers with no history, and the deposit rule
+    // then falls back to "you came in nowhere" and leaves a resident exactly
+    // where they are rather than setting them down somewhere they never earned.
     acts: async (who) => actsOfActor(who),
     // What the class of a mark LENDS, resolved for a resident — the § 5 roster.
     // It lives here and not in world-crossings.mjs because the roster is in the
