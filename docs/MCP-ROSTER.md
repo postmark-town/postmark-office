@@ -482,7 +482,7 @@ Walk. Declare a departure and the world carries you — position derives from th
 
 | field | type | notes |
 |---|---|---|
-| `mark_id` | string | walk to this mark's ground — <by>/<slug>, as ids appear in the telling (sited marks only, and not the town's own constitution furniture) |
+| `mark_id` | string | walk to this mark's ground — <by>/<slug>, as ids appear in the telling (sited marks only, and not the town's own constitution furniture, except a stop a vessel's timetable names) |
 | `x` | number | grid meters east of the Origin (the general case; a mark id is the path we teach) |
 | `y` | number | grid meters south of the Origin |
 | `mode` | `rim` \\| `center` | where ON the destination you stop — NOT the destination itself (that is mark_id: or x:/y:). |

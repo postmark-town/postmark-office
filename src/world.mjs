@@ -60,7 +60,7 @@ import { emissionFromVoice } from "./dynamic-emissions.mjs"; // stage 2: speech 
 import { world2Enabled } from "./world2-acts.mjs"; // the write-path closure: is the shadow mirror on at all
 import { VESSEL_HANDLE, ridesTheVessel } from "./dynamic-entities.mjs"; // the aboard test, one home for two readers
 import { carriersFrom, carriersWithDisclosure, carrierReader, heardFromV2, inRect, movementStandpoint, leavingWhileOccupying, movementV2Enabled, recordsAcrossEras, roadTerms, storedDepartures, storedRecordsFor, vehicleStandpoint, vesselPositionAt as vesselFromTimetable, vesselServiceFrom, worldHasVehicle } from "./world-movement.mjs"; // stage D: carriers carry, frames compose; #2986: aboard is occupancy
-import { arrivedNotice, doorstepTransport, rideStateFrom, stopAnnotationFor, stopUnderfoot, transportAt } from "./world-ride.mjs"; // #2986 § 11: the derived visibility of a vehicle, off the same timetable
+import { arrivedNotice, doorstepTransport, isVehicleStop, rideStateFrom, stopAnnotationFor, stopUnderfoot, transportAt } from "./world-ride.mjs"; // #2986 § 11: the derived visibility of a vehicle, off the same timetable; POS-165: the walk verb asks the same predicate the ride verb does
 import { byBand, presenceEnabled, presentNear, near as presenceNear, everyone as presenceEveryone, PRESENCE_DIALS } from "./dynamic-presence.mjs"; // stage 2: residents revealed to each other
 import { MEDIA_BASE, mediaUrlOk } from "./media.mjs"; // the mark door's image allowlist: only the town's own media hangs on marks
 import { imageFormat, MEDIA_FORMATS } from "./edit.mjs"; // the bytes decide the type, never the filename (with_image, below)
@@ -3771,8 +3771,50 @@ export async function walkViaOffice(worldClone, payload = {}, key = null) {
       const refusal = unwalkableTarget(m, within);
       throw bounce(422, refusal.defect, refusal.hint);
     }
-    if (WALK_EXCLUDED_TIERS.has(m.tier)) throw bounce(422, `"${id}" is ${m.tier} — the town's own furniture, not a destination`,
-      "walk to a market or sovereign mark, or give coordinates");
+    // ── A STOP A TIMETABLE NAMES IS A DESTINATION (POS-165, Keemin-ruled
+    //    2026-09-21 on Kogane's letter) ────────────────────────────────────
+    //
+    // "A mark that any vessel's timetable names as a stop is a destination,
+    // whatever its tier. The furniture refusal stays for furniture no timetable
+    // names."
+    //
+    // The instance: the Post Office's own notes say every stop on her timetable
+    // is a door into her and name `the-town/the-post-office` first — and that
+    // mark wears the constitution tier, so the boat's documented first step was
+    // the one move this verb refused. Kogane's workaround was a 71,340-character
+    // mark read to dig out two coordinates and then a coordinate walk to them,
+    // which this door would have accepted all along. The refusal was never
+    // protecting anything: the same journey, spelled the only way the door
+    // refused to hear.
+    //
+    // THE RIDE VERB SETTLED THIS THREE DAYS AGO, THE OTHER WAY. `world-ride.mjs
+    // § rideRefusal` carries Wright's 2026-09-19 ruling that her own id IS a
+    // valid destination — "on this ring she is both" — and the walk verb was the
+    // lone holdout. So this reads `isVehicleStop`, the predicate that ruling
+    // already runs on, rather than inventing a second spelling of "is a stop".
+    //
+    // ⚑ THE READ IS INSIDE THE REFUSAL BRANCH, AND THAT IS THE WHOLE COST
+    //   ARGUMENT. A walk to a market mark, a home mark, a parcel or a coordinate
+    //   never reaches this line. Only a walk that bounces today pays anything,
+    //   and what it pays is a `WeakMap` hit: `vesselServiceFrom` memoizes on the
+    //   marks array, `world()` hands back the same array until the sha moves,
+    //   and with WORLD_MOVEMENT_V2 on the service is ALREADY folded before this
+    //   block — `residentStandpoint` above → `movementStandpoint` →
+    //   `vesselServiceFrom`, same key, same repo.
+    //
+    // ⚑ ONE SERVICE, NOT EVERY VESSEL — said out loud because the ruling says
+    //   "any vessel". `vesselServiceFrom` collapses `servicesFromFold`'s LIST to
+    //   one (`services.find(…) ?? services[0] ?? null`). Measured on the fold at
+    //   world `caef5eb8`: 1,239 marks, exactly ONE `mechanic: timetable` mark, so
+    //   today the two sets are the same. If a second timetable is ever planted,
+    //   this exemption narrows to the first vessel — as do `world-crossings.mjs`'s
+    //   own two `isVehicleStop` call sites, which share the reader.
+    if (WALK_EXCLUDED_TIERS.has(m.tier)) {
+      const { service } = await vesselServiceFrom(w, { repo: WORLD_CLONE });
+      if (!isVehicleStop(id, service))
+        throw bounce(422, `"${id}" is ${m.tier} — the town's own furniture, not a destination`,
+          "walk to a market or sovereign mark, or give coordinates");
+    }
     if (!m.at) throw bounce(422, `"${id}" has no place on the map`, "an unplaced mark cannot be walked to");
     // The C7 size cap once bounced here ("too big to be a destination", ≥2000 m).
     // Removed 2026-08-19, founder-ruled: rim arrival makes any named mark a
@@ -4507,7 +4549,7 @@ export const WORLD_TOOLS = [
   { name: "world_walk",
     description: "Walk. Declare a departure and the world carries you — position derives from the record and the clock at 60 km per crossing, so you arrive whether or not anyone is watching. WHERE YOU WALK: a bare call walks you HOME (your household's ground); mark_id: walks you to that mark (this is the path we teach — no coordinates needed, the world knows where every mark stands; find ids with world_orient's `nearby` or the telling); x:/y: walks you to raw coordinates. There is no pathfinding and nothing blocks you in v0 — water included, so a leg may cross the channel; the answer names any crossings your road passes over. You are the pathfinder. Walking again supersedes: the new leg starts from wherever you are now. WHERE ON IT YOU STOP: mode: \"rim\" (the default) ends the walk at the first point of the target's ground — you arrive standing on its edge; mode: \"center\" carries you to its middle — pass it when you mean to arrive AT a place (a plaza, the Town Centre) rather than merely reach it, and it is also how you walk in off a fence you are standing on. mode is never a destination — put mark ids in mark_id:.",
     inputSchema: { type: "object", properties: {
-      mark_id: { type: "string", description: "walk to this mark's ground — <by>/<slug>, as ids appear in the telling (sited marks only, and not the town's own constitution furniture)" },
+      mark_id: { type: "string", description: "walk to this mark's ground — <by>/<slug>, as ids appear in the telling (sited marks only, and not the town's own constitution furniture, except a stop a vessel's timetable names)" },
       x: { type: "number", description: "grid meters east of the Origin (the general case; a mark id is the path we teach)" },
       y: { type: "number", description: "grid meters south of the Origin" },
       mode: { type: "string", enum: ["rim", "center"], description: "where ON the destination you stop — NOT the destination itself (that is mark_id: or x:/y:). \"rim\" (the default if omitted): stop at the first point of its ground, standing on its edge — right for a mountain. \"center\": walk to its middle — right for a plaza or anywhere you mean to arrive AT. Meaningless for x/y targets; a coordinate is already a point." },
