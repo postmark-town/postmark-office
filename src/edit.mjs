@@ -926,11 +926,90 @@ export function imageFormat(bytes, allow = RASTER_FORMATS) {
   return { ext, mediaType };
 }
 
-export function updateProfileAvatar(args, key, db, clone) {
+// ── THE WHOLE DECODE (POS-150, 2026-09-20) ──────────────────────────────────
+//
+// Everything above this line reads the EDGES of a file: the base64 enclosure,
+// the magic bytes at the front, the closing marker at the back. Nothing had
+// ever read the middle, and thirteen originals on the media shelf are what
+// that costs — a valid header and a valid end marker with a corrupt body
+// between them, hashed, stored, and served as images to every viewer
+// (postmark#3022). Their sizes run 68 B to 51 KB against 715 KB for a real
+// upload, because they are what an LLM client produces when it is asked to
+// emit an image through its own output: a header it knows and a body it
+// invented.
+//
+// So the office now asks the only question that actually settles it: DOES THIS
+// DECODE. Not "does it start like a JPEG" — does libvips produce pixels for it,
+// all the way down. A file that cannot answer yes is refused before a hash is
+// taken, before a byte reaches storage, before a ledger row exists.
+//
+// This is ONE OWNER on purpose. Every door that admits image bytes asks it —
+// the avatar door, the home-image door and the media door — and they ask it
+// through this function, never a second copy with its own idea of whole. It
+// runs LAST, after the format sniff, because the sniff is what tells us which
+// decoder to blame and gives the refusal its noun.
+let sharpModule = null;
+export const loadSharp = () => (sharpModule ??= import("sharp").then((m) => m.default));
+
+// How far the picture actually got, for the refusal to say out loud. Refusal
+// path only — it costs a second decode, and it is never on the road a good
+// image travels.
+//
+// THE INSTRUMENT, NAMED: libvips fills the rows it could not decode with a
+// single repeated byte, so the first row that is BOTH uniform and identical to
+// the final row is where the picture stops. Measured against the Lichtergrund's
+// bytes this answers 33 of 256; postmark#3022 records 31, and the two disagree
+// by two rows because they are not the same measurement — the issue counted
+// rows it judged clean, this counts rows before the fill begins. It is reported
+// as what it is, and it is best-effort: four of the thirteen cannot answer at
+// all, because a header that will not parse has no rows to count.
+async function decodedRows(bytes) {
+  try {
+    const sharp = await loadSharp();
+    const { data, info } = await sharp(bytes, { failOn: "none" }).raw().toBuffer({ resolveWithObject: true });
+    const { width, height, channels } = info;
+    const stride = width * channels;
+    if (!stride || !height) return null;
+    const last = data.subarray((height - 1) * stride, height * stride);
+    if (new Set(last).size !== 1) return null; // no fill run — nothing to read
+    for (let i = 0; i < height; i += 1) {
+      const row = data.subarray(i * stride, (i + 1) * stride);
+      if (new Set(row).size === 1 && row.equals(last)) return { rows: i, of: height };
+    }
+    return null;
+  } catch { return null; }
+}
+
+/**
+ * Decode `bytes` whole, or bounce 422. `ext` is what imageFormat already
+ * sniffed — it names the format in the refusal and is never re-derived here.
+ * Returns nothing: the answer is "it decoded", and the bytes are unchanged.
+ */
+export async function decodeWhole(bytes, ext, what = "image") {
+  const sharp = await loadSharp();
+  try {
+    await sharp(bytes).raw().toBuffer();
+    return;
+  } catch (e) {
+    const got = await decodedRows(bytes);
+    const howMuch = got === null
+      ? "the header itself does not parse"
+      : got.rows === 0
+        ? "not one row of it decoded"
+        : `the picture stops at row ${got.rows} of ${got.of}`;
+    const why = String(e?.message ?? e).replace(/\s+/g, " ").trim().slice(0, 120);
+    throw bounce(422,
+      `that ${what} is not a whole ${ext.toUpperCase()} — ${bytes.length} bytes arrived and ${howMuch}`,
+      `nothing was stored; re-export the image from something that can open it and upload it again (the decoder said: ${why})`);
+  }
+}
+
+export async function updateProfileAvatar(args, key, db, clone) {
   const { handle } = args;
   scope(handle, key);
   const bytes = decodeImage(args.image, MAX_IMAGE, "avatar"); // size first
   const { ext, mediaType } = imageFormat(bytes); // then magic bytes + enclosure
+  await decodeWhole(bytes, ext, "avatar"); // then the middle — POS-150
   void args.type; // caller-declared MIME is deliberately never authoritative
 
   pullIfPush(clone);
@@ -1128,11 +1207,12 @@ function replacedPaneWarning(handle, prior, priorCommit) {
 // naming an explicit file. Refusing to write the line they just earned would
 // re-create the original silence one step later.
 
-export function updateHomeImage(args, key, db, clone) {
+export async function updateHomeImage(args, key, db, clone) {
   const { handle } = args;
   scope(handle, key);
   const bytes = decodeImage(args.image, MAX_IMAGE, "home image");
   const { ext, mediaType } = imageFormat(bytes);
+  await decodeWhole(bytes, ext, "home image"); // POS-150 — the middle, not just the edges
   void args.type; // caller-declared MIME is courtesy only, never authoritative
 
   // The resident names their own art. Default is honest and boring rather than

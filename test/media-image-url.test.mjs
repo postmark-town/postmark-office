@@ -75,11 +75,17 @@ const redirectTo = (loc) => ({ status: 302, ok: false, headers: new Headers({ lo
 
 // ── the whole point: the new lane lands exactly where the old one lands ──────
 
-test("URL ≡ base64: the same bytes answer with the same URL and are charged once", async () => {
+// Was "URL ≡ base64" until POS-150 retired the base64 lane. The equivalence it
+// proved was never really about base64 — it was that the address is content-
+// addressed and the quota charges the FILE, not the door. Two different URLs
+// answering the same bytes prove exactly that, and they prove it against a
+// lane that still exists.
+test("two URLs, the same bytes: one address, one charge", async () => {
   const db = odb();
   const { calls, put } = stubPut();
   const url = "https://cdn.example.com/photo.png";
-  const { fetchImpl } = fetchSaying({ [url]: ok200(PNG) });
+  const mirror = "https://cdn.example.com/copy.png"; // same host: the stub DNS knows one name, and the point is the BYTES
+  const { fetchImpl } = fetchSaying({ [url]: ok200(PNG), [mirror]: ok200(PNG) });
 
   const viaUrl = await uploadMedia({ image_url: url }, key(), db, { put, fetchImpl, lookup: PUBLIC_DNS });
   assert.match(viaUrl.url, new RegExp(`^${MEDIA_BASE.replace(/[/.]/g, "\\$&")}/media/testers/[0-9a-f]{64}\\.png$`));
@@ -89,10 +95,10 @@ test("URL ≡ base64: the same bytes answer with the same URL and are charged on
   assert.equal(viaUrl.quota.used, 70);
   assert.equal(originals(calls).length, 1, "one object written");
 
-  const viaB64 = await uploadMedia({ image: PNG_B64 }, key(), db, { put });
-  assert.equal(viaB64.url, viaUrl.url, "content-addressed: the lane cannot change the address");
-  assert.equal(viaB64.already, true);
-  assert.equal(viaB64.quota.used, 70, "one charge for one file, whichever door it came through");
+  const viaMirror = await uploadMedia({ image_url: mirror }, key(), db, { put, fetchImpl, lookup: PUBLIC_DNS });
+  assert.equal(viaMirror.url, viaUrl.url, "content-addressed: which URL the bytes were fetched from cannot change the address");
+  assert.equal(viaMirror.already, true);
+  assert.equal(viaMirror.quota.used, 70, "one charge for one file, however it arrived");
   assert.equal(originals(calls).length, 1, "and storage was written exactly once");
 });
 
@@ -297,18 +303,25 @@ test("bytes are still the law on the URL lane: an HTML page fetched as an image 
 
 // ── one image per call, and the bounce that teaches the order ───────────────
 
-test("exactly one input, and the empty call names the lanes cheapest-first", () => {
+test("exactly one input, the empty call names the lanes cheapest-first, and base64 is gone by name", () => {
   assert.equal(mediaSourceOf({ image_url: "https://x/y.png" }), "image_url");
-  assert.equal(mediaSourceOf({ image: PNG_B64 }), "image");
   assert.equal(mediaSourceOf({ image_url: "https://x/y.png", image: "" }), "image_url", "an empty string is not an input");
 
-  assert.throws(() => mediaSourceOf({ image: PNG_B64, image_url: "https://x/y.png" }),
+  assert.throws(() => mediaSourceOf({ image_path: "HOME/a.png", image_url: "https://x/y.png" }),
     (e) => e.code === 422 && /send one image, not 2/.test(e.defect));
+
+  // POS-150. `image` is not an input any more, and the refusal for one says so
+  // rather than pretending no image was sent.
+  const legacy = (() => { try { mediaSourceOf({ image: PNG_B64 }); return null; } catch (e) { return e; } })();
+  assert.equal(legacy.code, 422);
+  assert.match(legacy.defect, /no longer takes inline base64/);
+  assert.ok(legacy.hint.includes("image_path") && legacy.hint.includes("image_url"),
+    "one sentence, both doors that work");
 
   const empty = (() => { try { mediaSourceOf({}); return null; } catch (e) { return e; } })();
   assert.equal(empty.code, 422);
-  assert.ok(empty.hint.indexOf("image_url") < empty.hint.indexOf("base64"), "the hint puts base64 last");
-  assert.match(empty.hint, /costs your model the whole file in tokens/, "and says WHY it is last");
+  assert.ok(empty.hint.indexOf("image_path") < empty.hint.indexOf("image_url"), "the hint teaches the cheapest lane first");
+  assert.doesNotMatch(empty.hint, /base64/, "the empty call no longer advertises a door that is closed");
 });
 
 test("the gates still stand in front of the URL lane", async () => {
