@@ -379,7 +379,16 @@ function render(plan, { dbName, user, sqlitePath, mode, from, to, displaced }) {
   return lines.join(NL);
 }
 
-if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split(/[\\/]/).pop())) {
+// THE REALPATH COMPARE, not the basename one (`await-clearing.mjs` § isMain).
+// A basename guard is FALSE when the entry reaches this file through a Windows
+// junction — the ESM loader realpaths the entry and `process.argv[1]` does not
+// — so the tool would exit 0 having done nothing. `cli-guard.test.mjs` drives
+// both faces of this guard through a junction, which is the arm that matters,
+// and its roster is what caught this file carrying the fragile form.
+const isMain = process.argv[1]
+  && (await import("node:fs")).realpathSync(process.argv[1]).replace(/\\/g, "/").endsWith("/backfill-departures.mjs");
+
+if (isMain) {
   const apply = flag("apply"), verify = flag("verify"), json = flag("json"), quiet = flag("quiet");
   if (apply && verify) { console.error("--apply and --verify are two different questions; ask one"); process.exit(2); }
   const mode = apply ? "APPLY" : verify ? "VERIFY" : "dry-run";

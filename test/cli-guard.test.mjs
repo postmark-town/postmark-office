@@ -155,6 +155,8 @@ const ROSTER = {
   "deploy/welcome-pass.mjs": { args: [], code: 1, needle: "--town <town-clone> is required" },
   // world2/tools/
   "world2/tools/await-clearing.mjs": { args: [], env: NO_PG, code: 2, needle: "--since <iso8601> is required" },
+  // No --sqlite: stops on usage before any sqlite open or Postgres connect (POS-154).
+  "world2/tools/backfill-departures.mjs": { args: [], env: NO_PG, code: 2, needle: "--sqlite <dynamic.db> is required" },
   "world2/tools/backfill-register.mjs": { args: [], env: NO_PG, code: 2, needle: "--class must be one of" },
   "world2/tools/escrow-ingest.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: escrow-ingest.mjs --town-repo <checkout>" },
   "world2/tools/falsifier-conversations-equality.mjs": { args: [], env: NO_PG, code: 2, needle: "--voices-log <path> is required" },
