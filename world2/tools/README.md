@@ -2311,10 +2311,21 @@ and the receipt printer in `guard-falsifier-report.mjs`; both are workflow
 machinery, listed by no unit.
 
 **The roles are created nowhere else.** No file in this repo `CREATE ROLE`s
-anything — 002 GRANTs to five names the box made by hand. The workflow's list
-(`world2_owner`, `office_api`, `clearing_job`, `law_ingester`,
-`snapshot_reader`) is derived from 002's grantees and is now the only written
-record of them.
+anything — the migrations GRANT to names the box made by hand. The workflow's
+list (`world2_owner`, `office_api`, `clearing_job`, `law_ingester`,
+`snapshot_reader`, `stance_reader`) is derived from the grantees and is now the
+only written record of them.
+
+**`stance_reader` is the sixth name and NOT a sixth pen** (023_stance_reader.sql,
+2026-09-22, RULING 2). It holds `SELECT` on `claims` and writes nothing, so the
+three-pens law is untouched and 003's first query cannot see it — which is why
+003 grew a SECOND query, *who may see a draft*, enumerating the policy carve
+instead of a grant. It is in the workflow's list because 023 GRANTs to it and
+023 refuses by name when the role is absent, so a floor run without it fails the
+migration rather than skipping it quietly. Its credential reaches the office as
+`WORLD2_STANCE_URL` and is read in exactly one place
+(`src/world2-acts.mjs § stanceQuery`), by exactly one reader —
+`worldForStances`, the stance candidate list.
 
 **`world2_dev` is SEEDED, and G5 is the reason.** G1–G4 and G6 write their own
 population and are the same equality on any machine. G5 reads a real store —
@@ -2458,6 +2469,23 @@ or compared nothing to nothing and called it green.
   place a sketch becomes visible to somebody who did not write it", which
   the-late-welcome asks for. Under 007 that is not narrowable for `office_api`,
   it is unrepresentable. Two laws collide and which gives way is a ruling.
+
+  **RULED, 2026-09-22 (Wright, G1 overnight RULING 2; POS-195).** Neither gives
+  way. A THIRD credential is cut — `stance_reader`, `world2/schema/023` — holding
+  SELECT on `claims` through a policy carve that admits drafts to that role
+  alone, used by exactly one reader through `WORLD2_STANCE_URL`. 007 stays
+  general for `office_api` and every other role; the-late-welcome stays true.
+  What moved is the RECORD the fact is read from, not the boundary: the
+  derivation's output carries a candidate's existence, standing and weight, and
+  `claims.body` is not in its column list — so a draft's text is never fetched.
+  Two falsifiers hold that (this file's own § the stance carve, and
+  `test/stance-candidates-read-the-store.test.mjs § THE SENTINEL`).
+
+  ⚠ **It is a behaviour change, and the ruling's own wording understates it.**
+  The 1.0 read did NOT carry only existence/standing/weight: tier 2 published a
+  120-character body excerpt as `says` and tier 3 carried the body WHOLE. Those
+  are now omitted for an unpublished candidate. Reversible in one word — add
+  `body` to the column list — and the sentinel test reds when you do.
 - **`path` is null unless injected.** 2.0 has no mark tree, and a guessed filing
   is worse than a missing one: gate A refuses a mark filed at the wrong place at
   the next lint, so a plausible guess would turn an absent field into a refused

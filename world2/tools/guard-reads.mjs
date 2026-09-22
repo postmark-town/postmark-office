@@ -1216,7 +1216,10 @@ export const DISCLOSURES = Object.freeze({
     "there is no household to name here. 1.0's `worldForStances` deliberately surfaces another household's " +
     "sketch when it overlaps ground you hold — 'the ONE place a sketch becomes visible to somebody who did not " +
     "write it', which the-late-welcome asks for. Under 007 that is not narrowable, it is unrepresentable for " +
-    "office_api. Which law gives way is a ruling, and it is not this port's to make.",
+    "office_api. Which law gives way is a ruling, and it is not this port's to make. RULED 2026-09-22 " +
+    "(POS-195, G1 overnight RULING 2): NEITHER gives way — a third credential, `stance_reader` " +
+    "(world2/schema/023), reads that ONE list through a policy carve admitting drafts to that role alone. " +
+    "This read is unchanged and office_api stays blind to other households' drafts, here and everywhere.",
   holdings_source:
     "holdings answer from `acts` alone. Measured 2026-08-28: `acts` holds all 43 attachment events the world " +
     "repo's STATE/log carries at settlement/S47 and S50, and the `attachments` tables in BOTH the lab office " +
