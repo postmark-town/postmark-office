@@ -75,8 +75,16 @@ import { serializeRegistry, serializePins } from "./residency.mjs";
 // order and skips what the row does not carry; every reader above checks its
 // input against them. They are the file's grammar, and they are the only place
 // that grammar is written down.
+//
+// `formerly` (POS-158, migration 020) sits LAST, after `declared_by`, and it is
+// the one key in this template that an EMPTY value must not render. 0/118 live
+// rows carry it; a house that renders `"formerly": []` would diff, and 118 of
+// them would rewrite the whole file on the first crossing. So `isAbsent` is not
+// enough for this one column and `isEmptyList` below joins it — an empty array
+// and a NULL are the same fact here ("this house has no former key"), and both
+// render as no key at all, exactly as a NULL `name` does.
 export const HOUSEHOLD_KEYS = Object.freeze([
-  "name", "human", "accounts", "residents", "since", "member_of", "declared_by",
+  "name", "human", "accounts", "residents", "since", "member_of", "declared_by", "formerly",
 ]);
 export const PIN_KEYS = Object.freeze([
   "login", "id", "pinned", "renamed", "note", "retired", "renamed_to",
@@ -91,6 +99,18 @@ const PIN_COLUMN = Object.freeze({
 });
 
 const isAbsent = (v) => v === undefined || v === null;
+
+// THE SECOND ABSENCE, and it belongs to exactly one column. `formerly` is
+// `text[] NOT NULL DEFAULT '{}'`, so the store never hands back a NULL for it —
+// it hands back `[]`, which `isAbsent` would happily render as a present empty
+// key on all 118 houses. An empty alias list is not a value the file has ever
+// carried, so it renders as nothing. Named as its own predicate rather than
+// folded into `isAbsent` because widening `isAbsent` would also silence an
+// empty `residents` or `accounts`, and a house with no residents IS a diff
+// somebody needs to see.
+const EMPTY_LIST_KEYS = new Set(["formerly"]);
+const rendersAsAbsent = (key, v) =>
+  isAbsent(v) || (EMPTY_LIST_KEYS.has(key) && Array.isArray(v) && v.length === 0);
 
 /**
  * The two parsed files -> the rows the store holds.
@@ -134,6 +154,10 @@ export function rowsFromRegistry(householdsJson, pinsJson) {
       since: rec?.since ?? null,
       member_of: rec?.member_of ?? null,
       declared_by: rec?.declared_by ?? null,
+      // The fold's side of the empty-list rule: a file with no `formerly` key
+      // folds to the column's own default, never to NULL, so a seed and a
+      // fresh INSERT put the same value in the same column.
+      formerly: rec?.formerly ?? [],
     });
   }
 
@@ -171,7 +195,7 @@ export function registryFromRows(rows) {
     const rec = {};
     for (const k of HOUSEHOLD_KEYS) {
       const v = r[k];
-      if (isAbsent(v)) continue;
+      if (rendersAsAbsent(k, v)) continue;
       rec[k] = v;
     }
     households[r.slug] = rec;

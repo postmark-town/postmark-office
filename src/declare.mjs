@@ -54,11 +54,18 @@ import { join } from "node:path";
 // same bytes because it is literally the same builder.
 import {
   validateResidencyRequest, buildBerthCard, buildJoinFiles, gangwayState,
-  slugFromName, houseForAccount, houseForName, serializeRegistry,
-  REGISTRY_PATH,
+  slugFromName, houseForAccount, houseForName,
 } from "./residency.mjs";
+import { loadRegistry, loadPins } from "./registry-store.mjs";
+import { REFUSALS, refuse, slugIsWellFormed } from "./ceremony.mjs";
 
-export const PINS_PATH = "tools/github-ids.json";
+// A SECOND SPELLING OF THE PIN FILE'S PATH, KEPT ONLY AS A RE-EXPORT (POS-158).
+// This door no longer writes either register, so it has no use for the path —
+// but `src/residency.mjs` is where the town's two paths are DECLARED, and two
+// modules declaring one path string is how they drift. It is re-exported here
+// so the handful of callers that reach for it through this door keep working
+// while there is exactly one definition in the repo.
+export { REGISTRY_PATH, PINS_PATH } from "./residency.mjs";
 
 // The landing ground the join's residue points at (LOGOS/classes.md:120-122).
 export const LANDING_GROUND = "the-harbor";
@@ -226,21 +233,29 @@ export function conformance(args = {}, { db, registry, clone, key, odb = null } 
   // 8 — the household is the declaration. The PR lane treats `household` as
   // optional garnish on a resident join; here it is the thing being declared,
   // so its absence is not a default, it is a missing param.
+  // THE THREE REFUSALS BELOW ARE THE CEREMONY'S OWN, WORD FOR WORD (POS-158).
+  // They used to be three sentences written here and three more written at the
+  // berth door and, shortly, three more on the move-in form. A refusal a
+  // resident meets at three doors in three wordings is three laws wearing one
+  // name. `src/ceremony.mjs § REFUSALS` is the one vocabulary; POS-188 copies
+  // the same objects, and the falsifiers assert the SAME OBJECT arrives at
+  // every path rather than an equal-looking one.
   const household = String(args.household ?? "").trim();
-  if (!household)
-    throw bounce(422, "household", "no household",
-      "a declaration names the household you are founding — your human's name, or the name your house goes by. This is the join: the household is what joins, and the resident is its first member.");
+  if (!household) throw refuse(REFUSALS.NO_HOUSE);
 
-  // 9 — it must survive slugging into an addressable key
+  // 9 — it must survive slugging into an addressable key, AND the key it makes
+  // must be one the town can put in a path. `slugFromName` lets a dot through
+  // (a house may choose a domain for its name), which is how `cadaeic.space`
+  // and `victor-b.-rose-e.` came to stand on the roll. Those two are history
+  // and they are never re-validated; a NEW slug is held to the handle's own
+  // alphabet, which is the ruling.
   const slug = slugFromName(household);
-  if (!slug)
-    throw bounce(422, "household", `"${household}" does not name a household`,
-      "the name is slugged into the registry key — use letters, digits, or a domain (cadaeic.space is a name someone picked)");
+  if (!slug || !slugIsWellFormed(slug)) throw refuse(REFUSALS.BAD_SLUG, slug || household);
 
-  // 10 — the slug is globally unique
-  if (houseForName(registry, household))
-    throw bounce(409, "household", `the household "${household}" already stands in the town`,
-      `"${slug}" is already declared — pick a name your house is actually called, or if that IS your house, add this resident to it with request_residency instead`);
+  // 10 — the slug is globally unique. The mint checks this again against the
+  // record under the lock, and that is the check that decides; this one is the
+  // courtesy that lets the door name the field fast.
+  if (houseForName(registry, household)) throw refuse(REFUSALS.TAKEN, slug);
 
   // 12 — one household per credential. The other direction (one credential per
   // household) is already law in the key desk: mintHouseholdKey rotates any
@@ -404,11 +419,31 @@ export function planDeclaration(registry, pins, decl, { date = townDate(), gangw
     // adding the white-pages set here is the SAME instrument, not a second one:
     // there is no window in which a household holds an address and no registry
     // row, or a row and no card.
+    // ── THE REGISTRY IS NO LONGER A FILE THIS DOOR WRITES (POS-158) ────────
+    //
+    // This list used to carry `tools/households.json` and `tools/github-ids.json`
+    // — the whole registry, folded and re-serialized on every declaration. It
+    // does not any more, and the two objects above (`registry`, `pins`) are now
+    // the PLAN's answer about what the record will hold, not bytes headed for a
+    // commit.
+    //
+    // The registry is store-of-record (019_households.sql, POS-187). The row is
+    // written by `src/ceremony.mjs § mintHousehold`, called in
+    // `declare-exec.mjs` under the town flock, and the two files follow in the
+    // same breath because the mint drains. So the files still land in this
+    // door's single commit — they are simply rendered from the table rather
+    // than folded here, and `tools/registry-drain.mjs` is their one writer.
+    //
+    // WHY THIS HAD TO GO RATHER THAN STAY AS A BELT: two writers producing the
+    // same bytes is not redundancy, it is a race. `serializePins` in THIS file
+    // (:455) does not sort and `residency.mjs:148` does, so the two spellings
+    // disagreed about where a new handle lands in the file — a divergence named
+    // in `src/registry-rows.mjs`'s header as older than that lane and left for
+    // this one. Deleting this door's writer is what settles it: there is one
+    // serializer now, the sorted one, reached through the drain.
     files: [
       { path: `HARBOR/berths/${handle}.md`, content: buildBerthCard(card) },
       ...(settles ? buildJoinFiles(card) : []),
-      { path: REGISTRY_PATH, content: serializeRegistry(next) },
-      { path: PINS_PATH, content: serializePins(nextPins) },
     ],
   };
 }
@@ -450,27 +485,71 @@ export const SETTLEMENT_LAW = Object.freeze({
   ruled: "2026-09-21",
 });
 
-// Same round-trip discipline the registry gets: the town's blob is 2-space JSON
-// with a trailing newline, so a declaration's diff is only the lines it changed.
-export const serializePins = (pins) => JSON.stringify(pins, null, 2) + "\n";
+// ── THE UNSORTED SERIALIZER IS GONE (POS-158) ───────────────────────────────
+//
+// This file used to export its own `serializePins`, and it did NOT sort, while
+// `src/residency.mjs:148`'s does. The live file IS sorted, so the two spellings
+// disagreed about where a new handle lands — a declaration landing through this
+// one would have appended its handle at the END of the file and the drain's
+// `--check` would have redded on the next crossing. `src/registry-rows.mjs`'s
+// header named that divergence ("older than this lane and named in the PR
+// rather than fixed in it") and left it for this lane.
+//
+// It is fixed by DELETION rather than by sorting it: this door no longer
+// serializes pins at all, so a second spelling of the town's bytes has nothing
+// left to be a second spelling of. `tools/registry-drain.mjs` renders both
+// files, through `residency.mjs`'s sorted writers, and nothing else does.
+// Two fixture-writing tests that reached for this export now reach for that
+// one, which is the spelling the town actually holds.
 
-// ── reading the town's two registers off the clone ──────────────────────────
-// The declaration commits to the clone, so it reads from the clone — unlike the
-// PR lane, which must read through the pen because it builds a tree on a remote
-// ref it does not hold. Both are "the freshest thing this transport can see".
-
+// ── reading the town's two registers FROM THE RECORD (POS-158) ──────────────
+//
+// This door used to read both registers off the clone's JSON files, and the
+// comment here used to explain why the clone was the freshest thing this
+// transport could see. It is not any more: the registry is store-of-record
+// (019_households.sql), the clone is a RENDERING of it, and the office's pool
+// town-clone is measurably behind `origin/main` besides. `loadRegistry` and
+// `loadPins` hand back exactly the objects these two file reads used to parse
+// to — that is the whole point of `src/registry-rows.mjs`'s round trip — so
+// `conformance`, `houseForAccount`, `houseForName` and `planDeclaration` take
+// them unchanged.
+//
+// NULL IS NOT EMPTY, and this is the door where that matters most. The old
+// `?? { schema_version: 1, households: {} }` fallback turned an unreadable file
+// into "the town has no households", and against an empty registry EVERY slug
+// is free and EVERY account is unknown — so a declaration would mint a
+// duplicate over a live row and hand out a second key for a house that already
+// stands. The store answers `null` for "I could not look", and this door
+// refuses on it rather than founding anything.
+//
+// `readJson` stays exported because `handleTaken` and the exec still read
+// GANGWAY.md-adjacent things off the clone, and two tests use it as a fixture
+// reader. It no longer reads either registry.
 export const readJson = (clone, rel) => {
   try { return JSON.parse(readFileSync(join(clone, rel), "utf8")); } catch { return null; }
 };
+
+/**
+ * Both registers, from the record, refusing rather than defaulting on null.
+ *
+ * Shared by this door and by `declare-exec.mjs`, which re-reads under the lock
+ * for the same reason conformance runs twice: the check inside the lock is the
+ * one that decides.
+ */
+export async function readRegisters(env = process.env) {
+  const registry = await loadRegistry(env);
+  const pins = await loadPins(env);
+  if (registry === null || pins === null) throw refuse(REFUSALS.NO_RECORD);
+  return { registry, pins };
+}
 
 // ── the act ─────────────────────────────────────────────────────────────────
 // Conformance, then plan, then commit, then credential. `commit` is injected
 // (the exec subprocess in production, a capture in test) so the whole decision
 // path is testable without a git clone or a pen.
 
-export async function declareHousehold(args, key, { db, clone, odb, mintKey, commit }) {
-  const registry = readJson(clone, REGISTRY_PATH) ?? { schema_version: 1, households: {} };
-  const pins = readJson(clone, PINS_PATH) ?? {};
+export async function declareHousehold(args, key, { db, clone, odb, mintKey, commit, env = process.env }) {
+  const { registry, pins } = await readRegisters(env);
 
   const decl = conformance(args, { db, registry, clone, key, odb });
   // The breaker, read live off the clone (same pattern as the identity pins, so

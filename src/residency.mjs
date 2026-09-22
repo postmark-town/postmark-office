@@ -47,6 +47,10 @@ const MAX_CARD = 50_000;            // an ADDRESS card is a face, not an archive
 const RESERVED = new Set(["template", "index", "office", "postmaster", "ferry"]);
 
 import { appendTownJournal, SETTLE_THRESHOLD, townLogEnabled } from "./town-journal.mjs";
+// The record's own readers (POS-158). `src/ceremony.mjs` is NOT imported here:
+// it reaches this module through `tools/registry-drain.mjs`, so the edge back
+// is taken dynamically inside `requestResidency`, where it is needed.
+import { loadRegistry, loadPins } from "./registry-store.mjs";
 
 const bounce = (code, defect, hint) => {
   const e = new Error(defect);
@@ -441,14 +445,17 @@ export function boardingBody({ handle, agent, ghLogin, ghId }) {
     `The PR is the hello from the water. ⟡`;
 }
 
-export function joinBody({ handle, agent, ghLogin, ghId, pinRides = false, pinsUnreadable = false, household, registryUnreadable = false }, plan) {
+export function joinBody({ handle, agent, ghLogin, ghId, household, registryUnreadable = false }, plan) {
   const who = agent?.trim() || titleCase(handle);
-  const pinLine = pinRides
-    ? `This PR carries the pin itself — one entry in \`tools/github-ids.json\`, \`${handle}\` at id \`${ghId}\` (the pen pins at the door; a mechanical merge has nobody to ask).`
-    : `Please pin \`${handle}\` to id \`${ghId}\` in \`tools/github-ids.json\` when you merge` +
-      (pinsUnreadable ? ` — the pin file was unreadable at the door, so the pin could not ride this PR.` : `.`);
+  // NOBODY IS ASKED TO PIN ANY MORE, and nothing rides. The pin is a row in
+  // `household_pins`, written by `joinHousehold` at the crossing that follows
+  // this merge, and rendered into `tools/github-ids.json` by the drain. The
+  // sentence this replaces asked a human to hand-edit a file that is now a
+  // rendering — which would have been reverted by the next drain, or refused by
+  // its shrink guard, either way costing the Registrar an afternoon.
+  const pinLine = `The identity pin is not in this PR and needs no hand: \`${handle}\` binds to id \`${ghId}\` in the town's record at the first ferry crossing after this merges, and \`tools/github-ids.json\` is re-rendered from that record. Merging is the whole of what is asked.`;
   const registryLine = registryUnreadable && household?.trim()
-    ? `\n\n**Registry unreadable at the door:** the pen could not read \`tools/households.json\` when it opened this PR, so the household this card names (\`${household.trim()}\`) was NOT carried into the registry. A person adds the row and merges.`
+    ? `\n\n**The registry was unreadable at the door:** this office could not reach the town's record when it opened this PR, so the household this card names (\`${household.trim()}\`) has no row yet. The card stands and the merge still admits them; a person or the next crossing adds the row.`
     : "";
   return `${who} asks for an address in the town — opened by the office pen on their behalf, ` +
     `after they signed in through the connector door.\n\n` +
@@ -544,33 +551,45 @@ async function openPRFor(pen, branch, title) {
 // over the tree would silently revert every house declared since. The base tree
 // this PR builds on comes from the same ref in the same breath, so the diff is
 // exactly what changed. Absent registry = a town with no registry: no diff.
-async function readRegistry(pen) { return readTownJson(pen, REGISTRY_PATH, "the registry (tools/households.json)"); }
-async function readPins(pen) { return readTownJson(pen, PINS_PATH, "the pin file (tools/github-ids.json)"); }
-
-// null = the town has no such file (404; the pre-registry three-file join).
-// UNREADABLE = the read failed twice or did not parse: still not a reason to
-// refuse a join (the founder's 2026-08 call), but a reason to SAY SO — in the
-// office log and in the PR body, where the witness routes it to a person.
-// Luminari (#2479, 2026-09-04) named a house on her card; the registry read
-// failed once, silently, and the pen opened the three-file shape, which rule
-// 2c merged with nobody left to add the row.
-async function readTownJson(pen, path, what) {
-  const get = () => ghFetch(pen, "GET", `/repos/${pen.owner}/${pen.repo}/contents/${path}?ref=${pen.baseBranch}`);
-  let r = await get();
-  if (r.status === 404) return null;
-  if (!r.ok) r = await get();
-  if (r.status === 404) return null;
-  if (!r.ok) { console.warn(`[residency] ${what} unreadable at the door (HTTP ${r.status}, twice) — the join goes out saying so`); return UNREADABLE; }
-  try {
-    const raw = r.json?.encoding === "base64"
-      ? Buffer.from(r.json.content ?? "", "base64").toString("utf8")
-      : r.json?.content ?? "";
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === "object") return parsed;
-  } catch { /* fall through */ }
-  console.warn(`[residency] ${what} does not parse at the door — the join goes out saying so`);
-  return UNREADABLE;
+// ── THE REGISTERS COME FROM THE RECORD NOW (POS-158) ────────────────────────
+//
+// These two used to fetch the base branch's blobs through the pen, and the
+// paragraph above explains why the pen and not the office's clone: the clone
+// lags its pull cron. Both readers are superseded by a third answer that lags
+// nothing — the registry is store-of-record (019_households.sql), and
+// `loadRegistry`/`loadPins` return exactly the objects those fetches parsed to.
+//
+// The `UNREADABLE` distinction is KEPT and it maps cleanly: the store answers
+// `null` for "this office is not pointed at the record", which is the same
+// class of fact as "the blob read failed twice" — not a reason to refuse a
+// join (the founder's 2026-08 call), but a reason to SAY SO, in the office log
+// and in the PR body where the witness routes it to a person. What is gone is
+// the 404 case: a town with no registry file is not a town with no registry
+// any more, because the registry is not a file.
+async function readRegistry(env = process.env) {
+  const r = await loadRegistry(env);
+  if (r === null) { console.warn("[residency] the registry is unreadable at the door (this office is not pointed at the record) — the join goes out saying so"); return UNREADABLE; }
+  return r;
 }
+async function readPins(env = process.env) {
+  const p = await loadPins(env);
+  if (p === null) { console.warn("[residency] the pin file is unreadable at the door (this office is not pointed at the record) — the join goes out saying so"); return UNREADABLE; }
+  return p;
+}
+
+// UNREADABLE survives the move to the record, and the case it was built for
+// is the reason. Luminari (#2479, 2026-09-04) named a house on her card; the
+// registry read failed once, SILENTLY, and the pen opened the three-file shape
+// which rule 2c merged with nobody left to add the row. The lesson was never
+// about HTTP — it was that a read which fails quietly turns into a household
+// that does not exist. `readRegistry`/`readPins` above keep that: a record this
+// office cannot reach answers UNREADABLE, loudly, and the PR body says so.
+//
+// The 404 case is gone with the fetch that produced it. A town with no
+// `tools/households.json` is no longer a town with no registry — the registry
+// is a table, and its absence is a refusal rather than an emptiness.
+// `readTownJson` (the pen-side blob reader these two used) is deleted with it:
+// nothing reads a register through the GitHub contents API any more.
 
 // Opens the join PR. Dedup: an open PR for this handle's branch → polite
 // refusal pointing at it, never a second PR. A household plan rides along as a
@@ -580,17 +599,37 @@ export async function openJoinPR(args, pen, plan) {
   const existing = await openPRFor(pen, joinBranch(handle), joinTitle(handle));
   if (existing)
     throw bounce(409, "a residency PR is already open for this handle", `your request is already waiting for a maintainer at ${existing.html_url} — no second PR was opened`);
+  // ── THE PR CARRIES THE CARD, AND NO REGISTRY DIFF (POS-158) ──────────────
+  //
+  // Two file entries used to ride here — `tools/households.json` folded by
+  // `planRegistryJoin`, and `tools/github-ids.json` with this handle's pin —
+  // so that "the merge IS the declaration" (the door law of 2026-08-07). That
+  // sentence has a new subject. The registry is store-of-record, and the two
+  // files are a rendering of it written by `tools/registry-drain.mjs` and
+  // nothing else; a PR carrying its own fold would be a second writer racing
+  // the drain, and the first drain after such a merge would refuse (the shrink
+  // guard) or overwrite it.
+  //
+  // WHAT REPLACES EACH HALF, and the two halves land at different moments
+  // because they are different facts (Keemin, 2026-09-22, on this lane's STOP):
+  //
+  //   · THE HOUSE is minted at the CO-SIGN — in `requestResidency` below,
+  //     before this PR is opened, because this verb's co-sign IS the request
+  //     (it refuses without `key.ghId`). A NEW house only; a join to a house
+  //     that already stands mints nothing.
+  //   · THE MEMBERSHIP — this handle inside that house, and its pin — is
+  //     ADMISSION, and admission on this lane is the Registrar's merge. It
+  //     lands at the office's first sight of that merge: the crossing, in
+  //     `src/town-drain.mjs`, which calls `joinHousehold`.
+  //
+  // THE REGISTRAR'S GATE DOES NOT MOVE. It governs residents, and no resident
+  // is admitted a minute earlier than before. The card still names the declared
+  // slug so the Registrar reads what house this join belongs to, which is the
+  // only thing the registry diff was doing for a human eye.
   const files = buildJoinFiles(args);
-  if (plan) files.push({ path: REGISTRY_PATH, content: serializeRegistry(plan.registry) });
-  // The pin, from the same verified id the body quotes. A handle the pin file
-  // already names is a re-binding, and a re-binding is a human ceremony — the
-  // body keeps asking a person in that case, and the witness routes it to one.
-  const pins = await readPins(pen);
-  const pinRides = Boolean(pins && pins !== UNREADABLE && !pins[handle] && args.ghId != null);
-  if (pinRides) files.push({ path: PINS_PATH, content: serializePins({ ...pins, [handle]: { login: args.ghLogin, id: args.ghId, pinned: townDate() } }) });
   return penSingleCommitPR(pen, {
     branch: joinBranch(handle), title: joinTitle(handle),
-    body: joinBody({ ...args, pinRides, pinsUnreadable: pins === UNREADABLE }, plan), files,
+    body: joinBody(args, plan), files,
     branchTaken: "a residency branch already exists for this handle",
   });
 }
@@ -632,7 +671,7 @@ export async function requestResidency(args, key, db, pen, { odb = null } = {}) 
   // base branch holds, and used for both doors: the join's registry diff, and
   // the `household:` line on the card (berth or address). A card that names its
   // house in the house's own words is what makes disembarkation a rename.
-  const registry = await readRegistry(pen);
+  const registry = await readRegistry();
   const registryUnreadable = registry === UNREADABLE;
   const plan = registry && !registryUnreadable ? planRegistryJoin(registry, {
     handle,
@@ -642,6 +681,57 @@ export async function requestResidency(args, key, db, pen, { odb = null } = {}) 
     siblings: [...(key.handles ?? [])],
     date: townDate(),
   }) : null;
+
+  // ── THE HOUSE IS MINTED HERE, AT THE CO-SIGN (POS-158) ───────────────────
+  //
+  // THIS VERB'S CO-SIGN IS THE REQUEST. It refuses above without `key.ghId`,
+  // so reaching this line means a verified GitHub account is asking — the same
+  // anchor the declaration door checks, arriving by the other transport.
+  //
+  // ONLY A NEW HOUSE. `planRegistryJoin` answers `action: "created"` when this
+  // join founds one and `"appended"` when it joins one that already stands; an
+  // appended join mints nothing, because the house's key already exists and
+  // minting it twice is the thing a key minted ONCE means.
+  //
+  // THE MEMBERSHIP DOES NOT LAND HERE. This handle's place inside the house,
+  // and its pin, are ADMISSION — and admission on this lane is the Registrar's
+  // merge, which happens in GitHub's hands. They land at the office's first
+  // sight of that merge, the next crossing (`src/town-drain.mjs`). So a house
+  // minted here stands with its `residents` EMPTY until then, which is the
+  // truthful state: the house is declared and nobody has been admitted to it.
+  //
+  // AN UNREADABLE RECORD DOES NOT REFUSE THE JOIN. The founder's 2026-08 call
+  // stands — a seam flicker is a reason to SAY SO, not to turn somebody away —
+  // so a null record leaves `plan` null, mints nothing, and the PR body carries
+  // the `registryUnreadable` sentence to a person. The card and the merge are
+  // untouched by it.
+  //
+  // The import is dynamic because `ceremony.mjs` reaches this module through
+  // `tools/registry-drain.mjs`, and a static edge back would close that cycle.
+  // `declareViaOffice` imports `oauth.mjs` the same way for the same reason.
+  let minted = null;
+  if (plan?.action === "created") {
+    const { mintHousehold, REFUSALS } = await import("./ceremony.mjs");
+    try {
+      minted = await mintHousehold({
+        slug: plan.slug,
+        name: plan.houseLine,
+        coSign: { ghId: key.ghId, ghLogin: key.ghLogin },
+        residents: [],
+        since: townDate(),
+        declaredBy: plan.registry.households[plan.slug].declared_by,
+      });
+    } catch (e) {
+      // A TAKEN SLUG IS THE ONE REFUSAL THAT REACHES THE CALLER. It means the
+      // house was founded between this door's read and its write — by the other
+      // door, or by a sibling a second earlier — and opening a PR that declares
+      // an already-declared house would hand the Registrar a contradiction.
+      // Every other refusal (an unreachable record, above all) leaves the join
+      // exactly as an unreadable registry leaves it: opened, and saying so.
+      if (e?.refusal === REFUSALS.TAKEN) throw bounce(e.code, e.defect, e.hint);
+      console.warn(`[residency] the house was not minted at the door (${e?.defect ?? e?.message ?? e}) — the join goes out saying so`);
+    }
+  }
 
   const full = {
     handle,

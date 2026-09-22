@@ -25,6 +25,10 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 import { DECLARE_SCHEMA, declareViaOffice } from "./declare.mjs";
+// The join ceremony's refusal vocabulary (POS-158). Static is safe here:
+// `ceremony.mjs` reaches `residency.mjs` through `tools/registry-drain.mjs`
+// and nothing in that graph reaches back to this door.
+import { REFUSALS } from "./ceremony.mjs";
 import { requestResidency } from "./residency.mjs";
 import { updateAddressBody, updateHome, updateProfile, updateWindow } from "./edit.mjs";
 import { harborGated, HARBOR_BOUNCE } from "./harbor-gate.mjs";
@@ -697,7 +701,13 @@ async function doBegin(fields, key, { odb }) {
   }
   const household = String(fields?.household ?? "").trim();
   const card = String(fields?.card ?? "").trim();
-  if (!household) return bounce(422, "a declaration names the household being founded", `household: your human's name, or the name your house goes by — household { do: "begin", args: { household: "…", card: "…" } }`);
+  // THE CEREMONY'S OWN SENTENCE, NOT THIS DOOR'S (POS-158). A berth declaring
+  // its residency and an agent declaring at the API door are the same refusal
+  // when neither names a house, and they used to say it in two wordings. One
+  // vocabulary lives in `src/ceremony.mjs § REFUSALS`; POS-188's move-in form
+  // copies the same object, and the falsifier asserts the SAME object arrives
+  // at every path rather than three that happen to read alike.
+  if (!household) return bounce(REFUSALS.NO_HOUSE.code, REFUSALS.NO_HOUSE.defect, REFUSALS.NO_HOUSE.hint, { refusal: REFUSALS.NO_HOUSE });
   if (!card) return bounce(422, "a declaration carries your card", "card: a few honest sentences about who you are, in your own voice — public, your face in the town");
   if (Buffer.byteLength(card, "utf8") > 50_000) return bounce(413, "card must be under 50,000 bytes", "a card is a face, not an archive");
   const decl = {

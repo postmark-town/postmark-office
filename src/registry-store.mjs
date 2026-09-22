@@ -54,8 +54,13 @@ import { registryFromRows, pinsFromRows, HOUSEHOLD_KEYS, PIN_KEYS } from "./regi
 // backwards at 36 of them), so the column is the only place that order lives
 // and a query without this clause would make the town's file depend on the
 // planner's mood.
+//
+// `formerly` (migration 020, POS-158) is selected like any other column and
+// carried through untouched. `node-postgres` hands a `text[]` back as a JS
+// array of strings, which is exactly what `registryFromRows` wants — and its
+// renderer drops the key when the array is empty, which today is all 118 rows.
 const HOUSEHOLDS_SQL = `
-  SELECT slug, ord, name, human, accounts, residents, since, member_of, declared_by
+  SELECT slug, ord, name, human, accounts, residents, since, member_of, declared_by, formerly
     FROM households
    ORDER BY ord`;
 
@@ -126,10 +131,17 @@ export async function loadPins(env = process.env) {
 // own transaction, before it calls `drainRegistry()` — they are exported and
 // falsified here so that lane inherits a writer rather than inventing one.
 
-const COLUMNS = ["slug", "ord", "name", "human", "accounts", "residents", "since", "member_of", "declared_by"];
+const COLUMNS = ["slug", "ord", "name", "human", "accounts", "residents", "since", "member_of", "declared_by", "formerly"];
 const PIN_COLUMNS = ["handle", "login", "gh_id", "pinned", "renamed", "note", "retired", "renamed_to"];
 
 const placeholders = (n, offset = 0) => Array.from({ length: n }, (_, i) => `$${i + 1 + offset}`).join(", ");
+// `accounts` is jsonb and wants a STRING; `residents` and `formerly` are
+// `text[]` and want the JS array itself, which `node-postgres` turns into a
+// Postgres array literal. Stringifying either of those would store the literal
+// characters `["a","b"]` in a text[] and the drain would render JSON inside
+// JSON. The `?? null` fallback is for the nullable scalars only — the two array
+// columns are NOT NULL with a `'{}'` default, and `[] ?? null` is `[]`, so an
+// empty list reaches the column as an empty list rather than as a NULL.
 const valuesOf = (row, cols) => cols.map((c) => (c === "accounts" ? JSON.stringify(row[c] ?? []) : row[c] ?? null));
 
 /**
