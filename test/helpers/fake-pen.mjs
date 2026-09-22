@@ -155,6 +155,38 @@ class FakeClient {
         ? { rows: [{ household: store.identities[params[0]] }], rowCount: 1 }
         : { rows: [], rowCount: 0 };
 
+    // ── THE REGISTRY, AS `householdKeyFor` NOW READS IT (POS-160) ───────────
+    //
+    // The pen's resolver stopped reading `identities` and started reading the
+    // registry that IS the record (`households` + `household_pins`), so this
+    // fake has to answer those three SELECTs or every write path that resolves
+    // a household dies here rather than at the thing under test.
+    //
+    // It answers them FROM THE SAME `identities` option, deliberately: a suite
+    // that said "guards-alfa lives at gh:9000001" is making one statement about
+    // one town, and making it say the same thing twice in two vocabularies is
+    // how two fakes drift apart. One house per distinct key, its slug the key
+    // with its prefix stripped, its residents the handles that share it. What
+    // changes for a caller is the SPELLING the resolver hands back (`hh:9000001`
+    // rather than `gh:9000001`), which is the whole point of the lane; no suite
+    // in this repo asserts on that value, which was measured before it moved.
+    if (/FROM households/i.test(t)) {
+      const byKey = new Map();
+      for (const [handle, key] of Object.entries(store.identities)) {
+        const slug = String(key).replace(/^[a-z0-9-]+:/, "");
+        if (!byKey.has(slug)) byKey.set(slug, []);
+        byKey.get(slug).push(handle);
+      }
+      return {
+        rows: [...byKey].map(([slug, residents], i) => ({
+          slug, ord: i, name: null, human: null, accounts: [], residents,
+          since: null, member_of: null, declared_by: null, formerly: [], provisional: false,
+        })),
+      };
+    }
+    if (/FROM household_pins/i.test(t)) return { rows: [] };
+    if (/FROM registry_meta/i.test(t)) return { rows: [{ key: "schema_version", value: 1 }] };
+
     if (/FROM windows WHERE status = 'open'/i.test(t)) {
       const w = store.windows.filter((x) => x.status === "open").sort((a, b) => b.id - a.id)[0];
       return { rows: w ? [{ id: w.id }] : [], rowCount: w ? 1 : 0 };

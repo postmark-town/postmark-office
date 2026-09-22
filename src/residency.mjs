@@ -51,6 +51,7 @@ import { appendTownJournal, SETTLE_THRESHOLD, townLogEnabled } from "./town-jour
 // it reaches this module through `tools/registry-drain.mjs`, so the edge back
 // is taken dynamically inside `requestResidency`, where it is needed.
 import { loadRegistry, loadPins } from "./registry-store.mjs";
+import { resolveHouse, accountMatches, slugFromName, VIA } from "./household-deriver.mjs";
 
 const bounce = (code, defect, hint) => {
   const e = new Error(defect);
@@ -161,13 +162,12 @@ export const UNREADABLE = Symbol("unreadable at the door");
 // admission, and a rename is a ledger ceremony afterwards. Kebab like a handle;
 // a dot survives because a house may choose a domain for its name
 // (cadaeic.space) and that IS the name someone picked.
-export function slugFromName(name) {
-  return String(name ?? "").trim().toLowerCase()
-    .replace(/['’]/g, "")
-    .replace(/[^a-z0-9.]+/g, "-")
-    .replace(/-{2,}/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
+//
+// MOVED to `household-deriver.mjs` (POS-160) and re-exported here, because the
+// deriver has to slug a name to answer `houseForName` and a second copy of a
+// slugger is a second answer to "is this the same house". Every importer keeps
+// importing it from here; there is simply one of it now.
+export { slugFromName };
 
 /**
  * Does one registry `accounts[]` entry name this caller?
@@ -196,37 +196,24 @@ export function slugFromName(name) {
  * `tools/account-match.mjs`, and the two must move together. If this changes,
  * that changes in the same round.
  */
-export function accountMatches(account, actorId, actorLogin) {
-  if (!account) return false;
-  if (account.id != null) {
-    // Pinned: an id is on record, so an id is the only thing that may match it.
-    return actorId != null && Number(account.id) === Number(actorId);
-  }
-  const want = actorLogin ? String(actorLogin).toLowerCase() : null;
-  return Boolean(want && account.login && String(account.login).toLowerCase() === want);
-}
+// RE-EXPORTED, not re-implemented (POS-160). The body moved to
+// `household-deriver.mjs § accountMatches`, which is where the walk that uses
+// it now lives; this name stays because `ceremony.mjs` and the suites cite it
+// by this path, and because the town's `tools/account-match.mjs` is the twin
+// that must move with it and it is this file the town's header names.
+export { accountMatches };
 
 // The house this verified account already belongs to, by immutable id first and
 // login only where the row carries no id at all. null = unknown account.
 export function houseForAccount(registry, ghId, ghLogin) {
-  for (const [slug, rec] of Object.entries(registry?.households ?? {})) {
-    for (const a of rec.accounts ?? []) if (accountMatches(a, ghId, ghLogin)) return slug;
-  }
-  return null;
+  return resolveHouse({ ghId, ghLogin }, registry, {}, { via: VIA.ACCOUNT }).slug;
 }
 
 // The house the caller NAMED, matched the way a human writes it: alden's card
 // says "Sydney Kitts" and arky's says "cadaeic.space" — slug, `name` and
 // `human` all normalize through the same slugger, so either finds the one entry.
 export function houseForName(registry, name) {
-  const want = slugFromName(name);
-  if (!want) return null;
-  for (const [slug, rec] of Object.entries(registry?.households ?? {})) {
-    if (slug.toLowerCase() === want) return slug;
-    if (rec.name && slugFromName(rec.name) === want) return slug;
-    if (rec.human && slugFromName(rec.human) === want) return slug;
-  }
-  return null;
+  return resolveHouse(name, registry, {}, { via: [VIA.SLUG, VIA.NAME] }).slug;
 }
 
 // What a house calls itself on an ADDRESS card. The witness lints the card's
