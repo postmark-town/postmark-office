@@ -189,6 +189,36 @@ export const HANDLE_FIELD = "description";
 // "the ledger records whole dollars, so a payment under $1 cannot be witnessed
 // as a receipt" — the /fund door's own floor, quoted rather than re-derived.
 export const MIN_USD = 1;
+// THE ACCOUNT'S SETTLEMENT CURRENCY, and the only currency the ledger records.
+//
+// ── WHY THIS IS NOW TWO CURRENCIES AND NOT ONE (postmark#3183, 2026-09-21) ──
+//
+// Account-level Adaptive Pricing is ON, so a Payment Link presented to a payer
+// in London yields a Checkout Session whose `currency` is `gbp` and whose
+// `amount_total` is in PENCE. Until this change the rule read that pair as the
+// whole truth and filed every such deed as a `not-usd` anomaly for the
+// founder's hand — with the note "there is no rate anywhere in the town to
+// convert it", which was true of the SESSION and false of the account: Stripe
+// settles every Adaptive-Pricing payment to the account's own currency and
+// writes the rate and the settled amount on the charge's BALANCE TRANSACTION.
+// The town does not need a rate. It needs to read the one Stripe already
+// applied.
+//
+// So a session now carries TWO amounts and they are named apart everywhere:
+//
+//   PRESENTMENT  `currency` + `amount_total` — what the payer saw and agreed
+//                to, in their own money. Recorded as `paid` on the operator's
+//                record so the row can still answer "what did they pay?".
+//   SETTLED      the balance transaction's `amount` + `currency` — what landed
+//                in the account, in dollars. This, floored, is the receipt's
+//                `usd:`, because the ledger records US dollars and nothing else.
+//
+// GROSS, NOT NET. The balance transaction also carries `fee` and `net`. The
+// receipt takes `amount` — the settled GROSS — because a pot-receipt witnesses
+// what the payer paid into the town, not what survived Stripe's cut. The fee is
+// the town's cost of taking cards and is the operator's line, not the payer's
+// deed; netting it here would quietly shrink a stranger's recorded gift.
+export const SETTLE_CURRENCY = "usd";
 // A cold start reads a bounded window and SAYS SO, rather than paginating the
 // account's whole history or silently starting from now. `--since` sweeps back
 // further when the operator wants a one-off catch-up.
@@ -292,7 +322,64 @@ export async function listCompleteSessions({ stripe, createdGte, limit = PAGE_LI
     throw new Error(`stripe-watch stopped after ${maxPages} pages (${out.length} sessions) and Stripe still had more — nothing was decided from a partial read. Sweep the backlog with a later --since, then let the timer resume.`);
   // Stripe lists newest-first; the ledger's order is arrival order.
   out.sort((a, b) => a.created - b.created || String(a.id).localeCompare(String(b.id)));
+  return attachSettlement({ stripe, sessions: out });
+}
+
+/**
+ * THE SETTLED DOLLARS, fetched for the sessions that actually need them.
+ *
+ * ── WHY A SECOND READ AND NOT AN EXPANSION ON THE LIST ─────────────────────
+ *
+ * The listing could in principle carry `expand[]=data.payment_intent.
+ * latest_charge.balance_transaction`. It is not asked for, for two reasons and
+ * the second is the one that decided it:
+ *
+ * 1. THAT PATH IS AT THE EXPANSION DEPTH LIMIT. `data` counts as a level on a
+ *    list, so the path is four deep — the documented maximum. A request at a
+ *    limit is a request that fails with an API error rather than a null, and a
+ *    400 on the LIST would blind the whole rail, not just the foreign session
+ *    that provoked it. The cost of being wrong is asymmetric and total.
+ *
+ * 2. ALMOST NO SESSION NEEDS IT. A session presented in the account's own
+ *    settlement currency already carries its settled amount: `amount_total` IS
+ *    the dollars. Every session the box has ever seen is one of those (3
+ *    witnessed, 0 anomalies, 2026-09-21). So expanding the list would enlarge
+ *    every page of every tick forever to answer a question only a foreign
+ *    session asks — and this way the common path is byte-for-byte the request
+ *    it has always been, which is also why the USD falsifiers below did not
+ *    have to move.
+ *
+ * The retrieve is `payment_intent.latest_charge.balance_transaction` — three
+ * levels, comfortably inside the limit — and it is asked once per foreign
+ * session per tick. A retrieve that FAILS is not fatal: the session is returned
+ * as it came, carries no settlement, and `resolveSession` names it an anomaly
+ * the next tick re-reads. A watcher that crashed on one unreadable payment
+ * would stop witnessing the good ones queued behind it.
+ */
+export async function attachSettlement({ stripe, sessions }) {
+  const out = [];
+  for (const s of sessions) {
+    if (String(s?.currency ?? "").toLowerCase() === SETTLE_CURRENCY || !s?.id) { out.push(s); continue; }
+    try {
+      const full = await stripe(`/checkout/sessions/${s.id}`, {
+        "expand[]": "payment_intent.latest_charge.balance_transaction",
+      });
+      out.push(full?.id === s.id ? full : s);
+    } catch { out.push(s); }
+  }
   return out;
+}
+
+/**
+ * The balance transaction hanging off a session, or null — one shape, read
+ * defensively, because every hop is a string id until something expands it.
+ */
+export function settlementOf(s) {
+  const pi = s?.payment_intent;
+  const charge = pi && typeof pi === "object" ? pi.latest_charge : null;
+  const bt = charge && typeof charge === "object" ? charge.balance_transaction : null;
+  if (!bt || typeof bt !== "object" || bt.amount == null) return null;
+  return { amount: Number(bt.amount), currency: String(bt.currency ?? "").toLowerCase() };
 }
 
 /**
@@ -314,8 +401,17 @@ export function decodeSession(s) {
     receipt_ref: `${RAIL}:${String(s?.id ?? "")}`,
     created: Number(s?.created ?? 0),
     created_at: s?.created ? iso(Number(s.created)) : null,
+    // THE PRESENTMENT PAIR — what the payer saw, in the payer's own money.
+    // Never dollars unless `currency` says so, and never the receipt's `usd:`.
     amount_total: Number(s?.amount_total ?? 0),
     currency: String(s?.currency ?? "").toLowerCase(),
+    // THE SETTLED PAIR — what landed in the account, from the charge's balance
+    // transaction. null for a session nothing expanded, which is every session
+    // presented in the settlement currency: those need no second read because
+    // `amount_total` is already the settled amount. A decoded row is journalled
+    // verbatim, so this travels with the session and the journal's re-decide
+    // (`decide`, below) reaches the same verdict a live read would.
+    settled: settlementOf(s),
     client_reference_id: s?.client_reference_id ?? null,
     handle_typed: typed == null ? null : String(typed).trim(),
     email: s?.customer_details?.email ?? null,
@@ -354,10 +450,25 @@ export function resolveSession(s, { engine, entries, clone, households, loginHan
     return { ...s, ...anomaly("testmode", "this is a TEST-MODE session", "a test payment must never become a real ledger row", "nothing — test money stays test money; if this is unexpected the box is holding a test key") };
   if (s.payment_status !== "paid")
     return { ...s, ...anomaly("unpaid", `payment_status is "${s.payment_status}", not "paid"`, "a receipt witnesses a payment that was actually made", "Stripe, when the payment settles — the next tick re-reads it") };
-  if (s.currency !== "usd")
-    return { ...s, ...anomaly("not-usd", `this session is in ${s.currency.toUpperCase()}, and the ledger records dollars`, "the pot-receipt grammar's `usd:` is a whole number of US dollars", "the founder, by hand — there is no rate anywhere in the town to convert it") };
+  // THE SETTLED DOLLARS. A session presented in the account's own currency IS
+  // its own settlement, and is read exactly as it always was — that identity is
+  // why a USD receipt is byte-for-byte the row it was before this rule changed.
+  // Anything else must show the balance transaction Stripe wrote when it
+  // converted, because the town holds no rate of its own and never will.
+  const settled = s.currency === SETTLE_CURRENCY
+    ? { amount: s.amount_total, currency: SETTLE_CURRENCY }
+    : (s.settled ?? null);
+  // The anomaly keeps its name — `not-usd` is what the report, the operator
+  // round and #2973's journal all already read — and NARROWS to its one true
+  // cause: not "this money is foreign" (it is, and that is fine now) but "no
+  // settled USD could be read for it". Two cases reach here and they resolve
+  // completely differently, so each says which one it is.
+  if (!settled)
+    return { ...s, ...anomaly("not-usd", `this session is in ${s.currency.toUpperCase()} and no settled amount could be read — Stripe has posted no balance transaction for it yet, or the read that would have carried one did not answer`, "the pot-receipt grammar's `usd:` is a whole number of US dollars, and for a foreign session only the balance transaction says how many", "Stripe, usually within a day — the next tick re-reads the session and the balance transaction appears. A session stuck here for more than a day is one for the founder") };
+  if (settled.currency !== SETTLE_CURRENCY)
+    return { ...s, ...anomaly("not-usd", `this session is in ${s.currency.toUpperCase()} and settled in ${settled.currency.toUpperCase()}, not ${SETTLE_CURRENCY.toUpperCase()}`, "the pot-receipt grammar's `usd:` is a whole number of US dollars", "the founder, by hand — the account settled this payment in another currency, and there is no rate anywhere in the town to convert it") };
 
-  const usdTotal = s.amount_total / 100;
+  const usdTotal = settled.amount / 100;
   const whole = Math.floor(usdTotal);
   const cents = Number((usdTotal - whole).toFixed(2));
   if (whole < minUsd)
@@ -397,6 +508,24 @@ export function resolveSession(s, { engine, entries, clone, households, loginHan
     ...(hand.via ? { attributed_via: hand.via } : {}),
     ...(hand.pin_note ? { pin_note: hand.pin_note } : {}),
     handle_typed: typed,
+    // WHAT THE PAYER ACTUALLY PAID, kept beside what settled.
+    //
+    // A row that said only `usd: 27` would have thrown away the fact that the
+    // payer agreed to €25.00, and that is the number on their card statement
+    // and in any letter they write about it. `usd` is what the town received;
+    // `paid` is what they gave. For a USD session the two say the same thing in
+    // two units, and it is carried anyway rather than only when they differ,
+    // because a field that appears only sometimes teaches every reader to treat
+    // its absence as meaningful.
+    //
+    // THIS DOES NOT REACH THE LEDGER, and that is not an oversight — see the PR
+    // body. `POT_RECEIPT_RE` is `^…$`-anchored in BOTH copies of the grammar
+    // (the town's tools/stamp-mint.mjs and this office's src/funding.mjs), the
+    // line is signed, and an appended `· paid: …` would not parse as a receipt
+    // at all. So the presentment pair lives on the OPERATOR's record — the
+    // journal row, the tick report, the funding report — which is the whole set
+    // of surfaces the office owns.
+    paid: { currency: s.currency, amount: s.amount_total },
     ...(cents > 0 ? {
       cents_note: `$${usdTotal.toFixed(2)} arrived; the ledger records whole dollars, so $${whole} is witnessed against the pot and the remaining $${cents.toFixed(2)} is money the town holds that priced nothing.`,
     } : {}),
@@ -711,7 +840,11 @@ async function main() {
     for (const w of todo) {
       try {
         const out = await record({ pot: w.pot, usd: w.usd, from: w.from, ref: w.ref });
-        written.push({ kind: "witnessed", at: new Date().toISOString(), session: w.session, ref: w.ref, pot: w.pot, from: w.from, usd: w.usd, attributed: w.attributed, handle_typed: w.handle_typed, line: out?.line ?? null, commit: out?.commit ?? null });
+        // `paid` rides the witnessed row for the same reason the ledger cannot
+        // carry it: this journal is the operator's record of the payment, and
+        // it is now the only place that remembers a foreign payer paid €25.00
+        // for the $27 the ledger records.
+        written.push({ kind: "witnessed", at: new Date().toISOString(), session: w.session, ref: w.ref, pot: w.pot, from: w.from, usd: w.usd, paid: w.paid, attributed: w.attributed, handle_typed: w.handle_typed, line: out?.line ?? null, commit: out?.commit ?? null });
       } catch (e) {
         // A refusal is an answer, not a crash: journal it and keep going, so one
         // bad session cannot hold up the queue behind it. The ref is unspent,

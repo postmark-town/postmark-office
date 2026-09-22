@@ -29,7 +29,8 @@ import { CROSSING_MS } from "../src/crossings.mjs";
 import { townLoginHands } from "../src/household-logins.mjs";
 import {
   decide, decodeSession, resolveSession, listCompleteSessions, stripeReader,
-  OUTSIDE_FROM, HANDLE_FIELD, RAIL, MIN_USD,
+  attachSettlement, settlementOf,
+  OUTSIDE_FROM, HANDLE_FIELD, RAIL, MIN_USD, SETTLE_CURRENCY,
 } from "../tools/stripe-watch.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -66,15 +67,28 @@ function stripeAccount({ sessions = [], throws = false } = {}) {
   return { stripe, calls };
 }
 
+// `settled` is the SETTLED pair, and it is written here exactly where Stripe
+// writes it: on the balance transaction of the charge of the payment intent.
+// A session with `settled: null` (the default, and every USD fixture in this
+// file) leaves `payment_intent` the bare string id it has always been — which
+// is the real shape of an unexpanded session, so no USD falsifier below had to
+// learn a new fixture to keep passing.
 const sess = ({
   id, created, amount = 1000, currency = "usd", pot = "keep", handle = null,
   livemode = true, payment_status = "paid", status = "complete", email = "patron@example.test",
+  settled = null,
 }) => ({
   id, object: "checkout.session", created, status, payment_status, livemode,
   amount_total: amount, currency, client_reference_id: pot,
   customer_details: { email },
   custom_fields: handle === null ? [] : [{ key: HANDLE_FIELD, type: "text", text: { value: handle } }],
-  payment_intent: `pi_${id.slice(3)}`,
+  payment_intent: settled === null ? `pi_${id.slice(3)}` : {
+    id: `pi_${id.slice(3)}`, object: "payment_intent",
+    latest_charge: {
+      id: `ch_${id.slice(3)}`, object: "charge",
+      balance_transaction: { id: `txn_${id.slice(3)}`, object: "balance_transaction", ...settled },
+    },
+  },
 });
 
 // ── a throwaway town with a real, sealed ledger ─────────────────────────────
@@ -521,7 +535,7 @@ test("once the ref is a receipt the same session reports `already`, and a second
 // WHAT IS NEVER A RECEIPT
 // ════════════════════════════════════════════════════════════════════════════
 
-test("test-mode money, unpaid sessions, foreign currency and sub-dollar amounts are named, never witnessed", async () => {
+test("test-mode money, unpaid sessions, unsettled foreign payments and sub-dollar amounts are named, never witnessed", async () => {
   // LAW (fund.mjs, guard 5, verbatim): "the ledger records whole dollars, so a
   //     payment under $1 cannot be witnessed as a receipt. It reached the town
   //     and it is not lost — write to the postmaster."
@@ -532,7 +546,12 @@ test("test-mode money, unpaid sessions, foreign currency and sub-dollar amounts 
 
   assert.equal(at({ id: CS_A, livemode: false }).anomaly, "testmode");
   assert.equal(at({ id: CS_A, payment_status: "unpaid" }).anomaly, "unpaid");
+  // A foreign session with NOTHING SETTLED YET is still named — but the reason
+  // moved, and the difference is the whole of postmark#3183. It is no longer
+  // "this money is foreign"; foreign money is fine. It is "no settled amount
+  // could be read for it", which Stripe fixes by itself on the next tick.
   assert.equal(at({ id: CS_A, currency: "eur" }).anomaly, "not-usd");
+  assert.match(at({ id: CS_A, currency: "eur" }).why, /no settled amount could be read/);
   const dust = at({ id: CS_A, amount: 50 });
   assert.equal(dust.anomaly, "under-a-dollar");
   assert.match(dust.rule, /cannot be witnessed as a receipt/);
@@ -548,6 +567,163 @@ test("cents are witnessed as whole dollars and the remainder is disclosed, never
   const r = resolveSession(decodeSession(sess({ id: CS_A, created: Math.floor(now / 1000) - 86_400, amount: 1050, handle: "paz" })), { ...ctx(town), now });
   assert.equal(r.usd, 10);
   assert.match(r.cents_note, /\$0\.50 is money the town holds that priced nothing/);
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// THE SETTLED DOLLARS — a foreign payment is a receipt, not a queue (#3183)
+// ════════════════════════════════════════════════════════════════════════════
+
+test("a EUR session is witnessed for the dollars that SETTLED, and the record keeps what the payer actually paid", async () => {
+  // LAW (Keemin, 2026-09-21, verbatim): "let's accept other currencies, no need
+  //     to block it on our end."
+  // LAW (the pot-receipt grammar, tools/epoch-close.mjs, verbatim): "`usd:` is
+  //     a whole number of US dollars."
+  //
+  // Account-level Adaptive Pricing presents the payment link in the payer's own
+  // money, so the session says `eur` / 2500 minor units. The town holds no rate
+  // and must never invent one — but it does not need one: Stripe converted at
+  // settlement and wrote the answer on the charge's balance transaction. €25.00
+  // landed as $27.31, and $27 is the receipt.
+  const town = seamTown();
+  const now = 2_000_000_000_000;
+  const old = Math.floor(now / 1000) - 86_400;
+
+  const eur = resolveSession(decodeSession(sess({
+    id: CS_A, created: old, handle: "paz", currency: "eur", amount: 2500,
+    settled: { amount: 2731, currency: "usd" },
+  })), { ...ctx(town), now });
+
+  assert.equal(eur.disposition, "witness", "a foreign payment is a receipt now, not a queue for the founder");
+  assert.equal(eur.usd, 27, "the SETTLED dollars, floored — never the presentment number, which would have read 25");
+  assert.deepEqual(eur.paid, { currency: "eur", amount: 2500 }, "and the record still says what the payer agreed to");
+  // The remainder is disclosed against the SETTLED amount, the same way a
+  // domestic $27.31 would be. A sentence about €0.31 would be a rate the town
+  // does not have, quietly asserted.
+  assert.match(eur.cents_note, /\$27\.31 arrived/);
+  assert.match(eur.cents_note, /\$0\.31 is money the town holds that priced nothing/);
+
+  // AND THE WHOLE WAY DOWN: the row the town's own CLI actually writes.
+  const { report, todo } = decide({
+    sessions: [sess({ id: CS_A, created: old, handle: "paz", currency: "eur", amount: 2500, settled: { amount: 2731, currency: "usd" } })],
+    ...ctx(town), now,
+  });
+  assert.equal(report.witnessed_now, 1);
+  const record = cliRecorder(town);
+  const { line } = await record(todo[0]);
+  assert.match(line, /· pot-receipt · pot:keep · rail: stripe · usd: 27 · from: paz · ref: stripe:cs_test_a11111111111111111111111 · sig: /,
+    "the ledger line is an ORDINARY receipt in whole dollars — the euro never reaches it");
+  // AND IT CANNOT. `POT_RECEIPT_RE` is `^…$`-anchored in both copies of the
+  // grammar (the town's tools/stamp-mint.mjs and this office's src/funding.mjs),
+  // so a `· paid: eur/2500` appended here would not parse as a receipt at all —
+  // the fold would see no money. The presentment pair lives on the operator's
+  // record instead, which is why this assertion is the ONLY shape allowed.
+  assert.ok(!/paid/.test(line), "nothing about euros reaches the signed row");
+  const folded = ENGINE.foldPotReceipts(entriesOf(town.repo)).receipts.at(-1);
+  assert.equal(folded.usd, 27, "and the town's own fold reads it back as 27 dollars");
+});
+
+test("a foreign session with no settled amount, or one settled in a third currency, is named and never guessed at", async () => {
+  // LAW (the anomaly this narrows, verbatim): "there is no rate anywhere in the
+  //     town to convert it."
+  //
+  // The rule reads a rate Stripe already applied; it never applies one. So the
+  // two ways a foreign session can arrive without a settled USD figure are both
+  // anomalies, and they are NOT the same anomaly to an operator: one is Stripe
+  // being a few hours behind and fixes itself, the other is an account setting
+  // and needs a person. The shared kind is `not-usd` because the report, the
+  // operator round and the journal all already read that name.
+  const town = seamTown();
+  const now = 2_000_000_000_000;
+  const old = Math.floor(now / 1000) - 86_400;
+  const at = (o) => resolveSession(decodeSession(sess({ created: old, handle: "paz", ...o })), { ...ctx(town), now });
+
+  const unsettled = at({ id: CS_A, currency: "gbp", amount: 2000 });
+  assert.equal(unsettled.anomaly, "not-usd");
+  assert.match(unsettled.why, /GBP and no settled amount could be read/);
+  assert.match(unsettled.resolves, /the next tick re-reads the session/, "it resolves itself, and the queue must say so");
+  assert.equal(unsettled.usd, undefined, "no dollars were invented for it");
+
+  const thirdCurrency = at({ id: CS_B, currency: "gbp", amount: 2000, settled: { amount: 1800, currency: "eur" } });
+  assert.equal(thirdCurrency.anomaly, "not-usd");
+  assert.match(thirdCurrency.why, /settled in EUR, not USD/);
+  assert.match(thirdCurrency.resolves, /no rate anywhere in the town to convert it/, "this one is the founder's, and keeps the original sentence");
+  assert.equal(thirdCurrency.usd, undefined);
+});
+
+test("a USD session is the row it has always been: the settled read never touches it, and it costs no extra Stripe call", async () => {
+  // The whole safety of #3183 is that the common path did not move. A USD
+  // session carries no balance transaction in any fixture in this file — that
+  // is the real shape of an unexpanded session — and it must resolve to exactly
+  // the receipt it resolved to before, because `amount_total` already IS the
+  // settled amount when presentment and settlement are the same currency.
+  const town = seamTown();
+  const now = 2_000_000_000_000;
+  const old = Math.floor(now / 1000) - 86_400;
+
+  const plain = decodeSession(sess({ id: CS_A, created: old, handle: "paz", amount: 1000 }));
+  assert.equal(settlementOf(sess({ id: CS_A, created: old })), null, "an unexpanded session has no balance transaction to read");
+  assert.equal(plain.settled, null);
+  const r = resolveSession(plain, { ...ctx(town), now });
+  assert.equal(r.disposition, "witness");
+  assert.equal(r.usd, 10, "the same ten dollars, from the same field, as before the rule learned about settlement");
+  assert.deepEqual(r.paid, { currency: "usd", amount: 1000 }, "`paid` is carried even when it restates `usd` — a field that appears only sometimes teaches readers that its absence means something");
+
+  const { line } = await cliRecorder(town)(r);
+  assert.match(line, /· pot-receipt · pot:keep · rail: stripe · usd: 10 · from: paz · ref: stripe:cs_test_a11111111111111111111111 · sig: /);
+
+  // AND THE READ: no second call is made for it.
+  const acct = stripeAccount({ sessions: [sess({ id: CS_A, created: old }), sess({ id: CS_B, created: old + 1 })] });
+  await listCompleteSessions({ stripe: acct.stripe, createdGte: old });
+  assert.ok(acct.calls.every((c) => c.path === "/checkout/sessions"),
+    "every USD session was answered by the listing alone — the settled read is asked only of the sessions that need it");
+});
+
+test("the settled read is a RETRIEVE, asked once per foreign session, and a refusal there is an anomaly rather than a dead rail", async () => {
+  // `data.payment_intent.latest_charge.balance_transaction` sits at Stripe's
+  // documented four-level expansion limit on a LIST, and a request at a limit
+  // fails with an API error rather than a null — which on the list would blind
+  // the whole rail. So the expansion is asked on the SESSION, three levels
+  // deep, and only of a session whose presentment currency is not the account's.
+  const old = 1_700_000_000;
+  const rows = [
+    sess({ id: CS_A, created: old }),
+    sess({ id: CS_B, created: old + 1, currency: "eur", amount: 2500 }),
+  ];
+  const full = { ...rows[1], payment_intent: { id: "pi_x", latest_charge: { id: "ch_x", balance_transaction: { amount: 2731, currency: "usd" } } } };
+  const calls = [];
+  const stripe = async (path, params = {}) => {
+    calls.push({ path, params });
+    if (path === "/checkout/sessions") return { object: "list", data: rows.slice().sort((a, b) => b.created - a.created), has_more: false };
+    if (path === `/checkout/sessions/${CS_B}`) return full;
+    throw new Error(`unexpected path ${path}`);
+  };
+  const got = await listCompleteSessions({ stripe, createdGte: old });
+  const retrieves = calls.filter((c) => c.path !== "/checkout/sessions");
+  assert.equal(retrieves.length, 1, "one retrieve, for the one foreign session");
+  assert.equal(retrieves[0].path, `/checkout/sessions/${CS_B}`);
+  assert.equal(retrieves[0].params["expand[]"], "payment_intent.latest_charge.balance_transaction",
+    "the request itself names what it needs, three levels and not four");
+  assert.deepEqual(settlementOf(got.find((s) => s.id === CS_B)), { amount: 2731, currency: "usd" });
+
+  // THE REFUSAL. A watcher that threw here would stop witnessing every good
+  // session queued behind one unreadable payment.
+  const angry = async (path) => {
+    if (path === "/checkout/sessions") return { object: "list", data: rows.slice().sort((a, b) => b.created - a.created), has_more: false };
+    throw new Error("Stripe refused the read (400): no such payment_intent");
+  };
+  const survived = await listCompleteSessions({ stripe: angry, createdGte: old });
+  assert.equal(survived.length, 2, "the tick still has both sessions");
+  assert.equal(settlementOf(survived.find((s) => s.id === CS_B)), null, "and the one it could not read carries no settlement, so the rule names it");
+  assert.equal(SETTLE_CURRENCY, "usd", "the account settles in dollars, and that is the one currency the ledger records");
+});
+
+test("attachSettlement asks nothing of a session it was not given, and leaves a mismatched answer alone", async () => {
+  // A retrieve that comes back as a DIFFERENT session is not a session this
+  // reader may substitute — the settled dollars would be another payer's.
+  const wrong = async () => ({ id: "cs_somebody_else", payment_intent: { latest_charge: { balance_transaction: { amount: 9999, currency: "usd" } } } });
+  const [only] = await attachSettlement({ stripe: wrong, sessions: [sess({ id: CS_B, created: 1, currency: "eur", amount: 2500 })] });
+  assert.equal(only.id, CS_B);
+  assert.equal(settlementOf(only), null, "the mismatched answer was discarded, not grafted on");
 });
 
 // ════════════════════════════════════════════════════════════════════════════

@@ -71,6 +71,32 @@ export const STALE_MINUTES = 60;
 
 const usd = (n) => "$" + Number(n).toLocaleString("en-US");
 
+/**
+ * ONE SESSION'S AMOUNT, in the report's one voice.
+ *
+ * A decoded session carries TWO amounts since postmark#3183 and they are not
+ * interchangeable: `amount_total`/`currency` is the PRESENTMENT pair — what the
+ * payer saw, in the payer's own money — and `usd_total` is the SETTLED dollars
+ * the rule computed from the charge's balance transaction, which is what the
+ * town will actually record.
+ *
+ * This page printed `$` in front of `amount_total / 100` unconditionally, which
+ * was the report's own half of the Adaptive-Pricing defect: a £20 payment read
+ * as "$20.00" on the operator's screen, off by whatever the pound was worth
+ * that morning, on the one table whose entire job is to be checked by eye
+ * before the ref is spent. The rule now converts; the page must not un-convert.
+ */
+const sessionAmount = (r) => {
+  const settled = r?.usd_total == null ? null : usd(r.usd_total);
+  const foreign = r?.currency && String(r.currency).toLowerCase() !== "usd";
+  // Never behind a "$": this number is not dollars and the cell must not imply
+  // it is. A `not-usd` anomaly has no settled amount at all, so for that row
+  // this is the ONLY number there is, and it is the honest one to show.
+  const presented = foreign ? `${((r.amount_total ?? 0) / 100).toFixed(2)} ${String(r.currency).toUpperCase()}` : null;
+  if (settled && presented) return `${settled} (paid ${presented})`;
+  return settled ?? presented ?? usd((r?.amount_total ?? 0) / 100);
+};
+
 // ── the one-command manual witness (STAGE A's whole write path) ─────────────
 // It is not a new tool. It is the SAME recorder the /fund door and both watchers
 // use — src/fund-exec.mjs shelling the town's own `epoch-close.mjs --receipt`,
@@ -141,7 +167,7 @@ export function anomalies({ fold, potsInvalid, stripe, usdcReport, walletInvalid
     add("intake-map", r.row_kind, r.line, r.reason, "a fix to deploy/intake-addresses.json in the office repo");
 
   for (const a of stripe.anomaly)
-    add("stripe", a.anomaly, `${a.session} · ${usd((a.amount_total ?? 0) / 100)}${a.email ? ` · ${a.email}` : ""}`, a.why, a.resolves);
+    add("stripe", a.anomaly, `${a.session} · ${sessionAmount(a)}${a.email ? ` · ${a.email}` : ""}`, a.why, a.resolves);
   for (const n of usdcReport?.needs_pot ?? [])
     add("usdc", "needs-pot", `${n.txhash} · ${usd(n.usd)} · ${n.handle}`, n.why, "the payer names the pot (or witnesses it from that pot's own /fund/ page), or the founder mints a per-pot intake address and deploy/intake-addresses.json names it");
   for (const o of usdcReport?.over_cap ?? [])
@@ -265,7 +291,7 @@ export function render({ now, pots, potsInvalid, fold, rails, anomalyRows, strip
     p(`| session | amount | files to | as | typed | email | witnesses after |`);
     p(`|---|---|---|---|---|---|---|`);
     for (const h of stripe.hold)
-      p(`| \`${h.session}\` | ${usd((h.amount_total ?? 0) / 100)} | ${h.plan.pot} | ${h.plan.attributed ? `**${h.plan.from}**` : `_${h.plan.from}_ (gift, no holo)`} | ${h.plan.handle_typed ?? "—"} | ${h.email ?? "—"} | ${h.witnesses_after} |`);
+      p(`| \`${h.session}\` | ${sessionAmount(h)} | ${h.plan.pot} | ${h.plan.attributed ? `**${h.plan.from}**` : `_${h.plan.from}_ (gift, no holo)`} | ${h.plan.handle_typed ?? "—"} | ${h.email ?? "—"} | ${h.witnesses_after} |`);
     p();
     // The table already shows "as" beside "typed", so a pin resolution is
     // VISIBLE here — but two differing cells read like a defect unless the page
