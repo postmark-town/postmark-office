@@ -26,6 +26,20 @@ import { tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { fixtureDb } from "../test/fixture.mjs";
+// THE STANCE SEGMENT READS THE STORE (POS-195, 2026-09-22). `worldForStances`
+// moved off the sqlite journal onto `claims` through `stance_reader`, so this
+// page needs an office that HOLDS that credential — which is the office that
+// exists after 023 is applied and `WORLD2_STANCE_URL` is set, and the one the
+// morning page is actually served from. Without it the segment answers
+// `unavailable`, which is a true sentence about a misconfigured office and the
+// wrong picture to freeze.
+//
+// The stub reads the same dynamic store the 1.0 arm read (`dynamicDbPath()`),
+// so the live half of this page is composed from exactly the source it was
+// composed from before. Imported from `test/` like `fixtureDb` above, for the
+// same reason: this tool and the falsifier must compose from ONE fixture.
+import { stancePoolFromJournal, STANCE_ON } from "../test/stance-pool-stub.mjs";
+import { dynamicDbPath } from "../src/dynamic-store.mjs";
 import { doorstepBundle } from "../src/doorstep-bundle.mjs";
 
 // ── THE FROZEN CLOCK (POS-168) ───────────────────────────────────────────────
@@ -63,6 +77,10 @@ export async function captureDoorstepGolden({ nowMs = GOLDEN_NOW_MS } = {}) {
   process.env.WORLD_STORE_DB = join(tmpdir(), "pm-foyer-no-such-world-store.db");
   delete process.env.TOWN_PUSH;
   delete process.env.TOWN_SINGLE_LOG;
+  // The fourth pinned input (POS-195): the stance credential, and a store that
+  // answers from the same dynamic path the 1.0 arm read.
+  Object.assign(process.env, STANCE_ON);
+  stancePoolFromJournal(dynamicDbPath());
 
   const dir = mkdtempSync(join(tmpdir(), "pm-doorstep-golden-"));
   const dbPath = join(dir, "fixture.db");
