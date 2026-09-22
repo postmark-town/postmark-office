@@ -23,6 +23,7 @@
 // both when present).
 
 import { boxOf } from "../world2/tools/seed-import.mjs";
+import { houseOfVia } from "./household-deriver.mjs";
 // Phase 5.6's deferred act is released through world2-pen's insertAct, INSIDE
 // the promotion's own transaction (imported lazily there — R1, 2026-08-29).
 
@@ -145,14 +146,50 @@ export async function withHousehold(p, household, fn) {
   }
 }
 
+/**
+ * ── THE DERIVER ANSWERS IT NOW (POS-160, the w40 ship) ──────────────────────
+ *
+ * This used to read `identities.household` — a projection of the WORLD repo's
+ * copy of the town's pins, four hops from the fact, answering in whichever
+ * spelling that copy happened to carry. So the store's rows recorded the same
+ * house two ways depending on when the row was written: measured on the live
+ * registry 2026-09-22, 173 of 190 handles wore `gh:<id>` and 17 wore
+ * `hh:<slug>`, and two handles of ONE house could wear one of each.
+ *
+ * It now asks `household-deriver.mjs`, the office's one walk over the registry
+ * that IS the record (`households` + `household_pins`, 019/020/021), and
+ * answers `hh:<slug>` — the key the ship writes from its law date on.
+ *
+ * ── WHICH ROWS MOVE, AND WHICH DO NOT ───────────────────────────────────────
+ *
+ * Every NEW row this pen writes from the law date carries `hh:<slug>`. Rows
+ * already in the store keep the spelling they were written with, and that is a
+ * problem THIS FUNCTION CANNOT SOLVE, because 007's draft row policy is a
+ * string equality (`household = current_setting('app.household', true)`): a
+ * resident whose key re-spells stops seeing their own drafts until the rows
+ * re-spell too. The backfill that re-spells them is `022_household_respell.sql`
+ * and it runs BETWEEN THE DEPLOY AND THE FIRST CROSSING — the store-backfill
+ * order wright-ship-week § 4.3b already rules for a backfill whose reader has
+ * shipped. The PR body carries that as its INSTALL block; nothing here is safe
+ * on a store where 022 has not run.
+ *
+ * ── THE MEMO STILL ONLY REMEMBERS A YES ─────────────────────────────────────
+ *
+ * A `solo:` answer is NOT cached, exactly as before. It means "the registry has
+ * never heard of this handle", which is a fact that changes the moment a join
+ * lands — and a cached absence would keep a brand-new resident outside their
+ * own house for the life of the process. A named house does not change under a
+ * running request, so that one is remembered.
+ */
 export async function householdKeyFor(p, handle) {
   if (!handle) return null;
   const hit = householdKeys.get(handle);
   if (hit) return hit;
-  const { rows } = await p.query("SELECT household FROM identities WHERE handle = $1", [handle]);
-  const key = rows[0]?.household ?? null;
-  if (key) householdKeys.set(handle, key);
-  return key ?? `solo:${handle}`;
+  const { slug } = await houseOfVia(p, handle);
+  if (!slug) return `solo:${handle}`;
+  const key = `hh:${slug}`;
+  householdKeys.set(handle, key);
+  return key;
 }
 
 /**

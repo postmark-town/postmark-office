@@ -219,7 +219,7 @@ jobs:
             INSERT INTO windows (id, opens_at, closes_at, status)
               VALUES (1, now() - interval '2 days', now() - interval '1 day', 'closed');
             INSERT INTO claims (window_id, class, claimant, household, status, body, geometry, slug, stake)
-              VALUES (1, 'sited', 'guards-alfa', 'gh:9000001', 'draft', 'a shed that stands in no journal',
+              VALUES (1, 'sited', 'guards-alfa', 'hh:guards-alfa-house', 'draft', 'a shed that stands in no journal',
                       '{\"slug\":\"guards-alfa/the-planted-shed\",\"at\":{\"x\":90,\"y\":90},\"extent\":{\"w\":2,\"h\":2}}',
                       'guards-alfa/the-planted-shed', 0);"
           echo "planted guards-alfa/the-planted-shed in claims — 1.0's journal never wrote it"

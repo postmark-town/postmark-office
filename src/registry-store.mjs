@@ -77,24 +77,36 @@ const PINS_SQL = `
 const META_SQL = "SELECT key, value FROM registry_meta";
 
 /**
- * The three tables -> the rows shape `registry-rows.mjs` folds and unfolds.
+ * The same three tables, read through a QUERYABLE the caller already holds.
  *
- * `null` = the office is not pointed at the record. Never `{}`.
+ * `loadRegistryRows` reaches for the module's own pool, which is the right
+ * shape for a door or a tool: it asks the store, and `null` means the office is
+ * not pointed at the record. It is the WRONG shape for `householdKeyFor`, which
+ * is handed a client that is already inside a transaction and — in every suite
+ * that has ever tested it — a stub pool that is the only store in the room.
+ * Reaching past that argument to the module pool would make the resolver answer
+ * from a different store than the one its caller is writing to, which is the
+ * two-queue disease with the queues renamed.
  *
- * `meta` is rebuilt in the FILE'S key order — `schema_version` first, then
- * `note` — because those two are the first bytes of `tools/households.json` and
- * a meta table read back in primary-key order would spell them the other way
- * round. The order is stated here rather than stored, because it is two keys
- * and a column holding it would be a column nobody could read.
+ * So: same SQL, same fold, the caller's queryable. No `world2Enabled` gate —
+ * a caller holding a client has already passed one — and a THROW rather than a
+ * `null` if the tables are not there, because a pool that answers some of this
+ * store's questions and not others is a fact worth failing on.
+ *
+ * (POS-160. `loadRegistryRows` is this function against the module pool, and
+ * it stays the entry point for everything that is not already holding one.)
  */
-export async function loadRegistryRows(env = process.env) {
+export async function registryRowsVia(q) {
   const [households, pins, meta] = await Promise.all([
-    actsQuery(HOUSEHOLDS_SQL, [], env),
-    actsQuery(PINS_SQL, [], env),
-    actsQuery(META_SQL, [], env),
+    q.query(HOUSEHOLDS_SQL).then((r) => r.rows),
+    q.query(PINS_SQL).then((r) => r.rows),
+    q.query(META_SQL).then((r) => r.rows),
   ]);
-  if (households === null || pins === null || meta === null) return null;
+  return foldRegistryRows(households, pins, meta);
+}
 
+/** The three result sets -> the rows shape. One fold, two readers. */
+function foldRegistryRows(households, pins, meta) {
   const byKey = new Map(meta.map((r) => [r.key, r.value]));
   const ordered = {};
   for (const k of ["schema_version", "note"]) if (byKey.has(k)) ordered[k] = byKey.get(k);
@@ -112,6 +124,27 @@ export async function loadRegistryRows(env = process.env) {
     households: households.map((r) => ({ ...r, ord: Number(r.ord) })),
     pins,
   };
+}
+
+/**
+ * The three tables -> the rows shape `registry-rows.mjs` folds and unfolds.
+ *
+ * `null` = the office is not pointed at the record. Never `{}`.
+ *
+ * `meta` is rebuilt in the FILE'S key order — `schema_version` first, then
+ * `note` — because those two are the first bytes of `tools/households.json` and
+ * a meta table read back in primary-key order would spell them the other way
+ * round. The order is stated here rather than stored, because it is two keys
+ * and a column holding it would be a column nobody could read.
+ */
+export async function loadRegistryRows(env = process.env) {
+  const [households, pins, meta] = await Promise.all([
+    actsQuery(HOUSEHOLDS_SQL, [], env),
+    actsQuery(PINS_SQL, [], env),
+    actsQuery(META_SQL, [], env),
+  ]);
+  if (households === null || pins === null || meta === null) return null;
+  return foldRegistryRows(households, pins, meta);
 }
 
 /** The registry object, as the clone's `tools/households.json` parses to. `null` = not asked. */

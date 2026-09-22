@@ -173,7 +173,14 @@ for (const [n, f] of Object.entries({ appendJournal, liveMarks, liveChildrenOf, 
 // `solo:gh:9000001` — a spelling of a spelling. Both happened on run 1, and both
 // were the harness rather than the port.
 const JOURNAL_HOUSEHOLD = { a: "guards-alfa", b: "guards-bravo" };
-const HOUSEHOLD_KEY = { a: "gh:9000001", b: "gh:9000002" };
+// POS-160: the resolved key is the house's SLUG. `householdKeyFor` reads the
+// REGISTRY (households + household_pins) rather than `identities`, so the
+// scratch seeds both below and they say the same thing — a harness that said it
+// one way in one table and another way in another is how a port gets blamed for
+// a fixture. The old spelling was `gh:9000001` / `gh:9000002`.
+const HOUSEHOLD_SLUG = { a: "guards-alfa-house", b: "guards-bravo-house" };
+const HOUSEHOLD_KEY = { a: `hh:${HOUSEHOLD_SLUG.a}`, b: `hh:${HOUSEHOLD_SLUG.b}` };
+const HOUSEHOLD_GH_ID = { a: 9000001, b: 9000002 };
 const ACTORS = { a: "guards-alfa", b: "guards-bravo" };
 
 const SCRIPT = [
@@ -213,6 +220,30 @@ async function plantPopulation(ownerClient, dbPath) {
     await ownerClient.query(
       "INSERT INTO identities (handle, household, status) VALUES ($1,$2,'resident') ON CONFLICT (handle) DO UPDATE SET household = EXCLUDED.household",
       [handle, HOUSEHOLD_KEY[k]]);
+
+  // THE REGISTRY, which is what `householdKeyFor` reads since POS-160 — the
+  // store-of-record 019 made these three tables into, rather than the world
+  // repo's copy projected into `identities`. The floor applies 019/020/021 to
+  // this lane's database, so the tables are HERE and EMPTY, and an empty
+  // registry makes every claim `solo:<handle>` and G2 red for a reason that is
+  // the harness's rather than the port's — which is the same sentence the
+  // `identities` seed above was written to prevent, one table over.
+  //
+  // One house per actor, listing that actor, pinned to the same id the old
+  // `gh:` key named. Both roads the deriver walks (residents[] and the pin)
+  // therefore reach the same door, which is the scratch stating one fact once.
+  for (const [k, handle] of Object.entries(ACTORS)) {
+    await ownerClient.query(
+      `INSERT INTO households (slug, ord, name, accounts, residents, since, declared_by)
+       VALUES ($1, $2, $3, $4::jsonb, $5, '2026-08-28', 'falsifier-guard-equality scratch')
+       ON CONFLICT (slug) DO UPDATE SET residents = EXCLUDED.residents, accounts = EXCLUDED.accounts`,
+      [HOUSEHOLD_SLUG[k], k === "a" ? 0 : 1, `Guards ${k.toUpperCase()}`,
+       JSON.stringify([{ login: handle, id: HOUSEHOLD_GH_ID[k] }]), [handle]]);
+    await ownerClient.query(
+      `INSERT INTO household_pins (handle, login, gh_id, pinned) VALUES ($1, $2, $3, '2026-08-28')
+       ON CONFLICT (handle) DO UPDATE SET login = EXCLUDED.login, gh_id = EXCLUDED.gh_id`,
+      [handle, handle, HOUSEHOLD_GH_ID[k]]);
+  }
 
   // an open window — the docket pen refuses without one ("no open window — the
   // candle is dark"), and that refusal would be swallowed by its own queue.

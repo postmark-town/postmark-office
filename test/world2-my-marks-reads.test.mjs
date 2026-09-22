@@ -86,7 +86,11 @@ const { world2MyMarks } = await import("../src/world2-serve.mjs");
 
 // ── the fixture store ───────────────────────────────────────────────────────
 
-const HOUSEHOLD = "gh:pos104";
+// POS-160: the door's key is the house's SLUG now, so the fixture spells it
+// the way the store will. Nothing about WHICH LISTS this suite is about moved —
+// the same handle, the same rows, the same three lists — only the spelling of
+// the one string they are all scoped by, which is the lane's whole point.
+const HOUSEHOLD = "hh:pos104";
 const TOWN_SHA = "610c43e7e5a7fabbcd340812b574c41ac31702f1";
 // A handle nothing else in the suite uses: `world2-claims.mjs` keeps a
 // process-wide `householdKeys` cache, and a shared handle would let one test's
@@ -141,6 +145,17 @@ function fixturePool({ marks = PUBLISHED_ROWS, claims = CLAIM_ROWS, escrow = ESC
     asked.push({ sql: String(sql).replace(/\s+/g, " ").trim(), params });
     if (/current_setting\('app\.household'/.test(sql)) return { rows: [{ declared: HOUSEHOLD }] };
     if (/FROM identities WHERE handle/i.test(sql)) return { rows: [{ household: HOUSEHOLD }] };
+    // THE REGISTRY, which is what `householdKeyFor` reads since POS-160. One
+    // house, slugged `pos104`, listing the one handle this suite uses — the
+    // same statement the `identities` line above makes, in the vocabulary the
+    // resolver now asks in.
+    if (/FROM households/i.test(sql)) return { rows: [{
+      slug: HOUSEHOLD.replace(/^hh:/, ""), ord: 0, name: null, human: null,
+      accounts: [], residents: ["pos104-wright"], since: null, member_of: null,
+      declared_by: null, formerly: [], provisional: false,
+    }] };
+    if (/FROM household_pins/i.test(sql)) return { rows: [] };
+    if (/FROM registry_meta/i.test(sql)) return { rows: [{ key: "schema_version", value: 1 }] };
     if (/FROM identities WHERE household/i.test(sql)) return { rows: [{ handle: "pos104-wright" }] };
     if (/FROM projection_heads/i.test(sql)) return { rows: townSha ? [{ sha: townSha }] : [] };
     if (/FROM escrow_projection/i.test(sql)) return { rows: escrow };
