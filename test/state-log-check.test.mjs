@@ -25,6 +25,7 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
@@ -35,7 +36,9 @@ import {
   checkStateLog, gapClassOf, windowCrossings, writeStateLogForWindow,
 } from "../world2/tools/state-log-write.mjs";
 
-const FIX = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
+const HERE = dirname(fileURLToPath(import.meta.url));
+const OFFICE = join(HERE, "..");
+const FIX = join(HERE, "fixtures");
 const sweep = (d) => { try { rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); } catch { /* litter */ } };
 const scratch = mkdtempSync(join(tmpdir(), "postmark-statelog-check-"));
 after(() => sweep(scratch));
@@ -357,6 +360,46 @@ test("C5b · the window's own horizon cannot be overridden by an argument", asyn
   assert.equal(f.lines, 2, "9005 and 9006 only — 9008 belongs to window 205 and stays there");
   const onDisk = readFileSync(join(repo, "STATE", "log", "204.journal.jsonl"), "utf8");
   assert.equal(onDisk.includes('"late"'), false, "and the later act is not in the file");
+});
+
+test("C5c · a bad command line is judged BEFORE a connection is opened, and answers 2", () => {
+  // THE DEFECT THIS CAUGHT, in this lane's own CLI: the `--window` shape check
+  // and the `--windows` parse both lived inside the `try`, AFTER
+  // `client.connect()`. So `--window 204.5` on the box would have opened a
+  // connection to PROD and only then discovered it had been handed something
+  // that is not a window id — and on a machine with no `WORLD2_PG_URL` the
+  // connect failed first, so an ARGUMENT error came back as exit 1 with a
+  // connection message and would send an operator to the wrong repair.
+  //
+  // Run as a subprocess with no `WORLD2_PG_URL` in the environment, which is
+  // what makes this an assertion rather than a description: if any of these
+  // reached the connect, the exit code would be 1 and not 2.
+  const env = { ...process.env };
+  delete env.WORLD2_PG_URL;
+  const cli = (...args) => spawnSync(process.execPath,
+    [join(OFFICE, "world2", "tools", "state-log-write.mjs"), ...args],
+    { encoding: "utf8", env });
+
+  const bad = [
+    [["--window", "204", "--check"], /--world <checkout> is required/],
+    [["--world", ".", "--window", "204", "--check", "--write"], /two different acts/],
+    [["--world", ".", "--check"], /is required/],
+    [["--world", ".", "--window", "204", "--windows", "203", "--check"], /two different ways/],
+    [["--world", ".", "--window", "204.5", "--check"], /not a candle window id/],
+    [["--world", ".", "--windows", "abc"], /names no finite crossing value/],
+    [["--world", ".", "--window", "204", "--check", "--last-drained", "nope"], /silently disarm MERGE_HAZARD/],
+  ];
+  for (const [args, re] of bad) {
+    const r = cli(...args);
+    assert.equal(r.status, 2, `${args.join(" ")} must answer 2, got ${r.status}: ${r.stderr}`);
+    assert.match(r.stderr, re, args.join(" "));
+  }
+
+  // THE CONTROL. A well-formed command line does NOT answer 2 — it gets as far
+  // as the register and fails there, for want of a connection. Without this,
+  // every assertion above would pass on a CLI that answered 2 to everything.
+  const ok = cli("--world", ".", "--window", "204", "--check");
+  assert.notEqual(ok.status, 2, "a good command line is not an argument error");
 });
 
 test("C6 · the writer refuses a crossing the DRAIN already photographed", async () => {

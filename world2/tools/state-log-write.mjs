@@ -485,7 +485,29 @@ if (process.argv[1]?.endsWith("state-log-write.mjs")) {
   if (!raw && one == null) { console.error("--windows <a,b,c> (exact crossing values) or --window <N> (a candle window) is required"); process.exit(2); }
   if (raw && one != null) { console.error("--windows and --window name the boundary two different ways; pass one"); process.exit(2); }
 
+  // THE WHOLE COMMAND LINE IS JUDGED BEFORE A CONNECTION IS OPENED.
+  //
+  // These two lived inside the `try`, AFTER `client.connect()`, and that is a
+  // defect rather than an ordering preference: `--window 204.5` on the box
+  // would open a connection to PROD and only then discover it had been handed
+  // something that is not a window id. It also reported the wrong thing — the
+  // connect failed first on a scratch machine, so an argument error came back
+  // as exit 1 with a connection message, and the operator is sent to the wrong
+  // repair. A tool decides whether it can do the work before it reaches for
+  // the register.
+  const window = one == null ? null : Number(one);
+  if (one != null && !Number.isInteger(window)) {
+    console.error(`--window ${one} is not a candle window id — an integer from the \`windows\` table, not a crossing value (those are --windows)`);
+    process.exit(2);
+  }
+  const windows = raw == null ? null : raw.split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n));
+  if (raw != null && !windows.length) { console.error(`--windows ${raw} names no finite crossing value`); process.exit(2); }
+
   const lastDrained = argOf("--last-drained", null);
+  if (lastDrained != null && !Number.isFinite(Number(lastDrained))) {
+    console.error(`--last-drained ${lastDrained} is not a crossing value — an unreadable one would silently disarm MERGE_HAZARD`);
+    process.exit(2);
+  }
   const lastDrainedWindow = lastDrained == null ? null : Number(lastDrained);
   const asOfWorld = argOf("--as-of-world", null);
 
@@ -495,14 +517,10 @@ if (process.argv[1]?.endsWith("state-log-write.mjs")) {
   try {
     let out;
     if (one != null) {
-      const window = Number(one);
-      if (!Number.isInteger(window)) { console.error(`--window ${one} is not a candle window id`); process.exit(2); }
       out = check
         ? await checkStateLog(client, { world, stateDir: argOf("--state-dir", null), window, asOfWorld, lastDrainedWindow })
         : await writeStateLogForWindow(client, { world, window, asOfWorld, lastDrainedWindow, dryRun: flag("--dry-run") });
     } else {
-      const windows = raw.split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n));
-      if (!windows.length) { console.error(`--windows ${raw} names no finite crossing value`); process.exit(2); }
       out = await writeStateLog(client, {
         world, windows,
         upto: argOf("--upto", null),
