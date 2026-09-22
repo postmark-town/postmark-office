@@ -140,6 +140,13 @@ const ROSTER = {
   // that is not a town checkout, so it refuses before it reads a berth, plans a
   // settlement or reaches the pen. --apply is not passed and could not write
   // anyway; the dry run is the default and the refusal comes first.
+  // POS-187's two. Both refuse on USAGE with no flag, which is before either
+  // reads the town clone, opens a Postgres connection or writes anything — the
+  // same "stops at the tool's first refusal" shape as the rest of this roster.
+  // NO_PG on top of that, so a regression that reached for a connection fails
+  // on the connection rather than quietly finding one.
+  "tools/registry-drain.mjs": { args: [], env: NO_PG, code: 1, needle: "pass exactly one of --check or --apply" },
+  "tools/registry-seed.mjs": { args: [], env: NO_PG, code: 1, needle: "pass exactly one of --dry-run or --apply" },
   "tools/settle-anchored-berths.mjs": { args: ["--clone", NOWHERE], code: 1, needle: "not a town checkout" },
   "tools/site-sentinel.mjs": { args: ["--now", "not-a-date", "--dry-run", "--state", NOWHERE_OUT, "--out", NOWHERE_OUT], env: { SENTINEL_DISCORD_WEBHOOK: undefined }, code: 1, needle: "site-sentinel" },
   "tools/stripe-watch.mjs": { args: ["--clone", NOWHERE], code: 1, needle: "no town clone with the funding seam" },
