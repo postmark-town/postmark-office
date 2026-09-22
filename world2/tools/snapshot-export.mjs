@@ -81,8 +81,14 @@
 //   …                            --target … --dry-run          (derive, write nothing)
 //   …                            --json                        (machine-readable summary)
 //
+//   the operator door (POS-189), for ONE archive the database no longer
+//   reproduces — every other differing archive still refuses:
+//
+//   …  --target … --refreeze 202 --reason "frozen before ferry 203 sailed"
+//
 // EXIT CODES:  0 green / nothing new to certify · 1 RED (drift, refusal) ·
-//              2 cannot run (caller, credential, or setup)
+//              2 cannot run (caller, credential, or setup — including
+//                --refreeze with no --reason)
 //
 // ── THE RED-PROOF CARRIES THE RUN ───────────────────────────────────────────
 //
@@ -99,6 +105,12 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
+// The town clock itself, not a second copy of its arithmetic. `crossings.mjs`
+// was extracted out of world.mjs precisely so a small tool could read the clock
+// without dragging the world in, and world2/tools already reads it this way
+// (falsifier-guard-equality.mjs). See § THE TWO CLOCKS below for why this pen
+// needs it at all.
+import { CROSSING_EPOCH_UTC, CROSSING_MS, currentCrossing } from "../../src/crossings.mjs";
 
 export const TOOL = "world2/tools/snapshot-export.mjs";
 
@@ -227,6 +239,82 @@ export function archiveLine(row) {
  */
 export function actsRangeFor(windowId, previousClosedId) {
   return { after: previousClosedId, upto: windowId };
+}
+
+// ── THE TWO CLOCKS, AND WHY A CLOSED WINDOW IS NOT YET A FINISHED ONE ────────
+//
+// This pen selected its windows on one clock and its acts on another, and the
+// two do not agree about when window N stops growing.
+//
+//   windows.status = 'closed'   the SETTLEMENT clock. Windows close at the
+//                               06:00Z / 18:00Z clearings.
+//   acts.crossing               the FERRY clock. Ferries sail 00:00Z / 12:00Z
+//                               (crossings.mjs, the ratified derivation).
+//
+// WHICH FERRY AN ACT'S NUMBER NAMES — the direction the whole rule turns on.
+// Every writer stamps `crossing: currentCrossing()` (src/world-apex.mjs,
+// src/world-hold.mjs, src/world.mjs), and `currentCrossing(now)` is
+// `floor((now − epoch) / 12h)` — the ferry that LAST SAILED, not the next one.
+// The pen that guards the insert says so in its own variable name:
+// world2-pen.mjs § lateCrossingGuard, `const open = currentCrossing(now)`, and
+// it throws on `crossing > open` because "the future is not a place a row can
+// file into". So an act numbered N is an act that arrived in
+// [ferry N sails, ferry N+1 sails) — and window N goes on growing until ferry
+// N+1 has sailed.
+//
+// THE INSTANCE (measured on the box, 2026-09-21/22, postmark POS-189). Ferry
+// 202 sailed 2026-09-21T00:00Z. At 07:22Z the settlement clock had already
+// closed window 202, and this pen froze it at 84 acts. Acts numbered 202 then
+// kept arriving — id 7181 at 07:47Z, id 7182 at 09:13Z — until the 12:00Z
+// ferry, which is ferry 203. The next night re-derived 94 and REFUSED, exactly
+// as § 2 says it must: from the repo's side, a window that grew after it was
+// frozen is indistinguishable from the office rewriting history. The refusal
+// was right; freezing that early was the defect. Red stood from 09-22 07:22Z
+// until a hand cleared it at 14:11Z.
+//
+// THE RULE THIS BUILDS: a window is archivable only once the ferry AFTER it has
+// sailed. Window 204 was archivable at 14:11Z on 09-22 (ferry 205 sailed at
+// 12:00Z); window 205 was not, and was correctly left alone.
+//
+// RESIDUAL, named because a rule should say where it stops being total:
+// `world2-pen.mjs § crossingIsLate` is `c < open − 1`, so a row stamped N may
+// still file without a reason while the open window is N+1 — the sub-second
+// race of a row composed just before a boundary and inserted just after. This
+// rule does not cover that race; holding a second ferry would, at the cost of
+// twelve more hours before every archive. The notary runs at 07:22Z, seven
+// hours from either boundary, so the race is not the failure that was measured.
+
+/** The instant ferry N sails, ISO, from the town clock's own epoch and interval. */
+export function crossingSailsAt(n) {
+  return new Date(CROSSING_EPOCH_UTC + Number(n) * CROSSING_MS).toISOString();
+}
+
+/** The ferry whose sailing completes window N — the one after it (see above). */
+export const completingFerryFor = (windowId) => Number(windowId) + 1;
+
+/**
+ * Split the settlement-closed windows into the ones whose ferry has sailed and
+ * the ones still growing. Window ids rise, so the held set is always a suffix.
+ * `now` is an argument, not a read of the wall clock, because a clock a test
+ * cannot move is a clause a test cannot falsify.
+ */
+export function ferryPartition(windows, now = Date.now()) {
+  const open = currentCrossing(typeof now === "number" ? now : new Date(now).getTime());
+  const archivable = [];
+  const held = [];
+  for (const w of windows) {
+    const id = Number(w.id);
+    const ferry = completingFerryFor(id);
+    if (ferry <= open) archivable.push(w);
+    else held.push({ ...w, id, ferry, sailsAt: crossingSailsAt(ferry) });
+  }
+  return { archivable, held, open };
+}
+
+/** How a held window says itself, beside the held-back acts line it belongs with. */
+export function heldWindowLine(h) {
+  return `window ${h.id} closed on the settlement clock; ferry ${h.ferry} sails at ${h.sailsAt}` +
+    ` — acts numbered ${h.id} may still arrive until it does, so the archive is not complete`;
 }
 
 // ── the mark render ──────────────────────────────────────────────────────────
@@ -459,10 +547,23 @@ export class Red extends Error {       // exit 1: drift, named
 
 // ── derive: everything both modes need, from the database alone ──────────────
 
-async function derive(client) {
-  const windows = await readWindows(client);
-  if (!windows.length) {
+// EXPORTED so the ferry gate can be falsified where it is WIRED, not only where
+// it is computed. A test that only asserted `ferryPartition` would stay green
+// through a revert of the two lines below, which is a probe that cannot fail.
+export async function derive(client, { now = Date.now() } = {}) {
+  const closed = await readWindows(client);
+  if (!closed.length) {
     throw new Cannot("no CLOSED window exists. There is nothing certified to certify — a notary that signed an empty book would be worse than one that refused.");
+  }
+  // THE FERRY CLOCK GATE (see § THE TWO CLOCKS). A window the settlement clock
+  // has closed is still growing until the ferry after it has sailed, and an
+  // archive is frozen on write — so freezing one early is not a small error, it
+  // is a file that every later run must refuse.
+  const { archivable: windows, held } = ferryPartition(closed, now);
+  if (!windows.length) {
+    throw new Cannot(
+      `every CLOSED window is still awaiting its ferry, so there is nothing complete to freeze yet:\n  ` +
+      held.map(heldWindowLine).join("\n  "));
   }
   const cursors = await readCursors(client);
   const latest = windows[windows.length - 1];
@@ -489,13 +590,14 @@ async function derive(client) {
   }
   const marksDigest = contentDigest(rendered.map((r) => ({ key: r.path, bytes: r.bytes })));
 
-  // Acts whose window has not closed belong to nobody's archive yet. Counted and
-  // named, because a durability lane that silently held rows back would be a
-  // backup with a hole in it.
+  // Acts no archive owns yet — because their window has not closed, or because
+  // it has closed but its ferry has not sailed. Counted and named, because a
+  // durability lane that silently held rows back would be a backup with a hole
+  // in it. `held` names the second reason window by window.
   const heldBack = cursors.acts_total - archives.reduce((n, a) => n + a.lines, 0);
 
   return {
-    windows, latest, cursors, archives, rendered, marksDigest, heldBack,
+    windows, held, latest, cursors, archives, rendered, marksDigest, heldBack,
     windowCursor: latest.id,
     pins: { law_sha: latest.law_sha, town_sha: latest.town_sha },
   };
@@ -522,15 +624,31 @@ function excerpt(a, b, width = 120) {
  * REFUSAL with the line named, not an overwrite. The whole point of § 2 is that
  * the repo catches the office rewriting history, and a pen that quietly restated
  * the archive would be the office's accomplice.
+ *
+ * THE OPERATOR DOOR (`refreeze`, POS-189; the 2026-09-14 rule that every guard
+ * gets an operator door with a receipt). A guard with no door is a defect: when
+ * this pen itself froze a window early, the only way past its own refusal was a
+ * hand removing the file from the notary repo with the reason in a commit
+ * message nobody had to write. So the door is here instead — ONE window,
+ * named by number, replaced by the re-derived bytes, with the old sha, the new
+ * sha and the operator's reason on the commit's first line. It narrows rather
+ * than widens: every other differing archive refuses exactly as before, which
+ * is why the refusal test above stays untouched and green.
  */
-export function checkArchives(target, archives) {
+export function checkArchives(target, archives, { refreeze = null } = {}) {
   const findings = [];
   const plan = [];
+  const wanted = refreeze === null ? null : Number(refreeze);
   for (const a of archives) {
     const full = path.join(target, a.path);
     if (!existsSync(full)) { plan.push({ ...a, action: "write" }); continue; }
     const have = readFileSync(full, "utf8");
     if (have === a.bytes) { plan.push({ ...a, action: "unchanged" }); continue; }
+
+    if (wanted !== null && Number(a.window) === wanted) {
+      plan.push({ ...a, action: "refreeze", was: have, oldSha: sha256(have), newSha: sha256(a.bytes) });
+      continue;
+    }
 
     const hl = have.length ? have.replace(/\n$/, "").split("\n") : [];
     const wl = a.bytes.length ? a.bytes.replace(/\n$/, "").split("\n") : [];
@@ -550,6 +668,50 @@ export function checkArchives(target, archives) {
       `    Either the file was edited, or the office rewrote history in a window it had already closed. Both want a human.`);
   }
   return { plan, findings };
+}
+
+const lineCount = (s) => (s.replace(/\n$/, "").length ? s.replace(/\n$/, "").split("\n").length : 0);
+
+/**
+ * The door's RECEIPT. Both sha256s and the operator's reason ride the first
+ * line, because that is the line `git log --oneline` shows and the line a
+ * reader scanning the notary repo's history will actually read: a replacement
+ * of a frozen archive must not be able to look like an ordinary certification.
+ */
+export function refreezeCommitMessage(a, reason, d) {
+  return `notary: refreeze archives/acts/${a.window}.jsonl — old sha256 ${a.oldSha}, new sha256 ${a.newSha} — ${reason}\n\n` +
+    `An archive is frozen on write (gold § 2). This run replaced one anyway, through the operator door\n` +
+    `\`--refreeze ${a.window} --reason "<text>"\`, and the two sha256s above are the whole receipt: anyone holding\n` +
+    `the previous commit can read exactly what stood here and exactly what replaced it.\n\n` +
+    `old sha256 ${a.oldSha} · ${lineCount(a.was)} line(s)\n` +
+    `new sha256 ${a.newSha} · ${a.lines} line(s)\n` +
+    `reason: ${reason}\n\n` +
+    `No other window was touched. Every other differing archive still refuses.\n` +
+    `window cursor ${d.windowCursor} · acts cursor ${d.cursors.acts_cursor}\n\nWritten by ${TOOL}.`;
+}
+
+/**
+ * `--refreeze <n> --reason "<text>"`, read off argv. Pure, so the refusal is
+ * testable without a database — and validated BEFORE the pen connects, so
+ * "--refreeze without --reason" exits 2 for the reason it names and not because
+ * some environment variable happened to be missing first.
+ */
+export function parseRefreeze(argv) {
+  const i = argv.indexOf("--refreeze");
+  if (i === -1) return { refreeze: null, reason: null };
+  const raw = argv[i + 1];
+  const n = Number(raw);
+  if (raw === undefined || String(raw).startsWith("--") || !Number.isInteger(n) || n < 0) {
+    throw new Cannot(`--refreeze wants a window NUMBER: got ${JSON.stringify(raw ?? null)}. Usage: --refreeze <n> --reason "<text>".`);
+  }
+  const j = argv.indexOf("--reason");
+  const reason = j === -1 ? "" : String(argv[j + 1] ?? "").trim();
+  if (!reason || reason.startsWith("--")) {
+    throw new Cannot(
+      `--refreeze ${n} needs --reason "<text>". Replacing a frozen archive is the one write this pen makes ` +
+      `that a human must own, and the reason goes on the commit's first line beside both sha256s. Refusing without one.`);
+  }
+  return { refreeze: n, reason };
 }
 
 /** Full re-render of the marks tree, including removing files no row derives. */
@@ -583,12 +745,26 @@ export function writeMarks(target, rendered, { dryRun }) {
   return { written, unchanged, removed };
 }
 
-async function runExport(client, { target, dryRun, allowDetached }) {
+async function runExport(client, { target, dryRun, allowDetached, now = Date.now(), refreeze = null, reason = null }) {
   assertUsableTarget(target, { allowDetached });
-  const d = await derive(client);
+  const d = await derive(client, { now });
 
-  const { plan, findings } = checkArchives(target, d.archives);
+  const { plan, findings } = checkArchives(target, d.archives, { refreeze });
   if (findings.length) throw new Red(`the append-only archive lane refuses this run`, findings);
+
+  // A door that silently does nothing is not a door. If the operator named a
+  // window, that window must actually be a differing archive — otherwise the
+  // run would report a refreeze it never made.
+  const refrozen = plan.filter((a) => a.action === "refreeze");
+  if (refreeze !== null && !refrozen.length) {
+    const held = d.held.find((h) => h.id === Number(refreeze));
+    throw new Cannot(
+      `--refreeze ${refreeze} has nothing to replace. ` +
+      (held ? `Window ${refreeze} is HELD BACK: ${heldWindowLine(held)}. Refreeze it after its ferry sails.`
+            : !d.archives.some((a) => Number(a.window) === Number(refreeze))
+              ? `No CLOSED window ${refreeze} is derived by this database.`
+              : `archives/acts/${refreeze}.jsonl either does not exist yet, or already reproduces exactly — there is no differing archive to replace.`));
+  }
 
   const cert = certification({ ...d, exportedAt: new Date().toISOString() });
   const tag = tagName(d);
@@ -625,7 +801,8 @@ async function runExport(client, { target, dryRun, allowDetached }) {
     catch { certChanged = true; }
   }
   const preview = writeMarks(target, d.rendered, { dryRun: true });
-  const wouldChange = certChanged || preview.written > 0 || preview.removed.length > 0 || plan.some((a) => a.action === "write");
+  const wouldChange = certChanged || preview.written > 0 || preview.removed.length > 0
+    || plan.some((a) => a.action === "write" || a.action === "refreeze");
 
   if (tagged && !wouldChange) {
     return { status: "already-certified", tag, cert, derived: d, wrote: null };
@@ -633,7 +810,7 @@ async function runExport(client, { target, dryRun, allowDetached }) {
 
   const marksResult = writeMarks(target, d.rendered, { dryRun });
   for (const a of plan) {
-    if (a.action !== "write" || dryRun) continue;
+    if ((a.action !== "write" && a.action !== "refreeze") || dryRun) continue;
     const full = path.join(target, a.path);
     mkdirSync(path.dirname(full), { recursive: true });
     writeFileSync(full, a.bytes);
@@ -648,7 +825,9 @@ async function runExport(client, { target, dryRun, allowDetached }) {
   // files the certification does not describe.
   git(target, ["add", "--", CERT_FILE, "archives", "WORLD2/marks"]);
   if (git(target, ["diff", "--cached", "--name-only"]).length) {
-    git(target, ["commit", "-m", tagged
+    git(target, ["commit", "-m", refrozen.length
+      ? refreezeCommitMessage(refrozen[0], reason, d)
+      : tagged
       ? `notary: restore the state ${tag} certifies\n\nThe tag stood; the checkout no longer held what it certifies. ` +
         `Re-derived and rewritten — the tag is unchanged.\n\nWritten by ${TOOL}.`
       : `notary: certify window ${d.windowCursor}, acts ${d.cursors.acts_cursor}\n\n` +
@@ -687,7 +866,7 @@ export function sampleIndexes(n, want) {
  * would catch a mangled archive too, but only as "the sha moved". Reading the
  * row back names the act, the field, and both spellings.
  */
-async function runVerify(client, { target, spotCheck }) {
+async function runVerify(client, { target, spotCheck, now = Date.now() }) {
   assertUsableTarget(target, { allowDetached: true });
   const certPath = path.join(target, CERT_FILE);
   if (!existsSync(certPath)) throw new Cannot(`${target} holds no ${CERT_FILE} — there is nothing to verify. (Exit 2: a verifier that checked nothing must not report green.)`);
@@ -696,7 +875,7 @@ async function runVerify(client, { target, spotCheck }) {
   try { onDisk = JSON.parse(readFileSync(certPath, "utf8")); }
   catch (e) { throw new Cannot(`${CERT_FILE} is not readable JSON: ${e.message}`); }
 
-  const d = await derive(client);
+  const d = await derive(client, { now });
   const findings = [];
 
   // 1 · the certification
@@ -775,8 +954,17 @@ async function runVerify(client, { target, spotCheck }) {
   const acts = path.join(target, "archives", "acts");
   if (existsSync(acts)) {
     const derived = new Set(d.archives.map((a) => path.posix.basename(a.path)));
+    // A file for a HELD window is a different finding, and saying so in the
+    // right words is the whole difference between "somebody forged a window"
+    // and "this pen froze one early" — which is the bug POS-189 is.
+    const heldByName = new Map(d.held.map((h) => [`${h.id}.jsonl`, h]));
     for (const name of readdirSync(acts)) {
-      if (!derived.has(name)) findings.push(`archives/acts/${name} is on disk but no CLOSED window derives it`);
+      if (derived.has(name)) continue;
+      const h = heldByName.get(name);
+      findings.push(h
+        ? `archives/acts/${name} was frozen before its ferry sailed — ${heldWindowLine(h)}. ` +
+          `It is short by construction and every later run will refuse it: the way through is --refreeze ${h.id} --reason "<text>" once ferry ${h.ferry} has sailed.`
+        : `archives/acts/${name} is on disk but no CLOSED window derives it`);
     }
   }
 
@@ -792,6 +980,9 @@ const USAGE = `usage:
   WORLD2_PG_URL=postgres://snapshot_reader:…@host/world2_dev \\
     node ${TOOL} --target <git-checkout> [--dry-run] [--allow-detached] [--json]
     node ${TOOL} --verify <git-checkout> [--spot-check N] [--json]
+
+the operator door, for ONE archive that the database no longer reproduces:
+    node ${TOOL} --target <git-checkout> --refreeze <window> --reason "<text>"
 
 The caller supplies the checkout; this pen never creates, fetches or pushes one.
 exit 0 green · 1 RED (drift or refusal) · 2 cannot run`;
@@ -817,13 +1008,19 @@ async function main() {
   const target = doVerify ? argOf("--verify") : argOf("--target");
   if (!target || has("--help") || has("-h")) { console.error(USAGE); process.exit(2); }
   const asJson = has("--json");
+  // Read and validated BEFORE connect(): a refusal that depends on which error
+  // the program happened to reach first is not a rule, it is an accident.
+  const { refreeze, reason } = parseRefreeze(process.argv);
+  if (refreeze !== null && doVerify) {
+    throw new Cannot("--refreeze is a WRITE; --verify never writes. Run the door against --target.");
+  }
 
   const { client, who } = await connect();
   let result;
   try {
     result = doVerify
       ? await runVerify(client, { target, spotCheck: Number(argOf("--spot-check") ?? 25) })
-      : await runExport(client, { target, dryRun: has("--dry-run"), allowDetached: has("--allow-detached") });
+      : await runExport(client, { target, dryRun: has("--dry-run"), allowDetached: has("--allow-detached"), refreeze, reason });
   } finally { await client.end(); }
 
   if (doVerify) {
@@ -836,13 +1033,23 @@ async function main() {
       console.log(`GREEN · ${target} certifies what the database derives`);
       console.log(`  window cursor ${derived.windowCursor} · acts cursor ${derived.cursors.acts_cursor} · ${derived.cursors.marks_count} marks`);
       console.log(`  ${derived.archives.length} archive(s), ${checked} line(s) read back against their acts rows`);
+      for (const h of derived.held) console.log(`  HELD BACK · ${heldWindowLine(h)}`);
       console.log(`  marks_content_sha ${cert.marks_content_sha}`);
     }
     process.exit(findings.length ? 1 : 0);
   }
 
   const { status, tag, commit, cert, derived, wrote } = result;
-  if (asJson) { console.log(JSON.stringify({ mode: "export", status, tag, commit, certification: cert }, null, 2)); process.exit(0); }
+  if (asJson) {
+    console.log(JSON.stringify({
+      mode: "export", status, tag, commit,
+      held: derived.held.map((h) => ({ window: h.id, ferry: h.ferry, sails_at: h.sailsAt })),
+      refrozen: (wrote?.archives ?? []).filter((a) => a.action === "refreeze")
+        .map((a) => ({ window: a.window, old_sha256: a.oldSha, new_sha256: a.newSha, reason })),
+      certification: cert,
+    }, null, 2));
+    process.exit(0);
+  }
   if (status === "already-certified") {
     console.log(`GREEN · nothing new to certify — ${tag} already stands, and it certifies exactly what the database derives`);
     process.exit(0);
@@ -855,8 +1062,15 @@ async function main() {
   }[status];
   console.log(`${HEAD[0]} · ${HEAD[1]} ${tag}${commit ? ` at ${commit}` : ""} (read as ${who})`);
   console.log(`  windows closed ${derived.windows.map((w) => w.id).join(", ")} · acts cursor ${derived.cursors.acts_cursor} · marks ${derived.cursors.marks_count}`);
-  for (const a of wrote.archives) console.log(`  archives/acts/${a.window}.jsonl — ${a.lines} act(s) [${a.action}]`);
-  if (derived.heldBack) console.log(`  ${derived.heldBack} act(s) held back: their window has not closed, so no archive owns them yet`);
+  for (const a of wrote.archives) {
+    console.log(`  archives/acts/${a.window}.jsonl — ${a.lines} act(s) [${a.action}]` +
+      (a.action === "refreeze" ? `\n      old sha256 ${a.oldSha}\n      new sha256 ${a.newSha}\n      reason: ${reason}` : ""));
+  }
+  // The two reasons an act has no archive, said apart. "Their window has not
+  // closed" was the ONLY sentence this pen had, and it was the wrong one for
+  // the newest window every single run (POS-189).
+  for (const h of derived.held) console.log(`  HELD BACK · ${heldWindowLine(h)}`);
+  if (derived.heldBack) console.log(`  ${derived.heldBack} act(s) held back: no archive owns them yet — their window has not closed, or has closed but its ferry has not sailed`);
   console.log(`  marks: ${wrote.marks.written} written, ${wrote.marks.unchanged} unchanged${wrote.marks.removed.length ? `, ${wrote.marks.removed.length} removed` : ""}`);
   console.log(`  marks_content_sha ${cert.marks_content_sha}`);
   console.log(`  archives_sha ${cert.archives_sha}`);
