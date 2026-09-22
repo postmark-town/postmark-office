@@ -133,6 +133,7 @@
 //   WORLD2_PG_URL=… node world2/tools/state-log-write.mjs \
 //     --world /path/to/sweep-clone --window 204 --write
 
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
@@ -142,6 +143,18 @@ import { householdNamerFor } from "./state-log-rederive.mjs";
 
 const argOf = (n, d = null) => { const i = process.argv.indexOf(n); return i !== -1 ? process.argv[i + 1] : d; };
 const flag = (n) => process.argv.includes(n);
+
+/**
+ * THE FILE'S OWN FINGERPRINT, twelve hex, on every receipt line.
+ *
+ * Over the BYTES and not over the derived lines, because the point of it is to
+ * answer "is what is on disk now what was on disk last run" without a diff —
+ * and a hash of the derivation would answer a question about the register
+ * instead, which is the substitution that makes a freshness stamp name a source
+ * it did not come from. On a `--write` it is read back from the file after the
+ * write, so it is the pen's output and not the pen's intention.
+ */
+export const shaOf = (bytes) => createHash("sha256").update(bytes ?? "", "utf8").digest("hex").slice(0, 12);
 
 /**
  * THE BOUNDARY, STATED FROM THE WINDOW'S OWN NUMBER.
@@ -267,6 +280,15 @@ export async function writeStateLog(client, {
     // converges the same way an interrupted drain did.
     const w2 = writeJournalWindow(STATE, out.crossing, out.lines, { asOfWorld });
     written.push({ crossing: out.crossing, lines: out.lines.length, wrote: w2.wrote,
+      // READ BACK FROM DISK, after the write. `writeJournalWindow` MERGES, so
+      // the file may hold more lines than this run derived — an earlier
+      // window's rows in the same crossing's file. A sha over `out.lines`
+      // would therefore name bytes that are not the ones on disk, which is the
+      // whole failure mode of a stamp that reports its input instead of its
+      // output.
+      sha: existsSync(w2.logPath) ? shaOf(readFileSync(w2.logPath, "utf8")) : null,
+      file_lines: existsSync(w2.logPath)
+        ? readFileSync(w2.logPath, "utf8").split("\n").filter((s) => s.trim()).length : 0,
       unnamed_households: out.unnamed_households });
   }
 
@@ -432,6 +454,12 @@ export async function checkStateLog(client, {
       crossing: out.crossing, derived_lines: out.lines.length, file_lines: fileLines.length,
       beyond_horizon: beyondHorizon, unparsed, byte_equal: byteEqual,
       equal: cmp.equal, classes, first_difference: first, path: logPath,
+      // BOTH SHAS, side by side. Equal is the one-glance answer; unequal names
+      // which two things differ without making a reader hold a diff in their
+      // head. `derived_sha` is over what this window alone renders, so on a
+      // file two settlements have written it is expected to differ — the
+      // classes are what say whether that difference is a cost or a finding.
+      sha: shaOf(onDiskBytes), derived_sha: shaOf(derivedBytes),
       unnamed_households: out.unnamed_households,
     });
   }

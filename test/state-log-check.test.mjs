@@ -26,6 +26,7 @@ import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
@@ -39,6 +40,10 @@ import {
 const HERE = dirname(fileURLToPath(import.meta.url));
 const OFFICE = join(HERE, "..");
 const FIX = join(HERE, "fixtures");
+/** The receipt's own fingerprint rule, restated here rather than imported: a test that
+    borrowed the implementation's hash could not tell a wrong one from a right one. */
+const sha12 = (s) => createHash("sha256").update(s, "utf8").digest("hex").slice(0, 12);
+
 const sweep = (d) => { try { rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); } catch { /* litter */ } };
 const scratch = mkdtempSync(join(tmpdir(), "postmark-statelog-check-"));
 after(() => sweep(scratch));
@@ -297,6 +302,30 @@ test("C2 · the on-disk horizon is filtered on BOTH sides, and the count dropped
   const onDisk = readFileSync(join(repo, "STATE", "log", "204.journal.jsonl"), "utf8");
   assert.equal(onDisk.split("\n").filter(Boolean).length, 3, "merged by seq: the file now holds the later row too");
 
+  // A WRITE RE-DERIVES ITS WHOLE CROSSING UP TO ITS OWN HORIZON, with no lower
+  // bound, so window 205 rendered all three rows and not just its own. That is
+  // deliberate and it is what makes the pen self-healing: the rows the previous
+  // settlement already wrote come back with the SAME `acts.id` seq, so the
+  // merge is a no-op on them. This assertion is here because the first version
+  // of it said `lines === 1` — I asserted my own design wrong, and the test
+  // said so.
+  assert.equal(next.windows[0].lines, 3, "window 205 re-derives the whole crossing up to its close");
+  assert.equal(next.windows[0].file_lines, 3);
+
+  // THE RECEIPT'S SHA IS THE FILE'S, NOT THE DERIVATION'S, and only this
+  // ordering can catch the difference. Re-running the OLDER window now — what a
+  // backfill or a by-hand repair does — derives two rows against a file that
+  // holds three, because the merge keeps 9008. A sha hashed from `out.lines`
+  // would report a fingerprint for bytes nobody can find on disk. Everywhere
+  // else the two coincide and the assertion would be decorative.
+  const again = await writeStateLogForWindow(client, { world: repo, window: 204, commit: false });
+  const f = again.windows.find((x) => x.crossing === 204);
+  assert.equal(f.lines, 2, "window 204 derives only its own two rows");
+  assert.equal(f.file_lines, 3, "and the file it leaves still holds the third");
+  assert.equal(f.sha, sha12(onDisk), "the sha names the three lines on disk");
+  assert.notEqual(f.sha, sha12(onDisk.split("\n").filter(Boolean).slice(0, 2).join("\n") + "\n"),
+    "and it is NOT a sha of the two lines this run derived");
+
   const chk = await checkStateLog(client, { world: repo, window: 204 });
   const c = chk.crossings.find((x) => x.crossing === 204);
   assert.equal(c.beyond_horizon, 1, "the later row is named, not silently dropped");
@@ -317,9 +346,25 @@ test("C3 · --write twice is one diff of zero", async () => {
     }
   }
   assert.equal(first.size, 6, "three files and three metas");
-  await writeStateLogForWindow(client, { world: repo, window: 204, commit: false });
+  const out1 = await writeStateLogForWindow(client, { world: repo, window: 204, commit: false });
   for (const [p, bytes] of first) assert.equal(readFileSync(p, "utf8"), bytes, `${p} is unchanged`);
+
+  // AND THE RECEIPT SAYS SO WITHOUT A DIFF. The sha on each line is read back
+  // from the FILE after the write, not hashed from the derivation — a stamp
+  // over the input would report "same" for a run whose output had changed.
+  assert.deepEqual(out1.windows.map((x) => x.sha), first2Shas(repo),
+    "the reported sha is the sha of what is actually on disk");
+  for (const w of out1.windows) {
+    assert.match(w.sha, /^[0-9a-f]{12}$/);
+    assert.equal(w.file_lines >= w.lines, true, "the file holds at least what this run derived");
+  }
 });
+
+/** The three journal files' shas, straight off disk, in crossing order. */
+function first2Shas(repo) {
+  return [203, 203.8541666666667, 204].map((c) =>
+    sha12(readFileSync(join(repo, "STATE", "log", `${c}.journal.jsonl`), "utf8")));
+}
 
 test("C4 · a window with no acts is NOT clean — it says nothing was compared", async () => {
   // "Green, I looked at nothing" is the starving-crossing shape one layer down.
