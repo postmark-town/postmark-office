@@ -17,7 +17,7 @@ import { escrowDetail, fundRead, KEEPING_STAKE_MARK, STAKE_POT_BODY, POT_STAKEAB
 import { clipPotStake } from "../src/pot-stake-exec.mjs";
 import { intakeDisclosure, INTAKE } from "../src/fund.mjs";
 import { readIntakeMap } from "../src/intake-map.mjs";
-import { HOUSEHOLD_DISPATCHABLE, householdDispatchToolFor } from "../src/household-apex.mjs";
+import { HOUSEHOLD_DISPATCHABLE, HOUSEHOLD_READS, householdDispatchToolFor } from "../src/household-apex.mjs";
 
 // A town whose WHITE_PAGES holds exactly the pot shapes the law now allows.
 function tempTown(pots) {
@@ -536,4 +536,44 @@ test("a pot that is not open publishes no address, per-pot map or not", () => {
   assert.match(row.why, /cannot take a dollar/);
   assert.equal(/0x[0-9a-fA-F]{40}/.test(JSON.stringify(row)), false,
     "not even its own minted address leaks from a pot that is not open");
+});
+
+// ── POS-184 · the `fund` read carries the stakers its own card promises ──────
+//
+// The card at household-apex.mjs § HOUSEHOLD_READS.fund now says this read
+// answers WHO has staked. fundRead FLATTENS the board's escrow block to a bare
+// number (`escrow: p.escrow?.staked ?? 0`), so without the field beside it the
+// description would promise an answer the door drops on its way out — a door
+// lying about itself, which is the drift class this suite keeps catching. Both
+// halves are asserted together, because either alone can go stale silently.
+
+// A db that serves the pot files AND the escrow behind them, which potDb above
+// deliberately does not — this test's whole subject is the escrow.
+const stakedDb = (files, stakers) => ({
+  prepare: (sql) => ({
+    all: () => (/FROM pots\b/.test(sql) ? files.map((f) => ({ id: f.pot, json: JSON.stringify(f) }))
+      : /FROM pot_stakers\b/.test(sql) ? stakers : []),
+    get: () => (/FROM pot_escrow\b/.test(sql)
+      ? { staked: stakers.reduce((n, s) => n + s.staked, 0) } : undefined),
+  }),
+});
+
+test("POS-184 — the `fund` read names WHO staked, and its card says so", () => {
+  const rows = [{ handle: "keemin", staked: 6 }, { handle: "limen", staked: 2 }];
+  const answer = fundRead(null, { db: stakedDb([EPOCH_POT], rows) });
+  const pot = potIn(answer, "keeping-ec2");
+  assert.deepEqual(pot.stakers, rows, "the read carries them, biggest first, as the board sorted them");
+  assert.equal(pot.stakers.reduce((n, s) => n + s.staked, 0), pot.escrow,
+    "and the flat `escrow` number it has always carried is exactly their sum");
+
+  // THE CARD. An agent chooses this read from its one-line description and
+  // nowhere else, so the field is only discoverable if the line names it.
+  assert.match(HOUSEHOLD_READS.fund, /stake/i,
+    "the card an agent picks this read from names the stakes as part of the answer");
+
+  // AND THE EMPTY CASE, present rather than absent: "nobody yet" is an answer a
+  // resident can act on; a missing field is a door that did not look.
+  const bare = potIn(fundRead(null, { db: stakedDb([EPOCH_POT], []) }), "keeping-ec2");
+  assert.deepEqual(bare.stakers, [], "an empty list");
+  assert.equal(bare.escrow, 0, "beside the zero it sums to");
 });
