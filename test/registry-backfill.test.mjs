@@ -361,6 +361,64 @@ test("a pin the registry already holds is NEVER re-bound by the backfill", () =>
   assert.equal(second.houses[0].pins[0].login, "someone-else");
 });
 
+// ── THE TOWN'S OWN TWO INVARIANTS ───────────────────────────────────────────
+//
+// The town's witness re-proves these on the head of any PR touching
+// `tools/households.json` (town `tools/witness.mjs` rule 2b, the founder's word
+// on PR #2000): ONE HOUSEHOLD PER RESIDENT and ONE PER ACCOUNT ID. The drain
+// commits as the office pen rather than through a resident's PR, so the witness
+// does not gate it — which is exactly why the planner has to hold the line
+// itself rather than rely on being stopped.
+//
+// It holds by construction: a resident is planned only when NO road finds them
+// a house, so neither they nor their account stands in one. This asserts the
+// construction rather than trusting it.
+
+const invariants = (rows, houses) => {
+  const reg = registryFromRows(rows).households;
+  const residents = new Map();
+  const accounts = new Map();
+  const bad = [];
+  const note = (map, key, slug, what) => {
+    if (map.has(key)) bad.push(`${what} ${key} is in ${map.get(key)} AND ${slug}`);
+    else map.set(key, slug);
+  };
+  for (const [slug, rec] of Object.entries(reg)) {
+    for (const h of rec.residents ?? []) note(residents, h, slug, "resident");
+    for (const a of rec.accounts ?? []) note(accounts, String(a.id), slug, "account");
+  }
+  for (const h of houses) {
+    for (const r of h.residents) note(residents, r, h.slug, "resident");
+    for (const a of h.accounts) note(accounts, String(a.id), h.slug, "account");
+  }
+  return bad;
+};
+
+test("the real registry already holds both invariants — the check is real before it is used", () => {
+  assert.deepEqual(invariants(ROWS(), []), []);
+});
+
+test("a plan never puts a resident, or an account, into a second household", () => {
+  const roll = [
+    R("one", { household: "New House", joined: "2026-08-01" }),
+    R("two", { household: "New House", joined: "2026-08-02" }),
+    R("three", { household: "Other House" }),
+    R("four"),
+  ];
+  const plan = planBackfill(roll, ROWS());
+  assert.equal(plan.counts.planned, 3);
+  assert.deepEqual(invariants(ROWS(), plan.houses), [], "119+3 houses, still one per resident and one per account");
+});
+
+test("THE INVARIANT CHECK CAN FAIL: two houses holding one resident are named", () => {
+  const bad = invariants(ROWS(), [
+    { slug: "house-a", residents: ["shared"], accounts: [] },
+    { slug: "house-b", residents: ["shared"], accounts: [] },
+  ]);
+  assert.equal(bad.length, 1);
+  assert.match(bad[0], /resident shared is in house-a AND house-b/);
+});
+
 // ── THE PARTS, EACH ABLE TO FAIL ────────────────────────────────────────────
 
 test("byJoined puts the earliest first, breaks a tie by handle, and sorts an undated card LAST", () => {
