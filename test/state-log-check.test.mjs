@@ -426,7 +426,7 @@ test("C5c · a bad command line is judged BEFORE a connection is opened, and ans
     { encoding: "utf8", env });
 
   const bad = [
-    [["--window", "204", "--check"], /--world <checkout> is required/],
+    [["--window", "204", "--check"], /--world <checkout> is required, and one of --window/],
     [["--world", ".", "--window", "204", "--check", "--write"], /two different acts/],
     [["--world", ".", "--check"], /is required/],
     [["--world", ".", "--window", "204", "--windows", "203", "--check"], /two different ways/],

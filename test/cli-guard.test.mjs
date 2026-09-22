@@ -182,7 +182,12 @@ const ROSTER = {
   "world2/tools/snapshot-export.mjs": { args: ["--help"], env: NO_PG, code: 2, needle: "usage:" },
   "world2/tools/stamp-ingest.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: stamp-ingest.mjs" },
   "world2/tools/state-log-rederive.mjs": { args: [], env: { ...NO_PG, WORLD2_PG_URL: "postgres://nobody@localhost/not_scratch" }, code: 2, needle: "REFUSED · WORLD2_PG_URL must name" },
-  "world2/tools/state-log-write.mjs": { args: [], env: NO_PG, code: 2, needle: "--world <checkout> and --windows" },
+  // POS-155 gave this tool a second door (`--window <N>`, a candle window) beside
+  // the exact-crossing `--windows`, so its no-args sentence names both. The
+  // needle moved with the sentence, which is this roster working: the CLI was
+  // restructured, the guard went red, and the new words had to be chosen rather
+  // than arrived at.
+  "world2/tools/state-log-write.mjs": { args: [], env: NO_PG, code: 2, needle: "--world <checkout> is required, and one of --window" },
   // A safe entry proof for a tool that WRITES to the live world store: no flag,
   // so it stops on usage. The store is opened lazily precisely so this refusal
   // never reaches Postgres — NO_PG below would make a connection fail anyway,

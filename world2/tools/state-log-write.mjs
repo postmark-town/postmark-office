@@ -509,7 +509,14 @@ if (process.argv[1]?.endsWith("state-log-write.mjs")) {
   const check = flag("--check");
   const write = flag("--write");
 
-  if (!world) { console.error("--world <checkout> is required"); process.exit(2); }
+  // THE NO-ARGS LINE NAMES EVERYTHING REQUIRED, not the first thing missing.
+  // `test/cli-guard.test.mjs`'s roster pins this sentence, and it pins it
+  // because a misinvoked tool that answers with one requirement at a time makes
+  // an operator discover the command line one failed run at a time.
+  if (!world) {
+    console.error("--world <checkout> is required, and one of --window <N> (a candle window) or --windows <a,b,c> (exact crossing values)");
+    process.exit(2);
+  }
   if (check && write) { console.error("--check and --write are two different acts; pass one"); process.exit(2); }
   if (!raw && one == null) { console.error("--windows <a,b,c> (exact crossing values) or --window <N> (a candle window) is required"); process.exit(2); }
   if (raw && one != null) { console.error("--windows and --window name the boundary two different ways; pass one"); process.exit(2); }
