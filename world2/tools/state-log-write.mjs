@@ -461,7 +461,12 @@ export async function writeStateLogForWindow(client, { window, ...rest } = {}) {
     return { window: w.window, windows: [], state_commit: null, boundary: WINDOW_BOUNDARY,
       state_note: "the window holds no acts — nothing to photograph" };
   }
-  const out = await writeStateLog(client, { windows: w.crossings, upto: w.closes_at, ...rest });
+  // THE WINDOW'S OWN VALUES WIN, AND THE SPREAD ORDER IS WHAT MAKES THAT TRUE.
+  // Written `{ windows, upto, ...rest }` a caller passing `upto` would silently
+  // override the window's close and pull the NEXT window's rows into this
+  // commit — the boundary defeated by an argument, which is the one thing this
+  // door exists to prevent. `rest` goes first so it cannot reach them.
+  const out = await writeStateLog(client, { ...rest, windows: w.crossings, upto: w.closes_at });
   return { window: w.window, opens_at: w.opens_at, closes_at: w.closes_at, boundary: WINDOW_BOUNDARY, ...out };
 }
 

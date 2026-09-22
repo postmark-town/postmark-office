@@ -342,6 +342,23 @@ test("C5 · an unrecognised cause never borrows a known gap's name", async () =>
   assert.equal(gapClassOf({ field: "somethingNobodyHasWrittenYet", cause: "values differ" }), "unexplained");
 });
 
+test("C5b · the window's own horizon cannot be overridden by an argument", async () => {
+  // The spread order in `writeStateLogForWindow` is load-bearing. With `rest`
+  // spread LAST a caller passing `upto` would replace the window's close, and
+  // window 204's commit would quietly carry act 9008 — a row belonging to
+  // window 205. The boundary defeated by an argument is the one thing this
+  // door exists to prevent, so the attempt is made here and must fail.
+  const repo = world("c5b");
+  const out = await writeStateLogForWindow(reg(), {
+    world: repo, window: 204, commit: false,
+    upto: "2026-09-22T17:45:00.000Z",   // window 205's close, offered and ignored
+  });
+  const f = out.windows.find((x) => x.crossing === 204);
+  assert.equal(f.lines, 2, "9005 and 9006 only — 9008 belongs to window 205 and stays there");
+  const onDisk = readFileSync(join(repo, "STATE", "log", "204.journal.jsonl"), "utf8");
+  assert.equal(onDisk.includes('"late"'), false, "and the later act is not in the file");
+});
+
 test("C6 · the writer refuses a crossing the DRAIN already photographed", async () => {
   // `MERGE_HAZARD`, reached through the window door rather than the exact-value
   // one: the register's seq is `acts.id`, a different numbering, so re-deriving
