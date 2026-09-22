@@ -184,8 +184,14 @@ function printPlan(read, plan) {
       say(`    name              ${h.name}`);
       say(`    first resident    ${h.firstResident} (joined ${h.since ?? "unstated"})`);
       say(`    residents         ${h.residents.join(", ")}`);
-      say(`    accounts          ${h.accounts.map((a) => "@" + a.login + " #" + a.id).join(", ") || "(none — no resident of this house is pinned)"}`);
-      say(`    pins to add       ${h.pins.map((p) => p.handle + " -> @" + p.login).join(", ") || "(none — every resident is already pinned)"}`);
+      say(`    accounts          ${h.accounts.map((a) => "@" + a.login + " #" + a.id).join(", ") || "(none — no resident of this house carries a pin)"}`);
+      // TWO DIFFERENT ZEROES, and they must not wear one sentence: a house
+      // whose residents are all pinned already needs no pin written, and a
+      // house where nobody is pinned at all has none to write. Reporting the
+      // second as the first tells a reader that identities are on record when
+      // none is.
+      say(`    pins to add       ${h.pins.map((p) => p.handle + " -> @" + p.login).join(", ")
+        || (h.accounts.length ? "(none — every resident is already pinned)" : "(none — no resident of this house carries a pin to write)")}`);
     }
   }
   if (plan.refusals.length) {
