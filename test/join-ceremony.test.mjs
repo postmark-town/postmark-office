@@ -654,3 +654,54 @@ test("a mint whose write fails REFUSES the join — never a warn with a false no
     if (was.url === undefined) delete process.env.WORLD2_PG_URL; else process.env.WORLD2_PG_URL = was.url;
   }
 });
+
+// ── A REFUSED DRAIN IS NEVER SILENT ─────────────────────────────────────────
+
+test("a mint whose DRAIN refuses still founds the house, and says the files did not follow", async () => {
+  // Review 6/6. `drainRegistry` answers `{ ran: false, refused }` rather than
+  // shrink the registry, and both ceremonies dropped that answer on the floor:
+  // the row had landed and the town's two files had NOT been re-rendered — a
+  // state only a person can clear with `registry-drain --ingest-missing` — and
+  // the door answered as if everything had landed.
+  //
+  // IT IS NOT A REFUSAL OF THE CEREMONY. The house IS founded and the record IS
+  // the record; the files are a rendering one crossing behind. Telling a
+  // resident their house failed would be as untrue as saying nothing.
+  await withPool(async (pool) => {
+    const r = await mintHousehold({
+      slug: "a-house-whose-files-lag", coSign: CO_SIGN, since: "2026-09-22",
+      declaredBy: "x", env: ENV_ON,
+      drain: async () => ({ ran: false, refused: "the files hold `a-merged-house`, which the store does not", changed: [] }),
+    });
+    assert.ok(pool.state.households.some((h) => h.slug === "a-house-whose-files-lag"),
+      "the house IS founded — the record is the record");
+    assert.deepEqual(r.registry, {
+      rendered: false,
+      refused: "the files hold `a-merged-house`, which the store does not",
+    }, "and the outcome rides back in the ceremony's own shape");
+  });
+});
+
+test("a mint whose drain succeeds says so plainly", async () => {
+  // The other side, so `rendered` is a fact and not a field that only ever
+  // appears when something went wrong.
+  await withPool(async () => {
+    const r = await mintHousehold({
+      slug: "a-house-whose-files-follow", coSign: CO_SIGN, since: "2026-09-22",
+      declaredBy: "x", env: ENV_ON,
+      drain: async () => ({ ran: true, changed: [REGISTRY_PATH, PINS_PATH], commit: null }),
+    });
+    assert.deepEqual(r.registry, { rendered: true });
+  });
+});
+
+test("the membership carries the same outcome, in the same shape", async () => {
+  await withPool(async () => {
+    const r = await joinHousehold({
+      slug: "fox-hearth", handle: "a-lagging-join", coSign: CO_SIGN, env: ENV_ON,
+      drain: async () => ({ ran: false, refused: "a pin the files hold and the store does not", changed: [] }),
+    });
+    assert.equal(r.registry.rendered, false);
+    assert.match(r.registry.refused, /a pin the files hold/);
+  });
+});

@@ -46,17 +46,44 @@ import { fileURLToPath } from "node:url";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 /** Every `.mjs` the office ships, as { file, lines }. */
-function sources() {
+/**
+ * Every `.mjs` the office ships, as { file, lines } — RECURSIVELY (review 6/6).
+ *
+ * The first pass read `src/` and `tools/` one level deep, which is where every
+ * writer happened to live on the day it was written. A guard whose reach stops
+ * at the top of a directory is a guard somebody walks under by making a
+ * subdirectory, and `world2/tools/` is already one level further down than that
+ * scan could see.
+ */
+function sources(dirs = ["src", "tools", "world2/tools", "deploy"]) {
   const out = [];
-  for (const d of ["src", "tools"]) {
-    for (const f of readdirSync(join(ROOT, d))) {
-      if (!f.endsWith(".mjs")) continue;
-      const rel = `${d}/${f}`;
-      out.push({ file: rel, lines: readFileSync(join(ROOT, rel), "utf8").split(/\r?\n/) });
+  const walk = (rel) => {
+    let entries;
+    try { entries = readdirSync(join(ROOT, rel), { withFileTypes: true }); }
+    catch { return; }                       // a directory this checkout does not have
+    for (const e of entries) {
+      if (e.name === "node_modules" || e.name.startsWith(".")) continue;
+      const child = `${rel}/${e.name}`;
+      if (e.isDirectory()) { walk(child); continue; }
+      if (!e.name.endsWith(".mjs")) continue;
+      out.push({ file: child, lines: readFileSync(join(ROOT, child), "utf8").split(/\r?\n/) });
     }
-  }
+  };
+  for (const d of dirs) walk(d);
   return out;
 }
+
+test("the scan REACHES a nested file — a guard that stops at the top level guards nothing", () => {
+  // The probe on the probe. `src/` has no subdirectories today, so a
+  // non-recursive scan and a recursive one return the same set and the change
+  // would be untestable by its result. `world2/tools/` is a real directory one
+  // level deeper than the first pass could see, and finding a file there is
+  // what says the walk descends.
+  const files = sources().map((s) => s.file);
+  assert.ok(files.some((f) => f.startsWith("world2/tools/")),
+    "the scan must reach world2/tools/, which the first pass could not see");
+  assert.ok(files.length > 40, `only ${files.length} files scanned — the walk is not walking`);
+});
 
 // Comment lines are excluded, and deliberately: this file's own prose names
 // every retired writer, and so do the headers of the five modules that used to

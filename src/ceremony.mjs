@@ -182,6 +182,27 @@ export function collectingDrain({ clone, env } = {}) {
   return { drain, paths };
 }
 
+// ── A REFUSED DRAIN IS NEVER SILENT (POS-158, review 6/6) ─────────────
+//
+// `drainRegistry` answers `{ ran: false, refused }` rather than shrink the
+// registry, and both ceremonies used to drop that answer on the floor. The row
+// had landed in the record and the town's two files had NOT been re-rendered —
+// a state only a person can clear (`registry-drain --ingest-missing`) — and
+// nothing anywhere said so. The door answered as if everything had landed.
+//
+// So the outcome rides back to the caller and is logged once. It is not a
+// refusal of the ceremony: the house IS founded, the record IS the record, and
+// the files are a rendering that is one crossing behind. Telling a resident
+// their house failed would be as untrue as saying nothing.
+const drainOutcome = (drained) => (drained?.refused
+  ? { rendered: false, refused: drained.refused }
+  : { rendered: true });
+
+const logRefusedDrain = (where, drained) => {
+  if (!drained?.refused) return;
+  console.error(`[ceremony] ${where}: the town's files were NOT re-rendered — ${drained.refused}`);
+};
+
 // ── THE HOUSE ───────────────────────────────────────────────────────────────
 
 /**
@@ -265,7 +286,8 @@ export async function mintHousehold({
   const written = await insertHousehold(row, env);
   if (written === null) throw refuse(REFUSALS.NO_RECORD);
   const drained = await drain({ env, ...drainOptions });
-  return { slug: key, row: written, drained };
+  logRefusedDrain(`mintHousehold(${key})`, drained);
+  return { slug: key, row: written, drained, registry: drainOutcome(drained) };
 }
 
 // ── THE MEMBERSHIP ──────────────────────────────────────────────────────────
@@ -370,7 +392,8 @@ export async function joinHousehold({
   }
 
   const drained = await drain({ env, ...drainOptions });
-  return { slug: key, handle: h, residents, pinned, drained };
+  logRefusedDrain(`joinHousehold(${key}/${h})`, drained);
+  return { slug: key, handle: h, residents, pinned, drained, registry: drainOutcome(drained) };
 }
 
 // The account matcher, in this file's own words for the same reason the

@@ -598,6 +598,14 @@ export async function declareHousehold(args, key, { db, clone, odb, mintKey, com
     ? Boolean(landed.settled)
     : plan.settled;
 
+  // WHETHER THE TOWN'S FILES FOLLOWED (review 6/6). The writer is the authority
+  // here too: it ran the drain. `drainRegistry` refuses rather than shrink the
+  // registry, and when it does the house is still founded and the two files are
+  // one crossing behind — a state only a person can clear with
+  // `registry-drain --ingest-missing`. It rides the answer rather than nothing
+  // at all, because the alternative is a receipt that says everything landed.
+  const registryOutcome = landed?.registry ?? null;
+
   // The credential. Not a second mechanism — this is the office's own key desk
   // (oauth.mjs mintHouseholdKey), called at the moment of declaration instead of
   // at a separate visit to the join page. Minting is idempotent-by-rotation: it
@@ -645,6 +653,7 @@ export async function declareHousehold(args, key, { db, clone, odb, mintKey, com
     ...(settled ? { address: `WHITE_PAGES/${decl.handle}/ADDRESS.md` } : {}),
     commit: commitSha,
     verified_github: { login: decl.ghLogin, id: decl.ghId },
+    ...(registryOutcome?.rendered === false ? { registry: registryOutcome } : {}),
     ...(credential ? { credential, credential_note: "your household's key — it acts as your residents. Shown ONCE; store it like a password. Minting again at the key desk replaces it." } : {}),
     // The row is still written when they settled here — it is the ACT log, not
     // a settlement queue, and the class is "join" either way. The crossing that

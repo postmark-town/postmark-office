@@ -126,6 +126,7 @@ async function main() {
   // unchanged: all or none, and there is no window in which a household holds
   // an address and no registry row.
   const { drain, paths: drainedPaths } = collectingDrain({ clone: CLONE });
+  let registryOutcome = { rendered: true };
   try {
     await mintHousehold({
       slug: plan.slug,
@@ -137,13 +138,19 @@ async function main() {
       declaredBy: plan.registry.households[plan.slug].declared_by,
       drain: NO_DRAIN,
     });
-    await joinHousehold({
+    const joined = await joinHousehold({
       slug: plan.slug,
       handle: decl.handle,
       coSign: { ghId: decl.ghId, ghLogin: decl.ghLogin },
       pinnedOn: plan.date,
       drain,
     });
+    // THE DRAIN'S OUTCOME RIDES THE ANSWER (review 6/6). `drainRegistry`
+    // refuses rather than shrink the registry, and the row still landed — so
+    // the house IS founded while the town's two files are one crossing behind,
+    // a state only a person can clear. Silence there told the resident
+    // everything landed; this says which half did.
+    registryOutcome = joined.registry;
   } catch (e) {
     return err(e.code ?? 500, e.field ?? null, e.defect ?? String(e?.message ?? e), e.hint ?? null);
   }
@@ -158,7 +165,7 @@ async function main() {
   // `settled` rides the answer because THIS process is the authority on it: the
   // door planned against a gangway it read before the lock, and this one re-read
   // it after the pull. declareHousehold prefers this field over its own plan.
-  answer({ slug: plan.slug, handle: decl.handle, commit, settled: plan.settled, gangway: plan.gangway, files: plan.files.map((f) => f.path) });
+  answer({ slug: plan.slug, handle: decl.handle, commit, settled: plan.settled, gangway: plan.gangway, registry: registryOutcome, files: plan.files.map((f) => f.path) });
 }
 
 main().catch((e) => { console.error(String(e?.stack ?? e)); process.exit(1); });
