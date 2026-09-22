@@ -187,17 +187,31 @@ test("arrives_at is the straight line over the timetable's own pace — computed
   assert.ok(Math.abs(expectedMs / 3_600_000 - 3.96) < 0.05, `the Pando leg times at ${(expectedMs / 3_600_000).toFixed(2)} h`);
 });
 
-test("the brief's SNUG example is wrong and the record is what this asserts", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
-  // The brief's § 2 says "quay → the Snug mooring ≈ 4.9 km ≈ 9 min". Measured
-  // off world main 5beca99a: the Post Office anchors at (-9, 35.5) and the Snug
-  // mooring at (-708, 9950), which is 9,939 m — twice the brief's figure, and
-  // ~17.7 minutes at pace 405, not 9. This is pinned rather than reported once,
-  // because the number in a brief is exactly the kind of thing a later reader
-  // takes for the record.
-  const w = vehicleWorld();
-  const d = straightLineM(markIn(w, SHIP).at, markIn(w, SNUG).at);
-  assert.ok(Math.abs(d - 9939) < 2, `the Snug leg measures ${Math.round(d)} m`);
-  assert.ok(Math.abs(rideMillis(d, 405) / 60000 - 17.7) < 0.2);
+test("the Snug leg is the arithmetic over a PINNED pair of anchors, not whatever the fold says today", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
+  // ⚑ THIS LEG USED TO SAY THE BRIEF WAS WRONG, AND IT WAS THE RECORD THAT WAS.
+  // The brief's § 2 says "quay → the Snug mooring ≈ 4.9 km ≈ 9 min". Written off
+  // world main 5beca99a, the fold put the Snug mooring at (-708, 9950) — 9,939 m
+  // from her berth, ~17.7 min at pace 405 — and this leg pinned that, on the
+  // reasoning that a number in a brief is what a later reader takes for the
+  // record. The 9,939 m was itself the defect: world `a7c866f1` (2026-09-20,
+  // "the Snug mooring comes home") records that the 09-14 amendment wrote the
+  // ABSOLUTE point (-358, 4972) into a PARENT-RELATIVE field, so the mooring
+  // resolved ~5 km out to sea from S71 until the repair. With `at: {-8, -6}`
+  // against the harbour it folds to (-358, 4972) — 4,949 m, 8.8 min, which is
+  // the brief's figure after all.
+  //
+  // A SYNTHETIC RECORD, so this cannot decay a second time: the two anchors are
+  // COPIED here off world `a7c866f1`, folded 2026-09-22, and the arithmetic is
+  // asserted against the copy. No live path, no date. The live fold is read in
+  // this file's stop-set and transport legs; what this one owns is the sum.
+  const RECORD = Object.freeze({           // world a7c866f1 · folded 2026-09-22
+    ship: Object.freeze({ x: -9, y: 35.5 }),   // the-town/the-post-office
+    snug: Object.freeze({ x: -358, y: 4972 }), // current-the-reader/the-snug-mooring
+  });
+  const d = straightLineM(RECORD.ship, RECORD.snug);
+  assert.ok(Math.abs(d - 4948.8) < 0.5, `the Snug leg measures ${Math.round(d)} m`);
+  assert.ok(Math.abs(rideMillis(d, 405) / 60000 - 8.8) < 0.05,
+    `the Snug leg times at ${(rideMillis(d, 405) / 60000).toFixed(2)} min`);
 });
 
 // ── the stop set ─────────────────────────────────────────────────────────────
