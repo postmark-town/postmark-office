@@ -363,12 +363,20 @@ const receipt = {
             // `absent` and `unexplained` are the two that mean something and
             // they mean opposite things — the first is the known hole, the
             // second is a line the register and the file disagree about.
-            classes: (stateLog.crossings ?? []).reduce((acc, c) => {
+            //
+            // NULL UNDER `store`, all three, and not zero. A `--write` run
+            // compares nothing, so `would_write: 0` beside it would read as
+            // "nothing was due this window" — which is the opposite of what a
+            // write that just put 38 lines on main means. A field that answers
+            // a question the run did not ask says so.
+            classes: STATE_LOG_MODE === "store" ? null : (stateLog.crossings ?? []).reduce((acc, c) => {
               for (const [k, v] of Object.entries(c.classes ?? {})) acc[k] = (acc[k] ?? 0) + v;
               return acc;
             }, {}),
-            would_write: (stateLog.crossings ?? []).reduce((n, c) => n + (c.derived_lines ?? 0), 0),
-            first_difference: (stateLog.crossings ?? []).find((c) => !c.byte_equal)?.first_difference ?? null,
+            would_write: STATE_LOG_MODE === "store" ? null
+              : (stateLog.crossings ?? []).reduce((n, c) => n + (c.derived_lines ?? 0), 0),
+            first_difference: STATE_LOG_MODE === "store" ? null
+              : ((stateLog.crossings ?? []).find((c) => !c.byte_equal)?.first_difference ?? null),
             // A household the resolver could not name is a finding, never a
             // guess written into an archive (`state-log-rederive.mjs §
             // householdNamerFor` returns null rather than picking one).
