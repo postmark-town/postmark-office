@@ -58,6 +58,12 @@ import { normalizeRow } from "../src/world-journal.mjs";
 import { useGuardReader } from "../src/world2-guards.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+
+// POS-198 drives the live act builder here rather than describing it (see
+// § THE POST-CHANGE FIXTURE). `src/world.mjs` reads WORLD_CLONE at module load;
+// the door is never called, so any readable path will do when one is unset.
+process.env.WORLD_CLONE ??= HERE;
+const { walkEntry } = await import("../src/world.mjs");
 const FIXTURE = join(HERE, "fixtures", "pos196-window-204-departures.jsonl");
 
 /** The record as the world holds it: 24 lines of crossing 204, untouched. */
@@ -134,6 +140,48 @@ afterEach(() => { if (restore) { restore(); restore = null; } });
 const ACTS = RECORD.map((l, i) => actFor(l, 9000 + i));
 const WINDOW_TO = Date.parse("2026-09-22T12:00:00.000Z");
 
+// ═════════════════════════════════════════════════════════════════════════════
+// THE POST-CHANGE FIXTURE (POS-198)
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// `actFor` above is the PRE-CHANGE photograph and it stays exactly as POS-196
+// left it: five payload keys, and `at` handed in as the best case the register
+// could not actually reach. Its tests are unchanged, because the history of
+// this lane is part of what it proved.
+//
+// This one is the act as the office NOW writes it — built by calling
+// `world.mjs § walkEntry` and `world-journal.mjs § normalizeRow`, the two real
+// writers, and reading back what they produced. No shape is described here, so
+// none can drift from the shape the door writes: if `walkEntry` stops carrying
+// the instant, these fixtures stop carrying it too and the equality reds. That
+// is the difference between a fixture built AFTER the change and a fixture
+// built to AGREE with it.
+//
+// The record line supplies the declaration — its instant, its declarer, its
+// note — exactly as a resident's walk would have supplied them to the door.
+const postChangeActFor = (line, id) => {
+  const p = line.payload;
+  const entry = walkEntry({
+    crossing: p.crossing, who: line.actor, targetMarkId: p.to,
+    stampAt: { anchor: null, dx: null, dy: null }, witnesses: null,
+    from: p.from, toward: p.toward, pace: p.pace ?? null,
+    targetExtent: p.within ?? null, household: null,
+    writtenAt: line.at,                 // ⚑ the departure's OWN instant, carried
+    declaredBy: p.declared_by, note: p.note ?? null,
+  });
+  const row = normalizeRow(entry);      // the real write path, not a summary of it
+  return {
+    id,
+    at: new Date(row.written_at),       // `written_at` IS `acts.at`
+    crossing: String(row.crossing),     // `pg` hands numeric back as TEXT
+    actor: row.actor,
+    action: row.action,
+    payload: JSON.parse(row.payload),
+  };
+};
+
+const POST_CHANGE_ACTS = RECORD.map((l, i) => postChangeActFor(l, 9000 + i));
+
 /** The renderer's lines, in the `<N>.jsonl` line shape `buildSave` writes. */
 async function renderedLines() {
   const { events, absent } = await storedDepartureEvents({ atMs: WINDOW_TO });
@@ -206,6 +254,90 @@ test("EQUALITY: `source` is the ONE allowed diff, and every other gap is named",
     "with the instant solved, exactly two fields differ and both are named");
 });
 
+// ── the same equality, over acts the office now really writes (POS-198) ─────
+
+test("POST-CHANGE EQUALITY: acts built by the LIVE writers read byte-equal on all nine fields", async () => {
+  const store = install(fixtureRegister(POST_CHANGE_ACTS));
+  const lines = await renderedLines();
+  assert.ok(store.asked.length >= 1, "the renderer asked the register no question — it is not reading the store");
+  assert.equal(lines.length, RECORD.length);
+
+  const { paired, onlyInFile, onlyInDerived } = pairDepartures(RECORD, lines);
+  assert.equal(onlyInFile.length, 0, "a record line the live writers could not answer for");
+  assert.equal(onlyInDerived.length, 0, "a register line the record does not hold");
+  assert.equal(paired.length, 24);
+
+  for (const p of paired) {
+    const read = compareDepartureLine(p.file, p.derived).filter((c) => c.read);
+    assert.deepEqual(read, [], `${p.key} differs on a field the world reads`);
+  }
+
+  // Nine fields, named rather than counted, so a reader of this test knows what
+  // "byte-equal" was judged on: finding 4's read set, which is pinned in code.
+  assert.deepEqual([...RECORD_READ_FIELDS].sort(),
+    ["actor", "at", "payload.crossing", "payload.from", "payload.pace", "payload.to",
+     "payload.toward", "payload.within", "type"].sort(),
+    "the read set moved — the equality above is judged on a different question than the one POS-196 asked");
+  assert.equal(RECORD_READ_FIELDS.length, 9);
+});
+
+test("POST-CHANGE: `source` is still the one allowed diff, and the INSTANT is no longer among them", async () => {
+  install(fixtureRegister(POST_CHANGE_ACTS));
+  const lines = await renderedLines();
+  const { paired } = pairDepartures(RECORD, lines);
+
+  const classes = new Set();
+  for (const p of paired) for (const c of compareDepartureLine(p.file, p.derived)) classes.add(gapClassOf(c));
+
+  assert.equal(classes.has("at"), false,
+    "THE STOP, CLOSED: the act carries the departure's own instant, so the field every world reader reads first no longer differs");
+  assert.equal(classes.has("unexplained"), false, "a difference in no named class is a finding, never a shrug");
+  assert.deepEqual([...classes].sort(), ["seq", "source"],
+    "exactly the two gaps that have no store source, and nothing else");
+});
+
+test("POST-CHANGE: the instant is the RECORD's, and it came through `writtenAt` rather than a clock", () => {
+  // The claim is equality with the record, line for line — not that the acts
+  // were stamped recently. A fixture stamped at build time would pass a
+  // "looks like an instant" test and fail the world.
+  for (let i = 0; i < RECORD.length; i++) {
+    assert.equal(POST_CHANGE_ACTS[i].at.toISOString(), RECORD[i].at,
+      "the act's instant is not the departure's — `walkEntry` has stopped carrying `writtenAt`");
+  }
+  const built = Date.now();
+  assert.ok(POST_CHANGE_ACTS.every((a) => a.at.getTime() < built - 1000),
+    "an act stamped at fixture-build time is this suite measuring its own clock, which is the thing POS-196 refused to do");
+});
+
+test("POST-CHANGE: `declared_by` and `note` are in the act now, which is what made them gaps", () => {
+  // They are not in `RECORD_READ_FIELDS`, so they do not move the equality
+  // above. They were named as GAPS because the register could not hold them at
+  // all; it can now, and the renderer is free to read them when its lane says so.
+  for (let i = 0; i < RECORD.length; i++) {
+    assert.equal(POST_CHANGE_ACTS[i].payload.declared_by, RECORD[i].payload.declared_by,
+      "window 204's own declarer did not survive into the act");
+    assert.equal("note" in POST_CHANGE_ACTS[i].payload, "note" in RECORD[i].payload,
+      "`note` is conditional on both sides or the grammars disagree");
+  }
+  assert.equal(POST_CHANGE_ACTS.every((a) => "declared_by" in a.payload), true);
+});
+
+test("THE PRE-CHANGE FIXTURE IS UNTOUCHED — history keeps its photograph", () => {
+  // POS-196's fixture carried five payload keys and no instant of its own.
+  // POS-198 must not retouch it: what that lane measured is only meaningful
+  // against the office it measured.
+  for (const a of ACTS) {
+    assert.deepEqual(Object.keys(a.payload), ["from", "toward", "pace", "within", "to"],
+      "the pre-change fixture grew a key — it is no longer the act POS-196 weighed");
+  }
+  assert.equal(ACTS.length, 24);
+  // And the two fixtures differ in exactly the way the change did.
+  assert.deepEqual(Object.keys(POST_CHANGE_ACTS[0].payload).slice(0, 5), Object.keys(ACTS[0].payload),
+    "the live act's first five keys are still POS-196's five, in its order");
+  assert.ok(Object.keys(POST_CHANGE_ACTS[0].payload).length > 5,
+    "and the live act carries more, which is the change");
+});
+
 test("CONTROL: the equality can fail — one mangled read field is caught and named", async () => {
   install(fixtureRegister(ACTS));
   const lines = await renderedLines();
@@ -273,29 +405,51 @@ test("era one is not rendered here — the caller already holds it", async () =>
 // would be a probe relying on a number I chose, which proves nothing about the
 // office.
 
-test("STOP (cause 1): a walk act is stamped with the MIRROR's clock, not the departure's", () => {
-  // `world.mjs § walkEntry` returns `{crossing, actor, action, object, at,
-  // witnesses, cls, payload, effect, household}` and passes no `writtenAt` —
-  // `at` there is `witnessStampAt`'s PLACE anchor, not an instant. So
-  // `normalizeRow` fills `written_at` from its own clock, and that value is
-  // what `mirrorAct` / `appendActFlipped` INSERT into `acts.at`.
+// ⚑ CAUSE 1 IS CLOSED (POS-198, 2026-09-22), AND THIS TEST NOW SAYS SO.
+//
+// POS-196 wrote it as "if this ever passes, the act has learned the departure's
+// own instant and the STOP is closed". It has. `world.mjs § walkEntry` carries
+// `writtenAt`, and `walkViaOffice` reads the declaration clock ONCE and hands
+// the same string to `dynamic.db/movements` and to the act.
+//
+// So the test keeps the same subject and splits into the two claims that are
+// true now: the instant is carried when there IS one, and the mirror's clock
+// is still the answer when there is not. Deleting it would take the cause's
+// name off the record; leaving it asserting the old behaviour would be the
+// suite disagreeing with the office.
+test("CAUSE 1, CLOSED: an act with a declared instant is stamped with THAT, not the mirror's clock", () => {
   const departedAt = "2026-09-22T00:14:40.194Z";
-  const before = Date.now();
   const row = normalizeRow({
     crossing: 204.02035324074075, actor: "neth", action: "walk", object: null,
     at: { anchor: null, dx: null, dy: null }, witnesses: null, cls: "move",
     payload: { from: { x: 1306, y: 2093.5 }, toward: { x: 1329, y: 2083 }, pace: 60, within: { w: 4, h: 4 }, to: "neth/little-free-library" },
     effect: "the walk is declared; the record receives it at the save",
+    writtenAt: departedAt,
+  });
+
+  assert.equal(row.written_at, departedAt,
+    "the declared instant did not reach `written_at` — and `written_at` is the `acts.at` every world reader of a departure reads first");
+  assert.equal(Object.prototype.hasOwnProperty.call(row.payload ? JSON.parse(row.payload) : {}, "at"), false,
+    "the instant is a COLUMN, not a payload key — the record's own grammar has no key for it");
+});
+
+test("THE FALLBACK STANDS: an act class with NO declared instant still gets the mirror's clock", () => {
+  // The fallback is not a leftover; it is the only honest answer for a class
+  // that does not know when it happened. `ride` (world-apex.mjs), `mark`
+  // (world.mjs), `stance` (world-stance.mjs) and the crossing's own rows
+  // (crossing-exec.mjs) all reach `normalizeRow` with no `writtenAt`. Closing
+  // the STOP for `move` must not leave any of them unstamped.
+  const before = Date.now();
+  const row = normalizeRow({
+    crossing: 204.5, actor: "alpha", action: "ride", object: "the-town/the-post-office",
+    at: null, witnesses: null, cls: "ride",
+    payload: { boarded: 204.0 }, effect: "aboard",
   });
   const after = Date.now();
 
-  assert.notEqual(row.written_at, departedAt,
-    "if this ever passes, the act has learned the departure's own instant and the STOP is closed");
   const stamped = Date.parse(row.written_at);
   assert.ok(stamped >= before && stamped <= after,
-    "the stamp is this process's clock at normalize time — the mirror's, taken after the resident declared");
-  assert.equal(Object.prototype.hasOwnProperty.call(row.payload ? JSON.parse(row.payload) : {}, "at"), false,
-    "and the payload carries no instant of its own either");
+    "a class with no instant of its own must still be stamped, and stamped at normalize time");
 });
 
 test("STOP (cause 2): the act's `crossing` is a DIFFERENT clock read and does not reconstruct the instant", () => {

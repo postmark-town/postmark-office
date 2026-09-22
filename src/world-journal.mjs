@@ -549,6 +549,30 @@ export function normalizeRow(entry = {}) {
     crossing = null, actor, action, object = null,
     at = null, witnesses = null, cls = CLASS_MARK,
     payload = null, effect = null, household = null,
+    // ── `written_at` IS `acts.at`, AND THE DECLARED INSTANT OUTRANKS IT ──────
+    //
+    // The fallback below is this process's clock at NORMALIZE time — the
+    // mirror's, taken after the resident declared. It stays, because it is the
+    // only honest answer for an act class that has no instant of its own:
+    // `mark` (world.mjs, the declare and the withdraw), `ride`
+    // (world-apex.mjs), `stance` (world-stance.mjs) and the crossing's own
+    // rows (crossing-exec.mjs) all reach here with no `writtenAt` and nothing
+    // better to offer.
+    //
+    // An act class that DOES know when it happened passes `writtenAt` and this
+    // default never fires: `voice` (world.mjs § voiceEntry, the spoken
+    // instant), `holding` (world-hold.mjs, "the declaration's own stamp,
+    // strictly ordered by the door") and, since POS-198, `move` — the walk act
+    // carries the same string `dynamic.db/movements` is stamped with, from one
+    // `Date` read in `walkViaOffice`. That is what lets `acts` render the
+    // world's `STATE/log/` departure record: `live-reads § departureRecordOf`
+    // reads era 5's instant as `isoOf(row.at)`, and row.at is this column.
+    //
+    // ⚑ A DESTRUCTURING DEFAULT FIRES ON `undefined` AND NOT ON `null`. A
+    // caller that means "I have no instant" must omit the key or pass
+    // undefined; passing null would store the string "null" in the first field
+    // every reader of a departure reads. `walkEntry` coalesces for exactly
+    // this reason.
     writtenAt = new Date().toISOString(),
   } = entry;
 

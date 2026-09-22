@@ -255,6 +255,15 @@ export function departureRowFrom(m) {
       pace: m.pace ?? null,
       within,
       to: m.to_mark ?? null,
+      // THE TWO KEYS THIS SELECT ALREADY ASKED FOR (POS-198, 2026-09-22).
+      // `readMovementRows` has SELECTed `declared_by, note` since POS-154 and
+      // this builder dropped both on the floor — POS-196 found it by reading
+      // the record rather than the code ("SELECTs the column and drops it").
+      // `declared_by ?? actor` is `readMovements`' own coalesce, so a
+      // backfilled act and a live one spell a self-declared walk the same way;
+      // `note` is conditional, as it is on the record's own lines.
+      declared_by: m.declared_by ?? m.actor,
+      ...(m.note ? { note: m.note } : {}),
       _backfill: BACKFILL_LANE,
       _backfill_seq: m.seq,
       _backfill_source: BACKFILL_SOURCE,
