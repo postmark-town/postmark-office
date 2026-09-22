@@ -67,10 +67,11 @@ import { dirname, join, resolve } from "node:path";
 
 import { penCommit } from "../src/write.mjs";
 import { WORLD_CLONE } from "../src/world-store.mjs";
-import { movementV2Enabled, openDynamic, putMeta, getMeta } from "../src/dynamic-store.mjs";
+import { openDynamic, putMeta, getMeta } from "../src/dynamic-store.mjs";
+import { world2Enabled } from "../src/world2-acts.mjs";
 import {
   readDepartureEvents, governingAt, entityFromDeparture, byHandle,
-  refreshEntities, readEntities, readAttachments, readMovements,
+  refreshEntities, readEntities, readAttachments,
   mergedDepartureEvents, walkModule,
 } from "../src/dynamic-entities.mjs";
 import { DEPARTURE_GAPS, RECORD_READ_FIELDS, storedDepartureEvents } from "../src/world-movement.mjs";
@@ -461,7 +462,35 @@ async function main() {
   // into ONE ordered list before anything is built, so the log lines, the
   // snapshot's governing departures and the replay all read one vocabulary and
   // the seam is invisible to every one of them.
-  const storeMovements = movementV2Enabled() ? readMovements(db, { until: saveMs }) : [];
+  //
+  // ── THE RECORD IS WRITTEN FROM THE REGISTER (POS-196's held swap, POS-156) ─
+  //
+  // This read was `readMovements(db)` — `dynamic.db/movements`, the
+  // REVERSE-MIRROR copy G1 removes, and the source stamped on all 2,857 of the
+  // record's store-era lines. It is `storedDepartureEvents` now: the same
+  // departures rendered from `acts`, in this file's own `events` row shape, so
+  // `mergedDepartureEvents`, `buildSave` and every replay read one vocabulary
+  // and the swap is a change of WRITER, not of meaning. The rendered lines are
+  // stamped `"source":"acts"` — the one allowed diff, which no world reader
+  // reads (`RECORD_READ_FIELDS`).
+  //
+  // POS-196 built this renderer and held the swap on one measured STOP: the
+  // register had no departure INSTANT, and `at` is the first field every world
+  // reader reads and the key `mergedRecords` orders and cuts on. POS-198 closed
+  // it — one clock read in `walkViaOffice`, handed to both pens.
+  //
+  // ⚑ `absent` IS A REFUSAL HERE, never an empty list. The thing this tool
+  // would otherwise commit is a PUBLIC FILE: an unreachable register that read
+  // as `[]` would write a window holding only the frozen era over a good one
+  // and push it. `world2Enabled()` false is the other case and it is not a
+  // failure — an office pointed at no register has no live era at all, exactly
+  // as `movementV2Enabled()` false meant before.
+  let storeMovements = [];
+  if (world2Enabled()) {
+    const stored = await storedDepartureEvents({ atMs: saveMs });
+    if (stored.absent) { db.close(); return die(4, "register", stored.absent); }
+    storeMovements = stored.events;
+  }
   const departureEvents = storeMovements.length ? mergedDepartureEvents(read.events, storeMovements) : read.events;
 
   const attachments = readAttachments(db);

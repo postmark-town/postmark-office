@@ -34,7 +34,7 @@ import { pathToFileURL } from "node:url";
 import { OFFICE_ROOT, WORLD_CLONE } from "./world-store.mjs";
 import { freshestMainRef, materializeAtRef } from "./world-branches.mjs";
 import { servedCanonSha } from "./world-serve.mjs";
-import { movementV2Enabled, openDynamic, putMeta } from "./dynamic-store.mjs";
+import { openDynamic, putMeta } from "./dynamic-store.mjs";
 
 // The vessel appears in the walk ledger as an actor — she is a mark that moves,
 // not a resident. She is never an entity; her position is `derived` mobility,
@@ -343,10 +343,45 @@ export async function refreshEntities({
 
   // STAGE D: the two eras, folded before the derivation rather than after it.
   // `governingAt` already implements latest-wins over one ordered list, so
-  // handing it the merged list is the whole of the seam's cost here — and with
-  // the flag off `movements` is not even read, so the derivation is the one that
-  // has always run.
-  const storeEvents = movementV2Enabled() ? readMovements(handle, { until: at }) : [];
+  // handing it the merged list is the whole of the seam's cost here.
+  //
+  // ── THE LIVE ERA COMES FROM THE REGISTER (POS-196's held swap, POS-156) ────
+  //
+  // This read was `readMovements(handle)` — `dynamic.db/movements`, the
+  // REVERSE-MIRROR copy G1 removes. It is `storedDepartureEvents` now: the same
+  // departures rendered from `acts` in world.db's `events` row shape, through
+  // POS-154's one road, so `mergedDepartureEvents`, `governingAt` and
+  // `deriveEntities` read one vocabulary and the seam stays a change of PEN.
+  //
+  // POS-196 could not land this and said why: the register held no departure
+  // INSTANT, and `at` is what `mergedDepartureEvents` orders on. POS-198 closed
+  // it — `walkViaOffice` reads the declaration clock once and hands the same
+  // string to both pens — so `acts.at` IS the departure's own instant now.
+  //
+  // ⚑ THE GATE IS `world2Enabled()`, AND IT IS THE OLD GATE'S TWIN. An office
+  // pointed at no register reads `[]` here, exactly as an office with
+  // `WORLD_MOVEMENT_V2` off read `[]` before: that is "this office has no live
+  // era", not "nobody has walked". An office that IS pointed at one and cannot
+  // read it REFUSES by name, because this function's own header rules it —
+  // "a refused gate leaves every existing row exactly where it was" — and
+  // deriving the entities table from the frozen era alone would replace every
+  // resident's position with a July one while reporting success.
+  //
+  // ⚑ BOTH IMPORTS ARE DYNAMIC, and not by taste: `world-movement.mjs` imports
+  // `VESSEL_HANDLE` and `worldToolModule` FROM THIS FILE (line 45 there), so a
+  // static import back would close a cycle. `world2-guards.mjs` already reaches
+  // this file the same way for the same reason.
+  const { world2Enabled } = await import("./world2-acts.mjs");
+  let storeEvents = [];
+  if (world2Enabled()) {
+    const { storedDepartureEvents } = await import("./world-movement.mjs");
+    const stored = await storedDepartureEvents({ atMs: at });
+    if (stored.absent) {
+      if (own) handle.close();
+      return { ok: false, refused: { gate: "register", detail: stored.absent }, entities: 0 };
+    }
+    storeEvents = stored.events;
+  }
   const events = storeEvents.length ? mergedDepartureEvents(read.events, storeEvents) : read.events;
   const rows = deriveEntities(events, at, w);
 
