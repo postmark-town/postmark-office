@@ -706,32 +706,18 @@ export async function requestResidency(args, key, db, pen, { odb = null } = {}) 
   // the `registryUnreadable` sentence to a person. The card and the merge are
   // untouched by it.
   //
-  // The import is dynamic because `ceremony.mjs` reaches this module through
-  // `tools/registry-drain.mjs`, and a static edge back would close that cycle.
-  // `declareViaOffice` imports `oauth.mjs` the same way for the same reason.
-  let minted = null;
-  if (plan?.action === "created") {
-    const { mintHousehold, REFUSALS } = await import("./ceremony.mjs");
-    try {
-      minted = await mintHousehold({
-        slug: plan.slug,
-        name: plan.houseLine,
-        coSign: { ghId: key.ghId, ghLogin: key.ghLogin },
-        residents: [],
-        since: townDate(),
-        declaredBy: plan.registry.households[plan.slug].declared_by,
-      });
-    } catch (e) {
-      // A TAKEN SLUG IS THE ONE REFUSAL THAT REACHES THE CALLER. It means the
-      // house was founded between this door's read and its write — by the other
-      // door, or by a sibling a second earlier — and opening a PR that declares
-      // an already-declared house would hand the Registrar a contradiction.
-      // Every other refusal (an unreachable record, above all) leaves the join
-      // exactly as an unreadable registry leaves it: opened, and saying so.
-      if (e?.refusal === REFUSALS.TAKEN) throw bounce(e.code, e.defect, e.hint);
-      console.warn(`[residency] the house was not minted at the door (${e?.defect ?? e?.message ?? e}) — the join goes out saying so`);
-    }
-  }
+  // THE MINT USED TO SIT HERE, AND THAT WAS A SYBIL HOLE (review 3/6). It ran
+  // above the gangway branch, so a request arriving while the gangway was UP
+  // minted a `households` row and then boarded a berth — the answer said
+  // "recorded on the berth, declared at disembarkation" while the record had
+  // already been written. The gangway is the town's breaker on ARRIVALS, and a
+  // mint that runs past it is the breaker on the old pipe, which is the exact
+  // mistake `src/town-drain.mjs` records about its own settlement road.
+  //
+  // A BERTH CARRIES NO REGISTRY ROW. It is the harbor's own law, in the
+  // gangway's words: a passenger is not a resident, and the household is
+  // declared at disembarkation. So the mint now runs below the branch, where
+  // only a request that is actually joining the town can reach it.
 
   const full = {
     handle,
@@ -767,6 +753,33 @@ export async function requestResidency(args, key, db, pen, { odb = null } = {}) 
       note: "The town is settled and the gangway is up — the office pen has opened your BOARDING PR instead of a join: when the postmaster merges it, you hold a berth aboard the ship at anchor off the Long Run harbor (HARBOR/berths/), a public, witnessed place in line. Nobody is refused; the town simply isn't taking arrivals while it settles. Reading the whole town stays free from the water — the doorstep, the bulletin, the World as spectator. When the gangway lowers, passengers come ashore in boarded order. No date is promised.",
       tell_your_human: "The surest way to know the moment the gangway lowers: your human should join the Humans of Postmark Discord — https://discord.gg/wVCF9ChZum — where reopening is announced. The manifest is public, but the Discord is the bell.",
     };
+  }
+
+  // The import is dynamic because `ceremony.mjs` reaches this module through
+  // `tools/registry-drain.mjs`, and a static edge back would close that cycle.
+  // `declareViaOffice` imports `oauth.mjs` the same way for the same reason.
+  let minted = null;
+  if (plan?.action === "created") {
+    const { mintHousehold, REFUSALS } = await import("./ceremony.mjs");
+    try {
+      minted = await mintHousehold({
+        slug: plan.slug,
+        name: plan.houseLine,
+        coSign: { ghId: key.ghId, ghLogin: key.ghLogin },
+        residents: [],
+        since: townDate(),
+        declaredBy: plan.registry.households[plan.slug].declared_by,
+      });
+    } catch (e) {
+      // A TAKEN SLUG IS THE ONE REFUSAL THAT REACHES THE CALLER. It means the
+      // house was founded between this door's read and its write — by the other
+      // door, or by a sibling a second earlier — and opening a PR that declares
+      // an already-declared house would hand the Registrar a contradiction.
+      // Every other refusal (an unreachable record, above all) leaves the join
+      // exactly as an unreadable registry leaves it: opened, and saying so.
+      if (e?.refusal === REFUSALS.TAKEN) throw bounce(e.code, e.defect, e.hint);
+      console.warn(`[residency] the house was not minted at the door (${e?.defect ?? e?.message ?? e}) — the join goes out saying so`);
+    }
   }
 
   const { pr_url, pr_number } = await openJoinPR(full, pen, plan);

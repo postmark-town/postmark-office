@@ -328,3 +328,36 @@ test("a frozen gangway boards a household member and the berth names their house
     rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
   }
 });
+
+test("a frozen gangway mints NOTHING, even for an account with no house at all", async () => {
+  // SYBIL 1a, and the test that missed it (review 3/6). The version above drives
+  // with `HOUSE_KEY` — an account that already holds a house — so
+  // `planRegistryJoin` answers `appended`, the mint is never reached, and
+  // `writes.households = 0` for a reason that has nothing to do with the
+  // gangway. It passed for the wrong reason.
+  //
+  // A FRESH ACCOUNT is what exercises the hole: `planRegistryJoin` answers
+  // `created`, the mint IS reached, and before the fix a berth walked away with
+  // a `households` row while the answer said "recorded on the berth, declared
+  // at disembarkation". The gangway is the town's breaker on arrivals; a mint
+  // that runs past it is the breaker on the old pipe.
+  const dir = mkdtempSync(join(tmpdir(), "pos158-gangway-fresh-"));
+  mkdirSync(join(dir, "HARBOR"), { recursive: true });
+  writeFileSync(join(dir, "HARBOR", "GANGWAY.md"), "state: frozen" + String.fromCharCode(10));
+  const wasClone = process.env.TOWN_CLONE;
+  process.env.TOWN_CLONE = dir;
+  try {
+    const { out, pool } = await ask(
+      { handle: "fresh-passenger", card: "nobody here yet", household: "A Wholly New House" }, STRANGER);
+    assert.equal(out.boarded, "fresh-passenger", "it boarded, as a frozen gangway requires");
+    assert.equal(pool.state.writes.households, 0,
+      "and NO household row was written — a passenger is not a resident");
+    assert.equal(pool.state.households.some((h) => h.slug === "a-wholly-new-house"), false);
+    assert.equal(pool.state.writes.pins, 0);
+    assert.deepEqual(captured.trees[0].tree.map((e) => e.path), ["HARBOR/berths/fresh-passenger.md"],
+      "one berth file and nothing else");
+  } finally {
+    if (wasClone === undefined) delete process.env.TOWN_CLONE; else process.env.TOWN_CLONE = wasClone;
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
+  }
+});
