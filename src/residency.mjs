@@ -771,14 +771,23 @@ export async function requestResidency(args, key, db, pen, { odb = null } = {}) 
         declaredBy: plan.registry.households[plan.slug].declared_by,
       });
     } catch (e) {
-      // A TAKEN SLUG IS THE ONE REFUSAL THAT REACHES THE CALLER. It means the
-      // house was founded between this door's read and its write — by the other
-      // door, or by a sibling a second earlier — and opening a PR that declares
-      // an already-declared house would hand the Registrar a contradiction.
-      // Every other refusal (an unreachable record, above all) leaves the join
-      // exactly as an unreadable registry leaves it: opened, and saying so.
-      if (e?.refusal === REFUSALS.TAKEN) throw bounce(e.code, e.defect, e.hint);
-      console.warn(`[residency] the house was not minted at the door (${e?.defect ?? e?.message ?? e}) — the join goes out saying so`);
+      // EVERY MINT FAILURE REACHES THE CALLER, IN THE CEREMONY'S OWN WORDS
+      // (review 4/6). This used to refuse only on a taken slug and downgrade
+      // everything else to a `console.warn` — while the answer below went on
+      // telling the resident "the same PR declares your household … the
+      // Registrar's merge completes both at once". It did not. A house that was
+      // not founded, announced as founded, is the one receipt a town must never
+      // hand out, and it is exactly what a lost `ord` race produced.
+      //
+      // THIS IS NOT THE 2026-08 CALL BEING REVERSED. That call is about a seam
+      // FLICKER on a READ — "not a reason to refuse a join, but a reason to say
+      // so" — and it still stands one branch up: an unreadable registry leaves
+      // `plan` null, so this block is never entered and the join goes out
+      // carrying `registryUnreadable` to a person. What reaches here is
+      // different in kind: the record was readable, the plan said this join
+      // FOUNDS a house, and the write failed. The caller asked for a house.
+      // They did not get one. They are told.
+      throw bounce(e.code ?? 503, e.defect ?? String(e?.message ?? e), e.hint ?? REFUSALS.NO_RECORD.hint);
     }
   }
 

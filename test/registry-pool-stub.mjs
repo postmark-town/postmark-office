@@ -79,6 +79,26 @@ export function makePool(seed) {
   return {
     state,
     async query(text, params = []) {
+      // THE MINT'S OWN INSERT, which lets the DATABASE choose the place
+      // (`src/registry-store.mjs` § A NEW HOUSE TAKES ITS PLACE FROM THE
+      // DATABASE). The stub computes it the same way the statement does, and
+      // enforces the UNIQUE index, so a test that races two mints meets the
+      // real constraint rather than a kindness.
+      if (/^\s*INSERT INTO households \(ord,/.test(text)) {
+        state.writes.households++;
+        const ord = state.households.reduce((hi, r) => Math.max(hi, Number(r.ord) + 1), 0);
+        if (state.households.some((r) => Number(r.ord) === ord))
+          throw new Error(`duplicate key value violates unique constraint "households_ord_key"`);
+        const row = {
+          slug: params[0], ord, name: params[1], human: params[2],
+          accounts: JSON.parse(params[3]), residents: params[4] ?? [], since: params[5],
+          member_of: params[6], declared_by: params[7], formerly: params[8] ?? [],
+        };
+        if (state.households.some((r) => r.slug === row.slug))
+          throw new Error(`duplicate key value violates unique constraint "households_pkey"`);
+        state.households.push(row);
+        return { rows: [{ ord }] };
+      }
       if (/^\s*INSERT INTO households/.test(text)) {
         state.writes.households++;
         const row = {

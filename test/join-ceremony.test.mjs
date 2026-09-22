@@ -60,6 +60,26 @@ function stubPool(seed = rowsFromRegistry(JSON.parse(HOUSEHOLDS_RAW), JSON.parse
   const pool = {
     state,
     async query(text, params = []) {
+      // THE MINT'S OWN INSERT, which lets the DATABASE choose the place
+      // (`src/registry-store.mjs` § A NEW HOUSE TAKES ITS PLACE FROM THE
+      // DATABASE). The stub computes it the same way the statement does, and
+      // enforces the UNIQUE index, so a test that races two mints meets the
+      // real constraint rather than a kindness.
+      if (/^\s*INSERT INTO households \(ord,/.test(text)) {
+        state.writes.households++;
+        const ord = state.households.reduce((hi, r) => Math.max(hi, Number(r.ord) + 1), 0);
+        if (state.households.some((r) => Number(r.ord) === ord))
+          throw new Error(`duplicate key value violates unique constraint "households_ord_key"`);
+        const row = {
+          slug: params[0], ord, name: params[1], human: params[2],
+          accounts: JSON.parse(params[3]), residents: params[4] ?? [], since: params[5],
+          member_of: params[6], declared_by: params[7], formerly: params[8] ?? [],
+        };
+        if (state.households.some((r) => r.slug === row.slug))
+          throw new Error(`duplicate key value violates unique constraint "households_pkey"`);
+        state.households.push(row);
+        return { rows: [{ ord }] };
+      }
       if (/^\s*INSERT INTO households/.test(text)) {
         state.writes.households++;
         const row = {
@@ -567,4 +587,70 @@ test("a store that throws AT WRITE TIME defers the row — the crossing complete
   // "nothing to commit" means is that the list of PATHS is empty.
   assert.equal(touched.length, 0, "nothing to commit — the row simply did not settle");
   assert.equal(existsSync(join(clone, "WHITE_PAGES", "a-stalled-arrival", "ADDRESS.md")), false);
+});
+
+// ── SYBIL 1b: TWO MINTS CANNOT CLAIM ONE PLACE ──────────────────────────────
+
+test("two mints landing together take DIFFERENT places — the database chooses", async () => {
+  // THE HOLE (review 4/6). `ord` was computed in JavaScript from a read taken
+  // before the write, with no transaction in between, so two mints landing
+  // together both chose the same next place. `households_ord_key` is UNIQUE and
+  // `upsertHousehold`'s ON CONFLICT names the SLUG only, so the loser did not
+  // update anything — it threw, and `src/residency.mjs` swallowed the throw
+  // into a `console.warn` while telling the resident their house was declared.
+  //
+  // The probe interleaves the two mints against one store, which is what
+  // "landing together" means for a single-connection pool: both reads happen
+  // before either write.
+  await withPool(async (pool) => {
+    const before = pool.state.households.length;
+    const [a, b] = await Promise.all([
+      mintHousehold({ slug: "race-one", coSign: CO_SIGN, since: "2026-09-22",
+        declaredBy: "x", env: ENV_ON, drain: NO_DRAIN }),
+      mintHousehold({ slug: "race-two", coSign: { ghId: 7, ghLogin: "other-human" },
+        since: "2026-09-22", declaredBy: "x", env: ENV_ON, drain: NO_DRAIN }),
+    ]);
+    assert.notEqual(a.row.ord, b.row.ord, "two houses, two places");
+    assert.equal(pool.state.households.length, before + 2, "and both landed");
+    const ords = pool.state.households.map((h) => Number(h.ord));
+    assert.equal(new Set(ords).size, ords.length, "no two rows share a place");
+  });
+});
+
+test("a mint whose write fails REFUSES the join — never a warn with a false note", async () => {
+  // The other half of 4/6. `requestResidency` refused only on a taken slug and
+  // downgraded every other failure to a `console.warn`, while its answer went
+  // on saying "the same PR declares your household … the Registrar's merge
+  // completes both at once". It did not. A house that was not founded,
+  // announced as founded, is the one receipt a town must never hand out.
+  const { requestResidency } = await import("../src/residency.mjs");
+  const { fixtureDb } = await import("./fixture.mjs");
+
+  const seeded = stubPool();
+  const readsButCannotWrite = {
+    async query(text, params) {
+      if (/^\s*INSERT INTO households/.test(text)) throw new Error("permission denied for table households");
+      return seeded.query(text, params);
+    },
+  };
+  __setPoolForTest(readsButCannotWrite);
+  const was = { pg: process.env.WORLD2_PG, url: process.env.WORLD2_PG_URL };
+  Object.assign(process.env, ENV_ON);
+  try {
+    await assert.rejects(
+      () => requestResidency(
+        { handle: "told-the-truth", card: "hello", household: "A House That Will Not Land" },
+        { ghId: 4242, ghLogin: "truthful-human", handles: new Set() },
+        fixtureDb(),
+        { apiBase: "http://127.0.0.1:1", token: "t", owner: "o", repo: "r", baseBranch: "main" }),
+      (e) => {
+        assert.ok(e.code, "it is a bounce, with a code");
+        assert.match(String(e.defect), /permission denied|record/i, "and it says what happened");
+        return true;
+      });
+  } finally {
+    __setPoolForTest(null);
+    if (was.pg === undefined) delete process.env.WORLD2_PG; else process.env.WORLD2_PG = was.pg;
+    if (was.url === undefined) delete process.env.WORLD2_PG_URL; else process.env.WORLD2_PG_URL = was.url;
+  }
 });

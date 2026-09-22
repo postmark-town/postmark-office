@@ -47,7 +47,7 @@
 // — and refusing is not a degradation: a ceremony that cannot see the roll
 // cannot tell whether it is founding a house or overwriting one.
 
-import { loadRegistryRows, upsertHousehold, upsertPin } from "./registry-store.mjs";
+import { loadRegistryRows, insertHousehold, upsertHousehold, upsertPin } from "./registry-store.mjs";
 import { registryFromRows, pinsFromRows } from "./registry-rows.mjs";
 import { drainRegistry } from "../tools/registry-drain.mjs";
 
@@ -239,21 +239,15 @@ export async function mintHousehold({
   const registry = registryFromRows(rows);
   if (registry.households?.[key]) throw refuse(REFUSALS.TAKEN, key);
 
-  // `ord` is the file's declaration order and nothing derives it (019's
-  // header), so a new house takes the next place at the end — which is exactly
-  // where a declaration has always appended in the file.
-  //
-  // PAST THE HIGHEST, NOT THE COUNT. `households_ord_key` is UNIQUE, so a
-  // count-derived ord collides the moment the sequence has a gap — and a gap is
-  // reachable: `registry-drain --ingest-missing` adopts a row at the position
-  // the FILE gives it, which need not continue the table's run. The count was
-  // right for a contiguous table and wrong for the table this store can
-  // actually hold, which is the difference between an invariant and a habit.
-  const ord = rows.households.reduce((hi, r) => Math.max(hi, Number(r.ord) + 1), 0);
-
+  // `ord` IS THE DATABASE'S TO ASSIGN, not this function's (review 4/6). It
+  // used to be computed here — first from the row count, then from the highest
+  // ord — and both versions held a number across a gap with no transaction in
+  // it, so two mints landing together chose the same place and one lost the
+  // unique index. `insertHousehold` computes it INSIDE the insert; see
+  // `src/registry-store.mjs` § A NEW HOUSE TAKES ITS PLACE FROM THE DATABASE
+  // for what that does and does not close.
   const row = {
     slug: key,
-    ord,
     name: name?.trim() || null,
     human: human?.trim() || null,
     accounts: [{ login: coSign.ghLogin, id: coSign.ghId }],
@@ -264,9 +258,14 @@ export async function mintHousehold({
     formerly: [...formerly],
   };
 
-  await upsertHousehold(row, env);
+  // THE INSERT ANSWERS WITH THE PLACE IT CHOSE, so a caller can say where the
+  // house landed rather than guess. `null` means the record went out of reach
+  // between the read above and this write, which is not a thing to paper over:
+  // the house was not founded, and the ceremony says so in its own words.
+  const written = await insertHousehold(row, env);
+  if (written === null) throw refuse(REFUSALS.NO_RECORD);
   const drained = await drain({ env, ...drainOptions });
-  return { slug: key, row, drained };
+  return { slug: key, row: written, drained };
 }
 
 // ── THE MEMBERSHIP ──────────────────────────────────────────────────────────
