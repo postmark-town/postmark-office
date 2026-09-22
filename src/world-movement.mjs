@@ -293,7 +293,7 @@ export async function vehicleStandpoint(handle, worldState, { repo = WORLD_CLONE
  * callers await it and a source pin in `test/walkers-read-the-store.test.mjs`
  * holds the sqlite open out.
  */
-export async function storedDepartures({ atMs = Date.now() } = {}) {
+export async function storedDepartures({ atMs = Date.now(), withActId = false } = {}) {
   try {
     const { storeDepartureRows } = await import("./world2-guards.mjs");
     const { records } = await storeDepartureRows();
@@ -328,6 +328,14 @@ export async function storedDepartures({ atMs = Date.now() } = {}) {
         // on that era, and `dynamic-presence.mjs` puts `era: "store"` in front of
         // a resident off this exact value.
         source: "store",
+        // OPT-IN, AND OFF BY DEFAULT, so not one of the four standing callers
+        // sees a key it did not see yesterday. `act_id` is the register's own
+        // row id and the only monotone sequence this record carries — POS-196's
+        // `storedDepartureEvents` needs it for the `<N>.jsonl` line's `seq`, and
+        // it is asked for by name rather than leaked to everybody, because the
+        // block above is a deliberate list of what this road does NOT pass on
+        // and a silent addition would make that list a lie.
+        ...(withActId ? { act_id: r.act_id ?? null } : {}),
       });
     }
     return { records: cut, absent: null };
@@ -350,6 +358,134 @@ export async function storedRecordsFor(handle, opts = {}) {
 /** The single governing record — the last one. Kept for surfaces that want only that. */
 export async function storedDepartureFor(handle, opts = {}) {
   return (await storedRecordsFor(handle, opts)).at(-1) ?? null;
+}
+
+// ── POS-196 · THE WORLD REPO'S DEPARTURE RECORD, RENDERED FROM THE STORE ─────
+//
+// `STATE/log/<N>.jsonl` is the world repo's departure record and the only live
+// source the three world-repo readers have (`tools/movement-records.mjs §
+// storeRecords`, and `boarding-flip-disclosure.mjs` /
+// `position-seed-manifest.mjs` through it). Today `tools/crossing-save.mjs`
+// writes it from `dynamic.db/movements` — the REVERSE-MIRROR copy, stamped
+// `"source":"dynamic.db/movements"` on all 2,857 of its lines — so when G1
+// removes that mirror the record stops and the readers fall back to the frozen
+// ledger era.
+//
+// This is the same record rendered from `acts`, through POS-154's one road, so
+// the swap is a change of WRITER and not of meaning. It emits world.db's
+// `events` row shape — exactly what `dynamic-entities.mjs § readMovements`
+// emitted — so `mergedDepartureEvents`, `governingAt`, `buildSave` and every
+// replay read the two eras through one vocabulary and the seam stays invisible.
+//
+// ⚑ THE SWAP IS NOT WIRED, AND THE REASON IS MEASURED. See `DEPARTURE_GAPS.at`
+// below: the register does not hold the departure's own instant, and `at` is
+// the first field every world reader reads. `crossing-save --check` renders
+// through this function and reports the distance; the write path still runs on
+// `movements` until the act carries the instant. A renderer with a check and no
+// writer is the honest half — a writer whose central field is wrong is not.
+//
+// WHAT CLOSES IT is one line in a file this lane does not own: `world.mjs §
+// walkEntry` carrying `writtenAt: <the movement's own instant>`, and the two
+// pens sharing one clock read (`declareMovementFlipped` takes the stamp before
+// the movements row; the unflipped mirror takes it after). Rows already written
+// need the same treatment `world2/tools/backfill-departures.mjs` already gives
+// its own — it writes `at: m.at`, the movements instant, and is the one path
+// whose acts DO carry it.
+
+/**
+ * What the register cannot give back, named once so a `--check` line and a PR
+ * table say the same words. The shape is POS-155's (`world2/tools/
+ * state-log-write.mjs § GAP_CLASSES`) because it is the same problem one file
+ * over, and a second vocabulary for it would be the third copy of a merge rule.
+ */
+export const DEPARTURE_GAPS = Object.freeze({
+  at: "STOP:at — the register holds no departure instant. `world.mjs § walkEntry` passes no `writtenAt`, so `world-journal.mjs § normalizeRow` stamps `acts.at` with the MIRROR's clock, taken after the resident declared; `acts.crossing` is a different read of the same door call and reconstructs the instant exactly ZERO times in the record's own 2,808 live door-written lines (windows 120–204: median −203 ms, 235 of them missing by more than a second, the worst by 10.6 hours). `at` is the field `storeRecords` reads first and the key `mergedRecords` orders and cuts on.",
+  seq: "gap:seq — no store source for the `movements` rowid; this is the register's own act id, which is the same monotone quantity the old `seq` was (dynamic-entities.mjs § readMovements: \"here it is the store's own sequence\").",
+  declared_by: "gap:declared_by — the departure act carries no declarer. `walkEntry`'s payload has five keys and none is it, and `world2/tools/backfill-departures.mjs § departureRowFrom` SELECTs the column and drops it. The act's own actor stands for it, which is what the live write path puts in that column (2,829 of 2,829 door-written lines); the 28 that differ are the 2026-08-10 `ledger-freeze` one-off, in windows 119/120.",
+  note: "gap:note — the departure act carries no note. The record's grammar already makes the key conditional, and the only 28 lines that carry one are the same freeze backfill.",
+  source: "gap:source — the allowed stamp diff: `\"acts\"` where the mirror wrote `\"dynamic.db/movements\"`. No world reader reads it; it is the line's own provenance.",
+  unexplained: "UNEXPLAINED — not one of the named gaps.",
+});
+
+/**
+ * THE FIELDS THE WORLD ACTUALLY READS, measured read-only in the world clone at
+ * `origin/main` @ `17fa4195` (POS-196 finding 4). `tools/movement-records.mjs §
+ * storeRecords` keeps `ev.type === "departure"` and takes these and nothing
+ * else; `boarding-flip-disclosure.mjs` and `position-seed-manifest.mjs` inherit
+ * it through `storeRecords` rather than opening the directory themselves.
+ *
+ * Byte-equality is judged HERE and not on the whole line, because a record is
+ * equal when every reader of it cannot tell — and `seq`, `declared_by`, `note`
+ * and `source` have no reader in that repo.
+ */
+export const RECORD_READ_FIELDS = Object.freeze([
+  "at", "type", "actor",
+  "payload.from", "payload.toward", "payload.crossing",
+  "payload.within", "payload.to", "payload.pace",
+]);
+
+/**
+ * The store's departures in world.db's `events` row shape, oldest first.
+ *
+ * Returns `{ events, absent }` and NEVER throws, for `storedDepartures`' own
+ * reason: an unreachable register must not be able to write an empty window
+ * over a good one. `absent` is a sentence; the caller decides whether it is a
+ * disclosure or a refusal, and `crossing-save` treats it as a refusal because
+ * the thing it would otherwise commit is a public file.
+ *
+ * ⚑ ERA ONE IS NOT HERE, and it must not be. `storeDepartureRows` filters
+ * `payload->>'_ledger'`, and the caller already holds the founding era from
+ * `readDepartureEvents` (world.db's hydrated ledger). Returning it here would
+ * hand `mergedDepartureEvents` the same departure twice under two era tags,
+ * where latest-wins would pick whichever sorted last.
+ *
+ * ⚑ NOT POINTED AT A REGISTER IS NOT AN EMPTY RECORD. `world2Enabled()` false
+ * is this office having no register at all — the same condition `movementV2Enabled()`
+ * false named on the old road, and the same answer `world2-guards §
+ * standsRowsFromStore` gives it ("null is 'I could not look', never 'the answer
+ * is none'"). It comes back as `absent`, never as `[]`, so no caller can read
+ * "no register" as "nobody has walked".
+ */
+export async function storedDepartureEvents({ atMs = Date.now() } = {}) {
+  const { world2Enabled } = await import("./world2-acts.mjs");
+  if (!world2Enabled()) {
+    return { events: [], absent: "WORLD2_PG/WORLD2_PG_URL are unset — this office is not pointed at the record, which is not the same as a record with no departures in it" };
+  }
+  const { records, absent } = await storedDepartures({ atMs, withActId: true });
+  if (absent) return { events: [], absent };
+  return { events: records.map(departureEventOf), absent: null };
+}
+
+/**
+ * ONE RECORD → ONE `<N>.jsonl` DEPARTURE LINE, in the record's own grammar.
+ *
+ * The grammar is finding 1's, measured on all 2,870 departure lines in the
+ * world clone: top keys `at,type,actor,seq,payload` and payload keys
+ * `from,toward,crossing,within,to,pace,declared_by,source`, in that order on
+ * every one of them. Key ORDER is part of the bytes, so the object literal's
+ * order is the record's order and neither may be sorted.
+ *
+ * `payload` is a STRING here because that is what `readMovements` handed back
+ * and what `departureFromEvent` and `buildSave` both already parse — one
+ * vocabulary, and the seam stays a change of pen.
+ */
+export function departureEventOf(r) {
+  return {
+    seq: r.act_id == null ? null : Number(r.act_id),   // DEPARTURE_GAPS.seq
+    at: r.iso,                                          // DEPARTURE_GAPS.at — the STOP
+    actor: r.handle,
+    type: "departure",
+    payload: JSON.stringify({
+      from: r.from,
+      toward: r.toward,
+      crossing: r.at,
+      within: r.targetExtent ?? null,
+      to: r.targetMarkId ?? null,
+      pace: r.pace ?? null,
+      declared_by: r.handle,                            // DEPARTURE_GAPS.declared_by
+      source: "acts",                                   // DEPARTURE_GAPS.source
+    }),
+  };
 }
 
 /**
