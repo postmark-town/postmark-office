@@ -20,7 +20,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -498,4 +498,73 @@ test("a two-row ceremony renders ONCE, not once per row", async () => {
     assert.deepEqual(after.households["two-row-house"].residents, ["two-row-resident"]);
     assert.ok(JSON.parse(readFileSync(join(clone, PINS_PATH), "utf8"))["two-row-resident"]);
   });
+});
+
+// ── A MEMBERSHIP WRITE NEVER BLOCKS THE TOWN ────────────────────────────────
+
+test("a store that throws AT WRITE TIME defers the row — the crossing completes", async () => {
+  // RULED (Keemin, 2026-09-22, review 2/6): a membership write must never block
+  // the town. `writeTownDrain` wrapped its mints in no try/catch, so a store
+  // failure between the plan and the write threw out of the drain, out of the
+  // tool, and out of an `&&`-joined ferry chain — a household row failing to
+  // land stopped the TOWN'S MAIL.
+  //
+  // The falsifier drives the real `writeTownDrain` against a pool that reads
+  // fine and refuses every write, which is the shape a lost connection or a
+  // revoked grant actually has: the plan was computed, and the write is what
+  // fails.
+  const { writeTownDrain, STORE_WRITE_FAILED } = await import("../src/town-drain.mjs");
+  const { planRegistryJoin } = await import("../src/residency.mjs");
+
+  const seeded = stubPool();
+  const readsButCannotWrite = {
+    async query(text, params) {
+      if (/^\s*INSERT INTO/.test(text)) throw new Error("permission denied for table households");
+      return seeded.query(text, params);
+    },
+  };
+
+  const clone = cloneWith();
+  const registry = JSON.parse(HOUSEHOLDS_RAW);
+  const row = {
+    seq: 7, cls: "join", act: "declare-household", handle: "a-stalled-arrival",
+    ghId: 4242, ghLogin: "stalled-human",
+    payload: { household: "A Stalled House", card: "hello" },
+  };
+  const p = planRegistryJoin(registry, {
+    handle: row.handle, household: row.payload.household,
+    ghId: row.ghId, ghLogin: row.ghLogin, date: "2026-09-22",
+  });
+
+  __setPoolForTest(readsButCannotWrite);
+  const was = { pg: process.env.WORLD2_PG, url: process.env.WORLD2_PG_URL };
+  Object.assign(process.env, ENV_ON);
+  let touched;
+  try {
+    // IT MUST NOT THROW. That is the whole ruling, and it is asserted by the
+    // absence of a rejection around this call rather than by a comment.
+    touched = await writeTownDrain(clone, { plans: [{ row, plan: p }], registry }, { date: "2026-09-22" });
+  } finally {
+    __setPoolForTest(null);
+    if (was.pg === undefined) delete process.env.WORLD2_PG; else process.env.WORLD2_PG = was.pg;
+    if (was.url === undefined) delete process.env.WORLD2_PG_URL; else process.env.WORLD2_PG_URL = was.url;
+  }
+
+  assert.ok(Array.isArray(touched), "the crossing completed and answered");
+  assert.equal(touched.stalled?.length, 1, "and the row is named as stalled");
+  assert.equal(touched.stalled[0].row.seq, 7);
+  assert.match(touched.stalled[0].why, /still pending/);
+  assert.match(touched.stalled[0].why, /permission denied/, "the operator gets the store's own words");
+  assert.equal(touched.stalled[0].why, STORE_WRITE_FAILED(new Error("permission denied for table households")),
+    "the sentence is the module's, not this test's");
+
+  // AND NOT ONE BYTE WAS WRITTEN FOR IT. The record comes first precisely so a
+  // stalled row leaves no ADDRESS card standing for a resident the record
+  // cannot account for.
+  // LENGTH, not deep-equality: `touched` is the list of paths to stage, and it
+  // also carries `stalled` (and `refused`) as properties for `runTownDrain` to
+  // read — the same shape `refused` has ridden since this lane opened. What
+  // "nothing to commit" means is that the list of PATHS is empty.
+  assert.equal(touched.length, 0, "nothing to commit — the row simply did not settle");
+  assert.equal(existsSync(join(clone, "WHITE_PAGES", "a-stalled-arrival", "ADDRESS.md")), false);
 });

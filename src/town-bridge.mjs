@@ -459,6 +459,24 @@ export async function runTownDrain(odb, {
   const registryRefused = touched.refused ?? null;
   if (registryRefused) log(`drain: the registry did not re-render — ${registryRefused}`);
 
+  // ── THE STALLED ROWS HOLD THE CURSOR (POS-158, review 2/6) ───────────
+  //
+  // A membership write that could not reach the record defers its row rather
+  // than throwing, because a membership write must never block the town
+  // (`src/town-drain.mjs` § THE RECORD FIRST, THE CARDS SECOND) — the ferry
+  // chain is `&&`-joined, and a throw here stopped the mail.
+  //
+  // Deferring is only half of that, and the gangway's own paragraph above says
+  // why the other half is not optional: `waiting` is a pile in a REPORT, and
+  // this function advances the cursor to the last PENDING row regardless of
+  // which pile a row landed in. A stalled row walked past is a household lost
+  // while the report prints the word that promises it was kept. So the cursor
+  // does not move at all while any row stalled, exactly as it does not while
+  // the gangway holds one.
+  const stalledRows = touched.stalled ?? [];
+  if (stalledRows.length)
+    log(`drain: ${stalledRows.length} row(s) could not reach the record and are still pending — the cursor is held`);
+
   // The join files are the only bytes the bridge itself put on disk, so they
   // are the only ones it commits. Every door below commits its own work through
   // the same pen — one commit per act, exactly as that act would have made had
@@ -564,12 +582,13 @@ export async function runTownDrain(odb, {
   }
 
   // ── the cursor, LAST — and not at all while the gangway holds a row ──────
-  if (!gangwayHold) advanceTownCursor(odb, head);
+  if (!gangwayHold && !stalledRows.length) advanceTownCursor(odb, head);
 
   return done({
     ran: true, date: stamp, drained: rows.length, counts, head,
     cursor: townDrainCursor(odb), commit, first_idea: firstIdea, ...gangwayFields,
     ...(registryRefused ? { registry_refused: registryRefused } : {}),
+    ...(stalledRows.length ? { store: stalledRows.map(({ row, why }) => ({ seq: row.seq, handle: row.handle, why })) } : {}),
     settled: plan.plans.map(({ row }) => row.handle),
     waiting: plan.waiting.map(({ row, why }) => ({ seq: row.seq, handle: row.handle, why })),
     // JOIN ROWS ONLY. planTownDrain reads the WHOLE pending log and files every
