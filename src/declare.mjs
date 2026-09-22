@@ -188,6 +188,29 @@ export function handleTaken(handle, { db, registry, clone, odb = null }) {
   return null;
 }
 
+/**
+ * Check 11, on its own — THE IDENTITY FENCE, AND IT RUNS FIRST.
+ *
+ * It used to live only inside `conformance`, which was fine while the door's
+ * first act was a file read that could not fail. Since POS-158 the door's first
+ * act is a READ OF THE RECORD, and that read can answer "unreachable" — so an
+ * unauthenticated caller was being told the office cannot reach its database
+ * instead of being told to sign in. Two things wrong with that and the second
+ * is the worse one: the fence's own sentence went missing (the tripwire suite
+ * reads for it by name, and the caller needs it to act), and a stranger with no
+ * credential at all learned a fact about the office's internals.
+ *
+ * So the fence is extracted and called at the top of `declareHousehold`, before
+ * a single read. It stays inside `conformance` too — the exec re-runs the whole
+ * list under the lock, and a fence that only ran at the outer door would be a
+ * fence with a gate beside it.
+ */
+export function requireAnchor(key) {
+  if (!key?.ghId)
+    throw bounce(403, "credential", "declaring a household needs a GitHub-verified sign-in",
+      "the household grain is the anti-sybil floor — the door mints your key against a verified account. Connector lane: your client's authenticate step. Shell lane: mint a household key at postmark.town/join, then declare with it.");
+}
+
 // The whole gate, in one pure-ish function. Throws a field-named bounce, or
 // returns the normalized declaration.
 export function conformance(args = {}, { db, registry, clone, key, odb = null } = {}) {
@@ -195,9 +218,7 @@ export function conformance(args = {}, { db, registry, clone, key, odb = null } 
   // credential for this purpose: the anti-sybil floor rides the household class
   // and IS the credential grain (LOGOS/classes.md:64-70, INDEX.md atom 3), so a
   // door that hands credentials to whoever asks has no floor at all.
-  if (!key?.ghId)
-    throw bounce(403, "credential", "declaring a household needs a GitHub-verified sign-in",
-      "the household grain is the anti-sybil floor — the door mints your key against a verified account. Connector lane: your client's authenticate step. Shell lane: mint a household key at postmark.town/join, then declare with it.");
+  requireAnchor(key);
 
   // 1,2,3,4,6,7 — handle grammar / reserved / card presence + size. One grammar,
   // shared with the PR lane, so a handle legal at one door is legal at both.
@@ -549,6 +570,10 @@ export async function readRegisters(env = process.env) {
 // path is testable without a git clone or a pen.
 
 export async function declareHousehold(args, key, { db, clone, odb, mintKey, commit, env = process.env }) {
+  // THE FENCE BEFORE THE READ. See § requireAnchor: a caller with no verified
+  // account must meet the sign-in sentence, not a report about whether this
+  // office can reach its own record.
+  requireAnchor(key);
   const { registry, pins } = await readRegisters(env);
 
   const decl = conformance(args, { db, registry, clone, key, odb });

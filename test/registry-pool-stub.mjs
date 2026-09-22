@@ -1,0 +1,134 @@
+// registry-pool-stub.mjs — the store, in memory, for suites that used to seed a file.
+//
+// NOT A TEST FILE. The suite glob is `test/*.test.mjs`, so this is a helper and
+// not a roster entry.
+//
+// ── WHY EVERY DRAIN SUITE SUDDENLY NEEDS ONE (POS-158) ──────────────────────
+//
+// The household registry is store-of-record (019_households.sql, POS-187), and
+// POS-158 moved the last office readers and the last office writers onto it.
+// `planTownDrain` reads `loadRegistry()`; `writeTownDrain` writes rows through
+// `src/ceremony.mjs` and renders the files through `tools/registry-drain.mjs`.
+//
+// These suites were all written against the OLD shape: seed
+// `tools/households.json` in a temp clone, run a crossing, read the file back.
+// That intent is still exactly right — a crossing reads the town's registry and
+// leaves it holding one more resident — so rather than rewrite twenty tests,
+// this seeds THE STORE from the same fixture the test already wrote, and the
+// file it wrote is then what the drain renders back.
+//
+// THE POOL IS STUBBED, NOT MOCKED AROUND. `world2-acts.mjs` exports
+// `__setPoolForTest` for exactly this (it is how `registry-drain.test.mjs` has
+// worked since POS-187), and this stub answers the REAL queries with rows
+// shaped the way `node-postgres` shapes them: `gh_id` a STRING for a bigint,
+// `accounts` parsed jsonb, `ord` a number. So the path under test stays the
+// real `loadRegistryRows` -> `registryFromRows` -> the ceremony -> the drain.
+//
+// IT APPLIES THE WRITES. A stub that answered reads and swallowed upserts would
+// let "the crossing settled them" pass while nothing was settled. The rows go
+// into the same arrays the reads come out of, which is what makes a suite's
+// "read it back" assertion mean something.
+
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { __setPoolForTest } from "../src/world2-acts.mjs";
+import { rowsFromRegistry } from "../src/registry-rows.mjs";
+import { REGISTRY_PATH, PINS_PATH } from "../src/residency.mjs";
+
+/** The env that says "this office IS pointed at the record". */
+export const RECORD_ON = Object.freeze({ WORLD2_PG: "1", WORLD2_PG_URL: "postgres://stub/none" });
+
+const readJson = (clone, rel) => {
+  try { return JSON.parse(readFileSync(join(clone, rel), "utf8")); } catch { return null; }
+};
+
+/**
+ * Seed the store from whatever two registers a clone already holds.
+ *
+ * A clone with no registry seeds an EMPTY store rather than no store — which is
+ * the truthful translation of the old `?? { households: {} }`: the office can
+ * look, and there is nothing there. "Cannot look" is a different fact and it is
+ * reached by not calling this at all.
+ */
+export function poolFromClone(clone) {
+  const households = readJson(clone, REGISTRY_PATH) ?? { schema_version: 1, households: {} };
+  const pins = readJson(clone, PINS_PATH) ?? {};
+
+  let seed;
+  try {
+    seed = rowsFromRegistry(households, pins);
+  } catch {
+    // A fixture carrying a key the columns do not cover. `rowsFromRegistry`
+    // throws on purpose there (it would otherwise render a file that drops
+    // somebody's field), and a helper must not paper over it — but a suite
+    // proving something else entirely should not fail on it either, so it
+    // starts empty and the suite's own assertions say whether that mattered.
+    seed = { meta: { schema_version: 1 }, households: [], pins: [] };
+  }
+  return makePool(seed);
+}
+
+/** The in-memory pool itself, over a `rowsFromRegistry`-shaped seed. */
+export function makePool(seed) {
+  const state = {
+    households: seed.households.map((r) => ({ ...r })),
+    pins: seed.pins.map((r) => ({ ...r })),
+    meta: { ...seed.meta },
+    writes: { households: 0, pins: 0 },
+  };
+  return {
+    state,
+    async query(text, params = []) {
+      if (/^\s*INSERT INTO households/.test(text)) {
+        state.writes.households++;
+        const row = {
+          slug: params[0], ord: Number(params[1]), name: params[2], human: params[3],
+          accounts: JSON.parse(params[4]), residents: params[5] ?? [], since: params[6],
+          member_of: params[7], declared_by: params[8], formerly: params[9] ?? [],
+        };
+        const at = state.households.findIndex((r) => r.slug === row.slug);
+        if (at >= 0) state.households[at] = row; else state.households.push(row);
+        return { rows: [] };
+      }
+      if (/^\s*INSERT INTO household_pins/.test(text)) {
+        state.writes.pins++;
+        const row = {
+          handle: params[0], login: params[1], gh_id: params[2], pinned: params[3],
+          renamed: params[4], note: params[5], retired: params[6], renamed_to: params[7],
+        };
+        const at = state.pins.findIndex((r) => r.handle === row.handle);
+        if (at >= 0) state.pins[at] = row; else state.pins.push(row);
+        return { rows: [] };
+      }
+      if (/FROM households/.test(text))
+        return { rows: [...state.households].sort((a, b) => a.ord - b.ord).map((r) => ({ ...r, ord: Number(r.ord) })) };
+      if (/FROM household_pins/.test(text))
+        return { rows: [...state.pins].sort((a, b) => (a.handle < b.handle ? -1 : 1)).map((r) => ({ ...r, gh_id: String(r.gh_id) })) };
+      if (/FROM registry_meta/.test(text))
+        return { rows: Object.entries(state.meta).map(([key, value]) => ({ key, value })) };
+      throw new Error(`the stub pool was asked something it does not answer: ${text}`);
+    },
+  };
+}
+
+/**
+ * Point the office at a store seeded from `clone`, for the length of one call.
+ *
+ * The pool is ALWAYS cleared, including on a throw, because a leaked stub makes
+ * the next suite in the same process read this one's town — and the failure it
+ * causes lands in a file nobody edited.
+ */
+export async function withRecordFrom(clone, fn) {
+  const pool = poolFromClone(clone);
+  __setPoolForTest(pool);
+  const was = process.env.WORLD2_PG;
+  const wasUrl = process.env.WORLD2_PG_URL;
+  process.env.WORLD2_PG = RECORD_ON.WORLD2_PG;
+  process.env.WORLD2_PG_URL = RECORD_ON.WORLD2_PG_URL;
+  try { return await fn(pool); }
+  finally {
+    __setPoolForTest(null);
+    if (was === undefined) delete process.env.WORLD2_PG; else process.env.WORLD2_PG = was;
+    if (wasUrl === undefined) delete process.env.WORLD2_PG_URL; else process.env.WORLD2_PG_URL = wasUrl;
+  }
+}

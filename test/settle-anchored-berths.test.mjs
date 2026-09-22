@@ -23,9 +23,30 @@ import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } from 
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { planSweep, applySweep, readBerth, rowFor } from "../tools/settle-anchored-berths.mjs";
+import { planSweep as REAL_planSweep, applySweep, readBerth, rowFor } from "../tools/settle-anchored-berths.mjs";
+import { withRecordFrom } from "./registry-pool-stub.mjs";
+
+// ── POINTED AT THE RECORD, AND AWAITED (POS-158) ───────────────────────────
+//
+// The sweep reads the registry and the pins to answer its two questions — does
+// this berth have a household row, and is it anchored to a pinned id — and both
+// now come from the store rather than from the clone's two JSON files. This
+// wrapper seeds the store from whatever registers the clone already holds, which
+// is the same fixture every test below already writes, so each verdict keeps
+// meaning what it meant.
+//
+// Without it every berth would answer "no household row lists this handle" and
+// land in `conflicts`: an unreachable record reported as a town whose record had
+// come apart. The tool refuses outright in that case, and the refusal has its
+// own test below.
+const planSweep = (clone, opts) => withRecordFrom(clone, () => REAL_planSweep(clone, opts));
 import { REGISTRY_PATH, PINS_PATH, serializeRegistry } from "../src/residency.mjs";
-import { serializePins } from "../src/declare.mjs";
+// THE SORTED SERIALIZER, which is the town pen's own and now the only one
+// (POS-158). `src/declare.mjs` used to export a second, UNSORTED spelling —
+// named in `src/registry-rows.mjs`'s header as a divergence that would red
+// `--check` on the next crossing — and this fixture writer reached for it.
+// It is deleted; the fixture now writes the bytes the town actually holds.
+import { serializePins } from "../src/residency.mjs";
 
 // ── the fixture: a town holding castor-vale's exact shape ───────────────────
 //
@@ -81,9 +102,9 @@ function sweepClone({ crlf = false, extraBerths = [], pins: extraPins = {}, hous
 
 // ── the falsifiers ──────────────────────────────────────────────────────────
 
-test("the dry run over castor-vale's shape plans EXACTLY one settle, and names the already-ashore as ashore", () => {
+test("the dry run over castor-vale's shape plans EXACTLY one settle, and names the already-ashore as ashore", async () => {
   const clone = sweepClone();
-  const plan = planSweep(clone);
+  const plan = await planSweep(clone);
 
   assert.equal(plan.counts.settle, 1);
   assert.equal(plan.settle[0].handle, "castor-vale");
@@ -98,9 +119,9 @@ test("the dry run over castor-vale's shape plans EXACTLY one settle, and names t
   assert.equal(plan.manifest, plan.counts.settle + plan.counts.ashore + plan.counts.unanchored + plan.counts.conflict);
 });
 
-test("the apply lands the address, and a SECOND run over the same pool plans zero", () => {
+test("the apply lands the address, and a SECOND run over the same pool plans zero", async () => {
   const clone = sweepClone();
-  const first = planSweep(clone);
+  const first = await planSweep(clone);
   const landed = applySweep(clone, first);
 
   assert.deepEqual(landed.settled, ["castor-vale"]);
@@ -110,14 +131,14 @@ test("the apply lands the address, and a SECOND run over the same pool plans zer
     "a resident who is ashore has somewhere for letters to land");
 
   // IDEMPOTENCE, read off the record rather than off a flag we set
-  const second = planSweep(clone);
+  const second = await planSweep(clone);
   assert.equal(second.counts.settle, 0, "the second run plans nothing — the card already stands");
   assert.equal(second.counts.ashore, 2);
 });
 
-test("the address the sweep writes is the BERTH's own words, carried over", () => {
+test("the address the sweep writes is the BERTH's own words, carried over", async () => {
   const clone = sweepClone();
-  applySweep(clone, planSweep(clone));
+  applySweep(clone, await planSweep(clone));
   const card = readFileSync(join(clone, "WHITE_PAGES", "castor-vale", "ADDRESS.md"), "utf8");
 
   assert.match(card, /^handle: castor-vale$/m);
@@ -128,14 +149,14 @@ test("the address the sweep writes is the BERTH's own words, carried over", () =
     "their prose is carried, not re-described — this settlement is the one the berth was promised");
 });
 
-test("a berth with NO household row is refused BY HANDLE, never minted an address", () => {
+test("a berth with NO household row is refused BY HANDLE, never minted an address", async () => {
   // the broken covenant declare-exec names: a household standing in the white
   // pages that the record cannot account for
   const clone = sweepClone({
     extraBerths: [{ handle: "no-row-anywhere", github: "ghost" }],
     pins: { "no-row-anywhere": { login: "ghost", id: 777, pinned: "2026-09-01" } },
   });
-  const plan = planSweep(clone);
+  const plan = await planSweep(clone);
 
   assert.equal(plan.counts.conflict, 1);
   assert.equal(plan.conflicts[0].handle, "no-row-anywhere");
@@ -147,12 +168,12 @@ test("a berth with NO household row is refused BY HANDLE, never minted an addres
     "the apply wrote an address for a handle the registry does not carry");
 });
 
-test("an UNANCHORED berth is skipped by name and keeps full berth life", () => {
+test("an UNANCHORED berth is skipped by name and keeps full berth life", async () => {
   const clone = sweepClone({
     extraBerths: [{ handle: "no-pin-yet", github: "someday" }],
     households: { somehouse: { name: "Somehouse", accounts: [], residents: ["no-pin-yet"], since: "2026-09-01", member_of: "the-harbor" } },
   });
-  const plan = planSweep(clone);
+  const plan = await planSweep(clone);
 
   const skipped = plan.skipped.find((r) => r.handle === "no-pin-yet");
   assert.ok(skipped, "an unanchored berth is reported, not dropped");
@@ -167,12 +188,12 @@ test("an UNANCHORED berth is skipped by name and keeps full berth life", () => {
 
 // ── the two that are about the tool's own failure modes ────────────────────
 
-test("A CRLF CHECKOUT PARSES — a Windows operator does not get a stranded household reported as a conflict", () => {
+test("A CRLF CHECKOUT PARSES — a Windows operator does not get a stranded household reported as a conflict", async () => {
   // measured: castor-vale's real card read as "no readable frontmatter" on a
   // Windows checkout with core.autocrlf, which is a verdict about the
   // operator's filesystem phrased as a verdict about the household
   const clone = sweepClone({ crlf: true });
-  const plan = planSweep(clone);
+  const plan = await planSweep(clone);
 
   assert.equal(plan.counts.conflict, 0, "CRLF is not a conflict");
   assert.equal(plan.counts.settle, 1);
@@ -183,9 +204,9 @@ test("A CRLF CHECKOUT PARSES — a Windows operator does not get a stranded hous
   assert.equal(berth.data.since, "2025-03-25");
 });
 
-test("the gangway is read, and a raised one is reported as a refusal of the SWEEP, not a verdict on anybody", () => {
+test("the gangway is read, and a raised one is reported as a refusal of the SWEEP, not a verdict on anybody", async () => {
   const clone = sweepClone({ frozen: true });
-  const plan = planSweep(clone);
+  const plan = await planSweep(clone);
 
   assert.equal(plan.gangway, "frozen");
   // the plan still says truthfully who WOULD settle — the entrypoint is what
@@ -195,15 +216,15 @@ test("the gangway is read, and a raised one is reported as a refusal of the SWEE
   assert.equal(plan.settle[0].verdict, "would-settle");
 });
 
-test("--only narrows the sweep to one handle without changing its verdict", () => {
+test("--only narrows the sweep to one handle without changing its verdict", async () => {
   const clone = sweepClone();
-  const plan = planSweep(clone, { only: "castor-vale" });
+  const plan = await planSweep(clone, { only: "castor-vale" });
   assert.equal(plan.counts.settle, 1);
   assert.equal(plan.counts.ashore, 0, "the others are not considered at all");
   assert.equal(plan.settle[0].handle, "castor-vale");
 });
 
-test("rowFor finds the household that lists the handle, and answers null rather than guessing", () => {
+test("rowFor finds the household that lists the handle, and answers null rather than guessing", async () => {
   const clone = sweepClone();
   const registry = JSON.parse(readFileSync(join(clone, REGISTRY_PATH), "utf8"));
   assert.equal(rowFor(registry, "castor-vale").slug, "lou");
