@@ -293,14 +293,61 @@ async function main() {
   // at the door; the FILE speaks the frame — the same conversion the migrator
   // used, from the clone's own fold. Root-level marks are framed on the origin,
   // so their numbers do not change; an old clone (no worldToFile) keeps v2
-  // behavior byte-for-byte. If this conversion is ever wrong, the lint+fold gate
-  // below refuses the write — the door cannot land a misplaced record.
+  // behavior byte-for-byte.
+  //
+  // WHAT THE GATE DOES AND DOES NOT REFUSE. This comment used to end "if this
+  // conversion is ever wrong, the lint+fold gate below refuses the write — the
+  // door cannot land a misplaced record". There IS no gate below: a draft costs
+  // nothing (header, 2026-08-22), and the lint and the fold run at the
+  // Settlement, not here. What they judge is whether a record PARSES and whether
+  // its composed footprint is admissible — overlap, standing, consent. A number
+  // written in the wrong frame parses, and it composes to a real point on the
+  // ground, so it is admissible: the gate reads a mark that has MOVED, not a
+  // mark that is misplaced, and it has no way to tell the two apart. Nothing
+  // downstream refuses this; getting the origin right here is the whole guard.
+  // It did not, twice — `vermillion/the-pando-peak` (2026-08-27, fixed at the
+  // drain) and `current-the-reader/the-snug-mooring` (2026-09-14, world
+  // `3a3a645c`: the resident's correct absolute landed in a nested slot and the
+  // fold read it as an offset, 5 km out to sea).
+  //
+  // THE ORIGIN, for a sited/parcel mark the frozen manifest already nests. Such
+  // a mark carries no `parent_id` — geometry decides its containment — so the
+  // `parentId` test below is false for it and the conversion was skipped
+  // entirely: the resident's ABSOLUTE went into a relative slot verbatim. A
+  // FRESH sited leave files at `WORLD/marks/<by>/<slug>/`, which is root level,
+  // where absolute IS the file frame and nothing needs shifting; the hole is
+  // only the amend of a fossil, whose filing is nested. Its origin is the
+  // composed centre of the mark that FRAMES it — the same anchor
+  // `world-journal.mjs § pathFor` takes ("the innermost containing mark is the
+  // anchor") and the same one `world-drain.mjs § fileFramer` already takes.
+  //
+  // Read from the fold's own answer for that record (`_origin`), not
+  // re-derived from the directory: the frame is the nearest positioned ancestor
+  // THAT BINDS the record (marks-fold § the tier binding), which steps past an
+  // ancestor the record outranks. Measured on world `58d4722e`, 7 of the 385
+  // frozen nested sited marks are framed on a mark that is NOT their directory
+  // parent, so a directory-parent centre would file those 7 against a frame the
+  // fold does not use — the same defect in a new place. The fossil the manifest
+  // names but the tree no longer holds has no such record; it falls back to the
+  // mark standing in `parentDir` (which IS `dirname(fossilDir)` by construction
+  // above — one name, so the two cannot drift), and to the null origin when
+  // nothing stands there.
+  //
+  // The door stays CONDEMNED. Nothing else about it changes.
   const rootRec = marks.find((m) => m.id === "the-town/let-there-be-light");
   const relativeTree = !!worldToFile && COORDS_FIELD &&
     String(rootRec?.[COORDS_FIELD] ?? "").trim() === COORDS_RELATIVE;
+  const frameOrigin = () => {
+    if (parentId) return byId.get(parentId)?.at ?? null;   // composed world centre — loadMarks composed it
+    if (!fossilDir) return null;                           // root-level filing: absolute IS the file frame
+    const fossilRec = byId.get(id);
+    if (fossilRec?._origin) return fossilRec._origin;      // the fold's own frame for this very record
+    const framing = marks.find((m) => m._dir && resolve(m._dir) === resolve(parentDir));
+    return framing?.at ?? null;
+  };
   const fileRec = { ...p };
-  if (relativeTree && parentId) {
-    const origin = byId.get(parentId)?.at ?? null;   // composed world centre — loadMarks composed it
+  if (relativeTree) {
+    const origin = frameOrigin();
     if (origin) {
       if (fileRec.at) fileRec.at = worldToFile(fileRec.at, origin);
       if (fileRec.points) fileRec.points = ringToFile(fileRec.points, origin);
