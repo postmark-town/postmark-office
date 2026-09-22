@@ -404,7 +404,6 @@ export const DEPARTURE_GAPS = Object.freeze({
   declared_by: "gap:declared_by — the departure act carries no declarer. `walkEntry`'s payload has five keys and none is it, and `world2/tools/backfill-departures.mjs § departureRowFrom` SELECTs the column and drops it. The act's own actor stands for it, which is what the live write path puts in that column (2,829 of 2,829 door-written lines); the 28 that differ are the 2026-08-10 `ledger-freeze` one-off, in windows 119/120.",
   note: "gap:note — the departure act carries no note. The record's grammar already makes the key conditional, and the only 28 lines that carry one are the same freeze backfill.",
   source: "gap:source — the allowed stamp diff: `\"acts\"` where the mirror wrote `\"dynamic.db/movements\"`. No world reader reads it; it is the line's own provenance.",
-  absent: "absent — no line on disk for this key.",
   unexplained: "UNEXPLAINED — not one of the named gaps.",
 });
 
