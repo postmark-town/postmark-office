@@ -1,0 +1,231 @@
+// registry-rows.mjs — THE ROUND TRIP, PURE (POS-187).
+//
+// The town's household registry is two JSON files in the town repo:
+// `tools/households.json` (118 houses) and `tools/github-ids.json` (190 pins).
+// POS-187 makes the STORE the record and the files a RENDERING of it. This
+// module is the fold and the unfold, and nothing else — no database, no clock,
+// no filesystem, no network. `tools/registry-seed.mjs` uses the fold,
+// `tools/registry-drain.mjs` uses the unfold, and `src/registry-store.mjs`
+// uses the unfold's object half.
+//
+// ── THE LAW THIS FILE EXISTS TO SATISFY ─────────────────────────────────────
+//
+//     renderRegistry(rowsFromRegistry(households, pins))  ===  the two files,
+//                                                              byte for byte
+//
+// It is the gate on the whole flip. `registry-drain.mjs --check` runs it
+// against the live clone and exits 1 naming the first differing line, and
+// `test/registry-rows.test.mjs` runs it against the real 2026-09-22 fixtures.
+// If it reds, the store is not the record yet and nothing may move onto it.
+//
+// ── WHY BYTE-EQUALITY IS REACHABLE AT ALL ───────────────────────────────────
+//
+// Measured on the live files (2026-09-22, town origin/main df732534a): both are
+// EXACTLY `JSON.stringify(obj, null, 2) + "\n"` — the re-stringify of each
+// parsed file is byte-equal to the file, LF throughout. So the whole problem
+// reduces to rebuilding the same objects with the same KEY INSERTION ORDER, and
+// two facts make that possible:
+//
+//   1. Every household's key order is a subsequence of one fixed template
+//      (name, human, accounts, residents, since, member_of, declared_by) —
+//      6 distinct live orderings, 0 mismatches over 118 rows.
+//   2. Every pin's key order is a subsequence of one fixed template
+//      (login, id, pinned, renamed, note, retired, renamed_to) —
+//      7 distinct live orderings, 0 mismatches over 190 rows.
+//
+// So an ABSENT key and a key set to null are different things here, and this
+// module keeps them different: a null column renders as NO KEY AT ALL. A house
+// with no `name` is a house that has not said what it is called
+// (src/residency.mjs § A HOUSE OF ONE — the card then reads
+// "(unstated — ask them)"), and writing `"name": null` into the town's file
+// would be both a lie and a diff.
+//
+// ── WHAT IS DERIVED AND WHAT IS STORED ──────────────────────────────────────
+//
+// The HOUSEHOLD order is stored (`ord`). The file's 118 keys are in declaration
+// order, which is neither sorted nor date-ordered — measured: `Object.keys()`
+// differs from its own `.sort()`, and `since` runs backwards at 36 of the 118.
+// Nothing derives that order, so it is a column.
+//
+// The PIN order is derived: the file is sorted by handle, and the town's own
+// `serializePins` (residency.mjs:148) sorts on every write. A column for it
+// would be a second answer to a settled question.
+//
+// ── ONE SERIALIZER, NOT A SECOND ────────────────────────────────────────────
+//
+// The bytes come from `serializeRegistry` and `serializePins` in
+// `src/residency.mjs` — the town pen's OWN writers, the ones every join and
+// every declaration already commit through. This module builds the objects; it
+// does not spell JSON. If the pen's spelling ever moves, the drain moves with
+// it in the same breath, because it is literally the same function.
+//
+// NOTE, FOR WHOEVER TOUCHES `serializePins` NEXT: there are two spellings of it
+// in this repo today and only one sorts. `src/residency.mjs:148` sorts;
+// `src/declare.mjs:455` does not, and `src/declare.mjs:411` is what the
+// declaration ceremony commits through. The live file IS sorted, so the sorted
+// spelling is the one that matches today's bytes and the one this module uses —
+// but a declaration landing through declare.mjs's unsorted writer would append
+// its new handle at the END of the file and `--check` would red on the next
+// crossing. That divergence is older than this lane and is named in the PR
+// rather than fixed in it.
+
+import { serializeRegistry, serializePins } from "./residency.mjs";
+
+// The two key templates, stated once. Every renderer below walks these in
+// order and skips what the row does not carry; every reader above checks its
+// input against them. They are the file's grammar, and they are the only place
+// that grammar is written down.
+export const HOUSEHOLD_KEYS = Object.freeze([
+  "name", "human", "accounts", "residents", "since", "member_of", "declared_by",
+]);
+export const PIN_KEYS = Object.freeze([
+  "login", "id", "pinned", "renamed", "note", "retired", "renamed_to",
+]);
+
+// A pin's column names are the file's key names except one: `id` is a reserved
+// enough word in SQL company that the column is `gh_id`, and this is the single
+// place the two spellings meet.
+const PIN_COLUMN = Object.freeze({
+  login: "login", id: "gh_id", pinned: "pinned",
+  renamed: "renamed", note: "note", retired: "retired", renamed_to: "renamed_to",
+});
+
+const isAbsent = (v) => v === undefined || v === null;
+
+/**
+ * The two parsed files -> the rows the store holds.
+ *
+ * `households` rows carry `ord` (the file's own order, 0-based), every column
+ * of 019_households.sql, and NOTHING ELSE. `pins` rows are keyed by handle.
+ * `meta` is the file-level pair — `schema_version` and the registry `note` —
+ * which belong to the FILE and to no house, and which the town's witness
+ * requires untouched by a resident's PR (town tools/witness.mjs:31).
+ *
+ * THIS REFUSES RATHER THAN DROPS. A key the templates above do not name is a
+ * field the town started carrying and this module cannot render; silently
+ * omitting it would hand the drain a file that loses somebody's row content on
+ * the next crossing, which is the one failure the whole round-trip law exists
+ * to make impossible. So it throws, and the seed stops, and a person looks.
+ */
+export function rowsFromRegistry(householdsJson, pinsJson) {
+  const doc = householdsJson ?? {};
+  const houses = doc.households ?? {};
+  const pinsDoc = pinsJson ?? {};
+
+  const meta = {};
+  for (const [k, v] of Object.entries(doc)) {
+    if (k === "households") continue;
+    meta[k] = v;
+  }
+
+  const households = [];
+  let ord = 0;
+  for (const [slug, rec] of Object.entries(houses)) {
+    const unknown = Object.keys(rec ?? {}).filter((k) => !HOUSEHOLD_KEYS.includes(k));
+    if (unknown.length)
+      throw new Error(`household "${slug}" carries ${unknown.map((k) => `\`${k}\``).join(", ")}, which registry-rows.mjs has no column for — add the column AND its place in HOUSEHOLD_KEYS in the same commit, or the drain will render a file that drops it`);
+    households.push({
+      slug,
+      ord: ord++,
+      name: rec?.name ?? null,
+      human: rec?.human ?? null,
+      accounts: rec?.accounts ?? [],
+      residents: rec?.residents ?? [],
+      since: rec?.since ?? null,
+      member_of: rec?.member_of ?? null,
+      declared_by: rec?.declared_by ?? null,
+    });
+  }
+
+  const pins = [];
+  for (const [handle, rec] of Object.entries(pinsDoc)) {
+    const unknown = Object.keys(rec ?? {}).filter((k) => !PIN_KEYS.includes(k));
+    if (unknown.length)
+      throw new Error(`pin "${handle}" carries ${unknown.map((k) => `\`${k}\``).join(", ")}, which registry-rows.mjs has no column for — add the column AND its place in PIN_KEYS in the same commit, or the drain will render a file that drops it`);
+    const row = { handle };
+    for (const k of PIN_KEYS) row[PIN_COLUMN[k]] = isAbsent(rec?.[k]) ? null : rec[k];
+    pins.push(row);
+  }
+
+  return { meta, households, pins };
+}
+
+/**
+ * The rows -> the registry OBJECT, in the file's own key order.
+ *
+ * This is the shape `src/declare-exec.mjs` and `src/declare.mjs` read off the
+ * clone today — `{ schema_version, note, households: { <slug>: { … } } }` — so
+ * a store read can be handed straight to `houseForAccount`, `houseForName`,
+ * `conformance` and `planRegistryJoin` with nothing in between.
+ *
+ * ORDER IS RESTORED HERE, not assumed from the query: rows are sorted by `ord`
+ * before the object is built, because a `SELECT` with no `ORDER BY` returns
+ * whatever the planner liked that morning and the file's bytes would then
+ * depend on the weather.
+ */
+export function registryFromRows(rows) {
+  const out = {};
+  for (const [k, v] of Object.entries(rows?.meta ?? {})) out[k] = v;
+  const households = {};
+  for (const r of [...(rows?.households ?? [])].sort((a, b) => a.ord - b.ord)) {
+    const rec = {};
+    for (const k of HOUSEHOLD_KEYS) {
+      const v = r[k];
+      if (isAbsent(v)) continue;
+      rec[k] = v;
+    }
+    households[r.slug] = rec;
+  }
+  out.households = households;
+  return out;
+}
+
+/**
+ * The rows -> the pins OBJECT. Sorted by handle inside `serializePins`, so the
+ * order this builds is not load-bearing; it is built sorted anyway, so that a
+ * caller reading this object (rather than its bytes) sees the same order the
+ * file has.
+ */
+export function pinsFromRows(rows) {
+  const out = {};
+  for (const r of [...(rows?.pins ?? [])].sort((a, b) => (a.handle < b.handle ? -1 : a.handle > b.handle ? 1 : 0))) {
+    const rec = {};
+    for (const k of PIN_KEYS) {
+      const v = r[PIN_COLUMN[k]];
+      if (isAbsent(v)) continue;
+      rec[k] = k === "id" ? Number(v) : v;
+    }
+    out[r.handle] = rec;
+  }
+  return out;
+}
+
+/**
+ * The rows -> both files' exact bytes.
+ *
+ * `{ households, pins }`, each a string ready to be written or committed.
+ * This is the half `--check` diffs and `--apply` commits, and it is the half
+ * the round-trip falsifier proves against the real files.
+ */
+export function renderRegistry(rows) {
+  return {
+    households: serializeRegistry(registryFromRows(rows)),
+    pins: serializePins(pinsFromRows(rows)),
+  };
+}
+
+/**
+ * The first line at which two renderings differ, 1-based, or null when they do
+ * not. `--check` prints this; a diff reported as "they differ" and nothing else
+ * is a red nobody can act on at 05:45 in the morning.
+ */
+export function firstDifferingLine(rendered, actual) {
+  if (rendered === actual) return null;
+  const a = String(rendered).split("\n");
+  const b = String(actual).split("\n");
+  const n = Math.max(a.length, b.length);
+  for (let i = 0; i < n; i++) {
+    if (a[i] !== b[i]) return { line: i + 1, rendered: a[i] ?? "(end of file)", actual: b[i] ?? "(end of file)" };
+  }
+  return { line: n, rendered: "(end of file)", actual: "(end of file)" };
+}

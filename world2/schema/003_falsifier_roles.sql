@@ -36,6 +36,22 @@ lawful AS (
     -- under the office's own connection, after the keeper's tag lands there;
     -- the pen is named in 018's header and is one word to move if ruled otherwise.
     ('office_api',   'settlements',      'INSERT'),
+    -- 019_households.sql. The household registry as store-of-record: the two
+    -- town JSON files become a rendering of these tables. `office_api` because
+    -- it is the role the door that DECLARES a household already connects as
+    -- (src/world2-acts.mjs:28) — `clearing_job` runs at a window's close and
+    -- `law_ingester` runs the ingest, and neither stands where a house is
+    -- declared. INSERT + UPDATE and no DELETE: a household row is edited in
+    -- place (a house gains a resident, states its name, appends an account),
+    -- which is what makes it a SOURCE rather than a projection, and a house is
+    -- never removed — the file has never removed a row and the town's witness
+    -- refuses a PR that does ("nothing removed", town tools/witness.mjs:31).
+    ('office_api',   'households',       'INSERT'),
+    ('office_api',   'households',       'UPDATE'),
+    ('office_api',   'household_pins',   'INSERT'),
+    ('office_api',   'household_pins',   'UPDATE'),
+    ('office_api',   'registry_meta',    'INSERT'),
+    ('office_api',   'registry_meta',    'UPDATE'),
     ('clearing_job', 'claims',           'UPDATE'),
     ('clearing_job', 'windows',          'INSERT'),
     ('clearing_job', 'windows',          'UPDATE'),
