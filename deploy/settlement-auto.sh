@@ -831,11 +831,29 @@ if [ "$SOURCE" = "store" ]; then
   # would merge a SECOND copy of every line rather than replacing them.
   STATE_LOG_JSON=""
   STATE_LOG_MODE="${STATE_LOG_SOURCE:-sqlite}"
-  case "$STATE_LOG_MODE" in
-    store|sqlite) ;;
-    *) echo "[settlement-auto] STATE_LOG_SOURCE=\"$STATE_LOG_MODE\" is not \`store\` or \`sqlite\` — refusing rather than guessing whether to write the archive" >&2; exit 1 ;;
-  esac
+  # THE KILL SWITCH IS A DOOR, SO IT COMES FIRST. `SETTLEMENT_STATE_LOG=0` is
+  # what an operator reaches for at 06:00Z when this step is the thing going
+  # wrong, and a mode check standing ahead of it would refuse the crossing on a
+  # stale `STATE_LOG_SOURCE` the operator had just switched off. A guard the
+  # off-switch cannot get past is a guard that blocks the fix.
   if [ "${SETTLEMENT_STATE_LOG:-1}" = "1" ]; then
+    # AN UNRECOGNISED MODE REFUSES RATHER THAN DEFAULTING, the same rule
+    # `SETTLEMENT_SOURCE` holds at :147 and for the same reason. A typo'd
+    # `STATE_LOG_SOURCE=stor` falling back to `sqlite` would mean the default
+    # was flipped, nobody was told, and the archive went on not being written —
+    # which is precisely the silence this step exists to end.
+    #
+    # It refuses THROUGH THE RECEIPT and not with a bare `exit`. :147 exits bare
+    # because it runs before `report` is defined; this line does not, and a
+    # crossing that stops with nothing on the receipt is a state the roll-call
+    # cannot see.
+    case "$STATE_LOG_MODE" in
+      store|sqlite) ;;
+      *)
+        report refused "STATE_LOG_SOURCE=\"$STATE_LOG_MODE\" is not \`store\` or \`sqlite\` — refusing rather than guessing whether to write the archive; SETTLEMENT_STATE_LOG=0 turns the step off"
+        echo "[settlement-auto] STATE_LOG_SOURCE=\"$STATE_LOG_MODE\" is not \`store\` or \`sqlite\` — publishing nothing" >&2
+        exit 1 ;;
+    esac
     STATE_LOG_JSON="$WORK/state-log.json"
     if [ "$STATE_LOG_MODE" = "store" ]; then
       if (cd "$OFFICE" && node "$OFFICE/world2/tools/state-log-write.mjs" \
