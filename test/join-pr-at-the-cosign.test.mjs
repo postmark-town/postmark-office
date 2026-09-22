@@ -40,7 +40,12 @@ import { __setPoolForTest } from "../src/world2-acts.mjs";
 import { requestResidency } from "../src/residency.mjs";
 import { rowsFromRegistry } from "../src/registry-rows.mjs";
 
-const GH_PORT = 43861;
+// 43943 — CHOSEN, NOT GUESSED. The first pick, 43861, was already
+// `test/hot-reload.test.mjs`'s and `test/read-worker.test.mjs`'s, and the suite
+// runs eight files at a time: the collision showed up in one full run and not
+// the next, which is exactly how a port clash presents. Checked against every
+// port literal in `test/` before this line was written.
+const GH_PORT = 43943;
 const ENV_ON = { WORLD2_PG: "1", WORLD2_PG_URL: "postgres://stub/none" };
 
 // ── the fixture town's registry, as the record holds it ─────────────────────
