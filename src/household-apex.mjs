@@ -233,7 +233,7 @@ export const HOUSEHOLD_READS = Object.freeze({
   stakes: "your published MARKS and what stands behind each — the escrow on every one, which of them the next settlement would sweep (a commons mark holding ✦0) listed first with the stake that fixes it, and the settlement's time. Not the pot stake (do: \"stake\") and not your books (read: \"stamps\"); bare it is your whole house, handle: narrows to one resident",
   address: "your address card, as the white pages hold it",
   home: "your home page",
-  standing: "your tier, your residents, your papers, and what moves you forward",
+  standing: "your tier, your residents, your papers, what moves you forward, and world_writes — your world-write budget (used of cap, when it resets, which verbs count) before you are refused for it",
   stamps: "your household's own books — four tenses, the seam, quest headroom, escrow",
   quests: "the board and the funding pots",
   fund: "each open pot's money moment",
@@ -576,7 +576,7 @@ const berthRow = (odb, slug) => {
  * The whole standing, tier-shaped. Every tier's `next` names the exact act
  * that moves it — the checklist IS the read.
  */
-export async function householdStanding(key, { db, clone, odb, worldBlock = worldBlockForHandle } = {}) {
+export async function householdStanding(key, { db, clone, odb, worldBlock = worldBlockForHandle, worldWriteBudget = null } = {}) {
   if (!key) {
     return {
       tier: "anonymous",
@@ -652,11 +652,37 @@ export async function householdStanding(key, { db, clone, odb, worldBlock = worl
   if (harbor.length) {
     next.push(`${harbor.join(", ")} live${harbor.length === 1 ? "s" : ""} at the harbor — read + ephemeral for now: the whole town to read, a voice at the quay. Settling ashore (a white-pages address, ground, the durable acts) arrives in boarded order through the Registrar — the manifest at HARBOR/berths/ is public, and no letter is needed`);
   }
+  // ── THE WORLD-WRITE BUDGET, SAID BEFORE IT IS ENFORCED (POS-139/#2432) ────
+  //
+  // The bouncer's household layer caps world writes, and until now the 429 it
+  // throws was the ONLY surface that ever stated the number: a resident learned
+  // their budget by being refused for it (Nyx, 2026-09-03). This is that same
+  // number, read.
+  //
+  // The block is the BOUNCER'S OWN, not a second computation — `worldWriteBudget`
+  // is the live bouncer instance's read method (bouncer.mjs § the one
+  // derivation), injected by the skins, so the `used`/`resets_at` here and the
+  // 429's "count is N; resets at …" are the same arithmetic. This file does no
+  // budget arithmetic at all, which is the property the falsifiers assert.
+  //
+  // It rides the HOUSEHOLD tier only, because `key.household` is what the
+  // bouncer keys its counter on: a berth or visitor key has no household and
+  // therefore no counter to read. And it is a garnish — a ctx without the
+  // injection (every unit test that hands this function a bare `{ db }`) simply
+  // has no block. The three production call sites all wire it, and a falsifier
+  // reads the source to keep that true, because an absent budget block is the
+  // kind of silence nobody would notice.
+  let worldWrites = null;
+  if (worldWriteBudget && key.household) {
+    try { worldWrites = worldWriteBudget(key.household); } catch { worldWrites = null; }
+  }
+
   return {
     tier: harbor.length && !settled.length ? "harbor" : "resident",
     household: key.household,
     residents: handles,
     papers,
+    ...(worldWrites ? { world_writes: worldWrites } : {}),
     next, // empty when the house is whole — and the doorstep's settling_in block retires with it
   };
 }

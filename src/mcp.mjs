@@ -510,7 +510,7 @@ const flatRequiredMap = () => {
 // probe must be built out of the same function the world calls, not out of the
 // pieces that function calls.)
 export async function callTool(name, args, ctx) {
-  const { db, key, meta, asOf, canWrite, clone, pen, odb, dbPath, rdb } = ctx;
+  const { db, key, meta, asOf, canWrite, clone, pen, odb, dbPath, rdb, worldWriteBudget } = ctx;
   const notFound = (what, hint) => ({ error: "bounce", defect: what, hint });
   if (name === "world" || name.startsWith("world_")) {
     try {
@@ -714,7 +714,10 @@ export async function callTool(name, args, ctx) {
       // exactly one read inside the apex — `doorstep`, which forwards it to the
       // bundle — and the REST call site at server.mjs § GET /household passes
       // no such thing, so the third door answers what it always answered.
-      return householdApex(args, key, { db, clone, odb, dbPath, pen, canWrite, meta, asOf, slim: true, schemas: flatPropsMap(), schemaRequired: flatRequiredMap(), strictFields: true });
+      // `worldWriteBudget` is the live bouncer's own read, injected by the
+      // server (POS-139): the standing read states the world-write budget
+      // rather than leaving the 429 to be the only place it is ever said.
+      return householdApex(args, key, { db, clone, odb, dbPath, pen, canWrite, meta, asOf, slim: true, schemas: flatPropsMap(), schemaRequired: flatRequiredMap(), strictFields: true, worldWriteBudget });
     }
     case "town": {
       // `call` is this very dispatcher, handed back to the apex. The town verb

@@ -1044,6 +1044,10 @@ const server = createServer((req, res) => {
         write,
         worldVerb: write ? verb : null,
       }),
+      // The household world-write budget as a READ (POS-139). Same bouncer
+      // instance the `rateLimit` closure above enforces with, so the standing
+      // read's `world_writes` and that layer's 429 state one number, not two.
+      worldWriteBudget: (household) => bouncer.worldWriteBudget(household),
       rateResponse,
     });
   }
@@ -1556,7 +1560,7 @@ const server = createServer((req, res) => {
         // The apex still judges anything riding an `args:` envelope; REST
         // carries none, so this door answers exactly the bytes it always did.
         return householdApex(qp, key,
-          { db, clone: TOWN_CLONE, odb, dbPath: DB_PATH, pen: PEN, canWrite, meta, asOf: AS_OF, schemas: flatPropsFromTools(), schemaRequired: flatRequiredFromTools() })
+          { db, clone: TOWN_CLONE, odb, dbPath: DB_PATH, pen: PEN, canWrite, meta, asOf: AS_OF, schemas: flatPropsFromTools(), schemaRequired: flatRequiredFromTools(), worldWriteBudget: (household) => bouncer.worldWriteBudget(household) })
           .then((r) => j(res, r?.error ? (r.code ?? 400) : 200, r))
           .catch((e) => bounce(res, 500, "the household door tripped", String(e?.message ?? e).slice(0, 200)));
       }
@@ -1784,7 +1788,7 @@ const server = createServer((req, res) => {
           // A visitor's act, decided by the verb it resolves to — the same
           // decision and the same words as the MCP door (postmark#2816 sweep).
           if (visitorBounces("household", payload, key)) return bounce(res, 403, VISITOR_BOUNCE.defect, VISITOR_BOUNCE.hint);
-          const r = await householdApex(payload, key, { db, clone: TOWN_CLONE, odb, dbPath: DB_PATH, pen: PEN, canWrite, meta, asOf: AS_OF, schemas: flatPropsFromTools(), schemaRequired: flatRequiredFromTools(), channel, strictFields: true });
+          const r = await householdApex(payload, key, { db, clone: TOWN_CLONE, odb, dbPath: DB_PATH, pen: PEN, canWrite, meta, asOf: AS_OF, schemas: flatPropsFromTools(), schemaRequired: flatRequiredFromTools(), channel, strictFields: true, worldWriteBudget: (household) => bouncer.worldWriteBudget(household) });
           return j(res, r?.error ? (r.code ?? 400) : 200, r);
         } catch (e) {
           if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", '{"do": "begin", "args": { "household": "…", "card": "…" }}');
