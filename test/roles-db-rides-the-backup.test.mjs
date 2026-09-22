@@ -28,7 +28,7 @@ import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -171,7 +171,72 @@ test("the receipt and LATEST.json carry the bytes and the audit count, under the
     "the backup row's stale_means does not say that a silence now also costs who paid");
 });
 
-test("the restore rehearsal compares the roles copy too — a backup nobody restored is a hope", () => {
-  assert.match(REHEARSE, /roles/i, "the rehearsal does not mention roles.db");
+// ── the rehearsal's comparison, RUN rather than read ────────────────────────
+// Asserting that the rehearsal's TEXT mentions role_audit would be a check that
+// does not read the behaviour it names: it passes over a block that computes the
+// wrong verdict. So the block is EXTRACTED FROM THE SHIPPED SCRIPT and executed
+// against fixtures, with the surrounding script stubbed down to what it touches
+// (`say`, `bad`, `drift_lines`, the two paths).
+function runRehearsalBlock(rolesDir, liveDb) {
+  const start = 'say "== roles.db, shipped copy vs live registry"';
+  const from = REHEARSE.indexOf(start);
+  assert.ok(from > 0, "the rehearsal no longer has a roles comparison block — this test is now measuring nothing");
+  const end = REHEARSE.indexOf("\nfi\n", REHEARSE.indexOf("\nelse\n", from));
+  const block = REHEARSE.slice(from, end + 4)
+    .replace('ROLES_DIR="$WORLD2_LAB/private-dumps"', `ROLES_DIR="${rolesDir}"`);
+
+  const harness = join(scratch, "harness.sh");
+  writeFileSync(harness, [
+    "set -uo pipefail",
+    "say() { printf '%s\\n' \"$*\"; }",
+    "bad=0; drift_lines=''; FROM_REMOTE=false; TMPCLONE=''",
+    `W2_ROLES_DB="${liveDb}"; WORLD2_LAB="${rolesDir}"; WORLD2_OFFICE="${liveDb}"`,
+    block,
+    'echo "BAD=$bad"',
+  ].join("\n"));
+  const out = execFileSync("bash", [harness], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  return { out, bad: Number(out.match(/BAD=(\d+)/)[1]) };
+}
+
+function auditDb(path, n) {
+  rmSync(path, { force: true });
+  const db = new DatabaseSync(path);
+  db.exec("CREATE TABLE role_audit (id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT, action TEXT, subject TEXT, role TEXT, login TEXT, actor TEXT, note TEXT);");
+  const a = db.prepare("INSERT INTO role_audit (at,action,subject,role,actor) VALUES (?,?,?,?,?)");
+  for (let i = 0; i < n; i++) a.run("t", "grant", String(i), "subscriber", "wright");
+  db.close();
+}
+
+test("the restore rehearsal COMPARES the roles copy — and only the impossible direction reddens", () => {
   assert.match(REHEARSE, /role_audit/, "the rehearsal does not compare the role_audit count");
+
+  const dir = mkdtempSync(join(scratch, "reh-"));
+  const live = join(dir, "live-roles.db");
+  const copy = join(dir, "roles-20260921T081000Z.db");
+
+  // A · the live registry has GAINED rows since the copy. role_audit is
+  // append-only and the town kept selling, so this is the ordinary night.
+  auditDb(copy, 8); auditDb(live, 11);
+  let r = runRehearsalBlock(dir, live);
+  assert.match(r.out, /live \+3 \(grants since the copy — expected\)/);
+  assert.equal(r.bad, 0, "a live registry ahead of the copy reddened the rehearsal — that is the town being alive");
+
+  // B · THE FINDING: the copy holds MORE than live. No clock explains that, so
+  // the two disagree about history and the rehearsal must fail.
+  auditDb(live, 4);
+  r = runRehearsalBlock(dir, live);
+  assert.match(r.out, /COPY HAS MORE \(\+4\) — THE REGISTRY LOST ROWS IT ONCE HAD/);
+  assert.equal(r.bad, 1, "the copy holding rows the live registry lost did NOT redden — the comparison proves nothing");
+
+  // C · nothing shipped yet, on a box where no role was ever granted. Reported
+  // as NOT-RUN in the operator's words, never silently as a pass.
+  const empty = mkdtempSync(join(scratch, "empty-"));
+  r = runRehearsalBlock(empty, live);
+  assert.match(r.out, /NOT-RUN: no roles-\*\.db/);
+  assert.equal(r.bad, 0, "an absent copy reddened — a box that never granted a role has nothing to ship");
+
+  // D · the rescue box: a copy in hand and no live registry to compare against.
+  r = runRehearsalBlock(dir, join(dir, "nonesuch.db"));
+  assert.match(r.out, /live registry absent — nothing to compare against/);
+  assert.equal(r.bad, 0, "a missing live registry reddened — that is the restore case, not a fault");
 });
