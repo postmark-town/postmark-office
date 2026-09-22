@@ -25,7 +25,7 @@ import { join } from "node:path";
 // enumeration skips exactly one name (`n !== "TEMPLATE"`) — a NAME LIST, not a
 // rule, which is why the second non-resident directory walked straight through
 // it and `_archived` came out of the live walkers door standing on the quay.
-// The vendor is upstream law and is not ours to edit (`vendor/town.mjs` line 2:
+// The vendor is upstream law and is not ours to edit (`vendor/tools/lib/town.mjs` line 2:
 // fix upstream and re-vendor); what IS ours is what the office indexes and
 // serves as a resident, and that is decided here, once.
 export const HANDLE_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;

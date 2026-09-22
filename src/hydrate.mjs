@@ -11,7 +11,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, rmSync, readFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { readTown } from "../vendor/town.mjs";
+import { readTown } from "../vendor/tools/lib/town.mjs";
 import { isResidentHandle } from "./residency.mjs"; // one definition of what a handle is — the door's
 import { readProfile } from "./profiles.mjs"; // PROFILE.md postdates the vendored reader — see that file
 import { readWindowState } from "./panes.mjs"; // the pane's machine twin — one island parser, two readers
@@ -112,7 +112,7 @@ try {
 // non-resident directory the town ever grew (`_archived`, the retirement shelf)
 // walked straight through it and became a row here, and from here into every
 // reader over this table. The vendor is upstream law and not ours to edit
-// (vendor/town.mjs line 2); what the office indexes IS ours.
+// (vendor/tools/lib/town.mjs line 2); what the office indexes IS ours.
 //
 // The skip is REPORTED, never silent: dropping a name quietly is how a town
 // loses somebody without anyone noticing (`the-town/the-disclosure` — refuse or
@@ -124,11 +124,13 @@ const notHandles = town.residents.filter((r) => !isResidentHandle(r.handle)).map
 for (const r of town.residents.filter((r) => isResidentHandle(r.handle))) insResident.run(r.handle, JSON.stringify({
   ...r, is_office: isOffice(r), window_state: windowStateOf(r.handle),
   last_active: lastActive.get(r.handle) ?? null,
-  // The profile bubble. Read here rather than by the vendored readTown, which
-  // was vendored 2026-07-07 and predates PROFILE.md entirely — see
-  // src/profiles.mjs for why this is an office-local reader and not a
-  // re-vendor. Absent/malformed reads null; a profile defect never stops a
-  // hydration.
+  // The profile bubble. The re-vendored readTown DOES read profiles now
+  // (POS-128), so `r.profile` above is a real value — and this line deliberately
+  // overrides it, keeping ONE answer for this field in the store. The two agree
+  // on 181 of the town's 182 handles; where they differ it is this reader's
+  // shape the office's doors and tests are written against. src/profiles.mjs
+  // holds the measurement and why that file was not deleted. Absent/malformed
+  // reads null; a profile defect never stops a hydration.
   profile: readProfile(TOWN, r.handle),
 }));
 if (notHandles.length)

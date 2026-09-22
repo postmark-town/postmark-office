@@ -214,7 +214,7 @@ export const TOWN_OFFICES_CAP = 25;
 //
 // `counts.residents` came out of `meta.hydrated_counts` — a snapshot stamped at
 // hydration from the VENDORED roll, which enumerates WHITE_PAGES with a name
-// list (`vendor/town.mjs`: `n !== "TEMPLATE"`). A name list is not a rule, so
+// list (`vendor/tools/lib/town.mjs`: `n !== "TEMPLATE"`). A name list is not a rule, so
 // the second non-resident directory the town grew walked straight through it,
 // and this door published 166 residents while `/metrics/mail` and `/residents`
 // — both counting the admitted table — published 165.
@@ -509,7 +509,7 @@ const MAIL_PAGE = 100;
 // drawn by two different definitions of the word "delivered":
 //
 //   `letters`     — every letter file on disk, in WHOSE-EVER box it sits.
-//                   `box` is the directory it was read from (vendor/town.mjs:
+//                   `box` is the directory it was read from (vendor/tools/lib/town.mjs:
 //                   "After ferry delivery the file MOVES from sender outbox to
 //                   recipient inbox … outbox holds mail awaiting the next
 //                   ferry"), and this WHERE never looked at it.

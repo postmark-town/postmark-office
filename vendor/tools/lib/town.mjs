@@ -1,6 +1,6 @@
-// VENDORED from starforge-site tools/lib/town.mjs (upstream sha256 a408ddfdc66fbc24..., vendored 2026-07-07).
-// Do not edit here — fix upstream and re-vendor; scripts/check-vendor-drift compares hashes.
-// town.mjs — read a keeminlee/postmark checkout into one structured model.
+// VENDORED from postmark-town/postmark-site tools/lib/town.mjs (upstream sha256 5a0367b96fe6f7cd500a8f272a9d583d20dc2ec0bca032e0718084acb6a91110, LF, vendored 2026-09-21).
+// Do not edit here — fix upstream and re-vendor; scripts/check-vendor-drift.mjs compares hashes.
+// town.mjs — read a postmark-town/postmark checkout into one structured model.
 //
 // The town repo is already a database: letters carry frontmatter
 // (id/from/to/date/thread), the mail ledger is an append-only structured log,
@@ -17,6 +17,11 @@
 
 import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { FAILSAFE_SCHEMA, load as parseYaml } from "js-yaml";
+// The media-door rule is shared with the browser-bundled world cockpit, so it
+// lives in a pure module both can import (src/lib/media-door.mjs). This reader
+// applies it at build time; the cockpit applies it at runtime.
+import { atTownMediaDoor } from "../../src/lib/media-door.mjs";
 
 const IMAGE_RE = /\.(png|jpe?g|webp|gif)$/i;
 
@@ -54,6 +59,143 @@ function isDir(path) {
 // repo-relative path with forward slashes — the model's universal path form
 function rel(townRoot, abs) {
   return abs.slice(townRoot.length + 1).replace(/\\/g, "/");
+}
+
+// ── resident profiles ──────────────────────────────────────────────────────
+// PROFILE.md is resident-authored expression, not a join contract. Treat it
+// like weather: missing is ordinary; malformed is warned and salvaged where a
+// top-level key remains legible; no profile defect can stop the town reader.
+const PROFILE_STRING_FIELDS = ["avatar", "avatar_url", "color", "color_name", "bio", "runtime"];
+
+// The town's own media door. `avatar_url` is the only profile field that lands
+// on the page as a URL the site never processed, so the one thing that makes it
+// safe is that it can name nowhere else.
+function profileFrontmatter(text) {
+  const source = String(text).replace(/^\uFEFF/, "");
+  const match = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(source);
+  return match ? match[1] : null;
+}
+
+// A deliberately small recovery pass used only after the YAML parser rejects
+// the block. It keeps readable top-level scalar keys (including > / | text)
+// and skips the broken lines. Valid YAML always takes the full parser path.
+function salvageProfileFrontmatter(source) {
+  const data = {};
+  const lines = source.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const match = /^([A-Za-z0-9_-]+):(?:[ \t]*(.*))?$/.exec(lines[i]);
+    if (!match) continue;
+    const key = match[1];
+    const raw = (match[2] ?? "").trim();
+    if (/^[>|][+-]?(?:\s+#.*)?$/.test(raw)) {
+      const folded = raw.startsWith(">");
+      const body = [];
+      while (i + 1 < lines.length && (/^[ \t]/.test(lines[i + 1]) || !lines[i + 1].trim())) {
+        i++;
+        body.push(lines[i].replace(/^[ \t]+/, ""));
+      }
+      data[key] = (folded ? body.join(" ").replace(/\s+/g, " ") : body.join("\n")).trim();
+      continue;
+    }
+    if (!raw || raw.startsWith("#")) {
+      data[key] = "";
+      continue;
+    }
+    try {
+      data[key] = parseYaml(`value: ${raw}`, { schema: FAILSAFE_SCHEMA })?.value ?? "";
+    } catch {
+      // Keep the resident's readable scalar rather than losing neighboring
+      // valid fields because one value has an unmatched quote/bracket.
+      data[key] = raw.replace(/\s+#.*$/, "").trim();
+    }
+  }
+  return data;
+}
+
+function normalizeProfile(raw, profilePath, problems) {
+  const profile = { ...raw };
+  for (const field of PROFILE_STRING_FIELDS) {
+    if (!Object.prototype.hasOwnProperty.call(profile, field)) continue;
+    if (profile[field] == null) profile[field] = "";
+    else if (typeof profile[field] === "string") profile[field] = profile[field].trim();
+    else {
+      delete profile[field];
+      problems.push(`invalid resident profile field ${field} (expected text): ${profilePath}`);
+    }
+  }
+
+  if (profile.color) {
+    const match = /^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.exec(profile.color);
+    if (!match) {
+      delete profile.color;
+      problems.push(`invalid resident profile color: ${profilePath}`);
+    } else {
+      const hex = match[1].toLowerCase();
+      profile.color = `#${hex.length === 3 ? [...hex].map((c) => c + c).join("") : hex}`;
+    }
+  } else if (profile.color === "") {
+    delete profile.color;
+  }
+
+  // `avatar` is a filename beside PROFILE.md, never a path traversal or a
+  // second asset system. The extractor later hands this filename to claimImage.
+  if (profile.avatar && (profile.avatar === "." || profile.avatar === ".." || /[\\/]/.test(profile.avatar))) {
+    delete profile.avatar;
+    problems.push(`invalid resident profile avatar filename: ${profilePath}`);
+  }
+
+  // `avatar_url` is what the settled office profile road writes: a complete URL
+  // at the town's media door, never a file beside PROFILE.md. It is not claimed
+  // and never becomes a claimed asset — the page prints it verbatim — so it is
+  // admitted only when it names the town's own door, and dropped the same way a
+  // traversing filename is when it names anything else.
+  if (profile.avatar_url && !atTownMediaDoor(profile.avatar_url)) {
+    delete profile.avatar_url;
+    problems.push(`invalid resident profile avatar_url (not the town media door): ${profilePath}`);
+  } else if (profile.avatar_url === "") {
+    delete profile.avatar_url;
+  }
+  return profile;
+}
+
+export function readResidentProfile(townRoot, handle, problems = []) {
+  const profilePath = join(townRoot, "WHITE_PAGES", handle, "PROFILE.md");
+  if (!existsSync(profilePath)) return {};
+  const displayPath = rel(townRoot, profilePath);
+  let text;
+  try {
+    text = readText(profilePath);
+  } catch (error) {
+    problems.push(`unreadable resident profile: ${displayPath} (${error.message})`);
+    return {};
+  }
+  const source = profileFrontmatter(text);
+  if (source == null) {
+    problems.push(`malformed resident profile (missing frontmatter fences): ${displayPath}`);
+    return {};
+  }
+
+  let raw;
+  try {
+    raw = parseYaml(source, { schema: FAILSAFE_SCHEMA }) ?? {};
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      problems.push(`malformed resident profile (frontmatter is not a mapping): ${displayPath}`);
+      return {};
+    }
+  } catch (error) {
+    problems.push(`malformed resident profile (salvaged what parsed): ${displayPath} (${error.message})`);
+    raw = salvageProfileFrontmatter(source);
+  }
+  return normalizeProfile(raw, displayPath, problems);
+}
+
+export function readResidentProfiles(townRoot, problems = []) {
+  const wpDir = join(townRoot, "WHITE_PAGES");
+  // A handle never starts with "_": WHITE_PAGES/_archived is a shelf, not a
+  // resident, and the baker once minted it a doorstep page (found 2026-08-31 —
+  // the atlas listed a resident named "_archived"). Same filter as readTown's.
+  const handles = listDir(wpDir).filter((name) => isDir(join(wpDir, name)) && name !== "TEMPLATE" && !name.startsWith("_"));
+  return Object.fromEntries(handles.map((handle) => [handle, readResidentProfile(townRoot, handle, problems)]));
 }
 
 // ── letters ─────────────────────────────────────────────────────────────────
@@ -116,6 +258,7 @@ function readResident(townRoot, handle, problems) {
   const dir = join(townRoot, "WHITE_PAGES", handle);
   const resident = {
     handle,
+    profile: {},     // freely-authored PROFILE.md frontmatter; always fail-soft
     address: null,   // { data, body } from ADDRESS.md
     home: null,      // { data, body } from HOME/HOME.md
     region: null,    // { data, body } from HOME/REGION.md
@@ -123,6 +266,7 @@ function readResident(townRoot, handle, problems) {
     inbox: [],
     outbox: [],
   };
+  resident.profile = readResidentProfile(townRoot, handle, problems);
   const addressPath = join(dir, "ADDRESS.md");
   if (existsSync(addressPath)) {
     const { data, body } = parseFrontmatter(readText(addressPath));
@@ -178,14 +322,40 @@ export function parseLedger(text) {
 
 // ── threads ─────────────────────────────────────────────────────────────────
 // A letter's `thread:` names the id it answers. Union-find the reply edges
-// into conversations; roots are letters nobody's thread points from. Letters
-// whose thread id was never seen still group (the target becomes a phantom
-// root — the record stays honest about mail we can't see).
+// into conversations; roots are letters nobody's thread points from.
+//
+// ── A THREAD THAT NAMES NO LETTER GROUPS WITH NOTHING (#1288, 2026-09-14) ────
+// This read: "Letters whose thread id was never seen still group (the target
+// becomes a phantom root — the record stays honest about mail we can't see)."
+// The sentence describes a real intention and the code did something else with
+// it. `ensure()` mints a node for ANY string, so every letter carrying the SAME
+// unseen value was unioned into the SAME phantom root — not "honest about mail
+// we can't see" but a claim that unrelated letters are one conversation.
+//
+// It was not hypothetical. Over the committed corpus this fused 53 letters into
+// 8 conversations that no reply edge connects, every one of them spanning
+// people who never wrote to each other. The largest is public: 21 letters, nine
+// residents, two months of separate correspondence served as one thread under
+// one of their letters' titles — because eleven letters carried the literal
+// word `reply` in a field meant for an id. The second largest is eight letters
+// carrying the four-character string `null`, which is a serialiser writing the
+// word for absence, not a person mistyping.
+//
+// A phantom root can only ever be a GUESS about invisible mail, and the guess
+// costs more than it pays: one letter pointing at something we cannot see is
+// simply a letter we cannot place, and two letters pointing at the same thing
+// we cannot see are not evidence that they belong together — the record has no
+// way to know that, and `reply` and `null` prove how cheaply it is fooled. So
+// an unresolvable `thread:` now groups with nothing: the letter stands alone,
+// exactly as if the field were absent. Nothing is rewritten; the bogus values
+// stay in the record as the history they are, and only the READING changes.
+//
+// Falsifiers: test/threads.test.mjs.
 export function buildThreads(letters) {
   const byId = new Map();
   for (const l of letters) if (l.id) byId.set(l.id, l);
 
-  const parent = new Map(); // union-find over letter ids (+ phantom ids)
+  const parent = new Map(); // union-find over letter ids — only ids of real letters
   const find = (x) => {
     while (parent.get(x) !== x) {
       parent.set(x, parent.get(parent.get(x)));
@@ -199,7 +369,10 @@ export function buildThreads(letters) {
   for (const l of letters) {
     if (!l.id) continue;
     ensure(l.id);
-    if (l.thread) union(l.id, l.thread);
+    // THE ONE GUARD. `byId.has` is the whole of it: an edge exists only when the
+    // letter it names exists. Without it, `union` reaches `ensure` and a bogus
+    // string becomes a node that every letter carrying it joins.
+    if (l.thread && byId.has(l.thread)) union(l.id, l.thread);
   }
 
   const groups = new Map();
@@ -261,9 +434,11 @@ function readMeep(townRoot, name, problems) {
 export function readTown(townRoot) {
   const problems = [];
 
-  // residents (skip TEMPLATE — it's the blank form, not a resident)
+  // residents (skip TEMPLATE — the blank form — and any "_"-prefixed dir:
+  // WHITE_PAGES/_archived is a shelf, not a resident; a handle never starts
+  // with "_". Found 2026-08-31: the baker had minted "_archived" a doorstep.)
   const wpDir = join(townRoot, "WHITE_PAGES");
-  const handles = listDir(wpDir).filter((n) => isDir(join(wpDir, n)) && n !== "TEMPLATE");
+  const handles = listDir(wpDir).filter((n) => isDir(join(wpDir, n)) && n !== "TEMPLATE" && !n.startsWith("_"));
   const residents = handles.map((h) => readResident(townRoot, h, problems));
 
   // canonical letter set: union by id across all mailboxes; inbox copy wins
