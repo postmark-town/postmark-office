@@ -295,6 +295,60 @@ test("a resident joining an ORDINARY house does not make it provisional either",
   });
 });
 
+// ── THE STOP: NO DOOR REACHES THIS PATH YET ─────────────────────────────────
+//
+// MEASURED, not assumed. All three callers of `mintHousehold` — `declare-exec.mjs`,
+// `residency.mjs` and `town-drain.mjs` — call it only when their plan says
+// `action === "created"`, and that plan comes from `planRegistryJoin`. For an
+// account whose house is PROVISIONAL, `houseForAccount` finds that house, and
+// the planner returns `appended` — so the mint is never called and the house
+// never chooses. The ceremony below is complete and falsified above; the ROUTE
+// to it is not built, and wiring one is a change to the declaration door's plan
+// shape rather than a line in this lane.
+//
+// THIS TEST ASSERTS TODAY'S BEHAVIOUR ON PURPOSE. It is not approval of it. The
+// day somebody wires the route, this reds and hands them this paragraph, which
+// is the whole reason to write down a gap rather than only mention it.
+
+test("THE STOP: a provisional house's human does not reach the mint through the door", async () => {
+  const { planRegistryJoin } = await import("../src/residency.mjs");
+  const seed = townWithAProvisionalHouse();
+  const registry = registryFromRows(seed);
+  assert.equal(registry.households[HANDLE].provisional, true);
+
+  for (const household of ["Fernwood Hollow", HANDLE, ""]) {
+    const plan = planRegistryJoin(registry, {
+      handle: "fernwood-two", household, ghId: HUMAN.ghId, ghLogin: HUMAN.ghLogin, date: "2026-09-22",
+    });
+    assert.equal(plan?.action, "appended",
+      `naming ${JSON.stringify(household)} appends to the provisional house rather than founding`);
+    assert.equal(plan?.slug, HANDLE, "and the borrowed key stands");
+    assert.notEqual(plan?.action, "created", "so no caller of mintHousehold fires");
+  }
+
+  // AND THE CONTROL, so the probe is measuring reachability and not just
+  // agreeing with itself: a human with NO house does reach the mint.
+  const control = planRegistryJoin(registry, {
+    handle: "somebody-new", household: "A Brand New House",
+    ghId: 880000999, ghLogin: "a-total-stranger", date: "2026-09-22",
+  });
+  assert.equal(control?.action, "created", "a houseless human still founds");
+});
+
+test("THE STOP's second half: the name they declare is dropped on the floor", async () => {
+  // The resident types "Fernwood Hollow" on the household line. The plan
+  // appends them to `fernwood`, keeps the borrowed nameplate, and nothing
+  // anywhere tells them the name they chose was not taken.
+  const { planRegistryJoin } = await import("../src/residency.mjs");
+  const registry = registryFromRows(townWithAProvisionalHouse());
+  const plan = planRegistryJoin(registry, {
+    handle: "fernwood-two", household: "Fernwood Hollow",
+    ghId: HUMAN.ghId, ghLogin: HUMAN.ghLogin, date: "2026-09-22",
+  });
+  assert.equal(plan.houseLine, "Fernwood's household", "the borrowed name is what the card will read");
+  assert.notEqual(plan.houseLine, "Fernwood Hollow");
+});
+
 // ── THE FILE THE TOWN SEES ──────────────────────────────────────────────────
 
 test("a provisional house renders its key, and a chosen one renders `formerly` instead", async () => {
