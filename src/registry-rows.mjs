@@ -76,15 +76,22 @@ import { serializeRegistry, serializePins } from "./residency.mjs";
 // input against them. They are the file's grammar, and they are the only place
 // that grammar is written down.
 //
-// `formerly` (POS-158, migration 020) sits LAST, after `declared_by`, and it is
-// the one key in this template that an EMPTY value must not render. 0/118 live
-// rows carry it; a house that renders `"formerly": []` would diff, and 118 of
-// them would rewrite the whole file on the first crossing. So `isAbsent` is not
-// enough for this one column and `isEmptyList` below joins it — an empty array
-// and a NULL are the same fact here ("this house has no former key"), and both
-// render as no key at all, exactly as a NULL `name` does.
+// THE TAIL OF THIS TEMPLATE IS TWO COLUMNS THAT USUALLY RENDER NOTHING, and
+// they are appended in the order their migrations landed so that no standing
+// key ever moves: `formerly` (POS-158, migration 020) after `declared_by`, then
+// `provisional` (POS-159, migration 021) after that. 0/118 live rows carry
+// either — measured on the town's own files, twice, a day apart.
+//
+// Both are keys an ordinary value must NOT render, which is why `isAbsent`
+// alone is not enough for this template. A house rendering `"formerly": []` or
+// `"provisional": false` would diff, and 118 of them would rewrite the whole
+// file on the first crossing. An empty alias list and a NULL are the same fact
+// ("this house has no former key"); so are a `false` and an absent
+// `provisional` ("this house's key was chosen"). Both render as no key at all,
+// exactly as a NULL `name` does — see the two narrow predicates below.
 export const HOUSEHOLD_KEYS = Object.freeze([
   "name", "human", "accounts", "residents", "since", "member_of", "declared_by", "formerly",
+  "provisional",
 ]);
 export const PIN_KEYS = Object.freeze([
   "login", "id", "pinned", "renamed", "note", "retired", "renamed_to",
@@ -109,8 +116,24 @@ const isAbsent = (v) => v === undefined || v === null;
 // empty `residents` or `accounts`, and a house with no residents IS a diff
 // somebody needs to see.
 const EMPTY_LIST_KEYS = new Set(["formerly"]);
+
+// THE THIRD ABSENCE, and it belongs to exactly one column too. `provisional`
+// (migration 021, POS-159) is `boolean NOT NULL DEFAULT false`, and it is TRUE
+// only while nobody has chosen the house's key. 0/118 live rows carry it —
+// measured 2026-09-22 — so `"provisional": false` on every house would rewrite
+// the whole file on the first crossing, exactly as `"formerly": []` would.
+//
+// It gets its OWN predicate rather than joining `EMPTY_LIST_KEYS` because the
+// two rules are different shapes: an empty array and a false are only alike if
+// you squint at them through JavaScript's truthiness, and a `rendersAsAbsent`
+// that dropped every falsy value would also silence `"since": ""` and a pin id
+// of 0. Named narrowly, it can only ever do this one thing.
+const FALSE_IS_ABSENT_KEYS = new Set(["provisional"]);
+
 const rendersAsAbsent = (key, v) =>
-  isAbsent(v) || (EMPTY_LIST_KEYS.has(key) && Array.isArray(v) && v.length === 0);
+  isAbsent(v)
+  || (EMPTY_LIST_KEYS.has(key) && Array.isArray(v) && v.length === 0)
+  || (FALSE_IS_ABSENT_KEYS.has(key) && v === false);
 
 /**
  * The two parsed files -> the rows the store holds.
@@ -158,6 +181,10 @@ export function rowsFromRegistry(householdsJson, pinsJson) {
       // folds to the column's own default, never to NULL, so a seed and a
       // fresh INSERT put the same value in the same column.
       formerly: rec?.formerly ?? [],
+      // Same for `provisional` (021): a file with no key folds to `false`, which
+      // is the truth about every house that has ever declared. A NULL here would
+      // reach a NOT NULL column and the seed would stop on it.
+      provisional: rec?.provisional ?? false,
     });
   }
 

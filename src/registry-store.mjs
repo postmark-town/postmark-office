@@ -55,12 +55,15 @@ import { registryFromRows, pinsFromRows, HOUSEHOLD_KEYS, PIN_KEYS } from "./regi
 // and a query without this clause would make the town's file depend on the
 // planner's mood.
 //
-// `formerly` (migration 020, POS-158) is selected like any other column and
-// carried through untouched. `node-postgres` hands a `text[]` back as a JS
-// array of strings, which is exactly what `registryFromRows` wants — and its
-// renderer drops the key when the array is empty, which today is all 118 rows.
+// `formerly` (migration 020, POS-158) and `provisional` (migration 021,
+// POS-159) are selected like any other column and carried through untouched.
+// `node-postgres` hands a `text[]` back as a JS array of strings and a `boolean`
+// back as a JS boolean, which is exactly what `registryFromRows` wants — and its
+// renderer drops each key at its own default (an empty array, a false), which
+// today is all 118 rows for both.
 const HOUSEHOLDS_SQL = `
-  SELECT slug, ord, name, human, accounts, residents, since, member_of, declared_by, formerly
+  SELECT slug, ord, name, human, accounts, residents, since, member_of, declared_by, formerly,
+         provisional
     FROM households
    ORDER BY ord`;
 
@@ -131,7 +134,7 @@ export async function loadPins(env = process.env) {
 // own transaction, before it calls `drainRegistry()` — they are exported and
 // falsified here so that lane inherits a writer rather than inventing one.
 
-const COLUMNS = ["slug", "ord", "name", "human", "accounts", "residents", "since", "member_of", "declared_by", "formerly"];
+const COLUMNS = ["slug", "ord", "name", "human", "accounts", "residents", "since", "member_of", "declared_by", "formerly", "provisional"];
 const PIN_COLUMNS = ["handle", "login", "gh_id", "pinned", "renamed", "note", "retired", "renamed_to"];
 
 const placeholders = (n, offset = 0) => Array.from({ length: n }, (_, i) => `$${i + 1 + offset}`).join(", ");
@@ -142,7 +145,16 @@ const placeholders = (n, offset = 0) => Array.from({ length: n }, (_, i) => `$${
 // JSON. The `?? null` fallback is for the nullable scalars only — the two array
 // columns are NOT NULL with a `'{}'` default, and `[] ?? null` is `[]`, so an
 // empty list reaches the column as an empty list rather than as a NULL.
-const valuesOf = (row, cols) => cols.map((c) => (c === "accounts" ? JSON.stringify(row[c] ?? []) : row[c] ?? null));
+// `provisional` joins the NOT NULL club and needs its own floor for the same
+// reason the arrays do: `undefined ?? null` is `null`, and a NULL reaching
+// `boolean NOT NULL` is a write that fails at the door of a ceremony that had
+// already told a resident their house was founded. A caller that does not know
+// about the column writes the column's own default.
+const valuesOf = (row, cols) => cols.map((c) => {
+  if (c === "accounts") return JSON.stringify(row[c] ?? []);
+  if (c === "provisional") return row[c] === true;
+  return row[c] ?? null;
+});
 
 /**
  * The seed's insert. Plain INSERTs, no ON CONFLICT: the seed has already
@@ -249,6 +261,66 @@ export async function upsertPin(row, env = process.env) {
   return actsQuery(
     `INSERT INTO household_pins (${PIN_COLUMNS.join(", ")}) VALUES (${placeholders(PIN_COLUMNS.length)})
        ON CONFLICT (handle) DO UPDATE SET ${set}`, valuesOf(row, PIN_COLUMNS), env);
+}
+
+// ── A HOUSE CHOOSES ITS KEY ONCE (POS-159) ──────────────────────────────────
+//
+// WHY THIS IS AN UPDATE AND NOT AN INSERT-PLUS-DELETE. `slug` is the PRIMARY
+// KEY, and no pen in this store holds DELETE (019: SELECT to four roles,
+// INSERT/UPDATE to `office_api`, DELETE to nobody, because a house is not
+// deleted). So "insert the new key and drop the old row" is not a thing this
+// office can do — it would leave BOTH rows standing, the house duplicated, and
+// the drain rendering it twice. The slug moves in place.
+//
+// AND IT KEEPS `ord`, which is the point. `ord` is the house's standing place
+// in the town's file, and a rename that re-derived one would move the house to
+// the end and rewrite every row after it — 118 lines of diff for one house
+// stating its name. The UPDATE names no `ord` at all, so the column keeps what
+// it holds and the file changes exactly one key.
+//
+// `household_pins` IS NOT TOUCHED, and that is a fact about the schema rather
+// than an omission: a pin row carries `handle`, `login`, `gh_id` and four
+// legacy notes (019) and NO household reference of any kind. The belonging
+// lives in `households.residents`, which is a column of the row being renamed
+// and therefore travels with it. Nothing in the pin table knows a slug, so
+// nothing in it can be left pointing at an old one.
+//
+// ONE ROW OR NONE, AND THE CALLER IS TOLD WHICH. The WHERE clause names the old
+// slug; a rename whose source has moved under it updates nothing and answers
+// `null` rather than reporting success over a row it never found.
+
+/**
+ * Move a house's key, keeping its place — the choose-once write.
+ *
+ * `from`        the key the house holds now (the provisional one).
+ * `to`          the key it is choosing. The CALLER checks the alphabet and that
+ *               it is free; this function writes what it is told.
+ * `formerly`    the new alias list, built by the caller (the old key appended).
+ * `provisional` the new value, which the choose-once path sets false.
+ * `name`        the display field. Passed EXPLICITLY, always, because this is a
+ *               SET and not a patch: a declaration that stated a name would
+ *               otherwise have it silently dropped, and one that stated none
+ *               would have the house's standing name silently cleared. The
+ *               caller decides which of those it means and says so.
+ *
+ * FOUR COLUMNS AND NO MORE. `ord` is named nowhere, so the house keeps its
+ * standing place in the town's file and the rename rewrites one line instead of
+ * moving the house to the end and rewriting every row after it. `accounts`,
+ * `residents`, `since`, `human`, `member_of` and `declared_by` are the house's
+ * own facts and a key changing is not news about any of them.
+ *
+ * Returns the renamed row's `{ slug, ord }`, or `null` when the office is not
+ * pointed at the record or no row held `from`.
+ */
+export async function renameHousehold({ from, to, formerly = [], provisional = false, name = null }, env = process.env) {
+  const r = await actsQuery(
+    `UPDATE households
+        SET slug = $1, formerly = $2, provisional = $3, name = $4
+      WHERE slug = $5
+  RETURNING slug, ord`,
+    [to, formerly, provisional === true, name ?? null, from], env);
+  if (r === null) return null;
+  return r.length ? { slug: r[0].slug, ord: Number(r[0].ord) } : null;
 }
 
 // Re-exported so a future reader importing "the registry's grammar" gets it
