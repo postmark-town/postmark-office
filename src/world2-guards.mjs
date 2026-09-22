@@ -79,6 +79,17 @@
 // It is not this module's to make either. Wiring it would silently delete
 // the-late-welcome — a candidate list that got shorter, with every policy
 // working exactly as written. Teed for the founder in the B1 report.
+//
+// ── RULED 2026-09-22 (Wright, G1 overnight RULING 2; POS-195) ──────────────
+//
+// NEITHER law gave way, and `worldForStances` is still NOT wired here — which
+// is the part to notice before reaching for it. It reads the store through a
+// THIRD credential, `stance_reader` (world2/schema/023_stance_reader.sql),
+// whose own pool lives at `world2-acts.mjs § stanceQuery` and whose column
+// list omits `claims.body`. Everything this module does stays on `office_api`,
+// and `office_api` is still blind to another household's draft — here and
+// everywhere. The disclosure above is therefore still true as written; only
+// its last sentence has been answered.
 
 import { world2Enabled } from "./world2-acts.mjs";
 import { officeRead } from "./world2-pen.mjs";

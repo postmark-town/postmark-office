@@ -565,6 +565,15 @@ test("F7c5 · THE MORNING PAGE DID NOT FATTEN — the doorstep bundle is byte-id
   // been happening. It is imported rather than re-spelled: a second copy of an
   // instant is how a doorstep and a receipt come to name different boats.
   const { GOLDEN_NOW_MS } = await import("../tools/capture-doorstep-golden.mjs");
+  // THE FOURTH PINNED INPUT (POS-195, 2026-09-22): the stance credential. The
+  // segment reads `claims` through `stance_reader` now, and the capture tool
+  // pins the same two lines — one fixture, composed the same way on both sides,
+  // which is the same reason the instant above is imported rather than
+  // re-spelled.
+  const { STANCE_ON, stancePoolFromJournal } = await import("./stance-pool-stub.mjs");
+  const { dynamicDbPath } = await import("../src/dynamic-store.mjs");
+  Object.assign(process.env, STANCE_ON);
+  stancePoolFromJournal(dynamicDbPath());
   const meta = { as_of: "fixturesha000000000000000000000000000000" };
   const bctx = { db, key: null, meta, asOf: meta.as_of, canWrite: false, clone: null, pen: null, odb: null, dbPath: null, nowMs: GOLDEN_NOW_MS };
   const now = { full: await doorstepBundle("wright", bctx), slim: await doorstepBundle("wright", { ...bctx, slim: true }) };

@@ -197,6 +197,14 @@ const { householdApex, HOUSEHOLD_DISPATCHABLE, HOUSEHOLD_TOOL, householdDispatch
 const { ACTION_STANCE, CLASS_STANCE, standingStances, stancesBlock } = await import("../src/world-stance.mjs");
 const { openDynamic } = await import("../src/dynamic-store.mjs");
 const { readJournal } = await import("../src/world-journal.mjs");
+// THE CANDIDATE LIST READS THE STORE (POS-195, 2026-09-22). This file plants
+// its sketches in the journal and still means the same thing by them; the stub
+// answers the store's query from that same journal, shaped as `claims` rows.
+// Imported HERE rather than at the top, for this file's own stated reason: a
+// static import is hoisted above the env this fixture sets.
+const { STANCE_ON, stancePoolFromJournal } = await import("./stance-pool-stub.mjs");
+Object.assign(process.env, STANCE_ON);
+stancePoolFromJournal(dynPath);
 
 // A household key exactly as `oauth.mjs § householdFor` mints one: the
 // household NAME is on it, which is the thing Wright's hand-run key lacked.

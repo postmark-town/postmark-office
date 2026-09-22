@@ -28,6 +28,7 @@ import {
   candidatesFrom, declareStanceViaOffice, groundFor, resetStanceGeometry,
   readNeverPerforms, stanceInbox, stanceShadow, stanceTeach, standingStances, standsBefore, stancesBlock,
 } from "../src/world-stance.mjs";
+import { STANCE_ON, clearStancePool, stancePoolFromJournal } from "./stance-pool-stub.mjs";
 
 const sweep = (d) => { try { rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); } catch { /* litter */ } };
 const scratch = mkdtempSync(join(tmpdir(), "postmark-stance-"));
@@ -123,9 +124,19 @@ beforeEach(() => {
   dbPath = join(scratch, `dyn-${++n}.db`);
   process.env.WORLD_DYNAMIC_DB = dbPath;
   process.env.WORLD_SINGLE_LOG = "1";
+  // THE CANDIDATE LIST READS THE STORE (POS-195, 2026-09-22). These fixtures
+  // plant their sketches with `appendJournal` and that intent is unchanged — "a
+  // sketch exists, unpublished, on this ground". The stub answers the store's
+  // query from that same journal, shaped as `claims` rows, so the tests below
+  // say what they always said while the path under them is the real one.
+  Object.assign(process.env, STANCE_ON);
+  stancePoolFromJournal(dbPath);
   resetStanceGeometry();
 });
-after(() => { delete process.env.WORLD_DYNAMIC_DB; delete process.env.WORLD_SINGLE_LOG; });
+after(() => {
+  delete process.env.WORLD_DYNAMIC_DB; delete process.env.WORLD_SINGLE_LOG;
+  delete process.env.WORLD2_STANCE_URL; clearStancePool();
+});
 
 const withDb = (fn) => { const db = openDynamic(dbPath); try { return fn(db); } finally { db.close(); } };
 const stamp = async () => ({ at: { anchor: "alpha/alphas-parcel", dx: 1, dy: 2 }, witnesses: { source: "presence", list: [{ handle: "gamma", anchor: "alpha/alphas-parcel", dx: 0, dy: 0 }] } });
