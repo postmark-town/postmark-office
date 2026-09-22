@@ -910,7 +910,7 @@ test("THE DOOR, flag off — the same call still spends a commit on the sketchbo
  * line `householdKeyFor` resolves through. Nothing here is arranged to please
  * the port: the field names are the columns' own.
  */
-const guardStore = ({ claims = [], identities = { alpha: "gh:1", beta: "gh:2" }, scopeAs = (h) => h } = {}) => {
+const guardStore = ({ claims = [], identities = { alpha: "hh:alpha-house", beta: "hh:beta-house" }, scopeAs = (h) => h } = {}) => {
   let declared = null;
   const calls = { claims: 0 };
   return {
@@ -920,6 +920,19 @@ const guardStore = ({ claims = [], identities = { alpha: "gh:1", beta: "gh:2" },
         if (/set_config\(.app\.household./.test(sql)) { declared = args[0]; return { rows: [{}] }; }
         if (/current_setting\(.app\.household./.test(sql)) return { rows: [{ declared }] };
         if (/FROM identities/.test(sql)) return { rows: identities[args[0]] ? [{ household: identities[args[0]] }] : [] };
+        // THE REGISTRY, which is what `householdKeyFor` reads since POS-160.
+        // Same statement as the `identities` line above — these handles live in
+        // these houses — in the vocabulary the resolver now asks in. The keys
+        // are `hh:` because that is what the resolver answers from the law
+        // date, and what the rows' own `household` column therefore holds.
+        if (/FROM households/.test(sql)) return { rows:
+          [...new Set(Object.values(identities))].map((key, ord) => ({
+            slug: String(key).replace(/^hh:/, ""), ord, name: null, human: null, accounts: [],
+            residents: Object.keys(identities).filter((h) => identities[h] === key),
+            since: null, member_of: null, declared_by: null, formerly: [], provisional: false,
+          })) };
+        if (/FROM household_pins/.test(sql)) return { rows: [] };
+        if (/FROM registry_meta/.test(sql)) return { rows: [{ key: "schema_version", value: 1 }] };
         if (/FROM claims/.test(sql)) {
           calls.claims += 1;
           const [statuses, asked] = args;
@@ -936,7 +949,11 @@ const guardStore = ({ claims = [], identities = { alpha: "gh:1", beta: "gh:2" },
 /** One live draft of alpha's, filed under the RESOLVED KEY, as the docket pen files it. */
 const draftClaim = (slug, over = {}) => ({
   id: "00000000-0000-0000-0000-000000000001",
-  slug: `alpha/${slug}`, class: "sited", claimant: "alpha", household: "gh:1", status: "draft",
+  // POS-160: the resolved key is the house's SLUG now, so the row wears what
+  // `householdKeyFor` files it under. If these two ever drift apart again the
+  // guard reads an empty `claims` and permits the duplicate, which is exactly
+  // what the CAN-FAIL test below makes happen on purpose.
+  slug: `alpha/${slug}`, class: "sited", claimant: "alpha", household: "hh:alpha-house", status: "draft",
   body: "the docket already holds this one",
   geometry: { slug: `alpha/${slug}`, at: { x: 110, y: 105 }, extent: { w: 2, h: 2 } },
   stake: 0, data: { by: "alpha", kind: "sited", date: "2026-09-03", _journal_seq: 1 },
