@@ -489,10 +489,11 @@ export async function enterViaOffice(worldClone, payload = {}, key = null, deps 
     // caller and null for its twin is worse than a column that is null for both.
     // CONSUMERS NAMED: `world-drain.mjs § logLine` passes it through to the
     // JSONL (additive); `world-drain.mjs:167` skips every non-mark class, so the
-    // drain's own routing is untouched; `journal-reaper.mjs`'s twin key and
-    // `state-log-from-store.mjs § compareWindow`'s pairing key both get STRICTLY
-    // FINER, which reaps and mis-pairs less rather than more; `world-hold.mjs`
-    // reads it only for `drop`. Checked, all five.
+    // drain's own routing is untouched; `state-log-from-store.mjs §
+    // compareWindow`'s pairing key gets STRICTLY FINER, which mis-pairs less
+    // rather than more; `world-hold.mjs` reads it only for `drop`. Checked.
+    // (`journal-reaper.mjs`'s twin key was the fifth consumer; the reaper was
+    // deleted by G1 — it reaped a journal that no longer fills.)
     ? await deps.record({ handle: who, act: "enter", at, lines: answer.rows, mark: markId, ...(viaOrdinary ? { via: viaOrdinary } : {}), summary })
     : { within: [...(occupancy.get(who) ?? [])] };
 

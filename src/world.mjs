@@ -2867,17 +2867,24 @@ async function journalLeaveMark(clean, { crossing = currentCrossing() } = {}) {
     // itself after the awaited pen; a transaction around one insert would be
     // ceremony that reads like a guarantee. The stance and walk lanes are the
     // shape being followed here (world-stance.mjs, walk-exec.mjs).
+    // ── BOTH ARMS REFUSE NOW (G1 / POS-156, RULING 3) ─────────────────────
+    //
+    // The unflipped arm was `appendJournal(db, entry)` — a sqlite row written
+    // here and a Postgres copy queued behind it. The sqlite row is gone, so
+    // that call awaits the record and throws exactly as the flipped one does,
+    // and this door's refusal is one sentence for both. It names no flag:
+    // `W2_PEN` decides which function writes, not whether the record is the
+    // record.
     let row;
-    if (laneFlipped("mark")) {
-      try { row = await appendActFlipped(db, entry); }
-      catch (err) {
-        if (err?.name === "PenUnreachableError")
-          throw bounce(503, err.message,
-            "this lane's pen is the office's record (W2_PEN=mark); when it cannot be reached the door refuses rather than writing anywhere else — nothing was declared, and your mark is safe to leave again");
-        throw err;
-      }
-    } else {
-      row = appendJournal(db, entry);
+    try {
+      row = laneFlipped("mark")
+        ? await appendActFlipped(db, entry)
+        : await appendJournal(db, entry);
+    } catch (err) {
+      if (err?.name === "PenUnreachableError")
+        throw bounce(503, err.message,
+          "this door's pen is the office's record; when it cannot be reached the door refuses rather than writing anywhere else — nothing was declared, and your mark is safe to leave again");
+      throw err;
     }
 
     // THE ANSWER SHAPE HOLDS ACROSS THE FLAG, for the reason the §1c contract
@@ -2915,7 +2922,7 @@ async function journalLeaveMark(clean, { crossing = currentCrossing() } = {}) {
       // `flipped`, because a PRIVATE DRAFT on a flipped lane has no deed by law
       // — its act rides the claim until a stake releases it — and answering
       // "acts" for one would name a table that does not hold it.
-      seq: row.seq, crossing: row.crossing, log: row.record ?? "journal",
+      seq: row.actId, crossing: row.crossing, log: row.record ?? "acts",
       witnesses: row.witnesses ? JSON.parse(row.witnesses) : null,
       ...(amending ? { amended: true, moved: false,
         superseded: "the prior declaration — every version stays in the log; canon shows the latest at the next crossing",
@@ -2978,19 +2985,25 @@ async function journalWithdraw({ by, slug, household }, { crossing = currentCros
     // (world2-claims § withdraw, "the one deletion this town performs") — so
     // committing the deed without it would tell a resident their mark is gone
     // while the docket still holds their name against it.
+    // ── BOTH ARMS REFUSE NOW (G1 / POS-156, RULING 3) ─────────────────────
+    //
+    // The unflipped arm was `appendJournal(db, entry)` — a sqlite row written
+    // here and a Postgres copy queued behind it. The sqlite row is gone, so
+    // that call awaits the record and throws exactly as the flipped one does.
     let row;
-    if (laneFlipped("mark")) {
-      try { row = await appendActFlipped(db, entry); }
-      catch (err) {
-        if (err?.name === "PenUnreachableError")
-          throw bounce(503, err.message,
-            "this lane's pen is the office's record (W2_PEN=mark); when it cannot be reached the door refuses rather than writing anywhere else — your mark is exactly as it was, and the withdrawal is safe to make again");
-        throw err;
-      }
-    } else {
-      row = appendJournal(db, entry);
+    try {
+      row = laneFlipped("mark")
+        ? await appendActFlipped(db, entry)
+        : await appendJournal(db, entry);
+    } catch (err) {
+      if (err?.name === "PenUnreachableError")
+        throw bounce(503, err.message,
+          "this door's pen is the office's record; when it cannot be reached the door refuses rather than writing anywhere else — your mark is exactly as it was, and the withdrawal is safe to make again");
+      throw err;
     }
-    return { id, withdrawn: true, was_published: wasPublished, effect: row.effect, seq: row.seq, crossing: row.crossing, log: row.record ?? "journal" };
+    // `seq` is the ACT'S id since G1 — there is no sqlite rowid left — and
+    // `log` has one answer because there is one record.
+    return { id, withdrawn: true, was_published: wasPublished, effect: row.effect, seq: row.actId, crossing: row.crossing, log: row.record ?? "acts" };
   } finally { try { db.close(); } catch { /* already gone */ } }
 }
 

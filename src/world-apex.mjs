@@ -360,13 +360,19 @@ export function rideDeps() {
     nowMs: () => Date.now(),
     crossing: () => currentCrossing(),
     record: async (entry) => {
-      // `appendJournal` carries the World 2.0 mirror itself (its own header:
-      // "mirror the row into Postgres `acts`"), so a ride reaches `acts` by the
-      // same path a walk and a crossing do. No second pen, no second queue.
+      // `appendJournal` IS the write into the record since G1 (POS-156): it
+      // awaits the store and throws `PenUnreachableError` when it cannot be
+      // reached, so a ride reaches `acts` by the same path a walk and a
+      // crossing do. No second pen, no second queue.
+      //
+      // ⚑ THE `await` IS LOAD-BEARING. Without it this returns a Promise, the
+      // apex answers the rider a ride that may never have landed, and the
+      // rejection is unhandled — a door reporting success over a lost act,
+      // which is the exact failure the awaited write was ruled to end.
       const { appendJournal, CLASS_RIDE } = await import("./world-journal.mjs");
       const db = openDynamic();
       try {
-        return appendJournal(db, {
+        return await appendJournal(db, {
           crossing: entry.crossing, actor: entry.handle, action: "ride", object: entry.object,
           cls: CLASS_RIDE, at: null, witnesses: null,
           // THE PAYLOAD IS EXACTLY THE BRIEF'S SIX FIELDS. The summary sentence

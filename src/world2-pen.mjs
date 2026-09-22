@@ -136,6 +136,22 @@ export class PenUnreachableError extends Error {
   }
 }
 
+/**
+ * Test seam: hand the module a pool. Never used by the office.
+ *
+ * `world2-acts.mjs` has carried the same one export for one line since the
+ * shadow era, and this file needed none because nothing awaited its pen — a
+ * suite either injected a client straight into `insertAct` or let the
+ * fire-and-forget queue fail into a console line nobody asserted on.
+ *
+ * G1 (POS-156, RULING 3) makes `penWrite` the office's ONE write and makes it
+ * refusable, so "this suite writes an act" now means "this suite points the
+ * office at a record". Without a seam here every act-writing suite would have
+ * to reach a live Postgres, and the alternative — leaving them unable to write
+ * at all — is a suite that proves the refusal and nothing else.
+ */
+export function __setPoolForTest(p) { state.pool = p; }
+
 async function pool(env = process.env) {
   if (state.pool) return state.pool;
   const { default: pg } = await import("pg");

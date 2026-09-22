@@ -76,8 +76,6 @@ import {
 } from "../src/dynamic-entities.mjs";
 import { DEPARTURE_GAPS, RECORD_READ_FIELDS, storedDepartureEvents } from "../src/world-movement.mjs";
 import { emissionsBetween, pruneEmissions } from "../src/dynamic-emissions.mjs";
-import { readJournal } from "../src/world-journal.mjs";
-import { enterExitLedgerText } from "../src/enter-exit-ledger.mjs";
 
 const argOf = (name, fallback = null) => { const i = process.argv.indexOf(name); return i !== -1 ? process.argv[i + 1] : fallback; };
 const flag = (name) => process.argv.includes(name);
@@ -573,11 +571,21 @@ async function main() {
   // (World 2.0's database migration supersedes this seam. Until then the
   // passage record has exactly one writer, and it is the reader.)
   //
-  // What remains is a READ: the same derivation the door performs, counted for
-  // the report so the operator can still see the record moving. It writes no
-  // file, commits nothing, and does not truncate the journal.
-  const derivedActs = (await enterExitLedgerText(CLONE, readJournal(db)))
-    .split("\n").filter((l) => l.startsWith("- ")).length;
+  // ── AND THE REPORT'S COUNT IS GONE TOO (G1 / POS-156, 2026-09-22) ────────
+  //
+  // What remained here was a READ: `enterExitLedgerText(CLONE, readJournal(db))`,
+  // counted for the report so the operator could see the record moving. Its
+  // source was the sqlite journal's frame rows, and G1 deletes the INSERT that
+  // filled them — so the number it printed would be the FROZEN ERA's 155 lines
+  // on every run for ever, a count that cannot move, reported as "the record
+  // moving". A stale instrument is worse than none: it answers.
+  //
+  // It is deleted rather than re-pointed. The live era HAS a reader and it is
+  // not this tool: POS-194 moved `servedEnterExitLedger` onto `acts`
+  // (`enter-exit-ledger.mjs § livePassageRows`), and the
+  // `/world/enter-exit-ledger` door and the viewer read it there. A second
+  // count derived on the save's own clock would be a second answer to a
+  // question that already has an owner.
 
   // A STATE directory outside the clone is a legitimate thing to write (tests
   // do it), but it is not something the pen can commit — and a save that
@@ -632,7 +640,7 @@ async function main() {
     // says how many acts the read would serve, because a number that stops
     // moving is how the two-day staleness was finally noticed, and losing the
     // number would be trading one silence for another.
-    enter_exit_ledger: { written: false, derived_acts: derivedActs, where: "derived at read time from the frozen era + the office journal; the committed copy is the frozen era by the world repo's own law (#2152)" },
+    enter_exit_ledger: { written: false, where: "derived at read time from the frozen era + the REGISTER (POS-194, `livePassageRows`); the committed copy is the frozen era by the world repo's own law (#2152). The `derived_acts` count this used to carry read the sqlite journal and went with G1 — ask the door, which owns that derivation" },
     prune,
   };
   db.close();
@@ -645,7 +653,7 @@ async function main() {
   console.log(`  files    ${written.length ? written.length + " changed" : "no change — the save is idempotent"}`);
   console.log(`  commit   ${commit ?? (flag("--no-commit") ? "skipped (--no-commit)" : (inClone ? "nothing to commit" : "skipped — STATE/ is outside the world clone"))}${pushed ? " · pushed" : ""}${push_error ? ` · PUSH FAILED: ${push_error}` : ""}`);
   console.log(`  world    ${String(read.as_of_world).slice(0, 12)} hydrated ${read.hydrated_at}${read.fresh === false ? "  (the walk ledger has MOVED since — disclosed in this report)" : ""}`);
-  console.log(`  passages ${derivedActs} in the derived record · NOT written — the save has no pen here (#2152)`);
+  console.log("  passages · NOT written — the save has no pen here (#2152); the derived record is the door's (GET /world/enter-exit-ledger)");
   for (const d of read.disclosed) console.log(`  DISCLOSED ${d}`);
   if (prune) console.log(`  prune    ${prune.refused ?? `${prune.pruned} faded emission(s) dropped (occurrence saved through ${prune.horizon})`}`);
 }
