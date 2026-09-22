@@ -43,14 +43,17 @@
 
 import { test, before, after, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 import {
   DEPARTURE_GAPS, RECORD_READ_FIELDS, departureEventOf, storedDepartureEvents,
 } from "../src/world-movement.mjs";
-import { compareDepartureLine, gapClassOf, pairDepartures, storeEraLines } from "../tools/crossing-save.mjs";
+import {
+  checkDepartureWindow, compareDepartureLine, gapClassOf, pairDepartures, storeEraLines,
+} from "../tools/crossing-save.mjs";
 import { normalizeRow } from "../src/world-journal.mjs";
 import { useGuardReader } from "../src/world2-guards.mjs";
 
@@ -354,6 +357,85 @@ test("era one lines on disk are not the store's half and are counted, not compar
   const kept = storeEraLines([eraOne, ...RECORD]);
   assert.equal(kept.length, RECORD.length, "era one is filtered out by its own missing stamp");
   assert.equal(kept.some((l) => l.payload.line_no != null), false);
+});
+
+// ── `--check` END TO END, over the real file on disk ────────────────────────
+//
+// The block above drives the pure halves. This drives the instrument Wright
+// runs on the box: the real 24-line window and its real meta, read off a disk,
+// cut at the file's own horizon, compared against a register.
+
+const CROSSING_MS = 12 * 3600 * 1000;
+const CROSSING_204_START = Date.UTC(2026, 5, 12) + 204 * CROSSING_MS;
+
+/** A STATE/ holding the real crossing-204 record and its real meta. */
+function stateDirWithWindow204() {
+  const dir = mkdtempSync(join(tmpdir(), "pos196-"));
+  mkdirSync(join(dir, "log"), { recursive: true });
+  writeFileSync(join(dir, "log", "204.jsonl"), readFileSync(FIXTURE, "utf8"), "utf8");
+  writeFileSync(join(dir, "log", "204.meta.json"), readFileSync(join(HERE, "fixtures", "pos196-window-204.meta.json"), "utf8"), "utf8");
+  return dir;
+}
+
+test("--check: the real window 204 against a register that holds the same walks", async () => {
+  const dir = stateDirWithWindow204();
+  try {
+    install(fixtureRegister(ACTS));
+    const out = await checkDepartureWindow({
+      crossing: 204, stateDir: dir, crossingStartMs: CROSSING_204_START, crossingMs: CROSSING_MS,
+    });
+    assert.equal(out.refused, undefined, `the check refused: ${out.detail}`);
+    assert.match(out.horizon, /the file's own meta/, "both sides are cut at the file's declared window");
+    assert.equal(out.file_lines, 24);
+    assert.equal(out.derived_lines, 24);
+    assert.equal(out.paired, 24);
+    assert.equal(out.only_in_file, 0);
+    assert.equal(out.only_in_register, 0);
+    assert.equal(out.ledger_era, 0);
+    assert.equal(out.read_equal, true, `the read fields differ: ${out.first_difference}`);
+    assert.deepEqual(Object.keys(out.classes).sort(), ["seq", "source"],
+      "with the instant solved, the leftovers are the two named gaps and nothing else");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("--check: a drifted instant is caught, and it is the line the verdict leads with", async () => {
+  // THE STOP, seen through the instrument. The offset is the SHAPE the mirror
+  // writes (the act is stamped after the resident declared, never before —
+  // `backfill-departures.mjs § PAIR_TOLERANCE_MS`), and the claim under test is
+  // the instrument's, not the offset's: does `--check` catch a departure whose
+  // recorded instant moved, and does it say so first?
+  const dir = stateDirWithWindow204();
+  try {
+    const drifted = ACTS.map((a) => ({ ...a, at: new Date(a.at.getTime() + 900) }));
+    install(fixtureRegister(drifted));
+    const out = await checkDepartureWindow({
+      crossing: 204, stateDir: dir, crossingStartMs: CROSSING_204_START, crossingMs: CROSSING_MS,
+    });
+    assert.equal(out.paired, 24, "the pairing key survives the drift, which is why the drift is visible at all");
+    assert.equal(out.read_equal, false, "a moved instant is a difference on a field the world reads");
+    assert.equal(out.classes.at, 24, "on every line of the window");
+    assert.match(String(out.first_difference), /^.*· STOP:at/,
+      "the STOP outranks the two accepted gaps in the one line a reader gets");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("--check: an empty window is not clean, and a missing file is refused by name", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pos196-"));
+  try {
+    mkdirSync(join(dir, "log"), { recursive: true });
+    install(fixtureRegister(ACTS));
+    const missing = await checkDepartureWindow({
+      crossing: 204, stateDir: dir, crossingStartMs: CROSSING_204_START, crossingMs: CROSSING_MS,
+    });
+    assert.equal(missing.refused, "no-file", "a dark crossing is named, never read as agreement");
+
+    writeFileSync(join(dir, "log", "300.jsonl"), "", "utf8");
+    const empty = await checkDepartureWindow({
+      crossing: 300, stateDir: dir, crossingStartMs: Date.UTC(2026, 5, 12) + 300 * CROSSING_MS, crossingMs: CROSSING_MS,
+    });
+    assert.match(String(empty.note), /nothing to compare/,
+      "green having looked at nothing is the starving-crossing shape one layer down");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("the check pairs on (actor, crossing) — the one key neither side is measuring", () => {

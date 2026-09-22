@@ -377,12 +377,20 @@ export async function storedDepartureFor(handle, opts = {}) {
 // emitted — so `mergedDepartureEvents`, `governingAt`, `buildSave` and every
 // replay read the two eras through one vocabulary and the seam stays invisible.
 //
-// ⚑ THE SWAP IS NOT WIRED, AND THE REASON IS MEASURED. See THE INSTANT below:
-// the register does not hold the departure's own instant, and `at` is the first
-// field every world reader reads. `crossing-save --check` renders through this
-// function and reports the distance; the write path still runs on `movements`
-// until the act carries the instant. A renderer with a check and no writer is
-// the honest half — a writer whose central field is wrong is not.
+// ⚑ THE SWAP IS NOT WIRED, AND THE REASON IS MEASURED. See `DEPARTURE_GAPS.at`
+// below: the register does not hold the departure's own instant, and `at` is
+// the first field every world reader reads. `crossing-save --check` renders
+// through this function and reports the distance; the write path still runs on
+// `movements` until the act carries the instant. A renderer with a check and no
+// writer is the honest half — a writer whose central field is wrong is not.
+//
+// WHAT CLOSES IT is one line in a file this lane does not own: `world.mjs §
+// walkEntry` carrying `writtenAt: <the movement's own instant>`, and the two
+// pens sharing one clock read (`declareMovementFlipped` takes the stamp before
+// the movements row; the unflipped mirror takes it after). Rows already written
+// need the same treatment `world2/tools/backfill-departures.mjs` already gives
+// its own — it writes `at: m.at`, the movements instant, and is the one path
+// whose acts DO carry it.
 
 /**
  * What the register cannot give back, named once so a `--check` line and a PR
@@ -391,7 +399,7 @@ export async function storedDepartureFor(handle, opts = {}) {
  * over, and a second vocabulary for it would be the third copy of a merge rule.
  */
 export const DEPARTURE_GAPS = Object.freeze({
-  at: "STOP:at — the register holds no departure instant. `world.mjs § walkEntry` passes no `writtenAt`, so `world-journal.mjs § normalizeRow` stamps `acts.at` with the MIRROR's clock; `acts.crossing` is a different read of the same door call. Measured against the record's own 2,829 live lines: median −200 ms, max −38 s. `at` is the field `storeRecords` reads first and the key `mergedRecords` orders and cuts on.",
+  at: "STOP:at — the register holds no departure instant. `world.mjs § walkEntry` passes no `writtenAt`, so `world-journal.mjs § normalizeRow` stamps `acts.at` with the MIRROR's clock, taken after the resident declared; `acts.crossing` is a different read of the same door call and reconstructs the instant exactly ZERO times in the record's own 2,808 live door-written lines (windows 120–204: median −203 ms, 235 of them missing by more than a second, the worst by 10.6 hours). `at` is the field `storeRecords` reads first and the key `mergedRecords` orders and cuts on.",
   seq: "gap:seq — no store source for the `movements` rowid; this is the register's own act id, which is the same monotone quantity the old `seq` was (dynamic-entities.mjs § readMovements: \"here it is the store's own sequence\").",
   declared_by: "gap:declared_by — the departure act carries no declarer. `walkEntry`'s payload has five keys and none is it, and `world2/tools/backfill-departures.mjs § departureRowFrom` SELECTs the column and drops it. The act's own actor stands for it, which is what the live write path puts in that column (2,829 of 2,829 door-written lines); the 28 that differ are the 2026-08-10 `ledger-freeze` one-off, in windows 119/120.",
   note: "gap:note — the departure act carries no note. The record's grammar already makes the key conditional, and the only 28 lines that carry one are the same freeze backfill.",
