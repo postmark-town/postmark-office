@@ -324,7 +324,12 @@ export async function writeTownDrain(clone, plan, { date, drainWith = collecting
           slug: p.slug,
           name: p.houseLine,
           coSign: { ghId: row.ghId, ghLogin: row.ghLogin },
-          residents: p.siblings?.length ? [...p.siblings, row.handle] : [],
+          // The siblings only — `joinHousehold` on the next line adds this
+          // row's own handle, so the two calls compose to the plan's
+          // `[...siblings, handle]` and the mint means the same thing here as
+          // it does at the door (`src/residency.mjs` § THE HOUSE FOUNDS
+          // HOLDING ITS SIBLINGS).
+          residents: [...(p.siblings ?? [])],
           since: date,
           declaredBy: p.registry.households[p.slug].declared_by,
           drain: NO_DRAIN,

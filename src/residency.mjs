@@ -766,7 +766,20 @@ export async function requestResidency(args, key, db, pen, { odb = null } = {}) 
         slug: plan.slug,
         name: plan.houseLine,
         coSign: { ghId: key.ghId, ghLogin: key.ghLogin },
-        residents: [],
+        // THE HOUSE FOUNDS HOLDING ITS SIBLINGS (review 5/6, ruled by Wright).
+        // `planRegistryJoin` computes `residents: [...siblings, handle]` — one
+        // human is one household, so the handles this account ALREADY acts for
+        // are the same house by definition and are seeded whole. This call
+        // passed `[]` and the crossing's `joinHousehold` then added only the
+        // ONE joining handle, so a two-handle account founded a house the
+        // record said held one resident. The record now agrees with the plan.
+        //
+        // THE JOINING HANDLE IS STILL NOT HERE, and that is the two-moment law
+        // rather than an oversight: the siblings are already admitted residents
+        // of the town, while this handle's admission IS the Registrar's merge.
+        // `joinHousehold` adds it at the crossing that follows, and the end
+        // state is exactly `[...siblings, handle]` — the plan's own answer.
+        residents: [...(plan.siblings ?? [])],
         since: townDate(),
         declaredBy: plan.registry.households[plan.slug].declared_by,
       });

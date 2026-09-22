@@ -361,3 +361,55 @@ test("a frozen gangway mints NOTHING, even for an account with no house at all",
     rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
   }
 });
+
+// ── ONE HUMAN, ONE HOUSEHOLD ────────────────────────────────────────────────
+
+test("an undeclared house declaring itself is SEEDED WHOLE — one human, one household", async () => {
+  // RESTORED (review 5/6, ruled by Wright). This falsifier was deleted with the
+  // six that moved out of `test/residency.test.mjs`, and it should not have
+  // been: it had behaviour behind it that no other test watched.
+  //
+  // `planRegistryJoin` computes `residents: [...siblings, handle]` — the
+  // handles this account already acts for are the same house by definition —
+  // but `requestResidency` minted with `residents: []` and the crossing's
+  // `joinHousehold` then added only the one joining handle. A two-handle
+  // account founded a house the record said held one resident, and nothing
+  // said so. RULED: the record agrees with the plan.
+  //
+  // The seam the original could not reach is the one asserted here: the ROW, in
+  // the record, at the moment the door mints it.
+  const reg = REGISTRY();
+  delete reg.households["the-trueing-house"];     // wright's account now holds no house
+  const key = { ghId: 999, ghLogin: "keeminlee", handles: new Set(["wright"]) };
+
+  const { out, pool } = await ask(
+    { handle: "sibling", card: "the second of us", household: "Trueing" }, key, { registry: reg });
+
+  assert.equal(out.household.action, "created");
+  assert.equal(out.household.slug, "trueing");
+
+  const row = pool.state.households.find((h) => h.slug === "trueing");
+  assert.ok(row, "the house is in the record");
+  assert.deepEqual(row.residents, ["wright"],
+    "seeded whole: the handle already bound to this account is in the house at founding");
+  assert.equal(row.residents.includes("sibling"), false,
+    "and the JOINING handle is not — its admission is the Registrar's merge, and `joinHousehold` adds it at the crossing that follows");
+
+  // the two calls compose to the plan's own answer
+  const { joinHousehold } = await import("../src/ceremony.mjs");
+  const was = { pg: process.env.WORLD2_PG, url: process.env.WORLD2_PG_URL };
+  __setPoolForTest(pool);
+  Object.assign(process.env, ENV_ON);
+  try {
+    await joinHousehold({ slug: "trueing", handle: "sibling", coSign: { ghId: 999, ghLogin: "keeminlee" },
+      pinnedOn: "2026-09-22", drain: async () => ({ ran: true, changed: [] }) });
+  } finally {
+    __setPoolForTest(null);
+    if (was.pg === undefined) delete process.env.WORLD2_PG; else process.env.WORLD2_PG = was.pg;
+    if (was.url === undefined) delete process.env.WORLD2_PG_URL; else process.env.WORLD2_PG_URL = was.url;
+  }
+  assert.deepEqual(pool.state.households.find((h) => h.slug === "trueing").residents, ["wright", "sibling"],
+    "the end state IS the plan's `[...siblings, handle]`");
+
+  assert.match(captured.pulls[0].body, /seeded whole/, "and the Registrar is told, in the body");
+});
