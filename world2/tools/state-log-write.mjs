@@ -20,7 +20,8 @@
 //                          this off. G1 is not the threat; G1 already happened.
 //
 //     `<N>.jsonl`          `tools/crossing-save.mjs`'s entity/event snapshot,
-//                          committed at :02 after each ferry crossing and alive
+//                          committed a couple of minutes after each ferry
+//                          crossing (205 at 12:02:36Z, 204 at 00:04:38Z) and alive
 //                          (`17fa4195`, "crossing-save 205"). Its meta carries
 //                          `covers_from` / `covers_to` / `complete`; its types
 //                          are `departure`, `attachment`, `emission`. A

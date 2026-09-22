@@ -759,7 +759,8 @@ if [ "$SOURCE" = "store" ]; then
   #                        AGO. G1 is not the threat to it; G1 is what happened.
   #
   #   `<N>.jsonl`          `tools/crossing-save.mjs`'s entity/event snapshot,
-  #                        still committed at :02 after each ferry crossing
+  #                        still committed a couple of minutes after each ferry
+  #                        crossing (205 at 12:02:36Z, 204 at 00:04:38Z)
   #                        (`17fa4195`, "crossing-save 205"). A different file
   #                        with a different grammar. This step does not touch it
   #                        and does not retire it — that is G2.
