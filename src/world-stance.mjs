@@ -435,6 +435,47 @@ export function standingStances(rows, { by = null } = {}) {
  * stance to read when it judges. Flagged for the founder in the handback rather
  * than left for a reader to discover.
  */
+// ── THIS ARM IS A G1 BLOCKER, AND THE 2.0 READ IS A MIGRATION (POS-195, 2026-09-22) ──
+//
+// DEC-14 (runbook, ruled 2026-09-03) has two halves. The standing half holds and
+// is not in question: "leave `worldForStances` on the 1.0 read permanently". The
+// scheduled half — "give the stance candidate list its own narrow 2.0 read that
+// may see overlapping drafts across households, built when G2's read deletions
+// need it" — was measured here, and its own note ("Blocks nothing today") is no
+// longer true. G1 removes the journal INSERT, which is this arm's source, and G1
+// comes BEFORE G2.
+//
+// WHY IT CANNOT SIMPLY BE PORTED, measured on the tip and not inferred. The road
+// exists and is right — `guardedLiveMarks` → `officeRead` → `pgLiveMarks` over
+// `claims`, and every field this function maps is there. What is missing is the
+// PERMISSION, and DEC-14's clause is a grant, not a query shape:
+//
+//   · a private draft's ONLY row in the store is `claims` at `status = 'draft'`,
+//     and 007's `claims_read` carries no `TO` clause, so it binds PUBLIC. RLS is
+//     ENABLE, not FORCE, so only `world2_owner` escapes it — and 002 bars that
+//     role from runtime ("migrations only").
+//   · there is no `SECURITY DEFINER` function and no `BYPASSRLS` role anywhere
+//     in `world2/`. Grepped, zero hits each.
+//   · `acts` cannot answer instead, deliberately: an unstaked draft's act is
+//     deferred into `claims.data._deferred_act` (world2-claims.mjs) and never
+//     reaches `acts` — "the whole of Phase 5.6's promise", one file over.
+//
+// So the narrow read wants a `world2/schema/` migration (a definer function over
+// the caller's ground, or a policy admitting overlap-scoped drafts) plus 003's
+// grant row plus a stated carve in Phase 5.6's leak falsifier. That is law-tier
+// by 007's own header, and it must land BEFORE the journal INSERT goes.
+//
+// WHAT STANDS GUARD MEANWHILE, so the next lane does not have to re-find it.
+// Flip-proved 2026-09-22: replace this live block with `if (false)` and exactly
+// three falsifiers go red, all in `test/world-stance.test.mjs` —
+//
+//   :442  the-late-welcome — an UNPUBLISHED sketch on your ground is a candidate
+//   :352  TIER 2 — the ambient block is capped at ~3 and says how many more
+//   :368  TIER 3 — the shadow is the full inbox, PAGINATED, plus your standing
+//
+// 98 of 101 stayed green, so the three are this arm's own. Deleting this block
+// cannot be silent; deleting it TOGETHER WITH those tests can be, and that is
+// the one move to refuse. Measurement: docs/2026-09-22/rail/pos-195 (Starstory).
 export function worldForStances(repo, { dbPath = null } = {}) {
   const canon = publishedState(repo).state?.marks ?? [];
   let live = [];
