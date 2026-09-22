@@ -56,7 +56,8 @@ import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync, realpa
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { buildJoinFiles, gangwayState, REGISTRY_PATH, PINS_PATH } from "../src/residency.mjs";
+import { buildJoinFiles, gangwayState } from "../src/residency.mjs";
+import { loadRegistry, loadPins } from "../src/registry-store.mjs";
 import { penCommit } from "../src/write.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -74,18 +75,14 @@ if (APPLY && VERIFY) {
   process.exit(2);
 }
 
-// READS THE CLONE IT IS GIVEN, never the module's default. This took the
-// argument late: an earlier pass closed over the module-level CLONE, so
-// `planSweep(someOtherClone)` read the BERTHS out of the fixture and the
-// REGISTRY out of the operator's real town-clone. Every probe still passed,
-// because the real registry happens to carry the handles the fixture names —
-// an instrument reading the thing it was supposed to be isolated from, and
-// agreeing with itself. A tool whose whole job is to decide what to write into
-// a clone must take that clone as an argument everywhere, with no default to
-// fall back to.
-const readJsonFrom = (clone, rel) => {
-  try { return JSON.parse(readFileSync(join(clone, rel), "utf8")); } catch { return null; }
-};
+// THE CLONE IS STILL AN ARGUMENT EVERYWHERE, and the lesson that made it one
+// outlives the reader it was written about. An earlier pass closed over the
+// module-level CLONE, so `planSweep(someOtherClone)` read the BERTHS out of the
+// fixture and the REGISTRY out of the operator's real town-clone — every probe
+// passed and the tool was reading two different towns. The registry half now
+// comes from the record rather than from any clone, which removes that
+// particular mismatch; the berths, the white pages and the gangway are still
+// read off whatever clone the caller names, and none of them has a default.
 
 /**
  * The berth card's frontmatter, as the berth actually holds it.
@@ -127,10 +124,31 @@ export function rowFor(registry, handle) {
 // the manifest gets exactly one verdict, and a berth that is already ashore is
 // reported as `ashore` rather than omitted — a sweep that silently drops the
 // rows it had no opinion about cannot be checked against the manifest's count.
-export function planSweep(clone, { only = null } = {}) {
+export async function planSweep(clone, { only = null } = {}) {
   const gangway = gangwayState(clone);
-  const registry = readJsonFrom(clone, REGISTRY_PATH) ?? { schema_version: 1, households: {} };
-  const pins = readJsonFrom(clone, PINS_PATH) ?? {};
+  // THE REGISTRY AND THE PINS COME FROM THE RECORD (POS-158). These two lines
+  // used to parse the clone's `tools/households.json` and `tools/github-ids.json`
+  // — the files this sweep has never written and only ever READ, to refuse a
+  // berth whose row is missing and to find the pinned id that is its anchor.
+  // The registry is store-of-record now, so those two questions are asked of
+  // the record; the files are a rendering of it and this tool still writes
+  // neither.
+  //
+  // `null` REFUSES THE WHOLE SWEEP rather than defaulting to empty, and the two
+  // reads are exactly why. Against an empty registry every berth would answer
+  // "no household row lists this handle" and land in `conflicts`, so an
+  // unreachable record would report 37 conflicts and read as a town whose
+  // record had come apart. Against empty pins every berth would answer
+  // "unanchored-skip" — a sweep that settles nobody and says, wrongly, that
+  // nobody is anchored. Both are worse than saying the true thing.
+  const registry = await loadRegistry();
+  const pins = await loadPins();
+  if (registry === null || pins === null)
+    return {
+      gangway, unreachable: true, manifest: 0,
+      settle: [], skipped: [], conflicts: [], ashore: [],
+      counts: { settle: 0, unanchored: 0, conflict: 0, ashore: 0 },
+    };
 
   const dir = join(clone, "HARBOR", "berths");
   const handles = existsSync(dir)
@@ -250,7 +268,17 @@ if (isMain) {
     process.exit(1);
   }
 
-  const plan = planSweep(CLONE, { only: ONLY });
+  const plan = await planSweep(CLONE, { only: ONLY });
+
+  // An unreachable record refuses the whole sweep, at every mode, before any
+  // verdict is printed — see `planSweep` § THE REGISTRY AND THE PINS. A sweep
+  // that answered "0 settleable" because it could not look would be a --verify
+  // that passes for the wrong reason, which is the one failure a closing check
+  // must not have.
+  if (plan.unreachable) {
+    console.error("REFUSED: this office is not pointed at the town's record (WORLD2_PG=1 and WORLD2_PG_URL are what point it) — no berth was judged and nothing was written");
+    process.exit(1);
+  }
 
   // VERIFY asks one question — is the set closed? — and it is the question the
   // apply is checked by, not a second description of the plan.

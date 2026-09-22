@@ -23,11 +23,12 @@ import { tmpdir } from "node:os";
 import { fixtureDb } from "./fixture.mjs";
 import {
   conformance, planDeclaration, declareHousehold, handleTaken,
-  serializePins, PINS_PATH, LANDING_GROUND,
+  PINS_PATH, LANDING_GROUND,
   DECLARE_SCHEMA, DECLARE_BOUNCES,
 } from "../src/declare.mjs";
-import { REGISTRY_PATH, serializeRegistry, buildJoinFiles, buildBoardingFiles, planRegistryJoin } from "../src/residency.mjs";
+import { REGISTRY_PATH, serializeRegistry, serializePins, buildJoinFiles, buildBoardingFiles, planRegistryJoin } from "../src/residency.mjs";
 import { arrivalPage } from "../src/arrival.mjs";
+import { withRecordFrom } from "./registry-pool-stub.mjs";
 
 // ── fixtures ────────────────────────────────────────────────────────────────
 
@@ -74,11 +75,29 @@ function declClone({ frozen = false, registry = REGISTRY(), pins = {} } = {}) {
 
 // the real act, with the town-writing half done in-process instead of under
 // flock — same planDeclaration, same file set, same penCommit ceremony.
+//
+// ── IT MIRRORS `declare-exec.mjs`, MINT AND ALL (POS-158) ──────────────────
+//
+// The registry is store-of-record, and the declaration's registry row is no
+// longer a file entry in `plan.files` — it is `mintHousehold` + `joinHousehold`
+// called inside the exec, under the town flock, followed by a drain that
+// renders the two files. So this helper does exactly that, in the same order,
+// with the same deferred drain.
+//
+// IF IT DID NOT, every test below that reads `tools/households.json` back would
+// go red for the wrong reason — not because the door stopped writing the row,
+// but because this fixture stopped writing it. A helper that diverges from the
+// production writer turns the suite into a test of the helper.
+//
+// THE POOL IS SEEDED FROM THE CLONE, so the record starts out holding exactly
+// what the fixture wrote, and the drain renders it back to the same bytes.
 async function declare(args, key, { clone, db, odb = null, mintKey = null } = {}) {
   const { penCommit } = await import("../src/write.mjs");
-  return declareHousehold(args, key, {
+  const { mintHousehold, joinHousehold, collectingDrain, NO_DRAIN } = await import("../src/ceremony.mjs");
+  const { LANDING_GROUND: LG } = await import("../src/declare.mjs");
+  return withRecordFrom(clone, () => declareHousehold(args, key, {
     db, clone, odb, mintKey,
-    commit: async (plan) => {
+    commit: async (plan, decl) => {
       const paths = [];
       for (const f of plan.files) {
         const abs = join(clone, f.path);
@@ -86,9 +105,25 @@ async function declare(args, key, { clone, db, odb = null, mintKey = null } = {}
         writeFileSync(abs, f.content);
         paths.push(abs);
       }
+      // the exec's own two rows, then ONE drain over both — see
+      // `src/declare-exec.mjs` § THE MINT, HERE, UNDER THE LOCK
+      const { drain, paths: drained } = collectingDrain({ clone });
+      await mintHousehold({
+        slug: plan.slug, name: decl.household,
+        coSign: { ghId: decl.ghId, ghLogin: decl.ghLogin },
+        residents: [decl.handle], since: plan.date, memberOf: LG,
+        declaredBy: plan.registry.households[plan.slug].declared_by,
+        drain: NO_DRAIN,
+      });
+      await joinHousehold({
+        slug: plan.slug, handle: decl.handle,
+        coSign: { ghId: decl.ghId, ghLogin: decl.ghLogin },
+        pinnedOn: plan.date, drain,
+      });
+      paths.push(...drained);
       return { commit: penCommit(clone, paths, `declare ${plan.slug}`) };
     },
-  });
+  }));
 }
 
 const readJson = (clone, rel) => JSON.parse(readFileSync(join(clone, rel), "utf8"));

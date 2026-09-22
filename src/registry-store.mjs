@@ -54,8 +54,13 @@ import { registryFromRows, pinsFromRows, HOUSEHOLD_KEYS, PIN_KEYS } from "./regi
 // backwards at 36 of them), so the column is the only place that order lives
 // and a query without this clause would make the town's file depend on the
 // planner's mood.
+//
+// `formerly` (migration 020, POS-158) is selected like any other column and
+// carried through untouched. `node-postgres` hands a `text[]` back as a JS
+// array of strings, which is exactly what `registryFromRows` wants — and its
+// renderer drops the key when the array is empty, which today is all 118 rows.
 const HOUSEHOLDS_SQL = `
-  SELECT slug, ord, name, human, accounts, residents, since, member_of, declared_by
+  SELECT slug, ord, name, human, accounts, residents, since, member_of, declared_by, formerly
     FROM households
    ORDER BY ord`;
 
@@ -126,10 +131,17 @@ export async function loadPins(env = process.env) {
 // own transaction, before it calls `drainRegistry()` — they are exported and
 // falsified here so that lane inherits a writer rather than inventing one.
 
-const COLUMNS = ["slug", "ord", "name", "human", "accounts", "residents", "since", "member_of", "declared_by"];
+const COLUMNS = ["slug", "ord", "name", "human", "accounts", "residents", "since", "member_of", "declared_by", "formerly"];
 const PIN_COLUMNS = ["handle", "login", "gh_id", "pinned", "renamed", "note", "retired", "renamed_to"];
 
 const placeholders = (n, offset = 0) => Array.from({ length: n }, (_, i) => `$${i + 1 + offset}`).join(", ");
+// `accounts` is jsonb and wants a STRING; `residents` and `formerly` are
+// `text[]` and want the JS array itself, which `node-postgres` turns into a
+// Postgres array literal. Stringifying either of those would store the literal
+// characters `["a","b"]` in a text[] and the drain would render JSON inside
+// JSON. The `?? null` fallback is for the nullable scalars only — the two array
+// columns are NOT NULL with a `'{}'` default, and `[] ?? null` is `[]`, so an
+// empty list reaches the column as an empty list rather than as a NULL.
 const valuesOf = (row, cols) => cols.map((c) => (c === "accounts" ? JSON.stringify(row[c] ?? []) : row[c] ?? null));
 
 /**
@@ -167,7 +179,63 @@ export async function registryRowCounts(env = process.env) {
   return { households: Number(r[0].households), pins: Number(r[0].pins), meta: Number(r[0].meta) };
 }
 
-/** POS-158's hook: one house, inserted or edited in place. Never deletes. */
+// ── A NEW HOUSE TAKES ITS PLACE FROM THE DATABASE (POS-158, review 4/6) ───
+//
+// THE HOLE THIS CLOSES. `mintHousehold` used to read the rows, compute
+// `max(ord) + 1` in JavaScript, and write that back — with no transaction
+// between the read and the write. Two mints landing together both read the same
+// highest ord and both chose the same next one. `households_ord_key` is UNIQUE
+// and `upsertHousehold`'s ON CONFLICT names the SLUG only, so the second insert
+// did not update anything: it threw. And the caller swallowed the throw into a
+// `console.warn` while still telling the resident "the same PR declares your
+// household" — a house that does not exist, announced as founded.
+//
+// The window between the read and the write is gone: the place is computed
+// INSIDE the insert, so no caller can hold a stale answer.
+//
+// WHAT REMAINS, STATED PLAINLY RATHER THAN CLAIMED AWAY. Two transactions
+// running under the same snapshot can still both see the same `max(ord)`, and
+// one of them will lose the unique index. That case is now RECOVERABLE and
+// never silent: `insertHousehold` retries a bounded number of times against a
+// fresh snapshot, and a failure that survives the retries is thrown — where the
+// ceremony turns it into a refusal the caller actually reads. A lost race costs
+// a retry; it never costs a wrong row, and it never costs a false receipt.
+const ORD_RETRIES = 3;
+const isOrdCollision = (e) =>
+  /households_ord_key|duplicate key value/i.test(String(e?.message ?? e));
+
+/**
+ * Insert a NEW house, with its place assigned by the database.
+ *
+ * `row.ord` is IGNORED and must be: this is the one writer that chooses a
+ * place, and a caller that could choose one is the caller that raced. Returns
+ * the row as written, `ord` included, so the caller can say where it landed.
+ *
+ * Deliberately NOT an upsert. A mint founds a house that does not exist; if the
+ * slug is taken, that is `REFUSALS.TAKEN` and a person needs to hear it, not an
+ * UPDATE that silently rewrites somebody's row.
+ */
+export async function insertHousehold(row, env = process.env) {
+  const cols = COLUMNS.filter((c) => c !== "ord");
+  const vals = valuesOf(row, cols);
+  const sql = `INSERT INTO households (ord, ${cols.join(", ")})
+               SELECT coalesce(max(ord), -1) + 1, ${placeholders(cols.length)} FROM households
+               RETURNING ord`;
+  let last = null;
+  for (let attempt = 1; attempt <= ORD_RETRIES; attempt++) {
+    try {
+      const r = await actsQuery(sql, vals, env);
+      if (r === null) return null;
+      return { ...row, ord: Number(r[0].ord) };
+    } catch (e) {
+      last = e;
+      if (!isOrdCollision(e)) throw e;   // a real failure is not a race
+    }
+  }
+  throw last;
+}
+
+/** POS-158's hook: one house, EDITED in place — the place is the caller's. Never deletes. */
 export async function upsertHousehold(row, env = process.env) {
   const set = COLUMNS.filter((c) => c !== "slug").map((c) => `${c} = EXCLUDED.${c}`).join(", ");
   return actsQuery(
