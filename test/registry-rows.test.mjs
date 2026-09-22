@@ -29,9 +29,10 @@ import { fileURLToPath } from "node:url";
 
 import {
   rowsFromRegistry, renderRegistry, registryFromRows, pinsFromRows,
-  firstDifferingLine, HOUSEHOLD_KEYS, PIN_KEYS,
+  firstDifferingLine, HOUSEHOLD_KEYS, PIN_KEYS, ACCOUNT_KEYS,
 } from "../src/registry-rows.mjs";
 import { houseForAccount, houseForName, serializeRegistry, serializePins } from "../src/residency.mjs";
+import { asJsonbReturns, compareJsonbKeys } from "./jsonb-key-order.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIX = join(HERE, "fixtures", "registry-2026-09-22");
@@ -54,12 +55,25 @@ const LIVE = { households: 118, pins: 190 };
  * and the file spells a pin's `id` as a NUMBER. A test that fed hand-built rows
  * straight back into the renderer would never meet that, and the first real
  * `--check` on the box would red on 190 lines at once. `ord` comes back as a
- * number from int4 and `accounts` comes back parsed from jsonb, so those are
- * passed through as they are.
+ * number from int4.
+ *
+ * AND `accounts` COMES BACK KEY-SORTED. This function used to pass the jsonb
+ * columns through as they were, which made this suite a store that behaves
+ * better than Postgres: it was green on 2026-09-22 while the dev sandbox's
+ * `registry-drain.mjs --check` red with `tools/households.json differs at line
+ * 9 — store renders "id": 306985727, / the clone has "login":
+ * "vertas-marginalia",`. jsonb is a sorted map, not an object; the rule is
+ * length-in-bytes then bytes, it is written down once in
+ * `test/jsonb-key-order.mjs`, and it is applied here so the pure law and the
+ * box's law are the same law.
  */
 const asPostgresReturns = (rows) => ({
-  meta: rows.meta,
-  households: rows.households.map((r) => ({ ...r, ord: Number(r.ord) })),
+  // `meta` is a MAP OF ROWS, not a jsonb value: each `registry_meta` row is a
+  // `key` text column and a `value` jsonb one, so the VALUES go through the
+  // reorder and the key set does not. Sorting this object's own keys would put
+  // `note` before `schema_version` and move the file's first two lines.
+  meta: Object.fromEntries(Object.entries(rows.meta).map(([k, v]) => [k, asJsonbReturns(v)])),
+  households: rows.households.map((r) => ({ ...r, ord: Number(r.ord), accounts: asJsonbReturns(r.accounts) })),
   pins: rows.pins.map((r) => ({ ...r, gh_id: String(r.gh_id) })),
 });
 
@@ -76,6 +90,68 @@ test("THE LAW: the store's rendering of the town's real files is byte-equal to t
   assert.equal(firstDifferingLine(out.pins, PINS_RAW), null,
     "tools/github-ids.json renders byte-for-byte from the rows");
   assert.equal(out.pins, PINS_RAW);
+});
+
+test("THE JSONB RULE: the store returns an account's keys sorted, and the render still writes the file's order", () => {
+  // THE RED THIS EXISTS FOR, measured on a REAL Postgres (dev sandbox,
+  // 2026-09-22 19:07 EDT, after `registry-seed.mjs --apply`, 118 houses /
+  // 190 pins): `registry-drain.mjs --check` exited 1 with
+  //
+  //   tools/households.json differs at line 9 — store renders "id": 306985727,
+  //                                 the clone has "login": "vertas-marginalia",
+  //
+  // The suite above was GREEN at the same moment, because a JavaScript stub
+  // keeps an object whole and `jsonb` does not: it is a SORTED MAP, keyed by
+  // LENGTH IN BYTES then BYTEWISE. `id` is 2 bytes, `login` is 5, so every one
+  // of the 121 accounts comes back reversed from the file's spelling.
+  //
+  // First: the rule itself, on the exact two keys the column carries. If this
+  // stops holding, jsonb has changed and the template below is answering a
+  // question nobody is asking any more.
+  assert.deepEqual(ACCOUNT_KEYS.slice(), ["login", "id"], "the file's order");
+  assert.deepEqual([...ACCOUNT_KEYS].sort(compareJsonbKeys), ["id", "login"],
+    "jsonb's order — length in bytes first, then bytes — is the REVERSE of the file's");
+  assert.deepEqual(asJsonbReturns({ login: "a", id: 1 }), { id: 1, login: "a" });
+  assert.deepEqual(Object.keys(asJsonbReturns({ login: "a", id: 1 })), ["id", "login"],
+    "the sorter really does reorder, so the assertion below is not passing by accident");
+
+  // Second: with every nested object re-sorted the way the store sorts them,
+  // the render is still byte-equal to the town's own file. That is the whole
+  // law, met over the values Postgres actually returns.
+  const rows = rowsFromRegistry(HOUSEHOLDS, PINS);
+  const stored = asPostgresReturns(rows);
+
+  const accountKeyOrders = new Set();
+  let accounts = 0;
+  for (const r of stored.households) for (const a of r.accounts) {
+    accountKeyOrders.add(Object.keys(a).join(","));
+    accounts++;
+  }
+  assert.equal(accounts, 121, "121 accounts over 118 houses, as 019's header measured");
+  assert.deepEqual([...accountKeyOrders], ["id,login"],
+    "every account arrives from the store in jsonb's order, not the file's");
+
+  const out = renderRegistry(stored);
+  assert.equal(firstDifferingLine(out.households, HOUSEHOLDS_RAW), null,
+    "the render puts the template's order back and line 9 reads `login` again");
+  assert.equal(out.households, HOUSEHOLDS_RAW);
+});
+
+test("an account key the template does not name is rendered, never dropped", () => {
+  // The tail of the nested template. A refusal is right at the FOLD, where a
+  // person is running the seed; at the DRAIN, which may be running at 05:45 at
+  // a crossing, a key nobody has taught the template must still reach the
+  // town's file. It lands after the template, sorted, and `--check` says the
+  // line moved — which is a diff a person reads, not a field that vanished.
+  const rows = rowsFromRegistry(HOUSEHOLDS, PINS);
+  const stored = asPostgresReturns(rows);
+  const house = stored.households.find((r) => r.slug === "fox-hearth");
+  house.accounts = house.accounts.map((a) => asJsonbReturns({ ...a, vouched_by: "corwin" }));
+
+  const rendered = registryFromRows(stored).households["fox-hearth"];
+  assert.deepEqual(Object.keys(rendered.accounts[0]), ["login", "id", "vouched_by"],
+    "the template first, then the stranger — in a stable place, and present");
+  assert.equal(rendered.accounts[0].vouched_by, "corwin");
 });
 
 test("the files are exactly what the town pen's own serializers write — there is no second spelling", () => {

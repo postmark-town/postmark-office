@@ -97,6 +97,42 @@ export const PIN_KEYS = Object.freeze([
   "login", "id", "pinned", "renamed", "note", "retired", "renamed_to",
 ]);
 
+// ── THE THIRD TEMPLATE, AND THE ONE THE STORE ACTUALLY FORCED ───────────────
+//
+// The two templates above order the keys of a HOUSE and of a PIN, both of which
+// are built here out of named columns, so their order was never in doubt. An
+// ACCOUNT is different: `households.accounts` is a `jsonb` column, and Postgres
+// `jsonb` is not an object — it is a SORTED MAP. On the way in, every object's
+// keys are reordered by LENGTH IN BYTES, then bytewise, and they come back out
+// that way forever. Insertion order is not stored and is not recoverable from
+// the column (`src/state-log-from-store.mjs § the three things` names the same
+// property for `acts.payload`).
+//
+// `login` is 5 bytes and `id` is 2, so the store hands every account back as
+// `{ id, login }` while the town's file spells it `{ "login", "id" }`. MEASURED
+// ON A REAL POSTGRES (dev sandbox, 2026-09-22 19:07 EDT, after
+// `registry-seed.mjs --apply`): `registry-drain.mjs --check` red with
+// `tools/households.json differs at line 9 — store renders "id": 306985727, /
+// the clone has "login": "vertas-marginalia",`. 121 accounts, so 121 blocks of
+// the file, on the first crossing.
+//
+// So the render orders nested keys BY THIS TEMPLATE, never by the order the row
+// arrived in. That restoration is legitimate here for the reason
+// `state-log-from-store.mjs` gives for `witnesses` and refuses for `payload`:
+// the shape is FIXED — 019's own header measured it, `login` 121/121 and `id`
+// 121/121, exactly two keys, always both — and `accountMatches` reads
+// `a.id`/`a.login` by name. An arbitrary payload has no such template and this
+// file invents none.
+export const ACCOUNT_KEYS = Object.freeze(["login", "id"]);
+
+// Which household columns carry nested objects, and the template each one's
+// objects are ordered by. `accounts` is the only one: `residents` and
+// `formerly` are `text[]` of strings (no keys to reorder) and every other
+// column is a scalar. If a later migration adds a second jsonb column, it
+// arrives with its row here in the same commit, or the drain renders it in
+// Postgres's order and reds on the first crossing.
+const NESTED_KEYS = Object.freeze({ accounts: ACCOUNT_KEYS });
+
 // A pin's column names are the file's key names except one: `id` is a reserved
 // enough word in SQL company that the column is `gh_id`, and this is the single
 // place the two spellings meet.
@@ -134,6 +170,33 @@ const rendersAsAbsent = (key, v) =>
   isAbsent(v)
   || (EMPTY_LIST_KEYS.has(key) && Array.isArray(v) && v.length === 0)
   || (FALSE_IS_ABSENT_KEYS.has(key) && v === false);
+
+/**
+ * A nested value with its object keys put back in the FILE's order.
+ *
+ * Walks arrays (a jsonb array IS ordered, and 019's header says the order of
+ * `accounts` is part of the file's bytes, so it is never sorted here) and
+ * rebuilds each object: the template's keys first, in the template's order,
+ * then EVERY REMAINING KEY, sorted, so a key the template does not name is
+ * rendered rather than dropped.
+ *
+ * That tail is the difference between this and the top-level templates, which
+ * REFUSE an unknown key at the fold. A refusal is right there, where a person
+ * is running the seed and can add the column. Here the value came out of a
+ * `jsonb` column that accepts any shape, on a drain that may be running at
+ * 05:45 at a crossing — so an unrecognised account key renders in a stable
+ * place and shows up as a diff a person reads, instead of vanishing from the
+ * town's file. It will be in the wrong PLACE, and `--check` will say so; it
+ * will not be missing.
+ */
+const orderNested = (v, template) => {
+  if (Array.isArray(v)) return v.map((x) => orderNested(x, template));
+  if (v === null || typeof v !== "object") return v;
+  const out = {};
+  for (const k of template) if (Object.hasOwn(v, k)) out[k] = v[k];
+  for (const k of Object.keys(v).sort()) if (!template.includes(k)) out[k] = v[k];
+  return out;
+};
 
 /**
  * The two parsed files -> the rows the store holds.
@@ -216,14 +279,28 @@ export function rowsFromRegistry(householdsJson, pinsJson) {
  */
 export function registryFromRows(rows) {
   const out = {};
-  for (const [k, v] of Object.entries(rows?.meta ?? {})) out[k] = v;
+  for (const [k, v] of Object.entries(rows?.meta ?? {})) {
+    // `registry_meta.value` is jsonb too, and it has no template — it is
+    // whatever the file's top level carries beside `households`. Live, that is
+    // `schema_version` (a number) and `note` (one prose string): 2/2 SCALARS,
+    // which jsonb cannot reorder, measured on the town's own files. An OBJECT
+    // here would come back key-sorted with nothing to restore it from, so it
+    // refuses rather than renders a file whose metadata block quietly moved —
+    // the same refusal the fold makes for an unknown household column, at the
+    // one other place a jsonb value reaches these bytes.
+    if (v !== null && typeof v === "object")
+      throw new Error(`registry_meta "${k}" holds an object, and jsonb returns an object's keys sorted by (length, bytes) with the file's order unrecoverable — give it a template in registry-rows.mjs before storing one, or the drain will render the metadata block in Postgres's order`);
+    out[k] = v;
+  }
   const households = {};
   for (const r of [...(rows?.households ?? [])].sort((a, b) => a.ord - b.ord)) {
     const rec = {};
     for (const k of HOUSEHOLD_KEYS) {
       const v = r[k];
       if (rendersAsAbsent(k, v)) continue;
-      rec[k] = v;
+      // The jsonb columns are re-ordered by their template; every other column
+      // is a scalar or a `text[]` and passes through as it arrived.
+      rec[k] = NESTED_KEYS[k] ? orderNested(v, NESTED_KEYS[k]) : v;
     }
     households[r.slug] = rec;
   }
