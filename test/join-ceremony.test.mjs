@@ -225,6 +225,38 @@ test("the membership writes the pin AND the residency, and drains once", async (
   });
 });
 
+test("a GAPPED ord sequence does not move a house, and a new one does not collide", async () => {
+  // THE PROBE THE FIRST DRAFT COULD NOT FAIL. `joinHousehold` took the house's
+  // POSITION in the folded object as its `ord`, and `mintHousehold` took the
+  // COUNT as the next one. Both are right while the sequence runs 0..N-1 and
+  // wrong the moment it has a gap — and `--ingest-missing` can leave one,
+  // because it adopts a row at the position the FILE gives it.
+  //
+  // `households_ord_key` is UNIQUE, so the count-derived mint would have thrown
+  // on a collision; the position-derived membership would have done something
+  // worse and moved somebody's house without a word.
+  const seed = rowsFromRegistry(JSON.parse(HOUSEHOLDS_RAW), JSON.parse(PINS_RAW));
+  const gapped = {
+    ...seed,
+    households: seed.households.map((r, i) => ({ ...r, ord: i < 2 ? r.ord : Number(r.ord) + 50 })),
+  };
+  await withPool(async (pool) => {
+    const victim = gapped.households[5];
+    await joinHousehold({ slug: victim.slug, handle: "a-gap-joiner", coSign: CO_SIGN,
+      env: ENV_ON, drain: NO_DRAIN });
+    assert.equal(pool.state.households.find((h) => h.slug === victim.slug).ord, victim.ord,
+      "the house kept its own place, not its index");
+
+    await mintHousehold({ slug: "past-the-gap", coSign: CO_SIGN, since: "2026-09-22",
+      declaredBy: "x", env: ENV_ON, drain: NO_DRAIN });
+    const minted = pool.state.households.find((h) => h.slug === "past-the-gap");
+    const highest = Math.max(...gapped.households.map((r) => Number(r.ord)));
+    assert.equal(minted.ord, highest + 1, "and the new house lands past the HIGHEST, not past the count");
+    assert.equal(pool.state.households.filter((h) => h.ord === minted.ord).length, 1,
+      "one row at that place — the unique index would have refused two");
+  }, stubPool(gapped));
+});
+
 test("the membership does NOT move the house's place in the file", async () => {
   // `ord` is the file's standing declaration order. Deriving a fresh one from
   // the current count would move an existing house to the end and rewrite

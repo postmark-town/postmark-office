@@ -47,7 +47,8 @@
 // — and refusing is not a degradation: a ceremony that cannot see the roll
 // cannot tell whether it is founding a house or overwriting one.
 
-import { loadRegistry, loadPins, upsertHousehold, upsertPin } from "./registry-store.mjs";
+import { loadRegistryRows, upsertHousehold, upsertPin } from "./registry-store.mjs";
+import { registryFromRows, pinsFromRows } from "./registry-rows.mjs";
 import { drainRegistry } from "../tools/registry-drain.mjs";
 
 // ── THE ALPHABET ────────────────────────────────────────────────────────────
@@ -228,14 +229,27 @@ export async function mintHousehold({
   // THE ROLL, READ FROM THE RECORD. `null` is refused rather than defaulted —
   // see § NULL IS NOT EMPTY in the header. This is also the uniqueness check
   // and it is the one that decides: a caller's earlier look was courtesy.
-  const registry = await loadRegistry(env);
-  if (registry === null) throw refuse(REFUSALS.NO_RECORD);
+  //
+  // THE ROWS, NOT THE OBJECT. `loadRegistry` folds the rows into the file's
+  // shape and drops `ord` on the way, and `ord` is exactly what a mint has to
+  // choose. Reading the rows also costs one query fewer than reading the
+  // registry and the pins separately, since both fold from the same read.
+  const rows = await loadRegistryRows(env);
+  if (rows === null) throw refuse(REFUSALS.NO_RECORD);
+  const registry = registryFromRows(rows);
   if (registry.households?.[key]) throw refuse(REFUSALS.TAKEN, key);
 
   // `ord` is the file's declaration order and nothing derives it (019's
   // header), so a new house takes the next place at the end — which is exactly
   // where a declaration has always appended in the file.
-  const ord = Object.keys(registry.households ?? {}).length;
+  //
+  // PAST THE HIGHEST, NOT THE COUNT. `households_ord_key` is UNIQUE, so a
+  // count-derived ord collides the moment the sequence has a gap — and a gap is
+  // reachable: `registry-drain --ingest-missing` adopts a row at the position
+  // the FILE gives it, which need not continue the table's run. The count was
+  // right for a contiguous table and wrong for the table this store can
+  // actually hold, which is the difference between an invariant and a habit.
+  const ord = rows.households.reduce((hi, r) => Math.max(hi, Number(r.ord) + 1), 0);
 
   const row = {
     slug: key,
@@ -291,20 +305,30 @@ export async function joinHousehold({
   const h = String(handle ?? "").trim().toLowerCase();
   if (!h) throw refuse(REFUSALS.NO_HOUSE, "a membership names the resident joining");
 
-  const registry = await loadRegistry(env);
-  if (registry === null) throw refuse(REFUSALS.NO_RECORD);
+  // ONE READ, AND IT IS THE ROWS. Both objects below fold from the same read,
+  // so asking for the registry and the pins separately would query the store
+  // twice for one answer — and, worse, would hand back a registry with no
+  // `ord` on it, which is the one column this function must not guess.
+  const rows = await loadRegistryRows(env);
+  if (rows === null) throw refuse(REFUSALS.NO_RECORD);
+  const registry = registryFromRows(rows);
+  const pins = pinsFromRows(rows);
 
   const rec = registry.households?.[key];
   if (!rec) throw refuse(REFUSALS.NO_SUCH_HOUSE, key);
 
-  const pins = await loadPins(env);
-  if (pins === null) throw refuse(REFUSALS.NO_RECORD);
-
-  // `ord` is NOT recomputed. It is the file's standing declaration order and
-  // this house already holds its place; deriving a fresh one from the current
-  // count would move an existing house to the end of the file and rewrite every
-  // row after it. The order comes back off the row we are editing.
-  const ord = Object.keys(registry.households ?? {}).indexOf(key);
+  // `ord` IS READ OFF THE ROW, never recomputed. It is the file's standing
+  // declaration order and this house already holds its place; deriving a fresh
+  // one would move the house and rewrite every row after it — 118 lines of diff
+  // for one resident joining.
+  //
+  // THE FIRST DRAFT TOOK `Object.keys(...).indexOf(key)`, which is the house's
+  // POSITION in the folded object and equals its `ord` only while the sequence
+  // is contiguous from zero. `--ingest-missing` can adopt a row at a position
+  // that leaves a gap, and from that moment the two numbers part company — and
+  // the wrong one would silently move somebody's house. The row carries the
+  // answer; nothing else needs to.
+  const ord = Number(rows.households.find((r) => r.slug === key).ord);
 
   const residents = [...new Set([...(rec.residents ?? []), h])];
 
