@@ -19,13 +19,19 @@
 // with the world's own `tools/marks-fold.mjs`, so what these tests run against
 // is the town's law rather than this lane's idea of it.
 //
-// ⚑ AND `WORLD/world-state.json` AT THAT SHA IS STALE, which is why the fold is
-// run here rather than the committed file read. The merged PR changed the Works
-// SOURCE (`WORLD/marks/**/mark.md`) and the fold is regenerated at the
-// settlement — its last three commits are all "settlement: sweep …" — so at
-// `6625d737` the committed fold still carries the pre-PR marks: no `class:` on
-// her, three stops, no `ride` mark. `plainWorld()` reads that committed file and
-// is the control every "the law gates the physics" leg needs.
+// ⚑ AND `WORLD/world-state.json` AT THAT SHA WAS STALE, which is why the fold
+// is run here rather than the committed file read. The merged PR changed the
+// Works SOURCE (`WORLD/marks/**/mark.md`) and the fold is regenerated at the
+// settlement, so at `6625d737` the committed fold still carried the pre-PR
+// marks: no `class:` on her, three stops, no `ride` mark.
+//
+// ⚑ AND THAT STALENESS EXPIRED. The settlement caught the committed fold up at
+// world `54a437a7` (2026-09-20), `class: vehicle` landed in the file, and the
+// six legs whose control was `plainWorld()` went red — and stayed red on the
+// train until POS-191. The control is now DERIVED rather than read; see
+// `plainWorld()` below. Nothing in the office regressed and nothing the tests
+// assert about the office changed: a record this suite treated as a fixture
+// moved, which is what a record does.
 //
 // ⚑ AND THE STOP LIST IS FOUR, NOT FIVE. Folded off `6625d737`: the wheelhouse
 // names `the-town/the-post-office` (her own berth), the Pando landing, the
@@ -90,12 +96,35 @@ function vehicleWorld() {
   return _folded;
 }
 
-/** The COMMITTED fold at this sha — pre-PR, no vehicle anywhere. The control
- *  every "the law gates the physics" leg needs, and a real artifact rather than
- *  a hand-emptied copy: this is the file the office reads until the settlement
- *  regenerates it. */
+/** THE CONTROL every "the law gates the physics" leg needs: this same world
+ *  with the vehicle class LIFTED, and nothing else changed.
+ *
+ *  ⚑ IT USED TO READ THE COMMITTED FOLD — `WORLD/world-state.json` — on the
+ *  reasoning that at `6625d737` that file was still pre-PR (no `class:` on her)
+ *  and so a real artifact rather than a hand-emptied copy. That reasoning had a
+ *  clock in it. The committed fold is REGENERATED AT EVERY SETTLEMENT: world
+ *  `54a437a7` (settlement sweep, 2026-09-20) swept `class: vehicle` into it,
+ *  the control stopped being a pre-class world, and six legs of this file stood
+ *  red from that crossing until POS-191. A live record pinned as a fixture
+ *  decays with the next crossing.
+ *
+ *  So the control is now DEFINED by the one property it needs. `worldHasVehicle`
+ *  (src/world-movement.mjs) gates on exactly this: a mark whose `class` is
+ *  `vehicle` and which is not itself a class row. Clearing that predicate and
+ *  nothing else is what makes these legs a control — one variable between the
+ *  two worlds — rather than two unrelated folds compared. It cannot decay,
+ *  because it is derived from whatever the world is today. */
 function plainWorld() {
-  return JSON.parse(readFileSync(join(CLONE, "WORLD", "world-state.json"), "utf8"));
+  const w = vehicleWorld();
+  const carriesTheClass = (m) => String(m?.class ?? "") === VEHICLE_CLASS && m?.kind !== "class" && m?.subkind !== "class";
+  return {
+    ...w,
+    marks: w.marks.map((m) => {
+      if (!carriesTheClass(m)) return m;
+      const { class: _lifted, ...withoutTheClass } = m;
+      return withoutTheClass;
+    }),
+  };
 }
 
 const markIn = (w, id) => w.marks.find((m) => m.id === id) ?? null;
@@ -187,17 +216,31 @@ test("arrives_at is the straight line over the timetable's own pace — computed
   assert.ok(Math.abs(expectedMs / 3_600_000 - 3.96) < 0.05, `the Pando leg times at ${(expectedMs / 3_600_000).toFixed(2)} h`);
 });
 
-test("the brief's SNUG example is wrong and the record is what this asserts", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
-  // The brief's § 2 says "quay → the Snug mooring ≈ 4.9 km ≈ 9 min". Measured
-  // off world main 5beca99a: the Post Office anchors at (-9, 35.5) and the Snug
-  // mooring at (-708, 9950), which is 9,939 m — twice the brief's figure, and
-  // ~17.7 minutes at pace 405, not 9. This is pinned rather than reported once,
-  // because the number in a brief is exactly the kind of thing a later reader
-  // takes for the record.
-  const w = vehicleWorld();
-  const d = straightLineM(markIn(w, SHIP).at, markIn(w, SNUG).at);
-  assert.ok(Math.abs(d - 9939) < 2, `the Snug leg measures ${Math.round(d)} m`);
-  assert.ok(Math.abs(rideMillis(d, 405) / 60000 - 17.7) < 0.2);
+test("the Snug leg is the arithmetic over a PINNED pair of anchors, not whatever the fold says today", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
+  // ⚑ THIS LEG USED TO SAY THE BRIEF WAS WRONG, AND IT WAS THE RECORD THAT WAS.
+  // The brief's § 2 says "quay → the Snug mooring ≈ 4.9 km ≈ 9 min". Written off
+  // world main 5beca99a, the fold put the Snug mooring at (-708, 9950) — 9,939 m
+  // from her berth, ~17.7 min at pace 405 — and this leg pinned that, on the
+  // reasoning that a number in a brief is what a later reader takes for the
+  // record. The 9,939 m was itself the defect: world `a7c866f1` (2026-09-20,
+  // "the Snug mooring comes home") records that the 09-14 amendment wrote the
+  // ABSOLUTE point (-358, 4972) into a PARENT-RELATIVE field, so the mooring
+  // resolved ~5 km out to sea from S71 until the repair. With `at: {-8, -6}`
+  // against the harbour it folds to (-358, 4972) — 4,949 m, 8.8 min, which is
+  // the brief's figure after all.
+  //
+  // A SYNTHETIC RECORD, so this cannot decay a second time: the two anchors are
+  // COPIED here off world `a7c866f1`, folded 2026-09-22, and the arithmetic is
+  // asserted against the copy. No live path, no date. The live fold is read in
+  // this file's stop-set and transport legs; what this one owns is the sum.
+  const RECORD = Object.freeze({           // world a7c866f1 · folded 2026-09-22
+    ship: Object.freeze({ x: -9, y: 35.5 }),   // the-town/the-post-office
+    snug: Object.freeze({ x: -358, y: 4972 }), // current-the-reader/the-snug-mooring
+  });
+  const d = straightLineM(RECORD.ship, RECORD.snug);
+  assert.ok(Math.abs(d - 4948.8) < 0.5, `the Snug leg measures ${Math.round(d)} m`);
+  assert.ok(Math.abs(rideMillis(d, 405) / 60000 - 8.8) < 0.05,
+    `the Snug leg times at ${(rideMillis(d, 405) / 60000).toFixed(2)} min`);
 });
 
 // ── the stop set ─────────────────────────────────────────────────────────────
@@ -262,9 +305,11 @@ test("a door is still entered from within its reach, and the refusal names the S
 });
 
 test("a stop is a door only where the vehicle class stands — the law gates the physics", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
-  // Against the world as it stands TODAY (no `class: vehicle` anywhere), the
-  // portal does not exist and the wharf is an ordinary mark. That is what lets
-  // this office ship ahead of the Keeping Works half.
+  // In a world with no `class: vehicle` anywhere, the portal does not exist and
+  // the wharf is an ordinary mark. That is what let this office ship ahead of
+  // the Keeping Works half — and it is still the property the gate rests on, so
+  // it is asserted against a world built to lack the class rather than against
+  // whichever world happens to lack it this week.
   const plain = plainWorld();
   const service = await serviceOf(plain);
   assert.equal(portalEntryFor(WHARF, plain, service), null);
@@ -926,11 +971,10 @@ test("the composed transport block: a vehicle world answers at a wharf, the real
   // door's reach — so since her berth became a stop it is emphatically NOT
   // "away from a stop", and the first run against the real tree said so.
   assert.equal(await transportBlock(vehicleWorld(), { x: 20000, y: 20000 }), null, "away from every stop, nothing");
-  // THE POSITIVE CONTROL'S OPPOSITE: measured live against the world as it
-  // stands today, `world_orient` and `world_open_your_eyes` at this exact point
-  // answer with NO `transport` key at all, because no mark carries
-  // `class: vehicle` yet. That is the correct answer and it is why this office
-  // half can ship ahead of the Keeping Works half.
+  // THE POSITIVE CONTROL'S OPPOSITE: in a world where no mark carries
+  // `class: vehicle`, `world_orient` and `world_open_your_eyes` at this exact
+  // point answer with NO `transport` key at all. That is the correct answer and
+  // it is why this office half could ship ahead of the Keeping Works half.
   assert.equal(await transportBlock(plainWorld(), wharf), null);
 });
 

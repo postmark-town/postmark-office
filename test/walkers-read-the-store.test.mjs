@@ -288,8 +288,20 @@ test("rows out of the record's append order REFUSE by name rather than answering
   install(unsorted);
   const read = await storedDepartures({ atMs: Date.parse("2026-09-21T00:00:00Z") });
   assert.deepEqual(read.records, []);
-  assert.match(String(read.absent), /append order|id-ascending/,
+  // ⚑ THE GUARD HAS THREE SENTENCES, ONE PER ORDER KEY, and this enumerated two
+  // of them. `world2/tools/live-reads.mjs § orderViolation` speaks in the broken
+  // key's own words: "append order" for `era`, "instant-ascending" for `instant`,
+  // "id-ascending" for `id`. The `instant` key was added by `76d36b9` (POS-154,
+  // 2026-09-21, "a departure's order is its INSTANT, never its insertion id"),
+  // on a branch beside the one that wrote this file (`fb80fca`, same day) — the
+  // two merged into the train and neither side re-read the other's assertion,
+  // so from that merge this leg called a CORRECT refusal a wrong answer. The
+  // guard never stopped refusing by name; the enumeration was short by one.
+  // The exact `instant` wording is pinned in test/backfill-departures.test.mjs.
+  assert.match(String(read.absent), /append order|instant-ascending|id-ascending/,
     `an out-of-order read answered normally: ${read.absent}`);
+  assert.match(String(read.absent), /act \d+/,
+    `the refusal named no act, so an operator cannot go and look at one: ${read.absent}`);
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
