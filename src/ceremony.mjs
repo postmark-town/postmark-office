@@ -47,8 +47,9 @@
 // — and refusing is not a degradation: a ceremony that cannot see the roll
 // cannot tell whether it is founding a house or overwriting one.
 
-import { loadRegistryRows, insertHousehold, upsertHousehold, upsertPin } from "./registry-store.mjs";
+import { loadRegistryRows, insertHousehold, upsertHousehold, upsertPin, renameHousehold } from "./registry-store.mjs";
 import { registryFromRows, pinsFromRows } from "./registry-rows.mjs";
+import { houseForAccount } from "./residency.mjs";
 import { drainRegistry } from "../tools/registry-drain.mjs";
 
 // ── THE ALPHABET ────────────────────────────────────────────────────────────
@@ -115,6 +116,15 @@ export const REFUSALS = Object.freeze({
     field: "household",
     defect: "no such household stands in the town",
     hint: "a resident joins a house that already exists. Found the house first — that is the same ceremony, one step earlier.",
+  }),
+  // POS-159. The choose-once path lets a PROVISIONAL house state its key, and
+  // "once" is the whole of the ruling: after the choice the key is immutable
+  // like everyone else's. This is the sentence the second attempt meets.
+  CHOSEN: Object.freeze({
+    code: 409,
+    field: "household",
+    defect: "this household has already chosen its key",
+    hint: "a house that was carrying a provisional key chooses its real one once, at its human's first co-sign, and the old key is kept in the record. It does not change again at a door — if the one on record is wrong, that is a person's correction and not a second declaration.",
   }),
 });
 
@@ -258,6 +268,96 @@ export async function mintHousehold({
   const rows = await loadRegistryRows(env);
   if (rows === null) throw refuse(REFUSALS.NO_RECORD);
   const registry = registryFromRows(rows);
+
+  // ── THE CHOOSE-ONCE PATH (POS-159) ────────────────────────────────────────
+  //
+  // RULED (Keemin, 2026-09-22): a house the backfill found in the roll and the
+  // registry did not hold carries a PROVISIONAL key, taken from its first
+  // resident's handle (`tools/registry-backfill.mjs`). At its human's FIRST
+  // co-sign — a declaration through this ceremony naming a real slug — it
+  // chooses its key ONCE. After that the key is immutable like everyone else's.
+  //
+  // SO THE SAME CALL MEANS TWO DIFFERENT THINGS depending on one column, and
+  // this is where the fork lives. For an account with no house, or with a house
+  // that chose its own key at a declaration, nothing below changes: a taken
+  // slug is `TAKEN` and a free one is a new house. For an account whose house
+  // is provisional, a free lawful slug RENAMES that house rather than founding
+  // a second one — which is the whole point. Minting here would leave the
+  // resident in two households, one of which nobody can find, and no pen in
+  // this store holds DELETE to clean it up afterwards.
+  //
+  // THE ACCOUNT IS THE DECIDER, not the slug. `houseForAccount` matches on the
+  // immutable GitHub id (login only where a row carries no id at all —
+  // `src/residency.mjs § accountMatches`), so the house that renames is the
+  // house this verified human already co-signs for, and no caller can rename
+  // somebody else's by naming it. An account that stands in nobody's house
+  // falls straight through to the ordinary mint.
+  const standing = houseForAccount(registry, coSign.ghId, coSign.ghLogin);
+  const standingRow = standing ? rows.households.find((r) => r.slug === standing) ?? null : null;
+
+  if (standingRow?.provisional === true) {
+    // THE SLUG MUST STILL BE FREE. A provisional house choosing a key somebody
+    // else holds is the same collision as any other, and it gets the same
+    // sentence — the ruling gives a house one choice, not a claim on the roll.
+    // Choosing the key it ALREADY carries is not a collision: that is a house
+    // saying "this borrowed name is the one, keep it", and the answer is to
+    // stop calling it borrowed rather than to refuse.
+    const confirmingItsOwn = key === standing;
+    if (!confirmingItsOwn && registry.households?.[key]) throw refuse(REFUSALS.TAKEN, key);
+
+    // THE OLD KEY IS KEPT, NOT DROPPED (migration 020's whole reason). Every
+    // reference the town has made to this house so far used the provisional
+    // key, and `formerly` is the one place an old key lives. A house
+    // confirming its own key appends nothing: it never had a different one.
+    const wasFormerly = standingRow.formerly ?? [];
+    const renamed = await renameHousehold({
+      from: standing,
+      to: key,
+      formerly: confirmingItsOwn ? [...wasFormerly] : [...wasFormerly, standing],
+      provisional: false,
+      // A declaration that states a name states it; one that does not leaves
+      // the borrowed nameplate standing rather than clearing it.
+      name: name?.trim() || standingRow.name || null,
+    }, env);
+    // `null` = the record went out of reach between the read and the write, or
+    // the row moved under us. Neither is a thing to paper over: the house did
+    // not choose, and the ceremony says so in its own words.
+    if (renamed === null) throw refuse(REFUSALS.NO_RECORD);
+
+    const row = {
+      ...standingRow,
+      slug: key,
+      ord: renamed.ord,
+      name: name?.trim() || standingRow.name || null,
+      formerly: confirmingItsOwn ? [...wasFormerly] : [...wasFormerly, standing],
+      provisional: false,
+    };
+    const drained = await drain({ env, ...drainOptions });
+    logRefusedDrain(`mintHousehold(${standing} -> ${key})`, drained);
+    return { slug: key, row, chose: { from: standing, confirmed: confirmingItsOwn }, drained, registry: drainOutcome(drained) };
+  }
+
+  // ONCE, AND THE MARKER IS THE RECORD'S OWN. A house that came through the
+  // path above is no longer provisional and carries its provisional key in
+  // `formerly`, so that pair IS "this house has chosen" — read off the row
+  // rather than remembered in a second table.
+  //
+  // NAMED NARROWLY ON PURPOSE. The obvious wider rule — "an account already in
+  // a house does not found another" — is NOT the rule here, and must not
+  // become it by accident: a founder seeding an existing account's siblings
+  // does exactly that, and `test/join-ceremony.test.mjs`'s gapped-ord falsifier
+  // mints a second house for an account it has just joined to a first. This
+  // clause fires only where a key was already chosen once.
+  //
+  // THE ONE OVERLAP, STATED RATHER THAN HIDDEN: a founder ceremony that wrote
+  // `formerly` by hand (020's other named writer, a rename when one is ruled)
+  // puts a house in the same shape, and its account would meet this refusal
+  // too. 0/118 live rows carry `formerly` — measured twice, a day apart — so
+  // nothing standing is affected, and the day a founder rename exists it wants
+  // this conversation rather than this silence.
+  if (standingRow && (standingRow.formerly ?? []).length)
+    throw refuse(REFUSALS.CHOSEN, `${standing} already chose its key over \`${(standingRow.formerly ?? []).join("`, `")}\``);
+
   if (registry.households?.[key]) throw refuse(REFUSALS.TAKEN, key);
 
   // `ord` IS THE DATABASE'S TO ASSIGN, not this function's (review 4/6). It
@@ -277,6 +377,10 @@ export async function mintHousehold({
     member_of: memberOf,
     declared_by: declaredBy,
     formerly: [...formerly],
+    // A house minted HERE is a house somebody just named, so its key is chosen
+    // by construction. `provisional` is written true in exactly one place and
+    // this is not it (`tools/registry-backfill.mjs`, migration 021's header).
+    provisional: false,
   };
 
   // THE INSERT ANSWERS WITH THE PLACE IT CHOSE, so a caller can say where the
@@ -349,7 +453,8 @@ export async function joinHousehold({
   // that leaves a gap, and from that moment the two numbers part company — and
   // the wrong one would silently move somebody's house. The row carries the
   // answer; nothing else needs to.
-  const ord = Number(rows.households.find((r) => r.slug === key).ord);
+  const standingRow = rows.households.find((r) => r.slug === key);
+  const ord = Number(standingRow.ord);
 
   const residents = [...new Set([...(rec.residents ?? []), h])];
 
@@ -373,6 +478,18 @@ export async function joinHousehold({
     member_of: rec.member_of ?? null,
     declared_by: rec.declared_by,
     formerly: rec.formerly ?? [],
+    // READ OFF THE ROW, NOT OFF THE FOLDED REGISTRY. `registryFromRows` renders
+    // `provisional: false` as NO KEY AT ALL (021, the same rule `formerly` and
+    // a NULL `name` already take), so `rec.provisional` is `undefined` for
+    // every house that ever declared — and `undefined` reaching a
+    // `boolean NOT NULL` column is a failed write inside a ceremony that has
+    // already told a resident they were admitted. The row carries the answer;
+    // the rendering deliberately does not.
+    //
+    // AND A RESIDENT JOINING DOES NOT CHOOSE A KEY. A provisional house gaining
+    // a member stays provisional: the choice is the HUMAN's co-sign at the
+    // mint, not an admission.
+    provisional: standingRow.provisional === true,
   }, env);
 
   // THE PIN IS NEVER RE-BOUND HERE. A handle the pin file already names has an

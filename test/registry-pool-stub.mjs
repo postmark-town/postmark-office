@@ -93,6 +93,7 @@ export function makePool(seed) {
           slug: params[0], ord, name: params[1], human: params[2],
           accounts: JSON.parse(params[3]), residents: params[4] ?? [], since: params[5],
           member_of: params[6], declared_by: params[7], formerly: params[8] ?? [],
+          provisional: params[9] === true,
         };
         if (state.households.some((r) => r.slug === row.slug))
           throw new Error(`duplicate key value violates unique constraint "households_pkey"`);
@@ -105,6 +106,7 @@ export function makePool(seed) {
           slug: params[0], ord: Number(params[1]), name: params[2], human: params[3],
           accounts: JSON.parse(params[4]), residents: params[5] ?? [], since: params[6],
           member_of: params[7], declared_by: params[8], formerly: params[9] ?? [],
+          provisional: params[10] === true,
         };
         const at = state.households.findIndex((r) => r.slug === row.slug);
         if (at >= 0) state.households[at] = row; else state.households.push(row);
@@ -119,6 +121,23 @@ export function makePool(seed) {
         const at = state.pins.findIndex((r) => r.handle === row.handle);
         if (at >= 0) state.pins[at] = row; else state.pins.push(row);
         return { rows: [] };
+      }
+      // THE CHOOSE-ONCE UPDATE (POS-159). A rename is an UPDATE because no pen
+      // in this store holds DELETE and `slug` is the primary key. The stub
+      // answers it the way the statement does: zero rows when nothing held the
+      // old key, and the row's own `ord` — untouched — when one did.
+      if (/^\s*UPDATE households/.test(text)) {
+        state.writes.households++;
+        const [to, formerly, provisional, name, from] = params;
+        const at = state.households.findIndex((r) => r.slug === from);
+        if (at < 0) return { rows: [] };
+        if (to !== from && state.households.some((r) => r.slug === to))
+          throw new Error(`duplicate key value violates unique constraint "households_pkey"`);
+        state.households[at] = {
+          ...state.households[at], slug: to, formerly: formerly ?? [],
+          provisional: provisional === true, name: name ?? null,
+        };
+        return { rows: [{ slug: to, ord: state.households[at].ord }] };
       }
       if (/FROM households/.test(text))
         return { rows: [...state.households].sort((a, b) => a.ord - b.ord).map((r) => ({ ...r, ord: Number(r.ord) })) };

@@ -145,6 +145,11 @@ const ROSTER = {
   // same "stops at the tool's first refusal" shape as the rest of this roster.
   // NO_PG on top of that, so a regression that reached for a connection fails
   // on the connection rather than quietly finding one.
+  // POS-159's third, on the same shape and for the same reason it matters
+  // MORE here than anywhere: a backfill whose entry guard is defeated by a
+  // junction exits 0 having read no roll and written no row, which is
+  // indistinguishable from the correct answer on today's town (0 planned).
+  "tools/registry-backfill.mjs": { args: [], env: NO_PG, code: 1, needle: "pass exactly one of --dry-run or --apply" },
   "tools/registry-drain.mjs": { args: [], env: NO_PG, code: 1, needle: "pass exactly one of --check, --apply or --ingest-missing" },
   "tools/registry-seed.mjs": { args: [], env: NO_PG, code: 1, needle: "pass exactly one of --dry-run or --apply" },
   "tools/settle-anchored-berths.mjs": { args: ["--clone", NOWHERE], code: 1, needle: "not a town checkout" },
