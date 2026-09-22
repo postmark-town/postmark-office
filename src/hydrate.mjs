@@ -223,6 +223,15 @@ if (existsSync(stampTool) && existsSync(stampLedger)) {
     for (const [pot, rs] of f.receiptsByPot) for (const r of rs) insRcpt.run(pot, r.rail, r.usd, r.date, r.receipt, r.from);
     const insEsc = db.prepare("INSERT INTO pot_escrow (pot, staked) VALUES (?, ?)");
     for (const [pot, n] of f.potEscrow) insEsc.run(pot, n);
+    // The same escrow, keyed by who holds it. potEscrowByHandle is the fold's
+    // OWN second key — not a re-derivation here — so no netting rule is
+    // restated and the per-staker rows cannot drift from the pot total. The
+    // fold has already dropped every zero (a closed position is not a stake);
+    // `n > 0` is belt-and-braces for a malformed ledger that returned more than
+    // it staked, where a negative row would otherwise break the sum-equality
+    // this table's whole worth rests on.
+    const insStaker = db.prepare("INSERT INTO pot_stakers (pot, handle, staked) VALUES (?,?,?)");
+    for (const [handle, mine] of f.potEscrowByHandle) for (const [pot, n] of mine) if (n > 0) insStaker.run(pot, handle, n);
     invalid.push(...f.invalid);
   }
   const potsRead = readPots(TOWN);

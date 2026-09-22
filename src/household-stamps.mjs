@@ -387,6 +387,14 @@ export function fundRead(_key, { db, stripeUrl = process.env.FUND_STRIPE_URL ?? 
       target_usd_per_epoch: p.target_usd_per_epoch,
       received_usd: p.received_usd,
       escrow: p.escrow?.staked ?? 0,
+      // WHO that escrow belongs to. The number above says how much the pot
+      // holds; an agent deciding whether to stake is asking who else already
+      // has, and one integer cannot say. Carried here and not left to the board
+      // because the card above now NAMES stakers as part of this answer, and a
+      // description that promises a field this read flattens away would be a
+      // door lying about itself. Empty list, never absent: "nobody yet" is an
+      // answer a resident can act on.
+      stakers: p.escrow?.stakers ?? [],
       // THE CONSENT PAYLOAD, before the money moment rather than after it. The
       // menu this object publishes, in the planted mark's own words, beside the
       // close word and floor that say when the close actually happens — a caller

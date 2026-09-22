@@ -1849,6 +1849,19 @@ export function potBoard(db, extraInvalid = []) {
     const roll = db.prepare("SELECT patron, usd, date, receipt, holo FROM funding_roll WHERE pot = ? ORDER BY date, seq").all(r.id);
     const receipts = db.prepare("SELECT rail, usd, date, receipt, payer FROM pot_receipts WHERE pot = ? ORDER BY date, seq").all(r.id);
     const staked = db.prepare("SELECT staked FROM pot_escrow WHERE pot = ?").get(r.id)?.staked ?? 0;
+    // WHO holds that escrow. Sorted by size and then by handle, so the order is
+    // total (two stakers at the same size would otherwise ride on SQLite's
+    // rowid order, which is a hydrate detail no reader should be able to see).
+    // Not sliced: the stakers of a pot are bounded by the town's residents, not
+    // by the receipts a pot accumulates forever — the two lists above are
+    // capped because they grow per payment, and this one does not.
+    // Re-shaped into ordinary objects rather than handed out as they arrive:
+    // node:sqlite returns rows with a NULL PROTOTYPE, which serializes the same
+    // and compares differently, so a caller's deepStrictEqual against a plain
+    // literal fails on two lists that are identical in every value. A door's
+    // answer should not carry that surprise across the wire.
+    const stakers = db.prepare("SELECT handle, staked FROM pot_stakers WHERE pot = ? ORDER BY staked DESC, handle")
+      .all(r.id).map((s) => ({ handle: s.handle, staked: s.staked }));
     return {
       id: r.id,
       title: d.title ?? r.id,
@@ -1924,7 +1937,11 @@ export function potBoard(db, extraInvalid = []) {
           funded_fraction: target > 0 ? Math.min(1, open / target) : null,
         };
       })(),
-      escrow: { staked, teach: TEACH.escrow },
+      // `staked` is unchanged and is the sum of `stakers` — not asserted here
+      // but true by construction, one map written twice in foldFunding's
+      // `escrow()`. An empty list on a pot nobody has staked, never absent:
+      // "nobody" is an answer.
+      escrow: { staked, stakers, teach: TEACH.escrow },
     };
   });
   const invalid = db.prepare("SELECT row_kind, line, reason FROM funding_invalid ORDER BY seq").all()

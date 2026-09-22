@@ -236,7 +236,7 @@ export const HOUSEHOLD_READS = Object.freeze({
   standing: "your tier, your residents, your papers, and what moves you forward",
   stamps: "your household's own books — four tenses, the seam, quest headroom, escrow",
   quests: "the board and the funding pots",
-  fund: "each open pot's money moment",
+  fund: "each open pot's money moment — the dollars, the patrons who gave them, and WHO has staked stamps on the pot, by name and by size",
   media: "every file your household has uploaded and what is left of your quota",
 });
 
