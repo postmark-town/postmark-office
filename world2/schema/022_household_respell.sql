@@ -22,6 +22,42 @@
 -- The LEDGER's lines and the WORLD's marks are the history that keeps its
 -- spellings. Nothing here touches either.
 --
+-- ── AND `acts` IS NOT ONE OF THOSE ROWS. IT IS THE HISTORY ──────────────────
+--
+-- This file used to carry a third UPDATE, over `acts`. It cannot run and it
+-- must not run, and both halves of that are worth writing down.
+--
+-- IT CANNOT. `002_grants.sql` builds `forbid_mutation()` and arms it:
+--
+--   CREATE TRIGGER acts_append_only
+--     BEFORE UPDATE OR DELETE ON acts
+--     FOR EACH ROW EXECUTE FUNCTION forbid_mutation();
+--
+-- MEASURED on the dev sandbox 2026-09-22: the FIRST run of this file was
+-- silent, because the alias table was empty and the UPDATE matched nothing. The
+-- SECOND run — once 019's registry was seeded and the map had rows — raised
+--
+--   ERROR: acts is append-only (World 2.0 rule: an act is never edited)
+--
+-- and took the whole transaction with it, so `claims` and `marks` were rolled
+-- back too. Prod would have refused it in exactly the same words at the ship,
+-- with the migration's real work undone alongside.
+--
+-- IT MUST NOT, which is the half that matters more. This file's own third
+-- paragraph says it: "earlier lines keep their spellings, because history is
+-- not rewritten." `acts` is that history. A claim's `household` is CURRENT
+-- STATE with a live string-equality reader (007's `claims_read`); an act's
+-- `household` is a record of what a door was told on a day, and re-spelling it
+-- would make the log say something nobody said. Nothing needs it re-spelled:
+-- `src/household-deriver.mjs § resolveHouse` resolves any old spelling ON READ,
+-- which is the whole reason POS-160 built a deriver rather than a rewrite. The
+-- BEFORE and AFTER blocks below keep `acts` as a READ for exactly this reason —
+-- the operator sees the old spellings still standing, and sees that they stayed.
+--
+-- The rule is stated ONCE for every migration, not just this one:
+-- `test/registry-grants.test.mjs` parses every file in `world2/schema/` and
+-- reds on any `UPDATE acts` or `DELETE FROM acts` anywhere in it.
+--
 -- ── IT RUNS BETWEEN THE DEPLOY AND THE FIRST CROSSING ───────────────────────
 --
 -- wright-ship-week § 4.3b: a store backfill that waits on a shipped reader runs
@@ -73,6 +109,9 @@
 --                     `identities`, which is POS-160's second STOP (the
 --                     law-ingest projection) and is not this ship's.
 --   `identities`      the same: `law_ingester` owns every row of it.
+--   `acts`            the history itself, append-only by trigger and by rule.
+--                     Read in every receipt block below, written in none.
+--                     § AND `acts` IS NOT ONE OF THOSE ROWS has the whole of it.
 --
 -- ── IDEMPOTENT ──────────────────────────────────────────────────────────────
 --
@@ -152,10 +191,11 @@ SELECT t, household, n FROM (
 -- tables' owner and is not subject to its own policies unless FORCE is set, and
 -- 007 sets no FORCE. Stated rather than assumed, because a policy silently
 -- filtering an UPDATE would leave a half-respelled store that reads as done.
-UPDATE acts t SET household = 'hh:' || m.slug
-  FROM household_alias m
- WHERE t.household = m.alias AND t.household <> 'hh:' || m.slug;
-
+--
+-- TWO TABLES, AND `acts` IS DELIBERATELY NOT THE THIRD — see § AND `acts` IS
+-- NOT ONE OF THOSE ROWS above. `claims` and `marks` are what a string-equality
+-- policy reads for the CURRENT tense; the act log is history and the deriver
+-- reads its old spellings.
 UPDATE claims t SET household = 'hh:' || m.slug
   FROM household_alias m
  WHERE t.household = m.alias AND t.household <> 'hh:' || m.slug;
@@ -170,23 +210,39 @@ SELECT 'acts'   AS t, household, count(*) FROM acts   WHERE household IS NOT NUL
 SELECT 'claims' AS t, household, count(*) FROM claims WHERE household IS NOT NULL GROUP BY 2 ORDER BY 3 DESC LIMIT 20;
 SELECT 'marks'  AS t, household, count(*) FROM marks  WHERE household IS NOT NULL GROUP BY 2 ORDER BY 3 DESC LIMIT 20;
 
-\echo '── 022 · every spelling that is not hh: or solo: (should be empty) ──'
+-- THE TWO RESPELLED TABLES ONLY. `acts` is not here because `acts` was not
+-- touched: its old spellings are SUPPOSED to be standing, and listing them
+-- under a heading that says "should be empty" would turn history-kept-as-
+-- designed into a red the operator has to talk themselves out of at 05:45.
+\echo '── 022 · claims/marks spellings that are not hh: or solo: (should be empty) ──'
 SELECT t, household, n FROM (
-  SELECT 'acts'   AS t, household, count(*) AS n FROM acts   WHERE household IS NOT NULL GROUP BY 2
-  UNION ALL SELECT 'claims', household, count(*) FROM claims WHERE household IS NOT NULL GROUP BY 2
+  SELECT 'claims' AS t, household, count(*) AS n FROM claims WHERE household IS NOT NULL GROUP BY 2
   UNION ALL SELECT 'marks',  household, count(*) FROM marks  WHERE household IS NOT NULL GROUP BY 2
 ) v
  WHERE household NOT LIKE 'hh:%' AND household NOT LIKE 'solo:%'
  ORDER BY n DESC;
 
+-- And the act log's own spellings, counted rather than corrected, so the
+-- operator sees WHAT STAYED and can check it against the BEFORE block. A
+-- non-zero count here is the migration working, not the migration failing.
+-- `src/household-deriver.mjs § resolveHouse` is what reads these.
+\echo '── 022 · acts: history keeps its spellings (NOT empty, and not a fault) ──'
+SELECT 'acts' AS t, household, count(*) AS n FROM acts
+ WHERE household IS NOT NULL AND household NOT LIKE 'hh:%' AND household NOT LIKE 'solo:%'
+ GROUP BY 2 ORDER BY 3 DESC;
+
 COMMIT;
 
 -- ── HOW TO PROVE IT LANDED (there is no migrations table in this store) ─────
 --
---   -- no row in the three tables still wears a credential key
---   SELECT count(*) FROM acts   WHERE household LIKE 'gh:%';   -- 0
+--   -- no row in the two RESPELLED tables still wears a credential key
 --   SELECT count(*) FROM claims WHERE household LIKE 'gh:%';   -- 0
 --   SELECT count(*) FROM marks  WHERE household LIKE 'gh:%';   -- 0
+--
+--   -- and the act log still wears its own, which is the design and not a miss.
+--   -- Take this count BEFORE too: it must be UNCHANGED, because an act is
+--   -- never edited (002_grants.sql's `acts_append_only`).
+--   SELECT count(*) FROM acts   WHERE household LIKE 'gh:%';   -- unchanged
 --
 --   -- and a resident can still see their own drafts, which is the whole point
 --   BEGIN;
