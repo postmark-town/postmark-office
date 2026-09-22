@@ -700,11 +700,57 @@ one line, named below.
 | `postmark-world2-ingest.timer` | `world2-ingest.sh` → `law-ingest.mjs` + `stamp-ingest.mjs` | **PARKED** since 2026-08-31 — the stamp pen's unit now (below) |
 | `postmark-world2-law-ingest.timer` | `world2-ingest.sh law` → `law-ingest.mjs` only | every 15 min, :04/:19/:34/:49 |
 | `postmark-world2-notary.timer` | `world2-notary.sh` → `snapshot-export.mjs` + `falsifier-canon-locks.mjs` (postmark#2594, nightly — the section below) | 07:20 UTC (office#83, from 03:20) |
-| `postmark-world2-backup.timer` | `world2-backup.sh` → `pg_dump` + ship, `pg_basebackup` | 08:10 UTC (office#83, from 04:10) |
+| `postmark-world2-backup.timer` | `world2-backup.sh` → `pg_dump` + ship, `pg_basebackup`, **and `roles.db`** (POS-185) | 08:10 UTC (office#83, from 04:10) |
 
 All five carry rows in `deploy/box-rollcall-manifest.json`. `world2-restore-rehearse.sh`
 is a hand-run, deliberately: it drops and recreates a database, and nothing that
 does that belongs on a clock.
+
+**The backup lane also carries `roles.db` since POS-185 (2026-09-21)**, and it is
+the only file in that commit that is not the world store. It is there because
+`src/roles.mjs:71-82` says so in its own voice and then declines to act on it,
+correctly — the module states the gap, operations decides the discipline:
+
+> `roles.db` … lives on the box and nowhere else. It is NOT the same durability
+> class as its neighbours: `office.db` and `world.db` are pure indexes, deleted
+> and rebuilt whole from a clone; `oauth.db` is auth paperwork whose loss only
+> forces everyone to sign in again; `dynamic.db` carries an explicit covenant
+> that every row re-derives or recovers from a crossing-save. This file carries
+> NO such covenant, because a grant exists nowhere else in the world — no repo
+> holds it, no fold recomputes it. **Losing `roles.db` loses who paid.**
+
+Three things about how it rides, each of which is the answer to a question the
+next reader will have:
+
+- **It is copied with `VACUUM INTO`, never `cp`.** A SQLite file copied while a
+  writer is mid-transaction is torn — it has the size and the magic bytes of a
+  database and restores as nothing. `VACUUM INTO` takes a read transaction and
+  emits a self-consistent database whatever the office is doing at 08:10.
+- **Through node's `node:sqlite`, not the `sqlite3` CLI**, so the box gains no
+  new package: the office already imports `DatabaseSync` to serve the gate
+  (`src/roles.mjs:141`, `src/server.mjs:36`). The handle is opened **read-only**
+  — `VACUUM INTO` writes only to the target — so the backup lane never holds a
+  pen over who paid.
+- **No new unit, no new credential, no new roll-call row.** Same timer, same
+  private repo, same deploy key, and the `postmark-world2-backup.timer` row's
+  receipt now carries `roles_status`, `roles_db_bytes` and `role_audit_rows`.
+  `roles_status: absent` is legal and does not redden: `OFFICE_ROLE_GATES` is
+  unset on every office today (`src/server.mjs:170`), so a box that has never
+  granted a role has no file to copy. A file that exists and *cannot* be copied
+  exits 1.
+
+**Restoring it is a file copy**, which is the whole restore path:
+
+```
+cp roles/<newest>.db /srv/postmark-office/roles.db   # the office opens it at boot
+```
+
+`world2-restore-rehearse.sh` counts the shipped copy's `role_audit` against the
+live registry on every rehearsal, under the same drift rule as the Postgres
+tables: the live side may have gained rows (the town kept selling), but the copy
+holding MORE rows than live cannot be explained by the clock and is the finding.
+Prefer `--from-remote`, which reads the copy out of the off-box clone rather than
+the box's own disk — the local one only proves the copier ran.
 
 ### The law pen keeps its own clock (2026-09-19, postmark#2893)
 
