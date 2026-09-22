@@ -75,7 +75,12 @@
 import { openDynamic, openDynamicReadOnly, singleLogEnabled } from "./dynamic-store.mjs";
 import { WORLD_CLONE } from "./world-store.mjs"; // the standing-scoped inbox door defaults to the office's own world checkout
 import { worldFreezeBounce } from "./freeze.mjs";
-import { appendActFlipped, appendJournal, laneFlipped, liveMarks, readJournal } from "./world-journal.mjs";
+import { appendActFlipped, appendJournal, laneFlipped, readJournal } from "./world-journal.mjs";
+// `stanceQuery` is the stance read's OWN credential (`stance_reader`), and the
+// only place in `src/` that is not `office_api`. It lives beside `actsQuery` so
+// the office learns "pool" once per table — see world2-acts.mjs § THE STANCE
+// READ'S OWN CREDENTIAL.
+import { stanceQuery } from "./world2-acts.mjs";
 import { mainRef, materializeAtRef, publishedState, resolvedWorldHousehold } from "./world-branches.mjs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -422,88 +427,151 @@ export function standingStances(rows, { by = null } = {}) {
 
 // ── reading the world this door needs ────────────────────────────────────────
 
+// ── THE NARROW READ'S COLUMN LIST (POS-195, 2026-09-22) ─────────────────────
+//
+// `claims.body` IS DELIBERATELY ABSENT, and its absence is the security
+// property this whole lane is built on. `stance_reader` HOLDS `SELECT` on the
+// table — 023's policy is `USING (true)`, because "overlaps ground you hold" is
+// the world engine's answer and not a predicate this table can state — so the
+// narrowing has to live somewhere the store cannot do it, and this is where.
+// A draft's text is never fetched, so no downstream caller can re-expose it by
+// forgetting a filter, and no future field added to a shared shaper can carry it
+// along. Add a column here and you are widening a carve; 023's header says so
+// and `falsifier-draft-privacy.mjs § the stance carve` reds if you do.
+//
+// EVERY FIELD IS `claims`' OWN. There is no join: `at` and `extent` are keys of
+// the row's `geometry` jsonb, `kind` and `date` keys of its `data` spill, which
+// is why 023 grants SELECT on one table and names no other.
+//
+// `stake` is NOT read. "Weight" in the ruling is the mark's EXTENT — the ground
+// it covers, which is what `groundFor` weighs — and no stance arm has ever
+// carried a stake. An unread column would be a widening bought for nothing.
+const STANCE_CLAIM_SELECT = `
+  SELECT slug,
+         claimant,
+         status,
+         geometry -> 'at'      AS at,
+         geometry -> 'extent'  AS extent,
+         data ->> 'kind'       AS kind,
+         data ->> 'date'       AS date,
+         data ->> 'by'         AS declared_by
+    FROM claims
+   WHERE status = ANY($1)
+   ORDER BY slug`;
+
+// The same two statuses `guard-reads.mjs § LIVE_STATUSES` reads, spelled here
+// rather than imported: `world2/tools/` is the port's own tree and `src/` does
+// not reach into it. `held_review` is excluded for the reason that file records
+// under "Unruled, and teed rather than guessed" — it has no 1.0 counterpart and
+// there are zero rows of it today.
+const LIVE_CLAIM_STATUSES = Object.freeze(["draft", "pending"]);
+
+/**
+ * One `claims` row → the candidate record the stance arms read.
+ *
+ * `published: false` is TOLD, not assumed, exactly as the 1.0 arm told it: a row
+ * in `claims` at draft or pending has not been through a settlement, so it is
+ * not canon. Canon overwrites these by id in `worldForStances`.
+ *
+ * `by` is the DECLARED author, falling back to the claimant column and then to
+ * the id's own first segment — 1.0's own derivation (`p.by ?? id.split("/")[0]`),
+ * kept because `groundFor` refuses a mark as its own ground on this field and a
+ * wrong answer there would let a resident welcome themselves onto their own
+ * parcel.
+ */
+function stanceCandidateOf(row) {
+  const id = row?.slug;
+  if (!id) return null;
+  return {
+    id,
+    by: row.declared_by ?? row.claimant ?? String(id).split("/")[0],
+    kind: row.kind ?? null,
+    at: row.at ?? null,
+    extent: row.extent ?? null,
+    date: row.date ?? null,
+    // ⚠ NOT `row.body`. There is no `row.body` — see § THE NARROW READ'S COLUMN
+    // LIST. The empty string keeps `candidatesFrom`'s shape unchanged for every
+    // caller; `ambientLine` omits the key rather than publishing an empty
+    // sentence.
+    body: "",
+    published: false,
+  };
+}
+
 /**
  * The marks a caller may weigh in about, and the ones they hold.
  *
  * Canon is `publishedState` (one cached JSON read at a ref). The live layer is
- * the journal's own marks across households — and that is the ONE place a
+ * the store's own live claims across households — and that is the ONE place a
  * sketch becomes visible to somebody who did not write it. It is narrow by
  * construction: `candidatesFrom` only ever surfaces a mark that overlaps ground
  * the caller already holds, so nobody learns about a sketch anywhere else in
  * town. The-late-welcome is what asks for it ("a stance may arrive after the
  * sketch and before the publish"), and without it the crossing would have no
- * stance to read when it judges. Flagged for the founder in the handback rather
- * than left for a reader to discover.
+ * stance to read when it judges.
  */
-// ── THIS ARM IS A G1 BLOCKER, AND THE 2.0 READ IS A MIGRATION (POS-195, 2026-09-22) ──
+// ── THE NARROW 2.0 READ, BUILT (POS-195 / DEC-14, RULING 2, 2026-09-22) ──────
 //
-// DEC-14 (runbook, ruled 2026-09-03) has two halves. The standing half holds and
-// is not in question: "leave `worldForStances` on the 1.0 read permanently". The
-// scheduled half — "give the stance candidate list its own narrow 2.0 read that
-// may see overlapping drafts across households, built when G2's read deletions
-// need it" — was measured here, and its own note ("Blocks nothing today") is no
-// longer true. G1 removes the journal INSERT, which is this arm's source, and G1
-// comes BEFORE G2.
+// This arm read the sqlite journal until 2026-09-22. It now reads the store,
+// through `stance_reader` — a credential that exists for this one function.
 //
-// WHY IT CANNOT SIMPLY BE PORTED, measured on the tip and not inferred. The road
-// exists and is right — `guardedLiveMarks` → `officeRead` → `pgLiveMarks` over
-// `claims`, and every field this function maps is there. What is missing is the
-// PERMISSION, and DEC-14's clause is a grant, not a query shape:
+// WHAT WAS IN THE WAY, and why the port needed a migration rather than a wire.
+// DEC-14 (runbook, ruled 2026-09-03) gave this list "its own narrow 2.0 read
+// that may see overlapping drafts across households" and judged it "blocks
+// nothing today". G1 removes the journal INSERT that was this arm's source, and
+// G1 comes before G2, so that note stopped being true. The 2026-09-22
+// measurement then found the road right and the PERMISSION absent: a private
+// draft's only row in the store is `claims` at status 'draft', 007's
+// `claims_read` binds PUBLIC with no `TO` clause, RLS is ENABLE so only
+// `world2_owner` escapes it, 002 bars that role from runtime, and there is no
+// `SECURITY DEFINER` and no `BYPASSRLS` anywhere in `world2/`. Not unwired —
+// unrepresentable. RULING 2 made the law; `world2/schema/023_stance_reader.sql`
+// is it, and that file's header carries the argument.
 //
-//   · a private draft's ONLY row in the store is `claims` at `status = 'draft'`,
-//     and 007's `claims_read` carries no `TO` clause, so it binds PUBLIC. RLS is
-//     ENABLE, not FORCE, so only `world2_owner` escapes it — and 002 bars that
-//     role from runtime ("migrations only").
-//   · there is no `SECURITY DEFINER` function and no `BYPASSRLS` role anywhere
-//     in `world2/`. Grepped, zero hits each.
-//   · `acts` cannot answer instead, deliberately: an unstaked draft's act is
-//     deferred into `claims.data._deferred_act` (world2-claims.mjs) and never
-//     reaches `acts` — "the whole of Phase 5.6's promise", one file over.
+// ── THE BODY IS NOT FETCHED, WHICH IS STRONGER THAN NOT RETURNED ────────────
 //
-// So the narrow read wants a `world2/schema/` migration (a definer function over
-// the caller's ground, or a policy admitting overlap-scoped drafts) plus 003's
-// grant row plus a stated carve in Phase 5.6's leak falsifier. That is law-tier
-// by 007's own header, and it must land BEFORE the journal INSERT goes.
+// The ruling: "the derivation's OUTPUT carries what the 1.0 read carries today
+// — a candidate's existence, standing and weight — never a draft's body."
 //
-// WHAT STANDS GUARD MEANWHILE, so the next lane does not have to re-find it.
-// Flip-proved 2026-09-22: replace this live block with `if (false)` and exactly
-// three falsifiers go red, all in `test/world-stance.test.mjs` —
+// ⚠ MEASURED, AND IT IS A BEHAVIOUR CHANGE, NOT A PRESERVATION. The 1.0 read
+// DID carry the body: `candidatesFrom` copied `body` onto every candidate, tier
+// 2 published a 120-character excerpt as `says`, and tier 3's page carried the
+// body WHOLE and untruncated. So a resident could read another household's
+// unstaked sketch, in full, at `read: "declare-stance-on"`. The ruling's own
+// apposition reads that as already-narrow and it was not. Reported to Wright as
+// this lane's STOP; built the way the ruling's operative clause says, because
+// "never a draft's body" is the half a falsifier can hold and the half the
+// sentinel test asserts.
 //
-//   :442  the-late-welcome — an UNPUBLISHED sketch on your ground is a candidate
-//   :352  TIER 2 — the ambient block is capped at ~3 and says how many more
-//   :368  TIER 3 — the shadow is the full inbox, PAGINATED, plus your standing
+// `stanceQuery`'s column list does not include `claims.body`. The draft's text
+// is not filtered out downstream — it is never read out of the store, so there
+// is no path by which a future caller re-exposes it by forgetting a filter.
+// A CANON mark keeps its body: it is published, every resident may read it, and
+// the teaching block (`lateWelcome`) is one of those bodies.
 //
-// 98 of 101 stayed green, so the three are this arm's own. Deleting this block
-// cannot be silent; deleting it TOGETHER WITH those tests can be, and that is
-// the one move to refuse. Measurement: docs/2026-09-22/rail/pos-195 (Starstory).
-export function worldForStances(repo, { dbPath = null } = {}) {
+// ── ABSENT CREDENTIAL IS `unreachable`, NEVER THE JOURNAL ───────────────────
+//
+// There is no fallback arm. `WORLD2_STANCE_URL` unset, or a store that will not
+// answer, returns `{ unreachable }` and every tier says so — `stanceInbox` turns
+// it into its own `unavailable`, which tiers 1, 2 and 3 already render. A read
+// that answered `[]` instead would tell a resident nothing awaits their word
+// while a sketch sat on their ground, which is the exact failure the-late-welcome
+// exists to prevent.
+export async function worldForStances(repo, { dbPath: _dbPath = null, env = process.env } = {}) {
   const canon = publishedState(repo).state?.marks ?? [];
-  let live = [];
-  if (singleLogEnabled()) {
-    // `openDynamicReadOnly` rather than `openDynamic(…, { readOnly: true })`:
-    // G3 centralised "may a read write" on this train and these were the tenth
-    // and eleventh call sites of the rule it centralised. The new opener returns
-    // NULL for an absent store where the old one threw, so the absence is a
-    // value the caller handles rather than an exception it catches — same
-    // behaviour, one answer instead of eleven. The `try` stays for a store that
-    // exists and is corrupt, which still throws.
-    try {
-      const db = openDynamicReadOnly(dbPath ?? undefined);
-      if (db) {
-        try {
-          live = liveMarks(db, { household: undefined })
-            .filter((m) => m.at && m.extent)
-            .map((m) => ({ id: m.id, by: m.by, kind: m.kind, at: m.at, extent: m.extent, date: m.date, body: m.body ?? "", published: false }));
-        } finally { try { db.close(); } catch { /* already gone */ } }
-      }
-    } catch { /* no live layer → canon alone is an honest world to weigh */ }
-  }
+  const answer = await stanceQuery(STANCE_CLAIM_SELECT, [LIVE_CLAIM_STATUSES], env);
+  if (answer.unreachable) return { unreachable: answer.unreachable };
+
+  const live = answer.rows
+    .map(stanceCandidateOf)
+    .filter((m) => m && m.at && m.extent);
+
   // Canon wins an id collision: a drained draft is in both, and the published
   // copy is the one everybody else can see.
   const byId = new Map();
   for (const m of live) byId.set(m.id, m);
   for (const m of canon) if (m?.id) byId.set(m.id, { ...m, published: true });
-  return [...byId.values()];
+  return { marks: [...byId.values()] };
 }
 
 // ── A STANCE OUTLIVES THE WINDOW IT WAS SPOKEN IN (postmark#2454, 2026-09-04) ──
@@ -690,7 +758,16 @@ export async function stanceInbox(repo, key, { dbPath = null } = {}) {
   if (!geom) return { candidates: [], standing: [], mine: [], unavailable: "the world's own geometry could not be read — overlap is the engine's answer, never this door's" };
   const overlaps = (a, b) => geom.overlapArea(geom.rect(a), geom.rect(b)) > 0;
 
-  const all = worldForStances(repo, { dbPath });
+  // THE READ MAY BE UNREACHABLE, AND THAT IS SAID RATHER THAN ROUNDED TO ZERO.
+  // `worldForStances` has no 1.0 arm to fall back on since POS-195; an office
+  // without `WORLD2_STANCE_URL`, or a store that will not answer, hands back
+  // `unreachable`. Answering `candidates: []` here would tell a resident nothing
+  // awaits their word while a sketch sat on their ground — the-late-welcome's
+  // own failure, arriving as a cheerful empty. It becomes this read's
+  // `unavailable`, which all three tiers already render.
+  const world = await worldForStances(repo, { dbPath });
+  if (world.unreachable) return { candidates: [], standing: [], mine: [], unavailable: world.unreachable };
+  const all = world.marks;
   const mine = all.filter((m) => mineHandles.has(m.by) && m.at && m.extent);
   const rows = await stanceRows({ dbPath, worldClone: repo });
   const standing = standingStances(rows).filter((s) => mineHandles.has(s.by));
@@ -730,11 +807,27 @@ export const stancesGround = (handles) => {
 
 // ── tier 1 + 2 · what rides the bare read ────────────────────────────────────
 
-/** One candidate, as the ambient block shows it: one line each. */
+/**
+ * One candidate, as the ambient block shows it: one line each.
+ *
+ * ── `says` IS OMITTED WHEN THERE IS NO BODY TO SAY (POS-195, 2026-09-22) ────
+ *
+ * Since the narrow 2.0 read, an UNPUBLISHED candidate carries no body — the
+ * store read never fetches `claims.body` (world2-acts.mjs § stanceQuery's column
+ * list), because a draft's text is its author's until submit. A published
+ * candidate still carries its own, which every resident may read anyway.
+ *
+ * So this key is now absent rather than empty. `says: ""` would be a sentence
+ * the door invented about a sketch it declined to read, and a resident cannot
+ * tell that from a sketch whose author wrote nothing — the same distinction
+ * `household-media` holds one door over ("an unread mark must not be given a
+ * sentence"). Omit, do not negate: what a reader does not see, they do not have
+ * to interpret.
+ */
 const ambientLine = (c) => ({
   mark: c.mark, by: c.by, at: c.at, date: c.date,
   on_your_ground: c.on_your_ground[0] ?? null,
-  says: c.body.length > 120 ? `${c.body.slice(0, 117)}…` : c.body,
+  ...(c.body ? { says: c.body.length > 120 ? `${c.body.slice(0, 117)}…` : c.body } : {}),
   published: c.published,
 });
 
@@ -801,6 +894,30 @@ export async function stancesBlock(repo, key, { spine = [], dbPath = null } = {}
 // ── tier 3 · the verb's shadow ───────────────────────────────────────────────
 
 /**
+ * One candidate on the shadow's page.
+ *
+ * ── THIS TIER CARRIED THE BODY WHOLE (POS-195, 2026-09-22) ─────────────────
+ *
+ * Tier 2 truncated to 120 characters; this one published `body` UNTRUNCATED,
+ * because it passed `candidatesFrom`'s records straight through. So the full
+ * text of another household's unstaked sketch was readable at
+ * `read: "declare-stance-on"` by anyone holding overlapping ground. That was
+ * measured on the 1.0 arm and is the finding RULING 2's "never a draft's body"
+ * settles.
+ *
+ * The store read no longer fetches a draft's body at all, so the key is empty
+ * for every unpublished candidate and omitting it is the honest rendering — the
+ * same reasoning as `ambientLine`, kept as its own function rather than shared,
+ * because the two tiers spell the field differently (`says` against `body`) and
+ * one shaper pretending otherwise is how a widening reaches two doors at once.
+ */
+const shadowLine = (c) => {
+  if (c.body) return c;
+  const { body: _withheld, ...rest } = c;
+  return rest;
+};
+
+/**
  * THE FULL INBOX, cursor-paginated: "every candidate overlapping any mark you
  * hold (a mark with extent IS ground, so overlapping-precedent-holders are the
  * speakers), plus your standing stances."
@@ -816,7 +933,7 @@ export async function stanceShadow(repo, key, { cursor = null, limit = PAGE_SIZE
 
   const n = Math.max(1, Math.min(Number(limit) || PAGE_SIZE, 100));
   const start = Math.max(0, Number.parseInt(String(cursor ?? "0"), 10) || 0);
-  const page = inbox.candidates.slice(start, start + n);
+  const page = inbox.candidates.slice(start, start + n).map(shadowLine);
   const next = start + n < inbox.candidates.length ? String(start + n) : null;
 
   return {
@@ -963,7 +1080,14 @@ export async function declareStanceViaOffice(repo, args = {}, key = null, { dbPa
     "overlap is the engine's answer and this door will not substitute its own — try again once the world store is readable");
   const overlaps = (a, b) => geom.overlapArea(geom.rect(a), geom.rect(b)) > 0;
 
-  const all = worldForStances(repo, { dbPath });
+  // A 503 rather than a 404, and the distinction is the act's whole safety: an
+  // unreachable candidate read cannot tell "no such mark" from "I could not
+  // look", and answering `no mark "<on>"` to the second would teach a resident
+  // their neighbour's sketch does not exist. The world-geometry refusal three
+  // lines up is the same shape and the same wording.
+  const world = await worldForStances(repo, { dbPath });
+  if (world.unreachable) throw bounce(503, "the stance candidate list could not be read", world.unreachable);
+  const all = world.marks;
   const target = all.find((m) => m.id === on);
   if (!target) throw bounce(404, `no mark "${on}"`, "ids are <by>/<slug> — see the telling, or your own inbox: world { read: \"" + ACTION_STANCE + "\" }");
   if (target.by === by) throw bounce(422, "a mark is never its own ground",

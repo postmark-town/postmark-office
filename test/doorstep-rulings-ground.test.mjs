@@ -137,6 +137,14 @@ let doorstepRulings, stancesForHandles, HOUSEHOLD_READS, DOORSTEP_SEGMENTS, CROS
 before(async () => {
   ({ doorstepRulings } = await import("../src/claim-effects.mjs"));
   ({ stancesForHandles } = await import("../src/world-stance.mjs"));
+  // THE CANDIDATE LIST READS THE STORE (POS-195, 2026-09-22). This file plants
+  // its sketches in the journal and still means the same thing by them; the stub
+  // answers the store's query from that same journal, shaped as `claims` rows.
+  // Imported HERE rather than at the top, for this file's own stated reason: a
+  // static import is hoisted above the env this fixture sets.
+  const stanceStub = await import("./stance-pool-stub.mjs");
+  Object.assign(process.env, stanceStub.STANCE_ON);
+  stanceStub.stancePoolFromJournal(join(scratch, "dynamic.db"));
   ({ HOUSEHOLD_READS } = await import("../src/household-apex.mjs"));
   ({ DOORSTEP_SEGMENTS } = await import("../src/queries.mjs"));
   ({ CROSSING_EPOCH_UTC, CROSSING_MS, currentCrossing } = await import("../src/crossings.mjs"));

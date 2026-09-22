@@ -97,6 +97,11 @@ beforeEach(() => {
   dbPath = join(scratch, `dynamic-${++runs}.db`);
   process.env.WORLD_DYNAMIC_DB = dbPath;
   process.env.WORLD_SINGLE_LOG = "1";
+  // THE CANDIDATE LIST READS THE STORE (POS-195, 2026-09-22). These fixtures
+  // still plant their sketches in the journal and mean the same thing by it; the
+  // stub answers the store's query from that journal, shaped as `claims` rows.
+  Object.assign(process.env, STANCE_ON);
+  stancePoolFromJournal(dbPath);
   resetStanceGeometry?.();
 });
 
@@ -107,6 +112,7 @@ const HANDLE = "alpha";
 const key = { household: "alpha", handles: new Set([HANDLE]) };
 
 let doorstepBundle, callTool, declareStanceViaOffice, resetStanceGeometry, stancesForHandles, SEGMENT_META;
+let STANCE_ON, clearStancePool, stancePoolFromJournal;
 let db, ctx;
 // ONE hook, because the second half depends on the first: the office fixture is
 // built from a SCHEMA that only exists once the dynamic imports have run.
@@ -114,6 +120,14 @@ before(async () => {
   ({ doorstepBundle } = await import("../src/doorstep-bundle.mjs"));
   ({ callTool } = await import("../src/mcp.mjs"));
   ({ declareStanceViaOffice, resetStanceGeometry, stancesForHandles } = await import("../src/world-stance.mjs"));
+  // THE CANDIDATE LIST READS THE STORE (POS-195, 2026-09-22). This file plants
+  // its sketches in the journal and still means the same thing by them; the stub
+  // answers the store's query from that same journal, shaped as `claims` rows.
+  // Imported HERE rather than at the top, for this file's own stated reason: a
+  // static import is hoisted above the env this fixture sets.
+  ({ STANCE_ON, clearStancePool, stancePoolFromJournal } = await import("./stance-pool-stub.mjs"));
+  Object.assign(process.env, STANCE_ON);
+  stancePoolFromJournal(dbPath);
   ({ SEGMENT_META } = await import("../src/queries.mjs"));
   const { SCHEMA } = await import("../src/schema.mjs");
 

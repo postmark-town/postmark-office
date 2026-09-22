@@ -326,6 +326,10 @@ const state = {
   failed: 0,
   lastError: null,
   pool: null,
+  // The stance read's SECOND credential, deliberately not `pool` — see
+  // § THE STANCE READ'S OWN CREDENTIAL at the foot of this file. `office_api`
+  // and `stance_reader` must never share a connection.
+  stancePool: null,
 };
 
 export function world2Enabled(env = process.env) {
@@ -444,4 +448,86 @@ export async function actsQuery(text, params = [], env = process.env) {
   const p = await pool(env);
   const { rows } = await p.query(text, params);
   return rows;
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// THE STANCE READ'S OWN CREDENTIAL (POS-195, RULING 2, 2026-09-22)
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// Every other pool in this office is built from ONE connection string,
+// `WORLD2_PG_URL`, role `office_api`. That is deliberate and it stays: one door,
+// one credential, and the 2026-09-22 measurement counted the four copies of the
+// idiom as a finding handed up rather than a licence to add a fifth.
+//
+// THIS IS THE FIFTH, AND IT IS A DIFFERENT KIND. The other four are four spellings
+// of the same credential; this is a SECOND credential, and the separation is the
+// whole security property. `stance_reader` may see another household's draft
+// (023_stance_reader.sql § the carve). `office_api` may not, and must not learn
+// how — so the two cannot share a pool, and the env key that carries the second
+// is read in exactly one place, here.
+//
+// WHY IT SITS BESIDE `actsQuery` RATHER THAN IN `world-stance.mjs`. The same
+// reason the read ports borrow this pool: the office should learn the word
+// "pool" once per table, not once per caller. Putting it here also means the one
+// grep that finds every credential this office holds (`WORLD2_.*_URL` in
+// `src/`) finds this one, which is not true of a pool opened in a door file.
+//
+// ── ABSENT IS `unreachable`, AND NEVER THE JOURNAL ──────────────────────────
+//
+// `actsQuery` returns `null` for "not asked" because its caller has a 1.0 arm to
+// fall back to. THIS READ HAS NONE, by ruling: the sqlite arm is deleted from
+// `worldForStances`, not flagged. So the absence of `WORLD2_STANCE_URL` is a
+// state the door must SAY, not one it can paper over — a stance read that
+// quietly answered "no candidates" because a credential was missing is the
+// #2454 shape (a door showing a world in which the thing never happened), and
+// here it would silently delete the-late-welcome on the first crossing.
+//
+// Hence a tagged answer rather than `null`: `{ unreachable: "<why>" }` or
+// `{ rows }`. A caller cannot mistake one for the other by forgetting a check,
+// which is what `null` invites.
+//
+// ── NO `WORLD2_PG=1` GATE, AND THAT IS NOT AN OVERSIGHT ─────────────────────
+//
+// `world2Enabled` asks for the mirror flag because the ACTS mirror is a shim
+// that ships with its own death (rule 5) and must be switchable off. This read
+// is not a shim — it is the only source `worldForStances` has after G1 — so its
+// one condition is whether the credential exists. Gating it on the mirror flag
+// would mean turning the mirror off silently empties the stance inbox.
+
+/** Test seam: hand the module a stance pool. Never used by the office. */
+export function __setStancePoolForTest(p) { state.stancePool = p; }
+
+const STANCE_URL_KEY = "WORLD2_STANCE_URL";
+
+async function stancePool(env = process.env) {
+  if (state.stancePool) return state.stancePool;
+  const { default: pg } = await import("pg");
+  state.stancePool = new pg.Pool({ connectionString: env[STANCE_URL_KEY], max: 2 });
+  return state.stancePool;
+}
+
+/**
+ * Read `claims` as `stance_reader` — the ONE reader of the draft carve.
+ *
+ * Returns `{ rows }` when it asked, `{ unreachable: "<sentence>" }` when it
+ * could not. Never throws and never falls back: a caller that gets
+ * `unreachable` must say so at its door.
+ */
+export async function stanceQuery(text, params = [], env = process.env) {
+  if (!env[STANCE_URL_KEY]) {
+    return { unreachable:
+      `the stance read has no credential — ${STANCE_URL_KEY} is not set on this office. It is the only source for ` +
+      `whether an unpublished sketch stands on your ground (the-late-welcome), and this read will not substitute the ` +
+      `1.0 journal for it: that arm was deleted by ruling, not flagged. Set ${STANCE_URL_KEY} to stance_reader's ` +
+      `credential (world2/schema/023_stance_reader.sql) and restart the office.` };
+  }
+  try {
+    const p = await stancePool(env);
+    const { rows } = await p.query(text, params);
+    return { rows };
+  } catch (e) {
+    return { unreachable:
+      `the stance read could not reach the store (${String(e?.message ?? e).slice(0, 160)}) — the candidate list is ` +
+      `unknown, which is a different fact from "nothing awaits your word" and is said rather than rounded to it` };
+  }
 }

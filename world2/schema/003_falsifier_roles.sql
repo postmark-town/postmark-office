@@ -78,3 +78,69 @@ lawful AS (
 SELECT w.* FROM writers w
 LEFT JOIN lawful l USING (grantee, table_name, privilege_type)
 WHERE l.grantee IS NULL;
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- THE SECOND QUERY — WHO MAY SEE A DRAFT (023_stance_reader.sql, 2026-09-22)
+-- ═══════════════════════════════════════════════════════════════════════════
+--
+-- 023 grants `stance_reader` SELECT on `claims` and adds `claims_read_stance`,
+-- a policy admitting draft rows to that role. It adds NO WRITE, so the query
+-- above cannot see it: `writers` filters on INSERT/UPDATE/DELETE/TRUNCATE by
+-- design, and a read-only role is invisible to the three-pens law — which is
+-- correct, because `stance_reader` is not a fourth pen. It writes nothing.
+--
+-- But "who may WRITE" was the only question this file asked, and 023 makes a
+-- second one load-bearing: WHO MAY SEE A DRAFT. Before 023 the answer was
+-- "nobody but the owner, and 002 bars the owner from runtime" and it was a
+-- fact about the shape of 007 rather than a list anyone maintained. After 023
+-- it is a list of exactly one, and a list of one is a thing that grows quietly.
+--
+-- So it gets its own enumeration, in this file, for 007's own stated reason:
+-- "Enforced structurally, not by vigilance." A second role admitted to drafts
+-- by a future migration prints a row here instead of being noticed by whoever
+-- next reads 007.
+--
+-- WHAT IT LOOKS AT: every permissive SELECT policy on `claims` whose USING
+-- clause does not carry 007's household test. `claims_read` narrows itself with
+-- `household = current_setting('app.household', true)`, so it admits a draft
+-- only to a transaction that has declared that draft's own household — that is
+-- the general rule and it is lawful for everyone. Any OTHER select policy is a
+-- carve, and every carve must be on the list below.
+--
+-- GREEN = zero rows. This query CAN FAIL, which is the standard 003 holds
+-- itself to: `CREATE POLICY anything ON claims FOR SELECT TO snapshot_reader
+-- USING (true)` prints a row immediately. It is the same hole
+-- `falsifier-draft-privacy.mjs --self-test` injects, caught statically.
+
+WITH draft_carves AS (
+  SELECT policyname, unnest(roles)::text AS grantee, qual
+    FROM pg_policies
+   WHERE schemaname = 'public'
+     AND tablename  = 'claims'
+     AND cmd IN ('SELECT', 'ALL')
+     AND permissive = 'PERMISSIVE'
+     -- 007's general rule narrows itself by the acting household; a policy that
+     -- does NOT is admitting drafts on some other ground, and that is a carve.
+     AND coalesce(qual, '') NOT LIKE '%app.household%'
+),
+lawful_carves AS (
+  SELECT * FROM (VALUES
+    -- 023_stance_reader.sql. `worldForStances`' narrow 2.0 read, DEC-14's
+    -- "may see overlapping drafts across households", ruled 2026-09-22
+    -- (RULING 2). Lawful because the-late-welcome requires that a ground-holder
+    -- learn a sketch stands on their ground before it publishes, and 1.0's
+    -- journal already told them — the information moves from one record to the
+    -- other and the boundary (a draft's TEXT is its author's until submit) is
+    -- unchanged. What makes it safe is not this policy, which is `USING (true)`:
+    -- it is that one reader holds the credential, that reader never SELECTs
+    -- `claims.body`, and two falsifiers assert the output carries no draft body
+    -- (falsifier-draft-privacy.mjs § the stance carve;
+    -- test/stance-candidates-read-the-store.test.mjs § the sentinel). 023's header carries
+    -- the full argument.
+    ('claims_read_stance', 'stance_reader')
+  ) AS t(policyname, grantee)
+)
+SELECT c.policyname, c.grantee, c.qual
+  FROM draft_carves c
+  LEFT JOIN lawful_carves l USING (policyname, grantee)
+ WHERE l.policyname IS NULL;
