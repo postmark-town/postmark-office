@@ -781,14 +781,53 @@ const EARSHOT_PRESENCE_CAP = 500;
  * storedDepartures: "`within` and `to` are the store's column names"), and using
  * it here is what lets live-reads.mjs read this pen with the mapping it already
  * has rather than a fifth spelling of one departure. */
-function walkEntry({ crossing, who, targetMarkId, stampAt, witnesses, from, toward, pace, targetExtent, household }) {
+/*
+ * ── THE DEPARTURE'S OWN INSTANT RIDES THIS ACT (POS-198, 2026-09-22) ────────
+ *
+ * `writtenAt` is the DECLARATION INSTANT, and it is the same string the
+ * `movements` row is stamped with — one `Date` read in `walkViaOffice`, handed
+ * to both pens, never two reads of a clock that moved in between.
+ *
+ * WHY IT HAD TO BE CARRIED. `at` above is `witnessStampAt`'s PLACE anchor
+ * (`{anchor, dx, dy}`), not an instant, and nothing else here was one — so
+ * `world-journal.mjs § normalizeRow` fell back to its own clock for
+ * `written_at`, and that column IS `acts.at`, which is the instant every world
+ * reader of a departure reads first (`live-reads § departureRecordOf`, era 5:
+ * `iso: isoOf(row.at)`). POS-196 measured the cost on the record itself: of
+ * 2,808 live door-written lines in windows 120–204, the act's own `crossing`
+ * reconstructs the instant exactly ZERO times, median −203 ms, 235 of them
+ * missing by more than a second, the worst by 10.6 hours. The register could
+ * not render the record while its instant was the mirror's clock.
+ *
+ * `declared_by` and `note` ride the payload for the same reason and in the
+ * record's own spelling. `note` is CONDITIONAL, as it is on the record's own
+ * 2,870 lines (28 carry it), so a walk with no note writes no key rather than a
+ * null one — the register agreeing with the grammar it is rendered into.
+ */
+/* EXPORTED FOR ITS FALSIFIER (POS-198), and for one reason worth the line: the
+ * alternative is a test that RE-IMPLEMENTS this shape, which is the trap POS-196
+ * named about its own fixture — "a fixture generous enough to carry fields the
+ * live pen does not write would prove the renderer equal to a store nobody
+ * runs". A falsifier that builds its acts with the live builder cannot drift
+ * from the live builder. Nothing else imports it. */
+export function walkEntry({ crossing, who, targetMarkId, stampAt, witnesses, from, toward, pace, targetExtent, household, writtenAt, declaredBy = null, note = null }) {
   return {
     crossing, actor: who, action: "walk",
     object: targetMarkId ?? null,
     at: stampAt, witnesses, cls: CLASS_MOVE,
-    payload: { from, toward, pace, within: targetExtent ?? null, to: targetMarkId ?? null },
+    payload: {
+      from, toward, pace, within: targetExtent ?? null, to: targetMarkId ?? null,
+      declared_by: declaredBy ?? who,
+      ...(note ? { note } : {}),
+    },
     effect: "the walk is declared; the record receives it at the save",
     household,
+    // `?? undefined`, never `?? new Date()`: a SECOND clock read here would be
+    // the very drift this closes, and `normalizeRow`'s own default is the one
+    // place the fallback lives (a destructuring default fires on `undefined`
+    // and not on `null`, so the coalesce is what keeps a missing instant a
+    // fallback rather than the string "null" in the record's first field).
+    writtenAt: writtenAt ?? undefined,
   };
 }
 
@@ -4114,8 +4153,23 @@ export async function walkViaOffice(worldClone, payload = {}, key = null) {
     // pace read via departurePace — the record's class is `depart`; asking for
     // "departure" here was the 2026-08-21 slow-walk bug (30 min for 650 m).
     const pace = departurePace();
+    // ── ONE CLOCK READ, TWO PENS (POS-198, 2026-09-22) ───────────────────────
+    //
+    // `declareMovement` reads `new Date()` itself when its caller passes no
+    // `at`, and until now this caller passed none — so the `movements` row's
+    // instant and the act's `written_at` were two reads of one wall clock with
+    // the whole of `declareMovement` (and, on the mirror arm, an awaited
+    // `witnessStampAt`) between them. That gap is POS-196's STOP, measured at a
+    // −203 ms median and a 10.6 h worst case across 2,808 lines.
+    //
+    // So the read happens HERE, once, and both pens are stamped from the same
+    // string. Equality is the assertion the falsifier makes — not closeness:
+    // two clock reads are never equal, so an equality test can only pass if
+    // there is genuinely one read, which is what makes it a probe that can
+    // fail rather than a tolerance that hides a regression.
+    const declaredAt = new Date().toISOString();
     const movement = {
-      actor: who, from, toward, crossing: at,
+      actor: who, from, toward, crossing: at, at: declaredAt,
       within: targetExtent, toMark: targetMarkId, declaredBy: who, pace,
     };
     // ── LANE THREE OF THE PEN FLIP (W2_PEN=walk; runbook C3, 2026-09-03) ────
@@ -4133,7 +4187,11 @@ export async function walkViaOffice(worldClone, payload = {}, key = null) {
         const { at: stampAt, witnesses } = await witnessStampAt(who, from);
         try {
           flippedRow = await declareMovementFlipped(store, movement,
-            walkEntry({ crossing: at, who, targetMarkId, stampAt, witnesses, from, toward, pace, targetExtent, household: resolvedWorldHousehold(key) }));
+            // The act is stamped FROM THE MOVEMENT OBJECT, not from a second
+            // read: `movement.at` is the one instant this call declared at, and
+            // `declareMovement` writes that same string into `movements.at`.
+            walkEntry({ crossing: at, who, targetMarkId, stampAt, witnesses, from, toward, pace, targetExtent, household: resolvedWorldHousehold(key),
+              writtenAt: movement.at, declaredBy: movement.declaredBy, note: movement.note ?? null }));
         } catch (err) {
           if (err?.name === "PenUnreachableError")
             throw bounce(503, err.message,
@@ -4171,7 +4229,11 @@ export async function walkViaOffice(worldClone, payload = {}, key = null) {
       void (async () => {
         try {
           const { at: stampAt, witnesses } = await witnessStampAt(who, from);
-          await mirrorLaneAct(walkEntry({ crossing: at, who, targetMarkId, stampAt, witnesses, from, toward, pace, targetExtent, household: resolvedWorldHousehold(key) }));
+          // Same instant as the `movements` row written above — the mirror is
+          // ASYNCHRONOUS (this arm runs after the door has answered), so a
+          // clock read here would be the widest drift of all.
+          await mirrorLaneAct(walkEntry({ crossing: at, who, targetMarkId, stampAt, witnesses, from, toward, pace, targetExtent, household: resolvedWorldHousehold(key),
+            writtenAt: movement.at, declaredBy: movement.declaredBy, note: movement.note ?? null }));
         } catch (e) {
           console.error(`[world2-acts] a walk did not reach acts (${String(e?.message ?? e).slice(0, 160)}) — dynamic.db/movements is unaffected`);
         }

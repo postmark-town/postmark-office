@@ -125,6 +125,59 @@ test("a derived row is walkEntry's shape, field for field, beside a mirrored act
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+// ── the two keys the SELECT always asked for (POS-198, 2026-09-22) ──────────
+//
+// `readMovementRows` has SELECTed `declared_by, note` since this tool was
+// written and `departureRowFrom` dropped both on the floor. POS-196 found it by
+// reading the record rather than the code: "SELECTs the column and drops it".
+// The 28 lines in the world's record that carry either are the 2026-08-10
+// `ledger-freeze` one-off — a backfill that could not hold them could not
+// reproduce them.
+
+/** A movements row, in `readMovementRows`' own column shape. */
+const moveRow = (over = {}) => ({
+  seq: 801, actor: "vellix", at: "2026-08-29T02:00:00.000Z",
+  from_x: 5, from_y: 5, toward_x: 15, toward_y: 15, crossing: 156.1,
+  within_w: null, within_h: null, to_mark: null, pace: 60,
+  declared_by: "vellix", note: null, ...over,
+});
+
+test("a DELEGATED backfilled walk carries its declarer, and a self-declared one says its own name", () => {
+  const delegated = departureRowFrom(moveRow({ declared_by: "the-town" }));
+  assert.equal(delegated.payload.declared_by, "the-town",
+    "the freeze's own 28 lines are exactly the rows this column exists for");
+  assert.equal(delegated.actor, "vellix", "the actor is still whose feet moved");
+
+  const own = departureRowFrom(moveRow());
+  assert.equal(own.payload.declared_by, "vellix");
+
+  // `readMovements` coalesces to the actor rather than writing a null, and a
+  // backfilled act must spell a self-declared walk the same way a live one does
+  // or the two eras disagree in a way that still parses.
+  const bare = departureRowFrom(moveRow({ declared_by: null }));
+  assert.equal(bare.payload.declared_by, "vellix", "a null declarer is the actor, never a null on the record");
+});
+
+test("a backfilled `note` is carried, and CONDITIONAL — no note writes no key", () => {
+  const noted = departureRowFrom(moveRow({ note: "carried by the freeze" }));
+  assert.equal(noted.payload.note, "carried by the freeze");
+
+  const plain = departureRowFrom(moveRow());
+  assert.equal("note" in plain.payload, false,
+    "28 of the record's 2,870 lines carry a note; a null key on the rest would be this tool disagreeing with the grammar it fills");
+});
+
+test("the two new keys do not disturb the era-5 arm, and the `_backfill` keys still follow them", () => {
+  const r = departureRowFrom(moveRow({ declared_by: "the-town", note: "n" }));
+  const p = r.payload;
+  // live-reads.mjs § era 5: `p.from && p.toward && !p.lines && !p._ledger`.
+  assert.ok(p.from && p.toward && !p.lines && !p._ledger,
+    "a backfilled row stopped matching the movement-store era and would be REFUSED BY NAME by every reader of it");
+  assert.deepEqual(Object.keys(p),
+    ["from", "toward", "pace", "within", "to", "declared_by", "note", "_backfill", "_backfill_seq", "_backfill_source"],
+    "walkEntry's five, then the record's two, then the store's own underscored three");
+});
+
 test("a null within is null, not the Origin — and a paceless walk keeps its null", () => {
   const { dir, path } = fixtureStore();
   try {
