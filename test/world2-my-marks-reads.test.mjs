@@ -143,7 +143,17 @@ function fixturePool({ marks = PUBLISHED_ROWS, claims = CLAIM_ROWS, escrow = ESC
   const asked = [];
   const answer = async (sql, params) => {
     asked.push({ sql: String(sql).replace(/\s+/g, " ").trim(), params });
-    if (/current_setting\('app\.household'/.test(sql)) return { rows: [{ declared: HOUSEHOLD }] };
+    // THE TWO SESSION SETTINGS (POS-160 RULING 4). `app.household` is the one
+    // current spelling; `app.household_keys` is the SET the store's four draft
+    // policies compare against (`024_household_spellings.sql`), and
+    // `guard-reads.mjs § assertHouseholdDeclared` refuses a read on a
+    // connection that declared only the first — because the store never
+    // re-spells a row, so a guard reading one spelling sees part of a house and
+    // PERMITS on the rest of it. This house wears one spelling, so its set is
+    // one long; the shape is what the stub has to answer.
+    if (/current_setting\('app\.household'/.test(sql))
+      return { rows: [{ declared: HOUSEHOLD, keys: [HOUSEHOLD] }] };
+    if (/current_setting\('app\.household_keys'/.test(sql)) return { rows: [{ keys: [HOUSEHOLD] }] };
     if (/FROM identities WHERE handle/i.test(sql)) return { rows: [{ household: HOUSEHOLD }] };
     // THE REGISTRY, which is what `householdKeyFor` reads since POS-160. One
     // house, slugged `pos104`, listing the one handle this suite uses — the
@@ -278,9 +288,18 @@ test("THE SCOPING IS THE POLICY'S: the live read declared the household before a
   const p = fixturePool();
   await world2MyMarks(KEY, { p });
   const declared = p.asked.findIndex((a) => /set_config\('app\.household'/.test(a.sql));
+  const keysAt = p.asked.findIndex((a) => /set_config\('app\.household_keys'/.test(a.sql));
   const claimsAt = p.asked.findIndex((a) => /FROM claims/i.test(a.sql));
   assert.ok(declared !== -1, "the live read ran on an undeclared connection — 007's policy would be the only strap left");
   assert.ok(declared < claimsAt, "the declaration must precede the read it scopes");
+  // BOTH settings, since POS-160 RULING 4. `024_household_spellings.sql`'s four
+  // policies compare against `app.household_keys`, so a connection carrying
+  // only `app.household` is read by a policy looking at NOTHING — every draft
+  // invisible, the guard finding no collision, and a duplicate permitted.
+  assert.ok(keysAt !== -1, "the spelling set was never declared — the draft policies would answer against NULL");
+  assert.ok(keysAt < claimsAt, "the spelling set must precede the read it scopes");
+  // And it carries THIS house's key: the set is every spelling of ONE house.
+  assert.deepEqual(p.asked[keysAt].params, [HOUSEHOLD]);
 });
 
 // ═════════════════════════════════════════════════════════════════════════════

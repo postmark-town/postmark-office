@@ -110,12 +110,29 @@ const asleep = [];
 const red = (leg, detail) => findings.push(`RED · ${leg} — ${detail}`);
 const dead = (leg, detail) => asleep.push(`ASLEEP · ${leg} — ${detail}`);
 
-/** The pen's own spelling: a draft is only ever written inside a declared household. */
+/**
+ * The pen's own spelling: a draft is only ever written inside a declared
+ * household.
+ *
+ * TWO SETTINGS since POS-160 RULING 4 (`024_household_spellings.sql`): the
+ * store never re-spells a row, so a house declares every spelling it has ever
+ * carried and the four draft policies compare `household = ANY(app.household_keys)`.
+ *
+ * THE SET HERE IS ONE LONG, ON PURPOSE. This falsifier writes its own draft,
+ * under this one key, in this run — so the house's history is irrelevant to
+ * what it is proving and importing the deriver to fetch it would give this file
+ * a second thing that can be wrong. A one-key set is the NARROWEST lawful
+ * session, which is the right instrument for a privacy falsifier: every
+ * "blind" leg is proven against the tightest declaration the office can make,
+ * and the one "visible to its own author" leg still passes, because the row was
+ * written under exactly this key.
+ */
 async function withHousehold(pool, household, fn) {
   const c = await pool.connect();
   try {
     await c.query("BEGIN");
     await c.query("SELECT set_config('app.household', $1, true)", [household]);
+    await c.query("SELECT set_config('app.household_keys', $1, true)", [household]);
     const out = await fn(c);
     await c.query("COMMIT");
     return out;

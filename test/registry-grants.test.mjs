@@ -29,6 +29,14 @@
 // edited)` and rolled back the `claims` and `marks` work beside it. Prod would
 // have refused it in the same words at the ship.
 //
+// THAT FILE IS NOW RETIRED to a header and `SELECT 1;`, because the other two
+// tables refuse the same rewrite for the same reason — `claims_update_guard`
+// requires `NEW.household IS NOT DISTINCT FROM OLD.household` on every lawful
+// transition, and `marks_id_is_fixed` says it one table over. Three guards, one
+// law: a row's household spelling is fixed for its life. The read side carries
+// the fix instead (POS-160 RULING 4, `024_household_spellings.sql`). This lint
+// is unchanged and still the thing that would catch the next attempt.
+//
 // A migration that cannot run is a red nobody sees until they run it, and the
 // two-run trap means even running it once is not proof. So the rule is stated
 // here, once, for every migration in the directory — including every one
@@ -170,9 +178,12 @@ test("no migration in world2/schema writes to `acts` — an act is never edited"
 
   assert.deepEqual(found, [],
     "a migration writes to `acts`, which is append-only by trigger (002_grants.sql `acts_append_only`) — "
-    + "the statement will abort and take its transaction with it. History keeps its spellings and "
-    + "`src/household-deriver.mjs § resolveHouse` resolves the old ones on read; re-spell `claims` and "
-    + "`marks` instead, as 022_household_respell.sql does");
+    + "the statement will abort and take its transaction with it. AND `claims` AND `marks` ARE NOT THE "
+    + "WAY ROUND IT: `claims_update_guard` and `marks_id_is_fixed` refuse a household re-spelling on those "
+    + "two by the same law (measured on the dev sandbox 2026-09-22), which is why 022_household_respell.sql "
+    + "is retired to a header and `SELECT 1;`. THE STORE NEVER RESPELLS A ROW. A house declares every "
+    + "spelling it has ever carried instead — `src/household-deriver.mjs § houseKeysOf` and "
+    + "`world2/schema/024_household_spellings.sql` (POS-160 RULING 4)");
 });
 
 test("the acts lint can actually fire — the pattern matches a write and not the trigger that forbids it", () => {
@@ -193,7 +204,8 @@ test("the acts lint can actually fire — the pattern matches a write and not th
     [], "002's trigger is the rule, not a breach of it");
   assert.deepEqual(hits("GRANT SELECT, INSERT ON acts TO office_api;"), []);
   assert.deepEqual(hits("UPDATE claims t SET household = 'hh:' || m.slug"), [],
-    "the two tables 022 DOES respell are untouched by this lint");
+    "the two tables 022 was going to respell are untouched by THIS lint — their own refusal is "
+    + "`claims_update_guard` and `marks_id_is_fixed`, in the store rather than in a text check");
   assert.deepEqual(hits("SELECT 'acts' AS t, household, count(*) FROM acts GROUP BY 2"), [],
     "a READ of acts — which every one of 022's receipt blocks is — is not a write");
 });
