@@ -303,23 +303,65 @@ if (has("--census")) {
   const verbProblems = checkCensus([...DISPATCHABLE]);
   const verbLine = `check 0 asked ${DISPATCHABLE.length} dispatchable verb(s) against LANE_OF — ${verbProblems.length ? "RED" : "every one is named"}`;
 
+  // ── CHECK 0b ASKS THE STORE IT CAN REACH, AND SAYS WHICH (G1 / POS-156) ──
+  //
+  // The two modes read DIFFERENT STORES after G1, and that is deliberate rather
+  // than an oversight. Check 0b's question is fixed — "does every KIND OF ACT
+  // the store actually holds have a ruling in CLASS_LANE_OF" — and what changes
+  // between the modes is which store is reachable to ask it of.
+  //
+  //   the FULL run   has Postgres, so the store is `acts` and the check runs
+  //                  there (check 0b, below). It read the sqlite journal until
+  //                  G1; after G1 that table holds the arena's rows and nothing
+  //                  else, so a census over it THERE would have gone quiet
+  //                  about every other class while still reporting green — the
+  //                  exact failure this check exists to prevent.
+  //
+  //   the CENSUS     has NO POSTGRES. That is the whole of it: this mode exists
+  //   (`--census`)   "to be asked on the day a verb lands, on a branch, with no
+  //                  Postgres", which is why it takes `--db` and reads whatever
+  //                  journal it is pointed at. Pointing it at `acts` would not
+  //                  narrow this mode, it would DELETE it.
+  //
+  // ⚑ AN EARLIER CUT OF G1 DID DELETE IT, by moving this arm to "runs against
+  // the RECORD, below" — below a `process.exit` this mode never reaches, in a
+  // mode that has no record to reach. It cost the four tests in
+  // `test/lane-closure-census.test.mjs`, which are about this mode's CONTRACT
+  // (a per-check verdict, a refusal when `--db` cannot be read, a disclosure
+  // when it was not given) and not about which table production fills.
+  //
+  // WHAT THE CENSUS CAN SEE HAS NARROWED, and the honest place to say so is
+  // here rather than in a silently weaker check: pointed at a post-G1 office's
+  // `dynamic.db` it sees the arena's classes and no others, because that is
+  // what that table now holds. The question is still a real one — the arena is
+  // the lane still writing there, and a new arena class nobody ruled on is
+  // exactly what this catches — and the line it prints names the count AND the
+  // classes, so an operator reading "1 journal class(es) (arena-act)" can see
+  // the narrowing rather than read it as a clean bill of health.
   let classes = null;
   let classProblems = [];
   let classLine;
-  // ── CHECK 0b READS THE RECORD NOW (G1 / POS-156) ────────────────────────
-  //
-  // It read `SELECT DISTINCT class FROM journal` out of the sqlite store. G1
-  // deleted the general journal INSERT, so that table holds the ARENA's rows
-  // and nothing else -- a census over it would have gone quiet about every
-  // other class while still reporting green, which is the exact failure this
-  // check exists to prevent ("a census that only learns about a lane after it
-  // lands is a census that is late by exactly the interval in which the gap can
-  // open", and one reading an emptied table is late for ever).
-  //
-  // The authority is still "what the store actually holds"; the store is
-  // `acts`. So the census runs below, against the rows this tool already reads
-  // from the record, and it is no longer a thing `--db` can answer.
-  classLine = "check 0b runs against the RECORD (`acts`), below — the sqlite journal it used to read holds only the arena's rows since G1";
+  const censusDb = arg("--db");
+  if (censusDb == null || censusDb === "") {
+    classLine = "check 0b was NOT asked — no --db was given, so no journal was read and this run says nothing about which classes the store holds";
+  } else {
+    try {
+      if (!existsSync(censusDb)) throw new Error("no such file");
+      const db = new DatabaseSync(censusDb, { readOnly: true });
+      try { classes = db.prepare("SELECT DISTINCT class FROM journal").all().map((r) => String(r.class)); }
+      finally { db.close(); }
+    } catch (e) {
+      for (const p of verbProblems) console.error(p);
+      console.error(
+        `REFUSED (census usage): --db ${censusDb} was given and could not be read as a journal (${String(e?.message ?? e)}). `
+        + "Check 0b was asked of it and could not be answered — this run says nothing about which classes the store holds, "
+        + "and it refuses rather than passing that silence off as green or as the operator's omission.");
+      console.log(`census: ${verbLine}; check 0b was asked of ${censusDb} and could NOT read it — REFUSED (exit 2)`);
+      process.exit(2);
+    }
+    classProblems = checkClassCensus(classes);
+    classLine = `check 0b asked ${classes.length} journal class(es) against CLASS_LANE_OF (${classes.join(", ") || "none"}) — ${classProblems.length ? "RED" : "every one is ruled"}`;
+  }
 
   for (const p of [...verbProblems, ...classProblems]) console.error(p);
   console.log(`census: ${verbLine}; ${classLine}`);
