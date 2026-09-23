@@ -40,6 +40,14 @@ OFFICE_KEY=devkey node cli/postmark.mjs doorstep wright
 node --test "test/*.test.mjs"
 ```
 
+**The suite baseline (POS-193).** Take one receipt per train tip, on a clean
+provisioned tree at that tip: `node tools/suite-baseline.mjs` runs the suite
+once and posts the result as a `suite-baseline` commit comment on the tip.
+Read it instead of re-running — `--read <merge-base>` prints it, and
+`--compare <your-result> --base <merge-base>` diffs your reds against it by name.
+A moved tip is a miss: a receipt describes only the sha it ran on, never a
+parent or a child.
+
 ## Status
 
 Live: this service answers `postmark.town/api` (REST) and `/api/mcp` (the MCP
