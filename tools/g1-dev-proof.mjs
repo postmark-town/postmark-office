@@ -198,25 +198,37 @@ function classes(me) {
   return [
     {
       name: "mark (draft)",
+      reader: "/world2/my-marks",
       write: async (at) => call("POST", "/world/marks", {
         by: who, slug, kind: "sited", body: `a probe stood here at ${stamp} and wrote this line`,
         at: { x: at.x, y: at.y }, extent: { w: 1, h: 1 },
       }, { keyed: true }),
-      // INVESTIGATE is the read the brief names, and it is the right one: it is
-      // the door that answers "what IS this mark", so a draft the store cannot
-      // describe is a draft the store does not hold.
-      read: async () => call("GET", `/world2/investigate?mark=${encodeURIComponent(markId)}`),
+      // THE DRAFT'S LAWFUL READER, and it is KEYED. POS-199: this read-back
+      // first asked `/world2/investigate`, which by 007's law never shows a
+      // draft — so the first dev run (2026-09-22, train 5bfad5e) reddened the
+      // mark class on a green write. `/world2/my-marks` is the portfolio's 2.0
+      // twin (server.mjs, ahead of the keyless router because "your marks need
+      // your resident household identity"): it answers the key's own household,
+      // and a draft is in `drafts` by its `by/slug` id — or, past the page
+      // bound, named by id in `withheld.drafts`. The probe sends the SAME
+      // Bearer key the write was made with, so the reader asks as the author.
+      read: async () => call("GET", "/world2/my-marks", null, { keyed: true }),
       find: (wrote, got) => {
         if (!wrote.ok) return { ok: false, said: `the door refused the draft — ${why(wrote)}` };
-        if (!got.ok) return { ok: false, said: `the mark was written but /world2/investigate did not answer — ${why(got)}` };
-        const hay = JSON.stringify(got.json ?? got.text);
-        return hay.includes(slug)
-          ? { ok: true, said: `the draft is in the store's own answer for ${markId}` }
-          : { ok: false, said: `the door took the draft and /world2/investigate does not name ${slug} — the write did not reach the reader` };
+        if (!got.ok) return { ok: false, said: `the mark was written but /world2/my-marks did not answer — ${why(got)}` };
+        // By ID, in the drafts list — not a substring of the whole body. The
+        // draft is unstaked, so `drafts` is where the portfolio files it; the
+        // slug turning up anywhere else is not this read-back's answer.
+        const shown = Array.isArray(got.json?.drafts) ? got.json.drafts.map((m) => m?.id) : [];
+        const withheld = Array.isArray(got.json?.withheld?.drafts) ? got.json.withheld.drafts : [];
+        return shown.includes(markId) || withheld.includes(markId)
+          ? { ok: true, said: `/world2/my-marks holds the draft ${markId}` }
+          : { ok: false, said: `the door took the draft and /world2/my-marks does not list ${markId} among the key's drafts — the write did not reach the reader` };
       },
     },
     {
       name: "walk (stand here)",
+      reader: "/world2/walks",
       // ZERO DISTANCE, ON PURPOSE. The walk ledger's own "stand here" — a
       // departure from the resident's current point toward the same point. It
       // is a real departure record and it moves nobody, which is the cheapest
@@ -242,19 +254,26 @@ function classes(me) {
     },
     {
       name: "say",
+      reader: "/world2/conversations",
       write: async () => call("POST", "/world/say", { text: said }, { keyed: true }),
-      read: async () => call("GET", "/world2/say"),
+      // THE ACT READER THAT CARRIES EVERY SAY. POS-199: this read-back first
+      // asked `/world2/say`, which reads only `emission` acts (the air at an
+      // instant), so a live `say` act can never come back through it and the
+      // first dev run reddened a green write. `/world2/conversations` reads
+      // `acts` over all three VOICE_ACTIONS — its own disclosure: "the
+      // crystallized record ... and the live say acts the lane hook mirrors" —
+      // and a voice sits in a thread (`live` or `closed`) as `{ handle, said }`.
+      read: async () => call("GET", "/world2/conversations"),
       find: (wrote, got) => {
         if (!wrote.ok) return { ok: false, said: `the door refused the say — ${why(wrote)}` };
-        if (!got.ok) return { ok: false, said: `the words were spoken but /world2/say did not answer — ${why(got)}` };
-        const hay = JSON.stringify(got.json ?? got.text);
-        return hay.includes(said)
-          ? { ok: true, said: `/world2/say carries the line back` }
-          // NAMED, NOT SWALLOWED. `/world2/say` discloses that it answers the
-          // crystallized record, so a freshly-spoken line may legitimately not
-          // be there yet — which is a finding about the say lane's read, not a
-          // pass. It fails loudly and says which of the two it is.
-          : { ok: false, said: `/world2/say does not carry the line back — either the say lane's store read is the crystallized-only one it discloses, or the write did not reach acts` };
+        if (!got.ok) return { ok: false, said: `the words were spoken but /world2/conversations did not answer — ${why(got)}` };
+        const threads = [...(Array.isArray(got.json?.live) ? got.json.live : []), ...(Array.isArray(got.json?.closed) ? got.json.closed : [])];
+        const heard = threads.some((t) => Array.isArray(t?.voices) && t.voices.some((v) => v?.handle === who && v?.said === said));
+        return heard
+          ? { ok: true, said: `/world2/conversations carries ${who}'s line back` }
+          // NAMED, NOT SWALLOWED. A reader that cannot answer is a red with
+          // the door's name, never a green.
+          : { ok: false, said: `the door took the say and /world2/conversations does not carry ${who}'s line back — the write did not reach the reader` };
       },
     },
   ];
@@ -304,11 +323,15 @@ async function main() {
   const before = await counts();
   console.log(`before: journal=${before.journal ?? "(absent)"} head=${before.journal_head ?? "(absent)"} movements=${before.movements ?? "(absent)"}  [${before.source}]`);
 
-  for (const c of classes({ handle })) {
+  const run = classes({ handle });
+  // WHICH DOOR ANSWERED, on the verdict line itself — so a future red says
+  // which reader each class was read through without anyone opening this file.
+  const readers = `readers: ${run.map((c) => `${c.name.split(" ")[0]}: ${c.reader}`).join(", ")}`;
+  for (const c of run) {
     const b = await counts();
     if (DRY_RUN) {
       const got = await c.read();
-      lines.push(`  DRY  ${c.name} — read reachable: ${got.ok ? "yes" : `no (${why(got)})`}`);
+      lines.push(`  DRY  ${c.name} via ${c.reader} — read reachable: ${got.ok ? "yes" : `no (${why(got)})`}`);
       if (!got.ok) failed++;
       continue;
     }
@@ -328,7 +351,7 @@ async function main() {
       : `journal_head ${jm.moved ? `+${jm.by}` : "unmoved"}${mm.absent ? "" : `, movements ${mm.moved ? `+${mm.by}` : "unmoved"}`}`;
     const ok = v.ok && journalOk;
     if (!ok) failed++;
-    lines.push(`  ${ok ? "PASS" : "FAIL"} ${c.name} — ${v.said}; sqlite: ${sqliteSaid}`);
+    lines.push(`  ${ok ? "PASS" : "FAIL"} ${c.name} via ${c.reader} — ${v.said}; sqlite: ${sqliteSaid}`);
   }
 
   if (!DRY_RUN) {
@@ -348,8 +371,8 @@ async function main() {
     ? "the store has no journal table at all — the drop has been applied"
     : `the whole run moved journal_head by ${total.by}`);
   console.log(failed === 0
-    ? `GREEN — every class round-tripped through the store${EXPECT_JOURNAL ? " (pre-G1 expectation: the journal still grew, as declared)" : ", and nothing was written to the sqlite journal"}`
-    : `RED — ${failed} ${failed === 1 ? "class" : "classes"} failed; the lines above say which half`);
+    ? `GREEN — every class round-tripped through the store${EXPECT_JOURNAL ? " (pre-G1 expectation: the journal still grew, as declared)" : ", and nothing was written to the sqlite journal"} · ${readers}`
+    : `RED — ${failed} ${failed === 1 ? "class" : "classes"} failed; the lines above say which half · ${readers}`);
   // `process.exitCode`, NEVER `process.exit()`. An abrupt exit while fetch's
   // sockets are still closing aborts libuv on Windows — the run prints GREEN and
   // the shell reads 0xC0000409, which is a probe that cannot report its own
