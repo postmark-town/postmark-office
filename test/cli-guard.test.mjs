@@ -152,6 +152,10 @@ const ROSTER = {
   "tools/registry-backfill.mjs": { args: [], env: NO_PG, code: 1, needle: "pass exactly one of --dry-run or --apply" },
   "tools/registry-drain.mjs": { args: [], env: NO_PG, code: 1, needle: "pass exactly one of --check, --apply or --ingest-missing" },
   "tools/registry-seed.mjs": { args: [], env: NO_PG, code: 1, needle: "pass exactly one of --dry-run or --apply" },
+  // POS-193 (fix-forward, 2026-09-23): the baseline tool refuses at its first gate
+  // when the named tip cannot be resolved — before any gh call and before the
+  // suite runs. #170 merged on the new test file alone and the roster went red.
+  "tools/suite-baseline.mjs": { args: ["--tip", "0000000"], code: 2, needle: "cannot resolve 0000000 to a full sha here" },
   "tools/settle-anchored-berths.mjs": { args: ["--clone", NOWHERE], code: 1, needle: "not a town checkout" },
   "tools/site-sentinel.mjs": { args: ["--now", "not-a-date", "--dry-run", "--state", NOWHERE_OUT, "--out", NOWHERE_OUT], env: { SENTINEL_DISCORD_WEBHOOK: undefined }, code: 1, needle: "site-sentinel" },
   "tools/stripe-watch.mjs": { args: ["--clone", NOWHERE], code: 1, needle: "no town clone with the funding seam" },
