@@ -74,7 +74,41 @@ const PINS_SQL = `
     FROM household_pins
    ORDER BY handle`;
 
-const META_SQL = "SELECT key, value FROM registry_meta";
+// ── THE FILE'S TOP-LEVEL KEY ORDER, WRITTEN ONCE ────────────────────────────
+//
+// `tools/households.json` opens `schema_version`, then `note`, then
+// `households`. `registryFromRows` emits the meta keys in the order it receives
+// them, so this list is what decides the file's first bytes. It is STATED
+// rather than stored, for the reason `loadRegistryRows`'s doc gives: two keys,
+// and a column holding their order would be a column nobody could read.
+//
+// NOT ALPHABETICAL, and that is the whole point — `note` sorts before
+// `schema_version`, so an `ORDER BY key` would spell the file's first two lines
+// the wrong way round on every crossing.
+const META_KEYS = Object.freeze(["schema_version", "note"]);
+
+// ── AND THE QUERY ORDERS BY IT, RATHER THAN BY THE PLANNER'S MOOD ───────────
+//
+// `foldRegistryRows` already puts the two keys above back in the file's order,
+// so the bytes the town has today were never at risk. WHAT WAS: any meta key
+// BEYOND those two. The fold appends such a key in the order the rows arrived,
+// and `SELECT key, value FROM registry_meta` with no ORDER BY hands them back
+// in whatever order the planner liked that morning. MEASURED: the same two
+// extra keys arriving two ways render `…,note,zeta,alpha,households` and
+// `…,note,alpha,zeta,households` — two different files from one store.
+//
+// So the tail is ordered by `key`, which is a real order rather than an absent
+// one, and the head is ordered by the list above EXPLICITLY. Both halves are
+// built from `META_KEYS`, so the SQL and the fold cannot drift apart: there is
+// one order here and two readers of it, not two orders.
+//
+// Its siblings `HOUSEHOLDS_SQL` and `PINS_SQL` both order deliberately, for the
+// reason 019's header states — a SELECT with no ORDER BY returns whatever the
+// planner liked and the file's bytes would then depend on the weather. This one
+// was the exception and is no longer.
+const META_SQL = `
+  SELECT key, value FROM registry_meta
+   ORDER BY CASE key${META_KEYS.map((k, i) => ` WHEN '${k}' THEN ${i}`).join("")} ELSE ${META_KEYS.length} END, key`;
 
 /**
  * The same three tables, read through a QUERYABLE the caller already holds.
@@ -109,8 +143,19 @@ export async function registryRowsVia(q) {
 function foldRegistryRows(households, pins, meta) {
   const byKey = new Map(meta.map((r) => [r.key, r.value]));
   const ordered = {};
-  for (const k of ["schema_version", "note"]) if (byKey.has(k)) ordered[k] = byKey.get(k);
-  for (const [k, v] of byKey) if (!(k in ordered)) ordered[k] = v;
+  // The same `META_KEYS` the query orders by, then every other key BY KEY —
+  // the same two-part order, in the same direction, as `META_SQL`'s ORDER BY.
+  //
+  // THE TAIL IS SORTED HERE AND NOT LEFT TO THE QUERY, although the query now
+  // orders it too. A fold that trusted the ORDER BY would hold this property
+  // only for rows that arrived through that one statement, and no test without
+  // a real Postgres could ever see it — a stub hands back the order it chose,
+  // `ORDER BY` or not. Sorted here, the file's top level is one order whatever
+  // hands the rows over, and `registry-drain.test.mjs` can prove it. The SQL
+  // clause is the matching half: it keeps the planner out of a log a person
+  // reads, and keeps the two roads spelling one order.
+  for (const k of META_KEYS) if (byKey.has(k)) ordered[k] = byKey.get(k);
+  for (const k of [...byKey.keys()].sort()) if (!(k in ordered)) ordered[k] = byKey.get(k);
 
   return {
     meta: ordered,
