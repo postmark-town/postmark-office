@@ -58,7 +58,6 @@ import { arenaGroundAt, adversaryIn, arrivalOnGround, groundAtPoint } from "./ar
 // its last caller here, and it opened the store for the departure read alone.
 // The remaining `openDynamic` calls are other readers' and other rows'.
 import { emissionsEnabled, openDynamic } from "./dynamic-store.mjs"; // stage 2: the dynamic layer's flag
-import { declareMovement, declareMovementFlipped } from "./dynamic-entities.mjs"; // stage D: the pen after the ledger's freeze
 import { emissionFromVoice } from "./dynamic-emissions.mjs"; // stage 2: speech also becomes an emission instance
 import { world2Enabled } from "./world2-acts.mjs"; // the write-path closure: is the shadow mirror on at all
 import { VESSEL_HANDLE, ridesTheVessel } from "./dynamic-entities.mjs"; // the aboard test, one home for two readers
@@ -4168,96 +4167,77 @@ export async function walkViaOffice(worldClone, payload = {}, key = null) {
     const pace = departurePace();
     // ── ONE CLOCK READ, TWO PENS (POS-198, 2026-09-22) ───────────────────────
     //
-    // `declareMovement` reads `new Date()` itself when its caller passes no
-    // `at`, and until now this caller passed none — so the `movements` row's
+    // The `movements` pen read `new Date()` itself when its caller passed no
+    // `at`, and until POS-198 this caller passed none — so the movements row's
     // instant and the act's `written_at` were two reads of one wall clock with
-    // the whole of `declareMovement` (and, on the mirror arm, an awaited
-    // `witnessStampAt`) between them. That gap is POS-196's STOP, measured at a
-    // −203 ms median and a 10.6 h worst case across 2,808 lines.
+    // an awaited `witnessStampAt` between them. That gap was POS-196's STOP,
+    // measured at a −203 ms median and a 10.6 h worst case across 2,808 lines.
     //
-    // So the read happens HERE, once, and both pens are stamped from the same
-    // string. Equality is the assertion the falsifier makes — not closeness:
-    // two clock reads are never equal, so an equality test can only pass if
-    // there is genuinely one read, which is what makes it a probe that can
-    // fail rather than a tolerance that hides a regression.
+    // The read happens HERE, once. G1 has since removed the movements row
+    // entirely, so there is one pen left and this is the instant it carries —
+    // which is what lets `acts` render the world's departure record at all
+    // (`storedDepartureEvents`). The read stays here rather than moving into
+    // `walkEntry` because the answer below reports it too, and a second read
+    // for the answer would be the same drift in a smaller place.
     const declaredAt = new Date().toISOString();
     const movement = {
       actor: who, from, toward, crossing: at, at: declaredAt,
       within: targetExtent, toMark: targetMarkId, declaredBy: who, pace,
     };
-    // ── LANE THREE OF THE PEN FLIP (W2_PEN=walk; runbook C3, 2026-09-03) ────
-    // Flipped, the record is Postgres `acts`, committed and awaited BEFORE the
-    // movements row may stand; movements + the reverse-mirror journal row commit
-    // in one sqlite transaction after the pen has (declareMovementFlipped,
-    // dynamic-entities.mjs). Unreachable Postgres = the ruled refusal, and
-    // nothing was written — the resident is exactly where they were. Unflipped,
-    // the pen is what it was and the mirror below carries the act.
+    // ── ONE WRITE, INTO THE RECORD (G1 / POS-156, RULING 3) ─────────────
+    //
+    // THREE things stood here and two of them are gone.
+    //
+    //   · `dynamic.db/movements` — the walk lane's own sqlite pen, and the
+    //     REVERSE-MIRROR copy G1 removes. Nothing reads it live any more:
+    //     `storedDepartures` moved to `acts` in POS-154, `refreshEntities` and
+    //     `crossing-save`'s `<N>.jsonl` half in POS-156 part 0. The table keeps
+    //     its frozen history and its historical readers (`tools/ledger-freeze`,
+    //     `tools/state-to-r2`); nothing adds to it.
+    //   · the FIRE-AND-FORGET mirror on the unflipped arm — `mirrorLaneAct` in
+    //     a `void (async () => …)()`, which answered the resident before the act
+    //     had reached anywhere durable. That was defensible while `movements`
+    //     was the SoT. It is not once `movements` is not written, and RULING 3
+    //     says what replaces it: await the record, refuse at the door.
+    //
+    // So both arms write the act, awaited, and an unreachable record is the
+    // ruled 503 on either one. The refusal names no flag: `W2_PEN` decides
+    // which function writes, not whether the record is the record.
+    //
+    // ⚑ THE CLOCK IS STILL READ ONCE (POS-198). `movement.at` is the
+    // declaration instant and it rides the act as `writtenAt`, which is what
+    // lets `acts` render the world's `STATE/log/` departure record. The
+    // `movement` object above is now this door's own vocabulary rather than a
+    // row on its way to a table, and it is kept because `walkEntry` and the
+    // answer both read from it.
     const walkFlipped = laneFlipped("walk");
-    let flippedRow = null;
-    const store = openDynamic();
-    try {
-      if (walkFlipped) {
-        const { at: stampAt, witnesses } = await witnessStampAt(who, from);
-        try {
-          flippedRow = await declareMovementFlipped(store, movement,
-            // The act is stamped FROM THE MOVEMENT OBJECT, not from a second
-            // read: `movement.at` is the one instant this call declared at, and
-            // `declareMovement` writes that same string into `movements.at`.
-            walkEntry({ crossing: at, who, targetMarkId, stampAt, witnesses, from, toward, pace, targetExtent, household: resolvedWorldHousehold(key),
-              writtenAt: movement.at, declaredBy: movement.declaredBy, note: movement.note ?? null }));
-        } catch (err) {
-          if (err?.name === "PenUnreachableError")
-            throw bounce(503, err.message,
-              "this lane's pen is the office's record (W2_PEN=walk); when it cannot be reached the door refuses rather than writing anywhere else — you are exactly where you were, and the walk is safe to declare again");
-          throw err;
-        }
-      } else {
-        declareMovement(store, movement);
+    let walkRow = null;
+    {
+      const { at: stampAt, witnesses } = await witnessStampAt(who, from);
+      const entry = walkEntry({
+        crossing: at, who, targetMarkId, stampAt, witnesses, from, toward, pace, targetExtent,
+        household: resolvedWorldHousehold(key),
+        writtenAt: movement.at, declaredBy: movement.declaredBy, note: movement.note ?? null,
+      });
+      try {
+        walkRow = walkFlipped ? await appendActFlipped(null, entry) : await appendJournal(null, entry);
+      } catch (err) {
+        if (err?.name === "PenUnreachableError")
+          throw bounce(503, err.message,
+            "this door's pen is the office's record; when it cannot be reached the door refuses rather than writing anywhere else — you are exactly where you were, and the walk is safe to declare again");
+        throw err;
       }
-    } finally { store.close(); }
-
-    // ── THE WALK GAP, CLOSED (2026-08-28) ───────────────────────────────────
-    //
-    // The say gap's sibling, and it hid better. `walk-exec.mjs` DOES call
-    // appendJournal, so the walk lane reads as mirrored — but that arm is the
-    // `else` below, and dev has run WORLD_MOVEMENT_V2=1 since movement-v2
-    // shipped. Every walk on this office goes through the branch you are
-    // reading, whose pen is `dynamic.db/movements`, and not one of them had
-    // reached `acts`. Two pens for one verb, only one of them mirrored: a lane
-    // is closed only when EVERY pen behind it is.
-    //
-    // Same fields the journal arm writes (walk-exec.mjs § SETTLE AT THE SAVE),
-    // so the act is the same act whichever pen recorded it — CLASS_MOVE,
-    // action "walk", the target as `object`, the pace on the payload. What it
-    // cannot carry is that arm's `payload.ledger`/`lines`: this pen formats no
-    // ledger line (that is the whole point of movement-v2 — "no commit is made
-    // on the resident's turn"), and inventing one here would be a second
-    // formatter for a serialization that has one home. The departure's own
-    // geometry rides instead, which is what this pen actually knows.
-    //
-    // Privacy: a departure is public — it crystallizes into `STATE/log/` in the
-    // public world repo at the next crossing-save, by this branch's own
-    // `movement.crystallizes`. Nothing new leaves the box.
-    if (world2Enabled() && !walkFlipped) { // flipped, the pen already holds this act (declareMovementFlipped above)
-      void (async () => {
-        try {
-          const { at: stampAt, witnesses } = await witnessStampAt(who, from);
-          // Same instant as the `movements` row written above — the mirror is
-          // ASYNCHRONOUS (this arm runs after the door has answered), so a
-          // clock read here would be the widest drift of all.
-          await mirrorLaneAct(walkEntry({ crossing: at, who, targetMarkId, stampAt, witnesses, from, toward, pace, targetExtent, household: resolvedWorldHousehold(key),
-            writtenAt: movement.at, declaredBy: movement.declaredBy, note: movement.note ?? null }));
-        } catch (e) {
-          console.error(`[world2-acts] a walk did not reach acts (${String(e?.message ?? e).slice(0, 160)}) — dynamic.db/movements is unaffected`);
-        }
-      })();
     }
+
     result = {
       position: positionAt({ from, toward, at, targetExtent, targetMarkId, pace }, at), pace,
-      movement: { record: walkFlipped ? "acts (Postgres; dynamic.db/movements is the reverse-mirror copy)" : "dynamic.db/movements", crystallizes: "STATE/log/ at the next crossing-save" },
-      // Which store is the RECORD for this act — said in the answer, as every
-      // flipped door says it.
-      ...(walkFlipped ? { log: "acts", seq: flippedRow?.seq ?? null } : {}),
+      // ONE RECORD, AND THE SAME SENTENCE ON BOTH ARMS (G1). This used to name
+      // `dynamic.db/movements` on the unflipped arm and call it the
+      // reverse-mirror copy on the flipped one; there is one store now, and the
+      // `<N>.jsonl` the record crystallizes into is rendered FROM it
+      // (`storedDepartureEvents`, POS-156 part 0).
+      movement: { record: "acts", crystallizes: "STATE/log/ at the next crossing-save, rendered from the record" },
+      log: "acts", seq: walkRow?.actId ?? null,
       ...(exitedFirst ? { exited_first: exitedFirst, note: setDownFirst
         ? `a walk declared aboard is the choice to go ashore: you stepped off at ${setDownFirst.at}${setDownFirst.arrived ? ", where your ride came due" : " — the stop you came in through"} and the road begins there. The exit stands as its own act on the record.`
         : "DEC-5: you stepped out of these before walking (exit: true); each exit stands as its own act on the record" } : {}),

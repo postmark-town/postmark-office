@@ -49,7 +49,7 @@
 // fallback's coat" (DESIGN §5 D2). The cost is chosen knowingly: after the
 // flip a Postgres outage is a visible town outage (DESIGN §4 F1).
 
-import { world2Enabled, MIRROR_EXPIRES, LANE_MIRROR, mirrorExpiresFor } from "./world2-acts.mjs";
+import { world2Enabled } from "./world2-acts.mjs";
 import { currentCrossing } from "./crossings.mjs";
 
 // ── A LATE ROW MAY NOT ENTER A CERTIFIED WINDOW (the act-4171 class, 2026-09-04) ─
@@ -277,15 +277,21 @@ export async function insertAct(client, rowIn, seq = null, { lateArrival = null 
   const row = lateCrossingGuard(rowIn, { lateArrival });
   const { householdKeyFor } = await import("./world2-claims.mjs");
   const household = row.household == null ? null : await householdKeyFor(client, row.household);
+  // `acts.journal_seq` IS DROPPED (G1 / POS-156, migration 024). It held the
+  // sqlite rowid an act was mirrored FROM, and there is no sqlite row any more
+  // -- 001 called it "the shadow-era pairing key, dying at cutover", and this
+  // is the cutover. `seq` is still TAKEN, because the arena's mirror still has
+  // one to offer and a caller that passed it would otherwise think it landed;
+  // it is ignored here, deliberately and in writing.
   const { rows: [r] } = await client.query(
     `INSERT INTO acts (at, crossing, actor, action, object,
                        at_anchor, at_dx, at_dy, witnesses, class,
-                       payload, effect, household, journal_seq)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+                       payload, effect, household)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
      RETURNING id`,
     [row.written_at, row.crossing, row.actor, row.action, row.object,
      row.at_anchor, row.at_dx, row.at_dy, row.witnesses, row.class,
-     row.payload, row.effect, household, seq]);
+     row.payload, row.effect, household]);
   return r.id;
 }
 
@@ -388,12 +394,10 @@ export function penStatus() {
   return {
     flipped_lanes: [...flippedLanes()],
     written, failed, refused, lastError,
-    // `expires` keeps its scalar shape — the governed lanes' shared backstop —
-    // and `lane_expiry` carries the per-lane truth beside it (DEC-2), null where
-    // a lane is exempt by ruling. Same pair mirrorStatus() answers with.
-    expires: MIRROR_EXPIRES,
-    lane_expiry: Object.fromEntries(
-      Object.keys(LANE_MIRROR).map((lane) => [lane, mirrorExpiresFor(lane)])),
+    // `expires` and `lane_expiry` are GONE with the map that fed them (G1 /
+    // POS-156). They were the reverse mirror's backstop dates, and the reverse
+    // mirror is deleted -- `appendActFlipped` writes no sqlite row. Same
+    // removal, same reason, as `mirrorStatus()`.
   };
 }
 

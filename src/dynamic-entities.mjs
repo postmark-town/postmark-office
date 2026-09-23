@@ -466,60 +466,24 @@ export function declareAttachment(db, { entity, target, policy = "cascade", decl
 // makes the seam a change of WRITER rather than a change of MEANING — and it is
 // why the ledger can be frozen without any resident's position moving.
 
-/**
- * Declare a departure into the store. The office pen's post-freeze equivalent of
- * appending one ledger line, and it keeps the ledger's own laws: position is a
- * pure function of (record, clock), superseding is a new departure from the
- * derived position, stopping is a zero-distance departure, and nothing en route
- * is ever written.
- */
-export function declareMovement(db, {
-  actor, at = null, from, toward, crossing,
-  within = null, toMark = null, pace = null, declaredBy = null, note = null,
-} = {}) {
-  if (!actor) throw new Error("a departure needs an actor");
-  if (!from || !Number.isFinite(from.x) || !Number.isFinite(from.y)) throw new Error("a departure needs a from {x,y}");
-  if (!toward || !Number.isFinite(toward.x) || !Number.isFinite(toward.y)) throw new Error("a departure needs a toward {x,y}");
-  if (!Number.isFinite(crossing)) throw new Error("a departure needs the fractional crossing it was declared at");
-  const iso = at ?? new Date().toISOString();
-  db.prepare(`INSERT INTO movements
-      (actor, at, from_x, from_y, toward_x, toward_y, crossing, within_w, within_h, to_mark, pace, declared_by, note)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-    .run(actor, iso, from.x, from.y, toward.x, toward.y, crossing,
-      within?.w ?? null, within?.h ?? null, toMark, pace, declaredBy ?? actor, note);
-  return { actor, at: iso, from, toward, crossing, within, to: toMark, pace, declared_by: declaredBy ?? actor, note };
-}
-
-// ── THE FLIPPED WALK (W2_PEN=walk; runbook C3, 2026-09-03) ──────────────────
+// ── THE MOVEMENTS PEN IS GONE (G1 / POS-156, 2026-09-22) ───────────────
 //
-// R2's ordering in sqlite's own terms, the hold lane's shape (world-hold.mjs §
-// declareHoldingFlipped): the movements row is written inside a sqlite
-// transaction that COMMITs only after `appendActFlipped` returns — Postgres
-// committed, the reverse-mirror journal row on the same handle — and ROLLs BACK
-// on any refusal. The three outcomes, each with one truth:
+// `declareMovement` and `declareMovementFlipped` wrote `dynamic.db/movements`:
+// the walk lane's own sqlite pen and, under the flip, the REVERSE-MIRROR copy
+// that committed in one sqlite transaction after the awaited Postgres pen. Both
+// are deleted with the rest of the reverse mirror.
 //
-//   the door refuses before this        → nothing in either store (never reaches here)
-//   the pen is unreachable              → PenUnreachableError thrown; movements + journal untouched
-//   the pen commits                     → acts holds the record; movements + journal commit together
+// NOTHING READS THE TABLE LIVE ANY MORE, which is what made the deletion a
+// deletion rather than a port: `storedDepartures` moved to `acts` in POS-154,
+// and `refreshEntities` and `crossing-save`'s `<N>.jsonl` half moved in
+// POS-156's part 0. Every walk writes one act, awaited, through `appendJournal`
+// -- `world.mjs § walkViaOffice` and `world-apex.mjs § spawnOnEnter`, which was
+// a THIRD writer of this table that POS-156's own measurement had not listed.
 //
-// `entry` is the act as the mirror would have described it (the caller builds
-// it with the same field vocabulary — `within`/`to`, the movements row's own
-// column names). `deps.appendActFlipped` exists so the ordering can be proven
-// on a hand-built store with no world db and no Postgres; the door injects the
-// real one. Throws; the door turns PenUnreachableError into the ruled 503.
-export async function declareMovementFlipped(db, movement, entry, deps = {}) {
-  const appendActFlipped = deps.appendActFlipped ?? (await import("./world-journal.mjs")).appendActFlipped;
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    const declared = declareMovement(db, movement);
-    const row = await appendActFlipped(db, entry);
-    db.exec("COMMIT");
-    return { ...declared, log: "acts", seq: row.seq ?? null };
-  } catch (err) {
-    try { db.exec("ROLLBACK"); } catch { /* no transaction to roll back — the BEGIN itself failed */ }
-    throw err;
-  }
-}
+// `readMovements` STAYS, below, and so does the table. It holds the frozen era
+// and two historical readers still ask it for that history
+// (`tools/ledger-freeze.mjs`, `tools/state-to-r2.mjs`). A reader of history is
+// not a shim; what G1 removes is the WRITE, so nothing is added to it again.
 
 /**
  * Every declared movement, in world.db's `events` row shape.
