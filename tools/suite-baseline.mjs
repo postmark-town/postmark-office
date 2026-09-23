@@ -35,10 +35,10 @@
 // EXIT: 0 done / same · 1 differs / no receipt / post failed · 2 refused.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const HEADING = "suite-baseline";
 const DEFAULT_REPO = "postmark-town/postmark-office";
@@ -336,6 +336,15 @@ export async function main(argv) {
   }
 }
 
-if (process.argv[1] && isAbsolute(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// ENTRY GUARD, the roster's realpath shape (test/cli-guard.test.mjs): compare
+// real paths, so an entry through a junction or symlink still runs the tool —
+// the href form is false under cli-guard's junction and the tool exits 0 with
+// nothing said (fix-forward 2026-09-23, after #170).
+const isMain = (() => {
+  if (!process.argv[1]) return false;
+  try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); }
+  catch { return pathToFileURL(process.argv[1]).href === import.meta.url; }
+})();
+if (isMain) {
   process.exitCode = await main(process.argv.slice(2));
 }
