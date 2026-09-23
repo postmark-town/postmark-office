@@ -61,7 +61,15 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { openDynamic } from "../src/dynamic-store.mjs";
-import { CLASS_FRAME, CLASS_MOVE, appendJournal, readJournal } from "../src/world-journal.mjs";
+import { CLASS_FRAME, CLASS_MOVE, readJournal } from "../src/world-journal.mjs";
+// ── THE ROWS ARE SEEDED, NOT WRITTEN BY A DOOR (G1 / POS-156) ───────────────
+//
+// G1 deleted the general journal INSERT; the write path writes the RECORD now.
+// What this suite is about is a READER of the sqlite journal, which is live
+// code whose retirement is G2's -- so the population it reads is PUT THERE by
+// this file, in the office's own row shape. Nothing below claims a door wrote
+// these rows. See test/journal-seed.mjs.
+import { seedJournalRow } from "./journal-seed.mjs";
 import { __setPoolForTest } from "../src/world2-acts.mjs";
 import {
   LEDGER_NEW, LEDGER_OLD, LEDGER_FROZEN, DEPRECATED_DOOR, ledgerHeaderFrom,
@@ -638,22 +646,33 @@ test("END TO END through the real pen — crossing-exec writes, the mirror carri
     JSON.stringify({ handle: "wright", act: "enter", at: 151.6, lines: [line], summary: "enters the trueing house" }),
   ], { encoding: "utf8", env: { ...process.env, WORLD_CLONE: clone, WORLD_DYNAMIC_DB: penDb, WORLD_SINGLE_LOG: "1" } });
 
+  // ── AFTER G1 THE REAL PEN NEEDS A REAL RECORD (POS-156, RULING 3) ────────
+  //
+  // This used to assert the whole chain: the pen writes a journal row, the
+  // mirror carries its payload into `acts`, the door derives from `acts`. The
+  // middle hop is gone — the pen writes the record DIRECTLY now — and the pen
+  // runs here as a SUBPROCESS, which the in-memory record
+  // (`test/acts-pen-stub.mjs`) cannot reach. A store for it would mean a live
+  // Postgres, which this suite does not have and must not require.
+  //
+  // So what is asserted end to end is the new truth, and it is worth asserting:
+  // an office pointed at no record REFUSES the crossing and writes nothing
+  // anywhere. The claim this test used to carry NAMES ITS NEW HOME rather than
+  // being dropped — "the door derives the passage from the payload in `acts`"
+  // is THE EQUALITY FALSIFIER below, which writes one payload into both records
+  // and compares the bytes, then takes the sqlite side away.
   const answer = JSON.parse(out.trim().split("\n").at(-1));
-  assert.equal(answer.error, undefined, `the pen refused: ${JSON.stringify(answer.error ?? {})}`);
-  assert.equal(answer.log, "journal", "the act settled at the save, as the cutover ruled");
-  assert.equal(answer.commit, null, "and spent no commit of its own");
+  assert.equal(answer.error?.code, 503,
+    "an office pointed at no record must REFUSE a crossing, not answer 200 over an act no store holds");
+  assert.match(String(answer.error?.hint), /the office's record/,
+    "and the refusal names the record as the thing that could not be reached");
 
-  // The mirror's hop, by hand: the journal row's OWN payload into `acts`.
   const written = withPenDb(penDb, (db) => readJournal(db));
-  assert.equal(written.length, 1, "control: the pen wrote exactly one row for the mirror to carry");
-  store.acts.push({
-    id: 1, at: written[0].written_at, crossing: String(written[0].crossing),
-    actor: written[0].actor, action: written[0].action, object: written[0].object,
-    payload: written[0].payload,
-  });
+  assert.deepEqual(written, [],
+    "and NOTHING reached the sqlite journal either — G1 deleted that INSERT, so a refused crossing has no consolation copy");
 
-  assert.ok((await servedEnterExitLedger(clone, { env: RECORD_ON })).ledger.includes(line),
-    "the pen kept the passage and the door showed a world in which it never happened");
+  assert.equal(readFileSync(join(clone, LEDGER_FROZEN), "utf8"), `${FROZEN_HEADER}${FROZEN_A}\n${FROZEN_B}\n`,
+    "the committed record is exactly as it was — a refusal leaves the world where it stood");
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -693,7 +712,7 @@ const FIXTURE_LINES = EQUALITY_FIXTURE.flatMap((f) => f.lines);
 function seedBothRecords(db) {
   EQUALITY_FIXTURE.forEach((f, i) => {
     const payload = { ledger: f.ledger, lines: f.lines, summary: `${f.act}s` };
-    appendJournal(db, {
+    seedJournalRow(db, {
       crossing: f.at, actor: f.handle, action: f.act, object: "the-town/the-post-office",
       cls: CLASS_FRAME, at: null, witnesses: null, payload,
       effect: "the crossing is declared; the record receives it at the save",

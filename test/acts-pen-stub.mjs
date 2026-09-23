@@ -102,6 +102,33 @@ export function makeActsPen({ households = [], pins = [], meta = [], also = [] }
       return { rows: [{ id }], rowCount: 1 };
     }
 
+    // ── IT READS BACK WHAT IT WAS WRITTEN ────────────────────────────────
+    //
+    // Not a convenience: since G1 the door writes the record and the READ folds
+    // that same record back, so a suite that could not read its own writes
+    // could not test a round trip at all -- it would assert against a fixture
+    // instead of against what the door did. `payload` and `witnesses` come back
+    // as OBJECTS, which is what `pg` does with a jsonb column, so a reader that
+    // forgot to parse a string here would not be flattered.
+    //
+    // The class filter is honoured because the callers pass one; an ORDER other
+    // than `id` falls through to the throw rather than being quietly ignored.
+    if (/^SELECT/i.test(q) && /FROM acts/i.test(q)) {
+      if (/ORDER BY/i.test(q) && !/ORDER BY id/i.test(q)) {
+        throw new Error(`acts-pen-stub only answers acts reads ordered by id; this one asks: ${q.slice(0, 200)}`);
+      }
+      const wantClass = /class = \$(\d+)/i.exec(q);
+      const rows = state.acts
+        .filter((r) => (wantClass ? r.class === params[Number(wantClass[1]) - 1] : true))
+        .map((r) => ({
+          ...r,
+          at: r.at instanceof Date ? r.at : new Date(r.at),
+          payload: typeof r.payload === "string" ? JSON.parse(r.payload) : r.payload,
+          witnesses: typeof r.witnesses === "string" ? JSON.parse(r.witnesses) : r.witnesses,
+        }));
+      return { rows, rowCount: rows.length };
+    }
+
     // The registry, as `registry-store.mjs`'s three fixed SELECTs ask for it.
     if (/FROM households/i.test(q)) return { rows: households.map((r) => ({ ...r })), rowCount: households.length };
     if (/FROM household_pins/i.test(q)) return { rows: pins.map((r) => ({ ...r })), rowCount: pins.length };
@@ -122,6 +149,22 @@ export function makeActsPen({ households = [], pins = [], meta = [], also = [] }
     state,
     /** The acts this pen actually received, in write order. */
     rows: () => state.acts.map((r) => ({ ...r })),
+    /**
+     * Put a row in the record WITHOUT a door writing it — for the suites whose
+     * subject is a READER of `acts` and that need history the door in this test
+     * did not make (a drained window, another household's act, a prior era).
+     *
+     * ⚑ NAMED `seedAct` SO IT CANNOT BE MISTAKEN FOR A WRITE. Nothing that uses
+     * it may assert that a door filed the row; the door's own writes are what
+     * `rows()` returns and they arrive through `insertAct` like any other.
+     */
+    seedAct(row) {
+      const id = row.id ?? state.nextId++;
+      if (row.id != null && row.id >= state.nextId) state.nextId = row.id + 1;
+      state.acts.push({ crossing: null, object: null, at_anchor: null, at_dx: null, at_dy: null,
+        witnesses: null, effect: null, household: null, journal_seq: null, ...row, id });
+      return id;
+    },
     /** Every query asked of it, normalized — assert the count, not only the answer. */
     asked: () => [...state.asked],
     query: answer,

@@ -99,12 +99,14 @@ const flagOn = async (fn) => {
 
 // ── THE CLASS ───────────────────────────────────────────────────────────────
 
-test('THE CLASS: "letter" is the town log\'s, and the world log bounces it on sight', () => {
+test('THE CLASS: "letter" is the town log\'s, and the world log bounces it on sight', async () => {
   assert.ok(TOWN_CLASSES.has("letter"));
   const d = odb();
   // one line in TOWN_CLASSES is what teaches the world log to refuse — the
   // tripwire reads that set rather than keeping a list of its own.
-  assert.throws(() => appendJournal(d, { actor: "wright", action: "send", cls: "letter", household: "keemin" }),
+  // `assert.rejects` since G1: `appendJournal` is async, so the tripwire's
+  // throw arrives as a rejection. Same call, same message, same claim.
+  await assert.rejects(() => appendJournal(d, { actor: "wright", action: "send", cls: "letter", household: "keemin" }),
     /"letter" is the town log's class, not the world's/,
     "a mail row under the world's drain would be truncated undrained — the collision two tables exist to make impossible");
   // and the reverse fence still stands
