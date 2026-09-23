@@ -911,14 +911,25 @@ test("THE DOOR, flag off — the same call still spends a commit on the sketchbo
  * the port: the field names are the columns' own.
  */
 const guardStore = ({ claims = [], identities = { alpha: "hh:alpha-house", beta: "hh:beta-house" }, scopeAs = (h) => h } = {}) => {
+  // TWO SESSION SETTINGS since POS-160 RULING 4 — the store never re-spells a
+  // row, so a house declares EVERY spelling it has ever carried and 024's four
+  // draft policies compare against that set. `app.household` is still the one
+  // current spelling, and `guard-reads.mjs § assertHouseholdDeclared` refuses a
+  // guard read on a connection that declared only one of the two. The
+  // `_keys` arm must be matched FIRST: `app.household` is a prefix of
+  // `app.household_keys`, so a looser pattern would let the set clobber the key.
   let declared = null;
+  let declaredKeys = null;
   const calls = { claims: 0 };
   return {
     calls,
     client: {
       async query(sql, args = []) {
+        if (/set_config\(.app\.household_keys./.test(sql)) {
+          declaredKeys = args[0] ? String(args[0]).split(",") : null; return { rows: [{}] };
+        }
         if (/set_config\(.app\.household./.test(sql)) { declared = args[0]; return { rows: [{}] }; }
-        if (/current_setting\(.app\.household./.test(sql)) return { rows: [{ declared }] };
+        if (/current_setting\(.app\.household./.test(sql)) return { rows: [{ declared, keys: declaredKeys }] };
         if (/FROM identities/.test(sql)) return { rows: identities[args[0]] ? [{ household: identities[args[0]] }] : [] };
         // THE REGISTRY, which is what `householdKeyFor` reads since POS-160.
         // Same statement as the `identities` line above — these handles live in
@@ -935,9 +946,14 @@ const guardStore = ({ claims = [], identities = { alpha: "hh:alpha-house", beta:
         if (/FROM registry_meta/.test(sql)) return { rows: [{ key: "schema_version", value: 1 }] };
         if (/FROM claims/.test(sql)) {
           calls.claims += 1;
+          // `asked` is the SPELLING SET now (`household = ANY($2)`), so the
+          // filter is membership rather than equality — the predicate the
+          // policy evaluates, in the shape it evaluates it. `scopeAs` still
+          // rewrites what the guard asked for, which is what the CAN-FAIL test
+          // below flips to make the duplicate slip through.
           const [statuses, asked] = args;
-          const household = asked == null ? null : scopeAs(asked);
-          return { rows: claims.filter((c) => statuses.includes(c.status) && (household == null || c.household === household)) };
+          const keys = asked == null ? null : [].concat(asked).map(scopeAs);
+          return { rows: claims.filter((c) => statuses.includes(c.status) && (keys == null || keys.includes(c.household))) };
         }
         if (/^(BEGIN|COMMIT|ROLLBACK)/.test(sql.trim())) return { rows: [] };
         throw new Error(`the hand-built store was asked something it does not know: ${sql.slice(0, 80)}`);

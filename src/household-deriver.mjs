@@ -285,6 +285,149 @@ export function resolveHouse(x, registry, pins = {}, opts = {}) {
   return NO;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// THE SPELLING SET — every name one house has ever answered to (RULING 4)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// ── WHY A SET AND NOT A REWRITE ─────────────────────────────────────────────
+//
+// `022_household_respell.sql` was going to re-spell `claims` and `marks` so a
+// session keyed `hh:<slug>` could see drafts written under `gh:<id>`. THE STORE
+// REFUSES IT, and by three separate laws, each measured on the dev sandbox
+// 2026-09-22 (Wright's hand, a real Postgres):
+//
+//   `acts_append_only`     002_grants.sql — "an act is never edited"
+//   `claims_update_guard`  007_private_drafts.sql — EVERY lawful transition
+//                          requires `NEW.household IS NOT DISTINCT FROM
+//                          OLD.household`. "A claim's household never changes."
+//   `marks_id_is_fixed`    the same rule one table over
+//
+// The store's own law is that a row's household spelling is FIXED FOR ITS LIFE,
+// and this file's header already said it from the other side: "earlier lines
+// keep their spellings — history is not rewritten." So the defect 022 named is
+// real and its fix was on the wrong side of the wall. THE FIX IS ON THE READ
+// SIDE: a house declares every spelling it has ever carried, and the policy and
+// every household filter compare against the set.
+//
+// ── WHICH SPELLINGS ARE ADMITTED, AND WHICH ARE NOT ─────────────────────────
+//
+// MEASURED on `test/fixtures/registry-2026-09-22/` — the town's own two files,
+// byte-exact, 118 households / 190 pins:
+//
+//   `hh:<slug>`     118 — one per house. THE FIRST ENTRY, always.
+//   `gh:<id>`       121 — every account the registry lists carries an id
+//                         (0 of 121 are login-only), and three houses hold two.
+//   `hh:<formerly>`   0 — POS-158 shipped the column and no door has reached
+//                         it yet. Admitted anyway, because the moment one does
+//                         a renamed house's old rows are exactly this problem.
+//
+// AND THREE CLASSES REFUSED, each for a reason a future reader will want:
+//
+//   `solo:<handle>`  NAMES NO HOUSE. `resolveHouse` answers `unknown` for it by
+//                    design ("a fabricated household is worse than an absent
+//                    one"), 022's own map excluded it in the same words, and
+//                    admitting it here would be a WIDENING rather than a
+//                    restoration: a `solo:` row was written when the registry
+//                    had never heard of that handle, so it was never any
+//                    house's row, and pulling it into a house would show one
+//                    resident's private compose space to all of their
+//                    housemates. Excluded, and a `solo:` session still declares
+//                    its own key — see `sessionKeysVia`.
+//
+//   BARE STRINGS     a bare slug, a bare handle, a bare login, a bare former
+//                    slug. `resolveHouse` can read these safely ONLY BECAUSE IT
+//                    IS ORDERED — a bare string is tried as a HANDLE first,
+//                    precisely because three live handles are also some house's
+//                    slug (`mari`, `moth`, `elias-returning`, measured
+//                    2026-09-22). A SET HAS NO ORDER. `household = ANY(set)`
+//                    matches on membership alone, so a bare `mari` in the set
+//                    of ev-attractor's house would match a row that meant
+//                    starforge's resident — a cross-household read, silently.
+//                    Every admitted spelling is PREFIXED, which is 022's own
+//                    rank-0 sentence: "a prefixed key says what it is; no
+//                    ambiguity."
+//
+//   `login:<name>`   an ACCOUNT spelling whose match rule is conditional —
+//                    `accountMatches` lets a login reach a house only where
+//                    that house's row carries NO id for it. A set cannot carry
+//                    a condition. Measured: 0 of 190 handles wear a `login:`
+//                    key and every one of the 118 houses pins every account it
+//                    lists, so this binds nothing today and is refused on the
+//                    rule rather than on the count.
+
+/** A comma is the separator `024_household_spellings.sql` splits on. */
+const COMMA = ",";
+
+/** Refuse a key that would split into two on the way into the policy. */
+const assertNoComma = (k) => {
+  if (String(k).includes(COMMA))
+    throw new Error(
+      `household-deriver: the key ${JSON.stringify(k)} carries a comma, and the session key is comma-joined ` +
+      `(024_household_spellings.sql § string_to_array) — it would split into two keys, one of which may be ` +
+      `another house's. Refusing rather than declaring it.`);
+  return k;
+};
+
+/**
+ * EVERY SPELLING ONE HOUSE HAS EVER CARRIED, the house being whichever one `x`
+ * resolves to. PURE.
+ *
+ * @returns `[]` when `x` names no house — the same refusal `resolveHouse`
+ *          gives, not an empty house.
+ *
+ * ORDER IS PART OF THE ANSWER: the live `hh:<slug>` first, so a caller that
+ * wants the ONE CURRENT spelling can read `[0]` and a receipt naming the set
+ * names the house before its history.
+ *
+ * IT THROWS ON A COMMA. The session key crosses into Postgres as one string and
+ * `024` splits it with `string_to_array(…, ',')`, so a key carrying a comma
+ * would silently become two keys — one of which could be some other house's.
+ * `slugFromName` cannot mint one (`[^a-z0-9.]+` collapses to `-`) and `gh:` is
+ * digits, so this cannot fire today; it is here because the day it could, the
+ * failure is a cross-household read that nothing else would say a word about.
+ */
+export function houseKeysOf(x, registry, pins = {}, opts = {}) {
+  const { slug } = resolveHouse(x, registry, pins, opts);
+  if (!slug) return [];
+  const rec = housesOf(registry)[slug] ?? {};
+  const out = [];
+  const add = (k) => {
+    if (!k || out.includes(k)) return;
+    out.push(assertNoComma(k));
+  };
+
+  add(keyOfSlug(slug));                                     // the live key, first
+  for (const f of rec.formerly ?? []) {                     // then the alias list
+    const s = String(f ?? "").replace(/^hh:/, "").trim();
+    if (s) add(`hh:${s}`);
+  }
+  for (const a of rec.accounts ?? [])                       // then every account
+    if (a?.id != null) add(`gh:${a.id}`);
+
+  return out;
+}
+
+/**
+ * THE SET A SESSION DECLARES for the key it is acting under. PURE.
+ *
+ * `key` ALWAYS COMES FIRST AND IS ALWAYS PRESENT, whatever the registry says,
+ * and that is the whole safety of this function:
+ *
+ *   a `solo:<handle>` key names no house, so `houseKeysOf` answers `[]` — and a
+ *   session declaring `[]` would see NONE of its own drafts, which is a
+ *   REGRESSION on today rather than the fix. The key itself in the set means
+ *   this can only ever ADD spellings to what a session can already read.
+ *
+ * So: no answer from the registry leaves a resident worse off than the string
+ * equality did, and a known house gains its history.
+ */
+export function sessionKeysFor(key, registry, pins = {}) {
+  if (key == null || key === "") return [];
+  assertNoComma(key);
+  const keys = houseKeysOf(key, registry, pins);
+  return [key, ...keys.filter((k) => k !== key)];
+}
+
 // ── the loaded half ─────────────────────────────────────────────────────────
 //
 // One registry read per request, and one answer per (request, x). The registry
@@ -384,3 +527,39 @@ export async function houseOfVia(q, x, opts = {}) {
 export async function houseKeyOfVia(q, x) {
   return keyOfSlug((await houseOfVia(q, x)).slug);
 }
+
+/** Every spelling this house has carried, from the caller's own store. */
+export async function houseKeysOfVia(q, x) {
+  const rows = await houseRowsVia(q);
+  return houseKeysOf(x, rows.registry, rows.pins);
+}
+
+/**
+ * THE SESSION'S SPELLING SET, from the caller's own store — what
+ * `app.household_keys` is set to, and what `= ANY(…)` compares against.
+ *
+ * IT DOES NOT SWALLOW A REGISTRY FAILURE, deliberately. Every call site
+ * (`withHousehold`, `officeWrite`, the guards' `scoped`) has ALREADY resolved
+ * its household key through this same deriver against this same store, so a
+ * registry this cannot read is a registry the caller could not read either — a
+ * throw here adds no failure the door did not already have. Catching it would
+ * silently narrow the set back to one spelling, and a guard reading narrow is
+ * `guard-reads.mjs § THE RLS CONTRACT`'s own worst case: it PERMITS wrongly,
+ * with nothing anywhere saying the answer was partial.
+ */
+export async function sessionKeysVia(q, key) {
+  if (key == null || key === "") return [];
+  const rows = await houseRowsVia(q);
+  return sessionKeysFor(key, rows.registry, rows.pins);
+}
+
+/** The same set, from the module pool's fold. */
+export async function sessionKeysOf(key, env = process.env) {
+  if (key == null || key === "") return [];
+  const rows = await houseRows(env);
+  if (!rows) return [key];
+  return sessionKeysFor(key, rows.registry, rows.pins);
+}
+
+/** The session key as `024`'s policy parses it: comma-joined, or null. */
+export const sessionKeyString = (keys) => (keys?.length ? keys.join(COMMA) : null);
