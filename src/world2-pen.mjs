@@ -51,6 +51,7 @@
 
 import { world2Enabled } from "./world2-acts.mjs";
 import { currentCrossing } from "./crossings.mjs";
+import { sessionKeysVia, sessionKeyString } from "./household-deriver.mjs";
 
 // ── A LATE ROW MAY NOT ENTER A CERTIFIED WINDOW (the act-4171 class, 2026-09-04) ─
 //
@@ -214,18 +215,27 @@ export function laneFlipped(lane, env = process.env) {
 // ── R1's one home: a single client, a single transaction ────────────────────
 /**
  * Run `fn(client)` inside BEGIN/COMMIT on a dedicated client. When
- * `household` is given, `app.household` is declared first with the
- * transaction-scoped set_config — world2-claims.mjs § withHousehold documents
- * why the dedicated client and the explicit ROLLBACK are not optional on a
- * pooled connection; this is that shape, generalized as DESIGN §2 R1 asked.
+ * `household` is given, `app.household` AND `app.household_keys` are declared
+ * first with the transaction-scoped set_config — world2-claims.mjs §
+ * withHousehold documents why the dedicated client and the explicit ROLLBACK
+ * are not optional on a pooled connection, and why there are two settings
+ * rather than one; this is that shape, generalized as DESIGN §2 R1 asked.
+ *
+ * THE SET IS RESOLVED ON THE POOL, BEFORE `connect()`, for this function's own
+ * stated reason one paragraph down in `penWrite`: "a resolver running inside
+ * would be a query on a second connection while this one holds the transaction
+ * open." `sessionKeysVia` reads the registry, so it runs here.
  */
 export async function officeWrite(fn, { household = null, env = process.env } = {}) {
   const p = await pool(env);
+  const keys = household == null ? [] : await sessionKeysVia(p, household);
   const client = await p.connect();
   try {
     await client.query("BEGIN");
     if (household != null) {
       await client.query("SELECT set_config('app.household', $1, true)", [household]);
+      await client.query("SELECT set_config('app.household_keys', $1, true)",
+        [sessionKeyString(keys) ?? ""]);
     }
     const out = await fn(client);
     await client.query("COMMIT");

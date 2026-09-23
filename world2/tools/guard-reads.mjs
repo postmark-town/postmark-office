@@ -377,11 +377,20 @@ export function liveMarkRecords(rows, { strict = true } = {}) {
  * household. That is a finding, not a bug in this function, and
  * `DISCLOSURES.cross_household` is what the door has to say about it.
  */
-export async function pgLiveMarks(client, { household = null, statuses = LIVE_STATUSES, strict = true } = {}) {
-  if (household != null) await assertHouseholdDeclared(client, household);
+export async function pgLiveMarks(client, { household = null, statuses = LIVE_STATUSES, strict = true, keys: given = null } = {}) {
+  // `given` is the set a CALLER already asserted on this same connection — one
+  // round trip instead of two, and never a way to supply a set that was not
+  // checked: `pgDraftsForKey` is the only caller that passes it and it passes
+  // `assertHouseholdDeclared`'s own return value.
+  const keys = household == null ? null : (given ?? await assertHouseholdDeclared(client, household));
   const where = ["status = ANY($1)"];
   const args = [statuses];
-  if (household != null) { where.push(`household = $${args.length + 1}`); args.push(household); }
+  // `= ANY(keys)`, and the keys are the connection's own declared set — the
+  // array `024_household_spellings.sql`'s policy is comparing against, handed
+  // back by the assertion above. A house's rows keep the spelling they were
+  // written under forever, so a guard that asked for one spelling would see
+  // part of a house and PERMIT on the rest of it.
+  if (household != null) { where.push(`household = ANY($${args.length + 1})`); args.push(keys); }
   // ORDER BY slug, and it is not decoration: 1.0's `liveMarks` returns Map
   // insertion order, which is journal order, which nothing downstream depends on
   // — but a comparison does, and an unordered read makes a diff report row moves
@@ -416,15 +425,54 @@ export async function pgLiveChildrenOf(client, id, opts = {}) {
  * is the same call 007's policy makes — so this asks the policy's own question
  * and gets the policy's own answer, instead of a second notion of "declared".
  */
+/**
+ * ── IT ASSERTS BOTH SETTINGS NOW, AND RETURNS THE SET ───────────────────────
+ *
+ * `024_household_spellings.sql` made the draft policies compare against
+ * `app.household_keys` — every spelling this house has ever carried — because
+ * the store never re-spells a row (three guards refuse it; see 022's retirement
+ * header). So a connection that declared only `app.household` would now be read
+ * by a policy that looks at NOTHING, and this file's whole argument applies with
+ * more force than it did at one key: the guard sees no drafts at all, finds no
+ * collision, and PERMITS A DUPLICATE.
+ *
+ * The set must also CONTAIN the household the read is scoped to. A set that did
+ * not would be a session declaring one house and reading under another's names.
+ *
+ * It RETURNS the array so `pgLiveMarks` filters on exactly the value the policy
+ * is comparing against, in the same round trip. Two notions of "this house"
+ * inside one function is the drift `household-deriver.mjs` exists to have ended.
+ */
 export async function assertHouseholdDeclared(client, household) {
-  const { rows: [r] } = await client.query("SELECT current_setting('app.household', true) AS declared");
+  const { rows: [r] } = await client.query(
+    `SELECT current_setting('app.household', true) AS declared,
+            string_to_array(NULLIF(current_setting('app.household_keys', true), ''), ',') AS keys`);
   const declared = r?.declared ?? null;
-  if (declared === household) return;
-  throw new Error(
-    `guard-reads: this connection has declared app.household = ${declared === null ? "(nothing)" : JSON.stringify(declared)}, ` +
-    `and the read is scoped to ${JSON.stringify(household)}. 007's row policy would answer WITHOUT this household's ` +
-    `drafts and say nothing about it — a slug-collision guard would then permit a duplicate, and a parcel cap would ` +
-    `undercount. Run this inside world2-claims.mjs's withHousehold(pool, household, …).`);
+  const keys = Array.isArray(r?.keys) ? r.keys : null;
+  const said = (v) => (v === null ? "(nothing)" : JSON.stringify(v));
+
+  if (declared !== household)
+    throw new Error(
+      `guard-reads: this connection has declared app.household = ${said(declared)}, ` +
+      `and the read is scoped to ${JSON.stringify(household)}. 007's row policy would answer WITHOUT this household's ` +
+      `drafts and say nothing about it — a slug-collision guard would then permit a duplicate, and a parcel cap would ` +
+      `undercount. Run this inside world2-claims.mjs's withHousehold(pool, household, …).`);
+
+  if (!keys?.length)
+    throw new Error(
+      `guard-reads: this connection declared app.household = ${said(declared)} and app.household_keys = ${said(keys)}. ` +
+      `024_household_spellings.sql's policies compare against the SECOND one, so a draft row is unreadable here and a ` +
+      `guard would permit a duplicate slug or a parcel past the cap. withHousehold and officeWrite declare both; ` +
+      `a connection that declared only the first is running against the pre-024 office.`);
+
+  if (!keys.includes(household))
+    throw new Error(
+      `guard-reads: this connection declared app.household = ${said(declared)}, which is not in its own ` +
+      `app.household_keys ${said(keys)}. The set is every spelling of ONE house and must contain the house it is ` +
+      `scoped to (src/household-deriver.mjs § sessionKeysFor puts it first) — these two settings are describing ` +
+      `two different households.`);
+
+  return keys;
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -496,12 +544,27 @@ export async function assertHouseholdDeclared(client, household) {
 // optionally widens it for the registry-lag case the fold names — "registry lag
 // never blocks a new resident, it only leaves them ungrouped" — where a handle
 // has acts but no roster line yet.
+//
+// ── AND `identities.household` IS ITSELF SPELLED TWO WAYS ───────────────────
+//
+// The paragraph above is now true one hop further in. `identities.household` is
+// a projection of the WORLD repo's copy of the town's pins, and it carries
+// whatever spelling that copy happened to hold when each row landed: measured
+// 2026-09-22 on the live registry, 173 of 190 handles wore `gh:<id>` and 17
+// wore `hh:<slug>`, and umbraliminalis wore BOTH AT ONCE because a ledger re-key
+// had reached its first resident and not its other seven. So `household = $1`
+// against a `hh:`-keyed session returned two of that house's eight residents,
+// and the overlay lost the other six's withdrawals with nothing to say so.
+//
+// `= ANY($1)` is the spelling set — the same one 024's policy compares against.
+// The store does not re-spell `identities` either: `law_ingester` owns every row
+// of it, which is POS-160's second STOP and not this ship's.
 export const WITHDRAW_ACT_SELECT =
   `SELECT a.id, a.at, a.actor, a.object, a.household, a.payload
      FROM acts a
     WHERE a.class = 'mark' AND a.action = 'withdraw'
-      AND (a.actor IN (SELECT handle FROM identities WHERE household = $1)
-           OR ($2::text IS NOT NULL AND a.household = $2))`;
+      AND (a.actor IN (SELECT handle FROM identities WHERE household = ANY($1))
+           OR (COALESCE(array_length($2::text[], 1), 0) > 0 AND a.household = ANY($2)))`;
 
 /**
  * `draftsForKey`'s JOURNAL HALF, over 2.0's stores.
@@ -537,7 +600,12 @@ export async function pgDraftsForKey(client, {
   strict = true,
 } = {}) {
   if (household == null) throw new Error("pgDraftsForKey: a draft overlay is one household's own — pass household");
-  const { marks: live, refusals } = await pgLiveMarks(client, { household, strict });
+  // The connection's own declared spelling set, asserted before anything reads
+  // a row (`assertHouseholdDeclared` returns it). Both arms below take it, so
+  // the live half and the deleted half are scoped to the SAME house by the same
+  // array, which is what they came apart over the first time.
+  const keys = await assertHouseholdDeclared(client, household);
+  const { marks: live, refusals } = await pgLiveMarks(client, { household, strict, keys });
 
   const pathOf = (record) => {
     if (typeof pathFor !== "function") return null;
@@ -557,8 +625,16 @@ export async function pgDraftsForKey(client, {
 
   // THE DELETED ARM. Scoped to withdrawals whose mark still stands in canon —
   // see § THE DELETED ARM above for why the scope is canon's and not the log's.
+  //
+  // $1 is the SPELLING SET (the roster is keyed in whichever spelling the world
+  // repo's copy carried — see WITHDRAW_ACT_SELECT § AND `identities.household`).
+  // $2 stays the ONE 1.0 household NAME, wrapped, and is deliberately NOT
+  // widened: `acts.household` carries the office key's name, a different
+  // namespace from the roster's keys, and the deriver has no spelling set for
+  // it. `[]` is the old `$2::text IS NOT NULL` false arm, exactly.
   const { rows: withdrawn } = await client.query(
-    `${WITHDRAW_ACT_SELECT} ORDER BY a.id`, [household, journalHousehold]);
+    `${WITHDRAW_ACT_SELECT} ORDER BY a.id`,
+    [keys, journalHousehold == null ? [] : [journalHousehold]]);
   const seen = new Set(out.map((m) => m.id));
   for (const act of withdrawn) {
     const id = act.object ?? (act.payload?.by && act.payload?.slug ? `${act.payload.by}/${act.payload.slug}` : null);

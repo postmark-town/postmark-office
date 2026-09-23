@@ -60,7 +60,8 @@ import { escrowAbsentAmong, escrowPresenceAt, escrowLines } from "./escrow-prese
 // THE PARCEL CAP — the sweep's own gate, ported to the candle before the sweep
 // has to be the one to say no. The law itself is the WORLD's and is imported
 // from a checkout, never copied. See step 5.6.
-import { parcelCapLawAt, parcelCapRefusals, parcelCapLines, heldParcelsByCred } from "./parcel-cap.mjs";
+import { parcelCapLawAt, parcelCapRefusals, parcelCapLines, heldParcelsByCred, credOf } from "./parcel-cap.mjs";
+import { houseRowsVia, resolveHouse } from "../../src/household-deriver.mjs";
 import { computeStanding, gistContainment } from "./standing.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -357,12 +358,19 @@ try {
         capSeen = { checked: false, reason: why, claims: parcels.map((c) => slugOf(c)) };
         console.log(`  ⚑ parcel cap: ${parcels.length} parcel claim(s) LOCKED UNCHECKED — ${why}`);
       } else {
-        const heldByCred = await heldParcelsByCred(q);
+        // ONE HOUSE, HOWEVER ITS ROWS ARE SPELLED (POS-160 RULING 4). The store
+        // never re-spells a row, so both sides of this gate fold through the
+        // deriver on the way in: the STANDING counts in `heldParcelsByCred` and
+        // each CANDIDATE's `cred` below, by the same rule (`credOf`). Folding
+        // one side only would make every lookup miss and refuse nothing.
+        const houseRows = await houseRowsVia({ query: q });
+        const resolve = (hh) => resolveHouse(hh, houseRows.registry, houseRows.pins).slug;
+        const heldByCred = await heldParcelsByCred(q, { resolve });
         const candidates = [];
         for (const c of parcels) {
           candidates.push({
             id: c.id, slug: slugOf(c),
-            cred: await ownerHouseholdFor(q, c.claimant),
+            cred: credOf(await ownerHouseholdFor(q, c.claimant), resolve),
             // The RECORD's own date, which is what the fold compares against the
             // law date — never `submitted_at`. The drain queue dates a parcel at
             // seating and the two are different facts; the exceptions map exists

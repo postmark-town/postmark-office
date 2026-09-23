@@ -82,6 +82,20 @@ export function committedLog() {
   return store.log.filter((e) => e.committed).map((e) => e.text);
 }
 
+/**
+ * `household = ANY($n)` — the predicate, modelled (POS-160 RULING 4).
+ *
+ * The store never re-spells a row, so every household filter on `claims` takes
+ * the acting house's SPELLING SET rather than its one current key. `asked` is
+ * therefore an array, and this is membership.
+ *
+ * A BARE STRING IS STILL ACCEPTED, and not out of kindness: a client that could
+ * not answer `current_setting` falls back to `[household]`, and a suite driving
+ * one of the filters by hand may still pass a string. Both spell the same
+ * question at one element.
+ */
+const oneOf = (asked, held) => (Array.isArray(asked) ? asked.includes(held) : asked === held);
+
 const jsonGet = (v, k) => {
   if (v == null) return null;
   const o = typeof v === "string" ? JSON.parse(v) : v;
@@ -144,7 +158,29 @@ class FakeClient {
       this.open = false; this.writes = []; this.staged = [];
       return { rows: [], rowCount: 0 };
     }
+    // ── THE TWO SESSION SETTINGS (POS-160 RULING 4) ────────────────────────
+    //
+    // The store never re-spells a row — `acts_append_only`,
+    // `claims_update_guard` and `marks_id_is_fixed` each refuse it — so a house
+    // declares EVERY spelling it has ever carried and
+    // `024_household_spellings.sql`'s four draft policies compare
+    // `household = ANY(app.household_keys)`. `app.household` is still the one
+    // CURRENT spelling.
+    //
+    // `_keys` IS MATCHED FIRST, and the ordering is load-bearing: `app.household`
+    // is a prefix of `app.household_keys`, so a looser pattern above would let
+    // the set overwrite the key and every assertion about "whose household is
+    // acting" would be about the wrong string.
+    if (/set_config\('app\.household_keys'/i.test(t)) {
+      this.householdKeys = params[0] ? String(params[0]).split(",") : [];
+      return { rows: [], rowCount: 0 };
+    }
     if (/set_config\('app\.household'/i.test(t)) { this.household = params[0]; return { rows: [], rowCount: 0 }; }
+    // `world2-claims.mjs § declaredKeys` reads the set back off the connection
+    // rather than resolving the house a second time. Answered here the way a
+    // real `string_to_array(NULLIF(…), ',')` answers: an array, or null.
+    if (/current_setting\('app\.household_keys'/i.test(t))
+      return { rows: [{ keys: this.householdKeys?.length ? this.householdKeys : null }], rowCount: 1 };
 
     // A statement outside a transaction is legal here (householdKeyFor and
     // promoteDraftOnStake read on the pool), and is applied immediately.
@@ -211,7 +247,7 @@ class FakeClient {
 
     if (/DELETE FROM claims WHERE status = 'draft'/i.test(t)) {
       const [slug, claimant, household] = params;
-      const hit = store.claims.filter((c) => c.status === "draft" && c.slug === slug && c.claimant === claimant && c.household === household);
+      const hit = store.claims.filter((c) => c.status === "draft" && c.slug === slug && c.claimant === claimant && oneOf(household, c.household));
       defer(() => { for (const c of hit) store.claims.splice(store.claims.indexOf(c), 1); });
       return { rows: [], rowCount: hit.length };
     }
@@ -235,7 +271,7 @@ class FakeClient {
     // the promotion/rewrite of a held draft (world2-claims § the stake crossing the boundary)
     if (/UPDATE claims SET status = \$12/i.test(t)) {
       const [windowId, kind, body, geometry, bbox, stake, supersedes, data, slug, claimant, household, status] = params;
-      const hit = store.claims.find((c) => c.status === "draft" && c.claimant === claimant && c.slug === slug && c.household === household);
+      const hit = store.claims.find((c) => c.status === "draft" && c.claimant === claimant && c.slug === slug && oneOf(household, c.household));
       if (!hit) return { rows: [], rowCount: 0 };
       guardTransition(hit.status, status);
       defer(() => Object.assign(hit, {
@@ -255,7 +291,7 @@ class FakeClient {
     // the promotion read in promoteDraftOnStake
     if (/SELECT id, data->'_deferred_act' AS held FROM claims/i.test(t)) {
       const [claimant, slug, household] = params;
-      const c = store.claims.find((x) => x.status === "draft" && x.claimant === claimant && x.slug === slug && x.household === household);
+      const c = store.claims.find((x) => x.status === "draft" && x.claimant === claimant && x.slug === slug && oneOf(household, x.household));
       if (!c) return { rows: [], rowCount: 0 };
       const data = typeof c.data === "string" ? JSON.parse(c.data) : (c.data ?? {});
       return { rows: [{ id: c.id, held: data._deferred_act ?? null }], rowCount: 1 };

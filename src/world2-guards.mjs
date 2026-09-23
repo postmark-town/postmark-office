@@ -212,9 +212,27 @@ const refusing = async (which, fn) => {
 async function scoped(name, fn) {
   return reading(async (client) => {
     const { householdKeyFor } = await import("./world2-claims.mjs");
+    const { sessionKeysVia, sessionKeyString } = await import("./household-deriver.mjs");
     const key = name == null ? null : await householdKeyFor(client, name);
-    if (key != null) await client.query("SELECT set_config('app.household', $1, true)", [key]);
-    return fn(client, key);
+    if (key != null) {
+      // TWO SETTINGS, one fact. `app.household` is the ONE CURRENT spelling —
+      // what `guard-reads.mjs § assertHouseholdDeclared` names, and what the
+      // pen writes. `app.household_keys` is every spelling this house has ever
+      // carried, which is what `024_household_spellings.sql` compares against.
+      //
+      // THE SET MATTERS MOST HERE, and it is a PERMIT rather than a leak if it
+      // is missing: `guard-reads.mjs § THE RLS CONTRACT` spells it out — a
+      // slug-collision guard that cannot see a household's `gh:`-spelled drafts
+      // finds no collision and permits a duplicate, and a parcel cap
+      // undercounts. The store never re-spells a row, so the set is the only
+      // way this guard sees the whole house.
+      const keys = await sessionKeysVia(client, key);
+      await client.query("SELECT set_config('app.household', $1, true)", [key]);
+      await client.query("SELECT set_config('app.household_keys', $1, true)",
+        [sessionKeyString(keys) ?? ""]);
+      return fn(client, key, keys);
+    }
+    return fn(client, key, []);
   });
 }
 
