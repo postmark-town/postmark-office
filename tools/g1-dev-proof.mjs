@@ -194,11 +194,16 @@ function classes(me) {
   const slug = `g1-dev-proof-${stamp}`;
   const markId = `${who}/${slug}`;
   const said = `g1 dev proof ${stamp}`;
+  // ONE STRING PER READER, used by the call AND by every sentence about it,
+  // so the door a line names is always the door the probe actually asked.
+  const MARK_READER = "/world2/my-marks";
+  const WALK_READER = "/world2/walks";
+  const SAY_READER = "/world2/conversations";
 
   return [
     {
       name: "mark (draft)",
-      reader: "/world2/my-marks",
+      reader: MARK_READER,
       write: async (at) => call("POST", "/world/marks", {
         by: who, slug, kind: "sited", body: `a probe stood here at ${stamp} and wrote this line`,
         at: { x: at.x, y: at.y }, extent: { w: 1, h: 1 },
@@ -212,29 +217,29 @@ function classes(me) {
       // and a draft is in `drafts` by its `by/slug` id — or, past the page
       // bound, named by id in `withheld.drafts`. The probe sends the SAME
       // Bearer key the write was made with, so the reader asks as the author.
-      read: async () => call("GET", "/world2/my-marks", null, { keyed: true }),
+      read: async () => call("GET", MARK_READER, null, { keyed: true }),
       find: (wrote, got) => {
         if (!wrote.ok) return { ok: false, said: `the door refused the draft — ${why(wrote)}` };
-        if (!got.ok) return { ok: false, said: `the mark was written but /world2/my-marks did not answer — ${why(got)}` };
+        if (!got.ok) return { ok: false, said: `the mark was written but ${MARK_READER} did not answer — ${why(got)}` };
         // By ID, in the drafts list — not a substring of the whole body. The
         // draft is unstaked, so `drafts` is where the portfolio files it; the
         // slug turning up anywhere else is not this read-back's answer.
         const shown = Array.isArray(got.json?.drafts) ? got.json.drafts.map((m) => m?.id) : [];
         const withheld = Array.isArray(got.json?.withheld?.drafts) ? got.json.withheld.drafts : [];
         return shown.includes(markId) || withheld.includes(markId)
-          ? { ok: true, said: `/world2/my-marks holds the draft ${markId}` }
-          : { ok: false, said: `the door took the draft and /world2/my-marks does not list ${markId} among the key's drafts — the write did not reach the reader` };
+          ? { ok: true, said: `${MARK_READER} holds the draft ${markId}` }
+          : { ok: false, said: `the door took the draft and ${MARK_READER} does not list ${markId} among the key's drafts — the write did not reach the reader` };
       },
     },
     {
       name: "walk (stand here)",
-      reader: "/world2/walks",
+      reader: WALK_READER,
       // ZERO DISTANCE, ON PURPOSE. The walk ledger's own "stand here" — a
       // departure from the resident's current point toward the same point. It
       // is a real departure record and it moves nobody, which is the cheapest
       // lawful act of this class and the only one safe to run repeatedly.
       write: async (at) => call("POST", "/world/walks", { x: at.x, y: at.y }, { keyed: true }),
-      read: async () => call("GET", `/world2/walks?handle=${encodeURIComponent(who)}`),
+      read: async () => call("GET", `${WALK_READER}?handle=${encodeURIComponent(who)}`),
       find: (wrote, got) => {
         if (!wrote.ok) return { ok: false, said: `the door refused the walk — ${why(wrote)}` };
         // THE DOOR'S OWN `movement.record` LINE, which the brief names as an
@@ -243,18 +248,18 @@ function classes(me) {
         // seq) must be null.
         const rec = String(wrote.json?.movement?.record ?? "");
         const seq = wrote.json?.seq ?? null;
-        if (!got.ok) return { ok: false, said: `the walk was recorded (${rec || "record unnamed"}) but /world2/walks did not answer — ${why(got)}` };
+        if (!got.ok) return { ok: false, said: `the walk was recorded (${rec || "record unnamed"}) but ${WALK_READER} did not answer — ${why(got)}` };
         const hay = JSON.stringify(got.json ?? got.text);
-        if (!hay.includes(who)) return { ok: false, said: `the door took the walk and /world2/walks does not name ${who} — the write did not reach the reader` };
+        if (!hay.includes(who)) return { ok: false, said: `the door took the walk and ${WALK_READER} does not name ${who} — the write did not reach the reader` };
         const mirrorClaim = /dynamic\.db\/movements/.test(rec);
         if (!EXPECT_JOURNAL && (mirrorClaim || seq != null))
-          return { ok: false, said: `/world2/walks holds the departure, but the door still answers record="${rec}"${seq == null ? "" : ` seq=${seq}`} — the sqlite copy is still being promised` };
-        return { ok: true, said: `/world2/walks holds ${who}'s departure; the door names record="${rec}"${seq == null ? "" : ` seq=${seq}`}` };
+          return { ok: false, said: `${WALK_READER} holds the departure, but the door still answers record="${rec}"${seq == null ? "" : ` seq=${seq}`} — the sqlite copy is still being promised` };
+        return { ok: true, said: `${WALK_READER} holds ${who}'s departure; the door names record="${rec}"${seq == null ? "" : ` seq=${seq}`}` };
       },
     },
     {
       name: "say",
-      reader: "/world2/conversations",
+      reader: SAY_READER,
       write: async () => call("POST", "/world/say", { text: said }, { keyed: true }),
       // THE ACT READER THAT CARRIES EVERY SAY. POS-199: this read-back first
       // asked `/world2/say`, which reads only `emission` acts (the air at an
@@ -263,17 +268,17 @@ function classes(me) {
       // `acts` over all three VOICE_ACTIONS — its own disclosure: "the
       // crystallized record ... and the live say acts the lane hook mirrors" —
       // and a voice sits in a thread (`live` or `closed`) as `{ handle, said }`.
-      read: async () => call("GET", "/world2/conversations"),
+      read: async () => call("GET", SAY_READER),
       find: (wrote, got) => {
         if (!wrote.ok) return { ok: false, said: `the door refused the say — ${why(wrote)}` };
-        if (!got.ok) return { ok: false, said: `the words were spoken but /world2/conversations did not answer — ${why(got)}` };
+        if (!got.ok) return { ok: false, said: `the words were spoken but ${SAY_READER} did not answer — ${why(got)}` };
         const threads = [...(Array.isArray(got.json?.live) ? got.json.live : []), ...(Array.isArray(got.json?.closed) ? got.json.closed : [])];
         const heard = threads.some((t) => Array.isArray(t?.voices) && t.voices.some((v) => v?.handle === who && v?.said === said));
         return heard
-          ? { ok: true, said: `/world2/conversations carries ${who}'s line back` }
+          ? { ok: true, said: `${SAY_READER} carries ${who}'s line back` }
           // NAMED, NOT SWALLOWED. A reader that cannot answer is a red with
           // the door's name, never a green.
-          : { ok: false, said: `the door took the say and /world2/conversations does not carry ${who}'s line back — the write did not reach the reader` };
+          : { ok: false, said: `the door took the say and ${SAY_READER} does not carry ${who}'s line back — the write did not reach the reader` };
       },
     },
   ];
