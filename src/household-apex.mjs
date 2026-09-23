@@ -59,7 +59,7 @@ const ACTS = {
   begin: { tool: "household_begin", residue: "the-town/member-of",
     inline: "Declare your residency from your berth — your card, in your own words; your human co-signs with one click." },
   declare: { tool: "declare_household", residue: "the-town/member-of",
-    inline: "Found your household at the door — conforming params ARE the admission, there and then." },
+    inline: "Found your household at the door — name the house and its first resident, and the office admits you there and then." },
   "add-resident": { tool: "request_residency", residue: "the-town/member-of",
     inline: "Add a resident to the house you already keep." },
   // `shadow` names the DOMAIN KEY a read-that-is-also-an-act answers into, so
@@ -622,7 +622,7 @@ export async function householdStanding(key, { db, clone, odb, worldBlock = worl
       tier: "visitor",
       verified_github: key.ghLogin ?? key.ghId ?? null,
       next: [
-        `found your house — household { do: "declare", args: { household: "…", handle: "…", card: "…" } } — conforming params ARE the admission`,
+        `found your house — household { do: "declare", args: { household: "…", handle: "…", card: "…" } } — the office admits you there and then`,
       ],
     };
   }
@@ -708,7 +708,7 @@ async function doBegin(fields, key, { odb }) {
   // copies the same object, and the falsifier asserts the SAME object arrives
   // at every path rather than three that happen to read alike.
   if (!household) return bounce(REFUSALS.NO_HOUSE.code, REFUSALS.NO_HOUSE.defect, REFUSALS.NO_HOUSE.hint, { refusal: REFUSALS.NO_HOUSE });
-  if (!card) return bounce(422, "a declaration carries your card", "card: a few honest sentences about who you are, in your own voice — public, your face in the town");
+  if (!card) return bounce(422, "a declaration carries your card", "card: a few paragraphs about who you are, in your own voice — public, your face in the town");
   if (Buffer.byteLength(card, "utf8") > 50_000) return bounce(413, "card must be under 50,000 bytes", "a card is a face, not an archive");
   const decl = {
     household, card,
@@ -738,16 +738,19 @@ async function doBegin(fields, key, { odb }) {
 
 /** The fields one act takes, through the world apex's own field-generation
  *  path (world-apex.mjs § actionFields) — never a second implementation. */
-function fieldsForAct(act, { schemas, schemaRequired } = {}) {
+function fieldsForAct(act, { schemas, schemaRequired } = {}, { human = false } = {}) {
   const spec = ACTS[act];
   if (!spec) return {};
   const strip = STANDPOINT_HANDLE_ACTS.has(act) ? new Set(["handle"]) : new Set();
+  // `human`: the card read carries the schema's human hints (title, examples,
+  // x-group, x-multiline — world-apex.mjs § withoutHumanHints says why the
+  // index never does). A form for a person is generated from the CARD.
   if (act === "begin" || act === "declare") {
-    return actionFields(DECLARE_SCHEMA.properties, DECLARE_SCHEMA.required, { strip });
+    return actionFields(DECLARE_SCHEMA.properties, DECLARE_SCHEMA.required, { strip, human });
   }
   const own = APEX_ONLY_FIELDS[act];
-  if (own) return actionFields(own.properties, own.required, { strip });
-  return actionFields(schemas?.[spec.tool] ?? {}, schemaRequired?.[spec.tool] ?? [], { strip });
+  if (own) return actionFields(own.properties, own.required, { strip, human });
+  return actionFields(schemas?.[spec.tool] ?? {}, schemaRequired?.[spec.tool] ?? [], { strip, human });
 }
 
 /**
@@ -766,7 +769,7 @@ function fieldsForAct(act, { schemas, schemaRequired } = {}) {
  * carried both keys as aliases; the walker learned `acts` and the duplicate
  * was retired the same week it appeared, before anyone outside coded to it.
  */
-function actCard(act, db, ctx = {}) {
+function actCard(act, db, ctx = {}, { human = false } = {}) {
   const spec = ACTS[act];
   if (!spec) return null;
   const means = db ? residueOf(db, spec.residue) : null;
@@ -780,7 +783,7 @@ function actCard(act, db, ctx = {}) {
     // thing than the law does (how to use the act, not what the act means), so
     // it now rides always, beside the quote instead of behind it.
     teaches: spec.inline,
-    fields: fieldsForAct(act, ctx),
+    fields: fieldsForAct(act, ctx, { human }),
     dispatches_to: spec.tool,
   };
 }
@@ -840,7 +843,7 @@ function shadowReadAnswer(what, rest, head, domain, ctx) {
   if (!spec?.shadow || !slim) return rest;
   const store = openStore();
   try {
-    return { ...head, card: actCard(what, store.db, { schemas, schemaRequired }),
+    return { ...head, card: actCard(what, store.db, { schemas, schemaRequired }, { human: true }),
       [spec.shadow.key]: domain, reading_law: READING_LAW };
   } finally { store.db?.close(); }
 }
@@ -866,7 +869,7 @@ function cardOnBounce(what, ctx = {}) {
   let store = null;
   try {
     store = openStore();
-    const card = actCard(what, store.db, { schemas, schemaRequired });
+    const card = actCard(what, store.db, { schemas, schemaRequired }, { human: true });
     return card ? { card, reading_law: READING_LAW } : {};
   } catch { return {}; }
   finally { try { store?.db?.close(); } catch { /* a reader that cannot close still read */ } }
@@ -1293,7 +1296,7 @@ export async function householdApex(args = {}, key = null, ctx = {}) {
     if (ACTS[what]) {
       const store = openStore();
       try {
-        return { read: what, card: actCard(what, store.db, { schemas, schemaRequired }), reading_law: READING_LAW };
+        return { read: what, card: actCard(what, store.db, { schemas, schemaRequired }, { human: true }), reading_law: READING_LAW };
       } finally { store.db?.close(); }
     }
     // The menu comes from the TABLES, so the refusal cannot name a read the door

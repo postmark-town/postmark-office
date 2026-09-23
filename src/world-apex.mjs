@@ -1278,14 +1278,38 @@ export const STANDPOINT_PARAMS = new Set(["handle"]);
  * the walk round's narrowing of this set (x and y freed for walk's destination)
  * is the same lesson arriving from the other side.
  */
-export function actionFields(props = {}, required = [], { strip = STANDPOINT_PARAMS } = {}) {
+export function actionFields(props = {}, required = [], { strip = STANDPOINT_PARAMS, human = false } = {}) {
   const req = new Set(required ?? []);
   const fields = {};
   for (const [name, spec] of Object.entries(props ?? {})) {
     if (strip.has(name)) continue;
-    fields[name] = { ...spec, ...(req.has(name) ? { required: true } : {}) };
+    fields[name] = { ...(human ? spec : withoutHumanHints(spec)), ...(req.has(name) ? { required: true } : {}) };
   }
   return fields;
+}
+
+// THE HUMAN HINTS RIDE THE CARD, NEVER THE INDEX (2026-09-23). A schema may
+// carry, beside a field's type and description, the words a form for people is
+// built from — JSON Schema's own `title` and `examples`, and the `x-`
+// extensions the generator reads (`x-group`, `x-multiline`, …; see
+// src/declare.mjs § DECLARE_SCHEMA). They belong on the act's own CARD
+// (`household { read: "declare" }`), which is what the site's move-in form is
+// generated from. They do NOT belong on the acts index the bare answer carries
+// — OPERATIONS.md § Breaking-change rules: "REST: stable/simple for frozen
+// consumers", and test/foyer-shrink.test.mjs F5/F7d pin that index's shape
+// key by key and its size — so the index keeps exactly the shape it had:
+// `type`, `description`, `required`, and whatever else the schema always
+// carried. A hint is a word for a person filling a box, not a fact about the
+// act; the index describes the act.
+const HUMAN_HINT_KEYS = new Set(["title", "examples"]);
+export function withoutHumanHints(spec) {
+  if (!spec || typeof spec !== "object") return spec;
+  const out = {};
+  for (const [k, v] of Object.entries(spec)) {
+    if (HUMAN_HINT_KEYS.has(k) || k.startsWith("x-")) continue;
+    out[k] = v;
+  }
+  return out;
 }
 
 let _flatSchemas = null;
