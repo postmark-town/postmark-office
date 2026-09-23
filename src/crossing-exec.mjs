@@ -101,7 +101,6 @@ async function main() {
     const { acts: actsJ, unrecognized: unrecJ } = parseEnterExitLedger(`${prevJ}${sepJ}${p.lines.join("\n")}\n`);
     const db = openDynamic();
     let seq = null;
-    let flipped = false;
     const entry = {
       crossing: p.at, actor: p.handle, action: p.act ?? "enter", object: p.mark ?? null,
       cls: CLASS_FRAME, at: null, witnesses: null,
@@ -128,19 +127,30 @@ async function main() {
       // appendActFlipped's own ordering — Postgres first, awaited, the journal
       // row after — is the whole shape. An unreachable pen is the ruled refusal
       // and nothing was written: the resident is exactly where they were.
-      if (laneFlipped("frame")) {
-        try { const row = await appendActFlipped(db, entry); seq = row.seq; flipped = true; }
-        catch (e) {
-          if (e?.name === "PenUnreachableError")
-            return err(503, e.message, "this lane's pen is the office's record (W2_PEN=frame); when it cannot be reached the door refuses rather than writing anywhere else — you are exactly where you were, and the crossing is safe to declare again");
-          throw e;
-        }
-      } else {
-        seq = appendJournal(db, entry).seq;
+      // ── BOTH ARMS REFUSE NOW (G1 / POS-156, RULING 3) ───────────────────
+      //
+      // The unflipped arm was `appendJournal(db, entry).seq` — a sqlite row
+      // written here and a Postgres copy queued behind it. The sqlite row is
+      // gone, so that call awaits the record and throws exactly as the flipped
+      // one does, and this door's refusal is one sentence for both. It names no
+      // flag: `W2_PEN` decides which function writes, not whether the record is
+      // the record, and a 503 that blamed an unset variable would send an
+      // operator to the wrong place.
+      try {
+        const row = laneFlipped("frame")
+          ? await appendActFlipped(db, entry)
+          : await appendJournal(db, entry);
+        // `seq` IS THE ACT'S ID NOW. There is no sqlite rowid to answer with;
+        // the record's own sequence is the one sequence left.
+        seq = row.actId;
+      } catch (e) {
+        if (e?.name === "PenUnreachableError")
+          return err(503, e.message, "this door's pen is the office's record; when it cannot be reached the door refuses rather than writing anywhere else — you are exactly where you were, and the crossing is safe to declare again");
+        throw e;
       }
     } finally { try { db.close(); } catch { /* already gone */ } }
     return answer({ lines: p.lines, at: p.at, within: occupancyAt(actsJ, p.at).get(p.handle) ?? [],
-                    commit: null, pushed: false, push_error: null, log: flipped ? "acts" : "journal", seq,
+                    commit: null, pushed: false, push_error: null, log: "acts", seq,
                     settles: "at the save — this crossing spends no commit of its own (WORLD_SINGLE_LOG)",
                     ledger_lines: actsJ.length, ledger_unrecognized: unrecJ.length });
   }

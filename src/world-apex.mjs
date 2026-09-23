@@ -112,7 +112,7 @@ import { openDynamic, openDynamicReadOnly } from "./dynamic-store.mjs";
 // falsifier could not have passed, and they are read-only now for the writer
 // too, because they were always readers.
 const openDynamicRead = () => openDynamicReadOnly();
-import { declareMovement, readAttachments } from "./dynamic-entities.mjs";
+import { readAttachments } from "./dynamic-entities.mjs";
 // The stride a placement is stamped with — read off the record like every other
 // departure's, never a constant here (decision 008b).
 import { departurePace } from "./world-classes.mjs";
@@ -360,13 +360,19 @@ export function rideDeps() {
     nowMs: () => Date.now(),
     crossing: () => currentCrossing(),
     record: async (entry) => {
-      // `appendJournal` carries the World 2.0 mirror itself (its own header:
-      // "mirror the row into Postgres `acts`"), so a ride reaches `acts` by the
-      // same path a walk and a crossing do. No second pen, no second queue.
+      // `appendJournal` IS the write into the record since G1 (POS-156): it
+      // awaits the store and throws `PenUnreachableError` when it cannot be
+      // reached, so a ride reaches `acts` by the same path a walk and a
+      // crossing do. No second pen, no second queue.
+      //
+      // ⚑ THE `await` IS LOAD-BEARING. Without it this returns a Promise, the
+      // apex answers the rider a ride that may never have landed, and the
+      // rejection is unhandled — a door reporting success over a lost act,
+      // which is the exact failure the awaited write was ruled to end.
       const { appendJournal, CLASS_RIDE } = await import("./world-journal.mjs");
       const db = openDynamic();
       try {
-        return appendJournal(db, {
+        return await appendJournal(db, {
           crossing: entry.crossing, actor: entry.handle, action: "ride", object: entry.object,
           cls: CLASS_RIDE, at: null, witnesses: null,
           // THE PAYLOAD IS EXACTLY THE BRIEF'S SIX FIELDS. The summary sentence
@@ -851,7 +857,6 @@ async function spawnOnEnter(args, key, who) {
   const target = String(args.mark ?? args.mark_id ?? parseEnvelope(args)?.mark ?? parseEnvelope(args)?.mark_id ?? "").trim();
   if (!target || !who) return null;
   const store = openStore();
-  let dyn = null;
   try {
     if (!store.db) return null;
     const place = arenaGroundAt(store.db, [target]);
@@ -859,15 +864,41 @@ async function spawnOnEnter(args, key, who) {
     const spawn = spawnPointFor(store.db, place, { who, crossing: currentCrossing() });
     if (!spawn) return null;
     if (spawn.refused) return { ground: place.ground, refused: spawn.refused };
-    dyn = openDynamic();
     // A ZERO-LENGTH DEPARTURE: from the spawn point to itself, so `positionAt`
     // answers "arrived, standing" from the first instant. A leg with length
     // would leave the entrant walking across the room they are already in, and
     // the wheel would seat them somewhere they had not reached yet.
-    declareMovement(dyn, {
-      actor: who, from: spawn.at, toward: spawn.at, crossing: currentCrossing(),
-      within: null, toMark: place.ground, declaredBy: who, pace: departurePace(),
-    });
+    //
+    // ── INTO THE RECORD (G1 / POS-156) ─────────────────────────────
+    //
+    // This wrote `dynamic.db/movements` through `declareMovement`, and it is
+    // the THIRD writer of that table — POS-156's own measurement named two
+    // (`declareMovementFlipped` and `walkViaOffice`) and this one was not on
+    // the list. Left alone it would have gone quiet the day the table stopped
+    // being written, and the failure is exactly the kind nobody looks for: an
+    // arena entrant's position simply absent, with the crossing still green.
+    //
+    // It writes the same departure through the same pen every other walk uses
+    // now, in `walkEntry`'s shape, so `storedDepartures` and everything over it
+    // read this placement the way they read any other. `walkEntry` is IMPORTED
+    // rather than restated for the reason POS-198 exported it: "a falsifier
+    // that builds its acts with the live builder cannot drift from the live
+    // builder", and neither can a caller.
+    //
+    // ⚑ STILL SILENT ON FAILURE, and that is this function's own standing rule
+    // one line up: "the enter itself has already succeeded — a placement that
+    // could not be written must not turn a successful crossing into an error".
+    // So an unreachable record loses the placement and not the crossing, which
+    // is the opposite of the door rule everywhere else and is deliberate here.
+    const { walkEntry } = await import("./world.mjs");
+    const { appendJournal } = await import("./world-journal.mjs");
+    const declaredAt = new Date().toISOString();
+    await appendJournal(null, walkEntry({
+      crossing: currentCrossing(), who, targetMarkId: place.ground,
+      stampAt: null, witnesses: null,
+      from: spawn.at, toward: spawn.at, pace: departurePace(), targetExtent: null,
+      household: null, writtenAt: declaredAt, declaredBy: who,
+    }));
     return {
       ground: place.ground, at: spawn.at,
       ...(spawn.jitter ? { jitter_m: spawn.jitter, from_spawn: spawn.from } : {}),
@@ -875,8 +906,9 @@ async function spawnOnEnter(args, key, who) {
     };
   } catch { return null; }
   finally {
-    try { dyn?.close(); } catch { /* a writer that cannot close still wrote */ }
-    try { store.db?.close(); } catch { /* same */ }
+    // No dynamic store is opened here any more: the placement goes to the
+    // record, and the write path takes no sqlite handle (G1 / POS-156).
+    try { store.db?.close(); } catch { /* a writer that cannot close still wrote */ }
   }
 }
 

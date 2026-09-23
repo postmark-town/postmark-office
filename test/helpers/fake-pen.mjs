@@ -230,8 +230,18 @@ class FakeClient {
 
     if (/INSERT INTO acts/i.test(t)) {
       const id = store.nextActId++;
-      const [at, crossing, actor, action, object, at_anchor, at_dx, at_dy, witnesses, cls, payload, effect, household, journal_seq] = params;
-      defer(() => store.acts.push({ id, at, crossing, actor, action, object, at_anchor, at_dx, at_dy, witnesses, class: cls, payload, effect, household, journal_seq }));
+      const [at, crossing, actor, action, object, at_anchor, at_dx, at_dy, witnesses, cls, payload, effect, household, ...rest] = params;
+      const row = { id, at, crossing, actor, action, object, at_anchor, at_dx, at_dy, witnesses, class: cls, payload, effect, household };
+      // ⚑ `journal_seq` IS ONLY PRESENT IF THE PEN SENT IT. G1 (POS-156,
+      // migration 025) drops that column and the pen stopped naming it; this
+      // row used to carry the key unconditionally, which would have let a suite
+      // assert the column's absence and pass while the pen still wrote it.
+      // Spreading the rest, rather than destructuring a fourteenth parameter
+      // into a named key, is what makes "the pen did not send it" and "the pen
+      // sent null" different facts here -- which is the difference migration
+      // 024 turns into a failed write on a real store.
+      if (rest.length) row.journal_seq = rest[0];
+      defer(() => store.acts.push(row));
       return { rows: [{ id }], rowCount: 1 };
     }
 

@@ -58,7 +58,11 @@ after(() => { try { rmSync(tmp, { recursive: true, force: true, maxRetries: 5, r
 delete process.env.W2_PEN;
 
 const { openDynamic } = await import("../src/dynamic-store.mjs");
-const { declareMovement, declareMovementFlipped, readMovements } = await import("../src/dynamic-entities.mjs");
+// `declareMovement`, `declareMovementFlipped` and the `movements` table are
+// GONE (G1 / POS-156): the walk lane has ONE pen now, and it is the record.
+// POS-198's claim survives the deletion and gets narrower rather than weaker --
+// the declaration's own instant rides the act, because that is what lets `acts`
+// render the world's `STATE/log/` departure record at all.
 const { normalizeRow, CLASS_RIDE, CLASS_MOVE } = await import("../src/world-journal.mjs");
 const { walkEntry } = await import("../src/world.mjs");
 
@@ -92,78 +96,74 @@ function oneDeclaration({ note = null, declaredBy = null, who = "alpha" } = {}) 
 // 1 · ONE CLOCK READ, TWO PENS
 // ═════════════════════════════════════════════════════════════════════════════
 
-test("ONE CLOCK READ: the movements row and the act carry the SAME instant, not a near one", async () => {
-  const { declaredAt, movement, entry } = oneDeclaration();
-  const db = openDynamic(join(tmp, "one-read.db"));
-  try {
-    // The flipped pen, injected, so the two rows are written by the real
-    // `declareMovementFlipped` ordering with no Postgres in the room. The
-    // injection is what `deps.appendActFlipped` exists for.
-    const penned = [];
-    await declareMovementFlipped(db, movement, entry, {
-      appendActFlipped: async (handle, e) => {
-        const row = normalizeRow(e);                    // the real write path
-        penned.push(row);
-        handle.prepare("INSERT INTO journal (crossing, actor, action, object, class, payload, written_at) VALUES (?,?,?,?,?,?,?)")
-          .run(row.crossing, row.actor, row.action, row.object, row.class, row.payload, row.written_at);
-        return { seq: 1, actId: 4242, flipped: true };
-      },
-    });
+test("ONE CLOCK READ: the act carries the DECLARATION's instant, not the normalizer's", async () => {
+  // POS-198 asserted that the `movements` row and the act were stamped from ONE
+  // read. G1 deleted the movements row, so there is one pen and the claim is
+  // the half that was load-bearing all along: the instant on the act is the one
+  // the DOOR declared at, and never a clock the write path read for itself.
+  //
+  // It is the same fact POS-196 measured the cost of. `acts.at` is what
+  // `live-reads § departureRecordOf` reads for era 5 (`iso: isoOf(row.at)`), so
+  // a drifted stamp here is a drifted instant in the world's own record.
+  const { declaredAt, entry } = oneDeclaration();
+  const act = normalizeRow(entry);
 
-    const [dep] = readMovements(db);
-    const act = penned[0];
-
-    // EQUALITY, NOT CLOSENESS. Two reads of a wall clock are never equal; a
-    // `Math.abs(a - b) < 1000` here would have passed on the drifted office for
-    // 2,573 of its 2,808 lines and still been wrong on all of them.
-    assert.equal(dep.at, declaredAt, "the movements row did not take the declaration's instant");
-    assert.equal(act.written_at, declaredAt, "the act did not take the declaration's instant");
-    assert.equal(act.written_at, dep.at,
-      "the act and the movements row were stamped from two different clock reads — that is the STOP, returned");
-
-    // `written_at` is the column that becomes `acts.at`, which is the instant
-    // `live-reads § departureRecordOf` reads for era 5 (`iso: isoOf(row.at)`).
-    assert.match(act.written_at, /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/, "the instant is an ISO string, as `acts.at` holds it");
-  } finally { db.close(); }
+  // EQUALITY, NOT CLOSENESS. Two reads of a wall clock are never equal; a
+  // `Math.abs(a - b) < 1000` here would have passed on the drifted office for
+  // 2,573 of its 2,808 lines and still been wrong on all of them.
+  assert.equal(act.written_at, declaredAt,
+    "the act did not take the declaration's instant — that is the STOP, returned");
+  assert.match(act.written_at, /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/, "the instant is an ISO string, as `acts.at` holds it");
 });
 
-test("CONTROL: the equality CAN fail — a second clock read for the act is caught", async () => {
+test("CONTROL: the equality CAN fail — an act with no declared instant takes the normalizer's clock", async () => {
   // A probe that cannot fail is an act. This is the office as it stood before
-  // POS-198: the act reaches for its own clock, a hair after the pen.
-  const { declaredAt, movement, entry } = oneDeclaration();
-  const db = openDynamic(join(tmp, "two-reads.db"));
-  try {
-    declareMovement(db, movement);
-    const driftedAct = normalizeRow({ ...entry, writtenAt: undefined });   // the fallback = a SECOND read
-    const [dep] = readMovements(db);
+  // POS-198: `walkEntry` passed no `writtenAt` and `normalizeRow` reached for
+  // its own clock, a hair after the resident declared.
+  // THE DECLARATION IS PINNED TO A KNOWN INSTANT, and that is what makes this
+  // control deterministic rather than a race. Before G1 the two clock reads had
+  // a sqlite write between them and reliably differed; with one pen they can
+  // land in the same millisecond, and a control that passes only when the
+  // machine is slow is a control that stops controlling on a fast one.
+  //
+  // Pinning costs nothing: the claim is "an act with no declared instant does
+  // NOT carry the declaration's", and a declaration in the past states it
+  // exactly. If `normalizeRow` ever started copying the instant from somewhere
+  // else, this still reds.
+  const declaredAt = "2026-09-22T00:14:40.194Z";                          // the record's own window-204 line
+  const { entry } = oneDeclaration();
+  const declared = normalizeRow({ ...entry, writtenAt: declaredAt });
+  const driftedAct = normalizeRow({ ...entry, writtenAt: undefined });    // the fallback = a SECOND read
 
-    assert.equal(dep.at, declaredAt, "the pen's own row is unaffected — only the act drifted");
-    assert.notEqual(driftedAct.written_at, dep.at,
-      "two clock reads produced the same millisecond — if this ever fails the control has stopped controlling, not the office stopped drifting");
-  } finally { db.close(); }
+  assert.equal(declared.written_at, declaredAt, "control's own control: a declared instant IS carried");
+  assert.notEqual(driftedAct.written_at, declaredAt,
+    "an act with no declared instant carried the declaration's anyway — the fallback has stopped being a fallback");
+  assert.ok(Date.parse(driftedAct.written_at) > Date.parse(declaredAt),
+    "and what it carried is this process's own clock, which is the drift POS-198 closed");
 });
 
-test("the DOOR makes that one read, and hands it to both pens", () => {
+test("the DOOR makes that one read, and hands it to the pen", () => {
   // `walkViaOffice` has no bottle in this suite (it wants a world clone, a
   // pool and a fold), and `test/issue-2859-enter-on-arrival.test.mjs` already
   // establishes the source-shape guard as this function's instrument for
-  // exactly that reason. The claim is narrow and structural: ONE read, on the
-  // movement object, carried to BOTH `walkEntry` calls.
+  // exactly that reason. The claim is narrow and structural: ONE read, carried
+  // into the act.
+  //
+  // THE COUNTS ARE ONE NOW, not two. G1 collapsed the door's two write arms
+  // into a single awaited write, so there is one `walkEntry` call where there
+  // were two -- and this count is still where a third walk pen appearing
+  // without the instant would be noticed.
   const src = readFileSync(join(HERE, "..", "src", "world.mjs"), "utf8");
 
   const reads = src.match(/const declaredAt = new Date\(\)\.toISOString\(\);/g) ?? [];
   assert.equal(reads.length, 1, "`walkViaOffice` should read the declaration clock exactly once");
 
   assert.match(src, /actor: who, from, toward, crossing: at, at: declaredAt,/,
-    "the movements row is stamped from that read — without this, `declareMovement` reads a clock of its own");
+    "the movement object is stamped from that read — it is what the act's instant comes from");
 
   const carried = src.match(/writtenAt: movement\.at, declaredBy: movement\.declaredBy, note: movement\.note \?\? null/g) ?? [];
-  assert.equal(carried.length, 2,
-    "both pens — the flipped arm and the async mirror arm — must stamp the act from the movement's own instant");
-
-  const builders = src.match(/walkEntry\(\{ crossing: at,/g) ?? [];
-  assert.equal(builders.length, 2,
-    "if a third walk pen appears, it needs the instant too and this count is where that is noticed");
+  assert.equal(carried.length, 1,
+    "the pen must stamp the act from the movement's own instant; more than one call site means a pen that could drift");
 });
 
 // ═════════════════════════════════════════════════════════════════════════════

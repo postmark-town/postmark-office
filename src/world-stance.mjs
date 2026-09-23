@@ -72,10 +72,10 @@
 // all, so the write bounces by name when the flag is off; the reads degrade to
 // canon-only rather than failing.
 
-import { openDynamic, openDynamicReadOnly, singleLogEnabled } from "./dynamic-store.mjs";
+import { openDynamic, singleLogEnabled } from "./dynamic-store.mjs";
 import { WORLD_CLONE } from "./world-store.mjs"; // the standing-scoped inbox door defaults to the office's own world checkout
 import { worldFreezeBounce } from "./freeze.mjs";
-import { appendActFlipped, appendJournal, laneFlipped, readJournal } from "./world-journal.mjs";
+import { appendActFlipped, appendJournal, laneFlipped } from "./world-journal.mjs";
 // `stanceQuery` is the stance read's OWN credential (`stance_reader`), and the
 // only place in `src/` that is not `office_api`. It lives beside `actsQuery` so
 // the office learns "pool" once per table — see world2-acts.mjs § THE STANCE
@@ -690,29 +690,38 @@ function stanceRowFromAct(a) {
 }
 
 /**
- * Every stance row in the record: the REGISTER, plus the drained photographs and
- * the live journal beside it, merged by the twin key. Empty (never a throw) when
- * none of the three can be read.
+ * Every stance row in the record: the REGISTER, plus the drained photographs
+ * beside it, merged by the twin key. Empty (never a throw) when neither can be
+ * read.
  *
  * ASYNC as of this change, because the register is. There is exactly one caller
  * (`stanceInbox`, already async) and it awaits — a second synchronous copy of
  * this read is how the two would come to disagree about who is standing.
+ *
+ * ── THE SQLITE ARM IS GONE (G1 / POS-156, 2026-09-22) ──────────────────────
+ *
+ * This merged THREE sources: the photographs ∪ the live sqlite journal ∪ the
+ * register, register last so it wins. The middle one is deleted with the
+ * journal INSERT, and deleting it CHANGES NO ANSWER — which is why it is a
+ * deletion rather than a port. POS-156's measurement put it plainly: "the
+ * register arm holds the same acts and already overwrites the sqlite arm
+ * wherever both hold one."
+ *
+ * The photographs stay, and they are not the same thing. `<n>.journal.jsonl`
+ * is the DRAINED history in the world repo, written by the crossing-save, and
+ * it is the reason a stance outlives the window it was spoken in (postmark#2454
+ * — lupi's seq 920, declared, read back, and "gone the next morning" when this
+ * read folded the live journal alone). Absence is the third state; a drain is
+ * not absence, and neither is a deletion.
  */
 export async function stanceRows({ dbPath = null, worldClone = WORLD_CLONE, acts = null } = {}) {
   const byTwin = new Map();
 
-  // The 1.0 halves first, so the register's copy overwrites them where both hold
-  // the act. Order is the preference, and it is stated here rather than left to
-  // whichever loop happens to run last.
+  // The photographs first, so the register's copy overwrites them where both
+  // hold the act. Order is the preference, and it is stated here rather than
+  // left to whichever loop happens to run last.
   if (singleLogEnabled()) {
     for (const r of photographStanceRows(worldClone)) byTwin.set(stanceTwinKey(r), r);
-    try {
-      const db = openDynamicReadOnly(dbPath ?? undefined);
-      if (db) {
-        try { for (const r of readJournal(db, { cls: CLASS_STANCE })) byTwin.set(stanceTwinKey(r), r); }
-        finally { try { db.close(); } catch { /* already gone */ } }
-      }
-    } catch { /* no live layer → the other sources are an honest record */ }
   }
 
   let rows = acts;
@@ -1137,25 +1146,35 @@ export async function declareStanceViaOffice(repo, args = {}, key = null, { dbPa
     // disagree with." Flipped, the record is Postgres `acts`, committed and
     // awaited BEFORE anything else; sqlite gets the reverse-mirror copy after.
     // Unreachable Postgres = the ruled refusal, and nothing was written.
+    // ── BOTH ARMS REFUSE NOW (G1 / POS-156, RULING 3) ─────────────────────
+    //
+    // The unflipped arm was `appendJournal(db, entry)` — a sqlite row written
+    // here and a Postgres copy queued behind it. The sqlite row is gone, so
+    // that call awaits the record and throws exactly as the flipped one does,
+    // and this door's refusal is one sentence for both. It names no flag:
+    // `W2_PEN` decides which function writes, not whether the record is the
+    // record.
     let row;
-    if (laneFlipped("stance")) {
-      try { row = await appendActFlipped(db, entry); }
-      catch (err) {
-        if (err?.name === "PenUnreachableError")
-          throw bounce(503, err.message,
-            "this lane's pen is the office's record (W2_PEN=stance); when it cannot be reached the door refuses rather than writing anywhere else — your stance is safe to speak again");
-        throw err;
-      }
-    } else {
-      row = appendJournal(db, entry);
+    try {
+      row = laneFlipped("stance")
+        ? await appendActFlipped(db, entry)
+        : await appendJournal(db, entry);
+    } catch (err) {
+      if (err?.name === "PenUnreachableError")
+        throw bounce(503, err.message,
+          "this door's pen is the office's record; when it cannot be reached the door refuses rather than writing anywhere else — your stance is safe to speak again");
+      throw err;
     }
     return {
       on, stance, by,
       on_your_ground: ground.map((g) => g.id),
-      seq: row.seq, crossing: row.crossing,
-      // Which store is the RECORD for this act — a flipped lane's answer says
-      // so honestly (the journal row behind it is the reverse-mirror copy).
-      log: row.flipped ? "acts" : "journal",
+      // `seq` IS THE ACT'S ID NOW (G1): there is no sqlite rowid to answer
+      // with, and the record's own sequence is the one sequence left.
+      seq: row.actId, crossing: row.crossing,
+      // Which store is the RECORD for this act. One answer since G1, because
+      // there is one record — the reverse-mirror copy this used to distinguish
+      // no longer exists.
+      log: row.record ?? "acts",
       witnesses: row.witnesses ? JSON.parse(row.witnesses) : null,
       ...(prior ? { superseded: { stance: prior.stance, at: prior.at, seq: prior.seq } } : {}),
       // The door does not enforce, and says so where the resident is standing

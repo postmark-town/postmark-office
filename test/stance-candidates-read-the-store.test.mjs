@@ -44,7 +44,15 @@ import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { openDynamic } from "../src/dynamic-store.mjs";
-import { CLASS_MARK, ACTION_LEAVE, appendJournal } from "../src/world-journal.mjs";
+import { CLASS_MARK, ACTION_LEAVE } from "../src/world-journal.mjs";
+// ── THE SKETCHES ARE SEEDED, NOT WRITTEN BY A DOOR (G1 / POS-156) ──────────
+//
+// G1 deleted the general journal INSERT; the write path writes the RECORD now.
+// These fixtures plant sketches in the sqlite journal and the stance pool stub
+// (`test/stance-pool-stub.mjs`) shapes them as the `claims` rows the store
+// read asks for -- so the rows are PUT THERE by this file, and the path under
+// test is still the real one. Nothing here claims a door wrote them.
+import { seedJournalRow } from "./journal-seed.mjs";
 import {
   AMBIENT_CAP, resetStanceGeometry, stanceInbox, stanceShadow, stancesBlock, worldForStances,
 } from "../src/world-stance.mjs";
@@ -276,7 +284,7 @@ test("WORLD2_STANCE_URL absent — the read answers `unreachable`, and does NOT 
   const live = join(scratch, `fallback-${++n}.db`);
   const db = openDynamic(live);
   try {
-    appendJournal(db, {
+    seedJournalRow(db, {
       crossing: 145, actor: "zeta", household: "zeta", action: ACTION_LEAVE,
       object: "zeta/a-sketch", cls: CLASS_MARK,
       at: { anchor: null, dx: null, dy: null }, witnesses: null,
@@ -332,7 +340,7 @@ test("EQUALITY — the same live marks in both records answer byte-identically f
   const live = join(scratch, `equality-${++n}.db`);
   const db = openDynamic(live);
   try {
-    for (const m of MARKS) appendJournal(db, {
+    for (const m of MARKS) seedJournalRow(db, {
       crossing: 145, actor: m.by, household: m.by, action: ACTION_LEAVE,
       object: m.slug, cls: CLASS_MARK,
       at: { anchor: null, dx: null, dy: null }, witnesses: null,

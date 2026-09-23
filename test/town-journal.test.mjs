@@ -20,6 +20,13 @@ import {
   townJournalHead, townDrainCursor, TOWN_DRAIN_CURSOR, SETTLE_THRESHOLD, townLogEnabled,
 } from "../src/town-journal.mjs";
 import { appendJournal, CLASS_MARK } from "../src/world-journal.mjs";
+// ── THE ROWS ARE SEEDED, NOT WRITTEN BY A DOOR (G1 / POS-156) ───────────────
+//
+// G1 deleted the general journal INSERT; the write path writes the RECORD now.
+// This suite's subject is the TWO-TABLE separation -- that the world's drain
+// cannot reach the town's rows -- so the world-side row it needs is PUT THERE
+// by this file, in the office's own row shape. See test/journal-seed.mjs.
+import { seedJournalRow } from "./journal-seed.mjs";
 import { DYNAMIC_SCHEMA } from "../src/dynamic-store.mjs";
 
 // The world journal's own DDL, lifted from the store's schema rather than
@@ -80,7 +87,7 @@ function townClone() {
 test("TWO LOGS: the town's rows live in their own table, untouched by the world's head", () => {
   const db = odb();
   const seq = appendTownJournal(db, row());
-  appendJournal(db, { actor: "wright", action: "leave-mark", cls: CLASS_MARK, household: "wright" });
+  seedJournalRow(db, { actor: "wright", action: "leave-mark", cls: CLASS_MARK, household: "wright" });
 
   // the world's head knows nothing of the town's rows, and vice versa
   const worldHead = Number(db.prepare("SELECT MAX(seq) s FROM journal").get()?.s ?? 0);
@@ -93,9 +100,12 @@ test("TWO LOGS: the town's rows live in their own table, untouched by the world'
     "a world truncate must not reach the town's rows — this is the entire reason for two tables");
 });
 
-test("THE TRIPWIRE: a join row aimed at the world log bounces at write time", () => {
+// `assert.rejects`, NOT `assert.throws`: `appendJournal` is async since the
+// store became the write (G1), so the tripwire's throw arrives as a rejection.
+// Same call, same message, same claim -- a tripwire nobody tests stops tripping.
+test("THE TRIPWIRE: a join row aimed at the world log bounces at write time", async () => {
   const db = odb();
-  assert.throws(() => appendJournal(db, { actor: "x", action: "declare", cls: "join", household: "h" }),
+  await assert.rejects(() => appendJournal(db, { actor: "x", action: "declare", cls: "join", household: "h" }),
     /"join" is the town log's class, not the world's/,
     "a row in the wrong log is a bug; bouncing costs a stack trace, being eaten at truncate time costs somebody their household");
   // and the reverse fence

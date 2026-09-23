@@ -365,11 +365,11 @@ export async function storedDepartureFor(handle, opts = {}) {
 // `STATE/log/<N>.jsonl` is the world repo's departure record and the only live
 // source the three world-repo readers have (`tools/movement-records.mjs §
 // storeRecords`, and `boarding-flip-disclosure.mjs` /
-// `position-seed-manifest.mjs` through it). Today `tools/crossing-save.mjs`
-// writes it from `dynamic.db/movements` — the REVERSE-MIRROR copy, stamped
+// `position-seed-manifest.mjs` through it). It was written from
+// `dynamic.db/movements` — the REVERSE-MIRROR copy, stamped
 // `"source":"dynamic.db/movements"` on all 2,857 of its lines — so when G1
-// removes that mirror the record stops and the readers fall back to the frozen
-// ledger era.
+// removed that mirror the record would have stopped and the readers fallen back
+// to the frozen ledger era.
 //
 // This is the same record rendered from `acts`, through POS-154's one road, so
 // the swap is a change of WRITER and not of meaning. It emits world.db's
@@ -377,20 +377,23 @@ export async function storedDepartureFor(handle, opts = {}) {
 // emitted — so `mergedDepartureEvents`, `governingAt`, `buildSave` and every
 // replay read the two eras through one vocabulary and the seam stays invisible.
 //
-// ⚑ THE SWAP IS NOT WIRED, AND THE REASON IS MEASURED. See `DEPARTURE_GAPS.at`
-// below: the register does not hold the departure's own instant, and `at` is
-// the first field every world reader reads. `crossing-save --check` renders
-// through this function and reports the distance; the write path still runs on
-// `movements` until the act carries the instant. A renderer with a check and no
-// writer is the honest half — a writer whose central field is wrong is not.
+// ⚑ THE SWAP IS WIRED (POS-156 part 0, 2026-09-22). Both write paths that
+// rendered the live era from the mirror now render it from here:
+// `tools/crossing-save.mjs`'s `<N>.jsonl` half and `src/dynamic-entities.mjs §
+// refreshEntities`. `crossing-save --check` diffs the rendered window against
+// the file on `RECORD_READ_FIELDS`; `test/pos-156-the-record-is-written-from-
+// the-store.test.mjs` pins which table each write path reads.
 //
-// WHAT CLOSES IT is one line in a file this lane does not own: `world.mjs §
-// walkEntry` carrying `writtenAt: <the movement's own instant>`, and the two
-// pens sharing one clock read (`declareMovementFlipped` takes the stamp before
-// the movements row; the unflipped mirror takes it after). Rows already written
-// need the same treatment `world2/tools/backfill-departures.mjs` already gives
-// its own — it writes `at: m.at`, the movements instant, and is the one path
-// whose acts DO carry it.
+// IT WAS HELD FOR TWO LANES, and the reason is worth keeping: POS-196 built
+// this renderer and could not wire it because the register held no departure
+// INSTANT — `acts.at` was the MIRROR's clock, taken after the resident
+// declared, and `acts.crossing` is a different read that reconstructs the true
+// instant exactly ZERO times across the record's own 2,808 live door-written
+// lines. `at` is the first field every world reader reads. POS-198 closed it:
+// `world.mjs § walkViaOffice` reads the declaration clock ONCE and hands the
+// same string to both pens, so `acts.at` is the departure's own instant. Rows
+// written before that carry the mirror's clock; `world2/tools/
+// backfill-departures.mjs` was always correct on this point (`at: m.at`).
 
 /**
  * What the register cannot give back, named once so a `--check` line and a PR
@@ -399,7 +402,7 @@ export async function storedDepartureFor(handle, opts = {}) {
  * over, and a second vocabulary for it would be the third copy of a merge rule.
  */
 export const DEPARTURE_GAPS = Object.freeze({
-  at: "STOP:at — the register holds no departure instant. `world.mjs § walkEntry` passes no `writtenAt`, so `world-journal.mjs § normalizeRow` stamps `acts.at` with the MIRROR's clock, taken after the resident declared; `acts.crossing` is a different read of the same door call and reconstructs the instant exactly ZERO times in the record's own 2,808 live door-written lines (windows 120–204: median −203 ms, 235 of them missing by more than a second, the worst by 10.6 hours). `at` is the field `storeRecords` reads first and the key `mergedRecords` orders and cuts on.",
+  at: "STOP:at — the recorded instant and the register's disagree, and `at` is the field `storeRecords` reads first and the key `mergedRecords` orders and cuts on, so this outranks every other gap in the one line a reader gets. CLOSED FOR ROWS WRITTEN SINCE POS-198 (2026-09-22): `world.mjs § walkViaOffice` reads the declaration clock ONCE and hands the same string to both pens, so `acts.at` is the departure's own instant. IT REMAINS THE CLASS FOR OLDER ROWS: before that, `walkEntry` passed no `writtenAt` and `world-journal.mjs § normalizeRow` stamped `acts.at` with the MIRROR's clock, taken after the resident declared — and `acts.crossing` is a different read of the same door call, which reconstructs the instant exactly ZERO times across the record's own 2,808 live door-written lines (windows 120–204: median −203 ms, 235 missing by more than a second, the worst by 10.6 hours). `world2/tools/backfill-departures.mjs` is the one older path whose acts DO carry it (`at: m.at`).",
   seq: "gap:seq — no store source for the `movements` rowid; this is the register's own act id, which is the same monotone quantity the old `seq` was (dynamic-entities.mjs § readMovements: \"here it is the store's own sequence\").",
   declared_by: "gap:declared_by — the departure act carries no declarer. `walkEntry`'s payload has five keys and none is it, and `world2/tools/backfill-departures.mjs § departureRowFrom` SELECTs the column and drops it. The act's own actor stands for it, which is what the live write path puts in that column (2,829 of 2,829 door-written lines); the 28 that differ are the 2026-08-10 `ledger-freeze` one-off, in windows 119/120.",
   note: "gap:note — the departure act carries no note. The record's grammar already makes the key conditional, and the only 28 lines that carry one are the same freeze backfill.",

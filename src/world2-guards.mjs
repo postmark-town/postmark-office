@@ -43,8 +43,35 @@
 // still be wrong, because it would make the flip's failure mode INVISIBLE: the
 // office would quietly validate against sqlite while every other receipt in the
 // lane said Postgres. That is the split brain with a switch on it, wearing a
-// fallback's coat. Rollback here is REMOVING THE FLAG, deliberately, by a hand
-// that knows it did so — never a branch this file takes on its own.
+// fallback's coat.
+//
+// ── AND THE FLAG-OFF FALLBACK IS GONE TOO (G1 / POS-156, RULING 3a) ─────────
+//
+// `guardedLiveMarks`, `guardedLiveChildrenOf` and `guardedDraftsForKey` each
+// read the sqlite journal when `W2_GUARDS` was not "1". That branch was the
+// runbook's rollback — "Rollback here is REMOVING THE FLAG, deliberately, by a
+// hand that knows it did so" — and it rested on the premise in the sentence
+// above: "the 1.0 guards are still correct WHILE THE REVERSE MIRROR HOLDS."
+//
+// G1 removed the journal INSERT, so the mirror does not hold and the premise is
+// repealed. A guard reading a journal nobody fills does not fail; it reads an
+// EMPTY live layer, and this file's own next section says what that does:
+// "PERMITS EVERYTHING — every duplicate slug, every parcel past the cap — with
+// nothing on any page to show for it." A rollback that opens the town to
+// duplicate slugs is not a rollback.
+//
+// So the three read the store unconditionally and refuse when it cannot be
+// reached. This is not a new shape: THE HOLD SHELF'S READS below have run it
+// since POS-153 — "there is no `guardsFlipped()` branch here and no sqlite
+// fallback underneath" — on Everything Reads the Store's own sentence, that the
+// flag is the disease. `guardedAttachments` KEEPS its flag, and the difference
+// is the whole test: its fallback reads `dynamic.db/attachments`, a table G1
+// does not touch, so its 1.0 arm still answers from a store that is still
+// written.
+//
+// Prod runs `W2_GUARDS=1`, so nothing live changes on the day this lands; what
+// goes is the ability to roll the read half back onto a store that no longer
+// holds the rows. That went with the INSERT, not with this edit.
 //
 // ── THE HOUSEHOLD SPELLING, WHICH IS THE SEAM THAT BITES ────────────────────
 //
@@ -107,7 +134,13 @@ export class GuardsUnreachableError extends Error {
     this.code = 503;
     this.which = which;
     this.hint =
-      `this door validates against the office's own record (W2_GUARDS=1), and the ${which} guard could not read it. ` +
+      // THE SENTENCE NAMES NO FLAG SINCE G1 (POS-156, RULING 3a). It said
+      // "(W2_GUARDS=1)", which was true while the flag chose between the record
+      // and the sqlite journal. There is no second place to read from now, so
+      // this fires whether or not the flag is set -- and an operator sent to
+      // check a variable that is not the cause is an operator looking in the
+      // wrong place.
+      `this door validates against the office's own record, and the ${which} guard could not read it. ` +
       `The door refuses rather than permitting on a guess — a guard that cannot see your neighbours' claims would ` +
       `let a duplicate slug or a parcel past the cap stand, and the receipt for that arrives at the next settlement. ` +
       `Nothing was written; your act is safe to make again.`;
@@ -221,10 +254,6 @@ async function scoped(name, fn) {
  * direction a guard may not fail in.
  */
 export async function guardedLiveMarks(db, { household = undefined } = {}) {
-  if (!guardsFlipped()) {
-    const { liveMarks } = await import("./world-journal.mjs");
-    return liveMarks(db, { household });
-  }
   return refusing("live-marks", async () =>
     scoped(household ?? null, async (client, key) => {
       const { marks } = await port.pgLiveMarks(client, { household: key });
@@ -240,10 +269,6 @@ export async function guardedLiveMarks(db, { household = undefined } = {}) {
  * that; this is the flag branch and the household resolution, and no more.
  */
 export async function guardedLiveChildrenOf(db, id, { household = undefined } = {}) {
-  if (!guardsFlipped()) {
-    const { liveChildrenOf } = await import("./world-journal.mjs");
-    return liveChildrenOf(db, id, { household });
-  }
   return refusing("live-children", async () =>
     scoped(household ?? null, async (client, key) => {
       const { children } = await port.pgLiveChildrenOf(client, id, { household: key });
@@ -281,8 +306,6 @@ export async function guardedLiveChildrenOf(db, id, { household = undefined } = 
  */
 export async function guardedDraftsForKey(repo, key) {
   const journal = await import("./world-journal.mjs");
-  if (!guardsFlipped()) return journal.draftsForKey(repo, key);
-
   const branches = await import("./world-branches.mjs");
   const gitDelta = branches.draftDeltaForKey(repo, key);
   if (gitDelta?.error) return gitDelta;
