@@ -298,8 +298,15 @@ test("THE SCOPING IS THE POLICY'S: the live read declared the household before a
   // invisible, the guard finding no collision, and a duplicate permitted.
   assert.ok(keysAt !== -1, "the spelling set was never declared — the draft policies would answer against NULL");
   assert.ok(keysAt < claimsAt, "the spelling set must precede the read it scopes");
-  // And it carries THIS house's key: the set is every spelling of ONE house.
-  assert.deepEqual(p.asked[keysAt].params, [HOUSEHOLD]);
+  // And it carries THIS house's key FIRST, then the rest of its own history:
+  // the set is every spelling of ONE house. The `solo:` tail arrived with the
+  // POS-160 follow-up (RULING 4's RED 1) — `pos104-wright` is this fixture
+  // house's own resident, so `solo:pos104-wright` is a spelling of THIS house
+  // and of no other. Asserted whole rather than by a prefix, so a set that
+  // grew a neighbour's spelling reds here.
+  assert.deepEqual(p.asked[keysAt].params, [`${HOUSEHOLD},solo:pos104-wright`]);
+  assert.ok(p.asked[keysAt].params[0].startsWith(`${HOUSEHOLD},`),
+    "the house's live key is the first spelling in the set, whatever else rides behind it");
 });
 
 // ═════════════════════════════════════════════════════════════════════════════

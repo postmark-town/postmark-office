@@ -182,6 +182,12 @@ export function resolveHouse(x, registry, pins = {}, opts = {}) {
   // their own, so nothing walks them as a slug — `login:` has already been read
   // for its account above, and `solo:` says "this handle is its own house",
   // which is the absence this function returns rather than an answer.
+  // THIS DID NOT MOVE WHEN `houseKeysOf` ADMITTED `solo:` INTO THE SET. The two
+  // functions answer different questions — "which house IS this" decides a
+  // write, a cap fold and a consent gate; "which rows may this house read" is
+  // Ruling 4's read-side question — so `solo:letta-resident` is in letta's set
+  // and still resolves to nothing here, deliberately. See § `solo:` WAS REFUSED
+  // HERE below, and FALSIFIER 1b, which pins both halves.
   const bare = s.startsWith("hh:") ? s.slice(3) : s;
   const isNonHouseKey = /^(solo|login):/.test(s);
   const wanted = isNonHouseKey ? "" : bare;
@@ -320,19 +326,89 @@ export function resolveHouse(x, registry, pins = {}, opts = {}) {
 //   `hh:<formerly>`   0 — POS-158 shipped the column and no door has reached
 //                         it yet. Admitted anyway, because the moment one does
 //                         a renamed house's old rows are exactly this problem.
+//   `solo:<held>`   304 — every handle (190) and every account login (121)
+//                         THIS house holds and nobody else's, less the 7 that
+//                         are both at once. The follow-up below. 543 keys in
+//                         all, over the town's 118 houses.
 //
-// AND THREE CLASSES REFUSED, each for a reason a future reader will want:
+// ── `solo:` WAS REFUSED HERE, AND THE REFUSAL WAS WRONG ─────────────────────
 //
-//   `solo:<handle>`  NAMES NO HOUSE. `resolveHouse` answers `unknown` for it by
-//                    design ("a fabricated household is worse than an absent
-//                    one"), 022's own map excluded it in the same words, and
-//                    admitting it here would be a WIDENING rather than a
-//                    restoration: a `solo:` row was written when the registry
-//                    had never heard of that handle, so it was never any
-//                    house's row, and pulling it into a house would show one
-//                    resident's private compose space to all of their
-//                    housemates. Excluded, and a `solo:` session still declares
-//                    its own key — see `sessionKeysVia`.
+// The first cut of this block excluded `solo:<handle>` on the rule "NAMES NO
+// HOUSE", which is what `resolveHouse` still answers and what 022's own map
+// said. IT WAS TRUE WHEN THE ROW WAS WRITTEN AND IT IS FALSE NOW, and the
+// difference is POS-159's backfill: since that measurement every resident on
+// the roll stands in exactly one house (188 of 188 by account), and the
+// registry's own invariant is that a handle belongs to AT MOST ONE house. So a
+// `solo:` spelling of a handle THE HOUSE ITSELF HOLDS is not a fabricated
+// household — it is a historical spelling of that house, exactly as `gh:<id>`
+// is, and the house is the only reader that can be handed it.
+//
+// MEASURED ON THE DEV SANDBOX 2026-09-22 21:11, after migration 024, a real
+// Postgres: the store holds 10 draft claims under `solo:kadakatzenberg`. With
+// `app.household_keys = 'hh:the-familiar-house'` alone their author sees 0 of
+// them; with `solo:kadakatzenberg` in the set they see all 10; a stranger sees
+// 0. That is RED 1, and this block is its fix.
+//
+// THE MEASURED ROW IS A LOGIN, NOT A HANDLE, and that is why two classes of
+// string are admitted rather than one. `kadakatzenberg` is the GitHub login of
+// `the-familiar-house`'s one account; its resident handle is
+// `sophia-familiaris`. `world2-claims.mjs § THE ONE RESOLVER` writes
+// `claims.household` from the ACTING KEY, and for a human-credentialed act
+// that key is the human's GitHub login — so the `solo:` rows in the store are
+// spelled with handles AND with logins, verbatim, case and all
+// (`materialize.mjs`'s own header names three: `solo:devadavisson`,
+// `solo:kristinashoultz-wq`, `solo:FluffUPando`). A set admitting only the
+// handle spelling would leave the measured 10 drafts exactly where they are.
+//
+// SO: `solo:<x>` is admitted for every `x` this house holds —
+//
+//   its `residents[]` handles;
+//   every handle whose PIN id is one of this house's account ids (the same
+//     id-only road `VIA.PIN` walks, and for the same recycled-login reason);
+//   every `accounts[].login` the house lists;
+//   the `login` each of those handles' pins wears.
+//
+// MEASURED on the fixture: 190 distinct handles and 121 distinct logins are
+// held this way (7 strings are both, for one house), giving 304 `solo:` keys,
+// and NOT ONE of them is held by two houses — so every `solo:` key in the town
+// belongs to exactly one house's set. `FALSIFIER 1g` asserts that census
+// rather than trusting this paragraph, and it is the whole safety argument:
+// the reason a bare `mari` is refused below is that a set has no order to
+// disambiguate it, and `solo:mari` needs none — measured, it names starforge's
+// resident and nothing else, while the house whose SLUG is `mari` carries
+// `solo:ev-attractor` and no `solo:mari` at all.
+//
+// THE ONE COST, STATED RATHER THAN BURIED. The refusal this replaces named a
+// real consequence: a `solo:` draft becomes readable by the author's HOUSEMATES
+// and not only by the author, because 007's grain is the household and not the
+// person. That is not a side effect of the set — it is what the household grain
+// already means for every `hh:`-spelled draft in the store, and a `solo:` row
+// written by a resident who now stands in a house is that house's row. The
+// alternative on offer is the measured one: the author sees none of their own
+// ten drafts. Ruling 4 takes the housemate over the locked drawer; if Keemin's
+// word before Sunday's deploy prefers the drawer, the fix is a per-person carve
+// on 007 and not a narrower set, because the same argument would then apply to
+// every `gh:`-spelled draft this set already admits.
+//
+// TWO THINGS THIS DELIBERATELY DOES NOT DO:
+//
+//   IT DOES NOT MOVE `resolveHouse`. A `solo:` key still answers `unknown`
+//   there, so nothing that asks "which house IS this" — the write side, the
+//   parcel-cap fold, a consent gate — changes its answer. The set is the READ
+//   side's question ("which rows may this house see") and Ruling 4 is a read-
+//   side ruling. One consequence is worth stating plainly rather than leaving
+//   for a reader to trip over: `houseKeysOf('hh:letta')` now contains
+//   `solo:wren-winter` while `houseKeysOf('solo:wren-winter')` is still `[]`.
+//   That asymmetry is the ruling's shape, not an oversight, and FALSIFIER 1b
+//   pins both halves of it.
+//
+//   IT DOES NOT LOWERCASE A LOGIN. 39 of the 121 live logins carry uppercase
+//   and the pen wrote them verbatim, so the verbatim spelling is the one that
+//   matches a row. A case-folded variant would be a second key admitted on a
+//   guess about what some past writer did, and `= ANY(set)` cannot tell a
+//   reader which of the two matched.
+//
+// AND TWO CLASSES STILL REFUSED, each for a reason a future reader will want:
 //
 //   BARE STRINGS     a bare slug, a bare handle, a bare login, a bare former
 //                    slug. `resolveHouse` can read these safely ONLY BECAUSE IT
@@ -369,6 +445,43 @@ const assertNoComma = (k) => {
 };
 
 /**
+ * EVERY `solo:` STRING THIS ONE HOUSE HOLDS — the handles it keeps and the
+ * logins those handles' credentials wear. PURE, and ordered: residents as the
+ * registry lists them, then the accounts' logins, then anything the pins add.
+ *
+ * THE PIN ROAD IS ID-ONLY, matching `VIA.PIN`'s own rule. A pin's `login` is
+ * display-only by the town's law (`tools/witness.mjs § loadBindings`), so a
+ * handle reaches this house through its pin's IMMUTABLE ID and never through
+ * the string — otherwise a recycled GitHub login would walk a stranger's handle
+ * into this house's spelling set, which is the recycled-login hole
+ * `accountMatches` exists to close, re-opened one door over.
+ *
+ * A login is taken VERBATIM. See § IT DOES NOT LOWERCASE A LOGIN above.
+ */
+function soloHeldBy(rec, pins) {
+  const out = [];
+  const seen = new Set();
+  const put = (s) => {
+    const v = String(s ?? "").trim();
+    if (v && !seen.has(v)) { seen.add(v); out.push(v); }
+  };
+
+  const ids = new Set((rec?.accounts ?? [])
+    .map((a) => a?.id).filter((x) => x != null).map(Number));
+
+  const handles = [];
+  for (const h of rec?.residents ?? []) { const v = String(h ?? "").trim(); if (v) handles.push(v); }
+  for (const [handle, pin] of Object.entries(pins ?? {}))
+    if (pin?.id != null && ids.has(Number(pin.id))) handles.push(String(handle).trim());
+
+  for (const h of handles) put(h);
+  for (const a of rec?.accounts ?? []) put(a?.login);
+  for (const h of handles) put(pins?.[h]?.login);
+
+  return out;
+}
+
+/**
  * EVERY SPELLING ONE HOUSE HAS EVER CARRIED, the house being whichever one `x`
  * resolves to. PURE.
  *
@@ -403,6 +516,8 @@ export function houseKeysOf(x, registry, pins = {}, opts = {}) {
   }
   for (const a of rec.accounts ?? [])                       // then every account
     if (a?.id != null) add(`gh:${a.id}`);
+  for (const held of soloHeldBy(rec, pins))                 // then its own `solo:` past
+    add(`solo:${held}`);
 
   return out;
 }
