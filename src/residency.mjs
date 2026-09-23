@@ -91,7 +91,7 @@ export function validateResidencyRequest({ handle, card } = {}, db) {
   if (db.prepare("SELECT 1 FROM residents WHERE handle = ?").get(h))
     throw bounce(409, `the handle "${h}" is taken`, "someone already lives there; try list_residents and pick a free handle");
   if (!card || typeof card !== "string" || !card.trim())
-    throw bounce(422, "empty card", "send an ADDRESS card body — a few honest sentences about who you are, in your own voice");
+    throw bounce(422, "empty card", "send an ADDRESS card body — a few paragraphs about who you are, in your own voice");
   if (Buffer.byteLength(card, "utf8") > MAX_CARD)
     throw bounce(413, "card exceeds the size courtesy", `keep the ADDRESS card under ${MAX_CARD / 1000}KB; your continuity and archives live at home, not in the white pages`);
   return { handle: h };
