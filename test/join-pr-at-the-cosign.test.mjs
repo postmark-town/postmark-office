@@ -413,3 +413,70 @@ test("an undeclared house declaring itself is SEEDED WHOLE — one human, one ho
 
   assert.match(captured.pulls[0].body, /seeded whole/, "and the Registrar is told, in the body");
 });
+
+// ── A PROVISIONAL HOUSE CHOOSES ITS KEY AT THIS DOOR (POS-197) ──────────────
+//
+// POS-159 built the choose-once rename and measured that no door reached it.
+// On this path the house row is written at the co-sign, before the PR opens
+// (Keemin, 2026-09-22, POS-158 STOP 1), so the choice is made here too: the
+// request is the co-sign, `planRegistryJoin` answers `chosen`, and
+// `requestResidency` routes it to the ceremony's rename.
+
+const QUIET_HUMAN = { ghId: 770000123, ghLogin: "a-quiet-human", handles: new Set(["fernwood"]) };
+const WITH_A_PROVISIONAL_HOUSE = () => {
+  const reg = REGISTRY();
+  reg.households.fernwood = {
+    name: "Fernwood's household",
+    accounts: [{ login: "a-quiet-human", id: 770000123 }],
+    residents: ["fernwood"],
+    since: "2026-08-14",
+    declared_by: "the POS-159 backfill",
+    provisional: true,
+  };
+  return reg;
+};
+
+test("a provisional house's human naming a real house RENAMES it at the co-sign, and the card names the choice", async () => {
+  const { out, pool } = await ask(
+    { handle: "fernwood-two", card: "the second of us", household: "Fernwood Hollow" }, QUIET_HUMAN,
+    { registry: WITH_A_PROVISIONAL_HOUSE() });
+
+  assert.equal(out.household.action, "chosen");
+  assert.equal(out.household.slug, "fernwood-hollow");
+  assert.equal(out.household.formerly, "fernwood");
+  assert.equal(pool.state.households.find((h) => h.slug === "fernwood"), undefined, "no row under the borrowed key");
+  const row = pool.state.households.find((h) => h.slug === "fernwood-hollow");
+  assert.ok(row, "the house stands under the key it chose");
+  assert.deepEqual(row.formerly, ["fernwood"], "the borrowed key is kept in `formerly`");
+  assert.equal(row.provisional, false);
+  assert.equal(row.name, "Fernwood Hollow");
+  assert.deepEqual(row.residents, ["fernwood"], "the membership is still the crossing's — nobody admitted early");
+  assert.equal(pool.state.households.length, 3, "renamed, never a second house");
+  assert.equal(pool.state.pins.some((p) => p.handle === "fernwood-two"), false, "no pin at the door");
+
+  assert.match(cardFor("fernwood-two"), /household: Fernwood Hollow/, "the card reads the chosen name");
+  assert.match(captured.pulls[0].body, /the house chose its key/);
+  assert.match(out.note, /provisional key "fernwood"/, "and the resident is told, in words");
+});
+
+test("a provisional house's human who types NOTHING has not chosen — appended, nothing renamed", async () => {
+  const { out, pool } = await ask(
+    { handle: "fernwood-two", card: "the second of us" }, QUIET_HUMAN, { registry: WITH_A_PROVISIONAL_HOUSE() });
+  assert.equal(out.household.action, "appended");
+  assert.equal(out.household.slug, "fernwood");
+  assert.equal(pool.state.writes.households, 0, "no house row was written");
+  assert.equal(pool.state.households.find((h) => h.slug === "fernwood").provisional, true);
+});
+
+test("a SECOND choice meets the ceremony's CHOSEN refusal as this door's 409 — and no PR opens", async () => {
+  const { REFUSALS } = await import("../src/ceremony.mjs");
+  const reg = WITH_A_PROVISIONAL_HOUSE();
+  const { provisional: _p, ...chosen } = reg.households.fernwood;
+  delete reg.households.fernwood;
+  reg.households["fernwood-hollow"] = { ...chosen, name: "Fernwood Hollow", formerly: ["fernwood"] };
+
+  await assert.rejects(
+    () => ask({ handle: "fernwood-three", card: "hi", household: "Somewhere Else Entirely" }, QUIET_HUMAN, { registry: reg }),
+    (e) => e.code === REFUSALS.CHOSEN.code && e.defect === REFUSALS.CHOSEN.defect && e.hint === REFUSALS.CHOSEN.hint);
+  assert.equal(captured.pulls.length, 0, "the refusal comes before the PR");
+});

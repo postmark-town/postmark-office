@@ -243,6 +243,68 @@ export function planRegistryJoin(registry, { handle, household, ghId, ghLogin, s
   const slug = byAccount ?? byName;
   const next = JSON.parse(JSON.stringify(registry));
 
+  // ── THE HOUSE CHOOSES ITS KEY (POS-197, the door POS-159 left unbuilt) ─────
+  //
+  // RULED (Keemin, 2026-09-22): a PROVISIONAL house — a key the backfill
+  // borrowed from its first resident's handle — chooses its real key ONCE, at
+  // its human's first co-sign naming a real house. The rename itself is the
+  // ceremony's (`src/ceremony.mjs § mintHousehold`, THE CHOOSE-ONCE PATH, which
+  // calls `renameHousehold`). This branch is only the ROUTE to it: before it,
+  // the account's own house won the `slug` line above whatever was typed, the
+  // join came back `appended`, and the name the resident chose was dropped on
+  // the floor while their card read the borrowed nameplate.
+  //
+  // WHAT COUNTS AS CHOOSING, and each part is load-bearing:
+  //   · the house is found BY ACCOUNT — the verified human's own house, so no
+  //     caller can rename somebody else's by naming it;
+  //   · something was typed — a resident who types nothing has not chosen;
+  //   · the typed words do NOT already name this house — the borrowed key, the
+  //     borrowed nameplate, or a key it wore before (`formerly`) is a resident
+  //     naming the house they are in, and that stays `appended`.
+  //
+  // A HOUSE THAT ALREADY CHOSE ANSWERS `chosen` TOO, marked `already`. The
+  // choice is once; the refusal of a second one is the ceremony's
+  // (`REFUSALS.CHOSEN`), and the door can only relay a sentence the mint gets
+  // the chance to say. `already` is read off the row exactly as the ceremony
+  // reads it — not provisional, carrying `formerly` — so the two cannot
+  // disagree about which houses have chosen.
+  const own = byAccount ? registry.households?.[byAccount] : null;
+  const provisional = own?.provisional === true;
+  const already = !provisional && (own?.formerly ?? []).length > 0;
+  const to = household?.trim() ? slugFromName(household) : null;
+  const namesItsOwnPast = Boolean(to) && (own?.formerly ?? []).some((f) => slugFromName(f) === to);
+  if (byAccount && !byName && to && (provisional || already) && !namesItsOwnPast) {
+    const rec = next.households[byAccount];
+    const residents = [...new Set([...(rec.residents ?? []), handle])];
+    const siblings = (rec.residents ?? []).filter((h) => h !== handle);
+    if (already) {
+      // Nothing moves in the fold: the ceremony will refuse, and a caller that
+      // must still admit the resident (the crossing) admits them to the house
+      // under the key it already chose.
+      rec.residents = residents;
+      return { slug: byAccount, action: "chosen", already: true, from: byAccount, to,
+        formerly: [...own.formerly], vouched: true, addedAccount: false,
+        houseLine: houseLineOf(registry, byAccount), name: rec.name ?? rec.human ?? byAccount,
+        registry: next, siblings };
+    }
+    const formerly = [...(own.formerly ?? []), byAccount];
+    const chosenName = household.trim();
+    // The fold mirrors the rename the ceremony writes — same key, same alias
+    // list, `provisional` gone, the stated name, the same place in the file —
+    // so a crossing folding several rows sees this house under its chosen key
+    // for every row after this one.
+    const renamed = {};
+    for (const [k, v] of Object.entries(next.households)) {
+      if (k !== byAccount) { renamed[k] = v; continue; }
+      const { provisional: _borrowed, ...rest } = v;
+      renamed[to] = { ...rest, name: chosenName, residents, formerly };
+    }
+    next.households = renamed;
+    return { slug: to, action: "chosen", already: false, from: byAccount, to, formerly,
+      vouched: true, addedAccount: false, houseLine: chosenName, name: chosenName,
+      registry: next, siblings };
+  }
+
   // an existing house gains a resident (and, cold, the account claiming it)
   if (slug) {
     const rec = next.households[slug];
@@ -362,6 +424,16 @@ export function registryNote(plan, { handle, ghLogin, ghId }) {
       `keyed by the account the town already knows (slug \`${plan.slug}\`, from \`@${ghLogin}\`). It carries NO \`name\`: ` +
       `the card reads \`(unstated — ask them)\` until they say, and saying it later is a display edit that leaves the slug alone.${seeded} ` +
       `No \`hh:\` ledger line is minted here: keys stay minimal until grouping becomes real (upgrade-at-second-ness).`;
+  }
+  // A HOUSE CHOOSING ITS KEY (POS-197). The row was renamed at the co-sign,
+  // before this PR opened; the Registrar is told the old key so the card's new
+  // `household:` line does not read as a stranger's house.
+  if (plan.action === "chosen") {
+    return `\n\n**Household — the house chose its key.** \`${handle}\`'s house was carrying the provisional key ` +
+      `\`${plan.from}\`, borrowed from a resident's handle, and this co-sign chose its real one: **${plan.name}** ` +
+      `(slug \`${plan.slug}\`). The record renamed the house in place before this PR opened — \`${plan.from}\` is kept in its ` +
+      `\`formerly\`, and ${where} is re-rendered from that record. The account (\`@${ghLogin}\`, id \`${ghId}\`) is the house's own, ` +
+      `so the vouch is inherent. Merge at full authority; the choice is made once and does not change again at a door.`;
   }
   if (plan.action === "created") {
     const seeded = plan.siblings.length
@@ -720,7 +792,8 @@ export async function requestResidency(args, key, db, pen, { odb = null } = {}) 
   };
   const house = plan
     ? { slug: plan.slug, name: plan.name, action: plan.action,
-        lane: plan.vouched ? "pre-vouched" : "held for a sibling's vouch" }
+        lane: plan.vouched ? "pre-vouched" : "held for a sibling's vouch",
+        ...(plan.action === "chosen" ? { formerly: plan.from } : {}) }
     : null;
 
   // The gangway (HARBOR/GANGWAY.md, founder law): while frozen, the same valid
@@ -746,6 +819,37 @@ export async function requestResidency(args, key, db, pen, { odb = null } = {}) 
   // `tools/registry-drain.mjs`, and a static edge back would close that cycle.
   // `declareViaOffice` imports `oauth.mjs` the same way for the same reason.
   let minted = null;
+
+  // ── THE CHOICE, HERE, AT THE SAME SEAM AS THE MINT (POS-197) ─────────────
+  //
+  // A provisional house choosing its key is a HOUSE-ROW write, and the ruling
+  // puts every house-row write on this path here: at the co-sign, before the
+  // PR opens (Keemin, 2026-09-22, POS-158 STOP 1). So the choice goes through
+  // the one ceremony that owns it — `mintHousehold` re-reads the record, finds
+  // the co-signer's house by account, and renames it in place when it is
+  // provisional — and the PR that follows carries a card naming the key the
+  // house just chose. The membership still lands at the crossing, unchanged.
+  //
+  // A SECOND CHOICE IS THE CEREMONY'S REFUSAL, relayed in its words. The plan
+  // marks it `already`; the mint is still called, because the mint is where
+  // "this household has already chosen its key" is said, and it throws before
+  // writing anything. The catch below turns it into this door's bounce — a 409
+  // with the ceremony's defect and hint, never a 500 — and no PR opens.
+  if (plan?.action === "chosen") {
+    const { mintHousehold, REFUSALS } = await import("./ceremony.mjs");
+    try {
+      minted = await mintHousehold({
+        slug: plan.to,
+        name: plan.houseLine,
+        coSign: { ghId: key.ghId, ghLogin: key.ghLogin },
+        since: townDate(),
+        declaredBy: plan.registry.households[plan.slug]?.declared_by,
+      });
+    } catch (e) {
+      throw bounce(e.code ?? 503, e.defect ?? String(e?.message ?? e), e.hint ?? REFUSALS.NO_RECORD.hint);
+    }
+  }
+
   if (plan?.action === "created") {
     const { mintHousehold, REFUSALS } = await import("./ceremony.mjs");
     try {
@@ -837,6 +941,8 @@ function householdNote(plan, key) {
       ? " Your house is not declared in the town's registry: send `household` with the name you want over the door and the join PR will carry that declaration too."
       : "";
   }
+  if (plan.action === "chosen")
+    return ` Your house was carrying the provisional key "${plan.from}"; it has now chosen its own — "${plan.name}" (slug ${plan.slug}) — and the old key is kept in the record. A house chooses once: this key does not change again at a door.`;
   if (plan.action === "created")
     return ` The same PR declares your household "${plan.name}" (slug ${plan.slug}) in tools/households.json — the Registrar's merge completes both at once.`;
   if (plan.vouched)
