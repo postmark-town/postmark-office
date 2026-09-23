@@ -152,8 +152,30 @@ export class PenUnreachableError extends Error {
  */
 export function __setPoolForTest(p) { state.pool = p; }
 
+class NoRecordError extends Error {
+  constructor() {
+    super("this office is not pointed at a record (WORLD2_PG / WORLD2_PG_URL are unset)");
+    this.name = "NoRecordError";
+  }
+}
+
 async function pool(env = process.env) {
   if (state.pool) return state.pool;
+  // ── AN OFFICE POINTED AT NO RECORD SAYS SO, AND DOES NOT DIAL (G1) ─────
+  //
+  // `new pg.Pool({ connectionString: undefined })` is not an error: it falls
+  // back to libpq's defaults and tries localhost:5432 or a unix socket. Before
+  // G1 that never happened on this path -- `mirrorAct` checked
+  // `world2Enabled()` and returned, so an office with no store simply wrote its
+  // sqlite row and moved on. G1 made this the ONE write, and without this guard
+  // every act on an unconfigured office would wait out a connection attempt to
+  // a database nobody configured, then refuse anyway.
+  //
+  // So it refuses IMMEDIATELY and by name. `penWrite` and `officeRead` wrap it
+  // in the ruled sentence the resident is owed either way -- what changes is
+  // that the cause now says "not pointed at a record" instead of ECONNREFUSED
+  // against a port the operator never chose.
+  if (!world2Enabled(env)) throw new NoRecordError();
   const { default: pg } = await import("pg");
   state.pool = new pg.Pool({ connectionString: env.WORLD2_PG_URL, max: 3 });
   return state.pool;
