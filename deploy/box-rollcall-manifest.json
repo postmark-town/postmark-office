@@ -396,6 +396,22 @@
    "must_be_owned_by": "meepo",
    "why": "Every push this box makes reads it — the settlement clone is configured with credential.helper 'store --file /srv/postmark-office/.git-credentials' by settlement-auto.sh itself, and deploy/settlement-escalate.mjs reads the same file to reach the operator queue. A root-owned credential store is the exact shape of the 2026-08-28 two-hour pen lockout: readable by nobody who needs it, and silent until the moment something tries to push.",
    "repair": "sudo chown meepo:meepo /srv/postmark-office/.git-credentials && sudo chmod 600 /srv/postmark-office/.git-credentials"
+  },
+  {
+   "id": "dev-world-clone",
+   "label": "the dev office's world clone",
+   "path": "/srv/postmark-office-dev/world-clone",
+   "must_be_owned_by": "meepo",
+   "why": "The dev office's world clone is rewritten by postmark-dev-freshen.service every night at 08:10 UTC, and that unit runs as meepo (its unit says User=meepo): a fetch, then a git reset --hard onto sandbox/seed, which has to rewrite every tracked file. On 2026-09-22 Wright found 1,918 root-owned files across this clone and its sibling — the 08-28 root-git class again: something on the box ran git in them as root. Every reset had been refusing them with Permission denied for an unknown time, and the freshen printed 'dev clones stood back on sandbox/seed' past the errors and exited 0, so dev had quietly stopped returning to the seed and no row said so. The freshen now fails loud (POS-192); this row is the other half: it names the foreign owner before the next reset trips on it, and its repair is chown, not a restart.",
+   "repair": "sudo chown -R meepo:meepo /srv/postmark-office-dev/world-clone && sudo -u meepo git -C /srv/postmark-office-dev/world-clone fsck --no-progress"
+  },
+  {
+   "id": "dev-town-clone",
+   "label": "the dev office's town clone",
+   "path": "/srv/postmark-office-dev/town-clone",
+   "must_be_owned_by": "meepo",
+   "why": "The dev office's town clone is rewritten by postmark-dev-freshen.service every night at 08:10 UTC, and that unit runs as meepo (its unit says User=meepo): a fetch, then a git reset --hard onto sandbox/seed, which has to rewrite every tracked file. On 2026-09-22 Wright found 1,918 root-owned files across this clone and its sibling — the 08-28 root-git class again: something on the box ran git in them as root. Every reset had been refusing them with Permission denied for an unknown time, and the freshen printed 'dev clones stood back on sandbox/seed' past the errors and exited 0, so dev had quietly stopped returning to the seed and no row said so. The freshen now fails loud (POS-192); this row is the other half: it names the foreign owner before the next reset trips on it, and its repair is chown, not a restart.",
+   "repair": "sudo chown -R meepo:meepo /srv/postmark-office-dev/town-clone && sudo -u meepo git -C /srv/postmark-office-dev/town-clone fsck --no-progress"
   }
  ],
  "_trees_readme": [
