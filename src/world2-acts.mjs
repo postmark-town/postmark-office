@@ -53,6 +53,94 @@
 // standing, which refuses any other class by name. An exemption stated at the
 // code that implements it is stronger than one stated in a map beside it.
 
+// ── WHEN EACH LANE'S PEN FLIPPED — DATES AS DATA, NOT AS PROSE ───────────────
+//
+// THE DEFECT THIS EXISTS TO KILL (w2-hold-say-flip-report.md § Findings 2,
+// 2026-09-03, verbatim): "`--since` is one clock for every lane, and lanes flip
+// on different days. Asked for `--lanes stance,hold,say --since <the stance
+// flip>`, it read 81 mirror-era say acts (`journal_seq` NULL by the mirror's
+// design, never flipped) as 'flipped acts lacking twins'. The pairing key
+// 'journal_seq NULL' does not distinguish a flipped row from a mirror-written
+// row of a lane that never had journal rows."
+//
+// The pairing key CANNOT distinguish them and never will: before a lane flips,
+// its mirror writes `acts` rows with `journal_seq` NULL too (the say gap and the
+// holding gap were closed by the mirror, not by the journal — the lane simply
+// had no journal row to carry a seq). The only thing that separates a flipped
+// row from a mirror row of the same lane is WHEN — so the moment each lane's pen
+// flipped is a fact the store needs written down, and this is where it lives:
+// here. (It used to sit beside `LANE_MIRROR`, "the one home for per-lane truth
+// about the shim"; G1 deleted that map with the journal INSERT it was
+// pressuring, and these dates OUTLIVE it -- they are a fact about `W2_PEN` on a
+// box, not about a shim's death clock, and the flipped-era acts they date still
+// exist.) A falsifier that carried these dates in its own argv would make every
+// operator re-type them, and a date re-typed is a date eventually mistyped.
+//
+// THE VALUE IS THE SERVICE-RESTART MOMENT, from that lane's own flip report —
+// not the first act observed after it. An act is evidence the flip happened
+// BEFORE it; the restart is the flip.
+//
+// `null` means THIS LANE HAS NOT FLIPPED. It is not "unknown" and it is not a
+// backstop: a lane with a null here has no flipped era at all, so a reverse-
+// parity check over it is a comparison with nothing to compare (its
+// `journal_seq`-NULL rows are the mirror's, and pairing them against a journal
+// that never held them manufactures exactly the 81 false reds above). A lane
+// ABSENT from this map is also unflipped — nothing becomes "flipped" by being
+// unnamed, which is LANE_MIRROR's own fail-closed rule pointed the other way.
+//
+// A lane's row changes ONCE, when its pen flips, and the change carries the
+// report that names the restart. Rolling a lane back (removing it from `W2_PEN`)
+// does NOT clear its row: the flipped-era acts it wrote still exist and still
+// need pairing. A second flip after a rollback is a second era, and the honest
+// shape for that is a list rather than a scalar — deliberately not built until
+// a rollback actually happens, because a shape nobody needs is furniture.
+export const LANE_FLIPPED_AT = Object.freeze({
+  // C1 · `W2_PEN=stance`, postmark-office.service restarted 21:01:58Z
+  // (G:/Starstory/docs/2026-09-02/w2-stance-flip-report.md).
+  stance: "2026-09-02T21:01:58Z",
+  // C2 + C4 · `W2_PEN=stance,hold,say`, one restart, both lanes
+  // (G:/Starstory/docs/2026-09-03/w2-hold-say-flip-report.md: "FLIPPED ON PROD
+  // 2026-09-03 18:58:05Z").
+  hold: "2026-09-03T18:58:05Z",
+  say: "2026-09-03T18:58:05Z",
+  // C3, C5, C6 flipped on prod 2026-09-05, one lane at a time, each with the
+  // refusal proof before the flag and the reverse-parity arm after its first
+  // live act (walk 1/1, frame 3/3; mark's amend paired by hand — see the
+  // report's finding on the held-act release instant). The arena stays null by
+  // ruling (P-143). This table records when a lane's pen ACTUALLY flipped on a
+  // box, which is a fact about `W2_PEN`, not about the code: a wired lane whose
+  // flag has never named it has no flipped era, and a date written before the
+  // flag moved would hand the reverse-parity arm a window in which every
+  // `journal_seq`-NULL row is the mirror's — finding 2, planted by hand. The
+  // founder's flip sets each line, in the same change as the flag.
+  // C3 · `W2_PEN=stance,hold,say,walk`, postmark-office.service restarted 19:09:37Z
+  // (G:/Starstory/docs/2026-09-05/w2-walk-frame-mark-flip-report.md).
+  walk: "2026-09-05T19:09:37Z",
+  // C5 · `W2_PEN=stance,hold,say,walk,frame`, restarted 19:11:01Z (same report).
+  frame: "2026-09-05T19:11:01Z",
+  // C6 · `W2_PEN=stance,hold,say,walk,frame,mark`, restarted 19:12:06Z (same report).
+  mark: "2026-09-05T19:12:06Z",
+  arena: null,
+});
+
+/**
+ * The instant this lane's pen flipped, or null when it never has.
+ *
+ * Fail-closed the way `mirrorExpiresFor` is, and toward the opposite answer for
+ * the opposite reason: an unnamed lane there must not buy IMMORTALITY, an
+ * unnamed lane here must not buy a FLIPPED ERA it never had. Both defaults are
+ * the answer that cannot manufacture a passing check out of an omission.
+ */
+export function laneFlippedAt(lane, lanes = LANE_FLIPPED_AT) {
+  const at = Object.prototype.hasOwnProperty.call(lanes, lane) ? lanes[lane] : null;
+  return at ?? null;
+}
+
+/** The lanes whose pen has flipped — what a reverse-parity check can ask about. */
+export function flippedLanesAt(lanes = LANE_FLIPPED_AT) {
+  return Object.keys(lanes).filter((lane) => laneFlippedAt(lane, lanes) !== null);
+}
+
 const state = {
   queue: Promise.resolve(),
   written: 0,

@@ -690,8 +690,8 @@ test("THE DOOR, flag on — leave_mark is ONE INSERT: no lease, no lock, no chec
   assert.deepEqual({ dx: row.at_dx, dy: row.at_dy }, { dx: 10, dy: 5 });
   assert.ok(row.witnesses, "with a witnesses block, however it was read");
   assert.equal(JSON.parse(row.payload).body, "the door wrote this into the log");
-  assert.equal(row.journal_seq, null,
-    "and `journal_seq` is null — there is no sqlite row left for it to pair with");
+  assert.equal("journal_seq" in row, false,
+    "the pen still names `journal_seq` in its INSERT — migration 024 drops that column, and an office writing it fails every act the moment the migration lands");
 
   // THE DOCKET IS NOT REACHED HERE, and that is this office's real behaviour
   // rather than a gap in the fixture: `claimEligible` gates the candle half on
@@ -1077,7 +1077,12 @@ const guardStore = ({ claims = [], identities = { alpha: "hh:alpha-house", beta:
             // that put it there would agree with a reader nothing writes for.
             at_anchor: args[5], at_dx: args[6], at_dy: args[7],
             witnesses: args[8], class: args[9], payload: args[10],
-            effect: args[11], household: args[12], journal_seq: args[13] });
+            effect: args[11], household: args[12],
+            // ⚑ ONLY PRESENT IF THE PEN SENT IT. G1 drops `acts.journal_seq`
+            // (migration 024) and the pen stopped naming it; a row that carried
+            // the key unconditionally would let a suite assert the column's
+            // absence and pass while the pen still wrote it.
+            ...(args.length > 13 ? { journal_seq: args[13] } : {}) });
           return { rows: [{ id }], rowCount: 1 };
         }
         // The docket half a mark-class row reaches on the same client.

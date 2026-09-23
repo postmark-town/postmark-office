@@ -28,7 +28,8 @@ import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
 
 import { openDynamic, movementV2Enabled } from "../src/dynamic-store.mjs";
-import { declareMovement, readMovements, mergedDepartureEvents } from "../src/dynamic-entities.mjs";
+// `declareMovement` is GONE (G1 / POS-156) and was already unused here.
+import { readMovements, mergedDepartureEvents } from "../src/dynamic-entities.mjs";
 import {
   carriersFrom, carriersWithDisclosure, foldFrames, gunwaleWarning, inRect, boundariesOnRoad,
 } from "../src/world-frames.mjs";

@@ -386,8 +386,13 @@ test("the claim carries the ACT'S OWN ID — `journal_seq is not an identity`, l
     const data = JSON.parse(s.claims[0].data);
     assert.equal(data._act_id, String(row.actId),
       "the claim must name the act it belongs to, by the act's own primary key");
-    assert.equal(s.acts[0].journal_seq, null,
-      "and the flipped act carries journal_seq NULL, which is why the old key could not have worked");
+    // THE COLUMN IS GONE (G1 / POS-156, migration 024). This asserted it was
+    // NULL on a flipped act, which was the evidence that pairing on it could
+    // never have worked. The evidence is stronger now: the pen does not write
+    // the column at all, so `_act_id` is not merely the better key, it is the
+    // only one there is.
+    assert.equal("journal_seq" in s.acts[0], false,
+      "the pen still names `journal_seq` in its INSERT — migration 024 drops that column, and an office writing it fails every act the moment the migration lands");
   } finally { db.close(); unflip(); }
 });
 
