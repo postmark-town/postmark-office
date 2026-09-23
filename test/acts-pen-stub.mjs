@@ -63,7 +63,7 @@ const norm = (sql) => String(sql).replace(/\s+/g, " ").trim();
  * consulted BEFORE the throw and AFTER the built-ins, so a suite can add the
  * docket without forking this file.
  */
-export function makeActsPen({ households = [], pins = [], meta = [], claims = [], windows = [{ id: 1 }], also = [] } = {}) {
+export function makeActsPen({ households = [], pins = [], meta = [], claims = [], windows = [{ id: 1 }], also = [], failOn = null } = {}) {
   const state = {
     acts: [],
     // THE DOCKET. Empty by default, and empty is an ANSWER here rather than a
@@ -82,6 +82,16 @@ export function makeActsPen({ households = [], pins = [], meta = [], claims = []
   const answer = async (sql, params = []) => {
     const q = norm(sql);
     state.asked.push(q);
+
+    // ⚑ `failOn` IS CHECKED FIRST, and it has to be. `also` is consulted after
+    // the built-ins, so a handler there can only answer a query this pen does
+    // NOT implement -- it could never make an implemented one fail, which is
+    // the thing a refusal test needs. A store that is REACHABLE and throws on
+    // one statement is a different fact from a store nobody can reach, and it
+    // is the fact RULING 3's "acts unchanged" is about.
+    if (typeof failOn === "function" && failOn(q, params)) {
+      throw new Error(`acts-pen-stub was told to fail this query: ${q.slice(0, 120)}`);
+    }
 
     if (/^BEGIN/i.test(q)) return { rows: [], rowCount: 0 };
     if (/^COMMIT/i.test(q)) { state.committed += 1; return { rows: [], rowCount: 0 }; }
@@ -221,8 +231,13 @@ export function makeActsPen({ households = [], pins = [], meta = [], claims = []
     seedAct(row) {
       const id = row.id ?? state.nextId++;
       if (row.id != null && row.id >= state.nextId) state.nextId = row.id + 1;
+      // ⚑ NO `journal_seq` IN THE DEFAULTS. G1 drops that column and the pen
+      // stopped sending it, so a row the real INSERT wrote does not carry the
+      // key at all. Seeding it here would make a seeded copy of a written row
+      // unequal to the row it copied -- which is exactly what a test comparing
+      // the record before and after a refused write is looking at.
       state.acts.push({ crossing: null, object: null, at_anchor: null, at_dx: null, at_dy: null,
-        witnesses: null, effect: null, household: null, journal_seq: null, ...row, id });
+        witnesses: null, effect: null, household: null, ...row, id });
       return id;
     },
     /** Every query asked of it, normalized — assert the count, not only the answer. */

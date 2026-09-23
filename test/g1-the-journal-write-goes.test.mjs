@@ -154,6 +154,69 @@ test("AN UNREACHABLE RECORD IS A REFUSAL, not a 200 over an act no store holds",
   } finally { db.close(); }
 });
 
+test("A STORE THAT THROWS AT WRITE TIME leaves the record UNCHANGED, not merely empty", async () => {
+  // The sharper half of the refusal, and the one RULING 3 names: "NO row exists
+  // anywhere (sqlite absent, acts unchanged)". The test above proves the
+  // refusal with no record at all; this one proves it against a record that is
+  // THERE, already holds rows, and fails on the write — which is the state a
+  // real outage leaves and the only one in which "unchanged" says more than
+  // "empty".
+  const db = freshDb();
+  try {
+    // One good act first, so there is something the refusal could damage.
+    await appendJournal(db, frameRow());
+    const before = pen.rows();
+    assert.equal(before.length, 1, "control: the record holds one act before the failure");
+
+    // Now the store throws on the INSERT and on nothing else — the transaction
+    // frame still answers, so what is proven is a failed WRITE rather than an
+    // unreachable pool.
+    const failing = installActsPen({ failOn: (q) => /^INSERT INTO acts/i.test(q) });
+    for (const r of before) failing.seedAct(r);
+
+    let refused = null;
+    try { await appendJournal(db, frameRow()); } catch (e) { refused = e; }
+
+    assert.equal(refused?.name, "PenUnreachableError",
+      "a write that threw resolved anyway — the door would answer 200 over an act the record refused");
+    assert.equal(refused.code, 503);
+    assert.deepEqual(failing.rows(), before,
+      "the record MOVED under a refused write — unchanged is the claim, and it is stronger than empty");
+    assert.equal(failing.state.rolledBack, 1, "and the transaction rolled back rather than being abandoned open");
+    assert.equal(db.prepare("SELECT COUNT(*) c FROM journal").get().c, 0,
+      "and no consolation copy reached sqlite either");
+  } finally { db.close(); }
+});
+
+test("THE ARENA STILL WRITES ITS ROW WITH THE STORE DOWN — the exemption does not depend on Postgres", () => {
+  // The other falsifier RULING 3 names. The arena's sqlite row is its IDENTITY
+  // inside the fold, not a receipt, so it may not become conditional on a store
+  // being reachable. `mirrorAct` is fire-and-forget on this path by design —
+  // here the sqlite row genuinely IS the SoT, which is the one place in the
+  // office where that is still true.
+  uninstallActsPen();
+  const was = { pg: process.env.WORLD2_PG, url: process.env.WORLD2_PG_URL };
+  process.env.WORLD2_PG = "1";
+  process.env.WORLD2_PG_URL = "postgres://nobody:nothing@127.0.0.1:1/absent";
+  const db = freshDb();
+  try {
+    const r = appendArenaRow(db, {
+      crossing: currentCrossing(), actor: "wright", action: "cast", object: null,
+      cls: CLASS_ARENA_ACT, at: null, witnesses: null,
+      payload: { ground: "the-town/the-vault", spell: "the-long-word" },
+      effect: "the word lands",
+    });
+    assert.equal(r.seq, 1, "the beat took its rowid with the store unreachable");
+    const [row] = readJournal(db, { cls: CLASS_ARENA_ACT });
+    assert.equal(row.actor, "wright");
+    assert.equal(row.payload.spell, "the-long-word", "and the whole row is there, not a stub");
+  } finally {
+    db.close();
+    for (const [k, v] of [["WORLD2_PG", was.pg], ["WORLD2_PG_URL", was.url]])
+      if (v === undefined) delete process.env[k]; else process.env[k] = v;
+  }
+});
+
 // ── 4. THE SOURCE ────────────────────────────────────────────────────────────
 //
 // A pin, because the behavioural tests above would still pass if the INSERT

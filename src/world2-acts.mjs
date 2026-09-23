@@ -53,6 +53,37 @@
 // standing, which refuses any other class by name. An exemption stated at the
 // code that implements it is stronger than one stated in a map beside it.
 
+/**
+ * THE LANES EXEMPT BY RULING — the one thing the deleted map carried that
+ * OUTLIVES it, kept because a live tool reads it and a ruling is not a shim.
+ *
+ * `world2/tools/state-log-rederive.mjs § classifyAbsence` asks which lanes may
+ * be ABSENT from the register without that absence being a finding. That
+ * question survives G1 whole: it is about the arena, and the arena's exemption
+ * is P-143, which no deletion of this lane's touches.
+ *
+ * It used to be derived from `LANE_MIRROR` by reading which rows had a null
+ * expiry — a map about the REVERSE MIRROR's death clock, which G1 deleted along
+ * with the INSERT it was pressuring. The answer was never really about expiry
+ * dates, so it is stated directly now:
+ *
+ *   P-143, RULED (Keemin, 2026-08-29 party night: "we can just keep the arena
+ *   on sqlite for now") — the lane stays sqlite-first, no read port, the
+ *   hardened rebuild lands 2.0-native instead. Lifting this is a founder ruling
+ *   PLUS the arena read ports, together.
+ *
+ * ⛑ A LANE IS NOT EXEMPT BY BEING ABSENT FROM THIS LIST. That was `LANE_MIRROR`'s
+ * own fail-closed rule ("an unnamed lane must never buy immortality by being
+ * unnamed") and it is the same here: this names the exemptions, and everything
+ * not named is governed.
+ */
+export const EXEMPT_LANES = Object.freeze(["arena"]);
+
+/** The lanes exempt by ruling — what a red must say it did NOT count. */
+export function exemptLanes(lanes = EXEMPT_LANES) {
+  return [...lanes];
+}
+
 // ── WHEN EACH LANE'S PEN FLIPPED — DATES AS DATA, NOT AS PROSE ───────────────
 //
 // THE DEFECT THIS EXISTS TO KILL (w2-hold-say-flip-report.md § Findings 2,
