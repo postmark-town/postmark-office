@@ -263,9 +263,19 @@ export function visibilityRefusal(v, { heldByName = null } = {}) {
 // supersedes the standing one, it never edits a row. Worth saying because 002's
 // `claims_update_guard` exempts only `clearing_job`, so a design that DID update
 // claims would be refused by the store no matter which role ran it.
+// THE REGISTRY TABLES REPLACED `identities` HERE (POS-160 follow-up, RED 2).
+// `materializeClaims → ownerHouseholdFor` used to SELECT one row from
+// `identities`; it now asks the ONE DERIVER, which reads the registry itself —
+// `households`, `household_pins` and `registry_meta`, the three
+// `registry-store.mjs § registryRowsVia` opens. A preflight still naming
+// `identities` would pass a role that cannot read the roll and then fail
+// mid-transaction on the first claim, which is the whole thing this list exists
+// to prevent.
 export const READ_PRIVILEGES = [
   ["marks", "SELECT"], ["claims", "SELECT"],
-  ["identities", "SELECT"],   // materializeClaims → ownerHouseholdFor
+  ["households", "SELECT"],       // materializeClaims → ownerHouseholdFor → the deriver
+  ["household_pins", "SELECT"],   //   …the same read, its second table
+  ["registry_meta", "SELECT"],    //   …and its third
   ["windows", "SELECT"],
 ];
 export const ADD_PRIVILEGES = [["claims", "INSERT"], ["marks", "INSERT"]];
