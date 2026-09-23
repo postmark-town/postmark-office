@@ -16,6 +16,23 @@
 // `world2/schema/` appears on 003's lawful list — and it records 014's rows as
 // the one known-missing set, with the count asserted so a SECOND forgotten
 // grant reds immediately instead of hiding behind the first.
+//
+// ── THE SECOND MIGRATION RULE THIS FILE LINTS: `acts` IS APPEND-ONLY ─────────
+//
+// Same shape of failure, one table over. `002_grants.sql` arms
+// `acts_append_only BEFORE UPDATE OR DELETE ON acts`, so a migration that
+// writes to `acts` does not do the wrong thing — it ABORTS, and takes the rest
+// of its transaction with it. `022_household_respell.sql` carried exactly such
+// an UPDATE and the dev sandbox found it on 2026-09-22, on its SECOND run:
+// the first matched nothing (the alias table was empty) and was silent, the
+// second raised `ERROR: acts is append-only (World 2.0 rule: an act is never
+// edited)` and rolled back the `claims` and `marks` work beside it. Prod would
+// have refused it in the same words at the ship.
+//
+// A migration that cannot run is a red nobody sees until they run it, and the
+// two-run trap means even running it once is not proof. So the rule is stated
+// here, once, for every migration in the directory — including every one
+// written after this sentence.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -53,6 +70,30 @@ function grantsInSchema() {
   }
   return out;
 }
+
+/** Every schema file, comment lines stripped, as `{ file, sql }`. */
+function schemaFiles() {
+  return readdirSync(SCHEMA).filter((n) => n.endsWith(".sql")).sort().map((f) => ({
+    file: f,
+    sql: readFileSync(join(SCHEMA, f), "utf8")
+      .split("\n").filter((l) => !l.trim().startsWith("--")).join("\n"),
+  }));
+}
+
+// A write to `acts`, in every spelling SQL allows for it: an optional schema
+// qualifier, optional quotes, `ONLY`. `\bacts\b` and not `acts` alone, so that
+// `acts_append_only` — the trigger 002 creates, named in a CREATE TRIGGER line
+// in the very file that forbids this — is not read as a violation of itself.
+const ACTS = String.raw`(?:ONLY\s+)?(?:public\s*\.\s*)?"?acts"?\b`;
+const ACTS_WRITES = [
+  { what: "UPDATE acts", re: new RegExp(String.raw`\bUPDATE\s+${ACTS}`, "gi") },
+  { what: "DELETE FROM acts", re: new RegExp(String.raw`\bDELETE\s+FROM\s+${ACTS}`, "gi") },
+  // TRUNCATE is here although the TRIGGER does not fire on it: `acts_append_only`
+  // is `BEFORE UPDATE OR DELETE`, so a TRUNCATE would succeed and take the whole
+  // log with it. That gap is the reason this lint covers three verbs and the
+  // database covers two.
+  { what: "TRUNCATE acts", re: new RegExp(String.raw`\bTRUNCATE\s+(?:TABLE\s+)?${ACTS}`, "gi") },
+];
 
 /** 003's own lawful list, parsed out of its VALUES block. */
 function lawfulList() {
@@ -109,4 +150,50 @@ test("no write grant anywhere in world2/schema is missing from 003, beyond 014's
   // repaired upstream, this line says so instead of silently widening.
   assert.deepEqual([...new Set(missing)].sort(), [...KNOWN_MISSING].sort(),
     "014_escrow_projection.sql's two grants are the one pre-existing gap; this list must not grow");
+});
+
+test("no migration in world2/schema writes to `acts` — an act is never edited", () => {
+  // THE RULE, for every file in the directory and every file added after this
+  // one. `002_grants.sql` arms `acts_append_only BEFORE UPDATE OR DELETE ON
+  // acts`, so such a statement does not misbehave — it ABORTS with `acts is
+  // append-only (World 2.0 rule: an act is never edited)` and rolls back
+  // whatever real work its transaction was doing.
+  //
+  // 022_household_respell.sql shipped with exactly that UPDATE and the dev
+  // sandbox met it on 2026-09-22, on the SECOND run: the first matched no rows
+  // and said nothing. So "I ran the migration once and it was fine" is not
+  // proof, which is why this is a lint over the text and not a runbook step.
+  const found = [];
+  for (const { file, sql } of schemaFiles())
+    for (const { what, re } of ACTS_WRITES)
+      for (const m of sql.matchAll(re)) found.push(`${file}: ${what} — ${m[0].replace(/\s+/g, " ")}`);
+
+  assert.deepEqual(found, [],
+    "a migration writes to `acts`, which is append-only by trigger (002_grants.sql `acts_append_only`) — "
+    + "the statement will abort and take its transaction with it. History keeps its spellings and "
+    + "`src/household-deriver.mjs § resolveHouse` resolves the old ones on read; re-spell `claims` and "
+    + "`marks` instead, as 022_household_respell.sql does");
+});
+
+test("the acts lint can actually fire — the pattern matches a write and not the trigger that forbids it", () => {
+  // A lint asserting an empty list over files that never violate it would be
+  // green forever whether or not the pattern works. So: the exact statement
+  // 022 carried must be caught, and 002's own CREATE TRIGGER — which contains
+  // the words `UPDATE OR DELETE ON acts` in the file that FORBIDS this — must
+  // not be.
+  const hits = (s) => ACTS_WRITES.filter(({ re }) => new RegExp(re.source, "i").test(s)).map((x) => x.what);
+
+  assert.deepEqual(hits("UPDATE acts t SET household = 'hh:' || m.slug\n  FROM household_alias m"),
+    ["UPDATE acts"], "022's own removed statement");
+  assert.deepEqual(hits("DELETE FROM acts WHERE id = 1"), ["DELETE FROM acts"]);
+  assert.deepEqual(hits('UPDATE public."acts" SET household = NULL'), ["UPDATE acts"]);
+  assert.deepEqual(hits("TRUNCATE TABLE acts"), ["TRUNCATE acts"]);
+
+  assert.deepEqual(hits("CREATE TRIGGER acts_append_only\n  BEFORE UPDATE OR DELETE ON acts\n  FOR EACH ROW EXECUTE FUNCTION forbid_mutation();"),
+    [], "002's trigger is the rule, not a breach of it");
+  assert.deepEqual(hits("GRANT SELECT, INSERT ON acts TO office_api;"), []);
+  assert.deepEqual(hits("UPDATE claims t SET household = 'hh:' || m.slug"), [],
+    "the two tables 022 DOES respell are untouched by this lint");
+  assert.deepEqual(hits("SELECT 'acts' AS t, household, count(*) FROM acts GROUP BY 2"), [],
+    "a READ of acts — which every one of 022's receipt blocks is — is not a write");
 });

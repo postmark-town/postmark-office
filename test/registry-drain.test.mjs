@@ -25,6 +25,7 @@ import { fileURLToPath } from "node:url";
 
 import { __setPoolForTest } from "../src/world2-acts.mjs";
 import { rowsFromRegistry, renderRegistry } from "../src/registry-rows.mjs";
+import { loadRegistryRows } from "../src/registry-store.mjs";
 import { checkRegistry, drainRegistry } from "../tools/registry-drain.mjs";
 import { REGISTRY_PATH, PINS_PATH } from "../src/residency.mjs";
 
@@ -62,6 +63,87 @@ function cloneWith(households, pins) {
   if (pins !== null) writeFileSync(join(dir, PINS_PATH), pins);
   return dir;
 }
+
+// ── THE METADATA BLOCK'S ORDER ──────────────────────────────────────────────
+//
+// `registryFromRows` emits the meta keys in the order it receives them, so
+// whatever hands them over decides the file's first bytes. `foldRegistryRows`
+// puts `schema_version` and `note` back under its own list — the stub above
+// hands them over backwards on purpose, and every test in this file already
+// leans on that. What the list did NOT cover is a meta key BEYOND those two:
+// the fold appends it in the order the rows ARRIVED, and `META_SQL` used to
+// carry no `ORDER BY` at all, so that order was the planner's.
+//
+// MEASURED before the fix: the same two extra keys arriving two ways rendered
+// `…,note,zeta,alpha,households` and `…,note,alpha,zeta,households` — two
+// different files out of one store, on a query whose two siblings both order
+// deliberately.
+
+/** A pool that answers meta with EXTRA keys, in whatever order is handed in, and records the SQL. */
+function metaPool(metaOrder, seen = []) {
+  return {
+    seen,
+    async query(text) {
+      if (/FROM households/.test(text)) return { rows: [] };
+      if (/FROM household_pins/.test(text)) return { rows: [] };
+      if (/FROM registry_meta/.test(text)) {
+        seen.push(text);
+        return { rows: metaOrder.map((key) => ({ key, value: key === "schema_version" ? 1 : key })) };
+      }
+      throw new Error(`the stub pool was asked something the drain should not ask: ${text}`);
+    },
+  };
+}
+
+test("the metadata block renders in ONE order however the rows arrive", async () => {
+  // THE FALSIFIER. The head reversed (`note` before `schema_version`, which is
+  // primary-key order) AND the tail shuffled, two ways. One rendering.
+  const read = async (order) => {
+    __setPoolForTest(metaPool(order));
+    try { return renderRegistry(await loadRegistryRows(ENV_ON)).households; }
+    finally { __setPoolForTest(null); }
+  };
+
+  const a = await read(["note", "schema_version", "zeta", "alpha"]);
+  const b = await read(["alpha", "zeta", "note", "schema_version"]);
+  assert.equal(a, b, "two arrival orders, one file, byte for byte");
+
+  // …and it is the FILE's order, not merely a stable one: a rendering that
+  // agreed with itself while spelling `note` first would pass the line above
+  // and still rewrite the town's first two lines on the next crossing.
+  assert.deepEqual(Object.keys(JSON.parse(a)), ["schema_version", "note", "alpha", "zeta", "households"],
+    "the two stated keys lead, in the file's order; the rest follow by key");
+
+  // And with no extra keys it is still byte-equal to the town's real file,
+  // which is the law the rest of this suite holds.
+  __setPoolForTest(stubPool());
+  try {
+    const clone = cloneWith(HOUSEHOLDS_RAW, PINS_RAW);
+    assert.equal((await checkRegistry({ clone, env: ENV_ON })).ok, true);
+  } finally { __setPoolForTest(null); }
+});
+
+test("the meta query the reader SENDS orders explicitly, and not by key text", async () => {
+  // The SQL half cannot be falsified without a real Postgres — a stub returns
+  // rows in the order it chose, `ORDER BY` or not. So the assertion is on the
+  // statement the real reader actually sends, captured off the pool it sends it
+  // to. Drop the ORDER BY and this reds.
+  const seen = [];
+  __setPoolForTest(metaPool(["schema_version", "note"], seen));
+  try { await loadRegistryRows(ENV_ON); } finally { __setPoolForTest(null); }
+
+  assert.equal(seen.length, 1, "one meta read, and it is the one asserted below");
+  const sql = seen[0].replace(/\s+/g, " ").trim();
+  assert.match(sql, /ORDER BY/i, "the meta read orders, like its two siblings");
+  assert.match(sql, /WHEN 'schema_version' THEN 0/, "`schema_version` first, stated");
+  assert.match(sql, /WHEN 'note' THEN 1/, "`note` second, stated");
+  assert.match(sql, /ELSE 2 END, key$/, "and every other key after them, by key");
+
+  // NOT a bare `ORDER BY key`: `note` sorts before `schema_version`, so that
+  // spelling would order the file's first two lines backwards — deterministic
+  // and wrong, which is worse than undetermined because nothing would red.
+  assert.doesNotMatch(sql, /ORDER BY key\b/i, "alphabetical would put `note` first");
+});
 
 test("--check is GREEN when the store renders the clone's files byte for byte", async () => {
   __setPoolForTest(stubPool());
