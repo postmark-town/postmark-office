@@ -334,6 +334,30 @@ export async function writeTownDrain(clone, plan, { date, drainWith = collecting
           declaredBy: p.registry.households[p.slug].declared_by,
           drain: NO_DRAIN,
         });
+      // `chosen` TAKES THE SAME ROAD, AND FOR THE SAME ONE REASON (POS-197). A
+      // provisional house's human chooses its key at the door, at the co-sign
+      // (`requestResidency`), and by the time the Registrar merges, the record
+      // already holds the chosen key and this plan comes back `appended`. The
+      // row that still arrives here `chosen` is the flicker road again: the
+      // door could not read the record, so the house did not choose there. It
+      // chooses here rather than never, through the same ceremony.
+      //
+      // A HOUSE THAT ALREADY CHOSE IS NOT REFUSED HERE. At the door that
+      // refusal is the answer; at the crossing the Registrar has already
+      // admitted this resident, and a refusal would stall the row — and hold
+      // the cursor — on every crossing forever over a nameplate. So an
+      // `already` plan mints nothing and joins the house under the key it chose
+      // (`p.slug` is that key for an `already` plan), which is what `appended`
+      // did before this branch existed.
+      else if (p.action === "chosen" && !p.already)
+        await mintHousehold({
+          slug: p.to,
+          name: p.houseLine,
+          coSign: { ghId: row.ghId, ghLogin: row.ghLogin },
+          since: date,
+          declaredBy: p.registry.households[p.slug].declared_by,
+          drain: NO_DRAIN,
+        });
       await joinHousehold({
         slug: p.slug,
         handle: row.handle,

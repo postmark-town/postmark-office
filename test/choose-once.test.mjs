@@ -295,28 +295,40 @@ test("a resident joining an ORDINARY house does not make it provisional either",
   });
 });
 
-// ── THE STOP: NO DOOR REACHES THIS PATH YET ─────────────────────────────────
+// ── THE STOP, AND THE DOOR THAT CLOSED IT (POS-159 → POS-197) ──────────────
 //
-// MEASURED, not assumed. All three callers of `mintHousehold` — `declare-exec.mjs`,
-// `residency.mjs` and `town-drain.mjs` — call it only when their plan says
-// `action === "created"`, and that plan comes from `planRegistryJoin`. For an
-// account whose house is PROVISIONAL, `houseForAccount` finds that house, and
-// the planner returns `appended` — so the mint is never called and the house
-// never chooses. The ceremony below is complete and falsified above; the ROUTE
-// to it is not built, and wiring one is a change to the declaration door's plan
-// shape rather than a line in this lane.
+// POS-159 MEASURED that no door reached this path: for an account whose house
+// is PROVISIONAL, `houseForAccount` found that house and the planner answered
+// `appended` whatever the resident typed, so the mint was never called and the
+// house never chose. These two tests asserted that gap on purpose, so the day
+// the route was wired they would red and hand the wirer this paragraph.
 //
-// THIS TEST ASSERTS TODAY'S BEHAVIOUR ON PURPOSE. It is not approval of it. The
-// day somebody wires the route, this reds and hands them this paragraph, which
-// is the whole reason to write down a gap rather than only mention it.
+// POS-197 WIRED IT: `planRegistryJoin` answers `chosen` for a provisional
+// house's own human naming a real house, and its callers route that to the
+// ceremony's rename. So the "Fernwood Hollow" arm below now asserts the ROUTE
+// where it asserted the gap. The two arms that are NOT a choice — the borrowed
+// key, and nothing at all — keep their original assertions exactly, and so
+// does the control. `test/join-pr-at-the-cosign.test.mjs` and the crossing's
+// test at the bottom of this file drive the route through the real callers.
 
-test("THE STOP: a provisional house's human does not reach the mint through the door", async () => {
+test("THE STOP, CLOSED: a provisional house's human naming a real house is routed to the choice", async () => {
   const { planRegistryJoin } = await import("../src/residency.mjs");
   const seed = townWithAProvisionalHouse();
   const registry = registryFromRows(seed);
   assert.equal(registry.households[HANDLE].provisional, true);
 
-  for (const household of ["Fernwood Hollow", HANDLE, ""]) {
+  const chose = planRegistryJoin(registry, {
+    handle: "fernwood-two", household: "Fernwood Hollow", ghId: HUMAN.ghId, ghLogin: HUMAN.ghLogin, date: "2026-09-22",
+  });
+  assert.equal(chose?.action, "chosen", "naming a real house routes to the choice");
+  assert.equal(chose?.from, HANDLE, "from the borrowed key");
+  assert.equal(chose?.to, "fernwood-hollow", "to the key the typed name slugs to");
+  assert.equal(chose?.slug, "fernwood-hollow");
+  assert.deepEqual(chose?.formerly, [HANDLE], "the borrowed key is kept");
+  assert.equal(chose?.already, false);
+  assert.notEqual(chose?.action, "created", "a choice is never a second house");
+
+  for (const household of [HANDLE, ""]) {
     const plan = planRegistryJoin(registry, {
       handle: "fernwood-two", household, ghId: HUMAN.ghId, ghLogin: HUMAN.ghLogin, date: "2026-09-22",
     });
@@ -335,18 +347,187 @@ test("THE STOP: a provisional house's human does not reach the mint through the 
   assert.equal(control?.action, "created", "a houseless human still founds");
 });
 
-test("THE STOP's second half: the name they declare is dropped on the floor", async () => {
-  // The resident types "Fernwood Hollow" on the household line. The plan
-  // appends them to `fernwood`, keeps the borrowed nameplate, and nothing
-  // anywhere tells them the name they chose was not taken.
+test("THE STOP's second half, CLOSED: the name they declare is the name on the card", async () => {
+  // The resident types "Fernwood Hollow" on the household line. Before POS-197
+  // the plan appended them to `fernwood` and the card read the borrowed
+  // nameplate. Now the card reads the name they chose.
   const { planRegistryJoin } = await import("../src/residency.mjs");
   const registry = registryFromRows(townWithAProvisionalHouse());
   const plan = planRegistryJoin(registry, {
     handle: "fernwood-two", household: "Fernwood Hollow",
     ghId: HUMAN.ghId, ghLogin: HUMAN.ghLogin, date: "2026-09-22",
   });
-  assert.equal(plan.houseLine, "Fernwood's household", "the borrowed name is what the card will read");
-  assert.notEqual(plan.houseLine, "Fernwood Hollow");
+  assert.equal(plan.houseLine, "Fernwood Hollow", "the chosen name is what the card will read");
+  assert.notEqual(plan.houseLine, "Fernwood's household");
+});
+
+// ── THE ROUTE'S EDGES (POS-197) ─────────────────────────────────────────────
+
+test("typing the borrowed NAMEPLATE is naming the house they are in — appended, not chosen", async () => {
+  const { planRegistryJoin } = await import("../src/residency.mjs");
+  const registry = registryFromRows(townWithAProvisionalHouse());
+  const plan = planRegistryJoin(registry, {
+    handle: "fernwood-two", household: "Fernwood's household",
+    ghId: HUMAN.ghId, ghLogin: HUMAN.ghLogin, date: "2026-09-22",
+  });
+  assert.equal(plan.action, "appended");
+  assert.equal(plan.slug, HANDLE);
+});
+
+test("a STRANGER typing a new name while a provisional house stands founds their own — never a rename", async () => {
+  // The account decides. Nothing about the provisional house is reachable by a
+  // human whose account it does not list.
+  const { planRegistryJoin } = await import("../src/residency.mjs");
+  const registry = registryFromRows(townWithAProvisionalHouse());
+  const plan = planRegistryJoin(registry, {
+    handle: "someone-else", household: "Fernwood Hollow",
+    ghId: 880000999, ghLogin: "a-total-stranger", date: "2026-09-22",
+  });
+  assert.equal(plan.action, "created");
+  assert.equal(plan.registry.households[HANDLE].provisional, true, "the provisional house is untouched");
+});
+
+test("the plan's fold mirrors the rename — same place, `formerly`, no `provisional`, residents joined", async () => {
+  const { planRegistryJoin } = await import("../src/residency.mjs");
+  const registry = registryFromRows(townWithAProvisionalHouse());
+  const plan = planRegistryJoin(registry, {
+    handle: "fernwood-two", household: "Fernwood Hollow",
+    ghId: HUMAN.ghId, ghLogin: HUMAN.ghLogin, date: "2026-09-22",
+  });
+  const keys = Object.keys(plan.registry.households);
+  assert.equal(keys.indexOf("fernwood-hollow"), Object.keys(registry.households).indexOf(HANDLE), "same place");
+  assert.ok(!keys.includes(HANDLE), "the borrowed key is no longer a house key in the fold");
+  const rec = plan.registry.households["fernwood-hollow"];
+  assert.ok(!("provisional" in rec));
+  assert.deepEqual(rec.formerly, [HANDLE]);
+  assert.equal(rec.name, "Fernwood Hollow");
+  assert.deepEqual(rec.residents, [HANDLE, "fern-sibling", "fernwood-two"]);
+  assert.equal(registry.households[HANDLE].provisional, true, "and the input registry was not mutated");
+});
+
+test("a house that ALREADY chose answers `chosen`, marked `already` — and naming its old key does not", async () => {
+  await withTown(async (pool) => {
+    await mintHousehold({ slug: "fernwood-hollow", coSign: HUMAN, since: "2026-09-22",
+      declaredBy: "x", env: ENV_ON, drain: NO_DRAIN });
+    const { planRegistryJoin } = await import("../src/residency.mjs");
+    const registry = registryFromRows({ meta: pool.state.meta, households: pool.state.households, pins: pool.state.pins });
+
+    const again = planRegistryJoin(registry, {
+      handle: "fernwood-two", household: "Somewhere Else Entirely",
+      ghId: HUMAN.ghId, ghLogin: HUMAN.ghLogin, date: "2026-09-22",
+    });
+    assert.equal(again.action, "chosen");
+    assert.equal(again.already, true);
+    assert.equal(again.slug, "fernwood-hollow", "an `already` plan stands on the key the house chose");
+
+    for (const household of ["Fernwood Hollow", HANDLE, ""]) {
+      const plan = planRegistryJoin(registry, {
+        handle: "fernwood-two", household, ghId: HUMAN.ghId, ghLogin: HUMAN.ghLogin, date: "2026-09-22",
+      });
+      assert.equal(plan.action, "appended", `${JSON.stringify(household)} names the house they are in`);
+      assert.equal(plan.slug, "fernwood-hollow");
+    }
+  });
+});
+
+test("THE CROSSING routes `chosen` to the rename — the flicker road, the real `writeTownDrain`", async () => {
+  // A join opened while the door could not read the record reaches the
+  // crossing unplanned. The crossing's plan is `chosen`; the house must be
+  // renamed through the ceremony and the resident admitted under the new key.
+  const { writeTownDrain } = await import("../src/town-drain.mjs");
+  const { planRegistryJoin, REGISTRY_PATH, PINS_PATH } = await import("../src/residency.mjs");
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+
+  const seed = townWithAProvisionalHouse();
+  const clone = mkdtempSync(join(tmpdir(), "pos197-"));
+  mkdirSync(join(clone, "tools"), { recursive: true });
+  const rendered = renderRegistry(seed);
+  writeFileSync(join(clone, REGISTRY_PATH), rendered.households);
+  writeFileSync(join(clone, PINS_PATH), rendered.pins);
+
+  const row = {
+    seq: 11, cls: "join", act: "request-residency", handle: "fernwood-two",
+    ghId: HUMAN.ghId, ghLogin: HUMAN.ghLogin,
+    payload: { household: "Fernwood Hollow", card: "hello" },
+  };
+  const registry = registryFromRows(seed);
+  const p = planRegistryJoin(registry, {
+    handle: row.handle, household: row.payload.household, ghId: row.ghId, ghLogin: row.ghLogin, date: "2026-09-23",
+  });
+  assert.equal(p.action, "chosen");
+
+  const pool = makePool(seed);
+  __setPoolForTest(pool);
+  const was = { pg: process.env.WORLD2_PG, url: process.env.WORLD2_PG_URL };
+  Object.assign(process.env, ENV_ON);
+  let touched;
+  try {
+    touched = await writeTownDrain(clone, { plans: [{ row, plan: p }], registry: p.registry }, { date: "2026-09-23" });
+  } finally {
+    __setPoolForTest(null);
+    if (was.pg === undefined) delete process.env.WORLD2_PG; else process.env.WORLD2_PG = was.pg;
+    if (was.url === undefined) delete process.env.WORLD2_PG_URL; else process.env.WORLD2_PG_URL = was.url;
+  }
+
+  assert.equal(touched.stalled?.length ?? 0, 0, "the row landed");
+  assert.equal(houseIn(pool, HANDLE), undefined, "no row under the borrowed key");
+  const house = houseIn(pool, "fernwood-hollow");
+  assert.ok(house, "the house stands under the chosen key");
+  assert.deepEqual(house.formerly, [HANDLE], "`formerly` carries the borrowed key");
+  assert.equal(house.provisional, false);
+  assert.equal(house.name, "Fernwood Hollow");
+  assert.ok(house.residents.includes("fernwood-two"), "and the resident is admitted to it");
+  assert.equal(pool.state.households.length, 119, "one house, renamed — never a second");
+  assert.ok(pool.state.pins.some((x) => x.handle === "fernwood-two" && String(x.gh_id) === String(HUMAN.ghId)),
+    "the pin names the resident; the belonging travels with the renamed row");
+});
+
+test("THE CROSSING admits an `already` plan to the chosen house — never a stalled row", async () => {
+  // At the door a second choice is refused. At the crossing the Registrar has
+  // already admitted the resident, so refusing would stall the row, and hold
+  // the cursor, on every crossing forever. The house is joined, not renamed.
+  const { writeTownDrain } = await import("../src/town-drain.mjs");
+  const { planRegistryJoin, REGISTRY_PATH, PINS_PATH } = await import("../src/residency.mjs");
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+
+  await withTown(async (pool) => {
+    await mintHousehold({ slug: "fernwood-hollow", coSign: HUMAN, since: "2026-09-22",
+      declaredBy: "x", env: ENV_ON, drain: NO_DRAIN });
+    const state = { meta: pool.state.meta, households: pool.state.households, pins: pool.state.pins };
+    const clone = mkdtempSync(join(tmpdir(), "pos197-"));
+    mkdirSync(join(clone, "tools"), { recursive: true });
+    const rendered = renderRegistry(state);
+    writeFileSync(join(clone, REGISTRY_PATH), rendered.households);
+    writeFileSync(join(clone, PINS_PATH), rendered.pins);
+
+    const row = {
+      seq: 12, cls: "join", act: "request-residency", handle: "fernwood-three",
+      ghId: HUMAN.ghId, ghLogin: HUMAN.ghLogin,
+      payload: { household: "Somewhere Else Entirely", card: "hello" },
+    };
+    const p = planRegistryJoin(registryFromRows(state), {
+      handle: row.handle, household: row.payload.household, ghId: row.ghId, ghLogin: row.ghLogin, date: "2026-09-23",
+    });
+    assert.equal(p.action, "chosen");
+    assert.equal(p.already, true);
+
+    const was = { pg: process.env.WORLD2_PG, url: process.env.WORLD2_PG_URL };
+    Object.assign(process.env, ENV_ON);
+    let touched;
+    try {
+      touched = await writeTownDrain(clone, { plans: [{ row, plan: p }], registry: p.registry }, { date: "2026-09-23" });
+    } finally {
+      if (was.pg === undefined) delete process.env.WORLD2_PG; else process.env.WORLD2_PG = was.pg;
+      if (was.url === undefined) delete process.env.WORLD2_PG_URL; else process.env.WORLD2_PG_URL = was.url;
+    }
+    assert.equal(touched.stalled?.length ?? 0, 0, "the row landed rather than stalling");
+    const house = houseIn(pool, "fernwood-hollow");
+    assert.ok(house.residents.includes("fernwood-three"), "admitted to the house under the key it chose");
+    assert.deepEqual(house.formerly, [HANDLE], "and the key did not move a second time");
+    assert.equal(pool.state.households.length, 119);
+  });
 });
 
 // ── THE FILE THE TOWN SEES ──────────────────────────────────────────────────
