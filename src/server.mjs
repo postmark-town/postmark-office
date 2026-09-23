@@ -45,7 +45,11 @@ import { channelOf, countAct, actsByChannel } from "./channel.mjs";
 import { logAccess } from "./telemetry.mjs";
 import { settlements } from "./settlements.mjs";
 import { worldSummary, worldOrient, worldEyes, worldInvestigate, worldStateRaw, worldSkeletonRaw, worldMyMarks, leaveMarkViaOffice, walkViaOffice, worldNoteViaOffice, worldWalkers, worldPresent, worldConversations, worldSay, worldSayHuman, whoami, worldBlockForHandle, resetPlaceWordsCache, WORLD_CLONE } from "./world.mjs";
-import { world2MyDrafts, world2MyMarks, world2Serve, world2ServeEnabled } from "./world2-serve.mjs";
+import { world2MyDrafts, world2MyMarks, world2Pool, world2Serve, world2ServeEnabled } from "./world2-serve.mjs";
+import { blessedSha } from "./world-branches.mjs";
+import { officeStoreFold, storeFingerprint, worldStateServed } from "./world2-fold.mjs"; // POS-142: /world/state from the store's rows, behind W2_FOLD
+// The rows fold needs the store engaged; a flag set on an office with no store falls through to the file, loudly.
+const storePoolOrRefuse = async () => { if (!world2ServeEnabled()) throw new Error("the world 2.0 store is not engaged at this office (WORLD2_PG/WORLD2_PG_URL)"); return world2Pool(); };
 import { callHoldTool } from "./world-hold.mjs"; // curl parity: /world/hold + /world/holdings (2026-08-15)
 import { APEX_TOOL, apexEnabled, dispatchToolFor, worldApex } from "./world-apex.mjs"; // stage 3: the apex verb — keyless read half + the POST act door (08-17)
 import { worldStakeViaOffice, worldUnstakeViaOffice, worldStakeRead } from "./world-stake.mjs"; // P3 draft
@@ -1175,7 +1179,17 @@ const server = createServer((req, res) => {
           .then((r) => (r?.error === "bounce" ? bounce(res, r.code ?? 422, r.defect, r.hint) : j(res, 200, r)))
           .catch((e) => bounce(res, 500, "the world door tripped", String(e?.message ?? e).slice(0, 200)));
       }
-      if (path === "/world/state") return worldStateRaw().then((r) => j(res, 200, r)).catch((e) => bounce(res, 500, "the world door tripped", String(e?.message ?? e).slice(0, 200)));
+      // GET /world/state — the World page's fold. The published file, as it
+      // always was; or, where this office sets W2_FOLD=store (POS-142), the same
+      // world fold run over the store's rows, with the file as the fall-through
+      // and `meta.source` saying which one answered (src/world2-fold.mjs).
+      if (path === "/world/state") {
+        return worldStateServed({
+          fileState: worldStateRaw,
+          storeState: async () => officeStoreFold({ p: await storePoolOrRefuse(), repo: WORLD_CLONE, fileState: worldStateRaw }),
+          fingerprint: async () => `${await storeFingerprint(await storePoolOrRefuse())}@${blessedSha(WORLD_CLONE)}`,
+        }).then((r) => j(res, 200, r)).catch((e) => bounce(res, 500, "the world door tripped", String(e?.message ?? e).slice(0, 200)));
+      }
       // GET /world/enter-exit-ledger — THE PASSAGES, DERIVED.
       //
       // The site stages the ledger as a build artifact, pinned to whichever world

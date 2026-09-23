@@ -119,6 +119,9 @@ async function pool(env = process.env) {
   return state.pool;
 }
 
+/** The store's pool, for a door that reads rows outside this file (world2-fold.mjs). */
+export const world2Pool = (env = process.env) => pool(env);
+
 // ── THE ENGINE, AND WHY IT IS THE ONE THING NOT IN THE STORE ────────────────
 //
 // Every other read in this file is bytes: query, order, render. `/world2/apex`
