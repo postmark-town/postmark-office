@@ -21,8 +21,10 @@
 // `__setPoolForTest` for exactly this (it is how `registry-drain.test.mjs` has
 // worked since POS-187), and this stub answers the REAL queries with rows
 // shaped the way `node-postgres` shapes them: `gh_id` a STRING for a bigint,
-// `accounts` parsed jsonb, `ord` a number. So the path under test stays the
-// real `loadRegistryRows` -> `registryFromRows` -> the ceremony -> the drain.
+// `ord` a number, and `accounts` parsed jsonb WITH ITS KEYS SORTED THE WAY
+// JSONB SORTS THEM — see the reads below and `test/jsonb-key-order.mjs`. So the
+// path under test stays the real `loadRegistryRows` -> `registryFromRows` ->
+// the ceremony -> the drain, over the values the real column hands back.
 //
 // IT APPLIES THE WRITES. A stub that answered reads and swallowed upserts would
 // let "the crossing settled them" pass while nothing was settled. The rows go
@@ -34,6 +36,7 @@ import { join } from "node:path";
 import { __setPoolForTest } from "../src/world2-acts.mjs";
 import { rowsFromRegistry } from "../src/registry-rows.mjs";
 import { REGISTRY_PATH, PINS_PATH } from "../src/residency.mjs";
+import { asJsonbReturns } from "./jsonb-key-order.mjs";
 
 /** The env that says "this office IS pointed at the record". */
 export const RECORD_ON = Object.freeze({ WORLD2_PG: "1", WORLD2_PG_URL: "postgres://stub/none" });
@@ -139,12 +142,23 @@ export function makePool(seed) {
         };
         return { rows: [{ slug: to, ord: state.households[at].ord }] };
       }
+      // ── THE READS, AND THE JSONB REORDER THEY CARRY ───────────────────────
+      //
+      // `accounts` is a `jsonb` column, and a stub that handed the JS object
+      // back whole would be a store that behaves BETTER than Postgres. It did,
+      // until 2026-09-22: every registry suite was green while the dev sandbox
+      // printed `tools/households.json differs at line 9 — store renders
+      // "id": 306985727, / the clone has "login": "vertas-marginalia",`, because
+      // jsonb sorts an object's keys by (length, bytes) on the way in and these
+      // reads never sorted anything. `asJsonbReturns` is that rule, named once
+      // in `test/jsonb-key-order.mjs`, and every registry suite now reads what
+      // the box reads.
       if (/FROM households/.test(text))
-        return { rows: [...state.households].sort((a, b) => a.ord - b.ord).map((r) => ({ ...r, ord: Number(r.ord) })) };
+        return { rows: [...state.households].sort((a, b) => a.ord - b.ord).map((r) => ({ ...r, ord: Number(r.ord), accounts: asJsonbReturns(r.accounts) })) };
       if (/FROM household_pins/.test(text))
         return { rows: [...state.pins].sort((a, b) => (a.handle < b.handle ? -1 : 1)).map((r) => ({ ...r, gh_id: String(r.gh_id) })) };
       if (/FROM registry_meta/.test(text))
-        return { rows: Object.entries(state.meta).map(([key, value]) => ({ key, value })) };
+        return { rows: Object.entries(state.meta).map(([key, value]) => ({ key, value: asJsonbReturns(value) })) };
       throw new Error(`the stub pool was asked something it does not answer: ${text}`);
     },
   };
