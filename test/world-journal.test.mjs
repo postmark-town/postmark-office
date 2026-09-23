@@ -691,7 +691,7 @@ test("THE DOOR, flag on — leave_mark is ONE INSERT: no lease, no lock, no chec
   assert.ok(row.witnesses, "with a witnesses block, however it was read");
   assert.equal(JSON.parse(row.payload).body, "the door wrote this into the log");
   assert.equal("journal_seq" in row, false,
-    "the pen still names `journal_seq` in its INSERT — migration 024 drops that column, and an office writing it fails every act the moment the migration lands");
+    "the pen still names `journal_seq` in its INSERT — migration 025 drops that column, and an office writing it fails every act the moment the migration lands");
 
   // THE DOCKET IS NOT REACHED HERE, and that is this office's real behaviour
   // rather than a gap in the fixture: `claimEligible` gates the candle half on
@@ -1095,7 +1095,7 @@ const guardStore = ({ claims = [], identities = { alpha: "hh:alpha-house", beta:
             witnesses: args[8], class: args[9], payload: args[10],
             effect: args[11], household: args[12],
             // ⚑ ONLY PRESENT IF THE PEN SENT IT. G1 drops `acts.journal_seq`
-            // (migration 024) and the pen stopped naming it; a row that carried
+            // (migration 025) and the pen stopped naming it; a row that carried
             // the key unconditionally would let a suite assert the column's
             // absence and pass while the pen still wrote it.
             ...(args.length > 13 ? { journal_seq: args[13] } : {}) });
@@ -1117,15 +1117,26 @@ const guardStore = ({ claims = [], identities = { alpha: "hh:alpha-house", beta:
           return { rows: [{ id: claims.at(-1).id }], rowCount: 1 };
         }
         // Withdraw's two outcomes: a draft is DELETED, a pending claim retracted.
+        // THE HOUSEHOLD IS A SPELLING SET NOW (POS-160 / #165). The withdraw's
+        // DELETE went from `household = $3` to `household = ANY($3)`, and $3 is
+        // `declaredKeys`' array -- a house may be spelled more than one way and
+        // a draft filed under any of its spellings is still its draft. A stub
+        // still comparing against a scalar matched none of them, so the drafts
+        // stayed on the docket and the slug stayed taken.
         if (/^DELETE FROM claims/i.test(sql.trim())) {
-          const [slug, claimant, household] = args;
+          const [slug, claimant, households] = args;
+          const keys = Array.isArray(households) ? households : [households];
           const before = claims.length;
           for (let i = claims.length - 1; i >= 0; i--) {
             const c = claims[i];
-            if (c.status === "draft" && c.slug === slug && c.claimant === claimant && c.household === household) claims.splice(i, 1);
+            if (c.status === "draft" && c.slug === slug && c.claimant === claimant && keys.includes(c.household)) claims.splice(i, 1);
           }
           return { rows: [], rowCount: before - claims.length };
         }
+        // `declaredKeys` asks the session for the house's spellings; a client
+        // that has none falls back to the one key it was given, which is this
+        // fixture's case and the honest answer for a store with no session.
+        if (/current_setting\('app\.household_keys'/i.test(sql)) return { rows: [{ keys: null }] };
         if (/^UPDATE claims/i.test(sql.trim())) return { rows: [], rowCount: 0 };
 
         throw new Error(`the hand-built store was asked something it does not know: ${sql.slice(0, 80)}`);

@@ -1,4 +1,4 @@
--- 024 — `acts.journal_seq` is dropped. The shadow era's pairing key, dying at
+-- 025 — `acts.journal_seq` is dropped. The shadow era's pairing key, dying at
 -- cutover exactly as 001 said it would, and G1 is the cutover.
 --
 -- LAW-TIER, per 001's discipline note and anti-rebake rule 4 ("Schema DDL is

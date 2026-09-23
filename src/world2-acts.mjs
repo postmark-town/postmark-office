@@ -224,7 +224,7 @@ export function mirrorAct(row, seq, env = process.env) {
       const { lateCrossingGuard } = await import("./world2-pen.mjs");
       const guarded = lateCrossingGuard(row, { env });
       const household = guarded.household == null ? null : await householdKeyFor(p, guarded.household);
-      // `acts.journal_seq` IS DROPPED (G1 / POS-156, migration 024). This path
+      // `acts.journal_seq` IS DROPPED (G1 / POS-156, migration 025). This path
       // is the ARENA's now -- the one lane that still writes a sqlite row and
       // so the one caller that still HAS a seq -- and even here the column has
       // no job: nothing pairs the two stores any more, and the arena's seq is

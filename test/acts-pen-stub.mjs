@@ -76,7 +76,8 @@ export function makeActsPen({ households = [], pins = [], meta = [], claims = []
     nextId: 1,
     committed: 0,
     rolledBack: 0,
-    household: null,   // the last `app.household` declared, so a suite can assert the scoping happened
+    household: null,      // the last `app.household` declared, so a suite can assert the scoping happened
+    householdKeys: [],    // and the spelling set declared beside it (POS-160 / #165)
   };
 
   const answer = async (sql, params = []) => {
@@ -97,12 +98,29 @@ export function makeActsPen({ households = [], pins = [], meta = [], claims = []
     if (/^COMMIT/i.test(q)) { state.committed += 1; return { rows: [], rowCount: 0 }; }
     if (/^ROLLBACK/i.test(q)) { state.rolledBack += 1; return { rows: [], rowCount: 0 }; }
     if (/set_config\('app\.household'/i.test(q)) { state.household = params[0] ?? null; return { rows: [], rowCount: 0 }; }
-    // THE PORT READS THE SETTING BACK before it trusts a household-scoped
+    // THE SPELLING SET, declared beside the household (POS-160 / #165): a house
+    // may be spelled more than one way, and a guard scoped to one spelling
+    // reads an empty live layer. Kept rather than shrugged at, so `declaredKeys`
+    // reads back what was declared and a suite can assert the set was named.
+    if (/set_config\('app\.household_keys'/i.test(q)) {
+      state.householdKeys = params[0] == null || params[0] === "" ? [] : String(params[0]).split(",");
+      return { rows: [], rowCount: 0 };
+    }
+    // THE PORT READS THE SETTINGS BACK before it trusts a household-scoped
     // query -- 007's row policy is declared per transaction, and a port that
     // assumed it had been declared would read another household's drafts the
-    // one time it had not. Answering it with what `set_config` was actually
-    // given keeps that check honest rather than satisfying it.
-    if (/current_setting\('app\.household'/i.test(q)) return { rows: [{ declared: state.household }], rowCount: 1 };
+    // one time it had not. Answering with what `set_config` was actually given
+    // keeps that check honest rather than satisfying it.
+    //
+    // ⚑ IT ASKS FOR BOTH IN ONE STATEMENT (`guard-reads.mjs §
+    // assertHouseholdDeclared`): `declared` AND `keys`, since POS-160 / #165
+    // made the spelling SET the thing 024's policies compare against. A handler
+    // that answered only `declared` returned a row whose `keys` was undefined,
+    // and the guard read that as "(nothing)" and REFUSED -- correctly, on a
+    // fixture's omission rather than on anything the office did.
+    if (/current_setting\('app\.household'/i.test(q)) {
+      return { rows: [{ declared: state.household, keys: state.householdKeys.length ? state.householdKeys : null }], rowCount: 1 };
+    }
 
     // THE ONE INSERT THIS PEN EXISTS FOR. The column list is `insertAct`'s and
     // `mirrorAct`'s, in their order, and the id is assigned here because that is
@@ -190,12 +208,22 @@ export function makeActsPen({ households = [], pins = [], meta = [], claims = []
       state.claims.push(row);
       return { rows: [{ id: row.id }], rowCount: 1 };
     }
+    // ⚑ THE HOUSEHOLD IS A SPELLING SET (POS-160 / #165): the withdraw's DELETE
+    // is `household = ANY($3)`, and $3 is `declaredKeys`' array -- a house may
+    // be spelled more than one way and a draft under any of its spellings is
+    // still its draft. Comparing against a scalar matches none of them.
     if (/^DELETE FROM claims/i.test(q)) {
-      const [slug, claimant, household] = params;
+      const [slug, claimant, households] = params;
+      const keys = Array.isArray(households) ? households : [households];
       const before = state.claims.length;
       state.claims = state.claims.filter((c) =>
-        !(c.status === "draft" && c.slug === slug && c.claimant === claimant && c.household === household));
+        !(c.status === "draft" && c.slug === slug && c.claimant === claimant && keys.includes(c.household)));
       return { rows: [], rowCount: before - state.claims.length };
+    }
+    // `declaredKeys` asks the session for the house's spellings; null means the
+    // client has none and the caller falls back to the one key it was given.
+    if (/current_setting\('app\.household_keys'/i.test(q)) {
+      return { rows: [{ keys: state.householdKeys.length ? state.householdKeys : null }], rowCount: 1 };
     }
     if (/^UPDATE claims/i.test(q)) return { rows: [], rowCount: 0 };
 

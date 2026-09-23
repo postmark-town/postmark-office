@@ -309,7 +309,7 @@ export async function insertAct(client, rowIn, seq = null, { lateArrival = null 
   const row = lateCrossingGuard(rowIn, { lateArrival });
   const { householdKeyFor } = await import("./world2-claims.mjs");
   const household = row.household == null ? null : await householdKeyFor(client, row.household);
-  // `acts.journal_seq` IS DROPPED (G1 / POS-156, migration 024). It held the
+  // `acts.journal_seq` IS DROPPED (G1 / POS-156, migration 025). It held the
   // sqlite rowid an act was mirrored FROM, and there is no sqlite row any more
   // -- 001 called it "the shadow-era pairing key, dying at cutover", and this
   // is the cutover. `seq` is still TAKEN, because the arena's mirror still has
