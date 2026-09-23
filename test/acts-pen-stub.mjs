@@ -63,9 +63,15 @@ const norm = (sql) => String(sql).replace(/\s+/g, " ").trim();
  * consulted BEFORE the throw and AFTER the built-ins, so a suite can add the
  * docket without forking this file.
  */
-export function makeActsPen({ households = [], pins = [], meta = [], also = [] } = {}) {
+export function makeActsPen({ households = [], pins = [], meta = [], claims = [], windows = [{ id: 1 }], also = [] } = {}) {
   const state = {
     acts: [],
+    // THE DOCKET. Empty by default, and empty is an ANSWER here rather than a
+    // shrug: a town whose docket holds nothing is a real state, and it is the
+    // one most suites are in. What the pen must never do is answer a question
+    // it does not model -- that is the throw at the foot of this function.
+    claims: claims.map((c) => ({ ...c })),
+    windows: windows.map((w) => ({ ...w })),
     asked: [],
     nextId: 1,
     committed: 0,
@@ -81,6 +87,12 @@ export function makeActsPen({ households = [], pins = [], meta = [], also = [] }
     if (/^COMMIT/i.test(q)) { state.committed += 1; return { rows: [], rowCount: 0 }; }
     if (/^ROLLBACK/i.test(q)) { state.rolledBack += 1; return { rows: [], rowCount: 0 }; }
     if (/set_config\('app\.household'/i.test(q)) { state.household = params[0] ?? null; return { rows: [], rowCount: 0 }; }
+    // THE PORT READS THE SETTING BACK before it trusts a household-scoped
+    // query -- 007's row policy is declared per transaction, and a port that
+    // assumed it had been declared would read another household's drafts the
+    // one time it had not. Answering it with what `set_config` was actually
+    // given keeps that check honest rather than satisfying it.
+    if (/current_setting\('app\.household'/i.test(q)) return { rows: [{ declared: state.household }], rowCount: 1 };
 
     // THE ONE INSERT THIS PEN EXISTS FOR. The column list is `insertAct`'s and
     // `mirrorAct`'s, in their order, and the id is assigned here because that is
@@ -129,6 +141,54 @@ export function makeActsPen({ households = [], pins = [], meta = [], also = [] }
       return { rows, rowCount: rows.length };
     }
 
+    // ── THE DOCKET, read and written ─────────────────────────────────────
+    //
+    // The door guards read `claims` since B1 and RULING 3a left them no second
+    // place to look, so a suite that exercises a door needs this table even
+    // when its own subject is elsewhere. The mark lane WRITES it too, on the
+    // same client and in the same transaction as the act (R1).
+    //
+    // ⚑ THE READS REQUIRE `SELECT`, because "DELETE FROM claims" contains
+    // "FROM claims" -- a matcher without it swallows the withdrawal's deletion
+    // and answers it with a row list, so the draft stays on the docket and
+    // nothing says so.
+    if (/^SELECT/i.test(q) && /FROM windows/i.test(q)) {
+      const open = state.windows[state.windows.length - 1];
+      return { rows: open ? [{ id: open.id }] : [], rowCount: open ? 1 : 0 };
+    }
+    if (/^SELECT/i.test(q) && /FROM claims/i.test(q)) {
+      // The amend's supersession lookup is a different question with different
+      // arguments ("is there a PENDING claim for this slug in this window");
+      // told apart by `window_id`, and answered honestly from the same rows.
+      if (/window_id/i.test(q)) {
+        const [, slug, claimant] = params;
+        const hit = state.claims.filter((c) => c.status === "pending" && c.geometry?.slug === slug && c.claimant === claimant);
+        return { rows: hit.slice(-1).map((c) => ({ id: c.id })), rowCount: hit.length ? 1 : 0 };
+      }
+      const [statuses, asked] = params;
+      const want = Array.isArray(statuses) ? statuses : null;
+      const rows = state.claims.filter((c) =>
+        (want ? want.includes(c.status) : true) && (asked == null ? true : c.household === asked));
+      return { rows: rows.map((c) => ({ ...c })), rowCount: rows.length };
+    }
+    if (/^SELECT/i.test(q) && /FROM marks/i.test(q)) return { rows: [], rowCount: 0 };
+    if (/^INSERT INTO claims/i.test(q)) {
+      const [, kind, claimant, household, body, geometry, bbox, stake, supersedes, data, slug, status] = params;
+      const row = { id: `claim-${state.claims.length + 1}`, slug, class: kind, claimant, household, status, body,
+        geometry: typeof geometry === "string" ? JSON.parse(geometry) : geometry,
+        bbox, stake, supersedes, data, submitted_at: new Date() };
+      state.claims.push(row);
+      return { rows: [{ id: row.id }], rowCount: 1 };
+    }
+    if (/^DELETE FROM claims/i.test(q)) {
+      const [slug, claimant, household] = params;
+      const before = state.claims.length;
+      state.claims = state.claims.filter((c) =>
+        !(c.status === "draft" && c.slug === slug && c.claimant === claimant && c.household === household));
+      return { rows: [], rowCount: before - state.claims.length };
+    }
+    if (/^UPDATE claims/i.test(q)) return { rows: [], rowCount: 0 };
+
     // The registry, as `registry-store.mjs`'s three fixed SELECTs ask for it.
     if (/FROM households/i.test(q)) return { rows: households.map((r) => ({ ...r })), rowCount: households.length };
     if (/FROM household_pins/i.test(q)) return { rows: pins.map((r) => ({ ...r })), rowCount: pins.length };
@@ -167,6 +227,8 @@ export function makeActsPen({ households = [], pins = [], meta = [], also = [] }
     },
     /** Every query asked of it, normalized — assert the count, not only the answer. */
     asked: () => [...state.asked],
+    /** The docket, as it stands after whatever the door did to it. */
+    claims: () => state.claims.map((c) => ({ ...c })),
     query: answer,
     connect: async () => client,
     end: async () => {},

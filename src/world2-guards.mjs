@@ -134,7 +134,13 @@ export class GuardsUnreachableError extends Error {
     this.code = 503;
     this.which = which;
     this.hint =
-      `this door validates against the office's own record (W2_GUARDS=1), and the ${which} guard could not read it. ` +
+      // THE SENTENCE NAMES NO FLAG SINCE G1 (POS-156, RULING 3a). It said
+      // "(W2_GUARDS=1)", which was true while the flag chose between the record
+      // and the sqlite journal. There is no second place to read from now, so
+      // this fires whether or not the flag is set -- and an operator sent to
+      // check a variable that is not the cause is an operator looking in the
+      // wrong place.
+      `this door validates against the office's own record, and the ${which} guard could not read it. ` +
       `The door refuses rather than permitting on a guess — a guard that cannot see your neighbours' claims would ` +
       `let a duplicate slug or a parcel past the cap stand, and the receipt for that arrives at the next settlement. ` +
       `Nothing was written; your act is safe to make again.`;
