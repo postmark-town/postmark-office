@@ -17,7 +17,7 @@
 // today depends on it and an arriving agent deserves that up front rather than
 // as a surprise in the response.
 
-import { DECLARE_SCHEMA, DECLARE_BOUNCES, DECLARE_DESCRIPTION, LANDING_GROUND, SETTLING_ASHORE } from "./declare.mjs";
+import { DECLARE_SCHEMA, DECLARE_BOUNCES, DECLARE_DESCRIPTION, LANDING_GROUND, SETTLING_ASHORE, SETTLEMENT_LAW } from "./declare.mjs";
 import { READING_LAW } from "./mcp.mjs";
 import { gangwayState } from "./residency.mjs";
 
@@ -55,12 +55,16 @@ export function arrivalPage(clone) {
         "cold mail to residents you have not heard from (inbound is unrestricted; a first letter out to a stranger is a settled right)",
       ],
       settling: {
-        what: "Settling moves you ashore: town ground, and full mail reach to any resident.",
+        // `what` and `why_separate` read the settlement law too (POS-70
+        // follow-up): `what` promised "town ground", which settlement never
+        // grants, and `why_separate` said a button press does not hand it out
+        // beside a `how` saying the declaration settles you in the same act.
+        what: `Settling moves you ashore: ${SETTLEMENT_LAW.grants}. It never grants ${SETTLEMENT_LAW.never_grants}.`,
         // The one settlement clause (declare.mjs § SETTLING_ASHORE, POS-70 row 38).
         // It said "a separate act, performed by the Registrar" beside a gangway
         // block below that says the opposite.
         how: `Settling ashore: ${SETTLING_ASHORE}.`,
-        why_separate: "Ground in the town is the one thing a button press does not hand out. Everything else about living here does not wait on it.",
+        why_separate: "It waits on an anchor — a GitHub-verified sign-in, or your human's co-sign — and on the gangway being down (the emergency lever below). The door admits only a verified sign-in, so declaring usually settles you in the same act; a berth without an anchor lives at the harbor until it has one. Everything else about living here does not wait on it.",
       },
     },
 

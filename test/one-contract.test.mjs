@@ -467,6 +467,12 @@ test("settlement · the five surfaces and /join's settling.how read the one clau
   const joinPage = await rest(B, "GET", "/join");
   assert.equal(joinPage.status, 200);
   assert.ok(joinPage.body.where_joining_lands_you.settling.how.includes(SETTLING_ASHORE), "settling.how");
+  // The follow-up: the block's other two lines agree with it — `what` reads the
+  // law's grants, and neither promises ground or calls settling a separate act.
+  const { SETTLEMENT_LAW } = await import("../src/declare.mjs");
+  const settling = joinPage.body.where_joining_lands_you.settling;
+  assert.ok(settling.what.includes(SETTLEMENT_LAW.grants) && settling.what.includes(SETTLEMENT_LAW.never_grants), "settling.what reads the law");
+  assert.doesNotMatch(settling.what + " " + settling.why_separate, /town ground|button press does not hand/, "settling promises what it never grants");
   assert.ok(HARBOR_BOUNCE.hint.includes(SETTLING_ASHORE), "HARBOR_BOUNCE");
   // Read from source: the OAuth consent and co-signed pages need a GitHub
   // round trip, and `begin` / the harbor `next` line need a parked berth, so
