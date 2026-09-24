@@ -310,6 +310,21 @@
    "stale_means": "The rulebook copy stops advancing and the store answers under a law the tree has amended. This is the alarm postmark#2893 asked for, and it is worth saying WHY it had to be asked for: the designed guard is the clearing's refusal on a NULL world-law pin, and a pin that was written once and then froze is never null — so between 09-05 and 09-19 nothing anywhere went red while law_projection fell 37 commits behind. The allowance is 45 minutes, three ticks: one missed fire is weather, three is the rail. THIS FILE IS THIS UNIT'S ALONE and that is the point — the parked poll writes /srv/world2-lab/state/ingest.json, so a heartbeat here can never go green on a run that was not the law pen's. Read the `law.sha` line beside the stamp: a fresh `at` with an ALARM-failed exit means the pen ran and could not ingest, and the detail names which."
   },
   {
+   "unit": "postmark-world2-marks-ingest.timer",
+   "label": "the World 2.0 marks pen",
+   "stage": "live",
+   "activation_owner": "Keemin — RULED 2026-09-23 18:4x EDT on POS-142: 'the class fix goes — a marks ingest at every bless, then prod's fold flips to the store — this week, no separate sitting'. The store had no ingest for the world repo's marks: door-made writes reach it through the clearing, every file-side change after the 08-28 seed did not, and PR #173's rows fold differed from the published file by 7 missing marks and ~50 stale rows. Unit source: deploy/postmark-world2-marks-ingest.{service,timer}, script deploy/world2-marks-ingest.sh, tool world2/tools/marks-ingest.mjs. Installed by Wright's hand, dev sandbox first.",
+   "cadence": "every 15 minutes, :12/:27/:42/:57 UTC — five minutes after the office tick that fetches a fresh settlement tag; the tool acts only on a new blessing and is a no-op between them, so the bless is the trigger and the clock is how the box notices it",
+   "cadence_source": "systemctl show postmark-world2-marks-ingest.timer -p TimersCalendar",
+   "heartbeat": {
+    "kind": "state_file",
+    "path": "/srv/world2-lab/state/ingest-marks.json",
+    "stamp_field": "at",
+    "stale_after_minutes": 45
+   },
+   "stale_means": "The store stops learning the world repo's own changes, and the rows fold drifts from the published file one crossing at a time — the exact silence POS-142 measured (7 marks no row held, ~50 stale rows, and nothing anywhere red). Every fire writes the state file, the no-op ones included, so a stale `at` means the pen is not running, not that nothing was blessed. Read `status` beside the stamp: `failed` with a fresh `at` is a STOP or a refused write, and `receipt`/`detail` name which; a STOP is a fact the row shape cannot hold and wants a person, never a retry. The allowance is 45 minutes, three fires: one missed fire is weather, three is the rail."
+  },
+  {
    "unit": "postmark-world2-notary.timer",
    "label": "the World 2.0 notary",
    "stage": "live",
@@ -626,6 +641,16 @@
     "must_be": "release",
     "why": "law-ingest.mjs execs out of this tree, and it is the only writer of law_projection anywhere in the office. A law pen on an old tree writes the rulebook to a schema the deployed clearing no longer expects — the escrow class from the upstream side, and worse here than on the parked poll it was split from, because this one is LIVE. The row carries require_env rather than a default so it refuses to guess: a unit whose drop-in went missing must redden, not fall back to a tree that happens to be right today.",
     "activation_owner": "Keemin — the split is his ruling of 2026-09-19 (postmark#2893); the drop-in and this row are the same install."
+   },
+   {
+    "id": "world2-marks-ingest",
+    "unit": "postmark-world2-marks-ingest.service",
+    "label": "the World 2.0 marks pen's office tree",
+    "env_key": "WORLD2_OFFICE",
+    "require_env": "/etc/systemd/system/postmark-world2-marks-ingest.service.d/office-tree.conf (deploy/postmark-world2-office-tree.conf)",
+    "must_be": "release",
+    "why": "marks-ingest.mjs execs out of this tree and writes `marks` and `claims` through materialize.mjs — the same pen shape the clearing uses. A marks pen on an old tree writes rows in a shape the deployed clearing and fold no longer read. require_env rather than a default, as on the law pen: a unit whose drop-in went missing must redden, not fall back to a tree that happens to be right today.",
+    "activation_owner": "Keemin — the ingest is his ruling of 2026-09-23 (POS-142); the drop-in and this row are the same install, by Wright's hand."
    },
    {
     "id": "world2-ops-scripts",
