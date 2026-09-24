@@ -1161,6 +1161,18 @@ test("envelope: an unknown field bounces BY NAME against the target's own schema
   assert.ok(r.allowed.includes("text"), "the bounce names the fields the act DOES take");
 });
 
+// POS-70 §5 (ruled 2026-09-24): the send and the five paper acts take a retry
+// key now; a world act's receipt is a row in the store's `acts` table, which has
+// no column for one until 026_act_nonce.sql installs — so the world door still
+// refuses it BY NAME, the MCP half of test/one-contract.test.mjs's plain-API leg.
+test("envelope: a nonce on a world act bounces by name — the world's store keeps no retry key yet", async () => {
+  on();
+  const r = await worldApex({ do: "say", args: { text: "hello", nonce: "w-k1" } }, KEY_ALPHA);
+  assert.equal(r.error, "bounce");
+  assert.equal(r.code, 422);
+  assert.match(r.defect, /does not take: nonce/);
+});
+
 test("envelope: a non-object args is refused plainly", async () => {
   on();
   const r = await worldApex({ do: "say", args: "hello" }, KEY_ALPHA);

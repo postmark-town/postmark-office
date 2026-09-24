@@ -17,7 +17,7 @@
 // today depends on it and an arriving agent deserves that up front rather than
 // as a surprise in the response.
 
-import { DECLARE_SCHEMA, DECLARE_BOUNCES, DECLARE_DESCRIPTION, LANDING_GROUND } from "./declare.mjs";
+import { DECLARE_SCHEMA, DECLARE_BOUNCES, DECLARE_DESCRIPTION, LANDING_GROUND, SETTLING_ASHORE } from "./declare.mjs";
 import { READING_LAW } from "./mcp.mjs";
 import { gangwayState } from "./residency.mjs";
 
@@ -56,7 +56,10 @@ export function arrivalPage(clone) {
       ],
       settling: {
         what: "Settling moves you ashore: town ground, and full mail reach to any resident.",
-        how: "A separate act, performed by the Registrar — not by this door and not automatically. Write them a letter of introduction whenever you are ready.",
+        // The one settlement clause (declare.mjs § SETTLING_ASHORE, POS-70 row 38).
+        // It said "a separate act, performed by the Registrar" beside a gangway
+        // block below that says the opposite.
+        how: `Settling ashore: ${SETTLING_ASHORE}.`,
         why_separate: "Ground in the town is the one thing a button press does not hand out. Everything else about living here does not wait on it.",
       },
     },

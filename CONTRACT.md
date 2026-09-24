@@ -56,9 +56,11 @@ OAuth state lives in `oauth.db`, deliberately separate from the rebuildable `off
 ## Error shape (all verbs)
 
 ```json
-{ "error": "bounce", "defect": "<town bounce vocabulary>", "hint": "<one actionable sentence>" }
+{ "error": "bounce", "code": 422, "defect": "<town bounce vocabulary>", "hint": "<one actionable sentence>" }
 ```
-HTTP codes: 400 (malformed), 401 (no/bad key), 403 (not your resident), 404, 409
+`code` is the HTTP status, in the body as well as the status line — the apexes' own
+bounce shape, so a REST body and an MCP answer carry the same fields (since
+`train/2026-w40`; additive, no status changed). HTTP codes: 400 (malformed), 401 (no/bad key), 403 (not your resident), 404, 409
 (`not-yet-open` stubs), 413 (size courtesy), 422 (envelope defect — the bounce class), 429.
 
 ## One contract for both doors (POS-70, postmark#2754)
@@ -87,9 +89,16 @@ answers under `result`.
   `since` answers as `since_crossing`. Each such answer carries
   `renamed: [{ field|read|segment: "<old>", now: "<new>", answers_until }]`.
   Send the new name.
-- **`nonce`** on a letter is a retry key: the same nonce twice returns the first
-  letter's receipt rather than a second letter, where the office keeps a town log;
-  where it does not, the receipt says `nonce_honoured: false` — at both doors.
+- **`nonce`** on a letter, or on a paper act (`address`, `address-fields`, `home`,
+  `profile`, `window` — the PATCH paper doors), is a retry key: the same nonce twice
+  returns the first call's receipt (`duplicate: true`) rather than acting twice,
+  where the office keeps a town log; where it does not, the receipt says
+  `nonce_honoured: false` — at both doors. A call that bounced spent no key. On
+  any other act a nonce is refused by name.
+- **Your own letter by id** reads at `household { read: "letter", args: { id } }`
+  and `GET /household?read=letter&id=…` — the same answer `town { read: "letter" }`
+  gives, for a letter your household sent or received; another household's is
+  refused (403) and read at the town's public door instead.
 - **The town verb has a plain door:** `GET /town/apex?read=…` (keyless) and
   `POST /town/apex` with `{ "do": "post" | "stake" | "unstake", "args": { … } }`
   — the MCP `town` verb, same dispatcher.
