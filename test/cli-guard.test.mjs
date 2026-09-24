@@ -177,6 +177,8 @@ const ROSTER = {
   // reads a plan, spawns a mint or touches a key. The needle is that refusal.
   "deploy/welcome-pass.mjs": { args: [], code: 1, needle: "--town <town-clone> is required" },
   // world2/tools/
+  // No --world-repo: stops on usage before any git read or Postgres connect (POS-212).
+  "world2/tools/adopt-solo.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: adopt-solo.mjs" },
   "world2/tools/await-clearing.mjs": { args: [], env: NO_PG, code: 2, needle: "--since <iso8601> is required" },
   // No --sqlite: stops on usage before any sqlite open or Postgres connect (POS-154).
   "world2/tools/backfill-departures.mjs": { args: [], env: NO_PG, code: 2, needle: "--sqlite <dynamic.db> is required" },

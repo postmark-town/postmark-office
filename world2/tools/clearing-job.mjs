@@ -60,7 +60,7 @@ import { escrowAbsentAmong, escrowPresenceAt, escrowLines } from "./escrow-prese
 // THE PARCEL CAP — the sweep's own gate, ported to the candle before the sweep
 // has to be the one to say no. The law itself is the WORLD's and is imported
 // from a checkout, never copied. See step 5.6.
-import { parcelCapLawAt, parcelCapRefusals, parcelCapLines, heldParcelsByCred, credOf } from "./parcel-cap.mjs";
+import { parcelCapLawAt, parcelCapRefusals, parcelCapLines, heldParcelsByCred, credOf, soloCountedAt, countingSolo } from "./parcel-cap.mjs";
 import { houseRowsVia, resolveHouse } from "../../src/household-deriver.mjs";
 import { computeStanding, gistContainment } from "./standing.mjs";
 
@@ -364,7 +364,12 @@ try {
         // each CANDIDATE's `cred` below, by the same rule (`credOf`). Folding
         // one side only would make every lookup miss and refuse nothing.
         const houseRows = await houseRowsVia({ query: q });
-        const resolve = (hh) => resolveHouse(hh, houseRows.registry, houseRows.pins).slug;
+        const walked = (hh) => resolveHouse(hh, houseRows.registry, houseRows.pins).slug;
+        // POS-212: `solo:` rows COUNT only once the adoption batch has run on
+        // this store (the `solo-counted` act) — never before. See parcel-cap.mjs
+        // § THE COUNT AFTER ADOPTION.
+        const soloCounted = await soloCountedAt(q);
+        const resolve = soloCounted ? countingSolo(walked, houseRows.registry, houseRows.pins) : walked;
         const heldByCred = await heldParcelsByCred(q, { resolve });
         const candidates = [];
         for (const c of parcels) {
@@ -385,7 +390,7 @@ try {
         }
         const verdict = parcelCapRefusals(candidates, { heldByCred, law });
         capSeen = {
-          checked: true, cap: law.cap, law_date: law.lawDate, world_sha: law.sha,
+          checked: true, cap: law.cap, law_date: law.lawDate, world_sha: law.sha, solo_counted: soloCounted,
           refused: verdict.refused.map((r) => ({ slug: r.slug, held: r.held })),
           excepted: verdict.admitted.filter((a) => a.excepted).map((a) => a.slug),
           judged: candidates.length,
