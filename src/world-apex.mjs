@@ -1844,6 +1844,12 @@ export async function groundWithinReach(oriented, key = null) {
     // THIRD answer this function has never given. `test/hold-wirings.test.mjs`
     // WIRING 1 drives exactly this path.
     const { attachments, journal } = await holdingRecord();
+    // The author's house's answers to strangers' set-downs (POS-138), read
+    // ONCE for the whole ground; an unreadable stance record is silence.
+    const stances = await (async () => {
+      try { const { stanceRows } = await import("./world-stance.mjs"); return await stanceRows(); }
+      catch { return []; }
+    })();
     const rows = store.db.prepare(GROUND_THINGS).all();
     const marks = rows.map((r) => ({ id: r.id, at: { x: Number(r.at_x), y: Number(r.at_y) }, extent: { w: Number(r.extent_w) || 1, h: Number(r.extent_h) || 1 } }));
     const centreOf = (id) => marks.find((m) => m.id === id)?.at ?? null;
@@ -1857,7 +1863,7 @@ export async function groundWithinReach(oriented, key = null) {
     for (const r of rows) {
       const mark = marks.find((m) => m.id === r.id);
       const stands = await hold.whereThingStands(r.id, {
-        attachments, journal, fold: mark.at, centreOf, householdOf,
+        attachments, journal, fold: mark.at, centreOf, householdOf, stances,
         standpointOf: async (h) => { const s = await residentStandpoint(h).catch(() => null); return s?.placed ? { x: s.x, y: s.y } : null; },
       });
       if (!stands?.where) continue; // a thing whose place cannot be derived is not "underfoot"

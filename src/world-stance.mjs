@@ -1044,7 +1044,127 @@ export function readNeverPerforms(fields) {
  * consults a fold, blocks a mark, or changes what anybody's world looks like.
  * It writes the word down with its witnesses and gets out of the way.
  */
-export async function declareStanceViaOffice(repo, args = {}, key = null, { dbPath = null, witnessStamp = null, crossing = null } = {}) {
+// ── THE SET-DOWN ARM's two halves ────────────────────────────────────────────
+
+/**
+ * Is there a set-down of `thing` by ANOTHER household standing unanswered-or-
+ * answered on the record — and a test for who may answer it. Never throws.
+ *
+ * Returns `{ speakerHouse }` always (the author's-household test, for the
+ * caller), plus `drop` / `stood` when the latest holding act on the thing is a
+ * drop by a household the town's record says is not the author's. A household
+ * record that cannot be read is NOT a stranger's set-down — the arm opens only
+ * on what it can prove, like the hold door's own ladder.
+ *
+ * `deps` (`readRows`, `householdOf`) are injectable so a falsifier drives this
+ * with the rows and the household map it supplies.
+ */
+export async function setDownFor(thing, target, marks = [], deps = {}) {
+  const hold = await import("./world-hold.mjs");
+  let householdOf = deps.householdOf;
+  if (householdOf === undefined) {
+    try { ({ householdOf } = await import("./households.mjs")); } catch { householdOf = null; }
+  }
+  const madeBy = String(target?.by ?? String(thing).split("/")[0]);
+  const speakerHouse = (h) => hold.sameHousehold(madeBy, String(h), householdOf).same;
+  let rows;
+  try {
+    rows = deps.readRows ? await deps.readRows(thing)
+      : await (await import("./world2-guards.mjs")).standsRowsFromStore(thing);
+  } catch (e) { return { speakerHouse, unreadable: String(e?.message ?? e).slice(0, 160) }; }
+  if (!rows) return { speakerHouse };
+  if (hold.liveHolder(rows.attachments ?? [], String(thing))) return { speakerHouse }; // held, not set down
+  const drop = hold.latestDrop(rows.journal ?? [], String(thing));
+  if (!drop || drop.actor == null) return { speakerHouse };
+  const setter = hold.sameHousehold(madeBy, String(drop.actor), householdOf);
+  if (setter.same || setter.how !== "household") return { speakerHouse };
+  const { composeAnchor } = await import("./world-journal.mjs");
+  const centreOf = (id) => marks.find((m) => m.id === id)?.at ?? null;
+  return { speakerHouse, drop, stood: composeAnchor(drop.at ?? {}, centreOf), householdOf, madeBy };
+}
+
+/**
+ * The author's house answers a stranger's set-down: one stance row, and on
+ * `welcomed` the author's amend. Everything that can refuse refuses BEFORE the
+ * row is written, so a refusal leaves nothing behind.
+ */
+async function answerSetDown({ repo, on, stance, by, key, target, sd, dbPath, witnessStamp, crossing, deps = {} }) {
+  const hold = await import("./world-hold.mjs");
+  const { drop, stood, householdOf, madeBy } = sd;
+  const setter = String(drop.actor);
+  const place = (p) => `(${Number(p.x)}, ${Number(p.y)})`;
+  if (!stood) throw bounce(409, `the record does not place ${setter}'s set-down of ${on}`,
+    "a set-down is answered at the place it was made, and the act's anchor could not be composed — nothing was written");
+
+  const prior = hold.setDownAnswer({
+    stances: await stanceRows({ dbPath, worldClone: repo }), thing: on, dropSeq: drop.seq, madeBy, householdOf });
+  if (prior?.stance === "welcomed" && stance === "opposed")
+    throw bounce(409, `your house has already accepted ${setter}'s set-down of ${on}`,
+      `accepting filed the amend that re-sites it in ${madeBy}'s name, so there is no set-down left to refuse — to move it back, amend the mark with world { do: "leave-mark", args: { slug, amend: true, at } }. Nothing was written.`);
+
+  let amendDeps = deps;
+  if (stance === "welcomed") {
+    // The amend is filed in the AUTHOR's name through the leave-mark door, and
+    // that door refuses a key that does not act for them. Asked here, first,
+    // so the refusal comes before the stance row rather than after it.
+    if (!key?.handles?.has(madeBy))
+      throw bounce(403, `accepting moves ${madeBy}'s mark, and this key does not act for ${madeBy}`,
+        `the amend that re-sites it is filed in ${madeBy}'s name, so a key that holds ${madeBy} speaks the welcome — nothing was written`);
+    const mark = deps.mark !== undefined ? deps.mark
+      : (await (await import("./world.mjs")).worldMarkById(on)).mark;
+    const built = hold.setDownAmend({ thing: on, mark, stood, actor: setter });
+    if (built.refused) throw bounce(409, `${on} cannot be re-sited by an amend at this door`, `${built.refused} — nothing was written`);
+    amendDeps = { ...deps, mark };
+  }
+
+  const stamp = witnessStamp ? await witnessStamp(by) : { at: { anchor: null, dx: null, dy: null }, witnesses: { source: "unread", reason: "no witness reader supplied", list: [] } };
+  const setDown = { act_id: drop.seq == null ? null : String(drop.seq), by: setter, at: stood };
+  const db = openDynamic(dbPath ?? undefined);
+  let row;
+  try {
+    const entry = {
+      crossing, actor: by, household: resolvedWorldHousehold(key) ?? null,
+      action: ACTION_STANCE, object: on, cls: CLASS_STANCE,
+      at: stamp.at, witnesses: stamp.witnesses,
+      payload: { on, stance, by, answers: hold.ANSWERS_SET_DOWN, set_down: setDown },
+      effect: stance === "welcomed"
+        ? `the author's house accepts ${setter}'s set-down — the amend that re-sites it is filed in ${madeBy}'s name`
+        : `the author's house refuses ${setter}'s set-down — canon keeps it where ${madeBy} put it`,
+    };
+    try {
+      row = laneFlipped("stance") ? await appendActFlipped(db, entry) : await appendJournal(db, entry);
+    } catch (err) {
+      if (err?.name === "PenUnreachableError")
+        throw bounce(503, err.message,
+          "this door's pen is the office's record; when it cannot be reached the door refuses rather than writing anywhere else — your stance is safe to speak again");
+      throw err;
+    }
+  } finally { try { db.close(); } catch { /* already gone */ } }
+
+  const amend = stance === "welcomed"
+    ? await hold.fileAuthorsAmend({ thing: on, stood, key, actor: setter, actId: drop.seq ?? null, writtenAt: drop.written_at ?? null,
+        extra: { stance_act_id: row.actId == null ? null : String(row.actId) }, deps: amendDeps })
+    : null;
+  const canonAt = target?.at ?? null;
+  const effect = stance === "opposed"
+    ? `your house refuses ${setter}'s set-down: canon keeps ${on} at ${canonAt ? place(canonAt) : "the place it was last folded"}, and the read answers canon from now on.`
+    : amend.filed && amend.put_forward
+      ? `your house accepts ${setter}'s set-down: the amend that re-sites ${on} at ${place(stood)} is filed in ${madeBy}'s name, and canon moves it at the next crossing.`
+      : amend.filed
+        ? `your house accepts ${setter}'s set-down: the amend that re-sites ${on} at ${place(stood)} is filed in ${madeBy}'s name as a private draft — no escrow behind it clears the ground it now stands on, so canon keeps it where it was folded until it is put forward.`
+        : `your house accepts ${setter}'s set-down, but the amend that re-sites ${on} was not filed (${amend.why}) — canon keeps it where it was folded; speak welcomed again to file it.`;
+  return {
+    on, stance, by, answers: hold.ANSWERS_SET_DOWN, set_down: setDown,
+    seq: row.actId, crossing: row.crossing, log: row.record ?? "acts",
+    witnesses: row.witnesses ? JSON.parse(row.witnesses) : null,
+    ...(prior ? { superseded: { stance: prior.stance, at: prior.at, seq: prior.seq } } : {}),
+    ...(amend ? { amend } : {}),
+    effect,
+    note: "a set-down of your house's thing by another household is yours to answer: welcomed re-sites it in your name, opposed keeps canon where you put it, and silence leaves it unaccepted",
+  };
+}
+
+export async function declareStanceViaOffice(repo, args = {}, key = null, { dbPath = null, witnessStamp = null, crossing = null, setDownDeps = {} } = {}) {
   // THE WORLD-FREEZE GATE (the engine cutover, 2026-08-24). A stance is a
   // ground act — the freeze's own bounce names it in the list — so this door
   // pauses with the other ten while the town changes engines. It is FIRST,
@@ -1099,6 +1219,24 @@ export async function declareStanceViaOffice(repo, args = {}, key = null, { dbPa
   const all = world.marks;
   const target = all.find((m) => m.id === on);
   if (!target) throw bounce(404, `no mark "${on}"`, "ids are <by>/<slug> — see the telling, or your own inbox: world { read: \"" + ACTION_STANCE + "\" }");
+
+  // ── THE SET-DOWN ARM (POS-138; Keemin, 2026-09-24: "I agree with you here") ─
+  //
+  // A set-down by ANOTHER household is a drafted amend of the author's thing,
+  // and the drafted amend IS the drop act. The author's house answers it here:
+  // welcomed files the author's amend (`world-hold.mjs § fileAuthorsAmend`,
+  // the same call the author's own drop makes), opposed files nothing and the
+  // read answers canon, and silence leaves it unaccepted. This arm is asked
+  // BEFORE the ground's-holder arm because it is the one case where the
+  // author speaks about their own mark — which the ground arm refuses by name,
+  // and still does for every other case.
+  const sd = await setDownFor(on, target, all, setDownDeps);
+  if (sd?.speakerHouse?.(by)) {
+    if (sd.unreadable) throw bounce(503, "the holding record could not be read",
+      `a set-down is answered against the act that made it, and that record did not answer (${sd.unreadable}) — nothing was written; speak again once it is readable`);
+    if (sd.drop) return await answerSetDown({ repo, on, stance, by, key, target, sd, dbPath, witnessStamp, crossing, deps: setDownDeps });
+  }
+
   if (target.by === by) throw bounce(422, "a mark is never its own ground",
     "you do not consent to your own declaration — a stance is the word of the ground it landed on");
 
@@ -1106,7 +1244,8 @@ export async function declareStanceViaOffice(repo, args = {}, key = null, { dbPa
   const ground = groundFor(target, mine, overlaps);
   if (!ground.length)
     throw bounce(403, `"${on}" does not stand on your ground`,
-      "the ground's holder speaks: a mark with extent IS ground, so you may answer only what overlaps a mark of yours that stood there first — precedent weighs in on the newcomer, never the reverse");
+      "the ground's holder speaks: a mark with extent IS ground, so you may answer only what overlaps a mark of yours that stood there first — precedent weighs in on the newcomer, never the reverse"
+      + (sd?.drop ? ` — and ${sd.drop.actor}'s set-down of it is ${target.by}'s to answer: a set-down of ${target.by}'s thing is accepted or refused by ${target.by}'s house alone` : ""));
 
   const stamp = witnessStamp ? await witnessStamp(by) : { at: { anchor: null, dx: null, dy: null }, witnesses: { source: "unread", reason: "no witness reader supplied", list: [] } };
 
@@ -1194,7 +1333,7 @@ export async function declareStanceViaOffice(repo, args = {}, key = null, { dbPa
 // drift that seam exists to close. The flat `tools/list` count is unchanged.
 export const STANCE_TOOLS = [
   { name: "world_declare_stance",
-    description: "Speak your word on something standing on your ground — welcomed or opposed. A stance is a revisable word on an edge: latest wins, and neutral is never stored because neutral is what everything already is until you speak. WHO MAY SPEAK: the ground's holder. A mark with extent IS ground, so you may answer any mark that overlaps a mark of yours which stood there first — precedent weighs in on the newcomer, never the reverse. THIS DOOR RECORDS; IT DOES NOT ENFORCE: the door writes and the crossing judges, so your word is read at the next settlement rather than blocking anything now. To see what is waiting for you, read this same action.",
+    description: "Speak your word on something standing on your ground — welcomed or opposed. A stance is a revisable word on an edge: latest wins, and neutral is never stored because neutral is what everything already is until you speak. WHO MAY SPEAK: the ground's holder. A mark with extent IS ground, so you may answer any mark that overlaps a mark of yours which stood there first — precedent weighs in on the newcomer, never the reverse. AND ONE MORE CASE: when another household has set down a thing your house made, your house answers that set-down here, on the thing itself — welcomed re-sites it where they left it, filed in your name; opposed keeps canon where you put it; silence leaves it unaccepted. THIS DOOR RECORDS; IT DOES NOT ENFORCE: the door writes and the crossing judges, so your word is read at the next settlement rather than blocking anything now. To see what is waiting for you, read this same action.",
     inputSchema: { type: "object", properties: {
       on: { type: "string", description: "the mark you are speaking about — <by>/<slug>, as ids appear in the telling and in your own inbox" },
       stance: { type: "string", enum: ["welcomed", "opposed"], description: "welcomed confers your ground's standing on it; opposed is your veto. There is no third word — returning to neutral has no grammar, because neutral is absence. Change your mind by declaring the other one." },

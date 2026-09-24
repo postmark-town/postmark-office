@@ -595,7 +595,7 @@ export function latestDrop(rows, thingId) {
  * `declareHolding` takes for `rows`, and for the same reason.
  */
 export async function whereThingStands(thingId, {
-  attachments = null, journal = null, fold = null, standpointOf = null, centreOf = null, householdOf = null,
+  attachments = null, journal = null, fold = null, standpointOf = null, centreOf = null, householdOf = null, stances = [],
 } = {}) {
   const id = String(thingId);
   if (attachments == null) return { where: null, source: "unreadable", says: "the office could not read the holding record — this is not an answer about where it stands" };
@@ -634,9 +634,20 @@ export async function whereThingStands(thingId, {
       if (house.same)
         return { ...base, says: `${setter} set it down here; it stands where they stood, and the record re-sites the mark at the next fold` };
       const foldAt = fold && Number.isFinite(Number(fold.x)) && Number.isFinite(Number(fold.y)) ? { x: Number(fold.x), y: Number(fold.y) } : null;
-      if (house.how === "household")
+      const canonText = foldAt ? placeText(foldAt) : "the place it was last folded";
+      if (house.how === "household") {
+        // THE AUTHOR'S HOUSE'S ANSWER, if it has spoken about THIS drop.
+        const answer = setDownAnswer({ stances, thing: id, dropSeq: drop.seq ?? null, madeBy, householdOf });
+        if (answer?.stance === "opposed")
+          return { where: foldAt, source: "fold", set_down_by: setter, act_seq: drop.seq ?? null,
+            accepted: false, refused_by: answer.by,
+            says: `set down by ${setter} at ${placeText(at)} — refused by ${madeBy}'s house; canon stands at ${canonText}, where ${madeBy} put it` };
+        if (answer?.stance === "welcomed")
+          return { ...base, accepted: true, accepted_by: answer.by, canon_at: foldAt,
+            says: `set down by ${setter} at ${placeText(at)} — accepted by ${madeBy}'s house; the amend that re-sites it is filed in ${madeBy}'s name` };
         return { ...base, accepted: false, canon_at: foldAt,
-          says: `set down by ${setter} at ${placeText(at)} — unaccepted; canon stays at ${foldAt ? placeText(foldAt) : "the place it was last folded"}, where ${madeBy} put it` };
+          says: `set down by ${setter} at ${placeText(at)} — unaccepted; canon stays at ${canonText}, where ${madeBy} put it` };
+      }
       return { ...base, accepted: null,
         says: `${setter ?? "somebody"} set it down here and it stands where they stood; whether canon follows depends on whose household set it down, and the household record could not be read here` };
     }
@@ -890,14 +901,14 @@ function dressReceipt(did, { reached = null, stood = null, setDown = null } = {}
 // ── A STRANGER'S SET-DOWN FILES NOTHING HERE ────────────────────────────────
 //
 // The drop, its act and its edge are written exactly as before. No amend is
-// filed and canon does not move. The drafted amend the ruling names, and the
-// stance that accepts or refuses it, are NOT built by this lane: the store
-// cannot hold a draft claim written by one household for another
-// (`007_private_drafts.sql` claims_insert: a draft's household must be the
-// writing transaction's), and the stance door's speaker is the ground's holder,
-// never the author (the PR body carries the proposal). The read and the
-// receipt say what is true: set down by <handle>, unaccepted, canon where the
-// author put it.
+// filed and canon does not move. THE DROP ACT IS THE DRAFTED AMEND (ruled
+// 2026-09-24, the proposal in PR #180): the store cannot hold a draft claim
+// written by one household for another (`007_private_drafts.sql`
+// claims_insert: a draft's household must be the writing transaction's), so
+// nothing is drafted at drop time. The author's house answers it through
+// `declare-stance-on` — § THE AUTHOR'S HOUSE ANSWERS, below, and
+// `world-stance.mjs § THE SET-DOWN ARM`. Until it does, the read and the
+// receipt say: set down by <handle>, unaccepted, canon where the author put it.
 
 /** A world point as a sentence reads it. */
 const placeText = (p) => `(${Number(p.x)}, ${Number(p.y)})`;
@@ -969,23 +980,80 @@ export async function fileSetDownAmend({ did, stood, key, actId = null, deps = {
         ? { ...base, whose: "another household's", amend: { filed: false, why: `${madeBy} made it and you are not of ${madeBy}'s household (by the town's household record) — a set-down by another household moves nothing in canon on its own` } }
         : { ...base, whose: "unread", amend: { filed: false, why: "the household record could not be read here, so this door cannot tell whether you set down your own household's thing — nothing was filed" } };
     }
+    const amend = await fileAuthorsAmend({ thing, stood, key, actor, actId, writtenAt: did.at ?? null, deps });
+    return { ...base, whose: "your household's", amend };
+  } catch (e) {
+    return { ...base, whose: "your household's", amend: { filed: false, why: `the amend door refused: ${String(e?.defect ?? e?.message ?? e).slice(0, 200)}` } };
+  }
+}
+
+/**
+ * THE AUTHOR'S AMEND, filed — the one call both callers make: a drop by the
+ * author's own household (above) and the author's house welcoming another
+ * household's set-down (`world-stance.mjs`, POS-138's second half). One call,
+ * so the two can never file two shapes of the same move.
+ *
+ * `extra` rides `_set_down` beside the drop's own fields — the stance act's id,
+ * when a welcome is what filed it. Never throws; the outcome says what happened.
+ */
+export async function fileAuthorsAmend({ thing, stood, key, actor, actId = null, writtenAt = null, extra = {}, deps = {} }) {
+  try {
     const mark = deps.mark !== undefined ? deps.mark
-      : await (async () => { const { worldMarkById } = await import("./world.mjs"); return (await worldMarkById(thing)).mark; })();
-    const built = setDownAmend({ thing, mark, stood, actor, actId, writtenAt: did.at ?? null });
-    if (built.refused) return { ...base, whose: "your household's", amend: { filed: false, why: built.refused } };
+      : await (async () => { const { worldMarkById } = await import("./world.mjs"); return (await worldMarkById(String(thing))).mark; })();
+    const built = setDownAmend({ thing, mark, stood, actor, actId, writtenAt });
+    if (built.refused) return { filed: false, why: built.refused };
     const leave = deps.leave ?? (async (payload, k, opts) => {
       const [{ leaveMarkViaOffice }, { WORLD_CLONE }] = await Promise.all([import("./world.mjs"), import("./world-store.mjs")]);
       return leaveMarkViaOffice(WORLD_CLONE, payload, k, opts);
     });
-    const res = await leave(built.payload, key, { setDown: built.setDown });
-    if (res?.error) return { ...base, whose: "your household's", amend: { filed: false, why: `the amend door answered: ${res.defect ?? res.error}` } };
-    return { ...base, whose: "your household's", amend: {
-      filed: true, mark: res?.id ?? thing, seq: res?.seq ?? null, put_forward: res?.put_forward === true,
+    const res = await leave(built.payload, key, { setDown: { ...built.setDown, ...extra } });
+    if (res?.error) return { filed: false, why: `the amend door answered: ${res.defect ?? res.error}` };
+    return {
+      filed: true, mark: res?.id ?? String(thing), seq: res?.seq ?? null, put_forward: res?.put_forward === true,
       ...(res?.put_forward === true ? {} : { to_publish: res?.to_publish ?? null }),
-    } };
+    };
   } catch (e) {
-    return { ...base, whose: "your household's", amend: { filed: false, why: `the amend door refused: ${String(e?.defect ?? e?.message ?? e).slice(0, 200)}` } };
+    return { filed: false, why: `the amend door refused: ${String(e?.defect ?? e?.message ?? e).slice(0, 200)}` };
   }
+}
+
+// ── THE AUTHOR'S HOUSE ANSWERS A STRANGER'S SET-DOWN (POS-138, ruled 10:1x) ──
+//
+// Keemin, 2026-09-24, on the proposal in PR #180: "I agree with you here." The
+// drop act IS the drafted amend; the author's house answers it through
+// `declare-stance-on` (`world-stance.mjs § THE SET-DOWN ARM`): welcomed files
+// the author's amend (`fileAuthorsAmend`), opposed makes this read answer canon
+// with nothing written, and silence leaves it unaccepted.
+//
+// A stance answers ONE set-down, named by the drop act's id on its payload
+// (`set_down.act_id`), so a word spoken about Ana's drop never answers a later
+// drop by somebody else. Only a speaker of the author's household counts: the
+// door refuses anybody else, and this read ignores anybody else too — a read is
+// not allowed to trust that the door was the only writer.
+
+/** The stance payload's own word for which question it answers. */
+export const ANSWERS_SET_DOWN = "set-down";
+
+/**
+ * The author's house's latest answer to one set-down, or null (silence). PURE.
+ *
+ * `stances` are stance rows as `world-stance.mjs § stanceRows` returns them
+ * (`class`, `actor`, `object`, `payload`, `written_at`, `seq`).
+ */
+export function setDownAnswer({ stances = [], thing, dropSeq, madeBy, householdOf = null }) {
+  if (dropSeq == null) return null;
+  let latest = null;
+  for (const r of stances ?? []) {
+    if (r?.class !== "stance" || String(r.object) !== String(thing)) continue;
+    const p = r.payload ?? {};
+    if (p.answers !== ANSWERS_SET_DOWN || String(p.set_down?.act_id) !== String(dropSeq)) continue;
+    if (p.stance !== "welcomed" && p.stance !== "opposed") continue;
+    if (!sameHousehold(madeBy, String(r.actor), householdOf).same) continue;
+    const later = !latest || String(r.written_at) > String(latest.written_at)
+      || (String(r.written_at) === String(latest.written_at) && Number(r.seq) > Number(latest.seq));
+    if (later) latest = r;
+  }
+  return latest ? { stance: latest.payload.stance, by: String(latest.actor), at: latest.written_at ?? null, seq: latest.seq ?? null } : null;
 }
 
 /**
