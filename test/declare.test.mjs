@@ -24,7 +24,7 @@ import { fixtureDb } from "./fixture.mjs";
 import {
   conformance, planDeclaration, declareHousehold, handleTaken,
   PINS_PATH, LANDING_GROUND,
-  DECLARE_SCHEMA, DECLARE_BOUNCES, SETTLING_ASHORE,
+  DECLARE_SCHEMA, DECLARE_BOUNCES, SETTLING_ASHORE, SETTLING_WHAT, SETTLEMENT_LAW,
 } from "../src/declare.mjs";
 import { REGISTRY_PATH, serializeRegistry, serializePins, buildJoinFiles, buildBoardingFiles, planRegistryJoin } from "../src/residency.mjs";
 import { arrivalPage } from "../src/arrival.mjs";
@@ -496,6 +496,11 @@ test("the response tells an arrival what it can do now and what settling adds", 
   assert.ok(out.you_can_now.some((s) => /offices/i.test(s)), "the two outbound harbor lanes are named");
   assert.ok(out.you_can_now.some((s) => /answer anyone who writes/i.test(s)));
   assert.match(out.settling.how, /Registrar/);
+  // POS-70 (the three siblings): `what` promised "a parcel, a district", which
+  // SETTLEMENT_LAW.never_grants refuses in as many words. It reads the law now.
+  assert.equal(out.settling.what, SETTLING_WHAT);
+  assert.ok(out.settling.what.includes(SETTLEMENT_LAW.grants));
+  assert.doesNotMatch(out.settling.what, /a white-pages address, a parcel, a district/, "the receipt promises ground settlement never grants");
   assert.match(out.note, /nobody reviewed this/i);
   assert.equal(out.pr_url, undefined, "no PR in either direction");
 

@@ -490,3 +490,21 @@ test("settlement · the five surfaces and /join's settling.how read the one clau
       /through the Registrar, in boarded order|in boarded order through the Registrar|Registrar's act, in boarded order|performed by the Registrar/,
       `${f} still says settling is the Registrar's act`);
 });
+
+// The last three siblings (POS-70, after #182): the berth's two sentences said
+// leaving the harbor is "the Registrar's gate" (and the receipt, that the queue
+// is "honored in boarded order"); SETTLEMENT_LAW says the Registrar audits after
+// the fact and is never a gate. Both read the one clause now. (The declaration
+// receipt's "a parcel, a district" is held in test/declare.test.mjs, beside the
+// receipt it reads.)
+test("settlement · a berth is told the one clause at both of its doors — POST /berth's receipt and /join's board_a_berth — never \"the Registrar's gate\"", async () => {
+  const { SETTLING_ASHORE } = await import("../src/declare.mjs");
+  const berth = await fetch(`${B.base}/berth`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: "pos-seventy-sibling" }) });
+  const receipt = await berth.json();
+  assert.ok(berth.status < 300, `POST /berth: ${berth.status} ${receipt.defect}`);
+  const joinPage = await rest(B, "GET", "/join");
+  for (const [what, text] of [["POST /berth residency", receipt.residency], ["/join board_a_berth.then", joinPage.body.board_a_berth.then]]) {
+    assert.ok(String(text).includes(SETTLING_ASHORE), `${what} does not read the one settlement clause`);
+    assert.doesNotMatch(String(text), /Registrar's gate|honored in boarded order/, `${what} still names a gate the law says is not one`);
+  }
+});
