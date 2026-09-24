@@ -387,7 +387,7 @@ cat /srv/postmark-sentinel/status.json | head -40
 
 ## The operator dashboards (`/ops/`, hub generated since 2026-08-11)
 
-Five static surfaces under `/ops/`, all written to `/var/www/postmark-ops/`
+Six static surfaces under `/ops/`, all written to `/var/www/postmark-ops/`
 (outside the site webroot, so a site rsync never clobbers them) and served by
 the aliases in `nginx-postmark-town.conf`:
 
@@ -398,6 +398,7 @@ the aliases in `nginx-postmark-town.conf`:
 | `/ops/git/` | `tools/git-report.mjs` | `/etc/cron.hourly/postmark-git-report` |
 | `/ops/economy/` | `tools/economy-report.mjs` | `/etc/cron.hourly/postmark-economy-report` |
 | `/ops/world/` | `tools/world-report.mjs` | `/etc/cron.hourly/postmark-world-report` |
+| `/ops/activity/` | `tools/ops-activity.mjs` | `/etc/cron.hourly/postmark-activity-report` |
 
 `/ops/desk/` is the exception: it is site-built (astro) and keeps its own more
 specific nginx location.
@@ -407,7 +408,7 @@ come from that dashboard's own `data.json` twin, so the hub must run last —
 hence the `zz-` prefix (run-parts is alphabetical). Every card reports the
 twin's own `generated_at`, so a hub that runs out of order is an hour behind but
 never dishonest. `/var/www/postmark-ops/data.json` is the freshness roll-up: one
-file to poll instead of four.
+file to poll instead of five.
 
 **Installing the hub the first time** (2026-08-11 change; do these together):
 
@@ -427,7 +428,15 @@ sources and output, so a dev machine can build the real page against sample or
 cloned data before anything ships: `TRAFFIC_ARCHIVE`, `TRAFFIC_GITHUB`,
 `OFFICE_TELEMETRY`, `NGINX_LOG_DIR`, `TRAFFIC_REPORT_OUT`; `TOWN_CLONE`,
 `GIT_REPORT_OUT`, `GIT_REPORT_NO_FETCH=1` (render from the PR cache, no GitHub
-token); `WORLD_CLONE`, `WORLD_REF`, `ECONOMY_REPORT_OUT`, `OUT_DIR`; `OPS_ROOT`.
+token); `WORLD_CLONE`, `WORLD_REF`, `ECONOMY_REPORT_OUT`, `OUT_DIR`; `OPS_ROOT`;
+`ACTIVITY_OUT`, `ACTIVITY_ACTS_FILE`, `ACTIVITY_NOW` (or `--town`, `--telemetry`,
+`--acts`, `--out`, `--now`).
+
+**Installing `/ops/activity/`** (POS-216): `install -m 755
+deploy/cron-postmark-activity-report.sh /etc/cron.hourly/postmark-activity-report`,
+then run it once by hand. It reads the store's `acts` with the office's own two
+keys from `/etc/postmark-office.env`; without them the page says the world acts
+were not read and counts the ledgers alone.
 
 ## Branch previews (`/preview/<slug>/`, 2026-07-20)
 
