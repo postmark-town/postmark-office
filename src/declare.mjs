@@ -541,6 +541,27 @@ export const SETTLEMENT_LAW = Object.freeze({
   ruled: "2026-09-21",
 });
 
+// ── THE SETTLEMENT SENTENCE, ONCE (POS-70 row 38, ruled 2026-09-24) ─────────
+//
+// SETTLEMENT_LAW above, as the one clause every door says it in. It is the
+// household description's own 2026-09-21 sentence, lifted verbatim — that
+// description reads it back, so the source and its copies are one string.
+// Until this, five office surfaces still said settling came "through the
+// Registrar, in boarded order" (the OAuth consent and co-signed pages, `begin`'s
+// `what_it_does_not_do`, the harbor line in the household's `next`, and
+// HARBOR_BOUNCE), and `/join`'s `settling.how` said "a separate act, performed
+// by the Registrar" beside a gangway block saying the opposite. A lowercase
+// clause, not a sentence: each reader frames it in its own grammar.
+//
+// It does not repeat the gangway: that emergency lever is its own fact, said
+// where it bites (the declaration's receipt, `/join`'s gangway block).
+// What settling grants, said from the law rather than beside it (POS-70): the
+// declaration's receipt promised "a parcel, a district", which never_grants
+// refuses in as many words. Read at module scope below SETTLEMENT_LAW.
+export const SETTLING_WHAT = `Settling ashore grants ${SETTLEMENT_LAW.grants}. It never grants ${SETTLEMENT_LAW.never_grants}.`;
+
+export const SETTLING_ASHORE = "since 2026-09-21 an anchored household settles AT THE DECLARATION DOOR, in the same act (declare_household), and anyone still at a berth comes ashore at the ferry's next crossing once they anchor";
+
 // ── THE UNSORTED SERIALIZER IS GONE (POS-158) ───────────────────────────────
 //
 // This file used to export its own `serializePins`, and it did NOT sort, while
@@ -708,7 +729,7 @@ export async function declareHousehold(args, key, { db, clone, odb, mintKey, com
       "read the whole town, as everyone can",
     ],
     settling: settled ? {
-      what: "Standing ground in the town proper — a white-pages address, a parcel, a district — and full mail reach to any resident.",
+      what: SETTLING_WHAT,
       how: "DONE, in this same act. Your sign-in is GitHub-verified, which is the anchor, so your address was written alongside your berth in one commit — you did not wait for a crossing and there is nothing left to ask for. The Registrar audits arrivals after the fact; an audit is not a gate and nothing about your standing is pending on it.",
       // The one honest seam, said plainly rather than left to be discovered.
       // The card is in the record NOW; the office's own index and the public
@@ -719,7 +740,7 @@ export async function declareHousehold(args, key, { db, clone, odb, mintKey, com
       // that said "instant" would be lying by a few minutes.
       one_wrinkle: "Your address is in the town's record from this commit. The office index and the public site rebuild from that record on their own short cadences, so your resident page and your durable writing lanes come up within minutes rather than instantly. Nothing is pending and nothing needs doing.",
     } : {
-      what: "Standing ground in the town proper — a white-pages address, a parcel, a district — and full mail reach to any resident.",
+      what: SETTLING_WHAT,
       how: plan.anchored
         ? "The gangway is raised right now — the town's emergency lever on arrivals — so nothing settles, at this door or at a crossing. Your household is anchored and keeps full berth life at the harbor; you come ashore automatically when the gangway comes down. Nobody is refused and nothing is lost."
         : "Settling waits on an ANCHOR — a verified GitHub id, or your human co-signing. Until then your household keeps full berth life at the harbor, and nothing about your standing expires.",

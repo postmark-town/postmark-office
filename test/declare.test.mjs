@@ -24,7 +24,7 @@ import { fixtureDb } from "./fixture.mjs";
 import {
   conformance, planDeclaration, declareHousehold, handleTaken,
   PINS_PATH, LANDING_GROUND,
-  DECLARE_SCHEMA, DECLARE_BOUNCES,
+  DECLARE_SCHEMA, DECLARE_BOUNCES, SETTLING_ASHORE, SETTLING_WHAT, SETTLEMENT_LAW,
 } from "../src/declare.mjs";
 import { REGISTRY_PATH, serializeRegistry, serializePins, buildJoinFiles, buildBoardingFiles, planRegistryJoin } from "../src/residency.mjs";
 import { arrivalPage } from "../src/arrival.mjs";
@@ -496,6 +496,11 @@ test("the response tells an arrival what it can do now and what settling adds", 
   assert.ok(out.you_can_now.some((s) => /offices/i.test(s)), "the two outbound harbor lanes are named");
   assert.ok(out.you_can_now.some((s) => /answer anyone who writes/i.test(s)));
   assert.match(out.settling.how, /Registrar/);
+  // POS-70 (the three siblings): `what` promised "a parcel, a district", which
+  // SETTLEMENT_LAW.never_grants refuses in as many words. It reads the law now.
+  assert.equal(out.settling.what, SETTLING_WHAT);
+  assert.ok(out.settling.what.includes(SETTLEMENT_LAW.grants));
+  assert.doesNotMatch(out.settling.what, /a white-pages address, a parcel, a district/, "the receipt promises ground settlement never grants");
   assert.match(out.note, /nobody reviewed this/i);
   assert.equal(out.pr_url, undefined, "no PR in either direction");
 
@@ -682,7 +687,10 @@ test("the arrival page is honest about the harbor: real capability, and two thin
   assert.ok(w.not_yet.some((s) => /white-pages|parcel|district/i.test(s)));
   assert.ok(w.not_yet.some((s) => /cold mail/i.test(s)),
     "the mail bound is stated plainly rather than discovered by bouncing");
-  assert.match(w.settling.how, /Registrar/);
+  // POS-70 row 38 (2026-09-24): `how` said "a separate act, performed by the
+  // Registrar" beside a gangway block saying settlement happens at the door.
+  // It reads the one settlement clause now.
+  assert.ok(w.settling.how.includes(SETTLING_ASHORE), "settling.how reads the one settlement clause");
   // and the verb's own description carries the same bound, so the MCP lane
   // cannot tell a different story from the JSON lane
   assert.match(page.join.what_it_is, /Registrar/);

@@ -38,13 +38,14 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, existsSync, statSync } 
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
+import { DatabaseSync } from "node:sqlite";
 import { editClone, fixtureDb } from "./fixture.mjs";
 import { awaitListening } from "./spawn-office.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const KEY = "onecontractkey";
 
-async function office() {
+async function office(extraEnv = {}) {
   const tmp = mkdtempSync(join(tmpdir(), "postmark-one-contract-"));
   const dbPath = join(tmp, "fixture.db");
   fixtureDb(dbPath).close();
@@ -53,7 +54,7 @@ async function office() {
     "--oauth-db", join(tmp, "oauth.db"), "--roles-db", join(tmp, "roles.db")], {
     env: { ...process.env, OFFICE_KEYS: `${KEY}=keemin:wright`, TOWN_CLONE: clone,
       WORLD_CLONE: join(tmp, "no-world-clone"), VOICES_LOG: join(tmp, "voices.jsonl"),
-      WORLD_STORE_DB: join(tmp, "no-world.db"), TOWN_PUSH: "", TOWN_SINGLE_LOG: "", WORLD_APEX: "1" },
+      WORLD_STORE_DB: join(tmp, "no-world.db"), TOWN_PUSH: "", TOWN_SINGLE_LOG: "", WORLD_APEX: "1", ...extraEnv },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let base = null;
@@ -133,8 +134,12 @@ const restBody = (spec, input) => {
 };
 
 let A, B; // A answers the MCP door, B the plain API — identical fixtures
-before(async () => { [A, B] = await Promise.all([office(), office()]); });
-after(async () => { await Promise.all([shut(A), shut(B)]); });
+// C and D are the same pair with the town log ON (TOWN_SINGLE_LOG=1), for the
+// one call that needs rows to remember a nonce by (§ 8, the paper-act nonce).
+let C, D;
+const LOG_ON = { TOWN_SINGLE_LOG: "1" };
+before(async () => { [A, B, C, D] = await Promise.all([office(), office(), office(LOG_ON), office(LOG_ON)]); });
+after(async () => { await Promise.all([shut(A), shut(B), shut(C), shut(D)]); });
 
 // Fresh offices per leg would cost a boot each; instead every leg below that
 // WRITES uses a letter title or field value of its own, and the file-bytes
@@ -318,4 +323,188 @@ test("send · flag-off, a nonce is DISCLOSED as unhonoured at both doors — the
   assert.equal(m.result?.nonce_honoured, false, `MCP: ${m.defect ?? "no disclosure"}`);
   assert.equal(r.body.nonce_honoured, false, "the plain API took a nonce it cannot honour and said nothing");
   assert.deepEqual(norm(r.body), norm(m.result));
+});
+
+// ── 8 · THE FOUR CALLS (POS-70 box 2; Keemin 2026-09-24, "For 70, i agree with calls") ──
+//
+// Office PR #178 named four differences and proposed rather than built them
+// (§ 1 rows 35, 38, 39; § 5). Each is driven here the way the rest of this
+// file drives an act: the same input through both doors, the same outcome.
+
+// Row 35 · `code` in every REST bounce body — additive, the status unchanged.
+test("bounce code · an unknown field bounces with the SAME code at both doors, and the REST body's code is its status", async () => {
+  for (const spec of HOUSEHOLD_ACTS) {
+    const probe = { ...spec.input, zz_code: 1 };
+    const m = await mcp(A, "household", { do: spec.act, args: probe });
+    const r = await rest(B, spec.method, spec.route(WRIGHT), restBody(spec, probe));
+    assert.equal(m.code, 422, `${spec.act}: the apex bounce carries its code`);
+    assert.equal(r.body.code, m.code, `${spec.act}: the REST bounce body carries no code, or a different one`);
+    assert.equal(r.body.code, r.status, `${spec.act}: the body's code is not the status`);
+  }
+});
+
+test("bounce code · the plain API's own bounces carry it too — a missing door, a body that is not JSON, an implementation's bounce passed through", async () => {
+  const raw = await fetch(`${B.base}/letters`, { method: "POST",
+    headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json" }, body: "this is not json" });
+  const cases = {
+    "no such door (the bounce helper)": await rest(B, "PATCH", "/nowhere/wright", {}),
+    "a body that is not JSON": { status: raw.status, body: await raw.json() },
+    "an implementation's bounce passed through whole": await rest(B, "GET", "/world/investigate"),
+    "an apex bounce that already carried its code": await rest(B, "GET", "/household?read=zz-no-such-read"),
+  };
+  for (const [what, r] of Object.entries(cases)) {
+    assert.ok(r.status >= 400, `${what}: expected a bounce, got ${r.status}`);
+    assert.equal(r.body.error, "bounce", `${what}: not a bounce body`);
+    assert.equal(r.body.code, r.status, `${what}: the body says ${r.body.code}, the status ${r.status}`);
+    assert.deepEqual(Object.keys(r.body).slice(0, 2), ["error", "code"], `${what}: the apex's order is error, code, defect, hint`);
+  }
+});
+
+// Row 39 · your own letter by id, at the household door (Deva for Pica).
+const OWN_LETTER = "limen-2026-07-01-to-wright-the-gap";        // limen → wright: this key's household received it
+const OTHERS_LETTER = "postmaster-2026-07-05-to-limen-notice";  // postmaster → limen: nobody this key keeps
+test("household letter · your own letter by id reads at both doors, and it IS the answer town { read: \"letter\" } gives", async () => {
+  const m = await mcp(A, "household", { read: "letter", args: { id: OWN_LETTER } });
+  const r = await rest(B, "GET", `/household?read=letter&id=${OWN_LETTER}`);
+  const t = await mcp(A, "town", { read: "letter", args: { id: OWN_LETTER } });
+  assert.equal(m.error, undefined, `MCP: ${m.defect} — ${m.hint}`);
+  assert.equal(r.status, 200, `REST: ${r.body.defect}`);
+  assert.equal(m.id, OWN_LETTER);
+  assert.deepEqual(r.body, m, "the two doors answered different letters for one read");
+  assert.deepEqual(m, t, "the household read is not the town's answer — one function, one answer");
+});
+
+test("household letter · another household's letter is refused at both doors, in one sentence, and the town's public door still reads it", async () => {
+  const m = await mcp(A, "household", { read: "letter", args: { id: OTHERS_LETTER } });
+  const r = await rest(B, "GET", `/household?read=letter&id=${OTHERS_LETTER}`);
+  assert.equal(m.error, "bounce");
+  assert.equal(m.code, 403);
+  assert.equal(r.status, 403);
+  assert.equal(r.body.defect, m.defect, "one sentence at both doors");
+  assert.match(m.hint, /town \{ read: "letter"/, "the refusal names the door that does read it");
+  const t = await mcp(A, "town", { read: "letter", args: { id: OTHERS_LETTER } });
+  assert.equal(t.id, OTHERS_LETTER, "the town's record is public and stays so — this read narrows nothing there");
+});
+
+// § 5 · the paper-act nonce, over the town-log rows POS-44 already writes.
+const journalRows = (o) => {
+  const db = new DatabaseSync(join(o.tmp, "oauth.db"), { readOnly: true });
+  try { return db.prepare("SELECT COUNT(*) AS n FROM town_journal").get().n; }
+  catch { return 0; } // no row ever written: the table is made on first append
+  finally { db.close(); }
+};
+const commitsIn = (clone) => Number(execFileSync("git", ["-C", clone, "rev-list", "--count", "HEAD"], { encoding: "utf8" }).trim());
+const sansWrittenAt = (receipt) => { const { logged: { written_at: _w, ...logged } = {}, ...rest } = receipt ?? {}; return { ...rest, logged }; };
+
+test("paper nonce · a repeated nonce answers the FIRST edit's receipt at both doors, and writes nothing", async () => {
+  const input = { handle: WRIGHT, body: "A home kept by a retry key.", nonce: "home-k1" };
+  const m1 = await mcp(C, "household", { do: "home", args: input });
+  const r1 = await rest(D, "PATCH", `/home/${WRIGHT}`, { body: input.body, nonce: input.nonce });
+  assert.equal(m1.error, undefined, `MCP refused a nonce on a paper act: ${m1.defect}`);
+  assert.equal(r1.status, 200, `REST refused a nonce on a paper act: ${r1.body.defect}`);
+  assert.ok(m1.result.logged?.seq, "flag-on, the first edit is a town-log row");
+  assert.deepEqual(norm(r1.body), norm(m1.result));
+  const [rowsC, rowsD, gitC, gitD] = [journalRows(C), journalRows(D), commitsIn(C.clone), commitsIn(D.clone)];
+
+  const m2 = await mcp(C, "household", { do: "home", args: input });
+  const r2 = await rest(D, "PATCH", `/home/${WRIGHT}`, { body: input.body, nonce: input.nonce });
+  assert.equal(m2.result.duplicate, true);
+  assert.equal(m2.result.logged.seq, m1.result.logged.seq, "the ORIGINAL receipt, not a new one");
+  assert.equal(m2.result.commit, m1.result.commit);
+  assert.equal(m2.result.nonce, "home-k1");
+  assert.deepEqual(norm(sansWrittenAt(r2.body)), norm(sansWrittenAt(m2.result)), "the two doors hand back different duplicate receipts");
+  assert.deepEqual([journalRows(C), journalRows(D)], [rowsC, rowsD], "a second row was written for a spent nonce");
+  assert.deepEqual([commitsIn(C.clone), commitsIn(D.clone)], [gitC, gitD], "a second pen commit was made for a spent nonce");
+});
+
+test("paper nonce · a bounced first call spends no key — the retry with the same nonce acts", async () => {
+  const bad = { handle: WRIGHT, color: "not a colour", nonce: "profile-k1" };
+  const m0 = await mcp(C, "household", { do: "profile", args: bad });
+  const r0 = await rest(D, "PATCH", `/profile/${WRIGHT}`, { color: bad.color, nonce: bad.nonce });
+  assert.equal(m0.error, "bounce", "the probe must bounce for this leg to mean anything");
+  assert.equal(r0.status, m0.code);
+  const good = { handle: WRIGHT, color: "#abcdef", nonce: "profile-k1" };
+  const m1 = await mcp(C, "household", { do: "profile", args: good });
+  const r1 = await rest(D, "PATCH", `/profile/${WRIGHT}`, { color: good.color, nonce: good.nonce });
+  assert.equal(m1.result?.duplicate, undefined, "a bounce's nonce was treated as spent");
+  assert.ok(m1.result?.logged?.seq, `MCP: ${m1.defect ?? "no row"}`);
+  assert.equal(r1.body.duplicate, undefined);
+  assert.ok(r1.body.logged?.seq, `REST: ${r1.body.defect ?? "no row"}`);
+});
+
+test("paper nonce · flag-off, a nonce is DISCLOSED as unhonoured at both doors, exactly as the send discloses it", async () => {
+  const input = { handle: WRIGHT, body: "A card rewritten with a key this office cannot keep.", nonce: "addr-k1" };
+  const m = await mcp(A, "household", { do: "address", args: input });
+  const r = await rest(B, "PATCH", `/address/${WRIGHT}`, { body: input.body, nonce: input.nonce });
+  assert.equal(m.result?.nonce_honoured, false, `MCP: ${m.defect ?? "no disclosure"}`);
+  assert.equal(r.body.nonce_honoured, false, "the plain API took a nonce it cannot honour and said nothing");
+  assert.match(m.result.nonce_note, /unchanged: true/, "and it names the guard that IS holding");
+  assert.deepEqual(norm(r.body), norm(m.result));
+});
+
+// The MCP half of this leg is in test/world-apex.test.mjs: the world apex
+// judges its envelope only once the store has answered which act the ground
+// affords, and this fixture has no world store (the reason § 3 gives).
+test("nonce · a world act still refuses a nonce by name at the plain API — its store has nowhere to keep one until 026_act_nonce.sql", async () => {
+  for (const [route, tool] of [["/world/walks", "world_walk"], ["/world/marks", "world_leave_mark"], ["/world/say", "world_say"]]) {
+    const r = await rest(B, "POST", route, { nonce: "w-k1" });
+    assert.equal(r.status, 422, `${route}: ${r.status} ${r.body.defect}`);
+    assert.equal(r.body.defect, `${tool} does not take: nonce`);
+  }
+});
+
+// Row 38 · one settlement sentence. The five office surfaces that said settling
+// came "through the Registrar, in boarded order", and /join's settling.how, read
+// ONE clause (declare.mjs § SETTLING_ASHORE) — the household description's own
+// 2026-09-21 sentence, which reads it back too.
+test("settlement · the five surfaces and /join's settling.how read the one clause, and the old sentence is gone from all of them", async () => {
+  const { SETTLING_ASHORE } = await import("../src/declare.mjs");
+  const { HARBOR_BOUNCE } = await import("../src/harbor-gate.mjs");
+  const { HOUSEHOLD_DESCRIPTION } = await import("../src/household-apex.mjs");
+  assert.match(SETTLING_ASHORE, /^since 2026-09-21 an anchored household settles AT THE DECLARATION DOOR/);
+  assert.ok(HOUSEHOLD_DESCRIPTION.includes(`never was: ${SETTLING_ASHORE}.`), "the source sentence is the constant");
+  // Driven: /join, and HARBOR_BOUNCE as the gate hands it out.
+  const joinPage = await rest(B, "GET", "/join");
+  assert.equal(joinPage.status, 200);
+  assert.ok(joinPage.body.where_joining_lands_you.settling.how.includes(SETTLING_ASHORE), "settling.how");
+  // The follow-up: the block's other two lines agree with it — `what` reads the
+  // law's grants, and neither promises ground or calls settling a separate act.
+  const { SETTLEMENT_LAW } = await import("../src/declare.mjs");
+  const settling = joinPage.body.where_joining_lands_you.settling;
+  assert.ok(settling.what.includes(SETTLEMENT_LAW.grants) && settling.what.includes(SETTLEMENT_LAW.never_grants), "settling.what reads the law");
+  assert.doesNotMatch(settling.what + " " + settling.why_separate, /town ground|button press does not hand/, "settling promises what it never grants");
+  assert.ok(HARBOR_BOUNCE.hint.includes(SETTLING_ASHORE), "HARBOR_BOUNCE");
+  // Read from source: the OAuth consent and co-signed pages need a GitHub
+  // round trip, and `begin` / the harbor `next` line need a parked berth, so
+  // each is held to interpolating the constant at its own sentence.
+  const src = (f) => readFileSync(join(ROOT, "src", f), "utf8");
+  const oauth = src("oauth.mjs");
+  assert.match(oauth, /minute\)\. Settling ashore: \$\{esc\(SETTLING_ASHORE\)\}\.<\/p>/, "the OAuth consent page");
+  assert.match(oauth, /Settling ashore \(a white-pages address and full mail reach\): \$\{esc\(SETTLING_ASHORE\)\}\.<\/p>/, "the co-signed page");
+  const apex = src("household-apex.mjs");
+  assert.match(apex, /what_it_does_not_do: `Settle you ashore by itself — \$\{SETTLING_ASHORE\}\./, "begin's what_it_does_not_do");
+  assert.match(apex, /Settling ashore \(a white-pages address and the durable acts\): \$\{SETTLING_ASHORE\} — the manifest/, "the harbor `next` line");
+  const code = (text) => text.split("\n").filter((l) => !/^\s*(\/\/|\*)/.test(l)).join("\n");
+  for (const f of ["oauth.mjs", "household-apex.mjs", "harbor-gate.mjs", "arrival.mjs"])
+    assert.doesNotMatch(code(src(f)),
+      /through the Registrar, in boarded order|in boarded order through the Registrar|Registrar's act, in boarded order|performed by the Registrar/,
+      `${f} still says settling is the Registrar's act`);
+});
+
+// The last three siblings (POS-70, after #182): the berth's two sentences said
+// leaving the harbor is "the Registrar's gate" (and the receipt, that the queue
+// is "honored in boarded order"); SETTLEMENT_LAW says the Registrar audits after
+// the fact and is never a gate. Both read the one clause now. (The declaration
+// receipt's "a parcel, a district" is held in test/declare.test.mjs, beside the
+// receipt it reads.)
+test("settlement · a berth is told the one clause at both of its doors — POST /berth's receipt and /join's board_a_berth — never \"the Registrar's gate\"", async () => {
+  const { SETTLING_ASHORE } = await import("../src/declare.mjs");
+  const berth = await fetch(`${B.base}/berth`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: "pos-seventy-sibling" }) });
+  const receipt = await berth.json();
+  assert.ok(berth.status < 300, `POST /berth: ${berth.status} ${receipt.defect}`);
+  const joinPage = await rest(B, "GET", "/join");
+  for (const [what, text] of [["POST /berth residency", receipt.residency], ["/join board_a_berth.then", joinPage.body.board_a_berth.then]]) {
+    assert.ok(String(text).includes(SETTLING_ASHORE), `${what} does not read the one settlement clause`);
+    assert.doesNotMatch(String(text), /Registrar's gate|honored in boarded order/, `${what} still names a gate the law says is not one`);
+  }
 });
