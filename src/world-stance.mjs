@@ -1231,14 +1231,16 @@ export async function declareStanceViaOffice(repo, args = {}, key = null, { dbPa
   // author speaks about their own mark — which the ground arm refuses by name,
   // and still does for every other case.
   const sd = await setDownFor(on, target, all, setDownDeps);
-  if (sd?.speakerHouse?.(by)) {
-    if (sd.unreadable) throw bounce(503, "the holding record could not be read",
-      `a set-down is answered against the act that made it, and that record did not answer (${sd.unreadable}) — nothing was written; speak again once it is readable`);
-    if (sd.drop) return await answerSetDown({ repo, on, stance, by, key, target, sd, dbPath, witnessStamp, crossing, deps: setDownDeps });
-  }
+  // An UNREADABLE holding record opens no arm and closes none: the door goes on
+  // to the answer it has always given, and says the set-down could not be
+  // checked. Turning every author's ordinary 422 into a 503 because a store
+  // blinked would make an outage look like a new law (the suite caught it).
+  if (sd?.drop && sd.speakerHouse(by))
+    return await answerSetDown({ repo, on, stance, by, key, target, sd, dbPath, witnessStamp, crossing, deps: setDownDeps });
 
   if (target.by === by) throw bounce(422, "a mark is never its own ground",
-    "you do not consent to your own declaration — a stance is the word of the ground it landed on");
+    "you do not consent to your own declaration — a stance is the word of the ground it landed on"
+    + (sd?.unreadable ? ` (whether another household has set it down, which is the one thing its author's house answers here, could not be checked: the holding record did not answer)` : ""));
 
   const mine = all.filter((m) => key.handles.has(m.by) && m.at && m.extent);
   const ground = groundFor(target, mine, overlaps);
