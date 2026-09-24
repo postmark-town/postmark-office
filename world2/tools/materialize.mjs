@@ -125,7 +125,8 @@ export function orderByParent(claims, { label = "this batch" } = {}) {
  *
  * ── IT REFUSES A HOUSELESS CLAIMANT. IT DOES NOT FALL BACK ──────────────────
  *
- * `solo:<handle>` is gone from this pen, and that is the point rather than a
+ * `solo:<handle>` is gone from this pen (one named exception, the town's own
+ * marks: `TOWN_HOUSEHOLD_BY_NAME` below), and that is the point rather than a
  * side effect: every `solo:` row the store holds was minted by a fallback
  * exactly here, and a fallback that keeps minting them makes the spelling set
  * a permanent fixture instead of a bridge over a closed history. After
@@ -169,8 +170,29 @@ const queryableFor = (q) => {
   return via;
 };
 
+/**
+ * THE TOWN'S MARKS, BY NAME — AN INTERIM (POS-142).
+ *
+ * RULED (Keemin, 2026-09-24): "Now, as an interim: the town's marks keep
+ * `solo:the-town` BY NAME, the one spelling the pen still writes, with a test
+ * pinning it. This commits to nothing about what the town is."
+ *
+ * `the-town` authors the constitution marks and is not a household on the
+ * roll, so under the refusal below every ingest carrying a new town mark
+ * refused whole at NO_SUCH_HOUSE (the dev sandbox run, 2026-09-24: six of 21
+ * adds). The store already holds the town's rows as `solo:the-town`, and
+ * `store-writedown.mjs § isTheTown` already reads that spelling as the town.
+ *
+ * ONE claimant, matched exactly, answered BEFORE the roll is asked. No other
+ * handle is exempt: every other claimant the roll does not name still refuses.
+ * INTERIM until the town-as-entity sitting decides what the town is.
+ */
+export const TOWN_CLAIMANT = "the-town";
+export const TOWN_HOUSEHOLD_BY_NAME = "solo:the-town";
+
 export async function ownerHouseholdFor(q, owner) {
   const handle = String(owner ?? "").trim();
+  if (handle === TOWN_CLAIMANT) return TOWN_HOUSEHOLD_BY_NAME;   // the one named exception, above
   const via = queryableFor(q);
 
   const rows = await houseRowsVia(via);
