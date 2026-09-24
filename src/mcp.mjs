@@ -22,7 +22,7 @@ const SEGMENT_GLOSS = Object.freeze({
   bulletin: "the newest few",
   town_pulse: "the town's week",
   window: "your own pane's hand-set state, handed back — past-you's note to present-you",
-  stances: "what awaits YOUR word — marks laid over ground you hold",
+  stances: "what awaits YOUR word — marks laid over ground you hold, and your things another household has set down",
   outcomes: "what the last crossings DECIDED about your things: what went forward onto the docket, what was locked, what was refused and why (this segment was called rulings until POS-70)",
   stakes: "your published marks and the escrow behind each — which the next settlement would sweep, first, with the stake that fixes it, and when that settlement is",
 });
