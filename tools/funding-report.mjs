@@ -309,7 +309,7 @@ export function render({ now, pots, potsInvalid, fold, rails, anomalyRows, strip
     if (receipts.length) {
       p(`| date | rail | from | usd | ref | settled |`);
       p(`|---|---|---|---|---|---|`);
-      for (const r of receipts) p(`| ${r.date} | ${r.rail} | ${r.from} | ${usd(r.usd)} | \`${r.receipt}\` | ${settledRefs.has(r.receipt) ? "yes" : "—"} |`);
+      for (const r of receipts) p(`| ${r.date} | ${r.rail} | ${payerCell(r)} | ${usd(r.usd)} | \`${r.receipt}\` | ${settledRefs.has(r.receipt) ? "yes" : "—"} |`);
       p();
     } else {
       p(`_No receipts yet._`);
@@ -337,7 +337,18 @@ export function render({ now, pots, potsInvalid, fold, rails, anomalyRows, strip
     p();
     p(`| date | rail | from | usd | ref |`);
     p(`|---|---|---|---|---|`);
-    for (const r of tRec) p(`| ${r.date} | ${r.rail} | ${r.from} | ${usd(r.usd)} | \`${r.receipt}\` |`);
+    for (const r of tRec) p(`| ${r.date} | ${r.rail} | ${payerCell(r)} | ${usd(r.usd)} | \`${r.receipt}\` |`);
+    p();
+  }
+
+  // A correction the town's rule REFUSED changes no hand, and the close mints
+  // by the uncorrected one — so it is named here rather than dropped, exactly
+  // as the town's own fold names it.
+  const refused = (fold.corrections ?? []).filter((c) => !c.applied);
+  if (refused.length) {
+    p(`### Corrections that did not apply`);
+    p();
+    for (const c of refused) p(`- \`${c.ref}\` — ${c.refused === "stale-from" ? `the correction says from **${c.says}**, the receipt reads **${c.receipt}**; the hand stays ${c.receipt}` : "no receipt carries this ref"} (${c.correction.date} · ${c.correction.reason} · by ${c.correction.by})`);
     p();
   }
 
@@ -375,6 +386,11 @@ function arg(name, dflt = null) {
   const i = process.argv.indexOf(`--${name}`);
   return i > -1 && process.argv[i + 1] && !process.argv[i + 1].startsWith("--") ? process.argv[i + 1] : dflt;
 }
+
+// Who paid, as the close reads it: a founder pot-correction row re-hands a
+// receipt (src/funding.mjs § THE HAND, CORRECTED), and the cell says so beside
+// the hand the rail first recorded.
+const payerCell = (r) => (r.corrected_from ? `**${r.from}** (corrected from ${r.corrected_from}, ${r.correction.date} · ${r.correction.reason})${r.correction.after_close ? " · after its close" : ""}` : r.from);
 
 const readJson = (p) => { try { return JSON.parse(readFileSync(p, "utf8")); } catch { return null; } };
 

@@ -529,3 +529,69 @@ test("a payment resolved through a PIN says so on the page a person actually rea
   });
   assert.doesNotMatch(plainHeld, /Where \*\*as\*\* differs from \*\*typed\*\*/);
 });
+
+// ════════════════════════════════════════════════════════════════════════════
+// POS-218 · THE REPORT READS A CORRECTION THE WAY THE CLOSE DOES
+// ════════════════════════════════════════════════════════════════════════════
+
+test("POS-218 · a founder pot-correction re-hands the receipt on the report exactly as the close mints it — and an uncorrected outside receipt stays outside", { skip: SKIP }, () => {
+  // LAW (town tools/stamp-mint.mjs § foldPotReceipts, verbatim): "The hand is
+  //     corrected here — every reader should show who really paid". The close
+  //     reads that fold; the report must name the same payer for the same dollars.
+  const town = seamTown();
+  receipt(town, { ref: "stripe:cs_fixed", usd: 10, from: "outside:stripe", date: "2026-08-01" });
+  receipt(town, { ref: "stripe:cs_stays", usd: 5, from: "outside:stripe", date: "2026-08-02" });
+  // the founder's hand, through the town's own verb — the only writer of this row
+  execFileSync(process.execPath, [
+    join(TOWN, "tools", "epoch-close.mjs"), "--correct-hand", "--ref", "stripe:cs_fixed", "--from", "outside:stripe", "--to", "paz",
+    "--reason", "founder-directed-attribution", "--by", "keemin", "--date", "2026-08-03", "--key", town.keyFile, "--repo", town.repo,
+  ], { encoding: "utf8", stdio: "pipe" });
+
+  // the close's own answer, never run for real
+  const dry = execFileSync(process.execPath, [
+    join(TOWN, "tools", "epoch-close.mjs"), "--close", "--pot", "keep", "--epoch", "2026-08", "--date", "2026-08-31", "--dry-run", "--repo", town.repo,
+  ], { encoding: "utf8", stdio: "pipe" });
+  // one holo row per receipt the close settles, naming its payer and its ref
+  const closePayer = (ref) => dry.split(/\r?\n/).map((l) => /holo · (\S+) · \d+ · pot:keep · epoch:2026-08 · ref: (\S+)$/.exec(l.trim())).find((m) => m?.[2] === ref)?.[1];
+  assert.equal(closePayer("stripe:cs_fixed"), "paz", "the close mints the corrected receipt to the corrected hand");
+  assert.equal(closePayer("stripe:cs_stays"), "outside:stripe", "and the uncorrected one to outside");
+
+  const fold = foldOf(town.repo);
+  const { pots } = readPots(town.repo);
+  const md = render({
+    now: NOW, pots, potsInvalid: [], fold, anomalyRows: [],
+    rails: [railHealth("x", { last_run: minsAgo(1) }, { now: NOW })],
+    stripe: { hold: [] }, usdcReport: null, registry: { addresses: 0, wallet_files: 0, mapped_pots: 0 },
+  });
+  const reportPayer = (ref) => new RegExp(String.raw`^\| \S+ \| stripe \| (?:\*\*)?([^ |*]+)(?:\*\*)?[^|]* \| \$\d+ \| \`${ref}\``, "m").exec(md)?.[1];
+  assert.equal(reportPayer("stripe:cs_fixed"), closePayer("stripe:cs_fixed"), "report and close name the same payer for the corrected $10");
+  assert.equal(reportPayer("stripe:cs_stays"), closePayer("stripe:cs_stays"), "report and close name the same payer for the uncorrected $5");
+  assert.match(md, /\*\*paz\*\* \(corrected from outside:stripe, 2026-08-03 · founder-directed-attribution\) \| \$10 \|/, "the page says the hand was corrected, and from what");
+  assert.match(md, /\| 2026-08-02 \| stripe \| outside:stripe \| \$5 \|/, "an uncorrected outside receipt still prints as outside, unannotated");
+  assert.doesNotMatch(md, /Corrections that did not apply/);
+});
+
+test("POS-218 · a correction the town's rule refuses is named on the report and changes no hand", { skip: SKIP }, () => {
+  const town = seamTown();
+  receipt(town, { ref: "stripe:cs_r", usd: 10, from: "outside:stripe", date: "2026-08-01" });
+  const ledger = readFileSync(join(town.repo, "WHITE_PAGES", "stamp-ledger.md"), "utf8");
+  // unsigned rows are enough for a READ: the fold reads canonical text, and the
+  // town's CLI would refuse to write either of these (that refusal is its law)
+  const entries = parseLedgerText(ledger + [
+    "- 2026-08-02 · pot-correction · ref: stripe:cs_r · from stan to paz · founder-directed-attribution · by: keemin",
+    "- 2026-08-02 · pot-correction · ref: stripe:cs_nothing · from outside:stripe to paz · founder-directed-attribution · by: keemin",
+  ].join("\n") + "\n");
+  const town2 = ENGINE.foldPotReceipts(entries).corrections.map((c) => [c.ref, c.applied, c.refused]);
+  const fold = foldFunding(entries);
+  assert.deepEqual(fold.corrections.map((c) => [c.ref, c.applied, c.refused]), town2, "the office refuses exactly what the town refuses");
+  const { pots } = readPots(town.repo);
+  const md = render({
+    now: NOW, pots, potsInvalid: [], fold, anomalyRows: [],
+    rails: [railHealth("x", { last_run: minsAgo(1) }, { now: NOW })],
+    stripe: { hold: [] }, usdcReport: null, registry: { addresses: 0, wallet_files: 0, mapped_pots: 0 },
+  });
+  assert.match(md, /\| 2026-08-01 \| stripe \| outside:stripe \| \$10 \|/, "a stale-from correction moves no hand");
+  assert.match(md, /### Corrections that did not apply/);
+  assert.match(md, /`stripe:cs_r` — the correction says from \*\*stan\*\*, the receipt reads \*\*outside:stripe\*\*/);
+  assert.match(md, /`stripe:cs_nothing` — no receipt carries this ref/);
+});
