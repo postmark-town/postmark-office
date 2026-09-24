@@ -448,9 +448,9 @@ const readRows = async (thing) => {
   const restore = guards.useGuardReader((run) => run(actsClient(written(pen))));
   try { return await guards.standsRowsFromStore(thing); } finally { restore(); }
 };
-async function speak(word, handle, key) {
+async function speak(word, handle, key, extraDeps = {}) {
   try {
-    return await stance.declareStanceViaOffice(repo, { on: STOOL, stance: word, handle }, key, { setDownDeps: { householdOf: HOUSES, readRows } });
+    return await stance.declareStanceViaOffice(repo, { on: STOOL, stance: word, handle }, key, { setDownDeps: { householdOf: HOUSES, readRows, ...extraDeps } });
   } catch (e) {
     return { refused: true, code: e?.code, defect: e?.defect ?? e?.message, hint: e?.hint };
   }
@@ -598,4 +598,30 @@ test("an answer belongs to ONE drop: a welcome of Ana's first set-down does not 
   const groundWord = [{ ...stances[0], payload: { stance: "opposed" } }];
   assert.equal(hold.setDownAnswer({ stances: groundWord, thing: STOOL, dropSeq: 3, madeBy: "keith", householdOf: HOUSES }), null,
     "a ground-holder's ordinary stance on the thing is not an answer to a set-down");
+});
+
+// ── THE READ CLAIMS ONLY WHAT THE STANCE PROVES (Wright's review, #184) ──────
+//
+// The stance row is written before the amend is filed, and the amend door can
+// still refuse (the move guard, an error). The read sees the word and never
+// the filing, so it must not say the amend "is filed".
+//
+// THE FLIP: restore the old sentence ("…; the amend that re-sites it is filed
+// in keith's name") and this reds.
+
+test("A WELCOME WHOSE AMEND THE DOOR REFUSES: the receipt says it was not filed, and the read does not claim a filing", async () => {
+  const p = fresh();
+  const drop = await anaDrops(p);
+  const refusingDoor = async () => { const e = new Error("3 marks stand on it"); Object.assign(e, { code: 409, defect: "3 marks stand on it" }); throw e; };
+  const r = await speak("welcomed", "keith", KEITH, { leave: refusingDoor });
+  assert.ok(!r.refused, `the welcome itself stands: ${JSON.stringify(r)}`);
+  assert.equal(r.amend.filed, false, "the amend door refused");
+  assert.match(r.effect, /was not filed \(the amend door refused: 3 marks stand on it\)/, "the receipt tells the truth");
+  assert.equal(p.rows().filter((a) => a.action === "amend").length, 0, "no amend act");
+  assert.equal(p.claims().length, 0, "no claim");
+
+  const s = await readStool(drop);
+  assert.equal(s.accepted, true, "the word was spoken, and the read says so");
+  assert.doesNotMatch(s.says, /is filed/, `the read claims a filing that did not happen: ${s.says}`);
+  assert.equal(s.says, "set down by ana at (4105, -305) — accepted by keith's house; canon follows when keith's amend publishes at a crossing");
 });

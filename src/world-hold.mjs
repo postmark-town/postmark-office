@@ -643,8 +643,12 @@ export async function whereThingStands(thingId, {
             accepted: false, refused_by: answer.by,
             says: `set down by ${setter} at ${placeText(at)} — refused by ${madeBy}'s house; canon stands at ${canonText}, where ${madeBy} put it` };
         if (answer?.stance === "welcomed")
+          // WHAT THE STANCE PROVES, AND NOTHING MORE. The row is written before
+          // the amend is filed, and the amend door can still refuse; this read
+          // sees the word, never the filing, so it must not claim one (Wright's
+          // review, #184). The receipt is where the filing's outcome is said.
           return { ...base, accepted: true, accepted_by: answer.by, canon_at: foldAt,
-            says: `set down by ${setter} at ${placeText(at)} — accepted by ${madeBy}'s house; the amend that re-sites it is filed in ${madeBy}'s name` };
+            says: `set down by ${setter} at ${placeText(at)} — accepted by ${madeBy}'s house; canon follows when ${madeBy}'s amend publishes at a crossing` };
         return { ...base, accepted: false, canon_at: foldAt,
           says: `set down by ${setter} at ${placeText(at)} — unaccepted; canon stays at ${canonText}, where ${madeBy} put it` };
       }
