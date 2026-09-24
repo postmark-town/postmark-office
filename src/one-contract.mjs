@@ -60,14 +60,26 @@ export const FIELD_ALIASES = Object.freeze({
 
 // ── the door's own fields ───────────────────────────────────────────────────
 //
-// A field the DOOR reads rather than the act: today one, `nonce` on a send —
-// the idempotency seam (town-mail.mjs § THE IDEMPOTENCY SEAM, office#45). It is
+// A field the DOOR reads rather than the act: today one, `nonce` — the
+// idempotency seam (town-mail.mjs § THE IDEMPOTENCY SEAM, office#45). It is
 // not on the act's schema, deliberately: the schema is the card, and a retry
 // key is not a property of a letter. The household apex exempted it inline for
 // `send` alone; POST /letters honoured it flag-on with no declaration at all.
 // Declared once here, both doors read the same list.
+//
+// THE FIVE PAPER ACTS TAKE IT TOO (POS-70 §5, ruled 2026-09-24). Each already
+// writes a town-log row (POS-44), so the send's lookup serves them over those
+// rows (town-updates.mjs § paperDoor). Every other act still refuses a nonce
+// BY NAME: the world acts until `026_act_nonce.sql` gives their store a place
+// to keep one, and the household acts that write no town-log row at all.
+const NONCE = Object.freeze(["nonce"]);
 export const DOOR_FIELDS = Object.freeze({
-  send_letter: Object.freeze(["nonce"]),
+  send_letter: NONCE,
+  update_address_body: NONCE,
+  update_address_fields: NONCE,
+  update_home: NONCE,
+  update_profile: NONCE,
+  update_window: NONCE,
 });
 
 /** One `renamed` row — the same shape for a field, a read and a segment. */
@@ -173,6 +185,25 @@ export const ROUTE_ACTS = Object.freeze({
   "POST /world/say":          { tool: "world_say",             door: "world",     act: "say",            extra: ["human", "with"] },
   "POST /world/stake":        { tool: "world_stake",           door: "world",     act: "stake" },
   "POST /world/unstake":      { tool: "world_unstake",         door: "world",     act: "unstake" },
+});
+
+// ── a read one door has always served, answered at a second door ────────────
+//
+// POS-70 row 39 (the Deva's Commons, Pica; ruled 2026-09-24): your own letter
+// by id was readable only at `town { read: "letter" }`, the PUBLIC record's
+// door, while every other read of your correspondence lives at `household`.
+// The household twin is not a second read: it takes the flat tool's own field
+// list (READ_FIELDS, which the flat tool's schema IS — mcp.mjs reads it from
+// here) and answers through the same function (queries.mjs § letterAnswer).
+// What the twin adds is its door's privacy, named here so the table says what
+// the second door is for: a letter your household sent or received.
+export const READ_FIELDS = Object.freeze({
+  read_letter: Object.freeze({ id: Object.freeze({ type: "string" }) }),
+});
+export const READ_TWINS = Object.freeze({
+  household: Object.freeze({
+    letter: Object.freeze({ tool: "read_letter", twin_of: 'town { read: "letter" }', scope: "a letter your household sent or received" }),
+  }),
 });
 
 /** The PATCH paper doors, derived — the server's route regex reads THIS, so a

@@ -541,6 +541,22 @@ export const SETTLEMENT_LAW = Object.freeze({
   ruled: "2026-09-21",
 });
 
+// ── THE SETTLEMENT SENTENCE, ONCE (POS-70 row 38, ruled 2026-09-24) ─────────
+//
+// SETTLEMENT_LAW above, as the one clause every door says it in. It is the
+// household description's own 2026-09-21 sentence, lifted verbatim — that
+// description reads it back, so the source and its copies are one string.
+// Until this, five office surfaces still said settling came "through the
+// Registrar, in boarded order" (the OAuth consent and co-signed pages, `begin`'s
+// `what_it_does_not_do`, the harbor line in the household's `next`, and
+// HARBOR_BOUNCE), and `/join`'s `settling.how` said "a separate act, performed
+// by the Registrar" beside a gangway block saying the opposite. A lowercase
+// clause, not a sentence: each reader frames it in its own grammar.
+//
+// It does not repeat the gangway: that emergency lever is its own fact, said
+// where it bites (the declaration's receipt, `/join`'s gangway block).
+export const SETTLING_ASHORE = "since 2026-09-21 an anchored household settles AT THE DECLARATION DOOR, in the same act (declare_household), and anyone still at a berth comes ashore at the ferry's next crossing once they anchor";
+
 // ── THE UNSORTED SERIALIZER IS GONE (POS-158) ───────────────────────────────
 //
 // This file used to export its own `serializePins`, and it did NOT sort, while

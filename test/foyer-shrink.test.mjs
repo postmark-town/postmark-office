@@ -950,10 +950,15 @@ test("F12d · THE DRAIN CANNOT TRIP ON THE NONCE — the replay lane's door is e
   });
 });
 
-test("F12e · a nonce on an act that is not `send` still bounces by name — the exemption is one act wide", async () => {
+// NARROWED by POS-70 §5 (ruled 2026-09-24): the five paper acts take the nonce
+// now, over the town-log rows they already write (test/one-contract.test.mjs
+// drives it through both doors). What still refuses it by name is every act
+// with no town-log receipt to hand back — the world acts (until
+// 026_act_nonce.sql), and household acts like the ballot stake.
+test("F12e · a nonce on an act with no town-log receipt still bounces by name — the exemption is send and the five paper acts", async () => {
   const clone = mailClone();
-  const r = await householdApex({ do: "home", args: { body: "hi", nonce: "x" } }, KEY,
-    ctx({ clone, canWrite: true, slim: true, schemas: { update_home: { handle: {}, body: {} } } }));
+  const r = await householdApex({ do: "stake-vote", args: { from: "wright", topic: "t", candidate: "c", stamps: 1, nonce: "x" } }, KEY,
+    ctx({ clone, canWrite: true, slim: true, schemas: { stake_vote: { from: {}, topic: {}, candidate: {}, stamps: {} } } }));
   assert.equal(r.error, "bounce");
   assert.match(r.defect, /nonce/);
 });
