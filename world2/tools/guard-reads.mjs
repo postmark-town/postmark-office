@@ -1179,8 +1179,16 @@ export const HOLDING_ORDER_SQL = "ORDER BY acts.at, acts.id";
  * `holdEffectsFrom`'s own `c == null` line there — but only the unbounded read
  * reaches `latestDrop`, which wants every row whether or not it carries a
  * crossing. That is why the ground readers ask for no bounds.
+ *
+ * `madeBy` (POS-138, 2026-09-24) narrows to the things a set of handles MADE —
+ * the author is the `<by>` half of the thing's id, which is the same reading
+ * `world-hold.mjs § whereThingStands` and `world-stance.mjs § setDownFor` make
+ * (`id.split("/")[0]`). It is how the author's stances read finds the
+ * set-downs waiting on its word without asking about every thing in town: the
+ * rows it returns are the holding acts on the house's own things and no others.
+ * Pushed AFTER `thing`, for the reason the `thing` clause gives.
  */
-export async function pgHoldingRows(client, { thing = null, since = null, until = null } = {}) {
+export async function pgHoldingRows(client, { thing = null, since = null, until = null, madeBy = null } = {}) {
   const args = [CLASS_HOLDING];
   let sql = `SELECT id, at, crossing, actor, action, object,
                     at_anchor, at_dx, at_dy, witnesses, class, payload, effect, household
@@ -1192,7 +1200,16 @@ export async function pgHoldingRows(client, { thing = null, since = null, until 
   // act and the payload key is the belt-and-braces for one written without it.
   if (thing != null) {
     args.push(String(thing));
-    sql += ` AND COALESCE(object, payload->>'thing') = ${args.length}`;
+    // ⚑ `$$`: the placeholder's own dollar, then the template's. One `$` here
+    // (1626f2f4) sent `= 2` to Postgres — an integer against text, and a bind
+    // of two parameters to a statement that names one — so every per-thing
+    // holding read refused on the real store while the fixture, which reads
+    // `params` and never the text, answered green.
+    sql += ` AND COALESCE(object, payload->>'thing') = $${args.length}`;
+  }
+  if (madeBy != null) {
+    args.push([...madeBy].map(String));
+    sql += ` AND split_part(COALESCE(object, payload->>'thing'), '/', 1) = ANY($${args.length})`;
   }
   if (Number.isFinite(Number(since)) && since != null) {
     args.push(Number(since));

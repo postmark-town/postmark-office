@@ -446,6 +446,45 @@ export async function storeHoldingRows({ thing = null, since = null, until = nul
 }
 
 /**
+ * THE SET-DOWNS WAITING ON A HOUSE'S WORD — the holding record's rows for the
+ * things `handles` made, in ONE read-only transaction (POS-138, 2026-09-24).
+ *
+ * Answers `Map(thing -> { attachments, journal })`: exactly the envelope
+ * `standsRowsFromStore` answers for one thing, so `world-stance.mjs §
+ * setDownFor` reads it through its own `readRows` seam and stays the one place
+ * that decides whether a set-down is a stranger's. This function decides
+ * nothing: it enumerates.
+ *
+ * WHAT IT READS: the holding acts on things these handles made (one query,
+ * `pgHoldingRows`' `madeBy` narrowing), then the attachment acts of each of
+ * those things that has a drop on the record (one query per such thing). A
+ * thing never set down costs no second query. Null when the office is not
+ * pointed at the record, which is "I could not look", never "nothing waits".
+ */
+export async function setDownRowsForMakers(handles) {
+  if (!world2Enabled()) return null;
+  const makers = [...new Set([...(handles ?? [])].map(String).filter(Boolean))].sort();
+  if (!makers.length) return new Map();
+  return reading(async (client) => {
+    const journal = await port.pgHoldingRows(client, { madeBy: makers });
+    const byThing = new Map();
+    for (const r of journal) {
+      const thing = String(r.object ?? r.payload?.thing ?? "");
+      if (!thing) continue;
+      if (!byThing.has(thing)) byThing.set(thing, []);
+      byThing.get(thing).push(r);
+    }
+    const out = new Map();
+    for (const [thing, rows] of [...byThing].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+      if (!rows.some((r) => r.action === "drop")) continue;
+      const held = await port.pgAttachmentsFor(client, { target: thing });
+      out.set(thing, { attachments: held.rows, journal: rows });
+    }
+    return out;
+  });
+}
+
+/**
  * `readAttachments(db)`, from the record — the whole town's edge, never
  * narrowed, for `pgAttachmentsFor`'s own reason: "narrowing it to one target
  * would change the answer, not just the cost."
