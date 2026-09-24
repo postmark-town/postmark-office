@@ -31,6 +31,7 @@ import { NO_TOWN, townClone, townModuleUrl } from "./fixture-paths.mjs";
 import {
   decide, decodeSession, resolveSession, listCompleteSessions, stripeReader,
   OUTSIDE_FROM, HANDLE_FIELD, RAIL, MIN_USD,
+  readSettlements, settlementOf, foldSettlements, unwitnessedSeen, witnessedRow, SETTLEMENT_EXPAND,
 } from "../tools/stripe-watch.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -50,11 +51,22 @@ const CS_B = "cs_test_b22222222222222222222222";
 const CS_C = "cs_test_c33333333333333333333333";
 
 // ── a Stripe account that honours the query ─────────────────────────────────
-function stripeAccount({ sessions = [], throws = false } = {}) {
+// `intents` answers GET /payment_intents/<id>, the settlement read (POS-183).
+// It honours the query too: without the expansion the watcher asks for, the
+// charge comes back as a bare id, exactly as Stripe returns it.
+function stripeAccount({ sessions = [], throws = false, intents = {} } = {}) {
   const calls = [];
   const stripe = async (path, params = {}) => {
     calls.push({ path, params });
     if (throws) throw new Error("Stripe refused the read (401): Invalid API Key provided");
+    if (path.startsWith("/payment_intents/")) {
+      const id = decodeURIComponent(path.slice("/payment_intents/".length));
+      const intent = intents[id];
+      if (!intent) throw new Error(`Stripe refused the read (404): No such payment_intent: '${id}'`);
+      if (params["expand[]"] !== "latest_charge.balance_transaction")
+        return { ...intent, latest_charge: intent.latest_charge?.id ?? null };
+      return intent;
+    }
     if (path !== "/checkout/sessions") throw new Error(`unexpected path ${path}`);
     let rows = sessions.slice();
     if (params.status) rows = rows.filter((s) => s.status === params.status);
@@ -536,7 +548,11 @@ test("test-mode money, unpaid sessions, foreign currency and sub-dollar amounts 
 
   assert.equal(at({ id: CS_A, livemode: false }).anomaly, "testmode");
   assert.equal(at({ id: CS_A, payment_status: "unpaid" }).anomaly, "unpaid");
-  assert.equal(at({ id: CS_A, currency: "eur" }).anomaly, "not-usd");
+  // MOVED 2026-09-23 (POS-183), on purpose: a EUR session is no longer
+  // `not-usd` by its presentment. With no settlement read it is `unsettled`;
+  // `not-usd` is reserved for a balance transaction that is itself not in
+  // dollars. Both are asserted in THE SETTLED DOLLARS below.
+  assert.equal(at({ id: CS_A, currency: "eur" }).anomaly, "unsettled");
   const dust = at({ id: CS_A, amount: 50 });
   assert.equal(dust.anomaly, "under-a-dollar");
   assert.match(dust.rule, /cannot be witnessed as a receipt/);
@@ -668,4 +684,152 @@ test("the payer's email is journalled for the operator and never reaches a ledge
   assert.equal(r.email, "patron@example.test");
   await cliRecorder(town)(r);
   assert.ok(!ledgerText(town.repo).includes("patron@example.test"), "no email on the public ledger");
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// THE SETTLED DOLLARS (POS-183): Adaptive Pricing presents, the ledger records
+// what SETTLED
+// ════════════════════════════════════════════════════════════════════════════
+
+const intentOf = (id, bt) => ({
+  id, object: "payment_intent",
+  latest_charge: bt === null ? null : { id: `ch_${id.slice(3)}`, object: "charge", balance_transaction: { id: `txn_${id.slice(3)}`, object: "balance_transaction", ...bt } },
+});
+
+test("S1 · a session PRESENTED in EUR whose balance transaction is in USD is WITNESSED with the settled whole dollars", { skip: SKIP }, async () => {
+  // LAW (tools/stripe-watch.mjs, the header, verbatim): "`usd:` from the
+  //     balance transaction, whole dollars, cents disclosed as they always
+  //     were. The presented currency and amount ride the witnessed JOURNAL row
+  //     as a receipt".
+  const town = seamTown();
+  const now = 2_000_000_000_000;
+  const old = Math.floor(now / 1000) - 86_400;
+  // 18.40 EUR shown to the payer; $20.13 gross settled to the account
+  const raw = sess({ id: CS_A, created: old, amount: 1840, currency: "eur", handle: "paz" });
+  const acct = stripeAccount({ intents: { [raw.payment_intent]: intentOf(raw.payment_intent, { amount: 2013, currency: "usd", exchange_rate: 1.094 }) } });
+
+  const settlements = await readSettlements({ stripe: acct.stripe, rows: [decodeSession(raw)] });
+  assert.equal(acct.calls.length, 1, "one settlement read, for the one foreign session");
+  assert.equal(acct.calls[0].path, `/payment_intents/${raw.payment_intent}`);
+  assert.equal(acct.calls[0].params["expand[]"], SETTLEMENT_EXPAND, "the read asks Stripe to expand the charge down to its balance transaction");
+
+  const { todo, report } = decide({ sessions: [raw], settlements, ...ctx(town), now });
+  assert.equal(report.anomalies, 0, "a foreign presentment is no longer an anomaly for the founder's hand");
+  assert.equal(todo.length, 1);
+  const w = todo[0];
+  assert.equal(w.usd, 20, "the SETTLED whole dollars, not 18 (the euro figure read as dollars)");
+  assert.match(w.cents_note, /\$20\.13 arrived.*\$0\.13 is money the town holds/);
+  assert.deepEqual(w.presented, { currency: "eur", amount: 1840 });
+  assert.deepEqual(w.settled, { balance_transaction: `txn_${raw.payment_intent.slice(3)}`, currency: "usd", amount: 2013 });
+
+  // and the ROW the town writes carries those dollars, through the town's own CLI
+  await cliRecorder(town)(w);
+  const { receipts } = ENGINE.foldPotReceipts(entriesOf(town.repo));
+  const got = receipts.find((r) => r.ref === `stripe:${CS_A}`);
+  assert.equal(got.usd, 20);
+  assert.ok(!/eur|1840|presented/i.test(ledgerText(town.repo)), "the presentment rides the journal, never the ledger");
+});
+
+test("S2 · a session whose balance transaction is itself in EUR is `not-usd`, and nothing is witnessed", { skip: SKIP }, async () => {
+  // LAW (tools/stripe-watch.mjs, the header, verbatim): "`not-usd` now means
+  //     the BALANCE TRANSACTION itself is not in dollars".
+  const town = seamTown();
+  const now = 2_000_000_000_000;
+  const raw = sess({ id: CS_A, created: Math.floor(now / 1000) - 86_400, amount: 1840, currency: "eur", handle: "paz" });
+  const acct = stripeAccount({ intents: { [raw.payment_intent]: intentOf(raw.payment_intent, { amount: 1840, currency: "eur" }) } });
+  const settlements = await readSettlements({ stripe: acct.stripe, rows: [decodeSession(raw)] });
+  const { todo, report } = decide({ sessions: [raw], settlements, ...ctx(town), now });
+  assert.equal(todo.length, 0);
+  assert.equal(report.anomaly[0].anomaly, "not-usd");
+  assert.match(report.anomaly[0].why, /settled in EUR/);
+  assert.match(report.anomaly[0].resolves, /the founder, by hand/);
+});
+
+test("S3 · a USD session is untouched: no extra read, the same decoded row, the same plan, the same journal row", { skip: SKIP }, async () => {
+  // The ledger line is written from { pot, usd, from, ref } alone (src/fund.mjs
+  // penRecorder), so a dollar session whose plan and journal rows are key for
+  // key what they were cannot produce a different line. The key lists are
+  // LITERALS read off train/2026-w40 6b86776, not derived from the code under
+  // test.
+  const town = seamTown();
+  const now = 2_000_000_000_000;
+  const raw = sess({ id: CS_A, created: Math.floor(now / 1000) - 86_400, amount: 1050, handle: "paz" });
+  const acct = stripeAccount({ sessions: [raw] });
+
+  const d = decodeSession(raw);
+  assert.deepEqual(Object.keys(d), ["session", "receipt_ref", "created", "created_at", "amount_total", "currency", "client_reference_id", "handle_typed", "email", "payment_status", "livemode", "payment_intent"],
+    "the decoded (and journalled) row is the row it always was, with no `settled` key on a dollar session");
+
+  const settlements = await readSettlements({ stripe: acct.stripe, rows: [d] });
+  assert.equal(settlements.size, 0);
+  assert.equal(acct.calls.length, 0, "a dollar session is never asked about its settlement");
+
+  const { todo } = decide({ sessions: [raw], settlements, ...ctx(town), now });
+  const w = todo[0];
+  assert.equal(w.usd, 10);
+  assert.equal(w.presented, undefined);
+  assert.equal(w.settled, undefined);
+  assert.deepEqual(Object.keys(witnessedRow(w, { line: "L", commit: null }, "T")),
+    ["kind", "at", "session", "ref", "pot", "from", "usd", "attributed", "handle_typed", "line", "commit"]);
+
+  await cliRecorder(town)(w);
+  const { receipts } = ENGINE.foldPotReceipts(entriesOf(town.repo));
+  assert.equal(receipts.find((r) => r.ref === `stripe:${CS_A}`).usd, 10);
+});
+
+test("S4 · the witnessed journal row carries `presented` and `settled`; a late settlement is journalled and folded back", { skip: SKIP }, async () => {
+  // LAW (tools/stripe-watch.mjs, the header, verbatim): "The settlement is
+  //     JOURNALLED (on the `seen` row, or on a `settled` row when it arrives
+  //     later), because tools/funding-report.mjs re-decides these rows from the
+  //     journal with no key and no network."
+  const town = seamTown();
+  const now = 2_000_000_000_000;
+  const raw = sess({ id: CS_A, created: Math.floor(now / 1000) - 86_400, amount: 1840, currency: "gbp", handle: "paz" });
+  const settled = { balance_transaction: "txn_x", currency: "usd", amount: 2311 };
+  const { todo } = decide({ sessions: [raw], settlements: new Map([[CS_A, settled]]), ...ctx(town), now });
+  const row = witnessedRow(todo[0], { line: "L", commit: "c" }, "T");
+  assert.deepEqual(row.presented, { currency: "gbp", amount: 1840 });
+  assert.deepEqual(row.settled, settled);
+  assert.equal(row.usd, 23);
+
+  // the journal as the watcher leaves it when the settlement arrived a tick late
+  const journal = [
+    { kind: "seen", at: "T0", ...decodeSession(raw) },
+    { kind: "settled", at: "T1", session: CS_A, settled },
+  ];
+  const [behind] = unwitnessedSeen(foldSettlements(journal));
+  assert.deepEqual(behind.settled, settled, "the late `settled` row reaches the seen row");
+  const again = decide({ sessions: [], journal: [behind], ...ctx(town), now });
+  assert.equal(again.todo[0].usd, 23, "and the row behind the cursor is decided from the settled dollars with no read at all");
+});
+
+test("S5 · no balance transaction yet, or a failed read, is `unsettled`, and it holds up nothing behind it", { skip: SKIP }, async () => {
+  const town = seamTown();
+  const now = 2_000_000_000_000;
+  const old = Math.floor(now / 1000) - 86_400;
+  const pending = sess({ id: CS_A, created: old, amount: 1840, currency: "eur", handle: "paz" });
+  const missing = sess({ id: CS_B, created: old, amount: 1840, currency: "eur", handle: "paz" });
+  const dollars = sess({ id: CS_C, created: old, amount: 1000, handle: "paz" });
+  const acct = stripeAccount({ intents: { [pending.payment_intent]: intentOf(pending.payment_intent, null) } });
+  const settlements = await readSettlements({ stripe: acct.stripe, rows: [pending, missing, dollars].map(decodeSession) });
+  const { todo, report } = decide({ sessions: [pending, missing, dollars], settlements, ...ctx(town), now });
+  const by = Object.fromEntries(report.anomaly.map((a) => [a.session, a]));
+  assert.equal(by[CS_A].anomaly, "unsettled");
+  assert.match(by[CS_A].why, /18\.40 EUR/);
+  assert.match(by[CS_A].resolves, /every tick re-reads it/);
+  assert.equal(by[CS_B].anomaly, "unsettled");
+  assert.match(by[CS_B].why, /No such payment_intent/, "the failed read's own words reach the operator");
+  assert.deepEqual(todo.map((w) => w.session), [CS_C], "the dollar session behind them is witnessed regardless");
+});
+
+test("S6 · an EXPANDED listing decodes to the same settlement the two-call read returns", { skip: SKIP }, async () => {
+  // One reading of one shape: settlementOf is asked of both.
+  const raw = sess({ id: CS_A, created: 1, amount: 1840, currency: "eur" });
+  const intent = intentOf(raw.payment_intent, { amount: 2013, currency: "USD" });
+  const d = decodeSession({ ...raw, payment_intent: intent });
+  assert.equal(d.payment_intent, raw.payment_intent, "the id survives the expansion");
+  assert.deepEqual(d.settled, settlementOf(intent));
+  assert.equal(d.settled.currency, "usd", "currency is lower-cased like the session's own");
+  // and an unexpanded charge (a bare id) is no settlement at all
+  assert.equal(settlementOf({ ...intent, latest_charge: "ch_x" }), null);
 });

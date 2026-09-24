@@ -142,6 +142,44 @@
 // real ones. A test payment must never become a real ledger row, so
 // `livemode: false` is an anomaly (`testmode`), never a witness.
 //
+// ── THE SETTLED DOLLARS (POS-183, 2026-09-23) ───────────────────────────────
+//
+// The ledger's `usd:` is a whole number of US dollars. Until this change the
+// watcher took it from `session.amount_total` and refused any session whose
+// `currency` was not "usd" as `not-usd`, for the founder's hand. Account-level
+// Adaptive Pricing is ON (Keemin, 2026-09-21), so Stripe may PRESENT a Payment
+// Link in the payer's currency. The session's `currency` and `amount_total`
+// are then the PRESENTED ones, in GBP or EUR, and every international payment
+// would have landed on the anomaly list instead of on the ledger.
+//
+// Stripe settles every such payment to the account's currency, and the dollars
+// that settled are on the charge's BALANCE TRANSACTION:
+// `payment_intent → latest_charge → balance_transaction.amount`, in the
+// settlement currency's minor units, GROSS (before Stripe's fee). Gross is what
+// `amount_total` has always meant for a dollar session, so a dollar on the
+// ledger means the same thing whichever currency the page was shown in.
+//
+// So, for a session presented in anything but dollars:
+//
+//   read   the payment intent, with `expand[]=latest_charge.balance_transaction`
+//          (`readSettlement`, a second call per non-dollar session only). A
+//          dollar session makes no extra call and resolves exactly as before.
+//   write  `usd:` from the balance transaction, whole dollars, cents disclosed
+//          as they always were. The presented currency and amount ride the
+//          witnessed JOURNAL row as a receipt — `presented: { currency, amount }`
+//          in Stripe's minor units — and never the ledger row, whose grammar is
+//          unchanged.
+//   refuse `not-usd` now means the BALANCE TRANSACTION itself is not in dollars,
+//          which only an account that stopped settling to dollars can produce.
+//          A session whose settlement has not been read (no charge yet, or the
+//          read failed) is `unsettled`, and every tick re-reads it.
+//
+// The settlement is JOURNALLED (on the `seen` row, or on a `settled` row when it
+// arrives later), because tools/funding-report.mjs re-decides these rows from
+// the journal with no key and no network. A settlement held only in this
+// process's memory would give the report and the tick two answers for one
+// payment — the report would say "unsettled" over a dollar the tick witnessed.
+//
 // Usage: node tools/stripe-watch.mjs [--state <state.json>] [--journal <j.jsonl>]
 //                                    [--out <report.json>] [--clone <town-clone>]
 //                                    [--since <ISO|unix>] [--dry-run] [--json]
@@ -322,7 +360,76 @@ export function decodeSession(s) {
     payment_status: String(s?.payment_status ?? ""),
     livemode: s?.livemode === true,
     payment_intent: typeof s?.payment_intent === "string" ? s.payment_intent : (s?.payment_intent?.id ?? null),
+    // Present only when the listing itself was expanded down to the balance
+    // transaction. Absent, not null, otherwise, so a dollar session decodes to
+    // exactly the row it always did.
+    ...(settlementOf(s?.payment_intent) ? { settled: settlementOf(s.payment_intent) } : {}),
   };
+}
+
+// ── the settled dollars (see THE SETTLED DOLLARS in the header) ─────────────
+
+/**
+ * The settlement a payment intent carries, if its charge's balance transaction
+ * is expanded. Pure. The one reading of that shape: `decodeSession` asks it of
+ * an expanded listing and `readSettlement` asks it of a retrieved intent.
+ */
+export function settlementOf(pi) {
+  const bt = pi && typeof pi === "object" ? pi.latest_charge?.balance_transaction : null;
+  if (!bt || typeof bt !== "object" || bt.currency == null || !Number.isFinite(Number(bt.amount))) return null;
+  return { balance_transaction: String(bt.id ?? ""), currency: String(bt.currency).toLowerCase(), amount: Number(bt.amount) };
+}
+
+/** A decoded session whose dollars must come from its balance transaction. */
+export const needsSettlement = (s) =>
+  !!s && s.currency !== "usd" && !s.settled && !!s.payment_intent && s.payment_status === "paid";
+
+export const SETTLEMENT_EXPAND = "latest_charge.balance_transaction";
+
+/** One payment intent's settlement, read from Stripe. null = no balance transaction yet. */
+export async function readSettlement({ stripe, paymentIntent }) {
+  const pi = await stripe(`/payment_intents/${encodeURIComponent(paymentIntent)}`, { "expand[]": SETTLEMENT_EXPAND });
+  return settlementOf(pi);
+}
+
+/**
+ * The settlements for every decoded row that needs one, keyed by session id.
+ * A read that fails is an ANSWER, not a crash: it maps to `{ error }`, the rule
+ * names it as `unsettled`, and the next tick tries again. One foreign card must
+ * not stop the dollar sessions behind it.
+ */
+export async function readSettlements({ stripe, rows }) {
+  const out = new Map();
+  for (const s of rows ?? []) {
+    if (!needsSettlement(s) || out.has(s.session)) continue;
+    try {
+      const settled = await readSettlement({ stripe, paymentIntent: s.payment_intent });
+      out.set(s.session, settled ?? { error: "the charge has no balance transaction yet" });
+    } catch (e) {
+      out.set(s.session, { error: String(e?.message ?? e).slice(0, 200) });
+    }
+  }
+  return out;
+}
+
+/** A decoded row with its settlement applied, if one was read and it has none. */
+export function withSettlement(s, settlements) {
+  if (!s || s.settled || !settlements?.has(s.session)) return s;
+  const got = settlements.get(s.session);
+  return got.error ? { ...s, settle_error: got.error } : { ...s, settled: got };
+}
+
+/**
+ * The journal with every `settled` row folded onto its session's `seen` row.
+ * Pure. A settlement read after the session was first journalled is appended
+ * as its own row (the journal is append-only), so every reader of `seen` rows
+ * — this watcher and tools/funding-report.mjs alike — reads through this.
+ */
+export function foldSettlements(rows) {
+  const settled = new Map();
+  for (const r of rows ?? []) if (r?.kind === "settled" && r.session && r.settled) settled.set(r.session, r.settled);
+  if (!settled.size) return rows ?? [];
+  return (rows ?? []).map((r) => (r?.kind === "seen" && !r.settled && settled.has(r.session) ? { ...r, settled: settled.get(r.session) } : r));
 }
 
 // ── the rule ────────────────────────────────────────────────────────────────
@@ -354,10 +461,29 @@ export function resolveSession(s, { engine, entries, clone, households, loginHan
     return { ...s, ...anomaly("testmode", "this is a TEST-MODE session", "a test payment must never become a real ledger row", "nothing — test money stays test money; if this is unexpected the box is holding a test key") };
   if (s.payment_status !== "paid")
     return { ...s, ...anomaly("unpaid", `payment_status is "${s.payment_status}", not "paid"`, "a receipt witnesses a payment that was actually made", "Stripe, when the payment settles — the next tick re-reads it") };
-  if (s.currency !== "usd")
-    return { ...s, ...anomaly("not-usd", `this session is in ${s.currency.toUpperCase()}, and the ledger records dollars`, "the pot-receipt grammar's `usd:` is a whole number of US dollars", "the founder, by hand — there is no rate anywhere in the town to convert it") };
+  // THE DOLLARS. A dollar session's are its own amount_total. Any other
+  // session's are the ones Stripe SETTLED, off the balance transaction — never
+  // a rate the town computes. See THE SETTLED DOLLARS in the header.
+  let minor = s.amount_total;
+  let presented = null;
+  if (s.currency !== "usd") {
+    const shown = `${(s.amount_total / 100).toFixed(2)} ${s.currency.toUpperCase()}`;
+    const rule = "the pot-receipt grammar's `usd:` is a whole number of US dollars; a payment presented in another currency is recorded at the dollars Stripe SETTLED it to (its charge's balance transaction), never at a rate the town computes";
+    if (!s.settled) {
+      const why = s.settle_error
+        ? `this session was presented in ${shown}, and reading what it settled to in dollars failed: ${s.settle_error}`
+        : s.payment_intent
+          ? `this session was presented in ${shown}, and what it settled to in dollars has not been read yet`
+          : `this session was presented in ${shown} and carries no payment_intent, so there is no charge to read its settled dollars from`;
+      return { ...s, ...anomaly("unsettled", why, rule, s.payment_intent ? "Stripe, when the charge's balance transaction exists — every tick re-reads it" : "the founder, by hand — there is no charge behind this session to read") };
+    }
+    if (s.settled.currency !== "usd")
+      return { ...s, ...anomaly("not-usd", `this payment settled in ${s.settled.currency.toUpperCase()} (balance transaction ${s.settled.balance_transaction}), not in US dollars, and the ledger records dollars`, rule, "the founder, by hand — the account itself did not settle to dollars, and there is no rate anywhere in the town to convert it") };
+    minor = s.settled.amount;
+    presented = { currency: s.currency, amount: s.amount_total };
+  }
 
-  const usdTotal = s.amount_total / 100;
+  const usdTotal = minor / 100;
   const whole = Math.floor(usdTotal);
   const cents = Number((usdTotal - whole).toFixed(2));
   if (whole < minUsd)
@@ -397,6 +523,9 @@ export function resolveSession(s, { engine, entries, clone, households, loginHan
     ...(hand.via ? { attributed_via: hand.via } : {}),
     ...(hand.pin_note ? { pin_note: hand.pin_note } : {}),
     handle_typed: typed,
+    // The receipt of a foreign presentment. Journal-only: record() takes pot,
+    // usd, from and ref, so nothing here can reach the ledger row.
+    ...(presented ? { presented, settled: s.settled } : {}),
     ...(cents > 0 ? {
       cents_note: `$${usdTotal.toFixed(2)} arrived; the ledger records whole dollars, so $${whole} is witnessed against the pot and the remaining $${cents.toFixed(2)} is money the town holds that priced nothing.`,
     } : {}),
@@ -547,8 +676,12 @@ export function unwitnessedSeen(rows) {
  * "what Stripe has shown us", and this is a fix TO a cursor bug, so it must not
  * quietly be a second change to what the cursor means.
  */
-export function decide({ sessions, journal = [], engine, entries, clone, households, loginHands = null, now = Date.now(), graceMs = CROSSING_MS, minUsd = MIN_USD, allowTestmode = false, cursor = null }) {
-  const live = sessions.map(decodeSession);
+export function decide({ sessions, journal = [], settlements = null, engine, entries, clone, households, loginHands = null, now = Date.now(), graceMs = CROSSING_MS, minUsd = MIN_USD, allowTestmode = false, cursor = null }) {
+  // `settlements` is `readSettlements(...)`'s map, read by the caller so this
+  // stays pure. Applied to live and journal rows alike; a row that already
+  // carries its settlement keeps it.
+  const live = sessions.map(decodeSession).map((s) => withSettlement(s, settlements));
+  journal = journal.map((r) => withSettlement(r, settlements));
   const maxCreated = live.reduce((a, s) => Math.max(a, s.created), cursor ?? 0);
 
   const byId = new Map(live.map((s) => [s.session, s]));
@@ -612,6 +745,28 @@ export function appendJournal(p, rows) {
   if (!rows.length) return;
   mkdirSync(dirname(p), { recursive: true });
   appendFileSync(p, rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
+}
+
+// A settlement worth journalling: a read that succeeded. Errors are not facts.
+const settledOnly = (session, settlements) => {
+  const got = settlements?.get(session);
+  return got && !got.error ? { settled: got } : {};
+};
+
+/**
+ * The journal row for one witnessed payment. Exported so a falsifier can read
+ * its shape without a pen. A payment presented in another currency carries
+ * `presented` (currency + amount in Stripe's minor units) and `settled` (the
+ * balance transaction the dollars came from); a dollar payment's row is
+ * exactly the row it always was.
+ */
+export function witnessedRow(w, out, at = new Date().toISOString()) {
+  return {
+    kind: "witnessed", at, session: w.session, ref: w.ref, pot: w.pot, from: w.from, usd: w.usd,
+    attributed: w.attributed, handle_typed: w.handle_typed,
+    ...(w.presented ? { presented: w.presented, settled: w.settled } : {}),
+    line: out?.line ?? null, commit: out?.commit ?? null,
+  };
 }
 
 export const readState = (p) => { try { return JSON.parse(readFileSync(p, "utf8")); } catch { return {}; } };
@@ -686,18 +841,41 @@ async function main() {
   // decide which of this listing's sessions are new enough to journal. One read
   // because two reads of an append-only file inside one tick can disagree, and
   // a dedupe set that disagrees with the re-decide set is a double-witness.
-  const journalRows = readJournal(journalPath);
+  const journalRows = foldSettlements(readJournal(journalPath));
+  const behind = unwitnessedSeen(journalRows);
+
+  // THE THIRD READ, for non-dollar sessions only: what each one SETTLED to.
+  // Asked of the live listing and of the journal's rows alike, because a row
+  // the cursor has left behind is decided from the journal and needs its
+  // dollars just the same. A dollar session is never asked about, and neither
+  // is one the journal already holds a settlement for: a balance transaction's
+  // amount never changes once written (a refund is a transaction of its own),
+  // so the boundary second's re-read costs no second call.
+  const remembered = new Map(journalRows.filter((r) => r.kind === "seen" && r.settled).map((r) => [r.session, r.settled]));
+  const settlements = await readSettlements({
+    stripe,
+    rows: [...sessions.map(decodeSession), ...behind].map((s) => (remembered.has(s.session) ? { ...s, settled: remembered.get(s.session) } : s)),
+  });
+  for (const [session, settled] of remembered) if (!settlements.has(session)) settlements.set(session, settled);
+
   const { report, todo, cursor: next } = decide({
-    sessions, journal: unwitnessedSeen(journalRows), engine, entries, clone, households, loginHands, cursor,
+    sessions, journal: behind, settlements, engine, entries, clone, households, loginHands, cursor,
   });
   if (coldStart) report.coldstart = `no cursor: this run read only the last ${COLDSTART_DAYS} days. A session older than ${iso(coldFloor)} was NOT read — sweep it with --since.`;
 
   // journal every session not already known, plus every disposition this tick
-  const known = new Set(journalRows.filter((r) => r.kind === "seen").map((r) => r.session));
+  const known = new Map(journalRows.filter((r) => r.kind === "seen").map((r) => [r.session, r]));
+  // A new session is journalled WITH its settlement when one was read (never
+  // with a failed read's error — that is this tick's weather, not a fact about
+  // the payment). A known session whose settlement arrives only now gets a
+  // `settled` row, because the journal is append-only and the report reads it.
   const seenRows = sessions.map(decodeSession)
     .filter((s) => !known.has(s.session))
-    .map((s) => ({ kind: "seen", at: report.generated_at, ...s }));
-  appendJournal(journalPath, seenRows);
+    .map((s) => ({ kind: "seen", at: report.generated_at, ...s, ...settledOnly(s.session, settlements) }));
+  const lateSettled = [...known.values()]
+    .filter((r) => !r.settled && settledOnly(r.session, settlements).settled)
+    .map((r) => ({ kind: "settled", at: report.generated_at, session: r.session, ...settledOnly(r.session, settlements) }));
+  appendJournal(journalPath, [...seenRows, ...lateSettled]);
 
   const written = [];
   if (!dryRun && todo.length) {
@@ -711,7 +889,7 @@ async function main() {
     for (const w of todo) {
       try {
         const out = await record({ pot: w.pot, usd: w.usd, from: w.from, ref: w.ref });
-        written.push({ kind: "witnessed", at: new Date().toISOString(), session: w.session, ref: w.ref, pot: w.pot, from: w.from, usd: w.usd, attributed: w.attributed, handle_typed: w.handle_typed, line: out?.line ?? null, commit: out?.commit ?? null });
+        written.push(witnessedRow(w, out));
       } catch (e) {
         // A refusal is an answer, not a crash: journal it and keep going, so one
         // bad session cannot hold up the queue behind it. The ref is unspent,
