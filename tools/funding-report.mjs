@@ -58,6 +58,7 @@ import { townDay } from "../src/ops.mjs";
 import { readIntakeMap, SINK_RULE, STATE_PATH as USDC_STATE, REPORT_NAME as USDC_REPORT_NAME } from "./usdc-watch.mjs";
 import {
   resolveSession, decodeSession, listCompleteSessions, stripeReader, readJournal, readState, COLDSTART_DAYS,
+  readSettlements, withSettlement, foldSettlements,
   STATE_PATH as STRIPE_STATE, JOURNAL_PATH as STRIPE_JOURNAL,
 } from "./stripe-watch.mjs";
 
@@ -70,6 +71,13 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 export const STALE_MINUTES = 60;
 
 const usd = (n) => "$" + Number(n).toLocaleString("en-US");
+// A session's own amount in the currency it was PRESENTED in. A dollar session
+// reads exactly as before; a foreign one is never printed with a dollar sign.
+const presentedAmount = (s) => (s.currency && s.currency !== "usd"
+  ? `${((s.amount_total ?? 0) / 100).toFixed(2)} ${s.currency.toUpperCase()}`
+  : usd((s.amount_total ?? 0) / 100));
+// The receipt of a foreign presentment, where the operator reads it (POS-183).
+const settledNote = (p) => `presented as ${(p.presented.amount / 100).toFixed(2)} ${p.presented.currency.toUpperCase()}; it settled to ${usd(p.settled.amount / 100)} (balance transaction \`${p.settled.balance_transaction}\`), and the ledger records the settled dollars.`;
 
 // ── the one-command manual witness (STAGE A's whole write path) ─────────────
 // It is not a new tool. It is the SAME recorder the /fund door and both watchers
@@ -141,7 +149,7 @@ export function anomalies({ fold, potsInvalid, stripe, usdcReport, walletInvalid
     add("intake-map", r.row_kind, r.line, r.reason, "a fix to deploy/intake-addresses.json in the office repo");
 
   for (const a of stripe.anomaly)
-    add("stripe", a.anomaly, `${a.session} · ${usd((a.amount_total ?? 0) / 100)}${a.email ? ` · ${a.email}` : ""}`, a.why, a.resolves);
+    add("stripe", a.anomaly, `${a.session} · ${presentedAmount(a)}${a.email ? ` · ${a.email}` : ""}`, a.why, a.resolves);
   for (const n of usdcReport?.needs_pot ?? [])
     add("usdc", "needs-pot", `${n.txhash} · ${usd(n.usd)} · ${n.handle}`, n.why, "the payer names the pot (or witnesses it from that pot's own /fund/ page), or the founder mints a per-pot intake address and deploy/intake-addresses.json names it");
   for (const o of usdcReport?.over_cap ?? [])
@@ -167,8 +175,8 @@ export function readyToWitness({ stripe, usdcReport, date }) {
     rail, ...plan, ...extra,
     command: witnessCommand({ pot: plan.pot, usd: plan.usd, from: plan.from, ref: plan.ref, rail, date }),
   });
-  for (const w of stripe.witness ?? []) add("stripe", w, { session: w.session, fresh: false, handle_typed: w.handle_typed ?? null, email: w.email ?? null });
-  for (const h of stripe.hold ?? []) add("stripe", h.plan, { session: h.session, fresh: true, handle_typed: h.plan.handle_typed ?? null, email: h.email ?? null, note: "created recently — Stage B would hold this one to let a mistyped handle be caught. In Stage A you are that window: check the typed handle before pasting." });
+  for (const w of stripe.witness ?? []) add("stripe", w, { session: w.session, fresh: false, handle_typed: w.handle_typed ?? null, email: w.email ?? null, ...(w.presented ? { note: settledNote(w) } : {}) });
+  for (const h of stripe.hold ?? []) add("stripe", h.plan, { session: h.session, fresh: true, handle_typed: h.plan.handle_typed ?? null, email: h.email ?? null, note: `created recently — Stage B would hold this one to let a mistyped handle be caught. In Stage A you are that window: check the typed handle before pasting.${h.plan.presented ? ` ${settledNote(h.plan)}` : ""}` });
   for (const w of usdcReport?.witness ?? []) add("usdc", w, { txhash: w.txhash, fresh: false });
   for (const h of usdcReport?.hold ?? []) add("usdc", h.plan, { txhash: h.txhash, fresh: true, note: "recent — check it before pasting." });
   return out;
@@ -416,15 +424,21 @@ async function main() {
   if (engine && process.env.STRIPE_KEY) {
     const days = Number(arg("days", COLDSTART_DAYS));
     try {
+      const reader = stripeReader({
+        key: process.env.STRIPE_KEY,
+        apiVersion: process.env.STRIPE_API_VERSION ?? null,
+        api: process.env.STRIPE_API || undefined,
+      });
       const sessions = await listCompleteSessions({
-        stripe: stripeReader({
-          key: process.env.STRIPE_KEY,
-          apiVersion: process.env.STRIPE_API_VERSION ?? null,
-          api: process.env.STRIPE_API || undefined,
-        }),
+        stripe: reader,
         createdGte: Math.floor(now / 1000) - days * 86_400,
       });
-      stripe = decided(sessions.map(decodeSession).map((x) => ({ ...x, kind: "seen" })));
+      // A session presented in another currency is decided from the dollars it
+      // SETTLED to, read here exactly as the watcher reads them (POS-183), so
+      // this page and the tick name the same dollars.
+      const rows = sessions.map(decodeSession);
+      const settlements = await readSettlements({ stripe: reader, rows });
+      stripe = decided(rows.map((x) => ({ ...withSettlement(x, settlements), kind: "seen" })));
       stripeRail = { rail: "stripe (live read)", ok: true, last_run: new Date(now).toISOString(), note: `read live just now — ${sessions.length} completed session(s) in the last ${days} days` };
     } catch (e) {
       // A read that failed is LOUD. Reporting an empty card queue because Stripe
@@ -432,7 +446,10 @@ async function main() {
       stripeRail = { rail: "stripe (live read)", ok: false, last_run: null, note: `the live read FAILED (${String(e?.message ?? e).slice(0, 160)}) — the card rail was NOT read` };
     }
   } else if (engine && existsSync(journalPath)) {
-    stripe = decided(readJournal(journalPath).filter((r) => r.kind === "seen"));
+    // foldSettlements: a settlement the watcher read after it first journalled
+    // the session rides its own `settled` row, and must reach the seen row here
+    // or this page calls "unsettled" a dollar the tick has witnessed.
+    stripe = decided(foldSettlements(readJournal(journalPath)).filter((r) => r.kind === "seen"));
     const st = readState(arg("stripe-state", STRIPE_STATE));
     stripeRail = railHealth("stripe-watch (journal)", st, { now });
   }

@@ -421,6 +421,50 @@ test("Stage A's report and Stage B's tick resolve the SAME payment to the SAME h
 });
 
 
+test("POS-183 · the report reads a EUR payment's SETTLED dollars from the journal, the late `settled` row included", { skip: SKIP }, () => {
+  // LAW (tools/stripe-watch.mjs, the header, verbatim): "A settlement held
+  //     only in this process's memory would give the report and the tick two
+  //     answers for one payment — the report would say "unsettled" over a
+  //     dollar the tick witnessed."
+  //
+  // Driven through the report's own CLI with no STRIPE_KEY, so it takes the
+  // journal branch the box's operator reads. The settlement arrives as its own
+  // row a tick after the session was first journalled, which is the case a
+  // reader of `seen` rows alone would get wrong.
+  const town = seamTown();
+  const scratch = mkdtempSync(join(tmpdir(), "report-settled-"));
+  const created = Math.floor(Date.now() / 1000) - 2 * 86_400;
+  const raw = {
+    id: "cs_live_eur000000000000000000000", object: "checkout.session", created, status: "complete", payment_status: "paid",
+    livemode: true, amount_total: 1840, currency: "eur", client_reference_id: "keep",
+    customer_details: { email: "payer@example.test" },
+    custom_fields: [{ key: HANDLE_FIELD, type: "text", text: { value: "paz" } }],
+    payment_intent: "pi_eur",
+  };
+  const pending = { ...raw, id: "cs_live_eurpending000000000000000", payment_intent: "pi_pending" };
+  const journalPath = join(scratch, "stripe-intake.jsonl");
+  writeFileSync(journalPath, [
+    { kind: "seen", at: "T0", ...decodeSession(raw) },
+    { kind: "seen", at: "T0", ...decodeSession(pending) },
+    { kind: "settled", at: "T1", session: raw.id, settled: { balance_transaction: "txn_eur", currency: "usd", amount: 2013 } },
+  ].map((r) => JSON.stringify(r)).join("\n") + "\n");
+
+  const out = execFileSync(process.execPath, [
+    join(HERE, "..", "tools", "funding-report.mjs"),
+    "--clone", town.repo,
+    "--stripe-state", join(scratch, "state.json"),
+    "--stripe-journal", journalPath,
+    "--usdc-state", join(scratch, "usdc-state.json"),
+    "--usdc-report", join(scratch, "usdc-report.json"),
+  ], { encoding: "utf8", env: { ...process.env, STRIPE_KEY: "", TOWN_CLONE: "" }, maxBuffer: 16 * 1024 * 1024 });
+
+  assert.match(out, /"usd":20/, "the paste-ready command carries the settled whole dollars");
+  assert.match(out, /presented as 18\.40 EUR; it settled to \$20\.13/, "and the page says what was shown and what settled");
+  // the one still waiting on its balance transaction is named in its own currency
+  assert.match(out, /cs_live_eurpending0+ · 18\.40 EUR/);
+  assert.doesNotMatch(out, /\$18\.4\b/, "a euro amount is never printed with a dollar sign");
+});
+
 test("a payment resolved through a PIN says so on the page a person actually reads", { skip: SKIP }, () => {
   // LAW (tools/stripe-watch.mjs, the header, verbatim): "AND IT SAYS SO ON THE
   //     ROW. The pin is the only channel that pays a hand the payer did not
