@@ -78,6 +78,15 @@ export function makePool(seed) {
     pins: seed.pins.map((r) => ({ ...r })),
     meta: { ...seed.meta },
     writes: { households: 0, pins: 0 },
+    // THE WORLD'S HALF, for the ceremony's adoption (POS-212). A suite that
+    // seeds only the registry holds no marks, and "no marks" is then the TRUE
+    // answer to the adoption's read rather than a kindness — the store it
+    // stands in for would say the same. `test/solo-adoption.test.mjs` seeds
+    // marks and an open window and reads back what the one statement wrote.
+    marks: (seed.marks ?? []).map((m) => ({ ...m })),
+    claims: (seed.claims ?? []).map((c) => ({ ...c })),
+    acts: (seed.acts ?? []).map((a) => ({ ...a })),
+    windows: (seed.windows ?? []).map((w) => ({ ...w })),
   };
   return {
     state,
@@ -159,6 +168,39 @@ export function makePool(seed) {
         return { rows: [...state.pins].sort((a, b) => (a.handle < b.handle ? -1 : 1)).map((r) => ({ ...r, gh_id: String(r.gh_id) })) };
       if (/FROM registry_meta/.test(text))
         return { rows: Object.entries(state.meta).map(([key, value]) => ({ key, value: asJsonbReturns(value) })) };
+      // ── THE ADOPTION'S STATEMENTS (src/solo-adoption.mjs), answered as they read ──
+      if (/FROM marks\s+WHERE status = 'standing' AND household LIKE 'solo:%'/.test(text))
+        return { rows: state.marks.filter((m) => m.status === "standing" && String(m.household).startsWith("solo:")).map((m) => ({ ...m })) };
+      if (/FROM marks\s+WHERE status = 'standing' AND kind = 'parcel' AND household NOT LIKE 'solo:%'/.test(text))
+        return { rows: state.marks.filter((m) => m.status === "standing" && m.kind === "parcel" && !String(m.household).startsWith("solo:")).map((m) => ({ ...m })) };
+      if (/SELECT supersedes::text AS id FROM claims/.test(text))
+        return { rows: state.claims.filter((c) => c.status === "pending" && c.supersedes != null && c.data?._adopted).map((c) => ({ id: String(c.supersedes) })) };
+      if (/^\s*WITH open_window AS/.test(text)) {
+        // One statement: the act only if a window is open AND a mark is still
+        // eligible, then one pending claim per eligible mark — every column read
+        // off the mark, exactly as the SQL does.
+        const [actor, key, payload, effect, ids] = params;
+        const win = state.windows.filter((w) => w.status === "open").sort((a, b) => b.id - a.id)[0];
+        const eligible = state.marks.filter((m) => ids.includes(String(m.id)) && m.status === "standing"
+          && String(m.household).startsWith("solo:")
+          && !state.claims.some((c) => c.status === "pending" && String(c.supersedes) === String(m.id) && c.data?._adopted));
+        if (!win || !eligible.length) return { rows: [] };
+        const act = { id: state.acts.length + 1, actor, action: "adopt", object: key, class: "household",
+          payload: JSON.parse(payload), effect, household: key };
+        state.acts.push(act);
+        const out = [];
+        for (const m of eligible) {
+          const id = `adopt-${state.claims.length + 1}`;
+          state.claims.push({
+            id, window_id: win.id, class: m.kind, claimant: m.owner, household: key, body: m.body,
+            geometry: m.geometry, bbox: m.bbox, stake: 0, supersedes: m.id, parent: m.parent ?? null,
+            data: { ...(m.data ?? {}), _adopted: { from: m.household, to: key, at: "ceremony" }, _act_id: String(act.id) },
+            slug: m.slug, status: "pending",
+          });
+          out.push({ id, slug: m.slug });
+        }
+        return { rows: out };
+      }
       throw new Error(`the stub pool was asked something it does not answer: ${text}`);
     },
   };

@@ -62,6 +62,7 @@ import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { execFileSync } from "node:child_process";
+import { soloHouseIndex, soloHouseOf, isSolo } from "../../src/solo-adoption.mjs";
 
 /** The check name this writes into `claims.refusal_check` — the prefix `causeOf` splits on. */
 export const PARCEL_CAP_CHECK = "parcel-cap";
@@ -249,3 +250,38 @@ export const credOf = (household, resolve = null) => {
   const slug = typeof resolve === "function" ? resolve(household) : null;
   return slug ? `hh:${slug}` : household;
 };
+
+// ── THE COUNT AFTER ADOPTION (POS-212) ──────────────────────────────────────
+//
+// POS-160 pinned it: "a `solo:` parcel is READ by the house and not COUNTED at
+// its cap" (test/household-spellings.test.mjs FALSIFIER 3d), because
+// `resolveHouse` answers `unknown` for a `solo:` key and this fold keys an
+// unknown spelling by its own string. Keemin's ruling (2026-09-23) closes the
+// gap in order: adopt first — the ceremony, then ONE batch — and COUNT AFTER.
+//
+// THE FLIP IS A STORE FACT, NOT A FLAG. `world2/tools/adopt-solo.mjs` writes one
+// `solo-counted` act after its last house commits; `soloCountedAt` reads it.
+// A flag is a setting that can be true on prod before the batch has run there,
+// and the count must never flip on a store that still holds unadopted `solo:`
+// parcels — that would refuse a resident's new parcel against holdings the
+// ruling said to grandfather first. An append-only act can exist only where the
+// batch ran, and nothing un-sets it.
+//
+// WHAT "COUNTED" MEANS: a `solo:<x>` row is folded into the ONE house whose
+// spelling set holds `solo:<x>` (`src/solo-adoption.mjs § soloHouseIndex`, the
+// inverse of the set #166's policy reads). A spelling no house holds, or two
+// houses hold, keeps its own string — refuse-rather-than-guess, as before.
+export { soloCountedAt } from "../../src/solo-adoption.mjs";
+
+/**
+ * `resolve` widened to fold `solo:` spellings into their house — the resolver
+ * `heldParcelsByCred` and `credOf` take once the count counts. PURE.
+ */
+export function countingSolo(resolve, registry, pins = {}) {
+  const idx = soloHouseIndex(registry, pins);
+  return (hh) => {
+    const slug = typeof resolve === "function" ? resolve(hh) : null;
+    if (slug) return slug;
+    return isSolo(hh) ? soloHouseOf(idx, hh) : null;
+  };
+}

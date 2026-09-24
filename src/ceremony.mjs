@@ -51,6 +51,7 @@ import { loadRegistryRows, insertHousehold, upsertHousehold, upsertPin, renameHo
 import { registryFromRows, pinsFromRows } from "./registry-rows.mjs";
 import { houseForAccount } from "./residency.mjs";
 import { drainRegistry } from "../tools/registry-drain.mjs";
+import { adoptAtCeremony } from "./solo-adoption.mjs";
 
 // ── THE ALPHABET ────────────────────────────────────────────────────────────
 //
@@ -213,6 +214,43 @@ const logRefusedDrain = (where, drained) => {
   console.error(`[ceremony] ${where}: the town's files were NOT re-rendered — ${drained.refused}`);
 };
 
+// ── THE ADOPTION (POS-212) ──────────────────────────────────────────────────
+//
+// RULED (Keemin, 2026-09-23): a resident who placed marks as `solo:<handle>`
+// before their house had a key has those marks ADOPTED by the house when the
+// key is minted — "solo: adoption at the ceremony". `src/solo-adoption.mjs`
+// holds the plan and the one statement; this is where the ceremony calls it,
+// after the registry holds the row, so the house's spelling set already names
+// the resident whose `solo:` marks it adopts.
+//
+// EVERY PATH CALLS IT: the mint, the choose-once rename, and the membership.
+// A declaration runs the mint and then the membership, so it asks twice; the
+// second ask finds the first one's claims pending and files nothing (the plan's
+// PENDING arm), which is the idempotence a crossing that re-sees a merged join
+// PR already relies on.
+//
+// IT LANDS AT THE NEXT CROSSING, and the reason is the store's grants, not a
+// choice: the ceremony's pen is `office_api`, which holds INSERT on `acts` and
+// `claims` and nothing on `marks`. So the ceremony files the door's own amend —
+// a pending claim superseding each mark, with the act that names the adoption —
+// and the clearing's `materializeClaims` re-grains each row by its owner.
+//
+// A FAILED ADOPTION IS NEVER A FAILED CEREMONY, for the reason a refused drain
+// is not (§ A REFUSED DRAIN IS NEVER SILENT): the house IS founded and the
+// resident IS admitted. The outcome rides back, and a failure is logged once;
+// the batch (`world2/tools/adopt-solo.mjs`) adopts anything a ceremony missed.
+export const NO_ADOPT = async () => ({ filed: 0, skipped: "not asked" });
+
+async function adoptionOutcome(where, adopt, args) {
+  try {
+    return await adopt(args);
+  } catch (err) {
+    const why = String(err?.message ?? err);
+    console.error(`[ceremony] ${where}: the house's solo: marks were NOT adopted — ${why}`);
+    return { filed: 0, failed: why };
+  }
+}
+
 // ── THE HOUSE ───────────────────────────────────────────────────────────────
 
 /**
@@ -249,6 +287,7 @@ export async function mintHousehold({
   env = process.env,
   drain = defaultDrain,
   drainOptions = {},
+  adopt = adoptAtCeremony,
 } = {}) {
   if (!coSign?.ghId)
     throw refuse(REFUSALS.NO_HOUSE, "a house is minted against a verified GitHub account and this call carried none");
@@ -334,7 +373,8 @@ export async function mintHousehold({
     };
     const drained = await drain({ env, ...drainOptions });
     logRefusedDrain(`mintHousehold(${standing} -> ${key})`, drained);
-    return { slug: key, row, chose: { from: standing, confirmed: confirmingItsOwn }, drained, registry: drainOutcome(drained) };
+    const adopted = await adoptionOutcome(`mintHousehold(${standing} -> ${key})`, adopt, { slug: key, env });
+    return { slug: key, row, chose: { from: standing, confirmed: confirmingItsOwn }, drained, registry: drainOutcome(drained), adopted };
   }
 
   // ONCE, AND THE MARKER IS THE RECORD'S OWN. A house that came through the
@@ -391,7 +431,8 @@ export async function mintHousehold({
   if (written === null) throw refuse(REFUSALS.NO_RECORD);
   const drained = await drain({ env, ...drainOptions });
   logRefusedDrain(`mintHousehold(${key})`, drained);
-  return { slug: key, row: written, drained, registry: drainOutcome(drained) };
+  const adopted = await adoptionOutcome(`mintHousehold(${key})`, adopt, { slug: key, env });
+  return { slug: key, row: written, drained, registry: drainOutcome(drained), adopted };
 }
 
 // ── THE MEMBERSHIP ──────────────────────────────────────────────────────────
@@ -423,6 +464,7 @@ export async function joinHousehold({
   env = process.env,
   drain = defaultDrain,
   drainOptions = {},
+  adopt = adoptAtCeremony,
 } = {}) {
   const key = String(slug ?? "").trim().toLowerCase();
   if (!key) throw refuse(REFUSALS.NO_HOUSE);
@@ -510,7 +552,8 @@ export async function joinHousehold({
 
   const drained = await drain({ env, ...drainOptions });
   logRefusedDrain(`joinHousehold(${key}/${h})`, drained);
-  return { slug: key, handle: h, residents, pinned, drained, registry: drainOutcome(drained) };
+  const adopted = await adoptionOutcome(`joinHousehold(${key}/${h})`, adopt, { slug: key, actor: h, env });
+  return { slug: key, handle: h, residents, pinned, drained, registry: drainOutcome(drained), adopted };
 }
 
 // The account matcher, in this file's own words for the same reason the
