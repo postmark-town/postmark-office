@@ -1867,6 +1867,13 @@ async function thingStandsBlock(id, w, r) {
       // author's move or a stranger's, unaccepted — the town's household map,
       // never the handle alone.
       householdOf,
+      // …and whether the author's house has answered a stranger's set-down
+      // (POS-138's stance arm). Read only here, where the thing has a holding
+      // history; an unreadable stance record is silence, never an answer.
+      stances: await (async () => {
+        try { const { stanceRows } = await import("./world-stance.mjs"); return await stanceRows(); }
+        catch { return []; }
+      })(),
       standpointOf: async (h) => {
         const s = await residentStandpoint(h, w).catch(() => null);
         return s?.placed ? { x: s.x, y: s.y } : null;

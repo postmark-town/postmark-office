@@ -21,9 +21,10 @@
 // keeps every act and claim it is handed. Nothing here is a copy of the amend
 // shape: the rows asserted are the rows the door wrote.
 //
-// NOT HERE, and said so rather than left as a todo leg: the stance that
-// accepts or refuses a stranger's set-down. That half stopped on a shape call
-// (the PR body carries the proposal); a skipped leg would read as coverage.
+// THE SECOND HALF (Keemin, 2026-09-24 ~10:1x, "I agree with you here", on
+// PR #180's proposal) is at the foot of this file: the author's house answers a
+// stranger's set-down through the real stance door — accept, refuse, silence,
+// and the author-only speaker refusal.
 //
 //   node --test test/set-down-files-the-amend.test.mjs
 
@@ -58,6 +59,7 @@ const STOOL = "keith/waiting-room-stool-2026-09-10";
 const GARAGE_AT = { x: 3978, y: -398 };
 const WAITING_ROOM_AT = { x: 176, y: 425.5 };
 const YARD_AT = { x: 4100, y: -300 };
+const ANA_AT = { x: 4105, y: -305 };
 
 const stoolRecord = {
   id: STOOL, kind: "sited", by: "keith", tier: "home", household: "keith", declared_household: "gh:1",
@@ -71,7 +73,11 @@ const PUBLISHED = [
   { id: "keith/the-garage", by: "keith", kind: "sited", tier: "home", at: GARAGE_AT, extent: { w: 20, h: 20 }, body: "one bay door up" },
   { id: "keith/the-yard", by: "keith", kind: "parcel", tier: "home", at: YARD_AT, extent: { w: 25, h: 25 }, body: "the yard behind the garage" },
   { id: "kin/the-shed", by: "kin", kind: "parcel", tier: "home", at: { x: 4130, y: -300 }, extent: { w: 25, h: 25 }, body: "the shed beside the yard" },
-  { id: "ana/the-orchard", by: "ana", kind: "parcel", tier: "home", at: { x: 900, y: 900 }, extent: { w: 25, h: 25 }, body: "an orchard" },
+  // Ana stands INSIDE Keith's yard (this bottle's where-is puts a resident at
+  // their own parcel's centre), so a set-down she makes lands on Keith's own
+  // ground: the minimum there is zero, and a welcome goes forward. It is also
+  // the plainest version of the question — a stranger's thing left on YOUR land.
+  { id: "ana/the-orchard", by: "ana", kind: "parcel", tier: "home", at: ANA_AT, extent: { w: 5, h: 5 }, body: "an orchard" },
   { id: "postmaster/the-waiting-room", by: "postmaster", kind: "sited", tier: "market", at: WAITING_ROOM_AT, extent: { w: 30, h: 30 }, body: "the waiting room" },
   stoolRecord,
 ];
@@ -106,6 +112,15 @@ export function marksContain(outer, inner) {
   if (!outer?.at || !outer?.extent || !inner?.at) return false;
   return Math.abs(inner.at.x - outer.at.x) <= outer.extent.w / 2
       && Math.abs(inner.at.y - outer.at.y) <= outer.extent.h / 2;
+}
+`);
+// The engine's geometry, which the stance door asks for overlap and will not
+// substitute its own (`world-stance.mjs § stanceGeometry`).
+put(repo, "tools/geometry.mjs", `
+export const rect = (m) => ({ x0: m.at.x - m.extent.w / 2, x1: m.at.x + m.extent.w / 2, y0: m.at.y - m.extent.h / 2, y1: m.at.y + m.extent.h / 2 });
+export function overlapArea(a, b) {
+  const w = Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0), h = Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0);
+  return w > 0 && h > 0 ? w * h : 0;
 }
 `);
 put(repo, "seeding/manifest.json", JSON.stringify({ homes: [] }));
@@ -379,4 +394,234 @@ test("the flipped hold receipt's `seq` is the act's id — it answered null on e
   const r = await hold.callHoldTool("world_hold", { thing: STOOL, handle: "keith" }, KEITH);
   const drop = p.rows().find((a) => a.action === "drop");
   assert.equal(r.seq, drop.id);
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// THE SECOND HALF · the author's house answers a stranger's set-down
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// Keemin, 2026-09-24 ~10:1x EDT, on PR #180's proposal: "I agree with you here."
+// The drop act IS the drafted amend. `declare-stance-on` gains the author's-
+// house arm: welcomed files the author's amend through the same
+// `leaveMarkViaOffice` call, in the author's name, with `_set_down` plus the
+// stance act's id; opposed makes the read answer canon, with no store write;
+// silence stays unaccepted.
+//
+// Driven end to end: Ana's drop through the real hold door, Keith's word
+// through the real stance door (`declareStanceViaOffice`), the amend through the
+// real leave-mark door, the read over the real stance rows (`stanceRows`).
+
+const stance = await import("../src/world-stance.mjs");
+// The stance door's candidate read rides its own credential (`stance_reader`,
+// 023). Pointed at the same in-memory record: it asks `claims`, which the pen
+// answers from the docket it keeps.
+process.env.WORLD2_STANCE_URL = "postgres://acts-pen-stub/stance";
+const acts2 = await import("../src/world2-acts.mjs");
+const speakPool = { query: (t, p) => pen.query(t, p) };
+acts2.__setStancePoolForTest(speakPool);
+after(() => acts2.__setStancePoolForTest(null));
+
+/** Ana sets Keith's stool down, through the real door. Returns her drop act. */
+async function anaDrops(p) {
+  hand("ana");
+  const r = await hold.callHoldTool("world_hold", { thing: STOOL, handle: "ana" }, ANA);
+  assert.equal(r.did, "drop", `Ana's drop did not land: ${JSON.stringify(r)}`);
+  const drops = p.rows().filter((a) => a.action === "drop" && a.actor === "ana");
+  return drops[drops.length - 1];
+}
+
+/** Speak on the stool, through the real stance door; a bounce comes back as `{ refused }`. */
+//
+// THE HOLDING READ IS THE PORT'S OWN (`standsRowsFromStore`), answered by
+// `stands-store-fixture.mjs § actsClient` — the investigate suite's client,
+// which filters and orders the way the real SQL does — over the acts the real
+// doors wrote into this suite's pen a moment earlier. Nothing is hand-seeded:
+// the drop the stance answers is the one Ana's call to the hold door made.
+const guards = await import("../src/world2-guards.mjs");
+const { actsClient } = await import("./stands-store-fixture.mjs");
+const written = (p) => p.rows().map((r) => ({ ...r, at: new Date(r.at), payload: parse(r.payload) }));
+// The fixture reader is installed for the HOLDING READ ALONE — the real
+// `standsRowsFromStore`, called through the arm's `readRows` seam — and taken
+// down before the stance and the amend write, so the pen's own reads on the
+// write path reach the pen and not the fixture.
+const readRows = async (thing) => {
+  const restore = guards.useGuardReader((run) => run(actsClient(written(pen))));
+  try { return await guards.standsRowsFromStore(thing); } finally { restore(); }
+};
+async function speak(word, handle, key, extraDeps = {}) {
+  try {
+    return await stance.declareStanceViaOffice(repo, { on: STOOL, stance: word, handle }, key, { setDownDeps: { householdOf: HOUSES, readRows, ...extraDeps } });
+  } catch (e) {
+    return { refused: true, code: e?.code, defect: e?.defect ?? e?.message, hint: e?.hint };
+  }
+}
+
+/** The read, over the record's own stance rows. */
+async function readStool(drop, fold = GARAGE_AT) {
+  const stances = await stance.stanceRows({ worldClone: repo });
+  return hold.whereThingStands(STOOL, {
+    attachments: [{ target: STOOL, entity: "ana", policy: "detach", born_at: "2026-09-24T01:00:00Z" }],
+    journal: [{ object: STOOL, action: "drop", actor: "ana", seq: drop.id, at: { anchor: null, dx: ANA_AT.x, dy: ANA_AT.y } }],
+    fold, householdOf: HOUSES, stances,
+  });
+}
+
+// ── ACCEPT ───────────────────────────────────────────────────────────────────
+//
+// THE FLIP: make `answerSetDown` skip `fileAuthorsAmend` and this reds on "no
+// amend act" — a welcome that is only a word moves nothing.
+
+test("ACCEPT: Keith's house welcomes Ana's set-down — the author's amend is filed in Keith's name, attributed to the drop act AND the stance act", async () => {
+  const p = fresh();
+  const drop = await anaDrops(p);
+  assert.equal(p.claims().length, 0, "before the answer, canon has not moved");
+
+  const r = await speak("welcomed", "keith", KEITH);
+  assert.ok(!r.refused, `the welcome was refused: ${JSON.stringify(r)}`);
+
+  const said = p.rows().find((a) => a.class === "stance");
+  assert.ok(said, "the stance act is on the record");
+  const sp = parse(said.payload);
+  assert.equal(sp.answers, "set-down", "the stance says which question it answers");
+  assert.equal(sp.set_down.act_id, String(drop.id), "and names the ONE drop it answers");
+  assert.equal(sp.set_down.by, "ana");
+
+  const amend = p.rows().find((a) => a.action === "amend");
+  assert.ok(amend, `no amend act — the welcome moved nothing: ${JSON.stringify(r.amend)}`);
+  assert.equal(amend.actor, "keith", "filed in the author's name, never the dropper's");
+  const ap = parse(amend.payload);
+  assert.deepEqual(ap.at, ANA_AT, "at = where Ana set it down");
+  assert.equal(ap._set_down.act_id, String(drop.id), "attributed to the drop act");
+  assert.equal(ap._set_down.by, "ana", "…and to who set it down");
+  assert.equal(ap._set_down.stance_act_id, String(said.id), "…and to the stance act that accepted it");
+  assert.equal(ap.class, "thing", "every field Keith wrote is copied");
+
+  const c = p.claims()[0];
+  assert.equal(c.claimant, "keith");
+  assert.equal(c.supersedes, STANDING_ID, "the amend chain, superseding the standing mark");
+  assert.equal(c.status, "pending", "set down on Keith's own ground, so it goes forward");
+
+  assert.equal(r.effect, `your house accepts ana's set-down: the amend that re-sites ${STOOL} at (4105, -305) is filed in keith's name, and canon moves it at the next crossing.`);
+  console.log(`    RECEIPT · ${r.effect}`);
+
+  const s = await readStool(drop);
+  assert.equal(s.accepted, true, "the read says accepted once the author's house has welcomed it");
+  assert.deepEqual(s.where, ANA_AT, "and it stands where Ana set it down");
+});
+
+// ── REFUSE ───────────────────────────────────────────────────────────────────
+
+test("REFUSE: Keith's house opposes Ana's set-down — nothing is filed, and the read answers canon from now on", async () => {
+  const p = fresh();
+  const drop = await anaDrops(p);
+  const before = p.rows().length;
+  const r = await speak("opposed", "keith", KEITH);
+  assert.ok(!r.refused, `the refusal was refused: ${JSON.stringify(r)}`);
+  assert.equal(p.rows().length, before + 1, "one row: the stance itself");
+  assert.equal(p.rows().filter((a) => a.action === "amend").length, 0, "no amend");
+  assert.equal(p.claims().length, 0, "no claim — no store write moves canon");
+  assert.equal(r.effect, `your house refuses ana's set-down: canon keeps ${STOOL} at (3978, -398), and the read answers canon from now on.`);
+  console.log(`    RECEIPT · ${r.effect}`);
+
+  const s = await readStool(drop);
+  assert.equal(s.source, "fold", "the read answers canon");
+  assert.deepEqual(s.where, GARAGE_AT, "at the garage, where Keith put it");
+  assert.equal(s.refused_by, "keith");
+  assert.equal(s.says, "set down by ana at (4105, -305) — refused by keith's house; canon stands at (3978, -398), where keith put it");
+});
+
+// ── SILENCE ──────────────────────────────────────────────────────────────────
+
+test("SILENCE: with no answer, nothing is filed and the read stays unaccepted, canon where Keith put it", async () => {
+  const p = fresh();
+  const drop = await anaDrops(p);
+  assert.equal(p.rows().filter((a) => a.class === "stance" || a.action === "amend").length, 0);
+  const s = await readStool(drop);
+  assert.equal(s.accepted, false);
+  assert.equal(s.source, "set-down");
+  assert.match(s.says, /— unaccepted; canon stays at \(3978, -398\), where keith put it$/);
+});
+
+// ── THE AUTHOR'S HOUSE ALONE ─────────────────────────────────────────────────
+
+test("AUTHOR-ONLY: Ana cannot welcome her own set-down of Keith's thing — refused by name, nothing written", async () => {
+  const p = fresh();
+  await anaDrops(p);
+  const before = p.rows().length;
+  const r = await speak("welcomed", "ana", ANA);
+  assert.equal(r.refused, true, `Ana accepted her own move of Keith's stool: ${JSON.stringify(r)}`);
+  assert.equal(r.code, 403);
+  assert.match(r.hint, /a set-down of keith's thing is accepted or refused by keith's house alone/);
+  assert.equal(p.rows().length, before, "no stance row, no amend");
+  assert.equal(p.claims().length, 0);
+});
+
+test("a welcome needs a key that acts for the author — the amend is filed in their name; a housemate's key without them is refused before anything is written", async () => {
+  const p = fresh();
+  await anaDrops(p);
+  const before = p.rows().length;
+  const r = await speak("welcomed", "kin", { household: "keithhouse", handles: new Set(["kin"]) });
+  assert.equal(r.refused, true, JSON.stringify(r));
+  assert.equal(r.code, 403);
+  assert.match(r.defect, /this key does not act for keith/);
+  assert.equal(p.rows().length, before, "refused before the stance row, not after it");
+});
+
+test("a housemate on a key without the author may still REFUSE — opposed writes nothing but the word", async () => {
+  const p = fresh();
+  await anaDrops(p);
+  const r = await speak("opposed", "kin", { household: "keithhouse", handles: new Set(["kin"]) });
+  assert.ok(!r.refused, JSON.stringify(r));
+  assert.equal(p.claims().length, 0);
+});
+
+test("once accepted, a later 'opposed' is refused — the amend is filed in the author's name, and moving it back is an amend", async () => {
+  const p = fresh();
+  await anaDrops(p);
+  const ok = await speak("welcomed", "keith", KEITH);
+  assert.ok(!ok.refused, JSON.stringify(ok));
+  const before = p.rows().length;
+  const r = await speak("opposed", "keith", KEITH);
+  assert.equal(r.refused, true, JSON.stringify(r));
+  assert.equal(r.code, 409);
+  assert.equal(p.rows().length, before, "nothing written");
+});
+
+test("an answer belongs to ONE drop: a welcome of Ana's first set-down does not accept a later one", () => {
+  const stances = [{ class: "stance", actor: "keith", object: STOOL, written_at: "2026-09-24T10:00:00Z", seq: 5,
+    payload: { stance: "welcomed", answers: "set-down", set_down: { act_id: "3" } } }];
+  assert.equal(hold.setDownAnswer({ stances, thing: STOOL, dropSeq: 3, madeBy: "keith", householdOf: HOUSES })?.stance, "welcomed");
+  assert.equal(hold.setDownAnswer({ stances, thing: STOOL, dropSeq: 9, madeBy: "keith", householdOf: HOUSES }), null, "drop 9 is unanswered");
+  const byAna = [{ ...stances[0], actor: "ana" }];
+  assert.equal(hold.setDownAnswer({ stances: byAna, thing: STOOL, dropSeq: 3, madeBy: "keith", householdOf: HOUSES }), null,
+    "a stance by anyone outside the author's house answers nothing, even if a writer other than the door put it there");
+  const groundWord = [{ ...stances[0], payload: { stance: "opposed" } }];
+  assert.equal(hold.setDownAnswer({ stances: groundWord, thing: STOOL, dropSeq: 3, madeBy: "keith", householdOf: HOUSES }), null,
+    "a ground-holder's ordinary stance on the thing is not an answer to a set-down");
+});
+
+// ── THE READ CLAIMS ONLY WHAT THE STANCE PROVES (Wright's review, #184) ──────
+//
+// The stance row is written before the amend is filed, and the amend door can
+// still refuse (the move guard, an error). The read sees the word and never
+// the filing, so it must not say the amend "is filed".
+//
+// THE FLIP: restore the old sentence ("…; the amend that re-sites it is filed
+// in keith's name") and this reds.
+
+test("A WELCOME WHOSE AMEND THE DOOR REFUSES: the receipt says it was not filed, and the read does not claim a filing", async () => {
+  const p = fresh();
+  const drop = await anaDrops(p);
+  const refusingDoor = async () => { const e = new Error("3 marks stand on it"); Object.assign(e, { code: 409, defect: "3 marks stand on it" }); throw e; };
+  const r = await speak("welcomed", "keith", KEITH, { leave: refusingDoor });
+  assert.ok(!r.refused, `the welcome itself stands: ${JSON.stringify(r)}`);
+  assert.equal(r.amend.filed, false, "the amend door refused");
+  assert.match(r.effect, /was not filed \(the amend door refused: 3 marks stand on it\)/, "the receipt tells the truth");
+  assert.equal(p.rows().filter((a) => a.action === "amend").length, 0, "no amend act");
+  assert.equal(p.claims().length, 0, "no claim");
+
+  const s = await readStool(drop);
+  assert.equal(s.accepted, true, "the word was spoken, and the read says so");
+  assert.doesNotMatch(s.says, /is filed/, `the read claims a filing that did not happen: ${s.says}`);
+  assert.equal(s.says, "set down by ana at (4105, -305) — accepted by keith's house; canon follows when keith's amend publishes at a crossing");
 });
