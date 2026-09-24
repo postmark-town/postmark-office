@@ -1,0 +1,382 @@
+// set-down-files-the-amend.test.mjs — POS-138, the office half.
+//
+// THE LAW: `LOGOS/classes.md` § The reach of a hold — a set-down's "position
+// is written on the act and is canon at the next fold like any move". A move is
+// an AMEND through the office's pen (`LOGOS/state-and-time.md`: "the settlement
+// writes a mark once; nothing moves it after").
+//
+// THE INSTANCE: Keith set his own stool down in the Waiting Room (postmark#2693,
+// act 1636, 2026-09-10). The hold door told him "the record re-sites the mark at
+// the next fold" and filed nothing, so canon kept the stool in his garage
+// through nine folds while the read said it stood in the Waiting Room.
+//
+// THE RULING (Keemin, 2026-09-24): the author's pen moves the author's own
+// thing without ceremony; a set-down by ANOTHER household moves nothing in
+// canon until the author's house accepts it, and the read says so.
+//
+// WHAT THIS SUITE DRIVES: the real hold door (`callHoldTool`) on a temporary
+// dynamic store, whose drop reaches the real leave-mark door
+// (`leaveMarkViaOffice` → `journalLeaveMark` → `appendActFlipped` →
+// `claimTxFromJournal`), against an in-memory record (`acts-pen-stub.mjs`) that
+// keeps every act and claim it is handed. Nothing here is a copy of the amend
+// shape: the rows asserted are the rows the door wrote.
+//
+// NOT HERE, and said so rather than left as a todo leg: the stance that
+// accepts or refuses a stranger's set-down. That half stopped on a shape call
+// (the PR body carries the proposal); a skipped leg would read as coverage.
+//
+//   node --test test/set-down-files-the-amend.test.mjs
+
+import test, { after } from "node:test";
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
+
+const sweep = (d) => { try { rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); } catch { /* litter */ } };
+
+const repo = mkdtempSync(join(tmpdir(), "pos138-world-"));
+const town = mkdtempSync(join(tmpdir(), "pos138-town-"));
+const scratch = mkdtempSync(join(tmpdir(), "pos138-db-"));
+after(() => { sweep(repo); sweep(town); sweep(scratch); });
+
+const git = (...args) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+const put = (root, path, text) => {
+  const full = join(root, path);
+  mkdirSync(dirname(full), { recursive: true });
+  writeFileSync(full, text);
+};
+
+// ── the world in a bottle ────────────────────────────────────────────────────
+//
+// Keith's house (`gh:1`: keith, and his housemate kin) holds the garage and a
+// yard parcel. Ana is another household (`gh:2`). The Waiting Room is the
+// postmaster's. The stool is Keith's thing, folded in the garage — the live
+// record's own fields, copied from world main `5509c996`.
+const STOOL = "keith/waiting-room-stool-2026-09-10";
+const GARAGE_AT = { x: 3978, y: -398 };
+const WAITING_ROOM_AT = { x: 176, y: 425.5 };
+const YARD_AT = { x: 4100, y: -300 };
+
+const stoolRecord = {
+  id: STOOL, kind: "sited", by: "keith", tier: "home", household: "keith", declared_household: "gh:1",
+  date: "2026-09-10T15:37:58.221Z", at: GARAGE_AT, extent: { w: 1, h: 1 }, sovereign: true, stamps: 2, weight: 2,
+  weight_parts: { own_escrow: 2 }, body: "Three-legged stool in pale ash: splayed legs, brass levelers, a seat sanded kind. Two names and a date under the seat. Built for whoever waits.",
+  class: "thing", placementParent: "keith/the-garage", ledger_weight: 2,
+};
+
+const PUBLISHED = [
+  { id: "the-town/let-there-be-light", by: "the-town", kind: "sited", tier: "constitution", at: { x: 0, y: 0 }, extent: { w: 20000, h: 20000 }, body: "the world frame" },
+  { id: "keith/the-garage", by: "keith", kind: "sited", tier: "home", at: GARAGE_AT, extent: { w: 20, h: 20 }, body: "one bay door up" },
+  { id: "keith/the-yard", by: "keith", kind: "parcel", tier: "home", at: YARD_AT, extent: { w: 25, h: 25 }, body: "the yard behind the garage" },
+  { id: "kin/the-shed", by: "kin", kind: "parcel", tier: "home", at: { x: 4130, y: -300 }, extent: { w: 25, h: 25 }, body: "the shed beside the yard" },
+  { id: "ana/the-orchard", by: "ana", kind: "parcel", tier: "home", at: { x: 900, y: 900 }, extent: { w: 25, h: 25 }, body: "an orchard" },
+  { id: "postmaster/the-waiting-room", by: "postmaster", kind: "sited", tier: "market", at: WAITING_ROOM_AT, extent: { w: 30, h: 30 }, body: "the waiting room" },
+  stoolRecord,
+];
+
+put(repo, "tools/world-build.mjs", `export function assembleWorld({ worldState, skeleton }) { return { ...worldState, skeleton }; }\n`);
+put(repo, "tools/where-is.mjs", `
+export const NOWHERE = Object.freeze({ x: null, y: null, placed: false, source: null, mark_id: null });
+export function homeOf(handle, world) {
+  const parcel = (world?.parcels ?? []).find((p) => p.household === handle);
+  if (!parcel) return { ...NOWHERE };
+  return { x: parcel.at.x, y: parcel.at.y, placed: true, source: "parcel", mark_id: parcel.id, parcel };
+}
+export function whereIs(handle, { world = null } = {}) { return homeOf(handle, world); }
+export function publicResidents() { return []; }
+`);
+put(repo, "tools/world-verbs.mjs", `
+export function containmentChain(pos, marks) {
+  return (marks ?? [])
+    .filter((m) => m.at && m.extent && Math.abs(pos.x - m.at.x) <= m.extent.w / 2 && Math.abs(pos.y - m.at.y) <= m.extent.h / 2)
+    .sort((a, b) => (b.extent.w * b.extent.h) - (a.extent.w * a.extent.h))
+    .map((m) => ({ id: m.id, by: m.by, tier: m.tier, body: m.body }));
+}
+export function orient() { return { seen: [] }; }
+export function investigate() { return null; }
+`);
+put(repo, "tools/marks-fold.mjs", `
+export function loadMarks() { return []; }
+export const PARCEL_EXTENT_M = 25;
+export const PARCEL_CLAIM_CAP = 3;
+export const PARCEL_CAP_LAW_DATE = "2026-07-30";
+export function marksContain(outer, inner) {
+  if (!outer?.at || !outer?.extent || !inner?.at) return false;
+  return Math.abs(inner.at.x - outer.at.x) <= outer.extent.w / 2
+      && Math.abs(inner.at.y - outer.at.y) <= outer.extent.h / 2;
+}
+`);
+put(repo, "seeding/manifest.json", JSON.stringify({ homes: [] }));
+put(repo, "WORLD/households.json", JSON.stringify({ households: { keith: "gh:1", kin: "gh:1", ana: "gh:2" } }));
+put(repo, "WORLD/skeleton.json", JSON.stringify({ features: [], physics_registry: {} }));
+put(repo, "WORLD/world-state.json", JSON.stringify({
+  tick: 0, dials: {}, marks: PUBLISHED,
+  parcels: PUBLISHED.filter((m) => m.kind === "parcel").map((m) => ({ id: m.id, household: m.by, at: m.at, extent: m.extent })),
+  determined: {}, vague: [], rivalries: [], portfolios: {}, terrain_weight: {}, errors: [],
+}));
+put(repo, "WORLD/filing-freeze.json", JSON.stringify({ frozen_at: "2026-08-25", marks: {} }));
+git("init", "-q", "-b", "main");
+git("config", "user.email", "test@postmark.town");
+git("config", "user.name", "pos138 falsifier");
+git("add", "-A");
+git("commit", "-qm", "canon: keith's stool, folded in his garage");
+git("branch", "-q", "draft/keithhouse");
+
+// THE TOWN'S HOUSEHOLD MAP, the one `households.mjs § householdOf` folds —
+// the same reader the door's reach clause asks. Two houses.
+put(town, "tools/stamp-mint.mjs", `
+export function currentHouseholds() {
+  return new Map([["keith", { key: "gh:1" }], ["kin", { key: "gh:1" }], ["ana", { key: "gh:2" }]]);
+}
+`);
+
+process.env.WORLD_CLONE = repo;
+process.env.TOWN_CLONE = town;
+process.env.WORLD_SINGLE_LOG = "1";
+process.env.WORLD_DYNAMIC_DB = join(scratch, "dynamic.db");
+process.env.W2_GUARDS = "";
+process.env.W2_PEN = "mark,hold";
+process.env.WORLD2_CANDLE = "1";
+process.env.TOWN_PUSH = "";
+
+const { installActsPen, uninstallActsPen, RECORD_ON } = await import("./acts-pen-stub.mjs");
+process.env.WORLD2_PG = RECORD_ON.WORLD2_PG;
+process.env.WORLD2_PG_URL = RECORD_ON.WORLD2_PG_URL;
+const STANDING_ID = "7f3a0c1e-0000-4000-8000-000000000636";
+// THE DOCKET PEN HOLDS ITS OWN POOL (`world2-claims.mjs § __setPoolForTest`):
+// the claim half resolves its household there before the transaction opens.
+// `installActsPen` sets the acts and pen pools only, so without this the
+// amend reaches a real socket and refuses as an unreachable record.
+const claimsPen = await import("../src/world2-claims.mjs");
+const install = () => { const p = installActsPen({ marks: [{ id: STANDING_ID, slug: STOOL }] }); claimsPen.__setPoolForTest(p); return p; };
+let pen = install();
+after(() => { uninstallActsPen(); claimsPen.__setPoolForTest(null); delete process.env.WORLD2_PG; delete process.env.WORLD2_PG_URL; });
+
+const hold = await import("../src/world-hold.mjs");
+const { openDynamic } = await import("../src/dynamic-store.mjs");
+const { declareAttachment } = await import("../src/dynamic-entities.mjs");
+
+const KEITH = { household: "keithhouse", handles: new Set(["keith", "kin"]) };
+const ANA = { household: "anahouse", handles: new Set(["ana"]) };
+const HOUSES = (h) => ({ keith: { key: "gh:1", slug: "keith-house" }, kin: { key: "gh:1", slug: "keith-house" }, ana: { key: "gh:2", slug: "ana-house" } })[h] ?? null;
+
+/** Put the stool in `who`'s hands on the dynamic store, as a take would have. */
+// Stamped NOW, not on the instance's date: the drop the door makes next is
+// stamped now too, and latest-wins must see this hand-off after every earlier
+// test's drop or the door reads the stool as standing on the ground.
+function hand(who) {
+  const db = openDynamic();
+  try { declareAttachment(db, { entity: who, target: STOOL, policy: "cascade", declaredBy: who, bornAt: new Date().toISOString() }); }
+  finally { db.close(); }
+}
+const fresh = () => { uninstallActsPen(); pen = install(); return pen; };
+const parse = (v) => (typeof v === "string" ? JSON.parse(v) : v);
+
+// ── FALSIFIER 1 · the author's own set-down files the amend ──────────────────
+//
+// THE FLIP: delete the `fileSetDownAmend` call in `callHoldTool`'s flipped
+// branch and this goes red on "no amend act" — the drop alone is what the
+// office wrote before POS-138.
+
+test("KEITH DROPS KEITH'S STOOL: the drop files an amend in the store's own shape — at = the standpoint, attributed to the drop act", async () => {
+  const p = fresh();
+  hand("keith");
+  const r = await hold.callHoldTool("world_hold", { thing: STOOL, handle: "keith" }, KEITH);
+  assert.equal(r.did, "drop", `the door answered ${JSON.stringify(r)}`);
+
+  const acts = p.rows();
+  const drop = acts.find((a) => a.action === "drop");
+  const amend = acts.find((a) => a.action === "amend");
+  assert.ok(drop, "the drop act is on the record, as before");
+  assert.ok(amend, `no amend act — the set-down filed nothing. Acts: ${acts.map((a) => a.action).join(", ")}`);
+  assert.equal(amend.class, "mark", "the amend is a mark-class act, the lane every door-made amend rides");
+  assert.equal(amend.actor, "keith", "the author's pen: the amend is Keith's own");
+  assert.equal(amend.object, STOOL);
+
+  const payload = parse(amend.payload);
+  assert.deepEqual(payload.at, YARD_AT, "at = the standpoint Keith stood on when he set it down");
+  assert.deepEqual(r.stands_at, YARD_AT, "…the same point the receipt says it stands at");
+  assert.equal(payload._set_down.act_id, String(drop.id), "attributed to the drop act, by the act's own id");
+  assert.equal(payload._set_down.by, "keith");
+  assert.equal(payload.class, "thing", "every field Keith wrote is copied — the stool is still a thing");
+  assert.equal(payload.body, stoolRecord.body);
+  assert.deepEqual(payload.extent, stoolRecord.extent);
+
+  // THE CANDLE HALF — the claim the crossing locks and the fold re-sites.
+  const claims = p.claims();
+  assert.equal(claims.length, 1, `one claim, got ${JSON.stringify(claims)}`);
+  const c = claims[0];
+  assert.equal(c.slug, STOOL);
+  assert.equal(c.claimant, "keith", "claimant = owner, so materialize grains it to Keith's house");
+  assert.equal(c.supersedes, STANDING_ID, "it supersedes the standing mark — the amend chain, not a fresh claim (#2806)");
+  assert.deepEqual(c.geometry.at, YARD_AT, "the claim's own geometry carries the set-down point");
+  assert.equal(c.status, "pending", "on Keith's own ground the minimum is zero, so it goes forward");
+  assert.equal(parse(c.data)._set_down.act_id, String(drop.id), "the claim names the drop act too");
+  assert.equal(parse(c.data)._act_id, String(amend.id), "and its own act, as every candle claim does");
+
+  assert.equal(r.set_down.amend.filed, true);
+  assert.equal(r.set_down.amend.put_forward, true);
+  assert.match(r.stands_note, /the amend that re-sites the mark is filed \(act \d+\), and canon moves it here at the next crossing/);
+  console.log(`    RECEIPT · ${r.stands_note}`);
+});
+
+test("the unflipped hold pen files the same amend, attributed by the drop's own stamp (its mirror returns no id)", async () => {
+  const p = fresh();
+  process.env.W2_PEN = "mark";
+  try {
+    hand("keith");
+    const r = await hold.callHoldTool("world_hold", { thing: STOOL, handle: "keith" }, KEITH);
+    assert.equal(r.did, "drop");
+    const amend = p.rows().find((a) => a.action === "amend");
+    assert.ok(amend, "the unflipped pen files the amend too — one law, both pens");
+    const sd = parse(amend.payload)._set_down;
+    assert.equal(sd.act_id, null, "no act id to name on this pen, and none is invented");
+    assert.equal(sd.written_at, r.at, "the drop declaration's own stamp pairs the two acts");
+  } finally { process.env.W2_PEN = "mark,hold"; }
+});
+
+test("a housemate's set-down is the author's household's: the door's own amend, in the author's name, filed through the housemate's key", async () => {
+  const p = fresh();
+  hand("kin");
+  const r = await hold.callHoldTool("world_hold", { thing: STOOL, handle: "kin" }, KEITH);
+  assert.equal(r.did, "drop");
+  assert.equal(r.set_down.whose, "your household's");
+  const amend = p.rows().find((a) => a.action === "amend");
+  assert.ok(amend, "a housemate on the house's key moves the house's thing");
+  assert.equal(amend.actor, "keith", "the amend stays in the author's name — the mark's `by` never moves");
+  assert.equal(parse(amend.payload)._set_down.by, "kin", "and the set-down names who actually set it down");
+});
+
+// ── the private-draft outcome is the door's own verdict, said on the receipt ─
+
+test("set down on ground that is not the author's, with no escrow readable: the amend is filed as a private draft, and the receipt says canon waits", async () => {
+  const p = fresh();
+  const out = await hold.fileSetDownAmend({
+    did: { thing: STOOL, declared_by: "keith", at: "2026-09-10T15:37:58.221Z", did: "drop" },
+    stood: WAITING_ROOM_AT, key: KEITH, actId: 1636, deps: { householdOf: HOUSES, mark: stoolRecord },
+  });
+  assert.equal(out.amend.filed, true, JSON.stringify(out));
+  assert.equal(out.amend.put_forward, false, "the Waiting Room is not Keith's ground and this bottle has no escrow to read");
+  const c = p.claims()[0];
+  assert.equal(c.status, "draft", "the claim's status is the verdict the receipt reports — one verdict");
+  assert.deepEqual(c.geometry.at, WAITING_ROOM_AT);
+  assert.equal(parse(c.data)._set_down.act_id, "1636", "the hand-run shape: act 1636 named on the claim");
+  assert.match(hold.setDownNote(out), /filed as keith's private draft/);
+  assert.doesNotMatch(hold.setDownNote(out), /canon moves it here/, "no promise of a move the verdict did not make");
+});
+
+// ── FALSIFIER 2 · a stranger's set-down files nothing, and says so ──────────
+
+test("ANA DROPS KEITH'S STOOL: no amend, no claim, canon unchanged — and the receipt says it is unaccepted", async () => {
+  const p = fresh();
+  hand("ana");
+  const r = await hold.callHoldTool("world_hold", { thing: STOOL, handle: "ana" }, ANA);
+  assert.equal(r.did, "drop", `the drop itself stands, as before: ${JSON.stringify(r)}`);
+  assert.ok(p.rows().some((a) => a.action === "drop"), "the drop act is written");
+  assert.equal(p.rows().filter((a) => a.action === "amend").length, 0, "no amend in Keith's name from Ana's hand");
+  assert.equal(p.claims().length, 0, "no claim on the docket: canon keeps the stool where Keith put it");
+  assert.equal(r.set_down.whose, "another household's");
+  assert.equal(r.set_down.amend.filed, false);
+  assert.match(r.stands_note, /keith made it, and a set-down by another household moves nothing in canon on its own: it reads as set down by you, unaccepted, and canon stays where keith put it/);
+  assert.doesNotMatch(r.stands_note, /re-sites/, "the old promise is not made to a stranger");
+  console.log(`    RECEIPT · ${r.stands_note}`);
+});
+
+test("THE READ: a stranger's set-down reads 'set down by ana at <place> — unaccepted; canon stays at <keith's place>'", async () => {
+  const attachments = [{ target: STOOL, entity: "ana", policy: "detach", born_at: "2026-09-24T01:00:00Z" }];
+  const journal = [{ object: STOOL, action: "drop", actor: "ana", seq: 9001, at: { anchor: null, dx: WAITING_ROOM_AT.x, dy: WAITING_ROOM_AT.y } }];
+  const s = await hold.whereThingStands(STOOL, { attachments, journal, fold: GARAGE_AT, householdOf: HOUSES });
+  assert.equal(s.source, "set-down", "it stands where Ana set it down — the reach's interim read");
+  assert.deepEqual(s.where, WAITING_ROOM_AT);
+  assert.equal(s.accepted, false);
+  assert.deepEqual(s.canon_at, GARAGE_AT, "canon has not moved");
+  assert.equal(s.says, "set down by ana at (176, 425.5) — unaccepted; canon stays at (3978, -398), where keith put it");
+
+  const own = await hold.whereThingStands(STOOL, { attachments, journal: [{ ...journal[0], actor: "keith" }], fold: GARAGE_AT, householdOf: HOUSES });
+  assert.equal(own.accepted, undefined, "the author's own set-down is not a stance question");
+  assert.match(own.says, /the record re-sites the mark at the next fold/, "and its promise is kept now, so it stays word for word");
+});
+
+test("a household record that cannot be read decides neither way: nothing filed, and the read promises nothing", async () => {
+  const p = fresh();
+  const out = await hold.fileSetDownAmend({
+    did: { thing: STOOL, declared_by: "kin", at: "2026-09-24T01:00:00Z", did: "drop" },
+    stood: YARD_AT, key: KEITH, deps: { householdOf: null, mark: stoolRecord },
+  });
+  assert.equal(out.amend.filed, false);
+  assert.equal(out.whose, "unread");
+  assert.equal(p.rows().length + p.claims().length, 0, "the pen was never asked");
+  const s = await hold.whereThingStands(STOOL, {
+    attachments: [{ target: STOOL, entity: "kin", policy: "detach", born_at: "x" }],
+    journal: [{ object: STOOL, action: "drop", actor: "kin", at: { anchor: null, dx: 1, dy: 2 } }],
+    fold: GARAGE_AT,
+  });
+  assert.equal(s.accepted, null);
+  assert.doesNotMatch(s.says, /re-sites/);
+});
+
+// ── an amend that would delete an authored line is not filed ─────────────────
+
+test("a record carrying a line the door cannot re-declare (loot) is not amended — the receipt names the line", async () => {
+  const built = hold.setDownAmend({ thing: "the-town/the-wick-end", mark: { ...stoolRecord, id: "the-town/the-wick-end", loot: true }, stood: YARD_AT, actor: "the-town" });
+  assert.match(built.refused, /`loot`/);
+  assert.equal(built.payload, undefined);
+  const ok = hold.setDownAmend({ thing: STOOL, mark: { ...stoolRecord, signal: false }, stood: YARD_AT, actor: "keith" });
+  assert.ok(ok.payload, "the assembly's derived `signal` is not an authored line");
+});
+
+// ── ACCEPTANCE (b) · the inventory agrees with the graph after the fold ──────
+//
+// THE INVENTORY'S READER is `groundWithinReach` (src/world-apex.mjs): what a
+// resident standing somewhere is shown as standing there. It composes three
+// pure parts — `whereThingStands` for the place, `standsWithin` for the reach,
+// `groundRow` for the verdict — and this drives those three exactly as it does.
+// The GRAPH's answer is the fold's `at` for the stool, which the published amend
+// sets to the set-down point (the world lane measured `placementParent` →
+// `postmaster/the-waiting-room` for that point, 2026-09-23).
+
+test("AFTER THE FOLD: the Waiting Room inventory and the published graph give the same point for the stool", async () => {
+  const { standsWithin } = await import("../src/reach.mjs");
+  const attachments = [{ target: STOOL, entity: "keith", policy: "detach", born_at: "2026-09-10T15:37:58Z" }];
+  const journal = [{ object: STOOL, action: "drop", actor: "keith", seq: 1636, at: { anchor: null, dx: WAITING_ROOM_AT.x, dy: WAITING_ROOM_AT.y } }];
+  const foldedAt = { ...WAITING_ROOM_AT }; // the graph, after the amend publishes
+  const s = await hold.whereThingStands(STOOL, { attachments, journal, fold: foldedAt, householdOf: HOUSES });
+  assert.deepEqual(s.where, foldedAt, "the inventory's place and the graph's are one point");
+  const inRoom = { x: WAITING_ROOM_AT.x + 3, y: WAITING_ROOM_AT.y - 2 };
+  const room = PUBLISHED.find((m) => m.id === "postmaster/the-waiting-room");
+  const rect = (m, p) => Math.abs(p.x - m.at.x) <= m.extent.w / 2 && Math.abs(p.y - m.at.y) <= m.extent.h / 2;
+  assert.ok(rect(room, s.where), "and that point is inside the Waiting Room, as the graph's containment says");
+  const reach = standsWithin(inRoom, { id: STOOL, at: s.where, extent: stoolRecord.extent }, { pointWithinMark: (p, m) => rect(m, p) });
+  const row = hold.groundRow({ id: STOOL, made_by: "keith", body: stoolRecord.body, stands: s, reach });
+  assert.deepEqual(row.stands_at, foldedAt, "the ground read lists it at the graph's point");
+  assert.equal(row.holder, undefined, "nobody holds it");
+});
+
+// ── ACCEPTANCE (c) · nothing is inferred from a set-down edge alone ──────────
+
+test("PINNED: a set-down never reads as accepted, and an amend copies a notice's status verbatim — no completion is inferred", async () => {
+  for (const actor of ["keith", "kin", "ana", "someone"]) {
+    const s = await hold.whereThingStands(STOOL, {
+      attachments: [{ target: STOOL, entity: actor, policy: "detach", born_at: "x" }],
+      journal: [{ object: STOOL, action: "drop", actor, at: { anchor: null, dx: 1, dy: 1 } }],
+      fold: GARAGE_AT, householdOf: HOUSES,
+    });
+    assert.notEqual(s.accepted, true, `a set-down by ${actor} read as accepted — acceptance is the author's word, never the edge's`);
+  }
+  const notice = { ...stoolRecord, id: "keith/a-notice", class: "bounty", ask: "fix the latch", reward: 2, status: "open" };
+  const built = hold.setDownAmend({ thing: "keith/a-notice", mark: notice, stood: YARD_AT, actor: "ana" });
+  assert.equal(built.payload.status, "open", "a notice set down anywhere is still open — the amend carries the poster's word, not a verdict");
+  assert.equal(built.payload.class, "bounty");
+});
+
+// ── the receipt's act id (found on the way) ──────────────────────────────────
+
+test("the flipped hold receipt's `seq` is the act's id — it answered null on every act since G1", async () => {
+  const p = fresh();
+  hand("keith");
+  const r = await hold.callHoldTool("world_hold", { thing: STOOL, handle: "keith" }, KEITH);
+  const drop = p.rows().find((a) => a.action === "drop");
+  assert.equal(r.seq, drop.id);
+});

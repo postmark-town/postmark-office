@@ -123,7 +123,7 @@ import { actorRoster, resolveHumanActor } from "./human-actor.mjs";
 // The hand an embodied act is recorded under. Imported rather than derived here:
 // `worldSayHuman` has owned this label since 2026-08-08 and `humanHandFor` is
 // that one derivation, moved somewhere both doors can read it.
-import { humanHandFor } from "./households.mjs";
+import { humanHandFor, householdOf } from "./households.mjs";
 import {
   classOfInstance, entriesOfClass, guardsPass, heldEntries, kindOf, resolveGrants, resolveForActor,
 } from "./world-grants.mjs";
@@ -1857,7 +1857,7 @@ export async function groundWithinReach(oriented, key = null) {
     for (const r of rows) {
       const mark = marks.find((m) => m.id === r.id);
       const stands = await hold.whereThingStands(r.id, {
-        attachments, journal, fold: mark.at, centreOf,
+        attachments, journal, fold: mark.at, centreOf, householdOf,
         standpointOf: async (h) => { const s = await residentStandpoint(h).catch(() => null); return s?.placed ? { x: s.x, y: s.y } : null; },
       });
       if (!stands?.where) continue; // a thing whose place cannot be derived is not "underfoot"

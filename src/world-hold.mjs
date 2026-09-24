@@ -595,7 +595,7 @@ export function latestDrop(rows, thingId) {
  * `declareHolding` takes for `rows`, and for the same reason.
  */
 export async function whereThingStands(thingId, {
-  attachments = null, journal = null, fold = null, standpointOf = null, centreOf = null,
+  attachments = null, journal = null, fold = null, standpointOf = null, centreOf = null, householdOf = null,
 } = {}) {
   const id = String(thingId);
   if (attachments == null) return { where: null, source: "unreadable", says: "the office could not read the holding record — this is not an answer about where it stands" };
@@ -612,8 +612,34 @@ export async function whereThingStands(thingId, {
   if (drop) {
     const { composeAnchor } = await import("./world-journal.mjs");
     const at = composeAnchor(drop.at ?? {}, centreOf);
-    if (at) return { where: at, source: "set-down", set_down_by: drop.actor ?? null, act_seq: drop.seq ?? null,
-      says: `${drop.actor ?? "somebody"} set it down here; it stands where they stood, and the record re-sites the mark at the next fold` };
+    if (at) {
+      const base = { where: at, source: "set-down", set_down_by: drop.actor ?? null, act_seq: drop.seq ?? null };
+      // ── WHOSE SET-DOWN IS IT (POS-138, Keemin's ruling 2026-09-24) ──────────
+      //
+      // "The author's pen moves the author's own thing without ceremony. A
+      // set-down by ANOTHER household becomes a drafted amend that the author's
+      // house accepts or refuses … until accepted, canon stays where the author
+      // put it and the read says 'set down by <handle> at <place>, unaccepted'."
+      //
+      // The author's own set-down files the amend at the door, so this read's
+      // old sentence is true for it and stays word for word. A stranger's does
+      // NOT move canon, so the promise is not made to them: the thing stands
+      // where it was set down (the-reach clause 2's interim read, unchanged) and
+      // the read says, in the ruling's words, that the move is unaccepted and
+      // where canon keeps it. A household record that cannot be read decides
+      // neither way, and the read says so rather than promising either.
+      const madeBy = id.split("/")[0];
+      const setter = drop.actor == null ? null : String(drop.actor);
+      const house = setter == null ? { same: false, how: "handle-only" } : sameHousehold(madeBy, setter, householdOf);
+      if (house.same)
+        return { ...base, says: `${setter} set it down here; it stands where they stood, and the record re-sites the mark at the next fold` };
+      const foldAt = fold && Number.isFinite(Number(fold.x)) && Number.isFinite(Number(fold.y)) ? { x: Number(fold.x), y: Number(fold.y) } : null;
+      if (house.how === "household")
+        return { ...base, accepted: false, canon_at: foldAt,
+          says: `set down by ${setter} at ${placeText(at)} — unaccepted; canon stays at ${foldAt ? placeText(foldAt) : "the place it was last folded"}, where ${madeBy} put it` };
+      return { ...base, accepted: null,
+        says: `${setter ?? "somebody"} set it down here and it stands where they stood; whether canon follows depends on whose household set it down, and the household record could not be read here` };
+    }
   }
 
   if (fold && Number.isFinite(Number(fold.x)) && Number.isFinite(Number(fold.y)))
@@ -807,7 +833,7 @@ export const PROPAGATION = Object.freeze({ cascade: "carried along", detach: "se
  * set a thing down was told `holder: null` and left to find out from a focus
  * that reads the last fold — walk #12's 536 m.
  */
-function dressReceipt(did, { reached = null, stood = null } = {}) {
+function dressReceipt(did, { reached = null, stood = null, setDown = null } = {}) {
   const propagation = PROPAGATION[did.policy] ?? null;
   return {
     ...did,
@@ -815,13 +841,169 @@ function dressReceipt(did, { reached = null, stood = null } = {}) {
       ? { propagation, propagation_note: `"${propagation}" is the attach class's own word for policy: "${did.policy}" — one law, and this is the sentence on the card.` }
       : {}),
     ...(did.did === "drop" && stood
-      ? { stands_at: stood,
-          stands_note: "it stands where you stood when you set it down, and the act carries that place; the record re-sites the mark at the next fold." }
+      ? { stands_at: stood, stands_note: setDownNote(setDown) }
       : {}),
+    ...(did.did === "drop" && setDown ? { set_down: setDown } : {}),
     ...(reached?.reach
       ? { reach: { how: reached.reach.how, distance_m: reached.reach.distance_round, earshot_m: reached.reach.earshot_m } }
       : {}),
   };
+}
+
+// ── THE SET-DOWN FILES THE AMEND (POS-138, Keemin's ruling 2026-09-24) ──────
+//
+// `LOGOS/classes.md` § The reach of a hold: a set-down's "position is written
+// on the act and is canon at the next fold like any move". `LOGOS/
+// state-and-time.md`: "The settlement writes a mark once; nothing moves it
+// after" — so a move is an AMEND through the office's pen, which the crossing
+// publishes. This door promised the re-site twice (the read, and the receipt's
+// `stands_note`) and filed nothing: Keith's stool read `source: set-down` in
+// the Waiting Room while canon kept it in the garage through nine folds.
+//
+// THE RULING, whose pen moves a thing somebody set down: "the author's pen
+// moves the author's own thing without ceremony. A set-down by ANOTHER
+// household becomes a drafted amend that the author's house accepts or
+// refuses through declare-stance-on … until accepted, canon stays where the
+// author put it."
+//
+// ── THE AUTHOR'S OWN SET-DOWN: THE DOOR'S OWN AMEND, NEVER A FOURTH WAY ─────
+//
+// The amend is filed through `leaveMarkViaOffice` with `amend: true` — the
+// exact call a resident makes to re-site their own mark, so every guard that
+// door runs (the key holds the author, the move guard, the put-forward verdict
+// on the mark's escrow and the ground it now stands on) runs here unchanged,
+// and the store receives the one amend shape it already has: a mark-class
+// `amend` act whose candle half files a claim superseding the standing mark
+// (`world2-claims.mjs § claimTxFromJournal`, #2806). The crossing locks it and
+// the fold re-sites the mark (measured by the world lane, 2026-09-23).
+//
+// `at` is the dropper's standpoint, the same point `stands_at` answers. Every
+// other field is the canon record's own, copied: an amend that changes nothing
+// the author wrote but the place. A canon record carrying an authored key this
+// door cannot re-declare (`loot`, `dials`, …) is NOT amended — filing it would
+// silently delete that line at the next crossing — and the receipt says so.
+//
+// The drop act rides the declaration as `_set_down` (`world.mjs §
+// leaveMarkViaOffice`): who set it down, where, when, and the act's id where
+// the pen returns one.
+//
+// ── A STRANGER'S SET-DOWN FILES NOTHING HERE ────────────────────────────────
+//
+// The drop, its act and its edge are written exactly as before. No amend is
+// filed and canon does not move. The drafted amend the ruling names, and the
+// stance that accepts or refuses it, are NOT built by this lane: the store
+// cannot hold a draft claim written by one household for another
+// (`007_private_drafts.sql` claims_insert: a draft's household must be the
+// writing transaction's), and the stance door's speaker is the ground's holder,
+// never the author (the PR body carries the proposal). The read and the
+// receipt say what is true: set down by <handle>, unaccepted, canon where the
+// author put it.
+
+/** A world point as a sentence reads it. */
+const placeText = (p) => `(${Number(p.x)}, ${Number(p.y)})`;
+
+/**
+ * THE FIELDS AN AMEND COPIES, and the fields it leaves to the store.
+ *
+ * `AMEND_CARRIES` is exactly what `leaveMarkViaOffice` can re-declare (its
+ * `clean`, less `at`, which the set-down replaces). `AMEND_LEAVES` is every key
+ * `WORLD/world-state.json` carries on a mark that no author writes — measured
+ * on world main `5509c996`, 1,264 marks: identity (`id`, `by`), the fold's and
+ * the walk's derivations (`tier`, `sovereign`, `placementParent`, `household`,
+ * `declared_household`), the ledger's (`stamps`, `weight`, `weight_parts`,
+ * `ledger_weight`), the world assembly's (`signal`, added to every mark by
+ * the engine's `tools/world-build.mjs`, which `worldMarkById` reads through)
+ * and the declaration's own stamp (`date`, which the door re-stamps on every
+ * amend). Any key in neither list is an authored line the door cannot carry,
+ * and the amend is refused rather than made to drop it.
+ */
+export const AMEND_CARRIES = Object.freeze(["kind", "extent", "points", "body", "slot", "value", "class", "ask", "reward", "status", "image"]);
+export const AMEND_LEAVES = Object.freeze([
+  "id", "by", "at", "tier", "sovereign", "placementParent", "household", "declared_household",
+  "stamps", "weight", "weight_parts", "ledger_weight", "date", "signal",
+]);
+const LEAVES = new Set(AMEND_LEAVES), CARRIES = new Set(AMEND_CARRIES);
+
+/**
+ * The amend a set-down files, from the canon record — or why none can be. PURE.
+ *
+ * @returns {{ payload, setDown } | { refused: string }}
+ */
+export function setDownAmend({ thing, mark, stood, actor, actId = null, writtenAt = null }) {
+  const id = String(thing);
+  const cut = id.indexOf("/");
+  const madeBy = id.slice(0, cut), slug = id.slice(cut + 1);
+  if (!mark) return { refused: `${id} has no canon record to amend — a private draft has no place on the map until it publishes` };
+  if (!stood || !Number.isFinite(Number(stood.x)) || !Number.isFinite(Number(stood.y)))
+    return { refused: "the record does not place you anywhere, so there is no standpoint to re-site it to" };
+  const kept = Object.keys(mark).filter((k) => !LEAVES.has(k) && !CARRIES.has(k) && !k.startsWith("_"));
+  if (kept.length)
+    return { refused: `its record carries ${kept.map((k) => `\`${k}\``).join(", ")}, which an amend at this door cannot re-declare — filing one would delete ${kept.length === 1 ? "that line" : "those lines"} at the next crossing` };
+  const at = { x: Number(stood.x), y: Number(stood.y) };
+  const setDown = { act_id: actId == null ? null : String(actId), by: String(actor), at, written_at: writtenAt ?? null };
+  const payload = { by: madeBy, slug, amend: true, at };
+  for (const k of AMEND_CARRIES) if (mark[k] !== undefined && mark[k] !== null) payload[k] = mark[k];
+  return { payload, setDown };
+}
+
+/**
+ * File the amend a drop owes, or say why none was filed. Never throws: the drop
+ * has already stood, and a failure here is an answer on its receipt.
+ *
+ * `deps` are the readers and the door, injectable so a falsifier drives the
+ * real door with a canon record and a household map it supplies.
+ */
+export async function fileSetDownAmend({ did, stood, key, actId = null, deps = {} }) {
+  const thing = String(did.thing);
+  const madeBy = thing.split("/")[0];
+  const actor = String(did.declared_by);
+  const base = { by: actor, made_by: madeBy, at: stood ?? null };
+  try {
+    let householdOf = deps.householdOf;
+    if (householdOf === undefined) {
+      try { ({ householdOf } = await import("./households.mjs")); } catch { householdOf = null; }
+    }
+    const house = sameHousehold(madeBy, actor, householdOf);
+    if (!house.same) {
+      return house.how === "household"
+        ? { ...base, whose: "another household's", amend: { filed: false, why: `${madeBy} made it and you are not of ${madeBy}'s household (by the town's household record) — a set-down by another household moves nothing in canon on its own` } }
+        : { ...base, whose: "unread", amend: { filed: false, why: "the household record could not be read here, so this door cannot tell whether you set down your own household's thing — nothing was filed" } };
+    }
+    const mark = deps.mark !== undefined ? deps.mark
+      : await (async () => { const { worldMarkById } = await import("./world.mjs"); return (await worldMarkById(thing)).mark; })();
+    const built = setDownAmend({ thing, mark, stood, actor, actId, writtenAt: did.at ?? null });
+    if (built.refused) return { ...base, whose: "your household's", amend: { filed: false, why: built.refused } };
+    const leave = deps.leave ?? (async (payload, k, opts) => {
+      const [{ leaveMarkViaOffice }, { WORLD_CLONE }] = await Promise.all([import("./world.mjs"), import("./world-store.mjs")]);
+      return leaveMarkViaOffice(WORLD_CLONE, payload, k, opts);
+    });
+    const res = await leave(built.payload, key, { setDown: built.setDown });
+    if (res?.error) return { ...base, whose: "your household's", amend: { filed: false, why: `the amend door answered: ${res.defect ?? res.error}` } };
+    return { ...base, whose: "your household's", amend: {
+      filed: true, mark: res?.id ?? thing, seq: res?.seq ?? null, put_forward: res?.put_forward === true,
+      ...(res?.put_forward === true ? {} : { to_publish: res?.to_publish ?? null }),
+    } };
+  } catch (e) {
+    return { ...base, whose: "your household's", amend: { filed: false, why: `the amend door refused: ${String(e?.defect ?? e?.message ?? e).slice(0, 200)}` } };
+  }
+}
+
+/**
+ * THE RECEIPT'S SENTENCE, one per outcome — which of the two branches happened,
+ * and whether canon will follow. The first clause is the one the receipt has
+ * always carried; what follows it is now true of this drop.
+ */
+export function setDownNote(setDown) {
+  const lead = "it stands where you stood when you set it down, and the act carries that place";
+  const a = setDown?.amend;
+  if (!a) return `${lead}.`;
+  if (a.filed && a.put_forward)
+    return `${lead}; the amend that re-sites the mark is filed${a.seq != null ? ` (act ${a.seq})` : ""}, and canon moves it here at the next crossing.`;
+  if (a.filed)
+    return `${lead}; the amend that re-sites the mark is filed as ${setDown.made_by}'s private draft — no escrow behind it clears the ground it now stands on, so canon keeps it where it was folded until it is put forward.`;
+  if (setDown.whose === "another household's")
+    return `${lead} — but ${setDown.made_by} made it, and a set-down by another household moves nothing in canon on its own: it reads as set down by you, unaccepted, and canon stays where ${setDown.made_by} put it.`;
+  return `${lead}; no amend was filed (${a.why}), so canon keeps it where it was folded and the set-down is the read's answer until one is.`;
 }
 
 export async function callHoldTool(name, args = {}, key = null) {
@@ -962,8 +1144,18 @@ export async function callHoldTool(name, args = {}, key = null) {
     const face = faceOf(preHolder, args.to ?? null);
     const reached = await refuseOutOfReach({ thing: args.thing, to: args.to ?? null, actor, act: face, holder: preHolder });
 
-    if (laneFlipped("hold"))
-      return await declareHoldingFlipped({ db, thing: args.thing, to: args.to ?? null, actor, dials, key, reached, stood: await standpointOfActor(actor) });
+    if (laneFlipped("hold")) {
+      const stood = await standpointOfActor(actor);
+      const out = await declareHoldingFlipped({ db, thing: args.thing, to: args.to ?? null, actor, dials, key, reached, stood });
+      if (out?.did !== "drop") return out;
+      // AFTER the drop's COMMIT, never inside its transaction: the amend is the
+      // mark lane's own act on the mark lane's own pen, and holding the hold
+      // lane's sqlite lock across a second pen's round trip would be a lock
+      // this door has no business taking. The drop stands whatever the amend
+      // does; the receipt says which happened.
+      const setDown = await fileSetDownAmend({ did: out, stood, key, actId: out.seq ?? null });
+      return { ...out, stands_note: setDownNote(setDown), set_down: setDown };
+    }
     // ── THE UNFLIPPED PEN ─────────────────────────────────────────────
     // Both legs run before anything is written, and both are read from the live
     // holder the adjudicator is about to read: the `to:`-on-an-unheld-thing
@@ -979,7 +1171,10 @@ export async function callHoldTool(name, args = {}, key = null) {
     const did = declareHolding({ db, thing: args.thing, to: args.to ?? null, actor, roster: null, groundOwner: null, dials, rows: preRows });
     const stood = await standpointOfActor(actor);
     mirrorHoldingAct(did, key);
-    return dressReceipt(did, { reached, stood });
+    // The mirror is fire-and-forget on this pen, so there is no act id to
+    // attribute to; the declaration's own stamp pairs the two acts instead.
+    const setDown = did.did === "drop" ? await fileSetDownAmend({ did, stood, key, actId: null }) : null;
+    return dressReceipt(did, { reached, stood, setDown });
   } finally { try { db?.close(); } catch { /* a reader that cannot close is still a reader that read */ } }
 }
 
@@ -1107,7 +1302,11 @@ export async function declareHoldingFlipped({ db, thing, to = null, actor, dials
     db.exec("COMMIT");
     // Which store is the RECORD for this act — said in the answer, as the stance
     // door says it (the journal row behind it is the reverse-mirror copy).
-    return { ...dressReceipt(did, { reached, stood }), log: "acts", seq: row.seq ?? null };
+    // `seq` IS THE ACT'S ID (G1): `appendActFlipped` answers `seq: null` and
+    // `actId`, and every other flipped door answers with the id. This one read
+    // `row.seq` and so answered null on every act since G1 — found by POS-138,
+    // which needs the drop act's id to attribute the amend to.
+    return { ...dressReceipt(did, { reached, stood }), log: "acts", seq: row.actId ?? row.seq ?? null };
   } catch (err) {
     try { db.exec("ROLLBACK"); } catch { /* no transaction to roll back — the BEGIN itself failed */ }
     if (err?.name === "PenUnreachableError")

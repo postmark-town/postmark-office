@@ -63,7 +63,7 @@ const norm = (sql) => String(sql).replace(/\s+/g, " ").trim();
  * consulted BEFORE the throw and AFTER the built-ins, so a suite can add the
  * docket without forking this file.
  */
-export function makeActsPen({ households = [], pins = [], meta = [], claims = [], windows = [{ id: 1 }], also = [], failOn = null } = {}) {
+export function makeActsPen({ households = [], pins = [], meta = [], claims = [], windows = [{ id: 1 }], marks = [], also = [], failOn = null } = {}) {
   const state = {
     acts: [],
     // THE DOCKET. Empty by default, and empty is an ANSWER here rather than a
@@ -199,7 +199,18 @@ export function makeActsPen({ households = [], pins = [], meta = [], claims = []
         (want ? want.includes(c.status) : true) && (asked == null ? true : c.household === asked));
       return { rows: rows.map((c) => ({ ...c })), rowCount: rows.length };
     }
-    if (/^SELECT/i.test(q) && /FROM marks/i.test(q)) return { rows: [], rowCount: 0 };
+    // THE STANDING MARKS, for the one question the write path asks of them:
+    // the amend's "what does this slug supersede" (`world2-claims.mjs` #2806,
+    // `WHERE slug = $1 AND status = 'standing'`). Empty by default, which is
+    // every suite's answer before POS-138 seeded one; any other read of
+    // `marks` answers empty exactly as it always did.
+    if (/^SELECT/i.test(q) && /FROM marks/i.test(q)) {
+      if (/slug = \$1/i.test(q) && /status = 'standing'/i.test(q)) {
+        const hit = marks.filter((m) => m.slug === params[0] && (m.status ?? "standing") === "standing").slice(0, 1);
+        return { rows: hit.map((m) => ({ id: String(m.id) })), rowCount: hit.length };
+      }
+      return { rows: [], rowCount: 0 };
+    }
     if (/^INSERT INTO claims/i.test(q)) {
       const [, kind, claimant, household, body, geometry, bbox, stake, supersedes, data, slug, status] = params;
       const row = { id: `claim-${state.claims.length + 1}`, slug, class: kind, claimant, household, status, body,
