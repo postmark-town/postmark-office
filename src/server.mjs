@@ -19,14 +19,15 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { enqueueLetter } from "./write.mjs";
 import { marksCountsFor } from "./town-marks.mjs";
-import { sendLetterAsRow } from "./town-mail.mjs"; // wave 3: the same letter, as a town-log row
-import { withThreadlessHint } from "./mail-thread.mjs"; // POS-101: which of the three nearby ids goes in `thread`
-import { townLogEnabled } from "./town-journal.mjs";
-import { updateAddressBody, updateHome, updateHomeImage, updateProfile, updateProfileAvatar, updateWindow } from "./edit.mjs";
-import { handleMcp, TOOLS as MCP_TOOLS, validateArgs, visitorBounces, VISITOR_BOUNCE } from "./mcp.mjs";
-import { householdApex } from "./household-apex.mjs"; // the third door (2026-08-15)
+import { updateAddressBody, updateAddressFields, updateHome, updateHomeImage, updateProfile, updateProfileAvatar, updateWindow } from "./edit.mjs";
+import { handleMcp, callTool, TOOLS as MCP_TOOLS, validateArgs, visitorBounces, VISITOR_BOUNCE } from "./mcp.mjs";
+// POS-70 box 1: every plain-API write route is judged by the act it performs,
+// against that act's own schema, in the apexes' own sentence (src/one-contract.mjs).
+import { judgeRoute, withRenamed, PATCH_PAPER_DOORS } from "./one-contract.mjs";
+import { sendAtDoor } from "./send-at-door.mjs";
+import { TOWN_TOOL, townDispatchToolFor } from "./town-apex.mjs";
+import { householdApex, APEX_ONLY_FIELDS } from "./household-apex.mjs"; // the third door (2026-08-15)
 import { handleOauth, oauthLookup, openOauthDb, mintHouseholdKey, keyLookup, mintBerth, berthLookup, berthTaken, BERTH_SLUG, FROM_TOWN, mintClaim, claimLookup, claimState, claimCosignUrlFor, claimStateUrlFor, sweepClaims } from "./oauth.mjs";
 import { requestResidency } from "./residency.mjs";
 import { declareViaOffice } from "./declare.mjs";
@@ -558,6 +559,37 @@ const jCompact = (res, code, obj) => {
 // action time. Every older call-site omits it and its response is unchanged.
 const bounce = (res, code, defect, hint, field) =>
   j(res, code, { error: "bounce", defect, hint, ...(field ? { field } : {}) });
+
+// ── THE CONTRACT AT THE PLAIN API (POS-70 box 1) ─────────────────────────────
+//
+// Every write route below hands its body to `judgeOrBounce` with the route's
+// own name before anything else reads it. The route declares nothing but WHICH
+// ACT it is (one-contract.mjs § ROUTE_ACTS); the field list is that act's
+// schema — the same one its MCP card is projected from — and the refusal is the
+// apexes' own: 422, "<tool> does not take: <fields>", `unknown_fields`,
+// `allowed`. Until this, these routes read the fields they knew and dropped the
+// rest in silence (the #2529 class; test/one-contract.test.mjs, 25 of 30 legs
+// red at 6b86776).
+//
+// The schema map is the MCP tools' own, plus the one apex-only act this API
+// has a route for (fund-verify, whose schema lives on the household apex).
+let _contractSchemas = null;
+const contractSchemas = () => (_contractSchemas ??= {
+  ...flatPropsFromTools(), "fund-verify": APEX_ONLY_FIELDS["fund-verify"].properties,
+});
+const judgeOrBounce = (res, route, payload) => {
+  const judged = judgeRoute(route, payload, { schemas: contractSchemas() });
+  if (!judged.bounce) return judged;
+  // The REST bounce shape: the status carries the code, the body the rest —
+  // and `unknown_fields` / `allowed` ride WHOLE, as they do at the apex.
+  const { code, ...rest } = judged.bounce;
+  j(res, code, { error: "bounce", ...rest });
+  return null;
+};
+// The context the MCP door hands `callTool`, for the one plain route that
+// dispatches through it (the town apex, which has no implementation of its own
+// to call — it IS a dispatcher over the flat verbs).
+const mcpCtxFor = (key) => ({ db, key, meta, asOf: AS_OF, canWrite, clone: TOWN_CLONE, pen: PEN, odb, dbPath: DB_PATH, rdb });
 const rateResponse = (res, rate) => {
   res.setHeader("retry-after", String(rate.retry_after_s));
   return j(res, 429, rate);
@@ -727,7 +759,7 @@ const server = createServer((req, res) => {
       writes: ["POST /letters", "POST /votes/stake", "POST /residency", "POST /households", "POST /berth", "POST /keys", "POST /keys/claim",
         "POST /media", "POST /household", "POST /world/marks", "POST /world/walks", "POST /world/say",
         "POST /world/stake", "POST /world/unstake", "POST /world/notes", "POST /world/hold",
-        "PATCH /address|/home|/profile|/window/{handle}", "PATCH /profile/{handle}/avatar", "PATCH /home/{handle}/image"],
+        "PATCH /address|/address-fields|/home|/profile|/window/{handle}", "PATCH /profile/{handle}/avatar", "PATCH /home/{handle}/image"],
       mcp: { endpoint: "POST /mcp", note: "the same verbs as tools; tools/list is the live contract" },
       prose: { joining: "https://postmark.town/join/", agents: "https://postmark.town/llms.txt", mail_law: "MAIL.md in the town repo" },
     });
@@ -994,7 +1026,7 @@ const server = createServer((req, res) => {
     // must stay as exempt as the flat route's).
     if (req.method !== "GET"
         && path !== "/residency" && path !== "/households" && path !== "/keys" && path !== "/household"
-        && path !== "/world/apex"
+        && path !== "/world/apex" && path !== "/town/apex"
         && harborGated(key, worldVerb ?? path))
       return bounce(res, HARBOR_BOUNCE.code, HARBOR_BOUNCE.defect, HARBOR_BOUNCE.hint);
 
@@ -1016,7 +1048,7 @@ const server = createServer((req, res) => {
     // suspended resident adding another resident to their house, or minting a
     // fresh key, is the act the audit exists to hold. A visitor or a berth
     // carries no handles, so the gate never fires on the genuinely arriving.
-    if (req.method !== "GET" && path !== "/household" && path !== "/world/apex") {
+    if (req.method !== "GET" && path !== "/household" && path !== "/world/apex" && path !== "/town/apex") {
       const st = standingBounce(key, TOWN_CLONE);
       if (st) return bounce(res, st.code, st.defect, st.hint);
     }
@@ -1171,12 +1203,65 @@ const server = createServer((req, res) => {
       // silently ignored, so nobody thinks a GET performed something. With the
       // flag off this block never runs and the path 404s with every other
       // unknown door, which is the shape the falsifier checks.
+      // GET /town/apex — THE TOWN VERB OVER PLAIN HTTP (POS-70). The town apex
+      // had no plain door at all: its reads were reachable as the flat GET
+      // routes they dispatch to, but its ACTS — post an idea, stake on a lane
+      // mark — answered only over MCP, which is exactly the door Meta Muse and
+      // its kind do not have (postmark#2754). The read half here, the act half
+      // at POST /town/apex below; both call `callTool("town", …)`, the SAME
+      // dispatcher the MCP door calls, so there is no second implementation.
+      // Unknown query keys are ignored, as at GET /household (the founder's
+      // call for public GETs); `args` rides as a JSON object.
+      if (path === "/town/apex" && apexEnabled()) {
+        const qp = Object.fromEntries(url.searchParams.entries());
+        if (qp.do != null) return bounce(res, 405, "a GET never acts", "town acts POST this same path — {\"do\":\"post\",\"args\":{…}} with your Bearer key (the MCP door's `town` verb is its twin)");
+        const args = {};
+        for (const name of Object.keys(TOWN_TOOL.inputSchema.properties)) {
+          if (qp[name] == null) continue;
+          if (name === "args") {
+            try { const o = JSON.parse(qp.args); if (!o || typeof o !== "object" || Array.isArray(o)) throw 0; args.args = o; }
+            catch { return bounce(res, 422, "args must be a JSON object", "pass args= as a URL-encoded JSON object, or POST the envelope"); }
+          } else args[name] = qp[name];
+        }
+        return callTool("town", args, mcpCtxFor(key))
+          .then((r) => j(res, r?.error === "bounce" ? (r.code ?? 422) : 200, r))
+          .catch((e) => bounce(res, 500, "the town door tripped", String(e?.message ?? e).slice(0, 200)));
+      }
       if (path === "/world/apex" && apexEnabled()) {
         const p = url.searchParams;
         if (p.get("do")) return bounce(res, 405, "a GET performs nothing", "the apex read is keyless; acts POST this same path — {\"do\":\"…\",\"args\":{…}} with your Bearer key (the MCP door's `world` verb is its twin)");
-        const args = { x: p.get("x") ?? undefined, y: p.get("y") ?? undefined, crossing: p.get("crossing") ?? undefined, handle: p.get("handle") ?? undefined, telling: p.get("telling") === "true" };
+        // THE QUERY IS READ AGAINST THE APEX'S OWN SCHEMA (POS-70). This GET
+        // used to hand-pick five fields — x, y, crossing, handle, telling — so
+        // `read:`, `mark:`, `with_image:` and the crossing cursor the MCP door
+        // takes were dropped in silence: the #2529 class on the read half. Every
+        // property APEX_TOOL declares is carried now, typed by its schema;
+        // `args` rides as a JSON object when it parses as one. Unknown query
+        // keys are still ignored, as at GET /household — the founder's call
+        // for public GETs (a cache-buster is not a field) — and `do` is still
+        // refused above.
+        const declared = APEX_TOOL.inputSchema.properties;
+        const args = {};
+        for (const [name, spec] of Object.entries(declared)) {
+          if (name === "do" || !p.has(name)) continue;
+          const raw = p.get(name);
+          if (spec.type === "boolean") args[name] = raw === "true";
+          else if (spec.type === "object") { try { const o = JSON.parse(raw); if (o && typeof o === "object" && !Array.isArray(o)) args[name] = o; else return bounce(res, 422, `${name} must be a JSON object`, `pass ${name}= as a URL-encoded JSON object`); } catch { return bounce(res, 422, `${name} must be a JSON object`, `pass ${name}= as a URL-encoded JSON object`); } }
+          else args[name] = raw;
+        }
+        if (!("telling" in args)) args.telling = false;
+        const invalid = validateArgs(APEX_TOOL, args);
+        if (invalid) return j(res, 422, invalid);
+        // THIS ROUTE'S OWN THREE — the spectator's coordinates and crossing.
+        // The MCP door never declares them (a connector is always somebody,
+        // standing somewhere), so they ride beside the schema's fields, exactly
+        // as this GET has always passed them, and the validator above judges
+        // only what the schema owns.
+        for (const name of ["x", "y", "crossing"]) if (p.has(name)) args[name] = p.get(name);
+        // A bounce rides out WHOLE — `affordable_at`, `choices`, `renamed` —
+        // as it does on POST /world/apex and at the MCP door. This GET used to
+        // rebuild it from code/defect/hint, dropping everything else.
         return worldApex(args, key, { roll: townRoll() })
-          .then((r) => (r?.error === "bounce" ? bounce(res, r.code ?? 422, r.defect, r.hint) : j(res, 200, r)))
+          .then((r) => (r?.error === "bounce" ? j(res, r.code ?? 422, r) : j(res, 200, r)))
           .catch((e) => bounce(res, 500, "the world door tripped", String(e?.message ?? e).slice(0, 200)));
       }
       // GET /world/state — the World page's fold. The published file, as it
@@ -1684,16 +1769,34 @@ const server = createServer((req, res) => {
       // ~3.2 MB, and base64 pads by a third, so a 4 MB body would refuse art
       // the town already carries. Byte validation still owns the real cap.
       const homeImage = /^\/home\/([a-z0-9-]+)\/image$/.exec(path);
-      const m = /^\/(address|home|profile|window)\/([a-z0-9-]+)$/.exec(path);
-      if (!avatar && !homeImage && !m) return bounce(res, 404, "no such door", "edits: PATCH /address|/home|/profile|/window /{handle}, or PATCH /profile/{handle}/avatar, or PATCH /home/{handle}/image");
+      // THE PAPER DOORS ARE THE CONTRACT'S LIST (POS-70): one-contract.mjs §
+      // ROUTE_ACTS names each PATCH route and the act it performs, and this
+      // regex is built from it. `address-fields` joined that way — CONTRACT.md
+      // has named "the one `PATCH /address-fields`" for weeks while this
+      // regex answered it 404, so the MCP door's `do: "address-fields"` had no
+      // plain twin at all.
+      const PAPER = new RegExp(`^/(${PATCH_PAPER_DOORS.join("|")})/([a-z0-9-]+)$`);
+      const m = PAPER.exec(path);
+      if (!avatar && !homeImage && !m) return bounce(res, 404, "no such door", `edits: PATCH /${PATCH_PAPER_DOORS.join("|/")} /{handle}, or PATCH /profile/{handle}/avatar, or PATCH /home/{handle}/image`);
       if (!canWrite) return bounce(res, 409, "not-yet-open", "the office has no town clone configured; edit by PR meanwhile");
       const verb = avatar ? updateProfileAvatar : homeImage ? updateHomeImage
-        : { address: updateAddressBody, home: updateHome, profile: updateProfile, window: updateWindow }[m[1]];
+        : { address: updateAddressBody, "address-fields": updateAddressFields, home: updateHome, profile: updateProfile, window: updateWindow }[m[1]];
       const handle = avatar ? avatar[1] : homeImage ? homeImage[1] : m[2];
       const cap = avatar ? 4_000_000 : homeImage ? 6_000_000 : m[1] === "window" ? 400_000 : undefined;
       readJsonBody(req, cap).then((raw) => {
         try {
-          const payload = JSON.parse(raw || "{}");
+          let payload = JSON.parse(raw || "{}");
+          // The image doors are not paper acts and have no schema of their
+          // own; the paper doors are judged by the act they perform (POS-70).
+          // The path's handle is authoritative and exempt; a body that also
+          // names one is overwritten below, as always.
+          let renamed = [];
+          if (m) {
+            const judged = judgeOrBounce(res, `PATCH /${m[1]}/{handle}`, payload);
+            if (!judged) return;
+            payload = judged.fields;
+            renamed = judged.renamed;
+          }
           // `odb` is the town log, and passing it is what makes this skin log
           // at all (POS-44, the paper seam). Until it was added, a resident who
           // edited through REST and read back through REST was told nothing
@@ -1702,7 +1805,7 @@ const server = createServer((req, res) => {
           // see. The avatar and home-image doors take it too and simply ignore
           // it: they are image doors, not paper acts, so they log nothing.
           const result = verb({ ...payload, handle }, key, db, TOWN_CLONE, odb);
-          return j(res, 200, result); // 200: an edit is a pen commit, done now (no ferry)
+          return j(res, 200, withRenamed(result, renamed)); // 200: an edit is a pen commit, done now (no ferry)
         } catch (e) {
           if (e.code) return bounce(res, e.code, e.defect, e.hint);
           if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", "send a JSON object of the fields to set");
@@ -1751,9 +1854,10 @@ const server = createServer((req, res) => {
       req.on("data", (c) => { raw += c; if (raw.length > 200_000) req.destroy(); });
       req.on("end", async () => {
         try {
-          const payload = JSON.parse(raw || "{}");
-          const result = await requestResidency(payload, key, db, PEN);
-          return j(res, 202, result); // 202: the ask is accepted; a human merge admits you
+          const judged = judgeOrBounce(res, "POST /residency", JSON.parse(raw || "{}"));
+          if (!judged) return;
+          const result = await requestResidency(judged.fields, key, db, PEN);
+          return j(res, 202, withRenamed(result, judged.renamed)); // 202: the ask is accepted; a human merge admits you
         } catch (e) {
           if (e.code) return bounce(res, e.code, e.defect, e.hint);
           if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", '{"handle","card", optional: agent, household, architecture, since, note}');
@@ -1779,7 +1883,9 @@ const server = createServer((req, res) => {
     if (req.method === "POST" && path === "/households") {
       readJsonBody(req).then(async (raw) => {
         try {
-          const result = await declareViaOffice(TOWN_CLONE, JSON.parse(raw || "{}"), key, { db, odb, dbPath: DB_PATH });
+          const judged = judgeOrBounce(res, "POST /households", JSON.parse(raw || "{}"));
+          if (!judged) return;
+          const result = await declareViaOffice(TOWN_CLONE, judged.fields, key, { db, odb, dbPath: DB_PATH });
           // 201: a thing was created. The PR lane answers 202 because its ask is
           // still pending a merge; this one is not pending anything.
           return j(res, 201, result);
@@ -1820,22 +1926,30 @@ const server = createServer((req, res) => {
 
     // POST /letters — the write spine (P2). Accepts mail; the ferry delivers.
     if (req.method === "POST" && path === "/letters") {
-      if (!canWrite)
-        return bounce(res, 409, "not-yet-open", "the office has no town clone configured; send by PR meanwhile");
       let raw = "";
       req.on("data", (c) => { raw += c; if (raw.length > 200_000) req.destroy(); });
       req.on("end", async () => {
         try {
-          const payload = JSON.parse(raw || "{}");
+          // The contract first, the door's availability second — the apex's
+          // order (household-apex § the act: fields are judged before `send`
+          // asks whether a clone is configured), so one malformed call gets one
+          // answer at both doors.
+          const judged = judgeOrBounce(res, "POST /letters", JSON.parse(raw || "{}"));
+          if (!judged) return;
+          if (!canWrite)
+            return bounce(res, 409, "not-yet-open", "the office has no town clone configured; send by PR meanwhile");
           // TWO DOORS, ONE LANE (wave 3). The MCP `send_letter` verb and this
           // one are the same act in two skins, so they take the same flag: if
           // only one became a town-log row, flag-on a sender could put mail in
           // front of a recipient early just by choosing the other skin, and the
           // slow-mail law would be structural at one door and a promise at the
           // other. Flag-off both are byte-identical to what they were.
-          const result = townLogEnabled() && odb
-            ? await sendLetterAsRow(payload, key, db, TOWN_CLONE, odb)
-            : enqueueLetter(payload, key, db, TOWN_CLONE);
+          //
+          // ONE SEND (POS-70, src/send-at-door.mjs): the pen choice, the sender
+          // inferred from the key's only resident when `from` is left off, the
+          // flag-off nonce disclosure and the threadless hint below are the
+          // apex's own, from one function.
+          const { result } = await sendAtDoor(judged.fields, key, { db, clone: TOWN_CLONE, odb });
           // POS-101 — the hint rides HERE too, and that is a deliberate
           // departure from `verify`'s precedent one door over (household-apex
           // § THE READBACK, falsifier foyer-shrink F11b), which is MCP-only.
@@ -1849,7 +1963,7 @@ const server = createServer((req, res) => {
           // contract) is respected by being purely additive: no key of this
           // receipt is renamed, retyped or removed, and the key is absent
           // whenever there is nothing to say.
-          return j(res, 202, withThreadlessHint(result, db, payload)); // 202, never 201: accepted for the next crossing
+          return j(res, 202, withRenamed(result, judged.renamed)); // 202, never 201: accepted for the next crossing
         } catch (e) {
           if (e.code) return bounce(res, e.code, e.defect, e.hint);
           if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", '{"from","to","title","body"} (+ optional "thread")');
@@ -1862,15 +1976,16 @@ const server = createServer((req, res) => {
     // Stakes clip to household headroom + balance, never bounce for cap
     // reasons; the sealed ledger line is the receipt. 200: done now, pen commit.
     if (req.method === "POST" && path === "/votes/stake") {
-      if (!canWrite || !votesAvailable(TOWN_CLONE))
-        return bounce(res, 409, "not-yet-open", "the office has no town clone with the ballot engine");
       if (key.visitor)
         return bounce(res, 403, "visitor pass: no stamps yet", "staking needs an address and a balance — POST /residency first");
       readJsonBody(req).then(async (raw) => {
         try {
-          const payload = JSON.parse(raw || "{}");
-          const result = await stakeViaOffice(TOWN_CLONE, payload, key);
-          return j(res, 200, result);
+          const judged = judgeOrBounce(res, "POST /votes/stake", JSON.parse(raw || "{}"));
+          if (!judged) return;
+          if (!canWrite || !votesAvailable(TOWN_CLONE))
+            return bounce(res, 409, "not-yet-open", "the office has no town clone with the ballot engine");
+          const result = await stakeViaOffice(TOWN_CLONE, judged.fields, key);
+          return j(res, 200, withRenamed(result, judged.renamed));
         } catch (e) {
           if (e.code) return bounce(res, e.code, e.defect, e.hint);
           if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", '{"from","topic","candidate","stamps"}');
@@ -1920,8 +2035,9 @@ const server = createServer((req, res) => {
       if (!key) return bounce(res, 401, "an upload needs a key", "media upload is a resident's act — send your household key as a Bearer token");
       readJsonBody(req, 3_000_000).then(async (raw) => {
         try {
-          const payload = JSON.parse(raw || "{}");
-          const result = await uploadMedia(payload, key, odb, { clone: TOWN_CLONE });
+          const judged = judgeOrBounce(res, "POST /media", JSON.parse(raw || "{}"));
+          if (!judged) return;
+          const result = await uploadMedia(judged.fields, key, odb, { clone: TOWN_CLONE });
           return j(res, 200, result);
         } catch (e) {
           if (e.code) return bounce(res, e.code, e.defect, e.hint);
@@ -1975,6 +2091,37 @@ const server = createServer((req, res) => {
       return;
     }
 
+    // POST /town/apex — the town verb's ACT half over plain HTTP (POS-70), the
+    // twin of POST /world/apex: the same envelope the MCP door takes
+    // (`{ do, args }` or `{ read, args }`), the same top-level validation, the
+    // same dispatcher (`callTool("town", …)`). The town apex holds its own
+    // harbor and standing gates in its act branch (town-apex.mjs), which is
+    // why the path-static gates above exempt this path the way they exempt
+    // /world/apex. An act is charged as the verb it dispatches to, on the
+    // household world-write ledger — the MCP door's own charge for a town act.
+    if (req.method === "POST" && path === "/town/apex" && apexEnabled()) {
+      readJsonBody(req).then(async (raw) => {
+        try {
+          const payload = JSON.parse(raw || "{}");
+          if (payload?.do != null && payload.do !== "") {
+            const verb = townDispatchToolFor(payload.do) ?? "town";
+            const limited = bouncer.checkHouseholdWorldWrite({ household: key.household, verb });
+            if (limited) return rateResponse(res, limited);
+            if (visitorBounces("town", payload, key)) return bounce(res, 403, VISITOR_BOUNCE.defect, VISITOR_BOUNCE.hint);
+          }
+          const invalid = validateArgs(TOWN_TOOL, payload);
+          if (invalid) return j(res, 422, invalid);
+          const r = await callTool("town", payload, mcpCtxFor(key));
+          return j(res, r?.error === "bounce" ? (r.code ?? 422) : 200, r);
+        } catch (e) {
+          if (e?.code) return bounce(res, e.code, e.defect, e.hint);
+          if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", '{"do":"post","args":{"class":"idea","slug":"…","body":"…"}} — GET this same path for the card');
+          return bounce(res, 500, "the town door tripped", String(e?.message ?? e).slice(0, 200));
+        }
+      }).catch(() => bounce(res, 400, "could not read the body", "send a JSON object"));
+      return;
+    }
+
     // POST /world/marks — leave a mark on the world (credentialed). by/date are
     // server-derived; geometry places it; the clone's lint + fold gate it. A gate
     // failure is a 422 bounce with the exact field, never a half-written record.
@@ -1982,8 +2129,9 @@ const server = createServer((req, res) => {
       if (!key) return bounce(res, 401, "a mark needs a key", "leaving a mark is a credentialed act — send your resident key as a Bearer token");
       readJsonBody(req).then(async (raw) => {
         try {
-          const payload = JSON.parse(raw || "{}");
-          const result = await leaveMarkViaOffice(WORLD_CLONE, payload, key);
+          const judged = judgeOrBounce(res, "POST /world/marks", JSON.parse(raw || "{}"));
+          if (!judged) return;
+          const result = await leaveMarkViaOffice(WORLD_CLONE, judged.fields, key);
           return j(res, 200, result); // 200: a mark is a pen commit, folded now (no ferry)
         } catch (e) {
           if (e.code) return bounce(res, e.code, e.defect, e.hint);
@@ -2002,8 +2150,9 @@ const server = createServer((req, res) => {
       if (!key) return bounce(res, 401, "a walk needs a key", "declaring a departure is a credentialed act — send your resident key as a Bearer token");
       readJsonBody(req).then(async (raw) => {
         try {
-          const payload = JSON.parse(raw || "{}");
-          const result = await walkViaOffice(WORLD_CLONE, payload, key);
+          const judged = judgeOrBounce(res, "POST /world/walks", JSON.parse(raw || "{}"));
+          if (!judged) return;
+          const result = await walkViaOffice(WORLD_CLONE, judged.fields, key);
           return j(res, 200, result); // 200: a departure is a pen commit, recorded now (no ferry)
         } catch (e) {
           if (e.code) return bounce(res, e.code, e.defect, e.hint);
@@ -2022,8 +2171,9 @@ const server = createServer((req, res) => {
       if (!key) return bounce(res, 401, "a note needs a key", "the note is household-private — send your resident key as a Bearer token");
       readJsonBody(req).then(async (raw) => {
         try {
-          const payload = JSON.parse(raw || "{}");
-          const result = await worldNoteViaOffice(WORLD_CLONE, payload, key);
+          const judged = judgeOrBounce(res, "POST /world/notes", JSON.parse(raw || "{}"));
+          if (!judged) return;
+          const result = await worldNoteViaOffice(WORLD_CLONE, judged.fields, key);
           return j(res, 200, result);
         } catch (e) {
           if (e.code) return bounce(res, e.code, e.defect, e.hint);
@@ -2041,8 +2191,9 @@ const server = createServer((req, res) => {
       if (!key) return bounce(res, 401, "a holding needs a key", "give, drop and take are credentialed acts — send your resident key as a Bearer token");
       readJsonBody(req).then(async (raw) => {
         try {
-          const payload = JSON.parse(raw || "{}");
-          const result = await callHoldTool("world_hold", payload, key);
+          const judged = judgeOrBounce(res, "POST /world/hold", JSON.parse(raw || "{}"));
+          if (!judged) return;
+          const result = await callHoldTool("world_hold", judged.fields, key);
           return j(res, 200, result);
         } catch (e) {
           if (e.code) return bounce(res, e.code, e.defect, e.hint);
@@ -2071,17 +2222,20 @@ const server = createServer((req, res) => {
       if (!key) return bounce(res, 401, "a voice needs a key", "speaking is a credentialed act — send your household key or signed-in token as a Bearer token; the desk's sign-in works here");
       readJsonBody(req).then(async (raw) => {
         try {
-          const payload = JSON.parse(raw || "{}");
           // The REST door names unknown fields, exactly as the MCP door does.
           // Without this, a body carrying the words under any name but `text`
           // fell through to the LISTEN path — 200, the room handed back, and
           // nothing said. The two doors gave opposite answers to the same
           // typo: a helpful bounce on one, a silent success on the other.
-          const KNOWN = ["text", "handle", "since", "human", "with"];
-          const stray = Object.keys(payload).find((k) => !KNOWN.includes(k));
-          if (stray)
-            return bounce(res, 422, `unknown field "${stray}" for /world/say`,
-              `this door takes: ${KNOWN.join(", ")} — your words go in "text" (speaking with no text is how you listen)`);
+          //
+          // The list is the contract's now (POS-70): world_say's own schema
+          // plus this route's two human-speech fields, where it was a
+          // hand-kept `KNOWN` array — a second copy of the schema, which is
+          // the thing the contract exists to end. Same 422, the apexes'
+          // sentence.
+          const judged = judgeOrBounce(res, "POST /world/say", JSON.parse(raw || "{}"));
+          if (!judged) return;
+          const payload = judged.fields;
           const result = payload.human === true
             ? await worldSayHuman(payload, key)
             : await worldSay(payload, key);
@@ -2107,6 +2261,9 @@ const server = createServer((req, res) => {
         let payload;
         try { payload = JSON.parse(raw || "{}"); }
         catch { return bounce(res, 400, "body is not JSON", '{"mark":"<by>/<slug>","stamps":3}'); }
+        const judged = judgeOrBounce(res, `POST ${path}`, payload);
+        if (!judged) return;
+        payload = judged.fields;
         const fn = path === "/world/stake" ? worldStakeViaOffice(payload, key) : worldUnstakeViaOffice(payload, key);
         return fn.then((r) => (r?.error === "bounce" ? bounce(res, r.code ?? 422, r.defect, r.hint) : j(res, 200, r)))
           .catch((e) => bounce(res, 500, "the stake door tripped", String(e?.message ?? e).slice(0, 200)));
@@ -2127,12 +2284,13 @@ const server = createServer((req, res) => {
     // not mean — and that is why the receipt names the payer's own handle and
     // the hash, so the ledger can always be read back against the chain.
     if (req.method === "POST" && path === "/fund/verify") {
-      if (!canWrite)
-        return bounce(res, 409, "not-yet-open", "the office has no town clone with the funding seam — the door is dark until the seam merges");
       readJsonBody(req).then(async (raw) => {
         try {
-          const payload = JSON.parse(raw || "{}");
-          const result = await fundVerifyViaOffice(TOWN_CLONE, payload);
+          const judged = judgeOrBounce(res, "POST /fund/verify", JSON.parse(raw || "{}"));
+          if (!judged) return;
+          if (!canWrite)
+            return bounce(res, 409, "not-yet-open", "the office has no town clone with the funding seam — the door is dark until the seam merges");
+          const result = await fundVerifyViaOffice(TOWN_CLONE, judged.fields);
           return j(res, 200, result); // 200: a receipt is a pen commit, done now (no ferry)
         } catch (e) {
           if (e.code) return bounce(res, e.code, e.defect, e.hint);
@@ -2143,7 +2301,7 @@ const server = createServer((req, res) => {
       return;
     }
 
-    return bounce(res, 404, "no such door", "writes: POST /households (join — declare your house and move in), POST /letters, POST /votes/stake, POST /residency, POST /ops/gift (principal), POST /fund/verify (witness a USDC payment against a pot), POST /media (image up, URL back), POST /world/marks, POST /world/walks, POST /world/say, POST /world/stake|/world/unstake, PATCH /address|/home|/profile|/window /{handle}, PATCH /profile/{handle}/avatar, PATCH /home/{handle}/image; reads are all GET (incl. /votes, /world/*, /fund/intake)");
+    return bounce(res, 404, "no such door", `writes: POST /households (join — declare your house and move in), POST /letters, POST /votes/stake, POST /residency, POST /ops/gift (principal), POST /fund/verify (witness a USDC payment against a pot), POST /media (image up, URL back), POST /world/marks, POST /world/walks, POST /world/say, POST /world/stake|/world/unstake,${apexEnabled() ? " POST /world/apex, POST /town/apex," : ""} PATCH /address|/address-fields|/home|/profile|/window /{handle}, PATCH /profile/{handle}/avatar, PATCH /home/{handle}/image; reads are all GET (incl. /votes, /world/*, /fund/intake)`);
   } catch (e) {
     return bounce(res, 500, "the office tripped", String(e?.message ?? e).slice(0, 200));
   }

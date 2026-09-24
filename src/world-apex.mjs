@@ -36,6 +36,7 @@
 // law — refuse or disclose absent inputs, never quietly substitute.)
 
 import { DatabaseSync } from "node:sqlite";
+import { renamedRow } from "./one-contract.mjs"; // POS-70: the one rename shape
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -3060,7 +3061,7 @@ export const WORLD_READ_FIELDS = Object.freeze({
   // exactly what it does today. So the room's cursor rides where a read's own
   // fields ride — in `args:` — and says what it is.
   say: { text: { type: "string", description: "refused — a read never performs; speak with do: \"say\"" },
-         since: { type: "number", description: "the `latest` stamp from your previous say-read — you hear only voices newer than it, and the room's shape rides either way. Milliseconds, and NOT the top-level since: (which is a crossing number, and buys `happened`)." } },
+         since: { type: "number", description: "the `latest` stamp from your previous say-read — you hear only voices newer than it, and the room's shape rides either way. Milliseconds, and NOT the top-level since_crossing: (a crossing number, which buys `happened`)." } },
   walk: {},
   "leave-mark": { mark: { type: "string", description: "one mark to look into — <by>/<slug>" },
                   depth: { type: "number", description: "how far down to descend into that mark" },
@@ -3326,7 +3327,31 @@ export async function worldApex(args = {}, key = null, ctx = {}) {
       `call twice: world { mark: "${String(args.mark)}" } for the close look, and world { ${doing ? `do: "${args.do}"` : `read: "${args.read}"`}, … } for the ${doing ? "act" : "shadow"}. To investigate a mark inside a read, that read's own args carry it — world { read: "leave-mark", args: { mark: … } }.`);
   }
   if (reading) return apexReadAction(args, key, ctx);
-  return doing ? apexDo(args, key, ctx) : apexRead(args, key, ctx);
+  if (doing) return apexDo(args, key, ctx);
+  // ── THE TWO `since` CLOCKS, ONE WORD EACH (POS-70; office PR #48) ─────────
+  //
+  // Top-level `since:` here is a CROSSING NUMBER and buys `happened`; the say
+  // room's `args: { since }` is a MILLISECOND stamp (its own `latest`). One
+  // word, two clocks — ruled into the contract pass on 2026-09-14 ("yes please
+  // fold into the One API contract"). The crossing cursor is the one renamed:
+  // `since_crossing` is the word the office already uses for it on the
+  // doorstep (`outcomes.since_crossing`), and it is the narrower door — the
+  // say room's `since` rides the flat world_say, POST /world/say and the say
+  // shadow, three doors to this one. The old spelling answers one cycle with
+  // the contract's `renamed` pointer, then stops. Inside, the read still
+  // speaks `since`: the rename is the DOOR's word, not a second variable.
+  let sinceRenamed = null;
+  if (args.since_crossing != null && args.since_crossing !== "") {
+    if (args.since != null && args.since !== "")
+      return bounce(422, 'both "since" and "since_crossing" were sent',
+        '"since" is the old spelling of "since_crossing" (the crossing number from your last reply) — send "since_crossing" alone');
+    const { since_crossing: sc, ...rest } = args;
+    args = { ...rest, since: sc };
+  } else if (args.since != null && args.since !== "") {
+    sinceRenamed = [renamedRow("field", "since", "since_crossing")];
+  }
+  const answer = await apexRead(args, key, ctx);
+  return sinceRenamed && answer && !answer.error ? { ...answer, renamed: sinceRenamed } : answer;
 }
 
 // ── the door ────────────────────────────────────────────────────────────────
@@ -3337,7 +3362,8 @@ export const APEX_TOOL = {
   name: "world",
   get description() { return APEX_DESCRIPTION; },
   inputSchema: { type: "object", properties: {
-    since: { type: "number", description: "the crossing number from your last reply — the answer then carries `happened`: what changed for YOU since (complete), a capped glance at what happened around you, and the town's headlines. The delta does not grow with how long you were away." },
+    since_crossing: { type: "number", description: "the crossing number from your last reply — the answer then carries `happened`: what changed for YOU since (complete), a capped glance at what happened around you, and the town's headlines. The delta does not grow with how long you were away. (Not the say room's `args: { since }`, which is a millisecond stamp.)" },
+    since: { type: "number", description: "RENAMED since_crossing (POS-70) — the same crossing cursor under its old name, answered with a `renamed` pointer until train/2026-w41, then refused. Send since_crossing." },
     // NO enum on do:/read:, deliberately — which acts are afforded depends on
     // WHERE YOU STAND (the bare read lists yours), so an enum here would
     // promise acts the ground refuses and bounce nothing useful. `examples`

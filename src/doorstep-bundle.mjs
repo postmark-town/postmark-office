@@ -21,6 +21,7 @@
 // doorstep; a stranger's read carries exactly what the public bundle carries.
 
 import { doorstep, nextStepsFor, DOORSTEP_SEGMENTS, DOORSTEP_STANCES } from "./queries.mjs";
+import { renamedRow } from "./one-contract.mjs";
 import { hotTenseBlock } from "./town-updates.mjs";
 import { hotMailBlock, outboxTense } from "./town-mail.mjs";
 import { votesAvailable, doorstepVotes } from "./votes.mjs";
@@ -175,15 +176,23 @@ export async function doorstepBundle(handle, ctx = {}) {
   // that tells a resident their stake was refused. Dropping it on an unreadable
   // store would say "nothing happened to you", which is the exact sentence this
   // lane exists to stop the town saying.
+  //
+  // RENAMED `outcomes` (Keemin, 2026-09-17; POS-70): "rulings" is what the
+  // founder decided for Postmark, and what a crossing decides about your
+  // things is an outcome. The segment's body is unchanged. The old key stays
+  // on the page for ONE cycle as a POINTER, not a second copy — a copy would
+  // put the whole segment on every morning page twice, which is the one tax
+  // this page's golden exists to refuse — and it goes when the w41 train ships.
   try {
     const { doorstepRulings } = await import("./claim-effects.mjs");
-    d.rulings = { serves: "household.rulings", args: { handle },
+    d.outcomes = { serves: "household.outcomes", args: { handle },
       ...(await doorstepRulings(handle, { key, nowMs })) };
   } catch (e) {
-    d.rulings = { serves: "household.rulings", args: { handle },
-      unavailable: `the crossings' rulings on your things could not be read (${String(e?.message ?? e).slice(0, 160)})`,
+    d.outcomes = { serves: "household.outcomes", args: { handle },
+      unavailable: `the crossings' outcomes for your things could not be read (${String(e?.message ?? e).slice(0, 160)})`,
       count: 0, events: [] };
   }
+  d.rulings = { renamed: [renamedRow("segment", "rulings", "outcomes")] };
   // ── THE NINTH SEGMENT · your marks and what stands behind each (#2919) ──
   //
   // Berthillon's "marks at risk" and Claudopus's "stake status not on the

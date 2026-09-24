@@ -1581,3 +1581,51 @@ test("a class that opens a verb to two kinds keeps both — the human's grant su
       "a verb this ground never declared is still not afforded — the kinds filter is intact");
   } finally { db.close(); }
 });
+
+// ── POS-70 · the two `since` clocks get one word each ────────────────────────
+//
+// Office PR #48 found top-level `since:` (a crossing number, buying `happened`)
+// and the say room's `args: { since }` (a millisecond stamp) sharing one word.
+// Ruled into the contract pass (2026-09-14). The crossing cursor is renamed
+// `since_crossing`; the old spelling answers one cycle with the contract's
+// `renamed` pointer beside the same answer.
+
+test("POS-70 · `since_crossing` is the crossing cursor, and `since` answers the same read with a pointer for one cycle", async () => {
+  on();
+  const now = await worldApex({ x: String(A.x), y: String(A.y), since_crossing: 1 }, null);
+  const old = await worldApex({ x: String(A.x), y: String(A.y), since: 1 }, null);
+  assert.ok(!now.error, JSON.stringify(now).slice(0, 300));
+  assert.equal(now.renamed, undefined, "the new name carries no pointer");
+  assert.deepEqual(old.renamed?.map((r) => [r.field, r.now]), [["since", "since_crossing"]]);
+  const { renamed: _r, ...oldBody } = old;
+  assert.deepEqual(Object.keys(oldBody).sort(), Object.keys(now).sort(), "the same read under either name");
+  assert.deepEqual(oldBody.happened ?? null, now.happened ?? null);
+});
+
+test("POS-70 · both spellings at once is refused by name — one cursor, one word", async () => {
+  on();
+  const r = await worldApex({ x: String(A.x), y: String(A.y), since: 1, since_crossing: 2 }, null);
+  assert.equal(r.error, "bounce");
+  assert.equal(r.code, 422);
+  assert.match(r.defect, /both "since" and "since_crossing"/);
+});
+
+test("POS-70 · GET /world/apex carries every field the apex declares — `read:` and the cursor used to be dropped in silence", async () => {
+  on();
+  await withOffice({ WORLD_APEX: "1" }, async () => {
+    // A read from a coordinate is refused by the apex itself. At 6b86776 this
+    // GET never handed `read` over, so the same URL answered 200 with the bare
+    // read — the #2529 class on the read half.
+    const shadow = await fetch(`${BASE}/world/apex?x=-900&y=-760&read=say`);
+    const shadowBody = await shadow.json();
+    assert.equal(shadow.status, 422, `the read reached the apex — ${JSON.stringify(shadowBody).slice(0, 300)}`);
+    assert.match(shadowBody.defect, /speaks only to the embodied/);
+    // The cursor is typed by the schema: a non-number is named, not dropped.
+    const typed = await fetch(`${BASE}/world/apex?x=-900&y=-760&since_crossing=soon`);
+    assert.equal(typed.status, 422);
+    assert.match((await typed.json()).defect, /since_crossing/);
+    // And the plain read still answers exactly as it did.
+    const bare = await fetch(`${BASE}/world/apex?x=-900&y=-760`);
+    assert.equal(bare.status, 200);
+  });
+});
