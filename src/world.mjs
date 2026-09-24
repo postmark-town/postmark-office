@@ -1863,6 +1863,10 @@ async function thingStandsBlock(id, w, r) {
       attachments, journal,
       fold: r?.at ?? null,
       centreOf,
+      // POS-138: whose house set it down decides whether the set-down is the
+      // author's move or a stranger's, unaccepted — the town's household map,
+      // never the handle alone.
+      householdOf,
       standpointOf: async (h) => {
         const s = await residentStandpoint(h, w).catch(() => null);
         return s?.placed ? { x: s.x, y: s.y } : null;
@@ -3039,7 +3043,15 @@ export function overCapHint(by, slug) {
 // critical section in leave-exec.mjs under the flock. Commit-local, push best-effort
 // (push-hold: TOWN_PUSH unset ⇒ commit-only is the default; a 403 is reported
 // push-pending, never thrown).
-export async function leaveMarkViaOffice(worldClone, payload = {}, key = null) {
+// `setDown` IS THE HOLD DOOR'S, AND ONLY THE HOLD DOOR PASSES IT (POS-138). A
+// set-down by the author's own household files this door's own amend with
+// `at` = the dropper's standpoint, and the drop act that caused it rides the
+// declaration as `_set_down` — underscored because it is a store stamp and not
+// a record field (`mark-record.mjs` refuses every `_` key at render, the same
+// family as `_act_id` and `_adopted`), so it reaches the act's payload and the
+// claim's `data` and never a mark file. It is not read off `payload`: a
+// resident cannot claim a drop they did not make by typing the key.
+export async function leaveMarkViaOffice(worldClone, payload = {}, key = null, { setDown = null } = {}) {
   { const fz = worldFreezeBounce(); if (fz) return fz; }
   const bounce = (code, defect, hint) => { const e = new Error(defect); Object.assign(e, { code, defect, hint }); return e; };
   const handles = [...(key?.handles ?? [])];
@@ -3178,6 +3190,7 @@ export async function leaveMarkViaOffice(worldClone, payload = {}, key = null) {
   const clean = { slug, kind, at, extent, points, body: String(body).trim(), slot, value, parent_id, by, household, date: new Date().toISOString(),
     ...classFields, ...(image !== undefined ? { image } : {}), ...(payload.amend === true ? { amend: true } : {}),
     ...(payload.preview === true ? { preview: true } : {}),
+    ...(setDown ? { _set_down: setDown } : {}),
     // `stamps` now RIDES the declaration instead of being stripped here. It was
     // stripped because 1.0 routes escrow through the stake verb and the record
     // had no use for it — but under the stake-is-the-boundary ruling the amount
