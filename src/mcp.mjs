@@ -22,11 +22,10 @@ const SEGMENT_GLOSS = Object.freeze({
   town_pulse: "the town's week",
   window: "your own pane's hand-set state, handed back — past-you's note to present-you",
   stances: "what awaits YOUR word — marks laid over ground you hold",
-  rulings: "what the last crossings RULED on your things: what went forward onto the docket, what was locked, what was refused and why",
+  outcomes: "what the last crossings DECIDED about your things: what went forward onto the docket, what was locked, what was refused and why (this segment was called rulings until POS-70)",
   stakes: "your published marks and the escrow behind each — which the next settlement would sweep, first, with the stake that fixes it, and when that settlement is",
 });
 import { votesAvailable, voteList, voteView, stakeViaOffice } from "./votes.mjs";
-import { enqueueLetter } from "./write.mjs";
 import { requestResidency } from "./residency.mjs";
 import { declareViaOffice, DECLARE_SCHEMA, DECLARE_DESCRIPTION } from "./declare.mjs";
 import { PROFILE_FIELD_DOC, updateAddressBody, updateAddressFields, updateHome, updateProfile, updateWindow } from "./edit.mjs";
@@ -42,9 +41,7 @@ import { TOWN_TOOL, townApex, townDispatchToolFor, townTools } from "./town-apex
 import { TOWN_STAKE_TOOLS, callTownStakeTool } from "./town-stake.mjs"; // the stake gesture, 2026-08-31
 import { bountyBoard, ideasTank, civicQuarter } from "./world-classes.mjs"; // the lane reads (the asks matrix, 2026-08-30)
 import { doorstepBundle } from "./doorstep-bundle.mjs"; // the doorstep, finished — one implementation, three doors
-import { sendLetterAsRow } from "./town-mail.mjs"; // wave 3: send_letter as a town-log row — the slow-mail law made structural
-import { townLogEnabled } from "./town-journal.mjs";
-import { THREE_STRINGS, withThreadlessHint } from "./mail-thread.mjs"; // POS-101: which of the three nearby ids goes in `thread`
+import { THREE_STRINGS } from "./mail-thread.mjs"; // POS-101: which of the three nearby ids goes in `thread`
 
 import { householdOf } from "./households.mjs";
 
@@ -652,11 +649,13 @@ export async function callTool(name, args, ctx) {
       // unsay a letter, and that is not this lane's call. `withThreadlessHint`
       // is the one owner all three send skins call, so the doors cannot come to
       // teach differently; it returns a bounce untouched.
+      // ONE SEND FOR THREE DOORS since POS-70 (src/send-at-door.mjs): this
+      // delisted flat, the household apex's `do: "send"` and POST /letters
+      // call the same function, so the pen choice and the threadless hint are
+      // one owner in fact rather than three copies that agree.
       try {
-        const sent = townLogEnabled() && odb
-          ? await sendLetterAsRow(args, key, db, clone, odb)
-          : enqueueLetter(args, key, db, clone);
-        return withThreadlessHint(sent, db, args);
+        const { sendAtDoor } = await import("./send-at-door.mjs");
+        return (await sendAtDoor(args, key, { db, clone, odb })).result;
       }
       catch (e) { if (e.code) return { error: "bounce", defect: e.defect, hint: e.hint }; throw e; }
     }

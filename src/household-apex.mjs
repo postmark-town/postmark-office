@@ -33,6 +33,9 @@ import { requestResidency } from "./residency.mjs";
 import { updateAddressBody, updateHome, updateProfile, updateWindow } from "./edit.mjs";
 import { harborGated, HARBOR_BOUNCE } from "./harbor-gate.mjs";
 import { standingBounce } from "./standing.mjs";
+// POS-70: the act-field judgement, the aliases and the rename pointer — one
+// owner for every door (src/one-contract.mjs).
+import { judgeActFields, withRenamed, renamedRow } from "./one-contract.mjs";
 import { validateReadArgs } from "./validate-args.mjs"; // the flat tools' own validator, now at the read branch too
 import { resident as residentQ, home as homeQ, identityOf, indexAsOf, mailList, mailAwaiting, mailCorrespondents, outboxSettled, windowRead, DOORSTEP_SEGMENTS } from "./queries.mjs";
 import { doorstepBundle } from "./doorstep-bundle.mjs";
@@ -150,7 +153,7 @@ const ACTS = {
 // validator, which needs nothing but the key names. The actions grammar needs
 // the shape, so the shape is written here once and both readers use it: the
 // validator takes `Object.keys(...properties)`, the grammar takes the specs.
-const APEX_ONLY_FIELDS = {
+export const APEX_ONLY_FIELDS = {
   stake: {
     properties: {
       from: { type: "string", description: "which of your residents stakes — their handle" },
@@ -233,7 +236,10 @@ export const HOUSEHOLD_READS = Object.freeze({
   mail: "your correspondence; view: inbox | outbox | pending (written, not yet sailed — yours alone) | awaiting (what you owe) | correspondents (WHO you have exchanged letters with, how many, and who spoke last)",
   window: "your own pane's hand-set state, handed back",
   stances: "what awaits YOUR word — marks laid over ground your house holds, and the stances you have already spoken; bare it is your whole house, handle: narrows to one resident, cursor:/limit: walk it; speak with do: \"declare-stance-on\"",
-  rulings: "what the last crossings RULED on your things — every mark of yours, and every mark laid over ground you hold, that went forward onto the docket or was ruled on. A refusal names its cause in the bulletin's own words.",
+  outcomes: "what the last crossings DECIDED about your things — every mark of yours, and every mark laid over ground you hold, that went forward onto the docket or was decided. A refusal names its cause in the bulletin's own words.",
+  // the old name, answering the same body with a `renamed` pointer until the
+  // w41 train ships (POS-70) — then this line goes.
+  rulings: "renamed: outcomes — answers the same body with a `renamed` pointer until train/2026-w41, then stops",
   stakes: "your published MARKS and what stands behind each — the escrow on every one, which of them the next settlement would sweep (a commons mark holding ✦0) listed first with the stake that fixes it, and the settlement's time. Not the pot stake (do: \"stake\") and not your books (read: \"stamps\"); bare it is your whole house, handle: narrows to one resident",
   address: "your address card, as the white pages hold it",
   home: "your home page",
@@ -285,6 +291,7 @@ export const HOUSEHOLD_READ_FIELDS = Object.freeze({
   window: {},
   stances: { cursor: { type: "string", description: "walk the inbox from where you last looked" },
              limit: { type: "number", description: "how many candidates" } },
+  outcomes: { crossings: { type: "number", description: "how many crossings back to look — the morning window is two" } },
   rulings: { crossings: { type: "number", description: "how many crossings back to look — the morning window is two" } },
   stakes: {},
   address: {},
@@ -1231,15 +1238,23 @@ export async function householdApex(args = {}, key = null, ctx = {}) {
     // SCOPE, like stances: bare is your whole household, a named handle narrows
     // to one resident. A narrower default would hide a housemate's refusal from
     // the house that shares the ground.
-    if (what === "rulings") {
+    // ── `outcomes`, which was `rulings` (Keemin, 2026-09-17; POS-70) ────────
+    //
+    // "Rulings" is what the founder decided for Postmark; what a crossing
+    // decides about your things is an OUTCOME. The body is unchanged. The old
+    // name answers the SAME body for one cycle with a `renamed` pointer beside
+    // it, then stops — `renamed` is the contract's one rename shape, the same
+    // row a field alias carries (src/one-contract.mjs § renamedRow).
+    if (what === "outcomes" || what === "rulings") {
       const named = String(f.handle ?? "").trim();
       const held = [...(key?.handles ?? [])];
       const scope = named ? [named] : held;
       if (!scope.length)
         return bounce(422, "whose things?", "pass handle: — or call with a key that holds a resident; this is derived from the marks your household has put forward");
       const { doorstepRulings } = await import("./claim-effects.mjs");
-      return doorstepRulings(named || null, { key,
+      const body = await doorstepRulings(named || null, { key,
         ...(Number.isFinite(Number(f.crossings)) ? { sinceCrossings: Number(f.crossings) } : {}) });
+      return what === "rulings" ? { ...body, renamed: [renamedRow("read", "rulings", "outcomes")] } : body;
     }
     // ── your marks and what stands behind each (2026-09-18, #2919) ──────────
     //
@@ -1343,25 +1358,29 @@ export async function householdApex(args = {}, key = null, ctx = {}) {
   const declared = act === "begin" || act === "declare"
     ? DECLARE_SCHEMA.properties
     : APEX_ONLY_FIELDS[act]?.properties ?? schemas?.[spec.tool] ?? null;
+  // THE JUDGEMENT IS THE CONTRACT'S NOW (POS-70, src/one-contract.mjs) — the
+  // same function POST /letters and every other plain-API route call, so the
+  // two doors cannot come to refuse differently. Its sentence is the one this
+  // branch always spoke. `nonce` is still THE DOOR'S OWN FIELD, not the
+  // letter's (town-mail.mjs § THE IDEMPOTENCY SEAM), and still exempt for
+  // `send` alone — declared once in the contract's DOOR_FIELDS rather than
+  // inline here, so POST /letters reads the same exemption. A nonce passed to
+  // `do: "home"` still bounces by name.
+  let renamed = [];
+  let judgedEnvelope = envelope;
   if (envelope && declared) {
-    // `nonce` is THE DOOR'S OWN FIELD, not the letter's — the idempotency seam
-    // (town-mail.mjs § THE IDEMPOTENCY SEAM). It is exempted here rather than
-    // added to `send_letter`'s schema on purpose: a schema property would join
-    // the send card's `fields`, and the card rides the bare answer, so a retry
-    // key would have changed the shape of a page that every frozen REST
-    // consumer already has carved into its JS. Exempted for `send` alone, so a
-    // nonce passed to `do: "home"` still bounces by name rather than being
-    // swallowed by a door that has no use for it.
-    const unknown = Object.keys(envelope).filter((k) => !(k in declared) && k !== "handle"
-      && !(act === "send" && k === "nonce"));
-    if (unknown.length) {
-      return bounce(422, `${spec.tool} does not take: ${unknown.join(", ")}`,
-        `the fields it takes: ${Object.keys(declared).join(", ")}`,
-        { unknown_fields: unknown, allowed: Object.keys(declared) });
+    // `stake` and `fund-verify` dispatch to no flat tool, so their refusal
+    // used to read "null does not take: …" — the act's own name stands in.
+    const judged = judgeActFields({ tool: spec.tool ?? act, declared, fields: envelope, exempt: ["handle"] });
+    if (judged.bounce) {
+      const { code, defect, hint, ...extra } = judged.bounce;
+      return bounce(code, defect, hint, extra);
     }
+    judgedEnvelope = judged.fields;
+    renamed = judged.renamed;
   }
   const { do: _d, read: _r, args: _a, ...rest } = args;
-  const fields = envelope ? { ...rest, ...envelope } : rest;
+  const fields = judgedEnvelope ? { ...rest, ...judgedEnvelope } : rest;
 
   // ── THE STANDPOINT HANDLE, ACTUALLY ANSWERED (2026-08-25) ─────────────────
   //
@@ -1440,31 +1459,17 @@ export async function householdApex(args = {}, key = null, ctx = {}) {
       // guards in the same order, the fields by the same identity fence.
       case "send": {
         if (!canWrite) { result = bounce(503, "not-yet-open", "the office has no town clone configured; send by PR meanwhile"); break; }
-        const { townLogEnabled } = await import("./town-journal.mjs");
-        const { withThreadlessHint } = await import("./mail-thread.mjs");
-        if (townLogEnabled() && odb) {
-          const { sendLetterAsRow } = await import("./town-mail.mjs");
-          result = await sendLetterAsRow(fields, key, db, clone, odb);
-        } else {
-          const { enqueueLetter } = await import("./write.mjs");
-          result = enqueueLetter(fields, key, db, clone);
-          // THE DISCLOSURE, not a silent no-op. `the-town/the-disclosure`: "An
-          // answer given without its inputs must never wear the grammar of an
-          // answer that had them." Flag-off there is no town log, so there is
-          // nowhere a nonce could be remembered — and a receipt that simply
-          // echoed the nonce back would read exactly like one from the door
-          // that honours it. It says which guard IS holding instead, and that
-          // guard is real: the letter is a file the moment it conforms, so the
-          // same call twice bounces 409 on the id rather than sending twice.
-          if (result && !result.error && String(fields.nonce ?? "").trim())
-            result = { ...result, nonce: String(fields.nonce).trim(), nonce_honoured: false,
-              nonce_note: "this office keeps no town log, so a nonce cannot be remembered and this receipt is NOT idempotent by it. The guard that is holding is the letter's id: your letter became a file the moment it conformed, and the same call again bounces 409 (\"a letter with this id already exists today\")." };
-        }
-        // POS-101 — the same owner the flat verb and POST /letters call, after
-        // BOTH pens, so the apex's answer cannot teach differently from the
-        // door it wraps. Additive: a bounce comes back untouched, and a send
-        // with nothing to say comes back as the object it was.
-        result = withThreadlessHint(result, db, fields);
+        // ONE SEND FOR THREE DOORS (POS-70, src/send-at-door.mjs): the pen
+        // choice, the flag-off nonce disclosure and the threadless hint
+        // (POS-101) were already agreed across the doors in intent and are now
+        // one function in fact. New here: the sender is inferred from the
+        // standpoint `handle` (or the key's only resident) when `from` is left
+        // off — the Deva's Commons report. `fields.from` is reassigned so the
+        // readback sentence below names the sender actually used.
+        const { sendAtDoor } = await import("./send-at-door.mjs");
+        const sent = await sendAtDoor(fields, key, { db, clone, odb });
+        fields.from = sent.fields.from;
+        result = sent.result;
         break;
       }
       case "stake-vote": {
@@ -1520,6 +1525,9 @@ export async function householdApex(args = {}, key = null, ctx = {}) {
     // caller's readback is `GET /household?read=mail&view=pending`, and putting
     // that sentence on the REST receipt would change an answer a frozen
     // consumer already has — a call the founder makes, not this lane.
+    // THE RENAME POINTER rides the act's own receipt (POS-70) — the same place
+    // POST /letters and the PATCH doors put it, so REST body ≡ apex `result`.
+    result = withRenamed(result, renamed);
     if (slim && act === "send" && result && !result.error && result.letter_id)
       return { ...done, verify: `household { read: "mail", view: "pending", handle: "${fields.from ?? ""}" } — your letter is ${result.letter_id}, and it stands there until the crossing takes it`, result };
     return result?.error ? { ...result, ...done } : { ...done, result };

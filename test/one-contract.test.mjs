@@ -25,7 +25,10 @@
 // receipt as `result` beside its card; the REST route answers that receipt
 // bare. Parity is REST body ≡ apex `result`. Stripped from both, and named:
 // `commit` (a sha — two clones, two commits, the same content) and
-// `next_crossing` (minutes-until, read off the wall clock a few ms apart).
+// `next_crossing` (minutes-until, read off the wall clock a few ms apart), and
+// `prior_commit` on a window receipt (the sha of the pane it replaced — two
+// clones' earlier legs, two shas) — and any sha a receipt QUOTES in a sentence
+// is masked to <sha> for the same reason.
 //   node --test test/one-contract.test.mjs
 
 import test, { before, after } from "node:test";
@@ -83,9 +86,10 @@ async function rest(o, method, path, payload) {
   return { status: res.status, body };
 }
 
-const VOLATILE = new Set(["commit", "next_crossing"]);
+const VOLATILE = new Set(["commit", "prior_commit", "next_crossing"]);
 const norm = (v) => Array.isArray(v) ? v.map(norm)
   : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).filter(([k]) => !VOLATILE.has(k)).map(([k, x]) => [k, norm(x)]))
+  : typeof v === "string" ? v.replace(/\b[0-9a-f]{7,40}\b/g, "<sha>")
   : v;
 const tracked = (clone) => execFileSync("git", ["-C", clone, "ls-files", "-mo", "--exclude-standard"], { encoding: "utf8" }).split("\n").filter(Boolean).sort();
 // A directory (the outbox) reads as its listing, so "nothing was written" covers
@@ -251,7 +255,7 @@ test("outcomes · the read answers under its new name at both doors, and `ruling
   assert.notEqual(m.error, "bounce", `MCP: ${m.defect}`);
   assert.equal(r.status, 200, `REST: ${r.body.defect}`);
   const old = await mcp(A, "household", { read: "rulings" });
-  assert.equal(old.renamed?.now, "outcomes");
+  assert.deepEqual(old.renamed?.map((r) => [r.read, r.now]), [["rulings", "outcomes"]]);
   const { renamed: _r, ...oldBody } = old;
   assert.deepEqual(norm(oldBody), norm(m));
 });
@@ -271,4 +275,47 @@ test("town · an unknown field on a town act is refused by name at both doors", 
   assert.deepEqual(m.unknown_fields, ["zz_probe"], `the MCP town door did not refuse the field: ${m.defect}`);
   assert.equal(r.status, 422);
   assert.equal(r.body.defect, m.defect);
+});
+
+// ── 7 · the generation itself: a route declares WHICH ACT, and nothing else ─
+//
+// The refusal's `allowed` list is read here from the act's own schema and
+// compared with what the route answers, so a route that grew a hand-kept list
+// again would disagree with the schema the day either moved.
+test("contract · every plain-API write route names an act whose schema exists, and its refusal lists exactly that schema", async () => {
+  process.env.WORLD_APEX = "1";
+  const { ROUTE_ACTS, judgeRoute, PATCH_PAPER_DOORS } = await import("../src/one-contract.mjs");
+  const { TOOLS } = await import("../src/mcp.mjs");
+  const { APEX_ONLY_FIELDS } = await import("../src/household-apex.mjs");
+  const schemas = Object.fromEntries(TOOLS.map((t) => [t.name, t.inputSchema.properties]));
+  schemas["fund-verify"] = APEX_ONLY_FIELDS["fund-verify"].properties;
+  for (const [route, spec] of Object.entries(ROUTE_ACTS)) {
+    assert.ok(schemas[spec.tool], `${route} names ${spec.tool}, which has no schema`);
+    const j = judgeRoute(route, { zz_probe: 1 }, { schemas });
+    assert.deepEqual(j.bounce?.allowed, Object.keys(schemas[spec.tool]), `${route}: the refusal is not the schema's own list`);
+  }
+  assert.deepEqual([...PATCH_PAPER_DOORS].sort(), ["address", "address-fields", "home", "profile", "window"]);
+  // A route the table does not name is the office's wiring defect, said so.
+  assert.equal(judgeRoute("POST /nowhere", {}, { schemas }).bounce.code, 500);
+});
+
+test("POST /fund/verify · an unknown field is refused by name, before the door asks whether the seam is open", async () => {
+  const r = await rest(B, "POST", "/fund/verify", { txhash: "0xabc", pot: "p", zz_probe: 1 });
+  assert.equal(r.status, 422, `${r.status}: ${r.body.defect}`);
+  assert.equal(r.body.defect, "fund-verify does not take: zz_probe");
+});
+
+test("stake · an apex-only act refuses in its own name — never \"null does not take\"", async () => {
+  const m = await mcp(A, "household", { do: "stake", args: { from: WRIGHT, pot: "p", stamps: 1, zz_probe: 1 } });
+  assert.equal(m.error, "bounce");
+  assert.equal(m.defect, "stake does not take: zz_probe");
+});
+
+test("send · flag-off, a nonce is DISCLOSED as unhonoured at both doors — the plain API used to take it and say nothing", async () => {
+  const input = { from: WRIGHT, to: "limen", title: "a nonce flag-off", body: "retry key", nonce: "k-1" };
+  const m = await mcp(A, "household", { do: "send", args: input });
+  const r = await rest(B, "POST", "/letters", input);
+  assert.equal(m.result?.nonce_honoured, false, `MCP: ${m.defect ?? "no disclosure"}`);
+  assert.equal(r.body.nonce_honoured, false, "the plain API took a nonce it cannot honour and said nothing");
+  assert.deepEqual(norm(r.body), norm(m.result));
 });

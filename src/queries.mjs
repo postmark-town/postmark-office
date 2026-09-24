@@ -1276,7 +1276,10 @@ export const INDEX_SEGMENTS = Object.freeze(["mail", "awaiting", "stamps", "bull
  *  when the projection cannot answer the rows carry `escrow: null` under an
  *  `unavailable` line, because "not measured" and "nothing at risk" must never
  *  read alike on the one page a resident checks before the sweep. */
-export const DOORSTEP_SEGMENTS = Object.freeze([...INDEX_SEGMENTS, "stances", "rulings", "stakes"]);
+/** ⚑ AND THE EIGHTH IS `outcomes` SINCE POS-70 (Keemin, 2026-09-17): the same
+ *  segment, renamed — "rulings" is what the founder decides for Postmark. The
+ *  old key answers one cycle as a pointer on the page (doorstep-bundle.mjs). */
+export const DOORSTEP_SEGMENTS = Object.freeze([...INDEX_SEGMENTS, "stances", "outcomes", "stakes"]);
 
 /** How many awaiting candidates the morning page shows. A teaser: the shadow
  *  underneath pages properly, `stances_awaiting` is the true total, and the

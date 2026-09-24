@@ -31,6 +31,7 @@
 import { actionFields, apexEnabled } from "./world-apex.mjs";
 import { standingBounce } from "./standing.mjs";
 import { harborGated, HARBOR_BOUNCE } from "./harbor-gate.mjs";
+import { judgeActFields, withRenamed } from "./one-contract.mjs"; // POS-70: one field judgement for every door
 import { validateReadArgs } from "./validate-args.mjs"; // the flat tools' own validator, now at the read branch too
 
 const bounce = (code, defect, hint, extra = {}) => ({ error: "bounce", code, defect, hint, ...extra });
@@ -385,14 +386,32 @@ export async function townApex(args = {}, key = null, ctx = {}) {
   }
 
   const { do: _d2, read: _r2, args: envelope, ...rest } = args;
-  const fields = envelope && typeof envelope === "object" && !Array.isArray(envelope) ? { ...rest, ...envelope } : rest;
+  // THE ONE DOOR OF THE THREE THAT NEVER JUDGED ITS ACT'S FIELDS (POS-70,
+  // measured at 6b86776): `town { do: "post", args: { …, zz: 1 } }` reached
+  // town_post with the stray field and answered whatever the post answered,
+  // where `world { do: }` and `household { do: }` refused it by name. Judged
+  // now by the contract's one function against the dispatched verb's own
+  // schema — the same sentence the other two apexes and the plain API speak.
+  let judgedEnvelope = envelope;
+  let renamed = [];
+  const declared = schemas?.[spec.tool];
+  if (envelope && typeof envelope === "object" && !Array.isArray(envelope) && declared) {
+    const judged = judgeActFields({ tool: spec.tool, declared, fields: envelope, exempt: ["handle"] });
+    if (judged.bounce) {
+      const { code, defect, hint, ...extra } = judged.bounce;
+      return bounce(code, defect, hint, { ...extra, did: act, dispatched_to: spec.tool });
+    }
+    judgedEnvelope = judged.fields;
+    renamed = judged.renamed;
+  }
+  const fields = judgedEnvelope && typeof judgedEnvelope === "object" && !Array.isArray(judgedEnvelope) ? { ...rest, ...judgedEnvelope } : rest;
 
   const card = actCard(act, { schemas, schemaRequired });
   // POS-44's row and the tier line ride through UNCHANGED: this dispatches the
   // same declare_household the flat door dispatches, so the journal row, the
   // fourth register and the settle threshold are the flat verb's behaviour, not
   // a second copy the apex would have to keep in step.
-  const result = await call(spec.tool, fields);
+  const result = withRenamed(await call(spec.tool, fields), renamed);
   return result?.error ? { ...result, did: act, dispatched_to: spec.tool, ...(card ? { card } : {}) }
     : { did: act, dispatched_to: spec.tool, ...(card ? { card } : {}), result };
 }

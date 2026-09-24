@@ -332,7 +332,10 @@ test("GET /doorstep/{h} serves the v0.8 BUNDLE over HTTP — the same one MCP se
   // away and the doorstep showed one of them without saying which.
   assert.equal(d.stamps.serves, "town.stamps");
   assert.equal(d.stamps.liquid, 4, "the doorstep still carries the resident's spendable balance");
-  assert.deepEqual(d.segments, ["mail", "awaiting", "stamps", "bulletin", "town_pulse", "window", "stances", "rulings", "stakes"]);
+  // `outcomes` was `rulings` until POS-70; the old key rides the page for one
+  // cycle as a pointer and is NOT a segment, so the manifest names the new one.
+  assert.deepEqual(d.segments, ["mail", "awaiting", "stamps", "bulletin", "town_pulse", "window", "stances", "outcomes", "stakes"]);
+  assert.deepEqual(d.rulings?.renamed?.map((r) => [r.segment, r.now]), [["rulings", "outcomes"]]);
   // The seventh reaches BOTH skins from the one implementation. Its content
   // depends on a world engine this fixture has no checkout of, so what is
   // asserted here is that it is PRESENT and names its read — a segment that
