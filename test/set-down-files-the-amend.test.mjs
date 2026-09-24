@@ -625,3 +625,171 @@ test("A WELCOME WHOSE AMEND THE DOOR REFUSES: the receipt says it was not filed,
   assert.doesNotMatch(s.says, /is filed/, `the read claims a filing that did not happen: ${s.says}`);
   assert.equal(s.says, "set down by ana at (4105, -305) — accepted by keith's house; canon follows when keith's amend publishes at a crossing");
 });
+
+// ═════════════════════════════════════════════════════════════════════════════
+// THE THIRD HALF · the set-down waits in the author's stances read
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// Keemin, 2026-09-24 17:2x: an author's house must be told when another
+// household has set down a thing it made, "in the same stances read". The
+// group is `set_downs_awaiting`, beside the ground group, built from
+// `setDownFor` + `setDownAnswer` over the holding record's drops of things the
+// house made (`world2-guards.mjs § setDownRowsForMakers`).
+//
+// Driven over the acts the real doors wrote into this suite's pen: Ana's drop
+// through the hold door, Keith's word through the stance door. The holding read
+// is the real `setDownRowsForMakers`, answered by `actsClient` through the
+// guards' own reader seam; the household map is the town's own reader
+// (`households.mjs`, off this suite's town clone), never HOUSES, so the doorstep
+// leg and the read legs ask the same question the same way.
+//
+// THE FLIPS (each reds its own leg):
+//   · drop `setDowns: true` from the household door → KEITH SEES IT reds;
+//   · make `setDownsAwaiting` skip the `setDownAnswer` check → ANSWERED reds;
+//   · make it keep a set-down whose `setDownFor` found no stranger → OWN DROP reds;
+//   · drop `setDowns: true` from the doorstep → THE DOORSTEP reds.
+
+const underRecord = async (fn) => {
+  const restore = guards.useGuardReader((run) => run(actsClient(written(pen))));
+  try { return await fn(); } finally { restore(); }
+};
+const apex = await import("../src/household-apex.mjs");
+/** The household door's own stances read, as `key` asks it. */
+const stancesRead = (key, extra = {}) => underRecord(() => apex.householdApex({ read: "stances", ...extra }, key));
+
+test("KEITH SEES IT: Ana sets down Keith's stool, and Keith's stances read lists it with the call that answers it", async () => {
+  const p = fresh();
+  const drop = await anaDrops(p);
+  const r = await stancesRead(KEITH);
+  assert.equal(r.unavailable, undefined, `the read could not see the world: ${r.unavailable}`);
+  assert.equal(r.set_downs_unavailable, undefined, `the holding record could not be read: ${r.set_downs_unavailable}`);
+  assert.equal(r.set_downs_awaiting?.length, 1, `one set-down waits: ${JSON.stringify(r.set_downs_awaiting)}`);
+  const w = r.set_downs_awaiting[0];
+  assert.equal(w.thing, STOOL);
+  assert.equal(w.made_by, "keith");
+  assert.equal(w.set_down_by, "ana", "who set it down");
+  assert.deepEqual(w.at, ANA_AT, "where");
+  assert.ok(w.when && !Number.isNaN(Date.parse(w.when)), `when: ${w.when}`);
+  assert.equal(w.act_id, String(drop.id), "the drop's act id — the one the answer binds to");
+  assert.deepEqual(w.canon_at, GARAGE_AT, "where canon keeps it");
+  assert.match(w.answer, /^household \{ do: "declare-stance-on", args: \{ on: "keith\/waiting-room-stool-2026-09-10", stance: "welcomed" \| "opposed" \} \}/);
+  assert.equal(r.note, undefined, "the read does not say nothing awaits while a set-down does");
+  console.log(`    WAITING · ${JSON.stringify(w)}`);
+
+  const kin = await stancesRead({ household: "keithhouse", handles: new Set(["kin"]) });
+  assert.deepEqual(kin.set_downs_awaiting, [], "narrowed to kin, who did not make the stool, the group is empty");
+});
+
+test("PRIVACY: Ana's own stances read does not list her set-down of Keith's thing", async () => {
+  const p = fresh();
+  await anaDrops(p);
+  const r = await stancesRead(ANA);
+  assert.deepEqual(r.set_downs_awaiting, [], "a house sees set-downs of its own residents' things and nobody else's");
+});
+
+test("ANSWERED: once Keith's house welcomes or opposes it, the set-down leaves the waiting group and reads with the stances spoken", async () => {
+  for (const word of ["welcomed", "opposed"]) {
+    const p = fresh();
+    await anaDrops(p);
+    assert.equal((await stancesRead(KEITH)).set_downs_awaiting.length, 1, `${word}: it waits first`);
+    const said = await speak(word, "keith", KEITH);
+    assert.ok(!said.refused, `${word}: the answer was refused: ${JSON.stringify(said)}`);
+    const r = await stancesRead(KEITH);
+    assert.deepEqual(r.set_downs_awaiting, [], `${word}: an answered set-down no longer waits`);
+    assert.ok(r.standing.some((s) => s.on === STOOL && s.stance === word && s.by === "keith"),
+      `${word}: and the word reads in standing: ${JSON.stringify(r.standing)}`);
+  }
+});
+
+test("PICKED UP: once the stool is in somebody's hands again, nothing waits", async () => {
+  const p = fresh();
+  await anaDrops(p);
+  // The record's own rows for Ana's drop, then the same rows with a live holder
+  // in the attachment half (`pgAttachmentsFor`'s answer once somebody takes it
+  // up). `hand()` writes the dynamic store, which the holding record does not
+  // read, so the holder is put where the record would carry it.
+  const rows = await underRecord(() => guards.setDownRowsForMakers(["keith"]));
+  const rec = rows.get(STOOL);
+  const heldRec = { ...rec, attachments: [{ target: STOOL, entity: "keith", policy: "cascade", born_at: new Date(Date.now() + 1000).toISOString() }] };
+  const got = await stance.setDownsAwaiting(["keith"], {
+    marks: PUBLISHED, stances: [], deps: { rowsForMakers: async () => new Map([[STOOL, heldRec]]) } });
+  assert.deepEqual(got.rows, [], "a held thing is not set down");
+  const free = await stance.setDownsAwaiting(["keith"], {
+    marks: PUBLISHED, stances: [], deps: { rowsForMakers: async () => new Map([[STOOL, rec]]) } });
+  assert.equal(free.rows.length, 1, "the same record with no live holder still waits — the control");
+});
+
+test("OWN DROP: Keith setting down his own stool never waits on his house's word", async () => {
+  const p = fresh();
+  hand("keith");
+  const r0 = await hold.callHoldTool("world_hold", { thing: STOOL, handle: "keith" }, KEITH);
+  assert.equal(r0.did, "drop", `Keith's drop did not land: ${JSON.stringify(r0)}`);
+  assert.ok(p.rows().some((a) => a.action === "drop" && a.actor === "keith"));
+  const r = await stancesRead(KEITH);
+  assert.deepEqual(r.set_downs_awaiting, [], "the author's own set-down files its amend; nothing waits");
+});
+
+test("THE DOORSTEP CARRIES IT: Keith's morning page lists the waiting set-down, and the segment IS the read", async () => {
+  const p = fresh();
+  const drop = await anaDrops(p);
+  const { DatabaseSync } = await import("node:sqlite");
+  const { SCHEMA } = await import("../src/schema.mjs");
+  const { SEGMENT_META } = await import("../src/queries.mjs");
+  const { doorstepBundle } = await import("../src/doorstep-bundle.mjs");
+  const { callTool } = await import("../src/mcp.mjs");
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec(SCHEMA);
+    const m = db.prepare("INSERT INTO meta VALUES (?, ?)");
+    m.run("as_of", "pos138fixture00000000000000000000000000"); m.run("town_path", "fixture"); m.run("hydrated_counts", "{}");
+    db.prepare("INSERT INTO residents VALUES (?, ?)").run("keith", JSON.stringify({
+      handle: "keith", is_office: false, last_active: null, address: { data: { since: "2026-01-01", joined: "2026-06-10" } } }));
+    const ctx = { db, key: KEITH, meta: { as_of: "pos138fixture00000000000000000000000000", quest_registry: '{"quests":[]}' },
+      asOf: "pos138fixture00000000000000000000000000", canWrite: false, clone: null, pen: null, odb: null, dbPath: null };
+    const seg = await underRecord(async () => (await doorstepBundle("keith", ctx)).stances);
+    assert.equal(seg.serves, "household.stances", "no new segment name");
+    assert.equal(seg.set_downs_awaiting?.length, 1, `the doorstep carries it: ${JSON.stringify(seg).slice(0, 400)}`);
+    assert.equal(seg.set_downs_awaiting[0].act_id, String(drop.id));
+    const asked = await underRecord(() => callTool("household", { read: "stances", ...seg.args }, ctx));
+    const answerOf = (s) => Object.fromEntries(Object.entries(s).filter(([k]) => !SEGMENT_META.includes(k)));
+    assert.deepEqual(answerOf(seg), asked, "ask the named read yourself and you get the same object back");
+  } finally { db.close(); }
+});
+
+// ── THE PLACEHOLDER (1626f2f4) ───────────────────────────────────────────────
+//
+// `pgHoldingRows` wrote its thing clause as `= ${n}` — one dollar, eaten by a
+// shell — so Postgres was sent `= 2`. This reads the text the port hands the
+// client. THE FLIP: put the one dollar back and this reds.
+test("THE PLACEHOLDER: a per-thing holding read names its parameter, and the maker narrowing names its own", async () => {
+  const { pgHoldingRows } = await import("../world2/tools/guard-reads.mjs");
+  const asked = [];
+  const client = { query: async (sql, params) => { asked.push({ sql: String(sql).replace(/\s+/g, " "), params }); return { rows: [] }; } };
+  await pgHoldingRows(client, { thing: STOOL });
+  assert.match(asked[0].sql, /COALESCE\(object, payload->>'thing'\) = \$2(\s|$)/, asked[0].sql);
+  assert.deepEqual(asked[0].params, ["holding", STOOL]);
+  await pgHoldingRows(client, { thing: STOOL, madeBy: ["keith", "kin"] });
+  assert.match(asked[1].sql, /= \$2 AND split_part\(COALESCE\(object, payload->>'thing'\), '\/', 1\) = ANY\(\$3\)/, asked[1].sql);
+  assert.deepEqual(asked[1].params, ["holding", STOOL, ["keith", "kin"]]);
+});
+
+// ── THE NOTE (the read's "nothing awaits" line) ──────────────────────────────
+//
+// Zed holds no ground in this bottle (the world frame overlaps every parcel, so
+// no parcel-holder has an empty ground group), so only a set-down can make the
+// note false. THE FLIP: let the note
+// ignore `set_downs_awaiting` and this reds.
+test("THE NOTE: with the ground group empty and a set-down waiting, the read never says nothing awaits", async () => {
+  const cup = "zed/a-cup";
+  const houses = (h) => (h === "zed" ? { key: "gh:9", slug: "zed-house" } : HOUSES(h));
+  const rec = { attachments: [], journal: [{ seq: 77, crossing: 1, actor: "ana", action: "drop", object: cup,
+    at: { anchor: null, dx: ANA_AT.x, dy: ANA_AT.y }, class: "holding", payload: { thing: cup }, written_at: "2026-09-24T12:00:00.000Z" }] };
+  const r = await stance.stancesForHandles(["zed"], { repo, setDowns: true,
+    setDownDeps: { householdOf: houses, rowsForMakers: async () => new Map([[cup, rec]]) } });
+  assert.equal(r.stances_awaiting, 0, `the control: zed holds no ground: ${JSON.stringify(r).slice(0, 300)}`);
+  assert.deepEqual(r.set_downs_awaiting.map((w) => [w.thing, w.set_down_by, w.act_id]), [[cup, "ana", "77"]]);
+  assert.equal(r.note, undefined, `the read said nothing awaits while a set-down did: ${r.note}`);
+  const none = await stance.stancesForHandles(["zed"], { repo, setDowns: true, setDownDeps: { householdOf: houses, rowsForMakers: async () => new Map() } });
+  assert.match(none.note ?? "", /nothing awaits your word/, "with both groups empty the note is said");
+  assert.equal(none.stances_awaiting, 0);
+});

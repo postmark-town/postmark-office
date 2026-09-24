@@ -670,6 +670,18 @@ test("F7c5 · THE MORNING PAGE DID NOT FATTEN — the doorstep bundle is byte-id
   // the price of two proper nouns and their read args; the five plaque BODIES
   // are still ~630 bytes behind `town read: "asks"` and did not come aboard.
   //
+  // ⚠ AND REGENERATED A SIXTH TIME, 2026-09-24 (POS-138), for the set-down
+  // group Keemin ruled into the stances read ("yes, in the same stances read").
+  // The diff was run leaf by leaf BEFORE the capture: 924 paths before, 928
+  // after, NONE removed and NONE changed; the four added are
+  // `full.stances.set_downs_awaiting`, `full.stances.set_downs_unavailable` and
+  // their slim twins. The fixture office is not pointed at the holding record,
+  // so this page says so rather than showing an empty group as an answer; an
+  // office that is pointed at it carries the empty array alone (+24).
+  //
+  //   full  19051 -> 19179 (+128, +0.67%) = set_downs_awaiting +24, set_downs_unavailable +104
+  //   slim  16683 -> 16811 (+128, +0.77%) = set_downs_awaiting +24, set_downs_unavailable +104
+  //
   // So the assertion below is the one that actually carries the promise, and it
   // is stated separately so a future regeneration cannot quietly absorb a card:
   assert.equal(JSON.stringify(now).includes('"card"'), false,

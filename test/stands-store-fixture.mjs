@@ -88,12 +88,25 @@ export function actsClient(acts = []) {
           .sort((x, y) => Date.parse(bornAt(x)) - Date.parse(bornAt(y)) || x.id - y.id) };
       }
 
-      // pgHoldingRowsFor — `class = $1` and the thing, ordered `(at, id)`.
+      // pgHoldingRows — `class = $1`, then the thing and/or the makers, each
+      // at the placeholder the TEXT names, ordered `(at, id)`. Read from the
+      // text rather than a fixed slot (POS-138, 2026-09-24): a fixture that
+      // took `params[1]` as the thing answered green while the real clause
+      // said `= 2` and Postgres refused it. A thing clause with no `$n` is
+      // refused here too.
       if (/FROM acts WHERE class = \$1/i.test(text)) {
-        const [cls, thing] = params;
+        const cls = params[0];
+        const thingAt = /payload->>'thing'\) = (\S+)/i.exec(text);
+        if (thingAt && !/^\$\d+$/.test(thingAt[1]))
+          throw new Error(`the thing clause names no parameter: "= ${thingAt[1]}" — Postgres refuses this`);
+        const thing = thingAt ? params[Number(thingAt[1].slice(1)) - 1] : undefined;
+        const makersAt = /split_part\(COALESCE\(object, payload->>'thing'\), '\/', 1\) = ANY\(\$(\d+)\)/i.exec(text);
+        const makers = makersAt ? params[Number(makersAt[1]) - 1] : undefined;
+        const idOf = (a) => a.object ?? a.payload?.thing;
         return { rows: acts
           .filter((a) => a.class === cls)
-          .filter((a) => (a.object ?? a.payload?.thing) === thing)
+          .filter((a) => thing === undefined || idOf(a) === thing)
+          .filter((a) => makers === undefined || makers.includes(String(idOf(a)).split("/")[0]))
           .sort((x, y) => x.at - y.at || x.id - y.id) };
       }
 

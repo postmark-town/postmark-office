@@ -235,7 +235,7 @@ export const HOUSEHOLD_READS = Object.freeze({
   doorstep: "your morning bundle — each segment naming the read it is",
   mail: "your correspondence; view: inbox | outbox | pending (written, not yet sailed — yours alone) | awaiting (what you owe) | correspondents (WHO you have exchanged letters with, how many, and who spoke last)",
   window: "your own pane's hand-set state, handed back",
-  stances: "what awaits YOUR word — marks laid over ground your house holds, and the stances you have already spoken; bare it is your whole house, handle: narrows to one resident, cursor:/limit: walk it; speak with do: \"declare-stance-on\"",
+  stances: "what awaits YOUR word — marks laid over ground your house holds, things of your house's that another household has set down (set_downs_awaiting), and the stances you have already spoken; bare it is your whole house, handle: narrows to one resident, cursor:/limit: walk it; speak with do: \"declare-stance-on\"",
   outcomes: "what the last crossings DECIDED about your things — every mark of yours, and every mark laid over ground you hold, that went forward onto the docket or was decided. A refusal names its cause in the bulletin's own words.",
   // the old name, answering the same body with a `renamed` pointer until the
   // w41 train ships (POS-70) — then this line goes.
@@ -1247,7 +1247,7 @@ export async function householdApex(args = {}, key = null, ctx = {}) {
       if (!scope.length)
         return bounce(422, "whose word?", "pass handle: — or call with a key that holds a resident; the inbox is derived from the ground your household holds");
       const { stancesForHandles } = await import("./world-stance.mjs");
-      return stancesForHandles(scope, { cursor: f.cursor ?? null, limit: f.limit });
+      return stancesForHandles(scope, { cursor: f.cursor ?? null, limit: f.limit, setDowns: true });
     }
     // ── what the crossings did to your things (2026-09-07, #2526) ───────────
     //

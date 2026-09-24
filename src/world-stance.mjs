@@ -783,6 +783,10 @@ export async function stanceInbox(repo, key, { dbPath = null } = {}) {
   const spoken = new Set(standing.map((s) => s.on));
 
   return { candidates: candidatesFrom({ mine, all, spoken, overlaps }), standing, mine: mine.map((m) => m.id),
+    // Carried for the set-down group (`stanceShadow`'s `setDowns`), which needs
+    // the same world and the same stance rows — never a second read of either.
+    // Nothing renders these two keys; the shadow names every field it answers.
+    marks: all, stanceRows: rows,
     // The teaching block's one mark body, taken off the set this read already
     // holds — never a second read of the world for one sentence.
     lateWelcome: all.find((m) => m.id === LATE_WELCOME_MARK)?.body?.trim() || null };
@@ -936,9 +940,11 @@ const shadowLine = (c) => {
  * newest-first order; a set that changes between pages simply changes, which is
  * what a derived inbox is.
  */
-export async function stanceShadow(repo, key, { cursor = null, limit = PAGE_SIZE, dbPath = null } = {}) {
+export async function stanceShadow(repo, key, { cursor = null, limit = PAGE_SIZE, dbPath = null, setDowns = false, setDownDeps = {} } = {}) {
   const inbox = await stanceInbox(repo, key, { dbPath });
-  if (inbox.unavailable) return { unavailable: inbox.unavailable, stances_awaiting_ground: stancesGround(key?.handles), awaiting: [], standing: [] };
+  if (inbox.unavailable) return { unavailable: inbox.unavailable, stances_awaiting_ground: stancesGround(key?.handles), awaiting: [],
+    ...(setDowns ? { set_downs_awaiting: [], set_downs_unavailable: "the world could not be read, so neither group of this read could be — this is not an answer that nothing waits" } : {}),
+    standing: [] };
 
   const n = Math.max(1, Math.min(Number(limit) || PAGE_SIZE, 100));
   const start = Math.max(0, Number.parseInt(String(cursor ?? "0"), 10) || 0);
@@ -954,6 +960,13 @@ export async function stanceShadow(repo, key, { cursor = null, limit = PAGE_SIZE
     // Said out loud rather than left to be inferred from a short page — the same
     // courtesy the presence read's `capped` pays.
     complete: next == null,
+    // THE SECOND GROUP (POS-138, Keemin 2026-09-24: "yes, in the same stances
+    // read"): another household has set down a thing your house made, and it
+    // waits on your house's word. Opt-in, so only the reads that promise it
+    // (the household's stances read and the doorstep's segment of it) pay its
+    // store read; the world door's shadow and the two ground-set builders
+    // (`since:`'s claim effects) answer exactly what they did.
+    ...(setDowns ? await setDownsGroup(key, inbox, setDownDeps) : {}),
     standing: inbox.standing,
     ground: inbox.mine,
     law: "A stance is a revisable word on an edge — welcomed or opposed, latest wins; neutral is never stored, it is absence. The ground's holder speaks.",
@@ -991,15 +1004,17 @@ export async function stanceShadow(repo, key, { cursor = null, limit = PAGE_SIZE
 // courtesy bought with the door itself. The catch lives HERE, in the one
 // function both doors call, so the two can never disagree about what a
 // degraded world looks like.
-export async function stancesForHandles(handles, { cursor = null, limit = PAGE_SIZE, repo = null, dbPath = null } = {}) {
+export async function stancesForHandles(handles, { cursor = null, limit = PAGE_SIZE, repo = null, dbPath = null, setDowns = false, setDownDeps = {} } = {}) {
   const set = new Set([...(handles ?? [])].filter(Boolean));
   try {
-    const answer = await stanceShadow(repo ?? WORLD_CLONE, { handles: set }, { cursor, limit, dbPath });
+    const answer = await stanceShadow(repo ?? WORLD_CLONE, { handles: set }, { cursor, limit, dbPath, setDowns, setDownDeps });
     // An honest empty, said out loud rather than left as a bare zero — psaFold's
     // manners: "no entry landed inside the window" is a real state and not a
     // failure to read. A resident with nothing awaiting must be able to tell
     // that from a door that did not answer.
-    if (!answer.unavailable && (answer.stances_awaiting ?? 0) === 0)
+    // A waiting set-down is a word awaited too, so the note that says nothing
+    // awaits is only true when BOTH groups are empty.
+    if (!answer.unavailable && (answer.stances_awaiting ?? 0) === 0 && !(answer.set_downs_awaiting?.length))
       return { ...answer, note: "nothing awaits your word — no mark has been laid over ground you hold since you last spoke. This is an ordinary state, not a quiet failure." };
     return answer;
   } catch (e) {
@@ -1081,6 +1096,84 @@ export async function setDownFor(thing, target, marks = [], deps = {}) {
   const { composeAnchor } = await import("./world-journal.mjs");
   const centreOf = (id) => marks.find((m) => m.id === id)?.at ?? null;
   return { speakerHouse, drop, stood: composeAnchor(drop.at ?? {}, centreOf), householdOf, madeBy };
+}
+
+// ── THE SET-DOWNS WAITING ON YOUR HOUSE'S WORD (POS-138, the read) ──────────
+//
+// Keemin, 2026-09-24: an author's house must be told when another household
+// has set down a thing it made, "in the same stances read". The answer exists
+// already (#184: `declare-stance-on` on the thing, bound to the drop's act id);
+// this is the read that tells the house there is something to answer.
+//
+// ONE READER. Whether a set-down is a stranger's is `setDownFor`'s question and
+// whether the house has answered it is `setDownAnswer`'s; this group asks both
+// and derives neither. The candidates are the things the scope's handles MADE
+// that have a drop on the holding record (`world2-guards.mjs §
+// setDownRowsForMakers`), so the read never asks about a thing the house did
+// not make — which is also the privacy line: a house sees set-downs of its own
+// residents' things and nobody else's.
+//
+// A SET-DOWN LEAVES THIS GROUP when the author's house has welcomed or opposed
+// that drop (its stance then reads in `standing`, the way every stance the
+// house has spoken does: `standingStances` keeps each speaker's latest word on
+// each object, and a set-down's answer is a stance on the thing), or when the
+// thing is picked up again (`setDownFor` reads a live holder as held, not set
+// down). A later drop by somebody else is a new question, because an answer
+// belongs to ONE drop.
+
+/** The exact call that answers one waiting set-down. */
+export const setDownAnswerCall = (thing) =>
+  `household { do: "${ACTION_STANCE}", args: { on: "${thing}", stance: "welcomed" | "opposed" } } — welcomed files ${String(thing).split("/")[0]}'s amend that re-sites it where it was set down; opposed keeps canon where it is`;
+
+/**
+ * The waiting group for `handles`, newest first. Never throws: an unreadable
+ * record is `unavailable`, said out loud, never an empty group.
+ *
+ * `deps.rowsForMakers(handles)` stands in for the store read and
+ * `deps.householdOf` for the town's household map, so a falsifier drives this
+ * over the rows the real doors wrote.
+ */
+export async function setDownsAwaiting(handles, { marks = [], stances = [], deps = {} } = {}) {
+  const makers = [...new Set([...(handles ?? [])].filter(Boolean).map(String))].sort();
+  if (!makers.length) return { rows: [] };
+  let byThing;
+  try {
+    byThing = deps.rowsForMakers ? await deps.rowsForMakers(makers)
+      : await (await import("./world2-guards.mjs")).setDownRowsForMakers(makers);
+  } catch (e) {
+    return { rows: [], unavailable: `the holding record could not be read (${String(e?.message ?? e).slice(0, 160)}) — this is not an answer that nothing waits` };
+  }
+  if (byThing == null)
+    return { rows: [], unavailable: "this office cannot read the holding record — not an answer that nothing waits" };
+
+  const hold = await import("./world-hold.mjs");
+  const rows = [];
+  for (const [thing, rec] of byThing) {
+    const mark = marks.find((m) => m?.id === thing) ?? null;
+    const sd = await setDownFor(thing, mark, marks, {
+      readRows: async () => rec,
+      ...(deps.householdOf !== undefined ? { householdOf: deps.householdOf } : {}),
+    });
+    if (!sd.drop || !makers.includes(String(sd.madeBy))) continue;
+    if (hold.setDownAnswer({ stances, thing, dropSeq: sd.drop.seq ?? null, madeBy: sd.madeBy, householdOf: sd.householdOf })) continue;
+    const canon = mark?.at && Number.isFinite(Number(mark.at.x)) && Number.isFinite(Number(mark.at.y))
+      ? { x: Number(mark.at.x), y: Number(mark.at.y) } : null;
+    rows.push({
+      thing, made_by: sd.madeBy, set_down_by: String(sd.drop.actor),
+      at: sd.stood ?? null, when: sd.drop.written_at ?? null,
+      act_id: sd.drop.seq == null ? null : String(sd.drop.seq),
+      canon_at: canon,
+      answer: setDownAnswerCall(thing),
+    });
+  }
+  rows.sort((a, b) => (String(a.when) === String(b.when) ? (a.thing < b.thing ? -1 : 1) : (String(a.when) < String(b.when) ? 1 : -1)));
+  return { rows };
+}
+
+/** The shadow's rendering of the group: the rows, and `unavailable` only when it could not be read. */
+async function setDownsGroup(key, inbox, deps = {}) {
+  const g = await setDownsAwaiting(handlesOf(key), { marks: inbox.marks ?? [], stances: inbox.stanceRows ?? [], deps });
+  return { set_downs_awaiting: g.rows, ...(g.unavailable ? { set_downs_unavailable: g.unavailable } : {}) };
 }
 
 /**

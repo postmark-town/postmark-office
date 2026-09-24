@@ -43,6 +43,7 @@ import { isDeepStrictEqual } from "node:util";
 import {
   ingest, planIngest, recordDiff, isRecordField, pathsAt, HEAD_KEY, amendClaimId,
 } from "../world2/tools/marks-ingest.mjs";
+import { REFUSED_BY_NAME } from "../world2/tools/backfill-register.mjs";
 import { marksFromRows, inPublishedOrder } from "../src/world2-fold.mjs";
 import { WORLD_CLONE } from "../src/world-store.mjs";
 import { __clearHouseCache } from "../src/household-deriver.mjs";
@@ -419,13 +420,44 @@ test("a retire needs the mark in the file at the base: a store row the file neve
   assert.deepEqual(plan.retires.map((r) => r.slug), ["a/deleted"]);
 });
 
-test("HELD by name: the lit-name is never written, in either arm, and says why", () => {
+// The hold is a MECHANISM, kept empty. These legs pin it with a synthetic name,
+// never a real mark's, so a later hold or a later lift moves no assertion here.
+test("HELD by name: a held slug is never written, in either arm, and says why", () => {
+  const held = new Set(["zz-fixture/held-by-name"]);
   const plan = planIngest({
-    derived: [row("wright/the-lit-name")], storeRows: [], pathAtRef: new Map([["wright/the-lit-name", "p"]]),
-    commitFor: () => C("c1"),
+    derived: [row("zz-fixture/held-by-name")], storeRows: [row("zz-fixture/held-gone")],
+    pathAtRef: new Map([["zz-fixture/held-by-name", "p"]]), pathAtBase: new Map([["zz-fixture/held-gone", "p/g"]]),
+    commitFor: () => C("c1"), held: new Set([...held, "zz-fixture/held-gone"]),
   });
   assert.deepEqual(plan.adds, []);
-  assert.equal(plan.held[0].slug, "wright/the-lit-name");
+  assert.deepEqual(plan.retires, []);
+  assert.deepEqual(plan.held.map((h) => h.slug), ["zz-fixture/held-by-name", "zz-fixture/held-gone"]);
+  assert.ok(plan.held.every((h) => /HELD by the founder's word/.test(h.why)));
+});
+
+test("HELD by name: the default is backfill-register's own set, imported — one place a hold is laid or lifted", () => {
+  const slug = "zz-fixture/held-through-the-import";
+  const args = () => ({ derived: [row(slug)], storeRows: [], pathAtRef: new Map([[slug, "p"]]), commitFor: () => C("c1") });
+  assert.deepEqual(planIngest(args()).adds.map((a) => a.slug), [slug], "not held: it plans in");
+  REFUSED_BY_NAME.add(slug);
+  try {
+    const plan = planIngest(args());
+    assert.deepEqual(plan.adds, []);
+    assert.deepEqual(plan.held.map((h) => h.slug), [slug]);
+  } finally { REFUSED_BY_NAME.delete(slug); }
+});
+
+// RULED 2026-09-24 (Keemin: "meant keep it in!"): the lit-name is no longer held.
+test("the lit-name comes in: planIngest plans wright/the-lit-name as an ADD, and the set holds nothing", () => {
+  const slug = "wright/the-lit-name";
+  const plan = planIngest({
+    derived: [row(slug, { kind: "naming" })], storeRows: [], pathAtRef: new Map([[slug, "WORLD/marks/wright/the-unlit-cake/the-lit-name/mark.md"]]),
+    commitFor: () => C("c-lit"),
+  });
+  assert.deepEqual(plan.held, [], "nothing is held");
+  assert.deepEqual(plan.adds.map((a) => a.slug), [slug], "the lit-name plans in");
+  assert.equal(plan.adds[0].commit.sha, "c-lit", "with the commit that carried its file");
+  assert.equal(REFUSED_BY_NAME.size, 0, "the refused set is empty today");
 });
 
 test("recordDiff compares the record, not the store's stamps", () => {

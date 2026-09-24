@@ -95,10 +95,11 @@
 //
 // ── HELD BY NAME ────────────────────────────────────────────────────────────
 //
-// `backfill-register.mjs § REFUSED_BY_NAME` — `wright/the-lit-name`, held for
-// the founder's sitting — is honoured here by the same set, imported. The dry
-// run and the run both print it under HELD. Lifting the hold is a ruling, and
-// the set is the one place it is lifted.
+// `backfill-register.mjs § REFUSED_BY_NAME` is honoured here by the same set,
+// imported. The dry run and the run both print a held name under HELD. Lifting
+// a hold is a ruling, and the set is the one place it is lifted. The set is
+// EMPTY since 2026-09-24: Keemin ruled `wright/the-lit-name` in ("meant keep it
+// in!"), and it now plans as any other mark does.
 //
 // ── THE DRY RUN READS THE STORE; IT CANNOT WRITE IT ─────────────────────────
 //

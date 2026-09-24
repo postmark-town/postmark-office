@@ -22,9 +22,17 @@
 // of any backfilled row can name the commit on world main that is its authority.
 //
 // WHAT IT REFUSES, BY NAME AND WITHOUT ARGUMENT:
-//   · `wright/the-lit-name` — HELD for the founder's sitting (escrow-bearing).
-//     Refused as a name, not as a rule with an exception, so no `--class` and no
-//     future filter can reach it by accident.
+//   · whatever `REFUSED_BY_NAME` names — refused as a name, not as a rule with
+//     an exception, so no `--class` and no future filter can reach it by
+//     accident. EMPTY TODAY. It held `wright/the-lit-name` for the founder's
+//     sitting (escrow-bearing) until RULED 2026-09-24 (Keemin: "meant keep it
+//     in!") — the lit-name comes into the store. Measured before the set was
+//     emptied: an ingest writes the mark's claim (stake 0) and its `marks` row
+//     and nothing else; escrow is `escrow_projection`, keyed by the text
+//     `<by>/<slug>` with no foreign key to `marks`, written by stamp-ingest from
+//     the town ledger, and it already carries positions under the new name. So
+//     admitting it needed nothing beyond the set. The mechanism stays: a future
+//     hold is one name added here, and every tool that imports the set honours it.
 //   · anything whose claim in the store is a `draft` — a private draft is the
 //     resident's, and publishing it from here would put a mark in the register
 //     that its author never put forward. These are reported and skipped; the
@@ -60,8 +68,8 @@ import { historyFor, isSweepCommit, parseFinding } from "./parity-causes.mjs";
 import { SUBSTANCE_COLUMNS, standingOnly, stripSlug, checkoutAt } from "./replay-ingest.mjs";
 import { uuid5 } from "./seed-import.mjs";
 
-/** HELD by the founder's word. Not a class, not a filter — a name. */
-export const REFUSED_BY_NAME = new Set(["wright/the-lit-name"]);
+/** HELD by the founder's word. Not a class, not a filter — a name. Empty since 2026-09-24 (see the header). */
+export const REFUSED_BY_NAME = new Set([]);
 
 const NL = String.fromCharCode(10);
 

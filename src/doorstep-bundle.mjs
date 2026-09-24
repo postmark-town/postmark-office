@@ -134,7 +134,7 @@ export async function doorstepBundle(handle, ctx = {}) {
   try {
     const { stancesForHandles } = await import("./world-stance.mjs");
     const args = { handle, limit: DOORSTEP_STANCES };
-    const whole = await stancesForHandles([handle], { limit: DOORSTEP_STANCES });
+    const whole = await stancesForHandles([handle], { limit: DOORSTEP_STANCES, setDowns: true });
     const { teach: _teach, ...trimmed } = whole;
     // ⚠ `teach_at`, NOT `teach` — THE KEY IS DROPPED, NOT RETYPED.
     //
