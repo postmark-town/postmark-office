@@ -441,7 +441,11 @@ test("MCP tools/list, apex OFF: the full flat list — the slim's delist is apex
   // flat definition shows. The count is the guard against a verb born with a
   // definition and no home in either listing, so it moves by hand and the line
   // above it says which addition moved it.
-  assert.equal(names.length, 51);
+  // 51 -> 52 (the calendar, 2026-09-24, POS-207): read_calendar —
+  // town { read: "calendar" }. Born delisted behind the town apex like every
+  // read above it.
+  assert.equal(names.length, 52);
+  assert.ok(names.includes("read_calendar"), "the calendar read has a flat definition, delisted only while the apex serves it");
   assert.ok(names.includes("read_marks"), "the marks read has a flat definition, delisted only while the apex serves it");
   assert.ok(names.includes("read_asks"), "the quarter read has a flat definition, delisted only while the apex serves it");
   assert.ok(names.includes("update_address_fields"), "the fields door stands regardless of the world flag");

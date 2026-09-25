@@ -1936,47 +1936,35 @@ const server = createServer((req, res) => {
       return;
     }
 
-    // POST /household/host | /household/cancel-event | /household/rsvp — THE
-    // CALENDAR'S ACTS over plain HTTP (POS-207, POS-208), under POS-70's one
-    // contract: the body IS the act's args, judged against the act's own
-    // schema (one-contract.mjs § ROUTE_ACTS) before anything is written, and
-    // the answer is what the MCP door answers under `result`. The act itself is
-    // the household apex's, called with the same key and the same gates.
-    {
-      const cal = /^\/household\/(host|cancel-event|rsvp)$/.exec(path);
-      if (req.method === "POST" && cal) {
-        readJsonBody(req).then(async (raw) => {
-          try {
-            const judged = judgeOrBounce(res, `POST /household/${cal[1]}`, JSON.parse(raw || "{}"));
-            if (!judged) return;
-            const payload = { do: cal[1], args: judged.fields };
-            if (visitorBounces("household", payload, key)) return bounce(res, 403, VISITOR_BOUNCE.defect, VISITOR_BOUNCE.hint);
-            const r = await householdApex(payload, key, { db, clone: TOWN_CLONE, odb, dbPath: DB_PATH, pen: PEN, canWrite, meta, asOf: AS_OF, schemas: flatPropsFromTools(), schemaRequired: flatRequiredFromTools(), channel, strictFields: true });
-            if (r?.error) return j(res, r.code ?? 400, r);
-            return j(res, 200, r.result);
-          } catch (e) {
-            if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", '{"title","place","starts","ends"} — the act\'s own fields, no envelope');
-            return bounce(res, 500, "the household door tripped", String(e?.message ?? e).slice(0, 200));
-          }
-        }).catch(() => bounce(res, 400, "could not read the body", "send a JSON object"));
-        return;
-      }
-    }
-
     // POST /household — the third door's acts over plain HTTP (curl parity):
     // begin, declare, add-resident, address, home, profile, window. Same verb
     // the MCP door serves; the answer carries the act's card and terms.
-    if (req.method === "POST" && path === "/household") {
+    //
+    // POST /household/host | /household/cancel-event | /household/rsvp — THE
+    // CALENDAR'S ACTS (POS-207, POS-208), the same door under POS-70's one
+    // contract: the body IS the act's args, judged against the act's own schema
+    // (one-contract.mjs § ROUTE_ACTS) before anything is written, and the answer
+    // is what the MCP door answers under `result`. They ride THIS call site
+    // rather than a fourth one, so the apex's call-site census
+    // (test/apex-read-args, test/pos-139) still counts one REST act door.
+    const calendarAct = req.method === "POST" ? /^\/household\/(host|cancel-event|rsvp)$/.exec(path) : null;
+    if (req.method === "POST" && (path === "/household" || calendarAct)) {
       readJsonBody(req).then(async (raw) => {
         try {
-          const payload = JSON.parse(raw || "{}");
+          let payload = JSON.parse(raw || "{}");
+          if (calendarAct) {
+            const judged = judgeOrBounce(res, `POST /household/${calendarAct[1]}`, payload);
+            if (!judged) return;
+            payload = { do: calendarAct[1], args: judged.fields };
+          }
           // A visitor's act, decided by the verb it resolves to — the same
           // decision and the same words as the MCP door (postmark#2816 sweep).
           if (visitorBounces("household", payload, key)) return bounce(res, 403, VISITOR_BOUNCE.defect, VISITOR_BOUNCE.hint);
           const r = await householdApex(payload, key, { db, clone: TOWN_CLONE, odb, dbPath: DB_PATH, pen: PEN, canWrite, meta, asOf: AS_OF, schemas: flatPropsFromTools(), schemaRequired: flatRequiredFromTools(), channel, strictFields: true, worldWriteBudget: (household) => bouncer.worldWriteBudget(household) });
+          if (calendarAct) return r?.error ? j(res, r.code ?? 400, r) : j(res, 200, r.result);
           return j(res, r?.error ? (r.code ?? 400) : 200, r);
         } catch (e) {
-          if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", '{"do": "begin", "args": { "household": "…", "card": "…" }}');
+          if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", calendarAct ? '{"title","place","starts","ends"} — the act\'s own fields, no envelope' : '{"do": "begin", "args": { "household": "…", "card": "…" }}');
           return bounce(res, 500, "the household door tripped", String(e?.message ?? e).slice(0, 200));
         }
       }).catch(() => bounce(res, 400, "could not read the body", "send a JSON object"));
