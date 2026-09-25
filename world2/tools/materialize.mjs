@@ -173,9 +173,12 @@ const queryableFor = (q) => {
 /**
  * THE TOWN'S MARKS, BY NAME — AN INTERIM (POS-142).
  *
- * RULED (Keemin, 2026-09-24): "Now, as an interim: the town's marks keep
- * `solo:the-town` BY NAME, the one spelling the pen still writes, with a test
- * pinning it. This commits to nothing about what the town is."
+ * Keemin, 2026-09-24 ~19:3x EDT: "the town should be some kind of entity, idk
+ * if household is correct, but yes the long-term shape is that the meeps should
+ * belong to the town." Wright proposed an interim (the town's marks keep
+ * `solo:the-town` by name, pinned by a test, committing to nothing about what
+ * the town is) and Keemin approved it: "I agree. good to have a lane build it
+ * tonight".
  *
  * `the-town` authors the constitution marks and is not a household on the
  * roll, so under the refusal below every ingest carrying a new town mark
