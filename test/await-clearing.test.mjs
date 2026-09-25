@@ -31,7 +31,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  clearingDidNotRunDetail, docketFor, newestWindow, nothingUnfoldedDetail, toMs, unfoldedDocket,
+  clearingDidNotRunDetail, docketFor, newestClosedDocket, newestWindow, nothingUnfoldedDetail, toMs, unfoldedDocket,
 } from "../world2/tools/await-clearing.mjs";
 
 const CROSSING_START = "2026-09-08T17:45:00Z";
@@ -258,4 +258,29 @@ test("FALSIFIER 4 · --by-hand NEVER takes the open window", () => {
   // half of the pair: there the status passes and the instant refuses.
   const halfway = [{ id: 189, status: "closed", cleared_at: null, town_sha: null }];
   assert.equal(unfoldedDocket(halfway, lockedUnmaterialized(189, 4)), null);
+});
+
+// ── AND THE SHADOW'S QUESTION (2026-09-25) ──────────────────────────────────
+//
+// `--rehearse` asks for the newest CLOSED window — the only one `foldDelta`
+// will fold — because the shadow runs between crossings, where the timer's
+// question has no answer and, on a healthy day, neither has the operator's.
+
+test("--rehearse takes the newest closed window by id, whether or not it is folded", () => {
+  const windows = [
+    { id: 211, status: "open", cleared_at: null, town_sha: null },
+    { id: 210, status: "closed", cleared_at: "2026-09-25 05:45:40.1+00", town_sha: "3a0df340" },
+    { id: 209, status: "closed", cleared_at: "2026-09-24 17:45:41.2+00", town_sha: "f7e0f595" },
+  ];
+  assert.deepEqual(newestClosedDocket(windows),
+    { window: 210, cleared_at: "2026-09-25 05:45:40.1+00", town_sha: "3a0df340", rehearsal: true });
+  // The timer, asked the same store at the shadow's hour, has no answer — which
+  // is why the shadow cannot borrow its question.
+  assert.equal(docketFor(windows, "2026-09-25T10:23:00Z"), null);
+});
+
+test("--rehearse never takes the open window, nor a closed one with no cleared_at", () => {
+  assert.equal(newestClosedDocket([{ id: 211, status: "open", cleared_at: "2026-09-25 13:00:00+00" }]), null);
+  assert.equal(newestClosedDocket([{ id: 210, status: "closed", cleared_at: null }]), null);
+  assert.equal(newestClosedDocket([]), null);
 });

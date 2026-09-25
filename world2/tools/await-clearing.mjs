@@ -3,6 +3,7 @@
 //
 //   node world2/tools/await-clearing.mjs --since <iso8601> [--timeout-s 240] [--poll-s 5]
 //   node world2/tools/await-clearing.mjs --since <iso8601> --by-hand
+//   node world2/tools/await-clearing.mjs --since <iso8601> --rehearse
 //
 //   env: WORLD2_PG=1 and WORLD2_PG_URL — consumed at `src/world2-acts.mjs:255`
 //        (`env.WORLD2_PG === "1" && !!env.WORLD2_PG_URL`).
@@ -89,6 +90,17 @@
 // timer, and is started by a person — so the journal names the act by its unit
 // and the receipt carries `by_hand: true` beside it. A by-hand publication that
 // could be mistaken for a scheduled one would be a worse record than no rerun.
+//
+// ── `--rehearse`: THE SHADOW'S QUESTION (2026-09-25) ─────────────────────────
+//
+// The settlement shadow runs at 10:23Z and 22:23Z, between crossings, so neither
+// question above has an answer it can use: no window clears after its start, and
+// on a healthy day nothing is unfolded. It asks a third one — "which window is
+// the newest CLOSED one" — which is the only window `foldDelta` will fold at all
+// (`not-newest-closed-window`). The shadow publishes nothing, so re-folding a
+// published docket is its point: the write-down skips every mark canon already
+// holds byte-for-byte, and what is left is what the next crossing would carry.
+// Never a crossing's door — `settlement-auto.sh` does not pass it.
 
 const argOf = (n, d = null) => { const i = process.argv.indexOf(n); return i !== -1 ? process.argv[i + 1] : d; };
 
@@ -189,6 +201,22 @@ export function unfoldedDocket(windows, unmaterializedRows) {
 }
 
 /**
+ * THE SHADOW'S PREDICATE, PURE. The newest closed window with a `cleared_at` —
+ * the same locked-docket test the other two use — or null. Newest by id, as
+ * `foldDelta`'s own `not-newest-closed-window` check orders it, so this can never
+ * name a window the fold would refuse.
+ */
+export function newestClosedDocket(windows) {
+  const closed = (windows ?? [])
+    .filter((w) => w && w.status === "closed" && w.cleared_at)
+    .sort((a, b) => Number(b.id) - Number(a.id));
+  const take = closed[0];
+  return take
+    ? { window: Number(take.id), cleared_at: take.cleared_at, town_sha: take.town_sha ?? null, rehearsal: true }
+    : null;
+}
+
+/**
  * The newest window the store holds, whatever its status — the one both
  * refusals name so the reader knows where the town actually is.
  */
@@ -242,6 +270,8 @@ if (isMain) {
   // the one field that says WHEN a by-hand publication happened; a door that let
   // an operator omit it would produce the one receipt nobody can place in time.
   const byHand = process.argv.includes("--by-hand");
+  const rehearse = process.argv.includes("--rehearse");
+  if (byHand && rehearse) { console.error("--by-hand and --rehearse ask different questions; pass one"); process.exit(2); }
   if (!since) { console.error("--since <iso8601> is required — the crossing's own start instant"); process.exit(2); }
   if (!Number.isFinite(timeoutS) || !Number.isFinite(pollS)) { console.error("--timeout-s and --poll-s must be numbers"); process.exit(2); }
 
@@ -258,7 +288,17 @@ if (isMain) {
   try {
     await client.connect();
 
-    if (byHand) {
+    if (rehearse) {
+      const { rows } = await client.query(
+        "SELECT id, status, cleared_at, town_sha FROM windows ORDER BY id DESC LIMIT 20");
+      const found = newestClosedDocket(rows);
+      if (!found) {
+        const newest = newestWindow(rows);
+        refuse("no-closed-window", "no closed window with a cleared_at among the newest twenty, so there is no docket to rehearse. "
+          + `The newest window is ${newest ? `${newest.id} (${newest.status}, cleared_at ${newest.cleared_at ?? "null"})` : "unreadable"}.`);
+      }
+      process.stdout.write(`${JSON.stringify(found, null, 1)}\n`);
+    } else if (byHand) {
       // NO `LIMIT` HERE, and the asymmetry with the timer's read is deliberate.
       // The timer asks "did a window clear in the last 240 seconds", and the
       // newest twenty answer that with room to spare. The operator asks "which
