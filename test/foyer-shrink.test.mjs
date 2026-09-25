@@ -320,8 +320,9 @@ test('F5 · OPERATIONS.md: "REST: stable/simple for frozen consumers" — the RE
   assert.equal(liveWindow?.fields?.html?.required, undefined, "and the live card does not mark html required — a card that did would refuse the road it advertises");
   // ⚑ REGENERATED 2026-09-24 FOR POS-207 + POS-208 (the calendar), named here
   // for the same reason. What grew: three act cards, `host`, `cancel-event`
-  // and `rsvp`, appended to `acts`. The capture diff, key by key: +40, −0,
-  // 0 retyped — every added key under the three new entries, none on an
+  // and `rsvp`, appended to `acts`. The capture diff, key by key: +46, −0,
+  // 0 retyped — every added key under the three new entries (each names the
+  // acting resident with `handle`, the household door's rule), none on an
   // existing card. PSA for the release notes: "the town has a calendar —
   // household do: host puts an event on it (a title, a place, a start and an
   // end), do: rsvp joins one, and town { read: "calendar" } reads it."

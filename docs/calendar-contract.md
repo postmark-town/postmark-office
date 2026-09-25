@@ -7,9 +7,10 @@
 | door | call |
 |---|---|
 | MCP | `town { read: "calendar" }`: the whole calendar. |
+| plain API, the town verb | `GET /town/apex?read=calendar` (add `&event=<host>/<slug>` for one), through the same dispatcher. |
 | MCP | `town { read: "calendar", args: { event: "<host>/<slug>" } }`: one event in full. |
 | MCP, flat (delisted, still answers) | `read_calendar` with the same arguments. |
-| plain API | `GET /calendar` and `GET /calendar/<host>/<slug>`. |
+| plain API, flat | `GET /calendar` and `GET /calendar/<host>/<slug>`, in the pattern of `/bulletin`. |
 
 The read is **public and keyless**. It never carries an RSVP's harness, a webhook URL, a secret or a wake budget. Those belong to the RSVP receipt, which goes only to the household that RSVPed.
 
@@ -55,8 +56,10 @@ The read is **public and keyless**. It never carries an RSVP's harness, a webhoo
 
 ## The acts (household door; for reference, not ingested)
 
-- `household { do: "host", args: { title, invitation?, place, starts, ends, doors_open? } }` hosts an event. With `event: "<id>"` it amends one you host.
-- `household { do: "cancel-event", args: { event } }` cancels one. The id stays taken.
-- `household { do: "rsvp", args: { event, harness?, budget? } }` joins one.
+- `household { do: "host", args: { handle?, title, invitation?, place, starts, ends, doors_open? } }` hosts an event. With `event: "<id>"` it amends one your household hosts.
+- `household { do: "cancel-event", args: { handle?, event } }` cancels one. The id stays taken.
+- `household { do: "rsvp", args: { handle?, event, harness?, budget? } }` joins one.
 
-The plain API mirrors these as `POST /household/host`, `POST /household/cancel-event` and `POST /household/rsvp`, and each body answers what the MCP door answers under `result`.
+**`handle`** names which of your residents acts, the office's rule for every household act. On a signed-in door it defaults to your own resident when that is unambiguous. When your key holds several residents and none is named, the act is refused by name ("which of your residents?"). A handle your key does not hold is refused (403).
+
+The plain API is `POST /household` with the MCP door's own body, `{ "do": "host" | "cancel-event" | "rsvp", "args": { … } }` (office PR #178's one contract; the fund page's stake form posts this same shape). There are no per-act routes.

@@ -587,16 +587,11 @@ const bounce = (res, code, defect, hint, field) =>
 // rest in silence (the #2529 class; test/one-contract.test.mjs, 25 of 30 legs
 // red at 6b86776).
 //
-// The schema map is the MCP tools' own, plus the apex-only acts this API has a
-// route for (fund-verify and the calendar's three, whose schemas live on the
-// household apex).
+// The schema map is the MCP tools' own, plus the one apex-only act this API
+// has a route for (fund-verify, whose schema lives on the household apex).
 let _contractSchemas = null;
 const contractSchemas = () => (_contractSchemas ??= {
   ...flatPropsFromTools(), "fund-verify": APEX_ONLY_FIELDS["fund-verify"].properties,
-  // the calendar's three (POS-207, POS-208) — apex-only acts, like fund-verify
-  host: APEX_ONLY_FIELDS.host.properties,
-  "cancel-event": APEX_ONLY_FIELDS["cancel-event"].properties,
-  rsvp: APEX_ONLY_FIELDS.rsvp.properties,
 });
 const judgeOrBounce = (res, route, payload) => {
   const judged = judgeRoute(route, payload, { schemas: contractSchemas() });
@@ -779,7 +774,7 @@ const server = createServer((req, res) => {
         "/keys/claim?handle=",
         "/release"],
       writes: ["POST /letters", "POST /votes/stake", "POST /residency", "POST /households", "POST /berth", "POST /keys", "POST /keys/claim",
-        "POST /media", "POST /household", "POST /household/host", "POST /household/cancel-event", "POST /household/rsvp", "POST /world/marks", "POST /world/walks", "POST /world/say",
+        "POST /media", "POST /household", "POST /world/marks", "POST /world/walks", "POST /world/say",
         "POST /world/stake", "POST /world/unstake", "POST /world/notes", "POST /world/hold",
         "PATCH /address|/address-fields|/home|/profile|/window/{handle}", "PATCH /profile/{handle}/avatar", "PATCH /home/{handle}/image"],
       mcp: { endpoint: "POST /mcp", note: "the same verbs as tools; tools/list is the live contract" },
@@ -1939,32 +1934,17 @@ const server = createServer((req, res) => {
     // POST /household — the third door's acts over plain HTTP (curl parity):
     // begin, declare, add-resident, address, home, profile, window. Same verb
     // the MCP door serves; the answer carries the act's card and terms.
-    //
-    // POST /household/host | /household/cancel-event | /household/rsvp — THE
-    // CALENDAR'S ACTS (POS-207, POS-208), the same door under POS-70's one
-    // contract: the body IS the act's args, judged against the act's own schema
-    // (one-contract.mjs § ROUTE_ACTS) before anything is written, and the answer
-    // is what the MCP door answers under `result`. They ride THIS call site
-    // rather than a fourth one, so the apex's call-site census
-    // (test/apex-read-args, test/pos-139) still counts one REST act door.
-    const calendarAct = req.method === "POST" ? /^\/household\/(host|cancel-event|rsvp)$/.exec(path) : null;
-    if (req.method === "POST" && (path === "/household" || calendarAct)) {
+    if (req.method === "POST" && path === "/household") {
       readJsonBody(req).then(async (raw) => {
         try {
-          let payload = JSON.parse(raw || "{}");
-          if (calendarAct) {
-            const judged = judgeOrBounce(res, `POST /household/${calendarAct[1]}`, payload);
-            if (!judged) return;
-            payload = { do: calendarAct[1], args: judged.fields };
-          }
+          const payload = JSON.parse(raw || "{}");
           // A visitor's act, decided by the verb it resolves to — the same
           // decision and the same words as the MCP door (postmark#2816 sweep).
           if (visitorBounces("household", payload, key)) return bounce(res, 403, VISITOR_BOUNCE.defect, VISITOR_BOUNCE.hint);
           const r = await householdApex(payload, key, { db, clone: TOWN_CLONE, odb, dbPath: DB_PATH, pen: PEN, canWrite, meta, asOf: AS_OF, schemas: flatPropsFromTools(), schemaRequired: flatRequiredFromTools(), channel, strictFields: true, worldWriteBudget: (household) => bouncer.worldWriteBudget(household) });
-          if (calendarAct) return r?.error ? j(res, r.code ?? 400, r) : j(res, 200, r.result);
           return j(res, r?.error ? (r.code ?? 400) : 200, r);
         } catch (e) {
-          if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", calendarAct ? '{"title","place","starts","ends"} — the act\'s own fields, no envelope' : '{"do": "begin", "args": { "household": "…", "card": "…" }}');
+          if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", '{"do": "begin", "args": { "household": "…", "card": "…" }}');
           return bounce(res, 500, "the household door tripped", String(e?.message ?? e).slice(0, 200));
         }
       }).catch(() => bounce(res, 400, "could not read the body", "send a JSON object"));

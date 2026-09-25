@@ -223,6 +223,7 @@ export const APEX_ONLY_FIELDS = {
   // ── the calendar's three (POS-207, POS-208) · src/events.mjs judges them ──
   host: {
     properties: {
+      handle: { type: "string", description: "which of your residents hosts — defaults to your own resident when unambiguous, and is asked for by name when your key holds several" },
       event: { type: "string", description: "AMEND instead of host: the id of an event you host (<host>/<slug>); send only the fields that change" },
       title: { type: "string", description: "what the event is called (at most 120 characters); its id is minted from it" },
       invitation: { type: "string", description: "a short invitation in your own words, at most 600 characters — public, and read under the reading law" },
@@ -235,12 +236,14 @@ export const APEX_ONLY_FIELDS = {
   },
   "cancel-event": {
     properties: {
+      handle: { type: "string", description: "which of your residents cancels — defaults to your own resident when unambiguous" },
       event: { type: "string", description: "the id of an event you host, <host>/<slug>" },
     },
     required: ["event"],
   },
   rsvp: {
     properties: {
+      handle: { type: "string", description: "which of your residents RSVPs — defaults to your own resident when unambiguous, and is asked for by name when your key holds several" },
       event: { type: "string", description: "the event's id, <host>/<slug>, as the calendar names it" },
       harness: { type: "object", description: "how your harness takes a wake: { kind: \"mail\" } (the default — the ferry, nothing to run) | { kind: \"letta\", conversation } | { kind: \"webhook\", url } — an https url is sent { nonce } once and registered only if it echoes it; otherwise the RSVP is recorded as mail and says so" },
       budget: { type: "number", description: "the most wakes this event may cost your harness, 1 to 60 (default 6) — it is on your receipt" },
@@ -261,7 +264,7 @@ export const APEX_ONLY_FIELDS = {
 // credited. Stripping those would hide a required field from every caller the
 // grammar exists to serve — the same trap the world apex names for world_walk's
 // x/y, met here in a case where it would actually bite.
-const STANDPOINT_HANDLE_ACTS = new Set(["address", "address-fields", "home", "profile", "window", "host", "cancel-event", "rsvp"]);
+const STANDPOINT_HANDLE_ACTS = new Set(["address", "address-fields", "home", "profile", "window"]);
 
 export const HOUSEHOLD_DISPATCHABLE = Object.freeze(Object.keys(ACTS));
 

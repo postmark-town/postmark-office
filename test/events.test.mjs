@@ -73,7 +73,7 @@ function eventTables() {
 }
 
 const MARKS = [
-  { slug: "current-the-reader/the-snug-harbour", status: "standing", kind: "sited", geometry: { at: { x: 412, y: -188 }, extent: { w: 12, h: 8 } } },
+  { slug: "current-the-reader/the-snug-harbour", status: "standing", kind: "sited", geometry: { at: { x: -350, y: 4978 }, extent: { w: 30, h: 22 } } },
   { slug: "wright/an-old-porch", status: "retired", kind: "sited", geometry: { at: { x: 5, y: 5 }, extent: { w: 2, h: 2 } } },
   { slug: "wright/a-pin", status: "standing", kind: "sited", geometry: { at: { x: 9, y: 9 }, extent: { w: 0, h: 0 } } },
   { slug: "wright/a-naming", status: "standing", kind: "naming", geometry: null },
@@ -105,7 +105,7 @@ test("falsifier · a host act with a standing mark answers the id and the absolu
   const now = Date.now();
   const r = await hostAtOffice(HOST(now), WRIGHT);
   assert.equal(r.event.id, "wright/the-snug-harbour-grand-opening");
-  assert.deepEqual(r.event.place, { mark: "current-the-reader/the-snug-harbour", name: "the-snug-harbour", x: 412, y: -188 });
+  assert.deepEqual(r.event.place, { mark: "current-the-reader/the-snug-harbour", name: "the-snug-harbour", x: -350, y: 4978 });
   assert.equal(pen.rows().length, 1);
   const act = pen.rows()[0];
   assert.equal(act.class, "event"); assert.equal(act.action, "host"); assert.equal(act.object, r.event.id);
@@ -281,6 +281,21 @@ test("the public read carries no harness, url, conversation or budget — only w
   }
   const one = await calendarAtOffice({ event: event.id }, { now });
   assert.deepEqual(one.event.rsvps, { total: 2, residents: ["errant", "wright"] });
+});
+
+test("the acting resident · handle names which of your residents acts; one resident is the default; several are asked for by name; another house's is refused", async () => {
+  const { pen } = setup();
+  const { event } = await hostAtOffice(HOST(Date.now()), WRIGHT);
+  const TWO = { household: "errant", handles: new Set(["errant", "pica"]) };
+  const n = pen.rows().length;
+  await refusedWith(rsvpAtOffice({ event: event.id }, TWO), 422, /which of your residents/);
+  await refusedWith(rsvpAtOffice({ event: event.id, handle: "wright" }, TWO), 403, /not one of your residents/);
+  assert.equal(pen.rows().length, n, "a refused rsvp wrote nothing");
+  const r = await rsvpAtOffice({ event: event.id, handle: "pica" }, TWO);
+  assert.equal(r.handle, "pica");
+  assert.equal(pen.rows().at(-1).actor, "pica");
+  const { APEX_ONLY_FIELDS } = await import("../src/household-apex.mjs");
+  for (const a of ["host", "cancel-event", "rsvp"]) assert.ok(APEX_ONLY_FIELDS[a].properties.handle, `${a} declares handle`);
 });
 
 // ── the rebuild ─────────────────────────────────────────────────────────────

@@ -173,11 +173,6 @@ export const ROUTE_ACTS = Object.freeze({
   "POST /households":         { tool: "declare_household",     door: "household", act: "declare" },
   "POST /media":              { tool: "upload_media",          door: null,        act: null },
   "POST /fund/verify":        { tool: "fund-verify",           door: "household", act: "fund-verify" },
-  // the calendar (POS-207, POS-208): apex-only acts, their schemas on the
-  // household apex (APEX_ONLY_FIELDS), named here as fund-verify's is
-  "POST /household/host":         { tool: "host",          door: "household", act: "host" },
-  "POST /household/cancel-event": { tool: "cancel-event",  door: "household", act: "cancel-event" },
-  "POST /household/rsvp":         { tool: "rsvp",          door: "household", act: "rsvp" },
   "PATCH /address/{handle}":  { tool: "update_address_body",   door: "household", act: "address",        path: ["handle"] },
   "PATCH /address-fields/{handle}": { tool: "update_address_fields", door: "household", act: "address-fields", path: ["handle"] },
   "PATCH /home/{handle}":     { tool: "update_home",           door: "household", act: "home",           path: ["handle"] },
