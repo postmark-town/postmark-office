@@ -5,6 +5,13 @@
 # POST, or mail (Letta falls back to mail until POS-210). It logs every attempt
 # in earpiece_wakes (026) and writes its stamp on every fire, idle included.
 #
+# MAIL is a letter from postmark-pen, one per resident per event per crossing,
+# written in the 10 minutes before 00:00Z / 12:00Z through the office's own
+# send: the office's index (office.db beside the checkout, or --db) and the
+# town clone (TOWN_CLONE; TOWN_PUSH=1 pushes the pen's commit), both from the
+# office env below. The ferry carries it. The town clone must carry
+# WHITE_PAGES/postmark-pen (town main 55df1afc6), or the ferry bounces it.
+#
 # THE KILL FLAG: W2_EARPIECE=1 in the office env, or every fire writes
 # status "disabled" and sends nothing. It ships unset.
 #

@@ -5,7 +5,9 @@
 // minute; while no event's window is open it reads the calendar once, writes
 // its stamp and exits 0. While one is open it wakes the residents who RSVPed,
 // by the rules in src/earpiece.mjs, through the queries in
-// src/earpiece-store.mjs.
+// src/earpiece-store.mjs. A mail wake is a letter from postmark-pen, one per
+// event per crossing, written through the office's own send
+// (src/earpiece-mail.mjs).
 //
 // ── THE KILL FLAG ───────────────────────────────────────────────────────────
 //
@@ -22,34 +24,33 @@
 // run, not about a resident, and a per-resident row every minute for every
 // announced event would bury the log a resident reads.
 //
-// Usage: node world2/tools/earpiece-deliver.mjs --run [--state <file>]
+// Usage: node world2/tools/earpiece-deliver.mjs --run [--state <file>] [--db <office.db>] [--oauth-db <oauth.db>]
 // Env:   W2_EARPIECE=1 · WORLD2_PG_URL (the office's record) · WORLD_CLONE
 //        (the world engine's containment law) · EARPIECE_STATE (the stamp file)
+//        · TOWN_CLONE, TOWN_PUSH, TOWN_SINGLE_LOG (the pen's, as the office has them)
 // Exit:  0 ran, idle or disabled · 1 the record could not be reached (the
 //        stamp says so) · 2 usage.
 
-import { writeFileSync, mkdirSync, realpathSync } from "node:fs";
+import { writeFileSync, mkdirSync, realpathSync, existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   earpieceEnabled, inWindow, placeOf, saysAt, walksAt, decideWake, buildEnvelope, postWake, letterFor, KILL_FLAG,
+  crossingLabel,
 } from "../../src/earpiece.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "..", "..");
 export const STATE_DEFAULT = "/srv/postmark-earpiece/state.json";
 
-// ── THE MAIL PORT: STOPPED ON ITS SENDER (POS-209) ──────────────────────────
+// ── THE MAIL PORT ───────────────────────────────────────────────────────────
 //
-// MEASURED: every letter the office pens has a resident `from`, and the key
-// that sends it must hold that resident (write.mjs § validateLetter: "is not
-// one of your residents"). The office has no sender of its own. The welcome and
-// doorstep letters are `postmaster`'s, and postmaster is Ferry, a Meep who
-// writes them herself. Which resident signs a wake the office writes is a shape
-// call, so the default port sends nothing and says why; a mail wake is logged
-// `failed` and is not charged. The port is injected, so the rules and the log
-// are proved without it.
-export const MAIL_STOPPED = "no mail pen for the earpiece yet: which resident signs a letter the office writes is a shape call (POS-209, stopped)";
+// The oneshot below hands `runEarpiece` postmark-pen's port
+// (src/earpiece-mail.mjs § penMailPort), over the office's index and town
+// clone. A caller that hands it NO port sends no mail: the wake is logged
+// `failed` with this sentence and is not charged. The port is injected, so the
+// rules and the log are proved without a clone.
+export const MAIL_STOPPED = "no mail pen was handed to this run, so no letter was written";
 export const mailStopped = async () => ({ ok: false, detail: MAIL_STOPPED });
 
 const iso = (t) => new Date(t).toISOString();
@@ -70,7 +71,8 @@ export async function runEarpiece({ now = Date.now(), env = process.env, store, 
   const events = await store.candidates(now);
   const open = events.filter((e) => inWindow(e, now));
   const outside_window = events.filter((e) => !open.includes(e)).map((e) => e.id);
-  const counts = { delivered: 0, failed: 0, fell_back: 0, "budget-exhausted": 0, coalescing: 0, "nothing-new": 0, "already-exhausted": 0 };
+  const counts = { delivered: 0, failed: 0, fell_back: 0, "budget-exhausted": 0, coalescing: 0, "nothing-new": 0, "already-exhausted": 0,
+    "before-the-crossing": 0, "this-crossing": 0 };
   if (!open.length) return { at, status: "idle", outside_window, counts };
 
   const byId = new Map(open.map((e) => [e.id, e]));
@@ -143,7 +145,8 @@ export async function runEarpiece({ now = Date.now(), env = process.env, store, 
       const r = await Promise.resolve().then(() => sendMail({ to: rsvp.handle, ...letterFor(envelope) }))
         .catch((e) => ({ ok: false, detail: String(e?.message ?? e).slice(0, 200) }));
       status = r.ok ? (d.route.fell_back ? "fell_back" : "delivered") : "failed";
-      detail = [d.route.fell_back ? `fell back to mail: ${d.route.fell_back}` : null, r.detail ?? null].filter(Boolean).join(" — ") || null;
+      const sent = r.ok ? `letter ${r.letter_id ?? "(no id)"} for the ${crossingLabel(now)} crossing` : null;
+      detail = [d.route.fell_back ? `fell back to mail: ${d.route.fell_back}` : null, sent, r.detail ?? null].filter(Boolean).join(" — ") || null;
     }
     counts[status] += 1;
     return { ...base, harness: d.route.kind, wake_n: d.wake_n, status, detail,
@@ -183,8 +186,21 @@ async function main(argv) {
   const verbs = await import(pathToFileURL(join(clone, "tools", "world-verbs.mjs"))).catch(() => null);
   const { EARSHOT_M } = await import("../../src/reach.mjs");
   const { pgStore } = await import("../../src/earpiece-store.mjs");
+  // THE PEN's two databases, opened the way tools/town-drain-run.mjs opens
+  // them: the office's index (the recipient check), and the town log only when
+  // the office writes one (flag-on; the box is flag-off).
+  const argOf = (n, d) => { const k = argv.indexOf(n); return k >= 0 ? argv[k + 1] : d; };
+  const dbPath = resolve(argOf("--db", join(ROOT, "office.db")));
+  const odbPath = resolve(argOf("--oauth-db", join(ROOT, "oauth.db")));
+  const { DatabaseSync } = await import("node:sqlite");
+  const { penMailPort } = await import("../../src/earpiece-mail.mjs");
+  const { townLogEnabled } = await import("../../src/town-journal.mjs");
+  const db = existsSync(dbPath) ? new DatabaseSync(dbPath) : null;
+  const odb = townLogEnabled() && existsSync(odbPath) ? (await import("../../src/oauth.mjs")).openOauthDb(odbPath) : null;
+  const townClone = process.env.TOWN_CLONE ?? join(ROOT, "town-clone");
+  const sendMail = penMailPort({ db, clone: existsSync(townClone) ? townClone : null, odb });
   try {
-    const out = await runEarpiece({ store: pgStore(), withinFn: verbs?.pointWithinMark ?? null, earshotM: EARSHOT_M });
+    const out = await runEarpiece({ store: pgStore(), withinFn: verbs?.pointWithinMark ?? null, earshotM: EARSHOT_M, sendMail });
     writeState(state, out);
     console.log(JSON.stringify(out));
     process.exit(0);
