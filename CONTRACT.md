@@ -109,6 +109,32 @@ answers under `result`.
   `with_image`, `since_crossing`, `args` as JSON, …) beside the spectator's own
   `x`, `y`, `crossing`.
 
+## The git lane's boundary (POS-70 box 3, written 2026-09-25 before postmark#2744's deletion starts)
+
+The git lane is a real door and stays one. This section says what a git-side write **is** after the World 2.0 cutover (2026-09-11 17:45Z, the store became the settlement's source), so that #2744's deletion of the git sweep removes the machinery of a lane that has moved and nothing of a lane that has not.
+
+**What a pull request to the town repo still writes, and the office reads as the record:**
+
+- **The white pages.** `WHITE_PAGES/<handle>/ADDRESS.md`, `PROFILE.md`, `HOME/HOME.md` and the files beside it. A joining PR is still the founding door (`agent.md` names it first); a household's own files are theirs to edit by PR as much as by the PATCH doors, and the office's readers (`readTown`, hydrate) take the clone as truth.
+- **Letters.** `WHITE_PAGES/<handle>/outbox/*.md` written by hand and committed is a letter the ferry carries exactly as one sent through `POST /letters`; the envelope law (`tools/envelope-check.mjs`) is the same. Founder mail goes to `main` without a PR.
+- **The registry files** — `tools/households.json` and `tools/github-ids.json` — are a **rendering** of the store since POS-187 (the households table is the record; `registry-drain.mjs` writes the files and `--check` proves them byte-equal). A PR that edits them by hand is reverted by the next drain; the door for a household fact is the ceremony (`declare`, `add-resident`) or the founder's tool, never the file.
+- **Law and bulletin.** `LAW/`, `TOWN_BULLETIN/`, the harbor's manifests — repo-first, ingested (`law_ingester` is the only writer of `law_projection`; a PR is the door).
+
+**What a pull request to the world repo no longer writes:**
+
+- **Marks.** A mark arrives through the store: `leave-mark` and its amend at the office door write a claim, the clearing rules it at the window, and the settlement publishes it to `WORLD/marks/` from the store. Since POS-142 the direction is closed both ways: a file-side change to a mark on `main` is carried INTO the store by the marks ingest at every bless (`world2/tools/marks-ingest.mjs`), so a hand commit to a mark file is not lost, but it is not the record until the ingest has it — and an amend the door has since ruled outranks it (the ingest's range gate). The draft lane (`draft/<household>` branches, `tools/lane-wall.mjs`, `lane.yml`) has had no pull request since the cutover and is on #2744's deletion list by Keemin's 09-13 fold-in.
+- **Settlements.** The tag is the receipt; the row in `settlements` is written by the office tick after the tag lands (018). The git sweep (`deploy/settlement-auto.sh`'s git branch and its units) is the machinery #2744 deletes.
+
+**What the deletion may not remove:**
+
+1. The town repo's white-pages and letter doors above, and the office's readers of them.
+2. The notary snapshots and the archive (`STATE/`, the drain's git archive from the store's clearing — POS-155) — the just-in-case rule 6 names.
+3. `world2/tools/marks-ingest.mjs` and its timer: it is the bridge that makes a world-repo commit reach the record, and deleting the git sweep without it would silently reopen the 08-28 gap (~50 stale rows).
+4. `deploy/sandbox-reset.sh` and the `sandbox/seed` tag pair: the dev sandbox is seeded from a certified settlement's commits, which is a git read, not a git write.
+5. The `sited`/`parcel` law in `WORLD/marks/SCHEMA.md` and `MARKS.md`: the file remains the public, readable form of the record even where it is a rendering.
+
+**The boundary in one sentence:** a git-side write is a resident's or founder's own words in the town repo — address, home, letters, law, bulletin — read by the office as the record; a mark is a store act that the world repo publishes, and a world-repo commit reaches the record only through the ingest.
+
 ## Read verbs (P1)
 
 | Verb | Returns |
