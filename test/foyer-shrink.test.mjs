@@ -264,7 +264,11 @@ const REST = () => ctx({ schemas: SCHEMAS, schemaRequired: REQUIRED });
 //                 unabridged 12,534 and trip this ceiling immediately. A bound
 //                 that could not be crossed by the regression it names would be
 //                 decoration.
-const REST_CEILING = 16_384;
+// POS-207 (2026-09-25, Keemin's go through Wright): raised to 24,576 (24 KiB) on
+// this ceiling's own rule, "~30% over today": three calendar act cards took the
+// bare answer to 19,353, which no honest trim of three cards brings back under
+// 16,384. SLIM_CEILING is untouched and stays the load-bearing bound.
+const REST_CEILING = 24_576;
 const SLIM_CEILING = 8_192;
 
 test('F5 · OPERATIONS.md: "REST: stable/simple for frozen consumers" — the REST bare answer keeps its SHAPE, every key and the type at it', async () => {
