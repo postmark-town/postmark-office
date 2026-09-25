@@ -24,6 +24,17 @@ const H = 3_600_000;
 const iso = (t) => new Date(t).toISOString();
 
 // ── the two tables, in memory ───────────────────────────────────────────────
+
+// `set_config(..., true)` is TRANSACTION-local in Postgres, and the pen stub
+// keeps the last value it was given across transactions. So the harness row's
+// policy reads the spelling set declared in THIS transaction only: the keys
+// set after the last BEGIN the stub was asked, or none.
+function txKeys(st) {
+  const begin = st.asked.findLastIndex((q) => /^BEGIN/i.test(q));
+  const declared = st.asked.slice(begin + 1).some((q) => /set_config\('app\.household_keys'/i.test(q));
+  return declared ? st.householdKeys : [];
+}
+
 function eventTables() {
   const events = new Map();
   const rsvps = new Map();
@@ -68,16 +79,16 @@ function eventTables() {
     // gives `office_api` under household_harnesses_read / _insert / _update.
     [/^SELECT kind, address FROM household_harnesses WHERE handle = \$1$/i, (q, p, st) => {
       const r = harnesses.get(p[0]);
-      const visible = r && st.householdKeys.includes(r.household);
+      const visible = r && txKeys(st).includes(r.household);
       return { rows: visible ? [{ kind: r.kind, address: r.address }] : [], rowCount: visible ? 1 : 0 };
     }],
     [/^INSERT INTO household_harnesses/i, (q, p, st) => {
       const [handle, household, kind, address, secret, registered_at] = p;
-      if (!st.householdKeys.includes(household))
+      if (!txKeys(st).includes(household))
         throw new Error('new row violates row-level security policy for table "household_harnesses"');
       if ((kind === "webhook") !== (secret != null)) throw new Error('violates check constraint "household_harnesses_secret"');
       const prev = harnesses.get(handle);
-      if (prev && !st.householdKeys.includes(prev.household))
+      if (prev && !txKeys(st).includes(prev.household))
         throw new Error('new row violates row-level security policy (USING expression) for table "household_harnesses"');
       harnesses.set(handle, prev
         ? { ...prev, household, kind, address, secret, rotated_at: registered_at }
@@ -414,9 +425,10 @@ test("the row policy · the harness row is read and written only inside a transa
   const asked = pen.asked();
   const touches = asked.map((q, i) => [q, i]).filter(([q]) => /household_harnesses/.test(q));
   assert.equal(touches.length, 2, "one read and one upsert");
-  for (const [, i] of touches) {
-    const lastDecl = asked.slice(0, i).reverse().find((q) => /set_config\('app\.household_keys'/.test(q));
-    assert.ok(lastDecl, "a harness query ran with no spelling set declared");
+  for (const [q, i] of touches) {
+    const begin = asked.slice(0, i).findLastIndex((x) => /^BEGIN/.test(x));
+    const declared = asked.slice(begin + 1, i).some((x) => /set_config\('app\.household_keys'/.test(x));
+    assert.ok(declared, `a harness query ran in a transaction that declared no spelling set: ${q.slice(0, 80)}`);
   }
   assert.deepEqual(pen.state.householdKeys, ["solo:errant"]);
   // another household's row is invisible to this one: seed one and read as errant
