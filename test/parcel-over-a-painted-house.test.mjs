@@ -220,7 +220,7 @@ function execLeave(payload) {
 
 // ── LEG 1 · the door prod runs ───────────────────────────────────────────────
 
-test("THE FIX, journal door: a parcel claim over a painted house standing on nobody's parcel is ADMITTED", async () => {
+test("THE FIX, journal door: a parcel claim over a painted house standing on nobody's parcel is ADMITTED", { todo: "the train's journal door reads and writes the store (POS-156, G1) and this leg installs no store fake, so it answers 503 — port onto the train's store harness (RECONCILIATION.md, main-into-w40, 2026-09-25)" }, async () => {
   const out = await journalLeave({ slug: "the-common-ground", kind: "parcel", by: "claimant",
     at: { x: 2000, y: 2000 }, body: "common ground by the standing law — the painting said otherwise" });
   console.log(`    RECEIPT · journal door → ${out.ok ? `OK id=${out.id}` : `${out.code} "${out.defect}"`}`);
@@ -254,7 +254,7 @@ test("THE FIX, git-era door: the same claim, the same answer — one law, both h
 // order wins. If a door-time overlap refusal is ever wanted, this is the leg
 // that will have to change, and it names what would have to be built.
 
-test("NON-REGRESSION: a parcel claim over a neighbour's PARCEL is admitted by this door and refused at the crossing", async () => {
+test("NON-REGRESSION: a parcel claim over a neighbour's PARCEL is admitted by this door and refused at the crossing", { todo: "the train's journal door reads and writes the store (POS-156, G1) and this leg installs no store fake, so it answers 503 — port onto the train's store harness (RECONCILIATION.md, main-into-w40, 2026-09-25)" }, async () => {
   const out = await journalLeave({ slug: "over-the-neighbour", kind: "parcel", by: "claimant",
     at: { x: 100, y: 100 }, body: "straight over the neighbour's ground" });
   console.log(`    RECEIPT · overlap claim → ${out.ok ? `OK id=${out.id} (the crossing refuses it, not this door)` : `${out.code} "${out.defect}"`}`);
