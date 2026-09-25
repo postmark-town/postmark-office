@@ -66,7 +66,7 @@ const THE_REFUSAL = "You are within current-the-reader/the-taproom — this walk
 /** One office in a closure, with the walk hooks made observable.
  *  `hooks: "manual"` is what crossingDeps() hands an ordinary entry;
  *  `hooks: "arrival"` is what walkViaOffice overrides them to. */
-async function officeWith({ hooks, stopThrows = false, standing = { x: -30, y: 40 } }) {
+async function officeWith({ hooks, stopThrows = false, standing = { x: -9, y: 35.5 } }) { // POS-220: the post office's anchor — a door is entered only from within its extent, so the walker stands AT it (the old { -30, 40 } was ~21 m off, inside the retired 60 m reach)
   const worldState = JSON.parse(readFileSync(join(CLONE, "WORLD", "world-state.json"), "utf8"));
   const mod = await import(`file:///${join(CLONE, "tools", GRAMMAR).replace(/\\/g, "/")}`);
   const thresholds = mod.parseEnterExitLedger ? mod : { ...mod, parseEnterExitLedger: mod.parseThresholdLedger };
@@ -110,7 +110,7 @@ test("an ORDINARY entry still ends the walk that carried you there — the fix t
   assert.ok(answer.entered.length > 0, "the fixture must actually enter, or nothing below is exercised");
   assert.equal(o.stops.length, 1, "a manual entry by a walking resident writes the stop — #2685, and it is still law");
   assert.equal(answer.walk_ended?.recorded, true);
-  assert.deepEqual(answer.walk_ended.at, { x: -30, y: 40 });
+  assert.deepEqual(answer.walk_ended.at, { x: -9, y: 35.5 });
 });
 
 test("#2859 · the reported contradiction, reproduced: a successful entry whose own stop is refused",
