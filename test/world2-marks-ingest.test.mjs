@@ -460,8 +460,9 @@ test("the lit-name comes in: planIngest plans wright/the-lit-name as an ADD, and
   assert.equal(REFUSED_BY_NAME.size, 0, "the refused set is empty today");
 });
 
-// RULED 2026-09-24 (Keemin, POS-142): the town's marks keep `solo:the-town` BY
-// NAME, as an interim. The dev sandbox run refused whole at NO_SUCH_HOUSE on six
+// POS-142, 2026-09-24: Wright's interim, which Keemin approved ("I agree. good to
+// have a lane build it tonight"): the town's marks keep `solo:the-town` by name.
+// The dev sandbox run refused whole at NO_SUCH_HOUSE on six
 // town adds; the fixture above never met it because its roll names every owner,
 // the town included. This roll is the real one's shape: the town is not on it.
 test("THE TOWN'S MARK comes in: a town add plans AND applies through the stub as `solo:the-town`, on a roll that does not name the town", async () => {

@@ -80,7 +80,7 @@ test("the exception is one named constant, spelled the way the store already hol
 test("a town claim answers `solo:the-town`, BEFORE the roll is asked", async () => {
   const q = stubQ();
   assert.equal(await ownerHouseholdFor(q, "the-town"), "solo:the-town");
-  assert.equal(q.rollReads, 0, "the town's answer asked the roll — the ruling puts it before the roll");
+  assert.equal(q.rollReads, 0, "the town's answer asked the roll — the interim puts it before the roll");
   assert.deepEqual(q.calls, [], "the town's answer touched the store at all");
 });
 
