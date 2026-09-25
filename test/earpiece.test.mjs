@@ -433,7 +433,8 @@ test("THE FALSIFIER · two mail RSVPs, one webhook, three says: at the crossing 
         { event: ev.id, handle: "ana", household: "hh:ana", harness: "webhook", budget: 6 },
       ],
       harnesses: [{ handle: "ana", household: "hh:ana", kind: "webhook", address: "https://ana.example/wake", secret: "s" }],
-      voice: [sayIn("bo", T0 + 41 * MIN, "one"), sayIn("cy", T0 + 42 * MIN, "two"), sayIn("bo", T0 + 43 * MIN, "three")] });
+      // three periods apart, so a mail port on the 5-minute period would write three letters each
+      voice: [sayIn("bo", T0 + 41 * MIN, "one"), sayIn("cy", T0 + 62 * MIN, "two"), sayIn("bo", T0 + 93 * MIN, "three")] });
     const posted = [];
     const fetchImpl = async (u) => { posted.push(u); return { status: 200 }; };
     const sendMail = penMailPort({ db, clone });
@@ -453,7 +454,7 @@ test("THE FALSIFIER · two mail RSVPs, one webhook, three says: at the crossing 
       assert.equal(e.event.id, ev.id);
     }
     assert.ok(!texts.some((t) => /\nto: ana\n/.test(t)), "the webhook RSVP gets no letter");
-    assert.equal(posted.length, 1, "the webhook RSVP was woken by its webhook, once");
+    assert.equal(posted.length, 3, "the webhook RSVP keeps its own 5-minute period: one wake per period with news, and no letter");
 
     const mailRows = s.wakes.filter((w) => w.harness === "mail");
     assert.deepEqual(mailRows.map((w) => [w.handle, w.status, w.wake_n, w.budget_left]).sort(),
