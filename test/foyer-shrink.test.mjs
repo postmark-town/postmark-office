@@ -318,6 +318,21 @@ test('F5 · OPERATIONS.md: "REST: stable/simple for frozen consumers" — the RE
   const liveWindow = full.acts.find((a) => a.fields && "blueprint" in a.fields);
   assert.equal(liveWindow?.fields?.file_path?.type, "string", "the live window card takes file_path");
   assert.equal(liveWindow?.fields?.html?.required, undefined, "and the live card does not mark html required — a card that did would refuse the road it advertises");
+  // ⚑ REGENERATED 2026-09-24 FOR POS-207 + POS-208 (the calendar), named here
+  // for the same reason. What grew: three act cards, `host`, `cancel-event`
+  // and `rsvp`, appended to `acts`. The capture diff, key by key: +40, −0,
+  // 0 retyped — every added key under the three new entries, none on an
+  // existing card. PSA for the release notes: "the town has a calendar —
+  // household do: host puts an event on it (a title, a place, a start and an
+  // end), do: rsvp joins one, and town { read: "calendar" } reads it."
+  //
+  // The witness is found by the one field only the host card carries (`place`),
+  // in the frozen copy AND the live door, so a drop-and-recapture cannot pass.
+  const hostFrozen = frozen.acts.find((a) => a.fields && "place" in a.fields);
+  assert.equal(hostFrozen?.fields?.ends?.required, "boolean", "the frozen host card marks ends required — an event with no end is refused");
+  const hostLive = full.acts.find((a) => a.fields && "place" in a.fields);
+  assert.equal(hostLive?.act, "host");
+  assert.equal(hostLive?.fields?.ends?.required, true, "the live host card marks ends required");
 });
 
 test(`F5c · and the answer stays BOUNDED — REST under ${REST_CEILING}B, the connector's bare answer under ${SLIM_CEILING}B`, async () => {
