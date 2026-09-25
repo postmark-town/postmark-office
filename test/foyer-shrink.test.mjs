@@ -990,7 +990,7 @@ test("F12d · THE DRAIN CANNOT TRIP ON THE NONCE — the replay lane's door is e
 // now, over the town-log rows they already write (test/one-contract.test.mjs
 // drives it through both doors). What still refuses it by name is every act
 // with no town-log receipt to hand back — the world acts (until
-// 026_act_nonce.sql), and household acts like the ballot stake.
+// 027_act_nonce.sql), and household acts like the ballot stake.
 test("F12e · a nonce on an act with no town-log receipt still bounces by name — the exemption is send and the five paper acts", async () => {
   const clone = mailClone();
   const r = await householdApex({ do: "stake-vote", args: { from: "wright", topic: "t", candidate: "c", stamps: 1, nonce: "x" } }, KEY,

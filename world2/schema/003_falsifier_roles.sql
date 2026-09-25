@@ -61,6 +61,11 @@ lawful AS (
     ('office_api',   'events',           'UPDATE'),
     ('office_api',   'event_rsvps',      'INSERT'),
     ('office_api',   'event_rsvps',      'UPDATE'),
+    -- 026_events.sql, the resident's private harness row (POS-208, ruled
+    -- 2026-09-25). Narrowed by its row policy to the acting household's own
+    -- rows; no DELETE, because a registration is replaced, never removed.
+    ('office_api',   'household_harnesses', 'INSERT'),
+    ('office_api',   'household_harnesses', 'UPDATE'),
     ('clearing_job', 'claims',           'UPDATE'),
     ('clearing_job', 'windows',          'INSERT'),
     ('clearing_job', 'windows',          'UPDATE'),

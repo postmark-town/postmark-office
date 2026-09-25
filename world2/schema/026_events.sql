@@ -1,4 +1,5 @@
--- 026 — events + event_rsvps: the calendar's current state (POS-207, POS-208, w40)
+-- 026 — events + event_rsvps: the calendar's current state, and household_harnesses:
+--       each resident's private harness row (POS-207, POS-208, w40)
 --
 -- THE SHAPE, decided by Wright 2026-09-24 and disclosed to Keemin: "The record
 -- is the act log; the table is its projection." Hosting, amending, cancelling
@@ -14,17 +15,40 @@
 -- row from one pure function (src/events.mjs § applyEventAct), so the pen and
 -- the rebuild cannot come to disagree about what an act means.
 --
--- ── THE ONE THING THE ACTS DO NOT CARRY ─────────────────────────────────────
+-- ── THE HARNESS ROW (ruled 2026-09-25, Keemin's go through Wright) ─────────
 --
--- `event_rsvps.address` holds a webhook URL or a Letta conversation. `acts` is
--- the table that leaves the box: the notary exports it into a public git repo,
--- frozen on write (src/world2-pen.mjs § `act: false`). An RSVP's address is a
--- household's private fact, and the public calendar read never carries it
--- either. So the act records the harness KIND and the budget, and the address
--- rides only here. A rebuild restores every column except `address`, and the
--- rebuild tool names that column as the one it cannot restore. Where a
--- household's private harness facts should live (007's RLS territory, beside
--- the webhook secret) is a STOP in the lane's report, and is not decided here.
+-- `acts` is the table that leaves the box: the notary exports it into a public
+-- git repo, frozen on write (src/world2-pen.mjs § `act: false`). A webhook url,
+-- a Letta conversation and a webhook's secret are a resident's private facts,
+-- so no act carries them, and neither do `events`, `event_rsvps` or the public
+-- calendar read. The rsvp act records the harness KIND and the budget.
+--
+-- They live on `household_harnesses`: ONE ROW PER RESIDENT, not one per RSVP.
+-- The office registers a resident's harness once. A webhook is challenged
+-- with a nonce once per registration, and on the echo the office mints a
+-- 32-byte secret and shows it once, on that RSVP's receipt. A later RSVP naming
+-- the same address reuses the row, with no challenge and no secret. A different
+-- address re-challenges and re-mints (`rotated_at`). A `letta` harness stores
+-- its conversation id the same way, with no secret. A `mail` RSVP stores
+-- nothing and leaves the row alone.
+--
+-- `event_rsvps` refers to the row by `handle`, the column it already has.
+-- One row per resident makes the handle the row's key, so a surrogate id would
+-- be a second name for the same thing that could come to disagree with it.
+--
+-- THE POLICY SHAPE IS 007's (private drafts), in 024's spelling-set form:
+-- ROW LEVEL SECURITY, and every policy is `TO office_api` and compares
+-- `household = ANY(app.household_keys)`. A transaction that has not declared
+-- this household sees no row and cannot write one. NO GRANT TO
+-- `snapshot_reader` or to any role but `office_api`. Even if a later re-run of
+-- 002's `GRANT SELECT ON ALL TABLES` reached this table, RLS with no policy for
+-- that role returns it nothing. No export reads it: the notary reads `acts`,
+-- `windows` and `marks` (world2/tools/snapshot-export.mjs), and a rebuild of
+-- the calendar never touches it (world2/tools/events-rebuild.mjs).
+--
+-- The secret is kept in the clear under RLS for now, as 007 keeps a draft's
+-- body. Encrypting it at rest belongs to the wake delivery (POS-208 C), the
+-- first thing that reads it.
 --
 -- ── THE PEN ──────────────────────────────────────────────────────────────────
 --
@@ -34,10 +58,13 @@
 -- second RSVP from the same resident replaces their first. Nothing is removed.
 -- A cancelled event keeps its row and its id.
 --
--- `event_rsvps` is SELECT to `office_api` ONLY, because of `address`. `events`
--- is public, like the read that serves it.
+-- `event_rsvps` stays SELECT to `office_api` only: it names who RSVPed with
+-- which kind and budget, and the public read carries only who. `events` is
+-- public, like the read that serves it. `household_harnesses` is `office_api`'s
+-- alone, SELECT + INSERT + UPDATE, narrowed by its row policy. No DELETE: a
+-- registration is replaced, never removed.
 --
--- 003_falsifier_roles.sql's lawful list carries the four matching rows in the
+-- 003_falsifier_roles.sql's lawful list carries the six matching rows in the
 -- same commit, so test/registry-grants.test.mjs stays green.
 --
 -- ── IDEMPOTENT. APPLY AS `world2_owner` by the runbook's step-1 idiom ────────
@@ -45,21 +72,27 @@
 --   sudo -n -u postgres psql -v ON_ERROR_STOP=1 -d world2_dev \
 --     -c "SET ROLE world2_owner;" -f world2/schema/026_events.sql
 --
--- A second run is a no-op: `IF NOT EXISTS` on the tables and the index,
--- `ON CONFLICT DO NOTHING` on the registry rows, and a GRANT is idempotent.
+-- A second run is a no-op: `IF NOT EXISTS` on the tables and the index, a
+-- `pg_policies` check before each CREATE POLICY, `ON CONFLICT DO NOTHING` on
+-- the registry rows, and a GRANT is idempotent.
 --
 -- ── HOW TO PROVE IT LANDED (there is no migrations table in this store) ──────
 --
---   SELECT tablename, tableowner FROM pg_tables WHERE tablename IN ('events','event_rsvps');
+--   SELECT tablename, tableowner, rowsecurity FROM pg_tables
+--    WHERE tablename IN ('events','event_rsvps','household_harnesses');
 --   SELECT table_name, grantee, privilege_type FROM information_schema.role_table_grants
---    WHERE table_name IN ('events','event_rsvps') ORDER BY 1, 2, 3;
---   SELECT * FROM registry WHERE object IN ('events','event_rsvps');
+--    WHERE table_name IN ('events','event_rsvps','household_harnesses') ORDER BY 1, 2, 3;
+--      -- household_harnesses: office_api SELECT/INSERT/UPDATE and nothing else
+--   SELECT policyname, roles, cmd FROM pg_policies WHERE tablename = 'household_harnesses';
+--   SELECT * FROM registry WHERE object IN ('events','event_rsvps','household_harnesses');
 --   node world2/tools/events-rebuild.mjs --dry-run   -- "equal"
 --
--- CONSUMERS, named: src/events-store.mjs (the pen and the calendar read),
--- world2/tools/events-rebuild.mjs (the rebuild and its equality check),
--- test/events.test.mjs (through a JS stub of these tables; the stub proves the
--- JS, not the store). Nothing else reads them yet. The site's `calendar.json`
+-- CONSUMERS, named: src/events-store.mjs (the pen, the calendar read, and the
+-- harness row's read and upsert), world2/tools/events-rebuild.mjs (the rebuild
+-- and its equality check; events and event_rsvps only), test/events.test.mjs
+-- (through a JS stub of these tables; the stub proves the JS, not the store),
+-- test/registry-grants.test.mjs (the harness table's grants and policies, read
+-- from this file). Nothing else reads them yet. The site's `calendar.json`
 -- ingest reads the calendar READ, never these tables.
 
 BEGIN;
@@ -88,23 +121,55 @@ CREATE TABLE IF NOT EXISTS event_rsvps (
   event       text NOT NULL REFERENCES events(id),
   handle      text NOT NULL,                   -- the resident who RSVPed
   household   text,
-  harness     text NOT NULL CHECK (harness IN ('letta','webhook','mail')),
-  address     text,                            -- PRIVATE: the webhook URL or the Letta conversation; never in acts, never in the public read
+  harness     text NOT NULL CHECK (harness IN ('letta','webhook','mail')),   -- the kind; a letta or webhook RSVP's address is on household_harnesses, by handle
   budget      integer NOT NULL CHECK (budget BETWEEN 1 AND 60),  -- wakes per event, the resident's own dial
   fell_back   text,                            -- why a webhook became mail, when it did
   act         bigint NOT NULL,                 -- acts.id of the rsvp act this row reflects
   PRIMARY KEY (event, handle)
 );
 
+CREATE TABLE IF NOT EXISTS household_harnesses (
+  handle        text PRIMARY KEY,              -- ONE row per resident; event_rsvps.handle refers to it
+  household     text NOT NULL,                 -- the resident's household key; the row policy compares it
+  kind          text NOT NULL CHECK (kind IN ('letta','webhook')),   -- mail stores nothing
+  address       text NOT NULL,                 -- PRIVATE: the webhook url or the Letta conversation id
+  secret        text,                          -- PRIVATE: the webhook's secret, minted by the office, shown once; NULL for letta
+  registered_at timestamptz NOT NULL,
+  rotated_at    timestamptz,                   -- set when a different address replaced the registration
+  CONSTRAINT household_harnesses_secret CHECK ((kind = 'webhook') = (secret IS NOT NULL))
+);
+
+ALTER TABLE household_harnesses ENABLE ROW LEVEL SECURITY;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'household_harnesses' AND policyname = 'household_harnesses_read') THEN
+    CREATE POLICY household_harnesses_read ON household_harnesses FOR SELECT TO office_api
+      USING (household = ANY(string_to_array(NULLIF(current_setting('app.household_keys', true), ''), ',')));
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'household_harnesses' AND policyname = 'household_harnesses_insert') THEN
+    CREATE POLICY household_harnesses_insert ON household_harnesses FOR INSERT TO office_api
+      WITH CHECK (household = ANY(string_to_array(NULLIF(current_setting('app.household_keys', true), ''), ',')));
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'household_harnesses' AND policyname = 'household_harnesses_update') THEN
+    CREATE POLICY household_harnesses_update ON household_harnesses FOR UPDATE TO office_api
+      USING      (household = ANY(string_to_array(NULLIF(current_setting('app.household_keys', true), ''), ',')))
+      WITH CHECK (household = ANY(string_to_array(NULLIF(current_setting('app.household_keys', true), ''), ',')));
+  END IF;
+END $$;
+
 GRANT SELECT ON events TO office_api, clearing_job, snapshot_reader;
 GRANT SELECT ON event_rsvps TO office_api;
 GRANT INSERT, UPDATE ON events, event_rsvps TO office_api;
+GRANT SELECT, INSERT, UPDATE ON household_harnesses TO office_api;
 
 INSERT INTO registry (object, kind, owner_pen, consumers, ruling) VALUES
   ('events', 'projection', 'office_api', '{clearing_job,snapshot_reader}',
    'Wright 2026-09-24 (POS-207, disclosed to Keemin): the record is the act log (class event), this table its current-state projection, rebuildable by world2/tools/events-rebuild.mjs'),
   ('event_rsvps', 'projection', 'office_api', '{}',
-   'Wright 2026-09-24 (POS-207/208): one row per resident per event, the rsvp acts projection; address is private and rides only here')
+   'Wright 2026-09-24 (POS-207/208): one row per resident per event, the rsvp acts projection; every column rebuildable from the acts'),
+  ('household_harnesses', 'source', 'office_api', '{}',
+   'Keemin 2026-09-25 through Wright (POS-208): one private harness row per resident; the office mints a webhook secret and shows it once; RLS on app.household_keys, office_api only, in no export')
 ON CONFLICT (object) DO NOTHING;
 
 COMMIT;

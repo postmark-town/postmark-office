@@ -32,9 +32,9 @@ import { currentCrossing } from "./crossings.mjs";
 import { WORLD_ANCHOR } from "./world-journal.mjs";
 import {
   EVENT_CLASS, ACT_HOST, ACT_AMEND, ACT_CANCEL, ACT_RSVP, ENDED_LIST_DAYS,
-  BUDGET_DEFAULT, BUDGET_MAX, FELL_BACK_NO_ECHO,
+  BUDGET_DEFAULT, BUDGET_MAX, FELL_BACK_NO_ECHO, SECRET_BYTES, SECRET_NOTE, HARNESS_REUSED_NOTE,
   refuse, mintEventId, judgeInterval, judgePlaceShape, placeFromMarkRow, anchorForPlace,
-  judgeText, judgeRsvp, challengeWebhook, applyEventAct, eventView, calendarFrom,
+  judgeText, judgeRsvp, challengeWebhook, harnessPlan, applyEventAct, eventView, calendarFrom,
 } from "./events.mjs";
 
 const EVENT_COLUMNS = "id, title, invitation, host, household, place_mark, place_x, place_y, doors_open, starts, ends, revised, cancelled, hosted_act, last_act";
@@ -42,10 +42,17 @@ const READ_HINT = (id) => `town { read: "calendar", args: { event: "${id}" } } �
 
 const isRefusal = (e) => e && typeof e.code === "number" && typeof e.defect === "string";
 
-/** Run one transaction; a rule's refusal is itself, anything else is the pen's 503. */
-async function write(fn, env) {
+/**
+ * Run one transaction; a rule's refusal is itself, anything else is the pen's
+ * 503. `household` declares the acting household's spelling set first
+ * (`officeWrite` § R1), which is what 026's row policy on `household_harnesses`
+ * compares against: without it the resident's own harness row is invisible and
+ * unwritable. The 503 is the pen's FIXED sentence, never the driver's message,
+ * so no column value (a secret on a failing row) can ride an error out.
+ */
+async function write(fn, env, household = null) {
   try {
-    return await officeWrite(fn, { env });
+    return await officeWrite(fn, { env, household });
   } catch (e) {
     if (isRefusal(e)) throw e;
     if (e?.name === "LateCrossingError") throw refuse(409, e.message, "the act was stamped for a window the record will not take; nothing was written");
@@ -232,51 +239,63 @@ function standingOrRefuse(prev, id, now) {
   if (Date.parse(prev.ends) <= now) throw refuse(409, `"${id}" has ended`, "there is nothing to RSVP to");
 }
 
-export async function rsvpAtOffice(fields, key, { now = Date.now(), env = process.env, fetchImpl = globalThis.fetch, nonce = null } = {}) {
+export async function rsvpAtOffice(fields, key, { now = Date.now(), env = process.env, fetchImpl = globalThis.fetch, nonce = null, mintSecret = null } = {}) {
   const handle = standpointHandle(fields, key);
   const id = String(fields.event ?? "").trim();
   if (!id) throw refuse(422, "which event?", 'event: "<host>/<slug>", as the calendar names it', { field: "event" });
   const judged = judgeRsvp(fields);
 
-  // The event is read BEFORE the challenge: no URL is called for an event that
-  // does not stand.
-  standingOrRefuse(await read((c) => eventRow(c, id), env), id, now);
+  // The household's spelling set is declared on every transaction below, so the
+  // row policy on `household_harnesses` shows this resident's own row and no
+  // other. The event is read BEFORE the challenge: no URL is called for an
+  // event that does not stand, and none is called twice for one registration.
+  const household = await read((c) => householdKeyFor(c, handle), env);
+  const before = await write(async (client) => {
+    const ev = await eventRow(client, id);
+    standingOrRefuse(ev, id, now);
+    return harnessRow(client, handle);
+  }, env, household);
 
   let harness = judged.harness;
+  let plan = harnessPlan(before, harness);
   let fell_back = null;
-  if (harness.kind === "webhook") {
+  let secret = null;
+  if (plan === "register" && harness.kind === "webhook") {
     const { randomBytes } = await import("node:crypto");
     const n = nonce ?? randomBytes(16).toString("hex");
     const ch = await challengeWebhook(harness.address, n, { fetchImpl });
-    if (!ch.echoed) { fell_back = FELL_BACK_NO_ECHO; harness = { kind: "mail", address: null }; }
+    if (!ch.echoed) { fell_back = FELL_BACK_NO_ECHO; harness = { kind: "mail", address: null }; plan = "none"; }
+    else secret = mintSecret ? mintSecret() : randomBytes(SECRET_BYTES).toString("hex");
   }
 
   return write(async (client) => {
     const prev = await eventRow(client, id);
     standingOrRefuse(prev, id, now);
-    // THE ACT CARRIES NO ADDRESS. `acts` leaves the box through the notary's
-    // public export; a webhook url or a Letta conversation is the household's.
-    // The address rides only on the projection row (026_events.sql § THE ONE
-    // THING THE ACTS DO NOT CARRY).
+    // THE ACT CARRIES NO ADDRESS AND NO SECRET. `acts` leaves the box through
+    // the notary's public export; a webhook url, a Letta conversation and a
+    // webhook's secret are the resident's, and live only on their harness row
+    // (026_events.sql § THE HARNESS ROW).
     const payload = { event: id, harness: harness.kind, budget: judged.budget, ...(fell_back ? { fell_back } : {}) };
     const place = { mark: prev.place_mark, x: prev.place_x, y: prev.place_y };
     const actId = await insertAct(client, actRow({ action: ACT_RSVP, actor: handle, event: id, payload, place, now }));
-    const household = await householdKeyFor(client, handle);
+    if (plan === "register") await registerHarness(client, { handle, household, kind: harness.kind, address: harness.address, secret, now });
     const row = applyEventAct({ events: new Map(), rsvps: new Map() },
-      { id: actId, action: ACT_RSVP, actor: handle, object: id, payload, household }, { address: harness.address });
+      { id: actId, action: ACT_RSVP, actor: handle, object: id, payload, household });
     await client.query(
-      `INSERT INTO event_rsvps (event, handle, household, harness, address, budget, fell_back, act)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+      `INSERT INTO event_rsvps (event, handle, household, harness, budget, fell_back, act)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
        ON CONFLICT (event, handle) DO UPDATE SET household = EXCLUDED.household, harness = EXCLUDED.harness,
-         address = EXCLUDED.address, budget = EXCLUDED.budget, fell_back = EXCLUDED.fell_back, act = EXCLUDED.act`,
-      [row.event, row.handle, row.household, row.harness, row.address, row.budget, row.fell_back, row.act]);
+         budget = EXCLUDED.budget, fell_back = EXCLUDED.fell_back, act = EXCLUDED.act`,
+      [row.event, row.handle, row.household, row.harness, row.budget, row.fell_back, row.act]);
     const shownHarness = { kind: row.harness,
-      ...(row.harness === "letta" ? { conversation: row.address } : {}),
-      ...(row.harness === "webhook" ? { url: row.address } : {}) };
+      ...(row.harness === "letta" ? { conversation: harness.address } : {}),
+      ...(row.harness === "webhook" ? { url: harness.address } : {}) };
     return {
       event: id, handle, act_id: actId,
       harness: shownHarness,
       ...(fell_back ? { fell_back } : {}),
+      ...(secret ? { secret, secret_note: SECRET_NOTE } : {}),
+      ...(plan === "reuse" && row.harness === "webhook" ? { harness_note: HARNESS_REUSED_NOTE } : {}),
       budget: row.budget,
       budget_note: `at most ${row.budget} wake${row.budget === 1 ? "" : "s"} for this event (default ${BUDGET_DEFAULT}, most ${BUDGET_MAX}); nothing delivers a wake yet — this records how your harness would take one`,
       receipt: fell_back
@@ -284,7 +303,29 @@ export async function rsvpAtOffice(fields, key, { now = Date.now(), env = proces
         : `RSVPed to ${id} by ${row.harness}`,
       read: READ_HINT(id),
     };
-  }, env);
+  }, env, household);
+}
+
+// ── the resident's harness row (POS-208, 026 § THE HARNESS ROW) ─────────────
+//
+// Read and written ONLY inside a transaction that declared the household's
+// spelling set (`write(…, household)` above); the row policy answers nothing
+// otherwise. The secret is SELECTed by nobody here: whether a registration
+// matches is a question about kind and address, and the one reader that will
+// need the secret is the wake delivery (POS-208 C, not built).
+async function harnessRow(client, handle) {
+  const { rows } = await client.query("SELECT kind, address FROM household_harnesses WHERE handle = $1", [handle]);
+  return rows[0] ?? null;
+}
+
+async function registerHarness(client, { handle, household, kind, address, secret, now }) {
+  const at = new Date(now).toISOString();
+  await client.query(
+    `INSERT INTO household_harnesses (handle, household, kind, address, secret, registered_at, rotated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,NULL)
+     ON CONFLICT (handle) DO UPDATE SET household = EXCLUDED.household, kind = EXCLUDED.kind,
+       address = EXCLUDED.address, secret = EXCLUDED.secret, rotated_at = EXCLUDED.registered_at`,
+    [handle, household, kind, address, secret, at]);
 }
 
 // ── the calendar read ───────────────────────────────────────────────────────

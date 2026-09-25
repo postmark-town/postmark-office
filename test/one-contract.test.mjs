@@ -466,7 +466,7 @@ test("paper nonce · flag-off, a nonce is DISCLOSED as unhonoured at both doors,
 // The MCP half of this leg is in test/world-apex.test.mjs: the world apex
 // judges its envelope only once the store has answered which act the ground
 // affords, and this fixture has no world store (the reason § 3 gives).
-test("nonce · a world act still refuses a nonce by name at the plain API — its store has nowhere to keep one until 026_act_nonce.sql", async () => {
+test("nonce · a world act still refuses a nonce by name at the plain API — its store has nowhere to keep one until 027_act_nonce.sql", async () => {
   for (const [route, tool] of [["/world/walks", "world_walk"], ["/world/marks", "world_leave_mark"], ["/world/say", "world_say"]]) {
     const r = await rest(B, "POST", route, { nonce: "w-k1" });
     assert.equal(r.status, 422, `${route}: ${r.status} ${r.body.defect}`);

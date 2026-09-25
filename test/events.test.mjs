@@ -16,8 +16,8 @@ import { installActsPen, uninstallActsPen } from "./acts-pen-stub.mjs";
 import {
   hostAtOffice, cancelAtOffice, rsvpAtOffice, calendarAtOffice, eventActs,
 } from "../src/events-store.mjs";
-import { phaseAt, judgeInterval, EVENT_MAX_DAYS, FELL_BACK_NO_ECHO, BUDGET_DEFAULT } from "../src/events.mjs";
-import { compareRebuild } from "../world2/tools/events-rebuild.mjs";
+import { phaseAt, judgeInterval, EVENT_MAX_DAYS, FELL_BACK_NO_ECHO, BUDGET_DEFAULT, SECRET_NOTE } from "../src/events.mjs";
+import { compareRebuild, dryRun, NEVER_TOUCHED_LINE } from "../world2/tools/events-rebuild.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const H = 3_600_000;
@@ -27,6 +27,7 @@ const iso = (t) => new Date(t).toISOString();
 function eventTables() {
   const events = new Map();
   const rsvps = new Map();
+  const harnesses = new Map();   // household_harnesses, by handle
   const EV = ["id", "title", "invitation", "host", "household", "place_mark", "place_x", "place_y",
     "doors_open", "starts", "ends", "revised", "cancelled", "hosted_act", "last_act"];
   const also = [
@@ -56,9 +57,40 @@ function eventTables() {
       return { rows, rowCount: rows.length };
     }],
     [/^INSERT INTO event_rsvps/i, (q, p) => {
-      const [event, handle, household, harness, address, budget, fell_back, act] = p;
-      rsvps.set(`${event} ${handle}`, { event, handle, household, harness, address, budget, fell_back, act });
+      if (/\baddress\b/i.test(q)) throw new Error("event_rsvps has no address column (026: it lives on household_harnesses)");
+      const [event, handle, household, harness, budget, fell_back, act] = p;
+      rsvps.set(`${event} ${handle}`, { event, handle, household, harness, budget, fell_back, act });
       return { rows: [], rowCount: 1 };
+    }],
+    // THE HARNESS ROW, with 026's row policy modelled rather than shrugged at:
+    // a transaction that declared no spelling set containing the row's
+    // household reads nothing and may write nothing — the same answer Postgres
+    // gives `office_api` under household_harnesses_read / _insert / _update.
+    [/^SELECT kind, address FROM household_harnesses WHERE handle = \$1$/i, (q, p, st) => {
+      const r = harnesses.get(p[0]);
+      const visible = r && st.householdKeys.includes(r.household);
+      return { rows: visible ? [{ kind: r.kind, address: r.address }] : [], rowCount: visible ? 1 : 0 };
+    }],
+    [/^INSERT INTO household_harnesses/i, (q, p, st) => {
+      const [handle, household, kind, address, secret, registered_at] = p;
+      if (!st.householdKeys.includes(household))
+        throw new Error('new row violates row-level security policy for table "household_harnesses"');
+      if ((kind === "webhook") !== (secret != null)) throw new Error('violates check constraint "household_harnesses_secret"');
+      const prev = harnesses.get(handle);
+      if (prev && !st.householdKeys.includes(prev.household))
+        throw new Error('new row violates row-level security policy (USING expression) for table "household_harnesses"');
+      harnesses.set(handle, prev
+        ? { ...prev, household, kind, address, secret, rotated_at: registered_at }
+        : { handle, household, kind, address, secret, registered_at, rotated_at: null });
+      return { rows: [], rowCount: 1 };
+    }],
+    [/^SELECT \* FROM events ORDER BY id$/i, () => {
+      const rows = [...events.values()].sort((a, b) => a.id.localeCompare(b.id)).map((r) => ({ ...r }));
+      return { rows, rowCount: rows.length };
+    }],
+    [/^SELECT \* FROM event_rsvps ORDER BY event, handle$/i, () => {
+      const rows = [...rsvps.values()].sort((a, b) => a.event.localeCompare(b.event) || a.handle.localeCompare(b.handle)).map((r) => ({ ...r }));
+      return { rows, rowCount: rows.length };
     }],
     [/SELECT handle FROM event_rsvps WHERE event = \$1/i, (q, p) => {
       const rows = [...rsvps.values()].filter((r) => r.event === p[0]).map((r) => ({ handle: r.handle })).sort((a, b) => a.handle.localeCompare(b.handle));
@@ -69,7 +101,7 @@ function eventTables() {
       return { rows, rowCount: rows.length };
     }],
   ];
-  return { events, rsvps, also };
+  return { events, rsvps, harnesses, also };
 }
 
 const MARKS = [
@@ -79,9 +111,9 @@ const MARKS = [
   { slug: "wright/a-naming", status: "standing", kind: "naming", geometry: null },
 ];
 
-function setup() {
+function setup(opts = {}) {
   const t = eventTables();
-  const pen = installActsPen({ marks: MARKS, also: t.also });
+  const pen = installActsPen({ marks: MARKS, also: t.also, ...opts });
   return { ...t, pen };
 }
 
@@ -229,7 +261,7 @@ const echoing = (seen) => async (url, init) => { seen.push({ url, body: JSON.par
 const silent = (seen) => async (url, init) => { seen.push({ url, body: JSON.parse(init.body) }); return { status: 200, text: async () => "ok" }; };
 
 test("falsifier · a webhook that echoes lands as webhook; one that does not lands as mail and says so; both show the budget", async () => {
-  const { rsvps } = setup();
+  const { rsvps, harnesses } = setup();
   const { event } = await hostAtOffice(HOST(Date.now()), WRIGHT);
   const seen = [];
   const ok = await rsvpAtOffice({ event: event.id, harness: { kind: "webhook", url: "https://hooks.example.org/postmark" }, budget: 9 }, ERRANT, { fetchImpl: echoing(seen) });
@@ -241,7 +273,8 @@ test("falsifier · a webhook that echoes lands as webhook; one that does not lan
   assert.equal(no.harness.kind, "mail"); assert.equal(no.fell_back, FELL_BACK_NO_ECHO);
   assert.equal(no.budget, BUDGET_DEFAULT);
   // an unechoed URL is never registered: nothing a later wake could read
-  assert.equal(rsvps.get(`${event.id} wright`).address, null);
+  assert.equal(harnesses.has("wright"), false);
+  assert.equal(no.secret, undefined, "a webhook that did not echo is minted no secret");
   assert.equal(rsvps.get(`${event.id} wright`).harness, "mail");
 });
 
@@ -294,8 +327,123 @@ test("the acting resident · handle names which of your residents acts; one resi
   const r = await rsvpAtOffice({ event: event.id, handle: "pica" }, TWO);
   assert.equal(r.handle, "pica");
   assert.equal(pen.rows().at(-1).actor, "pica");
-  const { APEX_ONLY_FIELDS } = await import("../src/household-apex.mjs");
+  const { APEX_ONLY_FIELDS, householdApex } = await import("../src/household-apex.mjs");
   for (const a of ["host", "cancel-event", "rsvp"]) assert.ok(APEX_ONLY_FIELDS[a].properties.handle, `${a} declares handle`);
+  // AT THE DOOR, not only at the store: household { do: "rsvp" } with a key
+  // holding two residents and no handle is refused by name, and writes nothing.
+  const door = await householdApex({ do: "rsvp", args: { event: event.id } }, TWO, {});
+  assert.equal(door.code, 422); assert.equal(door.defect, "which of your residents?");
+  const named = await householdApex({ do: "rsvp", args: { event: event.id, handle: "errant" } }, TWO, {});
+  assert.equal(named.result?.handle, "errant", JSON.stringify(named).slice(0, 300));
+  assert.equal(pen.rows().at(-1).actor, "errant");
+});
+
+// ── the harness row (POS-208, ruled 2026-09-25) ─────────────────────────────
+
+const SECRET_A = "a".repeat(64);
+const SECRET_B = "b".repeat(64);
+const secrets = (...list) => () => list.shift();
+
+test("falsifier · a webhook that echoes: the secret rides the receipt once, the harness row holds it, the act holds neither address nor secret; the same url again is not challenged and shows no secret", async () => {
+  const { pen, harnesses, rsvps } = setup();
+  const now = Date.now();
+  const a = await hostAtOffice(HOST(now), WRIGHT);
+  const b = await hostAtOffice({ ...HOST(now), title: "Reading by the lamp" }, WRIGHT);
+  const URL_ = "https://hooks.example.org/errant-path";
+  const seen = [];
+  const mint = secrets(SECRET_A, SECRET_B);
+  const first = await rsvpAtOffice({ event: a.event.id, harness: { kind: "webhook", url: URL_ } }, ERRANT, { fetchImpl: echoing(seen), mintSecret: mint });
+  assert.equal(first.secret, SECRET_A);
+  assert.equal(first.secret_note, SECRET_NOTE);
+  assert.match(first.secret_note, /^shown once; not shown again/);
+  assert.equal(seen.length, 1);
+  const row = harnesses.get("errant");
+  assert.deepEqual({ kind: row.kind, address: row.address, secret: row.secret, household: row.household, rotated_at: row.rotated_at },
+    { kind: "webhook", address: URL_, secret: SECRET_A, household: "solo:errant", rotated_at: null });
+  const rsvpAct = pen.rows().at(-1);
+  assert.equal(rsvpAct.action, "rsvp");
+  assert.deepEqual(JSON.parse(rsvpAct.payload), { event: a.event.id, harness: "webhook", budget: BUDGET_DEFAULT });
+  assert.doesNotMatch(JSON.stringify(pen.rows()), new RegExp(`errant-path|${SECRET_A}`), "an act carries the url or the secret");
+  assert.doesNotMatch(JSON.stringify([...rsvps.values()]), new RegExp(`errant-path|${SECRET_A}`), "event_rsvps carries the url or the secret");
+
+  const again = await rsvpAtOffice({ event: b.event.id, harness: { kind: "webhook", url: URL_ } }, ERRANT, { fetchImpl: echoing(seen), mintSecret: mint });
+  assert.equal(seen.length, 1, "the same url for the same resident was challenged a second time");
+  assert.equal(again.secret, undefined, "a reused registration showed its secret again");
+  assert.match(again.harness_note, /not challenged again/);
+  assert.equal(again.harness.kind, "webhook");
+  assert.equal(harnesses.get("errant").secret, SECRET_A, "the reuse re-minted");
+  assert.doesNotMatch(JSON.stringify(again), new RegExp(SECRET_A));
+});
+
+test("rotation · a different url is challenged again and re-mints, stamping rotated_at; letta stores its conversation with no secret; mail stores nothing and leaves the row alone", async () => {
+  const { harnesses } = setup();
+  const now = Date.now();
+  const { event } = await hostAtOffice(HOST(now), WRIGHT);
+  const seen = [];
+  const mint = secrets(SECRET_A, SECRET_B);
+  await rsvpAtOffice({ event: event.id, harness: { kind: "webhook", url: "https://hooks.example.org/one" } }, ERRANT, { fetchImpl: echoing(seen), mintSecret: mint, now });
+  const moved = await rsvpAtOffice({ event: event.id, harness: { kind: "webhook", url: "https://hooks.example.org/two" } }, ERRANT, { fetchImpl: echoing(seen), mintSecret: mint, now: now + 1000 });
+  assert.equal(seen.length, 2); assert.equal(seen[1].url, "https://hooks.example.org/two");
+  assert.equal(moved.secret, SECRET_B);
+  const r = harnesses.get("errant");
+  assert.equal(r.address, "https://hooks.example.org/two"); assert.equal(r.secret, SECRET_B);
+  assert.equal(r.rotated_at, new Date(now + 1000).toISOString());
+
+  // a different url that does NOT echo falls back to mail and leaves the registration as it was
+  const deaf = await rsvpAtOffice({ event: event.id, harness: { kind: "webhook", url: "https://hooks.example.org/deaf" } }, ERRANT, { fetchImpl: silent([]), mintSecret: mint });
+  assert.equal(deaf.fell_back, FELL_BACK_NO_ECHO); assert.equal(deaf.secret, undefined);
+  assert.equal(harnesses.get("errant").address, "https://hooks.example.org/two");
+
+  const mail = await rsvpAtOffice({ event: event.id }, ERRANT);
+  assert.equal(mail.harness.kind, "mail");
+  assert.equal(harnesses.get("errant").secret, SECRET_B, "a mail RSVP touched the harness row");
+
+  const l = await rsvpAtOffice({ event: event.id, harness: { kind: "letta", conversation: "conv-4f2a" } }, WRIGHT);
+  assert.equal(l.secret, undefined);
+  assert.deepEqual((({ kind, address, secret }) => ({ kind, address, secret }))(harnesses.get("wright")), { kind: "letta", address: "conv-4f2a", secret: null });
+  const m = await rsvpAtOffice({ event: event.id }, { household: "pica", handles: new Set(["pica"]) });
+  assert.equal(m.harness.kind, "mail");
+  assert.equal(harnesses.has("pica"), false, "a mail RSVP stored a harness row");
+});
+
+test("the row policy · the harness row is read and written only inside a transaction that declared the resident's household", async () => {
+  const { pen, harnesses } = setup();
+  const { event } = await hostAtOffice(HOST(Date.now()), WRIGHT);
+  await rsvpAtOffice({ event: event.id, harness: { kind: "letta", conversation: "c-1" } }, ERRANT);
+  // every query that named the table ran after solo:errant was declared
+  const asked = pen.asked();
+  const touches = asked.map((q, i) => [q, i]).filter(([q]) => /household_harnesses/.test(q));
+  assert.equal(touches.length, 2, "one read and one upsert");
+  for (const [, i] of touches) {
+    const lastDecl = asked.slice(0, i).reverse().find((q) => /set_config\('app\.household_keys'/.test(q));
+    assert.ok(lastDecl, "a harness query ran with no spelling set declared");
+  }
+  assert.deepEqual(pen.state.householdKeys, ["solo:errant"]);
+  // another household's row is invisible to this one: seed one and read as errant
+  harnesses.set("pica", { handle: "pica", household: "solo:pica", kind: "letta", address: "c-pica", secret: null, registered_at: "x", rotated_at: null });
+  const again = await rsvpAtOffice({ event: event.id, handle: "errant", harness: { kind: "letta", conversation: "c-pica" } }, ERRANT);
+  assert.equal(again.harness.conversation, "c-pica");
+  assert.equal(harnesses.get("pica").address, "c-pica", "errant's write reached pica's row");
+  assert.equal(harnesses.get("errant").address, "c-pica");
+});
+
+test("the secret never enters a log line or an error: a failing write after the mint answers the pen's fixed sentence", async () => {
+  const { pen } = setup({ failOn: (q) => /^INSERT INTO event_rsvps/i.test(q) });
+  const { event } = await hostAtOffice(HOST(Date.now()), WRIGHT);
+  const lines = [];
+  const keep = { log: console.log, error: console.error, warn: console.warn, info: console.info };
+  for (const k of Object.keys(keep)) console[k] = (...a) => { lines.push(a.map(String).join(" ")); };
+  let err;
+  try {
+    await rsvpAtOffice({ event: event.id, harness: { kind: "webhook", url: "https://hooks.example.org/x" } }, ERRANT, { fetchImpl: echoing([]), mintSecret: () => SECRET_A })
+      .catch((e) => { err = e; });
+    await rsvpAtOffice({ event: event.id, harness: { kind: "webhook", url: "https://hooks.example.org/y" } }, WRIGHT, { fetchImpl: echoing([]), mintSecret: () => SECRET_B }).catch((e) => e);
+  } finally { Object.assign(console, keep); }
+  assert.equal(err?.code, 503);
+  assert.match(err.defect, /nothing was written, and nothing was lost/);
+  const text = JSON.stringify({ defect: err.defect, hint: err.hint, message: err.message, stack: err.stack, keys: Object.entries(err) }) + lines.join("\n");
+  assert.doesNotMatch(text, new RegExp(`${SECRET_A}|${SECRET_B}`));
+  assert.ok(pen.state.rolledBack >= 1, "the failing write was not rolled back");
 });
 
 // ── the rebuild ─────────────────────────────────────────────────────────────
@@ -319,6 +467,52 @@ test("rebuild · the tables equal what the act log alone derives — and a hand-
   const bad = compareRebuild(stored(), acts);
   assert.equal(bad.equal, false);
   assert.match(bad.drift[0], /title: stored "edited by hand"/);
+});
+
+// 026's own column lists, read from the migration, so a column added there and
+// not compared here reds rather than passing as "equal".
+function columnsOf(table) {
+  const sql = readFileSync(join(HERE, "..", "world2", "schema", "026_events.sql"), "utf8").replace(/\r\n/g, "\n");
+  const body = new RegExp(`CREATE TABLE IF NOT EXISTS ${table} \\(([\\s\\S]*?)\\n\\);`).exec(sql)[1];
+  return body.split("\n").map((l) => l.trim()).filter((l) => /^[a-z_]+\s/.test(l) && !/^(CONSTRAINT|PRIMARY)\b/i.test(l)).map((l) => l.split(/\s+/)[0]);
+}
+
+test("rebuild · restores and compares EVERY column of events and event_rsvps — a hand edit to any one of them is caught", async () => {
+  const { pen, events, rsvps } = setup();
+  const now = Date.now();
+  const a = await hostAtOffice(HOST(now), WRIGHT);
+  await rsvpAtOffice({ event: a.event.id, harness: { kind: "webhook", url: "https://hooks.example.org/z" } }, ERRANT, { fetchImpl: echoing([]) });
+  const acts = await eventActs(pen);
+  const evCols = columnsOf("events"), rsCols = columnsOf("event_rsvps");
+  assert.ok(evCols.length >= 15 && rsCols.length >= 7, `${evCols} / ${rsCols}`);
+  assert.ok(!rsCols.includes("address"), "event_rsvps still has an address column");
+  const fresh = () => ({ events: [...events.values()].map((r) => ({ ...r })), rsvps: [...rsvps.values()].map((r) => ({ ...r })) });
+  assert.equal(compareRebuild(fresh(), acts).equal, true);
+  for (const [table, cols, key] of [["events", evCols, "events"], ["event_rsvps", rsCols, "rsvps"]]) {
+    for (const c of cols) {
+      const s = fresh();
+      const r = s[key][0];
+      r[c] = /^(doors_open|starts|ends)$/.test(c) ? new Date(Date.parse(r[c]) + 12345).toISOString()
+        : typeof r[c] === "number" ? r[c] + 7 : typeof r[c] === "boolean" ? !r[c] : `${r[c]}-edited`;
+      const out = compareRebuild(s, acts);
+      assert.equal(out.equal, false, `${table}.${c} was edited and the rebuild called it equal`);
+    }
+  }
+});
+
+test("rebuild · the dry run asks the store for the event acts and the two tables, and never for household_harnesses; its receipt says so", async () => {
+  const { pen } = setup();
+  const now = Date.now();
+  const a = await hostAtOffice(HOST(now), WRIGHT);
+  await rsvpAtOffice({ event: a.event.id, harness: { kind: "webhook", url: "https://hooks.example.org/q" } }, ERRANT, { fetchImpl: echoing([]) });
+  const before = pen.asked().length;
+  const out = await dryRun(pen);
+  const asked = pen.asked().slice(before);
+  assert.equal(out.equal, true, out.drift.join("; "));
+  assert.deepEqual(out.never_touched, ["household_harnesses"]);
+  assert.match(NEVER_TOUCHED_LINE, /never read or touched: household_harnesses/);
+  assert.ok(asked.some((q) => /FROM event_rsvps/.test(q)) && asked.some((q) => /FROM events/.test(q)) && asked.some((q) => /FROM acts/.test(q)), asked.join(" | "));
+  assert.deepEqual(asked.filter((q) => /household_harnesses/i.test(q)), []);
 });
 
 // ── the doors ───────────────────────────────────────────────────────────────

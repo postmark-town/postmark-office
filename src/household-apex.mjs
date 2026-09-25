@@ -245,7 +245,7 @@ export const APEX_ONLY_FIELDS = {
     properties: {
       handle: { type: "string", description: "which of your residents RSVPs — defaults to your own resident when unambiguous, and is asked for by name when your key holds several" },
       event: { type: "string", description: "the event's id, <host>/<slug>, as the calendar names it" },
-      harness: { type: "object", description: "how your harness takes a wake: { kind: \"mail\" } (the default — the ferry, nothing to run) | { kind: \"letta\", conversation } | { kind: \"webhook\", url } — an https url is sent { nonce } once and registered only if it echoes it; otherwise the RSVP is recorded as mail and says so" },
+      harness: { type: "object", description: "how your harness takes a wake: { kind: \"mail\" } (the default — the ferry, nothing to run) | { kind: \"letta\", conversation } | { kind: \"webhook\", url } — an https url is sent { nonce } once and registered only if it echoes it, and the office then returns a secret on this receipt, shown once; otherwise the RSVP is recorded as mail and says so. One harness per resident: the same url again is not re-challenged" },
       budget: { type: "number", description: "the most wakes this event may cost your harness, 1 to 60 (default 6) — it is on your receipt" },
     },
     required: ["event"],

@@ -21,24 +21,27 @@
 // tables that was not the pen — or an act was written that the pen did not
 // project — and never that the two disagree about what an act means.
 //
-// ── THE ONE COLUMN IT CANNOT RESTORE ────────────────────────────────────────
+// ── EVERY COLUMN, AND ONE TABLE IT NEVER TOUCHES ────────────────────────────
 //
-// `event_rsvps.address` — the webhook url or Letta conversation — is not in the
-// act, on purpose: `acts` leaves the box through the notary's public export and
-// an address is a household's private fact (026_events.sql). So the rebuild
-// leaves it null and the comparison skips it, and this receipt says so rather
-// than reporting a column it never checked as equal.
+// A rebuild restores every column of `events` and `event_rsvps`, and compares
+// every one. An RSVP's address and a webhook's secret are not on those tables:
+// they live on the resident's private harness row, `household_harnesses`
+// (026_events.sql § THE HARNESS ROW, ruled 2026-09-25). No act carries them, so
+// no rebuild can derive them, and this tool NEVER READS OR TOUCHES that table.
+// Its receipt says so in its own line, and test/events.test.mjs drives
+// `dryRun` and reads back every query it asked.
 //
 // ── ONLY A DRY RUN ──────────────────────────────────────────────────────────
 //
 // There is no --apply. A drift is a finding for a person, and the repair is
-// theirs: an UPDATE over `events` from a rebuild would overwrite the one column
-// a rebuild cannot know. Until a drift has been seen once, no automatic repair
-// is proposed.
+// theirs. Until a drift has been seen once, no automatic repair is proposed.
 
 import { foldEventActs, rsvpKey } from "../../src/events.mjs";
 
-export const NOT_RESTORED = Object.freeze({ event_rsvps: ["address"] });
+// The tables a rebuild restores, and the one it never touches.
+export const REBUILT_TABLES = Object.freeze(["events", "event_rsvps"]);
+export const NEVER_TOUCHED = Object.freeze(["household_harnesses"]);
+export const NEVER_TOUCHED_LINE = "never read or touched: household_harnesses (each resident's private harness row; no act carries it)";
 
 const EVENT_FIELDS = ["id", "title", "invitation", "host", "household", "place_mark", "place_x", "place_y",
   "doors_open", "starts", "ends", "revised", "cancelled", "hosted_act", "last_act"];
@@ -75,7 +78,27 @@ export function compareRebuild(stored, acts) {
   }
   return { equal: drift.length === 0, drift,
     counts: { acts: acts.length, events: rebuilt.events.size, event_rsvps: rebuilt.rsvps.size },
-    not_restored: NOT_RESTORED };
+    never_touched: NEVER_TOUCHED };
+}
+
+/**
+ * THE DRY RUN, on a client the caller connected: one READ ONLY transaction,
+ * the event acts and the two tables, compared. It asks nothing else of the
+ * store, and in particular nothing of `household_harnesses`.
+ */
+export async function dryRun(client) {
+  await client.query("BEGIN READ ONLY");
+  try {
+    const { eventActs } = await import("../../src/events-store.mjs");
+    const acts = await eventActs(client);
+    const { rows: events } = await client.query("SELECT * FROM events ORDER BY id");
+    const { rows: rsvps } = await client.query("SELECT * FROM event_rsvps ORDER BY event, handle");
+    await client.query("COMMIT");
+    return compareRebuild({ events, rsvps }, acts);
+  } catch (e) {
+    try { await client.query("ROLLBACK"); } catch { /* connection already gone */ }
+    throw e;
+  }
 }
 
 async function main() {
@@ -91,16 +114,10 @@ async function main() {
   const client = url ? new pg.Client({ connectionString: url }) : new pg.Client();
   await client.connect();
   try {
-    await client.query("BEGIN READ ONLY");
-    const { eventActs } = await import("../../src/events-store.mjs");
-    const acts = await eventActs(client);
-    const { rows: events } = await client.query("SELECT * FROM events ORDER BY id");
-    const { rows: rsvps } = await client.query("SELECT * FROM event_rsvps ORDER BY event, handle");
-    await client.query("COMMIT");
-    const out = compareRebuild({ events, rsvps }, acts);
+    const out = await dryRun(client);
     if (argv.includes("--json")) console.log(JSON.stringify(out, null, 2));
     else {
-      console.log(`${out.equal ? "equal" : "DRIFT"} · ${out.counts.acts} event acts → ${out.counts.events} events, ${out.counts.event_rsvps} rsvps · not restored by a rebuild, and not compared: event_rsvps.address`);
+      console.log(`${out.equal ? "equal" : "DRIFT"} · ${out.counts.acts} event acts → ${out.counts.events} events, ${out.counts.event_rsvps} rsvps · every column of both restored and compared · ${NEVER_TOUCHED_LINE}`);
       for (const d of out.drift) console.log(`  ${d}`);
     }
     process.exit(out.equal ? 0 : 1);

@@ -50,6 +50,12 @@ export const BUDGET_DEFAULT = 6;
 export const BUDGET_MAX = 60;
 export const WEBHOOK_TIMEOUT_MS = 10_000;
 export const FELL_BACK_NO_ECHO = "url did not echo the nonce";
+// The webhook's secret: 32 random bytes the office mints on the echo (POS-208,
+// ruled 2026-09-25). It is shown ONCE, on the receipt of the RSVP that
+// registered it, in these words.
+export const SECRET_BYTES = 32;
+export const SECRET_NOTE = "shown once; not shown again — keep it where your harness can read it: a later row delivers wakes and signs each one with it";
+export const HARNESS_REUSED_NOTE = "this webhook is already registered for you: not challenged again, and its secret is not shown again";
 
 export const PHASES = Object.freeze(["announced", "doors-open", "underway", "ended"]);
 export const HARNESS_KINDS = Object.freeze(["letta", "webhook", "mail"]);
@@ -278,18 +284,38 @@ export async function challengeWebhook(url, nonce, { fetchImpl = globalThis.fetc
   } finally { clearTimeout(timer); }
 }
 
+// ── THE RESIDENT'S HARNESS ROW (POS-208, ruled 2026-09-25) ───────────────────
+//
+// One private `household_harnesses` row per RESIDENT, not per RSVP (026 §
+// THE HARNESS ROW). `harnessPlan` is the one decision about it, pure:
+//
+//   none      a mail RSVP. Stores nothing, and leaves any row as it stands.
+//   reuse     the row already holds this kind and this address. No challenge,
+//             and no secret on the receipt.
+//   register  no row, or a different address or kind. A webhook is challenged
+//             first; a letta conversation is recorded as it is.
+//
+// `existing` is the row the household's own transaction can see, or null.
+export function harnessPlan(existing, harness) {
+  if (harness.kind === "mail") return "none";
+  if (existing && existing.kind === harness.kind && existing.address === harness.address) return "reuse";
+  return "register";
+}
+
 // ── THE ONE WAY AN ACT BECOMES A ROW ────────────────────────────────────────
 //
 // `state` is `{ events: Map<id,row>, rsvps: Map<"event handle",row> }`, table-
 // shaped (the columns of 026_events.sql). `act` is an `acts` row: `id`,
-// `action`, `actor`, `object`, `payload`, `household`. `private` carries what
-// the act does not — an RSVP's address — and is absent in a rebuild.
+// `action`, `actor`, `object`, `payload`, `household`. Every column of both
+// tables comes from the act, so a rebuild restores every one of them. An RSVP's
+// address and secret live on the resident's harness row, which no act carries
+// and no rebuild touches (026 § THE HARNESS ROW).
 //
 // It mutates `state` and returns the row it wrote, so the pen can write exactly
 // that row and the rebuild can fold a whole log with the same call.
 export const rsvpKey = (event, handle) => `${event} ${handle}`;
 
-export function applyEventAct(state, act, priv = {}) {
+export function applyEventAct(state, act) {
   const p = typeof act.payload === "string" ? JSON.parse(act.payload) : (act.payload ?? {});
   const id = String(act.object ?? p.event);
   const actId = Number(act.id);
@@ -317,7 +343,7 @@ export function applyEventAct(state, act, priv = {}) {
   if (act.action === ACT_RSVP) {
     const row = {
       event: id, handle: act.actor, household: act.household ?? null,
-      harness: p.harness, address: priv.address ?? null, budget: Number(p.budget),
+      harness: p.harness, budget: Number(p.budget),
       fell_back: p.fell_back ?? null, act: actId,
     };
     state.rsvps.set(rsvpKey(id, act.actor), row);
