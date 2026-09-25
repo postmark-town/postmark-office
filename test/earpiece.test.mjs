@@ -420,3 +420,23 @@ test("026 · earpiece_wakes: office_api SELECT and INSERT only, row level securi
   assert.match(roles, /\('office_api',\s+'earpiece_wakes',\s+'INSERT'\)/);
   assert.doesNotMatch(readFileSync(join(HERE, "..", "world2", "tools", "snapshot-export.mjs"), "utf8"), /earpiece_wakes/);
 });
+
+// ── the run is bounded by its slowest harness, not by the sum of them ───────
+
+test("wakes go out together: two residents' webhooks are in flight at once, so dead harnesses cannot outrun the unit's timeout in sequence", async () => {
+  const ev = hallEvent();
+  const s = memStore({ events: [ev],
+    rsvps: ["ana", "bo"].map((h) => ({ event: ev.id, handle: h, household: `hh:${h}`, harness: "webhook", budget: 6 })),
+    harnesses: ["ana", "bo"].map((h) => ({ handle: h, household: `hh:${h}`, kind: "webhook", address: `https://${h}.example/`, secret: "s" })),
+    voice: [sayIn("cy", T0 + 30_000, "hi")] });
+  let inFlight = 0, most = 0;
+  const fetchImpl = async () => {
+    inFlight += 1; most = Math.max(most, inFlight);
+    await new Promise((r) => setTimeout(r, 20));
+    inFlight -= 1;
+    return { status: 200 };
+  };
+  await runEarpiece({ now: T0 + MIN, env: ON, store: s, withinFn: withinRect, fetchImpl, sleep: noSleep });
+  assert.equal(most, 2, "both wakes were in flight together");
+  assert.deepEqual(s.wakes.map((w) => w.status), ["delivered", "delivered"]);
+});

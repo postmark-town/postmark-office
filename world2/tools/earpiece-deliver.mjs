@@ -103,46 +103,58 @@ export async function runEarpiece({ now = Date.now(), env = process.env, store, 
     houses.set(key, [...(houses.get(key) ?? []), r]);
   }
 
+  // PHASE 1 — each household's own rows, in its own transaction.
+  const plans = [];
   for (const [key, list] of houses) {
-    const plans = await store.household(key, async (tx) => {
+    const got = await store.household(key, async (tx) => {
       const out = [];
       for (const rsvp of list) {
         const event = byId.get(rsvp.event);
         const harness = rsvp.harness === "mail" ? null : await tx.harness(rsvp.handle);
         const history = await tx.wakes(rsvp.event, rsvp.handle);
-        out.push({ rsvp, event, decision: decideWake({ event, rsvp, harness, history, now, news: newsFor(rsvp.event) }) });
+        out.push({ key, rsvp, event, decision: decideWake({ event, rsvp, harness, history, now, news: newsFor(rsvp.event) }) });
       }
       return out;
     });
+    plans.push(...got);
+  }
 
-    // No transaction is open from here to the log.
-    const rows = [];
-    for (const { rsvp, event, decision: d } of plans) {
-      const base = { event: rsvp.event, handle: rsvp.handle, household: key, sent_at: at };
-      if (d.act === "none") { counts[d.why === "budget-exhausted" ? "already-exhausted" : d.why] += 1; continue; }
-      if (d.act === "exhausted") {
-        rows.push({ ...base, harness: rsvp.harness, wake_n: Number(rsvp.budget), status: "budget-exhausted", budget_left: 0,
-          detail: `the budget of ${rsvp.budget} is spent; nothing more is sent for this event` });
-        counts["budget-exhausted"] += 1;
-        continue;
-      }
-      const envelope = buildEnvelope({ event, place: taps.get(rsvp.event).place, since: d.since, news: d.news,
-        budget_left: d.budget_left, wake_n: d.wake_n, now });
-      let status, detail, kind = d.route.kind;
-      if (d.route.kind === "webhook") {
-        const r = await postWake(d.route.url, d.route.secret, envelope, { fetchImpl, ...(sleep ? { sleep } : {}) });
-        status = r.ok ? "delivered" : "failed";
-        detail = r.detail;
-      } else {
-        const r = await sendMail({ to: rsvp.handle, ...letterFor(envelope) }).catch((e) => ({ ok: false, detail: String(e?.message ?? e).slice(0, 200) }));
-        status = r.ok ? (d.route.fell_back ? "fell_back" : "delivered") : "failed";
-        detail = [d.route.fell_back ? `fell back to mail: ${d.route.fell_back}` : null, r.detail ?? null].filter(Boolean).join(" — ") || null;
-      }
-      counts[status] += 1;
-      rows.push({ ...base, harness: kind, wake_n: d.wake_n, status, detail,
-        budget_left: status === "failed" ? d.budget_left + 1 : d.budget_left });
+  // PHASE 2 — every wake at once, with no transaction open. CONCURRENT ON
+  // PURPOSE: a dead webhook costs four timeouts and 31 s of backoff, and one
+  // resident after another, ten of them would outrun the unit's
+  // TimeoutStartSec and be killed between sending and logging. Together, the
+  // run is bounded by the slowest single harness (about 71 s).
+  const deliver = async ({ key, rsvp, event, decision: d }) => {
+    const base = { event: rsvp.event, handle: rsvp.handle, household: key, sent_at: at };
+    if (d.act === "none") { counts[d.why === "budget-exhausted" ? "already-exhausted" : d.why] += 1; return null; }
+    if (d.act === "exhausted") {
+      counts["budget-exhausted"] += 1;
+      return { ...base, harness: rsvp.harness, wake_n: Number(rsvp.budget), status: "budget-exhausted", budget_left: 0,
+        detail: `the budget of ${rsvp.budget} is spent; nothing more is sent for this event` };
     }
-    if (rows.length) await store.household(key, async (tx) => { for (const w of rows) await tx.log(w); });
+    const envelope = buildEnvelope({ event, place: taps.get(rsvp.event).place, since: d.since, news: d.news,
+      budget_left: d.budget_left, wake_n: d.wake_n, now });
+    let status, detail;
+    if (d.route.kind === "webhook") {
+      const r = await postWake(d.route.url, d.route.secret, envelope, { fetchImpl, ...(sleep ? { sleep } : {}) });
+      status = r.ok ? "delivered" : "failed";
+      detail = r.detail;
+    } else {
+      const r = await Promise.resolve().then(() => sendMail({ to: rsvp.handle, ...letterFor(envelope) }))
+        .catch((e) => ({ ok: false, detail: String(e?.message ?? e).slice(0, 200) }));
+      status = r.ok ? (d.route.fell_back ? "fell_back" : "delivered") : "failed";
+      detail = [d.route.fell_back ? `fell back to mail: ${d.route.fell_back}` : null, r.detail ?? null].filter(Boolean).join(" — ") || null;
+    }
+    counts[status] += 1;
+    return { ...base, harness: d.route.kind, wake_n: d.wake_n, status, detail,
+      budget_left: status === "failed" ? d.budget_left + 1 : d.budget_left };
+  };
+  const rows = (await Promise.all(plans.map(deliver))).filter(Boolean);
+
+  // PHASE 3 — each household's log lines, in its own transaction.
+  for (const key of houses.keys()) {
+    const mine = rows.filter((w) => w.household === key);
+    if (mine.length) await store.household(key, async (tx) => { for (const w of mine) await tx.log(w); });
   }
   return { at, status: "ran", windows: open.map((e) => e.id), outside_window, ...(refused.length ? { refused } : {}), counts };
 }
