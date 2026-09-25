@@ -52,6 +52,7 @@ import {
   residentStandpoint,
   walkViaOffice,
   walkersAround,
+  whoOnRoll,
   witnessStamp,
   markRecords,
   worldEyes,
@@ -3068,7 +3069,7 @@ export const WORLD_READ_FIELDS = Object.freeze({
   // fields ride — in `args:` — and says what it is.
   say: { text: { type: "string", description: "refused — a read never performs; speak with do: \"say\"" },
          since: { type: "number", description: "the `latest` stamp from your previous say-read — you hear only voices newer than it, and the room's shape rides either way. Milliseconds, and NOT the top-level since_crossing: (a crossing number, which buys `happened`)." } },
-  walk: {},
+  walk: { who: { type: "string", description: "one resident to find, by handle: their x, y, mark_id, moving and toward from the whole roll (not bounded by your radius), or null with a sentence when they are not out or no resident has that handle" } },
   "leave-mark": { mark: { type: "string", description: "one mark to look into — <by>/<slug>" },
                   depth: { type: "number", description: "how far down to descend into that mark" },
                   offset: { type: "number", description: "walk past the first of your own marks" } },
@@ -3082,6 +3083,32 @@ export const WORLD_READ_FIELDS = Object.freeze({
                      limit: { type: "number", description: "how many candidates awaiting your word" },
                      stance: { type: "string", description: "refused — a read never performs; speak with household { do: \"declare-stance-on\" }" } },
 });
+
+/**
+ * THE WALK SHADOW'S DOMAIN, composed from the walkers door's answer — pure, so
+ * a probe can drive it with a roll instead of standing up a world clone.
+ *
+ * The near block is the road you are on. `who` (postmark#3138) narrows to one
+ * row of the SAME roll the radius is drawn from and rides beside the near block
+ * rather than replacing it. When the roll could not be read, a `who` that was
+ * asked is answered with that fact, never left silently absent.
+ */
+export function walkDomain(answer, fields, oriented, roll = null) {
+  const asked = fields?.who != null && fields.who !== "";
+  const found = !asked ? {}
+    : Array.isArray(answer?.walkers) && !answer?.error ? whoOnRoll(answer.walkers, fields.who, roll)
+    : { who: null, who_note: "the walkers roll could not be read just now, so nobody can be found on it; GET https://postmark.town/api/world/walkers is the same roll, keyless." };
+  const at = oriented?.standpoint;
+  if (answer?.error || !Array.isArray(answer?.walkers) || !Number.isFinite(at?.x) || !Number.isFinite(at?.y)) {
+    return { standpoint: oriented?.standpoint, walkers: answer, ...found };
+  }
+  return {
+    standpoint: oriented.standpoint,
+    walkers: { at: answer.at, ...walkersAround(answer.walkers, { x: at.x, y: at.y }),
+      ...(answer.disclosed ? { disclosed: answer.disclosed } : {}) },
+    ...found,
+  };
+}
 
 /** One action's domain, read. Fields are whitelisted per action — a read
  *  passes through only what the shadow's own tool takes, never the act's. */
@@ -3130,16 +3157,7 @@ export async function readDomainFor(action, fields, key, oriented, ctx = {}) {
       // The whole roll with positions is still one read away at
       // GET /world/walkers, which is the door the town's map draws from and
       // which is therefore never cut.
-      const answer = await call("world_walkers", {});
-      const at = oriented?.standpoint;
-      if (answer?.error || !Array.isArray(answer?.walkers) || !Number.isFinite(at?.x) || !Number.isFinite(at?.y)) {
-        return { standpoint: oriented.standpoint, walkers: answer };
-      }
-      return {
-        standpoint: oriented.standpoint,
-        walkers: { at: answer.at, ...walkersAround(answer.walkers, { x: at.x, y: at.y }),
-          ...(answer.disclosed ? { disclosed: answer.disclosed } : {}) },
-      };
+      return walkDomain(await call("world_walkers", {}), fields, oriented, ctx?.roll ?? null);
     }
     case "leave-mark":
       return fields?.mark
@@ -3375,7 +3393,7 @@ export const APEX_TOOL = {
     // promise acts the ground refuses and bounce nothing useful. `examples`
     // suggests the full dispatch roster without constraining the call.
     do: { type: "string", examples: DISPATCHABLE, description: "the action to perform — omit to read. It must be one your standpoint offers; the bare read lists them. Never rides with read:" },
-    read: { type: "string", examples: DISPATCHABLE, description: "an action's SHADOW — read its domain instead of performing it: read: \"say\" hears what stands in earshot, \"walk\" shows your position and the road, \"leave-mark\" your marks (args: {mark} to investigate one), \"stake\" the escrow behind a mark (args: {mark}), \"give\"/\"drop\"/\"take\" your holdings, \"note-to-self\" your private note. Anything you can do, you can read — and every answer carries the action's full card (blurb, fields, dials, the terms that would bind it), so the law is readable before you act. A read never performs. Never rides with do:" },
+    read: { type: "string", examples: DISPATCHABLE, description: "an action's SHADOW — read its domain instead of performing it: read: \"say\" hears what stands in earshot, \"walk\" shows your position and who stands near you (args: {who} finds one resident anywhere on the roll), \"leave-mark\" your marks (args: {mark} to investigate one), \"stake\" the escrow behind a mark (args: {mark}), \"give\"/\"drop\"/\"take\" your holdings, \"note-to-self\" your private note. Anything you can do, you can read — and every answer carries the action's full card (blurb, fields, dials, the terms that would bind it), so the law is readable before you act. A read never performs. Never rides with do:" },
     args: { type: "object", description: "the action's own fields (with do:) or narrowing fields (with read:), exactly as the entry's `fields` block names them — world { do: \"say\", args: { text: \"hello\" } }. Unknown fields bounce by name. Your standpoint (handle) stays top-level.", additionalProperties: true },
     mark: { type: "string", description: "FOCUS the bare read on one mark — <by>/<slug>, as ids appear in the telling. The answer is the read you would have got anyway, plus `focus`: the close look at that mark (its body, the properties predicated on it, what stands inside it). It is a focus rather than an action because investigating performs nothing — do: would be a lie, and read: is an action's shadow, so a shadow with no action is the reverse the apex's law forbids. Never rides with do: or read:." },
     with_image: { type: "boolean", description: "with mark:, also bring that mark's picture back as image bytes if it has one and it fits under the inline cap. The url rides in the answer either way; this only decides whether the office spends the bytes." },

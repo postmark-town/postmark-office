@@ -4527,6 +4527,38 @@ export function walkersAround(walkers, { x, y, radiusM = PRESENCE_DIALS.near_rad
   };
 }
 
+/**
+ * ONE RESIDENT, FROM THE WHOLE ROLL (postmark#3138, ruled 2026-09-25).
+ *
+ * `world { read: "walk", args: { who } }` asks "where is this resident", and
+ * the radius above is the wrong bound for that question. A resident across
+ * town is not "further off than the radius", they are the answer. So this reads
+ * the SAME rows the walkers door publishes and the radius was drawn from, and
+ * never a second derivation.
+ *
+ * Found, it answers the row: handle, x, y, mark_id, moving, toward. Not found,
+ * it answers `null` with a sentence, and there are two different reasons to be
+ * absent. A handle the town roll names who is not on the walkers roll is a
+ * resident who is not out. A handle the town roll does not name is nobody
+ * here. When the caller held no roll, the office cannot tell those two apart,
+ * and the third sentence says so rather than guessing.
+ */
+export function whoOnRoll(walkers, who, roll = null) {
+  const handle = String(who ?? "").trim().replace(/^@/, "").toLowerCase();
+  const row = (walkers ?? []).find((w) => w.handle === handle);
+  if (row) {
+    return { who: { handle: row.handle, x: row.x, y: row.y, mark_id: row.mark_id ?? null,
+      moving: row.moving ?? false, toward: row.toward ?? null } };
+  }
+  const known = Array.isArray(roll) && roll.length ? roll.includes(handle) : null;
+  const note = known === true
+    ? `${handle} lives here but is not out: the walkers roll places nobody by that handle right now, so there is no position to give.`
+    : known === false
+      ? `there is no resident "${handle}": the town roll does not name them, so there is nobody to find. Handles are spelled as the residents' own pages spell them.`
+      : `${handle} is not on the walkers roll, and this office could not read the town roll to say whether they live here.`;
+  return { who: null, who_note: note };
+}
+
 export async function worldWalkers(worldClone, key = null, { roll = null } = {}) {
   // publicWalkers is the single writer of the walker vocabulary — the spectator
   // publishes the same shape from the same function, so the two cannot drift.
