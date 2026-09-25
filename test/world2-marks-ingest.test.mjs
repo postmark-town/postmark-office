@@ -41,7 +41,7 @@ import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
 import {
-  ingest, planIngest, recordDiff, isRecordField, pathsAt, HEAD_KEY, amendClaimId,
+  ingest, planIngest, applyIngest, recordDiff, isRecordField, pathsAt, HEAD_KEY, amendClaimId,
 } from "../world2/tools/marks-ingest.mjs";
 import { REFUSED_BY_NAME } from "../world2/tools/backfill-register.mjs";
 import { marksFromRows, inPublishedOrder } from "../src/world2-fold.mjs";
@@ -458,6 +458,40 @@ test("the lit-name comes in: planIngest plans wright/the-lit-name as an ADD, and
   assert.deepEqual(plan.adds.map((a) => a.slug), [slug], "the lit-name plans in");
   assert.equal(plan.adds[0].commit.sha, "c-lit", "with the commit that carried its file");
   assert.equal(REFUSED_BY_NAME.size, 0, "the refused set is empty today");
+});
+
+// RULED 2026-09-24 (Keemin, POS-142): the town's marks keep `solo:the-town` BY
+// NAME, as an interim. The dev sandbox run refused whole at NO_SUCH_HOUSE on six
+// town adds; the fixture above never met it because its roll names every owner,
+// the town included. This roll is the real one's shape: the town is not on it.
+test("THE TOWN'S MARK comes in: a town add plans AND applies through the stub as `solo:the-town`, on a roll that does not name the town", async () => {
+  __clearHouseCache?.();
+  const slug = "the-town/zz-fixture-town-law";
+  const derived = [row(slug, { kind: "predicated", geometry: null, bbox: null, owner: "the-town", household: "solo:the-town",
+    data: { date: "2026-09-24", tier: "constitution" } })];
+  const plan = planIngest({ derived, storeRows: [], pathAtRef: new Map([[slug, "p/town"]]), commitFor: () => C("c-town") });
+  assert.deepEqual(plan.adds.map((a) => a.slug), [slug], "the town's add plans in");
+  assert.deepEqual(plan.stops, []);
+
+  const open = { id: 7, status: "open", opens_at: "2026-09-24T00:00:00.000Z", closes_at: "2026-09-25T00:00:00.000Z" };
+  const store = fakeStore({ marks: [], claims: [], windows: [open], roll: { berthillon: ["berthillon"] } });
+  const applied = await applyIngest(store.client.query, plan, { windowId: 7, target: { ref: "B", sha: "b".repeat(40) } });
+  assert.equal(applied.materialized, 1);
+  const m = store.bySlug(slug);
+  assert.equal(m.owner, "the-town");
+  assert.equal(m.household, "solo:the-town", "the town's mark is filed under the one spelling the pen still writes for it");
+  assert.equal(m.status, "standing");
+  assert.equal(m.locked_window, 7);
+
+  // and the exception is the town's alone: a resident the roll does not name still refuses the whole apply
+  __clearHouseCache?.();
+  const stranger = "vireo/zz-fixture-stranger";
+  const plan2 = planIngest({ derived: [row(stranger, { kind: "predicated", geometry: null, bbox: null })], storeRows: [],
+    pathAtRef: new Map([[stranger, "p/s"]]), commitFor: () => C("c-s") });
+  const store2 = fakeStore({ marks: [], claims: [], windows: [open], roll: { berthillon: ["berthillon"] } });
+  await assert.rejects(() => applyIngest(store2.client.query, plan2, { windowId: 7, target: { ref: "B", sha: "b".repeat(40) } }),
+    (e) => e.code === 404 && /vireo/.test(e.detail ?? e.message));
+  assert.equal(store2.bySlug(stranger), undefined, "the stranger's mark was written");
 });
 
 test("recordDiff compares the record, not the store's stamps", () => {
