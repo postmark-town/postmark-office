@@ -196,6 +196,9 @@ const ROSTER = {
   "world2/tools/pointer-ingest.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: pointer-ingest.mjs --world-repo" },
   "world2/tools/replay-ingest.mjs": { args: ["--help"], env: NO_PG, code: 0, needle: "usage: replay-ingest.mjs" },
   "world2/tools/retire-unpublished.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: retire-unpublished.mjs" },
+  // The calendar's rebuild (POS-207): no --dry-run, so it refuses before it
+  // opens any connection — it has no write mode at all.
+  "world2/tools/events-rebuild.mjs": { args: [], env: NO_PG, code: 2, needle: "only --dry-run exists" },
   "world2/tools/review-rule.mjs": { args: [], env: NO_PG, code: 2, needle: "review-rule.mjs: which claim?" },
   "world2/tools/roll-ingest.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: roll-ingest.mjs" },
   "world2/tools/seed-import.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: seed-import.mjs" },
