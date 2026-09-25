@@ -36,6 +36,9 @@ let store = null;
 export function resetStore({ identities = {}, failOn = null, connectDelay = null, queryDelay = null } = {}) {
   store = {
     acts: [], claims: [], windows: [{ id: 1, status: "open" }],
+    // `marks` — the published register `markStandingStatus` reads (slug,
+    // status, retired_window). Empty unless a test seeds it (postmark#3139).
+    marks: [],
     identities: { ...identities },
     log: [], clients: 0, nextActId: 1000, nextClaimId: 1,
     // `failOn` is a predicate on the statement text: the pen made unreachable
@@ -226,6 +229,20 @@ class FakeClient {
     if (/FROM windows WHERE status = 'open'/i.test(t)) {
       const w = store.windows.filter((x) => x.status === "open").sort((a, b) => b.id - a.id)[0];
       return { rows: w ? [{ id: w.id }] : [], rowCount: w ? 1 : 0 };
+    }
+
+    // `world2-claims.mjs § markStandingStatus` (postmark#3139): the marks row,
+    // standing first, with the OPEN window a pending claim on the slug rides.
+    if (/FROM marks m WHERE m\.slug = \$1/i.test(t)) {
+      const [slug] = params;
+      const open = new Set(store.windows.filter((w) => w.status === "open").map((w) => w.id));
+      const onDocket = store.claims.filter((c) => c.slug === slug && c.status === "pending" && open.has(c.window_id))
+        .map((c) => c.window_id).sort((a, b) => b - a);
+      const m = store.marks.filter((x) => x.slug === slug)
+        .sort((a, b) => Number(b.status === "standing") - Number(a.status === "standing"))[0];
+      return m
+        ? { rows: [{ status: m.status, retired_window: m.retired_window ?? null, docket_window: onDocket[0] ?? null }], rowCount: 1 }
+        : { rows: [], rowCount: 0 };
     }
 
     if (/INSERT INTO acts/i.test(t)) {

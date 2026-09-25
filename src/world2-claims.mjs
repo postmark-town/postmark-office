@@ -706,12 +706,23 @@ export async function promoteDraftOnStake({ actor, householdName, slug, stamps =
 export async function markStandingStatus({ slug }, env = process.env) {
   if (!candleEnabled(env)) return { known: false };
   const p = await pool(env);
+  // `docket_window` (postmark#3139): the OPEN window a pending claim on this
+  // slug rides, or null. A mark put forward again sits pending there while its
+  // `marks` row still says retired, and that pair means "put forward", not
+  // "returned to your drafts". Asked in the SAME statement, so the stake door
+  // gains no query. `claims_read` shows every non-draft row to any reader
+  // (007/024), so the pool sees the public docket without a household.
   const { rows } = await p.query(
-    `SELECT status, retired_window FROM marks WHERE slug = $1
-      ORDER BY (status = 'standing') DESC LIMIT 1`, [slug]);
+    `SELECT m.status, m.retired_window,
+            (SELECT c.window_id FROM claims c JOIN windows w ON w.id = c.window_id
+              WHERE c.slug = $1 AND c.status = 'pending' AND w.status = 'open'
+              ORDER BY c.window_id DESC LIMIT 1) AS docket_window
+       FROM marks m WHERE m.slug = $1
+      ORDER BY (m.status = 'standing') DESC LIMIT 1`, [slug]);
   if (!rows.length) return { known: true, found: false };
   return { known: true, found: true, status: rows[0].status,
-           retired: rows[0].status === "retired", retired_window: rows[0].retired_window };
+           retired: rows[0].status === "retired", retired_window: rows[0].retired_window,
+           docket_window: rows[0].docket_window == null ? null : Number(rows[0].docket_window) };
 }
 
 /**
