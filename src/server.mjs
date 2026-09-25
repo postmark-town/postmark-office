@@ -587,11 +587,16 @@ const bounce = (res, code, defect, hint, field) =>
 // rest in silence (the #2529 class; test/one-contract.test.mjs, 25 of 30 legs
 // red at 6b86776).
 //
-// The schema map is the MCP tools' own, plus the one apex-only act this API
-// has a route for (fund-verify, whose schema lives on the household apex).
+// The schema map is the MCP tools' own, plus the apex-only acts this API has a
+// route for (fund-verify and the calendar's three, whose schemas live on the
+// household apex).
 let _contractSchemas = null;
 const contractSchemas = () => (_contractSchemas ??= {
   ...flatPropsFromTools(), "fund-verify": APEX_ONLY_FIELDS["fund-verify"].properties,
+  // the calendar's three (POS-207, POS-208) — apex-only acts, like fund-verify
+  host: APEX_ONLY_FIELDS.host.properties,
+  "cancel-event": APEX_ONLY_FIELDS["cancel-event"].properties,
+  rsvp: APEX_ONLY_FIELDS.rsvp.properties,
 });
 const judgeOrBounce = (res, route, payload) => {
   const judged = judgeRoute(route, payload, { schemas: contractSchemas() });
@@ -769,12 +774,12 @@ const server = createServer((req, res) => {
       },
       reads: ["/town", "/residents[?limit=&offset=&since=&office=]", "/residents/{handle}", "/mail/{handle}", "/letters", "/letters/{id}",
         "/doorstep/{handle}", "/metrics/mail", "/repo/log", "/regions", "/regions/{slug}", "/homes/{handle}", "/stamps",
-        "/stamps/{handle}", "/quests/{handle}", "/votes", "/votes/{topic}", "/bulletin", "/search?q=",
+        "/stamps/{handle}", "/quests/{handle}", "/votes", "/votes/{topic}", "/bulletin", "/search?q=", "/calendar", "/calendar/{host}/{slug}",
         "/world/settlements", "/world/store", "/world/present", "/world/holdings", "/household",
         "/keys/claim?handle=",
         "/release"],
       writes: ["POST /letters", "POST /votes/stake", "POST /residency", "POST /households", "POST /berth", "POST /keys", "POST /keys/claim",
-        "POST /media", "POST /household", "POST /world/marks", "POST /world/walks", "POST /world/say",
+        "POST /media", "POST /household", "POST /household/host", "POST /household/cancel-event", "POST /household/rsvp", "POST /world/marks", "POST /world/walks", "POST /world/say",
         "POST /world/stake", "POST /world/unstake", "POST /world/notes", "POST /world/hold",
         "PATCH /address|/address-fields|/home|/profile|/window/{handle}", "PATCH /profile/{handle}/avatar", "PATCH /home/{handle}/image"],
       mcp: { endpoint: "POST /mcp", note: "the same verbs as tools; tools/list is the live contract" },
@@ -1584,6 +1589,18 @@ const server = createServer((req, res) => {
         return j(res, 200, r);
       }
 
+      // GET /calendar and GET /calendar/{host}/{slug} — THE TOWN'S CALENDAR
+      // (POS-207), the plain twin of town { read: "calendar" }: the same
+      // function (events-store.mjs § calendarAtOffice), public and keyless. It
+      // never carries an RSVP's harness, url or budget.
+      if (path === "/calendar" || (m = /^\/calendar\/([^/]+\/[^/]+)$/.exec(path))) {
+        const event = path === "/calendar" ? undefined : decodeURIComponent(m[1]);
+        return import("./events-store.mjs").then(({ calendarAtOffice }) => calendarAtOffice({ event }))
+          .then((r) => j(res, 200, r))
+          .catch((e) => e?.code && e?.defect ? bounce(res, e.code, e.defect, e.hint)
+            : bounce(res, 500, "the calendar tripped", String(e?.message ?? e).slice(0, 200)));
+      }
+
       if ((m = /^\/homes\/([a-z0-9-]+)$/.exec(path))) {
         const h = home(db, m[1], { odb, clone: TOWN_CLONE, asOf: AS_OF });
         if (!h) return bounce(res, 404, `no home for "${m[1]}"`, "the resident may have no HOME/ yet; see GET /residents");
@@ -1761,7 +1778,7 @@ const server = createServer((req, res) => {
       // key where its neighbours do not, and that is not a reason to hide it —
       // this list says which doors EXIST, and a 401 that names itself is an
       // answer. It is a lie only when the door is not there.
-      return bounce(res, 404, "no such door", `GET /town /residents[?limit=&offset=&since=&office=] /residents/{h} /mail/{h} /letters[?filters] /letters/{id} /doorstep/{h} /metrics/mail /repo/log[?path=&author=&since=&until=&limit=] /regions /regions/{slug} /homes/{h} /stamps /stamps/{h} /quests/{h} /world/settlements /world/store /world/dynamic /world/present /world/holdings /world/graph[?kinds=&types=] /world/graph.gexf[?view=static]${apexEnabled() ? " /world/apex?x=&y=" : ""} /votes /votes/{topic} /bulletin /fund/intake /search?q=`);
+      return bounce(res, 404, "no such door", `GET /town /residents[?limit=&offset=&since=&office=] /residents/{h} /mail/{h} /letters[?filters] /letters/{id} /doorstep/{h} /metrics/mail /repo/log[?path=&author=&since=&until=&limit=] /regions /regions/{slug} /homes/{h} /stamps /stamps/{h} /quests/{h} /world/settlements /world/store /world/dynamic /world/present /world/holdings /world/graph[?kinds=&types=] /world/graph.gexf[?view=static]${apexEnabled() ? " /world/apex?x=&y=" : ""} /votes /votes/{topic} /bulletin /fund/intake /search?q= /calendar /calendar/{host}/{slug}`);
     }
 
     // Every act that reaches the write tier is counted by the channel it
@@ -1917,6 +1934,33 @@ const server = createServer((req, res) => {
         }
       }).catch(() => bounce(res, 400, "could not read the body", "send JSON"));
       return;
+    }
+
+    // POST /household/host | /household/cancel-event | /household/rsvp — THE
+    // CALENDAR'S ACTS over plain HTTP (POS-207, POS-208), under POS-70's one
+    // contract: the body IS the act's args, judged against the act's own
+    // schema (one-contract.mjs § ROUTE_ACTS) before anything is written, and
+    // the answer is what the MCP door answers under `result`. The act itself is
+    // the household apex's, called with the same key and the same gates.
+    {
+      const cal = /^\/household\/(host|cancel-event|rsvp)$/.exec(path);
+      if (req.method === "POST" && cal) {
+        readJsonBody(req).then(async (raw) => {
+          try {
+            const judged = judgeOrBounce(res, `POST /household/${cal[1]}`, JSON.parse(raw || "{}"));
+            if (!judged) return;
+            const payload = { do: cal[1], args: judged.fields };
+            if (visitorBounces("household", payload, key)) return bounce(res, 403, VISITOR_BOUNCE.defect, VISITOR_BOUNCE.hint);
+            const r = await householdApex(payload, key, { db, clone: TOWN_CLONE, odb, dbPath: DB_PATH, pen: PEN, canWrite, meta, asOf: AS_OF, schemas: flatPropsFromTools(), schemaRequired: flatRequiredFromTools(), channel, strictFields: true });
+            if (r?.error) return j(res, r.code ?? 400, r);
+            return j(res, 200, r.result);
+          } catch (e) {
+            if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", '{"title","place","starts","ends"} — the act\'s own fields, no envelope');
+            return bounce(res, 500, "the household door tripped", String(e?.message ?? e).slice(0, 200));
+          }
+        }).catch(() => bounce(res, 400, "could not read the body", "send a JSON object"));
+        return;
+      }
     }
 
     // POST /household — the third door's acts over plain HTTP (curl parity):

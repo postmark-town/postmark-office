@@ -293,7 +293,10 @@ test("contract · every plain-API write route names an act whose schema exists, 
   const { TOOLS } = await import("../src/mcp.mjs");
   const { APEX_ONLY_FIELDS } = await import("../src/household-apex.mjs");
   const schemas = Object.fromEntries(TOOLS.map((t) => [t.name, t.inputSchema.properties]));
-  schemas["fund-verify"] = APEX_ONLY_FIELDS["fund-verify"].properties;
+  // The apex-only acts a route names (fund-verify, and the calendar's three,
+  // POS-207): their schemas live on the household apex, as the server's own
+  // contract map takes them.
+  for (const a of ["fund-verify", "host", "cancel-event", "rsvp"]) schemas[a] = APEX_ONLY_FIELDS[a].properties;
   for (const [route, spec] of Object.entries(ROUTE_ACTS)) {
     assert.ok(schemas[spec.tool], `${route} names ${spec.tool}, which has no schema`);
     const j = judgeRoute(route, { zz_probe: 1 }, { schemas });
@@ -308,6 +311,25 @@ test("POST /fund/verify · an unknown field is refused by name, before the door 
   const r = await rest(B, "POST", "/fund/verify", { txhash: "0xabc", pot: "p", zz_probe: 1 });
   assert.equal(r.status, 422, `${r.status}: ${r.body.defect}`);
   assert.equal(r.body.defect, "fund-verify does not take: zz_probe");
+});
+
+// The calendar's acts (POS-207): one refusal at both doors, before the record
+// is asked anything — this office is pointed at none, and the refusal is still
+// the contract's, not the pen's 503.
+test("POST /household/host · an unknown field is refused by name at both doors, before anything else is asked", async () => {
+  const input = { title: "a probe", place: { at: { x: 0, y: 0 } }, starts: "2030-01-01T00:00:00Z", ends: "2030-01-01T01:00:00Z", zz_probe: 1 };
+  const r = await rest(B, "POST", "/household/host", input);
+  const m = await mcp(A, "household", { do: "host", args: input });
+  assert.equal(r.status, 422, `${r.status}: ${r.body.defect}`);
+  assert.equal(r.body.defect, "host does not take: zz_probe");
+  assert.equal(m.defect, "host does not take: zz_probe");
+});
+
+test("GET /calendar · public and keyless; an office pointed at no record says so rather than answering an empty calendar", async () => {
+  const res = await fetch(`${B.base}/calendar`);
+  const body = await res.json();
+  assert.equal(res.status, 503, JSON.stringify(body));
+  assert.match(body.defect, /record cannot be read/);
 });
 
 test("stake · an apex-only act refuses in its own name — never \"null does not take\"", async () => {
