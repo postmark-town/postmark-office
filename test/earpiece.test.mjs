@@ -12,6 +12,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -215,14 +216,23 @@ test("SAID_MAX: the oldest says are dropped and counted, the newest kept", () =>
 
 test("the signature verifies with the harness row's secret at a local listener; a wrong secret does not", async () => {
   const SECRET = "a1".repeat(32);
-  const l = await listener(({ headers, body }) => (verifySignature(SECRET, body, headers["x-postmark-signature"]) ? [204] : [401, "bad signature"]));
+  // The harness's check, written the way a harness would write it — with
+  // node:crypto, not with this office's own signer, so a broken signer cannot
+  // agree with itself.
+  const check = (body, header) => {
+    const want = Buffer.from(`sha256=${createHmac("sha256", SECRET).update(body).digest("hex")}`);
+    const got = Buffer.from(String(header ?? ""));
+    return want.length === got.length && timingSafeEqual(want, got);
+  };
+  const l = await listener(({ headers, body }) => (check(body, headers["x-postmark-signature"]) ? [204] : [401, "bad signature"]));
   try {
     const env = buildEnvelope({ event: hallEvent(), place: { mark: HALL, name: "snug-harbour", x: 100, y: 100 }, since: iso(T0),
       news: { said: [{ who: "bo", at: iso(T0), text: "hi" }], walked_in: [], walked_out: [] }, budget_left: 5, wake_n: 1, now: T0 + MIN });
     const good = await postWake(l.url, SECRET, env, { sleep: noSleep });
     assert.equal(good.ok, true, good.detail);
     assert.equal(l.got[0].headers["x-postmark-wake"], "1");
-    assert.equal(l.got[0].headers["x-postmark-signature"], signBody(SECRET, l.got[0].body));
+    assert.equal(verifySignature(SECRET, l.got[0].body, l.got[0].headers["x-postmark-signature"]), true, "the office's verifier agrees with the harness's");
+    assert.equal(signBody(SECRET, l.got[0].body), l.got[0].headers["x-postmark-signature"]);
     const bad = await postWake(l.url, "b2".repeat(32), env, { sleep: noSleep });
     assert.equal(bad.ok, false, "a wrong secret's wake is refused by the harness");
     assert.equal(bad.attempts, WAKE_RETRIES + 1);
