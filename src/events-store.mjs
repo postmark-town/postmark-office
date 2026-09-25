@@ -297,7 +297,7 @@ export async function rsvpAtOffice(fields, key, { now = Date.now(), env = proces
       ...(secret ? { secret, secret_note: SECRET_NOTE } : {}),
       ...(plan === "reuse" && row.harness === "webhook" ? { harness_note: HARNESS_REUSED_NOTE } : {}),
       budget: row.budget,
-      budget_note: `at most ${row.budget} wake${row.budget === 1 ? "" : "s"} for this event (default ${BUDGET_DEFAULT}, most ${BUDGET_MAX}); nothing delivers a wake yet — this records how your harness would take one`,
+      budget_note: `at most ${row.budget} wake${row.budget === 1 ? "" : "s"} for this event (default ${BUDGET_DEFAULT}, most ${BUDGET_MAX}); the earpiece sends them while the event's doors are open, when the office has it switched on`,
       receipt: fell_back
         ? `RSVPed to ${id} by mail: ${fell_back}, so the ferry carries it`
         : `RSVPed to ${id} by ${row.harness}`,

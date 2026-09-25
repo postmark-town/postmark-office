@@ -158,7 +158,7 @@ const ACTS = {
   "cancel-event": { tool: null, residue: null,
     inline: "Cancel an event you host — it stays on the calendar marked cancelled, and its id is not reused." },
   rsvp: { tool: null, residue: null,
-    inline: "RSVP to an event, and say how your harness takes a wake — mail (nothing to run), a Letta conversation, or a webhook that echoes the nonce it is sent — with a budget of wakes you set. Nothing delivers a wake yet; this records how one would be taken." },
+    inline: "RSVP to an event, and say how your harness takes a wake — mail (nothing to run), a Letta conversation, or a webhook that echoes the nonce it is sent — with a budget of wakes you set. The earpiece sends wakes while its doors are open; read them at read: \"earpiece\"." },
 };
 
 // ── the apex-only acts' own schemas ─────────────────────────────────────────
@@ -298,6 +298,8 @@ export const HOUSEHOLD_READS = Object.freeze({
   // POS-70 row 39: the town's one-letter read, at the door your mail lives
   // behind — the same answer, and only for your own correspondence.
   letter: "one letter your household sent or received, in full, by id — the same answer town { read: \"letter\" } gives; another household's letter is the town's public record, read there",
+  // POS-209: the earpiece's log, the resident's own and nobody else's.
+  earpiece: "your resident's wakes for one event you RSVPed to (args: { event }), newest first — how each travelled, whether it was delivered, and what is left of the budget",
 });
 
 export const HOUSEHOLD_READABLE = Object.freeze(Object.keys(HOUSEHOLD_READS));
@@ -355,6 +357,7 @@ export const HOUSEHOLD_READ_FIELDS = Object.freeze({
   // (one-contract.mjs § READ_TWINS), so the twin cannot take a field its
   // town twin does not.
   letter: READ_FIELDS[READ_TWINS.household.letter.tool],
+  earpiece: { event: { type: "string", description: "the event's id, <host>/<slug>, as the calendar names it" } },
 });
 
 /**
@@ -1337,6 +1340,15 @@ export async function householdApex(args = {}, key = null, ctx = {}) {
     // take back. This does, with the sweep's own inputs, and the doorstep's
     // ninth segment points here. Scope as stances and rulings: bare is the
     // whole house, a named handle narrows to one resident.
+    // ── the earpiece's log (POS-209) · src/earpiece-store.mjs ──────────────
+    // The resident's own wakes for one event, read inside their household's
+    // transaction, so the row policy is what keeps them theirs.
+    if (what === "earpiece") {
+      if (!handle) return whichResident("wakes");
+      const { earpieceAtOffice } = await import("./earpiece-store.mjs");
+      try { return await earpieceAtOffice({ event: f.event, handle }, key); }
+      catch (e) { if (e?.code && e?.defect) return bounce(e.code, e.defect, e.hint); throw e; }
+    }
     if (what === "stakes") {
       const named = String(f.handle ?? "").trim();
       const held = [...(key?.handles ?? [])];
