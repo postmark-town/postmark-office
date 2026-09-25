@@ -783,6 +783,13 @@ test("POST /berth: one keyless POST mints ephemeral standing; names are single-o
     assert.equal((await post({ slug: "wright" })).status, 409, "a resident's address is not a berth name");
     assert.equal((await post({ slug: "The Walker" })).status, 422, "the slug grammar holds");
     assert.equal((await post({ slug: "the-imposter" })).status, 422, "the town's prefix is reserved");
+    // the town's own names (2026-09-25) — from a second place, because the mint
+    // cap above counts every knock from one IP and the five knocks above are it
+    for (const own of ["ferry", "office"]) {
+      const r = await fetch(`${base}/berth`, { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": "10.99.0.2" }, body: JSON.stringify({ slug: own }) });
+      assert.equal(r.status, 422, `the town's own name is not a berth name: ${own} → ${r.status}`);
+      assert.match((await r.json()).defect, /own names/, own);
+    }
 
     // the minted key IS a credential: /me answers with berth standing
     const me = await (await fetch(`${base}/me`, { headers: { authorization: `Bearer ${b.key}` } })).json();
