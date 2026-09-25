@@ -48,6 +48,12 @@ const MAX_CARD = 50_000;            // an ADDRESS card is a face, not an archive
 // name (`world2/tools/materialize.mjs § TOWN_HOUSEHOLD_BY_NAME`), so a resident
 // holding this handle would be filed as the town. Reserved so no one can.
 const RESERVED = new Set(["template", "index", "office", "postmaster", "ferry", "the-town"]);
+/** The town's own names, refused at EVERY door that mints a name — the join
+ *  desk here and the berth (server.mjs POST /berth). Before 2026-09-25 the
+ *  berth checked the roll, the manifest and the live berths but never this
+ *  set, so a traveler could board as `ferry` or `office` and speak as
+ *  `berth-ferry`. One set, both doors. */
+export function isReservedHandle(name) { return RESERVED.has(String(name ?? "").trim().toLowerCase()); }
 
 import { appendTownJournal, SETTLE_THRESHOLD, townLogEnabled } from "./town-journal.mjs";
 // The record's own readers (POS-158). `src/ceremony.mjs` is NOT imported here:

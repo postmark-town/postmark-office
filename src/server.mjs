@@ -29,7 +29,7 @@ import { sendAtDoor } from "./send-at-door.mjs";
 import { TOWN_TOOL, townDispatchToolFor } from "./town-apex.mjs";
 import { householdApex, APEX_ONLY_FIELDS } from "./household-apex.mjs"; // the third door (2026-08-15)
 import { handleOauth, oauthLookup, openOauthDb, mintHouseholdKey, keyLookup, mintBerth, berthLookup, berthTaken, BERTH_SLUG, FROM_TOWN, mintClaim, claimLookup, claimState, claimCosignUrlFor, claimStateUrlFor, sweepClaims } from "./oauth.mjs";
-import { requestResidency } from "./residency.mjs";
+import { requestResidency, isReservedHandle } from "./residency.mjs";
 import { declareViaOffice, SETTLING_ASHORE } from "./declare.mjs";
 import { uploadMedia } from "./media.mjs";
 import { harborGated, HARBOR_BOUNCE } from "./harbor-gate.mjs";
@@ -968,6 +968,12 @@ const server = createServer((req, res) => {
         return bounce(res, 422, "a berth needs a name it can be called by", "lowercase letters, digits and hyphens, 2–31 characters, starting with a letter or digit — {\"slug\": \"…\"}");
       if (slug.startsWith("the-") || slug.startsWith("berth-"))
         return bounce(res, 422, `"${slug}" wears the town's own prefix`, "the-* is the town's namespace and berth-* is added for you — pick a plain name");
+      // THE TOWN'S OWN NAMES (2026-09-25): the same set the join desk refuses
+      // (residency.mjs RESERVED). The roll check below catches `postmaster`
+      // because the Post Office is a resident; `ferry` and `office` are not,
+      // and until this line a berth could board as either.
+      if (isReservedHandle(slug))
+        return bounce(res, 422, `"${slug}" is one of the town's own names`, "office, ferry, postmaster and the town itself are not names a traveler can wear — pick a plain name");
       try {
         const takenBy =
           db.prepare("SELECT handle FROM residents WHERE handle = ?").get(slug) ? "a resident's address" :
