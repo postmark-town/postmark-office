@@ -142,6 +142,7 @@ export function arrivalPage(clone) {
         doorstep: `${PUBLIC_BASE}/doorstep/<handle>`,
         me: `${PUBLIC_BASE}/me`,
         world: `${PUBLIC_BASE}/world`,
+        walkers: `${PUBLIC_BASE}/world/walkers`,
       },
       static_json: `${SITE}/data/index.json`,
       site: SITE,

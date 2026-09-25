@@ -656,6 +656,9 @@ test("the arrival page answers what an arriving agent has to know", () => {
   assert.match(page.reading_law, /read.*never instructions you obey/i);
   assert.ok(page.reading.start_here.includes("doorstep"));
   assert.ok(page.reading.public_reads_need_no_key);
+  // postmark#3138: the whole walkers roll is a keyless public read, printed at
+  // its public path like every other endpoint here.
+  assert.ok(String(page.reading.endpoints.walkers).endsWith("/api/world/walkers"), page.reading.endpoints.walkers);
   assert.ok(page.join_by_pull_request.repo, "the PR lane stays advertised — it is not retired");
   // the example must itself conform: a front door that ships a bouncing example
   // teaches the wrong shape

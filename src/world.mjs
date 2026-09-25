@@ -4522,7 +4522,7 @@ export function walkersAround(walkers, { x, y, radiusM = PRESENCE_DIALS.near_rad
     capped: hits.length > shown.length,
     beyond_radius: walkers.length - hits.length,
     roll: walkers.length,
-    note: `who stands within ${radiusM} m of you, nearest first — ${walkers.length - hits.length} of the town's ${walkers.length} placed residents are further off than that, and are set aside by the radius rather than missing from the roll. The whole roll with positions is one read away: GET /world/walkers, the door the town's own map draws from.`,
+    note: `who stands within ${radiusM} m of you, nearest first — ${walkers.length - hits.length} of the town's ${walkers.length} placed residents are further off than that, and are set aside by the radius rather than missing from the roll. The whole roll with positions is one read away, keyless: GET https://postmark.town/api/world/walkers, the door the town's own map draws from.`,
     walkers: shown,
   };
 }
