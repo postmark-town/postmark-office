@@ -243,10 +243,10 @@ async function enterViaPortal(portal, { who, w, at, occupancy, here, thresholds,
     throw bounce(422, `${stop} has no place in this world`, "a stop must be a sited mark with an anchor before it can be a door");
 
   // THE DOOR CHECKED IS THE ONE YOU NAMED — here, the wharf.
-  const reach = standsWithin(here, stopMark, { pointWithinMark: verbs.pointWithinMark });
+  const reach = standsWithin(here, stopMark, { pointWithinMark: verbs.pointWithinMark, earshotM: 0 }); // POS-220: within the extent only
   if (!reach.stands)
     throw bounce(409, `you are not at that door — ${stop} stands ~${reach.distance_round} m from where you stand`,
-      `every stop on ${vessel}'s timetable is a door into her, wherever her hull is — but a door is still entered from within its reach. Walk to (${stopMark.at.x}, ${stopMark.at.y}) and knock again; nothing was recorded`,
+      `every stop on ${vessel}'s timetable is a door into her, wherever her hull is — but a door is entered only from within its extent (Keemin, 2026-09-25: no earshot enter). Walk to (${stopMark.at.x}, ${stopMark.at.y}) and knock again; nothing was recorded`,
       { walk: { to: { x: stopMark.at.x, y: stopMark.at.y }, mark: stop } });
 
   const acts = deps.acts ? (await deps.acts(who)) ?? [] : [];
@@ -412,7 +412,7 @@ export async function enterViaOffice(worldClone, payload = {}, key = null, deps 
   const threshold = target ? thresholdAtStandpointFrame(target, answer, here, w.marks ?? []) : null;
   let bundledWalk = answer.walk;
   if (threshold && answer.walk) {
-    const reach = standsWithin(here, threshold, { pointWithinMark: verbs.pointWithinMark });
+    const reach = standsWithin(here, threshold, { pointWithinMark: verbs.pointWithinMark, earshotM: 0 }); // POS-220: within the extent only
     if (!reach.stands) {
       if (threshold !== target) bundledWalk = { ...answer.walk, to: { x: threshold.at.x, y: threshold.at.y } };
       // THE WALK RIDES THE REFUSAL AS A FIELD, NOT ONLY AS A SENTENCE
@@ -427,7 +427,7 @@ export async function enterViaOffice(worldClone, payload = {}, key = null, deps 
       // here on purpose — a second copy of the destination is a second answer to
       // "where is that door", and this door already has the first.
       throw bounce(409, `you are not at that door — ${threshold.id} stands ~${reach.distance_round} m from where you stand`,
-        `a door is entered from within its reach (founder-ruled 2026-08-27; re-ruled 2026-09-11 to measure at the mark you NAMED, not the outermost link of its chain; R15 keeps walk and entry decoupled in both directions). Walk to (${threshold.at?.x}, ${threshold.at?.y}) and knock again; nothing was recorded`,
+        `a door is entered from within its extent — the 60 m reach from the anchor was removed on 2026-09-25 (Keemin: "remove the earshot enter, so must be within extent"; postmaster had entered the taproom from the mooring, 3 m outside it, POS-220); measured at the mark you NAMED (re-ruled 2026-09-11); R15 keeps walk and entry decoupled in both directions). Walk to (${threshold.at?.x}, ${threshold.at?.y}) and knock again; nothing was recorded`,
         { walk: bundledWalk });
     }
     // The engine's bundled walk was computed against canonical mark geometry.
