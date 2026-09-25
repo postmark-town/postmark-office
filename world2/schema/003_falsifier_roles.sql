@@ -66,6 +66,10 @@ lawful AS (
     -- rows; no DELETE, because a registration is replaced, never removed.
     ('office_api',   'household_harnesses', 'INSERT'),
     ('office_api',   'household_harnesses', 'UPDATE'),
+    -- 026_events.sql, the earpiece's log (POS-209). One row per attempted
+    -- wake, narrowed by its row policy to the resident's own household; INSERT
+    -- only, because a log line is never edited or removed.
+    ('office_api',   'earpiece_wakes',   'INSERT'),
     ('clearing_job', 'claims',           'UPDATE'),
     ('clearing_job', 'windows',          'INSERT'),
     ('clearing_job', 'windows',          'UPDATE'),

@@ -444,7 +444,10 @@ test("MCP tools/list, apex OFF: the full flat list — the slim's delist is apex
   // 51 -> 52 (the calendar, 2026-09-24, POS-207): read_calendar —
   // town { read: "calendar" }. Born delisted behind the town apex like every
   // read above it.
-  assert.equal(names.length, 52);
+  // 52 -> 53 (the earpiece, 2026-09-25, POS-209): read_earpiece —
+  // household { read: "earpiece" }. Born delisted behind the household apex.
+  assert.equal(names.length, 53);
+  assert.ok(names.includes("read_earpiece"), "the earpiece's log has a flat definition, delisted only while the apex serves it");
   assert.ok(names.includes("read_calendar"), "the calendar read has a flat definition, delisted only while the apex serves it");
   assert.ok(names.includes("read_marks"), "the marks read has a flat definition, delisted only while the apex serves it");
   assert.ok(names.includes("read_asks"), "the quarter read has a flat definition, delisted only while the apex serves it");

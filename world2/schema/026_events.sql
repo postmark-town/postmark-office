@@ -173,3 +173,63 @@ INSERT INTO registry (object, kind, owner_pen, consumers, ruling) VALUES
 ON CONFLICT (object) DO NOTHING;
 
 COMMIT;
+
+-- ── THE EARPIECE'S LOG (POS-209, Earpiece C; appended 2026-09-25) ───────────
+--
+-- One row per wake the deliverer ATTEMPTED (world2/tools/earpiece-deliver.mjs),
+-- and one row when a resident's budget for an event runs out. It is the
+-- resident's own record behind household { read: "earpiece" }, and it is what
+-- the deliverer reads back for coalescing and the budget: `delivered` and
+-- `fell_back` are charged, `failed` is not.
+--
+-- PRIVATE, in the harness row's shape: RLS, every policy `TO office_api` and
+-- comparing `household = ANY(app.household_keys)`. `household` is a column the
+-- brief's list did not name; the policy needs it, as the harness row's does.
+-- SELECT + INSERT and no UPDATE or DELETE: a log line is never edited. The
+-- public calendar read and the notary's export never read it.
+--
+-- A run's facts that are not a resident's (disabled, idle, an event outside
+-- its window) go on the deliverer's stamp file, not here.
+--
+-- CONSUMERS, named: src/earpiece-store.mjs (the deliverer's read and write,
+-- and the resident's read), test/earpiece.test.mjs (through a stub; the stub
+-- proves the JS, not the store).
+
+BEGIN;
+
+CREATE TABLE IF NOT EXISTS earpiece_wakes (
+  id           bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  event        text NOT NULL REFERENCES events(id),
+  handle       text NOT NULL,                 -- the resident woken
+  household    text NOT NULL,                 -- the resident's household key; the row policy compares it
+  harness      text NOT NULL CHECK (harness IN ('letta','webhook','mail')),   -- how the wake actually travelled
+  wake_n       integer NOT NULL CHECK (wake_n >= 0),
+  sent_at      timestamptz NOT NULL,
+  status       text NOT NULL CHECK (status IN ('delivered','failed','fell_back','budget-exhausted')),
+  detail       text,                          -- never a secret, a url or a letter; the outcome in words
+  budget_left  integer NOT NULL CHECK (budget_left >= 0)
+);
+CREATE INDEX IF NOT EXISTS earpiece_wakes_event_handle_idx ON earpiece_wakes (event, handle, id);
+
+ALTER TABLE earpiece_wakes ENABLE ROW LEVEL SECURITY;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'earpiece_wakes' AND policyname = 'earpiece_wakes_read') THEN
+    CREATE POLICY earpiece_wakes_read ON earpiece_wakes FOR SELECT TO office_api
+      USING (household = ANY(string_to_array(NULLIF(current_setting('app.household_keys', true), ''), ',')));
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'earpiece_wakes' AND policyname = 'earpiece_wakes_insert') THEN
+    CREATE POLICY earpiece_wakes_insert ON earpiece_wakes FOR INSERT TO office_api
+      WITH CHECK (household = ANY(string_to_array(NULLIF(current_setting('app.household_keys', true), ''), ',')));
+  END IF;
+END $$;
+
+GRANT SELECT, INSERT ON earpiece_wakes TO office_api;
+
+INSERT INTO registry (object, kind, owner_pen, consumers, ruling) VALUES
+  ('earpiece_wakes', 'source', 'office_api', '{}',
+   'Wright 2026-09-25 (POS-209 brief): the earpiece deliverer''s log, one row per attempted wake; RLS on app.household_keys, office_api only, in no export')
+ON CONFLICT (object) DO NOTHING;
+
+COMMIT;

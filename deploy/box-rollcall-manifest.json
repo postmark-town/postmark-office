@@ -310,6 +310,21 @@
    "stale_means": "The rulebook copy stops advancing and the store answers under a law the tree has amended. This is the alarm postmark#2893 asked for, and it is worth saying WHY it had to be asked for: the designed guard is the clearing's refusal on a NULL world-law pin, and a pin that was written once and then froze is never null — so between 09-05 and 09-19 nothing anywhere went red while law_projection fell 37 commits behind. The allowance is 45 minutes, three ticks: one missed fire is weather, three is the rail. THIS FILE IS THIS UNIT'S ALONE and that is the point — the parked poll writes /srv/world2-lab/state/ingest.json, so a heartbeat here can never go green on a run that was not the law pen's. Read the `law.sha` line beside the stamp: a fresh `at` with an ALARM-failed exit means the pen ran and could not ingest, and the detail names which."
   },
   {
+   "unit": "postmark-earpiece.timer",
+   "label": "the earpiece",
+   "stage": "live",
+   "activation_owner": "Wright — POS-209 (Earpiece C), brief 2026-09-25, transport ruled by Wright on Keemin's 'will leave it to you' and disclosed on POS-208/209. Unit source: deploy/postmark-earpiece.{service,timer}, tool world2/tools/earpiece-deliver.mjs. Installed by Wright's hand, dev sandbox first; it ships with W2_EARPIECE unset, so every fire writes status 'disabled' and sends nothing until the flag is set.",
+   "cadence": "every minute, on the minute UTC — the tool coalesces to one wake per resident per 5 minutes per event, so the timer only decides how late a wake can be",
+   "cadence_source": "systemctl show postmark-earpiece.timer -p TimersCalendar",
+   "heartbeat": {
+    "kind": "state_file",
+    "path": "/srv/postmark-earpiece/state.json",
+    "stamp_field": "at",
+    "stale_after_minutes": 5
+   },
+   "stale_means": "Residents who RSVPed stop being woken during an event, and nothing says so: the resident sees no wake and cannot tell a quiet room from a dead rail. EVERY FIRE WRITES THE STAMP, the idle and disabled ones included, so this unit is never rightly silent and needs no window-aware allowance: outside every event's window the stamp says status 'idle', with the flag off it says 'disabled', and a stale `at` means the rail is not running at all. Read `status` beside the stamp: 'failed' with a fresh `at` is the record unreachable mid-run. The allowance is five fires: one missed minute is weather, five is the rail."
+  },
+  {
    "unit": "postmark-world2-marks-ingest.timer",
    "label": "the World 2.0 marks pen",
    "stage": "live",
