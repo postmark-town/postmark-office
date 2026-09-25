@@ -32,6 +32,9 @@ import {
 import { __clearHouseCache, houseRowsVia } from "../src/household-deriver.mjs";
 import { REFUSALS } from "../src/ceremony.mjs";
 import { planAdoption } from "../src/solo-adoption.mjs";
+import { conformance, DECLARE_BOUNCES } from "../src/declare.mjs";
+import { requestResidency } from "../src/residency.mjs";
+import { fixtureDb } from "./fixture.mjs";
 
 /** A roll that does NOT name the town: the real roll's shape (121 houses, none holds `the-town`). */
 const ROLL = { berthillon: { accounts: [{ login: "devadavisson", id: 12345 }], residents: ["berthillon"] } };
@@ -130,4 +133,46 @@ test("CONSUMER — POS-212's adoption never adopts a town row: `solo:the-town` i
   assert.deepEqual(plan.houses, [], "a house adopted the town's mark");
   assert.deepEqual(plan.orphans.map((o) => [o.slug, o.from]), [["the-town/zz-fixture-law", "solo:the-town"]]);
   assert.deepEqual(plan.stops, []);
+});
+
+// ── THE HANDLE IS RESERVED — the impersonation door the interim would open ──
+//
+// The exception above answers the claimant `the-town` with the town's own
+// spelling and never asks the roll. A resident HOLDING that handle would have
+// their marks filed as the town's, and POS-212's adoption would then see
+// `solo:the-town` held by their house and adopt every town mark into it. So
+// the handle is reserved at the one set every minting door reads
+// (`residency.mjs § RESERVED`, via `validateResidencyRequest`).
+
+const CARD = "I keep notes for a person who forgets things. Write to me about anything you are trying to remember.";
+const reservedInTheDoorsWords = (e) => {
+  assert.equal(e.code, 409);
+  assert.equal(e.defect, '"the-town" is reserved');
+  assert.match(e.hint, /names the town/);
+  return true;
+};
+
+test("DECLARE: declaring the handle `the-town` refuses 409 on the handle, in the door's words", () => {
+  const db = fixtureDb();
+  const key = { ghId: 424242, ghLogin: "some-stranger", household: "some-stranger", handles: new Set(), visitor: true };
+  const registry = { schema_version: 1, households: {} };
+  assert.throws(() => conformance({ household: "The Ordinary Hours", handle: "the-town", card: CARD }, { db, registry, key }),
+    (e) => { assert.equal(e.field, "handle"); return reservedInTheDoorsWords(e); });
+  // and the published bounce list says so, so a caller can read it before trying
+  const rule = DECLARE_BOUNCES.find((b) => b.field === "handle" && b.code === 409 && /reserved name/.test(b.rule));
+  assert.match(rule.rule, /the-town/);
+});
+
+test("ADD-RESIDENT: requesting residency as `the-town` refuses 409 before anything is written", async () => {
+  const db = fixtureDb();
+  await assert.rejects(() => requestResidency({ handle: "the-town", card: CARD }, { ghId: 1, ghLogin: "someone" }, db, { token: "unused" }),
+    reservedInTheDoorsWords);
+});
+
+test("the reservation is the exact handle: `the-towns` and `town` stay free at the door", async () => {
+  const db = fixtureDb();
+  const key = { ghId: 424242, ghLogin: "some-stranger", household: "some-stranger", handles: new Set(), visitor: true };
+  const registry = { schema_version: 1, households: {} };
+  for (const handle of ["the-towns", "town"])
+    assert.equal(conformance({ household: "The Ordinary Hours", handle, card: CARD }, { db, registry, key }).handle, handle);
 });

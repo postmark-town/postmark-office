@@ -132,7 +132,7 @@ export const DECLARE_BOUNCES = [
   { field: "credential", code: 403, rule: "the call must carry a GitHub-verified credential — the household grain is the town's anti-sybil floor" },
   { field: "handle", code: 422, rule: "handle is required and must be a non-empty string" },
   { field: "handle", code: 422, rule: "handle must match ^[a-z0-9]+(?:-[a-z0-9]+)*$ and be 2–40 characters" },
-  { field: "handle", code: 409, rule: "handle must not be a reserved name (template, index, office, postmaster, ferry)" },
+  { field: "handle", code: 409, rule: "handle must not be a reserved name (template, index, office, postmaster, ferry, the-town)" },
   { field: "handle", code: 409, rule: "handle must not start with human-of- (that prefix names a household's human)" },
   { field: "handle", code: 409, rule: "handle must be free in the town, on the ship's manifest, and in the household registry" },
   { field: "card", code: 422, rule: "card is required and must not be empty" },

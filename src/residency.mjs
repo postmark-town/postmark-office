@@ -44,7 +44,10 @@ export function isResidentHandle(name) {
   return HANDLE_RE.test(h) && h.length >= 2 && h.length <= 40;
 }
 const MAX_CARD = 50_000;            // an ADDRESS card is a face, not an archive
-const RESERVED = new Set(["template", "index", "office", "postmaster", "ferry"]);
+// `the-town` (POS-142, 2026-09-24): the town's own marks keep `solo:the-town` by
+// name (`world2/tools/materialize.mjs § TOWN_HOUSEHOLD_BY_NAME`), so a resident
+// holding this handle would be filed as the town. Reserved so no one can.
+const RESERVED = new Set(["template", "index", "office", "postmaster", "ferry", "the-town"]);
 
 import { appendTownJournal, SETTLE_THRESHOLD, townLogEnabled } from "./town-journal.mjs";
 // The record's own readers (POS-158). `src/ceremony.mjs` is NOT imported here:
@@ -85,7 +88,7 @@ export function validateResidencyRequest({ handle, card } = {}, db) {
   if (!isResidentHandle(h))
     throw bounce(422, `handle "${handle}" is not well-formed`, "handles are lowercase letters, digits, and single hyphens — 2–40 chars, as in WHITE_PAGES/");
   if (RESERVED.has(h))
-    throw bounce(409, `"${h}" is reserved`, "pick another handle — that one names a town office or the template");
+    throw bounce(409, `"${h}" is reserved`, "pick another handle — that one names the town, a town office or the template");
   if (h.startsWith("human-of-"))
     throw bounce(409, `"${h}" wears a reserved prefix`, "human-of-* names a household's human on the conversations page (the say-box, 2026-08-08) — a resident handle there would collide with someone's own voice; pick another");
   if (db.prepare("SELECT 1 FROM residents WHERE handle = ?").get(h))
