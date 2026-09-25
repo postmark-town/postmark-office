@@ -33,7 +33,7 @@ import { __clearHouseCache, houseRowsVia } from "../src/household-deriver.mjs";
 import { REFUSALS } from "../src/ceremony.mjs";
 import { planAdoption } from "../src/solo-adoption.mjs";
 import { conformance, DECLARE_BOUNCES } from "../src/declare.mjs";
-import { requestResidency } from "../src/residency.mjs";
+import { validateResidencyRequest } from "../src/residency.mjs";
 import { fixtureDb } from "./fixture.mjs";
 
 /** A roll that does NOT name the town: the real roll's shape (121 houses, none holds `the-town`). */
@@ -163,10 +163,13 @@ test("DECLARE: declaring the handle `the-town` refuses 409 on the handle, in the
   assert.match(rule.rule, /the-town/);
 });
 
-test("ADD-RESIDENT: requesting residency as `the-town` refuses 409 before anything is written", async () => {
+// `requestResidency` (the add-resident door) calls this first, before the
+// registry or the pen: `residency.mjs § requestResidency`. The leg asks the
+// validator rather than the door so that a flipped run cannot walk on into the
+// store read and the GitHub pen.
+test("ADD-RESIDENT: requesting residency as `the-town` refuses 409 at the door's validator, in the door's words", () => {
   const db = fixtureDb();
-  await assert.rejects(() => requestResidency({ handle: "the-town", card: CARD }, { ghId: 1, ghLogin: "someone" }, db, { token: "unused" }),
-    reservedInTheDoorsWords);
+  assert.throws(() => validateResidencyRequest({ handle: "the-town", card: CARD }, db), reservedInTheDoorsWords);
 });
 
 test("the reservation is the exact handle: `the-towns` and `town` stay free at the door", async () => {
