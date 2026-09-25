@@ -777,6 +777,13 @@ test("POST /berth: one keyless POST mints ephemeral standing; names are single-o
     assert.equal(b.speaker, "berth-gangplank-walker");
     assert.ok(b.key.startsWith("pmb_"), "the key is shown once, berth-prefixed");
     assert.match(b.residency, /co-signs/, "the human lane is named, not skipped");
+    // postmark#3138 — the watching sentence names only doors that exist. There
+    // is no do: "walkers" (nor "orient", nor "open_your_eyes") on the world
+    // verb; who is near you is read: "walk", and the whole roll is keyless at
+    // the PUBLIC path (the office-internal /world/walkers 404s at the domain).
+    assert.doesNotMatch(b.watching, /do: "(walkers|orient|open_your_eyes)"/, "a phantom do: sends the reader to a door that is not there");
+    assert.match(b.watching, /read: "walk"/);
+    assert.ok(b.watching.includes("GET https://postmark.town/api/world/walkers"), b.watching);
 
     // single-occupancy, three ways
     assert.equal((await post({ slug: "gangplank-walker" })).status, 409, "a live berth holds its name");
