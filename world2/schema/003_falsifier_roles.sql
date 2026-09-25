@@ -52,6 +52,20 @@ lawful AS (
     ('office_api',   'household_pins',   'UPDATE'),
     ('office_api',   'registry_meta',    'INSERT'),
     ('office_api',   'registry_meta',    'UPDATE'),
+    -- 026_events.sql. The calendar's current state, projected from the event
+    -- acts in the same transaction as each act. INSERT + UPDATE and no DELETE:
+    -- an amendment, a cancellation or a second RSVP updates the current row,
+    -- and the history is the act log. office_api, because the household door
+    -- that performs the acts connects as it.
+    ('office_api',   'events',           'INSERT'),
+    ('office_api',   'events',           'UPDATE'),
+    ('office_api',   'event_rsvps',      'INSERT'),
+    ('office_api',   'event_rsvps',      'UPDATE'),
+    -- 026_events.sql, the resident's private harness row (POS-208, ruled
+    -- 2026-09-25). Narrowed by its row policy to the acting household's own
+    -- rows; no DELETE, because a registration is replaced, never removed.
+    ('office_api',   'household_harnesses', 'INSERT'),
+    ('office_api',   'household_harnesses', 'UPDATE'),
     ('clearing_job', 'claims',           'UPDATE'),
     ('clearing_job', 'windows',          'INSERT'),
     ('clearing_job', 'windows',          'UPDATE'),

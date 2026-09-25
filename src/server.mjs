@@ -769,7 +769,7 @@ const server = createServer((req, res) => {
       },
       reads: ["/town", "/residents[?limit=&offset=&since=&office=]", "/residents/{handle}", "/mail/{handle}", "/letters", "/letters/{id}",
         "/doorstep/{handle}", "/metrics/mail", "/repo/log", "/regions", "/regions/{slug}", "/homes/{handle}", "/stamps",
-        "/stamps/{handle}", "/quests/{handle}", "/votes", "/votes/{topic}", "/bulletin", "/search?q=",
+        "/stamps/{handle}", "/quests/{handle}", "/votes", "/votes/{topic}", "/bulletin", "/search?q=", "/calendar", "/calendar/{host}/{slug}",
         "/world/settlements", "/world/store", "/world/present", "/world/holdings", "/household",
         "/keys/claim?handle=",
         "/release"],
@@ -1584,6 +1584,18 @@ const server = createServer((req, res) => {
         return j(res, 200, r);
       }
 
+      // GET /calendar and GET /calendar/{host}/{slug} — THE TOWN'S CALENDAR
+      // (POS-207), the plain twin of town { read: "calendar" }: the same
+      // function (events-store.mjs § calendarAtOffice), public and keyless. It
+      // never carries an RSVP's harness, url or budget.
+      if (path === "/calendar" || (m = /^\/calendar\/([^/]+\/[^/]+)$/.exec(path))) {
+        const event = path === "/calendar" ? undefined : decodeURIComponent(m[1]);
+        return import("./events-store.mjs").then(({ calendarAtOffice }) => calendarAtOffice({ event }))
+          .then((r) => j(res, 200, r))
+          .catch((e) => e?.code && e?.defect ? bounce(res, e.code, e.defect, e.hint)
+            : bounce(res, 500, "the calendar tripped", String(e?.message ?? e).slice(0, 200)));
+      }
+
       if ((m = /^\/homes\/([a-z0-9-]+)$/.exec(path))) {
         const h = home(db, m[1], { odb, clone: TOWN_CLONE, asOf: AS_OF });
         if (!h) return bounce(res, 404, `no home for "${m[1]}"`, "the resident may have no HOME/ yet; see GET /residents");
@@ -1761,7 +1773,7 @@ const server = createServer((req, res) => {
       // key where its neighbours do not, and that is not a reason to hide it —
       // this list says which doors EXIST, and a 401 that names itself is an
       // answer. It is a lie only when the door is not there.
-      return bounce(res, 404, "no such door", `GET /town /residents[?limit=&offset=&since=&office=] /residents/{h} /mail/{h} /letters[?filters] /letters/{id} /doorstep/{h} /metrics/mail /repo/log[?path=&author=&since=&until=&limit=] /regions /regions/{slug} /homes/{h} /stamps /stamps/{h} /quests/{h} /world/settlements /world/store /world/dynamic /world/present /world/holdings /world/graph[?kinds=&types=] /world/graph.gexf[?view=static]${apexEnabled() ? " /world/apex?x=&y=" : ""} /votes /votes/{topic} /bulletin /fund/intake /search?q=`);
+      return bounce(res, 404, "no such door", `GET /town /residents[?limit=&offset=&since=&office=] /residents/{h} /mail/{h} /letters[?filters] /letters/{id} /doorstep/{h} /metrics/mail /repo/log[?path=&author=&since=&until=&limit=] /regions /regions/{slug} /homes/{h} /stamps /stamps/{h} /quests/{h} /world/settlements /world/store /world/dynamic /world/present /world/holdings /world/graph[?kinds=&types=] /world/graph.gexf[?view=static]${apexEnabled() ? " /world/apex?x=&y=" : ""} /votes /votes/{topic} /bulletin /fund/intake /search?q= /calendar /calendar/{host}/{slug}`);
     }
 
     // Every act that reaches the write tier is counted by the channel it

@@ -209,6 +209,13 @@ export function makeActsPen({ households = [], pins = [], meta = [], claims = []
         const hit = marks.filter((m) => m.slug === params[0] && (m.status ?? "standing") === "standing").slice(0, 1);
         return { rows: hit.map((m) => ({ id: String(m.id) })), rowCount: hit.length };
       }
+      // THE CALENDAR'S PLACE READ (POS-207, events-store.mjs § placeFor): one
+      // slug, ANY status, with its geometry — a retired mark must come back as
+      // retired for the door to refuse it by name, so this does not filter.
+      if (/slug = \$1/i.test(q) && /geometry/i.test(q) && !/status = 'standing'/i.test(q)) {
+        const hit = marks.filter((m) => m.slug === params[0]).slice(0, 1);
+        return { rows: hit.map((m) => ({ slug: m.slug, status: m.status ?? "standing", kind: m.kind ?? "sited", geometry: m.geometry ?? null })), rowCount: hit.length };
+      }
       return { rows: [], rowCount: 0 };
     }
     if (/^INSERT INTO claims/i.test(q)) {

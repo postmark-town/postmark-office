@@ -1163,7 +1163,7 @@ test("envelope: an unknown field bounces BY NAME against the target's own schema
 
 // POS-70 §5 (ruled 2026-09-24): the send and the five paper acts take a retry
 // key now; a world act's receipt is a row in the store's `acts` table, which has
-// no column for one until 026_act_nonce.sql installs — so the world door still
+// no column for one until 027_act_nonce.sql installs — so the world door still
 // refuses it BY NAME, the MCP half of test/one-contract.test.mjs's plain-API leg.
 test("envelope: a nonce on a world act bounces by name — the world's store keeps no retry key yet", async () => {
   on();
