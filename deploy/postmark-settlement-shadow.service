@@ -5,5 +5,9 @@ Description=Postmark settlement shadow — the next crossing rehearsed, publishi
 Type=oneshot
 User=meepo
 EnvironmentFile=/etc/postmark-office.env
+# The settlement unit's second file, so the rehearsal reads the environment the
+# crossing reads — SETTLEMENT_SOURCE decides which path it rehearses (2026-09-25:
+# it rehearsed git while the box crossed from the store). Optional, as there.
+EnvironmentFile=-/etc/postmark-world2-clearing.env
 WorkingDirectory=/srv/postmark-office
 ExecStart=/bin/sh /srv/postmark-office/deploy/settlement-shadow.sh
