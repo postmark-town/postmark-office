@@ -13,13 +13,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   inWindow, buildEnvelope, signBody, verifySignature, postWake, letterFor, decideWake,
   ENVELOPE_FIELDS, EARPIECE_COALESCE_MIN, SAID_MAX, WAKE_RETRIES, FELL_BACK_NO_LETTA, FELL_BACK_NO_ROW,
+  MAIL_LEAD_MIN, PEN_HANDLE, crossingFor,
 } from "../src/earpiece.mjs";
+import { penMailPort, PEN_KEY } from "../src/earpiece-mail.mjs";
+import { fixtureDb, tempClone } from "./fixture.mjs";
 import { runEarpiece, MAIL_STOPPED } from "../world2/tools/earpiece-deliver.mjs";
 import { installActsPen, uninstallActsPen, withRecordOn } from "./acts-pen-stub.mjs";
 
@@ -27,12 +30,18 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const MIN = 60_000;
 const iso = (t) => new Date(t).toISOString();
 const ON = { W2_EARPIECE: "1" };
+// The pen writes flag-off, locally: nothing here may push or write a town log.
+delete process.env.TOWN_PUSH;
+delete process.env.TOWN_SINGLE_LOG;
 
 // ── the town in memory ──────────────────────────────────────────────────────
 
 const T0 = Date.parse("2026-10-03T20:00:00Z");          // doors open
 const HALL = "keeper/snug-harbour";
 const HALL_GEOMETRY = { at: { x: 100, y: 100 }, extent: { w: 40, h: 40 } };
+// hallEvent ends 23:00Z, before the 00:00Z crossing, so its one letter is
+// written in its last MAIL_LEAD_MIN (earpiece.mjs § mail rides the crossing).
+const LETTER = T0 + 171 * MIN;
 // The world engine's containment for a rect mark (world-verbs.mjs §
 // pointWithinMark's rect path), so the suite does not need a clone.
 const withinRect = (p, m) => Math.abs(p.x - m.at.x) <= m.extent.w / 2 && Math.abs(p.y - m.at.y) <= m.extent.h / 2;
@@ -128,13 +137,13 @@ test("a cancelled event has no window even while its interval stands", () => {
 
 // ── the budget ──────────────────────────────────────────────────────────────
 
-test("none over budget: budget 2, three coalescing periods with news — two delivered, the third logged budget-exhausted, once", async () => {
-  const ev = hallEvent();
+test("none over budget: budget 2, four crossings with news — two delivered, the third logged budget-exhausted, once", async () => {
+  const ev = hallEvent({ ends: iso(T0 + 3 * 24 * 60 * MIN) });
   const s = memStore({ events: [ev], rsvps: [{ event: ev.id, handle: "ana", household: "hh:ana", harness: "mail", budget: 2 }] });
   const sent = [];
   const mail = async (l) => { sent.push(l); return { ok: true }; };
   for (let period = 0; period < 4; period++) {
-    const t = T0 + (1 + period * EARPIECE_COALESCE_MIN) * MIN;
+    const t = Date.parse("2026-10-04T00:00:00Z") + period * 12 * 60 * MIN - 5 * MIN;   // five minutes before each crossing
     s.voice.push(sayIn("bo", t - 30_000, `news ${period}`));
     await runEarpiece({ now: t, env: ON, store: s, withinFn: withinRect, sendMail: mail });
   }
@@ -147,19 +156,20 @@ test("none over budget: budget 2, three coalescing periods with news — two del
 
 // ── coalescing ──────────────────────────────────────────────────────────────
 
-test("coalesced: five says inside one period, with the deliverer running every minute, go out as ONE wake carrying five", async () => {
+test("coalesced: five says inside one period, with the deliverer running every minute, go out as ONE webhook wake carrying five", async () => {
   const ev = hallEvent();
-  const s = memStore({ events: [ev], rsvps: [{ event: ev.id, handle: "ana", household: "hh:ana", harness: "mail", budget: 6 }] });
+  const s = memStore({ events: [ev], rsvps: [{ event: ev.id, handle: "ana", household: "hh:ana", harness: "webhook", budget: 6 }],
+    harnesses: [{ handle: "ana", household: "hh:ana", kind: "webhook", address: "https://ana.example/wake", secret: "s" }] });
   const sent = [];
-  const mail = async (l) => { sent.push(l); return { ok: true }; };
+  const fetchImpl = async (u, init) => { sent.push({ body: init.body }); return { status: 200 }; };
   s.voice.push(sayIn("bo", T0 + 30_000, "first"));
-  await runEarpiece({ now: T0 + 1 * MIN, env: ON, store: s, withinFn: withinRect, sendMail: mail });   // wake 1
+  await runEarpiece({ now: T0 + 1 * MIN, env: ON, store: s, withinFn: withinRect, fetchImpl });   // wake 1
   for (let m = 1; m <= 5; m++) {
     s.voice.push(sayIn("cy", T0 + m * MIN + 10_000, `say ${m}`));
-    await runEarpiece({ now: T0 + (m + 1) * MIN, env: ON, store: s, withinFn: withinRect, sendMail: mail });
+    await runEarpiece({ now: T0 + (m + 1) * MIN, env: ON, store: s, withinFn: withinRect, fetchImpl });
   }
   assert.equal(sent.length, 2, "one wake before the period, ONE for the five inside it");
-  const env2 = JSON.parse(/```json\n([\s\S]*)\n```/.exec(sent[1].body)[1]);
+  const env2 = JSON.parse(sent[1].body);
   assert.deepEqual(env2.said.map((x) => x.text), ["say 1", "say 2", "say 3", "say 4", "say 5"]);
   assert.equal(env2.wake_n, 2);
 });
@@ -168,7 +178,7 @@ test("a wake with nothing new since the last is not sent", async () => {
   const ev = hallEvent();
   const s = memStore({ events: [ev], rsvps: [{ event: ev.id, handle: "ana", household: "hh:ana", harness: "mail", budget: 6 }],
     voice: [sayOutside("bo", T0 + 30_000, "not at the hall")] });
-  const out = await runEarpiece({ now: T0 + 20 * MIN, env: ON, store: s, withinFn: withinRect, sendMail: async () => ({ ok: true }) });
+  const out = await runEarpiece({ now: LETTER, env: ON, store: s, withinFn: withinRect, sendMail: async () => ({ ok: true }) });
   assert.equal(out.counts["nothing-new"], 1);
   assert.equal(s.wakes.length, 0);
 });
@@ -299,7 +309,7 @@ test("the resident's CURRENT harness is woken; letta and no row fall back to mai
   const voice = [sayIn("di", T0 + 30_000, "hello")];
   const s = memStore({ events: [ev], rsvps, harnesses, voice });
   const letters = [];
-  await runEarpiece({ now: T0 + MIN, env: ON, store: s, withinFn: withinRect, sendMail: async (l) => { letters.push(l); return { ok: true }; } });
+  await runEarpiece({ now: LETTER, env: ON, store: s, withinFn: withinRect, sendMail: async (l) => { letters.push(l); return { ok: true }; } });
   const by = Object.fromEntries(s.wakes.map((w) => [w.handle, w]));
   assert.equal(by.ana.status, "fell_back");
   assert.match(by.ana.detail, new RegExp(FELL_BACK_NO_LETTA.replace(/[.;']/g, ".")));
@@ -310,7 +320,7 @@ test("the resident's CURRENT harness is woken; letta and no row fall back to mai
   assert.deepEqual(s.opened.sort(), ["hh:ana", "hh:ana", "hh:bo", "hh:bo", "hh:cy", "hh:cy"], "one read and one log transaction per household, never one across them");
 
   const s2 = memStore({ events: [ev], rsvps: [rsvps[2]], voice });
-  await runEarpiece({ now: T0 + MIN, env: ON, store: s2, withinFn: withinRect });
+  await runEarpiece({ now: LETTER, env: ON, store: s2, withinFn: withinRect });
   assert.equal(s2.wakes[0].status, "failed");
   assert.equal(s2.wakes[0].detail, MAIL_STOPPED);
   assert.equal(s2.wakes[0].budget_left, 6);
@@ -325,7 +335,7 @@ test("a household's transaction never sees another household's harness", async (
     harnesses: [{ handle: "ana", household: "hh:other", kind: "webhook", address: "https://x.example/", secret: "s" }],
     voice: [sayIn("bo", T0 + 30_000, "hi")] });
   const posted = [];
-  await runEarpiece({ now: T0 + MIN, env: ON, store: s, withinFn: withinRect, fetchImpl: async (u) => { posted.push(u); return { status: 200 }; },
+  await runEarpiece({ now: LETTER, env: ON, store: s, withinFn: withinRect, fetchImpl: async (u) => { posted.push(u); return { status: 200 }; },
     sendMail: async () => ({ ok: true }) });
   assert.equal(posted.length, 0);
   assert.equal(s.wakes[0].status, "fell_back");
@@ -346,7 +356,7 @@ test("an event at a bare point hears within the say lane's earshot and has no do
     voice: [{ actor: "bo", at: iso(T0 + 1000), at_anchor: "the-town/let-there-be-light", at_dx: 30, at_dy: 0, payload: { text: "near" } },
             { actor: "cy", at: iso(T0 + 2000), at_anchor: "the-town/let-there-be-light", at_dx: 90, at_dy: 0, payload: { text: "far" } }] });
   const letters = [];
-  await runEarpiece({ now: T0 + MIN, env: ON, store: s, earshotM: 60, sendMail: async (l) => { letters.push(l); return { ok: true }; } });
+  await runEarpiece({ now: LETTER, env: ON, store: s, earshotM: 60, sendMail: async (l) => { letters.push(l); return { ok: true }; } });
   const e = JSON.parse(/```json\n([\s\S]*)\n```/.exec(letters[0].body)[1]);
   assert.deepEqual(e.said.map((x) => x.text), ["near"]);
   assert.deepEqual([e.walked_in, e.walked_out], [[], []]);
@@ -364,12 +374,127 @@ test("letterFor renders the envelope as prose with the JSON in a fence, and carr
 test("decideWake: a failed wake occupies its period but is not charged", () => {
   const ev = hallEvent();
   const news = () => ({ said: [{ who: "bo", at: iso(T0), text: "x" }], walked_in: [], walked_out: [] });
-  const rsvp = { harness: "mail", budget: 1 };
-  const d = decideWake({ event: ev, rsvp, harness: null, history: [{ status: "failed", sent_at: iso(T0 + MIN) }], now: T0 + 3 * MIN, news });
+  const rsvp = { harness: "webhook", budget: 1 };
+  const harness = { kind: "webhook", address: "https://x.example/", secret: "s" };
+  const d = decideWake({ event: ev, rsvp, harness, history: [{ status: "failed", sent_at: iso(T0 + MIN) }], now: T0 + 3 * MIN, news });
   assert.equal(d.why, "coalescing");
-  const d2 = decideWake({ event: ev, rsvp, harness: null, history: [{ status: "failed", sent_at: iso(T0 + MIN) }], now: T0 + 7 * MIN, news });
+  const d2 = decideWake({ event: ev, rsvp, harness, history: [{ status: "failed", sent_at: iso(T0 + MIN) }], now: T0 + 7 * MIN, news });
   assert.equal(d2.act, "wake");
   assert.equal(d2.budget_left, 0);
+  // and a failed LETTER waits the same period inside its lead window
+  const mail = { harness: "mail", budget: 1 };
+  assert.equal(decideWake({ event: ev, rsvp: mail, harness: null, history: [{ status: "failed", harness: "mail", sent_at: iso(LETTER) }], now: LETTER + 3 * MIN, news }).why, "coalescing");
+  assert.equal(decideWake({ event: ev, rsvp: mail, harness: null, history: [{ status: "failed", harness: "mail", sent_at: iso(LETTER) }], now: LETTER + 6 * MIN, news }).act, "wake");
+});
+
+// ── the mail sender: postmark-pen, one letter per event per crossing ────────
+
+test("decideWake · mail rides the crossing: nothing before the lead, one letter in it, none twice for one crossing, the next crossing writes again", () => {
+  const ev = hallEvent({ ends: iso(T0 + 30 * 60 * MIN) });                          // 2026-10-05T02:00Z
+  const news = () => ({ said: [{ who: "bo", at: iso(T0), text: "x" }], walked_in: [], walked_out: [] });
+  const rsvp = { harness: "mail", budget: 6 };
+  const C1 = Date.parse("2026-10-04T00:00:00Z"), C2 = Date.parse("2026-10-04T12:00:00Z");
+  assert.equal(decideWake({ event: ev, rsvp, harness: null, history: [], now: T0 + 5 * MIN, news }).why, "before-the-crossing");
+  assert.equal(decideWake({ event: ev, rsvp, harness: null, history: [], now: C1 - (MAIL_LEAD_MIN + 1) * MIN, news }).why, "before-the-crossing");
+  const d = decideWake({ event: ev, rsvp, harness: null, history: [], now: C1 - MAIL_LEAD_MIN * MIN, news });
+  assert.equal(d.act, "wake");
+  assert.equal(crossingFor(C1 - MAIL_LEAD_MIN * MIN), iso(C1));
+  const wrote = [{ status: "delivered", harness: "mail", sent_at: iso(C1 - MAIL_LEAD_MIN * MIN) }];
+  assert.equal(decideWake({ event: ev, rsvp, harness: null, history: wrote, now: C1 - 1 * MIN, news }).why, "this-crossing",
+    "a second run inside the same lead writes no second letter, though the 5-minute period has passed");
+  assert.equal(decideWake({ event: ev, rsvp, harness: null, history: wrote, now: C1 + 60 * MIN, news }).why, "before-the-crossing");
+  const d2 = decideWake({ event: ev, rsvp, harness: null, history: wrote, now: C2 - 5 * MIN, news });
+  assert.equal(d2.act, "wake");
+  assert.equal(d2.since, wrote[0].sent_at, "the next letter reads from the last one");
+  assert.equal(d2.wake_n, 2);
+});
+
+test("decideWake · an event that ends between crossings gets its one letter in its last minutes; the crossing it sails on is the next", () => {
+  const ev = hallEvent({ doors_open: iso(Date.parse("2026-10-04T13:00:00Z")), starts: iso(Date.parse("2026-10-04T13:00:00Z")),
+    ends: iso(Date.parse("2026-10-04T15:00:00Z")) });
+  const news = () => ({ said: [{ who: "bo", at: iso(T0), text: "x" }], walked_in: [], walked_out: [] });
+  const rsvp = { harness: "mail", budget: 6 };
+  assert.equal(decideWake({ event: ev, rsvp, harness: null, history: [], now: Date.parse("2026-10-04T14:49:00Z"), news }).why, "before-the-crossing");
+  const d = decideWake({ event: ev, rsvp, harness: null, history: [], now: Date.parse("2026-10-04T14:50:00Z"), news });
+  assert.equal(d.act, "wake");
+  assert.equal(crossingFor(Date.parse("2026-10-04T14:50:00Z")), "2026-10-05T00:00:00.000Z");
+});
+
+test("THE FALSIFIER · two mail RSVPs, one webhook, three says: at the crossing exactly two letters from postmark-pen, each carrying the three; the next crossing with nothing new writes nothing", async () => {
+  const db = fixtureDb();                        // residents: wright, limen, postmaster
+  const clone = tempClone();
+  try {
+    const C1 = Date.parse("2026-10-04T00:00:00Z"), C2 = Date.parse("2026-10-04T12:00:00Z");
+    const ev = hallEvent({ ends: iso(C2 + 2 * 60 * MIN) });
+    const s = memStore({ events: [ev],
+      rsvps: [
+        { event: ev.id, handle: "wright", household: "hh:keemin", harness: "mail", budget: 6 },
+        { event: ev.id, handle: "limen", household: "hh:limen", harness: "mail", budget: 6 },
+        { event: ev.id, handle: "ana", household: "hh:ana", harness: "webhook", budget: 6 },
+      ],
+      harnesses: [{ handle: "ana", household: "hh:ana", kind: "webhook", address: "https://ana.example/wake", secret: "s" }],
+      // three periods apart, so a mail port on the 5-minute period would write three letters each
+      voice: [sayIn("bo", T0 + 41 * MIN, "one"), sayIn("cy", T0 + 62 * MIN, "two"), sayIn("bo", T0 + 93 * MIN, "three")] });
+    const posted = [];
+    const fetchImpl = async (u) => { posted.push(u); return { status: 200 }; };
+    const sendMail = penMailPort({ db, clone });
+    // the timer's cadence, one run every 5 minutes from the doors to the second crossing
+    for (let t = T0 + 5 * MIN; t < C2; t += 5 * MIN) await runEarpiece({ now: t, env: ON, store: s, withinFn: withinRect, fetchImpl, sendMail });
+
+    const outbox = join(clone, "WHITE_PAGES", PEN_HANDLE, "outbox");
+    const files = existsSync(outbox) ? readdirSync(outbox).sort() : [];
+    assert.equal(files.length, 2, `exactly two letters, one each: ${files.join(", ")}`);
+    const texts = files.map((f) => readFileSync(join(outbox, f), "utf8"));
+    for (const [to, text] of [["limen", texts.find((t) => /\nto: limen\n/.test(t))], ["wright", texts.find((t) => /\nto: wright\n/.test(t))]]) {
+      assert.ok(text, `a letter to ${to}`);
+      assert.match(text, /\nfrom: postmark-pen\n/);
+      assert.match(text, /\nthread: new\n/);
+      const e = JSON.parse(/```json\n([\s\S]*)\n```/.exec(text)[1]);
+      assert.deepEqual(e.said.map((x) => x.text), ["one", "two", "three"]);
+      assert.equal(e.event.id, ev.id);
+    }
+    assert.ok(!texts.some((t) => /\nto: ana\n/.test(t)), "the webhook RSVP gets no letter");
+    assert.equal(posted.length, 3, "the webhook RSVP keeps its own 5-minute period: one wake per period with news, and no letter");
+
+    const mailRows = s.wakes.filter((w) => w.harness === "mail");
+    assert.deepEqual(mailRows.map((w) => [w.handle, w.status, w.wake_n, w.budget_left]).sort(),
+      [["limen", "delivered", 1, 5], ["wright", "delivered", 1, 5]], "one delivered · mail row each, the budget down by one");
+    for (const w of mailRows) {
+      assert.match(w.detail, /^letter postmark-pen-\d{4}-\d{2}-\d{2}-to-(wright|limen)-the-reading-wake-1 for the 00:00Z crossing$/);
+      assert.equal(crossingFor(w.sent_at), iso(C1), "written before the boundary, so it sails at it");
+    }
+    assert.equal(s.wakes.filter((w) => w.handle !== "ana").length, 2, "the second crossing, with nothing new, wrote no row");
+  } finally { rmSync(clone, { recursive: true, force: true }); }
+});
+
+test("the pen's key: postmark-pen and only postmark-pen; a key that does not hold it bounces 403 at the office's own fence", async () => {
+  const db = fixtureDb();
+  const clone = tempClone();
+  try {
+    assert.deepEqual([...PEN_KEY.handles], [PEN_HANDLE]);
+    const r = await penMailPort({ db, clone })({ to: "limen", title: "The Reading (wake 1)", body: "hello" });
+    assert.equal(r.ok, true);
+    assert.match(r.letter_id, /^postmark-pen-\d{4}-\d{2}-\d{2}-to-limen-the-reading-wake-1$/);
+    const stranger = { household: "keemin", handles: new Set(["wright"]) };
+    await assert.rejects(() => penMailPort({ db, clone, key: stranger })({ to: "limen", title: "x", body: "y" }),
+      (e) => e.code === 403 && /"postmark-pen" is not one of your residents/.test(e.defect));
+    const none = await penMailPort({ db: null, clone })({ to: "limen", title: "x", body: "y" });
+    assert.equal(none.ok, false);
+  } finally { rmSync(clone, { recursive: true, force: true }); }
+});
+
+test("a pen bounce is logged failed and uncharged with the fence's own sentence", async () => {
+  const ev = hallEvent();
+  const s = memStore({ events: [ev], rsvps: [{ event: ev.id, handle: "nobody", household: "hh:nobody", harness: "mail", budget: 6 }],
+    voice: [sayIn("bo", T0 + 30_000, "hi")] });
+  const db = fixtureDb();
+  const clone = tempClone();
+  try {
+    await runEarpiece({ now: LETTER, env: ON, store: s, withinFn: withinRect, sendMail: penMailPort({ db, clone }) });
+    assert.equal(s.wakes[0].status, "failed");
+    assert.equal(s.wakes[0].budget_left, 6);
+    assert.match(s.wakes[0].detail, /no resident "nobody"/);
+  } finally { rmSync(clone, { recursive: true, force: true }); }
 });
 
 // ── the SQL, through the acts-pen stub ──────────────────────────────────────
