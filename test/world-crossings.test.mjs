@@ -42,7 +42,7 @@ const WHEELHOUSE = "the-town/the-wheelhouse";
 /** A whole office, in a closure: the world off the clone's fold, one resident
  *  standing wherever we put her, an in-memory ledger, and a pen that appends to
  *  it. The pen's contract is the exec's — lines in, `within` out. */
-async function officeWith({ at = 200, standing = { x: -30, y: 40 }, ledger = "" } = {}) {
+async function officeWith({ at = 200, standing = { x: -9, y: 35.5 }, ledger = "" } = {}) { // POS-220: the default standing is INSIDE the post office (its anchor) — a door is entered only from within its extent
   const { readFileSync } = await import("node:fs");
   const worldState = JSON.parse(readFileSync(join(CLONE, "WORLD", "world-state.json"), "utf8"));
   const mod = await import(`file:///${join(CLONE, "tools", GRAMMAR).replace(/\\/g, "/")}`);
@@ -207,7 +207,7 @@ test("...and every such refusal carries the plan's bundled WALK as a field, not 
   assert.equal(o.written.length, 0);
 });
 
-test("...and the reach itself still admits — within earshot of the TARGET is at the door", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
+test("...and standing INSIDE the target still admits — within its extent is at the door", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
   // The default fixture standing is the one every chain falsifier above enters
   // from; if this test reddens, the guard has started refusing a walker who is
   // standing at the door, and every chain law above it is standing on a corpse.
@@ -299,28 +299,26 @@ test("...and from the parcel's own reach the chain still enters the outer links 
   assert.equal(o.written.length, answer.entered.length, "one row per link actually crossed");
 });
 
-test("the margin is measured at the target, and it is ±1 m of the town's own earshot",
+test("the door is the EXTENT: half a metre inside its edge admits, one metre outside refuses — no earshot enter (POS-220)",
   { skip: !HAVE_CLONE && WHY_NOT }, async () => {
-  // Observable only because the measure moved: the post office is 9 × 26 m, so
-  // 59 m from its anchor is outside its extent and the margin leg is the only
-  // thing that can admit. Under the old code both of these passed on the town
-  // centre's containment and this test could not exist. CAN-FAIL: widen or
-  // narrow EARSHOT_M and one of the two assertions reddens.
-  const { EARSHOT_M } = await import("../src/reach.mjs");
+  // Keemin, 2026-09-25: "remove the earshot enter, so must be within extent".
+  // Until then a 60 m reach from the ANCHOR admitted a resident 3 m outside the
+  // taproom (postmaster from the mooring). CAN-FAIL: restore the reach leg
+  // (drop earshotM: 0 in world-crossings.mjs) and the second assertion reddens.
   const { readFileSync } = await import("node:fs");
   const world = JSON.parse(readFileSync(join(CLONE, "WORLD", "world-state.json"), "utf8"));
   const po = world.marks.find((m) => m.id === SHIP);
+  const edge = po.at.x + po.extent.w / 2;
 
-  const near = await officeWith({ standing: { x: po.at.x + EARSHOT_M - 1, y: po.at.y } });
-  const admitted = await enterViaOffice(CLONE, { mark: SHIP, accept: true }, key("postmaster"), near.deps);
-  assert.ok((admitted.entered ?? []).length > 0 || admitted.already,
-    `${EARSHOT_M - 1} m from the post office's anchor is at its door`);
+  const inside = await officeWith({ standing: { x: edge - 0.5, y: po.at.y } });
+  const admitted = await enterViaOffice(CLONE, { mark: SHIP, accept: true }, key("postmaster"), inside.deps);
+  assert.ok((admitted.entered ?? []).length > 0 || admitted.already, "half a metre inside the edge is at its door");
 
-  const far = await officeWith({ standing: { x: po.at.x + EARSHOT_M + 1, y: po.at.y } });
-  const e = await enterViaOffice(CLONE, { mark: SHIP, accept: true }, key("postmaster"), far.deps)
+  const outside = await officeWith({ standing: { x: edge + 1, y: po.at.y } });
+  const e = await enterViaOffice(CLONE, { mark: SHIP, accept: true }, key("postmaster"), outside.deps)
     .then(() => null, (err) => err);
-  assert.ok(e && e.code === 409, `${EARSHOT_M + 1} m is not`);
-  assert.equal(far.written.length, 0);
+  assert.ok(e && e.code === 409, "one metre outside the edge is not — the 60 m reach is gone");
+  assert.equal(outside.written.length, 0);
 });
 
 test("no refusal this door speaks calls the margin a DOORSTEP — the resident's word stays the resident's",
@@ -338,7 +336,7 @@ test("no refusal this door speaks calls the margin a DOORSTEP — the resident's
   for (const b of sentences) {
     assert.doesNotMatch(b, /doorstep/i, `a bounce still says "doorstep": ${b.slice(0, 120)}`);
   }
-  assert.match(src, /a door is entered from within its reach/, "and the rule says the word it means");
+  assert.match(src, /a door is entered from within its extent/, "and the rule says the word it means");
 });
 
 
