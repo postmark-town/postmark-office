@@ -70,6 +70,9 @@ import { resolve } from "node:path";
 import { sketchbookNameForKey } from "./household-logins.mjs";
 import { markRecord } from "./mark-record.mjs";
 import { ROOT_PREFIX, pathFor } from "./world-journal.mjs";
+// The declared-parent law (postmark#3020) — the word, the predicate and the
+// sentence, minted once and shared with the amend door.
+import { OUTSIDE_DECLARED_PARENT, declaredParentRefusal, outsideParentDetail } from "./mark-declared-parent.mjs";
 import { draftBranch, mainRef } from "./world-branches.mjs";
 import { fileFramer, sketchbookBase, writeDownHousehold } from "./world-drain.mjs";
 import { WORLD_CLONE } from "./world-store.mjs";
@@ -444,6 +447,51 @@ export function planStoreWriteDown(marks, { publishedPathOf = null, canonBytesAt
           + "so this refuses instead.",
         );
       }
+      // ── THE POINT MUST BELONG AT THE PATH (postmark#3020, Keemin 2026-09-20) ─
+      //
+      // The conversion below is faithful and always was — that is the 2026-09-18
+      // fix and it is not in question. What it cannot notice on its own is that
+      // the world number it was handed does not belong at the filing it is
+      // framing FOR. The Snug mooring: an amend carrying a point five kilometres
+      // from the harbour it is filed in, converted correctly into a file that
+      // then said "in the harbour" over a geometry that said "at sea", and stood
+      // there through S71, S72 and S73.
+      //
+      // The path declares the parent, so the path and the point have to agree.
+      // When they do not, this row refuses EXACTLY as the three frame refusals
+      // above it do, and that is said precisely rather than comfortably: a
+      // `FoldInputRefusal` is THROWN, so it refuses the CROSSING, not just the
+      // row. `deploy/settlement-classify.mjs` grades it and
+      // `deploy/refused-marks.mjs` names it, both off the generic shape — neither
+      // enumerates reason words, so a new word needs no change there and gets
+      // none. (`tools/settlement-isolate.mjs`, the pass that keeps one bad mark
+      // from refusing the town, answers a RED SUITE and not a fold-input
+      // refusal; this does not reach it, and nothing here changes that either
+      // way.) A declared-parent refusal is therefore a loud stop, chosen because
+      // the alternative is a mark in the wrong place forever — the same trade
+      // the three refusals above already make.
+      //
+      // The predicate is the clone's own `pointWithinMark`, riding the framer;
+      // the door runs the same one over the same parent and refuses under the
+      // same word, and `mark-outside-declared-parent.test.mjs` asserts the two
+      // agree on these numbers rather than trusting that they do.
+      // THE NARROWING (Keemin, 2026-09-20): only an amend that actually MOVES
+      // the ground is asked the containment question. Measured over the live
+      // record, the unnarrowed guard would have refused nine standing marks'
+      // next amend, and eight of them are outside a region whose ring the
+      // FOUNDER redrew on 2026-08-24 — not their owners' act, and a words-only
+      // amend of one of those must go through. `declaredParentRefusal` carries
+      // the gate so that neither door can hold it and the other forget it; the
+      // prior here is the last published fold's own record for the mark, which
+      // is in world coordinates exactly as this row's numbers are.
+      const declared = typeof toFileFrame.declaredParentOf === "function" ? toFileFrame.declaredParentOf(path) : null;
+      const standing = typeof toFileFrame.standingMark === "function" ? toFileFrame.standingMark(m.id) : null;
+      const outside = declared && declaredParentRefusal({
+        id: m.id, prior: standing, next: rec,
+        parentId: declared.parentId, parent: declared.parent, pointWithinMark: toFileFrame.pointWithinMark,
+      });
+      if (outside) throw new FoldInputRefusal(OUTSIDE_DECLARED_PARENT, outsideParentDetail(outside, path));
+
       const shifted = toFileFrame({ at: rec.at ?? null, points: rec.points ?? null, parent_id: rec.parent_id ?? null, path });
       if (!shifted || !Object.keys(shifted).length) {
         throw new FoldInputRefusal(

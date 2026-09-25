@@ -84,7 +84,7 @@ async function main() {
 
   const tools = join(CLONE, "tools");
   const tEngine = performance.now();
-  const { loadMarks, marksContain, containmentParents, containmentParentOf, placementParent, worldRootOf,
+  const { loadMarks, containmentParents, containmentParentOf, placementParent, worldRootOf,
           PARCEL_CLAIM_CAP, PARCEL_CAP_LAW_DATE, PARCEL_EXTENT_M,
           worldToFile, ringToFile, COORDS_FIELD, COORDS_RELATIVE } =
     await import(pathToFileURL(join(tools, "marks-fold.mjs")));
@@ -274,37 +274,80 @@ async function main() {
     return err(409, "a mark already sits in that spot", `the directory ${relative(MARKS_DIR, dir)} exists — pick another slug`);
 
   // sovereignty guard — REPEALED for sited marks (Keemin-ruled 2026-08-17,
-  // party night; little-bird's cup was the test case). The old law refused any
-  // mark inside another household's walls; the consent law supersedes it: a
-  // gift indoors stands NEUTRAL until the owner speaks, welcome couples it,
-  // opposed returns it honorably — the same regime parcels already live under.
-  // The guard REMAINS for parcel claims: claiming GROUND inside another's
-  // walls is a land claim, not a gift, and the return machinery is built for
-  // marks, not ground. (Guard era: 2026-08-12 → 2026-08-17.)
-  if (p.kind === "parcel") {
-    let manifest = null;
-    try { manifest = JSON.parse(readFileSync(join(CLONE, "seeding", "manifest.json"), "utf8")); } catch { /* no manifest → no homes to protect */ }
-    for (const h of manifest?.homes ?? []) {
-      if (h.household === p.by) continue;
-      const home = byId.get(`${h.household}/${h.home_id}`);
-      if (home?.at && marksContain(home, { at: p.at, extent: p.extent, points: p.points }))
-        return err(403, `that spot is inside ${h.household}'s home`, "leave a mark near a home if you like, but not within someone else's walls — pick a spot outside them");
-    }
-  }
+  // party night; little-bird's cup was the test case), and now GONE for parcels
+  // too (postmark#3025, 2026-09-20). It read the July atlas painting
+  // `seeding/manifest.json` and refused a parcel contained by another
+  // household's painted house. Measured over the live fold before deletion: of
+  // the 74 painted houses still in the record, only four can contain a 25 m
+  // dial and all four ARE parcels, which `tools/marks-fold.mjs § admissibility`
+  // already refuses by overlap — the wider test. No sited painted house is as
+  // large as the dial, so this could not fire on a house at all.
+  //
+  // DELETED HERE IN THE SAME COMMIT as its twin in `world.mjs`'s leave-mark, so
+  // the two holders of this door cannot disagree about it — the #2888
+  // split-brain shape, where one law lived in one executor for a month and the
+  // sibling's falsifiers stayed green over the gap.
 
   // SCHEMA v3, feature-detected: in a relative tree a nested record's at:/points:
   // are offsets from the PARENT'S CENTRE. The resident speaks world coordinates
   // at the door; the FILE speaks the frame — the same conversion the migrator
   // used, from the clone's own fold. Root-level marks are framed on the origin,
   // so their numbers do not change; an old clone (no worldToFile) keeps v2
-  // behavior byte-for-byte. If this conversion is ever wrong, the lint+fold gate
-  // below refuses the write — the door cannot land a misplaced record.
+  // behavior byte-for-byte.
+  //
+  // WHAT THE GATE DOES AND DOES NOT REFUSE. This comment used to end "if this
+  // conversion is ever wrong, the lint+fold gate below refuses the write — the
+  // door cannot land a misplaced record". There IS no gate below: a draft costs
+  // nothing (header, 2026-08-22), and the lint and the fold run at the
+  // Settlement, not here. What they judge is whether a record PARSES and whether
+  // its composed footprint is admissible — overlap, standing, consent. A number
+  // written in the wrong frame parses, and it composes to a real point on the
+  // ground, so it is admissible: the gate reads a mark that has MOVED, not a
+  // mark that is misplaced, and it has no way to tell the two apart. Nothing
+  // downstream refuses this; getting the origin right here is the whole guard.
+  // It did not, twice — `vermillion/the-pando-peak` (2026-08-27, fixed at the
+  // drain) and `current-the-reader/the-snug-mooring` (2026-09-14, world
+  // `3a3a645c`: the resident's correct absolute landed in a nested slot and the
+  // fold read it as an offset, 5 km out to sea).
+  //
+  // THE ORIGIN, for a sited/parcel mark the frozen manifest already nests. Such
+  // a mark carries no `parent_id` — geometry decides its containment — so the
+  // `parentId` test below is false for it and the conversion was skipped
+  // entirely: the resident's ABSOLUTE went into a relative slot verbatim. A
+  // FRESH sited leave files at `WORLD/marks/<by>/<slug>/`, which is root level,
+  // where absolute IS the file frame and nothing needs shifting; the hole is
+  // only the amend of a fossil, whose filing is nested. Its origin is the
+  // composed centre of the mark that FRAMES it — the same anchor
+  // `world-journal.mjs § pathFor` takes ("the innermost containing mark is the
+  // anchor") and the same one `world-drain.mjs § fileFramer` already takes.
+  //
+  // Read from the fold's own answer for that record (`_origin`), not
+  // re-derived from the directory: the frame is the nearest positioned ancestor
+  // THAT BINDS the record (marks-fold § the tier binding), which steps past an
+  // ancestor the record outranks. Measured on world `58d4722e`, 7 of the 385
+  // frozen nested sited marks are framed on a mark that is NOT their directory
+  // parent, so a directory-parent centre would file those 7 against a frame the
+  // fold does not use — the same defect in a new place. The fossil the manifest
+  // names but the tree no longer holds has no such record; it falls back to the
+  // mark standing in `parentDir` (which IS `dirname(fossilDir)` by construction
+  // above — one name, so the two cannot drift), and to the null origin when
+  // nothing stands there.
+  //
+  // The door stays CONDEMNED. Nothing else about it changes.
   const rootRec = marks.find((m) => m.id === "the-town/let-there-be-light");
   const relativeTree = !!worldToFile && COORDS_FIELD &&
     String(rootRec?.[COORDS_FIELD] ?? "").trim() === COORDS_RELATIVE;
+  const frameOrigin = () => {
+    if (parentId) return byId.get(parentId)?.at ?? null;   // composed world centre — loadMarks composed it
+    if (!fossilDir) return null;                           // root-level filing: absolute IS the file frame
+    const fossilRec = byId.get(id);
+    if (fossilRec?._origin) return fossilRec._origin;      // the fold's own frame for this very record
+    const framing = marks.find((m) => m._dir && resolve(m._dir) === resolve(parentDir));
+    return framing?.at ?? null;
+  };
   const fileRec = { ...p };
-  if (relativeTree && parentId) {
-    const origin = byId.get(parentId)?.at ?? null;   // composed world centre — loadMarks composed it
+  if (relativeTree) {
+    const origin = frameOrigin();
     if (origin) {
       if (fileRec.at) fileRec.at = worldToFile(fileRec.at, origin);
       if (fileRec.points) fileRec.points = ringToFile(fileRec.points, origin);

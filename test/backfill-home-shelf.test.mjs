@@ -22,16 +22,24 @@ import { join } from "node:path";
 process.env.R2_ACCOUNT_ID = "test-account";
 process.env.R2_ACCESS_KEY_ID = "test-key";
 process.env.R2_SECRET_ACCESS_KEY = "test-secret";
-process.env.MEDIA_QUOTA_BYTES = "100"; // per resident — tiny, so the door's wall is reachable
+process.env.MEDIA_QUOTA_BYTES = "150"; // per resident — tiny, so the door's wall is reachable
+// 150 rather than 100 since POS-150: BIG_JPG had to become a real picture, and a
+// real JPEG has a floor of ~267 bytes (its quantisation and Huffman tables) where
+// the old hand-built one was 204. The dial moved so the same two arithmetics
+// still hold — one file over a two-resident wall, two files under a three’s —
+// and neither test changed what it is about.
 
 const { uploadMedia, mediaUrlOk, MEDIA_BASE } = await import("../src/media.mjs");
 const { backfillHomeShelf } = await import("../tools/backfill-home-shelf.mjs");
 
 // the same real 1×1 transparent PNG test/media.test.mjs uses (70 bytes)
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
-// 204 bytes, still a JPEG by the office's own reading (SOI at the front, EOI at
-// the back) — big enough to walk into a 200-byte ceiling
-const BIG_JPG = Buffer.concat([Buffer.from([0xff, 0xd8]), Buffer.alloc(200, 0x41), Buffer.from([0xff, 0xd9])]);
+// A REAL 2×2 JPEG, 269 bytes — big enough to walk into a 200-byte ceiling and,
+// since POS-150, actually a picture. The 204-byte SOI + 200 × 0x41 + EOI that
+// stood here was a JPEG only by the office's old reading of its two ends; the
+// door now decodes the middle too, so it would be refused before it ever
+// reached the wall this fixture exists to test.
+const BIG_JPG = Buffer.from("/9j/2wBDAAoHBwgHBgoICAgLCgoLDhgQDg0NDh0VFhEYIx8lJCIfIiEmKzcvJik0KSEiMEExNDk7Pj4+JS5ESUM8SDc9Pjv/2wBDAQoLCw4NDhwQEBw7KCIoOzs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozv/wAARCAACAAIDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAb/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAwb/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwCXACnH/9k=", "base64");
 
 const odb = () => new DatabaseSync(":memory:");
 const stubPut = () => { const calls = []; return { calls, put: async (...a) => { calls.push(a); } }; };
@@ -143,13 +151,13 @@ test("SAME CONTENT-ADDRESSED DEDUP: two handles of one household leading with th
 test("SAME PER-HOUSEHOLD QUOTA LEDGER IN ODB: the media door's own wall stops the backfill, and says so by name", async () => {
   const dir = staging({ "a.png": PNG, "b.jpg": BIG_JPG });
   const { calls, put } = stubPut();
-  const house = door("two-up", ["a", "b"]); // two residents ⇒ a 200-byte ceiling
+  const house = door("two-up", ["a", "b"]); // two residents ⇒ a 300-byte ceiling
   try {
     const { urls, skipped } = await backfillHomeShelf({
       images: { a: { file: "a", format: "png" }, b: { file: "b", format: "jpg" } },
       stagingDir: dir, householdFor: houses({ a: house, b: house }), upload: uploadMedia, odb: odb(), put,
     });
-    assert.ok(urls.a, "70 of the household's 200 bytes fits");
+    assert.ok(urls.a, "70 of the household's 300 bytes fits");
     assert.equal(urls.b, undefined, "the next one does not");
     assert.equal(skipped.refused[0].code, 413);
     assert.match(skipped.refused[0].why, /media is full/);

@@ -229,7 +229,13 @@ test("PATCH /profile/{handle}/avatar reaches the REST image door and keeps its b
       });
       avatarServer.on("exit", (code) => no(new Error(`avatar fixture server exited early (${code})`)));
     });
-    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xdb, 0xff, 0xd9]);
+    // A REAL 2×2 JPEG since POS-150. The six-byte SOI+DQT+EOI that stood here
+    // passed the sniff and the enclosure check and decoded to nothing — which
+    // is now a 422, correctly, and so it can no longer stand in for a picture
+    // a resident actually uploaded. The truncated case below keeps its own
+    // hand-built bytes: it is asserting the ENCLOSURE refusal, which still
+    // fires first and still speaks the same words.
+    const jpeg = Buffer.from("/9j/2wBDAAoHBwgHBgoICAgLCgoLDhgQDg0NDh0VFhEYIx8lJCIfIiEmKzcvJik0KSEiMEExNDk7Pj4+JS5ESUM8SDc9Pjv/2wBDAQoLCw4NDhwQEBw7KCIoOzs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozv/wAARCAACAAIDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAb/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAwb/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwCXACnH/9k=", "base64");
     const saved = await fetch(`http://127.0.0.1:${port}/profile/wright/avatar`, {
       method: "PATCH",
       headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json" },

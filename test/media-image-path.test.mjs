@@ -46,7 +46,13 @@ const originals = (calls) => calls.filter(([k]) => !/-(?:96|256)\.[a-z]+$/.test(
 
 // ── the whole point: the new lane lands exactly where the old one lands ──────
 
-test("path ≡ base64: a file in your own house answers with the same URL, and the receipt names the town sha", async (t) => {
+// POS-150 retired the base64 lane, so the equivalence this test was built on —
+// "path ≡ base64" — no longer has a second side. What it was actually proving
+// is that the address is CONTENT-addressed and the charge is per file, not per
+// door, and that survives the retirement: the same file sent twice down the one
+// remaining lane must answer the same URL and be charged once. The lost half is
+// not lost coverage; it is the door the next test now proves is closed.
+test("the same file answers with the same URL and is charged once, and the receipt names the town sha", async (t) => {
   const clone = townFixture(t);
   const db = odb();
   const { calls, put } = stubPut();
@@ -59,10 +65,10 @@ test("path ≡ base64: a file in your own house answers with the same URL, and t
   assert.match(viaPath.read_at.town_sha, /^[0-9a-f]{40}$/, "the receipt names the commit the file was read at");
   assert.equal(viaPath.read_at.town_sha, headOf(clone), "and it is THIS clone's sha, not some repo above the temp dir");
 
-  const viaB64 = await uploadMedia({ image: PNG_B64 }, key(), db, { put });
-  assert.equal(viaB64.url, viaPath.url, "content-addressed: the lane cannot change the address");
-  assert.equal(viaB64.already, true);
-  assert.equal(viaB64.quota.used, 70, "one charge for one file, whichever door it came through");
+  const again = await uploadMedia({ image_path: "HOME/house.png" }, key(), db, { put, clone });
+  assert.equal(again.url, viaPath.url, "content-addressed: the spelling of the path cannot change the address");
+  assert.equal(again.already, true);
+  assert.equal(again.quota.used, 70, "one charge for one file, however many times it is sent");
   assert.equal(originals(calls).length, 1, "and storage was written exactly once");
 });
 
@@ -180,11 +186,25 @@ test("bytes are still the law on the path lane: a text file in your own house bo
   assert.equal(calls.length, 0, "nothing reached storage");
 });
 
-test("all three inputs are named cheapest-first, and only one may ride", async (t) => {
+test("both inputs are named cheapest-first, only one may ride, and base64 is named as retired", async (t) => {
   const clone = townFixture(t);
   assert.equal(mediaSourceOf({ image_path: "HOME/x.png" }), "image_path");
-  assert.throws(() => mediaSourceOf({ image_path: "a", image_url: "b", image: "c" }),
-    (e) => e.code === 422 && /send one image, not 3/.test(e.defect));
+  assert.throws(() => mediaSourceOf({ image_path: "a", image_url: "b" }),
+    (e) => e.code === 422 && /send one image, not 2/.test(e.defect));
+  // POS-150: `image` is no longer one of the inputs, and a call still carrying
+  // it must NOT fall through to "no image" — that answer is true and useless to
+  // a caller who plainly sent one. The refusal names the retirement and both
+  // live doors, in one sentence.
+  const legacy = (() => { try { mediaSourceOf({ image: "AAAA" }); return null; } catch (e) { return e; } })();
+  assert.equal(legacy.code, 422);
+  assert.match(legacy.defect, /no longer takes inline base64/);
+  assert.ok(legacy.hint.includes("image_path") && legacy.hint.includes("image_url"),
+    "the refusal names both doors that still work");
+  // and `image` beside a live input is not a two-input collision — it is the
+  // same retirement, answered the same way
+  assert.match(
+    (() => { try { mediaSourceOf({ image_path: "a", image: "AAAA" }); return null; } catch (e) { return e; } })().defect,
+    /no longer takes inline base64/);
   const empty = (() => { try { mediaSourceOf({}); return null; } catch (e) { return e; } })();
   assert.ok(empty.hint.indexOf("image_path") < empty.hint.indexOf("image_url"), "the hint teaches the cheapest lane first");
 

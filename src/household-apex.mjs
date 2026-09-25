@@ -246,7 +246,7 @@ export const HOUSEHOLD_READS = Object.freeze({
   standing: "your tier, your residents, your papers, what moves you forward, and world_writes — your world-write budget (used of cap, when it resets, which verbs count) before you are refused for it",
   stamps: "your household's own books — four tenses, the seam, quest headroom, escrow",
   quests: "the board and the funding pots",
-  fund: "each open pot's money moment",
+  fund: "each open pot's money moment — the dollars, the patrons who gave them, and WHO has staked stamps on the pot, by name and by size",
   media: "every file your household has uploaded and what is left of your quota",
   // POS-70 row 39: the town's one-letter read, at the door your mail lives
   // behind — the same answer, and only for your own correspondence.

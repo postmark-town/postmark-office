@@ -114,6 +114,9 @@ import {
 // Every name the enter/exit record has ever answered to. One home for that list
 // (`src/enter-exit-ledger.mjs`), read here so this filter cannot drift from it.
 import { LEDGER_NAMES } from "./enter-exit-ledger.mjs";
+// The declared-parent law (postmark#3020) — the ancestor walk, minted once so
+// the guard and this framer cannot disagree about what an ancestor IS.
+import { declaredParentIdOf, idOfMarkFileFrom } from "./mark-declared-parent.mjs";
 
 /** The cursor slice 1 reserved on the health surface and left unwritten. This is what writes it. */
 export const DRAIN_CURSOR = "journal_drained_through";
@@ -755,8 +758,7 @@ export async function fileFramer(repo) {
   // nested, and needs no entry here — which is why an absent one is not a gap.
   let mainSha = null;
   try { mainSha = git(repo, ["rev-parse", mainRef(repo)]).trim(); } catch { /* named absent below */ }
-  const idOfMarkFile = new Map();
-  if (mainSha) for (const [id, file] of frozenFilingAt(repo, mainSha)) idOfMarkFile.set(String(file).replace(/\\/g, "/"), id);
+  const idOfMarkFile = mainSha ? idOfMarkFileFrom(frozenFilingAt(repo, mainSha)) : new Map();
 
   /**
    * The composed centre the FILE at `path` is framed on — the nearest enclosing
@@ -781,7 +783,7 @@ export async function fileFramer(repo) {
     return null;
   };
 
-  return ({ at, points, parent_id, path = null }) => {
+  const toFileFrame = ({ at, points, parent_id, path = null }) => {
     // THE PATH FIRST. It is where the record is actually going, so it is what
     // the fold will compose it against; `parent_id` is a claim the payload makes
     // and only predicated/naming marks make it at all.
@@ -792,6 +794,41 @@ export async function fileFramer(repo) {
       ...(points && fold.ringToFile ? { points: fold.ringToFile(points, origin) } : {}),
     };
   };
+
+  // ── THE DECLARED PARENT, RIDING THE SAME FRAMER (postmark#3020) ────────────
+  //
+  // The framer converts faithfully, which is the whole of the 2026-09-18 fix and
+  // is not in question. What it cannot do alone is notice that the number it was
+  // handed does not belong at the path it is framing FOR — the Snug mooring, a
+  // world point five kilometres from the harbour it is filed in, converted
+  // correctly into a file that then said the opposite of the truth.
+  //
+  // So the framer also hands back the two things the guard needs and nothing
+  // else can supply at this ref: the path's declared parent AS THE LAST FOLD
+  // COMPOSED IT, and the clone's own `pointWithinMark`. They ride as properties
+  // rather than a second return value because `toFileFrame(...)` has callers,
+  // and a signature change here is a signature change at every one of them.
+  //
+  // A clone whose tools do not carry `pointWithinMark` leaves it undefined, and
+  // the guard admits — the office does not grow a local definition of "inside".
+  const markOfId = new Map((state?.marks ?? []).filter((m) => m?.id).map((m) => [m.id, m]));
+  toFileFrame.declaredParentOf = (path) => {
+    const parentId = declaredParentIdOf(path, idOfMarkFile);
+    return parentId ? { parentId, parent: markOfId.get(parentId) ?? null } : null;
+  };
+  // THE MARK AS IT STANDS — the crossing's half of the narrowing. The door has
+  // `priorLive ?? priorCanon`; here the last published fold IS the prior, and it
+  // is in world coordinates exactly as a world-framed row's numbers are, so the
+  // two are comparable without a conversion. Absent means the mark is not
+  // standing, and an amend of a mark that is not standing is admitted rather
+  // than refused — the same direction every other arm of this guard takes.
+  toFileFrame.standingMark = (id) => markOfId.get(String(id)) ?? null;
+  try {
+    const dir = materializeAtRef(repo, mainRef(repo), "tools");
+    const verbs = await import(pathToFileURL(join(dir, "tools", "world-verbs.mjs")));
+    if (typeof verbs.pointWithinMark === "function") toFileFrame.pointWithinMark = verbs.pointWithinMark;
+  } catch { /* named absent by its own undefined — the guard admits rather than inventing a predicate */ }
+  return toFileFrame;
 }
 
 // ── the drain ────────────────────────────────────────────────────────────────

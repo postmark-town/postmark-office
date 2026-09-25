@@ -647,7 +647,28 @@ export async function exitViaOffice(worldClone, payload = {}, key = null, deps =
       // (dev, 2026-09-20 08:35Z: exit at the Snug, feet still at grove-wharf,
       // "your walk in progress (12508 m to go)"). A deposit is a departure OF
       // zero length AT the stop, so both ends are the anchor.
-      await deps.stop(who, { x: deposit.anchor.x, y: deposit.anchor.y }, key, { from: { x: deposit.anchor.x, y: deposit.anchor.y } });
+      // THE DEPOSIT IS A LEAVING, DECLARED (postmark#3019, 2026-09-20). A rider
+      // who boarded her the ORDINARY way — walking to her hull and entering —
+      // crossed the whole geometric chain, so stepping off the hull leaves them
+      // still filed within the rooms that chain went through (dom-pidgey: the
+      // town centre AND the-town/the-quay-reach). A set-down 9.9 km away carries
+      // them out of both, and DEC-5 refuses a walk that would do that silently —
+      // "you are within the-town/the-quay-reach — this walk would carry you out
+      // of it without leaving" — AFTER the exit is already on the ledger. That
+      // is a rider out of the boat with no ground: `recorded: false`, standpoint
+      // at the Origin, every door afterwards disagreeing about where they stand.
+      //
+      // So the deposit says what it is, in the walk door's own grammar. `exit:
+      // true` is DEC-5's documented route for a caller who is within a room: the
+      // exits are performed innermost outward, each standing as its own act on
+      // the record, and the walk follows. WHAT is actually left is the walk
+      // door's judgement — `leavingWhileOccupying` over the live stack — and it
+      // is not re-derived here; this side only answers whether there is anything
+      // left to leave at all. A rider who boarded through a distant stop crossed
+      // ONE row and remains within nothing, so their deposit is unchanged.
+      const stillWithin = held.filter((id) => !(answer.left ?? []).includes(id));
+      await deps.stop(who, { x: deposit.anchor.x, y: deposit.anchor.y }, key,
+        { from: { x: deposit.anchor.x, y: deposit.anchor.y }, ...(stillWithin.length ? { exit: true } : {}) });
       setDown = { at: deposit.stop, x: deposit.anchor.x, y: deposit.anchor.y, arrived: deposit.arrived, recorded: true };
     } catch (e) {
       setDown = { at: deposit.stop, x: deposit.anchor.x, y: deposit.anchor.y, arrived: deposit.arrived, recorded: false,

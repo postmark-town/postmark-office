@@ -23,6 +23,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -31,6 +32,8 @@ import {
   archiveLine, exactNumber, actsRangeFor, renderMark, safeSlug, markPath,
   contentDigest, certification, certificationSubstance, canonical,
   checkArchives, writeMarks, assertUsableTarget, sampleIndexes, Cannot,
+  crossingSailsAt, completingFerryFor, ferryPartition, heldWindowLine,
+  parseRefreeze, refreezeCommitMessage, derive,
 } from "../world2/tools/snapshot-export.mjs";
 
 // ── fixtures, in the driver's own shapes ─────────────────────────────────────
@@ -425,4 +428,317 @@ test("canonical() is total — it does not throw on the shapes pg returns", () =
   assert.equal(canonical(undefined), "null");
   assert.equal(canonical(new Date("2026-08-28T00:00:00Z")), `"2026-08-28T00:00:00.000Z"`);
   assert.equal(canonical([{ b: 1, a: 2 }]), `[{"a":2,"b":1}]`);
+});
+
+// ── THE FERRY CLOCK (POS-189) ───────────────────────────────────────────────
+//
+// The pen chose its windows on the SETTLEMENT clock (windows close at the
+// 06:00Z / 18:00Z clearings) and its acts on the FERRY clock (00:00Z / 12:00Z).
+// The two disagree about the newest window, and because an archive is frozen on
+// write, a window frozen early is a file every later run must refuse.
+//
+// THE INSTANCE, measured on the box (2026-09-21/22): ferry 202 sailed
+// 2026-09-21T00:00Z; at 07:22Z the pen froze window 202 with 84 acts; acts
+// numbered 202 kept arriving (id 7181 at 07:47Z, id 7182 at 09:13Z) until the
+// 12:00Z ferry, which is ferry 203; the next night re-derived 94 and REFUSED.
+//
+// Every fixture below is that instance's own clock.
+
+const WINDOW_202_FROZEN_EARLY = "2026-09-21T07:22:00.000Z";  // the run that did it
+const FERRY_203_SAILS         = "2026-09-21T12:00:00.000Z";  // when window 202 stops growing
+const AFTER_FERRY_203         = "2026-09-21T13:00:00.000Z";
+
+test("crossing N sails at epoch + N x 12h — the ratified derivation's own anchor", () => {
+  // crossings.mjs, quoting Keemin 2026-07-29 verbatim: "crossings run 00:00 /
+  // 12:00 UTC (the ferry's clock), counted from the mail-ledger's first delivery
+  // day (2026-06-12) ... Crossing 100 lands 2026-08-01 00:00 UTC."
+  assert.equal(crossingSailsAt(100), "2026-08-01T00:00:00.000Z");
+  assert.equal(crossingSailsAt(0), "2026-06-12T00:00:00.000Z");
+  // and the instance's own two boats
+  assert.equal(crossingSailsAt(202), "2026-09-21T00:00:00.000Z");
+  assert.equal(crossingSailsAt(203), FERRY_203_SAILS);
+});
+
+test("an act's number names the ferry that LAST sailed — so window N waits for ferry N+1", () => {
+  // FINDING 1, and the direction the whole rule turns on. Every writer stamps
+  // `crossing: currentCrossing()` (world-apex.mjs, world-hold.mjs, world.mjs),
+  // and world2-pen.mjs § lateCrossingGuard calls that same number `open` and
+  // throws on anything larger: "the future is not a place a row can file into".
+  // So an act numbered N arrived in [ferry N sails, ferry N+1 sails).
+  assert.equal(completingFerryFor(202), 203);
+  // The instance is the check: acts numbered 202 arrived at 07:47Z and 09:13Z
+  // on 09-21, which is AFTER ferry 202 sailed at 00:00Z. Had the number named
+  // the boat an act WILL sail on, those rows could not have existed.
+  assert.ok(Date.parse("2026-09-21T09:13:00Z") > Date.parse(crossingSailsAt(202)));
+  assert.ok(Date.parse("2026-09-21T09:13:00Z") < Date.parse(crossingSailsAt(203)));
+});
+
+test("FALSIFIER (a) — a settlement-closed window whose ferry has not sailed is HELD BACK", () => {
+  const windows = [{ id: 201 }, { id: 202 }];
+  const { archivable, held } = ferryPartition(windows, Date.parse(WINDOW_202_FROZEN_EARLY));
+  assert.deepEqual(archivable.map((w) => w.id), [201]);
+  assert.deepEqual(held.map((h) => h.id), [202]);
+  assert.equal(held[0].ferry, 203);
+  assert.equal(held[0].sailsAt, FERRY_203_SAILS);
+  // and it SAYS itself, the way heldBack acts already do
+  assert.match(heldWindowLine(held[0]), /window 202 closed on the settlement clock/);
+  assert.match(heldWindowLine(held[0]), /ferry 203 sails at 2026-09-21T12:00:00\.000Z/);
+});
+
+test("the boundary is the sailing instant itself, not a moment either side of it", () => {
+  const windows = [{ id: 202 }];
+  // one millisecond before ferry 203: still growing
+  assert.equal(ferryPartition(windows, Date.parse(FERRY_203_SAILS) - 1).held.length, 1);
+  // at the instant it sails: complete
+  assert.equal(ferryPartition(windows, Date.parse(FERRY_203_SAILS)).archivable.length, 1);
+  assert.equal(ferryPartition(windows, Date.parse(FERRY_203_SAILS)).held.length, 0);
+});
+
+// ── the gate, where it is WIRED ─────────────────────────────────────────────
+//
+// `derive` is the only place the two clocks meet, so the falsifier reads it and
+// not just the arithmetic beside it: a test that asserted `ferryPartition`
+// alone would survive a revert of the gate, and a probe that cannot fail is not
+// a probe. The client below answers the four SELECTs `derive` makes, in the
+// shapes `pg` hands them over (bigint and numeric as TEXT), and nothing else —
+// an unexpected statement throws rather than returning an obliging empty set.
+
+function fakeClient({ windows, acts, marks = [] }) {
+  return {
+    async query(sql, params = []) {
+      if (sql.includes("acts_cursor")) {
+        const ids = acts.map((a) => Number(a.id));
+        return { rows: [{
+          acts_cursor: ids.length ? String(Math.max(...ids)) : null,
+          acts_total: String(acts.length),
+          marks_count: String(marks.length),
+        }] };
+      }
+      if (sql.includes("FROM windows")) return { rows: windows };
+      if (sql.includes("FROM acts")) {
+        const upto = Number(params[0]);
+        const after = params.length > 1 ? Number(params[1]) : null;
+        return { rows: acts.filter((a) => a.crossing !== null
+          && Number(a.crossing) <= upto && (after === null || Number(a.crossing) > after)) };
+      }
+      if (sql.includes("FROM marks")) return { rows: marks };
+      throw new Error(`the notary asked something this stub does not answer: ${sql}`);
+    },
+  };
+}
+
+const act = (id, crossing, at) => ({
+  ...ACT, id: String(id), crossing: String(crossing), at: new Date(at), inserted_at: new Date(at),
+});
+
+// Window 201 is settled and still. Window 202 holds the two rows that were on
+// disk at 07:22Z and the two the box measured arriving after it — id 7181 at
+// 07:47Z and id 7182 at 09:13Z, the acts the frozen file did not contain.
+const INSTANCE = {
+  windows: [
+    { id: "201", opens_at: new Date("2026-09-20T12:00:00Z"), closes_at: new Date("2026-09-21T00:00:00Z"),
+      status: "closed", law_sha: "law201", town_sha: "town201", cleared_at: new Date("2026-09-20T18:00:00Z") },
+    { id: "202", opens_at: new Date("2026-09-21T00:00:00Z"), closes_at: new Date("2026-09-21T12:00:00Z"),
+      status: "closed", law_sha: "law202", town_sha: "town202", cleared_at: new Date("2026-09-21T06:00:00Z") },
+  ],
+  acts: [
+    act(7100, 201, "2026-09-20T13:00:00Z"),
+    act(7101, 201, "2026-09-20T23:00:00Z"),
+    act(7179, 202, "2026-09-21T01:00:00Z"),
+    act(7180, 202, "2026-09-21T05:00:00Z"),
+    act(7181, 202, "2026-09-21T07:47:00Z"),   // arrived AFTER the pen froze 202
+    act(7182, 202, "2026-09-21T09:13:00Z"),   // and again
+  ],
+};
+
+test("FALSIFIER (a), wired — at 07:22Z the pen does NOT archive window 202, and names why", async () => {
+  const d = await derive(fakeClient(INSTANCE), { now: Date.parse(WINDOW_202_FROZEN_EARLY) });
+
+  assert.deepEqual(d.archives.map((a) => a.window), [201],
+    "window 202 is closed on the settlement clock and STILL GROWING on the ferry clock");
+  assert.equal(d.windowCursor, 201);
+  assert.deepEqual(d.pins, { law_sha: "law201", town_sha: "town201" },
+    "the certification pins what it archives, not a window it held back");
+
+  assert.deepEqual(d.held.map((h) => h.id), [202]);
+  assert.match(heldWindowLine(d.held[0]), /ferry 203 sails at 2026-09-21T12:00:00\.000Z/);
+
+  // the four acts numbered 202 are counted, never silently dropped
+  assert.equal(d.heldBack, 4);
+});
+
+test("FALSIFIER (b) — past its sailing, window 202 archives ONCE and a second run is byte-stable", async () => {
+  const d = await derive(fakeClient(INSTANCE), { now: Date.parse(AFTER_FERRY_203) });
+
+  assert.deepEqual(d.archives.map((a) => a.window), [201, 202]);
+  assert.equal(d.held.length, 0);
+  assert.equal(d.heldBack, 0);
+  // and it is the COMPLETE window — all four rows, including the two that
+  // arrived after the early freeze. This is the count that went 84 then 94.
+  assert.equal(d.archives.find((a) => a.window === 202).lines, 4);
+
+  const dir = repo();
+  try {
+    const first = checkArchives(dir, d.archives);
+    assert.deepEqual(first.plan.map((p) => p.action), ["write", "write"]);
+    assert.equal(first.findings.length, 0);
+    mkdirSync(join(dir, "archives", "acts"), { recursive: true });
+    for (const a of first.plan) writeFileSync(join(dir, a.path), a.bytes);
+
+    // SECOND RUN, a full re-derivation at a later hour: byte-stable, nothing to
+    // write, no finding. (Exit 0 is what "no finding and nothing to write" is.)
+    const again = await derive(fakeClient(INSTANCE), { now: Date.parse("2026-09-22T07:22:00Z") });
+    const second = checkArchives(dir, again.archives);
+    assert.deepEqual(second.plan.map((p) => p.action), ["unchanged", "unchanged"]);
+    assert.equal(second.findings.length, 0);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("the early freeze is EXACTLY what the pen refuses the next night — the bug, held still", async () => {
+  // Why POS-189 is a defect and not a nuisance: the 07:22Z file is short, and
+  // the refusal it earns the next night is correct. The pen was right to refuse
+  // and wrong to have written that file at all.
+  const early = await derive(fakeClient(INSTANCE), { now: Date.parse(WINDOW_202_FROZEN_EARLY) });
+  assert.equal(early.archives.some((a) => a.window === 202), false);
+
+  // what 07:22Z would have written: the two rows that had arrived by then
+  const shortBytes = (await derive(fakeClient({
+    ...INSTANCE, acts: INSTANCE.acts.filter((a) => Number(a.id) < 7181),
+  }), { now: Date.parse(AFTER_FERRY_203) })).archives.find((a) => a.window === 202).bytes;
+
+  const dir = repo();
+  try {
+    mkdirSync(join(dir, "archives", "acts"), { recursive: true });
+    writeFileSync(join(dir, "archives/acts/202.jsonl"), shortBytes);
+    const full = await derive(fakeClient(INSTANCE), { now: Date.parse(AFTER_FERRY_203) });
+    const { findings } = checkArchives(dir, full.archives.filter((a) => a.window === 202));
+    assert.equal(findings.length, 1);
+    assert.match(findings[0], /line count 2 on disk, 4 re-derived/);
+    assert.match(findings[0], /the notary will not overwrite it/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// ── THE OPERATOR DOOR: --refreeze <n> --reason "<text>" ─────────────────────
+//
+// The 2026-09-14 rule: every guard gets an operator door with a receipt, and a
+// rule with no door is a defect. When this pen froze window 202 early, the only
+// way past its own refusal was a hand removing the file from the notary repo —
+// a write with no receipt the pen could enforce. The door is that write, made
+// nameable: ONE window, both sha256s and the operator's reason on the commit's
+// first line.
+
+const differing = (window, bytes) => [{
+  window, lines: bytes.replace(/\n$/, "").split("\n").length, bytes,
+  path: `archives/acts/${window}.jsonl`,
+}];
+
+test("FALSIFIER (c) — a differing archive with NO door still refuses, exactly as before", () => {
+  const dir = repo();
+  try {
+    mkdirSync(join(dir, "archives", "acts"), { recursive: true });
+    writeFileSync(join(dir, "archives/acts/202.jsonl"), `{"id":1}\n`);
+    for (const opts of [undefined, { refreeze: null }, { refreeze: 999 }]) {
+      const { plan, findings } = checkArchives(dir, differing(202, `{"id":1}\n{"id":2}\n`), opts);
+      assert.equal(findings.length, 1, `refreeze ${JSON.stringify(opts)} must not excuse window 202`);
+      assert.match(findings[0], /archives\/acts\/202\.jsonl is an ARCHIVE and already exists/);
+      assert.equal(plan.length, 0);
+      // and the file is untouched
+      assert.equal(readFileSync(join(dir, "archives/acts/202.jsonl"), "utf8"), `{"id":1}\n`);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("FALSIFIER (d) — --refreeze N plans a REPLACEMENT, carrying the old sha and the new", () => {
+  const dir = repo();
+  try {
+    mkdirSync(join(dir, "archives", "acts"), { recursive: true });
+    writeFileSync(join(dir, "archives/acts/202.jsonl"), `{"id":1}\n`);
+    const { plan, findings } = checkArchives(dir, differing(202, `{"id":1}\n{"id":2}\n`), { refreeze: 202 });
+
+    assert.equal(findings.length, 0, "the named window refuses no longer");
+    assert.deepEqual(plan.map((p) => p.action), ["refreeze"]);
+    assert.equal(plan[0].oldSha, createHash("sha256").update(`{"id":1}\n`).digest("hex"));
+    assert.equal(plan[0].newSha, createHash("sha256").update(`{"id":1}\n{"id":2}\n`).digest("hex"));
+    assert.notEqual(plan[0].oldSha, plan[0].newSha);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("the door is ONE window wide — every other differing archive still refuses", () => {
+  const dir = repo();
+  try {
+    mkdirSync(join(dir, "archives", "acts"), { recursive: true });
+    writeFileSync(join(dir, "archives/acts/201.jsonl"), `{"id":0}\n`);
+    writeFileSync(join(dir, "archives/acts/202.jsonl"), `{"id":1}\n`);
+    const archives = [
+      ...differing(201, `{"id":0}\n{"id":9}\n`),
+      ...differing(202, `{"id":1}\n{"id":2}\n`),
+    ];
+    const { plan, findings } = checkArchives(dir, archives, { refreeze: 202 });
+
+    assert.deepEqual(plan.map((p) => p.action), ["refreeze"]);
+    assert.equal(plan[0].window, 202);
+    assert.equal(findings.length, 1);
+    assert.match(findings[0], /archives\/acts\/201\.jsonl is an ARCHIVE and already exists/);
+    // 201 is untouched on disk, and the run that produced this will throw Red
+    assert.equal(readFileSync(join(dir, "archives/acts/201.jsonl"), "utf8"), `{"id":0}\n`);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("--refreeze N WITHOUT --reason is exit 2, and says why a reason is the point", () => {
+  assert.throws(
+    () => parseRefreeze(["node", "snapshot-export.mjs", "--target", "/t", "--refreeze", "202"]),
+    (e) => e instanceof Cannot && /needs --reason/.test(e.message)
+      && /a human must own/.test(e.message));
+  // an empty or flag-shaped reason is no reason
+  assert.throws(() => parseRefreeze(["--refreeze", "202", "--reason", "   "]), Cannot);
+  assert.throws(() => parseRefreeze(["--refreeze", "202", "--reason", "--json"]), Cannot);
+  // and a window that is not a number is refused before anything else happens
+  assert.throws(() => parseRefreeze(["--refreeze", "--reason", "x"]), Cannot);
+  assert.throws(() => parseRefreeze(["--refreeze", "202.5", "--reason", "x"]), Cannot);
+});
+
+test("no --refreeze at all is the ordinary run — the door is shut unless it is opened", () => {
+  assert.deepEqual(parseRefreeze(["node", "snapshot-export.mjs", "--target", "/t"]),
+    { refreeze: null, reason: null });
+  assert.deepEqual(parseRefreeze(["--refreeze", "202", "--reason", "POS-189: frozen before ferry 203 sailed"]),
+    { refreeze: 202, reason: "POS-189: frozen before ferry 203 sailed" });
+});
+
+test("the RECEIPT: both sha256s and the reason ride the commit's FIRST line", () => {
+  // `git log --oneline` is what a reader scanning the notary repo sees, so a
+  // replacement of a frozen archive must not be able to look ordinary there.
+  const a = { window: 202, lines: 94, was: `{"id":1}\n`, oldSha: "a".repeat(64), newSha: "b".repeat(64) };
+  const msg = refreezeCommitMessage(a, "POS-189: frozen before ferry 203 sailed",
+    { windowCursor: 204, cursors: { acts_cursor: 7260 } });
+  const first = msg.split("\n")[0];
+
+  assert.match(first, /^notary: refreeze archives\/acts\/202\.jsonl/);
+  assert.ok(first.includes("a".repeat(64)), "the old sha256 is on the first line");
+  assert.ok(first.includes("b".repeat(64)), "the new sha256 is on the first line");
+  assert.ok(first.includes("POS-189: frozen before ferry 203 sailed"), "so is the reason");
+  assert.match(msg, /No other window was touched/);
+  assert.match(msg, /1 line\(s\)/);
+  assert.match(msg, /94 line\(s\)/);
+});
+
+test("the door's refusal is reached BEFORE the database is — exit 2, naming --reason", () => {
+  // An exit code that depended on which error the program happened to reach
+  // first would not be a rule. WORLD2_PG_URL is deliberately absent here: if the
+  // argument check ran after `connect()`, this would fail on the connection
+  // string instead, and the falsifier would be measuring the wrong refusal.
+  const dir = repo();
+  const env = { ...process.env };
+  delete env.WORLD2_PG_URL;
+  try {
+    let code = 0, err = "";
+    try {
+      execFileSync(process.execPath, ["world2/tools/snapshot-export.mjs", "--target", dir, "--refreeze", "202"],
+        { encoding: "utf8", env, stdio: ["ignore", "pipe", "pipe"] });
+    } catch (e) { code = e.status; err = String(e.stderr ?? ""); }
+
+    assert.equal(code, 2);
+    assert.match(err, /needs --reason/);
+    assert.ok(!/WORLD2_PG_URL/.test(err),
+      "the argument check runs first — this refusal is about the door, not the environment");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
