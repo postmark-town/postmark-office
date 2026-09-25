@@ -24,15 +24,49 @@
 # what the settlement itself runs before its pen touches main. The fast gate
 # never substitutes for the suite on anything that ships.
 #
-# Env (unit): TOWN_CLONE, WORLD_CLONE (origin URL discovery only).
+# ── IT REHEARSES THE PATH THE BOX RUNS (2026-09-25) ─────────────────────────
+#
+# Since G1 the crossing folds from the store (`SETTLEMENT_SOURCE=store`), and
+# this script went on rehearsing the git path: town stakes, and every git-era
+# drawer on origin. The store crossing never reads those drawers —
+# `store-writedown.mjs § clearGitSketchbooks` deletes them from its clone before
+# it writes — so the rehearsal judged a crossing the box does not run. On
+# 2026-09-25 it said WOULD-REFUSE over `duplicate id "neth/warm-stone"`: S81 had
+# published the store's copy at `WORLD/marks/neth/warm-stone/`, and neth's
+# drawer `draft/xf3s` still held the door's 09-11 copy at
+# `WORLD/marks/let-there-be-light/warm-stone/`, with a different position and
+# extent. True of a rollback crossing; false of the one at 17:45Z.
+#
+# So the source is read exactly as settlement-auto.sh reads it, and under
+# `store` the chain is the crossing's own: the newest closed window's docket
+# (`await-clearing.mjs --rehearse` — between crossings no window clears after
+# this run starts, which is the timer's question), the fold input from the store
+# (read-only), the write-down into this clone's local sketchbooks (it pushes
+# nothing, and it clears the drawers first), then the same sweep and suite.
+# Under `git` it is what it was. The verdict names which one it rehearsed.
+#
+# Env (unit): TOWN_CLONE, WORLD_CLONE (origin URL discovery only);
+#   SETTLEMENT_SOURCE — `git` (the default) or `store`, the settlement unit's own
+#   value; under `store`, WORLD2_PG / WORLD2_PG_URL for the store read;
+#   OFFICE_ROOT, SHADOW_CLONE, SHADOW_REPORT — the defaults below.
 # Cwd: /srv/postmark-office. Exit: 0 would-settle · 1 would-refuse.
 
 set -eu
-TOWN="${TOWN_CLONE:-/srv/postmark-office/town-clone}"
-SHADOW="/srv/postmark-office/shadow-clone"
-OUT="/srv/postmark-harbor/settlement-shadow.json"
+OFFICE="${OFFICE_ROOT:-/srv/postmark-office}"
+TOWN="${TOWN_CLONE:-$OFFICE/town-clone}"
+SHADOW="${SHADOW_CLONE:-$OFFICE/shadow-clone}"
+OUT="${SHADOW_REPORT:-/srv/postmark-harbor/settlement-shadow.json}"
 STAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
+
+# Read once, and an unrecognised value refuses — settlement-auto.sh's rule for
+# the same variable, so the rehearsal and the crossing cannot read a typo two ways.
+SOURCE="${SETTLEMENT_SOURCE:-git}"
+case "$SOURCE" in
+  store|git) ;;
+  *) echo "[settlement-shadow] SETTLEMENT_SOURCE=\"$SOURCE\" is not \`store\` or \`git\` — refusing rather than guessing which crossing to rehearse" >&2; exit 1 ;;
+esac
+WINDOW=""
 
 # One-time: the shadow's own clone — never the sweep's, never the write pen's.
 if [ ! -d "$SHADOW/.git" ]; then
@@ -43,8 +77,21 @@ if [ ! -d "$SHADOW/.git" ]; then
 fi
 
 report() { # status detail
-  printf '{\n "at": "%s",\n "status": "%s",\n "town_sha": "%s",\n "world_main": "%s",\n "detail": "%s"\n}\n' \
-    "$STAMP" "$1" "${TOWN_SHA:-}" "${WORLD_FROM:-}" "$2" > "$OUT" 2>/dev/null || true
+  # Backslashes go too: the sweep's SETTLEMENT-SWEEP-REFUSAL line carries JSON of
+  # its own, and once a detail's 300 characters reach it, an escaped quote with
+  # its quote translated away leaves `\.` in this file. That is not JSON, and the
+  # ops card then reads no verdict at all on the refusal it exists to show
+  # (measured 2026-09-25 on a fixture: `main folds with 1 error(s)`).
+  set -- "$1" "$(printf '%s' "$2" | tr -d '\\')"
+  printf '{\n "at": "%s",\n "status": "%s",\n "source": "%s",\n "window": %s,\n "town_sha": "%s",\n "world_main": "%s",\n "detail": "%s"\n}\n' \
+    "$STAMP" "$1" "$SOURCE" "${WINDOW:-null}" "${TOWN_SHA:-}" "${WORLD_FROM:-}" "$2" > "$OUT" 2>/dev/null || true
+}
+refusal_of() { # json-file err-file — the tool's own "refused — detail", else its stderr
+  if said="$(node -e 'const r=require(process.argv[1]);process.stdout.write(String(r.refused||"unknown")+" — "+String(r.detail||""))' "$1" 2>/dev/null)"; then
+    printf '%s' "$said"
+  else
+    cat "$2"
+  fi | head -c 300 | tr '\n"' ' .'
 }
 
 # Immutable inputs, exactly as the real crossing takes them.
@@ -63,7 +110,34 @@ git -C "$WORK/town" checkout -qf "$TOWN_SHA"
 sh "$(dirname "$0")/shadow-refs-reset.sh" "$SHADOW"
 WORLD_FROM="$(git -C "$SHADOW" rev-parse origin/main)"
 
-(cd "$WORK/town" && node tools/world-stake.mjs --escrow --json) > "$WORK/stakes.json"
+if [ "$SOURCE" = "store" ]; then
+  if ! (cd "$OFFICE" && node "$OFFICE/world2/tools/await-clearing.mjs" --since "$STAMP" --rehearse) > "$WORK/docket.json" 2>"$WORK/docket.err"; then
+    report would-refuse "no docket to rehearse: $(refusal_of "$WORK/docket.json" "$WORK/docket.err")"
+    echo "[settlement-shadow] WOULD REFUSE (no docket)" >&2; cat "$WORK/docket.json" "$WORK/docket.err" >&2 || true
+    exit 1
+  fi
+  WINDOW="$(node -e 'const d=require(process.argv[1]);process.stdout.write(String(d.window))' "$WORK/docket.json")"
+
+  if ! (cd "$OFFICE" && node "$OFFICE/world2/tools/fold-input-cli.mjs" \
+        --world-sha "$WORLD_FROM" --town-clone "$TOWN" --town-sha "$TOWN_SHA" \
+        --window "$WINDOW" --world-repo "$SHADOW") > "$WORK/fold-input.json" 2>"$WORK/fold.err"; then
+    report would-refuse "the store could not answer: $(refusal_of "$WORK/fold-input.json" "$WORK/fold.err")"
+    echo "[settlement-shadow] WOULD REFUSE (store read)" >&2; cat "$WORK/fold-input.json" "$WORK/fold.err" >&2 || true
+    exit 1
+  fi
+  node -e 'const fs=require("node:fs");const i=require(process.argv[1]);fs.writeFileSync(process.argv[2],JSON.stringify(i.stakes,null,1)+"\n")' \
+    "$WORK/fold-input.json" "$WORK/stakes.json"
+
+  if ! (cd "$OFFICE" && node "$OFFICE/src/store-writedown.mjs" \
+        --input "$WORK/fold-input.json" --world "$SHADOW") > "$WORK/store.json" 2>"$WORK/store.err"; then
+    report would-refuse "the store write-down would refuse: $(refusal_of "$WORK/store.json" "$WORK/store.err")"
+    echo "[settlement-shadow] WOULD REFUSE (write-down)" >&2; cat "$WORK/store.json" "$WORK/store.err" >&2 || true
+    exit 1
+  fi
+  echo "[settlement-shadow] store: window $WINDOW — $(node -e 'const r=require(process.argv[1]);process.stdout.write(String(r.written||0)+" of "+String(r.marks||0)+" mark(s) written, "+String(r.unchanged_skipped||0)+" already in canon; cleared "+String((r.sketchbooks_cleared||{}).removed_remote||0)+" git-era drawer ref(s)")' "$WORK/store.json")" >&2
+else
+  (cd "$WORK/town" && node tools/world-stake.mjs --escrow --json) > "$WORK/stakes.json"
+fi
 
 # The sweep, local only — it never pushes, and this script has no push step.
 if ! (cd "$SHADOW" && node tools/settlement-sweep.mjs --stakes "$WORK/stakes.json" --json) > "$WORK/sweep.json" 2>"$WORK/sweep.err"; then
@@ -84,6 +158,6 @@ if ! (cd "$SHADOW" && TMPDIR="$SUITE_TMP" TMP="$SUITE_TMP" TEMP="$SUITE_TMP" npm
   exit 1
 fi
 
-report would-settle "the next crossing composes, lints and folds clean; suite green over world $WORLD_FROM"
+report would-settle "the next crossing composes, lints and folds clean from $SOURCE; suite green over world $WORLD_FROM"
 echo "[settlement-shadow] clean — the next crossing would settle"
 exit 0
