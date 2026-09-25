@@ -421,6 +421,8 @@ function fundingDb() {
   const insRcpt = db.prepare("INSERT INTO pot_receipts (pot, rail, usd, date, receipt, payer) VALUES (?,?,?,?,?,?)");
   for (const [pot, rs] of f.receiptsByPot) for (const r of rs) insRcpt.run(pot, r.rail, r.usd, r.date, r.receipt, r.from);
   for (const [pot, n] of f.potEscrow) db.prepare("INSERT INTO pot_escrow (pot, staked) VALUES (?,?)").run(pot, n);
+  const insStaker = db.prepare("INSERT INTO pot_stakers (pot, handle, staked) VALUES (?,?,?)");
+  for (const [handle, mine] of f.potEscrowByHandle) for (const [pot, n] of mine) if (n > 0) insStaker.run(pot, handle, n);
   for (const iv of f.invalid) db.prepare("INSERT INTO funding_invalid (row_kind, line, reason) VALUES (?,?,?)").run(iv.row_kind, iv.line, iv.reason);
   db.prepare("INSERT INTO pots (id, json) VALUES (?,?)").run("keeping-ec2", JSON.stringify(POT_FILE));
   return db;
@@ -860,4 +862,74 @@ test("POS-218 · the fund door's pot rows name the corrected hand — the receip
   assert.deepEqual(pot.patrons.roll.map((x) => [x.receipt, x.patron]), [["stripe:cs_closed", "domovoi"]], "the roll names the corrected hand for a settled receipt");
   // sums are hand-blind: a correction moves no dollars
   assert.equal(pot.receipts.sum_usd, 72);
+});
+
+// ── POS-184 · a fund names its stakers, not only its payers ──────────────────
+// The pot board has always carried ONE number for the escrow — how much is
+// staked — and nothing about whose it is. `funding_roll` and `pot_receipts` are
+// read row by row (who paid, how much, when) while the stamps behind the same
+// pot were a single integer, so the question an agent actually asks before it
+// stakes — "who else already has?" — had no answer at any door.
+//
+// The fold already knew. `foldFunding`'s `escrow()` writes potEscrow and
+// potEscrowByHandle in ONE call, from the same row, with the same sign; the
+// per-staker list is that second key materialized, never a second derivation.
+// That is why the sum-equality below is a property and not a coincidence.
+
+test("POS-184 — the board names WHO staked, netted by the fold's own second key", () => {
+  const pot = potBoard(fundingDb()).list[0];
+
+  // 1 · THE LIST. The fixture ledger stakes three residents on keeping-ec2 and
+  //     drains two of them by the two lawful routes — limen's 2 returns whole
+  //     (`for: pot-return:2026-08`), wright's 4 burns (`→ BURN · for: keeping:`).
+  //     Only keemin's 6 is still standing, so only keemin is a staker.
+  assert.deepEqual(pot.escrow.stakers, [{ handle: "keemin", staked: 6 }],
+    "the pot names its standing stakers, by handle and by size");
+
+  // 2 · A CLOSED POSITION IS NOT A STAKE. Both drained residents are ABSENT,
+  //     not listed at 0 — the same "absent == zero, one representation" the pot
+  //     total keeps. A reader must not be able to mistake someone who took their
+  //     stamps home for someone standing behind the pot today.
+  const named = pot.escrow.stakers.map((s) => s.handle);
+  assert.equal(named.includes("limen"), false, "a returned stake leaves no staker behind");
+  assert.equal(named.includes("wright"), false, "and neither does a burned one");
+
+
+  // 4 · THE ORDER IS TOTAL — biggest first, ties broken by handle — so the rows
+  //     never ride on SQLite's insertion order, which is a hydrate detail.
+  const many = fundingDb();
+  many.prepare("INSERT INTO pot_stakers (pot, handle, staked) VALUES (?,?,?)").run("keeping-ec2", "aaa", 6);
+  many.prepare("INSERT INTO pot_stakers (pot, handle, staked) VALUES (?,?,?)").run("keeping-ec2", "zzz", 9);
+  assert.deepEqual(potBoard(many).list[0].escrow.stakers.map((s) => s.handle), ["zzz", "aaa", "keemin"],
+    "sorted by stake desc, then by handle — a tie is not left to the rowid");
+});
+
+test("POS-184 — sum(stakers) IS `staked`, and the flip that breaks the netting turns this red", () => {
+  // THE LOAD-BEARING INVARIANT, in a test of its own on purpose: in the test
+  // above it sat behind a list assertion that fires first, so a flip breaking
+  // the netting reddened that line and this claim was never actually exercised.
+  // A probe standing behind another probe is not a probe.
+  //
+  // The warrant for showing a list beside a number is that they cannot disagree.
+  // They cannot because foldFunding's escrow() helper writes potEscrow and
+  // potEscrowByHandle in ONE call from ONE row with ONE sign — the list is the
+  // fold's own second key, never a second derivation. Break exactly that (count
+  // stakes only on the by-handle arm, keep the pot total netted) and the fixture
+  // reads 12 against a `staked` of 6.
+  const pot = potBoard(fundingDb()).list[0];
+  const sum = pot.escrow.stakers.reduce((n, s) => n + s.staked, 0);
+  assert.equal(sum, pot.escrow.staked, "sum(stakers) IS `staked` — one escrow, two keys, never two answers");
+  assert.equal(pot.escrow.staked, 6, "and `staked` itself is unmoved by this lane");
+});
+
+test("POS-184 — a pot nobody has staked answers `stakers: []`, not a missing field", () => {
+  // "Nobody yet" is an answer a resident can act on; an absent field is a door
+  // that did not look. The pot file lands with no stake row anywhere behind it.
+  const db = fundingDb();
+  db.prepare("INSERT INTO pots (id, json) VALUES (?,?)")
+    .run("unstaked-pot", JSON.stringify({ ...POT_FILE, pot: "unstaked-pot", title: "Nobody has staked here" }));
+  const pot = potBoard(db).list.find((p) => p.id === "unstaked-pot");
+  assert.ok(pot, "the pot is on the board");
+  assert.deepEqual(pot.escrow.stakers, [], "an empty list, present");
+  assert.equal(pot.escrow.staked, 0, "beside the zero it sums to");
 });

@@ -17,14 +17,14 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// the town moved to its own org 2026-08-03 (postmark-town/postmark); the rest
-// remain keeminlee's. Snapshot filenames stay on the bare repo name so the
+// the town moved to its own org 2026-08-03 (postmark-town/postmark); the site and
+// the world followed 2026-09-18 (POS-115); starforge-atelier stays keeminlee's. Snapshot filenames stay on the bare repo name so the
 // telemetry series is unbroken across the transfer.
 const REPOS = [
   { owner: "postmark-town", name: "postmark" },
   { owner: "keeminlee", name: "starforge-atelier" },
-  { owner: "keeminlee", name: "postmark-site" },
-  { owner: "keeminlee", name: "postmark-world" },
+  { owner: "postmark-town", name: "postmark-site" },
+  { owner: "postmark-town", name: "postmark-world" },
 ];
 const HERE = dirname(fileURLToPath(import.meta.url));
 const OFFICE = resolve(HERE, "..");

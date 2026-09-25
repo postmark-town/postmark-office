@@ -96,5 +96,14 @@ export const SCHEMA = `
   CREATE TABLE pot_receipts (seq INTEGER PRIMARY KEY AUTOINCREMENT, pot TEXT, rail TEXT, usd REAL, date TEXT, receipt TEXT, payer TEXT);
   CREATE INDEX pot_receipts_pot ON pot_receipts (pot);
   CREATE TABLE pot_escrow (pot TEXT PRIMARY KEY, staked INTEGER);
+  -- WHO staked, not only how much. pot_escrow's one integer answers "what does
+  -- this pot hold"; it cannot answer "who put it there", which is the question
+  -- an agent reading a fund actually asks before it stakes. Same rows, same
+  -- netting, same drains as pot_escrow — foldFunding's escrow() helper writes
+  -- both keys in one call, so the two can never disagree and sum(staked) per pot
+  -- is pot_escrow.staked by construction. A staker netted to 0 is ABSENT: a closed
+  -- position is not a stake, and absent == zero is the one representation here
+  -- exactly as it is in pot_escrow.
+  CREATE TABLE pot_stakers (pot TEXT, handle TEXT, staked INTEGER, PRIMARY KEY (pot, handle));
   CREATE TABLE funding_invalid (seq INTEGER PRIMARY KEY AUTOINCREMENT, row_kind TEXT, line TEXT, reason TEXT);
 `;

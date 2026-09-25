@@ -1810,7 +1810,7 @@ const server = createServer((req, res) => {
         : { address: updateAddressBody, "address-fields": updateAddressFields, home: updateHome, profile: updateProfile, window: updateWindow }[m[1]];
       const handle = avatar ? avatar[1] : homeImage ? homeImage[1] : m[2];
       const cap = avatar ? 4_000_000 : homeImage ? 6_000_000 : m[1] === "window" ? 400_000 : undefined;
-      readJsonBody(req, cap).then((raw) => {
+      readJsonBody(req, cap).then(async (raw) => {
         try {
           let payload = JSON.parse(raw || "{}");
           // The image doors are not paper acts and have no schema of their
@@ -1831,7 +1831,15 @@ const server = createServer((req, res) => {
           // row, while `your_pending_edits` reported a hot tense it could not
           // see. The avatar and home-image doors take it too and simply ignore
           // it: they are image doors, not paper acts, so they log nothing.
-          const result = verb({ ...payload, handle }, key, db, TOWN_CLONE, odb);
+          //
+          // AWAITED SINCE POS-150. The two image doors became async when they
+          // grew the whole decode (edit.mjs § decodeWhole — libvips has no
+          // synchronous face), and the other four verbs stayed synchronous.
+          // `await` is correct for both, and it is what keeps an image door's
+          // 422 inside this try: without it the door would answer 200 with a
+          // Promise in the body while the refusal became an unhandled
+          // rejection somewhere behind the response.
+          const result = await verb({ ...payload, handle }, key, db, TOWN_CLONE, odb);
           return j(res, 200, withRenamed(result, renamed)); // 200: an edit is a pen commit, done now (no ferry)
         } catch (e) {
           if (e.code) return bounce(res, e.code, e.defect, e.hint);
@@ -2050,14 +2058,15 @@ const server = createServer((req, res) => {
     // POST /media — the media door (2026-08-15): one image in, one permanent
     // https://media.postmark.town/… URL out — the URL a mark's image: field
     // accepts. Same handler as the upload_media tool; byte validation is the
-    // avatar door's; the 3 MB body cap fits a 1.5 MB image's base64 enclosure,
-    // same arithmetic as the other image doors.
+    // avatar door's, and since POS-150 every image decodes whole before it is
+    // hashed or stored.
     //
-    // THREE INPUTS since 2026-09-10 (media.mjs § the three ways bytes reach
-    // this door): image_path (a file in the caller's own house on TOWN_CLONE),
-    // image_url (the office fetches it, past an SSRF wall), image (base64, now
-    // the last resort). The cap above is base64's alone — the other two send a
-    // body of a few hundred bytes.
+    // TWO INPUTS since 2026-09-20 (media.mjs § the two ways bytes reach this
+    // door): image_path (a file in the caller's own house on TOWN_CLONE) and
+    // image_url (the office fetches it, past an SSRF wall). Inline base64 was
+    // removed with POS-150. The 3 MB cap is now vestigial here — both live
+    // inputs send a body of a few hundred bytes — and it is left alone
+    // deliberately: shrinking it is a separate act with its own blast radius.
     if (req.method === "POST" && path === "/media") {
       if (!key) return bounce(res, 401, "an upload needs a key", "media upload is a resident's act — send your household key as a Bearer token");
       readJsonBody(req, 3_000_000).then(async (raw) => {
@@ -2068,7 +2077,7 @@ const server = createServer((req, res) => {
           return j(res, 200, result);
         } catch (e) {
           if (e.code) return bounce(res, e.code, e.defect, e.hint);
-          if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", '{"image_path"|"image_url"|"image": "…", "by"?: "<handle>"}');
+          if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", '{"image_path"|"image_url": "…", "by"?: "<handle>"}');
           return bounce(res, 500, "the office tripped", String(e?.message ?? e).slice(0, 200));
         }
       }).catch(() => bounce(res, 400, "could not read the body", "send a JSON object"));

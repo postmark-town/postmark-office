@@ -148,17 +148,18 @@ test("the avatar allowlist IS mediaUrlOk — the same one the mark door's image:
 
 // ── 5. the two picture doors must not silently fight ────────────────────────
 
-test("LAST PICTURE WINS: uploading bytes clears a URL set through the act", () => {
+test("LAST PICTURE WINS: uploading bytes clears a URL set through the act", async () => {
   const clone = editClone();
-  const PNG = Buffer.from([
-    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
-    0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
-  ]);
+  // A REAL 2×2 PNG since POS-150: the 20-byte signature-plus-empty-IEND that
+  // stood here passes the sniff and the enclosure check and decodes to nothing,
+  // which the avatar door now refuses. This test is about which key wins, not
+  // about what a broken file does, so it needs bytes that are a picture.
+  const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAEElEQVR42mMQKHAAIgYIBQAUTgMBVe7jVwAAAABJRU5ErkJggg==", "base64");
   try {
     updateProfile({ handle: "wright", image: FACE }, fixtureKey, db, clone);
     assert.equal(parseProfile(read(clone, "WHITE_PAGES", "wright", "PROFILE.md")).avatar_url, FACE);
 
-    updateProfileAvatar({ handle: "wright", image: PNG.toString("base64") }, fixtureKey, db, clone);
+    await updateProfileAvatar({ handle: "wright", image: PNG.toString("base64") }, fixtureKey, db, clone);
     const after = parseProfile(read(clone, "WHITE_PAGES", "wright", "PROFILE.md"));
     assert.equal(after.avatar, "avatar.png", "the bytes landed");
     assert.equal(after.avatar_url, undefined,

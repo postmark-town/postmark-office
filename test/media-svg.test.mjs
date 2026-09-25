@@ -58,10 +58,43 @@ const HOSTILE_SVG = `<?xml version="1.0" encoding="UTF-8"?>
 </svg>
 `;
 
+// ── POS-150: the bytes lane, after the base64 door closed ────────────────────
+//
+// These tests are about what happens AFTER bytes reach the door — the gates,
+// the wall, the dedupe, the copies. They used `image:` (base64) because it was
+// the cheapest way to hand the handler a Buffer. That door is gone, so the
+// bytes now walk in the way a resident's would: down the URL lane, with fetch
+// and DNS injected so the falsifier still runs offline. Same bytes, same
+// handler, same assertions — only the doorway changed.
+const FIXTURE_URL = "https://fixture.example.com/bytes";
+const serving = (b64) => {
+  const buf = Buffer.from(b64, "base64");
+  return {
+    fetchImpl: async () => ({
+      status: 200, ok: true,
+      headers: new Headers({ "content-length": String(buf.length) }),
+      body: { getReader: () => { let sent = false; return {
+        read: async () => (sent ? { done: true } : (sent = true, { done: false, value: new Uint8Array(buf) })),
+        cancel: async () => {},
+      }; } },
+    }),
+    lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+  };
+};
+// Drop-in for uploadMedia: an `image` argument is carried down the URL lane,
+// anything else is passed straight through untouched.
+const upload = (args, k, db, opts = {}) => {
+  const { image, ...rest } = args ?? {};
+  return image === undefined
+    ? uploadMedia(args, k, db, opts)
+    : uploadMedia({ ...rest, image_url: FIXTURE_URL }, k, db, { ...opts, ...serving(image) });
+};
+
+
 test("the media door takes a script-bearing SVG — untrusted markup, stored, never executed", async () => {
   const db = odb();
   const { calls, put } = stubPut();
-  const r = await uploadMedia({ image: b64(HOSTILE_SVG) }, key(), db, { put });
+  const r = await upload({ image: b64(HOSTILE_SVG) }, key(), db, { put });
 
   assert.match(r.url, /\/media\/testers\/[0-9a-f]{64}\.svg$/, "content-addressed, .svg extension");
   assert.equal(r.type, "image/svg+xml");
@@ -80,7 +113,10 @@ test("the opt-in holds: the same bytes bounce at the avatar door", async () => {
     (e) => e.code === 422 && /JPEG, PNG, or WebP/.test(e.defect),
     "the default door does not know what an SVG is");
   // ...and ask the real avatar door, which must never reach a filesystem write.
-  assert.throws(() => updateProfileAvatar({ handle: "tester", image: b64(HOSTILE_SVG) }, key(), null, "/nonexistent-clone"),
+  // POS-150 made the image doors async, so the refusal is a REJECTION now.
+  // assert.throws would see a Promise, never an exception, and pass while
+  // proving nothing — the one shape this assertion must not take.
+  await assert.rejects(updateProfileAvatar({ handle: "tester", image: b64(HOSTILE_SVG) }, key(), null, "/nonexistent-clone"),
     (e) => e.code === 422 && /JPEG, PNG, or WebP/.test(e.defect));
 });
 
@@ -148,6 +184,6 @@ test("well-formed SVG in its several legal shapes is admitted", () => {
 
 test("the size ceiling is unchanged for SVG — one ceiling, every door", async () => {
   const huge = `<svg xmlns="http://www.w3.org/2000/svg"><!--${"x".repeat(2 * 1024 * 1024)}--></svg>`;
-  await assert.rejects(uploadMedia({ image: b64(huge) }, key(), odb(), { put: async () => { } }),
+  await assert.rejects(upload({ image: b64(huge) }, key(), odb(), { put: async () => { } }),
     (e) => e.code === 413, "a 2 MB SVG meets the same 1.5 MB wall a 2 MB JPEG meets");
 });

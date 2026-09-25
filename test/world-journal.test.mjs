@@ -65,6 +65,11 @@ const PUBLISHED = [
   { id: "the-town/let-there-be-light", by: "the-town", kind: "sited", tier: "constitution", at: { x: 0, y: 0 }, extent: { w: 1000, h: 1000 }, body: "the world frame" },
   { id: "the-town/town-square", by: "the-town", kind: "sited", tier: "constitution", at: { x: 100, y: 100 }, extent: { w: 40, h: 40 }, body: "the square" },
   { id: "alpha/published-note", by: "alpha", kind: "sited", tier: "market", at: { x: 20, y: 20 }, extent: { w: 4, h: 4 }, body: "alpha published this" },
+  // postmark#3025's ground, far from every point the other tests stand on. A
+  // painted house BIG enough (60x60) that a 25 m claim fits wholly inside it,
+  // standing on no parcel, and an ordinary parcel of the same neighbour's.
+  { id: "neighbour/the-big-house", by: "neighbour", kind: "sited", tier: "market", at: { x: 300, y: -300 }, extent: { w: 60, h: 60 }, body: "a painted house, standing on no parcel of anyone's" },
+  { id: "neighbour/the-neighbour-parcel", by: "neighbour", kind: "parcel", tier: "home", at: { x: -300, y: 300 }, extent: { w: 25, h: 25 }, body: "the ground neighbour holds" },
 ];
 
 // THE ENGINE, in miniature, on main — the office materialises `tools/` at the
@@ -161,13 +166,18 @@ export function containmentParents(marks) {
   return { parent, rootId: root?.id ?? null };
 }
 `);
-put("seeding/manifest.json", JSON.stringify({ homes: [] }));
-put("WORLD/households.json", JSON.stringify({ households: { alpha: "gh:1", beta: "gh:2" } }));
+// THE PAINTING NAMES ONE HOME (postmark#3025). The office must stop CONSULTING
+// it, not merely survive its absence: with the retired sovereignty guard
+// restored, this line is what reds #3025 LEG 1 at the end of this file.
+put("seeding/manifest.json", JSON.stringify({ homes: [{ household: "neighbour", home_id: "the-big-house", title: "the Big House" }] }));
+put("WORLD/households.json", JSON.stringify({ households: { alpha: "gh:1", beta: "gh:2", neighbour: "gh:3" } }));
 put("WORLD/marks/let-there-be-light/mark.md", record("the-town", "the world frame"));
 put("WORLD/marks/let-there-be-light/town-square/mark.md", record("the-town", "the square"));
 put("WORLD/marks/let-there-be-light/published-note/mark.md", record("alpha", "alpha published this"));
+put("WORLD/marks/let-there-be-light/the-big-house/mark.md", ["---", "kind: sited", "by: neighbour", "date: 2026-08-01", "at: { x: 300, y: -300 }", "extent: { w: 60, h: 60 }", "---", "", "a painted house, standing on no parcel of anyone's", ""].join(String.fromCharCode(10)));
+put("WORLD/marks/let-there-be-light/the-neighbour-parcel/mark.md", ["---", "kind: parcel", "by: neighbour", "date: 2026-08-01", "at: { x: -300, y: 300 }", "extent: { w: 25, h: 25 }", "---", "", "the ground neighbour holds", ""].join(String.fromCharCode(10)));
 put("WORLD/skeleton.json", JSON.stringify({ features: [], physics_registry: {} }));
-put("WORLD/world-state.json", JSON.stringify({ tick: 0, dials: {}, marks: PUBLISHED, parcels: [{ id: "alpha/alpha-parcel", household: "alpha", at: { x: 110, y: 105 }, extent: { w: 25, h: 25 } }], determined: {}, vague: [], rivalries: [], portfolios: {}, terrain_weight: {}, errors: [] }));
+put("WORLD/world-state.json", JSON.stringify({ tick: 0, dials: {}, marks: PUBLISHED, parcels: [{ id: "alpha/alpha-parcel", household: "alpha", at: { x: 110, y: 105 }, extent: { w: 25, h: 25 } }, { id: "neighbour/the-neighbour-parcel", household: "neighbour", at: { x: -300, y: 300 }, extent: { w: 25, h: 25 } }], determined: {}, vague: [], rivalries: [], portfolios: {}, terrain_weight: {}, errors: [] }));
 
 // THE FROZEN FILING MANIFEST (the freeze, 2026-08-25) — seeded on MAIN, before
 // any sketchbook branch exists, because that is where the real one lives and
@@ -1272,4 +1282,57 @@ test("B1 CAN-FAIL — scope the guard by the bare handle and the duplicate is PE
 
   assert.equal(permitted.id, "alpha/the-docketed-one",
     "RED, deliberately: the wrong household spelling lets the duplicate through. The first test is this one, flipped back.");
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// postmark#3025 · the sovereignty guard's retirement, at the JOURNAL door
+// ════════════════════════════════════════════════════════════════════════════
+//
+// Legs 1 and 3 of `test/parcel-over-a-painted-house.test.mjs`, ported onto
+// this file's store harness (main-into-w40, 2026-09-25). Main wrote them
+// against a sqlite journal door. Since POS-156 (G1) that door reads and writes
+// the store with no fallback, so they run here, where the one hand-built store
+// answers the guards and the write. Leg 2, the git-era twin, stays in that file.
+//
+// THE CAN-FAIL FLIP: restore the guard in `src/world.mjs` (it read
+// `seeding/manifest.json` and refused a parcel wholly inside another household's
+// PAINTED house) and LEG 1 reds with the 403. LEG 3 is green on both sides and
+// is a non-regression, not a discriminator.
+
+test("#3025 LEG 1 · THE FIX, journal door: a parcel claim over a painted house standing on nobody's parcel is ADMITTED", async () => {
+  process.env.WORLD_SINGLE_LOG = "1";
+  const { leaveMarkViaOffice } = await import("../src/world.mjs");
+  const store = guardStore();
+  let out;
+  try {
+    out = { ok: true, ...(await withGuardsFlipped(store, () => leaveMarkViaOffice(repo, {
+      slug: "the-common-ground", kind: "parcel", at: { x: 300, y: -300 },
+      body: "common ground by the standing law — the painting said otherwise",
+    }, houseA))) };
+  } catch (e) { out = { ok: false, code: e?.code, defect: e?.defect ?? e?.message }; }
+  assert.notEqual(out.code, 403,
+    `the retired guard fired: ${JSON.stringify(out)} — before #3025 this is 403 "that spot is inside neighbour's home"`);
+  assert.equal(out.ok, true, `the claim must go forward: ${JSON.stringify(out)}`);
+  assert.equal(out.id, "alpha/the-common-ground");
+  assert.equal(store.acts.length, 1, "and the door wrote it to the store — the claim really went through");
+});
+
+// This leg does not move when the guard is restored. It says, in a test, what
+// this door does about a claim over a neighbour's PARCEL: it admits it, and
+// always has. The refusal is `tools/marks-fold.mjs § admissibility`, at the
+// crossing: "parcel overlaps <id> — inadmissible (MARKS.md § Parcels)".
+test("#3025 LEG 3 · NON-REGRESSION: a parcel claim over a neighbour's PARCEL is admitted by this door and refused at the crossing", async () => {
+  process.env.WORLD_SINGLE_LOG = "1";
+  const { leaveMarkViaOffice } = await import("../src/world.mjs");
+  const store = guardStore();
+  let out;
+  try {
+    out = { ok: true, ...(await withGuardsFlipped(store, () => leaveMarkViaOffice(repo, {
+      slug: "over-the-neighbour", kind: "parcel", at: { x: -300, y: 300 },
+      body: "straight over the neighbour's ground",
+    }, houseA))) };
+  } catch (e) { out = { ok: false, code: e?.code, defect: e?.defect ?? e?.message }; }
+  assert.equal(out.ok, true,
+    `unchanged by #3025: this door carries no overlap check, before or after. Got ${JSON.stringify(out)}`);
+  assert.equal(out.id, "alpha/over-the-neighbour");
 });

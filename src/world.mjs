@@ -39,7 +39,10 @@ import {
   resolvedWorldHousehold,
 } from "./world-branches.mjs";
 import { moveGuard } from "./world-move-guard.mjs"; // the drain night: moving a mark moves what stands on it
-import { ACTION_AMEND, ACTION_LEAVE, ACTION_WITHDRAW, CLASS_MARK, CLASS_MOVE, CLASS_VOICE, anchorAt, appendActFlipped, appendJournal, filedPathOfAt, laneFlipped, mirrorLaneAct, pathFor, pinWitnesses, singleLogEnabled } from "./world-journal.mjs"; // POS-5 slice 1: the one append-only log
+import { ACTION_AMEND, ACTION_LEAVE, ACTION_WITHDRAW, CLASS_MARK, CLASS_MOVE, CLASS_VOICE, anchorAt, appendActFlipped, appendJournal, filedPathOfAt, frozenFilingAt, laneFlipped, mirrorLaneAct, pathFor, pinWitnesses, singleLogEnabled } from "./world-journal.mjs"; // POS-5 slice 1: the one append-only log
+// The declared-parent law (postmark#3020) — the word, the predicate and the
+// sentence, minted once and shared with the crossing's write-down.
+import { declaredParentIdOf, declaredParentRefusal, idOfMarkFileFrom, outsideParentBounce } from "./mark-declared-parent.mjs";
 import { guardedDraftsForKey, guardedLiveChildrenOf, guardedLiveMarks } from "./world2-guards.mjs"; // B1: the door guards' own reads, behind W2_GUARDS (runbook §4 B1)
 import { WORLD_STAKE_TOOLS, callWorldStakeTool, worldPortfolioStakeSlice, markStakeBlock } from "./world-stake.mjs"; // P3 draft, append-shaped
 import { toConfirm } from "./stamps-preview.mjs"; // POS-83: the inline stake's half of the confirmation step
@@ -204,18 +207,37 @@ function berthAboard(slug) {
   catch { return false; }
 }
 
-// household → home mark id, extracted from the world's own seeding manifest
-// (itself extracted from the atlas HOME_XY — never a second placement source).
-let _homes = null;
-function homesIndex() {
-  if (_homes) return _homes;
-  _homes = new Map();
-  try {
-    const m = JSON.parse(readFileSync(join(WORLD_CLONE, "seeding/manifest.json"), "utf8"));
-    for (const h of m.homes ?? []) if (h.household && h.home_id) _homes.set(h.household, `${h.household}/${h.home_id}`);
-  } catch { /* no manifest: everyone defaults to the quay */ }
-  return _homes;
-}
+// ── WHERE YOU LIVE IS YOUR PARCEL, AND THE ENGINE ALREADY SAID SO ───────────
+//                                       (postmark#3025, Keemin 2026-09-20)
+//
+// There used to be a `homesIndex()` here reading the world's
+// `seeding/manifest.json` — the July atlas painting, 88 households, a build
+// intermediate whose own first line says "not world canon". `worldBlockForHandle`
+// already fell through to `homeOf`'s answer whenever the painting named nothing,
+// so the painting was never the derivation: it was an OVERRIDE of the record's
+// answer with a seeded house's id, kept because it looked like "the more
+// specific answer".
+//
+// It was also a wrong one, and could not be corrected by living here. A painting
+// is not amendable, so for four months it outranked the record:
+// `current-the-reader` read "the Snug harbour" while the fold stands that mark
+// on spar's coast and calls it MARKET, and fourteen of the painted house ids had
+// already stopped being marks at all.
+//
+// SO THE OVERRIDE IS SIMPLY GONE, AND NOTHING REPLACES IT. `tools/where-is.mjs §
+// homeOf` answers the question this field asks — it returns the household's
+// parcel with `source: "parcel"`, the law the town already carries ("the parcel
+// IS the home", ruling 7). The office now says what the engine says, for
+// everyone, which is also the founder's rule for the map: the parcel's own name.
+//
+// AND NO PICKER WENT IN ITS PLACE, deliberately. I measured one first — the
+// largest mark of yours standing `home` on your own ground, which reproduces the
+// painting on 68 of 68 households where the painting is still true. It also
+// hands a 4 m² door light to lupi and a 6 m² table to solan as "their house",
+// because the record carries no DWELLING KIND and so any picker must guess.
+// Keemin's word on reading that table: use the parcel's name. A guess with a
+// good score is still a guess; the parcel is a fact.
+
 
 // Where to stand — split so the decision (which resident / coords / bounce) is
 // pure over (args, key) and settles BEFORE the engine loads. A multi-resident
@@ -2271,9 +2293,6 @@ function noteForHandle(worldClone, key, handle) {
 // exactly what it read before, and one that does can stop impersonating.
 export const HOME_BLOCK_UNREADABLE = "the office cannot read the world engine right now — this is not an answer about your ground";
 export async function worldBlockForHandle(handle, key = null) {
-  // The house's DISPLAY id still comes from the seeding manifest — that is all
-  // it was ever meant to be (see homesIndex). Placement comes from the engine.
-  const id = homesIndex().get(handle) ?? null;
   // No world to read (unconfigured clone, no main ref) → still never a throw,
   // but no longer indistinguishable from unplaced. The pre-engine version got
   // the non-throwing part free by short-circuiting; asking the engine means
@@ -2281,20 +2300,21 @@ export async function worldBlockForHandle(handle, key = null) {
   let w = null, homeOf = null;
   try { w = await world(); ({ homeOf } = await whereMod()); }
   catch (e) {
-    return { mark_id: id, x: null, y: null, sited: false,
+    // `mark_id` is null here rather than a painted id (#3025): every other
+    // field on this branch is the office saying it cannot see, and a house id
+    // read out of a file the engine was never needed for was the one field
+    // that answered anyway — the disclosure guard's own shape, one field deep.
+    return { mark_id: null, x: null, y: null, sited: false,
              unreadable: true, unreadable_reason: `${HOME_BLOCK_UNREADABLE} (${String(e?.message ?? e).slice(0, 120)})` };
   }
 
-  // ONE derivation, shared with world_orient. Prefer the seeded house mark as
-  // the id when it exists and is actually placed (26 residents read that way and
-  // it is the more specific answer); otherwise name the ground itself.
+  // ONE derivation, shared with world_orient, and now it is the ONLY one: the
+  // engine's answer, unedited. This used to be the fallback branch, reached
+  // only when the painting named nothing; it is the whole function now.
   const home = homeOf(handle, w);
   const transport = await doorstepTransportFor(handle, w);
-  if (!home.placed) return { mark_id: id, x: null, y: null, sited: false, ...(transport ? { transport } : {}) };
-  const house = id ? w.marks.find((m) => m.id === id && m.at) : null;
-  return house
-    ? { mark_id: id, x: house.at.x, y: house.at.y, sited: true, ...(transport ? { transport } : {}) }
-    : { mark_id: home.mark_id, x: home.x, y: home.y, sited: true, ...(transport ? { transport } : {}) };
+  if (!home.placed) return { mark_id: null, x: null, y: null, sited: false, ...(transport ? { transport } : {}) };
+  return { mark_id: home.mark_id, x: home.x, y: home.y, sited: true, ...(transport ? { transport } : {}) };
 }
 
 /**
@@ -2406,6 +2426,56 @@ function canonForGuards() {
   const state = publishedState(WORLD_CLONE).state ?? {};
   const marks = state.marks ?? [];
   return { marks, byId: new Map(marks.map((m) => [m.id, m])), ids: new Set(marks.map((m) => m.id)) };
+}
+
+/**
+ * THE DECLARED-PARENT GUARD at the amend door (postmark#3020, Keemin 2026-09-20).
+ *
+ * Returns null to admit, or `{ code, defect, hint }` to bounce — the move
+ * guard's shape next door, and for the move guard's reason: the caller owns the
+ * bounce grammar, and a test can assert the sentence a resident actually reads.
+ *
+ * THE THREE READS, and none of them is a fold:
+ *
+ *   1. the mark's frozen filing path, from `WORLD/filing-freeze.json` at main
+ *      (`frozenFilingAt` caches by sha, so this is one read per world revision);
+ *   2. the parent that path declares — the nearest enclosing directory the
+ *      manifest names, stopping BEFORE the world root, because a mark filed
+ *      under the root declares the frame and not a parent;
+ *   3. that parent as the last published fold composed it, out of the SAME
+ *      `canon` the move guard and the parcel cap already hold.
+ *
+ * The verdict is the clone's `pointWithinMark` — `tools/world-verbs.mjs`, the
+ * function the enter door adjudicates with and `leavingWhileOccupying` walks
+ * with. The office does not own a definition of "inside" and must not grow one.
+ *
+ * IT ADMITS WHENEVER IT CANNOT ASK. No manifest, no frozen path, a root-level
+ * filing, a parent canon does not carry, a parent with no ground, no predicate:
+ * all admit. This guard ADDS a refusal to a door that works today, so an
+ * unanswerable question must never become a "no" — the opposite of `dependentsOf`
+ * next door, which returns null-not-empty precisely because a missing file there
+ * would silently stop a guard that was already load-bearing.
+ */
+export async function declaredParentGuard(id, clean, canon = null, repo = WORLD_CLONE, prior = null) {
+  try {
+    const board = canon ?? canonForGuards();
+    const frozen = frozenFilingAt(repo, String(mainRef(repo)));
+    const markFile = frozen.get(String(id));
+    if (!markFile) return null;                       // no frozen filing → a create, or born after the freeze: geometry decides
+    const parentId = declaredParentIdOf(markFile, idOfMarkFileFrom(frozen));
+    if (!parentId) return null;                       // filed under the root: the frame, not a parent
+    const { verbs } = await mods();
+    // `prior` is the SAME value the move guard is handed two lines up — the
+    // journal's word for a mark amended since the last drain, else canon's.
+    // Defaulting it out of `canon` keeps a caller that does not pass one honest
+    // rather than silently ungated.
+    const standing = prior ?? board.byId.get(String(id)) ?? null;
+    const finding = declaredParentRefusal({
+      id, prior: standing, next: clean,
+      parentId, parent: board.byId.get(parentId) ?? null, pointWithinMark: verbs?.pointWithinMark,
+    });
+    return finding ? outsideParentBounce(finding) : null;
+  } catch { return null; }                            // could not look → admit, never refuse on a read failure
 }
 
 /**
@@ -2695,11 +2765,41 @@ async function journalLeaveMark(clean, { crossing = currentCrossing() } = {}) {
     if (amending) {
       const refusal = moveGuard(WORLD_CLONE, { id, prior: priorLive ?? priorCanon, next: clean });
       if (refusal) throw bounce(refusal.code, refusal.defect, refusal.hint);
+
+      // ── THE DECLARED PARENT (postmark#3020, Keemin-ruled 2026-09-20) ──────
+      //
+      // "if marks DECLARE their parent, refuse at that lands outside the parent.
+      //  If they DON'T, dont, and parent just gets computed by geometry."
+      //
+      // A mark declares its parent by its FROZEN FILING PATH, and `at` is
+      // absolute (the schema's word, and the owner's). So an amend whose `at`
+      // lands outside the mark it is filed inside is a contradiction the office
+      // must not resolve on the owner's behalf — the Snug mooring, filed in the
+      // harbour and amended to a point five kilometres out to sea, which the
+      // 2026-09-15 crossing wrote and three settlements answered with.
+      //
+      // WHY HERE AND NOT ONLY AT THE CROSSING. The write-down refuses the same
+      // row under the same word, but a crossing refusal reaches the owner hours
+      // later as a line in a receipt they do not read. This is the door they are
+      // standing at; the sentence names the parent, the point, the ground and
+      // the two ways on.
+      //
+      // The cost is the move guard's, not the fold gate's: one manifest read
+      // (cached by sha), one walk up the path's own directories, and one
+      // point-in-mark test against the last fold's composed parent. No fold, no
+      // geometry of our own — `pointWithinMark` is the CLONE'S, the same
+      // function the enter door adjudicates with. The 2026-08-22 ruling that
+      // took the fold gate off this door is not reopened.
+      // The SAME `prior` the move guard was handed on the line above — one
+      // reading of what is standing, two guards, so they cannot disagree about
+      // whether this amend moved anything.
+      const parentRefusal = await declaredParentGuard(id, clean, canon, WORLD_CLONE, priorLive ?? priorCanon);
+      if (parentRefusal) throw bounce(parentRefusal.code, parentRefusal.defect, parentRefusal.hint);
     }
 
     // ── the parcel dial and the claim cap, as lookups ────────────────────────
     if (clean.kind === "parcel") {
-      const { PARCEL_CLAIM_CAP, PARCEL_CAP_LAW_DATE, PARCEL_EXTENT_M, marksContain } = await foldConstants();
+      const { PARCEL_CLAIM_CAP, PARCEL_CAP_LAW_DATE, PARCEL_EXTENT_M } = await foldConstants();
       const main = mainRef(WORLD_CLONE);
       const side = PARCEL_EXTENT_M ?? 25;
       clean.extent = { w: side, h: side };   // the town's dial, never the claimant's
@@ -2745,18 +2845,45 @@ async function journalLeaveMark(clean, { crossing = currentCrossing() } = {}) {
         throw bounce(403, `your household already holds ${mine} parcel${mine === 1 ? "" : "s"}`,
           `parcel claiming is capped at ${cap} per household (ruled ${PARCEL_CAP_LAW_DATE ?? "2026-07-30"}; prior holdings stand) — new ground for this household is the founder's word, not the door's`);
 
-      // ── the sovereignty guard, still standing for GROUND ─────────────────
-      // Repealed for sited marks 2026-08-17 (the consent law supersedes it);
-      // kept for parcels, because claiming ground inside another's walls is a
-      // land claim and the return machinery is built for marks, not ground.
-      let manifest = null;
-      try { manifest = readJsonAtRef(WORLD_CLONE, main, "seeding/manifest.json"); } catch { /* no manifest → no homes to protect */ }
-      if (typeof marksContain === "function") for (const h of manifest?.homes ?? []) {
-        if (h.household === clean.by) continue;
-        const home = canon.byId.get(`${h.household}/${h.home_id}`);
-        if (home?.at && marksContain(home, { at: clean.at, extent: clean.extent, points: clean.points }))
-          throw bounce(403, `that spot is inside ${h.household}'s home`, "leave a mark near a home if you like, but not within someone else's walls — pick a spot outside them");
-      }
+      // ── the sovereignty guard is GONE, and it was refusing nothing ───────
+      //
+      // (postmark#3025, 2026-09-20.) It read `seeding/manifest.json` — the July
+      // atlas painting — and refused a parcel whose whole footprint lay inside
+      // another household's PAINTED house. Repealed for sited marks 2026-08-17
+      // when the consent law superseded it; kept for parcels on the reasoning
+      // that claiming ground inside another's walls is a land claim.
+      //
+      // MEASURED BEFORE IT WAS DELETED, over the live fold at `settlement/S74`,
+      // and the reasoning turned out to protect an empty set. Its test is
+      // CONTAINMENT — the claim must sit wholly inside the house — and a claim
+      // is a full 25 m town dial. Of the 74 painted houses still standing in
+      // the record, exactly FOUR are 25 m on both sides, and all four are the
+      // household's own PARCEL wearing a house's name (kai/the-working-window,
+      // milo/the-purple-door, rowan-archive/the-violet-archive,
+      // vellix/casa-nera). Every genuinely sited painted house is smaller than
+      // the dial — the largest is 30×22 — so no parcel claim could ever be
+      // contained by one, and this guard has not been able to fire on a house
+      // since the dial and the paintings were both what they are.
+      //
+      // What it could still fire on, those four parcels, the fold already
+      // refuses in its own words and by the rule that belongs to it: "parcel
+      // overlaps <id> — inadmissible (MARKS.md § Parcels)", first-in-claim-order
+      // wins (`tools/marks-fold.mjs § admissibility`). Overlap is the wider
+      // test, so the guard's set is a strict subset of the fold's.
+      //
+      // THE ONE THING THAT CHANGES IS WHEN A CLAIMANT HEARS "no", and only for
+      // those four: a door 403 becomes a crossing inadmissibility. That is
+      // already every other overlapping claim's experience — this door has
+      // never carried an overlap check of its own — so the office now tells one
+      // story about overlapping ground instead of two.
+      //
+      // And the ground the guard was imagined to protect — a declared house
+      // standing off every parcel, common ground by the standing law — is empty
+      // too: zero of the 74 overlap no parcel. The Snug harbour, the mark that
+      // made this issue, is 30×22 on spar's coast and reads MARKET in the fold;
+      // the guard never refused a claim over it (22 < 25, no containment), and
+      // the fold refuses one anyway, because current-the-reader's own parcel
+      // `the-keepers-flat` overlaps that ground.
     }
 
     // ── the parent, as a lookup ──────────────────────────────────────────────

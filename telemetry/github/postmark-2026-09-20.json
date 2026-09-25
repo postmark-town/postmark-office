@@ -1,0 +1,240 @@
+{
+  "repo": "postmark-town/postmark",
+  "captured_at": "2026-09-20T18:51:47-04:00",
+  "views": {
+    "count": 1918,
+    "uniques": 90,
+    "views": [
+      {
+        "timestamp": "2026-09-06T00:00:00Z",
+        "count": 48,
+        "uniques": 9
+      },
+      {
+        "timestamp": "2026-09-07T00:00:00Z",
+        "count": 102,
+        "uniques": 9
+      },
+      {
+        "timestamp": "2026-09-08T00:00:00Z",
+        "count": 96,
+        "uniques": 15
+      },
+      {
+        "timestamp": "2026-09-09T00:00:00Z",
+        "count": 70,
+        "uniques": 14
+      },
+      {
+        "timestamp": "2026-09-10T00:00:00Z",
+        "count": 47,
+        "uniques": 8
+      },
+      {
+        "timestamp": "2026-09-11T00:00:00Z",
+        "count": 73,
+        "uniques": 11
+      },
+      {
+        "timestamp": "2026-09-12T00:00:00Z",
+        "count": 147,
+        "uniques": 17
+      },
+      {
+        "timestamp": "2026-09-13T00:00:00Z",
+        "count": 242,
+        "uniques": 21
+      },
+      {
+        "timestamp": "2026-09-14T00:00:00Z",
+        "count": 180,
+        "uniques": 20
+      },
+      {
+        "timestamp": "2026-09-15T00:00:00Z",
+        "count": 401,
+        "uniques": 17
+      },
+      {
+        "timestamp": "2026-09-16T00:00:00Z",
+        "count": 261,
+        "uniques": 21
+      },
+      {
+        "timestamp": "2026-09-17T00:00:00Z",
+        "count": 69,
+        "uniques": 12
+      },
+      {
+        "timestamp": "2026-09-18T00:00:00Z",
+        "count": 71,
+        "uniques": 14
+      },
+      {
+        "timestamp": "2026-09-19T00:00:00Z",
+        "count": 111,
+        "uniques": 10
+      }
+    ]
+  },
+  "clones": {
+    "count": 12938,
+    "uniques": 2265,
+    "clones": [
+      {
+        "timestamp": "2026-09-06T00:00:00Z",
+        "count": 584,
+        "uniques": 173
+      },
+      {
+        "timestamp": "2026-09-07T00:00:00Z",
+        "count": 875,
+        "uniques": 268
+      },
+      {
+        "timestamp": "2026-09-08T00:00:00Z",
+        "count": 539,
+        "uniques": 172
+      },
+      {
+        "timestamp": "2026-09-09T00:00:00Z",
+        "count": 417,
+        "uniques": 145
+      },
+      {
+        "timestamp": "2026-09-10T00:00:00Z",
+        "count": 628,
+        "uniques": 223
+      },
+      {
+        "timestamp": "2026-09-11T00:00:00Z",
+        "count": 621,
+        "uniques": 243
+      },
+      {
+        "timestamp": "2026-09-12T00:00:00Z",
+        "count": 1027,
+        "uniques": 357
+      },
+      {
+        "timestamp": "2026-09-13T00:00:00Z",
+        "count": 1156,
+        "uniques": 387
+      },
+      {
+        "timestamp": "2026-09-14T00:00:00Z",
+        "count": 1080,
+        "uniques": 288
+      },
+      {
+        "timestamp": "2026-09-15T00:00:00Z",
+        "count": 1032,
+        "uniques": 287
+      },
+      {
+        "timestamp": "2026-09-16T00:00:00Z",
+        "count": 1156,
+        "uniques": 269
+      },
+      {
+        "timestamp": "2026-09-17T00:00:00Z",
+        "count": 1360,
+        "uniques": 390
+      },
+      {
+        "timestamp": "2026-09-18T00:00:00Z",
+        "count": 1066,
+        "uniques": 288
+      },
+      {
+        "timestamp": "2026-09-19T00:00:00Z",
+        "count": 1397,
+        "uniques": 355
+      }
+    ]
+  },
+  "popular_paths": [
+    {
+      "path": "/postmark-town/postmark",
+      "title": "Overview",
+      "count": 244,
+      "uniques": 40
+    },
+    {
+      "path": "/postmark-town/postmark/pulls",
+      "title": "/pulls",
+      "count": 77,
+      "uniques": 13
+    },
+    {
+      "path": "/postmark-town/postmark/tree/main/WHITE_PAGES",
+      "title": "/tree/main/WHITE_PAGES",
+      "count": 77,
+      "uniques": 12
+    },
+    {
+      "path": "/postmark-town/postmark/issues",
+      "title": "/issues",
+      "count": 71,
+      "uniques": 11
+    },
+    {
+      "path": "/postmark-town/postmark/commits/main",
+      "title": "/commits/main",
+      "count": 35,
+      "uniques": 4
+    },
+    {
+      "path": "/postmark-town/postmark/tree/main/WHITE_PAGES/eli-quick",
+      "title": "/tree/main/WHITE_PAGES/eli-quick",
+      "count": 28,
+      "uniques": 3
+    },
+    {
+      "path": "/postmark-town/postmark/tree/main/HARBOR",
+      "title": "/tree/main/HARBOR",
+      "count": 24,
+      "uniques": 4
+    },
+    {
+      "path": "/postmark-town/postmark/pull/2864",
+      "title": "/pull/2864",
+      "count": 24,
+      "uniques": 3
+    },
+    {
+      "path": "/postmark-town/postmark/pull/2561",
+      "title": "/pull/2561",
+      "count": 23,
+      "uniques": 2
+    },
+    {
+      "path": "/postmark-town/postmark/pull/2494",
+      "title": "/pull/2494",
+      "count": 20,
+      "uniques": 2
+    }
+  ],
+  "popular_referrers": [
+    {
+      "referrer": "github.com",
+      "count": 355,
+      "uniques": 27
+    },
+    {
+      "referrer": "postmark.town",
+      "count": 173,
+      "uniques": 33
+    },
+    {
+      "referrer": "Google",
+      "count": 39,
+      "uniques": 6
+    },
+    {
+      "referrer": "DuckDuckGo",
+      "count": 3,
+      "uniques": 2
+    }
+  ]
+}

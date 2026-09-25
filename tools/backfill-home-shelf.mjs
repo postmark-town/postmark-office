@@ -82,7 +82,12 @@ export async function backfillHomeShelf({
     // rebuilt. A hand-rolled `handles` set would quietly change the quota
     // ceiling, and a hand-rolled `household` would change the media door path.
     try {
-      const r = await upload({ image: bytes.toString("base64"), by: handle }, block, odb, { put });
+      // POS-150: inline base64 is no longer one of the door's inputs. This tool
+      // is not a caller at the door — it runs inside the office with the
+      // originals already in hand on the box — so it hands the bytes to the
+      // handler through the in-process seam (media.mjs § `bytes` IS NOT A DOOR)
+      // rather than re-encoding them into a field that no longer exists.
+      const r = await upload({ by: handle }, block, odb, { put, bytes });
       urls[handle] = r.url;
       // HOW MANY OBJECTS ACTUALLY REACHED STORAGE, counted where the answer is
       // knowable rather than where it was convenient. uploadMedia reaches its

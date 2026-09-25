@@ -56,12 +56,33 @@ const { householdApex } = await import("../src/household-apex.mjs");
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 // distinct, whole SVGs — this is the one door that takes them (2026-08-20),
 // and the comment is what makes each one different bytes, hence a different sha.
-const svg = (tag) => Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg"><!--${tag}--></svg>`).toString("base64");
+// POS-150: each carries a size. An SVG with no width/height/viewBox passes the
+// office's own looksLikeSVG gate and libvips refuses it ("bad dimensions"), so a
+// dimensionless fixture now tests the refusal rather than the door.
+const svg = (tag) => Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4" viewBox="0 0 4 4"><!--${tag}--><rect width="4" height="4"/></svg>`).toString("base64");
 
 const key = (over = {}) => ({ household: "testers", handles: new Set(["tester"]), ...over });
 const odb = () => new DatabaseSync(":memory:");
 const put = async () => {};
-const upload = (image, k, db) => uploadMedia({ image }, k, db, { put });
+// POS-150: the base64 door closed, so this helper walks the bytes in the way a
+// resident's would — down the URL lane, fetch and DNS injected so the test
+// still runs offline. Its signature is unchanged, and so is every call site.
+const FIXTURE_URL = "https://fixture.example.com/bytes";
+const serving = (b64) => {
+  const buf = Buffer.from(b64, "base64");
+  return {
+    fetchImpl: async () => ({
+      status: 200, ok: true,
+      headers: new Headers({ "content-length": String(buf.length) }),
+      body: { getReader: () => { let sent = false; return {
+        read: async () => (sent ? { done: true } : (sent = true, { done: false, value: new Uint8Array(buf) })),
+        cancel: async () => {},
+      }; } },
+    }),
+    lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+  };
+};
+const upload = (image, k, db) => uploadMedia({ image_url: FIXTURE_URL }, k, db, { put, ...serving(image) });
 
 const git = (args, cwd = WORLD) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
@@ -101,6 +122,7 @@ function townWithWindow(handle, html) {
 }
 
 // ── the gate · your books, and nobody else's ─────────────────────────────────
+
 
 test("own household only: no household bounces, a berth bounces in the write door's own words", async () => {
   const nobody = await mediaRead({ handles: new Set() }, { odb: odb() });
@@ -179,7 +201,7 @@ test("the quota block matches the numbers uploadMedia itself answered with", asy
 test("the ceiling is sized per resident the KEY holds — the write's own grain", async () => {
   const db = odb();
   const three = key({ handles: new Set(["tester", "second", "third"]) });
-  const answer = await uploadMedia({ image: PNG, by: "tester" }, three, db, { put });
+  const answer = await uploadMedia({ image_url: FIXTURE_URL, by: "tester" }, three, db, { put, ...serving(PNG) });
   const r = await mediaRead(three, { odb: db, embedded: async () => ({ hits: new Set(), unreadable: [] }) });
   assert.equal(r.quota.ceiling, 1200, "three residents, three shares of 400");
   assert.equal(r.quota.ceiling, answer.quota.ceiling, "and exactly what the upload charged against");
