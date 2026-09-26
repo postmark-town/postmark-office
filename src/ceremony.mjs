@@ -97,8 +97,8 @@ export const REFUSALS = Object.freeze({
   BAD_SLUG: Object.freeze({
     code: 422,
     field: "household",
-    defect: "that name does not make a household key",
-    hint: "a household key is lowercase letters, digits and single hyphens, 2–40 characters — the same alphabet a resident handle uses, because both have to survive being a path.",
+    defect: "a household's name must make a key of 2–40 characters: lowercase letters, digits and single hyphens",
+    hint: "the key is made from the name you give: letters are lowercased, and spaces, dots and other punctuation become single hyphens. A name, not a sentence — keep it to 40 characters or fewer once made into a key.",
   }),
   TAKEN: Object.freeze({
     code: 409,

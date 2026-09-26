@@ -138,7 +138,7 @@ export const DECLARE_BOUNCES = [
   { field: "card", code: 422, rule: "card is required and must not be empty" },
   { field: "card", code: 413, rule: "card must be under 50,000 bytes" },
   { field: "household", code: 422, rule: "household is required — it is the thing being declared" },
-  { field: "household", code: 422, rule: "household must slug to a non-empty registry key" },
+  { field: "household", code: 422, rule: "household's name must make a key of 2–40 characters: lowercase letters, digits and single hyphens (letters are lowercased; spaces, dots and other punctuation become single hyphens)" },
   { field: "household", code: 409, rule: "household must not already stand in the town" },
   { field: "credential", code: 409, rule: "your credential must not already keep a household — one household per credential" },
 ];
@@ -305,13 +305,19 @@ export function conformance(args = {}, { db, registry, clone, key, odb = null } 
   // and `victor-b.-rose-e.` came to stand on the roll. Those two are history
   // and they are never re-validated; a NEW slug is held to the handle's own
   // alphabet, which is the ruling.
-  const slug = slugFromName(household);
+  // A DOT BECOMES A HYPHEN for a new house (Keemin, 2026-09-26): the key's
+  // alphabet has no dot, and a name like "fern.hollow" should found fern-hollow,
+  // not bounce. Done HERE and not in `slugFromName`, which is the shared deriver
+  // the standing keys (cadaeic.space) are read through; changing it would move them.
+  const keyName = household.replace(/[.]/g, " ");
+  const slug = slugFromName(keyName);
   if (!slug || !slugIsWellFormed(slug)) throw refuse(REFUSALS.BAD_SLUG, slug || household);
 
   // 10 — the slug is globally unique. The mint checks this again against the
   // record under the lock, and that is the check that decides; this one is the
   // courtesy that lets the door name the field fast.
-  if (houseForName(registry, household)) throw refuse(REFUSALS.TAKEN, slug);
+  // Both spellings are asked, so "cadaeic.space" cannot found a near-twin cadaeic-space.
+  if (houseForName(registry, household) || houseForName(registry, keyName)) throw refuse(REFUSALS.TAKEN, slug);
 
   // 12 — one household per credential. The other direction (one credential per
   // household) is already law in the key desk: mintHouseholdKey rotates any
