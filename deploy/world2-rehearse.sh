@@ -2,13 +2,24 @@
 # world2-rehearse.sh — ONE COMMAND: a fresh copy of prod's store, a train's
 # migrations on it, and the next window's clearing (POS-242 parts 1-2).
 #
-#   world2-rehearse.sh <train ref> [--arm <sql file>] [--no-copy] [--no-clear]
+#   world2-rehearse.sh <train ref> [--seed-registry] [--arm <sql file>] [--no-copy] [--no-clear]
 #
 #     <train ref>   a branch or sha of postmark-town/postmark-office, e.g.
 #                   train/2026-w40. Its migrations and its clearing are what run.
 #     --arm <sql>   applied to the copy, as its owner, AFTER the migrations and
 #                   BEFORE the clearing — the falsifier's door
 #                   (world2/tools/rehearsal-falsifier-212.sql).
+#     --seed-registry   after the migrations, the household registry's one-time
+#                   fill — tools/registry-seed.mjs --apply, then
+#                   tools/registry-drain.mjs --check, which must exit 0 — from
+#                   the rehearsal's own town clone. This is the w40 INSTALL order
+#                   (POS-187: "019 -> seed -> --check green"), and the clearing
+#                   needs it: on 019's tables EMPTY, ownerHouseholdFor refuses
+#                   NO_RECORD ("this office cannot read the town's roll, so it
+#                   will not mint a household") and the crossing does not run —
+#                   measured on this copy, 2026-09-26. Runs as rehearsal_runner,
+#                   the copy's owner; prod runs it as office_api, a pen this lane
+#                   does not hold (Wright's ruling: only the pens a step needs).
 #     --no-copy     reuse the copy as it stands (a second clearing on it).
 #     --no-clear    migrations only.
 #
@@ -36,17 +47,18 @@ REHEARSAL_DIR="${REHEARSAL_DIR:-/srv/world2-lab/rehearsal}"
 LAB="${WORLD2_LAB:-/srv/world2-lab}"
 DB="world2_rehearsal"
 
-REF=""; ARM=""; COPY=true; CLEAR=true
+REF=""; ARM=""; COPY=true; CLEAR=true; SEED=false
 while [ $# -gt 0 ]; do
   case "$1" in
     --arm) ARM="${2:-}"; shift 2 ;;
     --no-copy) COPY=false; shift ;;
     --no-clear) CLEAR=false; shift ;;
+    --seed-registry) SEED=true; shift ;;
     -*) echo "unknown flag $1" >&2; exit 2 ;;
     *) REF="$1"; shift ;;
   esac
 done
-[ -n "$REF" ] || { echo "usage: world2-rehearse.sh <train ref> [--arm <sql>] [--no-copy] [--no-clear]" >&2; exit 2; }
+[ -n "$REF" ] || { echo "usage: world2-rehearse.sh <train ref> [--seed-registry] [--arm <sql>] [--no-copy] [--no-clear]" >&2; exit 2; }
 [ -z "$ARM" ] || [ -f "$ARM" ] || { echo "--arm: no such file $ARM" >&2; exit 2; }
 
 mkdir -p "$REHEARSAL_DIR" && chmod 0700 "$REHEARSAL_DIR" || exit 1
@@ -86,11 +98,30 @@ fi
 
 # ── the runner ──────────────────────────────────────────────────────────────
 RECEIPT="$REHEARSAL_DIR/receipt-$(date -u +%Y%m%dT%H%M%SZ).json"
-ARGS=(--tree "$T" --db "$DB" --password-file "$REHEARSAL_DIR/runner.pw"
-      --town-repo "$REHEARSAL_DIR/town" --world-repo "$REHEARSAL_DIR/world" --json "$RECEIPT")
+BASE=(--tree "$T" --db "$DB" --password-file "$REHEARSAL_DIR/runner.pw"
+      --town-repo "$REHEARSAL_DIR/town" --world-repo "$REHEARSAL_DIR/world")
+run() { ( cd "$RUNNER_ROOT" && env -i PATH="$PATH" HOME="${HOME:-/tmp}" node world2/tools/rehearse.mjs "${BASE[@]}" "$@" ); }
+
+if [ "$SEED" = true ]; then
+  # Migrations first (the runner's own receipt for them), then the fill, then the
+  # clearing below with --no-copy semantics — the copy is not re-made between.
+  run --no-clear --json "${RECEIPT%.json}-migrations.json" || exit $?
+  URL="postgres://rehearsal_runner:$(cat "$REHEARSAL_DIR/runner.pw")@127.0.0.1:${WORLD2_PGPORT:-5432}/$DB"
+  # The URL carries a password, so it rides assignment prefixes (the child's
+  # environment), never an argv — `env -i VAR=…` would put it in `ps`. The
+  # subshell first drops every inherited PG*/WORLD2_*/DATABASE_URL.
+  pen() { ( cd "$T" && unset $(compgen -e | grep -E '^(PG|WORLD2_|DATABASE_URL)') ;
+            TOWN_CLONE="$REHEARSAL_DIR/town" WORLD2_PG=1 WORLD2_PG_URL="$URL" node "$@" ); }
+  say "== registry: seed --apply, then drain --check (the w40 INSTALL order)"
+  pen tools/registry-seed.mjs --apply 2>&1 | sed -n '1p' || exit 1
+  pen tools/registry-drain.mjs --check 2>&1 | tail -1
+  [ "${PIPESTATUS[0]}" -eq 0 ] || { echo "registry-drain --check did not exit 0 — the clearing is not run on a registry that disagrees with the town" >&2; exit 1; }
+fi
+
+ARGS=(--json "$RECEIPT")
 [ -n "$ARM" ] && ARGS+=(--arm "$ARM")
 [ "$CLEAR" = true ] || ARGS+=(--no-clear)
-( cd "$RUNNER_ROOT" && env -i PATH="$PATH" HOME="${HOME:-/tmp}" node world2/tools/rehearse.mjs "${ARGS[@]}" )
+run "${ARGS[@]}"
 rc=$?
 say "== receipt kept: $RECEIPT"
 exit "$rc"
