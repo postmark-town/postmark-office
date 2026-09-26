@@ -4237,9 +4237,11 @@ export async function walkViaOffice(worldClone, payload = {}, key = null) {
   const via = skeleton ? crossingsOnSegment(from, toward, skeleton) : [];
 
   // THE CONTRACT IS SHOWN AT THE BOUNDARY (v2.2 §B). A leg that ends on a
-  // carrier's deck names the carrier and the law that binds there — "her
-  // timetable binds; standing in her frame when she departs means riding" —
-  // and a leg that steps OFF a moving carrier says so before it is taken.
+  // carrier's deck names the carrier, when she goes, and that the walk leaves
+  // you on the quay beside her — boarding is a stop's door, never a walk
+  // (Keemin, 2026-09-26: "simply 'walking aboard' shouldn't put you on the
+  // boat anymore") — and a leg that steps OFF a moving carrier says so before
+  // it is taken.
   // Both are disclosure and neither refuses: the gunwale rule is physics with
   // a warning (Wright's call), and v0 water does not block.
   //

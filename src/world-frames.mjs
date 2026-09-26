@@ -18,9 +18,12 @@
 //      district never carries; a vessel does. Nothing here knows the word
 //      "boat" — see `carriersFrom`, which reads the Keeping Works.
 //
-//   2. CROSSING THE BOUNDARY IS THE EDGE. The walk is the consent and the edge
-//      is the consent record. No declaration; you do not consent to gravity,
-//      but you chose to climb the mountain.
+//   2. A WALK NEVER BOARDS. Keemin, 2026-09-26: "simply 'walking aboard'
+//      shouldn't put you on the boat anymore." You board a carrier only
+//      through a stop's door (#2986, Keemin-ruled 2026-09-19: aboard is
+//      occupancy, read off the enter-exit ledger). A walk that ends on her
+//      deck leaves you on the quay beside her. What a walk still does is END
+//      a frame: a step that lands outside her footprint is stepping off.
 //
 //   3. CARRIAGE IS NOTHING HAPPENING. She sails, your offset holds, you moved.
 //      This is what relative coordinates were for — the keystone rides the
@@ -31,10 +34,10 @@
 //
 // WHERE THE FRAME IS EVALUATED, and why it is the endpoint. A movement record
 // is declared in the frame the entity is standing in, and the frame is re-decided
-// AT ARRIVAL. That single choice preserves both of ENGINE.md's boarding rules
-// for free: a walker whose line happens to sweep across a deck mid-stride does
-// not board (their endpoint is elsewhere), and a walk that ends on the deck does
-// (their endpoint is there). It also makes the derivation total and replayable —
+// AT ARRIVAL. Since 2026-09-26 the only frame change a walk can make is the
+// ending of one: an endpoint outside her footprint steps you off, and an endpoint
+// on her deck — from ashore — boards nobody (ruling 2 above). The arrival
+// instant keeps the derivation total and replayable —
 // no continuous crossing-solve, no sampling rate to argue about, same answer in
 // every clone.
 //
@@ -245,6 +248,11 @@ export async function carrierStateAt(carrier, worldState, atMs, { repo = WORLD_C
  * instant — injected so this stays pure over its inputs and a test can drive a
  * carrier along any path it likes.
  *
+ * `aboard` seeds the frame the entity starts the records in, as
+ * `{ carrier, local }`. No door passes it: since 2026-09-26 nothing a walk
+ * does can put anyone in a frame, so the fold starts in the world. It is
+ * how the stepping-off and within-frame branches below stay provable.
+ *
  * Returns `{ frame, local, world, transitions, provenance }`:
  *   frame        the carrier id you are in, or null for the world
  *   local        your offset IN that frame
@@ -252,9 +260,9 @@ export async function carrierStateAt(carrier, worldState, atMs, { repo = WORLD_C
  *   transitions  every frame edge born or died, with the record that did it
  *   provenance   "walked" | "carried" | "never-moved"
  */
-export async function foldFrames(records, { carriers, carrierAt, walk, atMs }) {
-  let frame = null;                     // null = the world frame
-  let local = null;                     // offset in `frame` (or world position when frame is null)
+export async function foldFrames(records, { carriers, carrierAt, walk, atMs, aboard = null }) {
+  let frame = aboard?.carrier ?? null;  // null = the world frame
+  let local = aboard?.local ?? null;    // offset in `frame` (or world position when frame is null)
   const transitions = [];
   let lastRecordMs = null;
   let lastArrivedMs = null;
@@ -277,31 +285,21 @@ export async function foldFrames(records, { carriers, carrierAt, walk, atMs }) {
     const arriveMs = arrivalMs(rec, walk);
     lastArrivedMs = Math.min(arriveMs, atMs);
 
-    // Which carrier, if any, holds the endpoint at the instant of arrival.
-    let landedIn = null;
-    for (const c of carriers) {
-      const st = await carrierAt(c, arriveMs);
-      if (!st) continue;
-      if (inRect(endWorld, st.footprint)) { landedIn = { carrier: c, state: st }; break; }
-    }
-
-    const wasFrame = frame;
-    if (landedIn && (!frame || frame.id !== landedIn.carrier.id)) {
-      // BOARDED. The walk is the consent; the edge is the record of it.
-      if (frame) transitions.push({ kind: "died", carrier: frame.id, at: new Date(arriveMs).toISOString(), by: rec.iso, reason: "left for another frame" });
-      frame = landedIn.carrier;
-      local = { x: endWorld.x - landedIn.state.at.x, y: endWorld.y - landedIn.state.at.y };
-      transitions.push({ kind: "born", carrier: frame.id, at: new Date(arriveMs).toISOString(), by: rec.iso, reason: "crossed her boundary" });
-    } else if (landedIn) {
-      // Still aboard the same carrier — a walk within the frame. The offset moves.
-      local = { x: endWorld.x - landedIn.state.at.x, y: endWorld.y - landedIn.state.at.y };
+    // Only the frame you are ALREADY in is asked about. Another carrier's
+    // footprint under your endpoint is the quay beside her, never her deck —
+    // a walk never boards (ruling 2, Keemin 2026-09-26; dom-pidgey walked to
+    // her hull at the Town Centre that morning and read aboard mid-crossing
+    // while every ride door, reading the ledger, said ashore).
+    const st = frame ? await carrierAt(frame, arriveMs) : null;
+    if (st && inRect(endWorld, st.footprint)) {
+      // Still aboard — a walk within the frame. The offset moves.
+      local = { x: endWorld.x - st.at.x, y: endWorld.y - st.at.y };
     } else {
       // Ashore, or stepped off.
       if (frame) transitions.push({ kind: "died", carrier: frame.id, at: new Date(arriveMs).toISOString(), by: rec.iso, reason: "crossed out over her gunwale" });
       frame = null;
       local = endWorld;
     }
-    if (wasFrame && !frame) { /* the exit is already recorded above */ }
   }
 
   if (!records.length) return { frame: null, local: null, world: null, transitions, provenance: "never-moved" };
@@ -367,7 +365,7 @@ export async function boundariesOnRoad(from, toward, carriers, atMs, { carrierAt
     if (c.mobility === "derived" && service && mod) {
       const next = mod.nextDepartures(service, mod.fractionalCrossing(atMs), 1);
       if (next?.length) terms.push(`her timetable binds — she departs ${new Date(mod.instantOf(next[0].departFc)).toISOString().slice(11, 16)}Z for ${next[0].to.markId}`);
-      terms.push("standing in her frame when she departs means riding — that is the contract of stepping aboard");
+      terms.push("a walk that ends on her deck leaves you on the quay beside her, not aboard — you board through a stop's door: enter a stop she calls at, then ride");
     }
     out.push({
       carrier: c.id, class: c.className, mobility: c.mobility,
