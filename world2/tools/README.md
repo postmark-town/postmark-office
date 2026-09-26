@@ -2511,7 +2511,7 @@ simply not in the question.
 
 Both imported live, neither restated:
 
-1. `readTown` (`vendor/town.mjs`) enumerates it — *"residents (skip TEMPLATE —
+1. `readTown` (`vendor/tools/lib/town.mjs`) enumerates it — *"residents (skip TEMPLATE —
    it's the blank form, not a resident)"*.
 2. `isResidentHandle` (`src/residency.mjs`) admits it, and that file says why
    step 1 is not enough alone: *"The vendor's enumeration skips exactly one name
@@ -2525,7 +2525,7 @@ and 132 is exactly what the lab's 1.0 door answered with on 2026-08-28.
 
 The office's readers are imported from THIS checkout rather than from the town
 one, and that is the right half of the reuse rule: the town owns its frontmatter
-(`vendor/town.mjs` is that reader, vendored under a do-not-edit-here notice),
+(`vendor/tools/lib/town.mjs` is that reader, vendored under a do-not-edit-here notice),
 while who counts as a resident AT THE DOOR is the office's own law.
 
 ### One pen, one head
