@@ -2146,7 +2146,7 @@ async function frameBlock(oriented, key) {
       // is disclosure, not refusal — so this says what a step costs, never that
       // it is forbidden.
       how_to_leave: "world_walk anywhere off her footprint. While she is under way that step puts you in the water where she left you — v0 does not stop you, and the walk answer says so before you take it.",
-      terms: "standing in her frame when she departs means riding — that is the contract of stepping aboard, and it needs no declaration from you.",
+      terms: "you came aboard through a stop's door, so you ride where she goes — a walk never boards anyone, and staying aboard needs no declaration from you.",
       // ── THE VEHICLE'S OWN HALF (#2986 § 6) ──────────────────────────────
       //
       // Present only when the frame is a VEHICLE, which is what makes this

@@ -23,8 +23,10 @@
 // aren't even there')." The rule said "from its DOORSTEP" until 2026-09-11,
 // when the founder took that word back for the resident's own front step.
 //
-// WHAT DOES NOT CHANGE, and has its own case below: aboard a CARRIER the frame
-// still composes. The road's end is a quay she left hours ago.
+// AND A WALK TO HER DECK IS NOT ABOARD (POS-247, Keemin 2026-09-26: "simply
+// 'walking aboard' shouldn't put you on the boat anymore"): the standpoint of
+// someone whose walk ended on her deck is the road's end, the quay she left.
+// The composition aboard a carrier is proved in world-movement.test.mjs.
 
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
@@ -114,19 +116,17 @@ test("AN ARRIVED WALKER ASHORE STANDS WHERE THE ROAD ENDED, not at the mark's an
   assert.equal(here.mark_id, TERRACE.id, "the record still says what he walked to");
 });
 
-test("ABOARD A CARRIER THE FRAME STILL COMPOSES — the road's end is a quay she left", async () => {
+test("A WALK ONTO HER DECK LEAVES HIM ON THE QUAY — she sails without him (POS-247)", async () => {
   // Step onto her deck at the quay before the 06:00Z cast-off, then ask after
-  // she has sailed. The road's end is the quay; the answer must be the far shore.
+  // she has sailed. Walking aboard no longer boards: the answer is the quay.
   const rec = departure({ handle: "rook", from: { x: -50, y: 0 }, toward: { ...QUAY }, at: 10.2 });
   const here = await movementStandpoint("rook", MARKS, {
     ...REPO, atMs: atCrossing(10.8), dbPath: DB, recordsOf: async () => [rec],
   });
   assert.ok(here?.placed);
-  assert.equal(here.aboard, true, "she took him");
-  assert.equal(here.frame, "the-town/the-post-office");
-  assert.notDeepEqual({ x: here.x, y: here.y }, { x: QUAY.x, y: QUAY.y },
-    "he is NOT at the road's end — the frame moved him, which is the whole point of a frame");
-  assert.ok(here.x > 3000, `he is across the water with her (x=${here.x})`);
+  assert.equal(here.aboard, false, "a walk is not a stop's door");
+  assert.equal(here.frame, null);
+  assert.deepEqual({ x: here.x, y: here.y }, { x: QUAY.x, y: QUAY.y }, "he is at the road's end, on the quay");
 });
 
 // ── 2. the enter door ────────────────────────────────────────────────────────

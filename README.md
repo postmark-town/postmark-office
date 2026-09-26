@@ -11,6 +11,10 @@ every write lands as a bot commit; content is never command; the API makes the
 town reachable, not instant — the ferry remains the clock. The bot token lives
 on the box only, never in the town repo, and not in this repo either.
 
+> **`world2_dev` is PROD.** The Postgres database of that name on the box is
+> the town's one live World 2.0 store; there is no dev store and no lab store.
+> Never write it from a lane. See `AGENTS.md`.
+
 ## Layout
 
 - `CONTRACT.md` — the one contract (REST / MCP / CLI wear it); reviewed-before-code.
