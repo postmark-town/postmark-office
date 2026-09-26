@@ -79,6 +79,11 @@ test("a clearing that dies on a constraint is reported by the constraint's name 
   assert.equal(clearingRefusal(out).reason, "marks_slug_key");
   assert.equal(clearingRefusal("CLEARING FAILED window 9: window 9 is not open (already cleared, or never opened) — nothing moved").reason,
     "window 9 is not open (already cleared, or never opened)");
+  // The w40 rehearsal's own crash (2026-09-26): a stack, then Node's banner last.
+  const crash = "node:internal/modules/esm/resolve:275\n    throw new ERR_MODULE_NOT_FOUND(\n    ^\n\n" +
+    "Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/t/vendor/town.mjs' imported from /t/world2/tools/roll-ingest.mjs\n" +
+    "    at finalizeResolution (node:internal/modules/esm/resolve:275:11)\n\nNode.js v22.22.1\n";
+  assert.match(clearingRefusal(crash).reason, /^Error \[ERR_MODULE_NOT_FOUND\]: Cannot find module '\/t\/vendor\/town\.mjs'/);
 });
 
 test("every schema file has a landed-probe or a named skip, and no probe names a file that is gone", () => {

@@ -81,7 +81,11 @@ export function asPen(url, pen) {
 // The failure words a clearing leaves, reduced to the reason a receipt names.
 export function clearingRefusal(output) {
   const m = /CLEARING FAILED window \d+: (.*?)(?: — nothing moved|$)/m.exec(output);
-  const msg = m ? m[1] : (output.trim().split("\n").filter(Boolean).pop() ?? "no output");
+  // A clearing that CRASHED (its first step threw before its own catch) leaves a
+  // stack, not a CLEARING FAILED line; the first `…Error…:` line is the reason,
+  // never the trailing `Node.js v22` banner.
+  const lines = output.split("\n").map((l) => l.trim()).filter(Boolean);
+  const msg = m ? m[1] : (lines.find((l) => /^[A-Za-z]*Error\b.*?:/.test(l)) ?? lines.pop() ?? "no output");
   const constraint = /violates (?:unique|exclusion|check|foreign key) constraint "([^"]+)"/.exec(msg)?.[1] ?? null;
   return { reason: constraint ?? msg, detail: msg.slice(0, 400) };
 }
