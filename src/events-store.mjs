@@ -1,7 +1,7 @@
 // events-store.mjs — THE CALENDAR'S PEN AND ITS READ (POS-207, POS-208).
 //
 // The rules are src/events.mjs's, pure. This file is where they meet the
-// record: the queries, the transaction, and the three household acts plus the
+// record: the queries, the transaction, and the four household acts plus the
 // town's calendar read.
 //
 // ── ONE ACT, ONE TRANSACTION (the pen's R1, src/world2-pen.mjs) ─────────────
@@ -9,7 +9,9 @@
 // Every write here is ONE `officeWrite` transaction: the store is read for
 // what the act needs to know (the mark, the event), the act is inserted
 // through the pen's own `insertAct`, and the row `applyEventAct` derives from
-// that act is written to `events` or `event_rsvps` on the same client. A
+// that act is written to `events` or `event_rsvps` on the same client. An
+// announcement (POS-227) is the one act with no projection row: it is read back
+// from `acts` itself (§ announcementsOf). A
 // refusal thrown inside rolls the whole thing back, so a refused act leaves the
 // acts count exactly where it was.
 //
@@ -31,10 +33,11 @@ import { householdKeyFor } from "./world2-claims.mjs";
 import { currentCrossing } from "./crossings.mjs";
 import { WORLD_ANCHOR } from "./world-journal.mjs";
 import {
-  EVENT_CLASS, ACT_HOST, ACT_AMEND, ACT_CANCEL, ACT_RSVP, ENDED_LIST_DAYS,
+  EVENT_CLASS, ACT_HOST, ACT_AMEND, ACT_CANCEL, ACT_RSVP, ACT_ANNOUNCE, ENDED_LIST_DAYS,
   BUDGET_DEFAULT, BUDGET_MAX, FELL_BACK_NO_ECHO, SECRET_BYTES, SECRET_NOTE, HARNESS_REUSED_NOTE,
   refuse, mintEventId, judgeInterval, judgePlaceShape, placeFromMarkRow, anchorForPlace,
   judgeText, judgeRsvp, challengeWebhook, harnessPlan, applyEventAct, eventView, calendarFrom,
+  judgeAnnouncement, announceMax, ANNOUNCE_MAX_ENV,
 } from "./events.mjs";
 
 const EVENT_COLUMNS = "id, title, invitation, host, household, place_mark, place_x, place_y, doors_open, starts, ends, revised, cancelled, hosted_act, last_act";
@@ -101,6 +104,28 @@ async function rsvpHandles(client, id) {
   const { rows } = await client.query("SELECT handle FROM event_rsvps WHERE event = $1 ORDER BY handle", [id]);
   return rows.map((r) => r.handle);
 }
+/**
+ * The host's announcements for these events, oldest first: the `announce` acts
+ * themselves, `{ act, event, at, text }`. There is no table of them; the act
+ * log is the record (§ the header), and the notary's public export already
+ * carries every act, so reading them here widens nothing.
+ */
+export async function announcementsOf(client, ids) {
+  if (!ids.length) return [];
+  const { rows } = await client.query(
+    "SELECT id, object, at, payload FROM acts WHERE class = $1 AND action = $2 AND object = ANY($3) ORDER BY id",
+    [EVENT_CLASS, ACT_ANNOUNCE, ids]);
+  return rows.map((r) => {
+    const p = typeof r.payload === "string" ? JSON.parse(r.payload) : (r.payload ?? {});
+    return { act: Number(r.id), event: r.object, at: new Date(r.at).toISOString(), text: String(p.text ?? "") };
+  });
+}
+const announcementsByEvent = (list) => {
+  const m = new Map();
+  for (const a of list) m.set(a.event, [...(m.get(a.event) ?? []), a]);
+  return m;
+};
+
 async function placeFor(client, shape) {
   if (shape.at) return { mark: null, name: null, x: shape.at.x, y: shape.at.y };
   const { rows } = await client.query("SELECT slug, status, kind, geometry FROM marks WHERE slug = $1", [shape.mark]);
@@ -198,7 +223,7 @@ async function amendAtOffice(fields, handle, { now, env }) {
       { id: actId, action: ACT_AMEND, actor: handle, object: id, payload, household: prev.household });
     await updateEvent(client, row);
     return {
-      event: eventView(row, await rsvpHandles(client, id), now), act_id: actId, amended: payload.changed,
+      event: eventView(row, await rsvpHandles(client, id), now, await announcementsOf(client, [id])), act_id: actId, amended: payload.changed,
       receipt: `amended: ${id} (${payload.changed.join(", ")}) — revision ${row.revised}, visible on the calendar as one`,
       read: READ_HINT(id),
     };
@@ -224,7 +249,7 @@ export async function cancelAtOffice(fields, key, { now = Date.now(), env = proc
       { id: actId, action: ACT_CANCEL, actor: handle, object: id, payload, household: prev.household });
     await updateEvent(client, row);
     return {
-      event: eventView(row, await rsvpHandles(client, id), now), act_id: actId,
+      event: eventView(row, await rsvpHandles(client, id), now, await announcementsOf(client, [id])), act_id: actId,
       receipt: `cancelled: ${id} — it stays on the calendar, marked cancelled, and its id is not reused`,
       read: READ_HINT(id),
     };
@@ -306,6 +331,45 @@ export async function rsvpAtOffice(fields, key, { now = Date.now(), env = proces
   }, env, household);
 }
 
+// ── announce (POS-227) ──────────────────────────────────────────────────────
+//
+// The HOST speaks to everyone attending. Only the host: not their household,
+// which may amend and cancel, because an announcement is a voice and the
+// voice is the one accountable resident's (the event's `host`). From the
+// event's creation until it ends; never on a cancelled one. Uncapped unless
+// the office sets ANNOUNCE_MAX. The earpiece delivers it (earpiece.mjs §
+// THE ANNOUNCEMENT); this act only records it.
+
+export async function announceAtOffice(fields, key, { now = Date.now(), env = process.env } = {}) {
+  const handle = standpointHandle(fields, key);
+  const id = String(fields.event ?? "").trim();
+  if (!id) throw refuse(422, "which event?", 'event: "<host>/<slug>", as the calendar names it', { field: "event" });
+  const text = judgeAnnouncement(fields.text);
+  const max = announceMax(env);
+  return write(async (client) => {
+    const prev = await eventRow(client, id);
+    if (!prev) throw refuse(404, `no event "${id}"`, "ids are <host>/<slug>, as the calendar names them");
+    if (prev.host !== handle)
+      throw refuse(403, `only the host announces on "${id}"`, `its host is ${prev.host}; ${handle} may say something at its place instead`);
+    if (prev.cancelled) throw refuse(409, `"${id}" was cancelled`, "a cancelled event takes no announcements");
+    if (Date.parse(prev.ends) <= now) throw refuse(409, `"${id}" has ended`, "an ended event takes no announcements");
+    const before = await announcementsOf(client, [id]);
+    if (before.length >= max)
+      throw refuse(409, `"${id}" already carries ${before.length} announcement${before.length === 1 ? "" : "s"}, the most this office allows`, `the office's ${ANNOUNCE_MAX_ENV} dial is ${max}`);
+    const payload = { event: id, text };
+    const place = { mark: prev.place_mark, x: prev.place_x, y: prev.place_y };
+    const actId = await insertAct(client, actRow({ action: ACT_ANNOUNCE, actor: handle, event: id, payload, place, now }));
+    const attending = (await rsvpHandles(client, id)).filter((h) => h !== handle);
+    const n = before.length + 1;
+    return {
+      event: id, handle, act_id: actId,
+      announcement: { n, at: new Date(now).toISOString(), text },
+      receipt: `announced on ${id} (announcement ${n}): the earpiece wakes the ${attending.length} resident${attending.length === 1 ? "" : "s"} who RSVPed, each once, outside their wake budget`,
+      read: READ_HINT(id),
+    };
+  }, env);
+}
+
 // ── the resident's harness row (POS-208, 026 § THE HARNESS ROW) ─────────────
 //
 // Read and written ONLY inside a transaction that declared the household's
@@ -337,7 +401,7 @@ export async function calendarAtOffice(fields = {}, { now = Date.now(), env = pr
     if (id) {
       const row = await eventRow(client, id);
       if (!row) throw refuse(404, `no event "${id}"`, 'ids are <host>/<slug> — town { read: "calendar" } lists them');
-      return { as_of: new Date(now).toISOString(), event: eventView(row, await rsvpHandles(client, id), now) };
+      return { as_of: new Date(now).toISOString(), event: eventView(row, await rsvpHandles(client, id), now, await announcementsOf(client, [id])) };
     }
     const since = new Date(now - ENDED_LIST_DAYS * 86_400_000).toISOString();
     const { rows } = await client.query(`SELECT ${EVENT_COLUMNS} FROM events WHERE ends > $1 ORDER BY starts, id`, [since]);
@@ -348,7 +412,7 @@ export async function calendarAtOffice(fields = {}, { now = Date.now(), env = pr
         "SELECT event, handle FROM event_rsvps WHERE event = ANY($1) ORDER BY event, handle", [events.map((e) => e.id)]);
       for (const r of rs) byEvent.set(r.event, [...(byEvent.get(r.event) ?? []), r.handle]);
     }
-    return calendarFrom(events, byEvent, now);
+    return calendarFrom(events, byEvent, now, announcementsByEvent(await announcementsOf(client, events.map((e) => e.id))));
   }, env);
 }
 

@@ -158,8 +158,15 @@ export function makeActsPen({ households = [], pins = [], meta = [], claims = []
         throw new Error(`acts-pen-stub only answers acts reads ordered by id; this one asks: ${q.slice(0, 200)}`);
       }
       const wantClass = /class = \$(\d+)/i.exec(q);
+      // `action = $n` and `object = ANY($n)` are honoured too (POS-227, the
+      // calendar's announcements): a filter the stub ignored would hand every
+      // event act back as an announcement, and the reader would look right.
+      const wantAction = /\baction = \$(\d+)/i.exec(q);
+      const wantObjects = /\bobject = ANY\(\$(\d+)\)/i.exec(q);
       const rows = state.acts
         .filter((r) => (wantClass ? r.class === params[Number(wantClass[1]) - 1] : true))
+        .filter((r) => (wantAction ? r.action === params[Number(wantAction[1]) - 1] : true))
+        .filter((r) => (wantObjects ? params[Number(wantObjects[1]) - 1].includes(r.object) : true))
         .map((r) => ({
           ...r,
           at: r.at instanceof Date ? r.at : new Date(r.at),

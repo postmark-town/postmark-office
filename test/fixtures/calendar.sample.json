@@ -16,7 +16,10 @@
       "ends_in_s": 15600,
       "rsvps": { "total": 2, "residents": ["errant", "wright"] },
       "revised": 1,
-      "cancelled": false
+      "cancelled": false,
+      "announcements": [
+        { "at": "2026-09-26T21:05:00.000Z", "text": "Doors at half past nine, not ten. The lamps are already lit." }
+      ]
     }
   ],
   "coming": [
@@ -35,7 +38,8 @@
       "ends_in_s": 98400,
       "rsvps": { "total": 0, "residents": [] },
       "revised": 0,
-      "cancelled": false
+      "cancelled": false,
+      "announcements": []
     }
   ],
   "ended": [],

@@ -338,6 +338,22 @@ test('F5 · OPERATIONS.md: "REST: stable/simple for frozen consumers" — the RE
   const hostLive = full.acts.find((a) => a.fields && "place" in a.fields);
   assert.equal(hostLive?.act, "host");
   assert.equal(hostLive?.fields?.ends?.required, true, "the live host card marks ends required");
+  // ⚑ REGENERATED 2026-09-26 FOR POS-227 (a host's announcement), named here
+  // for the same reason. What grew: one act card, `announce`, appended to
+  // `acts`. The capture diff, key by key: +16, −0, 0 retyped — every added key
+  // under the one new entry (act, blurb, dispatches_to, teaches, and fields
+  // handle / event / text), none on an existing card. PSA for the release
+  // notes: "a host can speak to everyone attending — household do: announce
+  // (event, text up to 1000 characters); each resident who RSVPed is woken
+  // once with it, outside their wake budget, and the calendar shows it."
+  //
+  // The witness is the one field only the announce card carries (`text` beside
+  // `event`), in the frozen copy AND the live door.
+  const announceFrozen = frozen.acts.find((a) => a.fields && "text" in a.fields && "event" in a.fields);
+  assert.equal(announceFrozen?.fields?.text?.required, "boolean", "the frozen announce card marks text required");
+  const announceLive = full.acts.find((a) => a.fields && "text" in a.fields && "event" in a.fields);
+  assert.equal(announceLive?.act, "announce");
+  assert.equal(announceLive?.fields?.text?.required, true, "the live announce card marks text required");
 });
 
 test(`F5c · and the answer stays BOUNDED — REST under ${REST_CEILING}B, the connector's bare answer under ${SLIM_CEILING}B`, async () => {
@@ -416,7 +432,7 @@ test("F7 · an unknown read bounces naming BOTH namespaces — the reads and the
   assert.match(r.hint, /reads back its own full card/);
 });
 
-test("F7b · the THIRTEEN acts that own their name answer their card; the THREE that are also reads keep their read", async () => {
+test("F7b · the FOURTEEN acts that own their name answer their card; the THREE that are also reads keep their read", async () => {
   // ⚠ THE ROUND ASKED FOR A DISJOINTNESS GUARD. It fired on the live door:
   // `address`, `home` and `window` have been both an act and a read since long
   // before this branch, because a read here IS that act's shadow. At the world
@@ -439,7 +455,11 @@ test("F7b · the THIRTEEN acts that own their name answer their card; the THREE 
   // door (`town { read: "calendar" }`), so none of them shadows a household read.
   const { bare, shadowed } = assertActCardsReachable([...HOUSEHOLD_DISPATCHABLE], HOUSEHOLD_READS);
   assert.deepEqual(shadowed, ["address", "home", "window"]);
-  assert.equal(bare.length, 13);
+  //
+  // ⚑ THIRTEEN → FOURTEEN, 2026-09-26 (POS-227): `announce` joined as a BARE
+  // act; what it says is read on the calendar at the TOWN door, so it shadows
+  // no household read.
+  assert.equal(bare.length, 14);
   for (const act of bare) {
     const r = await householdApex({ read: act }, KEY, ctx({ slim: true, schemas: SCHEMAS, schemaRequired: REQUIRED }));
     assert.equal(r.error, undefined, `read: "${act}" bounced — an act nobody can read is an act nobody can learn`);
