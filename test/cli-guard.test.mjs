@@ -195,6 +195,8 @@ const ROSTER = {
   "world2/tools/marks-ingest.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: marks-ingest.mjs" },
   "world2/tools/pointer-ingest.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: pointer-ingest.mjs --world-repo" },
   "world2/tools/replay-ingest.mjs": { args: ["--help"], env: NO_PG, code: 0, needle: "usage: replay-ingest.mjs" },
+  // No --tree: stops on usage before any git read or Postgres connect (POS-242).
+  "world2/tools/rehearse.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: rehearse.mjs" },
   "world2/tools/retire-unpublished.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: retire-unpublished.mjs" },
   // The calendar's rebuild (POS-207): no --dry-run, so it refuses before it
   // opens any connection — it has no write mode at all.
