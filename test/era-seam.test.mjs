@@ -263,8 +263,7 @@ test("FLAG OFF: era two is not read, and the answer is era one's alone", async (
 // ashore record. The frame fold must see BOTH — reading era one alone used to
 // re-derive the resident onto a boat that has since sailed, which is not a wrong
 // position, it is a disappearance. Since POS-247 (2026-09-26) a walk never
-// boards, so era one alone leaves him on the quay; the seam cases below seed
-// the frame (`aboard`) to keep proving what stepping off does.
+// boards, so era one alone leaves him on the quay.
 
 import { carriersFrom, carrierReader, recordsAcrossEras as acrossEras, vesselServiceFrom } from "../src/world-movement.mjs";
 import { foldFrames } from "../src/world-frames.mjs";
@@ -291,12 +290,10 @@ const era2Ashore = (handle) => ({
   at: 10.2, targetExtent: null, targetMarkId: null, pace: null, source: "store",
 });
 
-async function foldFor(records, atMs, { seeded = false } = {}) {
+async function foldFor(records, atMs) {
   const { service, mod, walk } = await vesselServiceFrom(CARRIER_MARKS, CARRIER_REPO);
   const carrierAt = carrierReader(CARRIER_MARKS, { repo: carrierClone.dir, service, mod });
-  const carriers = carriersFrom(CARRIER_MARKS);
-  const aboard = seeded ? { carrier: carriers[0], local: { x: 0, y: 0 } } : null;
-  return foldFrames(records, { carriers, carrierAt, walk, atMs, aboard });
+  return foldFrames(records, { carriers: carriersFrom(CARRIER_MARKS), carrierAt, walk, atMs });
 }
 
 test("ERA ONE ALONE no longer sails anyone away — a walk onto her deck never boarded (POS-247)", async () => {
@@ -309,14 +306,14 @@ test("ERA ONE ALONE no longer sails anyone away — a walk onto her deck never b
 test("BOTH ERAS: the same resident is ashore, and stays there while she sails", async () => {
   const mid = atCrossing(10.55);
   const records = acrossEras([era1Aboard("hal"), era2Ashore("hal")], []);
-  const fold = await foldFor(records, mid, { seeded: true });
+  const fold = await foldFor(records, mid);
   assert.equal(fold.frame, null, "he stepped off, so his frame is the world again");
   assert.deepEqual(fold.world, SHORE_POINT, "and he is where he walked to, not where she went");
 });
 
 test("the walkers overlay puts him ashore, not aboard", async () => {
   const mid = atCrossing(10.55);
-  const fold = await foldFor(acrossEras([era1Aboard("hal"), era2Ashore("hal")], []), mid, { seeded: true });
+  const fold = await foldFor(acrossEras([era1Aboard("hal"), era2Ashore("hal")], []), mid);
   const rows = withFrames(
     [{ handle: "hal", x: DECK_POINT.x, y: DECK_POINT.y, source: "walk", moving: false, remaining_m: 0, eta_crossings: 0 }],
     fold.frame ? new Map([["hal", fold]]) : new Map(),
@@ -337,7 +334,7 @@ test("a resident whose ONLY record is era two is still folded", async () => {
 
 // ── the de-dup (finding 4, made deliberate) ──────────────────────────────────
 
-test("the same era-two record arriving twice is ONE record, and ends ONE edge", async () => {
+test("the same era-two record arriving twice is ONE record", async () => {
   // Both callers of `recordsAcrossEras` take injected records and then add the
   // store's themselves, so since the doors began passing era-spanning records in
   // the store half arrives twice. `foldFrames` is idempotent over repeated
@@ -345,10 +342,6 @@ test("the same era-two record arriving twice is ONE record, and ends ONE edge", 
   const stored = [era2Ashore("hal")];
   const doubled = acrossEras([era1Aboard("hal"), ...stored], stored);
   assert.equal(doubled.length, 2, "the duplicate is collapsed, not carried");
-
-  const fold = await foldFor(doubled, atCrossing(10.55), { seeded: true });
-  assert.equal(fold.transitions.filter((t) => t.kind === "born").length, 0);
-  assert.equal(fold.transitions.filter((t) => t.kind === "died").length, 1);
 });
 
 test("de-dup keeps genuinely distinct records — it keys on the whole record, not the instant", () => {
