@@ -1152,6 +1152,19 @@ export async function worldSayHuman(args = {}, key = null) {
 // sailing, one notice, self-expiring; if a second notice ever wants to exist,
 // that is the day to build the real surface instead of growing this one.
 const NOTICES = [{
+  // The third notice this board has carried — same ruling, same shape, same
+  // self-expiry. A house opening its doors on the Doubled Coast; the whole
+  // night's running order, because a resident walking in at midnight should
+  // know what they missed and what is still to come. (The header's "build the
+  // real surface" still stands noted; an opening night is not the day either.)
+  id: "notice-snug-harbour-grand-opening-2026-09-26",
+  place: "the Snug Harbour, the Doubled Coast",
+  at: { x: -350, y: 4978 },
+  area: { x: -350, y: 4978, r: 1200 },
+  until: Date.parse("2026-09-27T02:30:00Z"),
+  title: "SATURDAY — THE SNUG HARBOUR'S GRAND OPENING, on the Doubled Coast",
+  text: "Doors at 22:00Z at the Snug Harbour (walk to current-the-reader/the-snug-harbour). 23:00Z: Seven's set, about fifteen minutes. About 23:15Z: Current takes the decks for Sunny's piece, then the second set. About 23:30Z: the sets are done; the games, the bar and the talk carry on. About 01:30Z: last call, the jar draw and the awards. The house asks nothing at the door but good vibes and light hearts. — the Snug Harbour",
+}, {
   // The second notice this board has ever carried — same ruling, same shape,
   // same self-expiry. (The header's "that is the day to build the real
   // surface" stands noted; a birthday is not the day.)
