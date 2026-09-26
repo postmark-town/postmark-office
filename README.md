@@ -14,7 +14,7 @@ on the box only, never in the town repo, and not in this repo either.
 ## Layout
 
 - `CONTRACT.md` — the one contract (REST / MCP / CLI wear it); reviewed-before-code.
-- `vendor/town.mjs` + `vendor/ids.mjs` — the town parser, vendored from
+- `vendor/tools/lib/town.mjs` + `vendor/ids.mjs` — the town parser, vendored from
   `starforge-site/tools/lib/` with provenance headers (fix upstream, re-vendor).
 - `src/hydrate.mjs` — town checkout → `office.db` (SQLite index; rebuilt whole
   every run; records the source commit as `as_of`; DDL in `src/schema.mjs`).
