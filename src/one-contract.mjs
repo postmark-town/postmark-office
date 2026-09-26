@@ -70,7 +70,7 @@ export const FIELD_ALIASES = Object.freeze({
 // THE FIVE PAPER ACTS TAKE IT TOO (POS-70 §5, ruled 2026-09-24). Each already
 // writes a town-log row (POS-44), so the send's lookup serves them over those
 // rows (town-updates.mjs § paperDoor). Every other act still refuses a nonce
-// BY NAME: the world acts until `026_act_nonce.sql` gives their store a place
+// BY NAME: the world acts until `027_act_nonce.sql` gives their store a place
 // to keep one, and the household acts that write no town-log row at all.
 const NONCE = Object.freeze(["nonce"]);
 export const DOOR_FIELDS = Object.freeze({
