@@ -235,21 +235,27 @@ async function framesForPresence({ db, world, repo, atMs, walk, stored = null })
  * placed them back on the quay they entered from, somebody would write them a
  * letter opening "you aren't home" all over again. One map, both doors.
  *
- * ⚑ RIDERS OVERWRITE, and they must. A resident who walked aboard at the quay
- * has BOTH a folded frame and an occupancy row; the two agree while she is
- * alongside and disagree the moment she sails with somebody who boarded through
- * a distant wharf. Occupancy is the record the law now reads, so it wins.
+ * ⚑ RIDERS OVERWRITE, and they must. Occupancy is the record the law now
+ * reads, so where the walk fold and the ledger disagree about a rider, the
+ * ledger wins. Since 2026-09-26 a walk never folds anyone aboard (Keemin:
+ * "simply 'walking aboard' shouldn't put you on the boat anymore"), so the
+ * fold can no longer disagree by boarding. The overwrite is still the one
+ * thing that puts a rider at the hull.
+ *
+ * `occupancy` is the ledger's answer, handed in by a test (POS-247) so the
+ * overwrite can be proved without a served ledger. The door never passes it.
  */
-async function withVehicleRiders(frames, { world, repo, atMs }) {
-  const [{ crossingLaw }, { crossingDeps }, { vehicleWithin, vesselPositionAt }] = await Promise.all([
-    import("./world-crossings.mjs"), import("./world-apex.mjs"), import("./world-movement.mjs"),
-  ]);
-  const law = await crossingLaw(repo).catch(() => null);
-  if (!law?.thresholds) return frames;
-  const deps = crossingDeps();
-  const at = law.thresholds.stampAt(deps.now());
-  const acts = law.thresholds.parseEnterExitLedger(await deps.ledger()).acts;
-  const occupancy = law.thresholds.occupancyAt(acts, at);
+export async function withVehicleRiders(frames, { world, repo, atMs, occupancy = null }) {
+  const { vehicleWithin, vesselPositionAt } = await import("./world-movement.mjs");
+  if (!occupancy) {
+    const [{ crossingLaw }, { crossingDeps }] = await Promise.all([import("./world-crossings.mjs"), import("./world-apex.mjs")]);
+    const law = await crossingLaw(repo).catch(() => null);
+    if (!law?.thresholds) return frames;
+    const deps = crossingDeps();
+    const at = law.thresholds.stampAt(deps.now());
+    const acts = law.thresholds.parseEnterExitLedger(await deps.ledger()).acts;
+    occupancy = law.thresholds.occupancyAt(acts, at);
+  }
   let hull = null;
   const out = frames ? new Map(frames) : new Map();
   for (const [handle, stack] of occupancy) {

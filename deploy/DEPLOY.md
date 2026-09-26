@@ -989,6 +989,12 @@ stamp pen the founder parked.
 
 ### Where things live
 
+> **`world2_dev` is PROD.** Every `WORLD2_*_URL` on this box names the one
+> live store, database `world2_dev`, whatever the file is called (`lab.env`
+> included). "lab" in a path here means the scripts' folder, never a second
+> database. Rehearse a store write on a restored copy (`world2_rehearsal`,
+> POS-242), never here. The rename is POS-242 part 0.
+
     /srv/world2-lab/ops/            the scripts (a plain file copy from this repo,
                                     the same shape as /srv/postmark-office).
                                     NOTHING DEPLOYS THIS — see the one-tree

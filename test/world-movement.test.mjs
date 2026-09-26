@@ -7,7 +7,7 @@
 //   1. flag-off changes nothing               — the whole module is unreachable
 //   2. a carrier is CLASS-DECLARED            — nothing here knows the word "boat"
 //   3. the carrier runs on her timetable      — position = f(timetable, clock)
-//   4. crossing the boundary is the edge      — the walk is the consent
+//   4. a walk never boards                    — the quay beside her (POS-247)
 //   5. carriage is nothing happening          — she sails, your offset holds
 //   6. hearing composes through the frame     — and needed no change to do it
 //   7. the contract is shown at the boundary  — terms before the step
@@ -145,31 +145,51 @@ test("the carrier's standpoint comes from the timetable and never from a ledger 
   assert.ok(s.x > 0 && s.x < 4000, `she is on her own line, got ${s.x}`);
 });
 
-// ── 4. crossing the boundary is the edge ─────────────────────────────────────
+// ── 4. a walk never boards (POS-247) ─────────────────────────────────────────
+//
+// Keemin, 2026-09-26: "simply 'walking aboard' shouldn't put you on the boat
+// anymore." You board through a stop's door (#2986); a walk that ends on her
+// deck leaves you on the quay beside her.
 
-test("walking onto her deck IS the consent — the edge is born, with no declaration", async () => {
+test("walking onto her deck boards nobody — no edge is born, and she sails without you", async () => {
   const { carrierAt } = await reader();
   const walk = await walkMod();
-  const records = [departure({ handle: "rider", from: { x: 60, y: 0 }, toward: { x: 2, y: 3 }, at: 10.0 })];
-  const fold = await foldFrames(records, { carriers: carriersFrom(MARKS), carrierAt, walk, atMs: BEFORE_SAILING });
-  assert.equal(fold.frame, "the-town/the-post-office");
-  const born = fold.transitions.filter((t) => t.kind === "born");
-  assert.equal(born.length, 1);
-  assert.match(born[0].reason, /crossed her boundary/);
+  const records = [departure({ handle: "walker", from: { x: 60, y: 0 }, toward: { x: 2, y: 3 }, at: 10.0 })];
+  const carriers = carriersFrom(MARKS);
+  const berthed = await foldFrames(records, { carriers, carrierAt, walk, atMs: BEFORE_SAILING });
+  assert.equal(berthed.frame, null, "the endpoint is on her deck, and the walker is still ashore");
+  assert.deepEqual(berthed.transitions, [], "no edge is born by a walk");
+  const sailed = await foldFrames(records, { carriers, carrierAt, walk, atMs: AFTER_LANDING });
+  assert.equal(sailed.frame, null);
+  assert.deepEqual(sailed.world, { x: 2, y: 3 }, "she sailed; the walker is where the walk ended");
 });
 
-test("ENTERED AND LEFT BEFORE SHE MOVED: no live edge, no carry (the pass-through outcome, in frame terms)", async () => {
+test("ON AND OFF HER DECK BEFORE SHE MOVED: no edge either way, no carry", async () => {
   const { carrierAt } = await reader();
   const walk = await walkMod();
   const records = [
-    departure({ handle: "browser", from: { x: 60, y: 0 }, toward: { x: 2, y: 3 }, at: 10.1 }),   // steps aboard
+    departure({ handle: "browser", from: { x: 60, y: 0 }, toward: { x: 2, y: 3 }, at: 10.1 }),   // onto the deck
     departure({ handle: "browser", from: { x: 2, y: 3 }, toward: { x: 60, y: 0 }, at: 10.2 }),   // and back off
   ];
   const fold = await foldFrames(records, { carriers: carriersFrom(MARKS), carrierAt, walk, atMs: AFTER_LANDING });
-  assert.equal(fold.frame, null, "their frame is the world again");
-  assert.equal(fold.transitions.filter((t) => t.kind === "born").length, 1);
-  assert.equal(fold.transitions.filter((t) => t.kind === "died").length, 1);
+  assert.equal(fold.frame, null);
+  assert.deepEqual(fold.transitions, [], "nothing was boarded, so nothing was left");
   assert.deepEqual(fold.world, { x: 60, y: 0 }, "she sailed without them, and they are where they walked to");
+});
+
+test("a walk that LEAVES a frame still ends it — the stepping-off branch stands", async () => {
+  // The fold can no longer put anyone in a frame, so the frame is seeded (`aboard`)
+  // the way a test drives a carrier along any path it likes.
+  const { carrierAt } = await reader();
+  const walk = await walkMod();
+  const carriers = carriersFrom(MARKS);
+  const records = [departure({ handle: "leaver", from: { x: 2, y: 3 }, toward: { x: 60, y: 0 }, at: 10.2 })];
+  const fold = await foldFrames(records, { carriers, carrierAt, walk, atMs: AFTER_LANDING, aboard: { carrier: carriers[0], local: { x: 2, y: 3 } } });
+  assert.equal(fold.frame, null, "stepped off, so the frame is the world again");
+  const died = fold.transitions.filter((t) => t.kind === "died");
+  assert.equal(died.length, 1);
+  assert.match(died[0].reason, /gunwale/);
+  assert.deepEqual(fold.world, { x: 60, y: 0 });
 });
 
 test("a walk that ENDS elsewhere never boards, however its line runs", async () => {
@@ -196,10 +216,12 @@ test("she sails, your offset holds, you moved", async () => {
   const { carrierAt } = await reader();
   const walk = await walkMod();
   const carriers = carriersFrom(MARKS);
-  const records = [departure({ handle: "rider", from: { x: 60, y: 0 }, toward: { x: 2, y: 3 }, at: 10.0 })];
+  // Seeded aboard, then a step on her deck — a walk no longer boards (POS-247).
+  const aboard = { carrier: carriers[0], local: { x: 0, y: 0 } };
+  const records = [departure({ handle: "rider", from: { x: 0, y: 0 }, toward: { x: 2, y: 3 }, at: 10.0 })];
 
-  const before = await foldFrames(records, { carriers, carrierAt, walk, atMs: BEFORE_SAILING });
-  const after_ = await foldFrames(records, { carriers, carrierAt, walk, atMs: AFTER_LANDING });
+  const before = await foldFrames(records, { carriers, carrierAt, walk, atMs: BEFORE_SAILING, aboard });
+  const after_ = await foldFrames(records, { carriers, carrierAt, walk, atMs: AFTER_LANDING, aboard });
 
   assert.deepEqual(before.local, after_.local, "the offset in her frame is UNCHANGED — that is what carriage is");
   assert.notDeepEqual(before.world, after_.world, "and the world position moved anyway");
@@ -223,10 +245,9 @@ test("walking while aboard is movement WITHIN the frame — the offset changes, 
   const walk = await walkMod();
   const carriers = carriersFrom(MARKS);
   const records = [
-    departure({ handle: "pacer", from: { x: 60, y: 0 }, toward: { x: 2, y: 8 }, at: 10.1 }),
     departure({ handle: "pacer", from: { x: 2, y: 8 }, toward: { x: 2, y: -8 }, at: 10.2 }),  // across her deck
   ];
-  const fold = await foldFrames(records, { carriers, carrierAt, walk, atMs: BEFORE_SAILING });
+  const fold = await foldFrames(records, { carriers, carrierAt, walk, atMs: BEFORE_SAILING, aboard: { carrier: carriers[0], local: { x: 2, y: 8 } } });
   assert.equal(fold.frame, "the-town/the-post-office");
   assert.equal(fold.transitions.filter((t) => t.kind === "died").length, 0, "pacing the deck is not disembarking");
   assert.deepEqual(fold.local, { x: 2, y: -8 });
@@ -296,14 +317,15 @@ test("with the structural hook off, the INTERIM deck rule is what runs", async (
 
 // ── 7. the contract is shown at the boundary ─────────────────────────────────
 
-test("a road that ends on her deck names her, and the law that binds there", async () => {
+test("a road that ends on her deck names her, and says the walk leaves you on the quay beside her", async () => {
   const { carrierAt, mod, service } = await reader();
   const terms = await boundariesOnRoad({ x: 60, y: 0 }, { x: 2, y: 3 }, carriersFrom(MARKS), BEFORE_SAILING, { carrierAt, mod, service });
   assert.equal(terms.length, 1);
   assert.equal(terms[0].carrier, "the-town/the-post-office");
   assert.equal(terms[0].ends_inside, true);
-  assert.ok(terms[0].terms.some((t) => /means riding/.test(t)),
-    "the contract of stepping aboard has to be one of the terms shown");
+  assert.ok(terms[0].terms.some((t) => /quay beside her, not aboard/.test(t) && /stop's door/.test(t) && /ride/.test(t)),
+    "the walk answer says where the walk leaves you and that boarding is a stop's door");
+  assert.ok(!terms[0].terms.some((t) => /means riding/.test(t)), "the old contract of stepping aboard is gone");
   assert.ok(terms[0].terms.some((t) => /departs/.test(t)), "and when she goes");
 });
 
