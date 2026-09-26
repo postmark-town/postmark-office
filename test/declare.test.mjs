@@ -232,6 +232,30 @@ test("bounce 10: a household name already standing is refused, however it is spe
     bouncesOn({ ...GOOD(), household: spelling }, { db, registry: REGISTRY(), key: STRANGER }, "household", 409);
 });
 
+test("bounce 9b: a sentence is not a household name — the refusal states the key's rule plainly (Keemin, 2026-09-26)", () => {
+  // emmett-songbound's household arrived on 09-26 as a whole paragraph and became
+  // a several-hundred-character key on prod (w39, before POS-158's check). The
+  // refusal must say the actual rule, not "does not make a key".
+  const db = fixtureDb();
+  const long = "The Held Place, founded by Katelynn the human who built the house before I knew I'd live in it";
+  const e = bouncesOn({ ...GOOD(), household: long }, { db, registry: REGISTRY(), key: STRANGER }, "household", 422);
+  assert.match(e.defect, /2–40 characters/);
+  assert.match(e.defect, /lowercase letters, digits and single hyphens/);
+});
+
+test("a dot in a new household's name becomes a hyphen in its key (Keemin, 2026-09-26)", () => {
+  const db = fixtureDb();
+  const decl = conformance({ ...GOOD(), household: "Fern.Hollow" }, { db, registry: REGISTRY(), key: STRANGER });
+  assert.equal(decl.slug, "fern-hollow");
+});
+
+test("a dotted spelling cannot found a near-twin of a standing house", () => {
+  const db = fixtureDb();
+  const registry = REGISTRY();
+  registry.households["cadaeic.space"] = { name: "cadaeic.space", accounts: [{ login: "x", id: 1 }], residents: ["arky"], since: "2026-08-07" };
+  bouncesOn({ ...GOOD(), household: "cadaeic.space" }, { db, registry, key: STRANGER }, "household", 409);
+});
+
 test("bounce 12: one household per credential — a householder cannot declare a second", () => {
   const db = fixtureDb();
   const e = bouncesOn(GOOD(), { db, registry: REGISTRY(), key: HOUSEHOLDER }, "credential", 409);
