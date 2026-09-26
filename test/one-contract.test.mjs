@@ -310,6 +310,27 @@ test("POST /fund/verify · an unknown field is refused by name, before the door 
   assert.equal(r.body.defect, "fund-verify does not take: zz_probe");
 });
 
+// The calendar's acts (POS-207): one refusal at both doors, before the record
+// is asked anything — this office is pointed at none, and the refusal is still
+// the contract's, not the pen's 503.
+// Under #178 the plain twin of every household act is `POST /household` with
+// the MCP door's own `{ do, args }` body — no per-act route.
+test("POST /household { do: \"host\" } · an unknown field is refused by name at both doors, before anything else is asked", async () => {
+  const input = { title: "a probe", place: { at: { x: 0, y: 0 } }, starts: "2030-01-01T00:00:00Z", ends: "2030-01-01T01:00:00Z", zz_probe: 1 };
+  const r = await rest(B, "POST", "/household", { do: "host", args: input });
+  const m = await mcp(A, "household", { do: "host", args: input });
+  assert.equal(r.status, 422, `${r.status}: ${r.body.defect}`);
+  assert.equal(r.body.defect, "host does not take: zz_probe");
+  assert.equal(m.defect, "host does not take: zz_probe");
+});
+
+test("GET /calendar · public and keyless; an office pointed at no record says so rather than answering an empty calendar", async () => {
+  const res = await fetch(`${B.base}/calendar`);
+  const body = await res.json();
+  assert.equal(res.status, 503, JSON.stringify(body));
+  assert.match(body.defect, /record cannot be read/);
+});
+
 test("stake · an apex-only act refuses in its own name — never \"null does not take\"", async () => {
   const m = await mcp(A, "household", { do: "stake", args: { from: WRIGHT, pot: "p", stamps: 1, zz_probe: 1 } });
   assert.equal(m.error, "bounce");
@@ -445,7 +466,7 @@ test("paper nonce · flag-off, a nonce is DISCLOSED as unhonoured at both doors,
 // The MCP half of this leg is in test/world-apex.test.mjs: the world apex
 // judges its envelope only once the store has answered which act the ground
 // affords, and this fixture has no world store (the reason § 3 gives).
-test("nonce · a world act still refuses a nonce by name at the plain API — its store has nowhere to keep one until 026_act_nonce.sql", async () => {
+test("nonce · a world act still refuses a nonce by name at the plain API — its store has nowhere to keep one until 027_act_nonce.sql", async () => {
   for (const [route, tool] of [["/world/walks", "world_walk"], ["/world/marks", "world_leave_mark"], ["/world/say", "world_say"]]) {
     const r = await rest(B, "POST", route, { nonce: "w-k1" });
     assert.equal(r.status, 422, `${route}: ${r.status} ${r.body.defect}`);

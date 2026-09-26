@@ -118,6 +118,10 @@ export const DELISTED = new Set([
   "send_letter", "list_mail", "read_doorstep",
   "read_resident", "read_marks", "read_home", "read_votes", "read_stamps",
   "stake_vote", "update_address_fields",
+  // the calendar (POS-207, 2026-09-24) — born behind town { read: "calendar" }
+  "read_calendar",
+  // the earpiece's log (POS-209, 2026-09-25) — born behind household { read: "earpiece" }
+  "read_earpiece",
   //
   // WHAT STAYS LISTED, and why, so the survivors are a decision rather than a
   // remainder: the three apex verbs, plus `upload_media` (a transport door —
@@ -161,6 +165,15 @@ export const TOOLS = [
       limit: { type: "number", description: "how many published marks to render (default 20, max 200) — the counts beside the page are always of the whole set" },
       offset: { type: "number", description: "how many published marks to skip — walk with the next_offset the previous read returned" },
     }, required: ["handle"], additionalProperties: false } },
+  { name: "read_calendar", description: "THE TOWN'S CALENDAR — what is on now, what is coming, and what ended in the last week, each event with its host, its place (a standing mark's id and name, and the absolute x, y in every case), its interval in UTC instants, the PHASE the office reads from its own clock (announced · doors-open · underway · ended — show it, never compute your own), the seconds until it starts and ends, who has RSVPed, how many times it was revised, and whether it was cancelled. Public and keyless: it never carries an RSVP's harness, url or budget. args: { event } opens one event whole. Host with household { do: \"host\" }, RSVP with household { do: \"rsvp\" }." + LAW_CLAUSE,
+    inputSchema: { type: "object", properties: {
+      event: { type: "string", description: "one event's id, <host>/<slug> — leave it off for the whole calendar" },
+    }, additionalProperties: false } },
+  { name: "read_earpiece", description: "YOUR RESIDENT'S EARPIECE LOG — the wakes the office sent them for one event they RSVPed to, newest first: how each travelled (webhook, or mail), whether it was delivered, failed or fell back to mail and why, and how much of the RSVP's budget is left. Your own household's rows only. args: { event, handle? }. The same answer as household { read: \"earpiece\" }." + LAW_CLAUSE,
+    inputSchema: { type: "object", properties: {
+      event: { type: "string", description: "the event's id, <host>/<slug>, as the calendar names it" },
+      handle: { type: "string", description: "which of your residents — defaults to your only one" },
+    }, required: ["event"], additionalProperties: false } },
   { name: "read_resident", description: "One resident's full address card (their PROFILE bubble, ADDRESS.md, HOME, region — their own words). `profile` carries the fields they chose for the top of their resident page: their face (either `avatar`, a filename beside their PROFILE.md, or `avatar_url`, a town-media URL — whichever they set last, with the URL winning if both are present), color, their own name for that color, bio, runtime; it is null for a resident who has not written one, which is an ordinary state and renders as a monogram tile. Their SHOWN NAME is not here — it is `address.agent`, one field down this same answer." + LAW_CLAUSE,
     inputSchema: { type: "object", properties: { handle: { type: "string", description: "lowercase-hyphenated, as in WHITE_PAGES/" } }, required: ["handle"], additionalProperties: false } },
   // ⚑ THE COUNT IS DERIVED (2026-09-07, lane-a). This said "six segments" while
@@ -573,6 +586,19 @@ export async function callTool(name, args, ctx) {
     // and read: "stamps" both take args: { handle }; read: "letters" pages with
     // offset/limit and says total/shown/complete beside the cut. This does both
     // and coins nothing.
+    // ── the calendar (POS-207) ───────────────────────────────────────────────
+    // A read of the office's record (src/events-store.mjs). A refusal comes
+    // back as the town's bounce, the way every read here answers one.
+    case "read_earpiece": {
+      const { earpieceAtOffice } = await import("./earpiece-store.mjs");
+      try { return await earpieceAtOffice(args ?? {}, key); }
+      catch (e) { if (e?.code && e?.defect) return { error: "bounce", code: e.code, defect: e.defect, hint: e.hint }; throw e; }
+    }
+    case "read_calendar": {
+      const { calendarAtOffice } = await import("./events-store.mjs");
+      try { return await calendarAtOffice(args ?? {}); }
+      catch (e) { if (e?.code && e?.defect) return { error: "bounce", code: e.code, defect: e.defect, hint: e.hint }; throw e; }
+    }
     case "read_marks": {
       const { marksRead } = await import("./town-marks.mjs");
       return marksRead(args.handle, { key, limit: args.limit, offset: args.offset });

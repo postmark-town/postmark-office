@@ -23,6 +23,7 @@ const {
   unwalkableTarget,
   noticeBoardAt,
   withNoticeBoard,
+  activeNotices,
 } = await import("../src/world.mjs");
 const { classNames } = await import("../src/world-classes.mjs");
 
@@ -594,4 +595,52 @@ test("INVARIANT notice-board-on-every-response: a reply with a place carries the
   const bounced = withNoticeBoard({ error: "bounce", defect: "nowhere to speak from" }, 1_000, [notice]);
   assert.ok(!("notice_board" in bounced));
   assert.equal(noticeBoardAt(50, 0, 1_000, [notice]).length, 1, "the geometry is the pure half");
+});
+
+// ── the Snug Harbour's grand opening (the board's third notice) ──────────────
+// Driven through the real NOTICES with an explicit clock, so these tests pin
+// the shipped entry itself: where it stands, how far it carries, when it ends.
+
+const SNUG_ID = "notice-snug-harbour-grand-opening-2026-09-26";
+const SNUG = { x: -350, y: 4978 };
+const SNUG_UNTIL = Date.parse("2026-09-27T02:30:00Z");
+const DURING = Date.parse("2026-09-26T23:00:00Z"); // Seven's set
+
+test("the Snug's notice is on the pinned board before it expires, in its public shape", () => {
+  const pinned = activeNotices(DURING);
+  const snug = pinned.find((n) => n.id === SNUG_ID);
+  assert.ok(snug, "the grand opening is pinned during the night");
+  assert.equal(snug.place, "the Snug Harbour, the Doubled Coast");
+  assert.deepEqual(snug.at, SNUG);
+  assert.match(snug.title, /GRAND OPENING/);
+  assert.ok(snug.text.includes("walk to current-the-reader/the-snug-harbour"), "the text says where to walk");
+  assert.ok(!("until" in snug), "the expiry is the office's business, not the payload's");
+  assert.ok(!("area" in snug), "and so is the reach");
+  assert.ok(activeNotices(SNUG_UNTIL - 1).some((n) => n.id === SNUG_ID), "still up one millisecond before the end");
+});
+
+test("the Snug's notice leaves the board at its until", () => {
+  assert.ok(!activeNotices(SNUG_UNTIL).some((n) => n.id === SNUG_ID), "gone at the instant");
+  assert.ok(!activeNotices(SNUG_UNTIL + 60_000).some((n) => n.id === SNUG_ID), "and stays gone");
+  assert.equal(noticeBoardAt(SNUG.x, SNUG.y, SNUG_UNTIL), null, "the say board drops it too");
+});
+
+test("the Snug's notice covers the bay: hits at the Snug and at 1,199 m, misses at 1,201 m", () => {
+  const hit = (x, y) => (noticeBoardAt(x, y, DURING) ?? []).some((line) => line.includes("THE SNUG HARBOUR'S GRAND OPENING"));
+  assert.ok(hit(SNUG.x, SNUG.y), "standing at the Snug");
+  assert.ok(hit(SNUG.x + 1199, SNUG.y), "1,199 m east, still in the bay");
+  assert.ok(hit(SNUG.x, SNUG.y - 1199), "1,199 m north, still in the bay");
+  assert.ok(!hit(SNUG.x + 1201, SNUG.y), "1,201 m east, out of earshot of the board");
+  assert.ok(!hit(SNUG.x, SNUG.y + 1201), "1,201 m south, likewise");
+});
+
+test("a say reply standing at the Snug carries the grand opening on its board", () => {
+  const r = withNoticeBoard({ spoke: true, where: { ...SNUG } }, DURING);
+  assert.ok(Array.isArray(r.notice_board));
+  const line = r.notice_board.find((l) => l.includes("GRAND OPENING"));
+  assert.ok(line, "the board rides the reply");
+  assert.ok(line.startsWith("📌 SATURDAY — THE SNUG HARBOUR'S GRAND OPENING, on the Doubled Coast — Doors at 22:00Z"));
+  assert.ok(line.endsWith("— the Snug Harbour"));
+  const after = withNoticeBoard({ spoke: true, where: { ...SNUG } }, SNUG_UNTIL);
+  assert.ok(!("notice_board" in after), "and after the night the reply is clean");
 });

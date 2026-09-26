@@ -264,7 +264,11 @@ const REST = () => ctx({ schemas: SCHEMAS, schemaRequired: REQUIRED });
 //                 unabridged 12,534 and trip this ceiling immediately. A bound
 //                 that could not be crossed by the regression it names would be
 //                 decoration.
-const REST_CEILING = 16_384;
+// POS-207 (2026-09-25, Keemin's go through Wright): raised to 24,576 (24 KiB) on
+// this ceiling's own rule, "~30% over today": three calendar act cards took the
+// bare answer to 19,353, which no honest trim of three cards brings back under
+// 16,384. SLIM_CEILING is untouched and stays the load-bearing bound.
+const REST_CEILING = 24_576;
 const SLIM_CEILING = 8_192;
 
 test('F5 · OPERATIONS.md: "REST: stable/simple for frozen consumers" — the REST bare answer keeps its SHAPE, every key and the type at it', async () => {
@@ -318,6 +322,22 @@ test('F5 · OPERATIONS.md: "REST: stable/simple for frozen consumers" — the RE
   const liveWindow = full.acts.find((a) => a.fields && "blueprint" in a.fields);
   assert.equal(liveWindow?.fields?.file_path?.type, "string", "the live window card takes file_path");
   assert.equal(liveWindow?.fields?.html?.required, undefined, "and the live card does not mark html required — a card that did would refuse the road it advertises");
+  // ⚑ REGENERATED 2026-09-24 FOR POS-207 + POS-208 (the calendar), named here
+  // for the same reason. What grew: three act cards, `host`, `cancel-event`
+  // and `rsvp`, appended to `acts`. The capture diff, key by key: +46, −0,
+  // 0 retyped — every added key under the three new entries (each names the
+  // acting resident with `handle`, the household door's rule), none on an
+  // existing card. PSA for the release notes: "the town has a calendar —
+  // household do: host puts an event on it (a title, a place, a start and an
+  // end), do: rsvp joins one, and town { read: "calendar" } reads it."
+  //
+  // The witness is found by the one field only the host card carries (`place`),
+  // in the frozen copy AND the live door, so a drop-and-recapture cannot pass.
+  const hostFrozen = frozen.acts.find((a) => a.fields && "place" in a.fields);
+  assert.equal(hostFrozen?.fields?.ends?.required, "boolean", "the frozen host card marks ends required — an event with no end is refused");
+  const hostLive = full.acts.find((a) => a.fields && "place" in a.fields);
+  assert.equal(hostLive?.act, "host");
+  assert.equal(hostLive?.fields?.ends?.required, true, "the live host card marks ends required");
 });
 
 test(`F5c · and the answer stays BOUNDED — REST under ${REST_CEILING}B, the connector's bare answer under ${SLIM_CEILING}B`, async () => {
@@ -396,7 +416,7 @@ test("F7 · an unknown read bounces naming BOTH namespaces — the reads and the
   assert.match(r.hint, /reads back its own full card/);
 });
 
-test("F7b · the TEN acts that own their name answer their card; the THREE that are also reads keep their read", async () => {
+test("F7b · the THIRTEEN acts that own their name answer their card; the THREE that are also reads keep their read", async () => {
   // ⚠ THE ROUND ASKED FOR A DISJOINTNESS GUARD. It fired on the live door:
   // `address`, `home` and `window` have been both an act and a read since long
   // before this branch, because a read here IS that act's shadow. At the world
@@ -413,9 +433,13 @@ test("F7b · the TEN acts that own their name answer their card; the THREE that 
   // number catches is an act quietly becoming a read (or the reverse), and a
   // census that moves with the thing it counts catches nothing. Update it in
   // the commit that changes the roster, and say why — as this line does.
+  //
+  // ⚑ TEN → THIRTEEN, 2026-09-24 (POS-207, POS-208): `host`, `cancel-event`
+  // and `rsvp` joined as BARE acts. The calendar they fill is read at the TOWN
+  // door (`town { read: "calendar" }`), so none of them shadows a household read.
   const { bare, shadowed } = assertActCardsReachable([...HOUSEHOLD_DISPATCHABLE], HOUSEHOLD_READS);
   assert.deepEqual(shadowed, ["address", "home", "window"]);
-  assert.equal(bare.length, 10);
+  assert.equal(bare.length, 13);
   for (const act of bare) {
     const r = await householdApex({ read: act }, KEY, ctx({ slim: true, schemas: SCHEMAS, schemaRequired: REQUIRED }));
     assert.equal(r.error, undefined, `read: "${act}" bounced — an act nobody can read is an act nobody can learn`);
@@ -966,7 +990,7 @@ test("F12d · THE DRAIN CANNOT TRIP ON THE NONCE — the replay lane's door is e
 // now, over the town-log rows they already write (test/one-contract.test.mjs
 // drives it through both doors). What still refuses it by name is every act
 // with no town-log receipt to hand back — the world acts (until
-// 026_act_nonce.sql), and household acts like the ballot stake.
+// 027_act_nonce.sql), and household acts like the ballot stake.
 test("F12e · a nonce on an act with no town-log receipt still bounces by name — the exemption is send and the five paper acts", async () => {
   const clone = mailClone();
   const r = await householdApex({ do: "stake-vote", args: { from: "wright", topic: "t", candidate: "c", stamps: 1, nonce: "x" } }, KEY,

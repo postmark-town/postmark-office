@@ -737,7 +737,13 @@ test("send_letter FOLDS UNDER household — your pen lives where your standing d
   // same thing from three angles (server.test.mjs's flag-off listing and
   // town-apex.test.mjs's TOWN_READABLE are the other two); all three moved
   // together, which is the ledger being paid rather than a count being nudged.
-  assert.equal(names.length, 51, "no tool was added or removed beyond the paid ledger; the flag-off listing is untouched");
+  // 51 → 52: read_calendar (the calendar, 2026-09-24, POS-207) — town
+  // { read: "calendar" }, born delisted behind the town apex the same way. All
+  // three counts moved in the same commit again.
+  // 52 → 53: read_earpiece (the earpiece, 2026-09-25, POS-209) — household
+  // { read: "earpiece" }, born delisted behind the household apex. The three
+  // counts moved in the same commit.
+  assert.equal(names.length, 53, "no tool was added or removed beyond the paid ledger; the flag-off listing is untouched");
 
   assert.ok(HOUSEHOLD_DISPATCHABLE.includes("send"), "household do: \"send\" is the letter's apex verb");
   assert.equal(householdDispatchToolFor("send"), "send_letter",

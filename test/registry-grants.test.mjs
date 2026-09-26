@@ -209,3 +209,68 @@ test("the acts lint can actually fire — the pattern matches a write and not th
   assert.deepEqual(hits("SELECT 'acts' AS t, household, count(*) FROM acts GROUP BY 2"), [],
     "a READ of acts — which every one of 022's receipt blocks is — is not a write");
 });
+
+// ── 026's PRIVATE HARNESS ROW: office_api's alone, under a row policy ────────
+//
+// POS-208, ruled 2026-09-25: one `household_harnesses` row per resident holds a
+// webhook url, a Letta conversation and a webhook's secret. The falsifier the
+// brief names: "a `snapshot_reader` SELECT on household_harnesses is refused".
+// Without a database that is three facts about the migration, each of which
+// alone would refuse it, all asserted: no role but `office_api` is GRANTed
+// anything on the table; row level security is enabled; and every policy on it
+// is `TO office_api` and compares the acting household's spelling set. And the
+// notary, which reads as `snapshot_reader`, does not name the table at all.
+const HARNESSES = "household_harnesses";
+
+/** Every GRANT of any privilege on `table`, as `{ file, privilege, grantee }`. */
+function allGrantsOn(table) {
+  const out = [];
+  for (const { file, sql } of schemaFiles()) {
+    for (const m of sql.matchAll(/GRANT\s+([A-Za-z,\s]+?)\s+ON\s+(?:TABLE\s+)?([A-Za-z0-9_,\s]+?)\s+TO\s+([A-Za-z0-9_,\s]+?)\s*;/gi)) {
+      const tables = m[2].split(",").map((s) => s.trim());
+      const allTables = /ALL\s+TABLES\s+IN\s+SCHEMA/i.test(m[0]);
+      if (!tables.includes(table) && !allTables) continue;
+      for (const p of m[1].split(",").map((s) => s.trim().toUpperCase()).filter(Boolean))
+        for (const r of m[3].split(",").map((s) => s.trim()).filter(Boolean))
+          out.push({ file, privilege: p, grantee: r, allTables });
+    }
+  }
+  return out;
+}
+
+test("026 · household_harnesses is GRANTed to office_api alone — SELECT, INSERT, UPDATE — and snapshot_reader holds nothing on it", () => {
+  const named = allGrantsOn(HARNESSES).filter((g) => !g.allTables);
+  assert.ok(named.length > 0, "026 grants nothing on household_harnesses, or this test proves nothing");
+  assert.deepEqual([...new Set(named.map((g) => g.grantee))], ["office_api"]);
+  assert.deepEqual(named.map((g) => g.privilege).sort(), ["INSERT", "SELECT", "UPDATE"]);
+  // 002's `GRANT SELECT ON ALL TABLES IN SCHEMA public TO snapshot_reader` ran
+  // before 026 existed, so it never reached this table — and if it were ever
+  // re-run, the row policy below still answers that role nothing.
+  for (const g of allGrantsOn(HARNESSES).filter((x) => x.allTables))
+    assert.ok(Number(g.file.slice(0, 3)) < 26, `${g.file} grants ${g.privilege} on ALL TABLES after 026 — household_harnesses would be in it`);
+  const lawful = lawfulList();
+  for (const p of ["INSERT", "UPDATE"]) assert.ok(lawful.has(`office_api|${HARNESSES}|${p}`), `003 must list office_api ${p} on ${HARNESSES}`);
+  assert.equal(lawful.has(`office_api|${HARNESSES}|DELETE`), false, "a registration is replaced, never removed");
+});
+
+test("026 · household_harnesses has row level security, and every policy is TO office_api and compares app.household_keys", () => {
+  const sql = schemaFiles().find((f) => f.file === "026_events.sql").sql;
+  assert.match(sql, /ALTER TABLE household_harnesses ENABLE ROW LEVEL SECURITY;/);
+  const policies = [...sql.matchAll(/CREATE POLICY\s+(\w+)\s+ON\s+household_harnesses\s+FOR\s+(\w+)\s+TO\s+(\w+)([\s\S]*?);/gi)]
+    .map((m) => ({ name: m[1], cmd: m[2].toUpperCase(), to: m[3], body: m[4] }));
+  assert.deepEqual(policies.map((p) => p.cmd).sort(), ["INSERT", "SELECT", "UPDATE"]);
+  for (const p of policies) {
+    assert.equal(p.to, "office_api", `${p.name} is TO ${p.to}`);
+    assert.match(p.body, /household = ANY\(string_to_array\(NULLIF\(current_setting\('app\.household_keys', true\), ''\), ','\)\)/, `${p.name} does not compare the spelling set`);
+  }
+  // No policy anywhere else names the table for another role.
+  const others = schemaFiles().flatMap(({ file, sql: s }) =>
+    [...s.matchAll(/CREATE POLICY\s+\w+\s+ON\s+household_harnesses[\s\S]*?TO\s+(\w+)/gi)].map((m) => `${file}:${m[1]}`))
+    .filter((x) => !x.endsWith(":office_api"));
+  assert.deepEqual(others, []);
+});
+
+test("026 · the notary's export (snapshot_reader) never reads household_harnesses", () => {
+  const exporter = readFileSync(join(HERE, "..", "world2", "tools", "snapshot-export.mjs"), "utf8");
+  assert.doesNotMatch(exporter, /household_harnesses/);
+});
