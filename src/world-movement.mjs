@@ -513,6 +513,7 @@ export async function heardFromV2(voice, worldState, { repo = WORLD_CLONE, atMs 
   if (records.length) {
     const walk = (await vesselServiceFrom(worldState, { repo })).walk;
     const fold = await foldFrames(records, { carriers, carrierAt, walk, atMs: spokenMs });
+    // ⚑ The voice-via-frame path: unreachable since POS-247 (2026-09-26): no walk creates a frame; the ledger is the only way aboard. Removed with the fold's frame machinery in w41.
     frame = fold.frameCarrier; local = fold.local;
   }
 

@@ -248,11 +248,6 @@ export async function carrierStateAt(carrier, worldState, atMs, { repo = WORLD_C
  * instant — injected so this stays pure over its inputs and a test can drive a
  * carrier along any path it likes.
  *
- * `aboard` seeds the frame the entity starts the records in, as
- * `{ carrier, local }`. No door passes it: since 2026-09-26 nothing a walk
- * does can put anyone in a frame, so the fold starts in the world. It is
- * how the stepping-off and within-frame branches below stay provable.
- *
  * Returns `{ frame, local, world, transitions, provenance }`:
  *   frame        the carrier id you are in, or null for the world
  *   local        your offset IN that frame
@@ -260,9 +255,9 @@ export async function carrierStateAt(carrier, worldState, atMs, { repo = WORLD_C
  *   transitions  every frame edge born or died, with the record that did it
  *   provenance   "walked" | "carried" | "never-moved"
  */
-export async function foldFrames(records, { carriers, carrierAt, walk, atMs, aboard = null }) {
-  let frame = aboard?.carrier ?? null;  // null = the world frame
-  let local = aboard?.local ?? null;    // offset in `frame` (or world position when frame is null)
+export async function foldFrames(records, { carriers, carrierAt, walk, atMs }) {
+  let frame = null;                     // null = the world frame
+  let local = null;                     // offset in `frame` (or world position when frame is null)
   const transitions = [];
   let lastRecordMs = null;
   let lastArrivedMs = null;
@@ -290,6 +285,7 @@ export async function foldFrames(records, { carriers, carrierAt, walk, atMs, abo
     // a walk never boards (ruling 2, Keemin 2026-09-26; dom-pidgey walked to
     // her hull at the Town Centre that morning and read aboard mid-crossing
     // while every ride door, reading the ledger, said ashore).
+    // ⚑ The frame branches below (within the frame, stepped off) are unreachable since POS-247 (2026-09-26): no walk creates a frame; the ledger is the only way aboard. Removed with the fold's frame machinery in w41.
     const st = frame ? await carrierAt(frame, arriveMs) : null;
     if (st && inRect(endWorld, st.footprint)) {
       // Still aboard — a walk within the frame. The offset moves.
@@ -309,6 +305,7 @@ export async function foldFrames(records, { carriers, carrierAt, walk, atMs, abo
   // moved since you last arrived — otherwise a berthed boat would report every
   // passenger as "carried" while nothing had happened at all.
   let provenance = "walked";
+  // ⚑ unreachable since POS-247 (2026-09-26): no walk creates a frame; the ledger is the only way aboard. Removed with the fold's frame machinery in w41.
   if (frame) {
     const then = await carrierAt(frame, lastArrivedMs ?? atMs);
     const now = await carrierAt(frame, atMs);
