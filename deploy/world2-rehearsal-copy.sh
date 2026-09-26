@@ -33,8 +33,15 @@
 #
 # `rehearsal_runner` holds the pens WITH INHERIT FALSE, SET TRUE. That pair is
 # the whole design:
-#   · SET TRUE lets a session on the copy become `clearing_job`, `law_ingester`,
-#     `office_api`, `snapshot_reader`, `stance_reader`;
+#   · SET TRUE lets a session on the copy become a pen — ONLY the pens the
+#     runner uses, each named with its step:
+#       clearing_job  — the clearing itself (clearing-job.mjs; the claims
+#                       trigger passes only this current_user)
+#       law_ingester  — the clearing's first step, stamp-ingest.mjs (PG* +
+#                       PGOPTIONS), which writes the stamp/roll/escrow projections
+#     office_api, snapshot_reader, stance_reader and world2_owner are NOT granted:
+#     no step of the runner runs as them. A later step that needs one adds it
+#     here, with its step (Wright's ruling, 2026-09-26);
 #   · INHERIT FALSE means none of their privileges count for rehearsal_runner
 #     itself — including CONNECT on the source. `world2_dev`'s datacl grants
 #     CONNECT to the owner and the four pens by name and to no PUBLIC, so a
@@ -49,6 +56,20 @@
 # No existing role's own rights change. PUBLIC's CONNECT and TEMP on the copy
 # are revoked, so no pen can open the copy by its own login either: the only
 # road in is rehearsal_runner's.
+#
+# ── THE WALL IS MEASURED ON EVERY RUN, BEFORE ANY WRITE TO A DATABASE ────────
+# "INHERIT FALSE blocks CONNECT" is an argument; this script does not rest on
+# it. After the role and its memberships exist and BEFORE the target is touched,
+# it logs in as rehearsal_runner over 127.0.0.1/scram and tries to open the
+# SOURCE three ways: plain, with `-c role=clearing_job`, with `-c role=office_api`
+# — the question being whether the startup `role` option is applied before the
+# CONNECT check. All three must be refused; the refusals are printed verbatim.
+# If ANY connects: disconnect, revoke the memberships, stop (exit 1), write
+# nothing. The URL / current_database() guards in the tools stay as a second
+# layer — the wall is two layers, not one.
+#
+# TEARDOWN: deploy/world2-rehearsal-teardown.sh — drops the copy, revokes every
+# membership, drops the role, removes the password file.
 #
 # ── ONE SNAPSHOT, SO EQUALITY MEANS SOMETHING ───────────────────────────────
 # The office is live while this runs. Counting the source after the dump would
@@ -92,7 +113,7 @@ while [ $# -gt 0 ]; do
 done
 
 RUNNER="rehearsal_runner"
-PENS="clearing_job law_ingester office_api snapshot_reader stance_reader"
+PENS="clearing_job law_ingester"   # each with its step — see § WHO OWNS THE COPY
 REHEARSAL_DIR="${REHEARSAL_DIR:-/srv/world2-lab/rehearsal}"
 
 rehearsal_target_ok "$TARGET" "$SOURCE" || exit 2
@@ -117,14 +138,40 @@ say "== role $RUNNER (LOGIN, NOINHERIT membership in: $PENS)"
   for p in $PENS; do printf "GRANT %s TO %s WITH INHERIT FALSE, SET TRUE;\n" "$p" "$RUNNER"; done
 } | pgsu -d postgres >/dev/null || { echo "role setup failed" >&2; exit 1; }
 
-# The proof, not the intent: the runner must NOT hold CONNECT on the source.
+# The proof, not the intent. First the catalog's answer…
+revoke_pens() { for p in $PENS; do printf "REVOKE %s FROM %s;\n" "$p" "$RUNNER"; done | pgsu -d postgres >/dev/null 2>&1; }
 if [ "$(pgsu -d postgres -c "SELECT has_database_privilege('$RUNNER', '$SOURCE', 'CONNECT')")" != "f" ]; then
-  echo "!! $RUNNER can CONNECT to $SOURCE — refusing to build a copy whose runner can reach prod" >&2; exit 1
+  echo "!! the catalog says $RUNNER can CONNECT to $SOURCE — memberships revoked, nothing written" >&2; revoke_pens; exit 1
 fi
-say "   $RUNNER CONNECT on $SOURCE: f (as it must be)"
 if [ "$(pgsu -d postgres -c "SELECT count(*) FROM aclexplode((SELECT datacl FROM pg_database WHERE datname = '$SOURCE')) WHERE grantee = 0 AND privilege_type = 'CONNECT'")" != "0" ]; then
   say "   ⚑ PUBLIC holds CONNECT on $SOURCE — reported, not changed (a new role could reach it)"
 fi
+# …then the wall itself, MEASURED: three real logins to the source, each of
+# which must be refused. `-c role=` is the question — whether the startup role
+# is applied before the CONNECT check. The password rides PGPASSWORD (the
+# environment of this one psql, never an argv); the refusal is printed whole.
+say "== the wall: $RUNNER tries to open $SOURCE over 127.0.0.1 (each must be REFUSED)"
+# A refusal only counts if the login itself worked — a wrong password is also a
+# refusal, and would prove nothing about the wall. So the control first: the
+# same login opens `postgres` (PUBLIC CONNECT there, by the cluster's default),
+# and each refusal below must be Postgres saying CONNECT, not the password.
+ctl="$(PGPASSWORD="$(cat "$PWF")" psql -XAtq -h 127.0.0.1 -p "${WORLD2_PGPORT:-5432}" -U "$RUNNER" -d postgres -c "SELECT current_user" 2>&1)"
+[ "$ctl" = "$RUNNER" ] || { echo "!! control failed: $RUNNER cannot log in at all ($ctl) — the wall cannot be measured; memberships revoked, nothing written" >&2; revoke_pens; exit 1; }
+say "   control: $RUNNER logs in to postgres over 127.0.0.1 (answered: $ctl)"
+for opt in "" "-c role=clearing_job" "-c role=office_api"; do
+  out="$(PGPASSWORD="$(cat "$PWF")" PGOPTIONS="$opt" psql -XAtq -h 127.0.0.1 -p "${WORLD2_PGPORT:-5432}" \
+         -U "$RUNNER" -d "$SOURCE" -c "SELECT current_database()" 2>&1)"
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
+    echo "!! BREACH: $RUNNER CONNECTED to $SOURCE with options='${opt}' (it answered: $out) — disconnected, memberships revoked, nothing written" >&2
+    revoke_pens; exit 1
+  fi
+  case "$out" in
+    *"permission denied for database"*) ;;
+    *) echo "!! options='${opt}': refused, but not by the CONNECT check ($out) — the wall is unmeasured; memberships revoked, nothing written" >&2; revoke_pens; exit 1 ;;
+  esac
+  say "   options='${opt}': REFUSED (psql exit $rc): $out"
+done
 
 # ── the target, fresh ───────────────────────────────────────────────────────
 say "== target $TARGET (dropped and re-created)"
