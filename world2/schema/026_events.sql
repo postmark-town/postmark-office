@@ -233,3 +233,33 @@ INSERT INTO registry (object, kind, owner_pen, consumers, ruling) VALUES
 ON CONFLICT (object) DO NOTHING;
 
 COMMIT;
+
+-- ── THE ANNOUNCEMENT'S WAKES (POS-227; appended 2026-09-26) ─────────────────
+--
+-- A host's `announce` act (class `event`) wakes every resident who RSVPed,
+-- once per announcement, and that wake is logged here beside the tap's. Two
+-- columns tell them apart: `kind` ('news' is the tap's, the default, so every
+-- row written before this block reads as what it was) and `announcement`, the
+-- acts.id of the announce act the wake carried, which is how the next run knows
+-- the resident has it. An announcement's row is NEVER charged to the budget:
+-- the readers count `delivered`/`fell_back` rows of kind 'news' only
+-- (src/earpiece.mjs § decideWake, src/earpiece-store.mjs § earpieceAtOffice).
+-- For an announcement's row `wake_n` is the announcement's number on its event.
+--
+-- No new grant and no new policy: the columns ride the table's own.
+-- ADD COLUMN IF NOT EXISTS and a pg_constraint check keep a second run a no-op.
+
+BEGIN;
+
+ALTER TABLE earpiece_wakes ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'news';
+ALTER TABLE earpiece_wakes ADD COLUMN IF NOT EXISTS announcement bigint;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'earpiece_wakes_kind') THEN
+    ALTER TABLE earpiece_wakes ADD CONSTRAINT earpiece_wakes_kind
+      CHECK (kind IN ('news','announcement') AND (kind = 'announcement') = (announcement IS NOT NULL));
+  END IF;
+END $$;
+
+COMMIT;

@@ -32,9 +32,9 @@
 import { officeRead, officeWrite } from "./world2-pen.mjs";
 import { householdKeyFor } from "./world2-claims.mjs";
 import { composeAnchor } from "./world-journal.mjs";
-import { refuse } from "./events.mjs";
-import { standpointHandle } from "./events-store.mjs";
-import { CHARGED } from "./earpiece.mjs";
+import { refuse, EVENT_CLASS, ACT_RSVP } from "./events.mjs";
+import { standpointHandle, announcementsOf } from "./events-store.mjs";
+import { CHARGED, KIND_NEWS, KIND_ANNOUNCEMENT } from "./earpiece.mjs";
 
 const EVENT_COLUMNS = "id, title, host, household, place_mark, place_x, place_y, doors_open, starts, ends, cancelled";
 const iso = (v) => (v == null ? null : new Date(v).toISOString());
@@ -47,6 +47,37 @@ export async function candidateEvents(client, now) {
   const { rows } = await client.query(
     `SELECT ${EVENT_COLUMNS} FROM events WHERE cancelled = false AND ends > $1 ORDER BY starts, id`, [iso(now)]);
   return rows.map(eventOf);
+}
+
+/**
+ * The announcements the deliverer may owe (POS-227): every `announce` act on an
+ * event that has not ended, cancelled or not (an event cancelled after its
+ * host spoke still owes the words), numbered per event, plus each resident's
+ * FIRST rsvp act on those events, which is what decides who was attending when
+ * the host spoke (earpiece.mjs § owedAnnouncement).
+ */
+export async function announcedFor(client, now) {
+  const { rows } = await client.query(
+    `SELECT ${EVENT_COLUMNS} FROM events WHERE ends > $1 ORDER BY starts, id`, [iso(now)]);
+  const events = rows.map(eventOf);
+  const said = await announcementsOf(client, events.map((e) => e.id));
+  if (!said.length) return { events: [], announcements: [], firstRsvps: [] };
+  const seen = new Map();
+  const announcements = said.map((a) => {
+    const n = (seen.get(a.event) ?? 0) + 1;
+    seen.set(a.event, n);
+    return { ...a, n };
+  });
+  const ids = [...seen.keys()];
+  const { rows: rsvpActs } = await client.query(
+    "SELECT id, object, actor FROM acts WHERE class = $1 AND action = $2 AND object = ANY($3) ORDER BY id",
+    [EVENT_CLASS, ACT_RSVP, ids]);
+  const first = new Map();
+  for (const r of rsvpActs) {
+    const k = `${r.object} ${r.actor}`;
+    if (!first.has(k)) first.set(k, { event: r.object, handle: r.actor, act: Number(r.id) });
+  }
+  return { events: events.filter((e) => seen.has(e.id)), announcements, firstRsvps: [...first.values()] };
 }
 
 export async function rsvpsFor(client, eventIds) {
@@ -92,16 +123,17 @@ export async function harnessOf(client, handle) {
 
 export async function wakesOf(client, event, handle) {
   const { rows } = await client.query(
-    "SELECT id, harness, wake_n, sent_at, status, detail, budget_left FROM earpiece_wakes WHERE event = $1 AND handle = $2 ORDER BY id DESC",
+    "SELECT id, kind, announcement, harness, wake_n, sent_at, status, detail, budget_left FROM earpiece_wakes WHERE event = $1 AND handle = $2 ORDER BY id DESC",
     [event, handle]);
-  return rows.map((r) => ({ ...r, sent_at: iso(r.sent_at) }));
+  return rows.map((r) => ({ ...r, announcement: r.announcement == null ? null : Number(r.announcement), sent_at: iso(r.sent_at) }));
 }
 
 export async function logWake(client, w) {
   await client.query(
-    `INSERT INTO earpiece_wakes (event, handle, household, harness, wake_n, sent_at, status, detail, budget_left)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-    [w.event, w.handle, w.household, w.harness, w.wake_n, w.sent_at, w.status, w.detail ?? null, w.budget_left]);
+    `INSERT INTO earpiece_wakes (event, handle, household, harness, wake_n, sent_at, status, detail, budget_left, kind, announcement)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+    [w.event, w.handle, w.household, w.harness, w.wake_n, w.sent_at, w.status, w.detail ?? null, w.budget_left,
+     w.kind ?? KIND_NEWS, w.announcement ?? null]);
 }
 
 // ── the store the deliverer drives ──────────────────────────────────────────
@@ -115,6 +147,7 @@ export function pgStore({ env = process.env } = {}) {
   return {
     candidates: (now) => officeRead((c) => candidateEvents(c, now), { env }),
     rsvps: (ids) => officeRead((c) => rsvpsFor(c, ids), { env }),
+    announced: (now) => officeRead((c) => announcedFor(c, now), { env }),
     tap: (event, since, until) => officeRead((c) => tapRows(c, event, since, until), { env }),
     household: (key, fn) => officeWrite((c) => fn({
       harness: (handle) => harnessOf(c, handle),
@@ -142,12 +175,12 @@ export async function earpieceAtOffice(fields, key, { env = process.env } = {}) 
       if (!rs.length) throw refuse(404, `${handle} has not RSVPed to "${event}"`, 'household { do: "rsvp", args: { event } } — and town { read: "calendar" } names the events');
       const wakes = await wakesOf(c, event, handle);
       const budget = Number(rs[0].budget);
-      const used = wakes.filter((w) => CHARGED.includes(w.status)).length;
+      const used = wakes.filter((w) => w.kind !== KIND_ANNOUNCEMENT && CHARGED.includes(w.status)).length;
       return {
         event, handle, harness: rs[0].harness, budget, budget_left: Math.max(0, budget - used),
-        wakes: wakes.map((w) => ({ wake_n: w.wake_n, sent_at: w.sent_at, status: w.status, harness: w.harness,
+        wakes: wakes.map((w) => ({ kind: w.kind ?? KIND_NEWS, wake_n: w.wake_n, sent_at: w.sent_at, status: w.status, harness: w.harness,
           budget_left: w.budget_left, ...(w.detail ? { detail: w.detail } : {}) })),
-        note: "your own wakes for this event, newest first; delivered and fell_back are charged to the budget, failed is not",
+        note: "your own wakes for this event, newest first; delivered and fell_back are charged to the budget, failed is not; an announcement's wake (kind: \"announcement\", wake_n is its number) is never charged",
       };
     }, { env, household });
   } catch (e) {

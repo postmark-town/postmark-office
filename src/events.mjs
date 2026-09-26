@@ -32,6 +32,7 @@ export const ACT_HOST = "host";
 export const ACT_AMEND = "amend-event";
 export const ACT_CANCEL = "cancel-event";
 export const ACT_RSVP = "rsvp";
+export const ACT_ANNOUNCE = "announce";
 
 // ── THE DIALS, named once ───────────────────────────────────────────────────
 //
@@ -45,6 +46,18 @@ export const EVENT_MAX_DAYS = 7;
 export const ENDED_LIST_DAYS = 7;
 export const TITLE_MAX = 120;
 export const INVITATION_MAX = 600;
+// A host's announcement (POS-227, Keemin 2026-09-26: "announcements per event
+// are UNCAPPED, and the text is ≤ 1000 characters").
+export const ANNOUNCE_TEXT_MAX = 1000;
+// How many announcements one event may carry. Unlimited by the ruling, and a
+// DIAL so a cap is a config change and never code: `ANNOUNCE_MAX=<n>` in the
+// office's environment, a whole number of at least 1. Unset (or anything that
+// is not such a number) is the ruling's default, no cap.
+export const ANNOUNCE_MAX_ENV = "ANNOUNCE_MAX";
+export function announceMax(env = process.env) {
+  const n = Number(String(env?.[ANNOUNCE_MAX_ENV] ?? "").trim());
+  return Number.isInteger(n) && n >= 1 ? n : Infinity;
+}
 // Wakes per event, the resident's own dial (POS-208).
 export const BUDGET_DEFAULT = 6;
 export const BUDGET_MAX = 60;
@@ -225,6 +238,17 @@ export function judgeText({ title, invitation }, { partial = false } = {}) {
   return out;
 }
 
+// ── THE ANNOUNCEMENT (POS-227) ──────────────────────────────────────────────
+
+/** Judge an announcement's text. Returns it trimmed; throws the refusal by name. */
+export function judgeAnnouncement(text) {
+  if (text != null && typeof text !== "string") throw refuse(422, "an announcement is text", "text: what you say to everyone attending, in your own words", { field: "text" });
+  const t = String(text ?? "").trim();
+  if (!t) throw refuse(422, "an announcement needs text", "text: what you say to everyone attending", { field: "text" });
+  if (t.length > ANNOUNCE_TEXT_MAX) throw refuse(422, `an announcement is at most ${ANNOUNCE_TEXT_MAX} characters`, `this one is ${t.length}`, { field: "text" });
+  return t;
+}
+
 // ── THE RSVP (POS-208 B) ────────────────────────────────────────────────────
 
 // The literal hosts a challenge is never sent to: this box and the networks
@@ -349,6 +373,9 @@ export function applyEventAct(state, act) {
     state.rsvps.set(rsvpKey(id, act.actor), row);
     return row;
   }
+  // An `announce` act changes no row: the announcement IS the act, and the
+  // calendar read and the earpiece read it from `acts` (events-store.mjs §
+  // announcementsOf). So the rebuild has nothing to restore for it.
   return null;
 }
 
@@ -368,7 +395,7 @@ const iso = (v) => (v == null ? null : new Date(v).toISOString());
  * RSVPed, and nothing else: the public read never carries a harness, a url, a
  * secret or a budget (the brief § 6).
  */
-export function eventView(row, rsvpHandles, now) {
+export function eventView(row, rsvpHandles, now, announcements = []) {
   const doors_open = iso(row.doors_open), starts = iso(row.starts), ends = iso(row.ends);
   const residents = [...rsvpHandles].sort();
   return {
@@ -385,12 +412,15 @@ export function eventView(row, rsvpHandles, now) {
     rsvps: { total: residents.length, residents },
     revised: Number(row.revised ?? 0),
     cancelled: row.cancelled === true,
+    // The host's announcements, oldest first. Resident text in its own field,
+    // never folded into a sentence of the office's (the reading law).
+    announcements: announcements.map((a) => ({ at: iso(a.at), text: a.text })),
   };
 }
 
 /** The whole calendar: `{ as_of, now, coming, ended, total }`. */
-export function calendarFrom(rows, rsvpsByEvent, now) {
-  const views = rows.map((r) => eventView(r, rsvpsByEvent.get(r.id) ?? [], now));
+export function calendarFrom(rows, rsvpsByEvent, now, announcementsByEvent = new Map()) {
+  const views = rows.map((r) => eventView(r, rsvpsByEvent.get(r.id) ?? [], now, announcementsByEvent.get(r.id) ?? []));
   const byStart = (a, b) => Date.parse(a.starts) - Date.parse(b.starts) || a.id.localeCompare(b.id);
   const current = views.filter((v) => v.phase === "doors-open" || v.phase === "underway").sort(byStart);
   const coming = views.filter((v) => v.phase === "announced").sort(byStart);

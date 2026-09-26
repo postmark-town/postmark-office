@@ -9,6 +9,11 @@
 // event per crossing, written through the office's own send
 // (src/earpiece-mail.mjs).
 //
+// A host's ANNOUNCEMENT (POS-227) is woken by this same run, window or no
+// window: one wake per announcement per resident who was attending when it was
+// said, never charged to the budget (earpiece.mjs § THE ANNOUNCEMENT). So a
+// run is `idle` only when no window is open AND no announcement is owed.
+//
 // ── THE KILL FLAG ───────────────────────────────────────────────────────────
 //
 // `W2_EARPIECE=1` or it sends nothing. Unset, or anything else, and the run
@@ -36,7 +41,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   earpieceEnabled, inWindow, placeOf, saysAt, walksAt, decideWake, buildEnvelope, postWake, letterFor, KILL_FLAG,
-  crossingLabel,
+  crossingLabel, owedAnnouncement, decideAnnouncement, buildAnnouncementEnvelope, announcementLetterFor, KIND_ANNOUNCEMENT,
 } from "../../src/earpiece.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -59,7 +64,7 @@ const iso = (t) => new Date(t).toISOString();
  * One run. Everything it touches is injected, so the suite drives it against a
  * store in memory and a listener on this machine.
  *
- *   store      { candidates(now), rsvps(ids), tap(event, since, until), household(key, fn) }
+ *   store      { candidates(now), rsvps(ids), announced(now), tap(event, since, until), household(key, fn) }
  *   withinFn   the world engine's containment (world-verbs.mjs § pointWithinMark)
  *   earshotM   the say lane's earshot, for an event at a bare point
  */
@@ -73,10 +78,13 @@ export async function runEarpiece({ now = Date.now(), env = process.env, store, 
   const outside_window = events.filter((e) => !open.includes(e)).map((e) => e.id);
   const counts = { delivered: 0, failed: 0, fell_back: 0, "budget-exhausted": 0, coalescing: 0, "nothing-new": 0, "already-exhausted": 0,
     "before-the-crossing": 0, "this-crossing": 0 };
-  if (!open.length) return { at, status: "idle", outside_window, counts };
+  const announcing = { delivered: 0, failed: 0, fell_back: 0, announced: 0, coalescing: 0, "at-the-crossing": 0 };
+  const said = await store.announced(now);
+  if (!open.length && !said.announcements.length) return { at, status: "idle", outside_window, counts };
 
   const byId = new Map(open.map((e) => [e.id, e]));
-  const rsvps = await store.rsvps(open.map((e) => e.id));
+  const saidById = new Map(said.events.map((e) => [e.id, e]));
+  const rsvps = await store.rsvps([...new Set([...open.map((e) => e.id), ...saidById.keys()])]);
 
   // The tap, read ONCE per event from its doors to now; each resident's
   // `since` is a filter over it.
@@ -97,12 +105,21 @@ export async function runEarpiece({ now = Date.now(), env = process.env, store, 
     return { said, ...walksAt(t.frameActs, t.place, { since, until: at }) };
   };
 
-  // ONE HOUSEHOLD AT A TIME (earpiece-store.mjs § the header).
+  // ONE HOUSEHOLD AT A TIME (earpiece-store.mjs § the header). A household's
+  // list holds its tap RSVPs and the announcements its residents are owed.
   const houses = new Map();
-  for (const r of rsvps) {
-    if (!taps.has(r.event)) continue;
+  const add = (r, item) => {
     const key = r.household ?? `solo:${r.handle}`;
-    houses.set(key, [...(houses.get(key) ?? []), r]);
+    houses.set(key, [...(houses.get(key) ?? []), item]);
+  };
+  for (const r of rsvps) if (taps.has(r.event)) add(r, { rsvp: r });
+  const firstRsvp = new Map(said.firstRsvps.map((f) => [`${f.event} ${f.handle}`, f.act]));
+  for (const a of said.announcements) {
+    const event = saidById.get(a.event);
+    for (const r of rsvps) {
+      if (r.event !== a.event) continue;
+      if (owedAnnouncement({ event, announcement: a, rsvp: r, firstRsvpAct: firstRsvp.get(`${r.event} ${r.handle}`) })) add(r, { rsvp: r, announcement: a });
+    }
   }
 
   // PHASE 1 — each household's own rows, in its own transaction.
@@ -110,10 +127,15 @@ export async function runEarpiece({ now = Date.now(), env = process.env, store, 
   for (const [key, list] of houses) {
     const got = await store.household(key, async (tx) => {
       const out = [];
-      for (const rsvp of list) {
-        const event = byId.get(rsvp.event);
+      for (const { rsvp, announcement } of list) {
         const harness = rsvp.harness === "mail" ? null : await tx.harness(rsvp.handle);
         const history = await tx.wakes(rsvp.event, rsvp.handle);
+        if (announcement) {
+          out.push({ key, rsvp, announcement, event: saidById.get(rsvp.event),
+            decision: decideAnnouncement({ announcement, rsvp, harness, history, now }) });
+          continue;
+        }
+        const event = byId.get(rsvp.event);
         out.push({ key, rsvp, event, decision: decideWake({ event, rsvp, harness, history, now, news: newsFor(rsvp.event) }) });
       }
       return out;
@@ -126,8 +148,9 @@ export async function runEarpiece({ now = Date.now(), env = process.env, store, 
   // resident after another, ten of them would outrun the unit's
   // TimeoutStartSec and be killed between sending and logging. Together, the
   // run is bounded by the slowest single harness (about 71 s).
-  const deliver = async ({ key, rsvp, event, decision: d }) => {
+  const deliver = async ({ key, rsvp, event, announcement, decision: d }) => {
     const base = { event: rsvp.event, handle: rsvp.handle, household: key, sent_at: at };
+    if (announcement) return announce({ base, rsvp, event, announcement, d });
     if (d.act === "none") { counts[d.why === "budget-exhausted" ? "already-exhausted" : d.why] += 1; return null; }
     if (d.act === "exhausted") {
       counts["budget-exhausted"] += 1;
@@ -152,6 +175,27 @@ export async function runEarpiece({ now = Date.now(), env = process.env, store, 
     return { ...base, harness: d.route.kind, wake_n: d.wake_n, status, detail,
       budget_left: status === "failed" ? d.budget_left + 1 : d.budget_left };
   };
+  // An announcement's wake: its own envelope and letter, logged with its kind
+  // and the act it carries, and never charged.
+  const announce = async ({ base, rsvp, event, announcement, d }) => {
+    if (d.act === "none") { announcing[d.why] += 1; return null; }
+    const envelope = buildAnnouncementEnvelope({ event, place: placeOf(event), announcement, now });
+    let status, detail;
+    if (d.route.kind === "webhook") {
+      const r = await postWake(d.route.url, d.route.secret, envelope, { fetchImpl, ...(sleep ? { sleep } : {}) });
+      status = r.ok ? "delivered" : "failed";
+      detail = r.detail;
+    } else {
+      const r = await Promise.resolve().then(() => sendMail({ to: rsvp.handle, ...announcementLetterFor(envelope) }))
+        .catch((e) => ({ ok: false, detail: String(e?.message ?? e).slice(0, 200) }));
+      status = r.ok ? (d.route.fell_back ? "fell_back" : "delivered") : "failed";
+      const sent = r.ok ? `letter ${r.letter_id ?? "(no id)"} for the ${crossingLabel(now)} crossing` : null;
+      detail = [d.route.fell_back ? `fell back to mail: ${d.route.fell_back}` : null, sent, r.detail ?? null].filter(Boolean).join(" — ") || null;
+    }
+    announcing[status] += 1;
+    return { ...base, kind: KIND_ANNOUNCEMENT, announcement: announcement.act, harness: d.route.kind,
+      wake_n: announcement.n, status, detail, budget_left: d.budget_left };
+  };
   const rows = (await Promise.all(plans.map(deliver))).filter(Boolean);
 
   // PHASE 3 — each household's log lines, in its own transaction.
@@ -159,7 +203,8 @@ export async function runEarpiece({ now = Date.now(), env = process.env, store, 
     const mine = rows.filter((w) => w.household === key);
     if (mine.length) await store.household(key, async (tx) => { for (const w of mine) await tx.log(w); });
   }
-  return { at, status: "ran", windows: open.map((e) => e.id), outside_window, ...(refused.length ? { refused } : {}), counts };
+  return { at, status: "ran", windows: open.map((e) => e.id), outside_window, ...(refused.length ? { refused } : {}), counts,
+    announcements: announcing };
 }
 
 // ── the oneshot ─────────────────────────────────────────────────────────────

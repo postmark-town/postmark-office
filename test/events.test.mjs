@@ -14,9 +14,9 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { installActsPen, uninstallActsPen } from "./acts-pen-stub.mjs";
 import {
-  hostAtOffice, cancelAtOffice, rsvpAtOffice, calendarAtOffice, eventActs,
+  hostAtOffice, cancelAtOffice, rsvpAtOffice, calendarAtOffice, eventActs, announceAtOffice,
 } from "../src/events-store.mjs";
-import { phaseAt, judgeInterval, EVENT_MAX_DAYS, FELL_BACK_NO_ECHO, BUDGET_DEFAULT, SECRET_NOTE } from "../src/events.mjs";
+import { phaseAt, judgeInterval, EVENT_MAX_DAYS, FELL_BACK_NO_ECHO, BUDGET_DEFAULT, SECRET_NOTE, ANNOUNCE_TEXT_MAX } from "../src/events.mjs";
 import { compareRebuild, dryRun, NEVER_TOUCHED_LINE } from "../world2/tools/events-rebuild.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -547,6 +547,136 @@ test("an office pointed at no record refuses the act with the pen's sentence, an
   const off = { WORLD2_PG: undefined, WORLD2_PG_URL: undefined };
   await refusedWith(hostAtOffice(HOST(Date.now()), WRIGHT, { env: off }), 503, /nothing was written, and nothing was lost/);
   await refusedWith(calendarAtOffice({}, { env: off }), 503, /record cannot be read/);
+});
+
+// ── announce (POS-227) ──────────────────────────────────────────────────────
+//
+// Keemin 2026-09-26: the host's word reaches everyone attending; UNCAPPED, a
+// dial ANNOUNCE_MAX for later; text ≤ 1000 characters. The delivery is the
+// earpiece's (test/earpiece.test.mjs § announcements); these are the act and
+// the read.
+
+// Read at the call, not at import: the pen stub points process.env at the record.
+const noCap = () => ({ ...process.env, ANNOUNCE_MAX: undefined });
+
+test("announce · the host's word is an act of class event, action announce, object the event; the calendar read carries it oldest first, and no harness detail", async () => {
+  const { pen } = setup();
+  const now = Date.now();
+  const { event } = await hostAtOffice(HOST(now), WRIGHT, { now });
+  const URL_ = "https://hooks.example.org/errant-announce";
+  await rsvpAtOffice({ event: event.id, harness: { kind: "webhook", url: URL_ } }, ERRANT, { fetchImpl: echoing([]), mintSecret: () => SECRET_A, now });
+  const first = await announceAtOffice({ event: event.id, text: "Doors at half past nine, not ten." }, WRIGHT, { now: now + 1000, env: noCap() });
+  const second = await announceAtOffice({ event: event.id, text: "  Bring a lamp.  " }, WRIGHT, { now: now + 2000, env: noCap() });
+  assert.deepEqual(first.announcement, { n: 1, at: iso(now + 1000), text: "Doors at half past nine, not ten." });
+  assert.equal(second.announcement.n, 2);
+  assert.equal(second.announcement.text, "Bring a lamp.", "the text is trimmed");
+  assert.match(first.receipt, /wakes the 1 resident who RSVPed, each once, outside their wake budget/);
+  const act = pen.rows().find((r) => r.action === "announce");
+  assert.deepEqual({ class: act.class, action: act.action, object: act.object, actor: act.actor },
+    { class: "event", action: "announce", object: event.id, actor: "wright" });
+  assert.deepEqual(JSON.parse(act.payload), { event: event.id, text: "Doors at half past nine, not ten." });
+
+  const one = await calendarAtOffice({ event: event.id }, { now: now + 3000 });
+  assert.deepEqual(one.event.announcements, [
+    { at: iso(now + 1000), text: "Doors at half past nine, not ten." },
+    { at: iso(now + 2000), text: "Bring a lamp." },
+  ]);
+  const all = await calendarAtOffice({}, { now: now + 3000 });
+  assert.deepEqual(all.coming[0].announcements, one.event.announcements);
+  // THE PUBLIC READ: the words, and nothing of how anyone is woken.
+  const text = JSON.stringify([one, all]);
+  assert.doesNotMatch(text, new RegExp(`errant-announce|${SECRET_A}|webhook|budget`), "the public read carries a harness detail");
+  // Another event's read carries none of them.
+  const other = await hostAtOffice({ ...HOST(now), title: "Reading by the lamp" }, WRIGHT, { now });
+  assert.deepEqual((await calendarAtOffice({ event: other.event.id }, { now })).event.announcements, []);
+});
+
+test("announce · only the host: another resident, and the host's own household-mate, are refused by name, and nothing is written", async () => {
+  const { pen } = setup();
+  const now = Date.now();
+  const { event } = await hostAtOffice(HOST(now), WRIGHT, { now });
+  await rsvpAtOffice({ event: event.id }, ERRANT, { now });
+  const n = pen.rows().length;
+  await refusedWith(announceAtOffice({ event: event.id, text: "hello all" }, ERRANT, { now, env: noCap() }), 403, /only the host announces on/);
+  const MATES = { household: "starforge", handles: new Set(["wright", "pica"]) };
+  await refusedWith(announceAtOffice({ event: event.id, handle: "pica", text: "hello all" }, MATES, { now, env: noCap() }), 403, /only the host announces on/);
+  await refusedWith(announceAtOffice({ event: "wright/no-such-thing", text: "hello" }, WRIGHT, { now, env: noCap() }), 404, /no event/);
+  await refusedWith(announceAtOffice({ event: event.id }, WRIGHT, { now, env: noCap() }), 422, /needs text/);
+  assert.equal(pen.rows().length, n, "a refused announcement wrote an act");
+  const ok = await announceAtOffice({ event: event.id, handle: "wright", text: "hello all" }, MATES, { now, env: noCap() });
+  assert.equal(ok.handle, "wright");
+});
+
+test(`announce · ${ANNOUNCE_TEXT_MAX} characters is taken, ${ANNOUNCE_TEXT_MAX + 1} is refused by name`, async () => {
+  const { pen } = setup();
+  const now = Date.now();
+  const { event } = await hostAtOffice(HOST(now), WRIGHT, { now });
+  assert.equal(ANNOUNCE_TEXT_MAX, 1000, "the ruling's number");
+  const n = pen.rows().length;
+  await refusedWith(announceAtOffice({ event: event.id, text: "x".repeat(1001) }, WRIGHT, { now, env: noCap() }), 422, /at most 1000 characters/);
+  assert.equal(pen.rows().length, n);
+  const ok = await announceAtOffice({ event: event.id, text: "x".repeat(1000) }, WRIGHT, { now, env: noCap() });
+  assert.equal(ok.announcement.text.length, 1000);
+});
+
+test("announce · from the event's creation until it ends: taken before the doors open, refused after the end and on a cancelled event", async () => {
+  const { pen } = setup();
+  const now = Date.now();
+  const a = await hostAtOffice(HOST(now), WRIGHT, { now });
+  const early = await announceAtOffice({ event: a.event.id, text: "see you soon" }, WRIGHT, { now: now + 1000, env: noCap() });
+  assert.equal(phaseAt(a.event, now + 1000), "announced");
+  assert.equal(early.announcement.n, 1);
+  await refusedWith(announceAtOffice({ event: a.event.id, text: "that was lovely" }, WRIGHT, { now: now + 3 * H, env: noCap() }), 409, /has ended/);
+  const b = await hostAtOffice({ ...HOST(now), title: "Reading by the lamp" }, WRIGHT, { now });
+  await cancelAtOffice({ event: b.event.id }, WRIGHT, { now });
+  const n = pen.rows().length;
+  await refusedWith(announceAtOffice({ event: b.event.id, text: "still on?" }, WRIGHT, { now, env: noCap() }), 409, /was cancelled/);
+  assert.equal(pen.rows().length, n);
+});
+
+test("announce · uncapped by default — twelve on one event are all taken; with ANNOUNCE_MAX=2 the third is refused by name", async () => {
+  const { pen } = setup();
+  const now = Date.now();
+  const a = await hostAtOffice(HOST(now), WRIGHT, { now });
+  for (let i = 1; i <= 12; i++) {
+    const r = await announceAtOffice({ event: a.event.id, text: `note ${i}` }, WRIGHT, { now, env: noCap() });
+    assert.equal(r.announcement.n, i);
+  }
+  const b = await hostAtOffice({ ...HOST(now), title: "Reading by the lamp" }, WRIGHT, { now });
+  const CAP2 = { ...noCap(), ANNOUNCE_MAX: "2" };
+  await announceAtOffice({ event: b.event.id, text: "one" }, WRIGHT, { now, env: CAP2 });
+  await announceAtOffice({ event: b.event.id, text: "two" }, WRIGHT, { now, env: CAP2 });
+  const n = pen.rows().length;
+  await refusedWith(announceAtOffice({ event: b.event.id, text: "three" }, WRIGHT, { now, env: CAP2 }), 409, /already carries 2 announcements, the most this office allows/);
+  assert.equal(pen.rows().length, n, "the refused third wrote an act");
+  // The dial counts per event: the first event's twelve do not count here, and
+  // the second's two do not stop the first.
+  await announceAtOffice({ event: a.event.id, text: "thirteen" }, WRIGHT, { now, env: noCap() });
+});
+
+test("announce · the rebuild still equals the tables: an announcement changes no row", async () => {
+  const { pen, events, rsvps } = setup();
+  const now = Date.now();
+  const a = await hostAtOffice(HOST(now), WRIGHT, { now });
+  await rsvpAtOffice({ event: a.event.id }, ERRANT, { now });
+  await announceAtOffice({ event: a.event.id, text: "hello" }, WRIGHT, { now, env: noCap() });
+  const acts = await eventActs(pen);
+  const out = compareRebuild({ events: [...events.values()], rsvps: [...rsvps.values()] }, acts);
+  assert.equal(out.equal, true, out.drift.join("; "));
+  assert.deepEqual(out.counts, { acts: 3, events: 1, event_rsvps: 1 });
+});
+
+test("the household door dispatches announce", async () => {
+  setup();
+  const now = Date.now();
+  const { event } = await hostAtOffice(HOST(now), WRIGHT, { now });
+  const { householdApex, HOUSEHOLD_DISPATCHABLE, APEX_ONLY_FIELDS } = await import("../src/household-apex.mjs");
+  assert.ok(HOUSEHOLD_DISPATCHABLE.includes("announce"));
+  assert.deepEqual(APEX_ONLY_FIELDS.announce.required, ["event", "text"]);
+  const r = await householdApex({ do: "announce", args: { event: event.id, text: "hello at the door" } }, WRIGHT, {});
+  assert.equal(r.result?.announcement?.text, "hello at the door", JSON.stringify(r).slice(0, 300));
+  const no = await householdApex({ do: "announce", args: { event: event.id, text: "me too" } }, ERRANT, {});
+  assert.equal(no.code, 403);
 });
 
 // ── the sample the site lane reads ──────────────────────────────────────────
