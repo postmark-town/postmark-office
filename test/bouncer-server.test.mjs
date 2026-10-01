@@ -30,7 +30,7 @@ before(async () => {
     "--bouncer-now-ms", FROZEN_BOUNCER_NOW_MS,
   ], {
     env: {
-      ...process.env,
+      ...process.env, WORLD_GRAPH_NONE: "1",
       OFFICE_KEYS: `${KEY}=keemin:wright`,
       OFFICE_BOUNCER_KEY_READ_PER_MINUTE: "2",
       OFFICE_BOUNCER_KEY_WRITE_PER_MINUTE: "3",
@@ -147,7 +147,7 @@ test("with no --bouncer-now-ms the office keeps Date.now — the seam is a test 
     // no --bouncer-now-ms: this is the production composition
   ], {
     env: {
-      ...process.env,
+      ...process.env, WORLD_GRAPH_NONE: "1",
       OFFICE_KEYS: `${KEY}=keemin:wright`,
       OFFICE_BOUNCER_KEY_READ_PER_MINUTE: "2",
       OFFICE_BOUNCER_KEY_WRITE_PER_MINUTE: "3",

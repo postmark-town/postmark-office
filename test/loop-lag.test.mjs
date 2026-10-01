@@ -133,7 +133,7 @@ before(async () => {
   fixtureDb(dbPath).close();
   writeFileSync(join(tmp, "release.json"), JSON.stringify({ tag: "t", sha: "s", target: "dev" }));
   ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--db", dbPath, "--release-root", tmp], {
-    env: { ...process.env, OFFICE_KEYS: "loop-lag-test-key=keemin:wright", TOWN_CLONE: join(tmp, "no-clone"), WORLD_CLONE: join(tmp, "no-world") },
+    env: { ...process.env, WORLD_GRAPH_NONE: "1", OFFICE_KEYS: "loop-lag-test-key=keemin:wright", TOWN_CLONE: join(tmp, "no-clone"), WORLD_CLONE: join(tmp, "no-world") },
     stdio: ["ignore", "pipe", "pipe"],
   })));
 });

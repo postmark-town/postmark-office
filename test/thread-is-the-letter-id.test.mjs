@@ -382,7 +382,7 @@ before(async () => {
   const p = join(restTmp, "fixture.db");
   fixtureDb(p).close();
   ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--db", p], {
-    env: { ...process.env, OFFICE_KEYS: `${REST_KEY}=keemin:wright`, TOWN_CLONE: mailClone(),
+    env: { ...process.env, WORLD_GRAPH_NONE: "1", OFFICE_KEYS: `${REST_KEY}=keemin:wright`, TOWN_CLONE: mailClone(),
       WORLD_CLONE: join(restTmp, "no-world-clone") },
     stdio: ["ignore", "pipe", "pipe"],
   })));

@@ -115,7 +115,7 @@ before(async () => {
   ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port),
     "--db", dbPath, "--oauth-db", (OAUTH_DB.path = join(tmp, "oauth.db"))], {
     env: {
-      ...process.env,
+      ...process.env, WORLD_GRAPH_NONE: "1",
       // PINNED (`#<gh_id>`), so the row carries a verified account and mints
       // at the key desk — the founder's ruling of 2026-08-26, and lap 3's
       // correction: a pinned env row CAN mint. That is how this file holds a

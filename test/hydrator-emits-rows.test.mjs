@@ -18,7 +18,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -111,11 +111,11 @@ test("THE OUTPUTS: --no-db writes no world.db, and the rows it emits carry the c
   const privateTmp = { TMP: dir, TEMP: dir, TMPDIR: dir };
   try {
     const run = (args) => JSON.parse(execFileSync(process.execPath, [join(OFFICE_ROOT, "src", "world-hydrate.mjs"), "--world", CLONE, "--office", office, "--no-gexf", "--no-lints", "--json", ...args],
-      { encoding: "utf8", env: { ...process.env, ...privateTmp, WORLD_STORE_DB: join(dir, "unused.db") }, stdio: ["ignore", "pipe", "ignore"] }));
+      { encoding: "utf8", env: { ...process.env, ...privateTmp }, stdio: ["ignore", "pipe", "ignore"] }));
     const rowsPath = join(dir, "rows.json");
-    const out = run(["--no-db", "--db", join(dir, "absent.db"), "--rows-out", rowsPath]);
-    assert.equal(existsSync(join(dir, "absent.db")), false, "--no-db wrote a world.db");
-    assert.equal(out.db, null);
+    const out = run(["--no-db", "--rows-out", rowsPath]);
+    assert.deepEqual(readdirSync(dir).filter((f) => f.endsWith(".db")), [], "the hydration wrote a world.db");
+    assert.equal(Object.hasOwn(out, "db"), false, "the run reported a world.db it was not asked for");
     // The rows are what the store's snapshot and a test's fixture are made of:
     // their own meta carries the counts the run reported, stamped OK.
     const rows = JSON.parse(readFileSync(rowsPath, "utf8"));
@@ -126,7 +126,17 @@ test("THE OUTPUTS: --no-db writes no world.db, and the rows it emits carry the c
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("A STORE MISS AFTER A GOOD FILE EXITS 3, so the tick still swaps the file in; with no file asked for, it is a plain failure", (t) => {
+test("--db IS REFUSED BY NAME: world.db is retired, and a caller still asking for one is told where the world went", () => {
+  const dir = mkdtempSync(join(tmpdir(), "hydrator-db-refused-"));
+  try {
+    const r = spawnSync(process.execPath, [join(OFFICE_ROOT, "src", "world-hydrate.mjs"), "--db", join(dir, "world.db")], { encoding: "utf8" });
+    assert.equal(r.status, 2, `exit ${r.status}: ${r.stderr}`);
+    assert.match(r.stderr, /world.db is retired .* --to-store .* --rows-out/);
+    assert.equal(existsSync(join(dir, "world.db")), false);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("A STORE MISS EXITS 1 and says so: with world.db retired there is no file to fall back on (the rows, if asked for, are still written)", (t) => {
   if (NO_WORLD) return t.skip(NO_WORLD);
   const dir = mkdtempSync(join(tmpdir(), "hydrator-store-miss-"));
   try {
@@ -136,12 +146,11 @@ test("A STORE MISS AFTER A GOOD FILE EXITS 3, so the tick still swaps the file i
     // The real office tree, so the snapshot carries an office sha and the miss
     // is the connection itself.
     const hydrate = (args) => spawnSync(process.execPath, [join(OFFICE_ROOT, "src", "world-hydrate.mjs"), "--world", CLONE, "--office", OFFICE_ROOT, "--no-gexf", "--no-lints", "--to-store", ...args], { encoding: "utf8", env });
-    const withFile = hydrate(["--db", join(dir, "world.db")]);
-    assert.equal(withFile.status, 3, `exit ${withFile.status}: ${withFile.stderr.slice(-300)}`);
-    assert.match(withFile.stderr, /the graph snapshot was NOT written to the store/);
-    assert.equal(existsSync(join(dir, "world.db")), true, "exit 3 promises the file was written");
-    const storeOnly = hydrate(["--no-db"]);
-    assert.equal(storeOnly.status, 1, "with no file asked for, a store miss built nothing usable");
+    const rows = join(dir, "rows.json");
+    const r = hydrate(["--rows-out", rows]);
+    assert.equal(r.status, 1, `exit ${r.status}: ${r.stderr.slice(-300)}`);
+    assert.match(r.stderr, /the graph snapshot was NOT written to the store/);
+    assert.equal(existsSync(rows), true, "the rows were asked for, and are written before the store is tried");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -154,12 +163,10 @@ test("AN OFFICE PLACED BY THE RELEASE TRAIN (no .git, a release.json) keys its r
   const SHA = "ab".repeat(20);
   writeFileSync(join(office, "release.json"), JSON.stringify({ tag: "release/2026-w41", sha: SHA, deployed_at: "2026-10-04T00:00:00Z" }));
   try {
-    const file = join(dir, "world.db");
-    execFileSync(process.execPath, [join(OFFICE_ROOT, "src", "world-hydrate.mjs"), "--world", CLONE, "--office", office, "--no-gexf", "--no-lints", "--db", file],
+    const rows = join(dir, "rows.json");
+    execFileSync(process.execPath, [join(OFFICE_ROOT, "src", "world-hydrate.mjs"), "--world", CLONE, "--office", office, "--no-gexf", "--no-lints", "--rows-out", rows],
       { stdio: "ignore", env: { ...process.env, TMP: dir, TEMP: dir, TMPDIR: dir } });
-    const db = new DatabaseSync(file, { readOnly: true });
-    const meta = Object.fromEntries(db.prepare("SELECT key, value FROM meta").all().map((r) => [r.key, r.value]));
-    db.close();
+    const meta = Object.fromEntries(JSON.parse(readFileSync(rows, "utf8")).meta.map((r) => [r.key, r.value]));
     assert.equal(meta.as_of_office, SHA, "an office the train placed must key the snapshot by the commit it is running");
     const gates = JSON.parse(meta.gates);
     assert.equal(gates.find((g) => g.gate === "office-release")?.status, "PRESENT");

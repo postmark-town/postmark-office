@@ -28,7 +28,7 @@ before(async () => {
   fixtureDb(dbPath).close();
   ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--db", dbPath], {
     env: {
-      ...process.env,
+      ...process.env, WORLD_GRAPH_NONE: "1",
       OFFICE_KEYS: `${KEY}=keemin:wright`,
       OFFICE_BOUNCER_KEYLESS_PER_MINUTE: "3",
       OFFICE_BOUNCER_KEYLESS_BURST: "3",

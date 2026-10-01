@@ -150,7 +150,7 @@ before(async () => {
   fixtureDb(dbPath).close();
   ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--db", dbPath], {
     // a static key (no ghId → never principal) + the principal pin + no clone
-    env: { ...process.env, OFFICE_KEYS: "shellkey=keemin:wright", PRINCIPAL_GH_ID: PRINCIPAL_ID, TOWN_CLONE: join(tmp, "no-clone"), TOWN_PUSH: "" },
+    env: { ...process.env, WORLD_GRAPH_NONE: "1", OFFICE_KEYS: "shellkey=keemin:wright", PRINCIPAL_GH_ID: PRINCIPAL_ID, TOWN_CLONE: join(tmp, "no-clone"), TOWN_PUSH: "" },
     stdio: ["ignore", "pipe", "pipe"],
   })));
   BASE = `http://127.0.0.1:${PORT}`;

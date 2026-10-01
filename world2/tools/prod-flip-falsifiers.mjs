@@ -83,7 +83,7 @@ export const FALSIFIERS = Object.freeze([
   { id: "guard-g5", file: "falsifier-guard-g5.mjs", proof: "--prove-can-fail" },
 ]);
 
-export const PASS_THROUGH = Object.freeze(["WORLD_STORE_DB", "TOWN_CLONE", "WORLD2_PGHOST", "WORLD2_PGPORT"]);
+export const PASS_THROUGH = Object.freeze(["TOWN_CLONE", "WORLD2_PGHOST", "WORLD2_PGPORT"]);
 
 /** The children's whole environment. */
 export function childEnv(parent, { url, repo }) {

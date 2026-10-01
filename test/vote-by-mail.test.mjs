@@ -30,7 +30,7 @@ before(async () => {
   fixtureDb(dbPath).close();
   clone = tempClone(); // WHITE_PAGES/wright/outbox + git init → canWrite is true
   ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--db", dbPath], {
-    env: { ...process.env, OFFICE_KEYS: `${KEY}=keemin:wright`, TOWN_CLONE: clone, TOWN_PUSH: "" },
+    env: { ...process.env, WORLD_GRAPH_NONE: "1", OFFICE_KEYS: `${KEY}=keemin:wright`, TOWN_CLONE: clone, TOWN_PUSH: "" },
     stdio: ["ignore", "pipe", "pipe"],
   })));
   BASE = `http://127.0.0.1:${PORT}`;

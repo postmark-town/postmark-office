@@ -36,7 +36,9 @@ test("the children's environment is minimal: the read-only URL, PGOPTIONS, the c
   const env = childEnv({ PATH: "/bin", HOME: "/home/m", W2_PEN: "all", WORLD_POSITIONS: "1", W2_GUARDS: "1",
     WORLD2_PG: "1", OFFICE_KEYS: "secret", WORLD_STORE_DB: "/srv/x/world.db" },
     { url: "postgres://snapshot_reader:pw@localhost/world2_dev", repo: "/srv/w" });
-  assert.deepEqual(Object.keys(env).sort(), ["HOME", "PATH", "PGOPTIONS", "WORLD2_PG_URL", "WORLD_CLONE", "WORLD_STORE_DB"]);
+  // WORLD_STORE_DB is handed in and must NOT come out: world.db is retired
+  // (POS-270 3b), and the children read the world graph snapshot at import.
+  assert.deepEqual(Object.keys(env).sort(), ["HOME", "PATH", "PGOPTIONS", "WORLD2_PG_URL", "WORLD_CLONE"]);
   assert.equal(env.PGOPTIONS, READ_ONLY_OPTION);
   assert.match(env.WORLD2_PG_URL, /options=/);
 });
