@@ -21,7 +21,7 @@ const execOf = (svc) => read(svc).split(/\r?\n/).find((l) => l.startsWith("ExecS
 const KEEPING = [
   ['git -C "$TOWN_CLONE" pull --ff-only', "the town pull"],
   ['git -C "$WORLD_CLONE" fetch --prune', "the world fetch (it carries the keeper's tag)"],
-  ["stamp-mint.mjs --append", "the mint catch-up"],
+  ["stamp-mint-run.mjs --append", "the mint catch-up (from the store, POS-341)"],
   ["deploy/welcome-pass.mjs", "the welcome pass"],
   ["/srv/postmark-office/tools/bug-stage-plan.mjs", "the bug stage pass (Darko, 2026-10-07: payment rides the acceptance)"],
   ["--apply --quiet --key /srv/postmark-office/stamp-key.pem", "the bug stage pass's apply, quiet, with the box's stamp key"],

@@ -149,7 +149,13 @@ REGISTRY_FILE="$SNAP/registry.json"
     cp "$LEDGER" "$HOLD/ledger.arrived" || exit 1
     git ls-files --others --exclude-standard > "$HOLD/untracked.arrived" || exit 1
     armed=1
-    node tools/stamp-mint.mjs --append --key /srv/postmark-office/stamp-key.pem || exit 1
+    # POS-341: the mint decides from the store and commits its own lines in its
+    # store transaction (world2/tools/stamp-mint-run.mjs). Those lines are in
+    # HEAD now, so the arrival copy moves up to them: a roll-back below puts back
+    # only what the welcome pass wrote.
+    node /srv/postmark-office/world2/tools/stamp-mint-run.mjs --append --key /srv/postmark-office/stamp-key.pem \
+        --clone "$TOWN_CLONE" --message "mint: tick catch-up pass" || exit 1
+    cp "$LEDGER" "$HOLD/ledger.arrived" || exit 1
     node /srv/postmark-office/deploy/welcome-pass.mjs \
         --town "$TOWN_CLONE" --key /srv/postmark-office/stamp-key.pem \
       || echo "[office-keep] welcome pass had refusals (non-fatal) — the lines above name each one; the household keeps its claim and the next crossing asks again" >&2
@@ -166,9 +172,11 @@ REGISTRY_FILE="$SNAP/registry.json"
       node tools/stamp-verify.mjs --registry "$REGISTRY_FILE" || exit 1
     fi
     if ! git diff --quiet -- "$LEDGER"; then
-      git add "$LEDGER" && git commit -qm "mint: tick catch-up pass" || exit 1
+      git add "$LEDGER" && git commit -qm "welcome: tick pass" || exit 1
       armed=0
       git push -q || exit 1
+      # the welcome lines went to git from this shell: the store reads them now
+      node /srv/postmark-office/world2/tools/stamp-lines.mjs --sync --clone "$TOWN_CLONE" || exit 1
     fi
     armed=0
   ) || echo "[office-keep] mint catch-up FAILED (non-fatal) — run stamp-verify in the town clone" >&2
