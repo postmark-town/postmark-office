@@ -179,12 +179,16 @@ export function scenario(ctx) {
     {
       id: "00", event: "catch-up", verify: true,
       title: "the box's tick catch-up on the copied town, before any sandbox event: whatever mints and bundles the real town is owed at this sha",
-      run: () => {
+      run: async () => {
         at(1)();
-        const mint = ctx.townTool("stamp-mint.mjs", ["--append", "--key", ctx.keyPath]);
-        ctx.commit("mint: tick catch-up pass");
+        // POS-341: the chain enters the store (the box's first --sync), the index
+        // is at HEAD, and the keep tick's mint pass decides from the store
+        ctx.syncLines();
+        await ctx.ingest();
+        const mint = ctx.mintPass("mint: tick catch-up pass");
         const wel = ctx.officeTool("deploy/welcome-pass.mjs", ["--town", ctx.town, "--key", ctx.keyPath, "--date", ctx.clock.date], { allowFail: true });
         ctx.commit("mint: tick catch-up pass (welcome)");
+        ctx.syncLines();
         return { notes: [mint.out, wel.out].map((o) => o.trim().split("\n").at(-1)).filter(Boolean) };
       },
       // the real residents may move here and only here: from step 01 on, every one of them must hold still
