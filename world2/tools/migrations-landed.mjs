@@ -100,10 +100,10 @@ export const LANDED = {
   "064_snapshot_register.sql":     { probe: `${rel("register_versions")} AND ${rel("world_snapshot_register")} AND ${col("world_snapshots", "register_digest")} AND EXISTS (SELECT 1 FROM registry WHERE object = 'world_snapshot_register')` },
   // 065 (POS-358): settlements point at their snapshot; a back-filled snapshot says where its sources came from.
   "065_snapshot_backfill.sql":     { probe: `${col("world_snapshots", "source")} AND ${col("world_snapshots", "town_sha_from")} AND ${col("settlements", "snapshot_id")}` },
-  // 064 (POS-341 Q1): the stamp ledger's signed chain, one row per line.
-  "064_stamp_lines.sql":           { probe: `${rel("stamp_lines")} AND ${col("stamp_lines", "seal")}` },
-  // 065 (POS-341): the mint's rooms and raw mail lines, read from git.
-  "065_town_mint_inputs.sql":      { probe: `${rel("town_rooms")} AND ${rel("town_mail_lines")}` },
+  // 066 (POS-341 Q1): the stamp ledger's signed chain, one row per line.
+  "066_stamp_lines.sql":           { probe: `${rel("stamp_lines")} AND ${col("stamp_lines", "seal")}` },
+  // 067 (POS-341): the mint's rooms and raw mail lines, read from git.
+  "067_town_mint_inputs.sql":      { probe: `${rel("town_rooms")} AND ${rel("town_mail_lines")}` },
 };
 
 /** The schema files in the order a store takes them — name order, as the CI floor applies them. */

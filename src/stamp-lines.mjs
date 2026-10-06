@@ -1,7 +1,7 @@
 // stamp-lines.mjs — THE STAMP LEDGER'S CHAIN LIVES IN THE STORE (POS-341, Q1).
 //
 // Ruled by Darko, 2026-10-04: the signed append-only chain that proves the town's
-// economy lives in the store (064, stamp_lines), appended by the pen IN THE SAME
+// economy lives in the store (066, stamp_lines), appended by the pen IN THE SAME
 // TRANSACTION as the act that writes it, and the town repo's
 // WHITE_PAGES/stamp-ledger.md becomes its signed public export. This file is the
 // writer, the reader and the verifier.
@@ -24,8 +24,8 @@
 // ── THE SWITCH ───────────────────────────────────────────────────────────────
 //
 // `STAMP_LINES=store` turns the store write on. Unset, `stampedCommit` is the
-// plain pen commit, exactly as before 064, and the rollback is unsetting it.
-// Apply 064 before setting it.
+// plain pen commit, exactly as before 066, and the rollback is unsetting it.
+// Apply 066 before setting it.
 //
 // ── ONE ROW VOUCHES FOR THE WHOLE PAST ──────────────────────────────────────
 //

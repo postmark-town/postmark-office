@@ -135,7 +135,7 @@ async function main() {
   try {
     store = await officeRead(async (q) => ({ ...(await mintInputsVia(q)), entries: await stampLinesVia(q) }));
   } catch (e) { console.error(`the store could not be read: ${e.message}`); return 2; }
-  if (!store.rooms.size || !store.mailLines.length) { console.error("town_rooms or town_mail_lines is empty: run the town-index ingest after 065 first"); return 2; }
+  if (!store.rooms.size || !store.mailLines.length) { console.error("town_rooms or town_mail_lines is empty: run the town-index ingest after 067 first"); return 2; }
   const report = parityOf(engine, clone, store);
   const control = verifyStampLedger(clone);
   report.control = { ok: control.ok, problems: control.problems.slice(0, 5) };

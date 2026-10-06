@@ -190,18 +190,18 @@ async function recordSnapshot(client, repo, sha, kind) {
   return counts;
 }
 
-// ── the mint's inputs (065, POS-341) ─────────────────────────────────────────
+// ── the mint's inputs (067, POS-341) ─────────────────────────────────────────
 
 /**
  * town_rooms and town_mail_lines, written in the index's own transaction from
  * the same checkout (src/mint-inputs.mjs § writeMintInputs). `whole` replaces
- * both, as the seed replaces every table. A store without 065 is skipped and
+ * both, as the seed replaces every table. A store without 067 is skipped and
  * logged, so the index never stops on a migration not yet applied; the mint
  * runner refuses on its own when the tables are absent.
  */
 async function mintInputs(client, townRepo, tally, { whole = false } = {}) {
   const has = (await client.query("SELECT to_regclass('town_rooms') AS r, to_regclass('town_mail_lines') AS m")).rows[0];
-  if (!has.r || !has.m) { console.error("[town-index] 065_town_mint_inputs.sql is not applied: the mint's rooms and mail lines were not written"); return; }
+  if (!has.r || !has.m) { console.error("[town-index] 067_town_mint_inputs.sql is not applied: the mint's rooms and mail lines were not written"); return; }
   let deleted = { rooms: 0, mail_lines: 0 };
   if (whole) {
     deleted.rooms = (await client.query("DELETE FROM town_rooms")).rowCount;

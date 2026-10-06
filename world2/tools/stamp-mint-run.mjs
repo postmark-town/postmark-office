@@ -9,11 +9,11 @@
 // the keys came from files nothing compared. This runner makes the same
 // decision from the store:
 //
-//   the ledger      stamp_lines (064)
-//   the key base    household_pins + town_rooms (065), src/mint-inputs.mjs §
+//   the ledger      stamp_lines (066)
+//   the key base    household_pins + town_rooms (067), src/mint-inputs.mjs §
 //                   keyBaseOf, held to the town's householdKeys by the parity
 //                   gate (world2/tools/stamp-mint-parity.mjs)
-//   the deliveries  town_mail_lines (065), read by the town's own parseDeliveries
+//   the deliveries  town_mail_lines (067), read by the town's own parseDeliveries
 //
 // THE LAW STAYS THE TOWN'S. The runner imports the town engine and calls the
 // functions --append calls, in --append's order: deriveMints,
@@ -27,7 +27,7 @@
 //   node world2/tools/stamp-mint-run.mjs --append --key <ed25519 pem> [--clone <town clone>] [--message <commit message>]
 //
 // The caller holds the town lock (the ferry's flock, the keep tick's), as for
-// --append. The store must hold its inputs: 064 and 065 applied, one town-index
+// --append. The store must hold its inputs: 066 and 067 applied, one town-index
 // ingest run and the chain recorded (stamp-lines.mjs --sync). An empty input is
 // a refusal by name, never a mint from nothing. Exit 0 appended or up to date,
 // 1 refused.
@@ -91,8 +91,8 @@ export async function mintFromStore(clone, { keyPem, message = "mint: crossing p
     return await officeWrite(async (client) => {
       await syncStampLinesVia(client, clone, { engine: eng });
       const inputs = await mintInputsVia(client);
-      if (!inputs.rooms.size) throw new Error("town_rooms is empty: the store has no key base yet (apply 065 and run the town-index ingest)");
-      if (!inputs.mailLines.length) throw new Error("town_mail_lines is empty: the store has no deliveries yet (apply 065 and run the town-index ingest)");
+      if (!inputs.rooms.size) throw new Error("town_rooms is empty: the store has no key base yet (apply 067 and run the town-index ingest)");
+      if (!inputs.mailLines.length) throw new Error("town_mail_lines is empty: the store has no deliveries yet (apply 067 and run the town-index ingest)");
       const entries = await stampLinesVia(client);
       if (!entries.length) throw new Error("stamp_lines is empty: record the chain first (stamp-lines.mjs --sync)");
       const d = owedFromStore(eng, { entries, ...inputs });

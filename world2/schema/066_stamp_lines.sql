@@ -1,4 +1,4 @@
--- 064 — the stamp ledger's lines in the store (POS-341, Q1)
+-- 066 — the stamp ledger's lines in the store (POS-341, Q1)
 --
 -- RULED (Darko, 2026-10-04, POS-341 Q1): the signed append-only chain lives in
 -- the store. Each line of WHITE_PAGES/stamp-ledger.md is a row here, appended
@@ -33,7 +33,7 @@
 -- ── IDEMPOTENT. APPLY AS `world2_owner` by the runbook's step-1 idiom ────────
 --
 --   sudo -n -u postgres psql -v ON_ERROR_STOP=1 -d world2_dev \
---     -c "SET ROLE world2_owner;" -f world2/schema/064_stamp_lines.sql
+--     -c "SET ROLE world2_owner;" -f world2/schema/066_stamp_lines.sql
 --
 -- ── HOW TO PROVE IT LANDED ───────────────────────────────────────────────────
 --

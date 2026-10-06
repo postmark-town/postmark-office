@@ -1,7 +1,7 @@
--- 065 — the mint's two other inputs, read from git into the store (POS-341, Q2/Q3)
+-- 067 — the mint's two other inputs, read from git into the store (POS-341, Q2/Q3)
 --
 -- RULED (Darko, 2026-10-04, POS-341): the stamp mint decides from the store.
--- Its inputs are the ledger (064, stamp_lines), the household key base and the
+-- Its inputs are the ledger (066, stamp_lines), the household key base and the
 -- deliveries. These two tables carry the last two, written by the town-index
 -- ingest (the `law_ingester` pen) beside 033's tables, so the mint reads what
 -- the store read from git: git can be written to, the store reads git.
@@ -32,7 +32,7 @@
 -- ── IDEMPOTENT. APPLY AS `world2_owner` by the runbook's step-1 idiom ────────
 --
 --   sudo -n -u postgres psql -v ON_ERROR_STOP=1 -d world2_dev \
---     -c "SET ROLE world2_owner;" -f world2/schema/065_town_mint_inputs.sql
+--     -c "SET ROLE world2_owner;" -f world2/schema/067_town_mint_inputs.sql
 --
 -- The next town-index ingest fills both: a delta that finds them empty fills
 -- them whole (src/mint-inputs.mjs § writeMintInputs).

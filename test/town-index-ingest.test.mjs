@@ -141,7 +141,7 @@ test("seed, then the crossing as a snapshot, then a delta: every table equals hy
   assert.equal(await readHead(c), sha.after);
 });
 
-// POS-341: the mint's two store inputs ride the same ingest (065,
+// POS-341: the mint's two store inputs ride the same ingest (067,
 // src/mint-inputs.mjs). After the seed, the crossing and the delta above they
 // hold the checkout's rooms (dee's arrival included, the `_archived` shelf not)
 // and its mail ledger's lines, raw and in order.

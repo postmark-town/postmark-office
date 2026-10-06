@@ -5,14 +5,14 @@
 // mint, friendship mint, transfer and void from three inputs:
 //
 //   the ledger      the recorded lines, their laws and their sealed `registry:`
-//                   revisions. In the store: stamp_lines (064, src/stamp-lines.mjs).
+//                   revisions. In the store: stamp_lines (066, src/stamp-lines.mjs).
 //   the key base    "which household shares a cap", from genesis: the pins, then
 //                   each room's ADDRESS login, then `solo:<room>`. In the store:
-//                   household_pins (019) and town_rooms (065).
+//                   household_pins (019) and town_rooms (067).
 //   the deliveries  the mail ledger's delivered letters, `pays:` included. In the
-//                   store: town_mail_lines (065).
+//                   store: town_mail_lines (067).
 //
-// This file DERIVES the two 065 projections from a town checkout (the ingest's
+// This file DERIVES the two 067 projections from a town checkout (the ingest's
 // half), WRITES them (the ingest calls writeMintInputs in its seed and its
 // delta), and READS all three back into the shapes the town's own engine takes
 // (the runner's half). The law stays the town's: the runner hands these to the
