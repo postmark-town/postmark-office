@@ -36,6 +36,10 @@ import { townLedger as ledgerFromDb, townDocs as docsFromDb } from "../src/queri
 import { estateRead } from "../src/household-stamps.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+// The office.db legs here read office.db, whatever switch the run was started
+// with; the switched legs set TOWN_INDEX_READS themselves (POS-268). These
+// twins go with office.db at 5b.
+delete process.env.TOWN_INDEX_READS;
 const trash = [];
 const stores = [];
 after(async () => {
