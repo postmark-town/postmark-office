@@ -95,6 +95,8 @@ function childEnv(sb, extra = {}) {
     ...env, ...BOT,
     TOWN_CLONE: sb.town, STAMP_KEY: sb.keyPath, TOWN_PUSH: "0", TOWN_TZ: "America/New_York",
     WORLD2_PG: "1", WORLD2_PG_URL: sb.store.url("office_api", SANDBOX_DB),
+    // POS-341: the stamp pens record their lines in stamp_lines, as the box does once 066/067 are installed
+    STAMP_LINES: "store",
     ...extra,
   };
 }
@@ -389,7 +391,7 @@ export async function openStore(sb, { log = () => {} } = {}) {
   for (const k of Object.keys(process.env)) if (/^(PG[A-Z]*|WORLD2_[A-Z_]*URL)$/.test(k)) delete process.env[k];
   Object.assign(process.env, {
     WORLD2_PG: env.WORLD2_PG, WORLD2_PG_URL: env.WORLD2_PG_URL, STAMP_KEY: sb.keyPath, TOWN_PUSH: "0",
-    TOWN_CLONE: sb.town, TOWN_TZ: env.TOWN_TZ, ...BOT,
+    TOWN_CLONE: sb.town, TOWN_TZ: env.TOWN_TZ, STAMP_LINES: env.STAMP_LINES, ...BOT,
   });
   const u = new URL(process.env.WORLD2_PG_URL);
   if (u.hostname !== "127.0.0.1") throw new Error(`the sandbox store must be local, not ${u.hostname}`);
@@ -596,6 +598,13 @@ async function makeContext(sb, { log }) {
     setDate(date) { if (date < ctx.clock.date) throw new Error(`the clock never runs backwards (${ctx.clock.date} → ${date})`); ctx.clock.date = date; },
     nextDay() { ctx.clock.date = addDays(ctx.clock.date, 1); return ctx.clock.date; },
 
+    /** The town-index delta at the clone's HEAD (the ferry chain's ingest, POS-341 Q2). */
+    ingest: () => ingestIndexDelta(sb),
+    /** The mint pass from the store (world2/tools/stamp-mint-run.mjs), which commits its own lines. */
+    mintPass(message) { return ctx.officeTool("world2/tools/stamp-mint-run.mjs", ["--append", "--key", sb.keyPath, "--clone", sb.town, "--message", message]); },
+    /** stamp_lines brought up to the lines a shell committed (world2/tools/stamp-lines.mjs --sync). */
+    syncLines() { return ctx.officeTool("world2/tools/stamp-lines.mjs", ["--sync", "--clone", sb.town]); },
+
     /** Commit everything the step wrote, as the pen would. */
     commit(message) {
       if (!git(sb.town, "status", "--porcelain")) return null;
@@ -647,18 +656,24 @@ async function makeContext(sb, { log }) {
      * Each writer's rows are committed as the box commits them. The full
      * verifier runs once, after the crossing (the step's `verify: true`).
      */
-    crossing({ welcome = true } = {}) {
+    // POS-341: the mint pass is the office's runner, deciding from the store, as
+    // the ferry chain runs it: the town-index ingest reads the ferry's commit
+    // first, the runner commits its own lines, and the lines the shell commits
+    // (the ballot pass, the welcome pass) are recorded after (stamp-lines --sync).
+    async crossing({ welcome = true } = {}) {
       const date = ctx.clock.date;
       const ferry = ctx.townTool("ferry.mjs", ["--no-git", "--date", date]);
       ctx.commit(`ferry: crossing ${date}`);
-      const mint = ctx.townTool("stamp-mint.mjs", ["--append", "--key", sb.keyPath]);
-      ctx.commit("mint: crossing pass");
+      await ctx.ingest();
+      const mint = ctx.mintPass("mint: crossing pass");
       const ballot = ctx.townTool("ballot-pass.mjs", ["--key", sb.keyPath, "--date", date]);
       ctx.commit("ballot: crossing pass");
+      ctx.syncLines();
       let wel = null;
       if (welcome) {
         wel = ctx.officeTool("deploy/welcome-pass.mjs", ["--town", sb.town, "--key", sb.keyPath, "--date", date], { allowFail: true });
-        ctx.commit("mint: tick catch-up pass");
+        ctx.commit("welcome: tick pass");
+        ctx.syncLines();
       }
       return { ferry: ferry.out, mint: mint.out, ballot: ballot.out, welcome: wel?.out ?? null, welcomeCode: wel?.code ?? null };
     },
