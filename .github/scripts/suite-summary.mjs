@@ -49,6 +49,12 @@ for (const name of readdirSync(dir).filter((n) => /^shard-\d+\.json$/.test(n)).s
       ? readFileSync(ev, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l))
       : [];
     results[file] = { ...r, ...readEvents(lines, file) };
+    if (r.retry) {
+      const rev = join(dir, "events", `${basename(file, ".test.mjs")}.retry.jsonl`);
+      const rlines = existsSync(rev) ? readFileSync(rev, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
+      const { ran, reds } = readEvents(rlines, file);
+      results[file].retry = { ran, reds };
+    }
   }
 }
 

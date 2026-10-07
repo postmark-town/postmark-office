@@ -128,6 +128,21 @@ test("A LISTED TEST THAT PASSES fails the run, so the list shrinks; a flaky row 
   assert.deepEqual(v.listed.map((r) => r.outcome), ["green (flaky, allowed)"]);
 });
 
+test("A FLAKY ROW THAT REDS is judged by its one retry: green on the retry is a flake, red again is a red", () => {
+  const flakyRow = row("test/a.test.mjs", "cold", { flaky: true });
+  const v = (retry) => verdict({ planned: ["test/a.test.mjs"], results: { "test/a.test.mjs": { ...red("cold"), retry } }, known: [flakyRow] });
+  const passed = v({ ran: ["cold"], reds: [] });
+  assert.equal(passed.ok, true);
+  assert.deepEqual(passed.listed.map((r) => r.outcome), ["flake: red, then green on its retry"]);
+  const twice = v({ ran: ["cold"], reds: [{ name: "cold" }] });
+  assert.deepEqual(kinds(twice), ["flaky-red-twice"]);
+  const crashed = v({ ran: [], reds: [] });
+  assert.deepEqual(kinds(crashed), ["flaky-red-twice"], "a retry that never ran the test proves nothing");
+  // only the flaky row's own name is read off the retry: a non-flaky red in the same file stays a red
+  const mixed = verdict({ planned: ["test/a.test.mjs"], results: { "test/a.test.mjs": { ...red("cold", ["other"]), reds: [{ name: "cold" }, { name: "other" }], retry: { ran: ["cold", "other"], reds: [] } } }, known: [flakyRow] });
+  assert.deepEqual(mixed.problems.map((p) => [p.kind, p.name]), [["new-red", "other"]]);
+});
+
 test("a listed test that no longer runs, or whose file is gone, is a stale row and fails the run", () => {
   const results = { "test/a.test.mjs": green(["renamed"]) };
   const v = verdict({ planned: Object.keys(results), results, known: [row("test/a.test.mjs", "old name"), row("test/gone.test.mjs", "anything")] });
