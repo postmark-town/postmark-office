@@ -263,7 +263,11 @@ export const RATIFICATION = Object.freeze({ RATIFIED: "ratified", NEUTRAL: "neut
  *
  *   ratified   the mark's current version stood at or before the cutover
  *              settlement (R14: "everything in the last settlement before
- *              cutover counts as ratified"; town-stance.mjs § clearedAtCutover)
+ *              cutover counts as ratified"; town-stance.mjs § clearedAtCutover),
+ *              or the town RATIFIED its current version after it (R7; Wright,
+ *              2026-10-07). The town's words today are neutral and opposed
+ *              (POS-361, Darko 2026-10-06), so this second road is read
+ *              wherever townWordsOf hands the word, and is empty until it does.
  *   neutral    the town declared neutral on its current version (POS-361: a
  *              declared neutral clears "awaiting the town" and confers nothing)
  *   awaiting   the town has not spoken on its current version
@@ -280,7 +284,7 @@ export async function labelMarks(marks, { townWords, cutover = null, versions = 
   const ground = marks.filter((m) => m?.kind !== "class");
   return marks.map((m) => {
     if (!m?.id || m.kind === "class") return m;
-    const ratification = clearedAtCutover(m, { cutover, versions }) ? RATIFICATION.RATIFIED
+    const ratification = clearedAtCutover(m, { cutover, versions }) || townWords?.get?.(m.id) === "ratified" ? RATIFICATION.RATIFIED
       : townWords?.get?.(m.id) === "neutral" ? RATIFICATION.NEUTRAL
         : RATIFICATION.AWAITING;
     const who = awaitingOf(m, { marks: ground, overlaps, words, householdOf, townSeat }).map((a) => a.who);
@@ -344,6 +348,41 @@ export async function settlementOrFile({ asked = null, fileAnswer, engaged, pool
   if (number != null) throw bounce(404, `S${number} is not a settlement this store holds a snapshot for`, "GET /world/state with no settlement serves the newest one; GET /world/settlements lists them");
   const file = await fileAnswer();
   return { ...file, meta: { ...(file?.meta ?? {}), source: file?.meta?.source ?? "file", not_settlement: reason } };
+}
+
+/**
+ * THE GRAPH ON THE SETTLEMENT (POS-359, Wright's option A, 2026-10-07).
+ * `/world/graph` draws world.db, which the tick hydrates from the tag's tree;
+ * its mark nodes are narrowed to the marks the served settlement holds (minus
+ * the opposed), so an opposed mark leaves the graph at once and `as_of` names
+ * S<n>. A mark cleared after the hydration is not in world.db and stays absent
+ * until the graph is hydrated from the settlement itself (option B, a follow-up).
+ * `{ ids, settlement, digest }`, null when there is no settlement to narrow to,
+ * or `{ unread }`.
+ */
+export async function settledMarkIds({ engaged, pool, worldRepo, townRepo = null }) {
+  if (!engaged) return null;
+  try {
+    const served = await servedSettlement(await pool(), { worldRepo, townRepo });
+    if (!served) return null;
+    return { ids: new Set((served.marks ?? []).map((m) => m.id)), settlement: served.meta.as_of.settlement, digest: served.meta.as_of.digest };
+  } catch (e) {
+    if (e?.code === "42P01") return null;              // a store without 054/065: nothing to narrow to
+    return { unread: String(e?.message ?? e).slice(0, 200) };
+  }
+}
+
+/** A graph view stamped with the settlement it was narrowed to (or why it was not). PURE. */
+export function graphOnSettlement(view, settled) {
+  if (!settled || view?.error) return view;
+  if (settled.unread) return { ...view, as_of: { ...view.as_of, settlement_unread: `the graph is not narrowed to a settlement: ${settled.unread}` } };
+  return {
+    ...view,
+    as_of: {
+      ...view.as_of, settlement: settled.settlement, digest: settled.digest,
+      settlement_note: "mark nodes are the served settlement's (opposed marks absent); a mark cleared after this graph's hydration is not drawn until it is hydrated from the settlement",
+    },
+  };
 }
 
 /**
@@ -433,6 +472,7 @@ export async function servedSettlement(p, { settlement = null, worldRepo, townRe
       ...(words.unread ? { opposed_unread: `the standing words could not be read, so nothing opposed since the seal is taken away here: ${words.unread}` } : {}),
       ...(built ? { built: "derived from the snapshot's sources on this read, and kept" } : {}),
       ...(labels.unread ? { ratification_unread: labels.unread } : {}),
+      ...(labels.omitted ? { ratification_omitted: labels.omitted } : {}),
     },
   };
 }
@@ -459,8 +499,17 @@ async function overlapsAt(worldRepo, sha) {
  */
 async function labelsFor(p, header, world, words, { worldRepo, servedKey }) {
   if (words.unread) return { unread: `the standing words could not be read: ${words.unread}` };
+  // NO CUTOVER, NO LABELS (Wright, 2026-10-07). R14 carries the old blessing
+  // over; until TOWN_STANCE_CUTOVER names the settlement it carries over from,
+  // every mark would read "awaiting the town", which the answer cannot stand
+  // behind. So the two fields are omitted, and meta says why. This is the
+  // served read's side of a seam with POS-361's town seat (town-stance.mjs §
+  // townSeatOf, open on every mark while the cutover is unset): the stance
+  // inbox keeps that rule; what residents see on the World is this one.
+  const { readCutover, readVersions, CUTOVER_KEY, cutoverNumber } = await import("./town-stance.mjs");
+  try { if (cutoverNumber() == null) return { omitted: `ratification and awaiting are omitted: ${CUTOVER_KEY} is not set, so the old blessing carries over (R14) and no mark is labelled awaiting the town` }; }
+  catch (e) { return { unread: `the ratification labels could not be read: ${String(e?.defect ?? e?.message ?? e).slice(0, 200)}` }; }
   try {
-    const { readCutover, readVersions, CUTOVER_KEY } = await import("./town-stance.mjs");
     const key = `${servedKey}|${createHash("sha256").update(JSON.stringify([words.words, process.env[CUTOVER_KEY] ?? null])).digest("hex").slice(0, 16)}`;
     const hit = LABELLED.get(key);
     if (hit) return { marks: hit };
