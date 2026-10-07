@@ -31,6 +31,9 @@ const { owner, asOffice, seed, speak } = settlementRig(store);
 const serve = (opts = {}) => asOffice((p) => servedSettlement(p, { worldRepo: WORLD, ...opts }));
 // The marks a resident placed (the class mark the law brings is the law's, and stands in every fold).
 const ids = (state) => state.marks.map((m) => m.id).filter((id) => id !== "the-town/hall").sort();
+// The fold as the snapshot holds it: the served marks less the two labels this read adds (R9, R14).
+const unlabelled = (state) => ({ ...state, marks: state.marks.map(({ ratification, awaiting, ...m }) => m) });
+const markOf = (state, id) => state.marks.find((m) => m.id === id);
 
 test("a settlement is named S<n>; anything else refuses, and absent means the newest", () => {
   assert.equal(settlementNumberOf("S95"), 95);
@@ -61,7 +64,7 @@ test("the newest settlement is served, as_of names it, and its World is the snap
   const header = await asOffice(async (p) => (await p.query("SELECT * FROM world_snapshots WHERE id = 2")).rows[0]);
   const { state } = await asOffice((p) => foldOfSnapshot(p, header, { fold, filing: filingAt(WORLD, LAW_SHA) }));
   const { meta, ...served } = first;
-  assert.equal(canonicalJson(served), canonicalJson(state), "the served World equals the snapshot's fold");
+  assert.equal(canonicalJson(unlabelled(served)), canonicalJson(state), "the served World equals the snapshot's fold, beside each mark's labels");
 
   // Kept under the snapshot's digest, as office_api, and read back from there.
   const [kept] = await owner(async (c) => (await c.query("SELECT state FROM world_snapshot_folds WHERE digest = $1", [s11])).rows);
@@ -213,4 +216,51 @@ test("a store with no settlement falls to the file and says why; an office with 
 
 test("foldText is the fold's own file form", () => {
   assert.equal(foldText({ a: 1 }), '{\n  "a": 1\n}\n');
+});
+
+test("each served mark carries its ratification state, and who it awaits only when someone does (R9, R14)", { skip }, async () => {
+  await seed();
+  const before = process.env.TOWN_STANCE_CUTOVER;
+  delete process.env.TOWN_STANCE_CUTOVER;
+  try {
+    let r = await serve();
+    assert.equal(markOf(r, "the-town/hall").ratification, undefined, "the law is not a cleared mark");
+    // No cutover set: every cleared mark awaits the town (POS-361's rule until the deploy sets it).
+    assert.equal(markOf(r, "cy/bench").ratification, "awaiting");
+    assert.deepEqual(markOf(r, "cy/bench").awaiting, ["the-town"]);
+    // The shed stands on ann's earlier ground: it awaits the town and ann's household.
+    assert.deepEqual(markOf(r, "bo/shed").awaiting, ["the-town", "ann"]);
+
+    // The town declares neutral on the bench; ann welcomes the shed.
+    const { TOWN_SPEAKER } = await import("../src/town-stance.mjs");
+    await speak({ actor: TOWN_SPEAKER, on: "cy/bench", stance: "neutral", as: "town" });
+    await speak({ actor: "ann", on: "bo/shed", stance: "welcomed" });
+    resetSettlementCaches();
+    r = await serve();
+    assert.equal(markOf(r, "cy/bench").ratification, "neutral");
+    assert.equal(markOf(r, "cy/bench").awaiting, undefined, "the field appears only when it is not empty");
+    assert.deepEqual(markOf(r, "bo/shed").awaiting, ["the-town"], "ann's word clears her household's seat");
+
+    // The cutover at S10 (window 500): a mark standing then counts as ratified;
+    // the shed's version locked in window 501, after it, still awaits.
+    await owner((c) => c.query(
+      `INSERT INTO claims (window_id, class, claimant, household, status, body, geometry, stake, data, slug, decided_at)
+       VALUES (501, 'sited', 'bo', 'bo', 'locked', 'A shed.', '{}'::jsonb, 0, '{}'::jsonb, 'bo/shed', '2026-10-02T06:00:00Z')`));
+    process.env.TOWN_STANCE_CUTOVER = "S10";
+    resetSettlementCaches();
+    r = await serve();
+    assert.equal(markOf(r, "ann/plot").ratification, "ratified");
+    assert.equal(markOf(r, "ann/plot").awaiting, undefined);
+    assert.equal(markOf(r, "bo/shed").ratification, "awaiting");
+    assert.deepEqual(markOf(r, "bo/shed").awaiting, ["the-town"]);
+
+    // A cutover the store cannot read is said, never labelled as awaiting.
+    process.env.TOWN_STANCE_CUTOVER = "S77";
+    resetSettlementCaches();
+    r = await serve();
+    assert.equal(markOf(r, "bo/shed").ratification, undefined);
+    assert.match(r.meta.ratification_unread, /S77/);
+  } finally {
+    if (before === undefined) delete process.env.TOWN_STANCE_CUTOVER; else process.env.TOWN_STANCE_CUTOVER = before;
+  }
 });

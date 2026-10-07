@@ -224,11 +224,12 @@ export async function vetoesFrom(rows, versions) {
   const { townWordsOf, TOWN_SPEAKER, AS_TOWN } = await import("./town-stance.mjs");
   const { standingStances } = await import("./world-stance.mjs");
   const townWords = townWordsOf(rows, { versions });
-  const holderOpposed = standingStances(rows, { versions })
+  const words = standingStances(rows, { versions });
+  const holderOpposed = words
     .filter((w) => w.stance === "opposed" && !(w.by === TOWN_SPEAKER && w.as === AS_TOWN))
     .map((w) => ({ by: w.by, on: w.on }))
     .sort((a, b) => (a.on === b.on ? (a.by < b.by ? -1 : 1) : a.on < b.on ? -1 : 1));
-  return { townWords, holderOpposed };
+  return { townWords, holderOpposed, words };
 }
 
 /** The stance rows in the store, through the office's own pool. */
@@ -251,6 +252,42 @@ export async function vetoesNow(p, { worldRepo } = {}) {
   }
 }
 
+// ── each mark's ratification state, and who it awaits (R9, R14) ─────────────
+
+/** The three states a SERVED mark can be in; an opposed one is not served. */
+export const RATIFICATION = Object.freeze({ RATIFIED: "ratified", NEUTRAL: "neutral", AWAITING: "awaiting" });
+
+/**
+ * Every served mark with its ratification state and, when not empty, who it
+ * awaits. PURE. Returns a new array; the marks it is handed are not edited.
+ *
+ *   ratified   the mark's current version stood at or before the cutover
+ *              settlement (R14: "everything in the last settlement before
+ *              cutover counts as ratified"; town-stance.mjs § clearedAtCutover)
+ *   neutral    the town declared neutral on its current version (POS-361: a
+ *              declared neutral clears "awaiting the town" and confers nothing)
+ *   awaiting   the town has not spoken on its current version
+ *
+ * `awaiting` is town-stance.mjs § awaitingOf, the one function the stance
+ * inbox and the label both read (POS-361, Q6): the town when its seat is open
+ * and silent, and each household whose earlier ground the mark overlaps and
+ * which has not spoken. Law marks (kind `class`) are the law, not cleared
+ * marks, and carry neither.
+ */
+export async function labelMarks(marks, { townWords, cutover = null, versions = null, words = [], householdOf = (h) => h, overlaps }) {
+  const { awaitingOf, clearedAtCutover, townSeatOf } = await import("./town-stance.mjs");
+  const townSeat = townSeatOf({ cutover, versions });
+  const ground = marks.filter((m) => m?.kind !== "class");
+  return marks.map((m) => {
+    if (!m?.id || m.kind === "class") return m;
+    const ratification = clearedAtCutover(m, { cutover, versions }) ? RATIFICATION.RATIFIED
+      : townWords?.get?.(m.id) === "neutral" ? RATIFICATION.NEUTRAL
+        : RATIFICATION.AWAITING;
+    const who = awaitingOf(m, { marks: ground, overlaps, words, householdOf, townSeat }).map((a) => a.who);
+    return { ...m, ratification, ...(who.length ? { awaiting: who } : {}) };
+  });
+}
+
 // ── serving ─────────────────────────────────────────────────────────────────
 
 /** The served World's cache key beyond its digest: the words that moved it. */
@@ -260,12 +297,13 @@ export function vetoKey(townWords, holderOpposed) {
 }
 
 const SERVED = new Map();       // `${digest}|${vetoKey}` -> state
+const LABELLED = new Map();     // `${digest}|${vetoKey}|${labelKey}` -> marks
 const NOW = { at: 0, key: null, value: null };
 /** How long a read of "which settlement, which words" is reused: R16's "within its refresh". */
 export const REFRESH_MS = 60_000;
 
 /** Test seam: forget every cached read. */
-export function resetSettlementCaches() { SERVED.clear(); ARGS.clear(); NOW.at = 0; NOW.key = null; NOW.value = null; }
+export function resetSettlementCaches() { SERVED.clear(); LABELLED.clear(); ARGS.clear(); NOW.at = 0; NOW.key = null; NOW.value = null; }
 
 async function refreshed(key, read, now = Date.now()) {
   if (NOW.key === key && now - NOW.at < REFRESH_MS) return NOW.value;
@@ -364,6 +402,8 @@ export async function servedSettlement(p, { settlement = null, worldRepo, townRe
   }
 
   const { __vetoes, ...world } = state;
+  const labels = await labelsFor(p, header, world, words, { worldRepo, servedKey });
+  if (labels.marks) world.marks = labels.marks;
   const n = Number(header.settlement);
   return {
     ...world,
@@ -372,6 +412,11 @@ export async function servedSettlement(p, { settlement = null, worldRepo, townRe
       as_of: {
         settlement: `S${n}`,
         digest: header.digest,
+        // The settlements row's own record of it: the commit its tag names and
+        // when that crossing published (018). A reader comparing against
+        // GET /world/settlements meets the same two values there.
+        tag_sha: header.tag_sha ?? null,
+        published_at: header.published_at ? new Date(header.published_at).toISOString() : null,
         window: header.window_id ?? null,
         marks: header.marks,
         law_sha: header.law_sha ?? null,
@@ -387,6 +432,52 @@ export async function servedSettlement(p, { settlement = null, worldRepo, townRe
       ...(__vetoes?.town_unread ? { opposed_unread: __vetoes.town_unread } : {}),
       ...(words.unread ? { opposed_unread: `the standing words could not be read, so nothing opposed since the seal is taken away here: ${words.unread}` } : {}),
       ...(built ? { built: "derived from the snapshot's sources on this read, and kept" } : {}),
+      ...(labels.unread ? { ratification_unread: labels.unread } : {}),
     },
   };
+}
+
+// The engine's geometry at a law sha: the overlap the stance door and the label
+// both weigh ground with (world-stance.mjs § stanceGeometry), read at the
+// settlement's own law rather than main's.
+const GEOMETRY = new Map();
+async function overlapsAt(worldRepo, sha) {
+  if (!GEOMETRY.has(sha)) {
+    const { materializeAtRef } = await import("./world-branches.mjs");
+    const g = await import(pathToFileURL(join(materializeAtRef(worldRepo, sha, "tools"), "tools", "geometry.mjs")).href);
+    GEOMETRY.set(sha, (a, b) => g.overlapArea(g.rect(a), g.rect(b)) > 0);
+  }
+  return GEOMETRY.get(sha);
+}
+
+/**
+ * The served marks, labelled (§ labelMarks): `{ marks }`, or `{ unread }` when
+ * the cutover, the versions or the words could not be read — a label nobody
+ * could read is never written as "awaiting" (it would tell a resident the town
+ * owes a word it may have spoken). Kept per served World and per the words
+ * standing, so a refresh with nothing new costs nothing.
+ */
+async function labelsFor(p, header, world, words, { worldRepo, servedKey }) {
+  if (words.unread) return { unread: `the standing words could not be read: ${words.unread}` };
+  try {
+    const { readCutover, readVersions, CUTOVER_KEY } = await import("./town-stance.mjs");
+    const key = `${servedKey}|${createHash("sha256").update(JSON.stringify([words.words, process.env[CUTOVER_KEY] ?? null])).digest("hex").slice(0, 16)}`;
+    const hit = LABELLED.get(key);
+    if (hit) return { marks: hit };
+    const query = async (sql, args) => (await p.query(sql, args)).rows;
+    const cutover = await readCutover({ query });
+    const ids = (world.marks ?? []).filter((m) => m?.id && m.kind !== "class").map((m) => m.id);
+    const read = await readVersions(ids, { query: async (sql, args) => ({ rows: await query(sql, args) }) });
+    if (read.unreachable) return { unread: read.unreachable };
+    const hh = world.households ?? {};
+    const marks = await labelMarks(world.marks ?? [], {
+      townWords: words.townWords, cutover, versions: read.versions, words: words.words,
+      householdOf: (h) => hh[h] ?? h, overlaps: await overlapsAt(worldRepo, header.law_sha),
+    });
+    LABELLED.set(key, marks);
+    if (LABELLED.size > 6) LABELLED.delete(LABELLED.keys().next().value);
+    return { marks };
+  } catch (e) {
+    return { unread: `the ratification labels could not be read: ${String(e?.defect ?? e?.message ?? e).slice(0, 200)}` };
+  }
 }
