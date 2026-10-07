@@ -150,6 +150,18 @@ jobs:
       - name: Shard ${{ matrix.shard }} of ${{ env.SHARDS }}
         run: node .github/scripts/suite-shard.mjs --shard ${{ matrix.shard }} --of "$SHARDS" --jobs "$SUITE_JOBS" --out suite-out
 
+      # A store that would not start says only "pg_ctl start exited 1" in the
+      # test; its own log is left in the temp dir (embedded-store.mjs keeps a
+      # failed server's directory). Print the first few.
+      - name: The store's own words, when one would not start
+        if: always()
+        run: |
+          shopt -s nullglob
+          TMP=$(node -p 'require("os").tmpdir()')
+          logs=("$TMP"/office-store-*/postgres.log "$TMP"/office-pg-floor-*/postgres.log)
+          echo "${#logs[@]} store logs left in $TMP"
+          for f in "${logs[@]:0:3}"; do echo "── $f"; tail -25 "$f"; done
+
       - if: always()
         uses: actions/upload-artifact@v4
         with:
