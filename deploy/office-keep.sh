@@ -176,11 +176,14 @@ REGISTRY_FILE="$SNAP/registry.json"
         --town "$TOWN_CLONE" --apply --quiet --key /srv/postmark-office/stamp-key.pem \
       || echo "[office-keep] bug stage pass had refusals (non-fatal) — the lines above name each one; the stage stays owed and the next tick pays it" >&2
     # The ballots (POS-349: ballots are posts). The founder's ballot files are
-    # the input, and this takes each one in as the town's post, or moves its post
-    # to what the file now says, in the store only (nothing here touches the
-    # ledger). A stake reads the post, and refuses while the two disagree, so a
-    # status the founder moved stands within one tick of reaching this clone.
-    node /srv/postmark-office/tools/ballots-backfill.mjs --town "$TOWN_CLONE" --hand keemin --ingest \
+    # the input: this takes each one in as the town's post, or moves its post to
+    # what the file now says, and records every ledger stake no vote carries, in
+    # the post's own transaction. Store only (nothing here touches the ledger),
+    # and idempotent, so the first tick after the deploy takes the town's ballots
+    # in whole and every later tick writes nothing unless something moved. A
+    # stake reads the post and refuses while the two disagree, so a status the
+    # founder moved stands within one tick of reaching this clone.
+    node /srv/postmark-office/tools/ballots-backfill.mjs --town "$TOWN_CLONE" --hand keemin --apply --quiet \
       || echo "[office-keep] ballot ingest had refusals (non-fatal) — the lines above name each one; the post stands as it was and the next tick asks again" >&2
     if ! cmp -s "$LEDGER" "$HOLD/ledger.arrived"; then
       node tools/stamp-verify.mjs --registry "$REGISTRY_FILE" || exit 1

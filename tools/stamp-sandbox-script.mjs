@@ -374,7 +374,7 @@ export function scenario(ctx) {
         ctx.commit(`ballot: ${BALLOT} opens`);
         // POS-349: the office tick takes the founder's file in as the ballot's post
         // (deploy/office-keep.sh), and the stake door judges from that post.
-        ctx.officeTool("tools/ballots-backfill.mjs", ["--town", ctx.town, "--hand", "keemin", "--ingest"]);
+        ctx.officeTool("tools/ballots-backfill.mjs", ["--town", ctx.town, "--hand", "keemin", "--apply", "--quiet"]);
         return ctx.exec("stake-exec", { handle: H("ada"), topic: BALLOT, candidate: "yes", n: 3, via: "api", date: ctx.clock.date });
       },
       // NO vote-mint: tools/ballot.mjs mints the +1 only while the law is stamps-v2, and it has been stamps-v3
@@ -503,7 +503,7 @@ export function scenario(ctx) {
         const p = `${ctx.town}/WHITE_PAGES/ballot-${BALLOT}.json`;
         writeFileSync(p, JSON.stringify({ ...JSON.parse(readFileSync(p, "utf8")), status: "closed" }, null, 2) + "\n");
         ctx.commit(`ballot: ${BALLOT} closes`);
-        ctx.officeTool("tools/ballots-backfill.mjs", ["--town", ctx.town, "--hand", "keemin", "--ingest"]);   // the tick: the post closes too
+        ctx.officeTool("tools/ballots-backfill.mjs", ["--town", ctx.town, "--hand", "keemin", "--apply", "--quiet"]);   // the tick: the post closes too
         const r = ctx.townTool("ballot.mjs", ["--close", BALLOT, "--date", ctx.clock.date, "--key", ctx.keyPath]);
         ctx.commit(`ballot: ${BALLOT} returns`);
         return r;

@@ -3,9 +3,8 @@
 // check that the record and the ledger hold the same votes (POS-349).
 //
 //   node tools/ballots-backfill.mjs --town <clone> --hand <wright|keemin>            the plan: writes nothing
-//   node tools/ballots-backfill.mjs --town <clone> --hand <wright|keemin> --apply    writes it
+//   node tools/ballots-backfill.mjs --town <clone> --hand <wright|keemin> --apply [--quiet]   writes it (the office tick)
 //   node tools/ballots-backfill.mjs --town <clone> --check [--json]                  the instrument
-//   node tools/ballots-backfill.mjs --town <clone> --hand <wright|keemin> --ingest   the files only (the office tick)
 //
 //   env: WORLD2_PG_URL (or PG*, or WORLD2_PG), the office's own store.
 //   EXIT (--check): 0 equal · 1 DIFFERENT (each difference printed) · 2 cannot run.
@@ -13,16 +12,20 @@
 // ── WHAT IT WRITES ──────────────────────────────────────────────────────────
 //
 //   1. Every ballot file, taken in as the town's post: src/ballots-store.mjs §
-//      ingestBallotFiles, the same ingest the office tick runs. `--hand` is the
-//      hand the acts name.
+//      ingestBallotFiles. `--hand` is the hand the acts name.
 //   2. Every stake line in the ledger whose signature no vote carries, as a
 //      vote act (`backfill: true`) and the resident's response, in ledger
-//      order. Its household (`mint_key`) is the town engine's for the resident
-//      on the stake's date, the key the old tally and the verifier count by.
-//      Stakes and returns are NOT written: they are the ledger's, and stay so.
+//      order, IN THE SAME TRANSACTION as its ballot's post: a reader never sees
+//      a post without its votes. Its household (`mint_key`) is the town
+//      engine's for the resident on the stake's date, the key the old tally and
+//      the verifier count by. Stakes and returns are NOT written: they are the
+//      ledger's, and stay so.
 //
 // A second --apply writes nothing: the posts stand and every line's signature
-// is on a vote.
+// is on a vote. So THE OFFICE TICK RUNS --apply (deploy/office-keep.sh, under
+// the town lock): the first tick after the deploy takes the town's ballots in
+// whole, nothing waits on a person, and a later tick records a stake whose
+// store commit failed after its push.
 //
 // ── THE CHECK (Wright, S2: "the instrument that catches a commit that failed
 //    after the push") ─────────────────────────────────────────────────────────
@@ -38,7 +41,7 @@ import { readFileSync, existsSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { officeRead, officeWrite } from "../src/world2-pen.mjs";
+import { officeRead } from "../src/world2-pen.mjs";
 import {
   townEngine, ingestBallotFiles, readBallotFiles, ballotRow, voteRows, castVote,
 } from "../src/ballots-store.mjs";
@@ -110,30 +113,41 @@ export async function check(clone, { env = process.env } = {}) {
   return { equal: differences.length === 0, differences, ballots };
 }
 
-/** THE BACKFILL: the ingest, then every ledger stake no vote carries. `apply: false` plans and writes nothing. */
+/**
+ * THE BACKFILL: the ingest, and every ledger stake no vote carries, recorded
+ * INSIDE the transaction that writes (or re-reads) its ballot's post, so a
+ * reader never sees a post without its votes. `apply: false` plans and
+ * writes nothing. Idempotent: a second run finds every post standing and every
+ * line's signature on a vote, and writes nothing. The office tick runs it with
+ * --apply (deploy/office-keep.sh): the first tick after the deploy takes the
+ * town's ballots in whole, and a later tick records a stake whose store
+ * commit failed after its push.
+ */
 export async function backfill(clone, { hand, apply = false, now = Date.now(), env = process.env } = {}) {
-  const ingest = await ingestBallotFiles(clone, { hand, now, env, dryRun: !apply });
   const { ballot: engine } = await townEngine(clone);
   const state = engine.ballotState(clone);
   const ledger = await ledgerStakes(clone);
-  const out = { ingest, recorded: [], would_record: [], refused: [] };
+  const out = { ingest: null, recorded: [], would_record: [], refused: [] };
+  const missingOn = async (client, post, topic) =>
+    stakeDiff(ledger.filter((s) => s.topic === topic), post ? stakesOf(await voteRows(client, post.id)) : []).missing;
+  const record = async (client, post, topic) => {
+    for (const s of await missingOn(client, post, topic)) {
+      const mint_key = state.householdOf(s.handle, s.date);
+      const act = await castVote(client, post, { handle: s.handle, candidate: s.candidate, n: s.n, mint_key,
+        date: s.date, via: s.via, sig: s.sig, vote_minted: s.vote_minted, backfill: true, now });
+      out.recorded.push({ topic, handle: s.handle, candidate: s.candidate, n: s.n, act });
+    }
+  };
+  out.ingest = await ingestBallotFiles(clone, { hand, now, env, dryRun: !apply, inTransaction: apply ? record : null });
+  const filed = new Set(readBallotFiles(clone).map((f) => f.topic));
   for (const topic of [...new Set(ledger.map((s) => s.topic))].sort()) {
-    const id = ballotPostId(topic);
-    const run = async (client) => {
-      const post = await ballotRow(client, id, { forUpdate: apply });
-      // A plan's ingest wrote nothing: a post it would write takes every stake.
-      const planned = !apply && ingest.topics.some((t) => t.topic === topic && t.did.includes("post"));
-      if (!post && !planned) { out.refused.push({ topic, defect: `no post ${id} to record its stakes on` }); return; }
-      const { missing } = stakeDiff(ledger.filter((s) => s.topic === topic), post ? stakesOf(await voteRows(client, id)) : []);
-      for (const s of missing) {
-        const mint_key = state.householdOf(s.handle, s.date);
-        if (!apply) { out.would_record.push({ topic, handle: s.handle, candidate: s.candidate, n: s.n, via: s.via, mint_key }); continue; }
-        const act = await castVote(client, post, { handle: s.handle, candidate: s.candidate, n: s.n, mint_key,
-          date: s.date, via: s.via, sig: s.sig, vote_minted: s.vote_minted, backfill: true, now });
-        out.recorded.push({ topic, handle: s.handle, candidate: s.candidate, n: s.n, act });
-      }
-    };
-    if (apply) await officeWrite(run, { env }); else await officeRead(run, { env });
+    if (!filed.has(topic)) { out.refused.push({ topic, defect: `the ledger holds stakes on "${topic}" and the town has no WHITE_PAGES/ballot-${topic}.json to post them on` }); continue; }
+    if (apply) continue;   // recorded inside the ingest's transaction
+    await officeRead(async (client) => {
+      const post = await ballotRow(client, ballotPostId(topic));
+      for (const s of await missingOn(client, post, topic))
+        out.would_record.push({ topic, handle: s.handle, candidate: s.candidate, n: s.n, via: s.via, mint_key: state.householdOf(s.handle, s.date) });
+    }, { env });
   }
   return out;
 }
@@ -159,18 +173,13 @@ async function main() {
       process.exit(r.equal ? 0 : 1);
     }
     const hand = arg("hand");
-    if (argv.includes("--ingest")) {
-      const r = await ingestBallotFiles(clone, { hand });
-      for (const t of r.topics) if (t.did.length) console.log(`${t.topic}: ${t.did.join(", ")} (acts ${t.act_ids.join(", ")})`);
-      for (const x of r.refused) console.log(`${x.topic}: REFUSED ${x.defect}`);
-      process.exit(r.refused.length ? 1 : 0);
-    }
     const apply = argv.includes("--apply");
     const r = await backfill(clone, { hand, apply });
-    for (const t of r.ingest.topics) console.log(`${t.topic}: ${t.did.length ? `${apply ? "" : "would "}${t.did.join(", ")}` : "the post stands as its file says"}`);
+    const quiet = argv.includes("--quiet");
+    for (const t of r.ingest.topics) if (t.did.length || !quiet) console.log(`${t.topic}: ${t.did.length ? `${apply ? "" : "would "}${t.did.join(", ")}` : "the post stands as its file says"}`);
     for (const x of r.ingest.refused) console.log(`${x.topic}: REFUSED ${x.defect}`);
     for (const x of r.refused) console.log(`${x.topic}: REFUSED ${x.defect}`);
-    console.log(apply
+    if (!quiet || r.recorded.length) console.log(apply
       ? `recorded ${r.recorded.length} stake(s) as votes (hand ${hand})`
       : `would record ${r.would_record.length} stake(s) as votes; nothing was written (add --apply)`);
     process.exit(r.ingest.refused.length || r.refused.length ? 1 : 0);

@@ -405,3 +405,43 @@ test("6 · a ballot staked, mailed and closed the old way backfills to the same 
     assert.ok(r.counts.ballots >= 1 && r.counts.votes >= 3, JSON.stringify(r.counts));
   } finally { await c2.end(); }
 });
+
+// ── 7 · between the deploy and the first tick (Wright's review of #415) ─────
+
+test("7 · a ballot the tick has not taken in is never read as gone; the tick takes it in whole, once", async () => {
+  const t = "window-vote";
+  const fresh = "fresh-vote";
+  const dir = town(t, { cap: 12 });
+  const { ballot } = await townEngine(dir);
+  ballot.clipApply(dir, { handle: "wright", topic: t, candidate: "lumen", n: 5, via: "api", date: "2026-07-20" }, PEM);
+  ballot.clipApply(dir, { handle: "ada", topic: t, candidate: "brightwork", n: 3, via: "api", date: "2026-07-21" }, PEM);
+  writeBallot(dir, t, { status: "closed" });
+  writeBallot(dir, fresh, { status: "submissions", candidates: ["a", "b"] });
+
+  // the deploy has landed and the tick has not run: no post stands for either file
+  await assert.rejects(voteList(dir), (e) => e.code === 503 && e.defect === `the office has not taken ballot "${t}" into its record yet` && /:07, :22, :37 and :52/.test(e.hint),
+    "a staked ballot is refused by name, never listed as gone");
+  await assert.rejects(voteView(dir, t, KEY), (e) => e.code === 503 && /"window-vote"/.test(e.defect));
+  await assert.rejects(voteView(dir, fresh, KEY), (e) => e.code === 503, "a file with no post is not a 404");
+
+  // a transaction that fails after the post writes neither the post nor its votes
+  const failed = await ingestBallotFiles(dir, { hand: "keemin",
+    inTransaction: async (client, post, topic) => { if (topic === t) { const { refuse } = await import("../src/events.mjs"); throw refuse(503, "the record went away", "try again"); } } });
+  assert.deepEqual(failed.refused.map((r) => r.topic), [t]);
+  assert.equal(await ballotActs(t), 0, "the post did not land without its votes");
+
+  // the tick: ballots-backfill --apply, as deploy/office-keep.sh runs it
+  const tick = spawnSync(process.execPath, [join(ROOT, "tools", "ballots-backfill.mjs"), "--town", dir, "--hand", "keemin", "--apply", "--quiet"], { encoding: "utf8", env: process.env });
+  assert.equal(tick.status, 0, `${tick.stdout}${tick.stderr}`);
+  const list = await voteList(dir);
+  const mine = list.topics.find((x) => x.topic === t);
+  assert.deepEqual([mine.status, mine.candidates], ["closed", [{ candidate: "lumen", staked: 5 }, { candidate: "brightwork", staked: 3 }]]);
+  assert.ok(list.topics.some((x) => x.topic === fresh), "the fresh ballot is listed once it is taken in");
+  assert.equal(list.awaiting_intake, undefined);
+  assert.equal((await check(dir)).equal, true);
+
+  const again = spawnSync(process.execPath, [join(ROOT, "tools", "ballots-backfill.mjs"), "--town", dir, "--hand", "keemin", "--apply", "--quiet"], { encoding: "utf8", env: process.env });
+  assert.equal(again.status, 0);
+  assert.equal(again.stdout.trim(), "", "a quiet tick with nothing to do says nothing");
+  assert.equal(await ballotActs(t), 3, "the post and two votes, written once");
+});

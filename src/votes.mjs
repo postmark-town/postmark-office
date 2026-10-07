@@ -21,6 +21,7 @@ import { pathToFileURL, fileURLToPath } from "node:url";
 import { execUnderTownLock, lockTimedOut, LOCK_BUSY } from "./town-lock.mjs";
 import { ballotsWithVotes, ballotWithVotes, tallyOf } from "./ballots-store.mjs";
 import { headroomOf, appliedBy, STATE_STAKING, STATE_CLOSED } from "./ballots.mjs";
+import { refuse } from "./events.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -42,9 +43,32 @@ async function mintKeyOf(clone, handle, date) {
   return b.ballotState(clone).householdOf(handle, date);
 }
 
+// ── A BALLOT THE OFFICE HAS NOT TAKEN IN YET (Wright's review of #415) ──────
+//
+// The office tick takes the town's ballot files in, stakes and all
+// (tools/ballots-backfill.mjs --apply, deploy/office-keep.sh at :07, :22, :37
+// and :52). Between a deploy (or a founder's new file) and that tick, a file
+// can stand with no post. The read never answers as if it were not there: a
+// ballot whose stakes the ledger holds would read as gone, or as nothing
+// staked, so the read REFUSES until the tick (503, naming the ballot); one
+// with no stakes yet is named in `awaiting_intake` beside the list.
+export const INTAKE_HINT = "the office's tick takes the town's ballots in at :07, :22, :37 and :52 past the hour, stakes and all; nothing is lost, so ask again after it";
+
+async function intakeOwed(clone, posts) {
+  const b = await engine(clone);
+  const have = new Set(posts.map((p) => p.fields.topic));
+  const missing = b.listBallots(clone).filter((t) => !have.has(t));
+  if (!missing.length) return { missing, staked: [] };
+  const staked = new Set(b.ballotState(clone).stakes.map((s) => s.topic));
+  return { missing, staked: missing.filter((t) => staked.has(t)) };
+}
+const notTakenIn = (topic) => refuse(503, `the office has not taken ballot "${topic}" into its record yet`, INTAKE_HINT, { awaiting_intake: [topic] });
+
 // GET /votes — every ballot with its tally
 export async function voteList(clone, { env = process.env } = {}) {
   const ballots = await ballotsWithVotes({ env });
+  const owed = await intakeOwed(clone, ballots.map((b) => b.post));
+  if (owed.staked.length) throw notTakenIn(owed.staked[0]);
   return {
     topics: ballots.map(({ post, votes }) => {
       const full = tallyOf(post, votes);
@@ -55,6 +79,7 @@ export async function voteList(clone, { env = process.env } = {}) {
         candidates: full.candidates.map((c) => ({ candidate: c.candidate, staked: c.staked })),
       };
     }),
+    ...(owed.missing.length ? { awaiting_intake: owed.missing, awaiting_intake_note: INTAKE_HINT } : {}),
     note: "stakes are escrow, not payment — everything returns at close; each ballot is a post in the office's record and each stake its vote, and the ledger holds every stake as a signed line (verify: node tools/stamp-verify.mjs)",
   };
 }
@@ -62,7 +87,10 @@ export async function voteList(clone, { env = process.env } = {}) {
 // GET /votes/{topic} — full tally; with a key, your household's headroom too
 export async function voteView(clone, topic, key, { env = process.env } = {}) {
   const one = await ballotWithVotes(topic, { env });
-  if (!one) return null;
+  if (!one) {
+    if (votesAvailable(clone) && (await engine(clone)).listBallots(clone).includes(topic)) throw notTakenIn(topic);
+    return null;
+  }
   const t = tallyOf(one.post, one.votes);
   if (key && key.handles?.size) {
     const handle = [...key.handles][0];

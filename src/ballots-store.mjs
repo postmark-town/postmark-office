@@ -174,9 +174,13 @@ function judgeHand(hand) {
  * Take every ballot file in the clone in: a file with no post is posted, and
  * a post its file has moved past is amended and moved, each file in its own
  * transaction. `dryRun` reads and writes nothing in the store.
+ * `inTransaction(client, post, topic)` runs inside each file's transaction
+ * after its acts, so what it writes lands with the post or not at all (the
+ * backfill records a ballot's stakes there: no reader ever sees a post
+ * without its votes).
  * Returns `{ topics: [{ topic, did: [actions], act_ids }], refused: [{ topic, defect }] }`.
  */
-export async function ingestBallotFiles(clone, { hand, now = Date.now(), env = process.env, dryRun = false } = {}) {
+export async function ingestBallotFiles(clone, { hand, now = Date.now(), env = process.env, dryRun = false, inTransaction = null } = {}) {
   judgeHand(hand);
   const out = { hand, topics: [], refused: [] };
   for (const f of readBallotFiles(clone)) {
@@ -202,7 +206,8 @@ export async function ingestBallotFiles(clone, { hand, now = Date.now(), env = p
           post = row;
           ids.push(actId);
         }
-        return { did: plan.map((a) => a.action), act_ids: ids };
+        const also = inTransaction ? await inTransaction(client, post, f.topic) : undefined;
+        return { did: plan.map((a) => a.action), act_ids: ids, ...(also !== undefined ? { also } : {}) };
       }, env);
       out.topics.push({ topic: f.topic, ...done });
     } catch (e) {
