@@ -252,31 +252,27 @@ export async function vetoesNow(p, { worldRepo } = {}) {
   }
 }
 
-// ── each mark's ratification state, and who it awaits (R9, R14) ─────────────
-
-/** The three states a SERVED mark can be in; an opposed one is not served. */
-export const RATIFICATION = Object.freeze({ RATIFIED: "ratified", NEUTRAL: "neutral", AWAITING: "awaiting" });
+// ── each mark's labels: the town's stance, and who it awaits (R9, R14) ──────
+//
+// ONE TAXONOMY (POS-361, Darko 2026-10-06; Wright 2026-10-07): the town speaks
+// declare-stance-on's own words. It declares neutral or opposed; its welcomed
+// is adoption and reserved. There is no "ratified" word (R7/R15 superseded).
 
 /**
- * Every served mark with its ratification state and, when not empty, who it
- * awaits. PURE. Returns a new array; the marks it is handed are not edited.
+ * Every served mark with its labels. PURE. Returns a new array; the marks it is
+ * handed are not edited.
  *
- *   ratified   the mark's current version stood at or before the cutover
- *              settlement (R14: "everything in the last settlement before
- *              cutover counts as ratified"; town-stance.mjs § clearedAtCutover),
- *              or the town RATIFIED its current version after it (R7; Wright,
- *              2026-10-07). The town's words today are neutral and opposed
- *              (POS-361, Darko 2026-10-06), so this second road is read
- *              wherever townWordsOf hands the word, and is empty until it does.
- *   neutral    the town declared neutral on its current version (POS-361: a
- *              declared neutral clears "awaiting the town" and confers nothing)
- *   awaiting   the town has not spoken on its current version
+ *   (none)               the mark's current version stood at or before the
+ *                        cutover: the old blessing carries over (R14), so it
+ *                        carries no label (town-stance.mjs § clearedAtCutover)
+ *   town_stance          "neutral" when the town declared neutral on its current
+ *                        version (it clears "awaiting the town" and confers nothing)
+ *   awaiting             who has standing and has not spoken (R9), only when not
+ *                        empty: town-stance.mjs § awaitingOf, the one function the
+ *                        stance inbox reads too (POS-361, Q6)
  *
- * `awaiting` is town-stance.mjs § awaitingOf, the one function the stance
- * inbox and the label both read (POS-361, Q6): the town when its seat is open
- * and silent, and each household whose earlier ground the mark overlaps and
- * which has not spoken. Law marks (kind `class`) are the law, not cleared
- * marks, and carry neither.
+ * An opposed mark is not served, so it is never labelled. Law marks (kind
+ * `class`) are the law, not cleared marks, and carry nothing.
  */
 export async function labelMarks(marks, { townWords, cutover = null, versions = null, words = [], householdOf = (h) => h, overlaps }) {
   const { awaitingOf, clearedAtCutover, townSeatOf } = await import("./town-stance.mjs");
@@ -284,11 +280,11 @@ export async function labelMarks(marks, { townWords, cutover = null, versions = 
   const ground = marks.filter((m) => m?.kind !== "class");
   return marks.map((m) => {
     if (!m?.id || m.kind === "class") return m;
-    const ratification = clearedAtCutover(m, { cutover, versions }) || townWords?.get?.(m.id) === "ratified" ? RATIFICATION.RATIFIED
-      : townWords?.get?.(m.id) === "neutral" ? RATIFICATION.NEUTRAL
-        : RATIFICATION.AWAITING;
+    if (clearedAtCutover(m, { cutover, versions })) return m;
+    const neutral = townWords?.get?.(m.id) === "neutral";
     const who = awaitingOf(m, { marks: ground, overlaps, words, householdOf, townSeat }).map((a) => a.who);
-    return { ...m, ratification, ...(who.length ? { awaiting: who } : {}) };
+    if (!neutral && !who.length) return m;
+    return { ...m, ...(neutral ? { town_stance: "neutral" } : {}), ...(who.length ? { awaiting: who } : {}) };
   });
 }
 
@@ -471,8 +467,8 @@ export async function servedSettlement(p, { settlement = null, worldRepo, townRe
       ...(__vetoes?.town_unread ? { opposed_unread: __vetoes.town_unread } : {}),
       ...(words.unread ? { opposed_unread: `the standing words could not be read, so nothing opposed since the seal is taken away here: ${words.unread}` } : {}),
       ...(built ? { built: "derived from the snapshot's sources on this read, and kept" } : {}),
-      ...(labels.unread ? { ratification_unread: labels.unread } : {}),
-      ...(labels.omitted ? { ratification_omitted: labels.omitted } : {}),
+      ...(labels.unread ? { labels_unread: labels.unread } : {}),
+      ...(labels.omitted ? { labels_omitted: labels.omitted } : {}),
     },
   };
 }
@@ -507,8 +503,8 @@ async function labelsFor(p, header, world, words, { worldRepo, servedKey }) {
   // townSeatOf, open on every mark while the cutover is unset): the stance
   // inbox keeps that rule; what residents see on the World is this one.
   const { readCutover, readVersions, CUTOVER_KEY, cutoverNumber } = await import("./town-stance.mjs");
-  try { if (cutoverNumber() == null) return { omitted: `ratification and awaiting are omitted: ${CUTOVER_KEY} is not set, so the old blessing carries over (R14) and no mark is labelled awaiting the town` }; }
-  catch (e) { return { unread: `the ratification labels could not be read: ${String(e?.defect ?? e?.message ?? e).slice(0, 200)}` }; }
+  try { if (cutoverNumber() == null) return { omitted: `town_stance and awaiting are omitted: ${CUTOVER_KEY} is not set, so the old blessing carries over (R14) and no mark is labelled` }; }
+  catch (e) { return { unread: `the labels could not be read: ${String(e?.defect ?? e?.message ?? e).slice(0, 200)}` }; }
   try {
     const key = `${servedKey}|${createHash("sha256").update(JSON.stringify([words.words, process.env[CUTOVER_KEY] ?? null])).digest("hex").slice(0, 16)}`;
     const hit = LABELLED.get(key);
@@ -527,6 +523,6 @@ async function labelsFor(p, header, world, words, { worldRepo, servedKey }) {
     if (LABELLED.size > 6) LABELLED.delete(LABELLED.keys().next().value);
     return { marks };
   } catch (e) {
-    return { unread: `the ratification labels could not be read: ${String(e?.defect ?? e?.message ?? e).slice(0, 200)}` };
+    return { unread: `the labels could not be read: ${String(e?.defect ?? e?.message ?? e).slice(0, 200)}` };
   }
 }

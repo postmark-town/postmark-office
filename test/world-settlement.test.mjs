@@ -32,7 +32,7 @@ const serve = (opts = {}) => asOffice((p) => servedSettlement(p, { worldRepo: WO
 // The marks a resident placed (the class mark the law brings is the law's, and stands in every fold).
 const ids = (state) => state.marks.map((m) => m.id).filter((id) => id !== "the-town/hall").sort();
 // The fold as the snapshot holds it: the served marks less the two labels this read adds (R9, R14).
-const unlabelled = (state) => ({ ...state, marks: state.marks.map(({ ratification, awaiting, ...m }) => m) });
+const unlabelled = (state) => ({ ...state, marks: state.marks.map(({ town_stance, awaiting, ...m }) => m) });
 const markOf = (state, id) => state.marks.find((m) => m.id === id);
 
 test("a settlement is named S<n>; anything else refuses, and absent means the newest", () => {
@@ -226,16 +226,16 @@ test("with TOWN_STANCE_CUTOVER unset, no mark is labelled: the old blessing carr
     resetSettlementCaches();
     const r = await serve();
     for (const m of r.marks) {
-      assert.equal(m.ratification, undefined, `${m.id} carries no ratification`);
+      assert.equal(m.town_stance, undefined, `${m.id} carries no stance label`);
       assert.equal(m.awaiting, undefined, `${m.id} awaits no one on this answer`);
     }
-    assert.match(r.meta.ratification_omitted, /TOWN_STANCE_CUTOVER is not set/);
+    assert.match(r.meta.labels_omitted, /TOWN_STANCE_CUTOVER is not set/);
   } finally {
     if (before === undefined) delete process.env.TOWN_STANCE_CUTOVER; else process.env.TOWN_STANCE_CUTOVER = before;
   }
 });
 
-test("with the cutover set, each served mark carries its ratification state, and who it awaits only when someone does (R7, R9, R14)", { skip }, async () => {
+test("with the cutover set: a mark from before it carries nothing, a town-neutral one says so, and `awaiting` names who has not spoken (R9, R14; one taxonomy)", { skip }, async () => {
   await seed();
   const before = process.env.TOWN_STANCE_CUTOVER;
   process.env.TOWN_STANCE_CUTOVER = "S10";              // window 500
@@ -247,11 +247,13 @@ test("with the cutover set, each served mark carries its ratification state, and
          VALUES (501, 'sited', $2, $2, 'locked', 'x', '{}'::jsonb, 0, '{}'::jsonb, $1, '2026-10-02T06:00:00Z')`, [slug, by]));
     resetSettlementCaches();
     let r = await serve();
-    assert.equal(r.meta.ratification_omitted, undefined);
-    assert.equal(markOf(r, "the-town/hall").ratification, undefined, "the law is not a cleared mark");
-    assert.equal(markOf(r, "ann/plot").ratification, "ratified", "it stood at the cutover");
-    assert.equal(markOf(r, "ann/plot").awaiting, undefined, "the field appears only when it is not empty");
-    assert.equal(markOf(r, "cy/bench").ratification, "awaiting");
+    assert.equal(r.meta.labels_omitted, undefined);
+    assert.ok(r.marks.every((m) => !("ratification" in m)), "no ratification field anywhere (R7/R15 superseded)");
+    assert.deepEqual(markOf(r, "the-town/hall"), unlabelled(r).marks.find((m) => m.id === "the-town/hall"), "the law is not a cleared mark");
+    const plot = markOf(r, "ann/plot");
+    assert.equal(plot.town_stance, undefined, "it stood at the cutover: the old blessing carries over");
+    assert.equal(plot.awaiting, undefined);
+    assert.equal(markOf(r, "cy/bench").town_stance, undefined, "the town has not spoken");
     assert.deepEqual(markOf(r, "cy/bench").awaiting, ["the-town"]);
     assert.deepEqual(markOf(r, "bo/shed").awaiting, ["the-town", "ann"], "the shed stands on ann's earlier ground");
 
@@ -261,33 +263,39 @@ test("with the cutover set, each served mark carries its ratification state, and
     await speak({ actor: "ann", on: "bo/shed", stance: "welcomed" });
     resetSettlementCaches();
     r = await serve();
-    assert.equal(markOf(r, "cy/bench").ratification, "neutral");
-    assert.equal(markOf(r, "cy/bench").awaiting, undefined);
+    assert.equal(markOf(r, "cy/bench").town_stance, "neutral");
+    assert.equal(markOf(r, "cy/bench").awaiting, undefined, "the field appears only when it is not empty");
     assert.deepEqual(markOf(r, "bo/shed").awaiting, ["the-town"], "ann's word clears her household's seat");
+    assert.equal(markOf(r, "bo/shed").town_stance, undefined);
 
     // A cutover the store cannot read is said, never labelled.
     process.env.TOWN_STANCE_CUTOVER = "S77";
     resetSettlementCaches();
     r = await serve();
-    assert.equal(markOf(r, "bo/shed").ratification, undefined);
-    assert.match(r.meta.ratification_unread, /S77/);
+    assert.equal(markOf(r, "bo/shed").awaiting, undefined);
+    assert.match(r.meta.labels_unread, /S77/);
   } finally {
     if (before === undefined) delete process.env.TOWN_STANCE_CUTOVER; else process.env.TOWN_STANCE_CUTOVER = before;
   }
 });
 
-test("labelMarks: the town's ratified word on the current version is ratified too (R7), wherever the town's words carry one", async () => {
+test("labelMarks: before the cutover nothing, even on another's ground; after it, only the town's neutral and who awaits", async () => {
   const { labelMarks } = await import("../src/world-settlement.mjs");
-  const marks = [{ id: "x/a", kind: "sited", by: "x", date: "2026-10-02", at: { x: 0, y: 0 }, extent: { w: 1, h: 1 } }];
-  const versions = new Map([["x/a", { current: { id: "9", status: "locked", window_id: 501 } }]]);
-  const cutover = { number: 10, window_id: 500 };
   const { TOWN_SPEAKER } = await import("../src/town-stance.mjs");
-  const spoken = [{ on: "x/a", by: TOWN_SPEAKER, as: "town", stance: "ratified" }];
-  const [r] = await labelMarks(marks, { townWords: new Map([["x/a", "ratified"]]), cutover, versions, words: spoken, overlaps: () => false });
-  assert.equal(r.ratification, "ratified");
-  assert.equal(r.awaiting, undefined, "a town that has spoken is not awaited");
-  const [w] = await labelMarks(marks, { townWords: new Map(), cutover, versions, overlaps: () => false });
-  assert.equal(w.ratification, "awaiting");
+  const ground = { id: "g/plot", kind: "parcel", by: "g", date: "2026-09-01", at: { x: 0, y: 0 }, extent: { w: 9, h: 9 } };
+  const mark = { id: "x/a", kind: "sited", by: "x", date: "2026-10-02", at: { x: 0, y: 0 }, extent: { w: 1, h: 1 } };
+  const cutover = { number: 10, window_id: 500 };
+  const overlaps = (a, b) => a.id !== b.id;
+  const at = (w) => new Map([["x/a", { current: { id: "9", status: "locked", window_id: w } }], ["g/plot", { current: { id: "1", status: "locked", window_id: 400 } }]]);
+  const [, old] = await labelMarks([ground, mark], { townWords: new Map(), cutover, versions: at(499), overlaps });
+  assert.deepEqual(old, mark, "a mark that stood at the cutover carries no label at all");
+  const [, after] = await labelMarks([ground, mark], { townWords: new Map(), cutover, versions: at(501), overlaps });
+  assert.deepEqual(after.awaiting, ["the-town", "g"]);
+  assert.equal(after.town_stance, undefined);
+  const spoken = [{ on: "x/a", by: TOWN_SPEAKER, as: "town", stance: "neutral" }, { on: "x/a", by: "g", stance: "welcomed" }];
+  const [, cleared] = await labelMarks([ground, mark], { townWords: new Map([["x/a", "neutral"]]), cutover, versions: at(501), words: spoken, overlaps });
+  assert.equal(cleared.town_stance, "neutral");
+  assert.equal(cleared.awaiting, undefined, "everyone with standing has spoken");
 });
 
 test("the graph's mark nodes are the served settlement's: an opposed mark and its edges leave, other kinds stay, counts follow (Wright's option A)", async () => {
