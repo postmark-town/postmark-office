@@ -53,7 +53,7 @@ import { dirname, join } from "node:path";
 // Steps 6 and 7's law, extracted the day the REVIEW lane became a second tool
 // holding the same `clearing_job` pen (`review-rule.mjs`). One definition, two
 // callers — see materialize.mjs's header for why it is not a copy.
-import { materializeClaims, recomputeStanding, slugOf, ownerHouseholdFor, liveHouseOfVia } from "./materialize.mjs";
+import { materializeClaims, recomputeStanding, slugOf, ownerHouseholdFor, liveHouseOfVia, houseOrRefusal } from "./materialize.mjs";
 // The escrow PRESENCE gate — the sweep's own rule, ported to the candle before
 // G1 deletes the path it lives on. See step 5.5. Step 3's sufficiency rule
 // lives there too (POS-411), reading the same escrow.
@@ -259,6 +259,23 @@ try {
     }
   }
 
+  // 5.4 · THE CLAIMANT'S HOUSE, asked once per claim, before anything asks it
+  //     for a verdict (POS-356, ruling R5: "a refusal cannot hold anyone's
+  //     marks"). On 2026-10-04 gabo was not on the store's roll, the first
+  //     `ownerHouseholdFor` (step 5.5's, below) threw NO_SUCH_HOUSE, and window
+  //     228 rolled back with ten lawful claims in it. A claimant the roll does not
+  //     name refuses that claim, in the join door's words; a roll that cannot be
+  //     read at all (NO_RECORD, or a failed read) still throws and refuses the
+  //     window, because then nobody's claim can be judged.
+  //
+  //     AFTER STEP 5, deliberately: a claim already refused or held is not asked,
+  //     so this changes no outcome the gates above already decided.
+  for (const c of pending) {
+    if (outcomes.has(c.id) || !slugOf(c)) continue;
+    const { check } = await houseOrRefusal(q, c.claimant);
+    if (check) decide(c.id, "refused", check);
+  }
+
   // 5.5 · A COMMONS MARK NEEDS SOMEBODY'S STAMPS BEHIND IT (postmark#2594's
   //     second half; ruled a G1 blocker 2026-09-08 after lane 2's reviewer found
   //     it by receipt).
@@ -442,21 +459,31 @@ try {
   //     itself is `materialize.mjs`'s — the same code the REVIEW lane's ruling
   //     runs, so a mark that arrives by a mind's ruling and one that arrives by
   //     the candle are the same row shape by construction.
+  //
+  //     ONE CLAIM THAT CANNOT BE FILED REFUSES ITSELF (POS-356, R5). Each claim is
+  //     filed under its own savepoint (materialize.mjs § ONE BAD CLAIM), and one
+  //     the store says no to is decided `refused` with its `unfileable` sentence
+  //     while the rest lock. So the docket's statuses are written AFTER the
+  //     filing, never before it: a claim written `locked` with no mark is the
+  //     state fold-delta's docket would carry as a lock that never landed.
+  const materialize = pending.filter((c) => (outcomes.get(c.id)?.status ?? "locked") === "locked");
+  const unfiled = [];
+  await materializeClaims(q, {
+    claims: materialize, amends, revives, windowId, label: `window ${windowId}`,
+    refuseEach: (c, check) => { decide(c.id, "refused", check); unfiled.push({ slug: slugOf(c), check }); },
+  });
+  for (const u of unfiled) console.log(`  ⚑ refused alone: ${u.slug} — ${u.check}`);
+
   const sixCount = { locked: 0, refused: 0, held_review: 0, retracted_before_close: 0, pending_carried: 0 };
-  const materialize = [];
   for (const c of pending) {
     const o = outcomes.get(c.id) ?? { status: "locked", refusal_check: null };
     await q("UPDATE claims SET status = $2, refusal_check = $3, decided_at = now() WHERE id = $1",
       [c.id, o.status, o.refusal_check]);
     sixCount[o.status === "locked" ? "locked" : o.status === "held_review" ? "held_review" : "refused"] += 1;
-    if (o.status !== "locked") continue;
-    materialize.push(c);
   }
-
-  await materializeClaims(q, { claims: materialize, amends, revives, windowId, label: `window ${windowId}` });
   // What each revive overwrote, on the window's own record: the row now says what
   // is true today, and this is where its retirement stays readable.
-  const revived = materialize.filter((c) => revives.has(String(c.id))).map((c) => {
+  const revived = materialize.filter((c) => revives.has(String(c.id)) && outcomes.get(c.id)?.status !== "refused").map((c) => {
     const was = revives.get(String(c.id));
     return { slug: slugOf(c), id: was.id, retired_window: was.retired_window, locked_window_before: was.locked_window };
   });
@@ -547,6 +574,8 @@ try {
       // ground has to name the law-as-of it refused against.
       ...(capSeen ? { parcel_cap: capSeen } : {}),
       ...(revived.length ? { revived } : {}),
+      // The claims the store would not file, each refused alone (POS-356).
+      ...(unfiled.length ? { unfileable: unfiled } : {}),
       // The seal's own account: which snapshot this window wrote.
       snapshot: { id: sealed.id, digest: sealed.digest, marks_digest: sealed.marks_digest, marks: sealed.marks, new_versions: sealed.new_versions, register_digest: sealed.register_digest, register_rows: sealed.register_rows },
       standing: {
