@@ -78,23 +78,27 @@ const sigOk = (key, seal, sig) => {
   catch { return false; }
 };
 
+/** The store's last row, `{ seq, canonical, sig, seal }` or null: one SQL read. */
+export async function stampHeadVia(q) {
+  const { rows: [head] } = await q.query("SELECT seq, canonical, sig, seal FROM stamp_lines ORDER BY seq DESC LIMIT 1");
+  return head ? { ...head, seq: Number(head.seq) } : null;
+}
+
 /**
- * Record every line the clone's ledger holds past the store's last row, inside
- * the caller's transaction. Refuses, writing nothing, on: a file shorter than
- * the store, a file whose line at the store's last row is not that row (the
- * past moved), an unsigned line, or a signature that does not verify over the
- * recomputed seal. Returns `{ held, inserted }`.
+ * The rows the clone's ledger holds past `head` (the store's last row, or
+ * null), each `[seq, canonical, sig, seal]`, with every seal recomputed and
+ * every signature verified. PURE CPU over the file: no store, so a caller can
+ * do it before it opens a transaction (Wright's review of #415: a write
+ * transaction never spans non-SQL work). Throws, naming the line, on: a file
+ * shorter than the store, a file whose line at the head is not the head (the
+ * past moved), an unsigned line, or a signature that does not verify.
  */
-export async function syncStampLinesVia(client, clone, { engine = null, pubkeyPem = null } = {}) {
-  const eng = engine ?? await engineOf(clone);
+export function stampRowsPast(clone, head, { engine, pubkeyPem = null }) {
   const pem = pubkeyPem ?? pubkeyOf(clone);
   if (!pem) throw new Error("no tools/stamp-pubkey.pem in the clone: a line's signature cannot be checked, so none is recorded");
   const key = createPublicKey(pem);
-  await client.query("SELECT pg_advisory_xact_lock(hashtext('stamp_lines'))");
   const path = ledgerOf(clone);
-  const entries = existsSync(path) ? eng.parseStampLedger(readFileSync(path, "utf8")) : [];
-  const { rows: [head] } = await client.query(
-    "SELECT seq, canonical, sig, seal FROM stamp_lines ORDER BY seq DESC LIMIT 1");
+  const entries = existsSync(path) ? engine.parseStampLedger(readFileSync(path, "utf8")) : [];
   const held = head ? Number(head.seq) : 0;
   if (entries.length < held)
     throw new Error(`the stamp ledger's export holds ${entries.length} lines and the store ${held}: the export lost lines the store recorded. Nothing was written.`);
@@ -108,11 +112,19 @@ export async function syncStampLinesVia(client, clone, { engine = null, pubkeyPe
   for (let i = held; i < entries.length; i++) {
     const e = entries[i];
     if (!e.sig) throw new Error(`the stamp ledger's line ${i + 1} is UNSIGNED: the store records only signed lines. Nothing was written.`);
-    const seal = sealAfter(eng, prev, e.canonical);
+    const seal = sealAfter(engine, prev, e.canonical);
     if (!sigOk(key, seal, e.sig)) throw new Error(`the stamp ledger's line ${i + 1}: its signature does not verify over its seal. Nothing was written.`);
     fresh.push([i + 1, e.canonical, e.sig, seal]);
     prev = seal;
   }
+  return fresh;
+}
+
+/** The serialising lock every stamp_lines writer takes first, inside its transaction. */
+export const lockStampLinesVia = (client) => client.query("SELECT pg_advisory_xact_lock(hashtext('stamp_lines'))");
+
+/** Insert rows `stampRowsPast` computed: SQL only. */
+export async function insertStampRowsVia(client, fresh) {
   for (let i = 0; i < fresh.length; i += 1000) {
     const c = fresh.slice(i, i + 1000);
     await client.query(
@@ -120,7 +132,23 @@ export async function syncStampLinesVia(client, clone, { engine = null, pubkeyPe
        SELECT * FROM unnest($1::int[], $2::text[], $3::text[], $4::text[])`,
       [c.map((r) => r[0]), c.map((r) => r[1]), c.map((r) => r[2]), c.map((r) => r[3])]);
   }
-  return { held, inserted: fresh.length };
+}
+
+/**
+ * Record every line the clone's ledger holds past the store's last row, inside
+ * the caller's transaction: the lock, the head, `stampRowsPast`, the insert.
+ * Refuses, writing nothing, as `stampRowsPast` does. Returns `{ held, inserted }`.
+ * The rows are computed INSIDE the transaction here, which is right for the few
+ * lines a pen commit carries; a caller with many lines (the mint) computes them
+ * first with `stampRowsPast` and only inserts inside.
+ */
+export async function syncStampLinesVia(client, clone, { engine = null, pubkeyPem = null } = {}) {
+  const eng = engine ?? await engineOf(clone);
+  await lockStampLinesVia(client);
+  const head = await stampHeadVia(client);
+  const fresh = stampRowsPast(clone, head, { engine: eng, pubkeyPem });
+  await insertStampRowsVia(client, fresh);
+  return { held: head ? head.seq : 0, inserted: fresh.length };
 }
 
 /**
