@@ -14,7 +14,9 @@
 // parent that failed because a subtest did. The run fails on
 //   · a red that is not on test/known-failures.json (a new red);
 //   · a listed test that passed (the list shrinks: delete its row), unless the
-//     row is `flaky`, which allows either outcome and says so;
+//     row is `flaky`. A flaky test that reds is run again once (its whole
+//     file, by the shard): green on the retry is a flake and allowed, red twice
+//     is a red and fails the run;
 //   · a listed test that did not run at all (renamed or deleted: the row is stale);
 //   · a planned file with no result, or a file that exited non-zero with no red
 //     of its own (it crashed, or was killed: its tests vanished, they did not pass);
@@ -98,7 +100,8 @@ const key = (file, name) => `${file}\u0000${name}`;
 /**
  * The verdict over a whole run.
  *   planned:  [file]                          every file some shard was dealt
- *   results:  { file: { exit, seconds, counts, reds, skips, ran } }
+ *   results:  { file: { exit, seconds, counts, reds, skips, ran, retry? } }
+ *             retry: { ran, reds } from the file's one re-run, when a flaky row red
  *   known:    [{ file, name, reason, owner, date, flaky? }]
  *   shards:   { planned: n, reported: [shard numbers that uploaded] }
  * Returns { ok, totals, problems: [{ kind, file, name?, detail }], listed: [...] }.
@@ -136,6 +139,21 @@ export function verdict({ planned, results, known, shards }) {
       continue;
     }
     if (!results[row.file]) continue; // file-missing already says so
+    if (redKeys.has(k) && row.flaky) {
+      const retry = results[row.file].retry;
+      if (!retry) { listed.push({ ...row, outcome: "red (flaky, not retried)" }); continue; }
+      if (retry.reds.some((x) => x.name === row.name)) {
+        problems.push({ kind: "flaky-red-twice", file: row.file, name: row.name, detail: "red, and red again on its one retry: that is a red, not a flake" });
+        listed.push({ ...row, outcome: "red twice (a flaky row, so the run fails)" });
+        continue;
+      }
+      if (!retry.ran.includes(row.name)) {
+        problems.push({ kind: "flaky-red-twice", file: row.file, name: row.name, detail: "red, and its retry never ran it (the file crashed on the retry)" });
+        continue;
+      }
+      listed.push({ ...row, outcome: "flake: red, then green on its retry" });
+      continue;
+    }
     if (redKeys.has(k)) { listed.push({ ...row, outcome: "red" }); continue; }
     if (!ranKeys.has(k)) {
       problems.push({ kind: "listed-not-run", file: row.file, name: row.name, detail: "no test by this name ran: renamed or deleted, so the row is stale" });

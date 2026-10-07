@@ -49,12 +49,18 @@ for (const name of readdirSync(dir).filter((n) => /^shard-\d+\.json$/.test(n)).s
       ? readFileSync(ev, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l))
       : [];
     results[file] = { ...r, ...readEvents(lines, file) };
+    if (r.retry) {
+      const rev = join(dir, "events", `${basename(file, ".test.mjs")}.retry.jsonl`);
+      const rlines = existsSync(rev) ? readFileSync(rev, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
+      const { ran, reds } = readEvents(rlines, file);
+      results[file].retry = { ran, reds };
+    }
   }
 }
 
 const v = verdict({ planned, results, known, shards: { planned: of, reported } });
 const t = v.totals;
-const knownRed = v.listed.filter((r) => r.outcome === "red").length;
+const knownRed = v.listed.filter((r) => r.outcome.startsWith("red")).length;
 const head = `${v.ok ? "GREEN" : "RED"} · ${t.reds} reds (${knownRed} on the known list, ${t.reds - knownRed} not) in ${t.tests} tests across ${t.files} of ${planned.length} files in ${reported.length} of ${of} shards · ` +
   `pass ${t.pass} · skipped ${t.skipped} · todo ${t.todo} · cancelled ${t.cancelled} · suites ${t.suites} · node ${node ?? "?"}`;
 

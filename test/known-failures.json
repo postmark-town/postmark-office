@@ -1,5 +1,5 @@
 {
-  "_doc": "The office suite's known reds on the train, as CI measures them (.github/workflows/suite.yml, POS-417). One row per test: file, name (the test's own name, exactly as node:test reports it), reason, owner, date. The CI summary fails on a red that is NOT here, and also on a row whose test passed (delete the row) or no longer exists. `flaky: true` allows either outcome. Fixing the reds is POS-419.",
+  "_doc": "The office suite's known reds on the train, as CI measures them (.github/workflows/suite.yml, POS-417). One row per test: file, name (the test's own name, exactly as node:test reports it), reason, owner, date. The CI summary fails on a red that is NOT here, and also on a row whose test passed (delete the row) or no longer exists. `flaky: true` is a flake: when it reds, its file runs once more, and green on that retry is allowed while red twice fails the run. Fixing the reds is POS-419.",
   "failures": [
     {
       "file": "test/cli-guard.test.mjs",
@@ -120,6 +120,22 @@
       "reason": "CI only: the junit fixture names a file with a Windows separator, and Node 22's junit reporter carries no file attribute for the tool to prefix; green on Windows with Node 25",
       "owner": "POS-419",
       "date": "2026-10-07"
+    },
+    {
+      "file": "test/thread-is-the-letter-id.test.mjs",
+      "name": "F13 · POST /letters — the REST skin hints too, and its own answer is otherwise the answer it was",
+      "reason": "a spawned office's first POST /letters runs cold and can hit the pen pool's 10 s acquire limit (503) under load: measured 10-07 on the plain train and on train + #376 (G:/Starstory/docs/2026-10-07/rail/POS-341/letters-503.md, POS-419). In CI it took 109-147 ms (F13) and 38-53 ms (F14) in runs 37692083332, 37693810179 and 37696624256",
+      "owner": "POS-419",
+      "date": "2026-10-07",
+      "flaky": true
+    },
+    {
+      "file": "test/thread-is-the-letter-id.test.mjs",
+      "name": "F14 · and POST /letters WITH a thread is byte-for-byte the receipt it always was — no key added when there is nothing to say",
+      "reason": "a spawned office's first POST /letters runs cold and can hit the pen pool's 10 s acquire limit (503) under load: measured 10-07 on the plain train and on train + #376 (G:/Starstory/docs/2026-10-07/rail/POS-341/letters-503.md, POS-419). In CI it took 109-147 ms (F13) and 38-53 ms (F14) in runs 37692083332, 37693810179 and 37696624256",
+      "owner": "POS-419",
+      "date": "2026-10-07",
+      "flaky": true
     },
     {
       "file": "test/world-ride.test.mjs",

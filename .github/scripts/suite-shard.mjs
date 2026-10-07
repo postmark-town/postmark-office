@@ -25,6 +25,7 @@ import { listTestFiles, planShards } from "./suite-lib.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "..", "..");
 const TIMINGS = join(ROOT, ".github", "suite", "timings.json");
+const KNOWN = join(ROOT, "test", "known-failures.json");
 const REPORTER = pathToFileURL(join(HERE, "suite-reporter.mjs")).href;
 // A test's own cap is --test-timeout (npm test's 180 s). A FILE's cap is this:
 // past it the file is killed and reads as crashed, never as passed.
@@ -61,9 +62,9 @@ for (const d of ["tap", "events", "stderr"]) mkdirSync(join(out, d), { recursive
 const stem = (f) => basename(f, ".test.mjs");
 const record = { shard, of, jobs, node: process.version, started_at: new Date().toISOString(), files: {} };
 
-function runOne(file) {
+function runOne(file, suffix = "") {
   return new Promise((done) => {
-    const s = stem(file);
+    const s = stem(file) + suffix;
     const errFd = openSync(join(out, "stderr", `${s}.txt`), "w");
     const t0 = Date.now();
     const child = spawn(process.execPath, [
@@ -77,8 +78,7 @@ function runOne(file) {
       clearTimeout(cap);
       closeSync(errFd);
       const seconds = (Date.now() - t0) / 1000;
-      record.files[file] = { exit: code ?? 128, signal: signal ?? null, seconds: Math.round(seconds * 10) / 10 };
-      done(record.files[file]);
+      done({ exit: code ?? 128, signal: signal ?? null, seconds: Math.round(seconds * 10) / 10 });
     });
   });
 }
@@ -88,12 +88,28 @@ let finished = 0;
 async function lane() {
   while (next < mine.length) {
     const file = mine[next++];
-    const r = await runOne(file);
+    const r = (record.files[file] = await runOne(file));
     finished++;
     console.log(`[${String(finished).padStart(3)}/${mine.length}] ${file} · ${r.seconds} s · exit ${r.exit}${r.signal ? ` (${r.signal})` : ""}`);
   }
 }
 await Promise.all(Array.from({ length: Math.min(jobs, mine.length) }, lane));
+
+// THE ONE RETRY. A file in which a `flaky` row of test/known-failures.json
+// went red runs once more, whole, after every other file (so it is not run
+// under the same contention), into <stem>.retry.*. The summary reads it: green
+// on the retry is a flake, red again is a red. Nothing else is ever retried.
+const flaky = new Set(JSON.parse(readFileSync(KNOWN, "utf8")).failures.filter((r) => r.flaky).map((r) => `${r.file}\u0000${r.name}`));
+for (const file of mine) {
+  const ev = join(out, "events", `${stem(file)}.jsonl`);
+  if (!existsSync(ev)) continue;
+  const redFlaky = readFileSync(ev, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l))
+    .filter((e) => e.outcome === "fail" && flaky.has(`${file}\u0000${e.name}`)).map((e) => e.name);
+  if (!redFlaky.length) continue;
+  const r = await runOne(file, ".retry");
+  record.files[file].retry = r;
+  console.log(`[retry] ${file} · flaky red: ${redFlaky.join(" | ")} · retry ${r.seconds} s · exit ${r.exit}`);
+}
 
 record.finished_at = new Date().toISOString();
 writeFileSync(join(out, `shard-${shard}.json`), JSON.stringify(record, null, 2) + "\n");
