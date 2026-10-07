@@ -82,6 +82,16 @@ test("THE REPORTER, END TO END: a leaf red is a red, a parent failed by its subt
   }
 });
 
+test("a failure node names by the file's absolute path is read as the file's repo path, on either separator", () => {
+  const fail = (name) => ({ name, nesting: 0, type: "test", outcome: "fail", failureType: "testCodeFailure", error: "test timed out" });
+  const posix = readEvents([fail("/home/runner/work/office/office/test/x.test.mjs")], "test/x.test.mjs");
+  const win = readEvents([fail("G:\\Postmark\\pool\\office-14\\test\\x.test.mjs")], "test/x.test.mjs");
+  assert.deepEqual(posix.reds.map((r) => r.name), ["test/x.test.mjs"]);
+  assert.deepEqual(win.reds.map((r) => r.name), ["test/x.test.mjs"]);
+  // a test that merely mentions another path keeps its own name
+  assert.deepEqual(readEvents([fail("reads test/y.test.mjs")], "test/x.test.mjs").reds.map((r) => r.name), ["reads test/y.test.mjs"]);
+});
+
 // ── the verdict ─────────────────────────────────────────────────────────────
 
 const counts = (o = {}) => ({ tests: 2, pass: 2, fail: 0, skipped: 0, todo: 0, cancelled: 0, suites: 0, ...o });
