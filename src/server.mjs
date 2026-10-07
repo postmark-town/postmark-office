@@ -54,7 +54,12 @@ import { worldSummary, worldOrient, worldEyes, worldInvestigate, worldFind, worl
 import { world2MyDrafts, world2MyMarks, world2Pool, world2Serve, world2ServeEnabled } from "./world2-serve.mjs";
 import { blessedSha } from "./world-branches.mjs";
 import { officeStoreFold, storeFingerprint, worldStateServed } from "./world2-fold.mjs"; // POS-142: /world/state from the store's rows, behind W2_FOLD
+import { settlementOrFile } from "./world-settlement.mjs"; // POS-359: /world/state serves the newest settlement minus the opposed
 // The rows fold needs the store engaged; a flag set on an office with no store falls through to the file, loudly.
+// POS-359: GET /world/state serves the newest settlement (or ?settlement=S<n>), minus the opposed.
+const worldStateAnswer = ({ asked, fileAnswer }) => settlementOrFile({
+  asked, fileAnswer, engaged: world2ServeEnabled(), pool: world2Pool, worldRepo: WORLD_CLONE, townRepo: TOWN_CLONE,
+});
 const storePoolOrRefuse = async () => { if (!world2ServeEnabled()) throw new Error("the world 2.0 store is not engaged at this office (WORLD2_PG/WORLD2_PG_URL)"); return world2Pool(); };
 import { callHoldTool } from "./world-hold.mjs"; // curl parity: /world/hold + /world/holdings (2026-08-15)
 import { APEX_TOOL, apexEnabled, dispatchToolFor, worldApex } from "./world-apex.mjs"; // stage 3: the apex verb — keyless read half + the POST act door (08-17)
@@ -1490,12 +1495,22 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       // always was; or, where this office sets W2_FOLD=store (POS-142), the same
       // world fold run over the store's rows, with the file as the fall-through
       // and `meta.source` saying which one answered (src/world2-fold.mjs).
+      //
+      // THE SETTLEMENT FIRST (POS-359, R2/R3): where the store is engaged, the
+      // newest settlement's World minus every opposed mark, or `?settlement=S<n>`'s
+      // (src/world-settlement.mjs). A store that holds no settled snapshot yet
+      // falls through to the answer above, and says why in `meta`; a named
+      // settlement never falls through, because the file is not that settlement.
       if (path === "/world/state") {
-        return worldStateServed({
+        const fileAnswer = () => worldStateServed({
           fileState: worldStateRaw,
           storeState: async () => officeStoreFold({ p: await storePoolOrRefuse(), repo: WORLD_CLONE, fileState: worldStateRaw }),
           fingerprint: async () => `${await storeFingerprint(await storePoolOrRefuse())}@${blessedSha(WORLD_CLONE)}`,
-        }).then((r) => j(res, 200, r)).catch((e) => bounce(res, 500, "the world door tripped", String(e?.message ?? e).slice(0, 200)));
+        });
+        const asked = url.searchParams.get("settlement");
+        return worldStateAnswer({ asked, fileAnswer })
+          .then((r) => (r?.error === "bounce" ? bounce(res, r.code, r.defect, r.hint) : j(res, 200, r)))
+          .catch((e) => (e?.code ? bounce(res, e.code, e.defect, e.hint) : bounce(res, 500, "the world door tripped", String(e?.message ?? e).slice(0, 200))));
       }
       // GET /world/enter-exit-ledger — THE PASSAGES, DERIVED.
       //
