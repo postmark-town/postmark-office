@@ -88,6 +88,13 @@
     },
     {
       "file": "test/state-log-check.test.mjs",
+      "name": "C3 · --write twice is one diff of zero",
+      "reason": "the drain family (the control's known reds since w41c): the fixture's state-log checkout has no current branch",
+      "owner": "POS-419",
+      "date": "2026-10-07"
+    },
+    {
+      "file": "test/state-log-check.test.mjs",
       "name": "C5b · the window's own horizon cannot be overridden by an argument",
       "reason": "the drain family (the control's known reds since w41c): the fixture's state-log checkout has no current branch",
       "owner": "POS-419",
