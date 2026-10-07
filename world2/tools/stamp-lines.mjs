@@ -8,9 +8,10 @@
 // each one's seal recomputed and its signature verified, in one transaction
 // (src/stamp-lines.mjs § syncStampLinesVia). The pens record their own lines in
 // their act's transaction; this is for the writers that still commit the file
-// straight from a shell (the ferry's ballot pass, the keep tick's welcome pass,
-// an epoch close by hand): git can be written to, and the store reads git. The
-// first run on a box fills the table from the whole ledger.
+// straight from a shell (the ferry's ballot pass, the keep tick's welcome pass and
+// its bug stage pass, tools/bug-stage-plan.mjs, an epoch close by hand): git can
+// be written to, and the store reads git. The first run on a box fills the table
+// from the whole ledger.
 //
 // --verify is the chain's check: the store's own seal chain and signatures, and
 // the export byte for byte against the store. Read-only. Exit 0 green, 1 red,

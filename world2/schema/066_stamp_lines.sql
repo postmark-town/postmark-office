@@ -27,7 +27,9 @@
 --
 -- `office_api`, INSERT only. Every writer of the ledger is an office pen (the
 -- stamp, gift, fund and world execs, the mint runner, the drain's registry
--- lines) or a box tool that runs as the office (the ferry chain, the keep tick).
+-- lines) or a box tool that runs as the office (the ferry chain, the keep tick
+-- and its shell writers: the welcome pass and tools/bug-stage-plan.mjs, whose
+-- lines world2/tools/stamp-lines.mjs --sync records after the shell's push).
 -- No UPDATE and no DELETE: a signed line is never rewritten, by town law.
 --
 -- ── IDEMPOTENT. APPLY AS `world2_owner` by the runbook's step-1 idiom ────────
@@ -41,8 +43,10 @@
 --   node world2/tools/stamp-lines.mjs --verify   -- export = store, chain green
 --
 -- CONSUMERS, named: src/stamp-lines.mjs (the writer, the reader, the verifier),
--- world2/tools/stamp-mint-run.mjs (the mint decides from these rows) and
--- world2/tools/stamp-mint-parity.mjs.
+-- world2/tools/stamp-mint-run.mjs (the mint decides from these rows),
+-- world2/tools/stamp-mint-parity.mjs, and world2/tools/stamp-lines.mjs --sync,
+-- which records what the shell writers committed (the ballot pass, the welcome
+-- pass, tools/bug-stage-plan.mjs, an epoch close by hand).
 
 BEGIN;
 
