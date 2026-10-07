@@ -37,6 +37,9 @@ name: Office suite (sharded, advisory)
 #     embedded-postgres devDependency (test/helpers/embedded-store.mjs), so no
 #     service container. The PGlite suites skip by name without
 #     PGLITE_MODULE_DIR, here as on the operator's machine.
+#   · the office's own `origin/main` and `origin/train/*` refs, which a pool
+#     tree's fetch holds and a PR checkout does not (one suite reads the open
+#     train's deploy script out of git).
 #   · node_modules from `npm ci` on Linux (sharp and embedded-postgres carry
 #     per-platform binaries), cached by the lockfile.
 #   · Node 22.22.1, prod's (the box's), so a red here is a red there.
@@ -140,6 +143,12 @@ jobs:
           fail-on-cache-miss: true
 
       - run: bash .github/scripts/suite-clones.sh --check
+
+      # The suite reads the open train out of the office's own refs
+      # (settlement-source-flip.test.mjs: the newest origin/train/*). A pool tree's
+      # fetch holds main and every train; a PR checkout holds neither.
+      - name: The office's main and trains, as a pool tree holds them
+        run: git fetch -q --no-tags --depth=1 origin '+refs/heads/main:refs/remotes/origin/main' '+refs/heads/train/*:refs/remotes/origin/train/*'
 
       # Tests commit into scratch repos; a runner has no git identity of its own.
       - name: Git identity for the suite's scratch repos
