@@ -465,9 +465,14 @@ const EXTRACTORS = {
 // query shapes. `?kinds=` mirrors the gexf tool's flag exactly, so the two
 // windows onto the same store take the same argument.
 
-/** The payload, narrowed. `kinds`/`types` null means everything. */
-export function filterPayload(payload, { kinds = null, types = null, dropUnresolved = false } = {}) {
-  if (!kinds && !types && !dropUnresolved) return payload;
+/**
+ * The payload, narrowed. `kinds`/`types` null means everything. `keepMarks`
+ * (a Set of mark ids, or null) keeps only the mark nodes the served settlement
+ * holds (POS-359): a mark opposed since, or cleared after the hydration, is
+ * not drawn as standing, and its edges go with it. Every other kind is kept.
+ */
+export function filterPayload(payload, { kinds = null, types = null, dropUnresolved = false, keepMarks = null } = {}) {
+  if (!kinds && !types && !dropUnresolved && !keepMarks) return payload;
   const keepKind = kinds ? new Set(kinds) : null;
   const keepType = types ? new Set(types) : null;
 
@@ -478,6 +483,7 @@ export function filterPayload(payload, { kinds = null, types = null, dropUnresol
   for (const n of nodes) {
     if (keepKind && !keepKind.has(n.data.kind)) continue;
     if (dropUnresolved && n.data.unresolved) continue;
+    if (keepMarks && n.data.kind === "mark" && !keepMarks.has(n.data.id)) continue;
     kept.set(n.data.id, n);
   }
   const edges = (payload.elements ? payload.elements.edges : payload.edges)
@@ -510,11 +516,11 @@ export function filterPayload(payload, { kinds = null, types = null, dropUnresol
  * The route's whole answer: the payload, filtered, with `elements` in the shape
  * `cytoscape({ elements })` takes directly.
  */
-export function worldGraphView({ dbPath = null, kinds = null, types = null, dropUnresolved = false } = {}) {
+export function worldGraphView({ dbPath = null, kinds = null, types = null, dropUnresolved = false, keepMarks = null } = {}) {
   const base = worldGraphPayload(dbPath);
   if (base.error) return base;
   // The filter's output SHARES the cached element objects rather than cloning
   // them: nothing downstream writes to a payload, and cloning 700 nodes per
   // request to protect against a write nobody makes is a cost with no buyer.
-  return filterPayload(base, { kinds, types, dropUnresolved });
+  return filterPayload(base, { kinds, types, dropUnresolved, keepMarks });
 }
