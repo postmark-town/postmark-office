@@ -41,18 +41,23 @@ import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { editClone, fixtureDb } from "./fixture.mjs";
 import { awaitListening } from "./spawn-office.mjs";
+import { indexStore } from "./helpers/office-under-test.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const KEY = "onecontractkey";
+let offices = 0; // each office's store is a database of its own
 
 async function office(extraEnv = {}) {
   const tmp = mkdtempSync(join(tmpdir(), "postmark-one-contract-"));
   const dbPath = join(tmp, "fixture.db");
   fixtureDb(dbPath).close();
+  // the office reads its town index from a store seeded from this fixture
+  // (POS-268, office-under-test.mjs), unless it is asked to have no record at all
+  const ix = extraEnv.WORLD2_PG === "" ? null : await indexStore(dbPath, { db: `one_contract_${++offices}` });
   const clone = editClone();
   const child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0", "--db", dbPath,
     "--oauth-db", join(tmp, "oauth.db"), "--roles-db", join(tmp, "roles.db")], {
-    env: { ...process.env, OFFICE_KEYS: `${KEY}=keemin:wright`, TOWN_CLONE: clone,
+    env: { ...process.env, ...ix?.env, OFFICE_KEYS: `${KEY}=keemin:wright`, TOWN_CLONE: clone,
       WORLD_CLONE: join(tmp, "no-world-clone"), VOICES_LOG: join(tmp, "voices.jsonl"),
       WORLD_STORE_DB: join(tmp, "no-world.db"), TOWN_PUSH: "", TOWN_SINGLE_LOG: "", WORLD_APEX: "1", ...extraEnv },
     stdio: ["ignore", "pipe", "pipe"],
@@ -60,12 +65,13 @@ async function office(extraEnv = {}) {
   let base = null;
   child.stdout.on("data", (d) => { const m = /listening on :(\d+)/.exec(String(d)); if (m) base = `http://127.0.0.1:${m[1]}`; });
   await awaitListening(child);
-  return { tmp, clone, child, get base() { return base; } };
+  return { tmp, clone, child, ix, get base() { return base; } };
 }
 
 async function shut(o) {
   if (!o) return;
   if (o.child.exitCode === null) { const gone = new Promise((ok) => o.child.on("exit", ok)); o.child.kill(); await gone; }
+  await o.ix?.stop();
   rmSync(o.tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   rmSync(o.clone, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 }
@@ -138,7 +144,9 @@ let A, B; // A answers the MCP door, B the plain API — identical fixtures
 // one call that needs rows to remember a nonce by (§ 8, the paper-act nonce).
 let C, D;
 const LOG_ON = { TOWN_SINGLE_LOG: "1" };
-before(async () => { [A, B, C, D] = await Promise.all([office(), office(), office(LOG_ON), office(LOG_ON)]); });
+// One at a time: with the four stores started at once (Promise.all), every
+// office's standing read refused its writes (503); started in turn, none does.
+before(async () => { A = await office(); B = await office(); C = await office(LOG_ON); D = await office(LOG_ON); });
 after(async () => { await Promise.all([shut(A), shut(B), shut(C), shut(D)]); });
 
 // Fresh offices per leg would cost a boot each; instead every leg below that
@@ -325,10 +333,14 @@ test("POST /household { do: \"host\" } · an unknown field is refused by name at
 });
 
 test("GET /calendar · public and keyless; an office pointed at no record says so rather than answering an empty calendar", async () => {
-  const res = await fetch(`${B.base}/calendar`);
-  const body = await res.json();
-  assert.equal(res.status, 503, JSON.stringify(body));
-  assert.match(body.defect, /record cannot be read/);
+  // an office of its own with no record: a switched office always has one (its town index is the store)
+  const E = await office({ TOWN_INDEX_READS: "", WORLD2_PG: "", WORLD2_PG_URL: "" });
+  try {
+    const res = await fetch(`${E.base}/calendar`);
+    const body = await res.json();
+    assert.equal(res.status, 503, JSON.stringify(body));
+    assert.match(body.defect, /record cannot be read/);
+  } finally { await shut(E); }
 });
 
 test("stake · an apex-only act refuses in its own name — never \"null does not take\"", async () => {
