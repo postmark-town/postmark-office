@@ -445,3 +445,38 @@ test("7 · a ballot the tick has not taken in is never read as gone; the tick ta
   assert.equal(again.stdout.trim(), "", "a quiet tick with nothing to do says nothing");
   assert.equal(await ballotActs(t), 3, "the post and two votes, written once");
 });
+
+// ── 8 · with the stamp lines in the store (POS-341's STAMP_LINES=store) ─────
+
+test("8 · STAMP_LINES=store: a stake's vote and its stamp_lines rows land in one transaction, at the door and in the pass", async () => {
+  const t = "lines-vote";
+  const dir = town(t, { cap: 12 });
+  const inbox = join(dir, "WHITE_PAGES", "postmaster", "inbox");
+  mkdirSync(inbox, { recursive: true });
+  writeFileSync(join(inbox, "rei-l.md"), `---\nid: rei-l\nfrom: rei\nto: postmaster\nstake_topic: ${t}\nstake_candidate: brightwork\nstake_stamps: 2\n---\n\nhi\n`);
+  git(dir, "add", "-A");
+  git(dir, "-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-q", "-m", "a letter");
+  await ingestBallotFiles(dir, { hand: "keemin" });
+  await q("DELETE FROM stamp_lines");   // this test's ledger is the store's chain, from its first line
+  const { verifyStampLinesVia } = await import("../src/stamp-lines.mjs");
+  const verified = async () => {
+    const c = await store.connect("office_api");
+    try { return await verifyStampLinesVia(c, dir); } finally { await c.end(); }
+  };
+
+  const r = spawnSync(process.execPath, [join(ROOT, "src", "stake-exec.mjs"),
+    JSON.stringify({ handle: "wright", topic: t, candidate: "lumen", n: 4, via: "api", date: "2026-10-01" })],
+  { encoding: "utf8", env: { ...process.env, TOWN_CLONE: dir, STAMP_KEY: KEY_FILE, STAMP_LINES: "store" } });
+  const out = JSON.parse(r.stdout.trim().split("\n").at(-1));
+  assert.equal(out.applied, 4, `${r.stdout}${r.stderr}`);
+  const v1 = await verified();
+  assert.equal(v1.ok, true, v1.problems.join("\n"));
+  assert.equal(v1.held, v1.exported, "the store's chain holds every line the export holds, the stake's included");
+
+  const pass = await ballotPassRun(dir, PEM, "2026-10-01", { env: { ...process.env, STAMP_LINES: "store" } });
+  assert.deepEqual([pass.processed, pass.receipts, pass.held], [1, 1, []]);
+  const v2 = await verified();
+  assert.equal(v2.ok, true, v2.problems.join("\n"));
+  assert.equal(v2.held, v1.held + 2, "the mailed stake's line and its first-stake mint were recorded with its vote");
+  assert.equal((await check(dir)).equal, true);
+});
