@@ -1,4 +1,4 @@
-name: Office suite (sharded, advisory)
+name: Office suite (sharded)
 
 # THE FULL OFFICE SUITE ON EVERY PR INTO A TRAIN OR MAIN (POS-417, Darko
 # 2026-10-07: "it will save us considerable time"). Until this file, the suite
@@ -49,11 +49,20 @@ name: Office suite (sharded, advisory)
 #
 # ── ADVISORY ─────────────────────────────────────────────────────────────────
 #
-# Not a required check. Darko makes `summary` required by clicks once it has
-# run green and stable on a few PRs (the steps are in the PR that added this).
+# Not a required check yet. Darko makes `office suite verdict` (the summary
+# job's name, which is the check's name) required by clicks once it has run
+# green and stable on a few PRs; the steps are in the PR that added this file.
+# The summary runs even when a shard or the prepare failed, and fails then: a
+# required check that is SKIPPED reads as passing, so it is never skipped.
+#
+# Pushes to main and to a train run it too, so the tips have a grade of their
+# own (the ship's "grade the merge tip" reads the train tip, main and the
+# ship PR's merge, three runs of this file).
 
 on:
   pull_request:
+    branches: [main, "train/**"]
+  push:
     branches: [main, "train/**"]
   workflow_dispatch:
 
@@ -183,8 +192,9 @@ jobs:
           if-no-files-found: warn
 
   summary:
+    name: office suite verdict
     needs: shard
-    if: always() && needs.shard.result != 'skipped'
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
