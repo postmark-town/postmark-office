@@ -481,6 +481,9 @@ export async function refreshStoreProbe({ env = process.env, letters = true, log
   return !r.refused;
 }
 
+/** The store's as-of (town_meta `as_of`) the held probe was read at, or null before the first load. */
+export const storeProbeAsOf = () => _probeRows?.asOf ?? null;
+
 /**
  * The held probe with one resident's mail_state row read now, for the reply
  * hint a send draws. Throws when the store cannot answer; the send has already

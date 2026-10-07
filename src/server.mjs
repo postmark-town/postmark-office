@@ -339,7 +339,30 @@ const stampOf = (path) => {
   catch { return null; }
 };
 
-let INDEX = openIndex();
+// ── A SWITCHED OFFICE OPENS NO office.db (POS-268 part 5a) ───────────────────
+// With TOWN_INDEX_READS=store every door reads the store, so the switched
+// office does not open office.db at all: it boots, and answers, with the file
+// gone. In its place stands ABSENT_INDEX, whose every read throws by name, and
+// a meta that throws on any key, so a reader still asking office.db is a loud
+// 500 that names it, never a quiet answer from a file the store replaced
+// (`the-town/the-disclosure`). The as-of every answer's header carries is the
+// store's own (town_meta `as_of`, as the held probe last read it), "unknown"
+// until the first load. Unswitched, nothing here runs and office.db is opened,
+// hot-reloaded and retired exactly as before; rolling back is unsetting the switch.
+const INDEX_SWITCHED = townIndexReads();
+const absent = (what) => () => {
+  throw new Error(`office.db is not opened with TOWN_INDEX_READS=store: ${what} still reads it (POS-268)`);
+};
+const ABSENT_INDEX = Object.freeze({ prepare: absent("a prepared statement"), exec: absent("an exec"), close() {} });
+const ABSENT_META = new Proxy(Object.freeze({}), {
+  get(_t, k) { if (typeof k === "symbol" || k === "then" || k === "toJSON") return undefined; return absent(`office.db's meta \`${String(k)}\``)(); },
+  ownKeys: absent("a copy of office.db's meta"),
+});
+const storeAsOf = () => townIndexStore.storeProbeAsOf() ?? "unknown";
+
+let INDEX = INDEX_SWITCHED
+  ? { handle: ABSENT_INDEX, meta: ABSENT_META, asOf: "unknown", refs: 0, retiredAt: 0 }
+  : openIndex();
 // The three names every route below reads. Reassigned together on each swap,
 // and read at CALL time everywhere — nothing captures them in a boot closure.
 let db = INDEX.handle;
@@ -363,6 +386,7 @@ let reloadComplaint = null;
 const journal = IN_READ_WORKER ? { log() {}, error() {} } : console;
 
 function reloadIndex() {
+  if (INDEX_SWITCHED) return;   // a switched office holds no office.db to reload (§ A SWITCHED OFFICE)
   const stamp = stampOf(DB_PATH);
   if (stamp === null || stamp === indexStamp) return;   // vanished, or unchanged
   let next;
@@ -449,7 +473,10 @@ onAnnounce("world-store", reloadWorldCaches);
 setInterval(() => {
   reloadIndex(); sweepRetired(); reloadWorldCaches();
   // the store's roll and the write path's probe, on the same clock the index reload keeps (POS-268)
-  if (townIndexReads()) { townIndexStore.refreshStoreRoll().catch(() => {}); townIndexStore.refreshStoreProbe().catch(() => {}); }
+  if (townIndexReads()) {
+    townIndexStore.refreshStoreRoll().catch(() => {});
+    townIndexStore.refreshStoreProbe().then(() => { if (INDEX_SWITCHED) AS_OF = storeAsOf(); }).catch(() => {});
+  }
 }, RELOAD_POLL_MS).unref();
 // AT BOOT, BEFORE THE OFFICE LISTENS (POS-268): the roll and the write path's
 // probe are loaded first, so the first ask is never answered by a process that
@@ -460,6 +487,7 @@ if (townIndexReads()) await Promise.race([
   Promise.all([townIndexStore.refreshStoreRoll().catch(() => {}), townIndexStore.refreshStoreProbe().catch(() => {})]),
   new Promise((ok) => setTimeout(ok, 10_000).unref()),
 ]);
+if (INDEX_SWITCHED) AS_OF = storeAsOf();
 
 // Keep the deterministic clock seam at the process boundary. Bouncer stays
 // environment-agnostic, while the HTTP integration test can pin only its clock.
