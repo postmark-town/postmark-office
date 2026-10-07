@@ -192,22 +192,37 @@ export async function verifyStampLinesVia(q, clone, { engine = null, pubkeyPem =
 export async function stampedCommit(clone, addPaths, message, { env = process.env, engine = null } = {}) {
   if (!stampLinesOn(env) || !addPaths.some((p) => isLedger(clone, p))) return penCommit(clone, addPaths, message);
   const { officeWrite } = await import("./world2-pen.mjs");
-  const eng = engine ?? await engineOf(clone);
-  return officeWrite(async (client) => {
-    await syncStampLinesVia(client, clone, { engine: eng });
-    const commit = penCommit(clone, addPaths, message);
-    // A lost race rebases the commit onto the remote: every line it carries is
-    // recorded again here (a no-op when the rebase brought none).
-    await syncStampLinesVia(client, clone, { engine: eng });
-    return commit;
-  }, { env });
+  return officeWrite((client) => stampedCommitVia(client, clone, addPaths, message, { env, engine }), { env });
 }
+
+/**
+ * The same commit on a transaction the CALLER holds (POS-349: a ballot stake
+ * writes its vote and records its lines in one transaction, and a second
+ * officeWrite inside it would be refused as nested, POS-370). The caller
+ * commits or rolls back; a git refusal thrown here rolls its lines back too.
+ */
+export async function stampedCommitVia(client, clone, addPaths, message, { env = process.env, engine = null } = {}) {
+  if (!stampLinesOn(env) || !addPaths.some((p) => isLedger(clone, p))) return penCommit(clone, addPaths, message);
+  const eng = engine ?? await engineOf(clone);
+  await syncStampLinesVia(client, clone, { engine: eng });
+  const commit = penCommit(clone, addPaths, message);
+  // A lost race rebases the commit onto the remote: every line it carries is
+  // recorded again here (a no-op when the rebase brought none).
+  await syncStampLinesVia(client, clone, { engine: eng });
+  return commit;
+}
+
+const notLanded = (e) => {
+  if (e?.pen !== NOT_LANDED) throw e;
+  return { error: { code: e.code, defect: e.defect, hint: e.hint } };
+};
 
 /** landOrRefuse for a stamped commit: a push that cannot land is the exec's answer, not a trip. */
 export async function landStamped(clone, addPaths, message, opts = {}) {
-  try { return await stampedCommit(clone, addPaths, message, opts); }
-  catch (e) {
-    if (e?.pen !== NOT_LANDED) throw e;
-    return { error: { code: e.code, defect: e.defect, hint: e.hint } };
-  }
+  try { return await stampedCommit(clone, addPaths, message, opts); } catch (e) { return notLanded(e); }
+}
+
+/** landStamped on the caller's transaction (stampedCommitVia). */
+export async function landStampedVia(client, clone, addPaths, message, opts = {}) {
+  try { return await stampedCommitVia(client, clone, addPaths, message, opts); } catch (e) { return notLanded(e); }
 }

@@ -388,7 +388,10 @@ function runExec(t, exec, payload, { push = true } = {}) {
 const EXECS = [
   ["gift-exec.mjs", { handle: "limen", amount: 3, slug: "a-hat", by: "wright", date: "2026-09-28" }, { handle: "refuse-me" }],
   ["fund-exec.mjs", { pot: "roof", usd: 5, from: "wright", ref: "tx-1", date: "2026-09-28" }, { pot: "refuse-me" }],
-  ["stake-exec.mjs", { handle: "wright", topic: "the-quay", candidate: "limen", n: 2, via: "api", date: "2026-09-28" }, { topic: "refuse-me" }],
+  // stake-exec.mjs left this table with POS-349: a stake now writes its vote in
+  // the office's record in the same act, so its P10–P12 run on the suite's store
+  // in test/ballot-posts.test.mjs § 4 (a land refused, a land that trips, the
+  // ordinary stake), the clone and the store both checked.
   ["world-stake-exec.mjs", { verb: "stake", handle: "wright", mark: "wright/a-mark", n: 2, date: "2026-09-28" }, { mark: "refuse-me" }],
   ["pot-stake-exec.mjs", { handle: "wright", pot: "roof", n: 2, via: "api", date: "2026-09-28" }, null],
 ];

@@ -19,6 +19,13 @@
 //
 // THE FLIP: put `!canWrite ||` back on the GET /votes gate and § 1 reds with
 // 409; put `canWrite &&` back on the doorstep garnish and § 2 reds.
+//
+// SINCE POS-349 the ballot is a post and each stake its vote, so the worker
+// reads the office's record: the suite's store (a real Postgres), filled the
+// way the box fills it — the town's real ballot backfilled from the real town
+// clone's file and ledger (tools/ballots-backfill.mjs), the open one ingested.
+// § 1's 77 for Iris is then the store's, and --check holds it equal to the
+// ledger's own count.
 
 import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -29,6 +36,7 @@ import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { fixtureDb } from "./fixture.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
+import { startStore } from "./helpers/embedded-store.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const TOWN = join(ROOT, "town-clone");
@@ -48,6 +56,7 @@ async function bootWorker(townClone) {
     WORLD_DYNAMIC_DB: join(tmp, "dynamic.db"),
     TOWN_CLONE: townClone,
     WORLD_CLONE: join(tmp, "no-world-clone"),
+    WORLD2_PG: "1", WORLD2_PG_URL: store.url("office_api"),
   };
   const { child, port } = await bootOnFreePort((port) => spawn(process.execPath, [
     join(ROOT, "src", "server.mjs"),
@@ -80,18 +89,26 @@ function engineClone() {
   return dir;
 }
 
-let onTown, onEngine;
+let onTown, onEngine, store, checked;
 
 before(async () => {
   if (!HAVE_TOWN) return;
+  store = await startStore({ db: "votes_worker_test" });
+  const env = { ...process.env, WORLD2_PG: "1", WORLD2_PG_URL: store.url("office_api") };
+  const { backfill, check } = await import("../tools/ballots-backfill.mjs");
+  const { ingestBallotFiles } = await import("../src/ballots-store.mjs");
   tmp = mkdtempSync(join(tmpdir(), "postmark-votes-worker-"));
+  await backfill(TOWN, { hand: "keemin", apply: true, env });
+  checked = await check(TOWN, { env });
+  const engine = engineClone();
+  await ingestBallotFiles(engine, { hand: "keemin", env });
   fixtureDb(join(tmp, "fixture.db")).close();
   const { openDynamic } = await import("../src/dynamic-store.mjs");
   openDynamic(join(tmp, "dynamic.db")).close();
   const { openOauthDb } = await import("../src/oauth.mjs");
   openOauthDb(join(tmp, "oauth.db")).close();
   onTown = await bootWorker(TOWN);
-  onEngine = await bootWorker(engineClone());
+  onEngine = await bootWorker(engine);
 });
 
 after(async () => {
@@ -102,6 +119,7 @@ after(async () => {
     await gone;
   }
   if (tmp) rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  if (store) await store.stop();
 });
 
 const skip = HAVE_TOWN ? false : "needs the pool's town-clone with tools/ballot.mjs";
@@ -117,7 +135,8 @@ test("§1 a read worker answers GET /votes with the town's ballot (#3383)", { sk
   assert.ok(t, `the town's ballot is listed: ${JSON.stringify(body.topics.map((x) => x.topic))}`);
   assert.equal(t.status, "closed");
   const iris = t.candidates.find((c) => c.candidate === "Iris");
-  assert.equal(iris?.staked, 77, "the tally is the ledger's, folded by the town's engine");
+  assert.equal(iris?.staked, 77, "the tally is the ballot post's votes, backfilled from the real ledger");
+  assert.equal(checked.equal, true, `--check holds the store equal to the ledger: ${checked.differences.join("; ")}`);
 
   const one = await onTown("/votes/illuminator-name");
   const full = await one.json();

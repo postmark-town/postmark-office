@@ -845,8 +845,10 @@ export async function callTool(name, args, ctx) {
     };
     case "read_votes": {
       if (!canWrite || !votesAvailable(clone)) return notFound("not-yet-open", "the office has no town clone with the ballot engine");
-      if (args.topic) return (await voteView(clone, args.topic, key)) ?? notFound(`no ballot topic "${args.topic}"`, "omit topic for the list");
-      return voteList(clone);
+      try {
+        if (args.topic) return (await voteView(clone, args.topic, key)) ?? notFound(`no ballot topic "${args.topic}"`, "omit topic for the list");
+        return await voteList(clone);
+      } catch (e) { if (e.code) return { error: "bounce", defect: e.defect, hint: e.hint }; throw e; }
     }
     case "stake_vote": {
       if (!canWrite || !votesAvailable(clone)) return notFound("not-yet-open", "the office has no town clone with the ballot engine");
