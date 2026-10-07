@@ -29,7 +29,9 @@ import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { fixtureDb } from "./fixture.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
+import { indexStore } from "./helpers/office-under-test.mjs";
 
+let IX = null; // the store this file's offices read (indexStore)
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const TOWN = join(ROOT, "town-clone");
 const KEY = "votes-read-worker-key";
@@ -43,7 +45,7 @@ const workers = [];
 
 async function bootWorker(townClone) {
   const env = {
-    ...process.env,
+    ...process.env, ...IX?.env,
     OFFICE_KEYS: `${KEY}=keemin:wright`,
     WORLD_DYNAMIC_DB: join(tmp, "dynamic.db"),
     TOWN_CLONE: townClone,
@@ -86,6 +88,8 @@ before(async () => {
   if (!HAVE_TOWN) return;
   tmp = mkdtempSync(join(tmpdir(), "postmark-votes-worker-"));
   fixtureDb(join(tmp, "fixture.db")).close();
+  // the offices here read their town index from a store seeded from this fixture (POS-268, office-under-test.mjs)
+  IX = await indexStore(join(tmp, "fixture.db"));
   const { openDynamic } = await import("../src/dynamic-store.mjs");
   openDynamic(join(tmp, "dynamic.db")).close();
   const { openOauthDb } = await import("../src/oauth.mjs");
@@ -101,6 +105,7 @@ after(async () => {
     c.kill();
     await gone;
   }
+  await IX?.stop();
   if (tmp) rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
