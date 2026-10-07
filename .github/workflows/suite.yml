@@ -147,8 +147,11 @@ jobs:
           git config --global user.name "postmark-office-ci"
           git config --global user.email "postmark-office-ci@users.noreply.github.com"
 
+      # The output goes OUTSIDE the checkout: cli-guard counts the office's files
+      # across its run and reds when one appears, and a shard's own TAP landing in
+      # the tree beside it is exactly that (CI's first run).
       - name: Shard ${{ matrix.shard }} of ${{ env.SHARDS }}
-        run: node .github/scripts/suite-shard.mjs --shard ${{ matrix.shard }} --of "$SHARDS" --jobs "$SUITE_JOBS" --out suite-out
+        run: node .github/scripts/suite-shard.mjs --shard ${{ matrix.shard }} --of "$SHARDS" --jobs "$SUITE_JOBS" --out "$RUNNER_TEMP/suite-out"
 
       # A store that would not start says only "pg_ctl start exited 1" in the
       # test; its own log is left in the temp dir (embedded-store.mjs keeps a
@@ -166,7 +169,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: suite-shard-${{ matrix.shard }}
-          path: suite-out/
+          path: ${{ runner.temp }}/suite-out/
           retention-days: 14
           if-no-files-found: warn
 
