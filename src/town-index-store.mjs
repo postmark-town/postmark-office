@@ -334,6 +334,8 @@ export function storeIndexPooled(clone, { env = process.env } = {}) {
     lastActive: via((c, handle) => lastActive(c, handle)),
     mailAwaiting: via((c, handle, opts) => mailAwaiting(c, handle, opts)),
     standing: via((c, handle) => standingFor(c, handle)),
+    // the town's quest registry (town_meta `quest_registry`), as the doorstep's next steps read it; null when the index has none
+    questRegistry: via(async (c) => (await questMeta(c)).quest_registry ?? null),
     home: via((c, handle, fresh) => home(c, handle, fresh)),
     deliveredTo: via((c, handle) => deliveredTo(c, handle)),
     resident: via((c, handle, fresh) => resident(c, handle, fresh)),

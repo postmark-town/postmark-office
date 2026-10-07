@@ -1836,7 +1836,8 @@ export async function nextStepsFor(db, meta, handle, clone, { own = false, world
     const real = injected ?? worldBlockForHandle;
     const worldBlock = (h) => (pending ??= real(h));
 
-    const registry = JSON.parse(meta.quest_registry ?? '{"quests":[]}');
+    // the registry from the index this door reads: the store's town_meta when switched, never office.db's meta (POS-268)
+    const registry = JSON.parse((ix ? await ix.questRegistry() : meta.quest_registry) ?? '{"quests":[]}');
     // ── THE FACTS COME OFF THE FOLD THE REHYDRATE ALREADY WROTE (POS-167) ──
     //
     // This line was `tools.onboardingFactsFor(clone, handle)` with no options,
