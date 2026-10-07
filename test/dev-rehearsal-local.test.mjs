@@ -1,0 +1,57 @@
+// dev-rehearsal-local.test.mjs — the dev rehearsal, end to end, on a local
+// stand-in for the dev office (POS-354, part 5).
+//
+// test/helpers/dev-target.mjs builds what the box holds for dev: an embedded
+// Postgres with every migration in this tree, scratch clones of this tree's town
+// and world (no remotes), office.db hydrated and the town index in the store, the
+// dev office's env file and the pens file, and this tree's office booted on them.
+// Then tools/dev-rehearsal.mjs runs against it exactly as Wright runs it on the
+// box: through the office's doors, the box's own jobs, and checks that read the store.
+//
+// HEAVY: minutes (a hydrate, a crossing, a clearing, two settlements with the
+// world's checker suite). It runs through `node G:/Postmark/pool/run-heavy.mjs`.
+// A store that cannot start FAILS with the reason (embedded-store.mjs § NO_STORE).
+
+import test, { after, before } from "node:test";
+import assert from "node:assert/strict";
+
+import { localDevTarget } from "./helpers/dev-target.mjs";
+import { PROD_DB, runRehearsal, renderReport, targetFromFiles } from "../tools/dev-rehearsal.mjs";
+
+let dev;
+before(async () => { dev = await localDevTarget(); }, { timeout: 20 * 60_000 });
+after(async () => { await dev?.stop(); });
+
+const target = (extra = {}) => ({ ...targetFromFiles({ envFile: dev.envFile, rolesFile: dev.rolesFile, office: dev.officeBase }), ...extra });
+
+test("the rehearsal refuses a pen pointed at PROD's database before it writes anything", async () => {
+  const t = target();
+  t.urls = { ...t.urls, clearing_job: t.urls.clearing_job.replace(/\/[^/]+$/, `/${PROD_DB}`) };
+  const lines = [];
+  const r = await runRehearsal(t, { log: (l) => lines.push(l) });
+  assert.equal(r.green, false);
+  assert.equal(r.setup_failed, true);
+  assert.match(lines[0], /^dev-rehearsal: REFUSED, the target store is not the dev office's own: clearing_job names world2_dev, PROD's store/);
+  assert.equal(r.steps.length, 0, "no step ran");
+});
+
+test("the preflight goes red on a dev office that does not read the store as prod's does", async () => {
+  const t = target();
+  t.env = { ...t.env, TOWN_INDEX_READS: undefined, STAMP_KEY: undefined };
+  const r = await runRehearsal(t, { only: ["preflight"] });
+  assert.equal(r.green, false);
+  const pre = r.steps.find((s) => s.id === "preflight");
+  assert.ok(pre.problems.some((p) => /without TOWN_INDEX_READS=store/.test(p)), pre.problems.join("; "));
+  assert.ok(pre.problems.some((p) => /sets no STAMP_KEY, so its pens sign with PROD's key file/.test(p)), pre.problems.join("; "));
+});
+
+test("one crossing, end to end, through the dev office's doors: green, every step read back from the store", async () => {
+  const lines = [];
+  const r = await runRehearsal(target(), { log: (l) => lines.push(l) });
+  const text = renderReport(r);
+  assert.match(lines[0], /^dev-rehearsal: target store w2_devsandbox_rehearsal \(the dev office's, from .*\); not world2_dev$/);
+  assert.equal(r.green, true, text);
+  const ran = r.steps.filter((s) => !s.pending).map((s) => s.id);
+  assert.deepEqual(ran, ["preflight", "sign-in", "join", "resident", "letters", "crossing", "claim", "clearing", "settle", "bless", "clearing-rerun", "by-hand"], text);
+  assert.deepEqual(r.steps.filter((s) => s.pending).map((s) => s.id), ["refused-alone"], "POS-356's step stays pending until it lands");
+}, { timeout: 30 * 60_000 });
