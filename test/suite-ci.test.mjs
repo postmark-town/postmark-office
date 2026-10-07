@@ -136,6 +136,7 @@ test("A FLAKY ROW THAT REDS is judged by its one retry: green on the retry is a 
   assert.deepEqual(passed.listed.map((r) => r.outcome), ["flake: red, then green on its retry"]);
   const twice = v({ ran: ["cold"], reds: [{ name: "cold" }] });
   assert.deepEqual(kinds(twice), ["flaky-red-twice"]);
+  assert.deepEqual(twice.listed.map((r) => r.outcome), ["red twice (a flaky row, so the run fails)"], "still counted as on the list");
   const crashed = v({ ran: [], reds: [] });
   assert.deepEqual(kinds(crashed), ["flaky-red-twice"], "a retry that never ran the test proves nothing");
   // only the flaky row's own name is read off the retry: a non-flaky red in the same file stays a red

@@ -144,6 +144,7 @@ export function verdict({ planned, results, known, shards }) {
       if (!retry) { listed.push({ ...row, outcome: "red (flaky, not retried)" }); continue; }
       if (retry.reds.some((x) => x.name === row.name)) {
         problems.push({ kind: "flaky-red-twice", file: row.file, name: row.name, detail: "red, and red again on its one retry: that is a red, not a flake" });
+        listed.push({ ...row, outcome: "red twice (a flaky row, so the run fails)" });
         continue;
       }
       if (!retry.ran.includes(row.name)) {

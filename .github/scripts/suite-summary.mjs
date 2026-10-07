@@ -60,7 +60,7 @@ for (const name of readdirSync(dir).filter((n) => /^shard-\d+\.json$/.test(n)).s
 
 const v = verdict({ planned, results, known, shards: { planned: of, reported } });
 const t = v.totals;
-const knownRed = v.listed.filter((r) => r.outcome === "red").length;
+const knownRed = v.listed.filter((r) => r.outcome.startsWith("red")).length;
 const head = `${v.ok ? "GREEN" : "RED"} · ${t.reds} reds (${knownRed} on the known list, ${t.reds - knownRed} not) in ${t.tests} tests across ${t.files} of ${planned.length} files in ${reported.length} of ${of} shards · ` +
   `pass ${t.pass} · skipped ${t.skipped} · todo ${t.todo} · cancelled ${t.cancelled} · suites ${t.suites} · node ${node ?? "?"}`;
 
