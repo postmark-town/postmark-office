@@ -104,6 +104,8 @@ export const LANDED = {
   "066_stamp_lines.sql":           { probe: `${rel("stamp_lines")} AND ${col("stamp_lines", "seal")}` },
   // 067 (POS-341): the mint's rooms and raw mail lines, read from git.
   "067_town_mint_inputs.sql":      { probe: `${rel("town_rooms")} AND ${rel("town_mail_lines")}` },
+  // 068 (POS-441): the clearing writes a carried mark's claim — its insert policy, then its trigger.
+  "068_clearing_carries.sql":      { probe: `${policy("claims_insert_clearing")} AND ${trig("claims_insert_carry_only")}` },
 };
 
 /** The schema files in the order a store takes them — name order, as the CI floor applies them. */

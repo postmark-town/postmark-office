@@ -152,6 +152,9 @@ lawful AS (
     ('office_api',   'office_meta',      'INSERT'),
     ('office_api',   'office_meta',      'UPDATE'),
     ('clearing_job', 'claims',           'UPDATE'),
+    -- 068_clearing_carries.sql (POS-441). A carried mark's claim, born locked in
+    -- the clearing's own transaction; a trigger narrows it to exactly that.
+    ('clearing_job', 'claims',           'INSERT'),
     ('clearing_job', 'windows',          'INSERT'),
     ('clearing_job', 'windows',          'UPDATE'),
     ('clearing_job', 'marks',            'INSERT'),

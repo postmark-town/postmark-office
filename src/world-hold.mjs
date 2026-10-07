@@ -851,7 +851,7 @@ function dressReceipt(did, { reached = null, stood = null, setDown = null } = {}
 //
 // The amend is filed through `leaveMarkViaOffice` with `amend: true` — the
 // exact call a resident makes to re-site their own mark, so every guard that
-// door runs (the key holds the author, the move guard, the put-forward verdict
+// door runs (the key holds the author, the carry forecast, the put-forward verdict
 // on the mark's escrow and the ground it now stands on) runs here unchanged,
 // and the store receives the one amend shape it already has: a mark-class
 // `amend` act whose candle half files a claim superseding the standing mark
