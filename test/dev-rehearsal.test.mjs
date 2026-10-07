@@ -112,7 +112,9 @@ test("the GitHub stub answers the pen's join road and records the PR's files, ne
       stub.merged(stub.prs[0]);
       assert.equal((await api("GET", `${base}/pulls?state=closed`)).body[0].merged_at != null, true);
       assert.equal((await api("GET", `${base}/contents/README.md`)).body.content, Buffer.from("town\n").toString("base64"));
-      assert.equal((await api("GET", "/repos/keeminlee/postmark/pulls")).status, 404, "the stub answers only the town repo it was given");
+      const other = await api("GET", "/repos/keeminlee/postmark/pulls");
+      assert.equal(other.status, 404);
+      assert.equal(other.body.message, "the rehearsal's stub answers only the town repo", "the stub answers only the town repo it was given");
     } finally { await stub.close(); }
   } finally { rmSync(town, { recursive: true, force: true }); }
 });
