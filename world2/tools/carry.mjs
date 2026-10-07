@@ -94,20 +94,32 @@ export function carryPlan({ rows, movers, waiting = new Set(), houseOf = null })
   const ranked = rankCandidates(records);
   const geoParent = new Map();
   for (const r of records) if (POSITIONED.has(r.kind) && r.at) geoParent.set(r.slug, containmentParentOf(r, records, root, ranked));
-  const chainHolds = (slug, up, target) => {
-    const seen = new Set([slug]);
-    for (let p = up(slug); p != null && !seen.has(p); p = up(p)) { if (p === target) return true; seen.add(p); }
-    return false;
-  };
+  // UP ONE STEP, BOTH WAYS. A mark rides if the mover is above it by any path
+  // that mixes the two edges: the lamp filed in the house rides when the house
+  // rides, whether the house rides because it stands inside the parcel or
+  // because it is filed there — the printout composes the lamp against the
+  // house either way, so the store must move it too.
   const geoUp = (s) => geoParent.get(s) ?? null;
   const fileUp = (s) => bySlug.get(s)?.rec._parentMarkId ?? null;
+  const under = (slug, target) => {
+    const seen = new Set([slug]), stack = [slug];
+    while (stack.length) {
+      const s = stack.pop();
+      for (const p of [geoUp(s), fileUp(s)]) {
+        if (p == null || seen.has(p)) continue;
+        if (p === target) return true;
+        seen.add(p); stack.push(p);
+      }
+    }
+    return false;
+  };
 
   for (const m of moving) {
     const moverHouse = house(recordOf(m.row)._cred);
     const riders = [], stayed = [], stuck = [];
     for (const { rec, row } of bySlug.values()) {
       if (rec.slug === m.slug || !POSITIONED.has(rec.kind)) continue;
-      if (!chainHolds(rec.slug, geoUp, m.slug) && !chainHolds(rec.slug, fileUp, m.slug)) continue;
+      if (!under(rec.slug, m.slug)) continue;
       if (house(rec._cred) !== moverHouse) { stayed.push({ slug: rec.slug, household: house(rec._cred) }); continue; }
       if (waiting.has(rec.slug)) { stuck.push({ slug: rec.slug, why: "it has its own claim waiting in this window" }); continue; }
       if (!isPoint(row.geometry?.at)) { stuck.push({ slug: rec.slug, why: "it carries no position to move" }); continue; }

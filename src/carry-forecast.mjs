@@ -32,17 +32,25 @@ export function carryForecast({ id, prior, next, marks, filedParentOf = () => nu
   const move = moveOf(prior, next);
   if (!move) return null;
   const byId = new Map(marks.map((m) => [m.id, m]));
-  const holds = (start, up) => {
-    const seen = new Set([start]);
-    for (let p = up(start); p != null && !seen.has(p); p = up(p)) { if (p === id) return true; seen.add(p); }
+  // Up one step both ways, mixed, as the clearing walks it (carry.mjs § up one step).
+  const geoUp = (m) => byId.get(m)?.placementParent ?? null;
+  const under = (start) => {
+    const seen = new Set([start]), stack = [start];
+    while (stack.length) {
+      const s = stack.pop();
+      for (const p of [geoUp(s), filedParentOf(s)]) {
+        if (p == null || seen.has(p)) continue;
+        if (p === id) return true;
+        seen.add(p); stack.push(p);
+      }
+    }
     return false;
   };
-  const geoUp = (m) => byId.get(m)?.placementParent ?? null;
   const moverHouse = houseOfMark(byId.get(id) ?? prior);
   const riders = [], stayed = [];
   for (const m of marks) {
     if (m.id === id || !POSITIONED.has(m.kind) || !m.at) continue;
-    if (!holds(m.id, geoUp) && !holds(m.id, filedParentOf)) continue;
+    if (!under(m.id)) continue;
     const house = houseOfMark(m);
     if (house === moverHouse) riders.push({ slug: m.id, from: m.at, to: { x: m.at.x + move.dx, y: m.at.y + move.dy } });
     else stayed.push({ slug: m.id, household: house });

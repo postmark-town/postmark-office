@@ -76,6 +76,17 @@ test("A CHAIN THROUGH ANOTHER HOUSEHOLD COUNTS (Q3): my mark in a neighbour's ho
   assert.deepEqual(plan.stayed.map((s) => s.slug), ["sable/the-guest-house"]);
 });
 
+test("THE MIXED CHAIN: a lamp filed in a house that stands in the parcel (filed nowhere) rides — the printout composes it against the house, and the house rides by ground", () => {
+  const rows = [
+    ROOT,
+    row("rei/the-parcel", "parcel", "rei", "hh:starforge", { x: 0, y: 7000 }, { w: 25, h: 25 }),
+    row("rei/the-house", "sited", "rei", "hh:starforge", { x: 0, y: 7000 }, { w: 10, h: 10 }),
+    row("rei/the-lamp", "sited", "rei", "hh:starforge", { x: 400, y: 7400 }, { w: 1, h: 1 }, { _parentMarkId: "rei/the-house" }),
+  ];
+  const plan = carryPlan({ rows, movers: [{ claimId: "c", slug: "rei/the-parcel", next: { at: { x: 10, y: 7000 }, extent: { w: 25, h: 25 } } }] }).get("c");
+  assert.deepEqual(plan.riders.map((r) => r.slug), ["rei/the-house", "rei/the-lamp"]);
+});
+
 test("ALL OR NOTHING (Q4): a rider with its own claim waiting this window is named stuck, and so is one with no position", () => {
   const rows = lanternstep();
   rows.find((r) => r.slug === "rei/the-lamp-out-back").geometry = { extent: { w: 1, h: 1 } };
