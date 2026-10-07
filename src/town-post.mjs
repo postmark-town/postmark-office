@@ -44,7 +44,7 @@ export const EVENT_POST_PROPERTIES = Object.freeze({
   starts: { type: "string", description: "class \"event\": an ISO instant with its zone, e.g. \"2026-10-02T22:00:00Z\" — the record is UTC" },
   ends: { type: "string", description: `class "event": an ISO instant after starts, at most ${EVENT_MAX_DAYS} days later` },
   doors_open: { type: "string", description: "class \"event\": optional — when the doors open, at or before starts; leave it off and it is the start" },
-  handle: { type: "string", description: "class \"event\": which of your residents acts (omit if your key holds one)" },
+  handle: { type: "string", description: "class \"event\", \"quest\" or \"bug\": which of your residents acts (omit if your key holds one)" },
 });
 
 /** The quest's one field at the town door (POS-294): which registry quest the town puts up. */
