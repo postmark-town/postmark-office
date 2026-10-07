@@ -62,14 +62,19 @@ export function planShards(files, timings, n) {
 /**
  * Read one file's reporter events (suite-reporter.mjs JSON lines) into its
  * counts and its leaf reds. `type: "suite"` events (describe) are not tests,
- * as node's own `# tests` count leaves them out.
+ * as node's own `# tests` count leaves them out. A failure node reports for
+ * the FILE (it would not load, a top-level hook threw) carries the file's
+ * absolute path as its name, which differs per checkout; given `file`, that
+ * name is read as the file's repo path, so a row can name it.
  */
-export function readEvents(lines) {
+export function readEvents(lines, file = null) {
+  const own = (name) => (file && String(name).replaceAll("\\", "/").endsWith(`/${file}`) ? file : name);
   const counts = { tests: 0, pass: 0, fail: 0, skipped: 0, todo: 0, cancelled: 0, suites: 0 };
   const reds = [];
   const skips = [];
   const ran = [];
-  for (const e of lines) {
+  for (const raw of lines) {
+    const e = { ...raw, name: own(raw.name) };
     if (e.type === "suite") { counts.suites++; continue; }
     counts.tests++;
     ran.push(e.name);

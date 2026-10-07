@@ -48,7 +48,7 @@ for (const name of readdirSync(dir).filter((n) => /^shard-\d+\.json$/.test(n)).s
     const lines = existsSync(ev)
       ? readFileSync(ev, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l))
       : [];
-    results[file] = { ...r, ...readEvents(lines) };
+    results[file] = { ...r, ...readEvents(lines, file) };
   }
 }
 
