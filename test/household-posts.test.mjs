@@ -234,10 +234,17 @@ test("6 · the doorstep segment deep-equals household { read: \"posts\" } at the
   const dbPath = join(DIR, "fixture.db");
   fixtureDb(dbPath).close();
   const db = new DatabaseSync(dbPath, { readOnly: true });
+  // the town index from a store seeded from this fixture, in this process, as a
+  // switched office reads it (POS-268); the record stays this file's stub
+  const { indexStore } = await import("./helpers/office-under-test.mjs");
+  const ix = await indexStore(dbPath, { db: "household_posts" });
+  const restore = await ix.useInProcess();
   try {
+    const { storeIndexPooled, townIndexReads } = await import("../src/town-index-store.mjs");
     const meta = { as_of: "fixturesha000000000000000000000000000000" };
     const ctx = { db, key: null, meta, asOf: meta.as_of, canWrite: false, clone: null, pen: null, odb: null, dbPath: null };
-    const d = await doorstepBundle("wright", ctx);
+    // the doorstep is handed the store's index, as server.mjs hands it a switched door's
+    const d = await doorstepBundle("wright", { ...ctx, ix: townIndexReads() ? storeIndexPooled(null) : null });
     assert.ok(d.segments.includes("posts"), "the manifest does not name the segment");
     const { serves, args, ...segment } = d.posts;
     assert.equal(serves, "household.posts");
@@ -246,6 +253,8 @@ test("6 · the doorstep segment deep-equals household { read: \"posts\" } at the
     const asked = await householdApex({ read: "posts", ...args }, null, ctx);
     assert.deepEqual(segment, asked, "the segment drifted from the read its `serves` names");
   } finally {
+    await restore();
+    await ix.stop();
     db.close();
   }
 });
