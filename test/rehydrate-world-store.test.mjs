@@ -20,7 +20,7 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -73,6 +73,9 @@ function fixture() {
   write(office, OFFICE_FILES);
   write(office, { "deploy/world2-lib.sh": readFileSync(join(OFFICE, "deploy", "world2-lib.sh"), "utf8") });
   write(bin, BIN);
+  // executable, or Linux's PATH lookup skips the stubs for the real curl, and the
+  // receipt waits out its 45 s deadline in every test (CI, 2026-10-08: 46 s each)
+  for (const name of Object.keys(BIN)) chmodSync(join(bin, name), 0o755);
   return { root, town, office, bin };
 }
 

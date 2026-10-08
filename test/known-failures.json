@@ -51,13 +51,6 @@
       "date": "2026-10-07"
     },
     {
-      "file": "test/rehydrate-world-store.test.mjs",
-      "name": "test/rehydrate-world-store.test.mjs",
-      "reason": "CI only (Linux): hangs past the 180 s test timeout before its first test reports (it drives sh scripts with stub curl/git). Cause not yet measured",
-      "owner": "POS-419",
-      "date": "2026-10-07"
-    },
-    {
       "file": "test/server.test.mjs",
       "name": "PATCH /profile/{handle}/avatar reaches the REST image door and keeps its bounce prose",
       "reason": "the avatar flake: its spawned office has a 10 s listen timeout, missed under load (the w42 control); green in CI runs 37692083332 and 37693810179",
