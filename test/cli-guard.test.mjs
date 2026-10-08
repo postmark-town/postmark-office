@@ -172,6 +172,11 @@ const ROSTER = {
   // The offline agent view (Posts phase 2): no --out, so it refuses before it
   // drives any door or writes a page.
   "tools/agent-view.mjs": { args: [], env: NO_PG, code: 2, needle: "--out <file.html> is required" },
+  // The ballots (POS-349): the office's ballot pass refuses with no --key before
+  // it reads a letter, the store or a key; the backfill with no --town before
+  // it imports the town engine or reads the store.
+  "tools/ballot-pass-run.mjs": { args: [], env: NO_PG, code: 1, needle: "usage: ballot-pass-run.mjs --key FILE" },
+  "tools/ballots-backfill.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: ballots-backfill.mjs --town <clone>" },
   "tools/suite-baseline.mjs": { args: ["--tip", "0000000"], code: 2, needle: "cannot resolve 0000000 to a full sha here" },
   "tools/settle-anchored-berths.mjs": { args: ["--clone", NOWHERE], code: 1, needle: "not a town checkout" },
   "tools/ship-guard.mjs": { args: [], code: 2, needle: "usage: node tools/ship-guard.mjs" },

@@ -2,8 +2,13 @@
 //   node --test test/votes.test.mjs
 // Builds a real git town-in-a-bottle with the town's OWN ballot tools copied
 // from the office's town clone (the live-import contract under test).
+//
+// Since POS-349 a ballot is a post and a vote its response: the doors read and
+// write the office's record, so this file runs on the suite's store (a real
+// Postgres) and each town's ballot file is taken in as its post first, the way
+// the office tick does. test/ballot-posts.test.mjs holds the class's own proofs.
 
-import test from "node:test";
+import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, copyFileSync } from "node:fs";
@@ -11,7 +16,13 @@ import { join, resolve, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { voteList, voteView, doorstepVotes, stakeViaOffice, votesAvailable } from "../src/votes.mjs";
+import { startStore } from "./helpers/embedded-store.mjs";
+
+const store = await startStore({ db: "votes_test" });
+Object.assign(process.env, { WORLD2_PG: "1", WORLD2_PG_URL: store.url("office_api") });
+after(() => store.stop());
+const { voteList, voteView, doorstepVotes, stakeViaOffice, votesAvailable } = await import("../src/votes.mjs");
+const { ingestBallotFiles } = await import("../src/ballots-store.mjs");
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TOWN_TOOLS = resolve(HERE, "..", "town-clone", "tools");
@@ -19,7 +30,10 @@ const TOOL_FILES = ["stamp-mint.mjs", "stamp-verify.mjs", "ballot.mjs", "ballot-
 
 const D = (date, id, from, to) => `- ${date} · ${id} · ${from} → ${to} · thread: new`;
 
-function voteClone({ cap = 12, status = "staking" } = {}) {
+// Each test starts from an empty ballot board: the posts and their votes are
+// cleared (the act log, append-only, keeps its rows), then the town's file is
+// taken in as its post.
+async function voteClone({ cap = 12, status = "staking" } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "office-votes-"));
   mkdirSync(join(dir, "tools"), { recursive: true });
   mkdirSync(join(dir, "WHITE_PAGES"), { recursive: true });
@@ -56,13 +70,17 @@ function voteClone({ cap = 12, status = "staking" } = {}) {
 
   process.env.STAMP_KEY = keyFile;
   delete process.env.TOWN_PUSH;
+  const c = await store.connect("world2_owner");
+  try { await c.query("DELETE FROM responses WHERE kind = 'vote'"); await c.query("DELETE FROM posts WHERE class = 'ballot'"); }
+  finally { await c.end(); }
+  await ingestBallotFiles(dir, { hand: "keemin" });
   return dir;
 }
 
 const kKey = { household: "keemin", handles: new Set(["wright", "rei"]) };
 
 test("stakeViaOffice: applies, commits, second sibling clips — never bounces", async () => {
-  const clone = voteClone({ cap: 12 });
+  const clone = await voteClone({ cap: 12 });
   const r1 = await stakeViaOffice(clone, { from: "wright", topic: "name-vote", candidate: "lumen", stamps: 10 }, kKey);
   assert.equal(r1.applied, 10);
   assert.equal(r1.vote_minted, true);
@@ -78,7 +96,7 @@ test("stakeViaOffice: applies, commits, second sibling clips — never bounces",
 });
 
 test("stakeViaOffice: zero-fill is an answer; wrong handle is a 403; bad status is a 409", async () => {
-  const clone = voteClone({ cap: 10 }); // wright's balance is 10 — one stake fills the household cap exactly
+  const clone = await voteClone({ cap: 10 }); // wright's balance is 10 — one stake fills the household cap exactly
   await stakeViaOffice(clone, { from: "wright", topic: "name-vote", candidate: "lumen", stamps: 10 }, kKey);
   const r = await stakeViaOffice(clone, { from: "rei", topic: "name-vote", candidate: "lumen", stamps: 3 }, kKey);
   assert.equal(r.applied, 0);
@@ -88,14 +106,14 @@ test("stakeViaOffice: zero-fill is an answer; wrong handle is a 403; bad status 
     (e) => e.code === 403);
   rmSync(clone, { recursive: true, force: true });
 
-  const early = voteClone({ status: "submissions" });
+  const early = await voteClone({ status: "submissions" });
   await assert.rejects(() => stakeViaOffice(early, { from: "wright", topic: "name-vote", candidate: "lumen", stamps: 1 }, kKey),
     (e) => e.code === 409 && /not staking/.test(e.defect));
   rmSync(early, { recursive: true, force: true });
 });
 
 test("voteList + voteView: tallies, headroom for the signed-in household", async () => {
-  const clone = voteClone({ cap: 12 });
+  const clone = await voteClone({ cap: 12 });
   assert.equal(votesAvailable(clone), true);
   await stakeViaOffice(clone, { from: "wright", topic: "name-vote", candidate: "lumen", stamps: 7 }, kKey);
 
@@ -115,7 +133,7 @@ test("voteList + voteView: tallies, headroom for the signed-in household", async
 });
 
 test("doorstepVotes: open topics with the household's applied + headroom", async () => {
-  const clone = voteClone({ cap: 12 });
+  const clone = await voteClone({ cap: 12 });
   await stakeViaOffice(clone, { from: "wright", topic: "name-vote", candidate: "lumen", stamps: 4 }, kKey);
   const v = await doorstepVotes(clone, "rei");
   assert.equal(v.length, 1);

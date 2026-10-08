@@ -58,7 +58,7 @@ import {
 // tables, generalized in place, with events their first class. The old names
 // are read-only views for the readers that have not moved (the earpiece, the
 // pinned board); nothing here reads or writes them.
-const POST_COLUMNS = "id, class, title, body, author, household, place_mark, place_x, place_y, starts, ends, state, fields, revised, posted_act, last_act";
+export const POST_COLUMNS = "id, class, title, body, author, household, place_mark, place_x, place_y, starts, ends, state, fields, revised, posted_act, last_act";
 const READ_HINT = (id) => `town { read: "calendar", args: { event: "${id}" } } — or GET /calendar/${id}`;
 const POST_READ_HINT = (id) => `town { read: "event", args: { post: "${id}" } } — or GET /calendar/${id}`;
 
@@ -114,7 +114,7 @@ export function standpointHandle(fields, key) {
 
 const isoOrNull = (v) => (v == null ? null : new Date(v).toISOString());
 const numOrNull = (v) => (v == null ? null : Number(v));
-const rowOf = (r) => (r ? { ...r, place_x: numOrNull(r.place_x), place_y: numOrNull(r.place_y), revised: Number(r.revised),
+export const rowOf = (r) => (r ? { ...r, place_x: numOrNull(r.place_x), place_y: numOrNull(r.place_y), revised: Number(r.revised),
   starts: isoOrNull(r.starts), ends: isoOrNull(r.ends),
   fields: typeof r.fields === "string" ? JSON.parse(r.fields) : { ...(r.fields ?? {}) } } : null);
 const doorsOf = (row) => row.fields?.doors_open ?? row.starts;
@@ -168,13 +168,13 @@ function actRow({ action, actor, event, payload, place, now }) {
 
 const placeOfRow = (r) => ({ mark: r.place_mark, x: r.place_x, y: r.place_y });
 
-async function insertPost(client, r) {
+export async function insertPost(client, r) {
   await client.query(
     `INSERT INTO posts (${POST_COLUMNS}) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
     [r.id, r.class, r.title, r.body, r.author, r.household, r.place_mark, r.place_x, r.place_y,
      r.starts, r.ends, r.state, JSON.stringify(r.fields ?? {}), r.revised, r.posted_act, r.last_act]);
 }
-async function updatePost(client, r) {
+export async function updatePost(client, r) {
   await client.query(
     `UPDATE posts SET title = $2, body = $3, place_mark = $4, place_x = $5, place_y = $6,
             starts = $7, ends = $8, state = $9, fields = $10, revised = $11, last_act = $12
