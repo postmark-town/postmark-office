@@ -121,7 +121,13 @@ const REST = [
   ["/search?q=gap"], ["/search?q=wright&kind=residents"], ["/metrics/mail"], ["/town/ledger"], ["/town/docs"],
   ["/doorstep/wright"], ["/doorstep/wright", keyed], ["/doorstep/limen", keyed], ["/doorstep/nobody", keyed],
   ["/me", keyed],
+  // what the site's build and the sentinel ask beyond the index doors (fetch-town-data, site-sentinel)
+  ["/"], ["/households"],
 ];
+
+// Asked by the site's build too, but stamped with the wall clock at each answer
+// (the calendar's as_of, /ops/heard's since), so only their status is compared.
+const REST_STATUS_ONLY = ["/calendar", "/posts?class=quest", "/ops/heard"];
 
 // The same families over MCP, through the one dispatch every MCP door shares.
 const MCP = [
@@ -168,6 +174,10 @@ test("every index door answers the absent office exactly as the plain one: statu
     assert.equal(b.status, a.status, `${what}: status (absent said ${b.body.slice(0, 300)})`);
     same(what, a.body, b.body);
     assert.equal(b.asOf, a.asOf, `${what}: x-postmark-as-of`);
+  }
+  for (const door of REST_STATUS_ONLY) {
+    const a = await rest("plain", door), b = await rest("absent", door);
+    assert.equal(b.status, a.status, `${door}: status (absent said ${b.body.slice(0, 300)})`);
   }
   assert.doesNotMatch(offices.absent.err(), /office\.db is not opened/, "no reader asked the absent index");
 });

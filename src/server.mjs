@@ -480,7 +480,7 @@ setInterval(() => {
   // the store's roll and the write path's probe, on the same clock the index reload keeps (POS-268)
   if (townIndexReads()) {
     townIndexStore.refreshStoreRoll().catch(() => {});
-    townIndexStore.refreshStoreProbe().then(() => { if (INDEX_SWITCHED) AS_OF = storeAsOf(); }).catch(() => {});
+    townIndexStore.refreshStoreProbe().then(() => { if (INDEX_SWITCHED) INDEX.asOf = AS_OF = storeAsOf(); }).catch(() => {});
   }
 }, RELOAD_POLL_MS).unref();
 // AT BOOT, BEFORE THE OFFICE LISTENS (POS-268): the roll and the write path's
@@ -492,7 +492,8 @@ if (townIndexReads()) await Promise.race([
   Promise.all([townIndexStore.refreshStoreRoll().catch(() => {}), townIndexStore.refreshStoreProbe().catch(() => {})]),
   new Promise((ok) => setTimeout(ok, 10_000).unref()),
 ]);
-if (INDEX_SWITCHED) AS_OF = storeAsOf();
+// INDEX.asOf too: the manifest (GET /) answers the borrowed index's as-of
+if (INDEX_SWITCHED) INDEX.asOf = AS_OF = storeAsOf();
 
 // Keep the deterministic clock seam at the process boundary. Bouncer stays
 // environment-agnostic, while the HTTP integration test can pin only its clock.
