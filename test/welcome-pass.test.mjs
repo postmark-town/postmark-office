@@ -338,3 +338,46 @@ test("a store the pass cannot read is a refusal: nothing planned, nothing paid",
   assert.equal(ledgerOf(repo), before, "the printouts are never the fallback");
   rmSync(repo, { recursive: true, force: true });
 });
+
+// ── AND SO DOES THE ROLL, BEHIND STAMP_LINES (POS-341 part 4) ─────────────────
+//
+// With the switch on, the plan's roll and the door's house check read the
+// store's key base (--base), the base the mint decides from. Needs the town
+// verbs to read --base (town #3540); against a pinned clone that predates it
+// this skips by name, and WELCOME_TOWN=<a town tree with the change> runs it.
+const BASE_TOWN_READS = (() => { try { return readFileSync(join(STORE_TOWN, "tools", "stamp-mint.mjs"), "utf8").includes("'--base'"); } catch { return false; } })();
+const BASE_SKIP = SKIP || (!BASE_TOWN_READS && "the town clone's stamp-mint.mjs does not read --base yet (set WELCOME_TOWN to a town tree that does)");
+
+test("with STAMP_LINES=store the roll is the store's key base: two printout houses the store keys as one are paid once", { skip: BASE_SKIP }, async () => {
+  const make = () => fixtureTown({
+    town: STORE_TOWN,
+    pins: { ada: { id: 1, pinned: "2026-06-01" }, bram: { id: 2, pinned: "2026-06-02" } },
+    deliveries: [D("2026-06-12", "a-1", "ada", "ada")],
+  });
+  const base = new Map([["ada", { key: "gh:1", provisional: false }], ["bram", { key: "gh:1", provisional: false }]]);
+  const store = make();
+  assert.equal(await main(["--town", store.repo, "--key", store.keyFile, "--date", "2026-10-08"],
+    { registryRows: rowsOf(store.repo), keyBase: base, env: { STAMP_LINES: "store" } }), 0);
+  const one = welcomeRows(store.repo);
+  assert.equal(one.length, 1, `one house, one bundle — got:\n${one.join("\n")}`);
+  assert.match(one[0], /MINT → ada · 5 · for: welcome:gh:1 · by: the-town/);
+  // the control: the switch off reads the printouts, two houses, two bundles
+  const printouts = make();
+  assert.equal(await main(["--town", printouts.repo, "--key", printouts.keyFile, "--date", "2026-10-08"],
+    { registryRows: rowsOf(printouts.repo), keyBase: base, env: {} }), 0);
+  assert.equal(welcomeRows(printouts.repo).length, 2, "the switch off never reads the base");
+  for (const r of [store, printouts]) rmSync(r.repo, { recursive: true, force: true });
+});
+
+test("with STAMP_LINES=store a key base the pass cannot read is a refusal: nothing planned, nothing paid", { skip: BASE_SKIP }, async () => {
+  const { repo, keyFile } = fixtureTown({
+    town: STORE_TOWN,
+    pins: { alice: { id: 1, pinned: "2026-06-01" } },
+    deliveries: [D("2026-06-12", "a-1", "alice", "alice")],
+  });
+  const before = ledgerOf(repo);
+  assert.equal(await main(["--town", repo, "--key", keyFile, "--date", "2026-10-08"],
+    { registryRows: rowsOf(repo), env: { STAMP_LINES: "store" } }), 1, "no store to read the base from");
+  assert.equal(ledgerOf(repo), before, "the printouts are never the fallback");
+  rmSync(repo, { recursive: true, force: true });
+});

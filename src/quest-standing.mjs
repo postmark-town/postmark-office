@@ -134,12 +134,16 @@ export function standingRowsFor(handles, { deliveries, friendships, factsFor }) 
  * leaves both `undefined`, which is exactly what `onboardingFactsFor` already
  * treats as "resolve your own" — the old behaviour, unchanged, not a fallback
  * added under a new road.
+ *
+ * `base` is the store's key base when the caller read one (POS-341 part 4,
+ * src/mint-inputs.mjs § keyBaseVia): the town folds the roll and the
+ * friendships from it in place of the printouts. Null is the printouts, as before.
  */
-export function standingRowsFromTown(tools, repo, handles) {
+export function standingRowsFromTown(tools, repo, handles, { base = null } = {}) {
   const deliveries = tools.parseDeliveries(repo);
-  const friendships = tools.foldFriendships(repo);
+  const friendships = base ? tools.foldFriendships(repo, { base }) : tools.foldFriendships(repo);
   const households = typeof tools.currentHouseholds === "function"
-    ? tools.currentHouseholds(repo) : undefined;
+    ? (base ? tools.currentHouseholds(repo, { base }) : tools.currentHouseholds(repo)) : undefined;
   const welcomed = households !== undefined && typeof tools.welcomedHouseholds === "function"
     ? tools.welcomedHouseholds(repo, households) : undefined;
   const rows = standingRowsFor(handles, {

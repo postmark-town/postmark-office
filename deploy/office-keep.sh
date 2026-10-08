@@ -129,13 +129,24 @@ REGISTRY_FILE="$SNAP/registry.json"
     # copy away before this trap has put it back.
     HOLD="$(mktemp -d /tmp/postmark-tick-hold.XXXXXX)" || exit 1
     armed=0
+    # The arrival bytes go back only over the head they arrived on (POS-447): a
+    # runner that lost its push race and then refused has brought the clone up
+    # to the remote's tip, whose ledger holds the other writer's lines, so the
+    # ledger is put back from that HEAD instead.
+    putback() {
+      if [ "$(git rev-parse HEAD)" = "$(cat "$HOLD/head.arrived")" ]; then
+        cp "$HOLD/ledger.arrived" "$LEDGER" && git reset -q -- "$LEDGER"
+      else
+        git reset -q -- "$LEDGER" && git checkout -q HEAD -- "$LEDGER"
+      fi
+    }
     restore() {
       if [ "$armed" = 1 ]; then
         armed=0
-        if cp "$HOLD/ledger.arrived" "$LEDGER" && git reset -q -- "$LEDGER"; then
+        if putback; then
           git ls-files --others --exclude-standard | grep -vxF -f "$HOLD/untracked.arrived" |
             while IFS= read -r made; do rm -f -- "$made"; done
-          echo "[office-keep] mint catch-up ROLLED BACK — the ledger is back to its arrival bytes and every path the pass created is gone; the rows re-derive on the next tick" >&2
+          echo "[office-keep] mint catch-up ROLLED BACK — the ledger is back to its arrival bytes (to HEAD's after a lost push race) and every path the pass created is gone; the rows re-derive on the next tick" >&2
         else
           echo "[office-keep] mint catch-up ROLL-BACK FAILED — the town clone may hold uncommitted rows; git -C $TOWN_CLONE status" >&2
         fi
@@ -147,6 +158,7 @@ REGISTRY_FILE="$SNAP/registry.json"
     trap 'exit 130' INT
     trap 'exit 129' HUP
     cp "$LEDGER" "$HOLD/ledger.arrived" || exit 1
+    git rev-parse HEAD > "$HOLD/head.arrived" || exit 1
     git ls-files --others --exclude-standard > "$HOLD/untracked.arrived" || exit 1
     armed=1
     # POS-341, BEHIND ITS SWITCH. With STAMP_LINES=store (set once the box has
@@ -160,6 +172,7 @@ REGISTRY_FILE="$SNAP/registry.json"
       node /srv/postmark-office/world2/tools/stamp-mint-run.mjs --append --key /srv/postmark-office/stamp-key.pem \
           --clone "$TOWN_CLONE" --message "mint: tick catch-up pass" || exit 1
       cp "$LEDGER" "$HOLD/ledger.arrived" || exit 1
+      git rev-parse HEAD > "$HOLD/head.arrived" || exit 1
     else
       node tools/stamp-mint.mjs --append --key /srv/postmark-office/stamp-key.pem || exit 1
     fi

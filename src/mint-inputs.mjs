@@ -124,10 +124,43 @@ export async function writeMintInputs(client, TOWN) {
  */
 export async function mintInputsVia(q) {
   const pins = pinsFromRows(await registryRowsVia(q));
-  const rooms = new Map((await q.query(`SELECT handle, github FROM town_rooms ORDER BY handle COLLATE "C"`)).rows.map((r) => [r.handle, r.github]));
+  const rooms = await roomsVia(q);
   const mailLines = (await q.query("SELECT line FROM town_mail_lines ORDER BY seq")).rows.map((r) => r.line);
   return { pins, rooms, mailLines };
 }
+
+const roomsVia = async (q) => new Map((await q.query(`SELECT handle, github FROM town_rooms ORDER BY handle COLLATE "C"`)).rows.map((r) => [r.handle, r.github]));
+
+/**
+ * THE STORE'S KEY BASE for the quests and the welcome (POS-341 part 4): the
+ * mint's own base (keyBaseOf over household_pins, town_rooms and the sealed
+ * dates of stamp_lines), handed to the town's folds as their `base` and to its
+ * welcome verbs as `--base`. SQL only. An empty input is a refusal by name,
+ * never a base from nothing: the caller's read stays null all the way up.
+ */
+export async function keyBaseVia(q, engine) {
+  const pins = pinsFromRows(await registryRowsVia(q));
+  const rooms = await roomsVia(q);
+  const entries = (await q.query("SELECT canonical FROM stamp_lines ORDER BY seq")).rows;
+  if (!rooms.size) throw new Error("town_rooms is empty: the store has no key base yet (apply 067 and run the town-index ingest)");
+  if (!entries.length) throw new Error("stamp_lines is empty: the store has no chain yet (stamp-lines.mjs --sync)");
+  return keyBaseOf({ pins, rooms, sealed: sealedDatesOf(engine, entries) });
+}
+
+/**
+ * Does this town checkout's engine take a caller's key base? (town #3540,
+ * POS-341 part 4.) Asked of the engine itself: an older currentHouseholds
+ * ignores `{ base }` and answers the printouts' roll, so a probe handle given
+ * only in the base is the tell.
+ */
+export function takesKeyBase(engine, repo) {
+  const probe = new Map([["key-base-probe", { key: "gh:0", provisional: false }]]);
+  try { return engine.currentHouseholds(repo, { base: probe }).get("key-base-probe")?.key === "gh:0"; }
+  catch { return false; }
+}
+
+/** The base as the town's `--base <file>` reads it: `{ <handle>: { key, provisional } }`. */
+export const keyBaseJson = (base) => JSON.stringify(Object.fromEntries([...base].map(([h, r]) => [h, { key: r.key, provisional: r.provisional }])));
 
 /**
  * The earliest sealed `registry:` date per handle, from the ledger's entries

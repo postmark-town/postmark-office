@@ -59,12 +59,13 @@
 //
 // ── THE COMPARISON: GIT MINT AND STORE MINT ─────────────────────────────────
 //
-// On the w42 train the store holds no mint of its own yet: every stamp line is
-// decided by the town's git engine and the store carries projections of it.
-// So "the store agrees" is, today, the projections against the git fold. When
-// the store mint lands (POS-341) it plugs in as one more COMPARATOR below (a
-// function that reads the store and the clone after a step and returns the
-// differences, each named); the script and the checks do not change.
+// The crossing's mint is the store's (POS-341: world2/tools/stamp-mint-run.mjs
+// decides from the store's inputs and records its lines in stamp_lines), and
+// the projections are checked against the git fold. The comparison is one more
+// COMPARATOR below (`compareMints`, a function that reads the store and the
+// clone after a step and returns the differences, each named): every pass of
+// the store's runner is run again by the town's own `--append` on the same
+// head, and the two must agree line for line. The script does not change.
 //
 // Node 22+. Runs anywhere the office suite runs (the embedded-postgres
 // devDependency). Prints no secrets; holds none.
@@ -282,11 +283,49 @@ async function comparePotEscrow(sb, { entries }) {
   return out;
 }
 
+/**
+ * THE GIT MINT AGAINST THE STORE MINT (POS-366, the comparison; POS-341 Q4).
+ * Every pass of the store's runner this step (ctx.mintPass records the head it
+ * started on and the head it left) is run again by the town's OWN `--append`
+ * in a twin checkout at the starting head: the same mail, the same rooms, the
+ * same ledger, and the store's pins as the registry seeded them. The two
+ * ledgers must agree line for line, signature included (a seal is the text's
+ * and the key is one key, so equal lines sign equal); the first line that
+ * differs is named. A pass that appended nothing is held to an --append that
+ * appends nothing. Exported for test/stamp-sandbox.test.mjs.
+ */
+export async function compareMints(sb) {
+  const out = [];
+  for (const { before, after } of sb.mintRuns?.splice(0) ?? []) {
+    const twin = join(sb.dir, `mint-twin-${before.slice(0, 9)}`);
+    git(sb.town, "worktree", "add", "-q", "--detach", twin, before);
+    try {
+      const r = spawnSync(process.execPath, [join(twin, "tools", "stamp-mint.mjs"), "--append", "--key", sb.keyPath, "--repo", twin],
+        { cwd: twin, env: childEnv(sb), encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+      if (r.status !== 0) { out.push(`the town's --append at ${before.slice(0, 9)} exited ${r.status}: ${`${r.stdout ?? ""}${r.stderr ?? ""}`.trim().split("\n").slice(-2).join(" | ")}`); continue; }
+      const held = sb.engine.parseStampLedger(git(sb.town, "show", `${before}:${LEDGER_REL}`)).length;
+      const town = sb.engine.parseStampLedger(readFileSync(join(twin, LEDGER_REL), "utf8"));
+      const store = sb.engine.parseStampLedger(git(sb.town, "show", `${after}:${LEDGER_REL}`));
+      const at = (sha) => sha.slice(0, 9);
+      for (let i = 0; i < Math.max(town.length, store.length); i++) {
+        if (town[i]?.raw === store[i]?.raw) continue;
+        out.push(`the mint at ${at(before)} → ${at(after)}: line ${i + 1} differs (the town's --append wrote ${town.length - held} line(s), the store's runner ${store.length - held})\n` +
+          `      town --append: ${town[i]?.raw ?? "(no line)"}\n      store runner : ${store[i]?.raw ?? "(no line)"}`);
+        break;
+      }
+    } finally {
+      git(sb.town, "worktree", "remove", "--force", twin);
+    }
+  }
+  return out;
+}
+
 export const COMPARATORS = [
   ["stamp_projection", compareStampProjection],
   ["escrow_projection", compareEscrow],
   ["town_stamps", compareTownStamps],
   ["town_pot_escrow", comparePotEscrow],
+  ["the git mint against the store mint", compareMints],
 ];
 
 // ── the sandbox ──────────────────────────────────────────────────────────────
@@ -601,7 +640,13 @@ async function makeContext(sb, { log }) {
     /** The town-index delta at the clone's HEAD (the ferry chain's ingest, POS-341 Q2). */
     ingest: () => ingestIndexDelta(sb),
     /** The mint pass from the store (world2/tools/stamp-mint-run.mjs), which commits its own lines. */
-    mintPass(message) { return ctx.officeTool("world2/tools/stamp-mint-run.mjs", ["--append", "--key", sb.keyPath, "--clone", sb.town, "--message", message]); },
+    mintPass(message) {
+      const before = git(sb.town, "rev-parse", "HEAD");
+      const run = ctx.officeTool("world2/tools/stamp-mint-run.mjs", ["--append", "--key", sb.keyPath, "--clone", sb.town, "--message", message]);
+      // the comparator runs the town's --append from `before` and holds it to `after` (compareMints)
+      (sb.mintRuns ??= []).push({ before, after: git(sb.town, "rev-parse", "HEAD") });
+      return run;
+    },
     /** stamp_lines brought up to the lines a shell committed (world2/tools/stamp-lines.mjs --sync). */
     syncLines() { return ctx.officeTool("world2/tools/stamp-lines.mjs", ["--sync", "--clone", sb.town]); },
 
