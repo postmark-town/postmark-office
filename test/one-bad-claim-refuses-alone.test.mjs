@@ -133,6 +133,8 @@ test("one claimant with no house refuses only its claim, and the other nine lock
   assert.equal(w.status, "closed");
   assert.equal(w.receipts.six_count.locked, 9);
   assert.equal(w.receipts.six_count.refused, 1);
+  assert.deepEqual(w.receipts.unfileable.map((u) => u.slug), [`${HOUSELESS}/a-lamp-9`],
+    "the window's own record names the claimant the roll does not carry (the 10-04 case)");
   assert.deepEqual(await read("SELECT status FROM windows WHERE id = $1", [WINDOW + 1]), [{ status: "open" }], "the successor opened");
 
   // THE SENTENCE THEY READ. The doorstep's `outcomes` and my-marks' `refused` are
@@ -173,7 +175,7 @@ test("a claim the store will not file refuses alone at the filing, and the rest 
 
   const [w] = await read("SELECT receipts FROM windows WHERE id = $1", [WINDOW]);
   assert.deepEqual(w.receipts.six_count, { locked: 9, refused: 3, held_review: 0, retracted_before_close: 0, pending_carried: 0 });
-  assert.deepEqual(w.receipts.unfileable.map((u) => u.slug).sort(), ["ada/under-gabos-lamp", "cleo/a-lamp-2"],
+  assert.deepEqual(w.receipts.unfileable.map((u) => u.slug).sort(), ["ada/under-gabos-lamp", "cleo/a-lamp-2", `${HOUSELESS}/a-lamp-9`].sort(),
     "the window's own record names the claims the store would not file");
 });
 

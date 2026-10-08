@@ -274,10 +274,16 @@ try {
   //
   //     AFTER STEP 5, deliberately: a claim already refused or held is not asked,
   //     so this changes no outcome the gates above already decided.
+  //
+  //     A claim refused here is refused ALONE, so it goes on the window
+  //     receipt's `unfileable` list and the console line, like step 6's (the
+  //     10-04 case is the one that list exists for).
+  const unfiled = [];
+  const refuseAlone = (c, check) => { decide(c.id, "refused", check); unfiled.push({ slug: slugOf(c), check }); };
   for (const c of pending) {
     if (outcomes.has(c.id) || !slugOf(c)) continue;
     const { check } = await houseOrRefusal(q, c.claimant);
-    if (check) decide(c.id, "refused", check);
+    if (check) refuseAlone(c, check);
   }
 
   // 5.5 · A COMMONS MARK NEEDS SOMEBODY'S STAMPS BEHIND IT (postmark#2594's
@@ -532,8 +538,6 @@ try {
   //     A MOVER WITH A CARRY PLAN IS NOT FILED HERE: it is filed at 6.1 with its
   //     riders, as one unit (Darko, 2026-10-08).
   const materialize = pending.filter((c) => (outcomes.get(c.id)?.status ?? "locked") === "locked");
-  const unfiled = [];
-  const refuseAlone = (c, check) => { decide(c.id, "refused", check); unfiled.push({ slug: slugOf(c), check }); };
   await materializeClaims(q, {
     claims: materialize.filter((c) => !carries.has(String(c.id))), amends, revives, windowId, label: `window ${windowId}`,
     refuseEach: refuseAlone,
