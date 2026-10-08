@@ -143,6 +143,11 @@ const CAUSE_OF_CHECK = Object.freeze({
   // `canon-absent` on the nightly read — land on different words on purpose,
   // because they ask a resident for different things.
   "escrow-absent": "unbacked",
+  // A claim the store would not file (the roll does not name its claimant, or
+  // Postgres refused its one row), refused alone so the rest of the window
+  // locks (POS-356). RULED 2026-10-08 by Darko: `quarantined`, set aside by the
+  // town's own gate until a person fixes what it names.
+  "unfileable": "quarantined",
   // ── the REVIEW lane's writer (world2/tools/review-rule.mjs) ───────────────
   //
   // ⚑ `contested`, NOT `held` (repaired 2026-09-07, reviewer-found — and it is

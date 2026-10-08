@@ -20,6 +20,7 @@ import { identityOf } from "../src/queries.mjs";
 import { fixtureDb } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
+import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 
 // The town index this file's offices read: a store seeded from each fixture
 // office.db (POS-268, office-under-test.mjs). Stopped when the file is done.
@@ -184,10 +185,10 @@ before(async () => {
   const dbPath = join(tmp, "fixture.db");
   fixtureDb(dbPath).close();
   const IX_ENV = await storeFor(dbPath);
-  ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--db", dbPath], {
+  ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--db", dbPath, "--oauth-db", seedStaticKeys(join(tmp, "oauth.db"), "shellkey=keemin:wright")], {
     // a static key (no ghId → never principal) + no clone. The principal is a
     // role row now (POS-352), and this office's registry holds none.
-    env: { ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV, OFFICE_KEYS: "shellkey=keemin:wright", TOWN_CLONE: join(tmp, "no-clone"), TOWN_PUSH: "" },
+    env: { ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV, TOWN_CLONE: join(tmp, "no-clone"), TOWN_PUSH: "" },
     stdio: ["ignore", "pipe", "pipe"],
   })));
   BASE = `http://127.0.0.1:${PORT}`;

@@ -23,6 +23,7 @@ import { fixtureDb } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
 import { openRolesDb, grantRole, revokeRole } from "../src/roles.mjs";
+import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 
 // The town index this file's offices read: a store seeded from each fixture
 // office.db (POS-268, office-under-test.mjs). Stopped when the file is done.
@@ -52,12 +53,12 @@ async function office({ gates }) {
     "--port", String(port),
     "--db", dbPath,
     "--roles-db", rolesPath,
+    // #<gh_id> pins the static key to an immutable account id — required to
+    // hold a role, ignored by everything else.
+    "--oauth-db", seedStaticKeys(join(tmp, "oauth.db"), `${KEY}=${HOUSEHOLD}#${GH_ID}:wright`),
   ], {
     env: {
       ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV,
-      // #<gh_id> pins the static key to an immutable account id — required to
-      // hold a role, ignored by everything else.
-      OFFICE_KEYS: `${KEY}=${HOUSEHOLD}#${GH_ID}:wright`,
       ...(gates ? { OFFICE_ROLE_GATES: "1" } : {}),
       TOWN_CLONE: join(tmp, "no-clone-here"),
       WORLD_CLONE: join(tmp, "no-world-clone"),
@@ -189,11 +190,11 @@ test('AMBIGUITY #4, RULED: "a household that exists only as an env string cannot
   const child = spawn(process.execPath, [
     join(ROOT, "src", "server.mjs"),
     "--port", "43875", "--db", dbPath, "--roles-db", rolesPath,
+    // NO #<gh_id> — a static key with no verified identity behind it.
+    "--oauth-db", seedStaticKeys(join(tmp, "oauth.db"), `${KEY}=${HOUSEHOLD}:wright`),
   ], {
     env: {
       ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV,
-      // NO #<gh_id> — a static key with no verified identity behind it.
-      OFFICE_KEYS: `${KEY}=${HOUSEHOLD}:wright`,
       OFFICE_ROLE_GATES: "1",
       TOWN_CLONE: join(tmp, "no-clone-here"),
       WORLD_CLONE: join(tmp, "no-world-clone"),
@@ -231,12 +232,12 @@ test("FLAG ON but registry missing — the door says so, and does not pretend it
     join(ROOT, "src", "server.mjs"),
     "--port", "43873", "--db", dbPath,
     "--roles-db", join(tmp, "nope", "roles.db"),
+    // Pinned, so the caller HAS a subject — otherwise the no-subject 401
+    // would fire first and this test would never reach the 503 it exists for.
+    "--oauth-db", seedStaticKeys(join(tmp, "oauth.db"), `${KEY}=${HOUSEHOLD}#${GH_ID}:wright`),
   ], {
     env: {
       ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV,
-      // Pinned, so the caller HAS a subject — otherwise the no-subject 401
-      // would fire first and this test would never reach the 503 it exists for.
-      OFFICE_KEYS: `${KEY}=${HOUSEHOLD}#${GH_ID}:wright`,
       OFFICE_ROLE_GATES: "1",
       TOWN_CLONE: join(tmp, "no-clone-here"),
       WORLD_CLONE: join(tmp, "no-world-clone"),

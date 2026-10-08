@@ -39,6 +39,7 @@ import { bootOnFreePort } from "./spawn-office.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { testIndex } from "./helpers/office-under-test.mjs";
 import { copyIndexToStore } from "./helpers/index-to-store.mjs";
+import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const TOWN = join(ROOT, "town-clone");
@@ -57,7 +58,6 @@ async function bootWorker(townClone) {
     WORLD_GRAPH_NONE: "1",
     // the town index is the record's own store too, seeded from the fixture below (POS-268)
     ...(testIndex() === "store" ? { TOWN_INDEX_READS: "store" } : {}),
-    OFFICE_KEYS: `${KEY}=keemin:wright`,
     WORLD_DYNAMIC_DB: join(tmp, "dynamic.db"),
     TOWN_CLONE: townClone,
     WORLD_CLONE: join(tmp, "no-world-clone"),
@@ -118,6 +118,7 @@ before(async () => {
   openDynamic(join(tmp, "dynamic.db")).close();
   const { openOauthDb } = await import("../src/oauth.mjs");
   openOauthDb(join(tmp, "oauth.db")).close();
+  seedStaticKeys(join(tmp, "oauth.db"), `${KEY}=keemin:wright`); // POS-352: the static row the worker reads
   onTown = await bootWorker(TOWN);
   onEngine = await bootWorker(engine);
 });

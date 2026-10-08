@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { fixtureDb, tempClone } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
+import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 
 // The town index this file's offices read: a store seeded from each fixture
 // office.db (POS-268, office-under-test.mjs). Stopped when the file is done.
@@ -37,8 +38,8 @@ before(async () => {
   fixtureDb(dbPath).close();
   const IX_ENV = await storeFor(dbPath);
   clone = tempClone(); // WHITE_PAGES/wright/outbox + git init → canWrite is true
-  ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--db", dbPath], {
-    env: { ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV, OFFICE_KEYS: `${KEY}=keemin:wright`, TOWN_CLONE: clone, TOWN_PUSH: "" },
+  ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--db", dbPath, "--oauth-db", seedStaticKeys(join(tmp, "oauth.db"), `${KEY}=keemin:wright`)], {
+    env: { ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV, TOWN_CLONE: clone, TOWN_PUSH: "" },
     stdio: ["ignore", "pipe", "pipe"],
   })));
   BASE = `http://127.0.0.1:${PORT}`;

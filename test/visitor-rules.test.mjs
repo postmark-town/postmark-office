@@ -28,6 +28,7 @@ import { fixtureDb } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { VISITOR_RULES, visitorRulesGate, useRulesRecorder, RULES_FIRST } from "../src/visitor-rules.mjs";
 import { WORLD_TOOLS } from "../src/world.mjs";
+import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const KEY = "residentkey";
@@ -42,8 +43,8 @@ const VOICES = join(dir, "voices.jsonl");
 let child = null;
 async function startOffice() {
   child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0", "--db", dbPath,
-    "--oauth-db", OAUTH, "--roles-db", join(dir, "roles.db")], {
-    env: { ...process.env, ...IX.env, WORLD_GRAPH_NONE: "1", OFFICE_KEYS: `${KEY}=keemin:wright`, TOWN_CLONE: join(dir, "no-clone"), WORLD_CLONE: join(dir, "no-world-clone"), VOICES_LOG: VOICES, TOWN_PUSH: "" },
+    "--oauth-db", seedStaticKeys(OAUTH, `${KEY}=keemin:wright`), "--roles-db", join(dir, "roles.db")], {
+    env: { ...process.env, ...IX.env, WORLD_GRAPH_NONE: "1", TOWN_CLONE: join(dir, "no-clone"), WORLD_CLONE: join(dir, "no-world-clone"), VOICES_LOG: VOICES, TOWN_PUSH: "" },
     stdio: ["ignore", "pipe", "pipe"],
   });
   const port = await new Promise((ok, no) => {

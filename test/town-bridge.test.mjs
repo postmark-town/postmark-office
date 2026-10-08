@@ -39,6 +39,7 @@ import { declareStanceViaOffice } from "../src/world-stance.mjs";
 import { worldFreezeBounce } from "../src/freeze.mjs";
 import { TOOLS } from "../src/mcp.mjs";
 import { withRecordFrom } from "./registry-pool-stub.mjs";
+import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 
 // The town index this file's offices read: a store seeded from each fixture
 // office.db (POS-268, office-under-test.mjs). Stopped when the file is done.
@@ -724,9 +725,9 @@ test("F11 · PARITY: the same fixture, both skins, deep-equal", async () => {
     let PORT;
     let BASE;
     const KEY = "paritykey";
-    ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--db", dbPath, "--oauth-db", odbPath], {
+    ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--db", dbPath, "--oauth-db", seedStaticKeys(odbPath, `${KEY}=keemin:wright`)], {
       env: {
-        ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV, TOWN_SINGLE_LOG: "1", OFFICE_KEYS: `${KEY}=keemin:wright`,
+        ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV, TOWN_SINGLE_LOG: "1",
         TOWN_CLONE: clone, WORLD_CLONE: join(tmp, "no-world"), VOICES_LOG: join(tmp, "voices.jsonl"), TOWN_PUSH: "",
       },
       stdio: ["ignore", "pipe", "pipe"],
