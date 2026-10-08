@@ -31,6 +31,7 @@ import { appendJournal, CLASS_MARK } from "../src/world-journal.mjs";
 import { enqueueLetter, outboxRelPath, validateLetter } from "../src/write.mjs";
 import { DYNAMIC_SCHEMA } from "../src/dynamic-store.mjs";
 import { townClone } from "./fixture-paths.mjs";
+import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 
 // The town index this file's offices read: a store seeded from each fixture
 // office.db (POS-268, office-under-test.mjs). Stopped when the file is done.
@@ -152,11 +153,11 @@ async function office(clone, env, run) {
   // asked for); it was 43900 + a random 0..59, sixty doors every pool tree on
   // the box shares.
   const { child, port } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"),
-    "--port", String(port), "--db", dbPath, "--oauth-db", join(tmp, "oauth.db")], {
+    // two households at the door: wright's, and the recipient's own — the
+    // mail law's second half cannot be read without a key that holds limen
+    "--port", String(port), "--db", dbPath, "--oauth-db", seedStaticKeys(join(tmp, "oauth.db"), `${KEY}=keemin:wright;${LIMEN_KEY}=limen-house:limen`)], {
     env: {
-      // two households at the door: wright's, and the recipient's own — the
-      // mail law's second half cannot be read without a key that holds limen
-      ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV, OFFICE_KEYS: `${KEY}=keemin:wright;${LIMEN_KEY}=limen-house:limen`, TOWN_CLONE: clone,
+      ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV, TOWN_CLONE: clone,
       WORLD_CLONE: join(tmp, "no-world-clone"), VOICES_LOG: join(tmp, "voices.jsonl"),
       TOWN_PUSH: "", OAUTH_DB: join(tmp, "oauth.db"), ...env,
     },

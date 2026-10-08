@@ -40,6 +40,7 @@ import { householdApex } from "../src/household-apex.mjs";
 import { townApex } from "../src/town-apex.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { plantStanding, resetStanding } from "./helpers/standing-rows.mjs";
+import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 
 // THE LEDGER IS A STORE TABLE (POS-347, 060_standing_acts.sql). The in-process
 // tests below read standing through the office's one pool, so this process is
@@ -330,9 +331,9 @@ test("S7 · REST AND MCP: writes bounce, reads pass, lift reopens, revoke shuts 
     let PORT;
     let BASE;
     const KEY = "standingkey";
-    ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--db", dbPath, "--oauth-db", odbPath], {
+    ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--db", dbPath, "--oauth-db", seedStaticKeys(odbPath, `${KEY}=keemin:wright`)], {
       env: {
-        ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV, OFFICE_KEYS: `${KEY}=keemin:wright`,
+        ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV,
         TOWN_CLONE: clone, WORLD_CLONE: join(work, "no-world"), VOICES_LOG: join(work, "voices.jsonl"), TOWN_PUSH: "",
       },
       stdio: ["ignore", "pipe", "pipe"],

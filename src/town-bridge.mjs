@@ -382,7 +382,7 @@ export async function runTownDrain(odb, {
   // requestResidency, the same). Every credential shape either carries `ghId`
   // or is refused there: OAuth tokens and household keys always carry it, an
   // un-cosigned berth key carries none and is bounced, a cosigned berth upgrades
-  // in place to its human's id, and a static OFFICE_KEYS entry has no GitHub
+  // in place to its human's id, and a static key with no gh_id has no GitHub
   // identity at all. Nor does the berth arc open a window: `household do:
   // "begin"` PARKS the declaration on the berth row and writes no journal row
   // ("nothing is executed until the click"), and the co-sign runs the parked

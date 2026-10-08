@@ -24,6 +24,7 @@ import { tmpdir } from "node:os";
 import { fixtureDb } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
+import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 
 // The town index this file's offices read: a store seeded from each fixture
 // office.db (POS-268, office-under-test.mjs). Stopped when the file is done.
@@ -60,8 +61,8 @@ before(async () => {
   writeFileSync(join(clone, "tools", "github-ids.json"), "{}");
 
   ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port),
-    "--db", dbPath, "--oauth-db", join(tmp, "oauth.db")], {
-    env: { ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV, OFFICE_KEYS: "statickey=keemin:wright", TOWN_CLONE: clone, TOWN_PUSH: "", PUBLIC_BASE: `http://127.0.0.1:${port}` },
+    "--db", dbPath, "--oauth-db", seedStaticKeys(join(tmp, "oauth.db"), "statickey=keemin:wright")], {
+    env: { ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV, TOWN_CLONE: clone, TOWN_PUSH: "", PUBLIC_BASE: `http://127.0.0.1:${port}` },
     stdio: ["ignore", "pipe", "pipe"],
   })));
   // The wait is spawn-office.mjs § awaitListening, inside bootOnFreePort: it

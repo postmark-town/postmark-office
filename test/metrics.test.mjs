@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { fixtureDb } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
+import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 
 // The town index this file's offices read: a store seeded from each fixture
 // office.db (POS-268, office-under-test.mjs). Stopped when the file is done.
@@ -34,10 +35,9 @@ before(async () => {
   const dbPath = join(tmp, "fixture.db");
   fixtureDb(dbPath).close();
   const IX_ENV = await storeFor(dbPath);
-  ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--db", dbPath], {
+  ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--db", dbPath, "--oauth-db", seedStaticKeys(join(tmp, "oauth.db"), `${KEY}=keemin:wright`)], {
     env: {
       ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV,
-      OFFICE_KEYS: `${KEY}=keemin:wright`,
       OFFICE_BOUNCER_KEYLESS_PER_MINUTE: "3",
       OFFICE_BOUNCER_KEYLESS_BURST: "3",
       TOWN_CLONE: join(tmp, "no-clone-here"),
