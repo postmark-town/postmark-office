@@ -164,7 +164,7 @@ try {
     }
     // THE SETTLEMENT'S WORLD (POS-362, 069): the same sources folded with the
     // words standing at the seal (the stance acts up to stance_through, on the
-    // versions at the seal's window). That is what the office keeps under the
+    // versions decided by the seal's instant). That is what the office keeps under the
     // digest. With no stance_through, or no absolute veto among the words, it IS
     // the derived fold above.
     const { wordsAtSeal, foldWithWords } = await import("../../src/world-settlement.mjs");

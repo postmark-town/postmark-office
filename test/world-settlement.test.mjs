@@ -384,7 +384,7 @@ test("a word counts on the version that stood at the seal: an amendment cleared 
   const V1 = "51000000-0000-4000-8000-000000000501", V2 = "52000000-0000-4000-8000-000000000502";
   await seed({
     // The shed's version at the seal locked in window 501. Its amendment was submitted BEFORE the seal
-    // (pending then) and locked in 502, after it: only the window says it was not yet current.
+    // (pending then) and DECIDED after it: only the decision's instant says it was not yet current.
     before: async (c) => {
       await c.query("INSERT INTO windows (id, opens_at, closes_at, status, cleared_at) VALUES (502, '2026-10-02T06:00Z', '2026-10-02T18:00Z', 'closed', '2026-10-04T18:00Z')");
       await c.query(
@@ -398,6 +398,40 @@ test("a word counts on the version that stood at the seal: an amendment cleared 
   assert.ok(!ids(await serve({ settlement: "S11" })).includes("bo/shed"), "at the seal the word stood on the shed's version");
   resetSettlementCaches();
   assert.ok(ids(await serve()).includes("bo/shed"), "now the shed's version is the amendment: the word is on an older one, so it is absent");
+});
+
+test("a held_review claim granted AFTER the seal keeps its window, and still cannot reach back into the settlement (Wright's review of #432)", { skip }, async () => {
+  // review-rule.mjs locks a held_review claim in a LATER clearing and keeps the
+  // window it was submitted in. Held at 501 (S11's own window), granted after
+  // S11's seal: by window it would read as S11's current version, and the word
+  // ann spoke on the version that stood would drop out of a sealed settlement.
+  const V1 = "61000000-0000-4000-8000-000000000501", V2 = "62000000-0000-4000-8000-000000000501";
+  await seed({
+    before: async (c) => {
+      await c.query(
+        `INSERT INTO claims (id, window_id, class, claimant, household, status, body, geometry, stake, data, slug, submitted_at, decided_at) VALUES
+           ($1, 501, 'sited', 'bo', 'bo', 'locked', 'x', '{}'::jsonb, 0, '{}'::jsonb, 'bo/shed', '2026-10-02T00:00:00Z', '2026-10-02T06:00:00Z'),
+           ($2, 501, 'sited', 'bo', 'bo', 'locked', 'y', '{}'::jsonb, 0, '{}'::jsonb, 'bo/shed', '2026-10-02T10:00:00Z', '2026-10-04T18:00:00Z')`, [V1, V2]);
+    },
+    sealWords: [{ actor: "ann", on: "bo/shed", stance: "opposed", at: "2026-10-02T12:00:00Z", version: V1 }],
+  });
+  const asked = await serve({ settlement: "S11" });
+  assert.ok(!ids(asked).includes("bo/shed"), "S11 is unchanged by a grant decided after its seal: ann's word stands on the version it was spoken on");
+  assert.deepEqual(asked.meta.opposed.holders, [{ by: "ann", on: "bo/shed" }]);
+  resetSettlementCaches();
+  assert.ok(ids(await serve()).includes("bo/shed"), "the newest World reads the grant: the word is on an older version now");
+});
+
+test("--verify derives a settlement carrying stance_through: the seal's words, and the kept World VALUE-EQUAL to it", { skip }, async () => {
+  const { spawnSync } = await import("node:child_process");
+  const { s11 } = await seed({ sealWords: [{ actor: "ann", on: "bo/shed", stance: "opposed" }] });
+  await serve({ settlement: "S11" });                     // the office keeps S11's World under its digest
+  const r = spawnSync(process.execPath, [join(WORLD, "..", "world2", "tools", "world-snapshot.mjs"), "--verify", "--window", "501", "--world-repo", WORLD],
+    { encoding: "utf8", env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, WORLD2_PG_URL: store.url("office_api") } });
+  const out = `${r.stdout}\n${r.stderr}`;
+  assert.match(out, /digests: .* hash to what they say/, out);
+  assert.match(out, /words: the stance acts up to \d+ — the town opposes 0 mark\(s\), holders 1 word\(s\)/, out);
+  assert.match(out, new RegExp(`the settlement \\(with its seal's words\\) vs the cached fold of ${s11.slice(0, 12)}: VALUE-EQUAL`), out);
 });
 
 test("the town's word at the seal reaches the engine as `townWords`, and the asked settlement serves it", { skip }, async () => {

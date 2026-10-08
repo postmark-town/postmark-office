@@ -1522,5 +1522,5 @@ records the measurement.
 Order at the ship, and it matters:
 
 1. **Apply 069 before the code.** The new seal writes `world_snapshots.stance_through`. Against a store without the column, every clearing rolls back.
-2. **Restart the office before the first clearing that runs the new code.** An office still running the old code would keep a fold without the town's words under the new digest, and `ON CONFLICT DO NOTHING` would make that permanent: `world-snapshot.mjs --verify` would then report a difference for that settlement forever.
+2. **Restart the office before the first clearing that runs the new code.** An office still running the old code would keep a fold without the town's words under the new digest, and `ON CONFLICT DO NOTHING` would make that permanent: `world-snapshot.mjs --verify` would then report a difference for that settlement forever. If a clearing did run first, delete that digest's `world_snapshot_folds` row (office_api holds DELETE on it); the next read rebuilds it with its words, and `--verify --world-repo` reads VALUE-EQUAL again.
 3. Snapshots sealed before 069 carry `stance_through` NULL and fold with no words, which equals their published tag. Words spoken before those seals are not in them, by design: a backfill would change their digests.

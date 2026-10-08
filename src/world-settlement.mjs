@@ -260,7 +260,7 @@ const atMs = (t) => (t instanceof Date ? t.getTime() : Date.parse(String(t ?? ""
  * so the one fold (§ foldWithWords) takes either. The acts are the store's
  * stance acts up to the header's `stance_through` (and the drained 1.0
  * photographs written by the seal's instant); each word counts only on the
- * version that stood at the seal's window (town-stance.mjs §
+ * version that stood at the seal's instant (town-stance.mjs §
  * readVersionsAtSeal), so an amendment cleared after the seal cannot reach back
  * into it. No stance_through: no word was read at this seal, and the settlement
  * has none. Throws when the record cannot be read: a settlement is never built
@@ -275,7 +275,7 @@ export async function wordsAtSeal(p, header, { worldRepo } = {}) {
   const rows = (await stanceRows({ acts, worldClone: worldRepo }))
     .filter((r) => r.register || !(atMs(r.written_at) > sealedAt));
   const read = await readVersionsAtSeal(rows.map((r) => r.object), {
-    query: async (sql, args) => ({ rows: (await p.query(sql, args)).rows }), window: header.window_id, at: header.taken_at,
+    query: async (sql, args) => ({ rows: (await p.query(sql, args)).rows }), at: header.taken_at,
   });
   if (read.unreachable) throw new Error(`the versions at snapshot ${header.id}'s seal could not be read: ${read.unreachable}`);
   return { ...(await vetoesFrom(rows, read.versions)), through: String(header.stance_through), versions: read.versions };
@@ -622,7 +622,7 @@ async function labelsFor(p, header, world, words, { worldRepo, servedKey, seal =
     // An asked settlement is labelled as it stood at its seal: its seal's words, on its seal's versions.
     const ask = async (sql, args) => ({ rows: await query(sql, args) });
     const read = seal
-      ? await readVersionsAtSeal(ids, { query: ask, window: header.window_id, at: header.taken_at })
+      ? await readVersionsAtSeal(ids, { query: ask, at: header.taken_at })
       : await readVersions(ids, { query: ask });
     if (read.unreachable) return { unread: read.unreachable };
     const hh = world.households ?? {};
