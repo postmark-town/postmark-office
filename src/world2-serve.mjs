@@ -438,12 +438,22 @@ export const DOCKET_SELECT =
  * no town head ingested, or the projection cannot answer at that sha (migration
  * 014 unapplied, or this sha not ingested) — and each carries its own sentence,
  * because a reader told "unavailable" with no reason cannot tell which.
+ *
+ * `ingestedAt` rides with the sha (POS-412, mari, 2026-10-05): the time that
+ * head was written, read off the same row in the same statement. A stake made
+ * after it is on the ledger and not yet here, and a reader shown only a sha
+ * cannot tell how far behind that is. Mari staked at 17:17Z, read 2 here at
+ * 17:18Z from a head ingested at 06:00Z, and took the receipt for a false one.
+ * The head only moves at the clearing (stamp-ingest is its first step), so the
+ * gap can be twelve hours.
  */
 export async function docketEscrow(p) {
   let townSha = null;
+  let ingestedAt = null;
   try {
-    const { rows: [head] } = await p.query("SELECT sha FROM projection_heads WHERE repo = 'town'");
+    const { rows: [head] } = await p.query("SELECT sha, ingested_at FROM projection_heads WHERE repo = 'town'");
     townSha = head?.sha ?? null;
+    ingestedAt = head?.ingested_at ? new Date(head.ingested_at).toISOString() : null;
   } catch (e) {
     return { townSha: null, byMark: null,
       reason: `the town's projection head could not be read (${String(e?.message ?? e).slice(0, 120)}), so what stands behind these marks is unknown — not zero` };
@@ -452,11 +462,11 @@ export async function docketEscrow(p) {
     reason: "no town sha is ingested, so the store cannot say what stands behind these marks — unknown, not zero" };
   try {
     const byMark = await escrowPresenceAt((sql, params) => p.query(sql, params), { townSha });
-    if (byMark == null) return { townSha, byMark: null,
+    if (byMark == null) return { townSha, ingestedAt, byMark: null,
       reason: `escrow_projection cannot answer at town ${townSha.slice(0, 8)} (migration 014 not applied, or this sha not ingested) — what stands behind these marks is unknown, not zero` };
-    return { townSha, byMark, reason: null };
+    return { townSha, ingestedAt, byMark, reason: null };
   } catch (e) {
-    return { townSha, byMark: null,
+    return { townSha, ingestedAt, byMark: null,
       reason: `the escrow projection could not be read at town ${townSha.slice(0, 8)} (${String(e?.message ?? e).slice(0, 120)}) — unknown, not zero` };
   }
 }
@@ -1147,17 +1157,20 @@ export async function world2Serve(path, searchParams, { p: injected = null } = {
     // THE MARKS READ IS FOR THE ANCHORS, not for the marks. A live say stores
     // the witnessed line (anchor + offset), so composing it back to a point
     // needs the anchor mark's centre — world.mjs's own
-    // `(id) => marks.find((m) => m.id === id)?.at`.
+    // `(id) => marks.find((m) => m.id === id)?.at`. Every mark the store holds,
+    // retired ones too: a say happened where its anchor stood at the time. A say
+    // whose anchor is in no row at all is left out and disclosed by count; it
+    // never fails the read (#351: 187 of them 500'd every caller on prod).
     const at = clockOf(searchParams);
     if (at.error) return at.error;
     const n = (k, d) => { const v = Number(searchParams?.get(k)); return Number.isFinite(v) && v > 0 ? v : d; };
     const [{ rows }, { rows: markRows }] = await Promise.all([
       p.query(`SELECT id, at, actor, action, at_anchor, at_dx, at_dy, payload FROM acts
                 WHERE action = ANY($1) ${talk.VOICE_ORDER_SQL}`, [talk.VOICE_ACTIONS]),
-      p.query("SELECT slug, geometry, data FROM marks WHERE status = 'standing'"),
+      p.query(talk.ANCHOR_MARKS_SQL),
     ]);
-    const centres = new Map(markRows.map((m) => [m.slug, m.geometry?.at ?? null]));
-    const dials = talk.sayDials(markRows);
+    const centres = talk.anchorCentres(markRows);
+    const dials = talk.sayDials(markRows.filter((m) => m.status === "standing"));
     let derived;
     try { derived = talk.voiceRecords(rows, { centreOf: (id) => centres.get(id) ?? null }); }
     catch (e) { return { code: 500, body: { error: "bounce", defect: "a voice act matches no known era", hint: String(e.message).slice(0, 400) } }; }
@@ -1169,13 +1182,17 @@ export async function world2Serve(path, searchParams, { p: injected = null } = {
       closedMax: n("closed", 40), voiceCap: n("voices", 80),
     });
     const fellBack = talk.sayDialsDisclosure(dials);
+    const unplacedLine = talk.unplacedDisclosure(derived.unplaced);
     return { code: 200, body: {
       what: "every conversation in the world, live ones first — a thread is a derivation over the record, not an object",
       evaluated_at: new Date(at.ms).toISOString(),
       voices: derived.voices.length, eras: derived.eras,
       dials: Object.fromEntries(Object.entries(dials).map(([k, d]) => [k, { value: d.value, source: d.source }])),
       ...body,
-      disclosed: [talk.DISCLOSURES.eras, talk.DISCLOSURES.presence, talk.DISCLOSURES.no_window, ...(fellBack ? [fellBack] : [])],
+      ...(unplacedLine ? { unplaced_says: { count: derived.unplaced.length,
+        example: { act_id: derived.unplaced[0].act_id, anchor: derived.unplaced[0].anchor } } } : {}),
+      disclosed: [talk.DISCLOSURES.eras, talk.DISCLOSURES.presence, talk.DISCLOSURES.no_window,
+        ...(fellBack ? [fellBack] : []), ...(unplacedLine ? [unplacedLine] : [])],
     } };
   }
 

@@ -145,6 +145,18 @@ export const hourWindow = (instantMs) => {
   return { hour: String(h), resetAtMs: (h + 1) * 3_600_000 };
 };
 
+// THE CALLER'S ADDRESS, the one every per-address bucket keys on. nginx fronts
+// the office with proxy_add_x_forwarded_for, which APPENDS the real client to
+// whatever the caller sent — so the LAST hop is the trustworthy one (the first
+// is caller-controlled and spoofable past the limit). Behind nginx the socket
+// address is nginx's own, never the caller's. Exported so every desk that
+// keys a limit on the caller (the bouncer here, the OAuth desk's
+// registrations) reads the caller one way.
+export const clientIp = (req) => {
+  const xff = req.headers["x-forwarded-for"];
+  return (xff ? String(xff).split(",").at(-1).trim() : req.socket?.remoteAddress) || "unknown";
+};
+
 export const keyIdForToken = (token) =>
   `sha256:${createHash("sha256").update(token).digest("hex").slice(0, 16)}`;
 

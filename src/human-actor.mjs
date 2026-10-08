@@ -47,6 +47,8 @@
 // ONE-GRANT FENCE, and the routing decision that sends `as: "human"` to the
 // human's own handler instead of the resident's.
 
+import { agentHeld } from "./named-hand.mjs";
+
 const bounce = (code, defect, hint, extra = {}) => ({ error: "bounce", code, defect, hint, ...extra });
 
 // ── AMENDED 2026-08-26 · THE FENCE STOPPED BEING A LIST ─────────────────────
@@ -100,6 +102,15 @@ export function resolveHumanActor({ action, as: kind, beside, key, fence = "ambi
   if (asked !== "human") {
     return bounce(422, `"${asked}" is not an actor kind this door resolves`,
       "the kinds it resolves: resident (the default), berth, human — an action the law mints for a kind the door cannot resolve is law with no room behind it");
+  }
+
+  // THE HUMAN IS ACTED AS ONLY BY THE HUMAN'S CREDENTIAL (POS-389). A key in a
+  // resident's own hand carries the whole house, but it is the resident's; the
+  // own hand is the human's, so it does not act as them (world.mjs § humanStand).
+  if (agentHeld(key)) {
+    return bounce(403, "this key is an agent's own, not the household's human",
+      "act as your resident (the default); the human acts with their own sign-in or the household key they hold",
+      { law: "LOGOS/classes.md § The human class" });
   }
 
   // ── the fence, and WHO IS HOLDING IT ──────────────────────────────────────

@@ -49,16 +49,18 @@ import {
 } from "./standing.mjs";
 import { standingForHandles, insertStandingActs } from "./standing-store.mjs";
 import { loadRegistryRows } from "./registry-store.mjs";
+import { holdsHand } from "./named-hand.mjs";
 
 export const STANDING_CALLERS = Object.freeze(["registrar", "wright"]);
 
+// The caller is the hand this credential is FOR, not a housemate it lists
+// (POS-389, named-hand.mjs): a resident's own key is its own handle only.
 export function callerMayStand(key) {
-  const held = key?.handles ?? new Set();
-  return STANDING_CALLERS.some((h) => held.has(h));
+  return STANDING_CALLERS.some((h) => holdsHand(key, h));
 }
 
 /** The caller's own hand, in list order: the Registrar when the key holds her. */
-export const callerHand = (key) => STANDING_CALLERS.find((h) => (key?.handles ?? new Set()).has(h)) ?? null;
+export const callerHand = (key) => STANDING_CALLERS.find((h) => holdsHand(key, h)) ?? null;
 
 export const STANDING_REFUSALS = Object.freeze({
   ACT: { code: 422, defect: "`act` must be quarantine, lift or revoke", hint: "household { do: \"standing\", args: { act, handle, reason } }" },

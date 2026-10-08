@@ -484,23 +484,12 @@ export function residentOf(d, pages, handle, ctx) {
         ? "no pane hangs for this resident yet"
         : "the office could not read this resident's window shelf — this is a declining to say, never a 'nothing hangs'",
   };
-  // household leads on who-you-are surfaces (ruling 2026-08-07) — resolved from
-  // the town's own vocabulary via households.mjs, present only when the registry
-  // view exists. The one deliberate clone-coupling in this db-shaped module;
-  // every door (REST + MCP) inherits it here.
-  //
-  // ⚠ AND IT IS STILL AMBIENT, deliberately left so (2026-08-25). Unlike the
-  // profile bubble below, `householdOf` cannot simply be handed `ctx.clone`:
-  // households.mjs resolves `process.env.TOWN_CLONE` at MODULE LOAD in order to
-  // import the town's own stamp-mint engine from that checkout, and caches
-  // against that one clone's mtimes. Making it per-call means re-importing an
-  // engine per clone, which is a real design change and not a test-hygiene fix.
-  // It is named here rather than quietly tolerated because it is the one
-  // remaining reader on this row that answers to the environment — and because
-  // it is genuinely harmless today: `household` is not a composable field, so
-  // no freshness stamp can be manufactured by it. If it ever becomes one, this
-  // is the line that has to move first.
-  try { const hh = householdOf(handle); if (hh) out.household = hh; } catch { /* garnish only */ }
+  // household leads on who-you-are surfaces (ruling 2026-08-07). It is NOT
+  // composed here any more (POS-342): the block reads the store's registry,
+  // which is an async read, and this composer is synchronous and shared with
+  // the store's twin. Each door that serves this card adds it at its own async
+  // edge with `households.mjs § withHouseholdBlock` — the MCP card, the REST
+  // /residents/{handle} card and the household apex's address read.
   // ── THE PROFILE BUBBLE'S READ-TIME GARNISH IS GONE (2026-08-25) ───────────
   //
   // It was `if (out.profile == null) out.profile = profileOf(handle)` — a
@@ -1122,7 +1111,22 @@ export function mailAwaitingOf(law, asOfDay, handle, { limit = LEDGER_PAGE, offs
     .filter((c) => c.attention_state === "new_inbound" || c.attention_state === "they_spoke_again")
     .map((c) => ({ thread_of: c.conversation, last_from: c.latest_delivered_from, last_id: c.latest_delivered_id,
       last_date: c.latest_event?.date ?? null, state: c.attention_state }));
-  const threads = threadsAll.slice(0, n);
+  // ── THE THREADS WALK ON THE SAME OFFSET THEIR NOTE NAMES (lupi, 2026-10-06) ─
+  //
+  // WHAT A RESIDENT SAW: 24 threads where the other side spoke last, 20 shown,
+  // and a note saying "the whole ledger walks with offset:". Called again with
+  // offset: 20, the page came back with the SAME 20 threads and the same note,
+  // because this slice ignored the offset: only `conversations` moved. A reader
+  // who followed the note never reached the oldest four, and the oldest is the
+  // reply most likely to have been waiting longest. `limit` was the only way in.
+  //
+  // So the threads take the offset the conversations already take, and answer
+  // their own cursor in the office's one grammar (`threads_next_offset` beside
+  // `threads_more_note`). `threads_note` stays, for the readers that already
+  // read it, and now tells the truth about which slice it is.
+  const tStart = Math.min(Math.max(Number(offset) || 0, 0), threadsAll.length);
+  const threads = threadsAll.slice(tStart, tStart + n);
+  const tNext = tStart + threads.length;
   // The sender's own merged-but-unsailed replies. Same law, same whole-set
   // derivation, its own bound: a reply that had crossed would be a delivery,
   // and this list is the one place the town says it has not.
@@ -1205,10 +1209,16 @@ export function mailAwaitingOf(law, asOfDay, handle, { limit = LEDGER_PAGE, offs
     // resident with exactly twenty threads and a resident with three hundred
     // must not read the same (presentNear's `capped`, stanceShadow's
     // `complete`).
-    threads_complete: threads.length >= threadsAll.length,
+    threads_complete: tNext >= threadsAll.length,
+    // Only on a paged list: this view is a doorstep segment, and a whole list
+    // (the common morning) must not pay a byte for a cursor it does not use
+    // (foyer-shrink.test.mjs § F7c5).
+    ...(tStart > 0 || threadsAll.length > threads.length ? { threads_offset: tStart } : {}),
     ...(threadsAll.length > threads.length
-      ? { threads_note: `the ${threads.length} most recent of ${threadsAll.length} threads where the other side spoke last — the whole ledger walks with offset:, and list_mail reads the box itself` }
+      ? { threads_note: `threads ${threads.length ? tStart + 1 : tStart}–${tNext} of ${threadsAll.length} where the other side spoke last, most recent first — the whole ledger walks with offset:, and list_mail reads the box itself` }
       : {}),
+    ...(tNext < threadsAll.length ? { threads_next_offset: tNext,
+      threads_more_note: `${threadsAll.length - tNext} further thread${threadsAll.length - tNext === 1 ? "" : "s"} where the other side spoke last — call again with offset: ${tNext}` } : {}),
     threads,
     outgoing_total: outgoingAll.length,
     outgoing,
@@ -1520,6 +1530,7 @@ const AWAITING_SLIM_ROW = Object.freeze(["conversation", "attention_state", "lat
 function slimAwaiting(a) {
   const {
     threads: _t, threads_shown: _ts, threads_complete: _tc, threads_note: _tn,
+    threads_offset: _toff, threads_next_offset: _tno, threads_more_note: _tmn,
     conversations, conversations_total: _ct, conversations_shown: _cs,
     conversations_offset: _co, conversations_complete: _cc,
     conversations_next_offset: _cn, conversations_note: _cnote,
@@ -1635,7 +1646,7 @@ function slimStamps(s) {
 // rather than to compose at the doors.
 // `slim` is the CONNECTOR SKIN's bound and only mcp.mjs passes it — see the
 // bounds note above, and the three helpers directly overhead.
-export function doorstep(db, handle, asOf, opts = {}) {
+export async function doorstep(db, handle, asOf, opts = {}) {
   const { nowMs = Date.now(), conversationsOffset = 0, fresh = null, slim = false } = opts;
   const selfRow = db.prepare("SELECT json FROM residents WHERE handle = ?").get(handle);
   if (!selfRow) return null;
@@ -1647,7 +1658,7 @@ export function doorstep(db, handle, asOf, opts = {}) {
       .map((r) => { const d = JSON.parse(r.json); return { handle: r.handle, joined: d.address?.data?.joined ?? null, is_office: isOffice(d) }; }),
     awaiting: mailAwaiting(db, handle, { offset }),
     mail: mailList(db, handle, "inbox", { limit: mailLimit }),
-    stamps: stampsDetail(db, handle),
+    stamps: await stampsDetail(db, handle),
     bulletin: bulletinTeaser(db, { limit: DOORSTEP_BULLETIN }),
     pulse: metricsMail(db, { days: DOORSTEP_PULSE_DAYS }),
     window: windowRead(db, handle, fresh),
@@ -1825,7 +1836,8 @@ export async function nextStepsFor(db, meta, handle, clone, { own = false, world
     const real = injected ?? worldBlockForHandle;
     const worldBlock = (h) => (pending ??= real(h));
 
-    const registry = JSON.parse(meta.quest_registry ?? '{"quests":[]}');
+    // the registry from the index this door reads: the store's town_meta when switched, never office.db's meta (POS-268)
+    const registry = JSON.parse((ix ? await ix.questRegistry() : meta.quest_registry) ?? '{"quests":[]}');
     // ── THE FACTS COME OFF THE FOLD THE REHYDRATE ALREADY WROTE (POS-167) ──
     //
     // This line was `tools.onboardingFactsFor(clone, handle)` with no options,
@@ -2000,11 +2012,11 @@ export function stampsFor(db, handle) {
 // block that does the summing in the open, and grows NO fifth tense. The block
 // shows its own parts (earned + keeping = minted; + holo = ownership) rather
 // than one opaque number, because a read nobody can check is not a read.
-export function stampsDetail(db, handle) {
+export async function stampsDetail(db, handle) {
   const row = db.prepare("SELECT balance, mint_count, staked FROM stamps WHERE handle = ?").get(handle);
   let funding = null;
   try {
-    const parties = stampParties(handle);
+    const parties = await stampParties(handle);
     const ph = parties.map(() => "?").join(",");
     // THE JOIN, IN THE OPEN. `pot-receipt` is the only money row (the founder's
     // 2026-08-26 ruling), so the dollars behind a holo row are read off the
@@ -2023,10 +2035,11 @@ export function stampsDetail(db, handle) {
   return stampsDetailOf(row, funding);
 }
 
-/** Whose funding rows a handle's stamps read: the handle, and its household's slug when that differs. */
-export function stampParties(handle) {
+/** Whose funding rows a handle's stamps read: the handle, and its household's slug when that differs.
+ *  The slug is the store's registry's (POS-342); a store that cannot be asked leaves the handle alone. */
+export async function stampParties(handle) {
   const parties = [handle];
-  try { const hh = householdOf(handle); if (hh?.slug && hh.slug !== handle) parties.push(hh.slug); } catch { /* garnish only */ }
+  try { const hh = await householdOf(handle); if (hh?.slug && hh.slug !== handle) parties.push(hh.slug); } catch { /* garnish only */ }
   return parties;
 }
 
@@ -2283,8 +2296,8 @@ async function questTools(clone) {
  * paying. The row says whether they did it.
  *
  * PER HOUSEHOLD, because the quest is ("once per household, ever"): the tank
- * row carries `by`, and the household's residents come from the office's own
- * registry resolution. A handle the resolver does not know falls back to itself
+ * row carries `by`, and the household's residents come from the store's
+ * registry, passed in as `house`. A handle with no house falls back to itself
  * — one resident is a household of one, which is the same default householdOf's
  * callers already take.
  *
@@ -2328,13 +2341,15 @@ export function firstIdeaStanding(handle, { house = null } = {}) {
   try {
     const tank = ideasTank();
     if (tank.source !== "store") return null;
-    // `house` is a seam, not a parameter callers pass in anger — the office
-    // always resolves it here. It exists because a mutation pass caught the
+    // `house` is the household's residents, which the caller reads from the
+    // store's registry at its own async edge (POS-342: `questBoardWith` does)
+    // and hands down, because this function is synchronous. It began as a seam
+    // because a mutation pass caught the
     // household branch UNCOVERED: every falsifier ran where householdOf resolves
     // to null (a worktree with no town clone), so replacing the whole lookup
     // with `[handle]` left the suite green. A branch a mutation can delete
     // silently is a branch nothing was testing.
-    const residents = house ?? householdOf(handle)?.residents ?? [handle];
+    const residents = house ?? [handle];
     const ours = tank.ideas.filter((i) => residents.includes(i.by));
     // `ideasTank` orders by the mark's own date then id, so the first match is
     // the household's earliest — the quest is "once per household, ever", so
@@ -2717,7 +2732,9 @@ export async function questBoardWith(src, meta, handle, clone, { worldSited: dec
   } : null;
   // ONE world-store read for the first-idea row: `boardForHandle` wants the
   // boolean and the standing join wants the date beside it.
-  const idea = firstIdeaStanding(handle);
+  // The household's residents from the store's registry (POS-342), read here at
+  // the async edge and handed down: `firstIdeaStanding` is synchronous.
+  const idea = firstIdeaStanding(handle, { house: (await householdOf(handle))?.residents ?? null });
   // ── AND ONE WORLD READ FOR THE `walk-the-world` ROW (#2773) ───────────────
   //
   // `worldSitedFor` is the three-way the disclosure guard asks for — true,

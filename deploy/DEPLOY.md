@@ -12,8 +12,10 @@ repo ~every 30 min for the site extractor. The office rides that rhythm.
 
 ## The weekly train (Keemin-directed 2026-08-23)
 
+> **The whole of how code ships, in one place:** `postmark-blueprints/documentation/SHIPPING.md` (each repo's PR base and route to live, hotfixes and their hand tag, the train taking main the same day, keeping the trains clean). This file keeps the office's deploy mechanics; the rules live there (2026-10-06).
+
 Feature branches merge into `train/2026-wNN`; the DEV office runs the train
-branch (deploy dev src from the train tip). ~Weekly the train PRs into `main`;
+branch when it is hand-carried there (the workflow deploys tags only; SHIPPING.md § 3). ~Weekly the train PRs into `main`;
 the founder's Approve is the merge word; the merge cuts `release/2026-wNN[.n]`
 (`.github/workflows/release-train.yml`). PROD deploys go FROM THE TAG — since
 POS-60 the same workflow carries them (§ below); before that they were
@@ -166,7 +168,7 @@ by `workflow_dispatch` with `target: prod` and that tag's name.
 # 1. code + clones (as the deploy user, e.g. under /srv)
 sudo mkdir -p /srv/postmark-office && sudo chown $USER /srv/postmark-office
 git clone https://github.com/postmark-town/postmark-office.git /srv/postmark-office
-git clone https://github.com/keeminlee/postmark.git /srv/postmark-office/town-clone
+git clone https://github.com/postmark-town/postmark.git /srv/postmark-office/town-clone
 
 # 2. secrets — NEVER in either repo
 sudo tee /etc/postmark-office.env >/dev/null <<'EOF'
@@ -180,7 +182,7 @@ sudo chmod 600 /etc/postmark-office.env
 
 # 2b. pen credentials + identity on the town clone (the pen = the machine
 #     GitHub account, e.g. postmark-pen: classic PAT, public_repo scope only,
-#     write access to keeminlee/postmark and NOTHING else; token custody =
+#     write access to postmark-town/postmark and NOTHING else; token custody =
 #     this box + the principal's password manager, never either repo)
 git -C /srv/postmark-office/town-clone config credential.helper \
   "store --file /srv/postmark-office/.git-credentials"
@@ -278,12 +280,17 @@ curl -s -H "Authorization: Bearer <key>" https://postmark.town/api/town
   adopt: § Sunday: adopting the tick split, below (the exact commands, the
   receipts, the manifest rows and the rollback). `office-tick.sh` stays until
   a clean week has passed.
-- **The town index (POS-268, 2026-09-30), PARKED.** office.db's tables have
+- **The town index (POS-268, 2026-09-30), adopted at the w41 ship (2026-10-04):
+  switch 2 needed it and went on that day, then was rolled back (§ Switch 2's
+  guard, below); the rollback is the env line, so the ingest keeps running.**
+  The `postmark-town-index.timer` row of `box-rollcall-manifest.json` still
+  says parked. office.db's tables have
   twins in the store (`world2/schema/033_town_index.sql`), kept by
   `postmark-town-index.timer` (:05/:20/:35/:50, `deploy/town-index-ingest.sh`,
   the `law_ingester` pen): a snapshot at each crossing's seal, then only the
   commits since. Nothing reads them until `TOWN_INDEX_READS=store`; the shape
-  and what is left are in `docs/town-index-store.md`. To adopt, in order: apply
+  and what is left are in `docs/town-index-store.md`. The adoption, in order (for a
+  rebuilt box): apply
   033 as `world2_owner`; copy the script to `/srv/world2-lab/ops/`; run the seed
   by hand (the script's header has the line); install and enable the timer.
 - The rehydrate timer rebuilds the index every 15 min. It **builds `office.db.new` and renames it
@@ -648,6 +655,69 @@ from `deploy/awareness-by-hand.json`, one entry per ISO week, which the page
 labels "entered by hand, <date>". Its history is `history.jsonl` in the page's
 own directory, one line per week: the current week's line is rewritten each
 hour, so a week keeps its last reading. Deleting that file loses the history.
+
+### The ops gate (POS-395, 2026-10-07)
+
+The generated pages above (the hub and every dashboard, with their `data.json`
+twins and anything else in their directories) are operator telemetry, so they
+answer only to the operators. Each of their seven locations in
+`nginx-postmark-town.conf` includes `/etc/nginx/snippets/postmark-ops-gate.conf`.
+Three `/ops/` addresses stay open on purpose: `/ops/sentinel.json` (the status
+board every page reads), and the site-built `/ops/desk/` and `/ops/graph/`.
+
+Nothing on the box reads the generated pages over HTTP: the hub reads its
+siblings' twins from disk, and the generators write files. So the gate needs no
+credential on the box.
+
+**Two candidates; the operators pick one** and install it under the snippet's
+name:
+
+- **B, a password** (`nginx-ops-gate.basic.conf`). Self-contained on the box:
+  one line per operator in `/etc/nginx/postmark-ops.htpasswd`, asked for by the
+  browser or given to `curl -u`. No Cloudflare change.
+- **A, Cloudflare Access** (`nginx-ops-gate.access.conf`). The operators' own
+  sign-in at the edge and no shared password, as dev is gated. It needs an
+  Access application in the Cloudflare dashboard that covers the generated paths
+  and leaves the three open ones open. Access matches by path prefix and the hub
+  is `/ops/` itself, so the hub takes an application on `/ops/` plus Bypass
+  applications on `/ops/sentinel.json`, `/ops/desk/` and `/ops/graph/`.
+
+**Installing it** (on the box, the operators' hands):
+
+1. Read the live config first and backport anything it has that the repo copy
+   lacks: `sudo nginx -T | grep -n "location.*/ops\|add_header\|cf_edge"`. Any
+   `add_header` at the town server level is replaced inside the gated locations
+   by the snippet's own two; say so before going on.
+2. **B only:** write the password file, one operator at a time (each types their
+   own; `openssl passwd -6` asks twice and does not echo). The group is nginx's
+   worker user (`grep ^user /etc/nginx/nginx.conf`; www-data on Debian/Ubuntu):
+
+   ```
+   sudo install -m 640 -o root -g www-data /dev/null /etc/nginx/postmark-ops.htpasswd
+   printf 'darko:%s\n' "$(openssl passwd -6)" | sudo tee -a /etc/nginx/postmark-ops.htpasswd >/dev/null
+   printf 'wright:%s\n' "$(openssl passwd -6)" | sudo tee -a /etc/nginx/postmark-ops.htpasswd >/dev/null
+   ```
+
+   **A only:** confirm `$cf_edge` is defined (`sudo nginx -T | grep -n cf_edge`)
+   and the Access applications are live.
+3. `sudo install -m 644 deploy/nginx-ops-gate.<basic|access>.conf /etc/nginx/snippets/postmark-ops-gate.conf`
+4. Install `nginx-postmark-town.conf` (or add its seven `include` lines to the
+   live file), then `sudo nginx -t && sudo systemctl reload nginx`.
+5. Check from off the box. Every generated address refuses (401 for B, 403 or
+   Access's redirect for A), and the three open ones answer 200:
+
+   ```
+   for p in "" traffic/ git/ economy/ world/ activity/ awareness/ traffic/data.json; do
+     curl -s -o /dev/null -w "%{http_code} /ops/$p\n" "https://postmark.town/ops/$p"; done
+   for p in sentinel.json graph/ desk/; do
+     curl -s -o /dev/null -w "%{http_code} /ops/$p\n" "https://postmark.town/ops/$p"; done
+   curl -s -o /dev/null -w "%{http_code}\n" -u darko https://postmark.town/ops/traffic/   # B: 200
+   ```
+
+**Undoing it:** empty the snippet (`sudo truncate -s 0
+/etc/nginx/snippets/postmark-ops-gate.conf`), then `nginx -t` and reload. Do not
+remove the file or the `include` lines: without the file, `nginx -t` refuses the
+whole config.
 
 ## Branch previews (`/preview/<slug>/`, 2026-07-20)
 

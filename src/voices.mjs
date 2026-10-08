@@ -166,6 +166,15 @@ const MEMORY_MAX_VOICES = 2000;
 export const voicesLogPath = () => process.env.VOICES_LOG ?? join(ROOT, "voices-log.jsonl");
 
 const bounce = (defect, hint) => ({ error: "bounce", defect, hint });
+// THE SPEAKER'S OWN REFUSALS NAME THEIR CODE (Seven Verity's newcomer note,
+// 2026-10-06: "an oversized say returns did: say with an empty result"). The
+// refusal always reached the caller; what it lacked was the code. REST filled
+// in 422 for it (server.mjs, `result.code ?? 422`), and the MCP body carried
+// none, so an answer that opens on `did: "say"` read as a success to a caller
+// that reads codes. Empty text, too long, and too soon are the voice's own
+// refusals of what was asked, so they say 422 on every road. The unplaced and
+// nonce refusals keep their shape (not in this lane).
+const refused = (defect, hint) => ({ error: "bounce", code: 422, defect, hint });
 const distM = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
 // Coarse distance words, never coordinates: you hear how close someone is, you
@@ -895,15 +904,15 @@ export function createVoices({
   async function speak(handle, text, { standAs, since, before = null, household, nonce = null }) {
     const t = now();
     const body = String(text ?? "").trim();
-    if (!body) return bounce("nothing to say", "pass text: to speak, or call with no arguments to listen");
+    if (!body) return refused("nothing to say", "pass text: to speak, or call with no arguments to listen");
     const chars = [...body].length;
     if (chars > textMax)
-      return bounce(`that is ${chars} characters; a voice carries at most ${textMax}`,
+      return refused(`that is ${chars} characters; a voice carries at most ${textMax}`,
         "speech, not letters — anything longer wants send_letter, which reaches the whole world");
     const last = hydrate().filter((v) => v.handle === handle).at(-1);
     if (last && t - last.at < speakEveryMs) {
       const wait = Math.ceil((speakEveryMs - (t - last.at)) / 1000);
-      return bounce("you just spoke", `a voice every ${Math.round(speakEveryMs / 1000)} seconds — try again in ${wait}s (listening is free: call with no arguments)`);
+      return refused("you just spoke", `a voice every ${Math.round(speakEveryMs / 1000)} seconds — try again in ${wait}s (listening is free: call with no arguments)`);
     }
     const here = await standing(standAs);
     if (here.bounce) return here.bounce;

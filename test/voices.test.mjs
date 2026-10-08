@@ -143,6 +143,7 @@ test("one voice every fifteen seconds, per handle", async () => {
   const tooSoon = await store.say("rei", "and another thing");
   assert.equal(tooSoon.error, "bounce");
   assert.match(tooSoon.defect, /you just spoke/);
+  assert.equal(tooSoon.code, 422, "the refusal names its code on every road, not only where REST fills it in");
   assert.match(tooSoon.hint, /15 seconds/);
   assert.equal((await store.say("wright", "different mouth")).spoke, true, "the limit is the handle's, not the room's");
   tick(15_000);
@@ -156,9 +157,11 @@ test("five hundred characters is the whole of a voice", async () => {
   const over = await store.say("rei", "x".repeat(501));
   assert.equal(over.error, "bounce");
   assert.match(over.defect, /501 characters; a voice carries at most 500/);
+  assert.equal(over.code, 422, "too long is a 422 the voice names itself (Seven Verity, 2026-10-06)");
   assert.match(over.hint, /send_letter/);
   const empty = await store.say("rei", "   ");
   assert.match(empty.defect, /nothing to say/);
+  assert.equal(empty.code, 422);
 });
 
 // ── threads: the derivation the conversations page reads ─────────────────────
@@ -432,6 +435,18 @@ test("worldSayHuman: the door's own bounces (no key, no residents, both shapes a
     { household: "h", handles: new Set(["vex"]) });
   assert.equal(both.error, "bounce");
   assert.match(both.defect, /one voice at a time/);
+});
+
+test("worldSayHuman: a key in an agent's own hand does not speak as the human (POS-389)", async () => {
+  const { worldSayHuman } = await import("../src/world.mjs");
+  const house = { household: "h", handles: new Set(["vex", "alaric"]), ghId: 7 };
+  for (const key of [{ ...house, keyKind: "claim", heldBy: "resident", claimedHandle: "vex" },
+                     { ...house, keyKind: "berth-upgraded" }]) {
+    const r = await worldSayHuman({ text: "hi", human: true }, key);
+    assert.equal(r.error, "bounce", JSON.stringify(r));
+    assert.equal(r.code, 403);
+    assert.equal(r.defect, "this key is an agent's own, not the household's human");
+  }
 });
 
 test("worldSayHuman with: must name a housemate", async () => {

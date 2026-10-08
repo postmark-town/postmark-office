@@ -43,12 +43,13 @@ const firstOfNextMonth = (date) => {
 
 // ── the household half: the drain, the ceremony, settle-join, re-key ────────
 
-/** The crossing's drain for join rows: plan each join, judge the split, write (src/town-bridge.mjs's order). */
+/** The crossing's drain for join rows: plan each join, judge the house's key, write (src/town-bridge.mjs's order). */
 async function drainJoins(ctx, joins, { date }) {
   const { loadRegistryRows } = await ctx.importOffice("src/registry-store.mjs");
   const { registryFromRows } = await ctx.importOffice("src/registry-rows.mjs");
   const { planRegistryJoin } = await ctx.importOffice("src/residency.mjs");
-  const { writeTownDrain, currentKeysOf, plannedRegistryLines, householdKeySplits } = await ctx.importOffice("src/town-drain.mjs");
+  const { writeTownDrain, plannedRegistryLines } = await ctx.importOffice("src/town-drain.mjs");
+  const { currentKeysOf, judgeHouseKey } = await ctx.importOffice("src/house-key.mjs");
   const { collectingDrain } = await ctx.importOffice("src/ceremony.mjs");
   let working = registryFromRows(await loadRegistryRows());
   const plans = [];
@@ -64,8 +65,11 @@ async function drainJoins(ctx, joins, { date }) {
   }
   const plan = { plans, registry: working, settle: plans.map((p) => p.row) };
   plan.ledger = plannedRegistryLines(plans, { date, keys: currentKeysOf(ctx.town) });
-  const splits = householdKeySplits(ctx.town, plan.ledger.lines, plan.registry);
-  if (splits.length) return { refused: "household-split", splits, plan };
+  // the judgment every admission road makes (#3429): the split, the tail, the pen, the dating rule
+  const judged = judgeHouseKey(ctx.town, plan.ledger, { date, registry: plan.registry });
+  if (judged.splits?.length) return { refused: "household-split", splits: judged.splits, plan };
+  if (judged.refusal) return { refused: "house-key", splits: [`${judged.refusal.defect} (${judged.detail})`], plan };
+  plan.signed = judged.signed;
   const touched = await writeTownDrain(ctx.town, plan, { date, drainWith: collectingDrain });
   if (touched.stalled?.length) throw new Error(`the drain stalled: ${touched.stalled.map((s) => s.why).join("; ")}`);
   if (touched.refused) throw new Error(`the registry did not render: ${touched.refused}`);
@@ -82,11 +86,15 @@ async function houseOf(ctx, handle) {
 // ── the money half: the three rails, through their own deciders ──────────────
 
 async function townFacts(ctx) {
-  const { readFundRegistry, meepLawOf } = await ctx.importOffice("src/fund-holder.mjs");
+  // POS-346: the watchers resolve the payer from the store (fund-holder.mjs §
+  // payerRegistry: the registry rows and the town_residents roll the sandbox
+  // ingests after every step), so the sandbox hands their deciders the same.
+  const { payerRegistry, meepLawOf } = await ctx.importOffice("src/fund-holder.mjs");
   const { townEngine } = await ctx.importOffice("tools/stripe-watch.mjs");
   const engine = await townEngine(ctx.town);
   const entries = ctx.entries();
-  return { engine, entries, households: engine.householdKeys(ctx.town), registry: readFundRegistry(ctx.town), isMeep: meepLawOf(engine, entries, ctx.clock.date) };
+  const registry = await payerRegistry();
+  return { engine, entries, households: registry.residents, registry, isMeep: meepLawOf(engine, entries, ctx.clock.date) };
 }
 
 const noonOf = (date) => Date.parse(`${date}T12:00:00Z`);
@@ -175,12 +183,16 @@ export function scenario(ctx) {
     {
       id: "00", event: "catch-up", verify: true,
       title: "the box's tick catch-up on the copied town, before any sandbox event: whatever mints and bundles the real town is owed at this sha",
-      run: () => {
+      run: async () => {
         at(1)();
-        const mint = ctx.townTool("stamp-mint.mjs", ["--append", "--key", ctx.keyPath]);
-        ctx.commit("mint: tick catch-up pass");
+        // POS-341: the chain enters the store (the box's first --sync), the index
+        // is at HEAD, and the keep tick's mint pass decides from the store
+        ctx.syncLines();
+        await ctx.ingest();
+        const mint = ctx.mintPass("mint: tick catch-up pass");
         const wel = ctx.officeTool("deploy/welcome-pass.mjs", ["--town", ctx.town, "--key", ctx.keyPath, "--date", ctx.clock.date], { allowFail: true });
         ctx.commit("mint: tick catch-up pass (welcome)");
+        ctx.syncLines();
         return { notes: [mint.out, wel.out].map((o) => o.trim().split("\n").at(-1)).filter(Boolean) };
       },
       // the real residents may move here and only here: from step 01 on, every one of them must hold still
@@ -248,7 +260,7 @@ export function scenario(ctx) {
 
     // ── day 2 ──────────────────────────────────────────────────────────────
     {
-      id: "04", event: "bind", title: "the bind: sbx-dov's join is settled by the office (settle-join, the hand road): a pin and a house of one, no ledger line",
+      id: "04", event: "bind", title: "the bind: sbx-dov's join is settled by the office (settle-join, the hand road): a pin, a house of one, and its key line, in one commit (#3429)",
       run: async () => {
         at(2)();
         const { settleUnderLock } = await ctx.importOffice("src/settle-join.mjs");
@@ -258,12 +270,15 @@ export function scenario(ctx) {
         state.dovHouse = r.house.slug;
         return r;
       },
-      expect: {},
+      // admission keys the house (#3429): the settle writes `registry: sbx-dov = hh:<house>` with the pin
+      expect: { lines: { registry: 1 } },
       check: async (c, r) => {
         const pins = JSON.parse(readFileSync(`${ctx.town}/tools/github-ids.json`, "utf8"));
+        const keyed = readFileSync(`${ctx.town}/WHITE_PAGES/stamp-ledger.md`, "utf8").includes(` · registry: ${H("dov")} = hh:${r?.house?.slug} · sig: `);
         return [
           ...(r?.settled ? [] : ["settle-join did not settle sbx-dov"]),
           ...(pins[H("dov")]?.id === GH.dov ? [] : ["sbx-dov has no pin after the bind"]),
+          ...(keyed ? [] : ["sbx-dov's house-key line is not on the ledger after the bind"]),
         ];
       },
     },
@@ -285,11 +300,12 @@ export function scenario(ctx) {
 
     // ── day 3 ──────────────────────────────────────────────────────────────
     {
-      id: "06", event: "household", title: "a merge: sbx-dex joins sbx-dov's house at the drain; the one-line plan is a split and is refused, the drain's plan re-keys the housemate too",
+      id: "06", event: "household", title: "a merge: sbx-dex joins sbx-dov's house at the drain; sbx-dov was keyed at the bind, so the joiner's line alone keeps the house on one key (#3429)",
       run: async () => {
         at(3)();
-        const { registryLine, householdKeySplits } = await ctx.importOffice("src/town-drain.mjs");
-        // the shape that split nine houses (before #340): the joiner's line alone
+        const { registryLine, householdKeySplits } = await ctx.importOffice("src/house-key.mjs");
+        // the shape that split nine houses (before #340): the joiner's line alone. Since the bind
+        // keys the house (#3429), it is no longer a split: the housemate is already on hh:<house>.
         const oneLine = [{ seq: 1, handle: H("dex"), key: `hh:${state.dovHouse}`, line: registryLine(ctx.clock.date, H("dex"), state.dovHouse) }];
         const { loadRegistryRows } = await ctx.importOffice("src/registry-store.mjs");
         const { registryFromRows } = await ctx.importOffice("src/registry-rows.mjs");
@@ -298,9 +314,9 @@ export function scenario(ctx) {
         state.splitOfOneLine = householdKeySplits(ctx.town, oneLine, reg);
         return drainJoins(ctx, [{ handle: H("dex"), ghId: GH.dov, ghLogin: login("dov"), household: null }], { date: ctx.clock.date });
       },
-      expect: { lines: { registry: 2 } },
+      expect: { lines: { registry: 1 } },
       check: async (c, r) => [
-        ...(state.splitOfOneLine?.length ? [] : ["the split guard passed a plan that re-keys only the joiner"]),
+        ...(state.splitOfOneLine?.length ? [`the joiner's line alone still splits the house after the bind keyed it: ${state.splitOfOneLine.join(" · ")}`] : []),
         ...(r?.refused ? [`the drain refused its own plan: ${r.splits?.join(" · ")}`] : []),
         ...((await houseOf(ctx, H("dex"))) === state.dovHouse ? [] : ["sbx-dex is not in sbx-dov's house"]),
       ],
@@ -356,6 +372,9 @@ export function scenario(ctx) {
           topic: BALLOT, status: "staking", title: "The sandbox's vote", cap_per_household_per_candidate: 10, window_days: 7, candidates: ["yes", "no"],
         }, null, 2) + "\n");
         ctx.commit(`ballot: ${BALLOT} opens`);
+        // POS-349: the office tick takes the founder's file in as the ballot's post
+        // (deploy/office-keep.sh), and the stake door judges from that post.
+        ctx.officeTool("tools/ballots-backfill.mjs", ["--town", ctx.town, "--hand", "keemin", "--apply", "--quiet"]);
         return ctx.exec("stake-exec", { handle: H("ada"), topic: BALLOT, candidate: "yes", n: 3, via: "api", date: ctx.clock.date });
       },
       // NO vote-mint: tools/ballot.mjs mints the +1 only while the law is stamps-v2, and it has been stamps-v3
@@ -484,6 +503,7 @@ export function scenario(ctx) {
         const p = `${ctx.town}/WHITE_PAGES/ballot-${BALLOT}.json`;
         writeFileSync(p, JSON.stringify({ ...JSON.parse(readFileSync(p, "utf8")), status: "closed" }, null, 2) + "\n");
         ctx.commit(`ballot: ${BALLOT} closes`);
+        ctx.officeTool("tools/ballots-backfill.mjs", ["--town", ctx.town, "--hand", "keemin", "--apply", "--quiet"]);   // the tick: the post closes too
         const r = ctx.townTool("ballot.mjs", ["--close", BALLOT, "--date", ctx.clock.date, "--key", ctx.keyPath]);
         ctx.commit(`ballot: ${BALLOT} returns`);
         return r;

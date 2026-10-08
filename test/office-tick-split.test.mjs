@@ -21,8 +21,13 @@ const execOf = (svc) => read(svc).split(/\r?\n/).find((l) => l.startsWith("ExecS
 const KEEPING = [
   ['git -C "$TOWN_CLONE" pull --ff-only', "the town pull"],
   ['git -C "$WORLD_CLONE" fetch --prune', "the world fetch (it carries the keeper's tag)"],
-  ["stamp-mint.mjs --append", "the mint catch-up"],
+  // POS-341: both branches of the STAMP_LINES switch: the town's own --append unset, the store's runner set
+  ["stamp-mint.mjs --append", "the mint catch-up (STAMP_LINES unset)"],
+  ["stamp-mint-run.mjs --append", "the mint catch-up (STAMP_LINES=store, POS-341)"],
+  ["[ \"${STAMP_LINES:-}\" = store ]", "the STAMP_LINES switch"],
   ["deploy/welcome-pass.mjs", "the welcome pass"],
+  ["/srv/postmark-office/tools/bug-stage-plan.mjs", "the bug stage pass (Darko, 2026-10-07: payment rides the acceptance)"],
+  ["--apply --quiet --key /srv/postmark-office/stamp-key.pem", "the bug stage pass's apply, quiet, with the box's stamp key"],
   ["settlements-backfill.mjs --apply", "the settlements row"],
   ["deploy/publish-windows.mjs", "the panes"],
 ];

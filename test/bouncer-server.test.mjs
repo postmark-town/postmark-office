@@ -92,7 +92,9 @@ test("REST and MCP middleware return exact 429s with independent key and househo
   const readRate = await call("/town");
   assert.equal(readRate.status, 429);
   const readBody = await readRate.json();
-  assert.deepEqual(Object.keys(readBody), ["error", "defect", "retry_after_s"]);
+  // `refused` joined 2026-10-06 (POS-427, Darko's option B): every refusal says so,
+  // last. The Bouncer's own object is unchanged (bouncer.test pins it); the door marks it.
+  assert.deepEqual(Object.keys(readBody), ["error", "defect", "retry_after_s", "refused"]);
   assert.equal(readBody.error, "rate");
   assert.equal(readBody.retry_after_s, 30);
   assert.equal(readRate.headers.get("retry-after"), "30");

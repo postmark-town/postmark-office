@@ -171,7 +171,7 @@ export async function stampsRoster(q, { limit, offset } = {}) {
 /** queries.stampsDetail, from the store. */
 export async function stampsDetail(q, handle) {
   const row = (await q.query("SELECT balance, mint_count, staked FROM town_stamps WHERE handle = $1", [handle])).rows[0];
-  const parties = stampParties(handle);
+  const parties = await stampParties(handle);
   const holoRows = (await q.query(
     `SELECT h.party, h.pot, h.holo, h.epoch, h.date, h.receipt, r.usd AS usd
        FROM town_funding_holo h LEFT JOIN town_pot_receipts r ON r.receipt = h.receipt
@@ -334,6 +334,8 @@ export function storeIndexPooled(clone, { env = process.env } = {}) {
     lastActive: via((c, handle) => lastActive(c, handle)),
     mailAwaiting: via((c, handle, opts) => mailAwaiting(c, handle, opts)),
     standing: via((c, handle) => standingFor(c, handle)),
+    // the town's quest registry (town_meta `quest_registry`), as the doorstep's next steps read it; null when the index has none
+    questRegistry: via(async (c) => (await questMeta(c)).quest_registry ?? null),
     home: via((c, handle, fresh) => home(c, handle, fresh)),
     deliveredTo: via((c, handle) => deliveredTo(c, handle)),
     resident: via((c, handle, fresh) => resident(c, handle, fresh)),
@@ -478,6 +480,9 @@ export async function refreshStoreProbe({ env = process.env, letters = true, log
   if (!r.refused) { _probeRows = r.out; holdStoreProbe(probeOver(_probeRows)); }
   return !r.refused;
 }
+
+/** The store's as-of (town_meta `as_of`) the held probe was read at, or null before the first load. */
+export const storeProbeAsOf = () => _probeRows?.asOf ?? null;
 
 /**
  * The held probe with one resident's mail_state row read now, for the reply

@@ -24,7 +24,11 @@
 //   8. (POS-298, the critter) an advance to fixed carries the critter its fixer
 //      named, refused by name without it and on any other stage; the post
 //      keeps it with named_by = the fix's credit, as plain text, and the
-//      rebuild folds it.
+//      rebuild folds it;
+//  10. (Darko, 2026-10-07) any advance may carry link, the work that earned
+//      the stage on the town's own repos; the post keeps one per stage in
+//      fields.links, refused by name off the town's repos, and the rebuild
+//      folds it.
 //
 // ⚑ THE STORE IS A JS STUB (`acts-pen-stub.mjs`), as in quest-posts.test.mjs:
 // this proves which acts and rows the pen writes and what the reads make of
@@ -216,6 +220,10 @@ test("4 · the reporter amends until confirmed and the hands after; only the cha
   assert.equal(JSON.parse(pen.rows().at(-1).payload).hand, "wright");
   assert.equal(posts.get(ID).fields.record, "https://postmark.town/api/release");
   assert.equal(posts.get(ID).fields.steps, "Open, close, open.", "an amend of one field left the other standing");
+  // POS-389: a housemate's OWN key naming the hand is not the hand
+  const ownKey = { household: "starforge", handles: new Set(["wright", "mari"]), keyKind: "claim", heldBy: "resident", claimedHandle: "mari" };
+  await refusedWith(amendAtTown({ post: ID, handle: "wright", record: "https://postmark.town/api/other" }, ownKey, { now: NOW, roll: ROLL }), 403, /not yours to amend/);
+  await refusedWith(advanceAtTown({ post: ID, handle: "wright", to: "not-a-bug" }, ownKey, { now: NOW, roll: ROLL }), 403, /not this key's own hand/);
 });
 
 // ── 5 ───────────────────────────────────────────────────────────────────────
@@ -501,4 +509,48 @@ test("9 · the reveal's refusals each write nothing: not shipped, not a hand, no
   await refusedNothingWritten(revealAtTown({ post: ID, pick: 1 }, ADA, { now: NOW }), 409, /critter is revealed/);
   await refusedNothingWritten(revealAtTown({ post: ID, candidates: PAINTED }, WRIGHT, { now: NOW }), 409, /critter is revealed/);
   await refusedWith(revealAtTown({ post: "errant/no-such-bug", pick: 1 }, ADA, { now: NOW }), 404, /no bug/);
+});
+
+// ── 10 · the link: the post points at the work that earned each stage (Darko, 2026-10-07) ──
+
+test("10 · an advance may carry link, kept per stage in fields.links; the posts read and the rebuild carry them", async () => {
+  const { pen, posts } = setup();
+  await postAtTown({ ...BUG, issue: "https://github.com/postmark-town/postmark/issues/3500" }, ERRANT, { now: NOW, roll: ROLL });
+  const CAUSE = "https://github.com/postmark-town/postmark/issues/3500#issuecomment-111";
+  const BRIEF = "https://github.com/postmark-town/postmark/issues/3500#issuecomment-222";
+  const PR = "https://github.com/postmark-town/postmark-office/pull/410";
+  const TAG = "https://github.com/postmark-town/postmark-office/releases/tag/release/2026-w42";
+  const d = await advanceAtTown({ post: ID, to: "diagnosed", credit: "finn", link: `  ${CAUSE}  ` }, WRIGHT, { now: NOW, roll: ROLL });
+  assert.equal(d.link, CAUSE);
+  assert.match(d.receipt, new RegExp(`; diagnosed points at ${CAUSE.replace(/[.#/]/g, "\$&")}$`));
+  await advanceAtTown({ post: ID, to: "briefed", credit: "finn", grade: "light", link: BRIEF }, WRIGHT, { now: NOW, roll: ROLL });
+  await advanceAtTown({ post: ID, to: "fixed", credit: "ada", size: "S", critter: "Stickle", link: PR }, WRIGHT, { now: NOW, roll: ROLL });
+  const ship = await advanceAtTown({ post: ID, to: "shipped", link: TAG }, WRIGHT, { now: NOW, roll: ROLL });
+  assert.equal(ship.stamps, 0, "a link pays nothing");
+  const LINKS = { diagnosed: CAUSE, briefed: BRIEF, fixed: PR, shipped: TAG };
+  assert.deepEqual(posts.get(ID).fields.links, LINKS);
+  assert.equal(posts.get(ID).fields.issue, "https://github.com/postmark-town/postmark/issues/3500", "the issue stays beside the links");
+  const one = (await postsAtOffice({ class: "bug", post: ID }, { now: NOW, roll: ROLL })).post;
+  assert.deepEqual(one.fields.links, LINKS);
+  const acts = pen.rows().filter((a) => a.class === "bug").map((a) => ({ ...a, payload: JSON.parse(a.payload) }));
+  assert.deepEqual(foldPostActs(acts).posts.get(ID).fields.links, LINKS, "the acts alone derive the links");
+  const out = await dryRun(pen);
+  assert.equal(out.equal, true, out.drift.join("\n"));
+});
+
+test("10 · a link off the town's repos, empty, too long, or not text is refused by name and writes nothing; no link is fine", async () => {
+  const { pen, posts } = setup();
+  await postAtTown(BUG, ERRANT, { now: NOW, roll: ROLL });
+  const n = pen.rows().length;
+  const had = JSON.stringify(posts.get(ID));
+  const HOW = /link: one URL — the work that earned the stage, on github\.com\/postmark-town\//;
+  await refusedWith(advanceAtTown({ post: ID, to: "confirmed", link: "https://github.com/someone/else/issues/1" }, WRIGHT, { now: NOW, roll: ROLL }), 422, HOW);
+  await refusedWith(advanceAtTown({ post: ID, to: "confirmed", link: "https://evil.example/postmark-town/x" }, WRIGHT, { now: NOW, roll: ROLL }), 422, /link points at the town's own repos/);
+  await refusedWith(advanceAtTown({ post: ID, to: "confirmed", link: "   " }, WRIGHT, { now: NOW, roll: ROLL }), 422, /link is empty/);
+  await refusedWith(advanceAtTown({ post: ID, to: "confirmed", link: 7 }, WRIGHT, { now: NOW, roll: ROLL }), 422, /link is text/);
+  await refusedWith(advanceAtTown({ post: ID, to: "confirmed", link: `https://github.com/postmark-town/postmark/issues/1#${"x".repeat(300)}` }, WRIGHT, { now: NOW, roll: ROLL }), 422, /link is at most 300 characters/);
+  assert.equal(pen.rows().length, n, "a refused link wrote an act");
+  assert.equal(JSON.stringify(posts.get(ID)), had);
+  await advanceAtTown({ post: ID, to: "confirmed" }, WRIGHT, { now: NOW, roll: ROLL });
+  assert.equal(posts.get(ID).fields.links, undefined, "an advance without a link sets no links");
 });

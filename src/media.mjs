@@ -58,7 +58,7 @@ import { lookup as dnsLookup } from "node:dns/promises";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { join, resolve as resolvePath, sep } from "node:path";
-import { decodeWhole, imageFormat, loadSharp, MAX_IMAGE, MEDIA_FORMATS, MEDIA_TYPE_BY_EXT } from "./edit.mjs";
+import { decodeWhole, imageFormat, loadSharp, MAX_IMAGE, MAX_PIXELS, MEDIA_FORMATS, MEDIA_TYPE_BY_EXT } from "./edit.mjs";
 import { asPaper } from "./paperwork.mjs";
 
 const bounce = (code, defect, hint) => Object.assign(new Error(defect), { code, defect, hint });
@@ -187,7 +187,7 @@ export async function mintThumbnails(bytes, ext, { sizes = THUMB_SIZES } = {}) {
     throw bounce(422, `no small copies are cut for .${ext}`, `copies are minted for ${THUMB_FORMATS.join(", ")}`);
   const sharp = await loadSharp();
   const mediaType = MEDIA_TYPE_BY_EXT[ext];
-  const source = sharp(bytes).rotate();
+  const source = sharp(bytes, { limitInputPixels: MAX_PIXELS }).rotate(); // the town's ceiling (POS-390)
   const out = [];
   for (const size of sizes) {
     const shape = THUMB_VARIANTS[size];

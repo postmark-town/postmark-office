@@ -268,3 +268,29 @@ test("PARITY · every readable name has a declared field list, and every declare
       assert.ok(branch.includes(`f.${field}`),
         `${read} declares "${field}" and the read branch never reads f.${field} — a field accepted and ignored is the defect, not the fix`);
 });
+
+// ── POS-427 · a refusal says `refused: true`, beside `did` ──────────────────
+test("POS-427 · a refused household act carries refused: true beside did; a success never carries it", async () => {
+  const refused = await householdApex({ do: "begin", args: { household: "X", card: "y" } },
+    { household: "keemin", handles: new Set(["wright"]) }, { odb, db });
+  assert.equal(refused.error, "bounce");
+  assert.equal(refused.code, 409);
+  assert.equal(refused.did, "begin");
+  assert.equal(refused.refused, true);
+  const keys = Object.keys(refused);
+  assert.equal(keys.indexOf("refused"), keys.indexOf("did") + 1, `refused sits beside did: ${keys.join(", ")}`);
+  // A refusal the door composes before any act is chosen has no did.
+  const both = await householdApex({ do: "begin", read: "standing" }, null, {});
+  assert.equal(both.refused, true);
+  assert.equal(Object.keys(both).at(-1), "refused");
+  // Successes: an act that lands and a read.
+  await mintBerth(odb, "refused-probe");
+  const begun = await householdApex({ do: "begin", args: { household: "The Probe", card: "Not refused." } },
+    { berth: true, slug: "refused-probe", household: null, handles: new Set() }, { odb });
+  assert.ok(!begun.error, JSON.stringify(begun).slice(0, 300));
+  assert.equal(begun.did, "begin");
+  assert.equal("refused" in begun, false);
+  const standing = await householdApex({ read: "standing" }, null, {});
+  assert.ok(!standing.error, JSON.stringify(standing).slice(0, 300));
+  assert.equal("refused" in standing, false);
+});

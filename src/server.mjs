@@ -24,11 +24,11 @@ import { updateAddressBody, updateAddressFields, updateHome, updateHomeImage, up
 import { handleMcp, callTool, TOOLS as MCP_TOOLS, validateArgs, visitorBounces, VISITOR_BOUNCE } from "./mcp.mjs";
 // POS-70 box 1: every plain-API write route is judged by the act it performs,
 // against that act's own schema, in the apexes' own sentence (src/one-contract.mjs).
-import { judgeRoute, withRenamed, PATCH_PAPER_DOORS } from "./one-contract.mjs";
+import { judgeRoute, withRenamed, PATCH_PAPER_DOORS, markRefused } from "./one-contract.mjs";
 import { sendAtDoor } from "./send-at-door.mjs";
 import { TOWN_TOOL, townDispatchToolFor } from "./town-apex.mjs";
 import { householdApex, APEX_ONLY_FIELDS } from "./household-apex.mjs"; // the third door (2026-08-15)
-import { handleOauth, oauthLookup, oauthSchema, mintHouseholdKey, keyLookup, mintBerth, berthLookup, berthTaken, acknowledgeVisitorRules, BERTH_SLUG, FROM_TOWN, mintClaim, claimLookup, claimState, claimCosignUrlFor, claimStateUrlFor, sweepClaims } from "./oauth.mjs";
+import { handleOauth, oauthLookup, oauthSchema, mintHouseholdKey, keyLookup, mintBerth, berthLookup, berthTaken, acknowledgeVisitorRules, BERTH_SLUG, FROM_TOWN, mintClaim, claimLookup, claimState, claimCosignUrlFor, claimStateUrlFor, sweepClaims, SignInUnreadable } from "./oauth.mjs";
 import { requestResidency, isReservedHandle } from "./residency.mjs";
 import { declareViaOffice, SETTLING_ASHORE } from "./declare.mjs";
 import { uploadMedia } from "./media.mjs";
@@ -39,7 +39,7 @@ import { rolesSchema, roleGate, roleGatesOn, ROLE_SUBSCRIBER } from "./roles.mjs
 import { openPaper, paperworkStoreOn } from "./paperwork.mjs"; // POS-271: sign-in, roles, the media ledger and the town log, one door
 import { arrivalPage } from "./arrival.mjs";
 import { townSummary, residentList, residentPage, resident, mailList, letter, search, bulletinList, bulletinEntry, townLedger, townDocs, stampsRoster, stampsFor, stampsDetail, questBoardFor, metricsMail, letterList, regionList, regionOne, home, identityOf, repoLog } from "./queries.mjs";
-import { householdOf } from "./households.mjs";
+import { householdsFor, withHouseholdBlock } from "./households.mjs";
 import * as townIndexStore from "./town-index-store.mjs"; // the office.db readers moved to the store (POS-268)
 import { probeOf, isUnreachable } from "./index-probe.mjs"; // the write path's questions of the index, office.db's or the store's (POS-268)
 const { townIndexReads } = townIndexStore;
@@ -55,7 +55,12 @@ import { world2MyDrafts, world2MyMarks, world2Pool, world2Serve, world2ServeEnab
 import { rowsFixtureActive } from "./world-graph-snapshot.mjs"; // POS-270 lane W 3b: the world graph's switch
 import { blessedSha } from "./world-branches.mjs";
 import { officeStoreFold, storeFingerprint, worldStateServed } from "./world2-fold.mjs"; // POS-142: /world/state from the store's rows, behind W2_FOLD
+import { graphOnSettlement, settledMarkIds, settlementOrFile } from "./world-settlement.mjs"; // POS-359: /world/state serves the newest settlement minus the opposed
 // The rows fold needs the store engaged; a flag set on an office with no store falls through to the file, loudly.
+// POS-359: GET /world/state serves the newest settlement (or ?settlement=S<n>), minus the opposed.
+const worldStateAnswer = ({ asked, fileAnswer }) => settlementOrFile({
+  asked, fileAnswer, engaged: world2ServeEnabled(), pool: world2Pool, worldRepo: WORLD_CLONE, townRepo: TOWN_CLONE,
+});
 const storePoolOrRefuse = async () => { if (!world2ServeEnabled()) throw new Error("the world 2.0 store is not engaged at this office (WORLD2_PG/WORLD2_PG_URL)"); return world2Pool(); };
 import { callHoldTool } from "./world-hold.mjs"; // curl parity: /world/hold + /world/holdings (2026-08-15)
 import { APEX_TOOL, apexEnabled, dispatchToolFor, worldApex } from "./world-apex.mjs"; // stage 3: the apex verb — keyless read half + the POST act door (08-17)
@@ -64,7 +69,7 @@ import { storeEngaged, storeSnapshot, worldStoreHealth } from "./world-serve.mjs
 import { worldGraphView, NODE_KINDS, gexfPath } from "./world-graph.mjs"; // stage E: the window
 import { dynamicHealth, dynamicDbPath, dynamicRetired } from "./dynamic-store.mjs"; // stage 2: the dynamic layer's instrument panel
 import { servedEnterExitLedger, DEPRECATED_DOOR } from "./enter-exit-ledger.mjs"; // the passages, derived from the frozen era + the journal (2026-08-26)
-import { Bouncer, keyIdForToken, worldWriteVerbForRest } from "./bouncer.mjs";
+import { Bouncer, clientIp, keyIdForToken, worldWriteVerbForRest } from "./bouncer.mjs";
 import { loopLag } from "./loop-lag.mjs"; // POS-267: how long the one thread keeps a caller waiting
 import { storeTxnWatch } from "./store-txn-watch.mjs"; // POS-370: does any office connection sit idle inside a transaction
 import { readReleaseStamp } from "./release.mjs"; // POS-60: the deploy receipt the auto-deploy probes
@@ -357,7 +362,30 @@ const stampOf = (path) => {
   catch { return null; }
 };
 
-let INDEX = openIndex();
+// ── A SWITCHED OFFICE OPENS NO office.db (POS-268 part 5a) ───────────────────
+// With TOWN_INDEX_READS=store every door reads the store, so the switched
+// office does not open office.db at all: it boots, and answers, with the file
+// gone. In its place stands ABSENT_INDEX, whose every read throws by name, and
+// a meta that throws on any key, so a reader still asking office.db is a loud
+// 500 that names it, never a quiet answer from a file the store replaced
+// (`the-town/the-disclosure`). The as-of every answer's header carries is the
+// store's own (town_meta `as_of`, as the held probe last read it), "unknown"
+// until the first load. Unswitched, nothing here runs and office.db is opened,
+// hot-reloaded and retired exactly as before; rolling back is unsetting the switch.
+const INDEX_SWITCHED = townIndexReads();
+const absent = (what) => () => {
+  throw new Error(`office.db is not opened with TOWN_INDEX_READS=store: ${what} still reads it (POS-268)`);
+};
+const ABSENT_INDEX = Object.freeze({ prepare: absent("a prepared statement"), exec: absent("an exec"), close() {} });
+const ABSENT_META = new Proxy(Object.freeze({}), {
+  get(_t, k) { if (typeof k === "symbol" || k === "then" || k === "toJSON") return undefined; return absent(`office.db's meta \`${String(k)}\``)(); },
+  ownKeys: absent("a copy of office.db's meta"),
+});
+const storeAsOf = () => townIndexStore.storeProbeAsOf() ?? "unknown";
+
+let INDEX = INDEX_SWITCHED
+  ? { handle: ABSENT_INDEX, meta: ABSENT_META, asOf: "unknown", refs: 0, retiredAt: 0 }
+  : openIndex();
 // The three names every route below reads. Reassigned together on each swap,
 // and read at CALL time everywhere — nothing captures them in a boot closure.
 let db = INDEX.handle;
@@ -381,6 +409,7 @@ let reloadComplaint = null;
 const journal = IN_READ_WORKER ? { log() {}, error() {} } : console;
 
 function reloadIndex() {
+  if (INDEX_SWITCHED) return;   // a switched office holds no office.db to reload (§ A SWITCHED OFFICE)
   const stamp = stampOf(DB_PATH);
   if (stamp === null || stamp === indexStamp) return;   // vanished, or unchanged
   let next;
@@ -436,7 +465,10 @@ onAnnounce("index", reloadIndex);
 setInterval(() => {
   reloadIndex(); sweepRetired();
   // the store's roll and the write path's probe, on the same clock the index reload keeps (POS-268)
-  if (townIndexReads()) { townIndexStore.refreshStoreRoll().catch(() => {}); townIndexStore.refreshStoreProbe().catch(() => {}); }
+  if (townIndexReads()) {
+    townIndexStore.refreshStoreRoll().catch(() => {});
+    townIndexStore.refreshStoreProbe().then(() => { if (INDEX_SWITCHED) INDEX.asOf = AS_OF = storeAsOf(); }).catch(() => {});
+  }
 }, RELOAD_POLL_MS).unref();
 // AT BOOT, BEFORE THE OFFICE LISTENS (POS-268): the roll and the write path's
 // probe are loaded first, so the first ask is never answered by a process that
@@ -447,6 +479,8 @@ if (townIndexReads()) await Promise.race([
   Promise.all([townIndexStore.refreshStoreRoll().catch(() => {}), townIndexStore.refreshStoreProbe().catch(() => {})]),
   new Promise((ok) => setTimeout(ok, 10_000).unref()),
 ]);
+// INDEX.asOf too: the manifest (GET /) answers the borrowed index's as-of
+if (INDEX_SWITCHED) INDEX.asOf = AS_OF = storeAsOf();
 
 // Keep the deterministic clock seam at the process boundary. Bouncer stays
 // environment-agnostic, while the HTTP integration test can pin only its clock.
@@ -598,8 +632,13 @@ const withBounceCode = (code, obj) =>
     && !Object.prototype.hasOwnProperty.call(obj, "code")
     ? (({ error, ...rest }) => ({ error, code, ...rest }))(obj)
     : obj;
+// EVERY REFUSAL SAYS SO (POS-427, Darko's option B), here for the same reason
+// the code is: every REST answer is written here. A status of 400 or more is a
+// refusal whatever verb answered it, so its body carries `refused: true`
+// (beside `did`, else last; one-contract.mjs § markRefused, never twice).
 const j = (res, code, obj) => {
   obj = withBounceCode(code, obj);
+  if (code >= 400) obj = markRefused(obj);
   const body = JSON.stringify(obj, null, 1);
   const headers = {
     "content-type": "application/json; charset=utf-8",
@@ -712,13 +751,8 @@ const setWwwAuth = (res) => {
   res.setHeader("www-authenticate", `Bearer resource_metadata="${base}/.well-known/oauth-protected-resource/api/mcp"`);
 };
 
-// nginx fronts us with proxy_add_x_forwarded_for, which APPENDS the real client
-// to whatever the caller sent — so the LAST hop is the trustworthy one (the
-// first is caller-controlled and spoofable past the limit).
-const clientIp = (req) => {
-  const xff = req.headers["x-forwarded-for"];
-  return (xff ? String(xff).split(",").at(-1).trim() : req.socket?.remoteAddress) || "unknown";
-};
+// clientIp (the caller behind nginx, the last X-Forwarded-For hop) lives in
+// bouncer.mjs, beside the buckets keyed on it, so the OAuth desk reads it too.
 
 // ── routes ───────────────────────────────────────────────────────────────────
 // POS-266: the read workers, started once the port is held (below). Null in a
@@ -875,7 +909,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         "/doorstep/{handle}", "/metrics/mail", "/repo/log", "/regions", "/regions/{slug}", "/homes/{handle}", "/stamps",
         "/stamps/{handle}", "/quests/{handle}", "/votes", "/votes/{topic}", "/bulletin", "/search?q=", "/calendar", "/calendar/{host}/{slug}", "/posts?class=", "/posts/{author}/{slug}", "/world/find?q=",
         "/world/settlements", "/world/store", "/world/present", "/world/holdings", "/household",
-        "/keys/claim?handle=", "/berth",
+        "/keys/claim?handle=", "/berth", "/households[?h=a,b]",
         "/release"],
       writes: ["POST /letters", "POST /votes/stake", "POST /residency", "POST /households", "POST /berth", "POST /keys", "POST /keys/claim",
         "POST /media", "POST /household", "POST /world/marks", "POST /world/walks", "POST /world/say",
@@ -1270,16 +1304,20 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
     if (!key) { setWwwAuth(res); return bounce(res, 401, "no key at the door", "GET /me tells you who you are at this door — sign in first. Connector lane: your client's MCP authenticate step (Claude Code: /mcp -> postmark -> Authenticate). Shell lane: Authorization: Bearer <household-key>. Guide: https://postmark.town/join/"); }
     const me = identityOf(key);
     // the registry view per handle — household is the primary column (2026-08-07)
-    try { if (me?.handles) { const hh = Object.fromEntries(me.handles.map((h) => [h, householdOf(h)])); if (Object.values(hh).some(Boolean)) me.households = hh; } } catch { /* garnish only */ }
     // POS-317: the household a payment by this account goes in, and the one
     // resident who holds its stamps, from the SAME function the payment watchers
     // resolve the minted reference through (src/fund-holder.mjs). The fund page
     // shows "for <household name>" from this. Garnish: absent, the page offers
     // the payment as an outside gift, which is what the watcher would make of it.
-    if (key.ghId == null) return j(res, 200, me);
-    return import("./fund-holder.mjs").then(({ fundHolderAtOffice }) => fundHolderAtOffice(TOWN_CLONE, key.ghId))
-      .then((h) => j(res, 200, h ? { ...me, fund_holder: { household: h.household, name: h.name, handle: h.handle, rule: h.rule } } : me))
-      .catch(() => j(res, 200, me));
+    // The household blocks come from the store's registry (POS-342); a store
+    // that cannot be asked leaves them off, as before.
+    return householdsFor(me?.handles ?? []).catch(() => null).then((hh) => {
+      if (hh) me.households = hh;
+      if (key.ghId == null) return j(res, 200, me);
+      return import("./fund-holder.mjs").then(({ fundHolderAtOffice }) => fundHolderAtOffice(TOWN_CLONE, key.ghId))
+        .then((h) => j(res, 200, h ? { ...me, fund_holder: { household: h.household, name: h.name, handle: h.handle, rule: h.rule } } : me))
+        .catch(() => j(res, 200, me));
+    });
   }
 
   try {
@@ -1290,6 +1328,14 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       // first read: it is the one door an agent finds before it has anything,
       // and it must answer with no key, no sign-in and no prior knowledge.
       if (path === "/join") return j(res, 200, await arrivalPage(TOWN_CLONE));
+      // GET /households — the household registry as the STORE holds it, in the
+      // shape of the town's two printouts (POS-345; contract in households-read.mjs).
+      if (path === "/households") {
+        return import("./households-read.mjs")
+          .then(({ householdsRead }) => householdsRead(Object.fromEntries(url.searchParams.entries())))
+          .then(({ status, body }) => j(res, status, body))
+          .catch((e) => bounce(res, 500, "the households read tripped", String(e?.message ?? e).slice(0, 200)));
+      }
       if (path === "/town") {
         if (townIndexReads()) return fromTownIndex(res, (c) => townIndexStore.townSummary(c));
         return j(res, 200, townSummary(db, meta));
@@ -1465,12 +1511,22 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       // always was; or, where this office sets W2_FOLD=store (POS-142), the same
       // world fold run over the store's rows, with the file as the fall-through
       // and `meta.source` saying which one answered (src/world2-fold.mjs).
+      //
+      // THE SETTLEMENT FIRST (POS-359, R2/R3): where the store is engaged, the
+      // newest settlement's World minus every opposed mark, or `?settlement=S<n>`'s
+      // (src/world-settlement.mjs). A store that holds no settled snapshot yet
+      // falls through to the answer above, and says why in `meta`; a named
+      // settlement never falls through, because the file is not that settlement.
       if (path === "/world/state") {
-        return worldStateServed({
+        const fileAnswer = () => worldStateServed({
           fileState: worldStateRaw,
           storeState: async () => officeStoreFold({ p: await storePoolOrRefuse(), repo: WORLD_CLONE, fileState: worldStateRaw }),
           fingerprint: async () => `${await storeFingerprint(await storePoolOrRefuse())}@${blessedSha(WORLD_CLONE)}`,
-        }).then((r) => j(res, 200, r)).catch((e) => bounce(res, 500, "the world door tripped", String(e?.message ?? e).slice(0, 200)));
+        });
+        const asked = url.searchParams.get("settlement");
+        return worldStateAnswer({ asked, fileAnswer })
+          .then((r) => (r?.error === "bounce" ? bounce(res, r.code, r.defect, r.hint) : j(res, 200, r)))
+          .catch((e) => (e?.code ? bounce(res, e.code, e.defect, e.hint) : bounce(res, 500, "the world door tripped", String(e?.message ?? e).slice(0, 200))));
       }
       // GET /world/enter-exit-ledger — THE PASSAGES, DERIVED.
       //
@@ -1627,17 +1683,21 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         const kinds = list(p.get("kinds"));
         const bad = kinds?.filter((k) => !NODE_KINDS.includes(k)) ?? [];
         if (bad.length) return bounce(res, 422, `no such node kind: ${bad.join(", ")}`, `kinds are ${NODE_KINDS.join(", ")}`);
-        const view = worldGraphView({
-          kinds,
-          types: list(p.get("types")),
-          dropUnresolved: p.get("drop-unresolved") === "1",
-        });
-        // A store that is not there is a 404 and says so plainly. The window has
-        // no fold to fall through to — unlike a read path, there is no second
-        // answer — so pretending with an empty graph would be the worst
-        // available lie: a clean-looking world nobody has hydrated.
-        if (view.error) return bounce(res, 404, view.error, `${view.detail ?? ""} — run: npm run hydrate:world`.trim());
-        return jCompact(res, 200, view);
+        // POS-359: the mark nodes are the served settlement's (opposed absent at once).
+        return settledMarkIds({ engaged: world2ServeEnabled(), pool: world2Pool, worldRepo: WORLD_CLONE, townRepo: TOWN_CLONE }).then((settled) => {
+          const view = worldGraphView({
+            kinds,
+            types: list(p.get("types")),
+            dropUnresolved: p.get("drop-unresolved") === "1",
+            keepMarks: settled?.ids ?? null,
+          });
+          // A store that is not there is a 404 and says so plainly. The window has
+          // no fold to fall through to — unlike a read path, there is no second
+          // answer — so pretending with an empty graph would be the worst
+          // available lie: a clean-looking world nobody has hydrated.
+          if (view.error) return bounce(res, 404, view.error, `${view.detail ?? ""} — run: npm run hydrate:world`.trim());
+          return jCompact(res, 200, graphOnSettlement(view, settled));
+        }).catch((e) => bounce(res, 500, "the world door tripped", String(e?.message ?? e).slice(0, 200)));
       }
       // GET /world/graph.gexf — the same store for Gephi Lite, zero build: the
       // file the last hydration wrote, streamed. ?view=static drops the
@@ -1729,6 +1789,8 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           r = got.out;
         } else r = resident(db, who, fresh);
         if (!r) return bounce(res, 404, `no resident "${who}"`, "handles are lowercase-hyphenated, as in WHITE_PAGES/");
+        // household leads (2026-08-07), from the store's registry (POS-342)
+        await withHouseholdBlock(r, who);
         // ── WHAT THIS RESIDENT MADE, on the REST skin too ────────────────────
         //
         // BOTH SKINS OR NEITHER. This is the route the SITE builds its resident
@@ -1977,7 +2039,10 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           ? voteList(TOWN_CLONE).then((v) => j(res, 200, v))
           : voteView(TOWN_CLONE, m[1], key).then((v) => v ? j(res, 200, v)
               : bounce(res, 404, `no ballot topic "${m[1]}"`, "open topics: GET /votes"));
-        p.catch((e) => bounce(res, 500, "the office tripped", String(e?.message ?? e).slice(0, 200)));
+        // The ballots are posts in the office's record (POS-349): a record that
+        // cannot be read is the read's own refusal (503), never a trip.
+        p.catch((e) => (e?.code && e?.defect ? bounce(res, e.code, e.defect, e.hint)
+          : bounce(res, 500, "the office tripped", String(e?.message ?? e).slice(0, 200))));
         return;
       }
 
@@ -1993,7 +2058,8 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       if ((m = /^\/stamps\/([a-z0-9-]+)$/.exec(path))) {
         const handle = m[1];
         if (townIndexReads()) return fromTownIndex(res, async (c) => ({ handle, ...(await townIndexStore.stampsDetail(c, handle)) }));
-        return j(res, 200, { handle, ...stampsDetail(db, handle) });
+        return stampsDetail(db, handle).then((d) => j(res, 200, { handle, ...d }))
+          .catch((e) => bounce(res, 500, "the stamps read tripped", String(e?.message ?? e).slice(0, 200)));
       }
 
       // quest board for one resident (registry × today's progress). The handle
@@ -2624,11 +2690,15 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
 
     // ── POST /fund/verify — the seam's public door (S3, USDC rail) ───────────
     // A patron's tx hash becomes a witnessed pot receipt, or a refusal they are
-    // owed verbatim. DELIBERATELY UNCREDENTIALED: the witness is the payment
-    // itself, on a public chain, to one published address — a key would gate
-    // who may TELL the town about a dollar it already holds, which protects
-    // nothing and loses real money. Every abuse this opens is already refused
-    // downstream: a hash that paid someone else fails the witness, a replayed
+    // owed verbatim. CREDENTIALED, BY POSITION: this route sits below the
+    // write tier's `if (!key)` above, so a call with no key is answered 401
+    // there and never reaches it (so it has been since the door was built,
+    // 2026-08-21; an earlier version of this comment said "deliberately
+    // uncredentialed", and the gate never agreed). Every caller here pays its
+    // key's write bucket. A key that names no account and no resident (a bare
+    // berth) is refused in fundVerify before the chain is asked (POS-388): a
+    // receipt is durable and in a household's name, and a berth has neither.
+    // The rest is refused downstream: a hash that paid someone else fails the witness, a replayed
     // hash fails the ledger's ref uniqueness, a hash aimed past a pot's need
     // fails D5, and a handle the town does not keep fails before the chain is
     // even consulted. What it cannot stop is someone naming a pot the payer did
@@ -2665,6 +2735,12 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
 // just means "anonymous": a stale token never locks someone out of a public
 // read; only writes require a valid key. A static key answers from memory and
 // never waits; every other shape is a read of the paperwork.
+//
+// ONE FAILURE IS NOT ANONYMOUS (POS-343): a live credential whose household
+// the store's pins could not be read for. That is not "this token is stale",
+// it is "the office cannot say who you are", and serving it as nobody would
+// hand a signed-in resident a visitor's answer with no word why. It is refused
+// with a 503 that names it.
 const resolveBearer = async (token) =>
   (await oauthLookup(odb, db, TOWN_CLONE, token)) ?? (await keyLookup(odb, db, TOWN_CLONE, token))
   ?? (await claimLookup(odb, db, TOWN_CLONE, token)) ?? (await berthLookup(odb, db, TOWN_CLONE, token)) ?? null;
@@ -2676,8 +2752,8 @@ const handle = (req, res) => {
   if (!auth) return route(req, res, null, t0).catch(tripped);
   const fixed = KEYS.get(auth[1]);
   if (fixed) return route(req, res, fixed, t0).catch(tripped);
-  resolveBearer(auth[1]).catch(() => null)
-    .then((key) => route(req, res, key, t0))
+  resolveBearer(auth[1]).then((key) => key, (e) => (e instanceof SignInUnreadable ? e : null))
+    .then((key) => (key instanceof SignInUnreadable ? bounce(res, 503, key.defect, key.hint) : route(req, res, key, t0)))
     .catch(tripped);
 };
 

@@ -23,6 +23,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isPrincipal } from "./ops.mjs";
+import { agentHeld, holdsHand } from "./named-hand.mjs"; // POS-389: a named gate asks whose hand the credential is
 import { nextSettlementAttemptAt } from "./settlements.mjs";
 import { execUnderTownLock, lockTimedOut, LOCK_BUSY } from "./town-lock.mjs";
 import {
@@ -37,7 +38,7 @@ import {
   readJsonAtRef,
   resolvedWorldHousehold,
 } from "./world-branches.mjs";
-import { moveGuard } from "./world-move-guard.mjs"; // the drain night: moving a mark moves what stands on it
+import { carryForecast } from "./carry-forecast.mjs"; // POS-441: a move carries your household's marks; the door forecasts it
 import { ACTION_AMEND, ACTION_LEAVE, ACTION_WITHDRAW, CLASS_MARK, CLASS_MOVE, CLASS_VOICE, anchorAt, appendActFlipped, appendJournal, filedPathOfAt, frozenFilingAt, laneFlipped, mirrorLaneAct, pathFor, pinWitnesses, singleLogEnabled } from "./world-journal.mjs"; // POS-5 slice 1: the one append-only log
 // The declared-parent law (postmark#3020) — the word, the predicate and the
 // sentence, minted once and shared with the crossing's write-down.
@@ -51,7 +52,7 @@ import { HOLD_TOOLS, callHoldTool } from "./world-hold.mjs"; // the object primi
 import { createVoices, EARSHOT_M, HEAR_MAX, HEARING_WINDOW, RECORD_KEPT_AT } from "./voices.mjs";
 import { createHearingWindow } from "./hearing-window.mjs"; // earshot: speech at a position (the party line)
 import { createSayPush, waitMsOf, serveSayStream } from "./say-push.mjs"; // POS-265: the waiters — a listen that waits, and the page's stream
-import { householdOf, humanHandFor, pinnedLoginOf } from "./households.mjs"; // the human speaker's label wears the town's name, never the login
+import { householdLookup, humanHandFor, pinnedLoginOf } from "./households.mjs"; // the human speaker's label wears the town's name, never the login
 import { householdLockPath, poolEnabled, pushDraftBranch, withDraftLease } from "./world-pool.mjs";
 import { NOTE_KEPT, noteOf, writeNote } from "./note-store.mjs"; // POS-392: the note's one home is the store
 import { cannotAnswer, pointAnswerable, servedRead, storeEpoch, storeShadowEnabled } from "./world-serve.mjs";
@@ -1417,6 +1418,13 @@ async function humanStand(args = {}, key = null) {
   if (args.handle)
     return { error: "bounce", defect: "one voice at a time",
       hint: "speak as your resident with handle:, or as yourself with human: true — not both" };
+  // THE HUMAN'S VOICE IS THE HUMAN'S CREDENTIAL'S (POS-389). A key in a
+  // resident's own hand carries the whole house, so it would pass the line
+  // below; but it is the resident's key, and the human's name written by it
+  // is the ghost-writing the human class exists to prevent.
+  if (agentHeld(key))
+    return { error: "bounce", code: 403, defect: "this key is an agent's own, not the household's human",
+      hint: "speak as your resident with handle:; the human speaks with their own sign-in or the household key they hold" };
   const handles = [...(key?.handles ?? [])];
   if (!handles.length)
     return { error: "bounce", defect: "no residents on this key",
@@ -1427,7 +1435,7 @@ async function humanStand(args = {}, key = null) {
   // the hand an embodied act is recorded under. Two copies of a label is two
   // answers waiting to disagree; this door still owns the label, it just no
   // longer keeps the only copy of how it is spelled.
-  const speaker = humanHandFor(handles);
+  const speaker = await humanHandFor(handles);
   // Whom the human stands beside. `with:` names a housemate explicitly; the
   // default prefers a housemate who is ABOARD a vessel over one ashore (learned
   // mid-crossing 2026-08-08: a split household stood DARKO's welcome in a
@@ -2295,8 +2303,8 @@ export async function thingStandsBlock(id, w, r) {
       centreOf,
       // POS-138: whose house set it down decides whether the set-down is the
       // author's move or a stranger's, unaccepted — the town's household map,
-      // never the handle alone.
-      householdOf,
+      // never the handle alone. One read of the store's registry (POS-342).
+      householdOf: await householdLookup(),
       // …and whether the author's house has answered a stranger's set-down
       // (POS-138's stance arm). Read only here, where the thing has a holding
       // history; an unreadable stance record is silence, never an answer.
@@ -2895,8 +2903,8 @@ function canonForGuards() {
  * IT ADMITS WHENEVER IT CANNOT ASK. No manifest, no frozen path, a root-level
  * filing, a parent canon does not carry, a parent with no ground, no predicate:
  * all admit. This guard ADDS a refusal to a door that works today, so an
- * unanswerable question must never become a "no" — the opposite of `dependentsOf`
- * next door, which returns null-not-empty precisely because a missing file there
+ * unanswerable question must never become a "no" — the opposite of the retired
+ * move guard's `dependentsOf`, which returned null-not-empty precisely because a missing file there
  * would silently stop a guard that was already load-bearing.
  */
 export async function declaredParentGuard(id, clean, canon = null, repo = WORLD_CLONE, prior = null) {
@@ -2908,7 +2916,7 @@ export async function declaredParentGuard(id, clean, canon = null, repo = WORLD_
     const parentId = declaredParentIdOf(markFile, idOfMarkFileFrom(frozen));
     if (!parentId) return null;                       // filed under the root: the frame, not a parent
     const { verbs } = await mods();
-    // `prior` is the SAME value the move guard is handed two lines up — the
+    // `prior` is the SAME value the carry forecast is handed two lines up — the
     // journal's word for a mark amended since the last drain, else canon's.
     // Defaulting it out of `canon` keeps a caller that does not pass one honest
     // rather than silently ungated.
@@ -3194,7 +3202,7 @@ async function journalLeaveMark(clean, { crossing = currentCrossing() } = {}) {
   const canon = canonForGuards();
   {
     // ── B1: THE READ FLIP (W2_GUARDS=1; runbook §4 B1) ──────────────────────
-    // The slug collision, the move guard's `prior`, and the parcel cap all read
+    // The slug collision, the carry forecast's `prior`, and the parcel cap all read
     // ONE live layer, so this is the one round trip that decides all three.
     // Flipped, it is `claims` where status ∈ (draft, pending) — DESIGN §2 R3's
     // sentence made true at the door: "A pen flip without a read flip produces
@@ -3214,26 +3222,28 @@ async function journalLeaveMark(clean, { crossing = currentCrossing() } = {}) {
     if (clean.amend === true && !exists)
       throw bounce(404, `no mark "${id}" to amend`, "ids are <by>/<slug> — leave it first, or drop amend: true");
 
-    // ── THE MOVE GUARD (founder-mandated 2026-08-27, the drain night) ────────
+    // ── THE CARRY, FORECAST (POS-441, ruled by Darko 2026-10-07) ────────────
     //
-    // An amend that re-sites a mark re-sites everything standing on it. On
-    // 2026-08-27T01:13Z one such amend moved `vermillion/the-pando-peak` — and
-    // with it 32 marks belonging to five households — and the settlement three
-    // hours later published NOTHING FOR ANYBODY over the eleven tests it broke.
+    // "Moving a mark carries the marks inside it that belong to the same
+    //  household; another household's marks never move. That should just always
+    //  be the default rule." It replaced the move guard (founder-mandated
+    //  2026-08-27, the drain night), which refused any move of a mark with
+    //  anything inside it — and so could never let vermillion's tower leave the
+    //  benches it had landed on (postmark#2458). Nothing here refuses: the
+    //  clearing carries the household's marks in the same act
+    //  (world2/tools/carry.mjs), and this door only says what that will be.
     //
-    // Read from the last fold's own containment map, not computed: one JSON
-    // read, no geometry, no fold. The 2026-08-22 ruling that took the fold gate
-    // off this door ("a draft costs nothing") is not reopened here — the
-    // reasoning and what this deliberately does NOT catch are in
-    // `world-move-guard.mjs`'s header.
-    //
-    // It runs over canon-plus-overlay like every other guard in this function:
+    // It reads canon-plus-overlay's prior like every guard in this function:
     // `priorLive` is the journal's word for a mark amended since the last drain,
-    // `priorCanon` is the record's. Reading only canon would let a mark be moved
-    // twice between crossings with the second move unseen.
+    // `priorCanon` the record's.
+    let carries = null;
     if (amending) {
-      const refusal = moveGuard(WORLD_CLONE, { id, prior: priorLive ?? priorCanon, next: clean });
-      if (refusal) throw bounce(refusal.code, refusal.defect, refusal.hint);
+      const frozen = idOfMarkFileFrom(frozenFilingAt(WORLD_CLONE, String(mainRef(WORLD_CLONE))));
+      const filedOf = new Map([...frozen].map(([file, mid]) => [mid, file]));
+      carries = carryForecast({
+        id, prior: priorLive ?? priorCanon, next: clean, marks: canon.marks,
+        filedParentOf: (mid) => (filedOf.has(mid) ? declaredParentIdOf(filedOf.get(mid), frozen) : null),
+      });
 
       // ── THE DECLARED PARENT (postmark#3020, Keemin-ruled 2026-09-20) ──────
       //
@@ -3253,15 +3263,15 @@ async function journalLeaveMark(clean, { crossing = currentCrossing() } = {}) {
       // standing at; the sentence names the parent, the point, the ground and
       // the two ways on.
       //
-      // The cost is the move guard's, not the fold gate's: one manifest read
+      // The cost is the retired move guard's, not the fold gate's: one manifest read
       // (cached by sha), one walk up the path's own directories, and one
       // point-in-mark test against the last fold's composed parent. No fold, no
       // geometry of our own — `pointWithinMark` is the CLONE'S, the same
       // function the enter door adjudicates with. The 2026-08-22 ruling that
       // took the fold gate off this door is not reopened.
-      // The SAME `prior` the move guard was handed on the line above — one
-      // reading of what is standing, two guards, so they cannot disagree about
-      // whether this amend moved anything.
+      // The SAME `prior` the forecast was handed on the line above — one
+      // reading of what is standing, so the two cannot disagree about whether
+      // this amend moved anything.
       const parentRefusal = await declaredParentGuard(id, clean, canon, WORLD_CLONE, priorLive ?? priorCanon);
       if (parentRefusal) throw bounce(parentRefusal.code, parentRefusal.defect, parentRefusal.hint);
     }
@@ -3466,6 +3476,7 @@ async function journalLeaveMark(clean, { crossing = currentCrossing() } = {}) {
         dir: String(landing).replace(/^WORLD[/]marks[/]/, "").replace(/[/]mark[.]md$/, ""),
         branch: draftBranch(household), put_forward: putForward,
         ...(amending ? { amended: true, moved: false, _verdict: verdict } : {}),
+        ...(carries ? { carries } : {}),
         _ground_min: groundMin,
         nothing_written: "a preview: no draft, no journal row, no stake — leave the mark without preview: true to write it",
       };
@@ -3555,6 +3566,8 @@ async function journalLeaveMark(clean, { crossing = currentCrossing() } = {}) {
       // "acts" for one would name a table that does not hold it.
       seq: row.actId, crossing: row.crossing, log: row.record ?? "acts",
       witnesses: row.witnesses ? JSON.parse(row.witnesses) : null,
+      // POS-441: what this move will carry, and what of other households' stays.
+      ...(carries ? { carries } : {}),
       ...(amending ? { amended: true, moved: false,
         superseded: "the prior declaration — every version stays in the log; canon shows the latest at the next crossing",
         // INTERNAL, and stripped before the answer leaves the door
@@ -3695,8 +3708,10 @@ const PLACED_BY_KEY = "_placed_by";
 const CONSENT_KEY = "_consent";
 
 /** Null when this is not a placement on another's behalf (the caller answers the unchanged 403); otherwise who placed, on whose asking, under which household. */
-function placingOnBehalf(by, payload, key, bounce) {
-  const placers = ON_BEHALF_PLACERS.filter((h) => key?.handles?.has(h));
+async function placingOnBehalf(by, payload, key, bounce) {
+  // The placer is the hand this credential is FOR, not a housemate it lists
+  // (POS-389, named-hand.mjs).
+  const placers = ON_BEHALF_PLACERS.filter((h) => holdsHand(key, h));
   if (!placers.length || payload.kind !== "parcel") return null;
   const consent = typeof payload.consent === "string" ? payload.consent.trim() : "";
   if (!consent) throw bounce(422, "a placement on a resident's behalf needs consent",
@@ -3708,9 +3723,9 @@ function placingOnBehalf(by, payload, key, bounce) {
     throw bounce(403, `"${named}" is not a placer on this key`, `this key places as: ${placers.join(", ")}`);
   if (named === null && placers.length > 1)
     throw bounce(422, "which placer is placing this?", `pass placed_by: one of ${placers.join(", ")}`);
-  const household = pinnedLoginOf(by);
+  const household = await pinnedLoginOf(by);
   if (!household) throw bounce(422, `the office cannot tell which household "${by}" belongs to`,
-    "a placement lands under the resident's own household, read from the town's pins — this handle has none");
+    "a placement lands under the resident's own household, read from the store's pins — this handle has none, or the store could not be read");
   return { placer: named ?? placers[0], consent, household };
 }
 
@@ -3745,7 +3760,7 @@ export async function leaveMarkViaOffice(worldClone, payload = {}, key = null, {
   const handles = [...(key?.handles ?? [])];
   const by = payload.by ?? (handles.length === 1 ? handles[0] : undefined);
   if (!by) throw bounce(422, "which resident is leaving this mark?", handles.length ? `pass by: one of ${handles.join(", ")}` : "this key acts for no resident");
-  const onBehalf = key?.handles?.has(by) ? null : placingOnBehalf(by, payload, key, bounce);
+  const onBehalf = key?.handles?.has(by) ? null : await placingOnBehalf(by, payload, key, bounce);
   if (!key?.handles?.has(by) && !onBehalf) throw bounce(403, `"${by}" is not one of your residents`, `this key acts for: ${handles.join(", ") || "(none)"}`);
   if (!onBehalf && (payload.consent !== undefined || payload.placed_by !== undefined))
     throw bounce(422, "consent and placed_by are for a placement on another resident's behalf",
@@ -3769,7 +3784,7 @@ export async function leaveMarkViaOffice(worldClone, payload = {}, key = null, {
   // A SET-DOWN MOVES THE RING (Wright's ruling (a), 2026-10-02). The hold door
   // files `at` = the dropper's standpoint with canon's ring unchanged, so the
   // ring is moved first, its box centre onto the standpoint, and the box is
-  // derived from the moved ring. The move guard below still runs on it.
+  // derived from the moved ring. The carry (POS-441) follows from it like any move.
   //
   // A ring-less write never enters this block, and a parcel's extent stays the
   // town's dial (the gate after the kind checks holds its ring to it).
@@ -4238,11 +4253,12 @@ async function disclosePublishing(result, by) {
       }
     }
     const w = await world();
+    const houses = await householdLookup(); // the store's registry (POS-342)
     const note = publishNoteFor({
       id: result.id, parent: result.parent ?? null, by, kind: result.kind ?? null,
       ownGround: groundMin === 0 ? true : null,
       marks: w?.marks ?? [],
-      residentsOf: (h) => householdOf(h)?.residents ?? null,
+      residentsOf: (h) => houses?.(h)?.residents ?? null,
     });
     if (!note) return;
     result.publishing = note;

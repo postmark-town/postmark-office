@@ -120,8 +120,23 @@ export function loginKeys(pins, households) {
 // EXPORTED map in `tools/world-households-export.mjs` and nowhere else, so the
 // money surface reads exactly the map it read yesterday.
 
-/** A legal git branch component — the sketchbook name has to be one. */
-export const SKETCHBOOK_COMPONENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+/**
+ * A legal git branch component — the sketchbook name has to be one. Git refuses
+ * a component that ends in "." or ".lock", or that holds "..". The 2026-10-06
+ * 06:00Z settlement was refused on `draft/victor-b.-rose-e.`, a household slug
+ * with a trailing dot (declared 08-24), because this pattern used to accept it.
+ */
+export const SKETCHBOOK_COMPONENT = /^(?!.*\.\.)(?!.*\.lock$)[A-Za-z0-9][A-Za-z0-9._-]*(?<!\.)$/i;
+
+/**
+ * A household's name as a git-safe sketchbook name, the same every time, so the
+ * write-down and the wall's logins map (both through `sketchbookNameForKey`)
+ * agree. A name git already accepts comes back unchanged. If the trimmed name
+ * meets another house's, `sketchbookKeys` reports the collision; nothing merges
+ * silently.
+ */
+export const gitSafeComponent = (name) =>
+  String(name).replace(/\.{2,}/g, ".").replace(/\.lock$/i, "-lock").replace(/\.+$/, "");
 
 /**
  * THE ONE RESOLVER: household key → the sketchbook name the world repo speaks.
@@ -157,6 +172,7 @@ export function sketchbookNameForKey(householdKey, logins = {}) {
     else name = `gh-${rest}`;
   }
 
+  name = gitSafeComponent(name);
   if (!SKETCHBOOK_COMPONENT.test(name)) return { name, reason: "unnameable", bound: [] };
   return { name, reason: null, bound: [] };
 }
@@ -311,4 +327,31 @@ export function readPins(clone) {
 export function townLoginHands(clone, engine) {
   if (typeof engine?.currentHouseholds !== "function") return new Map();
   return loginHands(engine.currentHouseholds(clone), readPins(clone));
+}
+
+/**
+ * THE WORLD'S HOUSEHOLD MAPS, for a town clone: `{ households, logins, names }`,
+ * exactly what tools/world-households-export.mjs publishes as
+ * WORLD/households.json (its `households` is what the fold reads). The town's
+ * own resolver (`engine.currentHouseholds`: the pins, the ADDRESS logins and the
+ * ledger's dated `registry:` lines), the pins' logins, then one key per declared
+ * house (tools/households.json). Moved here from the export on 2026-10-05
+ * (POS-410) so a settlement snapshot derives the same map from its own register
+ * rows; the export's emission does not move.
+ *
+ * `register` is the registry handed in rather than read off the clone: `pins`
+ * (`{ handle: { login, id } }`) and `declared` (`{ households: { slug: rec } }`).
+ * The export hands in the store's (POS-350: it renders the store's registry,
+ * never the clone's printouts, and refuses when it cannot read it). A field left
+ * undefined falls back to the clone's file, which is the snapshot's road: its
+ * clone is an overlay whose two files ARE the sealed register's rows.
+ */
+export function worldHouseholdsAt(clone, engine, register = {}) {
+  const ledgerHouseholds = householdsOf(engine.currentHouseholds(clone));
+  const pins = register.pins !== undefined ? register.pins : readPins(clone);
+  const { logins: ledgerLogins } = loginKeys(pins, ledgerHouseholds);
+  const declared = register.declared !== undefined ? register.declared : (() => {
+    try { return JSON.parse(readFileSync(join(clone, "tools", "households.json"), "utf8")); } catch { return null; }
+  })();
+  return oneKeyPerHouse(ledgerHouseholds, ledgerLogins, declared);
 }

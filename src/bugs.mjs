@@ -33,6 +33,7 @@
 // (BUG_NO_STAKE), with the ruling's reason in the refusal.
 
 import { refuse, TITLE_MAX, INVITATION_MAX } from "./events.mjs";
+import { handsOf, holdsHand, notThisHand } from "./named-hand.mjs";
 
 export const BUG_CLASS = "bug";
 
@@ -120,6 +121,30 @@ export function judgeCritter(v) {
   return s;
 }
 
+/**
+ * The link (Darko, 2026-10-07: "where the lifecycle pointers point TO"). The
+ * post holds a bug's state and its GitHub issue is where the work happens, in
+ * public: the cause, the fix brief, the PR. An advance may name the work that
+ * earned its stage, on the town's own repos: the issue comment holding the
+ * cause (diagnosed) or the fix brief (briefed), the PR (fixed), the release
+ * tag (shipped). The post keeps one per stage in fields.links, so the record
+ * points at everything the town paid for and the stage pass can check it.
+ * Optional: a stage our own fix proved may have nothing else to point at.
+ */
+export const LINK_RE = /^https:\/\/github\.com\/postmark-town\/[A-Za-z0-9._-]+\/\S+$/;
+export const LINK_MAX = RECORD_MAX;
+export const LINK_WHAT = "the work that earned the stage, on github.com/postmark-town/: the issue comment with the cause (diagnosed) or the fix brief (briefed), the PR (fixed), the release tag (shipped)";
+const LINK_HOW = `link: one URL — ${LINK_WHAT}`;
+
+export function judgeLink(v) {
+  if (typeof v !== "string") throw refuse(422, "link is text", LINK_HOW, { field: "link" });
+  const s = v.trim();
+  if (!s) throw refuse(422, "link is empty", "leave link off rather than sending it empty", { field: "link" });
+  if (s.length > LINK_MAX) throw refuse(422, `link is at most ${LINK_MAX} characters`, `this one is ${s.length}`, { field: "link" });
+  if (!LINK_RE.test(s)) throw refuse(422, "link points at the town's own repos", LINK_HOW, { field: "link" });
+  return s;
+}
+
 /** The fields a bug's reporter may send and amend, beside title and body. */
 export const BUG_FIELDS = Object.freeze(["issue", "steps", "record"]);
 
@@ -190,16 +215,18 @@ export function judgeBugHand(fields, key, { act }) {
   const held = [...(key?.handles ?? [])];
   const named = typeof fields?.handle === "string" ? fields.handle.trim() : "";
   if (named && !held.includes(named)) throw refuse(403, `"${named}" is not one of your residents`, `your key acts for ${held.join(", ") || "no resident"}`);
-  const hand = named || (held.length === 1 ? held[0] : held.find((h) => BUG_HANDS.includes(h)) ?? "");
+  const hand = named || (held.length === 1 ? held[0] : [...handsOf(key)].find((h) => BUG_HANDS.includes(h)) ?? "");
   if (!hand || !BUG_HANDS.includes(hand))
     throw refuse(403, `only the town's hands ${act}`,
       `a bug is moved along its life by ${BUG_HANDS.join(", ")}; anyone may post one as themselves with town { do: "post", args: { class: "bug", title, body } }`);
+  // POS-389: the hand is this credential's own, not a housemate it lists.
+  if (!holdsHand(key, hand)) { const r = notThisHand(hand, key); throw refuse(403, r.defect, r.hint); }
   return hand;
 }
 
 /**
  * Judge an advance against the post's current state. Returns the payload's
- * judged parts: `{ to, credit, size?, critter?, grade?, of? }`. `reporter` is the post's
+ * judged parts: `{ to, credit, size?, critter?, grade?, of?, link? }`. `reporter` is the post's
  * author, the credit a `confirmed` defaults to.
  */
 export function judgeAdvance(fields, prev, roll) {
@@ -237,6 +264,7 @@ export function judgeAdvance(fields, prev, roll) {
     if (!BUG_GRADES.includes(fields.grade)) throw refuse(422, "briefed needs a grade", `grade: ${BUG_GRADES.join(" or ")} — the bless's revision (${BUG_GRADES.map((g) => `${g} ${BUG_LADDER.briefed.n[g]}`).join(", ")})`, { field: "grade" });
     out.grade = fields.grade;
   }
+  if (fields.link !== undefined) out.link = judgeLink(fields.link);
   if (fields.of !== undefined && to !== STATE_DUPLICATE) throw refuse(422, "of is duplicate's", "only an advance to duplicate names the post it duplicates", { field: "of" });
   if (to === STATE_DUPLICATE) {
     const of = typeof fields.of === "string" ? fields.of.trim() : "";

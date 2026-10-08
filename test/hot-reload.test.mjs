@@ -27,6 +27,10 @@ import { fixtureDb } from "./fixture.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+// This file is office.db's hot reload, so every office here reads office.db,
+// whatever switch the run was started with (POS-268: a switched office opens
+// no office.db, and the reload goes with the file at 5b).
+delete process.env.TOWN_INDEX_READS;
 // The port is asked of the OS, never chosen (spawn-office.mjs § the port,
 // asked for); it was the fixed 43861, a door every pool tree on the box shares.
 let PORT, BASE;

@@ -62,6 +62,10 @@ lawful AS (
     -- 062_gangway_acts.sql (POS-353). The arrivals breaker as store-of-record;
     -- INSERT only, because a change of state is a new row and never an edit.
     ('office_api',   'gangway_acts',           'INSERT'),
+    -- 066_stamp_lines.sql (POS-341 Q1). The stamp ledger's signed chain, one row
+    -- per line, appended by the pen in its act's transaction; INSERT only,
+    -- because a signed line is never rewritten.
+    ('office_api',   'stamp_lines',            'INSERT'),
     -- 019_households.sql. The household registry as store-of-record: the two
     -- town JSON files become a rendering of these tables. `office_api` because
     -- it is the role the door that DECLARES a household already connects as
@@ -148,6 +152,9 @@ lawful AS (
     ('office_api',   'office_meta',      'INSERT'),
     ('office_api',   'office_meta',      'UPDATE'),
     ('clearing_job', 'claims',           'UPDATE'),
+    -- 068_clearing_carries.sql (POS-441). A carried mark's claim, born locked in
+    -- the clearing's own transaction; a trigger narrows it to exactly that.
+    ('clearing_job', 'claims',           'INSERT'),
     ('clearing_job', 'windows',          'INSERT'),
     ('clearing_job', 'windows',          'UPDATE'),
     ('clearing_job', 'marks',            'INSERT'),
@@ -158,6 +165,10 @@ lawful AS (
     ('clearing_job', 'mark_versions',        'INSERT'),
     ('clearing_job', 'world_snapshot_marks', 'INSERT'),
     ('clearing_job', 'world_snapshots',      'INSERT'),
+    -- 064_snapshot_register.sql (POS-410). The register rows the snapshot was
+    -- sealed against, copied beside the marks; INSERT only, the same reason.
+    ('clearing_job', 'register_versions',       'INSERT'),
+    ('clearing_job', 'world_snapshot_register', 'INSERT'),
     ('law_ingester', 'law_projection',   'INSERT'),
     ('law_ingester', 'law_projection',   'DELETE'),
     ('law_ingester', 'stamp_projection', 'INSERT'),
@@ -215,6 +226,12 @@ lawful AS (
     ('law_ingester', 'town_funding_invalid',       'INSERT'),
     ('law_ingester', 'town_funding_invalid',       'DELETE'),
     ('law_ingester', 'town_index_snapshots',       'INSERT'),
+    -- 067_town_mint_inputs.sql (POS-341): the mint's rooms and mail lines, read
+    -- from git by the town-index ingest; replaced, never edited.
+    ('law_ingester', 'town_rooms',                 'INSERT'),
+    ('law_ingester', 'town_rooms',                 'DELETE'),
+    ('law_ingester', 'town_mail_lines',            'INSERT'),
+    ('law_ingester', 'town_mail_lines',            'DELETE'),
     ('law_ingester', 'projection_heads', 'INSERT'),
     ('law_ingester', 'projection_heads', 'UPDATE'),
     ('law_ingester', 'projection_heads', 'DELETE'),

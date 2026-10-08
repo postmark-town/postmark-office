@@ -750,6 +750,16 @@ export async function fileFramer(repo) {
   const relative = fold.COORDS_FIELD && declared === fold.COORDS_RELATIVE;
   if (!relative) return null;
   const centre = new Map((state?.marks ?? []).filter((m) => m?.id && m.at).map((m) => [m.id, m.at]));
+  // THE BATCH'S OWN PLACES (POS-441, the carry). The centres above are the LAST
+  // published fold's. When a frame moves in this very crossing — a carried move
+  // writes the mover and its household's marks together — a nested rider framed
+  // against its parent's OLD centre would land at the move's offset twice. So a
+  // caller writing a batch hands its world-framed records in through
+  // `toFileFrame.batch(records)`, and every frame lookup reads the batch's place
+  // first. The fold's own composition is the rule this keeps: a nested file's
+  // numbers are an offset from where its frame stands NOW.
+  const moved = new Map();
+  const centreOf = (id) => moved.get(id)?.at ?? centre.get(id) ?? null;
 
   // DIRECTORY → the mark that owns it, inverted out of the fossil manifest. The
   // manifest is keyed id → directory and is never regenerated, so this is exact
@@ -777,7 +787,7 @@ export async function fileFramer(repo) {
     for (let depth = parts.length - 2; depth > 3; depth--) {
       const ancestor = `${parts.slice(0, depth).join("/")}/mark.md`;
       const id = idOfMarkFile.get(ancestor);
-      const at = id ? centre.get(id) : null;
+      const at = id ? centreOf(id) : null;
       if (at) return at;
     }
     return null;
@@ -787,7 +797,7 @@ export async function fileFramer(repo) {
     // THE PATH FIRST. It is where the record is actually going, so it is what
     // the fold will compose it against; `parent_id` is a claim the payload makes
     // and only predicated/naming marks make it at all.
-    const origin = (path ? originForPath(path) : null) ?? (parent_id ? centre.get(parent_id) : null);
+    const origin = (path ? originForPath(path) : null) ?? (parent_id ? centreOf(parent_id) : null);
     if (!origin) return {};
     return {
       ...(at ? { at: fold.worldToFile(at, origin) } : {}),
@@ -814,7 +824,21 @@ export async function fileFramer(repo) {
   const markOfId = new Map((state?.marks ?? []).filter((m) => m?.id).map((m) => [m.id, m]));
   toFileFrame.declaredParentOf = (path) => {
     const parentId = declaredParentIdOf(path, idOfMarkFile);
-    return parentId ? { parentId, parent: markOfId.get(parentId) ?? null } : null;
+    if (!parentId) return null;
+    const prior = markOfId.get(parentId) ?? null;
+    // The parent where it stands after THIS crossing (the batch), and where it
+    // stood before it — the guard asks the first, and the carry's exemption
+    // (mark-declared-parent.mjs § carried together) compares the two.
+    const now = moved.has(parentId) ? { ...(prior ?? {}), ...moved.get(parentId) } : prior;
+    return { parentId, parent: now, parentPrior: prior };
+  };
+  toFileFrame.batch = (records = []) => {
+    moved.clear();
+    for (const r of records) {
+      if (!r?.id || !r.at) continue;
+      moved.set(String(r.id), { at: r.at, ...(r.extent ? { extent: r.extent } : {}), ...(Array.isArray(r.points) ? { points: r.points } : {}) });
+    }
+    return moved.size;
   };
   // THE MARK AS IT STANDS — the crossing's half of the narrowing. The door has
   // `priorLive ?? priorCanon`; here the last published fold IS the prior, and it

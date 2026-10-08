@@ -1,0 +1,56 @@
+name: ship-guard
+
+# A PULL REQUEST INTO MAIN IS A SHIP OR A HOTFIX, AND A SHIP CARRIES MAIN
+# (Darko, 2026-10-06). The logic and its reasons live in tools/ship-guard.mjs,
+# with a unit test beside it; this file only hands the tool the PR's refs.
+#
+#   1. the base guard: a PR into main fails unless its head is train/* or hotfix/*
+#      ("retarget to train/<the open week>");
+#   2. the train contains main: a train/* PR into main fails while main has
+#      commits the train lacks ("merge main into the train").
+#
+# It reads and never writes: no push, no comment, no label.
+#
+# WHERE IT RUNS FROM. A pull_request run takes this file and the tool from the
+# PR's merge ref, so a PR into main is judged by main's copy. Landed on the
+# train, the guard reaches main's PRs with the ship.
+#
+# WHAT IT CANNOT SEE. A PR check does not rerun when main moves. A hotfix that
+# lands on main after the ship PR's last run leaves that run green. Requiring
+# this check with "branches must be up to date" on main's ruleset closes that
+# gap; until then, push the train (or rerun this job) just before the merge.
+# The ruleset is Darko's; this file does not touch it.
+
+on:
+  pull_request:
+    # edited: a PR retargeted to another base is judged again
+    types: [opened, reopened, synchronize, edited]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ship-guard-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  ship-guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Judge the base and the train
+        env:
+          BASE: ${{ github.event.pull_request.base.ref }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          # main as it stands now, not as it stood when the PR's merge ref was made
+          git fetch -q origin '+refs/heads/main:refs/remotes/origin/main'
+          TZ=America/New_York node tools/ship-guard.mjs --base "$BASE" --head "$HEAD_REF" --head-sha "$HEAD_SHA" --main-ref origin/main

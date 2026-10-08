@@ -23,6 +23,11 @@ set -eu
 LOCK="${TOWN_LOCK:-/srv/postmark-office/town.lock}"
 SNAP="$(mktemp -d /tmp/postmark-tick.XXXXXX)"
 trap 'rm -rf "$SNAP"' EXIT
+# THE STORE'S REGISTRY for the town's tools this tick runs (POS-345): they read
+# `--registry "$REGISTRY_FILE"`, never the printed tools/households.json and
+# tools/github-ids.json. Written inside the flock below; when the store cannot be
+# read nothing is written, and each tool handed the path refuses by name.
+REGISTRY_FILE="$SNAP/registry.json"
 
 # ── under the lock: mutate + snapshot (seconds) ──────────────────────────────
 # The world clone gets FETCH, never pull: its checkout is the write pen's
@@ -35,6 +40,8 @@ trap 'rm -rf "$SNAP"' EXIT
   flock -w 300 9
   git -C "$TOWN_CLONE" pull --ff-only -q
   git -C "$WORLD_CLONE" fetch --prune -q origin
+  node /srv/postmark-office/deploy/registry-file.mjs "$REGISTRY_FILE" \
+    || echo "[office-keep] the store's registry could not be read — every town check below that needs it refuses this tick, by name" >&2
   # settle-on-tick (Keemin, 2026-09-29; overturns #3231's "no timer"): every
   # join merged since the last tick is bound here — the pen's residency/* and
   # hand-written single-address joins — BEFORE the mint catch-up and the
@@ -113,7 +120,7 @@ trap 'rm -rf "$SNAP"' EXIT
   # a local commit, exactly as it did before this block.
   ( cd "$TOWN_CLONE" || exit 1
     LEDGER=WHITE_PAGES/stamp-ledger.md
-    if ! node tools/stamp-verify.mjs; then
+    if ! node tools/stamp-verify.mjs --registry "$REGISTRY_FILE"; then
       echo "[office-keep] mint catch-up OFF — the ledger arrived red (stamp-verify above names the line), so this tick appended nothing; the catch-up resumes on the first tick that finds it green" >&2
       exit 0
     fi
@@ -142,17 +149,54 @@ trap 'rm -rf "$SNAP"' EXIT
     cp "$LEDGER" "$HOLD/ledger.arrived" || exit 1
     git ls-files --others --exclude-standard > "$HOLD/untracked.arrived" || exit 1
     armed=1
-    node tools/stamp-mint.mjs --append --key /srv/postmark-office/stamp-key.pem || exit 1
+    # POS-341, BEHIND ITS SWITCH. With STAMP_LINES=store (set once the box has
+    # 066/067, one ingest, one --sync and a green parity), the mint decides from
+    # the store and commits its own lines in its store transaction
+    # (world2/tools/stamp-mint-run.mjs). Those lines are in HEAD then, so the
+    # arrival copy moves up to them and a roll-back below puts back only what
+    # the welcome and stage passes wrote. Unset, the town's own --append runs
+    # exactly as before, and unsetting it is the rollback.
+    if [ "${STAMP_LINES:-}" = store ]; then
+      node /srv/postmark-office/world2/tools/stamp-mint-run.mjs --append --key /srv/postmark-office/stamp-key.pem \
+          --clone "$TOWN_CLONE" --message "mint: tick catch-up pass" || exit 1
+      cp "$LEDGER" "$HOLD/ledger.arrived" || exit 1
+    else
+      node tools/stamp-mint.mjs --append --key /srv/postmark-office/stamp-key.pem || exit 1
+    fi
     node /srv/postmark-office/deploy/welcome-pass.mjs \
         --town "$TOWN_CLONE" --key /srv/postmark-office/stamp-key.pem \
       || echo "[office-keep] welcome pass had refusals (non-fatal) — the lines above name each one; the household keeps its claim and the next crossing asks again" >&2
+    # The bug ladder's stage pass (Darko, 2026-10-07: payment "rides on the
+    # acceptance"). Every stage an advance recorded and the ledger has not paid
+    # is minted through the town's own --stage-mint verb, one line per post and
+    # stage, ever; the cap and the meep law are the town's. The resident hears
+    # what was paid and why from the Bug Catcher's next round, which reads these
+    # post:<id>/<stage> lines (MEEPS/SKILLS/bugcatcher-round.md).
+    node /srv/postmark-office/tools/bug-stage-plan.mjs \
+        --town "$TOWN_CLONE" --apply --quiet --key /srv/postmark-office/stamp-key.pem \
+      || echo "[office-keep] bug stage pass had refusals (non-fatal) — the lines above name each one; the stage stays owed and the next tick pays it" >&2
+    # The ballots (POS-349: ballots are posts). The founder's ballot files are
+    # the input: this takes each one in as the town's post, or moves its post to
+    # what the file now says, and records every ledger stake no vote carries, in
+    # the post's own transaction. Store only (nothing here touches the ledger),
+    # and idempotent, so the first tick after the deploy takes the town's ballots
+    # in whole and every later tick writes nothing unless something moved. A
+    # stake reads the post and refuses while the two disagree, so a status the
+    # founder moved stands within one tick of reaching this clone.
+    node /srv/postmark-office/tools/ballots-backfill.mjs --town "$TOWN_CLONE" --hand keemin --apply --quiet \
+      || echo "[office-keep] ballot ingest had refusals (non-fatal) — the lines above name each one; the post stands as it was and the next tick asks again" >&2
     if ! cmp -s "$LEDGER" "$HOLD/ledger.arrived"; then
-      node tools/stamp-verify.mjs || exit 1
+      node tools/stamp-verify.mjs --registry "$REGISTRY_FILE" || exit 1
     fi
     if ! git diff --quiet -- "$LEDGER"; then
-      git add "$LEDGER" && git commit -qm "mint: tick catch-up pass" || exit 1
+      git add "$LEDGER" && git commit -qm "mint: tick pass (welcome, bug stages)" || exit 1
       armed=0
       git push -q || exit 1
+      # with the switch on, the lines this shell committed (the welcome and
+      # stage passes) are recorded in the store now: the store reads git
+      if [ "${STAMP_LINES:-}" = store ]; then
+        node /srv/postmark-office/world2/tools/stamp-lines.mjs --sync --clone "$TOWN_CLONE" || exit 1
+      fi
     fi
     armed=0
   ) || echo "[office-keep] mint catch-up FAILED (non-fatal) — run stamp-verify in the town clone" >&2
@@ -203,7 +247,7 @@ fi
 # JSON (the tool absent or crashed) still writes a line, `checked: false`, so
 # "did not run" never reads like "found nothing".
 HK_LOG="${HOUSEHOLD_KEYS_LOG:-/srv/postmark-harbor/household-keys.jsonl}"
-hk_out="$(node "$SNAP/town/tools/household-keys.mjs" --json --repo "$SNAP/town" 2>&1)" || true
+hk_out="$(node "$SNAP/town/tools/household-keys.mjs" --json --repo "$SNAP/town" --registry "$REGISTRY_FILE" 2>&1)" || true
 if node -e '
   const text = process.argv[1] ?? "";
   let j = null;

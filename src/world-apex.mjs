@@ -36,9 +36,10 @@
 // `law.unavailable` / `law.stale`, and returns no affordances. (The deriver's
 // law — refuse or disclose absent inputs, never quietly substitute.)
 
-import { renamedRow, DOOR_FIELDS } from "./one-contract.mjs"; // POS-70: the one rename shape; POS-246: the door's own fields
+import { renamedRow, DOOR_FIELDS, withRefused } from "./one-contract.mjs"; // POS-70: the one rename shape; POS-246: the door's own fields; POS-427: refused beside did
 import { actUnderNonce, nonceDefect } from "./act-nonce.mjs"; // POS-246: a world act's retry key
 import { readFileSync } from "node:fs";
+import { refShaFromDisk } from "./world-branches.mjs";
 import { join } from "node:path";
 
 import {
@@ -111,7 +112,7 @@ import { actorRoster, resolveHumanActor } from "./human-actor.mjs";
 // The hand an embodied act is recorded under. Imported rather than derived here:
 // `worldSayHuman` has owned this label since 2026-08-08 and `humanHandFor` is
 // that one derivation, moved somewhere both doors can read it.
-import { humanHandFor, householdOf } from "./households.mjs";
+import { humanHandFor, householdLookup } from "./households.mjs";
 import {
   classOfInstance, entriesOfClass, guardsPass, heldEntries, kindOf, resolveGrants, resolveForActor,
 } from "./world-grants.mjs";
@@ -665,7 +666,7 @@ export const declareStanceAtOffice = (args, key) =>
 export const STANDING_SCOPED_DOORS = Object.freeze({
   [ACTION_STANCE]: Object.freeze({
     door: "household",
-    perform: `household { do: "${ACTION_STANCE}", args: { on: …, stance: "welcomed"|"opposed" } }`,
+    perform: `household { do: "${ACTION_STANCE}", args: { on: …, stance: "welcomed"|"neutral"|"opposed" } }`,
     observe: 'household { read: "stances" }',
     why: "what awaits your word is derived from the ground your HOUSE holds, never from where your feet are — so it is spoken at the door where standing lives",
   }),
@@ -1337,14 +1338,32 @@ registerTwin(HELD_ROWS, (g, idsJson) => nodesIn(g, idsJson)
 // UNREADABLE IS NULL, NOT A GUESS. `scopeAdmits` refuses on a null household
 // rather than admitting, so a missing registry closes the relation-scoped doors
 // instead of opening them to everyone. That direction is the whole point.
-let _hh = null;
+//
+// CACHED PER HEAD, NOT PER PROCESS (the Starling House, 2026-09-30). This used
+// to parse the file ONCE for the life of the process, and nothing in
+// production ever reset it: a settlement that re-derived the registry reached
+// this door only at the office's next restart, so a house split across two
+// keys stayed split here after the world had joined it. The parse is now keyed
+// on the clone's HEAD sha, read off disk (no git subprocess), so the checkout
+// moving is what re-reads it.
+function headShaOf(repo) {
+  try {
+    const head = readFileSync(join(repo, ".git", "HEAD"), "utf8").trim();
+    const sym = /^ref: (refs\/\S+)$/.exec(head);
+    return sym ? refShaFromDisk(repo, sym[1]) ?? null : head;
+  } catch { return null; }
+}
+let _hh = null; // { head, map }
 export function worldHouseholdOf(handle, { repo = WORLD_CLONE } = {}) {
   if (!handle) return null;
-  if (_hh === null) {
-    try { _hh = JSON.parse(readFileSync(join(repo, "WORLD", "households.json"), "utf8")).households ?? {}; }
-    catch { _hh = {}; }
+  const head = headShaOf(repo);
+  if (_hh === null || _hh.head !== head) {
+    let map = {};
+    try { map = JSON.parse(readFileSync(join(repo, "WORLD", "households.json"), "utf8")).households ?? {}; }
+    catch { map = {}; }
+    _hh = { head, map };
   }
-  return _hh[handle] ?? `solo:${handle}`;
+  return _hh.map[handle] ?? `solo:${handle}`;
 }
 export const resetHouseholdCache = () => { _hh = null; };
 
@@ -1383,10 +1402,10 @@ export const actorKindOf = (args = {}) => {
  * checks it: WHERE the seating comes from, WHOSE name goes on the row, and WHO
  * actually acted.
  */
-export const seatBlock = (ground, args = {}, key = null) => ({
+export const seatBlock = async (ground, args = {}, key = null) => ({
   ground,
   seat: standingHandle(args, key),
-  human: humanHandFor([...(key?.handles ?? [])]),
+  human: await humanHandFor([...(key?.handles ?? [])]),
   note: "you are seated by this ground: your acts here are a resident's, and the record carries the seat's name with your own beside it",
 });
 
@@ -1475,6 +1494,8 @@ export async function groundWithinReach(oriented, key = null) {
     const { pointWithinMarkFn } = await import("./world.mjs");
     const withinFn = await pointWithinMarkFn().catch(() => null);
 
+    // One read of the store's registry for the whole ground (POS-342).
+    const householdOf = await householdLookup();
     const out = [];
     for (const r of rows) {
       const mark = marks.find((m) => m.id === r.id);
@@ -2183,8 +2204,8 @@ async function apexRead(args, key, ctx = {}) {
       // the disclosure is what makes the difference between a seat and
       // ghost-writing. It names no ground because it stands on none, and it
       // carries the hour it ends, which is the whole of how it ends.
-      ...(seatedAt ? { seat: seatBlock(seatedAt, args, key) }
-        : handoffSeat ? { seat: { ...seatBlock(null, args, key), ground: null, via: "handoff",
+      ...(seatedAt ? { seat: await seatBlock(seatedAt, args, key) }
+        : handoffSeat ? { seat: { ...(await seatBlock(null, args, key)), ground: null, via: "handoff",
             expires_at: handoffSeat.expires_at,
             note: "you are seated by your own resident's handoff, not by a ground: your acts here are a resident's, the record carries the seat's name with your own beside it, and the seat travels with them and ends at its ttl rather than at a fence" } }
         : {}),
@@ -2511,7 +2532,7 @@ async function apexDo(args, key, ctx = {}) {
       // disclose it too (the walk door's `acted_by` does), but a disclosure
       // that depended on each handler remembering would be a promise kept by
       // habit — this is the one place every act passes through.
-      ...(seatedAt ? { seat: seatBlock(seatedAt, args, key), ...(match.via_seat ? { via_seat: true } : {}) } : {}),
+      ...(seatedAt ? { seat: await seatBlock(seatedAt, args, key), ...(match.via_seat ? { via_seat: true } : {}) } : {}),
       ...(acting ? { actor: { kind: acting.kind, standing: acting.standing, residue: acting.residue, says: acting.says, note: acting.note } } : {}) };
     let result;
     // Declared out here, as it was when the arena's wheel on the crossing below
@@ -2576,7 +2597,7 @@ async function apexDo(args, key, ctx = {}) {
       // humans-as-residents design arrives. Recording the human's own name
       // beside a borrowed standpoint is the closest true thing this office can
       // write, and it is disclosed by `standing_with` on the answer.
-      hand = acting?.standing === "embodied" ? humanHandFor([...(key?.handles ?? [])]) : null;
+      hand = acting?.standing === "embodied" ? await humanHandFor([...(key?.handles ?? [])]) : null;
       if (acting?.route === "worldSayHuman" || (hand && action === "say")) {
         // THE ORIENT HANDLE IS NOT A VOICE (2026-08-28, found live on the
         // dungeon stage): the envelope's `handle:` chose whose standpoint
@@ -3051,7 +3072,14 @@ async function apexReadAction(args, key, ctx = {}) {
   } finally { store.db?.close(); }
 }
 
+// THE ONE PLACE A WORLD ANSWER LEAVES THE APEX, so the one place a refusal is
+// marked `refused: true` (POS-427, one-contract.mjs § withRefused). Every
+// return below, the act's catch included, comes back through here.
 export async function worldApex(args = {}, key = null, ctx = {}) {
+  return withRefused(await worldApexAnswer(args, key, ctx));
+}
+
+async function worldApexAnswer(args, key, ctx) {
   if (!apexEnabled()) return bounce(404, "the apex verb is not switched on at this office", "the operator runs it behind WORLD_APEX=1; the flat world_* verbs answer meanwhile");
   const doing = args.do != null && args.do !== "";
   const reading = args.read != null && args.read !== "";

@@ -10,6 +10,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execUnderTownLock, lockTimedOut, LOCK_BUSY } from "./town-lock.mjs";
 import { listRoles, roleCheck } from "./roles.mjs";
+import { agentHeld } from "./named-hand.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -27,6 +28,11 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 //
 // Static keys carry no ghId → never principal (the OAuth GitHub sign-in is the
 // gate), exactly as before.
+//
+// AN AGENT'S OWN KEY IS NEVER THE PRINCIPAL (POS-389). A resident's claim key,
+// its rotation and a co-signed berth all carry the ghId of the account that
+// co-signed them, which is the human's. The co-sign proves whose house the
+// agent is in; it does not make the agent the human. Both reads refuse them.
 //
 // TWO READS, BY WHAT THEY GUARD. The one door that SPENDS on the principal's
 // word (POST /ops/gift) asks the registry per call (`principalNow`): a revoke
@@ -66,11 +72,12 @@ export function __setPrincipalsForTest(subjects) { principals = new Set([...(sub
  */
 export function isPrincipal(key, subjects = principals) {
   const set = subjects instanceof Set ? subjects : new Set(subjects == null ? [] : [].concat(subjects).map(String));
-  return key?.ghId != null && set.has(String(key.ghId));
+  return key?.ghId != null && !agentHeld(key) && set.has(String(key.ghId));
 }
 
 /** The authoritative answer, read from the registry now (the spending door's). */
 export async function principalNow(rdb, key) {
+  if (agentHeld(key)) return false;
   return (await roleCheck(rdb, key?.ghId ?? null, ROLE_PRINCIPAL)).ok === true;
 }
 

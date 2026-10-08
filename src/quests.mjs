@@ -35,6 +35,7 @@ import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { refuse } from "./events.mjs";
 import { PEN_HANDLE } from "./earpiece.mjs";
+import { handsOf, holdsHand, notThisHand } from "./named-hand.mjs";
 
 export const QUEST_CLASS = "quest";
 export const STATE_OPEN = "open";
@@ -105,11 +106,13 @@ export function judgeQuestEntry(registry, questId) {
 export function judgeQuestHand(fields, key) {
   const held = [...(key?.handles ?? [])];
   const named = String(fields?.handle ?? "").trim();
-  const hand = named || (held.length === 1 ? held[0] : held.find((h) => QUEST_HANDS.includes(h)) ?? "");
+  const hand = named || (held.length === 1 ? held[0] : [...handsOf(key)].find((h) => QUEST_HANDS.includes(h)) ?? "");
   if (named && !held.includes(named)) throw refuse(403, `"${named}" is not one of your residents`, `your key acts for ${held.join(", ") || "no resident"}`);
   if (!hand || !QUEST_HANDS.includes(hand))
     throw refuse(403, "only the town posts and closes its quests",
       `a quest is the town's post, authored by ${QUEST_AUTHOR}; the hands that may put one up or close it are ${QUEST_HANDS.join(" and ")}`);
+  // POS-389: the hand is this credential's own, not a housemate it lists.
+  if (!holdsHand(key, hand)) { const r = notThisHand(hand, key); throw refuse(403, r.defect, r.hint); }
   return hand;
 }
 

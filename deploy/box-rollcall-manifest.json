@@ -142,13 +142,17 @@
   {
    "unit": "postmark-town-index.timer",
    "label": "the town index (office.db's tables in the store)",
-   "stage": "parked",
-   "activation_owner": "Not yet adopted — the law_ingester pen's town index, POS-268 (lane retire-sqlite-index, 2026-09-30). Adopted by whoever applies 033_town_index.sql and runs the seed by hand (deploy/town-index-ingest.sh's header).",
-   "parked_because": "Its migration (033) is not applied and the index has no seed. No office door reads these tables until TOWN_INDEX_READS=store is set, so nothing waits on it.",
-   "adopt_command": "apply world2/schema/033_town_index.sql as world2_owner; copy deploy/town-index-ingest.sh to /srv/world2-lab/ops/; run the seed by hand (the script's header); sudo cp deploy/postmark-town-index.{service,timer} /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable --now postmark-town-index.timer — then flip this row to live",
-   "cadence": "none while parked (the unit file carries :05/:20/:35/:50)",
-   "cadence_source": "the unit file — disabled with no next fire is this row's healthy state until adoption",
-   "stale_means": "not judged while parked. Once live: the store's town_* tables stop following the town, and every door that reads them serves the town as of the last ingest (state file /srv/world2-lab/state/town-index.json names the sha and why)."
+   "stage": "live",
+   "activation_owner": "Keemin — ADOPTED at the w41 ship, 2026-10-04 (runbook § 8.2): 033_town_index.sql applied, the seed run by hand, and the timer enabled by Wright at 16:45Z. The READS switch (TOWN_INDEX_READS=store) is a separate act: flipped 10-04 16:52Z and rolled back 19:35Z (pool exhaustion; office #346, POS-370), then re-flipped 10-06 12:13Z with w41.3 and watched four hours clean (switch2-watch). It is ON: every door that reads the town index reads these tables.",
+   "cadence": "every 15 minutes at :05/:20/:35/:50 UTC",
+   "cadence_source": "systemctl show postmark-town-index.timer -p TimersCalendar — measured on the box 2026-10-07T01:0xZ: '{ OnCalendar=*-*-* *:05,20,35,50:00 UTC }', UnitFileState=enabled, active since 2026-10-04 16:45:19 UTC",
+   "heartbeat": {
+    "kind": "state_file",
+    "path": "/srv/world2-lab/state/town-index.json",
+    "stamp_field": "at",
+    "stale_after_minutes": 45
+   },
+   "stale_means": "the store's town_* tables stop following the town, and with TOWN_INDEX_READS=store (on since 2026-10-06 12:13Z) every door that reads them serves the town as of the last ingest. The state file names the sha and why. The allowance is three ticks."
   },
   {
    "unit": "postmark-harbor-watch.timer",
@@ -741,6 +745,14 @@
     "must_be": "release",
     "why": "It writes the harbour snapshot every other row on this board is read against. A stale watcher is a stale board.",
     "activation_owner": "Wright — WorkingDirectory=/srv/postmark-office in deploy/postmark-harbor-watch.service."
+   },
+   {
+    "id": "paypal-watch",
+    "unit": "postmark-paypal-watch.service",
+    "label": "the paypal watch's tree",
+    "must_be": "release",
+    "why": "It attributes PayPal gifts to their pots and households and writes them onto the stamp ledger's pot-receipt rows. A watcher on an old tree attributes by an old rule, through a green board — the 2026-09-10 candle's class.",
+    "activation_owner": "Wright — WorkingDirectory=/srv/postmark-office in deploy/postmark-paypal-watch.service; adopted with the watch at the w41 ship (2026-10-04)."
    },
    {
     "id": "usdc-watch",

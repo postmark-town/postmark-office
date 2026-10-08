@@ -275,24 +275,26 @@ test("latest wins — a re-declaration supersedes, and the whole life stays in t
     "and exactly one word stands");
 });
 
-test("NEUTRAL IS NEVER STORED — there is no argument for it, and no zero row exists", async () => {
-  // the class mark: "neutral is never stored, it is absence."
-  // the response function: "neutral — the resting state … Neutral is the default
-  // everywhere, and it is what makes gifts, strangers, and latency survivable."
-  assert.deepEqual(STANCES, ["welcomed", "opposed"], "two words, and there is no third");
+test("A DECLARED NEUTRAL IS A WORD — it is stored, it clears the inbox, and it welcomes nothing (Darko, 2026-10-06)", async () => {
+  // AMENDED BY RULING. This test asserted the class mark's "neutral is never
+  // stored, it is absence" until POS-361. Darko, 2026-10-06: "Residents may
+  // also declare neutral (it clears 'awaiting your word'). One taxonomy." Silence
+  // is still the awaiting state; a declared neutral is a word.
+  assert.deepEqual(STANCES, ["welcomed", "neutral", "opposed"], "one taxonomy, three words");
 
-  await assert.rejects(() => speak({ on: "gamma/well-inside", stance: "neutral" }), (e) => {
-    assert.equal(e.code, 422);
-    assert.equal(e.defect, "neutral is never stored, it is absence");
-    assert.match(e.hint, /nothing to declare/);
-    return true;
-  }, "the refusal quotes the law rather than saying 'invalid enum'");
+  const r = await speak({ on: "gamma/well-inside", stance: "neutral" });
+  assert.equal(r.stance, "neutral");
+  assert.match(r.effect, /confers nothing/, "and it says it confers nothing");
+  const inbox = await stanceInbox(repo, houseA, { dbPath });
+  assert.equal(inbox.candidates.some((c) => c.mark === "gamma/well-inside"), false,
+    "a declared neutral clears 'awaiting your word'");
+  assert.ok(inbox.candidates.some((c) => c.mark === "beta/on-alphas-edge"),
+    "while silence on beta's cairn leaves it awaiting");
 
   for (const bad of ["", "yes", "welcome", "OPPOSED", null, 1]) {
     await assert.rejects(() => speak({ on: "gamma/well-inside", stance: bad }), (e) => e.code === 422);
   }
-  assert.equal(withDb((db) => readJournal(db, { cls: CLASS_STANCE })).length, 0,
-    "not one row was written — a refused stance is absence, exactly like an unspoken one");
+  assert.equal(pen.rows().length, 1, "one word written; every refused one left nothing behind");
 });
 
 test("a mark with no word from you is simply absent from your standing stances", async () => {
@@ -345,7 +347,9 @@ test("the write path is THE RECORD — one row, its own class, the witnessed lin
     "the-witnessed-line, exactly as a mark row carries it: where the actor stood, relative to what");
   assert.deepEqual(JSON.parse(row.witnesses).list, [{ handle: "gamma", anchor: "alpha/alphas-parcel", dx: 0, dy: 0 }]);
   const { late_from_crossing: _lc, late_arrival: _la, ...declared } = payload;
-  assert.deepEqual(declared, { on: "gamma/well-inside", stance: "welcomed", by: "alpha", on_your_ground: ["alpha/alphas-parcel"] });
+  // `version` is the mark version the word was spoken on (POS-361, Q5); this
+  // fixture's store names no claim for gamma's sketch, so it is null.
+  assert.deepEqual(declared, { on: "gamma/well-inside", stance: "welcomed", by: "alpha", on_your_ground: ["alpha/alphas-parcel"], version: null });
 });
 
 test("THE DOOR WRITES; THE CROSSING JUDGES — nothing is enforced, and the answer says so", async () => {

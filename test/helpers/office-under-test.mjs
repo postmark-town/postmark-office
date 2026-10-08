@@ -20,6 +20,18 @@
 import { DatabaseSync } from "node:sqlite";
 import { startStore } from "./embedded-store.mjs";
 import { copyIndexToStore } from "./index-to-store.mjs";
+import { execFileSync as execFileSyncSeed } from "node:child_process";
+import { fileURLToPath as fileURLToPathSeed } from "node:url";
+
+/**
+ * ONE READ WORKER for an office on a test store. Switched, every read worker
+ * keeps a pen pool of its own and polls the store each 5 s; at the default
+ * cores - 1 workers (15 on a 16-core machine) one office held ~45 of the test
+ * server's 100 connections, and under a busy suite its reads and boots timed
+ * out (POS-268 5a: 68 such reds in the switch-only probe). The box runs 3. A
+ * test about workers sets OFFICE_READ_WORKERS itself, after this env.
+ */
+const ONE_WORKER = "1";
 
 /** Which index this run's offices read: "store" (the default) or "office" (the old way, until the deletion). */
 export const testIndex = () => (process.env.OFFICE_TEST_INDEX === "office" ? "office" : "store");
@@ -42,7 +54,7 @@ export async function indexStore(dbPath, { db: name = "office_test" } = {}) {
   };
   await seed();
   let inProcess = null; // this process's index module, once useInProcess switched it
-  const env = { TOWN_INDEX_READS: "store", WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") };
+  const env = { TOWN_INDEX_READS: "store", WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api"), OFFICE_READ_WORKERS: ONE_WORKER };
   return {
     env,
     store: s,
@@ -107,5 +119,94 @@ export async function indexStoreFromTown(townRepo, { sha = null, db: name = "off
   const w = await s.connect("law_ingester");
   try { await ingest(w, { townRepo, sha: at, seed: true }); }
   finally { await w.end(); }
-  return { env: { TOWN_INDEX_READS: "store", WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") }, store: s, stop: () => s.stop() };
+  return { env: { TOWN_INDEX_READS: "store", WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api"), OFFICE_READ_WORKERS: ONE_WORKER }, store: s, stop: () => s.stop() };
+}
+
+/**
+ * THE REGISTRY, IN THE STORE (POS-342/343): replace a started store's
+ * `households`, `household_pins` and `registry_meta` with the two documents a
+ * town clone would print (`tools/households.json`, `tools/github-ids.json`).
+ *
+ * The household block and sign-in read these rows, never the clone's files, so
+ * a suite that used to write the pins file into its temp clone states the same
+ * pins here instead. Written as the store's owner, because the office's own
+ * role holds no DELETE and a suite re-states its registry between tests.
+ */
+export async function seedRegistry(store, households = null, pins = null) {
+  const { rowsFromRegistry } = await import("../../src/registry-rows.mjs");
+  const rows = rowsFromRegistry(households ?? { schema_version: 1, households: {} }, pins ?? {});
+  const c = await store.connect("world2_owner");
+  const json = new Set(["accounts", "home_images"]);
+  const insert = async (table, row) => {
+    const cols = Object.keys(row);
+    await c.query(`INSERT INTO ${table} (${cols.join(", ")}) VALUES (${cols.map((_, i) => `$${i + 1}`).join(", ")})`,
+      cols.map((k) => (json.has(k) ? JSON.stringify(row[k]) : row[k])));
+  };
+  try {
+    await c.query("TRUNCATE household_pins, households, registry_meta");
+    for (const [key, value] of Object.entries(rows.meta)) await c.query("INSERT INTO registry_meta (key, value) VALUES ($1, $2)", [key, JSON.stringify(value)]);
+    for (const r of rows.households) await insert("households", r);
+    for (const r of rows.pins) await insert("household_pins", r);
+  } finally { await c.end(); }
+}
+
+/**
+ * Point THIS process's record (`world2-acts.mjs § actsQuery`, the pool every
+ * registry read uses) at a started store, as the office's own role. Answers a
+ * function that puts the environment and the pool back.
+ */
+export async function recordInProcess(store) {
+  const { default: pg } = await import("pg");
+  const { __setPoolForTest } = await import("../../src/world2-acts.mjs");
+  const pool = new pg.Pool({ connectionString: store.url("office_api"), max: 2 });
+  pool.on("error", () => {});
+  const was = { on: process.env.WORLD2_PG, url: process.env.WORLD2_PG_URL };
+  __setPoolForTest(pool);
+  process.env.WORLD2_PG = "1";
+  process.env.WORLD2_PG_URL = store.url("office_api");
+  return async () => {
+    __setPoolForTest(null);
+    await pool.end().catch(() => {});
+    if (was.on === undefined) delete process.env.WORLD2_PG; else process.env.WORLD2_PG = was.on;
+    if (was.url === undefined) delete process.env.WORLD2_PG_URL; else process.env.WORLD2_PG_URL = was.url;
+  };
+}
+
+/**
+ * A store for a suite that SPAWNS a tool reading the registry (POS-350: the
+ * world export renders the store's registry, never the town clone's printouts).
+ * `seedFrom(town)` re-states the store from the two printouts a fixture town
+ * holds, so the fixture stays the suite's one statement of its registry; call it
+ * again after the suite rewrites them. `env` points a child at the store.
+ *
+ * A fixture house may omit the two columns 019 requires and the export never
+ * reads (`since`, `declared_by`); they are filled with a stated harness value.
+ */
+export async function registryStoreForTowns({ db = "registry_town_test" } = {}) {
+  const s = await startStore({ db });
+  const { readFileSync, existsSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const read = (p) => (existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : null);
+  return {
+    store: s,
+    env: { WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") },
+    async seedFrom(town) {
+      const doc = read(join(town, "tools", "households.json")) ?? { schema_version: 1, households: {} };
+      const houses = {};
+      for (const [slug, rec] of Object.entries(doc.households ?? {}))
+        houses[slug] = { since: "2026-01-01", declared_by: (rec?.residents ?? [])[0] ?? slug, ...rec };
+      await seedRegistry(s, { ...doc, households: houses }, read(join(town, "tools", "github-ids.json")) ?? {});
+    },
+    /** The same, from a synchronous harness: a child process does the writing. */
+    seedFromSync(town) {
+      return execSeed(town, s.url("world2_owner"));
+    },
+    stop: () => s.stop(),
+  };
+}
+
+/** Run the seed child synchronously (seed-registry-cli.mjs). */
+function execSeed(town, ownerUrl) {
+  execFileSyncSeed(process.execPath, [fileURLToPathSeed(new URL("./seed-registry-cli.mjs", import.meta.url)), town],
+    { env: { ...process.env, REG_OWNER_URL: ownerUrl }, stdio: ["ignore", "pipe", "pipe"] });
 }

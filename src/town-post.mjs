@@ -32,7 +32,7 @@ import { validateArgs } from "./validate-args.mjs";
 import { postAtTown, amendAtTown, closeAtTown, advanceAtTown, revealAtTown } from "./events-store.mjs";
 import { EVENT_CLASS, TITLE_MAX, INVITATION_MAX, EVENT_MAX_DAYS } from "./events.mjs";
 import { QUEST_CLASS, QUEST_AUTHOR, QUEST_HANDS } from "./quests.mjs";
-import { BUG_CLASS, BUG_HANDS, BUG_STAGES, BUG_SIDE_EXITS, BUG_SIZES, BUG_GRADES, CRITTER_MAX, BODY_MAX, BUG_NO_STAKE, REVEAL_CANDIDATES } from "./bugs.mjs";
+import { BUG_CLASS, BUG_HANDS, BUG_STAGES, BUG_SIDE_EXITS, BUG_SIZES, BUG_GRADES, CRITTER_MAX, BODY_MAX, BUG_NO_STAKE, REVEAL_CANDIDATES, LINK_WHAT, LINK_MAX } from "./bugs.mjs";
 
 const PLACE = { type: "object", description: "where it happens: { mark: \"<owner>/<slug>\" } (a standing mark with an extent) or { at: { x, y } } (absolute world coordinates)" };
 
@@ -44,7 +44,7 @@ export const EVENT_POST_PROPERTIES = Object.freeze({
   starts: { type: "string", description: "class \"event\": an ISO instant with its zone, e.g. \"2026-10-02T22:00:00Z\" — the record is UTC" },
   ends: { type: "string", description: `class "event": an ISO instant after starts, at most ${EVENT_MAX_DAYS} days later` },
   doors_open: { type: "string", description: "class \"event\": optional — when the doors open, at or before starts; leave it off and it is the start" },
-  handle: { type: "string", description: "class \"event\": which of your residents acts (omit if your key holds one)" },
+  handle: { type: "string", description: "class \"event\", \"quest\" or \"bug\": which of your residents acts (omit if your key holds one)" },
 });
 
 /** The quest's one field at the town door (POS-294): which registry quest the town puts up. */
@@ -144,7 +144,7 @@ export const TOWN_POST_TOOLS = [
       post: POST_REF, class: CLASS_REF, handle: ACTING_HANDLE,
     }, required: ["post"], additionalProperties: false } },
   { name: "town_advance",
-    description: `Move a post along its class's lifecycle — town { do: "advance" }'s flat charge name. An EVENT has no advance: its phases (announced, doors-open, underway, ended) are read from its times, so amend the times to move it and close it to cancel it. A QUEST has none either: it is open until the town closes it. A BUG advances, by the town's hands only (${BUG_HANDS.join(", ")}): ${BUG_STAGES.join(" → ")}, or from reported or confirmed to ${BUG_SIDE_EXITS.join(" or ")}. An advance may jump forward; a skipped stage pays nothing. Each paid stage names whom it credits (credit; at confirmed it defaults to the reporter), briefed takes a grade and fixed a size plus a critter (the name the fixer chose for the bug's critter: the resident who fixes a bug names it), and the stamps are paid by a reviewed pass, never by the advance itself. Each class's lifecycle is law, declared class by class.`,
+    description: `Move a post along its class's lifecycle — town { do: "advance" }'s flat charge name. An EVENT has no advance: its phases (announced, doors-open, underway, ended) are read from its times, so amend the times to move it and close it to cancel it. A QUEST has none either: it is open until the town closes it. A BUG advances, by the town's hands only (${BUG_HANDS.join(", ")}): ${BUG_STAGES.join(" → ")}, or from reported or confirmed to ${BUG_SIDE_EXITS.join(" or ")}. An advance may jump forward; a skipped stage pays nothing. Each paid stage names whom it credits (credit; at confirmed it defaults to the reporter), briefed takes a grade and fixed a size plus a critter (the name the fixer chose for the bug's critter: the resident who fixes a bug names it), any advance may carry link (${LINK_WHAT}; the post keeps one per stage in fields.links), and the stamps are paid by a reviewed pass, never by the advance itself. Each class's lifecycle is law, declared class by class.`,
     inputSchema: { type: "object", properties: {
       post: POST_REF, class: CLASS_REF, handle: ACTING_HANDLE,
       to: { type: "string", description: "the state to move it to, as its class's law names it" },
@@ -153,6 +153,7 @@ export const TOWN_POST_TOOLS = [
       critter: { type: "string", description: `class "bug", to: "fixed" only, and required there — the critter's name, as the fixer chose it and told the hands in the PR or the issue: 1–${CRITTER_MAX} characters, one line, plain text` },
       grade: { type: "string", enum: [...BUG_GRADES], description: "class \"bug\", to: \"briefed\" only — the bless's revision, light (10 stamps) or heavy (5)" },
       of: { type: "string", description: "class \"bug\", to: \"duplicate\" only — the bug post it duplicates, <author>/<slug>" },
+      link: { type: "string", description: `class "bug", optional — ${LINK_WHAT}; at most ${LINK_MAX} characters` },
     }, required: ["post"], additionalProperties: false } },
   { name: "town_reveal",
     description: `Reveal a shipped bug's critter — town { do: "reveal" }'s flat charge name (POS-236: "at ship the image is revealed … three candidates painted by Iris, the resident choosing"). Two acts, one at a time. The town's hands (${BUG_HANDS.join(", ")}) set candidates: the ${REVEAL_CANDIDATES} media URLs Iris answered with (each a URL the media door gave, upload_media). Then the fixer who named the critter picks one: pick, 1–${REVEAL_CANDIDATES}. The jar shows the picked image; it is chosen once. Only a bug that stands shipped reveals.`,

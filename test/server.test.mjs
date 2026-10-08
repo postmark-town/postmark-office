@@ -246,7 +246,10 @@ test("PATCH /profile/{handle}/avatar reaches the REST image door and keeps its b
   });
   try {
     await new Promise((ok, no) => {
-      const timer = setTimeout(() => no(new Error("avatar fixture server never listened")), 10_000);
+      // 30 s: a switched office loads its roll and probe from the store before it
+      // listens, bounded at 10 s itself (server.mjs § AT BOOT), so 10 s here
+      // raced that bound on a busy machine
+      const timer = setTimeout(() => no(new Error("avatar fixture server never listened")), 30_000);
       avatarServer.stdout.on("data", (data) => {
         const m = /listening on :(\d+)/.exec(String(data));
         if (m) { port = m[1]; clearTimeout(timer); ok(); }
@@ -278,7 +281,8 @@ test("PATCH /profile/{handle}/avatar reaches the REST image door and keeps its b
     });
     assert.equal(truncated.status, 422);
     // `code` rides the body since POS-70 row 35 (2026-09-24) — the status, said twice.
-    assert.deepEqual(await truncated.json(), { error: "bounce", code: 422, defect: "the file ends mid-stream", hint: "re-export it and try again" });
+    // `refused` since POS-427 (2026-10-06): every refusal says so, last.
+    assert.deepEqual(await truncated.json(), { error: "bounce", code: 422, defect: "the file ends mid-stream", hint: "re-export it and try again", refused: true });
   } finally {
     if (avatarServer.exitCode === null) {
       const gone = new Promise((ok) => avatarServer.on("exit", ok));
@@ -485,7 +489,11 @@ test("MCP tools/list, apex OFF: the full flat list — the slim's delist is apex
   // 57 -> 58 (the reveal at ship, 2026-09-30, POS-236): town_reveal —
   // town { do: "reveal" }. Born delisted behind the town apex. The counts moved
   // in the same commit.
-  assert.equal(names.length, 58);
+  // 58 -> 59 (the town's docs, 2026-10-06, #379): read_docs —
+  // town { read: "docs" }. Born delisted behind the town apex. The counts moved
+  // in the same commit.
+  assert.equal(names.length, 59);
+  assert.ok(names.includes("read_docs"), "the docs read has a flat definition, delisted only while the apex serves it");
   assert.ok(names.includes("read_posts"), "the posts read has a flat definition, delisted only while the apex serves it");
   assert.ok(names.includes("read_earpiece"), "the earpiece's log has a flat definition, delisted only while the apex serves it");
   assert.ok(names.includes("read_calendar"), "the calendar read has a flat definition, delisted only while the apex serves it");
@@ -527,7 +535,10 @@ test("GET /join — the arrival page answers keyless, with the verb's real schem
 
 test("GET /me — a static key reads its own identity; anonymous is 401 + discovery", async () => {
   const me = await (await get("/me")).json();
-  assert.deepEqual(me, { household: "keemin", handles: ["wright"], visitor: false, verified_github: null, key_kind: "static", principal: false });
+  // the household block reads the store's registry (POS-342); wright stands in
+  // no house in this suite's store, so the block is the honest solo one
+  assert.deepEqual(me, { household: "keemin", handles: ["wright"], visitor: false, verified_github: null, key_kind: "static", principal: false,
+    households: { wright: { key: "solo:wright", slug: null, human: null, residents: ["wright"] } } });
   const anon = await get("/me", null);
   assert.equal(anon.status, 401);
   assert.match(anon.headers.get("www-authenticate") ?? "", /resource_metadata=/);
@@ -665,7 +676,8 @@ test("world_say bounces honestly when the office has no world to stand in", asyn
 
 test("MCP whoami mirrors GET /me", async () => {
   const signed = JSON.parse((await rpc("tools/call", { name: "whoami", arguments: {} })).body.result.content[0].text);
-  assert.deepEqual(signed, { household: "keemin", handles: ["wright"], visitor: false, verified_github: null, key_kind: "static", principal: false });
+  assert.deepEqual(signed, { household: "keemin", handles: ["wright"], visitor: false, verified_github: null, key_kind: "static", principal: false,
+    households: { wright: { key: "solo:wright", slug: null, human: null, residents: ["wright"] } } });
 });
 
 test("MCP list_letters / list_regions / read_home mirror the REST reads", async () => {

@@ -100,9 +100,11 @@ git("config", "user.name", "pos233 falsifier");
 git("add", "-A");
 git("commit", "-qm", "canon: reader holds a parcel, solace holds nothing");
 
-// THE TOWN'S PINS — the file `oauth.mjs § householdFor` reads a signed-in key's
-// household from. Solace's household is Ana's account; the placers share one.
-put(town, "tools/github-ids.json", JSON.stringify({
+// THE TOWN'S PINS — the record `oauth.mjs § householdFor` reads a signed-in
+// key's household from: the STORE's household_pins (POS-343), seeded into the
+// stub pen below, not a file in the clone. Solace's household is Ana's
+// account; the placers share one.
+const PINS = {
   solace: { login: "Ana-Login", id: 100 },
   reader: { login: "readerhouse", id: 9 },
   illuminator: { login: "keeminlee", id: 1 },
@@ -111,7 +113,7 @@ put(town, "tools/github-ids.json", JSON.stringify({
   stranger: { login: "strangerhouse", id: 77 },
   bird: { login: "bird-login", id: 55 },
   wren: { login: "wren-login", id: 56 },
-}));
+};
 
 process.env.WORLD_CLONE = repo;
 process.env.TOWN_CLONE = town;
@@ -128,7 +130,8 @@ const { installActsPen, uninstallActsPen, RECORD_ON } = await import("./acts-pen
 process.env.WORLD2_PG = RECORD_ON.WORLD2_PG;
 process.env.WORLD2_PG_URL = RECORD_ON.WORLD2_PG_URL;
 const claimsPen = await import("../src/world2-claims.mjs");
-const pen = installActsPen();
+const { rowsFromRegistry } = await import("../src/registry-rows.mjs");
+const pen = installActsPen({ pins: rowsFromRegistry({ households: {} }, PINS).pins });
 claimsPen.__setPoolForTest(pen);
 after(() => { uninstallActsPen(); claimsPen.__setPoolForTest(null); delete process.env.WORLD2_PG; delete process.env.WORLD2_PG_URL; });
 
@@ -257,6 +260,20 @@ test("a key holding several placers must say which is placing; placed_by names i
   assert.match(ask.hint, /placed_by: one of illuminator, worldkeeper, wright/);
   const wrong = await leave(porch({ placed_by: "stranger" }), FOUNDER);
   assert.equal(wrong.code, 403, JSON.stringify(wrong));
+});
+
+// POS-389: a key in a resident's OWN hand carries the whole house, and places
+// only as the hand it was granted for.
+const ownKey = (handle) => ({ ...FOUNDER, handles: new Set([...FOUNDER.handles, "mari"]), keyKind: "claim", heldBy: "resident", claimedHandle: handle });
+
+test("a resident's own key is not a placer for its housemates (POS-389)", async () => {
+  const mari = await leave(porch({ slug: "mari-tries" }), ownKey("mari"));
+  assert.equal(mari.code, 403, JSON.stringify(mari));
+  assert.equal(mari.defect, `"solace" is not one of your residents`, "not a placement: the unchanged 403");
+  const named = await leave(porch({ slug: "keeper-names-wright", placed_by: "wright" }), ownKey("worldkeeper"));
+  assert.equal(named.code, 403, JSON.stringify(named));
+  assert.equal(named.defect, `"wright" is not a placer on this key`);
+  assert.equal(named.hint, "this key places as: worldkeeper");
 });
 
 test("consent on one's own resident bounces rather than riding silently", async () => {

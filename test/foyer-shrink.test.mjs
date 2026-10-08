@@ -73,6 +73,7 @@ import { hotMailBlock, outboxTense, replayLetter, sendLetterAsRow, MAIL_DOOR, NO
 import { pendingRows } from "../src/town-journal.mjs";
 import { enqueueLetter } from "../src/write.mjs";
 import { outboxSettled } from "../src/queries.mjs";
+import { indexStore } from "./helpers/office-under-test.mjs";
 
 delete process.env.TOWN_PUSH; // nothing here may leave the machine
 
@@ -96,6 +97,11 @@ const dbPath = join(dir, "fixture.db");
 fixtureDb(dbPath).close();
 const db = new DatabaseSync(dbPath, { readOnly: true });
 after(() => { db.close(); rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+// The doors below run in this process and read their town index from a store
+// seeded from this fixture (POS-268, office-under-test.mjs).
+const IX = await indexStore(dbPath);
+const IX_RESTORE = await IX.useInProcess();
+after(async () => { await IX_RESTORE(); await IX.stop(); });
 
 const KEY = { household: "keemin", handles: new Set(["wright"]), ghId: "42", ghLogin: "keeminlee" };
 const LIMEN = { household: "limen-house", handles: new Set(["limen"]), ghId: "43", ghLogin: "limenkeeper" };
@@ -296,6 +302,19 @@ test('F5 · OPERATIONS.md: "REST: stable/simple for frozen consumers" — the RE
   // act. PSA for the release notes: "the fund page's USDC verify takes your
   // signed-in account, and a signed-in key can only credit its own household."
   //
+  // ⚑ REGENERATED 2026-10-06 FOR POS-361 (the town's stance as law, Darko's
+  // rulings of 10-06): the declare-stance-on card gained `as` (as: "town", the
+  // town's word written by its own pen) and `law` (the law marks an opposition
+  // cites). ADDITIVE and proven so: the capture diff added exactly
+  // `/acts/12/fields/as/{type,enum,description}` and
+  // `/acts/12/fields/law/{type,items,description}` and removed or retyped none
+  // (the stance enum gained "neutral", a value, not a key). Both stay off the
+  // abridged index (household-apex.mjs § OFF_INDEX), so the connector's answer
+  // is unchanged in shape. PSA for the release notes: "a resident may declare
+  // neutral, which clears 'awaiting your word'; the town's hands speak the
+  // town's word with as: \"town\", and an opposition cites the law by mark id."
+  // Its witness, against the LIVE card, follows the window's below.
+  //
   // This is the WITNESS the regeneration would otherwise have no room for, and
   // it is positional-independent on purpose: the stake act is found by the one
   // field only it carries, so a reordering of the acts list cannot make it pass
@@ -328,6 +347,13 @@ test('F5 · OPERATIONS.md: "REST: stable/simple for frozen consumers" — the RE
   assert.ok(windowCard, "the window act is the only one carrying a `blueprint` field");
   assert.equal(windowCard.fields.file_path?.type, "string");
   assert.equal(windowCard.fields.html?.required, undefined, "the frozen shape no longer marks html required");
+  // POS-361's witness: the stance card, found by the one field only it carries
+  // (`stance`), takes `as` and `law` in the frozen shape AND on the live door.
+  const stanceCard = frozen.acts.find((a) => a.fields && "stance" in a.fields);
+  assert.ok(stanceCard?.fields?.as && stanceCard?.fields?.law, "the frozen stance card carries as and law");
+  const liveStance = full.acts.find((a) => a.fields && "stance" in a.fields);
+  assert.deepEqual(liveStance?.fields?.as?.enum, ["town"], "the live stance card takes as: \"town\"");
+  assert.deepEqual(liveStance?.fields?.stance?.enum, ["welcomed", "neutral", "opposed"], "and the three words");
   const liveWindow = full.acts.find((a) => a.fields && "blueprint" in a.fields);
   assert.equal(liveWindow?.fields?.file_path?.type, "string", "the live window card takes file_path");
   assert.equal(liveWindow?.fields?.html?.required, undefined, "and the live card does not mark html required — a card that did would refuse the road it advertises");
@@ -827,6 +853,24 @@ test("F7c5 · THE MORNING PAGE DID NOT FATTEN — the doorstep bundle is byte-id
   //
   // Both skins move identically: `posts` has no teaching block to cut, so it
   // rides the connector whole, the way `stakes`' rows do.
+  //
+  // ⚠ AND PATCHED A NINTH TIME, 2026-10-06 (POS-412, reported by mari), for
+  // the stakes read saying how old its escrow is: mari read escrow 2 here a
+  // minute after a stake the ledger already held, because the store's copy is
+  // only taken at the clearing. Not re-captured: the lane's tree carried a
+  // dynamic.db whose stances differ from this golden's on base too, so the
+  // three new paths were inserted into the committed golden by hand, and the
+  // patch was checked to equal a capture at the lane's head with only the
+  // golden's own `stances` put back. The leaf diff: NONE removed; added
+  // `full.stakes.escrow_ingested_at`, `.catches_up_at`, `.later_stakes`, and
+  // on slim the first two; changed `slim.stakes.abridged`, which now names
+  // `later_stakes` as cut (it is the same sentence on every page, like `rule`
+  // and `read_the_rest` beside it).
+  //
+  // Measured from the file (residual 0):
+  //
+  //   full  19754 -> 19992 (+238, +1.20%) = later_stakes +169, catches_up_at +43, escrow_ingested_at +26
+  //   slim  17386 -> 17485 (+99, +0.57%)  = catches_up_at +43, abridged +30, escrow_ingested_at +26
   //
   // So the assertion below is the one that actually carries the promise, and it
   // is stated separately so a future regeneration cannot quietly absorb a card:

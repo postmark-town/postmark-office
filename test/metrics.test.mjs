@@ -82,7 +82,8 @@ test("keyless GETs are rate-limited with the exact 429 shape; a key has its own 
   for (let i = 0; i < 4; i++) last = await fetch(`${BASE}/town`);
   assert.equal(last.status, 429);
   const body = await last.json();
-  assert.deepEqual(Object.keys(body), ["error", "defect", "retry_after_s"]);
+  // `refused` joined 2026-10-06 (POS-427, Darko's option B): every refusal says so, last.
+  assert.deepEqual(Object.keys(body), ["error", "defect", "retry_after_s", "refused"]);
   assert.equal(body.error, "rate");
   assert.ok(body.retry_after_s >= 1);
   assert.equal(last.headers.get("retry-after"), String(body.retry_after_s));
