@@ -757,6 +757,11 @@ test("THE DOOR, flag on — a key labelled by its LOGIN: the draft is filed unde
   await leaveIt();
   assert.deepEqual(store.claims.map((c) => c.household), ["hh:alpha-house"],
     "the draft names the acting handle's house, not solo:alpha-login");
+  // THE OVERLAY'S KEY ROAD (world2-guards § guardedDraftsForKey -> scoped({ key })):
+  // the signed-in key reads the draft the pen filed under its house.
+  const overlay = await withGuardsFlipped(store, (guards) => guards.guardedDraftsForKey(repo, signedIn));
+  assert.ok((overlay.marks ?? []).some((m) => m.id === "alpha/by-login"),
+    `the drafts overlay shows the key's own draft (log: ${JSON.stringify(overlay.log ?? null).slice(0, 160)})`);
   await assert.rejects(leaveIt(), (e) => {
     assert.equal(e.code, 409, "the guard reads the house the pen wrote to");
     assert.match(e.defect, /you already have a mark "by-login"/);
@@ -1057,6 +1062,15 @@ const guardStore = ({ claims = [], identities = { alpha: "hh:alpha-house", beta:
         }
         if (/set_config\(.app\.household./.test(sql)) { declared = args[0]; return { rows: [{}] }; }
         if (/current_setting\(.app\.household./.test(sql)) return { rows: [{ declared, keys: declaredKeys }] };
+        // The drafts overlay's DELETED arm (guard-reads.mjs § WITHDRAW_ACT_SELECT):
+        // withdraw acts by the house's residents, or under one of the names in $2.
+        // Matched BEFORE the identities line, whose subquery it contains.
+        if (/^SELECT/i.test(sql.trim()) && /FROM acts a/.test(sql) && /'withdraw'/.test(sql)) {
+          const [keys, named] = args;
+          const inHouse = (h) => (keys ?? []).includes(identities[h]);
+          return { rows: acts.filter((a) => a.action === ACTION_WITHDRAW && a.class === CLASS_MARK
+            && (inHouse(a.actor) || (named ?? []).includes(a.household))) };
+        }
         if (/FROM identities/.test(sql)) return { rows: identities[args[0]] ? [{ household: identities[args[0]] }] : [] };
         // THE REGISTRY, which is what `householdKeyFor` reads since POS-160.
         // Same statement as the `identities` line above — these handles live in

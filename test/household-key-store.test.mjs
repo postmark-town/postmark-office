@@ -40,11 +40,12 @@ async function seed() {
     await c.query(
       `INSERT INTO households (slug, ord, name, accounts, residents, since, declared_by)
        VALUES ('rookery', 0, 'The Rookery', $1::jsonb, ARRAY['wren','robin'], '2026-08-01', 'wren'),
-              ('elsewhere', 1, 'Elsewhere', '[{"id": 777, "login": "finchling"}]'::jsonb, ARRAY['finch'], '2026-08-01', 'finch')`,
+              ('elsewhere', 1, 'Elsewhere', '[{"id": 777, "login": "finchling"}]'::jsonb, ARRAY['finch'], '2026-08-01', 'finch'),
+              ('robin', 2, 'Robin''s Nest', '[{"id": 778, "login": "jaybird"}]'::jsonb, ARRAY['jay'], '2026-08-01', 'jay')`,
       [JSON.stringify([{ id: ROOKERY_ID, login: LOGIN }])]);
     await c.query(
       `INSERT INTO household_pins (handle, login, gh_id, pinned)
-       VALUES ('wren', $1, $2, '2026-08-01'), ('robin', $1, $2, '2026-08-01'), ('finch', 'finchling', 777, '2026-08-01')`,
+       VALUES ('wren', $1, $2, '2026-08-01'), ('robin', $1, $2, '2026-08-01'), ('finch', 'finchling', 777, '2026-08-01'), ('jay', 'jaybird', 778, '2026-08-01')`,
       [LOGIN, ROOKERY_ID]);
   } finally { await c.end(); }
 }
@@ -94,8 +95,8 @@ test("THE PEN: a signed-in resident's act and claim are filed under the house's 
       "the acting handle names the house; the login label was never a spelling the deriver may read");
     assert.equal(await claims.actHouseholdFor(pool, { actor: "human-of-rookery", household: LOGIN }), "hh:rookery",
       "a human's hand (human-of-<slug>) is filed under the house it was named after");
-    assert.equal(await claims.actHouseholdFor(pool, { actor: "vireo", household: "vireo-login" }), "solo:vireo-login",
-      "a houseless actor keeps the old answer: nothing that names no house changes");
+    assert.equal(await claims.actHouseholdFor(pool, { actor: "vireo", household: "vireo-login" }), "solo:vireo",
+      "a houseless actor is its own solo:<handle>; the login label is never asked");
     assert.equal(await claims.actHouseholdFor(pool, { actor: "vireo", household: LOGIN }), "solo:vireo",
       "a recycled login is not filed into the house that once held it: the actor's own solo:<handle> instead");
     assert.equal(await claims.actHouseholdFor(pool, { actor: "vireo", household: "solo:vireo" }), "solo:vireo",
@@ -223,4 +224,92 @@ test("THE ONE PEN: writeStamps files stamp_projection and escrow_projection unde
     { holder: "robin", household: "hh:rookery", own_household: "hh:rookery" },
     { holder: "vireo", household: "solo:vireo", own_household: "solo:the-town" },
   ]);
+});
+
+// ── THE REVIEW OF #438: THE BARE LABEL, THE HUMAN'S HAND, EVERY HOUSE ────────
+//
+// A visitor key is `{ household: <login>, handles: ∅, ghId }` (oauth.mjs). The
+// deriver reads a bare string as a handle, a pin, a slug or a former slug, so
+// handing it the login would place a stranger whose GitHub login happens to be
+// a house's slug, or a resident's handle, inside that house.
+
+const SLUG_LOGIN_KEY = { household: "rookery", handles: new Set(), ghId: 901 };   // login = a house's slug
+const HANDLE_LOGIN_KEY = { household: "wren", handles: new Set(), ghId: 902 };    // login = a resident's handle
+
+test("A LOGIN THAT EQUALS A SLUG OR A HANDLE places nobody: no read, no promotion, no write into that house", { skip }, async () => {
+  await seed();
+  await draft("wren/the-old-draft", `solo:${LOGIN}`);
+  await draft("wren/the-new-draft", "hh:rookery");
+  await asOffice(async (claims, pool, env) => {
+    for (const [name, key, own] of [["slug", SLUG_LOGIN_KEY, "gh:901"], ["handle", HANDLE_LOGIN_KEY, "gh:902"]]) {
+      assert.equal((await claims.keyHouseholdOf(pool, key)).household, own, `a login equal to a ${name} answers its own account, never the house`);
+      const seen = JSON.stringify(await claims.readDraftClaims(key, env));
+      assert.ok(!seen.includes("wren/"), `a login equal to a ${name} reads none of the rookery's drafts (read: ${seen.slice(0, 160)})`);
+      for (const slug of ["wren/the-old-draft", "wren/the-new-draft"]) {
+        const out = await claims.promoteDraftOnStake({ actor: "wren", householdName: key.household, key, slug, stamps: 1 }, env);
+        assert.equal(out.promoted, false, `a login equal to a ${name} does not put ${slug} forward`);
+      }
+    }
+    assert.equal(await claims.actHouseholdFor(pool, { actor: "vireo", household: "rookery" }), "solo:vireo",
+      "a houseless actor whose label is a slug is not filed into that house");
+    assert.equal(await claims.actHouseholdFor(pool, { actor: "vireo", household: "wren" }), "solo:vireo",
+      "nor one whose label is a resident's handle");
+  });
+});
+
+test("A HUMAN'S HAND names its house by the slug first: human-of-robin is Robin's Nest, not the house robin lives in", { skip }, async () => {
+  await seed();
+  await asOffice(async (claims, pool) => {
+    assert.equal(await claims.actHouseholdFor(pool, { actor: "human-of-robin", household: "jaybird" }), "hh:robin",
+      "robin is a slug and also a rookery resident; the hand was minted from the slug");
+    assert.equal(await claims.actHouseholdFor(pool, { actor: "human-of-wren", household: LOGIN }), "hh:rookery",
+      "a hand minted from a handle (a house with no slug then) still reaches that handle's house");
+    assert.equal(await claims.actHouseholdFor(pool, { actor: "robin", household: LOGIN }), "hh:rookery",
+      "and the bare handle robin is the resident, never the slug");
+  });
+});
+
+test("A KEY IN NO HOUSE, with no handles and no account, answers null and reads only what is public", { skip }, async () => {
+  await seed();
+  await draft("wren/the-old-draft", `solo:${LOGIN}`);
+  await asOffice(async (claims, pool, env) => {
+    const bare = { household: "rookery", handles: new Set() };
+    assert.equal((await claims.keyHouseholdOf(pool, bare)).household, null);
+    assert.deepEqual((await claims.readDraftClaims(bare, env)).drafts, []);
+  });
+});
+
+test("EVERY HOUSE A KEY STANDS IN: a second-house handle's draft is read and put forward", { skip }, async () => {
+  await seed();
+  await draft("finch/a-draft-elsewhere", "hh:elsewhere", "finch");
+  await draft("wren/a-draft-at-home", "hh:rookery");
+  const both = { household: LOGIN, handles: new Set(["wren", "finch"]), ghId: ROOKERY_ID };
+  await asOffice(async (claims, _p, env) => {
+    const seen = JSON.stringify(await claims.readDraftClaims(both, env));
+    assert.ok(seen.includes("wren/a-draft-at-home") && seen.includes("finch/a-draft-elsewhere"), "both houses' drafts are read");
+    const out = await claims.promoteDraftOnStake({ actor: "finch", householdName: LOGIN, key: both, slug: "finch/a-draft-elsewhere", stamps: 1 }, env);
+    assert.equal(out.promoted, true, "the second house's draft is put forward");
+  });
+});
+
+test("THE CENSUS after a ship: a houseless resident's solo:<handle> is lawful, a solo:<login> by a housed resident is a straggler", { skip }, async () => {
+  await seed();
+  const { census } = await import("../world2/tools/household-key-census.mjs");
+  const { __clearHouseCache } = await import("../src/household-deriver.mjs");
+  const since = new Date(Date.now() - 60e3).toISOString();
+  await draft("vireo/a-houseless-draft", "solo:vireo", "vireo");
+  __clearHouseCache();
+  let c = await store.connect("world2_owner");
+  try {
+    const r = await census(c, { after: since });
+    assert.equal(r.after_ok, true, `a resident in no house filed under its own handle is not a straggler: ${JSON.stringify(r.after.claims)}`);
+    assert.ok(Object.keys(r.after.claims).some((w) => w.startsWith("houseless:")));
+  } finally { await c.end(); }
+  await draft("wren/filed-the-old-way", `solo:${LOGIN}`);
+  __clearHouseCache();
+  c = await store.connect("world2_owner");
+  try {
+    const r = await census(c, { after: since });
+    assert.equal(r.after_ok, false, "a housed resident's row under solo:<login> is a straggler");
+  } finally { await c.end(); }
 });

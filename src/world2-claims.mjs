@@ -24,7 +24,7 @@
 
 import { boxOf } from "../world2/tools/seed-import.mjs";
 import { ringOf, ringBox, ringAgrees } from "./ring-box.mjs"; // POS-322: the bbox of a ringed mark is its ring's
-import { houseOfVia, liveHouseOfVia, sessionKeysVia, sessionKeyString } from "./household-deriver.mjs";
+import { houseOfVia, sessionKeysVia, sessionKeyString, VIA } from "./household-deriver.mjs";
 import { humanHandHouse } from "./households.mjs";
 import { DOOR_SHARES_THE_CANDLE } from "../world2/tools/candle-lock.mjs"; // POS-404: see § openWindowFor
 // Phase 5.6's deferred act is released through world2-pen's insertAct, INSIDE
@@ -132,38 +132,58 @@ const householdKeys = new Map();
  */
 export async function keyHouseholdOf(p, key) {
   const named = String(key?.household ?? "").trim();
-  const handles = [...(key?.handles ?? [])];
+  const handles = [...(key?.handles ?? [])].map(String);
+  // EVERY house the key's handles stand in, not only the first: a key whose
+  // handles live in two houses reads (and puts forward) the drafts of both.
+  const households = [];
+  let via = null;
   for (const handle of handles) {
-    const household = await householdKeyFor(p, handle);
-    if (household && !household.startsWith("solo:")) return { household, via: handle };
+    const { slug } = await houseOfVia(p, handle, { via: HANDLE_ROADS });
+    if (slug && !households.includes(`hh:${slug}`)) { households.push(`hh:${slug}`); via ??= handle; }
   }
+  if (households.length) return { household: households[0], households, via };
   // The key's VERIFIED account (`oauth.mjs` puts the GitHub id it signed in
-  // with on the key): an id is matched only by id, so this is the account
-  // road `accountMatches` already trusts (POS-457).
+  // with on the key), on the ACCOUNT road alone: an id matches only by id, and
+  // the login only an account row that carries no id (`accountMatches`).
   if (key?.ghId != null) {
-    const { slug } = await houseOfVia(p, `gh:${key.ghId}`);
-    if (slug) return { household: `hh:${slug}`, via: `gh:${key.ghId}` };
+    const { slug } = await houseOfVia(p, { ghId: key.ghId, ghLogin: named || null }, { via: [VIA.ACCOUNT] });
+    if (slug) return { household: `hh:${slug}`, households: [`hh:${slug}`], via: `gh:${key.ghId}` };
   }
-  const label = named || handles[0] || null;
-  let household = await householdKeyFor(p, label);
-  // A LABEL SOME OTHER HOUSE HOLDS IS NOT THIS KEY'S. Nothing above placed the
-  // key in a house, so if `solo:<label>` is in a house's spelling set, this key
-  // is wearing a string that house's account once wore (a recycled login) and
-  // must not read or put forward that house's `solo:<login>` drafts. It is
-  // answered by its own first handle, or its own account, instead (POS-457).
-  if (household?.startsWith("solo:") && (await liveHouseOfVia(p))(household) !== household) {
-    household = handles[0] ? `solo:${handles[0]}` : key?.ghId != null ? `gh:${key.ghId}` : household;
+  // A label that IS a house key (a keys-file key that names its house) names
+  // itself, on the slug roads only.
+  if (named.startsWith("hh:")) {
+    const { slug } = await houseOfVia(p, named, { via: [VIA.SLUG, VIA.FORMERLY] });
+    if (slug) return { household: `hh:${slug}`, households: [`hh:${slug}`], via: named };
   }
+  // NEVER THE BARE LABEL (POS-457, review of #438). The deriver reads a bare
+  // string as a handle, a pin, a slug or a former slug, so a stranger whose
+  // GitHub login is `starforge` (a visitor key: the login, no handles, its id)
+  // would have been answered `hh:starforge` and read that house's drafts. A key
+  // nothing above placed is its own first handle's `solo:`, or its account's
+  // `gh:<id>`, or NO house at all (null: every read then sees only what is
+  // public, and no write is scoped to anybody).
+  const household = handles[0] ? `solo:${handles[0]}` : key?.ghId != null ? `gh:${key.ghId}` : null;
   return {
-    household, via: null,
+    household, households: household ? [household] : [], via: null,
     disclosure: handles.length
-      ? `none of this key's handles (${handles.join(", ")}) is pinned to a house, so its household is read from the key's own name "${label}"${household?.startsWith("solo:") ? ", which names no house either: this answer holds only what was filed under that name" : ""}`
-      : `this key carries no handles, so its household is read from the key's own name "${label}"`,
+      ? `none of this key's handles (${handles.join(", ")}) is placed in a house, so it reads only what was filed under "${household}"`
+      : household
+        ? `this key carries no handles and its account (${household}) is in no house, so it reads only what was filed under that account`
+        : `this key carries no handles and no verified account, so it is in no house: it reads only what is public`,
   };
 }
 
+/** The roads a HANDLE reaches its house by: listed as a resident, or pinned by id. Never as a slug. */
+const HANDLE_ROADS = [VIA.RESIDENT, VIA.PIN];
+
 export async function householdKeyForKey(p, key) {
   return (await keyHouseholdOf(p, key)).household;
+}
+
+/** `withHousehold` for a KEY: its first house declared, every house's spellings in the set. */
+export async function withKeyHousehold(p, key, fn) {
+  const { household, households = [] } = await keyHouseholdOf(p, key);
+  return withHousehold(p, household, fn, { also: households.slice(1) });
 }
 
 /**
@@ -197,8 +217,11 @@ export async function householdKeyForKey(p, key) {
  * the office. On the pool it is folded once per process (`houseRowsVia`'s
  * WeakMap) and the transaction opens holding an array.
  */
-export async function withHousehold(p, household, fn) {
+export async function withHousehold(p, household, fn, { also = [] } = {}) {
+  // `also`: the other houses a key's handles stand in (keyHouseholdOf's
+  // `households`). Their spelling sets join this one, after it.
   const keys = await sessionKeysVia(p, household);
+  for (const h of also) for (const k of await sessionKeysVia(p, h)) if (!keys.includes(k)) keys.push(k);
   const client = await p.connect();
   try {
     await client.query("BEGIN");
@@ -296,25 +319,32 @@ export async function householdKeyFor(p, handle) {
  * 2,938 acts and 260 claims since the law date, against 859 and 16 under the
  * slug. Asked of the handle, the same rows name their house.
  *
- * A houseless actor keeps the old answer, `householdKeyFor` on the same input,
- * so its rows stay in the one bucket `keyHouseholdOf` reads for its key. With
- * ONE exception: a `solo:<label>` that some house's spelling set holds is that
- * house's (a recycled login), and the act is filed under the actor's own
- * `solo:<handle>` instead, the same answer `keyHouseholdOf` gives that key.
+ * THE ROADS ARE NARROW ON PURPOSE (review of #438). A handle reaches its house
+ * as a resident or through its pin's id, never as a slug: `mari` is a resident
+ * of starforge AND the slug of another house. A human's hand `human-of-<x>` was
+ * minted from a slug when the house had one, so `hh:<x>` is asked first (the
+ * slug roads), then `<x>` as a handle.
+ *
+ * A HOUSELESS ACTOR IS ITS OWN `solo:<handle>`. The row's `household` (the
+ * key's login label) is never handed to the deriver as a bare string: it would
+ * be read as a handle, a slug or a former slug, and a stranger whose login is
+ * some house's name would file into that house. Only a row with no actor falls
+ * back to its `household`, as before; one already carrying `solo:` is not
+ * wrapped twice (the census found `solo:solo:martes` on a ride act).
  */
 export async function actHouseholdFor(p, row) {
-  for (const x of [row?.actor, humanHandHouse(row?.actor)]) {
-    if (!x) continue;
-    const key = await householdKeyFor(p, x);   // its memo: a named house is asked once per process
-    if (key && !key.startsWith("solo:")) return key;
+  const actor = row?.actor ? String(row.actor) : null;
+  const hand = humanHandHouse(actor);
+  const asks = hand
+    ? [[`hh:${hand}`, [VIA.SLUG, VIA.FORMERLY]], [hand, HANDLE_ROADS]]
+    : actor ? [[actor, HANDLE_ROADS]] : [];
+  for (const [x, via] of asks) {
+    const { slug } = await houseOfVia(p, x, { via });
+    if (slug) return `hh:${slug}`;
   }
-  // A row that already carries a `solo:` key is not asked again: the census
-  // found `solo:solo:martes` on a ride act, the key wrapped twice.
+  if (actor) return `solo:${hand ?? actor}`;
   const named = /^solo:/.test(row?.household ?? "") ? row.household.slice("solo:".length) : row?.household;
-  const household = await householdKeyFor(p, named ?? row?.actor);
-  if (row?.actor && household?.startsWith("solo:") && (await liveHouseOfVia(p))(household) !== household)
-    return householdKeyFor(p, humanHandHouse(row.actor) ?? row.actor);
-  return household;
+  return householdKeyFor(p, named);
 }
 
 /**
@@ -770,7 +800,9 @@ export async function promoteDraftOnStake({ actor, householdName, key = null, sl
   // under the slug, so the stake answered `promoted: false` on its own house's
   // draft. It is the staker's house and not the author's on purpose: the row
   // policy is what keeps a stranger's stake off a house's private draft.
-  const household = key ? (await keyHouseholdOf(p, key)).household : await householdKeyFor(p, householdName ?? actor);
+  const staker = key ? await keyHouseholdOf(p, key) : null;
+  const household = staker ? staker.household : await householdKeyFor(p, householdName ?? actor);
+  const also = staker?.households?.slice(1) ?? [];
 
   let windowId = null;
   const out = await withHousehold(p, household, async (c, keys) => {
@@ -854,7 +886,7 @@ export async function promoteDraftOnStake({ actor, householdName, key = null, sl
         WHERE id = $3`,
       [win.id, Number(stamps) || 0, draft.id, releasedActId == null ? null : String(releasedActId)]);
     return { ...draft, lateFrom };
-  });
+  }, { also });
   if (!out) return { promoted: false, claim: null, window: windowId, late_from: null };
   state.submitted += 1;
   // `late_from` — the crossing the draft was composed in, present ONLY when the
@@ -938,7 +970,7 @@ export function withdrawRetiredRefusal(id, status) {
  */
 export async function readDraftClaims(key, env = process.env) {
   const p = await pool(env);
-  const { household, disclosure } = await keyHouseholdOf(p, key);
+  const { household, households = [], disclosure } = await keyHouseholdOf(p, key);
   // `= ANY(keys)` and not `= household`: the store never re-spells a row, so a
   // draft composed under this house's OLD key is still this house's draft and
   // the door must ask for it by every name the house has worn. The WHERE and
@@ -946,7 +978,7 @@ export async function readDraftClaims(key, env = process.env) {
   // argument.
   const rows = await withHousehold(p, household, (c, keys) => c.query(
     `SELECT id, slug, class, claimant, body, geometry, stake, submitted_at AS composed_at
-       FROM claims WHERE status = 'draft' AND household = ANY($1) ORDER BY slug`, [keys]));
+       FROM claims WHERE status = 'draft' AND household = ANY($1) ORDER BY slug`, [keys]), { also: households.slice(1) });
   return { household, drafts: rows.rows, ...(disclosure ? { disclosure } : {}) };
 }
 
@@ -1039,7 +1071,7 @@ export async function claimRowsForSlug(slug, { key = null, env = process.env, p:
   if (!key) return (await p.query(sql, [slug])).rows;
   const household = await householdKeyForKey(p, key);
   if (!household) return (await p.query(sql, [slug])).rows;
-  return (await withHousehold(p, household, (c) => c.query(sql, [slug]))).rows;
+  return (await withKeyHousehold(p, key, (c) => c.query(sql, [slug]))).rows;
 }
 
 /**
@@ -1098,7 +1130,7 @@ export async function claimRowsSince(since, { claimants = [], slugs = [], key = 
   if (!key) return (await p.query(sql, args)).rows;
   const household = await householdKeyForKey(p, key);
   if (!household) return (await p.query(sql, args)).rows;
-  return (await withHousehold(p, household, (c) => c.query(sql, args))).rows;
+  return (await withKeyHousehold(p, key, (c) => c.query(sql, args))).rows;
 }
 
 /**
@@ -1130,5 +1162,5 @@ export async function parcelClaimFor(handle, { key = null, env = process.env } =
   if (!key) return read(p);
   const household = await householdKeyForKey(p, key);
   if (!household) return read(p);
-  return withHousehold(p, household, read);
+  return withKeyHousehold(p, key, read);
 }

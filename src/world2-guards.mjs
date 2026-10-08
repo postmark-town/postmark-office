@@ -222,8 +222,9 @@ async function scoped(name, fn) {
   return reading(async (client) => {
     const { householdKeyFor, actHouseholdFor, keyHouseholdOf } = await import("./world2-claims.mjs");
     const { sessionKeysVia, sessionKeyString } = await import("./household-deriver.mjs");
+    const ofKey = name?.key ? await keyHouseholdOf(client, name.key) : null;
     const key = name == null ? null
-      : name.key ? (await keyHouseholdOf(client, name.key)).household
+      : ofKey ? ofKey.household
         : typeof name === "object" ? await actHouseholdFor(client, name)
           : await householdKeyFor(client, name);
     if (key != null) {
@@ -239,6 +240,9 @@ async function scoped(name, fn) {
       // undercounts. The store never re-spells a row, so the set is the only
       // way this guard sees the whole house.
       const keys = await sessionKeysVia(client, key);
+      // A key standing in two houses reads both (keyHouseholdOf's `households`).
+      for (const h of ofKey?.households?.slice(1) ?? [])
+        for (const k of await sessionKeysVia(client, h)) if (!keys.includes(k)) keys.push(k);
       await client.query("SELECT set_config('app.household', $1, true)", [key]);
       await client.query("SELECT set_config('app.household_keys', $1, true)",
         [sessionKeyString(keys) ?? ""]);

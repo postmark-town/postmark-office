@@ -213,7 +213,7 @@ export async function world2MyDrafts(key) {
  */
 export async function world2MyMarks(key, { offset = 0, p: injected = null, refusedReader = myMarksRefused } = {}) {
   const p = injected ?? await pool();
-  const { household, disclosure } = await keyHouseholdOf(p, key);
+  const { household, households = [], disclosure } = await keyHouseholdOf(p, key);
 
   // The household's roster, from the store's own `identities` projection — the
   // registry `roll-ingest.mjs` writes ("census decision 1: roster is
@@ -224,6 +224,7 @@ export async function world2MyMarks(key, { offset = 0, p: injected = null, refus
   // in whichever spelling the world repo's copy carried, so asking for one
   // returns part of a house and the page silently loses the rest of it.
   const householdKeys = await sessionKeysVia(p, household);
+  for (const h of households.slice(1)) for (const k of await sessionKeysVia(p, h)) if (!householdKeys.includes(k)) householdKeys.push(k);
   const { rows: handleRows } = await p.query(portfolio.HOUSEHOLD_HANDLES_SQL, [householdKeys]);
   const handles = new Set(handleRows.map((r) => r.handle));
   const belongs = (h) => handles.has(h);
@@ -231,7 +232,8 @@ export async function world2MyMarks(key, { offset = 0, p: injected = null, refus
   // ── the live overlay, inside the policy ──────────────────────────────────
   const publishedIds = await guards.publishedIdsFrom(p);
   const publishedMarkOf = await guards.publishedMarkFrom(p);
-  const liveDelta = await withHousehold(p, household, (client) =>
+  // A key in no house (keyHouseholdOf answers null) has no private layer to overlay.
+  const liveDelta = household == null ? { marks: [], counts: { added: 0, modified: 0, deleted: 0 } } : await withHousehold(p, household, (client) =>
     guards.pgDraftsForKey(client, {
       household,
       // Both spellings, for `pgDraftsForKey`'s own reason: `acts.household`
@@ -240,7 +242,7 @@ export async function world2MyMarks(key, { offset = 0, p: injected = null, refus
       // deleted ones, silently.
       journalHousehold: household,
       publishedIds, publishedMarkOf,
-    }));
+    }), { also: households.slice(1) });
 
   // ── canon: what this household's residents have standing ─────────────────
   const { rows: markRows } = await p.query(portfolio.PORTFOLIO_MARKS_SQL, [[...handles]]);

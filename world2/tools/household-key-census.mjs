@@ -19,7 +19,8 @@
 //   2. THE STRAGGLERS. Claims and acts written since `--since` that do not
 //      carry `hh:`, by the writer that made them, and whether each resolves.
 //      `--after <iso>` is the post-ship check: any straggler since then that is
-//      not a named interim (`solo:the-town`, POS-142) exits 1.
+//      not a named interim (`solo:the-town`, POS-142) exits 1. A resident no
+//      house holds, filed under its own `solo:<handle>`, is lawful and is not counted.
 //   3. THE PROJECTIONS. stamp_projection and escrow_projection at the town
 //      head (and, for escrow, every town sha held): what the pen's re-key would
 //      do, and the parity: the town's weights walked by the fold's own
@@ -84,15 +85,18 @@ export async function census(q, { since = LAW_DATE, after = null } = {}) {
 
   const stragglers = async (from) => {
     const { rows: c } = await q.query(
-      `SELECT ${CLAIM_WRITER} AS writer, household AS k, count(*)::int AS n FROM claims
-        WHERE submitted_at >= $1 AND household !~ '^hh:' GROUP BY 1, 2`, [from]);
+      `SELECT ${CLAIM_WRITER} AS writer, household AS k, claimant AS actor, count(*)::int AS n FROM claims
+        WHERE submitted_at >= $1 AND household !~ '^hh:' GROUP BY 1, 2, 3`, [from]);
     const { rows: a } = await q.query(
       `SELECT CASE WHEN household = '${TOWN_HOUSEHOLD_BY_NAME}' THEN 'interim: the town (POS-142)'
-                   ELSE 'the door (' || action || ')' END AS writer, household AS k, count(*)::int AS n
-         FROM acts WHERE at >= $1 AND household IS NOT NULL AND household !~ '^hh:' GROUP BY 1, 2`, [from]);
+                   ELSE 'the door (' || action || ')' END AS writer, household AS k, actor, count(*)::int AS n
+         FROM acts WHERE at >= $1 AND household IS NOT NULL AND household !~ '^hh:' GROUP BY 1, 2, 3`, [from]);
     const fold = (rows) => {
       const by = {};
-      for (const { writer, k, n } of rows) {
+      for (const { writer: w0, k, actor, n } of rows) {
+        // A resident no house holds is filed under its own solo:<handle>: lawful, not a straggler.
+        const own = actor ? `solo:${String(actor).replace(/^human-of-/, "")}` : null;
+        const writer = !w0.startsWith("interim:") && k === own && houseOf(k) === k ? "houseless: a resident in no house (solo:<handle>)" : w0;
         const w = (by[writer] ??= { rows: 0, resolvable: 0, spellings: {} });
         w.rows += n;
         if (houseOf(k) !== k) w.resolvable += n;
@@ -129,7 +133,7 @@ export async function census(q, { since = LAW_DATE, after = null } = {}) {
   if (after) {
     out.after = await stragglers(after);
     const bad = [...Object.entries(out.after.claims), ...Object.entries(out.after.acts)]
-      .filter(([w]) => !w.startsWith("interim:"));
+      .filter(([w]) => !w.startsWith("interim:") && !w.startsWith("houseless:"));
     out.after_ok = bad.length === 0;
   }
   return out;

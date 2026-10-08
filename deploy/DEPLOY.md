@@ -1174,10 +1174,22 @@ and the census names the position. On the 10-08 dump that was one old sha
 
 **Rollback.** Redeploy the previous release tag, then re-run `stamp-ingest` for
 the head sha: it is idempotent, and the old code writes the town's spellings
-back. Rows the new code wrote under `hh:<slug>` stay. The old code's spelling set
-includes `hh:<slug>`, so they read. The one thing a rollback loses is a
-resident's view of their NEW drafts through the old label-keyed reads (the
-overlay and the slug guard), until the next roll-forward. Nothing is deleted.
+back. Rows the new code wrote under `hh:<slug>` stay, and the old code's
+spelling set includes `hh:<slug>`, so they read. **But the old code's slug guard
+reads a signed-in resident's drafts by the key's login label (`solo:<login>`),
+so it cannot see a draft the new code filed under `hh:<slug>`, and it will
+PERMIT a second draft with the same slug** (the #438 flip F8 is exactly this).
+Its drafts overlay will also miss those drafts until the next roll-forward.
+Nothing is deleted. After a rollback, and again before rolling forward, look for
+duplicates by hand (read only):
+
+```
+SELECT slug, claimant, count(*) FROM claims
+ WHERE status IN ('draft','pending') GROUP BY 1, 2 HAVING count(*) > 1;
+```
+
+Any row this returns is a resident's duplicate. Name it to Darko; the resident
+withdraws the extra one through the door. It is never deleted by hand.
 
 ### Finishing a refused crossing by hand (2026-09-14, postmark#2786)
 

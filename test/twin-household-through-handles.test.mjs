@@ -103,10 +103,12 @@ test("that key reads the hearth's marks at /world2/my-marks", { skip }, async ()
 
 test("a key with no resolving handle reads nothing, and the answer names why", { skip }, async () => {
   const r = await claims.keyHouseholdOf(pool, LOST_KEY);
-  assert.equal(r.household, "solo:nobody-human");
+  // POS-457 (review of #438): the key's NAME is never asked of the deriver as a
+  // bare string (it could be some house's slug); a key in no house is its own
+  // first handle's solo:, which is what the pen files that handle's acts under.
+  assert.equal(r.household, "solo:drifter");
   assert.equal(r.via, null);
-  assert.match(r.disclosure, /none of this key's handles \(drifter\) is pinned to a house/);
-  assert.match(r.disclosure, /names no house either/);
+  assert.match(r.disclosure, /none of this key's handles \(drifter\) is placed in a house/);
   const drafts = await serve.world2MyDrafts(LOST_KEY);
   assert.deepEqual(drafts.drafts, []);
   assert.match(drafts.household_disclosure, /drifter/);
