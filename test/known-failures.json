@@ -37,13 +37,6 @@
       "date": "2026-10-07"
     },
     {
-      "file": "test/household-posts.test.mjs",
-      "name": "6 · the doorstep segment deep-equals household { read: \"posts\" } at the same args",
-      "reason": "the fixture's doorstep posts segment carries no rows (red on the train tip 3097af3 locally too, 10-07)",
-      "owner": "POS-419",
-      "date": "2026-10-07"
-    },
-    {
       "file": "test/office-tick-split.test.mjs",
       "name": "the roll-call knows the new unit, parked until its files are installed",
       "reason": "the roll-call manifest test (named in the brief; red locally too)",
