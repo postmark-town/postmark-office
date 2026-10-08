@@ -61,7 +61,7 @@ import { execFileSync } from "node:child_process";
 // `window` is the candle's, and it is labelled as the candle's. Nothing here
 // re-uses the bare word "crossing" for either.
 export const RECEIPT_CLOCK =
-  "crossing = the SETTLEMENT epoch (S-number + the sha it blessed, 05:45/17:45Z) — not the ferry's 00:00/12:00Z crossing, and not the candle's window";
+  "crossing = the SETTLEMENT epoch (S-number + the sha it blessed, 05:45/17:45Z) — not the ferry's 00:00/12:00Z crossing, and not candle N, the candle's own interval (LOGOS/classes.md § the register, crossing ③)";
 
 /**
  * The bulletin's own five words for why a mark did not ride.
@@ -374,7 +374,7 @@ export function receiptFrom(records = {}) {
       ...base, status: "refused", cause, cause_row,
       crossing: settlement ?? null,
       settlement_sha: settlement?.sha ?? null,
-      says: `refused at window ${row.window_id}${cause ? ` — ${cause}` : ""}${row.decided_at ? ` (${row.decided_at})` : ""}`
+      says: `refused at candle ${row.window_id}${cause ? ` — ${cause}` : ""}${row.decided_at ? ` (${row.decided_at})` : ""}`
         + (cause ? "" : " — the check that refused it has no word in the bulletin's five yet; the row is named beside this"),
     };
   }
@@ -383,22 +383,22 @@ export function receiptFrom(records = {}) {
       ...base, status: "locked",
       crossing: settlement ?? null,
       settlement_sha: settlement?.sha ?? null,
-      says: `locked at window ${row.window_id} — the candle ruled for it; it reaches the world at the settlement that carries the window`,
+      says: `locked at candle ${row.window_id} — the candle ruled for it; it reaches the world at the settlement that carries that candle`,
     };
   }
   if (row?.status === "retracted") {
-    return { ...base, status: "retracted", says: `retracted at window ${row.window_id} — you took it off the docket before the close` };
+    return { ...base, status: "retracted", says: `retracted at candle ${row.window_id} — you took it off the docket before the close` };
   }
   if (row?.status === "held_review") {
     return { ...base, status: "held_review", cause: "held", cause_row: "claims.status = \"held_review\"",
-      says: `held at window ${row.window_id} — a mind rules on it; it did not ride and it was not refused` };
+      says: `held at candle ${row.window_id} — a mind rules on it; it did not ride and it was not refused` };
   }
 
   // 3 · PENDING. On the public docket, waiting for the candle.
   if (row?.status === "pending") {
     return {
       ...base, status: "pending",
-      says: `pending at window ${row.window_id} — staked and on the public docket since ${row.submitted_at ?? "its stake"}; it rides when that window closes`,
+      says: `pending at candle ${row.window_id} — staked and on the public docket since ${row.submitted_at ?? "its stake"}; it rides when that candle closes`,
     };
   }
 

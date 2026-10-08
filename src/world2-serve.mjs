@@ -597,7 +597,7 @@ export async function twinReceipt(p, id, { terrain = false, standing = false } =
     const reason = settled ? "the settlements table names no window a settlement closed" : "the settlements table could not be read";
     Object.assign(receipt, {
       settlements: { readable: Boolean(settled), reason },
-      says: `standing in the store, its newest claim locked at window ${newest.window_id}; whether a settlement has carried it cannot be told: ${reason}`,
+      says: `standing in the store, its newest claim locked at candle ${newest.window_id}; whether a settlement has carried it cannot be told: ${reason}`,
     });
   }
   if (receipt.status === "published" && !carried) {
@@ -755,7 +755,7 @@ export async function world2Serve(path, searchParams, { p: injected = null } = {
         + "`settlement/S<n>` tag, written after the keeper's tag lands, the tags kept as the git-side receipt. "
         + "`n`, `sha`, `date` are 1.0's own fields under 1.0's own rules (src/settlements.mjs); `sha` is the "
         + "blessed COMMIT in full where 1.0 abbreviates it, and `date` is the crossing's push in UTC. "
-        + "`window` is the candle window that crossing closed (null before the store's first window); "
+        + "`window` is the number of the candle that crossing closed, candle N (null before the store's first candle); "
         + "`blessed_at` is the tag's own date, the keeper's bless. `current.n` is the newest number the "
         + "table holds — as current as the office's tick, which runs settlements-backfill.mjs right after "
         + "its world fetch, so at most ~15 minutes behind a bless.",

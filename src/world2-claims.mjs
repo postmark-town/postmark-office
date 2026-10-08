@@ -363,7 +363,7 @@ export async function openWindowFor(client, dark) {
 export async function claimTxFromJournal(client, row, seq, { household, actId = null, env = process.env } = {}) {
       const payload = row.payload == null ? {} : JSON.parse(row.payload);
       const win = await openWindowFor(client,
-        "no open window — the candle is dark; bootstrap the next window before the docket can take claims");
+        "no open candle — the candle is dark; the next candle must be lit (its windows row bootstrapped) before the docket can take claims");
 
       // -- withdraw ---------------------------------------------------------
       //
@@ -637,7 +637,7 @@ export async function retractPendingClaim(q, { windowId, slug, claimant, env = p
  * draft put forward by a stake (`promoteDraftOnStake`). Either way the newest
  * declaration on the docket is the one the clearing rules on.
  */
-export const REPLACED_CHECK = "replaced: a later claim on this mark in the same window replaces this one";
+export const REPLACED_CHECK = "replaced: a later claim on this mark in the same candle replaces this one";
 
 export async function retractReplaced(client, { windowId, slug, claimant, except = null }) {
   const { rows } = await client.query(
@@ -718,7 +718,7 @@ export async function promoteDraftOnStake({ actor, householdName, slug, stamps =
     // and a draft composed in the window it is put forward in moves no
     // window_id, so nothing waited: a stake during a clearing promoted the draft
     // into the window the clearing was closing, after its pending list was read.
-    const win = await openWindowFor(c, "no open window — the candle is dark; the stake cannot put this mark forward");
+    const win = await openWindowFor(c, "no open candle — the candle is dark; the stake cannot put this mark forward");
     windowId = win.id;
     // The spelling set, for `readDraftClaims`' reason: a stake on a draft the
     // house composed under its old key must find that draft, or the stake is
@@ -856,7 +856,7 @@ export function withdrawRetiredRefusal(id, status) {
   if (!status?.found || !status.retired || status.docket_window != null) return null;
   return {
     code: 409,
-    defect: `"${id}" is already retired at window ${status.retired_window ?? "?"}`,
+    defect: `"${id}" is already retired at candle ${status.retired_window ?? "?"}`,
     hint: "there is nothing standing to withdraw — leave it again to bring it back: the same mark, the same id, ruled at the next crossing",
   };
 }
