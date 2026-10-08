@@ -25,6 +25,7 @@
 
 import { execFileSync } from "node:child_process";
 import { actsQuery } from "./world2-acts.mjs";
+import { probeOf } from "./index-probe.mjs";
 
 /** The roads a row may name (071's CHECK). */
 export const ASHORE_ROADS = Object.freeze(["declare", "join-bind", "drain", "backfill"]);
@@ -54,8 +55,9 @@ export async function recordAshore({ handle, sha, road, clone, log = console }, 
 }
 
 /**
- * Which of `handles` the store holds ashore (a row, and no retired pin): a Set,
- * or null when the store cannot be asked.
+ * Which of `handles` the store holds ashore (a row, and no pin that retired it
+ * or renamed it away: a renamed handle is ashore under its new name, never its
+ * old one): a Set, or null when the store cannot be asked.
  */
 export async function ashoreOf(handles, env = process.env) {
   const list = [...new Set(handles ?? [])].filter((h) => typeof h === "string" && h);
@@ -64,8 +66,41 @@ export async function ashoreOf(handles, env = process.env) {
     const rows = await actsQuery(
       `SELECT a.handle FROM ashore a
         WHERE a.handle = ANY($1)
-          AND NOT EXISTS (SELECT 1 FROM household_pins p WHERE p.handle = a.handle AND p.retired IS NOT NULL)`,
+          AND NOT EXISTS (SELECT 1 FROM household_pins p
+                           WHERE p.handle = a.handle AND (p.retired IS NOT NULL OR p.renamed_to IS NOT NULL))`,
       [list], env);
     return rows === null ? null : new Set(rows.map((r) => r.handle));
   } catch { return null; }
+}
+
+// ── THE RECIPIENT CHECK'S PROBE, FOR THE DOOR AND THE DRAIN ALIKE ────────────
+//
+// validateLetter's `no resident "x"` asks the index, a copy that trails the
+// record. The send door wraps the probe so a recipient the copy lacks and the
+// store holds ashore reads as a resident (POS-444). The DRAIN replays that same
+// letter through that same check at the crossing, with a probe it loaded itself,
+// so it must take the same wrap: a door that accepted a letter the crossing then
+// bounces has lost a letter the sender was told was accepted (the 10-08 review).
+// One function, so the two cannot disagree about who lives here.
+
+/**
+ * `db` (an office.db handle, a probe, or null on a switched office) for the
+ * letters to `tos`: itself when the copy knows every recipient or the store
+ * holds none of the missing ones ashore, else a probe whose `hasResident` also
+ * answers yes for those. A copy that cannot be asked is left to throw in the
+ * check's own order.
+ */
+export async function recipientsProbe(db, tos, { env = process.env } = {}) {
+  const ix = probeOf(db, { env });
+  if (!ix) return db;
+  const missing = [];
+  for (const to of new Set(tos ?? [])) {
+    if (typeof to !== "string" || !to) continue;
+    try { if (!ix.hasResident(to)) missing.push(to); }
+    catch { return db; }
+  }
+  if (!missing.length) return db;
+  const ashore = await ashoreOf(missing, env);   // null (could not look): the copy's answer stands
+  if (!ashore?.size) return db;
+  return Object.freeze({ ...ix, hasResident: (h) => ashore.has(h) || ix.hasResident(h) });
 }

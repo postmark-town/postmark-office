@@ -116,7 +116,7 @@ export function makePool(seed) {
       }
       if (/FROM ashore a/.test(text)) {
         const asked = new Set(params[0] ?? []);
-        const retired = new Set(state.pins.filter((p) => p.retired != null).map((p) => p.handle));
+        const retired = new Set(state.pins.filter((p) => p.retired != null || p.renamed_to != null).map((p) => p.handle));
         return { rows: state.ashore.filter((a) => asked.has(a.handle) && !retired.has(a.handle)).map((a) => ({ handle: a.handle })) };
       }
       // THE MINT'S OWN INSERT, which lets the DATABASE choose the place

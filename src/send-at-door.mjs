@@ -22,8 +22,8 @@ import { sendLetterAsRow } from "./town-mail.mjs";
 import { townLogEnabled } from "./town-journal.mjs";
 import { withThreadlessHint } from "./mail-thread.mjs";
 import { inferSender } from "./one-contract.mjs";
-import { indexSwitched, probeOf } from "./index-probe.mjs";
-import { ashoreOf } from "./ashore.mjs";
+import { indexSwitched } from "./index-probe.mjs";
+import { recipientsProbe } from "./ashore.mjs";
 
 // ── A RECIPIENT THE COPY HAS NOT CAUGHT UP TO (POS-332) ──────────────────────
 //
@@ -39,16 +39,11 @@ import { ashoreOf } from "./ashore.mjs";
 // retired pin, is a recipient; anything else is checked exactly as before. The
 // copy is asked first, so the store is read only on a miss.
 //
-// THE DOOR ONLY. The drain replays a letter through validateLetter at the
-// crossing with its own probe (tools/town-drain-run.mjs); that side is not
-// changed here.
+// THE DRAIN TAKES THE SAME WRAP (src/ashore.mjs § recipientsProbe): it replays
+// this letter through validateLetter at the crossing, and a door that accepted
+// a letter the crossing then bounces has lost it (town-bridge.mjs § the letters).
 export async function recipientProbe(db, to, { env = process.env } = {}) {
-  const ix = probeOf(db, { env });
-  if (!ix || typeof to !== "string" || !to) return db;
-  try { if (ix.hasResident(to)) return db; }
-  catch { return db; }                     // the store's 503 is validateLetter's to throw, in its own order
-  if (!(await ashoreOf([to], env))?.has(to)) return db;   // not ashore, or could not look: the copy's answer stands
-  return Object.freeze({ ...ix, hasResident: (h) => h === to || ix.hasResident(h) });
+  return recipientsProbe(db, [to], { env });
 }
 
 export const NONCE_NOT_HONOURED = "this office keeps no town log, so a nonce cannot be remembered and this receipt is NOT idempotent by it. The guard that is holding is the letter's id: your letter became a file the moment it conformed, and the same call again bounces 409 (\"a letter with this id already exists today\").";

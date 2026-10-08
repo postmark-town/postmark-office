@@ -133,6 +133,32 @@ test("the new resident is a recipient at once too (the send door reads the same 
   assert.match(result.commit, /^[0-9a-f]{40}$/);
 });
 
+test("THE DOOR AND THE DRAIN AGREE: a letter to the just-landed resident, accepted at the door, is drained at the crossing, not bounced", async () => {
+  assert.ok(declared, "runs after the declaration");
+  const { DatabaseSync } = await import("node:sqlite");
+  const { runTownDrain } = await import("../src/town-bridge.mjs");
+  const { existsSync } = await import("node:fs");
+  process.env.TOWN_SINGLE_LOG = "1";
+  const odb = new DatabaseSync(":memory:");
+  odb.exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)");
+  try {
+    const key = { household: "keemin", handles: new Set(["wright"]), ghId: 999, ghLogin: "keeminlee" };
+    const { result } = await sendAtDoor({ from: "wright", to: HANDLE, title: "the boat tonight", thread: "new", body: "Wren —\n\nsee you on the quay." }, key, { db, clone, odb });
+    assert.equal(typeof result.logged?.seq, "number", "the door accepted it: a row in the town log");
+    // the crossing's drain, the ingest still held back: the copy does not know them
+    const report = await runTownDrain(odb, { db: null, clone, requireLock: false, log: null });
+    const row = report.letters.find((l) => l.id === result.letter_id);
+    assert.ok(row, "the drain replayed the letter");
+    assert.equal(row.bounced, undefined, `not bounced: ${row.bounced}`);
+    assert.match(row.commit ?? "", /^[0-9a-f]{40}$/, "materialised in the sender's outbox for the ferry");
+    assert.ok(existsSync(join(clone, row.file)));
+    assert.equal(report.bounced, 0);
+  } finally {
+    delete process.env.TOWN_SINGLE_LOG;
+    odb.close();
+  }
+});
+
 test("a harbor handle with no address is still refused as a recipient: the registry is not the record of who is ashore", async () => {
   const key = { household: "keemin", handles: new Set(["wright"]) };
   await assert.rejects(sendAtDoor({ from: "wright", to: "moored", title: "hello at the quay", thread: "new", body: "x" }, key, { db, clone, odb: null }),
@@ -148,6 +174,13 @@ test("the record is append-only, and a retired pin is not ashore", async () => {
     const { rowCount } = await owner.query("UPDATE household_pins SET retired = '2026-10-08' WHERE handle = $1", [HANDLE]);
     assert.equal(rowCount, 1, "the declaration pinned the handle");
     assert.deepEqual([...(await ashoreOf([HANDLE]))], [], "retired: not ashore");
+    // renamed away: ashore under the new name, never the old one
+    const pen = await IX.store.connect("office_api");
+    try { await pen.query("INSERT INTO ashore (handle, at, sha, road) VALUES ('old-name', now(), $1, 'join-bind')", ["e".repeat(40)]); }
+    finally { await pen.end(); }
+    assert.deepEqual([...(await ashoreOf(["old-name"]))], ["old-name"]);
+    await owner.query("INSERT INTO household_pins (handle, login, gh_id, pinned, renamed_to) VALUES ('old-name', 'renamer-gh', 8080, '2026-09-01', 'new-name')");
+    assert.deepEqual([...(await ashoreOf(["old-name"]))], [], "renamed: not ashore under the old name");
   } finally { await owner.end(); }
 });
 

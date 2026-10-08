@@ -25,7 +25,7 @@ import { renamedRow } from "./one-contract.mjs";
 import { hotTenseBlock } from "./town-updates.mjs";
 import { hotMailBlock, outboxTense } from "./town-mail.mjs";
 import { votesAvailable, doorstepVotes } from "./votes.mjs";
-import { nextCrossingForDoorstep, copyBlock } from "./crossings.mjs";
+import { nextCrossingForDoorstep, copyBlock, copyHoldsWords } from "./crossings.mjs";
 import { unreadFor, unreadBlock } from "./unread-store.mjs";
 import { freshFor } from "./paper-fresh.mjs"; // POS-271: the pending paper rows, read before a composed read
 
@@ -101,7 +101,7 @@ export async function doorstepBundle(handle, ctx = {}) {
   const { handle: h, as_of, ...rest } = core;
   let copy;
   try { copy = copyBlock(ix ? await ix.copy() : indexCopy(db), as_of, nowMs); }
-  catch { copy = { ...copyBlock({}, as_of, nowMs), caught_up: null, sentence: "the office's copy of the town record could not say what it has caught up to just now; as_of above names its commit" }; }
+  catch { copy = { ...copyBlock({}, as_of, nowMs), caught_up: null, sentence: `The office's copy of the town record ${copyHoldsWords(undefined)}; as_of above names its commit.` }; }
   const d = { handle: h, as_of, copy, next_crossing: nextCrossingForDoorstep(nowMs), ...rest };
 
   // ── THE SEVENTH SEGMENT · what awaits your word (the founder's .1 ruling) ─

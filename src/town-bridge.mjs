@@ -151,6 +151,7 @@ import { currentKeysOf, judgeHouseKey } from "./house-key.mjs";
 import { planFirstIdeaSweep, writeFirstIdeaSweep } from "./first-idea-sweep.mjs";
 import { replayPaperAct } from "./town-updates.mjs";
 import { replayLetter } from "./town-mail.mjs";
+import { recipientsProbe } from "./ashore.mjs"; // the recipient check's wrap, the door's own (POS-444)
 import { townLockPath, useFlock } from "./town-lock.mjs";
 
 /**
@@ -564,6 +565,13 @@ export async function runTownDrain(odb, {
   // the resume checks). An accepted letter is never lost; it may be a crossing late.
   const updates = [], letters = [];
   let bounced = 0, held = 0;
+  // THE RECIPIENTS THE COPY HAS NOT CAUGHT UP TO (POS-444): the send door
+  // accepted each of these letters with its recipient check wrapped so a handle
+  // the store holds ashore is a resident, and the replay below asks the same
+  // check, so it takes the same wrap. Otherwise a letter to a resident admitted
+  // since the last ingest is accepted at the door and bounced here. Letters
+  // only: the paper doors are handed `db` as it is.
+  const letterDb = await recipientsProbe(db, rows.filter((r) => r.cls === "letter").map((r) => r.payload?.args?.to));
   const bounce = (e) => {
     if (e?.pen === NOT_LANDED) {
       held += 1;
@@ -599,7 +607,7 @@ export async function runTownDrain(odb, {
     }
     let entry;
     try {
-      const out = replayLetter(row, { doors, db, clone });
+      const out = replayLetter(row, { doors, db: letterDb, clone });
       entry = out.skipped ? { skipped: out.skipped } : { commit: out.result?.commit ?? null };
     } catch (e) { entry = bounce(e); }
     letters.push({ seq: row.seq, id, file, ...entry });

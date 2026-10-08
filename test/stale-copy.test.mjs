@@ -263,7 +263,7 @@ test("a copy whose history cannot be read still answers the 404, and says it cou
   delete process.env.TOWN_INDEX_READS;
   try {
     const bent = { prepare: () => { throw new Error("no such table: repo_log"); } };
-    assert.equal(await letterNotInCopy(bent), "no letter by that id in the office's copy of the town record (what that copy has caught up to could not be read just now)");
+    assert.equal(await letterNotInCopy(bent), "no letter by that id in the office's copy of the town record, which could not say what it has caught up to just now");
   } finally { if (keep === undefined) delete process.env.TOWN_INDEX_READS; else process.env.TOWN_INDEX_READS = keep; }
 });
 

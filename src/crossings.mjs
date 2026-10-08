@@ -125,10 +125,17 @@ export function copyCrossing(seal) {
   return { crossing: n, sailed_at: crossingSailsAt(n), sealed_at: new Date(at).toISOString() };
 }
 
-/** What the copy holds, in words: "has caught up to crossing N, sealed T", or that it holds no seal. */
-export const copyHoldsWords = (crossing) => crossing
-  ? `has caught up to crossing ${crossing.crossing}, sealed ${crossing.sealed_at}`
-  : "holds no crossing's seal, so it cannot name a crossing it has caught up to";
+/**
+ * What the copy holds, in words, the ONE source for every page that says it
+ * (the doorstep's `copy`, its fallback, a lookup's 404): "has caught up to
+ * crossing N, sealed T"; that it holds no seal (`null`); or, when its history
+ * could not be read (`undefined`), that it could not say.
+ */
+export const copyHoldsWords = (crossing) => crossing === undefined
+  ? "could not say what it has caught up to just now"
+  : crossing
+    ? `has caught up to crossing ${crossing.crossing}, sealed ${crossing.sealed_at}`
+    : "holds no crossing's seal, so it cannot name a crossing it has caught up to";
 
 /**
  * A lookup's 404 when the office's copy holds no letter by the id (POS-332).
@@ -139,11 +146,9 @@ export const copyHoldsWords = (crossing) => crossing
  * could not be read.
  */
 export function notInCopyDefect(crossing) {
-  if (crossing === undefined)
-    return "no letter by that id in the office's copy of the town record (what that copy has caught up to could not be read just now)";
-  return crossing
-    ? `no letter by that id in the office's copy of the town record, which ${copyHoldsWords(crossing)}; a letter that sailed after that crossing is not in it yet`
-    : `no letter by that id in the office's copy of the town record, which ${copyHoldsWords(null)}; a letter newer than the copy is not in it yet`;
+  const tail = crossing === undefined ? ""
+    : crossing ? "; a letter that sailed after that crossing is not in it yet" : "; a letter newer than the copy is not in it yet";
+  return `no letter by that id in the office's copy of the town record, which ${copyHoldsWords(crossing)}${tail}`;
 }
 
 /**
