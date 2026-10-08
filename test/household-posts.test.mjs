@@ -234,6 +234,12 @@ test("6 · the doorstep segment deep-equals household { read: \"posts\" } at the
   const dbPath = join(DIR, "fixture.db");
   fixtureDb(dbPath).close();
   const db = new DatabaseSync(dbPath, { readOnly: true });
+  // THE CLOCK, PINNED TO THE FIXTURE'S WEEK. Both reads keep a week back from
+  // the real clock and neither takes one from its caller, so this test read
+  // the fixture's posts only until 2026-10-07 14:00Z, a week after office-hours
+  // ended, and was red after (POS-419). Every other test here passes NOW.
+  const realNow = Date.now;
+  Date.now = () => NOW;
   try {
     const meta = { as_of: "fixturesha000000000000000000000000000000" };
     const ctx = { db, key: null, meta, asOf: meta.as_of, canWrite: false, clone: null, pen: null, odb: null, dbPath: null };
@@ -246,6 +252,7 @@ test("6 · the doorstep segment deep-equals household { read: \"posts\" } at the
     const asked = await householdApex({ read: "posts", ...args }, null, ctx);
     assert.deepEqual(segment, asked, "the segment drifted from the read its `serves` names");
   } finally {
+    Date.now = realNow;
     db.close();
   }
 });
