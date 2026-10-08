@@ -65,6 +65,10 @@ on:
   push:
     branches: [main, "train/**"]
   workflow_dispatch:
+  # THE MERGE QUEUE on train/** (Darko, 2026-10-08): the queue stacks reviewed PRs
+  # onto the train and runs this suite once on the combined tree; the verdict it
+  # reports there is the required `office suite verdict` for the whole group.
+  merge_group:
 
 permissions:
   contents: read

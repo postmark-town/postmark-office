@@ -25,12 +25,17 @@ on:
   pull_request:
     # edited: a PR retargeted to another base is judged again
     types: [opened, reopened, synchronize, edited]
+  # THE MERGE QUEUE (Darko, 2026-10-08) runs on train/** only. A queue group
+  # still needs this required check to report, so it reports here: green for a
+  # group onto a train (nothing to judge: the guard judges PRs into main), and
+  # RED for a group onto main, which ships by PR and never through a queue.
+  merge_group:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ship-guard-${{ github.event.pull_request.number }}
+  group: ship-guard-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -44,7 +49,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: A merge-queue group (train only)
+        if: github.event_name == 'merge_group'
+        env:
+          QUEUE_BASE: ${{ github.event.merge_group.base_ref }}
+        run: |
+          set -euo pipefail
+          case "$QUEUE_BASE" in
+            refs/heads/train/*) echo "a merge-queue group onto ${QUEUE_BASE#refs/heads/}: the ship guard judges PRs into main; nothing to judge here" ;;
+            *) echo "::error::a merge-queue group onto $QUEUE_BASE: main ships by pull request (SHIPPING.md), never through a merge queue"; exit 1 ;;
+          esac
       - name: Judge the base and the train
+        if: github.event_name == 'pull_request'
         env:
           BASE: ${{ github.event.pull_request.base.ref }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
