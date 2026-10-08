@@ -587,7 +587,7 @@ export async function worldStakeViaOffice(args = {}, key = null, deps = {}) {
     // `escrow_projection`, through the candle's own reader. See
     // world2-claims.mjs § WHY THE ROW DOES NOT SAY WHAT IT HOLDS.
     putForward = await promote({
-      actor: by, householdName: key?.household, slug: args.mark, stamps: n });
+      actor: by, householdName: key?.household, key, slug: args.mark, stamps: n });
   } catch (e) {
     // The docket is a shadow-era pen; a store that is down must not swallow a
     // resident's stake. Loud, and the ledger still runs.
@@ -732,7 +732,7 @@ export async function worldStakeViaOffice(args = {}, key = null, deps = {}) {
         // both windows rather than quietly moving one.
         ...(putForward.late_from ? { late_from_crossing: putForward.late_from } : {}),
         effect: (putForward.late_from
-          ? `your draft from crossing ${putForward.late_from} is put forward in window ${putForward.window} with ✦${applied} behind it — it is on the public docket now, and locks or is refused by name at the next crossing.`
+          ? `your draft from crossing ${putForward.late_from} is put forward in candle ${putForward.window} with ✦${applied} behind it — it is on the public docket now, and locks or is refused by name at the next crossing.`
           : `✦${applied} stands behind it and that is what put it forward — it is on the public docket now, and locks or is refused by name at the next crossing.`)
           + (applied < n ? ` You asked for ✦${n}; your balance carried ✦${applied}, and ✦${applied} is what the ledger moved.` : "") }
     : docket != null
@@ -740,8 +740,8 @@ export async function worldStakeViaOffice(args = {}, key = null, deps = {}) {
       // claim on this window's docket, and the answer says which window.
       ? { ...staked, stamps: stampsAt, ...withReadBack, window: docket,
           effect: (applied > 0
-            ? `✦${applied} more stands behind it on window ${docket}'s docket — the same claim, not a second one; it locks or is refused by name at that crossing.`
-            : `nothing more stands behind it — it is on window ${docket}'s docket as it was, and locks or is refused by name at that crossing.`)
+            ? `✦${applied} more stands behind it on candle ${docket}'s docket — the same claim, not a second one; it locks or is refused by name at that crossing.`
+            : `nothing more stands behind it — it is on candle ${docket}'s docket as it was, and locks or is refused by name at that crossing.`)
             + (applied > 0 && applied < n ? ` You asked for ✦${n}; your balance carried ✦${applied}, and ✦${applied} is what the ledger moved.` : "") }
       : { ...staked, stamps: stampsAt, ...withReadBack };
 }

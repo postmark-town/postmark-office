@@ -144,7 +144,7 @@ function fakeStore({ marks, claims, windows, roll }) {
       const [id, , slug, , , , , , , , , , , , , supersedes] = params;
       if (state.claims.has(String(id))) throw new Error(`duplicate key value violates unique constraint "claims_pkey" (${id})`);
       if (supersedes != null && !state.claims.has(String(supersedes))) throw new Error(`claims.supersedes ${supersedes} names no claim`);
-      state.claims.set(String(id), { id, slug, supersedes, data: jsonb(parseJ(params[13])) });
+      state.claims.set(String(id), { id, slug, supersedes, household: params[5], data: jsonb(parseJ(params[13])) });
       return { rows: [], rowCount: 1 };
     }
     if (/^INSERT INTO marks/i.test(t)) {
@@ -458,6 +458,24 @@ test("the lit-name comes in: planIngest plans wright/the-lit-name as an ADD, and
   assert.deepEqual(plan.adds.map((a) => a.slug), [slug], "the lit-name plans in");
   assert.equal(plan.adds[0].commit.sha, "c-lit", "with the commit that carried its file");
   assert.equal(REFUSED_BY_NAME.size, 0, "the refused set is empty today");
+});
+
+// POS-457: the claim an ingest writes is spelled by the deriver, never copied
+// from the file. At S99 (10-07) an ingest wrote 65 `gh:<id>` and 17 `solo:`
+// claims after the law date, because the claim took the world fold's own
+// spelling of the mark's household while the mark row (materialize's) did not.
+test("THE CLAIM'S HOUSEHOLD is the deriver's: a file record spelled gh:<id> files its claim under hh:<slug>", async () => {
+  __clearHouseCache?.();
+  const slug = "berthillon/zz-fixture-spelled-by-the-file";
+  const derived = [row(slug, { household: "gh:314022791" })];
+  const plan = planIngest({ derived, storeRows: [], pathAtRef: new Map([[slug, "p/b"]]), commitFor: () => C("c-b") });
+  assert.deepEqual(plan.adds.map((a) => a.slug), [slug]);
+  const open = { id: 7, status: "open", opens_at: "2026-09-28T00:00:00.000Z", closes_at: "2026-09-29T00:00:00.000Z" };
+  const store = fakeStore({ marks: [], claims: [], windows: [open], roll: { "deva-s-commons": ["berthillon"] } });
+  await applyIngest(store.client.query, plan, { windowId: 7, target: { ref: "B", sha: "b".repeat(40) } });
+  const claim = store.claim(String(plan.adds[0].row.id));
+  assert.equal(claim.household, "hh:deva-s-commons", "the claim names the house by its slug key, not the file's gh:<id>");
+  assert.equal(store.bySlug(slug).household, "hh:deva-s-commons", "and agrees with the mark row materialize wrote");
 });
 
 // POS-142, 2026-09-24: Wright's interim, which Keemin approved ("I agree. good to

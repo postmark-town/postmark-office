@@ -176,7 +176,11 @@ test("a placer places a resident's first parcel: author and household are the re
   const data = dataOf(claim);
   console.log(`    RECEIPT · claim claimant=${claim.claimant} household=${claim.household} status=${claim.status} _placed_by=${data._placed_by} _consent=${data._consent} · acts rows for it: ${pen.state.acts.filter((a) => a.object === out.id).length}`);
   assert.equal(claim.claimant, "solace", "the author is the resident");
-  assert.equal(claim.household, "solo:Ana-Login", "the claim is scoped to the RESIDENT's household — their pinned login, the spelling their own key resolves to — never solo:keeminlee");
+  // POS-457 (review of #438): a resident in no house is filed under their own
+  // HANDLE, never their login. The login is never asked of the deriver as a bare
+  // string, and their own key (`keyHouseholdOf`) answers this same solo:<handle>,
+  // so the resident reads what the placer filed for them.
+  assert.equal(claim.household, "solo:solace", "the claim is scoped to the RESIDENT's household — the spelling their own key resolves to — never solo:keeminlee");
   assert.equal(data.by, "solace");
   assert.equal(data._placed_by, "illuminator", "who placed it rides the declaration");
   assert.equal(data._consent, "letter-2026-09-25-ana-to-illuminator", "and on whose asking");
@@ -306,7 +310,7 @@ test("a placer's stamps: 0 puts the resident's parcel forward free — on the do
   assert.equal(out.refused_the_stake, undefined, "the ground refused nothing");
   assert.equal(out.stake_bounce, undefined, "no ledger was asked, so the placer's key is never asked to act as the resident");
   assert.equal(claim?.status, "pending", "on the docket, where the crossing publishes it");
-  assert.equal(claim?.household, "solo:wren-login", "still the resident's own claim");
+  assert.equal(claim?.household, "solo:wren", "still the resident's own claim (their handle; POS-457)");
 });
 
 // ── LEG 8 · a stake that bounced is ruled as the ✦0 that landed (office #226)

@@ -735,6 +735,40 @@ test("THE DOOR, flag on — the slug guard is a STORE lookup, and amend/withdraw
   // through the door's own guard, with a CAN-FAIL beside it.
 });
 
+// POS-457: A SIGNED-IN KEY'S LABEL IS ITS LOGIN, NOT A HANDLE. The door filed
+// such a resident's draft under `solo:<login>` and its slug guard read the same
+// `solo:<login>`, wrong but consistent. The pen now files under the acting
+// handle's house, so the guard must read THAT house, or it finds no collision
+// and permits a duplicate slug (the permissive direction).
+test("THE DOOR, flag on — a key labelled by its LOGIN: the draft is filed under the house, and the slug guard still sees it", async () => {
+  process.env.WORLD_SINGLE_LOG = "1";
+  const { leaveMarkViaOffice } = await import("../src/world.mjs");
+  const store = guardStore();
+  const signedIn = { household: "alpha-login", handles: new Set(["alpha"]) };
+  const inStore = (fn) => withGuardsFlipped(store, async () => {
+    const was = process.env.WORLD2_CANDLE;
+    process.env.WORLD2_CANDLE = "1";
+    try { return await fn(); }
+    finally { if (was === undefined) delete process.env.WORLD2_CANDLE; else process.env.WORLD2_CANDLE = was; }
+  });
+  const leaveIt = () => inStore(() => leaveMarkViaOffice(repo, {
+    slug: "by-login", kind: "sited", at: { x: 110, y: 105 }, extent: { w: 2, h: 2 }, body: "said once",
+  }, signedIn));
+  await leaveIt();
+  assert.deepEqual(store.claims.map((c) => c.household), ["hh:alpha-house"],
+    "the draft names the acting handle's house, not solo:alpha-login");
+  // THE OVERLAY'S KEY ROAD (world2-guards § guardedDraftsForKey -> scoped({ key })):
+  // the signed-in key reads the draft the pen filed under its house.
+  const overlay = await withGuardsFlipped(store, (guards) => guards.guardedDraftsForKey(repo, signedIn));
+  assert.ok((overlay.marks ?? []).some((m) => m.id === "alpha/by-login"),
+    `the drafts overlay shows the key's own draft (log: ${JSON.stringify(overlay.log ?? null).slice(0, 160)})`);
+  await assert.rejects(leaveIt(), (e) => {
+    assert.equal(e.code, 409, "the guard reads the house the pen wrote to");
+    assert.match(e.defect, /you already have a mark "by-login"/);
+    return true;
+  });
+});
+
 // ── PREVIEW (founder-ruled 2026-09-14, postmark#2692): say it, write nothing ──
 //
 // Keith's third oddity: the ordinary path (walk to your parcel, leave the house
@@ -1028,6 +1062,15 @@ const guardStore = ({ claims = [], identities = { alpha: "hh:alpha-house", beta:
         }
         if (/set_config\(.app\.household./.test(sql)) { declared = args[0]; return { rows: [{}] }; }
         if (/current_setting\(.app\.household./.test(sql)) return { rows: [{ declared, keys: declaredKeys }] };
+        // The drafts overlay's DELETED arm (guard-reads.mjs § WITHDRAW_ACT_SELECT):
+        // withdraw acts by the house's residents, or under one of the names in $2.
+        // Matched BEFORE the identities line, whose subquery it contains.
+        if (/^SELECT/i.test(sql.trim()) && /FROM acts a/.test(sql) && /'withdraw'/.test(sql)) {
+          const [keys, named] = args;
+          const inHouse = (h) => (keys ?? []).includes(identities[h]);
+          return { rows: acts.filter((a) => a.action === ACTION_WITHDRAW && a.class === CLASS_MARK
+            && (inHouse(a.actor) || (named ?? []).includes(a.household))) };
+        }
         if (/FROM identities/.test(sql)) return { rows: identities[args[0]] ? [{ household: identities[args[0]] }] : [] };
         // THE REGISTRY, which is what `householdKeyFor` reads since POS-160.
         // Same statement as the `identities` line above — these handles live in
@@ -1164,6 +1207,7 @@ const withGuardsFlipped = async (store, fn) => {
   const acts = await import("../src/world2-acts.mjs");
   const pen = await import("../src/world2-pen.mjs");
   const house = await import("../src/household-deriver.mjs");
+  const claims = await import("../src/world2-claims.mjs");
   const prev = { pg: process.env.WORLD2_PG, url: process.env.WORLD2_PG_URL, flag: process.env.W2_GUARDS };
   process.env.WORLD2_PG = "1";
   process.env.WORLD2_PG_URL = "postgres://hand-built/none";   // never dialled — the reader is replaced
@@ -1175,6 +1219,9 @@ const withGuardsFlipped = async (store, fn) => {
   // a real socket.
   acts.__setPoolForTest(store);
   pen.__setPoolForTest(store);
+  // And the docket pen's own pool: `claimHouseholdFor` resolves the house on it
+  // (POS-457). Unset, it reached a real socket whenever its memo was cold.
+  claims.__setPoolForTest(store);
   house.__clearHouseCache();
   try {
     assert.equal(guards.guardsFlipped(), true, "the flag is READ, not merely set — B1's gate 1");
@@ -1183,6 +1230,7 @@ const withGuardsFlipped = async (store, fn) => {
     restore();
     acts.__setPoolForTest(null);
     pen.__setPoolForTest(null);
+    claims.__setPoolForTest(null);
     house.__clearHouseCache();
     for (const [k, v] of [["WORLD2_PG", prev.pg], ["WORLD2_PG_URL", prev.url], ["W2_GUARDS", prev.flag]])
       if (v === undefined) delete process.env[k]; else process.env[k] = v;

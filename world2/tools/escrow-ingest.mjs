@@ -51,6 +51,7 @@
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { stakesFromRows } from "./fold-input.mjs";
 
 const toolUrl = (repo, file) => pathToFileURL(join(resolve(repo), "tools", file)).href;
 
@@ -115,6 +116,37 @@ export async function deriveEscrow({ townRepo }) {
   }
   rows.sort((a, b) => (a.mark === b.mark ? a.holder.localeCompare(b.holder) : a.mark.localeCompare(b.mark)));
   return { rows, k: dial.k, dial_source: dial.source, positions: state.positions.size, marks: new Set(rows.map((r) => r.mark)).size };
+}
+
+/**
+ * THE TOWN'S SPELLINGS, RE-KEYED TO THE HOUSE (POS-457). PURE.
+ *
+ * `deriveEscrow` names each position's household the way the town's dated
+ * resolver spells it (`gh:<id>` for most of the town), and the store writes
+ * `hh:<slug>` from the law date. `houseOf` is the deriver's inverted spelling
+ * set (`household-deriver.mjs § liveHouseOf`): every spelling a house has worn
+ * maps to its live key, and a spelling no house claims maps to itself, so
+ * nothing is guessed.
+ *
+ * THE WEIGHTS ARE THE TOWN'S, AND THEY ARE HELD TO IT. k is drawn by a
+ * household's first external position on a mark, so a re-key that merged two
+ * of the town's households would change the arithmetic, which is not this
+ * projection's to change. The re-keyed rows are walked by the fold's own
+ * `stakesFromRows` beside the town's, and if any weight differs the town's
+ * spellings are kept for the whole sha and `merged` names why. Measured on the
+ * 10-08 dump: 53 households stay 53 and 0 weights move.
+ */
+export function keyEscrowRows(rows, houseOf) {
+  if (!rows.length) return { rows, rekeyed: 0, merged: null };
+  const keyed = rows.map((r) => ({ ...r, household: houseOf(r.household), own_household: houseOf(r.own_household) }));
+  const k = Number(rows[0].weight_k);
+  const before = stakesFromRows(rows, k), after = stakesFromRows(keyed, k);
+  const moved = before.filter((s, i) => s.weight !== after[i]?.weight || s.holder !== after[i]?.holder || s.mark !== after[i]?.mark);
+  if (moved.length) {
+    return { rows, rekeyed: 0, merged: moved.slice(0, 5).map((s) => `${s.mark}|${s.holder}`) };
+  }
+  const rekeyed = keyed.filter((r, i) => r.household !== rows[i].household || r.own_household !== rows[i].own_household).length;
+  return { rows: keyed, rekeyed, merged: null };
 }
 
 /**

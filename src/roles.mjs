@@ -36,9 +36,9 @@
 // The gate therefore reads `key.ghId`, which oauth.mjs already puts on every
 // credential shape it verifies (`oauthLookup`, `keyLookup`, and the co-signed
 // `berthLookup` all spread `{ ghId, ghLogin }`). A caller with no verified
-// GitHub identity — a bare berth, or a static OFFICE_KEYS row with no id — has
-// no subject and can hold no role. See `server.mjs § KEYS` for the env format
-// that lets an operator pin one.
+// GitHub identity — a bare berth, or a static key row with no gh_id — has
+// no subject and can hold no role. See `static-keys.mjs` for how an operator
+// pins one (the `#<gh_id>` of the OFFICE_KEYS entry the row was imported from).
 //
 // ── THE BOUNDARY, WHICH IS STRUCTURAL AND NOT A PROMISE ────────────────────
 //

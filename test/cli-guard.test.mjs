@@ -214,6 +214,8 @@ const ROSTER = {
   "world2/tools/backfill-register.mjs": { args: [], env: NO_PG, code: 2, needle: "--class must be one of" },
   "world2/tools/escrow-ingest.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: escrow-ingest.mjs --town-repo <checkout>" },
   "world2/tools/falsifier-conversations-equality.mjs": { args: [], env: NO_PG, code: 2, needle: "--voices-log <path> is required" },
+  // Read only, and refuses without --dry before any connect (POS-457).
+  "world2/tools/household-key-census.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: household-key-census.mjs --dry" },
   "world2/tools/fold-input-cli.mjs": { args: [], env: NO_PG, code: 2, needle: "--world-sha <sha> is required" },
   "world2/tools/falsifier-pen-flip.mjs": { args: ["--help"], env: NO_PG, code: 0, needle: "usage" },
   "world2/tools/falsifier-projection-equality.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: falsifier-projection-equality.mjs" },
@@ -268,6 +270,8 @@ const ROSTER = {
   "world2/tools/stamp-lines.mjs": { args: [], env: NO_PG, code: 2, needle: "say --sync or --verify" },
   "world2/tools/stamp-mint-parity.mjs": { args: ["--clone", NOWHERE], env: NO_PG, code: 2, needle: "no town clone with tools/stamp-mint.mjs" },
   "world2/tools/stamp-mint-run.mjs": { args: [], env: NO_PG, code: 1, needle: "say --append" },
+  // POS-341 part 4: the quest snapshot on the store's key base. Stops on a clone that is not a town, before any store is read.
+  "world2/tools/quest-snapshot-run.mjs": { args: ["--clone", NOWHERE], env: NO_PG, code: 1, needle: "no town clone with tools/quest-progress.mjs" },
   "world2/tools/town-index-ingest.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: town-index-ingest.mjs" },
   "world2/tools/state-log-rederive.mjs": { args: [], env: { ...NO_PG, WORLD2_PG_URL: "postgres://nobody@localhost/not_scratch" }, code: 2, needle: "REFUSED · WORLD2_PG_URL must name" },
   // POS-155 gave this tool a second door (`--window <N>`, a candle window) beside

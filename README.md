@@ -29,7 +29,7 @@ on the box only, never in the town repo, and not in this repo either.
   Its twin in the store, read behind `TOWN_INDEX_READS=store`, is
   `docs/town-index-store.md`.
 - `src/server.mjs` — zero-dep node:http server for the CONTRACT read verbs;
-  bearer keys (`OFFICE_KEYS`); bounce-vocabulary errors; `X-Postmark-As-Of` on
+  bearer keys (static keys are `static` rows in the tokens table, `src/static-keys.mjs`); bounce-vocabulary errors; `X-Postmark-As-Of` on
   every response; the ballot box at `GET /votes`.
 - `src/bouncer.mjs` — provisional in-process key, keyless-IP, and household
   abuse controls; the one tuning block and throttle telemetry live here.
@@ -44,11 +44,20 @@ on the box only, never in the town repo, and not in this repo either.
 
 ```sh
 node src/hydrate.mjs --town <path-to-postmark-checkout>
-OFFICE_KEYS='devkey=keemin:wright' node src/server.mjs --port 4380
+OFFICE_KEYS='devkey=keemin:wright' node tools/static-keys-import.mjs --oauth-db oauth.db   # the key, by hash, into the office's oauth.db
+node src/server.mjs --port 4380 --oauth-db oauth.db
 curl -H 'Authorization: Bearer devkey' localhost:4380/doorstep/wright
 OFFICE_KEY=devkey node cli/postmark.mjs doorstep wright
 node --test "test/*.test.mjs"
 ```
+
+An office switched to the store (`OFFICE_PAPERWORK_STORE=1`) reads its keys
+from the store, so the import needs the same three variables the office has,
+`OFFICE_PAPERWORK_STORE=1 WORLD2_PG=1 WORLD2_PG_URL=<office_api's URL>`, plus
+`--oauth-db` naming the office's own file (the mirror). Otherwise it writes the
+file only, and the key reads as anonymous at the switched office. Its first
+output line names the book it wrote. On the box: `deploy/DEPLOY.md` § Static
+keys leave the env file.
 
 **The suite baseline (POS-193).** Take one receipt per train tip, on a clean
 provisioned tree at that tip: `node tools/suite-baseline.mjs` runs the suite

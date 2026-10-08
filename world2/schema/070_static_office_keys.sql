@@ -1,0 +1,48 @@
+-- 070 — oauth_tokens.household and oauth_tokens.handles: the office's static
+-- keys leave the env file (POS-352 part 2, w42)
+--
+-- RULED (Darko, 2026-10-06, 2a): static office keys become a `static` kind
+-- with an explicit handles column and an explicit household column, imported
+-- from OFFICE_KEYS by hash, nothing re-issued, no token printed.
+--
+-- So a static key is an oauth_tokens row with kind = 'static' (031's kind
+-- column was `access | refresh | household`; it is now that and `static`):
+--
+--   token_hash   sha256(key), base64url, as every token row; the key is never stored
+--   gh_id        the env row's `#<gh_id>`, or NULL: a row with no gh_id holds no
+--                roles, as an env row without one never did (src/roles.mjs)
+--   household    NEW: the household the operator named, as the env row named it
+--   handles      NEW: the handles the key may act as, a JSON array in written
+--                order, e.g. ["wright","postmaster"]
+--   gh_login, client_id, expires   NULL: no sign-in stands behind the row, and a
+--                static key does not expire; it ends when its row is deleted
+--   created      epoch seconds, when the import wrote it
+--
+-- The household and handles are EXPLICIT because a minted household key
+-- resolves its handles from its gh_id (every handle pinned to the account), and
+-- a static row that holds two handles out of a house must stay two handles
+-- (src/static-keys.mjs § WHY THE COLUMNS ARE EXPLICIT).
+--
+-- The rows are written by tools/static-keys-import.mjs, as office_api, which
+-- already holds INSERT and DELETE on oauth_tokens (031). No grant changes: an
+-- edited env row is re-imported as a delete and an insert, because nothing
+-- updates a token. The office reads them with one SELECT by hash
+-- (static-keys.mjs § staticLookup). An office before this change reads only
+-- kinds access, refresh and household, so the rows are inert to it: they can be
+-- imported before the deploy, and the rollback leaves them in place.
+--
+-- The sweep (oauth.mjs § sweep: DELETE ... WHERE expires < now) never reaches a
+-- static row: NULL < now is not true.
+--
+-- The file's tokens table grows the same two columns additively (oauth.mjs §
+-- oauthSchema), so `world2/tools/paperwork-import.mjs`, which copies the
+-- file's columns one for one, needs them here before it runs.
+--
+-- Additive and idempotent: a re-run changes nothing.
+--
+-- PROOF THAT IT LANDED (world2/tools/migrations-landed.mjs):
+--   SELECT EXISTS (SELECT 1 FROM information_schema.columns
+--     WHERE table_schema = 'public' AND table_name = 'oauth_tokens' AND column_name = 'handles');
+
+ALTER TABLE oauth_tokens ADD COLUMN IF NOT EXISTS household text;
+ALTER TABLE oauth_tokens ADD COLUMN IF NOT EXISTS handles text;

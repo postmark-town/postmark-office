@@ -44,7 +44,10 @@ WorkingDirectory=/srv/postmark-office
 # pass"), so the diff check below it finds nothing left to commit. The ballot
 # pass (POS-349) lands each ballot itself, its lines recorded in the same store
 # transaction as its vote; the stamp-lines.mjs --sync after it is the belt for
-# anything the shell's own commit carries (the store reads git). The ingest is the office
+# anything the shell's own commit carries (the store reads git). The quest
+# snapshot rides the same switch (POS-341 part 4): set, world2/tools/
+# quest-snapshot-run.mjs folds the leaderboard on the store's key base; unset,
+# the town's own --snapshot runs, as before. The ingest is the office
 # tree's own deploy/town-index-ingest.sh, the script the timer's unit runs from
 # its installed copy: it keeps its own clone and the law pen's credentials, and
 # its advisory lock serialises it with the timer's run. A failed ingest stops
@@ -134,7 +137,11 @@ ExecStart=/usr/bin/flock -w 300 /srv/postmark-office/town.lock /bin/sh -c ' \
   { git add -A -- WHITE_PAGES && { git diff --quiet --cached || { \
       git commit -qm "ballot: crossing pass" && git push -q; }; }; } && \
   { [ "$STAMP_LINES" != store ] || node /srv/postmark-office/world2/tools/stamp-lines.mjs --sync --clone "$TOWN_CLONE"; } && \
-  node tools/quest-progress.mjs --snapshot && \
+  if [ "$STAMP_LINES" = store ]; then \
+    node /srv/postmark-office/world2/tools/quest-snapshot-run.mjs --clone "$TOWN_CLONE"; \
+  else \
+    node tools/quest-progress.mjs --snapshot; \
+  fi && \
   { git diff --quiet -- TOWN_BULLETIN/quests.md || { \
       git add TOWN_BULLETIN/quests.md && \
       git commit -qm "quests: crossing leaderboard" && git push -q; }; } && \
