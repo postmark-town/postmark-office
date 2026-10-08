@@ -14,7 +14,7 @@
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
-import { generateKeyPairSync } from "node:crypto";
+import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync } from "node:crypto";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -91,8 +91,23 @@ function fakeStripe(sessions, t) {
   return new Promise((done) => server.listen(0, "127.0.0.1", () => done({ server, seen, port: server.address().port })));
 }
 
-function seamTown() {
-  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+// A SEEDED KEY WHOSE SIGNATURE SAYS "eur" (POS-419). Every other town here
+// signs with a fresh key, so a check that read the ledger's signatures matched
+// /eur|1840/i about one run in 400 (a base64url signature holding "eur" in any
+// case: 51 of 20,000 sampled), which is how CI went red on #424. This seed's
+// key signs the town's first line, "- 2026-06-12 · rules: stamps-v1", as
+// SIO4RxJGlWSdqYQjBFVBMkJQ0T1LDQAeUrO7xA0S8LZzl3I9TnAzMDuikcm7hWEmDehZqekq_-eqGg9mvQVjDg
+// ("AeUrO7"), so the presentment check below meets "eur" in a signature on
+// every run, and must read the lines' fields to stay green.
+const EUR_SEED = createHash("sha256").update("stripe-watch-cli eur seed 240").digest();
+const PKCS8_ED25519 = Buffer.from("302e020100300506032b657004220420", "hex"); // the DER prefix before a 32-byte Ed25519 seed
+const keyPairFrom = (seed) => {
+  const privateKey = createPrivateKey({ key: Buffer.concat([PKCS8_ED25519, seed]), format: "der", type: "pkcs8" });
+  return { privateKey, publicKey: createPublicKey(privateKey) };
+};
+
+function seamTown({ seed = null } = {}) {
+  const { publicKey, privateKey } = seed ? keyPairFrom(seed) : generateKeyPairSync("ed25519");
   const repo = mkdtempSync(join(tmpdir(), "stripe-cli-"));
   mkdirSync(join(repo, "tools"), { recursive: true });
   mkdirSync(join(repo, "WHITE_PAGES"), { recursive: true });
@@ -271,7 +286,7 @@ test("POS-183 · a real tick WITNESSES the settled dollars: the ledger row says 
   const fed = session({ created: due, amount_total: 1840, currency: "eur", payment_intent: "pi_eur" });
   const intents = { pi_eur: { id: "pi_eur", object: "payment_intent", latest_charge: { id: "ch_eur", object: "charge", balance_transaction: { id: "txn_eur", object: "balance_transaction", amount: 2013, currency: "usd" } } } };
   const { port } = await routedStripe({ sessions: [fed], intents }, t);
-  const town = await seeded(seamTown());
+  const town = await seeded(seamTown({ seed: EUR_SEED }));
   const state = join(town.repo, "state.json");
   const journal = join(town.repo, "intake.jsonl");
   execFileSync(process.execPath, [join(TOWN, "tools", "stamp-mint.mjs"), "--append", "--key", town.keyFile, "--repo", town.repo], { encoding: "utf8" });
@@ -294,7 +309,11 @@ test("POS-183 · a real tick WITNESSES the settled dollars: the ledger row says 
   assert.match(w.line, /usd: 20\b/, "the ledger line the town signed carries the settled dollars");
   const ledger = readFileSync(join(town.repo, "WHITE_PAGES", "stamp-ledger.md"), "utf8");
   assert.ok(ledger.includes(`stripe:${CS}`));
-  assert.ok(!/eur|1840/i.test(ledger), "the presentment never reaches the public ledger");
+  // what a line SAYS is its text before " · sig: ": a signature is base64url, and
+  // the seeded key's own (the rules line's) carries "eur" by construction
+  const said = ledger.split("\n").map((l) => l.replace(/ · sig: \S+\s*$/, "")).join("\n");
+  assert.match(ledger, /^- 2026-06-12 · rules: stamps-v1 · sig: \S*eur/im,"the seeded key's signature says eur, so a check that read signatures would be red here");
+  assert.ok(!/eur|1840/i.test(said), "the presentment never reaches the public ledger");
 });
 
 test("no key is a loud refusal, not a quiet empty tick", { skip: SKIP }, async () => {
