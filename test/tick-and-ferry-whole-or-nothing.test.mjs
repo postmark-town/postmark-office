@@ -202,6 +202,18 @@ if (process.env.STUB_APPEND) {
   execFileSync("git", ["-C", clone, "push", "-q"]);
 }
 `,
+  // POS-341 part 4: the quest snapshot on the store's key base, the switch's
+  // branch of the ferry's quest step. Its shell-facing contract is --snapshot's:
+  // write TOWN_BULLETIN/quests.md (the shell commits it). "quests-run" in the
+  // call trail says which branch ran.
+  "world2/tools/quest-snapshot-run.mjs": `
+import { appendFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+const a = process.argv;
+const clone = a[a.indexOf("--clone") + 1];
+if (process.env.STUB_CALLS) appendFileSync(process.env.STUB_CALLS, "quests-run\\n");
+if (process.env.STUB_QUESTS) writeFileSync(join(clone, "TOWN_BULLETIN/quests.md"), process.env.STUB_QUESTS + "\\n");
+`,
   // the store's catch-up of lines a shell committed, and the ferry's ingest: no-ops here
   "world2/tools/stamp-lines.mjs": `process.exit(0);\n`,
   "deploy/town-index-ingest.sh": `exit 0\n`,
@@ -542,6 +554,7 @@ test("ferry · STAMP_LINES=store: the runner's commit is the crossing's mint com
   assert.equal(status(fx), "");
   assert.equal(head(fx), originHead(fx), "everything pushed");
   assert.ok(calls(fx).includes("mint-run --append") && !calls(fx).includes("mint --append"), `the switch took the runner: ${calls(fx).join(", ")}`);
+  assert.ok(calls(fx).includes("quests-run") && !calls(fx).includes("quests"), `and the quest snapshot on the store's key base: ${calls(fx).join(", ")}`);
   const log = fx.g("-C", fx.town, "log", "--format=%s", "-6").trim().split("\n");
   assert.deepEqual(log.slice(0, 5), ["seal: re-seal at the crossing", "quests: crossing leaderboard", "ballot: crossing pass", "mint: crossing pass", "ferry: crossing"]);
 });
@@ -561,4 +574,5 @@ test("the switch off is the town's --append: the unset tick and crossing never c
   const ferry = fixture(["row 1"]);
   run(ferry, ["-c", ferryScript(ferry)], { STUB_APPEND: "mint row 2" });
   assert.ok(calls(ferry).includes("mint --append") && !calls(ferry).includes("mint-run --append"), calls(ferry).join(", "));
+  assert.ok(calls(ferry).includes("quests") && !calls(ferry).includes("quests-run"), calls(ferry).join(", "));
 });
