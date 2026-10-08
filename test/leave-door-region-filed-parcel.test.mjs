@@ -318,15 +318,15 @@ test("a parcel filed AT ITS ID amends identically — the filing was never the v
 // or the one-line fix would quietly repeal the cap instead of scoping it. This
 // leg fails the moment the cap stops asking of a fresh claim.
 
-test("CONTROL: a genuinely NEW parcel for the same household is still refused at the cap", async () => {
+test("CONTROL: a genuinely NEW parcel for a household at the cap is ACCEPTED at the door; the settlement applies the cap (POS-364)", async () => {
+  // R11, Darko 2026-10-04: the office accepts every physically legal act; the settlement applies limits in act order (POS-364). The cap still holds, but at the settlement, citing the-town/claim-cap
+  // (test/world-settlement.test.mjs § the limits), never as this door's refusal.
   const out = await leave({
     slug: "the-fifth-plot", kind: "parcel", by: "reader",
     at: { x: 1500, y: 1500 }, body: "new ground, not an amendment",
   }, HOUSE);
-  assert.equal(out.code, 403, `the cap must still hold for new ground, got ${JSON.stringify(out)}`);
-  assert.match(out.defect, /already holds 4 parcels/,
-    "FOUR here — nothing is excluded, because this slug names no standing mark. The same arithmetic that showed Current `four` when his flat WAS excluded from five.");
-  assert.match(out.hint, /capped at 3 per household/);
+  assert.equal(out.ok, true, `the door accepts new ground over the cap, got ${JSON.stringify(out)}`);
+  assert.doesNotMatch(JSON.stringify(out), /already holds/);
 });
 
 // ── LEG 7 · a slug is unique PER AUTHOR, and the fix does not widen that ────
@@ -336,14 +336,12 @@ test("CONTROL: a genuinely NEW parcel for the same household is still refused at
 // way past it. Ids are author-scoped, so it cannot — asserted rather than
 // assumed, because the fix's whole effect is to trust `amending`.
 
-test("a DIFFERENT author's same slug is a fresh claim, capped as today — and cannot be amended into", async () => {
+test("a DIFFERENT author's same slug is a fresh claim (accepted; the settlement applies the cap) — and cannot be amended into", async () => {
   const fresh = await leave({
     slug: "the-keepers-flat", kind: "parcel", by: "sailor",
     at: { x: 1800, y: 1800 }, body: "the same word, a different author",
   }, HOUSE);
-  assert.equal(fresh.code, 403, `a different author's same slug is NEW ground, got ${JSON.stringify(fresh)}`);
-  assert.match(fresh.defect, /already holds 4 parcels/,
-    "FOUR — nothing excluded, because `sailor/the-keepers-flat` names no standing mark. Reader's flat is not sailor's to stand on.");
+  assert.equal(fresh.ok, true, `a different author's same slug is NEW ground, accepted (R11), got ${JSON.stringify(fresh)}`);
 
   const amend = await leave({
     slug: "the-keepers-flat", kind: "parcel", by: "sailor", amend: true,

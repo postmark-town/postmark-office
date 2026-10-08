@@ -622,6 +622,19 @@ test("F8c · it does NOT fire on a lawfully quiet DELTA — the trap the written
   assert.equal(r.staked_marks, 1);
 });
 
+test("F8s · a docket the SETTLEMENT took away whole is a lawful crossing, not a starving one (POS-364, R11)", () => {
+  // A window whose only claim was a parcel over the cap: it materialized, the
+  // settlement opposes it, and fold-input-cli withheld it from the sketchbooks.
+  // Escrow stands elsewhere. Without the withheld term this is F8a's refusal.
+  const stakes = [{ mark: "alpha/staked", holder: "beta", n: 3, weight: 3, tick: 0 }];
+  const r = starvingCheck({ marks: [], stakes, docketClaims: 1, withheldBySettlement: 1 });
+  assert.equal(r.starving, false);
+  assert.equal(r.withheld_by_settlement, 1);
+  assert.match(r.why, /the settlement opposes every one/);
+  // CONTROL: the same input with nothing withheld is still F8a's refusal.
+  assert.equal(caught(() => starvingCheck({ marks: [], stakes, docketClaims: 1 })).reason, "store-starving");
+});
+
 test("F8d · a stake position of zero is not escrow — it must not hold the guard open", () => {
   const r = starvingCheck({ marks: [], stakes: [{ mark: "alpha/one", holder: "beta", n: 0, weight: 0, tick: 0 }] });
   assert.equal(r.starving, false);

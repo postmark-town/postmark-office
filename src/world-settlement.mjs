@@ -371,6 +371,27 @@ export function foldWithWords(inputs, words, cleared = null) {
   };
 }
 
+/**
+ * WHAT A SETTLEMENT TAKES AWAY, as the git write-down needs it (POS-364): the
+ * marks its World returns (`state: "returned"`, each with the subtree the engine
+ * named), folded from the snapshot's sources with the words standing at its seal
+ * and the limits. A returned mark whose stakes have not unwound
+ * (`pending-escrow`) still stands, so it is not taken away here. `{ slugs, vetoes }`.
+ * Throws when the settlement cannot be folded; the caller says so on its receipt.
+ */
+export async function settlementTakesAway(p, header, { worldRepo, townRepo = null }) {
+  const inputs = await settlementFoldInputs(p, header, { worldRepo, townRepo });
+  const words = await wordsAtSeal(p, header, { worldRepo });
+  const { state, vetoes } = foldWithWords(inputs, words);
+  const slugs = new Set();
+  for (const r of state.returned ?? []) {
+    if (r?.state !== "returned") continue;
+    slugs.add(String(r.mark));
+    for (const s of r.subtree ?? []) slugs.add(String(s));
+  }
+  return { slugs, vetoes };
+}
+
 /** The stance rows in the store, through the office's own pool. */
 export const STANCE_ACTS_SQL =
   "SELECT id, at, crossing, actor, action, object, at_anchor, at_dx, at_dy, witnesses, class, payload, effect, household"

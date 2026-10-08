@@ -737,7 +737,7 @@ export function planStoreWriteDown(marks, { publishedPathOf = null, canonBytesAt
  * from this file and the failure would arrive as a refusal naming a resident.
  */
 export function starvingCheck({
-  marks = [], stakes = [], docketClaims = null, carriedAbsent = 0, window = null,
+  marks = [], stakes = [], docketClaims = null, carriedAbsent = 0, window = null, withheldBySettlement = 0,
 } = {}) {
   const staked = stakes.filter((s) => Number(s.n) > 0);
   const stakedMarks = new Set(staked.map((s) => s.mark));
@@ -815,10 +815,19 @@ export function starvingCheck({
   // WHAT THIS WINDOW'S OWN DOCKET PUT ON THE TABLE. Every test below is about
   // this number and not about `offered`, which is the whole of the repair.
   const docketOffered = offered - carried;
+  // THE FIFTH INPUT: WHAT THE SETTLEMENT TOOK AWAY (POS-364). Since R11 a docket
+  // mark the settlement opposes (a parcel over a limit, a word standing at the
+  // seal) is withheld from the sketchbooks before this guard sees the set
+  // (fold-input-cli.mjs § git is written from the settlement). It DID
+  // materialize, so it answers the docket as surely as a written mark does: a
+  // window whose only claim was opposed is a lawful crossing, never a starving
+  // one. A count, or nothing (0), by the shared test.
+  const withheld = isDocketCount(withheldBySettlement) ? withheldBySettlement : 0;
   const counts = {
     offered,
     docket_offered: docketOffered,
     carried_absent: carried,
+    ...(withheld ? { withheld_by_settlement: withheld } : {}),
     docket_claims: docket,
     staked_marks: stakedMarks.size,
     staked_positions: staked.length,
@@ -826,6 +835,12 @@ export function starvingCheck({
 
   if (docketOffered > 0) {
     return { starving: false, ...counts };
+  }
+  if (withheld > 0) {
+    return {
+      starving: false, ...counts, quiet: false,
+      why: `this window's docket materialized ${withheld} mark(s) and the settlement opposes every one, so none is written down`,
+    };
   }
 
   if (stakedMarks.size === 0) {
@@ -1041,6 +1056,7 @@ export function storeWriteDown({
     ...normalized,
     docketClaims: normalized.selection?.docket_claims ?? null,
     carriedAbsent: normalized.selection?.carried_absent?.count ?? 0,
+    withheldBySettlement: normalized.selection?.settlement?.withheld_from_docket ?? 0,
     window: normalized.as_of.window,
   });
 

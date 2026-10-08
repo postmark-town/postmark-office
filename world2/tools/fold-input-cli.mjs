@@ -105,6 +105,30 @@ const git = (repo, args) => execFileSync("git", ["-C", repo, ...args], {
 }).trim();
 
 /**
+ * The fold input less what the settlement takes away (POS-364). PURE.
+ * `{ marks, selection, fromDocket, fromCarry }`. The docket's own and the carry
+ * are counted apart, as the starving guard counts them (store-writedown.mjs §
+ * starvingCheck): a carried mark the settlement takes away leaves the carry's
+ * count and slugs too, so the guard's subtraction stays a subset of a set.
+ */
+export function withholdTakenAway({ marks = [], selection = {} }, slugs) {
+  const away = slugs instanceof Set ? slugs : new Set([...(slugs ?? [])].map(String));
+  const carried = new Set((selection?.carried_absent?.slugs ?? []).map(String));
+  const gone = marks.filter((m) => away.has(String(m.slug))).map((m) => String(m.slug));
+  let next = selection;
+  if (selection?.carried_absent && gone.some((g) => carried.has(g))) {
+    const kept = (selection.carried_absent.slugs ?? []).filter((x) => !away.has(String(x)));
+    next = { ...selection, carried_absent: { ...selection.carried_absent, count: kept.length, slugs: kept } };
+  }
+  return {
+    marks: marks.filter((m) => !away.has(String(m.slug))),
+    selection: next,
+    fromDocket: gone.filter((g) => !carried.has(g)).length,
+    fromCarry: gone.filter((g) => carried.has(g)).length,
+  };
+}
+
+/**
  * Where the store's ingested town head stands against the town this crossing
  * fetched. Pure git, no store.
  */
@@ -281,6 +305,48 @@ if (isMain) {
         + "over a docket with rows (the store did not answer) are the same value again, which is the defect this "
         + "field exists to close.");
     }
+
+    // ── GIT IS WRITTEN FROM THE SETTLEMENT, NOT FROM THE CLEARED SET (POS-364) ─
+    //
+    // R2: "Git main is written from settlements only", and R5: a settlement is
+    // every cleared mark minus every opposed one. The window just cleared was
+    // sealed as a snapshot in its own transaction (R1); that settlement's World
+    // takes away what the words at its seal oppose, and since R11 every parcel
+    // over a limit, which the doors and the clearing no longer refuse
+    // (src/world-settlement.mjs § the limits). Such a mark must not reach a
+    // sketchbook: the world's fold would find it inadmissible and quarantine its
+    // whole household's sketchbook, which is one refusal holding everyone's
+    // marks (R5). So the docket loses exactly the marks the settlement returns,
+    // each with the subtree the engine named, and the receipt names them.
+    //
+    // IT NEVER REFUSES THE CROSSING. A settlement that cannot be folded here
+    // (no world checkout, an engine older than world#146, a store without 069)
+    // leaves the docket as it was, and `settlement.unread` says why: the old
+    // behaviour, named, rather than a stopped town.
+    let settlement = { window, unread: "no --world-repo: the settlement could not be folded here" };
+    if (worldRepo) {
+      try {
+        const { snapshotHeader } = await import("../../src/world-snapshot.mjs");
+        const { settlementTakesAway } = await import("../../src/world-settlement.mjs");
+        const header = await snapshotHeader(client, { window });
+        if (!header) settlement = { window, unread: `no snapshot was sealed for window ${window}` };
+        else {
+          const { slugs, vetoes } = await settlementTakesAway(client, header, { worldRepo, townRepo: townClone });
+          const w = withholdTakenAway({ marks: out.marks, selection }, slugs);
+          out = { ...out, marks: w.marks };
+          selection = w.selection;
+          settlement = {
+            window, snapshot: header.id, digest: header.digest, stance_through: header.stance_through ?? null,
+            taken_away: [...slugs].sort(), withheld_from_docket: w.fromDocket, withheld_from_carry: w.fromCarry,
+            limits: vetoes?.limits ?? [],
+            ...(vetoes?.town_unread ? { unread: `the engine at law ${String(header.law_sha).slice(0, 12)} predates world#146, so ${vetoes.town_unread.length} opposition(s) could not be carried` } : {}),
+          };
+        }
+      } catch (e) {
+        settlement = { window, unread: `the settlement could not be folded: ${String(e?.message ?? e).slice(0, 240)}` };
+      }
+    }
+    selection = { ...selection, settlement };
   } catch (e) {
     // Lane 2's refusals are thrown Errors whose messages carry the sha or window
     // they wanted and the sentence for why. They are passed through WHOLE rather

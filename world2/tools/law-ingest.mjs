@@ -487,6 +487,9 @@ export async function writeLaw(client, { lawSha, rows, blessed = false }) {
     // rows are the whole of a blessed run: `projection_heads['world-law']` is the
     // clearing's pin, and it belongs to the main run. A blessed run that moved it
     // would hand the clearing an older rulebook than the one it had.
+    // (POS-364: the law unit no longer passes --blessed. Its one run reads the
+    // newest settlement's checkout and DOES move the pin, because R2 makes the
+    // settlement's law the clearing's rulebook; deploy/world2-ingest.sh.)
     if (blessed) { await client.query("COMMIT"); return; }
 
     // `identities` is not written here: since 055 (POS-350) it is a VIEW over the
