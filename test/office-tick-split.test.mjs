@@ -78,3 +78,16 @@ test("the keeping tick keeps the old clock", () => {
   assert.deepEqual(calendarOf("postmark-office-keep.timer"), ["*:07,22,37,52"],
     "the pulls, the mint, the settlements row and the panes keep the freshness they had");
 });
+
+test("the roll-call carries the rehydrate as retired, and its household-keys alarm on the keep row", () => {
+  const m = JSON.parse(read("box-rollcall-manifest.json"));
+  const reh = m.units.find((u) => u.unit === "postmark-office-rehydrate.timer");
+  assert.ok(reh, "a retired rail keeps its row");
+  assert.equal(reh.stage, "retired");
+  assert.match(reh.retire_steps, /DEPLOY\.md § Retiring the rehydrate/);
+  assert.equal(reh.outcome, undefined, "a retired row's outcome would never be judged");
+  const keep = m.units.find((u) => u.unit === "postmark-office-keep.timer");
+  assert.equal(keep.stage, "live");
+  assert.equal(keep.outcome?.history_path, "/srv/postmark-harbor/household-keys.jsonl", "office-keep.sh writes the line, so its row carries the alarm");
+  assert.ok(!m.trees.rows.some((r) => r.unit === "postmark-office-rehydrate.service"), "no tree row for a unit that is gone");
+});

@@ -31,6 +31,9 @@
   "  stage                 live | parked. parked never alarms for being inert — but it",
   "                        DOES alarm if the box has it enabled, because then the",
   "                        manifest and the box disagree about whether it is inert",
+  "                        retired (POS-268 5b) is a rail deliberately ended: it carries retired_because",
+  "                        and retire_steps and no outcome, reads RETIRED once systemd no longer loads",
+  "                        the unit, and ALARM-unretired while the box still has it installed",
   "  activation_owner      who decided it runs, and the receipt. Not decoration: a row",
   "                        that cannot say this is a row nobody will fix when it reddens",
   "  cadence               the effective schedule, in prose",
@@ -100,16 +103,24 @@
   },
   {
    "unit": "postmark-office-rehydrate.timer",
-   "label": "the office's read index",
+   "label": "the office's read index (office.db), retired",
+   "stage": "retired",
+   "activation_owner": "Wright — retired by POS-268 part 5b (2026-10-08), the unit files removed from deploy/ in the same change; enabled at the original box standup (Keemin, DEPLOY.md § One-time setup), unit added 2026-08-01 c8e62f9",
+   "retired_because": "office.db is retired (POS-268): a switched office opens no office.db (part 5a, office #419) and reads the store's town index, which postmark-town-index.timer keeps. The rehydrate's world hydration, the one step something still reads (world.db and the store's world graph snapshot), runs in postmark-office-keep.timer since part 5b.",
+   "retire_steps": "DEPLOY.md § Retiring the rehydrate (POS-268 part 5b): disable --now the timer, remove both unit files, daemon-reload"
+  },
+  {
+   "unit": "postmark-office-keep.timer",
+   "label": "the office's keeping tick (clones, mint, settlements row, world hydration, panes)",
    "stage": "live",
-   "activation_owner": "Keemin — part of the original box standup, enabled in DEPLOY.md § One-time setup's own enable line; unit added 2026-08-01 c8e62f9",
-   "cadence": "every 15 minutes at :07, :22, :37, :52 while the box runs the pre-split unit (which runs the whole tick through the transitional deploy/office-tick.sh); :09, :24, :39, :54 once the POS-268 split's unit files are installed, two minutes after postmark-office-keep.timer",
-   "cadence_source": "systemctl show postmark-office-rehydrate.timer -p TimersCalendar",
+   "activation_owner": "Wright — ADOPTED 2026-10-04 at the w41 ship (SUNDAY-RUNBOOK § 7.1, DEPLOY.md § Sunday: adopting the tick split, POS-268): the four unit files installed, the pre-split units backed up to /var/backups/postmark-tick-split, postmark-office-keep.timer enabled. office-tick.sh stays on the box until a clean week has passed (the rollback runs it).",
+   "cadence": "every 15 minutes at :07/:22/:37/:52 UTC, the old tick's clock",
+   "cadence_source": "systemctl show postmark-office-keep.timer -p TimersCalendar — measured on the box 2026-10-04T15:0xZ: '{ OnCalendar=*-*-* *:07,22,37,52:00 }', UnitFileState=enabled, ActiveState=active",
    "heartbeat": {
     "kind": "unit_trigger",
     "stale_after_minutes": 45
    },
-   "stale_means": "The office serves a frozen X-Postmark-As-Of: every door answers 200 with yesterday's town. This is the exact failure found BY HAND on 2026-08-25 (one distinct as-of across 40 minutes and three tick slots). The allowance is three ticks — one missed tick is noise, three is a stuck rehydrate. site-sentinel's office_as_of probe watches the OUTCOME of this from outside; this row watches the runner.",
+   "stale_means": "the town clone stops pulling (the write pen and declare read a stale town), the mint catch-up and welcome pass stop, the settlements row stops following the keeper's tag, world.db and the store's world graph snapshot stop following the blessing, the household-keys line stops being written, and the panes freeze. The allowance is three ticks.",
    "outcome": {
     "history_path": "/srv/postmark-harbor/household-keys.jsonl",
     "alarm_on_nonempty": [
@@ -120,24 +131,11 @@
      "checked"
     ],
     "unsettled_runs": 0,
-    "why": "ONE HOUSEHOLD, ONE MINT KEY (Darko, 2026-10-04: \"make sure this cannot happen again without tests failing and alarms\"). The mint caps a household by the key the town's currentHouseholds gives each handle; a join that re-keyed only the joiner left nine houses minting as two households with two daily caps (Kev's minted 10 sends on 10-03), and nothing was looking. deploy/office-keep.sh runs the town's own predicate (tools/household-keys.mjs) over each tick's frozen town snapshot and appends one line here. The drain refuses a crossing that would split a house it touches, and the town's PR check reds a split on the PR that brings it; this row is the third lock, for a split that arrives by any other road (a hand-declared registry line, a records edit). This row sits on the rehydrate timer because the box still runs the pre-split unit, whose deploy/office-tick.sh calls office-keep.sh; it moves to the postmark-office-keep.timer row when that row goes live. unsettled_runs is 0 on purpose: these lines carry no status, so a threshold on it could never fire. Judged on the LATEST line only, because a split is a fact about the town right now.",
+    "why": "ONE HOUSEHOLD, ONE MINT KEY (Darko, 2026-10-04: \"make sure this cannot happen again without tests failing and alarms\"). The mint caps a household by the key the town's currentHouseholds gives each handle; a join that re-keyed only the joiner left nine houses minting as two households with two daily caps (Kev's minted 10 sends on 10-03), and nothing was looking. deploy/office-keep.sh runs the town's own predicate (tools/household-keys.mjs) over each tick's frozen town snapshot and appends one line here. The drain refuses a crossing that would split a house it touches, and the town's PR check reds a split on the PR that brings it; this row is the third lock, for a split that arrives by any other road (a hand-declared registry line, a records edit). The row sits on postmark-office-keep.timer, the unit whose script writes the line; it moved here from the rehydrate row when that unit was retired (POS-268 part 5b, 2026-10-08), the keep row having been live since the 10-04 adoption. unsettled_runs is 0 on purpose: these lines carry no status, so a threshold on it could never fire. Judged on the LATEST line only, because a split is a fact about the town right now.",
     "means": "The household-keys line is not being written. INSTALL-DAY NOTE: this row is EXPECTED to read ALARM-outcome until the first tick after deploy appends to /srv/postmark-harbor/household-keys.jsonl, and it clears itself then.",
     "list_means": "A declared household mints under more than one key (split_households), or one key mints for two households (shared_keys): the house gets two daily caps, or two houses share one. THIS ALARM HAS NO INSTALL DAY. The line's `detail` names each house and its keys. The repair is signed `registry: <handle> = hh:<slug>` lines for the residents off the house key, written with the drain's signedRegistryLines (the 07fa74d6a precedent), then stamp-verify. There are no exceptions: two people under one roof are one household (Darko, 2026-10-04).",
     "unchecked_means": "The town's predicate did not run (the line carries `checked: false` and the error text): the snapshot's tools/household-keys.mjs is absent (a town clone older than d95e81c1c) or it crashed. A check that did not run is not a clean town."
    }
-  },
-  {
-   "unit": "postmark-office-keep.timer",
-   "label": "the office's keeping tick (clones, mint, settlements row, panes)",
-   "stage": "live",
-   "activation_owner": "Wright — ADOPTED 2026-10-04 at the w41 ship (SUNDAY-RUNBOOK § 7.1, DEPLOY.md § Sunday: adopting the tick split, POS-268): the four unit files installed, the pre-split units backed up to /var/backups/postmark-tick-split, postmark-office-keep.timer enabled. office-tick.sh stays on the box until a clean week has passed (the rollback runs it).",
-   "cadence": "every 15 minutes at :07/:22/:37/:52 UTC, the old tick's clock",
-   "cadence_source": "systemctl show postmark-office-keep.timer -p TimersCalendar — measured on the box 2026-10-04T15:0xZ: '{ OnCalendar=*-*-* *:07,22,37,52:00 }', UnitFileState=enabled, ActiveState=active",
-   "heartbeat": {
-    "kind": "unit_trigger",
-    "stale_after_minutes": 45
-   },
-   "stale_means": "the town clone stops pulling (the write pen and declare read a stale town), the mint catch-up and welcome pass stop, the settlements row stops following the keeper's tag, the household-keys line stops being written, and the panes freeze. The allowance is three ticks."
   },
   {
    "unit": "postmark-town-index.timer",
@@ -721,14 +719,6 @@
     "must_be": "release",
     "why": "It commits the town's state after a crossing. Old code here writes a shape the deployed door no longer reads.",
     "activation_owner": "Wright — WorkingDirectory=/srv/postmark-office in deploy/postmark-crossing-save.service."
-   },
-   {
-    "id": "office-rehydrate",
-    "unit": "postmark-office-rehydrate.service",
-    "label": "the office tick's tree",
-    "must_be": "release",
-    "why": "The tick rehydrates the door's own caches; a stale tree rehydrates them into the shape the old code expected.",
-    "activation_owner": "Wright — WorkingDirectory=/srv/postmark-office in deploy/postmark-office-rehydrate.service."
    },
    {
     "id": "office-keep",

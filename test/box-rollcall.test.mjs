@@ -56,6 +56,8 @@ import {
   DEFAULT_MANIFEST,
   OK,
   PARKED,
+  RETIRED,
+  ALARM_UNRETIRED,
   ALARM_MISSING,
   ALARM_UNBOUNDED,
   ALARM_DISABLED,
@@ -156,8 +158,9 @@ function healthy(m = manifest()) {
     const halfway = Number.isFinite(hb.stale_after_minutes) ? (hb.stale_after_minutes / 2) * MINUTE : 60 * MINUTE;
     const beatAt = T0 - halfway;
 
-    if (row.stage === "parked") {
-      // A parked unit is honestly ABSENT from the box — which is what "parked"
+    if (row.stage === "parked" || row.stage === "retired") {
+      // A parked unit is honestly ABSENT from the box (and a retired one is, once
+      // its box steps are done: the healthy state) — which is what "parked"
       // means on postmark-stripe-watch today: never installed, by design.
       units[row.unit] = { load_state: "not-found", active_state: "inactive", unit_file_state: "" };
       if (hb.kind === "state_file" && hb.path) files[hb.path] = { exists: false };
@@ -653,6 +656,90 @@ test("a PARKED row is printed, counted apart from OK, and never contributes to t
   assert.match(lines, /parked by design \(/);
 });
 
+// ── §5 RETIRED: ended on purpose, and green only once the box agrees ────────
+//
+// POS-268 part 5b retired the rehydrate unit. A retired rail keeps its row so
+// it can still be asked about, and is judged the other way round from a live
+// one: ABSENT is green, and a box that still loads the unit (enabled, or merely
+// installed) has not finished the retirement. Asserted over a planted row, for
+// the parked rows' reason: whether the town carries a retired rail today is a
+// fact about the town, not about this checker.
+const PLANTED_RETIRED_UNIT = "postmark-example-retired.timer";
+
+function retiredManifest(m = manifest()) {
+  return {
+    ...m,
+    units: [
+      ...m.units,
+      {
+        unit: PLANTED_RETIRED_UNIT,
+        label: "a rail deliberately ended",
+        stage: "retired",
+        activation_owner: "planted by test/box-rollcall.test.mjs — this row is not on the box and never will be",
+        retired_because: "what it built is read from somewhere else now",
+        retire_steps: "systemctl disable --now postmark-example-retired.timer, remove its unit files, daemon-reload",
+      },
+    ],
+  };
+}
+
+test("a RETIRED row the box no longer loads reads RETIRED, is counted apart from OK, and the roll-call stays clean", () => {
+  const m = retiredManifest();
+  const result = rollcall(m, healthy(m), T0);
+  const row = rowFor(result, PLANTED_RETIRED_UNIT);
+  assert.equal(row.verdict, RETIRED);
+  assert.match(row.reason, /is retired — what it built is read from somewhere else now/);
+  assert.equal(result.exitCode, 0);
+  assert.ok(result.counts.RETIRED >= 1, "a retired rail is not a running one");
+  const lines = formatLines(result);
+  assert.match(lines.at(-1), /^roll-call clean — \d+ running, \d+ retired, \d+ parked by design \(/);
+});
+
+test("FALSIFIER: a RETIRED row the box still has ENABLED is ALARM-unretired, and names the steps", () => {
+  // CAN-FAIL: take the retired branch out of classifyRow and this row is judged
+  // as live, which reads OK on an enabled, recently-fired timer.
+  const m = retiredManifest();
+  const live = mutate(healthy(m), (s) => {
+    s.units[PLANTED_RETIRED_UNIT] = {
+      load_state: "loaded", active_state: "active", unit_file_state: "enabled",
+      last_trigger_ms: T0 - 5 * MINUTE, triggers: PLANTED_RETIRED_UNIT.replace(/\.timer$/, ".service"),
+    };
+    s.discovered.push(PLANTED_RETIRED_UNIT);
+  });
+  const result = rollcall(m, live, T0);
+  const row = rowFor(result, PLANTED_RETIRED_UNIT);
+  assert.equal(row.verdict, ALARM_UNRETIRED);
+  assert.match(row.reason, /recorded RETIRED in the manifest but the box still loads it/);
+  assert.match(row.reason, /systemctl disable --now postmark-example-retired\.timer/);
+  assert.equal(result.exitCode, 1);
+});
+
+test("a RETIRED row stopped and disabled but still installed is not retired yet", () => {
+  // The next `enable` would revive it: the unit files leaving the box is the step.
+  const m = retiredManifest();
+  const half = mutate(healthy(m), (s) => {
+    s.units[PLANTED_RETIRED_UNIT] = { load_state: "loaded", active_state: "inactive", unit_file_state: "disabled" };
+  });
+  assert.equal(rowFor(rollcall(m, half, T0), PLANTED_RETIRED_UNIT).verdict, ALARM_UNRETIRED);
+});
+
+test("the manifest refuses a retired row that cannot say why, or that still carries an outcome", () => {
+  const dir = mkdtempSync(join(tmpdir(), "rollcall-retired-"));
+  try {
+    const base = JSON.parse(readFileSync(MANIFEST_PATH, "utf8"));
+    const planted = retiredManifest(base).units.at(-1);
+    const cases = [
+      [{ ...planted, retired_because: undefined }, /is retired and does not say why or when/],
+      [{ ...planted, outcome: { history_path: "/srv/x.jsonl", unsettled_runs: 0, means: "m", why: "w" } }, /is retired and still carries an outcome — move it to the live row that writes \/srv\/x\.jsonl/],
+    ];
+    for (const [row, want] of cases) {
+      const p = join(dir, "m.json");
+      writeFileSync(p, JSON.stringify({ ...base, units: [...base.units, row] }));
+      assert.throws(() => loadManifest(p), want);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 // ── §6 THE REVERSE DIRECTION ────────────────────────────────────────────────
 
 test("FALSIFIER (h): a unit on the box that NO manifest row names is ALARM-unmanifested", () => {
@@ -687,7 +774,9 @@ test("the manifest refuses a row with no activation owner — 'a mechanism folds
       typeof row.activation_owner === "string" && row.activation_owner.length > 20,
       `${row.unit} names no activation owner`,
     );
-    assert.ok(typeof row.stale_means === "string" && row.stale_means.length > 20, `${row.unit} does not say what stale means`);
+    // a retired rail has no staleness to describe; it says why it ended instead (POS-268 5b)
+    if (row.stage === "retired") assert.ok(typeof row.retired_because === "string" && row.retired_because.length > 20, `${row.unit} does not say why it was retired`);
+    else assert.ok(typeof row.stale_means === "string" && row.stale_means.length > 20, `${row.unit} does not say what stale means`);
   }
 
   // And the loader is the thing that enforces it, not this test's goodwill —
@@ -700,7 +789,7 @@ test("the manifest refuses a row with no activation owner — 'a mechanism folds
   assert.throws(() => loadManifest(tmp), /names no activation_owner/);
 
   writeFileSync(tmp, JSON.stringify({ units: [{ unit: "x.timer", stage: "someday", activation_owner: "nobody" }] }));
-  assert.throws(() => loadManifest(tmp), /must be "live" or "parked"/);
+  assert.throws(() => loadManifest(tmp), /must be "live", "parked" or "retired"/);
 
   writeFileSync(tmp, JSON.stringify({ units: [{ stage: "live", activation_owner: "nobody" }] }));
   assert.throws(() => loadManifest(tmp), /no unit name/);
@@ -780,7 +869,8 @@ test("the printed board puts every ALARM above the green rows, and names the cou
   const lines = formatLines(rollcall(m, broken, T0));
 
   assert.match(lines[0], /^ALARM-disabled\s+postmark-settlement-shadow\.timer/);
-  assert.match(lines[lines.length - 1], /^1 ALARM · \d+ ok · \d+ parked by design/);
+  // (a retired row, POS-268 5b, is counted between the ok and the parked ones)
+  assert.match(lines[lines.length - 1], /^1 ALARM · \d+ ok( · \d+ retired)? · \d+ parked by design/);
 });
 
 // ── §9 THE RAIL RAN. WHAT CAME OUT OF IT. (v1 #9, 2026-08-30) ───────────────
@@ -2126,9 +2216,11 @@ test("§2e THE ROW IS STRICT: a blessing row with no allowance or no why is refu
 // that step writes (exercised on the town at d95e81c1c: clean, tool absent, and
 // a ledger with one 07fa74d6a line dropped).
 //
-// THE CAN-FAIL FLIP: drop the outcome block from the rehydrate row; the split
-// and unchecked tests red, the clean one stays green as the control.
-const HK_ROW = manifest().units.find((u) => u.unit === "postmark-office-rehydrate.timer");
+// THE CAN-FAIL FLIP: drop the outcome block from the keep row; the split and
+// unchecked tests red, the clean one stays green as the control. (The row moved
+// off the rehydrate timer when that unit was retired, POS-268 5b: office-keep.sh
+// writes the line, so its timer carries the alarm.)
+const HK_ROW = manifest().units.find((u) => u.unit === "postmark-office-keep.timer");
 const hkLog = (...lines) => ({ files: { [HK_ROW.outcome?.history_path]: { exists: true, text: lines.map((l) => JSON.stringify(l)).join("\n") + "\n" } } });
 const HK_CLEAN = { at: "2026-10-04T04:44:20Z", split_households: [], shared_keys: [], detail: [], checked: true };
 
