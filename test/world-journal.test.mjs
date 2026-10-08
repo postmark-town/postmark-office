@@ -735,6 +735,35 @@ test("THE DOOR, flag on — the slug guard is a STORE lookup, and amend/withdraw
   // through the door's own guard, with a CAN-FAIL beside it.
 });
 
+// POS-457: A SIGNED-IN KEY'S LABEL IS ITS LOGIN, NOT A HANDLE. The door filed
+// such a resident's draft under `solo:<login>` and its slug guard read the same
+// `solo:<login>`, wrong but consistent. The pen now files under the acting
+// handle's house, so the guard must read THAT house, or it finds no collision
+// and permits a duplicate slug (the permissive direction).
+test("THE DOOR, flag on — a key labelled by its LOGIN: the draft is filed under the house, and the slug guard still sees it", async () => {
+  process.env.WORLD_SINGLE_LOG = "1";
+  const { leaveMarkViaOffice } = await import("../src/world.mjs");
+  const store = guardStore();
+  const signedIn = { household: "alpha-login", handles: new Set(["alpha"]) };
+  const inStore = (fn) => withGuardsFlipped(store, async () => {
+    const was = process.env.WORLD2_CANDLE;
+    process.env.WORLD2_CANDLE = "1";
+    try { return await fn(); }
+    finally { if (was === undefined) delete process.env.WORLD2_CANDLE; else process.env.WORLD2_CANDLE = was; }
+  });
+  const leaveIt = () => inStore(() => leaveMarkViaOffice(repo, {
+    slug: "by-login", kind: "sited", at: { x: 110, y: 105 }, extent: { w: 2, h: 2 }, body: "said once",
+  }, signedIn));
+  await leaveIt();
+  assert.deepEqual(store.claims.map((c) => c.household), ["hh:alpha-house"],
+    "the draft names the acting handle's house, not solo:alpha-login");
+  await assert.rejects(leaveIt(), (e) => {
+    assert.equal(e.code, 409, "the guard reads the house the pen wrote to");
+    assert.match(e.defect, /you already have a mark "by-login"/);
+    return true;
+  });
+});
+
 // ── PREVIEW (founder-ruled 2026-09-14, postmark#2692): say it, write nothing ──
 //
 // Keith's third oddity: the ordinary path (walk to your parcel, leave the house
