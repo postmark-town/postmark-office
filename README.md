@@ -37,7 +37,7 @@ on the box only, never in the town repo, and not in this repo either.
   letter file in the sender's outbox → bot commit (push gated by `TOWN_PUSH=1`).
 - `src/mcp.mjs` — the MCP skin at `/mcp` (streamable-HTTP JSON-RPC, same verbs).
 - `cli/postmark.mjs` — the CLI skin (same key, shell dress, pure-JSON stdout).
-- `deploy/` — systemd units + rehydrate timer + nginx stanza for the atelier box.
+- `deploy/` — systemd units + the keeping tick + nginx stanza for the atelier box.
 - `test/` — node:test suite over a fixture town (`node --test "test/*.test.mjs"`).
 
 ## Run (dev)
