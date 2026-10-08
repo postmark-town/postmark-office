@@ -327,4 +327,38 @@ test("the households a snapshot derives from its register are the crossing's exp
   assert.equal((await householdsAt(now, TOWN_CLONE))[mover], `hh:${to.slug}`, "the register as it stands now derives the move");
 });
 
+// ── POS-362: THE SEAL KEEPS HOW FAR THE TOWN'S WORDS HAD REACHED (069) ──────
+
+test("the seal records the newest STANCE act as stance_through, in SQL, and the digest covers it", { skip }, async () => {
+  await seed();
+  await owner(async (c) => {
+    await c.query("TRUNCATE acts CASCADE");
+    const say = (actor, cls, object) => c.query(
+      "INSERT INTO acts (at, actor, action, object, class, payload, household) VALUES (now(), $1, 'declare-stance-on', $2, $3, '{\"stance\":\"opposed\"}', $1) RETURNING id",
+      [actor, object, cls]);
+    await say("ann", "stance", "mari/hall");
+    await say("bo", "stance", "mari/hall");
+    await say("cy", "presence", "mari/hall");       // a later act of another class is not a word
+  });
+  const [{ through }] = await read("SELECT max(id)::text AS through FROM acts WHERE class = 'stance'");
+  const r = clear(302);
+  assert.equal(r.code, 0, r.out);
+  const h = await withPen("snapshot_reader", (c) => snapshotHeader(c, { window: 302 }));
+  assert.equal(String(h.stance_through), through, "the newest stance act, not the newest act");
+  const rows = await withPen("snapshot_reader", (c) => snapshotRows(c, h.marks_digest));
+  const reg = await withPen("snapshot_reader", (c) => snapshotRegisterRows(c, h.register_digest));
+  assert.deepEqual(checkSnapshot(h, rows, reg), [], "JS recomputes the six-part digest the seal wrote");
+  assert.notEqual(snapshotDigestOf({ ...h, stance_through: null }), h.digest, "the words are part of what the digest names");
+});
+
+test("a seal with no stance act keeps stance_through NULL and the five-part digest", { skip }, async () => {
+  await seed();
+  await owner((c) => c.query("TRUNCATE acts CASCADE"));
+  const r = clear(302);
+  assert.equal(r.code, 0, r.out);
+  const h = await withPen("snapshot_reader", (c) => snapshotHeader(c, { window: 302 }));
+  assert.equal(h.stance_through, null);
+  assert.equal(snapshotDigestOf(h), h.digest);
+});
+
 test.after(async () => { if (!skip) await store.stop(); });

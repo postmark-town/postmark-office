@@ -271,6 +271,13 @@ test("4b · a pre-change word reads as spoken on the claim current at its instan
   const after = versionsFromRows([...CLAIMS, claim("beta/on-alphas-edge", "c-beta-2", { window_id: 12, at: "2026-09-01T00:00:00Z" })]);
   assert.deepEqual(standingStances(legacy, { versions: after }), [], "after an amendment, the pre-change words are absent");
   assert.equal(townWordsOf(legacy, { versions: after }).size, 0, "the town's too");
+
+  // POS-362: AS OF A SEAL. A seal taken before the amendment was decided saw the
+  // old version as current, so the words stand in that settlement however the
+  // store has moved since. Judged by the decision's instant (Wright's review).
+  const atSeal = versionsFromRows([...CLAIMS, claim("beta/on-alphas-edge", "c-beta-2", { window_id: 12, at: "2026-09-01T00:00:00Z" })], { at: "2026-08-31T00:00:00Z" });
+  assert.notEqual(atSeal.get("beta/on-alphas-edge").current.id, "c-beta-2", "an amendment decided after the seal is not its current version");
+  assert.deepEqual([...townWordsOf(legacy, { versions: atSeal })], [["beta/on-alphas-edge", "opposed"]], "so the word spoken on the older version stands at that seal");
 });
 
 // ── 4c · the town speaks only on published marks ────────────────────────────
@@ -380,4 +387,28 @@ test("7 · townWordsOf is the map world#146's resolveConsent takes: the town's n
   assert.ok(words instanceof Map);
   assert.deepEqual([...words].sort(), [["alpha/alphas-parcel", "opposed"], ["beta/on-alphas-edge", "opposed"]],
     "latest wins per mark; a resident's word is not the town's");
+});
+
+// ── a review granted after the seal never reaches back into it (#432 review) ─
+// review-rule.mjs locks a held_review claim LATER and keeps its submit window,
+// so the window alone would let a grant in W+1 rewrite the asked S(W). The
+// seal's own instant decides: a claim counts as locked at the seal only if it
+// was decided by then.
+test("4c · a review granted after the seal never changes the version the seal saw", () => {
+  const rows = [
+    { slug: "bo/shed", id: "v1", status: "locked", window_id: 20, submitted_at: "2026-10-01T01:00:00Z", decided_at: "2026-10-01T06:00:00Z" },
+    // V2 was submitted in window 21 and held for review at 21's seal (18:00Z);
+    // a mind granted it the next morning, and it keeps window 21.
+    { slug: "bo/shed", id: "v2", status: "locked", window_id: 21, submitted_at: "2026-10-01T09:00:00Z", decided_at: "2026-10-02T07:00:00Z" },
+  ];
+  const sealOf21 = "2026-10-01T18:00:00Z";
+  assert.equal(versionsFromRows(rows, { window: 21, at: sealOf21 }).get("bo/shed").current.id, "v1",
+    "at window 21's seal V2 was still held, so V1 is the version that stood");
+  assert.equal(versionsFromRows(rows, { window: 21 }).get("bo/shed").current.id, "v2",
+    "(the window alone would have answered V2: the defect this guards)");
+  assert.equal(versionsFromRows(rows, { window: 22, at: "2026-10-02T18:00:00Z" }).get("bo/shed").current.id, "v2",
+    "and the next seal after the grant sees V2");
+  // A seed claim with no decision time falls back to the window rule.
+  const seed = [{ slug: "bo/old", id: "s1", status: "locked", window_id: null, submitted_at: null, decided_at: null }];
+  assert.equal(versionsFromRows(seed, { window: 21, at: sealOf21 }).get("bo/old").current.id, "s1");
 });
