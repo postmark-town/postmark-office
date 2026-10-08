@@ -376,15 +376,19 @@ export async function fundingRows(TOWN, { log = console } = {}) {
  * live in src/quest-standing.mjs). Answers null when the checkout has no quest
  * tool or registry; `standing` is null when the town's quest file is too old to
  * export the standing folds. `questDay` and `questRegistry` go to meta.
+ *
+ * `base` is the store's key base when the caller read one (POS-341 part 4: the
+ * delta ingest, behind STAMP_LINES); the town's folds group households by it in
+ * place of the printouts. Null is the printouts, as before.
  */
-export async function questRows(TOWN, town, { log = console } = {}) {
+export async function questRows(TOWN, town, { log = console, base = null } = {}) {
   const questTool = join(TOWN, "tools", "quest-progress.mjs");
   const registryPath = join(TOWN, "quest-registry.json");
   if (!existsSync(questTool) || !existsSync(registryPath)) return null;
   const questMod = await import(pathToFileURL(questTool));
   const { foldQuestProgress, townDay } = questMod;
   const today = townDay();
-  const prog = foldQuestProgress(TOWN, { today });
+  const prog = foldQuestProgress(TOWN, base ? { today, base } : { today });
   const progress = keyed("quest_progress");
   for (const [handle, p] of prog) {
     progress.put([handle, p.send, p.receive, p.household.size, p.household.send, p.household.receive,
@@ -405,7 +409,7 @@ export async function questRows(TOWN, town, { log = console } = {}) {
     const handles = town.residents.map((r) => r.handle).filter(isResidentHandle);
     const { rows, friendships } = standingRowsFromTown(
       { parseDeliveries, foldFriendships, currentHouseholds, welcomedHouseholds, onboardingFactsFor },
-      TOWN, handles);
+      TOWN, handles, { base });
     const standing = keyed("quest_standing");
     for (const [h, row] of rows) standing.put([h, JSON.stringify(row)]);
     out.standing = standing.rows();

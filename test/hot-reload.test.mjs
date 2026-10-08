@@ -25,6 +25,7 @@ import { tmpdir } from "node:os";
 
 import { fixtureDb } from "./fixture.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
+import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 // This file is office.db's hot reload, so every office here reads office.db,
@@ -89,10 +90,9 @@ before(async () => {
   copyFileSync(aPath, dbPath);
 
   ({ child, port: PORT } = await bootOnFreePort((port) => {
-    const c = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--db", dbPath], {
+    const c = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--db", dbPath, "--oauth-db", seedStaticKeys(join(tmp, "oauth.db"), "reloadkey=keemin:wright")], {
       env: {
         ...process.env,
-        OFFICE_KEYS: "reloadkey=keemin:wright",
         TOWN_CLONE: join(tmp, "no-clone-here"),
         WORLD_CLONE: join(tmp, "no-world-clone"),
         WORLD_GRAPH_NONE: "1",   // this office swaps its INDEX; it serves no world graph (POS-270 lane W 3b)

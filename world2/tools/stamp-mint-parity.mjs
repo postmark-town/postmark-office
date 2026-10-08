@@ -26,6 +26,12 @@
 //                    on the file's. Green is no problem on either side and the
 //                    same mints and settlements owed on both.
 //   the control      the town's own verifyStampLedger over the clone, untouched.
+//   the quests       (POS-341 part 4) the town's quest folds run twice, once on
+//                    the store's base and once on the file's: foldQuestProgress,
+//                    foldFriendships, foldLeaderboard, foldHouseholdBars and the
+//                    crossing's renderSnapshot, each equal or named. Only when
+//                    the clone's engine takes a key base (town #3540); an older
+//                    one is said so, and the quests are not part of the verdict.
 //
 // Exit 0: parity (and the control green). 1: a difference, named. 2: could not run.
 // A difference is a STOP (the ruling): it is reported, never reconciled here.
@@ -34,7 +40,7 @@ import { existsSync, realpathSync, readFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { mintInputsVia, keyBaseOf, sealedDatesOf, deliveriesOf } from "../../src/mint-inputs.mjs";
+import { mintInputsVia, keyBaseOf, sealedDatesOf, deliveriesOf, takesKeyBase } from "../../src/mint-inputs.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -63,6 +69,28 @@ export function replayOf(engine, { entries, deliveries, households }) {
   };
 }
 
+// A fold's answer as comparable text: Maps as their entries, in order.
+const textOf = (v) => JSON.stringify(v, (_, x) => (x instanceof Map ? [...x] : x instanceof Set ? [...x] : x));
+
+/**
+ * The quest folds on both bases (POS-341 part 4): `{ compared, folds: [{ fold,
+ * equal }], differ: [names] }`, or `{ compared: false, note }` when the clone's
+ * engine takes no base. `quests` is the clone's tools/quest-progress.mjs.
+ */
+export function questParityOf(engine, quests, clone, { storeBase, fileBase, today }) {
+  if (!quests || !takesKeyBase(engine, clone))
+    return { compared: false, note: "the clone's engine takes no key base (town #3540): the quest folds were not compared" };
+  const runs = [
+    ["foldQuestProgress", (base) => quests.foldQuestProgress(clone, { today, base })],
+    ["foldFriendships", (base) => quests.foldFriendships(clone, { base })],
+    ["foldLeaderboard", (base) => quests.foldLeaderboard(clone, { today, base })],
+    ["foldHouseholdBars", (base) => quests.foldHouseholdBars(clone, { today, base })],
+    ["renderSnapshot", (base) => quests.renderSnapshot(clone, { today, base })],
+  ];
+  const folds = runs.map(([fold, run]) => ({ fold, equal: textOf(run(storeBase)) === textOf(run(fileBase)) }));
+  return { compared: true, today, folds, differ: folds.filter((f) => !f.equal).map((f) => f.fold) };
+}
+
 const keyOf = (v) => (v ? `${v.key}${v.provisional ? " (provisional)" : ""}` : "(none)");
 const dKey = (d) => JSON.stringify([d.date, d.id, d.from, d.to, d.pays ?? null]);
 
@@ -71,7 +99,7 @@ const dKey = (d) => JSON.stringify([d.date, d.id, d.from, d.to, d.pays ?? null])
  * mailLines, entries }` (entries null when stamp_lines is empty); the file side
  * is read from `clone` by the town's own functions.
  */
-export function parityOf(engine, clone, store) {
+export function parityOf(engine, clone, store, { quests = null, today = null } = {}) {
   const fileEntries = engine.parseStampLedger(readFileSync(join(clone, "WHITE_PAGES", "stamp-ledger.md"), "utf8"));
   const storeEntries = store.entries && store.entries.length ? store.entries : null;
   const entries = storeEntries ?? fileEntries;
@@ -117,8 +145,12 @@ export function parityOf(engine, clone, store) {
   const control = typeof engine.verifyStampLedger === "function" ? engine.verifyStampLedger(clone) : null;
   report.control = control ?? { note: "the control runs in main(), which imports tools/stamp-verify.mjs" };
 
+  // the quests, twice
+  report.quests = questParityOf(engine, quests, clone, { storeBase, fileBase, today: today ?? quests?.townDay?.() });
+
   report.ok = baseDiffs.length === 0 && !firstDiff && report.ledger.first_difference == null
-    && onStore.problems.length === 0 && onFile.problems.length === 0 && report.replay.same_owed;
+    && onStore.problems.length === 0 && onFile.problems.length === 0 && report.replay.same_owed
+    && (!report.quests.compared || report.quests.differ.length === 0);
   return report;
 }
 
@@ -136,7 +168,8 @@ async function main() {
     store = await officeRead(async (q) => ({ ...(await mintInputsVia(q)), entries: await stampLinesVia(q) }));
   } catch (e) { console.error(`the store could not be read: ${e.message}`); return 2; }
   if (!store.rooms.size || !store.mailLines.length) { console.error("town_rooms or town_mail_lines is empty: run the town-index ingest after 067 first"); return 2; }
-  const report = parityOf(engine, clone, store);
+  const quests = existsSync(join(clone, "tools", "quest-progress.mjs")) ? await import(pathToFileURL(join(clone, "tools", "quest-progress.mjs")).href) : null;
+  const report = parityOf(engine, clone, store, { quests });
   const control = verifyStampLedger(clone);
   report.control = { ok: control.ok, problems: control.problems.slice(0, 5) };
   report.ok = report.ok && control.ok;
@@ -148,6 +181,9 @@ async function main() {
     console.log(`ledger     : store ${report.ledger.store}, file ${report.ledger.file}${report.ledger.first_difference ? `, FIRST DIFFERENCE at line ${report.ledger.first_difference}` : ""}`);
     console.log(`replay     : store ${report.replay.store.problems.length} problem(s), ${report.replay.store.mints} mints, owed ${report.replay.store.owed}+${report.replay.store.owed_settlements} · file ${report.replay.file.problems.length} problem(s), ${report.replay.file.mints} mints, owed ${report.replay.file.owed}+${report.replay.file.owed_settlements} · ${report.replay.same_owed ? "same owed" : "OWED DIFFERS"}`);
     for (const p of [...report.replay.store.problems, ...report.replay.file.problems]) console.log(`  ${p}`);
+    console.log(report.quests.compared
+      ? `quests     : ${report.quests.folds.length} folds on both bases (${report.quests.today}), ${report.quests.differ.length ? `DIFFER: ${report.quests.differ.join(", ")}` : "equal"}`
+      : `quests     : ${report.quests.note}`);
     console.log(`control    : stamp-verify over the export ${control.ok ? "green" : "RED"}`);
     for (const n of report.notes) console.log(`note       : ${n}`);
     console.log(report.ok ? "PARITY" : "DIFFERENCE: stop, report it, reconcile nothing (POS-341 ruling)");

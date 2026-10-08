@@ -35,6 +35,7 @@ import { bootOnFreePort, freePort } from "./spawn-office.mjs";
 import { workerSafe, penTokenFor } from "../src/role.mjs";
 import { openOauthDb } from "../src/oauth.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
+import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 
 let IX = null; // the store this file's offices read (indexStore)
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -61,7 +62,6 @@ const boot = async (extraArgs, extraEnv = {}) => {
   const env = {
     ...process.env, ...IX?.env,
     WORLD_GRAPH_NONE: "1",   // this office serves no world graph (POS-270 lane W 3b)
-    OFFICE_KEYS: `${KEY}=keemin:wright`,
     POSTMARK_PEN_TOKEN: PEN,
     WORLD_DYNAMIC_DB: dynPath,
     TOWN_CLONE: join(ROOT, "town-clone"),
@@ -101,6 +101,7 @@ before(async () => {
   // note at server.mjs's `OAUTH_DB_PATH`), and § 0 below proves that refusal.
   const { openOauthDb } = await import("../src/oauth.mjs");
   openOauthDb(join(tmp, "oauth.db")).close();
+  seedStaticKeys(join(tmp, "oauth.db"), `${KEY}=keemin:wright`); // POS-352: the writer's static row, which the worker reads
 
   const booted = await boot(["--role", "read", "--writer", WRITER]);
   child = booted.proc;
@@ -169,7 +170,7 @@ test("§0 a read worker refuses to boot without the writer's key store", async (
     join(ROOT, "src", "server.mjs"), "--port", String(await freePort()),
     "--db", join(tmp, "fixture.db"), "--oauth-db", absent,
     "--roles-db", join(tmp, "roles.db"), "--role", "read",
-  ], { env: { ...process.env, ...IX?.env, WORLD_GRAPH_NONE: "1", OFFICE_KEYS: `${KEY}=keemin:wright`, WORLD_DYNAMIC_DB: dynPath,
+  ], { env: { ...process.env, ...IX?.env, WORLD_GRAPH_NONE: "1", WORLD_DYNAMIC_DB: dynPath,
     TOWN_CLONE: join(ROOT, "town-clone"), WORLD_CLONE: join(tmp, "no-world-clone") },
     stdio: ["ignore", "pipe", "pipe"] });
   const r = await exitedWithin(p, 15_000, "absent key store");
@@ -196,7 +197,7 @@ test("§0b a read worker refuses to boot on an ABSENT dynamic store", async () =
     join(ROOT, "src", "server.mjs"), "--port", String(await freePort()),
     "--db", join(tmp, "fixture.db"), "--oauth-db", join(tmp, "oauth.db"),
     "--roles-db", join(tmp, "roles.db"), "--role", "read",
-  ], { env: { ...process.env, ...IX?.env, WORLD_GRAPH_NONE: "1", OFFICE_KEYS: `${KEY}=keemin:wright`, WORLD_DYNAMIC_DB: absent,
+  ], { env: { ...process.env, ...IX?.env, WORLD_GRAPH_NONE: "1", WORLD_DYNAMIC_DB: absent,
     TOWN_CLONE: join(ROOT, "town-clone"), WORLD_CLONE: join(tmp, "no-world-clone") },
     stdio: ["ignore", "pipe", "pipe"] });
   const r = await exitedWithin(p, 15_000, "absent dynamic store");
@@ -252,10 +253,10 @@ test("§1b the refusal is the ROLE's, not the router's — a writer answers thes
   // untouched.
   const { child: proc, port: WRITER_PORT } = await bootOnFreePort((port) => spawn(process.execPath, [
     join(ROOT, "src", "server.mjs"), "--port", String(port),
-    "--db", join(tmp, "fixture.db"), "--oauth-db", join(tmp, "oauth-w.db"),
+    "--db", join(tmp, "fixture.db"), "--oauth-db", seedStaticKeys(join(tmp, "oauth-w.db"), `${KEY}=keemin:wright`),
     "--roles-db", join(tmp, "roles-w.db"),
   ], {
-    env: { ...process.env, ...IX?.env, WORLD_GRAPH_NONE: "1", OFFICE_KEYS: `${KEY}=keemin:wright`, POSTMARK_PEN_TOKEN: PEN,
+    env: { ...process.env, ...IX?.env, WORLD_GRAPH_NONE: "1", POSTMARK_PEN_TOKEN: PEN,
       WORLD_DYNAMIC_DB: dynPath, TOWN_CLONE: join(ROOT, "town-clone"), WORLD_CLONE: join(tmp, "no-world-clone") },
     stdio: ["ignore", "pipe", "pipe"],
   }), { budgetMs: 20_000 });

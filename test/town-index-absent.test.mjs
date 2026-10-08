@@ -22,6 +22,7 @@ import { fixtureDb } from "./fixture.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { copyIndexToStore } from "./helpers/index-to-store.mjs";
 import { townClone, townModuleUrl } from "./fixture-paths.mjs";
+import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const tmp = mkdtempSync(join(tmpdir(), "town-index-absent-"));
@@ -37,8 +38,8 @@ const offices = {};
 
 function office(name, db, env) {
   const child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0", "--db", db,
-    "--oauth-db", join(tmp, `${name}-oauth.db`), "--roles-db", join(tmp, `${name}-roles.db`)], {
-    env: { ...process.env, OFFICE_KEYS: `${KEY}=keemin:wright`, TOWN_CLONE: TOWN ?? join(tmp, "no-clone-here"), WORLD_CLONE: join(tmp, "no-world-clone"),
+    "--oauth-db", seedStaticKeys(join(tmp, `${name}-oauth.db`), `${KEY}=keemin:wright`), "--roles-db", join(tmp, `${name}-roles.db`)], {
+    env: { ...process.env, TOWN_CLONE: TOWN ?? join(tmp, "no-clone-here"), WORLD_CLONE: join(tmp, "no-world-clone"),
       VOICES_LOG: join(tmp, `${name}-voices.jsonl`), TOWN_PUSH: "", WORLD_STORE_DB: join(tmp, "no-world.db"),
       OFFICE_READ_WORKERS: "0", TOWN_INDEX_READS: undefined, WORLD2_PG: undefined, WORLD2_PG_URL: undefined, ...env },
     stdio: ["ignore", "pipe", "pipe"],

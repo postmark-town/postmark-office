@@ -40,7 +40,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { mintInputsVia, keyBaseOf, sealedDatesOf, deliveriesOf } from "../../src/mint-inputs.mjs";
 import { engineOf, stampLinesVia, syncStampLinesVia, stampRowsPast, stampHeadVia, lockStampLinesVia, insertStampRowsVia } from "../../src/stamp-lines.mjs";
-import { penCommit } from "../../src/write.mjs";
+import { LOST_RACE, penCommit } from "../../src/write.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -90,6 +90,7 @@ export const LAND_TX_MS_DEFAULT = 120_000;
 const landTxMs = (env) => { const n = Number(env.WORLD2_PG_LAND_TX_MS); return Number.isFinite(n) && n > 0 ? n : LAND_TX_MS_DEFAULT; };
 
 const MOVED = Symbol("the chain's head moved");
+const racedNote = (n) => n ? ` (decided again after ${n} lost push race${n === 1 ? "" : "s"})` : "";
 
 /**
  * The pass. A WRITE TRANSACTION NEVER SPANS NON-SQL WORK (Wright's review of
@@ -108,22 +109,42 @@ const MOVED = Symbol("the chain's head moved");
  *      (HEAD_TRIES times, then refuse by name); else insert the rows and land
  *      the commit, the store committing last.
  *
- * A refusal anywhere leaves the export as it arrived and the store as it was.
- * Returns the summary, or throws. `verify` is the town's verifyStampLedger by
- * default (a test seam: it is the step that takes seconds).
+ * A LOST PUSH RACE RE-DECIDES, NEVER REBASES (POS-447; Darko, 2026-10-08: "a
+ * lost race is a transaction retry that re-decides"). Each signed line's seal
+ * chains to the line before it, so lines decided against one head are wrong on
+ * any other. When the push finds the remote moved, the commit is unmade, the
+ * store rolls back, the clone comes up to the remote's tip (the pen's
+ * `{ rebase: false }`), and the pass starts again at step 1: the store reads
+ * what the remote brought, and the decision is made from the new head. A
+ * rebase never landed a ledger commit anyway: two appends to the file's end
+ * conflict in git, and the throw that followed left the arrival bytes written
+ * over the remote's lines (measured 10-08, test/stamp-mint-run.test.mjs).
+ *
+ * A refusal anywhere leaves the export as it arrived and the store as it was,
+ * or, after a lost race, the export as the remote holds it. Returns the
+ * summary, or throws. `verify` is the town's verifyStampLedger by default (a
+ * test seam: it is the step that takes seconds).
  */
 export async function mintFromStore(clone, { keyPem, message = "mint: crossing pass", env = process.env, engine = null, verify = null } = {}) {
   const eng = engine ?? await engineOf(clone);
   const { officeRead, officeWrite } = await import("../../src/world2-pen.mjs");
   const ledger = join(clone, "WHITE_PAGES", "stamp-ledger.md");
-  const arrived = existsSync(ledger) ? readFileSync(ledger, "utf8") : null;
+  let arrived, arrivedAt;
+  const arrive = () => {
+    arrived = existsSync(ledger) ? readFileSync(ledger, "utf8") : null;
+    arrivedAt = git(clone, "rev-parse", "HEAD");
+  };
+  // The arrival bytes go back only over the head they arrived on: a clone the
+  // pen moved to the remote's tip holds the remote's lines, never older ones.
   const putBack = () => {
-    if (arrived != null && existsSync(ledger) && readFileSync(ledger, "utf8") !== arrived) writeFileSync(ledger, arrived);
+    if (arrived != null && existsSync(ledger) && readFileSync(ledger, "utf8") !== arrived && git(clone, "rev-parse", "HEAD") === arrivedAt) writeFileSync(ledger, arrived);
   };
   const verifyLedger = verify ?? (await import(pathToFileURL(join(clone, "tools", "stamp-verify.mjs")).href)).verifyStampLedger;
+  arrive();
+  let raced = 0;
   try {
-    await officeWrite((client) => syncStampLinesVia(client, clone, { engine: eng }), { env });
     for (let attempt = 1; attempt <= HEAD_TRIES; attempt++) {
+      await officeWrite((client) => syncStampLinesVia(client, clone, { engine: eng }), { env });
       const { inputs, entries } = await officeRead(async (client) =>
         ({ inputs: await mintInputsVia(client), entries: await stampLinesVia(client) }), { env });
       if (!inputs.rooms.size) throw new Error("town_rooms is empty: the store has no key base yet (apply 067 and run the town-index ingest)");
@@ -131,7 +152,7 @@ export async function mintFromStore(clone, { keyPem, message = "mint: crossing p
       if (!entries.length) throw new Error("stamp_lines is empty: record the chain first (stamp-lines.mjs --sync)");
       const d = owedFromStore(eng, { entries, ...inputs });
       if (d.problems.length) throw new Error(`the recorded ledger diverges from the derivation; nothing appended\n${d.problems[0]}`);
-      if (!d.lines.length) return { appended: 0, summary: "stamp-ledger: up to date — nothing to mint" };
+      if (!d.lines.length) return { appended: 0, raced, summary: `stamp-ledger: up to date — nothing to mint${racedNote(raced)}` };
       eng.appendSigned(clone, d.lines, keyPem);
       // ONLY A GREEN VERIFY COMMITS (the ferry's POS-295 rule): the town's
       // verifier over the export, every check it makes, before the commit.
@@ -140,26 +161,32 @@ export async function mintFromStore(clone, { keyPem, message = "mint: crossing p
       const head = entries.at(-1);
       const fresh = stampRowsPast(clone, { ...head, seq: entries.length }, { engine: eng });
       if (fresh.length !== d.lines.length) throw new Error(`signed ${d.lines.length} line(s) and the export holds ${fresh.length} past the store; nothing committed`);
-      const out = await officeWrite(async (client) => {
-        await lockStampLinesVia(client);
-        const now = await stampHeadVia(client);
-        if (!now || now.seq !== entries.length || now.sig !== head.sig) return MOVED;
-        await insertStampRowsVia(client, fresh);
-        await client.query("SELECT set_config('idle_in_transaction_session_timeout', $1, true)", [String(landTxMs(env))]);
-        const base = git(clone, "rev-parse", "HEAD");
-        const commit = penCommit(clone, [ledger], message);
-        // A lost push race rebases the commit onto the remote's: the lines it
-        // brought in are recorded too (none, in the town lock's ordinary case).
-        if (commit && git(clone, "rev-parse", `${commit}^`) !== base) await syncStampLinesVia(client, clone, { engine: eng });
-        return {
-          appended: d.lines.length, commit,
-          summary: `stamp-ledger: appended ${d.lines.length} line(s) — ${d.mints} mint(s), ${d.moved} transfer(s), ${d.voided} void(s) (${d.recorded} already recorded), decided from the store`,
-        };
-      }, { env });
+      let out;
+      try {
+        out = await officeWrite(async (client) => {
+          await lockStampLinesVia(client);
+          const now = await stampHeadVia(client);
+          if (!now || now.seq !== entries.length || now.sig !== head.sig) return MOVED;
+          await insertStampRowsVia(client, fresh);
+          await client.query("SELECT set_config('idle_in_transaction_session_timeout', $1, true)", [String(landTxMs(env))]);
+          // A lost push race throws LOST_RACE out of the transaction: the rows
+          // roll back with the unmade commit, and the pass decides again.
+          const commit = penCommit(clone, [ledger], message, { rebase: false });
+          return {
+            appended: d.lines.length, commit, raced,
+            summary: `stamp-ledger: appended ${d.lines.length} line(s) — ${d.mints} mint(s), ${d.moved} transfer(s), ${d.voided} void(s) (${d.recorded} already recorded), decided from the store${racedNote(raced)}`,
+          };
+        }, { env });
+      } catch (e) {
+        if (e?.pen !== LOST_RACE) throw e;
+        raced++;
+        arrive();
+        continue;
+      }
       if (out !== MOVED) return out;
       putBack();
     }
-    throw new Error(`the stamp chain's head moved under the mint ${HEAD_TRIES} times running (another writer is appending); nothing appended — the next pass decides again`);
+    throw new Error(`the stamp chain's head moved under the mint ${HEAD_TRIES} times running (another writer is appending${raced ? `; ${raced} of them a lost push race` : ""}); nothing appended — the next pass decides again`);
   } catch (e) {
     // The export goes back to its arrival bytes: a pass that did not land leaves
     // nothing behind (penCommit has already unmade an unlanded commit).
