@@ -594,7 +594,7 @@ export async function twinReceipt(p, id, { terrain = false, standing = false } =
     claims, settlement: settled?.current ?? null, site_pin: null,
   });
   if (carriedUndecidable) {
-    const reason = settled ? "the settlements table names no window a settlement closed" : "the settlements table could not be read";
+    const reason = settled ? "the settlements table names no candle a settlement closed" : "the settlements table could not be read";
     Object.assign(receipt, {
       settlements: { readable: Boolean(settled), reason },
       says: `standing in the store, its newest claim locked at candle ${newest.window_id}; whether a settlement has carried it cannot be told: ${reason}`,

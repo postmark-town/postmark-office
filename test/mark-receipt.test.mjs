@@ -216,7 +216,7 @@ test("causeOf maps every check it knows into the bulletin's five, and nothing el
 const REAL_REFUSAL_CHECKS = [
   ["duplicate: a standing mark already carries this slug", "contested", "clearing-job.mjs:131"],
   ["duplicate: a standing mark carries this slug, and this claim supersedes ab12cd34, which is not it", "contested", "clearing-job.mjs:129"],
-  ["superseded: a later claim in this window amends this one", "contested", "clearing-job.mjs:141"],
+  ["superseded: a later claim in this candle amends this one", "contested", "clearing-job.mjs:141"],
   ["insufficient-stamps: staked 3, liquid 1 at town 9f2a1b0c", "unbacked", "clearing-job.mjs:158"],
   ['parcel-overlap: standing parcel "k-of-garrison/the-long-field"', "contested", "clearing-job.mjs:176"],
   ["counterclaim: collides with 77 — a mind rules (census D2)", "contested", "clearing-job.mjs:190-191"],

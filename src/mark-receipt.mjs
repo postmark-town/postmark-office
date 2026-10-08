@@ -86,7 +86,7 @@ export const RECEIPT_CLOCK =
  * and `world2/tools/review-rule.mjs` at 247-248 — writes `<name>: <detail>`:
  *
  *     duplicate: a standing mark already carries this slug
- *     superseded: a later claim in this window amends this one
+ *     superseded: a later claim in this candle amends this one
  *     insufficient-stamps: staked 3, liquid 1 at town 9f2a1b0c
  *     parcel-overlap: standing parcel "k-of-garrison/the-long-field"
  *     counterclaim: collides with 77 — a mind rules (census D2)

@@ -143,9 +143,9 @@ test("one claimant with no house refuses only its claim, and the other nine lock
   const events = claimEffectsFrom({ rows: [gabo], sinceCrossing: now - 2, nowCrossing: now, mine: () => true });
   const [refused] = events.filter((e) => e.kind === "claim-refused");
   assert.equal(refused.cause, "quarantined", "the bulletin word Darko ruled for unfileable (2026-10-08)");
-  assert.equal(refused.summary, "gabo/a-lamp-9 was refused at window 228 — quarantined", "the doorstep outcome's sentence");
+  assert.equal(refused.summary, "gabo/a-lamp-9 was refused at candle 228 — quarantined", "the doorstep outcome's sentence");
   const [said] = refusedRowsFrom(events);
-  assert.match(said.says, /^refused at window 228: unfileable: no such household stands in the town for gabo/);
+  assert.match(said.says, /^refused at candle 228: unfileable: no such household stands in the town for gabo/);
 });
 
 test("a claim the store will not file refuses alone at the filing, and the rest still lock", { skip }, async () => {
