@@ -574,12 +574,19 @@ try {
     const riderClaims = [], riderAmends = new Map();
     for (const r of failed ? [] : plan.riders) {
       const { _fileAt, _origin, ...data } = r.row.data ?? {};
+      // The rider's house, resolved BEFORE the insert's try: a NO_SUCH_HOUSE
+      // carries no SQLSTATE, so inside the try it would rethrow and refuse the
+      // whole window. A rider the roll does not name refuses its move, alone
+      // (Darko, 2026-10-08: a mover and its riders are one unit). 5.7 checks this
+      // first today; the ruling holds here too, whatever runs before it.
+      const house = await houseOrRefusal(q, r.row.owner);
+      if (house.check) { fail({ slug: r.slug }, house.check); break; }
       try {
         const { rows: [rc] } = await q(
           `INSERT INTO claims (window_id, slug, class, claimant, household, status, decided_at, body, geometry, bbox, stake, data, parent, supersedes)
            VALUES ($1, $2, $3, $4, $5, 'locked', now(), $6, $7, $8, 0, $9, $10, $11)
            RETURNING *`,
-          [windowId, r.slug, r.row.kind, r.row.owner, await ownerHouseholdFor(q, r.row.owner), r.row.body ?? null, JSON.stringify(r.geometry),
+          [windowId, r.slug, r.row.kind, r.row.owner, house.household, r.row.body ?? null, JSON.stringify(r.geometry),
             r.geometry.extent ? boxOf(r.geometry.at, r.geometry.extent) : null,
             JSON.stringify({ ...data, _carried_by: String(c.id) }), r.row.parent ?? null, r.row.id]);
         riderClaims.push(rc);
