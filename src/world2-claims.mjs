@@ -442,6 +442,26 @@ export async function claimTxFromJournal(client, row, seq, { household, actId = 
         supersedes = standing?.id ?? null; // a fresh slug amends nothing: null, as before
       }
 
+      // THE CONTINUATION EDGE, ON THE ROW (POS-446, 2026-10-08). A predicate or
+      // a naming mark IS its parent continued (004_marks_data.sql: "claims.parent
+      // ... resolved to marks.parent at materialization"), and the clearing copies
+      // `claims.parent` and nothing else. This pen wrote the parent only into
+      // `data.parent_id`, so every door-made naming claim since window 162 locked
+      // with `parent` NULL and materialized a mark with no continuation edge:
+      // quill-stem/the-fitting-room stands in the store with no parent while its
+      // file is filed under neth/little-free-library. The edge is set HERE, from
+      // the payload's own word, so the claim row is right when it is written —
+      // not repaired by a second resolver downstream. Only a STANDING parent is
+      // named: a parent that is itself still a claim may yet be refused, and a
+      // claim pointing at it would break the clearing's foreign key. That case
+      // stays NULL, as it always was.
+      let parent = null;
+      if ((kind === "predicated" || kind === "naming") && typeof payload.parent_id === "string" && payload.parent_id) {
+        const { rows: [ground] } = await client.query(
+          "SELECT id::text FROM marks WHERE slug = $1 AND status = 'standing' LIMIT 1", [payload.parent_id]);
+        parent = ground?.id ?? null;
+      }
+
       // THE DEFERRED ACT rides on the draft it belongs to (world2-acts.mjs
       // § the deferral). A draft is not a public deed, so nothing was mirrored;
       // the row is carried here, in the claim's own `data`, and mirrored the
@@ -496,7 +516,7 @@ export async function claimTxFromJournal(client, row, seq, { household, actId = 
       // declaration; only the declaration is a deed.
       const promoted = await client.query(
         `UPDATE claims SET status = $12, class = $2, body = $3, geometry = $4, bbox = $5,
-                stake = $6, supersedes = $7, data = $8, slug = $9,
+                stake = $6, supersedes = $7, data = $8, slug = $9, parent = $13,
                 window_id = CASE WHEN $12 = 'pending' THEN $1 ELSE window_id END,
                 submitted_at = CASE WHEN $12 = 'pending' THEN now() ELSE submitted_at END
           WHERE status = 'draft' AND claimant = $10 AND slug = $9 AND household = ANY($11)
@@ -514,7 +534,7 @@ export async function claimTxFromJournal(client, row, seq, { household, actId = 
         // is the whole of RULING 4 in one statement — the read widens, the row
         // never moves.
         [win.id, kind, body ?? null, JSON.stringify(geometry), bbox, stamps ?? 0,
-         supersedes, data, slug, row.actor, await declaredKeys(client, household), status]);
+         supersedes, data, slug, row.actor, await declaredKeys(client, household), status, parent]);
       if (promoted.rowCount) {
         state.written += 1;
         if (status === "pending") state.submitted += 1;
@@ -530,10 +550,10 @@ export async function claimTxFromJournal(client, row, seq, { household, actId = 
       // without saying whose it is. Pending rows would pass either way; one
       // path is fewer.
       await client.query(
-        `INSERT INTO claims (window_id, class, claimant, household, body, geometry, bbox, stake, supersedes, data, slug, status)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+        `INSERT INTO claims (window_id, class, claimant, household, body, geometry, bbox, stake, supersedes, data, slug, status, parent)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
         [win.id, kind, row.actor, household, body ?? null,
-         JSON.stringify(geometry), bbox, stamps ?? 0, supersedes, data, slug, status]);
+         JSON.stringify(geometry), bbox, stamps ?? 0, supersedes, data, slug, status, parent]);
       state.written += 1;
 }
 
