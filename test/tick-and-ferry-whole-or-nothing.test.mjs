@@ -177,6 +177,18 @@ const clone = a[a.indexOf("--clone") + 1];
 const msg = a.includes("--message") ? a[a.indexOf("--message") + 1] : "mint: crossing pass";
 if (process.env.STUB_CALLS) appendFileSync(process.env.STUB_CALLS, "mint-run --append\\n");
 const ledger = join(clone, "${LEDGER}");
+// POS-447: a pass that lost its push race to another writer and then refused
+// (its last re-decide) leaves the clone at the remote's tip, clean, and exits 1.
+// The other writer's row reaches origin here, and the clone follows it.
+if (process.env.STUB_RUN_LOST_RACE) {
+  appendFileSync(ledger, process.env.STUB_RUN_LOST_RACE + "\\n");
+  execFileSync("git", ["-C", clone, "commit", "-qam", "mint: the other writer's pass"]);
+  execFileSync("git", ["-C", clone, "push", "-q"]);
+  execFileSync("git", ["-C", clone, "reset", "-q", "--hard", "HEAD~1"]);
+  execFileSync("git", ["-C", clone, "merge", "-q", "--ff-only", "origin/main"]);
+  console.error("FATAL: the stamp chain's head moved under the mint 3 times running (another writer is appending; 3 of them a lost push race); nothing appended — the next pass decides again");
+  process.exit(1);
+}
 if (process.env.STUB_APPEND) {
   const arrived = readFileSync(ledger, "utf8");
   for (const r of process.env.STUB_APPEND.split("|")) appendFileSync(ledger, r + "\\n");
@@ -507,6 +519,16 @@ test("tick · STAMP_LINES=store: a verify that fails after the welcome pass rest
   assert.equal(ledgerAt(fx), before + "mint row 3\n", "the welcome's row is gone, the mint's committed row stays");
   assert.equal(fx.g("-C", fx.town, "rev-parse", "HEAD~1").trim(), at, "one commit: the runner's");
   assert.equal(originHead(fx), head(fx), "and it reached origin, nothing past it");
+  assert.match(r.stderr, /mint catch-up ROLLED BACK/);
+});
+
+test("tick · STAMP_LINES=store: a runner that lost its push race and refused leaves the clone at the remote's tip, never the arrival bytes over it (POS-447)", { skip }, () => {
+  const fx = fixture(["row 1", "row 2"]);
+  const r = run(fx, [tickScript(fx)], { ...STORE, STUB_RUN_LOST_RACE: "the other writer's row 3", STUB_WELCOME: "welcome row 4" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(head(fx), originHead(fx), "the clone is at the remote's tip");
+  assert.equal(tracked(fx), "", "and clean: the ledger is HEAD's, the other writer's row in it");
+  assert.equal(ledgerAt(fx), "row 1\nrow 2\nthe other writer's row 3\n");
   assert.match(r.stderr, /mint catch-up ROLLED BACK/);
 });
 

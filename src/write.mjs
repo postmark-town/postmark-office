@@ -213,13 +213,26 @@ export function penTransaction(clone, fn) {
 // in a transaction or not, is left with nothing when it is told no. A push that
 // cannot land throws `notLandedError` (code 503, `pen: NOT_LANDED`); before
 // POS-296 the commit stayed local and the next write's push carried it.
-export function penCommit(clone, addPaths, message) {
+//
+// `{ rebase: false }` is for a commit whose bytes were DECIDED against the head
+// it sits on (the stamp mint, POS-447): a signed ledger line's seal chains to
+// the line before it, so a lost push race is never rebased. The commit is
+// unmade, the clone is brought up to the remote's tip (`restore`), and
+// `lostRaceError` (`pen: LOST_RACE`) tells the caller to decide again from it.
+export function penCommit(clone, addPaths, message, { rebase = true } = {}) {
   const base = git(clone, "rev-parse", "HEAD");
-  try { return commitAndLand(clone, addPaths, message); }
+  try { return commitAndLand(clone, addPaths, message, { rebase }); }
   catch (e) { restore(clone, base, addPaths.map((p) => relTo(clone, p))); throw e; }
 }
 
-function commitAndLand(clone, addPaths, message) {
+export const LOST_RACE = "lost-race";
+
+const lostRaceError = (commit) => Object.assign(
+  new Error(`pen push lost a race: ${commit} is not on origin/main, and a commit decided against its head is never rebased`),
+  { pen: LOST_RACE },
+);
+
+function commitAndLand(clone, addPaths, message, { rebase = true } = {}) {
   const name = process.env.BOT_NAME ?? "postmark-office[bot]";
   const email = process.env.BOT_EMAIL ?? "office@postmark.invalid";
   for (const p of addPaths) git(clone, "add", p);
@@ -245,6 +258,7 @@ function commitAndLand(clone, addPaths, message) {
         git(clone, "merge-base", "--is-ancestor", commit, "origin/main");
         break; // landed — the only exit that returns
       } catch { /* not on the remote yet */ }
+      if (!rebase) throw lostRaceError(commit);
       if (attempt >= 3) throw notLandedError(`${commit} is not on origin/main after ${attempt} attempts, so the ceremony unmade it rather than call a local-only write success`);
       git(clone, "rebase", "-q", "origin/main");
       commit = git(clone, "rev-parse", "HEAD");
