@@ -170,7 +170,7 @@ on every response says exactly which repo state answered.
 ## The world door (07-23 read verbs; 07-28 ruling 9 exposure split)
 
 REST reads are thin over `postmark-world`'s own engine — imported live from the
-**world clone** (`world-clone/`, pulled on the rehydrate tick like `town-clone`; env
+**world clone** (`world-clone/`, fetched on the keeping tick, `town-clone` pulled beside it; env
 `WORLD_CLONE` overrides). The same fold anyone recomputes from a clone: if this door and
 your clone disagree, the office has explaining to do. **Every read serves published
 `main`** — anonymous, visitor and author alike get the same bytes (world-runtime ladder
