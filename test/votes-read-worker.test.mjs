@@ -54,6 +54,7 @@ const workers = [];
 async function bootWorker(townClone) {
   const env = {
     ...process.env,
+    WORLD_GRAPH_NONE: "1",
     // the town index is the record's own store too, seeded from the fixture below (POS-268)
     ...(testIndex() === "store" ? { TOWN_INDEX_READS: "store" } : {}),
     OFFICE_KEYS: `${KEY}=keemin:wright`,

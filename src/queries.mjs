@@ -2319,8 +2319,8 @@ async function questTools(clone) {
  * daily pair has always had and costs the same as reading it. The rows no
  * longer read null on the bare board. See `standingFor` / `standingJoin` below.
  */
-export function injectedComplete(handle, { worldDb = null, house = null } = {}) {
-  const st = firstIdeaStanding(handle, { worldDb, house });
+export function injectedComplete(handle, { house = null } = {}) {
+  const st = firstIdeaStanding(handle, { house });
   return st ? { "first-idea": st.complete } : null;
 }
 
@@ -2337,9 +2337,9 @@ export function injectedComplete(handle, { worldDb = null, house = null } = {}) 
  * say "you have not published an idea" on the strength of a hydration blip,
  * and it is the row that PAYS.
  */
-export function firstIdeaStanding(handle, { worldDb = null, house = null } = {}) {
+export function firstIdeaStanding(handle, { house = null } = {}) {
   try {
-    const tank = ideasTank(worldDb ? { worldDb } : {});
+    const tank = ideasTank();
     if (tank.source !== "store") return null;
     // `house` is the household's residents, which the caller reads from the
     // store's registry at its own async edge (POS-342: `questBoardWith` does)
@@ -3041,9 +3041,9 @@ export function psaFold(db, opts = {}) {
 }
 
 /** The PSA fold from the PSA posting's stored json (null: the checkout carries none). Shared with the store's twin. */
-export function psaFoldOf(json, { now = Date.now(), worldDb = null } = {}) {
-  const windowDial = dialNumber("doorstep", "psa_window_days", 7, { worldDb, min: 0 });
-  const maxDial = dialNumber("doorstep", "psa_max", 5, { worldDb, min: 0 });
+export function psaFoldOf(json, { now = Date.now() } = {}) {
+  const windowDial = dialNumber("doorstep", "psa_window_days", 7, { min: 0 });
+  const maxDial = dialNumber("doorstep", "psa_max", 5, { min: 0 });
   if (json == null) {
     return { entries: [], window_days: windowDial.value, max: maxDial.value,
       dials: { psa_window_days: windowDial.source, psa_max: maxDial.source },

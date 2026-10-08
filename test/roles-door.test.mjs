@@ -54,7 +54,7 @@ async function office({ gates }) {
     "--roles-db", rolesPath,
   ], {
     env: {
-      ...process.env, ...IX_ENV,
+      ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV,
       // #<gh_id> pins the static key to an immutable account id — required to
       // hold a role, ignored by everything else.
       OFFICE_KEYS: `${KEY}=${HOUSEHOLD}#${GH_ID}:wright`,
@@ -191,7 +191,7 @@ test('AMBIGUITY #4, RULED: "a household that exists only as an env string cannot
     "--port", "43875", "--db", dbPath, "--roles-db", rolesPath,
   ], {
     env: {
-      ...process.env, ...IX_ENV,
+      ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV,
       // NO #<gh_id> — a static key with no verified identity behind it.
       OFFICE_KEYS: `${KEY}=${HOUSEHOLD}:wright`,
       OFFICE_ROLE_GATES: "1",
@@ -233,7 +233,7 @@ test("FLAG ON but registry missing — the door says so, and does not pretend it
     "--roles-db", join(tmp, "nope", "roles.db"),
   ], {
     env: {
-      ...process.env, ...IX_ENV,
+      ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV,
       // Pinned, so the caller HAS a subject — otherwise the no-subject 401
       // would fire first and this test would never reach the 503 it exists for.
       OFFICE_KEYS: `${KEY}=${HOUSEHOLD}#${GH_ID}:wright`,

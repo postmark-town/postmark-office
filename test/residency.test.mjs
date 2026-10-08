@@ -163,7 +163,7 @@ before(async () => {
   const spawnOffice = (oauthDb, extra) => bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port),
     "--db", dbPath, "--oauth-db", join(tmp, oauthDb)], {
     env: {
-      ...process.env,
+      ...process.env, WORLD_GRAPH_NONE: "1",
       ...extra,
       OFFICE_KEYS: "statickey=keemin:wright",
       TOWN_CLONE: clone, TOWN_PUSH: "",
