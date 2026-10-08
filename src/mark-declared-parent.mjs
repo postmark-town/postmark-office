@@ -58,7 +58,7 @@
 // different one at the crossing:
 //
 //   · `src/world.mjs § journalLeaveMark` — the amend branch, so the owner is
-//     told at once, in the same breath as the move guard;
+//     told at once, in the same breath as the carry forecast;
 //   · `src/store-writedown.mjs` — the framing block, so a row that reached the
 //     journal some other way is set aside at the crossing rather than written.
 //
@@ -68,11 +68,23 @@
 // last fold composed it. One derivation, two doors; the refusal word and the
 // sentence are minted here so they cannot drift apart.
 
-// The move guard's own "did the ground move" test. Imported rather than
-// restated: the two guards run in the same branch of the same door, and a
-// private second opinion about what "moved" means would show up as one firing
-// where the other does not.
-import { geometryMoved } from "./world-move-guard.mjs";
+// "DID THE GROUND MOVE" — the move guard's own test, kept here when the guard
+// itself was retired (POS-441, 2026-10-07: a move now carries its household's
+// marks instead of being refused). This module was its one other reader, so the
+// test lives where it is still asked, unchanged.
+/** Did this amend actually move the mark, or only rewrite its words? */
+export function geometryMoved(prior, next) {
+  const n = (v) => (v === undefined || v === null ? null : Number(v));
+  const at = (m) => ({ x: n(m?.at?.x), y: n(m?.at?.y) });
+  const ex = (m) => ({ w: n(m?.extent?.w), h: n(m?.extent?.h) });
+  const a = at(prior), b = at(next);
+  if (a.x !== b.x || a.y !== b.y) return "at";
+  const p = ex(prior), q = ex(next);
+  // An extent is only a move when the amend states one: an amend that carries no
+  // extent is not shrinking the mark to nothing, it is saying nothing about it.
+  if (next?.extent !== undefined && (p.w !== q.w || p.h !== q.h)) return "extent";
+  return null;
+}
 
 /** THE WORD. Both doors refuse under it; nothing else in the office uses it. */
 export const OUTSIDE_DECLARED_PARENT = "mark-outside-declared-parent";
@@ -187,8 +199,8 @@ export const extentText = (e) => (e.shape === "ring"
  *
  * Returns null — admit — whenever the question cannot be ASKED: no declared
  * parent, no parent record, a parent with no ground of its own, no predicate, no
- * point. That is deliberate and it is the opposite of `dependentsOf`'s choice
- * next door: this guard adds a refusal to a path that works today, so an
+ * point. That is deliberate and it was the opposite of the retired move guard's
+ * `dependentsOf`: this guard adds a refusal to a path that works today, so an
  * unanswerable question must not become a refusal. The loud half is the
  * write-down's `mark-frame-unresolved`, which already refuses when the frame
  * itself cannot be resolved; this only ever speaks when it has a parent, a
@@ -228,9 +240,7 @@ export function outsideDeclaredParent({ id, at, points, parentId, parent, pointW
 /**
  * Did this amend move the mark's GROUND, as opposed to its words?
  *
- * `geometryMoved` is the move guard's own — imported, not restated, because the
- * two guards sit in the same branch of the same door and a disagreement about
- * what "moved" means would show up as one firing where the other does not.
+ * `geometryMoved` is the retired move guard's own test, kept above, unchanged.
  *
  * ONE ADDITION, DELIBERATE AND DISCLOSED: `geometryMoved` reads `at` and
  * `extent` and does not look at `points`. This guard DOES test ring points for
@@ -273,13 +283,31 @@ function ringChanged(a, b) {
  * either, because Gate B files it root-framed at its own id and geometry places
  * it — the ruling's second sentence, untouched.
  */
-export function declaredParentRefusal({ id, prior, next, parentId, parent, pointWithinMark }) {
+export function declaredParentRefusal({ id, prior, next, parentId, parent, parentPrior = null, pointWithinMark }) {
   const moved = amendMovedGround(prior, next);
   if (!moved) return null;                       // words only — always free
+  if (carriedTogether(prior, next, parentPrior, parent)) return null;   // the carry: no displacement introduced or moved
   const finding = outsideDeclaredParent({
     id, at: next?.at ?? null, points: next?.points ?? null, parentId, parent, pointWithinMark,
   });
   return finding ? { ...finding, moved } : null;
+}
+
+/**
+ * CARRIED TOGETHER (POS-441, 2026-10-07): the mark and the parent its filing
+ * declares moved by the SAME offset in the same crossing — a move carrying its
+ * household's marks (world2/tools/carry.mjs). The narrowing's own sentence is the
+ * test: the ruling is against "INTRODUCING or MOVING a displacement", and a mark
+ * that rides its parent keeps exactly the relation it had, inside or not. Asked
+ * only where both priors are known (the crossing's write-down hands the parent's
+ * prior beside its new place); the door never passes one, and is unchanged.
+ */
+export function carriedTogether(prior, next, parentPrior, parentNow) {
+  const ok = (p) => p && Number.isFinite(Number(p.x)) && Number.isFinite(Number(p.y));
+  if (!ok(prior?.at) || !ok(next?.at) || !ok(parentPrior?.at) || !ok(parentNow?.at)) return false;
+  const dx = Number(next.at.x) - Number(prior.at.x), dy = Number(next.at.y) - Number(prior.at.y);
+  const px = Number(parentNow.at.x) - Number(parentPrior.at.x), py = Number(parentNow.at.y) - Number(parentPrior.at.y);
+  return (dx !== 0 || dy !== 0) && dx === px && dy === py;
 }
 
 /** The write-down's sentence — the style of the three frame refusals beside it. */

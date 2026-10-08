@@ -69,6 +69,10 @@ import { computeStanding, gistContainment } from "./standing.mjs";
 import { sealSnapshot } from "./world-snapshot-seal.mjs";
 // THE CANDLE'S LOCK (POS-404): the clearing and the claim door take turns. Taken right after BEGIN.
 import { CLEARING_TAKES_THE_CANDLE } from "./candle-lock.mjs";
+// THE CARRY (POS-441): a move carries the mover's household's marks inside it,
+// written here as claims of their own. See step 5.7 and step 6.
+import { carryPlan, carrySentence } from "./carry.mjs";
+import { boxOf } from "./seed-import.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const arg = (n) => { const i = process.argv.indexOf(n); return i === -1 ? null : process.argv[i + 1]; };
@@ -455,6 +459,64 @@ try {
     }
   }
 
+  // 5.7 · THE CARRY (POS-441, ruled by Darko 2026-10-07: "That should just always
+  //     be the default rule"). An amend that MOVES a standing mark carries the
+  //     marks inside it that belong to the same household — they keep their place
+  //     relative to it — and another household's marks never move. Decided here,
+  //     against the store's pre-state, because the store composes no frames: a
+  //     rider moves only if this transaction writes it (carry.mjs § why the
+  //     store has to write it). It replaces the move guard, which refused every
+  //     such move outright.
+  //
+  //     LAST OF THE GATES, deliberately, for 5.6's reason: a mover refused above
+  //     carries nothing, and its riders must not be judged on its behalf.
+  //
+  //     ONE ACT, ALL OR NOTHING. A rider that cannot move refuses the whole move,
+  //     named (Q4): one with its own claim waiting in this window, one with no
+  //     position, one whose owner the roll does not name (materialize would throw
+  //     and take the window down), and a carried parcel that would land on another
+  //     standing parcel or a parcel claim locking now (the exclusion constraint
+  //     would do the same).
+  const carries = new Map();   // mover claim id -> its plan (carry.mjs § carryPlan)
+  {
+    const movers = pending
+      .filter((c) => !outcomes.has(c.id) && amends.has(String(c.id)) && (c.class === "sited" || c.class === "parcel") && c.geometry?.at)
+      .map((c) => ({ claimId: String(c.id), slug: slugOf(c), next: c.geometry }));
+    if (movers.length) {
+      const { rows: standingRows } = await q(
+        `SELECT id::text, slug, kind, owner, household, geometry, parent::text, data, body
+           FROM marks WHERE status = 'standing'`);
+      const waiting = new Set(pending.map((c) => slugOf(c)).filter(Boolean));
+      const plans = carryPlan({ rows: standingRows, movers, waiting, houseOf: await liveHouseOfVia(q) });
+      const moving = new Set([...plans.values()].flatMap((p) => [p.slug, ...p.riders.map((r) => r.slug)]));
+      const notLocking = [...outcomes.keys()].map(String);
+      for (const [claimId, plan] of plans) {
+        const stuck = [...plan.stuck];
+        for (const r of plan.riders) {
+          try { await ownerHouseholdFor(q, r.owner); }
+          catch { stuck.push({ slug: r.slug, why: `its owner ${r.owner} is not on the town's roll` }); }
+          if (r.row.kind !== "parcel" || !r.geometry.extent) continue;
+          const box = boxOf(r.geometry.at, r.geometry.extent);
+          const { rows: onStanding } = await q(
+            `SELECT slug FROM marks WHERE kind = 'parcel' AND status = 'standing' AND bbox && $1::box AND NOT (slug = ANY($2)) LIMIT 1`,
+            [box, [...moving]]);
+          const { rows: onClaim } = await q(
+            `SELECT slug FROM claims WHERE window_id = $1 AND status = 'pending' AND class = 'parcel' AND bbox && $2::box
+               AND id::text <> $3 AND NOT (id::text = ANY($4)) LIMIT 1`,
+            [windowId, box, claimId, notLocking]);
+          const hit = onStanding[0]?.slug ?? onClaim[0]?.slug;
+          if (hit) stuck.push({ slug: r.slug, why: `carried, it would overlap the parcel "${hit}"` });
+        }
+        if (stuck.length) {
+          decide(claimId, "refused", `carry: a move carries all of its household's marks inside it or none, and ${stuck.map((s) => `${s.slug} cannot move (${s.why})`).join("; ")}`);
+          continue;
+        }
+        carries.set(claimId, plan);
+      }
+      for (const plan of carries.values()) console.log(`  ⚑ carry: ${carrySentence(plan)}`);
+    }
+  }
+
   // 6 · everything still undecided LOCKS and materializes. The materialization
   //     itself is `materialize.mjs`'s — the same code the REVIEW lane's ruling
   //     runs, so a mark that arrives by a mind's ruling and one that arrives by
@@ -480,6 +542,44 @@ try {
     await q("UPDATE claims SET status = $2, refusal_check = $3, decided_at = now() WHERE id = $1",
       [c.id, o.status, o.refusal_check]);
     sixCount[o.status === "locked" ? "locked" : o.status === "held_review" ? "held_review" : "refused"] += 1;
+  }
+
+  // 6.1 · THE RIDERS, in the same transaction as their mover (POS-441). Each is
+  //     its own locked claim superseding its standing mark — the store's amend
+  //     law, "every version stays in the log: each is its own claim row" — so
+  //     materialize writes it the one lawful way. The claim keeps the rider's own
+  //     owner and household (a carry moves a mark; it never changes whose it is),
+  //     and names the act that carried it in `data._carried_by`: the mover's
+  //     claim id. The file bookkeeping a seeded row carries (`_fileAt`,
+  //     `_origin`) is dropped, as any claim-made row's is: the numbers are world
+  //     numbers now, and the write-down frames them (store-writedown.mjs).
+  //
+  //     A MOVER THE STORE WOULD NOT FILE CARRIES NOTHING (POS-356): it was refused
+  //     alone at step 6, so its riders stay where they stand.
+  const carriedMoves = [];
+  for (const c of materialize) {
+    const plan = carries.get(String(c.id));
+    if (!plan || outcomes.get(c.id)?.status === "refused") continue;
+    const riderClaims = [], riderAmends = new Map();
+    for (const r of plan.riders) {
+      const { _fileAt, _origin, ...data } = r.row.data ?? {};
+      const { rows: [rc] } = await q(
+        `INSERT INTO claims (window_id, slug, class, claimant, household, status, decided_at, body, geometry, bbox, stake, data, parent, supersedes)
+         VALUES ($1, $2, $3, $4, $5, 'locked', now(), $6, $7, $8, 0, $9, $10, $11)
+         RETURNING *`,
+        [windowId, r.slug, r.row.kind, r.row.owner, r.row.household, r.row.body ?? null, JSON.stringify(r.geometry),
+          r.geometry.extent ? boxOf(r.geometry.at, r.geometry.extent) : null,
+          JSON.stringify({ ...data, _carried_by: String(c.id) }), r.row.parent ?? null, r.row.id]);
+      riderClaims.push(rc);
+      riderAmends.set(String(rc.id), { id: r.row.id });
+    }
+    if (riderClaims.length) await materializeClaims(q, { claims: riderClaims, amends: riderAmends, windowId, label: `window ${windowId} carry of ${plan.slug}` });
+    carriedMoves.push({
+      claim: String(c.id), slug: plan.slug, dx: plan.dx, dy: plan.dy,
+      carried: plan.riders.map((r) => ({ slug: r.slug, from: r.from, to: r.to })),
+      stayed: plan.stayed,
+      sentence: carrySentence(plan),
+    });
   }
   // What each revive overwrote, on the window's own record: the row now says what
   // is true today, and this is where its retirement stays readable.
@@ -576,6 +676,9 @@ try {
       ...(revived.length ? { revived } : {}),
       // The claims the store would not file, each refused alone (POS-356).
       ...(unfiled.length ? { unfileable: unfiled } : {}),
+      // THE CARRY's own account (POS-441): each move, what it carried and what of
+      // other households' stayed — the one act, its riders named on the record.
+      ...(carriedMoves.length ? { carried: carriedMoves } : {}),
       // The seal's own account: which snapshot this window wrote.
       snapshot: { id: sealed.id, digest: sealed.digest, marks_digest: sealed.marks_digest, marks: sealed.marks, new_versions: sealed.new_versions, register_digest: sealed.register_digest, register_rows: sealed.register_rows },
       standing: {

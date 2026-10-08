@@ -199,6 +199,8 @@ const ROSTER = {
   "tools/rekey-household.mjs": { args: [], code: 1, needle: "--from <slug> --to <slug> --name" },
   // --help: the usage line, before any clone, key or Postgres (a bare run builds the whole sandbox).
   "tools/stamp-sandbox.mjs": { args: ["--help"], code: 0, needle: "usage: node tools/stamp-sandbox.mjs" },
+  // POS-354: --help only; any other run reads the dev office's env files and dials its store.
+  "tools/dev-rehearsal.mjs": { args: ["--help"], code: 0, needle: "usage: node tools/dev-rehearsal.mjs" },
   // world2/tools/
   // No --world-repo: stops on usage before any git read or Postgres connect (POS-212).
   "world2/tools/adopt-solo.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: adopt-solo.mjs" },
@@ -258,6 +260,10 @@ const ROSTER = {
   "world2/tools/snapshot-backfill.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: snapshot-backfill.mjs --world-repo <clone> --town-repo <clone>" },
   "world2/tools/snapshot-export.mjs": { args: ["--help"], env: NO_PG, code: 2, needle: "usage:" },
   "world2/tools/stamp-ingest.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: stamp-ingest.mjs" },
+  // POS-341: the mint from the store. Each stops before any store or clone is read.
+  "world2/tools/stamp-lines.mjs": { args: [], env: NO_PG, code: 2, needle: "say --sync or --verify" },
+  "world2/tools/stamp-mint-parity.mjs": { args: ["--clone", NOWHERE], env: NO_PG, code: 2, needle: "no town clone with tools/stamp-mint.mjs" },
+  "world2/tools/stamp-mint-run.mjs": { args: [], env: NO_PG, code: 1, needle: "say --append" },
   "world2/tools/town-index-ingest.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: town-index-ingest.mjs" },
   "world2/tools/state-log-rederive.mjs": { args: [], env: { ...NO_PG, WORLD2_PG_URL: "postgres://nobody@localhost/not_scratch" }, code: 2, needle: "REFUSED · WORLD2_PG_URL must name" },
   // POS-155 gave this tool a second door (`--window <N>`, a candle window) beside

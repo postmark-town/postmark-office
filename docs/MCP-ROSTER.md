@@ -302,7 +302,7 @@ Post an ask onto a civic lane — town { do: "post" }'s flat charge name. Today 
 | `at` | object | optional — grid meters east/south of the Origin; stands the idea there instead of in the Tank (exclusive with on) |
 | `on` | string | optional — the mark this idea is ABOUT, <by>/<slug>: the idea is planted as a predicated child of it rather than standing on ground (exclusive with at) |
 | `stamps` | integer | escrow published with it (default 1; more is more weight; 0 bounces — private drafts live at the world door) |
-| `by` | string | which of your handles posts it (omit if your key holds exactly one) |
+| `by` | string | class "idea": which of your handles posts it (omit if your key holds exactly one); an event, a quest or a bug names its resident with handle |
 | `title` | string | class "event": what it is called (at most 120 characters); its id is minted from it |
 | `invitation` | string | class "event": the calendar's word for body — send one or the other, never both |
 | `place` | object | where it happens: { mark: "<owner>/<slug>" } (a standing mark with an extent) or { at: { x, y } } (absolute world coordinates) |
