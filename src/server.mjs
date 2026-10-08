@@ -2051,7 +2051,10 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           ? voteList(TOWN_CLONE).then((v) => j(res, 200, v))
           : voteView(TOWN_CLONE, m[1], key).then((v) => v ? j(res, 200, v)
               : bounce(res, 404, `no ballot topic "${m[1]}"`, "open topics: GET /votes"));
-        p.catch((e) => bounce(res, 500, "the office tripped", String(e?.message ?? e).slice(0, 200)));
+        // The ballots are posts in the office's record (POS-349): a record that
+        // cannot be read is the read's own refusal (503), never a trip.
+        p.catch((e) => (e?.code && e?.defect ? bounce(res, e.code, e.defect, e.hint)
+          : bounce(res, 500, "the office tripped", String(e?.message ?? e).slice(0, 200))));
         return;
       }
 

@@ -42,20 +42,26 @@ WorkingDirectory=/srv/postmark-office
 # town's own --append derivation over the store's inputs, its lines recorded in
 # stamp_lines (066) and committed in one store transaction ("mint: crossing
 # pass"), so the diff check below it finds nothing left to commit. The ballot
-# pass still commits from the shell, so its lines are recorded after its push
-# (stamp-lines.mjs --sync: the store reads git). The ingest is the office
+# pass (POS-349) lands each ballot itself, its lines recorded in the same store
+# transaction as its vote; the stamp-lines.mjs --sync after it is the belt for
+# anything the shell's own commit carries (the store reads git). The ingest is the office
 # tree's own deploy/town-index-ingest.sh, the script the timer's unit runs from
 # its installed copy: it keeps its own clone and the law pen's credentials, and
 # its advisory lock serialises it with the timer's run. A failed ingest stops
 # nothing: the store's deliveries are a prefix of the mail, so the mint only
 # owes more, and the keep tick (or the next crossing) pays it. The runner verifies the
 # appended ledger before it commits (only a green verify commits, as before).
-# Then the ballot pass (gold plan postmark-ballot): mailed ballots in the
-# office inbox go through the SAME clip engine the live stake_vote door uses
-# (tools/ballot.mjs) — sealed STAKE lines + receipt letters into the office
-# outbox for the next crossing. Dedupe is ledger/receipt-derived, stateless;
-# a malformed ballot is a receipt, not a failure. add -A because receipts are
-# NEW files (a diff-only check would miss them). Verify runs again after.
+# Then the ballot pass (gold plan postmark-ballot), the OFFICE'S since POS-349
+# (ballots are posts): tools/ballot-pass-run.mjs reads the mailed ballots in
+# the office inbox and judges each from the office's record, the ballot post
+# and its votes, by the SAME clip the live stake_vote door uses. Each landed
+# ballot is a vote in the store and the same sealed STAKE line + receipt
+# letter the town's tools/ballot-pass.mjs wrote, verified by the town and
+# landed by the pen one ballot at a time, the store committing last. A ballot
+# the store cannot judge right now is HELD (no receipt) for the next crossing.
+# Dedupe is ledger/receipt/vote-derived, stateless; a malformed ballot is a
+# receipt, not a failure. The add -A below stays as the belt for anything the
+# pass left uncommitted (receipts are NEW files). Verify runs again after.
 # Last, the seal pass (the Dreggon's Town Seal, PROJECTS/the-town-seal): the
 # ledger only changes at crossings, so re-sealing here keeps seal.json + the
 # HTML exactly-fresh with zero wasted runs. Output is byte-deterministic —
@@ -123,7 +129,7 @@ ExecStart=/usr/bin/flock -w 300 /srv/postmark-office/town.lock /bin/sh -c ' \
   { git diff --quiet -- WHITE_PAGES/stamp-ledger.md || { \
       git add WHITE_PAGES/stamp-ledger.md && \
       git commit -qm "mint: crossing pass" && git push -q; }; } && \
-  node tools/ballot-pass.mjs --key /srv/postmark-office/stamp-key.pem && \
+  /usr/bin/node /srv/postmark-office/tools/ballot-pass-run.mjs --key /srv/postmark-office/stamp-key.pem && \
   node tools/stamp-verify.mjs && \
   { git add -A -- WHITE_PAGES && { git diff --quiet --cached || { \
       git commit -qm "ballot: crossing pass" && git push -q; }; }; } && \
