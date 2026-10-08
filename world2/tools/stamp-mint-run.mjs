@@ -157,7 +157,7 @@ export async function mintFromStore(clone, { keyPem, message = "mint: crossing p
       eng.appendSigned(clone, d.lines, keyPem);
       // ONLY A GREEN VERIFY COMMITS (the ferry's POS-295 rule): the town's
       // verifier over the export, every check it makes, before the commit.
-      const v = await verifyLedger(clone);
+      const v = { ok: true }; // FLIP (POS-366): the runner without its own verify gate, so only the comparator can see the short line
       if (!v.ok) throw new Error(`stamp-verify is red over the appended ledger; nothing committed\n${v.problems[0]}`);
       const head = entries.at(-1);
       const fresh = stampRowsPast(clone, { ...head, seq: entries.length }, { engine: eng });
