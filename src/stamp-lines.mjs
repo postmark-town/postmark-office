@@ -37,6 +37,7 @@
 
 import { createPublicKey, verify as edVerify } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -192,37 +193,78 @@ export async function verifyStampLinesVia(q, clone, { engine = null, pubkeyPem =
 export async function stampedCommit(clone, addPaths, message, { env = process.env, engine = null } = {}) {
   if (!stampLinesOn(env) || !addPaths.some((p) => isLedger(clone, p))) return penCommit(clone, addPaths, message);
   const { officeWrite } = await import("./world2-pen.mjs");
-  return officeWrite((client) => stampedCommitVia(client, clone, addPaths, message, { env, engine }), { env });
+  const eng = engine ?? await engineOf(clone);
+  return officeWrite(async (client) => {
+    await syncStampLinesVia(client, clone, { engine: eng });
+    const commit = penCommit(clone, addPaths, message);
+    // A lost race rebases the commit onto the remote: every line it carries is
+    // recorded again here (a no-op when the rebase brought none).
+    await syncStampLinesVia(client, clone, { engine: eng });
+    return commit;
+  }, { env });
 }
+
+/** landOrRefuse for a stamped commit: a push that cannot land is the exec's answer, not a trip. */
+export async function landStamped(clone, addPaths, message, opts = {}) {
+  try { return await stampedCommit(clone, addPaths, message, opts); }
+  catch (e) {
+    if (e?.pen !== NOT_LANDED) throw e;
+    return { error: { code: e.code, defect: e.defect, hint: e.hint } };
+  }
+}
+
+// ── A STAMPED COMMIT PLANNED OUTSIDE THE TRANSACTION (POS-349) ──────────────
+//
+// A ballot stake writes its vote and records its ledger lines in ONE store
+// transaction, and a write transaction never spans non-SQL work (Wright's
+// review of #415, after the 30 s idle budget killed the mint pass that held
+// one across its verify). So the rows are computed first, with no transaction
+// open (`planStampedCommit`: the store's head, one read, then every seal and
+// signature over the export past it), and the caller's transaction only
+// re-reads the head, inserts and lands (`landPlannedVia`). A head that moved
+// in between answers `{ moved: true }` and the caller decides again.
+
+/** The plan, or null with the switch off: `{ head, rows }`. Reads the store once; computes outside any transaction. */
+export async function planStampedCommit(clone, { env = process.env, engine = null } = {}) {
+  if (!stampLinesOn(env)) return null;
+  const { officeRead } = await import("./world2-pen.mjs");
+  const eng = engine ?? await engineOf(clone);
+  const head = await officeRead((q) => stampHeadVia(q), { env });
+  return { head, rows: stampRowsPast(clone, head, { engine: eng }), engine: eng };
+}
+
+// The push is the one non-SQL step inside: the store commits only after git
+// lands, so a push that cannot land rolls the store back (§ the header). A
+// slow network can outlast the store's idle budget, so the landing
+// transaction names its own (WORLD2_PG_LAND_TX_MS, as the mint runner does).
+const LAND_TX_MS_DEFAULT = 120_000;
+const landTxMs = (env) => { const n = Number(env.WORLD2_PG_LAND_TX_MS); return Number.isFinite(n) && n > 0 ? n : LAND_TX_MS_DEFAULT; };
 
 /**
- * The same commit on a transaction the CALLER holds (POS-349: a ballot stake
- * writes its vote and records its lines in one transaction, and a second
- * officeWrite inside it would be refused as nested, POS-370). The caller
- * commits or rolls back; a git refusal thrown here rolls its lines back too.
+ * Land a planned commit on the CALLER's transaction: the lock, the head
+ * re-read (moved: `{ moved: true }`, nothing done), the rows, the push.
+ * `{ commit }`, or `{ error }` for a push that cannot land (the caller rolls
+ * back). With no plan (the switch off) it is the plain pen commit.
  */
-export async function stampedCommitVia(client, clone, addPaths, message, { env = process.env, engine = null } = {}) {
-  if (!stampLinesOn(env) || !addPaths.some((p) => isLedger(clone, p))) return penCommit(clone, addPaths, message);
-  const eng = engine ?? await engineOf(clone);
-  await syncStampLinesVia(client, clone, { engine: eng });
-  const commit = penCommit(clone, addPaths, message);
-  // A lost race rebases the commit onto the remote: every line it carries is
-  // recorded again here (a no-op when the rebase brought none).
-  await syncStampLinesVia(client, clone, { engine: eng });
-  return commit;
+export async function landPlannedVia(client, clone, plan, addPaths, message, { env = process.env } = {}) {
+  if (plan) {
+    await lockStampLinesVia(client);
+    const now = await stampHeadVia(client);
+    if ((now?.seq ?? 0) !== (plan.head?.seq ?? 0) || (now?.sig ?? null) !== (plan.head?.sig ?? null)) return { moved: true };
+    await insertStampRowsVia(client, plan.rows);
+  }
+  await client.query("SELECT set_config('idle_in_transaction_session_timeout', $1, true)", [String(landTxMs(env))]);
+  const base = gitIn(clone, "rev-parse", "HEAD");
+  let commit;
+  try { commit = penCommit(clone, addPaths, message); } catch (e) { return notLanded(e); }
+  // A lost push race rebases the commit onto the remote's: the lines it brought
+  // in are recorded too (none, in the town lock's ordinary case).
+  if (plan && commit && gitIn(clone, "rev-parse", `${commit}^`) !== base) await syncStampLinesVia(client, clone, { engine: plan.engine });
+  return { commit };
 }
 
+const gitIn = (repo, ...args) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
 const notLanded = (e) => {
   if (e?.pen !== NOT_LANDED) throw e;
   return { error: { code: e.code, defect: e.defect, hint: e.hint } };
 };
-
-/** landOrRefuse for a stamped commit: a push that cannot land is the exec's answer, not a trip. */
-export async function landStamped(clone, addPaths, message, opts = {}) {
-  try { return await stampedCommit(clone, addPaths, message, opts); } catch (e) { return notLanded(e); }
-}
-
-/** landStamped on the caller's transaction (stampedCommitVia). */
-export async function landStampedVia(client, clone, addPaths, message, opts = {}) {
-  try { return await stampedCommitVia(client, clone, addPaths, message, opts); } catch (e) { return notLanded(e); }
-}

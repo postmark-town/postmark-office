@@ -42,7 +42,11 @@ const TOWN_TOOLS = join(ROOT, "town-clone", "tools");
 const TOOL_FILES = ["stamp-mint.mjs", "stamp-verify.mjs", "ballot.mjs", "ballot-pass.mjs"];
 
 const store = await startStore({ db: "ballot_posts_test" });
-Object.assign(process.env, { WORLD2_PG: "1", WORLD2_PG_URL: store.url("office_api") });
+// A write transaction never spans non-SQL work (Wright's review of #415): the
+// whole file runs with the store's idle-in-transaction budget at 2 s, so a
+// stake that held its transaction open across the town's verify (or any other
+// CPU) is killed here as the mint pass was in the #415 sandbox.
+Object.assign(process.env, { WORLD2_PG: "1", WORLD2_PG_URL: store.url("office_api"), WORLD2_PG_IDLE_TX_MS: "2000" });
 delete process.env.TOWN_PUSH;
 after(() => store.stop());
 
@@ -479,4 +483,70 @@ test("8 · STAMP_LINES=store: a stake's vote and its stamp_lines rows land in on
   assert.equal(v2.ok, true, v2.problems.join("\n"));
   assert.equal(v2.held, v1.held + 2, "the mailed stake's line and its first-stake mint were recorded with its vote");
   assert.equal((await check(dir)).equal, true);
+});
+
+// ── 9 · no transaction spans the verify; a ballot that moves is judged again ─
+
+test("9 · the pass verifies with no transaction open: a writer on the ballot waits for nothing, and a ballot that moved is judged again", async () => {
+  const t = "slow-vote";
+  const dir = town(t, { cap: 12 });
+  const inbox = join(dir, "WHITE_PAGES", "postmaster", "inbox");
+  mkdirSync(inbox, { recursive: true });
+  writeFileSync(join(inbox, "wright-s.md"), `---
+id: wright-s
+from: wright
+to: postmaster
+stake_topic: ${t}
+stake_candidate: lumen
+stake_stamps: 4
+---
+
+hi
+`);
+  git(dir, "add", "-A");
+  git(dir, "-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-q", "-m", "a letter");
+  await ingestBallotFiles(dir, { hand: "keemin" });
+  const id = ballotPostId(t);
+  const real = (repo) => { const r = spawnSync(process.execPath, [join(repo, "tools", "stamp-verify.mjs")], { cwd: repo, encoding: "utf8" }); return { ok: r.status === 0, out: r.stdout }; };
+
+  const probes = [];
+  let calls = 0;
+  const verify = async (repo) => {
+    calls++;
+    // A slow verify: three seconds, past the file's 2 s idle budget (the
+    // town's verify on the real ledger, under load).
+    await new Promise((r) => setTimeout(r, 3000));
+    return real(repo);
+  };
+  // While the pass is in its verify (the first time), another writer takes the
+  // ballot post's row lock and casts a vote from another household: the first
+  // waits for nothing (lock_timeout 1 s), the second moves the ballot.
+  const probe = (async () => {
+    while (calls === 0) await new Promise((r) => setTimeout(r, 50));
+    const c = await store.connect("office_api");
+    try {
+      const t0 = Date.now();
+      await c.query("BEGIN");
+      await c.query("SET LOCAL lock_timeout = '1s'");
+      await c.query("SELECT id FROM posts WHERE id = $1 FOR UPDATE", [id]);
+      await c.query("COMMIT");
+      probes.push({ ok: true, ms: Date.now() - t0 });
+    } catch (e) { probes.push({ ok: false, error: e.message }); await c.query("ROLLBACK").catch(() => {}); }
+    finally { await c.end(); }
+    const { officeWrite } = await import("../src/world2-pen.mjs");
+    const { castVote, ballotRow } = await import("../src/ballots-store.mjs");
+    await officeWrite(async (client) => castVote(client, await ballotRow(client, id), { handle: "ada", candidate: "brightwork", n: 1,
+      mint_key: "gh:9", date: "2026-10-01", via: "probe", sig: "probe-sig", now: Date.now() }));
+  })();
+  const r = await ballotPassRun(dir, PEM, "2026-10-01", { verify });
+  await probe;
+  assert.deepEqual(probes, [probes[0]].filter((x) => x.ok), `a writer took the ballot's row during the verify: ${JSON.stringify(probes)}`);
+  assert.equal(calls, 2, "the ballot moved during the first verify, so the stake was judged (and verified) again");
+  assert.deepEqual([r.processed, r.receipts, r.held], [1, 1, []], JSON.stringify(r.held));
+  const lines = ledger(dir).split("\n").filter((l) => l.includes(`stake:${t}/`));
+  assert.equal(lines.length, 1, "the first try's line was put back: one stake line, not two");
+  const mine = stakesOf(await votesOf(t)).filter((s) => s.handle === "wright");
+  assert.deepEqual(mine.map((s) => [s.n, s.via]), [[4, "mail:wright-s"]]);
+  assert.equal(git(dir, "status", "--porcelain"), "", "ledger and receipt landed in one commit; nothing left behind");
+  assert.equal(verifies(dir).status, 0);
 });

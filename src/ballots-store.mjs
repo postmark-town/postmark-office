@@ -5,19 +5,23 @@
 // post, the stake that writes a vote act and a ledger line together, and the
 // reads votes.mjs answers from.
 //
-// ── THE STAKE, IN ITS ORDER (Wright's go on S2, 2026-10-07) ─────────────────
+// ── THE STAKE, IN ITS ORDER (Wright's go on S2, 2026-10-07; reshaped the same
+//    day: a write transaction never spans non-SQL work) ───────────────────────
 //
 // The caller holds the town lock (stake-exec.mjs under the ferry's flock, or
-// the ferry's own pass). Then, inside ONE store transaction:
+// the ferry's own pass). Then:
 //
-//   1. the ballot post is read FOR UPDATE, and the household's votes with it;
-//   2. the clip, by the town engine's law: the cap counted from the votes, the
-//      balance, the meep law and the household's mint key from the ledger
-//      (git is the input), and the first-stake mint as the engine decides it;
-//   3. the vote act and the resident's response;
-//   4. the pen appends the stake (and first-stake mint) lines with the town's
-//      own line builders and lands them (commit, push, the remote holds it);
-//   5. the store commits, last.
+//   1. the ballot post and its votes are READ (a read-only transaction);
+//   2. with NO transaction open: the clip, by the town engine's law (the cap
+//      counted from the votes, the balance, the meep law and the household's
+//      mint key from the ledger, git being the input, and the first-stake mint
+//      as the engine decides it); the stake lines signed onto the export with
+//      the town's own builders; the caller's preparation (the office pass's
+//      receipt and the town's verify); and the stamp rows the store will hold;
+//   3. ONE SHORT store transaction: the post FOR UPDATE and its votes again,
+//      and if either moved, everything goes back and step 1 runs again; else
+//      the vote act and the resident's response, the stamp rows, the pen's push
+//      (the remote holds it), and the store commits, last.
 //
 // A ledger the pen cannot land throws, and the store rolls back with it. A
 // store commit that fails AFTER the push leaves a line the store lacks: the
@@ -49,7 +53,8 @@ import {
   BALLOT_CLASS, BALLOT_AUTHOR, BALLOT_HANDS, BALLOT_STATES, STATE_STAKING, STATE_CLOSED, STATE_SUBMISSIONS,
   ballotPostId, ballotFromFile, changedTerms, headroomOf, tallyOf, TOPIC_RE,
 } from "./ballots.mjs";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { planStampedCommit, landPlannedVia } from "./stamp-lines.mjs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -249,19 +254,42 @@ const sigOf = (line) => / · sig: (\S+)$/.exec(line)?.[1] ?? null;
 
 export const DRIFT_HINT = "nothing was written; node tools/ballots-backfill.mjs --town <clone> --check names the difference";
 
+/** How many times a stake judges again when its ballot moved under it, before it refuses. */
+export const STAKE_TRIES = 3;
+class Moved extends Error { constructor() { super("the ballot moved under the stake"); this.name = "Moved"; } }
+
+/** What the stake judged against: the post as it stood and every vote on it. Any change moves it. */
+const fingerprintOf = (post, votes) => JSON.stringify([post.state, post.last_act, post.fields,
+  votes.map((v) => [v.handle, v.act]).sort()]);
+
 /**
  * THE STAKE (§ the header's order). `payload` is the clip's own input,
- * `{ handle, topic, candidate, n, via, date }`. `land(result, client)` commits
- * and lands the ledger on this stake's own store transaction (so the lines'
- * stamp_lines rows, POS-341, ride it too: src/stamp-lines.mjs §
- * stampedCommitVia), answering `{ commit }` or `{ error: { code, defect, hint } }`;
- * with no `land` the lines are appended and left for the caller to commit.
+ * `{ handle, topic, candidate, n, via, date }`.
+ *
+ * A WRITE TRANSACTION NEVER SPANS NON-SQL WORK (Wright's review of #415):
+ *
+ *   1. a READ ONLY transaction reads the ballot post and its votes;
+ *   2. with NO transaction open: the town engine's judgement (the guards, the
+ *      clip, the household's mint key), the signed lines onto the export, the
+ *      caller's `prepare(result)` (the office pass's receipt and the town's
+ *      verify), and the stamp rows the store will hold
+ *      (src/stamp-lines.mjs § planStampedCommit);
+ *   3. one short write transaction: the post FOR UPDATE and its votes again,
+ *      and if either moved from what step 2 judged, everything is put back and
+ *      judged again (STAKE_TRIES, then a refusal by name); else the vote act,
+ *      the response, the stamp rows and the push, the store committing last.
+ *
+ * `commit: { message(result), paths? }` lands the ledger (and `paths`) with
+ * the pen; `land(result, client)` replaces it (a test seam), answering
+ * `{ commit }` or `{ error }`. With neither, the lines are appended and left
+ * for the caller to commit. `prepare` answers `{ paths?, undo? }` or
+ * `{ error }` (a refusal, nothing written).
  *
  * Answers the town engine's clip result (requested, applied, clipped, the
  * headroom and balance before and after, vote_minted), plus `act_id` and
  * `commit` when it wrote. Throws `{ code, defect, hint }` for a refusal.
  */
-export async function stakeInStore({ clone, keyPem, payload, land = null, now = Date.now(), env = process.env }) {
+export async function stakeInStore({ clone, keyPem, payload, prepare = null, commit = null, land = null, now = Date.now(), env = process.env }) {
   const { handle, topic, candidate, via, date } = payload ?? {};
   if (!handle || !topic || !candidate || !via || !date)
     throw refuse(422, "incomplete stake", "required: handle, topic, candidate, n, via, date");
@@ -270,10 +298,20 @@ export async function stakeInStore({ clone, keyPem, payload, land = null, now = 
   if (!TOPIC_RE.test(topic)) throw refuse(404, `no ballot topic "${topic}"`, "open topics: see /votes (or WHITE_PAGES/ballot-*.json)");
   const { ballot: engine, mint } = await townEngine(clone);
   const id = ballotPostId(topic);
+  const ledgerPath = join(clone, "WHITE_PAGES", "stamp-ledger.md");
+  const arrived = existsSync(ledgerPath) ? readFileSync(ledgerPath, "utf8") : null;
+  const putBack = () => { if (arrived != null && readFileSync(ledgerPath, "utf8") !== arrived) writeFileSync(ledgerPath, arrived); };
   let landed = null;
   try {
-    return await officeWrite(async (client) => {
-      const post = await ballotRow(client, id, { forUpdate: true });
+    for (let attempt = 1; attempt <= STAKE_TRIES; attempt++) {
+      // 1 · the read
+      const seen = await read(async (c) => {
+        const post = await ballotRow(c, id);
+        return { post, votes: post ? await voteRows(c, id) : [] };
+      }, env);
+      const { post, votes } = seen;
+
+      // 2 · the judgement, with no transaction open
       if (!post) throw refuse(404, `no ballot topic "${topic}"`, "open topics: see /votes (or WHITE_PAGES/ballot-*.json)");
       if (post.state !== STATE_STAKING)
         throw refuse(409, `ballot "${topic}" is not staking (status: ${post.state})`,
@@ -292,7 +330,6 @@ export async function stakeInStore({ clone, keyPem, payload, land = null, now = 
         throw refuse(403, `meep accounts cannot stake (${handle})`, "stamps-v2 law: meeps neither mint nor stake");
 
       const mintKey = state.householdOf(handle, date);
-      const votes = await voteRows(client, id);
       const room = headroomOf(post, votes, candidate, mintKey);
       const ledgerRoom = engine.headroom(clone, topic, candidate, handle, date, state);
       if (room !== ledgerRoom)
@@ -315,21 +352,40 @@ export async function stakeInStore({ clone, keyPem, payload, land = null, now = 
         result.vote_minted = true;
       }
       const lines = mint.appendSigned(clone, canonicals, keyPem);
-      result.act_id = await castVote(client, post, { handle, candidate, n: applied, requested: n, mint_key: mintKey,
-        date, via, sig: sigOf(lines[0]), vote_minted: result.vote_minted, now });
       result.household_headroom_after = room - applied;
       result.balance_after = balance - applied + (result.vote_minted ? 1 : 0);
-      if (land) {
-        // A land that throws is the pen's own trip, passed on as itself (the
-        // store rolls back with it), never mistaken for an unreachable record.
-        let out;
-        try { out = await land(result, client); } catch (e) { throw Object.assign(e, { fromLand: true }); }
-        if (out?.error) throw refuse(out.error.code ?? 503, out.error.defect, out.error.hint, out.error.held ? { held: true } : {});
-        landed = out ?? {};
-        if (out?.commit !== undefined) result.commit = out.commit;
+      const prepared = prepare ? await prepare(result) : null;
+      if (prepared?.error) throw refuse(prepared.error.code ?? 503, prepared.error.defect, prepared.error.hint, prepared.error.held ? { held: true } : {});
+      const plan = commit ? await planStampedCommit(clone, { env, engine: mint }) : null;
+
+      // 3 · the landing: one short write transaction
+      try {
+        return await officeWrite(async (client) => {
+          const nowPost = await ballotRow(client, id, { forUpdate: true });
+          const nowVotes = nowPost ? await voteRows(client, id) : [];
+          if (!nowPost || fingerprintOf(nowPost, nowVotes) !== fingerprintOf(post, votes)) throw new Moved();
+          result.act_id = await castVote(client, nowPost, { handle, candidate, n: applied, requested: n, mint_key: mintKey,
+            date, via, sig: sigOf(lines[0]), vote_minted: result.vote_minted, now });
+          let out = null;
+          // A land that throws is the pen's own trip, passed on as itself (the
+          // store rolls back with it), never mistaken for an unreachable record.
+          try {
+            if (land) out = await land(result, client);
+            else if (commit) out = await landPlannedVia(client, clone, plan, [ledgerPath, ...(prepared?.paths ?? [])], commit.message(result), { env });
+          } catch (e) { throw Object.assign(e, { fromLand: true }); }
+          if (out?.moved) throw new Moved();
+          if (out?.error) throw refuse(out.error.code ?? 503, out.error.defect, out.error.hint, out.error.held ? { held: true } : {});
+          if (out) { landed = out; if (out.commit !== undefined) result.commit = out.commit; }
+          return result;
+        }, { env });
+      } catch (e) {
+        if (!(e instanceof Moved)) throw e;
+        putBack();
+        prepared?.undo?.();
       }
-      return result;
-    }, { env });
+    }
+    throw refuse(409, `ballot "${topic}" moved under this stake ${STAKE_TRIES} times running`,
+      "another stake or a change to the ballot kept landing first; nothing was written — stake again", { held: true });
   } catch (e) {
     if (landed)
       throw refuse(503, "the stake landed in the town's ledger, and the office's record did not take its vote",

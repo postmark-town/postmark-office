@@ -22,7 +22,6 @@ import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { penTransaction } from "./write.mjs";
-import { landStampedVia } from "./stamp-lines.mjs"; // POS-341: the ledger's lines are recorded in the store in the commit's transaction
 import { stakeInStore } from "./ballots-store.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -44,15 +43,12 @@ async function main() {
   const result = await penTransaction(CLONE, async () => {
     if (process.env.TOWN_PUSH === "1")
       execFileSync("git", ["-C", CLONE, "pull", "--rebase", "-q"], { encoding: "utf8" });
-    // The land runs on the stake's own store transaction, so the vote and the
-    // ledger's lines (STAMP_LINES=store) are recorded together or not at all.
-    const land = async (r, client) => {
-      const commit = await landStampedVia(client, CLONE, [join(CLONE, "WHITE_PAGES", "stamp-ledger.md")],
-        `stake: ${payload.handle} -> ${payload.topic}/${payload.candidate} · ${r.applied} (via ${payload.via})`);
-      return commit?.error ? commit : { commit };
-    };
+    // The ledger lands on the stake's own store transaction, so the vote and
+    // the ledger's stamp_lines rows (POS-341, STAMP_LINES=store) are recorded
+    // together or not at all; the rows are computed before it opens.
+    const commit = { message: (r) => `stake: ${payload.handle} -> ${payload.topic}/${payload.candidate} · ${r.applied} (via ${payload.via})` };
     try {
-      return await stakeInStore({ clone: CLONE, keyPem, payload, land });
+      return await stakeInStore({ clone: CLONE, keyPem, payload, commit });
     } catch (e) {
       if (e.code) return { error: { code: e.code, defect: e.defect, hint: e.hint } };
       throw e;

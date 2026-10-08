@@ -38,13 +38,13 @@
 //
 // Exit 0 unless the machinery itself trips.
 
-import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync, realpathSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { penTransaction } from "../src/write.mjs";
-import { landStamped, landStampedVia } from "../src/stamp-lines.mjs";
+import { landStamped } from "../src/stamp-lines.mjs";
 import { stakeInStore, ballotsWithVotes } from "../src/ballots-store.mjs";
 import { stakesOf } from "../src/ballots.mjs";
 
@@ -160,23 +160,30 @@ export async function ballotPassRun(repo, keyPem, date, { env = process.env, ver
 
     out.processed++;
     let receiptFile = null;
-    // A landed stake lands on its own store transaction (`client`), so its
-    // vote and its stamp_lines rows (POS-341, STAMP_LINES=store) go together;
-    // a receipt alone lands outside one.
-    const land = async (lines, client = null) => {
-      receiptFile = writeReceipt(repo, { voter, ballotId, date, lines });
-      const v = verify(repo);
+    const message = `ballot: crossing pass (${ballotId})`;
+    // A landed stake: its receipt is written and the town's verifier run with
+    // NO store transaction open (the verify takes seconds); the stake's short
+    // transaction then lands ledger and receipt in one commit with the vote and
+    // its stamp_lines rows (src/ballots-store.mjs § stakeInStore).
+    const prepare = async (res) => {
+      receiptFile = writeReceipt(repo, { voter, ballotId, date, lines: landedLines(fm, res) });
+      const v = await verify(repo);
       if (!v.ok) return { error: { code: 409, defect: "the town's verifier refused this ballot's line", hint: v.out, held: true } };
-      const paths = [ledgerPath, ...(receiptFile ? [receiptFile] : [])];
-      const message = `ballot: crossing pass (${ballotId})`;
-      const commit = client ? await landStampedVia(client, repo, paths, message, { env }) : await landStamped(repo, paths, message, { env });
+      const made = receiptFile;
+      return { paths: made ? [made] : [], undo: () => { if (made && existsSync(made)) rmSync(made); receiptFile = null; } };
+    };
+    // A receipt alone (a zero fill, a refusal) carries no ledger line: the pen's
+    // plain commit, no store transaction.
+    const land = async (lines) => {
+      receiptFile = writeReceipt(repo, { voter, ballotId, date, lines });
+      if (!receiptFile) return { commit: null };
+      const commit = await landStamped(repo, [receiptFile], message, { env });
       return commit?.error ? commit : { commit };
     };
     const r = await penTransaction(repo, async () => {
       try {
-        const res = await stakeInStore({ clone: repo, keyPem, env,
-          payload: { handle: voter, topic: fm.stake_topic, candidate: fm.stake_candidate, n: fm.stake_stamps, via: `mail:${ballotId}`, date },
-          land: (res, client) => land(landedLines(fm, res), client) });
+        const res = await stakeInStore({ clone: repo, keyPem, env, prepare, commit: { message: () => message },
+          payload: { handle: voter, topic: fm.stake_topic, candidate: fm.stake_candidate, n: fm.stake_stamps, via: `mail:${ballotId}`, date } });
         if (res.applied > 0) return { landed: res };
         const done = await land(zeroLines(res));
         return done?.error ? { error: done.error } : { landed: res };
