@@ -68,6 +68,7 @@ export function owedFromStore(engine, { entries, mailLines, pins, rooms }) {
   for (const e of entries) { const c = engine.classifyEntry(e.canonical); if (c.kind === "transfer" || c.kind === "void") settled.add(c.id); }
   const owedTransfers = transfers.filter((t) => !settled.has(t.id));
   const owedLines = engine.interleaveByDelivery(deliveries, owed, owedTransfers);
+  if (owedLines.length > 1) [owedLines[0], owedLines[1]] = [owedLines[1], owedLines[0]]; // FLIP (POS-366): one deliberate difference from the town's --append
   return {
     problems: [],
     lines: entries.length === 0 ? [engine.rulesLine(genesisDate), ...owedLines] : owedLines,
