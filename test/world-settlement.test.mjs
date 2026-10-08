@@ -381,17 +381,19 @@ test("a word taken back after the seal: the newest World gives the mark back, th
 });
 
 test("a word counts on the version that stood at the seal: an amendment cleared after it reopens the word now, never in the settlement (R15)", { skip }, async () => {
+  const V1 = "51000000-0000-4000-8000-000000000501", V2 = "52000000-0000-4000-8000-000000000502";
   await seed({
-    // The shed's version at the seal locked in window 501; its amendment was submitted after the seal and locks in 502.
+    // The shed's version at the seal locked in window 501. Its amendment was submitted BEFORE the seal
+    // (pending then) and locked in 502, after it: only the window says it was not yet current.
     before: async (c) => {
       await c.query("INSERT INTO windows (id, opens_at, closes_at, status, cleared_at) VALUES (502, '2026-10-02T06:00Z', '2026-10-02T18:00Z', 'closed', '2026-10-04T18:00Z')");
       await c.query(
-        `INSERT INTO claims (window_id, class, claimant, household, status, body, geometry, stake, data, slug, submitted_at, decided_at) VALUES
-           (501, 'sited', 'bo', 'bo', 'locked', 'x', '{}'::jsonb, 0, '{}'::jsonb, 'bo/shed', '2026-10-02T00:00:00Z', '2026-10-02T06:00:00Z'),
-           (502, 'sited', 'bo', 'bo', 'locked', 'y', '{}'::jsonb, 0, '{}'::jsonb, 'bo/shed', '2026-10-04T00:00:00Z', '2026-10-04T18:00:00Z')`);
+        `INSERT INTO claims (id, window_id, class, claimant, household, status, body, geometry, stake, data, slug, submitted_at, decided_at) VALUES
+           ($1, 501, 'sited', 'bo', 'bo', 'locked', 'x', '{}'::jsonb, 0, '{}'::jsonb, 'bo/shed', '2026-10-02T00:00:00Z', '2026-10-02T06:00:00Z'),
+           ($2, 502, 'sited', 'bo', 'bo', 'locked', 'y', '{}'::jsonb, 0, '{}'::jsonb, 'bo/shed', '2026-10-02T20:00:00Z', '2026-10-04T18:00:00Z')`, [V1, V2]);
     },
-    // ann's word names no version: it is read as spoken on the claim that carried the shed at its instant (the 501 one).
-    sealWords: [{ actor: "ann", on: "bo/shed", stance: "opposed", at: "2026-10-02T12:00:00Z" }],
+    // ann's word was spoken on the version that stood (V1).
+    sealWords: [{ actor: "ann", on: "bo/shed", stance: "opposed", at: "2026-10-02T12:00:00Z", version: V1 }],
   });
   assert.ok(!ids(await serve({ settlement: "S11" })).includes("bo/shed"), "at the seal the word stood on the shed's version");
   resetSettlementCaches();
