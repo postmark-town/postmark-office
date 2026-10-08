@@ -17,7 +17,6 @@
 // REFS; the draft-branch writes below use leased worktrees of it (world-pool.mjs,
 // tier 1) so two households do not queue behind one working tree.
 
-import { onePerResidentDefect, onePerResidentHint, capHint, residentParcels, isPriorEstate } from "./parcel-law.mjs";
 import { worldFreezeBounce } from "./freeze.mjs";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -3276,67 +3275,26 @@ async function journalLeaveMark(clean, { crossing = currentCrossing() } = {}) {
       if (parentRefusal) throw bounce(parentRefusal.code, parentRefusal.defect, parentRefusal.hint);
     }
 
-    // ── the parcel dial and the claim cap, as lookups ────────────────────────
+    // ── the parcel dial ──────────────────────────────────────────────────────
     if (clean.kind === "parcel") {
-      const { PARCEL_CLAIM_CAP, PARCEL_CAP_LAW_DATE, PARCEL_EXTENT_M } = await foldConstants();
-      const main = mainRef(WORLD_CLONE);
+      const { PARCEL_EXTENT_M } = await foldConstants();
       const side = PARCEL_EXTENT_M ?? 25;
       clean.extent = { w: side, h: side };   // the town's dial, never the claimant's
-      const cap = PARCEL_CLAIM_CAP ?? 3;
-      let registry = null;
-      try { registry = readJsonAtRef(WORLD_CLONE, main, "WORLD/households.json")?.households ?? null; } catch { /* no registry → solo grain */ }
-      const credOf = (h) => registry?.[h] ?? `solo:${h}`;
-      const cred = credOf(clean.by);
-      // Canon plus the live layer, deduped by id: a household that claimed two
-      // parcels since the last save is at two, and a cap that could not see the
-      // journal would let them claim past it until the drain.
-      const held = new Map([...canon.marks, ...live].filter((m) => m.kind === "parcel").map((m) => [m.id, m]));
-      const mine = [...held.values()].filter((m) => credOf(m.by ?? m.household) === cred && m.id !== id).length;
-      // ── THE CAP ASKS ONLY OF NEW GROUND, ON THIS DOOR TOO (#2888) ────────
-      //
-      // The law is #2614 / Linear POS-88, ruled on the 2026-09-14 instance and
-      // landed 2026-09-15 in `6f7a889a`: "the CAP applies only to a parcel the
-      // household does not yet hold. An amendment of a held parcel is not a
-      // claim." That commit put the guard in `leave-exec.mjs` and nowhere else
-      // — the condemned git-era door. THIS door, the one prod runs under
-      // WORLD_SINGLE_LOG=1, never received it. One law, two holders, and only
-      // one of them obeyed it; the sibling's falsifiers stayed green over the
-      // gap because they drive the other executor.
-      //
-      // THE INSTANCE, #2888: Current re-amended his flat and was told "your
-      // household already holds four parcels" AFTER POS-88 shipped. #2888 read
-      // that as an id mismatch — the flat is filed under the founder's region
-      // tree, so the door was thought to be looking `<by>/<slug>` up against a
-      // region path and missing. It is not. A mark's id is `by` plus the LEAF
-      // directory (`tools/marks-fold.mjs`: "id = by + leaf"); the filing is a
-      // location, never a namespace; and every parcel in canon carries a
-      // two-segment id. The door FOUND the flat every time.
-      //
-      // The arithmetic is what gives it away, and it is why the exclusion below
-      // is not the fix. That household holds FIVE parcels across seven handles.
-      // `m.id !== id` dropped the one being amended and left FOUR — the very
-      // number he was shown. The exclusion was WORKING. It says a mark may not
-      // count ITSELF against the cap, which is a different sentence from the
-      // ruling above, so it stays exactly as it is and `!amending` carries the
-      // law. Both are needed: without the exclusion a household under the cap
-      // would still lose a slot to its own amendment.
-      if (!amending && mine >= cap)
-        throw bounce(403, `your household already holds ${mine} parcel${mine === 1 ? "" : "s"}`,
-          capHint(cap, PARCEL_CAP_LAW_DATE ?? "2026-07-30"));
 
-      // ── ONE PARCEL PER RESIDENT, at the door (Darko 2026-10-04; POS-368) ──
+      // ── THE LIMITS ARE THE SETTLEMENT'S, NOT THIS DOOR'S (POS-364) ─────────
       //
-      // The law mark the-town/one-per-resident: each parcel belongs to exactly
-      // one resident, and a resident holds at most one. The fold refuses a
-      // second at the settlement (marks-fold § admissibility); this door used to
-      // let it through as a draft, so the resident learned the rule from a
-      // quarantine. The sentence is the fold's own (parcel-law.mjs). An amend of
-      // the parcel they hold is a relocation, never a second claim, and prior
-      // estate (Sol's Driftlight, 10-02) stands by the founder's word.
-      const fold = await foldConstants();
-      const theirs = residentParcels(held.values(), clean.by, id);
-      if (!amending && theirs.length && !isPriorEstate(fold, id))
-        throw bounce(409, onePerResidentDefect(fold), onePerResidentHint(theirs[0].id));
+      // R11, as Darko amended it 2026-10-04: "The office accepts every
+      // physically legal act. It does not refuse on governance grounds (limits,
+      // caps, 'you already have one'). A resident may file a second parcel, or
+      // fifteen, while the first waits. The settlement applies limits in
+      // chronological order of the acts. The first N welcomed stand; the rest
+      // are opposed, citing the limit." So the household claim cap
+      // (the-town/claim-cap, #2888 and POS-88 are its history) and one parcel per
+      // resident (the-town/one-per-resident, POS-368) no longer refuse here: the
+      // world's fold decides who is over a limit in claim order, and the
+      // settlement opposes each, citing its law (src/world-settlement.mjs § the
+      // limits). Telling a resident at once that a parcel will be opposed is the
+      // courtesy layer (POS-367), not this door's refusal.
 
       // ── the sovereignty guard is GONE, and it was refusing nothing ───────
       //
@@ -3729,13 +3687,9 @@ async function placingOnBehalf(by, payload, key, bounce) {
   return { placer: named ?? placers[0], consent, household };
 }
 
-/** First placement only: a resident who already holds a parcel, published or live, is refused by its id. */
-async function refuseHeldParcel(by, household, bounce) {
-  const live = await guardedLiveMarks(null, { household });
-  const held = [...canonForGuards().marks, ...live].find((m) => m.kind === "parcel" && (m.by ?? String(m.id).split("/")[0]) === by);
-  if (held) throw bounce(409, `"${by}" already holds a parcel: ${held.id}`,
-    "a placement on a resident's behalf is their first parcel only — that ground is theirs to amend or withdraw (one parcel per resident: the-town/one-per-resident)");
-}
+// A placement on a resident's behalf is no longer refused when they already
+// hold a parcel (POS-364, R11): the settlement opposes a second one, citing
+// the-town/one-per-resident, as it does for a parcel the resident files themself.
 
 // ── the write verb (credentialed) ────────────────────────────────────────────
 // world_leave_mark — leave a mark on the world. by/date are server-derived (never
@@ -3937,7 +3891,6 @@ export async function leaveMarkViaOffice(worldClone, payload = {}, key = null, {
   // live layer, their sketchbook and their cap, and their own amend must find it.
   const household = onBehalf ? onBehalf.household : String(key?.household ?? "").trim();
   if (!household) throw bounce(403, "this credential has no resident household", "sign in as a resident household before leaving a mark");
-  if (onBehalf) await refuseHeldParcel(by, household, bounce);
 
   // THE INLINE STAKE'S CALLER, ASKED BEFORE THE ACT IS WRITTEN (office #226).
   // The stake runs on THIS key with `handle: by`, and the stake door's first

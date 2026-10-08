@@ -290,28 +290,85 @@ export function vetoesOf(words) {
   return town.length || holders.length ? { town, holders } : null;
 }
 
+// ── the limits, applied by the settlement (POS-364; R11 as amended 10-04) ────
+//
+// "The office accepts every physically legal act. It does not refuse on
+// governance grounds (limits, caps, 'you already have one'). The settlement
+// applies limits in chronological order of the acts. The first N welcomed
+// stand; the rest are opposed, citing the limit." The doors and the clearing no
+// longer refuse a parcel over a limit (AUDIT G1–G5); the world's fold already
+// decides who is over one, in claim order (marks-fold § admissibility,
+// `parcelsInClaimOrder`), and says so in `errors`. Each such error becomes the
+// town's opposition on that mark, citing the law mark the fold's own sentence
+// names, so the mark leaves through the engine's return path with its subtree,
+// and a staked one stands until its stakes unwind (R10), exactly as any
+// opposition does. It is a tested rule in R12's sense: the fold is the test.
+
+/** The limits the settlement applies, each by the law mark it cites and the fold's sentence for it. */
+export const LIMITS = Object.freeze([
+  Object.freeze({ law: "the-town/one-per-resident", sentence: (e) => e.includes("the-town/one-per-resident") }),
+  Object.freeze({ law: "the-town/claim-cap", sentence: (e) => e.startsWith("parcel claim capped") }),
+]);
+
 /**
- * A settlement's sources folded WITH a set of words: `{ state, vetoes }`, the
- * one fold both the seal's words and today's go through. With no absolute veto
- * among them it is the cleared fold itself. Otherwise the arguments are folded
- * again with the town's words as `townWords` (world#146) and each holder's
- * opposed word on their parcels' `consent:` maps, so the subtree, the escrow
- * guard and `returned[]` are the engine's (R10). The parcels and households a
- * holder's word is written through are the CLEARED fold's, never those of a
- * fold some other word already took a parcel out of. `cleared` is that fold
+ * The marks a fold finds over a limit: `[{ mark, law, error }]`, in the fold's
+ * own order (claim order), from its `errors`. PURE. Any other error is not a
+ * limit and is not read here.
+ */
+export function limitOppositions(state) {
+  const out = [];
+  for (const e of state?.errors ?? []) {
+    const text = String(e?.error ?? "");
+    const limit = LIMITS.find((l) => l.sentence(text));
+    if (limit && e?.mark) out.push({ mark: String(e.mark), law: limit.law, error: text });
+  }
+  return out;
+}
+
+/**
+ * A settlement's sources folded WITH a set of words and the limits:
+ * `{ state, vetoes }`, the one fold both the seal's words and today's go
+ * through. With no absolute veto among the words and nothing over a limit it is
+ * the cleared fold itself. Otherwise the arguments are folded again with the
+ * town's words (and each limit, as the town's opposition citing its law) as
+ * `townWords` (world#146), and each holder's opposed word on their parcels'
+ * `consent:` maps, so the subtree, the escrow guard and `returned[]` are the
+ * engine's (R10). Who is over a limit, and the parcels and households a
+ * holder's word is written through, are read from the CLEARED fold, never from
+ * a fold some other word already took a parcel out of. `cleared` is that fold
  * when the caller already holds it. `vetoes.town_unread` names the town's
- * opposed marks an engine older than world#146 could not carry.
+ * opposed marks (limits included) an engine older than world#146 could not carry.
  */
 export function foldWithWords(inputs, words, cleared = null) {
-  const v = vetoesOf(words);
-  if (!v) return { state: cleared ?? foldOver(inputs), vetoes: null };
   const base = cleared ?? foldOver(inputs);
+  const rules = limitOppositions(base);
+  const v = vetoesOf(words);
+  if (!v && !rules.length) return { state: base, vetoes: null };
+  const holders = v?.holders ?? [];
+  const townWords = new Map(words?.townWords ?? []);
+  for (const r of rules) townWords.set(r.mark, "opposed");
   const hh = base.households ?? {};
   const state = foldOver(inputs, {
-    marks: withHolderWords(structuredClone(inputs.args.marks), v.holders, { parcels: base.parcels ?? [], householdOf: (h) => hh[h] ?? h }),
-    ...(inputs.townWordsRead ? { townWords: words.townWords } : {}),
+    marks: withHolderWords(structuredClone(inputs.args.marks), holders, { parcels: base.parcels ?? [], householdOf: (h) => hh[h] ?? h }),
+    ...(inputs.townWordsRead ? { townWords } : {}),
   });
-  return { state, vetoes: { ...v, ...(inputs.townWordsRead || !v.town.length ? {} : { town_unread: v.town }) } };
+  if (rules.length && inputs.townWordsRead) {
+    // The limit is the answer for these marks now: each return cites its law,
+    // and the fold's admissibility error for it is answered by that return.
+    const byMark = new Map(rules.map((r) => [r.mark, r]));
+    state.returned = (state.returned ?? []).map((x) => (byMark.has(x.mark) ? { ...x, law: byMark.get(x.mark).law, limit: byMark.get(x.mark).error } : x));
+    state.errors = (state.errors ?? []).filter((e) => !byMark.has(String(e?.mark)));
+  }
+  const town = v?.town ?? [];
+  const carriedNot = [...town, ...rules.map((r) => r.mark)];
+  return {
+    state,
+    vetoes: {
+      town, holders,
+      ...(rules.length ? { limits: rules.map(({ mark, law }) => ({ mark, law })) } : {}),
+      ...(inputs.townWordsRead || !carriedNot.length ? {} : { town_unread: carriedNot }),
+    },
+  };
 }
 
 /** The stance rows in the store, through the office's own pool. */
@@ -531,9 +588,12 @@ export async function servedSettlement(p, { settlement = null, worldRepo, townRe
       state = now.state;
       vetoes = now.vetoes;
     }
-    if (vetoes) state.__vetoes = {
-      town: vetoes.town, holders: vetoes.holders,
-      ...(vetoes.town_unread ? { town_unread: `the engine at law ${String(header.law_sha).slice(0, 12)} predates the town's word (world#146), so the town's opposition on ${vetoes.town_unread.join(", ")} could not be carried` } : {}),
+    // The limits the settlement applied are read off the World itself (each return citing its law), so a
+    // kept World answers them as well as a fresh fold does (POS-364).
+    const limits = (state.returned ?? []).filter((x) => x?.law).map((x) => ({ mark: x.mark, law: x.law }));
+    if (vetoes || limits.length) state.__vetoes = {
+      town: vetoes?.town ?? [], holders: vetoes?.holders ?? [], limits,
+      ...(vetoes?.town_unread ? { town_unread: `the engine at law ${String(header.law_sha).slice(0, 12)} predates the town's word (world#146), so the town's opposition on ${vetoes.town_unread.join(", ")} could not be carried` } : {}),
     };
     SERVED.set(servedKey, state);
     if (SERVED.size > 6) SERVED.delete(SERVED.keys().next().value);
@@ -566,7 +626,7 @@ export async function servedSettlement(p, { settlement = null, worldRepo, townRe
       },
       // A newer settlement number with no snapshot behind it yet is said, never skipped silently.
       ...(number == null && newest > n ? { newer_unsealed: `S${newest}` } : {}),
-      opposed: __vetoes ? { town: __vetoes.town, holders: __vetoes.holders } : { town: [], holders: [] },
+      opposed: __vetoes ? { town: __vetoes.town, holders: __vetoes.holders, limits: __vetoes.limits ?? [] } : { town: [], holders: [], limits: [] },
       // Whose words those are (POS-362): an asked settlement's own seal's, or today's.
       words: asked
         ? { as_of: "the seal", stance_through: seal.through }

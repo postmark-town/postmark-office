@@ -355,6 +355,11 @@ try {
 
   // 5.6 · THE PARCEL CLAIM CAP — the sweep's gate, asked at the close (POS-98).
   //
+  //     A FORECAST SINCE POS-364 (R11, Darko 2026-10-04): it no longer refuses.
+  //     The claim locks, and the settlement opposes it citing the-town/claim-cap;
+  //     the receipt's `parcel_cap.over_limit` says which. The history below is
+  //     why the count is asked here at all, and it still holds for the forecast.
+  //
   //     THE INSTANCE: window 191 cleared and LOCKED `mari/marigold-house-parcel`
   //     at 2026-09-15T17:45:46Z. The sweep, three minutes later, refused it —
   //     the cap counts per credential household, hers resolves to the founder's,
@@ -430,14 +435,21 @@ try {
           });
         }
         const verdict = parcelCapRefusals(candidates, { heldByCred, law });
+        // A FORECAST, NEVER A REFUSAL (POS-364; R11 as Darko amended it 10-04:
+        // "the office accepts every physically legal act … the settlement
+        // applies limits in chronological order of the acts"). Every claim over
+        // the cap LOCKS here like any other; the settlement opposes it, citing
+        // the-town/claim-cap (src/world-settlement.mjs § the limits). The
+        // window's receipt still says which claims are over, so the crossing
+        // and the keeper can read it before the settlement does.
         capSeen = {
           checked: true, cap: law.cap, law_date: law.lawDate, world_sha: law.sha, solo_counted: soloCounted,
-          refused: verdict.refused.map((r) => ({ slug: r.slug, held: r.held })),
+          over_limit: verdict.refused.map((r) => ({ slug: r.slug, held: r.held })),
+          applied_by: "the settlement (the-town/claim-cap), never this clearing",
           excepted: verdict.admitted.filter((a) => a.excepted).map((a) => a.slug),
           judged: candidates.length,
         };
-        for (const r of verdict.refused) decide(r.id, "refused", r.check);
-        for (const line of parcelCapLines(verdict, law)) console.log(`  ⚑ ${line}`);
+        for (const line of parcelCapLines(verdict, law)) console.log(`  ⚑ ${line} (a forecast: it locks, and the settlement opposes it)`);
       }
     }
   }

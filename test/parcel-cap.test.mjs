@@ -200,7 +200,7 @@ test("nothing to judge prints nothing", () => {
 
 // ── the wiring, and the docket ──────────────────────────────────────────────
 
-test("THE WIRING: clearing-job asks the gate and writes its check onto the claim", () => {
+test("THE WIRING: clearing-job asks the gate as a FORECAST and never refuses the claim (POS-364, R11)", () => {
   // clearing-job.mjs connects to Postgres at import and is not importable, so
   // this reads its source — the same shape window-reanchor.test.mjs already uses
   // for this file. Weak as proofs go, and it is the only thing between the gate
@@ -215,12 +215,13 @@ test("THE WIRING: clearing-job asks the gate and writes its check onto the claim
   // could not fail for the break it named. Found by the flip, which is the only
   // thing that could have found it.
   const from = src.indexOf("// 5.6 · THE PARCEL CLAIM CAP");
-  const to = src.indexOf("// 6 · everything still undecided LOCKS");
-  assert.ok(from !== -1 && to > from, "step 5.6's block must be findable between its own marker and step 6");
+  const to = src.indexOf("// 5.7 · THE CARRY");          // POS-441 put the carry between 5.6 and 6
+  assert.ok(from !== -1 && to > from, "step 5.6's block must be findable between its own marker and step 5.7");
   const step = src.slice(from, to);
 
   assert.ok(step.includes("parcelCapRefusals("), "step 5.6 must ask the gate");
-  assert.ok(step.includes('decide(r.id, "refused", r.check)'), "and write its sentence onto the claim");
+  assert.ok(!step.includes("decide("), "and decides nothing: the claim locks, and the settlement opposes it (R11)");
+  assert.ok(step.includes("over_limit:"), "its account says which claims are over the limit");
   assert.ok(step.includes("parcelCapLawAt("), "reading the law from the world checkout, not from a constant here");
   assert.ok(/amending:\s*amends\.has\(/.test(step), "and telling the gate which claims are amendments (POS-88)");
   assert.ok(src.includes("parcel_cap: capSeen"), "and put its account on the window's receipt");
