@@ -19,9 +19,10 @@
 // functions --append calls, in --append's order: deriveMints,
 // deriveFriendshipMints, combineDerived, walkLedger (a divergent ledger appends
 // nothing), deriveTransfers, interleaveByDelivery. Then it signs the owed lines
-// onto the export with the engine's own appendSigned, records them in
-// stamp_lines and commits the export, all in ONE store transaction (src/stamp-
-// lines.mjs § the pen's transaction). Its output is --append's, line for line:
+// onto the export with the engine's own appendSigned, verifies it, and then,
+// in one SHORT store transaction (SQL and the push only: § mintFromStore),
+// records them in stamp_lines and commits the export (src/stamp-lines.mjs §
+// the pen's transaction). Its output is --append's, line for line:
 // test/stamp-mint-run.test.mjs holds the two byte-equal on a fixture town.
 //
 //   node world2/tools/stamp-mint-run.mjs --append --key <ed25519 pem> [--clone <town clone>] [--message <commit message>]
@@ -32,12 +33,13 @@
 // a refusal by name, never a mint from nothing. Exit 0 appended or up to date,
 // 1 refused.
 
-import { existsSync, realpathSync, readFileSync } from "node:fs";
+import { existsSync, realpathSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { mintInputsVia, keyBaseOf, sealedDatesOf, deliveriesOf } from "../../src/mint-inputs.mjs";
-import { engineOf, stampLinesVia, syncStampLinesVia } from "../../src/stamp-lines.mjs";
+import { engineOf, stampLinesVia, syncStampLinesVia, stampRowsPast, stampHeadVia, lockStampLinesVia, insertStampRowsVia } from "../../src/stamp-lines.mjs";
 import { penCommit } from "../../src/write.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -76,54 +78,97 @@ export function owedFromStore(engine, { entries, mailLines, pins, rooms }) {
   };
 }
 
+/** How many times the pass decides again when the chain's head moved under it, before it refuses. */
+export const HEAD_TRIES = 3;
+
+// The push is the one non-SQL step left inside the landing transaction, and it
+// cannot move out: the store commits only after git lands, so a push that
+// cannot land rolls the store back (src/stamp-lines.mjs § the pen's
+// transaction). A push can take longer than the store's idle budget on a slow
+// network, so that one transaction names its own (WORLD2_PG_LAND_TX_MS).
+export const LAND_TX_MS_DEFAULT = 120_000;
+const landTxMs = (env) => { const n = Number(env.WORLD2_PG_LAND_TX_MS); return Number.isFinite(n) && n > 0 ? n : LAND_TX_MS_DEFAULT; };
+
+const MOVED = Symbol("the chain's head moved");
+
 /**
- * The pass: one store transaction. Record whatever git holds past the store
- * (the store reads git), decide from the store, sign the owed lines onto the
- * export, record them, commit the export. A refusal anywhere rolls the store
- * back and leaves the export as it arrived. Returns the summary, or throws.
+ * The pass. A WRITE TRANSACTION NEVER SPANS NON-SQL WORK (Wright's review of
+ * #415, 2026-10-07: the 30 s idle-transaction budget killed a pass that held
+ * one open across the derivation and the town's full verify, and a raised
+ * budget would only have held every other stamp writer that long):
+ *
+ *   1. the store reads git: whatever the export holds past the store is
+ *      recorded, in its own short transaction (a few lines, or none);
+ *   2. one READ ONLY transaction reads the chain and the inputs, SQL only;
+ *   3. with NO transaction open: decide (the town's own derivation), sign the
+ *      owed lines onto the export, run the town's full verifier over it, and
+ *      compute the rows the store will hold (every seal and signature);
+ *   4. one short write transaction: re-read the chain's head, and if it is not
+ *      the head step 3 decided against, put the export back and decide again
+ *      (HEAD_TRIES times, then refuse by name); else insert the rows and land
+ *      the commit, the store committing last.
+ *
+ * A refusal anywhere leaves the export as it arrived and the store as it was.
+ * Returns the summary, or throws. `verify` is the town's verifyStampLedger by
+ * default (a test seam: it is the step that takes seconds).
  */
-export async function mintFromStore(clone, { keyPem, message = "mint: crossing pass", env = process.env, engine = null } = {}) {
+export async function mintFromStore(clone, { keyPem, message = "mint: crossing pass", env = process.env, engine = null, verify = null } = {}) {
   const eng = engine ?? await engineOf(clone);
-  const { officeWrite } = await import("../../src/world2-pen.mjs");
+  const { officeRead, officeWrite } = await import("../../src/world2-pen.mjs");
   const ledger = join(clone, "WHITE_PAGES", "stamp-ledger.md");
   const arrived = existsSync(ledger) ? readFileSync(ledger, "utf8") : null;
+  const putBack = () => {
+    if (arrived != null && existsSync(ledger) && readFileSync(ledger, "utf8") !== arrived) writeFileSync(ledger, arrived);
+  };
+  const verifyLedger = verify ?? (await import(pathToFileURL(join(clone, "tools", "stamp-verify.mjs")).href)).verifyStampLedger;
   try {
-    return await officeWrite(async (client) => {
-      await syncStampLinesVia(client, clone, { engine: eng });
-      const inputs = await mintInputsVia(client);
+    await officeWrite((client) => syncStampLinesVia(client, clone, { engine: eng }), { env });
+    for (let attempt = 1; attempt <= HEAD_TRIES; attempt++) {
+      const { inputs, entries } = await officeRead(async (client) =>
+        ({ inputs: await mintInputsVia(client), entries: await stampLinesVia(client) }), { env });
       if (!inputs.rooms.size) throw new Error("town_rooms is empty: the store has no key base yet (apply 067 and run the town-index ingest)");
       if (!inputs.mailLines.length) throw new Error("town_mail_lines is empty: the store has no deliveries yet (apply 067 and run the town-index ingest)");
-      const entries = await stampLinesVia(client);
       if (!entries.length) throw new Error("stamp_lines is empty: record the chain first (stamp-lines.mjs --sync)");
       const d = owedFromStore(eng, { entries, ...inputs });
       if (d.problems.length) throw new Error(`the recorded ledger diverges from the derivation; nothing appended\n${d.problems[0]}`);
       if (!d.lines.length) return { appended: 0, summary: "stamp-ledger: up to date — nothing to mint" };
       eng.appendSigned(clone, d.lines, keyPem);
-      const rec = await syncStampLinesVia(client, clone, { engine: eng });
-      if (rec.inserted !== d.lines.length) throw new Error(`signed ${d.lines.length} line(s) and the store recorded ${rec.inserted}; nothing committed`);
-      // ONLY A GREEN VERIFY COMMITS, as it did when the chain verified before
-      // its own commit (the ferry's POS-295 rule): the town's verifier over the
-      // export, every check it makes, before the commit and inside the store
-      // transaction, so a red one rolls both back.
-      const { verifyStampLedger } = await import(pathToFileURL(join(clone, "tools", "stamp-verify.mjs")).href);
-      const v = verifyStampLedger(clone);
+      // ONLY A GREEN VERIFY COMMITS (the ferry's POS-295 rule): the town's
+      // verifier over the export, every check it makes, before the commit.
+      const v = await verifyLedger(clone);
       if (!v.ok) throw new Error(`stamp-verify is red over the appended ledger; nothing committed\n${v.problems[0]}`);
-      const commit = penCommit(clone, [ledger], message);
-      return {
-        appended: d.lines.length, commit,
-        summary: `stamp-ledger: appended ${d.lines.length} line(s) — ${d.mints} mint(s), ${d.moved} transfer(s), ${d.voided} void(s) (${d.recorded} already recorded), decided from the store`,
-      };
-    }, { env });
+      const head = entries.at(-1);
+      const fresh = stampRowsPast(clone, { ...head, seq: entries.length }, { engine: eng });
+      if (fresh.length !== d.lines.length) throw new Error(`signed ${d.lines.length} line(s) and the export holds ${fresh.length} past the store; nothing committed`);
+      const out = await officeWrite(async (client) => {
+        await lockStampLinesVia(client);
+        const now = await stampHeadVia(client);
+        if (!now || now.seq !== entries.length || now.sig !== head.sig) return MOVED;
+        await insertStampRowsVia(client, fresh);
+        await client.query("SELECT set_config('idle_in_transaction_session_timeout', $1, true)", [String(landTxMs(env))]);
+        const base = git(clone, "rev-parse", "HEAD");
+        const commit = penCommit(clone, [ledger], message);
+        // A lost push race rebases the commit onto the remote's: the lines it
+        // brought in are recorded too (none, in the town lock's ordinary case).
+        if (commit && git(clone, "rev-parse", `${commit}^`) !== base) await syncStampLinesVia(client, clone, { engine: eng });
+        return {
+          appended: d.lines.length, commit,
+          summary: `stamp-ledger: appended ${d.lines.length} line(s) — ${d.mints} mint(s), ${d.moved} transfer(s), ${d.voided} void(s) (${d.recorded} already recorded), decided from the store`,
+        };
+      }, { env });
+      if (out !== MOVED) return out;
+      putBack();
+    }
+    throw new Error(`the stamp chain's head moved under the mint ${HEAD_TRIES} times running (another writer is appending); nothing appended — the next pass decides again`);
   } catch (e) {
     // The export goes back to its arrival bytes: a pass that did not land leaves
     // nothing behind (penCommit has already unmade an unlanded commit).
-    if (arrived != null && existsSync(ledger) && readFileSync(ledger, "utf8") !== arrived) {
-      const { writeFileSync } = await import("node:fs");
-      writeFileSync(ledger, arrived);
-    }
+    putBack();
     throw e;
   }
 }
+
+const git = (repo, ...args) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
 
 function arg(name, fallback = null) { const i = process.argv.indexOf(`--${name}`); return i === -1 ? fallback : process.argv[i + 1]; }
 

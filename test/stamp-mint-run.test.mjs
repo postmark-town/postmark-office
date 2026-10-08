@@ -12,6 +12,14 @@
 // ledgers must be byte-equal, the store must hold B's export line for line, and
 // a second pass must find nothing owed. The runner must read the STORE: a pin
 // missing from the store changes what it owes.
+//
+// A WRITE TRANSACTION NEVER SPANS NON-SQL WORK (Wright's review of #415): the
+// whole file runs with the store's idle-in-transaction budget at 2 s
+// (WORLD2_PG_IDLE_TX_MS), so a pass that holds a transaction open across its
+// derivation or the town's verify is killed here as it was in the #415 sandbox
+// ("a held connection failed (officeWrite): Connection terminated
+// unexpectedly"). And while the pass runs the verify, another writer takes the
+// stamp_lines lock within a second: nothing holds it.
 
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
@@ -73,7 +81,7 @@ before(async () => {
       [p.handle, p.login ?? "", p.gh_id, p.pinned ?? null, p.renamed ?? null, p.note ?? null, p.retired ?? null, p.renamed_to ?? null]);
   await ingester.query("BEGIN"); await writeMintInputs(ingester, B); await ingester.query("COMMIT");
   await office.query("BEGIN"); await syncStampLinesVia(office, B, { engine }); await office.query("COMMIT");
-  Object.assign(process.env, { WORLD2_PG: "1", WORLD2_PG_URL: store.url("office_api"), TOWN_PUSH: "" });
+  Object.assign(process.env, { WORLD2_PG: "1", WORLD2_PG_URL: store.url("office_api"), TOWN_PUSH: "", WORLD2_PG_IDLE_TX_MS: "2000" });
   runner = await import("../world2/tools/stamp-mint-run.mjs");
 });
 after(async () => {
@@ -85,8 +93,24 @@ after(async () => {
 test("the runner, deciding from the store, writes the ledger the town's --append writes, byte for byte", async (t) => {
   if (skip) return t.skip(skip);
   const cli = execFileSync(process.execPath, [join(A, "tools", "stamp-mint.mjs"), "--append", "--key", keyFile, "--repo", A], { encoding: "utf8" });
-  const out = await runner.mintFromStore(B, { keyPem: PRIV });
+  // While the pass verifies, another stamp writer takes the chain's lock: it
+  // waits for no transaction of the pass's (lock_timeout 1 s).
+  const { verifyStampLedger } = await import(pathToFileURL(join(B, "tools", "stamp-verify.mjs")).href);
+  let probed = null;
+  const verify = async (clone) => {
+    const t0 = Date.now();
+    await owner.query("BEGIN");
+    try {
+      await owner.query("SET LOCAL lock_timeout = '1s'");
+      await owner.query("SELECT pg_advisory_xact_lock(hashtext('stamp_lines'))");
+      probed = { ok: true, ms: Date.now() - t0 };
+    } catch (e) { probed = { ok: false, error: e.message }; }
+    finally { await owner.query("ROLLBACK"); }
+    return verifyStampLedger(clone);
+  };
+  const out = await runner.mintFromStore(B, { keyPem: PRIV, verify });
   console.log(`# town: ${cli.trim()}\n# runner: ${out.summary}`);
+  assert.deepEqual(probed?.ok, true, `a concurrent stamp writer took the lock during the verify: ${JSON.stringify(probed)}`);
   assert.ok(out.appended > 0, "the fixture owes lines");
   const a = readFileSync(join(A, "WHITE_PAGES", "stamp-ledger.md"), "utf8");
   const b = readFileSync(join(B, "WHITE_PAGES", "stamp-ledger.md"), "utf8");
