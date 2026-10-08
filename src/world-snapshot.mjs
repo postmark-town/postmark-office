@@ -39,10 +39,12 @@ export function marksDigestOf(pairs) {
 }
 
 /** The snapshot digest over the list digest and the fold's other inputs, as the seal computes it. */
-export function snapshotDigestOf({ marks_digest, law_sha, town_sha, world_sha, register_digest = null }) {
-  // A header sealed before 064 has no register and its digest has four parts.
+export function snapshotDigestOf({ marks_digest, law_sha, town_sha, world_sha, register_digest = null, stance_through = null }) {
+  // A header sealed before 064 has no register and its digest has four parts;
+  // one sealed with no word read (before 069, or back-filled) has no sixth.
   const base = `${marks_digest} ${law_sha ?? "-"} ${town_sha ?? "-"} ${world_sha ?? "-"}`;
-  return sha256(register_digest ? `${base} ${register_digest}` : base);
+  const withRegister = register_digest ? `${base} ${register_digest}` : base;
+  return sha256(stance_through != null ? `${withRegister} ${stance_through}` : withRegister);
 }
 
 /** A snapshot header: by window, by id, or the newest. Null when there is none. */
@@ -344,7 +346,11 @@ export async function snapshotFoldInputs(p, header, { townRepo = null } = {}) {
  */
 export async function foldOfSnapshot(p, header, { fold, townRepo = null, filing = null }) {
   const { args, stakesSource, householdsSource } = await snapshotFoldArgs(p, header, { townRepo, filing });
-  return { state: fold(args), stakesSource, householdsSource };
+  // `args` back beside the state, so a caller folds the same arguments again with
+  // the seal's words (POS-362, src/world-settlement.mjs § foldWithWords), never a
+  // second derivation. The engine stamps its working fields onto what it folds, so
+  // it folds a copy.
+  return { state: fold(structuredClone(args)), args, stakesSource, householdsSource };
 }
 
 /**

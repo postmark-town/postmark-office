@@ -25,18 +25,31 @@
 //      the town at the ledger position, the households from the register at the
 //      seal through the town's own resolver. Then it keeps the result.
 //
-//   3. MINUS THE OPPOSED. The absolute vetoes only (R16): the town's opposed
+//   3. ITS WORDS (POS-362; Darko 2026-10-08, option A). The opposed half is a
+//      source of the settlement like its marks: the seal records the newest
+//      stance act (069 `stance_through`), and the settlement's World is its
+//      sources folded WITH the words standing at the seal (§ wordsAtSeal: the
+//      acts up to stance_through, on the versions that stood at the seal's
+//      window). That World is what `world_snapshot_folds` keeps under the
+//      digest (which covers stance_through), what `--verify` re-derives, and
+//      what an asked `?settlement=S<n>` serves: its own seal's words only. A
+//      snapshot with no stance_through (sealed before 069, back-filled) folds
+//      with none, which is what it published.
+//
+//   4. MINUS THE OPPOSED SINCE. The newest World (no settlement asked) takes the
+//      words standing NOW, at once (R16). The absolute vetoes only: the town's opposed
 //      word, and a parcel holder's opposed word on a mark over their own ground,
 //      each on the mark's CURRENT version (an amendment reopens every word,
 //      R14). They are not subtracted here. The settlement's own arguments are
-//      folded AGAIN with the words beside them, so the world's own return path
+//      folded AGAIN with today's words beside them, so the world's own return path
 //      carries them (R10: "so the existing return path carries it"): the
 //      subtree, the escrow guard (an opposed mark with open stakes stands until
 //      they unwind) and `returned[]`, every one the engine's. The town's words
 //      go in as `townWords` (consent.mjs § THE TOWN'S WORD, world#146); a
 //      holder's as their parcel's consent word, the field the parcel veto has
-//      always read (consent.mjs § the parcel domain). With nothing opposed the
-//      served World IS the cached one, byte for byte.
+//      always read (consent.mjs § the parcel domain). With the same absolute
+//      vetoes standing now as at the seal, the served World IS the kept one,
+//      byte for byte.
 //
 // Market opposition is not a veto (R16) and is not read here: it is
 // density-weighted and the settlement's fold applies it (POS-369). A holder's
@@ -232,6 +245,75 @@ export async function vetoesFrom(rows, versions) {
   return { townWords, holderOpposed, words };
 }
 
+// ── the settlement's own words: those standing at its seal (POS-362) ────────
+
+/** The stance acts up to a seal's `stance_through`, in the shape `STANCE_ACTS_SQL` reads. */
+export const STANCE_ACTS_THROUGH_SQL =
+  "SELECT id, at, crossing, actor, action, object, at_anchor, at_dx, at_dy, witnesses, class, payload, effect, household"
+  + " FROM acts WHERE class = 'stance' AND id <= $1 ORDER BY id";
+
+const atMs = (t) => (t instanceof Date ? t.getTime() : Date.parse(String(t ?? "")));
+
+/**
+ * THE WORDS A SETTLEMENT WAS SEALED WITH: `{ townWords, holderOpposed, words,
+ * through, versions }`, the shape `vetoesFrom` gives for the words standing now,
+ * so the one fold (§ foldWithWords) takes either. The acts are the store's
+ * stance acts up to the header's `stance_through` (and the drained 1.0
+ * photographs written by the seal's instant); each word counts only on the
+ * version that stood at the seal's window (town-stance.mjs §
+ * readVersionsAtSeal), so an amendment cleared after the seal cannot reach back
+ * into it. No stance_through: no word was read at this seal, and the settlement
+ * has none. Throws when the record cannot be read: a settlement is never built
+ * without its words.
+ */
+export async function wordsAtSeal(p, header, { worldRepo } = {}) {
+  if (header?.stance_through == null) return { townWords: new Map(), holderOpposed: [], words: [], through: null, versions: null };
+  const { stanceRows } = await import("./world-stance.mjs");
+  const { readVersionsAtSeal } = await import("./town-stance.mjs");
+  const { rows: acts } = await p.query(STANCE_ACTS_THROUGH_SQL, [header.stance_through]);
+  const sealedAt = atMs(header.taken_at);
+  const rows = (await stanceRows({ acts, worldClone: worldRepo }))
+    .filter((r) => r.register || !(atMs(r.written_at) > sealedAt));
+  const read = await readVersionsAtSeal(rows.map((r) => r.object), {
+    query: async (sql, args) => ({ rows: (await p.query(sql, args)).rows }), window: header.window_id, at: header.taken_at,
+  });
+  if (read.unreachable) throw new Error(`the versions at snapshot ${header.id}'s seal could not be read: ${read.unreachable}`);
+  return { ...(await vetoesFrom(rows, read.versions)), through: String(header.stance_through), versions: read.versions };
+}
+
+const opposedTownOf = (words) => [...(words?.townWords ?? new Map())].filter(([, w]) => w === "opposed").map(([id]) => id);
+
+/** The absolute vetoes among a set of words, as `meta.opposed` names them; null when there are none. */
+export function vetoesOf(words) {
+  const town = opposedTownOf(words);
+  const holders = words?.holderOpposed ?? [];
+  return town.length || holders.length ? { town, holders } : null;
+}
+
+/**
+ * A settlement's sources folded WITH a set of words: `{ state, vetoes }`, the
+ * one fold both the seal's words and today's go through. With no absolute veto
+ * among them it is the cleared fold itself. Otherwise the arguments are folded
+ * again with the town's words as `townWords` (world#146) and each holder's
+ * opposed word on their parcels' `consent:` maps, so the subtree, the escrow
+ * guard and `returned[]` are the engine's (R10). The parcels and households a
+ * holder's word is written through are the CLEARED fold's, never those of a
+ * fold some other word already took a parcel out of. `cleared` is that fold
+ * when the caller already holds it. `vetoes.town_unread` names the town's
+ * opposed marks an engine older than world#146 could not carry.
+ */
+export function foldWithWords(inputs, words, cleared = null) {
+  const v = vetoesOf(words);
+  if (!v) return { state: cleared ?? foldOver(inputs), vetoes: null };
+  const base = cleared ?? foldOver(inputs);
+  const hh = base.households ?? {};
+  const state = foldOver(inputs, {
+    marks: withHolderWords(structuredClone(inputs.args.marks), v.holders, { parcels: base.parcels ?? [], householdOf: (h) => hh[h] ?? h }),
+    ...(inputs.townWordsRead ? { townWords: words.townWords } : {}),
+  });
+  return { state, vetoes: { ...v, ...(inputs.townWordsRead || !v.town.length ? {} : { town_unread: v.town }) } };
+}
+
 /** The stance rows in the store, through the office's own pool. */
 export const STANCE_ACTS_SQL =
   "SELECT id, at, crossing, actor, action, object, at_anchor, at_dx, at_dy, witnesses, class, payload, effect, household"
@@ -296,14 +378,25 @@ export function vetoKey(townWords, holderOpposed) {
   return createHash("sha256").update(JSON.stringify([town, holderOpposed ?? []])).digest("hex").slice(0, 16);
 }
 
-const SERVED = new Map();       // `${digest}|${vetoKey}` -> state
+const SERVED = new Map();       // `${digest}|${vetoKey | "seal"}` -> state
+const SEALS = new Map();        // digest -> the words its seal was struck with
 const LABELLED = new Map();     // `${digest}|${vetoKey}|${labelKey}` -> marks
 const NOW = { at: 0, key: null, value: null };
 /** How long a read of "which settlement, which words" is reused: R16's "within its refresh". */
 export const REFRESH_MS = 60_000;
 
 /** Test seam: forget every cached read. */
-export function resetSettlementCaches() { SERVED.clear(); LABELLED.clear(); ARGS.clear(); NOW.at = 0; NOW.key = null; NOW.value = null; }
+export function resetSettlementCaches() { SERVED.clear(); LABELLED.clear(); ARGS.clear(); SEALS.clear(); NOW.at = 0; NOW.key = null; NOW.value = null; }
+
+/** A seal's words, read once per digest: a sealed settlement's words never change. */
+async function sealWordsOf(p, header, { worldRepo }) {
+  const hit = SEALS.get(header.digest);
+  if (hit) return hit;
+  const w = await wordsAtSeal(p, header, { worldRepo });
+  SEALS.set(header.digest, w);
+  if (SEALS.size > 8) SEALS.delete(SEALS.keys().next().value);
+  return w;
+}
 
 async function refreshed(key, read, now = Date.now()) {
   if (NOW.key === key && now - NOW.at < REFRESH_MS) return NOW.value;
@@ -401,43 +494,53 @@ export async function servedSettlement(p, { settlement = null, worldRepo, townRe
   if (!found) return null;
   const { header, newest } = found;
 
-  const vk = words.unread ? "unread" : vetoKey(words.townWords, words.holderOpposed);
-  const servedKey = `${header.digest}|${vk}`;
+  // ASKED BY NAME, a settlement is its own seal's words only; the newest World
+  // is today's words (Darko, 2026-10-08). The seal's words are read once per digest.
+  const asked = number != null;
+  const seal = await sealWordsOf(p, header, { worldRepo });
+  const applied = asked ? seal : words;
+  const sealKey = vetoKey(seal.townWords, seal.holderOpposed);
+  const vk = applied.unread ? "unread" : vetoKey(applied.townWords, applied.holderOpposed);
+  const servedKey = `${header.digest}|${asked ? "seal" : vk}`;
   let state = SERVED.get(servedKey) ?? null;
   let built = false;
   if (!state) {
     let text = await cachedFoldText(p, header.digest);
-    let inputs = null;
+    let inputs = null, cleared = null, kept = null;
     if (text == null) {
+      // The settlement's World: its sources and its seal's words, kept under its digest.
       inputs = await settlementFoldInputs(p, header, { worldRepo, townRepo });
-      text = foldText(foldOver(inputs));
+      cleared = foldOver(inputs);
+      kept = foldWithWords(inputs, seal, cleared);
+      text = foldText(kept.state);
       await keepFold(p, header.digest, text);
       built = true;
     }
-    const cached = JSON.parse(text);
-    const opposedTown = words.unread ? [] : [...words.townWords].filter(([, w]) => w === "opposed").map(([id]) => id);
-    const opposedHolders = words.unread ? [] : words.holderOpposed;
-    if (!opposedTown.length && !opposedHolders.length) {
-      state = cached;
+    let vetoes;
+    if (applied.unread || vk === sealKey) {
+      // The kept World IS this view: the seal's words, or today's when their vetoes are the seal's.
+      state = JSON.parse(text);
+      vetoes = kept ? kept.vetoes : vetoesOf(seal);
+      if (vetoes && !kept && opposedTownOf(seal).length) {
+        inputs ??= await settlementFoldInputs(p, header, { worldRepo, townRepo });
+        if (!inputs.townWordsRead) vetoes = { ...vetoes, town_unread: vetoes.town };
+      }
     } else {
       inputs ??= await settlementFoldInputs(p, header, { worldRepo, townRepo });
-      const hh = cached.households ?? {};
-      const householdOf = (h) => hh[h] ?? h;
-      state = foldOver(inputs, {
-        marks: withHolderWords(structuredClone(inputs.args.marks), opposedHolders, { parcels: cached.parcels ?? [], householdOf }),
-        ...(inputs.townWordsRead ? { townWords: words.townWords } : {}),
-      });
-      state.__vetoes = {
-        town: opposedTown, holders: opposedHolders,
-        ...(inputs.townWordsRead || !opposedTown.length ? {} : { town_unread: `the engine at law ${String(header.law_sha).slice(0, 12)} predates the town's word (world#146), so the town's opposition on ${opposedTown.join(", ")} could not be carried` }),
-      };
+      const now = foldWithWords(inputs, applied, cleared);
+      state = now.state;
+      vetoes = now.vetoes;
     }
+    if (vetoes) state.__vetoes = {
+      town: vetoes.town, holders: vetoes.holders,
+      ...(vetoes.town_unread ? { town_unread: `the engine at law ${String(header.law_sha).slice(0, 12)} predates the town's word (world#146), so the town's opposition on ${vetoes.town_unread.join(", ")} could not be carried` } : {}),
+    };
     SERVED.set(servedKey, state);
     if (SERVED.size > 6) SERVED.delete(SERVED.keys().next().value);
   }
 
   const { __vetoes, ...world } = state;
-  const labels = await labelsFor(p, header, world, words, { worldRepo, servedKey });
+  const labels = await labelsFor(p, header, world, applied, { worldRepo, servedKey, seal: asked ? seal : null });
   if (labels.marks) world.marks = labels.marks;
   const n = Number(header.settlement);
   return {
@@ -464,8 +567,12 @@ export async function servedSettlement(p, { settlement = null, worldRepo, townRe
       // A newer settlement number with no snapshot behind it yet is said, never skipped silently.
       ...(number == null && newest > n ? { newer_unsealed: `S${newest}` } : {}),
       opposed: __vetoes ? { town: __vetoes.town, holders: __vetoes.holders } : { town: [], holders: [] },
+      // Whose words those are (POS-362): an asked settlement's own seal's, or today's.
+      words: asked
+        ? { as_of: "the seal", stance_through: seal.through }
+        : { as_of: "now", seal_stance_through: seal.through },
       ...(__vetoes?.town_unread ? { opposed_unread: __vetoes.town_unread } : {}),
-      ...(words.unread ? { opposed_unread: `the standing words could not be read, so nothing opposed since the seal is taken away here: ${words.unread}` } : {}),
+      ...(applied.unread ? { opposed_unread: `the standing words could not be read, so nothing opposed since the seal is taken away here: ${words.unread}` } : {}),
       ...(built ? { built: "derived from the snapshot's sources on this read, and kept" } : {}),
       ...(labels.unread ? { labels_unread: labels.unread } : {}),
       ...(labels.omitted ? { labels_omitted: labels.omitted } : {}),
@@ -493,7 +600,7 @@ async function overlapsAt(worldRepo, sha) {
  * owes a word it may have spoken). Kept per served World and per the words
  * standing, so a refresh with nothing new costs nothing.
  */
-async function labelsFor(p, header, world, words, { worldRepo, servedKey }) {
+async function labelsFor(p, header, world, words, { worldRepo, servedKey, seal = null }) {
   if (words.unread) return { unread: `the standing words could not be read: ${words.unread}` };
   // NO CUTOVER, NO LABELS (Wright, 2026-10-07). R14 carries the old blessing
   // over; until TOWN_STANCE_CUTOVER names the settlement it carries over from,
@@ -502,7 +609,7 @@ async function labelsFor(p, header, world, words, { worldRepo, servedKey }) {
   // served read's side of a seam with POS-361's town seat (town-stance.mjs §
   // townSeatOf, open on every mark while the cutover is unset): the stance
   // inbox keeps that rule; what residents see on the World is this one.
-  const { readCutover, readVersions, CUTOVER_KEY, cutoverNumber } = await import("./town-stance.mjs");
+  const { readCutover, readVersions, readVersionsAtSeal, CUTOVER_KEY, cutoverNumber } = await import("./town-stance.mjs");
   try { if (cutoverNumber() == null) return { omitted: `town_stance and awaiting are omitted: ${CUTOVER_KEY} is not set, so the old blessing carries over (R14) and no mark is labelled` }; }
   catch (e) { return { unread: `the labels could not be read: ${String(e?.defect ?? e?.message ?? e).slice(0, 200)}` }; }
   try {
@@ -512,7 +619,11 @@ async function labelsFor(p, header, world, words, { worldRepo, servedKey }) {
     const query = async (sql, args) => (await p.query(sql, args)).rows;
     const cutover = await readCutover({ query });
     const ids = (world.marks ?? []).filter((m) => m?.id && m.kind !== "class").map((m) => m.id);
-    const read = await readVersions(ids, { query: async (sql, args) => ({ rows: await query(sql, args) }) });
+    // An asked settlement is labelled as it stood at its seal: its seal's words, on its seal's versions.
+    const ask = async (sql, args) => ({ rows: await query(sql, args) });
+    const read = seal
+      ? await readVersionsAtSeal(ids, { query: ask, window: header.window_id, at: header.taken_at })
+      : await readVersions(ids, { query: ask });
     if (read.unreachable) return { unread: read.unreachable };
     const hh = world.households ?? {};
     const marks = await labelMarks(world.marks ?? [], {

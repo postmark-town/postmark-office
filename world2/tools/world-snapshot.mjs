@@ -33,8 +33,11 @@
 //      order derived from their filings (src/world-filing-order.mjs). The git
 //      reads are at law_sha: the engine's code, the freeze manifest and the tree's
 //      filings. Then, for the newest snapshot, the same fold over the store's own
-//      standing rows (the office's read, real uuids), and against a cached fold
-//      and a --published file. Folds are compared VALUE-EQUAL, as canonical JSON
+//      standing rows (the office's read, real uuids). Then THE SETTLEMENT: the same
+//      sources with the words standing at the seal (069 stance_through, POS-362),
+//      against the cached fold (the office keeps the settlement); and the fold
+//      before the words against a --published file (git's printout reads no
+//      words, POS-364/365). Folds are compared VALUE-EQUAL, as canonical JSON
 //      (keys sorted, every array in order; Wright, 2026-10-05). jsonb keeps no key
 //      order, so a key order is never a difference, and an array order always is.
 //      A difference names its first key, and says when only an order differs.
@@ -95,7 +98,7 @@ try {
   const isNewest = newest && newest.id === header.id;
   console.log(`snapshot ${header.id} · window ${header.window_id ?? "∅"} · ${header.marks} mark(s) · digest ${header.digest.slice(0, 12)} · taken ${new Date(header.taken_at).toISOString()}${isNewest ? " (the newest)" : ""}`);
   if (header.source === "backfill") console.log(`  back-filled from settlement tag ${header.law_sha?.slice(0, 12)}; its ledger position was found ${header.town_sha_from === "named" ? "in the tag's own message" : "as town main at the tag's commit time"}`);
-  console.log(`  law ${header.law_sha?.slice(0, 12) ?? "∅"} · town ${header.town_sha?.slice(0, 12) ?? "∅"} · world ${header.world_sha?.slice(0, 12) ?? "∅"} · register ${header.register_digest?.slice(0, 12) ?? "∅ (sealed before 064)"}`);
+  console.log(`  law ${header.law_sha?.slice(0, 12) ?? "∅"} · town ${header.town_sha?.slice(0, 12) ?? "∅"} · world ${header.world_sha?.slice(0, 12) ?? "∅"} · register ${header.register_digest?.slice(0, 12) ?? "∅ (sealed before 064)"} · words through ${header.stance_through ?? "∅ (none read: before 069, or back-filled)"}`);
 
   // 1 · the digests
   const rows = await snapshotRows(client, header.marks_digest);
@@ -149,7 +152,7 @@ try {
     const { fold } = await import(pathToFileURL(join(tools, "tools", "marks-fold.mjs")).href);
     const { filingAt, inFilingOrder } = await import("../../src/world-filing-order.mjs");
     const filing = filingAt(worldRepo, header.law_sha);
-    const { state: derived, stakesSource, householdsSource } = await foldOfSnapshot(client, header, { fold, townRepo, filing });
+    const { state: derived, args, stakesSource, householdsSource } = await foldOfSnapshot(client, header, { fold, townRepo, filing });
     console.log(`  · world: derived from the snapshot's sources — the engine, class marks and terrain at law ${header.law_sha.slice(0, 12)}; stakes ${stakesSource}; households ${householdsSource}; the marks in their filing order (${filing.frozen.size} frozen, ${filing.filed.size} filed at that sha, the rest by the write-down's rule)`);
     if (isNewest) {
       const { marksFromRows } = await import("../../src/world2-fold.mjs");
@@ -159,9 +162,22 @@ try {
       const storeFold = fold({ marks: inFilingOrder(marksFromRows(storeRows, inputs.lawRows), filing), terrain: inputs.terrain, stakes: inputs.stakes, households: inputs.households });
       compareFolds("world vs the store rows' fold", derived, storeFold);
     }
+    // THE SETTLEMENT'S WORLD (POS-362, 069): the same sources folded with the
+    // words standing at the seal (the stance acts up to stance_through, on the
+    // versions at the seal's window). That is what the office keeps under the
+    // digest. With no stance_through, or no absolute veto among the words, it IS
+    // the derived fold above.
+    const { wordsAtSeal, foldWithWords } = await import("../../src/world-settlement.mjs");
+    const words = await wordsAtSeal(client, header, { worldRepo });
+    let consent = null;
+    try { consent = await import(pathToFileURL(join(tools, "tools", "consent.mjs")).href); } catch { consent = null; }
+    const settled = foldWithWords({ fold, args, townWordsRead: consent ? consent.TOWN_WORDS instanceof Set : false }, words, derived);
+    if (header.stance_through == null) console.log("  · words: none read at this seal (no stance_through: sealed before 069, or back-filled), so the settlement is the derived fold");
+    else console.log(`  · words: the stance acts up to ${header.stance_through} — the town opposes ${settled.vetoes?.town?.length ?? 0} mark(s), holders ${settled.vetoes?.holders?.length ?? 0} word(s)${settled.vetoes?.town_unread ? `; the engine at this law predates world#146, so the town's ${settled.vetoes.town_unread.length} are NOT carried` : ""}; ${(derived.marks?.length ?? 0) - (settled.state.marks?.length ?? 0)} mark(s) leave the settlement`);
     const { rows: [cached] } = await client.query("SELECT state FROM world_snapshot_folds WHERE digest = $1", [header.digest]);
-    if (cached) compareFolds(`world vs the cached fold of ${header.digest.slice(0, 12)}`, derived, JSON.parse(cached.state));
+    if (cached) compareFolds(`the settlement (with its seal's words) vs the cached fold of ${header.digest.slice(0, 12)}`, settled.state, JSON.parse(cached.state));
     else console.log("  · world: no cached fold kept for this digest (built by the office on first read, POS-359)");
+    // The published file is git's printout, which reads no words (POS-364/365): it is compared with the fold before them.
     if (publishedPath) compareFolds(`world vs the published ${publishedPath}`, derived, JSON.parse(readFileSync(publishedPath, "utf8")));
   }
 

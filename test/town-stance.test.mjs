@@ -271,6 +271,12 @@ test("4b · a pre-change word reads as spoken on the claim current at its instan
   const after = versionsFromRows([...CLAIMS, claim("beta/on-alphas-edge", "c-beta-2", { window_id: 12, at: "2026-09-01T00:00:00Z" })]);
   assert.deepEqual(standingStances(legacy, { versions: after }), [], "after an amendment, the pre-change words are absent");
   assert.equal(townWordsOf(legacy, { versions: after }).size, 0, "the town's too");
+
+  // POS-362: AS OF A SEAL. A seal taken before window 12 saw the old version as
+  // current, so the words stand in that settlement however the store has moved since.
+  const atSeal = versionsFromRows([...CLAIMS, claim("beta/on-alphas-edge", "c-beta-2", { window_id: 12, at: "2026-09-01T00:00:00Z" })], { window: 11 });
+  assert.notEqual(atSeal.get("beta/on-alphas-edge").current.id, "c-beta-2", "an amendment locked after the seal's window is not its current version");
+  assert.deepEqual([...townWordsOf(legacy, { versions: atSeal })], [["beta/on-alphas-edge", "opposed"]], "so the word spoken on the older version stands at that seal");
 });
 
 // ── 4c · the town speaks only on published marks ────────────────────────────

@@ -106,6 +106,8 @@ export const LANDED = {
   "067_town_mint_inputs.sql":      { probe: `${rel("town_rooms")} AND ${rel("town_mail_lines")}` },
   // 068 (POS-441): the clearing writes a carried mark's claim — its insert policy, then its trigger.
   "068_clearing_carries.sql":      { probe: `${policy("claims_insert_clearing")} AND ${trig("claims_insert_carry_only")}` },
+  // 069 (POS-362): the seal keeps how far the town's words had reached.
+  "069_snapshot_stance_through.sql": { probe: `${col("world_snapshots", "stance_through")}` },
 };
 
 /** The schema files in the order a store takes them — name order, as the CI floor applies them. */

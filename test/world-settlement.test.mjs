@@ -320,3 +320,112 @@ test("the graph's mark nodes are the served settlement's: an opposed mark and it
   assert.match(graphOnSettlement(payload, { unread: "boom" }).as_of.settlement_unread, /not narrowed to a settlement: boom/);
   assert.equal(graphOnSettlement(payload, null), payload);
 });
+
+// ── POS-362 (Darko 2026-10-08, option A): THE SETTLEMENT FOLDS ITS SEAL'S WORDS ──
+//
+// The seal records the newest stance act (069 stance_through). The settlement's
+// World is its sources folded with the words standing at the seal; an asked
+// ?settlement=S<n> serves exactly that, and the newest World (nothing asked)
+// takes the words standing now. A holder's word is the engine's parcel veto at
+// the pinned world clone; the town's needs world#146, so it is carried by a
+// stand-in engine here, as above.
+
+const keptOf = async (digest) => {
+  const [r] = await owner(async (c) => (await c.query("SELECT state FROM world_snapshot_folds WHERE digest = $1", [digest])).rows);
+  return r ? JSON.parse(r.state) : null;
+};
+
+test("an opposition spoken before the seal is in the settlement itself: the asked S<n>, the kept World, and the derivation --verify runs", { skip }, async () => {
+  const { s11 } = await seed({ sealWords: [{ actor: "ann", on: "bo/shed", stance: "opposed" }] });
+  const asked = await serve({ settlement: "S11" });
+  assert.deepEqual(ids(asked), ["ann/plot", "cy/bench", "cy/yard"], "the shed and the name that continues it left the settlement");
+  assert.equal(asked.meta.words.as_of, "the seal");
+  assert.ok(asked.meta.words.stance_through, "it names how far the words reached");
+  assert.deepEqual(asked.meta.opposed.holders, [{ by: "ann", on: "bo/shed" }]);
+  assert.equal(asked.returned.find((r) => r.mark === "bo/shed")?.returned_from, "ann/plot", "through the engine's own return path");
+
+  const kept = await keptOf(s11);
+  assert.ok(kept && !kept.marks.some((m) => m.id === "bo/shed"), "the World kept under the digest is the settlement, words and all");
+
+  // --verify's road: the sources and the seal's words, folded again, are the kept World.
+  const { settlementFoldInputs, wordsAtSeal, foldWithWords } = await import("../src/world-settlement.mjs");
+  const header = await asOffice(async (p) => (await p.query("SELECT * FROM world_snapshots WHERE id = 2")).rows[0]);
+  const derived = await asOffice(async (p) => foldWithWords(
+    await settlementFoldInputs(p, header, { worldRepo: WORLD, townRepo: null }), await wordsAtSeal(p, header, { worldRepo: WORLD })));
+  assert.equal(canonicalJson(derived.state), canonicalJson(kept));
+
+  const newest = await serve();
+  assert.deepEqual(ids(newest), ids(asked), "the same words stand now: the newest World is the kept one");
+  assert.equal(newest.meta.words.as_of, "now");
+});
+
+test("an opposition placed AFTER S11's seal is absent from S11-as-asked and present in what is served now (R16)", { skip }, async () => {
+  await seed({ sealWords: [{ actor: "cy", on: "bo/shed", stance: "welcomed" }] });
+  await speak({ actor: "ann", on: "bo/shed", stance: "opposed", at: "2026-10-04T00:00:00Z" });
+  resetSettlementCaches();
+  const asked = await serve({ settlement: "S11" });
+  assert.ok(ids(asked).includes("bo/shed"), "S11 is what it was sealed with: ann had not spoken");
+  assert.deepEqual(asked.meta.opposed.holders, []);
+  const newest = await serve();
+  assert.ok(!ids(newest).includes("bo/shed"), "the newest World takes ann's word at once");
+  assert.deepEqual(newest.meta.opposed.holders, [{ by: "ann", on: "bo/shed" }]);
+  assert.equal(newest.meta.as_of.settlement, "S11", "nothing waited for a clearing");
+});
+
+test("a word taken back after the seal: the newest World gives the mark back, the asked settlement keeps its seal's word", { skip }, async () => {
+  await seed({ sealWords: [{ actor: "ann", on: "bo/shed", stance: "opposed" }] });
+  await speak({ actor: "ann", on: "bo/shed", stance: "welcomed", at: "2026-10-04T00:00:00Z" });
+  resetSettlementCaches();
+  assert.ok(ids(await serve()).includes("bo/shed"), "today ann welcomes it");
+  assert.ok(!ids(await serve({ settlement: "S11" })).includes("bo/shed"), "at S11's seal she had opposed it");
+});
+
+test("a word counts on the version that stood at the seal: an amendment cleared after it reopens the word now, never in the settlement (R15)", { skip }, async () => {
+  await seed({
+    // The shed's version at the seal locked in window 501; its amendment was submitted after the seal and locks in 502.
+    before: async (c) => {
+      await c.query("INSERT INTO windows (id, opens_at, closes_at, status, cleared_at) VALUES (502, '2026-10-02T06:00Z', '2026-10-02T18:00Z', 'closed', '2026-10-04T18:00Z')");
+      await c.query(
+        `INSERT INTO claims (window_id, class, claimant, household, status, body, geometry, stake, data, slug, submitted_at, decided_at) VALUES
+           (501, 'sited', 'bo', 'bo', 'locked', 'x', '{}'::jsonb, 0, '{}'::jsonb, 'bo/shed', '2026-10-02T00:00:00Z', '2026-10-02T06:00:00Z'),
+           (502, 'sited', 'bo', 'bo', 'locked', 'y', '{}'::jsonb, 0, '{}'::jsonb, 'bo/shed', '2026-10-04T00:00:00Z', '2026-10-04T18:00:00Z')`);
+    },
+    // ann's word names no version: it is read as spoken on the claim that carried the shed at its instant (the 501 one).
+    sealWords: [{ actor: "ann", on: "bo/shed", stance: "opposed", at: "2026-10-02T12:00:00Z" }],
+  });
+  assert.ok(!ids(await serve({ settlement: "S11" })).includes("bo/shed"), "at the seal the word stood on the shed's version");
+  resetSettlementCaches();
+  assert.ok(ids(await serve()).includes("bo/shed"), "now the shed's version is the amendment: the word is on an older one, so it is absent");
+});
+
+test("the town's word at the seal reaches the engine as `townWords`, and the asked settlement serves it", { skip }, async () => {
+  const repo = mkdtempSync(join(tmpdir(), "settlement-engine-"));
+  try {
+    mkdirSync(join(repo, "tools"));
+    writeFileSync(join(repo, "tools", "consent.mjs"), 'export const TOWN_WORDS = new Set(["neutral", "opposed"]);\n');
+    writeFileSync(join(repo, "tools", "marks-fold.mjs"), [
+      "export function fold({ marks, townWords = null }) {",
+      "  const opposed = new Set([...(townWords ?? new Map())].filter(([, w]) => w === 'opposed').map(([id]) => id));",
+      "  return { marks: marks.filter((m) => !opposed.has(m.id)).map((m) => ({ id: m.id })), parcels: [], returned: [...opposed].map((mark) => ({ mark, returned_from: 'the-town' })) };",
+      "}", ""].join("\n"));
+    git(repo, "init", "-q");
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "add", ".");
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "stand-in engine");
+    const stand = git(repo, "rev-parse", "HEAD");
+    const { TOWN_SPEAKER } = await import("../src/town-stance.mjs");
+    await seed({ lawSha: stand, sealWords: [{ actor: TOWN_SPEAKER, on: "cy/bench", stance: "opposed", as: "town" }] });
+    const r = await serve({ worldRepo: repo, settlement: "S11" });
+    assert.ok(!ids(r).includes("cy/bench"), "the town's opposition at the seal took the bench out of S11");
+    assert.deepEqual(r.meta.opposed.town, ["cy/bench"]);
+  } finally { rmSync(repo, { recursive: true, force: true }); }
+});
+
+test("a settlement with no stance_through (sealed before 069, or back-filled) folds with no words", { skip }, async () => {
+  await seed();
+  await speak({ actor: "ann", on: "bo/shed", stance: "opposed" });
+  resetSettlementCaches();
+  const asked = await serve({ settlement: "S11" });
+  assert.ok(ids(asked).includes("bo/shed"), "no word was read at its seal");
+  assert.equal(asked.meta.words.stance_through, null);
+  assert.ok(!ids(await serve()).includes("bo/shed"), "the newest World still takes today's word");
+});

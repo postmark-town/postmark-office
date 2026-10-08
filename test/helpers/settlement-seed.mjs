@@ -41,16 +41,17 @@ export function settlementRig(store) {
     const c = await store.connect("office_api");
     try { return await fn(c); } finally { await c.end(); }
   }
-  async function seal(c, { id, window, number, marks, lawSha = LAW_SHA }) {
+  // `stanceThrough` (POS-362, 069): the newest stance act the seal saw; the digest covers it, as the seal's does.
+  async function seal(c, { id, window, number, marks, lawSha = LAW_SHA, stanceThrough = null }) {
     const pairs = marks.map((m) => ({ slug: m.slug, digest: sha256(rowText(m)), row: rowText(m) }));
     for (const p of pairs) await c.query("INSERT INTO mark_versions (digest, row) VALUES ($1, $2) ON CONFLICT DO NOTHING", [p.digest, p.row]);
     const marks_digest = marksDigestOf(pairs);
     for (const p of pairs) await c.query("INSERT INTO world_snapshot_marks (marks_digest, slug, digest) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING", [marks_digest, p.slug, p.digest]);
-    const digest = snapshotDigestOf({ marks_digest, law_sha: lawSha, town_sha: TOWN_SHA, world_sha: null });
+    const digest = snapshotDigestOf({ marks_digest, law_sha: lawSha, town_sha: TOWN_SHA, world_sha: null, stance_through: stanceThrough });
     await c.query(
-      `INSERT INTO world_snapshots (id, window_id, digest, marks_digest, marks, law_sha, town_sha, world_sha, taken_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, $8)`,
-      [id, window, digest, marks_digest, pairs.length, lawSha, TOWN_SHA, new Date(Date.UTC(2026, 9, 1 + id)).toISOString()]);
+      `INSERT INTO world_snapshots (id, window_id, digest, marks_digest, marks, law_sha, town_sha, world_sha, taken_at, stance_through)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, $8, $9)`,
+      [id, window, digest, marks_digest, pairs.length, lawSha, TOWN_SHA, new Date(Date.UTC(2026, 9, 1 + id)).toISOString(), stanceThrough]);
     await c.query(
       `INSERT INTO settlements (number, tag_sha, published_at, window_id, blessed_at, snapshot_id)
        VALUES ($1, $2, $3, $4, $3, $5)`,
@@ -58,7 +59,9 @@ export function settlementRig(store) {
     return digest;
   }
 
-  async function seed({ lawSha = LAW_SHA } = {}) {
+  // `sealWords` (POS-362): words spoken BEFORE the seals; S11 is sealed through the newest of them.
+  // `before(c)`: rows the test needs in place before the words and the seals (claims, windows).
+  async function seed({ lawSha = LAW_SHA, sealWords = null, before = null } = {}) {
     resetSettlementCaches();
     return owner(async (c) => {
       await c.query("TRUNCATE world_snapshot_folds, settlements, world_snapshots, world_snapshot_marks, mark_versions, law_projection, escrow_projection, acts, claims, windows CASCADE");
@@ -73,16 +76,24 @@ export function settlementRig(store) {
       // The ledger at TOWN_SHA has been ingested: ann backs her own plot.
       await c.query(
         "INSERT INTO escrow_projection (town_sha, mark, holder, household, own_household, n, weight_k) VALUES ($1, 'ann/plot', 'ann', 'ann', 'ann', 1, 1)", [TOWN_SHA]);
+      let stanceThrough = null;
+      if (before) await before(c);
+      if (sealWords) {
+        for (const w of sealWords) await speakOn(c, w);
+        stanceThrough = (await c.query("SELECT max(id)::text AS t FROM acts WHERE class = 'stance'")).rows[0].t;
+      }
       const s10 = await seal(c, { id: 1, window: 500, number: 10, marks: [MARKS.plot, MARKS.bench], lawSha });
-      const s11 = await seal(c, { id: 2, window: 501, number: 11, marks: [MARKS.plot, MARKS.bench, MARKS.yard, MARKS.shed, MARKS.name], lawSha });
+      const s11 = await seal(c, { id: 2, window: 501, number: 11, marks: [MARKS.plot, MARKS.bench, MARKS.yard, MARKS.shed, MARKS.name], lawSha, stanceThrough });
       return { s10, s11 };
     });
   }
 
-  async function speak({ actor, on, stance, as = null, at = "2026-10-03T00:00:00Z" }) {
-    await owner((c) => c.query(
-      "INSERT INTO acts (at, actor, action, object, class, payload, household) VALUES ($1, $2, 'declare-stance-on', $3, 'stance', $4, $2)",
-      [at, actor, on, JSON.stringify({ stance, ...(as ? { as } : {}) })]));
+  // `version` (POS-361 Q5): the claim id the word was spoken on, when the test gives one.
+  const speakOn = (c, { actor, on, stance, as = null, at = "2026-10-03T00:00:00Z", version = undefined }) => c.query(
+    "INSERT INTO acts (at, actor, action, object, class, payload, household) VALUES ($1, $2, 'declare-stance-on', $3, 'stance', $4, $2)",
+    [at, actor, on, JSON.stringify({ stance, ...(as ? { as } : {}), ...(version !== undefined ? { version } : {}) })]);
+  async function speak(w) {
+    await owner((c) => speakOn(c, w));
   }
 
   return { owner, asOffice, seal, seed, speak };
