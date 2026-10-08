@@ -57,9 +57,12 @@ import {
 } from "../../src/town-index.mjs";
 import { isResidentHandle } from "../../src/residency.mjs";
 import { writeMintInputs } from "../../src/mint-inputs.mjs";
+import { CROSSING_SEAL_SUBJECT } from "../../src/crossings.mjs";
 
 export const HEAD_KEY = "town-index";                     // projection_heads.repo
-export const SEAL_SUBJECT = "seal: re-seal at the crossing";
+// The crossing's seal, spelled once in src/crossings.mjs: the doorstep names the
+// crossing its copy holds by the same subject this ingest snapshots at (POS-332).
+export const SEAL_SUBJECT = CROSSING_SEAL_SUBJECT;
 const CHUNK = 500;
 const quiet = { log() {}, warn() {} };
 

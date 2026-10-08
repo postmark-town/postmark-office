@@ -37,6 +37,7 @@ import {
   rollEntry, residentPageOf, townSummaryOf, residentOf, windowReadOf, psaFoldOf, doorstepOf, DOORSTEP_SIZES, PSA_SLUG, CARD_MAIL,
 } from "./queries.mjs";
 import { isResidentHandle } from "./residency.mjs"; // the door's admission grammar, as readRoll filters by it
+import { CROSSING_SEAL_SUBJECT } from "./crossings.mjs"; // the crossing's closing commit (POS-332, indexCopy)
 import { holdStoreProbe, UNREACHABLE_DEFECT, UNREACHABLE_HINT } from "./index-probe.mjs";
 
 // The row SHAPES are queries.mjs's own exported functions, the ones its office.db
@@ -78,6 +79,14 @@ export async function townDocs(q) {
 export async function townIndexAsOf(q) {
   const r = await q.query("SELECT value FROM town_meta WHERE key = 'as_of'");
   return r.rows[0]?.value ?? null;
+}
+
+/** queries.indexCopy, from the store: the newest commit time and the newest crossing seal in town_repo_log. */
+export async function indexCopy(q) {
+  const newest = (await q.query("SELECT MAX(committed_at COLLATE \"C\") AS at FROM town_repo_log")).rows[0]?.at ?? null;
+  const seal = (await q.query(`SELECT sha, committed_at AS at FROM town_repo_log WHERE subject = $1
+      ORDER BY committed_at COLLATE "C" DESC, sha COLLATE "C" LIMIT 1`, [CROSSING_SEAL_SUBJECT])).rows[0];
+  return { newest, seal: seal ? { sha: seal.sha, at: seal.at } : null };
 }
 
 /** queries.repoLog, from the store. The same filters, page, total and notes. */
@@ -328,6 +337,7 @@ export function storeIndexPooled(clone, { env = process.env } = {}) {
     potBoard: via((c, extraInvalid) => potBoard(c, extraInvalid)),
     // the doorstep's and the house's reads (group 3)
     asOf: via((c) => townIndexAsOf(c)),
+    copy: via((c) => indexCopy(c)),
     doorstep: via((c, handle, asOf, opts) => doorstep(c, handle, asOf, opts)),
     residentSegments: via((c, handle, fresh) => residentSegments(c, handle, fresh)),
     hasResident: via((c, handle) => hasResident(c, handle)),

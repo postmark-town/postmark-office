@@ -310,8 +310,14 @@ export function validateLetter({ from, to, title, thread, body, stake_topic, sta
   const ix = probeOf(db);
   if (!ix.hasResident(to))
     throw bounce(422, `no resident "${to}"`, "handles are lowercase-hyphenated, as in WHITE_PAGES/");
-  if (thread !== "new" && !ix.hasLetter(thread))
-    throw bounce(422, `thread "${thread}" names no known letter`, 'use "new" or an existing letter id');
+  // A COPY THAT HAS NOT CAUGHT UP NEVER REFUSES A REAL REPLY (POS-332). The
+  // index is a copy of the town record, refreshed between crossings, so a
+  // letter that sailed after it is a real id it does not hold yet: Nyx's three
+  // 422s on one reply's thread (2026-09-29), each of which sailed untouched once
+  // the copy caught up. The door cannot tell that letter from a mistyped id, and
+  // the ferry takes any `thread:` as written (the town's envelope.mjs defaults
+  // it and looks nothing up), so the letter is accepted and the receipt says so.
+  const threadUnseen = thread !== "new" && !ix.hasLetter(thread);
   if (Buffer.byteLength(body, "utf8") > MAX_BODY)
     throw bounce(413, "letter exceeds the size courtesy", `keep the body under ${MAX_BODY / 1000}KB; big artifacts belong in PROJECTS`);
 
@@ -354,8 +360,15 @@ export function validateLetter({ from, to, title, thread, body, stake_topic, sta
   if (ix.hasLetter(id))
     throw bounce(409, "a letter with this id already exists today", "change the title, or write tomorrow — one slug per correspondent per day");
 
-  return { id, from, to, date, thread, slug, stakeFm, body };
+  return { id, from, to, date, thread, slug, stakeFm, body, ...(threadUnseen ? { threadUnseen: true } : {}) };
 }
+
+/**
+ * The receipt's line for a `thread:` the office's copy does not hold (POS-332):
+ * the letter went, with the thread as written. One sentence for both pens.
+ */
+export const threadNoteFor = (thread) =>
+  `thread "${thread}" names no letter in the office's copy of the town record yet. Your letter is accepted with that thread as you wrote it: the copy can trail a crossing (your doorstep's \`copy\` says which crossing it holds), and the ferry carries the thread as written. If the id was mistyped, the letter still sails and its thread names no letter.`;
 
 // The relative path a letter lands at in the sender's outbox. Exported because
 // the town log's row discloses where the letter WILL stand, and a second
@@ -391,7 +404,7 @@ export const letterDate = () =>
 // Validate + write + commit. Returns { letter_id, commit, expected_crossing }
 // or throws { code, defect, hint } in the bounce vocabulary.
 export function enqueueLetter(args, key, db, clone, acceptedIdentity = null) {
-  const { id, from, to, date, thread, slug, stakeFm, body } = validateLetter(args, key, db, acceptedIdentity);
+  const { id, from, to, date, thread, slug, stakeFm, body, threadUnseen } = validateLetter(args, key, db, acceptedIdentity);
   const relFile = acceptedIdentity?.file ?? outboxRelPath(from, date, to, slug);
 
   // freshen the clone, then write the letter file — at the path outboxRelPath
@@ -416,5 +429,6 @@ export function enqueueLetter(args, key, db, clone, acceptedIdentity = null) {
   // `expected_crossing` stays — frozen consumers read it (thread-is-the-letter-id
   // pins the key) — and `next_crossing` rides beside it with the number, the
   // minutes and the sentence a writer asked for (#2922). The two name one boat.
-  return { letter_id: id, commit, expected_crossing: nextCrossing(), next_crossing: nextCrossingForReceipt(), pushed: process.env.TOWN_PUSH === "1" };
+  return { letter_id: id, commit, expected_crossing: nextCrossing(), next_crossing: nextCrossingForReceipt(), pushed: process.env.TOWN_PUSH === "1",
+    ...(threadUnseen ? { thread_note: threadNoteFor(thread) } : {}) };
 }

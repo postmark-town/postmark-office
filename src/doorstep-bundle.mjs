@@ -20,12 +20,12 @@
 // to see, not theirs to be seen by"). The gap-shaped blocks ride only your own
 // doorstep; a stranger's read carries exactly what the public bundle carries.
 
-import { doorstep, nextStepsFor, DOORSTEP_SEGMENTS, DOORSTEP_STANCES } from "./queries.mjs";
+import { doorstep, nextStepsFor, indexCopy, DOORSTEP_SEGMENTS, DOORSTEP_STANCES } from "./queries.mjs";
 import { renamedRow } from "./one-contract.mjs";
 import { hotTenseBlock } from "./town-updates.mjs";
 import { hotMailBlock, outboxTense } from "./town-mail.mjs";
 import { votesAvailable, doorstepVotes } from "./votes.mjs";
-import { nextCrossingForDoorstep } from "./crossings.mjs";
+import { nextCrossingForDoorstep, copyBlock } from "./crossings.mjs";
 import { unreadFor, unreadBlock } from "./unread-store.mjs";
 import { freshFor } from "./paper-fresh.mjs"; // POS-271: the pending paper rows, read before a composed read
 
@@ -87,8 +87,22 @@ export async function doorstepBundle(handle, ctx = {}) {
   // clock — `minutes_away` moves every minute — which is why it is a header
   // field and not part of any segment's domain (the bundle law deep-equals
   // segments against their reads, called an instant apart).
+  //
+  // ── WHAT THE COPY HAS CAUGHT UP TO (POS-332) ──────────────────────────────
+  //
+  // Right beside `as_of`, because it is what `as_of` could not say: the commit
+  // is a name, not a time. `copy` reads the same index the segments came from
+  // (its own history: the newest change, and the newest crossing's seal) and
+  // says, in plain words and in fields, whether that copy holds the last
+  // crossing the timetable has sailed (crossings.mjs § copyBlock). Every skin,
+  // every door: it is composed here, once. A copy whose history cannot be read
+  // says so rather than dropping the block, because a page without it and a
+  // page that is caught up must not look alike.
   const { handle: h, as_of, ...rest } = core;
-  const d = { handle: h, as_of, next_crossing: nextCrossingForDoorstep(nowMs), ...rest };
+  let copy;
+  try { copy = copyBlock(ix ? await ix.copy() : indexCopy(db), as_of, nowMs); }
+  catch { copy = { ...copyBlock({}, as_of, nowMs), caught_up: null, sentence: "the office's copy of the town record could not say what it has caught up to just now; as_of above names its commit" }; }
+  const d = { handle: h, as_of, copy, next_crossing: nextCrossingForDoorstep(nowMs), ...rest };
 
   // ── THE SEVENTH SEGMENT · what awaits your word (the founder's .1 ruling) ─
   //

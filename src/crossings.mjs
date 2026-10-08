@@ -90,6 +90,62 @@ export function nextCrossingForDoorstep(now = Date.now()) {
     sentence: `crossing ${crossing} sails at ${at}. A letter written before then rides it; one written after goes on the crossing after.` };
 }
 
+// ── WHAT THE OFFICE'S COPY HAS CAUGHT UP TO (POS-332) ────────────────────────
+//
+// The doorstep's `as_of` is a COMMIT: the town record the office's copy (the
+// store's town index, or office.db) was built from. Kogane, office hours
+// 2026-10-02: "as_of came back as a commit, not a time", and Little Bird had
+// nothing to hold it against. Nyx logged ten reads that trailed a crossing and
+// asked for "the settle stamp the index is serving, on the doorstep read".
+//
+// So beside the commit the page says, from the copy's OWN record of the town's
+// commits (repo_log, the index's history table), two times: the newest change
+// the copy holds, and the newest crossing it holds, which is the crossing's
+// seal. The Postmark Pen closes every crossing with one commit of this subject
+// (the town index's ingest snapshots at exactly these commits,
+// world2/tools/town-index-ingest.mjs), after the delivery, the mint and the
+// quests. A copy that holds the seal holds the whole crossing. Its number is
+// the town clock's for the instant it was sealed, so it is the same number
+// `next_crossing` and a send receipt name: the copy is caught up when it holds
+// the last crossing the timetable has sailed.
+export const CROSSING_SEAL_SUBJECT = "seal: re-seal at the crossing";
+
+/** The instant crossing `n` sails by the timetable, as ISO. */
+export const crossingSailsAt = (n) => new Date(CROSSING_EPOCH_UTC + n * CROSSING_MS).toISOString();
+
+/**
+ * The doorstep's `copy` block, from what the index read: `newest` (the newest
+ * commit time in the copy, ISO, or null) and `seal` (`{ sha, at }` of the newest
+ * crossing seal in the copy, or null). `asOf` is the copy's commit, as the page
+ * names it. `now` is the page's one clock.
+ */
+export function copyBlock({ newest = null, seal = null } = {}, asOf = null, now = Date.now()) {
+  const n = typeof now === "number" ? now : new Date(now).getTime();
+  const last = currentCrossing(n);
+  const sealedAt = seal?.at ? Date.parse(seal.at) : NaN;
+  const crossing = Number.isFinite(sealedAt)
+    ? { crossing: currentCrossing(sealedAt), sailed_at: crossingSailsAt(currentCrossing(sealedAt)), sealed_at: new Date(sealedAt).toISOString() }
+    : null;
+  const caughtUp = crossing ? crossing.crossing >= last : null;
+  const commit = asOf && asOf !== "unknown" ? `commit ${String(asOf).slice(0, 12)}` : "a commit it cannot name";
+  const held = newest ? `its newest change was recorded at ${newest}` : "it holds no dated change";
+  const where = crossing
+    ? `It has caught up to crossing ${crossing.crossing} (sailed ${crossing.sailed_at}, sealed ${crossing.sealed_at})`
+    : "It holds no crossing's seal, so it cannot name a crossing it has caught up to";
+  const verdict = caughtUp === true
+    ? ", the last crossing by the timetable."
+    : caughtUp === false
+      ? `; crossing ${last} was due at ${crossingSailsAt(last)} by the timetable and is not in this copy yet, so read again once the copy catches up.`
+      : ".";
+  return {
+    newest_change_at: newest,
+    crossing,
+    last_crossing_by_timetable: last,
+    caught_up: caughtUp,
+    sentence: `This page reads the office's copy of the town record at ${commit}; ${held}. ${where}${verdict}`,
+  };
+}
+
 /**
  * The receipt's sentence: the letter is written, and the boat it rides is the
  * first one after `writtenAt`. The ordinary receipt says so. A receipt handed
