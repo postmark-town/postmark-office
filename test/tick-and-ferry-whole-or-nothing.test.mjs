@@ -202,9 +202,9 @@ writeFileSync(process.argv[process.argv.indexOf("--db") + 1], "hydrated\\n");
 import { writeFileSync } from "node:fs";
 writeFileSync(process.argv[process.argv.indexOf("--db") + 1], "hydrated\\n");
 `,
-  // The keeping tick's last step and the witness that it ran past the lock: the
-  // hydrates moved to the rehydrate unit in POS-268's split, so office.db is no
-  // longer this script's to write.
+  // The keeping tick's last step and the witness that it ran past the lock.
+  // office.db is no script's to write since POS-268 5b; the world hydration
+  // (deploy/office-world-hydrate.sh, not staged here) reports itself skipped.
   "deploy/publish-windows.mjs": `
 import { writeFileSync } from "node:fs";
 writeFileSync("panes-published", "yes\\n");

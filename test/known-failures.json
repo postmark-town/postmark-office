@@ -37,13 +37,6 @@
       "date": "2026-10-07"
     },
     {
-      "file": "test/office-tick-split.test.mjs",
-      "name": "the roll-call knows the new unit, parked until its files are installed",
-      "reason": "the roll-call manifest test (named in the brief; red locally too)",
-      "owner": "POS-419",
-      "date": "2026-10-07"
-    },
-    {
       "file": "test/refresher-blocked.test.mjs",
       "name": "test/refresher-blocked.test.mjs",
       "reason": "CI only (Linux): hangs past the 180 s test timeout; its Linux arm (a FIFO as GIT_CONFIG_GLOBAL) had never run before CI. Cause not yet measured",

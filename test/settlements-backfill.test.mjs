@@ -202,10 +202,11 @@ test("the tick runs the backfill AFTER the world fetch and OUTSIDE the lock", ()
   assert.ok(fetch !== -1 && unlock !== -1 && run !== -1, "the tick must carry all three: the world fetch, the lock's close, the backfill");
   assert.ok(fetch < run, "a backfill before the fetch reads yesterday's tags — the tag rides this fetch");
   assert.ok(unlock < run, "inside the lock the backfill's Postgres round-trip lengthens every write-path wait");
-  // and no derivation shares its unit: since the 2026-09-27 split (POS-268) the
-  // long hydrate runs on the rehydrate unit, so a slow hydrate can never hide or
-  // delay the settlements receipt
-  assert.equal(sh.indexOf("node src/hydrate.mjs"), -1, "the keeping tick must not hydrate — that is office-rehydrate.sh's unit");
+  // and office.db is built nowhere (POS-268 5b retired the rehydrate unit); the
+  // world hydration that moved here runs after this receipt, so a slow one can
+  // never hide or delay it
+  assert.equal(sh.indexOf("node src/hydrate.mjs"), -1, "the keeping tick must not build office.db, which nothing reads any more");
+  assert.ok(run < sh.indexOf("sh deploy/office-world-hydrate.sh"), "the world hydration runs after the settlements receipt");
 });
 
 test("the tick's backfill is the prod apply, quiet, on the clone the fetch moved", () => {

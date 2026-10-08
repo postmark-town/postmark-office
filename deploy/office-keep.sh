@@ -1,8 +1,12 @@
 #!/bin/sh
 # office-keep.sh — the office's keeping tick: the clones, the ledger, the
-# settlements row and the panes. Split out of office-tick.sh (POS-268,
-# 2026-09-27) so the rehydrate unit holds only the two hydrates and can be
-# retired on its own: nothing here reads or writes office.db or world.db.
+# settlements row, the world hydration and the panes. Split out of the old
+# office tick (POS-268, 2026-09-27) so the rehydrate unit held only the two
+# hydrates and could be retired on its own. It was (POS-268 part 5b,
+# 2026-10-08): office.db is no longer built anywhere, and the world hydration,
+# the one rehydrate step something still reads, runs here
+# (deploy/office-world-hydrate.sh, § the world hydration below). Nothing here
+# reads or writes office.db.
 #
 # Snapshot-under-lock / derive-outside, the same shape office-tick.sh had since
 # 2026-07-30: the lock covers only the pulls, the mint pass and a
@@ -12,10 +16,13 @@
 #
 # Runs on postmark-office-keep.timer at :07/:22/:37/:52 — the clock the whole
 # tick ran on before the split, so the pulls, the mint, the settlements row and
-# the panes are exactly as fresh as they were. deploy/office-rehydrate.sh
-# follows two minutes later and reads the clones this leaves.
+# the panes are exactly as fresh as they were. The world hydration, which the
+# rehydrate ran two minutes after this tick, now runs inside it, after the
+# settlements row: the same order, from the same fetch.
 #
 # Env (from /etc/postmark-office.env via the unit): TOWN_CLONE, WORLD_CLONE.
+# And PG_LAW_INGESTER_PASSWORD (from /etc/postmark-world2-dev.env, read by
+# systemd and handed in): the world graph's store write takes the law pen.
 # Cwd: /srv/postmark-office (the unit's WorkingDirectory).
 
 set -eu
@@ -241,7 +248,7 @@ fi
 # The town's own predicate (tools/household-keys.mjs) over the frozen snapshot:
 # every declared household mints under ONE key and no key spans two houses.
 # One JSON line per tick, appended to the log the roll-call reads (the
-# postmark-office-rehydrate.timer row's outcome block: alarm_on_nonempty
+# postmark-office-keep.timer row's outcome block: alarm_on_nonempty
 # split_households / shared_keys, alarm_on_false checked). NON-FATAL: a split
 # is the alarm's to raise, never this tick's to stop on. A run that produced no
 # JSON (the tool absent or crashed) still writes a line, `checked: false`, so
@@ -261,6 +268,16 @@ if node -e '
 else
   echo "[office-keep] household keys line NOT written to $HK_LOG (non-fatal) — the roll-call will read the log as stale" >&2
 fi
+
+# ── the world hydration (moved from the retired rehydrate, POS-268 5b) ───────
+# the store's world graph snapshot (world.db is retired, POS-270 3b), at the
+# newest blessing, from the world clone fetched under the lock above. After the settlements row, as
+# it ran before (two minutes after this tick), and before the panes, whose
+# publish fails the tick loudly and must never take this step down with it.
+# It never takes the lock (it reads refs, not the pen's checkout) and it never
+# fails the tick: every outcome is a journal line (deploy/office-world-hydrate.sh).
+sh deploy/office-world-hydrate.sh \
+  || echo "[office-keep] the world hydration step did not run (non-fatal) — deploy/office-world-hydrate.sh is missing or unreadable in this tree" >&2
 
 # ── outside the lock: the panes, from the frozen snapshot ────────────────────
 # publish-windows keeps its stage-and-swap: a failed publish leaves the live
