@@ -246,7 +246,10 @@ test("PATCH /profile/{handle}/avatar reaches the REST image door and keeps its b
   });
   try {
     await new Promise((ok, no) => {
-      const timer = setTimeout(() => no(new Error("avatar fixture server never listened")), 10_000);
+      // 30 s: a switched office loads its roll and probe from the store before it
+      // listens, bounded at 10 s itself (server.mjs § AT BOOT), so 10 s here
+      // raced that bound on a busy machine
+      const timer = setTimeout(() => no(new Error("avatar fixture server never listened")), 30_000);
       avatarServer.stdout.on("data", (data) => {
         const m = /listening on :(\d+)/.exec(String(data));
         if (m) { port = m[1]; clearTimeout(timer); ok(); }

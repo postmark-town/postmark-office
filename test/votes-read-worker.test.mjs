@@ -37,6 +37,8 @@ import { tmpdir } from "node:os";
 import { fixtureDb } from "./fixture.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
+import { testIndex } from "./helpers/office-under-test.mjs";
+import { copyIndexToStore } from "./helpers/index-to-store.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const TOWN = join(ROOT, "town-clone");
@@ -52,6 +54,8 @@ const workers = [];
 async function bootWorker(townClone) {
   const env = {
     ...process.env,
+    // the town index is the record's own store too, seeded from the fixture below (POS-268)
+    ...(testIndex() === "store" ? { TOWN_INDEX_READS: "store" } : {}),
     OFFICE_KEYS: `${KEY}=keemin:wright`,
     WORLD_DYNAMIC_DB: join(tmp, "dynamic.db"),
     TOWN_CLONE: townClone,
@@ -102,7 +106,13 @@ before(async () => {
   checked = await check(TOWN, { env });
   const engine = engineClone();
   await ingestBallotFiles(engine, { hand: "keemin", env });
-  fixtureDb(join(tmp, "fixture.db")).close();
+  const fixture = fixtureDb(join(tmp, "fixture.db"));
+  // the town index, in the same store the ballots are in, seeded from this fixture (POS-268)
+  if (testIndex() === "store") {
+    const w = await store.connect("law_ingester");
+    try { await copyIndexToStore(w, fixture); } finally { await w.end(); }
+  }
+  fixture.close();
   const { openDynamic } = await import("../src/dynamic-store.mjs");
   openDynamic(join(tmp, "dynamic.db")).close();
   const { openOauthDb } = await import("../src/oauth.mjs");

@@ -49,6 +49,11 @@ import {
 } from "../src/edit.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+// The cards here are office.db's (queries.mjs § resident, read on the fixture's
+// office.db), so the ladder they carry is office.db's too, whatever switch the
+// run was started with (POS-268). The store's card has its own twin
+// (town-index-residents.test.mjs); this one goes with office.db at 5b.
+delete process.env.TOWN_INDEX_READS;
 delete process.env.TOWN_PUSH; // nothing here may leave the machine
 
 // ── fixtures ────────────────────────────────────────────────────────────────

@@ -73,6 +73,7 @@ import { hotMailBlock, outboxTense, replayLetter, sendLetterAsRow, MAIL_DOOR, NO
 import { pendingRows } from "../src/town-journal.mjs";
 import { enqueueLetter } from "../src/write.mjs";
 import { outboxSettled } from "../src/queries.mjs";
+import { indexStore } from "./helpers/office-under-test.mjs";
 
 delete process.env.TOWN_PUSH; // nothing here may leave the machine
 
@@ -96,6 +97,11 @@ const dbPath = join(dir, "fixture.db");
 fixtureDb(dbPath).close();
 const db = new DatabaseSync(dbPath, { readOnly: true });
 after(() => { db.close(); rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+// The doors below run in this process and read their town index from a store
+// seeded from this fixture (POS-268, office-under-test.mjs).
+const IX = await indexStore(dbPath);
+const IX_RESTORE = await IX.useInProcess();
+after(async () => { await IX_RESTORE(); await IX.stop(); });
 
 const KEY = { household: "keemin", handles: new Set(["wright"]), ghId: "42", ghLogin: "keeminlee" };
 const LIMEN = { household: "limen-house", handles: new Set(["limen"]), ghId: "43", ghLogin: "limenkeeper" };

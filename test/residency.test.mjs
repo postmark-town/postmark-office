@@ -179,9 +179,18 @@ before(async () => {
     },
     stdio: ["ignore", "pipe", "pipe"],
   }));
-  // Only the RECORD's keys: the town index stays this suite's fixture office.db,
-  // exactly as before, so a test that writes a resident into it is read live.
-  const RECORD = { WORLD2_PG: IX.env.WORLD2_PG, WORLD2_PG_URL: IX.env.WORLD2_PG_URL };
+  // The record's keys and the switch: the town index is the store seeded from
+  // this suite's fixture office.db (POS-268), and a test that writes a resident
+  // into the fixture copies it to the store and moves the store's as-of, as an
+  // ingest would (§ settleResident). The office polls its index every 200 ms
+  // here, so the new row is read at once. OFFICE_TEST_INDEX=office keeps
+  // the old way: no switch, the fixture office.db read live. One read worker:
+  // switched, every worker keeps a pen pool of its own and polls the store, and
+  // at cores − 1 workers one office held ~45 of the test server's 100
+  // connections (measured 2026-10-07), so a second office met "remaining
+  // connection slots are reserved".
+  const RECORD = { WORLD2_PG: IX.env.WORLD2_PG, WORLD2_PG_URL: IX.env.WORLD2_PG_URL,
+    TOWN_INDEX_READS: IX.env.TOWN_INDEX_READS, OFFICE_RELOAD_POLL_MS: "200", OFFICE_READ_WORKERS: "1" };
   bootWith = async (extra = {}) => {
     ({ child, port: PORT } = await spawnOffice("oauth.db", { ...RECORD, ...extra }));
     BASE = `http://127.0.0.1:${PORT}`;
@@ -596,13 +605,7 @@ test("after merge, the same token resolves to the new household with no re-auth"
     wright: { login: "keeminlee", id: 999, pinned: "2026-07-05" },
     arrival: { login: "some-stranger", id: 424242, pinned: "2026-07-08" },
   });
-  {
-    const { DatabaseSync } = await import("node:sqlite");
-    const idx = new DatabaseSync(join(tmp, "fixture.db"));
-    idx.prepare("INSERT OR REPLACE INTO residents (handle, json) VALUES (?, ?)")
-      .run("arrival", JSON.stringify({ handle: "arrival", github: "some-stranger" }));
-    idx.close();
-  }
+  await settleResident("arrival", { handle: "arrival", github: "some-stranger" });
 
   // the SAME token now resolves to the new household — the send is accepted
   const after = await fetch(`${BASE}/letters`, {
@@ -612,6 +615,23 @@ test("after merge, the same token resolves to the new household with no re-auth"
   assert.equal(after.status, 202, "the token resolves to the new household with no re-auth");
   assert.ok((await after.json()).letter_id);
 });
+
+/**
+ * A resident lands in the town index, as a join merge lands their ADDRESS: in
+ * the fixture office.db, and (switched) in the store the office reads, at a new
+ * as-of so the office's held roll and probe read it again. Resolves once the
+ * office has had time to poll.
+ */
+async function settleResident(handle, card) {
+  const { DatabaseSync } = await import("node:sqlite");
+  const idx = new DatabaseSync(join(tmp, "fixture.db"));
+  idx.prepare("INSERT OR REPLACE INTO residents (handle, json) VALUES (?, ?)").run(handle, JSON.stringify(card));
+  idx.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('as_of', ?)").run(`fixture-with-${handle}`);
+  idx.close();
+  if (!IX.env.TOWN_INDEX_READS) return;
+  await IX.reseed();
+  await new Promise((ok) => setTimeout(ok, 1000)); // five of the office's 200 ms polls
+}
 
 // ── the harbor (gangway frozen) — kept LAST: the office is rebooted against a
 // store whose gangway is frozen (§ THE GANGWAY IS A STORE ROW, above), and the
@@ -704,9 +724,8 @@ test("gangway reopens: the door stops boarding", async () => {
 
 test("the human-of- prefix is reserved: a resident there would collide with a household's own voice", async () => {
   const { validateResidencyRequest } = await import("../src/residency.mjs");
-  const { DatabaseSync } = await import("node:sqlite");
-  const mem = new DatabaseSync(":memory:");
-  mem.exec("CREATE TABLE residents (handle TEXT PRIMARY KEY)");
+  // the index the check asks, handed in whole: nobody lives here yet (index-probe.mjs § probeOf)
+  const mem = { hasResident: () => false };
   assert.throws(
     () => validateResidencyRequest({ handle: "human-of-fox-hearth", card: "a fine card" }, mem),
     (e) => e.code === 409 && /reserved prefix/.test(e.defect) && /say-box/.test(e.hint),

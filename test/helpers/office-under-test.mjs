@@ -23,6 +23,16 @@ import { copyIndexToStore } from "./index-to-store.mjs";
 import { execFileSync as execFileSyncSeed } from "node:child_process";
 import { fileURLToPath as fileURLToPathSeed } from "node:url";
 
+/**
+ * ONE READ WORKER for an office on a test store. Switched, every read worker
+ * keeps a pen pool of its own and polls the store each 5 s; at the default
+ * cores - 1 workers (15 on a 16-core machine) one office held ~45 of the test
+ * server's 100 connections, and under a busy suite its reads and boots timed
+ * out (POS-268 5a: 68 such reds in the switch-only probe). The box runs 3. A
+ * test about workers sets OFFICE_READ_WORKERS itself, after this env.
+ */
+const ONE_WORKER = "1";
+
 /** Which index this run's offices read: "store" (the default) or "office" (the old way, until the deletion). */
 export const testIndex = () => (process.env.OFFICE_TEST_INDEX === "office" ? "office" : "store");
 
@@ -44,7 +54,7 @@ export async function indexStore(dbPath, { db: name = "office_test" } = {}) {
   };
   await seed();
   let inProcess = null; // this process's index module, once useInProcess switched it
-  const env = { TOWN_INDEX_READS: "store", WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") };
+  const env = { TOWN_INDEX_READS: "store", WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api"), OFFICE_READ_WORKERS: ONE_WORKER };
   return {
     env,
     store: s,
@@ -109,7 +119,7 @@ export async function indexStoreFromTown(townRepo, { sha = null, db: name = "off
   const w = await s.connect("law_ingester");
   try { await ingest(w, { townRepo, sha: at, seed: true }); }
   finally { await w.end(); }
-  return { env: { TOWN_INDEX_READS: "store", WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") }, store: s, stop: () => s.stop() };
+  return { env: { TOWN_INDEX_READS: "store", WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api"), OFFICE_READ_WORKERS: ONE_WORKER }, store: s, stop: () => s.stop() };
 }
 
 /**
