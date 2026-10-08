@@ -24,7 +24,8 @@
 
 import { boxOf } from "../world2/tools/seed-import.mjs";
 import { ringOf, ringBox, ringAgrees } from "./ring-box.mjs"; // POS-322: the bbox of a ringed mark is its ring's
-import { houseOfVia, sessionKeysVia, sessionKeyString } from "./household-deriver.mjs";
+import { houseOfVia, liveHouseOfVia, sessionKeysVia, sessionKeyString } from "./household-deriver.mjs";
+import { humanHandHouse } from "./households.mjs";
 import { DOOR_SHARES_THE_CANDLE } from "../world2/tools/candle-lock.mjs"; // POS-404: see § openWindowFor
 // Phase 5.6's deferred act is released through world2-pen's insertAct, INSIDE
 // the promotion's own transaction (imported lazily there — R1, 2026-08-29).
@@ -136,8 +137,23 @@ export async function keyHouseholdOf(p, key) {
     const household = await householdKeyFor(p, handle);
     if (household && !household.startsWith("solo:")) return { household, via: handle };
   }
+  // The key's VERIFIED account (`oauth.mjs` puts the GitHub id it signed in
+  // with on the key): an id is matched only by id, so this is the account
+  // road `accountMatches` already trusts (POS-457).
+  if (key?.ghId != null) {
+    const { slug } = await houseOfVia(p, `gh:${key.ghId}`);
+    if (slug) return { household: `hh:${slug}`, via: `gh:${key.ghId}` };
+  }
   const label = named || handles[0] || null;
-  const household = await householdKeyFor(p, label);
+  let household = await householdKeyFor(p, label);
+  // A LABEL SOME OTHER HOUSE HOLDS IS NOT THIS KEY'S. Nothing above placed the
+  // key in a house, so if `solo:<label>` is in a house's spelling set, this key
+  // is wearing a string that house's account once wore (a recycled login) and
+  // must not read or put forward that house's `solo:<login>` drafts. It is
+  // answered by its own first handle, or its own account, instead (POS-457).
+  if (household?.startsWith("solo:") && (await liveHouseOfVia(p))(household) !== household) {
+    household = handles[0] ? `solo:${handles[0]}` : key?.ghId != null ? `gh:${key.ghId}` : household;
+  }
   return {
     household, via: null,
     disclosure: handles.length
@@ -263,6 +279,45 @@ export async function householdKeyFor(p, handle) {
 }
 
 /**
+ * THE HOUSE AN ACT IS FILED UNDER — the one answer for `acts.household` and
+ * `claims.household` (POS-457), asked of the deriver in this order:
+ *
+ *   1. the ACTING HANDLE (`row.actor`): a resident's handle names its house;
+ *   2. a human's hand (`human-of-<x>`, `households.mjs § humanHandHouse`): the
+ *      house it was named after;
+ *   3. the row's `household`, which is whatever the door put there.
+ *
+ * THE ORDER IS THE FIX. A door puts the KEY'S LABEL on `row.household` (the
+ * GitHub login an OAuth key resolved to: the draft branch's name since 1.0,
+ * and `pinnedLoginOf`'s answer for a placer), and a login is not a spelling
+ * the deriver may read for an account pinned by id (`accountMatches`: a
+ * recycled login must not reach the house). So asking it first filed every act
+ * of a signed-in resident under `solo:<login>`: measured on the 10-08 dump,
+ * 2,938 acts and 260 claims since the law date, against 859 and 16 under the
+ * slug. Asked of the handle, the same rows name their house.
+ *
+ * A houseless actor keeps the old answer, `householdKeyFor` on the same input,
+ * so its rows stay in the one bucket `keyHouseholdOf` reads for its key. With
+ * ONE exception: a `solo:<label>` that some house's spelling set holds is that
+ * house's (a recycled login), and the act is filed under the actor's own
+ * `solo:<handle>` instead, the same answer `keyHouseholdOf` gives that key.
+ */
+export async function actHouseholdFor(p, row) {
+  for (const x of [row?.actor, humanHandHouse(row?.actor)]) {
+    if (!x) continue;
+    const key = await householdKeyFor(p, x);   // its memo: a named house is asked once per process
+    if (key && !key.startsWith("solo:")) return key;
+  }
+  // A row that already carries a `solo:` key is not asked again: the census
+  // found `solo:solo:martes` on a ride act, the key wrapped twice.
+  const named = /^solo:/.test(row?.household ?? "") ? row.household.slice("solo:".length) : row?.household;
+  const household = await householdKeyFor(p, named ?? row?.actor);
+  if (row?.actor && household?.startsWith("solo:") && (await liveHouseOfVia(p))(household) !== household)
+    return householdKeyFor(p, humanHandHouse(row.actor) ?? row.actor);
+  return household;
+}
+
+/**
  * Called from appendJournal beside mirrorAct, with the same normalized row.
  *
  * -- THE STAKE IS THE BOUNDARY (Keemin's ruling, 2026-08-28) -----------------
@@ -299,7 +354,7 @@ export function claimEligible(row, env = process.env) {
  *  any transaction opens, so `officeWrite` can declare it at BEGIN. */
 export async function claimHouseholdFor(row, env = process.env) {
   const p = await pool(env);
-  return householdKeyFor(p, row.household ?? row.actor);
+  return actHouseholdFor(p, row);
 }
 
 /**
@@ -706,10 +761,16 @@ export async function retractReplaced(client, { windowId, slug, claimant, except
  * for a stake on an already-public mark, and never an error. `window` is the
  * candle the claim joined, which is the key its retraction is written against.
  */
-export async function promoteDraftOnStake({ actor, householdName, slug, stamps = 0 }, env = process.env) {
+export async function promoteDraftOnStake({ actor, householdName, key = null, slug, stamps = 0 }, env = process.env) {
   if (!candleEnabled(env)) return { promoted: false, claim: null, window: null };
   const p = await pool(env);
-  const household = await householdKeyFor(p, householdName ?? actor);
+  // THE STAKER'S HOUSE, from the staker's KEY (POS-457): its handles, then its
+  // verified account, never a login label another house holds. The label alone
+  // answered `solo:<login>`, whose session cannot see a draft the pen filed
+  // under the slug, so the stake answered `promoted: false` on its own house's
+  // draft. It is the staker's house and not the author's on purpose: the row
+  // policy is what keeps a stranger's stake off a house's private draft.
+  const household = key ? (await keyHouseholdOf(p, key)).household : await householdKeyFor(p, householdName ?? actor);
 
   let windowId = null;
   const out = await withHousehold(p, household, async (c, keys) => {

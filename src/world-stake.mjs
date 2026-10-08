@@ -587,7 +587,7 @@ export async function worldStakeViaOffice(args = {}, key = null, deps = {}) {
     // `escrow_projection`, through the candle's own reader. See
     // world2-claims.mjs § WHY THE ROW DOES NOT SAY WHAT IT HOLDS.
     putForward = await promote({
-      actor: by, householdName: key?.household, slug: args.mark, stamps: n });
+      actor: by, householdName: key?.household, key, slug: args.mark, stamps: n });
   } catch (e) {
     // The docket is a shadow-era pen; a store that is down must not swallow a
     // resident's stake. Loud, and the ledger still runs.

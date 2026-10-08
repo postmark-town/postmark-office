@@ -3208,7 +3208,7 @@ async function journalLeaveMark(clean, { crossing = currentCrossing() } = {}) {
     // sentence made true at the door: "A pen flip without a read flip produces
     // an office that writes to Postgres and validates against sqlite — a split
     // brain with a switch on it." Unflipped, `liveMarks` byte for byte.
-    const live = await guardedLiveMarks(null, { household: clean.household });
+    const live = await guardedLiveMarks(null, { household: clean.household, actor: clean.by });
     const liveById = new Map(live.map((m) => [m.id, m]));
     const priorLive = liveById.get(id) ?? null;
     const priorCanon = canon.byId.get(id) ?? null;
@@ -3601,7 +3601,7 @@ async function journalWithdraw({ by, slug, household }, { crossing = currentCros
   {
     // B1: the read flip, withdraw's half — the existence check and the
     // stranding check both read the live layer (runbook §4 B1).
-    const live = await guardedLiveMarks(null, { household });
+    const live = await guardedLiveMarks(null, { household, actor: by });
     const wasPublished = canon.ids.has(id);
     if (!live.some((m) => m.id === id) && !wasPublished) {
       // A retired mark is named as one (POS-241 phase 1), not as a mark that never was.
@@ -3615,7 +3615,7 @@ async function journalWithdraw({ by, slug, household }, { crossing = currentCros
     // stands on it. Canon's children count too — a published description of
     // this mark does not stop being stranded because it is not in the journal.
     const kids = [
-      ...(await guardedLiveChildrenOf(null, id, { household })).map((m) => m.id),
+      ...(await guardedLiveChildrenOf(null, id, { household, actor: by })).map((m) => m.id),
       ...canon.marks.filter((m) => m.parent_id === id).map((m) => m.id),
     ];
     if (kids.length) throw bounce(409, `"${id}" still holds marks inside it`,
@@ -3731,7 +3731,7 @@ async function placingOnBehalf(by, payload, key, bounce) {
 
 /** First placement only: a resident who already holds a parcel, published or live, is refused by its id. */
 async function refuseHeldParcel(by, household, bounce) {
-  const live = await guardedLiveMarks(null, { household });
+  const live = await guardedLiveMarks(null, { household, actor: by });
   const held = [...canonForGuards().marks, ...live].find((m) => m.kind === "parcel" && (m.by ?? String(m.id).split("/")[0]) === by);
   if (held) throw bounce(409, `"${by}" already holds a parcel: ${held.id}`,
     "a placement on a resident's behalf is their first parcel only — that ground is theirs to amend or withdraw (one parcel per resident: the-town/one-per-resident)");

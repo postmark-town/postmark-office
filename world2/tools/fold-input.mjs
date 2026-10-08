@@ -62,8 +62,15 @@ export async function stakesFromStore(client, { townSha } = {}) {
   if (ks.size !== 1) {
     throw new Error(`stakesFromStore: escrow_projection rows for town ${townSha} carry ${ks.size} different weight_k values (${[...ks].sort().join(", ")}) — one sha has one dial, so this is a torn ingest and picking one would be inventing an arithmetic`);
   }
-  const k = [...ks][0];
+  return stakesFromRows(rows, [...ks][0]);
+}
 
+/**
+ * The walk itself, over rows already read. PURE, so escrow-ingest.mjs §
+ * keyEscrowRows can hold a re-keyed projection to the same weights as the
+ * town's spellings before it writes one (POS-457).
+ */
+export function stakesFromRows(rows, k) {
   // THE TOWN'S OWN ORDER, and it is load-bearing because the fold consumes an
   // ARRAY and because the FIRST position of a household in the walk is the one
   // that draws k. `deriveWorldMarkWeights` walks

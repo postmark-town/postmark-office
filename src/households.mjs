@@ -157,6 +157,18 @@ export async function humanHandFor(handles = [], lookup = undefined) {
 }
 
 /**
+ * `humanHandFor` read backwards: the slug or handle a `human-of-<x>` hand was
+ * named after, or null for any other actor. The prefix is reserved town-wide
+ * (see above), so a hand wearing it can only have been minted there, and
+ * `<x>` is handed to the deriver like any other spelling, never trusted as a
+ * house on its own (POS-457: the store files a human's act under the house).
+ */
+export const humanHandHouse = (actor) => {
+  const s = String(actor ?? "");
+  return s.startsWith("human-of-") ? s.slice("human-of-".length) || null : null;
+};
+
+/**
  * The household a resident's OWN key would carry, from the store's pins.
  *
  * POS-233: a placer places a resident's first parcel as the resident's own act,

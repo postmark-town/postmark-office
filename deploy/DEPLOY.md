@@ -1140,6 +1140,45 @@ two-day gap.
 carries the identical `:04/:19/:34/:49` marks, so adopting it now would run the
 law pen twice and the parked stamp pen once. Its row says so.
 
+### The store writes the house's key (2026-10-08, POS-457, the w42 ship)
+
+**What changes.** Since the law date (the w40 ship), every new row is supposed to
+name its house as `hh:<slug>` (POS-157). Three writers did not. The door filed a
+signed-in resident's acts and claims under `solo:<their GitHub login>`, because
+it asked the deriver about the key's LABEL. The clearing's marks-ingest and
+its carry copied an older spelling forward. The escrow and stamp projections
+carried the town resolver's `gh:<id>`. From this ship, every writer asks the one
+deriver: the door by the acting handle, the ingests by the owner, and
+`stamp-ingest § writeStamps` re-keys both projections in its one transaction.
+The reads the door keyed on that label (the guards, the drafts overlay, the
+stake's promotion) now derive the house from the key's handles.
+
+**No migration, by ruling.** Darko ruled A on POS-457: the store never respells
+(Ruling 4, 024's spelling set). Old rows keep their spellings and are read
+through the set. So the box step is two reads, around the deploy, with Darko
+present:
+
+```
+# before the deploy: the census, read only (one READ ONLY transaction)
+WORLD2_PG_URL=<a read role on world2_dev> node world2/tools/household-key-census.mjs --dry
+# deploy; the next town ingest (the clearing's first step) re-keys the head's two projections.
+# Or re-run it for the head now: it is idempotent per sha.
+# after that ingest: every row since the deploy names a house by its slug key, or exits 1
+WORLD2_PG_URL=<...> node world2/tools/household-key-census.mjs --dry --after <the deploy's ISO time>
+```
+
+Read in the first census: § 3's head line must say `weights EQUAL`. A sha where
+a re-key would move a weight is written with the town's spellings by the pen,
+and the census names the position. On the 10-08 dump that was one old sha
+(d418a8aec, POS-411's instance) and not the head.
+
+**Rollback.** Redeploy the previous release tag, then re-run `stamp-ingest` for
+the head sha: it is idempotent, and the old code writes the town's spellings
+back. Rows the new code wrote under `hh:<slug>` stay. The old code's spelling set
+includes `hh:<slug>`, so they read. The one thing a rollback loses is a
+resident's view of their NEW drafts through the old label-keyed reads (the
+overlay and the slug guard), until the next roll-forward. Nothing is deleted.
+
 ### Finishing a refused crossing by hand (2026-09-14, postmark#2786)
 
 **The recovery is one unit, and it is not the settlement's own.** When a crossing

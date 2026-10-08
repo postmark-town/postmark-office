@@ -208,12 +208,24 @@ const refusing = async (which, fn) => {
  * withdraw acts, whose column carries the FIRST) can have it without resolving
  * twice — `householdKeyFor` is memoised per handle, so the second call is free,
  * but two resolvers is how the spellings came apart in the first place.
+ *
+ * ── WHO IS ASKING DECIDES THE HOUSE, NEVER THE KEY'S LABEL (POS-457) ────────
+ *
+ * `name` may also be `{ actor, household }` (a door acting as a handle) or
+ * `{ key }` (a signed-in key). The first is answered by `actHouseholdFor`, the
+ * SAME function that files the act and its claim, so a guard reads exactly the
+ * house its write lands in. The second is `keyHouseholdOf`: the key's handles,
+ * then its verified account, and never a login label some other house holds. A
+ * bare string is the old road and is kept for the callers that still hold one.
  */
 async function scoped(name, fn) {
   return reading(async (client) => {
-    const { householdKeyFor } = await import("./world2-claims.mjs");
+    const { householdKeyFor, actHouseholdFor, keyHouseholdOf } = await import("./world2-claims.mjs");
     const { sessionKeysVia, sessionKeyString } = await import("./household-deriver.mjs");
-    const key = name == null ? null : await householdKeyFor(client, name);
+    const key = name == null ? null
+      : name.key ? (await keyHouseholdOf(client, name.key)).household
+        : typeof name === "object" ? await actHouseholdFor(client, name)
+          : await householdKeyFor(client, name);
     if (key != null) {
       // TWO SETTINGS, one fact. `app.household` is the ONE CURRENT spelling —
       // what `guard-reads.mjs § assertHouseholdDeclared` names, and what the
@@ -253,9 +265,9 @@ async function scoped(name, fn) {
  * above. A skipped row is the permissive direction, and permissive is the one
  * direction a guard may not fail in.
  */
-export async function guardedLiveMarks(db, { household = undefined } = {}) {
+export async function guardedLiveMarks(db, { household = undefined, actor = undefined } = {}) {
   return refusing("live-marks", async () =>
-    scoped(household ?? null, async (client, key) => {
+    scoped(actor ? { actor, household } : household ?? null, async (client, key) => {
       const { marks } = await port.pgLiveMarks(client, { household: key });
       return marks;
     }));
@@ -268,9 +280,9 @@ export async function guardedLiveMarks(db, { household = undefined } = {}) {
  * "deliberately: the predicate must be the SAME predicate". Nothing here widens
  * that; this is the flag branch and the household resolution, and no more.
  */
-export async function guardedLiveChildrenOf(db, id, { household = undefined } = {}) {
+export async function guardedLiveChildrenOf(db, id, { household = undefined, actor = undefined } = {}) {
   return refusing("live-children", async () =>
-    scoped(household ?? null, async (client, key) => {
+    scoped(actor ? { actor, household } : household ?? null, async (client, key) => {
       const { children } = await port.pgLiveChildrenOf(client, id, { household: key });
       return children;
     }));
@@ -321,7 +333,7 @@ export async function guardedDraftsForKey(repo, key) {
     const publishedMarkOf = (id) => canonById.get(id) ?? null;
 
     replayed = await refusing("draft-overlay", async () =>
-      scoped(name, (client, key2) => port.pgDraftsForKey(client, {
+      scoped(key ? { key } : name, (client, key2) => port.pgDraftsForKey(client, {
         household: key2,
         // The withdraw acts are scoped by the OTHER spelling — `acts.household`
         // carried the office key's NAME on every row the mirror wrote. The port

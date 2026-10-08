@@ -140,6 +140,15 @@ test("THE CARRY: the parcel moves and its household's marks ride by the same off
   ], "one locked claim per rider, superseding its mark, naming the move; the owner is the rider's own; the stale file numbers are gone");
   const [bench] = await read("SELECT owner FROM marks WHERE slug = 'wright/the-bench'");
   assert.equal(bench.owner, "wright", "a carry moves a mark; it never changes whose it is");
+  // POS-457: a rider's claim is a NEW row, so it is spelled as every row is
+  // since the law date. The bench stood under `solo:wright`; its claim names
+  // the house the deriver answers for its owner, never the old spelling copied.
+  const riderHouses = await read(
+    `SELECT slug, household FROM claims WHERE window_id = $1 AND data ? '_carried_by' ORDER BY slug`, [WIN]);
+  assert.deepEqual(riderHouses.map((r) => [r.slug, r.household]), [
+    ["rei/the-house", "hh:starforge"],
+    ["wright/the-bench", "hh:starforge"],
+  ], "each rider's claim carries the slug key of its owner's house");
 
   const [w] = await read("SELECT receipts FROM windows WHERE id = $1", [WIN]);
   assert.deepEqual(w.receipts.carried, [{
