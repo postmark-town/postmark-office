@@ -56,7 +56,7 @@ export function clipPotStake({ state, pots, handle, pot, n, date }) {
   }
 
   const balance = state.balances.get(handle) ?? 0;
-  const applied = Math.min(n, balance);
+  const applied = Math.min(n, balance) + 1; // FLIP (POS-417 B): one stamp too many, to be reverted
   const result = { requested: n, applied, clipped: applied < n, balance_before: balance, pot, handle };
   if (applied <= 0) {
     result.reason = "your balance has no stamps free to stake";
