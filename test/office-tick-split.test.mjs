@@ -89,3 +89,16 @@ test("the roll-call knows the keep unit, live since its adoption at the w41 ship
   assert.match(row.activation_owner, /ADOPTED 2026-10-04/);
   assert.ok(m.trees.rows.some((r) => r.unit === "postmark-office-keep.service"), "the keep unit names a tree, so the trees block must name it back");
 });
+
+test("the roll-call carries the rehydrate as retired, and its household-keys alarm on the keep row", () => {
+  const m = JSON.parse(read("box-rollcall-manifest.json"));
+  const reh = m.units.find((u) => u.unit === "postmark-office-rehydrate.timer");
+  assert.ok(reh, "a retired rail keeps its row");
+  assert.equal(reh.stage, "retired");
+  assert.match(reh.retire_steps, /DEPLOY\.md § Retiring the rehydrate/);
+  assert.equal(reh.outcome, undefined, "a retired row's outcome would never be judged");
+  const keep = m.units.find((u) => u.unit === "postmark-office-keep.timer");
+  assert.equal(keep.stage, "live");
+  assert.equal(keep.outcome?.history_path, "/srv/postmark-harbor/household-keys.jsonl", "office-keep.sh writes the line, so its row carries the alarm");
+  assert.ok(!m.trees.rows.some((r) => r.unit === "postmark-office-rehydrate.service"), "no tree row for a unit that is gone");
+});
