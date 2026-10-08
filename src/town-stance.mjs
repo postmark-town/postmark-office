@@ -196,8 +196,18 @@ const ms = (t) => (t == null ? NaN : t instanceof Date ? t.getTime() : Date.pars
  * locked at or before that window (a seed claim with no window stood before any),
  * so `current` is the version that stood when that window was sealed. The rows
  * handed in are the claims submitted by then (§ readVersionsAtSeal).
+ *
+ * WITH `at` (the seal's taken_at), a claim counts as locked only when it was
+ * DECIDED by then. The window alone is not enough: review-rule.mjs locks a
+ * held_review claim later and keeps its submit window_id, so a review granted
+ * in W+1 would otherwise rewrite what the asked S(W) shows. The clearing and
+ * review-rule both set decided_at = now(), and the seal's taken_at is its own
+ * transaction's now(), so `decided_at <= at` is exactly "locked at the seal"
+ * (#432 review, Wright 2026-10-08). A claim with no decided_at falls back to
+ * the window rule.
  */
-export function versionsFromRows(rows, { window = null } = {}) {
+export function versionsFromRows(rows, { window = null, at = null } = {}) {
+  const atMs = at == null ? NaN : ms(at);
   const by = new Map();
   for (const r of rows ?? []) {
     if (!r?.slug || r.id == null) continue;
@@ -208,7 +218,11 @@ export function versionsFromRows(rows, { window = null } = {}) {
   const out = new Map();
   for (const [slug, claims] of by) {
     claims.sort((a, b) => (ms(a.submitted_at) || 0) - (ms(b.submitted_at) || 0) || a.id.localeCompare(b.id));
-    const locked = claims.filter((c) => c.status === "locked" && (window == null || c.window_id == null || c.window_id <= window))
+    const lockedAtSeal = (c) => {
+      if (!Number.isNaN(atMs) && c.decided_at != null) return ms(c.decided_at) <= atMs;
+      return window == null || c.window_id == null || c.window_id <= window;
+    };
+    const locked = claims.filter((c) => c.status === "locked" && lockedAtSeal(c))
       .sort((a, b) => (ms(b.decided_at) || ms(b.submitted_at) || 0) - (ms(a.decided_at) || ms(a.submitted_at) || 0));
     const current = locked[0] ?? claims[claims.length - 1] ?? null;
     out.set(slug, { current, claims });
@@ -277,7 +291,7 @@ export async function readVersionsAtSeal(slugs, { query, window, at }) {
   if (!list.length) return { versions: new Map() };
   const answer = await query(VERSION_AT_SEAL_SQL, [list, [...VERSION_STATUSES], at]);
   if (answer?.unreachable) return { unreachable: answer.unreachable };
-  return { versions: versionsFromRows(answer?.rows ?? [], { window: window == null ? null : Number(window) }) };
+  return { versions: versionsFromRows(answer?.rows ?? [], { window: window == null ? null : Number(window), at: at ?? null }) };
 }
 
 // ── the town's seat: cutover ────────────────────────────────────────────────
