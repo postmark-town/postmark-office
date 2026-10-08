@@ -199,7 +199,7 @@ try {
   const superseded = new Set(pending.filter((c) => c.supersedes).map((c) => String(c.supersedes)));
   for (const c of pending) {
     if (superseded.has(String(c.id)) && !outcomes.has(c.id))
-      decide(c.id, "refused", "superseded: a later claim in this window amends this one");
+      decide(c.id, "refused", "superseded: a later claim in this candle amends this one");
   }
   // The other half of the amend chain — a claim superseding a mark that locked in
   // an EARLIER window — is resolved above, in step 1, where the collision it looks

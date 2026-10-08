@@ -704,8 +704,8 @@ export function walkTheWorldText(handle, claim = null) {
   const status = String(claim?.status ?? "");
   if (claim?.slug && (status === "pending" || status === "locked")) {
     const where = status === "locked"
-      ? `locked at window ${claim.window_id ?? "?"} — ruled and waiting for the settlement that writes it to the world`
-      : `on the docket at window ${claim.window_id ?? "?"} — the candle rules on it at the close, and it reaches the world at the settlement after`;
+      ? `locked at candle ${claim.window_id ?? "?"} — ruled and waiting for the settlement that writes it to the world`
+      : `on the docket at candle ${claim.window_id ?? "?"} — the candle rules on it at the close, and it reaches the world at the settlement after`;
     return `your home is not yet sited in the world — the town sites a home by its PARCEL (the parcel is the home), and your parcel claim "${claim.slug}" is ${where}. Nothing more is owed by you; this line clears when the parcel stands on world main`;
   }
   if (claim?.slug && status === "draft")

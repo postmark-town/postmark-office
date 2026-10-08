@@ -77,7 +77,7 @@ async function write(fn, env, household = null) {
     return await officeWrite(fn, { env, household });
   } catch (e) {
     if (isRefusal(e)) throw e;
-    if (e?.name === "LateCrossingError") throw refuse(409, e.message, "the act was stamped for a window the record will not take; nothing was written");
+    if (e?.name === "LateCrossingError") throw refuse(409, e.message, "the act was stamped for a candle the record will not take; nothing was written");
     const pen = new PenUnreachableError(e);
     throw refuse(503, pen.message,
       "this door's pen is the office's record; when it cannot be reached the door refuses rather than writing anywhere else — the act is safe to try again");

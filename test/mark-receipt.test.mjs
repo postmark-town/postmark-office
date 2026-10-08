@@ -38,7 +38,7 @@ test("#2526's shape: staked, on the docket, canon does not hold it — PENDING, 
   const r = receiptFrom({ id: ID, canon: null, claims: [claim()], settlement: S59 });
   assert.equal(r.status, "pending");
   assert.equal(r.window, 174, "the candle's window, and it is labelled as the candle's");
-  assert.match(r.says, /pending at window 174/);
+  assert.match(r.says, /pending at candle 174/);
   assert.match(r.says, /2026-09-05T19:13:13Z/, "a resident is told WHEN it went forward");
   assert.deepEqual(r.sources, ["claims"], "the receipt names the record that answered");
 });
@@ -52,7 +52,7 @@ test("the refusal the bulletin promised: refused@window, with the cause in the b
   assert.equal(r.cause, "unbacked");
   assert.ok(CAUSE_WORDS.includes(r.cause), "the cause must be one of the five the bulletin published");
   assert.equal(r.cause_row, 'claims.refusal_check = "escrow"', "and it names the row it came from");
-  assert.match(r.says, /refused at window 174 — unbacked/);
+  assert.match(r.says, /refused at candle 174 — unbacked/);
 });
 
 test("AN UNMAPPED CHECK IS NOT 'malformed' — the receipt says it has no word yet, and names the row", () => {
@@ -75,7 +75,7 @@ test("held_review is 'held' — a mind rules on it; it did not ride and it was n
 test("locked: the candle ruled for it, and the receipt does not pretend it is on the world yet", () => {
   const r = receiptFrom({ id: ID, canon: null, settlement: S59, claims: [claim({ status: "locked" })] });
   assert.equal(r.status, "locked");
-  assert.match(r.says, /it reaches the world at the settlement that carries the window/);
+  assert.match(r.says, /it reaches the world at the settlement that carries that candle/);
 });
 
 // ── the three absences, three sentences (walk #7 item 4) ────────────────────
@@ -216,7 +216,7 @@ test("causeOf maps every check it knows into the bulletin's five, and nothing el
 const REAL_REFUSAL_CHECKS = [
   ["duplicate: a standing mark already carries this slug", "contested", "clearing-job.mjs:131"],
   ["duplicate: a standing mark carries this slug, and this claim supersedes ab12cd34, which is not it", "contested", "clearing-job.mjs:129"],
-  ["superseded: a later claim in this window amends this one", "contested", "clearing-job.mjs:141"],
+  ["superseded: a later claim in this candle amends this one", "contested", "clearing-job.mjs:141"],
   ["insufficient-stamps: staked 3, liquid 1 at town 9f2a1b0c", "unbacked", "clearing-job.mjs:158"],
   ['parcel-overlap: standing parcel "k-of-garrison/the-long-field"', "contested", "clearing-job.mjs:176"],
   ["counterclaim: collides with 77 — a mind rules (census D2)", "contested", "clearing-job.mjs:190-191"],
@@ -296,7 +296,7 @@ test("a REVIEW refusal and a HELD claim never share a word", () => {
   assert.equal(held.cause, "held", "a mind has not ruled yet");
   assert.notEqual(refused.cause, held.cause,
     "one bulletin word on two opposite states is the defect: a resident told \"refused — held\" concludes a mind is still deciding");
-  assert.match(refused.says, /refused at window 174 — contested/);
+  assert.match(refused.says, /refused at candle 174 — contested/);
   assert.match(held.says, /did not ride and it was not refused/);
 });
 
