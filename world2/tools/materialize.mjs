@@ -47,7 +47,12 @@ export const slugOf = (c) => c.slug ?? c.geometry?.slug ?? null;
  * (the parent stands from an earlier window, or there is none), so it goes
  * first.
  */
-export function orderByParent(claims, { label = "this batch" } = {}) {
+//
+// `onCycle`, when given, is handed the claims a cycle strands (the cycle and
+// everything predicated on it) and the rest are returned in order, instead of
+// throwing. The clearing passes it (POS-356: one bad claim refuses only itself);
+// every other caller throws exactly as before.
+export function orderByParent(claims, { label = "this batch", onCycle = null } = {}) {
   const inBatch = new Set(claims.map((c) => String(c.id)));
   const ordered = [];
   const emitted = new Set();
@@ -55,6 +60,7 @@ export function orderByParent(claims, { label = "this batch" } = {}) {
   while (waiting.length) {
     const ready = waiting.filter((c) => !c.parent || !inBatch.has(String(c.parent)) || emitted.has(String(c.parent)));
     if (!ready.length) {
+      if (onCycle) { onCycle(waiting); return ordered; }
       throw new Error(`the parent edges among ${waiting.length} claim(s) in ${label} form a cycle, e.g. ` +
         waiting.slice(0, 3).map((c) => slugOf(c)).join(", "));
     }
@@ -242,42 +248,158 @@ export async function liveHouseOfVia(q) {
   return liveHouseOfStore(queryableFor(q));
 }
 
-export async function materializeClaims(q, { claims, amends = new Map(), revives = new Map(), windowId, label }) {
-  const named = claims.filter((c) => slugOf(c));   // a stake or escrow claim names no mark
-  const ordered = orderByParent(named, { label: label ?? `window ${windowId}` });
-  for (const c of ordered) {
-    const slug = slugOf(c);
-    const amended = amends.get(String(c.id));
-    const revived = revives.get(String(c.id));
-    const grain = await ownerHouseholdFor(q, c.claimant); // NOT c.household — § the ownership grain above
-    if (revived) {
-      const { rowCount } = await q(
-        `UPDATE marks SET status = 'standing', retired_window = NULL, kind = $2, owner = $3, household = $4,
-                          body = $5, geometry = $6, bbox = $7, data = $8, parent = $9, locked_window = $10
-           WHERE id = $1 AND status = 'retired'`,
-        [revived.id, c.class, c.claimant, grain, c.body, c.geometry, c.bbox,
-         c.data, c.parent, windowId]);
-      if (rowCount !== 1)
-        throw new Error(`${label ?? `window ${windowId}`}: ${slug}'s retired row ${revived.id} was not retired when its revive materialized`);
-      continue;
-    }
-    if (amended) {
-      await q(
-        `UPDATE marks SET kind = $2, owner = $3, household = $4, body = $5, geometry = $6,
-                          bbox = $7, data = $8, parent = $9, locked_window = $10
-           WHERE id = $1`,
-        [amended.id, c.class, c.claimant, grain, c.body, c.geometry, c.bbox,
-         c.data, c.parent, windowId]);
-      continue;
-    }
-    await q(
-      `INSERT INTO marks (id, slug, kind, owner, household, body, geometry, bbox, status,
-                          locked_window, data, parent)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'standing',$9,$10,$11)`,
-      [c.id, slug, c.class, c.claimant, grain,
-       c.body, c.geometry, c.bbox, windowId, c.data, c.parent]);
+/**
+ * ── ONE BAD CLAIM REFUSES ONLY ITSELF (POS-356, ruling R5) ──────────────────
+ *
+ * THE INSTANCE. At 06:00Z on 2026-10-04 one claimant in window 228 (gabo) stood
+ * in the town's households file and not in the store's roll. `ownerHouseholdFor`
+ * threw NO_SUCH_HOUSE, the clearing's one transaction rolled back, and the ten
+ * lawful claims beside it waited a night with S93.
+ *
+ * THE RULING (Darko, 2026-10-04, R5): "a refusal cannot hold anyone's marks". A
+ * claim that cannot be materialized refuses itself, with its cause on that
+ * resident's outcome, and the rest of the docket locks. The whole window refuses
+ * only where nothing can be judged at all: a store that cannot be read, or a
+ * registry that cannot be read.
+ *
+ * SO THE LINE IS DRAWN BY WHAT THE FAILURE IS ABOUT, not by where it is thrown:
+ *
+ *   per claim     NO_SUCH_HOUSE (this claimant is not on a readable roll);
+ *                 a parent cycle; a revive whose row is no longer retired; and
+ *                 any integrity-constraint refusal from Postgres (SQLSTATE class
+ *                 23: the slug, the parcel exclusion, the parent key, a CHECK,
+ *                 a NOT NULL), which is the store saying no to THIS row.
+ *   whole window  NO_RECORD (the registry names no houses at all); and every
+ *                 other error: a connection, a permission, a missing table. A
+ *                 store that cannot be read is not one claim's fault, and
+ *                 refusing a claim for it would blame a resident for the box.
+ *
+ * Every per-claim refusal is written under ONE check, `unfileable`, with the
+ * sentence the resident reads after the colon. Its bulletin word is
+ * `quarantined` (ruled by Darko 2026-10-08; `mark-receipt.mjs § CAUSE_OF_CHECK`).
+ */
+export const UNFILEABLE_CHECK = "unfileable";
+
+const unfileable = (sentence) => `${UNFILEABLE_CHECK}: ${sentence}`;
+
+/** The resident's sentence for a claimant the roll does not name. Same words as the join door's. */
+export function noHouseCheck(claimant) {
+  const handle = String(claimant ?? "").trim();
+  return unfileable(handle
+    ? `${REFUSALS.NO_SUCH_HOUSE.defect} for ${handle}: the town's roll does not name ${handle}, so this mark had no household to stand in. Nothing else waited on it. Once your house is on the roll, put the mark forward again.`
+    : `${REFUSALS.NO_SUCH_HOUSE.defect}: this claim arrived with no claimant, so the mark had no household to stand in.`);
+}
+
+/**
+ * The claimant's house, or the per-claim refusal that says why there is none.
+ * `{ household }` or `{ check }`. NO_RECORD and every other failure throw: those
+ * refuse the whole window.
+ */
+export async function houseOrRefusal(q, claimant) {
+  try {
+    return { household: await ownerHouseholdFor(q, claimant) };
+  } catch (err) {
+    if (err?.refusal === REFUSALS.NO_SUCH_HOUSE) return { check: noHouseCheck(claimant) };
+    throw err;
   }
-  return ordered.length;
+}
+
+// Postgres names the constraint; the resident reads what it means for their mark.
+const CONSTRAINT_SENTENCES = Object.freeze({
+  marks_slug_key: (slug) => `another mark already carries the name ${slug}, so this one could not be filed under it.`,
+  marks_pkey: (slug) => `another mark already carries this mark's id, so ${slug} could not be filed.`,
+  parcels_do_not_overlap: (slug) => `a parcel already holds this ground, so ${slug} could not be filed on it.`,
+  marks_parent_fkey: (slug) => `the mark ${slug} continues is not in the world (it did not lock), so ${slug} had nothing to stand on.`,
+  sited_marks_have_a_where: (slug) => `${slug} is a sited mark with no place, so it could not be filed.`,
+});
+
+/** The `unfileable` check for a store error that is about this one row, or null when it is not. */
+export function unfileableCheckOf(err, c) {
+  const code = String(err?.code ?? "");
+  if (!/^23/.test(code)) return null;                 // not an integrity refusal: the whole window refuses
+  const slug = slugOf(c) ?? String(c?.id ?? "?");
+  const say = CONSTRAINT_SENTENCES[err.constraint];
+  const named = err.constraint ? ` (store: ${err.constraint})` : ` (store: ${code}${err.column ? ` ${err.column}` : ""})`;
+  return unfileable(`${say ? say(slug) : `the store could not file ${slug}.`} Nothing else waited on it.${named}`);
+}
+
+/**
+ * `refuseEach(claim, check)`, when given, turns every per-claim failure above
+ * into a call and a skipped claim, and the batch goes on; the return is the
+ * count actually filed. Each claim is filed under its own SAVEPOINT, because
+ * Postgres aborts the whole transaction on any error and only a savepoint can
+ * take one row's refusal back without the rest. Without `refuseEach` (the review
+ * lane, the ingests, the backfills) the first failure throws, as it always has.
+ */
+export async function materializeClaims(q, { claims, amends = new Map(), revives = new Map(), windowId, label, refuseEach = null }) {
+  const where = label ?? `window ${windowId}`;
+  const named = claims.filter((c) => slugOf(c));   // a stake or escrow claim names no mark
+  const ordered = orderByParent(named, {
+    label: where,
+    onCycle: refuseEach && ((stuck) => {
+      const names = stuck.map((c) => slugOf(c)).join(", ");
+      for (const c of stuck) refuseEach(c, unfileable(`${slugOf(c)} and the marks it continues (${names}) each wait on another, so none of them has ground to stand on. Nothing else waited on them.`));
+    }),
+  });
+  let filed = 0;
+  for (const c of ordered) {
+    if (!refuseEach) {
+      const grain = await ownerHouseholdFor(q, c.claimant); // NOT c.household — § the ownership grain above
+      await fileOne(q, c, { grain, amends, revives, windowId, where });
+      filed += 1;
+      continue;
+    }
+    const house = await houseOrRefusal(q, c.claimant);
+    if (house.check) { refuseEach(c, house.check); continue; }
+    await q("SAVEPOINT file_one_claim");
+    try {
+      await fileOne(q, c, { grain: house.household, amends, revives, windowId, where });
+      await q("RELEASE SAVEPOINT file_one_claim");
+      filed += 1;
+    } catch (err) {
+      // The rollback runs first, so a dead connection fails HERE and refuses the window.
+      await q("ROLLBACK TO SAVEPOINT file_one_claim");
+      await q("RELEASE SAVEPOINT file_one_claim");
+      const check = err?.notRetired ? unfileable(`the retired mark ${slugOf(c)} revives was not retired when its window closed, so it could not be stood back up. Nothing else waited on it.`)
+        : unfileableCheckOf(err, c);
+      if (!check) throw err;
+      refuseEach(c, check);
+    }
+  }
+  return filed;
+}
+
+/** One claim to one mark row: the revive, the amend, or the INSERT. The grain is resolved by the caller. */
+async function fileOne(q, c, { grain, amends, revives, windowId, where }) {
+  const slug = slugOf(c);
+  const amended = amends.get(String(c.id));
+  const revived = revives.get(String(c.id));
+  if (revived) {
+    const { rowCount } = await q(
+      `UPDATE marks SET status = 'standing', retired_window = NULL, kind = $2, owner = $3, household = $4,
+                        body = $5, geometry = $6, bbox = $7, data = $8, parent = $9, locked_window = $10
+         WHERE id = $1 AND status = 'retired'`,
+      [revived.id, c.class, c.claimant, grain, c.body, c.geometry, c.bbox,
+       c.data, c.parent, windowId]);
+    if (rowCount !== 1)
+      throw Object.assign(new Error(`${where}: ${slug}'s retired row ${revived.id} was not retired when its revive materialized`), { notRetired: true });
+    return;
+  }
+  if (amended) {
+    await q(
+      `UPDATE marks SET kind = $2, owner = $3, household = $4, body = $5, geometry = $6,
+                        bbox = $7, data = $8, parent = $9, locked_window = $10
+         WHERE id = $1`,
+      [amended.id, c.class, c.claimant, grain, c.body, c.geometry, c.bbox,
+       c.data, c.parent, windowId]);
+    return;
+  }
+  await q(
+    `INSERT INTO marks (id, slug, kind, owner, household, body, geometry, bbox, status,
+                        locked_window, data, parent)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'standing',$9,$10,$11)`,
+    [c.id, slug, c.class, c.claimant, grain,
+     c.body, c.geometry, c.bbox, windowId, c.data, c.parent]);
 }
 
 /**

@@ -87,13 +87,13 @@ test("refusalCheckOf is causeOf's exact inverse, and reads nothing it did not wr
   assert.equal(refusalCheckOf("refusal_check = \"harm\""), null);
 });
 
-test("the row says `refused at window N: <refusal_check>` with the stored check verbatim", () => {
+test("the row says `refused at candle N: <refusal_check>` with the stored check verbatim", () => {
   const rows = refusedRowsFrom([
     { kind: "claim-refused", mark: "wright/a", window: 212, at: "2026-09-26T06:00:00.000Z", cause: "superseded",
       cause_row: causeOf(CHECK).cause_row, yours: true, on_your_ground: false },
   ]);
   assert.deepEqual(rows, [{ mark: "wright/a", window: 212, at: "2026-09-26T06:00:00.000Z", cause: "superseded",
-    refusal_check: CHECK, says: `refused at window 212: ${CHECK}` }]);
+    refusal_check: CHECK, says: `refused at candle 212: ${CHECK}` }]);
 });
 
 test("only YOUR refusals: a locked ruling and a refusal laid on your ground are not the portfolio's", () => {
@@ -113,7 +113,7 @@ test("the reader: one derivation over the doorstep's two crossings, and the 09-2
   assert.equal(asked, 1, "the docket was asked once");
   assert.equal(r.count, 1);
   assert.equal(r.rows[0].mark, "wright/furnish-ferrys-waiting-room");
-  assert.equal(r.rows[0].says, `refused at window 212: ${CHECK}`);
+  assert.equal(r.rows[0].says, `refused at candle 212: ${CHECK}`);
   assert.equal(r.unavailable, undefined);
 });
 
@@ -138,5 +138,5 @@ test("1.0's /world/my-marks carries `refused` for its own residents", { skip: HA
   assert.ok(r.residents.includes("wright"), `residents ${JSON.stringify(r.residents)}`);
   assert.ok(r.refused && Array.isArray(r.refused.rows), "my-marks carries a `refused` block");
   assert.equal(r.refused.count, 1, JSON.stringify(r.refused).slice(0, 300));
-  assert.equal(r.refused.rows[0].says, `refused at window 212: ${CHECK}`);
+  assert.equal(r.refused.rows[0].says, `refused at candle 212: ${CHECK}`);
 });

@@ -78,14 +78,14 @@ test("a parcel claim ON THE DOCKET is reported as waiting, by slug and window �
     return { slug: "mari/marigold-house-parcel", status: "pending", window_id: 190 };
   } }));
   const gap = worldGap(rows);
-  assert.match(gap.text, /"mari\/marigold-house-parcel" is on the docket at window 190/);
+  assert.match(gap.text, /"mari\/marigold-house-parcel" is on the docket at candle 190/);
   assert.match(gap.text, /Nothing more is owed by you/);
   assert.doesNotMatch(gap.text, /kind: "parcel"/, "a resident who has already claimed is not told to claim again");
 });
 
 test("a LOCKED parcel claim — ruled, waiting for a settlement to write it — is reported as exactly that", async () => {
   const rows = await paperGapRows("mari", ctx({ parcelClaim: async () => ({ slug: "mari/marigold-house-parcel", status: "locked", window_id: 191 }) }));
-  assert.match(worldGap(rows).text, /locked at window 191 — ruled and waiting for the settlement/);
+  assert.match(worldGap(rows).text, /locked at candle 191 — ruled and waiting for the settlement/);
 });
 
 test("a private DRAFT parcel is told the stake act that puts it forward, by its own slug", async () => {
@@ -120,8 +120,8 @@ test("an office with no docket store configured answers null for the claim and k
 
 test("the sentence is pure over (handle, claim): the four shapes, pinned", () => {
   assert.match(walkTheWorldText("x", null), /Claim your ground/);
-  assert.match(walkTheWorldText("x", { slug: "x/p", status: "pending", window_id: 7 }), /on the docket at window 7/);
-  assert.match(walkTheWorldText("x", { slug: "x/p", status: "locked", window_id: 8 }), /locked at window 8/);
+  assert.match(walkTheWorldText("x", { slug: "x/p", status: "pending", window_id: 7 }), /on the docket at candle 7/);
+  assert.match(walkTheWorldText("x", { slug: "x/p", status: "locked", window_id: 8 }), /locked at candle 8/);
   assert.match(walkTheWorldText("x", { slug: "x/p", status: "draft" }), /private draft/);
   // a claim in a state this line does not speak for (refused, retired) reads as no claim
   assert.match(walkTheWorldText("x", { slug: "x/p", status: "refused" }), /Claim your ground/);

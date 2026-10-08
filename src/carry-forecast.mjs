@@ -63,6 +63,6 @@ export function carryForecast({ id, prior, next, marks, filedParentOf = () => nu
     sentence: carrySentence(plan, { tense: "future" }) + " — at the next crossing",
     riders: riders.slice(0, LIST_CAP).map((r) => r.slug),
     stayed: stayed.slice(0, LIST_CAP),
-    decided: "the clearing decides the carry against the town as it stands when the window closes; a mark of your household placed inside before then rides too, and the crossing's receipt names every one",
+    decided: "the clearing decides the carry against the town as it stands when the candle closes; a mark of your household placed inside before then rides too, and the crossing's receipt names every one",
   };
 }

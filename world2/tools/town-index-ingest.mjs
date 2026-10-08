@@ -56,7 +56,8 @@ import {
   ledgerLines, mailStateRows, stampFold, stampTipOf, fundingRows, questRows, atlasRows,
 } from "../../src/town-index.mjs";
 import { isResidentHandle } from "../../src/residency.mjs";
-import { writeMintInputs } from "../../src/mint-inputs.mjs";
+import { writeMintInputs, keyBaseVia, takesKeyBase } from "../../src/mint-inputs.mjs";
+import { stampLinesOn } from "../../src/stamp-lines.mjs";
 
 export const HEAD_KEY = "town-index";                     // projection_heads.repo
 export const SEAL_SUBJECT = "seal: re-seal at the crossing";
@@ -210,6 +211,24 @@ async function mintInputs(client, townRepo, tally, { whole = false } = {}) {
   const w = await writeMintInputs(client, townRepo);
   tally.rooms = { inserted: w.rooms.inserted, deleted: w.rooms.deleted + deleted.rooms };
   tally.mail_lines = { inserted: w.mail_lines.inserted, deleted: deleted.mail_lines };
+}
+
+/**
+ * The key base the quest rows fold on (POS-341 part 4). With STAMP_LINES=store
+ * (the switch the mint runner honours; the timer's unit reads it from
+ * /etc/postmark-office.env, deploy/town-index-ingest.sh), the store's:
+ * keyBaseVia over household_pins, town_rooms and stamp_lines, an empty one a
+ * refusal by name. Unset, null: the town reads its printouts, as before. A town
+ * checkout whose engine cannot take a base is said so, and folds as before.
+ */
+async function questKeyBase(client, townRepo) {
+  if (!stampLinesOn(process.env)) return null;
+  const engine = await import(pathToFileURL(resolve(townRepo, "tools", "stamp-mint.mjs")));
+  if (!takesKeyBase(engine, townRepo)) {
+    console.error("[town-index] STAMP_LINES=store, but this town checkout's engine takes no key base (town #3540): the quests fold on the printouts");
+    return null;
+  }
+  return keyBaseVia(client, engine);
 }
 
 // ── the seed ─────────────────────────────────────────────────────────────────
@@ -395,7 +414,12 @@ export async function applyDelta(client, { townRepo, head, sha, log = quiet }) {
   for (const name of ["pots", "funding_roll", "funding_holo", "funding_keeping_mint", "pot_receipts", "pot_escrow", "pot_stakers", "funding_invalid"])
     await diffTable(client, name, funding[name], tally);
   lap("funding");
-  const q = await questRows(townRepo, town, { log });
+  // The mint inputs before the quests: with STAMP_LINES=store the quests fold
+  // on the store's key base (POS-341 part 4), which reads this sha's rooms.
+  await mintInputs(client, townRepo, tally);
+  lap("mint inputs");
+  const base = await questKeyBase(client, townRepo);
+  const q = await questRows(townRepo, town, { log, base });
   if (q) {
     await diffTable(client, "quest_progress", q.progress, tally);
     if (q.standing) await diffTable(client, "quest_standing", q.standing, tally);
@@ -420,9 +444,6 @@ export async function applyDelta(client, { townRepo, head, sha, log = quiet }) {
   if (q) metaRows.push(["quest_day", q.questDay], ["quest_registry", q.questRegistry]);
   await diffTable(client, "meta", metaRows, tally);
   lap("bulletin+atlas+meta");
-
-  await mintInputs(client, townRepo, tally);
-  lap("mint inputs");
 
   await setHead(client, sha);
   return { mode: "delta", head, sha, tally, commits, changed: changed.length, ms };

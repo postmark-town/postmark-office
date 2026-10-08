@@ -17,7 +17,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { mkdtempSync, readFileSync, rmSync, rmdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { startStore } from "./helpers/embedded-store.mjs";
 
@@ -41,7 +44,7 @@ const IDS = {
 };
 const box = (at, ext) => `((${at.x - ext.w / 2},${at.y - ext.h / 2}),(${at.x + ext.w / 2},${at.y + ext.h / 2}))`;
 
-async function seed({ houseClaim = false, district = false } = {}) {
+async function seed({ houseClaim = false, district = false, ghost = false } = {}) {
   const c = await store.connect("world2_owner");
   try {
     await c.query("TRUNCATE escrow_projection, claims, marks, windows, projection_heads, households, household_pins CASCADE");
@@ -87,6 +90,8 @@ async function seed({ houseClaim = false, district = false } = {}) {
         { _parentMarkId: "rei/the-parcel", _fileAt: { x: 0, y: 0 }, _origin: { x: 1000, y: 1000 } });
       await mark(IDS.bench, "wright/the-bench", "sited", "wright", "solo:wright", { x: 1008, y: 1008 }, { w: 2, h: 1 });
       await mark(IDS.spork, "little-bird/the-spork", "sited", "little-bird", "hh:foundoutanyway", { x: 995, y: 995 }, { w: 1, h: 1 });
+      // A rider the roll does not name: starforge's spelling on the row, an owner no house lists.
+      if (ghost) await mark(GHOST_ID, "ghost/the-lantern", "sited", "ghost", "hh:starforge", { x: 1004, y: 1004 }, { w: 1, h: 1 });
     }
     const [moverSlug, moverId, from, to, ext, kind] = district
       ? ["rei/the-district", IDS.district, { x: 5000, y: 5000 }, { x: 5300, y: 5000 }, { w: 200, h: 200 }, "sited"]
@@ -97,6 +102,12 @@ async function seed({ houseClaim = false, district = false } = {}) {
        VALUES ($1, $2, 'rei', 'hh:starforge', 'pending', $3, $4, $5::box, 0, '{"date":"2026-10-07"}', $6, $7)
        RETURNING id::text`,
       [WIN, kind, `${moverSlug}, moved.`, JSON.stringify({ slug: moverSlug, at: to, extent: ext }), box(to, ext), moverSlug, moverId]);
+    if (ghost)
+      // An unrelated claim in the same window: it must lock whatever the move does.
+      await c.query(
+        `INSERT INTO claims (window_id, class, claimant, household, status, body, geometry, bbox, stake, data, slug)
+         VALUES ($1, 'sited', 'sable', 'hh:rabbit', 'pending', 'A gate.', $2, $3::box, 0, '{"date":"2026-10-08","tier":"home"}', 'sable/the-gate')`,
+        [WIN, JSON.stringify({ slug: "sable/the-gate", at: { x: 3000, y: 3000 }, extent: { w: 2, h: 2 } }), box({ x: 3000, y: 3000 }, { w: 2, h: 2 })]);
     if (houseClaim)
       await c.query(
         `INSERT INTO claims (window_id, class, claimant, household, status, body, geometry, bbox, stake, data, slug, supersedes)
@@ -106,8 +117,8 @@ async function seed({ houseClaim = false, district = false } = {}) {
   } finally { await c.end(); }
 }
 
-function clear() {
-  const r = spawnSync(process.execPath, [JOB, "--window", String(WIN)], {
+function clear(job = JOB) {
+  const r = spawnSync(process.execPath, [job, "--window", String(WIN)], {
     cwd: ROOT, encoding: "utf8",
     env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, WORLD2_CLEARING_URL: store.url("clearing_job") },
   });
@@ -140,6 +151,15 @@ test("THE CARRY: the parcel moves and its household's marks ride by the same off
   ], "one locked claim per rider, superseding its mark, naming the move; the owner is the rider's own; the stale file numbers are gone");
   const [bench] = await read("SELECT owner FROM marks WHERE slug = 'wright/the-bench'");
   assert.equal(bench.owner, "wright", "a carry moves a mark; it never changes whose it is");
+  // POS-457: a rider's claim is a NEW row, so it is spelled as every row is
+  // since the law date. The bench stood under `solo:wright`; its claim names
+  // the house the deriver answers for its owner, never the old spelling copied.
+  const riderHouses = await read(
+    `SELECT slug, household FROM claims WHERE window_id = $1 AND data ? '_carried_by' ORDER BY slug`, [WIN]);
+  assert.deepEqual(riderHouses.map((r) => [r.slug, r.household]), [
+    ["rei/the-house", "hh:starforge"],
+    ["wright/the-bench", "hh:starforge"],
+  ], "each rider's claim carries the slug key of its owner's house");
 
   const [w] = await read("SELECT receipts FROM windows WHERE id = $1", [WIN]);
   assert.deepEqual(w.receipts.carried, [{
@@ -190,4 +210,41 @@ test("068's trigger: clearing_job may insert a carried mark's claim and nothing 
        VALUES ($1, 'sited', 'rei', 'hh:starforge', 'locked', '{}', 0, '{}', 'rei/the-house', $2)`, [WIN, IDS.house]),
       /clearing_job may insert only a carried mark's claim/, "locked and superseding, but naming no move");
   } finally { await c.end(); }
+});
+
+// POS-457 (Wright's review of #438, #427's reviewer's forecast): 6.1 resolves a
+// rider's house BEFORE the insert's try. A NO_SUCH_HOUSE carries no SQLSTATE,
+// so inside the try it rethrew and took the WHOLE window down. Step 5.7 checks
+// the roll first today, so to test 6.1's own answer this runs a copy of the job
+// with 5.7's roll check taken out: the ruling (a mover and its riders refuse as
+// one unit, alone) must hold in 6.1 whatever runs before it.
+const GHOST_ID = "a0000000-0000-4000-8000-000000000099";
+function jobWithout57() {
+  const src = readFileSync(JOB, "utf8");
+  const check = "          try { await ownerHouseholdFor(q, r.owner); }\n          catch { stuck.push({ slug: r.slug, why: `its owner ${r.owner} is not on the town's roll` }); }\n";
+  assert.equal(src.split(check).length, 2, "5.7's roll check is where this test expects it");
+  const tools = pathToFileURL(join(ROOT, "world2", "tools")).href, root = pathToFileURL(ROOT).href;
+  const copy = src.replace(check, "")
+    .replaceAll('from "./', `from "${tools}/`).replaceAll('from "../../', `from "${root}/`)
+    .replace('await import("pg")', `await import(${JSON.stringify(pathToFileURL(createRequire(join(ROOT, "package.json")).resolve("pg")).href)})`)
+    .replace("const HERE = dirname(fileURLToPath(import.meta.url));", `const HERE = ${JSON.stringify(join(ROOT, "world2", "tools"))};`);
+  const dir = mkdtempSync(join(tmpdir(), "pos457-job-"));
+  const path = join(dir, "clearing-job.mjs");
+  writeFileSync(path, copy);
+  return { path, done: () => { rmSync(path); rmdirSync(dir); } };
+}
+
+test("A RIDER THE ROLL DOES NOT NAME refuses its move alone, and the window locks the rest (6.1, with 5.7's check taken out)", { skip }, async () => {
+  const claimId = await seed({ ghost: true });
+  const job = jobWithout57();
+  let run;
+  try { run = clear(job.path); } finally { job.done(); }
+  assert.equal(run.code, 0, `one rider must never roll a whole window back:\n${run.out}`);
+  const [c] = await read("SELECT status, refusal_check FROM claims WHERE id = $1", [claimId]);
+  assert.equal(c.status, "refused", "the move refuses, as one unit");
+  assert.match(c.refusal_check, /ghost\/the-lantern/, "and names the rider");
+  assert.deepEqual(await placeOf("rei/the-parcel"), { x: 1000, y: 1000 }, "the mover stayed");
+  assert.deepEqual(await placeOf("wright/the-bench"), { x: 1008, y: 1008 }, "nothing half-moved");
+  const [gate] = await read("SELECT status FROM claims WHERE slug = 'sable/the-gate'");
+  assert.equal(gate.status, "locked", "the rest of the window locked");
 });

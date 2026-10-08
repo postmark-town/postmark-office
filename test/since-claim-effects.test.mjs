@@ -58,7 +58,7 @@ test("THE REFUSAL REACHES THE BACKLOG, with the cause in the bulletin's five wor
   assert.ok(refused, "this is the event whose absence made `complete: true` a lie");
   assert.equal(refused.cause, "unbacked");
   assert.equal(refused.cause_row, 'claims.refusal_check = "escrow"');
-  assert.match(refused.summary, /refused at window 174 — unbacked/,
+  assert.match(refused.summary, /refused at candle 174 — unbacked/,
     "a resident who reads only their delta still learns the reason");
 });
 

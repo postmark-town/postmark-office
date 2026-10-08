@@ -71,7 +71,7 @@ async function write(fn, env) {
   try { return await officeWrite(fn, { env }); }
   catch (e) {
     if (isRefusal(e)) throw e;
-    if (e?.name === "LateCrossingError") throw refuse(409, e.message, "the act was stamped for a window the record will not take; nothing was written");
+    if (e?.name === "LateCrossingError") throw refuse(409, e.message, "the act was stamped for a candle the record will not take; nothing was written");
     throw Object.assign(UNREACHABLE(), { cause: String(e?.message ?? e).slice(0, 160) });
   }
 }
@@ -392,7 +392,7 @@ export async function stakeInStore({ clone, keyPem, payload, prepare = null, com
         "do not stake it again: the ledger holds it, and node tools/ballots-backfill.mjs --check names it until the backfill records it",
         { landed: true, held: true, commit: landed.commit ?? null });
     if (isRefusal(e) || e?.fromLand) throw e;
-    if (e?.name === "LateCrossingError") throw refuse(409, e.message, "the act was stamped for a window the record will not take; nothing was written");
+    if (e?.name === "LateCrossingError") throw refuse(409, e.message, "the act was stamped for a candle the record will not take; nothing was written");
     throw Object.assign(UNREACHABLE(), { cause: String(e?.message ?? e).slice(0, 160) });
   }
 }
