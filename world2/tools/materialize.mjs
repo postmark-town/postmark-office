@@ -275,9 +275,8 @@ export async function liveHouseOfVia(q) {
  *                 refusing a claim for it would blame a resident for the box.
  *
  * Every per-claim refusal is written under ONE check, `unfileable`, with the
- * sentence the resident reads after the colon. The bulletin's word for it is
- * the founder's to classify (`mark-receipt.mjs § CAUSE_OF_CHECK` answers null
- * for an unclassified check, by its own rule), so this file does not guess one.
+ * sentence the resident reads after the colon. Its bulletin word is
+ * `quarantined` (ruled by Darko 2026-10-08; `mark-receipt.mjs § CAUSE_OF_CHECK`).
  */
 export const UNFILEABLE_CHECK = "unfileable";
 

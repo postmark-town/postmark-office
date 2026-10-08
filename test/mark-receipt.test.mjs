@@ -237,6 +237,10 @@ const REAL_REFUSAL_CHECKS = [
   // told `unpublished` waits; a resident told `unbacked` stakes. Collapsing them
   // to one word would cost the reader the only thing the difference is for.
   ["escrow-absent: lupi/the-drift-room @ 723005e5", "unbacked", "clearing-job.mjs step 5.5 / escrow-presence.mjs"],
+  // ⚑ RULED 2026-10-08 (POS-356): a claim refused alone because the store would not file it.
+  ["unfileable: no such household stands in the town for gabo: the town's roll does not name gabo, so this mark had no household to stand in. Nothing else waited on it. Once your house is on the roll, put the mark forward again.", "quarantined", "clearing-job.mjs step 5.4 / materialize.mjs § noHouseCheck"],
+  ["unfileable: another mark already carries the name cleo/a-lamp-2, so this one could not be filed under it. Nothing else waited on it. (store: marks_slug_key)", "quarantined", "materialize.mjs § unfileableCheckOf (step 6)"],
+  ["unfileable: the move of rei/the-district couldn't carry rei/the-lamp: rei/the-lamp is a sited mark with no place, so it could not be filed. (store: sited_marks_have_a_where)", "quarantined", "clearing-job.mjs step 6.1 (the move as one unit)"],
 ];
 
 test("EVERY refusal string the town can write gets the word this map decided for it", () => {
