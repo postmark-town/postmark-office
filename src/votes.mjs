@@ -1,16 +1,27 @@
-// votes.mjs — the ballot doors (gold plan postmark-ballot, P1).
+// votes.mjs — the ballot doors (gold plan postmark-ballot, P1; POS-349).
 //
-// The sealed stamp-ledger IS the vote state: reads fold the town clone's own
-// ledger through the town's OWN ballot engine (tools/ballot.mjs, imported
-// live from the checkout — never vendored, one source of truth, the same
-// rule hydrate.mjs follows for the balance fold). Writes go through a
-// subprocess under the ferry's flock (src/stake-exec.mjs) so a stake append
-// can never race a crossing's mint pass or its reset.
+// A BALLOT IS A POST AND A VOTE IS ITS RESPONSE (Darko, 2026-10-05). The reads
+// answer from the office's record: the ballot's `posts` row (class "ballot",
+// taken in from the founder's file by src/ballots-store.mjs § ingestBallotFiles)
+// and its `vote` responses. The answers keep the shape the town engine's tally
+// gave them, so the site's /votes/ page (GET /votes: topics[].{topic, status,
+// window, cap_per_household_per_candidate, candidates[].{candidate, staked}})
+// reads them unchanged.
+//
+// The town's engine (tools/ballot.mjs, imported live from the checkout) is
+// still asked one thing on a read: which household a signed-in resident's
+// stake would count in, today (the cap's household is the engine's mint key,
+// src/ballots.mjs § the header). Writes go through a subprocess under the
+// ferry's flock (src/stake-exec.mjs), which writes the vote and the ledger
+// line together (src/ballots-store.mjs § stakeInStore).
 
 import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { execUnderTownLock, lockTimedOut, LOCK_BUSY } from "./town-lock.mjs";
+import { ballotsWithVotes, ballotWithVotes, tallyOf } from "./ballots-store.mjs";
+import { headroomOf, appliedBy, STATE_STAKING, STATE_CLOSED } from "./ballots.mjs";
+import { refuse } from "./events.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -26,14 +37,41 @@ export function votesAvailable(clone) {
   return existsSync(join(clone, "tools", "ballot.mjs"));
 }
 
-// GET /votes — every declared topic with its tally
-export async function voteList(clone) {
+/** The household a resident's stake counts in today: the town engine's mint key. */
+async function mintKeyOf(clone, handle, date) {
   const b = await engine(clone);
-  const topics = b.listBallots(clone);
-  const state = b.ballotState(clone);
+  return b.ballotState(clone).householdOf(handle, date);
+}
+
+// ── A BALLOT THE OFFICE HAS NOT TAKEN IN YET (Wright's review of #415) ──────
+//
+// The office tick takes the town's ballot files in, stakes and all
+// (tools/ballots-backfill.mjs --apply, deploy/office-keep.sh at :07, :22, :37
+// and :52). Between a deploy (or a founder's new file) and that tick, a file
+// can stand with no post. The read never answers as if it were not there: a
+// ballot whose stakes the ledger holds would read as gone, or as nothing
+// staked, so the read REFUSES until the tick (503, naming the ballot); one
+// with no stakes yet is named in `awaiting_intake` beside the list.
+export const INTAKE_HINT = "the office's tick takes the town's ballots in at :07, :22, :37 and :52 past the hour, stakes and all; nothing is lost, so ask again after it";
+
+async function intakeOwed(clone, posts) {
+  const b = await engine(clone);
+  const have = new Set(posts.map((p) => p.fields.topic));
+  const missing = b.listBallots(clone).filter((t) => !have.has(t));
+  if (!missing.length) return { missing, staked: [] };
+  const staked = new Set(b.ballotState(clone).stakes.map((s) => s.topic));
+  return { missing, staked: missing.filter((t) => staked.has(t)) };
+}
+const notTakenIn = (topic) => refuse(503, `the office has not taken ballot "${topic}" into its record yet`, INTAKE_HINT, { awaiting_intake: [topic] });
+
+// GET /votes — every ballot with its tally
+export async function voteList(clone, { env = process.env } = {}) {
+  const ballots = await ballotsWithVotes({ env });
+  const owed = await intakeOwed(clone, ballots.map((b) => b.post));
+  if (owed.staked.length) throw notTakenIn(owed.staked[0]);
   return {
-    topics: topics.map((t) => {
-      const full = b.tally(clone, t, state);
+    topics: ballots.map(({ post, votes }) => {
+      const full = tallyOf(post, votes);
       return {
         topic: full.topic, status: full.status,
         cap_per_household_per_candidate: full.cap_per_household_per_candidate,
@@ -41,50 +79,47 @@ export async function voteList(clone) {
         candidates: full.candidates.map((c) => ({ candidate: c.candidate, staked: c.staked })),
       };
     }),
-    note: "stakes are escrow, not payment — everything returns at close; the ledger is the ballot box (verify: node tools/stamp-verify.mjs)",
+    ...(owed.missing.length ? { awaiting_intake: owed.missing, awaiting_intake_note: INTAKE_HINT } : {}),
+    note: "stakes are escrow, not payment — everything returns at close; each ballot is a post in the office's record and each stake its vote, and the ledger holds every stake as a signed line (verify: node tools/stamp-verify.mjs)",
   };
 }
 
 // GET /votes/{topic} — full tally; with a key, your household's headroom too
-export async function voteView(clone, topic, key) {
-  const b = await engine(clone);
-  const t = b.tally(clone, topic);
-  if (!t) return null;
+export async function voteView(clone, topic, key, { env = process.env } = {}) {
+  const one = await ballotWithVotes(topic, { env });
+  if (!one) {
+    if (votesAvailable(clone) && (await engine(clone)).listBallots(clone).includes(topic)) throw notTakenIn(topic);
+    return null;
+  }
+  const t = tallyOf(one.post, one.votes);
   if (key && key.handles?.size) {
-    const state = b.ballotState(clone);
     const handle = [...key.handles][0];
-    const today = townDay();
+    const mk = await mintKeyOf(clone, handle, townDay());
     t.your_household = {
       handles: [...key.handles],
-      headroom: Object.fromEntries(
-        (t.candidates ?? []).map((c) => [c.candidate, b.headroom(clone, topic, c.candidate, handle, today, state)])),
+      headroom: Object.fromEntries((t.candidates ?? []).map((c) => [c.candidate, headroomOf(one.post, one.votes, c.candidate, mk)])),
     };
   }
   return t;
 }
 
-// the doorstep's votes section: open topics + your household's applied/headroom
-export async function doorstepVotes(clone, handle) {
+// the doorstep's votes section: open ballots + your household's applied/headroom
+export async function doorstepVotes(clone, handle, { env = process.env } = {}) {
   if (!votesAvailable(clone)) return undefined;
-  const b = await engine(clone);
-  const topics = b.listBallots(clone);
-  if (!topics.length) return undefined;
-  const state = b.ballotState(clone);
-  const today = townDay();
-  const hkey = state.householdOf(handle, today);
+  const ballots = await ballotsWithVotes({ env, open: true });
+  if (!ballots.length) return undefined;
+  const mk = await mintKeyOf(clone, handle, townDay());
   const out = [];
-  for (const topic of topics) {
-    const t = b.tally(clone, topic, state);
-    if (t.status === "closed") continue;
+  for (const { post, votes } of ballots) {
+    if (post.state === STATE_CLOSED) continue;
     const mine = {};
-    for (const c of t.candidates) {
-      const row = c.households.find((h) => h.household === hkey);
-      mine[c.candidate] = {
-        household_applied: row?.applied ?? 0,
-        headroom: t.status === "staking" ? b.headroom(clone, topic, c.candidate, handle, today, state) : null,
+    for (const c of post.fields.candidates ?? []) {
+      mine[c] = {
+        household_applied: appliedBy(votes, c, mk),
+        headroom: post.state === STATE_STAKING ? headroomOf(post, votes, c, mk) : null,
       };
     }
-    out.push({ topic, status: t.status, cap: t.cap_per_household_per_candidate, candidates: mine });
+    out.push({ topic: post.fields.topic, status: post.state, cap: Number(post.fields.cap_per_household_per_candidate), candidates: mine });
   }
   return out.length ? out : undefined;
 }

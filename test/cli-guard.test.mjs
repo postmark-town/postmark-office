@@ -106,23 +106,22 @@ test.after(() => {
 const NO_PG = { WORLD2_PG_URL: undefined, WORLD2_PG: undefined, WORLD2_CLEARING_URL: undefined, WORLD2_OFFICE_URL: undefined, PGDATABASE: undefined, PGUSER: undefined };
 const ROSTER = {
   // src/
-  "src/dynamic-store.mjs": { args: [], env: { WORLD_DYNAMIC_DB: NOWHERE_DB, WORLD_STORE_DB: NOWHERE_DB }, code: 0, needle: '"present": false' },
+  "src/dynamic-store.mjs": { args: [], env: { WORLD_DYNAMIC_DB: NOWHERE_DB }, code: 0, needle: '"present": false' },
   "src/pot-stake-exec.mjs": { args: ["{}"], env: { STAMP_KEY: NOWHERE, TOWN_CLONE: NOWHERE }, code: 0, needle: "not-yet-open" },
   "src/store-writedown.mjs": { args: [], env: NO_PG, code: 2, needle: "--input <fold-input.json> is required" },
   "src/world-drain.mjs": { args: ["--at", "not-a-date"], code: 2, needle: "unparseable --at" },
-  "src/world-lints.mjs": { args: ["--db", NOWHERE_DB], code: 1, needle: "" },
-  "src/world-serve.mjs": { args: [], env: { WORLD_STORE_DB: NOWHERE_DB, WORLD_CLONE: NOWHERE }, code: 0, needle: "{" },
-  // KNOWN RED ON ANY HYDRATED TREE, and the env key that used to sit here was a
-  // lie about why. `world-store.mjs`'s tail calls `loadWorldGraph()` with no
-  // argument, so it reads `DEFAULT_DB` (`OFFICE_ROOT/world.db`) and never looks
-  // at WORLD_STORE_DB — the key its three siblings do read. The proof therefore
-  // exits 1 only where no `world.db` has ever been hydrated; on the box and on
-  // G:/Postmark/repo-clones/wright/office (world.db, hydration_status OK, 1406 nodes) it exits 0
-  // and this goes red. It cannot be fixed from the roster: making it honest
-  // needs either a second expected code here or the tail reading a path, and
-  // both are additions this train is not for. Left named rather than papered
-  // over, and the env key removed because it claimed a control that is not real.
-  "src/world-store.mjs": { args: [], code: 1, needle: "" },
+  // world.db is retired (POS-270 lane W 3b): the world tails read the store's
+  // snapshot, so with no store reachable each one says it has no world graph.
+  "src/world-lints.mjs": { args: [], env: NO_PG, code: 1, needle: "no world graph" },
+  "src/world-serve.mjs": { args: [], env: { WORLD_CLONE: NOWHERE }, code: 0, needle: "{" },
+  // Not a CLI: it reads process.argv[1] only to NAME the process in its boot
+  // line. Run bare with no store, that line is the whole tail (lane W 3b).
+  "src/world-graph-snapshot.mjs": { args: [], env: { ...NO_PG, WORLD_GRAPH_PG_URL: undefined, NODE_TEST_CONTEXT: undefined }, code: 0, needle: "world-graph-snapshot.mjs stands on its floor" },
+  // Was KNOWN RED ON ANY HYDRATED TREE: the tail read `OFFICE_ROOT/world.db`
+  // whatever the env said, so it exited 0 wherever one had ever been hydrated.
+  // It reads the store's snapshot now (lane W 3b), and NO_PG is a control that
+  // is real: with no store, it exits 1 and says why, on every tree.
+  "src/world-store.mjs": { args: [], env: NO_PG, code: 1, needle: "no world graph" },
   // tools/
   "tools/backfill-home-shelf.mjs": { args: ["--manifest", NOWHERE], code: 2, needle: "no manifest at" },
   // POS-219: refuses with neither --dry-run nor --apply before it imports a door or reads anything
@@ -172,6 +171,11 @@ const ROSTER = {
   // The offline agent view (Posts phase 2): no --out, so it refuses before it
   // drives any door or writes a page.
   "tools/agent-view.mjs": { args: [], env: NO_PG, code: 2, needle: "--out <file.html> is required" },
+  // The ballots (POS-349): the office's ballot pass refuses with no --key before
+  // it reads a letter, the store or a key; the backfill with no --town before
+  // it imports the town engine or reads the store.
+  "tools/ballot-pass-run.mjs": { args: [], env: NO_PG, code: 1, needle: "usage: ballot-pass-run.mjs --key FILE" },
+  "tools/ballots-backfill.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: ballots-backfill.mjs --town <clone>" },
   "tools/suite-baseline.mjs": { args: ["--tip", "0000000"], code: 2, needle: "cannot resolve 0000000 to a full sha here" },
   "tools/settle-anchored-berths.mjs": { args: ["--clone", NOWHERE], code: 1, needle: "not a town checkout" },
   "tools/ship-guard.mjs": { args: [], code: 2, needle: "usage: node tools/ship-guard.mjs" },
@@ -182,8 +186,8 @@ const ROSTER = {
   "tools/stripe-watch.mjs": { args: ["--clone", NOWHERE], code: 1, needle: "no town clone with the funding seam" },
   "tools/train-week-check.mjs": { args: [], code: 2, needle: "usage: node tools/train-week-check.mjs" },
   "tools/usdc-watch.mjs": { args: ["--clone", NOWHERE], code: 1, needle: "no town clone with the funding seam" },
-  "tools/vessel-parity.mjs": { args: ["--world", NOWHERE, "--db", NOWHERE_DB], code: 9, needle: "vessel-parity tripped" },
-  "tools/world-gexf.mjs": { args: ["--db", NOWHERE_DB, "--out", NOWHERE_OUT], code: 1, needle: "" },
+  "tools/vessel-parity.mjs": { args: ["--world", NOWHERE], env: NO_PG, code: 9, needle: "vessel-parity tripped" },
+  "tools/world-gexf.mjs": { args: ["--out", NOWHERE_OUT], env: NO_PG, code: 1, needle: "no world graph" },
   // deploy/
   "deploy/publish-windows.mjs": { args: [], code: 2, needle: "usage: node deploy/publish-windows.mjs" },
   "deploy/settlement-classify.mjs": { args: [], code: 0, needle: '"class"' },

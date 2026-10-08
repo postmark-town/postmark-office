@@ -58,6 +58,11 @@ export const STATE_ANNOUNCED = "announced";
 export const STATE_CANCELLED = "cancelled";
 export const RESPONSE_RSVP = "rsvp";
 export const RESPONSE_STANDING = "standing";
+// The ballot class's response (POS-349, Darko 2026-10-05: "ballots are posts
+// ... votes as its responses"). Each stake is one `vote` act; the resident's
+// one `vote` response per ballot carries every stake they cast, in act order.
+export const ACT_VOTE = "vote";
+export const RESPONSE_VOTE = "vote";
 
 // ── THE DIALS, named once ───────────────────────────────────────────────────
 //
@@ -448,6 +453,22 @@ export function applyPostAct(state, act) {
       act: actId,
     };
     state.responses.set(responseKey(id, act.actor), row);
+    return row;
+  }
+  // A ballot's vote: the stake the act records joins the resident's response.
+  // The stake's `mint_key` is the household the town's ballot engine put it
+  // in (the cap's household), never the store's `hh:`; the row's `household`
+  // is the act's, as an RSVP's is.
+  if (act.action === ACT_VOTE) {
+    const key = responseKey(id, act.actor, RESPONSE_VOTE);
+    const before = state.responses.get(key);
+    const stake = { act: actId, candidate: p.candidate, n: Number(p.n), mint_key: p.mint_key, date: p.date, via: p.via, sig: p.sig };
+    const row = {
+      post: id, handle: act.actor, kind: RESPONSE_VOTE, state: RESPONSE_STANDING, household: act.household ?? null,
+      fields: { stakes: [...(before?.fields?.stakes ?? []), stake] },
+      act: actId,
+    };
+    state.responses.set(key, row);
     return row;
   }
   // An `announce` act changes no row: the announcement IS the act, and the

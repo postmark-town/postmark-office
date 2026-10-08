@@ -30,6 +30,10 @@ import * as store from "../src/town-index-store.mjs";
 import { estateRead, questsRead, fundRead, fundReadOf } from "../src/household-stamps.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+// The office.db legs here read office.db, whatever switch the run was started
+// with; the switched legs set TOWN_INDEX_READS themselves (POS-268). These
+// twins go with office.db at 5b.
+delete process.env.TOWN_INDEX_READS;
 const TOWN = townClone();
 const tmp = mkdtempSync(join(tmpdir(), "town-index-quests-"));
 const dbPath = join(tmp, "office.db");
@@ -75,7 +79,7 @@ before(async () => {
     ["cut-off", { TOWN_INDEX_READS: "store", WORLD2_PG: "1", WORLD2_PG_URL: "postgres://office_api:x@127.0.0.1:9/none" }]]) {
     const child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0", "--db", dbPath,
       "--oauth-db", join(tmp, `${name}-oauth.db`), "--roles-db", join(tmp, `${name}-roles.db`)], {
-      env: { ...process.env, TOWN_CLONE: TOWN, WORLD_CLONE: join(tmp, "no-world-clone"), VOICES_LOG: join(tmp, `${name}-voices.jsonl`),
+      env: { ...process.env, WORLD_GRAPH_NONE: "1", TOWN_CLONE: TOWN, WORLD_CLONE: join(tmp, "no-world-clone"), VOICES_LOG: join(tmp, `${name}-voices.jsonl`),
         TOWN_PUSH: "", WORLD_STORE_DB: join(tmp, "no-world.db"), OFFICE_READ_WORKERS: "0",
         TOWN_INDEX_READS: undefined, WORLD2_PG: undefined, WORLD2_PG_URL: undefined, ...env },
       stdio: ["ignore", "pipe", "pipe"],

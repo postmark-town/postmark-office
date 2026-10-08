@@ -34,7 +34,9 @@ import { fixtureDb } from "./fixture.mjs";
 import { bootOnFreePort, freePort } from "./spawn-office.mjs";
 import { workerSafe, penTokenFor } from "../src/role.mjs";
 import { openOauthDb } from "../src/oauth.mjs";
+import { indexStore } from "./helpers/office-under-test.mjs";
 
+let IX = null; // the store this file's offices read (indexStore)
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 // THE PORTS ARE ASKED OF THE OS (spawn-office.mjs § the port, asked for). They
@@ -57,7 +59,8 @@ const boot = async (extraArgs, extraEnv = {}) => {
   // the right check aimed at the wrong object, which is the defect this whole
   // file exists to catch.
   const env = {
-    ...process.env,
+    ...process.env, ...IX?.env,
+    WORLD_GRAPH_NONE: "1",   // this office serves no world graph (POS-270 lane W 3b)
     OFFICE_KEYS: `${KEY}=keemin:wright`,
     POSTMARK_PEN_TOKEN: PEN,
     WORLD_DYNAMIC_DB: dynPath,
@@ -85,6 +88,8 @@ const boot = async (extraArgs, extraEnv = {}) => {
 before(async () => {
   tmp = mkdtempSync(join(tmpdir(), "postmark-read-worker-"));
   fixtureDb(join(tmp, "fixture.db")).close();
+  // the offices here read their town index from a store seeded from this fixture (POS-268, office-under-test.mjs)
+  IX = await indexStore(join(tmp, "fixture.db"));
   dynPath = join(tmp, "dynamic.db");
   // A real dynamic store, built by the ordinary WRITER path, so § 3 has
   // something to make unwritable. Built before the worker boots: a read worker
@@ -111,6 +116,7 @@ after(async () => {
     child.kill();
     await gone;
   }
+  await IX?.stop();
   rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
@@ -163,7 +169,7 @@ test("§0 a read worker refuses to boot without the writer's key store", async (
     join(ROOT, "src", "server.mjs"), "--port", String(await freePort()),
     "--db", join(tmp, "fixture.db"), "--oauth-db", absent,
     "--roles-db", join(tmp, "roles.db"), "--role", "read",
-  ], { env: { ...process.env, OFFICE_KEYS: `${KEY}=keemin:wright`, WORLD_DYNAMIC_DB: dynPath,
+  ], { env: { ...process.env, ...IX?.env, WORLD_GRAPH_NONE: "1", OFFICE_KEYS: `${KEY}=keemin:wright`, WORLD_DYNAMIC_DB: dynPath,
     TOWN_CLONE: join(ROOT, "town-clone"), WORLD_CLONE: join(tmp, "no-world-clone") },
     stdio: ["ignore", "pipe", "pipe"] });
   const r = await exitedWithin(p, 15_000, "absent key store");
@@ -190,7 +196,7 @@ test("§0b a read worker refuses to boot on an ABSENT dynamic store", async () =
     join(ROOT, "src", "server.mjs"), "--port", String(await freePort()),
     "--db", join(tmp, "fixture.db"), "--oauth-db", join(tmp, "oauth.db"),
     "--roles-db", join(tmp, "roles.db"), "--role", "read",
-  ], { env: { ...process.env, OFFICE_KEYS: `${KEY}=keemin:wright`, WORLD_DYNAMIC_DB: absent,
+  ], { env: { ...process.env, ...IX?.env, WORLD_GRAPH_NONE: "1", OFFICE_KEYS: `${KEY}=keemin:wright`, WORLD_DYNAMIC_DB: absent,
     TOWN_CLONE: join(ROOT, "town-clone"), WORLD_CLONE: join(tmp, "no-world-clone") },
     stdio: ["ignore", "pipe", "pipe"] });
   const r = await exitedWithin(p, 15_000, "absent dynamic store");
@@ -249,7 +255,7 @@ test("§1b the refusal is the ROLE's, not the router's — a writer answers thes
     "--db", join(tmp, "fixture.db"), "--oauth-db", join(tmp, "oauth-w.db"),
     "--roles-db", join(tmp, "roles-w.db"),
   ], {
-    env: { ...process.env, OFFICE_KEYS: `${KEY}=keemin:wright`, POSTMARK_PEN_TOKEN: PEN,
+    env: { ...process.env, ...IX?.env, WORLD_GRAPH_NONE: "1", OFFICE_KEYS: `${KEY}=keemin:wright`, POSTMARK_PEN_TOKEN: PEN,
       WORLD_DYNAMIC_DB: dynPath, TOWN_CLONE: join(ROOT, "town-clone"), WORLD_CLONE: join(tmp, "no-world-clone") },
     stdio: ["ignore", "pipe", "pipe"],
   }), { budgetMs: 20_000 });

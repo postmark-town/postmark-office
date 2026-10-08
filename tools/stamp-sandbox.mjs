@@ -652,7 +652,9 @@ async function makeContext(sb, { log }) {
     /**
      * One crossing, in the box's order (deploy/postmark-ferry.service): the
      * ferry delivers, the mint pass appends, the ballot pass applies mailed
-     * stakes; then the keep tick's welcome pass (deploy/office-keep.sh).
+     * stakes (the office's own pass since POS-349, judged from the store, which
+     * lands each ballot itself); then the keep tick's welcome pass
+     * (deploy/office-keep.sh).
      * Each writer's rows are committed as the box commits them. The full
      * verifier runs once, after the crossing (the step's `verify: true`).
      */
@@ -666,7 +668,7 @@ async function makeContext(sb, { log }) {
       ctx.commit(`ferry: crossing ${date}`);
       await ctx.ingest();
       const mint = ctx.mintPass("mint: crossing pass");
-      const ballot = ctx.townTool("ballot-pass.mjs", ["--key", sb.keyPath, "--date", date]);
+      const ballot = ctx.officeTool("tools/ballot-pass-run.mjs", ["--town", sb.town, "--key", sb.keyPath, "--date", date]);
       ctx.commit("ballot: crossing pass");
       ctx.syncLines();
       let wel = null;

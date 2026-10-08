@@ -23,6 +23,10 @@ import { startStore } from "./helpers/embedded-store.mjs";
 import { copyIndexToStore } from "./helpers/index-to-store.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+// The office.db legs here read office.db, whatever switch the run was started
+// with; the switched legs set TOWN_INDEX_READS themselves (POS-268). These
+// twins go with office.db at 5b.
+delete process.env.TOWN_INDEX_READS;
 const tmp = mkdtempSync(join(tmpdir(), "town-index-doors-"));
 const dbPath = join(tmp, "office.db");
 let store = null, skip = false;
@@ -31,7 +35,7 @@ const offices = {};
 function office(name, env) {
   const child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0", "--db", dbPath,
     "--oauth-db", join(tmp, `${name}-oauth.db`), "--roles-db", join(tmp, `${name}-roles.db`)], {
-    env: { ...process.env, TOWN_CLONE: join(tmp, "no-clone-here"), WORLD_CLONE: join(tmp, "no-world-clone"),
+    env: { ...process.env, WORLD_GRAPH_NONE: "1", TOWN_CLONE: join(tmp, "no-clone-here"), WORLD_CLONE: join(tmp, "no-world-clone"),
       VOICES_LOG: join(tmp, `${name}-voices.jsonl`), TOWN_PUSH: "", WORLD_STORE_DB: join(tmp, "no-world.db"),
       OFFICE_READ_WORKERS: "0", TOWN_INDEX_READS: undefined, WORLD2_PG: undefined, WORLD2_PG_URL: undefined, ...env },
     stdio: ["ignore", "pipe", "pipe"],

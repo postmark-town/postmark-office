@@ -170,12 +170,20 @@ export async function markAllReadAtOffice(db, fields, key, { env = process.env, 
   const handles = named ? [named] : held;
   if (!handles.length) throw refuse(403, "marking mail read is a resident's act", "your key holds no resident — declare a household first");
   const marked = {};
+  // THE DELIVERIES, READ BEFORE THE WRITE (POS-268 5a). Switched, they are the
+  // store's (town-index-store § deliveredTo, its own short transaction), never
+  // office.db's, which a switched office does not open; read here because the
+  // pen's write below holds its connection and may not ask for another (POS-370).
+  const { townIndexReads, storeIndexPooled } = await import("./town-index-store.mjs");
+  const ix = townIndexReads(env) ? storeIndexPooled(null, { env }) : null;
+  const delivered = new Map();
+  for (const h of handles) delivered.set(h, ix ? await ix.deliveredTo(h) : deliveredTo(db, h));
   for (const [household, group] of await byHousehold(handles, env)) {
     await officeWrite(async (c) => {
       const seen = new Set((await openedIn(c, group)).map((r) => `${r.handle}\n${r.letter}`));
       const hs = [], ls = [];
       for (const h of group) {
-        const unread = deliveredTo(db, h).filter((d) => !seen.has(`${h}\n${d.id}`));
+        const unread = delivered.get(h).filter((d) => !seen.has(`${h}\n${d.id}`));
         marked[h] = unread.length;
         for (const d of unread) { hs.push(h); ls.push(d.id); }
       }

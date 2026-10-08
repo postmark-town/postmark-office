@@ -25,6 +25,7 @@ import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { fixtureDb } from "./fixture.mjs";
+import { indexStore } from "./helpers/office-under-test.mjs";
 import { VISITOR_RULES, visitorRulesGate, useRulesRecorder, RULES_FIRST } from "../src/visitor-rules.mjs";
 import { WORLD_TOOLS } from "../src/world.mjs";
 
@@ -33,6 +34,8 @@ const KEY = "residentkey";
 const dir = mkdtempSync(join(tmpdir(), "postmark-visitor-rules-"));
 const dbPath = join(dir, "fixture.db");
 fixtureDb(dbPath).close();
+// the office reads its town index from a store seeded from this fixture (POS-268, office-under-test.mjs)
+const IX = await indexStore(dbPath);
 const OAUTH = join(dir, "oauth.db");
 const VOICES = join(dir, "voices.jsonl");
 
@@ -40,7 +43,7 @@ let child = null;
 async function startOffice() {
   child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0", "--db", dbPath,
     "--oauth-db", OAUTH, "--roles-db", join(dir, "roles.db")], {
-    env: { ...process.env, OFFICE_KEYS: `${KEY}=keemin:wright`, TOWN_CLONE: join(dir, "no-clone"), WORLD_CLONE: join(dir, "no-world-clone"), VOICES_LOG: VOICES, TOWN_PUSH: "" },
+    env: { ...process.env, ...IX.env, WORLD_GRAPH_NONE: "1", OFFICE_KEYS: `${KEY}=keemin:wright`, TOWN_CLONE: join(dir, "no-clone"), WORLD_CLONE: join(dir, "no-world-clone"), VOICES_LOG: VOICES, TOWN_PUSH: "" },
     stdio: ["ignore", "pipe", "pipe"],
   });
   const port = await new Promise((ok, no) => {
@@ -59,6 +62,7 @@ async function stopOffice() {
 }
 after(async () => {
   await stopOffice();
+  await IX.stop();
   rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 

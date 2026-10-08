@@ -101,17 +101,6 @@ if (process.env.STUB_FERRY_DELIVER) {
   execFileSync("git", ["push", "-q"]);
 }
 `,
-  "tools/ballot-pass.mjs": `
-import { mkdirSync, writeFileSync } from "node:fs";
-import { call } from "./stub-calls.mjs";
-import { append } from "./stub-append.mjs";
-call("ballot");
-if (process.env.STUB_BALLOT) {
-  append("${LEDGER}", process.env.STUB_BALLOT);
-  mkdirSync("WHITE_PAGES/office/outbox", { recursive: true });
-  writeFileSync("WHITE_PAGES/office/outbox/ballot-receipt.md", "your ballot was counted\\n");
-}
-`,
   "tools/quest-progress.mjs": `
 import { writeFileSync } from "node:fs";
 import { call } from "./stub-calls.mjs";
@@ -156,6 +145,19 @@ if (process.env.STUB_WELCOME_MAKES) {
 process.exit(Number(process.env.STUB_WELCOME_EXIT || 0));
 `,
   "tools/town-drain-run.mjs": `process.exit(Number(process.env.STUB_DRAIN_EXIT || 0));\n`,
+  // POS-349: the ballot pass is the office's (it judges from the store); the
+  // ferry runs it from inside the town clone, so the stub writes there.
+  "tools/ballot-pass-run.mjs": `
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+if (process.env.STUB_CALLS) appendFileSync(process.env.STUB_CALLS, "ballot\\n");
+if (process.env.STUB_BALLOT) {
+  for (const r of String(process.env.STUB_BALLOT).split("|")) appendFileSync("${LEDGER}", r + "\\n");
+  mkdirSync("WHITE_PAGES/office/outbox", { recursive: true });
+  writeFileSync("WHITE_PAGES/office/outbox/ballot-receipt.md", "your ballot was counted\\n");
+}
+`,
+  // POS-349: the tick takes the ballot files in as posts, store-only and non-fatal.
+  "tools/ballots-backfill.mjs": `process.exit(0);\n`,
   // POS-347: the standing drain renders the town's standing ledger from the
   // store; this tick has no store, and the drain is non-fatal either way.
   "tools/standing-drain.mjs": `process.exit(0);\n`,

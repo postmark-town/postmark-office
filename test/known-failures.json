@@ -37,13 +37,6 @@
       "date": "2026-10-07"
     },
     {
-      "file": "test/household-posts.test.mjs",
-      "name": "6 · the doorstep segment deep-equals household { read: \"posts\" } at the same args",
-      "reason": "the fixture's doorstep posts segment carries no rows (red on the train tip 3097af3 locally too, 10-07)",
-      "owner": "POS-419",
-      "date": "2026-10-07"
-    },
-    {
       "file": "test/office-tick-split.test.mjs",
       "name": "the roll-call knows the new unit, parked until its files are installed",
       "reason": "the roll-call manifest test (named in the brief; red locally too)",
@@ -54,13 +47,6 @@
       "file": "test/refresher-blocked.test.mjs",
       "name": "test/refresher-blocked.test.mjs",
       "reason": "CI only (Linux): hangs past the 180 s test timeout; its Linux arm (a FIFO as GIT_CONFIG_GLOBAL) had never run before CI. Cause not yet measured",
-      "owner": "POS-419",
-      "date": "2026-10-07"
-    },
-    {
-      "file": "test/rehydrate-world-store.test.mjs",
-      "name": "test/rehydrate-world-store.test.mjs",
-      "reason": "CI only (Linux): hangs past the 180 s test timeout before its first test reports (it drives sh scripts with stub curl/git). Cause not yet measured",
       "owner": "POS-419",
       "date": "2026-10-07"
     },
