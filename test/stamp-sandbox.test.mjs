@@ -133,6 +133,8 @@ test("the mint comparison agrees with the town's own --append, and names the fir
     sb.mintRuns = [{ before, after: agrees }, { before: agrees, after: agrees }];
     assert.deepEqual(await compareMints(sb), [], "a pass the town would write, and a pass that owed nothing, agree");
     assert.deepEqual(sb.mintRuns, [], "each pass is compared once");
+    const owed = ENGINE.parseStampLedger(good).length - canon.length;
+    assert.deepEqual(sb.mintCompared, { passes: 2, lines: owed }, "it counts the passes run again and the lines held side by side");
     sb.mintRuns = [{ before, after: short }];
     const p = await compareMints(sb);
     const n = ENGINE.parseStampLedger(good).length;
@@ -145,4 +147,12 @@ test("the mint comparison agrees with the town's own --append, and names the fir
   } finally {
     rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
   }
+});
+
+test("a comparison that compared nothing is RED: no pass, or no line", async () => {
+  const { mintComparisonProblem } = await import("../tools/stamp-sandbox.mjs");
+  assert.match(mintComparisonProblem(undefined), /compared no runner pass/);
+  assert.match(mintComparisonProblem({ passes: 0, lines: 0 }), /compared no runner pass/);
+  assert.match(mintComparisonProblem({ passes: 3, lines: 0 }), /compared 3 runner pass\(es\) and no ledger line/);
+  assert.equal(mintComparisonProblem({ passes: 3, lines: 41 }), null);
 });

@@ -237,6 +237,25 @@ test("STAMP_LINES=store: the quest rows fold on the store's key base, and a stor
     await ingest(c, { townRepo: town, sha: edit });
     assert.equal(await sizeOf("ada"), 1, "the store's pin keys ada alone");
     assert.equal(await sizeOf("bex"), 3, "and the rest share the login's house");
+
+    // the seed honours the switch too (Wright's review of #435): a reseed at the head folds on the store's base
+    await ingest(c, { townRepo: town, sha: edit, seed: true, reseed: true });
+    assert.equal(await sizeOf("ada"), 1, "the seed's quest rows: the store's pin keys ada alone");
+
+    // and a town engine that cannot take a base is a refusal, as the welcome pass and the snapshot runner refuse it
+    // (in a copy of the town: ESM caches an engine by its path, and each ingest on the box is its own process)
+    const town2 = join(tmp, "town-older-engine");
+    cpSync(town, town2, { recursive: true });
+    const mint = join(town2, "tools", "stamp-mint.mjs");
+    const text = readFileSync(mint, "utf8");
+    const older = text.replace("const map = base ? new Map(base) : householdKeys(repo);", "const map = householdKeys(repo);");
+    assert.notEqual(older, text, "the fixture's engine is #3540's");
+    writeFileSync(mint, older);
+    const g2 = (...a) => execFileSync("git", ["-C", town2, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    g2("-c", "user.name=Postmark Pen", "-c", "user.email=pen@test.invalid", "commit", "-qam", "an engine from before #3540");
+    const old = g2("rev-parse", "HEAD").trim();
+    await assert.rejects(ingest(c, { townRepo: town2, sha: old }), /takes no key base \(town #3540\): nothing was written/);
+    assert.equal(await readHead(c), edit, "and the head did not move");
   } finally {
     if (was === undefined) delete process.env.STAMP_LINES; else process.env.STAMP_LINES = was;
     await owner.query("DELETE FROM household_pins WHERE handle = 'ada'").catch(() => {});

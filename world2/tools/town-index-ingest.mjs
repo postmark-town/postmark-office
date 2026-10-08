@@ -219,15 +219,15 @@ async function mintInputs(client, townRepo, tally, { whole = false } = {}) {
  * /etc/postmark-office.env, deploy/town-index-ingest.sh), the store's:
  * keyBaseVia over household_pins, town_rooms and stamp_lines, an empty one a
  * refusal by name. Unset, null: the town reads its printouts, as before. A town
- * checkout whose engine cannot take a base is said so, and folds as before.
+ * checkout whose engine cannot take a base is a refusal too, as the welcome
+ * pass and the snapshot runner refuse it (Wright's review of #435): with the
+ * switch on, a quest fold on the printouts would be the store not read.
  */
 async function questKeyBase(client, townRepo) {
   if (!stampLinesOn(process.env)) return null;
   const engine = await import(pathToFileURL(resolve(townRepo, "tools", "stamp-mint.mjs")));
-  if (!takesKeyBase(engine, townRepo)) {
-    console.error("[town-index] STAMP_LINES=store, but this town checkout's engine takes no key base (town #3540): the quests fold on the printouts");
-    return null;
-  }
+  if (!takesKeyBase(engine, townRepo))
+    throw new Error("STAMP_LINES=store, but this town checkout's engine takes no key base (town #3540): nothing was written");
   return keyBaseVia(client, engine);
 }
 
@@ -238,14 +238,17 @@ export async function seed(client, { townRepo, sha, log = quiet }) {
   const tally = {};
   const ms = {};
   let t0 = Date.now();
-  const { tables } = await deriveTownIndex(townRepo, { log });
+  // The mint inputs first: with STAMP_LINES=store the seed's quest rows fold on
+  // the store's key base too (POS-341 part 4), which reads this sha's rooms.
+  await mintInputs(client, townRepo, tally, { whole: true });
+  const base = await questKeyBase(client, townRepo);
+  const { tables } = await deriveTownIndex(townRepo, { log, base });
   ms.derive = Date.now() - t0; t0 = Date.now();
   for (const name of Object.keys(TOWN_TABLES)) {
     const r = await client.query(`DELETE FROM ${tableOf(name)}`);
     tally[name] = { inserted: 0, deleted: r.rowCount };
     await insertRows(client, name, tables[name], tally);
   }
-  await mintInputs(client, townRepo, tally, { whole: true });
   ms.write = Date.now() - t0; t0 = Date.now();
   const counts = await recordSnapshot(client, townRepo, sha, "seed");
   ms.snapshot = Date.now() - t0;

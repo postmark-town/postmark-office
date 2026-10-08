@@ -293,9 +293,15 @@ async function comparePotEscrow(sb, { entries }) {
  * and the key is one key, so equal lines sign equal); the first line that
  * differs is named. A pass that appended nothing is held to an --append that
  * appends nothing. Exported for test/stamp-sandbox.test.mjs.
+ *
+ * IT COUNTS WHAT IT COMPARED (Wright's review of #435): `sb.mintCompared`
+ * holds the passes run again and the ledger lines held side by side, the run's
+ * report carries both, and a run that compared no pass or no line is RED
+ * (`mintComparisonProblem`): a comparison that saw nothing is not a green.
  */
 export async function compareMints(sb) {
   const out = [];
+  const tally = (sb.mintCompared ??= { passes: 0, lines: 0 });
   for (const { before, after } of sb.mintRuns?.splice(0) ?? []) {
     const twin = join(sb.dir, `mint-twin-${before.slice(0, 9)}`);
     git(sb.town, "worktree", "add", "-q", "--detach", twin, before);
@@ -307,6 +313,8 @@ export async function compareMints(sb) {
       const town = sb.engine.parseStampLedger(readFileSync(join(twin, LEDGER_REL), "utf8"));
       const store = sb.engine.parseStampLedger(git(sb.town, "show", `${after}:${LEDGER_REL}`));
       const at = (sha) => sha.slice(0, 9);
+      tally.passes++;
+      tally.lines += Math.max(town.length, store.length) - held;
       for (let i = 0; i < Math.max(town.length, store.length); i++) {
         if (town[i]?.raw === store[i]?.raw) continue;
         out.push(`the mint at ${at(before)} → ${at(after)}: line ${i + 1} differs (the town's --append wrote ${town.length - held} line(s), the store's runner ${store.length - held})\n` +
@@ -318,6 +326,14 @@ export async function compareMints(sb) {
     }
   }
   return out;
+}
+
+/** The run's verdict on the comparison itself: a sentence when it compared nothing, else null. */
+export function mintComparisonProblem(tally) {
+  const { passes = 0, lines = 0 } = tally ?? {};
+  if (!passes) return "the git mint against the store mint compared no runner pass: nothing was held to the town's --append";
+  if (!lines) return `the git mint against the store mint compared ${passes} runner pass(es) and no ledger line: every pass appended nothing`;
+  return null;
 }
 
 export const COMPARATORS = [
@@ -602,6 +618,12 @@ export async function runSandbox({ townSource, keep = false, log = () => {} } = 
       report.final_verify = v.line;
       report.green = v.ok;
       if (!v.ok) report.steps.push({ id: "final", event: "verify", title: "the town's full verifier over the finished ledger", ok: false, problems: [`stamp-verify: ${v.line}`], notes: [] });
+      report.mint_comparison = { passes: sb.mintCompared?.passes ?? 0, lines: sb.mintCompared?.lines ?? 0 };
+      const none = mintComparisonProblem(report.mint_comparison);
+      if (none) {
+        report.green = false;
+        report.steps.push({ id: "final", event: "comparison", title: "the git mint against the store mint compared something", ok: false, problems: [none], notes: [] });
+      }
     }
   } catch (e) {
     report.error = String(e?.message ?? e);
@@ -746,6 +768,7 @@ export function renderReport(r) {
     for (const p of s.problems ?? []) out.push(`      ✗ ${p}`);
   }
   if (r.final_verify) out.push(`\nfinal: ${r.final_verify}`);
+  if (r.mint_comparison) out.push(`the git mint against the store mint: ${r.mint_comparison.passes} runner pass(es), ${r.mint_comparison.lines} ledger line(s) compared`);
   if (r.events) out.push(`\nevents covered: ${r.events.join(", ")}`);
   const red = r.steps.find((s) => !s.ok);
   out.push("");
