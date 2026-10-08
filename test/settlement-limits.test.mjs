@@ -34,6 +34,7 @@ const { owner, asOffice, seal } = settlementRig(store);
 const ONE = "hh:one-house";
 const box = (x) => ({ at: { x, y: 0 }, extent: { w: 25, h: 25 } });
 const parcel = (by, x, date) => ({ slug: `${by}/plot`, kind: "parcel", owner: by, body: `${by}'s plot`, geometry: box(x), parent: null, data: { date, tier: "market" } });
+const shed = (by, x) => ({ slug: `${by}/shed`, kind: "sited", owner: by, body: `${by}'s shed`, geometry: { at: { x, y: 0 }, extent: { w: 4, h: 4 } }, parent: null, data: { date: "2026-10-05T00:00:00Z", tier: "market" } });
 const uuid = (n) => `7${String(n).padStart(7, "0")}-0000-4000-8000-000000000000`;
 
 /**
@@ -50,7 +51,7 @@ async function settle({ parcels, firstClaimed = {}, lawSha = ENGINE, stakes = []
     for (const [key, data] of Object.entries(skeleton))
       await c.query("INSERT INTO law_projection (law_sha, kind, path, key, data) VALUES ($1, 'skeleton', 'WORLD/skeleton.json', $2, $3)", [lawSha, key, JSON.stringify(data)]);
     await c.query(`INSERT INTO law_projection (law_sha, kind, path, key, data) VALUES ($1, 'class', 'LOGOS/classes/hall/mark.md', 'hall', '{"id":"the-town/hall","kind":"class","class":"hall"}')`, [lawSha]);
-    for (const p of parcels)   // the printed roster: every resident here is one household
+    for (const p of [...new Map(parcels.map((x) => [x.owner, x])).values()])   // the printed roster: every resident here is one household
       await c.query("INSERT INTO law_projection (law_sha, kind, path, key, data) VALUES ($1, 'roster', 'WORLD/households.json', $2, $3)", [lawSha, p.owner, JSON.stringify({ household: ONE })]);
     // The ledger at TOWN_SHA has been ingested (an empty stake set would refuse, by design): ✦1 behind the first plot.
     for (const s of stakes.length ? stakes : [{ mark: parcels[0].slug, holder: parcels[0].owner, n: 1 }])
@@ -60,12 +61,12 @@ async function settle({ parcels, firstClaimed = {}, lawSha = ENGINE, stakes = []
       const id = uuid(++n);
       await c.query(
         `INSERT INTO claims (id, window_id, class, claimant, household, status, body, geometry, stake, data, slug, submitted_at, decided_at)
-         VALUES ($1, 500, 'parcel', $2, $2, 'locked', $3, $4, 0, $5, $6, $7, $7)`,
-        [id, p.owner, p.body, JSON.stringify(p.geometry), JSON.stringify({ ...p.data, date: firstClaimed[p.slug] ?? p.data.date }), p.slug, firstClaimed[p.slug] ?? p.data.date]);
+         VALUES ($1, 500, $8, $2, $2, 'locked', $3, $4, 0, $5, $6, $7, $7)`,
+        [id, p.owner, p.body, JSON.stringify(p.geometry), JSON.stringify({ ...p.data, date: firstClaimed[p.slug] ?? p.data.date }), p.slug, firstClaimed[p.slug] ?? p.data.date, p.kind]);
       await c.query(
         `INSERT INTO marks (id, slug, kind, owner, household, body, geometry, bbox, status, locked_window, data, parent)
-         VALUES ($1, $2, 'parcel', $3, $3, $4, $5, box(point($7 - 12.5, -12.5), point($7 + 12.5, 12.5)), 'standing', 501, $6, NULL)`,
-        [id, p.slug, p.owner, p.body, JSON.stringify(p.geometry), JSON.stringify(p.data), p.geometry.at.x]);
+         VALUES ($1, $2, $9, $3, $3, $4, $5, box(point($7::float8 - $8::float8, -$8::float8), point($7::float8 + $8::float8, $8::float8)), 'standing', 501, $6, NULL)`,
+        [id, p.slug, p.owner, p.body, JSON.stringify(p.geometry), JSON.stringify(p.data), p.geometry.at.x, p.geometry.extent.w / 2, p.kind]);
     }
     return seal(c, { id: 2, window: 501, number: 11, marks: parcels, lawSha });
   });
@@ -161,3 +162,27 @@ test("--verify over a settlement with a limit: the derivation applies the limit,
 });
 
 test.after(async () => { await store.stop(); });
+
+test("A LIMIT PARCEL'S OWN GROUND GOES WITH IT: rd's shed on its over-cap plot never reaches git without it (applied, or found and not applied)", { skip }, async () => {
+  const marks = [parcel("ra", 0, "2026-10-01T00:00:00Z"), parcel("rb", 100, "2026-10-02T00:00:00Z"), parcel("rc", 200, "2026-10-03T00:00:00Z"), parcel("rd", 300, "2026-10-04T00:00:00Z"), shed("rd", 302), shed("ra", 2)];
+  for (const lawSha of [ENGINE, LAW_SHA]) {
+    await settle({ parcels: marks, lawSha });
+    const header = await asOffice(async (p) => (await p.query("SELECT * FROM world_snapshots WHERE id = 2")).rows[0]);
+    const { slugs } = await asOffice((p) => settlementTakesAway(p, header, { worldRepo: WORLD }));
+    assert.deepEqual([...slugs].sort(), ["rd/plot", "rd/shed"], `at law ${lawSha.slice(0, 8)}: the plot over the cap and its own household's shed, and ra's shed stays`);
+  }
+});
+
+test("THE FALLBACK WITHHOLDS EVERY STANDING FORECAST PARCEL, not only this window's, with its own ground", { skip }, async () => {
+  const marks = [parcel("ra", 0, "2026-10-01T00:00:00Z"), parcel("rb", 100, "2026-10-02T00:00:00Z"), parcel("rc", 200, "2026-10-03T00:00:00Z"), parcel("rd", 300, "2026-10-04T00:00:00Z"), shed("rd", 302)];
+  await settle({ parcels: marks });
+  // rd/plot was forecast over the cap at an EARLIER window (500); this crossing folds 501 and carries it.
+  await owner((c) => c.query(`UPDATE windows SET receipts = '{"parcel_cap":{"checked":true,"over_limit":[{"slug":"rd/plot","held":3,"law":"the-town/claim-cap"}]}}' WHERE id = 500`));
+  const out = { marks: marks.map((m) => ({ slug: m.slug })), as_of: { window: 501 } };
+  const selection = { entry: "fold-delta.mjs § foldDelta", docket_claims: 1, carried_absent: { checked: true, count: 4, slugs: marks.slice(0, 4).map((m) => m.slug) } };
+  const blind = await asOffice((p) => settlementWithhold(p, { window: 501, worldRepo: null, out, selection }));
+  assert.deepEqual(blind.out.marks.map((m) => m.slug), ["ra/plot", "rb/plot", "rc/plot"]);
+  assert.deepEqual(blind.selection.settlement.withheld_by_forecast, ["rd/plot"]);
+  assert.deepEqual(blind.selection.settlement.withheld_with_them, ["rd/shed"]);
+  assert.equal(blind.selection.carried_absent.count, 3, "the carry stays a subset of what is offered");
+});

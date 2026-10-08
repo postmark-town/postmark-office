@@ -404,15 +404,59 @@ export function foldWithWords(inputs, words, cleared = null) {
 export async function settlementTakesAway(p, header, { worldRepo, townRepo = null }) {
   const inputs = await settlementFoldInputs(p, header, { worldRepo, townRepo });
   const words = await wordsAtSeal(p, header, { worldRepo });
-  const { state, vetoes } = foldWithWords(inputs, words);
+  const cleared = foldOver(inputs);
+  const { state, vetoes } = foldWithWords(inputs, words, cleared);
   const slugs = new Set();
+  const limitParcels = [];
   for (const r of state.returned ?? []) {
     if (r?.state !== "returned" && !r?.law) continue;
     slugs.add(String(r.mark));
     for (const s of r.subtree ?? []) slugs.add(String(s));
+    if (r.law) limitParcels.push(String(r.mark));
   }
-  for (const l of vetoes?.limits_unread ?? []) slugs.add(String(l.mark));
+  for (const l of vetoes?.limits_unread ?? []) { slugs.add(String(l.mark)); limitParcels.push(String(l.mark)); }
+  // A limit parcel's OWN household's marks on its ground go with it. The engine
+  // never admitted the plot as ground, so they are not its subtree there, and in
+  // git without their parcel the sweep's admitDelta would quarantine the house.
+  // Another household's marks on it are Darko's open question (B), left alone.
+  const hh = cleared.households ?? {};
+  const rows = (cleared.marks ?? []).map((m) => ({ slug: m.id, household: hh[m.by] ?? m.by, at: m.at, extent: m.extent, parent: m.parent ?? null }));
+  for (const sl of ownGroundOf(limitParcels, rows)) slugs.add(sl);
   return { slugs, vetoes };
+}
+
+/**
+ * The marks a set of withheld parcels carries out of git with them (POS-364
+ * review): every mark whose declared parent chain reaches one of them, and
+ * every mark of the PARCEL'S OWN HOUSEHOLD whose centre stands on its ground.
+ * PURE over `rows` (`{ slug, household, at, extent, parent }`, parent by slug).
+ * The parcels themselves are not in the answer.
+ */
+export function ownGroundOf(parcels, rows) {
+  const bySlug = new Map(rows.map((r) => [String(r.slug), r]));
+  const wanted = new Set(parcels.map(String));
+  const out = new Set();
+  const inside = (m, p) => m?.at && p?.at && p?.extent
+    && Math.abs(Number(m.at.x) - Number(p.at.x)) <= Number(p.extent.w) / 2
+    && Math.abs(Number(m.at.y) - Number(p.at.y)) <= Number(p.extent.h) / 2;
+  for (const r of rows) {
+    const slug = String(r.slug);
+    if (wanted.has(slug)) continue;
+    let up = r.parent ? bySlug.get(String(r.parent)) : null, guard = 0;
+    while (up && guard++ < 64) { if (wanted.has(String(up.slug))) { out.add(slug); break; } up = up.parent ? bySlug.get(String(up.parent)) : null; }
+    if (out.has(slug)) continue;
+    for (const ps of wanted) {
+      const p = bySlug.get(ps);
+      if (p && p.household === r.household && inside(r, p)) { out.add(slug); break; }
+    }
+  }
+  // A withheld mark's own declared children go too.
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const r of rows) if (!out.has(String(r.slug)) && !wanted.has(String(r.slug)) && r.parent && out.has(String(r.parent))) { out.add(String(r.slug)); grew = true; }
+  }
+  return out;
 }
 
 /** The stance rows in the store, through the office's own pool. */

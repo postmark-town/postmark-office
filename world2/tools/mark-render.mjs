@@ -104,6 +104,16 @@ export function recordFromRow(row) {
   // rows carry a `geometry` holding nothing but a stray `slug`, which is the
   // door's own residue and not a placement; `at && extent` is the test, never
   // `geometry` being non-null.
+  // A PARCEL CARRIES ITS FIRST CLAIM INTO THE TREE (POS-364 review, 2026-10-08).
+  // Every door amend restamps `date`, and the tree's fold orders parcels and
+  // reads the cap's law date by when each was first claimed (marks-fold §
+  // claimInstant, world#166). A pre-law parcel amended today, in a household
+  // holding more than three, would otherwise read as a fourth claim and stop the
+  // crossing ("capped — already holds 4"). `first_claimed` is the mark's ORIGIN
+  // claim's date (the claim whose id the mark keeps for life; MARK_COLUMNS reads
+  // it), written only when it differs from `date`, so a parcel that was never
+  // amended keeps the bytes it has always had.
+  if (row.kind === "parcel" && row.first_claimed && String(row.first_claimed) !== String(d.date ?? "")) rec.claimed_at = String(row.first_claimed);
   if (g && g.at && g.extent) {
     const at = d._fileAt ?? g.at;
     rec.at = { x: at.x, y: at.y };
@@ -162,7 +172,8 @@ export function renderedMark(row) {
   return { fileRec, body, at_frame: frameOfRow(row), bytes: markRecord(fileRec, body) };
 }
 
-const MARK_COLUMNS = "id, slug, kind, owner, household, body, geometry, status, locked_window, retired_window, data";
+const MARK_COLUMNS = "id, slug, kind, owner, household, body, geometry, status, locked_window, retired_window, data, "
+  + "(SELECT c.data->>'date' FROM claims c WHERE c.id = marks.id) AS first_claimed";
 
 /**
  * The `mark.md` bytes for one slug, read from the store.

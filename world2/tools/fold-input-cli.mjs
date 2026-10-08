@@ -135,9 +135,13 @@ export function withholdTakenAway({ marks = [], selection = {} }, slugs) {
  *
  * WHEN THE SETTLEMENT CANNOT BE FOLDED HERE (no world checkout, no snapshot for
  * the window, an engine or a store that cannot answer), the clearing's own
- * forecast still holds which parcels are over a limit: the window's receipt
- * `parcel_cap.over_limit` (clearing-job.mjs step 5.6). Those are withheld, so
- * an unreadable settlement never lets an over-limit parcel quarantine its
+ * forecasts still hold which parcels are over a limit: every window's receipt
+ * `parcel_cap.over_limit` (clearing-job.mjs step 5.6), for every such parcel
+ * still STANDING. Not only this window's: the carry offers over-limit parcels
+ * withheld at earlier crossings, and they stand in the store until opposed away.
+ * Each is withheld with its own household's marks on its ground and its declared
+ * children (world-settlement.mjs § ownGroundOf), so an unreadable settlement
+ * never lets an over-limit parcel, or a shed without it, quarantine its
  * household's sketchbook (Wright's review of #441). `{ out, selection }`.
  */
 export async function settlementWithhold(client, { window, worldRepo = null, townClone = null, out, selection }) {
@@ -166,20 +170,37 @@ export async function settlementWithhold(client, { window, worldRepo = null, tow
   } catch (e) {
     settlement = { window, unread: `the settlement could not be folded: ${String(e?.message ?? e).slice(0, 240)}` };
   }
-  // THE FALLBACK: the clearing's forecast of what is over a limit.
+  // THE FALLBACK: the clearings' forecasts of what is over a limit, still standing.
   let forecast = [];
+  const away = new Set();
   try {
-    const { rows: [r] } = await client.query("SELECT receipts->'parcel_cap'->'over_limit' AS over FROM windows WHERE id = $1", [window]);
-    forecast = (Array.isArray(r?.over) ? r.over : []).map((x) => String(x?.slug ?? "")).filter(Boolean);
+    const { rows } = await client.query(FORECAST_STANDING_SQL);
+    forecast = [...new Set(rows.map((r) => String(r.slug)))].sort();
+    const { ownGroundOf } = await import("../../src/world-settlement.mjs");
+    const { rows: standing } = await client.query(STANDING_GROUND_SQL);
+    for (const sl of forecast) away.add(sl);
+    for (const sl of ownGroundOf(forecast, standing.map((r) => ({ slug: r.slug, household: r.household, at: r.geometry?.at, extent: r.geometry?.extent, parent: r.parent_slug })))) away.add(sl);
   } catch (e) {
     settlement.forecast_unread = String(e?.message ?? e).slice(0, 200);
   }
-  const w = withholdTakenAway({ marks: out.marks, selection }, new Set(forecast));
+  const w = withholdTakenAway({ marks: out.marks, selection }, away);
   return {
     out: { ...out, marks: w.marks },
-    selection: { ...w.selection, settlement: { ...settlement, withheld_by_forecast: forecast.sort(), withheld_from_docket: w.fromDocket, withheld_from_carry: w.fromCarry } },
+    selection: { ...w.selection, settlement: { ...settlement, withheld_by_forecast: forecast, withheld_with_them: [...away].filter((x) => !forecast.includes(x)).sort(), withheld_from_docket: w.fromDocket, withheld_from_carry: w.fromCarry } },
   };
 }
+
+/** Every parcel a clearing forecast over a limit that still STANDS in the store. */
+export const FORECAST_STANDING_SQL = `
+  SELECT DISTINCT o->>'slug' AS slug
+    FROM windows w, jsonb_array_elements(COALESCE(w.receipts->'parcel_cap'->'over_limit', '[]'::jsonb)) o
+    JOIN marks m ON m.slug = o->>'slug' AND m.status = 'standing'`;
+
+/** The standing marks with what ownGroundOf weighs: household, geometry, the declared parent by slug. */
+export const STANDING_GROUND_SQL = `
+  SELECT m.slug, m.household, m.geometry, p.slug AS parent_slug
+    FROM marks m LEFT JOIN marks p ON p.id = m.parent AND p.status = 'standing'
+   WHERE m.status = 'standing'`;
 
 /**
  * Where the store's ingested town head stands against the town this crossing
