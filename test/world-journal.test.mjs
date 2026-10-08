@@ -1193,6 +1193,7 @@ const withGuardsFlipped = async (store, fn) => {
   const acts = await import("../src/world2-acts.mjs");
   const pen = await import("../src/world2-pen.mjs");
   const house = await import("../src/household-deriver.mjs");
+  const claims = await import("../src/world2-claims.mjs");
   const prev = { pg: process.env.WORLD2_PG, url: process.env.WORLD2_PG_URL, flag: process.env.W2_GUARDS };
   process.env.WORLD2_PG = "1";
   process.env.WORLD2_PG_URL = "postgres://hand-built/none";   // never dialled — the reader is replaced
@@ -1204,6 +1205,9 @@ const withGuardsFlipped = async (store, fn) => {
   // a real socket.
   acts.__setPoolForTest(store);
   pen.__setPoolForTest(store);
+  // And the docket pen's own pool: `claimHouseholdFor` resolves the house on it
+  // (POS-457). Unset, it reached a real socket whenever its memo was cold.
+  claims.__setPoolForTest(store);
   house.__clearHouseCache();
   try {
     assert.equal(guards.guardsFlipped(), true, "the flag is READ, not merely set — B1's gate 1");
@@ -1212,6 +1216,7 @@ const withGuardsFlipped = async (store, fn) => {
     restore();
     acts.__setPoolForTest(null);
     pen.__setPoolForTest(null);
+    claims.__setPoolForTest(null);
     house.__clearHouseCache();
     for (const [k, v] of [["WORLD2_PG", prev.pg], ["WORLD2_PG_URL", prev.url], ["W2_GUARDS", prev.flag]])
       if (v === undefined) delete process.env[k]; else process.env[k] = v;
