@@ -270,21 +270,28 @@ test("a copy whose history cannot be read still answers the 404, and says it cou
 // ── 4. a recipient the copy has not caught up to ─────────────────────────────
 //
 // A resident admitted since the copy (join-bind.mjs lands the card and the bind
-// in one act) is in the store's household registry and in the record at once,
-// and in the copy only after its next ingest. The SEND DOOR asks the registry
-// when the copy does not know the recipient. The drain's side is not this
-// commit's (tools/town-drain-run.mjs, after POS-268 5b).
+// in one act) is in the record at once, and in the copy only after its next
+// ingest. The SEND DOOR asks the store's record of who came ashore (071,
+// POS-444) when the copy does not know the recipient; never the registry, which
+// holds a harbor house too. The drain's side is not this commit's
+// (tools/town-drain-run.mjs, w43 with POS-268 5b).
 
 const REGISTRY = { schema_version: 1, note: "printed from the store", households: {
-  keemin: { name: "Keemin's", human: "Keemin", since: "2026-05-12", declared_by: "wright", accounts: [{ login: "keeminlee", id: 42 }], residents: ["wright", "newcomer"] },
+  keemin: { name: "Keemin's", human: "Keemin", since: "2026-05-12", declared_by: "wright", accounts: [{ login: "keeminlee", id: 42 }], residents: ["wright", "newcomer", "at-the-quay"] },
 } };
 const PINS = { wright: { login: "keeminlee", id: 42, pinned: "2026-05-12" }, gone: { login: "gone-gh", id: 77, pinned: "2026-06-01", retired: "2026-09-01" } };
 
-test("THE OLD REFUSAL, GONE AT THE DOOR: a resident the copy does not hold yet, whom the registry holds, gets the letter", async () => {
+test("THE OLD REFUSAL, GONE AT THE DOOR: a resident the copy does not hold yet, whom the store holds ashore, gets the letter", async () => {
   const { seedRegistry, recordInProcess } = await import("./helpers/office-under-test.mjs");
   const { sendAtDoor } = await import("../src/send-at-door.mjs");
   await seedRegistry(IX.store, REGISTRY, PINS);
   const restore = await recordInProcess(IX.store);
+  // newcomer and gone came ashore (the roads' rows); at-the-quay is in the registry with no address
+  const pen = await IX.store.connect("office_api");
+  try {
+    for (const h of ["newcomer", "gone"])
+      await pen.query("INSERT INTO ashore (handle, at, sha, road) VALUES ($1, now(), $2, 'join-bind') ON CONFLICT (handle) DO NOTHING", [h, "d".repeat(40)]);
+  } finally { await pen.end(); }
   const clone = tempClone();
   try {
     const db = copyDb();
@@ -294,8 +301,8 @@ test("THE OLD REFUSAL, GONE AT THE DOOR: a resident the copy does not hold yet, 
     const { result } = await sendAtDoor(letter, fixtureKey, { db, clone, odb: null });
     assert.match(result.commit, /^[0-9a-f]{40}$/, "the letter was written");
     assert.ok(result.letter_id.endsWith("-to-newcomer-welcome-aboard"));
-    // a handle the registry holds only as a retired pin, or not at all, is refused as before
-    for (const to of ["gone", "nobody-at-all"]) {
+    // a retired pin, a harbor resident the registry holds with no address, and nobody: refused as before
+    for (const to of ["gone", "at-the-quay", "nobody-at-all"]) {
       await assert.rejects(sendAtDoor({ ...letter, to, title: "to " + to }, fixtureKey, { db, clone, odb: null }),
         (e) => e.code === 422 && e.defect === "no resident \"" + to + "\"", to);
     }

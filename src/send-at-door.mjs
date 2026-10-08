@@ -23,19 +23,20 @@ import { townLogEnabled } from "./town-journal.mjs";
 import { withThreadlessHint } from "./mail-thread.mjs";
 import { inferSender } from "./one-contract.mjs";
 import { indexSwitched, probeOf } from "./index-probe.mjs";
-import { actsQuery } from "./world2-acts.mjs";
+import { ashoreOf } from "./ashore.mjs";
 
 // ── A RECIPIENT THE COPY HAS NOT CAUGHT UP TO (POS-332) ──────────────────────
 //
 // The recipient check (write.mjs § validateLetter, `no resident "x"`) asks the
 // office's index, a copy of the town record refreshed between crossings. A
 // resident admitted since (join-bind.mjs: the card and the bind land in one act)
-// is in the record and in the store's household registry at once, and in the
-// copy only after its next ingest, so a letter to them was refused in between.
-// When the copy does not know the recipient, the door asks the registry, the
-// store's record of who lives here (`identities`, 055: every handle a house
-// lists or a pin holds, `retired` for a retired pin). A handle the registry
-// holds as a resident is one; anything else is checked exactly as before. The
+// is in the record at once, and in the copy only after its next ingest, so a
+// letter to them was refused in between. When the copy does not know the
+// recipient, the door asks the store's record of who came ashore (071, written
+// in the act that lands each address; src/ashore.mjs). Not the registry: a
+// harbor house has registry rows and no address, and a letter to it bounces at
+// the crossing (POS-444, Darko's A). A handle the store holds ashore, with no
+// retired pin, is a recipient; anything else is checked exactly as before. The
 // copy is asked first, so the store is read only on a miss.
 //
 // THE DOOR ONLY. The drain replays a letter through validateLetter at the
@@ -46,9 +47,7 @@ export async function recipientProbe(db, to, { env = process.env } = {}) {
   if (!ix || typeof to !== "string" || !to) return db;
   try { if (ix.hasResident(to)) return db; }
   catch { return db; }                     // the store's 503 is validateLetter's to throw, in its own order
-  const rows = await actsQuery("SELECT 1 FROM identities WHERE handle = $1 AND status = 'resident' LIMIT 1", [to], env)
-    .catch(() => null);                    // could not look: the copy's answer stands
-  if (!rows?.length) return db;
+  if (!(await ashoreOf([to], env))?.has(to)) return db;   // not ashore, or could not look: the copy's answer stands
   return Object.freeze({ ...ix, hasResident: (h) => h === to || ix.hasResident(h) });
 }
 

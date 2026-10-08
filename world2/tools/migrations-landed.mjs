@@ -106,6 +106,8 @@ export const LANDED = {
   "067_town_mint_inputs.sql":      { probe: `${rel("town_rooms")} AND ${rel("town_mail_lines")}` },
   // 068 (POS-441): the clearing writes a carried mark's claim — its insert policy, then its trigger.
   "068_clearing_carries.sql":      { probe: `${policy("claims_insert_clearing")} AND ${trig("claims_insert_carry_only")}` },
+  // 071 (POS-444): the store's record that a handle came ashore, append-only.
+  "071_ashore.sql":                { probe: `${rel("ashore")} AND ${trig("ashore_append_only")}` },
 };
 
 /** The schema files in the order a store takes them — name order, as the CI floor applies them. */

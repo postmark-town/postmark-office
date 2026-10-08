@@ -32,6 +32,7 @@ import { gangwayState } from "./residency.mjs";
 import { mintHousehold, joinHousehold, collectingDrain, NO_DRAIN } from "./ceremony.mjs";
 import { planHouseKey, appendHouseKey, registryWith } from "./house-key.mjs";
 import { heardAnswer, recordHeard, heardReceipt } from "./arrival-heard.mjs";
+import { recordAshore } from "./ashore.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLONE = process.env.TOWN_CLONE ?? resolve(HERE, "..", "town-clone");
@@ -191,6 +192,15 @@ async function main() {
       : `harbor: ${decl.handle} arrives · household ${decl.slug} declared (via postmark-office, join-as-declaration)`));
     if (commit?.error) return commit;
 
+    // ASHORE, IN THIS ACT (POS-444, 071). A household that settled here has its
+    // address on the record as of `commit`, so the store records that it came
+    // ashore now, under the same lock, after the commit landed and never before
+    // it. Sign-in's harbor stamp reads this row when the town index has not
+    // caught up yet, so the house that was just told `settled: true` can write
+    // at once. A row that fails to land refuses nothing: the index takes the
+    // handle at its next ingest, as before this record existed.
+    const ashore = plan.settled ? await recordAshore({ handle: decl.handle, sha: commit, road: "declare", clone: CLONE }) : null;
+
     // WHERE THEY HEARD (POS-292). The human's answer, kept in the store's
     // private table and nowhere else: not in `plan.files`, not in the commit,
     // not in the journal. Best-effort AFTER the house, the pin and the commit
@@ -203,6 +213,7 @@ async function main() {
     // it after the pull. declareHousehold prefers this field over its own plan.
     const heardLine = heardReceipt(heardGiven, heard);
     return { slug: plan.slug, handle: decl.handle, commit, settled: plan.settled, gangway: plan.gangway, registry: registryOutcome, files: plan.files.map((f) => f.path),
+      ...(ashore ? { ashore: ashore.recorded } : {}),
       ...(heardLine ? { heard_about: heardLine } : {}) };
   }));
 }

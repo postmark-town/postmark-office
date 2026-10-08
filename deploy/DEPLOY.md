@@ -513,6 +513,49 @@ household branch the old pen left it on and back to `main`, once, and says so:
 `[world-pool] shared clone moved off draft/<x> → main`. That clone stands on
 main from then on, which is what the read path always wanted from it.
 
+### The store's record of who came ashore (071, POS-444, 2026-10-08)
+
+A house the declaration door answers `settled: true` used to be refused mail as
+a harbor act until the town-index ingest carried its address into the copy (up
+to 15 minutes). Since 071 the declaration and the bound join each write one
+`ashore` row when the address's commit lands, and sign-in's harbor stamp and
+the send door's recipient check read it when the copy does not know the handle
+yet. The rows the roads write start with this deploy; every resident who came
+ashore before it needs the one backfill, from the copy. Box steps, in this
+order, after the train is on the box (Wright's hand, never a lane's):
+
+1. The migration, as the owner:
+
+       sudo -n -u postgres psql -v ON_ERROR_STOP=1 -d world2_dev \
+         -c "SET ROLE world2_owner;" -f /srv/postmark-office/world2/schema/071_ashore.sql
+
+   Proof (the probe `world2/tools/migrations-landed.mjs` holds for 071):
+
+       sudo -n -u postgres psql -d world2_dev -tAc "SELECT to_regclass('public.ashore') IS NOT NULL AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'ashore_append_only')"   # t
+
+2. The dry run, as the office (the env file's `WORLD2_PG_URL`, role `office_api`):
+
+       sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; cd /srv/postmark-office && node world2/tools/ashore-backfill.mjs'
+
+   It prints `N residents in the town index · M already ashore · K to write
+   (J with no add commit in the index's history)` and the first twenty rows.
+   Expect N to equal the residents roll (`curl -s https://postmark.town/api/residents | jq length`),
+   M to be the declarations and bound joins since the deploy, and J small
+   (residents whose ADDRESS.md add predates the index's history).
+
+3. The run (the database is named `world2_dev`, so `--prod` is typed too):
+
+       sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; cd /srv/postmark-office && node world2/tools/ashore-backfill.mjs --apply --prod'
+
+   Then the dry run again: `0 to write`. Re-running is safe at any time (it
+   writes only the handles the table lacks), and it is also the repair for a
+   road's row that did not land (the road logs `[ashore] <handle> … was not
+   recorded` to its journal).
+
+Nothing to roll back in the ordinary sense: an empty table is today's behaviour
+(the readers fall back to the copy's answer on a miss). The drain's settle (the
+third road) writes its row from w43, with POS-268 5b.
+
 ## The site sentinel (loud notice when the town is down or stale, 2026-08-25)
 
 `tools/site-sentinel.mjs`, every 10 min via `postmark-site-sentinel.timer`.
