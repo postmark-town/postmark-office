@@ -2,7 +2,7 @@
 # box-rollcall.sh — run the roll-call ON THE BOX and print one line per unit.
 #
 # Reads /etc/systemd/system and the state files under /srv. Writes nothing,
-# enables nothing, restarts nothing. Exit 0 = every row OK or PARKED; exit 1 =
+# enables nothing, restarts nothing. Exit 0 = every row OK, PARKED or RETIRED; exit 1 =
 # at least one ALARM; exit 2 = the roll-call itself could not run.
 #
 # ════════════════════════════════════════════════════════════════════════════
@@ -76,7 +76,9 @@
 #  Install the unit, then add its row to deploy/box-rollcall-manifest.json. The
 #  order does not matter: between the two, the roll-call reports
 #  ALARM-unmanifested for a unit with no row, which is the reminder. A row you
-#  are not ready to run is legal — set stage to "parked" and say why.
+#  are not ready to run is legal — set stage to "parked" and say why. A unit you
+#  have ENDED keeps its row with stage "retired", retired_because and retire_steps:
+#  it reads RETIRED once the box no longer loads it, and ALARM-unretired until then.
 #
 #  If the unit EXECS OUT OF A CHECKOUT, it also wants a row in the manifest's
 #  `trees` block naming the tree it runs and the release it must be. The reverse

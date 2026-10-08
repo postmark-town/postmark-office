@@ -156,6 +156,14 @@ export const HOUR = 60 * MINUTE;
 
 export const OK = "OK";
 export const PARKED = "PARKED";
+// A rail deliberately ENDED: its unit files are meant to be gone from the box.
+// Kept as a row for the same reason a parked one is (a rail nobody names is a
+// rail nobody can ask about), and judged the other way round: absent is the
+// green answer, and a box that still loads the unit is ALARM-unretired, so the
+// retirement's own box steps have a check that says when they are done.
+// (POS-268 part 5b, the rehydrate unit, 2026-10-08.)
+export const RETIRED = "RETIRED";
+export const ALARM_UNRETIRED = "ALARM-unretired";
 export const ALARM_MISSING = "ALARM-missing";
 export const ALARM_UNBOUNDED = "ALARM-unbounded";
 export const ALARM_DISABLED = "ALARM-disabled";
@@ -212,8 +220,15 @@ export function loadManifest(path = DEFAULT_MANIFEST) {
   if (!Array.isArray(m.units)) throw new Error(`manifest at ${path} has no units[]`);
   for (const row of m.units) {
     if (!row.unit) throw new Error(`manifest row with no unit name: ${JSON.stringify(row)}`);
-    if (row.stage !== "live" && row.stage !== "parked") {
-      throw new Error(`manifest row ${row.unit} has stage ${JSON.stringify(row.stage)} — must be "live" or "parked"`);
+    if (row.stage !== "live" && row.stage !== "parked" && row.stage !== "retired") {
+      throw new Error(`manifest row ${row.unit} has stage ${JSON.stringify(row.stage)} — must be "live", "parked" or "retired"`);
+    }
+    if (row.stage === "retired") {
+      if (!row.retired_because) throw new Error(`manifest row ${row.unit} is retired and does not say why or when (retired_because)`);
+      // An outcome on a retired row would never be judged, so the alarm it
+      // carries would go quiet without anyone deciding it should: move it to
+      // the row whose rail now writes its log.
+      if (row.outcome) throw new Error(`manifest row ${row.unit} is retired and still carries an outcome — move it to the live row that writes ${row.outcome.history_path}`);
     }
     if (!row.activation_owner) {
       // The law's third clause is not decorative. A row that cannot say who
@@ -834,6 +849,23 @@ function unitIsEnabled(u) {
 export function classifyRow(row, snapshot, now) {
   const u = snapshot.units[row.unit] || snapshot.services[row.unit];
   const label = row.label || row.unit;
+
+  // ── retired rows. Green only once systemd no longer loads the unit at all:
+  // disabled-but-installed is not retired, because the next enable revives it.
+  if (row.stage === "retired") {
+    if (unitIsPresent(u)) {
+      return {
+        unit: row.unit,
+        label,
+        verdict: ALARM_UNRETIRED,
+        reason:
+          `${label} is recorded RETIRED in the manifest but the box still loads it ` +
+          `(${u.unit_file_state || u.load_state}, ${u.active_state || "state unknown"}) — ` +
+          `the retirement's box steps are not done: ${row.retire_steps || "see DEPLOY.md"}`,
+      };
+    }
+    return { unit: row.unit, label, verdict: RETIRED, reason: `${label} is retired — ${row.retired_because}` };
+  }
 
   // ── parked rows. Reported forever, alarmed on only when the box disagrees
   // with the manifest about whether the rail is inert.
@@ -1482,6 +1514,9 @@ export function classifyTree(row, manifest, snapshot) {
   if (gov && gov.stage === "parked") {
     return { unit, label, verdict: PARKED, reason: `${label} is parked with ${gov.unit} — nothing is running this tree (adoption owner: ${gov.activation_owner})` };
   }
+  if (gov && gov.stage === "retired") {
+    return { unit, label, verdict: RETIRED, reason: `${label} is retired with ${gov.unit} — nothing is running this tree` };
+  }
 
   // THE DEPLOYED STAMP IS THE YARDSTICK, so an unreadable one is an alarm and
   // never a pass. Judged before anything else for the reason RULE 1 is: a check
@@ -1600,7 +1635,7 @@ export function unrowedTrees(manifest, snapshot) {
   const envKeys = [...new Set((spec.rows || []).map((r) => r.env_key).filter(Boolean))];
   const out = [];
   for (const row of manifest.units) {
-    if (row.stage === "parked") continue;
+    if (row.stage === "parked" || row.stage === "retired") continue;
     const svc = serviceOf(row.unit);
     if (rowed.has(svc)) continue;
     const src = (snapshot.tree_sources || {})[svc];
@@ -1645,10 +1680,11 @@ export function rollcall(manifest, snapshot, now = Date.now()) {
     });
   }
 
-  const counts = { OK: 0, PARKED: 0, ALARM: 0 };
+  const counts = { OK: 0, PARKED: 0, RETIRED: 0, ALARM: 0 };
   for (const r of rows) {
     if (isAlarm(r.verdict)) counts.ALARM += 1;
     else if (r.verdict === PARKED) counts.PARKED += 1;
+    else if (r.verdict === RETIRED) counts.RETIRED += 1;
     else counts.OK += 1;
   }
 
@@ -1666,10 +1702,13 @@ export function formatLines(result) {
   const rest = result.rows.filter((r) => !isAlarm(r.verdict));
   for (const r of [...alarms, ...rest]) out.push(`${r.verdict.padEnd(19)} ${r.unit.padEnd(34)} ${r.reason}`);
   out.push("");
+  // Retired rows are counted apart from "running" (they are not) and named only
+  // when there are any, so a manifest with none prints the line it always did.
+  const n = result.counts.RETIRED;
   out.push(
     result.counts.ALARM > 0
-      ? `${result.counts.ALARM} ALARM · ${result.counts.OK} ok · ${result.counts.PARKED} parked by design (${result.at})`
-      : `roll-call clean — ${result.counts.OK} running, ${result.counts.PARKED} parked by design (${result.at})`,
+      ? `${result.counts.ALARM} ALARM · ${result.counts.OK} ok${n ? ` · ${n} retired` : ""} · ${result.counts.PARKED} parked by design (${result.at})`
+      : `roll-call clean — ${result.counts.OK} running${n ? `, ${n} retired` : ""}, ${result.counts.PARKED} parked by design (${result.at})`,
   );
   return out;
 }

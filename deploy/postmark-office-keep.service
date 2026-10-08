@@ -1,5 +1,5 @@
 [Unit]
-Description=Postmark office — pull the clones, catch the mint up, write the settlements row, publish the panes
+Description=Postmark office — pull the clones, catch the mint up, write the settlements row, hydrate the world, publish the panes
 
 [Service]
 Type=oneshot
@@ -7,10 +7,19 @@ Type=oneshot
 # meepo's. This User= line is load-bearing — the 2026-07-09 tick outage was a
 # repo copy of the tick's unit drifting rootward from the live one.
 User=meepo
+# The law pen's credential, for the world graph snapshot's store write
+# (deploy/office-world-hydrate.sh), which moved here when the rehydrate unit was
+# retired (POS-268 part 5b). The same file the law-ingest and town-index units
+# read: root:root 0600, so systemd reads it and hands the values in, and meepo
+# never opens it. Read FIRST, so a key both files carry is the office's: every
+# step this tick ran before the move sees exactly the values it saw then, and
+# the world hydration takes PG_LAW_INGESTER_PASSWORD and WORLD2_DB from it.
+EnvironmentFile=/etc/postmark-world2-dev.env
 EnvironmentFile=/etc/postmark-office.env
 WorkingDirectory=/srv/postmark-office
 # The keeping half of the old office tick (POS-268 split it, 2026-09-27). It
-# touches neither office.db nor world.db; postmark-office-rehydrate does that,
-# two minutes later, from the clones this pulled. The ferry, the pen and both
-# halves share the one town lock.
+# touches no office.db, which nothing builds any more (part 5b retired the
+# rehydrate unit that did). It does write the store's world graph snapshot,
+# the one rehydrate step something still reads. The ferry, the
+# pen and this tick share the one town lock.
 ExecStart=/bin/sh /srv/postmark-office/deploy/office-keep.sh

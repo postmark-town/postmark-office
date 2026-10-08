@@ -1,10 +1,12 @@
-// office-tick-split.test.mjs — the office tick, split in two (POS-268, 2026-09-27).
+// office-tick-split.test.mjs — the office tick, split in two (POS-268, 2026-09-27),
+// and the rehydrate half retired (POS-268 part 5b, 2026-10-08).
 //
 // The rehydrate unit used to run everything the office does on a clock: pull
 // the clones, catch the mint up, write the settlements row, publish the panes,
-// AND rebuild office.db + world.db. Retiring the sqlite reads deletes the last
-// of those and must not delete the rest, so the keeping work moved to its own
-// unit and the rehydrate unit keeps only the two hydrates.
+// AND rebuild office.db + world.db. The split moved the keeping work to its own
+// unit; part 5b deleted the rehydrate. office.db is no longer built anywhere,
+// and the world hydration, the one rehydrate step something still reads, runs
+// in the keeping tick.
 //
 // ⚑ TEXT PINS, like welcome-pass.test.mjs and settlements-backfill.test.mjs:
 // nothing in a unit test can run a systemd unit, and what these hold is which
@@ -12,9 +14,10 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
-const read = (f) => readFileSync(new URL(`../deploy/${f}`, import.meta.url), "utf8");
+const at = (f) => new URL(`../deploy/${f}`, import.meta.url);
+const read = (f) => readFileSync(at(f), "utf8");
 const calendarOf = (timer) => read(timer).split(/\r?\n/).filter((l) => l.startsWith("OnCalendar=")).map((l) => l.slice(11));
 const execOf = (svc) => read(svc).split(/\r?\n/).find((l) => l.startsWith("ExecStart="));
 
@@ -29,60 +32,62 @@ const KEEPING = [
   ["/srv/postmark-office/tools/bug-stage-plan.mjs", "the bug stage pass (Darko, 2026-10-07: payment rides the acceptance)"],
   ["--apply --quiet --key /srv/postmark-office/stamp-key.pem", "the bug stage pass's apply, quiet, with the box's stamp key"],
   ["settlements-backfill.mjs --apply", "the settlements row"],
+  ["sh deploy/office-world-hydrate.sh", "the world hydration (moved off the rehydrate, POS-268 5b)"],
   ["deploy/publish-windows.mjs", "the panes"],
 ];
-const HYDRATES = [
-  ["node src/hydrate.mjs", "office.db"],
-  ["node src/world-hydrate.mjs", "world.db"],
+const RETIRED = [
+  "postmark-office-rehydrate.service",
+  "postmark-office-rehydrate.timer",
+  "office-rehydrate.sh",
+  "office-tick.sh",
 ];
 
-test("the keeping tick carries every keeping step and neither hydrate", () => {
+test("the keeping tick carries every keeping step, the world hydration among them, and never builds office.db", () => {
   const sh = read("office-keep.sh");
   for (const [line, what] of KEEPING) assert.ok(sh.includes(line), `office-keep.sh lost ${what}`);
-  for (const [line, what] of HYDRATES) assert.ok(!sh.includes(line), `office-keep.sh rebuilds ${what} — that is the rehydrate unit's, and only its`);
+  assert.ok(!sh.includes("node src/hydrate.mjs"), "office-keep.sh rebuilds office.db, which nothing reads any more (POS-268 5b)");
+  assert.ok(!read("office-world-hydrate.sh").includes("src/hydrate.mjs"), "the world hydration builds office.db too");
 });
 
-test("the rehydrate script carries both hydrates and no keeping step", () => {
-  const sh = read("office-rehydrate.sh");
-  for (const [line, what] of HYDRATES) assert.ok(sh.includes(line), `office-rehydrate.sh lost the ${what} rebuild`);
-  for (const [line, what] of KEEPING) assert.ok(!sh.includes(line), `office-rehydrate.sh still runs ${what}; deleting the rehydrate unit would take it along`);
-  // it reads the clone under the town lock, for the snapshot only
-  assert.match(sh, /flock -w 300 9\n\s*git clone --local --quiet "\$TOWN_CLONE" "\$SNAP\/town"\n\) 9>>"\$LOCK"/,
-    "the snapshot is taken under the town lock, and nothing else is");
+test("the world hydration runs after the settlements row and before the panes, and cannot stop the tick", () => {
+  const sh = read("office-keep.sh");
+  const settled = sh.indexOf("settlements-backfill.mjs --apply");
+  const world = sh.indexOf("sh deploy/office-world-hydrate.sh");
+  const panes = sh.indexOf("node deploy/publish-windows.mjs");
+  assert.ok(settled < world, "the hydration ran after the settlements row before the move (two minutes after the keeping tick); it still does");
+  assert.ok(world < panes, "the panes publish fails the tick loudly (set -e), so a step after it would be skipped whenever the panes fail");
+  // its own line can never trip the tick's set -e: the script exits 0, and a tree missing it says so
+  assert.match(sh, /sh deploy\/office-world-hydrate\.sh \\\n\s*\|\| echo "\[office-keep\] the world hydration step did not run \(non-fatal\)/);
+  assert.match(read("office-world-hydrate.sh"), /\nexit 0\n$/, "every outcome is a journal line, never a failed tick");
 });
 
-test("each unit runs its own half", () => {
+test("the rehydrate unit, its timer and both of its scripts are gone from deploy/", () => {
+  for (const f of RETIRED) assert.equal(existsSync(at(f)), false, `deploy/${f} is still in the repo; the rehydrate was retired (POS-268 5b)`);
+});
+
+test("the keep unit runs the keeping tick, as meepo, with the law pen's credential and the office's values winning", () => {
   assert.match(execOf("postmark-office-keep.service"), /deploy\/office-keep\.sh$/);
-  assert.match(execOf("postmark-office-rehydrate.service"), /deploy\/office-rehydrate\.sh$/);
-  for (const svc of ["postmark-office-keep.service", "postmark-office-rehydrate.service"]) {
-    assert.match(read(svc), /^User=meepo$/m, `${svc}: the User= line is load-bearing (the 2026-07-09 outage)`);
-    assert.match(read(svc), /^EnvironmentFile=\/etc\/postmark-office\.env$/m, `${svc}: TOWN_CLONE and WORLD_CLONE come from here`);
-  }
+  const unit = read("postmark-office-keep.service");
+  assert.match(unit, /^User=meepo$/m, "the User= line is load-bearing (the 2026-07-09 outage)");
+  const files = unit.split(/\r?\n/).filter((l) => l.startsWith("EnvironmentFile=")).map((l) => l.slice(16));
+  assert.deepEqual(files, ["/etc/postmark-world2-dev.env", "/etc/postmark-office.env"],
+    "the world2 file for PG_LAW_INGESTER_PASSWORD, read FIRST, so a key both carry is the office's and no step the tick ran before sees a new value");
 });
 
-test("the keeping tick keeps the old clock; the rehydrate follows it", () => {
+test("the keeping tick keeps the old clock", () => {
   assert.deepEqual(calendarOf("postmark-office-keep.timer"), ["*:07,22,37,52"],
     "the pulls, the mint, the settlements row and the panes keep the freshness they had");
-  assert.deepEqual(calendarOf("postmark-office-rehydrate.timer"), ["*:09,24,39,54"],
-    "two minutes after the keeping tick, which freshens the clones it reads");
 });
 
-test("a box on the pre-split unit still runs both halves, keeping first", () => {
-  // The installed rehydrate unit names office-tick.sh until someone copies the
-  // new unit files in; a code deploy alone must not stop the keeping work.
-  const sh = read("office-tick.sh");
-  const keep = sh.indexOf('sh "$HERE/office-keep.sh"');
-  const reh = sh.indexOf('sh "$HERE/office-rehydrate.sh"');
-  assert.ok(keep !== -1 && reh !== -1, "the transitional tick must run both halves");
-  assert.ok(keep < reh, "the keeping half pulls the clones the rehydrate reads, so it goes first");
-  assert.match(sh, /^set -eu$/m, "a failed pull stops the rehydrate, exactly as it did before the split");
-});
-
-test("the roll-call knows the new unit, parked until its files are installed", async () => {
+test("the roll-call carries the rehydrate as retired, and its household-keys alarm on the keep row", () => {
   const m = JSON.parse(read("box-rollcall-manifest.json"));
-  const row = m.units.find((u) => u.unit === "postmark-office-keep.timer");
-  assert.ok(row, "every postmark-* timer must have a manifest row");
-  assert.equal(row.stage, "parked");
-  assert.match(row.adopt_command, /enable --now postmark-office-keep\.timer/);
-  assert.ok(m.trees.rows.some((r) => r.unit === "postmark-office-keep.service"), "the keep unit names a tree, so the trees block must name it back");
+  const reh = m.units.find((u) => u.unit === "postmark-office-rehydrate.timer");
+  assert.ok(reh, "a retired rail keeps its row");
+  assert.equal(reh.stage, "retired");
+  assert.match(reh.retire_steps, /DEPLOY\.md § Retiring the rehydrate/);
+  assert.equal(reh.outcome, undefined, "a retired row's outcome would never be judged");
+  const keep = m.units.find((u) => u.unit === "postmark-office-keep.timer");
+  assert.equal(keep.stage, "live");
+  assert.equal(keep.outcome?.history_path, "/srv/postmark-harbor/household-keys.jsonl", "office-keep.sh writes the line, so its row carries the alarm");
+  assert.ok(!m.trees.rows.some((r) => r.unit === "postmark-office-rehydrate.service"), "no tree row for a unit that is gone");
 });
