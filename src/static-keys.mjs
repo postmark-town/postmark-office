@@ -48,11 +48,8 @@
 // itself is never stored. Nothing here returns or prints a key or any part of
 // its hash: the import reports counts and household names only.
 
-import { createHash } from "node:crypto";
 import { asPaper } from "./paperwork.mjs";
-
-/** sha256(token), base64url: the hash every tokens row is keyed on (oauth.mjs § sha256). */
-const sha256 = (s) => createHash("sha256").update(s).digest("base64url");
+import { sha256 } from "./oauth.mjs"; // the one hash every tokens row is keyed on
 
 /** The kind a static row carries in the tokens table. */
 export const STATIC_KIND = "static";
@@ -100,6 +97,11 @@ export async function staticLookup(odb, token) {
   const row = await asPaper(odb).get(
     "SELECT household, handles, gh_id FROM tokens WHERE token_hash = ? AND kind = 'static'", sha256(token));
   return row ? credentialOf(row) : null;
+}
+
+/** How many static rows the paper holds (the boot's warning when it is none). */
+export async function staticKeyCount(odb) {
+  return Number((await asPaper(odb).get("SELECT count(*) AS n FROM tokens WHERE kind = 'static'")).n);
 }
 
 /** The one statement a static row is written by (the import, and the suite's seed). */

@@ -55,7 +55,8 @@ const OOB_REDIRECT = "urn:ietf:wg:oauth:2.0:oob";
 
 const now = () => Math.floor(Date.now() / 1000);
 const rand = (n = 32) => randomBytes(n).toString("base64url");
-const sha256 = (s) => createHash("sha256").update(s).digest("base64url");
+/** sha256(token), base64url: what every tokens row is keyed on. Exported so static-keys.mjs hashes with this one function. */
+export const sha256 = (s) => createHash("sha256").update(s).digest("base64url");
 
 // ── storage ──────────────────────────────────────────────────────────────────
 

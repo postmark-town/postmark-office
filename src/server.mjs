@@ -29,7 +29,7 @@ import { sendAtDoor } from "./send-at-door.mjs";
 import { TOWN_TOOL, townDispatchToolFor } from "./town-apex.mjs";
 import { householdApex, APEX_ONLY_FIELDS } from "./household-apex.mjs"; // the third door (2026-08-15)
 import { handleOauth, oauthLookup, oauthSchema, mintHouseholdKey, keyLookup, mintBerth, berthLookup, berthTaken, acknowledgeVisitorRules, BERTH_SLUG, FROM_TOWN, mintClaim, claimLookup, claimState, claimCosignUrlFor, claimStateUrlFor, sweepClaims, SignInUnreadable } from "./oauth.mjs";
-import { staticLookup } from "./static-keys.mjs"; // POS-352: an operator's static key is a store row, no longer an env var
+import { staticLookup, staticKeyCount } from "./static-keys.mjs"; // POS-352: an operator's static key is a store row, no longer an env var
 import { requestResidency, isReservedHandle } from "./residency.mjs";
 import { declareViaOffice, SETTLING_ASHORE } from "./declare.mjs";
 import { uploadMedia } from "./media.mjs";
@@ -598,6 +598,13 @@ if (!PEN.token && !READ_ONLY_ROLE) console.warn("WARN: no POSTMARK_PEN_TOKEN —
 // import may not have run. The boot says so, and reads nothing from it.
 if (process.env.OFFICE_KEYS)
   console.warn("WARN: OFFICE_KEYS is set but the office no longer reads it (POS-352): static keys are the tokens table's 'static' rows. Run tools/static-keys-import.mjs --dry, then remove the line (deploy/DEPLOY.md § Static keys).");
+// And the warning the env parse used to give, said of the store: no static row
+// means every operator-issued key will 401. Said once, by the writer, off the
+// boot path; a paper that cannot be counted says that instead.
+if (!IN_READ_WORKER)
+  staticKeyCount(odb).then(
+    (n) => { if (n === 0) console.warn("WARN: the office holds no static keys (no 'static' rows in the tokens table), so every operator-issued key will 401. Import them with tools/static-keys-import.mjs (deploy/DEPLOY.md § Static keys)."); },
+    (e) => console.warn(`WARN: could not count the static keys: ${String(e?.message ?? e).slice(0, 160)}`));
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 //

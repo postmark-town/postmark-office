@@ -250,4 +250,11 @@ test("§ 5 the doors: /me answers each key as it did, and OFFICE_KEYS in the env
   assert.match(said, /OFFICE_KEYS is set but the office no longer reads it/);
   for (const t of TOKENS) assert.equal(said.includes(t), false, `the boot printed the key ${t}`);
   assert.doesNotMatch(stderrOf.get(a.child), /OFFICE_KEYS/, "an office with no env line says nothing about it");
+  // An office whose store holds no static row says so (the env parse's old
+  // "no OFFICE_KEYS configured" warning, said of the store); one that holds
+  // them does not. The count runs off the boot path, so wait for its line.
+  const deadline = Date.now() + 10_000;
+  while (!/holds no static keys/.test(stderrOf.get(b.child)) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
+  assert.match(stderrOf.get(b.child), /the office holds no static keys/);
+  assert.doesNotMatch(stderrOf.get(a.child), /holds no static keys|could not count/);
 });
