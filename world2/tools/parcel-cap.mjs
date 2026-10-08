@@ -68,6 +68,15 @@ import { soloHouseIndex, soloHouseOf, isSolo } from "../../src/solo-adoption.mjs
 export const PARCEL_CAP_CHECK = "parcel-cap";
 
 /**
+ * THE CLEARING'S OUTCOME FOR A PARCEL OVER A LIMIT (POS-364; Darko RULED A,
+ * 2026-10-08): `opposed: <the law mark>: <slug> — <the fold's sentence>`. The
+ * check name is `opposed`, because it is governance taking a claim away, not
+ * a gate refusing a malformed one; it names the law mark that holds the limit.
+ */
+export const OPPOSED_CHECK = "opposed";
+export const opposedCheck = (r) => `${OPPOSED_CHECK}: ${r.law}: ${String(r.check ?? "").replace(/^parcel-cap: /, "")}`;
+
+/**
  * The `<name>: <detail>` string a refused claim carries.
  *
  * The detail is the fold's own sentence, composed from the fold's own three

@@ -239,6 +239,19 @@ export function checkNameOf(refusalCheck) {
 
 const CAUSE_ROW_PREFIX = "claims.refusal_check = ";
 
+/**
+ * THE LAW A CLEARING'S OPPOSITION CITES (POS-364; Darko RULED A, 2026-10-08): a
+ * parcel over a limit is decided `opposed: <law mark>: …` (world2/tools/
+ * parcel-cap.mjs § opposedCheck). The law mark, or null for any other check.
+ * The bulletin has no word for it yet, so the sentence names the law itself.
+ */
+export function opposedLawOf(refusalCheck) {
+  const raw = String(refusalCheck ?? "").trim();
+  if (checkNameOf(raw) !== "opposed") return null;
+  const m = /^opposed:\s*([^:\s]+)/i.exec(raw);
+  return m ? m[1] : null;
+}
+
 export function causeOf(refusalCheck) {
   const raw = String(refusalCheck ?? "").trim();
   if (!raw) return { cause: null, cause_row: null };
@@ -379,7 +392,9 @@ export function receiptFrom(records = {}) {
       ...base, status: "refused", cause, cause_row,
       crossing: settlement ?? null,
       settlement_sha: settlement?.sha ?? null,
-      says: `refused at candle ${row.window_id}${cause ? ` — ${cause}` : ""}${row.decided_at ? ` (${row.decided_at})` : ""}`
+      says: opposedLawOf(row.refusal_check)
+        ? `opposed at candle ${row.window_id}, citing ${opposedLawOf(row.refusal_check)}: the parcel is over its limit and holds no ground${row.decided_at ? ` (${row.decided_at})` : ""}`
+        : `refused at candle ${row.window_id}${cause ? ` — ${cause}` : ""}${row.decided_at ? ` (${row.decided_at})` : ""}`
         + (cause ? "" : " — the check that refused it has no word in the bulletin's five yet; the row is named beside this"),
     };
   }

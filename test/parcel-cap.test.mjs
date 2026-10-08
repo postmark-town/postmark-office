@@ -200,7 +200,7 @@ test("nothing to judge prints nothing", () => {
 
 // ── the wiring, and the docket ──────────────────────────────────────────────
 
-test("THE WIRING: clearing-job asks the gate as a FORECAST and never refuses the claim (POS-364, R11)", () => {
+test("THE WIRING: clearing-job DECIDES the limits ahead of the geometry, opposed and citing the law (POS-364, Darko's ruling A)", () => {
   // clearing-job.mjs connects to Postgres at import and is not importable, so
   // this reads its source — the same shape window-reanchor.test.mjs already uses
   // for this file. Weak as proofs go, and it is the only thing between the gate
@@ -214,13 +214,15 @@ test("THE WIRING: clearing-job asks the gate as a FORECAST and never refuses the
   // (clearing-job.mjs:304). The check matched a DIFFERENT gate's wiring and
   // could not fail for the break it named. Found by the flip, which is the only
   // thing that could have found it.
-  const from = src.indexOf("// 5.6 · THE PARCEL CLAIM CAP");
-  const to = src.indexOf("// 5.7 · THE CARRY");          // POS-441 put the carry between 5.6 and 6
-  assert.ok(from !== -1 && to > from, "step 5.6's block must be findable between its own marker and step 5.7");
+  const from = src.indexOf("// 2.5 · THE PARCEL LIMITS, DECIDED AT THE CLEARING");
+  const to = src.indexOf("// 3 · escrow sufficiency");   // Darko's A (2026-10-08) moved it ahead of the geometry
+  assert.ok(from !== -1 && to > from, "step 2.5's block must be findable between its own marker and step 3");
+  assert.ok(from < src.indexOf("// 4 · geometry vs STANDING marks") && from < src.indexOf("// 5.7 · THE CARRY"),
+    "ahead of step 4's overlap and step 5.7's carry: an over-limit parcel never holds ground");
   const step = src.slice(from, to);
 
   assert.ok(step.includes("parcelCapRefusals("), "step 5.6 must ask the gate");
-  assert.ok(!step.includes("decide("), "and decides nothing: the claim locks, and the settlement opposes it (R11)");
+  assert.ok(step.includes('decide(r.id, "refused", opposedCheck(r))'), "and decides each over-limit claim opposed, citing its law");
   assert.ok(step.includes("over_limit:"), "its account says which claims are over the limit");
   assert.ok(step.includes("parcelCapLawAt("), "reading the law from the world checkout, not from a constant here");
   assert.ok(/amending:\s*amends\.has\(/.test(step), "and telling the gate which claims are amendments (POS-88)");
@@ -279,4 +281,12 @@ test("ONE PARCEL PER RESIDENT in the forecast: a resident's second parcel is ove
   assert.deepEqual(v.admitted.map((a) => a.slug), ["bee/her-first", "ash/the-plot", "ash/excepted-second"]);
   // Without the per-resident count the forecast asks the cap alone, as before.
   assert.deepEqual(parcelCapRefusals([parcel("ash/a-second-plot", "a-house", "2026-10-05", { claimant: "ash" })], { heldByCred: new Map([["a-house", 1]]), law: law1 }).refused, []);
+});
+
+test("the clearing's outcome sentence for a parcel over a limit names the law mark that holds it", async () => {
+  const { opposedCheck, OPPOSED_CHECK } = await import("../world2/tools/parcel-cap.mjs");
+  const v = parcelCapRefusals([parcel("someone/the-fourth-parcel", "a-house", "2026-09-15")], { heldByCred: new Map([["a-house", law.cap]]), law });
+  const check = opposedCheck(v.refused[0]);
+  assert.equal(checkNameOf(check), OPPOSED_CHECK);
+  assert.match(check, /^opposed: the-town\/claim-cap: someone\/the-fourth-parcel — parcel claim capped — this credential household already holds/);
 });
