@@ -59,7 +59,11 @@ async function office(extraEnv = {}) {
     "--oauth-db", join(tmp, "oauth.db"), "--roles-db", join(tmp, "roles.db")], {
     env: { ...process.env, ...ix?.env, OFFICE_KEYS: `${KEY}=keemin:wright`, TOWN_CLONE: clone,
       WORLD_CLONE: join(tmp, "no-world-clone"), VOICES_LOG: join(tmp, "voices.jsonl"),
-      WORLD_STORE_DB: join(tmp, "no-world.db"), TOWN_PUSH: "", TOWN_SINGLE_LOG: "", WORLD_APEX: "1", ...extraEnv },
+      WORLD_STORE_DB: join(tmp, "no-world.db"), TOWN_PUSH: "", TOWN_SINGLE_LOG: "", WORLD_APEX: "1",
+      // every test here writes on the one key, and a quick run took office B
+      // past the 40-a-minute write budget (a 429 where the contract's 422 was
+      // asked; CI on #419, 2026-10-08). The budget is bouncer-server's to test.
+      OFFICE_BOUNCER_KEY_WRITE_PER_MINUTE: "10000", ...extraEnv },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let base = null;
