@@ -101,7 +101,7 @@ export async function parcelCapLawAt(worldRepo) {
   }
 
   const mod = await import(pathToFileURL(fold).href);
-  const { PARCEL_CLAIM_CAP, PARCEL_CAP_LAW_DATE, PARCEL_CAP_EXCEPTIONS, compareClaimOrder } = mod;
+  const { PARCEL_CLAIM_CAP, PARCEL_CAP_LAW_DATE, PARCEL_CAP_EXCEPTIONS, compareClaimOrder, ONE_PARCEL_PER_HANDLE_EXCEPTIONS } = mod;
 
   // Each check names the constant it could not stand behind. A cap of 0 and a
   // missing export are different faults with the same symptom, and an operator
@@ -119,7 +119,10 @@ export async function parcelCapLawAt(worldRepo) {
   if (typeof compareClaimOrder !== "function")
     throw new Error(`parcelCapLawAt: ${repo} at ${sha.slice(0, 8)} exports no compareClaimOrder — which of several claims the cap refuses must be a function of the record`);
 
-  return { cap: PARCEL_CLAIM_CAP, lawDate: PARCEL_CAP_LAW_DATE, exceptions: PARCEL_CAP_EXCEPTIONS, compare: compareClaimOrder, sha, repo };
+  // One parcel per resident's own founder exceptions (POS-368); an engine older
+  // than that law answers none, and then the forecast asks only the cap.
+  const onePerExceptions = typeof ONE_PARCEL_PER_HANDLE_EXCEPTIONS?.has === "function" ? ONE_PARCEL_PER_HANDLE_EXCEPTIONS : null;
+  return { cap: PARCEL_CLAIM_CAP, lawDate: PARCEL_CAP_LAW_DATE, exceptions: PARCEL_CAP_EXCEPTIONS, compare: compareClaimOrder, onePerExceptions, sha, repo };
 }
 
 /**
@@ -153,9 +156,14 @@ export async function parcelCapLawAt(worldRepo) {
  * entry says so in its own text ("`held` still counts all five, so a SIXTH claim
  * by this household is refused").
  */
-export function parcelCapRefusals(candidates, { heldByCred, law } = {}) {
+export function parcelCapRefusals(candidates, { heldByCred, law, heldByResident = null } = {}) {
   if (!law) throw new Error("parcelCapRefusals: no law — the cap is the world's and this function never supplies a default");
   const held = new Map(heldByCred ?? []);
+  // ONE PARCEL PER RESIDENT, asked first, as the fold asks it (marks-fold §
+  // admissibility; POS-364 review: the clearing's forecast and the settlement
+  // agree). Only when the caller hands the standing parcels per resident and
+  // the law knows the rule; a resident's second parcel never counts toward the cap.
+  const residents = heldByResident && law.onePerExceptions ? new Map(heldByResident) : null;
   const refused = [];
   const admitted = [];
 
@@ -167,16 +175,22 @@ export function parcelCapRefusals(candidates, { heldByCred, law } = {}) {
 
   for (const c of ordered) {
     const cred = c?.cred ?? null;
+    if (residents && !c?.amending && c?.claimant && (residents.get(c.claimant) ?? 0) > 0 && !law.onePerExceptions.has(c?.slug)) {
+      refused.push({ id: c.id, slug: c.slug, cred, held: residents.get(c.claimant), law: "the-town/one-per-resident",
+        check: `${PARCEL_CAP_CHECK}: ${c.slug} — this resident already holds a parcel; a household may hold up to three, one per resident (the-town/one-per-resident; relocation = replace, not add)` });
+      continue;
+    }
     const n = held.get(cred) ?? 0;
     const postLaw = String(c?.date ?? "") > law.lawDate;
     const excepted = law.exceptions.has(c?.slug);
     if (!c?.amending && postLaw && n >= law.cap && !excepted) {
-      refused.push({ id: c.id, slug: c.slug, cred, held: n, check: parcelCapCheck(c.slug, n, law) });
+      refused.push({ id: c.id, slug: c.slug, cred, held: n, law: "the-town/claim-cap", check: parcelCapCheck(c.slug, n, law) });
       continue;
     }
     admitted.push({ id: c?.id, slug: c?.slug, cred, held: n, excepted, amending: !!c?.amending });
     // An amendment does not raise the count — it replaces a parcel already in it.
     if (!c?.amending) held.set(cred, n + 1);
+    if (residents && !c?.amending && c?.claimant) residents.set(c.claimant, (residents.get(c.claimant) ?? 0) + 1);
   }
   return { refused, admitted };
 }
@@ -238,6 +252,13 @@ export async function heldParcelsByCred(q, { resolve = null } = {}) {
     held.set(key, (held.get(key) ?? 0) + r.n);
   }
   return held;
+}
+
+/** Standing parcels per RESIDENT (the mark's owner, a handle): one parcel per resident's count (POS-364 review). */
+export async function heldParcelsByResident(q) {
+  const { rows } = await q(
+    "SELECT owner, COUNT(*)::int AS n FROM marks WHERE kind = 'parcel' AND status = 'standing' GROUP BY owner");
+  return new Map(rows.map((r) => [String(r.owner), r.n]));
 }
 
 /**

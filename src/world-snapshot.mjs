@@ -366,10 +366,41 @@ export async function snapshotFoldArgs(p, header, { townRepo = null, filing = nu
   const rows = await snapshotRows(p, header.marks_digest);
   const inputs = await snapshotFoldInputs(p, header, { townRepo });
   const marks = inFilingOrder(marksFromRows(markRowsOfVersions(rows), inputs.lawRows), filing);
+  await withClaimedAt(p, marks);
   return {
     args: { marks, terrain: inputs.terrain, stakes: inputs.stakes, households: inputs.households },
     stakesSource: inputs.stakesSource, householdsSource: inputs.householdsSource,
   };
+}
+
+// ── WHEN A PARCEL WAS FIRST CLAIMED (POS-364 review, 2026-10-08) ─────────────
+//
+// Every leave and every amendment restamps a record's `date`, and the store's
+// materialize replaces the record's data on amend, so a version's `date` is
+// when it was LAST said. The world's claim order and the cap's law date read
+// `claimed_at` when a record carries it (marks-fold.mjs § the first claim). A
+// mark's row keeps the id of the claim that first placed it for life (materialize
+// INSERTs with the claim's id and amends in place; a seed mark's claim shares its
+// id too), so that ORIGIN claim's own record date is when the mark was first
+// claimed. A source, not a derivation: an origin claim's data never changes, so
+// --verify reads the same instant every time. A parcel with no origin row (a
+// fixture, a store that never held it) keeps its own date, as before.
+export const CLAIMED_AT_SQL = `
+  SELECT m.slug, c.data->>'date' AS claimed_date, c.submitted_at
+    FROM marks m JOIN claims c ON c.id = m.id
+   WHERE m.slug = ANY($1)`;
+
+/** Stamp each parcel record with its first claim (`claimed_at`). Edits `marks` in place; returns it. */
+export async function withClaimedAt(p, marks) {
+  const parcels = marks.filter((m) => m?.kind === "parcel" && m.id);
+  if (!parcels.length) return marks;
+  const { rows } = await p.query(CLAIMED_AT_SQL, [parcels.map((m) => String(m.id))]);
+  const first = new Map(rows.map((r) => [r.slug, r.claimed_date ?? (r.submitted_at ? new Date(r.submitted_at).toISOString() : null)]));
+  for (const m of parcels) {
+    const at = first.get(String(m.id));
+    if (at) m.claimed_at = at;
+  }
+  return marks;
 }
 
 /**

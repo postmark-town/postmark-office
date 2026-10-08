@@ -504,7 +504,7 @@ test("the settlement applies the limits in act order: fifteen pending parcels, a
     date: `2026-10-08T${String(i).padStart(2, "0")}:00:00Z`,
   })).reverse();
   marks.push({ id: "r14/plot-name", kind: "naming", by: "r14", household: "one-house", parent: "r14/plot", date: "2026-10-08T23:00:00Z" });
-  const inputs = { fold: limitEngine, args: { marks }, townWordsRead: true };
+  const inputs = { fold: limitEngine, args: { marks }, townWordsRead: true, claimOrderRead: true };
   const cleared = limitEngine({ marks: structuredClone(marks) });
   assert.equal(limitOppositions(cleared).length, 12, "the fold names twelve over the cap");
   const { state, vetoes } = foldWithWords(inputs, null);
@@ -525,18 +525,21 @@ test("one parcel per resident is applied the same way: a resident's second parce
     { id: "ash/first", kind: "parcel", by: "ash", household: "ash-house", date: "2026-10-01T00:00:00Z" },
     { id: "ash/second", kind: "parcel", by: "ash", household: "ash-house", date: "2026-10-02T00:00:00Z" },
   ];
-  const { state, vetoes } = foldWithWords({ fold: limitEngine, args: { marks }, townWordsRead: true }, null);
+  const { state, vetoes } = foldWithWords({ fold: limitEngine, args: { marks }, townWordsRead: true, claimOrderRead: true }, null);
   assert.deepEqual(state.marks.map((m) => m.id), ["ash/first"]);
   assert.deepEqual(vetoes.limits, [{ mark: "ash/second", law: "the-town/one-per-resident" }]);
 });
 
-test("an engine older than world#146 cannot carry a limit: the World is the cleared one, and the answer names what was not carried", async () => {
+test("an engine without world#146 or world#166 applies no limit: the World is the cleared one, and the answer names what was not applied", async () => {
   const { foldWithWords } = await import("../src/world-settlement.mjs");
   const marks = [
     { id: "ash/first", kind: "parcel", by: "ash", household: "ash-house", date: "2026-10-01T00:00:00Z" },
     { id: "ash/second", kind: "parcel", by: "ash", household: "ash-house", date: "2026-10-02T00:00:00Z" },
   ];
-  const { state, vetoes } = foldWithWords({ fold: limitEngine, args: { marks }, townWordsRead: false }, null);
-  assert.ok(state.marks.some((m) => m.id === "ash/second"), "nothing is subtracted by hand");
-  assert.deepEqual(vetoes.town_unread, ["ash/second"]);
+  for (const engine of [{ townWordsRead: false, claimOrderRead: true }, { townWordsRead: true, claimOrderRead: false }]) {
+    // Either half missing (world#146's town word, world#166's first-claim order) applies no limit.
+    const { state, vetoes } = foldWithWords({ fold: limitEngine, args: { marks }, ...engine }, null);
+    assert.ok(state.marks.some((m) => m.id === "ash/second"), "nothing is subtracted by hand");
+    assert.deepEqual(vetoes.limits_unread, [{ mark: "ash/second", law: "the-town/one-per-resident" }], JSON.stringify(engine));
+  }
 });

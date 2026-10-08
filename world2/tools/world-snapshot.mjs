@@ -149,7 +149,8 @@ try {
     if (!header.law_sha) throw new Error("the snapshot names no law sha, so there is no engine to derive its World with");
     const { materializeAtRef } = await import("../../src/world-branches.mjs");
     const tools = materializeAtRef(worldRepo, header.law_sha, "tools");
-    const { fold } = await import(pathToFileURL(join(tools, "tools", "marks-fold.mjs")).href);
+    const engine = await import(pathToFileURL(join(tools, "tools", "marks-fold.mjs")).href);
+    const { fold } = engine;
     const { filingAt, inFilingOrder } = await import("../../src/world-filing-order.mjs");
     const filing = filingAt(worldRepo, header.law_sha);
     const { state: derived, args, stakesSource, householdsSource } = await foldOfSnapshot(client, header, { fold, townRepo, filing });
@@ -159,7 +160,9 @@ try {
       const { rows: storeRows } = await client.query(
         "SELECT id, slug, kind, owner, household, body, geometry, status, locked_window, parent, data FROM marks WHERE status = 'standing' ORDER BY slug");
       const inputs = await snapshotFoldInputs(client, header, { townRepo });
-      const storeFold = fold({ marks: inFilingOrder(marksFromRows(storeRows, inputs.lawRows), filing), terrain: inputs.terrain, stakes: inputs.stakes, households: inputs.households });
+      const { withClaimedAt } = await import("../../src/world-snapshot.mjs");
+      const storeMarks = await withClaimedAt(client, inFilingOrder(marksFromRows(storeRows, inputs.lawRows), filing));
+      const storeFold = fold({ marks: storeMarks, terrain: inputs.terrain, stakes: inputs.stakes, households: inputs.households });
       compareFolds("world vs the store rows' fold", derived, storeFold);
     }
     // THE SETTLEMENT'S WORLD (POS-362, 069): the same sources folded with the
@@ -171,7 +174,7 @@ try {
     const words = await wordsAtSeal(client, header, { worldRepo });
     let consent = null;
     try { consent = await import(pathToFileURL(join(tools, "tools", "consent.mjs")).href); } catch { consent = null; }
-    const settled = foldWithWords({ fold, args, townWordsRead: consent ? consent.TOWN_WORDS instanceof Set : false }, words, derived);
+    const settled = foldWithWords({ fold, args, townWordsRead: consent ? consent.TOWN_WORDS instanceof Set : false, claimOrderRead: typeof engine.CLAIMED_AT_FIELD === "string" }, words, derived);
     if (header.stance_through == null) console.log("  · words: none read at this seal (no stance_through: sealed before 069, or back-filled), so the settlement is the derived fold");
     else console.log(`  · words: the stance acts up to ${header.stance_through} — the town opposes ${settled.vetoes?.town?.length ?? 0} mark(s), holders ${settled.vetoes?.holders?.length ?? 0} word(s), the limits ${settled.vetoes?.limits?.length ?? 0} parcel(s)${settled.vetoes?.town_unread ? `; the engine at this law predates world#146, so the town's ${settled.vetoes.town_unread.length} are NOT carried` : ""}; ${(derived.marks?.length ?? 0) - (settled.state.marks?.length ?? 0)} mark(s) leave the settlement`);
     const { rows: [cached] } = await client.query("SELECT state FROM world_snapshot_folds WHERE digest = $1", [header.digest]);

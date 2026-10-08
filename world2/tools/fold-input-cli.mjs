@@ -129,6 +129,59 @@ export function withholdTakenAway({ marks = [], selection = {} }, slugs) {
 }
 
 /**
+ * THE CROSSING'S SETTLEMENT BLOCK (POS-364): the fold input less what the
+ * settlement of `window` takes away (src/world-settlement.mjs §
+ * settlementTakesAway), with `selection.settlement` naming it. Never refuses.
+ *
+ * WHEN THE SETTLEMENT CANNOT BE FOLDED HERE (no world checkout, no snapshot for
+ * the window, an engine or a store that cannot answer), the clearing's own
+ * forecast still holds which parcels are over a limit: the window's receipt
+ * `parcel_cap.over_limit` (clearing-job.mjs step 5.6). Those are withheld, so
+ * an unreadable settlement never lets an over-limit parcel quarantine its
+ * household's sketchbook (Wright's review of #441). `{ out, selection }`.
+ */
+export async function settlementWithhold(client, { window, worldRepo = null, townClone = null, out, selection }) {
+  let settlement;
+  try {
+    if (!worldRepo) throw new Error("no --world-repo: the settlement could not be folded here");
+    const { snapshotHeader } = await import("../../src/world-snapshot.mjs");
+    const { settlementTakesAway } = await import("../../src/world-settlement.mjs");
+    const header = await snapshotHeader(client, { window });
+    if (!header) throw new Error(`no snapshot was sealed for window ${window}`);
+    const { slugs, vetoes } = await settlementTakesAway(client, header, { worldRepo, townRepo: townClone });
+    const w = withholdTakenAway({ marks: out.marks, selection }, slugs);
+    return {
+      out: { ...out, marks: w.marks },
+      selection: {
+        ...w.selection,
+        settlement: {
+          window, snapshot: header.id, digest: header.digest, stance_through: header.stance_through ?? null,
+          taken_away: [...slugs].sort(), withheld_from_docket: w.fromDocket, withheld_from_carry: w.fromCarry,
+          limits: vetoes?.limits ?? [],
+          ...(vetoes?.limits_unread ? { limits_unread: vetoes.limits_unread } : {}),
+          ...(vetoes?.town_unread ? { unread: `the engine at law ${String(header.law_sha).slice(0, 12)} predates world#146, so ${vetoes.town_unread.length} opposition(s) could not be carried` } : {}),
+        },
+      },
+    };
+  } catch (e) {
+    settlement = { window, unread: `the settlement could not be folded: ${String(e?.message ?? e).slice(0, 240)}` };
+  }
+  // THE FALLBACK: the clearing's forecast of what is over a limit.
+  let forecast = [];
+  try {
+    const { rows: [r] } = await client.query("SELECT receipts->'parcel_cap'->'over_limit' AS over FROM windows WHERE id = $1", [window]);
+    forecast = (Array.isArray(r?.over) ? r.over : []).map((x) => String(x?.slug ?? "")).filter(Boolean);
+  } catch (e) {
+    settlement.forecast_unread = String(e?.message ?? e).slice(0, 200);
+  }
+  const w = withholdTakenAway({ marks: out.marks, selection }, new Set(forecast));
+  return {
+    out: { ...out, marks: w.marks },
+    selection: { ...w.selection, settlement: { ...settlement, withheld_by_forecast: forecast.sort(), withheld_from_docket: w.fromDocket, withheld_from_carry: w.fromCarry } },
+  };
+}
+
+/**
  * Where the store's ingested town head stands against the town this crossing
  * fetched. Pure git, no store.
  */
@@ -323,30 +376,7 @@ if (isMain) {
     // (no world checkout, an engine older than world#146, a store without 069)
     // leaves the docket as it was, and `settlement.unread` says why: the old
     // behaviour, named, rather than a stopped town.
-    let settlement = { window, unread: "no --world-repo: the settlement could not be folded here" };
-    if (worldRepo) {
-      try {
-        const { snapshotHeader } = await import("../../src/world-snapshot.mjs");
-        const { settlementTakesAway } = await import("../../src/world-settlement.mjs");
-        const header = await snapshotHeader(client, { window });
-        if (!header) settlement = { window, unread: `no snapshot was sealed for window ${window}` };
-        else {
-          const { slugs, vetoes } = await settlementTakesAway(client, header, { worldRepo, townRepo: townClone });
-          const w = withholdTakenAway({ marks: out.marks, selection }, slugs);
-          out = { ...out, marks: w.marks };
-          selection = w.selection;
-          settlement = {
-            window, snapshot: header.id, digest: header.digest, stance_through: header.stance_through ?? null,
-            taken_away: [...slugs].sort(), withheld_from_docket: w.fromDocket, withheld_from_carry: w.fromCarry,
-            limits: vetoes?.limits ?? [],
-            ...(vetoes?.town_unread ? { unread: `the engine at law ${String(header.law_sha).slice(0, 12)} predates world#146, so ${vetoes.town_unread.length} opposition(s) could not be carried` } : {}),
-          };
-        }
-      } catch (e) {
-        settlement = { window, unread: `the settlement could not be folded: ${String(e?.message ?? e).slice(0, 240)}` };
-      }
-    }
-    selection = { ...selection, settlement };
+    ({ out, selection } = await settlementWithhold(client, { window, worldRepo, townClone, out, selection }));
   } catch (e) {
     // Lane 2's refusals are thrown Errors whose messages carry the sha or window
     // they wanted and the sentence for why. They are passed through WHOLE rather

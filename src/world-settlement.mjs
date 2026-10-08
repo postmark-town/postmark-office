@@ -180,6 +180,10 @@ export async function settlementFoldInputs(p, header, { worldRepo, townRepo }) {
     // world#146: an engine that knows the town's words exports them. An older
     // one folds `townWords` as nothing, and the answer says so.
     townWordsRead: consent ? consent.TOWN_WORDS instanceof Set : false,
+    // world#166: an engine that orders parcels by their FIRST claim exports the
+    // field it reads. An older one orders by the restamped date, so a limit it
+    // finds may be the wrong parcel, and the settlement does not apply it.
+    claimOrderRead: typeof engine.CLAIMED_AT_FIELD === "string",
   };
   ARGS.set(header.digest, inputs);
   if (ARGS.size > 3) ARGS.delete(ARGS.keys().next().value);
@@ -341,9 +345,18 @@ export function limitOppositions(state) {
  */
 export function foldWithWords(inputs, words, cleared = null) {
   const base = cleared ?? foldOver(inputs);
-  const rules = limitOppositions(base);
+  // THE LIMITS NEED BOTH: the town's word to carry them (world#146) and the
+  // first-claim order to find the right parcel (world#166). Without the second,
+  // an amended parcel sorts last and the limit would oppose it in place of the
+  // one claimed after it (Wright's review of #441), so nothing is applied, and
+  // the answer names what was found and not applied.
+  const found = limitOppositions(base);
+  const limitsApply = !!(inputs.townWordsRead && inputs.claimOrderRead);
+  const rules = limitsApply ? found : [];
   const v = vetoesOf(words);
-  if (!v && !rules.length) return { state: base, vetoes: null };
+  const notApplied = !limitsApply && found.length
+    ? { limits_unread: found.map(({ mark, law }) => ({ mark, law })) } : {};
+  if (!v && !rules.length) return { state: base, vetoes: found.length && !limitsApply ? { town: [], holders: [], ...notApplied } : null };
   const holders = v?.holders ?? [];
   const townWords = new Map(words?.townWords ?? []);
   for (const r of rules) townWords.set(r.mark, "opposed");
@@ -367,6 +380,7 @@ export function foldWithWords(inputs, words, cleared = null) {
       town, holders,
       ...(rules.length ? { limits: rules.map(({ mark, law }) => ({ mark, law })) } : {}),
       ...(inputs.townWordsRead || !carriedNot.length ? {} : { town_unread: carriedNot }),
+      ...notApplied,
     },
   };
 }
@@ -375,9 +389,17 @@ export function foldWithWords(inputs, words, cleared = null) {
  * WHAT A SETTLEMENT TAKES AWAY, as the git write-down needs it (POS-364): the
  * marks its World returns (`state: "returned"`, each with the subtree the engine
  * named), folded from the snapshot's sources with the words standing at its seal
- * and the limits. A returned mark whose stakes have not unwound
- * (`pending-escrow`) still stands, so it is not taken away here. `{ slugs, vetoes }`.
- * Throws when the settlement cannot be folded; the caller says so on its receipt.
+ * and the limits. A word's return whose stakes have not unwound
+ * (`pending-escrow`) still stands, so it is not taken away here.
+ *
+ * A PARCEL OVER A LIMIT IS ALWAYS TAKEN AWAY FROM GIT, staked or not, applied or
+ * not (Wright's review of #441). The world's sweep folds the tree with the same
+ * admissibility, and a parcel it finds over a limit quarantines its household's
+ * whole sketchbook: one refusal holding every mark of that household. So a
+ * limit's return (it cites `law`) leaves with its subtree whatever its escrow
+ * state, and a limit the engine found and could not apply (an engine older than
+ * the first-claim order) leaves too. `{ slugs, vetoes }`. Throws when the
+ * settlement cannot be folded; the caller withholds the clearing's forecast instead.
  */
 export async function settlementTakesAway(p, header, { worldRepo, townRepo = null }) {
   const inputs = await settlementFoldInputs(p, header, { worldRepo, townRepo });
@@ -385,10 +407,11 @@ export async function settlementTakesAway(p, header, { worldRepo, townRepo = nul
   const { state, vetoes } = foldWithWords(inputs, words);
   const slugs = new Set();
   for (const r of state.returned ?? []) {
-    if (r?.state !== "returned") continue;
+    if (r?.state !== "returned" && !r?.law) continue;
     slugs.add(String(r.mark));
     for (const s of r.subtree ?? []) slugs.add(String(s));
   }
+  for (const l of vetoes?.limits_unread ?? []) slugs.add(String(l.mark));
   return { slugs, vetoes };
 }
 
@@ -657,6 +680,12 @@ export async function servedSettlement(p, { settlement = null, worldRepo, townRe
       ...(built ? { built: "derived from the snapshot's sources on this read, and kept" } : {}),
       ...(labels.unread ? { labels_unread: labels.unread } : {}),
       ...(labels.omitted ? { labels_omitted: labels.omitted } : {}),
+      // A limit the World still shows as an admissibility error was found and
+      // NOT applied (an engine older than the first-claim order, world#166).
+      ...(() => {
+        const left = limitOppositions(world);
+        return left.length ? { limits_unread: `${left.length} parcel(s) over a limit (${[...new Set(left.map((l) => l.law))].join(", ")}) are not opposed here: the engine at law ${String(header.law_sha).slice(0, 12)} orders parcels by their latest date, not their first claim` } : {};
+      })(),
     },
   };
 }

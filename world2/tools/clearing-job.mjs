@@ -61,7 +61,7 @@ import { escrowAbsentAmong, escrowPresenceAt, escrowLines, unbackedStakesAmong }
 // THE PARCEL CAP — the sweep's own gate, ported to the candle before the sweep
 // has to be the one to say no. The law itself is the WORLD's and is imported
 // from a checkout, never copied. See step 5.6.
-import { parcelCapLawAt, parcelCapRefusals, parcelCapLines, heldParcelsByCred, credOf, soloCountedAt, countingSolo } from "./parcel-cap.mjs";
+import { parcelCapLawAt, parcelCapRefusals, parcelCapLines, heldParcelsByCred, heldParcelsByResident, credOf, soloCountedAt, countingSolo } from "./parcel-cap.mjs";
 import { houseRowsVia, resolveHouse } from "../../src/household-deriver.mjs";
 import { computeStanding, gistContainment } from "./standing.mjs";
 // THE SEAL (POS-357, R1): a pure SQL copy of the World this window leaves, in
@@ -455,9 +455,11 @@ try {
             // `!mk._replacing`). Step 1 above already resolved which claims those
             // are, into `amends`.
             amending: amends.has(String(c.id)),
+            claimant: c.claimant,
           });
         }
-        const verdict = parcelCapRefusals(candidates, { heldByCred, law });
+        const heldByResident = await heldParcelsByResident(q);
+        const verdict = parcelCapRefusals(candidates, { heldByCred, law, heldByResident });
         // A FORECAST, NEVER A REFUSAL (POS-364; R11 as Darko amended it 10-04:
         // "the office accepts every physically legal act … the settlement
         // applies limits in chronological order of the acts"). Every claim over
@@ -467,7 +469,7 @@ try {
         // and the keeper can read it before the settlement does.
         capSeen = {
           checked: true, cap: law.cap, law_date: law.lawDate, world_sha: law.sha, solo_counted: soloCounted,
-          over_limit: verdict.refused.map((r) => ({ slug: r.slug, held: r.held })),
+          over_limit: verdict.refused.map((r) => ({ slug: r.slug, held: r.held, law: r.law })),
           applied_by: "the settlement (the-town/claim-cap), never this clearing",
           excepted: verdict.admitted.filter((a) => a.excepted).map((a) => a.slug),
           judged: candidates.length,
