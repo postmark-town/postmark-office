@@ -212,7 +212,7 @@ test("A MARK LAID OVER YOUR GROUND, REFUSED, REACHES THE SEGMENT with on_your_gr
   assert.equal(e.on_your_ground, true);
   assert.equal(e.yours, false, "somebody else's mark — the word still means what it means");
   assert.equal(e.cause, "contested", "and the cause arrives in the bulletin's own words");
-  assert.match(e.summary, /refused at window 174/);
+  assert.match(e.summary, /refused at candle 174/);
 });
 
 test("your OWN mark still arrives, and is labelled yours", async () => {

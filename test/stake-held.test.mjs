@@ -462,7 +462,7 @@ test("CLAIM EFFECTS · MEASURED — a retracted row still emits `claim-pending`,
     sinceCrossing: 0, nowCrossing: 999999, mine: () => true,
   });
   assert.deepEqual(events.map((e) => e.kind), ["claim-pending"]);
-  assert.equal(events[0].summary, "sophia/a-mark-on-the-commons went forward onto the docket at window 184",
+  assert.equal(events[0].summary, "sophia/a-mark-on-the-commons went forward onto the docket at candle 184",
     "the exact sentence a resident reads about a claim the door told them was never filed");
 });
 
