@@ -383,6 +383,16 @@ export function planStoreWriteDown(marks, { publishedPathOf = null, canonBytesAt
     return path;
   };
 
+  // THE BATCH'S OWN PLACES, handed to the framer before anything is framed
+  // (POS-441, the carry): a mark written this crossing at a new world position
+  // frames its nested children, and is the parent their declared-parent check
+  // reads, where it stands NOW — not where the last fold left it. Only the
+  // world-framed records say a world place; a file-framed one is its file's own
+  // numbers and did not move.
+  if (typeof toFileFrame?.batch === "function")
+    toFileFrame.batch(marks.filter((m) => m.at_frame === "world" && m.fileRec?.at)
+      .map((m) => ({ id: m.id, at: m.fileRec.at, extent: m.fileRec.extent ?? null, points: m.fileRec.points ?? null })));
+
   const unchanged = [];
   const framed = [];
   for (const m of marks) {
@@ -520,7 +530,8 @@ export function planStoreWriteDown(marks, { publishedPathOf = null, canonBytesAt
       const standing = typeof toFileFrame.standingMark === "function" ? toFileFrame.standingMark(m.id) : null;
       const outside = declared && declaredParentRefusal({
         id: m.id, prior: standing, next: rec,
-        parentId: declared.parentId, parent: declared.parent, pointWithinMark: toFileFrame.pointWithinMark,
+        parentId: declared.parentId, parent: declared.parent, parentPrior: declared.parentPrior ?? null,
+        pointWithinMark: toFileFrame.pointWithinMark,
       });
       if (outside) throw new FoldInputRefusal(OUTSIDE_DECLARED_PARENT, outsideParentDetail(outside, path));
 

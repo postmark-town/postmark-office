@@ -86,11 +86,15 @@ async function houseOf(ctx, handle) {
 // ── the money half: the three rails, through their own deciders ──────────────
 
 async function townFacts(ctx) {
-  const { readFundRegistry, meepLawOf } = await ctx.importOffice("src/fund-holder.mjs");
+  // POS-346: the watchers resolve the payer from the store (fund-holder.mjs §
+  // payerRegistry: the registry rows and the town_residents roll the sandbox
+  // ingests after every step), so the sandbox hands their deciders the same.
+  const { payerRegistry, meepLawOf } = await ctx.importOffice("src/fund-holder.mjs");
   const { townEngine } = await ctx.importOffice("tools/stripe-watch.mjs");
   const engine = await townEngine(ctx.town);
   const entries = ctx.entries();
-  return { engine, entries, households: engine.householdKeys(ctx.town), registry: readFundRegistry(ctx.town), isMeep: meepLawOf(engine, entries, ctx.clock.date) };
+  const registry = await payerRegistry();
+  return { engine, entries, households: registry.residents, registry, isMeep: meepLawOf(engine, entries, ctx.clock.date) };
 }
 
 const noonOf = (date) => Date.parse(`${date}T12:00:00Z`);
@@ -179,12 +183,16 @@ export function scenario(ctx) {
     {
       id: "00", event: "catch-up", verify: true,
       title: "the box's tick catch-up on the copied town, before any sandbox event: whatever mints and bundles the real town is owed at this sha",
-      run: () => {
+      run: async () => {
         at(1)();
-        const mint = ctx.townTool("stamp-mint.mjs", ["--append", "--key", ctx.keyPath]);
-        ctx.commit("mint: tick catch-up pass");
+        // POS-341: the chain enters the store (the box's first --sync), the index
+        // is at HEAD, and the keep tick's mint pass decides from the store
+        ctx.syncLines();
+        await ctx.ingest();
+        const mint = ctx.mintPass("mint: tick catch-up pass");
         const wel = ctx.officeTool("deploy/welcome-pass.mjs", ["--town", ctx.town, "--key", ctx.keyPath, "--date", ctx.clock.date], { allowFail: true });
         ctx.commit("mint: tick catch-up pass (welcome)");
+        ctx.syncLines();
         return { notes: [mint.out, wel.out].map((o) => o.trim().split("\n").at(-1)).filter(Boolean) };
       },
       // the real residents may move here and only here: from step 01 on, every one of them must hold still

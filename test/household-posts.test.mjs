@@ -239,6 +239,12 @@ test("6 · the doorstep segment deep-equals household { read: \"posts\" } at the
   const { indexStore } = await import("./helpers/office-under-test.mjs");
   const ix = await indexStore(dbPath, { db: "household_posts" });
   const restore = await ix.useInProcess();
+  // THE CLOCK, PINNED TO THE FIXTURE'S WEEK. Both reads keep a week back from
+  // the real clock and neither takes one from its caller, so this test read
+  // the fixture's posts only until 2026-10-07 14:00Z, a week after office-hours
+  // ended, and was red after (POS-419). Every other test here passes NOW.
+  const realNow = Date.now;
+  Date.now = () => NOW;
   try {
     const { storeIndexPooled, townIndexReads } = await import("../src/town-index-store.mjs");
     const meta = { as_of: "fixturesha000000000000000000000000000000" };
@@ -253,6 +259,7 @@ test("6 · the doorstep segment deep-equals household { read: \"posts\" } at the
     const asked = await householdApex({ read: "posts", ...args }, null, ctx);
     assert.deepEqual(segment, asked, "the segment drifted from the read its `serves` names");
   } finally {
+    Date.now = realNow;
     await restore();
     await ix.stop();
     db.close();

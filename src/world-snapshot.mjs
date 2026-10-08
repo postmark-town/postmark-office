@@ -343,13 +343,27 @@ export async function snapshotFoldInputs(p, header, { townRepo = null } = {}) {
  * the marks' order derives from; null derives every filing by the rule alone.
  */
 export async function foldOfSnapshot(p, header, { fold, townRepo = null, filing = null }) {
+  const { args, stakesSource, householdsSource } = await snapshotFoldArgs(p, header, { townRepo, filing });
+  return { state: fold(args), stakesSource, householdsSource };
+}
+
+/**
+ * The arguments `fold` takes for a snapshot, from its sources: `{ marks, terrain,
+ * stakes, households }`, the marks in their filing order. Split out of
+ * `foldOfSnapshot` so the office (src/world-settlement.mjs, POS-359) can fold the
+ * same arguments again with the opposed words beside them, never a second
+ * derivation of them.
+ */
+export async function snapshotFoldArgs(p, header, { townRepo = null, filing = null } = {}) {
   const { marksFromRows } = await import("./world2-fold.mjs");
   const { inFilingOrder } = await import("./world-filing-order.mjs");
   const rows = await snapshotRows(p, header.marks_digest);
   const inputs = await snapshotFoldInputs(p, header, { townRepo });
   const marks = inFilingOrder(marksFromRows(markRowsOfVersions(rows), inputs.lawRows), filing);
-  const state = fold({ marks, terrain: inputs.terrain, stakes: inputs.stakes, households: inputs.households });
-  return { state, stakesSource: inputs.stakesSource, householdsSource: inputs.householdsSource };
+  return {
+    args: { marks, terrain: inputs.terrain, stakes: inputs.stakes, households: inputs.households },
+    stakesSource: inputs.stakesSource, householdsSource: inputs.householdsSource,
+  };
 }
 
 /**
