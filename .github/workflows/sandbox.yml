@@ -1,0 +1,149 @@
+name: Stamp sandbox (on demand, advisory)
+
+# THE STAMP SANDBOX IN CI (POS-417 B; Darko 2026-10-07: "yes please for the
+# sandbox job"). Stamps are irreversible, so nothing that touches them merges
+# until tools/stamp-sandbox.mjs has run every stamp event on a throwaway town
+# ledger and a throwaway store and come back GREEN on that PR's own head
+# (POS-366). Until this file it ran only on the operator's machine, 36-39 min a
+# run, one at a time, through G:/Postmark/pool/run-heavy.mjs.
+#
+# ── WHEN IT RUNS ─────────────────────────────────────────────────────────────
+#
+# Never by default: it is ~40 minutes and most PRs do not touch stamps.
+#   · a `stamp-sandbox` label on a PR into main or a train runs it on the PR's
+#     merge ref, and every later push to that PR runs it again;
+#   · workflow_dispatch runs it on any branch (`town_ref` swaps the town
+#     checkout for a town branch, for a stamp PR paired with a town PR).
+#     GitHub offers dispatch only once this file is on the default branch.
+# It is advisory: not a required check. The check's name is `stamp sandbox`.
+#
+# ── WHAT IT NEEDS ────────────────────────────────────────────────────────────
+#
+# The office suite's own inputs (.github/workflows/suite.yml), under the same
+# cache keys, so a PR that has run the suite restores both in seconds:
+#   · node_modules from `npm ci` (the sandbox's store is the embedded-postgres
+#     devDependency, test/helpers/embedded-store.mjs);
+#   · the town checkout at test/clone-pins.json's sha: the sandbox clones it
+#     locally with its remotes removed, re-signs the real ledger's history
+#     under a fresh ed25519 key, and runs the town's own engines from it.
+# No secret: the key is made for the run and the store is thrown away with it.
+#
+# ── THE VERDICT ──────────────────────────────────────────────────────────────
+#
+# The tool exits 0 GREEN, 1 RED, 2 when the sandbox could not be built. The
+# step after it reads the report's first line as well, and refuses a 0 whose
+# report does not say GREEN: a green needs both.
+
+on:
+  pull_request:
+    branches: [main, "train/**"]
+    types: [opened, reopened, synchronize, labeled]
+  workflow_dispatch:
+    inputs:
+      town_ref:
+        description: "a town branch or sha to run against (blank = test/clone-pins.json's pin)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stamp-sandbox-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  NODE_VERSION: "22.22.1"
+
+jobs:
+  sandbox:
+    name: stamp sandbox
+    # dispatch; the label being added; or any other PR event while it is on
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || (github.event.action == 'labeled' && github.event.label.name == 'stamp-sandbox')
+      || (github.event.action != 'labeled' && contains(github.event.pull_request.labels.*.name, 'stamp-sandbox'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: node_modules (the suite's cache)
+        id: nm
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: office-nm-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('package-lock.json') }}
+
+      - if: steps.nm.outputs.cache-hit != 'true'
+        run: npm ci
+
+      - name: The pinned clones (the suite's cache)
+        id: clones
+        uses: actions/cache@v4
+        with:
+          path: |
+            town-clone
+            world-clone
+          key: office-clones-${{ hashFiles('test/clone-pins.json', '.github/scripts/suite-clones.sh') }}
+
+      - if: steps.clones.outputs.cache-hit != 'true'
+        run: bash .github/scripts/suite-clones.sh
+
+      - run: bash .github/scripts/suite-clones.sh --check
+
+      - name: The town at town_ref
+        if: github.event_name == 'workflow_dispatch' && inputs.town_ref != ''
+        env:
+          TOWN_REF: ${{ inputs.town_ref }}
+        run: |
+          git -C town-clone fetch -q origin "$TOWN_REF"
+          git -C town-clone -c advice.detachedHead=false checkout -q --detach FETCH_HEAD
+          echo "town-clone at $(git -C town-clone rev-parse HEAD) ($TOWN_REF), not the pin"
+
+      # The sandbox commits into its own local clone of the town.
+      - name: Git identity for the sandbox's clone
+        run: |
+          git config --global user.name "postmark-office-ci"
+          git config --global user.email "postmark-office-ci@users.noreply.github.com"
+
+      - name: The sandbox
+        id: run
+        run: |
+          set +e
+          node tools/stamp-sandbox.mjs --report "$RUNNER_TEMP/stamp-sandbox.md"
+          code=$?
+          set -e
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stamp-sandbox-report
+          path: ${{ runner.temp }}/stamp-sandbox.md
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: The verdict
+        env:
+          CODE: ${{ steps.run.outputs.code }}
+        run: |
+          REPORT="$RUNNER_TEMP/stamp-sandbox.md"
+          [ -f "$REPORT" ] || { echo "::error::the sandbox wrote no report (exit $CODE)"; exit 1; }
+          head=$(head -1 "$REPORT")
+          last=$(grep -E '^(GREEN|RED)' "$REPORT" | tail -1)
+          { echo "## $head"; echo; echo "$last"; } >> "$GITHUB_STEP_SUMMARY"
+          echo "$head · exit $CODE"
+          echo "$last"
+          if [ "$CODE" = "0" ] && [ "$head" = "# stamp sandbox: GREEN" ]; then exit 0; fi
+          [ "$CODE" = "0" ] && echo "::error::exit 0, but the report does not say GREEN"
+          exit 1
