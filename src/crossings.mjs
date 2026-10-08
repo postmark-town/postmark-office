@@ -114,6 +114,39 @@ export const CROSSING_SEAL_SUBJECT = "seal: re-seal at the crossing";
 export const crossingSailsAt = (n) => new Date(CROSSING_EPOCH_UTC + n * CROSSING_MS).toISOString();
 
 /**
+ * The crossing a copy holds, from its newest seal (`{ at }`, or null): its
+ * number on the town clock and the seal's instant. ONE place says it, so the
+ * doorstep's `copy` and a lookup's 404 cannot name two different crossings.
+ */
+export function copyCrossing(seal) {
+  const at = seal?.at ? Date.parse(seal.at) : NaN;
+  if (!Number.isFinite(at)) return null;
+  const n = currentCrossing(at);
+  return { crossing: n, sailed_at: crossingSailsAt(n), sealed_at: new Date(at).toISOString() };
+}
+
+/** What the copy holds, in words: "has caught up to crossing N, sealed T", or that it holds no seal. */
+export const copyHoldsWords = (crossing) => crossing
+  ? `has caught up to crossing ${crossing.crossing}, sealed ${crossing.sealed_at}`
+  : "holds no crossing's seal, so it cannot name a crossing it has caught up to";
+
+/**
+ * A lookup's 404 when the office's copy holds no letter by the id (POS-332).
+ * "no letter by that id" alone was a claim about the town that only the copy
+ * could make: Nyx's read-backs bounced on letters that had sailed after it. The
+ * defect names the copy and the crossing it holds, in the doorstep's words.
+ * `crossing` is copyCrossing's answer; `undefined` when the copy's history
+ * could not be read.
+ */
+export function notInCopyDefect(crossing) {
+  if (crossing === undefined)
+    return "no letter by that id in the office's copy of the town record (what that copy has caught up to could not be read just now)";
+  return crossing
+    ? `no letter by that id in the office's copy of the town record, which ${copyHoldsWords(crossing)}; a letter that sailed after that crossing is not in it yet`
+    : `no letter by that id in the office's copy of the town record, which ${copyHoldsWords(null)}; a letter newer than the copy is not in it yet`;
+}
+
+/**
  * The doorstep's `copy` block, from what the index read: `newest` (the newest
  * commit time in the copy, ISO, or null) and `seal` (`{ sha, at }` of the newest
  * crossing seal in the copy, or null). `asOf` is the copy's commit, as the page
@@ -122,18 +155,12 @@ export const crossingSailsAt = (n) => new Date(CROSSING_EPOCH_UTC + n * CROSSING
 export function copyBlock({ newest = null, seal = null } = {}, asOf = null, now = Date.now()) {
   const n = typeof now === "number" ? now : new Date(now).getTime();
   const last = currentCrossing(n);
-  const sealedAt = seal?.at ? Date.parse(seal.at) : NaN;
-  const crossing = Number.isFinite(sealedAt)
-    ? { crossing: currentCrossing(sealedAt), sailed_at: crossingSailsAt(currentCrossing(sealedAt)), sealed_at: new Date(sealedAt).toISOString() }
-    : null;
+  const crossing = copyCrossing(seal);
   const caughtUp = crossing ? crossing.crossing >= last : null;
   const commit = asOf && asOf !== "unknown" ? `commit ${String(asOf).slice(0, 12)}` : "a commit it cannot name";
   const held = newest ? `its newest change was recorded at ${newest}` : "it holds no dated change";
-  const where = crossing
-    ? `It has caught up to crossing ${crossing.crossing} (sailed ${crossing.sailed_at}, sealed ${crossing.sealed_at})`
-    : "It holds no crossing's seal, so it cannot name a crossing it has caught up to";
   const verdict = caughtUp === true
-    ? ", the last crossing by the timetable."
+    ? ": the last crossing by the timetable."
     : caughtUp === false
       ? `; crossing ${last} was due at ${crossingSailsAt(last)} by the timetable and is not in this copy yet, so read again once the copy catches up.`
       : ".";
@@ -142,7 +169,7 @@ export function copyBlock({ newest = null, seal = null } = {}, asOf = null, now 
     crossing,
     last_crossing_by_timetable: last,
     caught_up: caughtUp,
-    sentence: `This page reads the office's copy of the town record at ${commit}; ${held}. ${where}${verdict}`,
+    sentence: `This page reads the office's copy of the town record at ${commit}; ${held}. The copy ${copyHoldsWords(crossing)}${verdict}`,
   };
 }
 

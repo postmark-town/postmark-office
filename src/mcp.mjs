@@ -702,7 +702,8 @@ export async function callTool(name, args, ctx) {
         if (r.refused) return r.refused;
         l = r.out;
       } else l = letterAnswer(db, args.id);
-      if (!l) return notFound("no letter by that id", "ids come from list_mail or read_doorstep");
+      // The 404 names the copy it read and the crossing that copy holds (POS-332).
+      if (!l) return notFound(await townIndexStore.letterNotInCopy(db), "ids come from list_mail or read_doorstep");
       const { answerOpening } = await import("./unread-store.mjs");
       return answerOpening(l, key);
     }

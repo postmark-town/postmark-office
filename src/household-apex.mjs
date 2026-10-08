@@ -1256,7 +1256,7 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, dbPath, pen, 
       const id = String(f.id ?? "").trim();
       if (!id) return bounce(422, "which letter?", 'pass id: — ids come from household { read: "mail" } and your doorstep');
       let l = null;
-      const { townIndexReads, storeAnswer, letterAnswer: letterAnswerFromStore } = await import("./town-index-store.mjs");
+      const { townIndexReads, storeAnswer, letterAnswer: letterAnswerFromStore, letterNotInCopy } = await import("./town-index-store.mjs");
       if (townIndexReads()) {
         // THE SWITCH (POS-268): the letter from the store; a store that cannot be
         // reached is the 503, never office.db's copy.
@@ -1264,7 +1264,8 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, dbPath, pen, 
         if (r.refused) return bounce(503, r.refused.defect, r.refused.hint);
         l = r.out;
       } else { try { l = letterAnswer(db, id); } catch { l = null; } }
-      if (!l) return bounce(404, "no letter by that id", 'ids come from household { read: "mail" } and your doorstep — a letter still standing ahead of the crossing is not in the record yet (read: "mail", view: "pending")');
+      // The 404 names the copy it read and the crossing that copy holds (POS-332).
+      if (!l) return bounce(404, await letterNotInCopy(db), 'ids come from household { read: "mail" } and your doorstep — a letter still standing ahead of the crossing is not in the record yet (read: "mail", view: "pending")');
       const mine = new Set(held);
       if (!letterParties(l).some((h) => mine.has(h)))
         return bounce(403, "not a letter your household sent or received",

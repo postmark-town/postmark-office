@@ -22,7 +22,35 @@ import { sendLetterAsRow } from "./town-mail.mjs";
 import { townLogEnabled } from "./town-journal.mjs";
 import { withThreadlessHint } from "./mail-thread.mjs";
 import { inferSender } from "./one-contract.mjs";
-import { indexSwitched } from "./index-probe.mjs";
+import { indexSwitched, probeOf } from "./index-probe.mjs";
+import { actsQuery } from "./world2-acts.mjs";
+
+// ── A RECIPIENT THE COPY HAS NOT CAUGHT UP TO (POS-332) ──────────────────────
+//
+// The recipient check (write.mjs § validateLetter, `no resident "x"`) asks the
+// office's index, a copy of the town record refreshed between crossings. A
+// resident admitted since (join-bind.mjs: the card and the bind land in one act)
+// is in the record and in the store's household registry at once, and in the
+// copy only after its next ingest, so a letter to them was refused in between.
+// When the copy does not know the recipient, the door asks the registry, the
+// store's record of who lives here (`identities`, 055: every handle a house
+// lists or a pin holds, `retired` for a retired pin). A handle the registry
+// holds as a resident is one; anything else is checked exactly as before. The
+// copy is asked first, so the store is read only on a miss.
+//
+// THE DOOR ONLY. The drain replays a letter through validateLetter at the
+// crossing with its own probe (tools/town-drain-run.mjs); that side is not
+// changed here.
+export async function recipientProbe(db, to, { env = process.env } = {}) {
+  const ix = probeOf(db, { env });
+  if (!ix || typeof to !== "string" || !to) return db;
+  try { if (ix.hasResident(to)) return db; }
+  catch { return db; }                     // the store's 503 is validateLetter's to throw, in its own order
+  const rows = await actsQuery("SELECT 1 FROM identities WHERE handle = $1 AND status = 'resident' LIMIT 1", [to], env)
+    .catch(() => null);                    // could not look: the copy's answer stands
+  if (!rows?.length) return db;
+  return Object.freeze({ ...ix, hasResident: (h) => h === to || ix.hasResident(h) });
+}
 
 export const NONCE_NOT_HONOURED = "this office keeps no town log, so a nonce cannot be remembered and this receipt is NOT idempotent by it. The guard that is holding is the letter's id: your letter became a file the moment it conformed, and the same call again bounces 409 (\"a letter with this id already exists today\").";
 
@@ -35,6 +63,7 @@ export const NONCE_NOT_HONOURED = "this office keeps no town log, so a nonce can
  */
 export async function sendAtDoor(fields, key, { db, clone, odb }) {
   const f = inferSender(fields, key);
+  db = await recipientProbe(db, f.to);
   let result;
   if (townLogEnabled() && odb) {
     result = await sendLetterAsRow(f, key, db, clone, odb);

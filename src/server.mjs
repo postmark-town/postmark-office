@@ -1968,7 +1968,8 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       if ((m = /^\/letters\/(.+)$/.exec(path))) {
         const id = decodeURIComponent(m[1]);
         const open = (l) => {
-          if (!l) return bounce(res, 404, "no letter by that id", "ids come from /mail/{handle} or the ledger");
+          // The 404 names the copy it read and the crossing that copy holds (POS-332).
+          if (!l) return townIndexStore.letterNotInCopy(db).then((defect) => bounce(res, 404, defect, "ids come from /mail/{handle} or the ledger"));
           // Opening clears it (POS-286); a keyed GET stays on this thread for it
           // (read-workers.mjs § opensALetter).
           return import("./unread-store.mjs").then(({ answerOpening }) => answerOpening(l, key)).then((a) => j(res, 200, a));

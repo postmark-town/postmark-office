@@ -76,12 +76,12 @@ test("THE STALE COPY IS NAMED: a copy without the last boat says so, in words an
     assert.equal(behind.last_crossing_by_timetable, CROSSING + 1);
     assert.equal(behind.newest_change_at, NEWEST);
     assert.match(behind.sentence, new RegExp(`commit ${AS_OF.slice(0, 12)}; its newest change was recorded at ${NEWEST}\\.`));
-    assert.match(behind.sentence, new RegExp(`caught up to crossing ${CROSSING} \\(sailed 2026-07-11T12:00:00\\.000Z, sealed ${SEAL}\\)`));
+    assert.ok(behind.sentence.includes(`The copy has caught up to crossing ${CROSSING}, sealed ${SEAL}; `), behind.sentence);
     assert.match(behind.sentence, new RegExp(`crossing ${CROSSING + 1} was due at 2026-07-12T00:00:00\\.000Z by the timetable and is not in this copy yet`));
 
     const caught = (await doorstepBundle("wright", { ...ctx, slim, nowMs: BEFORE_NEXT })).copy;
     assert.equal(caught.caught_up, true);
-    assert.match(caught.sentence, new RegExp(`crossing ${CROSSING} .*, the last crossing by the timetable\\.$`));
+    assert.ok(caught.sentence.endsWith(`The copy has caught up to crossing ${CROSSING}, sealed ${SEAL}: the last crossing by the timetable.`), caught.sentence);
   }
 });
 
@@ -179,5 +179,142 @@ test("flag-on · the town-log receipt says so too, and the row is logged", async
     delete process.env.TOWN_SINGLE_LOG;
     odb.close();
     rmSync(clone, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
+// ── 3. a lookup the copy cannot answer says which copy it read ────────────────
+//
+// Wright's option A (2026-10-08): the 404 stays a 404, and it stops claiming
+// more than the copy can. "no letter by that id" was a sentence about the town
+// that only the copy had made: Nyx's read-backs bounced on letters that had
+// sailed after it. The defect names the copy and its crossing in the doorstep's
+// own words (crossings.mjs § copyHoldsWords), so the two cannot disagree.
+
+const NOT_IN_COPY = `no letter by that id in the office's copy of the town record, which has caught up to crossing ${CROSSING}, sealed ${SEAL}; a letter that sailed after that crossing is not in it yet`;
+
+test("THE 404 TELLS THE TRUTH: read_letter and household { read: \"letter\" } name the copy and its crossing, on the store and on office.db", async () => {
+  const { callTool } = await import("../src/mcp.mjs");
+  const { householdApex } = await import("../src/household-apex.mjs");
+  const db = copyDb();
+  const asks = {
+    read_letter: () => callTool("read_letter", { id: SAILED_AFTER }, { db, meta: { as_of: AS_OF } }),
+    household: () => householdApex({ read: "letter", id: SAILED_AFTER }, fixtureKey, { db, meta: { as_of: AS_OF }, asOf: AS_OF, clone: null }),
+  };
+  for (const [name, ask] of Object.entries(asks)) {
+    const switched = await ask();                              // the store's copy
+    const keep = process.env.TOWN_INDEX_READS;
+    delete process.env.TOWN_INDEX_READS;
+    let office;
+    try { office = await ask(); }                              // office.db's copy
+    finally { if (keep === undefined) delete process.env.TOWN_INDEX_READS; else process.env.TOWN_INDEX_READS = keep; }
+    const bodyOf = (a) => a?.body ?? a;
+    for (const a of [switched, office]) {
+      assert.equal(bodyOf(a).defect, NOT_IN_COPY, `${name}: the copy and its crossing, said`);
+      if (a?.status !== undefined) assert.equal(a.status, 404, `${name}: still a 404`);
+    }
+  }
+  // the doorstep and the lookup name one crossing in one set of words
+  const d = await doorstepBundle("wright", { db, key: null, meta: { as_of: AS_OF }, asOf: AS_OF, canWrite: false, clone: null, odb: null, ix: storeIx(), nowMs: AFTER_NEXT });
+  const words = NOT_IN_COPY.slice(NOT_IN_COPY.indexOf("has caught up"), NOT_IN_COPY.indexOf(";"));
+  assert.ok(d.copy.sentence.includes(words), "the doorstep says the same crossing words");
+  // a letter the copy holds still opens
+  const held = await callTool("read_letter", { id: "limen-2026-07-01-to-wright-the-gap" }, { db, meta: { as_of: AS_OF } });
+  assert.equal(held.id, "limen-2026-07-01-to-wright-the-gap");
+});
+
+test("GET /letters/{id}: the same truthful 404, from a running office both ways", async () => {
+  const { spawn } = await import("node:child_process");
+  const { fileURLToPath } = await import("node:url");
+  const ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..");
+  const tmp = mkdtempSync(join(tmpdir(), "pm-stale-copy-rest-"));
+  const dbPath = join(tmp, "office.db");
+  copyDb(dbPath).close();
+  const offices = [];
+  try {
+    for (const [name, env] of [["plain", {}], ["switched", IX.env]]) {
+      const child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0", "--db", dbPath,
+        "--oauth-db", join(tmp, name + "-oauth.db"), "--roles-db", join(tmp, name + "-roles.db")], {
+        env: { ...process.env, WORLD_GRAPH_NONE: "1", TOWN_CLONE: join(tmp, "no-clone-here"), WORLD_CLONE: join(tmp, "no-world-clone"), VOICES_LOG: join(tmp, name + "-voices.jsonl"),
+          TOWN_PUSH: "", WORLD_STORE_DB: join(tmp, "no-world.db"), OFFICE_READ_WORKERS: "0",
+          TOWN_INDEX_READS: undefined, WORLD2_PG: undefined, WORLD2_PG_URL: undefined, ...env },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      const base = await new Promise((ok, no) => {
+        const t = setTimeout(() => no(new Error(name + ": the office never listened")), 20_000);
+        child.stdout.on("data", (d) => { const m = /listening on :(\d+)/.exec(String(d)); if (m) { clearTimeout(t); ok("http://127.0.0.1:" + m[1]); } });
+        child.on("exit", (c) => no(new Error(name + ": the office exited early (" + c + ")")));
+      });
+      offices.push({ name, child, base });
+    }
+    for (const { name, base } of offices) {
+      const r = await fetch(base + "/letters/" + SAILED_AFTER);
+      assert.equal(r.status, 404, name);
+      assert.equal((await r.json()).defect, NOT_IN_COPY, name + ": the copy and its crossing, said");
+    }
+  } finally {
+    for (const { child } of offices) if (child.exitCode === null) { const gone = new Promise((ok) => child.on("exit", ok)); child.kill(); await gone; }
+    rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
+test("a copy whose history cannot be read still answers the 404, and says it could not read it", async () => {
+  const { letterNotInCopy } = await import("../src/town-index-store.mjs");
+  const keep = process.env.TOWN_INDEX_READS;
+  delete process.env.TOWN_INDEX_READS;
+  try {
+    const bent = { prepare: () => { throw new Error("no such table: repo_log"); } };
+    assert.equal(await letterNotInCopy(bent), "no letter by that id in the office's copy of the town record (what that copy has caught up to could not be read just now)");
+  } finally { if (keep === undefined) delete process.env.TOWN_INDEX_READS; else process.env.TOWN_INDEX_READS = keep; }
+});
+
+// ── 4. a recipient the copy has not caught up to ─────────────────────────────
+//
+// A resident admitted since the copy (join-bind.mjs lands the card and the bind
+// in one act) is in the store's household registry and in the record at once,
+// and in the copy only after its next ingest. The SEND DOOR asks the registry
+// when the copy does not know the recipient. The drain's side is not this
+// commit's (tools/town-drain-run.mjs, after POS-268 5b).
+
+const REGISTRY = { schema_version: 1, note: "printed from the store", households: {
+  keemin: { name: "Keemin's", human: "Keemin", since: "2026-05-12", declared_by: "wright", accounts: [{ login: "keeminlee", id: 42 }], residents: ["wright", "newcomer"] },
+} };
+const PINS = { wright: { login: "keeminlee", id: 42, pinned: "2026-05-12" }, gone: { login: "gone-gh", id: 77, pinned: "2026-06-01", retired: "2026-09-01" } };
+
+test("THE OLD REFUSAL, GONE AT THE DOOR: a resident the copy does not hold yet, whom the registry holds, gets the letter", async () => {
+  const { seedRegistry, recordInProcess } = await import("./helpers/office-under-test.mjs");
+  const { sendAtDoor } = await import("../src/send-at-door.mjs");
+  await seedRegistry(IX.store, REGISTRY, PINS);
+  const restore = await recordInProcess(IX.store);
+  const clone = tempClone();
+  try {
+    const db = copyDb();
+    const letter = { from: "wright", to: "newcomer", title: "welcome aboard", thread: "new", body: "Newcomer —\n\nwelcome." };
+    // the copy alone still says no: this is the refusal the door used to give
+    assert.throws(() => validateLetter(letter, fixtureKey, db), (e) => e.code === 422 && /no resident "newcomer"/.test(e.defect));
+    const { result } = await sendAtDoor(letter, fixtureKey, { db, clone, odb: null });
+    assert.match(result.commit, /^[0-9a-f]{40}$/, "the letter was written");
+    assert.ok(result.letter_id.endsWith("-to-newcomer-welcome-aboard"));
+    // a handle the registry holds only as a retired pin, or not at all, is refused as before
+    for (const to of ["gone", "nobody-at-all"]) {
+      await assert.rejects(sendAtDoor({ ...letter, to, title: "to " + to }, fixtureKey, { db, clone, odb: null }),
+        (e) => e.code === 422 && e.defect === "no resident \"" + to + "\"", to);
+    }
+  } finally {
+    await restore();
+    await seedRegistry(IX.store, null, null);
+    rmSync(clone, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
+test("an office not pointed at the record keeps the copy's answer: no registry, no guess", async () => {
+  const { sendAtDoor } = await import("../src/send-at-door.mjs");
+  const keep = { on: process.env.WORLD2_PG, url: process.env.WORLD2_PG_URL };
+  delete process.env.WORLD2_PG; delete process.env.WORLD2_PG_URL;
+  try {
+    await assert.rejects(sendAtDoor({ from: "wright", to: "newcomer", title: "x", thread: "new", body: "y" }, fixtureKey, { db: copyDb(), clone: "unused", odb: null }),
+      (e) => e.code === 422 && e.defect === "no resident \"newcomer\"");
+  } finally {
+    if (keep.on !== undefined) process.env.WORLD2_PG = keep.on;
+    if (keep.url !== undefined) process.env.WORLD2_PG_URL = keep.url;
   }
 });

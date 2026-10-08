@@ -34,10 +34,11 @@ import {
   potBoardOf, questBoardWith,
   excerpt, LETTER_READING_LAW_LINE, MAIL_PAGE, SEARCH_LETTERS, SEARCH_RESIDENTS,
   mailListOf, letterListNoRegion, letterListPage, correspondentsOf, mailAwaitingOf, searchPage, metricsMailOf,
+  indexCopy as officeIndexCopy,
   rollEntry, residentPageOf, townSummaryOf, residentOf, windowReadOf, psaFoldOf, doorstepOf, DOORSTEP_SIZES, PSA_SLUG, CARD_MAIL,
 } from "./queries.mjs";
 import { isResidentHandle } from "./residency.mjs"; // the door's admission grammar, as readRoll filters by it
-import { CROSSING_SEAL_SUBJECT } from "./crossings.mjs"; // the crossing's closing commit (POS-332, indexCopy)
+import { CROSSING_SEAL_SUBJECT, copyCrossing, notInCopyDefect } from "./crossings.mjs"; // the crossing's closing commit, and its words (POS-332)
 import { holdStoreProbe, UNREACHABLE_DEFECT, UNREACHABLE_HINT } from "./index-probe.mjs";
 
 // The row SHAPES are queries.mjs's own exported functions, the ones its office.db
@@ -87,6 +88,23 @@ export async function indexCopy(q) {
   const seal = (await q.query(`SELECT sha, committed_at AS at FROM town_repo_log WHERE subject = $1
       ORDER BY committed_at COLLATE "C" DESC, sha COLLATE "C" LIMIT 1`, [CROSSING_SEAL_SUBJECT])).rows[0];
   return { newest, seal: seal ? { sha: seal.sha, at: seal.at } : null };
+}
+
+/**
+ * The 404 for a letter id the door's index does not hold (POS-332): the copy
+ * that was read, and the crossing it has caught up to, from the same index the
+ * lookup asked (office.db's repo_log, or the store's with the switch on). A
+ * history that cannot be read is said; it never turns the 404 into a 500.
+ */
+export async function letterNotInCopy(db, { env = process.env } = {}) {
+  let copy;
+  try {
+    if (townIndexReads(env)) {
+      const r = await storeAnswer((c) => indexCopy(c), { env });
+      copy = r.refused ? undefined : r.out;
+    } else copy = officeIndexCopy(db);
+  } catch { copy = undefined; }
+  return notInCopyDefect(copy === undefined ? undefined : copyCrossing(copy.seal));
 }
 
 /** queries.repoLog, from the store. The same filters, page, total and notes. */
