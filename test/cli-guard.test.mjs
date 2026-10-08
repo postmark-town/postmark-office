@@ -214,6 +214,8 @@ const ROSTER = {
   "world2/tools/backfill-register.mjs": { args: [], env: NO_PG, code: 2, needle: "--class must be one of" },
   "world2/tools/escrow-ingest.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: escrow-ingest.mjs --town-repo <checkout>" },
   "world2/tools/falsifier-conversations-equality.mjs": { args: [], env: NO_PG, code: 2, needle: "--voices-log <path> is required" },
+  // Read only, and refuses without --dry before any connect (POS-457).
+  "world2/tools/household-key-census.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: household-key-census.mjs --dry" },
   "world2/tools/fold-input-cli.mjs": { args: [], env: NO_PG, code: 2, needle: "--world-sha <sha> is required" },
   "world2/tools/falsifier-pen-flip.mjs": { args: ["--help"], env: NO_PG, code: 0, needle: "usage" },
   "world2/tools/falsifier-projection-equality.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: falsifier-projection-equality.mjs" },

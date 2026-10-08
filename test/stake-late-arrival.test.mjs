@@ -258,3 +258,21 @@ test("THE ORDER IS A BEHAVIOUR, not a line number: the promotion runs, then the 
   assert.deepEqual(order, ["promote", "standing", "ledger"],
     "the stake's steps ran out of order — a refusal is only knowable before the debit if the promotion precedes it");
 });
+
+// POS-457 (review of #438): the promotion scopes by the STAKER'S KEY, through
+// keyHouseholdOf, never by the key's login label alone. The door must hand the
+// key over, or promoteDraftOnStake falls back to the label and a signed-in
+// resident's stake misses their own draft filed under the slug.
+test("THE STAKE DOOR hands the staker's KEY to the promotion", async () => {
+  const seen = [];
+  const deps = {
+    exists: async () => ({ known: true, exists: true, record: null }),
+    standing: async () => ({ known: true, found: true, retired: false }),
+    promote: async (p) => { seen.push(p); return { promoted: true, claim: "c1", window: 186, late_from: null }; },
+    ledger: async (p) => ({ applied: p.n }),
+  };
+  await worldStakeViaOffice({ mark: MARK, stamps: 1 }, KEY, deps);
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].key, KEY, "the promotion receives the key itself");
+  assert.equal(seen[0].householdName, KEY.household, "and the label rides beside it, for the keyless fallback only");
+});

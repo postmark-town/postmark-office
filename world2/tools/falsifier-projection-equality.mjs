@@ -64,6 +64,7 @@ import { pathToFileURL, fileURLToPath } from "node:url";
 import { deriveLaw, headSha, LAW_REPO_KEY } from "./law-ingest.mjs";
 import { deriveStamps, TOWN_REPO_KEY } from "./stamp-ingest.mjs";
 import { deriveRoll } from "./roll-ingest.mjs";
+import { liveHouseOfVia } from "../../src/household-deriver.mjs";
 
 // Canonical JSON: keys sorted at every depth, so two structurally equal values
 // have one spelling. Both sides are JS values by the time they get here — `pg`
@@ -167,7 +168,11 @@ async function checkStamps(client, townRepo) {
       `checkout ${townRepo} is at ${at}; projection_heads['${TOWN_REPO_KEY}'] says ${head.sha}. Put it at the recorded sha.`] };
   }
 
-  const { rows: derived } = await deriveStamps({ townRepo });
+  // The pen re-keys the town's spellings to the house (stamp-ingest § writeStamps,
+  // POS-457); the derivation is held to the row through the same re-key.
+  const houseOf = await liveHouseOfVia(client);
+  const derived = (await deriveStamps({ townRepo })).rows
+    .map((r) => ({ ...r, household: r.household == null ? null : houseOf(r.household) }));
   const db = (await client.query(
     "SELECT handle, household, balance FROM stamp_projection WHERE town_sha = $1", [head.sha])).rows;
 
