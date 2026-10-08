@@ -106,7 +106,7 @@
    "label": "the office's read index (office.db), retired",
    "stage": "retired",
    "activation_owner": "Wright — retired by POS-268 part 5b (2026-10-08), the unit files removed from deploy/ in the same change; enabled at the original box standup (Keemin, DEPLOY.md § One-time setup), unit added 2026-08-01 c8e62f9",
-   "retired_because": "office.db is retired (POS-268): a switched office opens no office.db (part 5a, office #419) and reads the store's town index, which postmark-town-index.timer keeps. The rehydrate's world hydration, the one step something still reads (world.db and the store's world graph snapshot), runs in postmark-office-keep.timer since part 5b.",
+   "retired_because": "office.db is retired (POS-268): a switched office opens no office.db (part 5a, office #419) and reads the store's town index, which postmark-town-index.timer keeps. The rehydrate's world hydration, the one step something still reads (the store's world graph snapshot; world.db is retired since switch 3, office #294), runs in postmark-office-keep.timer since part 5b.",
    "retire_steps": "DEPLOY.md § Retiring the rehydrate (POS-268 part 5b): disable --now the timer, remove both unit files, daemon-reload"
   },
   {
@@ -120,7 +120,7 @@
     "kind": "unit_trigger",
     "stale_after_minutes": 45
    },
-   "stale_means": "the town clone stops pulling (the write pen and declare read a stale town), the mint catch-up and welcome pass stop, the settlements row stops following the keeper's tag, world.db and the store's world graph snapshot stop following the blessing, the household-keys line stops being written, and the panes freeze. The allowance is three ticks.",
+   "stale_means": "the town clone stops pulling (the write pen and declare read a stale town), the mint catch-up and welcome pass stop, the settlements row stops following the keeper's tag, the store's world graph snapshot stops following the blessing, the household-keys line stops being written, and the panes freeze. The allowance is three ticks.",
    "outcome": {
     "history_path": "/srv/postmark-harbor/household-keys.jsonl",
     "alarm_on_nonempty": [
