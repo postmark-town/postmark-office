@@ -263,3 +263,20 @@ test("THE DOCKET: `parcel-cap` has no bulletin word yet, and the receipt says so
   assert.match(cause_row, /parcel claim capped/);
   assert.match(cause_row, /wait on the founder's word/);
 });
+
+// ── POS-364 review: the forecast asks one parcel per resident as the fold does ─
+
+test("ONE PARCEL PER RESIDENT in the forecast: a resident's second parcel is over its limit, never counted toward the cap; an amend and an exception are not", () => {
+  const law1 = { ...law, onePerExceptions: new Set(["ash/excepted-second"]) };
+  const v = parcelCapRefusals([
+    parcel("ash/a-second-plot", "a-house", "2026-10-05", { claimant: "ash" }),
+    parcel("bee/her-first", "a-house", "2026-10-06", { claimant: "bee" }),
+    parcel("ash/the-plot", "a-house", "2026-10-07", { claimant: "ash", amending: true }),
+    parcel("ash/excepted-second", "a-house", "2026-10-08", { claimant: "ash" }),
+  ], { heldByCred: new Map([["a-house", 1]]), law: law1, heldByResident: new Map([["ash", 1]]) });
+  assert.deepEqual(v.refused.map((r) => [r.slug, r.law]), [["ash/a-second-plot", "the-town/one-per-resident"]]);
+  assert.match(v.refused[0].check, /the-town\/one-per-resident/);
+  assert.deepEqual(v.admitted.map((a) => a.slug), ["bee/her-first", "ash/the-plot", "ash/excepted-second"]);
+  // Without the per-resident count the forecast asks the cap alone, as before.
+  assert.deepEqual(parcelCapRefusals([parcel("ash/a-second-plot", "a-house", "2026-10-05", { claimant: "ash" })], { heldByCred: new Map([["a-house", 1]]), law: law1 }).refused, []);
+});
