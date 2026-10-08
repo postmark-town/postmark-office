@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import { fixtureDb } from "./fixture.mjs";
 import { indexStore, seedRegistry } from "./helpers/office-under-test.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
+import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 
 // The town index this file's offices read: a store seeded from each fixture
 // office.db (POS-268, office-under-test.mjs). Stopped when the file is done.
@@ -36,8 +37,8 @@ let PORT;
 let GH_PORT = null;
 let BASE;
 const KEY = "statickey";
-// A SECOND STATIC ROW, PINNED. `OFFICE_KEYS` entries may carry `#<gh_id>`
-// (server.mjs § KEYS, the founder's ruling 2026-08-26), and that changes what
+// A SECOND STATIC ROW, PINNED. A static row may carry a gh_id (an OFFICE_KEYS
+// entry's `#<gh_id>`, static-keys.mjs; the founder's ruling 2026-08-26), and that changes what
 // the row can do — which the lane's report got wrong and the reviewer caught by
 // minting a working key from one.
 const PINNED_KEY = "staticpinned";
@@ -91,10 +92,9 @@ before(async () => {
   GH_PORT = ghServer.address().port;
 
   ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port),
-    "--db", dbPath, "--oauth-db", join(tmp, "oauth.db")], {
+    "--db", dbPath, "--oauth-db", seedStaticKeys(join(tmp, "oauth.db"), `${KEY}=keemin:wright;${PINNED_KEY}=keemin#999:wright`)], {
     env: {
       ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV,
-      OFFICE_KEYS: `${KEY}=keemin:wright;${PINNED_KEY}=keemin#999:wright`,
       TOWN_CLONE: clone, TOWN_PUSH: "",
       PUBLIC_BASE: `http://127.0.0.1:${port}`,
       POSTMARK_OAUTH_GITHUB_CLIENT_ID: "mock-gh-app",

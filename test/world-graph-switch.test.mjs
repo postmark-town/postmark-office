@@ -17,6 +17,7 @@ import { join } from "node:path";
 
 import { OFFICE_ROOT as ROOT } from "./fixture-paths.mjs";
 import { fixtureDb } from "./fixture.mjs";
+import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 
 const tmp = mkdtempSync(join(tmpdir(), "world-graph-switch-"));
 after(() => rmSync(tmp, { recursive: true, force: true, maxRetries: 5 }));
@@ -27,9 +28,9 @@ fixtureDb(dbPath).close();
 function boot(env, label) {
   return new Promise((ok) => {
     const p = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0", "--db", dbPath,
-      "--oauth-db", join(tmp, `oauth-${label}.db`), "--roles-db", join(tmp, `roles-${label}.db`)], {
+      "--oauth-db", seedStaticKeys(join(tmp, `oauth-${label}.db`), "switchkey=keemin:wright"), "--roles-db", join(tmp, `roles-${label}.db`)], {
       env: { ...process.env, WORLD2_PG: "", WORLD2_PG_URL: "", WORLD_GRAPH_NONE: "", WORLD_GRAPH_ROWS: "", WORLD_GRAPH_PG_URL: "",
-        OFFICE_KEYS: "switchkey=keemin:wright", TOWN_CLONE: join(tmp, "no-clone"), WORLD_CLONE: join(tmp, "no-world-clone"),
+        TOWN_CLONE: join(tmp, "no-clone"), WORLD_CLONE: join(tmp, "no-world-clone"),
         VOICES_LOG: join(tmp, `voices-${label}.jsonl`), TOWN_PUSH: "", OFFICE_READ_WORKERS: "0", ...env },
       stdio: ["ignore", "pipe", "pipe"],
     });

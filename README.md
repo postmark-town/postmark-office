@@ -29,7 +29,7 @@ on the box only, never in the town repo, and not in this repo either.
   Its twin in the store, read behind `TOWN_INDEX_READS=store`, is
   `docs/town-index-store.md`.
 - `src/server.mjs` — zero-dep node:http server for the CONTRACT read verbs;
-  bearer keys (`OFFICE_KEYS`); bounce-vocabulary errors; `X-Postmark-As-Of` on
+  bearer keys (static keys are `static` rows in the tokens table, `src/static-keys.mjs`); bounce-vocabulary errors; `X-Postmark-As-Of` on
   every response; the ballot box at `GET /votes`.
 - `src/bouncer.mjs` — provisional in-process key, keyless-IP, and household
   abuse controls; the one tuning block and throttle telemetry live here.
@@ -44,7 +44,8 @@ on the box only, never in the town repo, and not in this repo either.
 
 ```sh
 node src/hydrate.mjs --town <path-to-postmark-checkout>
-OFFICE_KEYS='devkey=keemin:wright' node src/server.mjs --port 4380
+OFFICE_KEYS='devkey=keemin:wright' node tools/static-keys-import.mjs   # the key, by hash, into oauth.db
+node src/server.mjs --port 4380
 curl -H 'Authorization: Bearer devkey' localhost:4380/doorstep/wright
 OFFICE_KEY=devkey node cli/postmark.mjs doorstep wright
 node --test "test/*.test.mjs"

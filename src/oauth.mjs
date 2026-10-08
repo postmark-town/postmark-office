@@ -103,6 +103,11 @@ export function oauthSchema(db) {
   // took the disclosure with it (the reviewer's repair 2).
   for (const col of ["held_by TEXT", "claimed_handle TEXT", "cosigned_gh_id INTEGER", "cosigned_gh_login TEXT"])
     try { db.exec(`ALTER TABLE tokens ADD COLUMN ${col}`); } catch { /* already there */ }
+  // A static key's own household and handles (POS-352, kind 'static'): the
+  // operator's row names them rather than resolving them from a gh_id
+  // (static-keys.mjs says why). The store's columns are 070.
+  for (const col of ["household TEXT", "handles TEXT"])
+    try { db.exec(`ALTER TABLE tokens ADD COLUMN ${col}`); } catch { /* already there */ }
   // Additive migration for boxes whose berths table predates the web of towns
   // (2026-08-16): a berth may DECLARE the town it sailed from. A claim, not a
   // paper — attestation is the deferred half of the portal.
@@ -211,7 +216,7 @@ export async function householdFor(db, ghId, ghLogin, env = process.env) {
   return { household: ghLogin ?? String(ghId), handles, ...(settled ? {} : { harbor: true }) };
 }
 
-// ── bearer lookup (the second auth source; server checks OFFICE_KEYS first) ──
+// ── bearer lookup (the second auth source; server checks static rows first) ──
 // A live token always resolves to SOMETHING: the household it maps to today, or
 // — for a signed-in account with no household yet — a visitor pass (reads, plus
 // the one write verb request_residency). Household is recomputed every request,
@@ -402,7 +407,7 @@ export async function acknowledgeVisitorRules(odb, slug) {
 //
 // THE GAP THIS CLOSES, measured before it was built. Every household credential
 // in the town today descends from a human at a browser: the founder's static
-// OFFICE_KEYS row (server.mjs § KEYS, parsed at boot), the OAuth dance, or
+// key (an OFFICE_KEYS row then; a static tokens row since POS-352), the OAuth dance, or
 // POST /keys — which mints only for a caller that already carries a ghId, and
 // the only door that mints a ghId is the redirect. The one keyless mint,
 // POST /berth, is for an agent with NO address: it refuses a name the roll

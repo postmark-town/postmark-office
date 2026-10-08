@@ -172,13 +172,16 @@ git clone https://github.com/postmark-town/postmark.git /srv/postmark-office/tow
 
 # 2. secrets — NEVER in either repo
 sudo tee /etc/postmark-office.env >/dev/null <<'EOF'
-OFFICE_KEYS=<key>=<household>:<handle>[,<handle>];<key2>=...
 TOWN_CLONE=/srv/postmark-office/town-clone
 TOWN_PUSH=1
 BOT_NAME=postmark-office[bot]
 BOT_EMAIL=<bot-account-noreply-email>
 EOF
 sudo chmod 600 /etc/postmark-office.env
+# static keys are store rows, not env lines (POS-352): put the entries in
+# OFFICE_KEYS for one run of the import, then never in this file:
+#   OFFICE_KEYS='<key>=<household>[#<gh_id>]:<handle>[,<handle>]' node tools/static-keys-import.mjs
+#   (deploy/DEPLOY.md § Static keys leave the env file)
 
 # 2b. pen credentials + identity on the town clone (the pen = the machine
 #     GitHub account, e.g. postmark-pen: classic PAT, public_repo scope only,
@@ -476,6 +479,135 @@ is there to raise it, never to remove it (0 means no limit).
    `last_minute.stuck` is 0.
 4. Roll back on the first stuck row or hung door: the env line out, the office
    restarted (the 2026-10-04 rollback, unchanged).
+
+### Static keys leave the env file (POS-352 part 2, w42)
+
+RULED (Darko, 2026-10-06, 2a): static office keys become a `static` kind with
+an explicit handles column and an explicit household column, imported from
+`OFFICE_KEYS` by hash, nothing re-issued, no token printed.
+
+From the release that carries this, the office no longer reads `OFFICE_KEYS`.
+A static key is an `oauth_tokens` row with `kind = 'static'` (migration 070
+adds its `household` and `handles` columns), written by
+`tools/static-keys-import.mjs` and read by `src/static-keys.mjs §
+staticLookup`. Every key keeps its value, its household, its handles and its
+gh_id; nobody is handed a new key. An office from before this change reads only
+the kinds `access`, `refresh` and `household`, so the rows are inert to it.
+That is why the import runs BEFORE the deploy, and why the rollback leaves the
+rows in place.
+
+**The order.** Dev first, before the train that carries this reaches dev (dev's
+office runs the train, and from that carry on it reads no env keys), then prod
+at the ship. Every step is on the box, as root. Nothing here prints a key or a
+hash.
+
+**0. Preconditions:**
+
+```sh
+sudo grep -c '^OFFICE_KEYS=' /etc/postmark-office.env      # 1: the line is there to import
+sudo grep '^OFFICE_KEYS=' /etc/postmark-office.env | cut -d= -f2- | tr ';' '\n' | grep -c .   # how many entries (no key printed)
+# Anything ELSE on the box that reads the line (paths only). The office's own
+# repos read it nowhere but server.mjs, checked 2026-10-08; a hand-installed
+# script would show here, and must move to its own key before step 5.
+sudo grep -rl 'OFFICE_KEYS' /etc /usr/local/bin /srv --include='*.sh' --include='*.mjs' --include='*.js' --include='*.service' --include='*.env' \
+  --exclude-dir=node_modules --exclude-dir=town-clone --exclude-dir=world-clone --exclude-dir=.git --exclude-dir=test 2>/dev/null
+# expected: the office trees' own src/ and tools/ files, and /etc/postmark-office.env and -dev.env themselves
+```
+
+**1. The migration, from the staged tip** (additive; the running office ignores
+it). Prod's store is the database `world2_dev` (POS-243: the name lies):
+
+```sh
+cd <the staged tip>
+sudo -n -u postgres psql -v ON_ERROR_STOP=1 -d world2_dev -c "SET ROLE world2_owner;" -f world2/schema/070_static_office_keys.sql
+sudo -n -u postgres psql -d world2_dev -tAc "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'oauth_tokens' AND column_name = 'handles');"   # t (070's own proof)
+```
+
+**2. The import, dry, then for real, from the same staged tip** (it needs that
+checkout's node_modules for `pg`). It loads the office's own env file, so it
+reads the same `OFFICE_KEYS` and writes the book the office reads: with
+`OFFICE_PAPERWORK_STORE=1` (prod since 10-04) the store's `oauth_tokens`, then
+the office's `oauth.db` as the mirror. `--oauth-db` must name the office's own
+file, because the default is the checkout's root. Its first line says which
+book it wrote.
+
+```sh
+cd <the staged tip>
+sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; node tools/static-keys-import.mjs --dry --oauth-db /srv/postmark-office/oauth.db'
+#   book: the store (oauth_tokens), mirrored to /srv/postmark-office/oauth.db
+#   OFFICE_KEYS: N keys          <- N is step 0's count; "malformed entries skipped" means a line to fix first
+#   would add N · would replace 0 · unchanged 0 · refused 0
+#   households: ...              <- every household you expect, and no other
+sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; node tools/static-keys-import.mjs --oauth-db /srv/postmark-office/oauth.db'
+#   added N · ... · refused 0. A second run says "unchanged N".
+```
+
+A `refused` count means a key's hash already belongs to a minted token. The
+import then writes nothing; that entry needs a new key, issued by hand.
+
+**3. The first real key to check: the Bug Catcher's** (Meeps Come Home step 3,
+`the-town#301406700:bugcatcher`). Read-only, no hash printed:
+
+```sh
+sudo -n -u postgres psql -d world2_dev -c "SET ROLE world2_owner;" \
+  -c "SELECT household, handles, gh_id, expires FROM oauth_tokens WHERE kind = 'static' ORDER BY household, handles;"
+#   the-town | ["bugcatcher"] | 301406700 | (null)    <- first; then every other row against the env line
+```
+
+**4. Deploy** the release (the train ship). Then the Bug Catcher's key at the
+door, which now answers only from the store:
+
+```sh
+sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; k=$(printf %s "$OFFICE_KEYS" | tr ";" "\n" | grep ":bugcatcher$" | cut -d= -f1); \
+  curl -s -H "Authorization: Bearer $k" http://127.0.0.1:4380/me' | jq '{household, handles, key_kind, verified_github}'
+#   { "household": "the-town", "handles": ["bugcatcher"], "key_kind": "oauth", "verified_github": { "login": null, "id": 301406700 } }
+#   (a pinned static key has always said key_kind "oauth"; that is unchanged)
+journalctl -u postmark-office -n 50 --no-pager | grep 'OFFICE_KEYS is set'   # the boot says the line is no longer read: expected until step 5
+```
+
+Then the founder's key the same way (`grep ':wright'` or its own handle list),
+and one round of each Meep that carries a static key.
+
+**5. Remove the line**, keeping a root-only copy for the rollback:
+
+```sh
+sudo install -d -m 700 /var/backups/postmark-static-keys
+sudo install -m 600 /etc/postmark-office.env /var/backups/postmark-static-keys/postmark-office.env.pre-pos352
+sudo sed -i '/^OFFICE_KEYS=/d' /etc/postmark-office.env
+sudo grep -c '^OFFICE_KEYS=' /etc/postmark-office.env      # 0
+sudo systemctl restart postmark-office
+journalctl -u postmark-office -n 50 --no-pager | grep -c 'OFFICE_KEYS is set'   # 0 since the restart
+# step 4's /me again, with the key read from the backup copy instead of the env file
+```
+
+Dev: the same steps with `/etc/postmark-office-dev.env`, `/srv/postmark-office-dev`
+and dev's port. Dev's paperwork is on the file unless its env sets
+`OFFICE_PAPERWORK_STORE=1`; the import's first line says which. Run 070 on dev's
+store too, so its switch finds the columns.
+
+The backup copy holds the same secrets the env file did. Delete it after a
+clean week (`sudo shred -u /var/backups/postmark-static-keys/postmark-office.env.pre-pos352`).
+
+**Adding a static key later** (Meeps Come Home): put only the new entry in
+`OFFICE_KEYS` for one run of the import (`read -rs` it into the variable so it
+stays out of the shell history). The import never revokes, so the other rows
+are untouched. Removing a static key is deleting its row; there is no verb for
+it yet.
+
+**Rollback.**
+
+- Before step 5 (the line is still in the env file): redeploy the previous
+  release tag (`workflow_dispatch`, target prod, that tag). The old office reads
+  `OFFICE_KEYS` again. Leave the rows and 070; the old office never reads them.
+- After step 5: restore the line, then redeploy the previous tag.
+  ```sh
+  sudo install -m 600 /var/backups/postmark-static-keys/postmark-office.env.pre-pos352 /etc/postmark-office.env
+  ```
+  Restoring the line alone does nothing for the new office, which does not read it.
+- If one key is wrong (a row missing, a household mistyped) and the release is
+  otherwise fine, fix forward instead: re-run step 2 with the backup copy's
+  line loaded (`. /var/backups/postmark-static-keys/postmark-office.env.pre-pos352`).
+  An edited entry replaces its row.
 
 ### The world write pool (tier 1, 2026-08-05)
 
