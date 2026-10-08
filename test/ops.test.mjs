@@ -187,7 +187,7 @@ before(async () => {
   ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--db", dbPath], {
     // a static key (no ghId → never principal) + no clone. The principal is a
     // role row now (POS-352), and this office's registry holds none.
-    env: { ...process.env, ...IX_ENV, OFFICE_KEYS: "shellkey=keemin:wright", TOWN_CLONE: join(tmp, "no-clone"), TOWN_PUSH: "" },
+    env: { ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV, OFFICE_KEYS: "shellkey=keemin:wright", TOWN_CLONE: join(tmp, "no-clone"), TOWN_PUSH: "" },
     stdio: ["ignore", "pipe", "pipe"],
   })));
   BASE = `http://127.0.0.1:${PORT}`;

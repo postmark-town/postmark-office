@@ -151,7 +151,7 @@ before(async () => {
   ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port),
     "--db", dbPath, "--oauth-db", (OAUTH_DB.path = join(tmp, "oauth.db"))], {
     env: {
-      ...process.env, ...IX_ENV,
+      ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV,
       OFFICE_KEYS: `${KEY}=keemin:${HANDLE}`,
       TOWN_CLONE: clone, TOWN_PUSH: "",
       PUBLIC_BASE: `http://127.0.0.1:${port}`,

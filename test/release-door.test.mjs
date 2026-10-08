@@ -68,7 +68,7 @@ before(async () => {
     "--release-root", stampDir,
   ], {
     env: {
-      ...process.env, ...IX_ENV,
+      ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV,
       OFFICE_KEYS: "release-door-test-key=keemin:wright",
       TOWN_CLONE: join(tmp, "no-clone-here"),
       WORLD_CLONE: join(tmp, "no-world-clone"),

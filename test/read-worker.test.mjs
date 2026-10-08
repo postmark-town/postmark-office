@@ -60,6 +60,7 @@ const boot = async (extraArgs, extraEnv = {}) => {
   // file exists to catch.
   const env = {
     ...process.env, ...IX?.env,
+    WORLD_GRAPH_NONE: "1",   // this office serves no world graph (POS-270 lane W 3b)
     OFFICE_KEYS: `${KEY}=keemin:wright`,
     POSTMARK_PEN_TOKEN: PEN,
     WORLD_DYNAMIC_DB: dynPath,
@@ -168,7 +169,7 @@ test("§0 a read worker refuses to boot without the writer's key store", async (
     join(ROOT, "src", "server.mjs"), "--port", String(await freePort()),
     "--db", join(tmp, "fixture.db"), "--oauth-db", absent,
     "--roles-db", join(tmp, "roles.db"), "--role", "read",
-  ], { env: { ...process.env, ...IX?.env, OFFICE_KEYS: `${KEY}=keemin:wright`, WORLD_DYNAMIC_DB: dynPath,
+  ], { env: { ...process.env, ...IX?.env, WORLD_GRAPH_NONE: "1", OFFICE_KEYS: `${KEY}=keemin:wright`, WORLD_DYNAMIC_DB: dynPath,
     TOWN_CLONE: join(ROOT, "town-clone"), WORLD_CLONE: join(tmp, "no-world-clone") },
     stdio: ["ignore", "pipe", "pipe"] });
   const r = await exitedWithin(p, 15_000, "absent key store");
@@ -195,7 +196,7 @@ test("§0b a read worker refuses to boot on an ABSENT dynamic store", async () =
     join(ROOT, "src", "server.mjs"), "--port", String(await freePort()),
     "--db", join(tmp, "fixture.db"), "--oauth-db", join(tmp, "oauth.db"),
     "--roles-db", join(tmp, "roles.db"), "--role", "read",
-  ], { env: { ...process.env, ...IX?.env, OFFICE_KEYS: `${KEY}=keemin:wright`, WORLD_DYNAMIC_DB: absent,
+  ], { env: { ...process.env, ...IX?.env, WORLD_GRAPH_NONE: "1", OFFICE_KEYS: `${KEY}=keemin:wright`, WORLD_DYNAMIC_DB: absent,
     TOWN_CLONE: join(ROOT, "town-clone"), WORLD_CLONE: join(tmp, "no-world-clone") },
     stdio: ["ignore", "pipe", "pipe"] });
   const r = await exitedWithin(p, 15_000, "absent dynamic store");
@@ -254,7 +255,7 @@ test("§1b the refusal is the ROLE's, not the router's — a writer answers thes
     "--db", join(tmp, "fixture.db"), "--oauth-db", join(tmp, "oauth-w.db"),
     "--roles-db", join(tmp, "roles-w.db"),
   ], {
-    env: { ...process.env, ...IX?.env, OFFICE_KEYS: `${KEY}=keemin:wright`, POSTMARK_PEN_TOKEN: PEN,
+    env: { ...process.env, ...IX?.env, WORLD_GRAPH_NONE: "1", OFFICE_KEYS: `${KEY}=keemin:wright`, POSTMARK_PEN_TOKEN: PEN,
       WORLD_DYNAMIC_DB: dynPath, TOWN_CLONE: join(ROOT, "town-clone"), WORLD_CLONE: join(tmp, "no-world-clone") },
     stdio: ["ignore", "pipe", "pipe"],
   }), { budgetMs: 20_000 });
