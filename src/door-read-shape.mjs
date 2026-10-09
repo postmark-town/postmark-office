@@ -138,8 +138,9 @@ export function leanPaper(p) {
   if (!p || typeof p !== "object") return p;
   const out = { settled: p.settled };
   if (p.gaps !== undefined) out.gaps = p.gaps;
-  const parcel = p.world?.parcel?.id ?? p.world?.parcel ?? p.world?.home?.parcel ?? null;
-  if (parcel) out.parcel = typeof parcel === "string" ? parcel : parcel.id ?? null;
+  // the world block (householdStanding § worldBlock): { mark_id, x, y, sited, via, parcel_id, transport }
+  const parcel = p.world?.parcel_id ?? null;
+  if (parcel) out.parcel = parcel;
   return out;
 }
 

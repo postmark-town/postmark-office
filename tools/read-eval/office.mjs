@@ -44,7 +44,7 @@ const envOf = (file) => Object.fromEntries(readFileSync(file, "utf8").trim().spl
  * Answers `{ dir, template, env, key, handle, household, stop }`. `stop()` drops
  * the template and the stand-in's folder.
  */
-export async function prepareRound({ handle, dir, log = () => {} }) {
+export async function prepareRound({ handle, dir, seed = null, log = () => {} }) {
   const { localDevTarget } = await import("../../test/helpers/dev-target.mjs");
   const dev = await localDevTarget({ boot: false, db: "read_eval_seed", log });
   try {
@@ -62,9 +62,14 @@ export async function prepareRound({ handle, dir, log = () => {} }) {
     if (!household) throw new Error(`no household in the registry lists ${handle}`);
     const key = `re_${randomBytes(18).toString("hex")}`;
     const env = envOf(dev.envFile);
+    // the neighbour's key (the door suites' seed acts as them; no agent ever holds it)
+    const neighbour = seed?.neighbour ?? null;
+    const nHousehold = neighbour ? await householdOf(dev.store, neighbour) : null;
+    const nKey = neighbour ? `re_${randomBytes(18).toString("hex")}` : null;
     execFileSync(process.execPath, [join(OFFICE, "tools", "static-keys-import.mjs"), "--oauth-db", join(dev.dir, "oauth.db")],
-      { cwd: OFFICE, stdio: "ignore", env: { ...cleanEnv(), ...env, OFFICE_KEYS: `${key}=${household}:${handle}` } });
-    log(`key written for ${handle} (household ${household})`);
+      { cwd: OFFICE, stdio: "ignore", env: { ...cleanEnv(), ...env, OFFICE_KEYS: [`${key}=${household}:${handle}`, ...(nKey ? [`${nKey}=${nHousehold}:${neighbour}`] : [])].join(";") } });
+    log(`key written for ${handle} (household ${household})${neighbour ? `, and for the seed's neighbour ${neighbour} (${nHousehold})` : ""}`);
+    const seeded = seed ? await seedDoors({ dev, env, key, nKey, seed, log }) : null;
 
     // the template: the seeded database copied, then the stand-in's own dropped by its stop
     const template = `read_eval_tpl_${process.pid}`;
@@ -78,7 +83,7 @@ export async function prepareRound({ handle, dir, log = () => {} }) {
     log(`template ${template} made`);
     mkdirSync(dir, { recursive: true });
     return {
-      dir: dev.dir, template, env, key, handle, household, port: portOf(dev.store), dev,
+      dir: dev.dir, template, env, key, handle, household, seeded, port: portOf(dev.store), dev,
       clones: { town: dev.town, world: dev.world, townHead: g(dev.town, "rev-parse", "HEAD"), worldHead: g(dev.world, "rev-parse", "HEAD") },
       async stop() {
         const s = await superuser(dev.store);
@@ -90,6 +95,47 @@ export async function prepareRound({ handle, dir, log = () => {} }) {
       },
     };
   } catch (e) { await dev.stop(); throw e; }
+}
+
+/**
+ * THE DOOR SUITES' SEED, put through the office's own doors on the seed
+ * database before it becomes the template: the test resident's bug (so "amend
+ * that bug" has one), and the neighbour's events this week (so "which starts
+ * first" and "RSVP" have them). Answers the ids, in the seed's own order.
+ */
+async function seedDoors({ dev, env, key, nKey, seed, log }) {
+  const { freePort } = await import("../../test/helpers/dev-target.mjs");
+  const { awaitListening } = await import("../../test/spawn-office.mjs");
+  const port = await freePort();
+  const child = spawn(process.execPath, [join(OFFICE, "src", "server.mjs"), "--port", String(port),
+    "--db", join(dev.dir, "office.db"), "--oauth-db", join(dev.dir, "oauth.db"), "--roles-db", join(dev.dir, "roles.db")],
+  { cwd: OFFICE, env: { ...cleanEnv(), ...env, PUBLIC_BASE: `http://127.0.0.1:${port}` }, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+  child.stdout.on("data", () => {}); child.stderr.on("data", () => {});
+  try {
+    await awaitListening(child, { budgetMs: 90_000 });
+    const base = `http://127.0.0.1:${port}`;
+    const must = async (k, door, args) => {
+      const r = await callTool(base, k, door, args);
+      if (r.isError || r.body?.error) throw new Error(`the seed's ${door} ${JSON.stringify(args).slice(0, 120)} was refused: ${JSON.stringify(r.body).slice(0, 300)}`);
+      return r.body;
+    };
+    const bug = await must(key, "town", { do: "post", args: { class: "bug", title: seed.bug.title, body: seed.bug.body, steps: seed.bug.steps } });
+    const day0 = new Date(); day0.setUTCHours(0, 0, 0, 0);
+    const events = [];
+    for (const e of seed.events) {
+      const starts = new Date(day0.getTime() + e.days * 86400_000 + (e.hour * 60 + e.minutes) * 60_000);
+      const ends = new Date(starts.getTime() + 2 * 3600_000);
+      const r = await must(nKey, "household", { do: "host", args: { title: e.title, place: e.place, starts: starts.toISOString(), ends: ends.toISOString() } });
+      events.push(r.result?.post?.id ?? r.result?.event?.id ?? r.result?.id ?? null);
+    }
+    const ids = { bug: bug.result?.post?.id ?? null, events };
+    if (!ids.bug || events.some((x) => !x)) throw new Error(`the seed could not read back its ids: ${JSON.stringify(ids)} (bug answer keys: ${Object.keys(bug.result ?? bug).join(", ")})`);
+    log(`seeded: bug ${ids.bug}; events ${events.join(", ")}`);
+    return ids;
+  } finally {
+    if (child.exitCode === null) { const gone = new Promise((ok) => child.on("exit", ok)); child.kill(); await gone; }
+    for (const f of [`loop-lag-${port}.json`, `store-txn-${port}.json`]) rmSync(join(OFFICE, "telemetry", f), { force: true });
+  }
 }
 
 const portOf = (store) => Number(new URL(store.url("office_api")).port);
@@ -133,7 +179,8 @@ export async function bootRun(round, { shape, runId, log = () => {} }) {
   const port = await freePort();
   const env = { ...round.env, PUBLIC_BASE: `http://127.0.0.1:${port}`, WORLD2_PG_URL: swap(round.env.WORLD2_PG_URL),
     ...(round.env.WORLD2_STANCE_URL ? { WORLD2_STANCE_URL: swap(round.env.WORLD2_STANCE_URL) } : {}),
-    WORLD_READ_SHAPE: shape };
+    // the variant's own door: v* is the world's, t* the town's, h* the household's
+    [{ t: "TOWN_READ_SHAPE", h: "HOUSEHOLD_READ_SHAPE" }[shape[0]] ?? "WORLD_READ_SHAPE"]: shape };
   const child = spawn(process.execPath, [join(OFFICE, "src", "server.mjs"), "--port", String(port),
     "--db", join(round.dir, "office.db"), "--oauth-db", join(round.dir, "oauth.db"), "--roles-db", join(round.dir, "roles.db")],
   { cwd: OFFICE, env: { ...cleanEnv(), ...env }, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });

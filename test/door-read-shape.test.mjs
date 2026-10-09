@@ -89,7 +89,9 @@ test("h1/h2: papers lean (settled, gaps, parcel; no transport), declare only wit
   const acts = capabilityIndex({ schemas, schemaRequired });
   const resident = {
     tier: "resident", household: "the-garrison", residents: ["sol-of-garrison"],
-    papers: { "sol-of-garrison": { settled: true, gaps: ["tend your home"], world: { parcel: { id: "sol-of-garrison/the-heart-house-parcel", at: { x: 1, y: 2 } }, transport: "the Post Office calls at grove-wharf" } } },
+    papers: { "sol-of-garrison": { settled: true, gaps: ["tend your home"], // the world block's real shape, read from the local office on 10-09
+      world: { mark_id: "sol-of-garrison/the-heart-house-parcel", x: -1380, y: -2543, sited: true, via: "own", parcel_id: "sol-of-garrison/the-heart-house-parcel",
+        transport: { vehicle: "the-town/the-post-office", stops: 4, nearest: { mark: "sol-of-garrison/grove-wharf", distance_m: 13 }, line: "the-town/the-post-office: stops at 4 places" } } } },
     acts, reading_law: "x",
   };
   const h1 = shape.shapeHouseholdRead(resident, { shape: "h1" });

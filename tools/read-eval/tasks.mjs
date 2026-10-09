@@ -52,6 +52,7 @@ export function truthFor(round, { bare = null } = {}) {
     inside: { ...t.inside },
     why: { ...t.why, parent: need(t.why.id).placementParent },
     householdOf: (id) => byId.get(id)?.declared_household ?? null,
+    atOf: (id) => byId.get(id)?.at ?? null,
     // the bare read at the start (v0), for the "where are you" errand: what stands around you
     within: (bare?.within ?? []).map((m) => m.id),
     nearby: (bare?.nearby ?? []).map((o) => o.id),
@@ -66,6 +67,8 @@ function ledgerLinesAdded(round) {
 
 const inside = (at, { at: c, extent: e }) =>
   at && Math.abs(Number(at.x) - c.x) <= e.w / 2 && Math.abs(Number(at.y) - c.y) <= e.h / 2;
+/** A mark the claim is laid on, standing on the parcel (or the parcel itself). */
+export const onParcel = (parent, truth) => Boolean(parent) && (parent === truth.parcel.id || inside(truth.atOf?.(parent), truth.parcel));
 
 /**
  * The eight. `prompt(truth)` is the errand as the agent is handed it;
@@ -102,8 +105,10 @@ export const TASKS = Object.freeze([
     id: 4, name: "leave-mark",
     prompt: () => "Leave a mark on your own parcel: something small you would like to see there.",
     async grade({ query, truth }) {
-      const rows = await query("world2_owner", "SELECT class, geometry, stake FROM claims WHERE claimant = $1", [truth.handle]);
-      const on = rows.filter((r) => inside(r.geometry?.at, truth.parcel));
+      // on the parcel: sited inside its 25×25, or predicated/named on a mark that stands inside it (or on the parcel itself);
+      // the first world round's grader took only the first, and failed a moss jar predicated on the Heart House (regraded)
+      const rows = await query("world2_owner", "SELECT class, geometry, data->>'parent_id' AS parent, stake FROM claims WHERE claimant = $1", [truth.handle]);
+      const on = rows.filter((r) => inside(r.geometry?.at, truth.parcel) || onParcel(r.parent, truth));
       return { pass: on.length > 0, why: `${rows.length} claim(s) by ${truth.handle}; ${on.length} on ${truth.parcel.id}` };
     },
   },

@@ -27,7 +27,9 @@ export function loadRuns(dir) {
 }
 
 export function writeReport(dir) {
-  const round = existsSync(join(dir, "round.json")) ? JSON.parse(readFileSync(join(dir, "round.json"), "utf8")) : {};
+  // a door's folder holds one round file per runtime (round-claude.json, round-codex.json; round.json before the second runtime)
+  const rounds = readdirSync(dir).filter((f) => /^round(-[a-z]+)?.json$/.test(f)).map((f) => JSON.parse(readFileSync(join(dir, f), "utf8")));
+  const round = rounds[0] ?? {};
   // a column is a runtime and a variant ("claude v1", "codex v1"); runs before the second runtime carry no runtime and were Claude's
   const runs = loadRuns(dir).map((r) => ({ ...r, col: `${r.runtime ?? "claude"} ${r.variant}` }));
   const variants = [...new Set(runs.map((r) => r.col))].sort();
@@ -40,7 +42,8 @@ export function writeReport(dir) {
   };
   const L = [];
   L.push(`# Read-shape eval: results`, "");
-  L.push(`Round started ${round.started ?? "?"}. Agents: ${round.model ?? "?"} at ${round.effort ?? "?"} effort, as ${round.handle ?? "?"} (household ${round.household ?? "?"}). Office ${String(round.office ?? "?").slice(0, 9)}, town ${String(round.clones?.town ?? "?").slice(0, 9)}, world ${String(round.clones?.world ?? "?").slice(0, 9)}. ${runs.length} runs.`, "");
+  for (const rd of rounds) L.push(`- ${rd.runtime ?? "claude"} round started ${rd.started ?? "?"}: ${rd.model ?? "?"} at ${rd.effort ?? "?"} effort, as ${rd.handle ?? "?"} (household ${rd.household ?? "?"}); office ${String(rd.office ?? "?").slice(0, 9)}.`);
+  L.push("", `${runs.length} runs.`, "");
   L.push("Each cell: passed/runs · median total tokens (input + cache writes + cache reads + output) · median tool calls · median wall time. Success is read from the run's store, the town clone's ledger, or (for a question) the answer against the fold; never from the agent's own claim.", "");
   L.push(`| task | ${variants.join(" | ")} |`, `|---|${variants.map(() => "---").join("|")}|`);
   for (const t of tasks) L.push(`| ${t} ${name(t)} | ${variants.map((v) => cell(runs.filter((r) => r.col === v && r.task === t))).join(" | ")} |`);

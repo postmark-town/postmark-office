@@ -28,7 +28,8 @@ import { fileURLToPath } from "node:url";
 
 import { bootRun, callTool, clonesClean, prepareRound } from "./office.mjs";
 import { codexHome, runAgent, runCodexAgent } from "./agent.mjs";
-import { FEEDBACK_PROMPT, TASKS, systemPrompt, truthFor } from "./tasks.mjs";
+import { FEEDBACK_PROMPT, TASKS, onParcel, systemPrompt, truthFor } from "./tasks.mjs";
+import { DOOR_TASKS, SEED, doorTruthFor } from "./door-tasks.mjs";
 import { writeReport } from "./report.mjs";
 import { SOLVED } from "./controls.mjs";
 
@@ -82,15 +83,15 @@ async function sweep() {
 }
 
 /** The graders' controls: each must pass the scripted solution and fail the empty run. */
-async function controls({ round, truth, taskIds, out }) {
+async function controls({ round, truth, taskIds, out, door = "world", SUITE = TASKS, P = "v" }) {
   const rows = [];
   for (const id of taskIds) {
-    const task = TASKS.find((t) => t.id === id);
+    const task = SUITE.find((t) => t.id === id);
     for (const kind of ["solved", "empty"]) {
-      const office = await bootRun(round, { shape: "v0", runId: `${process.pid}_ctl_${kind}_${id}`, log });
+      const office = await bootRun(round, { shape: `${P}0`, runId: `${process.pid}_ctl_${kind}_${id}`, log });
       try {
-        const done = kind === "solved" ? await SOLVED[id]({ office, truth }) : {};
-        const graded = await task.grade({ answer: done.answer ?? "", truth, query: office.query, round });
+        const done = kind === "solved" ? await SOLVED[door][id]({ office, truth }) : {};
+        const graded = await task.grade({ answer: done.answer ?? "", truth, query: office.query, round, calls: done.log ?? [] });
         const ok = kind === "solved" ? graded.pass : !graded.pass;
         rows.push({ task: id, kind, pass: graded.pass, ok, why: graded.why, refusals: (done.calls ?? []).filter((c) => c.isError).map((c) => c.body?.defect ?? c.body) });
         log(`control ${id} ${task.name} ${kind}: ${ok ? "OK" : "WRONG"} (pass=${graded.pass}) · ${graded.why}`);
@@ -102,16 +103,37 @@ async function controls({ round, truth, taskIds, out }) {
   log(`controls: all ${rows.length} OK`);
 }
 
+// The fold the round served: this tree's world clone at the pin (the round's scratch clone is the pin plus a package.json commit).
+const fold = () => new Map(JSON.parse(readFileSync(join(OFFICE, "world-clone", "WORLD", "world-state.json"), "utf8")).marks.map((m) => [m.id, m]));
+/**
+ * Task 4 regraded from the door's own record of the run (the proxy's log of each
+ * call and the office's answer to it), because the run's store is gone: a
+ * leave-mark the office did not refuse, sited inside the parcel or laid on a mark
+ * that stands on it. Used only to lift a verdict the first grader got wrong.
+ */
+function leaveMarkFromTheDoor(rec, truth) {
+  const byId = fold();
+  const t = { ...truth, atOf: (id) => byId.get(id)?.at ?? null };
+  const inside = (at) => at && Math.abs(at.x - t.parcel.at.x) <= t.parcel.extent.w / 2 && Math.abs(at.y - t.parcel.at.y) <= t.parcel.extent.h / 2;
+  const marks = (rec.transcript ?? []).filter((c) => c.method === "tools/call" && c.args?.do === "leave-mark" && !c.is_error && /"did": "leave-mark"/.test(c.head ?? ""));
+  const on = marks.filter((c) => inside(c.args?.args?.at) || onParcel(c.args?.args?.parent_id, t));
+  return { pass: on.length > 0, why: `(from the door's log) ${marks.length} leave-mark(s) the office took; ${on.length} on ${t.parcel.id}` };
+}
+
 /** The question errands graded again from their stored answers (a grader fix); each changed verdict keeps its old one. */
 function regrade(dir) {
-  const round = JSON.parse(readFileSync(join(dir, "round.json"), "utf8"));
+  const file = ["round-claude.json", "round.json"].map((f) => join(dir, f)).find((f) => existsSync(f));
+  const round = JSON.parse(readFileSync(file, "utf8"));
   const questions = new Set([1, 2, 8]); // graded from the answer alone; an act's grade needs the run's store, which is gone
   let changed = 0;
   return Promise.all(readdirSync(join(dir, "runs")).filter((f) => f.endsWith(".json")).map(async (f) => {
     const file = join(dir, "runs", f);
     const rec = JSON.parse(readFileSync(file, "utf8"));
-    if (!questions.has(rec.task) || rec.harness_error) return;
-    const g = await TASKS.find((t) => t.id === rec.task).grade({ answer: rec.answer ?? "", truth: round.truth });
+    if (rec.harness_error) return;
+    let g;
+    if (questions.has(rec.task)) g = await TASKS.find((t) => t.id === rec.task).grade({ answer: rec.answer ?? "", truth: round.truth });
+    else if (rec.task === 4 && !rec.pass) g = leaveMarkFromTheDoor(rec, round.truth);
+    else return;
     if (g.pass !== rec.pass || g.why !== rec.why) {
       if (g.pass !== rec.pass) changed++;
       rec.regraded = [...(rec.regraded ?? []), { at: stamp(), was: { pass: rec.pass, why: rec.why } }];
@@ -121,15 +143,31 @@ function regrade(dir) {
   })).then(() => { log(`regraded: ${changed} verdict(s) changed`); log(`results page: ${writeReport(dir)}`); });
 }
 
+/** One office on the round's seed, kept up for probing until <out>/stop exists; <out>/serve.json says where. */
+async function serve({ round, out }) {
+  const office = await bootRun(round, { shape: "v0", runId: `${process.pid}_serve`, log });
+  try {
+    writeFileSync(join(out, "serve.json"), JSON.stringify({ base: office.base, key: office.key, db: office.db, handle: round.handle, town: round.clones.town, world: round.clones.world }, null, 2));
+    log(`serving ${office.base} until ${join(out, "stop")} exists`);
+    while (!existsSync(join(out, "stop"))) await new Promise((ok) => setTimeout(ok, 2000));
+  } finally { await office.stop(); }
+}
+
 async function main() {
-  const a = argv(["out", "variants", "tasks", "repeats", "concurrency", "handle", "model", "effort", "report", "sweep", "controls", "regrade", "runtime"]);
+  const a = argv(["out", "variants", "tasks", "repeats", "concurrency", "handle", "model", "effort", "report", "sweep", "controls", "regrade", "runtime", "serve", "door"]);
   if (a.sweep) return sweep();
   if (a.regrade) return regrade(resolve(a.regrade));
   if (a.report) { const p = writeReport(resolve(a.report)); log(`results page: ${p}`); return; }
   if (!a.out) throw new Error("--out <dir> is required (the round's results folder)");
   const out = resolve(a.out);
-  const variants = String(a.variants ?? "v0,v1,v2").split(",");
-  const taskIds = range(a.tasks ?? "1-8");
+  // the door: world (the first suite), town or household (Darko's comment on POS-486, 10-09)
+  const door = a.door ?? "world";
+  if (!["world", "town", "household"].includes(door)) throw new Error("--door is world, town or household");
+  const SUITE = door === "world" ? TASKS : DOOR_TASKS[door];
+  const P = { world: "v", town: "t", household: "h" }[door];
+  const variants = String(a.variants ?? `${P}0,${P}1,${P}2`).split(",");
+  if (variants.some((v) => !v.startsWith(P))) throw new Error(`the ${door} door's variants are ${P}0, ${P}1, ${P}2`);
+  const taskIds = range(a.tasks ?? `1-${SUITE.length}`);
   const repeats = Number(a.repeats ?? 2);
   // ONE AT A TIME. The Letta server allows two, but the runs share the round's
   // town clone, and a stake commits to it until the run ends; a second run beside
@@ -144,24 +182,35 @@ async function main() {
   const effort = a.effort ?? "medium";
   mkdirSync(join(out, "runs"), { recursive: true });
 
-  log(`round: ${variants.join("/")} × tasks ${taskIds.join(",")} × ${repeats}, ${concurrency} at a time, as ${handle}, ${model} at ${effort}`);
-  const round = await prepareRound({ handle, dir: join(out, "seed"), log });
+  log(`round: the ${door} door, ${variants.join("/")} × tasks ${taskIds.join(",")} × ${repeats}, ${concurrency} at a time, as ${handle}, ${model} at ${effort}`);
+  const round = await prepareRound({ handle, dir: join(out, "seed"), seed: door === "world" ? null : SEED, log });
   try {
-    // the "where are you" truth: the v0 bare read at the start, through a run office of its own
-    const probe = await bootRun(round, { shape: "v0", runId: `${process.pid}_truth`, log });
-    let bare;
-    try { bare = (await callTool(probe.base, probe.key, "world", {})).body; } finally { await probe.stop(); }
-    const truth = truthFor(round, { bare });
-    writeFileSync(join(out, "round.json"), JSON.stringify({
-      started: stamp(), variants, tasks: taskIds, repeats, concurrency, handle, household: round.household, runtime, model, effort,
+    // THE TRUTH, read at the start through an office of its own at the control shape;
+    // and THE SIZES: the bare read at every variant, section by section
+    const sizes = {};
+    let truth;
+    for (const v of variants) {
+      const probe = await bootRun(round, { shape: v, runId: `${process.pid}_probe_${v}`, log });
+      try {
+        const bare = await callTool(probe.base, probe.key, door, {});
+        sizes[v] = { total: bare.chars, sections: Object.fromEntries(Object.entries(bare.body ?? {}).map(([k, x]) => [k, JSON.stringify(x ?? null).length])) };
+        if (v === variants[0]) truth = door === "world" ? truthFor(round, { bare: bare.body }) : await doorTruthFor(round, (d, x) => callTool(probe.base, probe.key, d, x));
+      } finally { await probe.stop(); restoreClones(round); }
+    }
+    writeFileSync(join(out, `sizes-${runtime}.json`), JSON.stringify(sizes, null, 2));
+    log(`bare read sizes: ${variants.map((v) => `${v} ${sizes[v].total}`).join(", ")}`);
+    // one round file per runtime, so a door's folder holds both runtimes' rounds side by side
+    writeFileSync(join(out, `round-${runtime}.json`), JSON.stringify({
+      started: stamp(), door, variants, tasks: taskIds, repeats, concurrency, handle, household: round.household, runtime, model, effort,
       clones: { town: round.clones.townHead, world: round.clones.worldHead },
       office: execFileSync("git", ["-C", OFFICE, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
-      truth: { ...truth, householdOf: undefined },
+      truth: { ...truth, householdOf: undefined, atOf: undefined }, seeded: round.seeded ?? null,
       system_prompt: systemPrompt(handle), feedback_prompt: FEEDBACK_PROMPT,
-      prompts: Object.fromEntries(TASKS.map((t) => [t.id, t.prompt(truth)])),
+      prompts: Object.fromEntries(SUITE.map((t) => [t.id, t.prompt(truth)])),
     }, null, 2));
 
-    if (a.controls) return await controls({ round, truth, taskIds, out });
+    if (a.controls) return await controls({ round, truth, taskIds, out, door, SUITE, P });
+    if (a.serve) return await serve({ round, out });
 
     // repeats outermost, then tasks, then variants: a slow hour or a busy box falls on every variant alike
     const plan = [];
@@ -170,8 +219,8 @@ async function main() {
     const worker = async () => {
       while (next < plan.length) {
         const { v, id, r } = plan[next++];
-        const task = TASKS.find((t) => t.id === id);
-        const runId = `${runtime === "codex" ? "codex-" : ""}${v}-t${id}-r${r}`;
+        const task = SUITE.find((t) => t.id === id);
+        const runId = `${runtime === "codex" ? "codex-" : ""}${v}-t${id}-r${r}`; // the variant names the door (v, t, h)
         const file = join(out, "runs", `${runId}.json`);
         if (existsSync(file)) { log(`${runId}: already done, kept`); continue; }
         const office = await bootRun(round, { shape: v, runId: `${process.pid}_${runId}`.replace(/-/g, "_"), log });
@@ -183,10 +232,10 @@ async function main() {
           const agent = await run({ base: office.base, key: office.key, prompt, system: systemPrompt(handle), feedback: FEEDBACK_PROMPT,
             dir: join(OFFICE, ".read-eval", "runs", runId), model, effort });
           const answer = agent.result?.result ?? "";
-          const graded = await task.grade({ answer, truth, query: office.query, round });
+          const graded = await task.grade({ answer, truth, query: office.query, round, calls: agent.calls });
           const u = agent.result?.usage ?? {};
           rec = {
-            run: runId, runtime, model, variant: v, task: id, task_name: task.name, repeat: r, started, prompt,
+            run: runId, door, runtime, model, variant: v, task: id, task_name: task.name, repeat: r, started, prompt,
             pass: graded.pass, why: graded.why,
             // Claude's input excludes its cache; Codex's input includes its cached tokens and its output its reasoning (agent.mjs)
             tokens: runtime === "codex" ? {

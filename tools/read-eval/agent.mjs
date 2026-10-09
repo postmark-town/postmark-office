@@ -130,11 +130,16 @@ export async function runAgent({ base, key, prompt, system, feedback, dir, model
 // servers, hooks, plugins, memories or AGENTS.md reach the agent, and nothing
 // is written back to his home. The office's MCP door is set per run with -c.
 //
-// WHAT COULD NOT BE TURNED OFF, said plainly: in codex-cli 0.160.1
-// `unified_exec` stays on and the collaboration tools (spawn_agent, wait, ...)
-// are always listed. The shell is off all the same: its host is disabled, so
-// an exec fails closed, and there is no apply_patch, web search, image or
-// browser tool. Any non-MCP item the agent makes is counted in `codex_items`.
+// WHAT COULD NOT BE TURNED OFF, said plainly: in codex-cli 0.160.1 the agent
+// still lists `exec` (the code-mode host, which is also the only road to MCP
+// tools in this version), `apply_patch`, the MCP resource readers, `wait`,
+// `request_user_input` and the collaboration tools (spawn_agent, ...). There
+// is no shell (shell_tool off), no web search, image or browser tool, and the
+// sandbox is read-only, so apply_patch cannot write. Every MCP call, however
+// reached, passes the counting proxy; every non-MCP item the agent makes is
+// counted in `codex_items`. MCP calls are approved by the server's
+// `default_tools_approval_mode = "approve"` (approval_policy "never" would
+// otherwise refuse them all).
 //
 // ITS ACCOUNTING IS NOT CLAUDE'S:
 //   - tokens: `input_tokens` INCLUDES `cached_input_tokens`, and
@@ -162,7 +167,10 @@ shell_tool = false
 unified_exec = false
 shell_snapshot = false
 code_mode = false
-code_mode_host = false
+# ON, because in codex-cli 0.160.1 the MCP tools reach the model only through
+# the code-mode host; with it off the agent sees no Postmark tool at all (the
+# first smoke run, 10-09). Its exec runs tools, not a shell (shell_tool is off).
+code_mode_host = true
 view_image = false
 image_generation = false
 browser_use = false
@@ -222,6 +230,7 @@ export async function runCodexAgent({ base, key, prompt, system, feedback, dir, 
   const env = { ...agentEnv(), CODEX_HOME: home, POSTMARK_EVAL_KEY: key };
   const common = ["--json", "--skip-git-repo-check", "-m", model, "-c", `model_reasoning_effort="${effort}"`,
     "-c", `mcp_servers.postmark.url="${proxy.url}/mcp"`, "-c", 'mcp_servers.postmark.bearer_token_env_var="POSTMARK_EVAL_KEY"',
+    "-c", 'mcp_servers.postmark.default_tools_approval_mode="approve"',
     "-c", `developer_instructions=${JSON.stringify(system)}`];
   try {
     const t0 = Date.now();
