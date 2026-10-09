@@ -261,6 +261,7 @@ async function main() {
             model_usage: agent.result?.modelUsage ?? null,
           };
         } catch (e) {
+          if (String(e?.message ?? e).startsWith("AUTH_MOVED")) throw e; // the round stops (the finally still stops the office); no record for a run that never ran honestly
           rec = { run: runId, variant: v, task: id, repeat: r, pass: false, why: `the harness failed: ${String(e?.stack ?? e).slice(0, 600)}`, harness_error: true };
         } finally {
           await office.stop();

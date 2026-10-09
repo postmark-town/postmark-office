@@ -19,7 +19,7 @@
 
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -200,6 +200,20 @@ export function codexHome(dir) {
   return dir;
 }
 
+// ── THE AUTH COPY MUST NEVER REFRESH (Wright, 10-09) ────────────────────────
+// A refresh rotates the sign-in, and the rotation would leave Darko's own
+// ~/.codex/auth.json holding a dead refresh token. So the copy is compared
+// with the original before and after every Codex run: if either has moved,
+// the round stops (AUTH_MOVED) and nothing more runs on Codex.
+export const AUTH_MOVED = "AUTH_MOVED";
+const authOf = (f) => { try { return readFileSync(f, "utf8"); } catch { return null; } };
+export function assertAuthStill(home) {
+  const copy = authOf(join(home, "auth.json"));
+  const original = authOf(join(homedir(), ".codex", "auth.json"));
+  if (copy == null || copy !== original)
+    throw new Error(`${AUTH_MOVED}: the eval's Codex auth copy no longer matches Darko's own (${copy == null ? "the copy is gone" : "a refresh, or his sign-in moved"}); Codex runs stop here`);
+}
+
 /** The JSONL events of one `codex exec --json`, folded to what the eval records. */
 export function foldCodexEvents(stdout) {
   const ev = stdout.split(/\r?\n/).filter((l) => l.startsWith("{")).map(parse).filter(Boolean);
@@ -228,6 +242,7 @@ export async function runCodexAgent({ base, key, prompt, system, feedback, dir, 
   const calls = [];
   const proxy = await countingProxy(base, calls);
   const env = { ...agentEnv(), CODEX_HOME: home, POSTMARK_EVAL_KEY: key };
+  assertAuthStill(home);
   const common = ["--json", "--skip-git-repo-check", "-m", model, "-c", `model_reasoning_effort="${effort}"`,
     "-c", `mcp_servers.postmark.url="${proxy.url}/mcp"`, "-c", 'mcp_servers.postmark.bearer_token_env_var="POSTMARK_EVAL_KEY"',
     "-c", 'mcp_servers.postmark.default_tools_approval_mode="approve"',
@@ -243,6 +258,7 @@ export async function runCodexAgent({ base, key, prompt, system, feedback, dir, 
       const r = await proc(process.execPath, [CODEX_JS, "exec", "resume", ...common, result.session_id, feedback], { cwd: dir, env, timeoutMs: 5 * 60_000 });
       fb = { ...foldCodexEvents(r.stdout), exit_code: r.code };
     }
+    assertAuthStill(home); // after the feedback turn too: a refresh mid-run stops the round
     return { result, feedback: fb, calls: calls.slice(0, callsDuringTask), calls_during_feedback: calls.slice(callsDuringTask).filter((c) => c.method === "tools/call").length };
   } finally { await proxy.close(); }
 }
