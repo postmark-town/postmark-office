@@ -136,10 +136,23 @@ const sweep = async (odb) => {
 // residents found their connectors "invalidated". Every read of these tables
 // checks `expires` itself, so a late sweep changes no answer. It runs after the
 // route has answered, and a failure is one logged line, never a refusal.
-const sweepAfter = (ctx) => setImmediate(async () => {
-  try { await sweep(ctx.odb); }
-  catch (e) { console.error(`[oauth] the sweep failed (housekeeping only; the request was answered): ${String(e?.message ?? e).slice(0, 200)}`); }
-});
+//
+// ONE AT A TIME, AT MOST ONCE A MINUTE (review of #449, finding 3). Run after
+// every request, a keyless loop on discovery (which answers at once) could queue
+// sweeps without bound on the paperwork pool every bearer lookup shares, and
+// starve the lookups into the very 503s this exists to prevent.
+const SWEEP_EVERY_S = 60;
+let sweeping = false, lastSweep = 0;
+const sweepAfter = (ctx) => {
+  if (sweeping || now() - lastSweep < SWEEP_EVERY_S) return;
+  sweeping = true;
+  lastSweep = now();
+  setImmediate(async () => {
+    try { await sweep(ctx.odb); }
+    catch (e) { console.error(`[oauth] the sweep failed (housekeeping only; the request was answered): ${String(e?.message ?? e).slice(0, 200)}`); }
+    finally { sweeping = false; }
+  });
+};
 
 // Split out and EXPORTED because the claim desk is not an oauth route and never
 // reached this sweep. It ran only inside handleOauth, so an expired ask sat in

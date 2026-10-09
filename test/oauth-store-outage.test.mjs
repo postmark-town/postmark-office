@@ -11,6 +11,10 @@
 //      then could not follow with inserts (the journal: 4 DELETE, 1 INSERT), so
 //      a resident whose delete landed held no refresh token at all.
 //
+//   R0  the sweep still deletes an expired row, after the answer, and runs at
+//       most once a minute (it must be the file's first oauth request: the
+//       minute is the module's own clock)
+//
 // Each test runs on a real Postgres of this file's own (never the tree's shared
 // server, which every file in the tree uses), which it stops and starts:
 //
@@ -124,6 +128,23 @@ async function assertRetryable(res, what) {
   assert.doesNotMatch(text, /invalid_grant/, `${what}: a store fault is never invalid_grant, which a client reads as "sign in again"`);
   assert.equal(JSON.parse(text).error, "temporarily_unavailable");
 }
+
+test("R0 the sweep still deletes an expired row after an oauth request, and not twice in a minute", async () => {
+  const expiredRow = async (tag) => {
+    await paper.run("INSERT INTO tokens (token_hash, kind, gh_id, gh_login, client_id, expires, created) VALUES (?, 'access', ?, ?, ?, ?, ?)",
+      sha(tag), 999, "keeminlee", "client-1", now() - 60, now() - 3600);
+    return async () => (await pool.query("SELECT 1 FROM oauth_tokens WHERE token_hash = $1", [sha(tag)])).rowCount;
+  };
+  const disco = () => fetch(`${BASE}/.well-known/oauth-authorization-server`, { headers: { accept: "application/json" } });
+  const first = await expiredRow("expired-1");
+  assert.equal((await disco()).status, 200);
+  for (let i = 0; i < 40 && await first(); i++) await new Promise((ok) => setTimeout(ok, 50));
+  assert.equal(await first(), 0, "the sweep deleted the expired token after the request was answered");
+  const second = await expiredRow("expired-2");
+  assert.equal((await disco()).status, 200);
+  await new Promise((ok) => setTimeout(ok, 500));
+  assert.equal(await second(), 1, "a second request inside the minute does not sweep again");
+});
 
 test("R1 the store is down: the refresh answers 503 with Retry-After, and once it is back the SAME refresh token works", async () => {
   const token = await seedRefresh();
