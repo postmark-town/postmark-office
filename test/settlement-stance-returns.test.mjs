@@ -44,7 +44,8 @@ const B = {
   name: { slug: "bo/grounds-name", kind: "naming", owner: "bo", body: "The Listening Grounds.", geometry: null, parent: "bo/grounds", data: { date: "2026-10-01T00:00:04Z", tier: "market", name: "The Listening Grounds" } },
 };
 const S11 = [MARKS.plot, B.meadow, B.grounds, B.tower, B.bell, B.hut, B.name];
-const serve = (opts = {}) => asOffice((p) => servedSettlement(p, { worldRepo: WORLD, ...opts }));
+// S11 is at or after the cutover S10, so stances count (Darko, 2026-10-09: the cutover is a settlement number).
+const serve = (opts = {}) => asOffice((p) => servedSettlement(p, { worldRepo: WORLD, env: { TOWN_STANCE_CUTOVER: "S10" }, ...opts }));
 const markOf = (state, id) => state.marks.find((m) => m.id === id);
 const ids = (state) => state.marks.map((m) => m.id).filter((id) => id !== "the-town/hall").sort();
 const header = () => asOffice(async (p) => (await p.query("SELECT * FROM world_snapshots WHERE id = 2")).rows[0]);

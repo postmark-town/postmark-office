@@ -51,6 +51,11 @@
 //      vetoes standing now as at the seal, the served World IS the kept one,
 //      byte for byte.
 //
+// 5. FROM THE CUTOVER ON (Darko, 2026-10-09 10:25 EDT). Items 3 and 4 apply
+//    to a settlement numbered at or after TOWN_STANCE_CUTOVER. One below it,
+//    or any while it is unset, is served with no stance at all, as git is
+//    written from it (town-stance.mjs § stancesCountAt).
+//
 // Market opposition is not a veto (R16) and is not read here: it is
 // density-weighted and the settlement's fold applies it (POS-369). A holder's
 // welcomed is not read either: what it confers is the settlement's (POS-362),
@@ -726,12 +731,22 @@ export async function servedSettlement(p, { settlement = null, worldRepo, townRe
 
   // ASKED BY NAME, a settlement is its own seal's words only; the newest World
   // is today's words (Darko, 2026-10-08). The seal's words are read once per digest.
+  //
+  // THE SERVED WORLD WAITS FOR THE CUTOVER TOO (Darko, 2026-10-09 10:25 EDT,
+  // the conservative cutover, point 2): a settlement numbered below
+  // TOWN_STANCE_CUTOVER, or any while it is unset, is served with no stance
+  // applied, exactly as git is written from it (§ settlementTakesAway), so the
+  // page and the record never disagree. The limits are applied whatever the
+  // cutover (R11). The kept World stays its digest's (the sources and the
+  // seal's words); whether those words count is this read's, by the number.
   const asked = number != null;
+  const { stancesCountAt } = await import("./town-stance.mjs");
+  const gate = stancesCountAt(header.settlement, env);
   const seal = await sealWordsOf(p, header, { worldRepo });
-  const applied = asked ? seal : words;
+  const applied = !gate.counts ? NO_WORDS : asked ? seal : words;
   const sealKey = vetoKey(seal.townWords, seal.holderOpposed);
   const vk = applied.unread ? "unread" : vetoKey(applied.townWords, applied.holderOpposed);
-  const servedKey = `${header.digest}|${asked ? "seal" : vk}`;
+  const servedKey = `${header.digest}|${!gate.counts ? "uncounted" : asked ? "seal" : vk}`;
   let state = SERVED.get(servedKey) ?? null;
   let built = false;
   if (!state) {
@@ -806,9 +821,11 @@ export async function servedSettlement(p, { settlement = null, worldRepo, townRe
       ...(number == null && newest > n ? { newer_unsealed: `S${newest}` } : {}),
       opposed: __vetoes ? { town: __vetoes.town, holders: __vetoes.holders, limits: __vetoes.limits ?? [] } : { town: [], holders: [], limits: [] },
       // Whose words those are (POS-362): an asked settlement's own seal's, or today's.
-      words: asked
-        ? { as_of: "the seal", stance_through: seal.through }
-        : { as_of: "now", seal_stance_through: seal.through },
+      words: {
+        ...(asked ? { as_of: "the seal", stance_through: seal.through } : { as_of: "now", seal_stance_through: seal.through }),
+        counted: gate.counts,
+        ...(gate.counts ? {} : { not_counted: `${gate.why}, so no stance is applied to this World` }),
+      },
       ...(__vetoes?.town_unread ? { opposed_unread: __vetoes.town_unread } : {}),
       ...(__vetoes?.stance_returns_whole ? { stance_returns_whole: __vetoes.stance_returns_whole } : {}),
       ...(applied.unread ? { opposed_unread: `the standing words could not be read, so nothing opposed since the seal is taken away here: ${words.unread}` } : {}),

@@ -29,7 +29,10 @@ after(() => store.stop()); // a store never stopped left its server running on e
 const skip = store.skip ?? false;
 const { owner, asOffice, seed, speak } = settlementRig(store);
 
-const serve = (opts = {}) => asOffice((p) => servedSettlement(p, { worldRepo: WORLD, ...opts }));
+// Stances count from the cutover on (Darko, 2026-10-09): these tests serve S10 and S11 with
+// the cutover at S10 unless a test names its own env (the label tests read process.env).
+const COUNTED = Object.freeze({ TOWN_STANCE_CUTOVER: "S10" });
+const serve = (opts = {}) => asOffice((p) => servedSettlement(p, { worldRepo: WORLD, env: COUNTED, ...opts }));
 // The marks a resident placed (the class mark the law brings is the law's, and stands in every fold).
 const ids = (state) => state.marks.map((m) => m.id).filter((id) => id !== "the-town/hall").sort();
 // The fold as the snapshot holds it: the served marks less the two labels this read adds (R9, R14).
@@ -225,7 +228,7 @@ test("with TOWN_STANCE_CUTOVER unset, no mark is labelled: the old blessing carr
   delete process.env.TOWN_STANCE_CUTOVER;
   try {
     resetSettlementCaches();
-    const r = await serve();
+    const r = await serve({ env: process.env });
     for (const m of r.marks) {
       assert.equal(m.town_stance, undefined, `${m.id} carries no stance label`);
       assert.equal(m.awaiting, undefined, `${m.id} awaits no one on this answer`);
@@ -247,7 +250,7 @@ test("with the cutover set: a mark from before it carries nothing, a town-neutra
         `INSERT INTO claims (window_id, class, claimant, household, status, body, geometry, stake, data, slug, decided_at)
          VALUES (501, 'sited', $2, $2, 'locked', 'x', '{}'::jsonb, 0, '{}'::jsonb, $1, '2026-10-02T06:00:00Z')`, [slug, by]));
     resetSettlementCaches();
-    let r = await serve();
+    let r = await serve({ env: process.env });
     assert.equal(r.meta.labels_omitted, undefined);
     assert.ok(r.marks.every((m) => !("ratification" in m)), "no ratification field anywhere (R7/R15 superseded)");
     assert.deepEqual(markOf(r, "the-town/hall"), unlabelled(r).marks.find((m) => m.id === "the-town/hall"), "the law is not a cleared mark");
@@ -263,7 +266,7 @@ test("with the cutover set: a mark from before it carries nothing, a town-neutra
     await speak({ actor: TOWN_SPEAKER, on: "cy/bench", stance: "neutral", as: "town" });
     await speak({ actor: "ann", on: "bo/shed", stance: "welcomed" });
     resetSettlementCaches();
-    r = await serve();
+    r = await serve({ env: process.env });
     assert.equal(markOf(r, "cy/bench").town_stance, "neutral");
     assert.equal(markOf(r, "cy/bench").awaiting, undefined, "the field appears only when it is not empty");
     assert.deepEqual(markOf(r, "bo/shed").awaiting, ["the-town"], "ann's word clears her household's seat");
@@ -273,13 +276,13 @@ test("with the cutover set: a mark from before it carries nothing, a town-neutra
     // no label (the cutover is a settlement number, Darko 2026-10-09).
     process.env.TOWN_STANCE_CUTOVER = "S77";
     resetSettlementCaches();
-    r = await serve();
+    r = await serve({ env: process.env });
     assert.equal(markOf(r, "bo/shed").awaiting, undefined);
     assert.match(r.meta.labels_omitted ?? "", /S11 is below the cutover S77/);
     // A cutover at or before it that the store holds no row for is said, never labelled.
     process.env.TOWN_STANCE_CUTOVER = "S5";
     resetSettlementCaches();
-    r = await serve();
+    r = await serve({ env: process.env });
     assert.equal(markOf(r, "bo/shed").awaiting, undefined);
     assert.match(r.meta.labels_unread ?? "", /S5/);
   } finally {
@@ -520,6 +523,19 @@ test("THE CROSSING'S OWN NUMBER: a snapshot no settlement names yet is read as t
   assert.deepEqual([...away.slugs].sort(), ["bo/shed", "bo/shed-name"]);
   const later = await asOffice((p) => settlementTakesAway(p, header, { worldRepo: WORLD, env: { TOWN_STANCE_CUTOVER: "S12" } }));
   assert.deepEqual([...later.slugs], [], "a cutover after it counts nothing at it");
+});
+
+test("THE SERVED WORLD READS THE NUMBER: the same sealed S11, asked, under a cutover at it and one after it", { skip }, async () => {
+  await seed({ sealWords: [{ actor: "ann", on: "bo/shed", stance: "opposed" }] });
+  const at11 = await serve({ settlement: "S11", env: { TOWN_STANCE_CUTOVER: "S11" } });
+  assert.ok(!ids(at11).includes("bo/shed"), "S11 is at the cutover: ann's word at its seal counts");
+  assert.equal(at11.meta.words.counted, true);
+  resetSettlementCaches();
+  const at12 = await serve({ settlement: "S11", env: { TOWN_STANCE_CUTOVER: "S12" } });
+  assert.ok(ids(at12).includes("bo/shed"), "S11 is before the cutover S12: every mark ratified, the shed stands");
+  assert.equal(at12.meta.words.counted, false);
+  assert.match(at12.meta.words.not_counted, /^S11 is below the cutover S12 \(TOWN_STANCE_CUTOVER\)/);
+  assert.deepEqual(at12.meta.opposed, { town: [], holders: [], limits: [] });
 });
 
 test("THE LABELS READ THE NUMBER TOO: a settlement below the cutover carries no label, and meta says why", { skip }, async () => {
