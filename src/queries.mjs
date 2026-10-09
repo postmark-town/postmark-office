@@ -314,7 +314,12 @@ function readRoll(db) {
     .map((r) => rollEntry(r.handle, JSON.parse(r.json)));
 }
 
-/** One resident's line on the roll, from their stored card. Shared with the store's twin. */
+/**
+ * One resident's line on the roll, from their stored card. Shared with the store's twin.
+ * `last_active` here is the index's commit-derived value; every door that serves
+ * a roll replaces it with the newest act of their own and adds
+ * `last_active_crossing` (last-active.mjs § withLastActive, POS-481).
+ */
 export const rollEntry = (handle, d) => ({ handle, display: d.display ?? d.name ?? handle, github: d.github ?? d.address?.data?.github ?? null, is_office: isOffice(d), joined: d.address?.data?.joined ?? null, last_active: d.last_active ?? null });
 
 /** Is a card an office's? queries.mjs's one reading of the flag, for the store's twin. */
@@ -2693,9 +2698,11 @@ export const officeIndex = (db, meta, clone) => ({
   doorstep: async (handle, asOf, opts) => doorstep(db, handle, asOf, opts),
   residentSegments: async (handle, fresh) => (await import("./house-bundle.mjs")).residentSegments(db, handle, fresh),
   hasResident: async (handle) => { try { return Boolean(db.prepare("SELECT 1 FROM residents WHERE handle = ?").get(handle)); } catch { return false; } },
-  lastActive: async (handle) => {
-    try { const row = db.prepare("SELECT json FROM residents WHERE handle = ?").get(handle); return row ? (JSON.parse(row.json).last_active ?? null) : null; }
-    catch { return null; }
+  // last_active is the store's (acts and town_letters, POS-481), never this
+  // index's: office.db has no acts, so this one asks the pen.
+  lastActiveFor: async (handles) => {
+    const [{ officeRead }, { lastActiveFor }] = await Promise.all([import("./world2-pen.mjs"), import("./last-active.mjs")]);
+    return officeRead((c) => lastActiveFor(c, handles), { by: "lastActive" });
   },
   mailAwaiting: async (handle, opts) => mailAwaiting(db, handle, opts),
   standing: async (handle) => standingFor(db, handle),

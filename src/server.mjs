@@ -75,6 +75,7 @@ import { loopLag } from "./loop-lag.mjs"; // POS-267: how long the one thread ke
 import { storeTxnWatch } from "./store-txn-watch.mjs"; // POS-370: does any office connection sit idle inside a transaction
 import { readReleaseStamp } from "./release.mjs"; // POS-60: the deploy receipt the auto-deploy probes
 import { currentCrossing, CROSSING_DERIVATION } from "./crossings.mjs"; // the town clock, served at the door
+import { withLastActive, withLastActiveOn } from "./last-active.mjs"; // the roster's and the card's last_active, from the store's acts (POS-481)
 import { roleFrom, workerSafe, writerAddressFrom, readRoleBounce, penTokenFor, roleDisclosure } from "./role.mjs"; // DEC-4/G3: read-only workers behind nginx
 import { IN_READ_WORKER, announce, mcpWorkerTakes, onAnnounce, readWorkerCount, serveReadsInWorker, startReadPool, workerTakes } from "./read-workers.mjs"; // POS-266: reads on the other cores
 import { heardDoor } from "./arrival-heard.mjs"; // POS-292: how arrivals heard, weekly counts only
@@ -1762,8 +1763,11 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           since: url.searchParams.get("since") ?? undefined,
           office: url.searchParams.has("office") ? url.searchParams.get("office") === "true" : undefined,
         };
-        if (townIndexReads()) return fromTownIndex(res, (c) => townIndexStore.residentPage(c, opts));
-        return j(res, 200, residentPage(db, opts));
+        // last_active is the newest act of their own, one store read for the
+        // page (last-active.mjs, POS-481), on the client the read already holds.
+        if (townIndexReads()) return fromTownIndex(res, async (c) => withLastActiveOn(c, "page", await townIndexStore.residentPage(c, opts)));
+        return withLastActive("page", residentPage(db, opts)).then((p) => j(res, 200, p))
+          .catch((e) => bounce(res, 500, "the office tripped", String(e?.message ?? e).slice(0, 200)));
       }
 
       if ((m = /^\/residents\/([a-z0-9-]+)$/.exec(path))) {
@@ -1773,11 +1777,11 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         freshFor(who, { odb, clone: TOWN_CLONE, asOf: AS_OF }).then(async (fresh) => {
         let r;
         if (townIndexReads()) {
-          const got = await townIndexStore.storeAnswer((c) => townIndexStore.resident(c, who, fresh));
+          const got = await townIndexStore.storeAnswer(async (c) => withLastActiveOn(c, "card", await townIndexStore.resident(c, who, fresh)));
           if (got.refused) return bounce(res, 503, got.refused.defect, got.refused.hint);
           if (got.asOf) res.setHeader("x-postmark-town-index-as-of", got.asOf);
           r = got.out;
-        } else r = resident(db, who, fresh);
+        } else r = await withLastActive("card", resident(db, who, fresh));
         if (!r) return bounce(res, 404, `no resident "${who}"`, "handles are lowercase-hyphenated, as in WHITE_PAGES/");
         // household leads (2026-08-07), from the store's registry (POS-342)
         await withHouseholdBlock(r, who);
@@ -2096,8 +2100,9 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           limit: url.searchParams.get("limit") ?? undefined,
           offset: url.searchParams.get("offset") ?? undefined,
         };
-        if (townIndexReads()) return fromTownIndex(res, (c) => townIndexStore.search(c, q, opts));
-        return j(res, 200, search(db, q, opts));
+        if (townIndexReads()) return fromTownIndex(res, async (c) => withLastActiveOn(c, "search", await townIndexStore.search(c, q, opts)));
+        return withLastActive("search", search(db, q, opts)).then((s) => j(res, 200, s))
+          .catch((e) => bounce(res, 500, "the office tripped", String(e?.message ?? e).slice(0, 200)));
       }
 
     // GET /fund/intake — the published address, and the disclosures that must
