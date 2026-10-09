@@ -19,9 +19,12 @@
 // ── WHAT IT RUNS ────────────────────────────────────────────────────────────
 //
 //   node tools/dev-ledger-resign.mjs --town <dev town clone> --key <dev key pem>
-//                                    [--not-key <prod key pem>] [--verify]
+//                                    --not-key <prod's key> [--verify]
 //
-//   --not-key  refuse when the key's public half is this key's (the 10-07 copy):
+//   --town     a dev clone only: every remote's push URL disabled, its real
+//              path under /srv/postmark-office-dev or the temp dir (§ WHICH CLONE)
+//
+//   --not-key  (required) refuse when the key's public half is this key's (the 10-07 copy):
 //              dev must never sign with prod's key, and a re-sign under it would
 //              change nothing and say nothing
 //   --verify   run the town's own verifier (tools/stamp-verify.mjs) on the result
@@ -39,7 +42,8 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createPublicKey, verify as edVerify } from "node:crypto";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { isAbsolute, join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { resignTown } from "./stamp-sandbox.mjs";
@@ -63,11 +67,45 @@ export function unsignedUnder(town, pubPem, engine) {
   return { bad, lines: entries.length };
 }
 
+// ── WHICH CLONE (the #453 review, F1) ────────────────────────────────────────
+//
+// Dev and prod share the box, and from the w42 ship this tool sits in prod's
+// tree too. Pointed at PROD's town clone by one mistyped --town, it would re-sign
+// the real ledger and swap the town's public key, and prod's next push would
+// carry that to GitHub. So the clone must be one that cannot push and that lives
+// where a dev clone lives:
+//   · every remote's push URL is the disabled value the dev clones carry (the
+//     freshen's header: "the push URL is DISABLED by design"); a clone with no
+//     remote at all has nowhere to push;
+//   · its real path is under the dev root or the temp dir (the tests' and the
+//     stand-in's clones); `allowedRoots` is the test seam.
+
+export const DEV_ROOT = "/srv/postmark-office-dev";
+export const DISABLED_PUSH_URL = "DISABLED-dev-channel-never-pushes";
+
+/** Why `town` is not a clone this tool may rewrite, or null. */
+export function cloneRefusal(town, { allowedRoots = [DEV_ROOT, tmpdir()] } = {}) {
+  let real;
+  try { real = realpathSync(town); } catch (e) { return `--town ${town} cannot be resolved (${e.code ?? e.message})`; }
+  const under = (root) => { let r; try { r = realpathSync(root); } catch { return false; } const rel = relative(r, real); return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel); };
+  if (!allowedRoots.some(under)) return `--town ${real} is not under ${allowedRoots.join(" or ")}: only a dev clone is re-signed, never prod's`;
+  const remotes = git(town, ["remote"]).split("\n").filter(Boolean);
+  for (const r of remotes) {
+    const url = spawnSync("git", ["-C", town, "remote", "get-url", "--push", r], { encoding: "utf8" });
+    const push = (url.stdout ?? "").trim();
+    if (url.status !== 0 || push !== DISABLED_PUSH_URL)
+      return `the clone's remote ${r} can push (${push || "its push URL cannot be read"}): only a clone whose push URL is ${DISABLED_PUSH_URL} is re-signed, so nothing it commits can reach GitHub`;
+  }
+  return null;
+}
+
 /**
  * Move `town` onto `keyPem`. Answers `{ status, ... }`: `already` (nothing to
  * do), `resigned` (committed; `sha`, `lines`, `carried`), or `refused` (`why`).
  */
-export async function resignDevTown({ town, keyPem, notKeyPem = null, verify = false }) {
+export async function resignDevTown({ town, keyPem, notKeyPem = null, verify = false, allowedRoots }) {
+  const wrongClone = cloneRefusal(town, allowedRoots ? { allowedRoots } : {});
+  if (wrongClone) return { status: "refused", why: wrongClone };
   if (!existsSync(join(town, LEDGER_REL))) return { status: "refused", why: `no ${LEDGER_REL} under ${town}: --town must be a town checkout` };
   const pub = publicOf(keyPem);
   if (notKeyPem && publicOf(notKeyPem) === pub)
@@ -101,14 +139,15 @@ export async function resignDevTown({ town, keyPem, notKeyPem = null, verify = f
   return { status: "resigned", sha: git(town, ["rev-parse", "HEAD"]), lines, carried };
 }
 
-const USAGE = "usage: node tools/dev-ledger-resign.mjs --town <dev town clone> --key <dev key pem> [--not-key <prod key pem>] [--verify]";
+const USAGE = "usage: node tools/dev-ledger-resign.mjs --town <dev town clone> --key <dev key pem> --not-key <prod's key, public or private> [--verify]";
 
 async function main(argv = process.argv.slice(2)) {
   const arg = (n) => { const i = argv.indexOf(n); return i === -1 ? null : argv[i + 1]; };
   const known = new Set(["--town", "--key", "--not-key", "--verify"]);
   for (const a of argv) if (a.startsWith("--") && !known.has(a)) { console.error(`unknown flag ${a}\n${USAGE}`); return 2; }
   const town = arg("--town"), keyPath = arg("--key"), notKey = arg("--not-key");
-  if (!town || !keyPath) { console.error(USAGE); return 2; }
+  // --not-key is mandatory (the #453 review, F1): the CLI never runs without the key it must refuse
+  if (!town || !keyPath || !notKey) { console.error(USAGE); return 2; }
   if (!existsSync(keyPath)) { console.error(`dev-ledger-resign: REFUSED, no key at ${keyPath}: generate dev's own key first (deploy/DEPLOY.md § The dev rehearsal)`); return 1; }
   const r = await resignDevTown({
     town, keyPem: readFileSync(keyPath, "utf8"),

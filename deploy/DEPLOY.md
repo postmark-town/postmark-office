@@ -196,6 +196,10 @@ sudo systemctl start postmark-dev-freshen.service
 journalctl -u postmark-dev-freshen.service -n 3 --no-pager   # "... the town ledger on the dev key"
 sudo -u meepo git -C /srv/postmark-office-dev/town-clone log -1 --format='%an: %s'   # dev freshen: dev: the stamp ledger re-signed ...
 ```
+The tool re-signs only a dev clone: every remote's push URL must be
+`DISABLED-dev-channel-never-pushes` and its real path under
+`/srv/postmark-office-dev` (it refuses prod's clone by both). Check the first before
+step 4: `sudo -u meepo git -C /srv/postmark-office-dev/town-clone remote get-url --push origin`.
 Every night after, the freshen stands the clones on `sandbox/seed` and re-signs
 with `tools/dev-ledger-resign.mjs`. The commit is the same each night (fixed
 author and date, deterministic signatures). It refuses a key whose public half

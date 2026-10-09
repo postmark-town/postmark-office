@@ -17,14 +17,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync, createPublicKey, verify as edVerify } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { resignDevTown } from "../tools/dev-ledger-resign.mjs";
-import { NO_TOWN, townClone } from "./fixture-paths.mjs";
+import { DEV_ROOT, DISABLED_PUSH_URL, resignDevTown } from "../tools/dev-ledger-resign.mjs";
+import { NO_TOWN, OFFICE_ROOT, townClone } from "./fixture-paths.mjs";
 
 const TOWN = townClone();
 const SKIP = !TOWN && NO_TOWN;
@@ -129,4 +129,46 @@ test("uncommitted changes under the ledger or tools/ are refused, never folded i
   assert.equal(r.status, "refused");
   assert.match(r.why, /uncommitted changes/);
   assert.equal(readFileSync(join(t.dir, "tools", "stamp-pubkey.pem"), "utf8"), prod.pub);
+});
+
+// ── WHICH CLONE (the #453 review, F1) ────────────────────────────────────────
+//
+// THE CAN-FAIL FLIP: make cloneRefusal answer null; the live-push-URL and the
+// outside-the-roots tests go red (the clone is re-signed).
+
+test("a clone whose origin can push is refused before anything is written (prod's clone pushes)", { skip: SKIP }, async () => {
+  const prod = keys(), dev = keys();
+  const t = seedTown(prod);
+  t.g("remote", "add", "origin", "https://github.com/postmark-town/postmark.git");
+  const head = t.g("rev-parse", "HEAD");
+  const r = await resignDevTown({ town: t.dir, keyPem: dev.key, notKeyPem: prod.key });
+  assert.equal(r.status, "refused");
+  assert.match(r.why, /remote origin can push \(https:\/\/github\.com\/postmark-town\/postmark\.git\)/);
+  assert.equal(t.g("rev-parse", "HEAD"), head);
+  assert.equal(t.g("status", "--porcelain"), "");
+  assert.equal(readFileSync(join(t.dir, "tools", "stamp-pubkey.pem"), "utf8"), prod.pub, "prod's public key still stands");
+});
+
+test("a clone whose every push URL is the disabled value is re-signed (the dev clones' shape)", { skip: SKIP }, async () => {
+  const prod = keys(), dev = keys();
+  const t = seedTown(prod);
+  t.g("remote", "add", "origin", "https://github.com/postmark-town/postmark.git");
+  t.g("remote", "set-url", "--push", "origin", DISABLED_PUSH_URL);
+  assert.equal((await resignDevTown({ town: t.dir, keyPem: dev.key, notKeyPem: prod.key })).status, "resigned");
+});
+
+test("a clone outside the dev root and the temp dir is refused (the roots are the test seam)", { skip: SKIP }, async () => {
+  const prod = keys(), dev = keys();
+  const t = seedTown(prod);
+  const head = t.g("rev-parse", "HEAD");
+  const r = await resignDevTown({ town: t.dir, keyPem: dev.key, notKeyPem: prod.key, allowedRoots: [DEV_ROOT] });
+  assert.equal(r.status, "refused");
+  assert.match(r.why, /is not under \/srv\/postmark-office-dev: only a dev clone is re-signed, never prod's/);
+  assert.equal(t.g("rev-parse", "HEAD"), head);
+});
+
+test("the CLI will not run without --not-key", () => {
+  const r = spawnSync(process.execPath, [join(OFFICE_ROOT, "tools", "dev-ledger-resign.mjs"), "--town", tmpdir(), "--key", join(tmpdir(), "no-such.pem")], { encoding: "utf8" });
+  assert.equal(r.status, 2, r.stdout + r.stderr);
+  assert.match(r.stderr, /usage: .*--not-key <prod's key, public or private>/);
 });
