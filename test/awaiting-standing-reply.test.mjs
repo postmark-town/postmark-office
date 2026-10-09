@@ -20,6 +20,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { lawWithStanding, mailAwaitingOf } from "../src/queries.mjs";
 import { STANDING } from "../src/town-mail.mjs";
+import { unansweredFrom } from "../src/mail-thread.mjs";
 import { NO_TOWN, townModuleUrl } from "./fixture-paths.mjs";
 import { fixtureDb } from "./fixture.mjs";
 import { indexStore, testIndex } from "./helpers/office-under-test.mjs";
@@ -154,4 +155,15 @@ test("the store roots a reply by walking its thread chain, and leaves a broken o
     assert.equal(fresh.conversations.find((c) => c.conversation === "wright-n1")?.attention_state, "reply_queued",
       "a new letter is its own conversation, as the law gives an outbox letter");
   } finally { await restore(); await ix.stop(); db.close(); }
+});
+
+// ── the threadless hint reads the same rule (mail-thread.mjs § unansweredFrom) ──
+test("the hint's unanswered letters: a standing reply answers its conversation, and a probe without one reads the law alone", { skip: SKIP }, () => {
+  const probe = (standing) => ({ hasResident: () => true, mailStateJson: () => JSON.stringify(law()),
+    ...(standing ? { mailStanding: () => standing } : {}) });
+  const open = (standing) => unansweredFrom(probe(standing), { handle: "wright", sender: "limen" }).map((r) => r.id);
+  assert.deepEqual(open(null), ["limen-a3"], "office.db's probe, or no standing letters: as before");
+  assert.deepEqual(open([]), ["limen-a3"]);
+  assert.deepEqual(open([standing("wright-r1", "limen-a3")]), [], "a reply written to limen's thread answers it");
+  assert.deepEqual(open([standing("wright-r1", "kio-b1")]), ["limen-a3"], "a reply in another conversation answers nothing here");
 });

@@ -484,14 +484,16 @@ export async function probeRows(q, { letters = true, logins = true } = {}) {
 // A question the snapshot was not loaded to answer is a programming error, named.
 const notLoaded = (what) => { throw new Error(`the store's probe was loaded without ${what}`); };
 
-/** The probe over a snapshot. `mail` holds the mail_state rows a caller read for this call (handle -> json|null). */
-export function probeOver(rows, { mail = null } = {}) {
+/** The probe over a snapshot. `mail` holds the mail_state rows a caller read for this call (handle -> json|null);
+ *  `standing` the sender's own standing letters with their roots (handle -> [{ letter_id, thread, root }]). */
+export function probeOver(rows, { mail = null, standing = null } = {}) {
   return Object.freeze({
     hasResident: (h) => rows.handles.has(h),
     hasLetter: (id) => (rows.letters ?? notLoaded("letter ids")).has(id),
     loginStamp: () => `store:${rows.asOf}`,
     loginRows: () => rows.logins ?? notLoaded("GitHub lines"),
     mailStateJson: (h) => (mail?.has(h) ? mail.get(h) : notLoaded(`${h}'s mail_state`)),
+    mailStanding: (h) => standing?.get(h) ?? [],
   });
 }
 
@@ -516,12 +518,17 @@ export const storeProbeAsOf = () => _probeRows?.asOf ?? null;
  * The held probe with one resident's mail_state row read now, for the reply
  * hint a send draws. Throws when the store cannot answer; the send has already
  * gone by then, so its caller says nothing rather than refuse a sent letter.
+ * `standing` is the sender's own standing letters (a key that holds the
+ * sender only), rooted here so the hint reads them as replies (POS-375).
  */
-export async function probeWithMailState(handle, { env = process.env } = {}) {
+export async function probeWithMailState(handle, { env = process.env, standing = null } = {}) {
   if (!_probeRows) throw new TownIndexUnreachable();
-  const r = await storeAnswer(async (c) => (await c.query("SELECT json FROM town_mail_state WHERE handle = $1", [handle])).rows[0]?.json ?? null, { env });
+  const r = await storeAnswer(async (c) => ({
+    json: (await c.query("SELECT json FROM town_mail_state WHERE handle = $1", [handle])).rows[0]?.json ?? null,
+    standing: await standingRoots(c, standing),
+  }), { env });
   if (r.refused) throw new TownIndexUnreachable();
-  return probeOver(_probeRows, { mail: new Map([[handle, r.out]]) });
+  return probeOver(_probeRows, { mail: new Map([[handle, r.out.json]]), standing: new Map([[handle, r.out.standing]]) });
 }
 
 /** Test seam: forget the roster memo (a suite that rewrites rows under one head). */
@@ -730,13 +737,19 @@ export async function mailAwaiting(q, handle, opts = {}) {
   // a bent law is no law, exactly as office.db's reader answers it
   let law = null;
   try { law = row ? JSON.parse(row.json) : null; } catch { law = null; }
-  const standing = [];
-  for (const s of law ? (opts.standing ?? []) : []) {
+  const standing = law ? await standingRoots(q, opts.standing) : [];
+  return mailAwaitingOf(law, await ledgerNewest(q), handle, { ...opts, standing });
+}
+
+/** The sender's standing letters (hotMailBlock's `standing`), each with the conversation root its thread chain ends at. */
+async function standingRoots(q, standing) {
+  const out = [];
+  for (const s of standing ?? []) {
     if (!s?.letter_id) continue;
     const thread = s.thread && s.thread !== "new" ? s.thread : null;
-    standing.push({ letter_id: s.letter_id, thread, root: thread ? await threadRoot(q, thread) : s.letter_id });
+    out.push({ letter_id: s.letter_id, thread, root: thread ? await threadRoot(q, thread) : s.letter_id });
   }
-  return mailAwaitingOf(law, await ledgerNewest(q), handle, { ...opts, standing });
+  return out;
 }
 
 // sqlite's LIKE with no ESCAPE clause: ASCII case folded, no escape character

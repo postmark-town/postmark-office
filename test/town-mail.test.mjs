@@ -947,3 +947,28 @@ test("A WRITTEN REPLY IS QUEUED: the sender's awaiting reads reply_queued with i
     });
   } finally { rmSync(clone, { recursive: true, force: true }); }
 });
+
+// ── …AND THE HINT KNOWS IT: a reply already written is an answer (POS-375) ──
+//
+// The other road to Mari's double letter. A threadless send draws the hint
+// "you have an unanswered letter from limen — set thread to …"; once a reply
+// to that letter stands in the log, a second threadless send must not ask for
+// the same answer again.
+test("A WRITTEN REPLY ANSWERS: a threadless send after a standing reply is not told the letter is unanswered", async () => {
+  const clone = mailClone();
+  try {
+    await office(clone, { TOWN_SINGLE_LOG: "1" }, async ({ mcp }) => {
+      const answering = "limen-2026-07-03-to-wright-the-return";
+      const first = await mcp({ ...ok, title: "a first thought" });
+      assert.match(first.hint ?? "", new RegExp(`set thread to ${answering}`),
+        "with nothing written back, the hint names the letter awaiting an answer");
+
+      const reply = await mcp({ ...ok, title: "the return answered", thread: answering });
+      assert.equal(reply.commit, null, "the reply stands in the log");
+
+      const second = await mcp({ ...ok, title: "a second thought" });
+      assert.equal(second.hint, undefined,
+        "the letter already has a reply written: the hint does not ask for another");
+    });
+  } finally { rmSync(clone, { recursive: true, force: true }); }
+});
