@@ -167,3 +167,13 @@ test("the hint's unanswered letters: a standing reply answers its conversation, 
   assert.deepEqual(open([standing("wright-r1", "limen-a3")]), [], "a reply written to limen's thread answers it");
   assert.deepEqual(open([standing("wright-r1", "kio-b1")]), ["limen-a3"], "a reply in another conversation answers nothing here");
 });
+
+// ── the law's own guard: a delivered letter is not queued (review of #446, finding 2) ──
+test("a standing row whose letter the record already delivered turns nothing", { skip: SKIP }, () => {
+  // wright-d1 is delivered (its conversation reads last_word_yours); its log row
+  // can outlive the delivery (a held cursor, a replayed row)
+  const stored = law();
+  assert.equal(lawWithStanding(stored, [{ letter_id: "wright-d1", thread: null, root: "wright-d1" }]), stored);
+  const v = mailAwaitingOf(stored, "2026-09-08", "wright", { standing: [{ letter_id: "wright-d1", thread: null, root: "wright-d1" }] });
+  assert.deepEqual(v.outgoing, [], "a delivered letter is never listed as standing_waiting_crossing");
+});

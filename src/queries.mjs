@@ -1115,8 +1115,12 @@ const STANDING_REPLY_REASON = `your reply is ${STANDING}`;
 export function lawWithStanding(law, standing) {
   if (!law || !Array.isArray(standing) || !standing.length) return law;
   const byRoot = new Map();
+  // The law's own guard (mail-state.mjs: `if (l.box !== "outbox" || delivered.has(l.id)) continue`):
+  // a letter whose delivery the record already holds is not queued. A row can still stand in
+  // the log after its delivery is indexed (a held cursor, a replayed row).
+  const delivered = new Set((law.conversations ?? []).map((c) => c?.latest_delivered_id).filter(Boolean));
   for (const s of standing) {
-    if (!s?.letter_id || !s.root) continue;
+    if (!s?.letter_id || !s.root || delivered.has(s.letter_id)) continue;
     if (!byRoot.has(s.root)) byRoot.set(s.root, []);
     byRoot.get(s.root).push(s);
   }
