@@ -3,11 +3,12 @@
 //   node --test test/last-active.test.mjs
 //
 // Darko, 2026-10-09: "to be able to see when that resident was last active …
-// a timestamp or a date or a crossing". The store's `acts` and `town_letters`
-// are seeded so each resident answers a different way: wright's newest is a
-// say (an act, at the clock's crossing for its time, whatever it stored), limen's is a letter they sent (at
-// the crossing that sailed it), postmaster's only a letter, and quiet has
-// nothing of their own, only a letter received. The roster, the card and
+// a timestamp or a date or a crossing". The store's `acts`, `town_letters` and
+// town journal are seeded so each resident answers a different way: wright's
+// newest is a say (an act, at the clock's crossing for its time, whatever it
+// stored), limen's is a letter they sent (at the crossing that sailed it),
+// postmaster's only a letter, decorator's only a window re-hung (a page edit),
+// and quiet has nothing of their own: a letter received and a join row. The roster, the card and
 // search are asked over REST on two offices (switch 2 off and on) and over MCP
 // in this process, where the store's statements are counted: one per page.
 // Then an office whose store is gone says why both fields are null.
@@ -44,7 +45,8 @@ const EXPECT = {
   wright: { last_active: "2026-07-03T10:00:00.000Z", last_active_crossing: 42 },            // a say: the clock at its time, never its stored 39
   limen: { last_active: LIMEN_LETTER, last_active_crossing: currentCrossing(Date.parse(LIMEN_LETTER)) }, // a letter beats an older walk
   postmaster: { last_active: "2026-07-05T20:00:00.000Z", last_active_crossing: 47 },         // only a letter
-  quiet: { last_active: null, last_active_crossing: null },                                  // only received
+  quiet: { last_active: null, last_active_crossing: null },                                  // only received, and a join row
+  decorator: { last_active: "2026-07-08T15:00:00.000Z", last_active_crossing: 53 },          // only a window re-hung (a page edit, O3)
 };
 const pick = (r) => ({ last_active: r.last_active, last_active_crossing: r.last_active_crossing });
 
@@ -54,6 +56,8 @@ before(async () => {
   db = fixtureDb(dbPath);
   db.prepare("INSERT INTO residents VALUES (?, ?)").run("quiet", JSON.stringify({ handle: "quiet", is_office: false,
     last_active: "2026-07-06T09:00:00.000Z", address: { data: { joined: "2026-07-01", pronouns: "they/them" }, body: "# Quiet" } }));
+  db.prepare("INSERT INTO residents VALUES (?, ?)").run("decorator", JSON.stringify({ handle: "decorator", is_office: false,
+    address: { data: { joined: "2026-07-02" }, body: "# Decorator" } }));
   db.prepare("INSERT INTO letters VALUES (?,?,?,?,?,?,?,?,?,?)").run("wright-2026-07-06-to-quiet-hello", "wright", "quiet",
     "2026-07-06", null, "inbox", "quiet", "WHITE_PAGES/quiet/inbox/x.md",
     JSON.stringify({ id: "wright-2026-07-06-to-quiet-hello", from: "wright", to: "quiet", date: "2026-07-06", body: "# Hello" }), null);
@@ -69,6 +73,11 @@ before(async () => {
   await act("2026-07-03T10:00:00Z", 39, "wright", "say"); // a stored crossing the clock disagrees with: the clock wins
   await act("2026-07-04T13:00:00Z", 44.5, "limen", "walk", "move");
   await act("2026-09-01T00:00:00Z", 162, "someone-else", "say");
+  // the town journal: a page edit counts (decorator's window), a join does not (quiet's)
+  const journal = (cls, act, handle, at) => su.query(
+    "INSERT INTO office_town_journal (class, act, household, handle, written_at) VALUES ($1, $2, $3, $3, $4)", [cls, act, handle, at]);
+  await journal("update", "window", "decorator", "2026-07-08T15:00:00.000Z");
+  await journal("join", "begin", "quiet", "2026-07-09T10:00:00.000Z");
 
   const { default: pg } = await import("pg");
   const real = new pg.Pool({ connectionString: s.url("office_api"), max: 3 });

@@ -6,14 +6,18 @@
 // been gone for months?"
 //
 // ONE MEANING: the resident's newest act of their own. Wright ruled the
-// sources (POS-481, 10-09, option A): the store's `acts` (every world act,
-// every post and its life, every ballot vote) UNION ALL the store's
-// `town_letters` (a letter they sent, at the crossing that sailed it). Reads
-// never count: a read is not recorded, and counting one would publish who is
-// reading. Mail delivered TO them is not their act. Left out, by ruling and
-// named: stakes on pots and marks (`stamp_lines` keeps the staker inside the
-// signed line, with no actor column) and the paper updates (address, home,
-// profile, window: `office_town_journal` class `update`).
+// sources (POS-481, 10-09): the store's `acts` (every world act, every post
+// and its life, every ballot vote) UNION ALL the store's `town_letters` (a
+// letter they sent, at the crossing that sailed it) UNION ALL the page edits,
+// `office_town_journal` class `update` (address, home, profile, window:
+// ruled in after the review, O3, so a resident who re-hangs a window or
+// edits HOME reads active). Reads never count: a read is not recorded, and
+// counting one would publish who is reading. Mail delivered TO them is not
+// their act. Left out, by ruling and named: stakes on pots and marks
+// (`stamp_lines` keeps the staker inside the signed line, with no actor
+// column). The page edits are the store's since the paperwork moved there
+// (OFFICE_PAPERWORK_STORE, prod since 10-04); an office still on oauth.db
+// keeps them in that file, and this read does not see them.
 //
 // Until this file, `last_active` on the roster meant "the newest commit
 // touching their own pages in the town repo" (town-index.mjs § readHistory),
@@ -41,8 +45,11 @@ import { currentCrossing } from "./crossings.mjs";
  * filter on `town_letters_from (from_h, date)`. `delivered_at` is text (UTC
  * ISO, town-index.mjs § readHistory), so its max is a string compare and the
  * instant is parsed here, never cast in SQL where one odd row would fail the
- * whole page. The act's instant is printed in the same UTC ISO, so the two
- * sources compare as like for like.
+ * whole page. The act's instant is printed in the same UTC ISO, so the
+ * sources compare as like for like. A page edit's `written_at` is the door's
+ * own `toISOString()` (town-journal.mjs § appendTownJournal), and its
+ * resident is `handle` (the page edited); the filter rides
+ * `office_town_journal_handle (handle, seq)`.
  */
 export const LAST_ACTIVE_SQL = `
 SELECT handle, at, src FROM (
@@ -57,11 +64,16 @@ UNION ALL
 SELECT from_h AS handle, max(delivered_at) AS at, 'letter' AS src
   FROM town_letters
  WHERE from_h = ANY($1::text[]) AND delivered_at IS NOT NULL
- GROUP BY from_h`;
+ GROUP BY from_h
+UNION ALL
+SELECT handle, max(written_at) AS at, 'update' AS src
+  FROM office_town_journal
+ WHERE class = 'update' AND handle = ANY($1::text[])
+ GROUP BY handle`;
 
 /** What a reader is told the two fields mean (the roster's and the card's own words). */
 export const LAST_ACTIVE_MEANS =
-  "the resident's newest act of their own in the store: a say, a walk, a mark left, amended or withdrawn, a post and its life, a ballot vote (acts), or a letter they sent (town_letters, at the crossing that sailed it). Reads never count, mail they received never counts; stakes on pots and marks and card edits are not counted. null: no act on record. last_active_crossing is the town clock's crossing it fell in";
+  "the resident's newest act of their own in the store: a say, a walk, a mark left, amended or withdrawn, a post and its life, a ballot vote (acts), a letter they sent (town_letters, at the crossing that sailed it), or an edit to their own pages: address, home, profile or window (the town journal's updates). Reads never count, mail they received never counts; stakes on pots and marks are not counted. null: no act on record. last_active_crossing is the town clock's crossing it fell in";
 
 const isoOf = (v) => {
   const t = new Date(v).getTime();
