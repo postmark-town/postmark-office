@@ -1354,8 +1354,9 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, dbPath, pen, 
         // A reply its sender has written and the ferry has not carried reads
         // reply_queued here, on the sender's own key only: the same block the
         // doorstep's your_pending_letters lists (POS-375). A log that will not
-        // read leaves the view as the record has it.
-        if (key?.handles?.has?.(handle) === true) {
+        // read leaves the view as the record has it. Read on the store's road
+        // only: office.db's reader takes no standing letters (POS-268).
+        if (switched && key?.handles?.has?.(handle) === true) {
           try {
             const { hotMailBlock } = await import("./town-mail.mjs");
             awaitingOpts.standing = (await hotMailBlock(odb, key, { handle }))?.standing ?? null;
