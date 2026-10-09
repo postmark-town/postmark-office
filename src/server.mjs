@@ -2723,8 +2723,9 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
 // Two credential shapes, one resolver: static household keys (the tokens
 // table's static rows, POS-352), then OAuth tokens (GitHub sign-in), household
 // keys, claims and berths. Reads are public, so a missing OR invalid
-// credential — or a lookup that failed — just means "anonymous": a stale token
-// never locks someone out of a public read; only writes require a valid key.
+// credential (no bearer, an unknown token, an expired one) just means
+// "anonymous": a stale token never locks someone out of a public read; only
+// writes require a valid key.
 // Every shape, the static one included since POS-352, is a read of the
 // paperwork; the static row is asked first, in the order the env map was.
 //
@@ -2733,6 +2734,22 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
 // it is "the office cannot say who you are", and serving it as nobody would
 // hand a signed-in resident a visitor's answer with no word why. It is refused
 // with a 503 that names it.
+//
+// NOR IS AN OUTAGE (POS-480, ruled by Wright 2026-10-09). A lookup that THREW
+// could not read the record at all; on 10-09, with the store in crash recovery,
+// every connector's bearer was served as anonymous, /mcp answered 401 with the
+// sign-in challenge, and residents' connectors came back "invalidated". An
+// outage must never tell a signed-in client it is signed out: a lookup that
+// throws answers 503 with Retry-After, named so an agent can tell it from a
+// sign-in problem, and never the WWW-Authenticate challenge.
+const STORE_UNREACHABLE = "the town's store is unreachable; your sign-in is intact, retry";
+const BEARER_RETRY_AFTER_S = 30;
+const LOOKUP_THREW = Symbol("the bearer's lookup threw");
+const storeUnreachable = (res) => {
+  res.setHeader("retry-after", String(BEARER_RETRY_AFTER_S));
+  return bounce(res, 503, STORE_UNREACHABLE,
+    "the office could not read its record of who holds this key: an outage, not your key. Send the same request again after Retry-After seconds; do not sign in again.");
+};
 const resolveBearer = async (token) =>
   (await staticLookup(odb, token))
   ?? (await oauthLookup(odb, db, TOWN_CLONE, token)) ?? (await keyLookup(odb, db, TOWN_CLONE, token))
@@ -2743,8 +2760,14 @@ const handle = (req, res) => {
   const auth = /^Bearer\s+(.+)$/.exec(req.headers.authorization ?? "");
   const tripped = (e) => { if (!res.headersSent) bounce(res, 500, "the office tripped", String(e?.message ?? e).slice(0, 200)); };
   if (!auth) return route(req, res, null, t0).catch(tripped);
-  resolveBearer(auth[1]).then((key) => key, (e) => (e instanceof SignInUnreadable ? e : null))
-    .then((key) => (key instanceof SignInUnreadable ? bounce(res, 503, key.defect, key.hint) : route(req, res, key, t0)))
+  resolveBearer(auth[1]).then((key) => key, (e) => {
+    if (e instanceof SignInUnreadable) return e;
+    console.error(`[auth] a bearer's lookup could not read the record (answered 503; the sign-in is intact): ${String(e?.message ?? e).slice(0, 200)}`);
+    return LOOKUP_THREW;
+  })
+    .then((key) => (key instanceof SignInUnreadable ? bounce(res, 503, key.defect, key.hint)
+      : key === LOOKUP_THREW ? storeUnreachable(res)
+      : route(req, res, key, t0)))
     .catch(tripped);
 };
 
