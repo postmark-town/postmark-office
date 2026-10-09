@@ -164,7 +164,7 @@ test("the rehearsal's tick runs every job the keep tick runs under its lock, and
   assert.deepEqual(diff(mine, box), [], "the rehearsal runs tick jobs the keep tick does not");
 });
 
-test("both sides of the stamp switch are rehearsable: each STAMP_LINES job has its other side or runs only on one", () => {
+test("both arms of the stamp switch are listed, so the census holds the whole unit (only the store arm runs: the preflight requires STAMP_LINES=store)", () => {
   for (const name of ["mint", "quests", "tick-mint"]) {
     const sides = CROSSING.filter((j) => j.name === name).map((j) => j.when).sort();
     assert.deepEqual(sides, ["git", "store"], `${name} must have a store side and a git side`);

@@ -368,6 +368,11 @@ export function treeTables(officeRoot = OFFICE) {
 // STAMP_LINES switch); `phase` ("ferry" or "keep"); `run(ctx)`; `commit`, the
 // message the box commits what the job wrote with; `nonFatal`, where the box
 // carries on past a refusal (`|| echo`).
+//
+// ONLY THE STORE SIDE RUNS (#453 review F10). The preflight requires
+// STAMP_LINES=store, so on a green preflight every `when: "git"` job is skipped.
+// They are listed so the census can hold this list to the whole unit, both arms
+// of its switch, not because the rehearsal exercises the town's own mint.
 
 const officeJob = (ctx, rel, args, opts) => ctx.locked([process.execPath, join(ctx.t.officeRoot, rel), ...args], opts);
 const townJob = (ctx, rel, args) => ctx.locked([process.execPath, join(ctx.t.townClone, rel), ...args], { cwd: ctx.t.townClone });
