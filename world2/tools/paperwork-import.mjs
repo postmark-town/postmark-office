@@ -4,6 +4,8 @@
 //
 //   node world2/tools/paperwork-import.mjs --pg-url <url> --oauth-db <file> --roles-db <file>
 //        [--check]     compare only; write nothing
+//        [--repair]    make the FILES equal the store, row by flagged row, then
+//                      check again (the clean week's repair, below)
 //        [--replace]   empty the eleven tables first, in the same transaction
 //        [--json]      the receipt as JSON on stdout
 //
@@ -13,6 +15,20 @@
 //   this is a migration step, and office_api cannot TRUNCATE.
 //
 //   EXIT: 0 every row equal · 1 DRIFT (nothing was committed) · 2 cannot run.
+//
+// ── --repair: THE STORE IS THE RECORD (POS-271, Darko 2026-10-09) ───────────
+//
+// While the office is switched, the mirror writes every store write to the
+// files after the store. When a mirror write fails (10-05 "database is
+// locked"; 10-09 "database or disk is full"), the file is behind the store by
+// that row, and --check names it. Darko ruled: repair, and keep the date. So
+// --repair reads --check's findings and rewrites exactly those rows in the
+// files from the store: a row the store lacks is deleted from the file, a row
+// the file lacks or holds differently is written as the store holds it. Rows
+// --check did not flag are never touched, and the store is only read. Then it
+// checks again; the exit is that second check's. Run it until it reads equal
+// (a mirror write racing the repair is flagged on the next run), and only then
+// delete the files (deploy/DEPLOY.md § The paperwork files leave the box).
 //
 // ── WHY A SIGNED-IN AGENT STAYS SIGNED IN ───────────────────────────────────
 //
@@ -144,6 +160,51 @@ export async function importPaperwork(client, files, { check = false, replace = 
   }
 }
 
+/**
+ * --repair: make the files equal the store for every row `--check` flags.
+ * Reads the store (never writes it); writes only the flagged rows of each file,
+ * one sqlite transaction per table. Answers `{ before, repaired, after, equal }`,
+ * where `before` and `after` are the two checks.
+ */
+export async function repairFiles(client, files) {
+  const before = await importPaperwork(client, files, { check: true });
+  const repaired = [];
+  if (!before.equal) {
+    const sdbs = { oauth: new DatabaseSync(files.oauth), roles: new DatabaseSync(files.roles) };
+    try {
+      for (const t of TABLES) {
+        if (!before.tables.find((r) => r.table === t.to)?.differ.length) continue;
+        const sdb = sdbs[t.db];
+        const columns = columnsOf(sdb, t.from);
+        if (!columns.length) throw Object.assign(new Error(`cannot repair ${t.to}: ${files[t.db]} has no table ${t.from}`), { exit: 2 });
+        const file = new Map(sdb.prepare(`SELECT * FROM ${t.from}`).all().map((r) => [keyOf(r, t.key), r]));
+        const store = new Map((await client.query(`SELECT * FROM ${t.to}`)).rows.map((r) => [keyOf(r, t.key), r]));
+        const flagged = [...new Set([...file.keys(), ...store.keys()])].filter((k) => {
+          const f = file.get(k), s = store.get(k);
+          return !f || !s || columns.some((c) => c in s && norm(f[c]) !== norm(s[c]));
+        });
+        const where = t.key.map((k) => `${k} = ?`).join(" AND ");
+        const del = sdb.prepare(`DELETE FROM ${t.from} WHERE ${where}`);
+        const ins = sdb.prepare(`INSERT INTO ${t.from} (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`);
+        let deleted = 0, written = 0;
+        sdb.exec("BEGIN");
+        try {
+          for (const k of flagged) {
+            const keyVals = JSON.parse(k);
+            if (file.has(k)) { del.run(...keyVals); deleted += 1; }
+            const s = store.get(k);
+            if (s) { ins.run(...columns.map((c) => s[c] ?? null)); written += 1; }
+          }
+          sdb.exec("COMMIT");
+        } catch (e) { try { sdb.exec("ROLLBACK"); } catch { /* already gone */ } throw e; }
+        repaired.push({ table: t.to, rows: flagged.length, deleted, written });
+      }
+    } finally { for (const s of Object.values(sdbs)) try { s.close(); } catch { /* closed */ } }
+  }
+  const after = await importPaperwork(client, files, { check: true });
+  return { before, repaired, after, equal: after.equal };
+}
+
 if (process.argv[1]?.endsWith("paperwork-import.mjs")) {
   const argv = process.argv.slice(2);
   const opt = (name) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : null; };
@@ -158,6 +219,18 @@ if (process.argv[1]?.endsWith("paperwork-import.mjs")) {
   let out;
   try {
     await client.connect();
+    if (flag("--repair")) {
+      const r = await repairFiles(client, { oauth, roles });
+      await client.end();
+      if (flag("--json")) console.log(JSON.stringify(r, null, 2));
+      else {
+        for (const t of r.before.tables) for (const d of t.differ.slice(0, 20)) console.log(`  before: ${d}`);
+        for (const t of r.repaired) console.log(`repaired  ${t.table.padEnd(20)} ${t.rows} rows (${t.deleted} removed from the file, ${t.written} written from the store)`);
+        for (const t of r.after.tables) for (const d of t.differ.slice(0, 20)) console.log(`  after: ${d}`);
+        console.log(r.equal ? "repaired; the files now equal the store" : "STILL DRIFT after the repair: run it again, and read what it names");
+      }
+      process.exit(r.equal ? 0 : 1);
+    }
     out = await importPaperwork(client, { oauth, roles }, { check: flag("--check"), replace: flag("--replace") });
   } catch (e) {
     await client.end().catch(() => {});
