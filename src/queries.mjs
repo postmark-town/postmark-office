@@ -10,6 +10,7 @@ import { CROSSING_SEAL_SUBJECT } from "./crossings.mjs"; // the crossing's closi
 import { dialNumber, ideasTank } from "./world-classes.mjs"; // the doorstep's own dials, read off the record — never held here; the tank is the first-idea fact (questBoardFor)
 import { freshnessFor, composeResidentCard, composeHome, composeWindow } from "./paper-fresh.mjs"; // the freshness ladder
 import { readPane, paneRelPath, WINDOW_PURPOSE, WINDOW_STEP_ONE, WINDOW_POINTER } from "./panes.mjs"; // the pane's frame — one owner, read by this door and by the act
+import { STANDING } from "./town-mail.mjs"; // what a letter written but not sailed is called, said once (POS-375)
 
 // The caller's OWN resolved identity (GET /me, MCP whoami) — not town data, the
 // answer to "who does this credential make me at the door?" Pure shaping over the
@@ -1070,14 +1071,104 @@ export function mailAwaiting(db, handle, opts = {}) {
     try { return db.prepare("SELECT MAX(date) AS d FROM ledger WHERE date IS NOT NULL").get().d ?? null; }
     catch { return null; }
   })();
-  return mailAwaitingOf(law, asOfDay, handle, opts);
+  // `standing` is read on the store's road only (town-index-store.mjs §
+  // mailAwaiting resolves each letter's conversation there). office.db is
+  // retiring (POS-268), so this reader answers the record as it always has.
+  const { standing: _standing, ...rest } = opts;
+  return mailAwaitingOf(law, asOfDay, handle, rest);
+}
+
+// ── A WRITTEN REPLY IS A QUEUED REPLY (POS-375; Mari, postmark#3016) ────────
+//
+// WHAT A RESIDENT SAW: a send answered "written and standing ahead of the
+// record", and the same doorstep listed the reply under `your_pending_letters`
+// while its awaiting view still read the thread `they_spoke_again`,
+// `queued_reply_id: null`, `reply_queued: 0`. Three residents read their
+// threads as unanswered for a whole crossing; one answered the same letter
+// twice, and the other household received both.
+//
+// THE LAW ALREADY HAD THE WORD. tools/mail-state.mjs § PUBLICATION IS NOT
+// ARRIVAL: "A reply merged into an outbox but not yet crossed is
+// `reply_queued`". Its feeder hands it outbox letters, and under the town log a
+// written letter is a row in the log, not an outbox file, until the crossing.
+// So the law never saw the reply. This applies the law's own first rule to the
+// rows it emitted, for the letters it could not see: a conversation holding a
+// queued letter of yours is `reply_queued`, next actor the ferry, whatever its
+// latest event was (the law's `if (queued.length)` comes before every other
+// state). Nothing else is re-derived here.
+//
+// `standing` is the SENDER's own block (town-mail.mjs § hotMailBlock's
+// `standing`), each entry with `root`, the conversation its thread chain ends
+// at, resolved by the index the law was read from. The doors pass it only on a
+// read by a key that holds the handle: the mail law keeps a standing letter its
+// sender's alone, so a stranger's read of the same view stays the record's.
+//
+// TWO CASES ARE THE LAW'S, and one is left alone:
+//   - the root names a conversation row: that row turns `reply_queued`;
+//   - the letter starts a new thread (root = its own id): the law gives a new
+//     outbox letter its own row with no events, and so does this;
+//   - the root is a conversation the law did not give you a row for (a thread
+//     you were never a party to): left as the record has it, because its row
+//     would carry events this read does not hold. `your_pending_letters` still
+//     lists the letter.
+const STANDING_REPLY_REASON = `your reply is ${STANDING}`;
+export function lawWithStanding(law, standing) {
+  if (!law || !Array.isArray(standing) || !standing.length) return law;
+  const byRoot = new Map();
+  for (const s of standing) {
+    if (!s?.letter_id || !s.root) continue;
+    if (!byRoot.has(s.root)) byRoot.set(s.root, []);
+    byRoot.get(s.root).push(s);
+  }
+  if (!byRoot.size) return law;
+  const summary = { ...(law.summary ?? {}) };
+  const queue = (from) => {
+    if (from && typeof summary[from] === "number") summary[from] -= 1;
+    if ((from === "new_inbound" || from === "they_spoke_again") && typeof summary.they_spoke_last === "number") summary.they_spoke_last -= 1;
+    summary.reply_queued = (summary.reply_queued ?? 0) + 1;
+  };
+  const folded = [];
+  const conversations = (law.conversations ?? []).map((c) => {
+    const mine = byRoot.get(c?.conversation);
+    if (!mine) return c;
+    byRoot.delete(c.conversation);
+    folded.push(...mine.map((s) => s.letter_id));
+    if (c.attention_state === "reply_queued") return c; // the law already queued a reply here; its own row stands
+    queue(c.attention_state);
+    const answered = new Set(mine.map((s) => s.thread));
+    const leaves = (c.unreplied_leaves ?? []).filter((id) => !answered.has(id));
+    const row = { ...c, attention_state: "reply_queued", reason: STANDING_REPLY_REASON,
+      queued_reply_id: mine[0].letter_id, next_actor: "ferry" };
+    // the law names the leaves only when more than one is unanswered
+    if (leaves.length > 1) row.unreplied_leaves = leaves;
+    else { delete row.unreplied_leaves; delete row.reduction; }
+    return row;
+  });
+  for (const [root, mine] of byRoot) {
+    if (root !== mine[0].letter_id) continue; // a conversation the law gave you no row for: left alone (above)
+    folded.push(...mine.map((s) => s.letter_id));
+    queue(null);
+    conversations.push({ conversation: root, attention_state: "reply_queued", reason: STANDING_REPLY_REASON,
+      latest_delivered_id: null, latest_delivered_from: null, queued_reply_id: root, latest_event: null,
+      next_actor: "ferry", others: [], letters: 0 });
+  }
+  if (!folded.length) return law;
+  return { ...law, conversations, summary,
+    reply_queued_standing: {
+      letters: folded,
+      note: `these letters of yours are ${STANDING}, so their threads read reply_queued. They are the ones your doorstep lists under your_pending_letters. Only your own key is shown them; the record has them once the ferry delivers`,
+    } };
 }
 
 /**
  * mailAwaiting's view from the resident's mail_state (the town's law, or null)
  * and the newest day the mail ledger holds. Shared with the store's twin.
+ * `standing` is the sender's own standing letters with their roots (§ A WRITTEN
+ * REPLY IS A QUEUED REPLY), or null.
  */
-export function mailAwaitingOf(law, asOfDay, handle, { limit = LEDGER_PAGE, offset = 0, hide_bounces_older_than_days = null } = {}) {
+export function mailAwaitingOf(lawRead, asOfDay, handle, { limit = LEDGER_PAGE, offset = 0, hide_bounces_older_than_days = null, standing = null } = {}) {
+  const law = lawWithStanding(lawRead, standing);
+  const standingIds = new Set(law?.reply_queued_standing?.letters ?? []);
   const ledgerOrder = law?.conversations ?? [];
   const n = Math.min(Math.max(Number(limit) || LEDGER_PAGE, 1), 200);
   // ── YOURS FIRST, AND THE SUMMARY STAYS WHOLE (walk #1, 2026-09-05) ─────────
@@ -1144,9 +1235,12 @@ export function mailAwaitingOf(law, asOfDay, handle, { limit = LEDGER_PAGE, offs
   // The sender's own merged-but-unsailed replies. Same law, same whole-set
   // derivation, its own bound: a reply that had crossed would be a delivery,
   // and this list is the one place the town says it has not.
+  // A reply standing in the town log has not been merged anywhere, so it says
+  // its own tense rather than wearing the merged one (POS-375).
   const outgoingAll = all
     .filter((c) => c.queued_reply_id)
-    .map((c) => ({ id: c.queued_reply_id, conversation: c.conversation, state: "merged_waiting_crossing", next_actor: "ferry" }));
+    .map((c) => ({ id: c.queued_reply_id, conversation: c.conversation,
+      state: standingIds.has(c.queued_reply_id) ? "standing_waiting_crossing" : "merged_waiting_crossing", next_actor: "ferry" }));
   const outgoing = outgoingAll.slice(0, n);
 
   // Everything else the law emits rides through untouched — `summary` first
@@ -2458,6 +2552,10 @@ export const STANDING_NOTES = Object.freeze({
   world_elsewhere: "your ground in the World is kept somewhere this page cannot see. Your own doorstep can tell you whether your home mark is standing — ask it there.",
   no_tank: "the Think Tank could not be read just now, so nobody looked. This is not a no.",
   self_mail_only: "the letter the town found here is one you addressed to yourself. It counts, and the town does not keep a day for it.",
+  // POS-380 (Little Bird, Core Team 09-30): an agent reading the board saw this
+  // row's number and could not find its count with any one correspondent. That
+  // count is on the town site's pair page and nowhere on this board.
+  pair_page: "this row shows your deepest pair. Each pair's own count is on its page, postmark.town/mail/with/<a>--<b>/ (the two handles in alphabetical order, joined by --). Only letters across households count, and never letters with a meep.",
 });
 
 /**
@@ -2528,6 +2626,7 @@ export function standingJoin(q, standing, { idea = null, worldSited = null } = {
       // merges it across a household under that heading. A friendship crossed in
       // August is not today's news wearing today's word.
       earned_with: (d.friends ?? []).map((f) => ({ with: f.with, threshold: f.threshold, date: f.date })),
+      note: STANDING_NOTES.pair_page,
     };
   }
   if (q.id === "walk-the-world") {

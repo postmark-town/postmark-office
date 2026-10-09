@@ -357,7 +357,7 @@ export function storeIndexPooled(clone, { env = process.env } = {}) {
     asOf: via((c) => townIndexAsOf(c)),
     copy: via((c) => indexCopy(c)),
     doorstep: via((c, handle, asOf, opts) => doorstep(c, handle, asOf, opts)),
-    residentSegments: via((c, handle, fresh) => residentSegments(c, handle, fresh)),
+    residentSegments: via((c, handle, fresh, standing) => residentSegments(c, handle, fresh, standing)),
     hasResident: via((c, handle) => hasResident(c, handle)),
     lastActive: via((c, handle) => lastActive(c, handle)),
     mailAwaiting: via((c, handle, opts) => mailAwaiting(c, handle, opts)),
@@ -585,12 +585,12 @@ export async function psaFold(q, opts = {}) {
 }
 
 /** house-bundle § residentSegments, from the store: one resident's own segments, at the house read's bounds. */
-export async function residentSegments(q, handle, fresh) {
+export async function residentSegments(q, handle, fresh, standing = null) {
   const { residentSegmentsOf, DOORSTEP_INBOX: HOUSE_INBOX } = await import("./house-bundle.mjs");
   const one = (sql, params) => count(q, sql, params);
   return residentSegmentsOf({
     mail: await mailList(q, handle, "inbox", { limit: HOUSE_INBOX }),
-    awaiting: await mailAwaiting(q, handle, { offset: 0 }),
+    awaiting: await mailAwaiting(q, handle, { offset: 0, standing }),
     stamps: await stampsDetail(q, handle),
     window: await windowRead(q, handle, fresh),
     pendingOutbox: await outboxSettled(q, handle),
@@ -625,14 +625,14 @@ export async function deliveredTo(q, handle) {
  * whatever the caller passes: the segments came from this index.
  */
 export async function doorstep(q, handle, _asOf, opts = {}) {
-  const { nowMs = Date.now(), conversationsOffset = 0, fresh = null, slim = false } = opts;
+  const { nowMs = Date.now(), conversationsOffset = 0, fresh = null, slim = false, standing = null } = opts;
   if (!(await hasResident(q, handle))) return null;
   const asOf = await townIndexAsOf(q);
   const offset = Math.max(Number(conversationsOffset) || 0, 0);
   const one = (sql, params = []) => count(q, sql, params);
   const parts = {
     arrivals: (await roster(q)).map((e) => ({ handle: e.handle, joined: e.joined, is_office: e.is_office })),
-    awaiting: await mailAwaiting(q, handle, { offset }),
+    awaiting: await mailAwaiting(q, handle, { offset, standing }),
     mail: await mailList(q, handle, "inbox", { limit: slim ? DOORSTEP_SIZES.inboxSlim : DOORSTEP_SIZES.inbox }),
     stamps: await stampsDetail(q, handle),
     bulletin: await bulletinTeaser(q, { limit: DOORSTEP_SIZES.bulletin }),
@@ -697,13 +697,46 @@ async function ledgerNewest(q) {
   return (await q.query(`SELECT MAX(date COLLATE "C") AS d FROM town_ledger WHERE date IS NOT NULL`)).rows[0]?.d ?? null;
 }
 
-/** queries.mailAwaiting, from the store. */
+// How far up a thread chain the root walk goes before it calls the chain bent.
+const THREAD_WALK_MAX = 500;
+
+/**
+ * The conversation a letter's thread chain ends at, as the town's law roots it
+ * (tools/mail-state.mjs § rootOf): follow `thread` while it names a letter; the
+ * last letter is the root, or, when the last `thread` names no letter, that
+ * name is (the law's broken edge). null when the chain does not end inside the
+ * walk (a cycle), which the caller leaves alone rather than guessing a root.
+ */
+async function threadRoot(q, id) {
+  const last = (await q.query(`WITH RECURSIVE up(id, thread, n) AS (
+      SELECT id, thread, 0 FROM town_letters WHERE id = $1
+      UNION ALL
+      SELECT l.id, l.thread, up.n + 1 FROM town_letters l JOIN up ON l.id = up.thread WHERE up.n < $2)
+    SELECT id, thread, n FROM up ORDER BY n DESC LIMIT 1`, [id, THREAD_WALK_MAX])).rows[0];
+  if (!last) return id;
+  if (Number(last.n) >= THREAD_WALK_MAX) return null;
+  return last.thread && last.thread !== "new" ? last.thread : last.id;
+}
+
+/**
+ * queries.mailAwaiting, from the store. `opts.standing` is the sender's own
+ * standing letters (town-mail.mjs § hotMailBlock's `standing`), passed only on
+ * a read by a key that holds `handle`: each is given its conversation root here
+ * and the view reads them as the law reads a queued reply (queries.mjs § A
+ * WRITTEN REPLY IS A QUEUED REPLY, POS-375).
+ */
 export async function mailAwaiting(q, handle, opts = {}) {
   const row = (await q.query("SELECT json FROM town_mail_state WHERE handle = $1", [handle])).rows[0];
   // a bent law is no law, exactly as office.db's reader answers it
   let law = null;
   try { law = row ? JSON.parse(row.json) : null; } catch { law = null; }
-  return mailAwaitingOf(law, await ledgerNewest(q), handle, opts);
+  const standing = [];
+  for (const s of law ? (opts.standing ?? []) : []) {
+    if (!s?.letter_id) continue;
+    const thread = s.thread && s.thread !== "new" ? s.thread : null;
+    standing.push({ letter_id: s.letter_id, thread, root: thread ? await threadRoot(q, thread) : s.letter_id });
+  }
+  return mailAwaitingOf(law, await ledgerNewest(q), handle, { ...opts, standing });
 }
 
 // sqlite's LIKE with no ESCAPE clause: ASCII case folded, no escape character

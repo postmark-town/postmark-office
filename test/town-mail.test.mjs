@@ -894,3 +894,56 @@ test("THE TWO SKINS PROMISE DIFFERENT THINGS, and both are pinned against one of
     });
   } finally { rmSync(clone, { recursive: true, force: true }); }
 });
+
+// ── A WRITTEN REPLY IS A QUEUED REPLY, ON THE SENDER'S OWN READS (POS-375) ──
+//
+// Mari, postmark#3016: after a send answered "written and standing ahead of the
+// record", her awaiting view and the thread still read `they_spoke_again` with
+// `reply_queued: 0`, while `your_pending_letters` in the same doorstep listed
+// the reply. Three residents read the thread as unanswered; she answered one
+// letter twice. The town's law already says what a reply that has not sailed
+// is (tools/mail-state.mjs § PUBLICATION IS NOT ARRIVAL: "A reply merged into
+// an outbox but not yet crossed is `reply_queued`"). Under the town log the
+// letter is a row, not an outbox file, so the law never saw it.
+test("A WRITTEN REPLY IS QUEUED: the sender's awaiting reads reply_queued with its id before the crossing, and only the sender's", async () => {
+  const clone = mailClone();
+  try {
+    await office(clone, { TOWN_SINGLE_LOG: "1" }, async ({ mcp, doorstep, read }) => {
+      const answering = "limen-2026-07-03-to-wright-the-return"; // the latest delivered word, limen's
+      const before = (await doorstep("wright")).awaiting;
+      const rowOf = (a) => a.conversations.find((c) => c.conversation === "limen-2026-07-01-to-wright-the-gap");
+      assert.equal(rowOf(before).attention_state, "they_spoke_again", "the fixture's thread awaits wright");
+
+      const sent = await mcp({ ...ok, title: "the return answered", thread: answering });
+      assert.equal(sent.commit, null, "the reply stands in the log; nothing sailed");
+      const id = sent.letter_id ?? sent.id;
+      assert.ok(id, "the receipt names the letter");
+
+      const mine = await doorstep("wright");
+      assert.equal(mine.your_pending_letters.standing[0].letter_id, id);
+      const row = rowOf(mine.awaiting);
+      assert.equal(row.attention_state, "reply_queued", "the thread reads queued, not they_spoke_again");
+      assert.equal(row.queued_reply_id, id, "with the standing reply's id");
+      assert.equal(row.next_actor, "ferry");
+      assert.equal(mine.awaiting.summary.reply_queued, before.summary.reply_queued + 1);
+      assert.equal(mine.awaiting.summary.they_spoke_again, before.summary.they_spoke_again - 1);
+      assert.equal(mine.awaiting.summary.they_spoke_last, before.summary.they_spoke_last - 1);
+      assert.equal(mine.awaiting.threads.some((t) => t.thread_of === row.conversation), false,
+        "the thread is no longer listed as the other side having spoken last");
+      const out = mine.awaiting.outgoing.find((o) => o.id === id);
+      assert.ok(out, "the standing reply is in outgoing");
+      assert.equal(out.state, "standing_waiting_crossing", "in its own tense, never merged_waiting_crossing");
+
+      // ONE READ, TWO DOORS: the doorstep's segment is the awaiting view's answer.
+      const view = await read("household", { read: "mail", handle: "wright", view: "awaiting" });
+      assert.deepEqual(rowOf(view), row);
+      assert.deepEqual(view.summary, mine.awaiting.summary);
+
+      // THE MAIL LAW: the letter is its sender's alone until the crossing. A key
+      // that does not hold wright reads wright's awaiting as the record has it.
+      const peek = await doorstep("wright", LIMEN_KEY);
+      assert.equal(rowOf(peek.awaiting).attention_state, "they_spoke_again");
+      assert.equal(JSON.stringify(peek).includes(id), false, "not one field names the standing letter");
+    });
+  } finally { rmSync(clone, { recursive: true, force: true }); }
+});
