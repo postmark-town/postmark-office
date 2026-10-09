@@ -1181,9 +1181,14 @@ async function handleOauthRoute(req, res, ctx) {
         return { grant: await issueTokens(t, { client_id: row.client_id, gh_id: row.gh_id, gh_login: row.gh_login }) };
       });
     } catch (e) {
-      console.error(`[oauth] the token endpoint could not reach its record (answered 503; nothing was changed): ${String(e?.message ?? e).slice(0, 200)}`);
+      // "MAY NOT", NEVER "NOTHING WAS" (review of #449, finding 4): a COMMIT the
+      // store applied whose acknowledgement was lost to the outage throws here
+      // too, and then the old refresh token is gone. The window is narrow and
+      // accepted as residual this week (a grace for the retired token is
+      // Darko's call, alongside family revocation); the answer must not promise.
+      console.error(`[oauth] the token endpoint could not reach its record (answered 503; the record may not have been changed): ${String(e?.message ?? e).slice(0, 200)}`);
       return jres(res, 503, { error: "temporarily_unavailable",
-        error_description: "the office could not reach its record; nothing was changed, so the same request will work once it is back" },
+        error_description: "the office could not reach its record, so your sign-in may not have been changed; send the same request again after Retry-After seconds" },
       { "retry-after": String(TOKEN_RETRY_AFTER_S) });
     }
     return out.refused ? oerr(res, 400, "invalid_grant", out.refused) : jres(res, 200, out.grant);

@@ -127,6 +127,7 @@ async function assertRetryable(res, what) {
   assert.ok(Number(res.headers.get("retry-after")) > 0, `${what}: the 503 says when to retry (Retry-After)`);
   assert.doesNotMatch(text, /invalid_grant/, `${what}: a store fault is never invalid_grant, which a client reads as "sign in again"`);
   assert.equal(JSON.parse(text).error, "temporarily_unavailable");
+  assert.match(JSON.parse(text).error_description, /may not have been changed/, `${what}: the answer never promises nothing changed (a lost COMMIT acknowledgement)`);
 }
 
 test("R0 the sweep still deletes an expired row after an oauth request, and not twice in a minute", async () => {
