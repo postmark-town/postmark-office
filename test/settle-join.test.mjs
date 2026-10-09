@@ -26,6 +26,7 @@ import { settleJoinAtOffice, settleUnderLock, SETTLE_REFUSALS, PEN_GH_ID, penIde
 import { settlePass } from "../deploy/settle-pass.mjs";
 import { householdApex } from "../src/household-apex.mjs";
 import { REGISTRY_PATH, PINS_PATH } from "../src/residency.mjs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 // THE PORT IS ASKED FOR, NEVER CHOSEN (join-pr-at-the-cosign.test.mjs § the
 // port). This was 43947, "checked against every port literal in test/", and
@@ -129,7 +130,7 @@ const git = (dir, ...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "u
 
 // A card is a house name, or `{ house, github }` for one whose github: is not the fixture human's.
 function town({ households = HOUSEHOLDS(), pins = PINS(), cards = { wildcat: "house-of-many-doors" }, ledger = null } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "settle-join-"));
+  const dir = tempDir("settle-join-");
   mkdirSync(join(dir, "tools"), { recursive: true });
   writeFileSync(join(dir, REGISTRY_PATH), JSON.stringify(households, null, 2) + "\n");
   writeFileSync(join(dir, PINS_PATH), JSON.stringify(pins, null, 2) + "\n");

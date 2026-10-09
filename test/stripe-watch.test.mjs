@@ -18,16 +18,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 
 import { isResidentHandle } from "../src/residency.mjs";
 import { CROSSING_MS } from "../src/crossings.mjs";
 import { townLoginHands } from "../src/household-logins.mjs";
 import { NO_TOWN, townClone, townModuleUrl } from "./fixture-paths.mjs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import {
   decide, decodeSession, resolveSession, listCompleteSessions, stripeReader,
   OUTSIDE_FROM, HANDLE_FIELD, RAIL, MIN_USD,
@@ -101,7 +101,7 @@ const sess = ({
 // opposite answers to the rule.
 function seamTown({ pots = { keep: 1000, small: 5 }, pins = { paz: { login: "p", id: 2 }, stan: { login: "s", id: 1 } } } = {}) {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
-  const repo = mkdtempSync(join(tmpdir(), "stripe-town-"));
+  const repo = tempDir("stripe-town-");
   mkdirSync(join(repo, "tools"), { recursive: true });
   mkdirSync(join(repo, "WHITE_PAGES"), { recursive: true });
   writeFileSync(join(repo, "tools", "github-ids.json"), JSON.stringify(pins));

@@ -17,9 +17,8 @@
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 
 import { WHAT_THIS_BUYS } from "../src/funding.mjs";
@@ -27,6 +26,7 @@ import { verifyUsdcPayment, INTAKE, USDC, TRANSFER_TOPIC, MIN_CONF } from "../sr
 import { fundVerify, fundGuards, intakeDisclosure } from "../src/fund.mjs";
 import { NO_TOWN, townClone, townModuleUrl } from "./fixture-paths.mjs";
 import { startPayerStore } from "./helpers/payer-store.mjs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 // The aligned town engine — the same tip the door's parser is pinned to.
 const TOWN = townClone();
@@ -61,7 +61,7 @@ function seamTown({ pots = {}, gifts = [] } = {}) {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
   const pub = publicKey.export({ type: "spki", format: "pem" });
   const priv = privateKey.export({ type: "pkcs8", format: "pem" });
-  const repo = mkdtempSync(join(tmpdir(), "fund-town-"));
+  const repo = tempDir("fund-town-");
   mkdirSync(join(repo, "tools"), { recursive: true });
   mkdirSync(join(repo, "WHITE_PAGES"), { recursive: true });
   writeFileSync(join(repo, "tools", "github-ids.json"), JSON.stringify({
