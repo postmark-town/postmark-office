@@ -141,8 +141,12 @@ export const HOUSEHOLD_TASKS = Object.freeze([
     async grade({ query, truth }) {
       const rows = await query("world2_owner", "SELECT payload FROM office_town_journal WHERE handle = $1 AND act = 'send-letter'", [truth.handle]);
       const to = rows.filter((r) => pl(r).args?.to === truth.reply.to);
-      const threaded = to.filter((r) => pl(r).args?.thread === truth.reply.letter);
-      return { pass: threaded.length > 0, why: `${rows.length} letter(s) sent; ${to.length} to ${truth.reply.to}; ${threaded.length} threaded on their latest (${to.map((r) => pl(r).args?.thread ?? "no thread").join(", ")})` };
+      // threaded: `thread` names their latest letter (the door's own word), or a letter of the same
+      // conversation (its first letter, the inbox row's `thread`): both land the reply in the exchange.
+      // The Sonnet household smoke (10-09) passed the conversation's first letter; the strict grader failed it.
+      const latest = to.filter((r) => pl(r).args?.thread === truth.reply.letter);
+      const conv = to.filter((r) => pl(r).args?.thread === truth.reply.thread_of);
+      return { pass: latest.length + conv.length > 0, why: `${rows.length} letter(s) sent; ${to.length} to ${truth.reply.to}; ${latest.length} on their latest, ${conv.length} on the conversation's first letter` };
     },
   },
   {
