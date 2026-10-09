@@ -32,6 +32,11 @@
 //       is the client's: 400 invalid_request, never the outage's 503
 //
 //   node --test test/oauth-store-outage.test.mjs
+//
+// A SERVER OF ITS OWN IS ONE MORE POSTGRES PER RUN (review of #449). If the file
+// dies before after() (a killed run, an uncaught error), that server is left
+// running under the temp dir: `node G:/Postmark/pool/pg.mjs reap` stops it, and
+// run-heavy reaps before every slot (POS-479).
 
 import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
