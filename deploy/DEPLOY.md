@@ -178,6 +178,12 @@ sudo -u meepo bash -c 'umask 077 && openssl genpkey -algorithm ed25519 -out /srv
 # its public half is not prod's: prints "differs", never a key
 sudo bash -c 'cmp -s <(openssl pkey -in /srv/postmark-office-dev/stamp-key.dev.pem -pubout) <(openssl pkey -in /srv/postmark-office/stamp-key.pem -pubout) && echo "SAME: stop" || echo differs'
 ```
+What this buys, plainly: dev and prod both run as `meepo`, so any dev-side
+process can still read prod's key. Dev's own key guards against signing with
+prod's key **by mistake**, not against a compromise. The tools compare keys by
+their public halves only (the seed's `tools/stamp-pubkey.pem` is prod's public
+key), so prod's private key is never read to make that check.
+
 The old `/srv/postmark-office-dev/stamp-key.pem` is a second copy of prod's
 signing key; prod's own stays at `/srv/postmark-office/stamp-key.pem`. Darko's
 word on removing the copy, then the new key takes its path (the freshen and the

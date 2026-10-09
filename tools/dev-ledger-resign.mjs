@@ -24,9 +24,11 @@
 //   --town     a dev clone only: every remote's push URL disabled, its real
 //              path under /srv/postmark-office-dev or the temp dir (§ WHICH CLONE)
 //
-//   --not-key  (required) refuse when the key's public half is this key's (the 10-07 copy):
-//              dev must never sign with prod's key, and a re-sign under it would
-//              change nothing and say nothing
+//   --not-key  (required) a key, public is enough (the freshen passes prod's
+//              clone's tools/stamp-pubkey.pem): refuse when the key's public half
+//              is this one's. Unreadable is a refusal. Independently, a key whose
+//              public half is the seed's tools/stamp-pubkey.pem (prod's) is
+//              refused with no prod path at all (§ NOT PROD'S KEY)
 //   --verify   run the town's own verifier (tools/stamp-verify.mjs) on the result
 //
 // ONE COMMIT, THE SAME EVERY NIGHT. The re-sign is committed on the clone (never
@@ -99,17 +101,59 @@ export function cloneRefusal(town, { allowedRoots = [DEV_ROOT, tmpdir()] } = {})
   return null;
 }
 
+// ── NOT PROD'S KEY, WITHOUT READING PROD'S KEY (the #453 review, F2) ─────────
+//
+// The seed is prod-signed, so `sandbox/seed:tools/stamp-pubkey.pem` IS prod's
+// public half. A key whose public half equals it is refused with no prod path
+// and no private key read: prod's private key never enters a process that then
+// imports and runs the clone's own engine. --not-key is a second, explicit
+// comparison (a public key is enough); a --not-key that is given but cannot be
+// read is a refusal, never a skip. Dev and prod both run as meepo, so this
+// guards against signing with prod's key by MISTAKE, not against a compromise.
+
+export const SEED_REF = "refs/tags/sandbox/seed";
+
+/** The seed's tools/stamp-pubkey.pem (prod's public key), or null when the clone has none. */
+export function seedPubkeyOf(town) {
+  const r = spawnSync("git", ["-C", town, "show", `${SEED_REF}:${PUBKEY_REL}`], { encoding: "utf8" });
+  return r.status === 0 && r.stdout.trim() ? r.stdout : null;
+}
+
+/**
+ * Why the key whose public half is `pub` must not sign dev's ledger, or null.
+ * `notKey` is `{ path }` (read here; unreadable is a refusal) or `{ pem }`.
+ */
+export function prodKeyRefusal(pub, { town, notKey = null }) {
+  const PROD = "dev would sign with PROD's key (the 10-07 finding). Generate dev's own key first (deploy/DEPLOY.md § The dev rehearsal).";
+  const seed = seedPubkeyOf(town);
+  if (!seed) return `the clone has no ${SEED_REF}:${PUBKEY_REL} (prod's public key) to compare the key with, so it cannot be shown not to be prod's`;
+  let seedPub;
+  try { seedPub = publicOf(seed); } catch (e) { return `the seed's ${PUBKEY_REL} is not a key (${e.message})`; }
+  if (seedPub === pub) return `the key's public half is the seed's ${PUBKEY_REL}, prod's: ${PROD}`;
+  if (notKey) {
+    let pem = notKey.pem;
+    if (pem == null) {
+      try { pem = readFileSync(notKey.path, "utf8"); }
+      catch (e) { return `--not-key ${notKey.path} cannot be read (${e.code ?? e.message}): a --not-key that is given and unreadable is a refusal, never a skip`; }
+    }
+    let notPub;
+    try { notPub = publicOf(pem); } catch (e) { return `--not-key${notKey.path ? ` ${notKey.path}` : ""} is not a key (${e.message})`; }
+    if (notPub === pub) return `the key's public half is the --not-key's: ${PROD}`;
+  }
+  return null;
+}
+
 /**
  * Move `town` onto `keyPem`. Answers `{ status, ... }`: `already` (nothing to
  * do), `resigned` (committed; `sha`, `lines`, `carried`), or `refused` (`why`).
  */
-export async function resignDevTown({ town, keyPem, notKeyPem = null, verify = false, allowedRoots }) {
+export async function resignDevTown({ town, keyPem, notKeyPem = null, notKeyPath = null, verify = false, allowedRoots }) {
   const wrongClone = cloneRefusal(town, allowedRoots ? { allowedRoots } : {});
   if (wrongClone) return { status: "refused", why: wrongClone };
   if (!existsSync(join(town, LEDGER_REL))) return { status: "refused", why: `no ${LEDGER_REL} under ${town}: --town must be a town checkout` };
   const pub = publicOf(keyPem);
-  if (notKeyPem && publicOf(notKeyPem) === pub)
-    return { status: "refused", why: "the key's public half is the --not-key's: dev would sign with PROD's key (the 10-07 finding). Generate dev's own key first (deploy/DEPLOY.md § The dev rehearsal)." };
+  const prodKey = prodKeyRefusal(pub, { town, notKey: notKeyPath ? { path: notKeyPath } : notKeyPem ? { pem: notKeyPem } : null });
+  if (prodKey) return { status: "refused", why: prodKey };
   if (git(town, ["status", "--porcelain", "--", LEDGER_REL, "tools"])) return { status: "refused", why: `the clone has uncommitted changes under ${LEDGER_REL} or tools/: re-signing over them would mix them into the dev key's commit` };
   const engine = await import(pathToFileURL(join(town, "tools", "stamp-mint.mjs")).href);
   const installed = existsSync(join(town, PUBKEY_REL)) ? readFileSync(join(town, PUBKEY_REL), "utf8") : null;
@@ -149,11 +193,8 @@ async function main(argv = process.argv.slice(2)) {
   // --not-key is mandatory (the #453 review, F1): the CLI never runs without the key it must refuse
   if (!town || !keyPath || !notKey) { console.error(USAGE); return 2; }
   if (!existsSync(keyPath)) { console.error(`dev-ledger-resign: REFUSED, no key at ${keyPath}: generate dev's own key first (deploy/DEPLOY.md § The dev rehearsal)`); return 1; }
-  const r = await resignDevTown({
-    town, keyPem: readFileSync(keyPath, "utf8"),
-    notKeyPem: notKey && existsSync(notKey) ? readFileSync(notKey, "utf8") : null,
-    verify: argv.includes("--verify"),
-  });
+  // --not-key is read inside, where a path that cannot be read is a refusal (never a skip)
+  const r = await resignDevTown({ town, keyPem: readFileSync(keyPath, "utf8"), notKeyPath: notKey, verify: argv.includes("--verify") });
   if (r.status === "refused") { console.error(`dev-ledger-resign: REFUSED, ${r.why}`); return 1; }
   if (r.status === "already") { console.log(`dev-ledger-resign: ${town} is already on the key (its public key is the key's and every signed line verifies)`); return 0; }
   console.log(`dev-ledger-resign: ${r.lines} ledger lines re-signed under dev's key, committed ${r.sha.slice(0, 9)} (never pushed)` +

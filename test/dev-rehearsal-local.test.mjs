@@ -27,7 +27,7 @@ let dev;
 before(async () => { dev = await localDevTarget(); }, { timeout: 20 * 60_000 });
 after(async () => { await dev?.stop(); });
 
-const target = (extra = {}) => ({ ...targetFromFiles({ envFile: dev.envFile, rolesFile: dev.rolesFile, office: dev.officeBase, prodStampKey: dev.prodKey }), ...extra });
+const target = (extra = {}) => ({ ...targetFromFiles({ envFile: dev.envFile, rolesFile: dev.rolesFile, office: dev.officeBase, prodPubKey: dev.prodKey }), ...extra });
 
 test("the rehearsal refuses a pen pointed at PROD's database before it writes anything", async () => {
   const t = target();
@@ -58,7 +58,7 @@ test("the preflight goes red when dev's key is prod's, and when the dev clone is
   const r = await runRehearsal(t, { only: ["preflight"] });
   assert.equal(r.green, false);
   const pre = r.steps.find((s) => s.id === "preflight");
-  assert.ok(pre.problems.some((p) => /is PROD's key/.test(p)), pre.problems.join("; "));
+  assert.ok(pre.problems.some((p) => /dev would sign with PROD's key/.test(p)), pre.problems.join("; "));
   assert.ok(pre.problems.some((p) => /tools\/stamp-pubkey\.pem is not the public half of dev's STAMP_KEY/.test(p)), pre.problems.join("; "));
 });
 

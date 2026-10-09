@@ -1382,7 +1382,7 @@ function runFreshen(failVerb, { nodeFails = false } = {}) {
   });
   if (failVerb) env.FRESHEN_FAIL = failVerb; else delete env.FRESHEN_FAIL;
   if (nodeFails) env.FRESHEN_NODE_FAIL = "1"; else delete env.FRESHEN_NODE_FAIL;
-  for (const k of ["POSTMARK_DEV_STAMP_KEY", "POSTMARK_PROD_STAMP_KEY"]) delete env[k]; // the box's defaults
+  for (const k of ["POSTMARK_DEV_STAMP_KEY", "POSTMARK_PROD_PUBKEY"]) delete env[k]; // the box's defaults
   const r = spawnSync("bash", [posix(FRESHEN)], { encoding: "utf8", env });
   const calls = readFileSync(log, "utf8").split("\n").filter(Boolean);
   const nodeCalls = readFileSync(nodeLog, "utf8").split("\n").filter(Boolean);
@@ -1402,10 +1402,10 @@ test("the dev freshen, every step succeeding: exit 0, the stand-back line, all s
   ]);
   assert.ok(r.calls[2].startsWith("-C /srv/postmark-office-dev/world-clone reset"));
   assert.ok(r.calls[5].startsWith("-C /srv/postmark-office-dev/town-clone reset"));
-  // then the town clone moves onto dev's own key, refusing prod's (POS-354)
+  // then the town clone moves onto dev's own key, refusing prod's by its PUBLIC half only (POS-354; #453 F2)
   assert.deepEqual(r.nodeCalls, [
     "/srv/postmark-office-dev/tools/dev-ledger-resign.mjs --town /srv/postmark-office-dev/town-clone " +
-    "--key /srv/postmark-office-dev/stamp-key.pem --not-key /srv/postmark-office/stamp-key.pem --verify",
+    "--key /srv/postmark-office-dev/stamp-key.pem --not-key /srv/postmark-office/town-clone/tools/stamp-pubkey.pem --verify",
   ]);
 });
 

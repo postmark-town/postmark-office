@@ -23,7 +23,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { DEV_ROOT, DISABLED_PUSH_URL, resignDevTown } from "../tools/dev-ledger-resign.mjs";
+import { DEV_ROOT, DISABLED_PUSH_URL, prodKeyRefusal, publicOf, resignDevTown } from "../tools/dev-ledger-resign.mjs";
 import { NO_TOWN, OFFICE_ROOT, townClone } from "./fixture-paths.mjs";
 
 const TOWN = townClone();
@@ -60,6 +60,7 @@ function seedTown(prod) {
   writeFileSync(join(dir, "tools", "stamp-pubkey.pem"), prod.pub);
   writeFileSync(join(dir, "tools", "ruled.mjs"), `export const RULED = new Set(["${sigs[1]}"]);\n`);
   g("add", "-A"); g("commit", "-q", "-m", "the seed");
+  g("tag", "sandbox/seed"); // the box's seed tag: its tools/stamp-pubkey.pem is prod's public key
   return { dir, g, sigs };
 }
 
@@ -171,4 +172,44 @@ test("the CLI will not run without --not-key", () => {
   const r = spawnSync(process.execPath, [join(OFFICE_ROOT, "tools", "dev-ledger-resign.mjs"), "--town", tmpdir(), "--key", join(tmpdir(), "no-such.pem")], { encoding: "utf8" });
   assert.equal(r.status, 2, r.stdout + r.stderr);
   assert.match(r.stderr, /usage: .*--not-key <prod's key, public or private>/);
+});
+
+// ── NOT PROD'S KEY, WITHOUT READING PROD'S KEY (the #453 review, F2) ─────────
+//
+// THE CAN-FAIL FLIP: drop the seed comparison from prodKeyRefusal; "prod's key is
+// refused by the seed's public key alone" goes red. tools/dev-rehearsal.mjs §
+// keyProblems asks the same function, so its preflight carries the same rule.
+
+test("prod's key is refused by the seed's public key alone: no --not-key, no prod private key read", { skip: SKIP }, async () => {
+  const prod = keys();
+  const t = seedTown(prod);
+  const head = t.g("rev-parse", "HEAD");
+  const r = await resignDevTown({ town: t.dir, keyPem: prod.key });
+  assert.equal(r.status, "refused");
+  assert.match(r.why, /the key's public half is the seed's tools\/stamp-pubkey\.pem, prod's: dev would sign with PROD's key/);
+  assert.equal(t.g("rev-parse", "HEAD"), head);
+});
+
+test("a --not-key that is given but cannot be read is a refusal, never a skip", { skip: SKIP }, async () => {
+  const prod = keys(), dev = keys();
+  const t = seedTown(prod);
+  const head = t.g("rev-parse", "HEAD");
+  const r = await resignDevTown({ town: t.dir, keyPem: dev.key, notKeyPath: join(t.dir, "no-such-prod-pubkey.pem") });
+  assert.equal(r.status, "refused");
+  assert.match(r.why, /--not-key .*no-such-prod-pubkey\.pem cannot be read \(ENOENT\): a --not-key that is given and unreadable is a refusal, never a skip/);
+  assert.equal(t.g("rev-parse", "HEAD"), head);
+  // and a public key is enough for --not-key
+  // a key the seed does not name, refused by its --not-key public half alone
+  const other = keys();
+  writeFileSync(join(t.dir, "other.pub"), other.pub);
+  assert.match(prodKeyRefusal(publicOf(other.key), { town: t.dir, notKey: { path: join(t.dir, "other.pub") } }), /the key's public half is the --not-key's/);
+});
+
+test("a clone with no seed tag is refused: the key cannot be shown not to be prod's", { skip: SKIP }, async () => {
+  const prod = keys(), dev = keys();
+  const t = seedTown(prod);
+  t.g("tag", "-d", "sandbox/seed");
+  const r = await resignDevTown({ town: t.dir, keyPem: dev.key, notKeyPem: prod.key });
+  assert.equal(r.status, "refused");
+  assert.match(r.why, /no refs\/tags\/sandbox\/seed:tools\/stamp-pubkey\.pem/);
 });

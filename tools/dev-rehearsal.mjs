@@ -100,7 +100,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { publicOf } from "./dev-ledger-resign.mjs";
+import { prodKeyRefusal, publicOf } from "./dev-ledger-resign.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const OFFICE = resolve(HERE, "..");
@@ -113,6 +113,8 @@ export const DEFAULT_ROLES_FILE = "/etc/postmark-dev-rehearsal.env";
 export const DEFAULT_OFFICE = "http://127.0.0.1:4381";
 /** PROD's signing key, where every office pen defaults to (src/ledger-pen.mjs). Dev's must not be it. */
 export const PROD_STAMP_KEY = "/srv/postmark-office/stamp-key.pem";
+/** PROD's PUBLIC key (its town clone's tools/stamp-pubkey.pem): what dev's key is compared with, so prod's private key is never read. */
+export const PROD_PUBKEY = "/srv/postmark-office/town-clone/tools/stamp-pubkey.pem";
 
 // ── the env files ────────────────────────────────────────────────────────────
 
@@ -278,7 +280,7 @@ export function githubStub({ owner, repo, branch = "main", townClone }) {
  * The rehearsal's target from the dev office's env file and the roles file.
  * Reads files only; connects to nothing. `office` is the dev office's base URL.
  */
-export function targetFromFiles({ envFile = DEFAULT_ENV_FILE, rolesFile = DEFAULT_ROLES_FILE, office = DEFAULT_OFFICE, officeRoot = OFFICE, prodStampKey = PROD_STAMP_KEY } = {}) {
+export function targetFromFiles({ envFile = DEFAULT_ENV_FILE, rolesFile = DEFAULT_ROLES_FILE, office = DEFAULT_OFFICE, officeRoot = OFFICE, prodPubKey = PROD_PUBKEY } = {}) {
   const env = parseEnvFile(readFileSync(envFile, "utf8"));
   const roles = existsSync(rolesFile) ? parseEnvFile(readFileSync(rolesFile, "utf8")) : {};
   return {
@@ -296,8 +298,8 @@ export function targetFromFiles({ envFile = DEFAULT_ENV_FILE, rolesFile = DEFAUL
     worldClone: env.WORLD_CLONE ?? null,
     // the key the office's own pens sign with (src/ledger-pen.mjs § DRAIN_KEY_PATH, the same default)
     stampKey: env.STAMP_KEY ?? PROD_STAMP_KEY,
-    // prod's, read only to prove dev's is not it
-    prodStampKey,
+    // prod's public key, read only to prove dev's is not it (a missing one is red, never a skip)
+    prodPubKey,
   };
 }
 
@@ -898,15 +900,13 @@ async function keyProblems(ctx) {
   try { pub = publicOf(readFileSync(t.stampKey, "utf8")); }
   catch (e) { return [`the dev key at ${t.stampKey} could not be read as a key (${e.code ?? e.message})`]; }
   const p = [];
-  if (t.prodStampKey && existsSync(t.prodStampKey)) {
-    let prodPub = null;
-    try { prodPub = publicOf(readFileSync(t.prodStampKey, "utf8")); }
-    catch (e) { p.push(`prod's key at ${t.prodStampKey} could not be read to compare with dev's (${e.code ?? e.message})`); }
-    if (prodPub === pub) p.push(`dev's STAMP_KEY (${t.stampKey}) is PROD's key (${t.prodStampKey}): generate dev's own (deploy/DEPLOY.md § The dev rehearsal)`);
-  }
+  // prod's PUBLIC half only, never its private key (#453 review, F2): the dev clone's seed
+  // pubkey, and the prod public key the target names; either one unreadable is red, never a skip
+  const prod = t.townClone ? prodKeyRefusal(pub, { town: t.townClone, notKey: t.prodPubKey ? { path: t.prodPubKey } : null }) : "no dev town clone to read the seed's public key from";
+  if (prod) p.push(`dev's STAMP_KEY (${t.stampKey}): ${prod}`);
   const pubPath = t.townClone ? join(t.townClone, "tools", "stamp-pubkey.pem") : null;
   const installed = pubPath && existsSync(pubPath) ? readFileSync(pubPath, "utf8").replace(/\r\n/g, "\n") : null;
-  if (installed !== pub) p.push(`the dev town clone's tools/stamp-pubkey.pem is not the public half of dev's STAMP_KEY: the clone is not on dev's key, so every line dev's pens sign fails the town's verifier (the freshen moves it: node tools/dev-ledger-resign.mjs --town ${t.townClone} --key ${t.stampKey} --not-key ${t.prodStampKey} --verify)`);
+  if (installed !== pub) p.push(`the dev town clone's tools/stamp-pubkey.pem is not the public half of dev's STAMP_KEY: the clone is not on dev's key, so every line dev's pens sign fails the town's verifier (the freshen moves it: node tools/dev-ledger-resign.mjs --town ${t.townClone} --key ${t.stampKey} --not-key ${t.prodPubKey} --verify)`);
   if (ctx.storeMint && !p.length) {
     const v = await ctx.job("world2/tools/stamp-lines.mjs", ["--verify", "--clone", t.townClone]);
     if (v.code !== 0) p.push(`the store's stamp chain and the dev clone's ledger disagree (stamp-lines --verify exited ${v.code}: ${tail(v.out, 3)}): before a rehearsal the store's lines are trimmed to the clone and synced (deploy/DEPLOY.md § The dev rehearsal)`);

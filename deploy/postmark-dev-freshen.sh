@@ -40,7 +40,10 @@
 # carried tree): every signed line re-signed, seals unchanged, dev's public key
 # installed, committed locally and never pushed. The commit is the same every
 # night (fixed author and date, deterministic signatures), so the store's
-# town-index head still finds it. It refuses a key whose public half is prod's.
+# town-index head still finds it. It refuses a key whose public half is prod's:
+# the seed's own tools/stamp-pubkey.pem, and prod's clone's public key passed as
+# --not-key. Prod's PRIVATE key is never read (#453 review, F2). It re-signs only a
+# clone whose push URL is disabled, under this root (F1).
 # It runs last, so a refusal leaves the clones stood back and the unit failed.
 #
 # POSTMARK_DEV_ROOT, POSTMARK_DEV_FLOCK and the two key paths exist for
@@ -50,16 +53,16 @@ set -euo pipefail
 DEV="${POSTMARK_DEV_ROOT:-/srv/postmark-office-dev}"
 FLOCK="${POSTMARK_DEV_FLOCK:-/usr/bin/flock}"
 DEV_KEY="${POSTMARK_DEV_STAMP_KEY:-$DEV/stamp-key.pem}"
-PROD_KEY="${POSTMARK_PROD_STAMP_KEY:-/srv/postmark-office/stamp-key.pem}"
+PROD_PUBKEY="${POSTMARK_PROD_PUBKEY:-/srv/postmark-office/town-clone/tools/stamp-pubkey.pem}"
 exec "$FLOCK" -x -w 120 "$DEV/town.lock" bash -c '
   set -euo pipefail
-  dev=$1 key=$2 prodkey=$3
+  dev=$1 key=$2 prodpub=$3
   for c in "$dev/world-clone" "$dev/town-clone"; do
     git -C "$c" fetch -q --tags --force origin
     git -C "$c" switch -q main 2>/dev/null || true
     git -C "$c" reset -q --hard refs/tags/sandbox/seed
   done
   git -C "$dev/world-clone" fetch -q --prune origin "+refs/heads/draft/*:refs/remotes/origin/draft/*"
-  node "$dev/tools/dev-ledger-resign.mjs" --town "$dev/town-clone" --key "$key" --not-key "$prodkey" --verify
+  node "$dev/tools/dev-ledger-resign.mjs" --town "$dev/town-clone" --key "$key" --not-key "$prodpub" --verify
   echo "dev clones stood back on sandbox/seed (+ world draft/* refs), the town ledger on the dev key"
-' freshen "$DEV" "$DEV_KEY" "$PROD_KEY"
+' freshen "$DEV" "$DEV_KEY" "$PROD_PUBKEY"
