@@ -148,10 +148,15 @@ async function superuser(store) {
   return c;
 }
 
-/** This process's environment without anything that could point a child at a real store or key. */
+/**
+ * This process's environment without anything that could point a child at a
+ * real store or key, and without any read shape: a run's office gets its own
+ * door's shape from bootRun and nothing from the shell that started the round
+ * (#455 review, finding 6).
+ */
 function cleanEnv() {
   const e = { ...process.env };
-  for (const k of Object.keys(e)) if (/^(PG[A-Z]*|WORLD2_[A-Z_]*URL|OFFICE_KEYS|NODE_TEST_CONTEXT|WORLD_GRAPH_ROWS)$/.test(k)) delete e[k];
+  for (const k of Object.keys(e)) if (/^(PG[A-Z]*|WORLD2_[A-Z_]*URL|OFFICE_KEYS|NODE_TEST_CONTEXT|WORLD_GRAPH_ROWS|WORLD_READ_SHAPE|TOWN_READ_SHAPE|HOUSEHOLD_READ_SHAPE)$/.test(k)) delete e[k];
   return e;
 }
 
