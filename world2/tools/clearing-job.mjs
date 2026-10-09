@@ -66,6 +66,8 @@ import { computeStanding, gistContainment } from "./standing.mjs";
 // THE SEAL (POS-357, R1): a pure SQL copy of the World this window leaves, in
 // this transaction. The module imports nothing; see its header and step 8.
 import { sealSnapshot } from "./world-snapshot-seal.mjs";
+// WHETHER STANCES COUNT AT THE SETTLEMENT THIS CROSSING MAKES (POS-364, 072): decided here, recorded by the seal. See step 8.
+import { stancesAtSeal } from "../../src/world-settlement.mjs";
 // THE CANDLE'S LOCK (POS-404): the clearing and the claim door take turns. Taken right after BEGIN.
 import { CLEARING_TAKES_THE_CANDLE } from "./candle-lock.mjs";
 // THE CARRY (POS-441): a move carries the mover's household's marks inside it,
@@ -688,8 +690,16 @@ try {
   //     AND THE HOUSEHOLD REGISTER BESIDE IT (POS-410, 064; Darko 2026-10-05:
   //     the snapshot keeps the atomic upstream sources). The register rows as
   //     they stand at the seal, so a past World folds with the past's houses.
-  const sealed = await sealSnapshot(q, { windowId });
+  //
+  //     AND WHETHER STANCES COUNT AT IT (POS-364, 072; Darko 2026-10-09, the
+  //     conservative cutover; Wright: decide once, at the seal). The cutover
+  //     this job holds (TOWN_STANCE_CUTOVER, from its own unit's env) against
+  //     the settlement this crossing makes, recorded on the header and covered
+  //     by its digest. Every reader reads the record; nothing recomputes it.
+  const stances = await stancesAtSeal({ query: q }, { env: process.env });
+  const sealed = await sealSnapshot(q, { windowId, stances });
   console.log(`  ⚑ snapshot: ${sealed.marks} standing mark(s), ${sealed.new_versions} new version(s), register ${sealed.register_rows} row(s) (${sealed.new_register_versions} new), digest ${sealed.digest.slice(0, 12)}`);
+  console.log(`  ⚑ stances: ${stances.counted ? "COUNTED" : "not counted"} at S${stances.settlement_inferred ?? "?"} (${stances.how}), cutover ${stances.cutover ?? "unset"}`);
 
   // Close, pin, open the successor.
   //

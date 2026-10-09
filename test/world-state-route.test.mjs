@@ -85,7 +85,7 @@ test("the door serves the newest settlement, names it, serves one by name, and r
 });
 
 test("a holder's opposition is gone from the door's answer without a clearing (R16)", { skip: ix?.store?.skip }, async () => {
-  await rig.seed();
+  await rig.seed({ cutover: "S10" });                       // S11 sealed at or after the cutover: stances count
   await rig.speak({ actor: "ann", on: "bo/shed", stance: "opposed" });
   await withOffice(async (base) => {
     const r = await get(`${base}/world/state`);
@@ -93,11 +93,13 @@ test("a holder's opposition is gone from the door's answer without a clearing (R
     assert.equal(r.body.meta.as_of.settlement, "S11");
     assert.deepEqual(ids(r.body), ["ann/plot", "cy/bench", "cy/yard"]);
     assert.equal(r.body.returned.find((x) => x.mark === "bo/shed")?.returned_from, "ann/plot");
-  }, { TOWN_STANCE_CUTOVER: "S10" });                       // S11 is at or after the cutover, so stances count
+  });
 });
 
-test("THE SERVED WORLD WAITS FOR THE CUTOVER (Darko, 2026-10-09): unset, /world/state keeps the opposed shed, and git keeps it too", { skip: ix?.store?.skip }, async () => {
-  await rig.seed({ sealWords: [{ actor: "ann", on: "bo/shed", stance: "opposed" }] });
+test("THE SERVED WORLD WAITS FOR THE CUTOVER (Darko, 2026-10-09): sealed with it unset, /world/state keeps the opposed shed, and git keeps it too", { skip: ix?.store?.skip }, async () => {
+  // S11 sealed while TOWN_STANCE_CUTOVER was unset (072 records it); the office's own env sets it, and changes nothing.
+  await rig.seed({ sealWords: [{ actor: "ann", on: "bo/shed", stance: "opposed" }], cutover: "S10",
+    s11Stances: { counted: false, cutover: null, settlement_inferred: 11, how: "inferred" } });
   await rig.speak({ actor: "ann", on: "bo/shed", stance: "opposed", at: "2026-10-04T00:00:00Z" });
   for (const asked of ["", "?settlement=S11"]) {
     await withOffice(async (base) => {
@@ -106,11 +108,11 @@ test("THE SERVED WORLD WAITS FOR THE CUTOVER (Darko, 2026-10-09): unset, /world/
       assert.deepEqual(ids(r.body), ["ann/plot", "bo/shed", "bo/shed-name", "cy/bench", "cy/yard"], `${asked || "the newest"}: the opposed shed stands`);
       assert.deepEqual(r.body.returned ?? [], []);
       assert.equal(r.body.meta.words.counted, false);
-      assert.equal(r.body.meta.words.not_counted, "TOWN_STANCE_CUTOVER is not set: before the cutover every mark counts as ratified (R14), so no stance is applied to this World");
-    }, { TOWN_STANCE_CUTOVER: null });
+      assert.equal(r.body.meta.words.not_counted, "TOWN_STANCE_CUTOVER was not set when S11 was sealed: before the cutover every mark counts as ratified (R14), so no stance is applied to this World");
+    }, { TOWN_STANCE_CUTOVER: "S1" });
   }
   const { settlementTakesAway } = await import("../src/world-settlement.mjs");
   const header = await rig.asOffice(async (p) => (await p.query("SELECT * FROM world_snapshots WHERE id = 2")).rows[0]);
-  const away = await rig.asOffice((p) => settlementTakesAway(p, header, { worldRepo: WORLD, env: {} }));
+  const away = await rig.asOffice((p) => settlementTakesAway(p, header, { worldRepo: WORLD }));
   assert.deepEqual([...away.slugs], [], "and git is written with the shed in it: the page and the record agree");
 });

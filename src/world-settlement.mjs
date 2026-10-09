@@ -54,7 +54,9 @@
 // 5. FROM THE CUTOVER ON (Darko, 2026-10-09 10:25 EDT). Items 3 and 4 apply
 //    to a settlement numbered at or after TOWN_STANCE_CUTOVER. One below it,
 //    or any while it is unset, is served with no stance at all, as git is
-//    written from it (town-stance.mjs § stancesCountAt).
+//    written from it (town-stance.mjs § stancesCountAt). DECIDED ONCE, AT THE
+//    SEAL (072): the snapshot header records the decision (`stances`), and
+//    every reader here reads that record and never recomputes it (§ stancesOf).
 //
 // Market opposition is not a veto (R16) and is not read here: it is
 // density-weighted and the settlement's fold applies it (POS-369). A holder's
@@ -439,20 +441,19 @@ export function stanceReturnsWhole(inputs, state) {
  * the first-claim order) leaves too. `{ slugs, vetoes }`. Throws when the
  * settlement cannot be folded; the caller withholds the clearing's forecast instead.
  */
-export async function settlementTakesAway(p, header, { worldRepo, townRepo = null, env = process.env }) {
+export async function settlementTakesAway(p, header, { worldRepo, townRepo = null }) {
   const inputs = await settlementFoldInputs(p, header, { worldRepo, townRepo });
   // R14: BEFORE THE CUTOVER, EVERYTHING COUNTS AS RATIFIED, AND THE CUTOVER IS
   // A SETTLEMENT NUMBER (Darko, 2026-10-09 10:25 EDT, the conservative
   // cutover). A settlement numbered below TOWN_STANCE_CUTOVER takes no mark out
   // of git for a stance; from it on, every opposition standing at its seal
-  // counts. So re-running a sealed settlement's write-down gives the same git
-  // whatever the variable says, as long as it names the same number. With no
-  // stance counted, the words are not read at all: the fold is the cleared one
-  // plus the LIMITS, which are the clearing's and the settlement's whatever the
-  // cutover (R11).
-  const { stancesCountAt } = await import("./town-stance.mjs");
-  const at = await settlementNumberAt(p, header);
-  const gate = stancesCountAt(at.number, env);
+  // counts. The seal decided which, and the header records it (072, § stancesOf):
+  // this reads the record, so re-running a sealed settlement's write-down gives
+  // the same git forever, whatever the variable or the settlements table says
+  // now. With no stance counted, the words are not read at all: the fold is the
+  // cleared one plus the LIMITS, which are the clearing's and the settlement's
+  // whatever the cutover (R11).
+  const gate = stancesOf(header);
   const stancesCount = gate.counts;
   const words = stancesCount ? await wordsAtSeal(p, header, { worldRepo }) : NO_WORDS;
   const cleared = foldOver(inputs);
@@ -483,14 +484,46 @@ export async function settlementTakesAway(p, header, { worldRepo, townRepo = nul
   for (const sl of ownGroundOf(limitParcels, rows)) slugs.add(sl);
   return {
     slugs, vetoes,
-    settlement: at.number,
-    ...(at.inferred ? { settlement_inferred: at.inferred } : {}),
+    stances: gate.recorded,
     ...(stancesCount ? {} : { stances_not_counted: `${gate.why}, so no stance takes one out of git` }),
     ...(vetoes?.stance_returns_whole ? { stance_returns_whole: wholeSentence(header, vetoes.stance_returns_whole) } : {}),
   };
 }
 
-/** No words: what a settlement folds with when no stance counts at it (§ stancesCountAt). */
+/**
+ * THE SEAL'S DECISION (072; Wright, 2026-10-09: decide once, at the seal). The
+ * clearing job asks this just before it seals and hands the answer to the seal,
+ * which records it on the header: `{ counted, cutover, settlement_inferred, how }`.
+ * The snapshot being sealed has no settlements row yet, so its number is the
+ * settlement this crossing makes (§ settlementNumberAt: the store's newest plus
+ * one, `how: "inferred"`). The only caller is the seal; every reader reads the
+ * record (§ stancesOf). A malformed cutover throws: the seal never guesses it.
+ */
+export async function stancesAtSeal(p, { env = process.env, header = { id: null } } = {}) {
+  const { stancesCountAt } = await import("./town-stance.mjs");
+  const at = await settlementNumberAt(p, header);
+  const gate = stancesCountAt(at.number, env);
+  return { counted: gate.counts, cutover: gate.cutover == null ? null : `S${gate.cutover}`, settlement_inferred: at.number, how: at.inferred ? "inferred" : "row" };
+}
+
+/**
+ * WHAT THE SEAL RECORDED: `{ counts, why, recorded }`. PURE over the header. No
+ * record (sealed before 072, back-filled) reads as NOT COUNTED: everything
+ * before the deploy is the old blessing (R14). Never recomputed from the
+ * cutover or the settlements table as they are now.
+ */
+export function stancesOf(header) {
+  const raw = header?.stances ?? null;
+  const s = typeof raw === "string" ? JSON.parse(raw) : raw;
+  if (!s) return { counts: false, recorded: null, why: `snapshot ${header?.id ?? "?"} recorded no stance decision at its seal (sealed before 072, or back-filled), so it counts as before the cutover: every mark ratified (R14)` };
+  if (s.counted === true) return { counts: true, recorded: s, why: null };
+  const n = s.settlement_inferred == null ? "this settlement" : `S${s.settlement_inferred}`;
+  return { counts: false, recorded: s, why: s.cutover == null
+    ? `TOWN_STANCE_CUTOVER was not set when ${n} was sealed: before the cutover every mark counts as ratified (R14)`
+    : `${n} was below the cutover ${s.cutover} when it was sealed: a settlement before the cutover counts every mark as ratified (R14)` };
+}
+
+/** No words: what a settlement folds with when no stance counts at it (§ stancesOf). */
 export const NO_WORDS = Object.freeze({ townWords: new Map(), holderOpposed: [], words: [], through: null, versions: null });
 
 /**
@@ -720,7 +753,7 @@ export function graphOnSettlement(view, settled) {
  * @param {string} o.worldRepo the office's world clone (the engine and filings at law_sha)
  * @param {string|null} o.townRepo the office's town clone (the ledger at town_sha)
  */
-export async function servedSettlement(p, { settlement = null, worldRepo, townRepo = null, now = Date.now(), env = process.env } = {}) {
+export async function servedSettlement(p, { settlement = null, worldRepo, townRepo = null, now = Date.now() } = {}) {
   const number = settlementNumberOf(settlement);
   const { found, words } = await refreshed(`${number ?? "newest"}`, async () => ({
     found: await settlementHeader(p, { number }),
@@ -740,9 +773,11 @@ export async function servedSettlement(p, { settlement = null, worldRepo, townRe
   // cutover (R11). The kept World stays its digest's (the sources and the
   // seal's words); whether those words count is this read's, by the number.
   const asked = number != null;
-  const { stancesCountAt } = await import("./town-stance.mjs");
-  const gate = stancesCountAt(header.settlement, env);
-  const seal = await sealWordsOf(p, header, { worldRepo });
+  const gate = stancesOf(header);
+  // The settlement's own words: its seal's when stances count at it, none when
+  // they do not. That is what its World is, what is kept under its digest (the
+  // digest covers the recorded decision) and what --verify re-derives.
+  const seal = gate.counts ? await sealWordsOf(p, header, { worldRepo }) : NO_WORDS;
   const applied = !gate.counts ? NO_WORDS : asked ? seal : words;
   const sealKey = vetoKey(seal.townWords, seal.holderOpposed);
   const vk = applied.unread ? "unread" : vetoKey(applied.townWords, applied.holderOpposed);
@@ -793,7 +828,7 @@ export async function servedSettlement(p, { settlement = null, worldRepo, townRe
   }
 
   const { __vetoes, ...world } = state;
-  const labels = await labelsFor(p, header, world, applied, { worldRepo, servedKey, seal: asked ? seal : null, env });
+  const labels = await labelsFor(p, header, world, applied, { worldRepo, servedKey, seal: asked ? seal : null });
   if (labels.marks) world.marks = labels.marks;
   const n = Number(header.settlement);
   return {
@@ -862,7 +897,7 @@ async function overlapsAt(worldRepo, sha) {
  * owes a word it may have spoken). Kept per served World and per the words
  * standing, so a refresh with nothing new costs nothing.
  */
-async function labelsFor(p, header, world, words, { worldRepo, servedKey, seal = null, env = process.env }) {
+async function labelsFor(p, header, world, words, { worldRepo, servedKey, seal = null }) {
   if (words.unread) return { unread: `the standing words could not be read: ${words.unread}` };
   // NO CUTOVER, NO LABELS (Wright, 2026-10-07). R14 carries the old blessing
   // over; until TOWN_STANCE_CUTOVER names the settlement it carries over from,
@@ -873,13 +908,12 @@ async function labelsFor(p, header, world, words, { worldRepo, servedKey, seal =
   // inbox keeps that rule; what residents see on the World is this one.
   // A SETTLEMENT BELOW THE CUTOVER (Darko, 2026-10-09: the cutover is a
   // settlement number) is the old blessing too, and carries no label either.
-  const { readCutover, readVersions, readVersionsAtSeal, CUTOVER_KEY, stancesCountAt } = await import("./town-stance.mjs");
-  try {
-    const gate = stancesCountAt(header.settlement, env);
-    if (!gate.counts) return { omitted: gate.cutover == null
-      ? `town_stance and awaiting are omitted: ${CUTOVER_KEY} is not set, so the old blessing carries over (R14) and no mark is labelled`
-      : `town_stance and awaiting are omitted: ${gate.why}, so no mark is labelled` };
-  } catch (e) { return { unread: `the labels could not be read: ${String(e?.defect ?? e?.message ?? e).slice(0, 200)}` }; }
+  // The cutover the labels read is the one the seal recorded (072), never the
+  // variable as it is now.
+  const { readCutover, readVersions, readVersionsAtSeal, CUTOVER_KEY } = await import("./town-stance.mjs");
+  const gate = stancesOf(header);
+  if (!gate.counts) return { omitted: `town_stance and awaiting are omitted: ${gate.why}, so no mark is labelled` };
+  const env = { [CUTOVER_KEY]: gate.recorded.cutover };
   try {
     const key = `${servedKey}|${createHash("sha256").update(JSON.stringify([words.words, env[CUTOVER_KEY] ?? null])).digest("hex").slice(0, 16)}`;
     const hit = LABELLED.get(key);

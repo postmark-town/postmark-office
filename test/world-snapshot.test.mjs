@@ -361,4 +361,65 @@ test("a seal with no stance act keeps stance_through NULL and the five-part dige
   assert.equal(snapshotDigestOf(h), h.digest);
 });
 
+// ── POS-364 (072): THE SEAL RECORDS WHETHER STANCES COUNT, ONCE ─────────────
+//
+// Darko 2026-10-09 (the cutover is a settlement number) and Wright (decide once,
+// at the seal): the clearing job decides from TOWN_STANCE_CUTOVER and the
+// settlement it is making (the store's newest plus one), the seal writes it, and
+// the digest covers it.
+
+test("072 against seeded rows: a snapshot sealed before 072 keeps its digest and reads NULL (not counted)", { skip }, async () => {
+  await seed();
+  const header = { marks_digest: "a".repeat(64), law_sha: LAW_SHA, town_sha: TOWN_SHA, world_sha: WORLD_SHA, register_digest: "b".repeat(64), stance_through: null };
+  const before = { ...header, digest: snapshotDigestOf(header) };
+  const withWords = { ...header, stance_through: "7" };
+  const before069 = { ...withWords, digest: snapshotDigestOf(withWords) };
+  await owner(async (c) => {
+    await c.query("ALTER TABLE world_snapshots DROP COLUMN stances");       // the store as it stands before 072
+    for (const [win, h] of [[300, before], [301, before069]])
+      await c.query(
+        `INSERT INTO world_snapshots (window_id, digest, marks_digest, marks, law_sha, town_sha, world_sha, register_digest, stance_through)
+         VALUES ($1, $2, $3, 0, $4, $5, $6, $7, $8)`,
+        [win, h.digest, h.marks_digest, h.law_sha, h.town_sha, h.world_sha, h.register_digest, h.stance_through]);
+    await c.query(readFileSync(join(ROOT, "world2", "schema", "072_snapshot_stances.sql"), "utf8"));
+    await c.query(readFileSync(join(ROOT, "world2", "schema", "072_snapshot_stances.sql"), "utf8"));   // idempotent
+  });
+  const rows = await read("SELECT window_id, digest, stances, stance_through::text FROM world_snapshots ORDER BY window_id");
+  assert.deepEqual(rows.map((r) => [r.window_id, r.digest, r.stances]), [[300, before.digest, null], [301, before069.digest, null]], "the digests are untouched, the column NULL");
+  for (const r of rows) assert.equal(snapshotDigestOf({ ...header, stance_through: r.stance_through, stances: r.stances }), r.digest, "and JS recomputes them with no seventh part");
+  const { stancesOf } = await import("../src/world-settlement.mjs");
+  assert.equal(stancesOf({ id: 1, stances: null }).counts, false, "no record reads as not counted");
+});
+
+test("072: a new seal under each cutover case writes the expected record, and the digest covers it", { skip }, async () => {
+  const cases = [
+    [null, { counted: false, cutover: null, settlement_inferred: 8, how: "inferred" }],
+    ["S7", { counted: true, cutover: "S7", settlement_inferred: 8, how: "inferred" }],
+    ["S8", { counted: true, cutover: "S8", settlement_inferred: 8, how: "inferred" }],
+    ["S9", { counted: false, cutover: "S9", settlement_inferred: 8, how: "inferred" }],
+  ];
+  for (const [cutover, expected] of cases) {
+    await seed();
+    // The store's newest settlement is S7, so this clearing makes S8.
+    await owner((c) => c.query("INSERT INTO settlements (number, tag_sha, published_at, window_id, blessed_at) VALUES (7, $1, '2026-10-01T07:00:00Z', 300, '2026-10-01T07:00:00Z')", ["c".repeat(40)]));
+    const r = run(JOB, ["--window", "302"], { WORLD2_CLEARING_URL: store.url("clearing_job"), ...(cutover ? { TOWN_STANCE_CUTOVER: cutover } : {}) });
+    assert.equal(r.code, 0, r.out);
+    assert.ok(r.out.includes(`⚑ stances: ${expected.counted ? "COUNTED" : "not counted"} at S8 (inferred), cutover ${cutover ?? "unset"}`), r.out);
+    const h = await withPen("snapshot_reader", (c) => snapshotHeader(c, { window: 302 }));
+    assert.deepEqual(h.stances, expected, `cutover ${cutover ?? "unset"}`);
+    const rows = await withPen("snapshot_reader", (c) => snapshotRows(c, h.marks_digest));
+    const reg = await withPen("snapshot_reader", (c) => snapshotRegisterRows(c, h.register_digest));
+    assert.deepEqual(checkSnapshot(h, rows, reg), [], "JS recomputes the digest the seal wrote, the decision included");
+    assert.notEqual(snapshotDigestOf({ ...h, stances: null }), h.digest, "the decision is part of what the digest names");
+  }
+});
+
+test("072: a malformed cutover is never guessed: the clearing refuses and the window rolls back", { skip }, async () => {
+  await seed();
+  const r = run(JOB, ["--window", "302"], { WORLD2_CLEARING_URL: store.url("clearing_job"), TOWN_STANCE_CUTOVER: "yes" });
+  assert.notEqual(r.code, 0, r.out);
+  assert.match(r.out, /names no settlement/);
+  assert.deepEqual(await read("SELECT id FROM world_snapshots WHERE window_id = 302"), [], "no seal");
+});
+
 test.after(async () => { if (!skip) await store.stop(); });

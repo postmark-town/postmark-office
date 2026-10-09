@@ -44,8 +44,7 @@ const B = {
   name: { slug: "bo/grounds-name", kind: "naming", owner: "bo", body: "The Listening Grounds.", geometry: null, parent: "bo/grounds", data: { date: "2026-10-01T00:00:04Z", tier: "market", name: "The Listening Grounds" } },
 };
 const S11 = [MARKS.plot, B.meadow, B.grounds, B.tower, B.bell, B.hut, B.name];
-// S11 is at or after the cutover S10, so stances count (Darko, 2026-10-09: the cutover is a settlement number).
-const serve = (opts = {}) => asOffice((p) => servedSettlement(p, { worldRepo: WORLD, env: { TOWN_STANCE_CUTOVER: "S10" }, ...opts }));
+const serve = (opts = {}) => asOffice((p) => servedSettlement(p, { worldRepo: WORLD, ...opts }));
 const markOf = (state, id) => state.marks.find((m) => m.id === id);
 const ids = (state) => state.marks.map((m) => m.id).filter((id) => id !== "the-town/hall").sort();
 const header = () => asOffice(async (p) => (await p.query("SELECT * FROM world_snapshots WHERE id = 2")).rows[0]);
@@ -56,7 +55,7 @@ test("the pinned engine carries ruling B (test/clone-pins.json's world sha)", as
 });
 
 test("RULING B · SERVED: ann opposes bo's grounds; the grounds and their name leave, the far tower and the near hut stand where they stood, reparented to cy's meadow", { skip }, async () => {
-  await seed({ s11Marks: S11 });
+  await seed({ cutover: "S10", s11Marks: S11 });
   const before = await serve();
   assert.equal(markOf(before, "bo/tower").placementParent, "bo/grounds");
   assert.equal(markOf(before, "bo/hut").placementParent, "bo/grounds");
@@ -80,7 +79,7 @@ test("RULING B · SERVED: ann opposes bo's grounds; the grounds and their name l
 });
 
 test("RULING B · SERVED, cutover set: the near hut awaits ann's household in its own right; the far tower does not", { skip }, async () => {
-  await seed({ s11Marks: S11 });
+  await seed({ cutover: "S10", s11Marks: S11 });
   const was = process.env.TOWN_STANCE_CUTOVER;
   process.env.TOWN_STANCE_CUTOVER = "S10";                // window 500: S11's marks cleared after it
   try {
@@ -100,9 +99,9 @@ test("RULING B · SERVED, cutover set: the near hut awaits ann's household in it
   }
 });
 
-test("RULING B · GIT: with the cutover set, ann's opposition at the seal takes the grounds and their name out of git, never the tower, the bell or the hut", { skip }, async () => {
-  await seed({ s11Marks: S11, sealWords: [{ actor: "ann", on: "bo/grounds", stance: "opposed" }] });
-  const away = await asOffice(async (p) => settlementTakesAway(p, await header(), { worldRepo: WORLD, env: { TOWN_STANCE_CUTOVER: "S11" } }));
+test("RULING B · GIT: sealed at or after the cutover, ann's opposition at the seal takes the grounds and their name out of git, never the tower, the bell or the hut", { skip }, async () => {
+  await seed({ cutover: "S10", s11Marks: S11, sealWords: [{ actor: "ann", on: "bo/grounds", stance: "opposed" }] });
+  const away = await asOffice(async (p) => settlementTakesAway(p, await header(), { worldRepo: WORLD }));
   assert.deepEqual([...away.slugs].sort(), ["bo/grounds", "bo/grounds-name"]);
   assert.equal(away.stance_returns_whole, undefined);
   // and the asked S11 (its seal's words) is the same World git is written from
@@ -113,7 +112,7 @@ test("RULING B · GIT: with the cutover set, ann's opposition at the seal takes 
 test("R11 · A LAW RETURN IS AS IT WAS: bo's second plot is opposed citing one-per-resident, and the mark on it still names that plot as its placement", { skip }, async () => {
   const plot = (slug, x, date) => ({ slug, kind: "parcel", owner: "bo", body: `${slug}.`, geometry: box(x, 500, 25, 25), parent: null, data: { date, tier: "market" } });
   const stall = sited("cy/stall", "cy", box(1000, 500, 4, 4), "2026-10-01T00:00:00Z");
-  await seed({ s11Marks: [MARKS.plot, plot("bo/plot-one", 600, "2026-09-05T00:00:00Z"), plot("bo/plot-two", 1000, "2026-09-06T00:00:00Z"), stall] });
+  await seed({ cutover: "S10", s11Marks: [MARKS.plot, plot("bo/plot-one", 600, "2026-09-05T00:00:00Z"), plot("bo/plot-two", 1000, "2026-09-06T00:00:00Z"), stall] });
   const s = await serve({ settlement: "S11" });
   const r = s.returned.find((x) => x.mark === "bo/plot-two");
   assert.equal(r?.law, "the-town/one-per-resident", JSON.stringify(s.returned));

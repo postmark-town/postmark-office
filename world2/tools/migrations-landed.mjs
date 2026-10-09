@@ -112,6 +112,8 @@ export const LANDED = {
   "070_static_office_keys.sql":    { probe: `${col("oauth_tokens", "household")} AND ${col("oauth_tokens", "handles")}` },
   // 071 (POS-444): the store's record that a handle came ashore, append-only.
   "071_ashore.sql":                { probe: `${rel("ashore")} AND ${trig("ashore_append_only")}` },
+  // 072 (POS-364): the seal records whether stances count at the settlement.
+  "072_snapshot_stances.sql":      { probe: `${col("world_snapshots", "stances")}` },
 };
 
 /** The schema files in the order a store takes them — name order, as the CI floor applies them. */

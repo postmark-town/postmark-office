@@ -170,8 +170,13 @@ try {
     // versions decided by the seal's instant). That is what the office keeps under the
     // digest. With no stance_through, or no absolute veto among the words, it IS
     // the derived fold above.
-    const { wordsAtSeal, foldWithWords } = await import("../../src/world-settlement.mjs");
-    const words = await wordsAtSeal(client, header, { worldRepo });
+    // WHETHER THOSE WORDS COUNT is the seal's recorded decision (072), read, never
+    // recomputed: below the cutover, or with no decision recorded, the settlement
+    // is its sources with no word at all.
+    const { wordsAtSeal, foldWithWords, stancesOf, NO_WORDS } = await import("../../src/world-settlement.mjs");
+    const decided = stancesOf(header);
+    console.log(`  · stances: ${decided.counts ? `counted (recorded at the seal: cutover ${decided.recorded.cutover}, S${decided.recorded.settlement_inferred}, ${decided.recorded.how})` : `not counted: ${decided.why}`}`);
+    const words = decided.counts ? await wordsAtSeal(client, header, { worldRepo }) : NO_WORDS;
     let consent = null;
     try { consent = await import(pathToFileURL(join(tools, "tools", "consent.mjs")).href); } catch { consent = null; }
     const settled = foldWithWords({ fold, args, townWordsRead: consent ? consent.TOWN_WORDS instanceof Set : false, claimOrderRead: typeof engine.CLAIMED_AT_FIELD === "string", returnsAloneRead: consent ? consent.STANCE_RETURNS_ALONE === true : false }, words, derived);

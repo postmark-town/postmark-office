@@ -42,16 +42,17 @@ export function settlementRig(store) {
     try { return await fn(c); } finally { await c.end(); }
   }
   // `stanceThrough` (POS-362, 069): the newest stance act the seal saw; the digest covers it, as the seal's does.
-  async function seal(c, { id, window, number, marks, lawSha = LAW_SHA, stanceThrough = null }) {
+  // `stances` (POS-364, 072): the seal's recorded decision, or null (sealed before 072: not counted).
+  async function seal(c, { id, window, number, marks, lawSha = LAW_SHA, stanceThrough = null, stances = null }) {
     const pairs = marks.map((m) => ({ slug: m.slug, digest: sha256(rowText(m)), row: rowText(m) }));
     for (const p of pairs) await c.query("INSERT INTO mark_versions (digest, row) VALUES ($1, $2) ON CONFLICT DO NOTHING", [p.digest, p.row]);
     const marks_digest = marksDigestOf(pairs);
     for (const p of pairs) await c.query("INSERT INTO world_snapshot_marks (marks_digest, slug, digest) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING", [marks_digest, p.slug, p.digest]);
-    const digest = snapshotDigestOf({ marks_digest, law_sha: lawSha, town_sha: TOWN_SHA, world_sha: null, stance_through: stanceThrough });
+    const digest = snapshotDigestOf({ marks_digest, law_sha: lawSha, town_sha: TOWN_SHA, world_sha: null, stance_through: stanceThrough, stances });
     await c.query(
-      `INSERT INTO world_snapshots (id, window_id, digest, marks_digest, marks, law_sha, town_sha, world_sha, taken_at, stance_through)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, $8, $9)`,
-      [id, window, digest, marks_digest, pairs.length, lawSha, TOWN_SHA, new Date(Date.UTC(2026, 9, 1 + id)).toISOString(), stanceThrough]);
+      `INSERT INTO world_snapshots (id, window_id, digest, marks_digest, marks, law_sha, town_sha, world_sha, taken_at, stance_through, stances)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, $8, $9, $10)`,
+      [id, window, digest, marks_digest, pairs.length, lawSha, TOWN_SHA, new Date(Date.UTC(2026, 9, 1 + id)).toISOString(), stanceThrough, stances == null ? null : JSON.stringify(stances)]);
     await c.query(
       `INSERT INTO settlements (number, tag_sha, published_at, window_id, blessed_at, snapshot_id)
        VALUES ($1, $2, $3, $4, $3, $5)`,
@@ -62,7 +63,9 @@ export function settlementRig(store) {
   // `sealWords` (POS-362): words spoken BEFORE the seals; S11 is sealed through the newest of them.
   // `before(c)`: rows the test needs in place before the words and the seals (claims, windows).
   // `s11Marks`: the marks S11 seals in place of the default five (the stance-return tests, ruling B).
-  async function seed({ lawSha = LAW_SHA, sealWords = null, before = null, s11Marks = null } = {}) {
+  // `cutover` (072): each seal records the decision a seal under that cutover makes for its own
+  // number, as if its row were read; null records none (sealed before 072). `s11Stances` overrides S11's.
+  async function seed({ lawSha = LAW_SHA, sealWords = null, before = null, s11Marks = null, cutover = null, s11Stances = undefined } = {}) {
     resetSettlementCaches();
     return owner(async (c) => {
       await c.query("TRUNCATE world_snapshot_folds, settlements, world_snapshots, world_snapshot_marks, mark_versions, law_projection, escrow_projection, acts, claims, windows CASCADE");
@@ -83,8 +86,10 @@ export function settlementRig(store) {
         for (const w of sealWords) await speakOn(c, w);
         stanceThrough = (await c.query("SELECT max(id)::text AS t FROM acts WHERE class = 'stance'")).rows[0].t;
       }
-      const s10 = await seal(c, { id: 1, window: 500, number: 10, marks: [MARKS.plot, MARKS.bench], lawSha });
-      const s11 = await seal(c, { id: 2, window: 501, number: 11, marks: s11Marks ?? [MARKS.plot, MARKS.bench, MARKS.yard, MARKS.shed, MARKS.name], lawSha, stanceThrough });
+      const at = (n) => (cutover == null ? null : { counted: n >= Number(String(cutover).replace(/^S/i, "")), cutover, settlement_inferred: n, how: "row" });
+      const s10 = await seal(c, { id: 1, window: 500, number: 10, marks: [MARKS.plot, MARKS.bench], lawSha, stances: at(10) });
+      const s11 = await seal(c, { id: 2, window: 501, number: 11, marks: s11Marks ?? [MARKS.plot, MARKS.bench, MARKS.yard, MARKS.shed, MARKS.name], lawSha, stanceThrough,
+        stances: s11Stances === undefined ? at(11) : s11Stances });
       return { s10, s11 };
     });
   }

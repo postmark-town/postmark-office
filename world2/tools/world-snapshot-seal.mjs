@@ -33,12 +33,21 @@
 //   register_digest   sha256 of "<key> <digest>" lines, key order (COLLATE "C"), "\n"-joined;
 //                     key = "households/<slug>" | "household_pins/<handle>"
 //   snapshot digest   sha256 of "<marks_digest> <law_sha> <town_sha> <world_sha> <register_digest>",
-//                     "-" for an absent value, then " <stance_through>" when it is set (069)
+//                     "-" for an absent value, then " <stance_through>" when it is set (069),
+//                     then " stances:<counted|not-counted>:<cutover|->:<settlement|->:<how>"
+//                     when the decision is recorded (072)
 //
 // THE TOWN'S WORDS (POS-362, 069_snapshot_stance_through.sql; Darko 2026-10-08,
 // option A). The opposed half of a settlement is one more source: the seal
 // records the newest stance act's id, and the settlement's World folds the words
 // up to it (src/world-settlement.mjs § wordsAtSeal). One max(id), nothing derived.
+//
+// WHETHER THEY COUNT (POS-364, 072_snapshot_stances.sql; Darko 2026-10-09, the
+// conservative cutover; Wright: decide once, at the seal). The caller hands the
+// decision in (`stances`, made by world-settlement.mjs § stancesAtSeal from the
+// cutover and the settlement number); this file only writes it, and the digest
+// covers it. Every reader reads the record and never recomputes it.
+//
 // `src/world-snapshot.mjs § checkSnapshot` recomputes every one in JS from the
 // stored rows; that second computation is a check, never a writer.
 
@@ -122,15 +131,19 @@ const HEADER_SQL = `
            (SELECT sha FROM projection_heads WHERE repo = 'town')        AS town_sha,
            (SELECT sha FROM projection_heads WHERE repo = 'world-marks') AS world_sha,
            (SELECT max(id) FROM acts WHERE class = 'stance')             AS stance_through)
-  INSERT INTO world_snapshots (window_id, digest, marks_digest, marks, law_sha, town_sha, world_sha, register_digest, stance_through)
+  INSERT INTO world_snapshots (window_id, digest, marks_digest, marks, law_sha, town_sha, world_sha, register_digest, stance_through, stances)
   SELECT $1, encode(sha256(convert_to(
            list.marks_digest || ' ' || coalesce(heads.law_sha, '-') || ' ' ||
            coalesce(heads.town_sha, '-') || ' ' || coalesce(heads.world_sha, '-') || ' ' ||
-           rlist.register_digest || coalesce(' ' || heads.stance_through::text, ''), 'UTF8')), 'hex'),
+           rlist.register_digest || coalesce(' ' || heads.stance_through::text, '') ||
+           CASE WHEN $2::jsonb IS NULL THEN '' ELSE
+             ' stances:' || CASE WHEN ($2::jsonb->>'counted')::boolean THEN 'counted' ELSE 'not-counted' END
+             || ':' || coalesce($2::jsonb->>'cutover', '-') || ':' || coalesce($2::jsonb->>'settlement_inferred', '-')
+             || ':' || coalesce($2::jsonb->>'how', '-') END, 'UTF8')), 'hex'),
          list.marks_digest, list.marks, heads.law_sha, heads.town_sha, heads.world_sha, rlist.register_digest,
-         heads.stance_through
+         heads.stance_through, $2::jsonb
     FROM list, rlist, heads
-  RETURNING id, digest, marks_digest, marks, law_sha, town_sha, world_sha, register_digest, stance_through,
+  RETURNING id, digest, marks_digest, marks, law_sha, town_sha, world_sha, register_digest, stance_through, stances,
             (SELECT register_rows FROM rlist) AS register_rows`;
 
 /**
@@ -140,16 +153,16 @@ const HEADER_SQL = `
  * and the marks it copies can never disagree.
  *
  * @param {(text: string, args?: any[]) => Promise<{rows: object[], rowCount: number}>} q
- * @param {{ windowId: number }} o
+ * @param {{ windowId: number, stances?: object|null }} o  `stances`: the decision (072), null records none
  * @returns {Promise<{ id: number, digest: string, marks_digest: string, marks: number,
  *   new_versions: number, register_digest: string, register_rows: number, new_register_versions: number,
  *   law_sha: string|null, town_sha: string|null, world_sha: string|null, stance_through: string|null }>}
  */
-export async function sealSnapshot(q, { windowId }) {
+export async function sealSnapshot(q, { windowId, stances = null }) {
   const versions = await q(VERSIONS_SQL);
   await q(LIST_SQL);
   const register = await q(REGISTER_VERSIONS_SQL);
   await q(REGISTER_LIST_SQL);
-  const { rows: [h] } = await q(HEADER_SQL, [windowId]);
+  const { rows: [h] } = await q(HEADER_SQL, [windowId, stances == null ? null : JSON.stringify(stances)]);
   return { ...h, new_versions: versions.rowCount, new_register_versions: register.rowCount };
 }
