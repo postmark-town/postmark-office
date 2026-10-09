@@ -652,14 +652,31 @@ whole town out. The switch stays on.
 **The gate (before the merge):** the switch's clean week has closed (10-11), and
 `paperwork-import --check` reads equal on prod. Prod's mirror logged
 `[paperwork] MIRROR FAILED` on 10-05 (database is locked) and again during the
-10-09 disk-full outage (POS-480's comment: 4 token DELETEs and 1 INSERT). A
-check that names rows is expected to name those. Whether those rows break the
-clean week is Darko's call; the check says exactly which rows they are.
+10-09 disk-full outage (POS-480's comment: 4 token DELETEs and 1 INSERT), so the
+first check names rows. **Darko ruled (2026-10-09): repair, and keep the date.**
+The store is the record, so the files are brought to it, row by flagged row,
+with `--repair`, and the check runs again until it reads equal. Only then is
+this merged and the files deleted.
+
+From the staged tip of this change (it carries `--repair`; its node_modules
+has pg), as root, the tool running as meepo (the files are meepo's):
 
 ```sh
-# as root, from the staged tip (its node_modules has pg); world2_owner, read-only with --check
-sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; cd <the staged tip> && exec runuser -u meepo -- node world2/tools/paperwork-import.mjs --check --pg-url "<world2_owner on world2_dev>" --oauth-db /srv/postmark-office/oauth.db --roles-db /srv/postmark-office/roles.db'
-#   checked; nothing written, exit 0   <- or stop and read the rows it names
+CHECK='node world2/tools/paperwork-import.mjs --pg-url "<world2_owner on world2_dev>" --oauth-db /srv/postmark-office/oauth.db --roles-db /srv/postmark-office/roles.db'
+# 1. What the files lack or hold differently (read-only):
+sudo bash -c "cd <the staged tip> && exec runuser -u meepo -- $CHECK --check"
+#   DRIFT ... (n findings) and the rows, exit 1   <- expected: the 10-05 and 10-09 rows
+# 2. A copy of each file first, never cp of a live sqlite file:
+sudo install -d -m 700 -o meepo /var/backups/postmark-paperwork
+sudo runuser -u meepo -- node -e 'const {DatabaseSync}=require("node:sqlite"); for (const n of ["oauth","roles"]) new DatabaseSync(`/srv/postmark-office/${n}.db`,{readOnly:true}).prepare("VACUUM INTO ?").run(`/var/backups/postmark-paperwork/${n}-pre-repair.db`)'
+# 3. The repair: each flagged row rewritten in the FILE from the store (the store is only read):
+sudo bash -c "cd <the staged tip> && exec runuser -u meepo -- $CHECK --repair"
+#   repaired  oauth_tokens  n rows (k removed from the file, m written from the store) ...
+#   repaired; the files now equal the store, exit 0
+# 4. Check again; repeat 3 and 4 until it reads equal (a mirror write racing the
+#    repair is flagged by the next check, and the next repair takes it):
+sudo bash -c "cd <the staged tip> && exec runuser -u meepo -- $CHECK --check"
+#   checked; nothing written, exit 0   <- the gate. Only now: the merge, the release, the steps below
 ```
 
 **The steps (prod, after the release is live).** Every step is on the box. Do
