@@ -23,11 +23,12 @@
 // it. The index's history value is still built and kept in the index; no door
 // serves it any more.
 //
-// THE CROSSING is the town clock (crossings.mjs). An act carries its own
-// `acts.crossing` (`currentCrossing()` at the write, fractional for a walk,
-// floored here). A letter's is `currentCrossing(delivered_at)`: the boat that
-// sailed it, never a second counter. That lags the send by up to one crossing,
-// which Wright accepted at the granularity of a date and a crossing.
+// THE CROSSING is the town clock (crossings.mjs) read at the winning time:
+// `currentCrossing(at)` for an act and for a letter alike (the spec as
+// amended, Wright 2026-10-09), never `acts.crossing` (a backfilled row can
+// carry another) and never a second counter. A letter's time is its
+// `delivered_at`, the boat that sailed it, which lags the send by up to one
+// crossing; Wright accepted that at the granularity of a date and a crossing.
 //
 // ONE STATEMENT PER PAGE, never one per resident: the handles of the page go
 // in as one array and every one of them comes back from one round trip.
@@ -44,16 +45,16 @@ import { currentCrossing } from "./crossings.mjs";
  * sources compare as like for like.
  */
 export const LAST_ACTIVE_SQL = `
-SELECT handle, at, crossing, src FROM (
+SELECT handle, at, src FROM (
   SELECT DISTINCT ON (actor) actor AS handle,
          to_char(acts.at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS at,
-         crossing::text AS crossing, 'act' AS src
+         'act' AS src
     FROM acts
    WHERE actor = ANY($1::text[])
    ORDER BY actor, acts.at DESC
 ) newest_act
 UNION ALL
-SELECT from_h AS handle, max(delivered_at) AS at, NULL AS crossing, 'letter' AS src
+SELECT from_h AS handle, max(delivered_at) AS at, 'letter' AS src
   FROM town_letters
  WHERE from_h = ANY($1::text[]) AND delivered_at IS NOT NULL
  GROUP BY from_h`;
@@ -75,9 +76,7 @@ export function pickLastActive(rows) {
     if (!at) continue;
     const prev = out.get(r.handle);
     if (prev && prev.at >= at) continue;
-    const own = r.src === "act" && r.crossing != null && Number.isFinite(Number(r.crossing))
-      ? Math.floor(Number(r.crossing)) : null;
-    out.set(r.handle, { at, crossing: own ?? currentCrossing(Date.parse(at)) });
+    out.set(r.handle, { at, crossing: currentCrossing(Date.parse(at)) });
   }
   return out;
 }

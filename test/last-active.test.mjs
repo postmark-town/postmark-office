@@ -5,7 +5,7 @@
 // Darko, 2026-10-09: "to be able to see when that resident was last active …
 // a timestamp or a date or a crossing". The store's `acts` and `town_letters`
 // are seeded so each resident answers a different way: wright's newest is a
-// say (an act, its own crossing, floored), limen's is a letter they sent (at
+// say (an act, at the clock's crossing for its time, whatever it stored), limen's is a letter they sent (at
 // the crossing that sailed it), postmaster's only a letter, and quiet has
 // nothing of their own, only a letter received. The roster, the card and
 // search are asked over REST on two offices (switch 2 off and on) and over MCP
@@ -41,7 +41,7 @@ const statements = [];
 // What each resident must read, from the seed below.
 const LIMEN_LETTER = "2026-07-05T08:00:00.000Z"; // the fixture's limen → postmaster, delivered at 08:00Z
 const EXPECT = {
-  wright: { last_active: "2026-07-03T10:00:00.000Z", last_active_crossing: 42 },            // a say, crossing 42.25 floored
+  wright: { last_active: "2026-07-03T10:00:00.000Z", last_active_crossing: 42 },            // a say: the clock at its time, never its stored 39
   limen: { last_active: LIMEN_LETTER, last_active_crossing: currentCrossing(Date.parse(LIMEN_LETTER)) }, // a letter beats an older walk
   postmaster: { last_active: "2026-07-05T20:00:00.000Z", last_active_crossing: 47 },         // only a letter
   quiet: { last_active: null, last_active_crossing: null },                                  // only received
@@ -61,11 +61,12 @@ before(async () => {
   await copyIndexToStore(w, db);
   await w.end();
   su = await s.connect("postgres");
-  // the acts: at, crossing, actor, action, class. Each is inserted now, long after its `at`.
+  // the acts: at, crossing, actor, action, class. Each is inserted now, long after its `at`;
+  // the stored crossing is never what a door says (the clock at `at` is).
   const act = (at, crossing, actor, action, cls = "voice") =>
     su.query("INSERT INTO acts (at, crossing, actor, action, class) VALUES ($1, $2, $3, $4, $5)", [at, crossing, actor, action, cls]);
   await act("2026-06-20T10:00:00Z", 16, "wright", "walk", "move");
-  await act("2026-07-03T10:00:00Z", 42.25, "wright", "say");
+  await act("2026-07-03T10:00:00Z", 39, "wright", "say"); // a stored crossing the clock disagrees with: the clock wins
   await act("2026-07-04T13:00:00Z", 44.5, "limen", "walk", "move");
   await act("2026-09-01T00:00:00Z", 162, "someone-else", "say");
 
@@ -177,17 +178,15 @@ for (const switched of [false, true]) {
   });
 }
 
-test("pickLastActive: the newest of the two sources wins, and a letter's crossing is the clock's", () => {
+test("pickLastActive: the newest of the two sources wins, and its crossing is the clock's at that time", () => {
   const m = pickLastActive([
-    { handle: "a", at: "2026-07-03T10:00:00.000Z", crossing: "42.25", src: "act" },
-    { handle: "a", at: "2026-07-02T08:00:00Z", crossing: null, src: "letter" },
-    { handle: "b", at: "2026-07-01T00:00:00.000Z", crossing: "40", src: "act" },
-    { handle: "b", at: "2026-07-05T20:00:00Z", crossing: null, src: "letter" },
-    { handle: "c", at: "not a time", crossing: null, src: "letter" },
-    { handle: "d", at: "2026-07-01T00:00:00.000Z", crossing: null, src: "act" },
+    { handle: "a", at: "2026-07-03T10:00:00.000Z", src: "act" },
+    { handle: "a", at: "2026-07-02T08:00:00Z", src: "letter" },
+    { handle: "b", at: "2026-07-01T00:00:00.000Z", src: "act" },
+    { handle: "b", at: "2026-07-05T20:00:00Z", src: "letter" },
+    { handle: "c", at: "not a time", src: "letter" },
   ]);
   assert.deepEqual(m.get("a"), { at: "2026-07-03T10:00:00.000Z", crossing: 42 });
   assert.deepEqual(m.get("b"), { at: "2026-07-05T20:00:00.000Z", crossing: 47 });
   assert.equal(m.has("c"), false);
-  assert.deepEqual(m.get("d"), { at: "2026-07-01T00:00:00.000Z", crossing: 38 }, "an act with no crossing reads the clock");
 });
