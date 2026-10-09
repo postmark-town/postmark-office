@@ -155,6 +155,60 @@ async function usdcPayment(ctx, { tx, usd, account = null, handle = null }) {
   return fundVerify(ctx.town, body, { verify, record, potMap: new Map() });
 }
 
+// ── the candle: the store's clearing job on the synthetic clock (POS-366) ────
+//
+// The clearing moves no stamp and writes no ledger line, but it JUDGES stamps:
+// its first step is the stamp ingest at the town's head (the census first-step),
+// it pins that sha on the window, and it refuses a claim whose stake the
+// claimant's escrow and liquid cannot back (step 3, POS-411) and a commons mark
+// nobody has staked on (step 5.5, postmark#2594). So it runs here, on the
+// sandbox's store and town, at the synthetic clock's crossing: the window opens
+// at the day's 06:00Z boundary and closes twelve hours later, as the box's candle does.
+
+/** A pending claim on the docket, in the mark door's row shape, written by the door's pen (office_api). */
+async function putForward(ctx, windowId, { handle, slug, stake, at }) {
+  const [house] = await ctx.sb.q("office_api", "SELECT slug FROM households WHERE $1 = ANY(residents)", [handle]);
+  if (!house) throw new Error(`${handle} stands in no house in the sandbox store`);
+  const geometry = JSON.stringify({ slug, at: { x: at, y: at }, extent: { w: 2, h: 2 } });
+  const [row] = await ctx.sb.q("office_api",
+    `INSERT INTO claims (window_id, class, claimant, household, status, body, geometry, bbox, stake, data, slug)
+     VALUES ($1, 'sited', $2, $3, 'pending', $4, $5, box(point($6, $6), point($6 + 2, $6 + 2)), $7, $8, $9)
+     RETURNING id::text`,
+    [windowId, handle, `hh:${house.slug}`, `A sandbox mark put forward by ${handle}.`, geometry, at, stake, JSON.stringify({ date: ctx.clock.date }), slug]);
+  return row.id;
+}
+
+/**
+ * Open the candle at the synthetic day's 06:00Z boundary, put the claims forward,
+ * and close it as the box does (world2/tools/clearing-job.mjs --window N
+ * --town-repo, as clearing_job, its stamp ingest first as law_ingester).
+ */
+async function clearWindow(ctx, claims) {
+  const sb = ctx.sb;
+  const [{ n }] = await sb.q("world2_owner", "SELECT coalesce(max(id), 0)::int AS n FROM windows");
+  const id = n + 1;
+  const opens = `${ctx.clock.date}T06:00:00Z`;
+  await sb.q("world2_owner", "INSERT INTO windows (id, opens_at, closes_at, status) VALUES ($1, $2::timestamptz, $2::timestamptz + interval '12 hours', 'open')", [id, opens]);
+  // THE LAW the candle computes against. The sandbox carries no world, so its
+  // law head is a named stand-in and no parcel is claimed here (parcel law is the
+  // dev rehearsal's, POS-354, which ingests a real world).
+  await sb.q("world2_owner", "INSERT INTO projection_heads (repo, sha, ingested_at) VALUES ('world-law', $1, now()) ON CONFLICT (repo) DO NOTHING", ["sandbox-has-no-world".padEnd(40, "0")]);
+  const ids = {};
+  for (const c of claims) ids[c.slug] = await putForward(ctx, id, c);
+  const role = (r) => sb.store.url(r, "stamp_sandbox");
+  const u = new URL(role("law_ingester"));
+  const r = ctx.officeTool("world2/tools/clearing-job.mjs", ["--window", String(id), "--town-repo", ctx.town], {
+    allowFail: true,
+    extraEnv: {
+      WORLD2_CLEARING_URL: role("clearing_job"), WORLD2_INGEST_URL: role("law_ingester"),
+      PGHOST: u.hostname, PGPORT: u.port, PGUSER: decodeURIComponent(u.username), PGPASSWORD: decodeURIComponent(u.password), PGDATABASE: u.pathname.slice(1),
+    },
+  });
+  const outcomes = Object.fromEntries((await sb.q("clearing_job", "SELECT slug, status, refusal_check FROM claims WHERE window_id = $1", [id])).map((x) => [x.slug, x]));
+  const windows = await sb.q("world2_owner", "SELECT id, status, opens_at, closes_at, town_sha FROM windows WHERE id = ANY($1) ORDER BY id", [[id, id + 1]]);
+  return { id, opens, run: r, ids, outcomes, windows, head: ctx.git("rev-parse", "HEAD") };
+}
+
 // ── the script ───────────────────────────────────────────────────────────────
 
 export function scenario(ctx) {
@@ -548,6 +602,46 @@ export function scenario(ctx) {
         return ctx.crossing();
       },
       expect: { lines: { mint: 2 }, bal: { [H("ada")]: 1, [H("cid")]: 1 } },
+    },
+
+    // ── the candle ───────────────────────────────────────────────────────────
+    {
+      id: "27", event: "clearing",
+      title: "the store's clearing on the synthetic clock: a window opens at the day's 06:00Z, three marks are put forward, the candle judges their stamps at the town's head and the next window opens twelve hours on",
+      run: async () => {
+        ctx.nextDay();
+        // sbx-hal asks one stamp more than it holds; nothing is in escrow on its new mark
+        state.halAsks = (ctx.holdings().bal.get(H("hal")) ?? 0) + 1;
+        return clearWindow(ctx, [
+          // sbx-cid's own position on the lamp is still open (step 11 left 1 of its 2): a commons mark with escrow behind it
+          { handle: H("cid"), slug: MARK, stake: 0, at: 9_000_100 },
+          { handle: H("hal"), slug: "sbx-hal/a-tower", stake: state.halAsks, at: 9_000_200 },
+          { handle: H("gus"), slug: "sbx-gus/a-bench", stake: 0, at: 9_000_300 },
+        ]);
+      },
+      // The candle moves no stamp and writes no line: nobody moves.
+      expect: { lines: {} },
+      check: (c, r) => {
+        const p = [];
+        if (r.run.code !== 0) return [`clearing-job --window ${r.id} exited ${r.run.code}: ${r.run.out.trim().split("\n").slice(-3).join(" | ")}`];
+        const o = r.outcomes;
+        // step 5.5 (postmark#2594): a commons mark needs somebody's stamps behind it, and sbx-cid's are
+        if (o[MARK]?.status !== "locked") p.push(`${MARK} reads ${o[MARK]?.status} (${o[MARK]?.refusal_check ?? ""}), not locked: escrow stood behind it`);
+        // step 3 (POS-411): a stake no escrow backs is judged against the claimant's liquid, and it asks one more
+        if (o["sbx-hal/a-tower"]?.status !== "refused" || !/^insufficient-stamps: staked \d+, held 0, liquid \d+ at town /.test(o["sbx-hal/a-tower"]?.refusal_check ?? ""))
+          p.push(`sbx-hal/a-tower reads ${o["sbx-hal/a-tower"]?.status} (${o["sbx-hal/a-tower"]?.refusal_check ?? ""}), not refused insufficient-stamps for ${state.halAsks}`);
+        if (o["sbx-gus/a-bench"]?.status !== "refused" || !o["sbx-gus/a-bench"]?.refusal_check?.startsWith("escrow-absent"))
+          p.push(`sbx-gus/a-bench reads ${o["sbx-gus/a-bench"]?.status} (${o["sbx-gus/a-bench"]?.refusal_check ?? ""}), not refused escrow-absent: nobody staked on it`);
+        const [w, next] = r.windows;
+        if (w?.status !== "closed") p.push(`window ${r.id} reads ${w?.status}, not closed`);
+        // the candle pins the stamps it judged by: the town's head, read by its own stamp ingest
+        if (w?.town_sha !== r.head) p.push(`window ${r.id} pinned town ${w?.town_sha}, not the sandbox town's head ${r.head}`);
+        // the synthetic clock: the successor opens where this one closed, twelve hours on
+        if (!next || next.status !== "open") p.push(`no open window ${r.id + 1} after the clearing: the candle went out`);
+        else if (new Date(next.opens_at).getTime() !== new Date(w.closes_at).getTime() || new Date(next.closes_at) - new Date(next.opens_at) !== 12 * 3_600_000)
+          p.push(`window ${r.id + 1} spans ${next.opens_at} to ${next.closes_at}, not the twelve hours after ${w.closes_at}`);
+        return p;
+      },
     },
   ];
 }
