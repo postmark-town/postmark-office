@@ -36,9 +36,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { writeFileSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { writeFileSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { tmpdir } from "node:os";
 import { join, dirname, delimiter } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -84,6 +83,7 @@ import {
   COPY_SCAN_CAP,
   MINUTE,
 } from "../tools/box-rollcall.mjs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MANIFEST_PATH = join(HERE, "..", "deploy", "box-rollcall-manifest.json");
@@ -694,7 +694,7 @@ test("the manifest refuses a row with no activation owner — 'a mechanism folds
   // otherwise the rule holds only for rows that existed when it was written.
   const stripped = JSON.parse(JSON.stringify(m));
   delete stripped.units[0].activation_owner;
-  const dir = mkdtempSync(join(tmpdir(), "box-rollcall-"));
+  const dir = tempDir("box-rollcall-");
   const tmp = join(dir, "manifest.json");
   writeFileSync(tmp, JSON.stringify(stripped));
   assert.throws(() => loadManifest(tmp), /names no activation_owner/);
@@ -1152,7 +1152,7 @@ test("FALSIFIER (o3): a by-hand publication inside an otherwise-empty window doe
 test("a row judged by its output must declare unsettled_runs — the manifest refuses one that does not", () => {
   // Without it a refusal that returns twice a day forever reads green, which is
   // the exact silence this whole block exists to end.
-  const dir = mkdtempSync(join(tmpdir(), "rollcall-outcome-"));
+  const dir = tempDir("rollcall-outcome-");
   const m = manifest();
   const bad = {
     ...m,
@@ -1228,7 +1228,7 @@ test("FALSIFIER (k4): a custody path that is not on the box at all is an alarm, 
 test("a custody row must say what breaks when custody slips — the manifest refuses one that cannot", () => {
   // The same discipline as activation_owner on a unit row: a row that cannot say
   // why it matters is a row nobody will act on when it reddens.
-  const dir = mkdtempSync(join(tmpdir(), "rollcall-custody-"));
+  const dir = tempDir("rollcall-custody-");
   const m = manifest();
   const bad = { ...m, custody: [{ id: "x", path: "/tmp/x", must_be_owned_by: "meepo" }] };
   const p = join(dir, "manifest.json");
@@ -1339,7 +1339,7 @@ const bashProbe = spawnSync("bash", ["-c", "exit 0"], { encoding: "utf8" });
 const noBash = bashProbe.status === 0 ? false : "no bash on this host — the freshen is a bash script and cannot be run without one";
 
 function runFreshen(failVerb) {
-  const dir = mkdtempSync(join(tmpdir(), "pos192-freshen-"));
+  const dir = tempDir("pos192-freshen-");
   const bin = join(dir, "bin");
   mkdirSync(bin);
   const log = join(dir, "git.log");
@@ -1490,7 +1490,7 @@ test("the shipped manifest's NOTARY row declares the list alarm, and an empty de
   assert.match(row.outcome.history_path, /canon-locks\.jsonl$/);
   // A list-alarm that names no field would pass every other assertion in
   // loadManifest and watch nothing forever.
-  const dir = mkdtempSync(join(tmpdir(), "rollcall-manifest-"));
+  const dir = tempDir("rollcall-manifest-");
   const bad = join(dir, "m.json");
   const m = manifest();
   m.units.find((u) => u.unit === "postmark-world2-notary.timer").outcome.alarm_on_nonempty = [];
@@ -1578,7 +1578,7 @@ test("a row declaring no counts prints no count line, and an empty log leaves it
 });
 
 test("the manifest refuses a count that names no field, has no sentence, or is ALSO an alarm", () => {
-  const dir = mkdtempSync(join(tmpdir(), "rollcall-manifest-"));
+  const dir = tempDir("rollcall-manifest-");
   const bad = join(dir, "m.json");
   const notaryOf = (m) => m.units.find((u) => u.unit === "postmark-world2-notary.timer").outcome;
   let m = manifest(); notaryOf(m).report_counts = [];
@@ -1653,7 +1653,7 @@ test("the shipped NOTARY row declares the flag alarm, and a nameless or voiceles
   assert.match(row.outcome.unchecked_means, /migration 014/, "it must name the pending cause, or the operator hunts the wrong one");
   assert.match(row.outcome.unchecked_means, /never a stake/);
 
-  const dir = mkdtempSync(join(tmpdir(), "rollcall-flag-"));
+  const dir = tempDir("rollcall-flag-");
   for (const [mutate, want] of [
     [(o) => { o.alarm_on_false = []; }, /alarm_on_false that names no field/],
     [(o) => { delete o.unchecked_means; }, /alarm_on_false with no unchecked_means/],
@@ -1886,7 +1886,7 @@ test("a PARKED rail's tree row is reported and alarms on nothing", () => {
 // ── the manifest's own law for §2c ──────────────────────────────────────────
 
 test("the manifest refuses a tree row that cannot say who owns it, what breaks, or why it diverges", () => {
-  const dir = mkdtempSync(join(tmpdir(), "rollcall-trees-"));
+  const dir = tempDir("rollcall-trees-");
   const cases = [
     [(t) => { delete t.rows[0].activation_owner; }, /names no activation_owner/],
     [(t) => { delete t.rows[0].why; }, /does not say what breaks/],
@@ -2090,7 +2090,7 @@ test("§2e ABSENCE IS NOT FRESHNESS: no clone, an unreadable clone, and a clone 
 });
 
 test("§2e THE COLLECTOR, on a real repository: the newest is the HIGHEST NUMBER (S10 over S9), and its age is the tag's own date", () => {
-  const dir = mkdtempSync(join(tmpdir(), "rollcall-bless-"));
+  const dir = tempDir("rollcall-bless-");
   try {
     const git = (args, env = {}) => spawnSync("git", ["-C", dir, ...args], { encoding: "utf8", env: { ...process.env, ...env } });
     git(["init", "-q"]);
@@ -2113,7 +2113,7 @@ test("§2e THE ROW IS STRICT: a blessing row with no allowance or no why is refu
   for (const [drop, want] of [["max_age_hours", /names no max_age_hours/], ["why", /does not say what goes wrong/], ["activation_owner", /names no activation_owner/]]) {
     const m = JSON.parse(readFileSync(MANIFEST_PATH, "utf8"));
     delete m.blessings[0][drop];
-    const p = join(mkdtempSync(join(tmpdir(), "rollcall-bless-m-")), "m.json");
+    const p = join(tempDir("rollcall-bless-m-"), "m.json");
     writeFileSync(p, JSON.stringify(m));
     assert.throws(() => loadManifest(p), want);
   }

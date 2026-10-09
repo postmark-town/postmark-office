@@ -27,9 +27,8 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
 
 import { loginKeys, sketchbookKeys } from "../src/household-logins.mjs";
 import { markRecord } from "../src/mark-record.mjs";
@@ -39,8 +38,9 @@ import {
   FoldInputRefusal, clearGitSketchbooks, normalizeFoldInput, normalizeMark,
   planStoreWriteDown, sketchbookNameFor, starvingCheck, storeWriteDown,
 } from "../src/store-writedown.mjs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
-const scratch = mkdtempSync(join(tmpdir(), "postmark-storewd-"));
+const scratch = tempDir("postmark-storewd-");
 after(() => { try { rmSync(scratch, { recursive: true, force: true }); } catch { /* litter */ } });
 
 const SEED_ISO = "2026-08-01T00:00:00.000Z";

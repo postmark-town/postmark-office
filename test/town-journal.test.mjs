@@ -11,9 +11,8 @@ import "./helpers/drain-pen.mjs"; // #2040: fixtures get a real ledger pen
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 
 import {
   appendTownJournal, pendingHandles, pendingRows, readTownJournal, rowIsSettleable,
@@ -29,6 +28,7 @@ import { appendJournal, CLASS_MARK } from "../src/world-journal.mjs";
 import { seedJournalRow } from "./journal-seed.mjs";
 import { DYNAMIC_SCHEMA } from "../src/dynamic-store.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 // The world journal's own DDL, lifted from the store's schema rather than
 // retyped — a hand-copied table in a test is a second definition of the shape
@@ -71,7 +71,7 @@ const row = (over = {}) => ({
   ghId: "12345", ghLogin: "tester-gh", payload: { household: "Testers", card: "a card" }, ...over,
 });
 function townClone() {
-  const dir = mkdtempSync(join(tmpdir(), "pm-towndrain-"));
+  const dir = tempDir("pm-towndrain-");
   mkdirSync(join(dir, "WHITE_PAGES"), { recursive: true });
   mkdirSync(join(dir, "tools"), { recursive: true });
   writeFileSync(join(dir, REGISTRY_PATH), JSON.stringify({ schema_version: 1, households: {} }, null, 2) + "\n");

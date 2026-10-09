@@ -21,12 +21,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, readFileSync, existsSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync, readFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { append, lineFor, readHistory, isDecision, recurringUnsettled, RETAIN } from "../deploy/settlement-history.mjs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TOOL = join(HERE, "..", "deploy", "settlement-history.mjs");
@@ -117,7 +117,7 @@ test("nothing else is ever withheld — a refusal from inside the retry still la
 });
 
 test("end to end: three raced attempts and the wrapper's verdict leave ONE line", () => {
-  const dir = mkdtempSync(join(tmpdir(), "settlement-history-"));
+  const dir = tempDir("settlement-history-");
   const rp = join(dir, "receipt.json");
   const hp = join(dir, "history.jsonl");
 
@@ -197,7 +197,7 @@ test("a SHORT log is not a pattern — a fresh install must not escalate about i
 });
 
 test("the query answers with an EXIT CODE, because its caller is a POSIX `if`", () => {
-  const dir = mkdtempSync(join(tmpdir(), "settlement-recurring-"));
+  const dir = tempDir("settlement-recurring-");
   const write = (name, rows) => {
     const p = join(dir, name);
     writeFileSync(p, `${rows.map((r) => JSON.stringify(r)).join("\n")}\n`);
@@ -219,7 +219,7 @@ test("the query answers with an EXIT CODE, because its caller is a POSIX `if`", 
 });
 
 test("the query mode NEVER writes — it is asked from inside a refusing crossing", () => {
-  const dir = mkdtempSync(join(tmpdir(), "settlement-recurring-ro-"));
+  const dir = tempDir("settlement-recurring-ro-");
   const p = join(dir, "h.jsonl");
   const rows = [unsettledRow(), unsettledRow(), unsettledRow()];
   writeFileSync(p, `${rows.map((r) => JSON.stringify(r)).join("\n")}\n`);

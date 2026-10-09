@@ -15,14 +15,14 @@
 
 import { execFileSync, spawn } from "node:child_process";
 import { createServer } from "node:net";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, readdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { startStore } from "./embedded-store.mjs";
 import { seedRegistry } from "./office-under-test.mjs";
 import { awaitListening } from "../spawn-office.mjs";
+import { tempDir } from "./temp-dir.mjs";
 
 const OFFICE = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const g = (repo, ...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }).trim();
@@ -69,7 +69,7 @@ export async function localDevTarget({
   worldSuite = false,
   log = () => {},
 } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "dev-target-"));
+  const dir = tempDir("dev-target-");
   const cleanups = [() => rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })];
   const stop = async () => { for (const c of cleanups.reverse()) { try { await c(); } catch { /* litter */ } } };
   try {

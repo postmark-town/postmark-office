@@ -33,10 +33,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const RESET = join(HERE, "..", "deploy", "shadow-refs-reset.sh");
@@ -56,7 +56,7 @@ const remoteDrafts = (repo) =>
  * one.
  */
 function fixture() {
-  const dir = mkdtempSync(join(tmpdir(), "shadow-refs-"));
+  const dir = tempDir("shadow-refs-");
   const origin = join(dir, "origin");
   const clone = join(dir, "clone");
   mkdirSync(origin, { recursive: true });
@@ -100,7 +100,7 @@ function oldReset(clone) {
     'git -C "$1" for-each-ref --format="%(refname:short) %(objectname)" "refs/remotes/origin/draft/*" > "$2"',
     'while read -r ref sha; do [ -n "$ref" ] || continue; git -C "$1" branch -qf "${ref#origin/}" "$sha"; done < "$2"',
   ].join("\n");
-  const tips = join(mkdtempSync(join(tmpdir(), "oldtips-")), "tips");
+  const tips = join(tempDir("oldtips-"), "tips");
   execFileSync("sh", ["-c", script, "sh", clone, tips], { stdio: "ignore" });
 }
 
@@ -138,7 +138,7 @@ test("the new reset DROPS the residue, and says which one it dropped", () => {
   // stderr redirected by the shell rather than captured from a throw: the reset
   // SUCCEEDS here, so a harness that only kept stderr from failures would have
   // nothing to assert the narration against.
-  const errFile = join(mkdtempSync(join(tmpdir(), "reseterr-")), "err.txt");
+  const errFile = join(tempDir("reseterr-"), "err.txt");
   execFileSync("sh", ["-c", 'sh "$1" "$2" 2> "$3"', "sh", RESET, clone, errFile], { stdio: "ignore" });
   const said = readFileSync(errFile, "utf8");
 

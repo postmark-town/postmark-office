@@ -6,10 +6,10 @@
 
 import { DatabaseSync } from "node:sqlite";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 import { SCHEMA } from "../src/schema.mjs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 export function fixtureDb(path = ":memory:") {
   const db = new DatabaseSync(path);
@@ -140,7 +140,7 @@ export function fixtureDb(path = ":memory:") {
 
 // a git-init'd throwaway town clone with just enough shape for the write spine
 export function tempClone() {
-  const dir = mkdtempSync(join(tmpdir(), "postmark-office-test-"));
+  const dir = tempDir("postmark-office-test-");
   mkdirSync(join(dir, "WHITE_PAGES", "wright", "outbox"), { recursive: true });
   const git = (...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8" });
   git("init", "-q");
@@ -154,7 +154,7 @@ export const fixtureKey = { household: "keemin", handles: new Set(["wright"]) };
 // a git-init'd clone with wright's ADDRESS.md + HOME/HOME.md (frontmatter + body)
 // so the body edit verbs have real files to preserve-frontmatter-and-swap-body.
 export function editClone() {
-  const dir = mkdtempSync(join(tmpdir(), "postmark-office-edit-"));
+  const dir = tempDir("postmark-office-edit-");
   const wp = join(dir, "WHITE_PAGES", "wright");
   mkdirSync(join(wp, "HOME"), { recursive: true });
   mkdirSync(join(wp, "inbox"), { recursive: true });
