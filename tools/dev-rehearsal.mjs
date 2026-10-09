@@ -867,12 +867,12 @@ export function plan() {
       id: "stamp-sandbox",
       title: "the stamp sandbox is GREEN on the carried sha (CI's `stamp sandbox` check, POS-366): every stamp event and the store's clearing, on a throwaway store and ledger",
       async run(ctx) {
-        const sha = carriedSha(ctx.t.officeRoot);
-        return { sha, verdict: sha ? await (ctx.t.sandboxVerdict ?? sandboxVerdictFromGitHub)(sha) : null };
+        const { sha, ref } = carried(ctx.t.officeRoot);
+        return { sha, ref, verdict: sha ? await (ctx.t.sandboxVerdict ?? sandboxVerdictFromGitHub)(sha) : null };
       },
       async check(ctx, r, rec) {
-        const p = sandboxProblems(r.sha, r.verdict ?? {});
-        if (!p.length) rec.notes.push(`${SANDBOX_CHECK}: success on ${r.verdict.head_sha ?? r.sha} (${r.verdict.url})`);
+        const p = sandboxProblems(r.sha, r.verdict ?? {}, r.ref);
+        if (!p.length) rec.notes.push(`${SANDBOX_CHECK}: success on ${r.verdict.head_sha ?? r.sha} (${r.ref}; ${r.verdict.url})`);
         return p;
       },
     },
@@ -926,11 +926,19 @@ async function keyProblems(ctx) {
 
 export const SANDBOX_CHECK = "stamp sandbox";
 
-/** The sha the dev office was carried with: its release.json (the carry writes it), else the tree's own HEAD. */
-export function carriedSha(officeRoot) {
-  try { const r = JSON.parse(readFileSync(join(officeRoot, "release.json"), "utf8")); if (r?.sha) return String(r.sha); } catch { /* not a carried tree */ }
+/**
+ * What the dev office was carried with: `{ sha, ref }` from its release.json
+ * (the carry writes `tag`, the ref it carried, e.g. train/2026-w42, and `sha`),
+ * else the tree's own HEAD and branch. Either may be null.
+ */
+export function carried(officeRoot) {
+  try {
+    const r = JSON.parse(readFileSync(join(officeRoot, "release.json"), "utf8"));
+    if (r?.sha) return { sha: String(r.sha), ref: r.tag ? String(r.tag) : null };
+  } catch { /* not a carried tree */ }
   const g = gitQuiet(officeRoot, "rev-parse", "HEAD");
-  return g.status === 0 ? g.stdout.trim() : null;
+  const b = gitQuiet(officeRoot, "symbolic-ref", "--short", "-q", "HEAD");
+  return { sha: g.status === 0 ? g.stdout.trim() : null, ref: b.status === 0 ? b.stdout.trim() : null };
 }
 
 /**
@@ -950,13 +958,18 @@ export async function sandboxVerdictFromGitHub(sha, { api = "https://api.github.
   return { runs: runs.length, status: newest?.status ?? null, conclusion: newest?.conclusion ?? null, url: newest?.html_url ?? null, head_sha: newest?.head_sha ?? null };
 }
 
-/** The sandbox step's verdict, as problems. */
-export function sandboxProblems(sha, v) {
+/**
+ * The sandbox step's verdict, as problems. Every red names the sha and the ref
+ * carried (Wright, 10-09), so whoever reads it knows exactly what to dispatch.
+ */
+export function sandboxProblems(sha, v, ref = null) {
   if (!sha) return ["the dev office names no carried sha (no release.json, not a git checkout): the sandbox's verdict cannot be looked up"];
-  if (v.error) return [v.error];
-  if (!v.runs) return [`no "${SANDBOX_CHECK}" run on ${sha}: label the train's ship PR \`stamp-sandbox\` (its runs report on the train's tip), or once sandbox.yml is on main, \`gh workflow run sandbox.yml -R postmark-town/postmark-office --ref <the train>\`; then run this step again`];
-  if (v.status !== "completed") return [`the "${SANDBOX_CHECK}" run on ${sha} is ${v.status} (${v.url}): wait for its verdict`];
-  if (v.conclusion !== "success") return [`the "${SANDBOX_CHECK}" run on ${sha} concluded ${v.conclusion} (${v.url}): a stamp event is red on the code carried to dev`];
+  const at = `${sha} (${ref ?? "the ref carried is unnamed: read release.json"})`;
+  const train = ref ?? "<the train carried>";
+  if (v.error) return [`${v.error}: the sandbox's verdict on ${at} is unknown, so this step is red until it can be read`];
+  if (!v.runs) return [`no "${SANDBOX_CHECK}" run on ${at}: label the ship PR from ${train} into main \`stamp-sandbox\` (its runs report on ${train}'s tip), or once sandbox.yml is on main, \`gh workflow run sandbox.yml -R postmark-town/postmark-office --ref ${train}\`; then run this step again`];
+  if (v.status !== "completed") return [`the "${SANDBOX_CHECK}" run on ${at} is ${v.status} (${v.url}): wait for its verdict, then run this step again`];
+  if (v.conclusion !== "success") return [`the "${SANDBOX_CHECK}" run on ${at} concluded ${v.conclusion} (${v.url}): a stamp event is red on the code carried to dev; fix it on ${train}, re-carry, and run the rehearsal again`];
   return [];
 }
 

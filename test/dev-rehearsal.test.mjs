@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { CROSSING, PROD_DB, SANDBOX_CHECK, carriedSha, databaseOf, githubStub, parseEnvFile, sandboxProblems, sandboxVerdictFromGitHub, storeGuard, treeTables } from "../tools/dev-rehearsal.mjs";
+import { CROSSING, PROD_DB, SANDBOX_CHECK, carried, databaseOf, githubStub, parseEnvFile, sandboxProblems, sandboxVerdictFromGitHub, storeGuard, treeTables } from "../tools/dev-rehearsal.mjs";
 
 const OFFICE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const TOOL = join(OFFICE, "tools", "dev-rehearsal.mjs");
@@ -191,20 +191,21 @@ test("the sandbox verdict: the newest run of the named check is the one judged",
 });
 
 test("a failed, running or missing sandbox run is red, and so is a GitHub that did not answer", async () => {
-  const red = async (runs) => sandboxProblems("abc1234", await sandboxVerdictFromGitHub("abc1234", { fetchImpl: runsAt(runs) }));
-  assert.match((await red([run("failure", "2026-10-09T12:00:00Z")]))[0], /concluded failure .* a stamp event is red/);
-  assert.match((await red([run(null, "2026-10-09T12:00:00Z", { status: "in_progress" })]))[0], /is in_progress .* wait for its verdict/);
-  assert.match((await red([]))[0], /no "stamp sandbox" run on abc1234: label the train's ship PR `stamp-sandbox`/);
+  // every red names the sha and the train carried, so the reader knows what to dispatch (Wright, 10-09)
+  const red = async (runs) => sandboxProblems("abc1234", await sandboxVerdictFromGitHub("abc1234", { fetchImpl: runsAt(runs) }), "train/2026-w42");
+  assert.match((await red([run("failure", "2026-10-09T12:00:00Z")]))[0], /on abc1234 \(train\/2026-w42\) concluded failure .* fix it on train\/2026-w42, re-carry/);
+  assert.match((await red([run(null, "2026-10-09T12:00:00Z", { status: "in_progress" })]))[0], /on abc1234 \(train\/2026-w42\) is in_progress .* wait for its verdict/);
+  assert.match((await red([]))[0], /no "stamp sandbox" run on abc1234 \(train\/2026-w42\): label the ship PR from train\/2026-w42 into main `stamp-sandbox`.*--ref train\/2026-w42`/);
   const down = await sandboxVerdictFromGitHub("abc1234", { fetchImpl: async () => ({ ok: false, status: 403 }) });
-  assert.match(sandboxProblems("abc1234", down)[0], /GitHub answered 403/);
+  assert.match(sandboxProblems("abc1234", down, "train/2026-w42")[0], /GitHub answered 403.*abc1234 \(train\/2026-w42\)/);
   assert.match(sandboxProblems(null, {})[0], /names no carried sha/);
 });
 
-test("the carried sha is release.json's (the carry writes it), else the tree's HEAD", () => {
+test("what was carried is release.json's sha and tag (the carry writes both), else the tree's HEAD and branch", () => {
   const dir = mkdtempSync(join(tmpdir(), "dev-rehearsal-sha-"));
   try {
     writeFileSync(join(dir, "release.json"), JSON.stringify({ tag: "train/2026-w42", sha: "65c5e6d", target: "dev" }));
-    assert.equal(carriedSha(dir), "65c5e6d");
-    assert.equal(carriedSha(OFFICE), execFileSync("git", ["-C", OFFICE, "rev-parse", "HEAD"], { encoding: "utf8" }).trim());
+    assert.deepEqual(carried(dir), { sha: "65c5e6d", ref: "train/2026-w42" });
+    assert.equal(carried(OFFICE).sha, execFileSync("git", ["-C", OFFICE, "rev-parse", "HEAD"], { encoding: "utf8" }).trim());
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
