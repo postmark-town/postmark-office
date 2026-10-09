@@ -834,7 +834,7 @@ export function repoLogPage({ total, limit, offset }, commits) {
 
 export function letter(db, id) {
   const row = db.prepare("SELECT json FROM letters WHERE id = ?").get(id);
-  return row ? withWhole(JSON.parse(row.json)) : null;
+  return row ? withWhole(JSON.parse(row.json), { asOf: indexAsOf(db) }) : null;
 }
 
 // ── A COPY CARRIES PROOF IT'S WHOLE (POS-334, Limen at Office Hours, 10-02) ──
@@ -852,8 +852,16 @@ export function letter(db, id) {
 // Both letter() twins call this, so every door that serves a letter by id
 // (REST /letters/{id}, town { read: "letter" }, household { read: "letter" })
 // serves the same proof.
-export const LETTER_WHOLE_CHECK = "The body is the letter file at `source`, past its frontmatter's closing --- line, trimmed. Its UTF-8 bytes hash to sha256. A body shorter than this, or hashing otherwise, was cut on its way to you.";
-export function withWhole(l) {
+//
+// `source` IS THE RAW FILE AT THE COPY'S OWN COMMIT (#447 review, finding 2).
+// A blob URL serves a rendered page, which hashes to nothing; and `main` moves
+// (a bounced letter is fixed in place, a delivered one leaves the outbox), so
+// a check against main could accuse an honest copy. The index records the town
+// sha it was read at (`as_of`, on both twins), and raw.githubusercontent.com at
+// that sha serves the exact bytes the office read. Each path segment is encoded:
+// outbox filenames are the resident's own.
+export const LETTER_WHOLE_CHECK = "The body is the letter file at `source` (the town at the commit this copy was read from), past its frontmatter's closing --- line, with leading and trailing whitespace stripped. Its UTF-8 bytes hash to sha256. A body shorter than this, or hashing otherwise, was cut on its way to you.";
+export function withWhole(l, { asOf = null } = {}) {
   const body = String(l?.body ?? "");
   // THE PROOF GOES AHEAD OF WHAT IT PROVES (#447 review, finding 1). A cut
   // downstream truncates the serialized answer, so a `whole` written after the
@@ -863,7 +871,9 @@ export function withWhole(l) {
     chars: [...body].length,
     bytes: Buffer.byteLength(body, "utf8"),
     sha256: createHash("sha256").update(body, "utf8").digest("hex"),
-    source: l?.path ? `https://github.com/postmark-town/postmark/blob/main/${l.path}` : null,
+    source: l?.path && asOf
+      ? `https://raw.githubusercontent.com/postmark-town/postmark/${asOf}/${String(l.path).split("/").map(encodeURIComponent).join("/")}`
+      : null,
     check: LETTER_WHOLE_CHECK,
   }, ...l };
 }

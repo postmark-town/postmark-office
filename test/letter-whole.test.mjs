@@ -31,6 +31,8 @@ function bodyFromFile(text) {
   const close = lines.findIndex((l, i) => i > 0 && l.replace(/\r$/, "") === "---");
   return lines.slice(close + 1).join("\n").trim();
 }
+// The town sha the fixture index says it was read at (test/fixture.mjs).
+const AS_OF = "fixturesha000000000000000000000000000000";
 const sha256 = (s) => createHash("sha256").update(s, "utf8").digest("hex");
 
 // Two files as residents commit them: one LF with accents, an emoji and
@@ -69,7 +71,7 @@ test("a letter read carries the body's length and sha256, and the public file pr
       chars: [...original].length,
       bytes: Buffer.byteLength(original, "utf8"),
       sha256: sha256(original),
-      source: `https://github.com/postmark-town/postmark/blob/main/WHITE_PAGES/${l.to}/inbox/${id}.md`,
+      source: `https://raw.githubusercontent.com/postmark-town/postmark/${AS_OF}/WHITE_PAGES/${l.to}/inbox/${id}.md`,
       check: LETTER_WHOLE_CHECK,
     }, `${id}: whole names the original`);
     assert.deepEqual(letter(db, id).whole, l.whole, "the bare letter read (REST /letters/{id}) carries the same proof");
@@ -110,5 +112,26 @@ test("a read_letter answer cut at the body's midpoint still carries its whole (#
   assert.ok(prefix.includes(`"sha256": "${result.whole.sha256}"`), "the hash survives a cut that leaves half the body");
   assert.ok(prefix.includes(`"bytes": ${result.whole.bytes}`), "and so does the length");
   assert.ok(prefix.indexOf('"whole"') < prefix.indexOf('"body"'), "the proof is written before what it proves");
+  db.close();
+});
+
+test("source is the raw file at the index's own commit, each path segment encoded (#447 review, finding 2)", () => {
+  // A blob URL serves a rendered page and `main` moves, so a reader hashing
+  // what the link returned could never match, or would accuse an honest copy.
+  // The raw file at the sha the index was read at is the bytes the office read.
+  const db = seeded();
+  const id = "wren-2026-10-02-to-limen-a #draft?";
+  const text = "---\nid: x\nfrom: wren\nto: limen\n---\nA name with a space, a hash and a question mark.\n";
+  const path = `WHITE_PAGES/wren/outbox/letter-2026-10-02-a #draft?.md`;
+  db.prepare("INSERT INTO letters VALUES (?,?,?,?,?,?,?,?,?,?)").run(id, "wren", "limen", "2026-10-02", null, "outbox", "wren", path,
+    JSON.stringify({ id, from: "wren", to: "limen", body: parseFrontmatter(text).body, path, box: "outbox" }), null);
+  const { whole } = letterAnswer(db, id);
+  assert.equal(whole.source,
+    `https://raw.githubusercontent.com/postmark-town/postmark/${AS_OF}/WHITE_PAGES/wren/outbox/letter-2026-10-02-a%20%23draft%3F.md`);
+  assert.match(whole.check, /with leading and trailing whitespace stripped/);
+
+  // An index that cannot say which commit it read names no source rather than main.
+  db.prepare("DELETE FROM meta WHERE key = 'as_of'").run();
+  assert.equal(letterAnswer(db, id).whole.source, null);
   db.close();
 });
