@@ -1,11 +1,11 @@
 {
-  "_doc": "The town and world checkouts the office suite reads (town-clone/, world-clone/), pinned. CI (.github/workflows/suite.yml) fetches exactly these and nothing newer: HEAD, origin/main and the tags are all as they stood at the pin. A pin moves only by a PR that changes this file. Seeded 2026-10-07 from the w42 control (G:/Starstory/docs/2026-10-04/rail/w42-control/CONTROL.md), the shas every office pool tree's clones sit at. POS-417. The world pin moved to 0bcb9c1c, world#166's merge (the fold's first-claim order, which the limit tests read by sha), in office#441 on 2026-10-08 (POS-364).",
+  "_doc": "The town and world checkouts the office suite reads (town-clone/, world-clone/), pinned. CI (.github/workflows/suite.yml) fetches exactly these and nothing newer: HEAD, origin/main and the tags are all as they stood at the pin. A pin moves only by a PR that changes this file. Seeded 2026-10-07 from the w42 control (G:/Starstory/docs/2026-10-04/rail/w42-control/CONTROL.md), the shas every office pool tree's clones sit at. POS-417. The world pin moved to 0bcb9c1c, world#166's merge (the fold's first-claim order, which the limit tests read by sha), in office#441 on 2026-10-08 (POS-364). The world pin moved to d9f85deb, postmark-world#PR (ruling B: a stance return takes the opposed mark alone; the stance-return tests read it), in POS-362/364 lane plumb-stance-returns on 2026-10-09.",
   "town": {
     "repo": "https://github.com/postmark-town/postmark.git",
     "sha": "4e38bbdda260c2fa62750a4a052ec4265317943d"
   },
   "world": {
     "repo": "https://github.com/postmark-town/postmark-world.git",
-    "sha": "0bcb9c1c55c0631ccf312af43b9f8f6533256cc4"
+    "sha": "d9f85deb08e36c2c2b5f4ad1f71de1ad6ce93ba6"
   }
 }

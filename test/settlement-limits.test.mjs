@@ -131,12 +131,15 @@ test("THE CROSSING'S SETTLEMENT BLOCK: the docket loses what the settlement take
   await settle({ parcels });
   const out = { marks: parcels.map((p) => ({ slug: p.slug })), as_of: { window: 501 } };
   const selection = { entry: "fold-delta.mjs § foldDelta", docket_claims: 4, carried_absent: { checked: true, count: 0, slugs: [] } };
-  const read = await asOffice((p) => settlementWithhold(p, { window: 501, worldRepo: WORLD, out, selection }));
+  // The env is the crossing's own, handed in, so neither arm can be skipped by the shell this runs in.
+  const read = await asOffice((p) => settlementWithhold(p, { window: 501, worldRepo: WORLD, out, selection, env: {} }));
   assert.deepEqual(read.out.marks.map((m) => m.slug), ["ra/plot", "rb/plot", "rc/plot"]);
   assert.equal(read.selection.settlement.withheld_from_docket, 1);
   assert.deepEqual(read.selection.settlement.limits, [{ mark: "rd/plot", law: "the-town/claim-cap" }]);
-  if (!process.env.TOWN_STANCE_CUTOVER)
-    assert.match(read.selection.settlement.stances_not_counted ?? "", /R14/, "the LIMIT is withheld with the cutover unset; the receipt says no stance counted (R14)");
+  assert.match(read.selection.settlement.stances_not_counted ?? "", /R14/, "the LIMIT is withheld with the cutover unset; the receipt says no stance counted (R14)");
+  const set = await asOffice((p) => settlementWithhold(p, { window: 501, worldRepo: WORLD, out, selection, env: { TOWN_STANCE_CUTOVER: "S11" } }));
+  assert.deepEqual(set.out.marks.map((m) => m.slug), ["ra/plot", "rb/plot", "rc/plot"], "with the cutover set, the same limit is withheld");
+  assert.equal(set.selection.settlement.stances_not_counted, undefined, "and the receipt no longer says no stance counted");
   // Unreadable (no world checkout): the window's own forecast is withheld instead.
   await owner((c) => c.query(`UPDATE windows SET receipts = '{"parcel_cap":{"checked":true,"over_limit":[{"slug":"rd/plot","held":3,"law":"the-town/claim-cap"}]}}' WHERE id = 501`));
   const blind = await asOffice((p) => settlementWithhold(p, { window: 501, worldRepo: null, out, selection }));

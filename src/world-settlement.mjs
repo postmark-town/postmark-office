@@ -184,6 +184,10 @@ export async function settlementFoldInputs(p, header, { worldRepo, townRepo }) {
     // field it reads. An older one orders by the restamped date, so a limit it
     // finds may be the wrong parcel, and the settlement does not apply it.
     claimOrderRead: typeof engine.CLAIMED_AT_FIELD === "string",
+    // Ruling B (Darko, 2026-10-09; world consent.mjs § A STANCE RETURN TAKES THE
+    // OPPOSED MARK ALONE): an engine that carries it says so. An older one
+    // returns a stance-opposed mark with its whole subtree, and the answer says so.
+    returnsAloneRead: consent ? consent.STANCE_RETURNS_ALONE === true : false,
   };
   ARGS.set(header.digest, inputs);
   if (ARGS.size > 3) ARGS.delete(ARGS.keys().next().value);
@@ -287,6 +291,10 @@ export async function wordsAtSeal(p, header, { worldRepo } = {}) {
 
 const opposedTownOf = (words) => [...(words?.townWords ?? new Map())].filter(([, w]) => w === "opposed").map(([id]) => id);
 
+/** The sentence for a World whose engine predates ruling B (§ stanceReturnsWhole). */
+export const wholeSentence = (header, marks) =>
+  `the engine at law ${String(header.law_sha).slice(0, 12)} predates ruling B (a stance return takes the opposed mark alone), so ${marks.join(", ")} left with the marks standing in them`;
+
 /** The absolute vetoes among a set of words, as `meta.opposed` names them; null when there are none. */
 export function vetoesOf(words) {
   const town = opposedTownOf(words);
@@ -342,6 +350,14 @@ export function limitOppositions(state) {
  * a fold some other word already took a parcel out of. `cleared` is that fold
  * when the caller already holds it. `vetoes.town_unread` names the town's
  * opposed marks (limits included) an engine older than world#146 could not carry.
+ *
+ * A STANCE RETURN TAKES THE OPPOSED MARK ALONE; A LAW RETURN TAKES ITS SUBTREE
+ * (Darko's ruling B, 2026-10-09). The two are told apart for the engine: each
+ * limit goes in as the town's word AND in `townLaws` (mark → the law it cites),
+ * and an engine with ruling B returns those with their subtree, as before, and
+ * every other opposition alone, its positioned children reparented. An engine
+ * older than ruling B ignores `townLaws` and returns every opposition with its
+ * subtree; `vetoes.stance_returns_whole` names the stance returns it did that to.
  */
 export function foldWithWords(inputs, words, cleared = null) {
   const base = cleared ?? foldOver(inputs);
@@ -364,6 +380,7 @@ export function foldWithWords(inputs, words, cleared = null) {
   const state = foldOver(inputs, {
     marks: withHolderWords(structuredClone(inputs.args.marks), holders, { parcels: base.parcels ?? [], householdOf: (h) => hh[h] ?? h }),
     ...(inputs.townWordsRead ? { townWords } : {}),
+    ...(inputs.townWordsRead && rules.length ? { townLaws: new Map(rules.map((r) => [r.mark, r.law])) } : {}),
   });
   if (rules.length && inputs.townWordsRead) {
     // The limit is the answer for these marks now: each return cites its law,
@@ -380,9 +397,25 @@ export function foldWithWords(inputs, words, cleared = null) {
       town, holders,
       ...(rules.length ? { limits: rules.map(({ mark, law }) => ({ mark, law })) } : {}),
       ...(inputs.townWordsRead || !carriedNot.length ? {} : { town_unread: carriedNot }),
+      ...stanceReturnsWhole(inputs, state),
       ...notApplied,
     },
   };
+}
+
+/**
+ * `{ stance_returns_whole: [mark] }` when the engine predates ruling B and
+ * returned a stance-opposed mark (not a limit's, which cites `law`) with a
+ * positioned mark under it, which ruling B would have left standing; `{}`
+ * otherwise. PURE over the fold's arguments and its World.
+ */
+export function stanceReturnsWhole(inputs, state) {
+  if (inputs?.returnsAloneRead) return {};
+  const positioned = new Set((inputs?.args?.marks ?? []).filter((m) => (m?.kind === "sited" || m?.kind === "parcel") && m.at).map((m) => String(m.id)));
+  const whole = (state?.returned ?? [])
+    .filter((r) => r?.state === "returned" && !r.law && (r.subtree ?? []).some((s) => positioned.has(String(s))))
+    .map((r) => r.mark);
+  return whole.length ? { stance_returns_whole: whole } : {};
 }
 
 /**
@@ -417,6 +450,14 @@ export async function settlementTakesAway(p, header, { worldRepo, townRepo = nul
   const { state, vetoes } = foldWithWords(inputs, words, cleared);
   const slugs = new Set();
   const limitParcels = [];
+  // WHAT LEAVES WITH A RETURN IS THE ENGINE'S `subtree` (Darko's ruling B,
+  // 2026-10-09). A stance return takes the opposed mark alone: its `subtree` is
+  // only the mark continued (its names and predicates, which have no place of
+  // their own, and in git without it would name a parent that is not there),
+  // and every positioned child stays in git where it stands, named in `stays`.
+  // A law return takes its subtree as before. An engine older than ruling B
+  // names every child in `subtree`; git then agrees with the World it served
+  // (`stance_returns_whole` says so), never with a fold this office did not run.
   for (const r of state.returned ?? []) {
     if (r?.state !== "returned" && !r?.law) continue;
     slugs.add(String(r.mark));
@@ -431,7 +472,11 @@ export async function settlementTakesAway(p, header, { worldRepo, townRepo = nul
   const hh = cleared.households ?? {};
   const rows = (cleared.marks ?? []).map((m) => ({ slug: m.id, household: hh[m.by] ?? m.by, at: m.at, extent: m.extent, parent: m.parent ?? null }));
   for (const sl of ownGroundOf(limitParcels, rows)) slugs.add(sl);
-  return { slugs, vetoes, ...(stancesCount ? {} : { stances_not_counted: `${CUTOVER_KEY} is not set: before the cutover every mark counts as ratified (R14), so no stance takes one out of git` }) };
+  return {
+    slugs, vetoes,
+    ...(stancesCount ? {} : { stances_not_counted: `${CUTOVER_KEY} is not set: before the cutover every mark counts as ratified (R14), so no stance takes one out of git` }),
+    ...(vetoes?.stance_returns_whole ? { stance_returns_whole: wholeSentence(header, vetoes.stance_returns_whole) } : {}),
+  };
 }
 
 /**
@@ -679,6 +724,10 @@ export async function servedSettlement(p, { settlement = null, worldRepo, townRe
         inputs ??= await settlementFoldInputs(p, header, { worldRepo, townRepo });
         if (!inputs.townWordsRead) vetoes = { ...vetoes, town_unread: vetoes.town };
       }
+      if (vetoes && !kept) {
+        inputs ??= await settlementFoldInputs(p, header, { worldRepo, townRepo });
+        vetoes = { ...vetoes, ...stanceReturnsWhole(inputs, state) };
+      }
     } else {
       inputs ??= await settlementFoldInputs(p, header, { worldRepo, townRepo });
       const now = foldWithWords(inputs, applied, cleared);
@@ -691,6 +740,7 @@ export async function servedSettlement(p, { settlement = null, worldRepo, townRe
     if (vetoes || limits.length) state.__vetoes = {
       town: vetoes?.town ?? [], holders: vetoes?.holders ?? [], limits,
       ...(vetoes?.town_unread ? { town_unread: `the engine at law ${String(header.law_sha).slice(0, 12)} predates the town's word (world#146), so the town's opposition on ${vetoes.town_unread.join(", ")} could not be carried` } : {}),
+      ...(vetoes?.stance_returns_whole ? { stance_returns_whole: wholeSentence(header, vetoes.stance_returns_whole) } : {}),
     };
     SERVED.set(servedKey, state);
     if (SERVED.size > 6) SERVED.delete(SERVED.keys().next().value);
@@ -729,6 +779,7 @@ export async function servedSettlement(p, { settlement = null, worldRepo, townRe
         ? { as_of: "the seal", stance_through: seal.through }
         : { as_of: "now", seal_stance_through: seal.through },
       ...(__vetoes?.town_unread ? { opposed_unread: __vetoes.town_unread } : {}),
+      ...(__vetoes?.stance_returns_whole ? { stance_returns_whole: __vetoes.stance_returns_whole } : {}),
       ...(applied.unread ? { opposed_unread: `the standing words could not be read, so nothing opposed since the seal is taken away here: ${words.unread}` } : {}),
       ...(built ? { built: "derived from the snapshot's sources on this read, and kept" } : {}),
       ...(labels.unread ? { labels_unread: labels.unread } : {}),

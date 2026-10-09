@@ -144,7 +144,7 @@ export function withholdTakenAway({ marks = [], selection = {} }, slugs) {
  * never lets an over-limit parcel, or a shed without it, quarantine its
  * household's sketchbook (Wright's review of #441). `{ out, selection }`.
  */
-export async function settlementWithhold(client, { window, worldRepo = null, townClone = null, out, selection }) {
+export async function settlementWithhold(client, { window, worldRepo = null, townClone = null, out, selection, env = process.env }) {
   let settlement;
   try {
     if (!worldRepo) throw new Error("no --world-repo: the settlement could not be folded here");
@@ -152,7 +152,7 @@ export async function settlementWithhold(client, { window, worldRepo = null, tow
     const { settlementTakesAway } = await import("../../src/world-settlement.mjs");
     const header = await snapshotHeader(client, { window });
     if (!header) throw new Error(`no snapshot was sealed for window ${window}`);
-    const { slugs, vetoes, stances_not_counted } = await settlementTakesAway(client, header, { worldRepo, townRepo: townClone });
+    const { slugs, vetoes, stances_not_counted, stance_returns_whole } = await settlementTakesAway(client, header, { worldRepo, townRepo: townClone, env });
     const w = withholdTakenAway({ marks: out.marks, selection }, slugs);
     return {
       out: { ...out, marks: w.marks },
@@ -164,6 +164,7 @@ export async function settlementWithhold(client, { window, worldRepo = null, tow
           limits: vetoes?.limits ?? [],
           ...(vetoes?.limits_unread ? { limits_unread: vetoes.limits_unread } : {}),
           ...(stances_not_counted ? { stances_not_counted } : {}),
+          ...(stance_returns_whole ? { stance_returns_whole } : {}),
           ...(vetoes?.town_unread ? { unread: `the engine at law ${String(header.law_sha).slice(0, 12)} predates world#146, so ${vetoes.town_unread.length} opposition(s) could not be carried` } : {}),
         },
       },

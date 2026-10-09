@@ -61,7 +61,8 @@ export function settlementRig(store) {
 
   // `sealWords` (POS-362): words spoken BEFORE the seals; S11 is sealed through the newest of them.
   // `before(c)`: rows the test needs in place before the words and the seals (claims, windows).
-  async function seed({ lawSha = LAW_SHA, sealWords = null, before = null } = {}) {
+  // `s11Marks`: the marks S11 seals in place of the default five (the stance-return tests, ruling B).
+  async function seed({ lawSha = LAW_SHA, sealWords = null, before = null, s11Marks = null } = {}) {
     resetSettlementCaches();
     return owner(async (c) => {
       await c.query("TRUNCATE world_snapshot_folds, settlements, world_snapshots, world_snapshot_marks, mark_versions, law_projection, escrow_projection, acts, claims, windows CASCADE");
@@ -83,7 +84,7 @@ export function settlementRig(store) {
         stanceThrough = (await c.query("SELECT max(id)::text AS t FROM acts WHERE class = 'stance'")).rows[0].t;
       }
       const s10 = await seal(c, { id: 1, window: 500, number: 10, marks: [MARKS.plot, MARKS.bench], lawSha });
-      const s11 = await seal(c, { id: 2, window: 501, number: 11, marks: [MARKS.plot, MARKS.bench, MARKS.yard, MARKS.shed, MARKS.name], lawSha, stanceThrough });
+      const s11 = await seal(c, { id: 2, window: 501, number: 11, marks: s11Marks ?? [MARKS.plot, MARKS.bench, MARKS.yard, MARKS.shed, MARKS.name], lawSha, stanceThrough });
       return { s10, s11 };
     });
   }
