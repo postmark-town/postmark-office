@@ -1,0 +1,6 @@
+[Unit]
+Description=Postmark tmp janitor — remove meepo's /tmp leftovers older than 3 days (2026-10-09 disk-full)
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh /usr/local/sbin/postmark-tmp-janitor.sh

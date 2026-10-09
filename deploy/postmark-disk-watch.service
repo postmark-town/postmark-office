@@ -1,0 +1,7 @@
+[Unit]
+Description=Postmark disk watch — Discord alarm when / passes 85% (2026-10-09 disk-full)
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/postmark-sentinel.env
+ExecStart=/bin/sh /usr/local/sbin/postmark-disk-watch.sh
