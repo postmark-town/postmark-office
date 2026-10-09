@@ -158,12 +158,12 @@ export async function stampRows(rows, { find = null, env = process.env } = {}) {
 }
 
 
-// ── THE THREE ANSWER SHAPES THE DOORS STAMP ─────────────────────────────────
+// ── THE TWO ANSWER SHAPES THE DOORS STAMP ───────────────────────────────────
 //
 // `page`: a roster page (`residents: [rows]`). `card`: one resident's card.
-// `search`: search_town, whose `residents` are bare handles; its stamp rides
-// beside them as `residents_last_active`, keyed by handle, so the list keeps
-// its shape. A disclosure rides the answer as `last_active_unavailable`.
+// Search is not stamped: the fact lives on the resident's own row, in one
+// shape, and search's job is to find them (POS-481 review, O5). A disclosure
+// rides the answer as `last_active_unavailable`.
 const SHAPES = {
   page: {
     rows: (a) => (Array.isArray(a?.residents) ? a.residents : []),
@@ -172,13 +172,6 @@ const SHAPES = {
   card: {
     rows: (a) => (a ? [a] : []),
     finish: () => {},
-  },
-  search: {
-    rows: (a) => (Array.isArray(a?.residents) ? a.residents.map((handle) => ({ handle })) : []),
-    finish: (a, rows) => {
-      a.residents_last_active = Object.fromEntries(rows.map((r) =>
-        [r.handle, { last_active: r.last_active, last_active_crossing: r.last_active_crossing }]));
-    },
   },
 };
 

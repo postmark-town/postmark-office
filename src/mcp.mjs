@@ -10,7 +10,7 @@
 
 import { townSummary, residentList, residentPage, resident, mailList, letterAnswer, LETTER_READING_LAW_LINE, search, bulletinList, bulletinTeaser, bulletinEntry, stampsRoster, stampsFor, stampsDetail, questBoardFor, metricsMail, letterList, regionList, home, identityOf, repoLog, townDocs, DOORSTEP_SEGMENTS } from "./queries.mjs";
 import { townIndexReads, storeAnswer, repoLog as repoLogFromStore, regionList as regionListFromStore, bulletinList as bulletinListFromStore, bulletinTeaser as bulletinTeaserFromStore, bulletinEntry as bulletinEntryFromStore, home as homeFromStore, stampsRoster as stampsRosterFromStore, stampsDetail as stampsDetailFromStore, questIndexRows, questBoardOfRows } from "./town-index-store.mjs"; // POS-268: the readers moved to the store, behind TOWN_INDEX_READS=store
-import { withLastActive, withLastActiveOn } from "./last-active.mjs"; // the roster's, the card's and search's last_active, from the store's acts (POS-481)
+import { withLastActive, withLastActiveOn } from "./last-active.mjs"; // the roster's and the card's last_active, from the store's acts (POS-481)
 import { DOC_NAMES, docsAnswer } from "./town-index.mjs"; // town { read: "docs" }: the docs value, shaped
 import * as townIndexStore from "./town-index-store.mjs"; // the moved readers by name, as the list above grows past a line
 import { READ_FIELDS, markRefused } from "./one-contract.mjs"; // the one field list a read shares with its twin at another door (POS-70 row 39); POS-427: every refusal says refused
@@ -226,7 +226,7 @@ export const TOOLS = [
     }, required: ["handle"], additionalProperties: false } },
   { name: "read_letter", description: "One letter in full — frontmatter and body. Letters are public; read kindly." + LAW_CLAUSE_MAIL,
     inputSchema: { type: "object", properties: READ_FIELDS.read_letter, required: ["id"], additionalProperties: false } },
-  { name: "search_town", description: "Search letters and residents by substring. Each resident found has their `last_active` and `last_active_crossing` under `residents_last_active`, keyed by handle. Answers `matches` (every letter and resident the term hits) beside `shown` and a per-bucket `capped`, so a search that stopped at the page says so instead of reading like the end of the results." + LAW_CLAUSE,
+  { name: "search_town", description: "Search letters and residents by substring. Answers `matches` (every letter and resident the term hits) beside `shown` and a per-bucket `capped`, so a search that stopped at the page says so instead of reading like the end of the results." + LAW_CLAUSE,
     inputSchema: { type: "object", properties: { q: { type: "string" },
       limit: { type: "number", description: "letters to return (default 25, max 200)" },
       offset: { type: "number", description: "how many letters to skip — walk the matches with the next_offset the previous search returned" },
@@ -713,8 +713,8 @@ export async function callTool(name, args, ctx) {
     }
     case "search_town": {
       const opts = { limit: args.limit, offset: args.offset };
-      if (townIndexReads()) return fromStore(async (c) => withLastActiveOn(c, "search", await townIndexStore.search(c, args.q ?? "", opts)));
-      return withLastActive("search", search(db, args.q ?? "", opts));
+      if (townIndexReads()) return fromStore((c) => townIndexStore.search(c, args.q ?? "", opts));
+      return search(db, args.q ?? "", opts);
     }
     // THE ROLE GATE'S SECOND HALF — and the reason it needed one. `/metrics/mail`
     // looked like a single door and is two CALL SITES of one read: the REST route

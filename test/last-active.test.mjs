@@ -8,9 +8,10 @@
 // newest is a say (an act, at the clock's crossing for its time, whatever it
 // stored), limen's is a letter they sent (at the crossing that sailed it),
 // postmaster's only a letter, decorator's only a window re-hung (a page edit),
-// and quiet has nothing of their own: a letter received and a join row. The roster, the card and
-// search are asked over REST on two offices (switch 2 off and on) and over MCP
-// in this process, where the store's statements are counted: one per page.
+// and quiet has nothing of their own: a letter received and a join row. The
+// roster, the card and the household's address are asked over REST on two
+// offices (switch 2 off and on), and search is asked to carry none of it. Over
+// MCP, in this process, the store's statements are counted: one per page.
 // Then an office whose store is gone says why both fields are null.
 //
 // Falsifier (POS-481): point LAST_ACTIVE_SQL at `acts.inserted_at` instead of
@@ -141,13 +142,13 @@ for (const office of ["plain", "switched"]) {
     assert.equal("pronouns" in page.residents.find((r) => r.handle === "wright"), false);
   });
 
-  test(`${office} office: GET /residents/{h} carries it on the card, and search beside its handles`, async (t) => {
+  test(`${office} office: GET /residents/{h} carries it on the card, and search carries none of it`, async (t) => {
     if (skip) return t.skip(skip);
     for (const [h, want] of Object.entries(EXPECT)) assert.deepEqual(pick(await get(office, `/residents/${h}`)), want, h);
+    // search finds; the fact lives on the resident's own row, in one shape (review O5)
     const found = await get(office, "/search?q=limen");
     assert.ok(found.residents.includes("limen"));
-    assert.deepEqual(found.residents_last_active.limen, EXPECT.limen);
-    assert.deepEqual(Object.keys(found.residents_last_active).sort(), [...found.residents].sort());
+    assert.equal("residents_last_active" in found, false);
   });
 
   test(`${office} office: household { read: "address" } carries the same two fields as /residents/{h}`, async (t) => {
@@ -194,8 +195,8 @@ for (const switched of [false, true]) {
     const card = await callTool("read_resident", { handle: "limen" }, ctx);
     assert.deepEqual(pick(card), EXPECT.limen);
     const found = await callTool("search_town", { q: "wright" }, ctx);
-    assert.deepEqual(found.residents_last_active.wright, EXPECT.wright);
-    assert.equal(statements.length, 2, "one for the card, one for the search");
+    assert.equal("residents_last_active" in found, false);
+    assert.equal(statements.length, 1, "one for the card; search reads no acts");
   });
 }
 

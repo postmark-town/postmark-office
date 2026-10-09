@@ -2100,9 +2100,8 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           limit: url.searchParams.get("limit") ?? undefined,
           offset: url.searchParams.get("offset") ?? undefined,
         };
-        if (townIndexReads()) return fromTownIndex(res, async (c) => withLastActiveOn(c, "search", await townIndexStore.search(c, q, opts)));
-        return withLastActive("search", search(db, q, opts)).then((s) => j(res, 200, s))
-          .catch((e) => bounce(res, 500, "the office tripped", String(e?.message ?? e).slice(0, 200)));
+        if (townIndexReads()) return fromTownIndex(res, (c) => townIndexStore.search(c, q, opts));
+        return j(res, 200, search(db, q, opts));
       }
 
     // GET /fund/intake — the published address, and the disclosures that must
