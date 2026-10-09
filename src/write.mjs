@@ -131,6 +131,16 @@ function removeCreated(clone, rel) {
  * to the recorded HEAD, then rebase onto the fetched origin/main, so the clone
  * matches the town. Otherwise the commit is unmade with `--soft` and only the
  * named paths are put back, so dirt this act did not make is never touched.
+ *
+ * THE CATCH-UP REBASE IS OF THE CLONE'S OWN PAST, NEVER OF THE UNMADE COMMIT
+ * (POS-447, Wright's review of #435). It replays only commits `recorded`
+ * already held that origin lacks; the act's own commit is gone by the reset.
+ * With none, it is a fast-forward to the remote's tip, which is where a
+ * `{ rebase: false }` caller decides again from. With one that appended to a
+ * ledger the remote also appended to, it conflicts: the rebase is aborted and
+ * the clone stands at `recorded`, clean, so that caller's next try loses again
+ * and the mint refuses after its HEAD_TRIES. A refusal, never a rebased line
+ * (test/pen-push-receipt.test.mjs, both roads).
  */
 function restore(clone, recorded, paths) {
   abortRebase(clone);

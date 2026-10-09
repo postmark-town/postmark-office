@@ -484,7 +484,7 @@ export function atlasRows(TOWN, town, { log = console } = {}) {
  * The whole index for one checkout, every table: what hydrate.mjs writes and
  * what the ingest's seed writes. `meta` rows come in hydrate's insert order.
  */
-export async function deriveTownIndex(TOWN, { log = console } = {}) {
+export async function deriveTownIndex(TOWN, { log = console, base = null } = {}) {
   const asOf = execFileSync("git", ["-C", TOWN, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   const town = readTown(TOWN);
   for (const p of town.problems) log.warn(`WARN (town): ${p}`);
@@ -522,7 +522,7 @@ export async function deriveTownIndex(TOWN, { log = console } = {}) {
   }
   Object.assign(t, await fundingRows(TOWN, { log }));
 
-  const q = await questRows(TOWN, town, { log });
+  const q = await questRows(TOWN, town, { log, base }); // the store's key base when the seed read one (POS-341 part 4); null in hydrate
   t.quest_progress = q?.progress ?? [];
   t.quest_standing = q?.standing ?? [];
   if (q) meta.push(["quest_day", q.questDay], ["quest_registry", q.questRegistry]);
