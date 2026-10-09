@@ -221,6 +221,19 @@ NODE
   [ -n "$ROLES_AUDIT" ] && [ -n "$ROLES_BYTES" ] || fail "roles.db copy returned no counts: $ROLES_JSON" roles
   chmod 600 "$ROLES_COPY"
   ROLES_STATUS=copied
+elif STORE_ROLES="$(PGPASSWORD="$OWNER_PW" psql --host "${WORLD2_PGHOST:-localhost}" --port "${WORLD2_PGPORT:-5432}" \
+    --username world2_owner --dbname "$DB" -tAc \
+    "SELECT (SELECT count(*) FROM office_role_audit) || ' ' || (SELECT count(*) FROM office_roles)" 2>/dev/null)" \
+    && [ -n "$STORE_ROLES" ]; then
+  # IN THE STORE (POS-271). Since the paperwork switch the registry is the
+  # store's office_roles and office_role_audit (031), and they ride the pg_dump
+  # above; roles.db is deleted with the switch's clean week. So with no file,
+  # the receipt counts the store's rows rather than reporting `absent` with
+  # zero, which would read as "no role was ever granted". The restore
+  # rehearsal compares both tables with every other table of the dump.
+  ROLES_AUDIT="${STORE_ROLES% *}"; ROLES_GRANTS="${STORE_ROLES#* }"
+  ROLES_SRC="the store: office_roles and office_role_audit, inside the dump"
+  ROLES_STATUS=in-store
 fi
 rm -f "$ROLES_ERR"
 
