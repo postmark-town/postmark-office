@@ -223,7 +223,8 @@ try {
   //     stake, step 6's unfileable) has already counted against its household's
   //     headroom, so a claim judged after it can be opposed that would have fit.
   //     A refused claim can be filed again; ground held by an over-limit parcel
-  //     could not.
+  //     could not. ACCEPTED BY RULING: Darko, on POS-364 (2026-10-08), keeps the
+  //     limits counted ahead of the ground checks with this cost named.
   //
   //     ONE RULE, NOT TWO (Wright's review of the A build). The clearing does not
   //     count: it asks the world's own fold (`parcel-cap.mjs § limitsAtClearing`)

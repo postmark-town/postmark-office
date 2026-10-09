@@ -20,11 +20,14 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { startStore } from "./helpers/embedded-store.mjs";
-import { settlementRig, WORLD, LAW_SHA, TOWN_SHA } from "./helpers/settlement-seed.mjs";
+import { settlementRig, WORLD, TOWN_SHA } from "./helpers/settlement-seed.mjs";
 import { servedSettlement, settlementTakesAway, resetSettlementCaches, foldText } from "../src/world-settlement.mjs";
 import { settlementWithhold } from "../world2/tools/fold-input-cli.mjs";
 
 const ENGINE = "a01213a822fbddeec31dfdd0dfb72afb9b6b9367";   // postmark-world#166 (first-claim order), on #146 and #165
+// An engine OLDER than #146 and #166, by sha: the suite's previous world pin. Not the
+// clone's HEAD, which moves with test/clone-pins.json (at 0bcb9c1c it carries #166).
+const OLDER = "53df97fee95b46279318a42a88c0c1fd6669fe0d";
 const git = (...a) => execFileSync("git", ["-C", WORLD, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 const hasEngine = (() => { try { git("cat-file", "-e", `${ENGINE}^{commit}`); return true; } catch { return false; } })();
 
@@ -114,7 +117,7 @@ test("GIT IS WRITTEN FROM THE SETTLEMENT: a STAKED parcel over the cap still lea
 
 test("AN ENGINE OLDER THAN THE FIRST-CLAIM ORDER applies no limit, says so, and git still withholds what it found", async () => {
   const parcels = [parcel("ra", 0, "2026-10-01T00:00:00Z"), parcel("rb", 100, "2026-10-02T00:00:00Z"), parcel("rc", 200, "2026-10-03T00:00:00Z"), parcel("rd", 300, "2026-10-04T00:00:00Z")];
-  await settle({ parcels, lawSha: LAW_SHA });                      // the pinned clone's HEAD: no #146, no #166
+  await settle({ parcels, lawSha: OLDER });                         // no #146, no #166
   const s = await serve({ settlement: "S11" });
   assert.deepEqual(ids(s), ["ra/plot", "rb/plot", "rc/plot", "rd/plot"], "nothing is subtracted by hand");
   assert.match(s.meta.limits_unread ?? "", /1 parcel\(s\) over a limit \(the-town\/claim-cap\) are not opposed here/);
@@ -165,7 +168,7 @@ test.after(async () => { await store.stop(); });
 
 test("A LIMIT PARCEL'S OWN GROUND GOES WITH IT: rd's shed on its over-cap plot never reaches git without it (applied, or found and not applied)", { skip }, async () => {
   const marks = [parcel("ra", 0, "2026-10-01T00:00:00Z"), parcel("rb", 100, "2026-10-02T00:00:00Z"), parcel("rc", 200, "2026-10-03T00:00:00Z"), parcel("rd", 300, "2026-10-04T00:00:00Z"), shed("rd", 302), shed("ra", 2)];
-  for (const lawSha of [ENGINE, LAW_SHA]) {
+  for (const lawSha of [ENGINE, OLDER]) {
     await settle({ parcels: marks, lawSha });
     const header = await asOffice(async (p) => (await p.query("SELECT * FROM world_snapshots WHERE id = 2")).rows[0]);
     const { slugs } = await asOffice((p) => settlementTakesAway(p, header, { worldRepo: WORLD }));
