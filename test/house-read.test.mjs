@@ -203,6 +203,8 @@ test("THE GATE: a key holding r000 adds r000's owner-only blocks — the doorste
     assert.deepEqual(h.residents.r000.your_pending_letters, d.your_pending_letters);
     assert.equal(h.residents.r000.pending_outbox, d.pending_outbox);
     assert.deepEqual(h.residents.r000.pending_outbox_freshness, d.pending_outbox_freshness);
+    // and the awaiting segment reads the same standing block on both (POS-375)
+    assert.deepEqual(h.residents.r000.awaiting, d.awaiting);
     assert.ok(!("your_pending_letters" in h.residents.r001), "a housemate the key does not hold reads public");
     const anon = await houseBundle({ household: HOUSE }, ctx({ readers, odb }));
     assert.ok(!("your_pending_letters" in anon.residents.r000), "no key, no owner-only block");
