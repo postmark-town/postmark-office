@@ -224,3 +224,23 @@ test("the key's commit carries only the ledger and tools/: anything else already
   assert.deepEqual(t.g("show", "--name-only", "--format=", "HEAD").split("\n").filter(Boolean).sort(), ["WHITE_PAGES/stamp-ledger.md", "tools/ruled.mjs", "tools/stamp-pubkey.pem"]);
   assert.equal(t.g("diff", "--cached", "--name-only"), "README.md", "the staged edit is still staged, not committed");
 });
+
+test("--verify: a red town verifier refuses, and the clone is put back on the seed's key, clean (#453 review F7)", { skip: SKIP }, async () => {
+  // THE CAN-FAIL FLIP: drop the checkout in resignDevTown's --verify branch; the clone is left
+  // re-signed and dirty, and this goes red
+  const prod = keys(), dev = keys();
+  const t = seedTown(prod);
+  writeFileSync(join(t.dir, "tools", "stamp-verify.mjs"), "console.log('stamp-verify: RED (a fixture that refuses)'); process.exit(1);\n");
+  t.g("add", "-A"); t.g("commit", "-q", "-m", "a verifier that refuses");
+  const head = t.g("rev-parse", "HEAD");
+  const r = await resignDevTown({ town: t.dir, keyPem: dev.key, notKeyPem: prod.key, verify: true });
+  assert.equal(r.status, "refused");
+  assert.match(r.why, /the town's verifier is red on the re-signed ledger \(exit 1\): stamp-verify: RED \(a fixture that refuses\); the clone is put back/);
+  assert.equal(t.g("rev-parse", "HEAD"), head);
+  assert.equal(t.g("status", "--porcelain"), "", "nothing re-signed is left in the working tree");
+  assert.equal(readFileSync(join(t.dir, "tools", "stamp-pubkey.pem"), "utf8"), prod.pub, "the seed's (prod's) public key is back");
+  // and a green verifier lets the re-sign land
+  writeFileSync(join(t.dir, "tools", "stamp-verify.mjs"), "process.exit(0);\n");
+  t.g("add", "-A"); t.g("commit", "-q", "-m", "a verifier that passes");
+  assert.equal((await resignDevTown({ town: t.dir, keyPem: dev.key, notKeyPem: prod.key, verify: true })).status, "resigned");
+});
