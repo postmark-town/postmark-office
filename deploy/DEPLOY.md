@@ -640,6 +640,55 @@ there is no verb for it yet.
   instead of `/etc/postmark-office.env` (it holds the switch and the line). An
   edited entry replaces its row.
 
+### The paperwork files leave the box (POS-271, after the switch's clean week)
+
+From the release that carries this, an office with `OFFICE_PAPERWORK_STORE=1`
+never opens `oauth.db` or `roles.db`. Sign-in, roles, the media ledger and the
+town log are the store's 031/032 tables only, and the rollback's mirror to the
+files is gone. **After this there is no rollback to the files.** An office
+whose switch is turned off starts on an empty `oauth.db`, and that signs the
+whole town out. The switch stays on.
+
+**The gate (before the merge):** the switch's clean week has closed (10-11), and
+`paperwork-import --check` reads equal on prod. Prod's mirror logged
+`[paperwork] MIRROR FAILED` on 10-05 (database is locked) and again during the
+10-09 disk-full outage (POS-480's comment: 4 token DELETEs and 1 INSERT). A
+check that names rows is expected to name those. Whether those rows break the
+clean week is Darko's call; the check says exactly which rows they are.
+
+```sh
+# as root, from the staged tip (its node_modules has pg); world2_owner, read-only with --check
+sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; cd <the staged tip> && exec runuser -u meepo -- node world2/tools/paperwork-import.mjs --check --pg-url "<world2_owner on world2_dev>" --oauth-db /srv/postmark-office/oauth.db --roles-db /srv/postmark-office/roles.db'
+#   checked; nothing written, exit 0   <- or stop and read the rows it names
+```
+
+**The steps (prod, after the release is live).** Every step is on the box. Do
+these only on an office whose env sets the switch (dev's paperwork is on the
+file unless its env sets it too):
+
+```sh
+sudo grep -c '^OFFICE_PAPERWORK_STORE=1$' /etc/postmark-office.env       # 1, or stop: this office still reads the files
+curl -s https://postmark.town/api/release                                 # the release that carries POS-271
+# 1. A last copy of each file, out of every checkout (never cp a live sqlite file):
+sudo install -d -m 700 -o meepo /var/backups/postmark-paperwork
+sudo runuser -u meepo -- node -e 'const {DatabaseSync}=require("node:sqlite"); for (const n of ["oauth","roles"]) new DatabaseSync(`/srv/postmark-office/${n}.db`,{readOnly:true}).prepare("VACUUM INTO ?").run(`/var/backups/postmark-paperwork/${n}-pre-pos271.db`)'
+sudo chmod 600 /var/backups/postmark-paperwork/*.db
+# 2. The files, by name (nothing else in the directory):
+sudo ls -l /srv/postmark-office/oauth.db* /srv/postmark-office/roles.db*  # read what is there first
+sudo rm /srv/postmark-office/oauth.db /srv/postmark-office/roles.db
+# 3. The office is unchanged by the removal (it never opened them), and a
+#    signed-in connector keeps working; the files never come back:
+curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer <a test key, from a mode-600 header file>" https://postmark.town/api/me   # 200
+sudo ls /srv/postmark-office/oauth.db /srv/postmark-office/roles.db 2>&1 # "No such file", both, the next day too
+```
+
+The backup's § 1b then reports `roles_status: in-store` with the store's
+`office_role_audit` and `office_roles` counts, and the restore rehearsal
+compares both tables along with the rest of the dump. PROPOSED, not ruled: keep
+`/var/backups/postmark-paperwork/` for one week after the deletion, then remove
+the two files by name. They hold token hashes and the old role book, and
+nothing reads them.
+
 ### The world write pool (tier 1, 2026-08-05)
 
 The draft-branch write lane — `world_leave_mark` (and its withdrawal), which
