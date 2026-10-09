@@ -18,7 +18,7 @@
 // Everything else is the existing implementation, called exactly as before.
 
 import { enqueueLetter } from "./write.mjs";
-import { sendLetterAsRow } from "./town-mail.mjs";
+import { sendLetterAsRow, hotMailBlock } from "./town-mail.mjs";
 import { townLogEnabled } from "./town-journal.mjs";
 import { withThreadlessHint } from "./mail-thread.mjs";
 import { inferSender } from "./one-contract.mjs";
@@ -73,10 +73,18 @@ export async function sendAtDoor(fields, key, { db, clone, odb }) {
   // from the store now, after the send. A store that cannot answer gives no hint,
   // exactly as an index with no mail_state row does: the letter has gone, and a
   // refusal here would tell its sender otherwise.
+  // The sender's own standing letters ride with it (POS-375): a reply they have
+  // already written answers its thread, so the hint does not ask for another.
+  // Read for a key that holds the sender only; a log that will not read leaves
+  // the hint on the law alone.
   let hintIx = db;
   if (indexSwitched() && !result?.error) {
     const { probeWithMailState } = await import("./town-index-store.mjs");
-    hintIx = await probeWithMailState(f.from).catch(() => null);
+    let standing = null;
+    if (odb && key?.handles?.has?.(f.from) === true) {
+      try { standing = (await hotMailBlock(odb, key, { handle: f.from }))?.standing ?? null; } catch { standing = null; }
+    }
+    hintIx = await probeWithMailState(f.from, { standing }).catch(() => null);
   }
   return { fields: f, result: withThreadlessHint(result, hintIx, f) };
 }

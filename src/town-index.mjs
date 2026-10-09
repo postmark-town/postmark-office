@@ -85,6 +85,9 @@ const numbered = (rows) => rows.map((r, i) => [i + 1, ...r]);
  *                   the unconditional overwrite leaves the oldest add.
  *   last_active   — per resident, the newest commit touching their own pages,
  *                   inbox arrivals excluded (that's the ferry acting, not them).
+ *                   The INDEX's value only: since POS-481 no door serves it.
+ *                   Every door's `last_active` is the resident's newest act
+ *                   in the store (src/last-active.mjs), stamped at the read.
  * --no-renames matters: the ferry MOVES letters outbox -> inbox, and rename
  * detection would hide the arrival from the A-filter. Times normalized to UTC
  * so plain string compares sort correctly alongside bare `date` days.

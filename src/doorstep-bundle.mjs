@@ -68,7 +68,17 @@ export async function doorstepBundle(handle, ctx = {}) {
   const { db, key, meta, asOf, clone, odb, canWrite, conversationsOffset = 0, slim = false, nowMs = Date.now(), ix = null } = ctx;
   // `ix` is the index the door picked (POS-268): absent, office.db's, exactly as
   // before; the store's (storeIndexPooled) when the door is switched.
-  const opts = { conversationsOffset, slim, fresh: await freshFor(handle, { odb, clone, asOf }), nowMs };
+  // THE SENDER'S STANDING LETTERS, READ ONCE (POS-375). `your_pending_letters`
+  // and the awaiting segment's queued replies are one block, so the two cannot
+  // disagree about which letters stand (Mari, postmark#3016: the block listed a
+  // reply while awaiting still read the thread unanswered). Only a key that
+  // holds the handle is read for, by the ownership gate's own test; `null` is a
+  // log that did not read, and the gate drops the block exactly as before.
+  const own = key?.handles?.has?.(handle) === true;
+  let pendingMail;
+  if (own) { try { pendingMail = { block: await hotMailBlock(odb, key, { handle }) }; } catch { pendingMail = null; } }
+  const standing = pendingMail?.block?.standing ?? null;
+  const opts = { conversationsOffset, slim, fresh: await freshFor(handle, { odb, clone, asOf }), nowMs, standing };
   const core = ix ? await ix.doorstep(handle, asOf, opts) : await doorstep(db, handle, asOf, opts);
   if (!core) return null;
 
@@ -281,7 +291,7 @@ export async function doorstepBundle(handle, ctx = {}) {
   // walks `segments` to find them, so it must name all ten or none.
   d.segments = [...DOORSTEP_SEGMENTS];
 
-  await ownerGate(d, handle, { db, clone, key, odb, meta, ix });
+  await ownerGate(d, handle, { db, clone, key, odb, meta, ix, pendingMail });
 
   // ── the civic pointer (2026-09-01, the clarity round) ─────────────────────
   //
@@ -345,7 +355,12 @@ export async function doorstepBundle(handle, ctx = {}) {
 // `unread` is the house read's prefetch (`{ rows: Map }` or `{ error }`, from
 // one unreadFor over the house); a doorstep passes none and asks for its one
 // resident.
-export async function ownerGate(d, handle, { db, clone, key, odb, meta, asOf = null, unread = null, ix = null } = {}) {
+//
+// `pendingMail` is the caller's own read of the sender's standing letters
+// (`{ block }`, or null for a log that did not read), so the block here is the
+// one the awaiting segment was composed with (POS-375). Absent, the gate reads
+// it itself.
+export async function ownerGate(d, handle, { db, clone, key, odb, meta, asOf = null, unread = null, ix = null, pendingMail = undefined } = {}) {
   const own = key?.handles?.has?.(handle) === true;
   // THE COUNTER'S TENSE (Vex of the Drift, 2026-08-26). `pending_outbox` is a
   // COUNT(*) over the settled index, so under the town log it could read 0 for
@@ -377,7 +392,8 @@ export async function ownerGate(d, handle, { db, clone, key, odb, meta, asOf = n
     // them. Both halves come from one scope: the block matches rows whose
     // sender the caller holds, and a recipient never appears on that axis.
     try {
-      const pending = await hotMailBlock(odb, key, { handle });
+      if (pendingMail === null) throw new Error("the town log did not read");
+      const pending = pendingMail ? pendingMail.block : await hotMailBlock(odb, key, { handle });
       if (pending) d.your_pending_letters = pending;
       // ONE SCOPE, ONE ANSWER. The count comes off the block that was just
       // composed rather than from a second query, so there is no second filter

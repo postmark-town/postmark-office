@@ -30,6 +30,7 @@ import { houseBundle, needsYou, isoAt, isoEvents, HOUSE_ONCE } from "../src/hous
 import { householdApex, HOUSEHOLD_READS, HOUSEHOLD_READ_FIELDS } from "../src/household-apex.mjs";
 import { poolFromClone, RECORD_ON } from "./registry-pool-stub.mjs";
 import { __setPoolForTest } from "../src/world2-acts.mjs";
+import { indexStore, testIndex } from "./helpers/office-under-test.mjs";
 
 const AS_OF = "housefixture0000000000000000000000000000";
 const HOUSE = "fixture-house";
@@ -91,7 +92,7 @@ const NOW = Date.parse("2026-09-27T06:00:00Z");
 
 /** Every world reader, counted, so "asked once" is a number and not a hope. */
 function worldReaders() {
-  const calls = { stances: [], stakesFor: [], walkers: 0, claimEffects: [] };
+  const calls = { stances: [], stakesFor: [], walkers: 0, claimEffects: [], lastActive: [] };
   return {
     calls,
     readers: {
@@ -102,6 +103,9 @@ function worldReaders() {
         return { next_settlement: { at: "2026-09-28T00:00:00.000Z" }, count: 2, at_risk: 1,
           rows: [{ mark: "r001/shed", class: "commons", escrow: 0, at_risk: true, act: 'world { do: "stake" }' },
                  { mark: "r000/garden", class: "commons", escrow: 3, at_risk: false }] }; },
+      // the store's acts and town_letters, newest per handle (last-active.mjs § lastActiveFor's Map)
+      lastActiveFor: async (handles) => { calls.lastActive.push([...handles]);
+        return new Map([["r000", { at: "2026-09-26T08:00:00.000Z", crossing: 213 }]]); },
       walkers: async () => { calls.walkers += 1;
         return { at: 190.5, walkers: [{ handle: "r000", x: 10, y: -4, mark_id: "the-town/quay", moving: false, toward: null }] }; },
       // The store's own shape on prod: `decided_at` comes back a Date, and
@@ -162,7 +166,12 @@ test("ASKED ONCE: stances, stakes and the walkers roll are one call each for the
   assert.deepEqual([...calls.claimEffects[0].onMyGround], ["r-stranger/fence"]);
   assert.deepEqual(h.residents.r000.stands, { x: 10, y: -4, mark_id: "the-town/quay", moving: false, toward: null });
   assert.equal(h.residents.r001.stands, null);
-  assert.equal(h.residents.r000.last_active, "2026-09-20T10:00:00.000Z");
+  // last_active is the newest act of their own, asked once for the house, never
+  // the index's commit-derived value (r000's card says 2026-09-20; POS-481).
+  assert.deepEqual(calls.lastActive, [["r000", "r001", "r002"]]);
+  assert.deepEqual([h.residents.r000.last_active, h.residents.r000.last_active_crossing], ["2026-09-26T08:00:00.000Z", 213]);
+  assert.deepEqual([h.residents.r001.last_active, h.residents.r001.last_active_crossing], [null, null]);
+  assert.equal(h.last_active_unavailable, undefined);
 });
 
 test("ISO: an outcome's `at` is ISO whatever the store handed back, and the events run in instant order", async () => {
@@ -203,10 +212,66 @@ test("THE GATE: a key holding r000 adds r000's owner-only blocks — the doorste
     assert.deepEqual(h.residents.r000.your_pending_letters, d.your_pending_letters);
     assert.equal(h.residents.r000.pending_outbox, d.pending_outbox);
     assert.deepEqual(h.residents.r000.pending_outbox_freshness, d.pending_outbox_freshness);
+    // and the awaiting segment reads the same standing block on both (POS-375)
+    assert.deepEqual(h.residents.r000.awaiting, d.awaiting);
     assert.ok(!("your_pending_letters" in h.residents.r001), "a housemate the key does not hold reads public");
     const anon = await houseBundle({ household: HOUSE }, ctx({ readers, odb }));
     assert.ok(!("your_pending_letters" in anon.residents.r000), "no key, no owner-only block");
   } finally { delete process.env.TOWN_SINGLE_LOG; odb.close(); }
+});
+
+// ── the gate on the store's road, with a threaded standing letter (POS-375; #446 review, finding 4) ──
+//
+// The test above reads office.db, where no standing letter is read. Here the
+// house and the doorstep read the store, r000 holds a delivered letter from
+// r001, and r000's reply to it stands in the log: the awaiting segment turns
+// reply_queued on the key that holds r000, the house's segment is the
+// doorstep's, and no other read (no key, another household's key, the
+// awaiting view under a key that does not hold r000) names the reply.
+const STORE = testIndex() === "office" && "the office.db road reads no standing letters (POS-268)";
+test("THE GATE, ON THE STORE: a threaded standing reply turns r000's thread queued on r000's key, and on no other read", { skip: STORE }, async () => {
+  const sdb = houseDb();
+  const answering = "r001-2026-07-04-to-r000-n3";
+  sdb.prepare("UPDATE mail_state SET json = ? WHERE handle = ?").run(JSON.stringify({
+    handle: "r000", language: "sequence, never debt",
+    conversations: [{ conversation: answering, attention_state: "new_inbound", reason: "a letter with no word of yours in the conversation yet",
+      latest_delivered_id: answering, latest_delivered_from: "r001", queued_reply_id: null,
+      latest_event: { ordinal: 0, date: "2026-07-04" }, next_actor: "you", others: ["r001"], letters: 1 }],
+    summary: { they_spoke_last: 1, new_inbound: 1, they_spoke_again: 0, reply_queued: 0, last_word_yours: 0, bounced: 0 },
+  }), "r000");
+  sdb.exec("UPDATE ledger SET json = '{}' WHERE json IS NULL"); // the store keeps every ledger line's json
+  const reply = "r000-2026-09-26-to-r001-answered";
+  const odb = new DatabaseSync(":memory:");
+  odb.exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)");
+  await appendTownJournal(odb, { cls: "letter", act: "send-letter", household: "fixture", handle: "r000",
+    payload: { args: { from: "r000", to: "r001", title: "answered", body: "standing", thread: answering },
+      id: reply, file: "WHITE_PAGES/r000/outbox/answered.md" } });
+  const store = await indexStore(sdb);
+  const restore = await store.useInProcess();
+  process.env.TOWN_SINGLE_LOG = "1";
+  try {
+    const tis = await import("../src/town-index-store.mjs");
+    const ix = tis.storeIndexPooled(scratch);
+    const key = { household: "fixture", handles: new Set(["r000"]) };
+    const { readers } = worldReaders();
+    const sctx = (over) => ctx({ db: sdb, readers, odb, ix, ...over });
+    const h = await houseBundle({ household: HOUSE }, sctx({ key }));
+    const d = await doorstepBundle("r000", { db: sdb, key, meta, asOf: AS_OF, clone: scratch, odb, nowMs: NOW, ix });
+    const row = h.residents.r000.awaiting.conversations.find((c) => c.conversation === answering);
+    assert.equal(row.attention_state, "reply_queued", "the house read's store road turns the thread queued");
+    assert.equal(row.queued_reply_id, reply);
+    assert.deepEqual(h.residents.r000.awaiting, d.awaiting, "the house's segment is the doorstep's");
+
+    const anon = await houseBundle({ household: HOUSE }, sctx({}));
+    assert.equal(JSON.stringify(anon).includes(reply), false, "no key: no trace of the standing reply");
+    const strangerKey = { household: "other", handles: new Set(["r-stranger"]) };
+    const stranger = await houseBundle({ household: HOUSE }, sctx({ key: strangerKey }));
+    assert.equal(JSON.stringify(stranger).includes(reply), false, "another household's key: no trace");
+    const view = await householdApex({ read: "mail", handle: "r000", view: "awaiting" }, strangerKey,
+      { db: sdb, clone: scratch, odb, meta, asOf: AS_OF });
+    assert.equal(JSON.stringify(view).includes(reply), false, "the awaiting view under a key that does not hold r000: no trace");
+    assert.equal(view.conversations?.find((c) => c.conversation === answering)?.attention_state, "new_inbound");
+  } finally { delete process.env.TOWN_SINGLE_LOG; await restore(); await store.stop(); odb.close(); }
 });
 
 // ── needs-you ───────────────────────────────────────────────────────────────

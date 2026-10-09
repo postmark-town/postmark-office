@@ -32,7 +32,8 @@
 
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { copyTownTools } from "./helpers/town-tools.mjs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
@@ -54,7 +55,7 @@ const iso = (t) => new Date(t).toISOString();
 const TOWN = join(DIR, "town");
 mkdirSync(join(TOWN, "tools"), { recursive: true });
 mkdirSync(join(TOWN, "WHITE_PAGES"), { recursive: true });
-if (haveEngine) for (const f of ["world-stake.mjs", "stamp-mint.mjs"]) copyFileSync(join(REAL_TOWN, "tools", f), join(TOWN, "tools", f));
+if (haveEngine) copyTownTools(REAL_TOWN, TOWN);
 writeFileSync(join(TOWN, "WHITE_PAGES", "stamp-ledger.md"), [
   "# the stamp ledger", "",
   "- 2026-09-20 · mari → stake:world-mark/kai/observation-state · 5 · via: api",

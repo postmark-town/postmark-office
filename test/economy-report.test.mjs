@@ -19,7 +19,8 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, copyFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { copyTownTools } from "./helpers/town-tools.mjs";
 import { join, resolve, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
@@ -61,7 +62,7 @@ function buildTown(root, { extraLines = [] } = {}) {
   const town = join(root, "town");
   initRepo(town);
   mkdirSync(join(town, "tools"), { recursive: true });
-  for (const f of NEEDED) copyFileSync(join(TOWN_TOOLS, f), join(town, "tools", f));
+  copyTownTools(join(TOWN_TOOLS, ".."), town);
   mkdirSync(join(town, "WHITE_PAGES"), { recursive: true });
 
   const lines = [

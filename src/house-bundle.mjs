@@ -22,7 +22,8 @@
 // `window` (with `window.pane`), `pending_outbox`, `counts`, `next_steps` — so
 // a reader of `doorstep.mail.letters` reads `house.residents[h].mail.letters`
 // and renames nothing. Then two the doorstep does not carry: `last_active`
-// (the index's own, hydrate.mjs § last_active) and `stands` (the walkers roll,
+// with `last_active_crossing` (the newest act of their own, last-active.mjs,
+// POS-481) and `stands` (the walkers roll,
 // read once for the house; behind WORLD_POSITIONS that roll is the kept
 // projection, position-projection.mjs).
 //
@@ -43,10 +44,12 @@
 import { doorstep, DOORSTEP_STANCES, mailList, mailAwaiting, stampsDetail, windowRead, outboxSettled } from "./queries.mjs";
 import { ownerGate } from "./doorstep-bundle.mjs";
 import { unreadFor } from "./unread-store.mjs";
+import { hotMailBlock } from "./town-mail.mjs";
 import { nextCrossingForDoorstep, currentCrossing, CROSSING_EPOCH_UTC, CROSSING_MS } from "./crossings.mjs";
 import { resolveHouse, VIA } from "./household-deriver.mjs";
 import { loadRegistryRows } from "./registry-store.mjs";
 import { registryFromRows, pinsFromRows } from "./registry-rows.mjs";
+import { stampRows, LAST_ACTIVE_MEANS } from "./last-active.mjs"; // last_active, once for the house (POS-481)
 import { freshFor } from "./paper-fresh.mjs"; // POS-271: the pending paper rows, read before a composed read
 
 /** The doorstep keys that are the same on every resident's page: carried once, at the top. */
@@ -192,14 +195,6 @@ async function stakesOf(handles, { nowMs, readers = {} }) {
   return stakesFor(handles, { now: new Date(nowMs) });
 }
 
-/** The index's own last activity for a resident: the newest commit touching their pages. */
-function lastActiveOf(db, handle) {
-  try {
-    const row = db.prepare("SELECT json FROM residents WHERE handle = ?").get(handle);
-    return row ? (JSON.parse(row.json).last_active ?? null) : null;
-  } catch { return null; }
-}
-
 /**
  * ONE RESIDENT'S OWN SEGMENTS, as `queries.mjs § doorstep` composes them —
  * the same reads, called at the same args, wrapped in the same `serves`/`args`
@@ -305,12 +300,21 @@ export async function houseBundle({ household = null } = {}, ctx = {}) {
   const residents = {};
   for (const h of ashore) {
     const fresh = await freshFor(h, { odb, clone, asOf });
-    const d = { handle: h, ...(ix ? await ix.residentSegments(h, fresh) : await residentSegments(db, h, fresh)) };
-    await ownerGate(d, h, { db, clone, key, odb, meta, asOf, unread, ix });
-    d.last_active = ix ? await ix.lastActive(h) : lastActiveOf(db, h);
+    // the resident's standing letters, read once for their awaiting segment and
+    // their your_pending_letters, on a key that holds them (doorstep-bundle.mjs §
+    // THE SENDER'S STANDING LETTERS, POS-375)
+    let pendingMail;
+    if (held.includes(h)) { try { pendingMail = { block: await hotMailBlock(odb, key, { handle: h }) }; } catch { pendingMail = null; } }
+    const standing = pendingMail?.block?.standing ?? null;
+    const d = { handle: h, ...(ix ? await ix.residentSegments(h, fresh, standing) : await residentSegments(db, h, fresh)) };
+    await ownerGate(d, h, { db, clone, key, odb, meta, asOf, unread, ix, pendingMail });
     d.stands = stands.byHandle[h] ?? null;
     residents[h] = d;
   }
+  // LAST ACTIVE, ONCE FOR THE HOUSE (POS-481): one store read for every
+  // resident here, never one per resident (last-active.mjs).
+  const find = ix ? (handles) => ix.lastActiveFor(handles) : readers.lastActiveFor ?? null;
+  const lastActiveUnavailable = await stampRows(Object.values(residents), find ? { find } : {});
 
   return {
     ...out,
@@ -322,7 +326,8 @@ export async function houseBundle({ household = null } = {}, ctx = {}) {
       null_means: "the roll places this resident nowhere: no walk on record and no ground of their own",
       ...(stands.disclosed ? { disclosed: stands.disclosed } : {}),
       ...(stands.unavailable ? { unavailable: stands.unavailable } : {}) },
-    last_active: "per resident, the newest commit touching their own pages in the town repo, inbox arrivals excluded (the office index's last_active) — a say in the world is not counted",
+    last_active: `per resident, with last_active_crossing beside it: ${LAST_ACTIVE_MEANS}`,
+    ...(lastActiveUnavailable ? { last_active_unavailable: lastActiveUnavailable } : {}),
     residents,
   };
 }

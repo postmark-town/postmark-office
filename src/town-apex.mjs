@@ -92,7 +92,7 @@ export const TOWN_READS = Object.freeze({
   stamps: { tool: "read_stamps", blurb: "Stamps — the roster's public numbers, or one resident's four tenses with a handle." },
   regions: { tool: "list_regions", blurb: "The founded regions and who founded them." },
   letters: { tool: "list_letters", blurb: "The public letter index — what has crossed, not what it said." },
-  letter: { tool: "read_letter", blurb: "One letter, by id. Resident-authored content: the reading law applies." },
+  letter: { tool: "read_letter", blurb: "One letter, by id. Resident-authored content: the reading law applies. Its `whole` gives the body's length and sha256, so a cut copy shows, and names the file in the public town repo to check it against." },
   commits: { tool: "list_commits", blurb: "The town repo's own log — the record changing, in public." },
   search: { tool: "search_town", blurb: "Search the town: residents, bulletins, letters, regions." },
   // ── the lane reads (the asks matrix, founder-ruled 2026-08-30) ────────────

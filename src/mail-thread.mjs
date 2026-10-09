@@ -29,6 +29,7 @@
 // is the repair for.
 
 import { probeOf } from "./index-probe.mjs";
+import { lawWithStanding } from "./queries.mjs"; // the law's queued-reply rule over the sender's standing letters (POS-375)
 
 /** The value `thread` takes. */
 export const THREAD_IS_THE_LETTER_ID =
@@ -109,6 +110,16 @@ export function unansweredFrom(db, { handle, sender } = {}) {
     const json = ix.mailStateJson(handle);
     law = json != null ? JSON.parse(json) : null;
   } catch { return []; } // an index built before this seam has no mail_state — say nothing rather than guess
+  // A REPLY ALREADY WRITTEN IS AN ANSWER (POS-375). Under the town log the
+  // sender's earlier reply is a row in the log until the crossing, so the law
+  // above still reads its thread as theirs to answer, and a second, threadless
+  // send was told "you have an unanswered letter" about a letter already
+  // answered: the other road to Mari's double letter (postmark#3016). The
+  // probe carries the sender's own standing letters (a key that holds the
+  // sender, read at the send), and the law's own rule turns their conversations
+  // reply_queued, which ANSWERABLE does not hold. A probe with none (office.db's,
+  // or a send with no town log) reads the law alone, as before.
+  law = lawWithStanding(law, ix.mailStanding?.(handle) ?? []);
   const rows = Array.isArray(law?.conversations) ? law.conversations : [];
   return rows
     .filter((c) => ANSWERABLE.has(c?.attention_state)

@@ -32,6 +32,7 @@ import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
+import { copyTownTools } from "./helpers/town-tools.mjs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
@@ -88,7 +89,7 @@ function seamTown({ tools = TOWN, pots = { keep: 1000 } } = {}) {
   for (const [id, target] of Object.entries(pots))
     writeFileSync(join(repo, "WHITE_PAGES", `pot-${id}.json`), JSON.stringify({ pot: id, status: "open", beneficiary: "keeper", target_usd_per_epoch: target, epoch_cadence: "monthly", received_usd: 0 }));
   writeFileSync(join(repo, "WHITE_PAGES", "pot-shut.json"), JSON.stringify({ pot: "shut", status: "draft", beneficiary: null, target_usd_per_epoch: 100, epoch_cadence: "monthly", received_usd: 0 }));
-  for (const f of ["stamp-mint.mjs", "epoch-close.mjs", "stamp-verify.mjs"]) writeFileSync(join(repo, "tools", f), readFileSync(join(tools, "tools", f)));
+  copyTownTools(tools, repo);
   const keyFile = join(repo, "stamp-key.pem");
   writeFileSync(keyFile, privateKey.export({ type: "pkcs8", format: "pem" }));
   execFileSync(process.execPath, [join(repo, "tools", "stamp-mint.mjs"), "--append", "--key", keyFile, "--repo", repo], { encoding: "utf8" });

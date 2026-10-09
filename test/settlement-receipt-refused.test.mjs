@@ -265,3 +265,19 @@ test("FALSIFIER: no quarantine and no refusal is NULL, not an empty block", () =
   assert.equal(refusedMarks(emptySweep(), null), null);
   assert.equal(refusedMarks(null, null), null);
 });
+
+test("an amend's refusal carries which sketchbook changed the canon path (POS-378, #447 review finding 5)", () => {
+  // The 10-02 shape: the lint refused kinofire's amend of the-gloaming, a path
+  // canon carries. Without the field the receipt reads input-bad beside a path
+  // in canon, and only the prose says why.
+  const gloaming = "WORLD/marks/kinofire/the-gloaming";
+  const r = compose({
+    status: "refused",
+    detail: "sweep tripped: settlement sweep refused: the crossing does not lint clean: 1 error(s)",
+    refusal: { class: "input-bad", next_step: "repair the amend", cause: "the crossing does not lint clean: 1 error(s)", ref: "origin/main",
+      paths_in_canon: [gloaming], paths_in_inputs: [], amended_by_inputs: { [gloaming]: ["draft/kinofire"] }, errors_claimed: 1, errors_seen: 1 },
+  });
+  assert.equal(r.class, "input-bad");
+  assert.deepEqual(r.refusal.paths_in_canon, [gloaming]);
+  assert.deepEqual(r.refusal.amended_by_inputs, { [gloaming]: ["draft/kinofire"] }, "the receipt names the sketchbook that changed the canon path");
+});
