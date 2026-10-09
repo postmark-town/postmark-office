@@ -803,7 +803,11 @@ test("the doorstep's standing line names her, her stops, and the nearest one to 
   assert.equal(d.vehicle, SHIP);
   assert.equal(d.stops, 4, "all four, her own berth included: it is a door you can stand at AND a place you can ride to, so counting three would be the doorstep disagreeing with the door");
   assert.equal(d.nearest.mark, WHARF);
-  assert.match(d.line, /Enter a stop to board/);
+  // POS-483: an enter from off the stop is refused (R15), so the line names
+  // the composed walk to the nearest stop, never "Enter a stop to board".
+  assert.match(d.line, new RegExp(`mark_id: "${WHARF}", enter_on_arrival: true`));
+  assert.match(d.line, /accept: true/);
+  assert.doesNotMatch(d.line, /Enter a stop to board/);
   assert.equal(doorstepTransport(service, null, w).nearest, undefined, "with no standpoint there is no nearest, and none is invented");
   assert.equal(doorstepTransport(service, { x: 0, y: 0 }, plainWorld()), null);
 });

@@ -367,3 +367,24 @@ test("and the path was never in doubt: gate A resolves the <by>/<slug> id to the
     "WORLD/marks/let-there-be-light/the-doubled-coast/the-keepers-flat/mark.md",
     "an amend carrying the id lands on the existing file — never a WORLD/marks/reader/the-keepers-flat twin");
 });
+
+// ── LEG 8 · a published mark MOVES by amend on the single-log lane ──────────
+//
+// POS-483's lane (2026-10-09). The leave-mark card said "an amend that MOVES a
+// published mark is refused for now (#1862)". That refusal lives only in
+// leave-exec.mjs, the git lane, which prod never reaches (WORLD_SINGLE_LOG=1).
+// On the lane prod runs, the move guard is retired and the door forecasts the
+// carry (POS-441). This leg is that door's own word, so the card's new sentence
+// is pinned to what the door does.
+
+test("POS-483: on the single-log lane, an amend that MOVES a published parcel is not refused — no 409, and the answer forecasts the carry", async () => {
+  const out = await leave({
+    slug: "the-sloop-at-anchor", kind: "parcel", by: "sailor", amend: true,
+    at: { x: 520, y: 500 }, body: "the sloop, warped twenty metres east",
+  }, HOUSE);
+  assert.notEqual(out.code, 409, `a published move must not be refused on the single-log lane: ${JSON.stringify(out)}`);
+  assert.equal(out.ok, true, `the move goes forward: ${JSON.stringify(out)}`);
+  assert.equal(out.amended, true, "as an amendment of the standing mark");
+  assert.equal(out.carries?.forecast, true, "and the answer carries the carry's forecast (POS-441)");
+  assert.deepEqual([out.carries.dx, out.carries.dy], [20, 0], "for exactly the move asked");
+});

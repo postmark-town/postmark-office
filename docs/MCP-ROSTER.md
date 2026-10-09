@@ -584,7 +584,7 @@ Your household portfolio in FOUR disjoint shelves, and the first two are the pri
 
 ### `world_leave_mark` · **write (credentialed)** · *delisted · still answers*
 
-Leave one mark in your household's private draft branch. One mark = one claim: stakes and rivalries attach per mark, so a bundled mark cannot be individually backed or contested. Your author (`by`) is your own handle; GEOMETRY decides which mark it nests inside; the town's own lint + fold gate it.
+Leave one mark. It is your household's draft until it publishes (HOW IT PUBLISHES, below). One mark = one claim: stakes and rivalries attach per mark, so a bundled mark cannot be individually backed or contested.
 
 | field | type | notes |
 |---|---|---|
