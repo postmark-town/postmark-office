@@ -66,6 +66,8 @@ import { computeStanding, gistContainment } from "./standing.mjs";
 // THE SEAL (POS-357, R1): a pure SQL copy of the World this window leaves, in
 // this transaction. The module imports nothing; see its header and step 8.
 import { sealSnapshot } from "./world-snapshot-seal.mjs";
+// WHETHER STANCES COUNT AT THE SETTLEMENT THIS CROSSING MAKES (POS-364, 072): decided here, recorded by the seal. See step 8.
+import { stancesAtSeal, lawCarriesRulingB } from "../../src/world-settlement.mjs";
 // THE CANDLE'S LOCK (POS-404): the clearing and the claim door take turns. Taken right after BEGIN.
 import { CLEARING_TAKES_THE_CANDLE } from "./candle-lock.mjs";
 // THE CARRY (POS-441): a move carries the mover's household's marks inside it,
@@ -279,11 +281,13 @@ try {
         // so it names the limit and the law mark that holds it.
         capSeen = {
           checked: true, cap: verdict.cap, law_date: verdict.lawDate, world_sha: verdict.lawSha, households: verdict.householdsSource,
+          ...(verdict.householdsFallback ? { households_fallback: verdict.householdsFallback } : {}),
           over_limit: verdict.opposed.map((r) => ({ slug: r.slug, law: r.law })),
           applied_by: "this clearing: opposed, never materialized (Darko, 2026-10-08)",
           judged: verdict.judged,
         };
         for (const r of verdict.opposed) decide(r.id, "refused", r.check);
+        if (verdict.householdsFallback) console.error(`  ⚠ parcel limits: the household cap was judged on a fallback — ${verdict.householdsFallback}`);
         if (verdict.opposed.length)
           console.log(`  ⚑ parcel limits: opposed ${verdict.opposed.length} claim(s) at this clearing (law ${String(verdict.lawSha).slice(0, 8)}): ${verdict.opposed.map((r) => `${r.slug} (${r.law})`).join(", ")}`);
       }
@@ -686,8 +690,20 @@ try {
   //     AND THE HOUSEHOLD REGISTER BESIDE IT (POS-410, 064; Darko 2026-10-05:
   //     the snapshot keeps the atomic upstream sources). The register rows as
   //     they stand at the seal, so a past World folds with the past's houses.
-  const sealed = await sealSnapshot(q, { windowId });
+  //
+  //     AND WHETHER STANCES COUNT AT IT (POS-364, 072; Darko 2026-10-09, the
+  //     conservative cutover; Wright: decide once, at the seal). The cutover
+  //     this job holds (TOWN_STANCE_CUTOVER, from its own unit's env) against
+  //     the settlement this crossing makes, recorded on the header and covered
+  //     by its digest. Every reader reads the record; nothing recomputes it.
+  const stances = await stancesAtSeal({ query: q }, { env: process.env });
+  const sealed = await sealSnapshot(q, { windowId, stances });
   console.log(`  ⚑ snapshot: ${sealed.marks} standing mark(s), ${sealed.new_versions} new version(s), register ${sealed.register_rows} row(s) (${sealed.new_register_versions} new), digest ${sealed.digest.slice(0, 12)}`);
+  // And whether the law it was sealed on carries ruling B (world#171): a cutover
+  // sealed on an older law returns every stance-opposed mark with its children,
+  // for good (DEPLOY.md § 072, step 0).
+  const b = lawCarriesRulingB(worldRepo, sealed.law_sha);
+  console.log(`  ⚑ stances: ${stances.counted ? "COUNTED" : "not counted"} at S${stances.settlement_inferred ?? "?"} (${stances.how}), cutover ${stances.cutover ?? "unset"}; law ${String(sealed.law_sha ?? "-").slice(0, 12)} ${b === true ? "carries ruling B" : b === false ? "does NOT carry ruling B (world#171)" : "unread for ruling B (no --world-repo, or the sha is not in it)"}`);
 
   // Close, pin, open the successor.
   //

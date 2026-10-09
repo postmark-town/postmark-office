@@ -45,7 +45,7 @@ const uuid = (n) => `7${String(n).padStart(7, "0")}-0000-4000-8000-000000000000`
  * parcel gets a marks row and its ORIGIN claim (the id the mark keeps for life)
  * dated `firstClaimed[slug]` (or its own date), so its first claim is a source.
  */
-async function settle({ parcels, firstClaimed = {}, lawSha = ENGINE, stakes = [] }) {
+async function settle({ parcels, firstClaimed = {}, lawSha = ENGINE, stakes = [], stances = null }) {
   resetSettlementCaches();
   return owner(async (c) => {
     await c.query("TRUNCATE world_snapshot_folds, settlements, world_snapshots, world_snapshot_marks, mark_versions, law_projection, escrow_projection, acts, claims, marks, windows CASCADE");
@@ -71,7 +71,7 @@ async function settle({ parcels, firstClaimed = {}, lawSha = ENGINE, stakes = []
          VALUES ($1, $2, $9, $3, $3, $4, $5, box(point($7::float8 - $8::float8, -$8::float8), point($7::float8 + $8::float8, $8::float8)), 'standing', 501, $6, NULL)`,
         [id, p.slug, p.owner, p.body, JSON.stringify(p.geometry), JSON.stringify(p.data), p.geometry.at.x, p.geometry.extent.w / 2, p.kind]);
     }
-    return seal(c, { id: 2, window: 501, number: 11, marks: parcels, lawSha });
+    return seal(c, { id: 2, window: 501, number: 11, marks: parcels, lawSha, stances });
   });
 }
 const ids = (s) => s.marks.filter((m) => m.kind === "parcel").map((m) => m.id).sort();
@@ -131,12 +131,19 @@ test("THE CROSSING'S SETTLEMENT BLOCK: the docket loses what the settlement take
   await settle({ parcels });
   const out = { marks: parcels.map((p) => ({ slug: p.slug })), as_of: { window: 501 } };
   const selection = { entry: "fold-delta.mjs § foldDelta", docket_claims: 4, carried_absent: { checked: true, count: 0, slugs: [] } };
+  // Both arms come from what the seal recorded (072), so neither can be skipped by the shell this runs in.
   const read = await asOffice((p) => settlementWithhold(p, { window: 501, worldRepo: WORLD, out, selection }));
   assert.deepEqual(read.out.marks.map((m) => m.slug), ["ra/plot", "rb/plot", "rc/plot"]);
   assert.equal(read.selection.settlement.withheld_from_docket, 1);
   assert.deepEqual(read.selection.settlement.limits, [{ mark: "rd/plot", law: "the-town/claim-cap" }]);
-  if (!process.env.TOWN_STANCE_CUTOVER)
-    assert.match(read.selection.settlement.stances_not_counted ?? "", /R14/, "the LIMIT is withheld with the cutover unset; the receipt says no stance counted (R14)");
+  assert.match(read.selection.settlement.stances_not_counted ?? "", /R14/, "the LIMIT is withheld with no stance counted; the receipt says so (R14)");
+  assert.equal(read.selection.settlement.stances, null, "sealed with no decision recorded");
+  const counted = { counted: true, cutover: "S11", settlement_inferred: 11, how: "inferred" };
+  await settle({ parcels, stances: counted });
+  const set = await asOffice((p) => settlementWithhold(p, { window: 501, worldRepo: WORLD, out, selection }));
+  assert.deepEqual(set.selection.settlement.stances, counted, "the receipt carries the seal's record");
+  assert.deepEqual(set.out.marks.map((m) => m.slug), ["ra/plot", "rb/plot", "rc/plot"], "with the cutover set, the same limit is withheld");
+  assert.equal(set.selection.settlement.stances_not_counted, undefined, "and the receipt no longer says no stance counted");
   // Unreadable (no world checkout): the window's own forecast is withheld instead.
   await owner((c) => c.query(`UPDATE windows SET receipts = '{"parcel_cap":{"checked":true,"over_limit":[{"slug":"rd/plot","held":3,"law":"the-town/claim-cap"}]}}' WHERE id = 501`));
   const blind = await asOffice((p) => settlementWithhold(p, { window: 501, worldRepo: null, out, selection }));

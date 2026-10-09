@@ -108,6 +108,9 @@ export function firstClaimInstant(date, submittedAt) {
   return submittedAt instanceof Date ? submittedAt.toISOString() : String(submittedAt);
 }
 
+/** Does a record carry a `date`? PURE. */
+export const isDated = (date) => date != null && date !== "";
+
 export function recordFromRow(row) {
   if (!row) throw new Error("recordFromRow: no row");
   const d = row.data ?? {};
@@ -126,10 +129,17 @@ export function recordFromRow(row) {
   // crossing ("capped — already holds 4"). `first_claimed` is the mark's ORIGIN
   // claim's instant (the claim whose id the mark keeps for life; MARK_COLUMNS reads
   // its date and its submitted_at, and `firstClaimInstant` is the one rule the
-  // store's fold uses too), written only when it differs from `date`, so a
-  // parcel that was never amended keeps the bytes it has always had.
+  // store's fold uses too), written only when the parcel carries a `date` and it
+  // differs from that date, so a parcel that was never amended keeps the bytes it
+  // has always had. An UNDATED parcel carries none either (Wright's review of
+  // #441): its file never had a date line, and the first write-down after the
+  // deploy would otherwise rewrite it with its origin claim's submitted_at. The
+  // cost, named: the store's fold still dates such a parcel by that submitted_at
+  // (world-snapshot.mjs § firstClaimedBySlug) while the tree's reads it undated,
+  // which sorts first and is never the one over a limit. World main held no
+  // undated parcel on 2026-10-09 (117 of 117 carry a date).
   const first = firstClaimInstant(row.first_claimed, row.first_claim_submitted_at);
-  if (row.kind === "parcel" && first && first !== String(d.date ?? "")) rec.claimed_at = first;
+  if (row.kind === "parcel" && first && isDated(d.date) && first !== String(d.date)) rec.claimed_at = first;
   if (g && g.at && g.extent) {
     const at = d._fileAt ?? g.at;
     rec.at = { x: at.x, y: at.y };

@@ -1941,6 +1941,39 @@ Order at the ship, and it matters:
 2. **Restart the office before the first clearing that runs the new code.** An office still running the old code would keep a fold without the town's words under the new digest, and `ON CONFLICT DO NOTHING` would make that permanent: `world-snapshot.mjs --verify` would then report a difference for that settlement forever. If a clearing did run first, delete that digest's `world_snapshot_folds` row (office_api holds DELETE on it); the next read rebuilds it with its words, and `--verify --world-repo` reads VALUE-EQUAL again.
 3. Snapshots sealed before 069 carry `stance_through` NULL and fold with no words, which equals their published tag. Words spoken before those seals are not in them, by design: a backfill would change their digests.
 
+## 072: the seal records whether stances count (POS-364, the conservative cutover)
+
+Darko, 2026-10-09 10:25 EDT: `TOWN_STANCE_CUTOVER=S<n>` names a settlement number. A settlement below it folds with no stances (R14); from it on, every opposition standing at its seal counts, in git and in the served World alike. The **seal decides** (the clearing job, from the cutover in its own env and the settlement it is making: the store's newest plus one) and records `world_snapshots.stances` (`{counted, cutover, settlement_inferred, how}`, covered by the digest). Every reader reads that record; nothing recomputes it. A snapshot with no record (everything sealed before 072) reads as not counted.
+
+Order at the ship, with Sunday's migrations:
+
+0. **Before the cutover is set, the law must carry ruling B (world#171).** A settlement folds with the engine at its sealed `law_sha`, which is the store's `projection_heads` world-law at the seal. A cutover sealed on a law older than #171 records `counted: true` on an engine that returns every stance-opposed mark with its positioned children, for good (the law sha is in the digest; it is disclosed as `stance_returns_whole`, never undone). So, on the box:
+   ```sh
+   LAW=$(sudo -n -u postgres psql -d world2 -tAc "SELECT sha FROM projection_heads WHERE repo = 'world-law'")
+   W=/srv/world2-lab/ingest-clones/world      # the clearing's own --world-repo (world2-clearing.sh)
+   git -C "$W" fetch -q origin
+   git -C "$W" merge-base --is-ancestor e79babcff36e77db597b0433e99433cb5eb39fc3 "$LAW" \
+     && echo "law $LAW carries ruling B" || echo "law $LAW does NOT carry ruling B"
+   ```
+   (`e79babcff` is world#171's merge on world main.) If it does not, **do not set the cutover yet**: let law-ingest move the pin forward (the next blessing of a world main that contains #171), re-run the check, and set the cutover only after it reads "carries". Once the cutover is set, every clearing's journal says it too: `⚑ stances: … ; law <sha> carries ruling B` (or `does NOT carry ruling B (world#171)`).
+1. **Apply 072 after 069 and 071, before the code, between crossings.** The new seal writes `world_snapshots.stances`; against a store without the column, every clearing rolls back. The file waits at most 5 s for its lock (`lock_timeout`): behind a running clearing it fails with `lock_not_available` and changes nothing, so run it again once the clearing is done.
+   ```sh
+   sudo -n -u postgres psql -v ON_ERROR_STOP=1 -d world2 \
+     -c "SET ROLE world2_owner;" -f /srv/postmark-office/world2/schema/072_snapshot_stances.sql
+   ```
+   Proof (the probe `world2/tools/migrations-landed.mjs` holds for 072): `SELECT data_type FROM information_schema.columns WHERE table_name = 'world_snapshots' AND column_name = 'stances';` reads `jsonb`. Every existing snapshot keeps its digest (the column is NULL on them, and the digest's seventh part is written only when it is set).
+2. **Restart the office before the first clearing that runs the new code**, as for 069: an office on the old code would keep a fold under the new digest with the seal's words whether or not they count.
+3. **The cutover must reach the clearing job.** The clearing unit (`postmark-world2-clearing.service`) reads `/etc/postmark-world2-dev.env` and `/etc/postmark-world2-clearing.env`, **not** `/etc/postmark-office.env`, and the seal is now the one place the cutover is read for git and the World. When Darko picks n, set `TOWN_STANCE_CUTOVER=S<n>` in `/etc/postmark-world2-clearing.env` (the file `postmark-settlement.service` reads too) as well as in the office env (the stance inbox's town seat still reads it there). Not set: every seal records `counted: false`, which is R14. Read it back on the next clearing's journal line, `⚑ stances: COUNTED at S<k> (inferred), cutover S<n>; law <sha> carries ruling B`.
+   - **A malformed cutover** (anything but `S<n>` or `<n>`) refuses every clearing: the seal never guesses it, and each window rolls back whole (`CLEARING FAILED … names no settlement`). Correct `/etc/postmark-world2-clearing.env` and re-run the clearing (`sudo systemctl start postmark-world2-clearing.service`); nothing was lost.
+   - **A cutover set only in the office env** is not seen by the clearing, so every seal records `counted: false` for good: those settlements stay before the cutover whatever is set later, and the journal line says `cutover unset`. The remedy is not a rewrite: set it in `/etc/postmark-world2-clearing.env`, and pick an n at or after the next settlement to be sealed, so the cutover starts there.
+4. **On dev and rehearsal stores** (any store where train code from before #451 sealed with 069 and served): a World kept under a 069-era digest (`stance_through` set, `stances` NULL) may hold the seal's words. The office no longer reads those rows, but `--verify` still compares against them, so clear them once, as office_api:
+   ```sql
+   DELETE FROM world_snapshot_folds f USING world_snapshots s
+    WHERE s.digest = f.digest AND s.stance_through IS NOT NULL AND s.stances IS NULL;
+   ```
+   Prod is not exposed: 069 ships with this train, so prod has no such row.
+5. **The decision is made once.** A seal under a lagging ingest (the last tag not yet a settlements row) infers its number one low and records it; that record stands. To read what a settlement recorded: `SELECT id, window_id, stances FROM world_snapshots ORDER BY id DESC LIMIT 3;`.
+
 ## The ground: the /tmp janitor, the disk watch, three site releases (2026-10-09)
 
 On 2026-10-09 the root disk filled (38G of 38G, about 03:00 EDT). Postgres went into crash recovery, sign-in failed, and the 08:00 ferry and ten timers refused. Nothing watched the ground. Installed the same morning on Darko's go:

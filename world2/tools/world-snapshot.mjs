@@ -170,13 +170,18 @@ try {
     // versions decided by the seal's instant). That is what the office keeps under the
     // digest. With no stance_through, or no absolute veto among the words, it IS
     // the derived fold above.
-    const { wordsAtSeal, foldWithWords } = await import("../../src/world-settlement.mjs");
-    const words = await wordsAtSeal(client, header, { worldRepo });
+    // WHETHER THOSE WORDS COUNT is the seal's recorded decision (072), read, never
+    // recomputed: below the cutover, or with no decision recorded, the settlement
+    // is its sources with no word at all.
+    const { wordsAtSeal, foldWithWords, stancesOf, NO_WORDS } = await import("../../src/world-settlement.mjs");
+    const decided = stancesOf(header);
+    console.log(`  · stances: ${decided.counts ? `counted (recorded at the seal: cutover ${decided.recorded.cutover}, S${decided.recorded.settlement_inferred}, ${decided.recorded.how})` : `not counted: ${decided.why}`}`);
+    const words = decided.counts ? await wordsAtSeal(client, header, { worldRepo }) : NO_WORDS;
     let consent = null;
     try { consent = await import(pathToFileURL(join(tools, "tools", "consent.mjs")).href); } catch { consent = null; }
-    const settled = foldWithWords({ fold, args, townWordsRead: consent ? consent.TOWN_WORDS instanceof Set : false, claimOrderRead: typeof engine.CLAIMED_AT_FIELD === "string" }, words, derived);
+    const settled = foldWithWords({ fold, args, townWordsRead: consent ? consent.TOWN_WORDS instanceof Set : false, claimOrderRead: typeof engine.CLAIMED_AT_FIELD === "string", returnsAloneRead: consent ? consent.STANCE_RETURNS_ALONE === true : false }, words, derived);
     if (header.stance_through == null) console.log("  · words: none read at this seal (no stance_through: sealed before 069, or back-filled), so the settlement is the derived fold");
-    else console.log(`  · words: the stance acts up to ${header.stance_through} — the town opposes ${settled.vetoes?.town?.length ?? 0} mark(s), holders ${settled.vetoes?.holders?.length ?? 0} word(s), the limits ${settled.vetoes?.limits?.length ?? 0} parcel(s)${settled.vetoes?.town_unread ? `; the engine at this law predates world#146, so the town's ${settled.vetoes.town_unread.length} are NOT carried` : ""}; ${(derived.marks?.length ?? 0) - (settled.state.marks?.length ?? 0)} mark(s) leave the settlement`);
+    else console.log(`  · words: the stance acts up to ${header.stance_through} — the town opposes ${settled.vetoes?.town?.length ?? 0} mark(s), holders ${settled.vetoes?.holders?.length ?? 0} word(s), the limits ${settled.vetoes?.limits?.length ?? 0} parcel(s)${settled.vetoes?.town_unread ? `; the engine at this law predates world#146, so the town's ${settled.vetoes.town_unread.length} are NOT carried` : ""}${settled.vetoes?.stance_returns_whole ? `; the engine at this law predates ruling B, so ${settled.vetoes.stance_returns_whole.join(", ")} left with the marks standing in them` : ""}; ${(derived.marks?.length ?? 0) - (settled.state.marks?.length ?? 0)} mark(s) leave the settlement`);
     const { rows: [cached] } = await client.query("SELECT state FROM world_snapshot_folds WHERE digest = $1", [header.digest]);
     if (cached) compareFolds(`the settlement (with its seal's words) vs the cached fold of ${header.digest.slice(0, 12)}`, settled.state, JSON.parse(cached.state));
     else console.log("  · world: no cached fold kept for this digest (built by the office on first read, POS-359)");

@@ -306,6 +306,31 @@ export function cutoverNumber(env = process.env) {
 }
 
 /**
+ * DO STANCES COUNT AT THIS SETTLEMENT? (Darko, 2026-10-09 10:25 EDT: "the
+ * conservative cutover, on both points".) The cutover is a settlement NUMBER.
+ * A settlement numbered below it folds with no stances (R14: everything
+ * ratified); from it on, every opposition standing at that settlement's seal
+ * counts, earlier acts included. Unset, no settlement counts any. So a sealed
+ * settlement folds by its own number, never by whether the variable is set.
+ * Git (world-settlement.mjs § settlementTakesAway) and the served World (§
+ * servedSettlement) both ask this one question. PURE; a malformed cutover
+ * throws, as `cutoverNumber` does. → `{ counts, cutover, number, why }`, `why`
+ * the clause when they do not, for the caller to end (", so no stance takes one
+ * out of git").
+ */
+export function stancesCountAt(number, env = process.env) {
+  const cutover = cutoverNumber(env);
+  const n = number == null || number === "" ? null : Number(number);
+  const known = Number.isFinite(n);
+  const counts = cutover != null && known && n >= cutover;
+  const why = counts ? null
+    : cutover == null ? `${CUTOVER_KEY} is not set: before the cutover every mark counts as ratified (R14)`
+      : !known ? `the settlement's number could not be read, so it is not known to be at or after the cutover S${cutover}`
+        : `S${n} is below the cutover S${cutover} (${CUTOVER_KEY}): a settlement before the cutover counts every mark as ratified (R14)`;
+  return { counts, cutover, number: known ? n : null, why };
+}
+
+/**
  * The cutover settlement's window, read from the store's `settlements` table.
  * `{ number, window_id, published_at }`, or null when unset.
  */

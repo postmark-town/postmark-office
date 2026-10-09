@@ -152,7 +152,7 @@ export async function settlementWithhold(client, { window, worldRepo = null, tow
     const { settlementTakesAway } = await import("../../src/world-settlement.mjs");
     const header = await snapshotHeader(client, { window });
     if (!header) throw new Error(`no snapshot was sealed for window ${window}`);
-    const { slugs, vetoes, stances_not_counted } = await settlementTakesAway(client, header, { worldRepo, townRepo: townClone });
+    const { slugs, vetoes, stances_not_counted, stance_returns_whole, stances } = await settlementTakesAway(client, header, { worldRepo, townRepo: townClone });
     const w = withholdTakenAway({ marks: out.marks, selection }, slugs);
     return {
       out: { ...out, marks: w.marks },
@@ -160,10 +160,12 @@ export async function settlementWithhold(client, { window, worldRepo = null, tow
         ...w.selection,
         settlement: {
           window, snapshot: header.id, digest: header.digest, stance_through: header.stance_through ?? null,
+          stances: stances ?? null,
           taken_away: [...slugs].sort(), withheld_from_docket: w.fromDocket, withheld_from_carry: w.fromCarry,
           limits: vetoes?.limits ?? [],
           ...(vetoes?.limits_unread ? { limits_unread: vetoes.limits_unread } : {}),
           ...(stances_not_counted ? { stances_not_counted } : {}),
+          ...(stance_returns_whole ? { stance_returns_whole } : {}),
           ...(vetoes?.town_unread ? { unread: `the engine at law ${String(header.law_sha).slice(0, 12)} predates world#146, so ${vetoes.town_unread.length} opposition(s) could not be carried` } : {}),
         },
       },

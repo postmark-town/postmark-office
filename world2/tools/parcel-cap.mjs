@@ -137,6 +137,17 @@ export async function limitsAtClearing(q, { worldRepo = null, townRepo = null, c
   // The receipt names the sha the resolver actually ran at, read from that checkout.
   const ranAt = town ? execFileSync("git", ["-C", town, "rev-parse", "HEAD"], { encoding: "utf8" }).trim() : null;
   const householdsSource = (ranAt ? `${grouped.source}, town ${ranAt.slice(0, 12)}` : grouped.source) + townNote;
+  // THE FALLBACK NAMES ITSELF (Wright's review of #441). Without the town at the
+  // ingested sha the households are the printed roster at the law, or nobody's
+  // (every handle its own household). Either one can let a parcel over its
+  // household's cap lock here, so the verdict says so in a field of its own,
+  // beside the source. It does not refuse: the door and the clearing never
+  // refuse on governance grounds they cannot judge (R11), and the settlement,
+  // which groups by the register at its seal, is the backstop.
+  const householdsFallback = town ? null
+    : `${townRepo ? (townHead?.sha ? `the town at the ingested sha ${String(townHead.sha).slice(0, 12)} could not be read` : "the store pins no town sha") : "no --town-repo was given"}, `
+      + `so the households are ${households ? `the printed roster at law ${lawSha.slice(0, 12)}` : "unread and every handle is its own household"}: `
+      + "a parcel over its household's cap can lock at this clearing, and the settlement's limit pass is the backstop";
   const state = engine.fold({ marks: records, terrain: null, stakes: [], households });
   const bySlugCandidate = new Map(candidates.map((c) => [c.slug, c]));
   const opposed = limitOppositions(state)
@@ -145,7 +156,7 @@ export async function limitsAtClearing(q, { worldRepo = null, townRepo = null, c
       const r = { id: bySlugCandidate.get(l.mark).id, slug: l.mark, law: l.law, error: l.error };
       return { ...r, check: opposedCheck(r) };
     });
-  return { checked: true, opposed, judged: candidates.length, cap: engine.PARCEL_CLAIM_CAP, lawDate: engine.PARCEL_CAP_LAW_DATE, lawSha, householdsSource };
+  return { checked: true, opposed, judged: candidates.length, cap: engine.PARCEL_CLAIM_CAP, lawDate: engine.PARCEL_CAP_LAW_DATE, lawSha, householdsSource, ...(householdsFallback ? { householdsFallback } : {}) };
 }
 
 /**

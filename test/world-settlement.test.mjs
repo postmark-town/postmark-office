@@ -27,8 +27,11 @@ import {
 const store = await startStore({ db: "world_settlement_test" });
 after(() => store.stop()); // a store never stopped left its server running on every run (POS-479)
 const skip = store.skip ?? false;
-const { owner, asOffice, seed, speak } = settlementRig(store);
+const { owner, asOffice, seed: seedRig, speak } = settlementRig(store);
 
+// Stances count from the cutover on (Darko, 2026-10-09), as each seal recorded it (072):
+// these tests seal S10 and S11 under a cutover at S10 unless a test names its own.
+const seed = (o = {}) => seedRig({ cutover: "S10", ...o });
 const serve = (opts = {}) => asOffice((p) => servedSettlement(p, { worldRepo: WORLD, ...opts }));
 // The marks a resident placed (the class mark the law brings is the law's, and stands in every fold).
 const ids = (state) => state.marks.map((m) => m.id).filter((id) => id !== "the-town/hall").sort();
@@ -219,20 +222,19 @@ test("foldText is the fold's own file form", () => {
   assert.equal(foldText({ a: 1 }), '{\n  "a": 1\n}\n');
 });
 
-test("with TOWN_STANCE_CUTOVER unset, no mark is labelled: the old blessing carries over (R14), and meta says why", { skip }, async () => {
-  await seed();
-  const before = process.env.TOWN_STANCE_CUTOVER;
-  delete process.env.TOWN_STANCE_CUTOVER;
-  try {
+test("with no cutover at the seal, no mark is labelled: the old blessing carries over (R14), and meta says why", { skip }, async () => {
+  for (const [how, opts] of [
+    ["no decision recorded (sealed before 072)", { cutover: null }],
+    ["the cutover unset at the seal", { s11Stances: { counted: false, cutover: null, settlement_inferred: 11, how: "inferred" } }],
+  ]) {
+    await seed(opts);
     resetSettlementCaches();
     const r = await serve();
     for (const m of r.marks) {
-      assert.equal(m.town_stance, undefined, `${m.id} carries no stance label`);
-      assert.equal(m.awaiting, undefined, `${m.id} awaits no one on this answer`);
+      assert.equal(m.town_stance, undefined, `${how}: ${m.id} carries no stance label`);
+      assert.equal(m.awaiting, undefined, `${how}: ${m.id} awaits no one on this answer`);
     }
-    assert.match(r.meta.labels_omitted, /TOWN_STANCE_CUTOVER is not set/);
-  } finally {
-    if (before === undefined) delete process.env.TOWN_STANCE_CUTOVER; else process.env.TOWN_STANCE_CUTOVER = before;
+    assert.match(r.meta.labels_omitted, opts.cutover === null ? /recorded no stance decision at its seal/ : /TOWN_STANCE_CUTOVER was not set when S11 was sealed/, how);
   }
 });
 
@@ -269,12 +271,23 @@ test("with the cutover set: a mark from before it carries nothing, a town-neutra
     assert.deepEqual(markOf(r, "bo/shed").awaiting, ["the-town"], "ann's word clears her household's seat");
     assert.equal(markOf(r, "bo/shed").town_stance, undefined);
 
-    // A cutover the store cannot read is said, never labelled.
+    // The labels read the cutover the SEAL recorded (072), never the variable now.
     process.env.TOWN_STANCE_CUTOVER = "S77";
     resetSettlementCaches();
     r = await serve();
+    assert.deepEqual(markOf(r, "bo/shed").awaiting, ["the-town"], "a different variable today changes nothing about S11");
+    // Sealed under a cutover AFTER it: the old blessing, no label.
+    await seed({ cutover: "S77" });
+    resetSettlementCaches();
+    r = await serve();
     assert.equal(markOf(r, "bo/shed").awaiting, undefined);
-    assert.match(r.meta.labels_unread, /S77/);
+    assert.match(r.meta.labels_omitted ?? "", /S11 was below the cutover S77 when it was sealed/);
+    // Sealed under a cutover at or before it that the store holds no row for: said, never labelled.
+    await seed({ cutover: "S5" });
+    resetSettlementCaches();
+    r = await serve();
+    assert.equal(markOf(r, "bo/shed").awaiting, undefined);
+    assert.match(r.meta.labels_unread ?? "", /S5/);
   } finally {
     if (before === undefined) delete process.env.TOWN_STANCE_CUTOVER; else process.env.TOWN_STANCE_CUTOVER = before;
   }
@@ -464,19 +477,110 @@ test("the town's word at the seal reaches the engine as `townWords`, and the ask
 // from the sweep while the cutover is unset; once it is set, it does.
 
 test("R14 · CUTOVER UNSET: ann's opposition to bo/shed is in the seal, and git still carries the shed and its name", { skip }, async () => {
-  await seed({ sealWords: [{ actor: "ann", on: "bo/shed", stance: "opposed" }] });
+  await seed({ sealWords: [{ actor: "ann", on: "bo/shed", stance: "opposed" }], s11Stances: { counted: false, cutover: null, settlement_inferred: 11, how: "inferred" } });
   const header = await asOffice(async (p) => (await p.query("SELECT * FROM world_snapshots WHERE id = 2")).rows[0]);
-  const away = await asOffice((p) => settlementTakesAway(p, header, { worldRepo: WORLD, env: {} }));
+  const away = await asOffice((p) => settlementTakesAway(p, header, { worldRepo: WORLD }));
   assert.deepEqual([...away.slugs], [], "nothing is taken away by a word before the cutover");
-  assert.ok(away.stances_not_counted.startsWith("TOWN_STANCE_CUTOVER is not set: before the cutover every mark counts as ratified (R14)"), away.stances_not_counted);
+  assert.equal(away.stances_not_counted, "TOWN_STANCE_CUTOVER was not set when S11 was sealed: before the cutover every mark counts as ratified (R14), so no stance takes one out of git");
 });
 
 test("R14 · CUTOVER SET: the same opposition takes the shed and the name that continues it out of git", { skip }, async () => {
   await seed({ sealWords: [{ actor: "ann", on: "bo/shed", stance: "opposed" }] });
   const header = await asOffice(async (p) => (await p.query("SELECT * FROM world_snapshots WHERE id = 2")).rows[0]);
-  const away = await asOffice((p) => settlementTakesAway(p, header, { worldRepo: WORLD, env: { TOWN_STANCE_CUTOVER: "S11" } }));
+  const away = await asOffice((p) => settlementTakesAway(p, header, { worldRepo: WORLD }));
   assert.deepEqual([...away.slugs].sort(), ["bo/shed", "bo/shed-name"]);
   assert.equal(away.stances_not_counted, undefined);
+});
+
+// ── THE CUTOVER IS A SETTLEMENT NUMBER (Darko, 2026-10-09 10:25 EDT) ─────────
+//
+// "A settlement numbered below n folds with no stances; this is R14, everything
+// ratified. From S<n> on, every opposition standing at that settlement's seal
+// counts, earlier acts included. So a sealed settlement always folds the same
+// way, whatever the env var says today."
+
+test("THE CUTOVER IS A SETTLEMENT NUMBER, DECIDED AT THE SEAL: S11 sealed under S10 or S11 counts ann's word, under S12 does not, whatever the variable says now", { skip }, async () => {
+  const header = () => asOffice(async (p) => (await p.query("SELECT * FROM world_snapshots WHERE id = 2")).rows[0]);
+  const was = process.env.TOWN_STANCE_CUTOVER;
+  try {
+    for (const cutover of ["S10", "S11"]) {
+      await seed({ cutover, sealWords: [{ actor: "ann", on: "bo/shed", stance: "opposed" }] });
+      for (const now of [undefined, "S12", "S99"]) {
+        if (now === undefined) delete process.env.TOWN_STANCE_CUTOVER; else process.env.TOWN_STANCE_CUTOVER = now;
+        const away = await asOffice(async (p) => settlementTakesAway(p, await header(), { worldRepo: WORLD }));
+        assert.deepEqual([...away.slugs].sort(), ["bo/shed", "bo/shed-name"], `sealed under ${cutover}, read with ${now ?? "nothing"} set: ann's word counts`);
+        assert.deepEqual(away.stances, { counted: true, cutover, settlement_inferred: 11, how: "row" });
+      }
+    }
+    await seed({ cutover: "S12", sealWords: [{ actor: "ann", on: "bo/shed", stance: "opposed" }] });
+    process.env.TOWN_STANCE_CUTOVER = "S1";
+    const above = await asOffice(async (p) => settlementTakesAway(p, await header(), { worldRepo: WORLD }));
+    assert.deepEqual([...above.slugs], [], "sealed below the cutover S12: every mark ratified, the word included, whatever is set now");
+    assert.equal(above.stances_not_counted, "S11 was below the cutover S12 when it was sealed: a settlement before the cutover counts every mark as ratified (R14), so no stance takes one out of git");
+  } finally {
+    if (was === undefined) delete process.env.TOWN_STANCE_CUTOVER; else process.env.TOWN_STANCE_CUTOVER = was;
+  }
+});
+
+test("THE SEAL'S DECISION: stancesAtSeal reads the settlement this crossing makes, the store's newest plus one, against the cutover it is handed", { skip }, async () => {
+  await seed();
+  const { stancesAtSeal } = await import("../src/world-settlement.mjs");
+  const at = (cutover) => asOffice((p) => stancesAtSeal(p, { env: cutover ? { TOWN_STANCE_CUTOVER: cutover } : {} }));
+  assert.deepEqual(await at("S12"), { counted: true, cutover: "S12", settlement_inferred: 12, how: "inferred" });
+  assert.deepEqual(await at("S13"), { counted: false, cutover: "S13", settlement_inferred: 12, how: "inferred" });
+  assert.deepEqual(await at(null), { counted: false, cutover: null, settlement_inferred: 12, how: "inferred" });
+  const named = await asOffice((p) => stancesAtSeal(p, { env: { TOWN_STANCE_CUTOVER: "S11" }, header: { id: 2 } }));
+  assert.deepEqual(named, { counted: true, cutover: "S11", settlement_inferred: 11, how: "row" }, "a snapshot a settlement already names reads its row");
+});
+
+test("A LAGGING INGEST IS DECIDED ONCE: S11 sealed while the store's newest was S9 records S10, not counted; S10's and S11's rows arrive, and every re-fold still answers not counted", { skip }, async () => {
+  // The seal's own read, against the store as it stood: S10's tag not yet ingested.
+  const { stancesAtSeal } = await import("../src/world-settlement.mjs");
+  const lagging = { query: async (sql) => ({ rows: /snapshot_id/.test(sql) ? [] : [{ n: 9 }] }) };
+  const decided = await stancesAtSeal(lagging, { env: { TOWN_STANCE_CUTOVER: "S11" } });
+  assert.deepEqual(decided, { counted: false, cutover: "S11", settlement_inferred: 10, how: "inferred" });
+  // Sealed with that record; the rows for S10 and S11 are written later by the tick.
+  await seed({ cutover: "S11", s11Stances: decided, sealWords: [{ actor: "ann", on: "bo/shed", stance: "opposed" }] });
+  // Every re-fold runs on the box as it is now: the cutover set to S11, and S11 a settlements row.
+  const was = process.env.TOWN_STANCE_CUTOVER;
+  process.env.TOWN_STANCE_CUTOVER = "S11";
+  try {
+    const header = await asOffice(async (p) => (await p.query("SELECT * FROM world_snapshots WHERE id = 2")).rows[0]);
+    const away = await asOffice((p) => settlementTakesAway(p, header, { worldRepo: WORLD }));
+    assert.deepEqual([...away.slugs], [], "git: the record stands, though the row now says S11");
+    assert.equal(away.stances_not_counted, "this seal read itself as S10 (inferred at the seal: the store's newest settlement, S9, plus one), below the cutover S11: a settlement before the cutover counts every mark as ratified (R14), so no stance takes one out of git", "the inferred number is named as the seal's own reading, never a bare S10 beside S11 (review F6)");
+    resetSettlementCaches();
+    const asked = await serve({ settlement: "S11" });
+    assert.ok(ids(asked).includes("bo/shed"), "the served World agrees with git");
+    assert.equal(asked.meta.words.counted, false);
+    const newest = await serve();
+    assert.ok(ids(newest).includes("bo/shed"), "and so does the newest");
+  } finally {
+    if (was === undefined) delete process.env.TOWN_STANCE_CUTOVER; else process.env.TOWN_STANCE_CUTOVER = was;
+  }
+});
+
+test("THE SERVED WORLD READS THE RECORD: the same S11, sealed counted and sealed not, asked", { skip }, async () => {
+  await seed({ cutover: "S11", sealWords: [{ actor: "ann", on: "bo/shed", stance: "opposed" }] });
+  const at11 = await serve({ settlement: "S11" });
+  assert.ok(!ids(at11).includes("bo/shed"), "sealed at the cutover: ann's word at its seal counts");
+  assert.equal(at11.meta.words.counted, true);
+  await seed({ cutover: "S12", sealWords: [{ actor: "ann", on: "bo/shed", stance: "opposed" }] });
+  resetSettlementCaches();
+  const at12 = await serve({ settlement: "S11" });
+  assert.ok(ids(at12).includes("bo/shed"), "sealed before the cutover S12: every mark ratified, the shed stands");
+  assert.equal(at12.meta.words.counted, false);
+  assert.match(at12.meta.words.not_counted, /^S11 was below the cutover S12 when it was sealed/);
+  assert.deepEqual(at12.meta.opposed, { town: [], holders: [], limits: [] });
+});
+
+test("THE LABELS READ THE RECORD TOO: a settlement sealed below the cutover carries no label, and meta says why", { skip }, async () => {
+  await seed({ cutover: "S12" });
+  resetSettlementCaches();
+  const r = await serve();
+  assert.equal(r.meta.as_of.settlement, "S11");
+  assert.match(r.meta.labels_omitted ?? "", /^town_stance and awaiting are omitted: S11 was below the cutover S12 when it was sealed/);
+  assert.ok(r.marks.every((m) => m.awaiting === undefined && m.town_stance === undefined));
 });
 
 test("a settlement with no stance_through (sealed before 069, or back-filled) folds with no words", { skip }, async () => {
@@ -565,4 +669,27 @@ test("an engine without world#146 or world#166 applies no limit: the World is th
     assert.ok(state.marks.some((m) => m.id === "ash/second"), "nothing is subtracted by hand");
     assert.deepEqual(vetoes.limits_unread, [{ mark: "ash/second", law: "the-town/one-per-resident" }], JSON.stringify(engine));
   }
+});
+
+test("A 069-ERA HEADER NEVER READS A KEPT WORLD (review of #451, F2): stance_through set, no decision recorded, and an older office's kept fold is folded past, not served", { skip }, async () => {
+  const { s11 } = await seed({ cutover: null, sealWords: [{ actor: "ann", on: "bo/shed", stance: "opposed" }] });
+  // What #432's code kept under this digest: the World with the seal's words applied (here, a stand-in the read must not serve).
+  await owner((c) => c.query("INSERT INTO world_snapshot_folds (digest, state) VALUES ($1, $2)", [s11, JSON.stringify({ marks: [], returned: [{ mark: "bo/shed", state: "returned", subtree: [] }] })]));
+  resetSettlementCaches();
+  const r = await serve({ settlement: "S11" });
+  assert.ok(ids(r).includes("bo/shed"), "not counted (no decision recorded), so the shed stands, as git keeps it");
+  assert.deepEqual(r.returned ?? [], []);
+  assert.equal(r.meta.words.counted, false);
+});
+
+test("AT THE SEAL THE ROW IS NOT LOOKED FOR (review of #451, F5): no snapshot id yet, one query, nothing caught inside the clearing's transaction", async () => {
+  const { stancesAtSeal } = await import("../src/world-settlement.mjs");
+  const asked = [];
+  const pen = { query: async (sql) => {
+    asked.push(sql);
+    if (/snapshot_id/.test(sql)) throw Object.assign(new Error("current transaction is aborted"), { code: "25P02" });
+    return { rows: [{ n: 41 }] };
+  } };
+  assert.deepEqual(await stancesAtSeal(pen, { env: { TOWN_STANCE_CUTOVER: "S42" } }), { counted: true, cutover: "S42", settlement_inferred: 42, how: "inferred" });
+  assert.equal(asked.length, 1, "only the newest settlement is read");
 });

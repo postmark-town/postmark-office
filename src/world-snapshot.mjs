@@ -40,12 +40,24 @@ export function marksDigestOf(pairs) {
 }
 
 /** The snapshot digest over the list digest and the fold's other inputs, as the seal computes it. */
-export function snapshotDigestOf({ marks_digest, law_sha, town_sha, world_sha, register_digest = null, stance_through = null }) {
+export function snapshotDigestOf({ marks_digest, law_sha, town_sha, world_sha, register_digest = null, stance_through = null, stances = null }) {
   // A header sealed before 064 has no register and its digest has four parts;
-  // one sealed with no word read (before 069, or back-filled) has no sixth.
+  // one sealed with no word read (before 069, or back-filled) has no sixth, and
+  // one sealed with no recorded decision (before 072) no seventh.
   const base = `${marks_digest} ${law_sha ?? "-"} ${town_sha ?? "-"} ${world_sha ?? "-"}`;
   const withRegister = register_digest ? `${base} ${register_digest}` : base;
-  return sha256(stance_through != null ? `${withRegister} ${stance_through}` : withRegister);
+  const withWords = stance_through != null ? `${withRegister} ${stance_through}` : withRegister;
+  return sha256(stances != null ? `${withWords} ${stancesPart(stances)}` : withWords);
+}
+
+/**
+ * The digest's part for a recorded stance decision (072): built from its four
+ * fields, never from jsonb's own text, the same way the seal's SQL builds it
+ * (world-snapshot-seal.mjs § HEADER_SQL). PURE.
+ */
+export function stancesPart(s) {
+  const v = typeof s === "string" ? JSON.parse(s) : s;
+  return `stances:${v?.counted === true ? "counted" : "not-counted"}:${v?.cutover ?? "-"}:${v?.settlement_inferred ?? "-"}:${v?.how ?? "-"}`;
 }
 
 /** A snapshot header: by window, by id, or the newest. Null when there is none. */

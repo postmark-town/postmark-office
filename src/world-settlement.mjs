@@ -51,6 +51,13 @@
 //      vetoes standing now as at the seal, the served World IS the kept one,
 //      byte for byte.
 //
+// 5. FROM THE CUTOVER ON (Darko, 2026-10-09 10:25 EDT). Items 3 and 4 apply
+//    to a settlement numbered at or after TOWN_STANCE_CUTOVER. One below it,
+//    or any while it is unset, is served with no stance at all, as git is
+//    written from it (town-stance.mjs § stancesCountAt). DECIDED ONCE, AT THE
+//    SEAL (072): the snapshot header records the decision (`stances`), and
+//    every reader here reads that record and never recomputes it (§ stancesOf).
+//
 // Market opposition is not a veto (R16) and is not read here: it is
 // density-weighted and the settlement's fold applies it (POS-369). A holder's
 // welcomed is not read either: what it confers is the settlement's (POS-362),
@@ -184,6 +191,10 @@ export async function settlementFoldInputs(p, header, { worldRepo, townRepo }) {
     // field it reads. An older one orders by the restamped date, so a limit it
     // finds may be the wrong parcel, and the settlement does not apply it.
     claimOrderRead: typeof engine.CLAIMED_AT_FIELD === "string",
+    // Ruling B (Darko, 2026-10-09; world consent.mjs § A STANCE RETURN TAKES THE
+    // OPPOSED MARK ALONE): an engine that carries it says so. An older one
+    // returns a stance-opposed mark with its whole subtree, and the answer says so.
+    returnsAloneRead: consent ? consent.STANCE_RETURNS_ALONE === true : false,
   };
   ARGS.set(header.digest, inputs);
   if (ARGS.size > 3) ARGS.delete(ARGS.keys().next().value);
@@ -287,6 +298,10 @@ export async function wordsAtSeal(p, header, { worldRepo } = {}) {
 
 const opposedTownOf = (words) => [...(words?.townWords ?? new Map())].filter(([, w]) => w === "opposed").map(([id]) => id);
 
+/** The sentence for a World whose engine predates ruling B (§ stanceReturnsWhole). */
+export const wholeSentence = (header, marks) =>
+  `the engine at law ${String(header.law_sha).slice(0, 12)} predates ruling B (a stance return takes the opposed mark alone), so ${marks.join(", ")} left with the marks standing in them`;
+
 /** The absolute vetoes among a set of words, as `meta.opposed` names them; null when there are none. */
 export function vetoesOf(words) {
   const town = opposedTownOf(words);
@@ -342,6 +357,14 @@ export function limitOppositions(state) {
  * a fold some other word already took a parcel out of. `cleared` is that fold
  * when the caller already holds it. `vetoes.town_unread` names the town's
  * opposed marks (limits included) an engine older than world#146 could not carry.
+ *
+ * A STANCE RETURN TAKES THE OPPOSED MARK ALONE; A LAW RETURN TAKES ITS SUBTREE
+ * (Darko's ruling B, 2026-10-09). The two are told apart for the engine: each
+ * limit goes in as the town's word AND in `townLaws` (mark → the law it cites),
+ * and an engine with ruling B returns those with their subtree, as before, and
+ * every other opposition alone, its positioned children reparented. An engine
+ * older than ruling B ignores `townLaws` and returns every opposition with its
+ * subtree; `vetoes.stance_returns_whole` names the stance returns it did that to.
  */
 export function foldWithWords(inputs, words, cleared = null) {
   const base = cleared ?? foldOver(inputs);
@@ -364,6 +387,7 @@ export function foldWithWords(inputs, words, cleared = null) {
   const state = foldOver(inputs, {
     marks: withHolderWords(structuredClone(inputs.args.marks), holders, { parcels: base.parcels ?? [], householdOf: (h) => hh[h] ?? h }),
     ...(inputs.townWordsRead ? { townWords } : {}),
+    ...(inputs.townWordsRead && rules.length ? { townLaws: new Map(rules.map((r) => [r.mark, r.law])) } : {}),
   });
   if (rules.length && inputs.townWordsRead) {
     // The limit is the answer for these marks now: each return cites its law,
@@ -380,9 +404,25 @@ export function foldWithWords(inputs, words, cleared = null) {
       town, holders,
       ...(rules.length ? { limits: rules.map(({ mark, law }) => ({ mark, law })) } : {}),
       ...(inputs.townWordsRead || !carriedNot.length ? {} : { town_unread: carriedNot }),
+      ...stanceReturnsWhole(inputs, state),
       ...notApplied,
     },
   };
+}
+
+/**
+ * `{ stance_returns_whole: [mark] }` when the engine predates ruling B and
+ * returned a stance-opposed mark (not a limit's, which cites `law`) with a
+ * positioned mark under it, which ruling B would have left standing; `{}`
+ * otherwise. PURE over the fold's arguments and its World.
+ */
+export function stanceReturnsWhole(inputs, state) {
+  if (inputs?.returnsAloneRead) return {};
+  const positioned = new Set((inputs?.args?.marks ?? []).filter((m) => (m?.kind === "sited" || m?.kind === "parcel") && m.at).map((m) => String(m.id)));
+  const whole = (state?.returned ?? [])
+    .filter((r) => r?.state === "returned" && !r.law && (r.subtree ?? []).some((s) => positioned.has(String(s))))
+    .map((r) => r.mark);
+  return whole.length ? { stance_returns_whole: whole } : {};
 }
 
 /**
@@ -401,22 +441,33 @@ export function foldWithWords(inputs, words, cleared = null) {
  * the first-claim order) leaves too. `{ slugs, vetoes }`. Throws when the
  * settlement cannot be folded; the caller withholds the clearing's forecast instead.
  */
-export async function settlementTakesAway(p, header, { worldRepo, townRepo = null, env = process.env }) {
+export async function settlementTakesAway(p, header, { worldRepo, townRepo = null }) {
   const inputs = await settlementFoldInputs(p, header, { worldRepo, townRepo });
-  // R14: BEFORE THE CUTOVER, EVERYTHING COUNTS AS RATIFIED (POS-364 delta
-  // review). Until TOWN_STANCE_CUTOVER names the settlement the town's seat
-  // carries over from, no stance takes a mark out of git: a stance act already
-  // in the store at the deploy would otherwise withhold its mark and subtree
-  // from the sweep while the old blessing still stands. The words are not read
-  // at all then, so the fold is the cleared one plus the LIMITS, which are the
-  // clearing's and the settlement's whatever the cutover (R11).
-  const { cutoverNumber, CUTOVER_KEY } = await import("./town-stance.mjs");
-  const stancesCount = cutoverNumber(env) != null;
-  const words = stancesCount ? await wordsAtSeal(p, header, { worldRepo }) : { townWords: new Map(), holderOpposed: [], words: [], through: null, versions: null };
+  // R14: BEFORE THE CUTOVER, EVERYTHING COUNTS AS RATIFIED, AND THE CUTOVER IS
+  // A SETTLEMENT NUMBER (Darko, 2026-10-09 10:25 EDT, the conservative
+  // cutover). A settlement numbered below TOWN_STANCE_CUTOVER takes no mark out
+  // of git for a stance; from it on, every opposition standing at its seal
+  // counts. The seal decided which, and the header records it (072, § stancesOf):
+  // this reads the record, so re-running a sealed settlement's write-down gives
+  // the same git forever, whatever the variable or the settlements table says
+  // now. With no stance counted, the words are not read at all: the fold is the
+  // cleared one plus the LIMITS, which are the clearing's and the settlement's
+  // whatever the cutover (R11).
+  const gate = stancesOf(header);
+  const stancesCount = gate.counts;
+  const words = stancesCount ? await wordsAtSeal(p, header, { worldRepo }) : NO_WORDS;
   const cleared = foldOver(inputs);
   const { state, vetoes } = foldWithWords(inputs, words, cleared);
   const slugs = new Set();
   const limitParcels = [];
+  // WHAT LEAVES WITH A RETURN IS THE ENGINE'S `subtree` (Darko's ruling B,
+  // 2026-10-09). A stance return takes the opposed mark alone: its `subtree` is
+  // only the mark continued (its names and predicates, which have no place of
+  // their own, and in git without it would name a parent that is not there),
+  // and every positioned child stays in git where it stands, named in `stays`.
+  // A law return takes its subtree as before. An engine older than ruling B
+  // names every child in `subtree`; git then agrees with the World it served
+  // (`stance_returns_whole` says so), never with a fold this office did not run.
   for (const r of state.returned ?? []) {
     if (r?.state !== "returned" && !r?.law) continue;
     slugs.add(String(r.mark));
@@ -431,7 +482,92 @@ export async function settlementTakesAway(p, header, { worldRepo, townRepo = nul
   const hh = cleared.households ?? {};
   const rows = (cleared.marks ?? []).map((m) => ({ slug: m.id, household: hh[m.by] ?? m.by, at: m.at, extent: m.extent, parent: m.parent ?? null }));
   for (const sl of ownGroundOf(limitParcels, rows)) slugs.add(sl);
-  return { slugs, vetoes, ...(stancesCount ? {} : { stances_not_counted: `${CUTOVER_KEY} is not set: before the cutover every mark counts as ratified (R14), so no stance takes one out of git` }) };
+  return {
+    slugs, vetoes,
+    stances: gate.recorded,
+    ...(stancesCount ? {} : { stances_not_counted: `${gate.why}, so no stance takes one out of git` }),
+    ...(vetoes?.stance_returns_whole ? { stance_returns_whole: wholeSentence(header, vetoes.stance_returns_whole) } : {}),
+  };
+}
+
+/**
+ * THE SEAL'S DECISION (072; Wright, 2026-10-09: decide once, at the seal). The
+ * clearing job asks this just before it seals and hands the answer to the seal,
+ * which records it on the header: `{ counted, cutover, settlement_inferred, how }`.
+ * The snapshot being sealed has no settlements row yet, so its number is the
+ * settlement this crossing makes (§ settlementNumberAt: the store's newest plus
+ * one, `how: "inferred"`). The only caller is the seal; every reader reads the
+ * record (§ stancesOf). A malformed cutover throws: the seal never guesses it.
+ */
+export async function stancesAtSeal(p, { env = process.env, header = { id: null } } = {}) {
+  const { stancesCountAt } = await import("./town-stance.mjs");
+  const at = await settlementNumberAt(p, header);
+  const gate = stancesCountAt(at.number, env);
+  return { counted: gate.counts, cutover: gate.cutover == null ? null : `S${gate.cutover}`, settlement_inferred: at.number, how: at.inferred ? "inferred" : "row" };
+}
+
+/**
+ * DOES THE LAW AT A SHA CARRY RULING B? (world#171: `STANCE_RETURNS_ALONE` in
+ * tools/consent.mjs.) `true`, `false`, or null when the world checkout cannot
+ * answer. The clearing's journal says it beside the seal's decision, so a
+ * cutover sealed on a law older than B is seen the crossing it happens
+ * (DEPLOY.md § 072, step 0).
+ */
+export function lawCarriesRulingB(worldRepo, lawSha) {
+  if (!worldRepo || !lawSha) return null;
+  try {
+    const src = execFileSync("git", ["-C", worldRepo, "show", `${lawSha}:tools/consent.mjs`], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    return /export const STANCE_RETURNS_ALONE = true\b/.test(src);
+  } catch { return null; }
+}
+
+/**
+ * WHAT THE SEAL RECORDED: `{ counts, why, recorded }`. PURE over the header. No
+ * record (sealed before 072, back-filled) reads as NOT COUNTED: everything
+ * before the deploy is the old blessing (R14). Never recomputed from the
+ * cutover or the settlements table as they are now.
+ */
+export function stancesOf(header) {
+  const raw = header?.stances ?? null;
+  const s = typeof raw === "string" ? JSON.parse(raw) : raw;
+  if (!s) return { counts: false, recorded: null, why: `snapshot ${header?.id ?? "?"} recorded no stance decision at its seal (sealed before 072, or back-filled), so it counts as before the cutover: every mark ratified (R14)` };
+  if (s.counted === true) return { counts: true, recorded: s, why: null };
+  const n = s.settlement_inferred == null ? "this settlement" : `S${s.settlement_inferred}`;
+  // An inferred number names the seal's own reading of itself, so it says so:
+  // under a lagging ingest it is one low, and a bare "S10" beside S11 reads as a
+  // typo (review of #451, F6).
+  const below = s.how === "inferred" && s.settlement_inferred != null
+    ? `this seal read itself as ${n} (inferred at the seal: the store's newest settlement, S${s.settlement_inferred - 1}, plus one), below the cutover ${s.cutover}`
+    : `${n} was below the cutover ${s.cutover} when it was sealed`;
+  return { counts: false, recorded: s, why: s.cutover == null
+    ? `TOWN_STANCE_CUTOVER was not set when ${n} was sealed: before the cutover every mark counts as ratified (R14)`
+    : `${below}: a settlement before the cutover counts every mark as ratified (R14)` };
+}
+
+/** No words: what a settlement folds with when no stance counts at it (§ stancesOf). */
+export const NO_WORDS = Object.freeze({ townWords: new Map(), holderOpposed: [], words: [], through: null, versions: null });
+
+/**
+ * WHICH SETTLEMENT A SNAPSHOT IS, by number: `{ number, inferred }`. A header
+ * read through `settlements` carries it. A snapshot the clearing has just
+ * sealed has no settlements row yet (the row is written when the keeper's tag
+ * is ingested, settlements-backfill.mjs), so at the crossing its number is the
+ * settlement this crossing makes: the store's newest plus one, and `inferred`
+ * says so. A store with no settlement at all answers null. It runs inside the
+ * clearing's transaction, so it catches nothing: a failed query there aborts
+ * the transaction, and the window rolls back whole (review of #451, F5). At the
+ * seal there is no snapshot id yet, so the row is not looked for.
+ */
+export async function settlementNumberAt(p, header) {
+  if (header?.settlement != null) return { number: Number(header.settlement), inferred: null };
+  if (header?.id != null) {
+    const { rows: [r] } = await p.query("SELECT number FROM settlements WHERE snapshot_id = $1 ORDER BY number LIMIT 1", [header.id]);
+    if (r?.number != null) return { number: Number(r.number), inferred: null };
+  }
+  const { rows: [m] } = await p.query("SELECT max(number) AS n FROM settlements");
+  if (m?.n == null) return { number: null, inferred: `snapshot ${header?.id} names no settlement, and the store holds none` };
+  const next = Number(m.n) + 1;
+  return { number: next, inferred: `snapshot ${header?.id} (window ${header?.window_id ?? "?"}) names no settlement yet, so it is read as the settlement this crossing makes: S${next}, the store's newest plus one` };
 }
 
 /**
@@ -650,16 +786,36 @@ export async function servedSettlement(p, { settlement = null, worldRepo, townRe
 
   // ASKED BY NAME, a settlement is its own seal's words only; the newest World
   // is today's words (Darko, 2026-10-08). The seal's words are read once per digest.
+  //
+  // THE SERVED WORLD WAITS FOR THE CUTOVER TOO (Darko, 2026-10-09 10:25 EDT,
+  // the conservative cutover, point 2): a settlement numbered below
+  // TOWN_STANCE_CUTOVER, or any while it is unset, is served with no stance
+  // applied, exactly as git is written from it (§ settlementTakesAway), so the
+  // page and the record never disagree. The limits are applied whatever the
+  // cutover (R11). The kept World stays its digest's (the sources and the
+  // seal's words); whether those words count is this read's, by the number.
   const asked = number != null;
-  const seal = await sealWordsOf(p, header, { worldRepo });
-  const applied = asked ? seal : words;
+  const gate = stancesOf(header);
+  // The settlement's own words: its seal's when stances count at it, none when
+  // they do not. That is what its World is, what is kept under its digest (the
+  // digest covers the recorded decision) and what --verify re-derives.
+  const seal = gate.counts ? await sealWordsOf(p, header, { worldRepo }) : NO_WORDS;
+  const applied = !gate.counts ? NO_WORDS : asked ? seal : words;
   const sealKey = vetoKey(seal.townWords, seal.holderOpposed);
   const vk = applied.unread ? "unread" : vetoKey(applied.townWords, applied.holderOpposed);
-  const servedKey = `${header.digest}|${asked ? "seal" : vk}`;
+  const servedKey = `${header.digest}|${!gate.counts ? "uncounted" : asked ? "seal" : vk}`;
   let state = SERVED.get(servedKey) ?? null;
   let built = false;
   if (!state) {
-    let text = await cachedFoldText(p, header.digest);
+    // A WORLD KEPT BY OLDER CODE IS NOT READ FOR A 069-ERA HEADER (review of
+    // #451, F2). A snapshot sealed with stance_through set and no recorded
+    // decision (stances NULL: before 072) may have had its World kept by #432's
+    // code with its seal's words applied; read as "not counted" now, that text
+    // would serve those words while git keeps the marks. So such a header is
+    // folded fresh, never read from the cache (DEPLOY.md § 072 clears those rows
+    // on dev and rehearsal stores).
+    const keptMayHoldWords = header.stance_through != null && header.stances == null;
+    let text = keptMayHoldWords ? null : await cachedFoldText(p, header.digest);
     let inputs = null, cleared = null, kept = null;
     if (text == null) {
       // The settlement's World: its sources and its seal's words, kept under its digest.
@@ -679,6 +835,10 @@ export async function servedSettlement(p, { settlement = null, worldRepo, townRe
         inputs ??= await settlementFoldInputs(p, header, { worldRepo, townRepo });
         if (!inputs.townWordsRead) vetoes = { ...vetoes, town_unread: vetoes.town };
       }
+      if (vetoes && !kept) {
+        inputs ??= await settlementFoldInputs(p, header, { worldRepo, townRepo });
+        vetoes = { ...vetoes, ...stanceReturnsWhole(inputs, state) };
+      }
     } else {
       inputs ??= await settlementFoldInputs(p, header, { worldRepo, townRepo });
       const now = foldWithWords(inputs, applied, cleared);
@@ -691,6 +851,7 @@ export async function servedSettlement(p, { settlement = null, worldRepo, townRe
     if (vetoes || limits.length) state.__vetoes = {
       town: vetoes?.town ?? [], holders: vetoes?.holders ?? [], limits,
       ...(vetoes?.town_unread ? { town_unread: `the engine at law ${String(header.law_sha).slice(0, 12)} predates the town's word (world#146), so the town's opposition on ${vetoes.town_unread.join(", ")} could not be carried` } : {}),
+      ...(vetoes?.stance_returns_whole ? { stance_returns_whole: wholeSentence(header, vetoes.stance_returns_whole) } : {}),
     };
     SERVED.set(servedKey, state);
     if (SERVED.size > 6) SERVED.delete(SERVED.keys().next().value);
@@ -725,10 +886,13 @@ export async function servedSettlement(p, { settlement = null, worldRepo, townRe
       ...(number == null && newest > n ? { newer_unsealed: `S${newest}` } : {}),
       opposed: __vetoes ? { town: __vetoes.town, holders: __vetoes.holders, limits: __vetoes.limits ?? [] } : { town: [], holders: [], limits: [] },
       // Whose words those are (POS-362): an asked settlement's own seal's, or today's.
-      words: asked
-        ? { as_of: "the seal", stance_through: seal.through }
-        : { as_of: "now", seal_stance_through: seal.through },
+      words: {
+        ...(asked ? { as_of: "the seal", stance_through: seal.through } : { as_of: "now", seal_stance_through: seal.through }),
+        counted: gate.counts,
+        ...(gate.counts ? {} : { not_counted: `${gate.why}, so no stance is applied to this World` }),
+      },
       ...(__vetoes?.town_unread ? { opposed_unread: __vetoes.town_unread } : {}),
+      ...(__vetoes?.stance_returns_whole ? { stance_returns_whole: __vetoes.stance_returns_whole } : {}),
       ...(applied.unread ? { opposed_unread: `the standing words could not be read, so nothing opposed since the seal is taken away here: ${words.unread}` } : {}),
       ...(built ? { built: "derived from the snapshot's sources on this read, and kept" } : {}),
       ...(labels.unread ? { labels_unread: labels.unread } : {}),
@@ -772,15 +936,20 @@ async function labelsFor(p, header, world, words, { worldRepo, servedKey, seal =
   // served read's side of a seam with POS-361's town seat (town-stance.mjs §
   // townSeatOf, open on every mark while the cutover is unset): the stance
   // inbox keeps that rule; what residents see on the World is this one.
-  const { readCutover, readVersions, readVersionsAtSeal, CUTOVER_KEY, cutoverNumber } = await import("./town-stance.mjs");
-  try { if (cutoverNumber() == null) return { omitted: `town_stance and awaiting are omitted: ${CUTOVER_KEY} is not set, so the old blessing carries over (R14) and no mark is labelled` }; }
-  catch (e) { return { unread: `the labels could not be read: ${String(e?.defect ?? e?.message ?? e).slice(0, 200)}` }; }
+  // A SETTLEMENT BELOW THE CUTOVER (Darko, 2026-10-09: the cutover is a
+  // settlement number) is the old blessing too, and carries no label either.
+  // The cutover the labels read is the one the seal recorded (072), never the
+  // variable as it is now.
+  const { readCutover, readVersions, readVersionsAtSeal, CUTOVER_KEY } = await import("./town-stance.mjs");
+  const gate = stancesOf(header);
+  if (!gate.counts) return { omitted: `town_stance and awaiting are omitted: ${gate.why}, so no mark is labelled` };
+  const env = { [CUTOVER_KEY]: gate.recorded.cutover };
   try {
-    const key = `${servedKey}|${createHash("sha256").update(JSON.stringify([words.words, process.env[CUTOVER_KEY] ?? null])).digest("hex").slice(0, 16)}`;
+    const key = `${servedKey}|${createHash("sha256").update(JSON.stringify([words.words, env[CUTOVER_KEY] ?? null])).digest("hex").slice(0, 16)}`;
     const hit = LABELLED.get(key);
     if (hit) return { marks: hit };
     const query = async (sql, args) => (await p.query(sql, args)).rows;
-    const cutover = await readCutover({ query });
+    const cutover = await readCutover({ query, env });
     const ids = (world.marks ?? []).filter((m) => m?.id && m.kind !== "class").map((m) => m.id);
     // An asked settlement is labelled as it stood at its seal: its seal's words, on its seal's versions.
     const ask = async (sql, args) => ({ rows: await query(sql, args) });
