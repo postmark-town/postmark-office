@@ -547,15 +547,16 @@ export const NO_WORDS = Object.freeze({ townWords: new Map(), holderOpposed: [],
  * sealed has no settlements row yet (the row is written when the keeper's tag
  * is ingested, settlements-backfill.mjs), so at the crossing its number is the
  * settlement this crossing makes: the store's newest plus one, and `inferred`
- * says so. A store with no settlement at all answers null.
+ * says so. A store with no settlement at all answers null. It runs inside the
+ * clearing's transaction, so it catches nothing: a failed query there aborts
+ * the transaction, and the window rolls back whole (review of #451, F5). At the
+ * seal there is no snapshot id yet, so the row is not looked for.
  */
 export async function settlementNumberAt(p, header) {
   if (header?.settlement != null) return { number: Number(header.settlement), inferred: null };
-  try {
-    const { rows: [r] } = await p.query("SELECT number FROM settlements WHERE snapshot_id = $1 ORDER BY number LIMIT 1", [header?.id ?? null]);
+  if (header?.id != null) {
+    const { rows: [r] } = await p.query("SELECT number FROM settlements WHERE snapshot_id = $1 ORDER BY number LIMIT 1", [header.id]);
     if (r?.number != null) return { number: Number(r.number), inferred: null };
-  } catch (e) {
-    if (e?.code !== "42703") throw e;                 // a store without 065 has no snapshot_id: infer, as below
   }
   const { rows: [m] } = await p.query("SELECT max(number) AS n FROM settlements");
   if (m?.n == null) return { number: null, inferred: `snapshot ${header?.id} names no settlement, and the store holds none` };

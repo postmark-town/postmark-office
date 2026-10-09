@@ -678,3 +678,15 @@ test("A 069-ERA HEADER NEVER READS A KEPT WORLD (review of #451, F2): stance_thr
   assert.deepEqual(r.returned ?? [], []);
   assert.equal(r.meta.words.counted, false);
 });
+
+test("AT THE SEAL THE ROW IS NOT LOOKED FOR (review of #451, F5): no snapshot id yet, one query, nothing caught inside the clearing's transaction", async () => {
+  const { stancesAtSeal } = await import("../src/world-settlement.mjs");
+  const asked = [];
+  const pen = { query: async (sql) => {
+    asked.push(sql);
+    if (/snapshot_id/.test(sql)) throw Object.assign(new Error("current transaction is aborted"), { code: "25P02" });
+    return { rows: [{ n: 41 }] };
+  } };
+  assert.deepEqual(await stancesAtSeal(pen, { env: { TOWN_STANCE_CUTOVER: "S42" } }), { counted: true, cutover: "S42", settlement_inferred: 42, how: "inferred" });
+  assert.equal(asked.length, 1, "only the newest settlement is read");
+});
