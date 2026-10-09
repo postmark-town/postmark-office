@@ -220,6 +220,22 @@ async function storePool(env) {
   return pools.get(url);
 }
 
+/**
+ * How many sign-ins the store holds (its oauth_tokens rows), or null when no
+ * store is configured. One connection, opened and closed here: it is asked once,
+ * at an UNSWITCHED office's boot, by the guard that refuses to start on an empty
+ * file while the town's sign-ins live in the store (server.mjs, POS-271).
+ */
+export async function storeSignInCount(env = process.env) {
+  if (!storeConfigured(env)) return null;
+  const { default: pg } = await import("pg");
+  const c = new pg.Client({ connectionString: env.WORLD2_PG_URL, connectionTimeoutMillis: 10_000 });
+  c.on("error", () => {});
+  await c.connect();
+  try { return Number((await c.query("SELECT count(*) AS n FROM oauth_tokens")).rows[0].n); }
+  finally { await c.end().catch(() => {}); }
+}
+
 /** Close every store pool this process opened (a tool's exit, a suite's end). */
 export async function closePaperworkPools() {
   const all = [...pools.values()];
