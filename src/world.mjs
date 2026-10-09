@@ -503,9 +503,9 @@ export const departuresNow = async (worldClone = WORLD_CLONE, opts = {}) =>
 // and `presenceEnabled` keep. With it off every door below answers exactly what
 // it answered before this block existed.
 export const positionsProjected = () => process.env.WORLD_POSITIONS === "1";
-export const positionProjection = createPositionProjection({
-  rebuild: (atMs) => departuresAcrossEras(WORLD_CLONE, { atMs, fromSnapshot: true }),
-});
+/** The projection's rebuild, exported so a test can stand the same projection on its own clock. */
+export const rebuildPositions = (atMs) => departuresAcrossEras(WORLD_CLONE, { atMs, fromSnapshot: true });
+export const positionProjection = createPositionProjection({ rebuild: rebuildPositions });
 
 // THE READ WORKERS' COPY (POS-266). Each worker keeps its own projection and
 // the walk door runs only on the main thread, so the door's record is announced
