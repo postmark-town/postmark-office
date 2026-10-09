@@ -106,19 +106,37 @@ export async function limitsAtClearing(q, { worldRepo = null, townRepo = null, c
   } catch (e) {
     return { checked: false, reason: `the engine at the pinned law ${lawSha.slice(0, 12)} could not be read from ${worldRepo}: ${String(e?.message ?? e).slice(0, 160)}`, opposed: [] };
   }
+  // LOUD (POS-364 delta review): the law pen pins forward only, from the newest
+  // blessing, so a pin older than world#166 means NO limit is judged here, and
+  // the settlement's pass needs the same engine, so it is no backstop either.
   if (typeof engine.CLAIMED_AT_FIELD !== "string")
-    return { checked: false, reason: `the engine at the pinned law ${lawSha.slice(0, 12)} predates the first-claim order (world#166)`, opposed: [] };
+    return { checked: false, limitsUnread: true, reason: `limits unread: the pinned law lacks the first-claim engine (law ${lawSha.slice(0, 12)} predates world#166), so this clearing judges no parcel limit and the settlement cannot apply one either`, opposed: [] };
 
   const { marksFromRows } = await import("../../src/world2-fold.mjs");
   const { withClaimedAt, foldHouseholds, registerRowsNow } = await import("../../src/world-snapshot.mjs");
-  const { limitOppositions } = await import("../../src/world-settlement.mjs");
+  const { limitOppositions, townAtSha } = await import("../../src/world-settlement.mjs");
   const { rows: standing } = await q.query(
     "SELECT id, slug, kind, owner, body, geometry, NULL::uuid AS parent, data FROM marks WHERE kind = 'parcel' AND status = 'standing'");
   const bySlug = new Map(standing.map((r) => [r.slug, r]));
   for (const c of candidates) bySlug.set(c.slug, { id: c.id, slug: c.slug, kind: c.kind, owner: c.owner, body: c.body, geometry: c.geometry, parent: null, data: c.data ?? {} });
   const records = marksFromRows([...bySlug.values()], []);
   await withClaimedAt(q, records, { pending: candidates });
-  const { households, source: householdsSource } = await foldHouseholds(q, { lawSha, townRepo, registerRows: () => registerRowsNow(q) });
+  // THE HOUSEHOLDS AT THE INGESTED TOWN SHA, the one the settlement seals and
+  // groups at (world-settlement.mjs § townAtSha), never the --town-repo HEAD.
+  const { rows: [townHead] } = await q.query("SELECT sha FROM projection_heads WHERE repo = 'town'");
+  let town = null, townNote = "";
+  if (townRepo && townHead?.sha) {
+    try {
+      town = townAtSha(townRepo, townHead.sha);
+    } catch (e) {
+      townNote = ` (the town at the ingested sha ${String(townHead.sha).slice(0, 12)} could not be read: ${String(e?.message ?? e).slice(0, 120)})`;
+    }
+  }
+  const grouped = await foldHouseholds(q, { lawSha, townRepo: town, registerRows: () => registerRowsNow(q) });
+  const households = grouped.households;
+  // The receipt names the sha the resolver actually ran at, read from that checkout.
+  const ranAt = town ? execFileSync("git", ["-C", town, "rev-parse", "HEAD"], { encoding: "utf8" }).trim() : null;
+  const householdsSource = (ranAt ? `${grouped.source}, town ${ranAt.slice(0, 12)}` : grouped.source) + townNote;
   const state = engine.fold({ marks: records, terrain: null, stakes: [], households });
   const bySlugCandidate = new Map(candidates.map((c) => [c.slug, c]));
   const opposed = limitOppositions(state)

@@ -270,8 +270,9 @@ try {
         candidates: parcels.map((c) => ({ id: c.id, slug: slugOf(c), kind: c.class, owner: c.claimant, body: c.body, geometry: c.geometry, data: c.data, submitted_at: c.submitted_at })),
       });
       if (!verdict.checked) {
-        capSeen = { checked: false, reason: verdict.reason, claims: parcels.map((c) => slugOf(c)) };
-        console.log(`  ⚑ parcel limits: ${parcels.length} parcel claim(s) NOT JUDGED here — ${verdict.reason} (the settlement's limit pass is the backstop)`);
+        capSeen = { checked: false, reason: verdict.reason, ...(verdict.limitsUnread ? { limits_unread: verdict.reason } : {}), claims: parcels.map((c) => slugOf(c)) };
+        if (verdict.limitsUnread) console.error(`  ⚠ LIMITS UNREAD: ${parcels.length} parcel claim(s) NOT JUDGED — ${verdict.reason}`);
+        else console.log(`  ⚑ parcel limits: ${parcels.length} parcel claim(s) NOT JUDGED here — ${verdict.reason} (the settlement's limit pass is the backstop)`);
       } else {
         // OPPOSED, CITING THE LAW. The claim's `refusal_check` is the outcome a
         // resident reads ("refused at candle N: opposed: the-town/claim-cap: …"),

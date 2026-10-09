@@ -1145,12 +1145,13 @@ test("F-claim · one door amend of a pre-law parcel goes through the write-down 
   g("add", "-A"); g("commit", "-qm", "canon");
 
   // The store row after sa's door amend: `date` restamped, the origin claim's date beside it.
-  const row = (firstClaimed) => ({
+  const row = (firstClaimed, submittedAt = null) => ({
     slug: "sa/plot", kind: "parcel", owner: "sa", household: "sa", body: "sa's plot, moved", locked_window: 177,
-    geometry: { at: { x: 10, y: 0 }, extent: { w: 25, h: 25 } }, data: { date: "2026-10-08T12:00:00.000Z" }, first_claimed: firstClaimed,
+    geometry: { at: { x: 10, y: 0 }, extent: { w: 25, h: 25 } }, data: { date: "2026-10-08T12:00:00.000Z" },
+    first_claimed: firstClaimed, first_claim_submitted_at: submittedAt,
   });
-  const foldTree = (firstClaimed) => {
-    const r = row(firstClaimed);
+  const foldTree = (firstClaimed, submittedAt = null) => {
+    const r = row(firstClaimed, submittedAt);
     const report = storeWriteDown({ repo, at: Date.parse(AT_ISO), input: foldInput([{ slug: r.slug, kind: r.kind, by: r.owner, household: r.household, locked_window: 177, ...renderedMark(r) }]) });
     const branch = report.households[0].branch;
     const out = join(scratch, `prelaw-tree-${++seq}`);
@@ -1164,6 +1165,11 @@ test("F-claim · one door amend of a pre-law parcel goes through the write-down 
   const kept = foldTree("2026-07-21");
   assert.equal(kept.marks.find((m) => m.id === "sa/plot")?.claimed_at, "2026-07-21", "the mark.md carries the first claim");
   assert.deepEqual(kept.state.errors, [], "four pre-law parcels stand: the amended one is still prior estate");
+  // AN UNDATED ORIGIN CLAIM (POS-364 delta review): its submitted_at is the first
+  // claim, as the store's fold reads it (mark-render.mjs § firstClaimInstant).
+  const undated = foldTree(null, new Date("2026-07-21T09:00:00.000Z"));
+  assert.equal(undated.marks.find((m) => m.id === "sa/plot")?.claimed_at, "2026-07-21T09:00:00.000Z");
+  assert.deepEqual(undated.state.errors, [], "dated by its submitted_at, it is still prior estate");
   // CONTROL: the same amend written without its first claim is the stopped town.
   const restamped = foldTree(null);
   assert.match(JSON.stringify(restamped.state.errors), /parcel claim capped — this credential household already holds 3/);

@@ -21,7 +21,7 @@ import { foldOfSnapshot, canonicalJson } from "../src/world-snapshot.mjs";
 import { settlementRig, WORLD, LAW_SHA, TOWN_SHA, git } from "./helpers/settlement-seed.mjs";
 import {
   servedSettlement, settlementOrFile, settlementNumberOf, withHolderWords, vetoKey,
-  resetSettlementCaches, foldText,
+  resetSettlementCaches, foldText, settlementTakesAway,
 } from "../src/world-settlement.mjs";
 
 const store = await startStore({ db: "world_settlement_test" });
@@ -454,6 +454,28 @@ test("the town's word at the seal reaches the engine as `townWords`, and the ask
     assert.ok(!ids(r).includes("cy/bench"), "the town's opposition at the seal took the bench out of S11");
     assert.deepEqual(r.meta.opposed.town, ["cy/bench"]);
   } finally { rmSync(repo, { recursive: true, force: true }); }
+});
+
+// ── R14 (POS-364 delta review): NO STANCE TAKES A MARK OUT OF GIT BEFORE THE CUTOVER ──
+//
+// Everything before TOWN_STANCE_CUTOVER counts as ratified. A stance act already
+// in the store at the deploy must not withhold its mark (and the mark's subtree)
+// from the sweep while the cutover is unset; once it is set, it does.
+
+test("R14 · CUTOVER UNSET: ann's opposition to bo/shed is in the seal, and git still carries the shed and its name", { skip }, async () => {
+  await seed({ sealWords: [{ actor: "ann", on: "bo/shed", stance: "opposed" }] });
+  const header = await asOffice(async (p) => (await p.query("SELECT * FROM world_snapshots WHERE id = 2")).rows[0]);
+  const away = await asOffice((p) => settlementTakesAway(p, header, { worldRepo: WORLD, env: {} }));
+  assert.deepEqual([...away.slugs], [], "nothing is taken away by a word before the cutover");
+  assert.ok(away.stances_not_counted.startsWith("TOWN_STANCE_CUTOVER is not set: before the cutover every mark counts as ratified (R14)"), away.stances_not_counted);
+});
+
+test("R14 · CUTOVER SET: the same opposition takes the shed and the name that continues it out of git", { skip }, async () => {
+  await seed({ sealWords: [{ actor: "ann", on: "bo/shed", stance: "opposed" }] });
+  const header = await asOffice(async (p) => (await p.query("SELECT * FROM world_snapshots WHERE id = 2")).rows[0]);
+  const away = await asOffice((p) => settlementTakesAway(p, header, { worldRepo: WORLD, env: { TOWN_STANCE_CUTOVER: "S11" } }));
+  assert.deepEqual([...away.slugs].sort(), ["bo/shed", "bo/shed-name"]);
+  assert.equal(away.stances_not_counted, undefined);
 });
 
 test("a settlement with no stance_through (sealed before 069, or back-filled) folds with no words", { skip }, async () => {

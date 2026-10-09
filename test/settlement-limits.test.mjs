@@ -135,6 +135,8 @@ test("THE CROSSING'S SETTLEMENT BLOCK: the docket loses what the settlement take
   assert.deepEqual(read.out.marks.map((m) => m.slug), ["ra/plot", "rb/plot", "rc/plot"]);
   assert.equal(read.selection.settlement.withheld_from_docket, 1);
   assert.deepEqual(read.selection.settlement.limits, [{ mark: "rd/plot", law: "the-town/claim-cap" }]);
+  if (!process.env.TOWN_STANCE_CUTOVER)
+    assert.match(read.selection.settlement.stances_not_counted ?? "", /R14/, "the LIMIT is withheld with the cutover unset; the receipt says no stance counted (R14)");
   // Unreadable (no world checkout): the window's own forecast is withheld instead.
   await owner((c) => c.query(`UPDATE windows SET receipts = '{"parcel_cap":{"checked":true,"over_limit":[{"slug":"rd/plot","held":3,"law":"the-town/claim-cap"}]}}' WHERE id = 501`));
   const blind = await asOffice((p) => settlementWithhold(p, { window: 501, worldRepo: null, out, selection }));

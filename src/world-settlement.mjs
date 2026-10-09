@@ -401,9 +401,18 @@ export function foldWithWords(inputs, words, cleared = null) {
  * the first-claim order) leaves too. `{ slugs, vetoes }`. Throws when the
  * settlement cannot be folded; the caller withholds the clearing's forecast instead.
  */
-export async function settlementTakesAway(p, header, { worldRepo, townRepo = null }) {
+export async function settlementTakesAway(p, header, { worldRepo, townRepo = null, env = process.env }) {
   const inputs = await settlementFoldInputs(p, header, { worldRepo, townRepo });
-  const words = await wordsAtSeal(p, header, { worldRepo });
+  // R14: BEFORE THE CUTOVER, EVERYTHING COUNTS AS RATIFIED (POS-364 delta
+  // review). Until TOWN_STANCE_CUTOVER names the settlement the town's seat
+  // carries over from, no stance takes a mark out of git: a stance act already
+  // in the store at the deploy would otherwise withhold its mark and subtree
+  // from the sweep while the old blessing still stands. The words are not read
+  // at all then, so the fold is the cleared one plus the LIMITS, which are the
+  // clearing's and the settlement's whatever the cutover (R11).
+  const { cutoverNumber, CUTOVER_KEY } = await import("./town-stance.mjs");
+  const stancesCount = cutoverNumber(env) != null;
+  const words = stancesCount ? await wordsAtSeal(p, header, { worldRepo }) : { townWords: new Map(), holderOpposed: [], words: [], through: null, versions: null };
   const cleared = foldOver(inputs);
   const { state, vetoes } = foldWithWords(inputs, words, cleared);
   const slugs = new Set();
@@ -422,7 +431,7 @@ export async function settlementTakesAway(p, header, { worldRepo, townRepo = nul
   const hh = cleared.households ?? {};
   const rows = (cleared.marks ?? []).map((m) => ({ slug: m.id, household: hh[m.by] ?? m.by, at: m.at, extent: m.extent, parent: m.parent ?? null }));
   for (const sl of ownGroundOf(limitParcels, rows)) slugs.add(sl);
-  return { slugs, vetoes };
+  return { slugs, vetoes, ...(stancesCount ? {} : { stances_not_counted: `${CUTOVER_KEY} is not set: before the cutover every mark counts as ratified (R14), so no stance takes one out of git` }) };
 }
 
 /**

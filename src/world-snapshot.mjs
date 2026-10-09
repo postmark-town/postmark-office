@@ -28,6 +28,7 @@
 // parent exactly as the store's uuids do.
 
 import { createHash } from "node:crypto";
+import { firstClaimInstant } from "../world2/tools/mark-render.mjs";
 import { STANDING_ROWS_SQL, REGISTER_ROWS_SQL } from "../world2/tools/world-snapshot-seal.mjs";
 
 const sha256 = (s) => createHash("sha256").update(Buffer.from(s, "utf8")).digest("hex");
@@ -417,13 +418,12 @@ export async function firstClaimedBySlug(p, slugs, { pending = [] } = {}) {
   const list = [...new Set([...(slugs ?? [])].filter(Boolean).map(String))];
   const out = new Map();
   if (!list.length) return out;
-  const iso = (t) => (t == null ? null : t instanceof Date ? t.toISOString() : String(t));
   const { rows } = await p.query(CLAIMED_AT_SQL, [list]);
-  for (const r of rows) { const at = r.claimed_date ?? iso(r.submitted_at); if (at) out.set(String(r.slug), at); }
+  for (const r of rows) { const at = firstClaimInstant(r.claimed_date, r.submitted_at); if (at) out.set(String(r.slug), at); }
   for (const c of pending) {
     const slug = String(c?.slug ?? "");
     if (!slug || out.has(slug)) continue;
-    const at = c?.data?.date ?? iso(c?.submitted_at);
+    const at = firstClaimInstant(c?.data?.date, c?.submitted_at);
     if (at) out.set(slug, at);
   }
   return out;

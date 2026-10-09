@@ -183,7 +183,7 @@ test("THE HOUSEHOLD IS THE FOLD'S GROUPING, not the claim row's: a fourth parcel
   assert.match(w.receipts.parcel_cap.households, /law_projection roster/, "the receipt names where the households came from");
 });
 
-test("THE LAW IS THE STORE'S PIN, never the checkout's HEAD: pinned at a law that predates the first-claim order, the clearing judges nothing and says so", async () => {
+test("THE LAW IS THE STORE'S PIN, never the checkout's HEAD: pinned at a law that predates the first-claim order, the clearing judges nothing and says so LOUDLY", async () => {
   // An older pin than ENGINE, whose fold has no claimed_at. (If the clone's HEAD
   // ever carries world#166, this pin is still the older law, by sha.)
   const OLD = "53df97fee95b46279318a42a88c0c1fd6669fe0d";
@@ -193,11 +193,51 @@ test("THE LAW IS THE STORE'S PIN, never the checkout's HEAD: pinned at a law tha
   });
   const run = clear();
   assert.equal(run.code, 0, run.out);
-  assert.match(run.out, /NOT JUDGED here — the engine at the pinned law 53df97fee95b predates the first-claim order/);
+  assert.ok(run.out.includes("⚠ LIMITS UNREAD: 4 parcel claim(s) NOT JUDGED — limits unread: the pinned law lacks the first-claim engine (law 53df97fee95b predates world#166)"), run.out);
   const [w] = await read("SELECT receipts FROM windows WHERE id = $1", [WIN]);
   assert.equal(w.receipts.parcel_cap.checked, false);
+  assert.match(w.receipts.parcel_cap.limits_unread ?? "", /^limits unread: the pinned law lacks the first-claim engine/, "the receipt says it too");
   const locked = await read("SELECT slug FROM claims WHERE window_id = $1 AND status = 'locked'", [WIN]);
-  assert.equal(locked.length, 4, "unjudged, they lock; the settlement's limit pass is the backstop");
+  assert.equal(locked.length, 4, "unjudged, they lock (and the receipt and the console said so)");
+});
+
+test("THE HOUSEHOLDS ARE GROUPED AT THE INGESTED TOWN SHA the settlement seals, never at the --town-repo HEAD", async (t) => {
+  const TOWN = join(ROOT, "town-clone");
+  let older;
+  try { older = spawnSync("git", ["-C", TOWN, "rev-parse", "HEAD~1"], { encoding: "utf8" }).stdout.trim(); } catch { older = ""; }
+  if (!/^[0-9a-f]{40}$/.test(older)) return t.skip(`needs a town clone with history at ${TOWN}`);
+  const { limitsAtClearing } = await import("../world2/tools/parcel-cap.mjs");
+  const verdict = await owner(async (c) => {
+    await base(c);
+    await c.query("UPDATE projection_heads SET sha = $1 WHERE repo = 'town'", [older]);   // ingested one commit behind the checkout
+    await pending(c, { slug: "s00/plot", by: "s00", house: "hh:sage", x: 0, date: "2026-10-01T00:00:00Z" });
+    const { rows } = await c.query("SELECT * FROM claims WHERE slug = 's00/plot'");
+    return limitsAtClearing(c, { worldRepo: WORLD, townRepo: TOWN,
+      candidates: rows.map((r) => ({ id: r.id, slug: r.slug, kind: r.class, owner: r.claimant, body: r.body, geometry: r.geometry, data: r.data, submitted_at: r.submitted_at })) });
+  });
+  assert.equal(verdict.checked, true, verdict.reason);
+  assert.ok(verdict.householdsSource.includes(`town ${older.slice(0, 12)}`), `grouped at the ingested sha, not HEAD: ${verdict.householdsSource}`);
+});
+
+test("ONE FIRST-CLAIM RULE: an undated origin claim is dated by its submitted_at in the store's fold AND in the mark.md the write-down prints", async () => {
+  const { firstClaimedBySlug } = await import("../src/world-snapshot.mjs");
+  const { renderMarkFromStore } = await import("../world2/tools/mark-render.mjs");
+  const got = await owner(async (c) => {
+    await base(c);
+    const slug = "r1/plot";
+    const { rows: [r] } = await c.query(
+      `INSERT INTO claims (window_id, class, claimant, household, status, decided_at, submitted_at, body, geometry, bbox, stake, data, slug)
+       VALUES ($1, 'parcel', 'r1', 'hh:reeves', 'locked', now(), '2026-07-21T09:00:00Z', $2, $3, $4::box, 0, '{}', $5) RETURNING id::text`,
+      [WIN - 1, `${slug}.`, geo(slug, 5000), box(5000), slug]);
+    // the door's amend restamped the mark's own date today
+    await c.query(
+      `INSERT INTO marks (id, slug, kind, owner, household, body, geometry, bbox, status, locked_window, data)
+       VALUES ($1, $2, 'parcel', 'r1', 'hh:reeves', $3, $4, $5::box, 'standing', $6, $7)`,
+      [r.id, slug, `${slug}.`, geo(slug, 5020), box(5020), WIN - 1, JSON.stringify({ date: "2026-10-08T12:00:00.000Z" })]);
+    return { fold: (await firstClaimedBySlug(c, [slug])).get(slug), bytes: await renderMarkFromStore(c, slug) };
+  });
+  assert.equal(got.fold, "2026-07-21T09:00:00.000Z");
+  assert.match(got.bytes, /^claimed_at: "?2026-07-21T09:00:00\.000Z"?$/m, `the printed mark.md carries the same instant:\n${got.bytes}`);
 });
 
 test("THE RESIDENT'S OUTCOME NAMES THE LIMIT: the doorstep's sentence and my-marks' row both cite the-town/claim-cap", async () => {

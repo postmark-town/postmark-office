@@ -94,6 +94,20 @@ import { markRecord } from "../../src/mark-record.mjs";
  * `_parentMarkId`, `_act_id`) and the derived `tier` fall out there rather than
  * being stripped here by a second rule that could drift from the first.
  */
+/**
+ * WHEN A MARK WAS FIRST CLAIMED, from its ORIGIN claim: the claim's record date,
+ * else its submitted_at (ISO). The one rule: the tree's write-down (here) and the
+ * store's fold (`world-snapshot.mjs § firstClaimedBySlug`) both ask it, so an
+ * undated origin claim reads as the same instant on both sides (POS-364 review:
+ * the write-down read the date only, and an undated pre-law parcel amended today
+ * folded as post-law in the tree). PURE. Null when the claim has neither.
+ */
+export function firstClaimInstant(date, submittedAt) {
+  if (date != null && date !== "") return String(date);
+  if (submittedAt == null) return null;
+  return submittedAt instanceof Date ? submittedAt.toISOString() : String(submittedAt);
+}
+
 export function recordFromRow(row) {
   if (!row) throw new Error("recordFromRow: no row");
   const d = row.data ?? {};
@@ -110,10 +124,12 @@ export function recordFromRow(row) {
   // claimInstant, world#166). A pre-law parcel amended today, in a household
   // holding more than three, would otherwise read as a fourth claim and stop the
   // crossing ("capped — already holds 4"). `first_claimed` is the mark's ORIGIN
-  // claim's date (the claim whose id the mark keeps for life; MARK_COLUMNS reads
-  // it), written only when it differs from `date`, so a parcel that was never
-  // amended keeps the bytes it has always had.
-  if (row.kind === "parcel" && row.first_claimed && String(row.first_claimed) !== String(d.date ?? "")) rec.claimed_at = String(row.first_claimed);
+  // claim's instant (the claim whose id the mark keeps for life; MARK_COLUMNS reads
+  // its date and its submitted_at, and `firstClaimInstant` is the one rule the
+  // store's fold uses too), written only when it differs from `date`, so a
+  // parcel that was never amended keeps the bytes it has always had.
+  const first = firstClaimInstant(row.first_claimed, row.first_claim_submitted_at);
+  if (row.kind === "parcel" && first && first !== String(d.date ?? "")) rec.claimed_at = first;
   if (g && g.at && g.extent) {
     const at = d._fileAt ?? g.at;
     rec.at = { x: at.x, y: at.y };
@@ -173,7 +189,8 @@ export function renderedMark(row) {
 }
 
 const MARK_COLUMNS = "id, slug, kind, owner, household, body, geometry, status, locked_window, retired_window, data, "
-  + "(SELECT c.data->>'date' FROM claims c WHERE c.id = marks.id) AS first_claimed";
+  + "(SELECT c.data->>'date' FROM claims c WHERE c.id = marks.id) AS first_claimed, "
+  + "(SELECT c.submitted_at FROM claims c WHERE c.id = marks.id) AS first_claim_submitted_at";
 
 /**
  * The `mark.md` bytes for one slug, read from the store.
