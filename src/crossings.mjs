@@ -116,16 +116,23 @@ export const CROSSING_SEAL_SUBJECT = "seal: re-seal at the crossing";
  * Amia dispatched a walk at crossing 225.44, worked out 0.04 crossings, and
  * arrived two hours before she meant to: the conversion to her own clock was
  * hers to do, and a timezone slipped in it. So the answers that give
- * `eta_crossings` give the instant too: `fromCrossing + etaCrossings` on this
- * clock, as ISO UTC. `eta_crossings` is in hundredths of a crossing (7.2
- * minutes), so the instant is good to about four minutes either way and is said
- * to the minute, no finer. Null when either is unreadable.
+ * `eta_crossings` give the instant too, as ISO UTC to the second.
+ *
+ * IT IS DERIVED FROM THE UNROUNDED REMAINDER, never from `eta_crossings`:
+ * `fromCrossing + remainingM / (paceKm × 1000)` on this clock. The eta is
+ * rounded to hundredths of a crossing (7.2 minutes), so two answers that each
+ * added their own rounded eta could name one walk's arrival up to seven minutes
+ * apart (the receipt at departure, `read: "walk"` later). The remainder is in
+ * whole metres, so every answer that asks this agrees to the second. `paceKm`
+ * is the leg's own stride, km per crossing, the one the engine's positionAt
+ * moves it by. Null when any input is unreadable or the pace is not positive.
  */
-export function arrivesAt(fromCrossing, etaCrossings) {
-  if (fromCrossing == null || etaCrossings == null) return null;
-  const c = Number(fromCrossing) + Number(etaCrossings);
-  if (!Number.isFinite(c)) return null;
-  return new Date(Math.round((CROSSING_EPOCH_UTC + c * CROSSING_MS) / 60_000) * 60_000).toISOString();
+export function arrivesAt(fromCrossing, remainingM, paceKm) {
+  if (fromCrossing == null || remainingM == null || paceKm == null) return null;
+  const from = Number(fromCrossing), rem = Number(remainingM), pace = Number(paceKm);
+  if (!Number.isFinite(from) || !Number.isFinite(rem) || !(pace > 0)) return null;
+  const c = from + rem / (pace * 1000);
+  return new Date(Math.round((CROSSING_EPOCH_UTC + c * CROSSING_MS) / 1000) * 1000).toISOString();
 }
 
 /** The instant crossing `n` sails by the timetable, as ISO. */

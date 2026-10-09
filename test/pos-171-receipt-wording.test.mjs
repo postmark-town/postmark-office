@@ -32,6 +32,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
+import { pathToFileURL } from "node:url";
 
 // ⚑ THE FIXTURE AND THE IMPORT COME BEFORE EVERY `test()` IN THIS FILE, AND
 // BOTH HALVES OF THAT ORDER ARE LOAD-BEARING.
@@ -162,6 +163,9 @@ export function marksContain() { return false; }
 // § positionAt (L313-345), which is where the real rule lives.
 put("tools/walk.mjs", `
 export function fractionalCrossing() { return 100.5; }
+// The bottle's own stride (its positionAt below moves 405 m a crossing), so an
+// unstamped leg's legacy constant agrees with it (POS-331 part 3).
+export const WALK_KM_PER_CROSSING = 0.405;
 export function formatDeparture({ handle, from, toward, at }) {
   return \`- 2026-09-21T00:00:00.000Z · \${handle} · from \${from.x},\${from.y} · toward \${toward.x},\${toward.y} · at \${at}\`;
 }
@@ -345,15 +349,27 @@ test("leg 7 — the walk tool's own description names the queued receipt, and is
 // ── leg 5c: the arrival on the wall clock (POS-331 part 3) ─────────────────
 //
 // Amia's ask (Office Hours Q8): the arrival as a UTC instant beside the
-// crossing count. It is the same instant the entry is adjudicated at, said to
-// the minute (crossings.mjs § arrivesAt; the pure legs are in
-// test/walk-arrives-at.test.mjs). This bottle's clock reads 100.5 and the leg
-// is 16.95 crossings, so 117.45 crossings after 2026-06-12T00:00Z.
-test("leg 5c — the real door's receipt carries arrives_at beside eta_crossings, the entry's own instant in UTC", async () => {
+// crossing count, to the second, from the unrounded remainder over the leg's
+// stride (crossings.mjs § arrivesAt; the pure legs are in
+// test/walk-arrives-at.test.mjs). This bottle's clock reads 100.5, the leg is
+// 6,865 m at its 405 m a crossing: 100.5 + 16.9506… crossings after
+// 2026-06-12T00:00Z. Then the SAME leg is read five crossings later through
+// read: walk's own composition (world.mjs § walkerPaces, world-apex.mjs §
+// walkDomain), and both answers name the same second.
+test("leg 5c — the receipt's arrives_at and read: walk's, for one leg, name the same second", async () => {
   const walk = await walkViaOffice(repo, { handle: "alpha", mark_id: FAR, enter_on_arrival: true }, houseA);
   assert.equal(walk.departed_at_crossing, 100.5);
-  assert.equal(walk.eta_crossings, 16.95);
-  assert.equal(walk.arrives_at, "2026-08-09T17:24:00.000Z");
-  assert.equal(Date.parse(walk.arrives_at), Math.round((Date.UTC(2026, 5, 12) + walk.entry.eta * 12 * 3600 * 1000) / 60_000) * 60_000,
-    "the instant the queued entry is adjudicated at, on the wall clock");
+  assert.equal(walk.eta_crossings, 16.95, "the rounded count rides beside it, unchanged");
+  assert.equal(walk.arrives_at, "2026-08-09T17:24:27.000Z");
+  assert.equal(walk.arrives_at, new Date(Math.round((Date.UTC(2026, 5, 12) + (100.5 + 6865 / 405) * 12 * 3600 * 1000) / 1000) * 1000).toISOString());
+
+  const { walkerPaces } = await import("../src/world.mjs");
+  const { walkDomain } = await import("../src/world-apex.mjs");
+  const engine = await import(pathToFileURL(join(repo, "tools", "walk.mjs")).href);
+  const t = 105.5;
+  const remaining = 6865 - (t - 100.5) * 405; // the bottle's own law, five crossings on
+  const rows = walkerPaces([{ handle: "alpha", x: 180, y: 200 + (t - 100.5) * 405, source: "walk", moving: true,
+    remaining_m: remaining, eta_crossings: Math.round((remaining / 405) * 100) / 100 }], [{ handle: "alpha", pace: null }], engine);
+  const { walkers } = walkDomain({ at: t, walkers: rows }, {}, { standpoint: { x: rows[0].x, y: rows[0].y } }); // read where she is: the near block is a radius
+  assert.equal(walkers.walkers[0].arrives_at, walk.arrives_at, "the receipt and the read agree to the second");
 });

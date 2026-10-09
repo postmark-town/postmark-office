@@ -4587,7 +4587,7 @@ export async function walkViaOffice(worldClone, payload = {}, key = null) {
 
   const w = await world();
   const skeleton = w?._raw?.skeleton ?? null;
-  const { parseWalkLedger, currentDeparture, positionAt, fractionalCrossing, extentForArrival, isWalkArrival, walkTargetFor } =
+  const { parseWalkLedger, currentDeparture, positionAt, fractionalCrossing, extentForArrival, isWalkArrival, walkTargetFor, WALK_KM_PER_CROSSING } =
     await import(pathToFileURL(join(worldClone, "tools", "walk.mjs")));
 
   // WHERE IN THE TARGET — issue #5 §1, RENAMED 2026-08-19 (founder-ruled, the
@@ -5108,8 +5108,11 @@ export async function walkViaOffice(worldClone, payload = {}, key = null) {
     via_crossings: via,
     eta_crossings: result.position.etaCrossings,
     // The same arrival on the wall clock (POS-331 part 3, crossings.mjs §
-    // arrivesAt): the instant the entry above is adjudicated at, to the minute.
-    arrives_at: arrivesAt(at, result.position.etaCrossings),
+    // arrivesAt), from the unrounded remainder and the leg's own stride (the
+    // stamped pace, else the engine's legacy constant, positionAt's own rule),
+    // so read: "walk" names the same instant to the second. The queued entry
+    // is still adjudicated at departure + the rounded eta (`entry.eta`).
+    arrives_at: arrivesAt(at, result.position.remainingM, result.pace > 0 ? result.pace : WALK_KM_PER_CROSSING),
     standing: result.position.standing,
     position: result.position,
     // Provenance in every position sentence (v2.2 §B): walked, carried, or
@@ -5124,6 +5127,28 @@ export async function walkViaOffice(worldClone, payload = {}, key = null) {
         ? `position derives from this record and the clock; your road crosses water at ${via.join(", ")}`
         : "position derives from this record and the clock; you arrive whether or not anyone is watching",
   };
+}
+
+/**
+ * A WALKING ROW CARRIES ITS LEG'S STRIDE (POS-331 part 3, review of #448).
+ *
+ * `pace_km_per_crossing` on each row that is walking a leg: the pace stamped on
+ * the resident's current departure, else the engine's legacy constant, which is
+ * the rule the engine's positionAt moves the walker by. It is what lets
+ * `read: "walk"` say the arrival from the unrounded `remaining_m`
+ * (crossings.mjs § arrivesAt) and agree with the walk receipt to the second.
+ * Additive; rows at rest, riders (`aboard`) and the vessel's own timetable row
+ * carry none. `walk` is the engine's walk.mjs (currentDeparture and the
+ * constant), passed in so this stays pure.
+ */
+export function walkerPaces(rows, departures = [], walk = {}) {
+  if (!Array.isArray(rows) || typeof walk.currentDeparture !== "function") return rows;
+  return rows.map((r) => {
+    if (!r?.moving || r.aboard || r.source === "timetable") return r;
+    const pace = walk.currentDeparture(departures, r.handle)?.pace;
+    const km = pace > 0 ? pace : walk.WALK_KM_PER_CROSSING;
+    return Number(km) > 0 ? { ...r, pace_km_per_crossing: Number(km) } : r;
+  });
 }
 
 /**
@@ -5253,7 +5278,7 @@ export function whoOnRoll(walkers, who, roll = null) {
 export async function worldWalkers(worldClone, key = null, { roll = null } = {}) {
   // publicWalkers is the single writer of the walker vocabulary — the spectator
   // publishes the same shape from the same function, so the two cannot drift.
-  const { publicWalkers, fractionalCrossing } = await engineImport("walk.mjs");
+  const { publicWalkers, fractionalCrossing, currentDeparture, WALK_KM_PER_CROSSING } = await engineImport("walk.mjs");
   const at = fractionalCrossing();
   // BOTH ERAS. This is the door that served twenty-seven residents at a berth
   // they had left, because their ashore records were in the store and this read
@@ -5311,7 +5336,7 @@ export async function worldWalkers(worldClone, key = null, { roll = null } = {})
       : "no town roll supplied to this door — the answer covers residents with a walk record or ground, and cannot include a resident who has neither";
     return {
       at,
-      walkers: movementV2Enabled() ? await walkersInFrames(walkers, w) : walkers,
+      walkers: walkerPaces(movementV2Enabled() ? await walkersInFrames(walkers, w) : walkers, departures, { currentDeparture, WALK_KM_PER_CROSSING }),
       // The disclosure the reader assembled, carried rather than dropped. A door
       // that reads half the record and says nothing is the failure this whole
       // change is about.

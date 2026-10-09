@@ -2923,13 +2923,16 @@ export function walkDomain(answer, fields, oriented, roll = null) {
   };
 }
 
-// A moving row's `eta_crossings` with its instant beside it (POS-331 part 3,
-// crossings.mjs § arrivesAt), counted from the crossing the roll was read at.
-// The vessel's own row is the timetable's, whose eta is a placeholder 0, so it
-// gets none.
+// A walking row's `eta_crossings` with its instant beside it (POS-331 part 3,
+// crossings.mjs § arrivesAt): the crossing the roll was read at plus the
+// unrounded `remaining_m` over the leg's own stride (`pace_km_per_crossing`,
+// world.mjs § walkerPaces), so it agrees with the walk receipt to the second.
+// None for the vessel's own row (the timetable's placeholder eta 0) and none
+// for a rider (`aboard`): withFrames zeroes a rider's remainder, and an
+// arrival at the roll's own instant would be no arrival at all.
 const withArrival = (w, atCrossing) =>
-  w?.moving && w.source !== "timetable" && Number.isFinite(w.eta_crossings)
-    ? { ...w, arrives_at: arrivesAt(atCrossing, w.eta_crossings) }
+  w?.moving && !w.aboard && w.source !== "timetable" && Number.isFinite(w.remaining_m) && w.pace_km_per_crossing > 0
+    ? { ...w, arrives_at: arrivesAt(atCrossing, w.remaining_m, w.pace_km_per_crossing) }
     : w;
 // THE FIND READ (2026-09-26) — see the branch in `apexReadAction`. Its card is
 // the office's own, not a class mark's, and says so in `via`.
