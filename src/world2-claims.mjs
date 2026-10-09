@@ -223,6 +223,20 @@ export async function withHousehold(p, household, fn, { also = [] } = {}) {
   const keys = await sessionKeysVia(p, household);
   for (const h of also) for (const k of await sessionKeysVia(p, h)) if (!keys.includes(k)) keys.push(k);
   const client = await p.connect();
+  // ── A STORE RESTART NEVER CRASHES THE OFFICE (POS-484) ──────────────────
+  // `store-pool.mjs § onPenClient`'s rule, kept here for this client. pg emits a
+  // session the server ended (a restart's fast shutdown, a crash, the idle
+  // transaction timeout) as an 'error' event on the client, and while the client
+  // is checked out nobody else listens, so an unheard 'error' is a crashed
+  // office. And a client whose ROLLBACK failed may still be inside this
+  // transaction, `app.household` set, so it is destroyed (`release(true)`),
+  // never handed to the next caller (POS-370's rule).
+  let discard = false;
+  const heard = (e) => {
+    discard = true;
+    console.error(`[world2-claims] a household connection failed (${household}): ${String(e?.message ?? e).slice(0, 200)}`);
+  };
+  client.on?.("error", heard); // a test's stub client may be a plain object with query and release
   try {
     await client.query("BEGIN");
     await client.query("SELECT set_config('app.household', $1, true)", [household]);
@@ -235,10 +249,11 @@ export async function withHousehold(p, household, fn, { also = [] } = {}) {
     await client.query("COMMIT");
     return out;
   } catch (err) {
-    try { await client.query("ROLLBACK"); } catch { /* connection already gone */ }
+    try { await client.query("ROLLBACK"); } catch { discard = true; /* gone, or still inside the transaction */ }
     throw err;
   } finally {
-    client.release();
+    client.removeListener?.("error", heard);
+    client.release(discard ? true : undefined);
   }
 }
 
