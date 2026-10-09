@@ -20,16 +20,18 @@ import { spawn } from "node:child_process";
 import { mkdirSync, openSync, closeSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { listTestFiles, planShards } from "./suite-lib.mjs";
+import { FILE_CAP_MS, fileTimeoutOf, listTestFiles, planShards } from "./suite-lib.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "..", "..");
 const TIMINGS = join(ROOT, ".github", "suite", "timings.json");
 const KNOWN = join(ROOT, "test", "known-failures.json");
 const REPORTER = pathToFileURL(join(HERE, "suite-reporter.mjs")).href;
-// A test's own cap is --test-timeout (npm test's 180 s). A FILE's cap is this:
-// past it the file is killed and reads as crashed, never as passed.
-const FILE_CAP_MS = 25 * 60 * 1000;
+// A file runs under --test-timeout, which node --test applies to the whole
+// file: npm test's 180 s, or the cap its header declares, clamped at
+// FILE_CAP_MS (suite-lib.mjs § a file's own cap). Past FILE_CAP_MS (plus a
+// grace, so a declared cap's own timeout speaks first) the file is killed and
+// reads as crashed, never as passed.
 
 const arg = (name, dflt) => {
   const i = process.argv.indexOf(`--${name}`);
@@ -67,18 +69,20 @@ function runOne(file, suffix = "") {
     const s = stem(file) + suffix;
     const errFd = openSync(join(out, "stderr", `${s}.txt`), "w");
     const t0 = Date.now();
+    const cap = fileTimeoutOf(readFileSync(join(ROOT, file), "utf8"));
     const child = spawn(process.execPath, [
-      "--test", "--test-timeout=180000",
+      "--test", `--test-timeout=${cap.ms}`,
       "--test-reporter=tap", `--test-reporter-destination=${join(out, "tap", `${s}.tap`)}`,
       `--test-reporter=${REPORTER}`, `--test-reporter-destination=${join(out, "events", `${s}.jsonl`)}`,
       file,
     ], { cwd: ROOT, stdio: ["ignore", "ignore", errFd] });
-    const cap = setTimeout(() => child.kill("SIGKILL"), FILE_CAP_MS);
+    const kill = setTimeout(() => child.kill("SIGKILL"), Math.max(FILE_CAP_MS, cap.ms + 30_000));
     child.on("exit", (code, signal) => {
-      clearTimeout(cap);
+      clearTimeout(kill);
       closeSync(errFd);
       const seconds = (Date.now() - t0) / 1000;
-      done({ exit: code ?? 128, signal: signal ?? null, seconds: Math.round(seconds * 10) / 10 });
+      done({ exit: code ?? 128, signal: signal ?? null, seconds: Math.round(seconds * 10) / 10,
+        ...(cap.declared != null ? { cap: { ms: cap.ms, declared: cap.declared, clamped: cap.clamped } } : {}) });
     });
   });
 }
@@ -90,7 +94,7 @@ async function lane() {
     const file = mine[next++];
     const r = (record.files[file] = await runOne(file));
     finished++;
-    console.log(`[${String(finished).padStart(3)}/${mine.length}] ${file} · ${r.seconds} s · exit ${r.exit}${r.signal ? ` (${r.signal})` : ""}`);
+    console.log(`[${String(finished).padStart(3)}/${mine.length}] ${file} · ${r.seconds} s · exit ${r.exit}${r.signal ? ` (${r.signal})` : ""}${r.cap ? ` · under its declared cap, ${r.cap.ms} ms${r.cap.clamped ? ` (declared ${r.cap.declared}, clamped)` : ""}` : ""}`);
   }
 }
 await Promise.all(Array.from({ length: Math.min(jobs, mine.length) }, lane));

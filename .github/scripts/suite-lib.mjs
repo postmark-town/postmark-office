@@ -177,3 +177,32 @@ export function timingsOf(results) {
   }
   return out;
 }
+
+// ── a file's own cap (POS-354, Wright 2026-10-09) ────────────────────────────
+//
+// Every file runs as `node --test --test-timeout=<ms> <file>`, and under
+// node --test that timeout is the WHOLE FILE's, not each test's: the file runs
+// as one test of the parent, and its own `{ timeout }` options never get a say.
+// npm test's 180 s fits nearly every file. A file that is minutes by design (the
+// dev rehearsal's local proof runs a whole crossing) declares its own cap in its
+// header, one line within its first 40:
+//
+//   // suite-file-timeout: 600000
+//
+// The declaration is honoured up to FILE_CAP_MS and clamped there, and the
+// summary prints every file running under one, with its value, so a long file
+// is visible rather than silent. Declare about 3× the file's measured CI time,
+// and raise it when the file grows.
+
+export const TEST_TIMEOUT_MS = 180_000;
+/** Past this a file is killed and reads as crashed, never as passed; no declaration goes beyond it. */
+export const FILE_CAP_MS = 25 * 60 * 1000;
+const DECLARED_CAP = /^\s*\/\/\s*suite-file-timeout:\s*(\d+)\s*$/;
+
+/** The timeout a file runs under, from its source text: `{ ms, declared, clamped }` (declared null when it declares none). */
+export function fileTimeoutOf(text) {
+  const line = String(text ?? "").split(/\r?\n/).slice(0, 40).map((l) => DECLARED_CAP.exec(l)).find(Boolean);
+  if (!line) return { ms: TEST_TIMEOUT_MS, declared: null, clamped: false };
+  const declared = Number(line[1]);
+  return { ms: Math.min(declared, FILE_CAP_MS), declared, clamped: declared > FILE_CAP_MS };
+}

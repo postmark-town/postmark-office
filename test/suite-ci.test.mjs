@@ -11,7 +11,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { listTestFiles, planShards, readEvents, verdict } from "../.github/scripts/suite-lib.mjs";
+import { FILE_CAP_MS, TEST_TIMEOUT_MS, fileTimeoutOf, listTestFiles, planShards, readEvents, verdict } from "../.github/scripts/suite-lib.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -174,4 +174,36 @@ test("the committed known-failures list is well formed: every row names its file
     assert.ok(!seen.has(k), `a row twice: ${r.file} · ${r.name}`);
     seen.add(k);
   }
+});
+
+// ── a file's own cap (POS-354) ──────────────────────────────────────────────
+//
+// node --test applies --test-timeout to the whole file, so a file that is
+// minutes by design declares its cap in its header and the shard runs it under
+// that, clamped at FILE_CAP_MS.
+//
+// THE CAN-FAIL FLIP: make fileTimeoutOf return TEST_TIMEOUT_MS whatever the
+// header says; "a declared cap is honoured" and "the dev rehearsal's local
+// proof declares its cap" go red.
+
+test("a file that declares nothing runs under npm test's 180 s", () => {
+  assert.deepEqual(fileTimeoutOf("// a plain test file\nimport test from 'node:test';\n"), { ms: TEST_TIMEOUT_MS, declared: null, clamped: false });
+  assert.equal(TEST_TIMEOUT_MS, 180_000);
+});
+
+test("a declared cap is honoured, and one above FILE_CAP_MS is clamped there", () => {
+  assert.deepEqual(fileTimeoutOf("// header\n// suite-file-timeout: 600000\n"), { ms: 600_000, declared: 600_000, clamped: false });
+  assert.deepEqual(fileTimeoutOf("// suite-file-timeout: 3600000\r\n"), { ms: FILE_CAP_MS, declared: 3_600_000, clamped: true });
+  // the declaration is a header line: past line 40, or inside a sentence, it is not one
+  assert.equal(fileTimeoutOf(`${"// filler\n".repeat(40)}// suite-file-timeout: 600000\n`).declared, null);
+  assert.equal(fileTimeoutOf("// say `// suite-file-timeout: 600000` to declare one\n").declared, null);
+});
+
+test("the dev rehearsal's local proof declares its cap, and the shard and the summary read it", () => {
+  const cap = fileTimeoutOf(readFileSync(join(ROOT, "test", "dev-rehearsal-local.test.mjs"), "utf8"));
+  assert.deepEqual(cap, { ms: 600_000, declared: 600_000, clamped: false });
+  const shard = readFileSync(join(ROOT, ".github", "scripts", "suite-shard.mjs"), "utf8");
+  assert.match(shard, /`--test-timeout=\$\{cap\.ms\}`/, "the shard runs each file under fileTimeoutOf's answer");
+  assert.doesNotMatch(shard, /--test-timeout=180000/, "no file is run under a fixed 180 s any more");
+  assert.match(readFileSync(join(ROOT, ".github", "scripts", "suite-summary.mjs"), "utf8"), /### Files under a declared cap/);
 });

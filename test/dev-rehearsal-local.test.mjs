@@ -8,9 +8,14 @@
 // Then tools/dev-rehearsal.mjs runs against it exactly as Wright runs it on the
 // box: through the office's doors, the box's own jobs, and checks that read the store.
 //
-// HEAVY: minutes (a hydrate, a crossing, a clearing, two settlements with the
-// world's checker suite). It runs through `node G:/Postmark/pool/run-heavy.mjs`.
+// HEAVY: minutes (a hydrate, a crossing, a clearing, three settlements with the
+// world's checker suite). Locally it runs through `node G:/Postmark/pool/run-heavy.mjs`.
 // A store that cannot start FAILS with the reason (embedded-store.mjs § NO_STORE).
+//
+// In CI it runs under its own cap (.github/scripts/suite-lib.mjs § a file's own
+// cap): about 3× its measured CI time (169 s on 10-09 before the whole crossing
+// came in, past 180 s after). Raise it when the rehearsal's chain grows.
+// suite-file-timeout: 600000
 
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
