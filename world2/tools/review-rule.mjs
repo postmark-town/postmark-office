@@ -444,6 +444,10 @@ async function main() {
  * lawful second ruling or stops noticing a missing one. Same shape as
  * `falsifier-acts-claims-closure.mjs`'s `(journal_seq, slug)` fix: the pairing
  * key has to be an identity.
+ *
+ * NO `journal_seq`: migration 025 dropped the column, and this INSERT kept
+ * naming it, so every act failed until POS-405. test/review-rule-act.test.mjs
+ * runs the tool against the current schema.
  */
 async function writeAct(pg, out) {
   if (!process.env.WORLD2_OFFICE_URL) {
@@ -455,8 +459,8 @@ async function writeAct(pg, out) {
     await c.connect();
     const { rows: [r] } = await c.query(
       `INSERT INTO acts (at, crossing, actor, action, object, at_anchor, at_dx, at_dy,
-                         witnesses, class, payload, effect, household, journal_seq)
-       VALUES ($1,$2,$3,$4,$5,NULL,NULL,NULL,NULL,$6,$7,$8,NULL,NULL) RETURNING id::text`,
+                         witnesses, class, payload, effect, household)
+       VALUES ($1,$2,$3,$4,$5,NULL,NULL,NULL,NULL,$6,$7,$8,NULL) RETURNING id::text`,
       [new Date().toISOString(), fractionalCrossing(), out.by, REVIEW_ACTION,
        out.slug ?? out.claim, REVIEW_CLASS,
        JSON.stringify({ claim: out.claim, rule: out.rule, because: out.because, at: out.at,
