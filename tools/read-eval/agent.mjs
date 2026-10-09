@@ -124,9 +124,11 @@ export async function runAgent({ base, key, prompt, system, feedback, dir, model
 // ── THE SECOND RUNTIME: Codex (Darko, 2026-10-09) ───────────────────────────
 //
 // `codex exec --json`, GPT Terra 5.6 (`gpt-5.6-terra`, the id in Codex's own
-// model list) at medium reasoning effort. Its home is the eval's own CODEX_HOME
-// (`.read-eval/codex-home`, gitignored): a config written by the harness and a
-// copy of the auth file, nothing else, so none of Darko's own Codex settings,
+// model list) at medium reasoning effort. Its home is the eval's own CODEX_HOME,
+// OUTSIDE the pool tree (`<os.tmpdir()>/read-eval-codex-home`, #455 review
+// finding 3: a credential never sits in a tree the next lane claims): a config
+// written by the harness and a copy of the auth file, nothing else, so none of
+// Darko's own Codex settings,
 // servers, hooks, plugins, memories or AGENTS.md reach the agent, and nothing
 // is written back to his home. The office's MCP door is set per run with -c.
 //
@@ -205,6 +207,13 @@ export function codexHome(dir) {
 // ~/.codex/auth.json holding a dead refresh token. So the copy is compared
 // with the original before and after every Codex run: if either has moved,
 // the round stops (AUTH_MOVED) and nothing more runs on Codex.
+//
+// SAID PLAINLY: this DETECTS a refresh; it does not PREVENT one. If the copy
+// refreshes during a run, Darko's own sign-in is already rotated by the time
+// the check fires, and the stop only keeps it from happening twice. Run Codex
+// rounds only while his token is well inside its life (Codex refreshes about
+// eight days after the last refresh), delete the copy the moment the runs end,
+// and tell him if the check ever fires.
 export const AUTH_MOVED = "AUTH_MOVED";
 const authOf = (f) => { try { return readFileSync(f, "utf8"); } catch { return null; } };
 export function assertAuthStill(home) {

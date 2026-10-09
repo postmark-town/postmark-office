@@ -24,6 +24,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 import { bootRun, callTool, clonesClean, prepareRound } from "./office.mjs";
@@ -228,7 +229,7 @@ async function main() {
         try {
           const prompt = task.prompt(truth);
           const started = stamp();
-          const run = runtime === "codex" ? (o) => runCodexAgent({ ...o, home: codexHome(join(OFFICE, ".read-eval", "codex-home")) }) : runAgent;
+          const run = runtime === "codex" ? (o) => runCodexAgent({ ...o, home: codexHome(join(tmpdir(), "read-eval-codex-home")) }) : runAgent;
           const agent = await run({ base: office.base, key: office.key, prompt, system: systemPrompt(handle), feedback: FEEDBACK_PROMPT,
             dir: join(OFFICE, ".read-eval", "runs", runId), model, effort });
           const answer = agent.result?.result ?? "";
