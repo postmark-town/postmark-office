@@ -8,8 +8,9 @@
 // run as a child under the `clearing_job` pen, as the carry test runs it, with
 // the office's world clone as its `--world-repo`. The clearing asks the world's
 // OWN fold at the store's pinned world-law sha (ENGINE below, world#166), never
-// the checkout's HEAD: the clone's HEAD is older and predates the first-claim
-// order, so every verdict here is also proof the pinned law was read.
+// the checkout's HEAD. The pinned-law test pins an OLDER law than the clone's
+// HEAD (test/clone-pins.json, 0bcb9c1c) and the clearing judges nothing; a
+// clearing that read HEAD would judge, so that test is the proof.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -204,7 +205,9 @@ test("THE RESIDENT'S OUTCOME NAMES THE LIMIT: the doorstep's sentence and my-mar
   const sample = row ?? { slug: "s03/plot", status: "refused", window_id: WIN, refusal_check: "opposed: the-town/claim-cap: s03/plot — parcel claim capped — this credential household already holds 3", submitted_at: new Date().toISOString(), decided_at: new Date().toISOString(), claimant: "s03" };
   const events = claimEffectsFrom({ rows: [sample], sinceCrossing: 0, nowCrossing: 1e9, mine: () => true });
   const refused = events.find((e) => e.kind === "claim-refused");
-  assert.match(refused.summary, /was opposed at candle \d+, citing the-town\/claim-cap: over its limit, it holds no ground/);
+  assert.match(refused.summary, /was opposed at candle \d+, citing the-town\/claim-cap: over its limit, it holds no ground$/);
+  assert.equal(refused.cause, "opposed", "the bulletin's seventh word (Darko, POS-364)");
+  assert.doesNotMatch(refused.summary, /no word in the bulletin/, "a ruled word leaves no apology tail");
   const { refusedRowsFrom } = await import("../src/claim-effects.mjs");
   assert.match(refusedRowsFrom(events)[0].says, /^refused at candle \d+: opposed: the-town\/claim-cap: /);
 });

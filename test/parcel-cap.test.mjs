@@ -250,19 +250,21 @@ test("THE RUNNER: the crossing hands the clearing a world checkout, and omits it
     "the argument is decided before the clearing is invoked, not after");
 });
 
-test("THE DOCKET: `parcel-cap` has no bulletin word yet, and the receipt says so rather than guessing one", () => {
-  const { cause, cause_row } = causeOf(parcelCapCheck(MARI, 5, law));
-  assert.equal(cause, null,
-    "none of the six fits: not contested (nobody else claims it), not unbacked (the stake is fine), not malformed " +
-    "(the record is fine), not quarantined or held. mark-receipt.mjs's own rule — guessing one of the promised words " +
-    "for a refusal nobody has classified is the town keeping its promise in appearance only. canon-absent answered " +
-    "null for one lap for exactly this reason and got its word from the founder.");
-  assert.equal(CAUSE_WORDS.includes("capped"), false,
-    "when the founder rules a word, this line and the map in mark-receipt.mjs are where it lands");
-  // The resident is NOT left with nothing: the raw check rides on cause_row and
-  // carries the whole sentence, including the number and the remedy.
-  assert.match(cause_row, /parcel claim capped/);
-  assert.match(cause_row, /wait on the founder's word/);
+test("THE DOCKET: a parcel over a limit answers `opposed`, the bulletin's seventh word (Darko, POS-364, 2026-10-08)", async () => {
+  const { opposedCheck } = await import("../world2/tools/parcel-cap.mjs");
+  assert.equal(CAUSE_WORDS.length, 7);
+  assert.equal(CAUSE_WORDS.at(-1), "opposed", "the ruled word is in the receipt's vocabulary");
+  // the clearing's check (the A build), for each limit
+  for (const law of ["the-town/claim-cap", "the-town/one-per-resident"]) {
+    const { cause, cause_row } = causeOf(opposedCheck({ law, slug: MARI, error: "over its limit" }));
+    assert.equal(cause, "opposed", `${law} answers opposed`);
+    assert.ok(cause_row.includes(`opposed: ${law}: ${MARI}`), "and the raw check still rides beside it, naming the law");
+  }
+  // the older count's spelling, on rows the train's clearing refused before the A build
+  const older = causeOf(parcelCapCheck(MARI, 5, law));
+  assert.equal(older.cause, "opposed");
+  assert.match(older.cause_row, /parcel claim capped/);
+  assert.match(older.cause_row, /wait on the founder's word/);
 });
 
 test("the clearing's outcome sentence for a parcel over a limit names the law mark that holds it", async () => {
