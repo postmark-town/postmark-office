@@ -205,6 +205,8 @@ const ROSTER = {
   "tools/stamp-sandbox.mjs": { args: ["--help"], code: 0, needle: "usage: node tools/stamp-sandbox.mjs" },
   // POS-354: --help only; any other run reads the dev office's env files and dials its store.
   "tools/dev-rehearsal.mjs": { args: ["--help"], code: 0, needle: "usage: node tools/dev-rehearsal.mjs" },
+  // POS-354: no --town or --key, so it refuses on usage before it reads a key or a clone.
+  "tools/dev-ledger-resign.mjs": { args: [], code: 2, needle: "usage: node tools/dev-ledger-resign.mjs" },
   // world2/tools/
   // No --world-repo: stops on usage before any git read or Postgres connect (POS-212).
   "world2/tools/adopt-solo.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: adopt-solo.mjs" },
