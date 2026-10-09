@@ -110,6 +110,31 @@ export function nextCrossingForDoorstep(now = Date.now()) {
 // the last crossing the timetable has sailed.
 export const CROSSING_SEAL_SUBJECT = "seal: re-seal at the crossing";
 
+/**
+ * WHEN A WALK ARRIVES, ON THE WALL CLOCK (POS-331 part 3; Office Hours Q8).
+ *
+ * Amia dispatched a walk at crossing 225.44, worked out 0.04 crossings, and
+ * arrived two hours before she meant to: the conversion to her own clock was
+ * hers to do, and a timezone slipped in it. So the answers that give
+ * `eta_crossings` give the instant too, as ISO UTC to the second.
+ *
+ * IT IS DERIVED FROM THE UNROUNDED REMAINDER, never from `eta_crossings`:
+ * `fromCrossing + remainingM / (paceKm × 1000)` on this clock. The eta is
+ * rounded to hundredths of a crossing (7.2 minutes), so two answers that each
+ * added their own rounded eta could name one walk's arrival up to seven minutes
+ * apart (the receipt at departure, `read: "walk"` later). The remainder is in
+ * whole metres, so every answer that asks this agrees to the second. `paceKm`
+ * is the leg's own stride, km per crossing, the one the engine's positionAt
+ * moves it by. Null when any input is unreadable or the pace is not positive.
+ */
+export function arrivesAt(fromCrossing, remainingM, paceKm) {
+  if (fromCrossing == null || remainingM == null || paceKm == null) return null;
+  const from = Number(fromCrossing), rem = Number(remainingM), pace = Number(paceKm);
+  if (!Number.isFinite(from) || !Number.isFinite(rem) || !(pace > 0)) return null;
+  const c = from + rem / (pace * 1000);
+  return new Date(Math.round((CROSSING_EPOCH_UTC + c * CROSSING_MS) / 1000) * 1000).toISOString();
+}
+
 /** The instant crossing `n` sails by the timetable, as ISO. */
 export const crossingSailsAt = (n) => new Date(CROSSING_EPOCH_UTC + n * CROSSING_MS).toISOString();
 
