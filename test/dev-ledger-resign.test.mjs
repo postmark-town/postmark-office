@@ -213,3 +213,14 @@ test("a clone with no seed tag is refused: the key cannot be shown not to be pro
   assert.equal(r.status, "refused");
   assert.match(r.why, /no refs\/tags\/sandbox\/seed:tools\/stamp-pubkey\.pem/);
 });
+
+test("the key's commit carries only the ledger and tools/: anything else already staged stays out (#453 review F6)", { skip: SKIP }, async () => {
+  // THE CAN-FAIL FLIP: drop the `-- WHITE_PAGES/stamp-ledger.md tools` pathspec from the commit; this goes red
+  const prod = keys(), dev = keys();
+  const t = seedTown(prod);
+  writeFileSync(join(t.dir, "README.md"), "someone's staged edit\n");
+  t.g("add", "README.md");
+  assert.equal((await resignDevTown({ town: t.dir, keyPem: dev.key, notKeyPem: prod.key })).status, "resigned");
+  assert.deepEqual(t.g("show", "--name-only", "--format=", "HEAD").split("\n").filter(Boolean).sort(), ["WHITE_PAGES/stamp-ledger.md", "tools/ruled.mjs", "tools/stamp-pubkey.pem"]);
+  assert.equal(t.g("diff", "--cached", "--name-only"), "README.md", "the staged edit is still staged, not committed");
+});

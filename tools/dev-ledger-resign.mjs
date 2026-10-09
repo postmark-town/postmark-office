@@ -179,7 +179,10 @@ export async function resignDevTown({ town, keyPem, notKeyPem = null, notKeyPath
   git(town, ["-c", "commit.gpgsign=false", "commit", "-q", "-m",
     `dev: the stamp ledger re-signed under dev's own key (POS-354)\n\n${lines} ledger lines re-signed, seals unchanged; tools/stamp-pubkey.pem is dev's.` +
     (carried.length ? ` Ruled exceptions carried to their new signatures: ${carried.map((c) => `${c.file} (line ${c.line})`).join(", ")}.` : "") +
-    `\nWritten by tools/dev-ledger-resign.mjs on the dev clone only. Never pushed: the dev clone's push URL is disabled.`], env);
+    `\nWritten by tools/dev-ledger-resign.mjs on the dev clone only. Never pushed: the dev clone's push URL is disabled.`,
+    // only what the re-sign wrote (#453 review F6): anything else already staged stays out of the
+    // key's commit, which must be the same every night
+    "--", LEDGER_REL, "tools"], env);
   return { status: "resigned", sha: git(town, ["rev-parse", "HEAD"]), lines, carried };
 }
 
