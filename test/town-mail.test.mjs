@@ -18,6 +18,7 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
 import { fixtureDb, fixtureKey } from "./fixture.mjs";
+import { copyTownTools } from "./helpers/town-tools.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
 import {
@@ -648,7 +649,7 @@ const lawSkip = TOWN ? false : "no town checkout carrying tools/envelope.mjs —
 test("PRE-FLIGHT, THE REAL LAW: the ferry's own classify() judges the letter at the door", { skip: lawSkip }, async () => {
   const clone = mailClone();
   try {
-    copyFileSync(join(TOWN, "tools", "envelope.mjs"), join(clone, "tools", "envelope.mjs"));
+    copyTownTools(TOWN, clone);
 
     // a well-formed letter passes the real law untouched
     assert.equal(await preflightEnvelope(clone, validateLetter(ok, fixtureKey, db)), null,
@@ -679,7 +680,7 @@ test("PRE-FLIGHT, THE REAL LAW: a door bounce and a crossing bounce say the same
   const clone = mailClone();
   const o = odb();
   try {
-    copyFileSync(join(TOWN, "tools", "envelope.mjs"), join(clone, "tools", "envelope.mjs"));
+    copyTownTools(TOWN, clone);
     const law = await import(new URL(`file:///${join(clone, "tools", "envelope.mjs").replace(/\\/g, "/")}`));
 
     const plan = validateLetter(ok, fixtureKey, db);

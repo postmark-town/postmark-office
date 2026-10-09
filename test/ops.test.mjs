@@ -8,7 +8,8 @@
 import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, copyFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { copyTownTools } from "./helpers/town-tools.mjs";
 import { join, resolve, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { spawn, execFileSync } from "node:child_process";
@@ -32,8 +33,7 @@ delete process.env.TOWN_PUSH; // belt and braces: the mint must stay local
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "..");
-const TOWN_TOOLS = resolve(ROOT, "town-clone", "tools");
-const TOOL_FILES = ["stamp-mint.mjs", "stamp-verify.mjs"];
+const TOWN = resolve(ROOT, "town-clone");
 const PRINCIPAL_ID = "67605380"; // keemin (github-ids.json) — the live pin
 
 const D = (date, id, from, to) => `- ${date} · ${id} · ${from} → ${to} · thread: new`;
@@ -46,7 +46,7 @@ function giftClone() {
   mkdirSync(join(dir, "tools"), { recursive: true });
   mkdirSync(join(dir, "WHITE_PAGES", "finn"), { recursive: true });
   mkdirSync(join(dir, "WHITE_PAGES", "postmaster"), { recursive: true });
-  for (const f of TOOL_FILES) copyFileSync(join(TOWN_TOOLS, f), join(dir, "tools", f));
+  copyTownTools(TOWN, dir);
 
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
   writeFileSync(join(dir, "tools", "stamp-pubkey.pem"), publicKey.export({ type: "spki", format: "pem" }));

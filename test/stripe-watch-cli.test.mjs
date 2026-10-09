@@ -16,6 +16,7 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync } from "node:crypto";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { copyTownTools } from "./helpers/town-tools.mjs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HANDLE_FIELD } from "../tools/stripe-watch.mjs";
@@ -123,8 +124,7 @@ function seamTown({ seed = null } = {}) {
   const keyFile = join(repo, "stamp-key.pem");
   writeFileSync(keyFile, privateKey.export({ type: "pkcs8", format: "pem" }));
   // the town's own tools, so the CLI's townEngine() finds a real seam
-  for (const f of ["stamp-mint.mjs", "epoch-close.mjs"])
-    writeFileSync(join(repo, "tools", f), readFileSync(join(TOWN, "tools", f)));
+  copyTownTools(TOWN, repo);
   return { repo, keyFile };
 }
 

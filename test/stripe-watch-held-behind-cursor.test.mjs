@@ -53,6 +53,7 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import { generateKeyPairSync } from "node:crypto";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { copyTownTools } from "./helpers/town-tools.mjs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
@@ -125,8 +126,7 @@ function seamTown() {
   writeFileSync(join(repo, "WHITE_PAGES", "pot-keep.json"), JSON.stringify({ pot: "keep", status: "open", beneficiary: "keeper", target_usd_per_epoch: 1000, epoch_cadence: "monthly", received_usd: 0 }));
   const keyFile = join(repo, "stamp-key.pem");
   writeFileSync(keyFile, privateKey.export({ type: "pkcs8", format: "pem" }));
-  for (const f of ["stamp-mint.mjs", "epoch-close.mjs"])
-    writeFileSync(join(repo, "tools", f), readFileSync(join(TOWN, "tools", f)));
+  copyTownTools(TOWN, repo);
   execFileSync(process.execPath, [join(TOWN, "tools", "stamp-mint.mjs"), "--append", "--key", keyFile, "--repo", repo], { encoding: "utf8" });
   return { repo, keyFile };
 }
