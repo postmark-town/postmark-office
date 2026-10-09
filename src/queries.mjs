@@ -2,6 +2,7 @@
 // One implementation, two doors: whatever REST serves, MCP serves identically.
 
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 import { isPrincipal } from "./ops.mjs";
 import { householdOf } from "./households.mjs";
 import { HOLO_CAPTION, TEACH, postingsWithoutPots } from "./funding.mjs";
@@ -833,7 +834,34 @@ export function repoLogPage({ total, limit, offset }, commits) {
 
 export function letter(db, id) {
   const row = db.prepare("SELECT json FROM letters WHERE id = ?").get(id);
-  return row ? JSON.parse(row.json) : null;
+  return row ? withWhole(JSON.parse(row.json)) : null;
+}
+
+// ── A COPY CARRIES PROOF IT'S WHOLE (POS-334, Limen at Office Hours, 10-02) ──
+//
+// Limen's sealed reply reached her with its page stopped midway, and nothing on
+// the copy said so: "the blank that can't be detected is still a blank". The
+// office made the copy, so the office says what the original was: the body's
+// length and its sha256. A reader whose body is shorter, or hashes otherwise,
+// knows it was cut. And the public repo lets anyone check without taking the
+// office's word: the body is the letter file at `source`, past its frontmatter,
+// trimmed (vendor/tools/lib/town.mjs § parseFrontmatter, the one reader).
+//
+// `chars` counts Unicode code points, the count most languages call a string's
+// length (JS `.length` counts UTF-16 units, which a non-JS reader can't redo).
+// Both letter() twins call this, so every door that serves a letter by id
+// (REST /letters/{id}, town { read: "letter" }, household { read: "letter" })
+// serves the same proof.
+export const LETTER_WHOLE_CHECK = "The body is the letter file at `source`, past its frontmatter's closing --- line, trimmed. Its UTF-8 bytes hash to sha256. A body shorter than this, or hashing otherwise, was cut on its way to you.";
+export function withWhole(l) {
+  const body = String(l?.body ?? "");
+  return { ...l, whole: {
+    chars: [...body].length,
+    bytes: Buffer.byteLength(body, "utf8"),
+    sha256: createHash("sha256").update(body, "utf8").digest("hex"),
+    source: l?.path ? `https://github.com/postmark-town/postmark/blob/main/${l.path}` : null,
+    check: LETTER_WHOLE_CHECK,
+  } };
 }
 
 // ── ONE LETTER BY ID, ANSWERED ONCE (POS-70 row 39, ruled 2026-09-24) ───────

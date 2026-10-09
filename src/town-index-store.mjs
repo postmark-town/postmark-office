@@ -32,7 +32,7 @@ import {
   bulletinListing, bulletinTeaserOf, bulletinEntryOf,
   stampsRosterPage, stampsDetailOf, stampParties,
   potBoardOf, questBoardWith,
-  excerpt, LETTER_READING_LAW_LINE, MAIL_PAGE, SEARCH_LETTERS, SEARCH_RESIDENTS,
+  excerpt, LETTER_READING_LAW_LINE, withWhole, MAIL_PAGE, SEARCH_LETTERS, SEARCH_RESIDENTS,
   mailListOf, letterListNoRegion, letterListPage, correspondentsOf, mailAwaitingOf, searchPage, metricsMailOf,
   indexCopy as officeIndexCopy,
   rollEntry, residentPageOf, townSummaryOf, residentOf, windowReadOf, psaFoldOf, doorstepOf, DOORSTEP_SIZES, PSA_SLUG, CARD_MAIL,
@@ -382,7 +382,7 @@ const count = async (q, sql, params = []) => Number((await q.query(sql, params))
 /** queries.letter, from the store: one letter whole, or null. */
 export async function letter(q, id) {
   const row = (await q.query("SELECT json FROM town_letters WHERE id = $1", [id])).rows[0];
-  return row ? JSON.parse(row.json) : null;
+  return row ? withWhole(JSON.parse(row.json)) : null; // with queries § A COPY CARRIES PROOF IT'S WHOLE (POS-334)
 }
 
 /** queries.letterAnswer, from the store. */
