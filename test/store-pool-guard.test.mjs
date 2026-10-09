@@ -164,6 +164,28 @@ test("the watcher sees an office_api session idle in transaction, and not once i
   } finally { await stuck.end(); await looker.end(); }
 });
 
+test("the watcher counts only its own database's sessions: the same role idle in a transaction in another database is not this store's", async (t) => {
+  if (skip) return t.skip(skip);
+  // A second database on the same server, as every file's store is on a pool tree's shared server (POS-479).
+  const other = `${s.database}_other`.slice(0, 63);
+  const su = await s.connect("postgres", "postgres");
+  await su.query(`CREATE DATABASE "${other}" OWNER world2_owner`);
+  const elsewhere = await s.connect("office_api", other);
+  const looker = await s.connect("office_api");
+  try {
+    await elsewhere.query("BEGIN READ ONLY");
+    await elsewhere.query("SELECT 'another file''s read' AS q");
+    await sleep(1300);
+    const seen = await lookOnce(looker, { stuckAfterS: 1 });
+    assert.deepEqual(seen.stuck, [], JSON.stringify(seen));
+    assert.equal(seen.sessions["idle in transaction"] ?? 0, 0, JSON.stringify(seen.sessions));
+  } finally {
+    await elsewhere.end(); await looker.end();
+    await su.query(`DROP DATABASE IF EXISTS "${other}" WITH (FORCE)`).catch(() => {});
+    await su.end();
+  }
+});
+
 test("calm_at moves only on a minute the store answered with nothing stuck", async () => {
   let t0 = Date.parse("2026-10-04T19:30:00Z");
   const answers = [
