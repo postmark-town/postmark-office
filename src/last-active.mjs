@@ -41,7 +41,12 @@ import { currentCrossing } from "./crossings.mjs";
 
 /**
  * The newest act per handle from each source, one row per (handle, source).
- * `acts_actor_id_idx (actor, id)` serves the `actor = ANY` filter; letters
+ * The acts half is a scan and a sort: measured on the dev sandbox (14,042
+ * acts, a 50-handle page) the planner took a seq scan, a sort on (actor, at)
+ * and a Unique, 26.7 ms; `acts_actor_id_idx (actor, id)` does not order by
+ * `at`, so it cannot serve the DISTINCT ON. Prod held about 15,100 acts on
+ * 2026-10-09 (Wright, read-only), so no index this week; `acts (actor, at
+ * DESC)` is the migration if the table grows past that comfort. Letters
  * filter on `town_letters_from (from_h, date)`. `delivered_at` is text (UTC
  * ISO, town-index.mjs § readHistory), so its max is a string compare and the
  * instant is parsed here, never cast in SQL where one odd row would fail the
