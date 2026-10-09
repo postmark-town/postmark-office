@@ -269,12 +269,19 @@ test("with the cutover set: a mark from before it carries nothing, a town-neutra
     assert.deepEqual(markOf(r, "bo/shed").awaiting, ["the-town"], "ann's word clears her household's seat");
     assert.equal(markOf(r, "bo/shed").town_stance, undefined);
 
-    // A cutover the store cannot read is said, never labelled.
+    // A cutover AFTER the served settlement: it is the old blessing, and carries
+    // no label (the cutover is a settlement number, Darko 2026-10-09).
     process.env.TOWN_STANCE_CUTOVER = "S77";
     resetSettlementCaches();
     r = await serve();
     assert.equal(markOf(r, "bo/shed").awaiting, undefined);
-    assert.match(r.meta.labels_unread, /S77/);
+    assert.match(r.meta.labels_omitted ?? "", /S11 is below the cutover S77/);
+    // A cutover at or before it that the store holds no row for is said, never labelled.
+    process.env.TOWN_STANCE_CUTOVER = "S5";
+    resetSettlementCaches();
+    r = await serve();
+    assert.equal(markOf(r, "bo/shed").awaiting, undefined);
+    assert.match(r.meta.labels_unread ?? "", /S5/);
   } finally {
     if (before === undefined) delete process.env.TOWN_STANCE_CUTOVER; else process.env.TOWN_STANCE_CUTOVER = before;
   }
@@ -477,6 +484,51 @@ test("R14 · CUTOVER SET: the same opposition takes the shed and the name that c
   const away = await asOffice((p) => settlementTakesAway(p, header, { worldRepo: WORLD, env: { TOWN_STANCE_CUTOVER: "S11" } }));
   assert.deepEqual([...away.slugs].sort(), ["bo/shed", "bo/shed-name"]);
   assert.equal(away.stances_not_counted, undefined);
+});
+
+// ── THE CUTOVER IS A SETTLEMENT NUMBER (Darko, 2026-10-09 10:25 EDT) ─────────
+//
+// "A settlement numbered below n folds with no stances; this is R14, everything
+// ratified. From S<n> on, every opposition standing at that settlement's seal
+// counts, earlier acts included. So a sealed settlement always folds the same
+// way, whatever the env var says today."
+
+test("THE CUTOVER IS A SETTLEMENT NUMBER: one sealed S11, its write-down folded under a cutover at or below 11 and one above it", { skip }, async () => {
+  await seed({ sealWords: [{ actor: "ann", on: "bo/shed", stance: "opposed" }] });
+  const header = await asOffice(async (p) => (await p.query("SELECT * FROM world_snapshots WHERE id = 2")).rows[0]);
+  const at = (cutover) => asOffice((p) => settlementTakesAway(p, header, { worldRepo: WORLD, env: cutover ? { TOWN_STANCE_CUTOVER: cutover } : {} }));
+  for (const cutover of ["S10", "S11"]) {
+    const away = await at(cutover);
+    assert.deepEqual([...away.slugs].sort(), ["bo/shed", "bo/shed-name"], `cutover ${cutover}: S11 is at or after it, so ann's word counts`);
+    assert.equal(away.settlement, 11);
+    assert.equal(away.stances_not_counted, undefined);
+  }
+  const above = await at("S12");
+  assert.deepEqual([...above.slugs], [], "cutover S12: S11 is before it, so every mark counts as ratified, the word included");
+  assert.equal(above.stances_not_counted, "S11 is below the cutover S12 (TOWN_STANCE_CUTOVER): a settlement before the cutover counts every mark as ratified (R14), so no stance takes one out of git");
+  assert.deepEqual([...(await at(null)).slugs], [], "unset: none counts");
+  assert.deepEqual([...(await at("S11")).slugs].sort(), ["bo/shed", "bo/shed-name"], "and the same number gives the same git again");
+});
+
+test("THE CROSSING'S OWN NUMBER: a snapshot no settlement names yet is read as the settlement this crossing makes, the store's newest plus one, and says so", { skip }, async () => {
+  await seed({ sealWords: [{ actor: "ann", on: "bo/shed", stance: "opposed" }] });
+  await owner((c) => c.query("DELETE FROM settlements WHERE number = 11"));     // the clearing sealed it; the keeper has not tagged it yet
+  const header = await asOffice(async (p) => (await p.query("SELECT * FROM world_snapshots WHERE id = 2")).rows[0]);
+  const away = await asOffice((p) => settlementTakesAway(p, header, { worldRepo: WORLD, env: { TOWN_STANCE_CUTOVER: "S11" } }));
+  assert.equal(away.settlement, 11);
+  assert.match(away.settlement_inferred, /names no settlement yet, so it is read as the settlement this crossing makes: S11, the store's newest plus one/);
+  assert.deepEqual([...away.slugs].sort(), ["bo/shed", "bo/shed-name"]);
+  const later = await asOffice((p) => settlementTakesAway(p, header, { worldRepo: WORLD, env: { TOWN_STANCE_CUTOVER: "S12" } }));
+  assert.deepEqual([...later.slugs], [], "a cutover after it counts nothing at it");
+});
+
+test("THE LABELS READ THE NUMBER TOO: a settlement below the cutover carries no label, and meta says why", { skip }, async () => {
+  await seed();
+  resetSettlementCaches();
+  const r = await serve({ env: { TOWN_STANCE_CUTOVER: "S12" } });
+  assert.equal(r.meta.as_of.settlement, "S11");
+  assert.match(r.meta.labels_omitted ?? "", /^town_stance and awaiting are omitted: S11 is below the cutover S12/);
+  assert.ok(r.marks.every((m) => m.awaiting === undefined && m.town_stance === undefined));
 });
 
 test("a settlement with no stance_through (sealed before 069, or back-filled) folds with no words", { skip }, async () => {

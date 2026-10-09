@@ -412,3 +412,15 @@ test("4c · a review granted after the seal never changes the version the seal s
   const seed = [{ slug: "bo/old", id: "s1", status: "locked", window_id: null, submitted_at: null, decided_at: null }];
   assert.equal(versionsFromRows(seed, { window: 21, at: sealOf21 }).get("bo/old").current.id, "s1");
 });
+
+test("stancesCountAt: the cutover is a settlement NUMBER; below it nothing counts, at and after it everything standing at the seal does (Darko, 2026-10-09)", async () => {
+  const { stancesCountAt } = await import("../src/town-stance.mjs");
+  assert.deepEqual(stancesCountAt(11, {}), { counts: false, cutover: null, number: 11, why: "TOWN_STANCE_CUTOVER is not set: before the cutover every mark counts as ratified (R14)" });
+  assert.equal(stancesCountAt(11, { TOWN_STANCE_CUTOVER: "S11" }).counts, true, "at the cutover");
+  assert.equal(stancesCountAt(12, { TOWN_STANCE_CUTOVER: "S11" }).counts, true, "after it");
+  const below = stancesCountAt(10, { TOWN_STANCE_CUTOVER: "S11" });
+  assert.equal(below.counts, false, "before it, though the variable is set");
+  assert.match(below.why, /^S10 is below the cutover S11/);
+  assert.equal(stancesCountAt(null, { TOWN_STANCE_CUTOVER: "S11" }).counts, false, "a number nobody can read is not known to be after it");
+  assert.throws(() => stancesCountAt(11, { TOWN_STANCE_CUTOVER: "yes" }), /names no settlement/, "a cutover is a number, never a yes");
+});
