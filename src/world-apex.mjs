@@ -83,7 +83,7 @@ import { CROSSING_EXEC, CROSSING_TOOLS, VEHICLE_CLASS, enterViaOffice, exitViaOf
 // POS-169: the four composing imports left with the composition — `rideBlockFrom`
 // is the block now, and an import this file no longer reads would be a false
 // claim about what it reads.
-import { RIDE_TOOLS, rideBlockFrom, rideViaOffice, stopsOfService, vesselIdOf } from "./world-ride.mjs";
+import { RIDE_TOOLS, rideBlockFrom, rideViaOffice, stopDoorsNearest, stopsOfService, vesselIdOf } from "./world-ride.mjs";
 import { servedEnterExitLedger } from "./enter-exit-ledger.mjs";
 // POS-5's consent verb. STANCE_TOOLS ride the schema lookup without joining
 // the flat tool list, exactly as CROSSING_TOOLS do and for the same reason.
@@ -1922,6 +1922,35 @@ async function rideDomain(oriented, key, fields = {}) {
   }
 }
 
+/**
+ * THE RIDE BOUNCE NAMES HER DOORS, NEVER HER CLASS (POS-379, postmark#3181).
+ *
+ * `ride` is granted by the vehicle class mark, which is de-sited: the warm
+ * bounce named it as "the-town/vehicle (null, null) — walk there and it
+ * appears", and walking there bounces too (Mari, 09-26: 25 minutes of
+ * probing). The way to ride is through a stop, so a resident who is not aboard
+ * is told the timetable's stops, nearest first, in the act's own words
+ * (world-ride.mjs § rideViaOffice's "you are not aboard"). Both bounces ask
+ * this, the act's and the read's. Null when no timetable can be read, and the
+ * generic bounce answers as before.
+ */
+async function rideDoorsFor(oriented) {
+  try {
+    const { service } = await vesselServiceFrom(await worldStateRaw(), { repo: WORLD_CLONE });
+    const sp = oriented?.standpoint;
+    const at = Number.isFinite(sp?.x) && Number.isFinite(sp?.y) ? { x: sp.x, y: sp.y } : null;
+    const doors = stopDoorsNearest(service, at);
+    if (!doors.length) return null;
+    const vessel = vesselIdOf(service);
+    const list = doors.map((d) => (d.distance_m == null ? d.mark : `${d.mark} (${d.distance_m.toLocaleString("en-US")} m)`)).join(", ");
+    return {
+      vessel,
+      doors,
+      sentence: `ride is lent by the ground inside ${vessel ?? "her"}, so it is declared aboard, and the class that grants it is not a place to walk to. Every stop on her timetable is a door into her, wherever her hull is${at ? ", nearest first" : ""}: ${list}. Enter one (do: "enter", args: { mark: "<the stop>" }; entering from outside walks you to its threshold), and aboard, ride is yours to declare.`,
+    };
+  } catch { return null; }
+}
+
 /** The three shelves. Complete for you, capped around you, pointers for the town. */
 // Exported for the same reason `readDomainFor` is, and with the same caveat:
 // the `since:` shelf's join is only watched by a check that reads the block
@@ -2440,6 +2469,13 @@ async function apexDo(args, key, ctx = {}) {
         return bounce(422, `"${action}" is not afforded where you stand — and it is not a standpoint's act`,
           `${standing} ${canDo}`,
           { standing_door: STANDING_SCOPED_DOORS[action], affordable_at: elsewhere, affordable_here: here });
+      // ⚑ A FOURTH (POS-379): ride's grant is a class nobody can walk to, and
+      // its doors are the timetable's stops. See rideDoorsFor.
+      const ride = action === "ride" ? await rideDoorsFor(oriented) : null;
+      if (ride)
+        return bounce(422, `"ride" is not afforded where you stand — you are not aboard ${ride.vessel ?? "her"}`,
+          `${ride.sentence} ${canDo}`,
+          { ride_doors: ride.doors, affordable_at: elsewhere, affordable_here: here });
       return elsewhere.length
         ? bounce(422, `"${action}" is not afforded where you stand`,
           `It is afforded at ${elsewhere.map((w) => `${w.mark} (${w.at.x}, ${w.at.y})`).join("; ")} — walk there and it appears. ${canDo}`,
@@ -3020,6 +3056,13 @@ async function apexReadAction(args, key, ctx = {}) {
         return bounce(422, `"${action}" is not an action anywhere in your view — it is not read from a standpoint`,
           `${standing} Readable from here: ${here.join(", ") || "(nothing)"}.`,
           { standing_door: STANDING_SCOPED_DOORS[action], readable_here: here, affordable_at: elsewhere });
+      // The ride's doors, as the act's bounce names them (POS-379). Ashore and
+      // away from her, `read: "ride"` meets this bounce and never rideDomain.
+      const ride = action === "ride" ? await rideDoorsFor(oriented) : null;
+      if (ride)
+        return bounce(422, `"ride" is not an action anywhere in your view — you are not aboard ${ride.vessel ?? "her"}`,
+          `${ride.sentence} Readable from here: ${here.join(", ") || "(nothing)"}.`,
+          { ride_doors: ride.doors, readable_here: here, affordable_at: elsewhere });
       return bounce(422, `"${action}" is not an action anywhere in your view — nothing to read`,
         `Readable from here: ${here.join(", ") || "(nothing)"}${elsewhere.length ? ` — and "${action}" stands at ${elsewhere.map((w) => w.mark).join(", ")}` : ""}.`,
         { readable_here: here, affordable_at: elsewhere });
