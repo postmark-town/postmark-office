@@ -462,6 +462,16 @@ export async function openStore(sb, { log = () => {} } = {}) {
   sb.sha = git(sb.town, "rev-parse", "HEAD");
   await ingestStamps(sb);
 
+  // the chain recorded before the index is seeded, in the box's switch order
+  // (066/067, one ingest, one stamp-lines --sync, then STAMP_LINES=store): the
+  // seed under the switch folds its quest rows on the store's key base, which
+  // reads stamp_lines and refuses it empty (POS-341 part 4)
+  const { syncStampLinesVia } = await importFrom(join(OFFICE, "src/stamp-lines.mjs"));
+  const pen = await sb.client("office_api");
+  await pen.query("BEGIN");
+  try { const r = await syncStampLinesVia(pen, sb.town, { engine: sb.engine }); await pen.query("COMMIT"); log(`store: the chain recorded (${r.inserted} lines)`); }
+  catch (e) { await pen.query("ROLLBACK").catch(() => {}); throw e; }
+
   // the town index: the whole history once, in a child, from a snapshot (the box seeded it once too)
   const snap = join(sb.dir, "town-at-setup");
   execFileSync("git", ["-c", "core.autocrlf=false", "clone", "--local", "--quiet", "--config", "core.autocrlf=false", sb.town, snap]);
@@ -476,7 +486,12 @@ export async function openStore(sb, { log = () => {} } = {}) {
     child.stderr.on("data", (d) => { err += d; });
     child.on("exit", (code) => {
       if (code === 0) { log(`store: town index seeded in ${Math.round((Date.now() - t0) / 1000)} s`); ok(); }
-      else no(new Error(`the town index seed exited ${code}: ${(err || out).trim().split("\n").slice(-3).join(" | ")}`));
+      else {
+        // the error's own sentence first, then the stack's tail: the tail alone named only where (#442's first run)
+        const lines = (err || out).trim().split("\n");
+        const why = lines.find((l) => /Error|FATAL|refus/.test(l));
+        no(new Error(`the town index seed exited ${code}: ${[why, ...lines.slice(-2)].filter(Boolean).join(" | ")}`));
+      }
     });
   });
   sb.indexReady.catch(() => {});
