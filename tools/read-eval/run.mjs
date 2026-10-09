@@ -6,6 +6,7 @@
 //                                [--handle sol-of-garrison] [--model sonnet] [--effort medium]
 //   node tools/read-eval/run.mjs --report <dir>        # the results page again, from the run files
 //   node tools/read-eval/run.mjs --sweep               # drop read_eval_* databases a killed round left
+//   node tools/read-eval/run.mjs --controls --out <dir> # every grader passes a scripted solution and fails an empty run (no agent)
 //
 // One ROUND builds the seeded town once (office.mjs § prepareRound, ~3½ minutes),
 // then for each (variant, task, repeat) boots a local office on a fresh copy of
@@ -29,6 +30,7 @@ import { bootRun, callTool, clonesClean, prepareRound } from "./office.mjs";
 import { runAgent } from "./agent.mjs";
 import { FEEDBACK_PROMPT, TASKS, systemPrompt, truthFor } from "./tasks.mjs";
 import { writeReport } from "./report.mjs";
+import { SOLVED } from "./controls.mjs";
 
 const OFFICE = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -79,8 +81,29 @@ async function sweep() {
   } finally { await c.end(); }
 }
 
+/** The graders' controls: each must pass the scripted solution and fail the empty run. */
+async function controls({ round, truth, taskIds, out }) {
+  const rows = [];
+  for (const id of taskIds) {
+    const task = TASKS.find((t) => t.id === id);
+    for (const kind of ["solved", "empty"]) {
+      const office = await bootRun(round, { shape: "v0", runId: `${process.pid}_ctl_${kind}_${id}`, log });
+      try {
+        const done = kind === "solved" ? await SOLVED[id]({ office, truth }) : {};
+        const graded = await task.grade({ answer: done.answer ?? "", truth, query: office.query, round });
+        const ok = kind === "solved" ? graded.pass : !graded.pass;
+        rows.push({ task: id, kind, pass: graded.pass, ok, why: graded.why, refusals: (done.calls ?? []).filter((c) => c.isError).map((c) => c.body?.defect ?? c.body) });
+        log(`control ${id} ${task.name} ${kind}: ${ok ? "OK" : "WRONG"} (pass=${graded.pass}) · ${graded.why}`);
+      } finally { await office.stop(); restoreClones(round); }
+    }
+  }
+  writeFileSync(join(out, "controls.json"), JSON.stringify(rows, null, 2));
+  if (rows.some((r) => !r.ok)) throw new Error(`${rows.filter((r) => !r.ok).length} control(s) WRONG: see ${join(out, "controls.json")}`);
+  log(`controls: all ${rows.length} OK`);
+}
+
 async function main() {
-  const a = argv(["out", "variants", "tasks", "repeats", "concurrency", "handle", "model", "effort", "report", "sweep"]);
+  const a = argv(["out", "variants", "tasks", "repeats", "concurrency", "handle", "model", "effort", "report", "sweep", "controls"]);
   if (a.sweep) return sweep();
   if (a.report) { const p = writeReport(resolve(a.report)); log(`results page: ${p}`); return; }
   if (!a.out) throw new Error("--out <dir> is required (the round's results folder)");
@@ -114,6 +137,8 @@ async function main() {
       system_prompt: systemPrompt(handle), feedback_prompt: FEEDBACK_PROMPT,
       prompts: Object.fromEntries(TASKS.map((t) => [t.id, t.prompt(truth)])),
     }, null, 2));
+
+    if (a.controls) return await controls({ round, truth, taskIds, out });
 
     // repeats outermost, then tasks, then variants: a slow hour or a busy box falls on every variant alike
     const plan = [];
