@@ -590,7 +590,7 @@ Leave one mark. It is your household's draft until it publishes (HOW IT PUBLISHE
 |---|---|---|
 | `slug` | string | **required** — the mark's leaf name — kebab-case, unique among your own marks |
 | `kind` | `sited` \\| `parcel` \\| `predicated` \\| `naming` | **required** — predicated requires slot + value; naming requires value and uses slot "name"; sited/parcel carry neither slot nor value |
-| `at` | object | grid meters east/south of the Origin (sited/parcel) |
+| `at` | object | grid meters east/south of the Origin (sited/parcel). |
 | `extent` | object | footprint in meters (sited only — a parcel carries no extent: every parcel is the town's 25×25, set by the door) |
 | `points` | array | optional polygon ring [[x,y],…] for an irregular shape, in grid meters. |
 | `body` | string | **required** — one present-tense observation; maximum 150 characters — the mark's face in every view |

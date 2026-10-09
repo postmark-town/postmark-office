@@ -2637,6 +2637,10 @@ export async function worldMyMarks(key = null, { offset = 0 } = {}) {
     // what lets `falsifier-draft-privacy.mjs`'s class leg ask "is every id here
     // authored by this household" without inventing a second roster.
     residents: stake.residents,
+    // YOUR GROUND, AS RANGES (POS-493): the household's published parcels, so a
+    // mark meant for your own ground can be aimed inside an edge you can read.
+    // A mark publishes free only when its whole footprint is inside one.
+    your_ground: yourGroundOf((main.marks ?? []).filter((m) => m.kind === "parcel" && residents.has(m.by))),
     branch: delta.branch,
     main: delta.main,
     draft: delta.draft,
@@ -3067,12 +3071,15 @@ async function groundMinimumStake(clean, canon) {
   catch { /* no registry → solo grain, same as everywhere else */ }
   const credOf = (h) => registry?.[h] ?? `solo:${h}`;
   const mine = credOf(clean.by);
-  for (const g of canon.marks) {
-    if (g.kind !== "parcel" || credOf(g.by ?? g.household) !== mine) continue;
+  // `own`: the household's parcels this verdict was judged against, so the
+  // door's ground note (POS-493, § groundNoteOf) names the same ground the
+  // verdict read and cannot disagree with it.
+  const own = canon.marks.filter((g) => g.kind === "parcel" && credOf(g.by ?? g.household) === mine);
+  for (const g of own) {
     if (marksContain(g, { at: clean.at, extent: clean.extent, points: clean.points }))
-      return { min: 0, ground: g.id };
+      return { min: 0, ground: g.id, own };
   }
-  return commons;
+  return { ...commons, own };
 }
 
 /**
@@ -3397,7 +3404,9 @@ async function journalLeaveMark(clean, { crossing = currentCrossing() } = {}) {
     // kinofire that a detail on her home (a sited mark on a housemate's parcel)
     // was commons and wanted 1✦, over an act this line had just put forward at
     // ✦0. Asked for an unstaked leave too, because the note rides those as well.
-    const groundMin = (ground ?? await groundMinimumStake(clean, canon)).min;
+    const groundRead = ground ?? await groundMinimumStake(clean, canon);
+    const groundMin = groundRead.min;
+    const groundOwn = groundRead.own ?? [];
     const escrowBehind = amending ? await escrowBehindMark(id) : 0;
     const verdict = putForwardVerdict({
       staking, stamps: stakeN, amending, escrowBehind, groundMin: ground?.min ?? 1 });
@@ -3436,6 +3445,7 @@ async function journalLeaveMark(clean, { crossing = currentCrossing() } = {}) {
         ...(amending ? { amended: true, moved: false, _verdict: verdict } : {}),
         ...(carries ? { carries } : {}),
         _ground_min: groundMin,
+        _ground_own: groundOwn,
         nothing_written: "a preview: no draft, no journal row, no stake — leave the mark without preview: true to write it",
       };
     }
@@ -3538,6 +3548,7 @@ async function journalLeaveMark(clean, { crossing = currentCrossing() } = {}) {
       // INTERNAL the same way: the ground's minimum this act was ruled on, so
       // the publish note says what the act did (POS-406, § disclosePublishing).
       _ground_min: groundMin,
+      _ground_own: groundOwn,                          // POS-493: the parcels the verdict read (§ discloseYourGround)
       // ── which side of the boundary this act left the mark on ──────────────
       put_forward: putForward,
       ...(ground?.ground ? { on_your_ground: ground.ground } : {}),
@@ -3950,6 +3961,7 @@ export async function leaveMarkViaOffice(worldClone, payload = {}, key = null, {
   }
   if (outline) result.outline = outline; // POS-322: one line, only when the door moved or derived the box
   await discloseOverhang(result, by, key);
+  await discloseYourGround(result, clean);             // before the publish note, which strips _ground_min
   await disclosePublishing(result, by);
 
   // THE INLINE STAKE (founder-ruled 2026-08-19, same sitting as the publish
@@ -4168,6 +4180,86 @@ export function publishNoteFor({ id, parent, by, marks, residentsOf, kind = null
     heads_up: `your mark stands, but only in your household's draft so far: on ${ground} it judges commons-class at the crossing, and a commons mark PUBLISHES ONLY WITH ESCROW BEHIND IT — unstaked it stays invisible to everyone else, and nothing asks again. Staking your own mark is legal and 1✦ is enough: stake now with the call below, or pass stamps: 1 when leaving a mark to do both in one act. If the crossing judges the ground yours after all, the stake is just weight behind your mark, never wasted.`,
     to_publish: { do: "stake", tool: "world_stake", args: { mark: id, stamps: 1 } },
   };
+}
+
+// ── YOUR GROUND, AS RANGES (POS-493, found by the read-shape eval 2026-10-09) ─
+//
+// Two agents asked to "leave a mark on your own parcel" set one a few metres
+// from where they stood, 1 m inside the edge, and it landed half a metre
+// outside: y −2530 against an edge at −2530.5. Nothing they could read named
+// the edge, so it was a coin toss. The door now names the household's parcels
+// as ranges on every sited leave, and when the footprint lands outside all of
+// them but within a parcel's side of one, it says by how much and where it
+// would sit wholly inside. A mark farther off is a deliberate commons mark and
+// keeps only the publish note. A note, never a refusal (R11).
+//
+// PURE, like `overhangOf` above: the parcels are the ones the act's own ground
+// verdict was judged against (§ groundMinimumStake's `own`), so the note and
+// the verdict read one set. `contains` is the engine's marksContain; a corrected
+// point is offered only when the engine agrees it is inside.
+const fmtM = (v) => String(Number(Number(v).toFixed(2)));
+export const rangeOf = (m) => {
+  const hw = Math.abs(Number(m?.extent?.w) || 0) / 2, hh = Math.abs(Number(m?.extent?.h) || 0) / 2;
+  return { x: `${fmtM(Number(m.at.x) - hw)}..${fmtM(Number(m.at.x) + hw)}`, y: `${fmtM(Number(m.at.y) - hh)}..${fmtM(Number(m.at.y) + hh)}` };
+};
+export const yourGroundOf = (parcels) => (parcels ?? [])
+  .filter((p) => p?.at && p?.extent && Number.isFinite(Number(p.at.x)) && Number.isFinite(Number(p.at.y)))
+  .map((p) => ({ parcel: p.id, ...rangeOf(p) }));
+
+export function groundNoteOf({ kind, at, extent = null, points = null, own, onOwnGround, nearM, contains = null }) {
+  if (kind !== "sited" || !at || !Number.isFinite(Number(at.x)) || !Number.isFinite(Number(at.y))) return null;
+  const your_ground = yourGroundOf(own);
+  if (!your_ground.length) return null;                     // no parcel in the household: nothing to aim at
+  if (onOwnGround) return { your_ground };
+  const w = Math.abs(Number(extent?.w) || 0), h = Math.abs(Number(extent?.h) || 0);
+  let best = null;
+  for (const p of own) {
+    if (!p?.at || !p?.extent) continue;
+    const px0 = Number(p.at.x) - p.extent.w / 2, px1 = Number(p.at.x) + p.extent.w / 2;
+    const py0 = Number(p.at.y) - p.extent.h / 2, py1 = Number(p.at.y) + p.extent.h / 2;
+    // The gap between the footprint and the parcel (0 when they touch or overlap).
+    const gap = Math.max(0, px0 - (at.x + w / 2), (at.x - w / 2) - px1, py0 - (at.y + h / 2), (at.y - h / 2) - py1);
+    if (gap > nearM) continue;
+    // The nearest point that holds the whole footprint inside, if it fits.
+    const fits = w <= p.extent.w && h <= p.extent.h;
+    const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
+    const inside = fits ? { x: clamp(Number(at.x), px0 + w / 2, px1 - w / 2), y: clamp(Number(at.y), py0 + h / 2, py1 - h / 2) } : null;
+    const past = inside ? Math.max(Math.abs(inside.x - at.x), Math.abs(inside.y - at.y)) : null;
+    if (!best || (past ?? Infinity) < (best.past ?? Infinity)) best = { p, inside, past };
+  }
+  if (!best) return { your_ground };
+  const r = rangeOf(best.p);
+  // Offered only when it is truly inside by the engine's own rule (a polygon,
+  // or a rule we do not model, gets no point rather than a wrong one).
+  const corrected = best.inside && !points && (typeof contains !== "function" || contains(best.p, { at: best.inside, extent }))
+    ? { x: Number(fmtM(best.inside.x)), y: Number(fmtM(best.inside.y)) } : null;
+  return {
+    your_ground,
+    off_your_ground: {
+      parcel: best.p.id,
+      note: `this footprint reaches ${best.past != null ? `${fmtM(best.past)} m` : "past"} outside your parcel ${best.p.id} (x ${r.x}, y ${r.y}), so it stands on ground that is not your household's: it publishes as a commons mark and needs ✦1 behind it, not ✦0`
+        + (corrected ? ` — at { x: ${corrected.x}, y: ${corrected.y} } it sits wholly inside` : ""),
+      ...(corrected ? { inside_at: corrected } : {}),
+      next_time: "pass preview: true first — it says where a mark would land and how it publishes, and writes nothing",
+    },
+  };
+}
+
+// groundNoteOf's I/O half: it strips its internal field whatever happens, and
+// never fails the act it rides on.
+async function discloseYourGround(result, clean) {
+  const own = result?._ground_own;
+  if (result) delete result._ground_own;
+  try {
+    if (!result?.id || !Array.isArray(own)) return;
+    const { PARCEL_EXTENT_M, marksContain } = await foldConstants();
+    const note = groundNoteOf({
+      kind: result.kind ?? clean?.kind, at: clean?.at ?? result.at, extent: clean?.extent ?? result.extent ?? null,
+      points: clean?.points ?? null, own, onOwnGround: result._ground_min === 0,
+      nearM: Number(PARCEL_EXTENT_M) || 25, contains: typeof marksContain === "function" ? marksContain : null,
+    });
+    if (note) Object.assign(result, note);
+  } catch { /* a courtesy: never fail the act it rides on */ }
 }
 
 // The I/O half: a courtesy that must never fail the write it rides on.
@@ -5405,7 +5497,7 @@ export const WORLD_TOOLS = [
     inputSchema: { type: "object", properties: {
       slug: { type: "string", description: "the mark's leaf name — kebab-case, unique among your own marks" },
       kind: { type: "string", enum: ["sited", "parcel", "predicated", "naming"], description: "predicated requires slot + value; naming requires value and uses slot \"name\"; sited/parcel carry neither slot nor value" },
-      at: { type: "object", description: "grid meters east/south of the Origin (sited/parcel)", properties: { x: { type: "number" }, y: { type: "number" } } },
+      at: { type: "object", description: "grid meters east/south of the Origin (sited/parcel). A sited mark publishes free only when its whole footprint (at ± extent/2) is inside one of your household's parcels; world { read: \"leave-mark\" } names their ranges as your_ground", properties: { x: { type: "number" }, y: { type: "number" } } },
       extent: { type: "object", description: "footprint in meters (sited only — a parcel carries no extent: every parcel is the town's 25×25, set by the door)", properties: { w: { type: "number" }, h: { type: "number" } } },
       points: { type: "array", description: "optional polygon ring [[x,y],…] for an irregular shape, in grid meters. On a sited mark the town derives at (the ring's bounding-box centre) and extent (its w×h) from it, so you may leave both off; a sent at/extent that disagrees is replaced and the answer's `outline` says so. On a parcel the ring must fill the town's 25×25 box exactly" },
       body: { type: "string", description: "one present-tense observation; maximum 150 characters — the mark's face in every view" },
