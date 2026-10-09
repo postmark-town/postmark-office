@@ -18,7 +18,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { copyTownTools } from "./helpers/town-tools.mjs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
@@ -40,7 +41,7 @@ function fixtureTown({ pins, deliveries = [], town = TOWN, rooms = [] }) {
   const repo = mkdtempSync(join(tmpdir(), "welcome-pass-"));
   mkdirSync(join(repo, "tools"), { recursive: true });
   mkdirSync(join(repo, "WHITE_PAGES"), { recursive: true });
-  copyFileSync(join(town, "tools", "stamp-mint.mjs"), join(repo, "tools", "stamp-mint.mjs"));
+  copyTownTools(town, repo);
   writeFileSync(join(repo, "tools", "github-ids.json"), JSON.stringify(pins));
   for (const handle of [...Object.keys(pins), ...rooms]) {
     mkdirSync(join(repo, "WHITE_PAGES", handle), { recursive: true });

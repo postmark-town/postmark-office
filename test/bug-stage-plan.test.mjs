@@ -33,7 +33,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
+import { copyTownTools } from "./helpers/town-tools.mjs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -176,7 +177,7 @@ function syntheticTown() {
   const repo = mkdtempSync(join(tmpdir(), "bug-stage-town-"));
   mkdirSync(join(repo, "tools"), { recursive: true });
   mkdirSync(join(repo, "WHITE_PAGES"), { recursive: true });
-  for (const f of ["stamp-mint.mjs", "stamp-verify.mjs"]) copyFileSync(join(TOWN_SRC, "tools", f), join(repo, "tools", f));
+  copyTownTools(TOWN_SRC, repo);
   writeFileSync(join(repo, "tools", "github-ids.json"), JSON.stringify({ carol: { id: 3 }, dan: { id: 4 } }));
   for (const h of ["carol", "dan"]) {
     mkdirSync(join(repo, "WHITE_PAGES", h), { recursive: true });

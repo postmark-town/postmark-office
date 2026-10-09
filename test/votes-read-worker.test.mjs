@@ -30,7 +30,8 @@
 import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, copyFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { copyTownTools } from "./helpers/town-tools.mjs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
@@ -86,7 +87,7 @@ function engineClone() {
   const dir = join(tmp, "engine-clone");
   mkdirSync(join(dir, "tools"), { recursive: true });
   mkdirSync(join(dir, "WHITE_PAGES"), { recursive: true });
-  for (const f of ["ballot.mjs", "stamp-mint.mjs"]) copyFileSync(join(TOWN, "tools", f), join(dir, "tools", f));
+  copyTownTools(TOWN, dir);
   writeFileSync(join(dir, "WHITE_PAGES", "ballot-w42-open.json"), JSON.stringify({
     topic: "w42-open", status: "staking", cap_per_household_per_candidate: 20,
     candidates: ["Postmark", "Ferry"],

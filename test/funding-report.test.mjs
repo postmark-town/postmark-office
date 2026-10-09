@@ -13,6 +13,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { copyTownTools } from "./helpers/town-tools.mjs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
@@ -60,8 +61,7 @@ function seamTown({ pins = { paz: { login: "p", id: 2 }, stan: { login: "s", id:
   writeFileSync(keyFile, privateKey.export({ type: "pkcs8", format: "pem" }));
   // a real git repo and the town's real tools, so the command this report PRINTS
   // can be executed here exactly as the operator would paste it
-  for (const f of ["stamp-mint.mjs", "epoch-close.mjs"])
-    writeFileSync(join(repo, "tools", f), readFileSync(join(TOWN, "tools", f)));
+  copyTownTools(TOWN, repo);
   execFileSync("git", ["init", "-q"], { cwd: repo, encoding: "utf8" });
   execFileSync("git", ["add", "-A"], { cwd: repo, encoding: "utf8" });
   execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "fixture"], { cwd: repo, encoding: "utf8" });

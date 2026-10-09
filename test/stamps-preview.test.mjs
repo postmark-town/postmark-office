@@ -47,7 +47,8 @@ import test, { after } from "node:test";
 import { NO_TOWN, townClone, worldClone } from "./fixture-paths.mjs";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
+import { copyTownTools } from "./helpers/town-tools.mjs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
@@ -82,8 +83,7 @@ function townFixture({ mints = [{ handle: "tester", n: 5 }], pots = [] } = {}) {
   litter.push(repo);
   mkdirSync(join(repo, "tools"), { recursive: true });
   mkdirSync(join(repo, "WHITE_PAGES"), { recursive: true });
-  for (const f of ["stamp-mint.mjs", "world-stake.mjs", "ballot.mjs"])
-    copyFileSync(join(TOWN, "tools", f), join(repo, "tools", f));
+  copyTownTools(TOWN, repo);
   writeFileSync(join(repo, "tools", "stamp-pubkey.pem"), publicKey.export({ type: "spki", format: "pem" }));
   const keyFile = join(repo, "stamp-key.pem");
   const pem = privateKey.export({ type: "pkcs8", format: "pem" });

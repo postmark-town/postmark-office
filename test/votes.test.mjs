@@ -11,7 +11,8 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, copyFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { copyTownTools } from "./helpers/town-tools.mjs";
 import { join, resolve, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
@@ -25,8 +26,7 @@ const { voteList, voteView, doorstepVotes, stakeViaOffice, votesAvailable } = aw
 const { ingestBallotFiles } = await import("../src/ballots-store.mjs");
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const TOWN_TOOLS = resolve(HERE, "..", "town-clone", "tools");
-const TOOL_FILES = ["stamp-mint.mjs", "stamp-verify.mjs", "ballot.mjs", "ballot-pass.mjs"];
+const TOWN = resolve(HERE, "..", "town-clone");
 
 const D = (date, id, from, to) => `- ${date} · ${id} · ${from} → ${to} · thread: new`;
 
@@ -37,7 +37,7 @@ async function voteClone({ cap = 12, status = "staking" } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "office-votes-"));
   mkdirSync(join(dir, "tools"), { recursive: true });
   mkdirSync(join(dir, "WHITE_PAGES"), { recursive: true });
-  for (const f of TOOL_FILES) copyFileSync(join(TOWN_TOOLS, f), join(dir, "tools", f));
+  copyTownTools(TOWN, dir);
 
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
   writeFileSync(join(dir, "tools", "stamp-pubkey.pem"), publicKey.export({ type: "spki", format: "pem" }));
