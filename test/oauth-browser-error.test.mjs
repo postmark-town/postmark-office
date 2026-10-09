@@ -104,3 +104,19 @@ test("#2766 a browser on a discovery route is still answered as HTML", async () 
   assert.match(String(res.headers?.["content-type"] ?? ""), /^text\/html\b/i);
   assert.match(res.body, /office tripped/i);
 });
+
+// THE TOKEN ENDPOINT AND REGISTRATION ARE A CLIENT'S (POS-480, review of #449
+// finding 6). Both live under /oauth, but a connector calls and parses them:
+// a failure there must reach the JSON bounce, never the human's HTML page, even
+// when the client's Accept would let a browser through.
+test("#2766 a failure at /oauth/token or /oauth/register rejects to the JSON bounce: a client parses those", async () => {
+  for (const url of ["/oauth/token", "/oauth/register"]) {
+    for (const accept of ["application/json", "text/html,*/*"]) {
+      const res = responseRecorder();
+      const req = { method: "POST", url, headers: { accept }, socket: { remoteAddress: "127.0.0.1" } };
+      const rejected = await handleOauth(req, res, failingCtx()).then(() => null, (error) => error);
+      assert.notEqual(rejected, null, `${url} (Accept: ${accept}) is a client's door: it must reach server.mjs's JSON bounce`);
+      assert.equal(res.headersSent, false, `${url} must not have been answered here at all`);
+    }
+  }
+});

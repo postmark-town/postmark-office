@@ -1218,8 +1218,15 @@ async function handleOauthRoute(req, res, ctx) {
 // a readable one, so the catch answers HTML only for the browser-facing set and
 // re-throws otherwise — server.mjs's outer catch then answers the JSON bounce it
 // always did. That outer catch stays the API path's answer; this is the human's.
+//
+// TWO /oauth PATHS ARE MACHINE-FACING (review of #449, finding 6): the token
+// endpoint and dynamic registration are called and parsed by a client, never
+// walked by a browser, so a failure there reaches the JSON bounce too, however
+// the client's Accept header reads.
+const MACHINE_FACING = new Set(["/oauth/token", "/oauth/register"]);
 const browserFacing = (req) => {
   const path = new URL(req.url ?? "/", "http://localhost").pathname.replace(/\/+$/, "") || "/";
+  if (MACHINE_FACING.has(path)) return false;
   if (path.startsWith("/oauth")) return true;
   const accept = String(req.headers?.accept ?? "");
   return /\btext\/html\b/i.test(accept);
