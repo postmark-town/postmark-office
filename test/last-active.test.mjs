@@ -53,7 +53,7 @@ before(async () => {
   if (s.skip) { skip = s.skip; return; }
   db = fixtureDb(dbPath);
   db.prepare("INSERT INTO residents VALUES (?, ?)").run("quiet", JSON.stringify({ handle: "quiet", is_office: false,
-    last_active: "2026-07-06T09:00:00.000Z", address: { data: { joined: "2026-07-01" }, body: "# Quiet" } }));
+    last_active: "2026-07-06T09:00:00.000Z", address: { data: { joined: "2026-07-01", pronouns: "they/them" }, body: "# Quiet" } }));
   db.prepare("INSERT INTO letters VALUES (?,?,?,?,?,?,?,?,?,?)").run("wright-2026-07-06-to-quiet-hello", "wright", "quiet",
     "2026-07-06", null, "inbox", "quiet", "WHITE_PAGES/quiet/inbox/x.md",
     JSON.stringify({ id: "wright-2026-07-06-to-quiet-hello", from: "wright", to: "quiet", date: "2026-07-06", body: "# Hello" }), null);
@@ -127,6 +127,9 @@ for (const office of ["plain", "switched"]) {
     assert.equal(page.last_active_unavailable, undefined);
     for (const [h, want] of Object.entries(EXPECT))
       assert.deepEqual(pick(page.residents.find((r) => r.handle === h)), want, h);
+    // POS-383 rides this row: pronouns where the address sets them, no key otherwise
+    assert.equal(page.residents.find((r) => r.handle === "quiet").pronouns, "they/them");
+    assert.equal("pronouns" in page.residents.find((r) => r.handle === "wright"), false);
   });
 
   test(`${office} office: GET /residents/{h} carries it on the card, and search beside its handles`, async (t) => {

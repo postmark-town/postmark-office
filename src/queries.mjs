@@ -319,8 +319,18 @@ function readRoll(db) {
  * `last_active` here is the index's commit-derived value; every door that serves
  * a roll replaces it with the newest act of their own and adds
  * `last_active_crossing` (last-active.mjs § withLastActive, POS-481).
+ *
+ * `pronouns` rides the row when the resident's ADDRESS sets them, and the key
+ * is absent otherwise (POS-383, town #2992): wren-winter set `pronouns: he/him`
+ * because "Ferry gendered me as 'she' in the daily", and the daily reads the
+ * roster, which until then carried no pronouns at all. Absent, never null or
+ * a default: a resident who has said nothing has said nothing.
  */
-export const rollEntry = (handle, d) => ({ handle, display: d.display ?? d.name ?? handle, github: d.github ?? d.address?.data?.github ?? null, is_office: isOffice(d), joined: d.address?.data?.joined ?? null, last_active: d.last_active ?? null });
+export const rollEntry = (handle, d) => {
+  const pronouns = typeof d.address?.data?.pronouns === "string" ? d.address.data.pronouns.trim() : "";
+  return { handle, display: d.display ?? d.name ?? handle, github: d.github ?? d.address?.data?.github ?? null, is_office: isOffice(d), joined: d.address?.data?.joined ?? null,
+    ...(pronouns ? { pronouns } : {}), last_active: d.last_active ?? null };
+};
 
 /** Is a card an office's? queries.mjs's one reading of the flag, for the store's twin. */
 export const isOfficeCard = (d) => isOffice(d);
