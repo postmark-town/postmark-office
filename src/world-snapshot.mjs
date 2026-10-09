@@ -328,14 +328,28 @@ export async function snapshotFoldInputs(p, header, { townRepo = null } = {}) {
   if (!lawRows.length) throw new Error(`law_projection holds no class marks at ${header.law_sha.slice(0, 12)}, the law snapshot ${header.id} names`);
   const terrain = await terrainAt(p, header.law_sha);
   const { stakes, source: stakesSource } = await stakesAt(p, header.town_sha, { townRepo });
-  let households = null, householdsSource = "nothing: every handle folds solo";
-  if (header.register_digest && townRepo) {
-    households = await householdsAt(await snapshotRegisterRows(p, header.register_digest), townRepo);
-    householdsSource = "the register at the seal, through the town's resolver at the ledger position";
-  } else if ((households = await rosterAt(p, header.law_sha))) {
-    householdsSource = `the printed WORLD/households.json at law ${header.law_sha.slice(0, 12)} (law_projection roster; a derived printout${header.register_digest ? ": pass the town checkout to derive it from the register" : ", and the snapshot predates 064"})`;
-  }
+  const { households, source: householdsSource } = await foldHouseholds(p, {
+    lawSha: header.law_sha, townRepo,
+    registerRows: header.register_digest ? () => snapshotRegisterRows(p, header.register_digest) : null,
+  });
   return { lawRows, terrain, stakes, stakesSource, households, householdsSource };
+}
+
+/**
+ * THE FOLD'S HOUSEHOLDS, the one derivation (POS-364 review: the clearing and the
+ * settlement group a household the same way). With register rows and a town
+ * checkout: the town's own resolver over them. Otherwise the printed roster at
+ * `lawSha`. Otherwise none, and every handle folds solo. `registerRows` is a
+ * thunk, so the register is read only when a town checkout will use it.
+ * → `{ households, source }`.
+ */
+export async function foldHouseholds(p, { lawSha, registerRows = null, townRepo = null }) {
+  if (registerRows && townRepo)
+    return { households: await householdsAt(await registerRows(), townRepo), source: "the register at the seal, through the town's resolver at the ledger position" };
+  const households = await rosterAt(p, lawSha);
+  if (households)
+    return { households, source: `the printed WORLD/households.json at law ${String(lawSha).slice(0, 12)} (law_projection roster; a derived printout${registerRows ? ": pass the town checkout to derive it from the register" : ", and the snapshot predates 064"})` };
+  return { households: null, source: "nothing: every handle folds solo" };
 }
 
 /**
@@ -390,12 +404,36 @@ export const CLAIMED_AT_SQL = `
     FROM marks m JOIN claims c ON c.id = m.id
    WHERE m.slug = ANY($1)`;
 
+/**
+ * WHEN EACH SLUG WAS FIRST CLAIMED, the one reading (the settlement's fold and
+ * the clearing's limits both ask this). A slug with a mark row, standing or
+ * retired, is dated by that row's ORIGIN claim (`claims.id = marks.id`: a mark
+ * keeps its first claim's id for life, and a REVIVE keeps the retired row's id,
+ * materialize.mjs § fileOne), by its record date, else its submitted_at. A slug
+ * no mark has held yet is dated by its own pending claim, the same way: it will
+ * be its own origin. → `Map(slug → instant)`.
+ */
+export async function firstClaimedBySlug(p, slugs, { pending = [] } = {}) {
+  const list = [...new Set([...(slugs ?? [])].filter(Boolean).map(String))];
+  const out = new Map();
+  if (!list.length) return out;
+  const iso = (t) => (t == null ? null : t instanceof Date ? t.toISOString() : String(t));
+  const { rows } = await p.query(CLAIMED_AT_SQL, [list]);
+  for (const r of rows) { const at = r.claimed_date ?? iso(r.submitted_at); if (at) out.set(String(r.slug), at); }
+  for (const c of pending) {
+    const slug = String(c?.slug ?? "");
+    if (!slug || out.has(slug)) continue;
+    const at = c?.data?.date ?? iso(c?.submitted_at);
+    if (at) out.set(slug, at);
+  }
+  return out;
+}
+
 /** Stamp each parcel record with its first claim (`claimed_at`). Edits `marks` in place; returns it. */
-export async function withClaimedAt(p, marks) {
+export async function withClaimedAt(p, marks, { pending = [] } = {}) {
   const parcels = marks.filter((m) => m?.kind === "parcel" && m.id);
   if (!parcels.length) return marks;
-  const { rows } = await p.query(CLAIMED_AT_SQL, [parcels.map((m) => String(m.id))]);
-  const first = new Map(rows.map((r) => [r.slug, r.claimed_date ?? (r.submitted_at ? new Date(r.submitted_at).toISOString() : null)]));
+  const first = await firstClaimedBySlug(p, parcels.map((m) => String(m.id)), { pending });
   for (const m of parcels) {
     const at = first.get(String(m.id));
     if (at) m.claimed_at = at;

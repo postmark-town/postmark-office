@@ -61,8 +61,7 @@ import { escrowAbsentAmong, escrowPresenceAt, escrowLines, unbackedStakesAmong }
 // THE PARCEL CAP — the sweep's own gate, ported to the candle before the sweep
 // has to be the one to say no. The law itself is the WORLD's and is imported
 // from a checkout, never copied. See step 5.6.
-import { parcelCapLawAt, parcelCapRefusals, parcelCapLines, heldParcelsByCred, heldParcelsByResident, credOf, soloCountedAt, countingSolo, opposedCheck } from "./parcel-cap.mjs";
-import { houseRowsVia, resolveHouse } from "../../src/household-deriver.mjs";
+import { limitsAtClearing } from "./parcel-cap.mjs";
 import { computeStanding, gistContainment } from "./standing.mjs";
 // THE SEAL (POS-357, R1): a pure SQL copy of the World this window leaves, in
 // this transaction. The module imports nothing; see its header and step 8.
@@ -219,10 +218,21 @@ try {
   //
   //     AHEAD OF THE GEOMETRY, which is the point of the ruling, and AFTER
   //     steps 1-2 (a duplicate or a superseded claim is not a claim on ground).
-  //     The cost, named: a sibling claim refused LATER (escrow, overlap,
-  //     counterclaim) has already counted against its household's headroom, so
-  //     a claim judged after it can be opposed that would have fit. A refused
-  //     claim can be filed again; ground held by an over-limit parcel could not.
+  //     The cost, named: a sibling claim refused LATER (step 3's escrow, step
+  //     4's overlap, step 5's counterclaim, step 5.4's house, step 5.5's commons
+  //     stake, step 6's unfileable) has already counted against its household's
+  //     headroom, so a claim judged after it can be opposed that would have fit.
+  //     A refused claim can be filed again; ground held by an over-limit parcel
+  //     could not.
+  //
+  //     ONE RULE, NOT TWO (Wright's review of the A build). The clearing does not
+  //     count: it asks the world's own fold (`parcel-cap.mjs § limitsAtClearing`)
+  //     on the inputs the settlement will fold, read by the same helpers. The
+  //     law at the store's pinned `projection_heads['world-law']` (the seal's
+  //     law_sha, never the checkout's HEAD), each parcel dated by its first claim
+  //     (`world-snapshot.mjs § firstClaimedBySlug`, a revive included, a claim
+  //     with no date by its submitted_at), and the households grouped as the
+  //     settlement groups them (`§ foldHouseholds`).
   //
   //     The history below is why the count is asked at the candle at all.
   //
@@ -235,7 +245,7 @@ try {
   //     mari/marigold-house-parcel", windows 192, 193, 194 on the box).
   //
   //     Two gates, two answers. The candle admitted what the sweep would refuse
-  //     because steps 1-5.5 above ask about slugs, supersession, escrow and
+  //     because the other steps (1-5.5) ask about slugs, supersession, escrow and
   //     geometry, and none of them counts a household's parcels.
   //
   //     THE SWEEP'S OWN CHECK IS UNTOUCHED. It stays as the gate of last resort:
@@ -243,7 +253,7 @@ try {
   //     disagree the conservative one is the one that should win.
   //
   //     AND IT DEGRADES LOUDLY RATHER THAN EITHER WAY SILENTLY — the same shape
-  //     step 5.5 above already argues for itself. Without `--world-repo` (or with
+  //     step 5.5 below already argues for itself. Without `--world-repo` (or with
   //     a checkout that cannot answer) the cap is reported UNCHECKED and parcel
   //     claims lock as they did before this step existed. It is not read as "the
   //     cap is 0", which would refuse every parcel in the town on a missing
@@ -254,66 +264,26 @@ try {
   {
     const parcels = pending.filter((c) => !outcomes.has(c.id) && c.class === "parcel" && slugOf(c));
     if (parcels.length) {
-      let law = null;
-      let why = null;
-      if (!worldRepo) why = "no --world-repo was given, so the world's cap could not be read";
-      else {
-        try { law = await parcelCapLawAt(worldRepo); }
-        catch (err) { why = err.message; }
-      }
-      if (!law) {
-        capSeen = { checked: false, reason: why, claims: parcels.map((c) => slugOf(c)) };
-        console.log(`  ⚑ parcel cap: ${parcels.length} parcel claim(s) LOCKED UNCHECKED — ${why}`);
+      const verdict = await limitsAtClearing({ query: q }, {
+        worldRepo, townRepo,
+        candidates: parcels.map((c) => ({ id: c.id, slug: slugOf(c), kind: c.class, owner: c.claimant, body: c.body, geometry: c.geometry, data: c.data, submitted_at: c.submitted_at })),
+      });
+      if (!verdict.checked) {
+        capSeen = { checked: false, reason: verdict.reason, claims: parcels.map((c) => slugOf(c)) };
+        console.log(`  ⚑ parcel limits: ${parcels.length} parcel claim(s) NOT JUDGED here — ${verdict.reason} (the settlement's limit pass is the backstop)`);
       } else {
-        // ONE HOUSE, HOWEVER ITS ROWS ARE SPELLED (POS-160 RULING 4). The store
-        // never re-spells a row, so both sides of this gate fold through the
-        // deriver on the way in: the STANDING counts in `heldParcelsByCred` and
-        // each CANDIDATE's `cred` below, by the same rule (`credOf`). Folding
-        // one side only would make every lookup miss and refuse nothing.
-        const houseRows = await houseRowsVia({ query: q });
-        const walked = (hh) => resolveHouse(hh, houseRows.registry, houseRows.pins).slug;
-        // POS-212: `solo:` rows COUNT only once the adoption batch has run on
-        // this store (the `solo-counted` act) — never before. See parcel-cap.mjs
-        // § THE COUNT AFTER ADOPTION.
-        const soloCounted = await soloCountedAt(q);
-        const resolve = soloCounted ? countingSolo(walked, houseRows.registry, houseRows.pins) : walked;
-        const heldByCred = await heldParcelsByCred(q, { resolve });
-        const candidates = [];
-        for (const c of parcels) {
-          // A claimant the roll does not name is step 5.4's to refuse, alone; this
-          // step does not judge it rather than throw the window back.
-          let house;
-          try { house = await ownerHouseholdFor(q, c.claimant); } catch { continue; }
-          candidates.push({
-            id: c.id, slug: slugOf(c),
-            cred: credOf(house, resolve),
-            // The RECORD's own date, which is what the fold compares against the
-            // law date — never `submitted_at`. The drain queue dates a parcel at
-            // seating and the two are different facts; the exceptions map exists
-            // precisely because they can disagree.
-            date: c.data?.date ?? null,
-            // An amendment of a parcel the household already holds is a
-            // relocation, not a second claim (POS-88, and marks-fold.mjs's own
-            // `!mk._replacing`). Step 1 above already resolved which claims those
-            // are, into `amends`.
-            amending: amends.has(String(c.id)),
-            claimant: c.claimant,
-          });
-        }
-        const heldByResident = await heldParcelsByResident(q);
-        const verdict = parcelCapRefusals(candidates, { heldByCred, law, heldByResident });
         // OPPOSED, CITING THE LAW. The claim's `refusal_check` is the outcome a
         // resident reads ("refused at candle N: opposed: the-town/claim-cap: …"),
         // so it names the limit and the law mark that holds it.
         capSeen = {
-          checked: true, cap: law.cap, law_date: law.lawDate, world_sha: law.sha, solo_counted: soloCounted,
-          over_limit: verdict.refused.map((r) => ({ slug: r.slug, held: r.held, law: r.law })),
+          checked: true, cap: verdict.cap, law_date: verdict.lawDate, world_sha: verdict.lawSha, households: verdict.householdsSource,
+          over_limit: verdict.opposed.map((r) => ({ slug: r.slug, law: r.law })),
           applied_by: "this clearing: opposed, never materialized (Darko, 2026-10-08)",
-          excepted: verdict.admitted.filter((a) => a.excepted).map((a) => a.slug),
-          judged: candidates.length,
+          judged: verdict.judged,
         };
-        for (const r of verdict.refused) decide(r.id, "refused", opposedCheck(r));
-        for (const line of parcelCapLines(verdict, law)) console.log(`  ⚑ ${line} (opposed at this clearing)`);
+        for (const r of verdict.opposed) decide(r.id, "refused", r.check);
+        if (verdict.opposed.length)
+          console.log(`  ⚑ parcel limits: opposed ${verdict.opposed.length} claim(s) at this clearing (law ${String(verdict.lawSha).slice(0, 8)}): ${verdict.opposed.map((r) => `${r.slug} (${r.law})`).join(", ")}`);
       }
     }
   }

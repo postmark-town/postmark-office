@@ -221,11 +221,10 @@ test("THE WIRING: clearing-job DECIDES the limits ahead of the geometry, opposed
     "ahead of step 4's overlap and step 5.7's carry: an over-limit parcel never holds ground");
   const step = src.slice(from, to);
 
-  assert.ok(step.includes("parcelCapRefusals("), "step 5.6 must ask the gate");
-  assert.ok(step.includes('decide(r.id, "refused", opposedCheck(r))'), "and decides each over-limit claim opposed, citing its law");
+  assert.ok(step.includes("limitsAtClearing("), "step 2.5 asks the world's own fold, never a parallel count (one rule, not two)");
+  assert.ok(!step.includes("parcelCapRefusals("), "and no longer counts for itself");
+  assert.ok(step.includes('decide(r.id, "refused", r.check)'), "and decides each over-limit claim opposed, citing its law");
   assert.ok(step.includes("over_limit:"), "its account says which claims are over the limit");
-  assert.ok(step.includes("parcelCapLawAt("), "reading the law from the world checkout, not from a constant here");
-  assert.ok(/amending:\s*amends\.has\(/.test(step), "and telling the gate which claims are amendments (POS-88)");
   assert.ok(src.includes("parcel_cap: capSeen"), "and put its account on the window's receipt");
   assert.ok(/the sweep's own check is untouched/i.test(step), "the sweep stays the gate of last resort");
 
@@ -266,27 +265,9 @@ test("THE DOCKET: `parcel-cap` has no bulletin word yet, and the receipt says so
   assert.match(cause_row, /wait on the founder's word/);
 });
 
-// ── POS-364 review: the forecast asks one parcel per resident as the fold does ─
-
-test("ONE PARCEL PER RESIDENT in the forecast: a resident's second parcel is over its limit, never counted toward the cap; an amend and an exception are not", () => {
-  const law1 = { ...law, onePerExceptions: new Set(["ash/excepted-second"]) };
-  const v = parcelCapRefusals([
-    parcel("ash/a-second-plot", "a-house", "2026-10-05", { claimant: "ash" }),
-    parcel("bee/her-first", "a-house", "2026-10-06", { claimant: "bee" }),
-    parcel("ash/the-plot", "a-house", "2026-10-07", { claimant: "ash", amending: true }),
-    parcel("ash/excepted-second", "a-house", "2026-10-08", { claimant: "ash" }),
-  ], { heldByCred: new Map([["a-house", 1]]), law: law1, heldByResident: new Map([["ash", 1]]) });
-  assert.deepEqual(v.refused.map((r) => [r.slug, r.law]), [["ash/a-second-plot", "the-town/one-per-resident"]]);
-  assert.match(v.refused[0].check, /the-town\/one-per-resident/);
-  assert.deepEqual(v.admitted.map((a) => a.slug), ["bee/her-first", "ash/the-plot", "ash/excepted-second"]);
-  // Without the per-resident count the forecast asks the cap alone, as before.
-  assert.deepEqual(parcelCapRefusals([parcel("ash/a-second-plot", "a-house", "2026-10-05", { claimant: "ash" })], { heldByCred: new Map([["a-house", 1]]), law: law1 }).refused, []);
-});
-
 test("the clearing's outcome sentence for a parcel over a limit names the law mark that holds it", async () => {
   const { opposedCheck, OPPOSED_CHECK } = await import("../world2/tools/parcel-cap.mjs");
-  const v = parcelCapRefusals([parcel("someone/the-fourth-parcel", "a-house", "2026-09-15")], { heldByCred: new Map([["a-house", law.cap]]), law });
-  const check = opposedCheck(v.refused[0]);
+  const check = opposedCheck({ law: "the-town/claim-cap", slug: "someone/the-fourth-parcel", error: "parcel claim capped — this credential household already holds 3 (cap 3 per household, ruled 2026-07-30; prior estate stands, new claims wait on the founder's word)" });
   assert.equal(checkNameOf(check), OPPOSED_CHECK);
   assert.match(check, /^opposed: the-town\/claim-cap: someone\/the-fourth-parcel — parcel claim capped — this credential household already holds/);
 });

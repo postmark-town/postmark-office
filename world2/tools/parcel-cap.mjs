@@ -74,7 +74,61 @@ export const PARCEL_CAP_CHECK = "parcel-cap";
  * a gate refusing a malformed one; it names the law mark that holds the limit.
  */
 export const OPPOSED_CHECK = "opposed";
-export const opposedCheck = (r) => `${OPPOSED_CHECK}: ${r.law}: ${String(r.check ?? "").replace(/^parcel-cap: /, "")}`;
+export const opposedCheck = (r) => `${OPPOSED_CHECK}: ${r.law}: ${r.slug} — ${r.error}`;
+
+/**
+ * THE CLEARING'S LIMITS, ASKED OF THE FOLD (POS-364; Darko RULED A, 2026-10-08;
+ * Wright's review of the A build: one rule, not two). The world's own engine,
+ * at the law the store pins (`projection_heads['world-law']`, which the seal
+ * stamps as the settlement's law_sha), folds every standing parcel with this
+ * window's parcel claims (an amend in place of the mark it moves), each dated by
+ * its FIRST claim and grouped into households exactly as the settlement's fold
+ * reads them. A claim the fold finds over a limit is opposed, citing the law its
+ * sentence names. Nothing here counts.
+ *
+ * NOT JUDGED (`checked: false`, with the reason) when there is no world
+ * checkout, the pinned law is not in it, or its engine predates the first-claim
+ * order (world#166): the settlement's limit pass is then the backstop, as it is
+ * for every limit the clearing could not see.
+ *
+ * `q` is `{ query }` under the clearing's pen. → `{ checked, reason?, opposed:
+ * [{ id, slug, law, error, check }], judged, cap, lawDate, lawSha, householdsSource }`.
+ */
+export async function limitsAtClearing(q, { worldRepo = null, townRepo = null, candidates = [] } = {}) {
+  if (!worldRepo) return { checked: false, reason: "no --world-repo was given, so the world's engine could not be asked", opposed: [] };
+  const { rows: [head] } = await q.query("SELECT sha FROM projection_heads WHERE repo = 'world-law'");
+  const lawSha = head?.sha ?? null;
+  if (!lawSha) return { checked: false, reason: "the store pins no world-law sha", opposed: [] };
+  let engine;
+  try {
+    const { materializeAtRef } = await import("../../src/world-branches.mjs");
+    engine = await import(pathToFileURL(join(materializeAtRef(worldRepo, lawSha, "tools"), "tools", "marks-fold.mjs")).href);
+  } catch (e) {
+    return { checked: false, reason: `the engine at the pinned law ${lawSha.slice(0, 12)} could not be read from ${worldRepo}: ${String(e?.message ?? e).slice(0, 160)}`, opposed: [] };
+  }
+  if (typeof engine.CLAIMED_AT_FIELD !== "string")
+    return { checked: false, reason: `the engine at the pinned law ${lawSha.slice(0, 12)} predates the first-claim order (world#166)`, opposed: [] };
+
+  const { marksFromRows } = await import("../../src/world2-fold.mjs");
+  const { withClaimedAt, foldHouseholds, registerRowsNow } = await import("../../src/world-snapshot.mjs");
+  const { limitOppositions } = await import("../../src/world-settlement.mjs");
+  const { rows: standing } = await q.query(
+    "SELECT id, slug, kind, owner, body, geometry, NULL::uuid AS parent, data FROM marks WHERE kind = 'parcel' AND status = 'standing'");
+  const bySlug = new Map(standing.map((r) => [r.slug, r]));
+  for (const c of candidates) bySlug.set(c.slug, { id: c.id, slug: c.slug, kind: c.kind, owner: c.owner, body: c.body, geometry: c.geometry, parent: null, data: c.data ?? {} });
+  const records = marksFromRows([...bySlug.values()], []);
+  await withClaimedAt(q, records, { pending: candidates });
+  const { households, source: householdsSource } = await foldHouseholds(q, { lawSha, townRepo, registerRows: () => registerRowsNow(q) });
+  const state = engine.fold({ marks: records, terrain: null, stakes: [], households });
+  const bySlugCandidate = new Map(candidates.map((c) => [c.slug, c]));
+  const opposed = limitOppositions(state)
+    .filter((l) => bySlugCandidate.has(l.mark))
+    .map((l) => {
+      const r = { id: bySlugCandidate.get(l.mark).id, slug: l.mark, law: l.law, error: l.error };
+      return { ...r, check: opposedCheck(r) };
+    });
+  return { checked: true, opposed, judged: candidates.length, cap: engine.PARCEL_CLAIM_CAP, lawDate: engine.PARCEL_CAP_LAW_DATE, lawSha, householdsSource };
+}
 
 /**
  * The `<name>: <detail>` string a refused claim carries.
@@ -110,7 +164,7 @@ export async function parcelCapLawAt(worldRepo) {
   }
 
   const mod = await import(pathToFileURL(fold).href);
-  const { PARCEL_CLAIM_CAP, PARCEL_CAP_LAW_DATE, PARCEL_CAP_EXCEPTIONS, compareClaimOrder, ONE_PARCEL_PER_HANDLE_EXCEPTIONS } = mod;
+  const { PARCEL_CLAIM_CAP, PARCEL_CAP_LAW_DATE, PARCEL_CAP_EXCEPTIONS, compareClaimOrder } = mod;
 
   // Each check names the constant it could not stand behind. A cap of 0 and a
   // missing export are different faults with the same symptom, and an operator
@@ -128,10 +182,7 @@ export async function parcelCapLawAt(worldRepo) {
   if (typeof compareClaimOrder !== "function")
     throw new Error(`parcelCapLawAt: ${repo} at ${sha.slice(0, 8)} exports no compareClaimOrder — which of several claims the cap refuses must be a function of the record`);
 
-  // One parcel per resident's own founder exceptions (POS-368); an engine older
-  // than that law answers none, and then the forecast asks only the cap.
-  const onePerExceptions = typeof ONE_PARCEL_PER_HANDLE_EXCEPTIONS?.has === "function" ? ONE_PARCEL_PER_HANDLE_EXCEPTIONS : null;
-  return { cap: PARCEL_CLAIM_CAP, lawDate: PARCEL_CAP_LAW_DATE, exceptions: PARCEL_CAP_EXCEPTIONS, compare: compareClaimOrder, onePerExceptions, sha, repo };
+  return { cap: PARCEL_CLAIM_CAP, lawDate: PARCEL_CAP_LAW_DATE, exceptions: PARCEL_CAP_EXCEPTIONS, compare: compareClaimOrder, sha, repo };
 }
 
 /**
@@ -165,14 +216,9 @@ export async function parcelCapLawAt(worldRepo) {
  * entry says so in its own text ("`held` still counts all five, so a SIXTH claim
  * by this household is refused").
  */
-export function parcelCapRefusals(candidates, { heldByCred, law, heldByResident = null } = {}) {
+export function parcelCapRefusals(candidates, { heldByCred, law } = {}) {
   if (!law) throw new Error("parcelCapRefusals: no law — the cap is the world's and this function never supplies a default");
   const held = new Map(heldByCred ?? []);
-  // ONE PARCEL PER RESIDENT, asked first, as the fold asks it (marks-fold §
-  // admissibility; POS-364 review: the clearing's forecast and the settlement
-  // agree). Only when the caller hands the standing parcels per resident and
-  // the law knows the rule; a resident's second parcel never counts toward the cap.
-  const residents = heldByResident && law.onePerExceptions ? new Map(heldByResident) : null;
   const refused = [];
   const admitted = [];
 
@@ -184,11 +230,6 @@ export function parcelCapRefusals(candidates, { heldByCred, law, heldByResident 
 
   for (const c of ordered) {
     const cred = c?.cred ?? null;
-    if (residents && !c?.amending && c?.claimant && (residents.get(c.claimant) ?? 0) > 0 && !law.onePerExceptions.has(c?.slug)) {
-      refused.push({ id: c.id, slug: c.slug, cred, held: residents.get(c.claimant), law: "the-town/one-per-resident",
-        check: `${PARCEL_CAP_CHECK}: ${c.slug} — this resident already holds a parcel; a household may hold up to three, one per resident (the-town/one-per-resident; relocation = replace, not add)` });
-      continue;
-    }
     const n = held.get(cred) ?? 0;
     const postLaw = String(c?.date ?? "") > law.lawDate;
     const excepted = law.exceptions.has(c?.slug);
@@ -199,7 +240,6 @@ export function parcelCapRefusals(candidates, { heldByCred, law, heldByResident 
     admitted.push({ id: c?.id, slug: c?.slug, cred, held: n, excepted, amending: !!c?.amending });
     // An amendment does not raise the count — it replaces a parcel already in it.
     if (!c?.amending) held.set(cred, n + 1);
-    if (residents && !c?.amending && c?.claimant) residents.set(c.claimant, (residents.get(c.claimant) ?? 0) + 1);
   }
   return { refused, admitted };
 }
@@ -261,13 +301,6 @@ export async function heldParcelsByCred(q, { resolve = null } = {}) {
     held.set(key, (held.get(key) ?? 0) + r.n);
   }
   return held;
-}
-
-/** Standing parcels per RESIDENT (the mark's owner, a handle): one parcel per resident's count (POS-364 review). */
-export async function heldParcelsByResident(q) {
-  const { rows } = await q(
-    "SELECT owner, COUNT(*)::int AS n FROM marks WHERE kind = 'parcel' AND status = 'standing' GROUP BY owner");
-  return new Map(rows.map((r) => [String(r.owner), r.n]));
 }
 
 /**
