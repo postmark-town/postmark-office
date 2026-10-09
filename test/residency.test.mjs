@@ -607,11 +607,23 @@ test("after merge, the same token resolves to the new household with no re-auth"
   });
   await settleResident("arrival", { handle: "arrival", github: "some-stranger" });
 
-  // the SAME token now resolves to the new household — the send is accepted
-  const after = await fetch(`${BASE}/letters`, {
+  // the SAME token now resolves to the new household — the send is accepted.
+  // The office reads the resident ashore only once its index poll has run, and a
+  // loaded runner can take longer than any fixed wait (a 1 s sleep went red on
+  // CI, #453; with no wait it is red here too). So the send is retried while,
+  // and only while, the answer is the harbor gate's refusal, which writes
+  // nothing; any other answer is the verdict at once.
+  const send = () => fetch(`${BASE}/letters`, {
     method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
     body: JSON.stringify({ from: "arrival", to: "wright", title: "first hello", thread: "new", body: "hi" }),
   });
+  let after = await send();
+  for (const deadline = Date.now() + 20_000; after.status === 403 && Date.now() < deadline;) {
+    const refusal = await after.json();
+    assert.equal(refusal.defect, "the harbor is read + ephemeral", `only the harbor gate may be waited out: ${JSON.stringify(refusal)}`);
+    await new Promise((ok) => setTimeout(ok, 200));
+    after = await send();
+  }
   assert.equal(after.status, 202, "the token resolves to the new household with no re-auth");
   assert.ok((await after.json()).letter_id);
 });
@@ -620,7 +632,8 @@ test("after merge, the same token resolves to the new household with no re-auth"
  * A resident lands in the town index, as a join merge lands their ADDRESS: in
  * the fixture office.db, and (switched) in the store the office reads, at a new
  * as-of so the office's held roll and probe read it again. Resolves once the
- * office has had time to poll.
+ * store holds the row; when the office reads it is its poll's business, so the
+ * caller waits on the office's own answer, never on a clock.
  */
 async function settleResident(handle, card) {
   const { DatabaseSync } = await import("node:sqlite");
@@ -630,7 +643,6 @@ async function settleResident(handle, card) {
   idx.close();
   if (!IX.env.TOWN_INDEX_READS) return;
   await IX.reseed();
-  await new Promise((ok) => setTimeout(ok, 1000)); // five of the office's 200 ms polls
 }
 
 // ── the harbor (gangway frozen) — kept LAST: the office is rebooted against a
