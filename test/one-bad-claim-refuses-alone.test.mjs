@@ -19,7 +19,7 @@
 // that refuse one row (the slug key, the parent key) are constraints only Postgres
 // raises, and the isolation is a savepoint only Postgres honours.
 
-import { test } from "node:test";
+import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -39,6 +39,7 @@ const HOUSED = ["ada", "bram", "cleo", "dov", "esme", "finn", "gus", "hale", "ir
 const HOUSELESS = "gabo";
 
 const store = await startStore({ db: "claim_isolation_test" });
+after(() => store.stop()); // a store never stopped left its server running on every run (POS-479)
 const skip = store.skip ?? false;
 
 async function owner(fn) {

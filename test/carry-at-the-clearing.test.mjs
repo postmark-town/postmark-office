@@ -14,7 +14,7 @@
 // Wright's bench (one household with Rei, under another spelling), and
 // little-bird's spork. Rei amends the parcel to (1100, 960).
 
-import { test } from "node:test";
+import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -31,6 +31,7 @@ const LAW_SHA = "l".repeat(40);
 const WIN = 240;
 
 const store = await startStore({ db: "carry_test" });
+after(() => store.stop()); // a store never stopped left its server running on every run (POS-479)
 const skip = store.skip ?? false;
 
 const IDS = {

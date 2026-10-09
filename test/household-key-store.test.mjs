@@ -17,11 +17,12 @@
 // in-process under `office_api`, as sponsored-stake-clears.test.mjs does. The
 // draft privacy questions are asked of the ROW POLICY, not of a stub.
 
-import { test } from "node:test";
+import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { startStore } from "./helpers/embedded-store.mjs";
 
 const store = await startStore({ db: "household_key_store_test" });
+after(() => store.stop()); // a store never stopped left its server running on every run (POS-479)
 const skip = store.skip ?? false;
 const OPEN = 240;
 const LOGIN = "CrowAndClock";

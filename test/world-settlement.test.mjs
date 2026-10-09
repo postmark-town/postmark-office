@@ -11,7 +11,7 @@
 // prove the town's words reach the engine as its own `townWords` argument,
 // because the pinned world clone's engine predates world#146.
 
-import { test } from "node:test";
+import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -25,6 +25,7 @@ import {
 } from "../src/world-settlement.mjs";
 
 const store = await startStore({ db: "world_settlement_test" });
+after(() => store.stop()); // a store never stopped left its server running on every run (POS-479)
 const skip = store.skip ?? false;
 const { owner, asOffice, seed, speak } = settlementRig(store);
 
