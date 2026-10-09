@@ -236,7 +236,7 @@ export async function withHousehold(p, household, fn, { also = [] } = {}) {
     discard = true;
     console.error(`[world2-claims] a household connection failed (${household}): ${String(e?.message ?? e).slice(0, 200)}`);
   };
-  client.on("error", heard);
+  client.on?.("error", heard); // a test's stub client may be a plain object with query and release
   try {
     await client.query("BEGIN");
     await client.query("SELECT set_config('app.household', $1, true)", [household]);
@@ -252,7 +252,7 @@ export async function withHousehold(p, household, fn, { also = [] } = {}) {
     try { await client.query("ROLLBACK"); } catch { discard = true; /* gone, or still inside the transaction */ }
     throw err;
   } finally {
-    client.removeListener("error", heard);
+    client.removeListener?.("error", heard);
     client.release(discard ? true : undefined);
   }
 }
