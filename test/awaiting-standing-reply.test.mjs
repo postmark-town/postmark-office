@@ -190,3 +190,22 @@ test("a standing row whose letter the record already delivered turns nothing", {
   const v = mailAwaitingOf(stored, "2026-09-08", "wright", { standing: [{ letter_id: "wright-d1", thread: null, root: "wright-d1" }] });
   assert.deepEqual(v.outgoing, [], "a delivered letter is never listed as standing_waiting_crossing");
 });
+
+// ── one day, the ledger's order against the ids' (#446 review, optional) ────
+//
+// Three letters on one date, written to the ledger in the order zz, mm, aa:
+// the reverse of their ids. The law orders by the ledger's ordinal, and the
+// overlay never re-sorts, so a reply into this thread must still equal the law.
+test("the law's queued reply on a day whose ledger order runs against its ids", { skip: SKIP }, () => {
+  const D = "2026-09-10";
+  const day = [L("kio-zz", "kio", "wright", D), L("wright-mm", "wright", "kio", D, "kio-zz"), L("kio-aa", "kio", "wright", D, "wright-mm")];
+  const events = parseLedger(day.map((l) => `- ${l.date} · ${l.id} · ${l.from} → ${l.to} · thread: ${l.thread}`).join("\n"));
+  const dayLaw = (extra = []) => mailState({ handle: "wright", letters: [...day, ...extra], ledgerEvents: events });
+  const bare = dayLaw();
+  assert.equal(bare.conversations[0].latest_delivered_id, "kio-aa", "the ledger's last word, not the ids' last");
+  for (const thread of ["kio-aa", "kio-zz"]) {
+    const expected = asStanding(dayLaw([outbox("wright-r1", thread)]), ["wright-r1"]);
+    const got = lawWithStanding(bare, [{ letter_id: "wright-r1", thread, root: "kio-zz" }]);
+    assert.deepEqual(withoutDisclosure(got), expected, thread);
+  }
+});
