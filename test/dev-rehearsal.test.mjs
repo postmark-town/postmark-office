@@ -13,12 +13,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { PROD_DB, databaseOf, githubStub, parseEnvFile, storeGuard, treeTables } from "../tools/dev-rehearsal.mjs";
+import { CROSSING, PROD_DB, SANDBOX_CHECK, carried, databaseOf, githubStub, parseEnvFile, sandboxProblems, sandboxVerdictFromGitHub, storeGuard, treeTables } from "../tools/dev-rehearsal.mjs";
 
 const OFFICE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const TOOL = join(OFFICE, "tools", "dev-rehearsal.mjs");
@@ -117,4 +117,107 @@ test("the GitHub stub answers the pen's join road and records the PR's files, ne
       assert.equal(other.body.message, "the rehearsal's stub answers only the town repo", "the stub answers only the town repo it was given");
     } finally { await stub.close(); }
   } finally { rmSync(town, { recursive: true, force: true }); }
+});
+
+// ── THE CROSSING IS THE BOX'S (POS-354, 10-09) ───────────────────────────────
+//
+// The rehearsal's crossing step runs CROSSING, a list of the jobs the box runs:
+// postmark-ferry.service's ExecStart, then the keep tick's locked section
+// (deploy/office-keep.sh). On 10-07 it was written by hand, and by 10-09 the box
+// had moved to the store's mint and the office's ballot pass while the
+// rehearsal still ran the town's. This census reads both box files and holds
+// the list to them: a job the box adds, or one the rehearsal drops, is red here.
+//
+// THE CAN-FAIL FLIP: delete the `ballot` entry from CROSSING; the ferry census
+// goes red naming tools/ballot-pass-run.mjs.
+
+/** Every job a box shell text runs: office scripts as office-relative paths, the town's (run from the clone) as `town:`. */
+function jobsIn(text) {
+  const out = new Set();
+  for (const m of text.matchAll(/(?:\/usr\/bin\/node|\bnode|\/bin\/bash)\s+("?)(\/srv\/postmark-office\/)?([A-Za-z0-9_./-]+\.(?:mjs|sh))\1/g)) {
+    if (m[3].startsWith("$")) continue;
+    out.add(m[2] ? m[3] : `town:${m[3]}`);
+  }
+  return out;
+}
+const boxFile = (rel) => readFileSync(join(OFFICE, rel), "utf8");
+const crossingJobs = (phase) => new Set(CROSSING.filter((j) => j.phase === phase).map((j) => j.box));
+const diff = (a, b) => [...a].filter((x) => !b.has(x)).sort();
+
+test("the rehearsal's crossing runs every job postmark-ferry.service runs, and no other", () => {
+  const unit = boxFile("deploy/postmark-ferry.service");
+  const exec = unit.slice(unit.indexOf("ExecStart="), unit.indexOf("NoNewPrivileges"));
+  const box = jobsIn(exec);
+  assert.ok(box.size >= 10, `the census found only ${[...box].join(", ")} in the unit`);
+  const mine = crossingJobs("ferry");
+  assert.deepEqual(diff(box, mine), [], "the box's ferry runs jobs the rehearsal does not");
+  assert.deepEqual(diff(mine, box), [], "the rehearsal runs ferry jobs the box does not");
+});
+
+test("the rehearsal's tick runs every job the keep tick runs under its lock, and no other", () => {
+  const keep = boxFile("deploy/office-keep.sh");
+  const from = keep.indexOf("flock -w 300 9"), to = keep.indexOf("mint catch-up FAILED");
+  assert.ok(from > 0 && to > from, "the keep tick's locked section moved: re-anchor this census");
+  const box = jobsIn(keep.slice(from, to));
+  const mine = crossingJobs("keep");
+  assert.deepEqual(diff(box, mine), [], "the keep tick runs jobs the rehearsal does not");
+  assert.deepEqual(diff(mine, box), [], "the rehearsal runs tick jobs the keep tick does not");
+});
+
+test("both arms of the stamp switch are listed, so the census holds the whole unit (only the store arm runs: the preflight requires STAMP_LINES=store)", () => {
+  for (const name of ["mint", "quests", "tick-mint"]) {
+    const sides = CROSSING.filter((j) => j.name === name).map((j) => j.when).sort();
+    assert.deepEqual(sides, ["git", "store"], `${name} must have a store side and a git side`);
+  }
+});
+
+// ── THE SANDBOX ON THE CARRIED SHA (POS-366 part 3) ──────────────────────────
+//
+// The sandbox cannot run on the dev box (the carry omits devDependencies), so
+// the rehearsal's last step gates on CI's `stamp sandbox` check for the sha the
+// dev office was carried with. Every road to a verdict other than a completed
+// success is red, and the newest run is the one judged.
+//
+// THE CAN-FAIL FLIP: make sandboxProblems answer [] for any conclusion; "a
+// failed or missing run is red" goes red.
+
+const runsAt = (runs) => async () => ({ ok: true, status: 200, json: async () => ({ check_runs: runs }) });
+const run = (conclusion, started_at, extra = {}) => ({ name: SANDBOX_CHECK, status: "completed", conclusion, started_at, html_url: `https://ci.invalid/${started_at}`, head_sha: "abc1234ffff", ...extra });
+
+test("the sandbox verdict: the newest run of the named check is the one judged", async () => {
+  const v = await sandboxVerdictFromGitHub("abc1234", { fetchImpl: runsAt([run("failure", "2026-10-09T10:00:00Z"), run("success", "2026-10-09T12:00:00Z"), { ...run("success", "2026-10-09T13:00:00Z"), name: "office suite verdict" }]) });
+  assert.deepEqual(v, { runs: 2, not_run: 0, status: "completed", conclusion: "success", url: "https://ci.invalid/2026-10-09T12:00:00Z", head_sha: "abc1234ffff" });
+  assert.deepEqual(sandboxProblems("abc1234", v), []);
+});
+
+test("a failed, running or missing sandbox run is red, and so is a GitHub that did not answer", async () => {
+  // every red names the sha and the train carried, so the reader knows what to dispatch (Wright, 10-09)
+  const red = async (runs) => sandboxProblems("abc1234", await sandboxVerdictFromGitHub("abc1234", { fetchImpl: runsAt(runs) }), "train/2026-w42");
+  assert.match((await red([run("failure", "2026-10-09T12:00:00Z")]))[0], /on abc1234 \(train\/2026-w42\) concluded failure .* fix it on train\/2026-w42, re-carry/);
+  assert.match((await red([run(null, "2026-10-09T12:00:00Z", { status: "in_progress" })]))[0], /on abc1234 \(train\/2026-w42\) is in_progress .* wait for its verdict/);
+  assert.match((await red([]))[0], /no "stamp sandbox" run on abc1234 \(train\/2026-w42\): label the ship PR from train\/2026-w42 into main `stamp-sandbox`.*--ref train\/2026-w42`/);
+  const down = await sandboxVerdictFromGitHub("abc1234", { fetchImpl: async () => ({ ok: false, status: 403 }) });
+  assert.match(sandboxProblems("abc1234", down, "train/2026-w42")[0], /GitHub answered 403.*abc1234 \(train\/2026-w42\)/);
+  assert.match(sandboxProblems(null, {})[0], /names no carried sha/);
+});
+
+test("what was carried is release.json's sha and tag (the carry writes both), else the tree's HEAD and branch", () => {
+  const dir = mkdtempSync(join(tmpdir(), "dev-rehearsal-sha-"));
+  try {
+    writeFileSync(join(dir, "release.json"), JSON.stringify({ tag: "train/2026-w42", sha: "65c5e6d", target: "dev" }));
+    assert.deepEqual(carried(dir), { sha: "65c5e6d", ref: "train/2026-w42" });
+    assert.equal(carried(OFFICE).sha, execFileSync("git", ["-C", OFFICE, "rev-parse", "HEAD"], { encoding: "utf8" }).trim());
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a skipped or cancelled run never shadows a verdict, and alone it asks for a re-run (#453 review F3)", async () => {
+  // THE CAN-FAIL FLIP: drop the skipped/cancelled filter in sandboxVerdictFromGitHub; this goes red
+  const v = await sandboxVerdictFromGitHub("abc1234", { fetchImpl: runsAt([run("success", "2026-10-09T12:00:00Z"), run("skipped", "2026-10-09T13:00:00Z")]) });
+  assert.equal(v.conclusion, "success");
+  assert.equal(v.not_run, 1);
+  assert.deepEqual(sandboxProblems("abc1234", v, "train/2026-w42"), []);
+  const only = await sandboxVerdictFromGitHub("abc1234", { fetchImpl: runsAt([run("cancelled", "2026-10-09T13:00:00Z"), run("skipped", "2026-10-09T14:00:00Z")]) });
+  const [why] = sandboxProblems("abc1234", only, "train/2026-w42");
+  assert.match(why, /every "stamp sandbox" run on abc1234 \(train\/2026-w42\) was skipped or cancelled \(2\), so none judged the code: re-run the sandbox/);
+  assert.doesNotMatch(why, /a stamp event is red/);
 });

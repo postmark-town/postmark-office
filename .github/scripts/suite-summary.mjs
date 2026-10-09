@@ -16,7 +16,7 @@
 import { appendFileSync, existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { listTestFiles, readEvents, timingsOf, verdict } from "./suite-lib.mjs";
+import { TEST_TIMEOUT_MS, listTestFiles, readEvents, timingsOf, verdict } from "./suite-lib.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const KNOWN = join(ROOT, "test", "known-failures.json");
@@ -90,6 +90,13 @@ for (const [file, r] of Object.entries(results))
 md.push(`### Skipped, by file and reason (${t.skipped})`, "");
 for (const [k, n] of [...skipReasons].sort()) md.push(`- ${n} × ${k}`);
 md.push("");
+// a file running under its own declared cap is named with it (suite-lib.mjs § a file's own cap)
+const capped = Object.entries(results).filter(([, r]) => r.cap).sort(([a], [b]) => a.localeCompare(b));
+if (capped.length) {
+  md.push(`### Files under a declared cap (${capped.length}; the default is ${TEST_TIMEOUT_MS} ms)`, "");
+  for (const [f, r] of capped) md.push(`- ${r.cap.ms} ms${r.cap.clamped ? ` (declared ${r.cap.declared}, clamped)` : ""} · ran ${r.seconds} s · \`${f}\``);
+  md.push("");
+}
 const slow = Object.entries(results).sort((a, b) => b[1].seconds - a[1].seconds).slice(0, 10);
 md.push("### The ten slowest files", "");
 for (const [f, r] of slow) md.push(`- ${r.seconds} s · \`${f}\``);

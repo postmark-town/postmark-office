@@ -391,17 +391,31 @@ export function prepareTown(sb, { log = () => {} } = {}) {
       held++;
     }
   }
-  const ledgerPath = join(sb.town, LEDGER_REL);
-  const text = readFileSync(ledgerPath, "utf8");
-  const copy = resignLedger(text, sb.keyPem, sb.engine);
-  writeFileSync(ledgerPath, copy);
-  writeFileSync(join(sb.town, "tools", "stamp-pubkey.pem"), sb.pubPem);
-  const carried = carryRuledSignatures(sb.town, sb.engine.parseStampLedger(text), sb.engine.parseStampLedger(copy));
+  const { lines, carried } = resignTown(sb.town, sb.keyPem, sb.engine);
   git(sb.town, "add", "-A");
   git(sb.town, "commit", "-q", "-m", `sandbox: the ledger re-signed under a throwaway key; ${held} real outbox item(s) set aside`);
-  log(`setup commit: ${held} real outbox item(s) set aside, ${sb.engine.parseStampLedger(text).length} ledger lines re-signed` +
+  log(`setup commit: ${held} real outbox item(s) set aside, ${lines} ledger lines re-signed` +
     (carried.length ? `; ${carried.length} ruled exception(s) the town names by signature carried to the new signature (${carried.map((c) => `${c.file}:line ${c.line}`).join(", ")})` : ""));
   return { held, carried };
+}
+
+/**
+ * A TOWN CHECKOUT MOVED ONTO ANOTHER KEY, in its working tree (no commit): the
+ * ledger re-signed line by line (the seals do not move), the town's public key
+ * replaced by `keyPem`'s, and the ruled exceptions the town names by signature
+ * carried to the new signatures. The one re-sign the sandbox, the dev rehearsal's
+ * local stand-in and the dev box's freshen (tools/dev-ledger-resign.mjs) all use.
+ * Answers `{ lines, carried, pubPem }`.
+ */
+export function resignTown(town, keyPem, engine) {
+  const ledgerPath = join(town, LEDGER_REL);
+  const text = readFileSync(ledgerPath, "utf8");
+  const copy = resignLedger(text, keyPem, engine);
+  writeFileSync(ledgerPath, copy);
+  const pubPem = createPublicKey(keyPem).export({ type: "spki", format: "pem" });
+  writeFileSync(join(town, "tools", "stamp-pubkey.pem"), pubPem);
+  const carried = carryRuledSignatures(town, engine.parseStampLedger(text), engine.parseStampLedger(copy));
+  return { lines: engine.parseStampLedger(text).length, carried, pubPem };
 }
 
 /**

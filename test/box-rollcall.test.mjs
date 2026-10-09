@@ -1322,12 +1322,13 @@ test("FALSIFIER (k5): a root-owned file in either dev clone is ALARM-custody, NA
   }
 });
 
-// The freshen itself, run for real under bash with two stubs on the road: a
-// `flock` that drops its lock arguments and execs the command, and a `git` that
+// The freshen itself, run for real under bash with three stubs on the road: a
+// `flock` that drops its lock arguments and execs the command, a `git` that
 // logs every call and — when FRESHEN_FAIL names a verb — refuses that verb the
-// way the box did (Permission denied, exit 128). The script is the shipped
-// file, unedited; POSTMARK_DEV_ROOT / POSTMARK_DEV_FLOCK are the two seams it
-// declares, and the unit sets neither.
+// way the box did (Permission denied, exit 128), and a `node` that logs the
+// re-sign it was asked for (POS-354) and refuses it when FRESHEN_NODE_FAIL is
+// set. The script is the shipped file, unedited; POSTMARK_DEV_ROOT /
+// POSTMARK_DEV_FLOCK are the seams it declares, and the unit sets neither.
 //
 // THE CAN-FAIL FLIP: delete the `  set -euo pipefail` line INSIDE the bash -c
 // body of deploy/postmark-dev-freshen.sh. The two refusal tests below go red —
@@ -1338,7 +1339,7 @@ const posix = (p) => p.replaceAll("\\", "/");
 const bashProbe = spawnSync("bash", ["-c", "exit 0"], { encoding: "utf8" });
 const noBash = bashProbe.status === 0 ? false : "no bash on this host — the freshen is a bash script and cannot be run without one";
 
-function runFreshen(failVerb) {
+function runFreshen(failVerb, { nodeFails = false } = {}) {
   const dir = tempDir("pos192-freshen-");
   const bin = join(dir, "bin");
   mkdirSync(bin);
@@ -1359,20 +1360,33 @@ function runFreshen(failVerb) {
     'shift 4; exec "$@"',
     "",
   ].join("\n"), { mode: 0o755 });
+  const nodeLog = join(dir, "node.log");
+  writeFileSync(join(bin, "node"), [
+    "#!/usr/bin/env bash",
+    'echo "$*" >> "$FRESHEN_NODE_LOG"',
+    'if [ -n "${FRESHEN_NODE_FAIL:-}" ]; then echo "dev-ledger-resign: REFUSED, the key is prod\'s" >&2; exit 1; fi',
+    "exit 0",
+    "",
+  ].join("\n"), { mode: 0o755 });
   writeFileSync(log, "");
+  writeFileSync(nodeLog, "");
   // Windows keeps PATH under whatever case it was born with; write the one key.
   const env = { ...process.env };
   const pathKey = Object.keys(env).find((k) => k.toUpperCase() === "PATH") ?? "PATH";
   env[pathKey] = `${bin}${delimiter}${env[pathKey] ?? ""}`;
   Object.assign(env, {
     FRESHEN_LOG: posix(log),
+    FRESHEN_NODE_LOG: posix(nodeLog),
     POSTMARK_DEV_ROOT: "/srv/postmark-office-dev",
     POSTMARK_DEV_FLOCK: posix(join(bin, "flock")),
   });
   if (failVerb) env.FRESHEN_FAIL = failVerb; else delete env.FRESHEN_FAIL;
+  if (nodeFails) env.FRESHEN_NODE_FAIL = "1"; else delete env.FRESHEN_NODE_FAIL;
+  for (const k of ["POSTMARK_DEV_STAMP_KEY", "POSTMARK_PROD_PUBKEY"]) delete env[k]; // the box's defaults
   const r = spawnSync("bash", [posix(FRESHEN)], { encoding: "utf8", env });
   const calls = readFileSync(log, "utf8").split("\n").filter(Boolean);
-  return { status: r.status, stdout: r.stdout, stderr: r.stderr, calls };
+  const nodeCalls = readFileSync(nodeLog, "utf8").split("\n").filter(Boolean);
+  return { status: r.status, stdout: r.stdout, stderr: r.stderr, calls, nodeCalls };
 }
 
 const STOOD_BACK = /dev clones stood back on sandbox\/seed/;
@@ -1388,6 +1402,22 @@ test("the dev freshen, every step succeeding: exit 0, the stand-back line, all s
   ]);
   assert.ok(r.calls[2].startsWith("-C /srv/postmark-office-dev/world-clone reset"));
   assert.ok(r.calls[5].startsWith("-C /srv/postmark-office-dev/town-clone reset"));
+  // then the town clone moves onto dev's own key, refusing prod's by its PUBLIC half only (POS-354; #453 F2)
+  assert.deepEqual(r.nodeCalls, [
+    "/srv/postmark-office-dev/tools/dev-ledger-resign.mjs --town /srv/postmark-office-dev/town-clone " +
+    "--key /srv/postmark-office-dev/stamp-key.pem --not-key /srv/postmark-office/town-clone/tools/stamp-pubkey.pem --verify",
+  ]);
+});
+
+test("FALSIFIER (freshen): a refused re-sign (dev's key is prod's, or the verifier is red) exits nonzero with no stand-back line, after every reset ran", { skip: noBash }, () => {
+  // THE CAN-FAIL FLIP: drop the `node .../dev-ledger-resign.mjs` line from the
+  // freshen's bash -c body; this goes red (exit 0, the stand-back line printed).
+  const r = runFreshen(null, { nodeFails: true });
+  assert.equal(r.status, 1, "the re-sign's refusal must be the unit's exit code");
+  assert.doesNotMatch(r.stdout, STOOD_BACK);
+  assert.match(r.stderr, /REFUSED, the key is prod's/);
+  assert.equal(r.calls.length, 7, "the clones were stood back before the re-sign refused");
+  assert.equal(r.nodeCalls.length, 1);
 });
 
 test("FALSIFIER (freshen): a refused `git reset` exits nonzero with git's code and prints NO stand-back line", { skip: noBash }, () => {
@@ -1399,11 +1429,12 @@ test("FALSIFIER (freshen): a refused `git reset` exits nonzero with git's code a
   assert.ok(r.calls.at(-1).startsWith("-C /srv/postmark-office-dev/world-clone reset"), r.calls.join(" | "));
 });
 
-test("FALSIFIER (freshen): a refused draft-ref fetch, the LAST step, still exits nonzero with no stand-back line", { skip: noBash }, () => {
+test("FALSIFIER (freshen): a refused draft-ref fetch, the last git step, still exits nonzero with no stand-back line", { skip: noBash }, () => {
   const r = runFreshen("--prune");
   assert.equal(r.status, 128);
   assert.doesNotMatch(r.stdout, STOOD_BACK);
   assert.equal(r.calls.length, 7, "every step before the last one must have run");
+  assert.deepEqual(r.nodeCalls, [], "and the re-sign after it never ran");
 });
 
 // ── the list that must be empty (postmark#2594, ruled 2026-09-08) ───────────

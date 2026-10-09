@@ -36,7 +36,9 @@
 //   guard       the target is the dev office's store and is not world2_dev
 //   preflight   the office answers; the store holds every table this tree's
 //               migrations create; the office's flags read the store as prod's
-//               do; its pens sign with its own key; nothing it can reach pushes
+//               do (STAMP_LINES=store included); its pens sign with dev's own
+//               key, never prod's, and the town clone is on it; the store's
+//               stamp chain agrees with the clone; nothing it can reach pushes
 //               (TOWN_PUSH=0, GitHub stubbed)
 //   sign-in     the one seam that is not a door: a household key minted for a
 //               synthetic GitHub account, through the office's own key desk
@@ -48,21 +50,24 @@
 //               frozen gangway), the PR lands on this script's stub GitHub, its
 //               merge on the dev town clone, and the keeping tick's settle-pass binds it
 //   letters     POST /letters both ways; they wait in the store's town log
-//   crossing    the ferry's chain on the dev town clone under the town lock
-//               (drain, deliver, mint, verify, ballot, welcome), never pushed;
-//               then the town-index ingest. The house must mint as ONE.
+//   crossing    the box's crossing on the dev town clone, job for job
+//               (CROSSING: postmark-ferry.service, then the keep tick's locked
+//               section), never pushed; then the town-index ingest. The house
+//               must mint as ONE.
 //   claim       a parcel through POST /world/marks, put forward (stamps: 0)
 //   clearing    the candle closes the window as clearing_job, while the
 //               scheduled settlement waits for it (the box fires both at once)
 //   settle      settlement-auto.sh from the store, into a bare copy of the world
 //   bless       an annotated settlement tag on the copy, then settlements-backfill
 //   recovery    the clearing re-run refuses and moves nothing; a second claim
-//               settled BY HAND; POS-356's refused claim is PENDING until it lands
+//               settled BY HAND; a claim the clearing cannot file (the 10-04
+//               instance, planted) refuses alone while its window locks and crosses
+//   sandbox     CI's `stamp sandbox` check is GREEN on the sha carried to dev
 //
 // Every step's checks read the store: the store is the record (RULED 10-04), and
-// the 10-03 failures were each a file that disagreed with it. The one record the
-// store does not yet hold is the mint (POS-341), so the crossing compares the
-// store's balances against the town's ledger and counts the ledger's welcomes.
+// the 10-03 failures were each a file that disagreed with it. The mint's chain is
+// the store's with STAMP_LINES=store (POS-341), and the crossing still compares
+// the store's balances against the town's ledger and counts the ledger's welcomes.
 // A FINDING is a defect measured and named on every run that does not gate (a
 // ruling or another lane's fix is owed).
 //
@@ -95,6 +100,8 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { prodKeyRefusal, publicOf } from "./dev-ledger-resign.mjs";
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const OFFICE = resolve(HERE, "..");
 const importFrom = (path) => import(pathToFileURL(path).href);
@@ -104,6 +111,10 @@ export const PROD_DB = "world2_dev";
 export const DEFAULT_ENV_FILE = "/etc/postmark-office-dev.env";
 export const DEFAULT_ROLES_FILE = "/etc/postmark-dev-rehearsal.env";
 export const DEFAULT_OFFICE = "http://127.0.0.1:4381";
+/** PROD's signing key, where every office pen defaults to (src/ledger-pen.mjs). Dev's must not be it. */
+export const PROD_STAMP_KEY = "/srv/postmark-office/stamp-key.pem";
+/** PROD's PUBLIC key (its town clone's tools/stamp-pubkey.pem): what dev's key is compared with, so prod's private key is never read. */
+export const PROD_PUBKEY = "/srv/postmark-office/town-clone/tools/stamp-pubkey.pem";
 
 // ── the env files ────────────────────────────────────────────────────────────
 
@@ -164,6 +175,8 @@ export function storeGuard({ configuredUrl, urls, source }) {
 const git = (repo, ...args) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 }).trim();
 const gitQuiet = (repo, ...args) => spawnSync("git", ["-C", repo, ...args], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
 const tail = (s, n = 4) => String(s ?? "").trim().split("\n").filter(Boolean).slice(-n).join(" | ");
+/** A throw, named: its message and the frame it came from (a stack's tail is the caller's frames, not the cause). */
+const thrown = (e) => String(e?.stack ?? e).split("\n").filter(Boolean).slice(0, 2).map((l) => l.trim()).join(" ");
 
 /** One door call. Answers `{ status, body }`; a refusal is an answer, not a throw. */
 async function door(target, method, path, { key = null, body = undefined } = {}) {
@@ -267,7 +280,7 @@ export function githubStub({ owner, repo, branch = "main", townClone }) {
  * The rehearsal's target from the dev office's env file and the roles file.
  * Reads files only; connects to nothing. `office` is the dev office's base URL.
  */
-export function targetFromFiles({ envFile = DEFAULT_ENV_FILE, rolesFile = DEFAULT_ROLES_FILE, office = DEFAULT_OFFICE, officeRoot = OFFICE } = {}) {
+export function targetFromFiles({ envFile = DEFAULT_ENV_FILE, rolesFile = DEFAULT_ROLES_FILE, office = DEFAULT_OFFICE, officeRoot = OFFICE, prodPubKey = PROD_PUBKEY } = {}) {
   const env = parseEnvFile(readFileSync(envFile, "utf8"));
   const roles = existsSync(rolesFile) ? parseEnvFile(readFileSync(rolesFile, "utf8")) : {};
   return {
@@ -284,7 +297,9 @@ export function targetFromFiles({ envFile = DEFAULT_ENV_FILE, rolesFile = DEFAUL
     townClone: env.TOWN_CLONE ?? null,
     worldClone: env.WORLD_CLONE ?? null,
     // the key the office's own pens sign with (src/ledger-pen.mjs § DRAIN_KEY_PATH, the same default)
-    stampKey: env.STAMP_KEY ?? "/srv/postmark-office/stamp-key.pem",
+    stampKey: env.STAMP_KEY ?? PROD_STAMP_KEY,
+    // prod's public key, read only to prove dev's is not it (a missing one is red, never a skip)
+    prodPubKey,
   };
 }
 
@@ -336,6 +351,94 @@ export function treeTables(officeRoot = OFFICE) {
   return names;
 }
 
+// ── the crossing, as the box runs it ─────────────────────────────────────────
+//
+// A REHEARSAL MUST RUN THE PATH THE BOX RUNS. The first version of this step
+// (10-07) ran the town's own mint and ballot pass; by 10-09 the box's ferry had
+// moved to the store's mint behind STAMP_LINES (POS-341) and the office's
+// ballot pass (POS-349), so it rehearsed a chain prod no longer runs. This list
+// is postmark-ferry.service's ExecStart, job for job, then the keep tick's mint
+// block (deploy/office-keep.sh), with dev's clone, dev's key and nothing pushed.
+// test/dev-rehearsal.test.mjs reads both box files and holds this list to them,
+// so a job added to the box's crossing reds the rehearsal's own test until it is
+// added here.
+//
+// Each job: `name`; `box`, the path the box's file names (office-relative, or
+// `town:` for the town clone's); `when` ("store" or "git": one side of the
+// STAMP_LINES switch); `phase` ("ferry" or "keep"); `run(ctx)`; `commit`, the
+// message the box commits what the job wrote with; `nonFatal`, where the box
+// carries on past a refusal (`|| echo`).
+//
+// ONLY THE STORE SIDE RUNS (#453 review F10). The preflight requires
+// STAMP_LINES=store, so on a green preflight every `when: "git"` job is skipped.
+// They are listed so the census can hold this list to the whole unit, both arms
+// of its switch, not because the rehearsal exercises the town's own mint.
+
+const officeJob = (ctx, rel, args, opts) => ctx.locked([process.execPath, join(ctx.t.officeRoot, rel), ...args], opts);
+const townJob = (ctx, rel, args) => ctx.locked([process.execPath, join(ctx.t.townClone, rel), ...args], { cwd: ctx.t.townClone });
+
+export const CROSSING = [
+  { phase: "ferry", name: "drain", box: "tools/town-drain-run.mjs",
+    run: (ctx) => officeJob(ctx, "tools/town-drain-run.mjs", ["--clone", ctx.t.townClone, "--date", ctx.today, ...(ctx.useFlock ? [] : ["--unlocked"])]),
+    commit: (ctx) => `town-log: crossing ${ctx.today} (dev rehearsal ${ctx.run})` },
+  { phase: "ferry", name: "ferry", box: "town:tools/ferry.mjs",
+    run: (ctx) => townJob(ctx, "tools/ferry.mjs", ["--no-git", "--date", ctx.today]),
+    commit: (ctx) => `ferry: crossing ${ctx.today} (dev rehearsal ${ctx.run})` },
+  { phase: "ferry", name: "index-before-mint", box: "deploy/town-index-ingest.sh", when: "store", nonFatal: true,
+    run: (ctx) => ctx.ingest("world2/tools/town-index-ingest.mjs", ["--town-repo", ctx.t.townClone, "--sha", git(ctx.t.townClone, "rev-parse", "HEAD")]) },
+  { phase: "ferry", name: "mint", box: "world2/tools/stamp-mint-run.mjs", when: "store",
+    run: (ctx) => officeJob(ctx, "world2/tools/stamp-mint-run.mjs", ["--append", "--key", ctx.stampKey, "--clone", ctx.t.townClone]) },
+  { phase: "ferry", name: "mint", box: "town:tools/stamp-mint.mjs", when: "git",
+    run: (ctx) => townJob(ctx, "tools/stamp-mint.mjs", ["--append", "--key", ctx.stampKey]) }, // committed after the verify, as the box does
+  { phase: "ferry", name: "verify", box: "town:tools/stamp-verify.mjs",
+    run: (ctx) => townJob(ctx, "tools/stamp-verify.mjs", []), commit: "mint: crossing pass" },
+  { phase: "ferry", name: "ballot", box: "tools/ballot-pass-run.mjs",
+    run: (ctx) => officeJob(ctx, "tools/ballot-pass-run.mjs", ["--key", ctx.stampKey]) },
+  { phase: "ferry", name: "verify-ballot", box: "town:tools/stamp-verify.mjs",
+    run: (ctx) => townJob(ctx, "tools/stamp-verify.mjs", []), commit: "ballot: crossing pass" },
+  { phase: "ferry", name: "lines-sync", box: "world2/tools/stamp-lines.mjs", when: "store",
+    run: (ctx) => officeJob(ctx, "world2/tools/stamp-lines.mjs", ["--sync", "--clone", ctx.t.townClone]) },
+  { phase: "ferry", name: "quests", box: "world2/tools/quest-snapshot-run.mjs", when: "store",
+    run: (ctx) => officeJob(ctx, "world2/tools/quest-snapshot-run.mjs", ["--clone", ctx.t.townClone]), commit: "quests: crossing leaderboard" },
+  { phase: "ferry", name: "quests", box: "town:tools/quest-progress.mjs", when: "git",
+    run: (ctx) => townJob(ctx, "tools/quest-progress.mjs", ["--snapshot"]), commit: "quests: crossing leaderboard" },
+  { phase: "ferry", name: "seal", box: "town:PROJECTS/the-town-seal/seal.mjs",
+    run: (ctx) => townJob(ctx, "PROJECTS/the-town-seal/seal.mjs", []) },
+  { phase: "ferry", name: "seal-verify", box: "town:PROJECTS/the-town-seal/verify.mjs",
+    run: (ctx) => townJob(ctx, "PROJECTS/the-town-seal/verify.mjs", []), commit: "seal: re-seal at the crossing" },
+  // the keep tick under its lock: the store's registry for the town's tools (deploy/registry-file.mjs, never
+  // the printouts), the binds, the two store-to-file drains, then the mint block
+  { phase: "keep", name: "registry-file", box: "deploy/registry-file.mjs",
+    run: (ctx) => officeJob(ctx, "deploy/registry-file.mjs", [ctx.registryFile]) },
+  { phase: "keep", name: "settle-pass", box: "deploy/settle-pass.mjs", nonFatal: true,
+    run: (ctx) => {
+      const cursor = join(ctx.scratch, "tick-settle.cursor");
+      if (!existsSync(cursor)) writeFileSync(cursor, new Date(Date.now() - 3600_000).toISOString() + "\n");
+      return officeJob(ctx, "deploy/settle-pass.mjs", ["--town", ctx.t.townClone, "--cursor", cursor]);
+    } },
+  { phase: "keep", name: "standing-drain", box: "tools/standing-drain.mjs", nonFatal: true,
+    run: (ctx) => officeJob(ctx, "tools/standing-drain.mjs", ["--apply", "--clone", ctx.t.townClone]) },
+  { phase: "keep", name: "gangway-drain", box: "tools/gangway-drain.mjs", nonFatal: true,
+    run: (ctx) => officeJob(ctx, "tools/gangway-drain.mjs", ["--apply", "--clone", ctx.t.townClone]) },
+  // the arrival check: the box skips the mint on a red arrival; here a red ledger is red
+  { phase: "keep", name: "arrival-verify", box: "town:tools/stamp-verify.mjs",
+    run: (ctx) => townJob(ctx, "tools/stamp-verify.mjs", ["--registry", ctx.registryFile]) },
+  { phase: "keep", name: "tick-mint", box: "world2/tools/stamp-mint-run.mjs", when: "store",
+    run: (ctx) => officeJob(ctx, "world2/tools/stamp-mint-run.mjs", ["--append", "--key", ctx.stampKey, "--clone", ctx.t.townClone, "--message", "mint: tick catch-up pass"]) },
+  { phase: "keep", name: "tick-mint", box: "town:tools/stamp-mint.mjs", when: "git",
+    run: (ctx) => townJob(ctx, "tools/stamp-mint.mjs", ["--append", "--key", ctx.stampKey]) },
+  { phase: "keep", name: "welcome", box: "deploy/welcome-pass.mjs", nonFatal: true,
+    run: (ctx) => officeJob(ctx, "deploy/welcome-pass.mjs", ["--town", ctx.t.townClone, "--key", ctx.stampKey, "--date", ctx.today]) },
+  { phase: "keep", name: "bug-stages", box: "tools/bug-stage-plan.mjs", nonFatal: true,
+    run: (ctx) => officeJob(ctx, "tools/bug-stage-plan.mjs", ["--town", ctx.t.townClone, "--apply", "--quiet", "--key", ctx.stampKey]) },
+  { phase: "keep", name: "ballots-in", box: "tools/ballots-backfill.mjs", nonFatal: true,
+    run: (ctx) => officeJob(ctx, "tools/ballots-backfill.mjs", ["--town", ctx.t.townClone, "--hand", "keemin", "--apply", "--quiet"]) },
+  { phase: "keep", name: "tick-verify", box: "town:tools/stamp-verify.mjs",
+    run: (ctx) => townJob(ctx, "tools/stamp-verify.mjs", ["--registry", ctx.registryFile]), commit: "mint: tick pass (welcome, bug stages)" },
+  { phase: "keep", name: "tick-lines-sync", box: "world2/tools/stamp-lines.mjs", when: "store",
+    run: (ctx) => officeJob(ctx, "world2/tools/stamp-lines.mjs", ["--sync", "--clone", ctx.t.townClone]) },
+];
+
 // ── the plan ─────────────────────────────────────────────────────────────────
 //
 // Each step: `id`, `title`, `run(ctx)` (the act, through a door or the job the
@@ -359,11 +462,11 @@ export function plan() {
         const missing = [...treeTables(ctx.t.officeRoot)].filter((n) => !have.has(n)).sort();
         if (missing.length) p.push(`the store lags this tree's migrations: ${missing.join(", ")} missing (apply them to ${ctx.db} first)`);
         const e = ctx.t.env;
-        // The flags prod reads the store with (/etc/postmark-office.env, measured 2026-10-07).
-        for (const [k, v] of [["TOWN_INDEX_READS", "store"], ["OFFICE_PAPERWORK_STORE", "1"], ["STATE_LOG_SOURCE", "store"], ["WORLD2_PG", "1"], ["TOWN_SINGLE_LOG", "1"], ["WORLD_SINGLE_LOG", "1"]])
-          if (e[k] !== v) p.push(`the dev office runs without ${k}=${v} (prod has it): a rehearsal on dev would not run the path the box runs`);
-        if (!e.STAMP_KEY) p.push("the dev office sets no STAMP_KEY, so its pens sign with PROD's key file (/srv/postmark-office/stamp-key.pem, src/ledger-pen.mjs); set it to the dev root's own key");
-        if (!existsSync(ctx.t.stampKey)) p.push(`no stamp key at ${ctx.t.stampKey}: the crossing cannot mint`);
+        // The flags prod reads the store with (/etc/postmark-office.env, measured 2026-10-07), and
+        // STAMP_LINES=store, which the w42 ship sets on prod (POS-341): the rehearsal runs the next tag's path.
+        for (const [k, v] of [["TOWN_INDEX_READS", "store"], ["OFFICE_PAPERWORK_STORE", "1"], ["STATE_LOG_SOURCE", "store"], ["WORLD2_PG", "1"], ["TOWN_SINGLE_LOG", "1"], ["WORLD_SINGLE_LOG", "1"], ["STAMP_LINES", "store"]])
+          if (e[k] !== v) p.push(`the dev office runs without ${k}=${v} (prod has it${k === "STAMP_LINES" ? " from the w42 ship" : ""}): a rehearsal on dev would not run the path the box runs`);
+        p.push(...(await keyProblems(ctx)));
         if (e.TOWN_PUSH !== "0") p.push(`the dev office's TOWN_PUSH is ${e.TOWN_PUSH ?? "unset"}, not 0: its pen could push the real town`);
         if (!ctx.stubPort) p.push(`the dev office's GITHUB_API_URL (${e.GITHUB_API_URL ?? "unset"}) is not a loopback address this script can stub: the join road would open a real PR on ${e.POSTMARK_TOWN_REPO ?? "the town repo"}`);
         if (!ctx.t.townClone || !existsSync(join(ctx.t.townClone, ".git"))) p.push(`no town clone at ${ctx.t.townClone}`);
@@ -447,7 +550,7 @@ export function plan() {
         // The keeping tick's bind (deploy/office-keep.sh runs it inside the town lock).
         const cursor = join(ctx.scratch, "settle-pass.cursor");
         writeFileSync(cursor, new Date(Date.now() - 3600_000).toISOString() + "\n");
-        const bind = ctx.job("deploy/settle-pass.mjs", ["--town", ctx.t.townClone, "--cursor", cursor]);
+        const bind = await ctx.job("deploy/settle-pass.mjs", ["--town", ctx.t.townClone, "--cursor", cursor]);
         return { asked, road: `join PR #${pr.number}, merged, bound by settle-pass`, pr: pr.number, files: files.map((f) => f.path), bind };
       },
       async check(ctx, r, rec) {
@@ -485,7 +588,7 @@ export function plan() {
         const harbor = out.filter((r) => r.status === 403 && /harbor/.test(r.body?.defect ?? "")).length;
         if (harbor === out.length) {
           ctx.findings.push(`letters: a house the declaration door answered "settled: true" was refused mail as a harbor act (${harbor}/${out.length} letters, 403 "${out[0].body.defect}") until the town-index ingest ran; on the box that is up to 15 minutes after joining`);
-          const ing = ctx.ingest("world2/tools/town-index-ingest.mjs", ["--town-repo", ctx.t.townClone, "--sha", git(ctx.t.townClone, "rev-parse", "HEAD")]);
+          const ing = await ctx.ingest("world2/tools/town-index-ingest.mjs", ["--town-repo", ctx.t.townClone, "--sha", git(ctx.t.townClone, "rev-parse", "HEAD")]);
           if (ing.code !== 0) return { out, ingest: ing };
           await new Promise((ok) => setTimeout(ok, 6_000)); // the office's reload poll (OFFICE_RELOAD_POLL_MS, 5 s)
           out = await send();
@@ -507,32 +610,35 @@ export function plan() {
     },
     {
       id: "crossing",
-      title: "the ferry's chain on the dev town clone (drain, deliver, mint, verify, ballot, the keep tick's welcome), then the town-index ingest into the store",
+      title: "the box's crossing on the dev town clone, job for job (postmark-ferry.service, then the keep tick's mint block), then the town-index ingest into the store",
       async run(ctx) {
-        const date = ctx.today;
         const steps = [];
-        const town = (tool, args) => ctx.locked([process.execPath, join(ctx.t.townClone, "tools", tool), ...args], { cwd: ctx.t.townClone });
-        const commit = (msg) => ctx.commitTown(msg);
-        steps.push(["drain", ctx.locked([process.execPath, join(ctx.t.officeRoot, "tools", "town-drain-run.mjs"), "--clone", ctx.t.townClone, "--date", date, ...(ctx.useFlock ? [] : ["--unlocked"])])]);
-        commit(`town-log: crossing ${date} (dev rehearsal ${ctx.run})`);
-        steps.push(["ferry", town("ferry.mjs", ["--no-git", "--date", date])]);
-        commit(`ferry: crossing ${date} (dev rehearsal ${ctx.run})`);
-        steps.push(["mint", town("stamp-mint.mjs", ["--append", "--key", ctx.stampKey])]);
-        commit("mint: crossing pass");
-        steps.push(["verify", town("stamp-verify.mjs", [])]);
-        steps.push(["ballot", town("ballot-pass.mjs", ["--key", ctx.stampKey, "--date", date])]);
-        commit("ballot: crossing pass");
-        steps.push(["welcome", ctx.locked([process.execPath, join(ctx.t.officeRoot, "deploy", "welcome-pass.mjs"), "--town", ctx.t.townClone, "--key", ctx.stampKey, "--date", date])]);
-        commit("mint: tick catch-up pass");
-        steps.push(["verify-after", town("stamp-verify.mjs", [])]);
+        for (const job of CROSSING) {
+          if (job.when && job.when !== (ctx.storeMint ? "store" : "git")) continue;
+          const r = await job.run(ctx);
+          steps.push([job.name, r, job]);
+          if (r.code !== 0 && !job.nonFatal) break; // the unit's `&&`: the first refusal stops the chain
+          if (job.commit) ctx.commitTown(typeof job.commit === "function" ? job.commit(ctx) : job.commit);
+        }
         // the store's town index catches up to the clone (on the box: postmark-town-index.service, every 15 min)
-        steps.push(["index", ctx.ingest("world2/tools/town-index-ingest.mjs", ["--town-repo", ctx.t.townClone, "--sha", git(ctx.t.townClone, "rev-parse", "HEAD")])]);
+        if (steps.every(([, r, job]) => r.code === 0 || job.nonFatal))
+          steps.push(["index", await ctx.ingest("world2/tools/town-index-ingest.mjs", ["--town-repo", ctx.t.townClone, "--sha", git(ctx.t.townClone, "rev-parse", "HEAD")]), {}]);
         return steps;
       },
       async check(ctx, steps, rec) {
         const p = [];
-        for (const [name, r] of steps) if (r.code !== 0) p.push(`${name} exited ${r.code}: ${tail(r.out)}`);
+        for (const [name, r, job] of steps) {
+          if (r.code === 0) continue;
+          if (job.nonFatal) rec.notes.push(`${name} exited ${r.code} (the box runs it non-fatal): ${tail(r.out, 6)}`);
+          else p.push(`${name} exited ${r.code}: ${tail(r.out)}`);
+        }
         if (p.length) return p;
+        rec.notes.push(`the chain: ${steps.map(([name]) => name).join(" → ")} (${ctx.storeMint ? "STAMP_LINES=store: the store's mint" : "the town's own --append"})`);
+        if (ctx.storeMint) {
+          // the store's chain and its export agree, line for line (the switch's own verifier)
+          const v = await ctx.job("world2/tools/stamp-lines.mjs", ["--verify", "--clone", ctx.t.townClone]);
+          if (v.code !== 0) p.push(`stamp-lines --verify after the crossing exited ${v.code}: ${tail(v.out)}`);
+        }
         const delivered = await ctx.s.q("office_api", "SELECT id, from_h, to_h FROM town_letters WHERE from_h = ANY($1) AND delivered_at IS NOT NULL", [[ctx.who.a, ctx.who.b]]);
         if (delivered.length < 2) p.push(`the store reads ${delivered.length} of the rehearsal's 2 letters as delivered after the crossing`);
         const ashore = await ctx.s.q("office_api", "SELECT handle FROM town_residents WHERE handle = ANY($1)", [[ctx.who.a, ctx.who.b]]);
@@ -685,7 +791,7 @@ export function plan() {
         } });
         if (claim.status >= 300 || claim.body?.error) return { claim };
         await ctx.s.q("clearing_job", "UPDATE windows SET closes_at = date_trunc('second', now()) WHERE id = $1 AND status = 'open' AND closes_at > now()", [ctx.window2]);
-        const clearing = ctx.clearing(ctx.window2);
+        const clearing = await ctx.clearing(ctx.window2);
         if (clearing.code !== 0) return { claim, clearing };
         return { claim, clearing, settle: await ctx.settlement({ byHand: true }) };
       },
@@ -697,10 +803,196 @@ export function plan() {
     },
     {
       id: "refused-alone",
-      title: "recovery: a refused claim refuses only itself, and the rest of its window crosses",
-      pending: "POS-356 (a refused claim refuses only itself) has not landed on this train; this step is written when it does",
+      title: "recovery: a claim the clearing cannot file refuses only itself (POS-356), and the rest of its window locks and crosses",
+      // THE 10-04 INSTANCE, PLANTED. Window 228 held ten lawful claims and one
+      // from a claimant the store's roll did not name; the clearing threw and the
+      // whole window waited a night. No door on this train can let that claim in
+      // (the mark door files under the acting handle's house, and no door removes
+      // a resident), so the rehearsal writes it the way the 10-04 door did: the
+      // door's own pen (office_api) puts a copy of a lawful door claim on the
+      // docket under a claimant the roll does not carry. Then the candle runs as
+      // the box runs it, and the crossing follows.
+      async run(ctx) {
+        ctx.window3 = ctx.window2 + 1;
+        ctx.mark3 = `rh-${ctx.run}-lamp`;
+        ctx.ghost = `rh-${ctx.run}-gone`;
+        const claim = await door(ctx.t, "POST", "/world/marks", { key: ctx.key, body: {
+          by: ctx.who.a, slug: ctx.mark3, kind: "sited", at: ctx.parcelAt, extent: { w: 2, h: 2 }, stamps: 0, body: `A lamp on the rehearsal's own ground (POS-354, run ${ctx.run}).`,
+        } });
+        if (claim.status >= 300 || claim.body?.error) return { claim };
+        const [good] = await ctx.s.q("clearing_job", "SELECT id::text, window_id FROM claims WHERE slug = $1 AND claimant = $2 AND status = 'pending'", [`${ctx.who.a}/${ctx.mark3}`, ctx.who.a]);
+        if (!good) return { claim, setup: `the door answered ${claim.status} and the store holds no pending claim for ${ctx.mark3}` };
+        if (Number(good.window_id) !== ctx.window3) return { claim, setup: `the claim sits in window ${good.window_id}, not the open ${ctx.window3}` };
+        ctx.goodClaim = good.id;
+        ctx.ghostSlug = `${ctx.ghost}/${ctx.mark3}`;
+        // every column the door wrote, copied, but the claimant and the name
+        const cols = (await ctx.s.q("office_api", "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'claims' AND column_name <> 'id' AND is_generated = 'NEVER' AND is_identity = 'NO' ORDER BY ordinal_position")).map((r) => r.column_name);
+        // ITS OWN GROUND (#453 review F8): the 10-04 claim was an ordinary separate claim, so the
+        // copy moves ten metres east (geometry's at.x and the bbox) and is submitted now, and the
+        // step tests only "unfileable refuses alone", never an overlap or a tie on time
+        const named = "CASE WHEN geometry ? 'slug' THEN jsonb_set(geometry, '{slug}', to_jsonb($3::text)) ELSE geometry END";
+        const pick = cols.map((c) => c === "claimant" ? "$2::text" : c === "slug" ? "$3::text"
+          : c === "geometry" ? `CASE WHEN jsonb_typeof(geometry #> '{at,x}') = 'number' THEN jsonb_set(${named}, '{at,x}', to_jsonb((geometry #>> '{at,x}')::numeric + 10)) ELSE ${named} END`
+          : c === "bbox" ? "CASE WHEN bbox IS NULL THEN NULL ELSE bbox + point(10, 0) END"
+          : c === "submitted_at" || c === "created_at" ? "now()"
+          : `"${c}"`);
+        const [planted] = await ctx.s.q("office_api", `INSERT INTO claims (${cols.map((c) => `"${c}"`).join(", ")}) SELECT ${pick.join(", ")} FROM claims WHERE id = $1 RETURNING id::text`, [good.id, ctx.ghost, ctx.ghostSlug]);
+        ctx.plantedClaim = planted.id;
+        const houses = await ctx.s.q("office_api", "SELECT slug FROM households WHERE $1 = ANY(residents)", [ctx.ghost]);
+        if (houses.length) return { claim, setup: `the planted claimant ${ctx.ghost} stands in ${houses[0].slug}: the instance did not plant` };
+        // the box's order: the scheduled settlement starts first and waits for the candle
+        ctx.settling = ctx.settlement();
+        await new Promise((ok) => setTimeout(ok, 5_000));
+        await ctx.s.q("clearing_job", "UPDATE windows SET closes_at = date_trunc('second', now()) WHERE id = $1 AND status = 'open' AND closes_at > now()", [ctx.window3]);
+        const clearing = await ctx.clearing(ctx.window3);
+        const settle = await ctx.settling;
+        ctx.settling = null;
+        return { claim, clearing, settle };
+      },
+      async check(ctx, r, rec) {
+        if (r.claim.status >= 300 || r.claim.body?.error) return [`the lawful claim: POST /world/marks answered ${said(r.claim)}`];
+        if (r.setup) return [r.setup];
+        if (r.clearing.code !== 0) return [`clearing-job --window ${ctx.window3} exited ${r.clearing.code} with a claim it could not file in the docket (the 10-04 failure: one claim held the window): ${tail(r.clearing.out)}`];
+        const p = [];
+        const rows = await ctx.s.q("clearing_job", "SELECT id::text, status, refusal_check FROM claims WHERE id::text = ANY($1::text[])", [[ctx.goodClaim, ctx.plantedClaim]]);
+        const planted = rows.find((x) => x.id === ctx.plantedClaim), good = rows.find((x) => x.id === ctx.goodClaim);
+        if (planted?.status !== "refused") p.push(`the planted claim reads ${planted?.status ?? "missing"}, not refused`);
+        else if (!/^unfileable: no such household stands in the town for /.test(planted.refusal_check ?? "")) p.push(`the planted claim was refused for "${planted.refusal_check}", not as unfileable (no house on the roll)`);
+        if (good?.status !== "locked") p.push(`the lawful claim beside it reads ${good?.status ?? "missing"}${good?.refusal_check ? ` (${good.refusal_check})` : ""}, not locked: one claim held another`);
+        const [w] = await ctx.s.q("office_api", "SELECT status, receipts FROM windows WHERE id = $1", [ctx.window3]);
+        if (w?.status !== "closed") p.push(`window ${ctx.window3} reads ${w?.status ?? "missing"} after the clearing, not closed`);
+        const unfiled = (w?.receipts?.unfileable ?? []).map((u) => u.slug);
+        if (JSON.stringify(unfiled) !== JSON.stringify([ctx.ghostSlug])) p.push(`the window's receipt names ${JSON.stringify(unfiled)} unfileable, not [${ctx.ghostSlug}]`);
+        if (!(await ctx.s.q("office_api", "SELECT 1 FROM windows WHERE id = $1 AND status = 'open'", [ctx.window3 + 1])).length) p.push(`the clearing left no open window ${ctx.window3 + 1}: the candle went out`);
+        const marks = await ctx.s.q("clearing_job", "SELECT slug FROM marks WHERE slug = ANY($1)", [[`${ctx.who.a}/${ctx.mark3}`, ctx.ghostSlug]]);
+        if (marks.map((m) => m.slug).join() !== `${ctx.who.a}/${ctx.mark3}`) p.push(`the store's marks hold ${JSON.stringify(marks.map((m) => m.slug))}, not the lawful mark alone`);
+        if (p.length) return p;
+        rec.notes.push(`refused alone: ${planted.refusal_check.slice(0, 160)}`);
+        const crossed = await settled(ctx, r.settle, { byHand: false, window: ctx.window3, mark: ctx.mark3 });
+        if (!crossed.length) {
+          const head = git(ctx.worldBare, "rev-parse", "main");
+          if (git(ctx.worldBare, "ls-tree", "-r", "--name-only", head, "--", "WORLD/marks").split("\n").some((f) => f.includes(`/${ctx.ghost}/`)))
+            crossed.push(`the copy's main carries a file for the refused claimant ${ctx.ghost}`);
+        }
+        return crossed;
+      },
+    },
+    {
+      id: "stamp-sandbox",
+      title: "the stamp sandbox is GREEN on the carried sha (CI's `stamp sandbox` check, POS-366): every stamp event and the store's clearing, on a throwaway store and ledger",
+      async run(ctx) {
+        const { sha, ref } = carried(ctx.t.officeRoot);
+        return { sha, ref, verdict: sha ? await (ctx.t.sandboxVerdict ?? sandboxVerdictFromGitHub)(sha) : null };
+      },
+      async check(ctx, r, rec) {
+        const p = sandboxProblems(r.sha, r.verdict ?? {}, r.ref);
+        // THE MERGE-REF GAP, named (#453 review F3): a PR's sandbox run checks out the PR's merge
+        // ref (refs/pull/N/merge, main merged into the train) and reports on the train's tip, so a
+        // green here attests main+train, not exactly the carried tree; a hotfix on main the train
+        // lacks is in what was tested and not in what dev runs
+        if (!p.length) rec.notes.push(`${SANDBOX_CHECK}: success on ${r.verdict.head_sha ?? r.sha} (${r.ref}; ${r.verdict.url}). A PR's run tests its merge ref (main merged into ${r.ref ?? "the train"}), not exactly the carried tree`);
+        return p;
+      },
     },
   ];
+}
+
+/**
+ * DEV SIGNS WITH ITS OWN KEY (POS-354, Darko 2026-10-07). Each fact read, none
+ * printed: the dev env names a STAMP_KEY and it is a key; its public half is
+ * not prod's (on 10-07 the dev root's key was a byte-identical copy of prod's);
+ * and the dev town clone's tools/stamp-pubkey.pem is that public half (the
+ * freshen's re-sign put it there), so every line dev's pens sign verifies. With
+ * STAMP_LINES=store, also: the store's chain agrees with the clone's export. A
+ * freshen stands the clone back on the seed and leaves the store's lines past
+ * it, and every stamped write then refuses; the dev reset trims them
+ * (deploy/DEPLOY.md § The dev rehearsal).
+ */
+async function keyProblems(ctx) {
+  const t = ctx.t;
+  if (!t.env.STAMP_KEY) return ["the dev office sets no STAMP_KEY, so its pens sign with PROD's key file (/srv/postmark-office/stamp-key.pem, src/ledger-pen.mjs); set it to the dev root's own key"];
+  if (!existsSync(t.stampKey)) return [`no stamp key at ${t.stampKey}: the crossing cannot mint`];
+  let pub;
+  try { pub = publicOf(readFileSync(t.stampKey, "utf8")); }
+  catch (e) { return [`the dev key at ${t.stampKey} could not be read as a key (${e.code ?? e.message})`]; }
+  const p = [];
+  // prod's PUBLIC half only, never its private key (#453 review, F2): the dev clone's seed
+  // pubkey, and the prod public key the target names; either one unreadable is red, never a skip
+  const prod = t.townClone ? prodKeyRefusal(pub, { town: t.townClone, notKey: t.prodPubKey ? { path: t.prodPubKey } : null }) : "no dev town clone to read the seed's public key from";
+  if (prod) p.push(`dev's STAMP_KEY (${t.stampKey}): ${prod}`);
+  const pubPath = t.townClone ? join(t.townClone, "tools", "stamp-pubkey.pem") : null;
+  const installed = pubPath && existsSync(pubPath) ? readFileSync(pubPath, "utf8").replace(/\r\n/g, "\n") : null;
+  if (installed !== pub) p.push(`the dev town clone's tools/stamp-pubkey.pem is not the public half of dev's STAMP_KEY: the clone is not on dev's key, so every line dev's pens sign fails the town's verifier (the freshen moves it: node tools/dev-ledger-resign.mjs --town ${t.townClone} --key ${t.stampKey} --not-key ${t.prodPubKey} --verify)`);
+  if (ctx.storeMint && !p.length) {
+    const v = await ctx.job("world2/tools/stamp-lines.mjs", ["--verify", "--clone", t.townClone]);
+    if (v.code !== 0) p.push(`the store's stamp chain and the dev clone's ledger disagree (stamp-lines --verify exited ${v.code}: ${tail(v.out, 3)}): before a rehearsal the store's lines are trimmed to the clone and synced (deploy/DEPLOY.md § The dev rehearsal)`);
+  }
+  return p;
+}
+
+// ── the stamp sandbox, on the carried sha ────────────────────────────────────
+//
+// POS-366: the sandbox runs as part of this rehearsal on every train. It cannot
+// run ON the dev box: the carry installs `npm ci --omit=dev`
+// (deploy/remote-deploy.sh), so its store (the embedded-postgres devDependency)
+// is not there, and a 10-40 minute run would share prod's box. So it runs where
+// every stamp-touching PR's run already does, CI's `stamp sandbox` check, on the
+// exact sha carried to dev, and this step gates on that check's verdict: no run,
+// a run still going, or any conclusion but success is RED.
+
+export const SANDBOX_CHECK = "stamp sandbox";
+
+/**
+ * What the dev office was carried with: `{ sha, ref }` from its release.json
+ * (the carry writes `tag`, the ref it carried, e.g. train/2026-w42, and `sha`),
+ * else the tree's own HEAD and branch. Either may be null.
+ */
+export function carried(officeRoot) {
+  try {
+    const r = JSON.parse(readFileSync(join(officeRoot, "release.json"), "utf8"));
+    if (r?.sha) return { sha: String(r.sha), ref: r.tag ? String(r.tag) : null };
+  } catch { /* not a carried tree */ }
+  const g = gitQuiet(officeRoot, "rev-parse", "HEAD");
+  const b = gitQuiet(officeRoot, "symbolic-ref", "--short", "-q", "HEAD");
+  return { sha: g.status === 0 ? g.stdout.trim() : null, ref: b.status === 0 ? b.stdout.trim() : null };
+}
+
+/**
+ * The newest `stamp sandbox` check run on `sha`, from GitHub's public API (read
+ * only, no token: the office repo is public). `{ runs, status, conclusion, url,
+ * head_sha }`, or `{ error }` when GitHub did not answer.
+ */
+export async function sandboxVerdictFromGitHub(sha, { api = "https://api.github.com", repo = "postmark-town/postmark-office", fetchImpl = fetch } = {}) {
+  let r;
+  try {
+    r = await fetchImpl(`${api}/repos/${repo}/commits/${encodeURIComponent(sha)}/check-runs?check_name=${encodeURIComponent(SANDBOX_CHECK)}&per_page=100`,
+      { headers: { accept: "application/vnd.github+json", "user-agent": "postmark-dev-rehearsal" }, signal: AbortSignal.timeout(30_000) });
+  } catch (e) { return { error: `GitHub's check runs for ${sha} could not be read: ${e.message}` }; }
+  if (!r.ok) return { error: `GitHub answered ${r.status} for ${sha}'s check runs` };
+  const all = ((await r.json()).check_runs ?? []).filter((c) => c.name === SANDBOX_CHECK);
+  // A skipped or cancelled run judged nothing (#453 review F3): a later `labeled` event for
+  // another label cancels the running sandbox and skips its own job, and the newest run
+  // would otherwise shadow a real verdict. They are counted, never chosen.
+  const NOT_RUN = new Set(["skipped", "cancelled"]);
+  const runs = all.filter((c) => !NOT_RUN.has(c.conclusion));
+  const newest = runs.sort((a, b) => String(b.started_at ?? "").localeCompare(String(a.started_at ?? "")))[0] ?? null;
+  return { runs: runs.length, not_run: all.length - runs.length, status: newest?.status ?? null, conclusion: newest?.conclusion ?? null, url: newest?.html_url ?? null, head_sha: newest?.head_sha ?? null };
+}
+
+/**
+ * The sandbox step's verdict, as problems. Every red names the sha and the ref
+ * carried (Wright, 10-09), so whoever reads it knows exactly what to dispatch.
+ */
+export function sandboxProblems(sha, v, ref = null) {
+  if (!sha) return ["the dev office names no carried sha (no release.json, not a git checkout): the sandbox's verdict cannot be looked up"];
+  const at = `${sha} (${ref ?? "the ref carried is unnamed: read release.json"})`;
+  const train = ref ?? "<the train carried>";
+  if (v.error) return [`${v.error}: the sandbox's verdict on ${at} is unknown, so this step is red until it can be read`];
+  if (!v.runs && v.not_run) return [`every "${SANDBOX_CHECK}" run on ${at} was skipped or cancelled (${v.not_run}), so none judged the code: re-run the sandbox (re-label the ship PR from ${train} \`stamp-sandbox\`, or \`gh run rerun\` its run), then run this step again`];
+  if (!v.runs) return [`no "${SANDBOX_CHECK}" run on ${at}: label the ship PR from ${train} into main \`stamp-sandbox\` (its runs report on ${train}'s tip), or once sandbox.yml is on main, \`gh workflow run sandbox.yml -R postmark-town/postmark-office --ref ${train}\`; then run this step again`];
+  if (v.status !== "completed") return [`the "${SANDBOX_CHECK}" run on ${at} is ${v.status} (${v.url}): wait for its verdict, then run this step again`];
+  if (v.conclusion !== "success") return [`the "${SANDBOX_CHECK}" run on ${at} concluded ${v.conclusion} (${v.url}): a stamp event is red on the code carried to dev; fix it on ${train}, re-carry, and run the rehearsal again`];
+  return [];
 }
 
 /** The store facts a re-run must not move: the window, its claims, the marks. */
@@ -787,9 +1079,23 @@ export async function runRehearsal(t, { only = null, keep = false, log = () => {
       job(rel, args = [], { extraEnv = {}, cwd = t.officeRoot } = {}) {
         return ctx.spawn([process.execPath, join(t.officeRoot, rel), ...args], { extraEnv, cwd });
       },
+      /**
+       * A child job, ASYNCHRONOUSLY. The GitHub stub lives in this process, so a
+       * child that calls it (the settle pass, the pen's join road) is answered
+       * only while this event loop runs: under spawnSync the child waited out
+       * fetch's headers timeout (300 s) and threw (the 10-09 local proof).
+       */
       spawn(argv, { extraEnv = {}, cwd = t.officeRoot } = {}) {
-        const r = spawnSync(argv[0], argv.slice(1), { cwd, env: childEnv(t, extraEnv), encoding: "utf8", maxBuffer: 64 * 1024 * 1024, windowsHide: true });
-        return { code: r.status ?? (r.error ? 127 : null), out: `${r.stdout ?? ""}${r.stderr ?? ""}${r.error ? String(r.error.message) : ""}` };
+        return new Promise((ok) => {
+          let out = "", done = false;
+          const finish = (code, extra = "") => { if (!done) { done = true; ok({ code, out: out + extra }); } };
+          const child = spawn(argv[0], argv.slice(1), { cwd, env: childEnv(t, extraEnv), windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+          const add = (d) => { out += d; if (out.length > 32 * 1024 * 1024) out = out.slice(-16 * 1024 * 1024); };
+          child.stdout.on("data", add);
+          child.stderr.on("data", add);
+          child.on("error", (e) => finish(127, String(e.message)));
+          child.on("close", (code) => finish(code));
+        });
       },
       /**
        * A crossing job under the dev office's town lock, as the ferry and the
@@ -802,6 +1108,10 @@ export async function runRehearsal(t, { only = null, keep = false, log = () => {
         return ctx.useFlock ? ctx.spawn(["/usr/bin/flock", "-w", "300", lock, ...argv], { extraEnv, cwd }) : ctx.spawn(argv, { extraEnv, cwd });
       },
       useFlock: process.platform === "linux" && existsSync("/usr/bin/flock"),
+      // STAMP_LINES=store: the mint decides from the store (POS-341), as prod's will after the w42 ship
+      storeMint: t.env.STAMP_LINES === "store",
+      // the keep tick's registry, written from the store by deploy/registry-file.mjs
+      registryFile: join(scratch, "registry.json"),
       /** Commit what a crossing job wrote on the dev town clone, as the pen would (never pushed). */
       commitTown(message) {
         if (!git(t.townClone, "status", "--porcelain")) return null;
@@ -895,10 +1205,10 @@ export async function runRehearsal(t, { only = null, keep = false, log = () => {
       log(`· ${step.id}: ${step.title}`);
       let result;
       try { result = await step.run(ctx); }
-      catch (e) { rec.problems.push(`the step threw: ${tail(e?.stack ?? e, 4)}`); }
+      catch (e) { rec.problems.push(`the step threw: ${thrown(e)}`); }
       if (!rec.problems.length) {
         try { rec.problems.push(...((await step.check(ctx, result, rec)) ?? [])); }
-        catch (e) { rec.problems.push(`the step's check threw: ${tail(e?.stack ?? e, 4)}`); }
+        catch (e) { rec.problems.push(`the step's check threw: ${thrown(e)}`); }
       }
       rec.findings = ctx.findings.slice(f0);
       for (const f of rec.findings) log(`  FINDING: ${f}`);

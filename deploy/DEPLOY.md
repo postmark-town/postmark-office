@@ -148,6 +148,165 @@ env), run by hand after the ship.
   precisely why the deploy job chains onto the tag-cutting job inside one run
   rather than living in a separate tag-triggered file that would never fire.
 
+### The dev rehearsal (POS-354, POS-366; first run Saturday 2026-10-10)
+
+`tools/dev-rehearsal.mjs` drives one crossing through the dev office's doors and
+the box's own jobs, and checks every step against the dev store. It gates the
+office tag (wright-ship-week § 2.5). Dev's store is `w2_devsandbox_20260925`;
+**`world2_dev` is PROD's**, and the tool refuses it before it connects. These are
+box writes on dev only, with Darko present. The switch-3 half of Saturday (the
+read-only pen and the world snapshot) is `G:/Starstory/docs/2026-10-04/rail/switch3/RUNBOOK.md`
+§ The dev rehearsal; its steps 1 and 3 are steps 1 and 2 here, done once.
+
+**1. Migrations 054–071 into dev's store, before the carry**, as `world2_owner`,
+from Wright's machine (Git bash). Every file is additive or `IF NOT EXISTS`:
+```sh
+CLONE=G:/Postmark/repo-clones/wright/office; REF=origin/train/2026-w42
+git -C $CLONE fetch -q origin
+for f in $(git -C $CLONE ls-tree --name-only $REF world2/schema/ | grep -E '/0(5[45]|6[0-9]|7[01])_'); do
+  echo "== $f"
+  git -C $CLONE show "$REF:$f" | ssh meepo-ec2 'sudo -n -u postgres psql -q -v ON_ERROR_STOP=1 -d w2_devsandbox_20260925 -c "SET ROLE world2_owner;" -f -' \
+    || { echo "FAILED at $f: stop here, nothing after it ran" >&2; break; }
+done
+```
+
+**2. Carry the train:** `bash deploy/dev-office-carry.sh origin/train/2026-w42`.
+
+**3. Dev's own stamp key** (Darko said yes on 10-07). On 10-07 the dev root's
+`stamp-key.pem` was a byte-identical copy of PROD's. In a box shell:
+```sh
+sudo -u meepo bash -c 'umask 077 && openssl genpkey -algorithm ed25519 -out /srv/postmark-office-dev/stamp-key.dev.pem'
+# both PUBLIC halves' fingerprints, never a private key of prod's: dev's new key, then prod's
+# public key from its town clone. They must differ. pipefail makes a failed read an error, and
+# e3b0c442… (the sha256 of nothing) also means a read failed: stop either way
+sudo -u meepo bash -o pipefail -c 'openssl pkey -in /srv/postmark-office-dev/stamp-key.dev.pem -pubout | sha256sum'
+sudo -u meepo bash -o pipefail -c 'openssl pkey -pubin -in /srv/postmark-office/town-clone/tools/stamp-pubkey.pem -pubout | sha256sum'
+```
+What this buys, plainly: dev and prod both run as `meepo`, so any dev-side
+process can still read prod's key. Dev's own key guards against signing with
+prod's key **by mistake**, not against a compromise. The tools compare keys by
+their public halves only (the seed's `tools/stamp-pubkey.pem` is prod's public
+key), so prod's private key is never read to make that check.
+
+The old `/srv/postmark-office-dev/stamp-key.pem` is a second copy of prod's
+signing key; prod's own stays at `/srv/postmark-office/stamp-key.pem`. Darko's
+word on removing the copy, then the new key takes its path (the freshen and the
+env line below name it):
+```sh
+sudo shred -u /srv/postmark-office-dev/stamp-key.pem
+sudo -u meepo mv /srv/postmark-office-dev/stamp-key.dev.pem /srv/postmark-office-dev/stamp-key.pem
+```
+
+**4. The env, without the stamp switch yet, STAMP_KEY first.** `sudoedit /etc/postmark-office-dev.env`
+and add (never in a shell line):
+`TOWN_INDEX_READS=store` · `OFFICE_PAPERWORK_STORE=1` · `STATE_LOG_SOURCE=store` ·
+`STAMP_KEY=/srv/postmark-office-dev/stamp-key.pem`. `GITHUB_API_URL` is already
+there (10-07). Then `sudo systemctl restart postmark-office-dev`.
+`OFFICE_PAPERWORK_STORE=1` moves dev's sign-ins from `oauth.db` to the store, so
+testers signed in on dev sign in again. The key goes in before the freshen (step
+5), so the dev office never signs with prod's default key path onto a clone
+already carrying dev's public key. Until step 5 lands, a stamped dev write reds
+the verifier (the clone still carries prod's public key): do none in between.
+
+**5. The freshen moves the town clone onto dev's key.** The unit runs the root
+copy, `/srv/postmark-office-dev/postmark-dev-freshen.sh`, and the carry does not
+install it. `cp` onto the existing file keeps its owner and mode:
+```sh
+sudo cp /srv/postmark-office-dev/deploy/postmark-dev-freshen.sh /srv/postmark-office-dev/postmark-dev-freshen.sh
+sudo systemctl start postmark-dev-freshen.service
+journalctl -u postmark-dev-freshen.service -n 3 --no-pager   # "... the town ledger on the dev key"
+sudo -u meepo git -C /srv/postmark-office-dev/town-clone log -1 --format='%an: %s'   # dev freshen: dev: the stamp ledger re-signed ...
+```
+The tool re-signs only a dev clone: every remote's push URL must be
+`DISABLED-dev-channel-never-pushes` and its real path under
+`/srv/postmark-office-dev` (it refuses prod's clone by both). Check the first before
+this step: `sudo -u meepo git -C /srv/postmark-office-dev/town-clone remote get-url --push origin`.
+Every night after, the freshen stands the clones on `sandbox/seed` and re-signs
+with `tools/dev-ledger-resign.mjs`. The commit is the same each night (fixed
+author and date, deterministic signatures). It refuses a key whose public half
+is prod's, and a refusal fails the unit.
+
+**6. The store's stamp chain, from the re-signed clone, once** (the box's switch
+order: 066/067, the chain, the index, then `STAMP_LINES=store`). As the dev
+office's own pen, with its env:
+```sh
+sudo systemd-run --uid=meepo -p EnvironmentFile=/etc/postmark-office-dev.env -p WorkingDirectory=/srv/postmark-office-dev --pipe --wait \
+  node world2/tools/stamp-lines.mjs --sync --clone /srv/postmark-office-dev/town-clone
+```
+It says `stamp_lines: N line(s) recorded past the 0 held`. It must run after
+step 5: a chain recorded from prod's signatures refuses dev's re-signed export
+as a changed past.
+
+**7. The town index, reseeded at the clone's head, as the law pen**, the stamp
+switch on for the seed (its quest rows fold on the chain from step 6):
+```sh
+cd /srv/postmark-office-dev && sudo bash -c '
+  export WORLD2_DB=w2_devsandbox_20260925 STAMP_LINES=store
+  . deploy/world2-lib.sh && w2_pgenv law_ingester PG_LAW_INGESTER_PASSWORD || exit 4
+  [ "$PGDATABASE" = w2_devsandbox_20260925 ] || { echo "REFUSED: $PGDATABASE is not the dev sandbox" >&2; exit 9; }
+  SHA=$(runuser -u meepo -- git -C /srv/postmark-office-dev/town-clone rev-parse HEAD)
+  exec runuser -u meepo -- node world2/tools/town-index-ingest.mjs --town-repo /srv/postmark-office-dev/town-clone --sha "$SHA" --seed'
+```
+`world2-lib.sh § w2_db` falls back to `world2_dev` (PROD) when `WORLD2_DB` is
+unset, so the line sets it and asserts it before anything writes.
+
+**8. The switch.** Add `STAMP_LINES=store` to `/etc/postmark-office-dev.env`
+(sudoedit), then `sudo systemctl restart postmark-office-dev`.
+
+**9. The pens file**, `/etc/postmark-dev-rehearsal.env` (root 0600, sudoedit),
+both URLs naming dev's database (the tool refuses any other):
+```
+WORLD2_INGEST_URL=postgres://law_ingester:<PG_LAW_INGESTER_PASSWORD from /etc/postmark-world2-dev.env>@localhost:5432/w2_devsandbox_20260925
+WORLD2_CLEARING_URL=postgres://clearing_job:<clearing_job's password, from the env file the box's clearing unit reads>@localhost:5432/w2_devsandbox_20260925
+```
+Roles are cluster-wide, so prod's `clearing_job` password is dev's too
+(`systemctl cat postmark-world2-clearing.service` names its env file).
+
+**10. The preflight, then the rehearsal.** In a box shell:
+```sh
+cd /srv/postmark-office-dev && sudo node tools/dev-rehearsal.mjs --user meepo --only preflight
+cd /srv/postmark-office-dev && sudo node tools/dev-rehearsal.mjs --user meepo --report /tmp/dev-rehearsal-$(date +%F).txt
+```
+The first line names the store it writes. The preflight names anything still
+missing: a migration, a flag, the key (dev's must not be prod's, and the clone's
+`tools/stamp-pubkey.pem` must be its public half), the town index off the
+clone's history, a stamp chain that disagrees with the clone.
+
+The last step is the stamp sandbox (POS-366). It cannot run on the box (the
+carry omits devDependencies, and it would share prod's CPU for 10–40 minutes),
+so it reads CI's `stamp sandbox` check on the sha in `release.json` through
+GitHub's public API, and is red unless the newest run there concluded success.
+Before the rehearsal, label the train's ship PR (`train/<week>` into `main`)
+`stamp-sandbox`: its runs report on the train's tip, which is the sha the carry
+takes. A skipped or cancelled run (another label's event cancels a running
+one) is never judged; if those are all there is, the step asks for a re-run.
+
+**The merge-ref gap.** A PR's sandbox run checks out the PR's merge ref
+(`refs/pull/N/merge`: main merged into the train), so a green attests main plus
+the train, not exactly the tree carried to dev. A hotfix on main that the train
+lacks is in what was tested and not in what dev runs. Close it by merging main
+into the train before the ship (SHIPPING.md), or, once `sandbox.yml` is on main,
+by a `workflow_dispatch` run on the train ref, which checks out the exact sha.
+
+**Before each later rehearsal** (the nightly freshen stands the clone back on
+the seed and the store keeps the last rehearsal's rows):
+- the stamp chain is trimmed to the seed, then checked. The re-sign is the same
+  every night, so the store's first N lines are the seed's exactly. In a box shell:
+  ```sh
+  N=$(sudo -u meepo node --input-type=module -e 'const e = await import("/srv/postmark-office-dev/town-clone/tools/stamp-mint.mjs"); const { readFileSync } = await import("node:fs"); console.log(e.parseStampLedger(readFileSync("/srv/postmark-office-dev/town-clone/WHITE_PAGES/stamp-ledger.md", "utf8")).length)')
+  sudo -u postgres psql -d w2_devsandbox_20260925 -v ON_ERROR_STOP=1 -c "SET ROLE world2_owner; DELETE FROM stamp_lines WHERE seq > $N"
+  sudo systemd-run --uid=meepo -p EnvironmentFile=/etc/postmark-office-dev.env -p WorkingDirectory=/srv/postmark-office-dev --pipe --wait \
+    node world2/tools/stamp-lines.mjs --verify --clone /srv/postmark-office-dev/town-clone
+  ```
+- then step 7 again (the index at the clone's head), and step 10.
+
+This trim is a recurring hand repair, and dev's stamped writes refuse every
+night until someone runs it. Folding it into the freshen (or a dev-only unit
+after it) is proposed, not built: it would give a dev unit the owner's DELETE on
+`stamp_lines`, which is Wright's call
+(`G:/Starstory/docs/2026-10-09/rail/plumb-dev-rehearsal/NOTES.md` § Proposal: the trim
+in the freshen).
+
 ### Repo secrets it needs
 
 `EC2_HOST`, `EC2_USER`, `EC2_SSH_KEY` — the same three names the site repo
