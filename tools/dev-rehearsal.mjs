@@ -822,8 +822,15 @@ export function plan() {
         ctx.ghostSlug = `${ctx.ghost}/${ctx.mark3}`;
         // every column the door wrote, copied, but the claimant and the name
         const cols = (await ctx.s.q("office_api", "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'claims' AND column_name <> 'id' AND is_generated = 'NEVER' AND is_identity = 'NO' ORDER BY ordinal_position")).map((r) => r.column_name);
+        // ITS OWN GROUND (#453 review F8): the 10-04 claim was an ordinary separate claim, so the
+        // copy moves ten metres east (geometry's at.x and the bbox) and is submitted now, and the
+        // step tests only "unfileable refuses alone", never an overlap or a tie on time
+        const named = "CASE WHEN geometry ? 'slug' THEN jsonb_set(geometry, '{slug}', to_jsonb($3::text)) ELSE geometry END";
         const pick = cols.map((c) => c === "claimant" ? "$2::text" : c === "slug" ? "$3::text"
-          : c === "geometry" ? "CASE WHEN geometry ? 'slug' THEN jsonb_set(geometry, '{slug}', to_jsonb($3::text)) ELSE geometry END" : `"${c}"`);
+          : c === "geometry" ? `CASE WHEN jsonb_typeof(geometry #> '{at,x}') = 'number' THEN jsonb_set(${named}, '{at,x}', to_jsonb((geometry #>> '{at,x}')::numeric + 10)) ELSE ${named} END`
+          : c === "bbox" ? "CASE WHEN bbox IS NULL THEN NULL ELSE bbox + point(10, 0) END"
+          : c === "submitted_at" || c === "created_at" ? "now()"
+          : `"${c}"`);
         const [planted] = await ctx.s.q("office_api", `INSERT INTO claims (${cols.map((c) => `"${c}"`).join(", ")}) SELECT ${pick.join(", ")} FROM claims WHERE id = $1 RETURNING id::text`, [good.id, ctx.ghost, ctx.ghostSlug]);
         ctx.plantedClaim = planted.id;
         const houses = await ctx.s.q("office_api", "SELECT slug FROM households WHERE $1 = ANY(residents)", [ctx.ghost]);
