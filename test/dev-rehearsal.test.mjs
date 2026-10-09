@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { CROSSING, PROD_DB, databaseOf, githubStub, parseEnvFile, storeGuard, treeTables } from "../tools/dev-rehearsal.mjs";
+import { CROSSING, PROD_DB, SANDBOX_CHECK, carriedSha, databaseOf, githubStub, parseEnvFile, sandboxProblems, sandboxVerdictFromGitHub, storeGuard, treeTables } from "../tools/dev-rehearsal.mjs";
 
 const OFFICE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const TOOL = join(OFFICE, "tools", "dev-rehearsal.mjs");
@@ -169,4 +169,42 @@ test("both sides of the stamp switch are rehearsable: each STAMP_LINES job has i
     const sides = CROSSING.filter((j) => j.name === name).map((j) => j.when).sort();
     assert.deepEqual(sides, ["git", "store"], `${name} must have a store side and a git side`);
   }
+});
+
+// ── THE SANDBOX ON THE CARRIED SHA (POS-366 part 3) ──────────────────────────
+//
+// The sandbox cannot run on the dev box (the carry omits devDependencies), so
+// the rehearsal's last step gates on CI's `stamp sandbox` check for the sha the
+// dev office was carried with. Every road to a verdict other than a completed
+// success is red, and the newest run is the one judged.
+//
+// THE CAN-FAIL FLIP: make sandboxProblems answer [] for any conclusion; "a
+// failed or missing run is red" goes red.
+
+const runsAt = (runs) => async () => ({ ok: true, status: 200, json: async () => ({ check_runs: runs }) });
+const run = (conclusion, started_at, extra = {}) => ({ name: SANDBOX_CHECK, status: "completed", conclusion, started_at, html_url: `https://ci.invalid/${started_at}`, head_sha: "abc1234ffff", ...extra });
+
+test("the sandbox verdict: the newest run of the named check is the one judged", async () => {
+  const v = await sandboxVerdictFromGitHub("abc1234", { fetchImpl: runsAt([run("failure", "2026-10-09T10:00:00Z"), run("success", "2026-10-09T12:00:00Z"), { ...run("success", "2026-10-09T13:00:00Z"), name: "office suite verdict" }]) });
+  assert.deepEqual(v, { runs: 2, status: "completed", conclusion: "success", url: "https://ci.invalid/2026-10-09T12:00:00Z", head_sha: "abc1234ffff" });
+  assert.deepEqual(sandboxProblems("abc1234", v), []);
+});
+
+test("a failed, running or missing sandbox run is red, and so is a GitHub that did not answer", async () => {
+  const red = async (runs) => sandboxProblems("abc1234", await sandboxVerdictFromGitHub("abc1234", { fetchImpl: runsAt(runs) }));
+  assert.match((await red([run("failure", "2026-10-09T12:00:00Z")]))[0], /concluded failure .* a stamp event is red/);
+  assert.match((await red([run(null, "2026-10-09T12:00:00Z", { status: "in_progress" })]))[0], /is in_progress .* wait for its verdict/);
+  assert.match((await red([]))[0], /no "stamp sandbox" run on abc1234: label the train's ship PR `stamp-sandbox`/);
+  const down = await sandboxVerdictFromGitHub("abc1234", { fetchImpl: async () => ({ ok: false, status: 403 }) });
+  assert.match(sandboxProblems("abc1234", down)[0], /GitHub answered 403/);
+  assert.match(sandboxProblems(null, {})[0], /names no carried sha/);
+});
+
+test("the carried sha is release.json's (the carry writes it), else the tree's HEAD", () => {
+  const dir = mkdtempSync(join(tmpdir(), "dev-rehearsal-sha-"));
+  try {
+    writeFileSync(join(dir, "release.json"), JSON.stringify({ tag: "train/2026-w42", sha: "65c5e6d", target: "dev" }));
+    assert.equal(carriedSha(dir), "65c5e6d");
+    assert.equal(carriedSha(OFFICE), execFileSync("git", ["-C", OFFICE, "rev-parse", "HEAD"], { encoding: "utf8" }).trim());
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

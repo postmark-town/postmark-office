@@ -255,6 +255,14 @@ missing: a migration, a flag, the key (dev's must not be prod's, and the clone's
 `tools/stamp-pubkey.pem` must be its public half), the town index off the
 clone's history, a stamp chain that disagrees with the clone.
 
+The last step is the stamp sandbox (POS-366). It cannot run on the box (the
+carry omits devDependencies, and it would share prod's CPU for 10–40 minutes),
+so it reads CI's `stamp sandbox` check on the sha in `release.json` through
+GitHub's public API, and is red unless the newest run there concluded success.
+Before the rehearsal, label the train's ship PR (`train/<week>` into `main`)
+`stamp-sandbox`: its runs report on the train's tip, which is the sha the carry
+takes.
+
 **Before each later rehearsal** (the nightly freshen stands the clone back on
 the seed and the store keeps the last rehearsal's rows):
 - the stamp chain is trimmed to the seed, then checked. The re-sign is the same

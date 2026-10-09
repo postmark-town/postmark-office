@@ -59,13 +59,16 @@ test("the preflight goes red when dev's key is prod's, and when the dev clone is
 
 test("one crossing, end to end, through the dev office's doors: green, every step read back from the store", async () => {
   const lines = [];
-  const r = await runRehearsal(target(), { log: (l) => lines.push(l) });
+  // the sandbox step reads CI's verdict for the carried sha; this stand-in hands it one, and
+  // test/dev-rehearsal.test.mjs drives the real lookup's every answer
+  const sandboxVerdict = async (sha) => ({ runs: 1, status: "completed", conclusion: "success", url: "(the local stand-in's verdict)", head_sha: sha });
+  const r = await runRehearsal(target({ sandboxVerdict }), { log: (l) => lines.push(l) });
   const text = renderReport(r);
   // the store's own database: w2_devsandbox_rehearsal, or on a pool tree t<pid>_<n>_w2_devsandbox_rehearsal (POS-479)
   assert.match(dev.store.database, /^(t\d+_\d+_)?w2_devsandbox_rehearsal$/);
   assert.match(lines[0], new RegExp(`^dev-rehearsal: target store ${dev.store.database} \\(the dev office's, from .*\\); not world2_dev$`));
   assert.equal(r.green, true, text);
   const ran = r.steps.filter((s) => !s.pending).map((s) => s.id);
-  assert.deepEqual(ran, ["preflight", "sign-in", "join", "resident", "letters", "crossing", "claim", "clearing", "settle", "bless", "clearing-rerun", "by-hand", "refused-alone"], text);
+  assert.deepEqual(ran, ["preflight", "sign-in", "join", "resident", "letters", "crossing", "claim", "clearing", "settle", "bless", "clearing-rerun", "by-hand", "refused-alone", "stamp-sandbox"], text);
   assert.deepEqual(r.steps.filter((s) => s.pending).map((s) => s.id), [], "no step is pending (POS-356 landed in #427)");
 }, { timeout: 30 * 60_000 });

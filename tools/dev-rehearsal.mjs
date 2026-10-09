@@ -36,7 +36,9 @@
 //   guard       the target is the dev office's store and is not world2_dev
 //   preflight   the office answers; the store holds every table this tree's
 //               migrations create; the office's flags read the store as prod's
-//               do; its pens sign with its own key; nothing it can reach pushes
+//               do (STAMP_LINES=store included); its pens sign with dev's own
+//               key, never prod's, and the town clone is on it; the store's
+//               stamp chain agrees with the clone; nothing it can reach pushes
 //               (TOWN_PUSH=0, GitHub stubbed)
 //   sign-in     the one seam that is not a door: a household key minted for a
 //               synthetic GitHub account, through the office's own key desk
@@ -48,21 +50,24 @@
 //               frozen gangway), the PR lands on this script's stub GitHub, its
 //               merge on the dev town clone, and the keeping tick's settle-pass binds it
 //   letters     POST /letters both ways; they wait in the store's town log
-//   crossing    the ferry's chain on the dev town clone under the town lock
-//               (drain, deliver, mint, verify, ballot, welcome), never pushed;
-//               then the town-index ingest. The house must mint as ONE.
+//   crossing    the box's crossing on the dev town clone, job for job
+//               (CROSSING: postmark-ferry.service, then the keep tick's locked
+//               section), never pushed; then the town-index ingest. The house
+//               must mint as ONE.
 //   claim       a parcel through POST /world/marks, put forward (stamps: 0)
 //   clearing    the candle closes the window as clearing_job, while the
 //               scheduled settlement waits for it (the box fires both at once)
 //   settle      settlement-auto.sh from the store, into a bare copy of the world
 //   bless       an annotated settlement tag on the copy, then settlements-backfill
 //   recovery    the clearing re-run refuses and moves nothing; a second claim
-//               settled BY HAND; POS-356's refused claim is PENDING until it lands
+//               settled BY HAND; a claim the clearing cannot file (the 10-04
+//               instance, planted) refuses alone while its window locks and crosses
+//   sandbox     CI's `stamp sandbox` check is GREEN on the sha carried to dev
 //
 // Every step's checks read the store: the store is the record (RULED 10-04), and
-// the 10-03 failures were each a file that disagreed with it. The one record the
-// store does not yet hold is the mint (POS-341), so the crossing compares the
-// store's balances against the town's ledger and counts the ledger's welcomes.
+// the 10-03 failures were each a file that disagreed with it. The mint's chain is
+// the store's with STAMP_LINES=store (POS-341), and the crossing still compares
+// the store's balances against the town's ledger and counts the ledger's welcomes.
 // A FINDING is a defect measured and named on every run that does not gate (a
 // ruling or another lane's fix is owed).
 //
@@ -858,6 +863,19 @@ export function plan() {
         return crossed;
       },
     },
+    {
+      id: "stamp-sandbox",
+      title: "the stamp sandbox is GREEN on the carried sha (CI's `stamp sandbox` check, POS-366): every stamp event and the store's clearing, on a throwaway store and ledger",
+      async run(ctx) {
+        const sha = carriedSha(ctx.t.officeRoot);
+        return { sha, verdict: sha ? await (ctx.t.sandboxVerdict ?? sandboxVerdictFromGitHub)(sha) : null };
+      },
+      async check(ctx, r, rec) {
+        const p = sandboxProblems(r.sha, r.verdict ?? {});
+        if (!p.length) rec.notes.push(`${SANDBOX_CHECK}: success on ${r.verdict.head_sha ?? r.sha} (${r.verdict.url})`);
+        return p;
+      },
+    },
   ];
 }
 
@@ -894,6 +912,52 @@ async function keyProblems(ctx) {
     if (v.code !== 0) p.push(`the store's stamp chain and the dev clone's ledger disagree (stamp-lines --verify exited ${v.code}: ${tail(v.out, 3)}): before a rehearsal the store's lines are trimmed to the clone and synced (deploy/DEPLOY.md § The dev rehearsal)`);
   }
   return p;
+}
+
+// ── the stamp sandbox, on the carried sha ────────────────────────────────────
+//
+// POS-366: the sandbox runs as part of this rehearsal on every train. It cannot
+// run ON the dev box: the carry installs `npm ci --omit=dev`
+// (deploy/remote-deploy.sh), so its store (the embedded-postgres devDependency)
+// is not there, and a 10-40 minute run would share prod's box. So it runs where
+// every stamp-touching PR's run already does, CI's `stamp sandbox` check, on the
+// exact sha carried to dev, and this step gates on that check's verdict: no run,
+// a run still going, or any conclusion but success is RED.
+
+export const SANDBOX_CHECK = "stamp sandbox";
+
+/** The sha the dev office was carried with: its release.json (the carry writes it), else the tree's own HEAD. */
+export function carriedSha(officeRoot) {
+  try { const r = JSON.parse(readFileSync(join(officeRoot, "release.json"), "utf8")); if (r?.sha) return String(r.sha); } catch { /* not a carried tree */ }
+  const g = gitQuiet(officeRoot, "rev-parse", "HEAD");
+  return g.status === 0 ? g.stdout.trim() : null;
+}
+
+/**
+ * The newest `stamp sandbox` check run on `sha`, from GitHub's public API (read
+ * only, no token: the office repo is public). `{ runs, status, conclusion, url,
+ * head_sha }`, or `{ error }` when GitHub did not answer.
+ */
+export async function sandboxVerdictFromGitHub(sha, { api = "https://api.github.com", repo = "postmark-town/postmark-office", fetchImpl = fetch } = {}) {
+  let r;
+  try {
+    r = await fetchImpl(`${api}/repos/${repo}/commits/${encodeURIComponent(sha)}/check-runs?check_name=${encodeURIComponent(SANDBOX_CHECK)}&per_page=100`,
+      { headers: { accept: "application/vnd.github+json", "user-agent": "postmark-dev-rehearsal" }, signal: AbortSignal.timeout(30_000) });
+  } catch (e) { return { error: `GitHub's check runs for ${sha} could not be read: ${e.message}` }; }
+  if (!r.ok) return { error: `GitHub answered ${r.status} for ${sha}'s check runs` };
+  const runs = ((await r.json()).check_runs ?? []).filter((c) => c.name === SANDBOX_CHECK);
+  const newest = runs.sort((a, b) => String(b.started_at ?? "").localeCompare(String(a.started_at ?? "")))[0] ?? null;
+  return { runs: runs.length, status: newest?.status ?? null, conclusion: newest?.conclusion ?? null, url: newest?.html_url ?? null, head_sha: newest?.head_sha ?? null };
+}
+
+/** The sandbox step's verdict, as problems. */
+export function sandboxProblems(sha, v) {
+  if (!sha) return ["the dev office names no carried sha (no release.json, not a git checkout): the sandbox's verdict cannot be looked up"];
+  if (v.error) return [v.error];
+  if (!v.runs) return [`no "${SANDBOX_CHECK}" run on ${sha}: label the train's ship PR \`stamp-sandbox\` (its runs report on the train's tip), or once sandbox.yml is on main, \`gh workflow run sandbox.yml -R postmark-town/postmark-office --ref <the train>\`; then run this step again`];
+  if (v.status !== "completed") return [`the "${SANDBOX_CHECK}" run on ${sha} is ${v.status} (${v.url}): wait for its verdict`];
+  if (v.conclusion !== "success") return [`the "${SANDBOX_CHECK}" run on ${sha} concluded ${v.conclusion} (${v.url}): a stamp event is red on the code carried to dev`];
+  return [];
 }
 
 /** The store facts a re-run must not move: the window, its claims, the marks. */
