@@ -1937,10 +1937,15 @@ async function rideDomain(oriented, key, fields = {}) {
  * (world-ride.mjs § rideViaOffice's "you are not aboard"). Both bounces ask
  * this, the act's and the read's. Null when no timetable can be read, and the
  * generic bounce answers as before.
+ *
+ * `affordable_at` keeps its entry shape ({ mark, class, at }) and carries the
+ * same doors, nearest first, never the class at (null, null): the #2392
+ * precedent keeps the field's shape, not content that points at nowhere.
  */
 async function rideDoorsFor(oriented) {
   try {
-    const { service } = await vesselServiceFrom(await worldStateRaw(), { repo: WORLD_CLONE });
+    const w = await worldStateRaw();
+    const { service } = await vesselServiceFrom(w, { repo: WORLD_CLONE });
     const sp = oriented?.standpoint;
     const at = Number.isFinite(sp?.x) && Number.isFinite(sp?.y) ? { x: sp.x, y: sp.y } : null;
     const doors = stopDoorsNearest(service, at);
@@ -1950,6 +1955,7 @@ async function rideDoorsFor(oriented) {
     return {
       vessel,
       doors,
+      affordable_at: doors.map((d) => ({ mark: d.mark, class: (w?.marks ?? []).find((m) => m.id === d.mark)?.class ?? null, at: d.at })),
       sentence: `ride is lent by the ground inside ${vessel ?? "her"}, so it is declared aboard, and the class that grants it is not a place to walk to. Every stop on her timetable is a door into her, wherever her hull is${at ? ", nearest first" : ""}: ${list}. Enter one (do: "enter", args: { mark: "<the stop>" }; entering from outside walks you to its threshold), and aboard, ride is yours to declare.`,
     };
   } catch { return null; }
@@ -2513,7 +2519,7 @@ async function apexDo(args, key, ctx = {}) {
       if (ride)
         return bounce(422, `"ride" is not afforded where you stand — you are not aboard ${ride.vessel ?? "her"}`,
           `${ride.sentence} ${canDo}`,
-          { ride_doors: ride.doors, affordable_at: elsewhere, affordable_here: here });
+          { ride_doors: ride.doors, affordable_at: ride.affordable_at, affordable_here: here });
       return elsewhere.length
         ? bounce(422, `"${action}" is not afforded where you stand`,
           `It is afforded at ${elsewhere.map((w) => `${w.mark} (${w.at.x}, ${w.at.y})`).join("; ")} — walk there and it appears. ${canDo}`,
@@ -3110,7 +3116,7 @@ async function apexReadAction(args, key, ctx = {}) {
       if (ride)
         return bounce(422, `"ride" is not an action anywhere in your view — you are not aboard ${ride.vessel ?? "her"}`,
           `${ride.sentence} Readable from here: ${here.join(", ") || "(nothing)"}.`,
-          { ride_doors: ride.doors, readable_here: here, affordable_at: elsewhere });
+          { ride_doors: ride.doors, readable_here: here, affordable_at: ride.affordable_at });
       return bounce(422, `"${action}" is not an action anywhere in your view — nothing to read`,
         `Readable from here: ${here.join(", ") || "(nothing)"}${elsewhere.length ? ` — and "${action}" stands at ${elsewhere.map((w) => w.mark).join(", ")}` : ""}.`,
         { readable_here: here, affordable_at: elsewhere });

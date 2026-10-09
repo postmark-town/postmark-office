@@ -95,7 +95,15 @@ function assertNamesTheStops(r) {
   const order = r.ride_doors.map((d) => said(r).indexOf(d.mark));
   assert.ok(order.every((i) => i >= 0), "the hint names every door");
   assert.deepEqual(order, [...order].sort((a, b) => a - b), "and in that order");
+  // `affordable_at` keeps its shape ({ mark, class, at }) and names the same
+  // doors in the same order: never the class at (null, null).
+  assert.deepEqual(r.affordable_at.map((e) => e.mark), r.ride_doors.map((d) => d.mark), "affordable_at is the doors, nearest first");
+  for (const e of r.affordable_at) {
+    assert.deepEqual(Object.keys(e).sort(), ["at", "class", "mark"], `${e.mark}: the field's entry shape`);
+    assert.ok(Number.isFinite(e.at?.x) && Number.isFinite(e.at?.y), `${e.mark} stands somewhere: ${JSON.stringify(e.at)}`);
+  }
   // Never the class, and never the promise that cannot be kept.
+  assert.doesNotMatch(JSON.stringify(r), /the-town\/vehicle/, "nowhere in the answer, the field included");
   assert.doesNotMatch(said(r), /the-town\/vehicle/);
   assert.doesNotMatch(said(r), /walk there and it appears/);
   assert.doesNotMatch(said(r), /null, null/);
