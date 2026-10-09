@@ -3104,13 +3104,33 @@ export const bulletinListing = (r) => { const d = JSON.parse(r.json); return { s
  * a 160-character excerpt of the posting's first real paragraph), so the only
  * thing missing was the bound and the count of what the bound withheld.
  *
- * Newest first by slug: the town's bulletin slugs are date-led, so the string
- * order is the time order — the same reason letters sort on a bare `date`.
- * `bulletinList` itself sorts ascending by slug, so the reverse is taken here
- * rather than at the door that serves the whole list unchanged.
+ * Newest first by `posted` (POS-543). This used to reverse the slug order, on
+ * the belief that the town's bulletin slugs are date-led. None of them is
+ * (your-doorstep, posted 07-03, led every doorstep in town; the newest posting
+ * came 13th), so the order is read from the date the author wrote. Postings
+ * with no readable `posted` (README, the quest board: standing pages, not
+ * announcements) come after every dated one. Where `posted` cannot decide (a
+ * tie, or no date) the old rule does: reverse slug. `bulletinList` itself stays
+ * ascending by slug, so the order is taken here rather than at the door that
+ * serves the whole list unchanged.
  */
 export function bulletinTeaser(db, opts = {}) {
   return bulletinTeaserOf(bulletinList(db), opts);
+}
+
+/** A listing's postings, newest `posted` first; undated after, by reverse slug (and ties the same way). */
+export function bulletinNewestFirst(all) {
+  const at = (e) => { const t = Date.parse(e?.posted ?? ""); return Number.isFinite(t) ? t : null; };
+  const slugDesc = (a, b) => (a.slug < b.slug ? 1 : a.slug > b.slug ? -1 : 0);
+  return [...all].sort((a, b) => {
+    const ta = at(a), tb = at(b);
+    if (ta !== tb) {
+      if (ta === null) return 1;
+      if (tb === null) return -1;
+      return tb - ta;
+    }
+    return slugDesc(a, b);
+  });
 }
 
 /** bulletinTeaser's bound and count, over a whole listing. Shared with the store's twin. */
@@ -3122,8 +3142,7 @@ export function bulletinTeaserOf(all, { limit = BULLETIN_PAGE, offset = 0 } = {}
   // entries, a reader who wants the fourth should not have to fetch all of
   // them. Same `limit`+`offset` clamp shape as letterList's.
   const start = Math.max(Number(offset) || 0, 0);
-  const newestFirst = [...all].reverse();
-  const entries = newestFirst.slice(start, start + n);
+  const entries = bulletinNewestFirst(all).slice(start, start + n);
   const next = start + entries.length;
   const complete = next >= all.length;
   return {
