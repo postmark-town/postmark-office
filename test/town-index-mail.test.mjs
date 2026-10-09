@@ -64,7 +64,10 @@ before(async () => {
   await w.end();
   api = await s.connect("office_api");
 
-  for (const [name, env] of [["plain", {}], ["switched", { TOWN_INDEX_READS: "store", WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") }],
+  // "plain" reaches the same store as prod's unswitched office does (WORLD2_PG
+  // since 10-04): search's last_active is read from the store's acts on both
+  // offices (POS-481), so the ONE difference between them is the switch.
+  for (const [name, env] of [["plain", { WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") }], ["switched", { TOWN_INDEX_READS: "store", WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") }],
     ["cut-off", { TOWN_INDEX_READS: "store", WORLD2_PG: "1", WORLD2_PG_URL: "postgres://office_api:x@127.0.0.1:9/none" }]]) {
     const child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0", "--db", dbPath,
       "--oauth-db", join(tmp, `${name}-oauth.db`), "--roles-db", join(tmp, `${name}-roles.db`)], {
