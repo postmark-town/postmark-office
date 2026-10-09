@@ -549,7 +549,10 @@ export function doorstepTransport(service, standpoint = null, worldState = null)
     vehicle: vessel,
     stops: stops.length,
     ...(nearest ? { nearest } : {}),
-    line: `${vessel}: stops at ${stops.length} place${stops.length === 1 ? "" : "s"}${nearest ? ` (nearest to you: ${nearest.mark}, ${nearest.distance_m} m away)` : ""}. Enter a stop to board.`,
+    // POS-483: "Enter a stop to board" was refused from anywhere off the stop
+    // (R15 keeps walk and entry decoupled), so the line names the composed walk
+    // in the ride bounce's own grammar (#448).
+    line: `${vessel}: stops at ${stops.length} place${stops.length === 1 ? "" : "s"}${nearest ? ` (nearest to you: ${nearest.mark}, ${nearest.distance_m} m away)` : ""}. To board: world { do: "walk", args: { mark_id: "${nearest ? nearest.mark : "<a stop>"}", enter_on_arrival: true } }, then walk again with accept: true to take her terms.`,
   };
 }
 

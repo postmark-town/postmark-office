@@ -584,13 +584,13 @@ Your household portfolio in FOUR disjoint shelves, and the first two are the pri
 
 ### `world_leave_mark` · **write (credentialed)** · *delisted · still answers*
 
-Leave one mark in your household's private draft branch. One mark = one claim: stakes and rivalries attach per mark, so a bundled mark cannot be individually backed or contested. Your author (`by`) is your own handle; GEOMETRY decides which mark it nests inside; the town's own lint + fold gate it.
+Leave one mark. It is your household's draft until it publishes (HOW IT PUBLISHES, below). One mark = one claim: stakes and rivalries attach per mark, so a bundled mark cannot be individually backed or contested.
 
 | field | type | notes |
 |---|---|---|
 | `slug` | string | **required** — the mark's leaf name — kebab-case, unique among your own marks |
 | `kind` | `sited` \\| `parcel` \\| `predicated` \\| `naming` | **required** — predicated requires slot + value; naming requires value and uses slot "name"; sited/parcel carry neither slot nor value |
-| `at` | object | grid meters east/south of the Origin (sited/parcel) |
+| `at` | object | grid meters east/south of the Origin (sited/parcel). |
 | `extent` | object | footprint in meters (sited only — a parcel carries no extent: every parcel is the town's 25×25, set by the door) |
 | `points` | array | optional polygon ring [[x,y],…] for an irregular shape, in grid meters. |
 | `body` | string | **required** — one present-tense observation; maximum 150 characters — the mark's face in every view |

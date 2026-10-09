@@ -406,8 +406,16 @@ test("overhang: a claim left where you stand, nesting one level out, is disclose
   // says where a mark would nest before anything is written. All three, or a
   // newcomer reads "move it" and finds the door closed.
   assert.match(r.remedy, /amend: true/, "the remedy says a draft can still move, and how");
-  assert.match(r.remedy, /a published mark cannot move/, "…and that a published one cannot");
   assert.match(r.remedy, /preview: true/, "…and names the preview for next time");
+  // POS-483's lane (2026-10-09): the move sentence is the lane's. On the
+  // single-log lane prod runs, a published mark moves by amend and carries its
+  // household's marks (POS-441); only the git lane still refuses that.
+  const live = overhangOf({ ...THE_GLASS, parent: PANDO.id, standing: ON_THE_FENCE, spine: [PANDO, VIEW_PEAK], singleLog: true });
+  assert.match(live.remedy, /draft or published/, "single-log: a published mark moves too");
+  assert.match(live.remedy, /carries your household's marks inside it/, "…and the move carries the household's marks");
+  assert.doesNotMatch(live.remedy, /cannot move/, "…so the remedy never says it cannot");
+  const git = overhangOf({ ...THE_GLASS, parent: PANDO.id, standing: ON_THE_FENCE, spine: [PANDO, VIEW_PEAK], singleLog: false });
+  assert.match(git.remedy, /a published mark cannot move/, "the git lane still refuses a published move (leave-exec.mjs, #1862)");
 });
 
 test("overhang: the ordinary case says nothing at all", async () => {
@@ -584,7 +592,8 @@ test("the revision family stands at the door: amend on leave-mark, withdraw as i
   const leave = WORLD_TOOLS.find(({ name }) => name === "world_leave_mark");
   assert.equal(leave.inputSchema.properties.amend.type, "boolean");
   assert.match(leave.inputSchema.properties.amend.description, /SUPERSEDE/, "amend says what it does in the author's face");
-  assert.match(leave.inputSchema.properties.amend.description, /#1862/, "and names the seam that limits moves");
+  assert.match(leave.inputSchema.properties.amend.description, /MOVE the mark, draft or published/, "and says an amend moves a published mark (POS-441, the single-log lane)");
+  assert.match(leave.inputSchema.properties.amend.description, /carries the marks inside it that belong to your household/, "…carrying the household's marks inside it");
   const wd = WORLD_TOOLS.find(({ name }) => name === "world_withdraw_mark");
   assert.ok(wd, "world_withdraw_mark stands in WORLD_TOOLS");
   assert.deepEqual(wd.inputSchema.required, ["mark"]);
