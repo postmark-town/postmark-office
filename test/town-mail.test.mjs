@@ -186,8 +186,8 @@ async function office(clone, env, run) {
       mail: (handle, qs = "") => fetch(`${base}/mail/${handle}${qs}`, {
         headers: { authorization: `Bearer ${KEY}` },
       }).then((r) => r.json()),
-      read: (door, args) => fetch(`${base}/mcp`, {
-        method: "POST", headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json", accept: "application/json, text/event-stream" },
+      read: (door, args, asKey = KEY) => fetch(`${base}/mcp`, {
+        method: "POST", headers: { authorization: `Bearer ${asKey}`, "content-type": "application/json", accept: "application/json, text/event-stream" },
         body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: door, arguments: args } }),
       }).then(async (r) => JSON.parse((await r.json()).result.content[0].text)),
     });
@@ -944,6 +944,10 @@ test("A WRITTEN REPLY IS QUEUED: the sender's awaiting reads reply_queued with i
       const peek = await doorstep("wright", LIMEN_KEY);
       assert.equal(rowOf(peek.awaiting).attention_state, "they_spoke_again");
       assert.equal(JSON.stringify(peek).includes(id), false, "not one field names the standing letter");
+      // …and at the awaiting view, under a key that does not hold wright (#446 review, finding 4)
+      const peekView = await read("household", { read: "mail", handle: "wright", view: "awaiting" }, LIMEN_KEY);
+      assert.equal(rowOf(peekView).attention_state, "they_spoke_again");
+      assert.equal(JSON.stringify(peekView).includes(id), false, "the awaiting view names no standing letter to a stranger");
     });
   } finally { rmSync(clone, { recursive: true, force: true }); }
 });
