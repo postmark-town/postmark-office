@@ -70,3 +70,16 @@ test("words and parcels carry no ground note", () => {
   assert.equal(groundNoteOf({ kind: "predicated", at: null, own: [PARCEL], onOwnGround: false, nearM: 25 }), null);
   assert.equal(groundNoteOf({ kind: "parcel", at: { x: 0, y: 0 }, own: [PARCEL], onOwnGround: false, nearM: 25 }), null);
 });
+
+test("THE 25 m EDGE: a footprint whose gap to the parcel is exactly 25 m still warns; 25.5 m is a deliberate commons mark", { skip: !HAVE_ENGINE && NO_WORLD }, () => {
+  // The parcel's top edge is y −2530.5 and the lamp is 1 m square, so a centre
+  // at −2505 leaves a gap of exactly 25 m (`gap > nearM` admits it), and
+  // −2504.5 leaves 25.5 m.
+  const atEdge = noteFor({ x: 620, y: -2505 });
+  assert.ok(atEdge.off_your_ground, "exactly 25 m off: warned");
+  assert.match(atEdge.off_your_ground.note, /reaches 26 m outside/);
+  assert.deepEqual(atEdge.off_your_ground.corrected_at, { x: 620, y: -2531 });
+  const past = noteFor({ x: 620, y: -2504.5 });
+  assert.equal(past.off_your_ground, undefined, "25.5 m off: no warning, only the ranges");
+  assert.deepEqual(past.your_ground, yourGroundOf([PARCEL]));
+});
