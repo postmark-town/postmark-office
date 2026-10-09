@@ -44,6 +44,7 @@ const { __forgetPassages } = await import("../src/enter-exit-ledger.mjs");
 const { vesselServiceFrom } = await import("../src/world-movement.mjs");
 const { portalEntryFor } = await import("../src/world-crossings.mjs");
 const { stopsOfService, vesselIdOf } = await import("../src/world-ride.mjs");
+const { rideDoorsOf } = await import("../src/world-apex.mjs");
 
 const WHO = "kogane";
 const KEY = { handles: new Set([WHO]) };
@@ -100,6 +101,9 @@ function assertNamesTheStops(r) {
   assert.deepEqual(r.affordable_at.map((e) => e.mark), r.ride_doors.map((d) => d.mark), "affordable_at is the doors, nearest first");
   for (const e of r.affordable_at) {
     assert.deepEqual(Object.keys(e).sort(), ["at", "class", "mark"], `${e.mark}: the field's entry shape`);
+    // `class` is the DOOR's own class off the fold, often null; never the vessel
+    // class put back in for a door that has none.
+    assert.equal(e.class, worldState.marks.find((m) => m.id === e.mark)?.class ?? null, `${e.mark}'s own class`);
     assert.ok(Number.isFinite(e.at?.x) && Number.isFinite(e.at?.y), `${e.mark} stands somewhere: ${JSON.stringify(e.at)}`);
   }
   // Never the class, and never the promise that cannot be kept.
@@ -114,8 +118,15 @@ test("do: ride from open ground names the stops nearest first, never the vehicle
   assert.equal(r.code, 422, JSON.stringify(r).slice(0, 300));
   assert.match(r.defect, /not aboard/);
   assertNamesTheStops(r);
-  assert.match(r.hint, /do: "enter"/, "the way in is named as the act it is");
-  assert.ok(Array.isArray(r.affordable_here) && r.affordable_here.includes("enter"), "and enter is open from where she stands");
+  // THE WAY IN IS A WALK THAT COMPOSES THE ENTRY: an enter from outside a stop
+  // is refused 409 ("you are not at that door"), so the hint never sends her
+  // to one, and it names the walk the office actually takes.
+  assert.match(r.hint, /do: "walk", args: \{ mark_id: "<the stop>", enter_on_arrival: true \}/, "the walk that composes the entry");
+  assert.match(r.hint, /accept: true/, "and her door's terms, crossed on accept: true");
+  assert.doesNotMatch(r.hint, /do: "enter"/, "an enter from out here is refused 409");
+  assert.doesNotMatch(r.hint, /walks you to its threshold/, "an enter does not bundle a walk (R15)");
+  assert.ok(Array.isArray(r.affordable_here) && r.affordable_here.includes("walk"), "and walk is open from where she stands");
+  assert.match(r.hint, /her own berth \(the-town\/the-post-office\) is one while she is alongside/);
 });
 
 test("read: ride from open ground answers the same doors", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
@@ -123,4 +134,15 @@ test("read: ride from open ground answers the same doors", { skip: !HAVE_CLONE &
   assert.equal(r.code, 422, JSON.stringify(r).slice(0, 300));
   assert.match(r.defect, /not aboard/);
   assertNamesTheStops(r);
+});
+
+// SAID, NEVER SWALLOWED: a timetable this office cannot read still answers
+// "not aboard", says why, and names no doors. Never the class at (null, null).
+test("a timetable that cannot be read is said, with the error, and names no doors", () => {
+  const r = rideDoorsOf(null, { x: 0, y: 0 }, [], "the world's tools/vessel.mjs could not be read at a ref");
+  assert.deepEqual(r.doors, []);
+  assert.deepEqual(r.affordable_at, [], "no (null, null) entries, and never the class");
+  assert.equal(r.timetable_unreadable, "the world's tools/vessel.mjs could not be read at a ref");
+  assert.match(r.sentence, /could not be read just now \(the world's tools\/vessel\.mjs could not be read at a ref\)/);
+  assert.doesNotMatch(r.sentence, /the-town\/vehicle|null, null|walk there and it appears/);
 });

@@ -1933,32 +1933,60 @@ async function rideDomain(oriented, key, fields = {}) {
  * bounce named it as "the-town/vehicle (null, null) — walk there and it
  * appears", and walking there bounces too (Mari, 09-26: 25 minutes of
  * probing). The way to ride is through a stop, so a resident who is not aboard
- * is told the timetable's stops, nearest first, in the act's own words
- * (world-ride.mjs § rideViaOffice's "you are not aboard"). Both bounces ask
- * this, the act's and the read's. Null when no timetable can be read, and the
- * generic bounce answers as before.
+ * is told the timetable's stops, nearest first. Both bounces ask this, the
+ * act's and the read's.
+ *
+ * THE WAY IN IS A WALK THAT COMPOSES THE ENTRY. An enter from outside a stop is
+ * refused 409 (world-crossings.mjs § the portal's "you are not at that door";
+ * R15 keeps walk and entry decoupled), so the sentence names the walk:
+ * `mark_id` admits a timetable stop and `enter_on_arrival` fires the entry as
+ * itself at arrival, where her door shows its terms and boards on accept: true.
+ *
+ * Her own berth (the vessel's own id among the stops) is a door only while she
+ * is alongside: `portalEntryFor` is null for her, so entering her is the
+ * ordinary crossing, measured to her hull. The other stops are doors wherever
+ * her hull is.
  *
  * `affordable_at` keeps its entry shape ({ mark, class, at }) and carries the
  * same doors, nearest first, never the class at (null, null): the #2392
- * precedent keeps the field's shape, not content that points at nowhere.
+ * precedent keeps the field's shape, not content that points at nowhere. Its
+ * `class` here is the DOOR's own class, read off the fold, and is often null
+ * (the fold drops `class:` for most marks); it is not the class that grants
+ * the act, which is what `class` means on every other bounce.
+ *
+ * SAID, NEVER SWALLOWED (rideDomain's rule): a timetable this office cannot
+ * read still answers "not aboard", says the timetable could not be read just
+ * now and why, and names no doors. It never falls back to the class.
  */
+export function rideDoorsOf(service, at = null, marks = [], unreadable = null) {
+  const doors = unreadable ? [] : stopDoorsNearest(service, at);
+  const vessel = vesselIdOf(service);
+  const lent = `ride is lent by the ground inside ${vessel ?? "her"}, so it is declared aboard, and the class that grants it is not a place to walk to.`;
+  if (!doors.length) {
+    const why = unreadable ?? "her timetable names no stops";
+    return { vessel, doors: [], affordable_at: [], timetable_unreadable: why,
+      sentence: `${lent} Her timetable could not be read just now (${why}), so this office cannot name her stops; ask again shortly. Her stops are the doors in.` };
+  }
+  const list = doors.map((d) => (d.distance_m == null ? d.mark : `${d.mark} (${d.distance_m.toLocaleString("en-US")} m)`)).join(", ");
+  return {
+    vessel,
+    doors,
+    affordable_at: doors.map((d) => ({ mark: d.mark, class: marks.find((m) => m.id === d.mark)?.class ?? null, at: d.at })),
+    sentence: `${lent} Every stop on her timetable is a door into her wherever her hull is, and her own berth${vessel ? ` (${vessel})` : ""} is one while she is alongside${at ? ". Nearest first" : ". They are"}: ${list}. Walk to one with the entry composed: do: "walk", args: { mark_id: "<the stop>", enter_on_arrival: true }. On arrival her door shows its terms; walk again with accept: true to board, and aboard, ride is yours to declare.`,
+  };
+}
+
 async function rideDoorsFor(oriented) {
+  const sp = oriented?.standpoint;
+  const at = Number.isFinite(sp?.x) && Number.isFinite(sp?.y) ? { x: sp.x, y: sp.y } : null;
   try {
     const w = await worldStateRaw();
-    const { service } = await vesselServiceFrom(w, { repo: WORLD_CLONE });
-    const sp = oriented?.standpoint;
-    const at = Number.isFinite(sp?.x) && Number.isFinite(sp?.y) ? { x: sp.x, y: sp.y } : null;
-    const doors = stopDoorsNearest(service, at);
-    if (!doors.length) return null;
-    const vessel = vesselIdOf(service);
-    const list = doors.map((d) => (d.distance_m == null ? d.mark : `${d.mark} (${d.distance_m.toLocaleString("en-US")} m)`)).join(", ");
-    return {
-      vessel,
-      doors,
-      affordable_at: doors.map((d) => ({ mark: d.mark, class: (w?.marks ?? []).find((m) => m.id === d.mark)?.class ?? null, at: d.at })),
-      sentence: `ride is lent by the ground inside ${vessel ?? "her"}, so it is declared aboard, and the class that grants it is not a place to walk to. Every stop on her timetable is a door into her, wherever her hull is${at ? ", nearest first" : ""}: ${list}. Enter one (do: "enter", args: { mark: "<the stop>" }; entering from outside walks you to its threshold), and aboard, ride is yours to declare.`,
-    };
-  } catch { return null; }
+    const { service, reason, errors } = await vesselServiceFrom(w, { repo: WORLD_CLONE });
+    const why = service ? null : (reason ?? errors?.[0]?.error ?? "no timetable");
+    return rideDoorsOf(service, at, w?.marks ?? [], why);
+  } catch (e) {
+    return rideDoorsOf(null, at, [], String(e?.message ?? e).slice(0, 160));
+  }
 }
 
 /** The three shelves. Complete for you, capped around you, pointers for the town. */
@@ -2519,7 +2547,7 @@ async function apexDo(args, key, ctx = {}) {
       if (ride)
         return bounce(422, `"ride" is not afforded where you stand — you are not aboard ${ride.vessel ?? "her"}`,
           `${ride.sentence} ${canDo}`,
-          { ride_doors: ride.doors, affordable_at: ride.affordable_at, affordable_here: here });
+          { ride_doors: ride.doors, affordable_at: ride.affordable_at, ...(ride.timetable_unreadable ? { timetable_unreadable: ride.timetable_unreadable } : {}), affordable_here: here });
       return elsewhere.length
         ? bounce(422, `"${action}" is not afforded where you stand`,
           `It is afforded at ${elsewhere.map((w) => `${w.mark} (${w.at.x}, ${w.at.y})`).join("; ")} — walk there and it appears. ${canDo}`,
@@ -3116,7 +3144,7 @@ async function apexReadAction(args, key, ctx = {}) {
       if (ride)
         return bounce(422, `"ride" is not an action anywhere in your view — you are not aboard ${ride.vessel ?? "her"}`,
           `${ride.sentence} Readable from here: ${here.join(", ") || "(nothing)"}.`,
-          { ride_doors: ride.doors, readable_here: here, affordable_at: ride.affordable_at });
+          { ride_doors: ride.doors, readable_here: here, affordable_at: ride.affordable_at, ...(ride.timetable_unreadable ? { timetable_unreadable: ride.timetable_unreadable } : {}) });
       return bounce(422, `"${action}" is not an action anywhere in your view — nothing to read`,
         `Readable from here: ${here.join(", ") || "(nothing)"}${elsewhere.length ? ` — and "${action}" stands at ${elsewhere.map((w) => w.mark).join(", ")}` : ""}.`,
         { readable_here: here, affordable_at: elsewhere });
