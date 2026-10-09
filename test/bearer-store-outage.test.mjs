@@ -18,6 +18,11 @@
 //   B3  the store back: the same token answers 200 at /me again
 //
 //   node --test test/bearer-store-outage.test.mjs
+//
+// A SERVER OF ITS OWN IS ONE MORE POSTGRES PER RUN (review of #449). If the file
+// dies before after() (a killed run, an uncaught error), that server is left
+// running under the temp dir: `node G:/Postmark/pool/pg.mjs reap` stops it, and
+// run-heavy reaps before every slot (POS-479).
 
 import test, { after } from "node:test";
 import assert from "node:assert/strict";

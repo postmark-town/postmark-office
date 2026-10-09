@@ -136,10 +136,23 @@ const sweep = async (odb) => {
 // residents found their connectors "invalidated". Every read of these tables
 // checks `expires` itself, so a late sweep changes no answer. It runs after the
 // route has answered, and a failure is one logged line, never a refusal.
-const sweepAfter = (ctx) => setImmediate(async () => {
-  try { await sweep(ctx.odb); }
-  catch (e) { console.error(`[oauth] the sweep failed (housekeeping only; the request was answered): ${String(e?.message ?? e).slice(0, 200)}`); }
-});
+//
+// ONE AT A TIME, AT MOST ONCE A MINUTE (review of #449, finding 3). Run after
+// every request, a keyless loop on discovery (which answers at once) could queue
+// sweeps without bound on the paperwork pool every bearer lookup shares, and
+// starve the lookups into the very 503s this exists to prevent.
+const SWEEP_EVERY_S = 60;
+let sweeping = false, lastSweep = 0;
+const sweepAfter = (ctx) => {
+  if (sweeping || now() - lastSweep < SWEEP_EVERY_S) return;
+  sweeping = true;
+  lastSweep = now();
+  setImmediate(async () => {
+    try { await sweep(ctx.odb); }
+    catch (e) { console.error(`[oauth] the sweep failed (housekeeping only; the request was answered): ${String(e?.message ?? e).slice(0, 200)}`); }
+    finally { sweeping = false; }
+  });
+};
 
 // Split out and EXPORTED because the claim desk is not an oauth route and never
 // reached this sweep. It ran only inside handleOauth, so an expired ask sat in
@@ -1134,13 +1147,28 @@ async function handleOauthRoute(req, res, ctx) {
   // commit together, or nothing does. A code is burned in the same transaction
   // as its tokens: a refused code still commits its own deletion (single use,
   // even on failure), but a code whose exchange the store could not finish is
-  // still there for the retry. Anything thrown inside is the office's fault,
+  // still there for the retry. THE DELETE IS THE CLAIM (review of #449): two
+  // grants of one token both read the row, and under READ COMMITTED the second
+  // DELETE waits for the first and then deletes nothing. Only the grant whose
+  // DELETE took the row issues tokens, so a refresh family cannot fork and a
+  // code cannot be spent twice. Anything thrown inside is the office's fault,
   // not the grant's: it answers 503 with Retry-After, and never `invalid_grant`,
   // which a client reads as "sign in again".
   if (req.method === "POST" && path === "/oauth/token") {
     const body = parseForm(await readBody(req), req.headers["content-type"]);
+    // A MALFORMED GRANT IS THE CLIENT'S, NEVER AN OUTAGE (review of #449,
+    // finding 5). A non-string field (a JSON body's number) threw inside the
+    // transaction, and a NUL reached the store as an encoding error: both were
+    // answered as the 503 a client retries forever, and logged as the store.
+    if (body == null || typeof body !== "object" || Array.isArray(body))
+      return oerr(res, 400, "invalid_request", "the token request's body must be a form or a JSON object");
     if (body.grant_type !== "authorization_code" && body.grant_type !== "refresh_token")
       return oerr(res, 400, "unsupported_grant_type", "authorization_code or refresh_token");
+    for (const field of ["code", "refresh_token", "code_verifier"]) {
+      const v = body[field];
+      if (v != null && (typeof v !== "string" || v.includes("\0")))
+        return oerr(res, 400, "invalid_request", `${field} must be a string without NUL characters`);
+    }
     const refuse = (description) => ({ refused: description });
 
     let out;
@@ -1148,8 +1176,8 @@ async function handleOauthRoute(req, res, ctx) {
       out = await odb.tx(async (t) => {
         if (body.grant_type === "authorization_code") {
           const row = await t.get("SELECT json, expires FROM codes WHERE code = ?", body.code ?? "");
-          await t.run("DELETE FROM codes WHERE code = ?", body.code ?? ""); // single use, even on failure
-          if (!row || row.expires < now()) return refuse("code unknown or expired");
+          const { changes } = await t.run("DELETE FROM codes WHERE code = ?", body.code ?? ""); // single use, even on failure
+          if (!row || !changes || row.expires < now()) return refuse("code unknown or expired");
           const grant = JSON.parse(row.json);
           if (body.client_id && body.client_id !== grant.client_id) return refuse("client_id mismatch");
           if (body.redirect_uri && body.redirect_uri !== grant.redirect_uri) return refuse("redirect_uri mismatch");
@@ -1159,13 +1187,19 @@ async function handleOauthRoute(req, res, ctx) {
         const hash = sha256(body.refresh_token ?? "");
         const row = await t.get("SELECT * FROM tokens WHERE token_hash = ? AND kind = 'refresh'", hash);
         if (!row || row.expires < now()) return refuse("refresh token unknown or expired");
-        await t.run("DELETE FROM tokens WHERE token_hash = ?", hash); // rotate
+        const { changes } = await t.run("DELETE FROM tokens WHERE token_hash = ? AND kind = 'refresh'", hash); // rotate
+        if (!changes) return refuse("refresh token unknown or expired"); // another grant took it first
         return { grant: await issueTokens(t, { client_id: row.client_id, gh_id: row.gh_id, gh_login: row.gh_login }) };
       });
     } catch (e) {
-      console.error(`[oauth] the token endpoint could not reach its record (answered 503; nothing was changed): ${String(e?.message ?? e).slice(0, 200)}`);
+      // "MAY NOT", NEVER "NOTHING WAS" (review of #449, finding 4): a COMMIT the
+      // store applied whose acknowledgement was lost to the outage throws here
+      // too, and then the old refresh token is gone. The window is narrow and
+      // accepted as residual this week (a grace for the retired token is
+      // Darko's call, alongside family revocation); the answer must not promise.
+      console.error(`[oauth] the token endpoint could not reach its record (answered 503; the record may not have been changed) [${e?.code ?? e?.name ?? "?"}]: ${String(e?.message ?? e).slice(0, 200)}`);
       return jres(res, 503, { error: "temporarily_unavailable",
-        error_description: "the office could not reach its record; nothing was changed, so the same request will work once it is back" },
+        error_description: "the office could not reach its record, so your sign-in may not have been changed; send the same request again after Retry-After seconds" },
       { "retry-after": String(TOKEN_RETRY_AFTER_S) });
     }
     return out.refused ? oerr(res, 400, "invalid_grant", out.refused) : jres(res, 200, out.grant);
@@ -1184,8 +1218,15 @@ async function handleOauthRoute(req, res, ctx) {
 // a readable one, so the catch answers HTML only for the browser-facing set and
 // re-throws otherwise — server.mjs's outer catch then answers the JSON bounce it
 // always did. That outer catch stays the API path's answer; this is the human's.
+//
+// TWO /oauth PATHS ARE MACHINE-FACING (review of #449, finding 6): the token
+// endpoint and dynamic registration are called and parsed by a client, never
+// walked by a browser, so a failure there reaches the JSON bounce too, however
+// the client's Accept header reads.
+const MACHINE_FACING = new Set(["/oauth/token", "/oauth/register"]);
 const browserFacing = (req) => {
   const path = new URL(req.url ?? "/", "http://localhost").pathname.replace(/\/+$/, "") || "/";
+  if (MACHINE_FACING.has(path)) return false;
   if (path.startsWith("/oauth")) return true;
   const accept = String(req.headers?.accept ?? "");
   return /\btext\/html\b/i.test(accept);
