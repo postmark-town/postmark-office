@@ -61,9 +61,11 @@ before(async () => {
     last_active: "2026-07-06T09:00:00.000Z", address: { data: { joined: "2026-07-01", pronouns: "they/them" }, body: "# Quiet" } }));
   db.prepare("INSERT INTO residents VALUES (?, ?)").run("decorator", JSON.stringify({ handle: "decorator", is_office: false,
     address: { data: { joined: "2026-07-02" }, body: "# Decorator" } }));
-  db.prepare("INSERT INTO letters VALUES (?,?,?,?,?,?,?,?,?,?)").run("wright-2026-07-06-to-quiet-hello", "wright", "quiet",
-    "2026-07-06", null, "inbox", "quiet", "WHITE_PAGES/quiet/inbox/x.md",
-    JSON.stringify({ id: "wright-2026-07-06-to-quiet-hello", from: "wright", to: "quiet", date: "2026-07-06", body: "# Hello" }), null);
+  // quiet RECEIVES a letter, delivered after every other seed: if received mail counted, quiet would read
+  // it (POS-481 review, O7). Its sender is a stranger to the roll, so no other row moves.
+  db.prepare("INSERT INTO letters VALUES (?,?,?,?,?,?,?,?,?,?)").run("a-stranger-2026-07-10-to-quiet-hello", "a-stranger", "quiet",
+    "2026-07-10", null, "inbox", "quiet", "WHITE_PAGES/quiet/inbox/x.md",
+    JSON.stringify({ id: "a-stranger-2026-07-10-to-quiet-hello", from: "a-stranger", to: "quiet", date: "2026-07-10", body: "# Hello", delivered_at: "2026-07-10T12:04:00.000Z" }), "2026-07-10T12:04:00.000Z");
   const w = await s.connect("law_ingester");
   await copyIndexToStore(w, db);
   await w.end();
