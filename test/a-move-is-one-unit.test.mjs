@@ -13,7 +13,7 @@
 // `clearing-job.mjs` as a child under the `clearing_job` pen, because the
 // refusals here are constraints only Postgres raises.
 
-import { test } from "node:test";
+import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -27,6 +27,7 @@ const LAW_SHA = "l".repeat(40);
 const WIN = 250;
 
 const store = await startStore({ db: "move_unit_test" });
+after(() => store.stop()); // a store never stopped left its server running on every run (POS-479)
 const skip = store.skip ?? false;
 
 const box = (at, ext) => `((${at.x - ext.w / 2},${at.y - ext.h / 2}),(${at.x + ext.w / 2},${at.y + ext.h / 2}))`;

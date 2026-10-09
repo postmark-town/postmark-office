@@ -49,7 +49,9 @@ test("one crossing, end to end, through the dev office's doors: green, every ste
   const lines = [];
   const r = await runRehearsal(target(), { log: (l) => lines.push(l) });
   const text = renderReport(r);
-  assert.match(lines[0], /^dev-rehearsal: target store w2_devsandbox_rehearsal \(the dev office's, from .*\); not world2_dev$/);
+  // the store's own database: w2_devsandbox_rehearsal, or on a pool tree t<pid>_<n>_w2_devsandbox_rehearsal (POS-479)
+  assert.match(dev.store.database, /^(t\d+_\d+_)?w2_devsandbox_rehearsal$/);
+  assert.match(lines[0], new RegExp(`^dev-rehearsal: target store ${dev.store.database} \\(the dev office's, from .*\\); not world2_dev$`));
   assert.equal(r.green, true, text);
   const ran = r.steps.filter((s) => !s.pending).map((s) => s.id);
   assert.deepEqual(ran, ["preflight", "sign-in", "join", "resident", "letters", "crossing", "claim", "clearing", "settle", "bless", "clearing-rerun", "by-hand"], text);

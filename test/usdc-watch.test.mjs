@@ -16,15 +16,15 @@
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 
 import { INTAKE, USDC, TRANSFER_TOPIC, MIN_CONF, verifyUsdcPayment } from "../src/usdc-witness.mjs";
 import { fundVerify } from "../src/fund.mjs";
 import { NO_TOWN, townClone, townModuleUrl } from "./fixture-paths.mjs";
 import { startPayerStore } from "./helpers/payer-store.mjs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import {
   watch, scanRange, reconcile, decodeArrival, ledgerEntries,
   MIN_USD, UNDER_A_DOLLAR, MAX_SPAN,
@@ -90,7 +90,7 @@ function chain({ head = 5000, logs = [], throws = false } = {}) {
 // ── a throwaway town with a real, sealed ledger ─────────────────────────────
 function seamTown() {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
-  const repo = mkdtempSync(join(tmpdir(), "watch-town-"));
+  const repo = tempDir("watch-town-");
   mkdirSync(join(repo, "tools"), { recursive: true });
   mkdirSync(join(repo, "WHITE_PAGES"), { recursive: true });
   // Each resident has a room: the store's roll is the town's rooms (POS-346).

@@ -26,10 +26,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, existsSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const RETRY = join(HERE, "..", "deploy", "settlement-retry.sh");
@@ -39,7 +39,7 @@ const RETRY = join(HERE, "..", "deploy", "settlement-retry.sh");
  * in order (the last code repeats). Returns { exit, attempts, stderr }.
  */
 function drive(max, codes) {
-  const dir = mkdtempSync(join(tmpdir(), "settlement-retry-"));
+  const dir = tempDir("settlement-retry-");
   const log = join(dir, "attempts.log");
   const script = [
     `printf '%s\\n' "$SETTLEMENT_ATTEMPT" >> '${log.replace(/\\/g, "/")}'`,

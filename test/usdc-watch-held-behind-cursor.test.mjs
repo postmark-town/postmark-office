@@ -96,6 +96,7 @@ import { INTAKE, USDC, TRANSFER_TOPIC, MIN_CONF } from "../src/usdc-witness.mjs"
 import { CROSSING_MS } from "../src/crossings.mjs";
 import { watch, decodeArrival, SINK_POT, SINK_AGE_DAYS, OUTSIDE_FROM, sinkEnabled } from "../tools/usdc-watch.mjs";
 import { NO_TOWN, townClone, townModuleUrl } from "./fixture-paths.mjs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 // `unresolvedSeen`, `journalRef` and the journal's two file functions are
 // imported INSIDE the cases that need them, on purpose. A static import of a
 // symbol the train tip does not export is a LOAD error, and a load error reds
@@ -167,7 +168,7 @@ function chain({ head, logs = [], blockTs = null, throws = false } = {}) {
 
 function seamTown() {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
-  const repo = mkdtempSync(join(tmpdir(), "usdc-held-"));
+  const repo = tempDir("usdc-held-");
   mkdirSync(join(repo, "tools"), { recursive: true });
   mkdirSync(join(repo, "WHITE_PAGES"), { recursive: true });
   writeFileSync(join(repo, "tools", "github-ids.json"), JSON.stringify({ paz: { login: "p", id: 2 }, stan: { login: "s", id: 1 } }));

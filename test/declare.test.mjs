@@ -17,9 +17,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 import { fixtureDb } from "./fixture.mjs";
 import {
   conformance, planDeclaration, declareHousehold, handleTaken,
@@ -30,6 +29,7 @@ import { REGISTRY_PATH, serializeRegistry, serializePins, buildJoinFiles, buildB
 import { arrivalPage } from "../src/arrival.mjs";
 import { withRecordFrom } from "./registry-pool-stub.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 // ── fixtures ────────────────────────────────────────────────────────────────
 
@@ -60,7 +60,7 @@ const GOOD = () => ({
 // A town clone with the two registers and a gangway, git-init'd so penCommit
 // has something real to commit onto.
 function declClone({ frozen = false, registry = REGISTRY(), pins = {} } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "postmark-office-declare-"));
+  const dir = tempDir("postmark-office-declare-");
   mkdirSync(join(dir, "tools"), { recursive: true });
   mkdirSync(join(dir, "HARBOR", "berths"), { recursive: true });
   mkdirSync(join(dir, "WHITE_PAGES"), { recursive: true });
