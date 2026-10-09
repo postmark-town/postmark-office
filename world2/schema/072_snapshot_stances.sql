@@ -46,6 +46,12 @@
 -- 054 and 069 first. A clearing on a store without this file rolls its window
 -- back at the seal, by design.
 --
+-- APPLY IT BETWEEN CROSSINGS. ADD COLUMN takes ACCESS EXCLUSIVE on
+-- world_snapshots. Behind a running clearing it would queue, and every
+-- /world/state read would queue behind it. So it waits at most 5 s for its lock
+-- and then fails, changing nothing (lock_not_available, 55P03); run it again
+-- after the clearing (review of #451, F7).
+--
 -- Proof it landed:
 --   SELECT column_name, data_type FROM information_schema.columns
 --    WHERE table_name = 'world_snapshots' AND column_name = 'stances';   -- jsonb
@@ -56,6 +62,8 @@
 -- world2/tools/world-snapshot.mjs (--verify).
 
 BEGIN;
+
+SET LOCAL lock_timeout = '5s';
 
 ALTER TABLE world_snapshots ADD COLUMN IF NOT EXISTS stances jsonb
   CHECK (stances IS NULL OR (jsonb_typeof(stances) = 'object'

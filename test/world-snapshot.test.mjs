@@ -422,4 +422,27 @@ test("072: a malformed cutover is never guessed: the clearing refuses and the wi
   assert.deepEqual(await read("SELECT id FROM world_snapshots WHERE window_id = 302"), [], "no seal");
 });
 
+test("072 waits at most 5 s for its lock behind a running reader, then fails changing nothing (review of #451, F7: apply it between crossings)", { skip }, async () => {
+  await seed();
+  await owner((c) => c.query("ALTER TABLE world_snapshots DROP COLUMN IF EXISTS stances"));
+  const reader = await store.connect("world2_owner");
+  try {
+    await reader.query("BEGIN");
+    await reader.query("LOCK TABLE world_snapshots IN ACCESS SHARE MODE");   // a clearing or a /world/state read, mid-transaction
+    const started = Date.now();
+    const outcome = await Promise.race([
+      owner((c) => c.query(readFileSync(join(ROOT, "world2", "schema", "072_snapshot_stances.sql"), "utf8"))).then(() => "applied", (e) => e?.code ?? String(e)),
+      new Promise((ok) => setTimeout(() => ok("still waiting after 15 s"), 15000)),
+    ]);
+    assert.equal(outcome, "55P03", "lock_not_available, not a queue that holds every read behind it");
+    assert.ok(Date.now() - started < 12000);
+  } finally {
+    await reader.query("ROLLBACK").catch(() => {});
+    await reader.end();
+  }
+  await owner((c) => c.query(readFileSync(join(ROOT, "world2", "schema", "072_snapshot_stances.sql"), "utf8")));
+  const [{ t }] = await read("SELECT data_type AS t FROM information_schema.columns WHERE table_name = 'world_snapshots' AND column_name = 'stances'");
+  assert.equal(t, "jsonb", "and between crossings it applies");
+});
+
 test.after(async () => { if (!skip) await store.stop(); });
