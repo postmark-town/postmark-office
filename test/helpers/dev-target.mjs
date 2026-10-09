@@ -89,24 +89,21 @@ export async function localDevTarget({
     }
     log(`clones: town ${g(town, "rev-parse", "--short", "HEAD")}, world ${g(world, "rev-parse", "--short", "HEAD")}`);
 
-    // THE STAMP KEY. The dev box keeps its own (/srv/postmark-office-dev/stamp-key.pem);
-    // here a throwaway one, and the ledger re-signed under it with the town's
-    // public key replaced, the stamp sandbox's way (tools/stamp-sandbox.mjs §
-    // prepareTown), so the town's own verifier checks every line with one key.
-    // Real residents' outboxes are set aside so only the rehearsal's letters cross.
+    // THE STAMP KEY. The dev box keeps its own (/srv/postmark-office-dev/stamp-key.pem),
+    // and postmark-dev-freshen moves the clone onto it every night with
+    // tools/dev-ledger-resign.mjs; here a throwaway key, a stand-in "prod" key
+    // the tool must refuse, and the same tool. Real residents' outboxes are then
+    // set aside so only the rehearsal's letters cross.
     const { generateKeyPairSync } = await import("node:crypto");
-    const { resignLedger, carryRuledSignatures } = await import("../../tools/stamp-sandbox.mjs");
-    const { privateKey, publicKey } = generateKeyPairSync("ed25519");
-    const keyPem = privateKey.export({ type: "pkcs8", format: "pem" });
+    const { resignDevTown } = await import("../../tools/dev-ledger-resign.mjs");
+    const pemOf = () => generateKeyPairSync("ed25519").privateKey.export({ type: "pkcs8", format: "pem" });
+    const keyPem = pemOf();
     const stampKey = join(dir, "stamp-key.pem");
     writeFileSync(stampKey, keyPem);
-    const engine = await import(pathToFileURL(join(town, "tools", "stamp-mint.mjs")).href);
-    const ledgerPath = join(town, "WHITE_PAGES", "stamp-ledger.md");
-    const text = readFileSync(ledgerPath, "utf8");
-    const copy = resignLedger(text, keyPem, engine);
-    writeFileSync(ledgerPath, copy);
-    writeFileSync(join(town, "tools", "stamp-pubkey.pem"), publicKey.export({ type: "spki", format: "pem" }));
-    carryRuledSignatures(town, engine.parseStampLedger(text), engine.parseStampLedger(copy));
+    const prodKey = join(dir, "prod-stamp-key.pem");
+    writeFileSync(prodKey, pemOf());
+    const moved = await resignDevTown({ town, keyPem, notKeyPem: readFileSync(prodKey, "utf8") });
+    if (moved.status !== "resigned") throw new Error(`the stand-in's re-sign: ${moved.status} ${moved.why ?? ""}`);
     const wp = join(town, "WHITE_PAGES");
     for (const room of readdirSync(wp, { withFileTypes: true })) {
       const ob = join(wp, room.name, "outbox");
@@ -114,7 +111,7 @@ export async function localDevTarget({
       for (const f of readdirSync(ob)) if (f !== ".gitkeep") rmSync(join(ob, f), { recursive: true, force: true });
     }
     g(town, "add", "-A");
-    g(town, "commit", "-q", "-m", "harness: the ledger re-signed under a throwaway key; real outboxes set aside");
+    g(town, "commit", "-q", "-m", "harness: real outboxes set aside");
 
     // the registry, from the town's two printouts (019 needs since/declared_by; a printout may omit them)
     const read = (rel) => (existsSync(join(town, rel)) ? JSON.parse(readFileSync(join(town, rel), "utf8")) : null);
@@ -145,6 +142,19 @@ export async function localDevTarget({
     } finally { sdb.close(); await w.end(); }
     log(`store: registry seeded; office.db hydrated and its town index copied in ${Math.round((Date.now() - t0) / 1000)} s`);
 
+    // THE STORE'S STAMP CHAIN, in the box's switch order (066/067, one ingest, one
+    // stamp-lines --sync, then STAMP_LINES=store; deploy/DEPLOY.md § The dev
+    // rehearsal): recorded from the clone AFTER the re-sign, so it carries dev's signatures.
+    const { syncStampLinesVia } = await import("../../src/stamp-lines.mjs");
+    const pen = await store.connect("office_api");
+    try {
+      await pen.query("BEGIN");
+      const synced = await syncStampLinesVia(pen, town);
+      await pen.query("COMMIT");
+      log(`store: stamp_lines holds the clone's ${synced.inserted} ledger lines`);
+    } catch (e) { await pen.query("ROLLBACK").catch(() => {}); throw e; }
+    finally { await pen.end(); }
+
     // THE CANDLE: one open window, as the dev store always holds one (the clearing
     // opens the next in the same transaction). The id is a crossing number past the
     // world's newest settlement, so a blessed rehearsal settlement names a real window.
@@ -170,7 +180,7 @@ export async function localDevTarget({
       WORLD2_PG: "1", WORLD2_CANDLE: "1",
       WORLD2_PG_URL: store.url("office_api"), WORLD2_STANCE_URL: store.url("stance_reader"),
       W2_PEN: "stance,hold,say,walk,frame,mark", W2_GUARDS: "1", WORLD_POSITIONS: "1",
-      OFFICE_READ_WORKERS: "0", STAMP_KEY: stampKey,
+      OFFICE_READ_WORKERS: "0", STAMP_KEY: stampKey, STAMP_LINES: "store",
       STATE_LOG_SOURCE: "store", OFFICE_PAPERWORK_STORE: "1", TOWN_INDEX_READS: "store",
       ...envOverrides,
     };
@@ -199,6 +209,6 @@ export async function localDevTarget({
       office = { child, stderr: () => errText };
       log(`office: listening on :${officePort}`);
     }
-    return { dir, store, town, world, envFile, rolesFile, officeBase: `http://127.0.0.1:${officePort}`, ghPort, office, stop };
+    return { dir, store, town, world, envFile, rolesFile, prodKey, officeBase: `http://127.0.0.1:${officePort}`, ghPort, office, stop };
   } catch (e) { await stop(); throw e; }
 }

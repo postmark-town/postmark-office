@@ -13,12 +13,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { PROD_DB, databaseOf, githubStub, parseEnvFile, storeGuard, treeTables } from "../tools/dev-rehearsal.mjs";
+import { CROSSING, PROD_DB, databaseOf, githubStub, parseEnvFile, storeGuard, treeTables } from "../tools/dev-rehearsal.mjs";
 
 const OFFICE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const TOOL = join(OFFICE, "tools", "dev-rehearsal.mjs");
@@ -117,4 +117,56 @@ test("the GitHub stub answers the pen's join road and records the PR's files, ne
       assert.equal(other.body.message, "the rehearsal's stub answers only the town repo", "the stub answers only the town repo it was given");
     } finally { await stub.close(); }
   } finally { rmSync(town, { recursive: true, force: true }); }
+});
+
+// ── THE CROSSING IS THE BOX'S (POS-354, 10-09) ───────────────────────────────
+//
+// The rehearsal's crossing step runs CROSSING, a list of the jobs the box runs:
+// postmark-ferry.service's ExecStart, then the keep tick's locked section
+// (deploy/office-keep.sh). On 10-07 it was written by hand, and by 10-09 the box
+// had moved to the store's mint and the office's ballot pass while the
+// rehearsal still ran the town's. This census reads both box files and holds
+// the list to them: a job the box adds, or one the rehearsal drops, is red here.
+//
+// THE CAN-FAIL FLIP: delete the `ballot` entry from CROSSING; the ferry census
+// goes red naming tools/ballot-pass-run.mjs.
+
+/** Every job a box shell text runs: office scripts as office-relative paths, the town's (run from the clone) as `town:`. */
+function jobsIn(text) {
+  const out = new Set();
+  for (const m of text.matchAll(/(?:\/usr\/bin\/node|\bnode|\/bin\/bash)\s+("?)(\/srv\/postmark-office\/)?([A-Za-z0-9_./-]+\.(?:mjs|sh))\1/g)) {
+    if (m[3].startsWith("$")) continue;
+    out.add(m[2] ? m[3] : `town:${m[3]}`);
+  }
+  return out;
+}
+const boxFile = (rel) => readFileSync(join(OFFICE, rel), "utf8");
+const crossingJobs = (phase) => new Set(CROSSING.filter((j) => j.phase === phase).map((j) => j.box));
+const diff = (a, b) => [...a].filter((x) => !b.has(x)).sort();
+
+test("the rehearsal's crossing runs every job postmark-ferry.service runs, and no other", () => {
+  const unit = boxFile("deploy/postmark-ferry.service");
+  const exec = unit.slice(unit.indexOf("ExecStart="), unit.indexOf("NoNewPrivileges"));
+  const box = jobsIn(exec);
+  assert.ok(box.size >= 10, `the census found only ${[...box].join(", ")} in the unit`);
+  const mine = crossingJobs("ferry");
+  assert.deepEqual(diff(box, mine), [], "the box's ferry runs jobs the rehearsal does not");
+  assert.deepEqual(diff(mine, box), [], "the rehearsal runs ferry jobs the box does not");
+});
+
+test("the rehearsal's tick runs every job the keep tick runs under its lock, and no other", () => {
+  const keep = boxFile("deploy/office-keep.sh");
+  const from = keep.indexOf("flock -w 300 9"), to = keep.indexOf("mint catch-up FAILED");
+  assert.ok(from > 0 && to > from, "the keep tick's locked section moved: re-anchor this census");
+  const box = jobsIn(keep.slice(from, to));
+  const mine = crossingJobs("keep");
+  assert.deepEqual(diff(box, mine), [], "the keep tick runs jobs the rehearsal does not");
+  assert.deepEqual(diff(mine, box), [], "the rehearsal runs tick jobs the keep tick does not");
+});
+
+test("both sides of the stamp switch are rehearsable: each STAMP_LINES job has its other side or runs only on one", () => {
+  for (const name of ["mint", "quests", "tick-mint"]) {
+    const sides = CROSSING.filter((j) => j.name === name).map((j) => j.when).sort();
+    assert.deepEqual(sides, ["git", "store"], `${name} must have a store side and a git side`);
+  }
 });
