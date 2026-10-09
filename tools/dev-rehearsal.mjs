@@ -536,7 +536,7 @@ export function plan() {
         // The keeping tick's bind (deploy/office-keep.sh runs it inside the town lock).
         const cursor = join(ctx.scratch, "settle-pass.cursor");
         writeFileSync(cursor, new Date(Date.now() - 3600_000).toISOString() + "\n");
-        const bind = ctx.job("deploy/settle-pass.mjs", ["--town", ctx.t.townClone, "--cursor", cursor]);
+        const bind = await ctx.job("deploy/settle-pass.mjs", ["--town", ctx.t.townClone, "--cursor", cursor]);
         return { asked, road: `join PR #${pr.number}, merged, bound by settle-pass`, pr: pr.number, files: files.map((f) => f.path), bind };
       },
       async check(ctx, r, rec) {
@@ -574,7 +574,7 @@ export function plan() {
         const harbor = out.filter((r) => r.status === 403 && /harbor/.test(r.body?.defect ?? "")).length;
         if (harbor === out.length) {
           ctx.findings.push(`letters: a house the declaration door answered "settled: true" was refused mail as a harbor act (${harbor}/${out.length} letters, 403 "${out[0].body.defect}") until the town-index ingest ran; on the box that is up to 15 minutes after joining`);
-          const ing = ctx.ingest("world2/tools/town-index-ingest.mjs", ["--town-repo", ctx.t.townClone, "--sha", git(ctx.t.townClone, "rev-parse", "HEAD")]);
+          const ing = await ctx.ingest("world2/tools/town-index-ingest.mjs", ["--town-repo", ctx.t.townClone, "--sha", git(ctx.t.townClone, "rev-parse", "HEAD")]);
           if (ing.code !== 0) return { out, ingest: ing };
           await new Promise((ok) => setTimeout(ok, 6_000)); // the office's reload poll (OFFICE_RELOAD_POLL_MS, 5 s)
           out = await send();
@@ -601,28 +601,28 @@ export function plan() {
         const steps = [];
         for (const job of CROSSING) {
           if (job.when && job.when !== (ctx.storeMint ? "store" : "git")) continue;
-          const r = job.run(ctx);
+          const r = await job.run(ctx);
           steps.push([job.name, r, job]);
           if (r.code !== 0 && !job.nonFatal) break; // the unit's `&&`: the first refusal stops the chain
           if (job.commit) ctx.commitTown(typeof job.commit === "function" ? job.commit(ctx) : job.commit);
         }
         // the store's town index catches up to the clone (on the box: postmark-town-index.service, every 15 min)
         if (steps.every(([, r, job]) => r.code === 0 || job.nonFatal))
-          steps.push(["index", ctx.ingest("world2/tools/town-index-ingest.mjs", ["--town-repo", ctx.t.townClone, "--sha", git(ctx.t.townClone, "rev-parse", "HEAD")]), {}]);
+          steps.push(["index", await ctx.ingest("world2/tools/town-index-ingest.mjs", ["--town-repo", ctx.t.townClone, "--sha", git(ctx.t.townClone, "rev-parse", "HEAD")]), {}]);
         return steps;
       },
       async check(ctx, steps, rec) {
         const p = [];
         for (const [name, r, job] of steps) {
           if (r.code === 0) continue;
-          if (job.nonFatal) rec.notes.push(`${name} exited ${r.code} (the box runs it non-fatal): ${tail(r.out, 2)}`);
+          if (job.nonFatal) rec.notes.push(`${name} exited ${r.code} (the box runs it non-fatal): ${tail(r.out, 6)}`);
           else p.push(`${name} exited ${r.code}: ${tail(r.out)}`);
         }
         if (p.length) return p;
         rec.notes.push(`the chain: ${steps.map(([name]) => name).join(" → ")} (${ctx.storeMint ? "STAMP_LINES=store: the store's mint" : "the town's own --append"})`);
         if (ctx.storeMint) {
           // the store's chain and its export agree, line for line (the switch's own verifier)
-          const v = ctx.job("world2/tools/stamp-lines.mjs", ["--verify", "--clone", ctx.t.townClone]);
+          const v = await ctx.job("world2/tools/stamp-lines.mjs", ["--verify", "--clone", ctx.t.townClone]);
           if (v.code !== 0) p.push(`stamp-lines --verify after the crossing exited ${v.code}: ${tail(v.out)}`);
         }
         const delivered = await ctx.s.q("office_api", "SELECT id, from_h, to_h FROM town_letters WHERE from_h = ANY($1) AND delivered_at IS NOT NULL", [[ctx.who.a, ctx.who.b]]);
@@ -777,7 +777,7 @@ export function plan() {
         } });
         if (claim.status >= 300 || claim.body?.error) return { claim };
         await ctx.s.q("clearing_job", "UPDATE windows SET closes_at = date_trunc('second', now()) WHERE id = $1 AND status = 'open' AND closes_at > now()", [ctx.window2]);
-        const clearing = ctx.clearing(ctx.window2);
+        const clearing = await ctx.clearing(ctx.window2);
         if (clearing.code !== 0) return { claim, clearing };
         return { claim, clearing, settle: await ctx.settlement({ byHand: true }) };
       },
@@ -803,7 +803,7 @@ export function plan() {
         ctx.mark3 = `rh-${ctx.run}-lamp`;
         ctx.ghost = `rh-${ctx.run}-gone`;
         const claim = await door(ctx.t, "POST", "/world/marks", { key: ctx.key, body: {
-          by: ctx.who.a, slug: ctx.mark3, kind: "sited", at: ctx.parcelAt, stamps: 0, body: `A lamp on the rehearsal's own ground (POS-354, run ${ctx.run}).`,
+          by: ctx.who.a, slug: ctx.mark3, kind: "sited", at: ctx.parcelAt, extent: { w: 2, h: 2 }, stamps: 0, body: `A lamp on the rehearsal's own ground (POS-354, run ${ctx.run}).`,
         } });
         if (claim.status >= 300 || claim.body?.error) return { claim };
         const [good] = await ctx.s.q("clearing_job", "SELECT id::text, window_id FROM claims WHERE slug = $1 AND claimant = $2 AND status = 'pending'", [`${ctx.who.a}/${ctx.mark3}`, ctx.who.a]);
@@ -823,7 +823,7 @@ export function plan() {
         ctx.settling = ctx.settlement();
         await new Promise((ok) => setTimeout(ok, 5_000));
         await ctx.s.q("clearing_job", "UPDATE windows SET closes_at = date_trunc('second', now()) WHERE id = $1 AND status = 'open' AND closes_at > now()", [ctx.window3]);
-        const clearing = ctx.clearing(ctx.window3);
+        const clearing = await ctx.clearing(ctx.window3);
         const settle = await ctx.settling;
         ctx.settling = null;
         return { claim, clearing, settle };
@@ -888,7 +888,7 @@ async function keyProblems(ctx) {
   const installed = pubPath && existsSync(pubPath) ? readFileSync(pubPath, "utf8").replace(/\r\n/g, "\n") : null;
   if (installed !== pub) p.push(`the dev town clone's tools/stamp-pubkey.pem is not the public half of dev's STAMP_KEY: the clone is not on dev's key, so every line dev's pens sign fails the town's verifier (the freshen moves it: node tools/dev-ledger-resign.mjs --town ${t.townClone} --key ${t.stampKey} --not-key ${t.prodStampKey} --verify)`);
   if (ctx.storeMint && !p.length) {
-    const v = ctx.job("world2/tools/stamp-lines.mjs", ["--verify", "--clone", t.townClone]);
+    const v = await ctx.job("world2/tools/stamp-lines.mjs", ["--verify", "--clone", t.townClone]);
     if (v.code !== 0) p.push(`the store's stamp chain and the dev clone's ledger disagree (stamp-lines --verify exited ${v.code}: ${tail(v.out, 3)}): before a rehearsal the store's lines are trimmed to the clone and synced (deploy/DEPLOY.md § The dev rehearsal)`);
   }
   return p;
@@ -978,9 +978,23 @@ export async function runRehearsal(t, { only = null, keep = false, log = () => {
       job(rel, args = [], { extraEnv = {}, cwd = t.officeRoot } = {}) {
         return ctx.spawn([process.execPath, join(t.officeRoot, rel), ...args], { extraEnv, cwd });
       },
+      /**
+       * A child job, ASYNCHRONOUSLY. The GitHub stub lives in this process, so a
+       * child that calls it (the settle pass, the pen's join road) is answered
+       * only while this event loop runs: under spawnSync the child waited out
+       * fetch's headers timeout (300 s) and threw (the 10-09 local proof).
+       */
       spawn(argv, { extraEnv = {}, cwd = t.officeRoot } = {}) {
-        const r = spawnSync(argv[0], argv.slice(1), { cwd, env: childEnv(t, extraEnv), encoding: "utf8", maxBuffer: 64 * 1024 * 1024, windowsHide: true });
-        return { code: r.status ?? (r.error ? 127 : null), out: `${r.stdout ?? ""}${r.stderr ?? ""}${r.error ? String(r.error.message) : ""}` };
+        return new Promise((ok) => {
+          let out = "", done = false;
+          const finish = (code, extra = "") => { if (!done) { done = true; ok({ code, out: out + extra }); } };
+          const child = spawn(argv[0], argv.slice(1), { cwd, env: childEnv(t, extraEnv), windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+          const add = (d) => { out += d; if (out.length > 32 * 1024 * 1024) out = out.slice(-16 * 1024 * 1024); };
+          child.stdout.on("data", add);
+          child.stderr.on("data", add);
+          child.on("error", (e) => finish(127, String(e.message)));
+          child.on("close", (code) => finish(code));
+        });
       },
       /**
        * A crossing job under the dev office's town lock, as the ferry and the
