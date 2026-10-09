@@ -279,11 +279,13 @@ try {
         // so it names the limit and the law mark that holds it.
         capSeen = {
           checked: true, cap: verdict.cap, law_date: verdict.lawDate, world_sha: verdict.lawSha, households: verdict.householdsSource,
+          ...(verdict.householdsFallback ? { households_fallback: verdict.householdsFallback } : {}),
           over_limit: verdict.opposed.map((r) => ({ slug: r.slug, law: r.law })),
           applied_by: "this clearing: opposed, never materialized (Darko, 2026-10-08)",
           judged: verdict.judged,
         };
         for (const r of verdict.opposed) decide(r.id, "refused", r.check);
+        if (verdict.householdsFallback) console.error(`  ⚠ parcel limits: the household cap was judged on a fallback — ${verdict.householdsFallback}`);
         if (verdict.opposed.length)
           console.log(`  ⚑ parcel limits: opposed ${verdict.opposed.length} claim(s) at this clearing (law ${String(verdict.lawSha).slice(0, 8)}): ${verdict.opposed.map((r) => `${r.slug} (${r.law})`).join(", ")}`);
       }

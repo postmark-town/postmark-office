@@ -217,6 +217,32 @@ test("THE HOUSEHOLDS ARE GROUPED AT THE INGESTED TOWN SHA the settlement seals, 
   });
   assert.equal(verdict.checked, true, verdict.reason);
   assert.ok(verdict.householdsSource.includes(`town ${older.slice(0, 12)}`), `grouped at the ingested sha, not HEAD: ${verdict.householdsSource}`);
+  assert.equal(verdict.householdsFallback, undefined, "the register through the town's resolver is no fallback");
+});
+
+test("THE HOUSEHOLDS FALLBACK NAMES ITSELF (Wright's review of #441): without the town, the verdict, the window's receipt and the console say the cap was judged on the roster, or on every handle alone", async () => {
+  const { limitsAtClearing } = await import("../world2/tools/parcel-cap.mjs");
+  const ask = (c, townRepo = null) => c.query("SELECT * FROM claims WHERE slug = 's00/plot'").then(({ rows }) => limitsAtClearing(c, { worldRepo: WORLD, townRepo,
+    candidates: rows.map((r) => ({ id: r.id, slug: r.slug, kind: r.class, owner: r.claimant, body: r.body, geometry: r.geometry, data: r.data, submitted_at: r.submitted_at })) }));
+  const { roster, solo } = await owner(async (c) => {
+    await base(c);
+    await pending(c, { slug: "s00/plot", by: "s00", house: "hh:sage", x: 0, date: "2026-10-01T00:00:00Z" });
+    const roster = await ask(c);
+    await c.query("DELETE FROM law_projection WHERE kind = 'roster'");
+    return { roster, solo: await ask(c) };
+  });
+  assert.equal(roster.checked, true);
+  assert.equal(roster.householdsFallback,
+    `no --town-repo was given, so the households are the printed roster at law ${ENGINE.slice(0, 12)}: a parcel over its household's cap can lock at this clearing, and the settlement's limit pass is the backstop`);
+  assert.match(solo.householdsFallback, /^no --town-repo was given, so the households are unread and every handle is its own household: /);
+
+  // The clearing run (no --town-repo) carries it into the window's receipt and says it out loud.
+  await owner(async (c) => { await base(c); await pending(c, { slug: "s00/plot", by: "s00", house: "hh:sage", x: 0, date: "2026-10-01T00:00:00Z" }); });
+  const run = clear();
+  assert.equal(run.code, 0, run.out);
+  assert.ok(run.out.includes("⚠ parcel limits: the household cap was judged on a fallback — no --town-repo was given"), run.out);
+  const [w] = await read("SELECT receipts FROM windows WHERE id = $1", [WIN]);
+  assert.match(w.receipts.parcel_cap.households_fallback ?? "", /^no --town-repo was given, so the households are the printed roster/);
 });
 
 test("ONE FIRST-CLAIM RULE: an undated origin claim is dated by its submitted_at in the store's fold AND in the mark.md the write-down prints", async () => {
