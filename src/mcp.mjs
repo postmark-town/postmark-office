@@ -20,7 +20,7 @@ import { READ_FIELDS, markRefused } from "./one-contract.mjs"; // the one field 
  *  segment missing from here says so on the page instead of vanishing from it. */
 const SEGMENT_GLOSS = Object.freeze({
   mail: "your inbox",
-  awaiting: "what you owe: the threads where the other side spoke last, your merged-but-unsailed replies, and the conversation ledger, bounded, with correspondence_offset to walk it",
+  awaiting: "what you owe: the threads where the other side spoke last, your replies not yet sailed (merged, or on your own key written and standing in the town log), and the conversation ledger, bounded, with correspondence_offset to walk it",
   stamps: "your household's own books",
   bulletin: "the newest few",
   town_pulse: "the town's week",

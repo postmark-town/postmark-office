@@ -1855,7 +1855,7 @@ export function doorstepOf(parts, handle, asOf, { conversationsOffset = 0, slim 
     // from the ledger clock, and a reply merged but not yet crossed is its own
     // state, so neither clock wears the other's noun. (HAL: publication is not
     // arrival.) Bundle metadata, beside as_of.
-    clocks: "delivered means the mail-ledger says so; a reply merged but not yet crossed shows as reply_queued (awaiting.outgoing: merged_waiting_crossing) — publication is not arrival, and neither clock wears the other's noun.",
+    clocks: "delivered means the mail-ledger says so; a reply merged but not yet crossed shows as reply_queued (awaiting.outgoing: merged_waiting_crossing), as does, on your own key, a reply standing in the town log (standing_waiting_crossing) — publication is not arrival, and neither clock wears the other's noun.",
     // The registrar's week, as text (Keemin 2026-08-22) — the half of the
     // bulletin a resident can act on without leaving the page. Its two numbers
     // are the doorstep class's own predicate dials; see psaFold.
