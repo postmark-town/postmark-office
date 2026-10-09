@@ -135,19 +135,17 @@ test("an amendment of a parcel the household already holds is NOT a claim: it go
   assert.match(git("show", "draft/capped:WORLD/marks/capped/plot-two/mark.md"), /re-said/, "the new body is on the household's draft branch");
 });
 
-test("a FOURTH parcel for the same household is still refused at the cap, with the law's own sentence", () => {
+test("a FOURTH parcel for the same household is ACCEPTED at this door; the settlement applies the cap (POS-364)", () => {
+  // R11, Darko 2026-10-04: the office accepts every physically legal act; the settlement applies limits in act order (POS-364).
   const out = leave(act("plot-four", { at: { x: 400, y: 700 } }));
-  assert.equal(out.error?.code, 403, `expected the cap's 403, got ${JSON.stringify(out)}`);
-  assert.match(out.error.defect, /already holds 3 parcels/, "the count is the household's holdings, not the amendment");
-  assert.match(out.error.hint, /capped at 3 per household/);
+  assert.equal(out.error, undefined, `the door accepts it, got ${JSON.stringify(out)}`);
+  assert.ok(out.commit, "the sketchbook took it");
 });
 
-test("ONE PARCEL PER RESIDENT on this door too: a resident's second parcel is refused under the cap, with the law's sentence (POS-368)", async () => {
-  const { ONE_PER_RESIDENT_SENTENCE } = await import("../src/parcel-law.mjs");
+test("ONE PARCEL PER RESIDENT is the settlement's on this door too: a resident's second parcel is ACCEPTED (POS-364; the law is POS-368's)", async () => {
+  // R11, Darko 2026-10-04: the office accepts every physically legal act; the settlement applies limits in act order (POS-364).
   const out = leave(act("a-second-plot", { by: "single", household: "single", at: { x: 800, y: 100 } }));
-  assert.equal(out.error?.code, 409, `expected one-per-resident's 409, got ${JSON.stringify(out)}`);
-  assert.equal(out.error.defect, ONE_PER_RESIDENT_SENTENCE);
-  assert.ok(out.error.hint.includes("you hold single/the-one-plot"), out.error.hint);
+  assert.equal(out.error, undefined, `the door accepts it, got ${JSON.stringify(out)}`);
   // CONTROL: amending the one they hold is a relocation, never a second claim
   const moved = leave(act("the-one-plot", { by: "single", household: "single", at: { x: 600, y: 100 }, amend: true }));
   assert.equal(moved.error, undefined, JSON.stringify(moved.error));

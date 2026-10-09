@@ -21,7 +21,7 @@ import { foldOfSnapshot, canonicalJson } from "../src/world-snapshot.mjs";
 import { settlementRig, WORLD, LAW_SHA, TOWN_SHA, git } from "./helpers/settlement-seed.mjs";
 import {
   servedSettlement, settlementOrFile, settlementNumberOf, withHolderWords, vetoKey,
-  resetSettlementCaches, foldText,
+  resetSettlementCaches, foldText, settlementTakesAway,
 } from "../src/world-settlement.mjs";
 
 const store = await startStore({ db: "world_settlement_test" });
@@ -456,6 +456,28 @@ test("the town's word at the seal reaches the engine as `townWords`, and the ask
   } finally { rmSync(repo, { recursive: true, force: true }); }
 });
 
+// ── R14 (POS-364 delta review): NO STANCE TAKES A MARK OUT OF GIT BEFORE THE CUTOVER ──
+//
+// Everything before TOWN_STANCE_CUTOVER counts as ratified. A stance act already
+// in the store at the deploy must not withhold its mark (and the mark's subtree)
+// from the sweep while the cutover is unset; once it is set, it does.
+
+test("R14 · CUTOVER UNSET: ann's opposition to bo/shed is in the seal, and git still carries the shed and its name", { skip }, async () => {
+  await seed({ sealWords: [{ actor: "ann", on: "bo/shed", stance: "opposed" }] });
+  const header = await asOffice(async (p) => (await p.query("SELECT * FROM world_snapshots WHERE id = 2")).rows[0]);
+  const away = await asOffice((p) => settlementTakesAway(p, header, { worldRepo: WORLD, env: {} }));
+  assert.deepEqual([...away.slugs], [], "nothing is taken away by a word before the cutover");
+  assert.ok(away.stances_not_counted.startsWith("TOWN_STANCE_CUTOVER is not set: before the cutover every mark counts as ratified (R14)"), away.stances_not_counted);
+});
+
+test("R14 · CUTOVER SET: the same opposition takes the shed and the name that continues it out of git", { skip }, async () => {
+  await seed({ sealWords: [{ actor: "ann", on: "bo/shed", stance: "opposed" }] });
+  const header = await asOffice(async (p) => (await p.query("SELECT * FROM world_snapshots WHERE id = 2")).rows[0]);
+  const away = await asOffice((p) => settlementTakesAway(p, header, { worldRepo: WORLD, env: { TOWN_STANCE_CUTOVER: "S11" } }));
+  assert.deepEqual([...away.slugs].sort(), ["bo/shed", "bo/shed-name"]);
+  assert.equal(away.stances_not_counted, undefined);
+});
+
 test("a settlement with no stance_through (sealed before 069, or back-filled) folds with no words", { skip }, async () => {
   await seed();
   await speak({ actor: "ann", on: "bo/shed", stance: "opposed" });
@@ -464,4 +486,82 @@ test("a settlement with no stance_through (sealed before 069, or back-filled) fo
   assert.ok(ids(asked).includes("bo/shed"), "no word was read at its seal");
   assert.equal(asked.meta.words.stance_through, null);
   assert.ok(!ids(await serve()).includes("bo/shed"), "the newest World still takes today's word");
+});
+
+// ── POS-364 (R11 as Darko amended it 10-04): THE SETTLEMENT APPLIES THE LIMITS ──
+//
+// "The settlement applies limits in chronological order of the acts. The first
+// N welcomed stand; the rest are opposed, citing the limit." The engine here is
+// a stand-in with the world fold's two limits in claim order (marks-fold §
+// admissibility: one parcel per resident, then the household cap, each an
+// `errors` entry in the fold's own sentence) and world#146's town veto with the
+// subtree; the pinned clone predates #146. The real engine's run is in the PR.
+
+const ONE_PER_RESIDENT = "this resident already holds a parcel; a household may hold up to three, one per resident (the-town/one-per-resident; relocation = replace, not add)";
+function limitEngine({ marks, townWords = null }) {
+  const opposed = new Set([...(townWords ?? new Map())].filter(([, w]) => w === "opposed").map(([id]) => id));
+  const errors = [], parcels = [], byResident = new Set(), byHouse = new Map();
+  for (const m of [...marks].filter((x) => x.kind === "parcel").sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))) {
+    if (byResident.has(m.by)) { errors.push({ mark: m.id, error: ONE_PER_RESIDENT }); continue; }
+    const held = byHouse.get(m.household) ?? 0;
+    if (held >= 3) { errors.push({ mark: m.id, error: `parcel claim capped — this credential household already holds ${held} (cap 3 per household, ruled 2026-07-30; prior estate stands, new claims wait on the founder's word)` }); continue; }
+    byResident.add(m.by); byHouse.set(m.household, held + 1); parcels.push({ id: m.id, household: m.by });
+  }
+  const kids = (id) => marks.filter((m) => m.parent === id).map((m) => m.id);
+  const returned = [], gone = new Set();
+  for (const id of [...opposed].sort()) {
+    if (!marks.some((m) => m.id === id)) continue;
+    const subtree = kids(id);
+    returned.push({ mark: id, returned_from: "the-town", authority: "the town (absolute)", subtree, state: "returned" });
+    gone.add(id); for (const k of subtree) gone.add(k);
+  }
+  return { marks: marks.filter((m) => !gone.has(m.id)).map((m) => ({ id: m.id })), parcels: parcels.filter((p) => !gone.has(p.id)), errors, returned, households: {} };
+}
+
+test("the settlement applies the limits in act order: fifteen pending parcels, a limit of three — the first three stand, twelve are opposed citing the-town/claim-cap (R11)", async () => {
+  const { foldWithWords, limitOppositions } = await import("../src/world-settlement.mjs");
+  // One household, fifteen residents, one parcel each, filed an hour apart and handed over shuffled.
+  const marks = Array.from({ length: 15 }, (_, i) => ({
+    id: `r${String(i).padStart(2, "0")}/plot`, kind: "parcel", by: `r${String(i).padStart(2, "0")}`, household: "one-house",
+    date: `2026-10-08T${String(i).padStart(2, "0")}:00:00Z`,
+  })).reverse();
+  marks.push({ id: "r14/plot-name", kind: "naming", by: "r14", household: "one-house", parent: "r14/plot", date: "2026-10-08T23:00:00Z" });
+  const inputs = { fold: limitEngine, args: { marks }, townWordsRead: true, claimOrderRead: true };
+  const cleared = limitEngine({ marks: structuredClone(marks) });
+  assert.equal(limitOppositions(cleared).length, 12, "the fold names twelve over the cap");
+  const { state, vetoes } = foldWithWords(inputs, null);
+  const standing = state.marks.map((m) => m.id).filter((id) => id.endsWith("/plot")).sort();
+  assert.deepEqual(standing, ["r00/plot", "r01/plot", "r02/plot"], "the FIRST three by act order stand");
+  assert.equal(vetoes.limits.length, 12);
+  assert.ok(vetoes.limits.every((l) => l.law === "the-town/claim-cap"), "each cites the cap's law mark");
+  assert.ok(!state.marks.some((m) => m.id === "r14/plot-name"), "the opposed parcel's subtree goes with it");
+  const r14 = state.returned.find((r) => r.mark === "r14/plot");
+  assert.equal(r14.law, "the-town/claim-cap");
+  assert.match(r14.limit, /parcel claim capped/);
+  assert.deepEqual(state.errors, [], "each limit's error is answered by its return");
+});
+
+test("one parcel per resident is applied the same way: a resident's second parcel is opposed citing the-town/one-per-resident; the first stands", async () => {
+  const { foldWithWords } = await import("../src/world-settlement.mjs");
+  const marks = [
+    { id: "ash/first", kind: "parcel", by: "ash", household: "ash-house", date: "2026-10-01T00:00:00Z" },
+    { id: "ash/second", kind: "parcel", by: "ash", household: "ash-house", date: "2026-10-02T00:00:00Z" },
+  ];
+  const { state, vetoes } = foldWithWords({ fold: limitEngine, args: { marks }, townWordsRead: true, claimOrderRead: true }, null);
+  assert.deepEqual(state.marks.map((m) => m.id), ["ash/first"]);
+  assert.deepEqual(vetoes.limits, [{ mark: "ash/second", law: "the-town/one-per-resident" }]);
+});
+
+test("an engine without world#146 or world#166 applies no limit: the World is the cleared one, and the answer names what was not applied", async () => {
+  const { foldWithWords } = await import("../src/world-settlement.mjs");
+  const marks = [
+    { id: "ash/first", kind: "parcel", by: "ash", household: "ash-house", date: "2026-10-01T00:00:00Z" },
+    { id: "ash/second", kind: "parcel", by: "ash", household: "ash-house", date: "2026-10-02T00:00:00Z" },
+  ];
+  for (const engine of [{ townWordsRead: false, claimOrderRead: true }, { townWordsRead: true, claimOrderRead: false }]) {
+    // Either half missing (world#146's town word, world#166's first-claim order) applies no limit.
+    const { state, vetoes } = foldWithWords({ fold: limitEngine, args: { marks }, ...engine }, null);
+    assert.ok(state.marks.some((m) => m.id === "ash/second"), "nothing is subtracted by hand");
+    assert.deepEqual(vetoes.limits_unread, [{ mark: "ash/second", law: "the-town/one-per-resident" }], JSON.stringify(engine));
+  }
 });

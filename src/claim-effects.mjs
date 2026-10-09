@@ -41,7 +41,7 @@
 // lines up). Naming one and printing the other is the R4 finding.
 
 import { currentCrossing } from "./crossings.mjs";
-import { causeOf, refusalCheckOf } from "./mark-receipt.mjs";
+import { causeOf, refusalCheckOf, opposedLawOf } from "./mark-receipt.mjs";
 
 /** How many ferry crossings back the doorstep's `outcomes` and my-marks' `refused` look. */
 export const RULINGS_SINCE_CROSSINGS = 2;
@@ -128,8 +128,10 @@ export function claimEffectsFrom({ rows = [], sinceCrossing, nowCrossing, mine =
           // THE SENTENCE THE BULLETIN PROMISED, in the backlog as well as on the
           // focus — a resident who reads their delta and never opens a mark
           // still learns the reason.
-          summary: `${id} was refused at candle ${row.window_id ?? "?"}${cause ? ` — ${cause}` : ""}`
-            + (cause ? "" : " (the check that refused it has no word in the bulletin's five yet — see cause_row)"),
+          summary: opposedLawOf(row.refusal_check)
+            ? `${id} was opposed at candle ${row.window_id ?? "?"}, citing ${opposedLawOf(row.refusal_check)}: over its limit, it holds no ground`
+            : `${id} was refused at candle ${row.window_id ?? "?"}${cause ? ` — ${cause}` : ""}`
+              + (cause ? "" : " (the check that refused it has no word in the bulletin's five yet — see cause_row)"),
         });
       }
     }

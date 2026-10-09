@@ -153,9 +153,14 @@ export const CAUSE = "marks-ingest";
 const RECORD_FIELDS_FROM_COLUMNS = new Set(["slug", "body", "household"]);
 export const STORE_STAMPS = new Set(DERIVED.filter((k) => !RECORD_FIELDS_FROM_COLUMNS.has(k)));
 
+// `claimed_at` is the store's own fact printed into the file (the origin claim's
+// date, mark-render.mjs § recordFromRow, POS-364 review): the file carries it
+// for the tree's fold, and it is never a resident's change to ingest back.
+export const PRINTED_FROM_THE_STORE = new Set(["claimed_at"]);
+
 /** Is `k` a key the fold's record carries as a fact of the mark? */
 export const isRecordField = (k, v) =>
-  !STORE_STAMPS.has(k)
+  !STORE_STAMPS.has(k) && !PRINTED_FROM_THE_STORE.has(k)
   && (!k.startsWith("_") || k === "_parentMarkId")
   // `source` as an OBJECT is the backfill's old stamp (mark-record.mjs § EMITS);
   // as a string it is the resident's word and counts.

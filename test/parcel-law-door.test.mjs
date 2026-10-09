@@ -60,12 +60,15 @@ test("a resident's parcels are their own, never a housemate's, and never the one
   assert.deepEqual(residentParcels(marks, "elm"), []);
 });
 
-test("[pin] both doors refuse a second parcel per resident, after the cap, sparing an amend and prior estate", () => {
+test("[pin] neither door refuses a parcel on a limit: the cap and one-per-resident are the settlement's (POS-364, R11)", () => {
+  // R11, Darko 2026-10-04: the office accepts every physically legal act; the settlement applies limits in act order (POS-364).
   const world = readFileSync(new URL("../src/world.mjs", import.meta.url), "utf8");
-  assert.match(world, /if \(!amending && theirs\.length && !isPriorEstate\(fold, id\)\)\n\s*throw bounce\(409, onePerResidentDefect\(fold\), onePerResidentHint\(theirs\[0\]\.id\)\);/);
-  assert.ok(world.indexOf("capHint(cap,") < world.indexOf("onePerResidentDefect(fold)"), "the cap speaks first (its falsifiers read 403 for a household at the cap)");
   const exec = readFileSync(new URL("../src/leave-exec.mjs", import.meta.url), "utf8");
-  assert.match(exec, /if \(theirs\.length && !isPriorEstate\(foldMod, id\)\)\n\s*return err\(409, onePerResidentDefect\(foldMod\), onePerResidentHint\(theirs\[0\]\.id\)\);/);
+  for (const [name, src] of [["world.mjs", world], ["leave-exec.mjs", exec]]) {
+    assert.ok(!src.includes("onePerResidentDefect("), `${name} no longer refuses one parcel per resident`);
+    assert.ok(!src.includes("capHint("), `${name} no longer refuses at the household cap`);
+  }
+  assert.ok(!world.includes("refuseHeldParcel("), "nor the placement made on a resident's behalf");
 });
 
 test("[pin] the home block answers per resident: via, parcel_id, home_mark ride beside the four keys", () => {

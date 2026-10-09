@@ -123,7 +123,20 @@ export const RECEIPT_CLOCK =
  * carried up in `docs/2026-09-08/jetto-candle-refusal-report.md` with the exact
  * sentence to change rather than edited here.
  */
-export const CAUSE_WORDS = Object.freeze(["held", "contested", "unbacked", "malformed", "quarantined", "unpublished"]);
+/**
+ * ⚑ `opposed` IS THE SEVENTH WORD, RULED BY DARKO 2026-10-08 (POS-364).
+ *
+ * A parcel over one of the town's limits (the-town/claim-cap, the-town/one-per-
+ * resident) is decided at the clearing as OPPOSED, citing the law mark, and
+ * never holds ground (world2/tools/parcel-cap.mjs § opposedCheck). Governance
+ * taking a claim away, citing the law, is none of the six: nobody else claims
+ * it (not contested), the stake is fine (not unbacked), the record is fine (not
+ * malformed), and nothing waits on a person (not quarantined, not held, not
+ * unpublished). The town's and a parcel holder's stance oppositions return a
+ * mark at the settlement (the fold's `returned[]`) and write no refusal check
+ * on a claim today; when one does, its check is `opposed` and this word is it.
+ */
+export const CAUSE_WORDS = Object.freeze(["held", "contested", "unbacked", "malformed", "quarantined", "unpublished", "opposed"]);
 
 const CAUSE_OF_CHECK = Object.freeze({
   // ── the CANDLE's writers (world2/tools/clearing-job.mjs) ──────────────────
@@ -148,6 +161,11 @@ const CAUSE_OF_CHECK = Object.freeze({
   // locks (POS-356). RULED 2026-10-08 by Darko: `quarantined`, set aside by the
   // town's own gate until a person fixes what it names.
   "unfileable": "quarantined",
+  // A parcel over a limit, decided at the clearing (`opposed: <law>: <slug> — …`),
+  // and the spelling the clearing's older count wrote on the rows it refused
+  // (`parcel-cap: …`, before the A build). RULED 2026-10-08 by Darko: `opposed`.
+  "opposed": "opposed",
+  "parcel-cap": "opposed",
   // ── the REVIEW lane's writer (world2/tools/review-rule.mjs) ───────────────
   //
   // ⚑ `contested`, NOT `held` (repaired 2026-09-07, reviewer-found — and it is
@@ -238,6 +256,19 @@ export function checkNameOf(refusalCheck) {
 }
 
 const CAUSE_ROW_PREFIX = "claims.refusal_check = ";
+
+/**
+ * THE LAW A CLEARING'S OPPOSITION CITES (POS-364; Darko RULED A, 2026-10-08): a
+ * parcel over a limit is decided `opposed: <law mark>: …` (world2/tools/
+ * parcel-cap.mjs § opposedCheck). The law mark, or null for any other check.
+ * Its bulletin word is `opposed` (CAUSE_WORDS); the sentence also names the law.
+ */
+export function opposedLawOf(refusalCheck) {
+  const raw = String(refusalCheck ?? "").trim();
+  if (checkNameOf(raw) !== "opposed") return null;
+  const m = /^opposed:\s*([^:\s]+)/i.exec(raw);
+  return m ? m[1] : null;
+}
 
 export function causeOf(refusalCheck) {
   const raw = String(refusalCheck ?? "").trim();
@@ -379,7 +410,9 @@ export function receiptFrom(records = {}) {
       ...base, status: "refused", cause, cause_row,
       crossing: settlement ?? null,
       settlement_sha: settlement?.sha ?? null,
-      says: `refused at candle ${row.window_id}${cause ? ` — ${cause}` : ""}${row.decided_at ? ` (${row.decided_at})` : ""}`
+      says: opposedLawOf(row.refusal_check)
+        ? `opposed at candle ${row.window_id}, citing ${opposedLawOf(row.refusal_check)}: the parcel is over its limit and holds no ground${row.decided_at ? ` (${row.decided_at})` : ""}`
+        : `refused at candle ${row.window_id}${cause ? ` — ${cause}` : ""}${row.decided_at ? ` (${row.decided_at})` : ""}`
         + (cause ? "" : " — the check that refused it has no word in the bulletin's five yet; the row is named beside this"),
     };
   }

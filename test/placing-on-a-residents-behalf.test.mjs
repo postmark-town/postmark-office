@@ -208,16 +208,15 @@ test("without consent the placement bounces, naming consent", async () => {
 
 // ── LEG 3 · first placement only ────────────────────────────────────────────
 
-test("a resident who already holds a parcel bounces, and the defect names the parcel", async () => {
+test("a placement for a resident who already holds a parcel is ACCEPTED; the settlement applies one-per-resident (POS-364)", async () => {
+  // R11, Darko 2026-10-04: the office accepts every physically legal act; the settlement applies limits in act order (POS-364).
   const out = await leave(porch({ by: "reader", slug: "a-second-plot", at: { x: 900, y: 900 } }), IRIS);
-  assert.equal(out.code, 409, JSON.stringify(out));
-  assert.match(out.defect, /reader\/the-keepers-flat/);
+  assert.equal(out.ok, true, JSON.stringify(out));
 });
 
-test("the resident's LIVE parcel counts too: a second placement for Solace names the first", async () => {
+test("a second placement for Solace, whose first is live, is ACCEPTED too: the limit is the settlement's (POS-364)", async () => {
   const out = await leave(porch({ slug: "another-porch", at: { x: 1200, y: 1200 } }), IRIS);
-  assert.equal(out.code, 409, JSON.stringify(out));
-  assert.match(out.defect, /solace\/the-far-bank-porch/);
+  assert.equal(out.ok, true, JSON.stringify(out));
 });
 
 test("an amend on a resident's behalf is refused — never an amend", async () => {

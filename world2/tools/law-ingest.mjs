@@ -462,7 +462,26 @@ const CHUNK = 500;
  * — that is what makes a webhook that fires twice harmless, and what lets the
  * red-proof restore itself by simply running again.
  */
-export async function writeLaw(client, { lawSha, rows, blessed = false }) {
+/**
+ * THE PIN NEVER MOVES BACKWARDS (POS-364 review, 2026-10-08). The law unit now
+ * reads the newest settlement's law; the first run after the deploy would
+ * otherwise move `projection_heads['world-law']` from world main BACK to the
+ * last settlement, handing the clearing an older rulebook than it had. The pin
+ * moves only to a descendant of where it stands. `isAncestor(a, b)` is the
+ * caller's git answer for "a is an ancestor of b"; with none, or a pin the
+ * checkout cannot place, the pin is held. PURE. → `{ move, why }`.
+ */
+export function pinMove(current, next, isAncestor = null) {
+  if (!current) return { move: true, why: "no pin yet" };
+  if (current === next) return { move: true, why: "the same sha" };
+  let ok = false;
+  try { ok = typeof isAncestor === "function" && isAncestor(current, next) === true; } catch { ok = false; }
+  return ok
+    ? { move: true, why: `${next.slice(0, 12)} descends from the pin ${current.slice(0, 12)}` }
+    : { move: false, why: `${next.slice(0, 12)} does not descend from the pin ${current.slice(0, 12)} (or this checkout cannot place it): the pin stays, and the rows for ${next.slice(0, 12)} are written beside it` };
+}
+
+export async function writeLaw(client, { lawSha, rows, blessed = false, isAncestor = null }) {
   await client.query("BEGIN");
   try {
     await client.query("DELETE FROM law_projection WHERE law_sha = $1", [lawSha]);
@@ -487,7 +506,14 @@ export async function writeLaw(client, { lawSha, rows, blessed = false }) {
     // rows are the whole of a blessed run: `projection_heads['world-law']` is the
     // clearing's pin, and it belongs to the main run. A blessed run that moved it
     // would hand the clearing an older rulebook than the one it had.
-    if (blessed) { await client.query("COMMIT"); return; }
+    // (POS-364: the law unit no longer passes --blessed. Its one run reads the
+    // newest settlement's checkout and DOES move the pin, because R2 makes the
+    // settlement's law the clearing's rulebook; deploy/world2-ingest.sh.)
+    if (blessed) { await client.query("COMMIT"); return { pin: "untouched" }; }
+
+    const { rows: [head] } = await client.query("SELECT sha FROM projection_heads WHERE repo = $1", [LAW_REPO_KEY]);
+    const verdict = pinMove(head?.sha ?? null, lawSha, isAncestor);
+    if (!verdict.move) { await client.query("COMMIT"); return { pin: "held", current: head.sha, why: verdict.why }; }
 
     // `identities` is not written here: since 055 (POS-350) it is a VIEW over the
     // store's registry, and its writer is the registry's.
@@ -498,6 +524,7 @@ export async function writeLaw(client, { lawSha, rows, blessed = false }) {
       [LAW_REPO_KEY, lawSha]);
 
     await client.query("COMMIT");
+    return { pin: "moved", why: verdict.why };
   } catch (e) {
     await client.query("ROLLBACK");
     throw e;
@@ -539,8 +566,17 @@ async function main() {
   const { default: pg } = await import("pg");
   const client = new pg.Client();               // PGHOST/PGDATABASE/PGUSER/PGPASSWORD
   await client.connect();
-  try { await writeLaw(client, { lawSha, rows, blessed }); }
+  const isAncestor = (a, b) => {
+    try { execFileSync("git", ["-C", lawRepo, "merge-base", "--is-ancestor", a, b], { stdio: "ignore" }); return true; }
+    catch (e) { if (e?.status === 1) return false; throw e; }
+  };
+  let wrote;
+  try { wrote = await writeLaw(client, { lawSha, rows, blessed, isAncestor }); }
   finally { await client.end(); }
+  if (wrote?.pin === "held") {
+    console.error(`[law-ingest] PIN HELD — projection_heads['${LAW_REPO_KEY}'] stays at ${wrote.current}: ${wrote.why}`);
+    summary.pin = "held"; summary.pin_at = wrote.current;
+  }
 
   if (blessed) {
     console.log(flag("--json") ? JSON.stringify(summary, null, 2)
@@ -548,7 +584,7 @@ async function main() {
     return;
   }
   console.log(flag("--json") ? JSON.stringify(summary, null, 2)
-    : `ingested law ${lawSha}\n  law_projection: ${rows.length} (${JSON.stringify(census)})\n  projection_heads['${LAW_REPO_KEY}'] = ${lawSha}`);
+    : `ingested law ${lawSha}\n  law_projection: ${rows.length} (${JSON.stringify(census)})\n  projection_heads['${LAW_REPO_KEY}'] = ${wrote?.pin === "held" ? `${wrote.current} (HELD: ${wrote.why})` : lawSha}`);
 }
 
 // ── entry guard ──────────────────────────────────────────────────────────────

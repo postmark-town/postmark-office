@@ -170,3 +170,20 @@ test("ingestOrdering: a head that is NOT an ancestor refuses — a rewritten bra
     assert.equal(o.reason, "not-an-ancestor");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+// ── POS-364: git is written from the settlement ─────────────────────────────
+
+test("withholdTakenAway: the settlement's returns leave the fold input, counted apart for the docket and the carry", async () => {
+  const { withholdTakenAway } = await import("../world2/tools/fold-input-cli.mjs");
+  const marks = [{ slug: "a/plot" }, { slug: "b/over-cap" }, { slug: "b/over-cap-name" }, { slug: "c/carried-opposed" }, { slug: "d/carried" }];
+  const selection = { entry: "fold-delta.mjs § foldDelta", docket_claims: 3, carried_absent: { checked: true, count: 2, slugs: ["c/carried-opposed", "d/carried"] } };
+  const w = withholdTakenAway({ marks, selection }, new Set(["b/over-cap", "b/over-cap-name", "c/carried-opposed", "z/not-offered"]));
+  assert.deepEqual(w.marks.map((m) => m.slug), ["a/plot", "d/carried"]);
+  assert.equal(w.fromDocket, 2, "the opposed parcel and the name that continues it");
+  assert.equal(w.fromCarry, 1);
+  assert.deepEqual(w.selection.carried_absent, { checked: true, count: 1, slugs: ["d/carried"] }, "the carry stays a subset of what is offered");
+  assert.equal(selection.carried_absent.count, 2, "the input is not edited");
+  const none = withholdTakenAway({ marks, selection }, new Set());
+  assert.equal(none.marks.length, 5);
+  assert.equal(none.selection, selection, "nothing taken away: the selection is the same object");
+});

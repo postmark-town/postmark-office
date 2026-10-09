@@ -240,16 +240,16 @@ test("POSITIONS_SNAPSHOT=off reads the whole record and says nothing", async (t)
 
 test("THE PROJECTION: its rebuild stands on the snapshot, and keeps the same governing records", async (t) => {
   if (needsClone(t)) return;
-  const world = await import("../src/world.mjs");
-  const { departuresAcrossEras } = world;
-  world.positionProjection.invalidate();
-  try {
-    const kept = await world.positionProjection.snapshot();
-    assert.deepEqual(kept.snapshot?.window, 4, `the projection's rebuild did not read window 4's snapshot: ${JSON.stringify(kept.snapshot)}`);
-    const whole = await departuresAcrossEras(WORLD_CLONE);
-    assert.equal(JSON.stringify(kept.departures), JSON.stringify([...governingOf(whole.departures).values()]),
-      "the projection's governing records differ from the whole record's");
-  } finally { world.positionProjection.invalidate(); }
+  const { departuresAcrossEras, rebuildPositions } = await import("../src/world.mjs");
+  const { createPositionProjection } = await import("../src/position-projection.mjs");
+  // Read at at(19), past window 4's close, never the wall clock: the clone's last
+  // departure moves with the pin, so the wall clock can sit before window 4.
+  const projection = createPositionProjection({ rebuild: rebuildPositions, now: () => at(19) });
+  const kept = await projection.snapshot();
+  assert.deepEqual(kept.snapshot?.window, 4, `the projection's rebuild did not read window 4's snapshot: ${JSON.stringify(kept.snapshot)}`);
+  const whole = await departuresAcrossEras(WORLD_CLONE, { atMs: at(19) });
+  assert.equal(JSON.stringify(kept.departures), JSON.stringify([...governingOf(whole.departures).values()]),
+    "the projection's governing records differ from the whole record's");
 });
 
 test("ENDPOINTS: /world2/positions and /world2/present answer the same body from the snapshot as from every act", async (t) => {

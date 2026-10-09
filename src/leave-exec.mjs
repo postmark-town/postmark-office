@@ -25,7 +25,6 @@
 // { error: { code, defect, hint } } (a bounce is an answer); exit 1 only when the
 // machinery itself trips.
 
-import { onePerResidentDefect, onePerResidentHint, capHint, residentParcels, isPriorEstate } from "./parcel-law.mjs";
 import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, readdirSync } from "node:fs";
 import { join, resolve, dirname, relative } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
@@ -87,7 +86,7 @@ async function main() {
   const tEngine = performance.now();
   const foldMod = await import(pathToFileURL(join(tools, "marks-fold.mjs")));
   const { loadMarks, containmentParents, containmentParentOf, placementParent, worldRootOf,
-          PARCEL_CLAIM_CAP, PARCEL_CAP_LAW_DATE, PARCEL_EXTENT_M,
+          PARCEL_EXTENT_M,
           worldToFile, ringToFile, COORDS_FIELD, COORDS_RELATIVE } = foldMod;
   phases.push(`engine=${Math.round(performance.now() - tEngine)}ms`);
   let branch;
@@ -185,11 +184,12 @@ async function main() {
       "a slug is unique per author — pass amend: true to supersede it (a newer declaration on your own node, edit-law's revision family), or pick another slug");
   const priorRec = amending ? byId.get(id) : null;
 
-  // The parcel-claim cap (Keemin's ruling 2026-07-30): a credential household —
-  // handles grouped by WORLD/households.json, the town-pin registry — may claim
-  // at most 3 parcels; holdings predating the law stand as prior estate. The
-  // fold enforces this too (marks-fold § admissibility); bouncing here gives
-  // the resident the honest sentence before anything is written.
+  // The parcel dial. The limits (the household claim cap, the-town/claim-cap;
+  // one parcel per resident, the-town/one-per-resident) no longer refuse at this
+  // door: R11, as Darko amended it 2026-10-04, has the office accept every
+  // physically legal act and the settlement apply limits in act order, citing
+  // the law (POS-364; src/world-settlement.mjs § the limits). This door and the
+  // journal door gave up the same check together: one law, two holders (#2888).
   if (p.kind === "parcel") {
     // The dial, not a declaration: every parcel is the town's square (Keemin,
     // 2026-07-31). The door already bounced any passed extent; this writes the
@@ -197,28 +197,6 @@ async function main() {
     // that has not yet pulled the constant.
     const side = PARCEL_EXTENT_M ?? 25;
     p.extent = { w: side, h: side };
-    // THE CAP ASKS ONLY OF NEW GROUND (2026-09-15, Linear POS-88; the instance:
-    // Current re-amending the-keepers-flat, held since S45, bounced "already
-    // holds 4 parcels"). `amending` was computed above and never consulted here,
-    // so `held` counted the very parcel being amended and an amendment of a
-    // holding read as a claim for new ground. The law's own sentence below says
-    // prior holdings stand; an amendment of one is not a claim. The extent dial
-    // above still applies to every parcel act — every parcel is the town's square.
-    if (!amending) {
-      const cap = PARCEL_CLAIM_CAP ?? 3;
-      let registry = null;
-      try { registry = JSON.parse(readFileSync(join(CLONE, "WORLD", "households.json"), "utf8")).households ?? null; } catch { /* no registry → solo grain */ }
-      const credOf = (handle) => registry?.[handle] ?? `solo:${handle}`;
-      const cred = credOf(p.by);
-      const held = marks.filter((m) => m.kind === "parcel" && credOf(m.by ?? m.household) === cred).length;
-      if (held >= cap)
-        return err(403, `your household already holds ${held} parcel${held === 1 ? "" : "s"}`,
-          capHint(cap, PARCEL_CAP_LAW_DATE ?? "2026-07-30"));
-      // one parcel per resident (the-town/one-per-resident, Darko 2026-10-04; POS-368)
-      const theirs = residentParcels(marks, p.by, id);
-      if (theirs.length && !isPriorEstate(foldMod, id))
-        return err(409, onePerResidentDefect(foldMod), onePerResidentHint(theirs[0].id));
-    }
   }
 
   // decide the directory. sited/parcel file BY IDENTITY — `WORLD/marks/<by>/

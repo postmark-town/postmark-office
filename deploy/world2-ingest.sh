@@ -74,7 +74,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # this script and one DEPLOY.md sentence). The law file's first reader is the
 # roll-call row this change adds.
 case "${1:-both}" in
-  law)    MODE=law;    RUN_LAW=1; RUN_STAMPS=0; RUN_BLESSED=1; STATE=ingest-law.json ;;
+  law)    MODE=law;    RUN_LAW=1; RUN_STAMPS=0; RUN_BLESSED=0; STATE=ingest-law.json ;;
   stamps) MODE=stamps; RUN_LAW=0; RUN_STAMPS=1; RUN_BLESSED=0; STATE=ingest-stamps.json ;;
   both)   MODE=both;   RUN_LAW=1; RUN_STAMPS=1; RUN_BLESSED=0; STATE=ingest.json ;;
   *)      echo "usage: world2-ingest.sh [law|stamps|both]   (no argument = both)" >&2; exit 2 ;;
@@ -108,8 +108,17 @@ LAW_RC=0;  LAW_SHA="";  LAW_LINE="";  LAW_OUT=""
 BLESSED_RC=0; BLESSED_SHA=""; BLESSED_LINE=""; BLESSED_OUT=""
 TOWN_RC=0; TOWN_SHA=""; TOWN_LINE=""; TOWN_OUT=""
 
+# ── THE SETTLEMENT'S LAW, NOT WORLD MAIN ON A CLOCK (POS-364; R2) ───────────
+# "Everyone reads the newest snapshot, minus what has been opposed" (R2), and
+# the law is part of what a settlement is. So the law pen reads the checkout at
+# the NEWEST SETTLEMENT (world2-refresh-clone.sh world-blessed), not world main:
+# a law merged to main governs from the first settlement that carries it, and
+# the clearing's pin (projection_heads['world-law'], which the seal stamps as
+# the snapshot's law_sha) is that settlement's law. One run now writes both
+# the rows and the pin, so the separate `--blessed` run below (POS-270) has
+# nothing left to add in `law` mode and does not run there.
 if [ "$RUN_LAW" -eq 1 ]; then
-  run_pen world law-ingest.mjs --law-repo
+  run_pen world-blessed law-ingest.mjs --law-repo
   LAW_RC=$PEN_RC; LAW_SHA=$PEN_SHA; LAW_OUT=$PEN_OUT
   LAW_LINE="$(printf ',"law":{"exit":%d,"sha":"%s"}' "$LAW_RC" "$LAW_SHA")"
   [ "$LAW_RC" -ne 0 ] && echo "[world2-ingest] LAW INGEST FAILED (exit $LAW_RC)" >&2
