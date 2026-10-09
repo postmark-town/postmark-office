@@ -11,13 +11,13 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { copyTownTools } from "./helpers/town-tools.mjs";
 import { join, resolve, dirname } from "node:path";
-import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { startStore } from "./helpers/embedded-store.mjs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 const store = await startStore({ db: "votes_test" });
 Object.assign(process.env, { WORLD2_PG: "1", WORLD2_PG_URL: store.url("office_api") });
@@ -34,7 +34,7 @@ const D = (date, id, from, to) => `- ${date} · ${id} · ${from} → ${to} · th
 // cleared (the act log, append-only, keeps its rows), then the town's file is
 // taken in as its post.
 async function voteClone({ cap = 12, status = "staking" } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "office-votes-"));
+  const dir = tempDir("office-votes-");
   mkdirSync(join(dir, "tools"), { recursive: true });
   mkdirSync(join(dir, "WHITE_PAGES"), { recursive: true });
   copyTownTools(TOWN, dir);

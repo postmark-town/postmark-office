@@ -32,18 +32,18 @@
 
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
 import { copyTownTools } from "./helpers/town-tools.mjs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { installActsPen, uninstallActsPen, RECORD_ON } from "./acts-pen-stub.mjs";
 import { OFFICE_ROOT } from "./fixture-paths.mjs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 const REAL_TOWN = process.env.TOWN_CLONE ?? join(OFFICE_ROOT, "town-clone");
 const haveEngine = existsSync(join(REAL_TOWN, "tools", "world-stake.mjs")) && existsSync(join(REAL_TOWN, "tools", "stamp-mint.mjs"));
 
-const DIR = mkdtempSync(join(tmpdir(), "pm-household-posts-"));
+const DIR = tempDir("pm-household-posts-");
 after(() => { try { rmSync(DIR, { recursive: true, force: true, maxRetries: 5 }); } catch { /* Windows keeps a handle */ } });
 
 const H = 3_600_000;

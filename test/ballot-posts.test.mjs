@@ -29,13 +29,13 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, readdirSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, readdirSync } from "node:fs";
 import { copyTownTools } from "./helpers/town-tools.mjs";
 import { join, resolve, dirname } from "node:path";
-import { tmpdir } from "node:os";
 import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { startStore } from "./helpers/embedded-store.mjs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "..");
@@ -61,7 +61,7 @@ const { penTransaction } = await import("../src/write.mjs");
 const { publicKey, privateKey } = generateKeyPairSync("ed25519");
 const PUB = publicKey.export({ type: "spki", format: "pem" });
 const PEM = privateKey.export({ type: "pkcs8", format: "pem" });
-const scratch = mkdtempSync(join(tmpdir(), "ballot-posts-"));
+const scratch = tempDir("ballot-posts-");
 after(() => rmSync(scratch, { recursive: true, force: true, maxRetries: 5 }));
 const KEY_FILE = join(scratch, "stamp-key.pem");
 writeFileSync(KEY_FILE, PEM);

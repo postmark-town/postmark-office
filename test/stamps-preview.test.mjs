@@ -47,13 +47,13 @@ import test, { after } from "node:test";
 import { NO_TOWN, townClone, worldClone } from "./fixture-paths.mjs";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { copyTownTools } from "./helpers/town-tools.mjs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { indexStore } from "./helpers/office-under-test.mjs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 // The doors below run in this process. They never had a town index, and the
 // office will not run without one (POS-268): this file's is an empty store.
@@ -79,7 +79,7 @@ after(() => { for (const d of litter) { try { rmSync(d, { recursive: true, force
 function townFixture({ mints = [{ handle: "tester", n: 5 }], pots = [] } = {}) {
   const mint = MINT;
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
-  const repo = mkdtempSync(join(tmpdir(), "pos83-town-"));
+  const repo = tempDir("pos83-town-");
   litter.push(repo);
   mkdirSync(join(repo, "tools"), { recursive: true });
   mkdirSync(join(repo, "WHITE_PAGES"), { recursive: true });
@@ -221,7 +221,7 @@ test("heldFor says so rather than answering zero when there is no ledger to fold
   // A door that quietly answered `{liquid: 0}` for an unreadable clone would be
   // telling a resident holding ✦40 that they hold nothing — the failure this
   // whole block exists to stop, dressed as an answer.
-  const nowhere = mkdtempSync(join(tmpdir(), "pos83-empty-"));
+  const nowhere = tempDir("pos83-empty-");
   litter.push(nowhere);
   const held = await heldFor(nowhere, "tester");
   assert.equal(held.liquid, 0);

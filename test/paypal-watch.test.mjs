@@ -31,10 +31,9 @@
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { copyTownTools } from "./helpers/town-tools.mjs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 
 import { CROSSING_MS } from "../src/crossings.mjs";
@@ -45,6 +44,7 @@ import {
   decide, decodeTransaction, resolveTransaction, listTransactions, parseCustom, customIdFor, main,
   OUTSIDE_FROM, RAIL, CUSTOM_MAX, WINDOW_DAYS,
 } from "../tools/paypal-watch.mjs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 const TOWN = [townClone()].filter(Boolean).find((p) => existsSync(join(p, "tools", "stamp-mint.mjs")));
 const ENGINE = TOWN ? await import(townModuleUrl("tools", "stamp-mint.mjs")) : null;
@@ -76,7 +76,7 @@ const txn = ({ id, at, value = "10.00", currency = "USD", custom = "keep|paz", c
 // ── a throwaway town with a real, sealed ledger (stripe-watch.test.mjs's shape) ─
 function seamTown({ tools = TOWN, pots = { keep: 1000 } } = {}) {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
-  const repo = mkdtempSync(join(tmpdir(), "paypal-town-"));
+  const repo = tempDir("paypal-town-");
   mkdirSync(join(repo, "tools"), { recursive: true });
   mkdirSync(join(repo, "WHITE_PAGES"), { recursive: true });
   // Each resident has a room: the store's roll is the town's rooms (POS-346).

@@ -18,7 +18,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { copyTownTools } from "./helpers/town-tools.mjs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -26,6 +26,7 @@ import { execFileSync } from "node:child_process";
 import { parseWelcomePlan, townDate, mintArgv, main } from "../deploy/welcome-pass.mjs";
 import { NO_TOWN, townClone } from "./fixture-paths.mjs";
 import { rowsFromRegistry } from "../src/registry-rows.mjs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 const TOWN = townClone(); // the same real checkout every office test imports the town's tools from
 const SKIP = !TOWN && NO_TOWN;
@@ -38,7 +39,7 @@ const SKIP = !TOWN && NO_TOWN;
 // because a stub would be this office asserting its own idea of the welcome law
 // back to itself.
 function fixtureTown({ pins, deliveries = [], town = TOWN, rooms = [] }) {
-  const repo = mkdtempSync(join(tmpdir(), "welcome-pass-"));
+  const repo = tempDir("welcome-pass-");
   mkdirSync(join(repo, "tools"), { recursive: true });
   mkdirSync(join(repo, "WHITE_PAGES"), { recursive: true });
   copyTownTools(town, repo);
