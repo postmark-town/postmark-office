@@ -28,6 +28,8 @@
 //       retry; a refused code is still burned (single use, even on failure)
 //   R4  two refreshes of one token, both past their SELECT before either
 //       deletes: exactly one 200 (the DELETE's own row count is the claim)
+//   R5  a malformed grant (a non-string field, a NUL, a body that is no object)
+//       is the client's: 400 invalid_request, never the outage's 503
 //
 //   node --test test/oauth-store-outage.test.mjs
 
@@ -219,4 +221,21 @@ test("R4 two refreshes of one token race past their SELECT: exactly one 200, and
   const loser = await answers.find((r) => r.status === 400).json();
   assert.equal(loser.error, "invalid_grant");
   assert.equal(await refreshRows(), before, "one refresh token retired and ONE issued: the family did not fork");
+});
+
+test("R5 a malformed grant is the client's: 400 invalid_request, never the outage's 503", async () => {
+  const json = (body) => fetch(`${BASE}/oauth/token`, { method: "POST", headers: { "content-type": "application/json" }, body });
+  const cases = [
+    ["a numeric refresh_token", json(JSON.stringify({ grant_type: "refresh_token", refresh_token: 1 }))],
+    ["a numeric code_verifier", json(JSON.stringify({ grant_type: "authorization_code", code: "c", code_verifier: 7 }))],
+    ["an object code", json(JSON.stringify({ grant_type: "authorization_code", code: { a: 1 }, code_verifier: "v" }))],
+    ["a NUL in the code", post({ grant_type: "authorization_code", code: "a\0b", code_verifier: "v" })],
+    ["a JSON body that is null", json("null")],
+  ];
+  for (const [what, call] of cases) {
+    const r = await call;
+    const body = await r.text();
+    assert.equal(r.status, 400, `${what}: ${r.status} ${body.slice(0, 160)}`);
+    assert.equal(JSON.parse(body).error, "invalid_request", what);
+  }
 });

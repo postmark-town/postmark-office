@@ -1156,8 +1156,19 @@ async function handleOauthRoute(req, res, ctx) {
   // which a client reads as "sign in again".
   if (req.method === "POST" && path === "/oauth/token") {
     const body = parseForm(await readBody(req), req.headers["content-type"]);
+    // A MALFORMED GRANT IS THE CLIENT'S, NEVER AN OUTAGE (review of #449,
+    // finding 5). A non-string field (a JSON body's number) threw inside the
+    // transaction, and a NUL reached the store as an encoding error: both were
+    // answered as the 503 a client retries forever, and logged as the store.
+    if (body == null || typeof body !== "object" || Array.isArray(body))
+      return oerr(res, 400, "invalid_request", "the token request's body must be a form or a JSON object");
     if (body.grant_type !== "authorization_code" && body.grant_type !== "refresh_token")
       return oerr(res, 400, "unsupported_grant_type", "authorization_code or refresh_token");
+    for (const field of ["code", "refresh_token", "code_verifier"]) {
+      const v = body[field];
+      if (v != null && (typeof v !== "string" || v.includes("\0")))
+        return oerr(res, 400, "invalid_request", `${field} must be a string without NUL characters`);
+    }
     const refuse = (description) => ({ refused: description });
 
     let out;
@@ -1186,7 +1197,7 @@ async function handleOauthRoute(req, res, ctx) {
       // too, and then the old refresh token is gone. The window is narrow and
       // accepted as residual this week (a grace for the retired token is
       // Darko's call, alongside family revocation); the answer must not promise.
-      console.error(`[oauth] the token endpoint could not reach its record (answered 503; the record may not have been changed): ${String(e?.message ?? e).slice(0, 200)}`);
+      console.error(`[oauth] the token endpoint could not reach its record (answered 503; the record may not have been changed) [${e?.code ?? e?.name ?? "?"}]: ${String(e?.message ?? e).slice(0, 200)}`);
       return jres(res, 503, { error: "temporarily_unavailable",
         error_description: "the office could not reach its record, so your sign-in may not have been changed; send the same request again after Retry-After seconds" },
       { "retry-after": String(TOKEN_RETRY_AFTER_S) });
