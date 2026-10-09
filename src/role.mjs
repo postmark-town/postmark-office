@@ -34,10 +34,10 @@ export const ROLES = ["write", "read"];
  *                              door REQUIRES a credential even for reads
  *                              (server.mjs's own note) and its writes are the
  *                              whole reason a second writer is forbidden.
- *   /oauth*                  — handleOauth's FIRST act is `sweep(odb)`, three
- *                              DELETEs against oauth.db (oauth.mjs:69-71), and
- *                              the dance goes on to INSERT tokens. A GET here
- *                              is a write.
+ *   /oauth*                  — every handleOauth request ends in `sweep(odb)`,
+ *                              the housekeeping DELETEs (run after the answer
+ *                              since POS-480), and the dance goes on to INSERT
+ *                              tokens. A GET here is a write.
  *   /.well-known/oauth-*     — same handler, same sweep. Discovery looks like
  *   /.well-known/openid-…      a read and is not one.
  *

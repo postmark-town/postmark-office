@@ -173,6 +173,10 @@ async function ownServer() {
   await pgStart(pkg.pgCtl, data, port);
   return {
     port,
+    // An outage and its end, on the same data and port (POS-480): `pause` is a
+    // fast shutdown, which ends every session and rolls back its transaction.
+    pause: () => pgStop(pkg.pgCtl, data),
+    resume: () => pgStart(pkg.pgCtl, data, port),
     async stop() {
       await pgStop(pkg.pgCtl, data);
       // Windows can hold the directory a moment after the server has gone: named, not thrown
@@ -287,9 +291,14 @@ async function treeStore(tree, db) {
  * `db` names the store for its caller; `connect(role, db)` and `url(role, db)`
  * reach it by that name. On a tree's server the database itself is named
  * apart (`database`), since every file there shares one server.
+ *
+ * `own: true` asks for a server of this file's own even on a pool tree, and
+ * then the store also has `pause()` and `resume()`: the server stopped and
+ * started again, for a test of what an outage does. The tree's server is never
+ * paused, since every file in the tree shares it.
  */
-export async function startStore({ db = "town_index_test" } = {}) {
-  const tree = treeServer();
+export async function startStore({ db = "town_index_test", own = false } = {}) {
+  const tree = own ? null : treeServer();
   let server;
   if (tree) server = await treeStore(tree, db);
   else {
@@ -308,5 +317,6 @@ export async function startStore({ db = "town_index_test" } = {}) {
     /** The database the store is, on its server: for a query that reads the server's own views. */
     database: server.database,
     stop: () => server.stop(),
+    ...(tree ? {} : { pause: () => server.pause(), resume: () => server.resume() }),
   };
 }

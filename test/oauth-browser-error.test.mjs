@@ -29,9 +29,9 @@ test("#2766 an unexpected OAuth failure renders a small HTML page instead of rej
   };
   const res = responseRecorder();
   const ctx = {
-    // `handleOauth` sweeps its store before routing. This deliberately makes
-    // that first internal operation fail, which is the class #2766 exposed:
-    // an exception outside the callback's deliberate HTML branches.
+    // The callback reads its pending row first. This deliberately makes that
+    // read fail, which is the class #2766 exposed: an exception outside the
+    // callback's deliberate HTML branches.
     odb: { prepare() { throw new Error("fixture-only internal failure"); } },
     db: null,
     clone: "",
@@ -52,14 +52,20 @@ test("#2766 an unexpected OAuth failure renders a small HTML page instead of rej
 // THE OTHER HALF OF THE ISSUE'S FALSIFIER: "the same error on an API path still
 // answers the JSON bounce". `handleOauth` also serves the three
 // `/.well-known/...` discovery routes, and those are probed and PARSED by MCP
-// clients, not read by a human. The sweep above fails for them identically, so
-// without a path/Accept test the browser page would be served to a parser.
+// clients, not read by a human. Without a path/Accept test the browser page
+// would be served to a parser.
+//
+// Discovery reads no record since POS-480 (the sweep runs after the answer,
+// never ahead of the route), so a failing store no longer reaches it. The
+// failure here is the route's first internal act instead: taking its paper.
+const failingCtx = () => ({
+  get odb() { throw new Error("fixture-only internal failure"); },
+  db: null,
+  clone: "",
+});
+
 test("#2766 the same failure on a machine-facing discovery route still rejects to the JSON bounce", async () => {
-  const ctx = {
-    odb: { prepare() { throw new Error("fixture-only internal failure"); } },
-    db: null,
-    clone: "",
-  };
+  const ctx = failingCtx();
 
   for (const url of [
     "/.well-known/oauth-authorization-server",
@@ -89,11 +95,7 @@ test("#2766 a browser on a discovery route is still answered as HTML", async () 
     headers: { accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" },
     socket: { remoteAddress: "127.0.0.1" },
   };
-  const ctx = {
-    odb: { prepare() { throw new Error("fixture-only internal failure"); } },
-    db: null,
-    clone: "",
-  };
+  const ctx = failingCtx();
 
   const rejected = await handleOauth(req, res, ctx).then(() => null, (error) => error);
 
