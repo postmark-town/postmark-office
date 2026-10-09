@@ -71,12 +71,14 @@ async function read(sql, args = []) {
   try { return (await c.query(sql, args)).rows; } finally { await c.end(); }
 }
 
-/** Resolves once `n` lock requests on the server are waiting (ungranted). */
+/** Resolves once `n` lock requests from this store's sessions are waiting (ungranted). A row
+ *  lock's wait is on a transaction id, which names no database, so the waits are told apart by
+ *  their session's database: on a pool tree every file's store shares one server (POS-479). */
 async function waiting(n, { timeoutMs = 60_000 } = {}) {
   const c = await store.connect("world2_owner");
   try {
     for (const until = Date.now() + timeoutMs; Date.now() < until;) {
-      const { rows: [r] } = await c.query("SELECT count(*)::int AS n FROM pg_locks WHERE NOT granted");
+      const { rows: [r] } = await c.query("SELECT count(*)::int AS n FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid WHERE NOT l.granted AND a.datname = current_database()");
       if (r.n >= n) return r.n;
       await new Promise((ok) => setTimeout(ok, 50));
     }

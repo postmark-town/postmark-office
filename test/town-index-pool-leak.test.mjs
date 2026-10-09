@@ -78,7 +78,7 @@ before(async () => {
 after(async () => {
   if (child && child.exitCode === null) { const gone = new Promise((ok) => child.on("exit", ok)); child.kill(); await gone; }
   // a drained pool's sessions are ended here, so a failing run still exits
-  if (su) { await su.query("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = 'office_api'").catch(() => {}); await su.end().catch(() => {}); }
+  if (su) { await su.query("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = 'office_api' AND datname = $1", [s.database]).catch(() => {}); await su.end().catch(() => {}); }
   if (s?.stop) await s.stop();
   for (const [k, v] of Object.entries(KEEP)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
   rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
@@ -86,13 +86,13 @@ after(async () => {
 
 /** End every office_api session (a drained pool's, from a test that failed before this one). */
 async function endStuck() {
-  await su.query("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = 'office_api' AND state LIKE 'idle in transaction%'");
+  await su.query("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = 'office_api' AND datname = $1 AND state LIKE 'idle in transaction%'", [s.database]);
 }
 
 /** office_api's sessions idle inside a transaction, as the store sees them. */
 async function idleInTransaction() {
   const { rows } = await su.query(
-    "SELECT pid, application_name, left(query, 120) AS query FROM pg_stat_activity WHERE usename = 'office_api' AND state LIKE 'idle in transaction%'");
+    "SELECT pid, application_name, left(query, 120) AS query FROM pg_stat_activity WHERE usename = 'office_api' AND datname = $1 AND state LIKE 'idle in transaction%'", [s.database]);
   return rows;
 }
 

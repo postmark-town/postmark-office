@@ -66,7 +66,7 @@ before(async () => {
 after(async () => {
   if (pen) pen.__setPoolForTest(null);
   if (pool) await Promise.race([pool.end().catch(() => {}), new Promise((ok) => setTimeout(ok, 2000))]);
-  if (su) { await su.query("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = 'office_api'").catch(() => {}); await su.end().catch(() => {}); }
+  if (su) { await su.query("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = 'office_api' AND datname = current_database()").catch(() => {}); await su.end().catch(() => {}); }
   if (s?.stop) await s.stop();
   for (const [k, v] of Object.entries(KEEP)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
   rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
@@ -75,7 +75,7 @@ after(async () => {
 /** The pool holds nothing, nobody waits for it, and no office_api session is idle in a transaction. */
 async function nothingHeld(label) {
   assert.deepEqual({ out: pool.totalCount - pool.idleCount, waiting: pool.waitingCount }, { out: 0, waiting: 0 }, `${label}: the pool still holds a connection`);
-  const { rows } = await su.query("SELECT left(query, 120) AS query FROM pg_stat_activity WHERE usename = 'office_api' AND state LIKE 'idle in transaction%'");
+  const { rows } = await su.query("SELECT left(query, 120) AS query FROM pg_stat_activity WHERE usename = 'office_api' AND datname = current_database() AND state LIKE 'idle in transaction%'");
   assert.deepEqual(rows, [], `${label}: an office_api session is idle in a transaction`);
 }
 
