@@ -35,6 +35,7 @@ import {
 import { drainRegistry, checkRegistry, ingestMissing, missingFromStore } from "../tools/registry-drain.mjs";
 import { conformance } from "../src/declare.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIX = join(HERE, "fixtures", "registry-2026-09-22");
@@ -134,7 +135,7 @@ function stubPool(seed = rowsFromRegistry(JSON.parse(HOUSEHOLDS_RAW), JSON.parse
 }
 
 function cloneWith(households = HOUSEHOLDS_RAW, pins = PINS_RAW) {
-  const dir = mkdtempSync(join(tmpdir(), "pos158-"));
+  const dir = tempDir("pos158-");
   mkdirSync(join(dir, "tools"), { recursive: true });
   if (households !== null) writeFileSync(join(dir, REGISTRY_PATH), households);
   if (pins !== null) writeFileSync(join(dir, PINS_PATH), pins);
@@ -669,7 +670,7 @@ test("a mint whose write fails REFUSES the join — never a warn with a false no
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
   const { execFileSync } = await import("node:child_process");
-  const clone = mkdtempSync(join(tmpdir(), "mint-refuses-"));
+  const clone = tempDir("mint-refuses-");
   mkdirSync(join(clone, "WHITE_PAGES"));
   execFileSync("git", ["-C", clone, "init", "-q"]);
   const db = fixtureDb();

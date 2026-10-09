@@ -39,12 +39,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { NO_TOWN, townClone } from "./fixture-paths.mjs";
 import { NO_WORLD_DB, publishWorld } from "./helpers/world-rows.mjs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 const { ideasTank } = await import("../src/world-classes.mjs");
 const { injectedComplete } = await import("../src/queries.mjs");
@@ -64,7 +64,7 @@ const GARRISON = "sol-of-garrison/the-protected-grove";
 // than hold `the-town/idea` as a literal — a store that re-files its own
 // constitution must not empty the Think Tank.
 function storeWith(ideas, { declaration = "the-town/idea", declare = true } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "idea-anywhere-"));
+  const dir = tempDir("idea-anywhere-");
   const path = join(dir, "world.db");
   const db = new DatabaseSync(path);
   db.exec(`CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
@@ -242,14 +242,14 @@ const TOWN = townClone();
 const TRAIN_ENGINE = TOWN && join(TOWN, "tools");
 const SKIP = !TOWN && NO_TOWN;
 const { publicKey, privateKey } = generateKeyPairSync("ed25519");
-const penDir = mkdtempSync(join(tmpdir(), "idea-anywhere-pen-"));
+const penDir = tempDir("idea-anywhere-pen-");
 const KEY = join(penDir, "stamp-key.pem");
 writeFileSync(KEY, privateKey.export({ type: "pkcs8", format: "pem" }));
 process.env.STAMP_KEY = KEY;
 if (TRAIN_ENGINE) process.env.STAMP_ENGINE_DIR = TRAIN_ENGINE;
 
 function foundedClone() {
-  const clone = mkdtempSync(join(tmpdir(), "idea-anywhere-town-"));
+  const clone = tempDir("idea-anywhere-town-");
   mkdirSync(join(clone, "tools"), { recursive: true });
   mkdirSync(join(clone, "WHITE_PAGES"), { recursive: true });
   writeFileSync(join(clone, "tools", "github-ids.json"), JSON.stringify({ alden: 1, rei: 2 }));

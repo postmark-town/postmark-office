@@ -10,16 +10,16 @@ import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
 import { createServer } from "node:http";
 import { createHash, randomBytes } from "node:crypto";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { tmpdir } from "node:os";
 import { fixtureDb } from "./fixture.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
 import { indexStore, seedRegistry } from "./helpers/office-under-test.mjs";
 import { serializeRegistry, slugFromName, houseForAccount, houseForName, planRegistryJoin } from "../src/residency.mjs";
 import { BIND_REFUSALS } from "../src/join-bind.mjs";
 import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 // The port is asked of the OS, never chosen (spawn-office.mjs § the port,
@@ -84,7 +84,7 @@ let child, tmp, ghServer, clone, IX, bare, BARE;
 const readBody = (req) => new Promise((r) => { let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => r(b)); });
 
 before(async () => {
-  tmp = mkdtempSync(join(tmpdir(), "postmark-office-residency-"));
+  tmp = tempDir("postmark-office-residency-");
   const dbPath = join(tmp, "fixture.db");
   fixtureDb(dbPath).close();
 

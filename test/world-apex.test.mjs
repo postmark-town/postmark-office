@@ -35,13 +35,14 @@ import test, { after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
+import { tempDir } from "./helpers/temp-dir.mjs";
 
-const repo = mkdtempSync(join(tmpdir(), "postmark-apex-"));
+const repo = tempDir("postmark-apex-");
 after(() => rmSync(repo, { recursive: true, force: true }));
 const dbPath = join(repo, "apex-world.db");
 
@@ -67,7 +68,7 @@ const dbPath = join(repo, "apex-world.db");
 // BEFORE the first `../src` import, because those constants are computed at
 // module load. `os.tmpdir()` reads the environment on every call, on Windows and
 // POSIX alike, so this is the whole fix.
-const tmpHome = mkdtempSync(join(tmpdir(), "postmark-apex-tmp-"));
+const tmpHome = tempDir("postmark-apex-tmp-");
 process.env.TEMP = process.env.TMP = process.env.TMPDIR = tmpHome;
 after(() => rmSync(tmpHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
 
@@ -340,7 +341,7 @@ const freePort = () => new Promise((ok, no) => {
 let BASE = null; // set per office, since each one is handed a different port
 
 async function withOffice(env, fn) {
-  const dir = mkdtempSync(join(tmpdir(), "postmark-apex-srv-"));
+  const dir = tempDir("postmark-apex-srv-");
   const officeDb = join(dir, "fixture.db");
   const { fixtureDb } = await import("./fixture.mjs");
   fixtureDb(officeDb).close();

@@ -62,14 +62,14 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { SCHEMA } from "../src/schema.mjs";
 import { parseLedgerText, foldFunding, classifyFundingRow, readPots, HOLO_CAPTION, HOLO_EXPANSION, WHAT_THIS_BUYS, TEACH } from "../src/funding.mjs";
 import { stampsDetail, potBoard, questBoardFor } from "../src/queries.mjs";
 import { NO_TOWN, townClone, townModuleUrl } from "./fixture-paths.mjs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 const SKIP = !townClone() && NO_TOWN;
 
@@ -374,7 +374,7 @@ const POT_FILE = {
 };
 
 function tempTown() {
-  const dir = mkdtempSync(join(tmpdir(), "postmark-funding-test-"));
+  const dir = tempDir("postmark-funding-test-");
   mkdirSync(join(dir, "WHITE_PAGES"), { recursive: true });
   writeFileSync(join(dir, "WHITE_PAGES", "pot-keeping-ec2.json"), JSON.stringify(POT_FILE));
   writeFileSync(join(dir, "WHITE_PAGES", "pot-broken.json"), JSON.stringify({

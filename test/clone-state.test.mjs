@@ -13,13 +13,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, statSync, utimesSync, appendFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync, readFileSync, statSync, utimesSync, appendFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { readCloneState, judgeDirt, parsePorcelainZ, DIRTY_GRACE_MS, MINUTE } from "../tools/clone-state.mjs";
 import { classifyClone } from "../tools/site-sentinel.mjs";
 import { loadManifest, classifyDirtyClone, rollcall, ALARM_DIRTY_CLONE, OK } from "../tools/box-rollcall.mjs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 const LEDGER = "WHITE_PAGES/stamp-ledger.md";
 const git = (cwd, ...args) =>
@@ -27,7 +28,7 @@ const git = (cwd, ...args) =>
 
 /** An origin and a clone of it, with the town's ledger and gitignore committed. */
 function townPair() {
-  const dir = mkdtempSync(join(tmpdir(), "clone-state-"));
+  const dir = tempDir("clone-state-");
   const origin = join(dir, "origin.git");
   const clone = join(dir, "town-clone");
   execFileSync("git", ["init", "-q", "--bare", "-b", "main", origin]);
@@ -203,7 +204,7 @@ test("a clone that is not there, or that git cannot read, is never reported clea
   assert.equal(sentinelOn(missing).verdict, "UNKNOWN");
   assert.equal(rowOn(missing).verdict, ALARM_DIRTY_CLONE);
 
-  const notGit = mkdtempSync(join(tmpdir(), "not-a-clone-"));
+  const notGit = tempDir("not-a-clone-");
   const unread = readCloneState(notGit, { git: () => { const e = new Error("x"); e.stderr = "fatal: detected dubious ownership in repository"; throw e; } });
   assert.equal(unread.readable, false);
   assert.match(sentinelOn(unread).reason, /dubious ownership/);
@@ -220,7 +221,7 @@ test("parsePorcelainZ keeps a rename's source out of the path list and survives 
 });
 
 test("the manifest refuses a clone row that cannot say what breaks", () => {
-  const dir = mkdtempSync(join(tmpdir(), "rollcall-clone-"));
+  const dir = tempDir("rollcall-clone-");
   const p = join(dir, "m.json");
   const m = JSON.parse(readFileSync(new URL("../deploy/box-rollcall-manifest.json", import.meta.url), "utf8"));
   writeFileSync(p, JSON.stringify({ ...m, clones: [{ id: "x", path: "/x", activation_owner: "W" }] }));

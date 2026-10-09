@@ -15,8 +15,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, existsSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -42,6 +41,7 @@ import {
   HOUR,
   CONFIG,
 } from "../tools/site-sentinel.mjs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 const T0 = Date.parse("2026-08-25T12:00:00Z");
 
@@ -580,7 +580,7 @@ const stubExec = ({ siteTip = "sitetip0000", townTip = "towntip0000", relSha = "
 // the sentinel at it rather than at the box's /srv paths.
 import { writeFileSync as _wf } from "node:fs";
 import { CONFIG as _CFG } from "../tools/site-sentinel.mjs";
-const _wdir = mkdtempSync(join(tmpdir(), "sentinel-watcher-"));
+const _wdir = tempDir("sentinel-watcher-");
 const _wstate = join(_wdir, "state.json");
 _wf(_wstate, "{}");
 import { utimesSync as _ut } from "node:fs";
@@ -652,7 +652,7 @@ test("LOUDLY BE NOTIFIED: an outage and a frozen index both surface from one tic
 });
 
 test("env-missing degrades LOUDLY: every reading is still taken, the board is still written, and it says nothing was sent", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "sentinel-degrade-"));
+  const dir = tempDir("sentinel-degrade-");
   const statePath = join(dir, "state.json");
   const outPath = join(dir, "status.json");
   const errs = [];

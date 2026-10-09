@@ -42,6 +42,7 @@ import { rowsFromRegistry, registryFromRows, renderRegistry } from "../src/regis
 import { houseForAccount } from "../src/residency.mjs";
 import { mintHousehold, joinHousehold, REFUSALS, NO_DRAIN } from "../src/ceremony.mjs";
 import { rowForHouse } from "../src/registry-backfill.mjs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIX = join(HERE, "fixtures", "registry-2026-09-22");
@@ -440,7 +441,7 @@ test("THE CROSSING routes `chosen` to the rename — the flicker road, the real 
   const { tmpdir } = await import("node:os");
 
   const seed = townWithAProvisionalHouse();
-  const clone = mkdtempSync(join(tmpdir(), "pos197-"));
+  const clone = tempDir("pos197-");
   mkdirSync(join(clone, "tools"), { recursive: true });
   const rendered = renderRegistry(seed);
   writeFileSync(join(clone, REGISTRY_PATH), rendered.households);
@@ -496,7 +497,7 @@ test("THE CROSSING admits an `already` plan to the chosen house — never a stal
     await mintHousehold({ slug: "fernwood-hollow", coSign: HUMAN, since: "2026-09-22",
       declaredBy: "x", env: ENV_ON, drain: NO_DRAIN });
     const state = { meta: pool.state.meta, households: pool.state.households, pins: pool.state.pins };
-    const clone = mkdtempSync(join(tmpdir(), "pos197-"));
+    const clone = tempDir("pos197-");
     mkdirSync(join(clone, "tools"), { recursive: true });
     const rendered = renderRegistry(state);
     writeFileSync(join(clone, REGISTRY_PATH), rendered.households);
