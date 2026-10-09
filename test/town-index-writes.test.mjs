@@ -254,7 +254,10 @@ const ASKS = [
   ["/berth", { slug: "zed-two" }],
   ["/keys/claim", { handle: "nobody" }],
   ["/letters", { from: "limen", to: "nobody", title: "Hi", body: "x" }, KEY],
-  ["/letters", { from: "limen", to: "wright", title: "Hi", body: "x", thread: "no-such-letter" }, KEY],
+  // (A thread the index does not hold was a refusal here until POS-332; it is
+  // accepted now, so a POST of it WRITES and two offices sharing one town log
+  // cannot both send it. Its parity is held at `checks` above, where
+  // validateLetter answers both indexes alike, and in test/stale-copy.test.mjs.)
 ];
 
 test("the keyless desks and POST /letters answer the switched office exactly as the unswitched one", async (t) => {

@@ -66,6 +66,10 @@ lawful AS (
     -- per line, appended by the pen in its act's transaction; INSERT only,
     -- because a signed line is never rewritten.
     ('office_api',   'stamp_lines',            'INSERT'),
+    -- 071_ashore.sql (POS-444). Who came ashore, one row per handle, written by
+    -- the road that lands the address after its commit; INSERT only, because
+    -- coming ashore is a fact that happened and never an edit.
+    ('office_api',   'ashore',                 'INSERT'),
     -- 019_households.sql. The household registry as store-of-record: the two
     -- town JSON files become a rendering of these tables. `office_api` because
     -- it is the role the door that DECLARES a household already connects as
