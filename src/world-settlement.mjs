@@ -800,7 +800,15 @@ export async function servedSettlement(p, { settlement = null, worldRepo, townRe
   let state = SERVED.get(servedKey) ?? null;
   let built = false;
   if (!state) {
-    let text = await cachedFoldText(p, header.digest);
+    // A WORLD KEPT BY OLDER CODE IS NOT READ FOR A 069-ERA HEADER (review of
+    // #451, F2). A snapshot sealed with stance_through set and no recorded
+    // decision (stances NULL: before 072) may have had its World kept by #432's
+    // code with its seal's words applied; read as "not counted" now, that text
+    // would serve those words while git keeps the marks. So such a header is
+    // folded fresh, never read from the cache (DEPLOY.md § 072 clears those rows
+    // on dev and rehearsal stores).
+    const keptMayHoldWords = header.stance_through != null && header.stances == null;
+    let text = keptMayHoldWords ? null : await cachedFoldText(p, header.digest);
     let inputs = null, cleared = null, kept = null;
     if (text == null) {
       // The settlement's World: its sources and its seal's words, kept under its digest.

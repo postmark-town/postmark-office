@@ -1805,7 +1805,13 @@ Order at the ship, with Sunday's migrations:
    Proof (the probe `world2/tools/migrations-landed.mjs` holds for 072): `SELECT data_type FROM information_schema.columns WHERE table_name = 'world_snapshots' AND column_name = 'stances';` reads `jsonb`. Every existing snapshot keeps its digest (the column is NULL on them, and the digest's seventh part is written only when it is set).
 2. **Restart the office before the first clearing that runs the new code**, as for 069: an office on the old code would keep a fold under the new digest with the seal's words whether or not they count.
 3. **The cutover must reach the clearing job.** The clearing unit (`postmark-world2-clearing.service`) reads `/etc/postmark-world2-dev.env` and `/etc/postmark-world2-clearing.env`, **not** `/etc/postmark-office.env`, and the seal is now the one place the cutover is read for git and the World. When Darko picks n, set `TOWN_STANCE_CUTOVER=S<n>` in `/etc/postmark-world2-clearing.env` (the file `postmark-settlement.service` reads too) as well as in the office env (the stance inbox's town seat still reads it there). Not set: every seal records `counted: false`, which is R14. Read it back on the next clearing's journal line, `⚑ stances: COUNTED at S<k> (inferred), cutover S<n>`.
-4. **The decision is made once.** A seal under a lagging ingest (the last tag not yet a settlements row) infers its number one low and records it; that record stands. To read what a settlement recorded: `SELECT id, window_id, stances FROM world_snapshots ORDER BY id DESC LIMIT 3;`.
+4. **On dev and rehearsal stores** (any store where train code from before #451 sealed with 069 and served): a World kept under a 069-era digest (`stance_through` set, `stances` NULL) may hold the seal's words. The office no longer reads those rows, but `--verify` still compares against them, so clear them once, as office_api:
+   ```sql
+   DELETE FROM world_snapshot_folds f USING world_snapshots s
+    WHERE s.digest = f.digest AND s.stance_through IS NOT NULL AND s.stances IS NULL;
+   ```
+   Prod is not exposed: 069 ships with this train, so prod has no such row.
+5. **The decision is made once.** A seal under a lagging ingest (the last tag not yet a settlements row) infers its number one low and records it; that record stands. To read what a settlement recorded: `SELECT id, window_id, stances FROM world_snapshots ORDER BY id DESC LIMIT 3;`.
 
 ## The ground: the /tmp janitor, the disk watch, three site releases (2026-10-09)
 

@@ -667,3 +667,14 @@ test("an engine without world#146 or world#166 applies no limit: the World is th
     assert.deepEqual(vetoes.limits_unread, [{ mark: "ash/second", law: "the-town/one-per-resident" }], JSON.stringify(engine));
   }
 });
+
+test("A 069-ERA HEADER NEVER READS A KEPT WORLD (review of #451, F2): stance_through set, no decision recorded, and an older office's kept fold is folded past, not served", { skip }, async () => {
+  const { s11 } = await seed({ cutover: null, sealWords: [{ actor: "ann", on: "bo/shed", stance: "opposed" }] });
+  // What #432's code kept under this digest: the World with the seal's words applied (here, a stand-in the read must not serve).
+  await owner((c) => c.query("INSERT INTO world_snapshot_folds (digest, state) VALUES ($1, $2)", [s11, JSON.stringify({ marks: [], returned: [{ mark: "bo/shed", state: "returned", subtree: [] }] })]));
+  resetSettlementCaches();
+  const r = await serve({ settlement: "S11" });
+  assert.ok(ids(r).includes("bo/shed"), "not counted (no decision recorded), so the shed stands, as git keeps it");
+  assert.deepEqual(r.returned ?? [], []);
+  assert.equal(r.meta.words.counted, false);
+});
