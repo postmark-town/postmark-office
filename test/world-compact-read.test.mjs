@@ -75,7 +75,11 @@ const size = (v) => JSON.stringify(v).length;
 test("tools/list: the world tool says how big a bare call is, names the cheap reads, and declares compact", () => {
   const world = toolList().find((t) => t.name === "world");
   assert.ok(world, "the apex is listed with WORLD_APEX=1");
-  assert.match(world.description, /a bare call returns 50–80k characters/);
+  assert.match(world.description, /a bare call returns roughly 50–80k characters as of 2026-10/, "an estimate, dated, never a flat claim");
+  assert.match(world.description, /typically about 10k/);
+  assert.match(world.inputSchema.properties.compact.description, /Typically about 10k characters/);
+  assert.match(world.inputSchema.properties.compact.description, /A bare read only: with do: or read: it changes nothing/);
+  assert.doesNotMatch(JSON.stringify(world), /[Uu]nder 10k/, "no flat ceiling the town will outgrow");
   for (const cheap of ["compact: true", 'mark: \\"<id>\\"', 'find: \\"<q>\\"', 'read: \\"<action>\\"', 'cards: \\"names\\"'])
     assert.ok(JSON.stringify(world.description).includes(cheap), `the size line names ${cheap}`);
   assert.equal(world.inputSchema.properties.compact?.type, "boolean", "compact is a declared field, or the closed schema bounces it");
