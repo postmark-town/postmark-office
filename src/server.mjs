@@ -148,7 +148,8 @@ if (READ_ONLY_ROLE && !paperworkStoreOn() && !existsSync(OAUTH_DB_PATH)) {
     "Booting anyway would leave this worker answering 401 to every signed-in reader while nginx kept sending it traffic.");
 }
 // A PAPER, not a sqlite handle (paperwork.mjs): oauth.db by default, the
-// store's 031/032 tables with OFFICE_PAPERWORK_STORE=1. A switched office that
+// store's 031/032 tables with OFFICE_PAPERWORK_STORE=1, and then the file is
+// never opened (the mirror and the box's files are deleted, POS-271). A switched office that
 // cannot reach its store cannot sign anyone in, so it refuses to boot rather
 // than answer 401 to the whole town.
 let odb;
@@ -156,7 +157,7 @@ try {
   odb = await openPaper(OAUTH_DB_PATH, { readOnly: READ_ONLY_ROLE, schema: oauthSchema });
 } catch (e) {
   refuseBoot(`the office's paperwork could not be opened: ${String(e?.message ?? e).slice(0, 200)}`,
-    paperworkStoreOn() ? "OFFICE_PAPERWORK_STORE=1 reads sign-in from the store; set WORLD2_PG=1 and WORLD2_PG_URL, or turn the switch off (the rollback)." : `the key store is ${OAUTH_DB_PATH}`);
+    paperworkStoreOn() ? "OFFICE_PAPERWORK_STORE=1 reads sign-in from the store; set WORLD2_PG=1 and WORLD2_PG_URL. Turning the switch off is no rollback since POS-271: the files are deleted, and an unswitched office starts on an empty oauth.db, which signs everyone out." : `the key store is ${OAUTH_DB_PATH}`);
 }
 // The berth's acknowledgement of the town's rules for visitors is written on
 // its own row in this paperwork (POS-300, visitor-rules.mjs).

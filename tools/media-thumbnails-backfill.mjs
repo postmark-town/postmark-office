@@ -161,9 +161,8 @@ async function main() {
     source = `the record's marks (${RECORD})`;
   } else {
     // THE OFFICE'S OWN SWITCH (POS-271). With OFFICE_PAPERWORK_STORE=1 the
-    // ledger is the store's office_media and oauth.db is only the rollback's
-    // mirror, so the originals are read from the store; unswitched, from the
-    // file, as before.
+    // ledger is the store's office_media (oauth.db is deleted, POS-271), so the
+    // originals are read from the store; unswitched, from the file, as before.
     const { openPaper, paperworkStoreOn, closePaperworkPools } = await import("../src/paperwork.mjs");
     const switched = paperworkStoreOn();
     if (!switched && !existsSync(LEDGER)) { console.error(`no ledger at ${LEDGER} — pass --ledger <oauth.db>, or --from-record <world-state.json> to walk the marks instead`); process.exit(2); }

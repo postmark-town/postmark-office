@@ -33,9 +33,9 @@
 // ── WHICH BOOK (POS-271) ────────────────────────────────────────────────────
 //
 // With OFFICE_PAPERWORK_STORE=1 and the store's WORLD2_PG / WORLD2_PG_URL in
-// the environment, the rows go to the store's oauth_tokens (070 must have run)
-// and then to the file, as the office's own mirror does. Without them, to the
-// file only. The first line says which.
+// the environment, the rows go to the store's oauth_tokens only (070 must have
+// run; the file and its mirror are deleted, POS-271). Without them, to the file
+// only. The first line says which.
 
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";

@@ -62,8 +62,8 @@
 // ── WHICH BOOK (POS-271) ───────────────────────────────────────────────────
 //
 // With OFFICE_PAPERWORK_STORE=1 and the store's WORLD2_PG / WORLD2_PG_URL in
-// this shell, the tool writes the store's office_roles (and --db's file after
-// it, as the office's own mirror does). Without them it writes the file only.
+// this shell, the tool writes the store's office_roles only (the file and its
+// mirror are deleted, POS-271). Without them it writes the file only.
 // An office switched to the store reads only the store, so a grant written to
 // the file alone would grant nobody: every run prints which book it wrote, on
 // its first line, so the operator sees that before anything else.
@@ -144,8 +144,8 @@ function pinsIndex(clonePath) {
  * Logins the office has actually seen sign in.
  *
  * THE SAME SWITCH AS THE REGISTRY (POS-271). With OFFICE_PAPERWORK_STORE=1 the
- * sign-ins are the store's `oauth_tokens`, and oauth.db is only the rollback's
- * mirror, so the lookup asks the store. A store that cannot answer is said, not
+ * sign-ins are the store's `oauth_tokens` (oauth.db is deleted, POS-271), so
+ * the lookup asks the store. A store that cannot answer is said, not
  * read as "nobody signed in": that would turn an outage into "this login cannot
  * be resolved", which sends the operator looking for a typo. Unswitched, the
  * file is read as it always was, and an absent or unreadable file is an empty

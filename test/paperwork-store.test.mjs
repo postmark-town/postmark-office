@@ -5,14 +5,15 @@
 //   G1  a signed-in agent's credential still answers after the import and the
 //       switch — every shape: an MCP session, a human's household key, a
 //       resident-held key (custody disclosure intact), a co-signed claim, a berth
-//   G2  a credential issued AFTER the switch still answers after the ROLLBACK
-//       (the flag off: the file), and so do a role granted and a town-log row
-//       written after the switch — the mirror is what makes the rollback lossless
+//   G2  after the switch the store is the only paperwork: a key issued, a role
+//       granted and a town-log row written answer from the store, and neither
+//       file is opened again (the rollback's mirror is deleted with the files,
+//       POS-271, so a switched office that wrote a file would be a second book)
 //   G3  the media ledger and the town log read identically from the store and
 //       the file: rows, quota, cursor, pending
 //   G4  roles unchanged: the standing, the trail, the gate's answer
-//   G5  and after all of it, paperwork-import --check finds the file and the
-//       store still equal, row for row
+//   G5  right after the import, paperwork-import --check finds the file and
+//       the store equal, row for row (the check prod reads before the deletion)
 //
 // It needs a store it may create tables in, so it runs only when pointed at a
 // DISPOSABLE Postgres that already carries the migrations (the proof's
@@ -30,7 +31,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
@@ -41,7 +42,7 @@ import { openRolesDb, rolesSchema, grantRole, revokeRole, listRoles, auditTrail,
 import { ensureMediaTable, mediaLedgerRows, mediaQuota } from "../src/media.mjs";
 import { appendTownJournal, readTownJournal, townDrainCursor, pendingRows } from "../src/town-journal.mjs";
 import { advanceTownCursor } from "../src/town-drain.mjs";
-import { openPaper, asPaper, paperStatus, closePaperworkPools } from "../src/paperwork.mjs";
+import { openPaper, asPaper, closePaperworkPools } from "../src/paperwork.mjs";
 import { importPaperwork } from "../world2/tools/paperwork-import.mjs";
 
 const OWNER_URL = process.env.PAPERWORK_TEST_PG_OWNER_URL;
@@ -147,62 +148,30 @@ test(`THE SWITCH on a real store: G1–G5 ${SKIP ? `(${SKIP})` : ""}`, { skip: S
     await t.test("G4 · roles unchanged: standing, trail and the gate's answer", async () => {
       assert.deepEqual(await book(r), before.roles);
     });
-
-    // ── AFTER THE SWITCH: new paperwork, written through the store ──────────
-    const mirroredBefore = paperStatus().mirrored;
-    const lateKey = await mintHouseholdKey(o, OWNER.id, OWNER.login); // rotates the human's key
-    await grantRole(r, { subject: 777, actor: "keemin", note: "after the switch" });
-    const lateSeq = await appendTownJournal(o, { cls: "join", act: "declare-household", household: "newcomers", handle: "newcomer", ghId: "777" });
-    await advanceTownCursor(o, lateSeq);
-    const switched = { lookups: await lookups(o), late: view(await keyLookup(o, db, clone, lateKey)), ledgers: await ledgers(o), roles: await book(r) };
-    assert.equal(switched.lookups.human, null, "the rotation on the store retired the human's old key");
-
-    // ── THE ROLLBACK: the flag off, the files as the switched office left them
-    const ofileBack = openOauthDb(oauthPath);
-    const rfileBack = openRolesDb(rolesPath);
-    try {
-      await t.test("G2 · a key issued after the switch answers after the rollback, and the rotation it made holds", async () => {
-        assert.deepEqual(view(await keyLookup(ofileBack, db, clone, lateKey)), switched.late);
-        assert.ok(switched.late?.ghId === OWNER.id, "…as the same account, the id a number, not a string");
-        assert.deepEqual(await lookups(ofileBack), switched.lookups);
-      });
-      await t.test("G2b · a role granted and a town-log row written after the switch survive the rollback, under the same seq", async () => {
-        assert.deepEqual(await book(rfileBack), switched.roles);
-        assert.deepEqual(await ledgers(ofileBack), switched.ledgers);
-        assert.ok((await readTownJournal(ofileBack)).some((row) => row.seq === lateSeq && row.handle === "newcomer"));
-      });
-    } finally { ofileBack.close(); rfileBack.close(); }
-
-    // The instrument, read AFTER the behaviour it counts: G2 is the proof, this
-    // is only the office's own tally of it agreeing.
-    await t.test("the mirror's own tally agrees: writes counted, none failed", () => {
-      assert.ok(paperStatus().mirrored > mirroredBefore, "the switched writes reached the file's mirror");
-      assert.equal(paperStatus().mirrorFailed, 0, `no mirror write failed: ${paperStatus().lastMirrorError}`);
-    });
-
-    await t.test("G5 · paperwork-import --check: file and store still equal, row for row, after the switched writes", async () => {
+    await t.test("G5 · paperwork-import --check: file and store equal, row for row, right after the import", async () => {
       const checked = await importPaperwork(owner, { oauth: oauthPath, roles: rolesPath }, { check: true });
       assert.ok(checked.equal, JSON.stringify(checked.tables.filter((x) => x.differ.length).map((x) => x.differ.slice(0, 3))));
     });
 
-    // Wright's condition on the mirror (2026-09-30): "a failed mirror write is
-    // logged loudly and counted … never silently dropped". Forced here by taking
-    // the file's media table away under a switched paper: the store takes the
-    // row, the mirror cannot, and the office must SAY so.
-    await t.test("G6 · a FORCED mirror failure is counted and logged on the roll-call's line, and the store still took the write", async () => {
-      o.file.exec("DROP TABLE media");
-      const failedBefore = paperStatus().mirrorFailed;
-      const lines = [];
-      const real = console.error;
-      console.error = (...a) => { lines.push(a.join(" ")); };
-      try {
-        await asPaper(o).run("INSERT INTO media (household, sha, ext, bytes, by_handle, created) VALUES (?, ?, ?, ?, ?, ?)",
-          "keeminlee", "b".repeat(64), "png", 1, "wright", Date.now());
-      } finally { console.error = real; }
-      assert.equal(paperStatus().mirrorFailed, failedBefore + 1, "the failure is counted");
-      assert.ok(lines.some((l) => l.startsWith("[paperwork] MIRROR FAILED") && /no such table: media/.test(l)),
-        `the failure is on the greppable line, with its cause: ${JSON.stringify(lines)}`);
-      assert.equal((await mediaLedgerRows(o, "keeminlee")).length, 2, "the store took the write the file could not");
+    // ── AFTER THE SWITCH: new paperwork, written through the store only ─────
+    // The files' bytes before the switched writes: a switched paper never opens
+    // either file (the mirror is deleted with them, POS-271).
+    const bytes = () => [readFileSync(oauthPath), readFileSync(rolesPath)].map((b) => sha(b.toString("base64")));
+    const filesBefore = bytes();
+    const lateKey = await mintHouseholdKey(o, OWNER.id, OWNER.login); // rotates the human's key
+    await grantRole(r, { subject: 777, actor: "keemin", note: "after the switch" });
+    const lateSeq = await appendTownJournal(o, { cls: "join", act: "declare-household", household: "newcomers", handle: "newcomer", ghId: "777" });
+    await advanceTownCursor(o, lateSeq);
+
+    await t.test("G2 · after the switch the store is the only paperwork: the late key, role and log row answer from it, and no file is written", async () => {
+      assert.equal(o.file, null, "a switched paper holds no file");
+      assert.equal(r.file, null, "a switched paper holds no file");
+      const late = view(await keyLookup(o, db, clone, lateKey));
+      assert.ok(late?.ghId === OWNER.id, "the key issued after the switch answers as the same account, the id a number, not a string");
+      assert.equal((await lookups(o)).human, null, "the rotation on the store retired the human's old key");
+      assert.ok((await listRoles(r)).some((x) => String(x.subject) === "777"), "the role granted after the switch is in the store's book");
+      assert.ok((await readTownJournal(o)).some((row) => row.seq === lateSeq && row.handle === "newcomer"), "the log row written after the switch is in the store");
+      assert.deepEqual(bytes(), filesBefore, "oauth.db and roles.db are byte-for-byte as the import left them: a switched office never writes a file");
     });
   } finally {
     delete process.env.TOWN_SINGLE_LOG;
