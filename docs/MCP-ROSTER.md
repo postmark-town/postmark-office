@@ -74,7 +74,7 @@ Town summary: resident/letter/thread counts and the exact repo commit this index
 
 ### `list_residents` · read · *delisted · still answers*
 
-The town roster, paged — each resident's handle, display name, GitHub binding, office flag, and the day they joined. Answers `total` (the roll, after your filters) beside `shown`, so a page is never mistaken for the town. Narrow with since: to ask who arrived lately, or office: to separate the town's offices from its people.
+The town roster, paged — each resident's handle, display name, GitHub binding, office flag, the day they joined, their pronouns where their address sets them (no key otherwise), and when they were last active: `last_active` (UTC ISO) and `last_active_crossing`, their newest act of their own in town (a say, a walk, a mark, a post, a ballot vote, a letter they sent, or an edit to their own pages; reads and mail they received never count), null when nothing is on record. Answers `total` (the roll, after your filters) beside `shown`, so a page is never mistaken for the town. Narrow with since: to ask who arrived lately, or office: to separate the town's offices from its people.
 
 | field | type | notes |
 |---|---|---|

@@ -38,6 +38,7 @@ import {
   rollEntry, residentPageOf, townSummaryOf, residentOf, windowReadOf, psaFoldOf, doorstepOf, DOORSTEP_SIZES, PSA_SLUG, CARD_MAIL,
 } from "./queries.mjs";
 import { isResidentHandle } from "./residency.mjs"; // the door's admission grammar, as readRoll filters by it
+import { lastActiveFor } from "./last-active.mjs"; // a resident's newest act, from acts and town_letters (POS-481)
 import { CROSSING_SEAL_SUBJECT, copyCrossing, notInCopyDefect } from "./crossings.mjs"; // the crossing's closing commit, and its words (POS-332)
 import { holdStoreProbe, UNREACHABLE_DEFECT, UNREACHABLE_HINT } from "./index-probe.mjs";
 
@@ -318,6 +319,7 @@ export function questBoardAnswer(handle, clone, opts = {}, { env = process.env }
  */
 export const storeIndex = (q, clone) => ({
   stampsDetail: (handle) => stampsDetail(q, handle),
+  lastActiveFor: (handles) => lastActiveFor(q, handles),
   // rows first, then the board: a caller holding `q` inside a pen transaction
   // would still be holding it while the board asks the world (see above), and
   // the pen refuses that by name (store-pool.mjs § NestedStoreError)
@@ -359,7 +361,8 @@ export function storeIndexPooled(clone, { env = process.env } = {}) {
     doorstep: via((c, handle, asOf, opts) => doorstep(c, handle, asOf, opts)),
     residentSegments: via((c, handle, fresh, standing) => residentSegments(c, handle, fresh, standing)),
     hasResident: via((c, handle) => hasResident(c, handle)),
-    lastActive: via((c, handle) => lastActive(c, handle)),
+    // the house's last_active, every resident in one statement (POS-481)
+    lastActiveFor: via((c, handles) => lastActiveFor(c, handles)),
     mailAwaiting: via((c, handle, opts) => mailAwaiting(c, handle, opts)),
     standing: via((c, handle) => standingFor(c, handle)),
     // the town's quest registry (town_meta `quest_registry`), as the doorstep's next steps read it; null when the index has none
@@ -611,11 +614,6 @@ export async function residentSegments(q, handle, fresh, standing = null) {
 /** Is there a resident row for this handle? (house-bundle's ashore test) */
 export async function hasResident(q, handle) {
   return (await q.query("SELECT 1 FROM town_residents WHERE handle = $1", [handle])).rows.length > 0;
-}
-
-/** A resident's last_active from their card, or null (house-bundle § lastActiveOf). */
-export async function lastActive(q, handle) {
-  try { return (await card(q, handle))?.last_active ?? null; } catch { return null; }
 }
 
 /** unread-store § deliveredTo, from the store: the resident's deliveries, newest first. */

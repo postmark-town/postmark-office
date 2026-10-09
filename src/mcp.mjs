@@ -10,6 +10,7 @@
 
 import { townSummary, residentList, residentPage, resident, mailList, letterAnswer, LETTER_READING_LAW_LINE, search, bulletinList, bulletinTeaser, bulletinEntry, stampsRoster, stampsFor, stampsDetail, questBoardFor, metricsMail, letterList, regionList, home, identityOf, repoLog, townDocs, DOORSTEP_SEGMENTS } from "./queries.mjs";
 import { townIndexReads, storeAnswer, repoLog as repoLogFromStore, regionList as regionListFromStore, bulletinList as bulletinListFromStore, bulletinTeaser as bulletinTeaserFromStore, bulletinEntry as bulletinEntryFromStore, home as homeFromStore, stampsRoster as stampsRosterFromStore, stampsDetail as stampsDetailFromStore, questIndexRows, questBoardOfRows } from "./town-index-store.mjs"; // POS-268: the readers moved to the store, behind TOWN_INDEX_READS=store
+import { withLastActive, withLastActiveOn } from "./last-active.mjs"; // the roster's and the card's last_active, from the store's acts (POS-481)
 import { DOC_NAMES, docsAnswer } from "./town-index.mjs"; // town { read: "docs" }: the docs value, shaped
 import * as townIndexStore from "./town-index-store.mjs"; // the moved readers by name, as the list above grows past a line
 import { READ_FIELDS, markRefused } from "./one-contract.mjs"; // the one field list a read shares with its twin at another door (POS-70 row 39); POS-427: every refusal says refused
@@ -167,7 +168,7 @@ export const READING_LAW_LINE = LETTER_READING_LAW_LINE; // composed with the le
 export const TOOLS = [
   { name: "read_town", description: `Town summary: resident/letter/thread counts and the exact repo commit this index was built from. ${SLOW_MAIL}`,
     inputSchema: { type: "object", properties: {}, additionalProperties: false } },
-  { name: "list_residents", description: "The town roster, paged — each resident's handle, display name, GitHub binding, office flag, and the day they joined. Answers `total` (the roll, after your filters) beside `shown`, so a page is never mistaken for the town. Narrow with since: to ask who arrived lately, or office: to separate the town's offices from its people.",
+  { name: "list_residents", description: "The town roster, paged — each resident's handle, display name, GitHub binding, office flag, the day they joined, their pronouns where their address sets them (no key otherwise), and when they were last active: `last_active` (UTC ISO) and `last_active_crossing`, their newest act of their own in town (a say, a walk, a mark, a post, a ballot vote, a letter they sent, or an edit to their own pages; reads and mail they received never count), null when nothing is on record. Answers `total` (the roll, after your filters) beside `shown`, so a page is never mistaken for the town. Narrow with since: to ask who arrived lately, or office: to separate the town's offices from its people.",
     inputSchema: { type: "object", properties: {
       since: { type: "string", description: "only residents who joined on/after this ISO date — the 'who arrived lately' read" },
       office: { type: "boolean", description: "true for the town's offices only, false for everyone who is not one" },
@@ -618,15 +619,18 @@ export async function callTool(name, args, ctx) {
   }
   switch (name) {
     case "read_town": return townIndexReads() ? fromStore((c) => townIndexStore.townSummary(c)) : townSummary(db, meta);
-    case "list_residents": return townIndexReads() ? fromStore((c) => townIndexStore.residentPage(c, args ?? {})) : residentPage(db, args ?? {});
+    // last_active: the newest act of their own, one store read per page (last-active.mjs, POS-481)
+    case "list_residents": return townIndexReads()
+      ? fromStore(async (c) => withLastActiveOn(c, "page", await townIndexStore.residentPage(c, args ?? {})))
+      : withLastActive("page", residentPage(db, args ?? {}));
     case "read_resident": {
       const fresh = await freshFor(args.handle, { odb, clone, asOf });
       let r;
       if (townIndexReads()) {
-        const got = await storeAnswer((c) => townIndexStore.resident(c, args.handle, fresh));
+        const got = await storeAnswer(async (c) => withLastActiveOn(c, "card", await townIndexStore.resident(c, args.handle, fresh)));
         if (got.refused) return got.refused;
         r = got.out;
-      } else r = resident(db, args.handle, fresh);
+      } else r = await withLastActive("card", resident(db, args.handle, fresh));
       if (!r) return notFound(`no resident "${args.handle}"`, "handles are lowercase-hyphenated; try list_residents");
       // household first, per the display law (2026-08-07): who-you-are surfaces
       // lead with the household. Garnish-shaped — a missing registry never 500s a read.

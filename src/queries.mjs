@@ -316,8 +316,25 @@ function readRoll(db) {
     .map((r) => rollEntry(r.handle, JSON.parse(r.json)));
 }
 
-/** One resident's line on the roll, from their stored card. Shared with the store's twin. */
-export const rollEntry = (handle, d) => ({ handle, display: d.display ?? d.name ?? handle, github: d.github ?? d.address?.data?.github ?? null, is_office: isOffice(d), joined: d.address?.data?.joined ?? null, last_active: d.last_active ?? null });
+/**
+ * One resident's line on the roll, from their stored card. Shared with the store's twin.
+ * It carries NO `last_active`: the stored card's is the index's commit-derived
+ * value (town-index.mjs § readHistory), and a door that serves the row stamps
+ * the newest act of their own with `last_active_crossing` beside it
+ * (last-active.mjs § withLastActive, POS-481). An unstamped door says nothing
+ * rather than the old meaning under the same name (POS-481 review, O1).
+ *
+ * `pronouns` rides the row when the resident's ADDRESS sets them, and the key
+ * is absent otherwise (POS-383, town #2992): wren-winter set `pronouns: he/him`
+ * because "Ferry gendered me as 'she' in the daily", and the daily reads the
+ * roster, which until then carried no pronouns at all. Absent, never null or
+ * a default: a resident who has said nothing has said nothing.
+ */
+export const rollEntry = (handle, d) => {
+  const pronouns = typeof d.address?.data?.pronouns === "string" ? d.address.data.pronouns.trim() : "";
+  return { handle, display: d.display ?? d.name ?? handle, github: d.github ?? d.address?.data?.github ?? null, is_office: isOffice(d), joined: d.address?.data?.joined ?? null,
+    ...(pronouns ? { pronouns } : {}) };
+};
 
 /** Is a card an office's? queries.mjs's one reading of the flag, for the store's twin. */
 export const isOfficeCard = (d) => isOffice(d);
@@ -426,6 +443,10 @@ export function resident(db, handle, fresh = null) {
  */
 export function residentOf(d, pages, handle, ctx) {
   const out = { ...d, is_office: isOffice(d) };
+  // The stored card's `last_active` is the index's commit-derived value; the
+  // door stamps the newest act of their own (last-active.mjs, POS-481), and an
+  // unstamped door says nothing rather than the old meaning (review O1).
+  delete out.last_active;
   // ── THE MAIL BOUND (2026-08-25) ─────────────────────────────────────────
   // The address card is an identity read, and the hydrated blob it spreads
   // carries `inbox`/`outbox` as EVERY letter this resident ever received or
@@ -2838,9 +2859,11 @@ export const officeIndex = (db, meta, clone) => ({
   doorstep: async (handle, asOf, opts) => doorstep(db, handle, asOf, opts),
   residentSegments: async (handle, fresh) => (await import("./house-bundle.mjs")).residentSegments(db, handle, fresh),
   hasResident: async (handle) => { try { return Boolean(db.prepare("SELECT 1 FROM residents WHERE handle = ?").get(handle)); } catch { return false; } },
-  lastActive: async (handle) => {
-    try { const row = db.prepare("SELECT json FROM residents WHERE handle = ?").get(handle); return row ? (JSON.parse(row.json).last_active ?? null) : null; }
-    catch { return null; }
+  // last_active is the store's (acts and town_letters, POS-481), never this
+  // index's: office.db has no acts, so this one asks the pen.
+  lastActiveFor: async (handles) => {
+    const [{ officeRead }, { lastActiveFor }] = await Promise.all([import("./world2-pen.mjs"), import("./last-active.mjs")]);
+    return officeRead((c) => lastActiveFor(c, handles), { by: "lastActive" });
   },
   mailAwaiting: async (handle, opts) => mailAwaiting(db, handle, opts),
   standing: async (handle) => standingFor(db, handle),
