@@ -32,7 +32,7 @@ import {
   bulletinListing, bulletinTeaserOf, bulletinEntryOf,
   stampsRosterPage, stampsDetailOf, stampParties,
   potBoardOf, questBoardWith,
-  excerpt, LETTER_READING_LAW_LINE, MAIL_PAGE, SEARCH_LETTERS, SEARCH_RESIDENTS,
+  excerpt, LETTER_READING_LAW_LINE, withWhole, MAIL_PAGE, SEARCH_LETTERS, SEARCH_RESIDENTS,
   mailListOf, letterListNoRegion, letterListPage, correspondentsOf, mailAwaitingOf, searchPage, metricsMailOf,
   indexCopy as officeIndexCopy,
   rollEntry, residentPageOf, townSummaryOf, residentOf, windowReadOf, psaFoldOf, doorstepOf, DOORSTEP_SIZES, PSA_SLUG, CARD_MAIL,
@@ -359,7 +359,7 @@ export function storeIndexPooled(clone, { env = process.env } = {}) {
     asOf: via((c) => townIndexAsOf(c)),
     copy: via((c) => indexCopy(c)),
     doorstep: via((c, handle, asOf, opts) => doorstep(c, handle, asOf, opts)),
-    residentSegments: via((c, handle, fresh) => residentSegments(c, handle, fresh)),
+    residentSegments: via((c, handle, fresh, standing) => residentSegments(c, handle, fresh, standing)),
     hasResident: via((c, handle) => hasResident(c, handle)),
     // the house's last_active, every resident in one statement (POS-481)
     lastActiveFor: via((c, handles) => lastActiveFor(c, handles)),
@@ -385,7 +385,7 @@ const count = async (q, sql, params = []) => Number((await q.query(sql, params))
 /** queries.letter, from the store: one letter whole, or null. */
 export async function letter(q, id) {
   const row = (await q.query("SELECT json FROM town_letters WHERE id = $1", [id])).rows[0];
-  return row ? JSON.parse(row.json) : null;
+  return row ? withWhole(JSON.parse(row.json), { asOf: await townIndexAsOf(q) }) : null; // with queries § A COPY CARRIES PROOF IT'S WHOLE (POS-334)
 }
 
 /** queries.letterAnswer, from the store. */
@@ -487,14 +487,16 @@ export async function probeRows(q, { letters = true, logins = true } = {}) {
 // A question the snapshot was not loaded to answer is a programming error, named.
 const notLoaded = (what) => { throw new Error(`the store's probe was loaded without ${what}`); };
 
-/** The probe over a snapshot. `mail` holds the mail_state rows a caller read for this call (handle -> json|null). */
-export function probeOver(rows, { mail = null } = {}) {
+/** The probe over a snapshot. `mail` holds the mail_state rows a caller read for this call (handle -> json|null);
+ *  `standing` the sender's own standing letters with their roots (handle -> [{ letter_id, thread, root }]). */
+export function probeOver(rows, { mail = null, standing = null } = {}) {
   return Object.freeze({
     hasResident: (h) => rows.handles.has(h),
     hasLetter: (id) => (rows.letters ?? notLoaded("letter ids")).has(id),
     loginStamp: () => `store:${rows.asOf}`,
     loginRows: () => rows.logins ?? notLoaded("GitHub lines"),
     mailStateJson: (h) => (mail?.has(h) ? mail.get(h) : notLoaded(`${h}'s mail_state`)),
+    mailStanding: (h) => standing?.get(h) ?? [],
   });
 }
 
@@ -519,12 +521,17 @@ export const storeProbeAsOf = () => _probeRows?.asOf ?? null;
  * The held probe with one resident's mail_state row read now, for the reply
  * hint a send draws. Throws when the store cannot answer; the send has already
  * gone by then, so its caller says nothing rather than refuse a sent letter.
+ * `standing` is the sender's own standing letters (a key that holds the
+ * sender only), rooted here so the hint reads them as replies (POS-375).
  */
-export async function probeWithMailState(handle, { env = process.env } = {}) {
+export async function probeWithMailState(handle, { env = process.env, standing = null } = {}) {
   if (!_probeRows) throw new TownIndexUnreachable();
-  const r = await storeAnswer(async (c) => (await c.query("SELECT json FROM town_mail_state WHERE handle = $1", [handle])).rows[0]?.json ?? null, { env });
+  const r = await storeAnswer(async (c) => ({
+    json: (await c.query("SELECT json FROM town_mail_state WHERE handle = $1", [handle])).rows[0]?.json ?? null,
+    standing: await standingRoots(c, standing),
+  }), { env });
   if (r.refused) throw new TownIndexUnreachable();
-  return probeOver(_probeRows, { mail: new Map([[handle, r.out]]) });
+  return probeOver(_probeRows, { mail: new Map([[handle, r.out.json]]), standing: new Map([[handle, r.out.standing]]) });
 }
 
 /** Test seam: forget the roster memo (a suite that rewrites rows under one head). */
@@ -588,12 +595,12 @@ export async function psaFold(q, opts = {}) {
 }
 
 /** house-bundle § residentSegments, from the store: one resident's own segments, at the house read's bounds. */
-export async function residentSegments(q, handle, fresh) {
+export async function residentSegments(q, handle, fresh, standing = null) {
   const { residentSegmentsOf, DOORSTEP_INBOX: HOUSE_INBOX } = await import("./house-bundle.mjs");
   const one = (sql, params) => count(q, sql, params);
   return residentSegmentsOf({
     mail: await mailList(q, handle, "inbox", { limit: HOUSE_INBOX }),
-    awaiting: await mailAwaiting(q, handle, { offset: 0 }),
+    awaiting: await mailAwaiting(q, handle, { offset: 0, standing }),
     stamps: await stampsDetail(q, handle),
     window: await windowRead(q, handle, fresh),
     pendingOutbox: await outboxSettled(q, handle),
@@ -623,14 +630,14 @@ export async function deliveredTo(q, handle) {
  * whatever the caller passes: the segments came from this index.
  */
 export async function doorstep(q, handle, _asOf, opts = {}) {
-  const { nowMs = Date.now(), conversationsOffset = 0, fresh = null, slim = false } = opts;
+  const { nowMs = Date.now(), conversationsOffset = 0, fresh = null, slim = false, standing = null } = opts;
   if (!(await hasResident(q, handle))) return null;
   const asOf = await townIndexAsOf(q);
   const offset = Math.max(Number(conversationsOffset) || 0, 0);
   const one = (sql, params = []) => count(q, sql, params);
   const parts = {
     arrivals: (await roster(q)).map((e) => ({ handle: e.handle, joined: e.joined, is_office: e.is_office })),
-    awaiting: await mailAwaiting(q, handle, { offset }),
+    awaiting: await mailAwaiting(q, handle, { offset, standing }),
     mail: await mailList(q, handle, "inbox", { limit: slim ? DOORSTEP_SIZES.inboxSlim : DOORSTEP_SIZES.inbox }),
     stamps: await stampsDetail(q, handle),
     bulletin: await bulletinTeaser(q, { limit: DOORSTEP_SIZES.bulletin }),
@@ -695,13 +702,67 @@ async function ledgerNewest(q) {
   return (await q.query(`SELECT MAX(date COLLATE "C") AS d FROM town_ledger WHERE date IS NOT NULL`)).rows[0]?.d ?? null;
 }
 
-/** queries.mailAwaiting, from the store. */
+// How far up a thread chain the root walk goes before it calls the chain bent.
+const THREAD_WALK_MAX = 500;
+
+/**
+ * The conversation a letter's thread chain ends at, as the town's law roots it
+ * (tools/mail-state.mjs § rootOf): follow `thread` while it names a letter; the
+ * last letter is the root, or, when the last `thread` names no letter, that
+ * name is (the law's broken edge). null when the chain does not end inside the
+ * walk (a cycle), which the caller leaves alone rather than guessing a root.
+ */
+async function threadRoot(q, id) {
+  const last = (await q.query(`WITH RECURSIVE up(id, thread, n) AS (
+      SELECT id, thread, 0 FROM town_letters WHERE id = $1
+      UNION ALL
+      SELECT l.id, l.thread, up.n + 1 FROM town_letters l JOIN up ON l.id = up.thread WHERE up.n < $2)
+    SELECT id, thread, n FROM up ORDER BY n DESC LIMIT 1`, [id, THREAD_WALK_MAX])).rows[0];
+  if (!last) return id;
+  if (Number(last.n) >= THREAD_WALK_MAX) return null;
+  return last.thread && last.thread !== "new" ? last.thread : last.id;
+}
+
+/**
+ * queries.mailAwaiting, from the store. `opts.standing` is the sender's own
+ * standing letters (town-mail.mjs § hotMailBlock's `standing`), passed only on
+ * a read by a key that holds `handle`: each is given its conversation root here
+ * and the view reads them as the law reads a queued reply (queries.mjs § A
+ * WRITTEN REPLY IS A QUEUED REPLY, POS-375).
+ */
 export async function mailAwaiting(q, handle, opts = {}) {
   const row = (await q.query("SELECT json FROM town_mail_state WHERE handle = $1", [handle])).rows[0];
   // a bent law is no law, exactly as office.db's reader answers it
   let law = null;
   try { law = row ? JSON.parse(row.json) : null; } catch { law = null; }
-  return mailAwaitingOf(law, await ledgerNewest(q), handle, opts);
+  const standing = law ? await standingRoots(q, opts.standing) : [];
+  return mailAwaitingOf(law, await ledgerNewest(q), handle, { ...opts, standing });
+}
+
+/** The sender's standing letters (hotMailBlock's `standing`), each with the conversation root its thread chain ends at. */
+async function standingRoots(q, standing) {
+  const mine = new Map((standing ?? []).filter((s) => s?.letter_id).map((s) => [s.letter_id, s]));
+  const roots = new Map();
+  // A reply to your own standing reply (#446 review, finding 3): the letter it
+  // names is a log row, not in town_letters, so it roots through that letter,
+  // as the law roots an outbox letter through another. A loop among them roots
+  // nowhere (null), as threadRoot leaves a cycle.
+  const rootOf = async (s, seen = new Set()) => {
+    if (roots.has(s.letter_id)) return roots.get(s.letter_id);
+    const thread = s.thread && s.thread !== "new" ? s.thread : null;
+    let root;
+    if (!thread) root = s.letter_id;
+    else if (mine.has(thread)) root = seen.has(thread) ? null : await rootOf(mine.get(thread), seen.add(s.letter_id));
+    else root = await threadRoot(q, thread);
+    roots.set(s.letter_id, root);
+    return root;
+  };
+  const out = [];
+  for (const s of mine.values()) {
+    const thread = s.thread && s.thread !== "new" ? s.thread : null;
+    out.push({ letter_id: s.letter_id, thread, root: await rootOf(s) });
+  }
+  return out;
 }
 
 // sqlite's LIKE with no ESCAPE clause: ASCII case folded, no escape character

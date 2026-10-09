@@ -1354,8 +1354,20 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, dbPath, pen, 
       const awaitingOpts = { limit: f.limit, offset: f.offset, hide_bounces_older_than_days: f.hide_bounces_older_than_days };
       if (view === "inbox" || view === "outbox")
         return switched ? fromStore((c) => tis.mailList(c, handle, view, pageOpts)) : mailList(db, handle, view, pageOpts);
-      if (view === "awaiting")
+      if (view === "awaiting") {
+        // A reply its sender has written and the ferry has not carried reads
+        // reply_queued here, on the sender's own key only: the same block the
+        // doorstep's your_pending_letters lists (POS-375). A log that will not
+        // read leaves the view as the record has it. Read on the store's road
+        // only: office.db's reader takes no standing letters (POS-268).
+        if (switched && key?.handles?.has?.(handle) === true) {
+          try {
+            const { hotMailBlock } = await import("./town-mail.mjs");
+            awaitingOpts.standing = (await hotMailBlock(odb, key, { handle }))?.standing ?? null;
+          } catch { /* the record's own answer still stands */ }
+        }
         return switched ? fromStore((c) => tis.mailAwaiting(c, handle, awaitingOpts)) : mailAwaiting(db, handle, awaitingOpts);
+      }
       // ── correspondents (walk #2 item 1, 2026-09-06) ───────────────────────
       //
       // WHO you have exchanged letters with. It is a PUBLIC-SHAPED fact — the

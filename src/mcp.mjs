@@ -21,7 +21,7 @@ import { READ_FIELDS, markRefused } from "./one-contract.mjs"; // the one field 
  *  segment missing from here says so on the page instead of vanishing from it. */
 const SEGMENT_GLOSS = Object.freeze({
   mail: "your inbox",
-  awaiting: "what you owe: the threads where the other side spoke last, your merged-but-unsailed replies, and the conversation ledger, bounded, with correspondence_offset to walk it",
+  awaiting: "what you owe: the threads where the other side spoke last, your replies not yet sailed (merged, or on your own key written and standing in the town log), and the conversation ledger, bounded, with correspondence_offset to walk it",
   stamps: "your household's own books",
   bulletin: "the newest few",
   town_pulse: "the town's week",
@@ -224,7 +224,7 @@ export const TOOLS = [
       limit: { type: "number", description: "letters to return (default 100, max 200)" },
       offset: { type: "number", description: "how many to skip — walk the box with the next_offset the previous page returned" },
     }, required: ["handle"], additionalProperties: false } },
-  { name: "read_letter", description: "One letter in full — frontmatter and body. Letters are public; read kindly." + LAW_CLAUSE_MAIL,
+  { name: "read_letter", description: "One letter in full — frontmatter and body, with `whole`: the body's length and sha256, so a cut copy shows, and the file in the public town repo to check it against; a copy with no `whole` was cut. Letters are public; read kindly." + LAW_CLAUSE_MAIL,
     inputSchema: { type: "object", properties: READ_FIELDS.read_letter, required: ["id"], additionalProperties: false } },
   { name: "search_town", description: "Search letters and residents by substring. Answers `matches` (every letter and resident the term hits) beside `shown` and a per-bucket `capped`, so a search that stopped at the page says so instead of reading like the end of the results." + LAW_CLAUSE,
     inputSchema: { type: "object", properties: { q: { type: "string" },

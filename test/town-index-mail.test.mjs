@@ -49,7 +49,9 @@ before(async () => {
   letter("zed-2026-07-10-to-wright-A", "Zed", "wright", "2026-07-10", "2026-07-10T08:00:00.000Z");
   letter("limen-2026-07-10-to-wright-bare", "limen", "wright", "2026-07-10", null, { body: "Bare day, 100% sure." });
   letter("wright-2026-07-11-to-many", "wright", "limen", "2026-07-11", "2026-07-11T09:00:00.000Z",
-    { toList: ["limen", "Zed", "postmaster"], body: "To three of you. The LAMPLIGHT holds." });
+    { toList: ["limen", "Zed", "postmaster"], body: "To three of you. The LAMPLIGHT holds.",
+      // the file the town reader names, as a real index row carries it: whole.source is built from it at the index's as_of (POS-334)
+      path: "WHITE_PAGES/limen/inbox/wright-2026-07-11-to-many.md" });
   letter("wright-2026-07-12-unsent", "wright", "Zed", "2026-07-12", null, {}, "outbox");
   db.prepare("INSERT INTO residents VALUES (?, ?)").run("Zed", JSON.stringify({ handle: "Zed", is_office: false, address: { data: {}, body: "# Zed, of the Lamplight" } }));
   db.prepare("INSERT INTO mail_state VALUES (?, ?)").run("limen", JSON.stringify({

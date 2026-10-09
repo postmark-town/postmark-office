@@ -44,6 +44,7 @@
 import { doorstep, DOORSTEP_STANCES, mailList, mailAwaiting, stampsDetail, windowRead, outboxSettled } from "./queries.mjs";
 import { ownerGate } from "./doorstep-bundle.mjs";
 import { unreadFor } from "./unread-store.mjs";
+import { hotMailBlock } from "./town-mail.mjs";
 import { nextCrossingForDoorstep, currentCrossing, CROSSING_EPOCH_UTC, CROSSING_MS } from "./crossings.mjs";
 import { resolveHouse, VIA } from "./household-deriver.mjs";
 import { loadRegistryRows } from "./registry-store.mjs";
@@ -299,8 +300,14 @@ export async function houseBundle({ household = null } = {}, ctx = {}) {
   const residents = {};
   for (const h of ashore) {
     const fresh = await freshFor(h, { odb, clone, asOf });
-    const d = { handle: h, ...(ix ? await ix.residentSegments(h, fresh) : await residentSegments(db, h, fresh)) };
-    await ownerGate(d, h, { db, clone, key, odb, meta, asOf, unread, ix });
+    // the resident's standing letters, read once for their awaiting segment and
+    // their your_pending_letters, on a key that holds them (doorstep-bundle.mjs §
+    // THE SENDER'S STANDING LETTERS, POS-375)
+    let pendingMail;
+    if (held.includes(h)) { try { pendingMail = { block: await hotMailBlock(odb, key, { handle: h }) }; } catch { pendingMail = null; } }
+    const standing = pendingMail?.block?.standing ?? null;
+    const d = { handle: h, ...(ix ? await ix.residentSegments(h, fresh, standing) : await residentSegments(db, h, fresh)) };
+    await ownerGate(d, h, { db, clone, key, odb, meta, asOf, unread, ix, pendingMail });
     d.stands = stands.byHandle[h] ?? null;
     residents[h] = d;
   }
