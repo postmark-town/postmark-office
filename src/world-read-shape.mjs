@@ -167,11 +167,22 @@ const SIZE_LEAN = {
   v2: "SIZE: a bare call is the lean read, roughly 14k characters as of 2026-10 (it grows with what stands near you), with the acts by name only: mark: \"<id>\" is one mark whole, find: \"<q>\" finds one, read: \"<action>\" is one act's full card, and cards: \"full\" gives every card whole.",
 };
 
-/** The apex's description at `shape`. v0 answers `text` itself. */
+let moved = false;
+/**
+ * The apex's description at `shape`. v0 answers `text` itself.
+ *
+ * FAILS SOFT (#455 review, finding 2). This runs inside the tool's description
+ * getter, which every MCP `tools/list` serializes; a throw here would take
+ * tool discovery down for every client. So if a later edit moves the two
+ * sentences this swaps, it says so once and answers the v0 description, and
+ * test/world-read-shape.test.mjs is the loud signal that goes red in CI.
+ */
 export function describeAt(text, shape = "v0") {
   if (shape === "v0") return text;
-  if (!text.includes(RECORDS_V0) || !text.includes(SIZE_V0))
-    throw new Error("world-read-shape: the apex description moved; RECORDS_V0 / SIZE_V0 no longer match it");
+  if (!text.includes(RECORDS_V0) || !text.includes(SIZE_V0)) {
+    if (!moved) { moved = true; console.error("[world] the apex description moved: RECORDS_V0 / SIZE_V0 no longer match it, so tools/list answers the v0 description at " + shape + " (world-read-shape.mjs § describeAt)"); }
+    return text;
+  }
   return text.replace(RECORDS_V0, RECORDS_LEAN).replace(SIZE_V0, SIZE_LEAN[shape]);
 }
 

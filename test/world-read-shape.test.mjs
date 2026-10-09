@@ -35,7 +35,7 @@ for (const [k, v] of Object.entries(ENV)) setEnv(k, v);
 const { worldApex, APEX_TOOL, APEX_DESCRIPTION, fieldsFor } = await import("../src/world-apex.mjs");
 const { __setPoolForTest } = await import("../src/world2-acts.mjs");
 const { toolList } = await import("../src/mcp.mjs");
-const { ONE_LINERS, namedFields, shapeRead, readShape, simplifyRing } = await import("../src/world-read-shape.mjs");
+const { ONE_LINERS, namedFields, shapeRead, readShape, simplifyRing, describeAt } = await import("../src/world-read-shape.mjs");
 
 const WHO = "kogane";
 const KEY = { handles: new Set([WHO]) };
@@ -170,4 +170,10 @@ test("an outline keeps at most 8 vertices, from the ring itself", () => {
   const out = simplifyRing(ring, 8);
   assert.equal(out.length, 8);
   for (const p of out) assert.ok(ring.some((q) => q[0] === p[0] && q[1] === p[1]), "every kept vertex is one of the ring's");
+});
+
+test("a description that moved fails soft: the v0 words come back, nothing throws (#455 review, finding 2)", () => {
+  const moved = "a description someone rewrote";
+  assert.equal(describeAt(moved, "v1"), moved);
+  assert.notEqual(describeAt(APEX_DESCRIPTION, "v1"), APEX_DESCRIPTION, "the real description still swaps; this test is the loud signal when it stops");
 });
