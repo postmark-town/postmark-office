@@ -90,6 +90,94 @@ export function nextCrossingForDoorstep(now = Date.now()) {
     sentence: `crossing ${crossing} sails at ${at}. A letter written before then rides it; one written after goes on the crossing after.` };
 }
 
+// ── WHAT THE OFFICE'S COPY HAS CAUGHT UP TO (POS-332) ────────────────────────
+//
+// The doorstep's `as_of` is a COMMIT: the town record the office's copy (the
+// store's town index, or office.db) was built from. Kogane, office hours
+// 2026-10-02: "as_of came back as a commit, not a time", and Little Bird had
+// nothing to hold it against. Nyx logged ten reads that trailed a crossing and
+// asked for "the settle stamp the index is serving, on the doorstep read".
+//
+// So beside the commit the page says, from the copy's OWN record of the town's
+// commits (repo_log, the index's history table), two times: the newest change
+// the copy holds, and the newest crossing it holds, which is the crossing's
+// seal. The Postmark Pen closes every crossing with one commit of this subject
+// (the town index's ingest snapshots at exactly these commits,
+// world2/tools/town-index-ingest.mjs), after the delivery, the mint and the
+// quests. A copy that holds the seal holds the whole crossing. Its number is
+// the town clock's for the instant it was sealed, so it is the same number
+// `next_crossing` and a send receipt name: the copy is caught up when it holds
+// the last crossing the timetable has sailed.
+export const CROSSING_SEAL_SUBJECT = "seal: re-seal at the crossing";
+
+/** The instant crossing `n` sails by the timetable, as ISO. */
+export const crossingSailsAt = (n) => new Date(CROSSING_EPOCH_UTC + n * CROSSING_MS).toISOString();
+
+/**
+ * The crossing a copy holds, from its newest seal (`{ at }`, or null): its
+ * number on the town clock and the seal's instant. ONE place says it, so the
+ * doorstep's `copy` and a lookup's 404 cannot name two different crossings.
+ */
+export function copyCrossing(seal) {
+  const at = seal?.at ? Date.parse(seal.at) : NaN;
+  if (!Number.isFinite(at)) return null;
+  const n = currentCrossing(at);
+  return { crossing: n, sailed_at: crossingSailsAt(n), sealed_at: new Date(at).toISOString() };
+}
+
+/**
+ * What the copy holds, in words, the ONE source for every page that says it
+ * (the doorstep's `copy`, its fallback, a lookup's 404): "has caught up to
+ * crossing N, sealed T"; that it holds no seal (`null`); or, when its history
+ * could not be read (`undefined`), that it could not say.
+ */
+export const copyHoldsWords = (crossing) => crossing === undefined
+  ? "could not say what it has caught up to just now"
+  : crossing
+    ? `has caught up to crossing ${crossing.crossing}, sealed ${crossing.sealed_at}`
+    : "holds no crossing's seal, so it cannot name a crossing it has caught up to";
+
+/**
+ * A lookup's 404 when the office's copy holds no letter by the id (POS-332).
+ * "no letter by that id" alone was a claim about the town that only the copy
+ * could make: Nyx's read-backs bounced on letters that had sailed after it. The
+ * defect names the copy and the crossing it holds, in the doorstep's words.
+ * `crossing` is copyCrossing's answer; `undefined` when the copy's history
+ * could not be read.
+ */
+export function notInCopyDefect(crossing) {
+  const tail = crossing === undefined ? ""
+    : crossing ? "; a letter that sailed after that crossing is not in it yet" : "; a letter newer than the copy is not in it yet";
+  return `no letter by that id in the office's copy of the town record, which ${copyHoldsWords(crossing)}${tail}`;
+}
+
+/**
+ * The doorstep's `copy` block, from what the index read: `newest` (the newest
+ * commit time in the copy, ISO, or null) and `seal` (`{ sha, at }` of the newest
+ * crossing seal in the copy, or null). `asOf` is the copy's commit, as the page
+ * names it. `now` is the page's one clock.
+ */
+export function copyBlock({ newest = null, seal = null } = {}, asOf = null, now = Date.now()) {
+  const n = typeof now === "number" ? now : new Date(now).getTime();
+  const last = currentCrossing(n);
+  const crossing = copyCrossing(seal);
+  const caughtUp = crossing ? crossing.crossing >= last : null;
+  const commit = asOf && asOf !== "unknown" ? `commit ${String(asOf).slice(0, 12)}` : "a commit it cannot name";
+  const held = newest ? `its newest change was recorded at ${newest}` : "it holds no dated change";
+  const verdict = caughtUp === true
+    ? ": the last crossing by the timetable."
+    : caughtUp === false
+      ? `; crossing ${last} was due at ${crossingSailsAt(last)} by the timetable and is not in this copy yet, so read again once the copy catches up.`
+      : ".";
+  return {
+    newest_change_at: newest,
+    crossing,
+    last_crossing_by_timetable: last,
+    caught_up: caughtUp,
+    sentence: `This page reads the office's copy of the town record at ${commit}; ${held}. The copy ${copyHoldsWords(crossing)}${verdict}`,
+  };
+}
+
 /**
  * The receipt's sentence: the letter is written, and the boat it rides is the
  * first one after `writtenAt`. The ordinary receipt says so. A receipt handed

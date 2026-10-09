@@ -72,7 +72,7 @@ import { pathToFileURL } from "node:url";
 
 import { appendTownJournal, pendingRows, townLogEnabled, NONCE_MAX, rowSpendingNonce } from "./town-journal.mjs";
 import { LADDER_NOTE, TENSE } from "./paper-fresh.mjs"; // the three words, borrowed rather than re-coined
-import { nextCrossing, outboxRelPath, validateLetter } from "./write.mjs";
+import { nextCrossing, outboxRelPath, validateLetter, threadNoteFor } from "./write.mjs";
 import { nextCrossingForReceipt } from "./crossings.mjs"; // #2922: the boat's number, minutes and sentence beside `expected_crossing`
 
 /** The one act this class carries, and the door that performs it. */
@@ -507,5 +507,7 @@ async function sendRow(args, key, db, clone, odb, nonce) {
     // Only when one was offered — a caller who passed no nonce is told nothing
     // about nonces, and this receipt is byte-for-byte the one they got before.
     ...(nonce ? { nonce, idempotent: "retry this exact call with the same nonce and you will get this receipt back rather than a second letter — until the crossing takes it, after which the letter id is the guard" } : {}),
+    // A thread the office's copy does not hold yet is accepted and said (POS-332, write.mjs § threadNoteFor).
+    ...(plan.threadUnseen ? { thread_note: threadNoteFor(plan.thread) } : {}),
   };
 }

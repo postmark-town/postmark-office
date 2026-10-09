@@ -98,10 +98,27 @@ export function makePool(seed) {
     acts: (seed.acts ?? []).map((a) => ({ ...a })),
     windows: (seed.windows ?? []).map((w) => ({ ...w })),
     gangway: seed.gangway ? [{ ...seed.gangway }] : [],
+    // WHO CAME ASHORE (071, POS-444): the rows the roads write after an
+    // address lands. Empty by default, which is the store before its backfill.
+    ashore: (seed.ashore ?? []).map((a) => ({ ...a })),
   };
   return {
     state,
     async query(text, params = []) {
+      // ASHORE (src/ashore.mjs), before the pins read below: its read names
+      // household_pins in a subquery, and the pins branch would answer it with
+      // every pin.
+      if (/^\s*INSERT INTO ashore\b/.test(text)) {
+        const [handle, at, sha, road] = params;
+        if (state.ashore.some((a) => a.handle === handle)) return { rows: [], rowCount: 0 };
+        state.ashore.push({ handle, at, sha, road });
+        return { rows: [{ handle }], rowCount: 1 };
+      }
+      if (/FROM ashore a/.test(text)) {
+        const asked = new Set(params[0] ?? []);
+        const retired = new Set(state.pins.filter((p) => p.retired != null || p.renamed_to != null).map((p) => p.handle));
+        return { rows: state.ashore.filter((a) => asked.has(a.handle) && !retired.has(a.handle)).map((a) => ({ handle: a.handle })) };
+      }
       // THE MINT'S OWN INSERT, which lets the DATABASE choose the place
       // (`src/registry-store.mjs` § A NEW HOUSE TAKES ITS PLACE FROM THE
       // DATABASE). The stub computes it the same way the statement does, and

@@ -214,6 +214,9 @@ test("an account already on the house is admitted and bound: pin + membership in
   assert.equal(JSON.parse(readFileSync(join(clone, PINS_PATH), "utf8")).tulip.id, 999);
   assert.deepEqual(JSON.parse(readFileSync(join(clone, REGISTRY_PATH), "utf8")).households["the-trueing-house"].residents, ["wright", "tulip"]);
   assert.equal(git(clone, "status", "--porcelain"), "", "nothing left behind");
+  // POS-444 (071): the store records the handle ashore in the same act, naming the commit that holds the card
+  assert.deepEqual(pool.state.ashore.map((a) => [a.handle, a.road, a.sha]), [["tulip", "join-bind", out.commit]],
+    "one ashore row, by the bind's road, naming the address's commit");
 });
 
 test("the card is written by the office: verified github, the house's own nameplate, the caller's prose", async () => {

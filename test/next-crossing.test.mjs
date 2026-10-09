@@ -166,7 +166,8 @@ test("the doorstep carries next_crossing right under as_of, on both skins — th
     const ctx = { db, key: null, meta, asOf: meta.as_of, canWrite: false, clone: null, pen: null, odb: null, dbPath: null };
     for (const slim of [false, true]) {
       const d = await doorstepBundle("wright", { ...ctx, slim });
-      assert.deepEqual(Object.keys(d).slice(0, 3), ["handle", "as_of", "next_crossing"], "the header, in reading order");
+      // `copy` (POS-332) sits beside the commit it describes, then the boat ahead
+      assert.deepEqual(Object.keys(d).slice(0, 4), ["handle", "as_of", "copy", "next_crossing"], "the header, in reading order");
       assert.equal(d.next_crossing.crossing, currentCrossing() + 1);
       assert.equal(d.next_crossing.at, nextCrossingAt());
       assert.match(d.next_crossing.sentence, /^crossing \d+ sails at .* A letter written before then rides it/);

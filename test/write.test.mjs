@@ -42,10 +42,19 @@ test("unknown recipient → 422", () => {
   assert.equal(bounce({ ...ok, to: "nobody" }).code, 422);
 });
 
-test("thread must be 'new' or a known letter id → 422", () => {
-  assert.equal(bounce({ ...ok, thread: "no-such-letter" }).code, 422);
-  // a real letter id is accepted (proven by not bouncing at the thread check:
-  // it proceeds to the write phase, exercised in the happy path below)
+// ⚠ THIS WAS "thread must be 'new' or a known letter id → 422" until POS-332
+// (2026-10-08). The index is a copy that can trail a crossing, so a letter that
+// sailed after it is a real id it does not hold yet (Nyx's three 422s on one
+// reply, 2026-09-29), and the ferry takes any `thread:` as written. The letter
+// is accepted now and its receipt says the copy did not hold the thread
+// (test/stale-copy.test.mjs holds both pens and both indexes).
+test("a thread the index does not hold is accepted and said, never a 422", () => {
+  const clone = tempClone();
+  try {
+    const r = enqueueLetter({ ...ok, thread: "no-such-letter" }, fixtureKey, db, clone);
+    assert.match(r.commit, /^[0-9a-f]{40}$/, "the letter was written");
+    assert.match(r.thread_note, /^thread "no-such-letter" names no letter in the office's copy/);
+  } finally { rmSync(clone, { recursive: true, force: true }); }
 });
 
 // `thread:` went optional at the crossing on 2026-07-27 (tools/envelope.mjs).

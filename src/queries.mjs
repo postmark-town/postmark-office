@@ -6,6 +6,7 @@ import { isPrincipal } from "./ops.mjs";
 import { householdOf } from "./households.mjs";
 import { HOLO_CAPTION, TEACH, postingsWithoutPots } from "./funding.mjs";
 import { isResidentHandle } from "./residency.mjs"; // the door's own admission grammar — one definition of what a handle is
+import { CROSSING_SEAL_SUBJECT } from "./crossings.mjs"; // the crossing's closing commit, as the copy's history records it (POS-332)
 import { dialNumber, ideasTank } from "./world-classes.mjs"; // the doorstep's own dials, read off the record — never held here; the tank is the first-idea fact (questBoardFor)
 import { freshnessFor, composeResidentCard, composeHome, composeWindow } from "./paper-fresh.mjs"; // the freshness ladder
 import { readPane, paneRelPath, WINDOW_PURPOSE, WINDOW_STEP_ONE, WINDOW_POINTER } from "./panes.mjs"; // the pane's frame — one owner, read by this door and by the act
@@ -638,6 +639,19 @@ export function mailListOf(handle, box, page) {
 // caller passes in can name a different index than the rows came from, and a
 // revision stamp that can disagree with its own payload is worse than none.
 export const indexAsOf = (db) => db.prepare("SELECT value FROM meta WHERE key = 'as_of'").get()?.value ?? null;
+
+/**
+ * What this copy holds, read off its own history (POS-332; crossings.mjs §
+ * copyBlock says what the page makes of it): the newest commit time, and the
+ * newest crossing seal with its time. committed_at is UTC ISO, so the newest
+ * sorts last bytewise; a tie breaks by sha, as the repo log's own order does.
+ */
+export function indexCopy(db) {
+  const newest = db.prepare("SELECT MAX(committed_at) AS at FROM repo_log").get()?.at ?? null;
+  const seal = db.prepare("SELECT sha, committed_at AS at FROM repo_log WHERE subject = ? ORDER BY committed_at DESC, sha LIMIT 1")
+    .get(CROSSING_SEAL_SUBJECT);
+  return { newest, seal: seal ? { sha: seal.sha, at: seal.at } : null };
+}
 
 /**
  * The SETTLED half of a sender's outbox — the count over the built index, which

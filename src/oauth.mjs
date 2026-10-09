@@ -214,6 +214,16 @@ export async function householdFor(db, ghId, ghLogin, env = process.env) {
     const ix = probeOf(db);
     for (const h of handles) if (ix.hasResident(h)) { settled = true; break; }
   } catch { settled = true; /* an unreadable index must never widen the gate */ }
+  // THE COPY MAY NOT HAVE CAUGHT UP (POS-444). The residents index is a copy of
+  // the town record, refreshed between crossings, so a house the declaration
+  // door (or a bound join) just landed ashore is not in it yet, and was stamped
+  // harbor until the next ingest. On a copy miss the store's own record is
+  // asked (071 ashore, written by every road in the act that lands the
+  // address; src/ashore.mjs). A store that cannot be asked keeps the stamp.
+  if (!settled) {
+    const { ashoreOf } = await import("./ashore.mjs");
+    if ((await ashoreOf(handles, env))?.size) settled = true;
+  }
   return { household: ghLogin ?? String(ghId), handles, ...(settled ? {} : { harbor: true }) };
 }
 
