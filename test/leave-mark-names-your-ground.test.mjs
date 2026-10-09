@@ -48,8 +48,8 @@ test("THE INSTANCE: y −2530 against the edge at −2530.5 warns, says how far,
   assert.match(n.off_your_ground.note, /reaches 1 m outside your parcel sonnet\/the-plot \(x 605\.\.630, y -2555\.5\.\.-2530\.5\)/,
     "the footprint (1 m square, centred 0.5 m past the edge) must come back 1 m to sit wholly inside");
   assert.match(n.off_your_ground.note, /needs ✦1/);
-  assert.deepEqual(n.off_your_ground.inside_at, { x: 620, y: -2531 });
-  assert.ok(marksContain(PARCEL, { ...LAMP, at: n.off_your_ground.inside_at }), "the engine agrees the offered point is inside");
+  assert.deepEqual(n.off_your_ground.corrected_at, { x: 620, y: -2531 });
+  assert.ok(marksContain(PARCEL, { ...LAMP, at: n.off_your_ground.corrected_at }), "the engine agrees the offered point is inside");
 });
 
 test("a footprint reaching exactly 0.5 m past the edge warns; the v2 agent's −2531 does not", { skip: !HAVE_ENGINE && NO_WORLD }, () => {

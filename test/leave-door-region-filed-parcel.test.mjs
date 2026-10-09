@@ -415,8 +415,11 @@ test("POS-493: a mark 0.5 m outside the parcel's edge warns, names the parcel's 
     assert.equal(off.parcel, "reader/the-keepers-flat");
     assert.match(off.note, /reaches 1 m outside your parcel reader\/the-keepers-flat \(x 287\.5\.\.312\.5, y 287\.5\.\.312\.5\)/);
     assert.match(off.note, /publishes as a commons mark and needs ✦1/);
-    assert.deepEqual(off.inside_at, { x: 300, y: 312 }, "the nearest point that holds the whole footprint inside");
-    assert.match(off.next_time, /preview: true/);
+    assert.deepEqual(off.corrected_at, { x: 300, y: 312 }, "the nearest point that holds the whole footprint inside");
+    assert.equal(off.preview.do, "leave-mark");
+    assert.deepEqual(off.preview.args, { slug: preview ? "the-bench-preview" : "the-bench", kind: "sited", by: "reader", body: "a bench by the flat",
+      extent: { w: 1, h: 1 }, at: { x: 300, y: 312 }, preview: true }, "the caller's own call, at the corrected point, as a preview");
+    assert.match(off.note, /writes nothing/);
     assert.equal(out._ground_own, undefined, "the internal field never leaves the door");
   }
 });

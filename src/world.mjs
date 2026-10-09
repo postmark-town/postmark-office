@@ -4206,7 +4206,7 @@ export const yourGroundOf = (parcels) => (parcels ?? [])
   .filter((p) => p?.at && p?.extent && Number.isFinite(Number(p.at.x)) && Number.isFinite(Number(p.at.y)))
   .map((p) => ({ parcel: p.id, ...rangeOf(p) }));
 
-export function groundNoteOf({ kind, at, extent = null, points = null, own, onOwnGround, nearM, contains = null }) {
+export function groundNoteOf({ kind, at, extent = null, points = null, own, onOwnGround, nearM, contains = null, call = null }) {
   if (kind !== "sited" || !at || !Number.isFinite(Number(at.x)) || !Number.isFinite(Number(at.y))) return null;
   const your_ground = yourGroundOf(own);
   if (!your_ground.length) return null;                     // no parcel in the household: nothing to aim at
@@ -4238,12 +4238,23 @@ export function groundNoteOf({ kind, at, extent = null, points = null, own, onOw
     off_your_ground: {
       parcel: best.p.id,
       note: `this footprint reaches ${best.past != null ? `${fmtM(best.past)} m` : "past"} outside your parcel ${best.p.id} (x ${r.x}, y ${r.y}), so it stands on ground that is not your household's: it publishes as a commons mark and needs ✦1 behind it, not ✦0`
-        + (corrected ? ` — at { x: ${corrected.x}, y: ${corrected.y} } it sits wholly inside` : ""),
-      ...(corrected ? { inside_at: corrected } : {}),
-      next_time: "pass preview: true first — it says where a mark would land and how it publishes, and writes nothing",
+        + (corrected
+          ? ` — at { x: ${corrected.x}, y: ${corrected.y} } it sits wholly inside; the preview below says so and writes nothing`
+          : " — preview: true says where a mark would land and how it publishes, and writes nothing"),
+      // A FORECAST, never a hold (R11, Wright 2026-10-09: "stamps: N keeps its
+      // meaning"): the act above ran as asked; this is the corrected call, ready.
+      ...(corrected ? { corrected_at: corrected } : {}),
+      ...(corrected && call ? { preview: { do: "leave-mark", tool: "world_leave_mark", args: { ...call, at: corrected, preview: true } } } : {}),
     },
   };
 }
+
+// The caller's own declaration, as the card's fields name it (internal keys and
+// the preview flag left out), so the corrected call is the one they sent.
+const callOf = (clean) => {
+  const fields = Object.keys(WORLD_TOOLS.find((t) => t.name === "world_leave_mark")?.inputSchema?.properties ?? {});
+  return Object.fromEntries(fields.filter((k) => k !== "preview" && clean?.[k] !== undefined).map((k) => [k, clean[k]]));
+};
 
 // groundNoteOf's I/O half: it strips its internal field whatever happens, and
 // never fails the act it rides on.
@@ -4257,6 +4268,7 @@ async function discloseYourGround(result, clean) {
       kind: result.kind ?? clean?.kind, at: clean?.at ?? result.at, extent: clean?.extent ?? result.extent ?? null,
       points: clean?.points ?? null, own, onOwnGround: result._ground_min === 0,
       nearM: Number(PARCEL_EXTENT_M) || 25, contains: typeof marksContain === "function" ? marksContain : null,
+      call: callOf(clean),
     });
     if (note) Object.assign(result, note);
   } catch { /* a courtesy: never fail the act it rides on */ }
