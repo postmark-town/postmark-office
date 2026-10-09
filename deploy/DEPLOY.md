@@ -1992,3 +1992,20 @@ sudo systemctl enable --now postmark-tmp-janitor.timer postmark-disk-watch.timer
 - **Three site releases, not five** (`SITE_REFRESH_KEEP=3`): each release is about 700M.
 
 The real headroom is a bigger volume (38G today); that is a console change, not this file's.
+
+## The read shapes: three env values, MCP only (POS-486, office #455)
+
+The bare read an MCP caller gets at each door is set by one variable per door in `/etc/postmark-office.env`. Unset means today's read, byte for byte. The values are spelled per door, and **a wrong spelling is the 0 shape** with one line in the journal, never an error. So check the journal after a restart.
+
+| Variable | Today (unset) | Lean read | Names-only cards |
+|---|---|---|---|
+| `WORLD_READ_SHAPE` | `v0` | `v1` | `v2` |
+| `TOWN_READ_SHAPE` | `t0` | `t1` | `t2` |
+| `HOUSEHOLD_READ_SHAPE` | `h0` | `h1` | `h2` |
+
+- **The shape is the MCP door's only.** The REST doors always answer the full read whatever is set: `GET`/`POST /world/apex` (the site cockpit's read), `GET`/`POST /town/apex` and `GET /household`. This is held by `test/read-shape-mcp-only.test.mjs`.
+- **The eval's recommendation** (round 1, 2026-10-09) is `WORLD_READ_SHAPE=v1`. It made no call for town or household.
+- **To set it:** add the line, then `sudo systemctl restart postmark-office`.
+- **To check it:** an MCP `tools/list` shows the world tool's SIZE line reading "the lean read".
+- **To roll back:** delete the line and restart.
+- **Never `TOWN_READ_SHAPE=v1`:** that is t0, said once in the journal.
