@@ -65,11 +65,19 @@ const stem = (f) => basename(f, ".test.mjs");
 const record = { shard, of, jobs, node: process.version, started_at: new Date().toISOString(), files: {} };
 
 function runOne(file, suffix = "") {
+  // The cap is read BEFORE anything is opened, outside the Promise (#453 review F5): a file
+  // that cannot be read is a crashed file (exit 128, the reason in its stderr), never a throw
+  // that rejects this lane and takes the whole shard and its record down with it.
+  const s = stem(file) + suffix;
+  let cap;
+  try { cap = fileTimeoutOf(readFileSync(join(ROOT, file), "utf8")); }
+  catch (e) {
+    writeFileSync(join(out, "stderr", `${s}.txt`), `suite-shard: ${file} could not be read to find its cap: ${e.code ?? e.message}\n`);
+    return Promise.resolve({ exit: 128, signal: null, seconds: 0, unread: e.code ?? e.message });
+  }
   return new Promise((done) => {
-    const s = stem(file) + suffix;
     const errFd = openSync(join(out, "stderr", `${s}.txt`), "w");
     const t0 = Date.now();
-    const cap = fileTimeoutOf(readFileSync(join(ROOT, file), "utf8"));
     const child = spawn(process.execPath, [
       "--test", `--test-timeout=${cap.ms}`,
       "--test-reporter=tap", `--test-reporter-destination=${join(out, "tap", `${s}.tap`)}`,
