@@ -8,10 +8,9 @@
 import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { copyTownTools } from "./helpers/town-tools.mjs";
 import { join, resolve, dirname } from "node:path";
-import { tmpdir } from "node:os";
 import { spawn, execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { giftViaOffice, isPrincipal, principalNow, loadPrincipals, __setPrincipalsForTest, ROLE_PRINCIPAL } from "../src/ops.mjs";
@@ -22,6 +21,7 @@ import { fixtureDb } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
 import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 // The town index this file's offices read: a store seeded from each fixture
 // office.db (POS-268, office-under-test.mjs). Stopped when the file is done.
@@ -42,7 +42,7 @@ const D = (date, id, from, to) => `- ${date} · ${id} · ${from} → ${to} · th
 // declared meep) and a founded, fully-minted stamp-ledger — the settled tail a
 // gift needs.
 function giftClone() {
-  const dir = mkdtempSync(join(tmpdir(), "office-ops-"));
+  const dir = tempDir("office-ops-");
   mkdirSync(join(dir, "tools"), { recursive: true });
   mkdirSync(join(dir, "WHITE_PAGES", "finn"), { recursive: true });
   mkdirSync(join(dir, "WHITE_PAGES", "postmaster"), { recursive: true });
@@ -101,7 +101,7 @@ test("/me carries principal: true only for the principal's session", () => {
 });
 
 test("THE PRINCIPAL IS A ROLE ROW (POS-352): the env line is not read; the registry is, now and on reload", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "postmark-principal-"));
+  const dir = tempDir("postmark-principal-");
   const rdb = await openPaper(join(dir, "roles.db"), { schema: rolesSchema });
   const prev = process.env.PRINCIPAL_GH_ID;
   process.env.PRINCIPAL_GH_ID = PRINCIPAL_ID; // the retired env line: it must grant nothing
@@ -181,7 +181,7 @@ let BASE;
 let child, tmp;
 
 before(async () => {
-  tmp = mkdtempSync(join(tmpdir(), "postmark-ops-srv-"));
+  tmp = tempDir("postmark-ops-srv-");
   const dbPath = join(tmp, "fixture.db");
   fixtureDb(dbPath).close();
   const IX_ENV = await storeFor(dbPath);

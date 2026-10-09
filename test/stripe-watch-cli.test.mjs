@@ -15,16 +15,16 @@ import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { copyTownTools } from "./helpers/town-tools.mjs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HANDLE_FIELD } from "../tools/stripe-watch.mjs";
-import { tmpdir } from "node:os";
 import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
 import { NO_TOWN, townClone } from "./fixture-paths.mjs";
 import { startPayerStore } from "./helpers/payer-store.mjs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 // execFileSync BLOCKS THE EVENT LOOP, so the in-process fake Stripe below could
 // never accept the child's connection and every run died on the fetch timeout.
@@ -109,7 +109,7 @@ const keyPairFrom = (seed) => {
 
 function seamTown({ seed = null } = {}) {
   const { publicKey, privateKey } = seed ? keyPairFrom(seed) : generateKeyPairSync("ed25519");
-  const repo = mkdtempSync(join(tmpdir(), "stripe-cli-"));
+  const repo = tempDir("stripe-cli-");
   mkdirSync(join(repo, "tools"), { recursive: true });
   mkdirSync(join(repo, "WHITE_PAGES"), { recursive: true });
   // Each resident has a room: the store's roll is the town's rooms (POS-346).
@@ -330,7 +330,7 @@ test("no key is a loud refusal, not a quiet empty tick", { skip: SKIP }, async (
 });
 
 test("no town clone with the funding seam is a loud refusal too", { skip: SKIP }, async () => {
-  const bare = mkdtempSync(join(tmpdir(), "no-seam-"));
+  const bare = tempDir("no-seam-");
   let err = null;
   try {
     await run(process.execPath, [CLI, "--dry-run", "--clone", bare, "--state", join(bare, "s.json")], {

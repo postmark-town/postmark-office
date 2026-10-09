@@ -12,10 +12,9 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { execFileSync, spawn } from "node:child_process";
 import {
-  copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync,
+  copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
-import { tmpdir } from "node:os";
 
 import { fixtureDb, fixtureKey } from "./fixture.mjs";
 import { copyTownTools } from "./helpers/town-tools.mjs";
@@ -33,6 +32,7 @@ import { enqueueLetter, outboxRelPath, validateLetter } from "../src/write.mjs";
 import { DYNAMIC_SCHEMA } from "../src/dynamic-store.mjs";
 import { townClone } from "./fixture-paths.mjs";
 import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 // The town index this file's offices read: a store seeded from each fixture
 // office.db (POS-268, office-under-test.mjs). Stopped when the file is done.
@@ -73,7 +73,7 @@ const LEDGER = "# the mail ledger\n\n- 2026-07-01 · limen-2026-07-01-to-wright-
 // cards, a sender's outbox, a recipient's inbox, and the ledger the ferry
 // rebuilds its dedupe from.
 function mailClone() {
-  const dir = mkdtempSync(join(tmpdir(), "pm-townmail-"));
+  const dir = tempDir("pm-townmail-");
   for (const h of ["wright", "limen"]) {
     mkdirSync(join(dir, "WHITE_PAGES", h, "outbox"), { recursive: true });
     mkdirSync(join(dir, "WHITE_PAGES", h, "inbox"), { recursive: true });
@@ -143,7 +143,7 @@ const KEY = "testkey";
 const LIMEN_KEY = "limenkey";
 
 async function office(clone, env, run) {
-  const tmp = mkdtempSync(join(tmpdir(), "pm-mailsrv-"));
+  const tmp = tempDir("pm-mailsrv-");
   const dbPath = join(tmp, "fixture.db");
   fixtureDb(dbPath).close();
   const IX_ENV = await storeFor(dbPath);

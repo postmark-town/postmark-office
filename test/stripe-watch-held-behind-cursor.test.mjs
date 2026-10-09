@@ -52,11 +52,10 @@ import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { copyTownTools } from "./helpers/town-tools.mjs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { tmpdir } from "node:os";
 import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -64,6 +63,7 @@ import { CROSSING_MS } from "../src/crossings.mjs";
 import { HANDLE_FIELD, decodeSession } from "../tools/stripe-watch.mjs";
 import { NO_TOWN, townClone } from "./fixture-paths.mjs";
 import { startPayerStore } from "./helpers/payer-store.mjs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 // `unwitnessedSeen` is imported inside F5 rather than here ON PURPOSE. A static
 // import of a symbol the train tip does not export is a LOAD error, and a load
 // error reds every case in the file for a reason none of them is about — the
@@ -112,7 +112,7 @@ function fakeStripe(sessions, t) {
 
 function seamTown() {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
-  const repo = mkdtempSync(join(tmpdir(), "stripe-held-"));
+  const repo = tempDir("stripe-held-");
   mkdirSync(join(repo, "tools"), { recursive: true });
   mkdirSync(join(repo, "WHITE_PAGES"), { recursive: true });
   // Each resident has a room: the store's roll is the town's rooms (POS-346).

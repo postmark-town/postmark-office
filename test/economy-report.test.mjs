@@ -19,12 +19,12 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { copyTownTools } from "./helpers/town-tools.mjs";
 import { join, resolve, dirname } from "node:path";
-import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "..");
@@ -112,7 +112,7 @@ function run(town, world, out) {
 const skip = haveTools ? false : `town tools not found at ${TOWN_TOOLS} — set TOWN_CLONE`;
 
 test("the equity table is cumulative mint, past tense", { skip }, () => {
-  const root = mkdtempSync(join(tmpdir(), "econ-"));
+  const root = tempDir("econ-");
   try {
     const { data, html } = run(buildTown(root), buildWorld(root), join(root, "out"));
     // 4 correspondence stamps + a 10-stamp gift = 14 minted, all time.
@@ -132,7 +132,7 @@ test("the equity table is cumulative mint, past tense", { skip }, () => {
 });
 
 test("issuance classifies every minted stamp", { skip }, () => {
-  const root = mkdtempSync(join(tmpdir(), "econ-"));
+  const root = tempDir("econ-");
   try {
     const { data, html } = run(buildTown(root), buildWorld(root), join(root, "out"));
     assert.equal(data.issuance.totals.correspondence, 4);
@@ -147,7 +147,7 @@ test("issuance classifies every minted stamp", { skip }, () => {
 // ── THE FALSIFIERS: each guard is shown going red ────────────────────────────
 
 test("FALSIFIER — an unknown mint class turns issuance RED rather than shrinking every share", { skip }, () => {
-  const root = mkdtempSync(join(tmpdir(), "econ-"));
+  const root = tempDir("econ-");
   try {
     // A mint line in a shape this page does not classify. It is a real MINT →
     // handle movement, so it counts toward M and toward equity — but no issuance
@@ -165,7 +165,7 @@ test("FALSIFIER — an unknown mint class turns issuance RED rather than shrinki
 });
 
 test("FALSIFIER — escrow on a mark the world does not hold is flagged, not hidden", { skip }, () => {
-  const root = mkdtempSync(join(tmpdir(), "econ-"));
+  const root = tempDir("econ-");
   try {
     // Escrow implies existence: staking a mark the register does not carry is a
     // fold error waiting to happen, and the page must name it.
@@ -179,7 +179,7 @@ test("FALSIFIER — escrow on a mark the world does not hold is flagged, not hid
 });
 
 test("FALSIFIER — money from an account that never minted turns the supply chips RED", { skip }, () => {
-  const root = mkdtempSync(join(tmpdir(), "econ-"));
+  const root = tempDir("econ-");
   try {
     // A payment OUT of an account that never minted and was never pinned. The
     // fold still balances — that is the point: `liquid + escrow = M` cannot see
@@ -199,7 +199,7 @@ test("FALSIFIER — money from an account that never minted turns the supply chi
 });
 
 test("the transition set is un-sovereign marks with no escrow, split by tier", { skip }, () => {
-  const root = mkdtempSync(join(tmpdir(), "econ-"));
+  const root = tempDir("econ-");
   try {
     const { data } = run(buildTown(root), buildWorld(root), join(root, "out"));
     // three marks: bo/the-hill is commons WITH escrow (anchored, not eligible),
@@ -213,7 +213,7 @@ test("the transition set is un-sovereign marks with no escrow, split by tier", {
 });
 
 test("town issuance is its own cumulative series, not just a row", () => {
-  const root = mkdtempSync(join(tmpdir(), "econ-"));
+  const root = tempDir("econ-");
   try {
     const town = buildTown(root, { extraLines: [
       issuanceLine("2026-08-10", "the-town", 100, "founding-grant", "k", "the founding act"),
@@ -238,7 +238,7 @@ test("FALSIFIER — constitution-tier marks are kept OUT of the top-backed ranki
   // The root and the terrain bind without stamps and absorb fan-up from
   // everything beneath them, so ranking them beside earned backing is a category
   // error. They must be named, not hidden — a silent exclusion is its own lie.
-  const root = mkdtempSync(join(tmpdir(), "econ-"));
+  const root = tempDir("econ-");
   try {
     // the fixture's the-town/the-quay is constitution tier; stake it heavily
     const town = buildTown(root, { extraLines: [

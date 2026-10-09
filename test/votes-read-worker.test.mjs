@@ -30,17 +30,17 @@
 import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { copyTownTools } from "./helpers/town-tools.mjs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { tmpdir } from "node:os";
 import { fixtureDb } from "./fixture.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { testIndex } from "./helpers/office-under-test.mjs";
 import { copyIndexToStore } from "./helpers/index-to-store.mjs";
 import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const TOWN = join(ROOT, "town-clone");
@@ -103,7 +103,7 @@ before(async () => {
   const env = { ...process.env, WORLD2_PG: "1", WORLD2_PG_URL: store.url("office_api") };
   const { backfill, check } = await import("../tools/ballots-backfill.mjs");
   const { ingestBallotFiles } = await import("../src/ballots-store.mjs");
-  tmp = mkdtempSync(join(tmpdir(), "postmark-votes-worker-"));
+  tmp = tempDir("postmark-votes-worker-");
   await backfill(TOWN, { hand: "keemin", apply: true, env });
   checked = await check(TOWN, { env });
   const engine = engineClone();
