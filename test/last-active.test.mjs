@@ -29,6 +29,7 @@ import { tmpdir } from "node:os";
 import { fixtureDb, fixtureKey } from "./fixture.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { copyIndexToStore } from "./helpers/index-to-store.mjs";
+import { seedStaticKeys } from "./helpers/static-keys.mjs";
 import { LAST_ACTIVE_UNAVAILABLE, pickLastActive } from "../src/last-active.mjs";
 import { currentCrossing } from "../src/crossings.mjs";
 
@@ -39,6 +40,7 @@ const KEEP = Object.fromEntries(["TOWN_INDEX_READS", "WORLD2_PG", "WORLD2_PG_URL
 let s = null, su = null, skip = false, db = null, pool = null, pen = null;
 const offices = {};
 const statements = [];
+const KEY = "pos481-last-active-test-key"; // /mcp answers a key, never a stranger (a static row in each office's oauth.db)
 
 // What each resident must read, from the seed below.
 const LIMEN_LETTER = "2026-07-05T08:00:00.000Z"; // the fixture's limen → postmaster, delivered at 08:00Z
@@ -79,6 +81,8 @@ before(async () => {
     "INSERT INTO office_town_journal (class, act, household, handle, written_at) VALUES ($1, $2, $3, $3, $4)", [cls, act, handle, at]);
   await journal("update", "window", "decorator", "2026-07-08T15:00:00.000Z");
   await journal("join", "begin", "quiet", "2026-07-09T10:00:00.000Z");
+  // one declared house, as the store's registry holds it, so household { read: "house" } has a house to read
+  await su.query(`INSERT INTO households (slug, ord, name, residents, since, declared_by) VALUES ('fixture-house', 1, 'Fixture House', '{wright,limen,quiet,decorator}', '2026-06-12', 'test')`);
 
   const { default: pg } = await import("pg");
   const real = new pg.Pool({ connectionString: s.url("office_api"), max: 3 });
@@ -99,9 +103,9 @@ before(async () => {
     ["switched", { TOWN_INDEX_READS: "store", WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") }],
     ["cut-off", { WORLD2_PG: "1", WORLD2_PG_URL: "postgres://office_api:x@127.0.0.1:9/none" }]]) {
     const child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0", "--db", dbPath,
-      "--oauth-db", join(tmp, `${name}-oauth.db`), "--roles-db", join(tmp, `${name}-roles.db`)], {
+      "--oauth-db", seedStaticKeys(join(tmp, `${name}-oauth.db`), `${KEY}=fixture-house:wright`), "--roles-db", join(tmp, `${name}-roles.db`)], {
       env: { ...process.env, TOWN_CLONE: join(tmp, "no-clone-here"), WORLD_CLONE: join(tmp, "no-world-clone"), VOICES_LOG: join(tmp, `${name}-voices.jsonl`),
-        TOWN_PUSH: "", WORLD_STORE_DB: join(tmp, "no-world.db"), OFFICE_READ_WORKERS: "0",
+        TOWN_PUSH: "", WORLD_APEX: "1" /* the apexes, as prod serves them */, WORLD_STORE_DB: join(tmp, "no-world.db"), OFFICE_READ_WORKERS: "0",
         TOWN_INDEX_READS: undefined, WORLD2_PG: undefined, WORLD2_PG_URL: undefined, ...env },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -123,6 +127,20 @@ after(async () => {
   for (const [k, v] of Object.entries(KEEP)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
   rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
+
+/** One tools/call over the office's own /mcp door, with the suite's key; the tool's JSON answer. */
+const mcp = async (office, name, args) => {
+  const res = await fetch(`${offices[office].base}/mcp`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json", accept: "application/json, text/event-stream" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }),
+  });
+  assert.equal(res.status, 200, `${office} /mcp ${name}: ${res.status}`);
+  const text = await res.text();
+  const body = JSON.parse(text.startsWith("{") ? text : text.split(/\r?\n/).find((l) => l.startsWith("data: ")).slice(6));
+  assert.ok(body.result?.content?.[0]?.text, `${office} /mcp ${name}: ${text.slice(0, 300)}`);
+  return JSON.parse(body.result.content[0].text);
+};
 
 const get = async (office, path) => {
   const res = await fetch(`${offices[office].base}${path}`);
@@ -149,6 +167,18 @@ for (const office of ["plain", "switched"]) {
     const found = await get(office, "/search?q=limen");
     assert.ok(found.residents.includes("limen"));
     assert.equal("residents_last_active" in found, false);
+  });
+
+  test(`${office} office: town { read: "resident" } over /mcp and household { read: "house" } carry them, through the production readers`, async (t) => {
+    if (skip) return t.skip(skip);
+    for (const h of ["wright", "limen", "decorator"]) {
+      const card = await mcp(office, "town", { read: "resident", args: { handle: h } });
+      assert.deepEqual(pick(card.resident ?? card), EXPECT[h], `town resident ${h}: ${JSON.stringify(card).slice(0, 200)}`);
+    }
+    const house = await get(office, "/household?read=house&household=fixture-house");
+    assert.equal(house.read, "house", JSON.stringify(house).slice(0, 200));
+    for (const h of ["wright", "limen", "quiet", "decorator"]) assert.deepEqual(pick(house.residents[h]), EXPECT[h], `house ${h}`);
+    assert.equal(house.last_active_unavailable, undefined);
   });
 
   test(`${office} office: household { read: "address" } carries the same two fields as /residents/{h}`, async (t) => {
