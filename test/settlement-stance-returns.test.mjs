@@ -79,24 +79,18 @@ test("RULING B · SERVED: ann opposes bo's grounds; the grounds and their name l
 });
 
 test("RULING B · SERVED, cutover set: the near hut awaits ann's household in its own right; the far tower does not", { skip }, async () => {
-  await seed({ cutover: "S10", s11Marks: S11 });
-  const was = process.env.TOWN_STANCE_CUTOVER;
-  process.env.TOWN_STANCE_CUTOVER = "S10";                // window 500: S11's marks cleared after it
-  try {
-    for (const [slug, by] of [["bo/hut", "bo"], ["bo/tower", "bo"]])
-      await owner((c) => c.query(
-        `INSERT INTO claims (window_id, class, claimant, household, status, body, geometry, stake, data, slug, decided_at)
-         VALUES (501, 'sited', $2, $2, 'locked', 'x', '{}'::jsonb, 0, '{}'::jsonb, $1, '2026-10-02T06:00:00Z')`, [slug, by]));
-    await speak({ actor: "ann", on: "bo/grounds", stance: "opposed" });
-    resetSettlementCaches();
-    const r = await serve();
-    assert.equal(r.meta.labels_omitted, undefined);
-    assert.ok(!r.marks.some((m) => m.id === "bo/grounds"));
-    assert.deepEqual(markOf(r, "bo/hut").awaiting, ["the-town", "ann", "cy"], "a mark over ann's earlier ground in its own right: it awaits her household (and cy's, whose older meadow holds it)");
-    assert.ok(!(markOf(r, "bo/tower").awaiting ?? []).includes("ann"), "the far tower stands on no ground of ann's");
-  } finally {
-    if (was === undefined) delete process.env.TOWN_STANCE_CUTOVER; else process.env.TOWN_STANCE_CUTOVER = was;
-  }
+  await seed({ cutover: "S10", s11Marks: S11 });               // S11 sealed under the cutover S10 (window 500): its marks cleared after it
+  for (const [slug, by] of [["bo/hut", "bo"], ["bo/tower", "bo"]])
+    await owner((c) => c.query(
+      `INSERT INTO claims (window_id, class, claimant, household, status, body, geometry, stake, data, slug, decided_at)
+       VALUES (501, 'sited', $2, $2, 'locked', 'x', '{}'::jsonb, 0, '{}'::jsonb, $1, '2026-10-02T06:00:00Z')`, [slug, by]));
+  await speak({ actor: "ann", on: "bo/grounds", stance: "opposed" });
+  resetSettlementCaches();
+  const r = await serve();
+  assert.equal(r.meta.labels_omitted, undefined);
+  assert.ok(!r.marks.some((m) => m.id === "bo/grounds"));
+  assert.deepEqual(markOf(r, "bo/hut").awaiting, ["the-town", "ann", "cy"], "a mark over ann's earlier ground in its own right: it awaits her household (and cy's, whose older meadow holds it)");
+  assert.ok(!(markOf(r, "bo/tower").awaiting ?? []).includes("ann"), "the far tower stands on no ground of ann's");
 });
 
 test("RULING B · GIT: sealed at or after the cutover, ann's opposition at the seal takes the grounds and their name out of git, never the tower, the bell or the hut", { skip }, async () => {

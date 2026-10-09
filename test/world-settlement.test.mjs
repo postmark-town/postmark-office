@@ -544,17 +544,20 @@ test("A LAGGING INGEST IS DECIDED ONCE: S11 sealed while the store's newest was 
   // Every re-fold runs on the box as it is now: the cutover set to S11, and S11 a settlements row.
   const was = process.env.TOWN_STANCE_CUTOVER;
   process.env.TOWN_STANCE_CUTOVER = "S11";
-  const header = await asOffice(async (p) => (await p.query("SELECT * FROM world_snapshots WHERE id = 2")).rows[0]);
-  const away = await asOffice((p) => settlementTakesAway(p, header, { worldRepo: WORLD }));
-  assert.deepEqual([...away.slugs], [], "git: the record stands, though the row now says S11");
-  assert.equal(away.stances_not_counted, "this seal read itself as S10 (inferred at the seal: the store's newest settlement, S9, plus one), below the cutover S11: a settlement before the cutover counts every mark as ratified (R14), so no stance takes one out of git", "the inferred number is named as the seal's own reading, never a bare S10 beside S11 (review F6)");
-  resetSettlementCaches();
-  const asked = await serve({ settlement: "S11" });
-  assert.ok(ids(asked).includes("bo/shed"), "the served World agrees with git");
-  assert.equal(asked.meta.words.counted, false);
-  const newest = await serve();
-  assert.ok(ids(newest).includes("bo/shed"), "and so does the newest");
-  if (was === undefined) delete process.env.TOWN_STANCE_CUTOVER; else process.env.TOWN_STANCE_CUTOVER = was;
+  try {
+    const header = await asOffice(async (p) => (await p.query("SELECT * FROM world_snapshots WHERE id = 2")).rows[0]);
+    const away = await asOffice((p) => settlementTakesAway(p, header, { worldRepo: WORLD }));
+    assert.deepEqual([...away.slugs], [], "git: the record stands, though the row now says S11");
+    assert.equal(away.stances_not_counted, "this seal read itself as S10 (inferred at the seal: the store's newest settlement, S9, plus one), below the cutover S11: a settlement before the cutover counts every mark as ratified (R14), so no stance takes one out of git", "the inferred number is named as the seal's own reading, never a bare S10 beside S11 (review F6)");
+    resetSettlementCaches();
+    const asked = await serve({ settlement: "S11" });
+    assert.ok(ids(asked).includes("bo/shed"), "the served World agrees with git");
+    assert.equal(asked.meta.words.counted, false);
+    const newest = await serve();
+    assert.ok(ids(newest).includes("bo/shed"), "and so does the newest");
+  } finally {
+    if (was === undefined) delete process.env.TOWN_STANCE_CUTOVER; else process.env.TOWN_STANCE_CUTOVER = was;
+  }
 });
 
 test("THE SERVED WORLD READS THE RECORD: the same S11, sealed counted and sealed not, asked", { skip }, async () => {
