@@ -168,6 +168,8 @@ export function storeGuard({ configuredUrl, urls, source }) {
 const git = (repo, ...args) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 }).trim();
 const gitQuiet = (repo, ...args) => spawnSync("git", ["-C", repo, ...args], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
 const tail = (s, n = 4) => String(s ?? "").trim().split("\n").filter(Boolean).slice(-n).join(" | ");
+/** A throw, named: its message and the frame it came from (a stack's tail is the caller's frames, not the cause). */
+const thrown = (e) => String(e?.stack ?? e).split("\n").filter(Boolean).slice(0, 2).map((l) => l.trim()).join(" ");
 
 /** One door call. Answers `{ status, body }`; a refusal is an answer, not a throw. */
 async function door(target, method, path, { key = null, body = undefined } = {}) {
@@ -833,7 +835,7 @@ export function plan() {
         if (r.setup) return [r.setup];
         if (r.clearing.code !== 0) return [`clearing-job --window ${ctx.window3} exited ${r.clearing.code} with a claim it could not file in the docket (the 10-04 failure: one claim held the window): ${tail(r.clearing.out)}`];
         const p = [];
-        const rows = await ctx.s.q("clearing_job", "SELECT id::text, status, refusal_check FROM claims WHERE id = ANY($1::bigint[])", [[ctx.goodClaim, ctx.plantedClaim]]);
+        const rows = await ctx.s.q("clearing_job", "SELECT id::text, status, refusal_check FROM claims WHERE id::text = ANY($1::text[])", [[ctx.goodClaim, ctx.plantedClaim]]);
         const planted = rows.find((x) => x.id === ctx.plantedClaim), good = rows.find((x) => x.id === ctx.goodClaim);
         if (planted?.status !== "refused") p.push(`the planted claim reads ${planted?.status ?? "missing"}, not refused`);
         else if (!/^unfileable: no such household stands in the town for /.test(planted.refusal_check ?? "")) p.push(`the planted claim was refused for "${planted.refusal_check}", not as unfileable (no house on the roll)`);
@@ -1104,10 +1106,10 @@ export async function runRehearsal(t, { only = null, keep = false, log = () => {
       log(`· ${step.id}: ${step.title}`);
       let result;
       try { result = await step.run(ctx); }
-      catch (e) { rec.problems.push(`the step threw: ${tail(e?.stack ?? e, 4)}`); }
+      catch (e) { rec.problems.push(`the step threw: ${thrown(e)}`); }
       if (!rec.problems.length) {
         try { rec.problems.push(...((await step.check(ctx, result, rec)) ?? [])); }
-        catch (e) { rec.problems.push(`the step's check threw: ${tail(e?.stack ?? e, 4)}`); }
+        catch (e) { rec.problems.push(`the step's check threw: ${thrown(e)}`); }
       }
       rec.findings = ctx.findings.slice(f0);
       for (const f of rec.findings) log(`  FINDING: ${f}`);
