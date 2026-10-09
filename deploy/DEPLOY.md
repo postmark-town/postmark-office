@@ -271,7 +271,15 @@ so it reads CI's `stamp sandbox` check on the sha in `release.json` through
 GitHub's public API, and is red unless the newest run there concluded success.
 Before the rehearsal, label the train's ship PR (`train/<week>` into `main`)
 `stamp-sandbox`: its runs report on the train's tip, which is the sha the carry
-takes.
+takes. A skipped or cancelled run (another label's event cancels a running
+one) is never judged; if those are all there is, the step asks for a re-run.
+
+**The merge-ref gap.** A PR's sandbox run checks out the PR's merge ref
+(`refs/pull/N/merge`: main merged into the train), so a green attests main plus
+the train, not exactly the tree carried to dev. A hotfix on main that the train
+lacks is in what was tested and not in what dev runs. Close it by merging main
+into the train before the ship (SHIPPING.md), or, once `sandbox.yml` is on main,
+by a `workflow_dispatch` run on the train ref, which checks out the exact sha.
 
 **Before each later rehearsal** (the nightly freshen stands the clone back on
 the seed and the store keeps the last rehearsal's rows):

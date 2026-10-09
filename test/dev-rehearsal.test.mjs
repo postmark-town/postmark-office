@@ -186,7 +186,7 @@ const run = (conclusion, started_at, extra = {}) => ({ name: SANDBOX_CHECK, stat
 
 test("the sandbox verdict: the newest run of the named check is the one judged", async () => {
   const v = await sandboxVerdictFromGitHub("abc1234", { fetchImpl: runsAt([run("failure", "2026-10-09T10:00:00Z"), run("success", "2026-10-09T12:00:00Z"), { ...run("success", "2026-10-09T13:00:00Z"), name: "office suite verdict" }]) });
-  assert.deepEqual(v, { runs: 2, status: "completed", conclusion: "success", url: "https://ci.invalid/2026-10-09T12:00:00Z", head_sha: "abc1234ffff" });
+  assert.deepEqual(v, { runs: 2, not_run: 0, status: "completed", conclusion: "success", url: "https://ci.invalid/2026-10-09T12:00:00Z", head_sha: "abc1234ffff" });
   assert.deepEqual(sandboxProblems("abc1234", v), []);
 });
 
@@ -208,4 +208,16 @@ test("what was carried is release.json's sha and tag (the carry writes both), el
     assert.deepEqual(carried(dir), { sha: "65c5e6d", ref: "train/2026-w42" });
     assert.equal(carried(OFFICE).sha, execFileSync("git", ["-C", OFFICE, "rev-parse", "HEAD"], { encoding: "utf8" }).trim());
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a skipped or cancelled run never shadows a verdict, and alone it asks for a re-run (#453 review F3)", async () => {
+  // THE CAN-FAIL FLIP: drop the skipped/cancelled filter in sandboxVerdictFromGitHub; this goes red
+  const v = await sandboxVerdictFromGitHub("abc1234", { fetchImpl: runsAt([run("success", "2026-10-09T12:00:00Z"), run("skipped", "2026-10-09T13:00:00Z")]) });
+  assert.equal(v.conclusion, "success");
+  assert.equal(v.not_run, 1);
+  assert.deepEqual(sandboxProblems("abc1234", v, "train/2026-w42"), []);
+  const only = await sandboxVerdictFromGitHub("abc1234", { fetchImpl: runsAt([run("cancelled", "2026-10-09T13:00:00Z"), run("skipped", "2026-10-09T14:00:00Z")]) });
+  const [why] = sandboxProblems("abc1234", only, "train/2026-w42");
+  assert.match(why, /every "stamp sandbox" run on abc1234 \(train\/2026-w42\) was skipped or cancelled \(2\), so none judged the code: re-run the sandbox/);
+  assert.doesNotMatch(why, /a stamp event is red/);
 });

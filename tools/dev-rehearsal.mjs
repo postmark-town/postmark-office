@@ -874,7 +874,11 @@ export function plan() {
       },
       async check(ctx, r, rec) {
         const p = sandboxProblems(r.sha, r.verdict ?? {}, r.ref);
-        if (!p.length) rec.notes.push(`${SANDBOX_CHECK}: success on ${r.verdict.head_sha ?? r.sha} (${r.ref}; ${r.verdict.url})`);
+        // THE MERGE-REF GAP, named (#453 review F3): a PR's sandbox run checks out the PR's merge
+        // ref (refs/pull/N/merge, main merged into the train) and reports on the train's tip, so a
+        // green here attests main+train, not exactly the carried tree; a hotfix on main the train
+        // lacks is in what was tested and not in what dev runs
+        if (!p.length) rec.notes.push(`${SANDBOX_CHECK}: success on ${r.verdict.head_sha ?? r.sha} (${r.ref}; ${r.verdict.url}). A PR's run tests its merge ref (main merged into ${r.ref ?? "the train"}), not exactly the carried tree`);
         return p;
       },
     },
@@ -953,9 +957,14 @@ export async function sandboxVerdictFromGitHub(sha, { api = "https://api.github.
       { headers: { accept: "application/vnd.github+json", "user-agent": "postmark-dev-rehearsal" }, signal: AbortSignal.timeout(30_000) });
   } catch (e) { return { error: `GitHub's check runs for ${sha} could not be read: ${e.message}` }; }
   if (!r.ok) return { error: `GitHub answered ${r.status} for ${sha}'s check runs` };
-  const runs = ((await r.json()).check_runs ?? []).filter((c) => c.name === SANDBOX_CHECK);
+  const all = ((await r.json()).check_runs ?? []).filter((c) => c.name === SANDBOX_CHECK);
+  // A skipped or cancelled run judged nothing (#453 review F3): a later `labeled` event for
+  // another label cancels the running sandbox and skips its own job, and the newest run
+  // would otherwise shadow a real verdict. They are counted, never chosen.
+  const NOT_RUN = new Set(["skipped", "cancelled"]);
+  const runs = all.filter((c) => !NOT_RUN.has(c.conclusion));
   const newest = runs.sort((a, b) => String(b.started_at ?? "").localeCompare(String(a.started_at ?? "")))[0] ?? null;
-  return { runs: runs.length, status: newest?.status ?? null, conclusion: newest?.conclusion ?? null, url: newest?.html_url ?? null, head_sha: newest?.head_sha ?? null };
+  return { runs: runs.length, not_run: all.length - runs.length, status: newest?.status ?? null, conclusion: newest?.conclusion ?? null, url: newest?.html_url ?? null, head_sha: newest?.head_sha ?? null };
 }
 
 /**
@@ -967,6 +976,7 @@ export function sandboxProblems(sha, v, ref = null) {
   const at = `${sha} (${ref ?? "the ref carried is unnamed: read release.json"})`;
   const train = ref ?? "<the train carried>";
   if (v.error) return [`${v.error}: the sandbox's verdict on ${at} is unknown, so this step is red until it can be read`];
+  if (!v.runs && v.not_run) return [`every "${SANDBOX_CHECK}" run on ${at} was skipped or cancelled (${v.not_run}), so none judged the code: re-run the sandbox (re-label the ship PR from ${train} \`stamp-sandbox\`, or \`gh run rerun\` its run), then run this step again`];
   if (!v.runs) return [`no "${SANDBOX_CHECK}" run on ${at}: label the ship PR from ${train} into main \`stamp-sandbox\` (its runs report on ${train}'s tip), or once sandbox.yml is on main, \`gh workflow run sandbox.yml -R postmark-town/postmark-office --ref ${train}\`; then run this step again`];
   if (v.status !== "completed") return [`the "${SANDBOX_CHECK}" run on ${at} is ${v.status} (${v.url}): wait for its verdict, then run this step again`];
   if (v.conclusion !== "success") return [`the "${SANDBOX_CHECK}" run on ${at} concluded ${v.conclusion} (${v.url}): a stamp event is red on the code carried to dev; fix it on ${train}, re-carry, and run the rehearsal again`];
