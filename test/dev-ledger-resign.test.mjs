@@ -18,13 +18,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync, createPublicKey, verify as edVerify } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { DEV_ROOT, DISABLED_PUSH_URL, prodKeyRefusal, publicOf, resignDevTown } from "../tools/dev-ledger-resign.mjs";
 import { NO_TOWN, OFFICE_ROOT, townClone } from "./fixture-paths.mjs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 const TOWN = townClone();
 const SKIP = !TOWN && NO_TOWN;
@@ -42,13 +43,10 @@ const BASE = [
   "- 2026-06-13 · MINT → bea · 1 · for: letter-a (received)",
 ];
 
-const dirs = [];
-test.after(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); });
 
 /** A town checkout signed by `prod`, its seed commit dated SEED_DATE; one tool names line 2 by signature, as stamp-verify's RULED_WELCOMES does. */
 function seedTown(prod) {
-  const dir = mkdtempSync(join(tmpdir(), "dev-ledger-resign-"));
-  dirs.push(dir);
+  const dir = tempDir("dev-ledger-resign-"); // removed when the file ends, after git's own maintenance (POS-419)
   const g = (...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8", env: { ...process.env, GIT_AUTHOR_DATE: SEED_DATE, GIT_COMMITTER_DATE: SEED_DATE } }).trim();
   g("init", "-q", "-b", "main");
   g("config", "user.name", "seed"); g("config", "user.email", "seed@postmark.invalid"); g("config", "core.autocrlf", "false");
