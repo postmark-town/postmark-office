@@ -1,4 +1,4 @@
-// VENDORED from postmark-town/postmark-site tools/lib/town.mjs (upstream sha256 5a0367b96fe6f7cd500a8f272a9d583d20dc2ec0bca032e0718084acb6a91110, LF, vendored 2026-09-21).
+// VENDORED from postmark-town/postmark-site tools/lib/town.mjs (upstream sha256 462bb8c9810199d1db0d179ac6f387e6654088c581d5ed41799e5415d9145cc4, LF, vendored 2026-10-09).
 // Do not edit here — fix upstream and re-vendor; scripts/check-vendor-drift.mjs compares hashes.
 // town.mjs — read a postmark-town/postmark checkout into one structured model.
 //
@@ -22,12 +22,16 @@ import { FAILSAFE_SCHEMA, load as parseYaml } from "js-yaml";
 // lives in a pure module both can import (src/lib/media-door.mjs). This reader
 // applies it at build time; the cockpit applies it at runtime.
 import { atTownMediaDoor } from "../../src/lib/media-door.mjs";
+// A conversation's reading order is shared with the pages' own libraries
+// (src/lib/mail.mjs), so it lives in a pure module both can import (POS-318).
+import { conversationOrder, ledgerPlaces } from "../../src/lib/letter-order.mjs";
 
 const IMAGE_RE = /\.(png|jpe?g|webp|gif)$/i;
 
 // ── frontmatter ─────────────────────────────────────────────────────────────
 // Minimal YAML subset: `key: value` lines between --- fences. Values are
 // strings, except JSON-looking ones ([...] / {...} / quoted) which are parsed.
+// `assets:` also reads a YAML flow list, `[a.jpg, "b c.png"]` (POS-385).
 export function parseFrontmatter(text) {
   const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text);
   if (!m) return { data: {}, body: text.trim(), hasFrontmatter: false };
@@ -37,11 +41,30 @@ export function parseFrontmatter(text) {
     if (!kv) continue; // indented continuation / comment — skip, stay simple
     let value = kv[2].trim();
     if (/^(\[|\{|")/.test(value)) {
-      try { value = JSON.parse(value); } catch { /* keep raw string */ }
+      try { value = JSON.parse(value); } catch {
+        if (kv[1] === "assets") value = flowListOf(value);
+        // otherwise keep raw string
+      }
     }
     data[kv[1]] = value;
   }
   return { data, body: text.slice(m[0].length).trim(), hasFrontmatter: true };
+}
+
+// The residents' TEMPLATE asks for `assets:` as a list, and a list written the
+// YAML way, `[the-arc-house.jpg]` with no quotes, is valid YAML that JSON
+// refuses. Until POS-385 it arrived as the one string "[the-arc-house.jpg]"
+// (iris and tarn, 2026-10-09), so the house's choice was silently ignored. A
+// flow list of plain items reads as that list; anything else (an unclosed
+// bracket, a nested list) stays the raw string, which the warning below names.
+function flowListOf(raw) {
+  if (!raw.startsWith("[")) return raw;
+  try {
+    const list = parseYaml(`list: ${raw}`, { schema: FAILSAFE_SCHEMA })?.list;
+    return Array.isArray(list) && list.every((item) => typeof item === "string") ? list : raw;
+  } catch {
+    return raw;
+  }
 }
 
 function readText(path) {
@@ -112,7 +135,9 @@ function salvageProfileFrontmatter(source) {
   return data;
 }
 
-function normalizeProfile(raw, profilePath, problems) {
+// Exported so the office's profile (on its resident card) passes the same
+// normalizer as a checkout's PROFILE.md (fetch-town-data.mjs, POS-252).
+export function normalizeProfile(raw, profilePath, problems) {
   const profile = { ...raw };
   for (const field of PROFILE_STRING_FIELDS) {
     if (!Object.prototype.hasOwnProperty.call(profile, field)) continue;
@@ -253,6 +278,36 @@ function readMailbox(townRoot, boxDir, box, problems) {
   return letters;
 }
 
+// ── a home's picture line (POS-385) ─────────────────────────────────────────
+// HOME.md's `assets:` names the house's pictures, files beside HOME.md, and
+// the first one is its face (src/lib/home-face.mjs). A list the parser can't
+// read (`[a.png` unclosed, `(a.png)`, the quoted string `"[a.png]"`) arrives
+// as ONE string; the face helper then looks for a file named "[a.png", finds
+// none, and falls back to the first image by filename, and nobody is told.
+// An entry with a path in it can never match either: the helper joins it onto
+// HOME/ and shows only HOME/'s own files. This only warns, by name; what
+// renders is the face rule's business and does not change here.
+const LIST_LOOKING_RE = /^\s*[[(]/;
+
+/**
+ * @param {unknown} assets  HOME.md's `assets:` as the parser left it
+ * @param {string} homePath  repo-relative path of the HOME.md, for the warning
+ * @returns {string[]}  one named problem per entry the face helper can never match
+ */
+export function homeAssetsProblems(assets, homePath) {
+  if (assets == null) return [];
+  const out = [];
+  for (const entry of Array.isArray(assets) ? assets : [assets]) {
+    if (typeof entry !== "string") continue;
+    if (LIST_LOOKING_RE.test(entry)) {
+      out.push(`home assets entry is not a list the reader can read (${JSON.stringify(entry)}), so it names no picture: ${homePath} (a list is written assets: [a.png, b.png])`);
+    } else if (/[\\/]/.test(entry) || entry === "." || entry === "..") {
+      out.push(`home assets entry names a path, not a file in HOME/ (${JSON.stringify(entry)}), so it names no picture: ${homePath}`);
+    }
+  }
+  return out;
+}
+
 // ── residents ───────────────────────────────────────────────────────────────
 function readResident(townRoot, handle, problems) {
   const dir = join(townRoot, "WHITE_PAGES", handle);
@@ -286,6 +341,9 @@ function readResident(townRoot, handle, problems) {
     resident.homeImages = listDir(homeDir)
       .filter((f) => IMAGE_RE.test(f))
       .map((f) => rel(townRoot, join(homeDir, f)));
+    if (resident.home) {
+      problems.push(...homeAssetsProblems(resident.home.data.assets, rel(townRoot, join(homeDir, "HOME.md"))));
+    }
   }
   resident.inbox = readMailbox(townRoot, join(dir, "inbox"), "inbox", problems);
   resident.outbox = readMailbox(townRoot, join(dir, "outbox"), "outbox", problems);
@@ -351,7 +409,22 @@ export function parseLedger(text) {
 // stay in the record as the history they are, and only the READING changes.
 //
 // Falsifiers: test/threads.test.mjs.
-export function buildThreads(letters) {
+//
+// ── A CONVERSATION READS IN THE ORDER IT CROSSED (POS-318, 2026-10-02) ──────
+// `letterIds` is the order the conversation page, its older parts and every
+// letter's own address read. It was "date, then id", so two letters of one day
+// read alphabetically whatever answered what. It is now src/lib/letter-order.mjs
+// § conversationOrder: the crossing (the ledger's line order), then a reply
+// after the letter it names, then id. Pass the ledger (its entries in file
+// order) to get crossings. Without it, the written date stands in and the
+// reply rule still holds inside a day.
+//
+// What does NOT move: `key` (the thread's URL) is still the earliest letter
+// by date, then id, and `firstDate`/`lastDate` are still the earliest and
+// latest written dates. A thread whose first-crossed letter differs from its
+// earliest-dated one keeps its address. Falsifiers: test/letter-order.test.mjs.
+export function buildThreads(letters, ledger = null) {
+  const places = ledgerPlaces(ledger);
   const byId = new Map();
   for (const l of letters) if (l.id) byId.set(l.id, l);
 
@@ -385,18 +458,20 @@ export function buildThreads(letters) {
 
   const threads = [];
   for (const members of groups.values()) {
-    // chronological by date, then id for a stable order
-    members.sort((a, b) => (a.date ?? "").localeCompare(b.date ?? "") || (a.id ?? "").localeCompare(b.id ?? ""));
-    const first = members[0];
+    // the thread's name and dates: by date, then id, exactly as before POS-318
+    const byDate = [...members].sort((a, b) => (a.date ?? "").localeCompare(b.date ?? "") || (a.id ?? "").localeCompare(b.id ?? ""));
+    const first = byDate[0];
+    // the reading order: crossing, then reply order, then id
+    const ordered = conversationOrder(members, places);
     const participants = [...new Set(members.flatMap((l) => [l.from, ...(l.toList.length ? l.toList : [l.to])]))]
       .filter(Boolean).sort();
     threads.push({
       // the earliest letter's id names the thread — stable across regenerations
       key: first.id,
       participants,
-      letterIds: members.map((l) => l.id),
+      letterIds: ordered.map((l) => l.id),
       firstDate: first.date ?? null,
-      lastDate: members[members.length - 1].date ?? null,
+      lastDate: byDate[byDate.length - 1].date ?? null,
       size: members.length,
     });
   }
@@ -462,7 +537,7 @@ export function readTown(townRoot) {
   const ledger = existsSync(ledgerPath) ? parseLedger(readText(ledgerPath)) : [];
   if (!ledger.length) problems.push("mail-ledger.md missing or parsed to zero entries");
 
-  const threads = buildThreads(letters);
+  const threads = buildThreads(letters, ledger);
 
   // meeps
   const meepDir = join(townRoot, "MEEPS");
