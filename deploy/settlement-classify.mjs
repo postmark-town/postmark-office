@@ -31,7 +31,12 @@
 //               that repair CLEARS IT — and a rerun before the repair does not,
 //               which is worth saying too.
 //
-//   canon-bad   the offending path is in origin/main's own tree. NO RERUN CAN
+//               An AMEND is this class too: its path is in canon, but the
+//               copy the lint refused is the sketchbook's (§ AN AMEND'S PATH
+//               IS ALWAYS IN CANON, at classify below; POS-378).
+//
+//   canon-bad   the offending path is in origin/main's own tree, as canon
+//               has it (no sketchbook changed it). NO RERUN CAN
 //               EVER CLEAR THIS: every future crossing composes the same red
 //               from the same canon, twice a day, forever. It needs an
 //               operator-repair commit on main (or on the drawer that keeps
@@ -128,11 +133,24 @@ export function pathsIn(text) {
 }
 
 /**
- * The verdict. `existsInCanon(path)` answers "is this in the reference tree" —
- * injected so the whole judgment is a pure function a falsifier can drive
- * without a clone.
+ * The verdict. `existsInCanon(path)` answers "is this in the reference tree",
+ * and `changedByInputs(path)` answers "which of this crossing's sketchbooks
+ * changed it" (a list of branch names, empty when none) — both injected so the
+ * whole judgment is a pure function a falsifier can drive without a clone.
+ *
+ * ── AN AMEND'S PATH IS ALWAYS IN CANON (POS-378, postmark#3375) ─────────────
+ *
+ * Path presence alone called every bad AMEND terminal. On 2026-10-02 18:00Z the
+ * lint refused WORLD/marks/kinofire/the-gloaming, which canon carried, so this
+ * said "NO RERUN CAN CLEAR THIS" (postmark#3363). The fault was kinofire's
+ * amend: canon's copy was clean, the crossing's copy was not, and the repair was
+ * one line on world main (f8cfefb4). So a fault in canon is canon-bad only when
+ * the composition left it as canon has it. A sketchbook that changed the file
+ * means the lint refused the INPUT's copy, and that is input-bad. With no probe
+ * (or a probe that cannot answer) nothing is downgraded: canon-bad stays the
+ * answer, because calling a terminal refusal rerunnable is the costly mistake.
  */
-export function classify({ stderr, existsInCanon, ref = "origin/main" }) {
+export function classify({ stderr, existsInCanon, changedByInputs = () => [], ref = "origin/main" }) {
   const refusal = refusalOf(stderr);
   const cause = refusal ? String(refusal.cause ?? "") : "";
 
@@ -183,6 +201,7 @@ export function classify({ stderr, existsInCanon, ref = "origin/main" }) {
     : "";
 
   const probe = (p) => { try { return !!existsInCanon(p); } catch { return false; } };
+  const amenders = (p) => { try { const b = changedByInputs(p); return Array.isArray(b) ? b : []; } catch { return []; } };
   const split = (list) => {
     const inCanon = [];
     const inInputs = [];
@@ -202,12 +221,18 @@ export function classify({ stderr, existsInCanon, ref = "origin/main" }) {
 
   // ── THE SURE PATH: the sweep named its faults ──────────────────────────────
   if (faults.length) {
-    const { inCanon, inInputs } = split(faults);
+    const { inCanon: present, inInputs } = split(faults);
+    // § AN AMEND'S PATH IS ALWAYS IN CANON: a present path a sketchbook changed
+    // is the input's copy, not canon's.
+    const amended = present.map((p) => ({ path: p, by: amenders(p) })).filter((a) => a.by.length);
+    const inCanon = present.filter((p) => !amended.some((a) => a.path === p));
+    const amendedBy = Object.fromEntries(amended.map((a) => [a.path, a.by]));
     if (inCanon.length) {
       return {
         ...base,
-        paths_in_canon: inCanon,
+        paths_in_canon: present,
         paths_in_inputs: inInputs,
+        amended_by_inputs: amendedBy,
         class: CANON_BAD,
         next_step:
           `NO RERUN CAN CLEAR THIS. ${inCanon.join(", ")} ${inCanon.length === 1 ? "is" : "are"} in ${ref}'s own ` +
@@ -217,10 +242,28 @@ export function classify({ stderr, existsInCanon, ref = "origin/main" }) {
           `then the next scheduled crossing.${withheld}`,
       };
     }
+    if (amended.length) {
+      const changed = amended.map((a) =>
+        `${a.path} is in ${ref}'s tree, but this crossing's ${a.by.join(", ")} changed it, and the lint refused that changed copy, not canon's.`);
+      const only = inInputs.length
+        ? ` ${inInputs.join(", ")} ${inInputs.length === 1 ? "exists" : "exist"} only in this crossing's drained inputs.` : "";
+      return {
+        ...base,
+        paths_in_canon: present,
+        paths_in_inputs: inInputs,
+        amended_by_inputs: amendedBy,
+        class: INPUT_BAD,
+        next_step:
+          `rerunnable AFTER the source is repaired, not before. ${changed.join(" ")}${only} Repair the amend at its ` +
+          `source, or re-amend the mark on world main as postmark-world f8cfefb4 did on 2026-10-02 (postmark#3363), ` +
+          `and rerun. A rerun before the repair composes the same red.${withheld}`,
+      };
+    }
     return {
       ...base,
       paths_in_canon: [],
       paths_in_inputs: inInputs,
+      amended_by_inputs: {},
       class: INPUT_BAD,
       next_step:
         `rerunnable AFTER the source is repaired, not before. ${inInputs.join(", ")} ` +
@@ -292,6 +335,34 @@ export function canonProbe(clone, ref = "origin/main") {
   };
 }
 
+/**
+ * Which of this crossing's sketchbooks changed a path, against a real clone.
+ *
+ * The store write-down builds each household's sketchbook as a local
+ * `draft/<name>` branch from main and commits that household's marks on it
+ * (src/store-writedown.mjs), and the sweep composes main with those branches.
+ * The sweep rolls its working tree back on a refusal, so the branches are
+ * where the composed copy can still be read. A branch counts when it changed
+ * the path itself (against its merge-base with `ref`, so a stale branch built
+ * on an older main does not count for a file main moved since) AND its copy
+ * differs from `ref`'s. Any git failure answers "none", which leaves the
+ * verdict canon-bad.
+ */
+export function inputsProbe(clone, ref = "origin/main") {
+  const git = (args) => execFileSync("git", ["-C", clone, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 20_000 });
+  const differs = (a, b, path) => {
+    try { git(["diff", "--quiet", a, b, "--", path]); return false; } catch (e) { return e.status === 1; }
+  };
+  let branches = [];
+  try { branches = git(["for-each-ref", "--format=%(refname:short)", "refs/heads/draft/"]).split("\n").filter(Boolean); }
+  catch { return () => []; }
+  return (path) => branches.filter((b) => {
+    let base;
+    try { base = git(["merge-base", b, ref]).trim(); } catch { return false; }
+    return differs(base, b, path) && differs(ref, b, path);
+  });
+}
+
 function argOf(name, fallback = null) {
   const i = process.argv.indexOf(`--${name}`);
   return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : fallback;
@@ -318,7 +389,7 @@ export function run() {
     }, null, 1)}\n`);
     return 0;
   }
-  process.stdout.write(`${JSON.stringify(classify({ stderr, existsInCanon: canonProbe(clone, ref), ref }), null, 1)}\n`);
+  process.stdout.write(`${JSON.stringify(classify({ stderr, existsInCanon: canonProbe(clone, ref), changedByInputs: inputsProbe(clone, ref), ref }), null, 1)}\n`);
   return 0;
 }
 

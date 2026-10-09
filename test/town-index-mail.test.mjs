@@ -49,7 +49,9 @@ before(async () => {
   letter("zed-2026-07-10-to-wright-A", "Zed", "wright", "2026-07-10", "2026-07-10T08:00:00.000Z");
   letter("limen-2026-07-10-to-wright-bare", "limen", "wright", "2026-07-10", null, { body: "Bare day, 100% sure." });
   letter("wright-2026-07-11-to-many", "wright", "limen", "2026-07-11", "2026-07-11T09:00:00.000Z",
-    { toList: ["limen", "Zed", "postmaster"], body: "To three of you. The LAMPLIGHT holds." });
+    { toList: ["limen", "Zed", "postmaster"], body: "To three of you. The LAMPLIGHT holds.",
+      // the file the town reader names, as a real index row carries it: whole.source is built from it at the index's as_of (POS-334)
+      path: "WHITE_PAGES/limen/inbox/wright-2026-07-11-to-many.md" });
   letter("wright-2026-07-12-unsent", "wright", "Zed", "2026-07-12", null, {}, "outbox");
   db.prepare("INSERT INTO residents VALUES (?, ?)").run("Zed", JSON.stringify({ handle: "Zed", is_office: false, address: { data: {}, body: "# Zed, of the Lamplight" } }));
   db.prepare("INSERT INTO mail_state VALUES (?, ?)").run("limen", JSON.stringify({
@@ -64,7 +66,10 @@ before(async () => {
   await w.end();
   api = await s.connect("office_api");
 
-  for (const [name, env] of [["plain", {}], ["switched", { TOWN_INDEX_READS: "store", WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") }],
+  // "plain" reaches the same store as prod's unswitched office does (WORLD2_PG
+  // since 10-04): search's last_active is read from the store's acts on both
+  // offices (POS-481), so the ONE difference between them is the switch.
+  for (const [name, env] of [["plain", { WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") }], ["switched", { TOWN_INDEX_READS: "store", WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") }],
     ["cut-off", { TOWN_INDEX_READS: "store", WORLD2_PG: "1", WORLD2_PG_URL: "postgres://office_api:x@127.0.0.1:9/none" }]]) {
     const child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0", "--db", dbPath,
       "--oauth-db", join(tmp, `${name}-oauth.db`), "--roles-db", join(tmp, `${name}-roles.db`)], {

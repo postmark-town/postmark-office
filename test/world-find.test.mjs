@@ -18,11 +18,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 
 import { findMarks, prettyName, FIND_CAP } from "../src/world-find.mjs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 // ── the pure half ────────────────────────────────────────────────────────────
 
@@ -132,7 +132,7 @@ test("RED CONTROL: a query that names nothing finds nothing", () => {
 
 const SOURCE_WORLD = "G:/Postmark/repo-clones/wright/postmark-world";
 const HAVE_SOURCE = existsSync(join(SOURCE_WORLD, "WORLD", "world-state.json"));
-const repo = mkdtempSync(join(tmpdir(), "pm-find-fixture-"));
+const repo = tempDir("pm-find-fixture-");
 const git = (...args) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" });
 
 const HOUSEHOLD = "fixturehouse";

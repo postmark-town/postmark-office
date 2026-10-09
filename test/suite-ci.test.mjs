@@ -11,7 +11,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { FILE_CAP_MS, MIN_DECLARED_MS, TEST_TIMEOUT_MS, fileTimeoutOf, listTestFiles, planShards, readEvents, verdict } from "../.github/scripts/suite-lib.mjs";
+import { FILE_CAP_MS, MIN_DECLARED_MS, TEST_TIMEOUT_MS, fileTimeoutOf, listTestFiles, planShards, readEvents, rowShapeProblems, verdict } from "../.github/scripts/suite-lib.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -97,7 +97,7 @@ test("a failure node names by the file's absolute path is read as the file's rep
 const counts = (o = {}) => ({ tests: 2, pass: 2, fail: 0, skipped: 0, todo: 0, cancelled: 0, suites: 0, ...o });
 const green = (names = ["x"]) => ({ exit: 0, seconds: 1, counts: counts(), reds: [], skips: [], ran: names });
 const red = (name, others = []) => ({ exit: 1, seconds: 1, counts: counts({ pass: 1, fail: 1 }), reds: [{ name, failureType: "testCodeFailure", error: "no" }], skips: [], ran: [name, ...others] });
-const row = (file, name, extra = {}) => ({ file, name, reason: "r", owner: "o", date: "2026-10-07", ...extra });
+const row = (file, name, extra = {}) => ({ file, name, reason: "r", owner: "POS-1", date: "2026-10-07", until: "2026-10-18", ...extra });
 const kinds = (v) => v.problems.map((p) => p.kind).sort();
 
 test("a clean run is GREEN, and its totals carry the denominator", () => {
@@ -150,6 +150,34 @@ test("a listed test that no longer runs, or whose file is gone, is a stale row a
   assert.deepEqual(kinds(v), ["listed-not-run", "listed-not-run"]);
 });
 
+test("a row that names no Linear owner, no until, or a day that is not a day is MALFORMED, and that fails the run", () => {
+  const results = { "test/a.test.mjs": red("listed one") };
+  const bad = [
+    row("test/a.test.mjs", "listed one", { owner: "someone" }),
+    row("test/a.test.mjs", "listed one", { until: undefined }),
+    row("test/a.test.mjs", "listed one", { until: "next week" }),
+    row("test/a.test.mjs", "listed one", { until: "2026-10-01" }),
+  ];
+  for (const r of bad) {
+    const v = verdict({ planned: Object.keys(results), results, known: [r], today: "2026-10-09" });
+    assert.deepEqual(kinds(v), ["row-malformed"], JSON.stringify(r));
+    assert.equal(v.ok, false);
+  }
+  assert.deepEqual(rowShapeProblems(row("test/a.test.mjs", "fine")), []);
+});
+
+test("a row past its until is OVERDUE: named, and the run is still GREEN", () => {
+  const results = { "test/a.test.mjs": red("listed one") };
+  const late = row("test/a.test.mjs", "listed one", { until: "2026-10-18" });
+  const before = verdict({ planned: Object.keys(results), results, known: [late], today: "2026-10-18" });
+  assert.equal(before.ok, true);
+  assert.deepEqual(before.overdue, [], "on its until day it is not yet overdue");
+  const after = verdict({ planned: Object.keys(results), results, known: [late], today: "2026-10-19" });
+  assert.equal(after.ok, true, "overdue is never a failure of the run");
+  assert.deepEqual(after.overdue, [late]);
+  assert.deepEqual(after.listed.map((r) => r.outcome), ["red"]);
+});
+
 test("a file that exited non-zero with no red of its own CRASHED, and that fails the run", () => {
   const results = { "test/a.test.mjs": { ...green([]), exit: 137, counts: counts({ tests: 0, pass: 0 }) } };
   const v = verdict({ planned: Object.keys(results), results, known: [] });
@@ -161,14 +189,13 @@ test("a planned file with no result, and a shard that never reported, each fail 
   assert.deepEqual(kinds(v), ["file-missing", "shard-missing"]);
 });
 
-test("the committed known-failures list is well formed: every row names its file, test, reason, owner and date", () => {
+test("the committed known-failures list is well formed: every row names its file, test, reason, Linear owner, date and until", () => {
   const { failures } = JSON.parse(readFileSync(join(ROOT, "test", "known-failures.json"), "utf8"));
   assert.ok(Array.isArray(failures));
   const files = new Set(listTestFiles(ROOT));
   const seen = new Set();
   for (const r of failures) {
-    for (const k of ["file", "name", "reason", "owner", "date"]) assert.ok(typeof r[k] === "string" && r[k].trim(), `a row without ${k}: ${JSON.stringify(r)}`);
-    assert.match(r.date, /^\d{4}-\d{2}-\d{2}$/);
+    assert.deepEqual(rowShapeProblems(r), [], JSON.stringify(r));
     assert.ok(files.has(r.file), `${r.file} is not a suite file`);
     const k = `${r.file}\u0000${r.name}`;
     assert.ok(!seen.has(k), `a row twice: ${r.file} · ${r.name}`);

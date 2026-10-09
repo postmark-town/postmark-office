@@ -40,11 +40,13 @@ export const testIndex = () => (process.env.OFFICE_TEST_INDEX === "office" ? "of
  * A store seeded from the office.db at `dbPath` (a path, or an open DatabaseSync),
  * or an empty town index when `dbPath` is null (a test whose doors never had one).
  * `env` is what an office (spawned, or this process via `useInProcess`) needs to
- * read it; office_api is the office's own pen.
+ * read it; office_api is the office's own pen. `own: true` puts it on a server
+ * of this file's own, whose `store.pause()` / `store.resume()` are an outage
+ * (embedded-store.mjs § startStore).
  */
-export async function indexStore(dbPath, { db: name = "office_test" } = {}) {
+export async function indexStore(dbPath, { db: name = "office_test", own = false } = {}) {
   if (testIndex() === "office") return { env: {}, reseed: async () => {}, stop: async () => {}, useInProcess: async () => () => {} };
-  const s = await startStore({ db: name });
+  const s = await startStore({ db: name, own });
   const seed = async () => {
     if (dbPath == null) return;
     const db = typeof dbPath === "string" ? new DatabaseSync(dbPath, { readOnly: true }) : dbPath;

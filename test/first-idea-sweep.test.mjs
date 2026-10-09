@@ -13,13 +13,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
 import { NO_TOWN, townClone } from "./fixture-paths.mjs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 // The town's own stamp engine — real law, no fake. It was pinned to
 // `G:/Postmark/worktrees/town-w36/tools`, a week-36 worktree on one operator's
@@ -38,7 +38,7 @@ const OLD_ENGINE = process.env.OLD_STAMP_ENGINE_DIR ?? null;
 const { publicKey, privateKey } = generateKeyPairSync("ed25519");
 const PUB = publicKey.export({ type: "spki", format: "pem" });
 const PRIV = privateKey.export({ type: "pkcs8", format: "pem" });
-const penDir = mkdtempSync(join(tmpdir(), "pm-fisweep-pen-"));
+const penDir = tempDir("pm-fisweep-pen-");
 const KEY = join(penDir, "stamp-key.pem");
 writeFileSync(KEY, PRIV);
 process.env.STAMP_KEY = KEY;
@@ -49,7 +49,7 @@ const { planFirstIdeaSweep, writeFirstIdeaSweep, FIRST_IDEA_WINDOW_END } = await
 // A founded town clone: two households, mail, a settled ledger (the train
 // engine's own --append founds it, so the tail is real law, not a fixture's).
 function foundedClone() {
-  const clone = mkdtempSync(join(tmpdir(), "pm-fisweep-town-"));
+  const clone = tempDir("pm-fisweep-town-");
   mkdirSync(join(clone, "tools"), { recursive: true });
   mkdirSync(join(clone, "WHITE_PAGES"), { recursive: true });
   writeFileSync(join(clone, "tools", "github-ids.json"), JSON.stringify({ alice: 1, bob: 2 }));

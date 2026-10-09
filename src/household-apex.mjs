@@ -23,6 +23,7 @@
 
 import { existsSync } from "node:fs";
 import { withHouseholdBlock } from "./households.mjs";
+import { withLastActive } from "./last-active.mjs"; // the address card's last_active (POS-481)
 import { join } from "node:path";
 
 import { DECLARE_SCHEMA, BEGIN_PROPERTIES, declareViaOffice, SETTLING_ASHORE } from "./declare.mjs";
@@ -1213,6 +1214,9 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, dbPath, pen, 
       let r = null;
       if (ix) r = await ix.resident(handle, await freshFor(handle, { odb, clone, asOf }));
       else { try { r = residentQ(db, handle); } catch { r = null; } }
+      // last_active: the newest act of their own, as /residents/{h} and
+      // town { read: "resident" } carry it (last-active.mjs, POS-481)
+      if (r) await withLastActive("card", r, ix ? { find: (handles) => ix.lastActiveFor(handles) } : {});
       // household leads (2026-08-07), from the store's registry (POS-342)
       if (r) await withHouseholdBlock(r, handle);
       return r ? shadowReadAnswer("address", { read: "address", of: handle, address: r }, { read: "address", of: handle }, r, ctx) : bounce(404, `no settled address for "${handle}"`, "a harbor resident has no white-pages address yet — that comes with settling");
@@ -1350,8 +1354,20 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, dbPath, pen, 
       const awaitingOpts = { limit: f.limit, offset: f.offset, hide_bounces_older_than_days: f.hide_bounces_older_than_days };
       if (view === "inbox" || view === "outbox")
         return switched ? fromStore((c) => tis.mailList(c, handle, view, pageOpts)) : mailList(db, handle, view, pageOpts);
-      if (view === "awaiting")
+      if (view === "awaiting") {
+        // A reply its sender has written and the ferry has not carried reads
+        // reply_queued here, on the sender's own key only: the same block the
+        // doorstep's your_pending_letters lists (POS-375). A log that will not
+        // read leaves the view as the record has it. Read on the store's road
+        // only: office.db's reader takes no standing letters (POS-268).
+        if (switched && key?.handles?.has?.(handle) === true) {
+          try {
+            const { hotMailBlock } = await import("./town-mail.mjs");
+            awaitingOpts.standing = (await hotMailBlock(odb, key, { handle }))?.standing ?? null;
+          } catch { /* the record's own answer still stands */ }
+        }
         return switched ? fromStore((c) => tis.mailAwaiting(c, handle, awaitingOpts)) : mailAwaiting(db, handle, awaitingOpts);
+      }
       // ── correspondents (walk #2 item 1, 2026-09-06) ───────────────────────
       //
       // WHO you have exchanged letters with. It is a PUBLIC-SHAPED fact — the

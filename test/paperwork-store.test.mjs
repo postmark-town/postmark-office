@@ -30,7 +30,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
@@ -43,6 +43,8 @@ import { appendTownJournal, readTownJournal, townDrainCursor, pendingRows } from
 import { advanceTownCursor } from "../src/town-drain.mjs";
 import { openPaper, asPaper, paperStatus, closePaperworkPools } from "../src/paperwork.mjs";
 import { importPaperwork } from "../world2/tools/paperwork-import.mjs";
+import { upsertPin } from "../src/registry-store.mjs";
+import { __setPoolForTest } from "../src/world2-acts.mjs";
 
 const OWNER_URL = process.env.PAPERWORK_TEST_PG_OWNER_URL;
 const API_URL = process.env.PAPERWORK_TEST_PG_API_URL;
@@ -71,13 +73,18 @@ test(`THE SWITCH on a real store: G1–G5 ${SKIP ? `(${SKIP})` : ""}`, { skip: S
   const db = fixtureDb(join(tmp, "fixture.db"));
   const clone = join(tmp, "town-clone");
   mkdirSync(join(clone, "tools"), { recursive: true });
-  writeFileSync(join(clone, "tools", "github-ids.json"), JSON.stringify({
-    wright: { login: OWNER.login, id: OWNER.id, pinned: "2026-07-05" },
-    rei: { login: OWNER.login, id: OWNER.id, pinned: "2026-07-05" },
-  }));
   process.env.TOWN_SINGLE_LOG = "1";
+  // Sign-in reads the household pins from the store, never the clone's
+  // github-ids.json (POS-343), so the pins live in the store and the lookups'
+  // env names it. The acts pool is this test's own, ended below.
+  const pinsEnv = { WORLD2_PG: "1", WORLD2_PG_URL: API_URL };
+  const savedEnv = { WORLD2_PG: process.env.WORLD2_PG, WORLD2_PG_URL: process.env.WORLD2_PG_URL };
+  Object.assign(process.env, pinsEnv);
+  const actsPool = new pg.Pool({ connectionString: API_URL, max: 2 });
+  __setPoolForTest(actsPool);
   const papers = [];
   try {
+    for (const handle of ["wright", "rei"]) await upsertPin({ handle, login: OWNER.login, gh_id: OWNER.id, pinned: "2026-07-05" }, pinsEnv);
     // ── BEFORE: the office's own writers, on the files ─────────────────────
     const ofile = openOauthDb(oauthPath);
     const t0 = now();
@@ -206,6 +213,9 @@ test(`THE SWITCH on a real store: G1–G5 ${SKIP ? `(${SKIP})` : ""}`, { skip: S
     });
   } finally {
     delete process.env.TOWN_SINGLE_LOG;
+    for (const [k, v] of Object.entries(savedEnv)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    __setPoolForTest(null);
+    await actsPool.end();
     for (const p of papers) p.close();
     await closePaperworkPools();
     await owner.end();

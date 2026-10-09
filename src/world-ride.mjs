@@ -89,6 +89,21 @@ export function stopsOfService(service) {
 export const isVehicleStop = (markId, service) =>
   stopsOfService(service).some((s) => s.markId === String(markId ?? ""));
 
+/**
+ * THE DOORS IN, NEAREST FIRST (POS-379, postmark#3181). Every stop the
+ * timetable names, with its straight-line distance from `at` in whole metres,
+ * nearest first. The vessel's own mooring is a stop like any other, so it is
+ * among them. With no readable `at` the timetable's own order stands and every
+ * distance is null: a list sorted on nothing would only look ordered.
+ */
+export function stopDoorsNearest(service, at = null) {
+  const doors = stopsOfService(service).map((s) => {
+    const d = straightLineM(at, s.at);
+    return { mark: s.markId, at: s.at, distance_m: d == null ? null : Math.round(d) };
+  });
+  return doors.every((d) => d.distance_m != null) ? doors.sort((a, b) => a.distance_m - b.distance_m) : doors;
+}
+
 /** The vessel a service moves — the thing you are inside when you board. */
 export const vesselIdOf = (service) => service?.vessel?.markId ?? null;
 

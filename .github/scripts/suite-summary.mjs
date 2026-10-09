@@ -62,7 +62,8 @@ const v = verdict({ planned, results, known, shards: { planned: of, reported } }
 const t = v.totals;
 const knownRed = v.listed.filter((r) => r.outcome.startsWith("red")).length;
 const head = `${v.ok ? "GREEN" : "RED"} · ${t.reds} reds (${knownRed} on the known list, ${t.reds - knownRed} not) in ${t.tests} tests across ${t.files} of ${planned.length} files in ${reported.length} of ${of} shards · ` +
-  `pass ${t.pass} · skipped ${t.skipped} · todo ${t.todo} · cancelled ${t.cancelled} · suites ${t.suites} · node ${node ?? "?"}`;
+  `pass ${t.pass} · skipped ${t.skipped} · todo ${t.todo} · cancelled ${t.cancelled} · suites ${t.suites} · node ${node ?? "?"}` +
+  (v.overdue.length ? ` · ${v.overdue.length} known rows overdue` : "");
 
 const md = [];
 md.push(`## The office suite: ${head}`, "");
@@ -71,8 +72,14 @@ if (v.problems.length) {
   for (const p of v.problems) md.push(`- **${p.kind}** · \`${p.file ?? "-"}\`${p.name ? ` · ${p.name}` : ""} · ${p.detail}`);
   md.push("");
 }
+if (v.overdue.length) {
+  // Past their review-by date: the owner's to answer, never a failure of this run.
+  md.push(`### Overdue known failures (${v.overdue.length}: past their until; not a failure)`, "");
+  for (const r of v.overdue) md.push(`- OVERDUE since ${r.until} · \`${r.file}\` · ${r.name} · ${r.owner}`);
+  md.push("");
+}
 md.push(`### Known failures (${v.listed.length} of ${known.length} rows matched)`, "");
-for (const r of v.listed) md.push(`- ${r.outcome} · \`${r.file}\` · ${r.name} · ${r.reason} (${r.owner}, ${r.date})`);
+for (const r of v.listed) md.push(`- ${r.outcome} · \`${r.file}\` · ${r.name} · ${r.reason} (${r.owner}, listed ${r.date}, until ${r.until}${v.overdue.some((o) => o.file === r.file && o.name === r.name) ? ", OVERDUE" : ""})`);
 md.push("");
 const skipReasons = new Map();
 for (const [file, r] of Object.entries(results))

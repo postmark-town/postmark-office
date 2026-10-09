@@ -43,6 +43,9 @@ const ACCESS_TTL_S = 30 * 24 * 3600;  // 30d (Keemin's word, 2026-08-12 — the 
 const REFRESH_TTL_S = 60 * 24 * 3600; // 60d
 const CODE_TTL_S = 120;
 const PENDING_TTL_S = 600;
+// How long a client is asked to wait when the token endpoint cannot reach its
+// record (POS-480): a 503 with this Retry-After, never a refusal of the grant.
+const TOKEN_RETRY_AFTER_S = 30;
 // THE MANUAL FINISH (#2764 friction 3). A shell agent with no browser and no
 // loopback listener can run discovery, registration and the PKCE authorize
 // from a bare shell — and then the consent's last redirect goes to a
@@ -125,6 +128,30 @@ const sweep = async (odb) => {
   await P.run("DELETE FROM codes WHERE expires < ?", t);
   await P.run("DELETE FROM tokens WHERE expires < ?", t);
   await sweepClaims(P);
+};
+
+// THE SWEEP IS HOUSEKEEPING, NEVER A GATE (POS-480). It ran before every oauth
+// route, so on 10-09, while the store was in crash recovery, it threw ahead of
+// the token endpoint and every connector's refresh got a 500; after the outage
+// residents found their connectors "invalidated". Every read of these tables
+// checks `expires` itself, so a late sweep changes no answer. It runs after the
+// route has answered, and a failure is one logged line, never a refusal.
+//
+// ONE AT A TIME, AT MOST ONCE A MINUTE (review of #449, finding 3). Run after
+// every request, a keyless loop on discovery (which answers at once) could queue
+// sweeps without bound on the paperwork pool every bearer lookup shares, and
+// starve the lookups into the very 503s this exists to prevent.
+const SWEEP_EVERY_S = 60;
+let sweeping = false, lastSweep = 0;
+const sweepAfter = (ctx) => {
+  if (sweeping || now() - lastSweep < SWEEP_EVERY_S) return;
+  sweeping = true;
+  lastSweep = now();
+  setImmediate(async () => {
+    try { await sweep(ctx.odb); }
+    catch (e) { console.error(`[oauth] the sweep failed (housekeeping only; the request was answered): ${String(e?.message ?? e).slice(0, 200)}`); }
+    finally { sweeping = false; }
+  });
 };
 
 // Split out and EXPORTED because the claim desk is not an oauth route and never
@@ -710,7 +737,6 @@ async function handleOauthRoute(req, res, ctx) {
   const odb = asPaper(ctx.odb);
   const url = new URL(req.url, "http://localhost");
   const path = url.pathname.replace(/\/+$/, "") || "/";
-  await sweep(odb);
 
   // discovery — liberal: bare and path-inserted well-known forms
   if (req.method === "GET" && /^\/\.well-known\/oauth-protected-resource(\/api\/mcp)?$/.test(path))
@@ -1112,30 +1138,71 @@ async function handleOauthRoute(req, res, ctx) {
   }
 
   // token endpoint — authorization_code (PKCE) and refresh_token
+  //
+  // ONE TRANSACTION PER GRANT, AND A STORE FAULT IS NEVER A VERDICT (POS-480).
+  // The refresh used to delete the old refresh token, commit, and only then
+  // issue the new pair as a second write; on 10-09 the store took deletes it
+  // then could not follow with inserts, and a resident whose delete landed held
+  // no refresh token at all. Now the old token's retirement and the new pair
+  // commit together, or nothing does. A code is burned in the same transaction
+  // as its tokens: a refused code still commits its own deletion (single use,
+  // even on failure), but a code whose exchange the store could not finish is
+  // still there for the retry. THE DELETE IS THE CLAIM (review of #449): two
+  // grants of one token both read the row, and under READ COMMITTED the second
+  // DELETE waits for the first and then deletes nothing. Only the grant whose
+  // DELETE took the row issues tokens, so a refresh family cannot fork and a
+  // code cannot be spent twice. Anything thrown inside is the office's fault,
+  // not the grant's: it answers 503 with Retry-After, and never `invalid_grant`,
+  // which a client reads as "sign in again".
   if (req.method === "POST" && path === "/oauth/token") {
     const body = parseForm(await readBody(req), req.headers["content-type"]);
-
-    if (body.grant_type === "authorization_code") {
-      const row = await odb.get("SELECT json, expires FROM codes WHERE code = ?", body.code ?? "");
-      await odb.run("DELETE FROM codes WHERE code = ?", body.code ?? ""); // single use, even on failure
-      if (!row || row.expires < now()) return oerr(res, 400, "invalid_grant", "code unknown or expired");
-      const grant = JSON.parse(row.json);
-      if (body.client_id && body.client_id !== grant.client_id) return oerr(res, 400, "invalid_grant", "client_id mismatch");
-      if (body.redirect_uri && body.redirect_uri !== grant.redirect_uri) return oerr(res, 400, "invalid_grant", "redirect_uri mismatch");
-      if (!body.code_verifier || sha256(body.code_verifier) !== grant.code_challenge)
-        return oerr(res, 400, "invalid_grant", "PKCE verification failed");
-      return await issueTokens(odb, res, grant);
+    // A MALFORMED GRANT IS THE CLIENT'S, NEVER AN OUTAGE (review of #449,
+    // finding 5). A non-string field (a JSON body's number) threw inside the
+    // transaction, and a NUL reached the store as an encoding error: both were
+    // answered as the 503 a client retries forever, and logged as the store.
+    if (body == null || typeof body !== "object" || Array.isArray(body))
+      return oerr(res, 400, "invalid_request", "the token request's body must be a form or a JSON object");
+    if (body.grant_type !== "authorization_code" && body.grant_type !== "refresh_token")
+      return oerr(res, 400, "unsupported_grant_type", "authorization_code or refresh_token");
+    for (const field of ["code", "refresh_token", "code_verifier"]) {
+      const v = body[field];
+      if (v != null && (typeof v !== "string" || v.includes("\0")))
+        return oerr(res, 400, "invalid_request", `${field} must be a string without NUL characters`);
     }
+    const refuse = (description) => ({ refused: description });
 
-    if (body.grant_type === "refresh_token") {
-      const hash = sha256(body.refresh_token ?? "");
-      const row = await odb.get("SELECT * FROM tokens WHERE token_hash = ? AND kind = 'refresh'", hash);
-      if (!row || row.expires < now()) return oerr(res, 400, "invalid_grant", "refresh token unknown or expired");
-      await odb.run("DELETE FROM tokens WHERE token_hash = ?", hash); // rotate
-      return await issueTokens(odb, res, { client_id: row.client_id, gh_id: row.gh_id, gh_login: row.gh_login });
+    let out;
+    try {
+      out = await odb.tx(async (t) => {
+        if (body.grant_type === "authorization_code") {
+          const row = await t.get("SELECT json, expires FROM codes WHERE code = ?", body.code ?? "");
+          const { changes } = await t.run("DELETE FROM codes WHERE code = ?", body.code ?? ""); // single use, even on failure
+          if (!row || !changes || row.expires < now()) return refuse("code unknown or expired");
+          const grant = JSON.parse(row.json);
+          if (body.client_id && body.client_id !== grant.client_id) return refuse("client_id mismatch");
+          if (body.redirect_uri && body.redirect_uri !== grant.redirect_uri) return refuse("redirect_uri mismatch");
+          if (!body.code_verifier || sha256(body.code_verifier) !== grant.code_challenge) return refuse("PKCE verification failed");
+          return { grant: await issueTokens(t, grant) };
+        }
+        const hash = sha256(body.refresh_token ?? "");
+        const row = await t.get("SELECT * FROM tokens WHERE token_hash = ? AND kind = 'refresh'", hash);
+        if (!row || row.expires < now()) return refuse("refresh token unknown or expired");
+        const { changes } = await t.run("DELETE FROM tokens WHERE token_hash = ? AND kind = 'refresh'", hash); // rotate
+        if (!changes) return refuse("refresh token unknown or expired"); // another grant took it first
+        return { grant: await issueTokens(t, { client_id: row.client_id, gh_id: row.gh_id, gh_login: row.gh_login }) };
+      });
+    } catch (e) {
+      // "MAY NOT", NEVER "NOTHING WAS" (review of #449, finding 4): a COMMIT the
+      // store applied whose acknowledgement was lost to the outage throws here
+      // too, and then the old refresh token is gone. The window is narrow and
+      // accepted as residual this week (a grace for the retired token is
+      // Darko's call, alongside family revocation); the answer must not promise.
+      console.error(`[oauth] the token endpoint could not reach its record (answered 503; the record may not have been changed) [${e?.code ?? e?.name ?? "?"}]: ${String(e?.message ?? e).slice(0, 200)}`);
+      return jres(res, 503, { error: "temporarily_unavailable",
+        error_description: "the office could not reach its record, so your sign-in may not have been changed; send the same request again after Retry-After seconds" },
+      { "retry-after": String(TOKEN_RETRY_AFTER_S) });
     }
-
-    return oerr(res, 400, "unsupported_grant_type", "authorization_code or refresh_token");
+    return out.refused ? oerr(res, 400, "invalid_grant", out.refused) : jres(res, 200, out.grant);
   }
 
   return null; // not an oauth route — let the server carry on
@@ -1151,8 +1218,15 @@ async function handleOauthRoute(req, res, ctx) {
 // a readable one, so the catch answers HTML only for the browser-facing set and
 // re-throws otherwise — server.mjs's outer catch then answers the JSON bounce it
 // always did. That outer catch stays the API path's answer; this is the human's.
+//
+// TWO /oauth PATHS ARE MACHINE-FACING (review of #449, finding 6): the token
+// endpoint and dynamic registration are called and parsed by a client, never
+// walked by a browser, so a failure there reaches the JSON bounce too, however
+// the client's Accept header reads.
+const MACHINE_FACING = new Set(["/oauth/token", "/oauth/register"]);
 const browserFacing = (req) => {
   const path = new URL(req.url ?? "/", "http://localhost").pathname.replace(/\/+$/, "") || "/";
+  if (MACHINE_FACING.has(path)) return false;
   if (path.startsWith("/oauth")) return true;
   const accept = String(req.headers?.accept ?? "");
   return /\btext\/html\b/i.test(accept);
@@ -1172,10 +1246,11 @@ export async function handleOauth(req, res, ctx) {
     return html(res, 500, page("The office tripped", `
       <p>Something went wrong inside the office while handling this sign-in.</p>
       <p><strong>Nothing was authorized.</strong> Try again shortly.</p>`));
-  }
+  } finally { sweepAfter(ctx); }
 }
 
-async function issueTokens(odb, res, grant) {
+/** The new pair, written inside the caller's transaction `tx` (the token endpoint's: POS-480). Answers the grant's body. */
+async function issueTokens(tx, grant) {
   const access = rand(32);
   const refresh = rand(32);
   const t = now();
@@ -1185,14 +1260,12 @@ async function issueTokens(odb, res, grant) {
   // sign-in would have died on an arity error. A bare VALUES list is a
   // schema assumption written where nobody reads it.
   const cols = "INSERT INTO tokens (token_hash, kind, gh_id, gh_login, client_id, expires, created)";
-  await odb.tx(async (tx) => {
-    await tx.run(`${cols} VALUES (?, 'access', ?, ?, ?, ?, ?)`,
-      sha256(access), grant.gh_id, grant.gh_login, grant.client_id ?? "", t + ACCESS_TTL_S, t);
-    await tx.run(`${cols} VALUES (?, 'refresh', ?, ?, ?, ?, ?)`,
-      sha256(refresh), grant.gh_id, grant.gh_login, grant.client_id ?? "", t + REFRESH_TTL_S, t);
-  });
-  return jres(res, 200, {
+  await tx.run(`${cols} VALUES (?, 'access', ?, ?, ?, ?, ?)`,
+    sha256(access), grant.gh_id, grant.gh_login, grant.client_id ?? "", t + ACCESS_TTL_S, t);
+  await tx.run(`${cols} VALUES (?, 'refresh', ?, ?, ?, ?, ?)`,
+    sha256(refresh), grant.gh_id, grant.gh_login, grant.client_id ?? "", t + REFRESH_TTL_S, t);
+  return {
     access_token: access, token_type: "Bearer", expires_in: ACCESS_TTL_S,
     refresh_token: refresh, scope: "town",
-  });
+  };
 }

@@ -3,8 +3,8 @@
 //   node --test --test-timeout=300000 test/ballot-posts.test.mjs
 //
 // On the suite's store (a real Postgres, test/helpers/embedded-store.mjs) and a
-// town-in-a-bottle holding the town's OWN tools copied from the pool's town
-// clone (ballot.mjs, ballot-pass.mjs, stamp-mint.mjs, stamp-verify.mjs, envelope.mjs):
+// town-in-a-bottle holding the town's OWN tools, copied whole from the pool's
+// town clone (test/helpers/town-tools.mjs):
 //
 //   1. the ingest takes the founder's ballot file in as the town's post, moves
 //      it forward as the file moves, writes nothing twice, and refuses a file
@@ -29,7 +29,8 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, rmSync, existsSync, readdirSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, readdirSync } from "node:fs";
+import { copyTownTools } from "./helpers/town-tools.mjs";
 import { join, resolve, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -38,8 +39,7 @@ import { startStore } from "./helpers/embedded-store.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "..");
-const TOWN_TOOLS = join(ROOT, "town-clone", "tools");
-const TOOL_FILES = ["stamp-mint.mjs", "stamp-verify.mjs", "ballot.mjs", "ballot-pass.mjs", "envelope.mjs"]; // envelope: ballot-pass imports its HANDLE_RE (town c56d61663, POS-386)
+const TOWN = join(ROOT, "town-clone");
 
 const store = await startStore({ db: "ballot_posts_test" });
 // A write transaction never spans non-SQL work (Wright's review of #415): the
@@ -77,7 +77,7 @@ function town(topic, { cap = 12, status = "staking", mint = true } = {}) {
   const dir = join(scratch, `town-${++n}`);
   mkdirSync(join(dir, "tools"), { recursive: true });
   mkdirSync(join(dir, "WHITE_PAGES"), { recursive: true });
-  for (const f of TOOL_FILES) copyFileSync(join(TOWN_TOOLS, f), join(dir, "tools", f));
+  copyTownTools(TOWN, dir);
   writeFileSync(join(dir, "tools", "stamp-pubkey.pem"), PUB);
   writeFileSync(join(dir, "tools", "github-ids.json"),
     JSON.stringify({ wright: { login: "k", id: 7 }, rei: { login: "k", id: 7 }, ada: { login: "a", id: 9 } }));

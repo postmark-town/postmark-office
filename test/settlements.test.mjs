@@ -7,14 +7,13 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 
 import {
   parseSettlementTags, settlementsFrom, readSettlementTags, settlements, SETTLEMENT_TAG,
 } from "../src/settlements.mjs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 const row = (n, date, sha = `sha${n}`) => ({ tag: `settlement/S${n}`, date, sha });
 
@@ -73,7 +72,7 @@ test("recent is capped, newest kept", () => {
 // ── against a real repository, including an ANNOTATED tag ───────────────────
 
 test("reading a real clone: annotated and lightweight tags both resolve to their COMMIT", () => {
-  const repo = mkdtempSync(join(tmpdir(), "settle-"));
+  const repo = tempDir("settle-");
   const g = (...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   g("init", "-q", "-b", "main");
   g("config", "user.email", "t@example.com");
@@ -98,7 +97,7 @@ test("reading a real clone: annotated and lightweight tags both resolve to their
 });
 
 test("a directory that is not a repo answers empty rather than throwing", () => {
-  const notRepo = mkdtempSync(join(tmpdir(), "settle-bare-"));
+  const notRepo = tempDir("settle-bare-");
   assert.deepEqual(readSettlementTags(notRepo), []);
   assert.deepEqual(settlements(notRepo), { current: null, recent: [] });
   assert.deepEqual(settlements("Z:/no/such/place"), { current: null, recent: [] });
@@ -123,7 +122,7 @@ const perTag = (repo) => {
 const byTag = (rows) => [...rows].sort((a, b) => a.tag.localeCompare(b.tag));
 
 test("one for-each-ref reads the same rows the per-tag spawns read", () => {
-  const repo = mkdtempSync(join(tmpdir(), "settle-one-"));
+  const repo = tempDir("settle-one-");
   const g = (env, ...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...env } });
   g({}, "init", "-q", "-b", "main");
   g({}, "config", "user.email", "t@example.com");

@@ -6,11 +6,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync, execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { telemetryClone, commitSnapshots, TELEMETRY_REMOTE } from "../tools/traffic-snapshot.mjs";
+import { removeTempDirSync } from "./helpers/temp-dir.mjs";
 
 const TOOL = resolve(dirname(fileURLToPath(import.meta.url)), "..", "tools", "traffic-snapshot.mjs");
 const git = (dir, ...args) => execFileSync("git", ["-C", dir, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -20,7 +21,7 @@ const fwd = (p) => p.replace(/\\/g, "/");
 // on main, as Darko's new repo will be, plus a clone of it ready to commit.
 function scratch(t) {
   const root = mkdtempSync(join(tmpdir(), "traffic-snapshot-"));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
+  t.after(() => removeTempDirSync(root));
   const bare = join(root, "postmark-town", "postmark-telemetry.git");
   mkdirSync(bare, { recursive: true });
   execFileSync("git", ["init", "--quiet", "--bare", "--initial-branch=main", bare]);

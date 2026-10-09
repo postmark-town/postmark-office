@@ -468,7 +468,9 @@ function runSuite(townClone) {
   // call them identical.
   delete env.NODE_TEST_CONTEXT;
   if (townClone === null) delete env.TOWN_CLONE; else env.TOWN_CLONE = townClone;
-  const out = spawnSync(process.execPath, ["--test", import.meta.filename], {
+  // The spec reporter by name: with no reporter named, Node 22 prints TAP to a
+  // pipe (Node 25 prints spec), and TAP has no "ℹ fail" line to read.
+  const out = spawnSync(process.execPath, ["--test", "--test-reporter=spec", import.meta.filename], {
     encoding: "utf8", env, cwd: ROOT, timeout: 300_000,
   });
   const text = `${out.stdout ?? ""}${out.stderr ?? ""}`;
