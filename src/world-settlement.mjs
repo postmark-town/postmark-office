@@ -533,9 +533,15 @@ export function stancesOf(header) {
   if (!s) return { counts: false, recorded: null, why: `snapshot ${header?.id ?? "?"} recorded no stance decision at its seal (sealed before 072, or back-filled), so it counts as before the cutover: every mark ratified (R14)` };
   if (s.counted === true) return { counts: true, recorded: s, why: null };
   const n = s.settlement_inferred == null ? "this settlement" : `S${s.settlement_inferred}`;
+  // An inferred number names the seal's own reading of itself, so it says so:
+  // under a lagging ingest it is one low, and a bare "S10" beside S11 reads as a
+  // typo (review of #451, F6).
+  const below = s.how === "inferred" && s.settlement_inferred != null
+    ? `this seal read itself as ${n} (inferred at the seal: the store's newest settlement, S${s.settlement_inferred - 1}, plus one), below the cutover ${s.cutover}`
+    : `${n} was below the cutover ${s.cutover} when it was sealed`;
   return { counts: false, recorded: s, why: s.cutover == null
     ? `TOWN_STANCE_CUTOVER was not set when ${n} was sealed: before the cutover every mark counts as ratified (R14)`
-    : `${n} was below the cutover ${s.cutover} when it was sealed: a settlement before the cutover counts every mark as ratified (R14)` };
+    : `${below}: a settlement before the cutover counts every mark as ratified (R14)` };
 }
 
 /** No words: what a settlement folds with when no stance counts at it (§ stancesOf). */

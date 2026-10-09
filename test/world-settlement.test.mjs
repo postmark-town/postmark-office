@@ -547,7 +547,7 @@ test("A LAGGING INGEST IS DECIDED ONCE: S11 sealed while the store's newest was 
   const header = await asOffice(async (p) => (await p.query("SELECT * FROM world_snapshots WHERE id = 2")).rows[0]);
   const away = await asOffice((p) => settlementTakesAway(p, header, { worldRepo: WORLD }));
   assert.deepEqual([...away.slugs], [], "git: the record stands, though the row now says S11");
-  assert.match(away.stances_not_counted, /^S10 was below the cutover S11 when it was sealed/);
+  assert.equal(away.stances_not_counted, "this seal read itself as S10 (inferred at the seal: the store's newest settlement, S9, plus one), below the cutover S11: a settlement before the cutover counts every mark as ratified (R14), so no stance takes one out of git", "the inferred number is named as the seal's own reading, never a bare S10 beside S11 (review F6)");
   resetSettlementCaches();
   const asked = await serve({ settlement: "S11" });
   assert.ok(ids(asked).includes("bo/shed"), "the served World agrees with git");
