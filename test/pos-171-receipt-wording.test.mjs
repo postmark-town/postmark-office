@@ -341,3 +341,19 @@ test("leg 7 — the walk tool's own description names the queued receipt, and is
                         /ARRIVAL instant/, /THE WALK STILL STANDS/, /accept: true/])
     assert.match(d, clause);
 });
+
+// ── leg 5c: the arrival on the wall clock (POS-331 part 3) ─────────────────
+//
+// Amia's ask (Office Hours Q8): the arrival as a UTC instant beside the
+// crossing count. It is the same instant the entry is adjudicated at, said to
+// the minute (crossings.mjs § arrivesAt; the pure legs are in
+// test/walk-arrives-at.test.mjs). This bottle's clock reads 100.5 and the leg
+// is 16.95 crossings, so 117.45 crossings after 2026-06-12T00:00Z.
+test("leg 5c — the real door's receipt carries arrives_at beside eta_crossings, the entry's own instant in UTC", async () => {
+  const walk = await walkViaOffice(repo, { handle: "alpha", mark_id: FAR, enter_on_arrival: true }, houseA);
+  assert.equal(walk.departed_at_crossing, 100.5);
+  assert.equal(walk.eta_crossings, 16.95);
+  assert.equal(walk.arrives_at, "2026-08-09T17:24:00.000Z");
+  assert.equal(Date.parse(walk.arrives_at), Math.round((Date.UTC(2026, 5, 12) + walk.entry.eta * 12 * 3600 * 1000) / 60_000) * 60_000,
+    "the instant the queued entry is adjudicated at, on the wall clock");
+});

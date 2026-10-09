@@ -40,6 +40,7 @@ import { renamedRow, DOOR_FIELDS, withRefused } from "./one-contract.mjs"; // PO
 import { actUnderNonce, nonceDefect } from "./act-nonce.mjs"; // POS-246: a world act's retry key
 import { readFileSync } from "node:fs";
 import { refShaFromDisk } from "./world-branches.mjs";
+import { arrivesAt } from "./crossings.mjs"; // POS-331 part 3: a walker's arrival on the wall clock
 import { join } from "node:path";
 
 import {
@@ -2879,13 +2880,23 @@ export function walkDomain(answer, fields, oriented, roll = null) {
   if (answer?.error || !Array.isArray(answer?.walkers) || !Number.isFinite(at?.x) || !Number.isFinite(at?.y)) {
     return { standpoint: oriented?.standpoint, walkers: answer, ...found };
   }
+  const around = walkersAround(answer.walkers, { x: at.x, y: at.y });
   return {
     standpoint: oriented.standpoint,
-    walkers: { at: answer.at, ...walkersAround(answer.walkers, { x: at.x, y: at.y }),
+    walkers: { at: answer.at, ...around, walkers: around.walkers.map((w) => withArrival(w, answer.at)),
       ...(answer.disclosed ? { disclosed: answer.disclosed } : {}) },
     ...found,
   };
 }
+
+// A moving row's `eta_crossings` with its instant beside it (POS-331 part 3,
+// crossings.mjs § arrivesAt), counted from the crossing the roll was read at.
+// The vessel's own row is the timetable's, whose eta is a placeholder 0, so it
+// gets none.
+const withArrival = (w, atCrossing) =>
+  w?.moving && w.source !== "timetable" && Number.isFinite(w.eta_crossings)
+    ? { ...w, arrives_at: arrivesAt(atCrossing, w.eta_crossings) }
+    : w;
 // THE FIND READ (2026-09-26) — see the branch in `apexReadAction`. Its card is
 // the office's own, not a class mark's, and says so in `via`.
 export const FIND_READ = "find";

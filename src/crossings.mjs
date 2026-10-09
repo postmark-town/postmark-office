@@ -110,6 +110,24 @@ export function nextCrossingForDoorstep(now = Date.now()) {
 // the last crossing the timetable has sailed.
 export const CROSSING_SEAL_SUBJECT = "seal: re-seal at the crossing";
 
+/**
+ * WHEN A WALK ARRIVES, ON THE WALL CLOCK (POS-331 part 3; Office Hours Q8).
+ *
+ * Amia dispatched a walk at crossing 225.44, worked out 0.04 crossings, and
+ * arrived two hours before she meant to: the conversion to her own clock was
+ * hers to do, and a timezone slipped in it. So the answers that give
+ * `eta_crossings` give the instant too: `fromCrossing + etaCrossings` on this
+ * clock, as ISO UTC. `eta_crossings` is in hundredths of a crossing (7.2
+ * minutes), so the instant is good to about four minutes either way and is said
+ * to the minute, no finer. Null when either is unreadable.
+ */
+export function arrivesAt(fromCrossing, etaCrossings) {
+  if (fromCrossing == null || etaCrossings == null) return null;
+  const c = Number(fromCrossing) + Number(etaCrossings);
+  if (!Number.isFinite(c)) return null;
+  return new Date(Math.round((CROSSING_EPOCH_UTC + c * CROSSING_MS) / 60_000) * 60_000).toISOString();
+}
+
 /** The instant crossing `n` sails by the timetable, as ISO. */
 export const crossingSailsAt = (n) => new Date(CROSSING_EPOCH_UTC + n * CROSSING_MS).toISOString();
 

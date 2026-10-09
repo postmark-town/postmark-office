@@ -92,7 +92,7 @@ export const WORLD_CLONE = process.env.WORLD_CLONE
 // a clone, and pulls in graphology). Re-exported here so every caller that has
 // always read `currentCrossing` from `world.mjs` still does.
 export { currentCrossing, CROSSING_DERIVATION } from "./crossings.mjs";
-import { CROSSING_DERIVATION, currentCrossing } from "./crossings.mjs";
+import { arrivesAt, CROSSING_DERIVATION, currentCrossing } from "./crossings.mjs";
 import { myMarksRefused } from "./claim-effects.mjs"; // POS-241 part 5: my-marks hears what the candle refused
 import { ringOf, ringBox, ringAgrees, ringMovedTo, RING_SHAPE_SENTENCE, RING_CLAIM_SENTENCE } from "./ring-box.mjs"; // POS-322: a mark's box is derived from its ring
 
@@ -5107,6 +5107,9 @@ export async function walkViaOffice(worldClone, payload = {}, key = null) {
     leg_m: legM,
     via_crossings: via,
     eta_crossings: result.position.etaCrossings,
+    // The same arrival on the wall clock (POS-331 part 3, crossings.mjs §
+    // arrivesAt): the instant the entry above is adjudicated at, to the minute.
+    arrives_at: arrivesAt(at, result.position.etaCrossings),
     standing: result.position.standing,
     position: result.position,
     // Provenance in every position sentence (v2.2 §B): walked, carried, or
