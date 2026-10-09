@@ -165,7 +165,8 @@ CLONE=G:/Postmark/repo-clones/wright/office; REF=origin/train/2026-w42
 git -C $CLONE fetch -q origin
 for f in $(git -C $CLONE ls-tree --name-only $REF world2/schema/ | grep -E '/0(5[45]|6[0-9]|7[01])_'); do
   echo "== $f"
-  git -C $CLONE show "$REF:$f" | ssh meepo-ec2 'sudo -n -u postgres psql -q -v ON_ERROR_STOP=1 -d w2_devsandbox_20260925 -c "SET ROLE world2_owner;" -f -' || break
+  git -C $CLONE show "$REF:$f" | ssh meepo-ec2 'sudo -n -u postgres psql -q -v ON_ERROR_STOP=1 -d w2_devsandbox_20260925 -c "SET ROLE world2_owner;" -f -' \
+    || { echo "FAILED at $f: stop here, nothing after it ran" >&2; break; }
 done
 ```
 
@@ -175,8 +176,11 @@ done
 `stamp-key.pem` was a byte-identical copy of PROD's. In a box shell:
 ```sh
 sudo -u meepo bash -c 'umask 077 && openssl genpkey -algorithm ed25519 -out /srv/postmark-office-dev/stamp-key.dev.pem'
-# its public half is not prod's: prints "differs", never a key
-sudo bash -c 'cmp -s <(openssl pkey -in /srv/postmark-office-dev/stamp-key.dev.pem -pubout) <(openssl pkey -in /srv/postmark-office/stamp-key.pem -pubout) && echo "SAME: stop" || echo differs'
+# both PUBLIC halves' fingerprints, never a private key of prod's: dev's new key, then prod's
+# public key from its town clone. They must differ. pipefail makes a failed read an error, and
+# e3b0c442… (the sha256 of nothing) also means a read failed: stop either way
+sudo -u meepo bash -o pipefail -c 'openssl pkey -in /srv/postmark-office-dev/stamp-key.dev.pem -pubout | sha256sum'
+sudo -u meepo bash -o pipefail -c 'openssl pkey -pubin -in /srv/postmark-office/town-clone/tools/stamp-pubkey.pem -pubout | sha256sum'
 ```
 What this buys, plainly: dev and prod both run as `meepo`, so any dev-side
 process can still read prod's key. Dev's own key guards against signing with
@@ -193,7 +197,18 @@ sudo shred -u /srv/postmark-office-dev/stamp-key.pem
 sudo -u meepo mv /srv/postmark-office-dev/stamp-key.dev.pem /srv/postmark-office-dev/stamp-key.pem
 ```
 
-**4. The freshen moves the town clone onto dev's key.** The unit runs the root
+**4. The env, without the stamp switch yet, STAMP_KEY first.** `sudoedit /etc/postmark-office-dev.env`
+and add (never in a shell line):
+`TOWN_INDEX_READS=store` · `OFFICE_PAPERWORK_STORE=1` · `STATE_LOG_SOURCE=store` ·
+`STAMP_KEY=/srv/postmark-office-dev/stamp-key.pem`. `GITHUB_API_URL` is already
+there (10-07). Then `sudo systemctl restart postmark-office-dev`.
+`OFFICE_PAPERWORK_STORE=1` moves dev's sign-ins from `oauth.db` to the store, so
+testers signed in on dev sign in again. The key goes in before the freshen (step
+5), so the dev office never signs with prod's default key path onto a clone
+already carrying dev's public key. Until step 5 lands, a stamped dev write reds
+the verifier (the clone still carries prod's public key): do none in between.
+
+**5. The freshen moves the town clone onto dev's key.** The unit runs the root
 copy, `/srv/postmark-office-dev/postmark-dev-freshen.sh`, and the carry does not
 install it. `cp` onto the existing file keeps its owner and mode:
 ```sh
@@ -205,19 +220,11 @@ sudo -u meepo git -C /srv/postmark-office-dev/town-clone log -1 --format='%an: %
 The tool re-signs only a dev clone: every remote's push URL must be
 `DISABLED-dev-channel-never-pushes` and its real path under
 `/srv/postmark-office-dev` (it refuses prod's clone by both). Check the first before
-step 4: `sudo -u meepo git -C /srv/postmark-office-dev/town-clone remote get-url --push origin`.
+this step: `sudo -u meepo git -C /srv/postmark-office-dev/town-clone remote get-url --push origin`.
 Every night after, the freshen stands the clones on `sandbox/seed` and re-signs
 with `tools/dev-ledger-resign.mjs`. The commit is the same each night (fixed
 author and date, deterministic signatures). It refuses a key whose public half
 is prod's, and a refusal fails the unit.
-
-**5. The env, without the stamp switch yet.** `sudoedit /etc/postmark-office-dev.env`
-and add (never in a shell line):
-`TOWN_INDEX_READS=store` · `OFFICE_PAPERWORK_STORE=1` · `STATE_LOG_SOURCE=store` ·
-`STAMP_KEY=/srv/postmark-office-dev/stamp-key.pem`. `GITHUB_API_URL` is already
-there (10-07). Then `sudo systemctl restart postmark-office-dev`.
-`OFFICE_PAPERWORK_STORE=1` moves dev's sign-ins from `oauth.db` to the store, so
-testers signed in on dev sign in again.
 
 **6. The store's stamp chain, from the re-signed clone, once** (the box's switch
 order: 066/067, the chain, the index, then `STAMP_LINES=store`). As the dev
@@ -227,7 +234,7 @@ sudo systemd-run --uid=meepo -p EnvironmentFile=/etc/postmark-office-dev.env -p 
   node world2/tools/stamp-lines.mjs --sync --clone /srv/postmark-office-dev/town-clone
 ```
 It says `stamp_lines: N line(s) recorded past the 0 held`. It must run after
-step 4: a chain recorded from prod's signatures refuses dev's re-signed export
+step 5: a chain recorded from prod's signatures refuses dev's re-signed export
 as a changed past.
 
 **7. The town index, reseeded at the clone's head, as the law pen**, the stamp
@@ -292,6 +299,13 @@ the seed and the store keeps the last rehearsal's rows):
     node world2/tools/stamp-lines.mjs --verify --clone /srv/postmark-office-dev/town-clone
   ```
 - then step 7 again (the index at the clone's head), and step 10.
+
+This trim is a recurring hand repair, and dev's stamped writes refuse every
+night until someone runs it. Folding it into the freshen (or a dev-only unit
+after it) is proposed, not built: it would give a dev unit the owner's DELETE on
+`stamp_lines`, which is Wright's call
+(`G:/Starstory/docs/2026-10-09/rail/plumb-dev-rehearsal/NOTES.md` § Proposal: the trim
+in the freshen).
 
 ### Repo secrets it needs
 
