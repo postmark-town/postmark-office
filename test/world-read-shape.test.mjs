@@ -62,10 +62,10 @@ after(() => {
   if (dir) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
-/** A bare read at `shape` (undefined = the var unset). */
+/** A bare read as the MCP door makes it at `shape` (undefined = the var unset): the door passes the shape in ctx. */
 async function bareAt(shape, args = {}) {
   setEnv("WORLD_READ_SHAPE", shape);
-  try { return await worldApex({ handle: WHO, ...args }, KEY); }
+  try { return await worldApex({ handle: WHO, ...args }, KEY, shape ? { readShape: readShape() } : {}); }
   finally { setEnv("WORLD_READ_SHAPE", undefined); }
 }
 

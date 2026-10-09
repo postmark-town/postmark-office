@@ -42,6 +42,8 @@ import { standingBounce } from "./standing.mjs";
 import { roleGate, ROLE_SUBSCRIBER } from "./roles.mjs";
 import { WORLD_TOOLS, callWorldTool, townPost, worldBlockForHandle } from "./world.mjs";
 import { apexEnabled, apexTools, dispatchToolFor, worldApex } from "./world-apex.mjs"; // stage 3: the apex `world` verb, behind WORLD_APEX
+import { readShape } from "./world-read-shape.mjs"; // POS-486: the world read's shape, for the MCP door's own calls
+import { doorShape } from "./door-read-shape.mjs"; // POS-486: the town and household reads' shapes, likewise
 import { HOUSEHOLD_TOOL, householdApex, householdDispatchToolFor } from "./household-apex.mjs";
 import { TOWN_TOOL, townApex, townDispatchToolFor, townTools } from "./town-apex.mjs";
 import { TOWN_STAKE_TOOLS, callTownStakeTool } from "./town-stake.mjs"; // the stake gesture, 2026-08-31
@@ -604,7 +606,9 @@ export async function callTool(name, args, ctx) {
         if (townIndexReads()) return townIndexStore.storeRollHandles(); // POS-268: the store's roll, as last loaded
         try { return residentList(db).map((r) => r.handle); } catch { return null; }
       };
-      const r = name === "world" ? await worldApex(args, key, { roll: rollFor() }) : await callWorldTool(name, args, key, { roll: rollFor() });
+      // the read's shape rides the MCP door's own calls only (POS-486, #455 finding 1): REST reaches this
+      // dispatcher too (GET/POST /town/apex), without the marker, and keeps the full read
+      const r = name === "world" ? await worldApex(args, key, { roll: rollFor(), ...(ctx.door === "mcp" ? { readShape: readShape() } : {}) }) : await callWorldTool(name, args, key, { roll: rollFor() });
       if (r !== null) return r;
     } catch (e) {
       // Same hand-picked extras list as world-apex.mjs § the act branch, and it
@@ -893,7 +897,8 @@ export async function callTool(name, args, ctx) {
       // `worldWriteBudget` is the live bouncer's own read, injected by the
       // server (POS-139): the standing read states the world-write budget
       // rather than leaving the 429 to be the only place it is ever said.
-      return householdApex(args, key, { db, clone, odb, dbPath, pen, rdb, canWrite, meta, asOf, slim: true, schemas: flatPropsMap(), schemaRequired: flatRequiredMap(), strictFields: true, worldWriteBudget });
+      return householdApex(args, key, { db, clone, odb, dbPath, pen, rdb, canWrite, meta, asOf, slim: true, schemas: flatPropsMap(), schemaRequired: flatRequiredMap(), strictFields: true, worldWriteBudget,
+        ...(ctx.door === "mcp" ? { readShape: doorShape("household") } : {}) }); // POS-486: the MCP door's shape only
     }
     case "town": {
       // `call` is this very dispatcher, handed back to the apex. The town verb
@@ -903,6 +908,7 @@ export async function callTool(name, args, ctx) {
       return townApex(args, key, {
         clone, // the town apex gates its one act on standing, and reads the ledger from here
         schemas: flatPropsMap(), schemaRequired: flatRequiredMap(),
+        ...(ctx.door === "mcp" ? { readShape: doorShape("town") } : {}), // POS-486: the MCP door's shape only; REST /town/apex comes here without it
         call: (tool, fields) => callTool(tool, fields, ctx),
       });
     }
@@ -1076,7 +1082,8 @@ async function handleMessage(msg, ctx) {
       const bad = validateArgs(tool, args);
       if (bad) return refusal(msg.id, bad);
       try {
-        const result = await callTool(name, args, ctx);
+        // `door: "mcp"` marks the MCP door's own calls: only they carry a read shape (POS-486)
+        const result = await callTool(name, args, { ...ctx, door: "mcp" });
         const isBounce = result && typeof result === "object" && result.error === "bounce";
         return rpcResult(msg.id, {
           content: contentFor(isBounce ? markRefused(result) : result),

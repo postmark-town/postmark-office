@@ -1098,10 +1098,10 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, dbPath, pen, 
     // is the office's own static teaching sentence, so the residue lookup — a
     // second database, opened and closed on every identity check — is not
     // merely trimmed from the answer, it stops happening.
-    // THE SHAPE (POS-486): HOUSEHOLD_READ_SHAPE picks the default bare read
-    // while the eval measures candidates; unset it is h0, and the very answer
-    // comes back (door-read-shape.mjs).
-    const shaped = (answer) => shapeHouseholdRead(answer, { shape: doorShape("household"), cards: args.cards ?? null });
+    // THE SHAPE (POS-486) is the MCP call's: the MCP door passes
+    // HOUSEHOLD_READ_SHAPE in as ctx.readShape, and the REST doors pass nothing,
+    // so GET /household stays h0. At h0 the very answer comes back.
+    const shaped = (answer) => shapeHouseholdRead(answer, { shape: ctx.readShape ?? "h0", cards: args.cards ?? null });
     if (slim) {
       return shaped({
         ...standing,

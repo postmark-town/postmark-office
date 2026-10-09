@@ -23,7 +23,8 @@ const shape = await import("../src/door-read-shape.mjs");
 const schemas = Object.fromEntries(TOOLS.map((t) => [t.name, t.inputSchema?.properties ?? {}]));
 const schemaRequired = Object.fromEntries(TOOLS.map((t) => [t.name, t.inputSchema?.required ?? []]));
 const at = async (k, v, fn) => { setEnv(k, v); try { return await fn(); } finally { setEnv(k, undefined); } };
-const townBare = (v, args = {}) => at("TOWN_READ_SHAPE", v, () => townApex(args, null, { schemas, schemaRequired }));
+// the town's bare read as the MCP door makes it: the door passes the shape in ctx
+const townBare = (v, args = {}) => at("TOWN_READ_SHAPE", v, () => townApex(args, null, { schemas, schemaRequired, ...(v ? { readShape: shape.doorShape("town") } : {}) }));
 
 test("the 0 shapes are the defaults: unset, empty or unknown, and the switch hands back the very answer", () => {
   assert.equal(shape.doorShape("town", {}), "t0");
