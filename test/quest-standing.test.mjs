@@ -183,6 +183,23 @@ test("the friendship milestone reports the deepest reach, the crossing day, and 
     "the friends must NOT ride `counted` — that field holds who filled a unit TODAY and the site merges it across a household under that heading");
 });
 
+// POS-380 (Little Bird, Core Team 09-30): the row's number is the deepest
+// pair, and an agent reading the board could not find its count with any one
+// correspondent. The note names the page that has it, and the pair rule.
+test("the friendship row names the pair page where each pair's count lives", () => {
+  for (const depth of [SETTLED.depth, { eachWay: 3, best: 0, since: null, friends: [] }]) {
+    const p = standingJoin(row("correspond-depth", { target: 5 }), { ...FRESH, depth });
+    assert.equal(p.note, STANDING_NOTES.pair_page);
+  }
+  assert.ok(STANDING_NOTES.pair_page.includes("postmark.town/mail/with/<a>--<b>/"), "the site's pair page, by its address");
+  assert.match(STANDING_NOTES.pair_page, /alphabetical order, joined by --/, "how to spell a pair's address");
+  assert.match(STANDING_NOTES.pair_page, /across households/);
+  assert.match(STANDING_NOTES.pair_page, /meep/);
+  // the rows that count nothing keep their own notes
+  assert.equal(standingJoin(row("correspond-depth", { target: 5 }), { ...FRESH, depth: null }).note, STANDING_NOTES.ladder_unsealed);
+  assert.equal(standingJoin(row("correspond-depth", { target: 5 }), null).note, STANDING_NOTES.no_index);
+});
+
 test("deep letters with no rung crossed is progress without completion", () => {
   const p = standingJoin(row("correspond-depth", { target: 5 }), {
     ...FRESH, depth: { eachWay: 3, best: 0, since: null, friends: [] },
