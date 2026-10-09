@@ -654,9 +654,12 @@ whole town out. The switch stays on.
 `[paperwork] MIRROR FAILED` on 10-05 (database is locked) and again during the
 10-09 disk-full outage (POS-480's comment: 4 token DELETEs and 1 INSERT), so the
 first check names rows. **Darko ruled (2026-10-09): repair, and keep the date.**
-The store is the record, so the files are brought to it, row by flagged row,
-with `--repair`, and the check runs again until it reads equal. Only then is
-this merged and the files deleted.
+Prod's check (Wright, 2026-10-09 15:0x UTC) named three rows, every one "in the
+store, not in the file": 2 in oauth_tokens, 1 in office_town_journal. So
+`--repair` only INSERTS into the files the rows only the store holds; it never
+deletes or overwrites, and it refuses, writing nothing, if a row differs in
+content or only the file holds it. The check then runs again until it reads
+equal. Only then is this merged and the files deleted.
 
 From the staged tip of this change (it carries `--repair`; its node_modules
 has pg), as root, the tool running as meepo (the files are meepo's):
@@ -669,9 +672,10 @@ sudo bash -c "cd <the staged tip> && exec runuser -u meepo -- $CHECK --check"
 # 2. A copy of each file first, never cp of a live sqlite file:
 sudo install -d -m 700 -o meepo /var/backups/postmark-paperwork
 sudo runuser -u meepo -- node -e 'const {DatabaseSync}=require("node:sqlite"); for (const n of ["oauth","roles"]) new DatabaseSync(`/srv/postmark-office/${n}.db`,{readOnly:true}).prepare("VACUUM INTO ?").run(`/var/backups/postmark-paperwork/${n}-pre-repair.db`)'
-# 3. The repair: each flagged row rewritten in the FILE from the store (the store is only read):
+# 3. The repair: the rows only the store holds, inserted into the FILES (the store is only read;
+#    a row that differs, or one only the file holds, is a refusal, exit 2, nothing written: stop):
 sudo bash -c "cd <the staged tip> && exec runuser -u meepo -- $CHECK --repair"
-#   repaired  oauth_tokens  n rows (k removed from the file, m written from the store) ...
+#   repaired  oauth_tokens  2 row(s) inserted into the file from the store   (counts only, never a key)
 #   repaired; the files now equal the store, exit 0
 # 4. Check again; repeat 3 and 4 until it reads equal (a mirror write racing the
 #    repair is flagged by the next check, and the next repair takes it):
