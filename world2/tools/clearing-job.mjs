@@ -67,7 +67,7 @@ import { computeStanding, gistContainment } from "./standing.mjs";
 // this transaction. The module imports nothing; see its header and step 8.
 import { sealSnapshot } from "./world-snapshot-seal.mjs";
 // WHETHER STANCES COUNT AT THE SETTLEMENT THIS CROSSING MAKES (POS-364, 072): decided here, recorded by the seal. See step 8.
-import { stancesAtSeal } from "../../src/world-settlement.mjs";
+import { stancesAtSeal, lawCarriesRulingB } from "../../src/world-settlement.mjs";
 // THE CANDLE'S LOCK (POS-404): the clearing and the claim door take turns. Taken right after BEGIN.
 import { CLEARING_TAKES_THE_CANDLE } from "./candle-lock.mjs";
 // THE CARRY (POS-441): a move carries the mover's household's marks inside it,
@@ -699,7 +699,11 @@ try {
   const stances = await stancesAtSeal({ query: q }, { env: process.env });
   const sealed = await sealSnapshot(q, { windowId, stances });
   console.log(`  ⚑ snapshot: ${sealed.marks} standing mark(s), ${sealed.new_versions} new version(s), register ${sealed.register_rows} row(s) (${sealed.new_register_versions} new), digest ${sealed.digest.slice(0, 12)}`);
-  console.log(`  ⚑ stances: ${stances.counted ? "COUNTED" : "not counted"} at S${stances.settlement_inferred ?? "?"} (${stances.how}), cutover ${stances.cutover ?? "unset"}`);
+  // And whether the law it was sealed on carries ruling B (world#171): a cutover
+  // sealed on an older law returns every stance-opposed mark with its children,
+  // for good (DEPLOY.md § 072, step 0).
+  const b = lawCarriesRulingB(worldRepo, sealed.law_sha);
+  console.log(`  ⚑ stances: ${stances.counted ? "COUNTED" : "not counted"} at S${stances.settlement_inferred ?? "?"} (${stances.how}), cutover ${stances.cutover ?? "unset"}; law ${String(sealed.law_sha ?? "-").slice(0, 12)} ${b === true ? "carries ruling B" : b === false ? "does NOT carry ruling B (world#171)" : "unread for ruling B (no --world-repo, or the sha is not in it)"}`);
 
   // Close, pin, open the successor.
   //

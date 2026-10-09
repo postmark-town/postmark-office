@@ -507,6 +507,21 @@ export async function stancesAtSeal(p, { env = process.env, header = { id: null 
 }
 
 /**
+ * DOES THE LAW AT A SHA CARRY RULING B? (world#171: `STANCE_RETURNS_ALONE` in
+ * tools/consent.mjs.) `true`, `false`, or null when the world checkout cannot
+ * answer. The clearing's journal says it beside the seal's decision, so a
+ * cutover sealed on a law older than B is seen the crossing it happens
+ * (DEPLOY.md § 072, step 0).
+ */
+export function lawCarriesRulingB(worldRepo, lawSha) {
+  if (!worldRepo || !lawSha) return null;
+  try {
+    const src = execFileSync("git", ["-C", worldRepo, "show", `${lawSha}:tools/consent.mjs`], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    return /export const STANCE_RETURNS_ALONE = true\b/.test(src);
+  } catch { return null; }
+}
+
+/**
  * WHAT THE SEAL RECORDED: `{ counts, why, recorded }`. PURE over the header. No
  * record (sealed before 072, back-filled) reads as NOT COUNTED: everything
  * before the deploy is the old blessing (R14). Never recomputed from the

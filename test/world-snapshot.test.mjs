@@ -404,7 +404,7 @@ test("072: a new seal under each cutover case writes the expected record, and th
     await owner((c) => c.query("INSERT INTO settlements (number, tag_sha, published_at, window_id, blessed_at) VALUES (7, $1, '2026-10-01T07:00:00Z', 300, '2026-10-01T07:00:00Z')", ["c".repeat(40)]));
     const r = run(JOB, ["--window", "302"], { WORLD2_CLEARING_URL: store.url("clearing_job"), ...(cutover ? { TOWN_STANCE_CUTOVER: cutover } : {}) });
     assert.equal(r.code, 0, r.out);
-    assert.ok(r.out.includes(`⚑ stances: ${expected.counted ? "COUNTED" : "not counted"} at S8 (inferred), cutover ${cutover ?? "unset"}`), r.out);
+    assert.ok(r.out.includes(`⚑ stances: ${expected.counted ? "COUNTED" : "not counted"} at S8 (inferred), cutover ${cutover ?? "unset"}; law ${LAW_SHA.slice(0, 12)} unread for ruling B`), r.out);
     const h = await withPen("snapshot_reader", (c) => snapshotHeader(c, { window: 302 }));
     assert.deepEqual(h.stances, expected, `cutover ${cutover ?? "unset"}`);
     const rows = await withPen("snapshot_reader", (c) => snapshotRows(c, h.marks_digest));

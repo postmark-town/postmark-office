@@ -1788,6 +1788,15 @@ Darko, 2026-10-09 10:25 EDT: `TOWN_STANCE_CUTOVER=S<n>` names a settlement numbe
 
 Order at the ship, with Sunday's migrations:
 
+0. **Before the cutover is set, the law must carry ruling B (world#171).** A settlement folds with the engine at its sealed `law_sha`, which is the store's `projection_heads` world-law at the seal. A cutover sealed on a law older than #171 records `counted: true` on an engine that returns every stance-opposed mark with its positioned children, for good (the law sha is in the digest; it is disclosed as `stance_returns_whole`, never undone). So, on the box:
+   ```sh
+   LAW=$(sudo -n -u postgres psql -d world2 -tAc "SELECT sha FROM projection_heads WHERE repo = 'world-law'")
+   W=/srv/world2-lab/ingest-clones/world      # the clearing's own --world-repo (world2-clearing.sh)
+   git -C "$W" fetch -q origin
+   git -C "$W" merge-base --is-ancestor e79babcff36e77db597b0433e99433cb5eb39fc3 "$LAW" \
+     && echo "law $LAW carries ruling B" || echo "law $LAW does NOT carry ruling B"
+   ```
+   (`e79babcff` is world#171's merge on world main.) If it does not, **do not set the cutover yet**: let law-ingest move the pin forward (the next blessing of a world main that contains #171), re-run the check, and set the cutover only after it reads "carries". Once the cutover is set, every clearing's journal says it too: `⚑ stances: … ; law <sha> carries ruling B` (or `does NOT carry ruling B (world#171)`).
 1. **Apply 072 after 069 and 071, before the code.** The new seal writes `world_snapshots.stances`; against a store without the column, every clearing rolls back.
    ```sh
    sudo -n -u postgres psql -v ON_ERROR_STOP=1 -d world2 \

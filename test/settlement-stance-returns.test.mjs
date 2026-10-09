@@ -145,3 +145,11 @@ test("THE LIMITS GO TO THE ENGINE AS LAWS: foldWithWords hands each limit in `to
   assert.deepEqual(vetoes.limits, [{ mark: "ash/second", law: "the-town/one-per-resident" }]);
   assert.deepEqual([...seen.at(-1)], [["ash/second", "the-town/one-per-resident"]]);
 });
+
+test("lawCarriesRulingB: the clearing's journal can tell a law with ruling B from one without (DEPLOY § 072, step 0)", async () => {
+  const { lawCarriesRulingB } = await import("../src/world-settlement.mjs");
+  assert.equal(lawCarriesRulingB(WORLD, LAW_SHA), true, "the pinned world (world#171's head) carries it");
+  assert.equal(lawCarriesRulingB(WORLD, "0bcb9c1c55c0631ccf312af43b9f8f6533256cc4"), false, "the engine before #171 does not");
+  assert.equal(lawCarriesRulingB(WORLD, "f".repeat(40)), null, "a sha the checkout lacks is unread, never a no");
+  assert.equal(lawCarriesRulingB(null, LAW_SHA), null, "no checkout, no answer");
+});
