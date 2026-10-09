@@ -91,7 +91,7 @@ const NOW = Date.parse("2026-09-27T06:00:00Z");
 
 /** Every world reader, counted, so "asked once" is a number and not a hope. */
 function worldReaders() {
-  const calls = { stances: [], stakesFor: [], walkers: 0, claimEffects: [] };
+  const calls = { stances: [], stakesFor: [], walkers: 0, claimEffects: [], lastActive: [] };
   return {
     calls,
     readers: {
@@ -102,6 +102,9 @@ function worldReaders() {
         return { next_settlement: { at: "2026-09-28T00:00:00.000Z" }, count: 2, at_risk: 1,
           rows: [{ mark: "r001/shed", class: "commons", escrow: 0, at_risk: true, act: 'world { do: "stake" }' },
                  { mark: "r000/garden", class: "commons", escrow: 3, at_risk: false }] }; },
+      // the store's acts and town_letters, newest per handle (last-active.mjs § lastActiveFor's Map)
+      lastActiveFor: async (handles) => { calls.lastActive.push([...handles]);
+        return new Map([["r000", { at: "2026-09-26T08:00:00.000Z", crossing: 213 }]]); },
       walkers: async () => { calls.walkers += 1;
         return { at: 190.5, walkers: [{ handle: "r000", x: 10, y: -4, mark_id: "the-town/quay", moving: false, toward: null }] }; },
       // The store's own shape on prod: `decided_at` comes back a Date, and
@@ -162,7 +165,12 @@ test("ASKED ONCE: stances, stakes and the walkers roll are one call each for the
   assert.deepEqual([...calls.claimEffects[0].onMyGround], ["r-stranger/fence"]);
   assert.deepEqual(h.residents.r000.stands, { x: 10, y: -4, mark_id: "the-town/quay", moving: false, toward: null });
   assert.equal(h.residents.r001.stands, null);
-  assert.equal(h.residents.r000.last_active, "2026-09-20T10:00:00.000Z");
+  // last_active is the newest act of their own, asked once for the house, never
+  // the index's commit-derived value (r000's card says 2026-09-20; POS-481).
+  assert.deepEqual(calls.lastActive, [["r000", "r001", "r002"]]);
+  assert.deepEqual([h.residents.r000.last_active, h.residents.r000.last_active_crossing], ["2026-09-26T08:00:00.000Z", 213]);
+  assert.deepEqual([h.residents.r001.last_active, h.residents.r001.last_active_crossing], [null, null]);
+  assert.equal(h.last_active_unavailable, undefined);
 });
 
 test("ISO: an outcome's `at` is ISO whatever the store handed back, and the events run in instant order", async () => {

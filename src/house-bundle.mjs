@@ -306,8 +306,8 @@ export async function houseBundle({ household = null } = {}, ctx = {}) {
   }
   // LAST ACTIVE, ONCE FOR THE HOUSE (POS-481): one store read for every
   // resident here, never one per resident (last-active.mjs).
-  const lastActiveUnavailable = await stampRows(Object.values(residents),
-    ix ? { find: (handles) => ix.lastActiveFor(handles) } : {});
+  const find = ix ? (handles) => ix.lastActiveFor(handles) : readers.lastActiveFor ?? null;
+  const lastActiveUnavailable = await stampRows(Object.values(residents), find ? { find } : {});
 
   return {
     ...out,
