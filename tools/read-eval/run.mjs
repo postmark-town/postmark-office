@@ -27,7 +27,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { bootRun, callTool, clonesClean, prepareRound } from "./office.mjs";
-import { runAgent } from "./agent.mjs";
+import { codexHome, runAgent, runCodexAgent } from "./agent.mjs";
 import { FEEDBACK_PROMPT, TASKS, systemPrompt, truthFor } from "./tasks.mjs";
 import { writeReport } from "./report.mjs";
 import { SOLVED } from "./controls.mjs";
@@ -102,9 +102,29 @@ async function controls({ round, truth, taskIds, out }) {
   log(`controls: all ${rows.length} OK`);
 }
 
+/** The question errands graded again from their stored answers (a grader fix); each changed verdict keeps its old one. */
+function regrade(dir) {
+  const round = JSON.parse(readFileSync(join(dir, "round.json"), "utf8"));
+  const questions = new Set([1, 2, 8]); // graded from the answer alone; an act's grade needs the run's store, which is gone
+  let changed = 0;
+  return Promise.all(readdirSync(join(dir, "runs")).filter((f) => f.endsWith(".json")).map(async (f) => {
+    const file = join(dir, "runs", f);
+    const rec = JSON.parse(readFileSync(file, "utf8"));
+    if (!questions.has(rec.task) || rec.harness_error) return;
+    const g = await TASKS.find((t) => t.id === rec.task).grade({ answer: rec.answer ?? "", truth: round.truth });
+    if (g.pass !== rec.pass || g.why !== rec.why) {
+      if (g.pass !== rec.pass) changed++;
+      rec.regraded = [...(rec.regraded ?? []), { at: stamp(), was: { pass: rec.pass, why: rec.why } }];
+      rec.pass = g.pass; rec.why = g.why;
+      writeFileSync(file, JSON.stringify(rec, null, 2));
+    }
+  })).then(() => { log(`regraded: ${changed} verdict(s) changed`); log(`results page: ${writeReport(dir)}`); });
+}
+
 async function main() {
-  const a = argv(["out", "variants", "tasks", "repeats", "concurrency", "handle", "model", "effort", "report", "sweep", "controls"]);
+  const a = argv(["out", "variants", "tasks", "repeats", "concurrency", "handle", "model", "effort", "report", "sweep", "controls", "regrade", "runtime"]);
   if (a.sweep) return sweep();
+  if (a.regrade) return regrade(resolve(a.regrade));
   if (a.report) { const p = writeReport(resolve(a.report)); log(`results page: ${p}`); return; }
   if (!a.out) throw new Error("--out <dir> is required (the round's results folder)");
   const out = resolve(a.out);
@@ -117,7 +137,10 @@ async function main() {
   if (a.concurrency != null && Number(a.concurrency) !== 1) throw new Error("--concurrency is 1: the runs share the round's town clone (a stake commits to it)");
   const concurrency = 1;
   const handle = a.handle ?? "sol-of-garrison";
-  const model = a.model ?? "sonnet";
+  // the runtime: claude (Sonnet) or codex (GPT Terra 5.6), each at medium effort unless told
+  const runtime = a.runtime ?? "claude";
+  if (!["claude", "codex"].includes(runtime)) throw new Error("--runtime is claude or codex");
+  const model = a.model ?? (runtime === "codex" ? "gpt-5.6-terra" : "sonnet");
   const effort = a.effort ?? "medium";
   mkdirSync(join(out, "runs"), { recursive: true });
 
@@ -130,7 +153,7 @@ async function main() {
     try { bare = (await callTool(probe.base, probe.key, "world", {})).body; } finally { await probe.stop(); }
     const truth = truthFor(round, { bare });
     writeFileSync(join(out, "round.json"), JSON.stringify({
-      started: stamp(), variants, tasks: taskIds, repeats, concurrency, handle, household: round.household, model, effort,
+      started: stamp(), variants, tasks: taskIds, repeats, concurrency, handle, household: round.household, runtime, model, effort,
       clones: { town: round.clones.townHead, world: round.clones.worldHead },
       office: execFileSync("git", ["-C", OFFICE, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
       truth: { ...truth, householdOf: undefined },
@@ -148,7 +171,7 @@ async function main() {
       while (next < plan.length) {
         const { v, id, r } = plan[next++];
         const task = TASKS.find((t) => t.id === id);
-        const runId = `${v}-t${id}-r${r}`;
+        const runId = `${runtime === "codex" ? "codex-" : ""}${v}-t${id}-r${r}`;
         const file = join(out, "runs", `${runId}.json`);
         if (existsSync(file)) { log(`${runId}: already done, kept`); continue; }
         const office = await bootRun(round, { shape: v, runId: `${process.pid}_${runId}`.replace(/-/g, "_"), log });
@@ -156,19 +179,25 @@ async function main() {
         try {
           const prompt = task.prompt(truth);
           const started = stamp();
-          const agent = await runAgent({ base: office.base, key: office.key, prompt, system: systemPrompt(handle), feedback: FEEDBACK_PROMPT,
+          const run = runtime === "codex" ? (o) => runCodexAgent({ ...o, home: codexHome(join(OFFICE, ".read-eval", "codex-home")) }) : runAgent;
+          const agent = await run({ base: office.base, key: office.key, prompt, system: systemPrompt(handle), feedback: FEEDBACK_PROMPT,
             dir: join(OFFICE, ".read-eval", "runs", runId), model, effort });
           const answer = agent.result?.result ?? "";
           const graded = await task.grade({ answer, truth, query: office.query, round });
           const u = agent.result?.usage ?? {};
           rec = {
-            run: runId, variant: v, task: id, task_name: task.name, repeat: r, started, prompt,
+            run: runId, runtime, model, variant: v, task: id, task_name: task.name, repeat: r, started, prompt,
             pass: graded.pass, why: graded.why,
-            tokens: {
+            // Claude's input excludes its cache; Codex's input includes its cached tokens and its output its reasoning (agent.mjs)
+            tokens: runtime === "codex" ? {
+              input: u.input_tokens ?? null, cached: u.cached_input_tokens ?? null, output: u.output_tokens ?? null,
+              reasoning: u.reasoning_output_tokens ?? null, total: (u.input_tokens ?? 0) + (u.output_tokens ?? 0),
+            } : {
               input: u.input_tokens ?? null, cache_creation: u.cache_creation_input_tokens ?? null,
               cache_read: u.cache_read_input_tokens ?? null, output: u.output_tokens ?? null,
               total: ["input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens"].reduce((s, k) => s + (u[k] ?? 0), 0),
             },
+            codex_items: agent.result?.codex_items, codex_errors: agent.result?.errors,
             cost_usd: agent.result?.total_cost_usd ?? null,
             turns: agent.result?.num_turns ?? null,
             calls: agent.calls.filter((c) => c.method === "tools/call").length,

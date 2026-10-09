@@ -19,7 +19,9 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-const words = (id) => String(id).split("/").pop().replace(/-/g, " ").toLowerCase();
+// a mark's name in words, without a leading article: "my Protected Grove" names the-protected-grove
+// (the first world round's grader required "the", and failed v1/v2 answers for it; regraded, 2026-10-09)
+const words = (id) => String(id).split("/").pop().replace(/-/g, " ").toLowerCase().replace(/^(the|a|an) /, "");
 const norm = (s) => String(s ?? "").toLowerCase().replace(/[“”"'’‘`*_]/g, "").replace(/\s+/g, " ").trim();
 const mentions = (text, id) => norm(text).includes(words(id)) || norm(text).includes(String(id).toLowerCase());
 
