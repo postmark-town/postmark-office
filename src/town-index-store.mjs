@@ -743,11 +743,26 @@ export async function mailAwaiting(q, handle, opts = {}) {
 
 /** The sender's standing letters (hotMailBlock's `standing`), each with the conversation root its thread chain ends at. */
 async function standingRoots(q, standing) {
-  const out = [];
-  for (const s of standing ?? []) {
-    if (!s?.letter_id) continue;
+  const mine = new Map((standing ?? []).filter((s) => s?.letter_id).map((s) => [s.letter_id, s]));
+  const roots = new Map();
+  // A reply to your own standing reply (#446 review, finding 3): the letter it
+  // names is a log row, not in town_letters, so it roots through that letter,
+  // as the law roots an outbox letter through another. A loop among them roots
+  // nowhere (null), as threadRoot leaves a cycle.
+  const rootOf = async (s, seen = new Set()) => {
+    if (roots.has(s.letter_id)) return roots.get(s.letter_id);
     const thread = s.thread && s.thread !== "new" ? s.thread : null;
-    out.push({ letter_id: s.letter_id, thread, root: thread ? await threadRoot(q, thread) : s.letter_id });
+    let root;
+    if (!thread) root = s.letter_id;
+    else if (mine.has(thread)) root = seen.has(thread) ? null : await rootOf(mine.get(thread), seen.add(s.letter_id));
+    else root = await threadRoot(q, thread);
+    roots.set(s.letter_id, root);
+    return root;
+  };
+  const out = [];
+  for (const s of mine.values()) {
+    const thread = s.thread && s.thread !== "new" ? s.thread : null;
+    out.push({ letter_id: s.letter_id, thread, root: await rootOf(s) });
   }
   return out;
 }

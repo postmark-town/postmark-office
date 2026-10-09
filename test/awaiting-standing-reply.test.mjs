@@ -71,13 +71,19 @@ const CASES = [
   ["a new letter, its own conversation", [["wright-n1", "new"]]],
   ["two replies in one conversation: the first is the queued one", [["wright-r1", "limen-a3"], ["wright-r2", "limen-a1"]]],
   ["replies across conversations at once", [["wright-r1", "limen-a3"], ["wright-r2", "kio-b1"], ["wright-n1", "new"]]],
+  // the law roots an outbox letter through another outbox letter (#446 review, finding 3)
+  ["a reply to your own standing reply", [["wright-r1", "limen-a3"], ["wright-r2", "wright-r1"]]],
 ];
 
 for (const [name, sent] of CASES) {
   test(`the law's queued reply, read from the standing block: ${name}`, { skip: SKIP }, () => {
     const expected = asStanding(law(sent.map(([id, t]) => outbox(id, t))),
       sent.map(([id]) => id));
-    const got = lawWithStanding(law(), sent.map(([id, t]) => standing(id, t)));
+    // a letter that answers one of the sender's own standing letters roots through it,
+    // as town-index-store.mjs § standingRoots resolves it
+    const roots = new Map();
+    for (const [id, t] of sent) roots.set(id, t === "new" ? id : roots.get(t) ?? rootOf(t));
+    const got = lawWithStanding(law(), sent.map(([id, t]) => ({ letter_id: id, thread: t === "new" ? null : t, root: roots.get(id) })));
     assert.deepEqual(withoutDisclosure(got), expected);
     assert.deepEqual(got.reply_queued_standing.letters.sort(), sent.map(([id]) => id).sort(),
       "the view names which of its queued letters are standing ones");
@@ -150,6 +156,13 @@ test("the store roots a reply by walking its thread chain, and leaves a broken o
       assert.deepEqual(left.summary, bare.summary, `${thread}: no conversation of wright's, so nothing turns`);
       assert.equal(left.reply_queued_standing, undefined, thread);
     }
+
+    // a reply to your own standing reply roots through it (#446 review, finding 3)
+    const chained = await read([{ letter_id: "wright-s1", thread: "limen-x3" }, { letter_id: "wright-s2", thread: "wright-s1" }]);
+    assert.equal(rowOf(chained).queued_reply_id, "wright-s1", "the first written is the queued one, as the law's queued[0]");
+    assert.deepEqual(chained.reply_queued_standing.letters, ["wright-s1", "wright-s2"], "and the second is named with it");
+    const looped = await read([{ letter_id: "wright-s1", thread: "wright-s2" }, { letter_id: "wright-s2", thread: "wright-s1" }]);
+    assert.deepEqual(looped.summary, bare.summary, "two of your letters naming each other root nowhere");
 
     const fresh = await read([{ letter_id: "wright-n1", thread: "new", to: "limen" }]);
     assert.equal(fresh.conversations.find((c) => c.conversation === "wright-n1")?.attention_state, "reply_queued",
