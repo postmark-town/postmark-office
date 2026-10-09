@@ -44,10 +44,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readdirSync, readFileSync, statSync, symlinkSync, unlinkSync, rmSync, rmdirSync, realpathSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, unlinkSync, rmSync, rmdirSync, realpathSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, relative, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { tempDir } from "./helpers/temp-dir.mjs";
 
 const ROOT = realpathSync(resolve(dirname(fileURLToPath(import.meta.url)), ".."));
 const IMPORTER = "test/helpers/cli-guard-importer.mjs";
@@ -55,7 +55,7 @@ const IMPORTER = "test/helpers/cli-guard-importer.mjs";
 // Paths that do not exist at all — the refusals below are all "no X at <path>",
 // never a write; the child's cwd is the scratch dir so a tool that did write a
 // default file would write it there, and the after() sweeps it.
-const SCRATCH = tempDir("cli-guard-");
+const SCRATCH = mkdtempSync(join(tmpdir(), "cli-guard-"));
 const NOWHERE = join(SCRATCH, "does-not-exist");
 const NOWHERE_DB = join(SCRATCH, "does-not-exist.db");
 const NOWHERE_OUT = join(SCRATCH, "out.json");
@@ -75,7 +75,7 @@ const countFiles = (dir) => {
   return n;
 };
 const FILES_BEFORE = countFiles(ROOT);
-const LINK_DIR = tempDir("cli-guard-link-");
+const LINK_DIR = mkdtempSync(join(tmpdir(), "cli-guard-link-"));
 const LINK = join(LINK_DIR, "office");
 if (process.platform === "win32") {
   const mk = spawnSync("cmd", ["/c", "mklink", "/J", LINK, ROOT], { encoding: "utf8" });
