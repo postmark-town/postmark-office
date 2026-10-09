@@ -29,12 +29,13 @@
 //   node tools/home-picture-carry.mjs --dry-run --town ./town-clone --oauth-db ./oauth.db --office-db ./office.db
 //   node tools/home-picture-carry.mjs --apply   --town ./town-clone --oauth-db ./oauth.db --office-db ./office.db
 //
-// `--dry-run` mints nothing (the R2 PUT is a mock, the ledger a throwaway copy)
-// and writes nothing to the store; it reads the store's current pictures when
-// the office is pointed at it, and says so when it is not.
+// `--dry-run` mints nothing (the R2 PUT is a mock; the media ledger is a
+// throwaway copy of the file, or, on a switched office, the store's inside one
+// transaction rolled back at the end) and writes nothing to the store; it reads
+// the store's current pictures when the office is pointed at it, and says so
+// when it is not.
 
-import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 
@@ -125,8 +126,8 @@ if (isMain) {
   process.env.TOWN_CLONE = TOWN;
   if (DRY) for (const k of ["R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY"]) if (!process.env[k]) process.env[k] = "dry-run";
   const { uploadMedia, mediaConfigured } = await import("../src/media.mjs");
-  const { openOauthDb, oauthSchema, householdFor } = await import("../src/oauth.mjs");
-  const { openPaper } = await import("../src/paperwork.mjs");
+  const { householdFor } = await import("../src/oauth.mjs");
+  const { openLedger } = await import("./backfill-home-shelf.mjs");
   const { setHomePicture } = await import("../src/home-picture.mjs");
   const { loadRegistry, loadPins } = await import("../src/registry-store.mjs");
   const { homePictureIn } = await import("../src/registry-rows.mjs");
@@ -158,15 +159,16 @@ if (isMain) {
     return ghId == null && !ghLogin ? null : householdFor(idx, ghId, ghLogin);
   };
 
-  let dbPath = OAUTH_DB, tmp = null;
-  if (DRY) { tmp = mkdtempSync(join(tmpdir(), "home-picture-carry-")); dbPath = join(tmp, "oauth.db"); if (existsSync(OAUTH_DB)) copyFileSync(OAUTH_DB, dbPath); }
-  // THE LEDGER THE DOOR WRITES (POS-271). --apply opens it the way the server
-  // does, so a switched office (OFFICE_PAPERWORK_STORE=1) writes the media rows
-  // into the store's office_media, not into a file it no longer reads.
-  // --dry-run opens a throwaway COPY of the file and never the store: the file
-  // is the store's mirror when switched, so its reads (what this household
-  // holds, what its quota has spent) are the real state, and nothing is kept.
-  const odb = DRY ? openOauthDb(dbPath) : await openPaper(OAUTH_DB, { schema: oauthSchema });
+  // THE LEDGER THE DOOR WRITES (POS-271), opened the way backfill-home-shelf
+  // opens it (§ openLedger). --apply writes where the server does: the store's
+  // office_media on a switched office (OFFICE_PAPERWORK_STORE=1), else the file.
+  // --dry-run reads the same real state and keeps nothing: a throwaway copy of
+  // the file, or, switched, the store inside one transaction rolled back at the
+  // end. It used to copy the file even when switched, reading the store's
+  // mirror; the mirror is deleted with the files, so that copy would be empty.
+  const ledger = await openLedger({ path: OAUTH_DB, dry: DRY });
+  const odb = ledger.odb;
+  console.log(`  media ledger: ${ledger.where}`);
   const put = DRY ? async () => {} : undefined;
   const keep = DRY ? async ({ handle }) => ({ household: Object.entries(registry?.households ?? {}).find(([, r]) => (r.residents ?? []).includes(handle))?.[0] ?? "(no record here)" }) : setHomePicture;
 
@@ -182,6 +184,6 @@ if (isMain) {
     console.log(`  drain: ${drained.refused ? `REFUSED — ${drained.refused}` : drained.commit ? `committed ${drained.commit}` : "nothing changed"}`);
   }
   console.log(`\n${DRY ? "[dry-run] would keep" : "kept"} ${kept.length}; already chosen ${skipped.chosen.length}; no picture ${skipped.none.length}; no household ${skipped.noHousehold.length}; refused ${skipped.refused.length}`);
-  if (tmp) rmSync(tmp, { recursive: true, force: true });
+  await ledger.done();
   process.exit(skipped.refused.length ? 1 : 0);
 }

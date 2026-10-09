@@ -37,7 +37,7 @@ import { harborGated, HARBOR_BOUNCE } from "./harbor-gate.mjs";
 import { VISITOR_RULES, useRulesRecorder } from "./visitor-rules.mjs"; // POS-300
 import { standingBounce, standingOf, isSuspended, bounceSentence, STANDING_BOUNCE_CODE, STANDING_UNREADABLE } from "./standing.mjs";
 import { rolesSchema, roleGate, roleGatesOn, ROLE_SUBSCRIBER } from "./roles.mjs";
-import { openPaper, paperworkStoreOn } from "./paperwork.mjs"; // POS-271: sign-in, roles, the media ledger and the town log, one door
+import { openPaper, paperworkStoreOn, storeSignInCount } from "./paperwork.mjs"; // POS-271: sign-in, roles, the media ledger and the town log, one door
 import { arrivalPage } from "./arrival.mjs";
 import { townSummary, residentList, residentPage, resident, mailList, letter, search, bulletinList, bulletinEntry, townLedger, townDocs, stampsRoster, stampsFor, stampsDetail, questBoardFor, metricsMail, letterList, regionList, regionOne, home, identityOf, repoLog } from "./queries.mjs";
 import { householdsFor, withHouseholdBlock } from "./households.mjs";
@@ -148,8 +148,29 @@ if (READ_ONLY_ROLE && !paperworkStoreOn() && !existsSync(OAUTH_DB_PATH)) {
     "Start the writer first (it creates and owns the schema), or point --oauth-db at the writer's file.",
     "Booting anyway would leave this worker answering 401 to every signed-in reader while nginx kept sending it traffic.");
 }
+// ⚑ THE SWITCH OFF IS NO ROLLBACK ONCE THE FILES ARE GONE (POS-271, Wright
+// 2026-10-09). Since the paperwork files were deleted, an unswitched office
+// would create an empty oauth.db and sign the whole town out without a word.
+// So the writer refuses to boot when its switch is off, its oauth.db is missing,
+// and the store holds sign-ins: that is the deleted box, never a new office
+// (whose store holds none) or a suite's fresh file. A store it cannot ask is a
+// refusal too, since it then cannot tell which of the two it is.
+const ROLES_DB_PATH = resolve(ROOT, arg("--roles-db", "roles.db"));
+if (!READ_ONLY_ROLE && !paperworkStoreOn() && !existsSync(OAUTH_DB_PATH)) {
+  const missing = [OAUTH_DB_PATH, ...(existsSync(ROLES_DB_PATH) ? [] : [ROLES_DB_PATH])].join(" and ");
+  let held = null;
+  try { held = await storeSignInCount(); }
+  catch (e) {
+    refuseBoot(`OFFICE_PAPERWORK_STORE is off and ${missing} is missing, and the store could not be asked whether it holds the town's sign-ins (${String(e?.message ?? e).slice(0, 120)}).`,
+      "Set OFFICE_PAPERWORK_STORE=1: since POS-271 the paperwork lives in the store, and the files are deleted.");
+  }
+  if (held > 0)
+    refuseBoot(`OFFICE_PAPERWORK_STORE is off, ${missing} is missing, and the store holds ${held} sign-ins: this office's paperwork lives in the store.`,
+      "Set OFFICE_PAPERWORK_STORE=1. Booting on an empty file would sign the whole town out; the switch off is no rollback since the files were deleted (POS-271).");
+}
 // A PAPER, not a sqlite handle (paperwork.mjs): oauth.db by default, the
-// store's 031/032 tables with OFFICE_PAPERWORK_STORE=1. A switched office that
+// store's 031/032 tables with OFFICE_PAPERWORK_STORE=1, and then the file is
+// never opened (the mirror and the box's files are deleted, POS-271). A switched office that
 // cannot reach its store cannot sign anyone in, so it refuses to boot rather
 // than answer 401 to the whole town.
 let odb;
@@ -157,7 +178,7 @@ try {
   odb = await openPaper(OAUTH_DB_PATH, { readOnly: READ_ONLY_ROLE, schema: oauthSchema });
 } catch (e) {
   refuseBoot(`the office's paperwork could not be opened: ${String(e?.message ?? e).slice(0, 200)}`,
-    paperworkStoreOn() ? "OFFICE_PAPERWORK_STORE=1 reads sign-in from the store; set WORLD2_PG=1 and WORLD2_PG_URL, or turn the switch off (the rollback)." : `the key store is ${OAUTH_DB_PATH}`);
+    paperworkStoreOn() ? "OFFICE_PAPERWORK_STORE=1 reads sign-in from the store; set WORLD2_PG=1 and WORLD2_PG_URL. Turning the switch off is no rollback since POS-271: the files are deleted, and an unswitched office starts on an empty oauth.db, which signs everyone out." : `the key store is ${OAUTH_DB_PATH}`);
 }
 // The berth's acknowledgement of the town's rules for visitors is written on
 // its own row in this paperwork (POS-300, visitor-rules.mjs).
@@ -242,7 +263,7 @@ if (!world2ServeEnabled() && process.env.WORLD_GRAPH_NONE !== "1" && !rowsFixtur
 // read must not be able to take the town down.
 let rdb = null;
 try {
-  rdb = await openPaper(resolve(ROOT, arg("--roles-db", "roles.db")), { readOnly: READ_ONLY_ROLE, schema: rolesSchema });
+  rdb = await openPaper(ROLES_DB_PATH, { readOnly: READ_ONLY_ROLE, schema: rolesSchema });
 } catch (e) {
   rdb = null;
   console.warn(`WARN: roles.db could not be opened (${String(e?.message ?? e).slice(0, 120)}) — ` +

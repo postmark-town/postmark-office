@@ -15,29 +15,17 @@
 //              Writes go to the store FIRST and are awaited; a store that
 //              refuses is a refusal, never a quiet fall back to the file.
 //
-// ── COPY, THEN SWITCH, AND THE ROLLBACK IS THE FLAG ─────────────────────────
+// ── COPY, THEN SWITCH; THE FILES ARE GONE ───────────────────────────────────
 //
-// world2/tools/paperwork-import.mjs copies the files into the store and commits
-// only when every row is equal. The flag then switches reads. The rollback is
-// the flag off, so the file has to still be RIGHT after a switched office has
-// minted a key: a token issued on the store must answer after the rollback
-// (the lane's gate). So while switched, every write that commits on the store
-// is then written to the file too — the same statement, the same arguments, the
-// same seq for a town-log row — after the store, best-effort, and never with a
-// vote. That is the pen's reverse mirror (world2-pen.mjs § D3) applied to
-// paperwork: "a rollback convenience, not a record". A mirror write that fails
-// is counted and logged loudly (`paperStatus()`), and the file is then behind
-// the store by that row; the import's `--check` names exactly which.
-//
-// ⚑ THE MIRROR IS TEMPORARY (Wright, 2026-09-30). It is the rollback's bridge
-// and nothing else, and it is DELETED — `#mirror`, `withIdColumn`, the `file`
-// on a switched paper and `paperStatus` — in the same change that deletes
-// oauth.db and roles.db after a clean week on the store. Until then a failed
-// mirror write is never dropped silently: it is counted (`paperStatus()`) and
-// logged on one greppable line, `[paperwork] MIRROR FAILED`, for the
-// roll-call, because a file that drifted makes the rollback sign people out.
-// With no file (after the deletion, or on a read worker) a paper simply has
-// nothing to mirror to.
+// world2/tools/paperwork-import.mjs copied the files into the store and
+// committed only when every row was equal; the flag then switched reads. Until
+// the switch's clean week closed, every write that committed on the store was
+// also written to the file (the rollback's mirror, Wright 2026-09-30), so the
+// flag off was a lossless rollback. That mirror, and oauth.db and roles.db on
+// the box, are DELETED in the same change (POS-271): a switched paper holds no
+// file and writes only the store. There is no rollback to the files after it.
+// The file road below is the unswitched office's (a suite, a dev office), and
+// a switched office never opens either file.
 //
 // ── ONE SPELLING OF THE SQL ─────────────────────────────────────────────────
 //
@@ -59,7 +47,6 @@
 // numeric, and its one caller (media.mjs § mediaQuota) says Number() itself.
 
 import { DatabaseSync } from "node:sqlite";
-import { existsSync } from "node:fs";
 
 // THIS MODULE IMPORTS NOTHING BUT NODE BUILTINS (and pg, lazily), ON PURPOSE:
 // roles.mjs reaches the store through it, and the registry's boundary is that
@@ -86,31 +73,10 @@ export function toStoreSql(sql) {
   return sql.replace(TABLE_RE, (t) => STORE_TABLES[t]).replace(/\?/g, () => `$${++n}`);
 }
 
-/**
- * `INSERT INTO t (a, b) VALUES (?, ?)` -> `INSERT INTO t (id, a, b) VALUES (?, ?, ?)`:
- * the mirror of an append, carrying the id the store assigned so the file's row
- * is the same row (a town-log seq the drain cursor names, an audit id).
- */
-export function withIdColumn(sql, idCol) {
-  const out = sql.replace(/^(\s*INSERT INTO \w+\s*\()/i, `$1${idCol}, `).replace(/\bVALUES\s*\(/i, "VALUES (?, ");
-  if (out === sql || !/VALUES \(\?, /.test(out)) throw new Error(`paperwork: cannot carry ${idCol} into "${sql.slice(0, 60)}"`);
-  return out;
-}
-
 const INT8 = 20;
 const storeTypes = (pg) => ({
   getTypeParser: (oid, format) => (oid === INT8 ? (v) => (v == null ? null : Number(v)) : pg.types.getTypeParser(oid, format)),
 });
-
-const status = { mirrored: 0, mirrorFailed: 0, lastMirrorError: null };
-/** What the mirror has done since boot — for /ops and the suite. */
-export const paperStatus = () => ({ ...status });
-
-const loud = (what, e) => {
-  status.mirrorFailed += 1;
-  status.lastMirrorError = `${what}: ${String(e?.message ?? e).slice(0, 200)}`;
-  console.error(`[paperwork] MIRROR FAILED (the file is now behind the store by this write; paperwork-import --check names it): ${status.lastMirrorError}`);
-};
 
 // ── the file ────────────────────────────────────────────────────────────────
 
@@ -136,19 +102,6 @@ class Paper {
 
   #refuseWrite() { if (this.readOnly) throw new Error("paperwork: this handle is read-only (a read worker holds no pen)"); }
 
-  // The writes the mirror replays, in order, after the store committed them.
-  // TEMPORARY: deleted with the files (see ⚑ THE MIRROR IS TEMPORARY, above).
-  #mirror(steps) {
-    if (!this.file || !steps.length) return;
-    try {
-      this.file.exec("BEGIN");
-      try {
-        for (const [sql, args] of steps) this.file.prepare(sql).run(...args);
-        this.file.exec("COMMIT");
-      } catch (e) { try { this.file.exec("ROLLBACK"); } catch { /* already gone */ } throw e; }
-      status.mirrored += steps.length;
-    } catch (e) { loud(steps[0][0].trim().split(/\s+/).slice(0, 4).join(" "), e); }
-  }
 
   async get(sql, ...args) {
     if (!this.onStore) return this.file.prepare(sql).get(...args);
@@ -164,7 +117,6 @@ class Paper {
     this.#refuseWrite();
     if (!this.onStore) return fileVerbs(this.file).run(sql, ...args);
     const r = await this.pool.query(toStoreSql(sql), args);
-    this.#mirror([[sql, args]]);
     return { changes: r.rowCount ?? 0 };
   }
 
@@ -172,16 +124,13 @@ class Paper {
   async append(sql, args, idCol) {
     this.#refuseWrite();
     if (!this.onStore) return fileVerbs(this.file).append(sql, args);
-    const id = Number((await this.pool.query(`${toStoreSql(sql)} RETURNING ${idCol}`, args)).rows[0][idCol]);
-    this.#mirror([[withIdColumn(sql, idCol), [id, ...args]]]);
-    return id;
+    return Number((await this.pool.query(`${toStoreSql(sql)} RETURNING ${idCol}`, args)).rows[0][idCol]);
   }
 
   /**
    * `fn(t)` in one transaction, `t` carrying the same four verbs. On the file
    * it is BEGIN/COMMIT on the handle, as roles.mjs always did. On the store it
-   * is one client; the mirror replays the transaction's writes as one sqlite
-   * transaction only after the store's COMMIT.
+   * is one client.
    */
   async tx(fn) {
     this.#refuseWrite();
@@ -191,16 +140,11 @@ class Paper {
       catch (e) { try { this.file.exec("ROLLBACK"); } catch { /* already gone */ } throw e; }
     }
     const client = await this.pool.connect();
-    const steps = [];
     const t = {
       get: async (sql, ...args) => (await client.query(toStoreSql(sql), args)).rows[0],
       all: async (sql, ...args) => (await client.query(toStoreSql(sql), args)).rows,
-      run: async (sql, ...args) => { const r = await client.query(toStoreSql(sql), args); steps.push([sql, args]); return { changes: r.rowCount ?? 0 }; },
-      append: async (sql, args, idCol) => {
-        const id = Number((await client.query(`${toStoreSql(sql)} RETURNING ${idCol}`, args)).rows[0][idCol]);
-        steps.push([withIdColumn(sql, idCol), [id, ...args]]);
-        return id;
-      },
+      run: async (sql, ...args) => ({ changes: (await client.query(toStoreSql(sql), args)).rowCount ?? 0 }),
+      append: async (sql, args, idCol) => Number((await client.query(`${toStoreSql(sql)} RETURNING ${idCol}`, args)).rows[0][idCol]),
     };
     // A ROLLBACK that fails may leave the connection inside the transaction; it
     // is discarded, never handed to the next caller (POS-370, the pen's rule).
@@ -218,7 +162,6 @@ class Paper {
       await client.query("BEGIN");
       const out = await fn(t);
       await client.query("COMMIT");
-      this.#mirror(steps);
       return out;
     } catch (e) {
       try { await client.query("ROLLBACK"); } catch { discard = true; }
@@ -249,10 +192,8 @@ export function asPaper(h) {
  * The office's paper for one file. `schema(db)` builds the file's own tables
  * (the writer owns them) and runs only when the file is opened for writing.
  *
- * Switched, the paper reads the store and keeps the file as its mirror, if the
- * file is there. A read worker's paper holds no file at all when switched: it
- * has nothing to mirror, and a worker that could write the file would be a
- * second writer.
+ * Switched, the paper is the store's and `path` is never opened: the files
+ * were deleted with the mirror (POS-271), so nothing here may create one.
  */
 export async function openPaper(path, { readOnly = false, schema = null, env = process.env, pool = null } = {}) {
   if (!paperworkStoreOn(env)) {
@@ -260,11 +201,7 @@ export async function openPaper(path, { readOnly = false, schema = null, env = p
     if (!readOnly && schema) schema(db);
     return new Paper({ file: db, readOnly });
   }
-  let file = null;
-  if (!readOnly) {
-    if (existsSync(path)) { file = new DatabaseSync(path); if (schema) schema(file); }
-  }
-  return new Paper({ file, pool: pool ?? await storePool(env), readOnly });
+  return new Paper({ pool: pool ?? await storePool(env), readOnly });
 }
 
 const pools = new Map(); // url -> pool: every paper in a process shares one
@@ -281,6 +218,22 @@ async function storePool(env) {
     pools.set(url, pool);
   }
   return pools.get(url);
+}
+
+/**
+ * How many sign-ins the store holds (its oauth_tokens rows), or null when no
+ * store is configured. One connection, opened and closed here: it is asked once,
+ * at an UNSWITCHED office's boot, by the guard that refuses to start on an empty
+ * file while the town's sign-ins live in the store (server.mjs, POS-271).
+ */
+export async function storeSignInCount(env = process.env) {
+  if (!storeConfigured(env)) return null;
+  const { default: pg } = await import("pg");
+  const c = new pg.Client({ connectionString: env.WORLD2_PG_URL, connectionTimeoutMillis: 10_000 });
+  c.on("error", () => {});
+  await c.connect();
+  try { return Number((await c.query("SELECT count(*) AS n FROM oauth_tokens")).rows[0].n); }
+  finally { await c.end().catch(() => {}); }
 }
 
 /** Close every store pool this process opened (a tool's exit, a suite's end). */
