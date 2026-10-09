@@ -50,6 +50,7 @@ export function readShape(env = process.env) {
 // apex's own names, FIELD_ALIASES), not `to`; and exit takes an optional
 // `mark`, so it is not "no fields".
 export const ONE_LINERS = Object.freeze({
+  // the pace is the resident class's own dial, never this sentence's (#455 review, finding 5): see `oneLine`
   walk: { says: "Walk to a mark or a point, at about 5 km an hour.", fields: ["mark_id or to_x + to_y", "mode?", "enter_on_arrival?"] },
   say: { says: "Speak aloud where you stand; anyone within earshot hears it.", fields: ["text"] },
   enter: { says: "Go inside a place whose door you're standing at.", fields: ["mark"] },
@@ -74,10 +75,22 @@ const firstSentence = (s) => {
   return (m ? m[1] : line.trim()).slice(0, 160);
 };
 
-/** One card, one line. An act with no approved line says its blurb's first sentence and its own fields. */
-export function oneLine(card) {
+/** km an hour from the resident class's pace dial (km a crossing; a crossing is 12 hours), or null. */
+export const paceKmH = (dials) => {
+  const perCrossing = Number(dials?.pace_km_per_crossing);
+  return Number.isFinite(perCrossing) && perCrossing > 0 ? perCrossing / 12 : null;
+};
+
+/**
+ * One card, one line. An act with no approved line says its blurb's first
+ * sentence and its own fields. Walk's pace is read from the dial the read
+ * carries (`the-town/resident`'s `pace_km_per_crossing`), so a ruled change
+ * of pace changes the line; with no dial in hand the line names no speed.
+ */
+export function oneLine(card, { pace = null } = {}) {
   const fixed = ONE_LINERS[card.action];
-  const says = fixed?.says ?? firstSentence(card.blurb);
+  let says = fixed?.says ?? firstSentence(card.blurb);
+  if (card.action === "walk") says = pace ? says.replace(/about [\d.]+ km an hour/, `about ${Math.round(pace * 10) / 10} km an hour`) : "Walk to a mark or a point.";
   const fields = fixed?.fields
     ?? Object.entries(card.fields ?? {}).map(([name, spec]) => (spec?.required ? name : `${name}?`));
   return { action: card.action, line: `${says} ${fields.length ? `Fields: ${fields.join(", ")}.` : "No fields."}` };
@@ -143,7 +156,8 @@ export function shapeRead(answer, { shape = "v0", cards = null, within = [], nam
   for (const [k, v] of Object.entries(answer)) {
     if (k === "records") { out.records = records; out.ground = ground; continue; }
     if (k === "actions" && cards == null) {
-      out.actions = shape === "v2" ? v.map((e) => e.action) : v.map(oneLine);
+      const pace = paceKmH(answer.records?.["the-town/resident"]?.dials);
+      out.actions = shape === "v2" ? v.map((e) => e.action) : v.map((e) => oneLine(e, { pace }));
       out.cards = shape === "v2" ? "names-only" : "one-line";
       out.cards_note = CARDS_NOTE[shape];
       continue;

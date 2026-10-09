@@ -35,7 +35,8 @@ for (const [k, v] of Object.entries(ENV)) setEnv(k, v);
 const { worldApex, APEX_TOOL, APEX_DESCRIPTION, fieldsFor } = await import("../src/world-apex.mjs");
 const { __setPoolForTest } = await import("../src/world2-acts.mjs");
 const { toolList } = await import("../src/mcp.mjs");
-const { ONE_LINERS, namedFields, shapeRead, readShape, simplifyRing, describeAt } = await import("../src/world-read-shape.mjs");
+const { ONE_LINERS, namedFields, shapeRead, readShape, simplifyRing, describeAt, oneLine, paceKmH } = await import("../src/world-read-shape.mjs");
+const { TOOLS } = await import("../src/mcp.mjs");
 
 const WHO = "kogane";
 const KEY = { handles: new Set([WHO]) };
@@ -176,4 +177,36 @@ test("a description that moved fails soft: the v0 words come back, nothing throw
   const moved = "a description someone rewrote";
   assert.equal(describeAt(moved, "v1"), moved);
   assert.notEqual(describeAt(APEX_DESCRIPTION, "v1"), APEX_DESCRIPTION, "the real description still swaps; this test is the loud signal when it stops");
+});
+
+// ── the numbers in the lines, held against their sources (#455 review, finding 5) ──
+
+test("walk's pace is the resident class's dial: the read's own dial gives the line, and a changed dial changes it", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
+  const full = await bareAt(undefined);
+  const dial = full.records["the-town/resident"]?.dials?.pace_km_per_crossing;
+  assert.ok(Number(dial) > 0, "the read carries the pace dial");
+  const lean = await bareAt("v1");
+  assert.ok(lean.actions.find((a) => a.action === "walk").line.includes(`about ${dial / 12} km an hour`), "the line says the dial's pace");
+  const walk = full.actions.find((a) => a.action === "walk");
+  assert.match(oneLine(walk, { pace: paceKmH({ pace_km_per_crossing: 120 }) }).line, /about 10 km an hour/);
+  assert.doesNotMatch(oneLine(walk).line, /km an hour/, "with no dial in hand the line names no speed");
+});
+
+test("leave-mark's ≤150 and 1✦ are the door's own: the body cap and the commons stake as the act's schema states them", () => {
+  const lm = TOOLS.find((t) => t.name === "world_leave_mark");
+  assert.match(lm.inputSchema.properties.body.description, /maximum 150 characters/, "the body cap the line repeats");
+  assert.match(lm.description, /pass stamps: 1 to stake it/, "the commons stake the line repeats");
+  assert.ok(ONE_LINERS["leave-mark"].fields.includes("body (≤150)"));
+  assert.match(ONE_LINERS["leave-mark"].says, /elsewhere you stake 1✦/);
+});
+
+test("the lean read's stated size is near what it measures at the rig's standpoint", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
+  for (const shape of ["v1", "v2"]) {
+    const chars = JSON.stringify(await bareAt(shape)).length;
+    setEnv("WORLD_READ_SHAPE", shape);
+    try {
+      const stated = Number(/the lean read, roughly (\d+)k characters/.exec(APEX_TOOL.description)?.[1]) * 1000;
+      assert.ok(chars > stated * 0.5 && chars < stated * 1.5, `${shape}: measured ${chars}, stated roughly ${stated}`);
+    } finally { setEnv("WORLD_READ_SHAPE", undefined); }
+  }
 });
