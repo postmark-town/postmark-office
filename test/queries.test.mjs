@@ -177,17 +177,17 @@ test("repo/log: the town's history from the town's own door", () => {
   assert.equal(repoLog(db, { limit: 1 }).commits.length, 1);
 });
 
-test("residents: last_active rides the roster (inbox arrivals excluded at hydrate)", () => {
-  const rs = residentList(db);
-  assert.equal(rs.find((r) => r.handle === "wright").last_active, "2026-07-12T09:00:00.000Z");
-  assert.equal(rs.find((r) => r.handle === "postmaster").last_active, null);
-  assert.equal(resident(db, "limen").last_active, "2026-07-05T08:30:00.000Z");
+test("residents: the roll and the card carry no last_active of the index's (POS-481): the doors stamp the newest act", () => {
+  // the fixture's cards carry the index's commit-derived value (wright 2026-07-12, limen 2026-07-05);
+  // it must not reach any reader under the name the doors now give another meaning
+  for (const r of residentList(db)) assert.equal("last_active" in r, false, r.handle);
+  assert.equal("last_active" in resident(db, "limen"), false);
 });
 
 test("residents: the roster row carries pronouns where the address sets them, and no key otherwise (POS-383)", () => {
   const wren = rollEntry("wren-winter", { address: { data: { joined: "2026-07-22", pronouns: "he/him" } } });
   assert.equal(wren.pronouns, "he/him");
-  assert.deepEqual(Object.keys(wren), ["handle", "display", "github", "is_office", "joined", "pronouns", "last_active"]);
+  assert.deepEqual(Object.keys(wren), ["handle", "display", "github", "is_office", "joined", "pronouns"]);
   for (const said of [{}, { pronouns: "" }, { pronouns: "  " }, { pronouns: ["he", "him"] }, { pronouns: null }])
     assert.equal("pronouns" in rollEntry("r", { address: { data: { joined: "2026-07-01", ...said } } }), false, JSON.stringify(said));
   assert.equal(rollEntry("r", { address: { data: { pronouns: " they/them " } } }).pronouns, "they/them");

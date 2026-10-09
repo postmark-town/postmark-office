@@ -140,6 +140,15 @@ for (const office of ["plain", "switched"]) {
     assert.deepEqual(found.residents_last_active.limen, EXPECT.limen);
     assert.deepEqual(Object.keys(found.residents_last_active).sort(), [...found.residents].sort());
   });
+
+  test(`${office} office: household { read: "address" } carries the same two fields as /residents/{h}`, async (t) => {
+    if (skip) return t.skip(skip);
+    for (const h of Object.keys(EXPECT)) {
+      const { address } = await get(office, `/household?read=address&handle=${h}`);
+      assert.deepEqual(pick(address), pick(await get(office, `/residents/${h}`)), h);
+      assert.deepEqual(pick(address), EXPECT[h], h);
+    }
+  });
 }
 
 test("a letter sent at crossing N reads crossing N (the acceptance)", async (t) => {

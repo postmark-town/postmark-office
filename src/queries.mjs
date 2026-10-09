@@ -316,9 +316,11 @@ function readRoll(db) {
 
 /**
  * One resident's line on the roll, from their stored card. Shared with the store's twin.
- * `last_active` here is the index's commit-derived value; every door that serves
- * a roll replaces it with the newest act of their own and adds
- * `last_active_crossing` (last-active.mjs § withLastActive, POS-481).
+ * It carries NO `last_active`: the stored card's is the index's commit-derived
+ * value (town-index.mjs § readHistory), and a door that serves the row stamps
+ * the newest act of their own with `last_active_crossing` beside it
+ * (last-active.mjs § withLastActive, POS-481). An unstamped door says nothing
+ * rather than the old meaning under the same name (POS-481 review, O1).
  *
  * `pronouns` rides the row when the resident's ADDRESS sets them, and the key
  * is absent otherwise (POS-383, town #2992): wren-winter set `pronouns: he/him`
@@ -329,7 +331,7 @@ function readRoll(db) {
 export const rollEntry = (handle, d) => {
   const pronouns = typeof d.address?.data?.pronouns === "string" ? d.address.data.pronouns.trim() : "";
   return { handle, display: d.display ?? d.name ?? handle, github: d.github ?? d.address?.data?.github ?? null, is_office: isOffice(d), joined: d.address?.data?.joined ?? null,
-    ...(pronouns ? { pronouns } : {}), last_active: d.last_active ?? null };
+    ...(pronouns ? { pronouns } : {}) };
 };
 
 /** Is a card an office's? queries.mjs's one reading of the flag, for the store's twin. */
@@ -439,6 +441,10 @@ export function resident(db, handle, fresh = null) {
  */
 export function residentOf(d, pages, handle, ctx) {
   const out = { ...d, is_office: isOffice(d) };
+  // The stored card's `last_active` is the index's commit-derived value; the
+  // door stamps the newest act of their own (last-active.mjs, POS-481), and an
+  // unstamped door says nothing rather than the old meaning (review O1).
+  delete out.last_active;
   // ── THE MAIL BOUND (2026-08-25) ─────────────────────────────────────────
   // The address card is an identity read, and the hydrated blob it spreads
   // carries `inbox`/`outbox` as EVERY letter this resident ever received or

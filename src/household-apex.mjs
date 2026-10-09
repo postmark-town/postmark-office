@@ -23,6 +23,7 @@
 
 import { existsSync } from "node:fs";
 import { withHouseholdBlock } from "./households.mjs";
+import { withLastActive } from "./last-active.mjs"; // the address card's last_active (POS-481)
 import { join } from "node:path";
 
 import { DECLARE_SCHEMA, BEGIN_PROPERTIES, declareViaOffice, SETTLING_ASHORE } from "./declare.mjs";
@@ -1213,6 +1214,9 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, dbPath, pen, 
       let r = null;
       if (ix) r = await ix.resident(handle, await freshFor(handle, { odb, clone, asOf }));
       else { try { r = residentQ(db, handle); } catch { r = null; } }
+      // last_active: the newest act of their own, as /residents/{h} and
+      // town { read: "resident" } carry it (last-active.mjs, POS-481)
+      if (r) await withLastActive("card", r, ix ? { find: (handles) => ix.lastActiveFor(handles) } : {});
       // household leads (2026-08-07), from the store's registry (POS-342)
       if (r) await withHouseholdBlock(r, handle);
       return r ? shadowReadAnswer("address", { read: "address", of: handle, address: r }, { read: "address", of: handle }, r, ctx) : bounce(404, `no settled address for "${handle}"`, "a harbor resident has no white-pages address yet — that comes with settling");
