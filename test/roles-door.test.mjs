@@ -187,9 +187,9 @@ test('AMBIGUITY #4, RULED: "a household that exists only as an env string cannot
   const seed = openRolesDb(rolesPath);
   try { await grantRole(seed, { subject: GH_ID, actor: "seed", login: HOUSEHOLD }); } finally { seed.close(); }
 
-  const child = spawn(process.execPath, [
+  const { child, port } = await bootOnFreePort((port) => spawn(process.execPath, [
     join(ROOT, "src", "server.mjs"),
-    "--port", "43875", "--db", dbPath, "--roles-db", rolesPath,
+    "--port", String(port), "--db", dbPath, "--roles-db", rolesPath,
     // NO #<gh_id> — a static key with no verified identity behind it.
     "--oauth-db", seedStaticKeys(join(tmp, "oauth.db"), `${KEY}=${HOUSEHOLD}:wright`),
   ], {
@@ -200,14 +200,9 @@ test('AMBIGUITY #4, RULED: "a household that exists only as an env string cannot
       WORLD_CLONE: join(tmp, "no-world-clone"),
     },
     stdio: ["ignore", "pipe", "pipe"],
-  });
+  }));
   try {
-    await new Promise((ok, no) => {
-      const t = setTimeout(() => no(new Error("server never listened")), 15_000);
-      child.stdout.on("data", (d) => { if (String(d).includes("listening")) { clearTimeout(t); ok(); } });
-      child.on("exit", (c) => no(new Error(`server exited early (${c})`)));
-    });
-    const r = await fetch("http://127.0.0.1:43875/metrics/mail", { headers: { authorization: `Bearer ${KEY}` } });
+    const r = await fetch(`http://127.0.0.1:${port}/metrics/mail`, { headers: { authorization: `Bearer ${KEY}` } });
     assert.equal(r.status, 401,
       "an unpinned static key holds no role even though a row exists for the household it names");
     const b = await r.json();
@@ -228,9 +223,9 @@ test("FLAG ON but registry missing — the door says so, and does not pretend it
   const IX_ENV = await storeFor(dbPath);
   // Point --roles-db at a path inside a directory that does not exist, so the
   // open throws and the office boots with rdb = null.
-  const child = spawn(process.execPath, [
+  const { child, port } = await bootOnFreePort((port) => spawn(process.execPath, [
     join(ROOT, "src", "server.mjs"),
-    "--port", "43873", "--db", dbPath,
+    "--port", String(port), "--db", dbPath,
     "--roles-db", join(tmp, "nope", "roles.db"),
     // Pinned, so the caller HAS a subject — otherwise the no-subject 401
     // would fire first and this test would never reach the 503 it exists for.
@@ -243,15 +238,10 @@ test("FLAG ON but registry missing — the door says so, and does not pretend it
       WORLD_CLONE: join(tmp, "no-world-clone"),
     },
     stdio: ["ignore", "pipe", "pipe"],
-  });
+  }));
   try {
-    await new Promise((ok, no) => {
-      const t = setTimeout(() => no(new Error("server never listened")), 15_000);
-      child.stdout.on("data", (d) => { if (String(d).includes("listening")) { clearTimeout(t); ok(); } });
-      child.on("exit", (c) => no(new Error(`server exited early (${c})`)));
-    });
     // THE OFFICE STILL BOOTS. A registry it cannot read must not take the town down.
-    const r = await fetch("http://127.0.0.1:43873/metrics/mail", { headers: { authorization: `Bearer ${KEY}` } });
+    const r = await fetch(`http://127.0.0.1:${port}/metrics/mail`, { headers: { authorization: `Bearer ${KEY}` } });
     assert.equal(r.status, 503, "fail closed — an unreadable registry must never become a free door");
     const b = await r.json();
     assert.match(b.defect, /could not be read/);
