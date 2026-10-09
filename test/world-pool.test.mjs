@@ -17,11 +17,12 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { lockArgv } from "../src/town-lock.mjs";
+import { removeTempDirSync } from "./helpers/temp-dir.mjs";
 
 const repo = mkdtempSync(join(tmpdir(), "postmark-world-pool-"));
 const pool = mkdtempSync(join(tmpdir(), "postmark-world-pool-wt-"));
-after(() => rmSync(repo, { recursive: true, force: true }));
-after(() => rmSync(pool, { recursive: true, force: true }));
+after(() => removeTempDirSync(repo));
+after(() => removeTempDirSync(pool));
 
 const git = (...args) => execFileSync("git", ["-C", repo, ...args], {
   encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],

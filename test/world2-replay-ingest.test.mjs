@@ -26,6 +26,7 @@ import {
   standingOnly, actObject, isWithdrawAct, eraReceipt, dataFindings,
 } from "../world2/tools/replay-ingest.mjs";
 import { uuid5, deriveActs, LOG_FILE, compareMarks } from "../world2/tools/seed-import.mjs";
+import { removeTempDirSync } from "./helpers/temp-dir.mjs";
 
 // ── the fixture world ────────────────────────────────────────────────────────
 //
@@ -126,7 +127,7 @@ function world(steps) {
     g(env, "commit", "-qm", s.subject);
     if (s.tag) { g(env, "tag", "-a", s.tag, "-m", `annotated ${s.tag}`); tags[s.tag] = g(env, "rev-parse", "HEAD"); }
   }
-  return { dir, tags, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  return { dir, tags, cleanup: () => removeTempDirSync(dir) };
 }
 
 // The two shapes the town's log actually carries, and they are NOT the same.

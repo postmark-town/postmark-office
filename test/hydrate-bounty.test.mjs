@@ -16,13 +16,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 import { WORLD_CLONE } from "../src/world-store.mjs";
 import { publishWorld } from "./helpers/world-rows.mjs";
+import { removeTempDirSync } from "./helpers/temp-dir.mjs";
 
 const OFFICE = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const HAVE_WORLD = existsSync(join(WORLD_CLONE, "tools", "marks-fold.mjs"));
@@ -80,7 +81,7 @@ test("A BOUNTY'S ask, reward AND status reach the rows, as the mark file says th
     assert.equal(open.status, null, "a notice that says no status must not be given one here: the board's default is the reader's");
     assert.equal(open.ask, "Paint the quay.");
     assert.equal(open.reward, 3);
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { removeTempDirSync(dir); }
 });
 
 test("THE REAL CASE: wright/furnish-ferrys-waiting-room reads back DONE on the bounty board, with its ask and its reward", { timeout: 180_000 }, async (t) => {
@@ -101,5 +102,5 @@ test("THE REAL CASE: wright/furnish-ferrys-waiting-room reads back DONE on the b
     assert.equal(notice.status, "done", "the closed notice reads OPEN — the bug office#295 names");
     assert.equal(notice.reward, 1);
     assert.match(String(notice.ask), /^Closed, with thanks: the room is furnished\./);
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { removeTempDirSync(dir); }
 });

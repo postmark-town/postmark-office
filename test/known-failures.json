@@ -227,15 +227,6 @@
       "owner": "POS-487",
       "date": "2026-10-07",
       "until": "2026-10-18"
-    },
-    {
-      "file": "test/world2-replay-ingest.test.mjs",
-      "name": "§9: one commit naming TWO windows gives two eras, and the first closes where it opens",
-      "reason": "ENOTEMPTY removing its scratch .git, once in two CI runs (37692083332; green in 37693810179): a teardown race",
-      "owner": "POS-419",
-      "date": "2026-10-07",
-      "until": "2026-10-18",
-      "flaky": true
     }
   ]
 }
