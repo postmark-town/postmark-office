@@ -1175,6 +1175,17 @@ test("F-claim · one door amend of a pre-law parcel goes through the write-down 
   assert.match(JSON.stringify(restamped.state.errors), /parcel claim capped — this credential household already holds 3/);
 });
 
+test("F-claim-undated · a parcel with no date keeps the bytes it has always had: no claimed_at from its submitted_at (Wright's review of #441)", async () => {
+  const { recordFromRow, renderRecord } = await import("../world2/tools/mark-render.mjs");
+  const geometry = { at: { x: 5000, y: 0 }, extent: { w: 25, h: 25 } };
+  const undated = { kind: "parcel", owner: "sa", body: "Sa's plot.", geometry, data: { tier: "market" }, first_claimed: null, first_claim_submitted_at: new Date("2026-07-21T09:00:00.000Z") };
+  assert.equal(recordFromRow(undated).claimed_at, undefined, "never amended, never dated: nothing to differ from");
+  assert.doesNotMatch(renderRecord(undated), /claimed_at/, "the first write-down after the deploy leaves its mark.md as it was");
+  // CONTROL: the same parcel amended today (the door restamps `date`) carries its first claim.
+  const amended = { ...undated, data: { tier: "market", date: "2026-10-08T12:00:00.000Z" } };
+  assert.equal(recordFromRow(amended).claimed_at, "2026-07-21T09:00:00.000Z");
+});
+
 test("F-claim-ingest · marks-ingest never reads claimed_at back as a resident's change: it is the store's fact printed into the file", async () => {
   const { recordDiff } = await import("../world2/tools/marks-ingest.mjs");
   assert.deepEqual(recordDiff({ kind: "parcel", body: "a", claimed_at: "2026-07-21" }, { kind: "parcel", body: "a" }), []);
