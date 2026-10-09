@@ -22,8 +22,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tempDir } from "./helpers/temp-dir.mjs";
+
 import {
-  classify, refusalOf, pathsIn, errorsClaimed,
+  classify, refusalOf, pathsIn, errorsClaimed, inputsProbe,
   INPUT_BAD, CANON_BAD, UNCLASSIFIED, SENTINEL,
 } from "../deploy/settlement-classify.mjs";
 
@@ -242,4 +247,107 @@ test("with errors[], the FAULT is the file field and the message stays prose", (
     "the reference path in the message was probed against canon and turned a drawer repair into a terminal refusal");
   assert.deepEqual(verdict.paths_in_canon, []);
   assert.match(verdict.next_step, /7f866059/, "the verdict does not point at the repair whose shape this is");
+});
+
+// ── §5 an amend's path is always in canon (POS-378, postmark#3375) ──────────
+
+// The 10-02 18:00Z refusal (postmark#3363), as the sweep forwarded it: one
+// error, its file the mark kinofire amended, the cause carrying no path at all.
+const GLOAMING = "WORLD/marks/kinofire/the-gloaming";
+const GLOAMING_RING = "the points: ring's bounding box must equal the mark's at/extent claim — the claim IS the ring's bbox (SCHEMA v2)";
+const OCT_02 = `settlement sweep refused: the crossing does not lint clean: 1 error(s), first — ${GLOAMING_RING}\n` +
+  `${SENTINEL} ${JSON.stringify({
+    cause: `the crossing does not lint clean: 1 error(s), first — ${GLOAMING_RING}`,
+    phase: "lint",
+    errors: [{ file: GLOAMING, msg: GLOAMING_RING }],
+  })}`;
+
+test("10-02: a bad AMEND of a mark canon carries is input-bad, not 'NO RERUN CAN CLEAR THIS'", () => {
+  // Canon's the-gloaming was clean; the crossing's copy was kinofire's amend,
+  // which read `at` as the top-left corner. Wright re-amended it on world main
+  // (f8cfefb4) and the next crossing published it.
+  const verdict = classify({ stderr: OCT_02, existsInCanon: (p) => p === GLOAMING,
+    changedByInputs: (p) => (p === GLOAMING ? ["draft/kinofire"] : []) });
+  assert.equal(verdict.class, INPUT_BAD, "the amend was the fault, and a repaired amend reruns clean");
+  assert.doesNotMatch(verdict.next_step, /NO RERUN CAN CLEAR THIS/);
+  assert.match(verdict.next_step, /rerunnable AFTER the source is repaired, not before/);
+  assert.ok(verdict.next_step.includes(`${GLOAMING} is in origin/main's tree, but this crossing's draft/kinofire changed it`),
+    "the verdict names the path and the sketchbook that changed it");
+  assert.match(verdict.next_step, /f8cfefb4/, "and the repair whose shape this is");
+  assert.deepEqual(verdict.paths_in_canon, [GLOAMING], "the path IS in canon; that stays said");
+  assert.deepEqual(verdict.amended_by_inputs, { [GLOAMING]: ["draft/kinofire"] });
+});
+
+test("a fault canon carries and no sketchbook changed is still canon-bad", () => {
+  const verdict = classify({ stderr: OCT_02, existsInCanon: (p) => p === GLOAMING, changedByInputs: () => [] });
+  assert.equal(verdict.class, CANON_BAD);
+  assert.match(verdict.next_step, /NO RERUN CAN CLEAR THIS/);
+  assert.deepEqual(verdict.amended_by_inputs, {});
+});
+
+test("with no input probe, or one that throws, nothing is downgraded: canon-bad stays canon-bad", () => {
+  assert.equal(classify({ stderr: OCT_02, existsInCanon: () => true }).class, CANON_BAD);
+  assert.equal(classify({ stderr: OCT_02, existsInCanon: () => true, changedByInputs: () => { throw new Error("no clone"); } }).class, CANON_BAD);
+});
+
+test("an amended fault beside an untouched canon fault is canon-bad, named by the untouched one", () => {
+  const other = "WORLD/marks/let-there-be-light/the-town-centre/pistache-cone-for-julian";
+  const stderr = `${SENTINEL} ${JSON.stringify({
+    cause: "the crossing does not lint clean: 2 error(s), first — …", phase: "lint",
+    errors: [{ file: GLOAMING, msg: GLOAMING_RING }, { file: other, msg: "stray .md" }],
+  })}`;
+  const verdict = classify({ stderr, existsInCanon: () => true, changedByInputs: (p) => (p === GLOAMING ? ["draft/kinofire"] : []) });
+  assert.equal(verdict.class, CANON_BAD, "one fault no rerun can clear makes the refusal terminal");
+  assert.ok(verdict.next_step.startsWith(`NO RERUN CAN CLEAR THIS. ${other} is in`), verdict.next_step);
+  assert.deepEqual(verdict.paths_in_canon, [GLOAMING, other]);
+});
+
+/** A world clone in miniature: main with two marks, a stale sketchbook from an
+ *  older main, kinofire's sketchbook amending the-gloaming, and a bystander. */
+function miniWorld() {
+  const repo = tempDir("settlement-classify-");
+  const git = (...args) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  const put = (path, text) => { mkdirSync(join(repo, path, ".."), { recursive: true }); writeFileSync(join(repo, path), text); };
+  git("init", "-q", "-b", "main");
+  git("config", "user.name", "test"); git("config", "user.email", "test@example.invalid");
+  put(`${GLOAMING}/mark.md`, "---\nat: { x: -1700, y: -500 }\n---\nThe gloaming.\n");
+  put("WORLD/marks/kinofire/the-old-lamp/mark.md", "---\nat: { x: 0, y: 0 }\n---\nA lamp.\n");
+  git("add", "-A"); git("commit", "-q", "-m", "canon");
+  git("branch", "draft/stale");                       // built on the older main
+  put("WORLD/marks/kinofire/the-old-lamp/mark.md", "---\nat: { x: 0, y: 0 }\n---\nA lamp, relit.\n");
+  git("commit", "-qam", "main moves the lamp's words");
+  git("checkout", "-q", "-b", "draft/kinofire");
+  put(`${GLOAMING}/mark.md`, "---\nat: { x: -1900, y: -700 }\n---\nThe gloaming.\n");   // the amend: at read as the top-left corner
+  git("commit", "-qam", "store write-down: kinofire");
+  git("checkout", "-q", "-b", "draft/bystander", "main");
+  put("WORLD/marks/bystander/a-bench/mark.md", "---\nat: { x: 9, y: 9 }\n---\nA bench.\n");
+  git("add", "-A"); git("commit", "-q", "-m", "store write-down: bystander");
+  git("checkout", "-q", "main");
+  return repo;
+}
+
+test("inputsProbe reads the sketchbooks: the amending branch only, and never a stale one", () => {
+  const repo = miniWorld();
+  const changed = inputsProbe(repo, "main");
+  assert.deepEqual(changed(GLOAMING), ["draft/kinofire"]);
+  assert.deepEqual(changed("WORLD/marks/kinofire/the-old-lamp"), [],
+    "draft/stale holds an older copy of the lamp but never changed it, so canon's copy is what was composed");
+  assert.deepEqual(changed("WORLD/marks/nobody/nothing"), []);
+  assert.deepEqual(inputsProbe(join(repo, "not-a-repo"), "main")(GLOAMING), [], "a probe that cannot run answers none");
+});
+
+test("the CLI against a clone: the 10-02 amend reads input-bad, a fault in canon's own copy reads canon-bad", () => {
+  const repo = miniWorld();
+  const dir = tempDir("settlement-classify-");
+  const cli = join(import.meta.dirname, "..", "deploy", "settlement-classify.mjs");
+  const verdictFor = (stderr) => {
+    writeFileSync(join(dir, "sweep.err"), stderr);
+    const r = spawnSync(process.execPath, [cli, "--stderr", join(dir, "sweep.err"), "--clone", repo, "--ref", "main"], { encoding: "utf8" });
+    assert.equal(r.status, 0, r.stderr);
+    return JSON.parse(r.stdout);
+  };
+  assert.equal(verdictFor(OCT_02).class, INPUT_BAD);
+  const lamp = "WORLD/marks/kinofire/the-old-lamp";
+  assert.equal(verdictFor(`${SENTINEL} ${JSON.stringify({ cause: "the crossing does not lint clean: 1 error(s), first — x", phase: "lint",
+    errors: [{ file: lamp, msg: "x" }] })}`).class, CANON_BAD);
 });
