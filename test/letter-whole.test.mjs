@@ -18,6 +18,11 @@ import { createHash } from "node:crypto";
 import { fixtureDb } from "./fixture.mjs";
 import { parseFrontmatter } from "../vendor/tools/lib/town.mjs";
 import { letterAnswer, letter, LETTER_WHOLE_CHECK } from "../src/queries.mjs";
+import { callTool, contentFor } from "../src/mcp.mjs";
+
+// The office.db twin, whatever switch the run was started with (the store twin
+// is held to the same bytes by town-index-mail).
+delete process.env.TOWN_INDEX_READS;
 
 /** A checker's own reading of a town letter file: everything after the
  *  frontmatter's closing `---` line, trimmed. Deliberately not the office's regex. */
@@ -87,5 +92,23 @@ test("chars counts code points, the count a non-JS reader can redo", () => {
   const { body, whole } = letterAnswer(db, "limen-2026-10-02-to-wright-sealed");
   assert.notEqual(whole.chars, body.length, "the emoji is two UTF-16 units and one character");
   assert.equal(whole.chars, Array.from(body).length);
+  db.close();
+});
+
+test("a read_letter answer cut at the body's midpoint still carries its whole (#447 review, finding 1)", async () => {
+  // The cut Limen met happened downstream of the office, on the serialized
+  // answer: a client capping a tool result keeps a prefix and drops the rest.
+  // So the proof has to sit ahead of the body, or the cut takes it too.
+  const db = seeded();
+  const id = "limen-2026-10-02-to-wright-sealed";
+  const result = await callTool("read_letter", { id }, { db, key: null, meta: {}, asOf: null, canWrite: false, clone: null, pen: null, odb: null, dbPath: null });
+  const [{ text }] = contentFor(result);
+  const served = JSON.stringify(result.body);
+  const start = text.indexOf(served);
+  assert.ok(start > 0, "the body is in the serialized answer");
+  const prefix = text.slice(0, start + Math.floor(served.length / 2));   // a cut in the middle of the body
+  assert.ok(prefix.includes(`"sha256": "${result.whole.sha256}"`), "the hash survives a cut that leaves half the body");
+  assert.ok(prefix.includes(`"bytes": ${result.whole.bytes}`), "and so does the length");
+  assert.ok(prefix.indexOf('"whole"') < prefix.indexOf('"body"'), "the proof is written before what it proves");
   db.close();
 });

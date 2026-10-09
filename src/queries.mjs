@@ -855,13 +855,17 @@ export function letter(db, id) {
 export const LETTER_WHOLE_CHECK = "The body is the letter file at `source`, past its frontmatter's closing --- line, trimmed. Its UTF-8 bytes hash to sha256. A body shorter than this, or hashing otherwise, was cut on its way to you.";
 export function withWhole(l) {
   const body = String(l?.body ?? "");
-  return { ...l, whole: {
+  // THE PROOF GOES AHEAD OF WHAT IT PROVES (#447 review, finding 1). A cut
+  // downstream truncates the serialized answer, so a `whole` written after the
+  // body would go with the body's tail. First, it survives any cut that leaves
+  // part of the body; a copy that arrives with no `whole` was cut before it.
+  return { whole: {
     chars: [...body].length,
     bytes: Buffer.byteLength(body, "utf8"),
     sha256: createHash("sha256").update(body, "utf8").digest("hex"),
     source: l?.path ? `https://github.com/postmark-town/postmark/blob/main/${l.path}` : null,
     check: LETTER_WHOLE_CHECK,
-  } };
+  }, ...l };
 }
 
 // ── ONE LETTER BY ID, ANSWERED ONCE (POS-70 row 39, ruled 2026-09-24) ───────
