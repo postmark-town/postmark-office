@@ -22,6 +22,8 @@
 //       token still works (the delete was rolled back with the insert)
 //   R3  a code exchange the store could not finish leaves the code for the
 //       retry; a refused code is still burned (single use, even on failure)
+//   R4  two refreshes of one token, both past their SELECT before either
+//       deletes: exactly one 200 (the DELETE's own row count is the claim)
 //
 //   node --test test/oauth-store-outage.test.mjs
 
@@ -39,14 +41,19 @@ const now = () => Math.floor(Date.now() / 1000);
 
 let store, pool, paper, server, BASE;
 
-// A fault hook on the pool the paper writes through: once armed, the first
-// statement matching `re` runs, the store TOOK it, and then `fault()` runs
-// before the caller sees the answer. It hooks both roads a paper writes by: a
-// bare `pool.query` (autocommit) and a transaction's client.
-function faultAfter(p, re, fault) {
-  let armed = false;
+// Hooks on the pool the paper writes through: `after(re, fn, times)` runs
+// `fn()` once a statement matching `re` has run (the store TOOK it) and before
+// the caller sees the answer, for the next `times` matches. It hooks both roads
+// a paper writes by: a bare `pool.query` (autocommit) and a transaction's client.
+function hooksOn(p) {
+  const armed = [];
   const hook = async (sql, answer) => {
-    if (armed && re.test(typeof sql === "string" ? sql : sql?.text ?? "")) { armed = false; await fault(); }
+    const text = typeof sql === "string" ? sql : sql?.text ?? "";
+    for (const h of [...armed]) {
+      if (!h.re.test(text)) continue;
+      if (--h.times <= 0) armed.splice(armed.indexOf(h), 1);
+      await h.fn();
+    }
     return answer;
   };
   const query = p.query.bind(p);
@@ -65,17 +72,19 @@ function faultAfter(p, re, fault) {
       return client;
     });
   };
-  return { arm: () => { armed = true; } };
+  return { after: (re, fn, times = 1) => { armed.push({ re, fn, times }); } };
 }
 
-let fault;
+let hooks;
+const TAKEN = /^DELETE FROM oauth_(tokens|codes) WHERE (token_hash|code) = /;
+const outageAfterTheDelete = () => hooks.after(TAKEN, () => store.pause());
 
 before(async () => {
   store = await startStore({ db: "oauth_outage", own: true });
   const { default: pg } = await import("pg");
   pool = new pg.Pool({ connectionString: store.url("office_api"), max: 4, types: paperworkPoolTypes(pg) });
   pool.on("error", () => {}); // an idle client the outage ended: the pool drops it
-  fault = faultAfter(pool, /^DELETE FROM oauth_(tokens|codes) WHERE (token_hash|code) = /, () => store.pause());
+  hooks = hooksOn(pool);
   paper = paperOnPool(pool);
   // The office's own dispatch (server.mjs § OAuth + discovery routes): a
   // rejection the route did not answer is the outer catch's 500 bounce.
@@ -135,7 +144,7 @@ test("R1 the store is down: the refresh answers 503 with Retry-After, and once i
 
 test("R2 the store goes down mid-rotation, after it took the old token's DELETE: 503, and the old refresh token survives", async () => {
   const token = await seedRefresh();
-  fault.arm();
+  outageAfterTheDelete();
   try {
     await assertRetryable(await refresh(token), "refresh whose store went down mid-rotation");
   } finally { await store.resume(); }
@@ -153,7 +162,7 @@ test("R3 a code exchange the store could not finish leaves the code for the retr
   await paper.run("INSERT INTO codes VALUES (?, ?, ?)", code, JSON.stringify(grant), now() + 120);
   const exchange = (v) => post({ grant_type: "authorization_code", code, client_id: "client-1", redirect_uri: "http://localhost/cb", code_verifier: v });
 
-  fault.arm();
+  outageAfterTheDelete();
   try { await assertRetryable(await exchange(verifier), "code exchange whose store went down mid-exchange"); }
   finally { await store.resume(); }
   const ok = await exchange(verifier);
@@ -167,4 +176,25 @@ test("R3 a code exchange the store could not finish leaves the code for the retr
   assert.equal((await bad.json()).error, "invalid_grant");
   const { rowCount } = await pool.query("SELECT 1 FROM oauth_codes WHERE code = $1", [code2]);
   assert.equal(rowCount, 0, "a refused code is burned: its deletion commits with the refusal");
+});
+
+test("R4 two refreshes of one token race past their SELECT: exactly one 200, and one refresh family", async () => {
+  const token = await seedRefresh();
+  const refreshRows = async () => (await pool.query("SELECT count(*)::int AS n FROM oauth_tokens WHERE kind = 'refresh'")).rows[0].n;
+  const before = await refreshRows();
+  // A barrier on the refresh's SELECT: neither grant goes on to its DELETE until
+  // both have read the row, so the race the review named is forced, not hoped for.
+  let seen = 0, both;
+  const bothRead = new Promise((ok) => { both = ok; });
+  hooks.after(/^SELECT \* FROM oauth_tokens WHERE token_hash = /, async () => {
+    if (++seen === 2) both();
+    await Promise.race([bothRead, new Promise((ok) => setTimeout(ok, 5000))]);
+  }, 2);
+  const answers = await Promise.all([refresh(token), refresh(token)]);
+  assert.equal(seen, 2, "both grants read the row before either deleted it");
+  const statuses = answers.map((r) => r.status).sort();
+  assert.deepEqual(statuses, [200, 400], `exactly one grant wins: ${statuses}`);
+  const loser = await answers.find((r) => r.status === 400).json();
+  assert.equal(loser.error, "invalid_grant");
+  assert.equal(await refreshRows(), before, "one refresh token retired and ONE issued: the family did not fork");
 });

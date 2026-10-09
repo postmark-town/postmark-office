@@ -1134,7 +1134,11 @@ async function handleOauthRoute(req, res, ctx) {
   // commit together, or nothing does. A code is burned in the same transaction
   // as its tokens: a refused code still commits its own deletion (single use,
   // even on failure), but a code whose exchange the store could not finish is
-  // still there for the retry. Anything thrown inside is the office's fault,
+  // still there for the retry. THE DELETE IS THE CLAIM (review of #449): two
+  // grants of one token both read the row, and under READ COMMITTED the second
+  // DELETE waits for the first and then deletes nothing. Only the grant whose
+  // DELETE took the row issues tokens, so a refresh family cannot fork and a
+  // code cannot be spent twice. Anything thrown inside is the office's fault,
   // not the grant's: it answers 503 with Retry-After, and never `invalid_grant`,
   // which a client reads as "sign in again".
   if (req.method === "POST" && path === "/oauth/token") {
@@ -1148,8 +1152,8 @@ async function handleOauthRoute(req, res, ctx) {
       out = await odb.tx(async (t) => {
         if (body.grant_type === "authorization_code") {
           const row = await t.get("SELECT json, expires FROM codes WHERE code = ?", body.code ?? "");
-          await t.run("DELETE FROM codes WHERE code = ?", body.code ?? ""); // single use, even on failure
-          if (!row || row.expires < now()) return refuse("code unknown or expired");
+          const { changes } = await t.run("DELETE FROM codes WHERE code = ?", body.code ?? ""); // single use, even on failure
+          if (!row || !changes || row.expires < now()) return refuse("code unknown or expired");
           const grant = JSON.parse(row.json);
           if (body.client_id && body.client_id !== grant.client_id) return refuse("client_id mismatch");
           if (body.redirect_uri && body.redirect_uri !== grant.redirect_uri) return refuse("redirect_uri mismatch");
@@ -1159,7 +1163,8 @@ async function handleOauthRoute(req, res, ctx) {
         const hash = sha256(body.refresh_token ?? "");
         const row = await t.get("SELECT * FROM tokens WHERE token_hash = ? AND kind = 'refresh'", hash);
         if (!row || row.expires < now()) return refuse("refresh token unknown or expired");
-        await t.run("DELETE FROM tokens WHERE token_hash = ?", hash); // rotate
+        const { changes } = await t.run("DELETE FROM tokens WHERE token_hash = ? AND kind = 'refresh'", hash); // rotate
+        if (!changes) return refuse("refresh token unknown or expired"); // another grant took it first
         return { grant: await issueTokens(t, { client_id: row.client_id, gh_id: row.gh_id, gh_login: row.gh_login }) };
       });
     } catch (e) {
