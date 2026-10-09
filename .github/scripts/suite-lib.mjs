@@ -198,11 +198,15 @@ export const TEST_TIMEOUT_MS = 180_000;
 /** Past this a file is killed and reads as crashed, never as passed; no declaration goes beyond it. */
 export const FILE_CAP_MS = 25 * 60 * 1000;
 const DECLARED_CAP = /^\s*\/\/\s*suite-file-timeout:\s*(\d+)\s*$/;
+/** A declaration below this is no declaration. */
+export const MIN_DECLARED_MS = 1000;
 
 /** The timeout a file runs under, from its source text: `{ ms, declared, clamped }` (declared null when it declares none). */
 export function fileTimeoutOf(text) {
   const line = String(text ?? "").split(/\r?\n/).slice(0, 40).map((l) => DECLARED_CAP.exec(l)).find(Boolean);
-  if (!line) return { ms: TEST_TIMEOUT_MS, declared: null, clamped: false };
-  const declared = Number(line[1]);
+  const declared = line ? Number(line[1]) : null;
+  // under a second is no declaration (#453 review F4): --test-timeout=0 is NO timeout in node,
+  // so a 0 would run the file to the 25-minute kill instead of failing at its declared value
+  if (declared == null || declared < MIN_DECLARED_MS) return { ms: TEST_TIMEOUT_MS, declared: null, clamped: false };
   return { ms: Math.min(declared, FILE_CAP_MS), declared, clamped: declared > FILE_CAP_MS };
 }

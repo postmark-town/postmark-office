@@ -11,7 +11,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { FILE_CAP_MS, TEST_TIMEOUT_MS, fileTimeoutOf, listTestFiles, planShards, readEvents, verdict } from "../.github/scripts/suite-lib.mjs";
+import { FILE_CAP_MS, MIN_DECLARED_MS, TEST_TIMEOUT_MS, fileTimeoutOf, listTestFiles, planShards, readEvents, verdict } from "../.github/scripts/suite-lib.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -197,6 +197,12 @@ test("a declared cap is honoured, and one above FILE_CAP_MS is clamped there", (
   // the declaration is a header line: past line 40, or inside a sentence, it is not one
   assert.equal(fileTimeoutOf(`${"// filler\n".repeat(40)}// suite-file-timeout: 600000\n`).declared, null);
   assert.equal(fileTimeoutOf("// say `// suite-file-timeout: 600000` to declare one\n").declared, null);
+});
+
+test("a declared cap under a second is no declaration: 0 would mean no timeout at all in node (#453 review F4)", () => {
+  // THE CAN-FAIL FLIP: drop the MIN_DECLARED_MS floor; this goes red ({ ms: 0, declared: 0 })
+  for (const n of [0, 999]) assert.deepEqual(fileTimeoutOf(`// suite-file-timeout: ${n}\n`), { ms: TEST_TIMEOUT_MS, declared: null, clamped: false });
+  assert.equal(fileTimeoutOf("// suite-file-timeout: 1000\n").ms, MIN_DECLARED_MS);
 });
 
 test("the dev rehearsal's local proof declares its cap, and the shard and the summary read it", () => {
