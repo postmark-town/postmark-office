@@ -1781,3 +1781,22 @@ Order at the ship, and it matters:
 1. **Apply 069 before the code.** The new seal writes `world_snapshots.stance_through`. Against a store without the column, every clearing rolls back.
 2. **Restart the office before the first clearing that runs the new code.** An office still running the old code would keep a fold without the town's words under the new digest, and `ON CONFLICT DO NOTHING` would make that permanent: `world-snapshot.mjs --verify` would then report a difference for that settlement forever. If a clearing did run first, delete that digest's `world_snapshot_folds` row (office_api holds DELETE on it); the next read rebuilds it with its words, and `--verify --world-repo` reads VALUE-EQUAL again.
 3. Snapshots sealed before 069 carry `stance_through` NULL and fold with no words, which equals their published tag. Words spoken before those seals are not in them, by design: a backfill would change their digests.
+
+## The ground: the /tmp janitor, the disk watch, three site releases (2026-10-09)
+
+On 2026-10-09 the root disk filled (38G of 38G, about 03:00 EDT). Postgres went into crash recovery, sign-in failed, and the 08:00 ferry and ten timers refused. Nothing watched the ground. Installed the same morning on Darko's go:
+
+```sh
+sudo install -m 0755 deploy/postmark-tmp-janitor.sh deploy/postmark-disk-watch.sh /usr/local/sbin/
+sudo install -m 0644 deploy/postmark-tmp-janitor.{service,timer} deploy/postmark-disk-watch.{service,timer} /etc/systemd/system/
+sudo mkdir -p /etc/systemd/system/postmark-site-refresh.service.d
+sudo install -m 0644 deploy/postmark-site-refresh.service-dropin-keep-three.conf /etc/systemd/system/postmark-site-refresh.service.d/keep-three.conf
+sudo systemctl daemon-reload
+sudo systemctl enable --now postmark-tmp-janitor.timer postmark-disk-watch.timer
+```
+
+- **The janitor** (daily 05:37 UTC) removes meepo-owned top-level `/tmp` entries older than 3 days that no process holds open, except a keep list of caches the office prunes itself. Every removal is a journal line; the receipt is `/var/lib/postmark-tmp-janitor.json`.
+- **The disk watch** (every 15 min) shouts through the sentinel's webhook when `/` passes 85%, at most once every 6 hours, and once when it is back under. Its receipt is `/var/lib/postmark-disk-watch.json`.
+- **Three site releases, not five** (`SITE_REFRESH_KEEP=3`): each release is about 700M.
+
+The real headroom is a bigger volume (38G today); that is a console change, not this file's.

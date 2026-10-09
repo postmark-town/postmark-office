@@ -1,870 +1,900 @@
 {
- "schema": 1,
- "_readme": [
-  "THE BOX ROLL-CALL. Every mechanism that is supposed to be running on meepo-ec2,",
-  "with the heartbeat that would prove it, the allowance past which that heartbeat is",
-  "old, and THE NAME OF WHOEVER DECIDED IT RUNS. Read by tools/box-rollcall.mjs; run",
-  "on the box by deploy/box-rollcall.sh; wired into Wright's daily operator round.",
-  "",
-  "WHY IT EXISTS. On 2026-08-27 the town was carrying four mechanisms that had been",
-  "BUILT and were not RUNNING, and no surface anywhere went red about any of them:",
-  "the world drain had no caller at all (postmark#1990), the settlement shadow was",
-  "disabled with a WOULD-REFUSE verdict nobody had read (2 days 8 hours old), the",
-  "economy report's timer had been owed since 2026-08-10 in OPERATIONS.md's own Known",
-  "gaps, and the stripe watcher was built on 08-25 and never adopted. Three of those",
-  "are failures; the fourth is correct and deliberate. A roll-call that could not tell",
-  "them apart would be no better than the silence it replaces, which is why PARKED is",
-  "a first-class verdict here and a parked row is carried FOREVER rather than omitted.",
-  "",
-  "THE LAW THIS SERVES (OPERATIONS.md § Built is not Done): a mechanism folds only",
-  "with its runner, its liveness check, and its activation owner named.",
-  "",
-  "ADDING A ROW. Every postmark-* timer on the box, and every ENABLED postmark-*",
-  "service, must appear here — the checker globs the box and reports ALARM-unmanifested",
-  "for anything it finds that this file does not name, which is what keeps the roll-call",
-  "from decaying into a snapshot of the day it was written. Parked rows are legal.",
-  "Omission is not.",
-  "",
-  "FIELDS.",
-  "  unit                  the systemd unit, exactly as systemctl names it",
-  "  label                 how the alarm line refers to it, in the town's own words",
-  "  stage                 live | parked. parked never alarms for being inert — but it",
-  "                        DOES alarm if the box has it enabled, because then the",
-  "                        manifest and the box disagree about whether it is inert",
-  "  activation_owner      who decided it runs, and the receipt. Not decoration: a row",
-  "                        that cannot say this is a row nobody will fix when it reddens",
-  "  cadence               the effective schedule, in prose",
-  "  cadence_source        WHERE that schedule is authoritative. Note that this is",
-  "                        `systemctl show -p TimersCalendar` for every timer and never",
-  "                        the .timer file — postmark-dev-freshen's file says every ten",
-  "                        minutes and its drop-in makes it daily, a factor of 144",
-  "  heartbeat             what would prove it ran. unit_trigger = systemd's own last",
-  "                        firing; state_file = the work's own output (stronger — it",
-  "                        proves the run REACHED ITS END); unit_active = a daemon, whose",
-  "                        liveness is simply that it is up",
-  "  stale_means           the sentence the operator reads at 8am: what it means for THIS",
-  "                        unit to be late, and why the allowance is that number",
-  "  no_staleness_because  the only escape from an allowance, and deliberately a sentence",
-  "  outcome               judges what the rail PRODUCED, not just that it ran — a rolling",
-  "                        Inside it: history_path · alarm_on_classes (terminal on sight) ·",
-  "                        zero_published_runs (the starvation window) · means (the ONE sentence",
-  "                        the board prints) · why (the paragraph a reviewer weighs, never printed",
-  "                        — a board that recites its own rationale every morning teaches skimming)",
-  "                        receipt log, the refusal classes that are terminal on sight, and",
-  "                        how many consecutive empty runs is starvation. Every threshold is",
-  "                        DATA here rather than a constant in the checker, because a baseline",
-  "                        compiled into code is a number nobody can review beside its reason",
-  "  outcome.alarm_on_nonempty  the fields in the latest log line that must be EMPTY lists, with",
-  "                        list_means as that alarm's own sentence. Judged on the LATEST line only",
-  "                        — a non-empty list is a fact about the store right now, not a trend —",
-  "                        and a latest line carrying none of the named fields is ITSELF the alarm,",
-  "                        so a writer that stops emitting the list cannot switch its own alarm off.",
-  "                        list_means is REQUIRED and separate because the shared means ends with an",
-  "                        install-day excuse, which is false of a line naming a slug",
-  "  outcome.report_counts  number fields on the latest log line that the board PRINTS beside the",
-  "                        row's verdict and never alarms on, with count_means as the one sentence",
-  "                        printed after them. A field may not be in report_counts and an alarm",
-  "                        list at once. For what the rail knows but cannot judge — the notary's",
-  "                        commons marks locked at windows the escrow projection never held",
-  "                        (postmark#2935): unavailable, never ✦0, so a count and not an alarm",
-  "",
-  "SEE ALSO the custody[] block at the foot of this file: every row above asks whether a",
-  "mechanism RAN; those ask whether it still CAN."
- ],
- "units": [
-  {
-   "unit": "postmark-ferry.timer",
-   "label": "the ferry",
-   "stage": "live",
-   "activation_owner": "Keemin — the town's published crossings; consolidated onto the box 2026-07-08 (deploy/DEPLOY.md § The ferry on the box), unit added to the repo 2026-08-01 c8e62f9",
-   "cadence": "00:00 and 12:00 UTC, sharp and unjittered",
-   "cadence_source": "systemctl show postmark-ferry.timer -p TimersCalendar",
-   "heartbeat": {
-    "kind": "unit_trigger",
-    "stale_after_minutes": 780
-   },
-   "stale_means": "A missed crossing means mail written yesterday did not deliver and the ledger carries no stamp for it. The allowance is one crossing plus an hour: a single late tick is Persistent=true catching up after a reboot, but two crossings of silence is the town's clock stopped."
-  },
-  {
-   "unit": "postmark-crossing-save.timer",
-   "label": "the crossing save",
-   "stage": "live",
-   "activation_owner": "Wright — added 2026-08-09 45b9dcf, crossing-aligned two minutes behind the ferry so the two never contend for town.lock",
-   "cadence": "00:02 and 12:02 UTC, two minutes behind each crossing on purpose",
-   "cadence_source": "systemctl show postmark-crossing-save.timer -p TimersCalendar",
-   "heartbeat": {
-    "kind": "unit_trigger",
-    "stale_after_minutes": 780
-   },
-   "stale_means": "The dynamic store is not crystallized at the boundary it just left, so the record of that crossing has a hole in it that no later run fills — the save writes the crossing it has left, not the ones it slept through. Same allowance as the ferry it follows."
-  },
-  {
-   "unit": "postmark-office-rehydrate.timer",
-   "label": "the office's read index",
-   "stage": "live",
-   "activation_owner": "Keemin — part of the original box standup, enabled in DEPLOY.md § One-time setup's own enable line; unit added 2026-08-01 c8e62f9",
-   "cadence": "every 15 minutes at :07, :22, :37, :52 while the box runs the pre-split unit (which runs the whole tick through the transitional deploy/office-tick.sh); :09, :24, :39, :54 once the POS-268 split's unit files are installed, two minutes after postmark-office-keep.timer",
-   "cadence_source": "systemctl show postmark-office-rehydrate.timer -p TimersCalendar",
-   "heartbeat": {
-    "kind": "unit_trigger",
-    "stale_after_minutes": 45
-   },
-   "stale_means": "The office serves a frozen X-Postmark-As-Of: every door answers 200 with yesterday's town. This is the exact failure found BY HAND on 2026-08-25 (one distinct as-of across 40 minutes and three tick slots). The allowance is three ticks — one missed tick is noise, three is a stuck rehydrate. site-sentinel's office_as_of probe watches the OUTCOME of this from outside; this row watches the runner.",
-   "outcome": {
-    "history_path": "/srv/postmark-harbor/household-keys.jsonl",
-    "alarm_on_nonempty": [
-     "split_households",
-     "shared_keys"
-    ],
-    "alarm_on_false": [
-     "checked"
-    ],
-    "unsettled_runs": 0,
-    "why": "ONE HOUSEHOLD, ONE MINT KEY (Darko, 2026-10-04: \"make sure this cannot happen again without tests failing and alarms\"). The mint caps a household by the key the town's currentHouseholds gives each handle; a join that re-keyed only the joiner left nine houses minting as two households with two daily caps (Kev's minted 10 sends on 10-03), and nothing was looking. deploy/office-keep.sh runs the town's own predicate (tools/household-keys.mjs) over each tick's frozen town snapshot and appends one line here. The drain refuses a crossing that would split a house it touches, and the town's PR check reds a split on the PR that brings it; this row is the third lock, for a split that arrives by any other road (a hand-declared registry line, a records edit). This row sits on the rehydrate timer because the box still runs the pre-split unit, whose deploy/office-tick.sh calls office-keep.sh; it moves to the postmark-office-keep.timer row when that row goes live. unsettled_runs is 0 on purpose: these lines carry no status, so a threshold on it could never fire. Judged on the LATEST line only, because a split is a fact about the town right now.",
-    "means": "The household-keys line is not being written. INSTALL-DAY NOTE: this row is EXPECTED to read ALARM-outcome until the first tick after deploy appends to /srv/postmark-harbor/household-keys.jsonl, and it clears itself then.",
-    "list_means": "A declared household mints under more than one key (split_households), or one key mints for two households (shared_keys): the house gets two daily caps, or two houses share one. THIS ALARM HAS NO INSTALL DAY. The line's `detail` names each house and its keys. The repair is signed `registry: <handle> = hh:<slug>` lines for the residents off the house key, written with the drain's signedRegistryLines (the 07fa74d6a precedent), then stamp-verify. There are no exceptions: two people under one roof are one household (Darko, 2026-10-04).",
-    "unchecked_means": "The town's predicate did not run (the line carries `checked: false` and the error text): the snapshot's tools/household-keys.mjs is absent (a town clone older than d95e81c1c) or it crashed. A check that did not run is not a clean town."
-   }
-  },
-  {
-   "unit": "postmark-office-keep.timer",
-   "label": "the office's keeping tick (clones, mint, settlements row, panes)",
-   "stage": "live",
-   "activation_owner": "Wright — ADOPTED 2026-10-04 at the w41 ship (SUNDAY-RUNBOOK § 7.1, DEPLOY.md § Sunday: adopting the tick split, POS-268): the four unit files installed, the pre-split units backed up to /var/backups/postmark-tick-split, postmark-office-keep.timer enabled. office-tick.sh stays on the box until a clean week has passed (the rollback runs it).",
-   "cadence": "every 15 minutes at :07/:22/:37/:52 UTC, the old tick's clock",
-   "cadence_source": "systemctl show postmark-office-keep.timer -p TimersCalendar — measured on the box 2026-10-04T15:0xZ: '{ OnCalendar=*-*-* *:07,22,37,52:00 }', UnitFileState=enabled, ActiveState=active",
-   "heartbeat": {
-    "kind": "unit_trigger",
-    "stale_after_minutes": 45
-   },
-   "stale_means": "the town clone stops pulling (the write pen and declare read a stale town), the mint catch-up and welcome pass stop, the settlements row stops following the keeper's tag, the household-keys line stops being written, and the panes freeze. The allowance is three ticks."
-  },
-  {
-   "unit": "postmark-town-index.timer",
-   "label": "the town index (office.db's tables in the store)",
-   "stage": "live",
-   "activation_owner": "Keemin — ADOPTED at the w41 ship, 2026-10-04 (runbook § 8.2): 033_town_index.sql applied, the seed run by hand, and the timer enabled by Wright at 16:45Z. The READS switch (TOWN_INDEX_READS=store) is a separate act: flipped 10-04 16:52Z and rolled back 19:35Z (pool exhaustion; office #346, POS-370), then re-flipped 10-06 12:13Z with w41.3 and watched four hours clean (switch2-watch). It is ON: every door that reads the town index reads these tables.",
-   "cadence": "every 15 minutes at :05/:20/:35/:50 UTC",
-   "cadence_source": "systemctl show postmark-town-index.timer -p TimersCalendar — measured on the box 2026-10-07T01:0xZ: '{ OnCalendar=*-*-* *:05,20,35,50:00 UTC }', UnitFileState=enabled, active since 2026-10-04 16:45:19 UTC",
-   "heartbeat": {
-    "kind": "state_file",
-    "path": "/srv/world2-lab/state/town-index.json",
-    "stamp_field": "at",
-    "stale_after_minutes": 45
-   },
-   "stale_means": "the store's town_* tables stop following the town, and with TOWN_INDEX_READS=store (on since 2026-10-06 12:13Z) every door that reads them serves the town as of the last ingest. The state file names the sha and why. The allowance is three ticks."
-  },
-  {
-   "unit": "postmark-harbor-watch.timer",
-   "label": "the harbor watch",
-   "stage": "live",
-   "activation_owner": "Wright — added 2026-08-16 71a4622 for the web-of-towns carriage duty; read every operator round at step 4.7",
-   "cadence": "every 15 minutes, jittered up to 60s",
-   "cadence_source": "systemctl show postmark-harbor-watch.timer -p TimersCalendar",
-   "heartbeat": {
-    "kind": "state_file",
-    "path": "/srv/postmark-harbor/harbor-snapshot.json",
-    "stamp_field": "generated_at",
-    "stale_after_minutes": 50
-   },
-   "stale_means": "Cargo left at a foreign pier goes unseen, and the operator round reads a snapshot that describes the shores as they were rather than as they are — the sable-#537 shape, where carriage was owed and nobody could see it. The allowance is three ticks plus the jitter. The stamp is read from inside the file rather than from its mtime because a snapshot rewritten with unchanged content still has a fresh mtime."
-  },
-  {
-   "unit": "postmark-usdc-watch.timer",
-   "label": "the usdc watch",
-   "stage": "live",
-   "activation_owner": "Wright — the funding lane, unit added 2026-08-24 00e3d64; adopted as a READ-ONLY watcher (it sees and reports; it does not witness)",
-   "cadence": "every 10 minutes, jittered up to 45s",
-   "cadence_source": "systemctl show postmark-usdc-watch.timer -p TimersCalendar",
-   "heartbeat": {
-    "kind": "state_file",
-    "path": "/srv/postmark-usdc/state.json",
-    "stamp_field": "last_run",
-    "stale_after_minutes": 30
-   },
-   "stale_means": "Arrivals at the town's intake address stop being noticed, and because the cursor only advances on a successful read, a long silence means real money has landed with nobody told. The allowance is three ticks. Note that this row and site-sentinel's usdc_watch probe are deliberate duplicates: the sentinel reads it from the town's outside, this reads the runner from the box's inside, and the pair survives either one being the thing that broke."
-  },
-  {
-   "unit": "postmark-site-sentinel.timer",
-   "label": "the site sentinel",
-   "stage": "live",
-   "activation_owner": "Wright — built and enabled 2026-08-25 b71f63a, on Keemin's sentence \"how can we LOUDLY BE NOTIFIED when something is down on the site?\"; enable line in DEPLOY.md § The site sentinel",
-   "cadence": "every 10 minutes, jittered up to 45s",
-   "cadence_source": "systemctl show postmark-site-sentinel.timer -p TimersCalendar",
-   "heartbeat": {
-    "kind": "state_file",
-    "path": "/srv/postmark-sentinel/status.json",
-    "stamp_field": "generated_at",
-    "stale_after_minutes": 30
-   },
-   "stale_means": "THE WATCHMAN ITSELF HAS STOPPED, and it is the one failure the sentinel is structurally incapable of reporting — its own header says so: 'it cannot see its own death'. A dead sentinel presents as a permanently green board, which is worse than no board. This row is the answer to that, and it is the single most load-bearing row in this file. The allowance is three ticks."
-  },
-  {
-   "unit": "postmark-settlement.timer",
-   "label": "the settlement sweep",
-   "stage": "live",
-   "activation_owner": "Wright — added 2026-08-17 2cc4c6b, timed 05:45/17:45 UTC to land ahead of the Worldkeeper's 06:00/18:00 heartbeats so his blessing certifies fresh work",
-   "cadence": "05:45 and 17:45 UTC",
-   "cadence_source": "systemctl show postmark-settlement.timer -p TimersCalendar",
-   "heartbeat": {
-    "kind": "state_file",
-    "path": "/srv/postmark-harbor/settlement-auto.json",
-    "stamp_field": "at",
-    "stale_after_minutes": 780
-   },
-   "stale_means": "Drafts stop settling into the world: residents' work sits eligible and unpublished, and the world pin stops advancing twice daily as the law requires. The allowance is one crossing plus an hour. The stamp is the verdict's own 'at' rather than the file's mtime, because a run that refuses still rewrites the file — the question is when it last DECIDED, not when the bytes last moved.",
-   "outcome": {
-    "history_path": "/srv/postmark-harbor/settlement-auto-history.jsonl",
-    "alarm_on_classes": [
-     "canon-bad"
-    ],
-    "zero_published_runs": 3,
-    "why": "THE CLOCK IS NOT THE WORK. Until 2026-08-30 this row judged timer recency and nothing else, so the board would have read a green tick over the night of 08-31: the timer fired at 02:38:50Z exactly as scheduled and the crossing refused at 02:39:26Z with {\"phase\":\"unknown\"}, publishing nothing. TWO SHAPES ARE JUDGED HERE AND THEY FAIL DIFFERENTLY. A canon-bad refusal (deploy/settlement-classify.mjs) is loud and instantaneous — the failing path is in origin/main s own tree, so no rerun ever clears it and one occurrence is already forever; it alarms on sight. STARVATION is quiet and only exists across crossings: on 2026-08-26 a crossing left 42 marks drafted and reported nothing, and a starving crossing printed 0 published, 0 unpublished and read as a quiet day for two days — every receipt individually honest, the pattern the finding. Three consecutive crossings that published nothing WHILE left_drafted grew is work arriving with none getting out. THE WINDOW IS THREE because two is a weekend of genuinely nothing eligible and four is two full days of silence, which is the length the 08-26 starvation actually ran. The log is written by deploy/settlement-history.mjs at the end of every decided crossing; a single receipt file is overwritten twice a day and structurally cannot hold a pattern. AND A REFUSAL THAT KEEPS COMING BACK: the class rule above catches the refusal that announces itself terminal; unsettled_runs catches the one that does not and is terminal anyway. postmark-world 7f866059 (2026-08-30 22:40) says it in its own message — the fault \"was the sweep s standing 2-error lint refusal (every crossing since 08-28 re-drained them, dropped one, tripped on the other)\": six input-bad refusals over three days, each individually rerunnable, none ever cleared, because what produced them was upstream of the rerun. It is judged on STATUS and not on left_drafted, because a refused crossing never reaches the point of having channel counts — its receipt carries zeros, so the starvation rule is structurally blind to it.",
-    "means": "Read the receipt at /srv/postmark-harbor/settlement-auto.json — its `class` and `next_step` say whether this is yours to rerun or yours to repair. INSTALL-DAY NOTE: this row is EXPECTED to read ALARM-outcome until the first crossing after deploy writes the log, and it clears itself then.",
-    "unsettled_runs": 3,
-    "retire_null_runs": 3,
-    "retire_why": "A STEP THAT DEGRADES LOUDLY IS STILL UNREAD IF NOBODY COUNTS THE NOTICES. The retire step (G1 lane 1, 2026-09-08) tells the store what the world unpublished; until it existed nothing in the live write path ever set marks.status = retired, and the pre-cutover dump read 1,019 standing and 0 retired, ever. It is built to degrade loudly rather than to fail the crossing: a box whose settlement unit carries no WORLD2_CLEARING_URL writes retired: {ran: false} with its reason into every receipt and publishes canon anyway, which is correct — the world is already pushed by that line, and refusing there would write refused over a crossing that really landed. But a named absence repeated twice a day forever reads exactly like a quiet town, which is the 2026-08-26 starvation lesson one rule up wearing new clothes. NULL AND ZERO ARE DIFFERENT FACTS AND ONLY ONE OF THEM ALARMS: retired: 0 means the step ran and there was nothing to retire, which is the common green case; retired: null means nobody asked. Alarming on zero would fire on nearly every crossing and teach the board to be ignored. THE WINDOW IS THREE for its sibling's reason — two is a weekend, four is two full days of the register drifting from canon. A history line written before this field existed has no retired key at all and deliberately does not match, so an old log never alarms about a step that did not exist when it was written, and this rule needs no install-day exception.",
-    "retire_means": "Read the receipt at /srv/postmark-harbor/settlement-auto.json — its `retired` block names the reason in its own words. If it reads that WORLD2_CLEARING_URL is unset, the fix is the box carry: the settlement unit reads WORLD2_CLEARING_URL from EnvironmentFile=/etc/postmark-world2-clearing.env — ONE file, shared with the candle since 2026-09-12 (office #26); if it is missing or stale the URL is unset here and the candle cannot log in either, so repair that one file, daemon-reload, and both units follow. A non-empty `absent` list in that same block is a DIFFERENT finding and not this alarm — it means the world unpublished a mark the store never materialized."
-   }
-  },
-  {
-   "unit": "postmark-settlement-shadow.timer",
-   "label": "the settlement shadow",
-   "stage": "live",
-   "activation_owner": "Wright — built 2026-08-20 1f3a73a, and DELIBERATELY REACTIVATED 2026-08-23 998c5d1 after the outage-day disable, at a reduced 2/day cadence chosen so the CPU cost stopped being an argument for switching it off. The commit message is the receipt: 'reactivated 2026-08-23 after the outage-day disable'.",
-   "cadence": "10:23 and 22:23 UTC — off the real crossing's 05:45/17:45 marks so the rehearsal never races the pen",
-   "cadence_source": "systemctl show postmark-settlement-shadow.timer -p TimersCalendar",
-   "heartbeat": {
-    "kind": "state_file",
-    "path": "/srv/postmark-harbor/settlement-shadow.json",
-    "stamp_field": "at",
-    "stale_after_minutes": 780
-   },
-   "stale_means": "THIS IS THE ROW THE ROLL-CALL WAS BUILT AROUND, and on install day it is expected to be red. The shadow rehearses the next crossing with the pen denied, so a WOULD-REFUSE here is a finding roughly twelve hours ahead of the real settlement rather than an outage. On 2026-08-27 the box had this timer disabled, and the verdict on disk read {\"at\":\"2026-08-24T22:23:00Z\",\"status\":\"would-refuse\",\"detail\":\"grammar suite would go red\"} — the exact finding it exists to raise, 2 days 8 hours old when measured at 2026-08-27T06:00Z, unread. The repo says reactivated and the box says disabled, and until this file existed nothing anywhere could see the two disagree. Its own script header claims the verdict is 'polled by the ops page and read on the operator round'; no step of the operator round read it. The allowance is one cadence period plus an hour."
-  },
-  {
-   "unit": "postmark-dev-freshen.timer",
-   "label": "the dev sandbox freshen",
-   "stage": "live",
-   "activation_owner": "Keemin — founder ruling 2026-08-26 (the drop-in carries it verbatim: 'dev default = sandbox/seed; nightly stand-back, not 10-minute — a mid-day rehearsal is never yanked'); unit added 2026-08-21 27026cd",
-   "cadence": "once daily at 08:10 UTC",
-   "cadence_source": "systemctl show postmark-dev-freshen.timer -p TimersCalendar — AND NOTHING ELSE. The .timer file itself says OnCalendar=*:0/10 and calls itself 'every 10 minutes' in its own Description; the drop-in at postmark-dev-freshen.timer.d/nightly.conf clears that line and substitutes the daily one. Reading the file instead of the merged value is wrong by a factor of 144 in the direction of alarming on a healthy rail every ten minutes forever.",
-   "heartbeat": {
-    "kind": "unit_trigger",
-    "stale_after_minutes": 1560
-   },
-   "stale_means": "dev stops returning to the certified sandbox/seed snapshot, so a rehearsal run against dev is measuring drift rather than the seed. The allowance is 26 hours — one full day plus room for the box to have been down over the 08:10 mark and caught up on boot."
-  },
-  {
-   "unit": "postmark-office.service",
-   "label": "the office API",
-   "stage": "live",
-   "activation_owner": "Keemin — the front door itself; enabled in DEPLOY.md § One-time setup's enable line, unit added 2026-08-01 c8e62f9",
-   "cadence": "always on",
-   "cadence_source": "systemctl show postmark-office.service -p ActiveState",
-   "heartbeat": {
-    "kind": "unit_active"
-   },
-   "no_staleness_because": "A daemon has no cadence to be late for — its liveness is simply that it is up, which is the check the row above the heartbeat already makes. What the uptime is reported FOR is the flap: an office that came up four minutes ago every single morning is a crash loop wearing a green tick, and only the number makes that visible.",
-   "stale_means": "Not applicable. Down is the failure, and down is caught as ALARM-disabled. site-sentinel's office_api probe watches the same thing from outside the box; both are kept, because a door that answers 200 to the outside while systemd reports it restarting is a finding, and so is the reverse."
-  },
-  {
-   "unit": "postmark-office.service",
-   "label": "the office's thread",
-   "stage": "live",
-   "activation_owner": "Keemin — POS-267 part 2, briefed by Wright and built by the lane jetto-office-measure (2026-09-27, after the Snug Harbour night's two brownouts, when the office answered 18-22 s late and nothing on the box recorded it). The office writes the file itself from src/loop-lag.mjs, so it goes live with the first release that carries that module; until then this row reads ALARM-noheartbeat (the file does not exist), which is correct",
-   "cadence": "read as: last CALM — calm_at is the last minute in which every caller got the thread within 5 s; the office rewrites the file every minute",
-   "cadence_source": "src/loop-lag.mjs (MINUTE_MS); the row above this one says whether the process is up",
-   "heartbeat": {
-    "kind": "state_file",
-    "path": "/srv/postmark-office/telemetry/loop-lag-4380.json",
-    "stamp_field": "calm_at",
-    "stale_after_minutes": 10
-   },
-   "stale_means": "For ten minutes or more, no minute passed in which every caller got the office's one thread within 5 s (LAG_ALARM_MS, judged on the minute's MAX lag, because one 48 s synchronous read is a single late sample that p99 hides). That is the brownout itself: requests queue behind the thread, nginx's cached reads keep answering, and everything else waits. The same alarm reads when the office stops writing the file at all. Read the file's worst_24h and minutes for the shape, and GET /api/ops/loop-lag for the live numbers. THE LIMIT, said once: this is a point-in-time reader like the rest of the board, so a brownout that ended before the roll-call ran is not an alarm here; it is in worst_24h."
-  },
-  {
-   "unit": "postmark-office.service",
-   "label": "the office's store transactions",
-   "stage": "live",
-   "activation_owner": "Darko — POS-370 (2026-10-04, \"let's add the durable fix for switch two so that we can roll it back out\"), after switch 2 (TOWN_INDEX_READS=store) stalled the office for an hour behind nine office_api sessions idle in transaction and nothing on the box said so. Built by the lane plumb-pos370-index-leak. The office writes the file itself from src/store-txn-watch.mjs, so it goes live with the first release that carries that module; until then this row reads ALARM-noheartbeat (the file does not exist), which is correct",
-   "cadence": "read as: last CALM — calm_at is the last minute the office could ask the store and no office_api session had been idle inside a transaction for 5 s or more; the office rewrites the file every minute",
-   "cadence_source": "src/store-txn-watch.mjs (MINUTE_MS, STUCK_AFTER_S); the office API row says whether the process is up",
-   "heartbeat": {
-    "kind": "state_file",
-    "path": "/srv/postmark-office/telemetry/store-txn-4380.json",
-    "stamp_field": "calm_at",
-    "stale_after_minutes": 5
-   },
-   "stale_means": "For five minutes or more, every minute either found an office_api session idle inside a transaction for 5 s or more, or could not ask the store at all. That is the 2026-10-04 stall's signature (POS-370): a connection held open while its holder waits on something else, the pool drains, and every later store read waits behind it while the CPU sits idle. Read last_minute.stuck_sessions for which pool and worker hold them (application_name postmark-office:<pool>:t<thread>) and the statement each last ran; GET /api/ops/store-txn gives the live numbers. With idle_in_transaction_session_timeout on (the office's own pools ask for 30 s, and DEPLOY.md § POS-370 sets it on the roles) such a session should not outlive 30 s, so this alarm also means the timeout is not in force. If switch 2 is on, its rollback is the documented one (the env line out, the office restarted). THE LIMIT, said once: a point-in-time reader like the rest of the board; a stall that cleared before the roll-call ran is in worst_24h."
-  },
-  {
-   "unit": "postmark-office-dev.service",
-   "label": "the dev office",
-   "stage": "live",
-   "activation_owner": "Wright — the dev sandbox standup, unit installed 2026-08-22; behind Cloudflare Access by design",
-   "cadence": "always on",
-   "cadence_source": "systemctl show postmark-office-dev.service -p ActiveState",
-   "heartbeat": {
-    "kind": "unit_active"
-   },
-   "no_staleness_because": "Same as the office it mirrors: an always-on daemon is judged by being up, not by being recent. Its uptime is carried for the same flap reason.",
-   "stale_means": "Not applicable. Down means dev.postmark.town stops answering behind the Access gate, which reads to the sentinel as an INFO 302 either way — so this row is the only place a dead dev office is visible."
-  },
-  {
-   "unit": "postmark-stripe-watch.timer",
-   "label": "the stripe watch (Stage B)",
-   "stage": "live",
-   "activation_owner": "Keemin — ADOPTED 2026-08-27 ~00:15 EDT (the founder's ON word, the night of the martina $20; enabled by Wright 06:23Z after review of wright/stripe-login-attribution). The Stage-B header's condition was met: the paste became the outage.",
-   "cadence": "every 15 minutes at :07/:22/:37/:52 — offset from usdc-watch so the two funding watchers never contend for town.lock",
-   "cadence_source": "systemctl show postmark-stripe-watch.timer -p TimersCalendar — measured on the box 2026-08-31T03:4xZ: '{ OnCalendar=*-*-* *:07/15:00 }', UnitFileState=enabled, ActiveState=active",
-   "heartbeat": {
-    "kind": "state_file",
-    "path": "/srv/postmark-stripe/state.json",
-    "stamp_field": "last_run",
-    "stale_after_minutes": 45
-   },
-   "stale_means": "Stripe payments stop being attributed: a resident pays and the funding ledger does not learn, so the town's own record of who is paid up goes quietly wrong rather than loudly absent. The allowance is three ticks. WHAT THIS ROW HAS ALREADY CAUGHT ONCE, and the reason it judges the unit before the heartbeat: on 2026-08-27 a file at /srv/postmark-office/.stripe-watch-state.json was four minutes fresh, written by a HAND-RUN of the tool's default state path, while no unit existed on the box at all. That file is not this row's heartbeat and must never become it — a hand-run's output is exactly the evidence that makes a rail with no runner look alive. THE ROW'S OWN SCAR (2026-08-30, the v1 sweep): this rail was adopted on 08-27 by flipping stage parked -> live, and every sentence around that word stayed written for a rail that does not run — cadence said 'would be … once adopted', cadence_source said 'the unit is not on the box', and parked_because and adopt_command were both still standing. The suite went red for three weeks about a manifest that described the wrong box, which is this file's own failure class committed inside this file."
-  },
-  {
-   "unit": "postmark-paypal-watch.timer",
-   "label": "the paypal watch",
-   "stage": "live",
-   "activation_owner": "Keemin — ADOPTED 2026-10-04 at the w41 ship (\"get it fully up this release\"); installed and enabled by Wright: the live REST pair in /etc/postmark-paypal-watch.env (root 600), Transaction Search answering 200 on both apps, the site's PUBLIC_PAYPAL_CLIENT_ID in /etc/postmark-site-refresh.env. Built 2026-09-29 (POS-183 part 2, lane plumb-paypal-rail).",
-   "cadence": "every 15 minutes at :14/:29/:44/:59 UTC — off stripe-watch's :07/15 and usdc-watch's *:0/10",
-   "cadence_source": "systemctl show postmark-paypal-watch.timer -p TimersCalendar — measured on the box 2026-10-04T15:0xZ: '{ OnCalendar=*-*-* *:14/15:00 }', UnitFileState=enabled, ActiveState=active",
-   "heartbeat": {
-    "kind": "state_file",
-    "path": "/srv/postmark-paypal/state.json",
-    "stamp_field": "last_run",
-    "stale_after_minutes": 45
-   },
-   "stale_means": "PayPal gifts stop being attributed to their pots and households. PayPal's own indexing lag (up to about three hours before a payment is in Transaction Search) is not this row's allowance: the heartbeat is the watcher's run, which is fresh whether or not PayPal has indexed anything yet. The allowance is three ticks."
-  },
-  {
-   "unit": "postmark-site-refresh.timer",
-   "label": "the box publishes the site (atomic swap, lock, convergence)",
-   "stage": "live",
-   "activation_owner": "Keemin — AC #3 of the 2026-08-27 acceptance criteria; installed+enabled by Wright 06:33Z after selftest 33/33 and a proven sandbox first run (3347 pages). GitHub schedule retires only after one proven box crossing.",
-   "cadence": "every 30 minutes at :10/:40 — phased ~10 min after the ferry crossings",
-   "cadence_source": "systemctl show postmark-site-refresh.timer",
-   "heartbeat": {
-    "kind": "state_file",
-    "path": "/srv/postmark-harbor/site-refresh.json",
-    "stamp_field": "at",
-    "stale_after_minutes": 100
-   },
-   "stale_means": "The site stops following the town: a ferry landing never reaches postmark.town, and nothing else publishes prod now that the box is the one writer. The allowance is three ticks plus build time."
-  },
-  {
-   "unit": "postmark-world2-clearing.timer",
-   "label": "the World 2.0 candle",
-   "stage": "live",
-   "activation_owner": "Wright — founder ruling 2026-08-29 (prod Postgres on the box, cutover drive on). Windows 149..155 had been closed by hand all day; 155 was the last one a person typed and the first this timer closed, 2026-08-29T01:54Z. Unit source: deploy/postmark-world2-clearing.{service,timer}, script deploy/world2-clearing.sh",
-   "cadence": "05:45 and 17:45 UTC — the marks world LOGOS/classes.md § crossing ② holds until the w39 ship (2026-09-21), after which both this timer and postmark-settlement.timer read 06:00 and 18:00; the repo copies already carry the ship's marks and reach the box with the tag",
-   "cadence_source": "systemctl show postmark-world2-clearing.timer -p TimersCalendar",
-   "heartbeat": {
-    "kind": "state_file",
-    "path": "/srv/world2-lab/state/clearing.json",
-    "stamp_field": "at",
-    "stale_after_minutes": 780
-   },
-   "stale_means": "The candle stops. Windows pass their close and stay open, claims sit pending in a window that will not clear, and every downstream read — standing tiers, the docket, escrow sufficiency — describes a town frozen at the last close somebody performed by hand. The allowance is one crossing plus an hour, matching the settlement sweep it shares its marks with. NOTE THAT THE STAMP IS WRITTEN ON REFUSAL TOO, deliberately: a clearing that refused (the null-pin guard) has RUN, and this heartbeat answers 'did the lane run', while the service's own non-zero exit is what answers 'did it succeed'. Read both — a fresh stamp with an ALARM-failed beside it means the guard fired, and clearing.json names which one."
-  },
-  {
-   "unit": "postmark-world2-ingest.timer",
-   "label": "the World 2.0 projection poll",
-   "stage": "parked",
-   "activation_owner": "Keemin — PARKED at his word 2026-08-31 ~03:45Z ('arm it, disable git ingest'): the World2 shadow mirror is armed on the prod office and is the store's SOLE feeder; the seam closed lawfully (mirror live, one final ingest pass, then this timer disabled). Every sentence in this row was rewritten with the word, per this file's own stripe-watch scar.",
-   "parked_because": "CORRECTED 2026-09-19 (postmark#2893, founder-ruled): the 08-31 sentence here read 'a re-lift from git would launder v1's record into v2's and destroy the writer comparison the shadow era exists to make'. That is true of the world's OUTCOMES — acts, claims, marks, what the shadow mirror writes and what a replay-ingest would lift — and this unit's two pens write none of them. They copy the rulebook (law_projection + identities) and the ledger (stamp_projection), repo-first inputs the store may not author. The mirror's reason was written onto this row when the seam closed in one gesture, and it named a danger these pens cannot cause. What HOLDS this unit parked now is narrower and still the founder's: the STAMP pen stays parked because the town's record is the shadow writer's and the clearing already lifts the ledger at every close. The LAW pen was resumed 2026-09-19 on its own unit (postmark-world2-law-ingest.timer) — see that row.",
-   "adopt_command": "sudo systemctl enable --now postmark-world2-ingest.timer — ONLY at Keemin's word; re-adopting silently would recommit the ruling this row records. NOTE 2026-09-19: adopting THIS unit now would run the law pen a second time, on top of postmark-world2-law-ingest.timer's identical :04/:19/:34/:49 marks. The law pen has its own unit; this one is the stamp pen's.",
-   "cadence": "none while parked (the unit file keeps its :04/:19/:34/:49 UTC OnCalendar for the day it is re-adopted)",
-   "cadence_source": "the unit file — disabled with no next fire is this row's healthy state",
-   "stale_means": "not judged while parked. The store's freshness belongs to the SHADOW WRITER now — a mirror failure surfaces in the office journal (loud, fire-and-forget) and the dead-letter queue, never here. When this rail was live its staleness only degraded the doors' advisory reads; the clearing pins its own reads at the candle and refuses on a null law pin regardless."
-  },
-  {
-   "unit": "postmark-world2-law-ingest.timer",
-   "label": "the World 2.0 law pen",
-   "stage": "live",
-   "activation_owner": "Keemin — RULED 2026-09-19 ~14:4x EDT on postmark#2893, 'split for now is good'. The law pen rode postmark-world2-ingest, parked at his 08-31 word for a reason about the world's outcomes that neither pen touches; law-ingest.mjs is the only writer of law_projection anywhere in the office, so the park froze the rulebook copy — a23a8d17 (09-05), one hand-run to 1688a5af (09-17), then 37 commits behind world main by 09-19. This unit is the law half resumed on its own clock. Unit source: deploy/postmark-world2-law-ingest.{service,timer}, script deploy/world2-ingest.sh in `law` mode. The stamp pen stays parked on the original unit.",
-   "cadence": "every 15 minutes, :04/:19/:34/:49 UTC — the same marks the parked poll carries, kept deliberately: they are off the :07/:22/:37/:52 that office-rehydrate and stripe-watch occupy, and a new cadence here would be a second decision riding along with the split",
-   "cadence_source": "systemctl show postmark-world2-law-ingest.timer -p TimersCalendar",
-   "heartbeat": {
-    "kind": "state_file",
-    "path": "/srv/world2-lab/state/ingest-law.json",
-    "stamp_field": "at",
-    "stale_after_minutes": 45
-   },
-   "stale_means": "The rulebook copy stops advancing and the store answers under a law the tree has amended. This is the alarm postmark#2893 asked for, and it is worth saying WHY it had to be asked for: the designed guard is the clearing's refusal on a NULL world-law pin, and a pin that was written once and then froze is never null — so between 09-05 and 09-19 nothing anywhere went red while law_projection fell 37 commits behind. The allowance is 45 minutes, three ticks: one missed fire is weather, three is the rail. THIS FILE IS THIS UNIT'S ALONE and that is the point — the parked poll writes /srv/world2-lab/state/ingest.json, so a heartbeat here can never go green on a run that was not the law pen's. Read the `law.sha` line beside the stamp: a fresh `at` with an ALARM-failed exit means the pen ran and could not ingest, and the detail names which."
-  },
-  {
-   "unit": "postmark-earpiece.timer",
-   "label": "the earpiece",
-   "stage": "live",
-   "activation_owner": "Wright — POS-209 (Earpiece C), brief 2026-09-25, transport ruled by Wright on Keemin's 'will leave it to you' and disclosed on POS-208/209. Unit source: deploy/postmark-earpiece.{service,timer}, tool world2/tools/earpiece-deliver.mjs. Installed by Wright's hand, dev sandbox first; it shipped with W2_EARPIECE unset; the flag was set on prod 2026-09-27 with release/2026-w40.1 (Keemin: \"good for 2\"), so it sends. Unset the flag and every fire writes status 'disabled' and sends nothing.",
-   "cadence": "every minute, on the minute UTC — the tool coalesces to one wake per resident per 5 minutes per event, so the timer only decides how late a wake can be",
-   "cadence_source": "systemctl show postmark-earpiece.timer -p TimersCalendar",
-   "heartbeat": {
-    "kind": "state_file",
-    "path": "/srv/postmark-earpiece/state.json",
-    "stamp_field": "at",
-    "stale_after_minutes": 5
-   },
-   "stale_means": "Residents who RSVPed stop being woken during an event, and nothing says so: the resident sees no wake and cannot tell a quiet room from a dead rail. EVERY FIRE WRITES THE STAMP, the idle and disabled ones included, so this unit is never rightly silent and needs no window-aware allowance: outside every event's window the stamp says status 'idle', with the flag off it says 'disabled', and a stale `at` means the rail is not running at all. Read `status` beside the stamp: 'failed' with a fresh `at` is the record unreachable mid-run. The allowance is five fires: one missed minute is weather, five is the rail."
-  },
-  {
-   "unit": "postmark-world2-marks-ingest.timer",
-   "label": "the World 2.0 marks pen",
-   "stage": "live",
-   "activation_owner": "Keemin — RULED 2026-09-23 18:4x EDT on POS-142: 'the class fix goes — a marks ingest at every bless, then prod's fold flips to the store — this week, no separate sitting'. The store had no ingest for the world repo's marks: door-made writes reach it through the clearing, every file-side change after the 08-28 seed did not, and PR #173's rows fold differed from the published file by 7 missing marks and ~50 stale rows. Unit source: deploy/postmark-world2-marks-ingest.{service,timer}, script deploy/world2-marks-ingest.sh, tool world2/tools/marks-ingest.mjs. Installed by Wright's hand, dev sandbox first.",
-   "cadence": "every 15 minutes, :12/:27/:42/:57 UTC — five minutes after the office tick that fetches a fresh settlement tag; the tool acts only on a new blessing and is a no-op between them, so the bless is the trigger and the clock is how the box notices it",
-   "cadence_source": "systemctl show postmark-world2-marks-ingest.timer -p TimersCalendar",
-   "heartbeat": {
-    "kind": "state_file",
-    "path": "/srv/world2-lab/state/ingest-marks.json",
-    "stamp_field": "at",
-    "stale_after_minutes": 45
-   },
-   "stale_means": "The store stops learning the world repo's own changes, and the rows fold drifts from the published file one crossing at a time — the exact silence POS-142 measured (7 marks no row held, ~50 stale rows, and nothing anywhere red). Every fire writes the state file, the no-op ones included, so a stale `at` means the pen is not running, not that nothing was blessed. Read `status` beside the stamp: `failed` with a fresh `at` is a STOP or a refused write, and `receipt`/`detail` name which; a STOP is a fact the row shape cannot hold and wants a person, never a retry. The allowance is 45 minutes, three fires: one missed fire is weather, three is the rail."
-  },
-  {
-   "unit": "postmark-world2-notary.timer",
-   "label": "the World 2.0 notary",
-   "stage": "live",
-   "activation_owner": "Wright — 2026-08-29, PAYING A NAMED DEBT. The notary shipped with 'Nightly TIMER deferred deliberately — the box roll-call manifest law' written into world2/tools/README.md at its merge; the deferral was correct and this row is what settles it. Script deploy/world2-notary.sh, connecting as snapshot_reader and no other role",
-   "cadence": "nightly at 07:20 UTC, jittered up to 2 min — after the morning crossing has published and its receipt has landed, so the certification reads the docket the crossing cleared (office#83; was 03:20, which read every docketed mark as canon-absent two hours before the crossing cleared it)",
-   "cadence_source": "systemctl show postmark-world2-notary.timer -p TimersCalendar",
-   "heartbeat": {
-    "kind": "state_file",
-    "path": "/srv/world2-lab/state/notary.json",
-    "stamp_field": "at",
-    "stale_after_minutes": 1560
-   },
-   "stale_means": "No new certified snapshot binds (acts cursor, window cursor, content sha, law sha, town sha), so the repo stops being able to catch the office rewriting history — gold section 2's whole promise. The allowance is one day plus two hours. TWO THINGS AN OPERATOR MUST KNOW HERE. First, a RED from this unit is usually a FINDING and not a broken timer: an archive is frozen on write, and the pen refuses and names the diff rather than overwriting. Second, since 2026-09-03 (DEC-7) this lane PUSHES after every certification, to the private repo github.com/wright-starforge/postmark-world2-notary over an SSH deploy key scoped to that one repository and held by no other lane. A push that does not land is its own red even when the certification was green, because a certification that stayed on the box it certifies catches nothing; the state file carries push and remote_tip, and those are what say whether the off-box copy actually moved. That repository is SEPARATE from the backups repo on purpose - a certification stored beside the backup it certifies cannot be the thing that catches the backup - so neither lane's key can read the other's repo, and a future convenience that gives one process both keys undoes the whole arrangement.",
-   "outcome": {
-    "history_path": "/srv/world2-lab/state/canon-locks.jsonl",
-    "alarm_on_nonempty": [
-     "canon_absent",
-     "unmaterialized",
-     "escrow_unbacked"
-    ],
-    "unsettled_runs": 0,
-    "why": "postmark#2594, ruled by Keemin 2026-09-08 at the G1 sitting. The store locked claims at named candle windows for three marks canon never carried (darko/the-second-foundation-stone at 154, wright/final-unstaked at 155, little-bird/the-second-spoon-verdict at 161). They disagreed with canon from the moment of locking and stood for three weeks, and the reason nobody caught them is not that anything was quiet — it is that NOTHING WAS LOOKING. The lock-time refusal was WITHDRAWN on 2026-09-08: the crossing settlement pushes to origin three to four minutes AFTER the candle clears (seven crossings measured, never once before), so a canon check at the lock step would refuse the marks its own crossing just locked. world2/tools/falsifier-canon-locks.mjs is the instrument instead, run nightly on THIS rail where the push is hours old, and this row is what makes its answer arrive somewhere a person already looks. What gates at the candle is the escrow presence rule, which reads the town and races nothing. unsettled_runs is 0 ON PURPOSE and is not an oversight: this log's lines carry no `status`, so the sibling refusal-that-keeps-returning rule could never fire on it, and declaring a threshold that cannot fire is a rule that reads green forever. The judgement here is on the LATEST line only, because a non-empty list is a fact about the store's state right now rather than a trend across crossings.",
-    "means": "The canon-locks read is not writing its log. INSTALL-DAY NOTE: this row is EXPECTED to read ALARM-outcome until the first NIGHTLY run after deploy appends to /srv/world2-lab/state/canon-locks.jsonl, and it clears itself then.",
-    "list_means": "A mark stands in the register that the world carries no file for, which is the class #2594 names. The fix is never to delete the locking claim (it is the historical fact that the mark WAS ruled in at that window) — it is to decide which door the mark left canon by and record that: a settlement unpublish retires through the retire path, a never-materialized mark retires by hand with a data.note, per review-g1-retire.md probe 4. A mark that CHANGED HANDS is neither (DEC-16: the row keeps its id, the slug moves) — since 2026-09-15 the read asks the claim's own row before listing it; the-town/the-lanternstep-parlor was this, not a retire. THIS ALARM HAS NO INSTALL DAY: a line naming a slug is never deploy noise. `escrow_unbacked` is the same class from the other side (postmark#2594, ruled a G1 blocker 2026-09-08): a standing COMMONS mark with nothing staked on it at its locking window’s town sha, which the 1.0 sweep refused as “commons needs escrow > 0” and which G1 deletes the path for — there the repair is a stake, not a retire. It lists ONLY judgeable zeros — a locking sha the projection holds rows for and none for the slug; a mark locked at a window the projection never held is counted under report_counts and never listed here (postmark#2935).",
-    "alarm_on_false": [
-     "escrow_checked"
-    ],
-    "report_counts": [
-     "escrow_unjudgeable"
-    ],
-    "count_means": "commons marks locked at a window whose town sha the escrow projection holds NO rows for — every window before 181, migration 014's first ingest (2026-09-10T17:45Z) — so the read cannot judge them there: unavailable, never ✦0 (postmark#2935; 227 on 2026-09-18, and the true unbacked count under them was zero). A count and not an alarm. It falls only as those marks are retired or re-locked by an amend at a projected window; a stake today is read at today's sha and does not move it. The read names the oldest projected town sha on the same line.",
-    "unchecked_means": "The escrow half of the read has never run: escrow_projection does not exist until migration 014 lands with lane 2 (jetto/g1-render-stakes), so the read reports escrow_checked:false and the commons marks in the register are unjudged. This is EXPECTED until that migration ships and it clears itself then — but it must not read as a clean town, because a clean escrow list and an escrow list nobody built are opposite facts. The repair is the migration, never a stake."
-   }
-  },
-  {
-   "unit": "postmark-world2-backup.timer",
-   "label": "the World 2.0 durability lane",
-   "stage": "live",
-   "activation_owner": "Wright — founder ruling 2026-08-29 ('prod Postgres = ON THE BOX with shipped backups, no managed service'). Script deploy/world2-backup.sh. First rehearsed restore from the off-box copy the same night: 6318 rows across 9 tables, every table matching, restore in 1s, projection-equality falsifier GREEN against the restored database",
-   "cadence": "nightly at 08:10 UTC, jittered up to 5 min — after the notary (moved with it, office#83), so the night's certification has already been pushed to its own repo before the dump ships to this one",
-   "cadence_source": "systemctl show postmark-world2-backup.timer -p TimersCalendar",
-   "heartbeat": {
-    "kind": "state_file",
-    "path": "/srv/world2-lab/state/backup.json",
-    "stamp_field": "at",
-    "stale_after_minutes": 1560
-   },
-   "stale_means": "THE STORE STOPS HAVING AN OFF-BOX COPY, AND SO DOES WHO PAID, and this is the one row in this file where a long silence is not a degraded read but an unbounded loss: every hour past the last successful ship is an hour that dies with the box. The allowance is one day plus two hours. What the lane ships is the pg_dump (RPO no worse than 24h) to github.com/wright-starforge/postmark-world2-backups, private, over an SSH deploy key scoped to that one repository. It no longer ships a bundle of the notary checkout: since 2026-09-03 the notary pushes itself to its own separate repo (DEC-7), and a certification kept beside the backup it certifies cannot be the check on that backup. The bundles shipped before that date stay in this repo's history under notary/ with a RETIRED.md beside them saying which repo is live. What it does NOT ship is the WAL: measured at about 163 MB/day raw on 2026-08-29, which no git history survives, so the pg_basebackup and the WAL spool are on-box only and cover a bad migration rather than a lost box. That split is deliberate and it is the tee — an object-storage bucket makes the WAL ship a dozen lines. Since POS-185 (2026-09-21) the same commit also carries roles.db, the office's subscriber registry — src/roles.mjs:71-82 states the gap in its own words: a grant exists nowhere else in the world, no repo holds it and no fold recomputes it, so \"losing roles.db loses who paid\". It is copied with VACUUM INTO through node:sqlite from a read-only handle, never cp, which tears a live SQLite file; the receipt's roles_status, roles_db_bytes and role_audit_rows are the numbers to read, and roles_status:absent is legal on a box where no role has ever been granted (OFFICE_ROLE_GATES is unset on every office today). It rides this row rather than getting one of its own: one lane, one heartbeat, one thing to watch. Check the receipt with deploy/world2-restore-rehearse.sh --from-remote, which is the only thing that turns any of this from a hope into a backup — it now counts the shipped roles copy's role_audit against the live registry too."
+  "schema": 1,
+  "_readme": [
+    "THE BOX ROLL-CALL. Every mechanism that is supposed to be running on meepo-ec2,",
+    "with the heartbeat that would prove it, the allowance past which that heartbeat is",
+    "old, and THE NAME OF WHOEVER DECIDED IT RUNS. Read by tools/box-rollcall.mjs; run",
+    "on the box by deploy/box-rollcall.sh; wired into Wright's daily operator round.",
+    "",
+    "WHY IT EXISTS. On 2026-08-27 the town was carrying four mechanisms that had been",
+    "BUILT and were not RUNNING, and no surface anywhere went red about any of them:",
+    "the world drain had no caller at all (postmark#1990), the settlement shadow was",
+    "disabled with a WOULD-REFUSE verdict nobody had read (2 days 8 hours old), the",
+    "economy report's timer had been owed since 2026-08-10 in OPERATIONS.md's own Known",
+    "gaps, and the stripe watcher was built on 08-25 and never adopted. Three of those",
+    "are failures; the fourth is correct and deliberate. A roll-call that could not tell",
+    "them apart would be no better than the silence it replaces, which is why PARKED is",
+    "a first-class verdict here and a parked row is carried FOREVER rather than omitted.",
+    "",
+    "THE LAW THIS SERVES (OPERATIONS.md § Built is not Done): a mechanism folds only",
+    "with its runner, its liveness check, and its activation owner named.",
+    "",
+    "ADDING A ROW. Every postmark-* timer on the box, and every ENABLED postmark-*",
+    "service, must appear here — the checker globs the box and reports ALARM-unmanifested",
+    "for anything it finds that this file does not name, which is what keeps the roll-call",
+    "from decaying into a snapshot of the day it was written. Parked rows are legal.",
+    "Omission is not.",
+    "",
+    "FIELDS.",
+    "  unit                  the systemd unit, exactly as systemctl names it",
+    "  label                 how the alarm line refers to it, in the town's own words",
+    "  stage                 live | parked. parked never alarms for being inert — but it",
+    "                        DOES alarm if the box has it enabled, because then the",
+    "                        manifest and the box disagree about whether it is inert",
+    "  activation_owner      who decided it runs, and the receipt. Not decoration: a row",
+    "                        that cannot say this is a row nobody will fix when it reddens",
+    "  cadence               the effective schedule, in prose",
+    "  cadence_source        WHERE that schedule is authoritative. Note that this is",
+    "                        `systemctl show -p TimersCalendar` for every timer and never",
+    "                        the .timer file — postmark-dev-freshen's file says every ten",
+    "                        minutes and its drop-in makes it daily, a factor of 144",
+    "  heartbeat             what would prove it ran. unit_trigger = systemd's own last",
+    "                        firing; state_file = the work's own output (stronger — it",
+    "                        proves the run REACHED ITS END); unit_active = a daemon, whose",
+    "                        liveness is simply that it is up",
+    "  stale_means           the sentence the operator reads at 8am: what it means for THIS",
+    "                        unit to be late, and why the allowance is that number",
+    "  no_staleness_because  the only escape from an allowance, and deliberately a sentence",
+    "  outcome               judges what the rail PRODUCED, not just that it ran — a rolling",
+    "                        Inside it: history_path · alarm_on_classes (terminal on sight) ·",
+    "                        zero_published_runs (the starvation window) · means (the ONE sentence",
+    "                        the board prints) · why (the paragraph a reviewer weighs, never printed",
+    "                        — a board that recites its own rationale every morning teaches skimming)",
+    "                        receipt log, the refusal classes that are terminal on sight, and",
+    "                        how many consecutive empty runs is starvation. Every threshold is",
+    "                        DATA here rather than a constant in the checker, because a baseline",
+    "                        compiled into code is a number nobody can review beside its reason",
+    "  outcome.alarm_on_nonempty  the fields in the latest log line that must be EMPTY lists, with",
+    "                        list_means as that alarm's own sentence. Judged on the LATEST line only",
+    "                        — a non-empty list is a fact about the store right now, not a trend —",
+    "                        and a latest line carrying none of the named fields is ITSELF the alarm,",
+    "                        so a writer that stops emitting the list cannot switch its own alarm off.",
+    "                        list_means is REQUIRED and separate because the shared means ends with an",
+    "                        install-day excuse, which is false of a line naming a slug",
+    "  outcome.report_counts  number fields on the latest log line that the board PRINTS beside the",
+    "                        row's verdict and never alarms on, with count_means as the one sentence",
+    "                        printed after them. A field may not be in report_counts and an alarm",
+    "                        list at once. For what the rail knows but cannot judge — the notary's",
+    "                        commons marks locked at windows the escrow projection never held",
+    "                        (postmark#2935): unavailable, never ✦0, so a count and not an alarm",
+    "",
+    "SEE ALSO the custody[] block at the foot of this file: every row above asks whether a",
+    "mechanism RAN; those ask whether it still CAN."
+  ],
+  "units": [
+    {
+      "unit": "postmark-ferry.timer",
+      "label": "the ferry",
+      "stage": "live",
+      "activation_owner": "Keemin — the town's published crossings; consolidated onto the box 2026-07-08 (deploy/DEPLOY.md § The ferry on the box), unit added to the repo 2026-08-01 c8e62f9",
+      "cadence": "00:00 and 12:00 UTC, sharp and unjittered",
+      "cadence_source": "systemctl show postmark-ferry.timer -p TimersCalendar",
+      "heartbeat": {
+        "kind": "unit_trigger",
+        "stale_after_minutes": 780
+      },
+      "stale_means": "A missed crossing means mail written yesterday did not deliver and the ledger carries no stamp for it. The allowance is one crossing plus an hour: a single late tick is Persistent=true catching up after a reboot, but two crossings of silence is the town's clock stopped."
+    },
+    {
+      "unit": "postmark-crossing-save.timer",
+      "label": "the crossing save",
+      "stage": "live",
+      "activation_owner": "Wright — added 2026-08-09 45b9dcf, crossing-aligned two minutes behind the ferry so the two never contend for town.lock",
+      "cadence": "00:02 and 12:02 UTC, two minutes behind each crossing on purpose",
+      "cadence_source": "systemctl show postmark-crossing-save.timer -p TimersCalendar",
+      "heartbeat": {
+        "kind": "unit_trigger",
+        "stale_after_minutes": 780
+      },
+      "stale_means": "The dynamic store is not crystallized at the boundary it just left, so the record of that crossing has a hole in it that no later run fills — the save writes the crossing it has left, not the ones it slept through. Same allowance as the ferry it follows."
+    },
+    {
+      "unit": "postmark-office-rehydrate.timer",
+      "label": "the office's read index",
+      "stage": "live",
+      "activation_owner": "Keemin — part of the original box standup, enabled in DEPLOY.md § One-time setup's own enable line; unit added 2026-08-01 c8e62f9",
+      "cadence": "every 15 minutes at :07, :22, :37, :52 while the box runs the pre-split unit (which runs the whole tick through the transitional deploy/office-tick.sh); :09, :24, :39, :54 once the POS-268 split's unit files are installed, two minutes after postmark-office-keep.timer",
+      "cadence_source": "systemctl show postmark-office-rehydrate.timer -p TimersCalendar",
+      "heartbeat": {
+        "kind": "unit_trigger",
+        "stale_after_minutes": 45
+      },
+      "stale_means": "The office serves a frozen X-Postmark-As-Of: every door answers 200 with yesterday's town. This is the exact failure found BY HAND on 2026-08-25 (one distinct as-of across 40 minutes and three tick slots). The allowance is three ticks — one missed tick is noise, three is a stuck rehydrate. site-sentinel's office_as_of probe watches the OUTCOME of this from outside; this row watches the runner.",
+      "outcome": {
+        "history_path": "/srv/postmark-harbor/household-keys.jsonl",
+        "alarm_on_nonempty": [
+          "split_households",
+          "shared_keys"
+        ],
+        "alarm_on_false": [
+          "checked"
+        ],
+        "unsettled_runs": 0,
+        "why": "ONE HOUSEHOLD, ONE MINT KEY (Darko, 2026-10-04: \"make sure this cannot happen again without tests failing and alarms\"). The mint caps a household by the key the town's currentHouseholds gives each handle; a join that re-keyed only the joiner left nine houses minting as two households with two daily caps (Kev's minted 10 sends on 10-03), and nothing was looking. deploy/office-keep.sh runs the town's own predicate (tools/household-keys.mjs) over each tick's frozen town snapshot and appends one line here. The drain refuses a crossing that would split a house it touches, and the town's PR check reds a split on the PR that brings it; this row is the third lock, for a split that arrives by any other road (a hand-declared registry line, a records edit). This row sits on the rehydrate timer because the box still runs the pre-split unit, whose deploy/office-tick.sh calls office-keep.sh; it moves to the postmark-office-keep.timer row when that row goes live. unsettled_runs is 0 on purpose: these lines carry no status, so a threshold on it could never fire. Judged on the LATEST line only, because a split is a fact about the town right now.",
+        "means": "The household-keys line is not being written. INSTALL-DAY NOTE: this row is EXPECTED to read ALARM-outcome until the first tick after deploy appends to /srv/postmark-harbor/household-keys.jsonl, and it clears itself then.",
+        "list_means": "A declared household mints under more than one key (split_households), or one key mints for two households (shared_keys): the house gets two daily caps, or two houses share one. THIS ALARM HAS NO INSTALL DAY. The line's `detail` names each house and its keys. The repair is signed `registry: <handle> = hh:<slug>` lines for the residents off the house key, written with the drain's signedRegistryLines (the 07fa74d6a precedent), then stamp-verify. There are no exceptions: two people under one roof are one household (Darko, 2026-10-04).",
+        "unchecked_means": "The town's predicate did not run (the line carries `checked: false` and the error text): the snapshot's tools/household-keys.mjs is absent (a town clone older than d95e81c1c) or it crashed. A check that did not run is not a clean town."
+      }
+    },
+    {
+      "unit": "postmark-office-keep.timer",
+      "label": "the office's keeping tick (clones, mint, settlements row, panes)",
+      "stage": "live",
+      "activation_owner": "Wright — ADOPTED 2026-10-04 at the w41 ship (SUNDAY-RUNBOOK § 7.1, DEPLOY.md § Sunday: adopting the tick split, POS-268): the four unit files installed, the pre-split units backed up to /var/backups/postmark-tick-split, postmark-office-keep.timer enabled. office-tick.sh stays on the box until a clean week has passed (the rollback runs it).",
+      "cadence": "every 15 minutes at :07/:22/:37/:52 UTC, the old tick's clock",
+      "cadence_source": "systemctl show postmark-office-keep.timer -p TimersCalendar — measured on the box 2026-10-04T15:0xZ: '{ OnCalendar=*-*-* *:07,22,37,52:00 }', UnitFileState=enabled, ActiveState=active",
+      "heartbeat": {
+        "kind": "unit_trigger",
+        "stale_after_minutes": 45
+      },
+      "stale_means": "the town clone stops pulling (the write pen and declare read a stale town), the mint catch-up and welcome pass stop, the settlements row stops following the keeper's tag, the household-keys line stops being written, and the panes freeze. The allowance is three ticks."
+    },
+    {
+      "unit": "postmark-town-index.timer",
+      "label": "the town index (office.db's tables in the store)",
+      "stage": "live",
+      "activation_owner": "Keemin — ADOPTED at the w41 ship, 2026-10-04 (runbook § 8.2): 033_town_index.sql applied, the seed run by hand, and the timer enabled by Wright at 16:45Z. The READS switch (TOWN_INDEX_READS=store) is a separate act: flipped 10-04 16:52Z and rolled back 19:35Z (pool exhaustion; office #346, POS-370), then re-flipped 10-06 12:13Z with w41.3 and watched four hours clean (switch2-watch). It is ON: every door that reads the town index reads these tables.",
+      "cadence": "every 15 minutes at :05/:20/:35/:50 UTC",
+      "cadence_source": "systemctl show postmark-town-index.timer -p TimersCalendar — measured on the box 2026-10-07T01:0xZ: '{ OnCalendar=*-*-* *:05,20,35,50:00 UTC }', UnitFileState=enabled, active since 2026-10-04 16:45:19 UTC",
+      "heartbeat": {
+        "kind": "state_file",
+        "path": "/srv/world2-lab/state/town-index.json",
+        "stamp_field": "at",
+        "stale_after_minutes": 45
+      },
+      "stale_means": "the store's town_* tables stop following the town, and with TOWN_INDEX_READS=store (on since 2026-10-06 12:13Z) every door that reads them serves the town as of the last ingest. The state file names the sha and why. The allowance is three ticks."
+    },
+    {
+      "unit": "postmark-harbor-watch.timer",
+      "label": "the harbor watch",
+      "stage": "live",
+      "activation_owner": "Wright — added 2026-08-16 71a4622 for the web-of-towns carriage duty; read every operator round at step 4.7",
+      "cadence": "every 15 minutes, jittered up to 60s",
+      "cadence_source": "systemctl show postmark-harbor-watch.timer -p TimersCalendar",
+      "heartbeat": {
+        "kind": "state_file",
+        "path": "/srv/postmark-harbor/harbor-snapshot.json",
+        "stamp_field": "generated_at",
+        "stale_after_minutes": 50
+      },
+      "stale_means": "Cargo left at a foreign pier goes unseen, and the operator round reads a snapshot that describes the shores as they were rather than as they are — the sable-#537 shape, where carriage was owed and nobody could see it. The allowance is three ticks plus the jitter. The stamp is read from inside the file rather than from its mtime because a snapshot rewritten with unchanged content still has a fresh mtime."
+    },
+    {
+      "unit": "postmark-usdc-watch.timer",
+      "label": "the usdc watch",
+      "stage": "live",
+      "activation_owner": "Wright — the funding lane, unit added 2026-08-24 00e3d64; adopted as a READ-ONLY watcher (it sees and reports; it does not witness)",
+      "cadence": "every 10 minutes, jittered up to 45s",
+      "cadence_source": "systemctl show postmark-usdc-watch.timer -p TimersCalendar",
+      "heartbeat": {
+        "kind": "state_file",
+        "path": "/srv/postmark-usdc/state.json",
+        "stamp_field": "last_run",
+        "stale_after_minutes": 30
+      },
+      "stale_means": "Arrivals at the town's intake address stop being noticed, and because the cursor only advances on a successful read, a long silence means real money has landed with nobody told. The allowance is three ticks. Note that this row and site-sentinel's usdc_watch probe are deliberate duplicates: the sentinel reads it from the town's outside, this reads the runner from the box's inside, and the pair survives either one being the thing that broke."
+    },
+    {
+      "unit": "postmark-site-sentinel.timer",
+      "label": "the site sentinel",
+      "stage": "live",
+      "activation_owner": "Wright — built and enabled 2026-08-25 b71f63a, on Keemin's sentence \"how can we LOUDLY BE NOTIFIED when something is down on the site?\"; enable line in DEPLOY.md § The site sentinel",
+      "cadence": "every 10 minutes, jittered up to 45s",
+      "cadence_source": "systemctl show postmark-site-sentinel.timer -p TimersCalendar",
+      "heartbeat": {
+        "kind": "state_file",
+        "path": "/srv/postmark-sentinel/status.json",
+        "stamp_field": "generated_at",
+        "stale_after_minutes": 30
+      },
+      "stale_means": "THE WATCHMAN ITSELF HAS STOPPED, and it is the one failure the sentinel is structurally incapable of reporting — its own header says so: 'it cannot see its own death'. A dead sentinel presents as a permanently green board, which is worse than no board. This row is the answer to that, and it is the single most load-bearing row in this file. The allowance is three ticks."
+    },
+    {
+      "unit": "postmark-settlement.timer",
+      "label": "the settlement sweep",
+      "stage": "live",
+      "activation_owner": "Wright — added 2026-08-17 2cc4c6b, timed 05:45/17:45 UTC to land ahead of the Worldkeeper's 06:00/18:00 heartbeats so his blessing certifies fresh work",
+      "cadence": "05:45 and 17:45 UTC",
+      "cadence_source": "systemctl show postmark-settlement.timer -p TimersCalendar",
+      "heartbeat": {
+        "kind": "state_file",
+        "path": "/srv/postmark-harbor/settlement-auto.json",
+        "stamp_field": "at",
+        "stale_after_minutes": 780
+      },
+      "stale_means": "Drafts stop settling into the world: residents' work sits eligible and unpublished, and the world pin stops advancing twice daily as the law requires. The allowance is one crossing plus an hour. The stamp is the verdict's own 'at' rather than the file's mtime, because a run that refuses still rewrites the file — the question is when it last DECIDED, not when the bytes last moved.",
+      "outcome": {
+        "history_path": "/srv/postmark-harbor/settlement-auto-history.jsonl",
+        "alarm_on_classes": [
+          "canon-bad"
+        ],
+        "zero_published_runs": 3,
+        "why": "THE CLOCK IS NOT THE WORK. Until 2026-08-30 this row judged timer recency and nothing else, so the board would have read a green tick over the night of 08-31: the timer fired at 02:38:50Z exactly as scheduled and the crossing refused at 02:39:26Z with {\"phase\":\"unknown\"}, publishing nothing. TWO SHAPES ARE JUDGED HERE AND THEY FAIL DIFFERENTLY. A canon-bad refusal (deploy/settlement-classify.mjs) is loud and instantaneous — the failing path is in origin/main s own tree, so no rerun ever clears it and one occurrence is already forever; it alarms on sight. STARVATION is quiet and only exists across crossings: on 2026-08-26 a crossing left 42 marks drafted and reported nothing, and a starving crossing printed 0 published, 0 unpublished and read as a quiet day for two days — every receipt individually honest, the pattern the finding. Three consecutive crossings that published nothing WHILE left_drafted grew is work arriving with none getting out. THE WINDOW IS THREE because two is a weekend of genuinely nothing eligible and four is two full days of silence, which is the length the 08-26 starvation actually ran. The log is written by deploy/settlement-history.mjs at the end of every decided crossing; a single receipt file is overwritten twice a day and structurally cannot hold a pattern. AND A REFUSAL THAT KEEPS COMING BACK: the class rule above catches the refusal that announces itself terminal; unsettled_runs catches the one that does not and is terminal anyway. postmark-world 7f866059 (2026-08-30 22:40) says it in its own message — the fault \"was the sweep s standing 2-error lint refusal (every crossing since 08-28 re-drained them, dropped one, tripped on the other)\": six input-bad refusals over three days, each individually rerunnable, none ever cleared, because what produced them was upstream of the rerun. It is judged on STATUS and not on left_drafted, because a refused crossing never reaches the point of having channel counts — its receipt carries zeros, so the starvation rule is structurally blind to it.",
+        "means": "Read the receipt at /srv/postmark-harbor/settlement-auto.json — its `class` and `next_step` say whether this is yours to rerun or yours to repair. INSTALL-DAY NOTE: this row is EXPECTED to read ALARM-outcome until the first crossing after deploy writes the log, and it clears itself then.",
+        "unsettled_runs": 3,
+        "retire_null_runs": 3,
+        "retire_why": "A STEP THAT DEGRADES LOUDLY IS STILL UNREAD IF NOBODY COUNTS THE NOTICES. The retire step (G1 lane 1, 2026-09-08) tells the store what the world unpublished; until it existed nothing in the live write path ever set marks.status = retired, and the pre-cutover dump read 1,019 standing and 0 retired, ever. It is built to degrade loudly rather than to fail the crossing: a box whose settlement unit carries no WORLD2_CLEARING_URL writes retired: {ran: false} with its reason into every receipt and publishes canon anyway, which is correct — the world is already pushed by that line, and refusing there would write refused over a crossing that really landed. But a named absence repeated twice a day forever reads exactly like a quiet town, which is the 2026-08-26 starvation lesson one rule up wearing new clothes. NULL AND ZERO ARE DIFFERENT FACTS AND ONLY ONE OF THEM ALARMS: retired: 0 means the step ran and there was nothing to retire, which is the common green case; retired: null means nobody asked. Alarming on zero would fire on nearly every crossing and teach the board to be ignored. THE WINDOW IS THREE for its sibling's reason — two is a weekend, four is two full days of the register drifting from canon. A history line written before this field existed has no retired key at all and deliberately does not match, so an old log never alarms about a step that did not exist when it was written, and this rule needs no install-day exception.",
+        "retire_means": "Read the receipt at /srv/postmark-harbor/settlement-auto.json — its `retired` block names the reason in its own words. If it reads that WORLD2_CLEARING_URL is unset, the fix is the box carry: the settlement unit reads WORLD2_CLEARING_URL from EnvironmentFile=/etc/postmark-world2-clearing.env — ONE file, shared with the candle since 2026-09-12 (office #26); if it is missing or stale the URL is unset here and the candle cannot log in either, so repair that one file, daemon-reload, and both units follow. A non-empty `absent` list in that same block is a DIFFERENT finding and not this alarm — it means the world unpublished a mark the store never materialized."
+      }
+    },
+    {
+      "unit": "postmark-settlement-shadow.timer",
+      "label": "the settlement shadow",
+      "stage": "live",
+      "activation_owner": "Wright — built 2026-08-20 1f3a73a, and DELIBERATELY REACTIVATED 2026-08-23 998c5d1 after the outage-day disable, at a reduced 2/day cadence chosen so the CPU cost stopped being an argument for switching it off. The commit message is the receipt: 'reactivated 2026-08-23 after the outage-day disable'.",
+      "cadence": "10:23 and 22:23 UTC — off the real crossing's 05:45/17:45 marks so the rehearsal never races the pen",
+      "cadence_source": "systemctl show postmark-settlement-shadow.timer -p TimersCalendar",
+      "heartbeat": {
+        "kind": "state_file",
+        "path": "/srv/postmark-harbor/settlement-shadow.json",
+        "stamp_field": "at",
+        "stale_after_minutes": 780
+      },
+      "stale_means": "THIS IS THE ROW THE ROLL-CALL WAS BUILT AROUND, and on install day it is expected to be red. The shadow rehearses the next crossing with the pen denied, so a WOULD-REFUSE here is a finding roughly twelve hours ahead of the real settlement rather than an outage. On 2026-08-27 the box had this timer disabled, and the verdict on disk read {\"at\":\"2026-08-24T22:23:00Z\",\"status\":\"would-refuse\",\"detail\":\"grammar suite would go red\"} — the exact finding it exists to raise, 2 days 8 hours old when measured at 2026-08-27T06:00Z, unread. The repo says reactivated and the box says disabled, and until this file existed nothing anywhere could see the two disagree. Its own script header claims the verdict is 'polled by the ops page and read on the operator round'; no step of the operator round read it. The allowance is one cadence period plus an hour."
+    },
+    {
+      "unit": "postmark-dev-freshen.timer",
+      "label": "the dev sandbox freshen",
+      "stage": "live",
+      "activation_owner": "Keemin — founder ruling 2026-08-26 (the drop-in carries it verbatim: 'dev default = sandbox/seed; nightly stand-back, not 10-minute — a mid-day rehearsal is never yanked'); unit added 2026-08-21 27026cd",
+      "cadence": "once daily at 08:10 UTC",
+      "cadence_source": "systemctl show postmark-dev-freshen.timer -p TimersCalendar — AND NOTHING ELSE. The .timer file itself says OnCalendar=*:0/10 and calls itself 'every 10 minutes' in its own Description; the drop-in at postmark-dev-freshen.timer.d/nightly.conf clears that line and substitutes the daily one. Reading the file instead of the merged value is wrong by a factor of 144 in the direction of alarming on a healthy rail every ten minutes forever.",
+      "heartbeat": {
+        "kind": "unit_trigger",
+        "stale_after_minutes": 1560
+      },
+      "stale_means": "dev stops returning to the certified sandbox/seed snapshot, so a rehearsal run against dev is measuring drift rather than the seed. The allowance is 26 hours — one full day plus room for the box to have been down over the 08:10 mark and caught up on boot."
+    },
+    {
+      "unit": "postmark-office.service",
+      "label": "the office API",
+      "stage": "live",
+      "activation_owner": "Keemin — the front door itself; enabled in DEPLOY.md § One-time setup's enable line, unit added 2026-08-01 c8e62f9",
+      "cadence": "always on",
+      "cadence_source": "systemctl show postmark-office.service -p ActiveState",
+      "heartbeat": {
+        "kind": "unit_active"
+      },
+      "no_staleness_because": "A daemon has no cadence to be late for — its liveness is simply that it is up, which is the check the row above the heartbeat already makes. What the uptime is reported FOR is the flap: an office that came up four minutes ago every single morning is a crash loop wearing a green tick, and only the number makes that visible.",
+      "stale_means": "Not applicable. Down is the failure, and down is caught as ALARM-disabled. site-sentinel's office_api probe watches the same thing from outside the box; both are kept, because a door that answers 200 to the outside while systemd reports it restarting is a finding, and so is the reverse."
+    },
+    {
+      "unit": "postmark-office.service",
+      "label": "the office's thread",
+      "stage": "live",
+      "activation_owner": "Keemin — POS-267 part 2, briefed by Wright and built by the lane jetto-office-measure (2026-09-27, after the Snug Harbour night's two brownouts, when the office answered 18-22 s late and nothing on the box recorded it). The office writes the file itself from src/loop-lag.mjs, so it goes live with the first release that carries that module; until then this row reads ALARM-noheartbeat (the file does not exist), which is correct",
+      "cadence": "read as: last CALM — calm_at is the last minute in which every caller got the thread within 5 s; the office rewrites the file every minute",
+      "cadence_source": "src/loop-lag.mjs (MINUTE_MS); the row above this one says whether the process is up",
+      "heartbeat": {
+        "kind": "state_file",
+        "path": "/srv/postmark-office/telemetry/loop-lag-4380.json",
+        "stamp_field": "calm_at",
+        "stale_after_minutes": 10
+      },
+      "stale_means": "For ten minutes or more, no minute passed in which every caller got the office's one thread within 5 s (LAG_ALARM_MS, judged on the minute's MAX lag, because one 48 s synchronous read is a single late sample that p99 hides). That is the brownout itself: requests queue behind the thread, nginx's cached reads keep answering, and everything else waits. The same alarm reads when the office stops writing the file at all. Read the file's worst_24h and minutes for the shape, and GET /api/ops/loop-lag for the live numbers. THE LIMIT, said once: this is a point-in-time reader like the rest of the board, so a brownout that ended before the roll-call ran is not an alarm here; it is in worst_24h."
+    },
+    {
+      "unit": "postmark-office.service",
+      "label": "the office's store transactions",
+      "stage": "live",
+      "activation_owner": "Darko — POS-370 (2026-10-04, \"let's add the durable fix for switch two so that we can roll it back out\"), after switch 2 (TOWN_INDEX_READS=store) stalled the office for an hour behind nine office_api sessions idle in transaction and nothing on the box said so. Built by the lane plumb-pos370-index-leak. The office writes the file itself from src/store-txn-watch.mjs, so it goes live with the first release that carries that module; until then this row reads ALARM-noheartbeat (the file does not exist), which is correct",
+      "cadence": "read as: last CALM — calm_at is the last minute the office could ask the store and no office_api session had been idle inside a transaction for 5 s or more; the office rewrites the file every minute",
+      "cadence_source": "src/store-txn-watch.mjs (MINUTE_MS, STUCK_AFTER_S); the office API row says whether the process is up",
+      "heartbeat": {
+        "kind": "state_file",
+        "path": "/srv/postmark-office/telemetry/store-txn-4380.json",
+        "stamp_field": "calm_at",
+        "stale_after_minutes": 5
+      },
+      "stale_means": "For five minutes or more, every minute either found an office_api session idle inside a transaction for 5 s or more, or could not ask the store at all. That is the 2026-10-04 stall's signature (POS-370): a connection held open while its holder waits on something else, the pool drains, and every later store read waits behind it while the CPU sits idle. Read last_minute.stuck_sessions for which pool and worker hold them (application_name postmark-office:<pool>:t<thread>) and the statement each last ran; GET /api/ops/store-txn gives the live numbers. With idle_in_transaction_session_timeout on (the office's own pools ask for 30 s, and DEPLOY.md § POS-370 sets it on the roles) such a session should not outlive 30 s, so this alarm also means the timeout is not in force. If switch 2 is on, its rollback is the documented one (the env line out, the office restarted). THE LIMIT, said once: a point-in-time reader like the rest of the board; a stall that cleared before the roll-call ran is in worst_24h."
+    },
+    {
+      "unit": "postmark-office-dev.service",
+      "label": "the dev office",
+      "stage": "live",
+      "activation_owner": "Wright — the dev sandbox standup, unit installed 2026-08-22; behind Cloudflare Access by design",
+      "cadence": "always on",
+      "cadence_source": "systemctl show postmark-office-dev.service -p ActiveState",
+      "heartbeat": {
+        "kind": "unit_active"
+      },
+      "no_staleness_because": "Same as the office it mirrors: an always-on daemon is judged by being up, not by being recent. Its uptime is carried for the same flap reason.",
+      "stale_means": "Not applicable. Down means dev.postmark.town stops answering behind the Access gate, which reads to the sentinel as an INFO 302 either way — so this row is the only place a dead dev office is visible."
+    },
+    {
+      "unit": "postmark-stripe-watch.timer",
+      "label": "the stripe watch (Stage B)",
+      "stage": "live",
+      "activation_owner": "Keemin — ADOPTED 2026-08-27 ~00:15 EDT (the founder's ON word, the night of the martina $20; enabled by Wright 06:23Z after review of wright/stripe-login-attribution). The Stage-B header's condition was met: the paste became the outage.",
+      "cadence": "every 15 minutes at :07/:22/:37/:52 — offset from usdc-watch so the two funding watchers never contend for town.lock",
+      "cadence_source": "systemctl show postmark-stripe-watch.timer -p TimersCalendar — measured on the box 2026-08-31T03:4xZ: '{ OnCalendar=*-*-* *:07/15:00 }', UnitFileState=enabled, ActiveState=active",
+      "heartbeat": {
+        "kind": "state_file",
+        "path": "/srv/postmark-stripe/state.json",
+        "stamp_field": "last_run",
+        "stale_after_minutes": 45
+      },
+      "stale_means": "Stripe payments stop being attributed: a resident pays and the funding ledger does not learn, so the town's own record of who is paid up goes quietly wrong rather than loudly absent. The allowance is three ticks. WHAT THIS ROW HAS ALREADY CAUGHT ONCE, and the reason it judges the unit before the heartbeat: on 2026-08-27 a file at /srv/postmark-office/.stripe-watch-state.json was four minutes fresh, written by a HAND-RUN of the tool's default state path, while no unit existed on the box at all. That file is not this row's heartbeat and must never become it — a hand-run's output is exactly the evidence that makes a rail with no runner look alive. THE ROW'S OWN SCAR (2026-08-30, the v1 sweep): this rail was adopted on 08-27 by flipping stage parked -> live, and every sentence around that word stayed written for a rail that does not run — cadence said 'would be … once adopted', cadence_source said 'the unit is not on the box', and parked_because and adopt_command were both still standing. The suite went red for three weeks about a manifest that described the wrong box, which is this file's own failure class committed inside this file."
+    },
+    {
+      "unit": "postmark-paypal-watch.timer",
+      "label": "the paypal watch",
+      "stage": "live",
+      "activation_owner": "Keemin — ADOPTED 2026-10-04 at the w41 ship (\"get it fully up this release\"); installed and enabled by Wright: the live REST pair in /etc/postmark-paypal-watch.env (root 600), Transaction Search answering 200 on both apps, the site's PUBLIC_PAYPAL_CLIENT_ID in /etc/postmark-site-refresh.env. Built 2026-09-29 (POS-183 part 2, lane plumb-paypal-rail).",
+      "cadence": "every 15 minutes at :14/:29/:44/:59 UTC — off stripe-watch's :07/15 and usdc-watch's *:0/10",
+      "cadence_source": "systemctl show postmark-paypal-watch.timer -p TimersCalendar — measured on the box 2026-10-04T15:0xZ: '{ OnCalendar=*-*-* *:14/15:00 }', UnitFileState=enabled, ActiveState=active",
+      "heartbeat": {
+        "kind": "state_file",
+        "path": "/srv/postmark-paypal/state.json",
+        "stamp_field": "last_run",
+        "stale_after_minutes": 45
+      },
+      "stale_means": "PayPal gifts stop being attributed to their pots and households. PayPal's own indexing lag (up to about three hours before a payment is in Transaction Search) is not this row's allowance: the heartbeat is the watcher's run, which is fresh whether or not PayPal has indexed anything yet. The allowance is three ticks."
+    },
+    {
+      "unit": "postmark-site-refresh.timer",
+      "label": "the box publishes the site (atomic swap, lock, convergence)",
+      "stage": "live",
+      "activation_owner": "Keemin — AC #3 of the 2026-08-27 acceptance criteria; installed+enabled by Wright 06:33Z after selftest 33/33 and a proven sandbox first run (3347 pages). GitHub schedule retires only after one proven box crossing.",
+      "cadence": "every 30 minutes at :10/:40 — phased ~10 min after the ferry crossings",
+      "cadence_source": "systemctl show postmark-site-refresh.timer",
+      "heartbeat": {
+        "kind": "state_file",
+        "path": "/srv/postmark-harbor/site-refresh.json",
+        "stamp_field": "at",
+        "stale_after_minutes": 100
+      },
+      "stale_means": "The site stops following the town: a ferry landing never reaches postmark.town, and nothing else publishes prod now that the box is the one writer. The allowance is three ticks plus build time."
+    },
+    {
+      "unit": "postmark-world2-clearing.timer",
+      "label": "the World 2.0 candle",
+      "stage": "live",
+      "activation_owner": "Wright — founder ruling 2026-08-29 (prod Postgres on the box, cutover drive on). Windows 149..155 had been closed by hand all day; 155 was the last one a person typed and the first this timer closed, 2026-08-29T01:54Z. Unit source: deploy/postmark-world2-clearing.{service,timer}, script deploy/world2-clearing.sh",
+      "cadence": "05:45 and 17:45 UTC — the marks world LOGOS/classes.md § crossing ② holds until the w39 ship (2026-09-21), after which both this timer and postmark-settlement.timer read 06:00 and 18:00; the repo copies already carry the ship's marks and reach the box with the tag",
+      "cadence_source": "systemctl show postmark-world2-clearing.timer -p TimersCalendar",
+      "heartbeat": {
+        "kind": "state_file",
+        "path": "/srv/world2-lab/state/clearing.json",
+        "stamp_field": "at",
+        "stale_after_minutes": 780
+      },
+      "stale_means": "The candle stops. Windows pass their close and stay open, claims sit pending in a window that will not clear, and every downstream read — standing tiers, the docket, escrow sufficiency — describes a town frozen at the last close somebody performed by hand. The allowance is one crossing plus an hour, matching the settlement sweep it shares its marks with. NOTE THAT THE STAMP IS WRITTEN ON REFUSAL TOO, deliberately: a clearing that refused (the null-pin guard) has RUN, and this heartbeat answers 'did the lane run', while the service's own non-zero exit is what answers 'did it succeed'. Read both — a fresh stamp with an ALARM-failed beside it means the guard fired, and clearing.json names which one."
+    },
+    {
+      "unit": "postmark-world2-ingest.timer",
+      "label": "the World 2.0 projection poll",
+      "stage": "parked",
+      "activation_owner": "Keemin — PARKED at his word 2026-08-31 ~03:45Z ('arm it, disable git ingest'): the World2 shadow mirror is armed on the prod office and is the store's SOLE feeder; the seam closed lawfully (mirror live, one final ingest pass, then this timer disabled). Every sentence in this row was rewritten with the word, per this file's own stripe-watch scar.",
+      "parked_because": "CORRECTED 2026-09-19 (postmark#2893, founder-ruled): the 08-31 sentence here read 'a re-lift from git would launder v1's record into v2's and destroy the writer comparison the shadow era exists to make'. That is true of the world's OUTCOMES — acts, claims, marks, what the shadow mirror writes and what a replay-ingest would lift — and this unit's two pens write none of them. They copy the rulebook (law_projection + identities) and the ledger (stamp_projection), repo-first inputs the store may not author. The mirror's reason was written onto this row when the seam closed in one gesture, and it named a danger these pens cannot cause. What HOLDS this unit parked now is narrower and still the founder's: the STAMP pen stays parked because the town's record is the shadow writer's and the clearing already lifts the ledger at every close. The LAW pen was resumed 2026-09-19 on its own unit (postmark-world2-law-ingest.timer) — see that row.",
+      "adopt_command": "sudo systemctl enable --now postmark-world2-ingest.timer — ONLY at Keemin's word; re-adopting silently would recommit the ruling this row records. NOTE 2026-09-19: adopting THIS unit now would run the law pen a second time, on top of postmark-world2-law-ingest.timer's identical :04/:19/:34/:49 marks. The law pen has its own unit; this one is the stamp pen's.",
+      "cadence": "none while parked (the unit file keeps its :04/:19/:34/:49 UTC OnCalendar for the day it is re-adopted)",
+      "cadence_source": "the unit file — disabled with no next fire is this row's healthy state",
+      "stale_means": "not judged while parked. The store's freshness belongs to the SHADOW WRITER now — a mirror failure surfaces in the office journal (loud, fire-and-forget) and the dead-letter queue, never here. When this rail was live its staleness only degraded the doors' advisory reads; the clearing pins its own reads at the candle and refuses on a null law pin regardless."
+    },
+    {
+      "unit": "postmark-world2-law-ingest.timer",
+      "label": "the World 2.0 law pen",
+      "stage": "live",
+      "activation_owner": "Keemin — RULED 2026-09-19 ~14:4x EDT on postmark#2893, 'split for now is good'. The law pen rode postmark-world2-ingest, parked at his 08-31 word for a reason about the world's outcomes that neither pen touches; law-ingest.mjs is the only writer of law_projection anywhere in the office, so the park froze the rulebook copy — a23a8d17 (09-05), one hand-run to 1688a5af (09-17), then 37 commits behind world main by 09-19. This unit is the law half resumed on its own clock. Unit source: deploy/postmark-world2-law-ingest.{service,timer}, script deploy/world2-ingest.sh in `law` mode. The stamp pen stays parked on the original unit.",
+      "cadence": "every 15 minutes, :04/:19/:34/:49 UTC — the same marks the parked poll carries, kept deliberately: they are off the :07/:22/:37/:52 that office-rehydrate and stripe-watch occupy, and a new cadence here would be a second decision riding along with the split",
+      "cadence_source": "systemctl show postmark-world2-law-ingest.timer -p TimersCalendar",
+      "heartbeat": {
+        "kind": "state_file",
+        "path": "/srv/world2-lab/state/ingest-law.json",
+        "stamp_field": "at",
+        "stale_after_minutes": 45
+      },
+      "stale_means": "The rulebook copy stops advancing and the store answers under a law the tree has amended. This is the alarm postmark#2893 asked for, and it is worth saying WHY it had to be asked for: the designed guard is the clearing's refusal on a NULL world-law pin, and a pin that was written once and then froze is never null — so between 09-05 and 09-19 nothing anywhere went red while law_projection fell 37 commits behind. The allowance is 45 minutes, three ticks: one missed fire is weather, three is the rail. THIS FILE IS THIS UNIT'S ALONE and that is the point — the parked poll writes /srv/world2-lab/state/ingest.json, so a heartbeat here can never go green on a run that was not the law pen's. Read the `law.sha` line beside the stamp: a fresh `at` with an ALARM-failed exit means the pen ran and could not ingest, and the detail names which."
+    },
+    {
+      "unit": "postmark-earpiece.timer",
+      "label": "the earpiece",
+      "stage": "live",
+      "activation_owner": "Wright — POS-209 (Earpiece C), brief 2026-09-25, transport ruled by Wright on Keemin's 'will leave it to you' and disclosed on POS-208/209. Unit source: deploy/postmark-earpiece.{service,timer}, tool world2/tools/earpiece-deliver.mjs. Installed by Wright's hand, dev sandbox first; it shipped with W2_EARPIECE unset; the flag was set on prod 2026-09-27 with release/2026-w40.1 (Keemin: \"good for 2\"), so it sends. Unset the flag and every fire writes status 'disabled' and sends nothing.",
+      "cadence": "every minute, on the minute UTC — the tool coalesces to one wake per resident per 5 minutes per event, so the timer only decides how late a wake can be",
+      "cadence_source": "systemctl show postmark-earpiece.timer -p TimersCalendar",
+      "heartbeat": {
+        "kind": "state_file",
+        "path": "/srv/postmark-earpiece/state.json",
+        "stamp_field": "at",
+        "stale_after_minutes": 5
+      },
+      "stale_means": "Residents who RSVPed stop being woken during an event, and nothing says so: the resident sees no wake and cannot tell a quiet room from a dead rail. EVERY FIRE WRITES THE STAMP, the idle and disabled ones included, so this unit is never rightly silent and needs no window-aware allowance: outside every event's window the stamp says status 'idle', with the flag off it says 'disabled', and a stale `at` means the rail is not running at all. Read `status` beside the stamp: 'failed' with a fresh `at` is the record unreachable mid-run. The allowance is five fires: one missed minute is weather, five is the rail."
+    },
+    {
+      "unit": "postmark-world2-marks-ingest.timer",
+      "label": "the World 2.0 marks pen",
+      "stage": "live",
+      "activation_owner": "Keemin — RULED 2026-09-23 18:4x EDT on POS-142: 'the class fix goes — a marks ingest at every bless, then prod's fold flips to the store — this week, no separate sitting'. The store had no ingest for the world repo's marks: door-made writes reach it through the clearing, every file-side change after the 08-28 seed did not, and PR #173's rows fold differed from the published file by 7 missing marks and ~50 stale rows. Unit source: deploy/postmark-world2-marks-ingest.{service,timer}, script deploy/world2-marks-ingest.sh, tool world2/tools/marks-ingest.mjs. Installed by Wright's hand, dev sandbox first.",
+      "cadence": "every 15 minutes, :12/:27/:42/:57 UTC — five minutes after the office tick that fetches a fresh settlement tag; the tool acts only on a new blessing and is a no-op between them, so the bless is the trigger and the clock is how the box notices it",
+      "cadence_source": "systemctl show postmark-world2-marks-ingest.timer -p TimersCalendar",
+      "heartbeat": {
+        "kind": "state_file",
+        "path": "/srv/world2-lab/state/ingest-marks.json",
+        "stamp_field": "at",
+        "stale_after_minutes": 45
+      },
+      "stale_means": "The store stops learning the world repo's own changes, and the rows fold drifts from the published file one crossing at a time — the exact silence POS-142 measured (7 marks no row held, ~50 stale rows, and nothing anywhere red). Every fire writes the state file, the no-op ones included, so a stale `at` means the pen is not running, not that nothing was blessed. Read `status` beside the stamp: `failed` with a fresh `at` is a STOP or a refused write, and `receipt`/`detail` name which; a STOP is a fact the row shape cannot hold and wants a person, never a retry. The allowance is 45 minutes, three fires: one missed fire is weather, three is the rail."
+    },
+    {
+      "unit": "postmark-world2-notary.timer",
+      "label": "the World 2.0 notary",
+      "stage": "live",
+      "activation_owner": "Wright — 2026-08-29, PAYING A NAMED DEBT. The notary shipped with 'Nightly TIMER deferred deliberately — the box roll-call manifest law' written into world2/tools/README.md at its merge; the deferral was correct and this row is what settles it. Script deploy/world2-notary.sh, connecting as snapshot_reader and no other role",
+      "cadence": "nightly at 07:20 UTC, jittered up to 2 min — after the morning crossing has published and its receipt has landed, so the certification reads the docket the crossing cleared (office#83; was 03:20, which read every docketed mark as canon-absent two hours before the crossing cleared it)",
+      "cadence_source": "systemctl show postmark-world2-notary.timer -p TimersCalendar",
+      "heartbeat": {
+        "kind": "state_file",
+        "path": "/srv/world2-lab/state/notary.json",
+        "stamp_field": "at",
+        "stale_after_minutes": 1560
+      },
+      "stale_means": "No new certified snapshot binds (acts cursor, window cursor, content sha, law sha, town sha), so the repo stops being able to catch the office rewriting history — gold section 2's whole promise. The allowance is one day plus two hours. TWO THINGS AN OPERATOR MUST KNOW HERE. First, a RED from this unit is usually a FINDING and not a broken timer: an archive is frozen on write, and the pen refuses and names the diff rather than overwriting. Second, since 2026-09-03 (DEC-7) this lane PUSHES after every certification, to the private repo github.com/wright-starforge/postmark-world2-notary over an SSH deploy key scoped to that one repository and held by no other lane. A push that does not land is its own red even when the certification was green, because a certification that stayed on the box it certifies catches nothing; the state file carries push and remote_tip, and those are what say whether the off-box copy actually moved. That repository is SEPARATE from the backups repo on purpose - a certification stored beside the backup it certifies cannot be the thing that catches the backup - so neither lane's key can read the other's repo, and a future convenience that gives one process both keys undoes the whole arrangement.",
+      "outcome": {
+        "history_path": "/srv/world2-lab/state/canon-locks.jsonl",
+        "alarm_on_nonempty": [
+          "canon_absent",
+          "unmaterialized",
+          "escrow_unbacked"
+        ],
+        "unsettled_runs": 0,
+        "why": "postmark#2594, ruled by Keemin 2026-09-08 at the G1 sitting. The store locked claims at named candle windows for three marks canon never carried (darko/the-second-foundation-stone at 154, wright/final-unstaked at 155, little-bird/the-second-spoon-verdict at 161). They disagreed with canon from the moment of locking and stood for three weeks, and the reason nobody caught them is not that anything was quiet — it is that NOTHING WAS LOOKING. The lock-time refusal was WITHDRAWN on 2026-09-08: the crossing settlement pushes to origin three to four minutes AFTER the candle clears (seven crossings measured, never once before), so a canon check at the lock step would refuse the marks its own crossing just locked. world2/tools/falsifier-canon-locks.mjs is the instrument instead, run nightly on THIS rail where the push is hours old, and this row is what makes its answer arrive somewhere a person already looks. What gates at the candle is the escrow presence rule, which reads the town and races nothing. unsettled_runs is 0 ON PURPOSE and is not an oversight: this log's lines carry no `status`, so the sibling refusal-that-keeps-returning rule could never fire on it, and declaring a threshold that cannot fire is a rule that reads green forever. The judgement here is on the LATEST line only, because a non-empty list is a fact about the store's state right now rather than a trend across crossings.",
+        "means": "The canon-locks read is not writing its log. INSTALL-DAY NOTE: this row is EXPECTED to read ALARM-outcome until the first NIGHTLY run after deploy appends to /srv/world2-lab/state/canon-locks.jsonl, and it clears itself then.",
+        "list_means": "A mark stands in the register that the world carries no file for, which is the class #2594 names. The fix is never to delete the locking claim (it is the historical fact that the mark WAS ruled in at that window) — it is to decide which door the mark left canon by and record that: a settlement unpublish retires through the retire path, a never-materialized mark retires by hand with a data.note, per review-g1-retire.md probe 4. A mark that CHANGED HANDS is neither (DEC-16: the row keeps its id, the slug moves) — since 2026-09-15 the read asks the claim's own row before listing it; the-town/the-lanternstep-parlor was this, not a retire. THIS ALARM HAS NO INSTALL DAY: a line naming a slug is never deploy noise. `escrow_unbacked` is the same class from the other side (postmark#2594, ruled a G1 blocker 2026-09-08): a standing COMMONS mark with nothing staked on it at its locking window’s town sha, which the 1.0 sweep refused as “commons needs escrow > 0” and which G1 deletes the path for — there the repair is a stake, not a retire. It lists ONLY judgeable zeros — a locking sha the projection holds rows for and none for the slug; a mark locked at a window the projection never held is counted under report_counts and never listed here (postmark#2935).",
+        "alarm_on_false": [
+          "escrow_checked"
+        ],
+        "report_counts": [
+          "escrow_unjudgeable"
+        ],
+        "count_means": "commons marks locked at a window whose town sha the escrow projection holds NO rows for — every window before 181, migration 014's first ingest (2026-09-10T17:45Z) — so the read cannot judge them there: unavailable, never ✦0 (postmark#2935; 227 on 2026-09-18, and the true unbacked count under them was zero). A count and not an alarm. It falls only as those marks are retired or re-locked by an amend at a projected window; a stake today is read at today's sha and does not move it. The read names the oldest projected town sha on the same line.",
+        "unchecked_means": "The escrow half of the read has never run: escrow_projection does not exist until migration 014 lands with lane 2 (jetto/g1-render-stakes), so the read reports escrow_checked:false and the commons marks in the register are unjudged. This is EXPECTED until that migration ships and it clears itself then — but it must not read as a clean town, because a clean escrow list and an escrow list nobody built are opposite facts. The repair is the migration, never a stake."
+      }
+    },
+    {
+      "unit": "postmark-world2-backup.timer",
+      "label": "the World 2.0 durability lane",
+      "stage": "live",
+      "activation_owner": "Wright — founder ruling 2026-08-29 ('prod Postgres = ON THE BOX with shipped backups, no managed service'). Script deploy/world2-backup.sh. First rehearsed restore from the off-box copy the same night: 6318 rows across 9 tables, every table matching, restore in 1s, projection-equality falsifier GREEN against the restored database",
+      "cadence": "nightly at 08:10 UTC, jittered up to 5 min — after the notary (moved with it, office#83), so the night's certification has already been pushed to its own repo before the dump ships to this one",
+      "cadence_source": "systemctl show postmark-world2-backup.timer -p TimersCalendar",
+      "heartbeat": {
+        "kind": "state_file",
+        "path": "/srv/world2-lab/state/backup.json",
+        "stamp_field": "at",
+        "stale_after_minutes": 1560
+      },
+      "stale_means": "THE STORE STOPS HAVING AN OFF-BOX COPY, AND SO DOES WHO PAID, and this is the one row in this file where a long silence is not a degraded read but an unbounded loss: every hour past the last successful ship is an hour that dies with the box. The allowance is one day plus two hours. What the lane ships is the pg_dump (RPO no worse than 24h) to github.com/wright-starforge/postmark-world2-backups, private, over an SSH deploy key scoped to that one repository. It no longer ships a bundle of the notary checkout: since 2026-09-03 the notary pushes itself to its own separate repo (DEC-7), and a certification kept beside the backup it certifies cannot be the check on that backup. The bundles shipped before that date stay in this repo's history under notary/ with a RETIRED.md beside them saying which repo is live. What it does NOT ship is the WAL: measured at about 163 MB/day raw on 2026-08-29, which no git history survives, so the pg_basebackup and the WAL spool are on-box only and cover a bad migration rather than a lost box. That split is deliberate and it is the tee — an object-storage bucket makes the WAL ship a dozen lines. Since POS-185 (2026-09-21) the same commit also carries roles.db, the office's subscriber registry — src/roles.mjs:71-82 states the gap in its own words: a grant exists nowhere else in the world, no repo holds it and no fold recomputes it, so \"losing roles.db loses who paid\". It is copied with VACUUM INTO through node:sqlite from a read-only handle, never cp, which tears a live SQLite file; the receipt's roles_status, roles_db_bytes and role_audit_rows are the numbers to read, and roles_status:absent is legal on a box where no role has ever been granted (OFFICE_ROLE_GATES is unset on every office today). It rides this row rather than getting one of its own: one lane, one heartbeat, one thing to watch. Check the receipt with deploy/world2-restore-rehearse.sh --from-remote, which is the only thing that turns any of this from a hope into a backup — it now counts the shipped roles copy's role_audit against the live registry too."
+    },
+    {
+      "unit": "postmark-tmp-janitor.timer",
+      "label": "the /tmp janitor",
+      "stage": "live",
+      "activation_owner": "Wright, on Darko's go 2026-10-09 (\"I pretty much agree with all of your box recommendations; can we action on these now\"), after the disk filled that morning. Script deploy/postmark-tmp-janitor.sh, installed to /usr/local/sbin.",
+      "cadence": "daily at 05:37 UTC",
+      "cadence_source": "systemctl show postmark-tmp-janitor.timer -p TimersCalendar",
+      "heartbeat": {
+        "kind": "state_file",
+        "path": "/var/lib/postmark-tmp-janitor.json",
+        "stamp_field": "at",
+        "stale_after_minutes": 1560
+      },
+      "stale_means": "/tmp FILLS AGAIN. Hand-run scratch lands in /tmp and nothing owns its end; on 2026-10-09 it filled the disk (38G of 38G), Postgres went into crash recovery, sign-in failed and the ferry refused. The janitor removes only meepo-owned top-level entries older than 3 days that nothing holds open, minus a keep list. The allowance is one day plus two hours."
+    },
+    {
+      "unit": "postmark-disk-watch.timer",
+      "label": "the disk watch",
+      "stage": "live",
+      "activation_owner": "Wright, on Darko's go 2026-10-09 (the same sentence). Script deploy/postmark-disk-watch.sh; shouts through the sentinel's webhook (/etc/postmark-sentinel.env).",
+      "cadence": "every 15 minutes (:07, :22, :37, :52)",
+      "cadence_source": "systemctl show postmark-disk-watch.timer -p TimersCalendar",
+      "heartbeat": {
+        "kind": "state_file",
+        "path": "/var/lib/postmark-disk-watch.json",
+        "stamp_field": "at",
+        "stale_after_minutes": 60
+      },
+      "stale_means": "NOTHING WATCHES THE GROUND. On 2026-10-09 a full disk surfaced as Postgres in crash recovery and a dead sign-in, two hours before anyone looked. The watch shouts into Discord at 85% (once every 6 hours while over) and says when it is back under. The allowance is four ticks."
+    }
+  ],
+  "_custody_readme": [
+    "§2b — WHO OWNS THE FILES A SERVICE HAS TO WRITE.",
+    "",
+    "Every row above asks whether a mechanism RAN. These ask whether it still can.",
+    "On 2026-08-28 a sudo git touched the settlement clone and left root-owned files",
+    "inside it. The lane runs as meepo. Root-owned refs, objects and a root-owned",
+    "credential store then failed LATER and SEPARATELY — a two-hour pen lockout one",
+    "day, a refused 05:45Z crossing the next — with nothing on the box tying either",
+    "back to the one act that caused them, because nothing on the box could see the",
+    "ownership of a working file at all.",
+    "",
+    "ALARM-custody is its own verdict because its repair is chown, not systemctl. A",
+    "row that reported it as ALARM-failed would send the operator to restart a unit",
+    "that will fail again the same way in twelve hours.",
+    "",
+    "FIELDS. id · label · path (the root scanned, recursively) · must_be_owned_by",
+    "(a username, resolved to a uid on the box — a name that does not resolve is",
+    "itself an alarm, never a pass) · why (what breaks when custody slips; required,",
+    "same discipline as a unit row's activation_owner) · repair (the command)."
+  ],
+  "custody": [
+    {
+      "id": "settlement-clone-git",
+      "label": "the settlement clone's git internals",
+      "path": "/srv/postmark-office/settlement-clone/.git",
+      "must_be_owned_by": "meepo",
+      "why": "This clone is the settlement's whole pen. postmark-settlement.service runs as meepo (its unit says so: 'the clones and push credentials are meepos'), and the sweep writes refs, objects and a commit into it on every crossing, then pushes under a lease. A single root-owned ref or pack from a stray sudo git makes the next write fail — and it fails at whichever step touches that particular file, hours later, looking like an unrelated fault.",
+      "repair": "sudo chown -R meepo:meepo /srv/postmark-office/settlement-clone && sudo -u meepo git -C /srv/postmark-office/settlement-clone fsck --no-progress"
+    },
+    {
+      "id": "office-git-credentials",
+      "label": "the office pen's credential store",
+      "path": "/srv/postmark-office/.git-credentials",
+      "must_be_owned_by": "meepo",
+      "why": "Every push this box makes reads it — the settlement clone is configured with credential.helper 'store --file /srv/postmark-office/.git-credentials' by settlement-auto.sh itself, and deploy/settlement-escalate.mjs reads the same file to reach the operator queue. A root-owned credential store is the exact shape of the 2026-08-28 two-hour pen lockout: readable by nobody who needs it, and silent until the moment something tries to push.",
+      "repair": "sudo chown meepo:meepo /srv/postmark-office/.git-credentials && sudo chmod 600 /srv/postmark-office/.git-credentials"
+    },
+    {
+      "id": "dev-world-clone",
+      "label": "the dev office's world clone",
+      "path": "/srv/postmark-office-dev/world-clone",
+      "must_be_owned_by": "meepo",
+      "why": "The dev office's world clone is rewritten by postmark-dev-freshen.service every night at 08:10 UTC, and that unit runs as meepo (its unit says User=meepo): a fetch, then a git reset --hard onto sandbox/seed, which has to rewrite every tracked file. On 2026-09-22 Wright found 1,918 root-owned files across this clone and its sibling — the 08-28 root-git class again: something on the box ran git in them as root. Every reset had been refusing them with Permission denied for an unknown time, and the freshen printed 'dev clones stood back on sandbox/seed' past the errors and exited 0, so dev had quietly stopped returning to the seed and no row said so. The freshen now fails loud (POS-192); this row is the other half: it names the foreign owner before the next reset trips on it, and its repair is chown, not a restart.",
+      "repair": "sudo chown -R meepo:meepo /srv/postmark-office-dev/world-clone && sudo -u meepo git -C /srv/postmark-office-dev/world-clone fsck --no-progress"
+    },
+    {
+      "id": "dev-town-clone",
+      "label": "the dev office's town clone",
+      "path": "/srv/postmark-office-dev/town-clone",
+      "must_be_owned_by": "meepo",
+      "why": "The dev office's town clone is rewritten by postmark-dev-freshen.service every night at 08:10 UTC, and that unit runs as meepo (its unit says User=meepo): a fetch, then a git reset --hard onto sandbox/seed, which has to rewrite every tracked file. On 2026-09-22 Wright found 1,918 root-owned files across this clone and its sibling — the 08-28 root-git class again: something on the box ran git in them as root. Every reset had been refusing them with Permission denied for an unknown time, and the freshen printed 'dev clones stood back on sandbox/seed' past the errors and exited 0, so dev had quietly stopped returning to the seed and no row said so. The freshen now fails loud (POS-192); this row is the other half: it names the foreign owner before the next reset trips on it, and its repair is chown, not a restart.",
+      "repair": "sudo chown -R meepo:meepo /srv/postmark-office-dev/town-clone && sudo -u meepo git -C /srv/postmark-office-dev/town-clone fsck --no-progress"
+    }
+  ],
+  "_clones_readme": [
+    "§2d — THE CLONES THE OFFICE WRITES THROUGH, AND WHETHER THEY ARE CLEAN.",
+    "",
+    "Every office write to the town begins `git pull --rebase` in the town clone, so",
+    "one uncommitted tracked change there refuses them ALL. On 2026-09-28 the tick's",
+    "mint catch-up appended a signed welcome line, its stamp-verify refused the ledger",
+    "over an older line, and the catch-up left the new line on disk uncommitted. From",
+    "18:37Z to 23:3xZ thirty writes bounced with 'cannot pull with rebase: You have",
+    "unstaged changes', and a resident noticed before anything on the box did.",
+    "",
+    "ALARM-dirty-clone is its own verdict because its repair is a person: read the",
+    "change, commit it if it is lawful, restore the file if it is not. It also alarms",
+    "on a clone off its OWN upstream ref (ahead: signed rows the pen never landed; behind:",
+    "a pull that fetched and could not land) — read locally, no network, nothing fetched.",
+    "Untracked files are never read: a pull does not refuse on them. site-sentinel's",
+    "town_clone probe (§8 there) watches the same clone every ten minutes and barks on",
+    "Discord; both read through tools/clone-state.mjs, so they agree about what dirty is.",
+    "",
+    "The world clone has no row, on purpose: ensureDraftCheckout resets and cleans it",
+    "before every write and refuses a tree it cannot clean, and the tick only fetches it,",
+    "because a pen branch off origin is its normal state between writes.",
+    "",
+    "FIELDS. id · label · path · activation_owner (who decided it is watched, and the",
+    "receipt) · why (what breaks while it is dirty; required) · repair · dirty_grace_minutes",
+    "(optional; the default is tools/clone-state.mjs DIRTY_GRACE_MS, measured there)."
+  ],
+  "clones": [
+    {
+      "id": "town-clone",
+      "label": "the office's town clone",
+      "path": "/srv/postmark-office/town-clone",
+      "activation_owner": "Wright — briefed 2026-09-28 after the 4.5-hour dirty town clone (18:37Z-23:3xZ, thirty writes refused); lane jetto-dirty-clone built the row and site-sentinel's town_clone probe together",
+      "why": "Every office write that touches the town (letters, edits, declarations, gifts, stakes, funding, settle-join) pulls this clone first and refuses while a tracked file here is uncommitted; the rehydrate tick's --ff-only pull refuses on local-only commits.",
+      "repair": "sudo -u meepo git -C /srv/postmark-office/town-clone diff — then commit it by hand if it is lawful (run the town's tools/stamp-verify.mjs first for the ledger), or git checkout -- <file> if it is not, and push"
+    }
+  ],
+  "_blessings_readme": [
+    "§2e — THE KEEPER'S NEWEST BLESSING, AND HOW OLD IT IS.",
+    "",
+    "A crossing publishes at 06:00 and 18:00 UTC, and the keeper blesses it by cutting",
+    "settlement/S<n> on the world. Everything served as canon follows the newest tag: the",
+    "office's world.db and graph snapshot, the site's world pin, the law pen's blessed run.",
+    "From 2026-09-27 to 09-29 the box published three crossings, the keeper blessed none",
+    "of them, and nothing rang: every surface kept serving the last blessing and said so",
+    "politely (smalls-0930 D).",
+    "",
+    "ALARM-unblessed is its own verdict because its repair is the keeper's judgment:",
+    "reading the crossing and cutting the tag, or deciding not to and saying why. It is",
+    "not ALARM-outcome: that verdict reads what a RAIL produced, and no rail blesses.",
+    "",
+    "The newest tag is the highest S<n>, never the latest string (S10 sorts before S9)",
+    "or the latest date. Its age is the tag's own tagger date, the instant the keeper",
+    "blessed. The clone is read locally, as §2d's are: the rehydrate tick fetches it",
+    "every fifteen minutes, and when the clone's last fetch is over an hour old the",
+    "reason says so, because then part of the age may be the fetch's and not the keeper's.",
+    "",
+    "WHY 14 HOURS: two crossings a day, twelve hours apart, and two hours for the keeper",
+    "to read one. One missed blessing rings; a blessing cut an hour after its crossing",
+    "does not.",
+    "",
+    "FIELDS. id · label · path (a world clone the office fetches) · activation_owner ·",
+    "why (what goes wrong while nothing is blessed; required) · repair · max_age_hours",
+    "(required)."
+  ],
+  "blessings": [
+    {
+      "id": "world-blessing",
+      "label": "the keeper's newest blessing",
+      "path": "/srv/postmark-office/world-clone",
+      "max_age_hours": 14,
+      "activation_owner": "Wright — smalls-0930 item D, on Keemin's word (2026-09-30), after the 09-27 to 09-29 stall: three crossings published and none blessed",
+      "why": "Canon stands still while it is unblessed: the office's world.db and graph snapshot, the site's world pin and the law pen's blessed run all keep serving the last tag, and residents' marks from the unblessed crossings are not in the world anyone reads.",
+      "repair": "read the newest crossing on the world (git -C /srv/postmark-office/world-clone log --oneline -5 origin/main) and bless it with the keeper's tag, or record why it is being held"
+    }
+  ],
+  "_trees_readme": [
+    "§2c — WHICH TREE EACH UNIT WILL ACTUALLY RUN.",
+    "",
+    "§2b asks whether a mechanism still CAN run. These ask whether the code it runs",
+    "is the code somebody deployed.",
+    "",
+    "WHY IT EXISTS (2026-09-10, the arm gate). The 05:45Z crossing published green",
+    "under release/2026-w37.9 and escrow_projection held ZERO rows after that same",
+    "timer's clearing. The candle — postmark-world2-clearing.service — runs",
+    "clearing-job.mjs out of /srv/world2-lab/office, a SECOND office checkout at",
+    "7926461 (2026-09-05, schema <= 012, no escrow ingest) that the release workflow",
+    "never deploys: release-train.yml rsyncs the tag into /srv/postmark-office and",
+    "nothing else. Four units share that tree through deploy/world2-lib.sh's",
+    "WORLD2_OFFICE=\"${WORLD2_OFFICE:-$WORLD2_LAB/office}\".",
+    "",
+    "EVERY ROW ON THE BOARD READ CORRECTLY AND THE BOARD WAS WRONG. The candle read",
+    "OK, because its row reads its TICK: the lane ran, on time, wrote its state file,",
+    "and did three-day-old work. The notary read ALARM-outcome, because this manifest",
+    "was written from the new tree and declares an outcome log the OLD notary has no",
+    "code to write. Neither row could say the word tree, so the single fact that",
+    "explained both was the one fact nothing on the box was holding.",
+    "",
+    "THE RULE. For every unit that execs out of a checkout, a row naming the tree it",
+    "will run and the release it must be. Path identity when the tree IS the release",
+    "root; otherwise that tree's own release.json sha against the deployed one, so a",
+    "second copy the deploy genuinely keeps up with is green and a stale one is not.",
+    "Verdict ALARM-tree, and the roll-call exits nonzero on it like any other alarm.",
+    "",
+    "FIELDS.",
+    "  id                  short slug, the row's name on the board",
+    "  unit                the .SERVICE that execs. A timer execs nothing, and a row",
+    "                      pointed at one would read WorkingDirectory off a unit that",
+    "                      has never had one. The checker refuses a timer here.",
+    "  env_key             the variable that names the tree, when one does",
+    "  require_env         the drop-in that must set env_key. A row carrying this",
+    "                      REFUSES TO GUESS when the key is unset (see below).",
+    "  default_when_unset  the tree the row falls back to, for rows that may guess",
+    "  must_be             \"release\" (the deployed tree) or a literal path",
+    "  divergence_because  REQUIRED beside a literal must_be. A row that can excuse",
+    "                      itself without a sentence is how a wrong tree gets",
+    "                      silenced, so the excuse has to be typed where a reviewer",
+    "                      reads it.",
+    "  why                 what breaks when this tree drifts",
+    "  activation_owner    who decided it runs from there",
+    "  kind: file_copy     a DIRECTORY on the box compared byte-for-byte against a",
+    "                      directory in the release (path, from, match, repair)",
+    "",
+    "WHY THE WORLD2 ROWS REFUSE TO GUESS. Their fallback lives in",
+    "/srv/world2-lab/ops/world2-lib.sh, which DEPLOY.md itself calls \"a plain file",
+    "copy from this repo\" — no deploy updates it, and on 2026-09-05 this repo had to",
+    "carry a one-line change to it by scp. So the roll-call cannot READ that default,",
+    "only assume it, and an assumed default is precisely how this class hid: the repo",
+    "said one path and the box ran another. Those rows carry require_env, and an",
+    "unset WORLD2_OFFICE is the alarm rather than an occasion to guess.",
+    "",
+    "THE GAP THIS RULE DOES NOT COVER, NAMED RATHER THAN LEFT SILENT. A unit that",
+    "carries no WorkingDirectory and no env key, and names its tree only inside an",
+    "absolute ExecStart path, is invisible here — postmark-site-refresh.service",
+    "(/srv/postmark-office/deploy/site-refresh.sh) and postmark-dev-freshen.service",
+    "(/srv/postmark-office-dev/postmark-dev-freshen.sh) are the two today. Reading a",
+    "tree out of ExecStart means parsing systemd's ExecStart struct and guessing",
+    "which argument is the script, which is a different and worse instrument than",
+    "reading a property that answers a path. Both of those scripts DO sit under a",
+    "tree that another row already checks, so nothing is unwatched today; a unit that",
+    "execs out of a tree NO row names would be, and that is the day to build it.",
+    "",
+    "ADDING A ROW is not optional in one direction: a live unit whose service names",
+    "a tree and has no row here comes back ALARM-tree from the reverse check, the",
+    "same discipline ALARM-unmanifested keeps over units."
+  ],
+  "trees": {
+    "release_root": "/srv/postmark-office",
+    "_release_root_source": "deploy/remote-deploy.sh is invoked with ROOT=/srv/postmark-office for target prod (.github/workflows/release-train.yml, the lane step), and the workflow writes release.json into the tree it rsyncs there. That stamp is the only thing on the box that says which commit is deployed.",
+    "rows": [
+      {
+        "id": "office",
+        "unit": "postmark-office.service",
+        "label": "the office door's tree",
+        "must_be": "release",
+        "why": "This is the door the town reads through. A drifted tree here serves yesterday's API from a green unit.",
+        "activation_owner": "Wright — the office has run from /srv/postmark-office since the box was built; release-train.yml deploys prod there and nowhere else."
+      },
+      {
+        "id": "earpiece",
+        "unit": "postmark-earpiece.service",
+        "label": "the earpiece deliverer's tree",
+        "must_be": "release",
+        "why": "The deliverer execs world2/tools/earpiece-deliver.mjs out of /srv/postmark-office. A drifted tree wakes residents by rules the release no longer holds: a stale window, budget or envelope, sent to real harnesses.",
+        "activation_owner": "Wright — installed on prod 2026-09-27 with release/2026-w40.1 and W2_EARPIECE=1, on Keemin's \"good for 2\"; release-train.yml deploys this tree."
+      },
+      {
+        "id": "office-dev",
+        "unit": "postmark-office-dev.service",
+        "label": "the dev office's tree",
+        "must_be": "/srv/postmark-office-dev",
+        "divergence_because": "Dev is a SEPARATE deploy target by design and runs the train tip rather than the release tag — release-train.yml's own lane step: 'dev) ROOT=/srv/postmark-office-dev'. Comparing it to the prod release would redden every day dev is ahead, which is every day dev is doing its job. What this row still catches is dev pointed at the PROD tree, which would make the :4381 door a second prod door and every dev rehearsal a prod act.",
+        "why": "A dev office running the prod tree turns rehearsals into prod writes, and a dev office running some third tree is a rehearsal that proves nothing about what will ship.",
+        "activation_owner": "Wright — the dev lane's own deploy target, named in release-train.yml."
+      },
+      {
+        "id": "ferry",
+        "unit": "postmark-ferry.service",
+        "label": "the ferry's tree",
+        "must_be": "release",
+        "why": "The ferry moves the town's mail. A stale tree delivers by yesterday's rules under a fresh tick.",
+        "activation_owner": "Wright — WorkingDirectory=/srv/postmark-office in deploy/postmark-ferry.service."
+      },
+      {
+        "id": "crossing-save",
+        "unit": "postmark-crossing-save.service",
+        "label": "the crossing save's tree",
+        "must_be": "release",
+        "why": "It commits the town's state after a crossing. Old code here writes a shape the deployed door no longer reads.",
+        "activation_owner": "Wright — WorkingDirectory=/srv/postmark-office in deploy/postmark-crossing-save.service."
+      },
+      {
+        "id": "office-rehydrate",
+        "unit": "postmark-office-rehydrate.service",
+        "label": "the office tick's tree",
+        "must_be": "release",
+        "why": "The tick rehydrates the door's own caches; a stale tree rehydrates them into the shape the old code expected.",
+        "activation_owner": "Wright — WorkingDirectory=/srv/postmark-office in deploy/postmark-office-rehydrate.service."
+      },
+      {
+        "id": "office-keep",
+        "unit": "postmark-office-keep.service",
+        "label": "the office keeping tick's tree",
+        "must_be": "release",
+        "why": "It runs the release's own mint, welcome pass, settlements tool and panes publisher; a stale tree writes the ledger and the panes in the shape the old code expected.",
+        "activation_owner": "Wright — WorkingDirectory=/srv/postmark-office in deploy/postmark-office-keep.service."
+      },
+      {
+        "id": "harbor-watch",
+        "unit": "postmark-harbor-watch.service",
+        "label": "the harbor watch's tree",
+        "must_be": "release",
+        "why": "It writes the harbour snapshot every other row on this board is read against. A stale watcher is a stale board.",
+        "activation_owner": "Wright — WorkingDirectory=/srv/postmark-office in deploy/postmark-harbor-watch.service."
+      },
+      {
+        "id": "paypal-watch",
+        "unit": "postmark-paypal-watch.service",
+        "label": "the paypal watch's tree",
+        "must_be": "release",
+        "why": "It attributes PayPal gifts to their pots and households and writes them onto the stamp ledger's pot-receipt rows. A watcher on an old tree attributes by an old rule, through a green board — the 2026-09-10 candle's class.",
+        "activation_owner": "Wright — WorkingDirectory=/srv/postmark-office in deploy/postmark-paypal-watch.service; adopted with the watch at the w41 ship (2026-10-04)."
+      },
+      {
+        "id": "usdc-watch",
+        "unit": "postmark-usdc-watch.service",
+        "label": "the USDC watcher's tree",
+        "must_be": "release",
+        "why": "It witnesses money arriving. Old code here misses an arrival shape the deployed door already knows about, and the miss looks like a quiet day.",
+        "activation_owner": "Wright — WorkingDirectory=/srv/postmark-office in deploy/postmark-usdc-watch.service."
+      },
+      {
+        "id": "stripe-watch",
+        "unit": "postmark-stripe-watch.service",
+        "label": "the Stripe watcher's tree",
+        "must_be": "release",
+        "why": "Same class as the USDC watcher, on the other rail: a payment the deployed code would have witnessed and the running code does not.",
+        "activation_owner": "Wright — adopted 2026-08-27; WorkingDirectory=/srv/postmark-office in deploy/postmark-stripe-watch.service."
+      },
+      {
+        "id": "site-sentinel",
+        "unit": "postmark-site-sentinel.service",
+        "label": "the site sentinel's tree",
+        "must_be": "release",
+        "why": "The sentinel is a checker, and a checker running old code checks the old law — the worst kind of green.",
+        "activation_owner": "Wright — WorkingDirectory=/srv/postmark-office in deploy/postmark-site-sentinel.service."
+      },
+      {
+        "id": "settlement",
+        "unit": "postmark-settlement.service",
+        "label": "the crossing settlement's tree",
+        "must_be": "release",
+        "why": "The settlement is the crossing. It runs deploy/settlement-auto.sh out of this tree and the sweep beneath it, and every guard the train adds arrives only when this tree does. This is the row that would have caught the candle's twin had the candle been on this side of the fence.",
+        "activation_owner": "Wright — WorkingDirectory=/srv/postmark-office in deploy/postmark-settlement.service."
+      },
+      {
+        "id": "settlement-shadow",
+        "unit": "postmark-settlement-shadow.service",
+        "label": "the settlement shadow's tree",
+        "must_be": "release",
+        "why": "The shadow rehearses the next crossing against the CURRENT law. Rehearsing from a stale tree is rehearsing the wrong crossing, and its would-refuse verdicts would be about code nobody is going to run.",
+        "activation_owner": "Wright — WorkingDirectory=/srv/postmark-office in deploy/postmark-settlement-shadow.service."
+      },
+      {
+        "id": "world2-clearing",
+        "unit": "postmark-world2-clearing.service",
+        "label": "the World 2.0 candle's office tree",
+        "env_key": "WORLD2_OFFICE",
+        "require_env": "/etc/systemd/system/postmark-world2-clearing.service.d/office-tree.conf (deploy/postmark-world2-office-tree.conf)",
+        "must_be": "release",
+        "why": "THE INCIDENT'S OWN ROW. The candle closes windows and opens their successors, and its clearing-job.mjs is what fills escrow_projection. On 2026-09-10 it ran from a checkout three days behind the release, at schema <= 012 with no escrow ingest, and the store crossed a green crossing into an empty projection. A store crossing armed on that state folds at a pin with no escrow and refuses.",
+        "activation_owner": "Wright — founder ruling 2026-08-29 (prod Postgres on the box); the tree pinned by drop-in on 2026-09-10 on Keemin's go ('agreed with your instance and class fixes for the arm gate')."
+      },
+      {
+        "id": "world2-notary",
+        "unit": "postmark-world2-notary.service",
+        "label": "the World 2.0 notary's office tree",
+        "env_key": "WORLD2_OFFICE",
+        "require_env": "/etc/systemd/system/postmark-world2-notary.service.d/office-tree.conf (deploy/postmark-world2-office-tree.conf)",
+        "must_be": "release",
+        "why": "The notary execs world2/tools/snapshot-export.mjs and world2/tools/falsifier-canon-locks.mjs out of this tree. falsifier-canon-locks.mjs DOES NOT EXIST at 7926461 — it landed on 2026-09-08 in 59ff9b9 — so under the lab tree the nightly read cannot run, /srv/world2-lab/state/canon-locks.jsonl stays empty, and this unit's own outcome row reads ALARM-outcome for a reason that has nothing to do with the register. That alarm was the second symptom of this one cause.",
+        "activation_owner": "Wright — 2026-08-29, paying the deferred-timer debt; the tree pinned by drop-in on 2026-09-10."
+      },
+      {
+        "id": "world2-backup",
+        "unit": "postmark-world2-backup.service",
+        "label": "the World 2.0 durability lane's office tree",
+        "env_key": "WORLD2_OFFICE",
+        "require_env": "/etc/systemd/system/postmark-world2-backup.service.d/office-tree.conf (deploy/postmark-world2-office-tree.conf)",
+        "must_be": "release",
+        "why": "The backup lane does not exec out of the office tree today — it runs pg_dump and pg_basebackup. It gets the drop-in and the row anyway, because the whole point of this section is that a lane must not acquire a second tree by inheriting a default nobody looked at, and the day it grows a node step is not the day to remember.",
+        "activation_owner": "Wright — 2026-08-29 with the other three world2 lanes; the tree pinned by drop-in on 2026-09-10."
+      },
+      {
+        "id": "world2-ingest",
+        "unit": "postmark-world2-ingest.service",
+        "label": "the World 2.0 projections lane's office tree",
+        "env_key": "WORLD2_OFFICE",
+        "require_env": "/etc/systemd/system/postmark-world2-ingest.service.d/office-tree.conf (deploy/postmark-world2-office-tree.conf)",
+        "must_be": "release",
+        "why": "law-ingest.mjs and stamp-ingest.mjs exec out of this tree, and they are the pens that write the projections the candle then reads. An ingest on an old tree is the escrow class from the upstream side: rows written to a schema the deployed clearing no longer expects. The unit is PARKED today, so this row reports PARKED and alarms on nothing; it exists so that adopting the timer does not also silently adopt a tree.",
+        "activation_owner": "Wright — installed 2026-08-29, timer disabled since 2026-09-05 pending the world-branch carry (DEPLOY.md § Which branch the ingest lane reads)."
+      },
+      {
+        "id": "world2-law-ingest",
+        "unit": "postmark-world2-law-ingest.service",
+        "label": "the World 2.0 law pen's office tree",
+        "env_key": "WORLD2_OFFICE",
+        "require_env": "/etc/systemd/system/postmark-world2-law-ingest.service.d/office-tree.conf (deploy/postmark-world2-office-tree.conf)",
+        "must_be": "release",
+        "why": "law-ingest.mjs execs out of this tree, and it is the only writer of law_projection anywhere in the office. A law pen on an old tree writes the rulebook to a schema the deployed clearing no longer expects — the escrow class from the upstream side, and worse here than on the parked poll it was split from, because this one is LIVE. The row carries require_env rather than a default so it refuses to guess: a unit whose drop-in went missing must redden, not fall back to a tree that happens to be right today.",
+        "activation_owner": "Keemin — the split is his ruling of 2026-09-19 (postmark#2893); the drop-in and this row are the same install."
+      },
+      {
+        "id": "world2-marks-ingest",
+        "unit": "postmark-world2-marks-ingest.service",
+        "label": "the World 2.0 marks pen's office tree",
+        "env_key": "WORLD2_OFFICE",
+        "require_env": "/etc/systemd/system/postmark-world2-marks-ingest.service.d/office-tree.conf (deploy/postmark-world2-office-tree.conf)",
+        "must_be": "release",
+        "why": "marks-ingest.mjs execs out of this tree and writes `marks` and `claims` through materialize.mjs — the same pen shape the clearing uses. A marks pen on an old tree writes rows in a shape the deployed clearing and fold no longer read. require_env rather than a default, as on the law pen: a unit whose drop-in went missing must redden, not fall back to a tree that happens to be right today.",
+        "activation_owner": "Keemin — the ingest is his ruling of 2026-09-23 (POS-142); the drop-in and this row are the same install, by Wright's hand."
+      },
+      {
+        "id": "world2-ops-scripts",
+        "kind": "file_copy",
+        "label": "the World 2.0 ops scripts on the box",
+        "path": "/srv/world2-lab/ops",
+        "from": "deploy",
+        "match": "\\.sh$",
+        "why": "THE SAME CLASS ONE LAYER DOWN, and it is already live. The four world2 units do not exec node directly — their ExecStart is /srv/world2-lab/ops/world2-<lane>.sh, and DEPLOY.md calls that directory 'a plain file copy from this repo'. No deploy writes it. On 2026-09-05 a one-line default in world2-refresh-clone.sh had to be carried by scp, and DEPLOY.md's own sentence for it is 'The box's copy of the script is stale until it is carried.' Nothing goes red while it is uncarried, which is the whole complaint. The drop-in above pins which OFFICE the scripts read; this row is what says the SCRIPTS themselves are the ones that shipped. Read as bytes, so a CRLF from a Windows copy reddens here rather than failing later in a way that reads like a missing file.",
+        "repair": "scp deploy/world2-*.sh meepo-ec2:/srv/world2-lab/ops/ && ssh meepo-ec2 'chmod +x /srv/world2-lab/ops/*.sh' — then re-run the roll-call",
+        "activation_owner": "Wright — the ops directory was placed by hand on 2026-08-29 with the four world2 lanes and has been carried by hand since."
+      }
+    ]
   }
- ],
- "_custody_readme": [
-  "§2b — WHO OWNS THE FILES A SERVICE HAS TO WRITE.",
-  "",
-  "Every row above asks whether a mechanism RAN. These ask whether it still can.",
-  "On 2026-08-28 a sudo git touched the settlement clone and left root-owned files",
-  "inside it. The lane runs as meepo. Root-owned refs, objects and a root-owned",
-  "credential store then failed LATER and SEPARATELY — a two-hour pen lockout one",
-  "day, a refused 05:45Z crossing the next — with nothing on the box tying either",
-  "back to the one act that caused them, because nothing on the box could see the",
-  "ownership of a working file at all.",
-  "",
-  "ALARM-custody is its own verdict because its repair is chown, not systemctl. A",
-  "row that reported it as ALARM-failed would send the operator to restart a unit",
-  "that will fail again the same way in twelve hours.",
-  "",
-  "FIELDS. id · label · path (the root scanned, recursively) · must_be_owned_by",
-  "(a username, resolved to a uid on the box — a name that does not resolve is",
-  "itself an alarm, never a pass) · why (what breaks when custody slips; required,",
-  "same discipline as a unit row's activation_owner) · repair (the command)."
- ],
- "custody": [
-  {
-   "id": "settlement-clone-git",
-   "label": "the settlement clone's git internals",
-   "path": "/srv/postmark-office/settlement-clone/.git",
-   "must_be_owned_by": "meepo",
-   "why": "This clone is the settlement's whole pen. postmark-settlement.service runs as meepo (its unit says so: 'the clones and push credentials are meepos'), and the sweep writes refs, objects and a commit into it on every crossing, then pushes under a lease. A single root-owned ref or pack from a stray sudo git makes the next write fail — and it fails at whichever step touches that particular file, hours later, looking like an unrelated fault.",
-   "repair": "sudo chown -R meepo:meepo /srv/postmark-office/settlement-clone && sudo -u meepo git -C /srv/postmark-office/settlement-clone fsck --no-progress"
-  },
-  {
-   "id": "office-git-credentials",
-   "label": "the office pen's credential store",
-   "path": "/srv/postmark-office/.git-credentials",
-   "must_be_owned_by": "meepo",
-   "why": "Every push this box makes reads it — the settlement clone is configured with credential.helper 'store --file /srv/postmark-office/.git-credentials' by settlement-auto.sh itself, and deploy/settlement-escalate.mjs reads the same file to reach the operator queue. A root-owned credential store is the exact shape of the 2026-08-28 two-hour pen lockout: readable by nobody who needs it, and silent until the moment something tries to push.",
-   "repair": "sudo chown meepo:meepo /srv/postmark-office/.git-credentials && sudo chmod 600 /srv/postmark-office/.git-credentials"
-  },
-  {
-   "id": "dev-world-clone",
-   "label": "the dev office's world clone",
-   "path": "/srv/postmark-office-dev/world-clone",
-   "must_be_owned_by": "meepo",
-   "why": "The dev office's world clone is rewritten by postmark-dev-freshen.service every night at 08:10 UTC, and that unit runs as meepo (its unit says User=meepo): a fetch, then a git reset --hard onto sandbox/seed, which has to rewrite every tracked file. On 2026-09-22 Wright found 1,918 root-owned files across this clone and its sibling — the 08-28 root-git class again: something on the box ran git in them as root. Every reset had been refusing them with Permission denied for an unknown time, and the freshen printed 'dev clones stood back on sandbox/seed' past the errors and exited 0, so dev had quietly stopped returning to the seed and no row said so. The freshen now fails loud (POS-192); this row is the other half: it names the foreign owner before the next reset trips on it, and its repair is chown, not a restart.",
-   "repair": "sudo chown -R meepo:meepo /srv/postmark-office-dev/world-clone && sudo -u meepo git -C /srv/postmark-office-dev/world-clone fsck --no-progress"
-  },
-  {
-   "id": "dev-town-clone",
-   "label": "the dev office's town clone",
-   "path": "/srv/postmark-office-dev/town-clone",
-   "must_be_owned_by": "meepo",
-   "why": "The dev office's town clone is rewritten by postmark-dev-freshen.service every night at 08:10 UTC, and that unit runs as meepo (its unit says User=meepo): a fetch, then a git reset --hard onto sandbox/seed, which has to rewrite every tracked file. On 2026-09-22 Wright found 1,918 root-owned files across this clone and its sibling — the 08-28 root-git class again: something on the box ran git in them as root. Every reset had been refusing them with Permission denied for an unknown time, and the freshen printed 'dev clones stood back on sandbox/seed' past the errors and exited 0, so dev had quietly stopped returning to the seed and no row said so. The freshen now fails loud (POS-192); this row is the other half: it names the foreign owner before the next reset trips on it, and its repair is chown, not a restart.",
-   "repair": "sudo chown -R meepo:meepo /srv/postmark-office-dev/town-clone && sudo -u meepo git -C /srv/postmark-office-dev/town-clone fsck --no-progress"
-  }
- ],
- "_clones_readme": [
-  "§2d — THE CLONES THE OFFICE WRITES THROUGH, AND WHETHER THEY ARE CLEAN.",
-  "",
-  "Every office write to the town begins `git pull --rebase` in the town clone, so",
-  "one uncommitted tracked change there refuses them ALL. On 2026-09-28 the tick's",
-  "mint catch-up appended a signed welcome line, its stamp-verify refused the ledger",
-  "over an older line, and the catch-up left the new line on disk uncommitted. From",
-  "18:37Z to 23:3xZ thirty writes bounced with 'cannot pull with rebase: You have",
-  "unstaged changes', and a resident noticed before anything on the box did.",
-  "",
-  "ALARM-dirty-clone is its own verdict because its repair is a person: read the",
-  "change, commit it if it is lawful, restore the file if it is not. It also alarms",
-  "on a clone off its OWN upstream ref (ahead: signed rows the pen never landed; behind:",
-  "a pull that fetched and could not land) — read locally, no network, nothing fetched.",
-  "Untracked files are never read: a pull does not refuse on them. site-sentinel's",
-  "town_clone probe (§8 there) watches the same clone every ten minutes and barks on",
-  "Discord; both read through tools/clone-state.mjs, so they agree about what dirty is.",
-  "",
-  "The world clone has no row, on purpose: ensureDraftCheckout resets and cleans it",
-  "before every write and refuses a tree it cannot clean, and the tick only fetches it,",
-  "because a pen branch off origin is its normal state between writes.",
-  "",
-  "FIELDS. id · label · path · activation_owner (who decided it is watched, and the",
-  "receipt) · why (what breaks while it is dirty; required) · repair · dirty_grace_minutes",
-  "(optional; the default is tools/clone-state.mjs DIRTY_GRACE_MS, measured there)."
- ],
- "clones": [
-  {
-   "id": "town-clone",
-   "label": "the office's town clone",
-   "path": "/srv/postmark-office/town-clone",
-   "activation_owner": "Wright — briefed 2026-09-28 after the 4.5-hour dirty town clone (18:37Z-23:3xZ, thirty writes refused); lane jetto-dirty-clone built the row and site-sentinel's town_clone probe together",
-   "why": "Every office write that touches the town (letters, edits, declarations, gifts, stakes, funding, settle-join) pulls this clone first and refuses while a tracked file here is uncommitted; the rehydrate tick's --ff-only pull refuses on local-only commits.",
-   "repair": "sudo -u meepo git -C /srv/postmark-office/town-clone diff — then commit it by hand if it is lawful (run the town's tools/stamp-verify.mjs first for the ledger), or git checkout -- <file> if it is not, and push"
-  }
- ],
- "_blessings_readme": [
-  "§2e — THE KEEPER'S NEWEST BLESSING, AND HOW OLD IT IS.",
-  "",
-  "A crossing publishes at 06:00 and 18:00 UTC, and the keeper blesses it by cutting",
-  "settlement/S<n> on the world. Everything served as canon follows the newest tag: the",
-  "office's world.db and graph snapshot, the site's world pin, the law pen's blessed run.",
-  "From 2026-09-27 to 09-29 the box published three crossings, the keeper blessed none",
-  "of them, and nothing rang: every surface kept serving the last blessing and said so",
-  "politely (smalls-0930 D).",
-  "",
-  "ALARM-unblessed is its own verdict because its repair is the keeper's judgment:",
-  "reading the crossing and cutting the tag, or deciding not to and saying why. It is",
-  "not ALARM-outcome: that verdict reads what a RAIL produced, and no rail blesses.",
-  "",
-  "The newest tag is the highest S<n>, never the latest string (S10 sorts before S9)",
-  "or the latest date. Its age is the tag's own tagger date, the instant the keeper",
-  "blessed. The clone is read locally, as §2d's are: the rehydrate tick fetches it",
-  "every fifteen minutes, and when the clone's last fetch is over an hour old the",
-  "reason says so, because then part of the age may be the fetch's and not the keeper's.",
-  "",
-  "WHY 14 HOURS: two crossings a day, twelve hours apart, and two hours for the keeper",
-  "to read one. One missed blessing rings; a blessing cut an hour after its crossing",
-  "does not.",
-  "",
-  "FIELDS. id · label · path (a world clone the office fetches) · activation_owner ·",
-  "why (what goes wrong while nothing is blessed; required) · repair · max_age_hours",
-  "(required)."
- ],
- "blessings": [
-  {
-   "id": "world-blessing",
-   "label": "the keeper's newest blessing",
-   "path": "/srv/postmark-office/world-clone",
-   "max_age_hours": 14,
-   "activation_owner": "Wright — smalls-0930 item D, on Keemin's word (2026-09-30), after the 09-27 to 09-29 stall: three crossings published and none blessed",
-   "why": "Canon stands still while it is unblessed: the office's world.db and graph snapshot, the site's world pin and the law pen's blessed run all keep serving the last tag, and residents' marks from the unblessed crossings are not in the world anyone reads.",
-   "repair": "read the newest crossing on the world (git -C /srv/postmark-office/world-clone log --oneline -5 origin/main) and bless it with the keeper's tag, or record why it is being held"
-  }
- ],
- "_trees_readme": [
-  "§2c — WHICH TREE EACH UNIT WILL ACTUALLY RUN.",
-  "",
-  "§2b asks whether a mechanism still CAN run. These ask whether the code it runs",
-  "is the code somebody deployed.",
-  "",
-  "WHY IT EXISTS (2026-09-10, the arm gate). The 05:45Z crossing published green",
-  "under release/2026-w37.9 and escrow_projection held ZERO rows after that same",
-  "timer's clearing. The candle — postmark-world2-clearing.service — runs",
-  "clearing-job.mjs out of /srv/world2-lab/office, a SECOND office checkout at",
-  "7926461 (2026-09-05, schema <= 012, no escrow ingest) that the release workflow",
-  "never deploys: release-train.yml rsyncs the tag into /srv/postmark-office and",
-  "nothing else. Four units share that tree through deploy/world2-lib.sh's",
-  "WORLD2_OFFICE=\"${WORLD2_OFFICE:-$WORLD2_LAB/office}\".",
-  "",
-  "EVERY ROW ON THE BOARD READ CORRECTLY AND THE BOARD WAS WRONG. The candle read",
-  "OK, because its row reads its TICK: the lane ran, on time, wrote its state file,",
-  "and did three-day-old work. The notary read ALARM-outcome, because this manifest",
-  "was written from the new tree and declares an outcome log the OLD notary has no",
-  "code to write. Neither row could say the word tree, so the single fact that",
-  "explained both was the one fact nothing on the box was holding.",
-  "",
-  "THE RULE. For every unit that execs out of a checkout, a row naming the tree it",
-  "will run and the release it must be. Path identity when the tree IS the release",
-  "root; otherwise that tree's own release.json sha against the deployed one, so a",
-  "second copy the deploy genuinely keeps up with is green and a stale one is not.",
-  "Verdict ALARM-tree, and the roll-call exits nonzero on it like any other alarm.",
-  "",
-  "FIELDS.",
-  "  id                  short slug, the row's name on the board",
-  "  unit                the .SERVICE that execs. A timer execs nothing, and a row",
-  "                      pointed at one would read WorkingDirectory off a unit that",
-  "                      has never had one. The checker refuses a timer here.",
-  "  env_key             the variable that names the tree, when one does",
-  "  require_env         the drop-in that must set env_key. A row carrying this",
-  "                      REFUSES TO GUESS when the key is unset (see below).",
-  "  default_when_unset  the tree the row falls back to, for rows that may guess",
-  "  must_be             \"release\" (the deployed tree) or a literal path",
-  "  divergence_because  REQUIRED beside a literal must_be. A row that can excuse",
-  "                      itself without a sentence is how a wrong tree gets",
-  "                      silenced, so the excuse has to be typed where a reviewer",
-  "                      reads it.",
-  "  why                 what breaks when this tree drifts",
-  "  activation_owner    who decided it runs from there",
-  "  kind: file_copy     a DIRECTORY on the box compared byte-for-byte against a",
-  "                      directory in the release (path, from, match, repair)",
-  "",
-  "WHY THE WORLD2 ROWS REFUSE TO GUESS. Their fallback lives in",
-  "/srv/world2-lab/ops/world2-lib.sh, which DEPLOY.md itself calls \"a plain file",
-  "copy from this repo\" — no deploy updates it, and on 2026-09-05 this repo had to",
-  "carry a one-line change to it by scp. So the roll-call cannot READ that default,",
-  "only assume it, and an assumed default is precisely how this class hid: the repo",
-  "said one path and the box ran another. Those rows carry require_env, and an",
-  "unset WORLD2_OFFICE is the alarm rather than an occasion to guess.",
-  "",
-  "THE GAP THIS RULE DOES NOT COVER, NAMED RATHER THAN LEFT SILENT. A unit that",
-  "carries no WorkingDirectory and no env key, and names its tree only inside an",
-  "absolute ExecStart path, is invisible here — postmark-site-refresh.service",
-  "(/srv/postmark-office/deploy/site-refresh.sh) and postmark-dev-freshen.service",
-  "(/srv/postmark-office-dev/postmark-dev-freshen.sh) are the two today. Reading a",
-  "tree out of ExecStart means parsing systemd's ExecStart struct and guessing",
-  "which argument is the script, which is a different and worse instrument than",
-  "reading a property that answers a path. Both of those scripts DO sit under a",
-  "tree that another row already checks, so nothing is unwatched today; a unit that",
-  "execs out of a tree NO row names would be, and that is the day to build it.",
-  "",
-  "ADDING A ROW is not optional in one direction: a live unit whose service names",
-  "a tree and has no row here comes back ALARM-tree from the reverse check, the",
-  "same discipline ALARM-unmanifested keeps over units."
- ],
- "trees": {
-  "release_root": "/srv/postmark-office",
-  "_release_root_source": "deploy/remote-deploy.sh is invoked with ROOT=/srv/postmark-office for target prod (.github/workflows/release-train.yml, the lane step), and the workflow writes release.json into the tree it rsyncs there. That stamp is the only thing on the box that says which commit is deployed.",
-  "rows": [
-   {
-    "id": "office",
-    "unit": "postmark-office.service",
-    "label": "the office door's tree",
-    "must_be": "release",
-    "why": "This is the door the town reads through. A drifted tree here serves yesterday's API from a green unit.",
-    "activation_owner": "Wright — the office has run from /srv/postmark-office since the box was built; release-train.yml deploys prod there and nowhere else."
-   },
-   {
-    "id": "earpiece",
-    "unit": "postmark-earpiece.service",
-    "label": "the earpiece deliverer's tree",
-    "must_be": "release",
-    "why": "The deliverer execs world2/tools/earpiece-deliver.mjs out of /srv/postmark-office. A drifted tree wakes residents by rules the release no longer holds: a stale window, budget or envelope, sent to real harnesses.",
-    "activation_owner": "Wright — installed on prod 2026-09-27 with release/2026-w40.1 and W2_EARPIECE=1, on Keemin's \"good for 2\"; release-train.yml deploys this tree."
-   },
-   {
-    "id": "office-dev",
-    "unit": "postmark-office-dev.service",
-    "label": "the dev office's tree",
-    "must_be": "/srv/postmark-office-dev",
-    "divergence_because": "Dev is a SEPARATE deploy target by design and runs the train tip rather than the release tag — release-train.yml's own lane step: 'dev) ROOT=/srv/postmark-office-dev'. Comparing it to the prod release would redden every day dev is ahead, which is every day dev is doing its job. What this row still catches is dev pointed at the PROD tree, which would make the :4381 door a second prod door and every dev rehearsal a prod act.",
-    "why": "A dev office running the prod tree turns rehearsals into prod writes, and a dev office running some third tree is a rehearsal that proves nothing about what will ship.",
-    "activation_owner": "Wright — the dev lane's own deploy target, named in release-train.yml."
-   },
-   {
-    "id": "ferry",
-    "unit": "postmark-ferry.service",
-    "label": "the ferry's tree",
-    "must_be": "release",
-    "why": "The ferry moves the town's mail. A stale tree delivers by yesterday's rules under a fresh tick.",
-    "activation_owner": "Wright — WorkingDirectory=/srv/postmark-office in deploy/postmark-ferry.service."
-   },
-   {
-    "id": "crossing-save",
-    "unit": "postmark-crossing-save.service",
-    "label": "the crossing save's tree",
-    "must_be": "release",
-    "why": "It commits the town's state after a crossing. Old code here writes a shape the deployed door no longer reads.",
-    "activation_owner": "Wright — WorkingDirectory=/srv/postmark-office in deploy/postmark-crossing-save.service."
-   },
-   {
-    "id": "office-rehydrate",
-    "unit": "postmark-office-rehydrate.service",
-    "label": "the office tick's tree",
-    "must_be": "release",
-    "why": "The tick rehydrates the door's own caches; a stale tree rehydrates them into the shape the old code expected.",
-    "activation_owner": "Wright — WorkingDirectory=/srv/postmark-office in deploy/postmark-office-rehydrate.service."
-   },
-   {
-    "id": "office-keep",
-    "unit": "postmark-office-keep.service",
-    "label": "the office keeping tick's tree",
-    "must_be": "release",
-    "why": "It runs the release's own mint, welcome pass, settlements tool and panes publisher; a stale tree writes the ledger and the panes in the shape the old code expected.",
-    "activation_owner": "Wright — WorkingDirectory=/srv/postmark-office in deploy/postmark-office-keep.service."
-   },
-   {
-    "id": "harbor-watch",
-    "unit": "postmark-harbor-watch.service",
-    "label": "the harbor watch's tree",
-    "must_be": "release",
-    "why": "It writes the harbour snapshot every other row on this board is read against. A stale watcher is a stale board.",
-    "activation_owner": "Wright — WorkingDirectory=/srv/postmark-office in deploy/postmark-harbor-watch.service."
-   },
-   {
-    "id": "paypal-watch",
-    "unit": "postmark-paypal-watch.service",
-    "label": "the paypal watch's tree",
-    "must_be": "release",
-    "why": "It attributes PayPal gifts to their pots and households and writes them onto the stamp ledger's pot-receipt rows. A watcher on an old tree attributes by an old rule, through a green board — the 2026-09-10 candle's class.",
-    "activation_owner": "Wright — WorkingDirectory=/srv/postmark-office in deploy/postmark-paypal-watch.service; adopted with the watch at the w41 ship (2026-10-04)."
-   },
-   {
-    "id": "usdc-watch",
-    "unit": "postmark-usdc-watch.service",
-    "label": "the USDC watcher's tree",
-    "must_be": "release",
-    "why": "It witnesses money arriving. Old code here misses an arrival shape the deployed door already knows about, and the miss looks like a quiet day.",
-    "activation_owner": "Wright — WorkingDirectory=/srv/postmark-office in deploy/postmark-usdc-watch.service."
-   },
-   {
-    "id": "stripe-watch",
-    "unit": "postmark-stripe-watch.service",
-    "label": "the Stripe watcher's tree",
-    "must_be": "release",
-    "why": "Same class as the USDC watcher, on the other rail: a payment the deployed code would have witnessed and the running code does not.",
-    "activation_owner": "Wright — adopted 2026-08-27; WorkingDirectory=/srv/postmark-office in deploy/postmark-stripe-watch.service."
-   },
-   {
-    "id": "site-sentinel",
-    "unit": "postmark-site-sentinel.service",
-    "label": "the site sentinel's tree",
-    "must_be": "release",
-    "why": "The sentinel is a checker, and a checker running old code checks the old law — the worst kind of green.",
-    "activation_owner": "Wright — WorkingDirectory=/srv/postmark-office in deploy/postmark-site-sentinel.service."
-   },
-   {
-    "id": "settlement",
-    "unit": "postmark-settlement.service",
-    "label": "the crossing settlement's tree",
-    "must_be": "release",
-    "why": "The settlement is the crossing. It runs deploy/settlement-auto.sh out of this tree and the sweep beneath it, and every guard the train adds arrives only when this tree does. This is the row that would have caught the candle's twin had the candle been on this side of the fence.",
-    "activation_owner": "Wright — WorkingDirectory=/srv/postmark-office in deploy/postmark-settlement.service."
-   },
-   {
-    "id": "settlement-shadow",
-    "unit": "postmark-settlement-shadow.service",
-    "label": "the settlement shadow's tree",
-    "must_be": "release",
-    "why": "The shadow rehearses the next crossing against the CURRENT law. Rehearsing from a stale tree is rehearsing the wrong crossing, and its would-refuse verdicts would be about code nobody is going to run.",
-    "activation_owner": "Wright — WorkingDirectory=/srv/postmark-office in deploy/postmark-settlement-shadow.service."
-   },
-   {
-    "id": "world2-clearing",
-    "unit": "postmark-world2-clearing.service",
-    "label": "the World 2.0 candle's office tree",
-    "env_key": "WORLD2_OFFICE",
-    "require_env": "/etc/systemd/system/postmark-world2-clearing.service.d/office-tree.conf (deploy/postmark-world2-office-tree.conf)",
-    "must_be": "release",
-    "why": "THE INCIDENT'S OWN ROW. The candle closes windows and opens their successors, and its clearing-job.mjs is what fills escrow_projection. On 2026-09-10 it ran from a checkout three days behind the release, at schema <= 012 with no escrow ingest, and the store crossed a green crossing into an empty projection. A store crossing armed on that state folds at a pin with no escrow and refuses.",
-    "activation_owner": "Wright — founder ruling 2026-08-29 (prod Postgres on the box); the tree pinned by drop-in on 2026-09-10 on Keemin's go ('agreed with your instance and class fixes for the arm gate')."
-   },
-   {
-    "id": "world2-notary",
-    "unit": "postmark-world2-notary.service",
-    "label": "the World 2.0 notary's office tree",
-    "env_key": "WORLD2_OFFICE",
-    "require_env": "/etc/systemd/system/postmark-world2-notary.service.d/office-tree.conf (deploy/postmark-world2-office-tree.conf)",
-    "must_be": "release",
-    "why": "The notary execs world2/tools/snapshot-export.mjs and world2/tools/falsifier-canon-locks.mjs out of this tree. falsifier-canon-locks.mjs DOES NOT EXIST at 7926461 — it landed on 2026-09-08 in 59ff9b9 — so under the lab tree the nightly read cannot run, /srv/world2-lab/state/canon-locks.jsonl stays empty, and this unit's own outcome row reads ALARM-outcome for a reason that has nothing to do with the register. That alarm was the second symptom of this one cause.",
-    "activation_owner": "Wright — 2026-08-29, paying the deferred-timer debt; the tree pinned by drop-in on 2026-09-10."
-   },
-   {
-    "id": "world2-backup",
-    "unit": "postmark-world2-backup.service",
-    "label": "the World 2.0 durability lane's office tree",
-    "env_key": "WORLD2_OFFICE",
-    "require_env": "/etc/systemd/system/postmark-world2-backup.service.d/office-tree.conf (deploy/postmark-world2-office-tree.conf)",
-    "must_be": "release",
-    "why": "The backup lane does not exec out of the office tree today — it runs pg_dump and pg_basebackup. It gets the drop-in and the row anyway, because the whole point of this section is that a lane must not acquire a second tree by inheriting a default nobody looked at, and the day it grows a node step is not the day to remember.",
-    "activation_owner": "Wright — 2026-08-29 with the other three world2 lanes; the tree pinned by drop-in on 2026-09-10."
-   },
-   {
-    "id": "world2-ingest",
-    "unit": "postmark-world2-ingest.service",
-    "label": "the World 2.0 projections lane's office tree",
-    "env_key": "WORLD2_OFFICE",
-    "require_env": "/etc/systemd/system/postmark-world2-ingest.service.d/office-tree.conf (deploy/postmark-world2-office-tree.conf)",
-    "must_be": "release",
-    "why": "law-ingest.mjs and stamp-ingest.mjs exec out of this tree, and they are the pens that write the projections the candle then reads. An ingest on an old tree is the escrow class from the upstream side: rows written to a schema the deployed clearing no longer expects. The unit is PARKED today, so this row reports PARKED and alarms on nothing; it exists so that adopting the timer does not also silently adopt a tree.",
-    "activation_owner": "Wright — installed 2026-08-29, timer disabled since 2026-09-05 pending the world-branch carry (DEPLOY.md § Which branch the ingest lane reads)."
-   },
-   {
-    "id": "world2-law-ingest",
-    "unit": "postmark-world2-law-ingest.service",
-    "label": "the World 2.0 law pen's office tree",
-    "env_key": "WORLD2_OFFICE",
-    "require_env": "/etc/systemd/system/postmark-world2-law-ingest.service.d/office-tree.conf (deploy/postmark-world2-office-tree.conf)",
-    "must_be": "release",
-    "why": "law-ingest.mjs execs out of this tree, and it is the only writer of law_projection anywhere in the office. A law pen on an old tree writes the rulebook to a schema the deployed clearing no longer expects — the escrow class from the upstream side, and worse here than on the parked poll it was split from, because this one is LIVE. The row carries require_env rather than a default so it refuses to guess: a unit whose drop-in went missing must redden, not fall back to a tree that happens to be right today.",
-    "activation_owner": "Keemin — the split is his ruling of 2026-09-19 (postmark#2893); the drop-in and this row are the same install."
-   },
-   {
-    "id": "world2-marks-ingest",
-    "unit": "postmark-world2-marks-ingest.service",
-    "label": "the World 2.0 marks pen's office tree",
-    "env_key": "WORLD2_OFFICE",
-    "require_env": "/etc/systemd/system/postmark-world2-marks-ingest.service.d/office-tree.conf (deploy/postmark-world2-office-tree.conf)",
-    "must_be": "release",
-    "why": "marks-ingest.mjs execs out of this tree and writes `marks` and `claims` through materialize.mjs — the same pen shape the clearing uses. A marks pen on an old tree writes rows in a shape the deployed clearing and fold no longer read. require_env rather than a default, as on the law pen: a unit whose drop-in went missing must redden, not fall back to a tree that happens to be right today.",
-    "activation_owner": "Keemin — the ingest is his ruling of 2026-09-23 (POS-142); the drop-in and this row are the same install, by Wright's hand."
-   },
-   {
-    "id": "world2-ops-scripts",
-    "kind": "file_copy",
-    "label": "the World 2.0 ops scripts on the box",
-    "path": "/srv/world2-lab/ops",
-    "from": "deploy",
-    "match": "\\.sh$",
-    "why": "THE SAME CLASS ONE LAYER DOWN, and it is already live. The four world2 units do not exec node directly — their ExecStart is /srv/world2-lab/ops/world2-<lane>.sh, and DEPLOY.md calls that directory 'a plain file copy from this repo'. No deploy writes it. On 2026-09-05 a one-line default in world2-refresh-clone.sh had to be carried by scp, and DEPLOY.md's own sentence for it is 'The box's copy of the script is stale until it is carried.' Nothing goes red while it is uncarried, which is the whole complaint. The drop-in above pins which OFFICE the scripts read; this row is what says the SCRIPTS themselves are the ones that shipped. Read as bytes, so a CRLF from a Windows copy reddens here rather than failing later in a way that reads like a missing file.",
-    "repair": "scp deploy/world2-*.sh meepo-ec2:/srv/world2-lab/ops/ && ssh meepo-ec2 'chmod +x /srv/world2-lab/ops/*.sh' — then re-run the roll-call",
-    "activation_owner": "Wright — the ops directory was placed by hand on 2026-08-29 with the four world2 lanes and has been carried by hand since."
-   }
-  ]
- }
 }
