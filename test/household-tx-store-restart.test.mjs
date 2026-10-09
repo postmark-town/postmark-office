@@ -100,14 +100,18 @@ function run(kase) {
   return { status: r.status, signal: r.signal, stderr: r.stderr ?? "", out: line ? JSON.parse(line.slice(7)) : null };
 }
 
+// The head of a crash names it ("Unhandled 'error' event"); its tail is the error object's fields.
+const said = (r) => r.stderr.split(/\r?\n/).filter((l) => /\S/.test(l)).slice(0, 8).join(" | ").slice(0, 600);
+
 function assertSurvived(r, what) {
   assert.equal(r.status, 0,
-    `${what}: the process stays up (exit ${r.status}${r.signal ? `, ${r.signal}` : ""}): ${r.stderr.slice(-400)}`);
-  assert.ok(r.out, `${what}: the child reported: ${r.stderr.slice(-400)}`);
+    `${what}: the process stays up (exit ${r.status}${r.signal ? `, ${r.signal}` : ""}): ${said(r)}`);
+  assert.ok(r.out, `${what}: the child reported: ${said(r)}`);
 }
 
 function assertNextIsClean(r, what) {
-  assert.notEqual(r.out.next.pid, r.out.pid, `${what}: the next pooled client is a new session`);
+  assert.notEqual(r.out.next.pid, r.out.pid,
+    `${what}: the next pooled client is a new session, not the one given back (next: ${JSON.stringify(r.out.next)})`);
   assert.equal(r.out.next.fresh, true, `${what}: the next pooled client is not inside an earlier transaction`);
   assert.ok(!r.out.next.household, `${what}: and carries no app.household (got ${JSON.stringify(r.out.next.household)})`);
 }
