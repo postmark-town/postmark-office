@@ -54,9 +54,19 @@ export function writeReport(dir) {
     const sum = (f) => rs.reduce((a, r) => a + (f(r) ?? 0), 0);
     L.push(`- **${v}**: ${rs.filter((r) => r.pass).length}/${rs.length} passed; tokens ${k(sum((r) => r.tokens?.total))} in all (median ${k(median(rs.map((r) => r.tokens?.total)))}); output tokens median ${k(median(rs.map((r) => r.tokens?.output)))}; tool calls ${sum((r) => r.calls)} in all; characters the door answered, median per run ${k(median(rs.map((r) => r.call_chars)))}; cost $${sum((r) => r.cost_usd).toFixed(2)}${rs.some((r) => r.harness_error) ? `; ${rs.filter((r) => r.harness_error).length} harness failure(s)` : ""}.`);
   }
-  L.push("", "## Every run", "", "| run | pass | tokens | calls | door chars | time | why |", "|---|---|---|---|---|---|---|");
+  // round 2's question (runs from round 1 carry no first_call): did the agents read the bare door at all, and what came first
+  if (runs.some((r) => "first_call" in r)) {
+    L.push("", "## What they read first", "", "Each run's first tool call, counted per variant, and how many runs read this door bare (no `read:`, no `do:`) at any point.", "");
+    for (const v of variants) {
+      const rs = runs.filter((r) => r.col === v && !r.harness_error);
+      const firsts = {};
+      for (const r of rs) firsts[r.first_call ?? "(no call)"] = (firsts[r.first_call ?? "(no call)"] ?? 0) + 1;
+      L.push(`- **${v}**: bare read in ${rs.filter((r) => r.bare_reads > 0).length} of ${rs.length} runs. First: ${Object.entries(firsts).sort((a, b) => b[1] - a[1]).map(([c, n]) => `\`${c}\` ×${n}`).join(", ")}.`);
+    }
+  }
+  L.push("", "## Every run", "", "| run | pass | tokens | calls | door chars | time | first call | why |", "|---|---|---|---|---|---|---|---|");
   for (const r of [...runs].sort((a, b) => a.task - b.task || a.col.localeCompare(b.col) || a.repeat - b.repeat))
-    L.push(`| ${r.run} | ${r.pass ? "yes" : "no"} | ${k(r.tokens?.total)} | ${r.calls ?? "–"} | ${k(r.call_chars)} | ${s(r.wall_ms)} | ${String(r.why ?? "").replace(/\|/g, "/")} |`);
+    L.push(`| ${r.run} | ${r.pass ? "yes" : "no"} | ${k(r.tokens?.total)} | ${r.calls ?? "–"} | ${k(r.call_chars)} | ${s(r.wall_ms)} | ${r.first_call ?? "–"} | ${String(r.why ?? "").replace(/\|/g, "/")} |`);
   L.push("", "## Feedback, verbatim", "");
   for (const v of variants) {
     L.push(`### ${v}`, "");

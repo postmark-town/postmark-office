@@ -7,6 +7,7 @@
 //   node tools/read-eval/run.mjs --report <dir>        # the results page again, from the run files
 //   node tools/read-eval/run.mjs --sweep               # drop read_eval_* databases a killed round left
 //   node tools/read-eval/run.mjs --controls --out <dir> # every grader passes a scripted solution and fails an empty run (no agent)
+//   node tools/read-eval/run.mjs --door town --suite errands --out <dir>  # round 2: the open errands (errands.mjs)
 //
 // One ROUND builds the seeded town once (office.mjs § prepareRound, ~3½ minutes),
 // then for each (variant, task, repeat) boots a local office on a fresh copy of
@@ -31,8 +32,9 @@ import { bootRun, callTool, clonesClean, prepareRound } from "./office.mjs";
 import { codexHome, runAgent, runCodexAgent } from "./agent.mjs";
 import { FEEDBACK_PROMPT, TASKS, onParcel, systemPrompt, truthFor } from "./tasks.mjs";
 import { DOOR_TASKS, SEED, doorTruthFor } from "./door-tasks.mjs";
+import { ERRANDS, ERRAND_SEED, errandTruthFor } from "./errands.mjs";
 import { writeReport } from "./report.mjs";
-import { SOLVED } from "./controls.mjs";
+import { SOLVED, SOLVED_ERRANDS } from "./controls.mjs";
 
 const OFFICE = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -67,6 +69,17 @@ function restoreClones(round) {
   if (!clonesClean(round)) throw new Error("a clone would not go back to the round's seed");
 }
 
+/** The run's tool calls, as what it read: the first call, and the bare reads of the round's door (no read:, no do:). */
+function readsOf(calls, door) {
+  const label = (c) => `${c.tool}${c.args?.read ? ` read:${c.args.read}${c.args?.args?.view ? `/${c.args.args.view}` : c.args?.view ? `/${c.args.view}` : ""}` : c.args?.do ? ` do:${c.args.do}` : " bare"}`;
+  const tc = (calls ?? []).filter((c) => c.method === "tools/call");
+  return {
+    first_call: tc[0] ? label(tc[0]) : null,
+    bare_reads: tc.filter((c) => c.tool === door && !c.args?.read && !c.args?.do).length,
+    call_path: tc.map(label),
+  };
+}
+
 async function sweep() {
   const { default: pg } = await import("pg");
   const ready = readFileSync(join(OFFICE, "..", `${OFFICE.replace(/\\/g, "/").split("/").pop()}.pg`, "READY"), "utf8");
@@ -84,14 +97,14 @@ async function sweep() {
 }
 
 /** The graders' controls: each must pass the scripted solution and fail the empty run. */
-async function controls({ round, truth, taskIds, out, door = "world", SUITE = TASKS, P = "v" }) {
+async function controls({ round, truth, taskIds, out, door = "world", SUITE = TASKS, P = "v", solved = SOLVED }) {
   const rows = [];
   for (const id of taskIds) {
     const task = SUITE.find((t) => t.id === id);
     for (const kind of ["solved", "empty"]) {
       const office = await bootRun(round, { shape: `${P}0`, runId: `${process.pid}_ctl_${kind}_${id}`, log });
       try {
-        const done = kind === "solved" ? await SOLVED[door][id]({ office, truth }) : {};
+        const done = kind === "solved" ? await solved[door][id]({ office, truth }) : {};
         const graded = await task.grade({ answer: done.answer ?? "", truth, query: office.query, round, calls: done.log ?? [] });
         const ok = kind === "solved" ? graded.pass : !graded.pass;
         rows.push({ task: id, kind, pass: graded.pass, ok, why: graded.why, refusals: (done.calls ?? []).filter((c) => c.isError).map((c) => c.body?.defect ?? c.body) });
@@ -155,7 +168,7 @@ async function serve({ round, out }) {
 }
 
 async function main() {
-  const a = argv(["out", "variants", "tasks", "repeats", "concurrency", "handle", "model", "effort", "report", "sweep", "controls", "regrade", "runtime", "serve", "door"]);
+  const a = argv(["out", "variants", "tasks", "repeats", "concurrency", "handle", "model", "effort", "report", "sweep", "controls", "regrade", "runtime", "serve", "door", "suite"]);
   if (a.sweep) return sweep();
   if (a.regrade) return regrade(resolve(a.regrade));
   if (a.report) { const p = writeReport(resolve(a.report)); log(`results page: ${p}`); return; }
@@ -164,7 +177,11 @@ async function main() {
   // the door: world (the first suite), town or household (Darko's comment on POS-486, 10-09)
   const door = a.door ?? "world";
   if (!["world", "town", "household"].includes(door)) throw new Error("--door is world, town or household");
-  const SUITE = door === "world" ? TASKS : DOOR_TASKS[door];
+  // the suite: round 1's named errands, or round 2's open ones (town and household only)
+  const suite = a.suite ?? "named";
+  if (!["named", "errands"].includes(suite)) throw new Error("--suite is named (round 1) or errands (round 2)");
+  if (suite === "errands" && door === "world") throw new Error("--suite errands is the town and household doors' (round 2)");
+  const SUITE = door === "world" ? TASKS : suite === "errands" ? ERRANDS[door] : DOOR_TASKS[door];
   const P = { world: "v", town: "t", household: "h" }[door];
   const variants = String(a.variants ?? `${P}0,${P}1,${P}2`).split(",");
   if (variants.some((v) => !v.startsWith(P))) throw new Error(`the ${door} door's variants are ${P}0, ${P}1, ${P}2`);
@@ -184,7 +201,7 @@ async function main() {
   mkdirSync(join(out, "runs"), { recursive: true });
 
   log(`round: the ${door} door, ${variants.join("/")} × tasks ${taskIds.join(",")} × ${repeats}, ${concurrency} at a time, as ${handle}, ${model} at ${effort}`);
-  const round = await prepareRound({ handle, dir: join(out, "seed"), seed: door === "world" ? null : SEED, log });
+  const round = await prepareRound({ handle, dir: join(out, "seed"), seed: door === "world" ? null : suite === "errands" ? ERRAND_SEED[door] : SEED, log });
   try {
     // THE TRUTH, read at the start through an office of its own at the control shape;
     // and THE SIZES: the bare read at every variant, section by section
@@ -195,14 +212,17 @@ async function main() {
       try {
         const bare = await callTool(probe.base, probe.key, door, {});
         sizes[v] = { total: bare.chars, sections: Object.fromEntries(Object.entries(bare.body ?? {}).map(([k, x]) => [k, JSON.stringify(x ?? null).length])) };
-        if (v === variants[0]) truth = door === "world" ? truthFor(round, { bare: bare.body }) : await doorTruthFor(round, (d, x) => callTool(probe.base, probe.key, d, x));
+        if (v === variants[0]) {
+          const call = (d, x) => callTool(probe.base, probe.key, d, x);
+          truth = door === "world" ? truthFor(round, { bare: bare.body }) : suite === "errands" ? await errandTruthFor(round, call, door) : await doorTruthFor(round, call);
+        }
       } finally { await probe.stop(); restoreClones(round); }
     }
     writeFileSync(join(out, `sizes-${runtime}.json`), JSON.stringify(sizes, null, 2));
     log(`bare read sizes: ${variants.map((v) => `${v} ${sizes[v].total}`).join(", ")}`);
     // one round file per runtime, so a door's folder holds both runtimes' rounds side by side
     writeFileSync(join(out, `round-${runtime}.json`), JSON.stringify({
-      started: stamp(), door, variants, tasks: taskIds, repeats, concurrency, handle, household: round.household, runtime, model, effort,
+      started: stamp(), door, suite, variants, tasks: taskIds, repeats, concurrency, handle, household: round.household, runtime, model, effort,
       clones: { town: round.clones.townHead, world: round.clones.worldHead },
       office: execFileSync("git", ["-C", OFFICE, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
       truth: { ...truth, householdOf: undefined, atOf: undefined }, seeded: round.seeded ?? null,
@@ -210,7 +230,7 @@ async function main() {
       prompts: Object.fromEntries(SUITE.map((t) => [t.id, t.prompt(truth)])),
     }, null, 2));
 
-    if (a.controls) return await controls({ round, truth, taskIds, out, door, SUITE, P });
+    if (a.controls) return await controls({ round, truth, taskIds, out, door, SUITE, P, solved: suite === "errands" ? SOLVED_ERRANDS : SOLVED });
     if (a.serve) return await serve({ round, out });
 
     // repeats outermost, then tasks, then variants: a slow hour or a busy box falls on every variant alike
@@ -255,6 +275,8 @@ async function main() {
             wall_ms: agent.result?.wall_ms ?? null,
             agent_error: agent.result?.is_error ?? null, exit_code: agent.result?.exit_code ?? null, stderr: agent.result?.stderr,
             answer,
+            // what the agent read first, and how often it read this door bare (round 2's question)
+            ...readsOf(agent.calls, door),
             feedback: agent.feedback?.result ?? null,
             feedback_tokens: agent.feedback?.usage ?? null,
             calls_during_feedback: agent.calls_during_feedback,

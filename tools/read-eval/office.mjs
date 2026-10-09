@@ -119,6 +119,12 @@ async function seedDoors({ dev, env, key, nKey, seed, log }) {
       if (r.isError || r.body?.error) throw new Error(`the seed's ${door} ${JSON.stringify(args).slice(0, 120)} was refused: ${JSON.stringify(r.body).slice(0, 300)}`);
       return r.body;
     };
+    // round 2's errands bring their own seed (errands.mjs § ERRAND_SEED)
+    if (seed.plant) {
+      const ids = await seed.plant({ me: (door, args) => must(key, door, args), them: (door, args) => must(nKey, door, args), cross: () => crossTown({ dev, env, log }), log });
+      log(`seeded: ${JSON.stringify(ids)}`);
+      return ids;
+    }
     const bug = await must(key, "town", { do: "post", args: { class: "bug", title: seed.bug.title, body: seed.bug.body, steps: seed.bug.steps } });
     const day0 = new Date(); day0.setUTCHours(0, 0, 0, 0);
     const events = [];
@@ -136,6 +142,41 @@ async function seedDoors({ dev, env, key, nKey, seed, log }) {
     if (child.exitCode === null) { const gone = new Promise((ok) => child.on("exit", ok)); child.kill(); await gone; }
     for (const f of [`loop-lag-${port}.json`, `store-txn-${port}.json`]) rmSync(join(OFFICE, "telemetry", f), { force: true });
   }
+}
+
+/**
+ * ONE CROSSING ON THE SEED, so a seeded letter is delivered the way the box
+ * delivers it: the town-log drain (the office's rows become outbox files), the
+ * town's ferry (outbox to inbox, and the mail ledger), each committed on the
+ * round's scratch clone as the box commits them, then the town-index ingest
+ * that brings the store's index up to the clone (tools/dev-rehearsal.mjs §
+ * CROSSING, the first two jobs and its index step). The stand-in set real
+ * residents' outboxes aside, so only the seed's letters cross. Never pushed:
+ * the clone has no remote.
+ */
+async function crossTown({ dev, env, log }) {
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: env.TOWN_TZ ?? "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+  const base = { ...cleanEnv(), ...env, TOWN_PUSH: "0" };
+  const job = (name, argv, { cwd = OFFICE, extra = {} } = {}) => {
+    try { execFileSync(process.execPath, argv, { cwd, env: { ...base, ...extra }, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" }); }
+    catch (e) { throw new Error(`the seed's crossing: ${name} exited ${e.status}: ${String(e.stdout ?? "").slice(-800)} ${String(e.stderr ?? "").slice(-800)}`); }
+  };
+  const commit = (message) => {
+    if (!g(dev.town, "status", "--porcelain")) return false;
+    g(dev.town, "add", "-A");
+    g(dev.town, "-c", "user.name=read-eval seed", "-c", "user.email=read-eval@postmark.invalid", "commit", "-q", "-m", message);
+    return true;
+  };
+  job("drain", [join(OFFICE, "tools", "town-drain-run.mjs"), "--clone", dev.town, "--db", join(dev.dir, "office.db"), "--oauth-db", join(dev.dir, "oauth.db"), "--date", today, "--unlocked"]);
+  const drained = commit(`town-log: crossing ${today} (read-eval seed)`);
+  job("ferry", [join(dev.town, "tools", "ferry.mjs"), "--no-git", "--date", today], { cwd: dev.town });
+  const ferried = commit(`ferry: crossing ${today} (read-eval seed)`);
+  const u = new URL(dev.store.url("law_ingester"));
+  job("index", [join(OFFICE, "world2", "tools", "town-index-ingest.mjs"), "--town-repo", dev.town, "--sha", g(dev.town, "rev-parse", "HEAD")], {
+    extra: { PGHOST: u.hostname, PGPORT: u.port, PGUSER: decodeURIComponent(u.username), PGPASSWORD: decodeURIComponent(u.password), PGDATABASE: decodeURIComponent(u.pathname.slice(1)), WORLD2_INGEST_URL: dev.store.url("law_ingester") },
+  });
+  log(`the seed's crossing ${today}: drain ${drained ? "committed" : "had nothing"}, ferry ${ferried ? "committed" : "had nothing"}, index ingested at ${g(dev.town, "rev-parse", "--short", "HEAD")}`);
+  return { today, drained, ferried };
 }
 
 const portOf = (store) => Number(new URL(store.url("office_api")).port);

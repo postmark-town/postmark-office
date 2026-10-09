@@ -61,3 +61,21 @@ const HOUSEHOLD = Object.freeze({
 
 /** The scripted solutions, by door and errand. */
 export const SOLVED = Object.freeze({ world: WORLD, town: TOWN, household: HOUSEHOLD });
+
+// ── round 2's open errands (errands.mjs) ────────────────────────────────────
+
+const HOUSEHOLD_ERRANDS = Object.freeze({
+  1: async ({ office, truth }) => { const log = []; await logged(office, log, "household", { do: "send", args: { from: truth.handle, to: truth.deadline.from, title: "Re: the long table", body: "Yes: the long table is yours for the night.", thread: truth.deadline.id } }); return { log }; },
+  2: async ({ truth }) => ({ answer: `This week we wrote to ${truth.week.letters_to.join(" and ")}, said welcomed on ${truth.week.stance_on.split("/").pop().replace(/-/g, " ")}, and RSVPed to ${truth.week.rsvp}.` }),
+  3: async ({ office, truth }) => { const log = []; await logged(office, log, "household", { do: "declare-stance-on", args: { on: truth.awaiting_marks[0], stance: "welcomed" } }); return { log }; },
+  4: async ({ office }) => { const log = []; await logged(office, log, "household", { do: "profile", args: { display_name: "Sol of the Grove" } }); return { log }; },
+});
+
+const TOWN_ERRANDS = Object.freeze({
+  1: async ({ office, truth }) => { const log = []; await logged(office, log, "household", { do: "rsvp", args: { event: truth.events[0].id } }); return { log }; },
+  2: async ({ office, truth }) => { const log = []; await logged(office, log, "town", { do: "stake", args: { mark: truth.bounties[0].id, stamps: 1 } }); return { log }; },
+  3: async ({ truth }) => ({ answer: `The bulletin's newest: ${truth.bulletin_newest[0].title}. On the calendar: ${truth.current_posts[0].title}. More next crossing.` }),
+});
+
+/** Round 2's scripted solutions, by door and errand. */
+export const SOLVED_ERRANDS = Object.freeze({ town: TOWN_ERRANDS, household: HOUSEHOLD_ERRANDS });
