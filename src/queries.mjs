@@ -13,7 +13,7 @@ import { readPane, paneRelPath, WINDOW_PURPOSE, WINDOW_STEP_ONE, WINDOW_POINTER 
 
 // The caller's OWN resolved identity (GET /me, MCP whoami) — not town data, the
 // answer to "who does this credential make me at the door?" Pure shaping over the
-// key the server already resolved (KEYS.get for static, oauthLookup for tokens);
+// key the server already resolved (staticLookup for a static row, oauthLookup for tokens);
 // no new computation. A static shell key carries no verified GitHub identity.
 export function identityOf(key) {
   if (!key) return null;

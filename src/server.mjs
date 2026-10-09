@@ -5,13 +5,13 @@
 // Errors use the town's bounce vocabulary. Writes: POST /letters lands in P2 —
 // this build answers 409 not-yet-open for it and the ballot stubs alike.
 //
-//   OFFICE_KEYS='devkey1=keemin:wright,postmaster' node src/server.mjs [--port 4380] [--db office.db]
+//   node src/server.mjs [--port 4380] [--db office.db] [--oauth-db oauth.db]
 //
-// OFFICE_KEYS format: <key>=<household>[#<gh_id>]:<handle>[,<handle>...][;<key>=...]
-// The optional #<gh_id> pins the static key to an immutable GitHub account id.
-// It is required only to hold a role (src/roles.mjs); everything else ignores it.
 // Keys are how we know who's at the door; a key may act `from:` only its own
 // residents. Reads require a key too (public read parity stays on the site).
+// A static key (one an operator issued by hand) is a `static` row in the
+// tokens table since POS-352: OFFICE_KEYS='devkey1=keemin:wright,postmaster'
+// node tools/static-keys-import.mjs writes it (src/static-keys.mjs).
 
 import { createServer } from "node:http";
 import { DatabaseSync } from "node:sqlite";
@@ -29,6 +29,7 @@ import { sendAtDoor } from "./send-at-door.mjs";
 import { TOWN_TOOL, townDispatchToolFor } from "./town-apex.mjs";
 import { householdApex, APEX_ONLY_FIELDS } from "./household-apex.mjs"; // the third door (2026-08-15)
 import { handleOauth, oauthLookup, oauthSchema, mintHouseholdKey, keyLookup, mintBerth, berthLookup, berthTaken, acknowledgeVisitorRules, BERTH_SLUG, FROM_TOWN, mintClaim, claimLookup, claimState, claimCosignUrlFor, claimStateUrlFor, sweepClaims, SignInUnreadable } from "./oauth.mjs";
+import { staticLookup, staticKeyCount } from "./static-keys.mjs"; // POS-352: an operator's static key is a store row, no longer an env var
 import { requestResidency, isReservedHandle } from "./residency.mjs";
 import { declareViaOffice, SETTLING_ASHORE } from "./declare.mjs";
 import { uploadMedia } from "./media.mjs";
@@ -585,36 +586,25 @@ if (!PEN.token && !READ_ONLY_ROLE) console.warn("WARN: no POSTMARK_PEN_TOKEN —
 
 // ── keys ─────────────────────────────────────────────────────────────────────
 //
-// A static key's household is a string an OPERATOR chose in an env var. There
-// is no GitHub sign-in behind it and therefore no verified account id — which
-// is fine for everything these keys have ever done, and NOT fine for holding a
-// role, because the role registry keys on the immutable gh_id and a household
-// that exists only as an env string has none.
+// THE STATIC KEYS ARE THE STORE'S (POS-352 part 2, Darko 2026-10-06, 2a). A key
+// an operator issued by hand is a `static` row in the tokens table, with its
+// own household and handles columns and the env row's gh_id where it had one,
+// and `resolveBearer` below reads it like every other credential. The office
+// no longer reads OFFICE_KEYS: tools/static-keys-import.mjs reads it once, by
+// hash, and src/static-keys.mjs says the rest (why the columns are explicit,
+// and why a row with no gh_id holds no roles).
 //
-// So the household field may optionally carry a pinned id: `keemin#583231`.
-// Founder-ruled shape (2026-08-26): a static key resolves for role purposes
-// ONLY if its env row carries an explicit gh_id. Without one the key works
-// exactly as it always has and simply holds no roles — it fails the gate with
-// the "no verified GitHub identity" sentence, which says the true reason.
-// Backward compatible by construction: no existing entry contains a `#`.
-const KEYS = new Map(); // key -> { household, handles: Set, ghId?: number }
-for (const entry of (process.env.OFFICE_KEYS ?? "").split(";").filter(Boolean)) {
-  const m = /^([^=]+)=([^:]+):(.+)$/.exec(entry.trim());
-  if (!m) continue;
-  const [, token, householdField, handleList] = m;
-  const hash = householdField.lastIndexOf("#");
-  const household = hash === -1 ? householdField : householdField.slice(0, hash);
-  const idPart = hash === -1 ? "" : householdField.slice(hash + 1).trim();
-  const ghId = /^[1-9][0-9]*$/.test(idPart) ? Number(idPart) : null;
-  if (hash !== -1 && ghId === null)
-    console.warn(`WARN: OFFICE_KEYS entry for "${household}" has a "#" but no numeric gh_id after it — it will hold no roles.`);
-  KEYS.set(token, {
-    household,
-    handles: new Set(handleList.split(",").map((s) => s.trim())),
-    ...(ghId === null ? {} : { ghId }),
-  });
-}
-if (KEYS.size === 0) console.warn("WARN: no OFFICE_KEYS configured — every request will 401.");
+// A box whose env file still carries the line after the deploy is saying the
+// import may not have run. The boot says so, and reads nothing from it.
+if (process.env.OFFICE_KEYS)
+  console.warn("WARN: OFFICE_KEYS is set but the office no longer reads it (POS-352): static keys are the tokens table's 'static' rows. Run tools/static-keys-import.mjs --dry, then remove the line (deploy/DEPLOY.md § Static keys).");
+// And the warning the env parse used to give, said of the store: no static row
+// means every operator-issued key will 401. Said once, by the writer, off the
+// boot path; a paper that cannot be counted says that instead.
+if (!IN_READ_WORKER)
+  staticKeyCount(odb).then(
+    (n) => { if (n === 0) console.warn("WARN: the office holds no static keys (no 'static' rows in the tokens table), so every operator-issued key will 401. Import them with tools/static-keys-import.mjs (deploy/DEPLOY.md § Static keys)."); },
+    (e) => console.warn(`WARN: could not count the static keys: ${String(e?.message ?? e).slice(0, 160)}`));
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 //
@@ -1170,8 +1160,8 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
     return;
   }
 
-  // Two credential shapes, one resolver: static household keys (OFFICE_KEYS),
-  // then OAuth tokens (GitHub sign-in). Reads are public, so a missing OR
+  // Two credential shapes, one resolver: static household keys (the tokens
+  // table's static rows, POS-352), then OAuth tokens (GitHub sign-in). Reads are public, so a missing OR
   // invalid credential just means "anonymous" — a stale token never locks
   // someone out of a public read; only writes require a valid key.
   // The resolution itself is `resolveBearer`, run by `handle` before this.
@@ -2232,9 +2222,9 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
     if (req.method === "POST" && path === "/keys") {
       if (!key.ghId)
         // THE HINT USED TO SAY "a hand-issued key can't mint another", and that
-        // is FALSE for a hand-issued key the founder pinned: an OFFICE_KEYS row
-        // may carry `#<gh_id>` (§ KEYS), which IS a verified identity written
-        // by the one hand that can edit the box's env, and such a row mints
+        // is FALSE for a hand-issued key the founder pinned: a static row
+        // may carry a gh_id (§ keys; imported from OFFICE_KEYS' `#<gh_id>`), which IS a verified identity written
+        // by the one hand that can write the box's static rows, and such a row mints
         // exactly as it should. The gate was never about how a key was issued
         // — it is about whether an account stands behind it. The sentence now
         // says the thing the code actually checks.
@@ -2730,12 +2720,13 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
 };
 
 // ── THE CREDENTIAL, RESOLVED BEFORE THE ROUTE (POS-271) ─────────────────────
-// Two credential shapes, one resolver: static household keys (OFFICE_KEYS),
-// then OAuth tokens (GitHub sign-in), household keys, claims and berths. Reads
-// are public, so a missing OR invalid credential — or a lookup that failed —
-// just means "anonymous": a stale token never locks someone out of a public
-// read; only writes require a valid key. A static key answers from memory and
-// never waits; every other shape is a read of the paperwork.
+// Two credential shapes, one resolver: static household keys (the tokens
+// table's static rows, POS-352), then OAuth tokens (GitHub sign-in), household
+// keys, claims and berths. Reads are public, so a missing OR invalid
+// credential — or a lookup that failed — just means "anonymous": a stale token
+// never locks someone out of a public read; only writes require a valid key.
+// Every shape, the static one included since POS-352, is a read of the
+// paperwork; the static row is asked first, in the order the env map was.
 //
 // ONE FAILURE IS NOT ANONYMOUS (POS-343): a live credential whose household
 // the store's pins could not be read for. That is not "this token is stale",
@@ -2743,7 +2734,8 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
 // hand a signed-in resident a visitor's answer with no word why. It is refused
 // with a 503 that names it.
 const resolveBearer = async (token) =>
-  (await oauthLookup(odb, db, TOWN_CLONE, token)) ?? (await keyLookup(odb, db, TOWN_CLONE, token))
+  (await staticLookup(odb, token))
+  ?? (await oauthLookup(odb, db, TOWN_CLONE, token)) ?? (await keyLookup(odb, db, TOWN_CLONE, token))
   ?? (await claimLookup(odb, db, TOWN_CLONE, token)) ?? (await berthLookup(odb, db, TOWN_CLONE, token)) ?? null;
 
 const handle = (req, res) => {
@@ -2751,8 +2743,6 @@ const handle = (req, res) => {
   const auth = /^Bearer\s+(.+)$/.exec(req.headers.authorization ?? "");
   const tripped = (e) => { if (!res.headersSent) bounce(res, 500, "the office tripped", String(e?.message ?? e).slice(0, 200)); };
   if (!auth) return route(req, res, null, t0).catch(tripped);
-  const fixed = KEYS.get(auth[1]);
-  if (fixed) return route(req, res, fixed, t0).catch(tripped);
   resolveBearer(auth[1]).then((key) => key, (e) => (e instanceof SignInUnreadable ? e : null))
     .then((key) => (key instanceof SignInUnreadable ? bounce(res, 503, key.defect, key.hint) : route(req, res, key, t0)))
     .catch(tripped);

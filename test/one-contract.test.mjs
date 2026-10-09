@@ -42,6 +42,7 @@ import { DatabaseSync } from "node:sqlite";
 import { editClone, fixtureDb } from "./fixture.mjs";
 import { awaitListening } from "./spawn-office.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
+import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const KEY = "onecontractkey";
@@ -56,8 +57,8 @@ async function office(extraEnv = {}) {
   const ix = extraEnv.WORLD2_PG === "" ? null : await indexStore(dbPath, { db: `one_contract_${++offices}` });
   const clone = editClone();
   const child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0", "--db", dbPath,
-    "--oauth-db", join(tmp, "oauth.db"), "--roles-db", join(tmp, "roles.db")], {
-    env: { ...process.env, ...ix?.env, WORLD_GRAPH_NONE: "1", OFFICE_KEYS: `${KEY}=keemin:wright`, TOWN_CLONE: clone,
+    "--oauth-db", seedStaticKeys(join(tmp, "oauth.db"), `${KEY}=keemin:wright`), "--roles-db", join(tmp, "roles.db")], {
+    env: { ...process.env, ...ix?.env, WORLD_GRAPH_NONE: "1", TOWN_CLONE: clone,
       WORLD_CLONE: join(tmp, "no-world-clone"), VOICES_LOG: join(tmp, "voices.jsonl"),
       WORLD_STORE_DB: join(tmp, "no-world.db"), TOWN_PUSH: "", TOWN_SINGLE_LOG: "", WORLD_APEX: "1",
       // every test here writes on the one key, and a quick run took office B

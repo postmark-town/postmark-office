@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { fixtureDb } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
+import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 
 // The town index this file's offices read: a store seeded from each fixture
 // office.db (POS-268, office-under-test.mjs). Stopped when the file is done.
@@ -36,10 +37,10 @@ before(async () => {
     "--port", String(port),
     "--db", dbPath,
     "--bouncer-now-ms", FROZEN_BOUNCER_NOW_MS,
+    "--oauth-db", seedStaticKeys(join(tmp, "oauth.db"), `${KEY}=keemin:wright`),
   ], {
     env: {
       ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV,
-      OFFICE_KEYS: `${KEY}=keemin:wright`,
       OFFICE_BOUNCER_KEY_READ_PER_MINUTE: "2",
       OFFICE_BOUNCER_KEY_WRITE_PER_MINUTE: "3",
       OFFICE_BOUNCER_WORLD_WRITES_PER_HOUR: "1",
@@ -156,10 +157,10 @@ test("with no --bouncer-now-ms the office keeps Date.now — the seam is a test 
     "--port", String(port),
     "--db", dbPath,
     // no --bouncer-now-ms: this is the production composition
+    "--oauth-db", seedStaticKeys(join(dir, "oauth.db"), `${KEY}=keemin:wright`),
   ], {
     env: {
       ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV,
-      OFFICE_KEYS: `${KEY}=keemin:wright`,
       OFFICE_BOUNCER_KEY_READ_PER_MINUTE: "2",
       OFFICE_BOUNCER_KEY_WRITE_PER_MINUTE: "3",
       OFFICE_BOUNCER_WORLD_WRITES_PER_HOUR: "1",

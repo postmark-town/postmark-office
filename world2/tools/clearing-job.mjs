@@ -53,7 +53,7 @@ import { dirname, join } from "node:path";
 // Steps 6 and 7's law, extracted the day the REVIEW lane became a second tool
 // holding the same `clearing_job` pen (`review-rule.mjs`). One definition, two
 // callers — see materialize.mjs's header for why it is not a copy.
-import { materializeClaims, recomputeStanding, slugOf, ownerHouseholdFor, liveHouseOfVia } from "./materialize.mjs";
+import { materializeClaims, recomputeStanding, slugOf, ownerHouseholdFor, liveHouseOfVia, houseOrRefusal, unfileableCheckOf } from "./materialize.mjs";
 // The escrow PRESENCE gate — the sweep's own rule, ported to the candle before
 // G1 deletes the path it lives on. See step 5.5. Step 3's sufficiency rule
 // lives there too (POS-411), reading the same escrow.
@@ -261,6 +261,29 @@ try {
         decide(b.id, "held_review", `counterclaim: collides with ${a.id} — a mind rules (census D2)`);
       }
     }
+  }
+
+  // 5.4 · THE CLAIMANT'S HOUSE, asked once per claim, before anything asks it
+  //     for a verdict (POS-356, ruling R5: "a refusal cannot hold anyone's
+  //     marks"). On 2026-10-04 gabo was not on the store's roll, the first
+  //     `ownerHouseholdFor` (step 5.5's, below) threw NO_SUCH_HOUSE, and window
+  //     228 rolled back with ten lawful claims in it. A claimant the roll does not
+  //     name refuses that claim, in the join door's words; a roll that cannot be
+  //     read at all (NO_RECORD, or a failed read) still throws and refuses the
+  //     window, because then nobody's claim can be judged.
+  //
+  //     AFTER STEP 5, deliberately: a claim already refused or held is not asked,
+  //     so this changes no outcome the gates above already decided.
+  //
+  //     A claim refused here is refused ALONE, so it goes on the window
+  //     receipt's `unfileable` list and the console line, like step 6's (the
+  //     10-04 case is the one that list exists for).
+  const unfiled = [];
+  const refuseAlone = (c, check) => { decide(c.id, "refused", check); unfiled.push({ slug: slugOf(c), check }); };
+  for (const c of pending) {
+    if (outcomes.has(c.id) || !slugOf(c)) continue;
+    const { check } = await houseOrRefusal(q, c.claimant);
+    if (check) refuseAlone(c, check);
   }
 
   // 5.5 · A COMMONS MARK NEEDS SOMEBODY'S STAMPS BEHIND IT (postmark#2594's
@@ -504,18 +527,21 @@ try {
   //     itself is `materialize.mjs`'s — the same code the REVIEW lane's ruling
   //     runs, so a mark that arrives by a mind's ruling and one that arrives by
   //     the candle are the same row shape by construction.
-  const sixCount = { locked: 0, refused: 0, held_review: 0, retracted_before_close: 0, pending_carried: 0 };
-  const materialize = [];
-  for (const c of pending) {
-    const o = outcomes.get(c.id) ?? { status: "locked", refusal_check: null };
-    await q("UPDATE claims SET status = $2, refusal_check = $3, decided_at = now() WHERE id = $1",
-      [c.id, o.status, o.refusal_check]);
-    sixCount[o.status === "locked" ? "locked" : o.status === "held_review" ? "held_review" : "refused"] += 1;
-    if (o.status !== "locked") continue;
-    materialize.push(c);
-  }
-
-  await materializeClaims(q, { claims: materialize, amends, revives, windowId, label: `window ${windowId}` });
+  //
+  //     ONE CLAIM THAT CANNOT BE FILED REFUSES ITSELF (POS-356, R5). Each claim is
+  //     filed under its own savepoint (materialize.mjs § ONE BAD CLAIM), and one
+  //     the store says no to is decided `refused` with its `unfileable` sentence
+  //     while the rest lock. So the docket's statuses are written AFTER the
+  //     filing, never before it: a claim written `locked` with no mark is the
+  //     state fold-delta's docket would carry as a lock that never landed.
+  //
+  //     A MOVER WITH A CARRY PLAN IS NOT FILED HERE: it is filed at 6.1 with its
+  //     riders, as one unit (Darko, 2026-10-08).
+  const materialize = pending.filter((c) => (outcomes.get(c.id)?.status ?? "locked") === "locked");
+  await materializeClaims(q, {
+    claims: materialize.filter((c) => !carries.has(String(c.id))), amends, revives, windowId, label: `window ${windowId}`,
+    refuseEach: refuseAlone,
+  });
 
   // 6.1 · THE RIDERS, in the same transaction as their mover (POS-441). Each is
   //     its own locked claim superseding its standing mark — the store's amend
@@ -526,24 +552,53 @@ try {
   //     claim id. The file bookkeeping a seeded row carries (`_fileAt`,
   //     `_origin`) is dropped, as any claim-made row's is: the numbers are world
   //     numbers now, and the write-down frames them (store-writedown.mjs).
+  //
+  //     ONE MOVE, ONE UNIT (POS-356, ruled by Darko 2026-10-08). The mover's
+  //     filing, its riders' claim rows and their filing share one savepoint. If
+  //     any of it is refused (a constraint, a cycle, a revive no longer retired),
+  //     the savepoint is rolled back: no rider claim row survives, every rider
+  //     stays where it stands, and the mover alone is refused `unfileable`,
+  //     naming the rider and the constraint. Any other error refuses the window.
+  //     The savepoint's name is its own, because the per-claim one nests inside.
   const carriedMoves = [];
   for (const c of materialize) {
     const plan = carries.get(String(c.id));
     if (!plan) continue;
+    let failed = null;
+    const fail = (x, check) => { failed ??= { x, check }; };
+    await q("SAVEPOINT file_one_move");
+    await materializeClaims(q, { claims: [c], amends, revives, windowId, label: `window ${windowId}`, refuseEach: fail });
     const riderClaims = [], riderAmends = new Map();
-    for (const r of plan.riders) {
+    for (const r of failed ? [] : plan.riders) {
       const { _fileAt, _origin, ...data } = r.row.data ?? {};
-      const { rows: [rc] } = await q(
-        `INSERT INTO claims (window_id, slug, class, claimant, household, status, decided_at, body, geometry, bbox, stake, data, parent, supersedes)
-         VALUES ($1, $2, $3, $4, $5, 'locked', now(), $6, $7, $8, 0, $9, $10, $11)
-         RETURNING *`,
-        [windowId, r.slug, r.row.kind, r.row.owner, r.row.household, r.row.body ?? null, JSON.stringify(r.geometry),
-          r.geometry.extent ? boxOf(r.geometry.at, r.geometry.extent) : null,
-          JSON.stringify({ ...data, _carried_by: String(c.id) }), r.row.parent ?? null, r.row.id]);
-      riderClaims.push(rc);
-      riderAmends.set(String(rc.id), { id: r.row.id });
+      try {
+        const { rows: [rc] } = await q(
+          `INSERT INTO claims (window_id, slug, class, claimant, household, status, decided_at, body, geometry, bbox, stake, data, parent, supersedes)
+           VALUES ($1, $2, $3, $4, $5, 'locked', now(), $6, $7, $8, 0, $9, $10, $11)
+           RETURNING *`,
+          [windowId, r.slug, r.row.kind, r.row.owner, r.row.household, r.row.body ?? null, JSON.stringify(r.geometry),
+            r.geometry.extent ? boxOf(r.geometry.at, r.geometry.extent) : null,
+            JSON.stringify({ ...data, _carried_by: String(c.id) }), r.row.parent ?? null, r.row.id]);
+        riderClaims.push(rc);
+        riderAmends.set(String(rc.id), { id: r.row.id });
+      } catch (err) {
+        const check = unfileableCheckOf(err, { slug: r.slug });
+        if (!check) throw err;
+        fail({ slug: r.slug }, check);
+        break;
+      }
     }
-    if (riderClaims.length) await materializeClaims(q, { claims: riderClaims, amends: riderAmends, windowId, label: `window ${windowId} carry of ${plan.slug}` });
+    if (!failed && riderClaims.length)
+      await materializeClaims(q, { claims: riderClaims, amends: riderAmends, windowId, label: `window ${windowId} carry of ${plan.slug}`, refuseEach: fail });
+    if (failed) {
+      await q("ROLLBACK TO SAVEPOINT file_one_move");
+      await q("RELEASE SAVEPOINT file_one_move");
+      const who = slugOf(failed.x);
+      const why = failed.check.replace(/^unfileable: /, "").replace(" Nothing else waited on it.", "");
+      refuseAlone(c, who === plan.slug ? failed.check : `unfileable: the move of ${plan.slug} couldn't carry ${who}: ${why}`);
+      continue;
+    }
+    await q("RELEASE SAVEPOINT file_one_move");
     carriedMoves.push({
       claim: String(c.id), slug: plan.slug, dx: plan.dx, dy: plan.dy,
       carried: plan.riders.map((r) => ({ slug: r.slug, from: r.from, to: r.to })),
@@ -551,9 +606,20 @@ try {
       sentence: carrySentence(plan),
     });
   }
+  for (const u of unfiled) console.log(`  ⚑ refused alone: ${u.slug} — ${u.check}`);
+
+  // The docket's statuses, written once every claim and every move has settled.
+  const sixCount = { locked: 0, refused: 0, held_review: 0, retracted_before_close: 0, pending_carried: 0 };
+  for (const c of pending) {
+    const o = outcomes.get(c.id) ?? { status: "locked", refusal_check: null };
+    await q("UPDATE claims SET status = $2, refusal_check = $3, decided_at = now() WHERE id = $1",
+      [c.id, o.status, o.refusal_check]);
+    sixCount[o.status === "locked" ? "locked" : o.status === "held_review" ? "held_review" : "refused"] += 1;
+  }
+
   // What each revive overwrote, on the window's own record: the row now says what
   // is true today, and this is where its retirement stays readable.
-  const revived = materialize.filter((c) => revives.has(String(c.id))).map((c) => {
+  const revived = materialize.filter((c) => revives.has(String(c.id)) && outcomes.get(c.id)?.status !== "refused").map((c) => {
     const was = revives.get(String(c.id));
     return { slug: slugOf(c), id: was.id, retired_window: was.retired_window, locked_window_before: was.locked_window };
   });
@@ -644,6 +710,8 @@ try {
       // ground has to name the law-as-of it refused against.
       ...(capSeen ? { parcel_cap: capSeen } : {}),
       ...(revived.length ? { revived } : {}),
+      // The claims the store would not file, each refused alone (POS-356).
+      ...(unfiled.length ? { unfileable: unfiled } : {}),
       // THE CARRY's own account (POS-441): each move, what it carried and what of
       // other households' stayed — the one act, its riders named on the record.
       ...(carriedMoves.length ? { carried: carriedMoves } : {}),

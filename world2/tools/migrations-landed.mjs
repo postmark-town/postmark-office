@@ -106,6 +106,8 @@ export const LANDED = {
   "067_town_mint_inputs.sql":      { probe: `${rel("town_rooms")} AND ${rel("town_mail_lines")}` },
   // 068 (POS-441): the clearing writes a carried mark's claim — its insert policy, then its trigger.
   "068_clearing_carries.sql":      { probe: `${policy("claims_insert_clearing")} AND ${trig("claims_insert_carry_only")}` },
+  // 070 (POS-352): a static key's own household and handles, on its oauth_tokens row.
+  "070_static_office_keys.sql":    { probe: `${col("oauth_tokens", "household")} AND ${col("oauth_tokens", "handles")}` },
   // 071 (POS-444): the store's record that a handle came ashore, append-only.
   "071_ashore.sql":                { probe: `${rel("ashore")} AND ${trig("ashore_append_only")}` },
 };

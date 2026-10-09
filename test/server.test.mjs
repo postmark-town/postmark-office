@@ -14,6 +14,7 @@ import { editClone, fixtureDb } from "./fixture.mjs";
 import { worldStoreFixture, AS_OF_WORLD } from "./world-graph-fixture.mjs";
 import { rowsEnv } from "./helpers/world-rows.mjs";
 import { indexStore, testIndex } from "./helpers/office-under-test.mjs";
+import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const KEY = "testkey";
@@ -43,8 +44,8 @@ before(async () => {
   // collision the port had, one directory over. The berth test below already
   // passed its own `--oauth-db`; this is that idiom applied to every spawn here.
   child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0", "--db", dbPath,
-    "--oauth-db", join(tmp, "oauth.db"), "--roles-db", join(tmp, "roles.db")], {
-    env: { ...process.env, OFFICE_KEYS: `${KEY}=keemin:wright`, TOWN_CLONE: join(tmp, "no-clone-here"), WORLD_CLONE: join(tmp, "no-world-clone"), VOICES_LOG: join(tmp, "voices-log.jsonl"), TOWN_PUSH: "", ...rowsEnv(join(tmp, "world.db"), tmp), ...ix.env },   // the world is the rows (POS-270 lane W 3a), never the file
+    "--oauth-db", seedStaticKeys(join(tmp, "oauth.db"), `${KEY}=keemin:wright`), "--roles-db", join(tmp, "roles.db")], {
+    env: { ...process.env, TOWN_CLONE: join(tmp, "no-clone-here"), WORLD_CLONE: join(tmp, "no-world-clone"), VOICES_LOG: join(tmp, "voices-log.jsonl"), TOWN_PUSH: "", ...rowsEnv(join(tmp, "world.db"), tmp), ...ix.env },   // the world is the rows (POS-270 lane W 3a), never the file
     stdio: ["ignore", "pipe", "pipe"],
   });
   await new Promise((ok, no) => {
@@ -240,8 +241,8 @@ test("PATCH /profile/{handle}/avatar reaches the REST image door and keeps its b
   const dbPath = join(dir, "fixture.db");
   fixtureDb(dbPath).close();
   const avatarServer = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0", "--db", dbPath,
-    "--oauth-db", join(dir, "oauth.db"), "--roles-db", join(dir, "roles.db")], {
-    env: { ...process.env, WORLD_GRAPH_NONE: "1", OFFICE_KEYS: `${KEY}=keemin:wright`, TOWN_CLONE: clone, WORLD_CLONE: join(dir, "no-world-clone"), TOWN_PUSH: "", ...ix.env },
+    "--oauth-db", seedStaticKeys(join(dir, "oauth.db"), `${KEY}=keemin:wright`), "--roles-db", join(dir, "roles.db")], {
+    env: { ...process.env, WORLD_GRAPH_NONE: "1", TOWN_CLONE: clone, WORLD_CLONE: join(dir, "no-world-clone"), TOWN_PUSH: "", ...ix.env },
     stdio: ["ignore", "pipe", "pipe"],
   });
   try {
@@ -642,8 +643,8 @@ test("with NO store at all the window 404s — never an empty graph, which would
   // the one shape an operator meets on a box before the first hydration.
   let port;
   const bare = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0", "--db", join(tmp, "fixture.db"),
-    "--oauth-db", join(tmp, "oauth-bare.db"), "--roles-db", join(tmp, "roles-bare.db")], {
-    env: { ...process.env, WORLD_GRAPH_NONE: "1", OFFICE_KEYS: `${KEY}=keemin:wright`, TOWN_CLONE: join(tmp, "no-clone-here"), WORLD_CLONE: join(tmp, "no-world-clone"), VOICES_LOG: join(tmp, "voices-log-2.jsonl"), TOWN_PUSH: "", WORLD_STORE_DB: join(tmp, "no-store-here.db"), ...ix.env },
+    "--oauth-db", seedStaticKeys(join(tmp, "oauth-bare.db"), `${KEY}=keemin:wright`), "--roles-db", join(tmp, "roles-bare.db")], {
+    env: { ...process.env, WORLD_GRAPH_NONE: "1", TOWN_CLONE: join(tmp, "no-clone-here"), WORLD_CLONE: join(tmp, "no-world-clone"), VOICES_LOG: join(tmp, "voices-log-2.jsonl"), TOWN_PUSH: "", WORLD_STORE_DB: join(tmp, "no-store-here.db"), ...ix.env },
     stdio: ["ignore", "pipe", "pipe"],
   });
   try {
@@ -812,8 +813,8 @@ test("POST /berth: one keyless POST mints ephemeral standing; names are single-o
   const dbPath = join(dir, "fixture.db");
   fixtureDb(dbPath).close();
   const child2 = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0", "--db", dbPath,
-    "--oauth-db", join(dir, "oauth.db"), "--roles-db", join(dir, "roles.db")], {
-    env: { ...process.env, WORLD_GRAPH_NONE: "1", OFFICE_KEYS: `${KEY}=keemin:wright`, TOWN_CLONE: join(dir, "no-clone"), WORLD_CLONE: join(dir, "no-world-clone"), VOICES_LOG: join(dir, "voices.jsonl"), TOWN_PUSH: "", ...ix.env },
+    "--oauth-db", seedStaticKeys(join(dir, "oauth.db"), `${KEY}=keemin:wright`), "--roles-db", join(dir, "roles.db")], {
+    env: { ...process.env, WORLD_GRAPH_NONE: "1", TOWN_CLONE: join(dir, "no-clone"), WORLD_CLONE: join(dir, "no-world-clone"), VOICES_LOG: join(dir, "voices.jsonl"), TOWN_PUSH: "", ...ix.env },
     stdio: ["ignore", "pipe", "pipe"],
   });
   try {

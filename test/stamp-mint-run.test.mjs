@@ -11,7 +11,9 @@
 // against a real Postgres holding B's pins, rooms, mail lines and chain. The two
 // ledgers must be byte-equal, the store must hold B's export line for line, and
 // a second pass must find nothing owed. The runner must read the STORE: a pin
-// missing from the store changes what it owes.
+// missing from the store changes what it owes. And a pass that loses its push
+// race to another writer decides again from the new head, never rebasing
+// (POS-447, the last test).
 //
 // A WRITE TRANSACTION NEVER SPANS NON-SQL WORK (Wright's review of #415): the
 // whole file runs with the store's idle-in-transaction budget at 2 s
@@ -162,4 +164,66 @@ test("an empty input is a refusal by name, and the export is left as it arrived"
   } finally {
     await ingester.query("BEGIN"); await writeMintInputs(ingester, B); await ingester.query("COMMIT");
   }
+});
+
+// POS-447: A LOST PUSH RACE RE-DECIDES, NEVER REBASES. Two writers race on one
+// remote. The rival is a git-only writer (the town's own --append, the road
+// STAMP_LINES unset takes, or a hand), and it lands its lines while the pass is
+// verifying, so the store's head has not moved and only the push can find out.
+// Its lines are a prefix of the pass's (it saw 200 fewer deliveries), which is
+// what lets "re-decides" be held to an oracle: the two writers must end exactly
+// where the town's --append alone ends over every delivery.
+test("a lost push race re-decides from the new head: no rebase, the chain verifies, the store equals the file (POS-447)", async (t) => {
+  if (skip) return t.skip(skip);
+  const remote = join(tmp, "remote.git"), W = join(tmp, "w"), R = join(tmp, "r"), O = join(tmp, "oracle");
+  const id = ["-c", "user.name=t", "-c", "user.email=t@t"];
+  const MAIL = join("WHITE_PAGES", "mail-ledger.md"), LEDGER = join("WHITE_PAGES", "stamp-ledger.md");
+  const all = readFileSync(join(CLONE, MAIL), "utf8").replace(/\r\n/g, "\n").split("\n").filter((l) => l.startsWith("- "));
+  const mailOf = (n) => `# Mail ledger\n\n${all.slice(0, n).join("\n")}\n`;
+  // the remote: B as it stands (its chain is the store's), 400 more deliveries
+  execFileSync("git", ["init", "-q", "--bare", remote]);
+  git(B, "push", "-q", remote, "HEAD:refs/heads/main");
+  git(remote, "symbolic-ref", "HEAD", "refs/heads/main");
+  const clone = (dir) => execFileSync("git", ["clone", "-q", "-c", "core.autocrlf=false", remote, dir]);
+  clone(W);
+  writeFileSync(join(W, MAIL), mailOf(MAIL_LINES + 400));
+  git(W, ...id, "commit", "-qam", "the crossing: 400 more deliveries");
+  git(W, "push", "-q");
+  clone(R); clone(O);
+  await ingester.query("BEGIN"); await writeMintInputs(ingester, W); await ingester.query("COMMIT");
+  // the oracle: one writer alone, the town's --append over every delivery
+  execFileSync(process.execPath, [join(O, "tools", "stamp-mint.mjs"), "--append", "--key", keyFile, "--repo", O], { encoding: "utf8" });
+  const { verifyStampLedger } = await import(pathToFileURL(join(W, "tools", "stamp-verify.mjs")).href);
+  const linesOf = (dir) => engine.parseStampLedger(readFileSync(join(dir, LEDGER), "utf8")).length;
+  const held = linesOf(W);
+  let rival = null;
+  const verify = async (clone) => {
+    if (!rival) {
+      // The rival lands while the pass verifies: 200 fewer deliveries, so fewer lines.
+      writeFileSync(join(R, MAIL), mailOf(MAIL_LINES + 200));
+      execFileSync(process.execPath, [join(R, "tools", "stamp-mint.mjs"), "--append", "--key", keyFile, "--repo", R], { encoding: "utf8" });
+      git(R, "checkout", "-q", "--", MAIL);
+      git(R, ...id, "commit", "-qm", "mint: the rival's pass", "--", LEDGER);
+      git(R, "push", "-q");
+      rival = { sha: git(R, "rev-parse", "HEAD").trim(), lines: linesOf(R) - held, decided: linesOf(clone) - held };
+    }
+    return verifyStampLedger(clone);
+  };
+  const was = process.env.TOWN_PUSH;
+  process.env.TOWN_PUSH = "1";
+  let out;
+  try { out = await runner.mintFromStore(W, { keyPem: PRIV, verify }); }
+  finally { process.env.TOWN_PUSH = was; }
+  console.log(`# rival: ${rival.lines} line(s) landed first; the pass had decided ${rival.decided}; then: ${out.summary}`);
+  assert.ok(rival.lines > 0 && rival.decided > rival.lines, `the race is real: the rival landed ${rival.lines} line(s), the pass had decided ${rival.decided}`);
+  assert.equal(out.raced, 1, "the pass lost one push race and decided again");
+  assert.equal(out.appended, rival.decided - rival.lines, "it appended only what the new head still owed");
+  assert.equal(git(W, "rev-parse", "HEAD^").trim(), rival.sha, "its commit sits on the rival's: decided against the new head");
+  assert.equal(git(W, "rev-parse", "HEAD").trim(), git(remote, "rev-parse", "main").trim(), "and it landed");
+  assert.equal(git(W, "status", "--porcelain").trim(), "", "the clone is clean");
+  assert.equal(readFileSync(join(W, LEDGER), "utf8"), readFileSync(join(O, LEDGER), "utf8"), "the two writers end where one writer alone ends, byte for byte");
+  const v = await verifyStampLedger(W);
+  assert.deepEqual(v.ok ? [] : v.problems, [], "the town's verifier: the chain verifies");
+  const s = await verifyStampLinesVia(office, W, { engine });
+  assert.deepEqual(s.problems, [], "the store equals the file, line for line");
 });

@@ -19,6 +19,7 @@ import { bootOnFreePort } from "./spawn-office.mjs";
 import { indexStore, seedRegistry } from "./helpers/office-under-test.mjs";
 import { serializeRegistry, slugFromName, houseForAccount, houseForName, planRegistryJoin } from "../src/residency.mjs";
 import { BIND_REFUSALS } from "../src/join-bind.mjs";
+import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 // The port is asked of the OS, never chosen (spawn-office.mjs § the port,
@@ -161,11 +162,10 @@ before(async () => {
   GH_PORT = ghServer.address().port;
 
   const spawnOffice = (oauthDb, extra) => bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port),
-    "--db", dbPath, "--oauth-db", join(tmp, oauthDb)], {
+    "--db", dbPath, "--oauth-db", seedStaticKeys(join(tmp, oauthDb), "statickey=keemin:wright")], {
     env: {
       ...process.env, WORLD_GRAPH_NONE: "1",
       ...extra,
-      OFFICE_KEYS: "statickey=keemin:wright",
       TOWN_CLONE: clone, TOWN_PUSH: "",
       PUBLIC_BASE: `http://127.0.0.1:${port}`,
       POSTMARK_OAUTH_GITHUB_CLIENT_ID: "mock-gh-app",

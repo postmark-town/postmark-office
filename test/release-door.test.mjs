@@ -33,6 +33,7 @@ import { tmpdir } from "node:os";
 import { fixtureDb } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
+import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 
 // The town index this file's offices read: a store seeded from each fixture
 // office.db (POS-268, office-under-test.mjs). Stopped when the file is done.
@@ -66,10 +67,10 @@ before(async () => {
     "--port", String(port),
     "--db", dbPath,
     "--release-root", stampDir,
+    "--oauth-db", seedStaticKeys(join(tmp, "oauth.db"), "release-door-test-key=keemin:wright"),
   ], {
     env: {
       ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV,
-      OFFICE_KEYS: "release-door-test-key=keemin:wright",
       TOWN_CLONE: join(tmp, "no-clone-here"),
       WORLD_CLONE: join(tmp, "no-world-clone"),
     },
