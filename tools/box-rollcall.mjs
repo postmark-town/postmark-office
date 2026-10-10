@@ -74,10 +74,11 @@
 //    (something we swore would run, does not). A unit with no manifest row is the
 //    OTHER failure, and it is the one that grows silently: every unit installed
 //    after this file was written is invisible to the roll-call until someone adds
-//    it. So the collector globs the box for every postmark-* timer and every
-//    ENABLED postmark-* service, and anything it finds that the manifest does not
-//    name is ALARM-unmanifested. That is what keeps the roll-call from decaying
-//    into a snapshot of 2026-08-27.
+//    it. So the collector globs the box for every postmark-* timer, every
+//    ENABLED postmark-* service, and every live instance of a template (the read
+//    pool's, POS-522), and anything it finds that the manifest does not name is
+//    ALARM-unmanifested. That is what keeps the roll-call from decaying into a
+//    snapshot of 2026-08-27.
 //
 // ── WHAT IT WILL NOT DO ─────────────────────────────────────────────────────
 //
@@ -219,6 +220,17 @@ export function loadManifest(path = DEFAULT_MANIFEST) {
       // The law's third clause is not decorative. A row that cannot say who
       // decided it runs is a row nobody will fix when it goes red.
       throw new Error(`manifest row ${row.unit} names no activation_owner`);
+    }
+    // A unit whose file lives only on the box says where, and why it is not in
+    // deploy/ (POS-522): a row nobody can read the unit of is a row nobody can
+    // rebuild the box from. Which rows need it is the repo's check
+    // (test/box-rollcall.test.mjs reads deploy/); the box has no deploy/ to ask.
+    if (row.box_only !== undefined) {
+      const b = row.box_only;
+      if (!b || typeof b.path !== "string" || !b.path.startsWith("/"))
+        throw new Error(`manifest row ${row.unit} is box_only and names no absolute path for its unit file`);
+      if (typeof b.why !== "string" || !b.why.trim())
+        throw new Error(`manifest row ${row.unit} is box_only and does not say why its unit file is not in deploy/`);
     }
   }
   // §2b, the custody rows. Optional as a block, strict inside it: the same
@@ -420,22 +432,45 @@ function readUnit(name) {
   return u;
 }
 
-function discoverUnits() {
-  // RULE 4's scope, and the scoping is deliberate. Every postmark-* TIMER is in
-  // scope because a timer is by definition a thing someone decided should run on
-  // a clock. Only ENABLED postmark-* services are in scope, because a `static`
-  // service is the body a timer triggers — it has no independent existence to
-  // roll-call, and listing all of them would double every row for no signal.
-  const out = systemctl(["list-unit-files", "postmark*", "--no-pager", "--no-legend", "--plain"]);
-  const found = [];
-  for (const line of out.split("\n")) {
+// RULE 4's scope, and the scoping is deliberate. Every postmark-* TIMER is in
+// scope because a timer is by definition a thing someone decided should run on
+// a clock. Only ENABLED postmark-* services are in scope, because a `static`
+// service is the body a timer triggers — it has no independent existence to
+// roll-call, and listing all of them would double every row for no signal.
+//
+// ⚑ A TEMPLATE'S INSTANCES ARE NOT FILES (POS-522, postmark-office#354).
+// `list-unit-files` lists unit FILES, so the read pool's template is one line,
+// `postmark-office-read@.service`, however many instances run, and the instance
+// names that a row can watch (`postmark-office-read@4391.service`) never appear
+// there. Until 2026-10-09 a dead read worker raised no alarm in either
+// direction. So the units systemd has LOADED and live (`list-units`: active,
+// activating, failed) are read too, and every INSTANCE among them is in scope.
+// A non-instance service there is a timer's body mid-run, or an enabled service
+// the file listing already found, so it adds nothing but a flake. The template
+// line itself is never a unit: `systemctl show` on it answers for no process.
+export function parseDiscovery(unitFilesText, liveUnitsText = "") {
+  const found = new Set();
+  for (const line of String(unitFilesText).split("\n")) {
     const parts = line.trim().split(/\s+/);
     if (parts.length < 2) continue;
     const [name, state] = parts;
-    if (name.endsWith(".timer")) found.push(name);
-    else if (name.endsWith(".service") && state === "enabled") found.push(name);
+    if (/@\.(service|timer)$/.test(name)) continue;
+    if (name.endsWith(".timer")) found.add(name);
+    else if (name.endsWith(".service") && state === "enabled") found.add(name);
   }
-  return found.sort();
+  for (const line of String(liveUnitsText).split("\n")) {
+    // A failed unit's line can lead with a "●"; the name is the first postmark token.
+    const name = line.trim().split(/\s+/).find((t) => t.startsWith("postmark"));
+    if (name && /@[^.@]+\.(service|timer)$/.test(name)) found.add(name);
+  }
+  return [...found].sort();
+}
+
+function discoverUnits() {
+  return parseDiscovery(
+    systemctl(["list-unit-files", "postmark*", "--no-pager", "--no-legend", "--plain"]),
+    systemctl(["list-units", "postmark*", "--type=service,timer", "--no-pager", "--no-legend", "--plain"]),
+  );
 }
 
 function readFile(path) {
