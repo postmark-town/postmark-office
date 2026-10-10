@@ -162,11 +162,16 @@ test("GET /world/apex: an error with no code is still the door's own fault, 500"
   assert.equal(r.body.refused, true);
 });
 
-test("POS-544 at the apex: a store lost under GET or POST /world/apex answers 503 with Retry-After", async () => {
+test("POS-544 at the apex: a store lost under GET /world/apex answers 503 with Retry-After", async () => {
   const g = await answer(await get("/world/apex?find=synthetic-store-lost", { key: null }));
   assert.equal(g.status, 503, `GET: ${JSON.stringify(g.body).slice(0, 300)}`);
   assert.equal(g.retryAfter, "30");
   assert.match(g.body.hint, /A read is safe to repeat/);
+});
+
+// Before: the catch handed pg's string SQLSTATE to bounce as a status, writeHead
+// threw, and the body-read catch answered 400 "could not read the body".
+test("POS-544 at the apex: a store lost under POST /world/apex answers 503 with Retry-After, not 400", async () => {
   const p = await answer(await post("/world/apex", { find: "synthetic-store-lost" }));
   assert.equal(p.status, 503, `POST: ${JSON.stringify(p.body).slice(0, 300)}`);
   assert.equal(p.retryAfter, "30");
