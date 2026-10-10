@@ -53,6 +53,7 @@ import { logAccess } from "./telemetry.mjs";
 import { settlements } from "./settlements.mjs";
 import { worldSummary, worldOrient, worldEyes, worldInvestigate, worldFind, worldStateRaw, worldSkeletonRaw, worldMyMarks, leaveMarkViaOffice, walkViaOffice, worldNoteViaOffice, worldWalkers, worldPresent, worldConversations, worldSay, worldSayHuman, worldSayStream, serveSayStream, whoami, worldBlockForHandle, WORLD_CLONE } from "./world.mjs";
 import { world2MyDrafts, world2MyMarks, world2Pool, world2Serve, world2ServeEnabled } from "./world2-serve.mjs";
+import { isStoreUnreachable } from "./store-pool.mjs"; // POS-544: a store lost mid-request answers 503, not 500
 import { rowsFixtureActive } from "./world-graph-snapshot.mjs"; // POS-270 lane W 3b: the world graph's switch
 import { blessedSha } from "./world-branches.mjs";
 import { officeStoreFold, storeFingerprint, worldStateServed } from "./world2-fold.mjs"; // POS-142: /world/state from the store's rows, behind W2_FOLD
@@ -1364,7 +1365,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         if (!key) { setWwwAuth(res); return bounce(res, 401, "no key at the door", "your drafts are yours alone — sign in as your resident household first"); }
         return world2MyDrafts(key)
           .then((r) => j(res, 200, r))
-          .catch((e) => bounce(res, 500, "the drafts door tripped", String(e?.message ?? e).slice(0, 200)));
+          .catch((e) => doorTripped(res, "the drafts door tripped", e));
       }
       // The portfolio's twin, and key-scoped for the same reason its 1.0 half is
       // (`server.mjs:1105`): "your marks need your resident household identity".
@@ -1382,7 +1383,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         const offset2 = Number(url.searchParams.get("offset"));
         return world2MyMarks(key, { offset: Number.isFinite(offset2) && offset2 > 0 ? Math.floor(offset2) : 0 })
           .then((r) => j(res, 200, r))
-          .catch((e) => bounce(res, 500, "the world2 portfolio tripped", String(e?.message ?? e).slice(0, 200)));
+          .catch((e) => doorTripped(res, "the world2 portfolio tripped", e));
       }
       if (path.startsWith("/world2/")) {
         return world2Serve(path, url.searchParams)
@@ -1496,7 +1497,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         // rebuild it from code/defect/hint, dropping everything else.
         return worldApex(args, key, { roll: townRoll() })
           .then((r) => (r?.error === "bounce" ? j(res, r.code ?? 422, r) : j(res, 200, r)))
-          .catch((e) => bounce(res, 500, "the world door tripped", String(e?.message ?? e).slice(0, 200)));
+          .catch((e) => doorTripped(res, "the world door tripped", e));
       }
       // GET /world/state — the World page's fold. The published file, as it
       // always was; or, where this office sets W2_FOLD=store (POS-142), the same
@@ -2491,9 +2492,11 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           const r = await worldApex(payload, key, { roll: townRoll() });
           return j(res, r?.error === "bounce" ? (r.code ?? 422) : 200, r);
         } catch (e) {
-          if (e?.code) return bounce(res, e.code, e.defect, e.hint);
+          // doorTripped, not `if (e?.code)`: a lost store's error carries pg's string
+          // SQLSTATE, which writeHead refused, and the body-read catch below then
+          // answered 400 "could not read the body" (POS-544).
           if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", '{"do":"say","args":{"text":"…"}} — GET this same path for the card');
-          return bounce(res, 500, "the office tripped", String(e?.message ?? e).slice(0, 200));
+          return doorTripped(res, "the office tripped", e, { retry: ACT_RETRY });
         }
       }).catch(() => bounce(res, 400, "could not read the body", "send a JSON object"));
       return;
@@ -2749,10 +2752,35 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
 const STORE_UNREACHABLE = "the town's store is unreachable; your sign-in is intact, retry";
 const BEARER_RETRY_AFTER_S = 30;
 const LOOKUP_THREW = Symbol("the bearer's lookup threw");
-const storeUnreachable = (res) => {
+const storeUnreachable = (res, defect = STORE_UNREACHABLE,
+  hint = "the office could not read its record of who holds this key: an outage, not your key. Send the same request again after Retry-After seconds; do not sign in again.") => {
   res.setHeader("retry-after", String(BEARER_RETRY_AFTER_S));
-  return bounce(res, 503, STORE_UNREACHABLE,
-    "the office could not read its record of who holds this key: an outage, not your key. Send the same request again after Retry-After seconds; do not sign in again.");
+  return bounce(res, 503, defect, hint);
+};
+
+// ── A DOOR ANSWERS ITS OWN CODES (POS-544, POS-520) ──────────────────────────
+//
+// What a door's catch answers, in the order it asks:
+//
+//   · an error carrying an HTTP refusal code (a number, 400–599) is the refusal
+//     a handler meant: its own code, defect and hint, as POST /world/apex and
+//     the MCP door have always rebuilt it. GET /world/apex answered these 500
+//     (POS-520), so a read the door meant to refuse looked like an office fault.
+//   · a store lost mid-request (store-pool.mjs § isStoreUnreachable) is an
+//     outage: 503 with Retry-After, the bearer check's shape (POS-480). The one
+//     request in flight when the session ended answered 500 (POS-544).
+//   · anything else is the door's own fault, 500, as before.
+//
+// A string `code` (pg's SQLSTATE, Node's ECONNRESET) is never an HTTP status.
+const httpCoded = (e) => Number.isInteger(e?.code) && e.code >= 400 && e.code <= 599;
+const STORE_LOST = "the town's store went away mid-request; nothing is wrong with your request, retry";
+const READ_RETRY = "the office lost its connection to the town's store while answering: an outage, not your request. A read is safe to repeat; send the same request again after Retry-After seconds.";
+const ACT_RETRY = "the office lost its connection to the town's store while performing this act, so it may not have been recorded: read before you send it again (an act with a nonce is safe to repeat), after Retry-After seconds.";
+const doorTripped = (res, defect, e, { retry = READ_RETRY } = {}) => {
+  if (res.headersSent) return res.end();
+  if (httpCoded(e)) return bounce(res, e.code, e.defect ?? String(e.message ?? defect).slice(0, 200), e.hint);
+  if (isStoreUnreachable(e)) return storeUnreachable(res, STORE_LOST, retry);
+  return bounce(res, 500, defect, String(e?.message ?? e).slice(0, 200));
 };
 const resolveBearer = async (token) =>
   (await staticLookup(odb, token))

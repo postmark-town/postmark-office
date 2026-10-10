@@ -100,6 +100,40 @@ export async function acquire(pool, name) {
   }
 }
 
+// ── A LOST STORE IS AN OUTAGE, NOT A FAULT (POS-544) ─────────────────────────
+//
+// Since POS-484 a store restart no longer crashes the office, but the request in
+// flight when the session ends throws, and a door's catch answered it 500 ("the
+// drafts door tripped") while the requests after it got the bearer check's 503
+// with Retry-After (POS-480). These are the errors that mean "the office could
+// not talk to its store", as Postgres, pg, pg-pool and Node raise them, so a
+// door can answer them as the outage they are:
+//
+//   · SQLSTATE class 08 (connection exception); 57P01 admin_shutdown (a restart's
+//     fast shutdown, pg_terminate_backend), 57P02 crash_shutdown, 57P03
+//     cannot_connect_now (starting up, shutting down, in recovery); 53300
+//     too_many_connections;
+//   · the socket's own codes (refused, reset, unreachable, timed out);
+//   · pg's sentences for a session that ended under a client, and the connect
+//     timeouts of pg and pg-pool, including this file's StoreAcquireTimeout.
+//
+// The cause chain is walked (StoreAcquireTimeout and PenUnreachableError carry
+// one), and so is an AggregateError's list (a dial that tried two addresses).
+const LOST_SQLSTATE = /^(08...|57P0[123]|53300)$/;
+const LOST_SOCKET = new Set(["ECONNREFUSED", "ECONNRESET", "EPIPE", "ETIMEDOUT", "EHOSTUNREACH", "ENETUNREACH"]);
+const LOST_SAID = /^(Connection terminated|Client has encountered a connection error and is not queryable|timeout expired$|timeout exceeded when trying to connect)/;
+
+/** Does `e` say the office could not reach its store (rather than that the work itself failed)? */
+export function isStoreUnreachable(e, depth = 0) {
+  if (!e || typeof e !== "object" || depth > 4) return false;
+  if (e instanceof StoreAcquireTimeout) return true;
+  const code = typeof e.code === "string" ? e.code : "";
+  if (LOST_SQLSTATE.test(code) || LOST_SOCKET.has(code)) return true;
+  if (LOST_SAID.test(String(e.message ?? ""))) return true;
+  if (Array.isArray(e.errors) && e.errors.some((x) => isStoreUnreachable(x, depth + 1))) return true;
+  return isStoreUnreachable(e.cause, depth + 1);
+}
+
 // ── ONE PEN CONNECTION PER CALL CHAIN ────────────────────────────────────────
 
 const holding = new AsyncLocalStorage();
