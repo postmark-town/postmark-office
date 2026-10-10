@@ -46,6 +46,12 @@ const SYNTHETIC = {
   "acquire-timeout": { code: "store-acquire-timeout", message: "the store's pen pool had no free connection within 10000 ms (it holds 3)" },
   "not-a-status": { code: "nested-store", message: "a asked the store's pen for a connection while this call already holds one (b)" },
   "refusal-409": { code: 409, message: "a synthetic refusal", defect: "a synthetic refusal", hint: "the fixture's own hint" },
+  // the status check's edges (the seam review of #473): none of these is a refusal status
+  "status-99": { code: 99, message: "synthetic edge: status 99" },
+  "status-600": { code: 600, message: "synthetic edge: status 600" },
+  "string-409": { code: "409", message: "synthetic edge: the string 409" },
+  "status-0": { code: 0, message: "synthetic edge: status 0" },
+  "status-200": { code: 200, message: "synthetic edge: status 200", defect: "a refusal that carried 200" },
 };
 
 const HOOKS = `
@@ -57,6 +63,8 @@ const EDITS = {
     "if (args?.args?.synthetic != null && Object.hasOwn(SYNTHETIC_THROWS, args.args.synthetic)) " + THROW("args.args.synthetic")],
   "/src/world.mjs": ["export async function worldNoteViaOffice(worldClone, payload = {}, key = null) {",
     "if (typeof payload?.body === 'string' && payload.body.startsWith('synthetic:') && Object.hasOwn(SYNTHETIC_THROWS, payload.body.slice(10))) " + THROW("payload.body.slice(10)")],
+  "/src/world-settlement.mjs": ["export async function settlementOrFile({ asked = null, fileAnswer, engaged, pool, worldRepo, townRepo = null }) {",
+    "if (typeof asked === 'string' && asked.startsWith('synthetic:') && Object.hasOwn(SYNTHETIC_THROWS, asked.slice(10))) " + THROW("asked.slice(10)")],
   "/src/town-index-store.mjs": ["export async function storeAnswer(fn, { env = process.env, then = null } = {}) {",
     "if (process.env.SYNTHETIC_TOWN_DOWN && (await import('node:fs')).existsSync(process.env.SYNTHETIC_TOWN_DOWN)) return { refused: UNREACHABLE };"],
 };
@@ -148,6 +156,44 @@ for (const { door, ask } of DOORS) {
     });
   }
 }
+
+// ── the status check's edges, at one door ───────────────────────────────────
+//
+// Each is 500, and the log names the error's message as well as its code, so the
+// 500 can be read back. 99, 600 and "409" are not statuses (j's check); 0 is
+// falsy, so the catch's own 500 answers it; 200 is a status but no refusal (the
+// floor in bounce).
+for (const name of ["status-99", "status-600", "string-409", "status-0", "status-200"]) {
+  test(`POST /town/apex: a handler error with code ${JSON.stringify(SYNTHETIC[name].code)} is the office's own 500, and the log says what failed`, async (t) => {
+    const r = await post("/town/apex", { args: { synthetic: name } });
+    t.diagnostic(`the door answered ${r.status}: ${JSON.stringify(r.body).slice(0, 300)}`);
+    assert.equal(r.status, 500);
+    assert.equal(r.body.refused, true);
+    assert.equal(r.body.code, 500, "the body's code is the status line's");
+    assert.equal(r.retryAfter, null);
+    assert.ok(r.body.defect, "the 500 names what tripped");
+    if (name === "status-0") {
+      // the catch's own 500 path, which has always put the message in the hint
+      assert.equal(r.body.hint, SYNTHETIC[name].message);
+      return;
+    }
+    // stderr is written as the answer is, but read here on another stream
+    for (let i = 0; i < 40 && !office.stderr().includes(SYNTHETIC[name].message); i++) await new Promise((ok) => setTimeout(ok, 25));
+    assert.ok(office.stderr().includes(SYNTHETIC[name].message), `the office's log names the error's message (${SYNTHETIC[name].message})`);
+  });
+}
+
+// ── a GET door through notAStatus: the read's words ─────────────────────────
+
+test("GET /world/state: a lost-store code answers 503 with Retry-After, and tells a read it is safe to repeat", async (t) => {
+  const r = await answer(await fetch(`${office.base}/world/state?settlement=synthetic:lost-session`));
+  t.diagnostic(`the door answered ${r.status}: ${JSON.stringify(r.body).slice(0, 300)}`);
+  assert.equal(r.status, 503);
+  assert.equal(r.retryAfter, "30");
+  assert.match(r.body.defect, /store went away mid-request/);
+  assert.match(r.body.hint, /A read is safe to repeat/);
+  assert.doesNotMatch(r.body.hint, /may not have been recorded/);
+});
 
 test("the town index's 503 carries Retry-After (GET /residents while the index cannot be read)", async () => {
   writeFileSync(TOWN_DOWN, "down");
