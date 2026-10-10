@@ -1105,6 +1105,26 @@ export async function mistsWallOn(worldClone, skeleton, points, crossing) {
 export const MISTS_FIRST_CROSSING = 244;
 export const MISTS_UNREADABLE = "the office cannot read the world to check the wall; try again";
 export const MISTS_RETRY_AFTER_S = 30;
+/** The points of `ground` that stand outside `old`'s footprint (its outline, else
+ *  its box), or all of them when there is no old mark: the ground an amend adds. */
+export function mistsNewGround(old, ground) {
+  if (!old?.at) return ground;
+  const ring = ringOf(old.points);
+  const hw = (Number(old.extent?.w) || 0) / 2, hh = (Number(old.extent?.h) || 0) / 2;
+  const poly = ring ?? [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]].map(([dx, dy]) => ({ x: Number(old.at.x) + dx, y: Number(old.at.y) + dy }));
+  const inside = (q) => {
+    let hit = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const a = poly[i], b = poly[j];
+      if (((a.y > q.y) !== (b.y > q.y)) && q.x <= ((b.x - a.x) * (q.y - a.y)) / (b.y - a.y) + a.x) hit = !hit;
+    }
+    // a point on an edge or a vertex of the old footprint is the old ground too
+    return hit || poly.some((a, i) => { const b = poly[(i + 1) % poly.length]; const cross = (b.x - a.x) * (q.y - a.y) - (b.y - a.y) * (q.x - a.x);
+      return Math.abs(cross) < 1e-6 && q.x >= Math.min(a.x, b.x) - 1e-6 && q.x <= Math.max(a.x, b.x) + 1e-6 && q.y >= Math.min(a.y, b.y) - 1e-6 && q.y <= Math.max(a.y, b.y) + 1e-6; });
+  };
+  return ground.filter((q) => !inside(q));
+}
+
 /** null (clear, or no Mists) · { wall: {x, y} } · { unreadable: true } */
 export async function mistsGroundCheck(worldClone, readSkeleton, points, crossing) {
   let skeleton = null;
@@ -4020,7 +4040,18 @@ export async function leaveMarkViaOffice(worldClone, payload = {}, key = null, {
     const hw = (Number(box?.w) || 0) / 2, hh = (Number(box?.h) || 0) / 2;
     const ground = ringOf(points) ? ringOf(points)
       : [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]].map(([dx, dy]) => ({ x: Number(at.x) + dx, y: Number(at.y) + dy }));
-    const seen = await mistsGroundCheck(worldClone, async () => (await world())?._raw?.skeleton ?? null, ground, mistsCrossing ?? currentCrossing());
+    // AN AMEND IS ASKED ONLY ABOUT THE GROUND IT ADDS. The town's own great marks
+    // (its sea, its channel, the root's box) already reach behind the wall, and
+    // re-filing one in place must not be refused for ground it always held: so the
+    // wall is asked only about the points of the new ground that stand outside the
+    // mark's old footprint. An amend that neither moves nor widens it asks nothing.
+    let w = null;
+    try { w = await world(); } catch { w = null; }
+    const old = payload.amend === true ? (w?.marks ?? []).find((m) => m.id === `${by}/${slug}`) ?? null : null;
+    const fresh = mistsNewGround(old, ground);
+    const seen = fresh.length
+      ? await mistsGroundCheck(worldClone, async () => w?._raw?.skeleton ?? null, fresh, mistsCrossing ?? currentCrossing())
+      : null;
     if (seen?.unreadable) throw bounce(503, MISTS_UNREADABLE,
       `the office could not read the world or its engine to see where the wall of the Mists stands, so it will not place this mark until it can. Nothing was written; send the same request again after ${MISTS_RETRY_AFTER_S} seconds (Retry-After).`);
     if (seen?.wall) throw bounce(422, "this ground stands behind the wall of the Mists",

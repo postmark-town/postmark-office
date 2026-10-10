@@ -71,9 +71,9 @@ test("the wall helper: a point in town is clear, a point past the border is behi
   assert.equal(await mistsWallOn(CLONE, { physics_registry: {} }, [past], last), null, "no Mists on the record");
 });
 
-test("THE PLACEMENT DOOR asks the wall for a sited or parcel mark's whole ground, before the write, in plain words", () => {
+test("THE PLACEMENT DOOR asks the wall for the ground a sited or parcel mark adds, before the write, in plain words", () => {
   const door = SOURCE.slice(SOURCE.indexOf("export async function leaveMarkViaOffice"), SOURCE.indexOf("export async function withdrawMarkViaOffice") > 0 ? SOURCE.indexOf("export async function withdrawMarkViaOffice") : undefined);
-  const guard = door.indexOf("const seen = await mistsGroundCheck(worldClone,");
+  const guard = door.indexOf("await mistsGroundCheck(worldClone,");
   assert.ok(guard > 0, "the placement door asks the wall");
   assert.ok(guard > door.indexOf("RING_CLAIM_SENTENCE") && guard > door.indexOf("const clean = {"), "after every other judgment of the mark");
   assert.ok(guard < door.indexOf("await journalLeaveMark(clean)") && guard < door.indexOf("draftWrite("), "and before either pen writes");
@@ -128,4 +128,33 @@ test("FAIL CLOSED AT THE DOORS: the mark door answers 503 in plain words with Re
   assert.ok(server.includes('if (code === 503 && obj?.defect === MISTS_UNREADABLE && !res.hasHeader?.("retry-after"))') && server.includes('res.setHeader("retry-after", String(MISTS_RETRY_AFTER_S));'), "the 503 carries Retry-After");
   const spawn = APEX.slice(APEX.indexOf("async function spawnOnEnter"), APEX.indexOf("// ── the read mode"));
   assert.ok(spawn.includes("if (seen?.unreadable) return { ground: place.ground, refused: `${MISTS_UNREADABLE}:"), "a wall it cannot read sets no one down");
+});
+
+// ── THE TOWN'S OWN GREAT MARKS (POS-468 B) ───────────────────────────────────
+// Its sea, its channel and the root's box already reach behind the wall by the
+// last keyframe. An amend is asked only about the ground it adds, so re-filing
+// one in place is not refused; moving or widening it onto the wall still is.
+test("AN AMEND ASKS ONLY ABOUT THE GROUND IT ADDS: the-sea's real outline, re-filed at the last keyframe, passes; moved south, it is refused", { skip: !READY && WHY_NOT }, async () => {
+  const { mistsNewGround } = await import("../src/world.mjs");
+  const { ringOf } = await import("../src/ring-box.mjs");
+  const worldState = JSON.parse(readFileSync(join(CLONE, "WORLD", "world-state.json"), "utf8"));
+  const sea = worldState.marks.find((m) => m.id === "the-town/the-sea");
+  const last = SKELETON.mists.schedule.at(-1).crossing;
+  const outline = ringOf(sea.points);
+  assert.ok(outline?.length > 10, "the sea carries its outline");
+  // the problem: the whole outline reaches behind the wall by the last keyframe
+  assert.ok((await mistsGroundCheck(CLONE, async () => SKELETON, outline, last))?.wall, "the-sea's own ground reaches behind the wall");
+  // re-filed in place: no new ground, nothing asked, nothing refused
+  assert.deepEqual(mistsNewGround(sea, outline), []);
+  // the root's 320 km box, re-filed as it stands: nothing new either
+  const root = worldState.marks.find((m) => m.id === "the-town/let-there-be-light");
+  const hw = root.extent.w / 2, hh = root.extent.h / 2;
+  assert.deepEqual(mistsNewGround(root, [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]].map(([x, y]) => ({ x: root.at.x + x, y: root.at.y + y }))), []);
+  // moved 3 km south: the new ground is asked, and the wall refuses it
+  const moved = outline.map((p) => ({ x: p.x, y: p.y + 3000 }));
+  const fresh = mistsNewGround(sea, moved);
+  assert.ok(fresh.length > 0);
+  assert.ok((await mistsGroundCheck(CLONE, async () => SKELETON, fresh, last))?.wall, "moved onto the wall, refused");
+  // a new placement has no old footprint: all of it is asked
+  assert.equal(mistsNewGround(null, outline).length, outline.length);
 });
