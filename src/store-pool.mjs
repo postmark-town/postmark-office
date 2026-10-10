@@ -123,12 +123,19 @@ const LOST_SQLSTATE = /^(08...|57P0[123]|53300)$/;
 const LOST_SOCKET = new Set(["ECONNREFUSED", "ECONNRESET", "EPIPE", "ETIMEDOUT", "EHOSTUNREACH", "ENETUNREACH"]);
 const LOST_SAID = /^(Connection terminated|Client has encountered a connection error and is not queryable|timeout expired$|timeout exceeded when trying to connect)/;
 
+/**
+ * Does a bare `code` say the store is gone? For a writer that holds only the
+ * code an error carried, not the error (server.mjs § j, POS-544's follow-up).
+ */
+export function isStoreLostCode(code) {
+  return typeof code === "string" && (LOST_SQLSTATE.test(code) || LOST_SOCKET.has(code) || code === "store-acquire-timeout");
+}
+
 /** Does `e` say the office could not reach its store (rather than that the work itself failed)? */
 export function isStoreUnreachable(e, depth = 0) {
   if (!e || typeof e !== "object" || depth > 4) return false;
   if (e instanceof StoreAcquireTimeout) return true;
-  const code = typeof e.code === "string" ? e.code : "";
-  if (LOST_SQLSTATE.test(code) || LOST_SOCKET.has(code)) return true;
+  if (isStoreLostCode(e.code)) return true;
   if (LOST_SAID.test(String(e.message ?? ""))) return true;
   if (Array.isArray(e.errors) && e.errors.some((x) => isStoreUnreachable(x, depth + 1))) return true;
   return isStoreUnreachable(e.cause, depth + 1);

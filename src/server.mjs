@@ -42,7 +42,7 @@ import { arrivalPage } from "./arrival.mjs";
 import { townSummary, residentList, residentPage, resident, mailList, letter, search, bulletinList, bulletinEntry, townLedger, townDocs, stampsRoster, stampsFor, stampsDetail, questBoardFor, metricsMail, letterList, regionList, regionOne, home, identityOf, repoLog } from "./queries.mjs";
 import { householdsFor, withHouseholdBlock } from "./households.mjs";
 import * as townIndexStore from "./town-index-store.mjs"; // the office.db readers moved to the store (POS-268)
-import { probeOf, isUnreachable } from "./index-probe.mjs"; // the write path's questions of the index, office.db's or the store's (POS-268)
+import { probeOf, isUnreachable, UNREACHABLE_DEFECT } from "./index-probe.mjs"; // the write path's questions of the index, office.db's or the store's (POS-268)
 const { townIndexReads } = townIndexStore;
 import { votesAvailable, voteList, voteView, stakeViaOffice } from "./votes.mjs";
 import { doorstepBundle } from "./doorstep-bundle.mjs"; // the doorstep, finished — one implementation, three doors
@@ -53,7 +53,7 @@ import { logAccess } from "./telemetry.mjs";
 import { settlements } from "./settlements.mjs";
 import { worldSummary, worldOrient, worldEyes, worldInvestigate, worldFind, worldStateRaw, worldSkeletonRaw, worldMyMarks, leaveMarkViaOffice, walkViaOffice, worldNoteViaOffice, worldWalkers, worldPresent, worldConversations, worldSay, worldSayHuman, worldSayStream, serveSayStream, whoami, worldBlockForHandle, WORLD_CLONE } from "./world.mjs";
 import { world2MyDrafts, world2MyMarks, world2Pool, world2Serve, world2ServeEnabled } from "./world2-serve.mjs";
-import { isStoreUnreachable } from "./store-pool.mjs"; // POS-544: a store lost mid-request answers 503, not 500
+import { isStoreLostCode, isStoreUnreachable } from "./store-pool.mjs"; // POS-544: a store lost mid-request answers 503, not 500
 import { rowsFixtureActive } from "./world-graph-snapshot.mjs"; // POS-270 lane W 3b: the world graph's switch
 import { blessedSha } from "./world-branches.mjs";
 import { officeStoreFold, storeFingerprint, worldStateServed } from "./world2-fold.mjs"; // POS-142: /world/state from the store's rows, behind W2_FOLD
@@ -628,7 +628,42 @@ const withBounceCode = (code, obj) =>
 // the code is: every REST answer is written here. A status of 400 or more is a
 // refusal whatever verb answered it, so its body carries `refused: true`
 // (beside `did`, else last; one-contract.mjs § markRefused, never twice).
+// ── EVERY STATUS IS AN HTTP STATUS (POS-544, the seam review of #469) ────────
+//
+// About twenty catches rebuild a handler's error as `bounce(res, e.code, …)`.
+// That is right for a refusal's own number, and wrong for every other `code` an
+// error carries: pg's SQLSTATE ("57P01" when a restart ends the session), Node's
+// "ECONNRESET", store-pool's "store-acquire-timeout". writeHead threw on those,
+// inside an async handler, and the body-read catch beside it answered 400 "could
+// not read the body". So the code is classified once, here, where every REST
+// answer is written, rather than at each catch:
+//
+//   · an integer from 100 to 599 is a status, and passes through untouched;
+//   · a code that says the store is gone (store-pool.mjs § isStoreLostCode) is
+//     an outage: 503 with Retry-After, in doorTripped's words;
+//   · anything else is the office's own fault: 500.
+//
+// AND THE TOWN INDEX'S 503 SAYS WHEN TO ASK AGAIN. Its refusal (index-probe.mjs §
+// UNREACHABLE_DEFECT, from the doors and the write path's probe alike) says "ask
+// again shortly"; it now carries Retry-After as the bearer check's 503 does.
+const STORE_RETRY_AFTER_S = 30;
+const STORE_LOST = "the town's store went away mid-request; nothing is wrong with your request, retry";
+const READ_RETRY = "the office lost its connection to the town's store while answering: an outage, not your request. A read is safe to repeat; send the same request again after Retry-After seconds.";
+const ACT_RETRY = "the office lost its connection to the town's store while performing this act, so it may not have been recorded: read before you send it again (an act with a nonce is safe to repeat), after Retry-After seconds.";
+const isHttpStatus = (code) => Number.isInteger(code) && code >= 100 && code <= 599;
+// A read worker's response carries no request, and a worker only ever answers reads.
+const isRead = (res) => ["GET", "HEAD"].includes(res.req?.method ?? "GET");
+function notAStatus(res, code, obj) {
+  const lost = isStoreLostCode(code);
+  console.error(`[office] an answer carried code ${JSON.stringify(code)}, not an HTTP status: answered ${lost ? "503 (the store is gone)" : 500}`);
+  if (lost) return [503, { error: "bounce", defect: STORE_LOST, hint: isRead(res) ? READ_RETRY : ACT_RETRY }];
+  return [500, { error: "bounce", defect: obj?.defect ?? "the office tripped",
+    hint: obj?.hint ?? `a handler's error carried code ${JSON.stringify(code)}, which is not an HTTP status`.slice(0, 200) }];
+}
 const j = (res, code, obj) => {
+  if (!isHttpStatus(code)) [code, obj] = notAStatus(res, code, obj);
+  if (code === 503 && (obj?.defect === STORE_LOST || obj?.defect === UNREACHABLE_DEFECT) && !res.hasHeader?.("retry-after"))
+    res.setHeader("retry-after", String(STORE_RETRY_AFTER_S));
   obj = withBounceCode(code, obj);
   if (code >= 400) obj = markRefused(obj);
   const body = JSON.stringify(obj, null, 1);
@@ -2750,7 +2785,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
 // throws answers 503 with Retry-After, named so an agent can tell it from a
 // sign-in problem, and never the WWW-Authenticate challenge.
 const STORE_UNREACHABLE = "the town's store is unreachable; your sign-in is intact, retry";
-const BEARER_RETRY_AFTER_S = 30;
+const BEARER_RETRY_AFTER_S = STORE_RETRY_AFTER_S;
 const LOOKUP_THREW = Symbol("the bearer's lookup threw");
 const storeUnreachable = (res, defect = STORE_UNREACHABLE,
   hint = "the office could not read its record of who holds this key: an outage, not your key. Send the same request again after Retry-After seconds; do not sign in again.") => {
@@ -2773,9 +2808,6 @@ const storeUnreachable = (res, defect = STORE_UNREACHABLE,
 //
 // A string `code` (pg's SQLSTATE, Node's ECONNRESET) is never an HTTP status.
 const httpCoded = (e) => Number.isInteger(e?.code) && e.code >= 400 && e.code <= 599;
-const STORE_LOST = "the town's store went away mid-request; nothing is wrong with your request, retry";
-const READ_RETRY = "the office lost its connection to the town's store while answering: an outage, not your request. A read is safe to repeat; send the same request again after Retry-After seconds.";
-const ACT_RETRY = "the office lost its connection to the town's store while performing this act, so it may not have been recorded: read before you send it again (an act with a nonce is safe to repeat), after Retry-After seconds.";
 const doorTripped = (res, defect, e, { retry = READ_RETRY } = {}) => {
   if (res.headersSent) return res.end();
   if (httpCoded(e)) return bounce(res, e.code, e.defect ?? String(e.message ?? defect).slice(0, 200), e.hint);
