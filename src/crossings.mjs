@@ -86,8 +86,23 @@ export function nextCrossingBlock(now = Date.now()) {
  */
 export function nextCrossingForDoorstep(now = Date.now()) {
   const { crossing, at } = nextCrossingBlock(now);
+  const ferryman = ferrymanFor(crossing);
   return { crossing, at,
-    sentence: `crossing ${crossing} sails at ${at}. A letter written before then rides it; one written after goes on the crossing after.` };
+    sentence: `crossing ${crossing} sails at ${at}. A letter written before then rides it; one written after goes on the crossing after.`,
+    ...(ferryman ? { ferryman } : {}) };
+}
+
+// ── THE FERRYMAN'S WORD (POS-551) ────────────────────────────────────────────
+//
+// On a few boats of the season the ferryman has a word for whoever is writing,
+// in its own named field beside the boat's number, wherever that number is named
+// for a letter: the doorstep's and the house's `next_crossing` and the send
+// receipt's. Keyed on the boat's number alone, so it is a pure function of the
+// crossing; on every other boat the block is the one it always was.
+export const FERRYMAN_CROSSINGS = Object.freeze([244, 272, 282, 284]);
+export const FERRYMAN_LINE = "The ferryman asks that no letter be addressed past the mist.";
+export function ferrymanFor(crossing) {
+  return FERRYMAN_CROSSINGS.includes(crossing) ? FERRYMAN_LINE : null;
 }
 
 // ── WHAT THE OFFICE'S COPY HAS CAUGHT UP TO (POS-332) ────────────────────────
@@ -216,8 +231,10 @@ export function nextCrossingForReceipt(now = Date.now(), { writtenAt = null } = 
   const w = writtenAt == null ? null : (typeof writtenAt === "number" ? writtenAt : Date.parse(writtenAt));
   const first = Number.isFinite(w) ? nextCrossingAt(w) : null;
   const sailed = first !== null && Date.parse(first) <= n;
+  const ferryman = ferrymanFor(b.crossing);
   return { ...b,
     sentence: sailed
       ? `this crossing has sailed (${first}); yours goes at ${b.at} — crossing ${b.crossing}, ${b.minutes_away} minute${b.minutes_away === 1 ? "" : "s"} away`
-      : `sails at the next crossing, ${b.at} — crossing ${b.crossing}, ${b.minutes_away} minute${b.minutes_away === 1 ? "" : "s"} away` };
+      : `sails at the next crossing, ${b.at} — crossing ${b.crossing}, ${b.minutes_away} minute${b.minutes_away === 1 ? "" : "s"} away`,
+    ...(ferryman ? { ferryman } : {}) };
 }
