@@ -101,6 +101,11 @@ function postsTable() {
     [/^SELECT id, state, ends FROM posts WHERE id LIKE \$1$/i, (q, p) => { const pre = p[0].replace(/%$/, ""); const rows = [...posts.values()].filter((r) => r.id.startsWith(pre)); return { rows, rowCount: rows.length }; }],
     [/^SELECT id, class, title, author, household, starts, ends, fields, state, last_act FROM posts WHERE class = \$1 ORDER BY id$/i, (q, p) => { const rows = byClass(p[0]); return { rows, rowCount: rows.length }; }],
     [/^SELECT post, handle, state FROM responses WHERE post = ANY\(\$1\) ORDER BY post, handle$/i, () => ({ rows: [], rowCount: 0 })],
+    // the bug read's history (POS-547) joins the store's stamp chain; here the chain
+    // holds no stage line yet, as it stands in the minutes before the tick pays
+    [/^SELECT to_regclass\('stamp_lines'\) IS NOT NULL AS ok$/i, () => ({ rows: [{ ok: true }], rowCount: 1 })],
+    [/^SELECT EXISTS \(SELECT 1 FROM stamp_lines\) AS held$/i, () => ({ rows: [{ held: true }], rowCount: 1 })],
+    [/^SELECT canonical FROM stamp_lines WHERE canonical LIKE \$1 ORDER BY seq$/i, () => ({ rows: [], rowCount: 0 })],
   ];
 }
 
