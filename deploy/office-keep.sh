@@ -20,6 +20,10 @@
 
 set -eu
 
+# The tick says it is the tick: a tool that must never run here (the reviewed
+# award pass, tools/post-award-plan.mjs, POS-290) refuses while this is set.
+export OFFICE_KEEP=1
+
 LOCK="${TOWN_LOCK:-/srv/postmark-office/town.lock}"
 SNAP="$(mktemp -d /tmp/postmark-tick.XXXXXX)"
 trap 'rm -rf "$SNAP"' EXIT
