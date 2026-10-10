@@ -194,6 +194,7 @@ test("3 · on the tick (OFFICE_KEEP set) the tool refuses, exits non-zero and wr
   const town = tempDir("award-tick-");
   try {
     writeFileSync(join(town, "ledger-sentinel"), "x");
+    git(town, "init", "-q");   // a clone the pass could read, so a refusal here is the guard's and nothing else's
     const out = say();
     const code = await main(["--town", town, "--apply", "--key", join(town, "ledger-sentinel"), "--date", DATE],
       { ...out, env: { ...process.env, OFFICE_KEEP: "1" }, facts: { acts: [] }, spawn: () => { throw new Error("the tick ran the verb"); } });
