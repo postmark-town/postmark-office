@@ -956,4 +956,7 @@ test("GET /posts takes a class: none → 422 naming it; an idea is a post class 
   const one = await get("/posts/postmark-pen/first-idea?class=bounty", null);
   assert.equal(one.status, 422);
   assert.match((await one.json()).defect, /"bounty" is not a post class/);
+  // POS-558: the bug read pages, and the door hands it limit and offset
+  const bugs = await (await get("/posts?class=bug&limit=7&offset=3", null)).json();
+  assert.deepEqual([bugs.total, bugs.shown, bugs.limit, bugs.offset, bugs.complete, bugs.catchers, bugs.posts], [0, 0, 7, 3, true, [], []]);
 });

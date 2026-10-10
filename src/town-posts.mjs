@@ -36,6 +36,19 @@
 // nothing until the switch has been on). The Think Tank's marks stay marks and
 // are read at town { read: "ideas" }, beside these posts.
 //
+// ── THE BUG READ PAGES (POS-558, Darko 2026-10-10) ──────────────────────────
+//
+// "We already need a page-based load instead of just dropping all of them,
+// because this is going to get really big really fast." The bug list answers
+// in the office's paged-read grammar (queries.mjs: the roll, the mail,
+// correspondents, regions): `limit` (default BUG_PAGE, max 200) and `offset`
+// in; `total` (every bug), `shown`, `limit`, `offset`, `complete`, and
+// `next_offset` with `more_note` while there is more, out. The order is the
+// one it has always had (postOrder). A page cannot add up the town, so every
+// page also carries `catchers`, the Hall of Fame's totals over the whole
+// record (bugs.mjs § THE CATCHERS): the history is still read for every bug,
+// as it was before the read paged. The other classes are not paged.
+//
 // ── A BUG CARRIES ITS OWN FIELDS ────────────────────────────────────────────
 //
 // A bug row (bugs.mjs) adds its class `fields` to the general row: the
@@ -63,7 +76,7 @@ import { officeRead } from "./world2-pen.mjs";
 import { postRowsOf, postOrder, TERMINAL_STATES, FIELDS } from "./household-posts.mjs";
 import { EVENT_CLASS, refuse } from "./events.mjs";
 import { QUEST_CLASS, QUEST_FINISHED, readQuestRegistry, questTerms } from "./quests.mjs";
-import { BUG_CLASS, BUG_FINISHED } from "./bugs.mjs";
+import { BUG_CLASS, BUG_FINISHED, bugCatchersOf } from "./bugs.mjs";
 import { IDEA_CLASS, IDEA_FINISHED, ideaResponsesOf } from "./ideas.mjs";
 import { postHistoryVia, NO_CHAIN } from "./post-history.mjs";
 import { ideaExtrasVia } from "./idea-store.mjs";
@@ -89,6 +102,24 @@ function judgePostsClass(fields) {
   return c;
 }
 
+/** Bugs on one page of the bug read, unless the caller asks for another number (max 200). */
+export const BUG_PAGE = 50;
+
+/** One page of the bug list, in the paged-read grammar (queries.mjs § regionPage's shape). */
+function bugPageOf(all, { limit, offset } = {}) {
+  const n = Math.min(Math.max(Number(limit) || BUG_PAGE, 1), 200);
+  const start = Math.max(Number(offset) || 0, 0);
+  const page = all.slice(start, start + n);
+  const next = start + page.length;
+  const complete = next >= all.length;
+  return {
+    total: all.length, shown: page.length, limit: n, offset: start, complete,
+    ...(complete ? {} : { next_offset: next,
+      more_note: `${all.length - next} further bug${all.length - next === 1 ? "" : "s"} — call again with offset: ${next}` }),
+    posts: page,
+  };
+}
+
 const plain = ({ ...r }) => Object.fromEntries(Object.entries(r));   // own string keys only: the reader's symbols stay behind
 
 // The history's one reader is post-history.mjs (POS-547's, generalized for
@@ -97,7 +128,7 @@ const plain = ({ ...r }) => Object.fromEntries(Object.entries(r));   // own stri
 export { NO_CHAIN };
 
 /**
- * `town { read: "posts", args: { class, post? } }`.
+ * `town { read: "posts", args: { class, post?, limit?, offset? } }` (limit and offset page the bug class).
  * @param {{ now?: number, env?: object, townClone?: string }} ctx
  */
 export async function postsAtOffice(fields = {}, { now = Date.now(), env = process.env, townClone = TOWN_CLONE() } = {}) {
@@ -151,6 +182,10 @@ export async function postsAtOffice(fields = {}, { now = Date.now(), env = proce
     const hit = posts.find((p) => p.id === one);
     if (!hit) throw refuse(404, `no ${cls} "${one}"`, `town { read: "posts", args: { class: "${cls}" } } lists them`);
     return { ...head, post: hit };
+  }
+  if (cls === BUG_CLASS) {
+    const { posts: page, ...paging } = bugPageOf(posts, fields);
+    return { ...head, ...paging, catchers: bugCatchersOf(posts, { unavailable: Boolean(history?.unavailable) }), posts: page };
   }
   return { ...head, total: posts.length, posts };
 }

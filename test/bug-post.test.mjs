@@ -34,6 +34,9 @@
 //      stamps_paid joined from the store's stamp_lines, null where no line
 //      stands; a store with no chain says so rather than calling every stage
 //      unpaid.
+//  12. (POS-558, Darko 2026-10-10) the bug read pages in the office's grammar
+//      (limit, offset; total, shown, complete, next_offset), and every page
+//      carries `catchers`, the Hall of Fame's totals over the whole record.
 //
 // ⚑ THE STORE IS A JS STUB (`acts-pen-stub.mjs`), as in quest-posts.test.mjs:
 // this proves which acts and rows the pen writes and what the reads make of
@@ -661,4 +664,59 @@ test("11 · the stage line is read in the town's own grammar: its stageMintLine 
   if (typeof stageMintLine !== "function") return t.skip("this town's stamp-mint.mjs has no stageMintLine");
   const line = stageMintLine({ date: "2026-10-09", handle: "wildcat", n: 25, post: "wildcat/leave-mark-preview", stage: "fixed" });
   assert.deepEqual(stagePaidOf(line), { handle: "wildcat", n: 25, post: "wildcat/leave-mark-preview", stage: "fixed" });
+});
+
+// ── 12 · the bug read pages, and every page carries the catchers (POS-558, Darko 2026-10-10) ──
+
+const { BUG_PAGE } = await import("../src/town-posts.mjs");
+
+/** throughFixed's bug, errant's own bug, and finn's report ruled not a bug. */
+async function threeBugs() {
+  const id = await throughFixed();
+  await postAtTown(BUG, ERRANT, { now: NOW, roll: ROLL });
+  await postAtTown({ class: "bug", title: "The bell rings twice", body: "The ferry bell rings twice at every crossing." }, FINN, { now: NOW, roll: ROLL });
+  await advanceAtTown({ post: "finn/the-bell-rings-twice", to: "not-a-bug" }, WRIGHT, { now: NOW, roll: ROLL });
+  return id;
+}
+
+test("12 · the bug read pages in the office's grammar: total, shown, limit, offset, complete, next_offset and more_note; the pages walk the one order", async () => {
+  setup();
+  await threeBugs();
+  const all = await postsAtOffice({ class: "bug", limit: 200 }, { now: NOW, roll: ROLL });
+  assert.deepEqual([all.total, all.shown, all.limit, all.offset, all.complete, all.next_offset], [3, 3, 200, 0, true, undefined]);
+  const p1 = await postsAtOffice({ class: "bug", limit: 2 }, { now: NOW, roll: ROLL });
+  assert.deepEqual([p1.total, p1.shown, p1.limit, p1.offset, p1.complete, p1.next_offset], [3, 2, 2, 0, false, 2]);
+  assert.equal(p1.posts.length, 2);
+  assert.match(p1.more_note, /^1 further bug — call again with offset: 2$/);
+  const p2 = await postsAtOffice({ class: "bug", limit: "2", offset: "2" }, { now: NOW, roll: ROLL });   // the GET door hands strings
+  assert.deepEqual([p2.shown, p2.offset, p2.complete, "next_offset" in p2, "more_note" in p2], [1, 2, true, false, false]);
+  assert.deepEqual([...p1.posts, ...p2.posts].map((p) => p.id), all.posts.map((p) => p.id), "the pages are not the one order, cut");
+  for (const p of p1.posts) assert.ok(Array.isArray(p.history), "a paged row lost its history");
+  const bare = await postsAtOffice({ class: "bug" }, { now: NOW, roll: ROLL });
+  assert.equal(bare.limit, BUG_PAGE);
+  assert.equal(BUG_PAGE, 50);
+  assert.equal((await postsAtOffice({ class: "bug", limit: 999 }, { now: NOW, roll: ROLL })).limit, 200);
+  assert.equal((await postsAtOffice({ class: "bug", limit: "x", offset: -4 }, { now: NOW, roll: ROLL })).offset, 0);
+  // one post is still one post, unpaged
+  assert.equal((await postsAtOffice({ class: "bug", post: ID, limit: 1 }, { now: NOW, roll: ROLL })).post.id, ID);
+});
+
+test("12 · every page carries the catchers over the whole record: stamps paid and bugs credited per handle; a bug ruled not a bug credits only a stage that paid", async () => {
+  const { ledger } = setup();
+  const id = await threeBugs();
+  ledger.lines = [stageLine("ada", 2, id, "confirmed"), stageLine("errant", 25, id, "fixed")];
+  const want = [
+    { handle: "errant", stamps: 25, bugs: 2 },   // the fix on ada's bug, and the report of their own
+    { handle: "ada", stamps: 2, bugs: 1 },       // reported for them by wright's hand, and confirmed
+    { handle: "finn", stamps: 0, bugs: 1 },      // reproduced ada's, unpaid; their own report was not a bug
+  ];
+  for (const [limit, offset] of [[200, 0], [1, 0], [1, 2]]) {
+    const r = await postsAtOffice({ class: "bug", limit, offset }, { now: NOW, roll: ROLL });
+    assert.deepEqual(r.catchers, want, `the page at ${offset} of ${limit} summed something else`);
+  }
+  // a chain that cannot be read says null, never 0
+  ledger.lines = [];
+  const r = await postsAtOffice({ class: "bug", limit: 1 }, { now: NOW, roll: ROLL });
+  assert.equal(r.unavailable, NO_CHAIN);
+  assert.deepEqual(r.catchers.map((c) => [c.handle, c.stamps, c.bugs]), [["errant", null, 2], ["ada", null, 1], ["finn", null, 1]]);
 });
