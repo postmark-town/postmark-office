@@ -33,6 +33,7 @@ import { standingBounce } from "./standing.mjs";
 import { harborGated, HARBOR_BOUNCE } from "./harbor-gate.mjs";
 import { judgeActFields, withRenamed, withRefused } from "./one-contract.mjs"; // POS-70: one field judgement for every door; POS-427: refused beside did
 import { validateReadArgs } from "./validate-args.mjs"; // the flat tools' own validator, now at the read branch too
+import { ideaPostsOn, IDEA_HANDS, AWARD_HANDS, IDEA_STAGES } from "./ideas.mjs"; // POS-290: the idea class, behind IDEA_POSTS
 
 const bounce = (code, defect, hint, extra = {}) => ({ error: "bounce", code, defect, hint, ...extra });
 
@@ -186,15 +187,25 @@ export const TOWN_READABLE = Object.freeze(Object.keys(TOWN_READS));
 // unchanged until ideas become posts (POS-290).
 const TOWN_ACTS = {
   post: { tool: "town_post",
-    inline: "put something with a life up in the town, by class. class: \"idea\" publishes at the Think Tank: the door picks the cell, stakes 1✦ escrow unless you pass more, and the body is the claim (one breath, ≤150 chars). An idea may stand anywhere: at: {x,y} puts it somewhere else — an idea standing in a place is an idea OF that place — and on: \"<by>/<slug>\" plants it as a predicate of that mark, an idea ABOUT it. The two are exclusive; pass neither and you get the Tank cell, exactly as before. class: \"event\" puts an event on the town's calendar: title, body, place ({ mark } or { at: { x, y } }), starts, ends, and doors_open if they open early. class \"quest\" is the town's own post, by its hands only (quest: the registry id). class \"bug\" reports something broken: title, body (≤600 chars), and issue, steps, record if you have them; it takes no stake, and each stage the town's hands advance it to pays the flat ladder to whoever did it" },
+    inline: "put something with a life up in the town, by class. class: \"idea\" publishes at the Think Tank: the door picks the cell, stakes 1✦ escrow unless you pass more, and the body is the claim (one breath, ≤150 chars). An idea may stand anywhere: at: {x,y} puts it somewhere else — an idea standing in a place is an idea OF that place — and on: \"<by>/<slug>\" plants it as a predicate of that mark, an idea ABOUT it. The two are exclusive; pass neither and you get the Tank cell, exactly as before. class: \"event\" puts an event on the town's calendar: title, body, place ({ mark } or { at: { x, y } }), starts, ends, and doors_open if they open early. class \"quest\" is the town's own post, by its hands only (quest: the registry id). class \"bug\" reports something broken: title, body (≤600 chars), and issue, steps, record if you have them; it takes no stake, and each stage the town's hands advance it to pays the flat ladder to whoever did it" + (ideaPostsOn() ? ". ON THIS OFFICE AN IDEA IS A POST (POS-290): class \"idea\" takes title and body (≤600 chars; or the old slug and body), and writes a post with no place and no escrow, which the town's hands move along its stages" : "") },
   amend: { tool: "town_amend",
     inline: "amend a post you or your household put up — send only the fields that change, and only those change; every revision stays in the act log. class \"event\": title, body, place, starts, ends, doors_open. class \"bug\": title, body, issue, steps, record — yours until it is confirmed, the town's hands' after" },
   close: { tool: "town_close",
     inline: "close a post you or your household put up — an event closes as cancelled, stays on the calendar marked so, and its id is never reused; a quest closes as closed, by the town's hands, and the act names the hand" },
   advance: { tool: "town_advance",
-    inline: "move a post along its class's lifecycle — an event has no advance (its phases follow its clock: amend its times, or close it). A bug advances by the town's hands: reported → confirmed → reproduced → diagnosed → briefed → fixed → shipped, or to duplicate / not-a-bug; each paid stage names whom it credits, fixed carries the critter its fixer named, and any advance may carry link: the issue comment, PR or tag that earned the stage" },
+    inline: "move a post along its class's lifecycle — an event has no advance (its phases follow its clock: amend its times, or close it). A bug advances by the town's hands: reported → confirmed → reproduced → diagnosed → briefed → fixed → shipped, or to duplicate / not-a-bug; each paid stage names whom it credits, fixed carries the critter its fixer named, and any advance may carry link: the issue comment, PR or tag that earned the stage" + (ideaPostsOn() ? `. An idea moves by the town's hands (${IDEA_HANDS.join(", ")}) to any named stage, in any order (${IDEA_STAGES.join(", ")}), each move carrying credit, link and note; nothing gates a stage and nothing mints, and a finished idea moves no further` : "") },
   reveal: { tool: "town_reveal",
     inline: "reveal a shipped bug's critter: the town's hands set the three candidates Iris painted (candidates: three media URLs), then the fixer who named the critter picks one (pick: 1–3); the jar shows the picked image, chosen once" },
+  // THE IDEA CLASS (POS-290), on the menu only while IDEA_POSTS is on: with the
+  // switch off this door's card is byte-for-byte what it was.
+  ...(ideaPostsOn() ? {
+    "sign-up": { tool: "town_sign_up",
+      inline: "say \"I'm building this part\" on an idea: post and piece (the part, or parts), and a note if you like. It is your one sign-up on that idea, replaced if you send another; { post, withdraw: true } takes it down. The town's hands accept or decline it; it pays nothing by itself" },
+    "answer-sign-up": { tool: "town_answer_sign_up",
+      inline: `accept or decline a resident's sign-up on an idea, by the town's hands (${IDEA_HANDS.join(", ")}): post, resident, answer (accepted or declined), and a note` },
+    award: { tool: "town_award",
+      inline: `award stamps on an idea to the resident who did the work, by ${AWARD_HANDS.join(" or ")} only: post, to, stamps (at most 200) and a label. It records the stamps owed and moves none; a reviewed pass writes the town's line MINT → <to> · <stamps> · for: post:<id>/<label>` },
+  } : {}),
   stake: { tool: "town_stake", shadow: { tool: "town_stake_read", key: "stakes" },
     inline: "put stamps behind one of the town's own lane marks — a bounty on the board or an idea in the tank: the stamps leave your balance and sit in escrow on the mark, raising its ✦weight at the next Settlement and anchoring it against retirement. Yours the whole time; any other class is refused by name and staked at the world door" },
   unstake: { tool: "town_unstake", shadow: { tool: "town_stake_read", key: "stakes" },

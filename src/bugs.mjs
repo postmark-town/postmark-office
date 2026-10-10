@@ -361,14 +361,18 @@ export function stagePaidOf(canonical) {
 
 /**
  * Every bug's history, PURE. `acts` are the class's acts on the posts asked
- * (any action, oldest first by id); `lines` the ledger's canonical lines.
- * Returns Map(post id → rows).
+ * (any action, oldest first by id); `paid` is what the chain's post lines paid,
+ * Map("<post>/<stage>" → n), as post-history.mjs § postPaymentsVia reads it —
+ * or the ledger's canonical lines themselves, read here. Returns Map(post id → rows).
  */
-export function bugHistoryOf(acts, lines = []) {
-  const paid = new Map();
-  for (const l of lines) {
-    const s = stagePaidOf(l);
-    if (s) paid.set(`${s.post}/${s.stage}`, s.n);
+export function bugHistoryOf(acts, paid = []) {
+  if (!(paid instanceof Map)) {
+    const lines = paid;
+    paid = new Map();
+    for (const l of lines) {
+      const s = stagePaidOf(l);
+      if (s) paid.set(`${s.post}/${s.stage}`, s.n);
+    }
   }
   const out = new Map();
   for (const a of acts) {

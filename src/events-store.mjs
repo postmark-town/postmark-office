@@ -45,6 +45,7 @@ import {
   BUG_CLASS, BUG_FINISHED, BUG_LADDER, BUG_STAGES, BUG_HANDS, STATE_REPORTED, stageAmount,
   judgeBugText, judgeBugHand, judgeHandleField, judgeAdvance, judgeReveal, REVEAL_CANDIDATES, BUG_NO_STAKE, BUG_NO_CLOSE,
 } from "./bugs.mjs";
+import { ideaPostsOn } from "./ideas.mjs";
 import {
   EVENT_CLASS, ACT_POST, ACT_AMEND_POST, ACT_CLOSE, ACT_ADVANCE, ACT_REVEAL, ACT_RSVP, ACT_ANNOUNCE, ENDED_LIST_DAYS,
   STATE_CANCELLED, RESPONSE_RSVP, RESPONSE_STANDING,
@@ -336,16 +337,25 @@ export async function cancelAtOffice(fields, key, { now = Date.now(), env = proc
 // ── the town door: post · amend · close · advance (POS-288, POS-294) ───────
 //
 // `town { do: "post" | "amend" | "close" | "advance", args: { class, … } }`.
-// These answer class "event", class "quest" and class "bug"; town-post.mjs
-// routes every other class where it went before (an idea is still a mark at
-// the Think Tank until POS-290).
+// These answer class "event", class "quest", class "bug" and, behind
+// IDEA_POSTS (POS-290), class "idea", whose pen is idea-store.mjs. With the
+// switch off, town-post.mjs sends an idea where it went before: a mark at the
+// Think Tank.
 
+// class "idea" (POS-290) joins behind IDEA_POSTS; its pen is idea-store.mjs,
+// loaded when an idea act arrives (it imports this file's row helpers).
+const IDEA_CLASS = "idea";
 const POST_MACHINE_CLASSES = [EVENT_CLASS, QUEST_CLASS, BUG_CLASS];
+const ideaPen = () => import("./idea-store.mjs");
 
-function judgeClass(fields, { required }) {
+function judgeClass(fields, { required, env = process.env }) {
   const c = fields.class == null ? "" : String(fields.class).trim();
-  if (!c && required) throw refuse(422, "post needs a class", 'class: "event" puts it on the calendar; class: "quest" is the town\'s own; class: "bug" reports something broken', { field: "class" });
-  if (c && !POST_MACHINE_CLASSES.includes(c)) throw refuse(422, `this act answers class "event", "quest" or "bug", not "${c}"`, "the post machine's classes join it one by one", { field: "class" });
+  // The idea class is one of these only where it is open (IDEA_POSTS): off, an
+  // act naming class "idea" is refused exactly as it was before the class existed.
+  const ideas = ideaPostsOn(env);
+  const classes = ideas ? [...POST_MACHINE_CLASSES, IDEA_CLASS] : POST_MACHINE_CLASSES;
+  if (!c && required) throw refuse(422, "post needs a class", 'class: "event" puts it on the calendar; class: "quest" is the town\'s own; class: "bug" reports something broken' + (ideas ? '; class: "idea" puts an idea up' : ""), { field: "class" });
+  if (c && !classes.includes(c)) throw refuse(422, ideas ? `this act answers class "event", "quest", "bug" or "idea", not "${c}"` : `this act answers class "event", "quest" or "bug", not "${c}"`, "the post machine's classes join it one by one", { field: "class" });
   return c || null;
 }
 function postId(fields) {
@@ -366,16 +376,18 @@ function bodyOf(fields) {
  * path, which answers its own "no event", exactly as it did before they joined.
  */
 async function classOf(fields, id, env) {
-  const c = judgeClass(fields, { required: false });
+  const c = judgeClass(fields, { required: false, env });
   if (c) return c;
+  const { ideaRow } = await ideaPen();
   return read(async (client) => ((await questRow(client, id)) ? QUEST_CLASS
-    : (await bugRow(client, id)) ? BUG_CLASS : EVENT_CLASS), env);
+    : (await bugRow(client, id)) ? BUG_CLASS : (await ideaRow(client, id)) ? IDEA_CLASS : EVENT_CLASS), env);
 }
 
-export async function postAtTown(fields, key, { now = Date.now(), env = process.env, registry = undefined, roll = null } = {}) {
-  const cls = judgeClass(fields, { required: true });
+export async function postAtTown(fields, key, { now = Date.now(), env = process.env, registry = undefined, roll = null, titleOf = null } = {}) {
+  const cls = judgeClass(fields, { required: true, env });
   if (cls === QUEST_CLASS) return postQuest(fields, key, { now, env, registry });
   if (cls === BUG_CLASS) return postBug(fields, key, { now, env, roll });
+  if (cls === IDEA_CLASS) return (await ideaPen()).postIdea(fields, key, { now, env, roll, titleOf });
   const handle = standpointHandle(fields, key);
   return postEvent(handle, { title: fields.title, body: bodyOf(fields), place: fields.place,
     doors_open: fields.doors_open, starts: fields.starts, ends: fields.ends }, { now, env, door: "town" });
@@ -386,6 +398,7 @@ export async function amendAtTown(fields, key, { now = Date.now(), env = process
   const cls = await classOf(fields, id, env);
   if (cls === QUEST_CLASS) throw QUEST_NO_AMEND();
   if (cls === BUG_CLASS) return amendBug(fields, key, id, { now, env });
+  if (cls === IDEA_CLASS) return (await ideaPen()).amendIdea(fields, key, id, { now, env });
   const handle = standpointHandle(fields, key);
   return amendEvent(handle, id, { title: fields.title, body: bodyOf(fields), place: fields.place,
     doors_open: fields.doors_open, starts: fields.starts, ends: fields.ends }, { now, env, door: "town" });
@@ -396,6 +409,8 @@ export async function closeAtTown(fields, key, { now = Date.now(), env = process
   const cls = await classOf(fields, id, env);
   if (cls === QUEST_CLASS) return closeQuest(fields, key, id, { now, env });
   if (cls === BUG_CLASS) throw BUG_NO_CLOSE(id);
+  if (cls === IDEA_CLASS) throw refuse(422, `"${id}" is an idea, and an idea is not closed`,
+    "it finishes by advance: town { do: \"advance\", args: { post, to: \"shipped\" | \"declined\" | \"duplicate\" } }, by the town's hands");
   const handle = standpointHandle(fields, key);
   return closeEvent(handle, id, { now, env, door: "town" });
 }
@@ -404,14 +419,15 @@ export async function closeAtTown(fields, key, { now = Date.now(), env = process
  * `advance` moves a post along its class's lifecycle. An event has no such
  * move: its phases (announced · doors-open · underway · ended) follow its
  * clock, and its only act-made state beyond announced is cancelled, which is
- * `close`. A quest's one move is `close` too. A bug is the class that
- * advances (bugs.mjs), by the town's hands.
+ * `close`. A quest's one move is `close` too. A bug advances (bugs.mjs), by
+ * the town's hands, and so does an idea (ideas.mjs), to any named stage.
  */
 export async function advanceAtTown(fields, key, { now = Date.now(), env = process.env, roll = null } = {}) {
   const id = postId(fields);
   const cls = await classOf(fields, id, env);
   if (cls === QUEST_CLASS) throw QUEST_NO_ADVANCE();
   if (cls === BUG_CLASS) return advanceBug(fields, key, id, { now, env, roll });
+  if (cls === IDEA_CLASS) return (await ideaPen()).advanceIdea(fields, key, id, { now, env, roll });
   standpointHandle(fields, key);
   throw refuse(422, "an event's phases follow its clock",
     "announced, doors-open, underway and ended are read from its times — amend them to move it; close it to cancel it", { field: "to" });

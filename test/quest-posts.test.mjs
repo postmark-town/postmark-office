@@ -245,12 +245,15 @@ test("5 · the posts read answers class quest: the registry's order and terms, t
   assert.equal(r.total, 11);
   assert.deepEqual(r.posts.map((p) => p.fields.quest), QUEST_IDS, "the registry's own order");
   const send = r.posts[0];
-  assert.deepEqual(Object.keys(send).sort(), ["author", "class", "fields", "household", "id", "latest", "responses", "state", "terms", "title"]);
+  assert.deepEqual(Object.keys(send).sort(), ["author", "class", "fields", "history", "household", "id", "latest", "responses", "state", "terms", "title"]);
   assert.deepEqual(send.terms, { title: "Reach out", source: "Send a letter to 5 different residents. Resets daily.", reward: "1 stamp each", cadence: "daily", target: 5 });
   assert.deepEqual([send.author, send.household, send.state, send.responses, send.latest.act], ["postmark-pen", "hh:the-town", "open", 0, "post"]);
   assert.ok(!("progress" in send), "progress is derived from the letters, never on the post");
   const welcome = r.posts.find((p) => p.fields.quest === "welcome-to-postmark");
   assert.deepEqual([welcome.state, welcome.latest.act], ["closed", "close"]);
+  // every class carries its history (POS-547, generalized for POS-290): a quest's is its post and its close, by the hand
+  assert.deepEqual(welcome.history.map(({ at, ...h }) => h), [{ stage: "open", hand: "wright" }, { stage: "closed", hand: "wright" }]);
+  assert.deepEqual(send.history.map(({ at, ...h }) => h), [{ stage: "open", hand: "wright" }]);
   // what the Guild draws: the open daily and milestone posts, by their terms
   const guild = r.posts.filter((p) => p.state === "open" && ["daily", "milestone"].includes(p.terms.cadence)).map((p) => p.terms.title);
   assert.deepEqual(guild, BOARD);
@@ -258,7 +261,8 @@ test("5 · the posts read answers class quest: the registry's order and terms, t
   const one = await postsAtOffice({ class: "quest", post: "postmark-pen/first-idea" }, { now: NOW, townClone: TOWN });
   assert.equal(one.post.terms.title, "A first idea");
   await refusedWith(postsAtOffice({ class: "quest", post: "postmark-pen/nothing" }, { now: NOW, townClone: TOWN }), 404);
-  await refusedWith(postsAtOffice({ class: "idea" }, { now: NOW, townClone: TOWN }), 422, /read: "ideas"/);
+  // an idea is a post class since POS-290: the read answers what the store holds (here, none)
+  assert.equal((await postsAtOffice({ class: "idea" }, { now: NOW, townClone: TOWN })).total, 0);
   await refusedWith(postsAtOffice({}, { now: NOW, townClone: TOWN }), 422, /which class/);
   // a registry that cannot be read is said, never a quiet copy of the stored title
   const blind = await postsAtOffice({ class: "quest" }, { now: NOW, townClone: join(DIR, "nowhere") });

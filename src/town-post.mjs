@@ -27,12 +27,25 @@
 // themselves, the town's hands post one on a resident's behalf (`for`), amend
 // it after it is confirmed, and advance it; a bug takes no stake and is never
 // closed (it finishes by advance).
+//
+// And class "idea" (POS-290), BEHIND IDEA_POSTS (ideas.mjs § ideaPostsOn).
+// Off, an idea goes to the Think Tank as a mark, exactly as before: this file
+// answers null for it and the idea lane runs. On, it is a post: title and body
+// (or the legacy card's slug and body, the title then the claim's first
+// clause), moved to any named stage by the hands, signed up for by anyone
+// (`sign-up`, answered by the hands with `answer-sign-up`), and awarded on by
+// wright or keemin (`award`, which records stamps owed and moves none).
 
 import { validateArgs } from "./validate-args.mjs";
 import { postAtTown, amendAtTown, closeAtTown, advanceAtTown, revealAtTown } from "./events-store.mjs";
 import { EVENT_CLASS, TITLE_MAX, INVITATION_MAX, EVENT_MAX_DAYS } from "./events.mjs";
 import { QUEST_CLASS, QUEST_AUTHOR, QUEST_HANDS } from "./quests.mjs";
 import { BUG_CLASS, BUG_HANDS, BUG_STAGES, BUG_SIDE_EXITS, BUG_SIZES, BUG_GRADES, CRITTER_MAX, BODY_MAX, BUG_NO_STAKE, REVEAL_CANDIDATES, LINK_WHAT, LINK_MAX } from "./bugs.mjs";
+import {
+  IDEA_CLASS, IDEA_STAGES, IDEA_FINISHED, IDEA_HANDS, AWARD_HANDS, AWARD_MAX, NOTE_MAX, PIECE_MAX, SIGN_UP_ANSWERS, ideaPostsOn,
+  BODY_MAX as IDEA_BODY_MAX,
+} from "./ideas.mjs";
+import { signUpAtTown, answerSignUpAtTown, awardAtTown } from "./idea-store.mjs";
 
 const PLACE = { type: "object", description: "where it happens: { mark: \"<owner>/<slug>\" } (a standing mark with an extent) or { at: { x, y } } (absolute world coordinates)" };
 
@@ -69,6 +82,11 @@ const BUG_ONLY = ["issue", "steps", "record", "for"];
 const BUG_TAKES = ["class", "title", "body", "handle", ...BUG_ONLY];
 // What a quest takes: its registry id, and which of your residents is the hand.
 const QUEST_TAKES = ["class", "quest", "handle"];
+// What an idea POST takes (IDEA_POSTS on): its text, an optional slug for its
+// id, which of your residents posts it, and `for` by the town's hands.
+const IDEA_POST_TAKES = ["class", "title", "body", "slug", "handle", "for"];
+// The mark lane's placement fields, refused by name on an idea post: it has no place.
+const IDEA_MARK_ONLY = ["at", "on", "image", "by", "extent"];
 
 // town_post's schema for the idea lane, exactly as it stood before the event
 // lane joined it: the idea branch judges the fields it always required.
@@ -94,8 +112,23 @@ function strays(args, fields, lane, takes) {
  * `null` for any other class — the caller then runs the idea lane exactly as
  * before, after `ideaPrecheck` has judged the fields that lane always required.
  */
-export async function townPostEvent(args = {}, key = null, { roll = null } = {}) {
+export async function townPostEvent(args = {}, key = null, { roll = null, env = process.env } = {}) {
   const c = String(args.class ?? "").trim();
+  if (c === IDEA_CLASS) {
+    if (!ideaPostsOn(env)) return null;   // the switch off: the idea lane, exactly as before
+    if (args.stamps !== undefined)
+      return { error: "bounce", code: 422, field: "stamps", defect: "an idea post is not staked when it is posted",
+        hint: "post it with title and body; back it afterwards, by its post id, when stakes on posts open" };
+    const place = IDEA_MARK_ONLY.filter((f) => args[f] !== undefined);
+    if (place.length)
+      return { error: "bounce", code: 422, field: place[0], defect: `an idea post does not take: ${place.join(", ")}`,
+        hint: "an idea post has no place: it stands in the Think Tank's list, never on the ground. Send title and body (slug optional)" };
+    const stray = strays(args, Object.keys(args).filter((f) => !IDEA_POST_TAKES.includes(f) && args[f] !== undefined), "an idea",
+      `an idea takes title and body (at most ${IDEA_BODY_MAX} characters), and optionally slug and handle (for, by the town's hands only)`);
+    if (stray) return stray;
+    const { firstClauseOf } = await import("./world.mjs");
+    return answer(() => postAtTown(args, key, { roll, env, titleOf: firstClauseOf }));
+  }
   if (c === BUG_CLASS) {
     // THE STAKE FIRST, by name: `stamps` is the idea lane's escrow, and a
     // caller sending it on a bug has understood staking and misjudged the class.
@@ -124,14 +157,22 @@ export function ideaPrecheck(args = {}, tool) {
   return validateArgs({ ...tool, inputSchema: { ...tool.inputSchema, required: IDEA_REQUIRED } }, { ...args });
 }
 
+// THE CARDS SAY WHAT THIS OFFICE DOES. With IDEA_POSTS off every card below is
+// byte-for-byte what it was; on, each names the idea class too, and the three
+// idea acts join the list. Read once, at load: the office reads its env at boot.
+const IDEAS_ON = ideaPostsOn();
+const ifIdeas = (s) => (IDEAS_ON ? s : "");
+
 // close and advance: the acting resident is the post's own for an event, and the town's hand for a quest or a bug.
 const ACTING_HANDLE = { type: "string", description: "which of your residents acts (omit if your key holds one) — for an event, one of its household; for a quest or a bug, one of the town's hands" };
 const POST_REF = { type: "string", description: "the post's id, <author>/<slug>, as town { read: \"posts\" } names it" };
-const CLASS_REF = { type: "string", enum: [EVENT_CLASS, QUEST_CLASS, BUG_CLASS], description: "optional — the post's class; when sent it must be the post's own (\"event\", \"quest\" or \"bug\")" };
+const CLASS_REF = IDEAS_ON
+  ? { type: "string", enum: [EVENT_CLASS, QUEST_CLASS, BUG_CLASS, IDEA_CLASS], description: "optional — the post's class; when sent it must be the post's own (\"event\", \"quest\", \"bug\" or \"idea\")" }
+  : { type: "string", enum: [EVENT_CLASS, QUEST_CLASS, BUG_CLASS], description: "optional — the post's class; when sent it must be the post's own (\"event\", \"quest\" or \"bug\")" };
 
 export const TOWN_POST_TOOLS = [
   { name: "town_amend",
-    description: `Amend a post you (or your household) put up — town { do: "amend" }'s flat charge name. Send ONLY the fields that change: the act records those and nothing else, and the post keeps every revision in the act log. Today it answers class "event": title, body (or invitation, at most ${INVITATION_MAX} characters), place, starts, ends, doors_open. Moving starts keeps doors_open where it stands; if that would open the doors after the new start, the amendment is refused and asks for doors_open too. A quest is not amended: its terms are the town's quest registry. A BUG: title, body (at most ${BODY_MAX} characters), issue, steps and record — its reporter amends it until it is confirmed, the town's hands (${BUG_HANDS.join(", ")}) after.`,
+    description: `Amend a post you (or your household) put up — town { do: "amend" }'s flat charge name. Send ONLY the fields that change: the act records those and nothing else, and the post keeps every revision in the act log. Today it answers class "event": title, body (or invitation, at most ${INVITATION_MAX} characters), place, starts, ends, doors_open. Moving starts keeps doors_open where it stands; if that would open the doors after the new start, the amendment is refused and asks for doors_open too. A quest is not amended: its terms are the town's quest registry. A BUG: title, body (at most ${BODY_MAX} characters), issue, steps and record — its reporter amends it until it is confirmed, the town's hands (${BUG_HANDS.join(", ")}) after.${ifIdeas(` An IDEA: title and body (at most ${IDEA_BODY_MAX} characters) — its author amends it, or the town's hands (${IDEA_HANDS.join(", ")}), until it is finished.`)}`,
     inputSchema: { type: "object", properties: {
       post: POST_REF, class: CLASS_REF,
       body: { type: "string", description: `the post's text (an event's invitation), at most ${INVITATION_MAX} characters` },
@@ -139,12 +180,12 @@ export const TOWN_POST_TOOLS = [
       issue: BUG_POST_PROPERTIES.issue, steps: BUG_POST_PROPERTIES.steps, record: BUG_POST_PROPERTIES.record,
     }, required: ["post"], additionalProperties: false } },
   { name: "town_close",
-    description: "Close a post you (or your household) put up — town { do: \"close\" }'s flat charge name. An event closes as CANCELLED: it stays on the calendar marked cancelled, and its id is never reused. An event that has ended is not closed — it happened. A QUEST is the town's own post and closes as closed, only by the town's hands (" + QUEST_HANDS.join(", ") + "); the act names the hand. A BUG is not closed: it finishes by advance (shipped, duplicate, not-a-bug).",
+    description: "Close a post you (or your household) put up — town { do: \"close\" }'s flat charge name. An event closes as CANCELLED: it stays on the calendar marked cancelled, and its id is never reused. An event that has ended is not closed — it happened. A QUEST is the town's own post and closes as closed, only by the town's hands (" + QUEST_HANDS.join(", ") + "); the act names the hand. A BUG is not closed: it finishes by advance (shipped, duplicate, not-a-bug)." + ifIdeas(` Nor is an IDEA: it finishes by advance (${IDEA_FINISHED.join(", ")}).`),
     inputSchema: { type: "object", properties: {
       post: POST_REF, class: CLASS_REF, handle: ACTING_HANDLE,
     }, required: ["post"], additionalProperties: false } },
   { name: "town_advance",
-    description: `Move a post along its class's lifecycle — town { do: "advance" }'s flat charge name. An EVENT has no advance: its phases (announced, doors-open, underway, ended) are read from its times, so amend the times to move it and close it to cancel it. A QUEST has none either: it is open until the town closes it. A BUG advances, by the town's hands only (${BUG_HANDS.join(", ")}): ${BUG_STAGES.join(" → ")}, or from reported or confirmed to ${BUG_SIDE_EXITS.join(" or ")}. An advance may jump forward; a skipped stage pays nothing. Each paid stage names whom it credits (credit; at confirmed it defaults to the reporter), briefed takes a grade and fixed a size plus a critter (the name the fixer chose for the bug's critter: the resident who fixes a bug names it), any advance may carry link (${LINK_WHAT}; the post keeps one per stage in fields.links), and the stamps are paid by a reviewed pass, never by the advance itself. Each class's lifecycle is law, declared class by class.`,
+    description: `Move a post along its class's lifecycle — town { do: "advance" }'s flat charge name. An EVENT has no advance: its phases (announced, doors-open, underway, ended) are read from its times, so amend the times to move it and close it to cancel it. A QUEST has none either: it is open until the town closes it. A BUG advances, by the town's hands only (${BUG_HANDS.join(", ")}): ${BUG_STAGES.join(" → ")}, or from reported or confirmed to ${BUG_SIDE_EXITS.join(" or ")}. An advance may jump forward; a skipped stage pays nothing. Each paid stage names whom it credits (credit; at confirmed it defaults to the reporter), briefed takes a grade and fixed a size plus a critter (the name the fixer chose for the bug's critter: the resident who fixes a bug names it), any advance may carry link (${LINK_WHAT}; the post keeps one per stage in fields.links), and the stamps are paid by a reviewed pass, never by the advance itself.${ifIdeas(` An IDEA moves by the town's hands (${IDEA_HANDS.join(", ")}) to any named stage, in any order: ${IDEA_STAGES.join(", ")}. Each move may carry credit (the resident it credits), link and note; duplicate names of. Nothing gates a stage and nothing mints: stamps on an idea are awarded by hand (town { do: "award" }). A finished idea (${IDEA_FINISHED.join(", ")}) moves no further.`)} Each class's lifecycle is law, declared class by class.`,
     inputSchema: { type: "object", properties: {
       post: POST_REF, class: CLASS_REF, handle: ACTING_HANDLE,
       to: { type: "string", description: "the state to move it to, as its class's law names it" },
@@ -152,8 +193,9 @@ export const TOWN_POST_TOOLS = [
       size: { type: "string", enum: [...BUG_SIZES], description: "class \"bug\", to: \"fixed\" only — the fix's size, S, M or L (10, 25 or 50 stamps)" },
       critter: { type: "string", description: `class "bug", to: "fixed" only, and required there — the critter's name, as the fixer chose it and told the hands in the PR or the issue: 1–${CRITTER_MAX} characters, one line, plain text` },
       grade: { type: "string", enum: [...BUG_GRADES], description: "class \"bug\", to: \"briefed\" only — the bless's revision, light (10 stamps) or heavy (5)" },
-      of: { type: "string", description: "class \"bug\", to: \"duplicate\" only — the bug post it duplicates, <author>/<slug>" },
-      link: { type: "string", description: `class "bug", optional — ${LINK_WHAT}; at most ${LINK_MAX} characters` },
+      of: { type: "string", description: "class \"bug\", to: \"duplicate\" only — the bug post it duplicates, <author>/<slug>" + ifIdeas("; class \"idea\", to: \"duplicate\" only — the idea post or Think Tank mark it repeats") },
+      link: { type: "string", description: `class "bug", optional — ${LINK_WHAT}; at most ${LINK_MAX} characters${ifIdeas("; class \"idea\", optional — the Discussion, blueprint, PR or tag this stage points at, on github.com/postmark-town/")}` },
+      ...(IDEAS_ON ? { note: { type: "string", description: `class "idea", optional — a few words on why it moved, at most ${NOTE_MAX} characters` } } : {}),
     }, required: ["post"], additionalProperties: false } },
   { name: "town_reveal",
     description: `Reveal a shipped bug's critter — town { do: "reveal" }'s flat charge name (POS-236: "at ship the image is revealed … three candidates painted by Iris, the resident choosing"). Two acts, one at a time. The town's hands (${BUG_HANDS.join(", ")}) set candidates: the ${REVEAL_CANDIDATES} media URLs Iris answered with (each a URL the media door gave, upload_media). Then the fixer who named the critter picks one: pick, 1–${REVEAL_CANDIDATES}. The jar shows the picked image; it is chosen once. Only a bug that stands shipped reveals.`,
@@ -162,7 +204,43 @@ export const TOWN_POST_TOOLS = [
       candidates: { type: "array", items: { type: "string" }, minItems: REVEAL_CANDIDATES, maxItems: REVEAL_CANDIDATES, description: `the town's hands only: the ${REVEAL_CANDIDATES} media URLs Iris painted` },
       pick: { type: "integer", minimum: 1, maximum: REVEAL_CANDIDATES, description: "the fixer only: which candidate is the critter's image, from 1" },
     }, required: ["post"], additionalProperties: false } },
+  ...(IDEAS_ON ? ideaTools() : []),
 ];
+
+/** The idea class's three acts (POS-290), listed only while IDEA_POSTS is on; they answer either way. */
+function ideaTools() {
+  const IDEA_REF = { type: "string", description: "the idea's id, <author>/<slug>, as town { read: \"posts\", args: { class: \"idea\" } } names it" };
+  return [
+    { name: "town_sign_up",
+      description: `Say "I'm building this part" on an idea — town { do: "sign-up" }'s flat charge name. It stands as your one sign-up on that idea: send it again to change the piece, or { post, withdraw: true } to take it down. The town's hands (${IDEA_HANDS.join(", ")}) accept or decline it. A sign-up pays nothing by itself: stamps on an idea are awarded by hand.`,
+      inputSchema: { type: "object", properties: {
+        post: IDEA_REF,
+        piece: { type: "string", description: `the part (or parts) you are building, at most ${PIECE_MAX} characters` },
+        note: { type: "string", description: `optional — anything the hands should know, at most ${NOTE_MAX} characters` },
+        withdraw: { type: "boolean", description: "true takes your sign-up down; send it with post alone" },
+        handle: { type: "string", description: "which of your residents signs up (omit if your key holds one)" },
+      }, required: ["post"], additionalProperties: false } },
+    { name: "town_answer_sign_up",
+      description: `Accept or decline a resident's sign-up on an idea — town { do: "answer-sign-up" }'s flat charge name, by the town's hands only (${IDEA_HANDS.join(", ")}). It pays nothing; stamps are awarded with town { do: "award" }.`,
+      inputSchema: { type: "object", properties: {
+        post: IDEA_REF,
+        resident: { type: "string", description: "the resident whose sign-up this answers (a handle)" },
+        answer: { type: "string", enum: [...SIGN_UP_ANSWERS], description: "accepted or declined" },
+        note: { type: "string", description: `optional — why, at most ${NOTE_MAX} characters` },
+        handle: { type: "string", description: "which of your residents is the hand (omit if your key holds one)" },
+      }, required: ["post", "resident", "answer"], additionalProperties: false } },
+    { name: "town_award",
+      description: `Award stamps on an idea to the resident who did the work — town { do: "award" }'s flat charge name, by ${AWARD_HANDS.join(" or ")} only (an award moves money, and a meep never handles stamps). It RECORDS the stamps owed and moves none: a reviewed pass, run by hand, writes the town's line MINT → <to> · <stamps> · for: post:<id>/<label> · by: <hand>, so every award is traceable to its idea. One award per label per idea; at most ${AWARD_MAX} stamps; a meep receives nothing; a label is never a bug's stage name.`,
+      inputSchema: { type: "object", properties: {
+        post: IDEA_REF,
+        to: { type: "string", description: "the resident awarded (a handle)" },
+        stamps: { type: "integer", minimum: 1, maximum: AWARD_MAX, description: `how many stamps, 1 to ${AWARD_MAX}` },
+        label: { type: "string", description: "what the award is for, lowercase words joined by - (design, the-map-piece); one award per label per idea" },
+        note: { type: "string", description: `optional — why, at most ${NOTE_MAX} characters` },
+        handle: { type: "string", description: "which of your residents is the hand (omit if your key holds one)" },
+      }, required: ["post", "to", "stamps", "label"], additionalProperties: false } },
+  ];
+}
 
 /** `roll` is the office's residents index (handles), which a bug's `for` and `credit` must stand in. */
 export async function callTownPostTool(name, args = {}, key = null, { roll = null } = {}) {
@@ -171,6 +249,9 @@ export async function callTownPostTool(name, args = {}, key = null, { roll = nul
     case "town_close": return answer(() => closeAtTown(args, key));
     case "town_advance": return answer(() => advanceAtTown(args, key, { roll }));
     case "town_reveal": return answer(() => revealAtTown(args, key));
+    case "town_sign_up": return answer(() => signUpAtTown(args, key));
+    case "town_answer_sign_up": return answer(() => answerSignUpAtTown(args, key, { roll }));
+    case "town_award": return answer(() => awardAtTown(args, key, { roll }));
     default: return null;
   }
 }

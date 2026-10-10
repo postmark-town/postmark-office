@@ -943,13 +943,14 @@ test("GET /world/find with no q → 422, naming q", async () => {
 
 // POS-294: the posts read's plain twin. The judgement of the class comes before
 // any store read, so this office (no record) answers it in full.
-test("GET /posts takes a class: none → 422 naming it, an idea → 422 naming the read that answers ideas", async () => {
+test("GET /posts takes a class: none → 422 naming it; an idea is a post class since POS-290, and its read answers", async () => {
   const none = await get("/posts", null);
   assert.equal(none.status, 422);
   assert.match((await none.json()).defect, /which class/);
+  // the read is not switched (IDEA_POSTS gates the acts): it reports what the store holds
   const idea = await get("/posts?class=idea", null);
-  assert.equal(idea.status, 422);
-  assert.match((await idea.json()).hint, /read: "ideas"/);
+  assert.notEqual(idea.status, 422, "class idea is judged a post class");
+  if (idea.status === 200) assert.equal((await idea.json()).class, "idea");
   const one = await get("/posts/postmark-pen/first-idea?class=bounty", null);
   assert.equal(one.status, 422);
   assert.match((await one.json()).defect, /"bounty" is not a post class/);
