@@ -14,13 +14,24 @@
 //   3. ON or OFF: the idea acts' flat verbs are delisted (born behind the apex),
 //      and the town tool's do: enum carries them only when on;
 //   4. the award card states the label rule exactly as the ledger keeps it, and
-//      the award's refusal to a hand who is not an award's names who awards.
+//      the award's refusal to a hand who is not an award's names who awards;
+//   5. OFF is pinned: the town's whole card surface (the town tool and its
+//      schema, the bare read with its register law, every act's card, the
+//      town flat verbs, the listed names) is byte-identical to
+//      test/fixtures/town-cards-off.json: the surface the w42 train serves
+//      with the class shut (proved equal to a4c38821's src, #464 merged, and so
+//      to #463's; before #463 only read_posts differs, which takes class idea
+//      because the reads are not switched).
+//      A lane that changes a town card on purpose rewrites the fixture with
+//      UPDATE_TOWN_CARDS=1 node --test test/idea-cards.test.mjs, and the diff
+//      shows in its review.
 //
 // THE FLIPS are in G:/Starstory/docs/2026-10-09/rail/plumb-idea-plan/NOTES.md § the review notes.
 
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -34,7 +45,15 @@ function cards(env) {
     const town = apex.TOWN_TOOL;
     const post = await apex.townApex({ read: "post" }, null, { schemas: {}, schemaRequired: {} });
     const listed = toolList().map((t) => t.name);
+    // the surface the OFF pin compares, whole
+    const reads = {};
+    for (const a of apex.TOWN_DISPATCHABLE) reads[a] = await apex.townApex({ read: a }, null, { schemas: {}, schemaRequired: {} });
+    const bare = await apex.townApex({}, null, { schemas: {}, schemaRequired: {} });
+    const surface = { town: { description: town.description, inputSchema: town.inputSchema }, bare, reads,
+      flat: TOOLS.filter((t) => /^town_/.test(t.name) || ["read_posts", "read_ideas"].includes(t.name)),
+      listed: toolList().map((t) => t.name) };
     process.stdout.write("CARDS" + JSON.stringify({
+      surface,
       town: town.description,
       doEnum: town.inputSchema.properties.do.enum,
       doText: town.inputSchema.properties.do.description,
@@ -44,9 +63,15 @@ function cards(env) {
       listed,
     }));
   `;
-  const out = execFileSync(process.execPath, ["--input-type=module", "-e", src], {
-    cwd: ROOT, encoding: "utf8", env: { ...process.env, WORLD_APEX: "1", IDEA_POSTS: "", ...env }, stdio: ["ignore", "pipe", "ignore"],
-  });
+  let out;
+  try {
+    out = execFileSync(process.execPath, ["--input-type=module", "-e", src], {
+      cwd: ROOT, encoding: "utf8", env: { ...process.env, WORLD_APEX: "1", IDEA_POSTS: "", ...env }, stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (e) {
+    // a card swap that no longer finds its segment throws at load: say which
+    throw new Error(`the office did not load with ${JSON.stringify(env)}: ${String(e.stderr ?? e.message).split("\n").filter((l) => /^\s*\w*Error:/.test(l)).slice(0, 3).join(" | ")}`);
+  }
   return JSON.parse(out.slice(out.indexOf("CARDS") + 5));
 }
 
@@ -93,7 +118,8 @@ test("3 · the idea acts' flat verbs are never listed (born behind the apex); th
 });
 
 test("4 · the award card states the label rule exactly as the ledger keeps it; the refusal to a hand who is not an award's names who awards", async () => {
-  assert.match(ON.award.description, /a label is never one of a bug's five paid stages \(confirmed, reproduced, diagnosed, briefed, fixed\)/);
+  const { PAID_STAGES } = await import("../src/bugs.mjs");
+  assert.ok(ON.award.description.includes(`a label is never one of a bug's paid stages (${PAID_STAGES.join(", ")})`), "the stage names are the class law's, never typed by hand");
   assert.doesNotMatch(ON.award.description, /never a bug's stage name/);
   const { judgeHand, AWARD_HANDS, judgeAward } = await import("../src/ideas.mjs");
   assert.throws(() => judgeHand({}, { handles: new Set(["architect"]) }, { hands: AWARD_HANDS, act: "award stamps" }),
@@ -104,4 +130,29 @@ test("4 · the award card states the label rule exactly as the ledger keeps it; 
   const roll = new Set(["finn"]);
   assert.equal(judgeAward({ to: "finn", stamps: 5, label: "shipped" }, roll).label, "shipped");
   assert.throws(() => judgeAward({ to: "finn", stamps: 5, label: "briefed" }, roll), /a bug's stage/);
+});
+
+test("5 · OFF is pinned: the town's whole card surface is byte-identical to the surface the train serves with the idea class shut", () => {
+  const fixture = resolve(ROOT, "test", "fixtures", "town-cards-off.json");
+  const now = JSON.stringify(OFF.surface, null, 1) + "\n";
+  if (process.env.UPDATE_TOWN_CARDS === "1") writeFileSync(fixture, now);
+  assert.equal(now, readFileSync(fixture, "utf8"),
+    "a town card changed with IDEA_POSTS off; if that is on purpose, rewrite the fixture (UPDATE_TOWN_CARDS=1) and let the review read its diff");
+});
+
+test("6 · ON: the register law, the bounties sentence and the do: text teach what the menu offers", () => {
+  assert.match(ON.surface.bare.the_register_law, /class: "idea" is a post on this office \(POS-290\), title and body, with no place and no escrow;/);
+  assert.doesNotMatch(ON.surface.bare.the_register_law, /placement computed for you/);
+  assert.match(ON.surface.bare.the_register_law, /do: "sign-up" \/ "answer-sign-up" carry who builds an idea's parts and do: "award" records stamps owed on it/);
+  assert.match(ON.townPost.description, /Bounties and listings open here after their migrations; until then bounties post at the world door\. AND class: "event"/);
+  // " sign-up (" with its leading space: "answer-sign-up (" must not stand in for it
+  for (const a of ["sign-up", "answer-sign-up", "award"]) assert.ok(ON.doText.includes(` ${a} (`), `the do: text names ${a}`);
+  assert.match(OFF.surface.bare.the_register_law, /class: "idea" publishes at the Think Tank, placement computed for you;/);
+});
+
+test("7 · a card swap keeps a dollar sign in its replacement as a dollar sign, and refuses a segment it does not find exactly once", async () => {
+  const { swapOnce } = await import("../src/town-apex.mjs");
+  assert.equal(swapOnce("a X b", "X", "$& and $1 and $$"), "a $& and $1 and $$ b");
+  assert.throws(() => swapOnce("a b", "X", "y"), /no longer finds its segment once/);
+  assert.throws(() => swapOnce("X X", "X", "y"), /no longer finds its segment once/);
 });
