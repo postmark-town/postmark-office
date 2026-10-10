@@ -32,7 +32,7 @@
 // A bug takes no stake, at post and at the stake door alike, refused by name
 // (BUG_NO_STAKE), with the ruling's reason in the refusal.
 
-import { refuse, TITLE_MAX, INVITATION_MAX } from "./events.mjs";
+import { refuse, TITLE_MAX, INVITATION_MAX, ACT_POST, ACT_ADVANCE } from "./events.mjs";
 import { handsOf, holdsHand, notThisHand } from "./named-hand.mjs";
 
 export const BUG_CLASS = "bug";
@@ -326,6 +326,63 @@ export function judgeReveal(fields, prev, key, { urlOk }) {
   if (!Number.isInteger(n) || n < 1 || n > REVEAL_CANDIDATES)
     throw refuse(422, `pick is 1–${REVEAL_CANDIDATES}`, "pick: the candidate's place in the list, from 1", { field: "pick" });
   return { actor, reveal: { candidates: was.candidates, pick: n, image: was.candidates[n - 1], picked_by: actor } };
+}
+
+// ── THE HISTORY (POS-547, Darko 2026-10-09) ─────────────────────────────────
+//
+// "Clicking a bug shows what stage it's at, who contributed each earlier
+// stage, and where the links lead." Credit is the public record, so the bug
+// read carries it: one row per stage act, oldest first,
+//
+//   { stage, at, hand, credit, link, stamps_paid }
+//
+//   the post      stage `reported`; credit is the reporter (the act's actor),
+//                 hand the town hand who put it up `for:` them, else null
+//   an advance    stage is its `to`; credit and hand as the act recorded them
+//                 (shipped and the side exits credit no one: null); link is
+//                 the one the advance named for its own stage (the act carries
+//                 the post's whole `links` map after it, so it is `links[to]`)
+//   stamps_paid   the amount on the signed ledger's `post:<id>/<stage>` line,
+//                 or null: not paid yet (the tick pays within about fifteen
+//                 minutes), held by the weekly household cap, a meep's stage,
+//                 or a stage that pays nothing
+//
+// Amends and reveals move no stage, so they are not history rows; what they
+// set is on the post's fields. The line's grammar is the town's (stamp-mint.mjs
+// § STAGE_RE); it is read here only to find what a stage paid.
+
+const STAGE_LINE_RE = new RegExp(String.raw`^- \d{4}-\d{2}-\d{2} · MINT → (\S+) · ([1-9]\d*) · for: post:([a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9-]*)\/(${PAID_STAGES.join("|")}) · by: \S+$`);
+
+/** A ledger line's stage payment, `{ post, stage, handle, n }`, or null for any other line. */
+export function stagePaidOf(canonical) {
+  const m = STAGE_LINE_RE.exec(String(canonical ?? ""));
+  return m ? { handle: m[1], n: Number(m[2]), post: m[3], stage: m[4] } : null;
+}
+
+/**
+ * Every bug's history, PURE. `acts` are the class's acts on the posts asked
+ * (any action, oldest first by id); `lines` the ledger's canonical lines.
+ * Returns Map(post id → rows).
+ */
+export function bugHistoryOf(acts, lines = []) {
+  const paid = new Map();
+  for (const l of lines) {
+    const s = stagePaidOf(l);
+    if (s) paid.set(`${s.post}/${s.stage}`, s.n);
+  }
+  const out = new Map();
+  for (const a of acts) {
+    if (a.action !== ACT_POST && a.action !== ACT_ADVANCE) continue;
+    const p = typeof a.payload === "string" ? JSON.parse(a.payload) : (a.payload ?? {});
+    const post = String(a.object);
+    const at = new Date(a.at).toISOString();
+    const row = a.action === ACT_POST
+      ? { stage: STATE_REPORTED, at, hand: p.hand ?? null, credit: a.actor ?? null, link: null, stamps_paid: null }
+      : { stage: p.to, at, hand: p.hand ?? a.actor ?? null, credit: p.credit ?? null,
+        link: p.fields?.links?.[p.to] ?? null, stamps_paid: paid.get(`${post}/${p.to}`) ?? null };
+    out.set(post, [...(out.get(post) ?? []), row]);
+  }
+  return out;
 }
 
 // ── the refusals for what a bug does not take ───────────────────────────────

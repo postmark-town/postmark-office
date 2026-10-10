@@ -38,9 +38,18 @@
 //
 // A bug row (bugs.mjs) adds its class `fields` to the general row: the
 // reporter's issue, steps and record, and whatever its advances set (size,
-// critter and named_by at fixed, grade at briefed, `of` at duplicate). Its state is its stage. Who
-// was credited at each stage is on the advance acts, and the stage pass
-// (tools/bug-stage-plan.mjs) reads it there.
+// critter and named_by at fixed, grade at briefed, `of` at duplicate). Its state is its stage.
+//
+// ── A BUG CARRIES ITS HISTORY (POS-547) ─────────────────────────────────────
+//
+// Who did each stage is on the acts, and what each stage paid is on the signed
+// ledger, so the bug read joins both: `history`, one row per stage act
+// (bugs.mjs § THE HISTORY). It rides on every row of the list as well as on
+// the one post, because the Bug Catcher's page draws every bug's ladder from
+// one read (measured on the 48 bugs of 2026-10-09 in POS-547's report). The ledger is the store's
+// `stamp_lines` (066), never the town's file. An office whose store has no
+// chain yet (before 066, or before its first sync) says so in `unavailable`
+// and answers stamps_paid null, rather than calling every stage unpaid.
 
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -49,7 +58,7 @@ import { officeRead } from "./world2-pen.mjs";
 import { postRowsOf, postOrder, TERMINAL_STATES, FIELDS } from "./household-posts.mjs";
 import { EVENT_CLASS, refuse } from "./events.mjs";
 import { QUEST_CLASS, QUEST_FINISHED, readQuestRegistry, questTerms } from "./quests.mjs";
-import { BUG_CLASS, BUG_FINISHED } from "./bugs.mjs";
+import { BUG_CLASS, BUG_FINISHED, bugHistoryOf } from "./bugs.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TOWN_CLONE = () => process.env.TOWN_CLONE ?? resolve(HERE, "..", "town-clone");
@@ -74,6 +83,26 @@ function judgePostsClass(fields) {
 
 const plain = ({ ...r }) => Object.fromEntries(Object.entries(r));   // own string keys only: the reader's symbols stay behind
 
+/** The text `unavailable` carries when the store holds no stamp chain to read. */
+export const NO_CHAIN = "the store holds no stamp chain yet (stamp_lines), so every history row's stamps_paid is null";
+// The stage lines only: every one carries this, and nothing else does.
+const STAGE_LINES_LIKE = "%· for: post:%";
+
+/**
+ * The bug posts' history, on the caller's read: their acts, and the ledger's
+ * stage lines. `{ byPost, unavailable }`.
+ */
+export async function bugHistoryVia(client, ids) {
+  if (!ids.length) return { byPost: new Map(), unavailable: null };
+  const { rows: acts } = await client.query(
+    "SELECT id, object, action, actor, at, payload FROM acts WHERE class = $1 AND object = ANY($2) ORDER BY id", [BUG_CLASS, ids]);
+  const { rows: [table] } = await client.query("SELECT to_regclass('stamp_lines') IS NOT NULL AS ok");
+  const { rows: [chain] } = table?.ok ? await client.query("SELECT EXISTS (SELECT 1 FROM stamp_lines) AS held") : { rows: [] };
+  if (!chain?.held) return { byPost: bugHistoryOf(acts, []), unavailable: NO_CHAIN };
+  const { rows: lines } = await client.query("SELECT canonical FROM stamp_lines WHERE canonical LIKE $1 ORDER BY seq", [STAGE_LINES_LIKE]);
+  return { byPost: bugHistoryOf(acts, lines.map((l) => l.canonical)), unavailable: null };
+}
+
 /**
  * `town { read: "posts", args: { class, post? } }`.
  * @param {{ now?: number, env?: object, townClone?: string }} ctx
@@ -82,15 +111,21 @@ export async function postsAtOffice(fields = {}, { now = Date.now(), env = proce
   const cls = judgePostsClass(fields);
   const one = String(fields?.post ?? "").trim();
   let rows;
+  let history = null;
   try {
-    rows = await officeRead((client) => postRowsOf(client, cls, now), { env });
+    ({ rows, history } = await officeRead(async (client) => {
+      const rows = await postRowsOf(client, cls, now);
+      if (cls !== BUG_CLASS) return { rows, history: null };
+      const ids = rows.map((r) => r.id).filter((id) => !one || id === one);
+      return { rows, history: await bugHistoryVia(client, ids) };
+    }, { env }));
   } catch (e) {
     if (e && typeof e.code === "number" && typeof e.defect === "string") throw e;
     throw refuse(503, "the posts live in the office's record, and the record cannot be read",
       "nothing is wrong with your call — ask again shortly", { cause: String(e?.message ?? e).slice(0, 160) });
   }
   let posts;
-  let unavailable = null;
+  let unavailable = history?.unavailable ?? null;
   if (cls === QUEST_CLASS) {
     const registry = questRegistryAtOffice(townClone);
     if (!registry) unavailable = "the quest registry could not be read, so each quest's terms are null";
@@ -101,7 +136,8 @@ export async function postsAtOffice(fields = {}, { now = Date.now(), env = proce
       return { ...plain(r), fields: { quest: f.quest ?? null }, terms: questTerms(entry) };
     }).sort((a, b) => (order.get(a.fields.quest) ?? Infinity) - (order.get(b.fields.quest) ?? Infinity) || a.id.localeCompare(b.id));
   } else if (cls === BUG_CLASS) {
-    posts = [...rows].sort(postOrder).map((r) => ({ ...plain(r), fields: { ...(r[FIELDS] ?? {}) } }));
+    posts = [...rows].sort(postOrder).map((r) => ({ ...plain(r), fields: { ...(r[FIELDS] ?? {}) },
+      history: history.byPost.get(r.id) ?? [] }));
   } else {
     posts = [...rows].sort(postOrder).map(plain);
   }

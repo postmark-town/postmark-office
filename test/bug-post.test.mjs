@@ -29,6 +29,11 @@
 //      the stage on the town's own repos; the post keeps one per stage in
 //      fields.links, refused by name off the town's repos, and the rebuild
 //      folds it.
+//  11. (POS-547, Darko 2026-10-09) the bug read carries `history`: one row per
+//      stage act, { stage, at, hand, credit, link, stamps_paid }, with
+//      stamps_paid joined from the store's stamp_lines, null where no line
+//      stands; a store with no chain says so rather than calling every stage
+//      unpaid.
 //
 // ⚑ THE STORE IS A JS STUB (`acts-pen-stub.mjs`), as in quest-posts.test.mjs:
 // this proves which acts and rows the pen writes and what the reads make of
@@ -66,6 +71,10 @@ const ROLL = new Set(["wright", "keemin", "errant", "ada", "finn"]);
 // ── the posts table, in memory, answering exactly the queries asked ─────────
 function bugTables() {
   const posts = new Map();
+  // the store's stamp_lines (066): canonical lines in ledger order, or null for
+  // a store that has no such table yet
+  const ledger = { lines: [] };
+  const like = (pat) => new RegExp(`^${pat.split("%").map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`, "s");
   const PC = ["id", "class", "title", "body", "author", "household", "place_mark", "place_x", "place_y",
     "starts", "ends", "state", "fields", "revised", "posted_act", "last_act"];
   const asJson = (v) => (typeof v === "string" ? JSON.parse(v) : v);
@@ -102,8 +111,18 @@ function bugTables() {
     [/^SELECT post, handle, state FROM responses WHERE post = ANY\(\$1\) ORDER BY post, handle$/i, () => ({ rows: [], rowCount: 0 })],
     [/^SELECT \* FROM posts WHERE class = \$1 ORDER BY id$/i, (q, p) => { const rows = byClass(p[0]); return { rows, rowCount: rows.length }; }],
     [/^SELECT \* FROM responses WHERE kind = \$1 ORDER BY post, handle$/i, () => ({ rows: [], rowCount: 0 })],
+    [/^SELECT to_regclass\('stamp_lines'\) IS NOT NULL AS ok$/i, () => ({ rows: [{ ok: ledger.lines !== null }], rowCount: 1 })],
+    [/^SELECT EXISTS \(SELECT 1 FROM stamp_lines\) AS held$/i, () => {
+      if (ledger.lines === null) throw new Error('relation "stamp_lines" does not exist');
+      return { rows: [{ held: ledger.lines.length > 0 }], rowCount: 1 };
+    }],
+    [/^SELECT canonical FROM stamp_lines WHERE canonical LIKE \$1 ORDER BY seq$/i, (q, p) => {
+      if (ledger.lines === null) throw new Error('relation "stamp_lines" does not exist');
+      const rows = ledger.lines.filter((l) => like(p[0]).test(l)).map((canonical) => ({ canonical }));
+      return { rows, rowCount: rows.length };
+    }],
   ];
-  return { posts, also };
+  return { posts, also, ledger };
 }
 
 function setup() {
@@ -553,4 +572,81 @@ test("10 · a link off the town's repos, empty, too long, or not text is refused
   assert.equal(JSON.stringify(posts.get(ID)), had);
   await advanceAtTown({ post: ID, to: "confirmed" }, WRIGHT, { now: NOW, roll: ROLL });
   assert.equal(posts.get(ID).fields.links, undefined, "an advance without a link sets no links");
+});
+
+// ── 11 · the history: who did each stage, and what it paid (POS-547, Darko 2026-10-09) ──
+
+const { stagePaidOf } = await import("../src/bugs.mjs");
+const { NO_CHAIN } = await import("../src/town-posts.mjs");
+const stageLine = (handle, n, post, stage) => `- 2026-10-09 · MINT → ${handle} · ${n} · for: post:${post}/${stage} · by: the-town`;
+const FIX_PR = "https://github.com/postmark-town/postmark-office/pull/462";
+
+/** A bug put up for ada by wright's hand, then confirmed, reproduced by finn, and fixed by errant with a critter. */
+async function throughFixed() {
+  await postAtTown({ ...BUG, for: "ada" }, WRIGHT, { now: NOW, roll: ROLL });
+  const id = "ada/the-door-sticks";
+  await amendAtTown({ post: id, steps: "Twice." }, WRIGHT, { now: NOW, roll: ROLL });
+  await advanceAtTown({ post: id, to: "confirmed" }, WRIGHT, { now: NOW, roll: ROLL });
+  await advanceAtTown({ post: id, to: "reproduced", credit: "finn" }, WRIGHT, { now: NOW, roll: ROLL });
+  await advanceAtTown({ post: id, to: "fixed", credit: "errant", size: "M", critter: "Hinge Nibbler", link: FIX_PR }, WRIGHT, { now: NOW, roll: ROLL });
+  return id;
+}
+
+test("11 · the bug read carries history: the post and each advance, in order, with their credits, hands and links; stamps_paid from the ledger's line, null without one", async () => {
+  const { ledger } = setup();
+  const id = await throughFixed();
+  await postAtTown(BUG, ERRANT, { now: NOW, roll: ROLL });   // a second bug, with only its post
+  ledger.lines = [
+    "- 2026-10-01 · MINT → wright · 5 · for: welcome:the-harbor · by: the-town",         // not a stage line
+    stageLine("ada", 2, id, "confirmed"),
+    stageLine("errant", 25, id, "fixed"),
+    stageLine("finn", 3, "errant/the-door-sticks", "reproduced"),                          // another post's stage
+  ];
+
+  const one = (await postsAtOffice({ class: "bug", post: id }, { now: NOW, roll: ROLL })).post;
+  assert.deepEqual(one.history.map(({ at, ...r }) => r), [
+    { stage: "reported", hand: "wright", credit: "ada", link: null, stamps_paid: null },
+    { stage: "confirmed", hand: "wright", credit: "ada", link: null, stamps_paid: 2 },
+    { stage: "reproduced", hand: "wright", credit: "finn", link: null, stamps_paid: null },
+    { stage: "fixed", hand: "wright", credit: "errant", link: FIX_PR, stamps_paid: 25 },
+  ], "four stage rows (the amend moves no stage), the reproduced line not yet written");
+  for (const r of one.history) assert.equal(new Date(r.at).toISOString(), r.at, "at is an ISO instant");
+
+  // the list carries the same history on every row
+  const r = await postsAtOffice({ class: "bug" }, { now: NOW, roll: ROLL });
+  assert.equal(r.unavailable, undefined, "a store with a chain says nothing is missing");
+  assert.deepEqual(r.posts.find((p) => p.id === id).history, one.history);
+  assert.deepEqual(r.posts.find((p) => p.id === ID).history.map(({ at, ...x }) => x),
+    [{ stage: "reported", hand: null, credit: "errant", link: null, stamps_paid: null }],
+    "a bug posted by its reporter has no hand, and another post's line is not its");
+});
+
+test("11 · a store with no stamp chain, or no stamp_lines at all, still answers history, with stamps_paid null and unavailable saying why", async () => {
+  const { ledger } = setup();
+  const id = await throughFixed();
+  for (const lines of [[], null]) {
+    ledger.lines = lines;
+    const r = await postsAtOffice({ class: "bug" }, { now: NOW, roll: ROLL });
+    assert.equal(r.unavailable, NO_CHAIN);
+    const h = r.posts.find((p) => p.id === id).history;
+    assert.deepEqual(h.map((x) => [x.stage, x.credit, x.stamps_paid]),
+      [["reported", "ada", null], ["confirmed", "ada", null], ["reproduced", "finn", null], ["fixed", "errant", null]]);
+  }
+});
+
+test("11 · the stage line is read in the town's own grammar: its stageMintLine parses, and nothing else does", async (t) => {
+  const { existsSync } = await import("node:fs");
+  const { resolve } = await import("node:path");
+  const { pathToFileURL } = await import("node:url");
+  const tool = resolve(process.env.TOWN_CLONE ?? "town-clone", "tools", "stamp-mint.mjs");
+  assert.deepEqual(stagePaidOf(stageLine("finn", 10, "errant/the-door-sticks", "briefed")),
+    { handle: "finn", n: 10, post: "errant/the-door-sticks", stage: "briefed" });
+  for (const not of [stageLine("finn", 10, "errant/the-door-sticks", "shipped"), "- 2026-10-09 · MINT → finn · 5 · for: welcome:x · by: the-town",
+    `${stageLine("finn", 10, "errant/the-door-sticks", "briefed")} · sig: abc`, ""])
+    assert.equal(stagePaidOf(not), null, not);
+  if (!existsSync(tool)) return t.skip(`no town clone at ${tool} (TOWN_CLONE names one)`);
+  const { stageMintLine } = await import(pathToFileURL(tool).href);
+  if (typeof stageMintLine !== "function") return t.skip("this town's stamp-mint.mjs has no stageMintLine");
+  const line = stageMintLine({ date: "2026-10-09", handle: "wildcat", n: 25, post: "wildcat/leave-mark-preview", stage: "fixed" });
+  assert.deepEqual(stagePaidOf(line), { handle: "wildcat", n: 25, post: "wildcat/leave-mark-preview", stage: "fixed" });
 });
