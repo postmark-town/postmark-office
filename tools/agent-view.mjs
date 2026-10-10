@@ -1,7 +1,11 @@
 #!/usr/bin/env node
 // agent-view.mjs — WHAT THE AGENT SEES, offline: the bug lifecycle, step by step.
 //
-//   node tools/agent-view.mjs --out <file.html>
+//   node tools/agent-view.mjs --out <file.html>                  the bug's
+//   node tools/agent-view.mjs --class idea --out <file.html>     the idea's (POS-290)
+//
+// The idea's page is drawn with IDEA_POSTS on, the office the pilot runs on;
+// the office reads its cards at load, so one run draws one class.
 //
 // Keemin, 2026-09-28 (the Posts project, § Acceptance for phase 2): "I really
 // want to make sure we uphold a high bar when it comes to context engineering
@@ -46,6 +50,8 @@ const KEY = (h) => ({ household: h, handles: new Set([h]) });
 const WRIGHT = KEY("wright");
 const ERRANT = KEY("errant");
 const FINN = KEY("finn");
+const KEEMIN = KEY("keemin");
+const ARCHITECT = KEY("architect");
 
 const BUG = { class: "bug", title: "The door sticks", body: "The front door of the post office does not open on the second try: it opens once, then sticks until the next crossing." };
 const ID = "errant/the-door-sticks";
@@ -86,6 +92,39 @@ export const STEPS = [
   { kind: "step", title: "Read the bug posts", who: null, env: { read: "posts", args: { class: "bug" } } },
 ];
 
+// ── THE IDEA'S STEPS (POS-290), drawn with IDEA_POSTS on ─────────────────────
+const IDEA = { class: "idea", title: "A lantern on the quay", body: "The quay is dark after the evening ferry. A lantern at the gangway would let late residents find the boat." };
+const IDEA_ID = "errant/a-lantern-on-the-quay";
+const DISCUSSION = "https://github.com/postmark-town/postmark-blueprints/discussions/12";
+export const IDEA_STEPS = [
+  { kind: "step", title: "Read the post card", who: ERRANT, env: { read: "post" }, note: "With IDEA_POSTS on, the card says an idea is a post." },
+  { kind: "step", title: "Post an idea as yourself", who: ERRANT, env: { do: "post", args: IDEA } },
+  { kind: "step", title: "Post one with the old card: slug and body", who: FINN, env: { do: "post", args: { class: "idea", slug: "ferry-bell", body: "Ring a bell: the ferry should announce itself as it docks." } }, note: "An agent that learned the mark-era card still posts; the title is the claim's first clause." },
+  { kind: "refusal", title: "Give it a place (the mark road's at)", who: ERRANT, env: { do: "post", args: { ...IDEA, title: "Somewhere", at: { x: 10, y: 4 } } } },
+  { kind: "refusal", title: "Stake on it as it is posted", who: ERRANT, env: { do: "post", args: { ...IDEA, title: "Staked", stamps: 2 } } },
+  { kind: "refusal", title: "A body over 600 characters", who: ERRANT, env: { do: "post", args: { ...IDEA, title: "Long", body: "x".repeat(601) } } },
+  { kind: "step", title: "A hand posts on a resident's behalf", who: WRIGHT, env: { do: "post", args: { class: "idea", title: "Benches by the board", body: "Somewhere to sit while reading the bulletin.", for: "ada" } } },
+  { kind: "step", title: "The author amends it", who: ERRANT, env: { do: "amend", args: { post: IDEA_ID, body: "The quay is dark after the evening ferry. A lantern at the gangway, and a hook to hang it on." } } },
+  { kind: "refusal", title: "A resident who is not a hand moves it", who: FINN, env: { do: "advance", args: { post: IDEA_ID, to: "building" } } },
+  { kind: "step", title: "A hand moves it into conversation, pointing at its Discussion", who: KEEMIN, env: { do: "advance", args: { post: IDEA_ID, to: "in-conversation", link: DISCUSSION, note: "Opened the Discussion." } } },
+  { kind: "step", title: "A resident signs up to build a part", who: FINN, env: { do: "sign-up", args: { post: IDEA_ID, piece: "the lantern post and its hook", note: "I have the iron." } } },
+  { kind: "step", title: "Another signs up, then withdraws", who: KEY("ada"), env: { do: "sign-up", args: { post: IDEA_ID, piece: "the wick" } } },
+  { kind: "step", title: "The withdrawal", who: KEY("ada"), env: { do: "sign-up", args: { post: IDEA_ID, withdraw: true } } },
+  { kind: "refusal", title: "A resident answers a sign-up", who: ERRANT, env: { do: "answer-sign-up", args: { post: IDEA_ID, resident: "finn", answer: "accepted" } } },
+  { kind: "step", title: "A hand accepts the sign-up", who: ARCHITECT, env: { do: "answer-sign-up", args: { post: IDEA_ID, resident: "finn", answer: "accepted", note: "Go ahead." } } },
+  { kind: "step", title: "A hand moves it to building, crediting the builder", who: WRIGHT, env: { do: "advance", args: { post: IDEA_ID, to: "building", credit: "finn" } }, note: "Any named stage, in any order: it skipped ruled-in, and nothing gates that." },
+  { kind: "refusal", title: "The Architect awards stamps", who: ARCHITECT, env: { do: "award", args: { post: IDEA_ID, to: "finn", stamps: 25, label: "the-lantern" } }, note: "An award moves money: wright or keemin only." },
+  { kind: "refusal", title: "An award labelled as a bug's stage", who: WRIGHT, env: { do: "award", args: { post: IDEA_ID, to: "finn", stamps: 25, label: "fixed" } } },
+  { kind: "refusal", title: "An award over 200 stamps", who: WRIGHT, env: { do: "award", args: { post: IDEA_ID, to: "finn", stamps: 500, label: "the-lantern" } } },
+  { kind: "step", title: "Wright awards the builder", who: WRIGHT, env: { do: "award", args: { post: IDEA_ID, to: "finn", stamps: 25, label: "the-lantern", note: "Built and hung." } }, note: "It records the stamps owed and moves none; the reviewed award pass writes the town's line." },
+  { kind: "refusal", title: "The same label again", who: KEEMIN, env: { do: "award", args: { post: IDEA_ID, to: "finn", stamps: 5, label: "the-lantern" } } },
+  { kind: "step", title: "A hand ships it", who: WRIGHT, env: { do: "advance", args: { post: IDEA_ID, to: "shipped", link: "https://github.com/postmark-town/postmark-office/releases/tag/release/2026-w43" } } },
+  { kind: "refusal", title: "Move a finished idea", who: WRIGHT, env: { do: "advance", args: { post: IDEA_ID, to: "building" } } },
+  { kind: "refusal", title: "Close an idea", who: WRIGHT, env: { do: "close", args: { post: IDEA_ID } } },
+  { kind: "step", title: "Read the idea posts", who: null, env: { read: "posts", args: { class: "idea" } } },
+  { kind: "step", title: "Read the Think Tank: the marks, and the posts beside them", who: null, env: { read: "ideas" } },
+];
+
 // ── the posts table, in memory (the suites' shape: test/bug-post.test.mjs) ──
 function postsTable() {
   const posts = new Map();
@@ -94,18 +133,28 @@ function postsTable() {
   const asJson = (v) => (typeof v === "string" ? JSON.parse(v) : v);
   const copy = (r) => ({ ...r, fields: { ...r.fields } });
   const byClass = (cls) => [...posts.values()].filter((r) => r.class === cls).sort((a, b) => a.id.localeCompare(b.id)).map(copy);
+  const responses = new Map();
+  const rsorted = () => [...responses.values()].sort((a, b) => a.post.localeCompare(b.post) || a.handle.localeCompare(b.handle));
   return [
     [/^INSERT INTO posts/i, (q, p) => { const r = Object.fromEntries(PC.map((k, i) => [k, p[i]])); r.fields = asJson(r.fields); posts.set(p[0], r); return { rows: [], rowCount: 1 }; }],
     [/^UPDATE posts SET/i, (q, p) => { Object.assign(posts.get(p[0]), { title: p[1], body: p[2], state: p[8], fields: asJson(p[9]), revised: p[10], last_act: p[11] }); return { rows: [], rowCount: 1 }; }],
     [/FROM posts WHERE id = \$1 AND class = \$2$/i, (q, p) => { const r = posts.get(p[0]); const hit = r && r.class === p[1]; return { rows: hit ? [copy(r)] : [], rowCount: hit ? 1 : 0 }; }],
     [/^SELECT id, state, ends FROM posts WHERE id LIKE \$1$/i, (q, p) => { const pre = p[0].replace(/%$/, ""); const rows = [...posts.values()].filter((r) => r.id.startsWith(pre)); return { rows, rowCount: rows.length }; }],
     [/^SELECT id, class, title, author, household, starts, ends, fields, state, last_act FROM posts WHERE class = \$1 ORDER BY id$/i, (q, p) => { const rows = byClass(p[0]); return { rows, rowCount: rows.length }; }],
-    [/^SELECT post, handle, state FROM responses WHERE post = ANY\(\$1\) ORDER BY post, handle$/i, () => ({ rows: [], rowCount: 0 })],
-    // the bug read's history (POS-547) joins the store's stamp chain; here the chain
-    // holds no stage line yet, as it stands in the minutes before the tick pays
+    [/^SELECT id FROM posts WHERE id LIKE \$1$/i, (q, p) => { const pre = p[0].replace(/%$/, ""); const rows = [...posts.keys()].filter((id) => id.startsWith(pre)).map((id) => ({ id })); return { rows, rowCount: rows.length }; }],
+    [/^SELECT id, body FROM posts WHERE id = ANY\(\$1\) AND class = \$2$/i, (q, p) => { const rows = [...posts.values()].filter((r) => p[0].includes(r.id) && r.class === p[1]).map((r) => ({ id: r.id, body: r.body })); return { rows, rowCount: rows.length }; }],
+    // the responses (an idea's sign-ups, POS-290)
+    [/^INSERT INTO responses/i, (q, p) => { responses.set(`${p[0]} ${p[1]} ${p[3]}`, { post: p[0], handle: p[1], household: p[2], kind: p[3], state: p[4], fields: asJson(p[5]), act: p[6] }); return { rows: [], rowCount: 1 }; }],
+    [/^SELECT post, handle, household, kind, state, fields, act FROM responses WHERE post = \$1 AND handle = \$2 AND kind = \$3$/i, (q, p) => { const r = responses.get(`${p[0]} ${p[1]} ${p[2]}`); return { rows: r ? [{ ...r, fields: { ...r.fields } }] : [], rowCount: r ? 1 : 0 }; }],
+    [/^SELECT post, handle, state FROM responses WHERE post = ANY\(\$1\) ORDER BY post, handle$/i, (q, p) => { const rows = rsorted().filter((r) => p[0].includes(r.post)).map(({ post, handle, state }) => ({ post, handle, state })); return { rows, rowCount: rows.length }; }],
+    [/^SELECT post, handle, kind, state, fields FROM responses WHERE post = ANY\(\$1\) AND kind = ANY\(\$2\) ORDER BY post, handle$/i, (q, p) => { const rows = rsorted().filter((r) => p[0].includes(r.post) && p[1].includes(r.kind)).map(({ post, handle, kind, state, fields }) => ({ post, handle, kind, state, fields: { ...fields } })); return { rows, rowCount: rows.length }; }],
+    // the history (POS-547, every class since POS-290) joins the store's stamp chain,
+    // read as a delta; here the chain holds one line and no post line yet, as it
+    // stands in the minutes before anything pays
     [/^SELECT to_regclass\('stamp_lines'\) IS NOT NULL AS ok$/i, () => ({ rows: [{ ok: true }], rowCount: 1 })],
-    [/^SELECT EXISTS \(SELECT 1 FROM stamp_lines\) AS held$/i, () => ({ rows: [{ held: true }], rowCount: 1 })],
-    [/^SELECT canonical FROM stamp_lines WHERE canonical LIKE \$1 ORDER BY seq$/i, () => ({ rows: [], rowCount: 0 })],
+    [/^SELECT seq, seal FROM stamp_lines ORDER BY seq DESC LIMIT 1$/i, () => ({ rows: [{ seq: 1, seal: "0".repeat(64) }], rowCount: 1 })],
+    [/^SELECT seal FROM stamp_lines WHERE seq = \$1$/i, () => ({ rows: [{ seal: "0".repeat(64) }], rowCount: 1 })],
+    [/^SELECT seq, canonical FROM stamp_lines WHERE seq > \$1 AND seq <= \$2 AND canonical LIKE \$3 ORDER BY seq$/i, () => ({ rows: [], rowCount: 0 })],
   ];
 }
 
@@ -114,9 +163,11 @@ const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replac
 const pretty = (v) => esc(JSON.stringify(v, (k, x) => (x instanceof Set ? [...x] : x), 2));
 
 /** Drive every step through the office's own dispatcher. Returns the page's data. */
-export async function collect() {
+export async function collect({ cls = "bug" } = {}) {
   // The office, pointed at the in-memory record, with the apex on; the clock pinned.
   Object.assign(process.env, { WORLD2_PG: "1", WORLD2_PG_URL: "postgres://agent-view-stub/none", WORLD_APEX: "1" });
+  // The idea's page is the office with the class open (POS-290); the cards are read at load.
+  if (cls === "idea") process.env.IDEA_POSTS = "1";
   Date.now = () => PINNED_NOW;
   const { installActsPen, uninstallActsPen } = await import(pathToFileURL(resolve(ROOT, "test", "acts-pen-stub.mjs")).href);
   const { callTool, toolList, TOOLS } = await import("../src/mcp.mjs");
@@ -129,21 +180,22 @@ export async function collect() {
   const { DatabaseSync } = await import("node:sqlite");
   const db = new DatabaseSync(":memory:");
   db.exec("CREATE TABLE residents (handle TEXT PRIMARY KEY, json TEXT)");
-  for (const h of ["wright", "keemin", "errant", "ada", "finn"]) db.prepare("INSERT INTO residents VALUES (?, ?)").run(h, JSON.stringify({ display: h }));
+  for (const h of ["wright", "keemin", "architect", "errant", "ada", "finn"]) db.prepare("INSERT INTO residents VALUES (?, ?)").run(h, JSON.stringify({ display: h }));
   try {
     const town = toolList().find((t) => t.name === "town");
     const flat = (name) => TOOLS.find((t) => t.name === name) ?? null;
     const out = [];
-    for (const s of STEPS) {
+    for (const s of cls === "idea" ? IDEA_STEPS : STEPS) {
       const answer = await callTool("town", s.env, { key: s.who, clone: null, db });
       const verb = s.env.do ? townDispatchToolFor(s.env.do) : TOWN_READS[s.env.read]?.tool ?? townDispatchToolFor(s.env.read);
       const status = answer?.error === "bounce" ? (answer.code ?? 422) : 200;
       out.push({ ...s, who: s.who ? [...s.who.handles][0] : null, answer, verb, flat: flat(verb), status, bytes: bytes(answer),
         refused: answer?.error === "bounce" });
     }
+    if (cls === "idea") return { town, steps: out, plan: null, acts: pen.rows().length, cls };
     const facts = await storeFacts();
     const rows = planStages({ acts: facts.acts, houseOf: (h) => facts.houses.get(h) ?? null, isMeep: () => false, paid: new Set() });
-    return { town, steps: out, plan: renderPlan(rows), acts: pen.rows().length };
+    return { town, steps: out, plan: renderPlan(rows), acts: pen.rows().length, cls };
   } finally { uninstallActsPen(); }
 }
 
@@ -168,7 +220,7 @@ function fieldsTable(card) {
 }
 
 /** The page, self-contained: no script, no font, no request. */
-export function render({ town, steps, plan, acts }, { commit = commitOf() } = {}) {
+export function render({ town, steps, plan, acts, cls = "bug" }, { commit = commitOf() } = {}) {
   const meter = (n) => {
     const pct = Math.min(100, Math.round((n / FOYER_BOUND) * 100));
     return `<span class="bytes ${n > FOYER_BOUND ? "over" : ""}">${n.toLocaleString("en-US")} B · ${pct}% of the foyer's ${FOYER_BOUND.toLocaleString("en-US")} B</span><span class="bar"><i style="width:${pct}%"></i></span>`;
@@ -191,7 +243,7 @@ ${s.flat ? `<details><summary>the flat verb <code>${esc(s.flat.name)}</code>'s d
   }).join("\n");
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>What the agent sees: bugs</title>
+<title>What the agent sees: ${cls === "idea" ? "ideas" : "bugs"}</title>
 <style>
 :root { --bg:#fbfaf7; --ink:#1d1b16; --soft:#6b6558; --line:#e3ded2; --no:#9c2f1f; --nobg:#fbeeea; --ok:#2f6b3a; --bar:#c9c1ad; --link:#1f4f8a; }
 @media (prefers-color-scheme: dark) { :root { --bg:#16140f; --ink:#ece7da; --soft:#a39b88; --line:#332f26; --no:#f0947f; --nobg:#2c1a15; --ok:#8fcf99; --bar:#4a4436; --link:#9cc3f0; } }
@@ -209,7 +261,7 @@ table { border-collapse:collapse; width:100%; font-size:13px; } td, th { border-
 ol.toc { columns:2; font-size:13.5px; } ol.toc li.k-refusal a { color:var(--no); } em { color:var(--no); font-style:normal; font-size:12px; }
 @media (max-width:640px) { ol.toc { columns:1; } }
 </style></head><body>
-<h1>What the agent sees: the bug lifecycle</h1>
+<h1>What the agent sees: the ${cls === "idea" ? "idea" : "bug"} lifecycle</h1>${cls === "idea" ? `<p class="meta">Drawn with <code>IDEA_POSTS=1</code>. With the switch off, an idea is still a Think Tank mark and none of these acts open.</p>` : ""}
 <p class="meta">Generated offline from postmark-office at <code>${esc(commit)}</code>, by <code>node tools/agent-view.mjs</code>. Every answer is the office's own dispatcher (<code>callTool("town", …)</code>, which the MCP door and <code>POST /town/apex</code> both call) over an in-memory record; the clock is pinned to ${new Date(PINNED_NOW).toISOString()}. ${acts} acts were written.</p>
 <h2>The MCP tool: <code>${esc(town?.name ?? "town")}</code></h2>
 <p class="meta">This is what the agent holds in its tool list for every call below (${bytes(town?.description ?? "").toLocaleString("en-US")} B of description, ${bytes(town?.inputSchema ?? {}).toLocaleString("en-US")} B of schema).</p>
@@ -217,18 +269,21 @@ ol.toc { columns:2; font-size:13.5px; } ol.toc li.k-refusal a { color:var(--no);
 <details><summary>the input schema</summary><pre>${pretty(town?.inputSchema ?? {})}</pre></details>
 <h2>The steps</h2><ol class="toc">${toc}</ol>
 ${sections}
-<section><h2>The reviewed pass: the stage plan these acts produce</h2>
+${plan == null ? "" : `<section><h2>The reviewed pass: the stage plan these acts produce</h2>
 <p class="note">The advances mint nothing. <code>node tools/bug-stage-plan.mjs --town &lt;clone&gt;</code> prints this; Wright reads it, then runs it with <code>--apply</code>. The meep law and "already paid" come from the town's ledger, which this offline page does not read, so here nobody is a meep and nothing is paid yet.</p>
-<pre>${esc(plan)}</pre></section>
+<pre>${esc(plan)}</pre></section>`}
 </body></html>
 `;
 }
 
 export async function main(argv = process.argv.slice(2)) {
   const i = argv.indexOf("--out");
+  const c = argv.indexOf("--class");
+  const cls = c === -1 ? "bug" : argv[c + 1];
+  if (!["bug", "idea"].includes(cls)) { console.error("agent-view: --class is bug or idea"); return 2; }
   const out = i === -1 ? null : argv[i + 1];
   if (!out) { console.error("agent-view: --out <file.html> is required (the page is written there and nowhere else)"); return 2; }
-  const data = await collect();
+  const data = await collect({ cls });
   const html = render(data);
   mkdirSync(dirname(resolve(out)), { recursive: true });
   writeFileSync(out, html);

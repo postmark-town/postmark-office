@@ -188,7 +188,8 @@ export function meepLawOf(engine, entries, date) {
 // The page names the household a payment will be in ("for <household name>"),
 // so it must ask the same function the watchers do. The meep law is the town's
 // own, read from its ledger through its own checker, cached on the ledger's
-// stamp (the ledger is ~3 MB; /me is asked on every signed-in page).
+// stamp (the ledger is ~3 MB; /me is asked on every signed-in page). The idea's
+// award act asks it too (idea-store.mjs § awardAtTown, POS-290): a meep never receives stamps.
 let meepCache = null;
 export async function meepLawAtOffice(clone) {
   const { existsSync, readFileSync: rf } = await import("node:fs");
