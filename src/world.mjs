@@ -1079,6 +1079,21 @@ const EARSHOT_PRESENCE_CAP = 500;
  * live pen does not write would prove the renderer equal to a store nobody
  * runs". A falsifier that builds its acts with the live builder cannot drift
  * from the live builder. Nothing else imports it. */
+// ── GROUND BEHIND THE WALL (POS-468 B) ────────────────────────────────────────
+// The first point of `points` that stands behind the wall this crossing, as
+// {x, y}, or null: no Mists, a clone that predates them, or all of it clear.
+// The placement door and the portal spawn ask it.
+export async function mistsWallOn(worldClone, skeleton, points, crossing) {
+  if (!skeleton?.mists || !Array.isArray(points) || !points.length) return null;
+  let eng;
+  try { eng = await import(pathToFileURL(join(worldClone, "tools", "world-engine.mjs"))); } catch { return null; }
+  if (typeof eng.mistsAt !== "function" || typeof eng.mistsHere !== "function") return null;
+  const m = eng.mistsAt(crossing, skeleton.mists);
+  if (!m) return null;
+  const p = points.find((q) => Number.isFinite(q?.x) && Number.isFinite(q?.y) && eng.mistsHere(q, m).inWall);
+  return p ? { x: Math.round(p.x), y: Math.round(p.y) } : null;
+}
+
 // ── THE MISTS ON A ROAD (POS-468) ────────────────────────────────────────────
 // The world's engine owns the reading (tools/world-engine.mjs § mistsRoad); the
 // office only asks it, from the same clone it walks by, and a clone without it
@@ -3823,6 +3838,23 @@ export async function leaveMarkViaOffice(worldClone, payload = {}, key = null, {
           kind === "parcel"
             ? `a parcel's box is the town's ${claim.extent.w}×${claim.extent.h} centred on your at — an outline must fill exactly that box, or leave points off`
             : "send the outline alone; the town derives at/extent from it");
+    }
+    // ── NO NEW GROUND BEHIND THE MISTS (POS-468 B, Wright's go 2026-10-09) ──
+    // From the Mists' first crossing, a mark may not be placed, nor moved by
+    // its amend, onto ground behind the wall: the wall hides everything behind
+    // it, and a mark there would be a way to stand something where no one can
+    // see or reach. Its whole ground is asked (its outline, else its box). Marks
+    // already standing are not touched by this; only a write that would put
+    // ground behind the wall is refused. No Mists, or a clone without them: no
+    // check at all.
+    {
+      const box = kind === "parcel" ? (await parcelDial()) : extent;
+      const hw = (Number(box?.w) || 0) / 2, hh = (Number(box?.h) || 0) / 2;
+      const ground = ringOf(points) ? ringOf(points)
+        : [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]].map(([dx, dy]) => ({ x: Number(at.x) + dx, y: Number(at.y) + dy }));
+      const wall = await mistsWallOn(worldClone, (await world())?._raw?.skeleton, ground, currentCrossing());
+      if (wall) throw bounce(422, "this ground stands behind the wall of the Mists",
+        `a mark may not be placed or moved behind the wall while the Mists stand: its ground reaches (${wall.x}, ${wall.y}), which no one can see or reach. Choose ground on the clear side of the wall; marks already standing stay as they are.`);
     }
   } else {
     if (at !== undefined || extent !== undefined) throw bounce(422, `${kind} marks carry no at/extent`, "they take their locus from the mark they describe");
