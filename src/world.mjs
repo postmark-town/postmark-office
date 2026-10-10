@@ -5358,7 +5358,10 @@ export async function walkViaOffice(worldClone, payload = {}, key = null) {
     arrives_at: arrivesAt(at, result.position.remainingM, result.pace > 0 ? result.pace : WALK_KM_PER_CROSSING),
     // ABSENT unless the Mists slowed this road, so every other answer is the one it was
     ...(mistFactor ? { mists: { factor: mistFactor, deepest: +mistRoad.deepest.toFixed(3), stride_km: result.pace,
-      note: "your road runs into the Mists' fringe, and the deeper a road goes the slower it walks, to nothing at the wall: this leg walks at the stride above the whole way" } } : {}),
+      ...(mistRoad.walk_out ? { walk_out: true } : {}),
+      note: mistRoad.walk_out
+        ? "the wall of the Mists had overtaken you: this road leads straight out, and you walk it slowly, at the stride above the whole way"
+        : "your road runs into the Mists' fringe, and the deeper a road goes the slower it walks, to nothing at the wall: this leg walks at the stride above the whole way" } } : {}),
     standing: result.position.standing,
     position: result.position,
     // Provenance in every position sentence (v2.2 §B): walked, carried, or

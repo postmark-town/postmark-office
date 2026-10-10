@@ -71,3 +71,15 @@ test("against the world clone: a road into the wall is refused, a road into the 
   assert.equal(await mistsOnTheRoad(CLONE, SKELETON, from, { x: 0, y: face - 50 }, SKELETON.mists.schedule[0].crossing - 1), null, "before the Mists, nothing");
   assert.deepEqual(await mistsOnTheRoad(CLONE, SKELETON, { x: 0, y: face - 50 }, { x: 0, y: face - 50 }, last), { factor: 1, deepest: 0 }, "a stop is never refused, wherever it stands");
 });
+
+test("the walk out at the door: a walker the wall overtook may walk straight out, slowly; deeper is refused in today's words", { skip: !HAS_ROAD && WHY_NOT }, async () => {
+  const first = SKELETON.mists.schedule[0].crossing;
+  const eng = await import(`file:///${ENGINE.replace(/\\/g, "/")}`);
+  const caught = { x: 0, y: eng.mistsAt(first, SKELETON.mists).clear.minY - 100 };
+  const out = await mistsOnTheRoad(CLONE, SKELETON, caught, { x: 0, y: 0 }, first);
+  assert.ok(out && !out.refused && out.walk_out && out.factor < 1, "toward the Origin: allowed, slow");
+  const deeper = await mistsOnTheRoad(CLONE, SKELETON, caught, { x: 0, y: caught.y - 300 }, first);
+  assert.ok(deeper?.refused, "deeper: refused");
+  assert.equal(mistsRefusal(bounce, deeper.refused).defect, "the mist is too thick to walk into");
+  assert.ok(SOURCE.includes("the wall of the Mists had overtaken you"), "the answer says so");
+});
