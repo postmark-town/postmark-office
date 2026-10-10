@@ -3839,23 +3839,6 @@ export async function leaveMarkViaOffice(worldClone, payload = {}, key = null, {
             ? `a parcel's box is the town's ${claim.extent.w}×${claim.extent.h} centred on your at — an outline must fill exactly that box, or leave points off`
             : "send the outline alone; the town derives at/extent from it");
     }
-    // ── NO NEW GROUND BEHIND THE MISTS (POS-468 B, Wright's go 2026-10-09) ──
-    // From the Mists' first crossing, a mark may not be placed, nor moved by
-    // its amend, onto ground behind the wall: the wall hides everything behind
-    // it, and a mark there would be a way to stand something where no one can
-    // see or reach. Its whole ground is asked (its outline, else its box). Marks
-    // already standing are not touched by this; only a write that would put
-    // ground behind the wall is refused. No Mists, or a clone without them: no
-    // check at all.
-    {
-      const box = kind === "parcel" ? (await parcelDial()) : extent;
-      const hw = (Number(box?.w) || 0) / 2, hh = (Number(box?.h) || 0) / 2;
-      const ground = ringOf(points) ? ringOf(points)
-        : [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]].map(([dx, dy]) => ({ x: Number(at.x) + dx, y: Number(at.y) + dy }));
-      const wall = await mistsWallOn(worldClone, (await world())?._raw?.skeleton, ground, currentCrossing());
-      if (wall) throw bounce(422, "this ground stands behind the wall of the Mists",
-        `a mark may not be placed or moved behind the wall while the Mists stand: its ground reaches (${wall.x}, ${wall.y}), which no one can see or reach. Choose ground on the clear side of the wall; marks already standing stay as they are.`);
-    }
   } else {
     if (at !== undefined || extent !== undefined) throw bounce(422, `${kind} marks carry no at/extent`, "they take their locus from the mark they describe");
     if (!parent_id) throw bounce(422, `a ${kind} mark needs parent_id`, "the id of the mark it describes, <by>/<slug>");
@@ -4001,6 +3984,28 @@ export async function leaveMarkViaOffice(worldClone, payload = {}, key = null, {
     // rule on it (the ground question is a canon question). The ledger move is
     // still the stake verb's; this is the declaration saying what was asked for.
     ...(payload.stamps === undefined || payload.stamps === null ? {} : { stamps: stakeLands }) };
+  // ── NO NEW GROUND BEHIND THE MISTS (POS-468 B, Wright's go 2026-10-09) ────
+  // From the Mists' first crossing, a mark may not be placed, nor moved by its
+  // amend, onto ground behind the wall: the wall hides everything behind it,
+  // and a mark there would be a way to stand something where no one can see or
+  // reach. Its whole ground is asked (its outline, else its box), here after
+  // every other judgment and before either pen writes. Marks already standing
+  // are not touched by this; only a write that would put ground behind the wall
+  // is refused. No Mists, a clone without them, or a world that will not load:
+  // no check at all.
+  if (kind === "sited" || kind === "parcel") {
+    let skeleton = null;
+    try { skeleton = (await world())?._raw?.skeleton ?? null; } catch { skeleton = null; }
+    if (skeleton?.mists) {
+      const box = kind === "parcel" ? (await parcelDial()) : extent;
+      const hw = (Number(box?.w) || 0) / 2, hh = (Number(box?.h) || 0) / 2;
+      const ground = ringOf(points) ? ringOf(points)
+        : [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]].map(([dx, dy]) => ({ x: Number(at.x) + dx, y: Number(at.y) + dy }));
+      const wall = await mistsWallOn(worldClone, skeleton, ground, currentCrossing());
+      if (wall) throw bounce(422, "this ground stands behind the wall of the Mists",
+        `a mark may not be placed or moved behind the wall while the Mists stand: its ground reaches (${wall.x}, ${wall.y}), which no one can see or reach. Choose ground on the clear side of the wall; marks already standing stay as they are.`);
+    }
+  }
   const exec = join(HERE, "leave-exec.mjs");
   let result;
   if (singleLogEnabled()) {

@@ -73,7 +73,9 @@ test("THE PLACEMENT DOOR asks the wall for a sited or parcel mark's whole ground
   const door = SOURCE.slice(SOURCE.indexOf("export async function leaveMarkViaOffice"), SOURCE.indexOf("export async function withdrawMarkViaOffice") > 0 ? SOURCE.indexOf("export async function withdrawMarkViaOffice") : undefined);
   const guard = door.indexOf("const wall = await mistsWallOn(worldClone,");
   assert.ok(guard > 0, "the placement door asks the wall");
-  assert.ok(guard > door.indexOf("RING_CLAIM_SENTENCE") && guard < door.indexOf("draftWrite("), "after the ground is settled, before anything is written");
+  assert.ok(guard > door.indexOf("RING_CLAIM_SENTENCE") && guard > door.indexOf("const clean = {"), "after every other judgment of the mark");
+  assert.ok(guard < door.indexOf("await journalLeaveMark(clean)") && guard < door.indexOf("draftWrite("), "and before either pen writes");
+  assert.ok(door.includes("try { skeleton = (await world())?._raw?.skeleton ?? null; } catch { skeleton = null; }"), "a world that will not load is no check, never a new refusal");
   assert.match(door, /this ground stands behind the wall of the Mists/);
   assert.match(door, /marks already standing stay as they are/);
 });
