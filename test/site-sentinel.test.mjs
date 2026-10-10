@@ -38,6 +38,7 @@ import {
   run,
   classifyProblems,
   classifyDisk,
+  classifyMeeps,
   diskUsage,
   readDiskState,
   MINUTE,
@@ -618,11 +619,19 @@ _ex("git", ["-C", _clone, "-c", "user.name=t", "-c", "user.email=t@t", "commit",
 // §9 fixture: the disk is read through an injected reader, so the suite's
 // verdicts never ride the disk of whatever machine runs it (CI's or the box's).
 const GREEN_DISK = () => ({ path: "/", usedPct: 62, freeBytes: 14 * 2 ** 30 });
+// §10 fixture: a real temp meeps record, written a minute before the fixed
+// clock, so the healthy tick exercises the probe and never reads the box's
+// /srv/postmark-sentinel/meeps.json. Its window is 6h IN THE FIXTURE ONLY, for
+// the same reason the watcher's is: tests that walk the clock forward must not
+// trip it; its own verdicts are pinned in §10 below.
+const _meeps = join(_wdir, "meeps.json");
+_wf(_meeps, JSON.stringify({ schema: 1, generated_at: new Date(T0 - 60_000).toISOString(), status: "OK", summary: "all 9 meeps answering; every round due in the last 3 h fired", problems: [], meeps: {} }));
 const FIXTURE_CONFIG = {
   ..._CFG,
   clones: [{ key: "town_clone", label: "the office's town clone", path: _clone }],
   watchers: [{ key: "usdc_watch", label: "the usdc-watch timer", state: _wstate, cadenceMs: 6 * 60 * 60_000 }],
   siteRefresh: { ..._CFG.siteRefresh, report: _rrep, cadenceMs: 6 * 60 * 60_000 },
+  meeps: { ..._CFG.meeps, path: _meeps, staleAfterMs: 6 * 60 * 60_000 },
 };
 // cadence is 6h IN THE FIXTURE ONLY: the LOUDLY test advances its clock ~1h to
 // exercise held-alert semantics, and the watcher must stay inside its window
@@ -1301,4 +1310,77 @@ test("ONE ROUTE: nothing the office ships to the box posts to Discord except the
   const planted = join(dir, "planted.sh");
   _wf(planted, `HOOK="\${SENTINEL_DISCORD_WEBHOOK:-}"\ncurl -d '{}' "$HOOK"\n`);
   assert.ok(POSTER.test(readFileSync(planted, "utf8")));
+});
+
+// ── §10: the meeps (POS-556, Darko 2026-10-10 13:27) ────────────────────────
+//
+// The record is the one G:/Wright-HQ/tools/meep-watch.mjs writes every five
+// minutes and lands on the box by scp. Its summary below is copied in shape
+// from that watcher's own status.json of 2026-10-10T17:32:41Z.
+
+const MEEPS_REC = (over = {}) => JSON.stringify({
+  schema: 1,
+  generated_at: new Date(T0 - 2 * MINUTE).toISOString(),
+  status: "OK",
+  summary: "all 9 meeps answering; every round due in the last 3 h fired",
+  problems: [],
+  meeps: {},
+  ...over,
+});
+const STUCK_SUMMARY = "STUCK Rei: an input in local-conv-333 at 13:06 EDT has had no reply for 26 min (summary: Thread in wright-starforge)";
+
+test("§10 OK is OK, and the watcher's summary is the reason", () => {
+  const r = classifyMeeps({ raw: MEEPS_REC(), nowMs: T0, staleAfterMs: CONFIG.meeps.staleAfterMs });
+  assert.equal(r.verdict, "OK");
+  assert.match(r.reason, /all 9 meeps answering/);
+});
+
+test("§10 DEGRADED and DOWN are DOWN, and the reason is the record's one-line summary verbatim", () => {
+  for (const status of ["DEGRADED", "DOWN"]) {
+    const r = classifyMeeps({ raw: MEEPS_REC({ status, summary: STUCK_SUMMARY, problems: [{ kind: "STUCK", meep: "Rei" }] }), nowMs: T0, staleAfterMs: CONFIG.meeps.staleAfterMs });
+    assert.equal(r.verdict, "DOWN", status);
+    assert.equal(r.reason, STUCK_SUMMARY);
+    assert.equal(r.detail.problems, 1);
+  }
+});
+
+test("§10 a 16-minute-old record is STALE: the watcher or the desktop has stopped", () => {
+  assert.equal(CONFIG.meeps.staleAfterMs, 15 * MINUTE);
+  const old = classifyMeeps({ raw: MEEPS_REC({ generated_at: new Date(T0 - 16 * MINUTE).toISOString() }), nowMs: T0, staleAfterMs: CONFIG.meeps.staleAfterMs });
+  assert.equal(old.verdict, "STALE");
+  assert.match(old.reason, /16m old/);
+  const fresh = classifyMeeps({ raw: MEEPS_REC({ generated_at: new Date(T0 - 14 * MINUTE).toISOString() }), nowMs: T0, staleAfterMs: CONFIG.meeps.staleAfterMs });
+  assert.equal(fresh.verdict, "OK", "inside the window is the record's own verdict");
+});
+
+test("§10 MISSING, UNPARSEABLE, UNDATED or an unread status is STALE, never UNKNOWN — /fleet barks only on DOWN or STALE", () => {
+  const missing = classifyMeeps({ raw: null, readError: "ENOENT", nowMs: T0, path: "/srv/postmark-sentinel/meeps.json" });
+  assert.equal(missing.verdict, "STALE");
+  assert.match(missing.reason, /no meeps record at \/srv\/postmark-sentinel\/meeps\.json \(ENOENT\)/);
+  assert.equal(classifyMeeps({ raw: "{ half a recor", nowMs: T0 }).verdict, "STALE");
+  assert.equal(classifyMeeps({ raw: MEEPS_REC({ generated_at: null }), nowMs: T0 }).verdict, "STALE");
+  assert.equal(classifyMeeps({ raw: MEEPS_REC({ status: "WEIRD" }), nowMs: T0 }).verdict, "STALE");
+  // and STALE alarms, on the sentinel's own edge
+  assert.equal(transition({ prev: null, next: missing, nowMs: T0 }).alert?.kind, "onset");
+});
+
+test("§10 the probe reaches the board as `meeps` and the sentinel's message carries a stuck meep; a missing record alarms too", async () => {
+  const dir = tempDir("sentinel-meeps-");
+  const path = join(dir, "meeps.json");
+  _wf(path, MEEPS_REC({ status: "DEGRADED", summary: STUCK_SUMMARY }));
+  const cfg = { ...FIXTURE_CONFIG, meeps: { ...CONFIG.meeps, path } };
+  const t1 = await tick({ fetchImpl: stubFetch(GREEN_TABLE), exec: stubExec(), state: {}, nowMs: T0, config: cfg, readDisk: GREEN_DISK });
+  const probe = t1.probes.find((p) => p.key === "meeps");
+  assert.equal(probe.verdict, "DOWN");
+  assert.equal(probe.kind, "meeps");
+  assert.deepEqual(t1.alerts.map((a) => a.key), ["meeps"], "a stuck meep on an otherwise green town alerts, and nothing else does");
+  const board = composeBoard({ probes: t1.probes, nowIso: t1.nowIso, alerting: {} });
+  assert.equal(board.status, "DOWN");
+  assert.match(composeMessage({ alerts: t1.alerts, board, nowIso: t1.nowIso }), /DOWN — the meeps: STUCK Rei: an input in local-conv-333/);
+
+  const gone = { ...FIXTURE_CONFIG, meeps: { ...CONFIG.meeps, path: join(dir, "never-landed.json") } };
+  const t2 = await tick({ fetchImpl: stubFetch(GREEN_TABLE), exec: stubExec(), state: {}, nowMs: T0, config: gone, readDisk: GREEN_DISK });
+  assert.equal(t2.probes.find((p) => p.key === "meeps").verdict, "STALE");
+  assert.deepEqual(t2.alerts.map((a) => a.key), ["meeps"]);
+  assert.equal(composeBoard({ probes: t2.probes, nowIso: t2.nowIso, alerting: {} }).status, "STALE");
 });

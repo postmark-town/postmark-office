@@ -902,9 +902,17 @@ Wright's /fleet reads, so the two always hear the same thing from one record.
 A new box alarm is a probe in `tools/site-sentinel.mjs`, never a script with
 its own webhook call; `test/site-sentinel.test.mjs` § ONE ROUTE reds on a PR
 that adds one. The root disk is probe `disk_root` (DOWN at 85%, the line the
-retired disk watch used). The one alarm outside it is the watch on the
-sentinel's own death, which runs off the box in the town repo
-(`.github/workflows/offbox-watch.yml`) and reads this same board.
+retired disk watch used). The meeps are probe `meeps`: it reads
+`/srv/postmark-sentinel/meeps.json`, which Wright's watcher on Darko's desktop
+(`G:/Wright-HQ/tools/meep-watch.mjs`) lands every 5 minutes by scp. The record's
+DEGRADED or DOWN is DOWN, with its one-line summary as the reason. A record
+older than 15 minutes, or none at all, is STALE, never UNKNOWN, because /fleet
+barks only on DOWN or STALE. The one alarm outside the sentinel is the
+watchman's watchman: the town repo's `.github/workflows/offbox-watch.yml` runs
+off the box and alarms when the front door or the sentinel itself is dead or
+stale, which the sentinel cannot report about itself. It reads this same
+board's `generated_at`, so /fleet (which barks on a heartbeat over 30 min old)
+and it still agree. Darko's word on the exception is pending.
 
 **Install (all of it is Wright's hand; nothing here is installed):**
 
@@ -2007,6 +2015,8 @@ The real headroom is a bigger volume (38G today); that is a console change, not 
 
 Darko, 2026-10-10: *"make sure we do it clean so there's ONE route to get to the Meepo bot on discord that the fleet also listens to."* The sentinel is that route (§ The site sentinel). The disk watch posted on its own timer through the same webhook; it is now the sentinel's `disk_root` probe, on the same 85% line, with the same words. What changes for a reader: the alarm arrives in the sentinel's message (`DOWN — the box's root disk: at 87% used (4.9G free; alarm at 85%). …`), it repeats every 12 hours while the disk stays over (the sentinel's reminder; the watch's was 6), it says RECOVERED when the disk is back under, and /fleet sees it on the board as `probes[key=disk_root]`.
 
+The same PR adds the `meeps` probe (Darko, 13:27): the desktop meep watcher's record, `/srv/postmark-sentinel/meeps.json`, read on every sentinel tick. A sick meep (the record's DEGRADED or DOWN) is DOWN, and its summary is the reason. A missing, unreadable or 15-minute-old record is STALE. Either one rides the sentinel's message and the board, so /fleet barks on it unchanged. The file is already landing there, so the box needs no new step.
+
 The site refresh (`deploy/site-refresh.sh`) also stops writing every built page into syslog (POS-557): the build's stdout passes through `quiet_build_log`, which cuts Astro's one-line-per-page output (about 900 MB a week) and logs how many lines it cut. The summary, the timings and stderr (Astro's warnings and errors) are unchanged.
 
 **Box steps, after the merge and the office deploy (Wright's hand):**
@@ -2014,8 +2024,9 @@ The site refresh (`deploy/site-refresh.sh`) also stops writing every built page 
 ```sh
 # 1. the sentinel carries the disk: confirm the new probe on the board
 sudo -u meepo systemctl start postmark-site-sentinel
-jq -r '.probes[] | select(.key=="disk_root") | "\(.verdict) \(.reason)"' /srv/postmark-sentinel/status.json
-#    expect: OK  NN% used, X.XG free: under 85%   (and `df -h /` agrees on NN)
+jq -r '.probes[] | select(.key=="disk_root" or .key=="meeps") | "\(.key) \(.verdict) \(.reason)"' /srv/postmark-sentinel/status.json
+#    expect: disk_root OK  NN% used, X.XG free: under 85%   (and `df -h /` agrees on NN)
+#            meeps     the watcher's own verdict and summary (STALE means meeps.json is missing or 15+ min old)
 
 # 2. retire the disk watch: timer, unit, script, receipts
 sudo systemctl disable --now postmark-disk-watch.timer

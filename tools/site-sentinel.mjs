@@ -106,6 +106,14 @@
 //                 postmark-disk-watch, which shouted into the same channel on its
 //                 own timer (POS-556, Darko 2026-10-10: ONE route to the Meepo
 //                 bot, the one /fleet also reads).
+// 10. MEEPS     — the town's meeps on Letta are answering. Read from
+//                 /srv/postmark-sentinel/meeps.json, the record Wright's watcher
+//                 (G:/Wright-HQ/tools/meep-watch.mjs, on Darko's desktop, every 5
+//                 min) lands here by scp. A meep that is down, stuck, cut off,
+//                 missed a round or failed one is DOWN; a record older than 15
+//                 min, or none at all, is STALE: the watcher or the desktop has
+//                 stopped, and a silent watcher must not read as healthy meeps
+//                 (Darko 2026-10-10 13:27, POS-556).
 //
 // ── ONE ALARM ROUTE (POS-556) ───────────────────────────────────────────────
 //
@@ -301,6 +309,11 @@ export const CONFIG = {
   // postmark-disk-watch's line, carried over unchanged when this probe
   // replaced it (POS-556): at 38G, 15% is under 6G, about eight site releases.
   disk: { key: "disk_root", label: "the box's root disk", path: "/", limitPct: 85 },
+
+  // §10 — the meeps. The desktop watcher writes every 5 minutes, so 15 is two
+  // missed pushes plus one of ours. The record's own path and freshness are
+  // the probe's; what counts as a sick meep is the watcher's (its `status`).
+  meeps: { key: "meeps", label: "the meeps", path: "/srv/postmark-sentinel/meeps.json", staleAfterMs: 15 * MINUTE },
 
   requestTimeoutMs: 20_000,
   // One reminder every twelve hours while a probe stays bad. Not per tick —
@@ -916,6 +929,37 @@ export function classifyDisk({ usedPct = null, freeBytes = null, error = null, l
   return { verdict: "OK", reason: `${usedPct}% used, ${free} free: under ${limitPct}%`, detail };
 }
 
+// §10 — the meeps. PURE: `raw` is the file's text, or null when there is none.
+//
+// MISSING AND UNREADABLE ARE STALE, NEVER UNKNOWN, on purpose: UNKNOWN never
+// alerts here and /fleet's sentinelBark barks only on DOWN or STALE, so an
+// UNKNOWN would be a dead watcher read as silence on both of the routes this
+// file feeds. The watcher's `summary` is already the one line that names the
+// meep, the kind and the evidence, so it is the reason verbatim.
+export function classifyMeeps({ raw = null, readError = null, nowMs, staleAfterMs = 15 * MINUTE, path = "the meeps record" } = {}) {
+  const watcher = "the desktop watcher (meep-watch, every 5 min by scp)";
+  if (raw == null) {
+    return { verdict: "STALE", reason: `there is no meeps record at ${path}${readError ? ` (${String(readError).slice(0, 80)})` : ""} — ${watcher} has not landed one, so nothing is watching the meeps` };
+  }
+  let rec;
+  try { rec = JSON.parse(raw); } catch (e) {
+    return { verdict: "STALE", reason: `the meeps record at ${path} does not parse (${String(e?.message ?? e).slice(0, 80)}) — nothing readable is watching the meeps` };
+  }
+  const at = Date.parse(rec?.generated_at ?? "");
+  if (!Number.isFinite(at)) {
+    return { verdict: "STALE", reason: `the meeps record at ${path} carries no readable generated_at — it cannot say when the meeps were last seen` };
+  }
+  const age = nowMs - at;
+  const detail = { status: rec.status ?? null, generated_at: rec.generated_at, problems: Array.isArray(rec.problems) ? rec.problems.length : null };
+  if (age > staleAfterMs) {
+    return { verdict: "STALE", reason: `the meeps record is ${humanDuration(age)} old (written ${rec.generated_at}; stale after ${humanDuration(staleAfterMs)}) — ${watcher} or the desktop has stopped`, detail };
+  }
+  const summary = String(rec.summary ?? "").trim() || "no summary in the record";
+  if (rec.status === "OK") return { verdict: "OK", reason: summary, detail };
+  if (rec.status === "DEGRADED" || rec.status === "DOWN") return { verdict: "DOWN", reason: summary, detail };
+  return { verdict: "STALE", reason: `the meeps record's status is ${JSON.stringify(rec.status ?? null)}, which this probe does not read — unread is never healthy`, detail };
+}
+
 export const BAD = new Set(["DOWN", "STALE"]);
 
 /**
@@ -1324,6 +1368,14 @@ export async function tick({
   if (config.disk) {
     const dk = classifyDisk({ ...readDisk(config.disk.path), limitPct: config.disk.limitPct });
     probes.push({ key: config.disk.key, label: config.disk.label, kind: "disk", verdict: dk.verdict, reason: dk.reason, ...(dk.detail ? { detail: dk.detail } : {}) });
+  }
+
+  // §10 — the meeps. A local read of the record the desktop watcher lands.
+  if (config.meeps) {
+    let raw = null, readError = null;
+    try { raw = readFileSync(config.meeps.path, "utf8"); } catch (e) { readError = e?.code ?? e?.message ?? String(e); }
+    const mp = classifyMeeps({ raw, readError, nowMs, staleAfterMs: config.meeps.staleAfterMs, path: config.meeps.path });
+    probes.push({ key: config.meeps.key, label: config.meeps.label, kind: "meeps", verdict: mp.verdict, reason: mp.reason, ...(mp.detail ? { detail: mp.detail } : {}) });
   }
 
   // the edges

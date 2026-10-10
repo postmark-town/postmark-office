@@ -204,7 +204,7 @@
         "stamp_field": "generated_at",
         "stale_after_minutes": 30
       },
-      "stale_means": "THE WATCHMAN ITSELF HAS STOPPED, and it is the one failure the sentinel is structurally incapable of reporting — its own header says so: 'it cannot see its own death'. A dead sentinel presents as a permanently green board, which is worse than no board. This row is the answer to that, and it is the single most load-bearing row in this file. Since POS-556 (2026-10-10) the sentinel is also the box's ONE alarm route to Discord and the board /fleet reads, and it carries the root disk (probe disk_root, DOWN at 85%), which postmark-disk-watch used to shout on its own timer: a dead sentinel is now a blind disk as well. The allowance is three ticks."
+      "stale_means": "THE WATCHMAN ITSELF HAS STOPPED, and it is the one failure the sentinel is structurally incapable of reporting — its own header says so: 'it cannot see its own death'. A dead sentinel presents as a permanently green board, which is worse than no board. This row is the answer to that, and it is the single most load-bearing row in this file. Since POS-556 (2026-10-10) the sentinel is also the box's ONE alarm route to Discord and the board /fleet reads, and it carries the root disk (probe disk_root, DOWN at 85%), which postmark-disk-watch used to shout on its own timer, and the meeps (probe meeps, from /srv/postmark-sentinel/meeps.json, which Wright's desktop watcher lands every 5 minutes; STALE past 15): a dead sentinel is now a blind disk and unwatched meeps as well. The allowance is three ticks."
     },
     {
       "unit": "postmark-settlement.timer",
