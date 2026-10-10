@@ -168,6 +168,7 @@ const ROSTER = {
   // The bug stage pass (Posts phase 2): no --town, so it refuses before it
   // imports the town engine, reads the store, spawns a mint or touches a key.
   "tools/bug-stage-plan.mjs": { args: [], env: NO_PG, code: 1, needle: "--town <town-clone> is required" },
+  "tools/post-award-plan.mjs": { args: [], env: NO_PG, code: 1, needle: "--town <town-clone> is required" },
   // The offline agent view (Posts phase 2): no --out, so it refuses before it
   // drives any door or writes a page.
   "tools/agent-view.mjs": { args: [], env: NO_PG, code: 2, needle: "--out <file.html> is required" },

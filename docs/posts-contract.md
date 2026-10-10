@@ -141,6 +141,16 @@ Darko, 2026-10-09: "build all the plumbing for the idea stuff … but the actual
 - **Refused:** a meep or a non-resident recipient; `stamps` outside 1..200; a label that is not `[a-z0-9][a-z0-9-]{0,39}`, or is a bug's paid stage (confirmed, reproduced, diagnosed, briefed, fixed); a label already awarded on the idea.
 - The reviewed award pass, run by hand and never on the tick, writes the town's line `- <date> · MINT → <to> · <stamps> · for: post:<author>/<slug>/<label> · by: <hand>`. The idea read's `awards[].stamps_paid` reads that line from the chain.
 
+**The award pass.** `node tools/post-award-plan.mjs --town <clone>` reads every `award` act from the store and prints one row per act: post and label, recipient, amount, hand, and why.
+- The why is one of `owed`, `already paid` (the ledger holds that post and label), `meep` (pays 0, by the town's meep law at the act's date and the line's), `unresolved` (no room in the town), or `refused` (the town's builder would refuse the line, or an earlier act holds the label), with the town's own sentence.
+- The amount is always the act's. The pass computes none.
+- With `--apply --key <pem>` it takes the town lock (the tick's), prints the plan, and parses its own print back. It refuses the whole apply on any difference.
+- It then calls the town's `stamp-mint.mjs --award-mint` once per owed row, with `--by` set to the act's hand, and runs the town's stamp-verify. It lands the lines with `landStamped`, which records them in `stamp_lines` in the commit's transaction when `STAMP_LINES=store`.
+- Any refusal on the way puts the ledger back, and nothing is written.
+- A second `--apply` writes nothing, because every row reads `already paid`.
+- It never catches the ledger up: a ledger behind the mail is the tick's to settle.
+- It refuses to run at all while `OFFICE_KEEP` is set, which `deploy/office-keep.sh` exports, so it can never run on the tick.
+
 **The read.** `town { read: "posts", args: { class: "idea", post? } }` (or `GET /posts?class=idea`). Each row is the general row plus:
 - `body`;
 - `fields` (`links`, `of`);
