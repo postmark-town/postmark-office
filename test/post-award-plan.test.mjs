@@ -20,9 +20,10 @@
 //
 // 1, 2, 4 and 5 run the TOWN'S OWN verb, so they need a town whose stamp-mint.mjs
 // carries --award-mint (town main 834da240b and later). The office's pinned
-// town-clone gains it when its pin moves past that merge; until then they SKIP
-// and say why in their own name. Point AWARD_MINT_TOWN at a town tree that
-// carries it to run them.
+// town-clone carries it since its pin moved to 834da240b (this lane). Off CI, a
+// town without it SKIPS them and says why in their own name; in CI (CI set) it
+// FAILS instead, so a stale pin can never silently skip the money tests (the
+// seam review of #467). Point AWARD_MINT_TOWN at a town tree that carries it.
 //
 // ⚑ THE STORE IS REAL: a database in this tree's own Postgres (the embedded
 // store helper). The acts are written by the real doors (postAtTown, awardAtTown
@@ -60,7 +61,8 @@ const TOWN_SRC = process.env.AWARD_MINT_TOWN ?? join(OFFICE_ROOT, "town-clone");
 const TOWN_HAS_VERB = existsSync(join(TOWN_SRC, "tools", "stamp-mint.mjs"))
   && readFileSync(join(TOWN_SRC, "tools", "stamp-mint.mjs"), "utf8").includes("'--award-mint'");
 const NO_FLOCK = useFlock() ? false : "linux only: the command takes the town lock through /usr/bin/flock";
-const NO_VERB = TOWN_HAS_VERB ? false : `the town at ${TOWN_SRC} has no --award-mint yet (town main 834da240b); set AWARD_MINT_TOWN to a town tree that carries it`;
+// In CI the money tests never skip: a town without the verb fails them, by name, below.
+const NO_VERB = TOWN_HAS_VERB || process.env.CI ? false : `the town at ${TOWN_SRC} has no --award-mint yet (town main 834da240b); set AWARD_MINT_TOWN to a town tree that carries it`;
 
 const NOW = Date.now();
 const DATE = "2026-10-09";
@@ -142,6 +144,12 @@ async function reviewed(town, deps = {}) {
 }
 const applyArgv = (town, digest) => ["--town", town.repo, "--apply", "--key", town.keyFile, "--date", DATE, "--expect", digest];
 const storeHeld = async (office) => Number((await office.query("SELECT count(*) n FROM stamp_lines")).rows[0].n);
+
+// ── the money tests cannot skip in CI ───────────────────────────────────────
+
+test("the town clone carries --award-mint, or this run says so: in CI a stale pin is a FAILURE, never a skip", { skip: process.env.CI ? false : (TOWN_HAS_VERB ? false : "off CI, the money tests below skip by name instead") }, () => {
+  assert.ok(TOWN_HAS_VERB, `the town at ${TOWN_SRC} has no --award-mint (town main 834da240b and later): the award pass's money tests cannot run, and in CI that is a failure, not a skip — move test/clone-pins.json's town pin`);
+});
 
 // ── 1 ───────────────────────────────────────────────────────────────────────
 
@@ -299,7 +307,7 @@ test("3 · the tick says it is the tick: office-keep.sh exports OFFICE_KEEP=1 be
   const sh = readFileSync(join(OFFICE_ROOT, "deploy", "office-keep.sh"), "utf8");
   const exported = sh.indexOf("\nexport OFFICE_KEEP=1\n");
   assert.ok(exported !== -1, "office-keep.sh does not export OFFICE_KEEP=1");
-  assert.ok(exported < sh.indexOf("flock -w 300 9"), "the marker is exported after the tick's first locked step");
+  assert.ok(exported < sh.indexOf("flock -w 300 9"), "office-keep.sh must export OFFICE_KEEP=1 before its first locked step (flock -w 300 9), and it does not");
   assert.doesNotMatch(sh, /node\s+\S*post-award-plan/, "the award pass is wired into the tick");
 });
 
