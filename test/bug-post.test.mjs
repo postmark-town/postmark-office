@@ -37,6 +37,8 @@
 //  12. (POS-558, Darko 2026-10-10) the bug read pages in the office's grammar
 //      (limit, offset; total, shown, complete, next_offset), and every page
 //      carries `catchers`, the Hall of Fame's totals over the whole record.
+//      The bug read's order is the jar's (Wright's review of #481): open by
+//      the furthest stage, the named, the legacy shelf, the set aside.
 //
 // ⚑ THE STORE IS A JS STUB (`acts-pen-stub.mjs`), as in quest-posts.test.mjs:
 // this proves which acts and rows the pen writes and what the reads make of
@@ -719,4 +721,27 @@ test("12 · every page carries the catchers over the whole record: stamps paid a
   const r = await postsAtOffice({ class: "bug", limit: 1 }, { now: NOW, roll: ROLL });
   assert.equal(r.unavailable, NO_CHAIN);
   assert.deepEqual(r.catchers.map((c) => [c.handle, c.stamps, c.bugs]), [["errant", null, 2], ["ada", null, 1], ["finn", null, 1]]);
+});
+
+test("12 · the bug read walks the jar's order across a page cut: open by the furthest stage, the named, the legacy shelf, the set aside; newest first within each", async () => {
+  setup();
+  const at = { now: NOW, roll: ROLL };
+  const post = async (title, house) => { await postAtTown({ class: "bug", title, body: `${title}, as it happened.` }, house, at); };
+  const idOf = async (title) => (await postsAtOffice({ class: "bug", limit: 200 }, at)).posts.find((p) => p.title === title).id;
+  const go = async (title, to, extra = {}) => advanceAtTown({ post: await idOf(title), to, ...extra }, WRIGHT, at);
+  // oldest act first, so each later act is newer
+  await post("Reported, older", ERRANT);
+  await post("Confirmed", FINN); await go("Confirmed", "confirmed");
+  await post("Fixed, named", ERRANT); await go("Fixed, named", "fixed", { credit: "finn", size: "S", critter: "Stickle" });
+  await post("Shipped, named", FINN); await go("Shipped, named", "fixed", { credit: "errant", size: "S", critter: "Quill" }); await go("Shipped, named", "shipped");
+  await post("The legacy fix, older", ERRANT); await go("The legacy fix, older", "shipped");
+  await post("Not one", FINN); await go("Not one", "not-a-bug");
+  await postAtTown({ class: "bug", title: "Reported, newer", body: "Reported, newer, as it happened.", for: "ada" }, WRIGHT, at);
+  await post("A legacy fix, newer", ERRANT); await go("A legacy fix, newer", "shipped");
+  const want = ["Fixed, named", "Confirmed", "Reported, newer", "Reported, older", "Shipped, named", "A legacy fix, newer", "The legacy fix, older", "Not one"];
+  const all = await postsAtOffice({ class: "bug", limit: 200 }, at);
+  assert.deepEqual(all.posts.map((p) => p.title), want);
+  const pages = [];
+  for (let offset = 0; offset < all.total; offset += 3) pages.push((await postsAtOffice({ class: "bug", limit: 3, offset }, at)).posts.map((p) => p.title));
+  assert.deepEqual(pages, [want.slice(0, 3), want.slice(3, 6), want.slice(6)], "the pages cut the jar's order somewhere else");
 });

@@ -44,7 +44,10 @@
 // correspondents, regions): `limit` (default BUG_PAGE, max 200) and `offset`
 // in; `total` (every bug), `shown`, `limit`, `offset`, `complete`, and
 // `next_offset` with `more_note` while there is more, out. The order is the
-// one it has always had (postOrder). A page cannot add up the town, so every
+// jar's (bugs.mjs § THE JAR'S ORDER: open by the furthest stage, the named,
+// the legacy shelf, the set aside), so the pages read like the jar; the shared
+// postOrder, which events and quests read, is not touched. A page cannot add
+// up the town, so every
 // page also carries `catchers`, the Hall of Fame's totals over the whole
 // record (bugs.mjs § THE CATCHERS): the history is still read for every bug,
 // as it was before the read paged. The other classes are not paged.
@@ -76,7 +79,7 @@ import { officeRead } from "./world2-pen.mjs";
 import { postRowsOf, postOrder, TERMINAL_STATES, FIELDS } from "./household-posts.mjs";
 import { EVENT_CLASS, refuse } from "./events.mjs";
 import { QUEST_CLASS, QUEST_FINISHED, readQuestRegistry, questTerms } from "./quests.mjs";
-import { BUG_CLASS, BUG_FINISHED, bugCatchersOf } from "./bugs.mjs";
+import { BUG_CLASS, BUG_FINISHED, bugCatchersOf, bugJarOrder } from "./bugs.mjs";
 import { IDEA_CLASS, IDEA_FINISHED, ideaResponsesOf } from "./ideas.mjs";
 import { postHistoryVia, NO_CHAIN } from "./post-history.mjs";
 import { ideaExtrasVia } from "./idea-store.mjs";
@@ -164,8 +167,9 @@ export async function postsAtOffice(fields = {}, { now = Date.now(), env = proce
       return { ...plain(r), fields: { quest: f.quest ?? null }, terms: questTerms(entry), history: historyOf(r.id) };
     }).sort((a, b) => (order.get(a.fields.quest) ?? Infinity) - (order.get(b.fields.quest) ?? Infinity) || a.id.localeCompare(b.id));
   } else if (cls === BUG_CLASS) {
-    posts = [...rows].sort(postOrder).map((r) => ({ ...plain(r), fields: { ...(r[FIELDS] ?? {}) },
-      history: historyOf(r.id) }));
+    // the jar's order, the bug read's own (bugs.mjs § THE JAR'S ORDER), never the shared postOrder
+    posts = rows.map((r) => ({ ...plain(r), fields: { ...(r[FIELDS] ?? {}) },
+      history: historyOf(r.id) })).sort(bugJarOrder);
   } else if (cls === IDEA_CLASS) {
     // An idea (POS-290) carries its body, its own fields (links, of), its
     // history, the awards recorded on it (and what the chain shows each paid),
