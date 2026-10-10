@@ -138,10 +138,10 @@ const EXPECT = {
 
 for (const { door, ask } of DOORS) {
   for (const [name, expect] of Object.entries(EXPECT)) {
-    test(`${door}: a handler error with code ${JSON.stringify(SYNTHETIC[name].code)} (${name})`, async () => {
+    test(`${door}: a handler error with code ${JSON.stringify(SYNTHETIC[name].code)} (${name})`, async (t) => {
       const r = await ask(name);
-      try { expect(r); }
-      catch (e) { e.message += `\n  the door answered ${r.status}: ${JSON.stringify(r.body).slice(0, 300)}`; throw e; }
+      t.diagnostic(`the door answered ${r.status}: ${JSON.stringify(r.body).slice(0, 300)}`);
+      expect(r);
       assert.equal(r.body.refused, true, "every refusal says so (POS-427)");
       assert.equal(r.body.code, r.status, "the body's code is the status line's");
       assert.equal(office.child.exitCode, null, `the office is still up: ${office.stderr().slice(-300)}`);
