@@ -389,6 +389,78 @@ export function bugHistoryOf(acts, paid = []) {
   return out;
 }
 
+// ── THE JAR'S ORDER (POS-558, Wright's review of #481, 2026-10-10) ──────────
+//
+// The bug read pages, so its order is what a resident walks page after page,
+// and it is the jar's, in four groups:
+//
+//   1. open bugs, the furthest stage first (fixed … reported)
+//   2. finished bugs with a name (a critter), the caught ones in the jar
+//   3. the legacy shelf: finished with no name (fixed or shipped without a
+//      critter; a critter is named only at fixed, so these never will be)
+//   4. set aside: duplicate, not a bug
+//
+// newest first within each (the post's latest act), then by id. This order is
+// the bug read's own; the shared postOrder, which events and quests read, is
+// untouched.
+
+const BUG_STAGE_RANK = new Map(BUG_STAGES.map((s, i) => [s, i]));
+/** A bug row's group in the jar's order: 0 open, 1 named and finished, 2 legacy, 3 set aside. */
+export function bugGroupOf(row) {
+  if (BUG_SIDE_EXITS.includes(row.state)) return 3;
+  const named = typeof row.fields?.critter === "string" && row.fields.critter.trim() !== "";
+  if (row.state === STATE_SHIPPED) return named ? 1 : 2;
+  if (row.state === STATE_FIXED && !named) return 2;
+  return 0;
+}
+/** The bug read's comparator: group, then (open) the furthest stage, then newest, then id. */
+export function bugJarOrder(a, b) {
+  const ga = bugGroupOf(a), gb = bugGroupOf(b);
+  return (ga - gb)
+    || (ga === 0 ? (BUG_STAGE_RANK.get(b.state) ?? -1) - (BUG_STAGE_RANK.get(a.state) ?? -1) : 0)
+    || String(b.latest?.at ?? "").localeCompare(String(a.latest?.at ?? ""))
+    || String(a.id).localeCompare(String(b.id));
+}
+
+// ── THE CATCHERS (POS-558, Darko 2026-10-10) ────────────────────────────────
+//
+// "The Bug Catchers' Hall of Fame … residents in order of amount of stamp
+// contribution towards bugs." The bug read pages (town-posts.mjs § THE BUG
+// READ PAGES), and a page cannot add up the town, so every page carries the
+// totals over the whole record, from the same history credits and
+// stamps_paid: one row per handle credited on any bug,
+//
+//   { handle, stamps, bugs }
+//
+//   stamps  the sum of stamps_paid on the history rows that credit them; null
+//           when the chain cannot be read (the read's `unavailable`), never 0
+//   bugs    the posts they hold a credit on (the post's row credits its reporter)
+//
+// A bug set aside (duplicate, not a bug) credits only a stage that paid: a
+// withdrawn report is not a catch. Every credited handle is listed, the town's
+// hands too; whom to rank is the reader's call (the site ranks no meep and no
+// founder). Ordered by stamps, then bugs, then handle.
+
+/** The Hall's totals over every bug post (each carrying its `history`), PURE. */
+export function bugCatchersOf(posts, { unavailable = false } = {}) {
+  const by = new Map();
+  for (const p of posts) {
+    const aside = BUG_SIDE_EXITS.includes(p.state);
+    for (const h of p.history ?? []) {
+      if (!h?.credit) continue;
+      const paid = Number.isInteger(h.stamps_paid) && h.stamps_paid > 0 ? h.stamps_paid : 0;
+      if (aside && !paid) continue;
+      const r = by.get(h.credit) ?? { handle: h.credit, stamps: 0, posts: new Set() };
+      r.stamps += paid;
+      r.posts.add(p.id);
+      by.set(h.credit, r);
+    }
+  }
+  return [...by.values()]
+    .map(({ handle, stamps, posts: credited }) => ({ handle, stamps: unavailable ? null : stamps, bugs: credited.size }))
+    .sort((a, b) => (b.stamps ?? 0) - (a.stamps ?? 0) || b.bugs - a.bugs || a.handle.localeCompare(b.handle));
+}
+
 // ── the refusals for what a bug does not take ───────────────────────────────
 
 export const NO_STAKE_REASON = "Keemin, 2026-09-29: \"it feels odd to wait for stakers for a clearly broken thing that just needs fixing, and ideally every bug gets fixed anyway\"";
