@@ -246,9 +246,11 @@ const arg = (name, argv) => { const i = argv.indexOf(name); return i === -1 ? nu
 const firstLine = (out) => (String(out.stderr ?? "").trim() || String(out.stdout ?? "").trim()).split(/\r?\n/)[0] || `exit ${out.status}`;
 
 /**
- * The whole pass. `facts`, `spawn` and `printed` are injectable so a suite
- * drives the same path in-process against a store it made and a synthetic
- * town; `printed` stands for what reaches the screen between print and parse.
+ * The whole pass, run by a caller that holds the town lock for an --apply (the
+ * CLI below takes it). `facts`, `spawn` and `printed` are injectable so a
+ * suite drives the same path in-process against a store it made and a
+ * synthetic town; `printed` stands for what reaches the screen between print
+ * and parse.
  */
 export async function main(argv = process.argv.slice(2), { facts = null, spawn = run, printed = (t) => t, log = console.log, err = console.error, env = process.env } = {}) {
   if (env.OFFICE_KEEP) {
@@ -264,14 +266,6 @@ export async function main(argv = process.argv.slice(2), { facts = null, spawn =
   if (!DATE_RE.test(date)) { err(`post-award-plan: --date is YYYY-MM-DD, got ${JSON.stringify(date)}`); return 1; }
 
   if (apply) {
-    // The town lock: the tick, the ferry and every shared-ledger exec take it
-    // exclusively, so a pass holding it never races a mint or a crossing.
-    const { useFlock, townLockPath } = await import("../src/town-lock.mjs");
-    if (useFlock() && env.POST_AWARD_LOCKED !== "1") {
-      const [file, args] = lockedArgv(fileURLToPath(import.meta.url), argv, townLockPath());
-      const out = spawnSync(file, args, { stdio: "inherit", env: { ...env, POST_AWARD_LOCKED: "1" } });
-      return out.status ?? 1;
-    }
     if (git(town, "status", "--porcelain", "--", LEDGER_REL)) {
       err(`post-award-plan: the clone's ${LEDGER_REL} has changes nobody committed — a pass that writes onto them could not put them back. Nothing written; the tick (or a person) settles them first.`);
       return 1;
@@ -321,10 +315,30 @@ export async function main(argv = process.argv.slice(2), { facts = null, spawn =
   return 0;
 }
 
+/**
+ * THE COMMAND. An --apply holds the town lock for its whole run: the tick, the
+ * ferry and every shared-ledger exec take it exclusively, so the pass never
+ * races a mint or a crossing. On linux the command re-runs itself under
+ * `/usr/bin/flock -w 300` on the tick's own lock file (src/town-lock.mjs §
+ * townLockPath); the child, marked POST_AWARD_LOCKED=1, runs the pass. The plan
+ * alone reads, and takes no lock.
+ */
+export async function cli(argv = process.argv.slice(2), env = process.env) {
+  if (argv.includes("--apply") && !env.OFFICE_KEEP && env.POST_AWARD_LOCKED !== "1") {
+    const { useFlock, townLockPath } = await import("../src/town-lock.mjs");
+    if (useFlock()) {
+      const [file, args] = lockedArgv(fileURLToPath(import.meta.url), argv, townLockPath());
+      const out = spawnSync(file, args, { stdio: "inherit", env: { ...env, POST_AWARD_LOCKED: "1" } });
+      return out.status ?? 1;
+    }
+  }
+  return main(argv, { env });
+}
+
 // Script only when run as one (the realpath compare: deploy/welcome-pass.mjs § entry guard).
 const isMain = (() => {
   if (!process.argv[1]) return false;
   try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); }
   catch { return pathToFileURL(process.argv[1]).href === import.meta.url; }
 })();
-if (isMain) process.exit(await main());
+if (isMain) process.exit(await cli());

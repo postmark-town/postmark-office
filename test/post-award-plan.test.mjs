@@ -36,7 +36,7 @@
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn as spawnChild, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -48,11 +48,13 @@ import { tempDir } from "./helpers/temp-dir.mjs";
 const { planAwards, renderPlan, parseAwardPlan, planDiffers, townEngine, storeFacts, awardMintArgv, lockedArgv, main } =
   await import("../tools/post-award-plan.mjs");
 const { verifyStampLinesVia } = await import("../src/stamp-lines.mjs");
+const { useFlock } = await import("../src/town-lock.mjs");
 
 const TOOL = join(OFFICE_ROOT, "tools", "post-award-plan.mjs");
 const TOWN_SRC = process.env.AWARD_MINT_TOWN ?? join(OFFICE_ROOT, "town-clone");
 const TOWN_HAS_VERB = existsSync(join(TOWN_SRC, "tools", "stamp-mint.mjs"))
   && readFileSync(join(TOWN_SRC, "tools", "stamp-mint.mjs"), "utf8").includes("'--award-mint'");
+const NO_FLOCK = useFlock() ? false : "linux only: the command takes the town lock through /usr/bin/flock";
 const NO_VERB = TOWN_HAS_VERB ? false : `the town at ${TOWN_SRC} has no --award-mint yet (town main 834da240b); set AWARD_MINT_TOWN to a town tree that carries it`;
 
 const NOW = Date.now();
@@ -168,6 +170,29 @@ test("1 · two award acts, an empty ledger: two owed rows; --apply writes two li
     assert.equal(awardLinesOf(town.repo).length, 2, "a second --apply wrote a line");
     assert.equal(await storeHeld(office), held, "a second --apply recorded a row");
   } finally { town.cleanup(); }
+});
+
+// ── the command holds the town lock (linux) ─────────────────────────────────
+
+test("the command holds the tick's lock for an --apply: while another process holds town.lock it waits, then writes", { skip: NO_VERB || NO_FLOCK }, async () => {
+  await freshStore();
+  const id = await ideaWithAwards([[WRIGHT, { to: "finn", stamps: 4, label: "the-oil" }]]);
+  const town = syntheticTown();
+  const lock = `${town.repo}-town.lock`;
+  try {
+    writeFileSync(lock, "");
+    // the holder: the tick's own flock on the same file, for three seconds
+    const holder = spawnChild("/usr/bin/flock", [lock, "sh", "-c", "echo held; sleep 3"], { stdio: ["ignore", "pipe", "inherit"] });
+    await new Promise((res) => holder.stdout.once("data", res));
+    const t0 = Date.now();
+    const res = spawnSync(process.execPath, [TOOL, "--town", town.repo, "--apply", "--key", town.keyFile, "--date", DATE],
+      { encoding: "utf8", env: { ...process.env, TOWN_LOCK: lock } });
+    const waited = Date.now() - t0;
+    if (holder.exitCode === null) await new Promise((r) => holder.once("exit", r));
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.ok(waited >= 2000, `the command wrote without waiting for the lock (${waited} ms)`);
+    assert.deepEqual(awardLinesOf(town.repo).map((l) => l.replace(/ · sig: \S+$/, "")), [`- ${DATE} · MINT → finn · 4 · for: post:${id}/the-oil · by: wright`]);
+  } finally { town.cleanup(); rmSync(lock, { force: true }); }
 });
 
 // ── 2 ───────────────────────────────────────────────────────────────────────
