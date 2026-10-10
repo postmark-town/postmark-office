@@ -61,8 +61,14 @@ const bounce = (code, defect, hint, extra = {}) => ({ error: "bounce", code, def
 //
 //  AMENDED 2026-09-29 (Posts phase 2): the fourth, "bug", which any resident
 //  posts and the town's hands advance.
-export const REGISTER_LAW =
+const REGISTER_LAW_MARKS =
   "the town's acts are the lanes' pen — do: \"post\" puts something with a life up in the town, by class (class: \"idea\" publishes at the Think Tank, placement computed for you; class: \"event\" puts it on the town's calendar; class: \"quest\" is the town's own, put up by its hands alone; class: \"bug\" reports something broken, for the town's hands to advance), do: \"amend\" / \"close\" / \"advance\" carry a post you put up through its life, and do: \"stake\" / \"unstake\" put stamps behind one of its lanes' marks and take them back, target-typed to bounty and idea and the same escrow the world door keeps; your pen lives at household, your feet in the world, and every other mark is staked where you stand";
+/** The register law the bare read carries: the literal with the idea class shut; with it open (POS-290), the idea taught as a post. */
+export const REGISTER_LAW = !ideaPostsOn() ? REGISTER_LAW_MARKS : swapOnce(swapOnce(REGISTER_LAW_MARKS,
+  'class: \"idea\" publishes at the Think Tank, placement computed for you;',
+  'class: \"idea\" is a post on this office (POS-290), title and body, with no place and no escrow;'),
+  'do: \"amend\" / \"close\" / \"advance\" carry a post you put up through its life,',
+  'do: \"amend\" / \"close\" / \"advance\" carry a post you put up through its life, do: \"sign-up\" / \"answer-sign-up\" carry who builds an idea\'s parts and do: \"award\" records stamps owed on it (wright or keemin),');
 
 // ── the reads · the town's public face ──────────────────────────────────────
 //
@@ -192,9 +198,11 @@ export const TOWN_READABLE = Object.freeze(Object.keys(TOWN_READS));
 // swap names its exact segment and throws at load if the literal moved, so the
 // two cannot drift apart unseen.
 const IDEA_POST_INLINE = "class \"idea\" is a POST on this office (POS-290): title and body (≤600 chars; the old slug and body still post), no place and no escrow; the town's hands move it to any named stage, anyone signs up to build a part with do: \"sign-up\", and stamps are awarded by hand with do: \"award\". The world door still places idea marks. ";
-function swapOnce(text, from, to) {
-  if (text.split(from).length !== 2) throw new Error(`town-apex: the idea class's card swap no longer finds its segment: ${from.slice(0, 60)}`);
-  return text.replace(from, to);
+export function swapOnce(text, from, to) {
+  const parts = text.split(from);
+  if (parts.length !== 2) throw new Error(`the idea class's card swap no longer finds its segment once: ${from.slice(0, 60)}`);
+  // split/join, never replace(): a "$" in the replacement stays a dollar sign
+  return parts.join(to);
 }
 const IDEA_MARK_INLINE = "class: \"idea\" publishes at the Think Tank: the door picks the cell, stakes 1✦ escrow unless you pass more, and the body is the claim (one breath, ≤150 chars). An idea may stand anywhere: at: {x,y} puts it somewhere else — an idea standing in a place is an idea OF that place — and on: \"<by>/<slug>\" plants it as a predicate of that mark, an idea ABOUT it. The two are exclusive; pass neither and you get the Tank cell, exactly as before. ";
 function ideasFirstInline(off) {
@@ -522,7 +530,8 @@ const TOWN_INPUT_SCHEMA = { type: "object", properties: {
     // additionalProperties stays true so a stray act reaches the apex and
     // gets the TEACHING bounce rather than a bare schema refusal.
     read: { type: "string", enum: [...TOWN_READABLE, ...TOWN_DISPATCHABLE], description: `a focused read — ${TOWN_READABLE.join(", ")}; any act name (${TOWN_DISPATCHABLE.join(", ")}) reads back its own card. Never rides with do:` },
-    do: { type: "string", enum: TOWN_DISPATCHABLE, description: (ideaPostsOn() ? (t) => swapOnce(t, "args: { class: \"idea\", slug, body }", "args: { class: \"idea\", title, body }") : (t) => t)("an act — post (put something with a life up, by class; args: { class: \"idea\", slug, body }, { class: \"event\", title, body, place, starts, ends } or { class: \"bug\", title, body }), amend (args: { post, …the fields that change }), close (args: { post }), advance (args: { post, to, credit? }), stake / unstake (stamps behind one of this door's lane marks — a bounty or an idea — and back out again; args: { mark, stamps }). Never rides with read:") },
+    do: { type: "string", enum: TOWN_DISPATCHABLE, description: (ideaPostsOn() ? (t) => swapOnce(swapOnce(t, "args: { class: \"idea\", slug, body }", "args: { class: \"idea\", title, body }"),
+      ". Never rides with read:", "), sign-up (an idea: args: { post, piece, note? }, or { post, withdraw: true }), answer-sign-up (the town's hands: args: { post, resident, answer: accepted | declined }), award (wright or keemin: args: { post, to, stamps, label }). Never rides with read:") : (t) => t)("an act — post (put something with a life up, by class; args: { class: \"idea\", slug, body }, { class: \"event\", title, body, place, starts, ends } or { class: \"bug\", title, body }), amend (args: { post, …the fields that change }), close (args: { post }), advance (args: { post, to, credit? }), stake / unstake (stamps behind one of this door's lane marks — a bounty or an idea — and back out again; args: { mark, stamps }). Never rides with read:") },
     args: { type: "object", description: "the read's or act's own fields — town { do: \"post\", args: { class: \"idea\", slug: \"…\", body: \"…\" } }, town { do: \"stake\", args: { mark: \"<by>/<slug>\", stamps: 1 } } or town { read: \"quests\", args: { handle: \"…\" } }", additionalProperties: true },
   }, additionalProperties: true };
 const _townSchemaAt = new Map();

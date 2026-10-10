@@ -49,8 +49,8 @@ import { HOUSEHOLD_TOOL, householdApex, householdDispatchToolFor } from "./house
 import { TOWN_TOOL, townApex, townDispatchToolFor, townTools } from "./town-apex.mjs";
 import { TOWN_STAKE_TOOLS, callTownStakeTool } from "./town-stake.mjs"; // the stake gesture, 2026-08-31
 import { TOWN_POST_TOOLS, EVENT_POST_PROPERTIES, QUEST_POST_PROPERTIES, BUG_POST_PROPERTIES, callTownPostTool, townPostEvent, ideaPrecheck } from "./town-post.mjs"; // the post machine, POS-288 (quests: POS-294; bugs: Posts phase 2)
-import { ideaPostsOn, IDEA_HANDS, IDEA_POST_HOW } from "./ideas.mjs";
-import { TITLE_MAX } from "./events.mjs"; // the idea class, POS-290, behind IDEA_POSTS
+import { ideaPostsOn, IDEA_HANDS, IDEA_POST_HOW } from "./ideas.mjs"; // the idea class, POS-290, behind IDEA_POSTS
+import { TITLE_MAX } from "./events.mjs";
 import { ideaPostsForTank } from "./idea-store.mjs";
 
 // With IDEA_POSTS on, an idea is a post, and the card teaches that FIRST: the
@@ -58,13 +58,21 @@ import { ideaPostsForTank } from "./idea-store.mjs";
 // it, because this door refuses those fields for an idea; the world door still
 // places idea marks. Off, the card is the literal below, byte for byte.
 const IDEA_POST_LEAD = `Post something with a life in the town — town { do: "post" }'s flat charge name. class: "idea" IS A POST on this office (POS-290): args { class: "idea", title, body } (body at most 600 characters; the old card's slug and body still post, the title then the claim's first clause). It has no place and no escrow, never crosses the settlement, and joins the Think Tank's posts at once. The town's hands (${IDEA_HANDS.join(", ")}) move it to any named stage; anyone signs up to build a part with town { do: "sign-up" }; stamps are awarded by hand (town { do: "award" }). at, on, image, by and stamps are the mark road's, refused here for an idea; the world door still places idea marks (world_leave_mark).`;
+// Kept from the literal card: the mark road's sentences go, this one stays.
+const BOUNTIES_LATER = "Bounties and listings open here after their migrations; until then bounties post at the world door.";
+/** The card from its one anchor on; an anchor that moved, or is there twice, throws at load (town-apex.mjs § swapOnce's rule). */
+function cutFrom(text, anchor) {
+  const at = text.indexOf(anchor);
+  if (at === -1 || text.indexOf(anchor, at + 1) !== -1) throw new Error(`the idea class's town_post card no longer finds its anchor once: ${anchor}`);
+  return text.slice(at);
+}
 /** The town_post card: the literal off; with the idea class open, the post road first and the other classes as they stand. */
 function ideasFirst(tool) {
   if (!ideaPostsOn()) return tool;
   const off = tool.description;
   const p = tool.inputSchema.properties;
   return { ...tool,
-    description: `${IDEA_POST_LEAD} ${off.slice(off.indexOf('AND class: "event"'))}`,
+    description: `${IDEA_POST_LEAD} ${BOUNTIES_LATER} ${cutFrom(off, 'AND class: "event"')}`,
     inputSchema: { ...tool.inputSchema, properties: { ...p,
       class: { ...p.class, description: 'which class — "idea" (a post in the Think Tank, POS-290), "event" (the town\'s calendar, POS-288), "quest" (the town\'s own post, by the town\'s hands only, POS-294) or "bug" (something broken, for the town\'s hands to confirm and move along)' },
       slug: { type: "string", description: 'class "idea": optional — its id within your name, <you>/<slug> (lowercase-hyphenated); leave it off and the title names it' },

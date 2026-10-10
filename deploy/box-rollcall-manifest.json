@@ -19,11 +19,14 @@
     "THE LAW THIS SERVES (OPERATIONS.md § Built is not Done): a mechanism folds only",
     "with its runner, its liveness check, and its activation owner named.",
     "",
-    "ADDING A ROW. Every postmark-* timer on the box, and every ENABLED postmark-*",
-    "service, must appear here — the checker globs the box and reports ALARM-unmanifested",
-    "for anything it finds that this file does not name, which is what keeps the roll-call",
-    "from decaying into a snapshot of the day it was written. Parked rows are legal.",
-    "Omission is not.",
+    "ADDING A ROW. Every postmark-* timer on the box, every ENABLED postmark-*",
+    "service, and every live INSTANCE of a template (postmark-office-read@4391, not the",
+    "template's one file line) must appear here — the checker globs the box and reports",
+    "ALARM-unmanifested for anything it finds that this file does not name, which is what",
+    "keeps the roll-call from decaying into a snapshot of the day it was written. Parked",
+    "rows are legal. Omission is not. The same law is checked on the PR: a unit in",
+    "deploy/ the box could run on its own (a timer, or a service with [Install] that",
+    "is not a timer's body) with no row here reddens test/box-rollcall.test.mjs (h3).",
     "",
     "FIELDS.",
     "  unit                  the systemd unit, exactly as systemctl names it",
@@ -45,6 +48,10 @@
     "  stale_means           the sentence the operator reads at 8am: what it means for THIS",
     "                        unit to be late, and why the allowance is that number",
     "  no_staleness_because  the only escape from an allowance, and deliberately a sentence",
+    "  box_only              for a unit whose file is NOT in deploy/: {path, why, measured}",
+    "                        — where systemd reads it on the box, and why it is not",
+    "                        committed. Every other row's unit (or its template) is a",
+    "                        file in deploy/, which the repo's test checks (h3)",
     "  outcome               judges what the rail PRODUCED, not just that it ran — a rolling",
     "                        Inside it: history_path · alarm_on_classes (terminal on sight) ·",
     "                        zero_published_runs (the starvation window) · means (the ONE sentence",
@@ -299,10 +306,111 @@
       "stale_means": "For five minutes or more, every minute either found an office_api session idle inside a transaction for 5 s or more, or could not ask the store at all. That is the 2026-10-04 stall's signature (POS-370): a connection held open while its holder waits on something else, the pool drains, and every later store read waits behind it while the CPU sits idle. Read last_minute.stuck_sessions for which pool and worker hold them (application_name postmark-office:<pool>:t<thread>) and the statement each last ran; GET /api/ops/store-txn gives the live numbers. With idle_in_transaction_session_timeout on (the office's own pools ask for 30 s, and DEPLOY.md § POS-370 sets it on the roles) such a session should not outlive 30 s, so this alarm also means the timeout is not in force. If switch 2 is on, its rollback is the documented one (the env line out, the office restarted). THE LIMIT, said once: a point-in-time reader like the rest of the board; a stall that cleared before the roll-call ran is in worst_24h."
     },
     {
+      "unit": "postmark-office-read@4391.service",
+      "label": "read worker 4391 (the systemd read pool)",
+      "stage": "parked",
+      "activation_owner": "Keemin — the systemd read pool is DEC-4 / G3 (\"We are paying for four cores so we should use them\", 2026-08-29), built 2026-09-08 as deploy/postmark-office-read@.service and never installed: the box read of 2026-10-04 found no postmark-office-read@ unit (docs/2026-10-04/rail/switch3/RUNBOOK.md), and prod's env carries OFFICE_READ_WORKERS=3, the in-process pool (read 2026-10-07, docs/2026-10-07/rail/pos-354/NOTES.md). Adopting it is his word.",
+      "cadence": "always on, once adopted",
+      "cadence_source": "systemctl show postmark-office-read@4391.service -p ActiveState",
+      "parked_because": "the office's reads run on worker_threads inside the writer's process (src/read-workers.mjs; OFFICE_READ_WORKERS=3 on prod), so no worker process runs today. These rows exist so that the day the systemd pool is enabled the roll-call already names each instance: an enabled instance reads ALARM-unparked until its rows go live, never silence (postmark-office#354, POS-522)",
+      "adopt_command": "the carry recipe at the foot of deploy/postmark-office-read@.service (the slice, then the template, then sudo systemctl enable --now postmark-office-read@439{1,2,3}.service), and all six read-worker rows here flipped to live in the same act — ONLY at Keemin's word",
+      "heartbeat": {
+        "kind": "unit_active"
+      },
+      "no_staleness_because": "An always-on daemon is judged by being up, as the office API row is. Its uptime is carried for the flap.",
+      "stale_means": "Not applicable. Down means nginx's least_conn pool (deploy/nginx-postmark-read-pool-upstreams.conf) loses a worker and its GETs crowd onto the others, then onto the writer, which is the pool's backup. The town still answers, slower, and only this row says why."
+    },
+    {
+      "unit": "postmark-office-read@4391.service",
+      "label": "read worker 4391's thread",
+      "stage": "parked",
+      "activation_owner": "Keemin — with the read pool this row watches (see read worker 4391's row). src/loop-lag.mjs writes the file from every office process that is not an in-process worker thread, so a --role read process on port 4391 writes loop-lag-4391.json.",
+      "cadence": "read as: last CALM, rewritten every minute once the worker runs",
+      "cadence_source": "src/loop-lag.mjs (MINUTE_MS)",
+      "parked_because": "as read worker 4391's row: no worker process runs today",
+      "adopt_command": "with read worker 4391's row, in the same act",
+      "heartbeat": {
+        "kind": "state_file",
+        "path": "/srv/postmark-office/telemetry/loop-lag-4391.json",
+        "stamp_field": "calm_at",
+        "stale_after_minutes": 10
+      },
+      "stale_means": "For ten minutes or more, no minute passed in which every caller of this worker got its thread within 5 s, or the worker stopped writing the file. It is the office's thread row on one worker: nginx keeps handing a slow worker its share of GETs for as long as it answers at all, so a stalled worker is slow reads for a third of the town."
+    },
+    {
+      "unit": "postmark-office-read@4392.service",
+      "label": "read worker 4392 (the systemd read pool)",
+      "stage": "parked",
+      "activation_owner": "Keemin — as read worker 4391's row: DEC-4 / G3, built 2026-09-08 and never installed; adopting it is his word.",
+      "cadence": "always on, once adopted",
+      "cadence_source": "systemctl show postmark-office-read@4392.service -p ActiveState",
+      "parked_because": "as read worker 4391's row: the reads run in-process today",
+      "adopt_command": "with read worker 4391's row, in the same act",
+      "heartbeat": {
+        "kind": "unit_active"
+      },
+      "no_staleness_because": "An always-on daemon is judged by being up, as read worker 4391's row is.",
+      "stale_means": "Not applicable. Down is read worker 4391's row's sentence, for this worker."
+    },
+    {
+      "unit": "postmark-office-read@4392.service",
+      "label": "read worker 4392's thread",
+      "stage": "parked",
+      "activation_owner": "Keemin — with the read pool this row watches (see read worker 4391's row).",
+      "cadence": "read as: last CALM, rewritten every minute once the worker runs",
+      "cadence_source": "src/loop-lag.mjs (MINUTE_MS)",
+      "parked_because": "as read worker 4391's row: no worker process runs today",
+      "adopt_command": "with read worker 4391's row, in the same act",
+      "heartbeat": {
+        "kind": "state_file",
+        "path": "/srv/postmark-office/telemetry/loop-lag-4392.json",
+        "stamp_field": "calm_at",
+        "stale_after_minutes": 10
+      },
+      "stale_means": "Read worker 4391's thread row's sentence, for this worker: ten minutes with no calm minute, or no file being written."
+    },
+    {
+      "unit": "postmark-office-read@4393.service",
+      "label": "read worker 4393 (the systemd read pool)",
+      "stage": "parked",
+      "activation_owner": "Keemin — as read worker 4391's row: DEC-4 / G3, built 2026-09-08 and never installed; adopting it is his word.",
+      "cadence": "always on, once adopted",
+      "cadence_source": "systemctl show postmark-office-read@4393.service -p ActiveState",
+      "parked_because": "as read worker 4391's row: the reads run in-process today",
+      "adopt_command": "with read worker 4391's row, in the same act",
+      "heartbeat": {
+        "kind": "unit_active"
+      },
+      "no_staleness_because": "An always-on daemon is judged by being up, as read worker 4391's row is.",
+      "stale_means": "Not applicable. Down is read worker 4391's row's sentence, for this worker."
+    },
+    {
+      "unit": "postmark-office-read@4393.service",
+      "label": "read worker 4393's thread",
+      "stage": "parked",
+      "activation_owner": "Keemin — with the read pool this row watches (see read worker 4391's row).",
+      "cadence": "read as: last CALM, rewritten every minute once the worker runs",
+      "cadence_source": "src/loop-lag.mjs (MINUTE_MS)",
+      "parked_because": "as read worker 4391's row: no worker process runs today",
+      "adopt_command": "with read worker 4391's row, in the same act",
+      "heartbeat": {
+        "kind": "state_file",
+        "path": "/srv/postmark-office/telemetry/loop-lag-4393.json",
+        "stamp_field": "calm_at",
+        "stale_after_minutes": 10
+      },
+      "stale_means": "Read worker 4391's thread row's sentence, for this worker: ten minutes with no calm minute, or no file being written."
+    },
+    {
       "unit": "postmark-office-dev.service",
       "label": "the dev office",
       "stage": "live",
       "activation_owner": "Wright — the dev sandbox standup, unit installed 2026-08-22; behind Cloudflare Access by design",
+      "box_only": {
+        "path": "/etc/systemd/system/postmark-office-dev.service",
+        "measured": "2026-10-07 by lane plumb-dev-rehearsal (docs/2026-10-07/rail/pos-354/NOTES.md): active, User=meepo, WorkingDirectory=/srv/postmark-office-dev, ExecStart node src/server.mjs --port 4381, EnvironmentFile=/etc/postmark-office-dev.env. The path is the box's convention for a hand-installed unit; its FragmentPath was not read.",
+        "why": "it was installed by hand at the dev standup and its file was never committed. Its properties are measured and its full text is not, and a file rebuilt from them in deploy/ would be a second copy nobody can say matches the box. The repair is `systemctl cat postmark-office-dev` read on the box and committed to deploy/ verbatim, and then this block is deleted (POS-522)."
+      },
       "cadence": "always on",
       "cadence_source": "systemctl show postmark-office-dev.service -p ActiveState",
       "heartbeat": {
@@ -702,6 +810,9 @@
     "reading a property that answers a path. Both of those scripts DO sit under a",
     "tree that another row already checks, so nothing is unwatched today; a unit that",
     "execs out of a tree NO row names would be, and that is the day to build it.",
+    "That day was 2026-10-09: the disk watch and the /tmp janitor exec scripts copied",
+    "by hand into /usr/local/sbin, which no tree row names, so the file_copy row",
+    "box-sbin-scripts reads those two files against the release (POS-522).",
     "",
     "ADDING A ROW is not optional in one direction: a live unit whose service names",
     "a tree and has no row here comes back ALARM-tree from the reverse check, the",
@@ -783,6 +894,30 @@
         "must_be": "release",
         "why": "It attributes PayPal gifts to their pots and households and writes them onto the stamp ledger's pot-receipt rows. A watcher on an old tree attributes by an old rule, through a green board — the 2026-09-10 candle's class.",
         "activation_owner": "Wright — WorkingDirectory=/srv/postmark-office in deploy/postmark-paypal-watch.service; adopted with the watch at the w41 ship (2026-10-04)."
+      },
+      {
+        "id": "office-read-4391",
+        "unit": "postmark-office-read@4391.service",
+        "label": "read worker 4391's tree",
+        "must_be": "release",
+        "why": "A read worker on an old tree answers GETs by old code while the writer answers by the release: two offices disagreeing about the town, the split-brain deploy/postmark-office-read@.service names. Parked with its pool, so this row reports and alarms on nothing until the pool is adopted.",
+        "activation_owner": "Keemin — with the read pool (parked); WorkingDirectory=/srv/postmark-office in deploy/postmark-office-read@.service."
+      },
+      {
+        "id": "office-read-4392",
+        "unit": "postmark-office-read@4392.service",
+        "label": "read worker 4392's tree",
+        "must_be": "release",
+        "why": "As read worker 4391's tree row, for this worker.",
+        "activation_owner": "Keemin — with the read pool (parked); WorkingDirectory=/srv/postmark-office in deploy/postmark-office-read@.service."
+      },
+      {
+        "id": "office-read-4393",
+        "unit": "postmark-office-read@4393.service",
+        "label": "read worker 4393's tree",
+        "must_be": "release",
+        "why": "As read worker 4391's tree row, for this worker.",
+        "activation_owner": "Keemin — with the read pool (parked); WorkingDirectory=/srv/postmark-office in deploy/postmark-office-read@.service."
       },
       {
         "id": "usdc-watch",
@@ -894,6 +1029,17 @@
         "why": "THE SAME CLASS ONE LAYER DOWN, and it is already live. The four world2 units do not exec node directly — their ExecStart is /srv/world2-lab/ops/world2-<lane>.sh, and DEPLOY.md calls that directory 'a plain file copy from this repo'. No deploy writes it. On 2026-09-05 a one-line default in world2-refresh-clone.sh had to be carried by scp, and DEPLOY.md's own sentence for it is 'The box's copy of the script is stale until it is carried.' Nothing goes red while it is uncarried, which is the whole complaint. The drop-in above pins which OFFICE the scripts read; this row is what says the SCRIPTS themselves are the ones that shipped. Read as bytes, so a CRLF from a Windows copy reddens here rather than failing later in a way that reads like a missing file.",
         "repair": "scp deploy/world2-*.sh meepo-ec2:/srv/world2-lab/ops/ && ssh meepo-ec2 'chmod +x /srv/world2-lab/ops/*.sh' — then re-run the roll-call",
         "activation_owner": "Wright — the ops directory was placed by hand on 2026-08-29 with the four world2 lanes and has been carried by hand since."
+      },
+      {
+        "id": "box-sbin-scripts",
+        "kind": "file_copy",
+        "label": "the disk watch and /tmp janitor scripts on the box",
+        "path": "/usr/local/sbin",
+        "from": "deploy",
+        "match": "^postmark-(disk-watch|tmp-janitor)\\.sh$",
+        "why": "postmark-disk-watch.service and postmark-tmp-janitor.service exec /usr/local/sbin/postmark-{disk-watch,tmp-janitor}.sh, copies installed by hand on 2026-10-09 (DEPLOY.md § the disk). No deploy writes that directory and neither unit names a tree, so the reverse check above cannot see them: the gap §2c names, live. A fix to either script in deploy/ would never reach the box and nothing would go red. Read as bytes.",
+        "repair": "sudo install -m 0755 /srv/postmark-office/deploy/postmark-tmp-janitor.sh /srv/postmark-office/deploy/postmark-disk-watch.sh /usr/local/sbin/ — then re-run the roll-call",
+        "activation_owner": "Wright — the scripts were placed by hand with their units on Darko's go, 2026-10-09 (office #444); this row is POS-522's."
       }
     ]
   }

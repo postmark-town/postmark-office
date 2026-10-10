@@ -36,7 +36,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { writeFileSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { writeFileSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join, dirname, delimiter } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -75,6 +75,7 @@ import {
   classifyTree,
   declaredTree,
   unrowedTrees,
+  parseDiscovery,
   serviceOf,
   pickEnv,
   readRelease,
@@ -638,6 +639,46 @@ test("FALSIFIER (g): a PARKED row that the box has ENABLED is ALARM-unparked", (
   assert.match(row.reason, /recorded PARKED in the manifest but the box has it/);
 });
 
+test("FALSIFIER (g2): a PARKED read@ row alarms once its instance is ENABLED, and once it was started by hand and FAILED (#471 review)", () => {
+  // The read pool's rows are parked (POS-522). A worker someone starts by hand
+  // and that then dies is disabled AND failed, and until the #471 review that
+  // read PARKED: a quiet board over a rail that ran. Planted rather than read
+  // from the shipped read@ rows, so this keeps asserting after the pool is adopted.
+  const unit = "postmark-office-read@4399.service";
+  const m = manifest();
+  const planted = {
+    ...m,
+    units: [...m.units, {
+      unit,
+      label: "a planted read worker",
+      stage: "parked",
+      activation_owner: "planted by test/box-rollcall.test.mjs — this row is not on the box",
+      cadence: "always on, once adopted",
+      cadence_source: `systemctl show ${unit} -p ActiveState`,
+      parked_because: "planted",
+      adopt_command: `sudo systemctl enable --now ${unit}`,
+      heartbeat: { kind: "unit_active" },
+      no_staleness_because: "an always-on daemon is judged by being up",
+      stale_means: "nothing, while parked — a parked row is never alarmed for being inert",
+    }],
+  };
+  const base = healthy(planted);
+  const withUnit = (state) => mutate(base, (s) => { s.units[unit] = { load_state: "loaded", result: "", ...state }; });
+
+  // The control: the template is installed and the instance never ran.
+  const quiet = withUnit({ active_state: "inactive", unit_file_state: "disabled" });
+  assert.equal(rowFor(rollcall(planted, quiet, T0), unit).verdict, PARKED);
+
+  const enabled = withUnit({ active_state: "active", unit_file_state: "enabled" });
+  assert.equal(rowFor(rollcall(planted, enabled, T0), unit).verdict, ALARM_UNPARKED);
+
+  const died = withUnit({ active_state: "failed", unit_file_state: "disabled", result: "exit-code" });
+  const row = rowFor(rollcall(planted, died, T0), unit);
+  assert.equal(row.verdict, ALARM_UNPARKED);
+  assert.match(row.reason, /failed \(disabled\): it ran and died/);
+  assert.equal(rollcall(planted, died, T0).exitCode, 1);
+});
+
 test("a PARKED row is printed, counted apart from OK, and never contributes to the exit code", () => {
   const m = parkedManifest();
   const result = rollcall(m, healthy(m), T0);
@@ -676,6 +717,110 @@ test("FALSIFIER (h): a unit on the box that NO manifest row names is ALARM-unman
   assert.match(row.reason, /appears in NO roll-call row/);
   assert.match(row.reason, /parked rows are legal; omission is not/);
   assert.equal(result.exitCode, 1);
+});
+
+test("FALSIFIER (h2): a running INSTANCE of a template is discovered, and the template's own file line is not a unit (POS-522)", () => {
+  // `list-unit-files` lists files, so an enabled template is one line however
+  // many instances run, and a dead read worker raised no alarm in either
+  // direction (postmark-office#354). The live listing is where instances are.
+  const unitFiles = [
+    "postmark-ferry.timer                 enabled  enabled",
+    "postmark-ferry.service               static   -",
+    "postmark-office.service              enabled  enabled",
+    "postmark-office-read@.service        indirect enabled",
+    "postmark-settlement-by-hand.service  static   -",
+  ].join("\n");
+  const live = [
+    "postmark-ferry.service             loaded activating start   Postmark ferry crossing",
+    "postmark-ferry.timer               loaded active     waiting Postmark ferry crossing",
+    "postmark-office-read@4391.service  loaded active     running Postmark office READ WORKER on port 4391",
+    "● postmark-office-read@4392.service loaded failed    failed  Postmark office READ WORKER on port 4392",
+    "postmark-office.service            loaded active     running Postmark office",
+  ].join("\n");
+
+  assert.deepEqual(parseDiscovery(unitFiles, live), [
+    "postmark-ferry.timer",
+    "postmark-office-read@4391.service",
+    "postmark-office-read@4392.service",
+    "postmark-office.service",
+  ]);
+  // The control: the file listing alone, as discovery read the box before
+  // POS-522, never names an instance, so no row could be asked for one.
+  assert.deepEqual(parseDiscovery(unitFiles), ["postmark-ferry.timer", "postmark-office.service"]);
+
+  // And through the judgment: a worker the box runs that no row names alarms.
+  const m = manifest();
+  const s = mutate(healthy(m), (x) => {
+    x.discovered.push("postmark-office-read@4399.service");
+    x.services["postmark-office-read@4399.service"] = { load_state: "loaded", active_state: "active", unit_file_state: "enabled" };
+  });
+  assert.equal(rowFor(rollcall(m, s, T0), "postmark-office-read@4399.service").verdict, ALARM_UNMANIFESTED);
+});
+
+// The unit files a box can run on its own: every timer, and every service with
+// an [Install] section that is not a timer's body. A template counts once per
+// INSTANCE, so a row must name an instance of it.
+const DEPLOY_DIR = join(HERE, "..", "deploy");
+function deployUnitFiles() {
+  return readdirSync(DEPLOY_DIR)
+    .filter((f) => /^postmark-.*\.(service|timer)$/.test(f))
+    .map((f) => ({ file: f, installable: /^\[Install\]/m.test(readFileSync(join(DEPLOY_DIR, f), "utf8")) }));
+}
+
+function unrowedDeployUnits(m, files) {
+  const named = new Set(m.units.map((r) => r.unit));
+  const names = new Set(files.map((f) => f.file));
+  const gaps = [];
+  for (const { file, installable } of files) {
+    if (file.endsWith(".timer")) { if (!named.has(file)) gaps.push(file); continue; }
+    if (names.has(file.replace(/\.service$/, ".timer"))) continue; // its timer's row speaks for it
+    if (!installable) continue; // static: started by hand or pulled in, never enabled, never discovered
+    if (file.includes("@.")) {
+      const [pre, post] = file.split("@");
+      const instance = new RegExp(`^${pre}@[^.@]+${post.replace(/\./g, "\\.")}$`);
+      if (![...named].some((u) => instance.test(u))) gaps.push(file);
+      continue;
+    }
+    if (!named.has(file)) gaps.push(file);
+  }
+  return gaps;
+}
+
+function unfiledRows(m, files) {
+  const names = new Set(files.map((f) => f.file));
+  return [...new Set(m.units.filter((r) => !r.box_only && !names.has(r.unit.replace(/@[^.@]+\./, "@."))).map((r) => r.unit))];
+}
+
+test("FALSIFIER (h3): every unit in deploy/ the box could run has a row, and every row's unit is in deploy/ or says where it lives (POS-522)", () => {
+  // ALARM-unmanifested catches this on the box, the morning after an install.
+  // This catches it on the PR that adds the unit: the read pool's template sat
+  // in deploy/ from 2026-09-08 with no row, and the dev office's row named a
+  // unit whose file nobody could read.
+  const m = manifest();
+  const files = deployUnitFiles();
+  assert.ok(files.length > 30, `read ${files.length} unit files from deploy/; the reader is wrong`);
+  assert.deepEqual(unrowedDeployUnits(m, files), [], "a unit in deploy/ with no roll-call row");
+  assert.deepEqual(unfiledRows(m, files), [], "a roll-call row whose unit is not in deploy/ and does not say box_only");
+
+  // The check is not vacuous: a planted timer, an installable service and a
+  // template with no instance row are each named, and a static body is not.
+  const planted = [
+    ...files,
+    { file: "postmark-planted.timer", installable: true },
+    { file: "postmark-planted-daemon.service", installable: true },
+    { file: "postmark-planted-pool@.service", installable: true },
+    { file: "postmark-planted-by-hand.service", installable: false },
+  ];
+  assert.deepEqual(unrowedDeployUnits(m, planted), ["postmark-planted.timer", "postmark-planted-daemon.service", "postmark-planted-pool@.service"]);
+
+  // A box-only row carries its path and its reason, and the loader refuses one that does not.
+  const dir = tempDir("box-rollcall-");
+  const tmp = join(dir, "manifest.json");
+  const row = { unit: "postmark-x.service", stage: "live", activation_owner: "planted by the test" };
+  writeFileSync(tmp, JSON.stringify({ units: [{ ...row, box_only: { why: "only on the box" } }] }));
+  assert.throws(() => loadManifest(tmp), /names no absolute path/);
+  writeFileSync(tmp, JSON.stringify({ units: [{ ...row, box_only: { path: "/etc/systemd/system/postmark-x.service" } }] }));
+  assert.throws(() => loadManifest(tmp), /does not say why/);
 });
 
 // ── §7 THE MANIFEST'S OWN LAW ───────────────────────────────────────────────

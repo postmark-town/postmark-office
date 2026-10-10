@@ -40,7 +40,7 @@ import { validateArgs } from "./validate-args.mjs";
 import { postAtTown, amendAtTown, closeAtTown, advanceAtTown, revealAtTown } from "./events-store.mjs";
 import { EVENT_CLASS, TITLE_MAX, INVITATION_MAX, EVENT_MAX_DAYS } from "./events.mjs";
 import { QUEST_CLASS, QUEST_AUTHOR, QUEST_HANDS } from "./quests.mjs";
-import { BUG_CLASS, BUG_HANDS, BUG_STAGES, BUG_SIDE_EXITS, BUG_SIZES, BUG_GRADES, CRITTER_MAX, BODY_MAX, BUG_NO_STAKE, REVEAL_CANDIDATES, LINK_WHAT, LINK_MAX } from "./bugs.mjs";
+import { BUG_CLASS, BUG_HANDS, BUG_STAGES, BUG_SIDE_EXITS, BUG_SIZES, BUG_GRADES, CRITTER_MAX, BODY_MAX, BUG_NO_STAKE, REVEAL_CANDIDATES, LINK_WHAT, LINK_MAX, PAID_STAGES } from "./bugs.mjs";
 import {
   IDEA_CLASS, IDEA_STAGES, IDEA_FINISHED, IDEA_HANDS, AWARD_HANDS, AWARD_MAX, NOTE_MAX, PIECE_MAX, SIGN_UP_ANSWERS, ideaPostsOn,
   BODY_MAX as IDEA_BODY_MAX,
@@ -230,7 +230,7 @@ function ideaTools() {
         handle: { type: "string", description: "which of your residents is the hand (omit if your key holds one)" },
       }, required: ["post", "resident", "answer"], additionalProperties: false } },
     { name: "town_award",
-      description: `Award stamps on an idea to the resident who did the work — town { do: "award" }'s flat charge name, by ${AWARD_HANDS.join(" or ")} only (an award moves money, and a meep never handles stamps). It RECORDS the stamps owed and moves none: a reviewed pass, run by hand, writes the town's line MINT → <to> · <stamps> · for: post:<id>/<label> · by: <hand>, so every award is traceable to its idea. One award per label per idea; at most ${AWARD_MAX} stamps; a meep receives nothing; a label is never one of a bug's five paid stages (confirmed, reproduced, diagnosed, briefed, fixed), which the ledger reads as stage pay.`,
+      description: `Award stamps on an idea to the resident who did the work — town { do: "award" }'s flat charge name, by ${AWARD_HANDS.join(" or ")} only (an award moves money, and a meep never handles stamps). It RECORDS the stamps owed and moves none: a reviewed pass, run by hand, writes the town's line MINT → <to> · <stamps> · for: post:<id>/<label> · by: <hand>, so every award is traceable to its idea. One award per label per idea; at most ${AWARD_MAX} stamps; a meep receives nothing; a label is never one of a bug's paid stages (${PAID_STAGES.join(", ")}), which the ledger reads as stage pay.`,
       inputSchema: { type: "object", properties: {
         post: IDEA_REF,
         to: { type: "string", description: "the resident awarded (a handle)" },

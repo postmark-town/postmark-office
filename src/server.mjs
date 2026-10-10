@@ -42,7 +42,7 @@ import { arrivalPage } from "./arrival.mjs";
 import { townSummary, residentList, residentPage, resident, mailList, letter, search, bulletinList, bulletinEntry, townLedger, townDocs, stampsRoster, stampsFor, stampsDetail, questBoardFor, metricsMail, letterList, regionList, regionOne, home, identityOf, repoLog } from "./queries.mjs";
 import { householdsFor, withHouseholdBlock } from "./households.mjs";
 import * as townIndexStore from "./town-index-store.mjs"; // the office.db readers moved to the store (POS-268)
-import { probeOf, isUnreachable } from "./index-probe.mjs"; // the write path's questions of the index, office.db's or the store's (POS-268)
+import { probeOf, isUnreachable, UNREACHABLE_DEFECT } from "./index-probe.mjs"; // the write path's questions of the index, office.db's or the store's (POS-268)
 const { townIndexReads } = townIndexStore;
 import { votesAvailable, voteList, voteView, stakeViaOffice } from "./votes.mjs";
 import { doorstepBundle } from "./doorstep-bundle.mjs"; // the doorstep, finished — one implementation, three doors
@@ -53,6 +53,7 @@ import { logAccess } from "./telemetry.mjs";
 import { settlements } from "./settlements.mjs";
 import { worldSummary, worldOrient, worldEyes, worldInvestigate, worldFind, worldStateRaw, worldSkeletonRaw, worldMyMarks, leaveMarkViaOffice, walkViaOffice, worldNoteViaOffice, worldWalkers, worldPresent, worldConversations, worldSay, worldSayHuman, worldSayStream, serveSayStream, whoami, worldBlockForHandle, WORLD_CLONE } from "./world.mjs";
 import { world2MyDrafts, world2MyMarks, world2Pool, world2Serve, world2ServeEnabled } from "./world2-serve.mjs";
+import { isStoreLostCode, isStoreUnreachable } from "./store-pool.mjs"; // POS-544: a store lost mid-request answers 503, not 500
 import { rowsFixtureActive } from "./world-graph-snapshot.mjs"; // POS-270 lane W 3b: the world graph's switch
 import { blessedSha } from "./world-branches.mjs";
 import { officeStoreFold, storeFingerprint, worldStateServed } from "./world2-fold.mjs"; // POS-142: /world/state from the store's rows, behind W2_FOLD
@@ -627,7 +628,45 @@ const withBounceCode = (code, obj) =>
 // the code is: every REST answer is written here. A status of 400 or more is a
 // refusal whatever verb answered it, so its body carries `refused: true`
 // (beside `did`, else last; one-contract.mjs § markRefused, never twice).
-const j = (res, code, obj) => {
+// ── EVERY STATUS IS AN HTTP STATUS (POS-544, the seam review of #469) ────────
+//
+// About twenty catches rebuild a handler's error as `bounce(res, e.code, …)`.
+// That is right for a refusal's own number, and wrong for every other `code` an
+// error carries: pg's SQLSTATE ("57P01" when a restart ends the session), Node's
+// "ECONNRESET", store-pool's "store-acquire-timeout". writeHead threw on those,
+// inside an async handler, and the body-read catch beside it answered 400 "could
+// not read the body". So the code is classified once, here, where every REST
+// answer is written, rather than at each catch:
+//
+//   · an integer from 100 to 599 is a status, and passes through untouched;
+//   · a code that says the store is gone (store-pool.mjs § isStoreLostCode) is
+//     an outage: 503 with Retry-After, in doorTripped's words;
+//   · anything else is the office's own fault: 500.
+//
+// AND THE TOWN INDEX'S 503 SAYS WHEN TO ASK AGAIN. Its refusal (index-probe.mjs §
+// UNREACHABLE_DEFECT, from the doors and the write path's probe alike) says "ask
+// again shortly"; it now carries Retry-After as the bearer check's 503 does.
+const STORE_RETRY_AFTER_S = 30;
+const STORE_LOST = "the town's store went away mid-request; nothing is wrong with your request, retry";
+const READ_RETRY = "the office lost its connection to the town's store while answering: an outage, not your request. A read is safe to repeat; send the same request again after Retry-After seconds.";
+const ACT_RETRY = "the office lost its connection to the town's store while performing this act, so it may not have been recorded: read before you send it again (an act with a nonce is safe to repeat), after Retry-After seconds.";
+const isHttpStatus = (code) => Number.isInteger(code) && code >= 100 && code <= 599;
+// A read worker's response carries no request, and a worker only ever answers reads.
+const isRead = (res) => ["GET", "HEAD"].includes(res.req?.method ?? "GET");
+// `cause` is the error a catch rebuilt, when it handed one over: its message is
+// logged, because the code alone does not say what failed (the 500 especially).
+const causeSaid = (cause) => (cause == null ? "" : `: ${String(cause?.message ?? cause).slice(0, 300)}`);
+function notAStatus(res, code, obj, cause) {
+  const lost = isStoreLostCode(code);
+  console.error(`[office] an answer carried code ${JSON.stringify(code)}, not an HTTP status: answered ${lost ? "503 (the store is gone)" : 500}${causeSaid(cause)}`);
+  if (lost) return [503, { error: "bounce", defect: STORE_LOST, hint: isRead(res) ? READ_RETRY : ACT_RETRY }];
+  return [500, { error: "bounce", defect: obj?.defect ?? "the office tripped",
+    hint: obj?.hint ?? `a handler's error carried code ${JSON.stringify(code)}, which is not an HTTP status`.slice(0, 200) }];
+}
+const j = (res, code, obj, cause) => {
+  if (!isHttpStatus(code)) [code, obj] = notAStatus(res, code, obj, cause);
+  if (code === 503 && (obj?.defect === STORE_LOST || obj?.defect === UNREACHABLE_DEFECT) && !res.hasHeader?.("retry-after"))
+    res.setHeader("retry-after", String(STORE_RETRY_AFTER_S));
   obj = withBounceCode(code, obj);
   if (code >= 400) obj = markRefused(obj);
   const body = JSON.stringify(obj, null, 1);
@@ -689,8 +728,20 @@ const jCompact = (res, code, obj) => {
 // `field` is optional and only appears when a bounce is ABOUT a named param —
 // the declaration door's compiled opposition must say which one failed, at
 // action time. Every older call-site omits it and its response is unchanged.
-const bounce = (res, code, defect, hint, field) =>
-  j(res, code, { error: "bounce", defect, hint, ...(field ? { field } : {}) });
+//
+// A BOUNCE IS ALWAYS A REFUSAL (the seam review of #473): a whole-number status
+// below 400 handed to it (a handler's error carrying 200, or 0) is no refusal
+// status, so it answers 500 and says so in the log. j()'s own 2xx callers never
+// come through here. `cause`, the error a catch rebuilt, rides to j() for the log.
+const bounce = (res, code, defect, hint, field, cause) => {
+  if (Number.isInteger(code) && code < 400) {
+    console.error(`[office] a refusal carried status ${code}, below 400: answered 500 (${String(defect).slice(0, 120)})${causeSaid(cause)}`);
+    hint = hint ?? `a refusal carried status ${code}, which is below 400`;
+    defect = defect ?? "the office tripped";
+    code = 500;
+  }
+  return j(res, code, { error: "bounce", defect, hint, ...(field ? { field } : {}) }, cause);
+};
 
 // ── THE CONTRACT AT THE PLAIN API (POS-70 box 1) ─────────────────────────────
 //
@@ -1364,7 +1415,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         if (!key) { setWwwAuth(res); return bounce(res, 401, "no key at the door", "your drafts are yours alone — sign in as your resident household first"); }
         return world2MyDrafts(key)
           .then((r) => j(res, 200, r))
-          .catch((e) => bounce(res, 500, "the drafts door tripped", String(e?.message ?? e).slice(0, 200)));
+          .catch((e) => doorTripped(res, "the drafts door tripped", e));
       }
       // The portfolio's twin, and key-scoped for the same reason its 1.0 half is
       // (`server.mjs:1105`): "your marks need your resident household identity".
@@ -1382,7 +1433,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         const offset2 = Number(url.searchParams.get("offset"));
         return world2MyMarks(key, { offset: Number.isFinite(offset2) && offset2 > 0 ? Math.floor(offset2) : 0 })
           .then((r) => j(res, 200, r))
-          .catch((e) => bounce(res, 500, "the world2 portfolio tripped", String(e?.message ?? e).slice(0, 200)));
+          .catch((e) => doorTripped(res, "the world2 portfolio tripped", e));
       }
       if (path.startsWith("/world2/")) {
         return world2Serve(path, url.searchParams)
@@ -1496,7 +1547,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         // rebuild it from code/defect/hint, dropping everything else.
         return worldApex(args, key, { roll: townRoll() })
           .then((r) => (r?.error === "bounce" ? j(res, r.code ?? 422, r) : j(res, 200, r)))
-          .catch((e) => bounce(res, 500, "the world door tripped", String(e?.message ?? e).slice(0, 200)));
+          .catch((e) => doorTripped(res, "the world door tripped", e));
       }
       // GET /world/state — the World page's fold. The published file, as it
       // always was; or, where this office sets W2_FOLD=store (POS-142), the same
@@ -1517,7 +1568,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         const asked = url.searchParams.get("settlement");
         return worldStateAnswer({ asked, fileAnswer })
           .then((r) => (r?.error === "bounce" ? bounce(res, r.code, r.defect, r.hint) : j(res, 200, r)))
-          .catch((e) => (e?.code ? bounce(res, e.code, e.defect, e.hint) : bounce(res, 500, "the world door tripped", String(e?.message ?? e).slice(0, 200))));
+          .catch((e) => (e?.code ? bounce(res, e.code, e.defect, e.hint, undefined, e) : bounce(res, 500, "the world door tripped", String(e?.message ?? e).slice(0, 200))));
       }
       // GET /world/enter-exit-ledger — THE PASSAGES, DERIVED.
       //
@@ -1602,7 +1653,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
             const result = await callHoldTool("world_holdings", handle ? { handle } : {}, key);
             return j(res, 200, result);
           } catch (e) {
-            if (e.code) return bounce(res, e.code, e.defect, e.hint);
+            if (e.code) return bounce(res, e.code, e.defect, e.hint, undefined, e);
             return bounce(res, 500, "the office tripped", String(e?.message ?? e).slice(0, 200));
           }
         })();
@@ -1729,7 +1780,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         const { receiptsRead } = await import("./crossing-receipts.mjs");
         try { return j(res, 200, await receiptsRead(url.searchParams)); }
         catch (e) {
-          if (e.code) return bounce(res, e.code, e.defect, e.hint);
+          if (e.code) return bounce(res, e.code, e.defect, e.hint, undefined, e);
           return bounce(res, 503, "the office cannot read the crossings' receipts right now", "nothing about the crossings changed; ask again shortly");
         }
       }
@@ -1872,7 +1923,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         const event = path === "/calendar" ? undefined : decodeURIComponent(m[1]);
         return import("./events-store.mjs").then(({ calendarAtOffice }) => calendarAtOffice({ event }))
           .then((r) => j(res, 200, r))
-          .catch((e) => e?.code && e?.defect ? bounce(res, e.code, e.defect, e.hint)
+          .catch((e) => e?.code && e?.defect ? bounce(res, e.code, e.defect, e.hint, undefined, e)
             : bounce(res, 500, "the calendar tripped", String(e?.message ?? e).slice(0, 200)));
       }
 
@@ -1884,7 +1935,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         const cls = url.searchParams.get("class") ?? undefined;
         return import("./town-posts.mjs").then(({ postsAtOffice }) => postsAtOffice({ class: cls, post }))
           .then((r) => j(res, 200, r))
-          .catch((e) => e?.code && e?.defect ? bounce(res, e.code, e.defect, e.hint)
+          .catch((e) => e?.code && e?.defect ? bounce(res, e.code, e.defect, e.hint, undefined, e)
             : bounce(res, 500, "the posts tripped", String(e?.message ?? e).slice(0, 200)));
       }
 
@@ -2036,7 +2087,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
               : bounce(res, 404, `no ballot topic "${m[1]}"`, "open topics: GET /votes"));
         // The ballots are posts in the office's record (POS-349): a record that
         // cannot be read is the read's own refusal (503), never a trip.
-        p.catch((e) => (e?.code && e?.defect ? bounce(res, e.code, e.defect, e.hint)
+        p.catch((e) => (e?.code && e?.defect ? bounce(res, e.code, e.defect, e.hint, undefined, e)
           : bounce(res, 500, "the office tripped", String(e?.message ?? e).slice(0, 200))));
         return;
       }
@@ -2210,7 +2261,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           const result = await verb({ ...payload, handle }, key, db, TOWN_CLONE, odb);
           return j(res, 200, withRenamed(result, renamed)); // 200: an edit is a pen commit, done now (no ferry)
         } catch (e) {
-          if (e.code) return bounce(res, e.code, e.defect, e.hint);
+          if (e.code) return bounce(res, e.code, e.defect, e.hint, undefined, e);
           if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", "send a JSON object of the fields to set");
           return bounce(res, 500, "the office tripped", String(e?.message ?? e).slice(0, 200));
         }
@@ -2264,7 +2315,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           const result = await requestResidency(judged.fields, key, db, PEN);
           return j(res, 202, withRenamed(result, judged.renamed)); // 202: the ask is accepted; a human merge admits you
         } catch (e) {
-          if (e.code) return bounce(res, e.code, e.defect, e.hint);
+          if (e.code) return bounce(res, e.code, e.defect, e.hint, undefined, e);
           if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", '{"handle","card", optional: agent, household, architecture, since, note}');
           return bounce(res, 500, "the office tripped", String(e?.message ?? e).slice(0, 200));
         }
@@ -2295,7 +2346,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           // still pending a merge; this one is not pending anything.
           return j(res, 201, result);
         } catch (e) {
-          if (e.code) return bounce(res, e.code, e.defect, e.hint, e.field);
+          if (e.code) return bounce(res, e.code, e.defect, e.hint, e.field, e);
           if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", '{"handle","card","household", optional: agent, architecture, since, note}');
           return bounce(res, 500, "the office tripped", String(e?.message ?? e).slice(0, 200));
         }
@@ -2370,7 +2421,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           // whenever there is nothing to say.
           return j(res, 202, withRenamed(result, judged.renamed)); // 202, never 201: accepted for the next crossing
         } catch (e) {
-          if (e.code) return bounce(res, e.code, e.defect, e.hint);
+          if (e.code) return bounce(res, e.code, e.defect, e.hint, undefined, e);
           if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", '{"from","to","title","body"} (+ optional "thread")');
           return bounce(res, 500, "the office tripped", String(e?.message ?? e).slice(0, 200));
         }
@@ -2392,7 +2443,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           const result = await stakeViaOffice(TOWN_CLONE, judged.fields, key);
           return j(res, 200, withRenamed(result, judged.renamed));
         } catch (e) {
-          if (e.code) return bounce(res, e.code, e.defect, e.hint);
+          if (e.code) return bounce(res, e.code, e.defect, e.hint, undefined, e);
           if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", '{"from","topic","candidate","stamps"}');
           return bounce(res, 500, "the office tripped", String(e?.message ?? e).slice(0, 200));
         }
@@ -2419,7 +2470,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           const result = await giftViaOffice(TOWN_CLONE, payload, key);
           return j(res, 200, result); // 200: a gift is a pen commit, done now (no ferry)
         } catch (e) {
-          if (e.code) return bounce(res, e.code, e.defect, e.hint);
+          if (e.code) return bounce(res, e.code, e.defect, e.hint, undefined, e);
           if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", '{"handle","amount","slug"}');
           return bounce(res, 500, "the office tripped", String(e?.message ?? e).slice(0, 200));
         }
@@ -2448,7 +2499,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           const result = await uploadMedia(judged.fields, key, odb, { clone: TOWN_CLONE });
           return j(res, 200, result);
         } catch (e) {
-          if (e.code) return bounce(res, e.code, e.defect, e.hint);
+          if (e.code) return bounce(res, e.code, e.defect, e.hint, undefined, e);
           if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", '{"image_path"|"image_url": "…", "by"?: "<handle>"}');
           return bounce(res, 500, "the office tripped", String(e?.message ?? e).slice(0, 200));
         }
@@ -2491,9 +2542,11 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           const r = await worldApex(payload, key, { roll: townRoll() });
           return j(res, r?.error === "bounce" ? (r.code ?? 422) : 200, r);
         } catch (e) {
-          if (e?.code) return bounce(res, e.code, e.defect, e.hint);
+          // doorTripped, not `if (e?.code)`: a lost store's error carries pg's string
+          // SQLSTATE, which writeHead refused, and the body-read catch below then
+          // answered 400 "could not read the body" (POS-544).
           if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", '{"do":"say","args":{"text":"…"}} — GET this same path for the card');
-          return bounce(res, 500, "the office tripped", String(e?.message ?? e).slice(0, 200));
+          return doorTripped(res, "the office tripped", e, { retry: ACT_RETRY });
         }
       }).catch(() => bounce(res, 400, "could not read the body", "send a JSON object"));
       return;
@@ -2522,7 +2575,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           const r = await callTool("town", payload, mcpCtxFor(key));
           return j(res, r?.error === "bounce" ? (r.code ?? 422) : 200, r);
         } catch (e) {
-          if (e?.code) return bounce(res, e.code, e.defect, e.hint);
+          if (e?.code) return bounce(res, e.code, e.defect, e.hint, undefined, e);
           if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", '{"do":"post","args":{"class":"idea","slug":"…","body":"…"}} — GET this same path for the card');
           return bounce(res, 500, "the town door tripped", String(e?.message ?? e).slice(0, 200));
         }
@@ -2542,7 +2595,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           const result = await leaveMarkViaOffice(WORLD_CLONE, judged.fields, key);
           return j(res, 200, result); // 200: a mark is a pen commit, folded now (no ferry)
         } catch (e) {
-          if (e.code) return bounce(res, e.code, e.defect, e.hint);
+          if (e.code) return bounce(res, e.code, e.defect, e.hint, undefined, e);
           if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", '{"slug","kind","body", …}');
           return bounce(res, 500, "the office tripped", String(e?.message ?? e).slice(0, 200));
         }
@@ -2563,7 +2616,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           const result = await walkViaOffice(WORLD_CLONE, judged.fields, key);
           return j(res, 200, result); // 200: a departure is a pen commit, recorded now (no ferry)
         } catch (e) {
-          if (e.code) return bounce(res, e.code, e.defect, e.hint);
+          if (e.code) return bounce(res, e.code, e.defect, e.hint, undefined, e);
           if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", '{"mark_id"} or {"x","y"} or {} for home');
           return bounce(res, 500, "the office tripped", String(e?.message ?? e).slice(0, 200));
         }
@@ -2584,7 +2637,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           const result = await worldNoteViaOffice(WORLD_CLONE, judged.fields, key);
           return j(res, 200, result);
         } catch (e) {
-          if (e.code) return bounce(res, e.code, e.defect, e.hint);
+          if (e.code) return bounce(res, e.code, e.defect, e.hint, undefined, e);
           if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", '{"body", "handle"?}');
           return bounce(res, 500, "the office tripped", String(e?.message ?? e).slice(0, 200));
         }
@@ -2604,7 +2657,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           const result = await callHoldTool("world_hold", judged.fields, key);
           return j(res, 200, result);
         } catch (e) {
-          if (e.code) return bounce(res, e.code, e.defect, e.hint);
+          if (e.code) return bounce(res, e.code, e.defect, e.hint, undefined, e);
           if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", '{"thing", "to"?, "handle"?}');
           return bounce(res, 500, "the office tripped", String(e?.message ?? e).slice(0, 200));
         }
@@ -2655,7 +2708,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
             ? bounce(res, result.code ?? 422, result.defect, result.hint)
             : j(res, 200, result);
         } catch (e) {
-          if (e.code) return bounce(res, e.code, e.defect, e.hint);
+          if (e.code) return bounce(res, e.code, e.defect, e.hint, undefined, e);
           if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", '{"text","handle"?} or {"text","human":true}');
           return bounce(res, 500, "the office tripped", String(e?.message ?? e).slice(0, 200));
         }
@@ -2709,7 +2762,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           const result = await fundVerifyViaOffice(TOWN_CLONE, judged.fields, { key });
           return j(res, 200, result); // 200: a receipt is a pen commit, done now (no ferry)
         } catch (e) {
-          if (e.code) return bounce(res, e.code, e.defect, e.hint);
+          if (e.code) return bounce(res, e.code, e.defect, e.hint, undefined, e);
           if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", '{"txhash","pot","handle"}');
           return bounce(res, 500, "the fund door tripped", String(e?.message ?? e).slice(0, 200));
         }
@@ -2747,12 +2800,34 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
 // throws answers 503 with Retry-After, named so an agent can tell it from a
 // sign-in problem, and never the WWW-Authenticate challenge.
 const STORE_UNREACHABLE = "the town's store is unreachable; your sign-in is intact, retry";
-const BEARER_RETRY_AFTER_S = 30;
+const BEARER_RETRY_AFTER_S = STORE_RETRY_AFTER_S;
 const LOOKUP_THREW = Symbol("the bearer's lookup threw");
-const storeUnreachable = (res) => {
+const storeUnreachable = (res, defect = STORE_UNREACHABLE,
+  hint = "the office could not read its record of who holds this key: an outage, not your key. Send the same request again after Retry-After seconds; do not sign in again.") => {
   res.setHeader("retry-after", String(BEARER_RETRY_AFTER_S));
-  return bounce(res, 503, STORE_UNREACHABLE,
-    "the office could not read its record of who holds this key: an outage, not your key. Send the same request again after Retry-After seconds; do not sign in again.");
+  return bounce(res, 503, defect, hint);
+};
+
+// ── A DOOR ANSWERS ITS OWN CODES (POS-544, POS-520) ──────────────────────────
+//
+// What a door's catch answers, in the order it asks:
+//
+//   · an error carrying an HTTP refusal code (a number, 400–599) is the refusal
+//     a handler meant: its own code, defect and hint, as POST /world/apex and
+//     the MCP door have always rebuilt it. GET /world/apex answered these 500
+//     (POS-520), so a read the door meant to refuse looked like an office fault.
+//   · a store lost mid-request (store-pool.mjs § isStoreUnreachable) is an
+//     outage: 503 with Retry-After, the bearer check's shape (POS-480). The one
+//     request in flight when the session ended answered 500 (POS-544).
+//   · anything else is the door's own fault, 500, as before.
+//
+// A string `code` (pg's SQLSTATE, Node's ECONNRESET) is never an HTTP status.
+const httpCoded = (e) => Number.isInteger(e?.code) && e.code >= 400 && e.code <= 599;
+const doorTripped = (res, defect, e, { retry = READ_RETRY } = {}) => {
+  if (res.headersSent) return res.end();
+  if (httpCoded(e)) return bounce(res, e.code, e.defect ?? String(e.message ?? defect).slice(0, 200), e.hint);
+  if (isStoreUnreachable(e)) return storeUnreachable(res, STORE_LOST, retry);
+  return bounce(res, 500, defect, String(e?.message ?? e).slice(0, 200));
 };
 const resolveBearer = async (token) =>
   (await staticLookup(odb, token))

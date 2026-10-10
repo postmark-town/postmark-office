@@ -63,6 +63,7 @@
 
 import { loadRegistryRows } from "./registry-store.mjs";
 import { registryFromRows, pinsFromRows } from "./registry-rows.mjs";
+import { isResidentHandle } from "./residency.mjs"; // one definition of what a handle is
 import { resolveHouse, keyOfSlug } from "./household-deriver.mjs";
 
 /**
@@ -86,6 +87,44 @@ export function householdLookupOf(registry, pins = {}) {
     memo.set(h, block);
     return block;
   };
+}
+
+// ── WHO GAVE: A GIFT SHOWS ITS HOUSEHOLD (POS-550, Darko 2026-10-09) ────────
+//
+// Gifts are household-scoped (POS-317), but the ledger files each one under the
+// household's first resident (`pot-receipt · … · from: keith`), so a read that
+// printed `from:` named one resident for the whole house's money. DISPLAY ONLY:
+// the ledger line, the close and the holo mint still read the handle, and holo
+// still lands on that resident (household-held stamps are POS-326).
+//
+// The name is the registry row's own `name`, else its slug: the one office rule
+// for a household's name (fund-holder.mjs § holderOf, the fund page's "for"
+// row). A handle no house holds has no house name (`household: null`), and a
+// payer that is not a resident handle (`outside:stripe`) is an outside gift.
+export const OUTSIDE_GIFT = "an outside gift";
+
+/**
+ * The synchronous `(payer) => giver` over one registry read (registryRowsVia's or
+ * loadRegistryRows' rows). PURE. A giver is `{ household, household_key, handle }`,
+ * or `{ outside: true, says }` for a payer no resident is.
+ */
+export function giversOf(rows) {
+  const registry = registryFromRows(rows);
+  const lookup = householdLookupOf(registry, pinsFromRows(rows));
+  return (payer) => {
+    const p = String(payer ?? "");
+    if (!isResidentHandle(p)) return { outside: true, says: OUTSIDE_GIFT };
+    const hh = lookup(p);
+    const rec = hh.slug ? registry.households?.[hh.slug] : null;
+    return { household: hh.slug ? rec?.name ?? hh.slug : null, household_key: hh.key, handle: p };
+  };
+}
+
+/** One registry read -> giversOf's `(payer) => giver`, or null when the store could not be asked. */
+export async function giverLookup(env = process.env) {
+  let rows;
+  try { rows = await loadRegistryRows(env); } catch (e) { warnOnce(e); return null; }
+  return rows === null ? null : giversOf(rows);
 }
 
 /** One registry read -> the synchronous lookup, or null when the store could not be asked. */

@@ -193,7 +193,7 @@ test("the stake act quotes its residue class mark, never its own prose", () => {
 
 // ── the money moment ─────────────────────────────────────────────────────────
 
-test("the address rides only beside an OPEN pot, never bare in the envelope", () => {
+test("the address rides only beside an OPEN pot, never bare in the envelope", async () => {
   // THE PUBLICATION LAW (the USDC runbook R9, quoted in fund.mjs's header):
   //   "The address publishes ONLY beside a pot (the money moment carries the
   //    disclosure, per §10's second consent gate) — never bare on a page."
@@ -201,7 +201,7 @@ test("the address rides only beside an OPEN pot, never bare in the envelope", ()
     prepare: () => ({ all: () => [], get: () => undefined }),
   };
   // potBoard is exercised through fundRead's own guard; feed it directly here
-  const answer = fundRead(null, { db, stripeUrl: "https://buy.stripe.com/x" });
+  const answer = await fundRead(null, { db, stripeUrl: "https://buy.stripe.com/x" });
   assert.equal(answer.read, "fund");
   const top = JSON.stringify({ ...answer, pots: "[elided]" });
   assert.equal(/0x[0-9a-fA-F]{40}/.test(top), false,
@@ -222,7 +222,7 @@ const potDb = (files) => ({
 });
 const potIn = (answer, id) => answer.pots.find((p) => p.pot === id);
 
-test("a pot whose word is `epoch` gets the contract stated, in the pot file's own sentence", () => {
+test("a pot whose word is `epoch` gets the contract stated, in the pot file's own sentence", async () => {
   // THE LAW THIS ASSERTS — WHITE_PAGES/pot-keeping-ec2.json § source, quoted
   // verbatim, and the founder's explicit-word ruling of 2026-08-25 that made
   // the `close` field say out loud what this sentence had always ruled:
@@ -235,7 +235,7 @@ test("a pot whose word is `epoch` gets the contract stated, in the pot file's ow
   // Before the trueing this door gave the keeping pot the UNSTATED warning
   // while the public stamps page promised an epoch close — the same pot, two
   // readers, opposite answers, because each was deriving a word nobody spoke.
-  const answer = fundRead(null, { db: potDb([EPOCH_POT]) });
+  const answer = await fundRead(null, { db: potDb([EPOCH_POT]) });
   const ec2 = potIn(answer, "keeping-ec2");
   const pc = ec2.stakeable.published_close;
   assert.equal(pc.word, "epoch", "the door says the word the record speaks");
@@ -248,7 +248,7 @@ test("a pot whose word is `epoch` gets the contract stated, in the pot file's ow
     "a pot whose record speaks must not also be described as silent");
 });
 
-test("the WHOLE point: the humble path survives, for a pot that genuinely has not said", () => {
+test("the WHOLE point: the humble path survives, for a pot that genuinely has not said", async () => {
   // THE HONESTY THAT WAS NEVER THE BUG. household-stamps.mjs § CLOSE_UNSTATED,
   // quoted, and it must keep answering for a pot whose file names no word:
   //
@@ -258,7 +258,7 @@ test("the WHOLE point: the humble path survives, for a pot that genuinely has no
   // The defect was one pot's SILENT RECORD, not the reader that said so. This
   // decoy is here so that teaching the door `epoch` cannot quietly delete the
   // path a wordless pot still needs.
-  const answer = fundRead(null, { db: potDb([EPOCH_POT, SILENT_POT]) });
+  const answer = await fundRead(null, { db: potDb([EPOCH_POT, SILENT_POT]) });
   const hushed = potIn(answer, "hushed").stakeable.published_close;
   assert.equal(hushed.word, null, "no word is a real answer, not a missing field");
   assert.equal(hushed.floor_usd, null);
@@ -271,12 +271,12 @@ test("the WHOLE point: the humble path survives, for a pot that genuinely has no
   assert.equal(potIn(answer, "keeping-ec2").stakeable.published_close.word, "epoch");
 });
 
-test("a word the law spells elsewhere is passed through as said, with no invented copy", () => {
+test("a word the law spells elsewhere is passed through as said, with no invented copy", async () => {
   // `elastic` and `none` are the other two words the law spells
   // (pot-darko-fund.json § _close). The door carries them and does not write
   // prose for them here — the elastic contract lives in the pot's own file, and
   // a second copy on this door is a second thing that can drift.
-  const answer = fundRead(null, { db: potDb([ELASTIC_POT]) });
+  const answer = await fundRead(null, { db: potDb([ELASTIC_POT]) });
   const pc = potIn(answer, "darko-fund").stakeable.published_close;
   assert.equal(pc.word, "elastic");
   assert.equal(pc.floor_usd, 5, "and the floor rides with the word");
@@ -284,7 +284,7 @@ test("a word the law spells elsewhere is passed through as said, with no invente
   assert.equal("says" in pc, false, "and the door invents no contract sentence for it");
 });
 
-test("the fund read names WHEN the first close runs, for every pot that has one", () => {
+test("the fund read names WHEN the first close runs, for every pot that has one", async () => {
   // THE LAW — pot-keeping-ec2.json § _first_close, quoted (founder's ruling,
   // 2026-08-25 beta-launch sitting):
   //
@@ -295,7 +295,7 @@ test("the fund read names WHEN the first close runs, for every pot that has one"
   //
   // This read carried the cadence and the target and never the day, on the one
   // surface where a caller is deciding whether to send money.
-  const answer = fundRead(null, { db: potDb([EPOCH_POT, ELASTIC_POT, SILENT_POT]) });
+  const answer = await fundRead(null, { db: potDb([EPOCH_POT, ELASTIC_POT, SILENT_POT]) });
   assert.equal(potIn(answer, "keeping-ec2").first_close, "2026-09-30");
   // NOT only the epoch pots — the elastic box names one too, and a read that
   // surfaced the date for one kind of pot and not the other would have made the
@@ -497,7 +497,7 @@ test("the primary residue is the mode class, with keeping law still citable", ()
   assert.equal(KEEPING_STAKE_MARK, "the-town/keeping-stake", "and the keeping law stays citable");
 });
 
-test("the money moment carries the POT'S OWN address, from the shipped map", () => {
+test("the money moment carries the POT'S OWN address, from the shipped map", async () => {
   // LAW (deploy/intake-addresses.json, verbatim): "WHICH POT A USDC ARRIVAL
   //     PAYS, read off the address it landed on. An ERC-20 transfer carries no
   //     memo, so the ONLY way the chain can name a pot is for the pot to have
@@ -508,7 +508,7 @@ test("the money moment carries the POT'S OWN address, from the shipped map", () 
   // stands today: keeping-ec2 has an address of its own (minted 2026-08-25),
   // darko-fund does not and keeps the standing shared intake.
   const { map } = readIntakeMap();
-  const answer = fundRead(null, { db: potDb([EPOCH_POT, ELASTIC_POT]) });
+  const answer = await fundRead(null, { db: potDb([EPOCH_POT, ELASTIC_POT]) });
 
   const keeping = potIn(answer, "keeping-ec2").money_moment;
   const darko = potIn(answer, "darko-fund").money_moment;
@@ -532,13 +532,13 @@ test("the money moment carries the POT'S OWN address, from the shipped map", () 
     assert.equal(keeping[k], darko[k], `${k} did not fork when the address did`);
 });
 
-test("a pot that is not open publishes no address, per-pot map or not", () => {
+test("a pot that is not open publishes no address, per-pot map or not", async () => {
   // THE PUBLICATION LAW (the USDC runbook R9): "The address publishes ONLY
   //     beside a pot" — and a pot the town has not opened is not a named need
   //     it can take a dollar for. Minting keeping-ec2 an address of its own
   //     must not become a way around that gate.
   const closed = { ...EPOCH_POT, status: "closed" };
-  const answer = fundRead(null, { db: potDb([closed]) });
+  const answer = await fundRead(null, { db: potDb([closed]) });
   const row = potIn(answer, "keeping-ec2");
   assert.equal(row.money_moment, null);
   assert.match(row.why, /cannot take a dollar/);
@@ -566,9 +566,9 @@ const stakedDb = (files, stakers) => ({
   }),
 });
 
-test("POS-184 — the `fund` read names WHO staked, and its card says so", () => {
+test("POS-184 — the `fund` read names WHO staked, and its card says so", async () => {
   const rows = [{ handle: "keemin", staked: 6 }, { handle: "limen", staked: 2 }];
-  const answer = fundRead(null, { db: stakedDb([EPOCH_POT], rows) });
+  const answer = await fundRead(null, { db: stakedDb([EPOCH_POT], rows) });
   const pot = potIn(answer, "keeping-ec2");
   assert.deepEqual(pot.stakers, rows, "the read carries them, biggest first, as the board sorted them");
   assert.equal(pot.stakers.reduce((n, s) => n + s.staked, 0), pot.escrow,
@@ -581,7 +581,7 @@ test("POS-184 — the `fund` read names WHO staked, and its card says so", () =>
 
   // AND THE EMPTY CASE, present rather than absent: "nobody yet" is an answer a
   // resident can act on; a missing field is a door that did not look.
-  const bare = potIn(fundRead(null, { db: stakedDb([EPOCH_POT], []) }), "keeping-ec2");
+  const bare = potIn(await fundRead(null, { db: stakedDb([EPOCH_POT], []) }), "keeping-ec2");
   assert.deepEqual(bare.stakers, [], "an empty list");
   assert.equal(bare.escrow, 0, "beside the zero it sums to");
 });
