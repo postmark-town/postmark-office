@@ -212,6 +212,24 @@ test("the transition set is un-sovereign marks with no escrow, split by tier", {
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test("an award on an idea post is its own issuance source, and keeps every minted stamp classified (POS-290)", { skip }, () => {
+  const root = tempDir("econ-");
+  try {
+    const town = buildTown(root, { extraLines: [
+      "- 2026-10-09 · MINT → bo · 25 · for: post:ada/a-lantern/the-lantern · by: wright",
+      "- 2026-10-09 · MINT → ada · 7 · for: post:ada/a-lantern/the-hook · by: keemin",
+    ] });
+    const { data, html } = run(town, buildWorld(root), join(root, "out"));
+    assert.equal(data.supply.minted, 46, "the 32 award stamps entered supply");
+    assert.equal(data.issuance.totals.awards, 32);
+    assert.equal(data.issuance.lines.awards, 2);
+    const classified = Object.values(data.issuance.totals).reduce((a, b) => a + b, 0);
+    assert.equal(classified, data.supply.minted);
+    assert.match(html, /every minted stamp is classified/);
+    assert.doesNotMatch(html, /UNCLASSIFIED ISSUANCE/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("town issuance is its own cumulative series, not just a row", () => {
   const root = tempDir("econ-");
   try {

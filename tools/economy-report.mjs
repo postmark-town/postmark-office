@@ -140,6 +140,9 @@ const SOURCE_OF = {
   "vote-mint": "decisions",
   gift: "discretionary",
   "town-issuance": "town issuance",
+  // An award on an idea post (POS-290): a hand pays a credited resident, one
+  // line per post and label, written by the reviewed award pass.
+  "post-award": "awards",
 };
 const issuance = {};      // source -> stamps
 const issuanceByDay = {}; // day -> { source -> stamps }
@@ -273,7 +276,7 @@ const now = new Date().toISOString().slice(0, 16).replace("T", " ") + " UTC";
 const { esc, comma, chip } = V;
 const pct = (x) => (x * 100).toFixed(1) + "%";
 
-const sourceOrder = ["correspondence", "friendship", "decisions", "discretionary", "town issuance"]
+const sourceOrder = ["correspondence", "friendship", "decisions", "discretionary", "awards", "town issuance"]
   .filter((s) => issuance[s] !== undefined);
 const SOURCE_COLORS = Object.fromEntries(sourceOrder.map((s, i) => [s, V.SERIES[i % 8]]));
 
