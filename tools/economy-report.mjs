@@ -131,26 +131,49 @@ const gini = (() => {
 const topShare = (k) => equityRows.slice(0, k).reduce((s, r) => s + r.minted, 0) / (M || 1);
 
 // ── 2. ISSUANCE BY SOURCE, over time ─────────────────────────────────────────
-// The classes the ledger ACTUALLY carries. Quests are deliberately absent: a
-// quest is a visible face on the correspondence mint (read_quests), not its own
-// mint class, and inventing a row for it would be inventing money history.
+// The classes the ledger ACTUALLY carries, keyed by classifyEntry's kind. Quests
+// are deliberately absent: a quest is a visible face on the correspondence mint
+// (read_quests), not its own mint class, and inventing a row for it would be
+// inventing money history. The order here is the page's order.
 const SOURCE_OF = {
   mint: "correspondence",
   friendship: "friendship",
+  // The join bundle: paid once per household, ever, to one resident on its
+  // behalf (`for: welcome:<household>`, by the town). The ledger's word is
+  // `welcome`; the town's word for the thing is the join bundle.
+  welcome: "join bundle",
+  // A household's first idea mark (`for: first-idea:<handle>/<mark>`).
+  "first-idea": "first ideas",
+  // A post reaching a stage on its ladder pays the poster (`for:
+  // post:<post>/<stage>`), confirmed through fixed, written by the reviewed
+  // stage pass (tools/bug-stage-plan.mjs).
+  "post-stage": "post stages",
+  // Holo: stamps minted to a payer when a pot closes (`holo · <handle> · n ·
+  // pot:<pot> · epoch:<e> · ref: <receipt>`). Arrow-free, because a mint is not a
+  // movement; the town's foldMintCount counts it by kind, so it is in M.
+  holo: "holo",
   "vote-mint": "decisions",
   gift: "discretionary",
   "town-issuance": "town issuance",
 };
+// What one ledger line minted, asked of the town's own fold: foldMintCount over
+// that line alone. So a line counts here exactly when it counts in M, and a kind
+// this page has no source for is named by its kind, never parsed here.
+const mintedBy = (e) => { let n = 0; for (const v of sm.foldMintCount([e]).values()) n += v; return n; };
 const issuance = {};      // source -> stamps
 const issuanceByDay = {}; // day -> { source -> stamps }
 const issuanceLines = {}; // source -> line count
+const unclassified = {};  // classifyEntry kind -> { stamps, lines }: minted, but no source above
 for (const e of entries) {
+  const n = mintedBy(e);
+  if (!n) continue;
   const c = sm.classifyEntry(e.canonical);
   const source = SOURCE_OF[c.kind];
-  if (!source) continue;
-  // A correspondence/vote mint is always 1 stamp by grammar; gift and
-  // friendship carry an explicit n.
-  const n = c.n ?? 1;
+  if (!source) {
+    const u = (unclassified[c.kind] ||= { stamps: 0, lines: 0 });
+    u.stamps += n; u.lines += 1;
+    continue;
+  }
   issuance[source] = (issuance[source] || 0) + n;
   issuanceLines[source] = (issuanceLines[source] || 0) + 1;
   (issuanceByDay[c.date] ||= {})[source] = (issuanceByDay[c.date]?.[source] || 0) + n;
@@ -185,8 +208,8 @@ for (const t of townIssuance) townByPurpose[t.purpose] = (townByPurpose[t.purpos
 //
 // Still no money grammar of our own: every line below is classified by the
 // town's own classifyEntry, exactly like the issuance fold above. The kinds it
-// already names (mint/gift/friendship/vote-mint/town-issuance, world-stake,
-// world-unstake, transfer) are the whole vocabulary used here.
+// already names (the SOURCE_OF kinds, world-stake, world-unstake, transfer) are
+// the whole vocabulary used here, and what a line minted is mintedBy's answer.
 const WIN = V.windows(7);
 const W7 = WIN.size;
 const flow = {
@@ -204,8 +227,8 @@ for (const e of entries) {
   if (!isCur && !WIN.inPrev(c.date)) continue;
   const side = isCur ? "cur" : "prev";
   flow.lines[side] += 1;
-  if (SOURCE_OF[c.kind]) {
-    const n = c.n ?? 1;
+  const n = mintedBy(e);
+  if (n) {
     flow.minted[side] += n;
     if (isCur && c.handle) mintedByHandleWin[c.handle] = (mintedByHandleWin[c.handle] || 0) + n;
   }
@@ -273,8 +296,8 @@ const now = new Date().toISOString().slice(0, 16).replace("T", " ") + " UTC";
 const { esc, comma, chip } = V;
 const pct = (x) => (x * 100).toFixed(1) + "%";
 
-const sourceOrder = ["correspondence", "friendship", "decisions", "discretionary", "town issuance"]
-  .filter((s) => issuance[s] !== undefined);
+// SOURCE_OF's order, so a source added there is drawn without a second list to keep.
+const sourceOrder = [...new Set(Object.values(SOURCE_OF))].filter((s) => issuance[s] !== undefined);
 const SOURCE_COLORS = Object.fromEntries(sourceOrder.map((s, i) => [s, V.SERIES[i % 8]]));
 
 // ── the week, as the page's first reading ────────────────────────────────────
@@ -380,7 +403,9 @@ const issuanceBars = V.bars({
 });
 const issuanceGuard = `<p>${chip(issuanceTotal === M ? "ok" : "red", issuanceTotal === M
   ? `every minted stamp is classified (${issuanceTotal} = M)`
-  : `UNCLASSIFIED ISSUANCE — ${issuanceTotal} classified vs M ${M}: ${M - issuanceTotal} stamp(s) entered supply through a mint class this page does not know`)}</p>`;
+  : `UNCLASSIFIED ISSUANCE — ${issuanceTotal} classified vs M ${M}: ${M - issuanceTotal} stamp(s) entered supply through a mint class this page does not know: `
+    + Object.entries(unclassified).sort((a, b) => b[1].stamps - a[1].stamps)
+      .map(([k, u]) => `${k === "unknown" ? "a line the town's grammar does not parse" : esc(k)} ${u.stamps} (${u.lines} line(s))`).join(", "))}</p>`;
 const townChart = townIssuance.length
   ? V.lines({
       labels: townIssuance.map((t) => t.date.slice(5)),
@@ -398,7 +423,7 @@ ${kpiRow}
 
 ${V.figure({
   title: `issuance per day, by source (last 30d)`,
-  note: `The flow: what the ledger actually minted, day by day. These are the mint classes the ledger carries, and only those. <strong>Quests are deliberately not a row</strong> — a quest is a visible face on the correspondence mint, not its own class, so counting it separately would be inventing money history. Joins likewise mint through correspondence.`,
+  note: `The flow: what the ledger actually minted, day by day. These are the mint classes the ledger carries, and only those. <strong>Quests are deliberately not a row</strong> — a quest is a visible face on the correspondence mint, not its own class, so counting it separately would be inventing money history. A join mints its own row, the join bundle; holo is what a pot's close mints to the people who funded it.`,
   legendItems: sourceOrder.map((s) => ({ name: s, color: SOURCE_COLORS[s] })),
   chart: issuanceOverTime, detail: issuanceTable, detailLabel: "per-day counts",
 })}
@@ -499,7 +524,7 @@ writeFileSync(join(OUT_DIR, "data.json"), JSON.stringify({
     unknown_accounts: unknown.map((r) => ({ key: r.key, handles: r.handles, liquid: r.liquid })),
     clean: negative.length === 0 && unknown.length === 0,
   },
-  issuance: { totals: issuance, lines: issuanceLines, by_day: issuanceByDay },
+  issuance: { totals: issuance, lines: issuanceLines, by_day: issuanceByDay, unclassified },
   town_issuance: { cumulative: townCumulative, lines: townIssuance, by_purpose: townByPurpose, share_of_supply: M > 0 ? Number((townCumulative / M).toFixed(4)) : 0 },
   top_backed: { k: derived.k, marks: topBacked, constitution_excluded: constitutionBacked },
   transition: { commons: commons.length, zero_escrow: zeroEscrowCommons.length, by_tier: zeroByTier, marks: zeroEscrowCommons.map((m) => ({ id: m.id, tier: m.tier, by: m.by, date: m.date })) },
