@@ -1086,12 +1086,34 @@ const EARSHOT_PRESENCE_CAP = 500;
 export async function mistsWallOn(worldClone, skeleton, points, crossing) {
   if (!skeleton?.mists || !Array.isArray(points) || !points.length) return null;
   let eng;
-  try { eng = await import(pathToFileURL(join(worldClone, "tools", "world-engine.mjs"))); } catch { return null; }
-  if (typeof eng.mistsAt !== "function" || typeof eng.mistsHere !== "function") return null;
+  try { eng = await import(pathToFileURL(join(worldClone, "tools", "world-engine.mjs"))); } catch { return { unreadable: true }; }
+  if (typeof eng.mistsAt !== "function" || typeof eng.mistsHere !== "function") return { unreadable: true };
   const m = eng.mistsAt(crossing, skeleton.mists);
   if (!m) return null;
   const p = points.find((q) => Number.isFinite(q?.x) && Number.isFinite(q?.y) && eng.mistsHere(q, m).inWall);
   return p ? { x: Math.round(p.x), y: Math.round(p.y) } : null;
+}
+
+// ── FAIL CLOSED: A WALL THE OFFICE CANNOT READ ────────────────────────────────
+// A guard that cannot read the wall must not wave ground through it. From the
+// Mists' first crossing, a world that will not load, an engine that will not
+// import, or one without the reading answers `{ unreadable: true }`, and the
+// door refuses rather than guess. A record that truly carries no Mists schedule
+// passes quietly. MISTS_FIRST_CROSSING is the floor the office holds only while
+// it cannot read the record's own schedule (whose first entry governs whenever
+// it can be read); a test holds the two equal.
+export const MISTS_FIRST_CROSSING = 244;
+export const MISTS_UNREADABLE = "the office cannot read the world to check the wall; try again";
+export const MISTS_RETRY_AFTER_S = 30;
+/** null (clear, or no Mists) · { wall: {x, y} } · { unreadable: true } */
+export async function mistsGroundCheck(worldClone, readSkeleton, points, crossing) {
+  let skeleton = null;
+  try { skeleton = await readSkeleton(); } catch { skeleton = null; }
+  if (!skeleton) return crossing >= MISTS_FIRST_CROSSING ? { unreadable: true } : null;
+  if (!skeleton.mists) return null;
+  const wall = await mistsWallOn(worldClone, skeleton, points, crossing);
+  if (wall?.unreadable) return crossing >= MISTS_FIRST_CROSSING ? { unreadable: true } : null;
+  return wall ? { wall } : null;
 }
 
 // ── THE MISTS ON A ROAD (POS-468) ────────────────────────────────────────────
@@ -3761,7 +3783,7 @@ async function placingOnBehalf(by, payload, key, bounce) {
 // family as `_act_id` and `_adopted`), so it reaches the act's payload and the
 // claim's `data` and never a mark file. It is not read off `payload`: a
 // resident cannot claim a drop they did not make by typing the key.
-export async function leaveMarkViaOffice(worldClone, payload = {}, key = null, { setDown = null } = {}) {
+export async function leaveMarkViaOffice(worldClone, payload = {}, key = null, { setDown = null, mistsCrossing = null } = {}) {
   { const fz = worldFreezeBounce(); if (fz) return fz; }
   const bounce = (code, defect, hint) => { const e = new Error(defect); Object.assign(e, { code, defect, hint }); return e; };
   const handles = [...(key?.handles ?? [])];
@@ -3994,17 +4016,15 @@ export async function leaveMarkViaOffice(worldClone, payload = {}, key = null, {
   // is refused. No Mists, a clone without them, or a world that will not load:
   // no check at all.
   if (kind === "sited" || kind === "parcel") {
-    let skeleton = null;
-    try { skeleton = (await world())?._raw?.skeleton ?? null; } catch { skeleton = null; }
-    if (skeleton?.mists) {
-      const box = kind === "parcel" ? (await parcelDial()) : extent;
-      const hw = (Number(box?.w) || 0) / 2, hh = (Number(box?.h) || 0) / 2;
-      const ground = ringOf(points) ? ringOf(points)
-        : [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]].map(([dx, dy]) => ({ x: Number(at.x) + dx, y: Number(at.y) + dy }));
-      const wall = await mistsWallOn(worldClone, skeleton, ground, currentCrossing());
-      if (wall) throw bounce(422, "this ground stands behind the wall of the Mists",
-        `a mark may not be placed or moved behind the wall while the Mists stand: its ground reaches (${wall.x}, ${wall.y}), which no one can see or reach. Choose ground on the clear side of the wall; marks already standing stay as they are.`);
-    }
+    const box = kind === "parcel" ? (await parcelDial().catch(() => ({ w: 25, h: 25 }))) : extent;
+    const hw = (Number(box?.w) || 0) / 2, hh = (Number(box?.h) || 0) / 2;
+    const ground = ringOf(points) ? ringOf(points)
+      : [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]].map(([dx, dy]) => ({ x: Number(at.x) + dx, y: Number(at.y) + dy }));
+    const seen = await mistsGroundCheck(worldClone, async () => (await world())?._raw?.skeleton ?? null, ground, mistsCrossing ?? currentCrossing());
+    if (seen?.unreadable) throw bounce(503, MISTS_UNREADABLE,
+      `the office could not read the world or its engine to see where the wall of the Mists stands, so it will not place this mark until it can. Nothing was written; send the same request again after ${MISTS_RETRY_AFTER_S} seconds (Retry-After).`);
+    if (seen?.wall) throw bounce(422, "this ground stands behind the wall of the Mists",
+      `a mark may not be placed or moved behind the wall while the Mists stand: its ground reaches (${seen.wall.x}, ${seen.wall.y}), which no one can see or reach. Choose ground on the clear side of the wall; marks already standing stay as they are.`);
   }
   const exec = join(HERE, "leave-exec.mjs");
   let result;

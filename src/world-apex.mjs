@@ -2763,8 +2763,10 @@ async function spawnOnEnter(args, key, who) {
     // writes its own zero-length walk past the walk door's road check, so it
     // asks the wall itself: a spawn point behind it sets nobody down, and the
     // entrant stays where the entry left them, told why.
-    const { walkEntry, mistsWallOn, worldSkeletonRaw } = await import("./world.mjs");
-    if (await mistsWallOn(WORLD_CLONE, await worldSkeletonRaw().catch(() => null), [spawn.at], currentCrossing()))
+    const { walkEntry, mistsGroundCheck, worldSkeletonRaw, MISTS_UNREADABLE } = await import("./world.mjs");
+    const seen = await mistsGroundCheck(WORLD_CLONE, worldSkeletonRaw, [spawn.at], currentCrossing());
+    if (seen?.unreadable) return { ground: place.ground, refused: `${MISTS_UNREADABLE}: this ground sets no one down behind a wall it cannot see; you stay where you entered` };
+    if (seen?.wall)
       return { ground: place.ground, refused: "this ground's spawn point stands behind the wall of the Mists, so it sets no one down there; you stay where you entered" };
     const { appendJournal } = await import("./world-journal.mjs");
     const declaredAt = new Date().toISOString();

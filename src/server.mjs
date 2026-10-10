@@ -51,7 +51,7 @@ import { fundVerifyViaOffice, intakeDisclosure, POT_RE as FUND_POT_RE, INTAKE as
 import { channelOf, countAct, actsByChannel } from "./channel.mjs";
 import { logAccess } from "./telemetry.mjs";
 import { settlements } from "./settlements.mjs";
-import { worldSummary, worldOrient, worldEyes, worldInvestigate, worldFind, worldStateRaw, worldSkeletonRaw, worldMyMarks, leaveMarkViaOffice, walkViaOffice, worldNoteViaOffice, worldWalkers, worldPresent, worldConversations, worldSay, worldSayHuman, worldSayStream, serveSayStream, whoami, worldBlockForHandle, WORLD_CLONE } from "./world.mjs";
+import { worldSummary, worldOrient, worldEyes, worldInvestigate, worldFind, worldStateRaw, worldSkeletonRaw, worldMyMarks, leaveMarkViaOffice, walkViaOffice, worldNoteViaOffice, worldWalkers, worldPresent, worldConversations, worldSay, worldSayHuman, worldSayStream, serveSayStream, whoami, worldBlockForHandle, WORLD_CLONE, MISTS_UNREADABLE, MISTS_RETRY_AFTER_S } from "./world.mjs";
 import { world2MyDrafts, world2MyMarks, world2Pool, world2Serve, world2ServeEnabled } from "./world2-serve.mjs";
 import { isStoreLostCode, isStoreUnreachable } from "./store-pool.mjs"; // POS-544: a store lost mid-request answers 503, not 500
 import { rowsFixtureActive } from "./world-graph-snapshot.mjs"; // POS-270 lane W 3b: the world graph's switch
@@ -667,6 +667,9 @@ const j = (res, code, obj, cause) => {
   if (!isHttpStatus(code)) [code, obj] = notAStatus(res, code, obj, cause);
   if (code === 503 && (obj?.defect === STORE_LOST || obj?.defect === UNREACHABLE_DEFECT) && !res.hasHeader?.("retry-after"))
     res.setHeader("retry-after", String(STORE_RETRY_AFTER_S));
+  // the Mists' guard that cannot read the wall (POS-468): the same 30 s
+  if (code === 503 && obj?.defect === MISTS_UNREADABLE && !res.hasHeader?.("retry-after"))
+    res.setHeader("retry-after", String(MISTS_RETRY_AFTER_S));
   obj = withBounceCode(code, obj);
   if (code >= 400) obj = markRefused(obj);
   const body = JSON.stringify(obj, null, 1);
