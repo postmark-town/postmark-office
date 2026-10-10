@@ -29,7 +29,7 @@ const beforeBoat = (n) => CROSSING_EPOCH_UTC + (n - 1) * CROSSING_MS + HOUR;
 
 // his words, pinned as they were given, one for each of his boats
 const WORDS = {
-  244: "The ferryman asks that no letter be addressed past the mist.",
+  244: "The ferryman looks north before he casts off, and says nothing.",
   272: "The ferryman has started counting the passengers twice.",
   282: "The ferryman sails with his eyes on the water and will not look north.",
   284: "The ferryman lights a second lantern for the crossing, and does not say who it is for.",
