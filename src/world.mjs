@@ -3984,7 +3984,7 @@ export async function leaveMarkViaOffice(worldClone, payload = {}, key = null, {
     // rule on it (the ground question is a canon question). The ledger move is
     // still the stake verb's; this is the declaration saying what was asked for.
     ...(payload.stamps === undefined || payload.stamps === null ? {} : { stamps: stakeLands }) };
-  // ── NO NEW GROUND BEHIND THE MISTS (POS-468 B, Wright's go 2026-10-09) ────
+  // ── NO NEW GROUND BEHIND THE MISTS (POS-468 B) ───────────────────────────
   // From the Mists' first crossing, a mark may not be placed, nor moved by its
   // amend, onto ground behind the wall: the wall hides everything behind it,
   // and a mark there would be a way to stand something where no one can see or
@@ -4977,9 +4977,9 @@ export async function walkViaOffice(worldClone, payload = {}, key = null) {
     targetFrom = onGround.targetFrom;
   }
 
-  // ── THE MISTS ON THIS ROAD (POS-468, Darko 2026-10-09 21:47) ──────────────
-  // "the further they make it into the mist, the slower they get until they
-  // essentially hit zero". The world's engine reads the road once, here at the
+  // ── THE MISTS ON THIS ROAD (POS-468) ─────────────────────────────────────
+  // The stride falls the deeper a road goes into the fringe, to nothing at the
+  // wall's face. The world's engine reads the road once, here at the
   // declare: one that ends in the wall, on its face, crosses it or starts in it
   // is refused in plain words (no creeping in by short legs); one through the
   // fringe walks at an even, slowed stride, stamped on the leg as its pace below.

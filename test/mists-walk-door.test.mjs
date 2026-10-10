@@ -1,7 +1,7 @@
 // mists-walk-door.test.mjs — the walk declare reads the Mists (POS-468).
 //
-// Darko, 2026-10-09 21:47: "the further they make it into the mist, the slower
-// they get until they essentially hit zero". The world's engine owns the reading
+// The stride falls the deeper a road goes into the Mists' fringe, to nothing at
+// the wall's face. The world's engine owns the reading
 // (tools/world-engine.mjs § mistsRoad); this door asks it once at the declare,
 // refuses a road into the wall before any act is written, and stamps the leg's
 // slowed stride as its pace, so every reader of a departure walks it slowed.

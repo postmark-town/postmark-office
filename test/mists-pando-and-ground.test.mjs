@@ -1,13 +1,13 @@
 // mists-pando-and-ground.test.mjs — the Mists' other roads (POS-468 B).
 //
-// Pando Peak keeps its own air (Darko, 2026-10-09 22:00): a clearing round all
+// Pando Peak keeps its own air: a clearing round all
 // its ground, the Post Office's landing with it, so the ride is the one link
 // between Pando and the map. Proved here with the office's own ride code (its
 // timetable and set-down points) and the walk door's own road reading:
 //   ride in → set down in clear ground; walk inside Pando → allowed (going
 //   home, for the household whose parcel is there); ride out → set down in
 //   town; walk out of Pando → refused at the wall.
-// And the two guards with Wright's go: no mark placed or moved onto ground
+// And the two guards: no mark placed or moved onto ground
 // behind the wall, and no portal ground that sets anyone down there.
 
 import { test } from "node:test";
