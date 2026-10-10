@@ -100,6 +100,22 @@
 //                 every write that pulls the clone refuses while it stands
 //                 (2026-09-28, 4.5 hours, found by a resident). The reader is
 //                 tools/clone-state.mjs, shared with the box roll-call.
+//  9. DISK      — the box's root disk is under 85% used. The ground: on
+//                 2026-10-09 a full disk took Postgres, sign-in and the ferry
+//                 down two hours before anyone looked. This probe replaced
+//                 postmark-disk-watch, which shouted into the same channel on its
+//                 own timer (POS-556, Darko 2026-10-10: ONE route to the Meepo
+//                 bot, the one /fleet also reads).
+//
+// ── ONE ALARM ROUTE (POS-556) ───────────────────────────────────────────────
+//
+// This file is the only thing on the box that posts an alarm to Discord, and
+// /ops/sentinel.json (this file's --out board) is what Wright's /fleet reads.
+// Discord and /fleet hear the same thing because they read one record. A new
+// box alarm is a probe here, never a script with its own webhook call. The
+// one alarm that cannot be a probe is the watch on this file's own death,
+// which runs off the box (the town's .github/workflows/offbox-watch.yml) and
+// reads this same board's generated_at.
 //
 // ── THE STALENESS CLOCK, AND WHY IT IS ANCHORED WHERE IT IS ─────────────────
 //
@@ -132,7 +148,7 @@
 //   node tools/site-sentinel.mjs [--state <state.json>] [--out <status.json>]
 //                                [--json] [--dry-run] [--now <iso>]
 
-import { readFileSync, writeFileSync, mkdirSync, statSync, existsSync, realpathSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, statSync, statfsSync, existsSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -280,6 +296,11 @@ export const CONFIG = {
   ],
   cloneDirtyGraceMs: DIRTY_GRACE_MS,
   cloneBehindAfterMs: 25 * MINUTE,
+
+  // §9 — the root disk, read from the disk this runs on. 85% is
+  // postmark-disk-watch's line, carried over unchanged when this probe
+  // replaced it (POS-556): at 38G, 15% is under 6G, about eight site releases.
+  disk: { key: "disk_root", label: "the box's root disk", path: "/", limitPct: 85 },
 
   requestTimeoutMs: 20_000,
   // One reminder every twelve hours while a probe stays bad. Not per tick —
@@ -852,6 +873,49 @@ export function classifyClone({ state, seen = null, nowMs, dirtyGraceMs = DIRTY_
   };
 }
 
+// §9 — the ground. statfs's numbers turned into df's, so the percent here is
+// the percent `df /` prints and the line sits exactly where disk-watch's did:
+// used is blocks less free, the percent is used over used-plus-available
+// (root's reserved blocks are in neither), rounded UP, as GNU df rounds.
+export function diskUsage({ bsize, blocks, bfree, bavail }) {
+  const used = (blocks - bfree) * bsize;
+  const avail = bavail * bsize;
+  const total = used + avail;
+  return { usedPct: total > 0 ? Math.ceil((used * 100) / total) : null, freeBytes: avail };
+}
+
+export function readDiskState(path, { statfs = statfsSync } = {}) {
+  try { return { path, ...diskUsage(statfs(path)) }; }
+  catch (e) { return { path, error: e?.message ?? String(e) }; }
+}
+
+/** df -h's way of saying a size: 1024s, one decimal under ten, "4.9G". */
+export function humanBytes(n) {
+  const units = ["B", "K", "M", "G", "T"];
+  let v = n, i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return `${v < 10 && i > 0 ? v.toFixed(1) : Math.round(v)}${units[i]}`;
+}
+
+// PURE. DOWN at the line, never STALE: a full disk is not late, it is broken,
+// and every writer on the box fails with it. The reason is disk-watch's own
+// sentence, so a reader who knew that alarm reads the same words here.
+export function classifyDisk({ usedPct = null, freeBytes = null, error = null, limitPct = 85 } = {}) {
+  if (error || !Number.isFinite(usedPct)) {
+    return { verdict: "UNKNOWN", reason: `could not read the root disk${error ? ` (${String(error).slice(0, 120)})` : ""}` };
+  }
+  const free = Number.isFinite(freeBytes) ? humanBytes(freeBytes) : "unknown";
+  const detail = { used_pct: usedPct, free_bytes: freeBytes, limit_pct: limitPct };
+  if (usedPct >= limitPct) {
+    return {
+      verdict: "DOWN",
+      reason: `at ${usedPct}% used (${free} free; alarm at ${limitPct}%). On 10-09 a full disk took Postgres and sign-in down. Look at /tmp, /srv/postmark-site-refresh and /srv/world2-lab first`,
+      detail,
+    };
+  }
+  return { verdict: "OK", reason: `${usedPct}% used, ${free} free: under ${limitPct}%`, detail };
+}
+
 export const BAD = new Set(["DOWN", "STALE"]);
 
 /**
@@ -1062,6 +1126,7 @@ export async function tick({
   config = CONFIG,
   token = null,
   readClone = readCloneState,
+  readDisk = readDiskState,
 } = {}) {
   const nowIso = new Date(nowMs).toISOString();
   const probes = [];
@@ -1255,6 +1320,12 @@ export async function tick({
     probes.push({ key: c.key, label: c.label, kind: "clone", verdict: cs.verdict, reason: cs.reason, ...(cs.detail ? { detail: cs.detail } : {}) });
   }
 
+  // §9 — the ground. A local statfs, no network, no budget.
+  if (config.disk) {
+    const dk = classifyDisk({ ...readDisk(config.disk.path), limitPct: config.disk.limitPct });
+    probes.push({ key: config.disk.key, label: config.disk.label, kind: "disk", verdict: dk.verdict, reason: dk.reason, ...(dk.detail ? { detail: dk.detail } : {}) });
+  }
+
   // the edges
   const prevProbes = state.probes ?? {};
   const nextProbes = {};
@@ -1323,6 +1394,7 @@ export async function run({
   nowMs = null,
   log = console.log,
   errLog = console.error,
+  readDisk = readDiskState,
 } = {}) {
   const a = (name, dflt = null) => {
     const i = argv.indexOf(`--${name}`);
@@ -1342,7 +1414,7 @@ export async function run({
   let token = null;
   try { token = readFileSync(env.SENTINEL_GITHUB_TOKEN_FILE ?? "/srv/postmark-office/git-metrics-token", "utf8").trim() || null; } catch { token = null; }
 
-  const { probes, alerts, notes, nextState, nowIso } = await tick({ fetchImpl, exec, state: readState(statePath), nowMs: at, token });
+  const { probes, alerts, notes, nextState, nowIso } = await tick({ fetchImpl, exec, state: readState(statePath), nowMs: at, token, readDisk });
   const board = composeBoard({ probes, nowIso, alerting: { ...alerting, notes } });
   if (outPath) { board.published_at = outPath; writeJson(outPath, board); }
 

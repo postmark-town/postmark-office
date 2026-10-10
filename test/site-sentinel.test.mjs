@@ -37,6 +37,9 @@ import {
   tick,
   run,
   classifyProblems,
+  classifyDisk,
+  diskUsage,
+  readDiskState,
   MINUTE,
   HOUR,
   CONFIG,
@@ -612,6 +615,9 @@ _ex("git", ["init", "-q", "-b", "main", _clone]);
 _wf(join(_clone, "ledger.md"), "line\n");
 _ex("git", ["-C", _clone, "add", "ledger.md"]);
 _ex("git", ["-C", _clone, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "seed"]);
+// §9 fixture: the disk is read through an injected reader, so the suite's
+// verdicts never ride the disk of whatever machine runs it (CI's or the box's).
+const GREEN_DISK = () => ({ path: "/", usedPct: 62, freeBytes: 14 * 2 ** 30 });
 const FIXTURE_CONFIG = {
   ..._CFG,
   clones: [{ key: "town_clone", label: "the office's town clone", path: _clone }],
@@ -624,7 +630,7 @@ const FIXTURE_CONFIG = {
 // classifyWatcher tests above, not by riding along here.
 
 test("a healthy tick is entirely green and says nothing", async () => {
-  const { probes, alerts } = await tick({ fetchImpl: stubFetch(GREEN_TABLE), exec: stubExec(), state: {}, nowMs: T0, config: FIXTURE_CONFIG });
+  const { probes, alerts } = await tick({ fetchImpl: stubFetch(GREEN_TABLE), exec: stubExec(), state: {}, nowMs: T0, config: FIXTURE_CONFIG, readDisk: GREEN_DISK });
   const bad = probes.filter((p) => p.verdict !== "OK" && p.verdict !== "INFO");
   assert.deepEqual(bad.map((p) => `${p.key}:${p.verdict} ${p.reason}`), [], "a green town must produce no findings");
   assert.equal(alerts.length, 0, "and therefore nothing to say");
@@ -639,7 +645,7 @@ test("LOUDLY BE NOTIFIED: an outage and a frozen index both surface from one tic
     "https://postmark.town/api/": { status: 200, headers: { "x-postmark-as-of": "frozen00000" }, body: "{}" },
   };
   const state = { probes: {}, stamps: { office_as_of: { value: "frozen00000", first_seen_at: T0 - 2 * HOUR, diverged_since: T0 - 2 * HOUR } } };
-  const { probes, alerts } = await tick({ fetchImpl: stubFetch(broken), exec: stubExec(), state, nowMs: T0, config: FIXTURE_CONFIG });
+  const { probes, alerts } = await tick({ fetchImpl: stubFetch(broken), exec: stubExec(), state, nowMs: T0, config: FIXTURE_CONFIG, readDisk: GREEN_DISK });
 
   const daily = probes.find((p) => p.key === "site_daily");
   assert.equal(daily.verdict, "DOWN");
@@ -1036,7 +1042,7 @@ test("§7 the probe reaches the BOARD, with its detail, and its first tick says 
   // above points the probe at it. Two things are asserted that a classifier
   // test cannot: that the probe is IN the probe list at all, and that `detail`
   // survives onto the board entry the site's popover reads.
-  const { probes, alerts } = await tick({ fetchImpl: stubFetch(GREEN_TABLE), exec: stubExec(), state: {}, nowMs: T0, config: FIXTURE_CONFIG });
+  const { probes, alerts } = await tick({ fetchImpl: stubFetch(GREEN_TABLE), exec: stubExec(), state: {}, nowMs: T0, config: FIXTURE_CONFIG, readDisk: GREEN_DISK });
   const p = probes.find((x) => x.key === "site_refresh");
   assert.ok(p, "the refresh probe is on the board, beside usdc_watch");
   assert.equal(p.kind, "refresh");
@@ -1192,4 +1198,107 @@ test("the sentinel watches Deploy by its workflow file, and no longer the retire
   assert.deepEqual(WATCHED_WORKFLOWS.map((w) => w.name), ["Deploy"]);
   for (const w of WATCHED_WORKFLOWS) assert.match(w.file, /^[a-z0-9-]+\.ya?ml$/, `${w.name} names its workflow file`);
   assert.ok(!WATCHED_WORKFLOWS.some((w) => /atlas/i.test(w.name)), "the atlas sync is dispatch-only; watching it can only raise stale alarms");
+});
+
+// ── §9: the ground (POS-556, ONE alarm route) ───────────────────────────────
+//
+// THE INSTANCE. On 2026-10-09 the root disk filled (38G of 38G): Postgres went
+// into crash recovery, sign-in failed and the 08:00 ferry refused, two hours
+// before anyone looked. postmark-disk-watch was installed that morning and
+// shouted into Discord on its own timer. Darko, 2026-10-10: "make sure we do it
+// clean so there's ONE route to get to the Meepo bot on discord that the fleet
+// also listens to." The disk is a sentinel probe now, on disk-watch's line.
+
+const GIB = 2 ** 30;
+
+test("§9 THE LINE: 84% is OK, 85% is DOWN, 90% is DOWN — disk-watch's own threshold, carried over", () => {
+  const at = (usedPct) => classifyDisk({ usedPct, freeBytes: 5.2 * GIB, limitPct: CONFIG.disk.limitPct });
+  assert.equal(CONFIG.disk.limitPct, 85);
+  assert.equal(at(84).verdict, "OK");
+  assert.equal(at(85).verdict, "DOWN");
+  assert.equal(at(90).verdict, "DOWN");
+  assert.match(at(84).reason, /84% used, 5\.2G free: under 85%/);
+});
+
+test("§9 the DOWN reason names the percent, the free space and where to look first — disk-watch's words", () => {
+  const { reason, detail } = classifyDisk({ usedPct: 91, freeBytes: 3.4 * GIB, limitPct: 85 });
+  assert.match(reason, /91% used/);
+  assert.match(reason, /3\.4G free; alarm at 85%/);
+  assert.match(reason, /Look at \/tmp, \/srv\/postmark-site-refresh and \/srv\/world2-lab first/);
+  assert.deepEqual(detail, { used_pct: 91, free_bytes: 3.4 * GIB, limit_pct: 85 });
+});
+
+test("§9 the percent is df's: used over used-plus-available, root's reserve in neither, rounded UP", () => {
+  // 84.01% by the arithmetic is 85% on df, and so DOWN here, exactly where
+  // disk-watch's `df --output=pcent` put it.
+  const u = diskUsage({ bsize: 4096, blocks: 10_500, bfree: 2_099, bavail: 1_599 });
+  assert.equal(u.usedPct, 85);
+  assert.equal(u.freeBytes, 1_599 * 4096);
+  assert.equal(diskUsage({ bsize: 4096, blocks: 10_500, bfree: 2_100, bavail: 1_600 }).usedPct, 84);
+  assert.equal(diskUsage({ bsize: 1, blocks: 0, bfree: 0, bavail: 0 }).usedPct, null, "an empty answer is unread, not 0%");
+});
+
+test("§9 an unreadable disk is UNKNOWN and never alerts — and a real read answers a percent", () => {
+  const r = readDiskState("/no/such/mount", { statfs: () => { throw new Error("ENOENT"); } });
+  assert.equal(r.error, "ENOENT");
+  assert.equal(classifyDisk({ ...r, limitPct: 85 }).verdict, "UNKNOWN");
+  assert.equal(classifyDisk({ usedPct: null }).verdict, "UNKNOWN");
+  const live = readDiskState(".");
+  assert.ok(Number.isInteger(live.usedPct) && live.usedPct >= 0 && live.usedPct <= 100, `statfs on this machine answered ${JSON.stringify(live)}`);
+});
+
+test("§9 a full disk reaches the board as disk_root and the sentinel's own Discord message carries it — onset, then recovery", async () => {
+  const full = () => ({ path: "/", usedPct: 87, freeBytes: 4.9 * GIB });
+  const first = await tick({ fetchImpl: stubFetch(GREEN_TABLE), exec: stubExec(), state: {}, nowMs: T0, config: FIXTURE_CONFIG, readDisk: full });
+  const probe = first.probes.find((p) => p.key === "disk_root");
+  assert.equal(probe.verdict, "DOWN");
+  assert.equal(probe.kind, "disk");
+  assert.equal(probe.detail.used_pct, 87);
+  assert.deepEqual(first.alerts.map((a) => a.key), ["disk_root"], "a full disk on an otherwise green town alerts, and nothing else does");
+
+  // /fleet's sentinelBark reads status, probes[].verdict, probes[].key and generated_at
+  const board = composeBoard({ probes: first.probes, nowIso: first.nowIso, alerting: {} });
+  assert.equal(board.status, "DOWN");
+  assert.equal(board.generated_at, first.nowIso);
+  assert.ok(board.probes.some((p) => p.key === "disk_root" && p.verdict === "DOWN"));
+  const msg = composeMessage({ alerts: first.alerts, board, nowIso: first.nowIso });
+  assert.match(msg, /DOWN — the box's root disk: at 87% used \(4\.9G free; alarm at 85%\)/);
+
+  // the same full disk ten minutes on says nothing: the edge, not the tick
+  const held = await tick({ fetchImpl: stubFetch(GREEN_TABLE), exec: stubExec(), state: first.nextState, nowMs: T0 + 10 * MINUTE, config: FIXTURE_CONFIG, readDisk: full });
+  assert.deepEqual(held.alerts, []);
+
+  const back = await tick({ fetchImpl: stubFetch(GREEN_TABLE), exec: stubExec(), state: held.nextState, nowMs: T0 + 20 * MINUTE, config: FIXTURE_CONFIG, readDisk: GREEN_DISK });
+  assert.deepEqual(back.alerts.map((a) => `${a.key}:${a.alert.kind}`), ["disk_root:recovered"]);
+});
+
+// THE RULING, HELD: no other file the box runs posts to Discord. A new alarm is
+// a probe in this file; a script with its own webhook call reds here on the PR
+// that adds it. (The watch on the sentinel's own death is off the box, in the
+// town's .github/workflows/offbox-watch.yml, and reads this file's board.)
+test("ONE ROUTE: nothing the office ships to the box posts to Discord except the sentinel (POS-556)", async () => {
+  const { readdirSync, statSync: st } = await import("node:fs");
+  const ROOT = new URL("..", import.meta.url);
+  const POSTER = /SENTINEL_DISCORD_WEBHOOK|DISCORD_WEBHOOK|discord(app)?\.com\/api\/webhooks/;
+  const ALLOWED = new Set(["tools/site-sentinel.mjs", "deploy/postmark-site-sentinel.service"]);
+  const walk = (rel) => {
+    const out = [];
+    for (const name of readdirSync(new URL(rel + "/", ROOT))) {
+      if (name === "node_modules" || name.startsWith(".")) continue;
+      const r = `${rel}/${name}`;
+      if (st(new URL(r, ROOT)).isDirectory()) out.push(...walk(r));
+      else if (/\.(sh|mjs|js|cjs|service|timer|conf|snippet)$/.test(name)) out.push(r);
+    }
+    return out;
+  };
+  const posters = (files) => files.filter((f) => !ALLOWED.has(f) && POSTER.test(readFileSync(new URL(f, ROOT), "utf8")));
+  const files = ["deploy", "tools", "src", "world2"].filter((d) => existsSync(new URL(d, ROOT))).flatMap(walk);
+  assert.ok(files.length > 100, `read ${files.length} files; the walk is wrong`);
+  assert.deepEqual(posters(files), [], "a box script posts to Discord on its own — make it a sentinel probe instead");
+
+  // not vacuous: the retired disk watch's own line is caught
+  const dir = tempDir("one-route-");
+  const planted = join(dir, "planted.sh");
+  _wf(planted, `HOOK="\${SENTINEL_DISCORD_WEBHOOK:-}"\ncurl -d '{}' "$HOOK"\n`);
+  assert.ok(POSTER.test(readFileSync(planted, "utf8")));
 });

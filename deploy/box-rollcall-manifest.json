@@ -204,7 +204,7 @@
         "stamp_field": "generated_at",
         "stale_after_minutes": 30
       },
-      "stale_means": "THE WATCHMAN ITSELF HAS STOPPED, and it is the one failure the sentinel is structurally incapable of reporting — its own header says so: 'it cannot see its own death'. A dead sentinel presents as a permanently green board, which is worse than no board. This row is the answer to that, and it is the single most load-bearing row in this file. The allowance is three ticks."
+      "stale_means": "THE WATCHMAN ITSELF HAS STOPPED, and it is the one failure the sentinel is structurally incapable of reporting — its own header says so: 'it cannot see its own death'. A dead sentinel presents as a permanently green board, which is worse than no board. This row is the answer to that, and it is the single most load-bearing row in this file. Since POS-556 (2026-10-10) the sentinel is also the box's ONE alarm route to Discord and the board /fleet reads, and it carries the root disk (probe disk_root, DOWN at 85%), which postmark-disk-watch used to shout on its own timer: a dead sentinel is now a blind disk as well. The allowance is three ticks."
     },
     {
       "unit": "postmark-settlement.timer",
@@ -599,21 +599,6 @@
         "stale_after_minutes": 1560
       },
       "stale_means": "/tmp FILLS AGAIN. Hand-run scratch lands in /tmp and nothing owns its end; on 2026-10-09 it filled the disk (38G of 38G), Postgres went into crash recovery, sign-in failed and the ferry refused. The janitor removes only meepo-owned top-level entries older than 3 days that nothing holds open, minus a keep list. The allowance is one day plus two hours."
-    },
-    {
-      "unit": "postmark-disk-watch.timer",
-      "label": "the disk watch",
-      "stage": "live",
-      "activation_owner": "Wright, on Darko's go 2026-10-09 (the same sentence). Script deploy/postmark-disk-watch.sh; shouts through the sentinel's webhook (/etc/postmark-sentinel.env).",
-      "cadence": "every 15 minutes (:07, :22, :37, :52)",
-      "cadence_source": "systemctl show postmark-disk-watch.timer -p TimersCalendar",
-      "heartbeat": {
-        "kind": "state_file",
-        "path": "/var/lib/postmark-disk-watch.json",
-        "stamp_field": "at",
-        "stale_after_minutes": 60
-      },
-      "stale_means": "NOTHING WATCHES THE GROUND. On 2026-10-09 a full disk surfaced as Postgres in crash recovery and a dead sign-in, two hours before anyone looked. The watch shouts into Discord at 85% (once every 6 hours while over) and says when it is back under. The allowance is four ticks."
     }
   ],
   "_custody_readme": [
@@ -812,7 +797,9 @@
     "execs out of a tree NO row names would be, and that is the day to build it.",
     "That day was 2026-10-09: the disk watch and the /tmp janitor exec scripts copied",
     "by hand into /usr/local/sbin, which no tree row names, so the file_copy row",
-    "box-sbin-scripts reads those two files against the release (POS-522).",
+    "box-sbin-scripts reads those two files against the release (POS-522). The disk",
+    "watch was retired into the sentinel's disk_root probe on 2026-10-10 (POS-556);",
+    "the row now reads the janitor alone.",
     "",
     "ADDING A ROW is not optional in one direction: a live unit whose service names",
     "a tree and has no row here comes back ALARM-tree from the reverse check, the",
@@ -1033,12 +1020,12 @@
       {
         "id": "box-sbin-scripts",
         "kind": "file_copy",
-        "label": "the disk watch and /tmp janitor scripts on the box",
+        "label": "the /tmp janitor script on the box",
         "path": "/usr/local/sbin",
         "from": "deploy",
-        "match": "^postmark-(disk-watch|tmp-janitor)\\.sh$",
-        "why": "postmark-disk-watch.service and postmark-tmp-janitor.service exec /usr/local/sbin/postmark-{disk-watch,tmp-janitor}.sh, copies installed by hand on 2026-10-09 (DEPLOY.md § the disk). No deploy writes that directory and neither unit names a tree, so the reverse check above cannot see them: the gap §2c names, live. A fix to either script in deploy/ would never reach the box and nothing would go red. Read as bytes.",
-        "repair": "sudo install -m 0755 /srv/postmark-office/deploy/postmark-tmp-janitor.sh /srv/postmark-office/deploy/postmark-disk-watch.sh /usr/local/sbin/ — then re-run the roll-call",
+        "match": "^postmark-tmp-janitor\\.sh$",
+        "why": "postmark-tmp-janitor.service execs /usr/local/sbin/postmark-tmp-janitor.sh, a copy installed by hand on 2026-10-09 (DEPLOY.md § the disk). The disk watch's copy was retired with its unit in POS-556 (the sentinel's disk_root probe). No deploy writes that directory and the unit names no tree, so the reverse check above cannot see them: the gap §2c names, live. A fix to the script in deploy/ would never reach the box and nothing would go red. Read as bytes.",
+        "repair": "sudo install -m 0755 /srv/postmark-office/deploy/postmark-tmp-janitor.sh /usr/local/sbin/ — then re-run the roll-call",
         "activation_owner": "Wright — the scripts were placed by hand with their units on Darko's go, 2026-10-09 (office #444); this row is POS-522's."
       }
     ]
