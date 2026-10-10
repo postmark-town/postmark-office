@@ -1079,6 +1079,33 @@ const EARSHOT_PRESENCE_CAP = 500;
  * live pen does not write would prove the renderer equal to a store nobody
  * runs". A falsifier that builds its acts with the live builder cannot drift
  * from the live builder. Nothing else imports it. */
+// ── THE MISTS ON A ROAD (POS-468) ────────────────────────────────────────────
+// The world's engine owns the reading (tools/world-engine.mjs § mistsRoad); the
+// office only asks it, from the same clone it walks by, and a clone without it
+// answers null so the walk is untouched.
+export async function mistsOnTheRoad(worldClone, skeleton, from, toward, crossing) {
+  if (!skeleton?.mists) return null;
+  let eng;
+  try { eng = await import(pathToFileURL(join(worldClone, "tools", "world-engine.mjs"))); } catch { return null; }
+  if (typeof eng.mistsRoad !== "function") return null;
+  return eng.mistsRoad(from, toward, crossing, skeleton.mists);
+}
+
+/** The refusal for a road into the wall, in plain words. */
+export function mistsRefusal(bounce, at, extra = {}) {
+  return bounce(422, "the mist is too thick to walk into",
+    `this road runs into the wall of the Mists at (${at.x}, ${at.y}), and no road goes into the wall, ends on it or crosses it. Choose a point short of it: walking into the mist's edge is allowed, but the deeper a road goes the slower it walks, and at the wall it stops altogether.`,
+    { law: "LOGOS/classes.md § The emission lines: the Mists (POS-466, POS-468)", wall_at: at, ...extra });
+}
+
+/** The leg's stride: the dial's pace, slowed by the Mists' factor when there is one.
+ *  An unreadable dial walks at the engine's legacy constant, so the slowed stride is
+ *  that constant's, stamped (an unstamped line would walk at the open road's). */
+export function mistedPace(pace, factor, legacyKm) {
+  if (!(factor > 0 && factor < 1)) return pace;
+  return (pace ?? legacyKm) * factor;
+}
+
 export function walkEntry({ crossing, who, targetMarkId, stampAt, witnesses, from, toward, pace, targetExtent, household, writtenAt, declaredBy = null, note = null }) {
   return {
     crossing, actor: who, action: "walk",
@@ -4913,6 +4940,18 @@ export async function walkViaOffice(worldClone, payload = {}, key = null) {
     targetFrom = onGround.targetFrom;
   }
 
+  // ── THE MISTS ON THIS ROAD (POS-468, Darko 2026-10-09 21:47) ──────────────
+  // "the further they make it into the mist, the slower they get until they
+  // essentially hit zero". The world's engine reads the road once, here at the
+  // declare: one that ends in the wall, on its face, crosses it or starts in it
+  // is refused in plain words (no creeping in by short legs); one through the
+  // fringe walks at an even, slowed stride, stamped on the leg as its pace below.
+  // Read BEFORE the exits under DEC-5 run, so a refused road writes no act at all.
+  // No Mists this crossing, or a clone that predates them: null, and nothing here
+  // changes.
+  let mistRoad = await mistsOnTheRoad(worldClone, skeleton, from, toward, at);
+  if (mistRoad?.refused) throw mistsRefusal(bounce, mistRoad.refused);
+
   // THE WATER GATE IS OFF FOR v0 — Keemin's ruling: "walking on water is fine for
   // v0 lol". A leg across the channel is permitted, and no bounce is raised.
   //
@@ -4996,7 +5035,13 @@ export async function walkViaOffice(worldClone, payload = {}, key = null) {
       }
     }
   }
-  const clean = { handle: who, from, toward, at, targetExtent, targetMarkId };
+  // stepping ashore moved the road's start: read the Mists again from where it now begins
+  if (setDownFirst) {
+    mistRoad = await mistsOnTheRoad(worldClone, skeleton, from, toward, at);
+    if (mistRoad?.refused) throw mistsRefusal(bounce, mistRoad.refused, { exited_first: exitedFirst });
+  }
+  const mistFactor = mistRoad && mistRoad.factor < 1 ? mistRoad.factor : null;
+  const clean = { handle: who, from, toward, at, targetExtent, targetMarkId, ...(mistFactor ? { mistFactor } : {}) };
 
   // ── WHERE THE DEPARTURE IS WRITTEN (Stage D, WORLD_MOVEMENT_V2) ───────────
   //
@@ -5022,7 +5067,7 @@ export async function walkViaOffice(worldClone, payload = {}, key = null) {
     // in the reply is the visible sign the dial was unreadable.
     // pace read via departurePace — the record's class is `depart`; asking for
     // "departure" here was the 2026-08-21 slow-walk bug (30 min for 650 m).
-    const pace = departurePace();
+    const pace = mistedPace(departurePace(), mistFactor, WALK_KM_PER_CROSSING);
     // ── ONE CLOCK READ, TWO PENS (POS-198, 2026-09-22) ───────────────────────
     //
     // The `movements` pen read `new Date()` itself when its caller passed no
@@ -5223,6 +5268,9 @@ export async function walkViaOffice(worldClone, payload = {}, key = null) {
     // so read: "walk" names the same instant to the second. The queued entry
     // is still adjudicated at departure + the rounded eta (`entry.eta`).
     arrives_at: arrivesAt(at, result.position.remainingM, result.pace > 0 ? result.pace : WALK_KM_PER_CROSSING),
+    // ABSENT unless the Mists slowed this road, so every other answer is the one it was
+    ...(mistFactor ? { mists: { factor: mistFactor, deepest: +mistRoad.deepest.toFixed(3), stride_km: result.pace,
+      note: "your road runs into the Mists' fringe, and the deeper a road goes the slower it walks, to nothing at the wall: this leg walks at the stride above the whole way" } } : {}),
     standing: result.position.standing,
     position: result.position,
     // Provenance in every position sentence (v2.2 §B): walked, carried, or
