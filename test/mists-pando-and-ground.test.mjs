@@ -122,7 +122,7 @@ test("the floor the office holds while it cannot read the record is the record's
   assert.equal(MISTS_FIRST_CROSSING, SKELETON.mists.schedule[0].crossing);
 });
 
-test("FAIL CLOSED AT THE DOORS: the mark door answers 503 in the ruled words with Retry-After; the spawn sets no one down", () => {
+test("FAIL CLOSED AT THE DOORS: the mark door answers 503 in plain words with Retry-After; the spawn sets no one down", () => {
   assert.equal(MISTS_UNREADABLE, "the office cannot read the world to check the wall; try again");
   const server = readFileSync(new URL("../src/server.mjs", import.meta.url), "utf8");
   assert.ok(server.includes('if (code === 503 && obj?.defect === MISTS_UNREADABLE && !res.hasHeader?.("retry-after"))') && server.includes('res.setHeader("retry-after", String(MISTS_RETRY_AFTER_S));'), "the 503 carries Retry-After");
