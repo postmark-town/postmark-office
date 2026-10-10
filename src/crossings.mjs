@@ -98,11 +98,17 @@ export function nextCrossingForDoorstep(now = Date.now()) {
 // in its own named field beside the boat's number, wherever that number is named
 // for a letter: the doorstep's and the house's `next_crossing` and the send
 // receipt's. Keyed on the boat's number alone, so it is a pure function of the
-// crossing; on every other boat the block is the one it always was.
-export const FERRYMAN_CROSSINGS = Object.freeze([244, 272, 282, 284]);
-export const FERRYMAN_LINE = "The ferryman asks that no letter be addressed past the mist.";
+// crossing; on every other boat the block is the one it always was. His word
+// is his own on each of his boats.
+export const FERRYMAN_WORDS = Object.freeze({
+  244: "The ferryman asks that no letter be addressed past the mist.",
+  272: "The ferryman has started counting the passengers twice.",
+  282: "The ferryman sails with his eyes on the water and will not look north.",
+  284: "The ferryman lights a second lantern for the crossing, and does not say who it is for.",
+});
+export const FERRYMAN_CROSSINGS = Object.freeze(Object.keys(FERRYMAN_WORDS).map(Number));
 export function ferrymanFor(crossing) {
-  return FERRYMAN_CROSSINGS.includes(crossing) ? FERRYMAN_LINE : null;
+  return Object.hasOwn(FERRYMAN_WORDS, crossing) ? FERRYMAN_WORDS[crossing] : null;
 }
 
 // ── WHAT THE OFFICE'S COPY HAS CAUGHT UP TO (POS-332) ────────────────────────

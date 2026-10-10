@@ -15,7 +15,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { CROSSING_EPOCH_UTC, CROSSING_MS, FERRYMAN_CROSSINGS, FERRYMAN_LINE, ferrymanFor, nextCrossingForDoorstep, nextCrossingForReceipt } from "../src/crossings.mjs";
+import { CROSSING_EPOCH_UTC, CROSSING_MS, FERRYMAN_CROSSINGS, FERRYMAN_WORDS, ferrymanFor, nextCrossingForDoorstep, nextCrossingForReceipt } from "../src/crossings.mjs";
 import { transportAt, stopUnderfoot } from "../src/world-ride.mjs";
 import { vesselServiceFrom } from "../src/world-movement.mjs";
 import { NO_WORLD, OFFICE_ROOT, worldClone } from "./fixture-paths.mjs";
@@ -27,11 +27,19 @@ const beforeBoat = (n) => CROSSING_EPOCH_UTC + (n - 1) * CROSSING_MS + HOUR;
 
 // ── THE FERRYMAN ─────────────────────────────────────────────────────────────
 
-test("the ferryman speaks on boats 244, 272, 282 and 284, and on no other", () => {
+// his words, pinned as they were given, one for each of his boats
+const WORDS = {
+  244: "The ferryman asks that no letter be addressed past the mist.",
+  272: "The ferryman has started counting the passengers twice.",
+  282: "The ferryman sails with his eyes on the water and will not look north.",
+  284: "The ferryman lights a second lantern for the crossing, and does not say who it is for.",
+};
+
+test("the ferryman speaks on boats 244, 272, 282 and 284, his own word on each, and on no other", () => {
   assert.deepEqual([...FERRYMAN_CROSSINGS], [244, 272, 282, 284]);
+  assert.deepEqual({ ...FERRYMAN_WORDS }, WORDS);
   for (let n = 0; n <= 400; n += 1)
-    assert.equal(ferrymanFor(n), FERRYMAN_CROSSINGS.includes(n) ? FERRYMAN_LINE : null, `boat ${n}`);
-  assert.equal(FERRYMAN_LINE, "The ferryman asks that no letter be addressed past the mist.");
+    assert.equal(ferrymanFor(n), WORDS[n] ?? null, `boat ${n}`);
 });
 
 test("next_crossing on the doorstep: the ferryman's own field on his boats; the old block, key for key, on every other", () => {
@@ -44,16 +52,18 @@ test("next_crossing on the doorstep: the ferryman's own field on his boats; the 
     const b = nextCrossingForDoorstep(beforeBoat(n));
     assert.equal(b.crossing, n);
     assert.deepEqual(Object.keys(b), ["crossing", "at", "sentence", "ferryman"]);
-    assert.equal(b.ferryman, FERRYMAN_LINE);
+    assert.equal(b.ferryman, WORDS[n]);
     assert.doesNotMatch(b.sentence, /ferryman|mist/, "the boat's sentence is untouched; the word is its own field");
   }
 });
 
 test("next_crossing on the send receipt: the same, for the boat the letter rides", () => {
   for (const n of [243, 245]) assert.deepEqual(Object.keys(nextCrossingForReceipt(beforeBoat(n))), ["crossing", "at", "minutes_away", "sentence"]);
-  const on = nextCrossingForReceipt(beforeBoat(244));
-  assert.deepEqual(Object.keys(on), ["crossing", "at", "minutes_away", "sentence", "ferryman"]);
-  assert.equal(on.ferryman, FERRYMAN_LINE);
+  for (const n of FERRYMAN_CROSSINGS) {
+    const on = nextCrossingForReceipt(beforeBoat(n));
+    assert.deepEqual(Object.keys(on), ["crossing", "at", "minutes_away", "sentence", "ferryman"]);
+    assert.equal(on.ferryman, WORDS[n], `boat ${n}`);
+  }
   // a retry read after its own boat sailed names the boat it goes on now, and the word follows that boat
   const retry = nextCrossingForReceipt(beforeBoat(245), { writtenAt: beforeBoat(244) });
   assert.match(retry.sentence, /this crossing has sailed/);
@@ -67,7 +77,7 @@ const CLONE = worldClone();
 const HAVE_CLONE = Boolean(CLONE) && existsSync(join(CLONE, "WORLD", "world-state.json")) && existsSync(join(CLONE, "tools", "marks-fold.mjs"));
 const WHY_NOT = CLONE ? `the world clone at ${CLONE} is missing WORLD/world-state.json or tools/marks-fold.mjs` : NO_WORLD;
 const WHARF = "sol-of-garrison/grove-wharf";
-const RIDE_CLAUSE = " (she will not steer north of the mist).";
+const RIDE_CLAUSE = " (she sails only to the clear places now).";
 
 // The real works, folded by the world's own tool (world-ride.test.mjs § vehicleWorld).
 async function vehicleWorld() {
@@ -102,7 +112,7 @@ test("the ride line: the ferry's word on the Mists while they stand; the old lin
   const w = withMists(await vehicleWorld(), 244);
   const { service } = await vesselServiceFrom(w, { repo: CLONE });
   const plain = transportAt(WHARF, service, w);
-  assert.ok(plain.line.endsWith(".") && !plain.line.includes("mist"), "the line it always was");
+  assert.ok(plain.line.endsWith(".") && !plain.line.includes("clear places"), "the line it always was");
   const seasoned = transportAt(WHARF, service, w, { season: true });
   assert.equal(seasoned.line, plain.line.slice(0, -1) + RIDE_CLAUSE);
   assert.deepEqual(seasoned.ride_to, plain.ride_to, "only the line moves");

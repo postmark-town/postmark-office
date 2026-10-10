@@ -522,7 +522,7 @@ export function transportAt(markId, service, worldState = null, { season = false
   return {
     stop: markId,
     vehicle: vessel,
-    line: `${boarding}; from aboard, ride to: ${onward.map((o) => `${o.mark} (~${o.ride_minutes} min)`).join(", ") || "(nowhere else on her timetable)"}${season ? " (she will not steer north of the mist)" : ""}.`,
+    line: `${boarding}; from aboard, ride to: ${onward.map((o) => `${o.mark} (~${o.ride_minutes} min)`).join(", ") || "(nowhere else on her timetable)"}${season ? " (she sails only to the clear places now)" : ""}.`,
     ride_to: onward,
   };
 }
