@@ -70,7 +70,7 @@ function cards(env) {
     });
   } catch (e) {
     // a card swap that no longer finds its segment throws at load: say which
-    throw new Error(`the office did not load with ${JSON.stringify(env)}: ${String(e.stderr ?? e.message).split("\n").filter((l) => /Error/.test(l)).slice(0, 3).join(" | ")}`);
+    throw new Error(`the office did not load with ${JSON.stringify(env)}: ${String(e.stderr ?? e.message).split("\n").filter((l) => /^\s*\w*Error:/.test(l)).slice(0, 3).join(" | ")}`);
   }
   return JSON.parse(out.slice(out.indexOf("CARDS") + 5));
 }
@@ -145,7 +145,8 @@ test("6 · ON: the register law, the bounties sentence and the do: text teach wh
   assert.doesNotMatch(ON.surface.bare.the_register_law, /placement computed for you/);
   assert.match(ON.surface.bare.the_register_law, /do: "sign-up" \/ "answer-sign-up" carry who builds an idea's parts and do: "award" records stamps owed on it/);
   assert.match(ON.townPost.description, /Bounties and listings open here after their migrations; until then bounties post at the world door\. AND class: "event"/);
-  for (const a of ["sign-up", "answer-sign-up", "award"]) assert.match(ON.doText, new RegExp(`\\b${a} \\(`), `the do: text names ${a}`);
+  // " sign-up (" with its leading space: "answer-sign-up (" must not stand in for it
+  for (const a of ["sign-up", "answer-sign-up", "award"]) assert.ok(ON.doText.includes(` ${a} (`), `the do: text names ${a}`);
   assert.match(OFF.surface.bare.the_register_law, /class: "idea" publishes at the Think Tank, placement computed for you;/);
 });
 
