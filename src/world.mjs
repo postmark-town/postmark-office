@@ -1079,6 +1079,162 @@ const EARSHOT_PRESENCE_CAP = 500;
  * live pen does not write would prove the renderer equal to a store nobody
  * runs". A falsifier that builds its acts with the live builder cannot drift
  * from the live builder. Nothing else imports it. */
+// ── GROUND BEHIND THE WALL (POS-468 B) ────────────────────────────────────────
+// The placement door and the portal spawn ask it.
+/** The first point of `ground` that stands behind the wall this crossing, as
+ *  {x, y}, or null; `{ unreadable: true }` when the engine cannot be read.
+ *  `ground` is `{ points, edges }` (or a bare array of points): every point is
+ *  asked, and every edge with the engine's own segment test, the sight line's
+ *  check between its two ends, so a thin outline whose corners all stand clear
+ *  but whose side runs through the wall is caught. */
+export async function mistsWallOn(worldClone, skeleton, ground, crossing) {
+  const points = Array.isArray(ground) ? ground : ground?.points ?? [];
+  const edges = Array.isArray(ground) ? [] : ground?.edges ?? [];
+  if (!skeleton?.mists || (!points.length && !edges.length)) return null;
+  let eng;
+  try { eng = await import(pathToFileURL(join(worldClone, "tools", "world-engine.mjs"))); } catch { return { unreadable: true }; }
+  if (typeof eng.mistsAt !== "function" || typeof eng.mistsHere !== "function") return { unreadable: true };
+  if (edges.length && typeof eng.mistsHide !== "function") return { unreadable: true };
+  const m = eng.mistsAt(crossing, skeleton.mists);
+  if (!m) return null;
+  const fin = (q) => Number.isFinite(q?.x) && Number.isFinite(q?.y);
+  const at = (q) => ({ x: Math.round(q.x), y: Math.round(q.y) });
+  const p = points.find((q) => fin(q) && eng.mistsHere(q, m).inWall);
+  if (p) return at(p);
+  for (const [a, b] of edges) {
+    if (!fin(a) || !fin(b)) continue;
+    if (eng.mistsHere(a, m).inWall) return at(a);
+    if (eng.mistsHere(b, m).inWall) return at(b);
+    if (eng.mistsHide(a, b, m)) {
+      // name where the side meets the wall: the first sampled point behind it
+      const n = Math.max(2, Math.min(4000, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / 5)));
+      for (let i = 1; i < n; i += 1) {
+        const q = { x: a.x + ((b.x - a.x) * i) / n, y: a.y + ((b.y - a.y) * i) / n };
+        if (eng.mistsHere(q, m).inWall) return at(q);
+      }
+      return at({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+    }
+  }
+  return null;
+}
+
+// ── FAIL CLOSED: A WALL THE OFFICE CANNOT READ ────────────────────────────────
+// A guard that cannot read the wall must not wave ground through it. From the
+// Mists' first crossing, a world that will not load, an engine that will not
+// import, or one without the reading answers `{ unreadable: true }`, and the
+// door refuses rather than guess. A record that truly carries no Mists schedule
+// passes quietly. MISTS_FIRST_CROSSING is the floor the office holds only while
+// it cannot read the record's own schedule (whose first entry governs whenever
+// it can be read); a test holds the two equal.
+export const MISTS_FIRST_CROSSING = 244;
+export const MISTS_UNREADABLE = "the office cannot read the world to check the wall; try again";
+export const MISTS_RETRY_AFTER_S = 30;
+
+// ── THE GROUND A WRITE ADDS ───────────────────────────────────────────────────
+// A mark's ground is its outline, else its box, as a closed ring. A new mark adds
+// all of it. An amend adds the region inside its new ring and outside its old
+// one, and that region meets the wall exactly when its boundary does (the wall is
+// one connected piece around the clear ground, and the region is bounded). That
+// boundary is made of two kinds of side: the new ring's sides where they run
+// outside the old footprint, and the old ring's sides where they run inside the
+// new one (a filled-in notch). So each side of either ring is cut where the other
+// ring crosses it, and each piece is kept by which side of the other ring its
+// middle stands on; a piece lying along the other ring's boundary is shared ground,
+// not new. An amend that neither moves nor widens adds nothing.
+const groundRingOf = (mark) => {
+  const ring = ringOf(mark?.points);
+  if (ring) return ring;
+  const hw = (Number(mark?.extent?.w) || 0) / 2, hh = (Number(mark?.extent?.h) || 0) / 2;
+  return [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]].map(([dx, dy]) => ({ x: Number(mark.at.x) + dx, y: Number(mark.at.y) + dy }));
+};
+const sidesOfRing = (ring) => ring.map((a, i) => [a, ring[(i + 1) % ring.length]]);
+const EPS = 1e-6;
+function whereIn(q, poly) {                                            // "in" | "out" | "on"
+  for (let i = 0; i < poly.length; i += 1) {
+    const a = poly[i], b = poly[(i + 1) % poly.length];
+    const cross = (b.x - a.x) * (q.y - a.y) - (b.y - a.y) * (q.x - a.x);
+    const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+    if (Math.abs(cross) / len < 1e-4 && q.x >= Math.min(a.x, b.x) - 1e-4 && q.x <= Math.max(a.x, b.x) + 1e-4
+      && q.y >= Math.min(a.y, b.y) - 1e-4 && q.y <= Math.max(a.y, b.y) + 1e-4) return "on";
+  }
+  let hit = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const a = poly[i], b = poly[j];
+    if (((a.y > q.y) !== (b.y > q.y)) && q.x < ((b.x - a.x) * (q.y - a.y)) / (b.y - a.y) + a.x) hit = !hit;
+  }
+  return hit ? "in" : "out";
+}
+function piecesOf([a, b], poly, keep) {                                // the pieces of a side whose middle is `keep`
+  const ts = [0, 1];
+  const dx = b.x - a.x, dy = b.y - a.y;
+  for (let i = 0; i < poly.length; i += 1) {
+    const c = poly[i], d = poly[(i + 1) % poly.length];
+    const ex = d.x - c.x, ey = d.y - c.y;
+    const den = dx * ey - dy * ex;
+    if (Math.abs(den) < EPS) continue;                                 // parallel: no single crossing
+    const t = ((c.x - a.x) * ey - (c.y - a.y) * ex) / den;
+    const u = ((c.x - a.x) * dy - (c.y - a.y) * dx) / den;
+    if (t > EPS && t < 1 - EPS && u >= -EPS && u <= 1 + EPS) ts.push(t);
+  }
+  ts.sort((p, q) => p - q);
+  const at = (t) => ({ x: a.x + dx * t, y: a.y + dy * t });
+  const out = [];
+  for (let i = 0; i + 1 < ts.length; i += 1) {
+    if (ts[i + 1] - ts[i] < EPS) continue;
+    if (whereIn(at((ts[i] + ts[i + 1]) / 2), poly) === keep) out.push([at(ts[i]), at(ts[i + 1])]);
+  }
+  return out;
+}
+/** `{ points, edges }`: the ground a write adds. `ground` is the new ring. */
+export function mistsNewGround(old, ground) {
+  const ring = ground ?? [];
+  if (!old?.at) return { points: ring, edges: ring.length >= 2 ? sidesOfRing(ring) : [] };
+  const was = groundRingOf(old);
+  const edges = [
+    ...sidesOfRing(ring).flatMap((side) => piecesOf(side, was, "out")),   // new sides outside the old footprint
+    ...sidesOfRing(was).flatMap((side) => piecesOf(side, ring, "in")),    // old sides inside the new ring (a filled notch)
+  ];
+  return { points: edges.flat(), edges };
+}
+
+/** null (clear, or no Mists) · { wall: {x, y} } · { unreadable: true } */
+export async function mistsGroundCheck(worldClone, readSkeleton, ground, crossing) {
+  let skeleton = null;
+  try { skeleton = await readSkeleton(); } catch { skeleton = null; }
+  if (!skeleton) return crossing >= MISTS_FIRST_CROSSING ? { unreadable: true } : null;
+  if (!skeleton.mists) return null;
+  const wall = await mistsWallOn(worldClone, skeleton, ground, crossing);
+  if (wall?.unreadable) return crossing >= MISTS_FIRST_CROSSING ? { unreadable: true } : null;
+  return wall ? { wall } : null;
+}
+
+// ── THE MISTS ON A ROAD (POS-468) ────────────────────────────────────────────
+// The world's engine owns the reading (tools/world-engine.mjs § mistsRoad); the
+// office only asks it, from the same clone it walks by, and a clone without it
+// answers null so the walk is untouched.
+export async function mistsOnTheRoad(worldClone, skeleton, from, toward, crossing) {
+  if (!skeleton?.mists) return null;
+  let eng;
+  try { eng = await import(pathToFileURL(join(worldClone, "tools", "world-engine.mjs"))); } catch { return null; }
+  if (typeof eng.mistsRoad !== "function") return null;
+  return eng.mistsRoad(from, toward, crossing, skeleton.mists);
+}
+
+/** The refusal for a road into the wall, in plain words. */
+export function mistsRefusal(bounce, at, extra = {}) {
+  return bounce(422, "the mist is too thick to walk into",
+    `this road runs into the wall of the Mists at (${at.x}, ${at.y}), and no road goes into the wall, ends on it or crosses it. Choose a point short of it: walking into the mist's edge is allowed, but the deeper a road goes the slower it walks, and at the wall it stops altogether.`,
+    { law: "LOGOS/classes.md § The emission lines: the Mists (POS-466, POS-468)", wall_at: at, ...extra });
+}
+
+/** The leg's stride: the dial's pace, slowed by the Mists' factor when there is one.
+ *  An unreadable dial walks at the engine's legacy constant, so the slowed stride is
+ *  that constant's, stamped (an unstamped line would walk at the open road's). */
+export function mistedPace(pace, factor, legacyKm) {
+  if (!(factor > 0 && factor < 1)) return pace;
+  return (pace ?? legacyKm) * factor;
+}
+
 export function walkEntry({ crossing, who, targetMarkId, stampAt, witnesses, from, toward, pace, targetExtent, household, writtenAt, declaredBy = null, note = null }) {
   return {
     crossing, actor: who, action: "walk",
@@ -3719,7 +3875,7 @@ async function placingOnBehalf(by, payload, key, bounce) {
 // family as `_act_id` and `_adopted`), so it reaches the act's payload and the
 // claim's `data` and never a mark file. It is not read off `payload`: a
 // resident cannot claim a drop they did not make by typing the key.
-export async function leaveMarkViaOffice(worldClone, payload = {}, key = null, { setDown = null } = {}) {
+export async function leaveMarkViaOffice(worldClone, payload = {}, key = null, { setDown = null, mistsCrossing = null } = {}) {
   { const fz = worldFreezeBounce(); if (fz) return fz; }
   const bounce = (code, defect, hint) => { const e = new Error(defect); Object.assign(e, { code, defect, hint }); return e; };
   const handles = [...(key?.handles ?? [])];
@@ -3942,6 +4098,37 @@ export async function leaveMarkViaOffice(worldClone, payload = {}, key = null, {
     // rule on it (the ground question is a canon question). The ledger move is
     // still the stake verb's; this is the declaration saying what was asked for.
     ...(payload.stamps === undefined || payload.stamps === null ? {} : { stamps: stakeLands }) };
+  // ── NO NEW GROUND BEHIND THE MISTS (POS-468 B) ───────────────────────────
+  // From the Mists' first crossing, a mark may not be placed, nor moved by its
+  // amend, onto ground behind the wall: the wall hides everything behind it,
+  // and a mark there would be a way to stand something where no one can see or
+  // reach. Its whole ground is asked (its outline, else its box), here after
+  // every other judgment and before either pen writes. Marks already standing
+  // are not touched by this; only a write that would put ground behind the wall
+  // is refused. No Mists, a clone without them, or a world that will not load:
+  // no check at all.
+  if (kind === "sited" || kind === "parcel") {
+    const box = kind === "parcel" ? (await parcelDial().catch(() => ({ w: 25, h: 25 }))) : extent;
+    const hw = (Number(box?.w) || 0) / 2, hh = (Number(box?.h) || 0) / 2;
+    const ground = ringOf(points) ? ringOf(points)
+      : [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]].map(([dx, dy]) => ({ x: Number(at.x) + dx, y: Number(at.y) + dy }));
+    // AN AMEND IS ASKED ONLY ABOUT THE GROUND IT ADDS. The town's own great marks
+    // (its sea, its channel, the root's box) already reach behind the wall, and
+    // re-filing one in place must not be refused for ground it always held: so the
+    // wall is asked only about the points of the new ground that stand outside the
+    // mark's old footprint. An amend that neither moves nor widens it asks nothing.
+    let w = null;
+    try { w = await world(); } catch { w = null; }
+    const old = payload.amend === true ? (w?.marks ?? []).find((m) => m.id === `${by}/${slug}`) ?? null : null;
+    const fresh = mistsNewGround(old, ground);
+    const seen = fresh.points.length || fresh.edges.length
+      ? await mistsGroundCheck(worldClone, async () => w?._raw?.skeleton ?? null, fresh, mistsCrossing ?? currentCrossing())
+      : null;
+    if (seen?.unreadable) throw bounce(503, MISTS_UNREADABLE,
+      `the office could not read the world or its engine to see where the wall of the Mists stands, so it will not place this mark until it can. Nothing was written; send the same request again after ${MISTS_RETRY_AFTER_S} seconds (Retry-After).`);
+    if (seen?.wall) throw bounce(422, "this ground stands behind the wall of the Mists",
+      `a mark may not be placed or moved behind the wall while the Mists stand: its ground reaches (${seen.wall.x}, ${seen.wall.y}), which no one can see or reach. Choose ground on the clear side of the wall; marks already standing stay as they are.`);
+  }
   const exec = join(HERE, "leave-exec.mjs");
   let result;
   if (singleLogEnabled()) {
@@ -4913,6 +5100,18 @@ export async function walkViaOffice(worldClone, payload = {}, key = null) {
     targetFrom = onGround.targetFrom;
   }
 
+  // ── THE MISTS ON THIS ROAD (POS-468) ─────────────────────────────────────
+  // The stride falls the deeper a road goes into the fringe, to nothing at the
+  // wall's face. The world's engine reads the road once, here at the
+  // declare: one that ends in the wall, on its face, crosses it or starts in it
+  // is refused in plain words (no creeping in by short legs); one through the
+  // fringe walks at an even, slowed stride, stamped on the leg as its pace below.
+  // Read BEFORE the exits under DEC-5 run, so a refused road writes no act at all.
+  // No Mists this crossing, or a clone that predates them: null, and nothing here
+  // changes.
+  let mistRoad = await mistsOnTheRoad(worldClone, skeleton, from, toward, at);
+  if (mistRoad?.refused) throw mistsRefusal(bounce, mistRoad.refused);
+
   // THE WATER GATE IS OFF FOR v0 — Keemin's ruling: "walking on water is fine for
   // v0 lol". A leg across the channel is permitted, and no bounce is raised.
   //
@@ -4996,7 +5195,13 @@ export async function walkViaOffice(worldClone, payload = {}, key = null) {
       }
     }
   }
-  const clean = { handle: who, from, toward, at, targetExtent, targetMarkId };
+  // stepping ashore moved the road's start: read the Mists again from where it now begins
+  if (setDownFirst) {
+    mistRoad = await mistsOnTheRoad(worldClone, skeleton, from, toward, at);
+    if (mistRoad?.refused) throw mistsRefusal(bounce, mistRoad.refused, { exited_first: exitedFirst });
+  }
+  const mistFactor = mistRoad && mistRoad.factor < 1 ? mistRoad.factor : null;
+  const clean = { handle: who, from, toward, at, targetExtent, targetMarkId, ...(mistFactor ? { mistFactor } : {}) };
 
   // ── WHERE THE DEPARTURE IS WRITTEN (Stage D, WORLD_MOVEMENT_V2) ───────────
   //
@@ -5022,7 +5227,7 @@ export async function walkViaOffice(worldClone, payload = {}, key = null) {
     // in the reply is the visible sign the dial was unreadable.
     // pace read via departurePace — the record's class is `depart`; asking for
     // "departure" here was the 2026-08-21 slow-walk bug (30 min for 650 m).
-    const pace = departurePace();
+    const pace = mistedPace(departurePace(), mistFactor, WALK_KM_PER_CROSSING);
     // ── ONE CLOCK READ, TWO PENS (POS-198, 2026-09-22) ───────────────────────
     //
     // The `movements` pen read `new Date()` itself when its caller passed no
@@ -5223,6 +5428,12 @@ export async function walkViaOffice(worldClone, payload = {}, key = null) {
     // so read: "walk" names the same instant to the second. The queued entry
     // is still adjudicated at departure + the rounded eta (`entry.eta`).
     arrives_at: arrivesAt(at, result.position.remainingM, result.pace > 0 ? result.pace : WALK_KM_PER_CROSSING),
+    // ABSENT unless the Mists slowed this road, so every other answer is the one it was
+    ...(mistFactor ? { mists: { factor: mistFactor, deepest: +mistRoad.deepest.toFixed(3), stride_km: result.pace,
+      ...(mistRoad.walk_out ? { walk_out: true } : {}),
+      note: mistRoad.walk_out
+        ? "the wall of the Mists had overtaken you: this road leads straight out, and you walk it slowly, at the stride above the whole way"
+        : "your road runs into the Mists' fringe, and the deeper a road goes the slower it walks, to nothing at the wall: this leg walks at the stride above the whole way" } } : {}),
     standing: result.position.standing,
     position: result.position,
     // Provenance in every position sentence (v2.2 §B): walked, carried, or

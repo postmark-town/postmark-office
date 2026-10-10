@@ -89,7 +89,10 @@ async function main() {
   // migration); the record owns the value, this guards only absurdity.
   // one owner: departurePace (world-classes) — this inline copy asking
   // "departure" was the second body of the 2026-08-21 slow-walk bug.
-  const pace = departurePace();
+  // THE MISTS' SLOWING (POS-468): world.mjs read the road at the declare and
+  // passes the leg's factor; the stride stamped is the dial's, slowed by it.
+  const dialPace = departurePace();
+  const pace = p.mistFactor > 0 && p.mistFactor < 1 ? (dialPace ?? WALK_KM_PER_CROSSING) * p.mistFactor : dialPace;
   const dialFallback = pace == null;
   // THE RECORD SAYS WHICH PACE IT WALKED AT (POS-270 lane W 3b). On a fallback
   // the line goes out unstamped and the engine walks at its own legacy constant;
