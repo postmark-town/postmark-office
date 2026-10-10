@@ -14,7 +14,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { mistsOnTheRoad, mistsWallOn, mistsGroundCheck, MISTS_FIRST_CROSSING, MISTS_UNREADABLE } from "../src/world.mjs";
+import { mistsOnTheRoad, mistsWallOn, mistsGroundCheck, mistsNewGround, MISTS_FIRST_CROSSING, MISTS_UNREADABLE } from "../src/world.mjs";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { vesselServiceFrom } from "../src/world-movement.mjs";
@@ -135,7 +135,6 @@ test("FAIL CLOSED AT THE DOORS: the mark door answers 503 in plain words with Re
 // last keyframe. An amend is asked only about the ground it adds, so re-filing
 // one in place is not refused; moving or widening it onto the wall still is.
 test("AN AMEND ASKS ONLY ABOUT THE GROUND IT ADDS: the-sea's real outline, re-filed at the last keyframe, passes; moved south, it is refused", { skip: !READY && WHY_NOT }, async () => {
-  const { mistsNewGround } = await import("../src/world.mjs");
   const { ringOf } = await import("../src/ring-box.mjs");
   const worldState = JSON.parse(readFileSync(join(CLONE, "WORLD", "world-state.json"), "utf8"));
   const sea = worldState.marks.find((m) => m.id === "the-town/the-sea");
@@ -145,16 +144,44 @@ test("AN AMEND ASKS ONLY ABOUT THE GROUND IT ADDS: the-sea's real outline, re-fi
   // the problem: the whole outline reaches behind the wall by the last keyframe
   assert.ok((await mistsGroundCheck(CLONE, async () => SKELETON, outline, last))?.wall, "the-sea's own ground reaches behind the wall");
   // re-filed in place: no new ground, nothing asked, nothing refused
-  assert.deepEqual(mistsNewGround(sea, outline), []);
+  assert.deepEqual(mistsNewGround(sea, outline), { points: [], edges: [] });
   // the root's 320 km box, re-filed as it stands: nothing new either
   const root = worldState.marks.find((m) => m.id === "the-town/let-there-be-light");
   const hw = root.extent.w / 2, hh = root.extent.h / 2;
-  assert.deepEqual(mistsNewGround(root, [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]].map(([x, y]) => ({ x: root.at.x + x, y: root.at.y + y }))), []);
+  assert.deepEqual(mistsNewGround(root, [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]].map(([x, y]) => ({ x: root.at.x + x, y: root.at.y + y }))), { points: [], edges: [] });
   // moved 3 km south: the new ground is asked, and the wall refuses it
   const moved = outline.map((p) => ({ x: p.x, y: p.y + 3000 }));
   const fresh = mistsNewGround(sea, moved);
-  assert.ok(fresh.length > 0);
+  assert.ok(fresh.edges.length > 0);
   assert.ok((await mistsGroundCheck(CLONE, async () => SKELETON, fresh, last))?.wall, "moved onto the wall, refused");
   // a new placement has no old footprint: all of it is asked
-  assert.equal(mistsNewGround(null, outline).length, outline.length);
+  assert.equal(mistsNewGround(null, outline).edges.length, outline.length, "every side of a new mark is asked");
+});
+
+test("THE SIDES ARE ASKED, NOT ONLY THE CORNERS: a thin outline whose corners stand in town and in Pando's clearing is refused", { skip: !READY && WHY_NOT }, async () => {
+  const last = SKELETON.mists.schedule.at(-1).crossing;
+  const pando = SKELETON.mists.clearings_m.find((k) => k.id === "pando");
+  const thin = [{ x: 0, y: 0 }, { x: pando.x, y: pando.y }, { x: pando.x + 5, y: pando.y }];
+  assert.equal(await mistsWallOn(CLONE, SKELETON, thin, last), null, "every corner stands clear (the bare-corner check would pass it)");
+  const seen = await mistsGroundCheck(CLONE, async () => SKELETON, mistsNewGround(null, thin), last);
+  assert.ok(seen?.wall, "its side runs through the wall, and it is refused");
+});
+
+test("A FILLED NOTCH IS NEW GROUND: an amend that fills a concave notch reaching into the wall is refused, and one that keeps it is not", { skip: !READY && WHY_NOT }, async () => {
+  const last = SKELETON.mists.schedule.at(-1).crossing;
+  const m = SKELETON.mists, eastFace = m.border_m.maxX - m.schedule.at(-1).front_m;        // the east wall's face at the last keyframe
+  const x0 = eastFace - 300, x1 = eastFace + 200;                       // the mark straddles the face
+  // an old mark already standing across the face, with a notch cut in from the west
+  const notched = [[x0, 0], [x1, 0], [x1, 300], [x0, 300], [x0, 200], [eastFace + 100, 200], [eastFace + 100, 100], [x0, 100]].map(([x, y]) => ({ x, y }));
+  const old = { at: { x: (x0 + x1) / 2, y: 150 }, points: notched.map((p) => [p.x, p.y]) };
+  const same = mistsNewGround(old, notched);
+  assert.deepEqual(same, { points: [], edges: [] }, "re-filed as it stands, it adds nothing");
+  const filled = [[x0, 0], [x1, 0], [x1, 300], [x0, 300]].map(([x, y]) => ({ x, y }));
+  const fresh = mistsNewGround(old, filled);
+  assert.ok(fresh.edges.length > 0, "filling the notch adds ground");
+  assert.ok((await mistsGroundCheck(CLONE, async () => SKELETON, fresh, last))?.wall, "and the notch reached into the wall, so it is refused");
+  // filling a notch that lies wholly on clear ground is not refused
+  const clearOld = { at: { x: 0, y: 150 }, points: notched.map((p) => [p.x - 3000, p.y]) };
+  const clearFill = filled.map((p) => ({ x: p.x - 3000, y: p.y }));
+  assert.equal(await mistsGroundCheck(CLONE, async () => SKELETON, mistsNewGround(clearOld, clearFill), last), null);
 });

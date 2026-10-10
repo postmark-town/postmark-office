@@ -1080,18 +1080,42 @@ const EARSHOT_PRESENCE_CAP = 500;
  * runs". A falsifier that builds its acts with the live builder cannot drift
  * from the live builder. Nothing else imports it. */
 // ── GROUND BEHIND THE WALL (POS-468 B) ────────────────────────────────────────
-// The first point of `points` that stands behind the wall this crossing, as
-// {x, y}, or null: no Mists, a clone that predates them, or all of it clear.
 // The placement door and the portal spawn ask it.
-export async function mistsWallOn(worldClone, skeleton, points, crossing) {
-  if (!skeleton?.mists || !Array.isArray(points) || !points.length) return null;
+/** The first point of `ground` that stands behind the wall this crossing, as
+ *  {x, y}, or null; `{ unreadable: true }` when the engine cannot be read.
+ *  `ground` is `{ points, edges }` (or a bare array of points): every point is
+ *  asked, and every edge with the engine's own segment test, the sight line's
+ *  check between its two ends, so a thin outline whose corners all stand clear
+ *  but whose side runs through the wall is caught. */
+export async function mistsWallOn(worldClone, skeleton, ground, crossing) {
+  const points = Array.isArray(ground) ? ground : ground?.points ?? [];
+  const edges = Array.isArray(ground) ? [] : ground?.edges ?? [];
+  if (!skeleton?.mists || (!points.length && !edges.length)) return null;
   let eng;
   try { eng = await import(pathToFileURL(join(worldClone, "tools", "world-engine.mjs"))); } catch { return { unreadable: true }; }
   if (typeof eng.mistsAt !== "function" || typeof eng.mistsHere !== "function") return { unreadable: true };
+  if (edges.length && typeof eng.mistsHide !== "function") return { unreadable: true };
   const m = eng.mistsAt(crossing, skeleton.mists);
   if (!m) return null;
-  const p = points.find((q) => Number.isFinite(q?.x) && Number.isFinite(q?.y) && eng.mistsHere(q, m).inWall);
-  return p ? { x: Math.round(p.x), y: Math.round(p.y) } : null;
+  const fin = (q) => Number.isFinite(q?.x) && Number.isFinite(q?.y);
+  const at = (q) => ({ x: Math.round(q.x), y: Math.round(q.y) });
+  const p = points.find((q) => fin(q) && eng.mistsHere(q, m).inWall);
+  if (p) return at(p);
+  for (const [a, b] of edges) {
+    if (!fin(a) || !fin(b)) continue;
+    if (eng.mistsHere(a, m).inWall) return at(a);
+    if (eng.mistsHere(b, m).inWall) return at(b);
+    if (eng.mistsHide(a, b, m)) {
+      // name where the side meets the wall: the first sampled point behind it
+      const n = Math.max(2, Math.min(4000, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / 5)));
+      for (let i = 1; i < n; i += 1) {
+        const q = { x: a.x + ((b.x - a.x) * i) / n, y: a.y + ((b.y - a.y) * i) / n };
+        if (eng.mistsHere(q, m).inWall) return at(q);
+      }
+      return at({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+    }
+  }
+  return null;
 }
 
 // ── FAIL CLOSED: A WALL THE OFFICE CANNOT READ ────────────────────────────────
@@ -1105,33 +1129,81 @@ export async function mistsWallOn(worldClone, skeleton, points, crossing) {
 export const MISTS_FIRST_CROSSING = 244;
 export const MISTS_UNREADABLE = "the office cannot read the world to check the wall; try again";
 export const MISTS_RETRY_AFTER_S = 30;
-/** The points of `ground` that stand outside `old`'s footprint (its outline, else
- *  its box), or all of them when there is no old mark: the ground an amend adds. */
+
+// ── THE GROUND A WRITE ADDS ───────────────────────────────────────────────────
+// A mark's ground is its outline, else its box, as a closed ring. A new mark adds
+// all of it. An amend adds the region inside its new ring and outside its old
+// one, and that region meets the wall exactly when its boundary does (the wall is
+// one connected piece around the clear ground, and the region is bounded). That
+// boundary is made of two kinds of side: the new ring's sides where they run
+// outside the old footprint, and the old ring's sides where they run inside the
+// new one (a filled-in notch). So each side of either ring is cut where the other
+// ring crosses it, and each piece is kept by which side of the other ring its
+// middle stands on; a piece lying along the other ring's boundary is shared ground,
+// not new. An amend that neither moves nor widens adds nothing.
+const groundRingOf = (mark) => {
+  const ring = ringOf(mark?.points);
+  if (ring) return ring;
+  const hw = (Number(mark?.extent?.w) || 0) / 2, hh = (Number(mark?.extent?.h) || 0) / 2;
+  return [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]].map(([dx, dy]) => ({ x: Number(mark.at.x) + dx, y: Number(mark.at.y) + dy }));
+};
+const sidesOfRing = (ring) => ring.map((a, i) => [a, ring[(i + 1) % ring.length]]);
+const EPS = 1e-6;
+function whereIn(q, poly) {                                            // "in" | "out" | "on"
+  for (let i = 0; i < poly.length; i += 1) {
+    const a = poly[i], b = poly[(i + 1) % poly.length];
+    const cross = (b.x - a.x) * (q.y - a.y) - (b.y - a.y) * (q.x - a.x);
+    const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+    if (Math.abs(cross) / len < 1e-4 && q.x >= Math.min(a.x, b.x) - 1e-4 && q.x <= Math.max(a.x, b.x) + 1e-4
+      && q.y >= Math.min(a.y, b.y) - 1e-4 && q.y <= Math.max(a.y, b.y) + 1e-4) return "on";
+  }
+  let hit = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const a = poly[i], b = poly[j];
+    if (((a.y > q.y) !== (b.y > q.y)) && q.x < ((b.x - a.x) * (q.y - a.y)) / (b.y - a.y) + a.x) hit = !hit;
+  }
+  return hit ? "in" : "out";
+}
+function piecesOf([a, b], poly, keep) {                                // the pieces of a side whose middle is `keep`
+  const ts = [0, 1];
+  const dx = b.x - a.x, dy = b.y - a.y;
+  for (let i = 0; i < poly.length; i += 1) {
+    const c = poly[i], d = poly[(i + 1) % poly.length];
+    const ex = d.x - c.x, ey = d.y - c.y;
+    const den = dx * ey - dy * ex;
+    if (Math.abs(den) < EPS) continue;                                 // parallel: no single crossing
+    const t = ((c.x - a.x) * ey - (c.y - a.y) * ex) / den;
+    const u = ((c.x - a.x) * dy - (c.y - a.y) * dx) / den;
+    if (t > EPS && t < 1 - EPS && u >= -EPS && u <= 1 + EPS) ts.push(t);
+  }
+  ts.sort((p, q) => p - q);
+  const at = (t) => ({ x: a.x + dx * t, y: a.y + dy * t });
+  const out = [];
+  for (let i = 0; i + 1 < ts.length; i += 1) {
+    if (ts[i + 1] - ts[i] < EPS) continue;
+    if (whereIn(at((ts[i] + ts[i + 1]) / 2), poly) === keep) out.push([at(ts[i]), at(ts[i + 1])]);
+  }
+  return out;
+}
+/** `{ points, edges }`: the ground a write adds. `ground` is the new ring. */
 export function mistsNewGround(old, ground) {
-  if (!old?.at) return ground;
-  const ring = ringOf(old.points);
-  const hw = (Number(old.extent?.w) || 0) / 2, hh = (Number(old.extent?.h) || 0) / 2;
-  const poly = ring ?? [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]].map(([dx, dy]) => ({ x: Number(old.at.x) + dx, y: Number(old.at.y) + dy }));
-  const inside = (q) => {
-    let hit = false;
-    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-      const a = poly[i], b = poly[j];
-      if (((a.y > q.y) !== (b.y > q.y)) && q.x <= ((b.x - a.x) * (q.y - a.y)) / (b.y - a.y) + a.x) hit = !hit;
-    }
-    // a point on an edge or a vertex of the old footprint is the old ground too
-    return hit || poly.some((a, i) => { const b = poly[(i + 1) % poly.length]; const cross = (b.x - a.x) * (q.y - a.y) - (b.y - a.y) * (q.x - a.x);
-      return Math.abs(cross) < 1e-6 && q.x >= Math.min(a.x, b.x) - 1e-6 && q.x <= Math.max(a.x, b.x) + 1e-6 && q.y >= Math.min(a.y, b.y) - 1e-6 && q.y <= Math.max(a.y, b.y) + 1e-6; });
-  };
-  return ground.filter((q) => !inside(q));
+  const ring = ground ?? [];
+  if (!old?.at) return { points: ring, edges: ring.length >= 2 ? sidesOfRing(ring) : [] };
+  const was = groundRingOf(old);
+  const edges = [
+    ...sidesOfRing(ring).flatMap((side) => piecesOf(side, was, "out")),   // new sides outside the old footprint
+    ...sidesOfRing(was).flatMap((side) => piecesOf(side, ring, "in")),    // old sides inside the new ring (a filled notch)
+  ];
+  return { points: edges.flat(), edges };
 }
 
 /** null (clear, or no Mists) · { wall: {x, y} } · { unreadable: true } */
-export async function mistsGroundCheck(worldClone, readSkeleton, points, crossing) {
+export async function mistsGroundCheck(worldClone, readSkeleton, ground, crossing) {
   let skeleton = null;
   try { skeleton = await readSkeleton(); } catch { skeleton = null; }
   if (!skeleton) return crossing >= MISTS_FIRST_CROSSING ? { unreadable: true } : null;
   if (!skeleton.mists) return null;
-  const wall = await mistsWallOn(worldClone, skeleton, points, crossing);
+  const wall = await mistsWallOn(worldClone, skeleton, ground, crossing);
   if (wall?.unreadable) return crossing >= MISTS_FIRST_CROSSING ? { unreadable: true } : null;
   return wall ? { wall } : null;
 }
@@ -4049,7 +4121,7 @@ export async function leaveMarkViaOffice(worldClone, payload = {}, key = null, {
     try { w = await world(); } catch { w = null; }
     const old = payload.amend === true ? (w?.marks ?? []).find((m) => m.id === `${by}/${slug}`) ?? null : null;
     const fresh = mistsNewGround(old, ground);
-    const seen = fresh.length
+    const seen = fresh.points.length || fresh.edges.length
       ? await mistsGroundCheck(worldClone, async () => w?._raw?.skeleton ?? null, fresh, mistsCrossing ?? currentCrossing())
       : null;
     if (seen?.unreadable) throw bounce(503, MISTS_UNREADABLE,
