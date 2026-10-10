@@ -85,7 +85,14 @@ export async function postPaymentsVia(client) {
 
 // ── the acts, and each class's rows ─────────────────────────────────────────
 
-/** The acts that make each class's history rows. */
+/**
+ * The acts that make each class's history rows: the acts that MOVE a post's
+ * state, one rule for every class. An amend moves none (an event's announced
+ * stays announced when its time moves; a bug's and an idea's stage stand as
+ * they were), so it is not a history row, exactly as #462 ruled for the bug
+ * ("amends and reveals move no stage"). What an amend changed is on the post
+ * itself (`revised`, and its fields), and every revision stays in the act log.
+ */
 export const HISTORY_ACTIONS = Object.freeze({
   [BUG_CLASS]: Object.freeze([ACT_POST, ACT_ADVANCE]),
   [IDEA_CLASS]: Object.freeze([ACT_POST, ACT_ADVANCE, ACT_AWARD]),

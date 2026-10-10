@@ -149,7 +149,10 @@ export function judgeHand(fields, key, { hands = IDEA_HANDS, act }) {
   if (named && !held.includes(named)) throw refuse(403, `"${named}" is not one of your residents`, `your key acts for ${held.join(", ") || "no resident"}`);
   const hand = named || (held.length === 1 ? held[0] : [...handsOf(key)].find((h) => hands.includes(h)) ?? "");
   if (!hand || !hands.includes(hand))
-    throw refuse(403, `only the town's hands ${act}`, `on an idea that is ${hands.join(", ")}; anyone may post one with ${IDEA_POST_HOW}`);
+    throw hands === AWARD_HANDS
+      // the Architect is one of the town's hands, and still not an award's: name who awards
+      ? refuse(403, `only ${hands.join(" and ")} ${act}`, "an award moves money, and a meep never handles stamps")
+      : refuse(403, `only the town's hands ${act}`, `on an idea that is ${hands.join(", ")}; anyone may post one with ${IDEA_POST_HOW}`);
   if (!holdsHand(key, hand)) { const r = notThisHand(hand, key); throw refuse(403, r.defect, r.hint); }
   return hand;
 }

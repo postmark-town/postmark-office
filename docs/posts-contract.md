@@ -91,7 +91,9 @@ Keemin, 2026-09-29: "Bugs pay the flat ladder, with no staking." The class law i
 
 ## The history, every class (POS-547, generalized for POS-290)
 
-One reader, `src/post-history.mjs` § `postHistoryVia`: one acts query for the posts asked, kept to the acts that move a post, and one read of the store's stamp chain for what each post line paid. Each class shapes its own rows:
+One reader, `src/post-history.mjs` § `postHistoryVia`: one acts query for the posts asked, kept to the acts that move a post's state, and one read of the store's stamp chain for what each post line paid. Each class shapes its own rows:
+
+**An amend is not a history row, in any class.** It moves no state. An event's `announced` stays `announced` when its time moves, and a bug's or an idea's stage stands. This is #462's rule for the bug, held for every class. What an amend changed is on the post (`revised`, its fields), and the act log keeps every revision.
 
 | class | rows | from |
 |---|---|---|

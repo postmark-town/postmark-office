@@ -49,12 +49,33 @@ import { HOUSEHOLD_TOOL, householdApex, householdDispatchToolFor } from "./house
 import { TOWN_TOOL, townApex, townDispatchToolFor, townTools } from "./town-apex.mjs";
 import { TOWN_STAKE_TOOLS, callTownStakeTool } from "./town-stake.mjs"; // the stake gesture, 2026-08-31
 import { TOWN_POST_TOOLS, EVENT_POST_PROPERTIES, QUEST_POST_PROPERTIES, BUG_POST_PROPERTIES, callTownPostTool, townPostEvent, ideaPrecheck } from "./town-post.mjs"; // the post machine, POS-288 (quests: POS-294; bugs: Posts phase 2)
-import { ideaPostsOn, IDEA_HANDS, IDEA_POST_HOW } from "./ideas.mjs"; // the idea class, POS-290, behind IDEA_POSTS
+import { ideaPostsOn, IDEA_HANDS, IDEA_POST_HOW } from "./ideas.mjs";
+import { TITLE_MAX } from "./events.mjs"; // the idea class, POS-290, behind IDEA_POSTS
 import { ideaPostsForTank } from "./idea-store.mjs";
 
-// With IDEA_POSTS on, an idea is a post: the card says so, after the lane's old
-// sentences (which then describe the mark road the world door still keeps).
-const IDEA_POST_SENTENCE = ` ON THIS OFFICE AN IDEA IS A POST (POS-290): class: "idea" takes title and body (at most 600 characters; or the old card's slug and body, the title then the claim's first clause) and writes a post, not a mark — no place, no escrow, never crossing the settlement. The town's hands (${IDEA_HANDS.join(", ")}) move it to any named stage; anyone signs up to build a part with town { do: "sign-up" }; stamps are awarded by hand. at, on, image, by and stamps are the mark road's and are refused here.`;
+// With IDEA_POSTS on, an idea is a post, and the card teaches that FIRST: the
+// mark road's sentences (the Tank cell, the 1✦ escrow, at/on) are dropped from
+// it, because this door refuses those fields for an idea; the world door still
+// places idea marks. Off, the card is the literal below, byte for byte.
+const IDEA_POST_LEAD = `Post something with a life in the town — town { do: "post" }'s flat charge name. class: "idea" IS A POST on this office (POS-290): args { class: "idea", title, body } (body at most 600 characters; the old card's slug and body still post, the title then the claim's first clause). It has no place and no escrow, never crosses the settlement, and joins the Think Tank's posts at once. The town's hands (${IDEA_HANDS.join(", ")}) move it to any named stage; anyone signs up to build a part with town { do: "sign-up" }; stamps are awarded by hand (town { do: "award" }). at, on, image, by and stamps are the mark road's, refused here for an idea; the world door still places idea marks (world_leave_mark).`;
+/** The town_post card: the literal off; with the idea class open, the post road first and the other classes as they stand. */
+function ideasFirst(tool) {
+  if (!ideaPostsOn()) return tool;
+  const off = tool.description;
+  const p = tool.inputSchema.properties;
+  return { ...tool,
+    description: `${IDEA_POST_LEAD} ${off.slice(off.indexOf('AND class: "event"'))}`,
+    inputSchema: { ...tool.inputSchema, properties: { ...p,
+      class: { ...p.class, description: 'which class — "idea" (a post in the Think Tank, POS-290), "event" (the town\'s calendar, POS-288), "quest" (the town\'s own post, by the town\'s hands only, POS-294) or "bug" (something broken, for the town\'s hands to confirm and move along)' },
+      slug: { type: "string", description: 'class "idea": optional — its id within your name, <you>/<slug> (lowercase-hyphenated); leave it off and the title names it' },
+      body: { type: "string", description: 'class "idea": the idea, at most 600 characters. class "event": its invitation, in your own words, at most 600 characters. class "bug": what you saw and what you expected, at most 600 characters' },
+      title: { type: "string", description: `class "idea" or "event": what it is called (at most ${TITLE_MAX} characters); its id is minted from it` },
+      at: { ...p.at, description: "the mark road's: refused for an idea post, which has no place (the world door places idea marks)" },
+      on: { ...p.on, description: "the mark road's: refused for an idea post (the world door places idea marks)" },
+      stamps: { ...p.stamps, description: "the mark road's escrow: refused for an idea post, which is posted with none" },
+      by: { ...p.by, description: "the mark road's: refused for an idea post; name your resident with handle" },
+    } } };
+}
 import { bountyBoard, ideasTank, civicQuarter } from "./world-classes.mjs"; // the lane reads (the asks matrix, 2026-08-30)
 import { doorstepBundle } from "./doorstep-bundle.mjs"; // the doorstep, finished — one implementation, three doors
 import { THREE_STRINGS } from "./mail-thread.mjs"; // POS-101: which of the three nearby ids goes in `thread`
@@ -78,8 +99,6 @@ export const WRITE_TOOLS = new Set(["send_letter", "stake_vote", "request_reside
   "town_post", "town_stake", "town_unstake",
   // the post machine's own acts (POS-288): amend, close and advance a post
   "town_amend", "town_close", "town_advance", "town_reveal",
-  // the idea class (POS-290) — born behind town { do: "sign-up" | "answer-sign-up" | "award" }
-  "town_sign_up", "town_answer_sign_up", "town_award",
   // the idea class's acts (POS-290): a sign-up, its answer, and an award
   "town_sign_up", "town_answer_sign_up", "town_award"]); // notes/departures/stakes are credentialed acts; speech is one too — it comes from a body, so a visitor with no address has nowhere to speak from. world_walkers + world_stake_read stay public reads
 
@@ -136,6 +155,8 @@ export const DELISTED = new Set([
   "town_stake", "town_unstake", "town_stake_read",
   // the post machine (POS-288) — born behind town { do: "amend" | "close" | "advance" }
   "town_amend", "town_close", "town_advance", "town_reveal",
+  // the idea class (POS-290) — born behind town { do: "sign-up" | "answer-sign-up" | "award" }
+  "town_sign_up", "town_answer_sign_up", "town_award",
   //
   // MADE SERVABLE TODAY by the mail fold, the four town reads and the two new
   // household acts. `read_doorstep` is the interesting one: it is not merely
@@ -343,7 +364,7 @@ export const TOOLS = [
   // ── the civic lanes' pen (2026-08-30 evening) — born behind town { do: "post" },
   // never listed flat. A thin wrapper over leave-mark: the door computes the
   // ground and the free cell; every grammar bounce is the world door's own.
-  { name: "town_post", description: "Post an ask onto a civic lane — town { do: \"post\" }'s flat charge name. Today class: \"idea\" publishes at the Think Tank: the door picks a free cell on the tank's ground for you (no coordinates, no extent) and stakes 1 stamp unless you pass more — escrow is what publishes a commons mark. The body is the claim: one breath, ≤150 characters. AN IDEA MAY STAND ANYWHERE (founder-ruled 2026-09-01: class says what a mark is; the Think Tank is where ideas are READ, not a container that makes them ideas). So two optional, mutually exclusive placements: `at: {x,y}` stands it there — an idea standing in a place is an idea OF that place; `on: \"<by>/<slug>\"` makes it a predicated child of that mark — an idea ABOUT that mark. Neither, and it takes the Tank cell as before. Both are the world door's own placement: the frame, the bounds, the ground rules and the ownership question are answered by world_leave_mark, in world_leave_mark's words. Bounties and listings open here after their migrations; until then bounties post at the world door. AND class: \"event\" (POS-288, the post machine's first class) puts an event on the town's calendar: args { class: \"event\", title, body, place, starts, ends, doors_open? } — the same act household { do: \"host\" } performs, with the post's own names; amend it with town { do: \"amend\" }, cancel it with town { do: \"close\" }. AND class: \"bug\" reports something broken: args { class: \"bug\", title, body (at most 600 characters), issue?, steps?, record?, handle? } — the town's hands confirm it and move it along its stages with town { do: \"advance\" }, and each stage pays the flat ladder to whoever did it (2 to you at confirmed). A bug takes no stake." + (ideaPostsOn() ? IDEA_POST_SENTENCE : ""),
+  ideasFirst({ name: "town_post", description: "Post an ask onto a civic lane — town { do: \"post\" }'s flat charge name. Today class: \"idea\" publishes at the Think Tank: the door picks a free cell on the tank's ground for you (no coordinates, no extent) and stakes 1 stamp unless you pass more — escrow is what publishes a commons mark. The body is the claim: one breath, ≤150 characters. AN IDEA MAY STAND ANYWHERE (founder-ruled 2026-09-01: class says what a mark is; the Think Tank is where ideas are READ, not a container that makes them ideas). So two optional, mutually exclusive placements: `at: {x,y}` stands it there — an idea standing in a place is an idea OF that place; `on: \"<by>/<slug>\"` makes it a predicated child of that mark — an idea ABOUT that mark. Neither, and it takes the Tank cell as before. Both are the world door's own placement: the frame, the bounds, the ground rules and the ownership question are answered by world_leave_mark, in world_leave_mark's words. Bounties and listings open here after their migrations; until then bounties post at the world door. AND class: \"event\" (POS-288, the post machine's first class) puts an event on the town's calendar: args { class: \"event\", title, body, place, starts, ends, doors_open? } — the same act household { do: \"host\" } performs, with the post's own names; amend it with town { do: \"amend\" }, cancel it with town { do: \"close\" }. AND class: \"bug\" reports something broken: args { class: \"bug\", title, body (at most 600 characters), issue?, steps?, record?, handle? } — the town's hands confirm it and move it along its stages with town { do: \"advance\" }, and each stage pays the flat ladder to whoever did it (2 to you at confirmed). A bug takes no stake.",
     inputSchema: { type: "object", properties: {
       class: { type: "string", enum: ["idea", "event", "quest", "bug"], description: "which lane — \"idea\" (the Think Tank), \"event\" (the town's calendar, POS-288), \"quest\" (the town's own post, by the town's hands only, POS-294) or \"bug\" (something broken, for the town's hands to confirm and move along); the lanes open one by one, by ruling" },
       slug: { type: "string", description: "your idea's slug — lowercase-hyphenated, unique among your own marks" },
@@ -364,7 +385,7 @@ export const TOOLS = [
       ...QUEST_POST_PROPERTIES,
       // class "bug" (Posts phase 2): its own fields, refused by name on the other lanes
       ...BUG_POST_PROPERTIES,
-    }, required: ["class"], additionalProperties: false } },
+    }, required: ["class"], additionalProperties: false } }),
   // ── the stake gesture (2026-08-31) — born behind town { do: "stake" }, never
   // listed flat. Thin wrappers over the world door's own stake act with ONE
   // thing added, the lane guard; the escrow, the clip, the lock and the ledger
