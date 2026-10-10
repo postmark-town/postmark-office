@@ -46,6 +46,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { installActsPen, uninstallActsPen, RECORD_ON } from "./acts-pen-stub.mjs";
 
 Object.assign(process.env, RECORD_ON);
@@ -73,7 +74,8 @@ function bugTables() {
   const posts = new Map();
   // the store's stamp_lines (066): canonical lines in ledger order, or null for
   // a store that has no such table yet
-  const ledger = { lines: [] };
+  const ledger = { lines: [], deltas: [] };
+  const sealOf = (n) => createHash("sha256").update(ledger.lines.slice(0, n).join("\n")).digest("hex");
   const like = (pat) => new RegExp(`^${pat.split("%").map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`, "s");
   const PC = ["id", "class", "title", "body", "author", "household", "place_mark", "place_x", "place_y",
     "starts", "ends", "state", "fields", "revised", "posted_act", "last_act"];
@@ -112,13 +114,23 @@ function bugTables() {
     [/^SELECT \* FROM posts WHERE class = \$1 ORDER BY id$/i, (q, p) => { const rows = byClass(p[0]); return { rows, rowCount: rows.length }; }],
     [/^SELECT \* FROM responses WHERE kind = \$1 ORDER BY post, handle$/i, () => ({ rows: [], rowCount: 0 })],
     [/^SELECT to_regclass\('stamp_lines'\) IS NOT NULL AS ok$/i, () => ({ rows: [{ ok: ledger.lines !== null }], rowCount: 1 })],
-    [/^SELECT EXISTS \(SELECT 1 FROM stamp_lines\) AS held$/i, () => {
+    // The chain is read as a delta since POS-290 (post-history.mjs): its head,
+    // the seal at the seq a process reached, and the post lines past it. Each
+    // row's seq is its place in the list and its seal a digest of what it holds,
+    // so a test that swaps the chain out is, as on a restored store, another chain.
+    [/^SELECT seq, seal FROM stamp_lines ORDER BY seq DESC LIMIT 1$/i, () => {
       if (ledger.lines === null) throw new Error('relation "stamp_lines" does not exist');
-      return { rows: [{ held: ledger.lines.length > 0 }], rowCount: 1 };
+      const n = ledger.lines.length;
+      return n ? { rows: [{ seq: n, seal: sealOf(n) }], rowCount: 1 } : { rows: [], rowCount: 0 };
     }],
-    [/^SELECT canonical FROM stamp_lines WHERE canonical LIKE \$1 ORDER BY seq$/i, (q, p) => {
-      if (ledger.lines === null) throw new Error('relation "stamp_lines" does not exist');
-      const rows = ledger.lines.filter((l) => like(p[0]).test(l)).map((canonical) => ({ canonical }));
+    [/^SELECT seal FROM stamp_lines WHERE seq = \$1$/i, (q, p) => {
+      const n = Number(p[0]);
+      return n >= 1 && n <= ledger.lines.length ? { rows: [{ seal: sealOf(n) }], rowCount: 1 } : { rows: [], rowCount: 0 };
+    }],
+    [/^SELECT seq, canonical FROM stamp_lines WHERE seq > \$1 AND seq <= \$2 AND canonical LIKE \$3 ORDER BY seq$/i, (q, p) => {
+      ledger.deltas.push([Number(p[0]), Number(p[1])]);
+      const rows = ledger.lines.map((canonical, i) => ({ seq: i + 1, canonical }))
+        .filter((r) => r.seq > Number(p[0]) && r.seq <= Number(p[1]) && like(p[2]).test(r.canonical));
       return { rows, rowCount: rows.length };
     }],
   ];

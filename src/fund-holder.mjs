@@ -190,7 +190,7 @@ export function meepLawOf(engine, entries, date) {
 // own, read from its ledger through its own checker, cached on the ledger's
 // stamp (the ledger is ~3 MB; /me is asked on every signed-in page).
 let meepCache = null;
-async function meepLawAtOffice(clone) {
+export async function meepLawAtOffice(clone) {
   const { existsSync, readFileSync: rf } = await import("node:fs");
   const { pathToFileURL } = await import("node:url");
   const ledger = join(clone, "WHITE_PAGES", "stamp-ledger.md");

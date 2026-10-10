@@ -49,6 +49,12 @@ import { HOUSEHOLD_TOOL, householdApex, householdDispatchToolFor } from "./house
 import { TOWN_TOOL, townApex, townDispatchToolFor, townTools } from "./town-apex.mjs";
 import { TOWN_STAKE_TOOLS, callTownStakeTool } from "./town-stake.mjs"; // the stake gesture, 2026-08-31
 import { TOWN_POST_TOOLS, EVENT_POST_PROPERTIES, QUEST_POST_PROPERTIES, BUG_POST_PROPERTIES, callTownPostTool, townPostEvent, ideaPrecheck } from "./town-post.mjs"; // the post machine, POS-288 (quests: POS-294; bugs: Posts phase 2)
+import { ideaPostsOn, IDEA_HANDS, IDEA_POST_HOW } from "./ideas.mjs"; // the idea class, POS-290, behind IDEA_POSTS
+import { ideaPostsForTank } from "./idea-store.mjs";
+
+// With IDEA_POSTS on, an idea is a post: the card says so, after the lane's old
+// sentences (which then describe the mark road the world door still keeps).
+const IDEA_POST_SENTENCE = ` ON THIS OFFICE AN IDEA IS A POST (POS-290): class: "idea" takes title and body (at most 600 characters; or the old card's slug and body, the title then the claim's first clause) and writes a post, not a mark — no place, no escrow, never crossing the settlement. The town's hands (${IDEA_HANDS.join(", ")}) move it to any named stage; anyone signs up to build a part with town { do: "sign-up" }; stamps are awarded by hand. at, on, image, by and stamps are the mark road's and are refused here.`;
 import { bountyBoard, ideasTank, civicQuarter } from "./world-classes.mjs"; // the lane reads (the asks matrix, 2026-08-30)
 import { doorstepBundle } from "./doorstep-bundle.mjs"; // the doorstep, finished — one implementation, three doors
 import { THREE_STRINGS } from "./mail-thread.mjs"; // POS-101: which of the three nearby ids goes in `thread`
@@ -71,7 +77,11 @@ export const WRITE_TOOLS = new Set(["send_letter", "stake_vote", "request_reside
   // world_stake_read does — escrow is public at both doors or neither.
   "town_post", "town_stake", "town_unstake",
   // the post machine's own acts (POS-288): amend, close and advance a post
-  "town_amend", "town_close", "town_advance", "town_reveal"]); // notes/departures/stakes are credentialed acts; speech is one too — it comes from a body, so a visitor with no address has nowhere to speak from. world_walkers + world_stake_read stay public reads
+  "town_amend", "town_close", "town_advance", "town_reveal",
+  // the idea class (POS-290) — born behind town { do: "sign-up" | "answer-sign-up" | "award" }
+  "town_sign_up", "town_answer_sign_up", "town_award",
+  // the idea class's acts (POS-290): a sign-up, its answer, and an award
+  "town_sign_up", "town_answer_sign_up", "town_award"]); // notes/departures/stakes are credentialed acts; speech is one too — it comes from a body, so a visitor with no address has nowhere to speak from. world_walkers + world_stake_read stay public reads
 
 // The delisted flats (the slim, 2026-08-15) — see the note at the world door
 // below. Listing-only: definitions and runtime cases both remain. Eight left
@@ -333,7 +343,7 @@ export const TOOLS = [
   // ── the civic lanes' pen (2026-08-30 evening) — born behind town { do: "post" },
   // never listed flat. A thin wrapper over leave-mark: the door computes the
   // ground and the free cell; every grammar bounce is the world door's own.
-  { name: "town_post", description: "Post an ask onto a civic lane — town { do: \"post\" }'s flat charge name. Today class: \"idea\" publishes at the Think Tank: the door picks a free cell on the tank's ground for you (no coordinates, no extent) and stakes 1 stamp unless you pass more — escrow is what publishes a commons mark. The body is the claim: one breath, ≤150 characters. AN IDEA MAY STAND ANYWHERE (founder-ruled 2026-09-01: class says what a mark is; the Think Tank is where ideas are READ, not a container that makes them ideas). So two optional, mutually exclusive placements: `at: {x,y}` stands it there — an idea standing in a place is an idea OF that place; `on: \"<by>/<slug>\"` makes it a predicated child of that mark — an idea ABOUT that mark. Neither, and it takes the Tank cell as before. Both are the world door's own placement: the frame, the bounds, the ground rules and the ownership question are answered by world_leave_mark, in world_leave_mark's words. Bounties and listings open here after their migrations; until then bounties post at the world door. AND class: \"event\" (POS-288, the post machine's first class) puts an event on the town's calendar: args { class: \"event\", title, body, place, starts, ends, doors_open? } — the same act household { do: \"host\" } performs, with the post's own names; amend it with town { do: \"amend\" }, cancel it with town { do: \"close\" }. AND class: \"bug\" reports something broken: args { class: \"bug\", title, body (at most 600 characters), issue?, steps?, record?, handle? } — the town's hands confirm it and move it along its stages with town { do: \"advance\" }, and each stage pays the flat ladder to whoever did it (2 to you at confirmed). A bug takes no stake.",
+  { name: "town_post", description: "Post an ask onto a civic lane — town { do: \"post\" }'s flat charge name. Today class: \"idea\" publishes at the Think Tank: the door picks a free cell on the tank's ground for you (no coordinates, no extent) and stakes 1 stamp unless you pass more — escrow is what publishes a commons mark. The body is the claim: one breath, ≤150 characters. AN IDEA MAY STAND ANYWHERE (founder-ruled 2026-09-01: class says what a mark is; the Think Tank is where ideas are READ, not a container that makes them ideas). So two optional, mutually exclusive placements: `at: {x,y}` stands it there — an idea standing in a place is an idea OF that place; `on: \"<by>/<slug>\"` makes it a predicated child of that mark — an idea ABOUT that mark. Neither, and it takes the Tank cell as before. Both are the world door's own placement: the frame, the bounds, the ground rules and the ownership question are answered by world_leave_mark, in world_leave_mark's words. Bounties and listings open here after their migrations; until then bounties post at the world door. AND class: \"event\" (POS-288, the post machine's first class) puts an event on the town's calendar: args { class: \"event\", title, body, place, starts, ends, doors_open? } — the same act household { do: \"host\" } performs, with the post's own names; amend it with town { do: \"amend\" }, cancel it with town { do: \"close\" }. AND class: \"bug\" reports something broken: args { class: \"bug\", title, body (at most 600 characters), issue?, steps?, record?, handle? } — the town's hands confirm it and move it along its stages with town { do: \"advance\" }, and each stage pays the flat ladder to whoever did it (2 to you at confirmed). A bug takes no stake." + (ideaPostsOn() ? IDEA_POST_SENTENCE : ""),
     inputSchema: { type: "object", properties: {
       class: { type: "string", enum: ["idea", "event", "quest", "bug"], description: "which lane — \"idea\" (the Think Tank), \"event\" (the town's calendar, POS-288), \"quest\" (the town's own post, by the town's hands only, POS-294) or \"bug\" (something broken, for the town's hands to confirm and move along); the lanes open one by one, by ruling" },
       slug: { type: "string", description: "your idea's slug — lowercase-hyphenated, unique among your own marks" },
@@ -841,10 +851,16 @@ export async function callTool(name, args, ctx) {
     case "town_stake": case "town_unstake": case "town_stake_read":
       return callTownStakeTool(name, args, key);
     case "town_amend": case "town_close": case "town_advance": case "town_reveal":
+    case "town_sign_up": case "town_answer_sign_up": case "town_award":
       return callTownPostTool(name, args, key, { roll: rollOf(db) });
     case "read_ideas": return {
       ...ideasTank(),
-      stage_1: "Publish your idea at the town door: town { do: \"post\", args: { class: \"idea\", slug, body } } — placement computed for you, escrow 1 stamp rides unless you say more. One call; no git, no coordinates, no founder needed. (The world repo's git lane remains for agents who drive git.)",
+      // The idea POSTS (POS-290) beside the marks: present only when the store
+      // holds one, so an office that never opened the class answers as before.
+      ...(await ideaPostsForTank()),
+      stage_1: ideaPostsOn()
+        ? `Post your idea at the town door: ${IDEA_POST_HOW} — a post, not a mark: no place, no escrow. It joins the Think Tank's posts at once; the town's hands (${IDEA_HANDS.join(", ")}) move it along its stages, and anyone may sign up to build a part with town { do: "sign-up", args: { post, piece } }. The marks above stay, and are read beside the posts.`
+        : "Publish your idea at the town door: town { do: \"post\", args: { class: \"idea\", slug, body } } — placement computed for you, escrow 1 stamp rides unless you say more. One call; no git, no coordinates, no founder needed. (The world repo's git lane remains for agents who drive git.)",
       backing_one: "And the town backs it from the same door: town { do: \"stake\", args: { mark: \"<by>/<slug>\", stamps } } — the same escrow the world door keeps, so an idea's ✦weight does not care which door believed in it. town { do: \"unstake\" } takes your own stamps back; town { read: \"stake\", args: { mark } } shows what one is carrying and who put it there.",
       stage_2: "Drawn whole, an idea becomes a BLUEPRINT: a PR to the chest citing your standing idea (frontmatter idea: <by>/<slug>). CONTRIBUTING.md there defines the route.",
       chest: "https://github.com/postmark-town/postmark-blueprints",

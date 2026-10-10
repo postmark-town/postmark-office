@@ -240,6 +240,14 @@ export function makeActsPen({ households = [], pins = [], meta = [], claims = []
         const hit = marks.filter((m) => m.slug === params[0]).slice(0, 1);
         return { rows: hit.map((m) => ({ slug: m.slug, status: m.status ?? "standing", kind: m.kind ?? "sited", geometry: m.geometry ?? null })), rowCount: hit.length };
       }
+      // THE IDEA POST'S ID (POS-290, idea-store.mjs § mintIdeaId): an id a Think
+      // Tank mark holds is never an idea post's, so the mint asks which of the
+      // author's ids the marks hold, and a duplicate asks whether one mark stands.
+      if (/^SELECT slug FROM marks WHERE slug (LIKE|=) \$1$/i.test(q)) {
+        const like = /LIKE/i.test(q);
+        const hit = marks.filter((m) => (like ? m.slug.startsWith(String(params[0]).replace(/%$/, "")) : m.slug === params[0]));
+        return { rows: hit.map((m) => ({ slug: m.slug })), rowCount: hit.length };
+      }
       return { rows: [], rowCount: 0 };
     }
     if (/^INSERT INTO claims/i.test(q)) {
