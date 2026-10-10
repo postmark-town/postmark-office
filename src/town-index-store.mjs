@@ -31,7 +31,7 @@ import {
   repoLogPage, repoLogCommit, regionListing, regionPage, regionWhole,
   bulletinListing, bulletinTeaserOf, bulletinEntryOf,
   stampsRosterPage, stampsDetailOf, stampParties,
-  potBoardOf, questBoardWith,
+  potBoardOf, questBoardWith, withGivers,
   excerpt, LETTER_READING_LAW_LINE, withWhole, MAIL_PAGE, SEARCH_LETTERS, SEARCH_RESIDENTS,
   mailListOf, letterListNoRegion, letterListPage, correspondentsOf, mailAwaitingOf, searchPage, metricsMailOf,
   indexCopy as officeIndexCopy,
@@ -324,7 +324,7 @@ export const storeIndex = (q, clone) => ({
   // would still be holding it while the board asks the world (see above), and
   // the pen refuses that by name (store-pool.mjs § NestedStoreError)
   questBoard: async (handle, opts) => questBoardOfRows(await questIndexRows(q, handle), clone, opts),
-  potBoard: (extraInvalid) => potBoard(q, extraInvalid),
+  potBoard: async (extraInvalid) => withGivers(await potBoard(q, extraInvalid)),
 });
 
 /** Thrown by a pooled index method when the store cannot be reached; a door turns it into its 503. */
@@ -354,7 +354,8 @@ export function storeIndexPooled(clone, { env = process.env } = {}) {
   return {
     stampsDetail: via((c, handle) => stampsDetail(c, handle)),
     questBoard: via((c, handle) => questIndexRows(c, handle), (rows, _handle, opts) => questBoardOfRows(rows, clone, opts)),
-    potBoard: via((c, extraInvalid) => potBoard(c, extraInvalid)),
+    // the givers' households after the connection is back (queries.mjs § withGivers)
+    potBoard: via((c, extraInvalid) => potBoard(c, extraInvalid), (board) => withGivers(board)),
     // the doorstep's and the house's reads (group 3)
     asOf: via((c) => townIndexAsOf(c)),
     copy: via((c) => indexCopy(c)),
