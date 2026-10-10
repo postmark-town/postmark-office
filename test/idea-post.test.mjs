@@ -270,7 +270,7 @@ test("4 · a non-hand cannot move an idea, a finished idea moves no further, an 
   for (const to of ["building", "declined", "posted"])
     await refusedWith(advance({ post: ID, to }), 409, /is finished \(shipped\)/);
   await refusedWith(closeAtTown({ post: ID }, WRIGHT, { now: NOW, env: ON }), 422, /an idea is not closed/);
-  await refusedWith(awardAtTown({ post: ID, to: "finn", stamps: 5, label: "design" }, ARCHITECT, { now: NOW, env: ON, roll: ROLL, isMeep }), 403, /only the town's hands award stamps/);
+  await refusedWith(awardAtTown({ post: ID, to: "finn", stamps: 5, label: "design" }, ARCHITECT, { now: NOW, env: ON, roll: ROLL, isMeep }), 403, /only wright and keemin award stamps/);
   assert.deepEqual([...IDEA_FINISHED], ["shipped", "declined", "duplicate"]);
 });
 

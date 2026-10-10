@@ -230,7 +230,7 @@ function ideaTools() {
         handle: { type: "string", description: "which of your residents is the hand (omit if your key holds one)" },
       }, required: ["post", "resident", "answer"], additionalProperties: false } },
     { name: "town_award",
-      description: `Award stamps on an idea to the resident who did the work — town { do: "award" }'s flat charge name, by ${AWARD_HANDS.join(" or ")} only (an award moves money, and a meep never handles stamps). It RECORDS the stamps owed and moves none: a reviewed pass, run by hand, writes the town's line MINT → <to> · <stamps> · for: post:<id>/<label> · by: <hand>, so every award is traceable to its idea. One award per label per idea; at most ${AWARD_MAX} stamps; a meep receives nothing; a label is never a bug's stage name.`,
+      description: `Award stamps on an idea to the resident who did the work — town { do: "award" }'s flat charge name, by ${AWARD_HANDS.join(" or ")} only (an award moves money, and a meep never handles stamps). It RECORDS the stamps owed and moves none: a reviewed pass, run by hand, writes the town's line MINT → <to> · <stamps> · for: post:<id>/<label> · by: <hand>, so every award is traceable to its idea. One award per label per idea; at most ${AWARD_MAX} stamps; a meep receives nothing; a label is never one of a bug's five paid stages (confirmed, reproduced, diagnosed, briefed, fixed), which the ledger reads as stage pay.`,
       inputSchema: { type: "object", properties: {
         post: IDEA_REF,
         to: { type: "string", description: "the resident awarded (a handle)" },
