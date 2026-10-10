@@ -871,17 +871,21 @@ export function classifyRow(row, snapshot, now) {
   const label = row.label || row.unit;
 
   // ── parked rows. Reported forever, alarmed on only when the box disagrees
-  // with the manifest about whether the rail is inert.
+  // with the manifest about whether the rail is inert. FAILED counts (#471
+  // review): a parked unit started by hand that then died is disabled and
+  // failed, and a parked rail that RAN is not inert, whatever its enable word.
   if (row.stage === "parked") {
-    if (unitIsPresent(u) && (unitIsEnabled(u) || u.active_state === "active" || u.active_state === "activating")) {
+    const failed = !!u && u.active_state === "failed";
+    if (unitIsPresent(u) && (unitIsEnabled(u) || failed || u.active_state === "active" || u.active_state === "activating")) {
       return {
         unit: row.unit,
         label,
         verdict: ALARM_UNPARKED,
         reason:
           `${label} is recorded PARKED in the manifest but the box has it ` +
-          `${u.unit_file_state || u.active_state} — either it was adopted and the roll-call was not told, ` +
-          `or it was enabled by accident. Adoption owner: ${row.activation_owner}`,
+          `${failed ? `failed (${u.unit_file_state || "no enable state"}): it ran and died` : u.unit_file_state || u.active_state} — ` +
+          `either it was adopted and the roll-call was not told, ` +
+          `or it was enabled or started by accident. Adoption owner: ${row.activation_owner}`,
       };
     }
     return {

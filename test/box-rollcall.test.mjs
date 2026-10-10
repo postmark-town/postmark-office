@@ -639,6 +639,46 @@ test("FALSIFIER (g): a PARKED row that the box has ENABLED is ALARM-unparked", (
   assert.match(row.reason, /recorded PARKED in the manifest but the box has it/);
 });
 
+test("FALSIFIER (g2): a PARKED read@ row alarms once its instance is ENABLED, and once it was started by hand and FAILED (#471 review)", () => {
+  // The read pool's rows are parked (POS-522). A worker someone starts by hand
+  // and that then dies is disabled AND failed, and until the #471 review that
+  // read PARKED: a quiet board over a rail that ran. Planted rather than read
+  // from the shipped read@ rows, so this keeps asserting after the pool is adopted.
+  const unit = "postmark-office-read@4399.service";
+  const m = manifest();
+  const planted = {
+    ...m,
+    units: [...m.units, {
+      unit,
+      label: "a planted read worker",
+      stage: "parked",
+      activation_owner: "planted by test/box-rollcall.test.mjs — this row is not on the box",
+      cadence: "always on, once adopted",
+      cadence_source: `systemctl show ${unit} -p ActiveState`,
+      parked_because: "planted",
+      adopt_command: `sudo systemctl enable --now ${unit}`,
+      heartbeat: { kind: "unit_active" },
+      no_staleness_because: "an always-on daemon is judged by being up",
+      stale_means: "nothing, while parked — a parked row is never alarmed for being inert",
+    }],
+  };
+  const base = healthy(planted);
+  const withUnit = (state) => mutate(base, (s) => { s.units[unit] = { load_state: "loaded", result: "", ...state }; });
+
+  // The control: the template is installed and the instance never ran.
+  const quiet = withUnit({ active_state: "inactive", unit_file_state: "disabled" });
+  assert.equal(rowFor(rollcall(planted, quiet, T0), unit).verdict, PARKED);
+
+  const enabled = withUnit({ active_state: "active", unit_file_state: "enabled" });
+  assert.equal(rowFor(rollcall(planted, enabled, T0), unit).verdict, ALARM_UNPARKED);
+
+  const died = withUnit({ active_state: "failed", unit_file_state: "disabled", result: "exit-code" });
+  const row = rowFor(rollcall(planted, died, T0), unit);
+  assert.equal(row.verdict, ALARM_UNPARKED);
+  assert.match(row.reason, /failed \(disabled\): it ran and died/);
+  assert.equal(rollcall(planted, died, T0).exitCode, 1);
+});
+
 test("a PARKED row is printed, counted apart from OK, and never contributes to the exit code", () => {
   const m = parkedManifest();
   const result = rollcall(m, healthy(m), T0);
