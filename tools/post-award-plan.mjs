@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // post-award-plan.mjs — the awards a hand recorded on idea posts, and the reviewed pass that pays them.
 //
-//   node tools/post-award-plan.mjs --town <town-clone> [--date YYYY-MM-DD]          the plan: writes nothing, needs no key
-//   node tools/post-award-plan.mjs --town <town-clone> --apply --key <pem> [--date YYYY-MM-DD]
+//   node tools/post-award-plan.mjs --town <town-clone> [--date YYYY-MM-DD]          the plan: writes nothing, needs no key;
+//                                                     it ends with its digest and the one command that applies it
+//   node tools/post-award-plan.mjs --town <town-clone> --date YYYY-MM-DD --apply --key <pem> --expect <digest>
 //
 //   env: WORLD2_PG_URL (or PG*), the office's own store — the plan reads the
 //        idea class's award acts from it, and nothing else. TOWN_PUSH=1 pulls
@@ -12,7 +13,7 @@
 //   On the box, by hand, as the office user, with the office's env:
 //     sudo -u meepo sh -c 'set -a; . /etc/postmark-office.env; cd /srv/postmark-office;
 //       node tools/post-award-plan.mjs --town "$TOWN_CLONE"'
-//   then, once the plan reads right, the same line with --apply --key stamp-key.pem.
+//   then, once the plan reads right, the command it printed beneath its digest.
 //
 // ── WHY IT EXISTS: THE AWARD RECORDS, A REVIEWED PASS WRITES (POS-290) ──────
 //
@@ -31,9 +32,18 @@
 // ── NEVER ON THE TICK ───────────────────────────────────────────────────────
 //
 // It is a fork of bug-stage-plan.mjs's shape, and unlike that pass it is never
-// scheduled: deploy/office-keep.sh exports OFFICE_KEEP=1, and this tool refuses
-// to run at all, plan or apply, while that is set. Wright runs it by hand, and
-// that run is the list he reviews before it writes.
+// scheduled: deploy/office-keep.sh exports OFFICE_KEEP=1, systemd sets
+// INVOCATION_ID for any unit it starts, and this tool refuses to run at all,
+// plan or apply, while either is set. Wright runs it by hand.
+//
+// ── THE APPLY WRITES THE PLAN THAT WAS READ (Wright, 2026-10-09) ────────────
+//
+// The plan ends with a digest: sha256 over the exact lines it would write, in
+// order. Beneath it is the one command that applies it, which carries
+// `--expect <digest>`. --apply refuses unless --expect equals the digest of
+// the plan it is about to write, with both digests shown. So an award recorded,
+// a line paid or a date changed between the reading and the apply refuses the
+// apply instead of slipping into it.
 //
 // ── WHAT DECIDES A ROW ──────────────────────────────────────────────────────
 //
@@ -75,6 +85,7 @@
 // refusal says so.
 
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -95,9 +106,11 @@ const payloadOf = (a) => (typeof a.payload === "string" ? JSON.parse(a.payload) 
  * (throws its refusal); `date` the date the lines would carry.
  *
  * One row per award act:
- *   { post, label, handle, n, hand, act, date, why, owed }
+ *   { post, label, handle, n, hand, act, date, why, owed, line? }
  * `n` is the act's amount, or 0 for a row that pays nothing; `date` is the
- * act's own (town time); `owed` is true only for a row the pass should write.
+ * act's own (town time); `owed` is true only for a row the pass should write,
+ * and an owed row carries `line`, the exact unsigned line the town's builder
+ * makes for it.
  */
 export function planAwards({ acts, isMeep, paid = new Map(), hasRoom, lineOf, date, tz }) {
   const rows = [];
@@ -125,9 +138,10 @@ export function planAwards({ acts, isMeep, paid = new Map(), hasRoom, lineOf, da
     held.set(key, base.act);
     if (isMeep(handle, base.date) || isMeep(handle, date)) { nothing("meep: a meep never receives stamps"); continue; }
     if (!hasRoom(handle)) { nothing(`unresolved: ${handle} has no room in the town; an award needs a resident to receive it`); continue; }
-    try { lineOf({ date, handle, n: asked, post, label, by: hand }); }
+    let line;
+    try { line = lineOf({ date, handle, n: asked, post, label, by: hand }); }
     catch (e) { nothing(`refused: ${String(e?.message ?? e).split(/\r?\n/)[0]}`); continue; }
-    rows.push({ ...base, n: asked, why: "owed", owed: true });
+    rows.push({ ...base, n: asked, why: "owed", owed: true, line });
   }
   return rows;
 }
@@ -151,6 +165,21 @@ export function renderPlan(rows, { date }) {
   }
   return `${out.join("\n")}\n`;
 }
+
+/**
+ * THE DIGEST OF WHAT THE PLAN WOULD WRITE. PURE. sha256 over the owed rows'
+ * exact lines (the town builder's, unsigned, the date in each), in the plan's
+ * order, one per line. The plan prints it; --apply refuses unless `--expect`
+ * names it, so the apply writes only the list a person read.
+ */
+export function planDigest(rows) {
+  const lines = rows.filter((r) => r.owed).map((r) => r.line);
+  return `sha256:${createHash("sha256").update(lines.join("\n")).digest("hex").slice(0, 16)}`;
+}
+
+/** The digest, and beneath it the exact command that applies this plan and no other. */
+export const renderApplyHint = (digest, { town, date, keyPath }) =>
+  `digest: ${digest}\napply exactly this plan with:\n  node tools/post-award-plan.mjs --town ${town} --date ${date} --apply --key ${keyPath} --expect ${digest}\n`;
 
 /**
  * The plan, read back. PURE. Throws on a plan it cannot account for: the
@@ -240,6 +269,18 @@ export const verifyArgv = (town) => [join(town, "tools", "stamp-verify.mjs"), "-
 /** On linux, the apply re-runs itself under the town's exclusive flock: the argv for that, PURE. */
 export const lockedArgv = (self, argv, lockPath) => ["/usr/bin/flock", ["-w", "300", lockPath, process.execPath, self, ...argv]];
 
+/**
+ * Is this run scheduled rather than by hand? The keeping tick says so with
+ * OFFICE_KEEP (deploy/office-keep.sh exports it), and systemd sets
+ * INVOCATION_ID for every unit it starts, so a future timer is caught too. A
+ * login shell carries neither. The reason in words, or null.
+ */
+export function scheduled(env) {
+  if (env.OFFICE_KEEP) return "OFFICE_KEEP is set, so this is the keeping tick";
+  if (env.INVOCATION_ID) return "INVOCATION_ID is set, so systemd started this run as a unit";
+  return null;
+}
+
 const run = (town, argv) => spawnSync(process.execPath, argv, { cwd: town, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
 const git = (repo, ...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8" }).trim();
 const arg = (name, argv) => { const i = argv.indexOf(name); return i === -1 ? null : argv[i + 1]; };
@@ -253,15 +294,15 @@ const firstLine = (out) => (String(out.stderr ?? "").trim() || String(out.stdout
  * and parse.
  */
 export async function main(argv = process.argv.slice(2), { facts = null, spawn = run, printed = (t) => t, log = console.log, err = console.error, env = process.env } = {}) {
-  if (env.OFFICE_KEEP) {
-    err("post-award-plan: refused — OFFICE_KEEP is set, so this is the keeping tick, and the award pass never runs on the tick: Wright runs it by hand (POS-290). Nothing read, nothing written.");
-    return 2;
-  }
+  const unit = scheduled(env);
+  if (unit) { err(`post-award-plan: refused — ${unit}, and the award pass never runs from the tick or any timer: Wright runs it by hand (POS-290). Nothing read, nothing written.`); return 2; }
   const town = arg("--town", argv);
   const apply = argv.includes("--apply");
   const keyPath = arg("--key", argv);
+  const expect = arg("--expect", argv);
   if (!town || !existsSync(town)) { err("post-award-plan: --town <town-clone> is required and must exist"); return 1; }
   if (apply && (!keyPath || !existsSync(keyPath))) { err("post-award-plan: --apply needs --key <ed25519-private-pem>"); return 1; }
+  if (apply && !expect) { err("post-award-plan: --apply needs --expect <digest>, the digest the plan printed: run the plan, read it, then apply exactly that one. Nothing written."); return 1; }
   const date = arg("--date", argv) ?? townDate(Date.now());
   if (!DATE_RE.test(date)) { err(`post-award-plan: --date is YYYY-MM-DD, got ${JSON.stringify(date)}`); return 1; }
 
@@ -282,9 +323,19 @@ export async function main(argv = process.argv.slice(2), { facts = null, spawn =
       store = facts ?? await storeFacts({ env });
     } catch (e) { return { error: String(e?.message ?? e) }; }
     const rows = planAwards({ acts: store.acts, ...engine, date });
+    const digest = planDigest(rows);
     const text = printed(renderPlan(rows, { date }));
     log(text.trimEnd());
-    if (!apply) return { planOnly: true };
+    if (!apply) {
+      log("");
+      log(renderApplyHint(digest, { town, date, keyPath: keyPath ?? env.STAMP_KEY ?? "/srv/postmark-office/stamp-key.pem" }).trimEnd());
+      return { planOnly: true };
+    }
+    log(`digest: ${digest}`);
+    // ⚑ THE REVIEWED PLAN. The apply writes only the list a person read: the
+    // digest of what this run would write against the one they copied.
+    if (expect !== digest)
+      return { error: `post-award-plan: this plan is not the one reviewed — --expect ${expect}, and the plan this run would write is ${digest}. Something changed since the plan was printed (an award recorded, a line paid, another date). Nothing written: run the plan again and read it.` };
 
     let parsed;
     try { parsed = parseAwardPlan(text); } catch (e) { return { error: e.message }; }
@@ -324,7 +375,7 @@ export async function main(argv = process.argv.slice(2), { facts = null, spawn =
  * alone reads, and takes no lock.
  */
 export async function cli(argv = process.argv.slice(2), env = process.env) {
-  if (argv.includes("--apply") && !env.OFFICE_KEEP && env.POST_AWARD_LOCKED !== "1") {
+  if (argv.includes("--apply") && !scheduled(env) && env.POST_AWARD_LOCKED !== "1") {
     const { useFlock, townLockPath } = await import("../src/town-lock.mjs");
     if (useFlock()) {
       const [file, args] = lockedArgv(fileURLToPath(import.meta.url), argv, townLockPath());

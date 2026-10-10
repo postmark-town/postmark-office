@@ -144,12 +144,14 @@ Darko, 2026-10-09: "build all the plumbing for the idea stuff … but the actual
 **The award pass.** `node tools/post-award-plan.mjs --town <clone>` reads every `award` act from the store and prints one row per act: post and label, recipient, amount, hand, and why.
 - The why is one of `owed`, `already paid` (the ledger holds that post and label), `meep` (pays 0, by the town's meep law at the act's date and the line's), `unresolved` (no room in the town), or `refused` (the town's builder would refuse the line, or an earlier act holds the label), with the town's own sentence.
 - The amount is always the act's. The pass computes none.
-- With `--apply --key <pem>` it takes the town lock (the tick's), prints the plan, and parses its own print back. It refuses the whole apply on any difference.
+- The plan ends with its digest (sha256 over the exact lines it would write, in order) and, beneath it, the one command that applies it.
+- That command is `--apply --key <pem> --expect <digest>`. It refuses unless `--expect` equals the digest of the plan it is about to write, and shows both. So an award recorded between the reading and the apply refuses the apply.
+- It takes the town lock (the tick's), prints the plan, and parses its own print back. It refuses the whole apply on any difference.
 - It then calls the town's `stamp-mint.mjs --award-mint` once per owed row, with `--by` set to the act's hand, and runs the town's stamp-verify. It lands the lines with `landStamped`, which records them in `stamp_lines` in the commit's transaction when `STAMP_LINES=store`.
 - Any refusal on the way puts the ledger back, and nothing is written.
 - A second `--apply` writes nothing, because every row reads `already paid`.
 - It never catches the ledger up: a ledger behind the mail is the tick's to settle.
-- It refuses to run at all while `OFFICE_KEEP` is set, which `deploy/office-keep.sh` exports, so it can never run on the tick.
+- It refuses to run at all while `OFFICE_KEEP` is set (`deploy/office-keep.sh` exports it) or `INVOCATION_ID` is set (systemd sets it for any unit). So it never runs from the tick or a timer.
 
 **The read.** `town { read: "posts", args: { class: "idea", post? } }` (or `GET /posts?class=idea`). Each row is the general row plus:
 - `body`;

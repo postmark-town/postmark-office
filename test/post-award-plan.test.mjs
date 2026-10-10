@@ -45,10 +45,15 @@ import { startStore } from "./helpers/embedded-store.mjs";
 import { OFFICE_ROOT } from "./fixture-paths.mjs";
 import { tempDir } from "./helpers/temp-dir.mjs";
 
-const { planAwards, renderPlan, parseAwardPlan, planDiffers, townEngine, storeFacts, awardMintArgv, lockedArgv, main } =
+const { planAwards, renderPlan, parseAwardPlan, planDiffers, townEngine, storeFacts, awardMintArgv, lockedArgv, planDigest, scheduled, main } =
   await import("../tools/post-award-plan.mjs");
 const { verifyStampLinesVia } = await import("../src/stamp-lines.mjs");
 const { useFlock } = await import("../src/town-lock.mjs");
+
+// A suite run is not a scheduled run, even when a runner service started it:
+// the refusals below set these markers themselves.
+delete process.env.OFFICE_KEEP;
+delete process.env.INVOCATION_ID;
 
 const TOOL = join(OFFICE_ROOT, "tools", "post-award-plan.mjs");
 const TOWN_SRC = process.env.AWARD_MINT_TOWN ?? join(OFFICE_ROOT, "town-clone");
@@ -128,6 +133,14 @@ async function ideaWithAwards(awards) {
   return id;
 }
 const say = () => { const out = []; return { out, log: (s) => out.push(s), err: (s) => out.push(`ERR ${s}`), text: () => out.join("\n") }; };
+const DIGEST_RE = /^digest: (sha256:[0-9a-f]{16})$/m;
+/** The plan run a reviewer reads first, and the digest they copy off it. */
+async function reviewed(town, deps = {}) {
+  const out = say();
+  assert.equal(await main(["--town", town, "--date", DATE], { ...out, ...deps }), 0, out.text());
+  return DIGEST_RE.exec(out.text())[1];
+}
+const applyArgv = (town, digest) => ["--town", town.repo, "--apply", "--key", town.keyFile, "--date", DATE, "--expect", digest];
 const storeHeld = async (office) => Number((await office.query("SELECT count(*) n FROM stamp_lines")).rows[0].n);
 
 // ── 1 ───────────────────────────────────────────────────────────────────────
@@ -144,10 +157,10 @@ test("1 · two award acts, an empty ledger: two owed rows; --apply writes two li
     assert.match(plan.text(), new RegExp(`^ {2}${id}/the-hook · ada · 7 · by keemin · owed · act \\d+ on \\d{4}-\\d{2}-\\d{2}$`, "m"));
     assert.match(plan.text(), /the plan only — nothing written/);
     assert.equal(awardLinesOf(town.repo).length, 0, "the plan wrote a line");
+    const digest = DIGEST_RE.exec(plan.text())[1];
 
-    const argv = ["--town", town.repo, "--apply", "--key", town.keyFile, "--date", DATE];
     const first = say();
-    assert.equal(await main(argv, first), 0, first.text());
+    assert.equal(await main(applyArgv(town, digest), first), 0, first.text());
     assert.deepEqual(awardLinesOf(town.repo).map((l) => l.replace(/ · sig: \S+$/, "")), [
       `- ${DATE} · MINT → finn · 25 · for: post:${id}/the-lantern · by: wright`,
       `- ${DATE} · MINT → ada · 7 · for: post:${id}/the-hook · by: keemin`,
@@ -163,12 +176,54 @@ test("1 · two award acts, an empty ledger: two owed rows; --apply writes two li
     const held = await storeHeld(office);
 
     const second = say();
-    assert.equal(await main(argv, second), 0, second.text());
+    assert.equal(await main(applyArgv(town, await reviewed(town.repo)), second), 0, second.text());
     assert.match(second.text(), /2 already paid, 0 pay nothing, 0 owed \(0 stamps\)/);
     assert.match(second.text(), new RegExp(`ALREADY PAID\\n {2}${id}/the-lantern · finn · 25 · by wright · already paid`));
     assert.match(second.text(), /nothing owed/);
     assert.equal(awardLinesOf(town.repo).length, 2, "a second --apply wrote a line");
     assert.equal(await storeHeld(office), held, "a second --apply recorded a row");
+  } finally { town.cleanup(); }
+});
+
+// ── the apply writes the plan that was read (--expect) ──────────────────────
+
+test("the plan ends with its digest and the one command that applies it; --apply without --expect, or after an award was recorded since the plan, refuses and writes nothing; the plan read again applies", { skip: NO_VERB }, async () => {
+  const office = await freshStore();
+  const id = await ideaWithAwards([[WRIGHT, { to: "finn", stamps: 25, label: "the-lantern" }]]);
+  const town = syntheticTown();
+  try {
+    const plan = say();
+    assert.equal(await main(["--town", town.repo, "--date", DATE, "--key", town.keyFile], plan), 0, plan.text());
+    const digest = DIGEST_RE.exec(plan.text())[1];
+    const lines = plan.text().split("\n");
+    const at = lines.indexOf(`digest: ${digest}`);
+    assert.deepEqual(lines.slice(at + 1, at + 3), ["apply exactly this plan with:",
+      `  node tools/post-award-plan.mjs --town ${town.repo} --date ${DATE} --apply --key ${town.keyFile} --expect ${digest}`]);
+    const before = ledgerOf(town.repo);
+    const head = git(town.repo, "rev-parse", "HEAD");
+    const nothingWritten = async () => {
+      assert.equal(ledgerOf(town.repo), before, "the ledger moved");
+      assert.equal(git(town.repo, "rev-parse", "HEAD"), head, "a commit landed");
+      assert.equal(await storeHeld(office), 0, "a row was recorded");
+    };
+
+    const bare = say();
+    assert.equal(await main(["--town", town.repo, "--apply", "--key", town.keyFile, "--date", DATE], { ...bare, spawn: () => { throw new Error("ran a verb with no --expect"); } }), 1);
+    assert.match(bare.text(), /--apply needs --expect <digest>, the digest the plan printed/);
+    await nothingWritten();
+
+    // Keemin records an award after Wright read the plan
+    await doors.awardAtTown({ post: id, to: "ada", stamps: 7, label: "the-hook" }, KEEMIN, { now: NOW, env: process.env, roll: ROLL, isMeep: () => false });
+    const stale = say();
+    assert.equal(await main(applyArgv(town, digest), { ...stale, spawn: () => { throw new Error("ran a verb on a plan nobody read"); } }), 1, stale.text());
+    const fresh = await reviewed(town.repo);
+    assert.notEqual(fresh, digest);
+    assert.match(stale.text(), new RegExp(`this plan is not the one reviewed — --expect ${digest}, and the plan this run would write is ${fresh}\\.`));
+    await nothingWritten();
+
+    const ok = say();
+    assert.equal(await main(applyArgv(town, fresh), ok), 0, ok.text());
+    assert.equal(awardLinesOf(town.repo).length, 2);
   } finally { town.cleanup(); }
 });
 
@@ -184,8 +239,11 @@ test("the command holds the tick's lock for an --apply: while another process ho
     // the holder: the tick's own flock on the same file, for three seconds
     const holder = spawnChild("/usr/bin/flock", [lock, "sh", "-c", "echo held; sleep 3"], { stdio: ["ignore", "pipe", "inherit"] });
     await new Promise((res) => holder.stdout.once("data", res));
+    // the plan reads and takes no lock, so it prints while the holder holds
+    const plan = spawnSync(process.execPath, [TOOL, "--town", town.repo, "--date", DATE], { encoding: "utf8", env: process.env });
+    assert.equal(plan.status, 0, plan.stdout + plan.stderr);
     const t0 = Date.now();
-    const res = spawnSync(process.execPath, [TOOL, "--town", town.repo, "--apply", "--key", town.keyFile, "--date", DATE],
+    const res = spawnSync(process.execPath, [TOOL, ...applyArgv(town, DIGEST_RE.exec(plan.stdout)[1])],
       { encoding: "utf8", env: { ...process.env, TOWN_LOCK: lock } });
     const waited = Date.now() - t0;
     if (holder.exitCode === null) await new Promise((r) => holder.once("exit", r));
@@ -203,7 +261,7 @@ test("2 · a meep recipient's row reads 0 and meep, and is never written; the ot
   const town = syntheticTown({ meep: "ferry" });
   try {
     const out = say();
-    assert.equal(await main(["--town", town.repo, "--apply", "--key", town.keyFile, "--date", DATE], out), 0, out.text());
+    assert.equal(await main(applyArgv(town, await reviewed(town.repo)), out), 0, out.text());
     assert.match(out.text(), /1 pay nothing, 1 owed \(3 stamps\)/);
     assert.match(out.text(), new RegExp(`PAYS NOTHING\\n {2}${id}/the-crossing · ferry · 0 · by wright · meep: a meep never receives stamps · act \\d+`));
     assert.deepEqual(awardLinesOf(town.repo).map((l) => l.replace(/ · sig: \S+$/, "")), [`- ${DATE} · MINT → finn · 3 · for: post:${id}/the-wick · by: wright`]);
@@ -215,22 +273,27 @@ test("2 · a meep recipient's row reads 0 and meep, and is never written; the ot
 
 // ── 3 ───────────────────────────────────────────────────────────────────────
 
-test("3 · on the tick (OFFICE_KEEP set) the tool refuses, exits non-zero and writes nothing — in-process and as a process", async () => {
-  const town = tempDir("award-tick-");
-  try {
-    writeFileSync(join(town, "ledger-sentinel"), "x");
-    git(town, "init", "-q");   // a clone the pass could read, so a refusal here is the guard's and nothing else's
-    const out = say();
-    const code = await main(["--town", town, "--apply", "--key", join(town, "ledger-sentinel"), "--date", DATE],
-      { ...out, env: { ...process.env, OFFICE_KEEP: "1" }, facts: { acts: [] }, spawn: () => { throw new Error("the tick ran the verb"); } });
-    assert.equal(code, 2, out.text());
-    assert.match(out.text(), /^ERR post-award-plan: refused — OFFICE_KEEP is set, so this is the keeping tick/m);
-    const child = spawnSync(process.execPath, [TOOL, "--town", town], { encoding: "utf8", env: { ...process.env, OFFICE_KEEP: "1", WORLD2_PG_URL: "" } });
-    assert.equal(child.status, 2, child.stdout + child.stderr);
-    assert.match(child.stderr, /never runs on the tick/);
-    assert.equal(child.stdout, "", "the tick's run printed a plan");
-  } finally { rmSync(town, { recursive: true, force: true }); }
-});
+for (const [name, marker, said] of [
+  ["on the tick (OFFICE_KEEP set)", { OFFICE_KEEP: "1" }, /refused — OFFICE_KEEP is set, so this is the keeping tick/],
+  ["under any systemd unit (INVOCATION_ID set)", { INVOCATION_ID: "0123456789abcdef0123456789abcdef" }, /refused — INVOCATION_ID is set, so systemd started this run as a unit/],
+]) {
+  test(`3 · ${name} the tool refuses, exits non-zero and writes nothing — in-process and as a process`, async () => {
+    const town = tempDir("award-tick-");
+    try {
+      writeFileSync(join(town, "ledger-sentinel"), "x");
+      git(town, "init", "-q");   // a clone the pass could read, so a refusal here is the guard's and nothing else's
+      const out = say();
+      const code = await main(["--town", town, "--apply", "--key", join(town, "ledger-sentinel"), "--date", DATE, "--expect", "sha256:0000000000000000"],
+        { ...out, env: { ...process.env, ...marker }, facts: { acts: [] }, spawn: () => { throw new Error("a scheduled run ran the verb"); } });
+      assert.equal(code, 2, out.text());
+      assert.match(out.text(), new RegExp(`^ERR post-award-plan: ${said.source}`, "m"));
+      const child = spawnSync(process.execPath, [TOOL, "--town", town], { encoding: "utf8", env: { ...process.env, ...marker, WORLD2_PG_URL: "" } });
+      assert.equal(child.status, 2, child.stdout + child.stderr);
+      assert.match(child.stderr, /never runs from the tick or any timer: Wright runs it by hand/);
+      assert.equal(child.stdout, "", "a scheduled run printed a plan");
+    } finally { rmSync(town, { recursive: true, force: true }); }
+  });
+}
 
 test("3 · the tick says it is the tick: office-keep.sh exports OFFICE_KEEP=1 before its first step, and never runs the pass", () => {
   const sh = readFileSync(join(OFFICE_ROOT, "deploy", "office-keep.sh"), "utf8");
@@ -259,9 +322,10 @@ test("4 · a plan whose printed text was edited between print and parse refuses 
       // the date the lines carry
       [(t) => t.replace("dated 2026-10-09", "dated 2026-10-10"), /the lines' date: printed 2026-10-10, planned 2026-10-09/],
     ];
+    const digest = await reviewed(town.repo);
     for (const [printed, why] of edits) {
       const out = say();
-      assert.equal(await main(["--town", town.repo, "--apply", "--key", town.keyFile, "--date", DATE], { ...out, printed }), 1, out.text());
+      assert.equal(await main(applyArgv(town, digest), { ...out, printed }), 1, out.text());
       assert.match(out.text(), why);
       assert.equal(ledgerOf(town.repo), before, "a refused apply changed the ledger");
       assert.equal(git(town.repo, "rev-parse", "HEAD"), head, "a refused apply committed");
@@ -283,7 +347,7 @@ test("5 · the amount is the act's: each written line's n is the act's stamps, b
     const handed = [];
     const spawn = (cwd, argv) => { if (argv.includes("--award-mint")) handed.push(argv[argv.indexOf("--amount") + 1]); return spawnSync(process.execPath, argv, { cwd, encoding: "utf8" }); };
     const out = say();
-    assert.equal(await main(["--town", town.repo, "--apply", "--key", town.keyFile, "--date", DATE], { ...out, facts, spawn }), 0, out.text());
+    assert.equal(await main(applyArgv(town, await reviewed(town.repo, { facts })), { ...out, facts, spawn }), 0, out.text());
     const acts = facts.acts.map((a) => (typeof a.payload === "string" ? JSON.parse(a.payload) : a.payload));
     assert.deepEqual(handed, acts.map((p) => String(p.stamps)));
     assert.deepEqual(awardLinesOf(town.repo).map((l) => / · MINT → finn · (\d+) · for: post:\S+\/(piece-\d)/.exec(l).slice(1)),
@@ -305,9 +369,10 @@ test("whole or nothing: a verb that refuses the second row, or a verifier that g
       [(cwd, argv) => (argv.includes("ada") ? { status: 1, stderr: "FATAL: refused for the test\n" } : real(cwd, argv)), /REFUSED post:\S+\/the-hook → ada — FATAL: refused for the test\. The whole apply is put back/],
       [(cwd, argv) => (argv[0].endsWith("stamp-verify.mjs") ? { status: 1, stdout: "LAWFUL fails — for the test\n" } : real(cwd, argv)), /stamp-verify is red after the award lines — LAWFUL fails — for the test/],
     ];
+    const digest = await reviewed(town.repo);
     for (const [spawn, why] of cases) {
       const out = say();
-      assert.equal(await main(["--town", town.repo, "--apply", "--key", town.keyFile, "--date", DATE], { ...out, spawn }), 1, out.text());
+      assert.equal(await main(applyArgv(town, digest), { ...out, spawn }), 1, out.text());
       assert.match(out.text(), why);
       assert.equal(ledgerOf(town.repo), before, "the first line stayed");
       assert.equal(git(town.repo, "rev-parse", "HEAD"), head);
@@ -316,7 +381,7 @@ test("whole or nothing: a verb that refuses the second row, or a verifier that g
     }
     writeFileSync(join(town.repo, "WHITE_PAGES", "stamp-ledger.md"), `${before}- 2026-10-09 · an uncommitted line\n`);
     const out = say();
-    assert.equal(await main(["--town", town.repo, "--apply", "--key", town.keyFile, "--date", DATE], { ...out, spawn: () => { throw new Error("ran a verb on a dirty ledger"); } }), 1);
+    assert.equal(await main(applyArgv(town, digest), { ...out, spawn: () => { throw new Error("ran a verb on a dirty ledger"); } }), 1);
     assert.match(out.text(), /has changes nobody committed .* Nothing written/);
   } finally { town.cleanup(); }
 });
@@ -343,8 +408,8 @@ test("an award over 200, a stage-named label and a by: that is not a hand are re
     const out = say();
     const verbs = [];
     const spawn = (cwd, argv) => { verbs.push(argv[1]); return spawnSync(process.execPath, argv, { cwd, encoding: "utf8" }); };
-    assert.equal(await main(["--town", town.repo, "--apply", "--key", town.keyFile, "--date", DATE],
-      { ...out, facts: { acts: acts.filter((a) => a.id !== 5 && a.id !== 6) }, spawn, env: { ...process.env, STAMP_LINES: "", TOWN_PUSH: "" } }), 0, out.text());
+    const deps = { facts: { acts: acts.filter((a) => a.id !== 5 && a.id !== 6) }, env: { ...process.env, STAMP_LINES: "", TOWN_PUSH: "" } };
+    assert.equal(await main(applyArgv(town, await reviewed(town.repo, deps)), { ...out, ...deps, spawn }), 0, out.text());
     assert.match(out.text(), /4 pay nothing, 0 owed \(0 stamps\)/);
     assert.deepEqual(verbs, [], "a refused row reached the town's verb");
     assert.equal(ledgerOf(town.repo), before);
@@ -391,4 +456,24 @@ test("the verb is the town's --award-mint, handed the act's own hand, amount and
   assert.equal(file, "/usr/bin/flock");
   assert.deepEqual(args, ["-w", "300", "/srv/postmark-office/town.lock", process.execPath, "/srv/postmark-office/tools/post-award-plan.mjs", "--town", "/t", "--apply"],
     "exclusive (no -s), on the lock the tick takes");
+});
+
+test("the digest is over the exact lines in order: another amount, another order or another date is another digest; a row that pays nothing does not move it", () => {
+  const lineOf = ({ date, handle, n, post, label, by }) => `- ${date} · MINT → ${handle} · ${n} · for: post:${post}/${label} · by: ${by}`;
+  const plan = (acts, date = DATE, more = {}) => planAwards({ acts, ...fakeEngine, lineOf, date, ...more });
+  const base = planDigest(plan(pureActs));
+  assert.match(base, /^sha256:[0-9a-f]{16}$/);
+  assert.equal(planDigest(plan(pureActs)), base, "the same plan, the same digest");
+  const more = structuredClone(pureActs); more[0].payload.stamps = 26;
+  assert.notEqual(planDigest(plan(more)), base, "another amount");
+  assert.notEqual(planDigest(plan([...pureActs].reverse())), base, "another order");
+  assert.notEqual(planDigest(plan(pureActs, "2026-10-10")), base, "another date");
+  const meep = { id: 9, actor: "wright", action: "award", object: "errant/x", at: "2026-10-09T15:00:00Z", payload: { post: "errant/x", to: "ferry", stamps: 5, label: "the-oar", hand: "wright" } };
+  assert.equal(planDigest(plan([...pureActs, meep], DATE, { isMeep: (h) => h === "ferry" })), base, "a meep row writes nothing, so it is not in the digest");
+});
+
+test("a run is scheduled when the tick's marker or systemd's unit id is set, and by hand otherwise", () => {
+  assert.equal(scheduled({}), null);
+  assert.match(scheduled({ OFFICE_KEEP: "1" }), /keeping tick/);
+  assert.match(scheduled({ INVOCATION_ID: "abc" }), /systemd started this run as a unit/);
 });
