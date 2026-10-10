@@ -262,6 +262,26 @@ report() { # status detail
     "$(printf '%s' "$2" | tr -d '\n' | tr '"' "'")" > "$OUT" 2>/dev/null || true
 }
 say() { echo "[site-refresh] $*"; }
+
+# THE BUILD'S STDOUT, LESS ONE LINE PER PAGE (POS-557). Astro prints every page
+# it writes ("13:10:01   ├─ /mail/<slug>/index.html (+3ms)"), about 5,300 a
+# build, which put some 900 MB a week into syslog through
+# the journal. Those lines are cut and counted; everything else on stdout (the
+# route headers, the timings, "N page(s) built", "Complete!") passes through,
+# and stderr, where Astro writes its warnings and errors, is never piped here
+# at all. Astro has no log level between info and silent on its CLI, so this
+# filter is the knife. Portable awk (the box's is mawk): no POSIX classes, the
+# escape byte built with sprintf. A failed build still fails the run: pipefail
+# hands the pipeline the build's own exit code.
+quiet_build_log() {
+  awk '
+    BEGIN { ansi = sprintf("%c", 27) "\\[[0-9;]*m" }
+    { line = $0; gsub(ansi, "", line) }
+    line ~ /^[ \t0-9:.APMapm]*(├─|└─) / { cut++; next }
+    { print; fflush() }
+    END { if (cut) printf "[site-refresh] build: %d per-page lines left out of the log (POS-557)\n", cut }
+  '
+}
 die() { report failed "$1"; echo "[site-refresh] FAILED: $1" >&2; exit 1; }
 
 # EVERY failure writes the board, not just the ones with a `|| die` on them.
@@ -562,7 +582,7 @@ build_once() {
 
   say "build: astro, release channel"
   ( cd "$BUILD" && PUBLIC_CHANNEL=release PUBLIC_BUILD_SHA="$(git -C "$BUILD" rev-parse HEAD)" npm run build --silent ) \
-    || die "the site build tripped"
+    | quiet_build_log || die "the site build tripped"
 
   # ── the stamp: what this page was built from, in its own bytes ────────────
   # BUILD_TOWN_SHA and BUILD_CROSSING are new (postmark-site
