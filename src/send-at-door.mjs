@@ -18,11 +18,33 @@
 // Everything else is the existing implementation, called exactly as before.
 
 import { enqueueLetter } from "./write.mjs";
-import { sendLetterAsRow } from "./town-mail.mjs";
+import { sendLetterAsRow, hotMailBlock } from "./town-mail.mjs";
 import { townLogEnabled } from "./town-journal.mjs";
 import { withThreadlessHint } from "./mail-thread.mjs";
 import { inferSender } from "./one-contract.mjs";
 import { indexSwitched } from "./index-probe.mjs";
+import { recipientsProbe } from "./ashore.mjs";
+
+// ── A RECIPIENT THE COPY HAS NOT CAUGHT UP TO (POS-332) ──────────────────────
+//
+// The recipient check (write.mjs § validateLetter, `no resident "x"`) asks the
+// office's index, a copy of the town record refreshed between crossings. A
+// resident admitted since (join-bind.mjs: the card and the bind land in one act)
+// is in the record at once, and in the copy only after its next ingest, so a
+// letter to them was refused in between. When the copy does not know the
+// recipient, the door asks the store's record of who came ashore (071, written
+// in the act that lands each address; src/ashore.mjs). Not the registry: a
+// harbor house has registry rows and no address, and a letter to it bounces at
+// the crossing (POS-444, Darko's A). A handle the store holds ashore, with no
+// retired pin, is a recipient; anything else is checked exactly as before. The
+// copy is asked first, so the store is read only on a miss.
+//
+// THE DRAIN TAKES THE SAME WRAP (src/ashore.mjs § recipientsProbe): it replays
+// this letter through validateLetter at the crossing, and a door that accepted
+// a letter the crossing then bounces has lost it (town-bridge.mjs § the letters).
+export async function recipientProbe(db, to, { env = process.env } = {}) {
+  return recipientsProbe(db, [to], { env });
+}
 
 export const NONCE_NOT_HONOURED = "this office keeps no town log, so a nonce cannot be remembered and this receipt is NOT idempotent by it. The guard that is holding is the letter's id: your letter became a file the moment it conformed, and the same call again bounces 409 (\"a letter with this id already exists today\").";
 
@@ -35,6 +57,7 @@ export const NONCE_NOT_HONOURED = "this office keeps no town log, so a nonce can
  */
 export async function sendAtDoor(fields, key, { db, clone, odb }) {
   const f = inferSender(fields, key);
+  db = await recipientProbe(db, f.to);
   let result;
   if (townLogEnabled() && odb) {
     result = await sendLetterAsRow(f, key, db, clone, odb);
@@ -50,10 +73,18 @@ export async function sendAtDoor(fields, key, { db, clone, odb }) {
   // from the store now, after the send. A store that cannot answer gives no hint,
   // exactly as an index with no mail_state row does: the letter has gone, and a
   // refusal here would tell its sender otherwise.
+  // The sender's own standing letters ride with it (POS-375): a reply they have
+  // already written answers its thread, so the hint does not ask for another.
+  // Read for a key that holds the sender only; a log that will not read leaves
+  // the hint on the law alone.
   let hintIx = db;
   if (indexSwitched() && !result?.error) {
     const { probeWithMailState } = await import("./town-index-store.mjs");
-    hintIx = await probeWithMailState(f.from).catch(() => null);
+    let standing = null;
+    if (odb && key?.handles?.has?.(f.from) === true) {
+      try { standing = (await hotMailBlock(odb, key, { handle: f.from }))?.standing ?? null; } catch { standing = null; }
+    }
+    hintIx = await probeWithMailState(f.from, { standing }).catch(() => null);
   }
   return { fields: f, result: withThreadlessHint(result, hintIx, f) };
 }

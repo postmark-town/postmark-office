@@ -11,7 +11,10 @@
 //      key. kinofire wears `hh:house-of-many-doors`, the three PR-joined
 //      residents `gh:334016343`, so Lyra's residents left kinofire out and the
 //      publish note fired (world.mjs § publishNoteFor). sameHousehold (give and
-//      take between housemates) compared the same keys.
+//      take between housemates) compared the same keys. Since POS-342 (w42)
+//      the block reads the STORE's registry, where the house's key is the
+//      house, so these three tests seed the same house into the store and ask
+//      the office's lookup, the way the doors do.
 //   2. world-apex.mjs § worldHouseholdOf parsed the world's registry once per
 //      process, so a settlement's re-derive waited for a restart.
 //   3. standing.mjs § groundVerdict compared the parcel's STORED household with
@@ -40,10 +43,20 @@ mkdirSync(join(town, "tools"), { recursive: true });
 const LEDGER = { [KINO]: `hh:${HOUSE}`, [LYRA]: "gh:334016343", seasiren: "gh:334016343", wildcat: "gh:334016343", stranger: "solo:stranger" };
 writeFileSync(join(town, "tools", "stamp-mint.mjs"),
   `export function currentHouseholds() { return new Map(${JSON.stringify(Object.entries(LEDGER).map(([h, key]) => [h, { key, provisional: false }]))}); }\n`);
-writeFileSync(join(town, "tools", "github-ids.json"), JSON.stringify(Object.fromEntries(
-  [KINO, LYRA, "seasiren", "wildcat"].map((h) => [h, { ...ACCOUNT, pinned: "2026-09-26" }]))));
-writeFileSync(join(town, "tools", "households.json"), JSON.stringify({ schema_version: 1, households: {
-  [HOUSE]: { name: HOUSE, accounts: [ACCOUNT], residents: [KINO, "seasiren", LYRA, "wildcat"] } } }));
+const PINS = Object.fromEntries([KINO, LYRA, "seasiren", "wildcat"].map((h) => [h, { ...ACCOUNT, pinned: "2026-09-26" }]));
+const REGISTERED = { schema_version: 1, households: {
+  [HOUSE]: { name: HOUSE, accounts: [ACCOUNT], residents: [KINO, "seasiren", LYRA, "wildcat"] } } };
+writeFileSync(join(town, "tools", "github-ids.json"), JSON.stringify(PINS));
+writeFileSync(join(town, "tools", "households.json"), JSON.stringify(REGISTERED));
+
+// ── the record: the same house, in the store the household block reads (POS-342)
+const { installActsPen, uninstallActsPen, RECORD_ON } = await import("./acts-pen-stub.mjs");
+const { rowsFromRegistry } = await import("../src/registry-rows.mjs");
+const STORE = rowsFromRegistry(REGISTERED, PINS);
+process.env.WORLD2_PG = RECORD_ON.WORLD2_PG;
+process.env.WORLD2_PG_URL = RECORD_ON.WORLD2_PG_URL;
+installActsPen({ households: STORE.households, pins: STORE.pins, meta: [] });
+after(() => { uninstallActsPen(); delete process.env.WORLD2_PG; delete process.env.WORLD2_PG_URL; });
 
 // ── the world, as far as the registry reader looks: HEAD, its ref, and the
 // working tree's registry. A settlement's pull is the checkout moving.
@@ -61,7 +74,7 @@ checkout("a90dd0127", SPLIT); // the 06:00Z settlement, as the office booted wit
 
 process.env.TOWN_CLONE = town;
 process.env.WORLD_CLONE = world;
-const { householdOf } = await import(pathToFileURL(join(OFFICE, "src", "households.mjs")).href);
+const { householdLookup } = await import(pathToFileURL(join(OFFICE, "src", "households.mjs")).href);
 const { sameHousehold } = await import(pathToFileURL(join(OFFICE, "src", "world-hold.mjs")).href);
 const { publishNoteFor } = await import(pathToFileURL(join(OFFICE, "src", "world.mjs")).href);
 const { worldHouseholdOf } = await import(pathToFileURL(join(OFFICE, "src", "world-apex.mjs")).href);
@@ -72,16 +85,18 @@ const { reCheckGrant } = await import(pathToFileURL(join(OFFICE, "world2", "tool
 const PARCEL = { id: `${LYRA}/the-starling-house`, kind: "parcel", by: LYRA, household: LYRA,
   at: { x: 900, y: 1250 }, extent: { w: 25, h: 25 } };
 
-test("householdOf groups housemates by the HOUSE, whichever ledger key each wears", () => {
+test("householdOf groups housemates by the HOUSE, whichever ledger key each wears", async () => {
+  const householdOf = await householdLookup();
   const lyra = householdOf(LYRA), kino = householdOf(KINO);
   assert.deepEqual(lyra.residents, [KINO, "seasiren", LYRA, "wildcat"].sort());
   assert.deepEqual(kino.residents, lyra.residents);
-  assert.equal(lyra.house, `hh:${HOUSE}`);
-  assert.equal(lyra.key, "gh:334016343", "`key` is still the ledger's own spelling");
+  assert.equal(lyra.key, `hh:${HOUSE}`, "the block's key is the house, not the ledger spelling Lyra's mail minted under");
+  assert.equal(kino.key, lyra.key);
   assert.deepEqual(householdOf("stranger").residents, ["stranger"], "a handle no house lists is its own household");
 });
 
-test("the publish note stays silent for a home on a housemate's parcel (the sentence kinofire got)", () => {
+test("the publish note stays silent for a home on a housemate's parcel (the sentence kinofire got)", async () => {
+  const householdOf = await householdLookup();
   const note = publishNoteFor({ id: `${KINO}/kinos-house`, parent: PARCEL.id, by: KINO, kind: "sited",
     marks: [PARCEL], residentsOf: (h) => householdOf(h)?.residents ?? null });
   assert.equal(note, null, `expected no commons note, got: ${note?.heads_up?.slice(0, 90)}`);
@@ -90,7 +105,8 @@ test("the publish note stays silent for a home on a housemate's parcel (the sent
   assert.match(stranger.heads_up, /commons-class/, "another household's builder is still told the law");
 });
 
-test("sameHousehold: two housemates on two ledger keys are one household", () => {
+test("sameHousehold: two housemates on two ledger keys are one household", async () => {
+  const householdOf = await householdLookup();
   assert.deepEqual(sameHousehold(LYRA, KINO, householdOf), { same: true, how: "household", slug: HOUSE });
   assert.equal(sameHousehold(LYRA, "stranger", householdOf).same, false);
 });

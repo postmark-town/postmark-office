@@ -22,7 +22,8 @@
 // `window` (with `window.pane`), `pending_outbox`, `counts`, `next_steps` — so
 // a reader of `doorstep.mail.letters` reads `house.residents[h].mail.letters`
 // and renames nothing. Then two the doorstep does not carry: `last_active`
-// (the index's own, hydrate.mjs § last_active) and `stands` (the walkers roll,
+// with `last_active_crossing` (the newest act of their own, last-active.mjs,
+// POS-481) and `stands` (the walkers roll,
 // read once for the house; behind WORLD_POSITIONS that roll is the kept
 // projection, position-projection.mjs).
 //
@@ -39,14 +40,16 @@
 // derivation was made ISO too on 2026-09-27 (Keemin: "yeah everything iso
 // please"), so isoAt here is now belt-and-braces over an ISO string.
 
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 
 import { doorstep, DOORSTEP_STANCES, mailList, mailAwaiting, stampsDetail, windowRead, outboxSettled } from "./queries.mjs";
 import { ownerGate } from "./doorstep-bundle.mjs";
 import { unreadFor } from "./unread-store.mjs";
+import { hotMailBlock } from "./town-mail.mjs";
 import { nextCrossingForDoorstep, currentCrossing, CROSSING_EPOCH_UTC, CROSSING_MS } from "./crossings.mjs";
-import { resolveHouse, houseRows, VIA } from "./household-deriver.mjs";
+import { resolveHouse, VIA } from "./household-deriver.mjs";
+import { loadRegistryRows } from "./registry-store.mjs";
+import { registryFromRows, pinsFromRows } from "./registry-rows.mjs";
+import { stampRows, LAST_ACTIVE_MEANS } from "./last-active.mjs"; // last_active, once for the house (POS-481)
 import { freshFor } from "./paper-fresh.mjs"; // POS-271: the pending paper rows, read before a composed read
 
 /** The doorstep keys that are the same on every resident's page: carried once, at the top. */
@@ -73,24 +76,28 @@ export function isoEvents(events = []) {
 // ── WHICH HOUSE, AND WHO LIVES IN IT ─────────────────────────────────────────
 
 /**
- * The registry, from the record when the office is pointed at it, else the
- * town clone's own `tools/households.json` (the file households.mjs reads).
- * `from` says which, because the two can disagree for a crossing.
+ * The registry, from the record: the store's `households` / `household_pins`,
+ * read fresh on every call. Null when the office cannot ask the store.
+ *
+ * THE PRINTOUT IS NOT A FALLBACK (POS-345). This used to fall back to the town
+ * clone's tools/households.json when the store did not answer, and `from`
+ * said which, "because the two can disagree for a crossing". They can, and the
+ * store is the record: the file is its printout (registry-drain.mjs), so a
+ * house read from it could be a crossing stale or carry a hand edit the record
+ * never held. A store this office cannot ask is now a refusal (houseMembers'
+ * 503), never the printout's answer.
+ *
+ * FRESH, NOT THE PROCESS MEMO. `houseRows()` folds once per process until a
+ * writer IN THAT PROCESS clears it; the house read is served by read workers,
+ * where no ceremony ever writes, so a memo there would answer with the town
+ * from boot for as long as the worker lived. Three small reads per call.
  */
 export async function registryFor(clone, readers = {}) {
   if (readers.registry) return { ...readers.registry, from: readers.registry.from ?? "injected" };
-  try {
-    const rows = await houseRows();
-    if (rows) return { registry: rows.registry, pins: rows.pins, from: "the registry store" };
-  } catch { /* the store is optional here; the clone's file is the next answer */ }
-  try {
-    const registry = JSON.parse(readFileSync(join(clone, "tools", "households.json"), "utf8"));
-    let pins = {};
-    try { pins = JSON.parse(readFileSync(join(clone, "tools", "github-ids.json"), "utf8")); } catch { /* pins optional */ }
-    return { registry, pins, from: "the town clone's tools/households.json" };
-  } catch {
-    return null;
-  }
+  let rows;
+  try { rows = await loadRegistryRows(); } catch { return null; }
+  if (!rows) return null;
+  return { registry: registryFromRows(rows), pins: pinsFromRows(rows), from: "the registry store" };
 }
 
 /**
@@ -99,7 +106,7 @@ export async function registryFor(clone, readers = {}) {
  */
 export async function houseMembers({ household, key, clone, readers = {} }) {
   const reg = await registryFor(clone, readers);
-  if (!reg) return { refused: [503, "this office cannot read the household registry", "neither the registry store nor the town clone's tools/households.json answered — nothing is guessed in their place"] };
+  if (!reg) return { refused: [503, "this office cannot read the household registry", "the registry store did not answer — nothing is guessed in its place, and the town's printed households.json is not the record"] };
   const houses = reg.registry?.households ?? {};
   const asked = String(household ?? "").trim().replace(/^hh:/, "");
   let slug = null;
@@ -188,14 +195,6 @@ async function stakesOf(handles, { nowMs, readers = {} }) {
   return stakesFor(handles, { now: new Date(nowMs) });
 }
 
-/** The index's own last activity for a resident: the newest commit touching their pages. */
-function lastActiveOf(db, handle) {
-  try {
-    const row = db.prepare("SELECT json FROM residents WHERE handle = ?").get(handle);
-    return row ? (JSON.parse(row.json).last_active ?? null) : null;
-  } catch { return null; }
-}
-
 /**
  * ONE RESIDENT'S OWN SEGMENTS, as `queries.mjs § doorstep` composes them —
  * the same reads, called at the same args, wrapped in the same `serves`/`args`
@@ -206,12 +205,12 @@ function lastActiveOf(db, handle) {
  * The REST skin's bounds: the house read has no connector abridgement.
  */
 export const DOORSTEP_INBOX = 20;
-export function residentSegments(db, handle, fresh) {
+export async function residentSegments(db, handle, fresh) {
   const one = (sql, ...p) => Object.values(db.prepare(sql).get(...p))[0];
   return residentSegmentsOf({
     mail: mailList(db, handle, "inbox", { limit: DOORSTEP_INBOX }),
     awaiting: mailAwaiting(db, handle, { offset: 0 }),
-    stamps: stampsDetail(db, handle),
+    stamps: await stampsDetail(db, handle),
     window: windowRead(db, handle, fresh),
     pendingOutbox: outboxSettled(db, handle),
     counts: {
@@ -288,7 +287,7 @@ export async function houseBundle({ household = null } = {}, ctx = {}) {
   // arrivals and folds the PSA board and the pulse), so it is paid once here
   // where nine doorsteps paid it nine times.
   const firstOpts = ashore.length ? { fresh: await freshFor(ashore[0], { odb, clone, asOf }), nowMs } : null;
-  const first = !ashore.length ? null : ix ? await ix.doorstep(ashore[0], asOf, firstOpts) : doorstep(db, ashore[0], asOf, firstOpts);
+  const first = !ashore.length ? null : ix ? await ix.doorstep(ashore[0], asOf, firstOpts) : await doorstep(db, ashore[0], asOf, firstOpts);
   const once = first ? Object.fromEntries(HOUSE_ONCE.filter((k) => k in first).map((k) => [k, first[k]])) : {};
 
   // UNREAD, ONCE FOR THE HOUSE (POS-286): one store read for every resident
@@ -301,12 +300,21 @@ export async function houseBundle({ household = null } = {}, ctx = {}) {
   const residents = {};
   for (const h of ashore) {
     const fresh = await freshFor(h, { odb, clone, asOf });
-    const d = { handle: h, ...(ix ? await ix.residentSegments(h, fresh) : residentSegments(db, h, fresh)) };
-    await ownerGate(d, h, { db, clone, key, odb, meta, asOf, unread, ix });
-    d.last_active = ix ? await ix.lastActive(h) : lastActiveOf(db, h);
+    // the resident's standing letters, read once for their awaiting segment and
+    // their your_pending_letters, on a key that holds them (doorstep-bundle.mjs §
+    // THE SENDER'S STANDING LETTERS, POS-375)
+    let pendingMail;
+    if (held.includes(h)) { try { pendingMail = { block: await hotMailBlock(odb, key, { handle: h }) }; } catch { pendingMail = null; } }
+    const standing = pendingMail?.block?.standing ?? null;
+    const d = { handle: h, ...(ix ? await ix.residentSegments(h, fresh, standing) : await residentSegments(db, h, fresh)) };
+    await ownerGate(d, h, { db, clone, key, odb, meta, asOf, unread, ix, pendingMail });
     d.stands = stands.byHandle[h] ?? null;
     residents[h] = d;
   }
+  // LAST ACTIVE, ONCE FOR THE HOUSE (POS-481): one store read for every
+  // resident here, never one per resident (last-active.mjs).
+  const find = ix ? (handles) => ix.lastActiveFor(handles) : readers.lastActiveFor ?? null;
+  const lastActiveUnavailable = await stampRows(Object.values(residents), find ? { find } : {});
 
   return {
     ...out,
@@ -318,7 +326,8 @@ export async function houseBundle({ household = null } = {}, ctx = {}) {
       null_means: "the roll places this resident nowhere: no walk on record and no ground of their own",
       ...(stands.disclosed ? { disclosed: stands.disclosed } : {}),
       ...(stands.unavailable ? { unavailable: stands.unavailable } : {}) },
-    last_active: "per resident, the newest commit touching their own pages in the town repo, inbox arrivals excluded (the office index's last_active) — a say in the world is not counted",
+    last_active: `per resident, with last_active_crossing beside it: ${LAST_ACTIVE_MEANS}`,
+    ...(lastActiveUnavailable ? { last_active_unavailable: lastActiveUnavailable } : {}),
     residents,
   };
 }

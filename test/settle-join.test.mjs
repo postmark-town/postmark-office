@@ -16,8 +16,7 @@
 import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 
@@ -26,6 +25,7 @@ import { settleJoinAtOffice, settleUnderLock, SETTLE_REFUSALS, PEN_GH_ID, penIde
 import { settlePass } from "../deploy/settle-pass.mjs";
 import { householdApex } from "../src/household-apex.mjs";
 import { REGISTRY_PATH, PINS_PATH } from "../src/residency.mjs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 // THE PORT IS ASKED FOR, NEVER CHOSEN (join-pr-at-the-cosign.test.mjs § the
 // port). This was 43947, "checked against every port literal in test/", and
@@ -129,7 +129,7 @@ const git = (dir, ...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "u
 
 // A card is a house name, or `{ house, github }` for one whose github: is not the fixture human's.
 function town({ households = HOUSEHOLDS(), pins = PINS(), cards = { wildcat: "house-of-many-doors" }, ledger = null } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "settle-join-"));
+  const dir = tempDir("settle-join-");
   mkdirSync(join(dir, "tools"), { recursive: true });
   writeFileSync(join(dir, REGISTRY_PATH), JSON.stringify(households, null, 2) + "\n");
   writeFileSync(join(dir, PINS_PATH), JSON.stringify(pins, null, 2) + "\n");
@@ -448,7 +448,7 @@ test("the pass settles every merged join it finds, and a second run is a no-op",
   cards = { vesper: card("vesper", "house-of-many-doors") };
   users = { "commander-and-chief": 334016343 };
   const clone = town({ cards: { wildcat: "house-of-many-doors", vesper: "house-of-many-doors" } });
-  const cursorPath = join(mkdtempSync(join(tmpdir(), "settle-cursor-")), "cursor");
+  const cursorPath = join(tempDir("settle-cursor-"), "cursor");
 
   const first = await pass(clone, cursorPath);
   assert.deepEqual(first.out.settled, ["wildcat", "vesper"], first.lines.join("\n"));
@@ -477,7 +477,7 @@ test("a refusal is logged and passed; a GitHub failure holds the cursor for the 
   cards = {};                                   // the card read fails: GitHub's weather
   users = {};
   const clone = town({ cards: { wildcat: "house-of-many-doors", vesper: "house-of-many-doors" } });
-  const cursorPath = join(mkdtempSync(join(tmpdir(), "settle-cursor-")), "cursor");
+  const cursorPath = join(tempDir("settle-cursor-"), "cursor");
   const { out, lines } = await pass(clone, cursorPath);
   assert.deepEqual(out.refused, [3217], "the pen join from an account the house never listed is refused");
   assert.match(lines.join("\n"), /#3217 wildcat REFUSED — the house has never listed this account/);

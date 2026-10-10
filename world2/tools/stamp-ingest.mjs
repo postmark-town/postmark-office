@@ -80,7 +80,8 @@ import { pathToFileURL, fileURLToPath } from "node:url";
 
 import { assertSha } from "./law-ingest.mjs";   // the same --sha guard, not a twin of it
 import { deriveRoll, writeRoll } from "./roll-ingest.mjs";
-import { deriveEscrow, writeEscrow } from "./escrow-ingest.mjs";
+import { deriveEscrow, writeEscrow, keyEscrowRows } from "./escrow-ingest.mjs";
+import { liveHouseOfVia } from "../../src/household-deriver.mjs";
 
 export const TOWN_REPO_KEY = "town";            // projection_heads.repo for this pen
 
@@ -152,6 +153,16 @@ export async function writeStamps(client, { townSha, rows, rollRows, escrowRows 
   }
   await client.query("BEGIN");
   try {
+    // THE STORE WRITES THE HOUSE'S KEY (POS-457). Both derivations carry the
+    // town resolver's spellings; they are re-keyed here, in the one pen, through
+    // the deriver's spelling set read on this same client. A spelling no house
+    // claims stays as the town wrote it. Escrow keeps the town's spellings for
+    // the whole sha if a re-key would move any weight (keyEscrowRows).
+    const houseOf = await liveHouseOfVia(client);
+    rows = rows.map((r) => ({ ...r, household: r.household == null ? null : houseOf(r.household) }));
+    const escrow = keyEscrowRows(escrowRows, houseOf);
+    if (escrow.merged) console.error(`stamp-ingest: escrow at ${townSha.slice(0, 12)} keeps the town's spellings: re-keyed, the weights of ${escrow.merged.join(", ")} would move`);
+    escrowRows = escrow.rows;
     await client.query("DELETE FROM stamp_projection WHERE town_sha = $1", [townSha]);
     for (let i = 0; i < rows.length; i += CHUNK) {
       const slice = rows.slice(i, i + CHUNK);

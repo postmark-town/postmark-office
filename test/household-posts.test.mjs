@@ -32,17 +32,18 @@
 
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { copyTownTools } from "./helpers/town-tools.mjs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { installActsPen, uninstallActsPen, RECORD_ON } from "./acts-pen-stub.mjs";
 import { OFFICE_ROOT } from "./fixture-paths.mjs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 const REAL_TOWN = process.env.TOWN_CLONE ?? join(OFFICE_ROOT, "town-clone");
 const haveEngine = existsSync(join(REAL_TOWN, "tools", "world-stake.mjs")) && existsSync(join(REAL_TOWN, "tools", "stamp-mint.mjs"));
 
-const DIR = mkdtempSync(join(tmpdir(), "pm-household-posts-"));
+const DIR = tempDir("pm-household-posts-");
 after(() => { try { rmSync(DIR, { recursive: true, force: true, maxRetries: 5 }); } catch { /* Windows keeps a handle */ } });
 
 const H = 3_600_000;
@@ -54,7 +55,7 @@ const iso = (t) => new Date(t).toISOString();
 const TOWN = join(DIR, "town");
 mkdirSync(join(TOWN, "tools"), { recursive: true });
 mkdirSync(join(TOWN, "WHITE_PAGES"), { recursive: true });
-if (haveEngine) for (const f of ["world-stake.mjs", "stamp-mint.mjs"]) copyFileSync(join(REAL_TOWN, "tools", f), join(TOWN, "tools", f));
+if (haveEngine) copyTownTools(REAL_TOWN, TOWN);
 writeFileSync(join(TOWN, "WHITE_PAGES", "stamp-ledger.md"), [
   "# the stamp ledger", "",
   "- 2026-09-20 · mari → stake:world-mark/kai/observation-state · 5 · via: api",
@@ -234,10 +235,23 @@ test("6 · the doorstep segment deep-equals household { read: \"posts\" } at the
   const dbPath = join(DIR, "fixture.db");
   fixtureDb(dbPath).close();
   const db = new DatabaseSync(dbPath, { readOnly: true });
+  // the town index from a store seeded from this fixture, in this process, as a
+  // switched office reads it (POS-268); the record stays this file's stub
+  const { indexStore } = await import("./helpers/office-under-test.mjs");
+  const ix = await indexStore(dbPath, { db: "household_posts" });
+  const restore = await ix.useInProcess();
+  // THE CLOCK, PINNED TO THE FIXTURE'S WEEK. Both reads keep a week back from
+  // the real clock and neither takes one from its caller, so this test read
+  // the fixture's posts only until 2026-10-07 14:00Z, a week after office-hours
+  // ended, and was red after (POS-419). Every other test here passes NOW.
+  const realNow = Date.now;
+  Date.now = () => NOW;
   try {
+    const { storeIndexPooled, townIndexReads } = await import("../src/town-index-store.mjs");
     const meta = { as_of: "fixturesha000000000000000000000000000000" };
     const ctx = { db, key: null, meta, asOf: meta.as_of, canWrite: false, clone: null, pen: null, odb: null, dbPath: null };
-    const d = await doorstepBundle("wright", ctx);
+    // the doorstep is handed the store's index, as server.mjs hands it a switched door's
+    const d = await doorstepBundle("wright", { ...ctx, ix: townIndexReads() ? storeIndexPooled(null) : null });
     assert.ok(d.segments.includes("posts"), "the manifest does not name the segment");
     const { serves, args, ...segment } = d.posts;
     assert.equal(serves, "household.posts");
@@ -246,6 +260,9 @@ test("6 · the doorstep segment deep-equals household { read: \"posts\" } at the
     const asked = await householdApex({ read: "posts", ...args }, null, ctx);
     assert.deepEqual(segment, asked, "the segment drifted from the read its `serves` names");
   } finally {
+    Date.now = realNow;
+    await restore();
+    await ix.stop();
     db.close();
   }
 });

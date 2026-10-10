@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { fixtureDb } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
+import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 
 // The town index this file's offices read: a store seeded from each fixture
 // office.db (POS-268, office-under-test.mjs). Stopped when the file is done.
@@ -34,10 +35,9 @@ before(async () => {
   const dbPath = join(tmp, "fixture.db");
   fixtureDb(dbPath).close();
   const IX_ENV = await storeFor(dbPath);
-  ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--db", dbPath], {
+  ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--db", dbPath, "--oauth-db", seedStaticKeys(join(tmp, "oauth.db"), `${KEY}=keemin:wright`)], {
     env: {
-      ...process.env, ...IX_ENV,
-      OFFICE_KEYS: `${KEY}=keemin:wright`,
+      ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV,
       OFFICE_BOUNCER_KEYLESS_PER_MINUTE: "3",
       OFFICE_BOUNCER_KEYLESS_BURST: "3",
       TOWN_CLONE: join(tmp, "no-clone-here"),
@@ -82,7 +82,8 @@ test("keyless GETs are rate-limited with the exact 429 shape; a key has its own 
   for (let i = 0; i < 4; i++) last = await fetch(`${BASE}/town`);
   assert.equal(last.status, 429);
   const body = await last.json();
-  assert.deepEqual(Object.keys(body), ["error", "defect", "retry_after_s"]);
+  // `refused` joined 2026-10-06 (POS-427, Darko's option B): every refusal says so, last.
+  assert.deepEqual(Object.keys(body), ["error", "defect", "retry_after_s", "refused"]);
   assert.equal(body.error, "rate");
   assert.ok(body.retry_after_s >= 1);
   assert.equal(last.headers.get("retry-after"), String(body.retry_after_s));

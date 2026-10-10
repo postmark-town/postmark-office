@@ -18,6 +18,7 @@ import { fixtureDb } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
 import { createLoopLag, LAG_ALARM_MS, MINUTE_MS, stateFileFor } from "../src/loop-lag.mjs";
+import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 
 // The town index this file's offices read: a store seeded from each fixture
 // office.db (POS-268, office-under-test.mjs). Stopped when the file is done.
@@ -140,8 +141,8 @@ before(async () => {
   fixtureDb(dbPath).close();
   const IX_ENV = await storeFor(dbPath);
   writeFileSync(join(tmp, "release.json"), JSON.stringify({ tag: "t", sha: "s", target: "dev" }));
-  ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--db", dbPath, "--release-root", tmp], {
-    env: { ...process.env, ...IX_ENV, OFFICE_KEYS: "loop-lag-test-key=keemin:wright", TOWN_CLONE: join(tmp, "no-clone"), WORLD_CLONE: join(tmp, "no-world") },
+  ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--db", dbPath, "--release-root", tmp, "--oauth-db", seedStaticKeys(join(tmp, "oauth.db"), "loop-lag-test-key=keemin:wright")], {
+    env: { ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV, TOWN_CLONE: join(tmp, "no-clone"), WORLD_CLONE: join(tmp, "no-world") },
     stdio: ["ignore", "pipe", "pipe"],
   })));
 });

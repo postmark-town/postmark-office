@@ -53,7 +53,7 @@ import { dirname, join } from "node:path";
 // Steps 6 and 7's law, extracted the day the REVIEW lane became a second tool
 // holding the same `clearing_job` pen (`review-rule.mjs`). One definition, two
 // callers — see materialize.mjs's header for why it is not a copy.
-import { materializeClaims, recomputeStanding, slugOf, ownerHouseholdFor, liveHouseOfVia } from "./materialize.mjs";
+import { materializeClaims, recomputeStanding, slugOf, ownerHouseholdFor, liveHouseOfVia, houseOrRefusal, unfileableCheckOf } from "./materialize.mjs";
 // The escrow PRESENCE gate — the sweep's own rule, ported to the candle before
 // G1 deletes the path it lives on. See step 5.5. Step 3's sufficiency rule
 // lives there too (POS-411), reading the same escrow.
@@ -61,9 +61,19 @@ import { escrowAbsentAmong, escrowPresenceAt, escrowLines, unbackedStakesAmong }
 // THE PARCEL CAP — the sweep's own gate, ported to the candle before the sweep
 // has to be the one to say no. The law itself is the WORLD's and is imported
 // from a checkout, never copied. See step 5.6.
-import { parcelCapLawAt, parcelCapRefusals, parcelCapLines, heldParcelsByCred, credOf, soloCountedAt, countingSolo } from "./parcel-cap.mjs";
-import { houseRowsVia, resolveHouse } from "../../src/household-deriver.mjs";
+import { limitsAtClearing } from "./parcel-cap.mjs";
 import { computeStanding, gistContainment } from "./standing.mjs";
+// THE SEAL (POS-357, R1): a pure SQL copy of the World this window leaves, in
+// this transaction. The module imports nothing; see its header and step 8.
+import { sealSnapshot } from "./world-snapshot-seal.mjs";
+// WHETHER STANCES COUNT AT THE SETTLEMENT THIS CROSSING MAKES (POS-364, 072): decided here, recorded by the seal. See step 8.
+import { stancesAtSeal, lawCarriesRulingB } from "../../src/world-settlement.mjs";
+// THE CANDLE'S LOCK (POS-404): the clearing and the claim door take turns. Taken right after BEGIN.
+import { CLEARING_TAKES_THE_CANDLE } from "./candle-lock.mjs";
+// THE CARRY (POS-441): a move carries the mover's household's marks inside it,
+// written here as claims of their own. See step 5.7 and step 6.
+import { carryPlan, carrySentence } from "./carry.mjs";
+import { boxOf } from "./seed-import.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const arg = (n) => { const i = process.argv.indexOf(n); return i === -1 ? null : process.argv[i + 1]; };
@@ -104,6 +114,11 @@ const OVERLAP = "a.bbox && b.bbox";
 
 try {
   await q("BEGIN");
+
+  // THE CANDLE'S LOCK, before anything else (POS-404, candle-lock.mjs): a claim
+  // door mid-filing finishes first and its claim is in the pending read below;
+  // a door that arrives now waits, then files into the window this one opens.
+  await q(CLEARING_TAKES_THE_CANDLE);
 
   // The window, locked against a concurrent close (one clearing at a time).
   const { rows: [win] } = await q(
@@ -185,11 +200,99 @@ try {
   const superseded = new Set(pending.filter((c) => c.supersedes).map((c) => String(c.supersedes)));
   for (const c of pending) {
     if (superseded.has(String(c.id)) && !outcomes.has(c.id))
-      decide(c.id, "refused", "superseded: a later claim in this window amends this one");
+      decide(c.id, "refused", "superseded: a later claim in this candle amends this one");
   }
   // The other half of the amend chain — a claim superseding a mark that locked in
   // an EARLIER window — is resolved above, in step 1, where the collision it looks
   // like is decided. Both halves read the same column; only the scope differs.
+
+  // 2.5 · THE PARCEL LIMITS, DECIDED AT THE CLEARING (POS-364; Darko RULED A,
+  //     2026-10-08: "agree that over limit parcel gets detected asap"). A parcel
+  //     claim over its household's cap (the-town/claim-cap) or a resident's
+  //     second parcel (the-town/one-per-resident), judged in the order the
+  //     settlement judges it (first claim: marks-fold § claimInstant, world#166),
+  //     is decided here as OPPOSED, citing its law, and never materializes. So
+  //     it holds no ground: step 4's overlap, the 016 exclusion constraint and
+  //     step 5.7's carry never see it, and another household's parcel on the
+  //     same ground locks in the same window. The door still accepts every act
+  //     (R11); the settlement's limit pass stays the backstop for anything this
+  //     step could not judge (no world checkout, an unreadable law).
+  //
+  //     AHEAD OF THE GEOMETRY, which is the point of the ruling, and AFTER
+  //     steps 1-2 (a duplicate or a superseded claim is not a claim on ground).
+  //     The cost, named: a sibling claim refused LATER (step 3's escrow, step
+  //     4's overlap, step 5's counterclaim, step 5.4's house, step 5.5's commons
+  //     stake, step 6's unfileable) has already counted against its household's
+  //     headroom, so a claim judged after it can be opposed that would have fit.
+  //     A refused claim can be filed again; ground held by an over-limit parcel
+  //     could not. ACCEPTED BY RULING: Darko, on POS-364 (2026-10-08), keeps the
+  //     limits counted ahead of the ground checks with this cost named.
+  //
+  //     ONE RULE, NOT TWO (Wright's review of the A build). The clearing does not
+  //     count: it asks the world's own fold (`parcel-cap.mjs § limitsAtClearing`)
+  //     on the inputs the settlement will fold, read by the same helpers. The
+  //     law at the store's pinned `projection_heads['world-law']` (the seal's
+  //     law_sha, never the checkout's HEAD), each parcel dated by its first claim
+  //     (`world-snapshot.mjs § firstClaimedBySlug`, a revive included, a claim
+  //     with no date by its submitted_at), and the households grouped as the
+  //     settlement groups them (`§ foldHouseholds`).
+  //
+  //     The history below is why the count is asked at the candle at all.
+  //
+  //     THE INSTANCE: window 191 cleared and LOCKED `mari/marigold-house-parcel`
+  //     at 2026-09-15T17:45:46Z. The sweep, three minutes later, refused it —
+  //     the cap counts per credential household, hers resolves to the founder's,
+  //     and that one held five. The store stood the parcel while canon lacked
+  //     it, and every crossing since has carried it forward as canon-absent
+  //     ("CARRIED 1 canon-absent mark(s) from earlier window(s):
+  //     mari/marigold-house-parcel", windows 192, 193, 194 on the box).
+  //
+  //     Two gates, two answers. The candle admitted what the sweep would refuse
+  //     because the other steps (1-5.5) ask about slugs, supersession, escrow and
+  //     geometry, and none of them counts a household's parcels.
+  //
+  //     THE SWEEP'S OWN CHECK IS UNTOUCHED. It stays as the gate of last resort:
+  //     this side reads the store and the sweep reads the tree, and the day they
+  //     disagree the conservative one is the one that should win.
+  //
+  //     AND IT DEGRADES LOUDLY RATHER THAN EITHER WAY SILENTLY — the same shape
+  //     step 5.5 below already argues for itself. Without `--world-repo` (or with
+  //     a checkout that cannot answer) the cap is reported UNCHECKED and parcel
+  //     claims lock as they did before this step existed. It is not read as "the
+  //     cap is 0", which would refuse every parcel in the town on a missing
+  //     argument, and it is not silent: the crossing prints it and the window's
+  //     receipt carries it. (If the conductor would rather the crossing REFUSE
+  //     while it cannot check, that is this block's `unchecked` arm and one throw.)
+  let capSeen = null;
+  {
+    const parcels = pending.filter((c) => !outcomes.has(c.id) && c.class === "parcel" && slugOf(c));
+    if (parcels.length) {
+      const verdict = await limitsAtClearing({ query: q }, {
+        worldRepo, townRepo,
+        candidates: parcels.map((c) => ({ id: c.id, slug: slugOf(c), kind: c.class, owner: c.claimant, body: c.body, geometry: c.geometry, data: c.data, submitted_at: c.submitted_at })),
+      });
+      if (!verdict.checked) {
+        capSeen = { checked: false, reason: verdict.reason, ...(verdict.limitsUnread ? { limits_unread: verdict.reason } : {}), claims: parcels.map((c) => slugOf(c)) };
+        if (verdict.limitsUnread) console.error(`  ⚠ LIMITS UNREAD: ${parcels.length} parcel claim(s) NOT JUDGED — ${verdict.reason}`);
+        else console.log(`  ⚑ parcel limits: ${parcels.length} parcel claim(s) NOT JUDGED here — ${verdict.reason} (the settlement's limit pass is the backstop)`);
+      } else {
+        // OPPOSED, CITING THE LAW. The claim's `refusal_check` is the outcome a
+        // resident reads ("refused at candle N: opposed: the-town/claim-cap: …"),
+        // so it names the limit and the law mark that holds it.
+        capSeen = {
+          checked: true, cap: verdict.cap, law_date: verdict.lawDate, world_sha: verdict.lawSha, households: verdict.householdsSource,
+          ...(verdict.householdsFallback ? { households_fallback: verdict.householdsFallback } : {}),
+          over_limit: verdict.opposed.map((r) => ({ slug: r.slug, law: r.law })),
+          applied_by: "this clearing: opposed, never materialized (Darko, 2026-10-08)",
+          judged: verdict.judged,
+        };
+        for (const r of verdict.opposed) decide(r.id, "refused", r.check);
+        if (verdict.householdsFallback) console.error(`  ⚠ parcel limits: the household cap was judged on a fallback — ${verdict.householdsFallback}`);
+        if (verdict.opposed.length)
+          console.log(`  ⚑ parcel limits: opposed ${verdict.opposed.length} claim(s) at this clearing (law ${String(verdict.lawSha).slice(0, 8)}): ${verdict.opposed.map((r) => `${r.slug} (${r.law})`).join(", ")}`);
+      }
+    }
+  }
 
   // 3 · escrow sufficiency at town_sha (the pinned candle read).
   //     A STAKE IS JUDGED FROM ITS OWN RECORD (POS-411): the stamps open in
@@ -247,6 +350,29 @@ try {
         decide(b.id, "held_review", `counterclaim: collides with ${a.id} — a mind rules (census D2)`);
       }
     }
+  }
+
+  // 5.4 · THE CLAIMANT'S HOUSE, asked once per claim, before anything asks it
+  //     for a verdict (POS-356, ruling R5: "a refusal cannot hold anyone's
+  //     marks"). On 2026-10-04 gabo was not on the store's roll, the first
+  //     `ownerHouseholdFor` (step 5.5's, below) threw NO_SUCH_HOUSE, and window
+  //     228 rolled back with ten lawful claims in it. A claimant the roll does not
+  //     name refuses that claim, in the join door's words; a roll that cannot be
+  //     read at all (NO_RECORD, or a failed read) still throws and refuses the
+  //     window, because then nobody's claim can be judged.
+  //
+  //     AFTER STEP 5, deliberately: a claim already refused or held is not asked,
+  //     so this changes no outcome the gates above already decided.
+  //
+  //     A claim refused here is refused ALONE, so it goes on the window
+  //     receipt's `unfileable` list and the console line, like step 6's (the
+  //     10-04 case is the one that list exists for).
+  const unfiled = [];
+  const refuseAlone = (c, check) => { decide(c.id, "refused", check); unfiled.push({ slug: slugOf(c), check }); };
+  for (const c of pending) {
+    if (outcomes.has(c.id) || !slugOf(c)) continue;
+    const { check } = await houseOrRefusal(q, c.claimant);
+    if (check) refuseAlone(c, check);
   }
 
   // 5.5 · A COMMONS MARK NEEDS SOMEBODY'S STAMPS BEHIND IT (postmark#2594's
@@ -339,92 +465,61 @@ try {
     }
   }
 
-  // 5.6 · THE PARCEL CLAIM CAP — the sweep's gate, asked at the close (POS-98).
+  // 5.7 · THE CARRY (POS-441, ruled by Darko 2026-10-07: "That should just always
+  //     be the default rule"). An amend that MOVES a standing mark carries the
+  //     marks inside it that belong to the same household — they keep their place
+  //     relative to it — and another household's marks never move. Decided here,
+  //     against the store's pre-state, because the store composes no frames: a
+  //     rider moves only if this transaction writes it (carry.mjs § why the
+  //     store has to write it). It replaces the move guard, which refused every
+  //     such move outright.
   //
-  //     THE INSTANCE: window 191 cleared and LOCKED `mari/marigold-house-parcel`
-  //     at 2026-09-15T17:45:46Z. The sweep, three minutes later, refused it —
-  //     the cap counts per credential household, hers resolves to the founder's,
-  //     and that one held five. The store stood the parcel while canon lacked
-  //     it, and every crossing since has carried it forward as canon-absent
-  //     ("CARRIED 1 canon-absent mark(s) from earlier window(s):
-  //     mari/marigold-house-parcel", windows 192, 193, 194 on the box).
+  //     LAST OF THE GATES, deliberately, for 5.6's reason: a mover refused above
+  //     carries nothing, and its riders must not be judged on its behalf.
   //
-  //     Two gates, two answers. The candle admitted what the sweep would refuse
-  //     because steps 1-5.5 above ask about slugs, supersession, escrow and
-  //     geometry, and none of them counts a household's parcels.
-  //
-  //     LAST OF THE GATES, deliberately. A claim already refused for overlap or
-  //     held for a counterclaim must not consume a household's headroom — it is
-  //     not getting ground this window either way, and spending the cap on it
-  //     would refuse a sibling claim that should have stood.
-  //
-  //     THE SWEEP'S OWN CHECK IS UNTOUCHED. It stays as the gate of last resort:
-  //     this side reads the store and the sweep reads the tree, and the day they
-  //     disagree the conservative one is the one that should win.
-  //
-  //     AND IT DEGRADES LOUDLY RATHER THAN EITHER WAY SILENTLY — the same shape
-  //     step 5.5 above already argues for itself. Without `--world-repo` (or with
-  //     a checkout that cannot answer) the cap is reported UNCHECKED and parcel
-  //     claims lock as they did before this step existed. It is not read as "the
-  //     cap is 0", which would refuse every parcel in the town on a missing
-  //     argument, and it is not silent: the crossing prints it and the window's
-  //     receipt carries it. (If the conductor would rather the crossing REFUSE
-  //     while it cannot check, that is this block's `unchecked` arm and one throw.)
-  let capSeen = null;
+  //     ONE ACT, ALL OR NOTHING. A rider that cannot move refuses the whole move,
+  //     named (Q4): one with its own claim waiting in this window, one with no
+  //     position, one whose owner the roll does not name (materialize would throw
+  //     and take the window down), and a carried parcel that would land on another
+  //     standing parcel or a parcel claim locking now (the exclusion constraint
+  //     would do the same).
+  const carries = new Map();   // mover claim id -> its plan (carry.mjs § carryPlan)
   {
-    const parcels = pending.filter((c) => !outcomes.has(c.id) && c.class === "parcel" && slugOf(c));
-    if (parcels.length) {
-      let law = null;
-      let why = null;
-      if (!worldRepo) why = "no --world-repo was given, so the world's cap could not be read";
-      else {
-        try { law = await parcelCapLawAt(worldRepo); }
-        catch (err) { why = err.message; }
-      }
-      if (!law) {
-        capSeen = { checked: false, reason: why, claims: parcels.map((c) => slugOf(c)) };
-        console.log(`  ⚑ parcel cap: ${parcels.length} parcel claim(s) LOCKED UNCHECKED — ${why}`);
-      } else {
-        // ONE HOUSE, HOWEVER ITS ROWS ARE SPELLED (POS-160 RULING 4). The store
-        // never re-spells a row, so both sides of this gate fold through the
-        // deriver on the way in: the STANDING counts in `heldParcelsByCred` and
-        // each CANDIDATE's `cred` below, by the same rule (`credOf`). Folding
-        // one side only would make every lookup miss and refuse nothing.
-        const houseRows = await houseRowsVia({ query: q });
-        const walked = (hh) => resolveHouse(hh, houseRows.registry, houseRows.pins).slug;
-        // POS-212: `solo:` rows COUNT only once the adoption batch has run on
-        // this store (the `solo-counted` act) — never before. See parcel-cap.mjs
-        // § THE COUNT AFTER ADOPTION.
-        const soloCounted = await soloCountedAt(q);
-        const resolve = soloCounted ? countingSolo(walked, houseRows.registry, houseRows.pins) : walked;
-        const heldByCred = await heldParcelsByCred(q, { resolve });
-        const candidates = [];
-        for (const c of parcels) {
-          candidates.push({
-            id: c.id, slug: slugOf(c),
-            cred: credOf(await ownerHouseholdFor(q, c.claimant), resolve),
-            // The RECORD's own date, which is what the fold compares against the
-            // law date — never `submitted_at`. The drain queue dates a parcel at
-            // seating and the two are different facts; the exceptions map exists
-            // precisely because they can disagree.
-            date: c.data?.date ?? null,
-            // An amendment of a parcel the household already holds is a
-            // relocation, not a second claim (POS-88, and marks-fold.mjs's own
-            // `!mk._replacing`). Step 1 above already resolved which claims those
-            // are, into `amends`.
-            amending: amends.has(String(c.id)),
-          });
+    const movers = pending
+      .filter((c) => !outcomes.has(c.id) && amends.has(String(c.id)) && (c.class === "sited" || c.class === "parcel") && c.geometry?.at)
+      .map((c) => ({ claimId: String(c.id), slug: slugOf(c), next: c.geometry }));
+    if (movers.length) {
+      const { rows: standingRows } = await q(
+        `SELECT id::text, slug, kind, owner, household, geometry, parent::text, data, body
+           FROM marks WHERE status = 'standing'`);
+      const waiting = new Set(pending.map((c) => slugOf(c)).filter(Boolean));
+      const plans = carryPlan({ rows: standingRows, movers, waiting, houseOf: await liveHouseOfVia(q) });
+      const moving = new Set([...plans.values()].flatMap((p) => [p.slug, ...p.riders.map((r) => r.slug)]));
+      const notLocking = [...outcomes.keys()].map(String);
+      for (const [claimId, plan] of plans) {
+        const stuck = [...plan.stuck];
+        for (const r of plan.riders) {
+          try { await ownerHouseholdFor(q, r.owner); }
+          catch { stuck.push({ slug: r.slug, why: `its owner ${r.owner} is not on the town's roll` }); }
+          if (r.row.kind !== "parcel" || !r.geometry.extent) continue;
+          const box = boxOf(r.geometry.at, r.geometry.extent);
+          const { rows: onStanding } = await q(
+            `SELECT slug FROM marks WHERE kind = 'parcel' AND status = 'standing' AND bbox && $1::box AND NOT (slug = ANY($2)) LIMIT 1`,
+            [box, [...moving]]);
+          const { rows: onClaim } = await q(
+            `SELECT slug FROM claims WHERE window_id = $1 AND status = 'pending' AND class = 'parcel' AND bbox && $2::box
+               AND id::text <> $3 AND NOT (id::text = ANY($4)) LIMIT 1`,
+            [windowId, box, claimId, notLocking]);
+          const hit = onStanding[0]?.slug ?? onClaim[0]?.slug;
+          if (hit) stuck.push({ slug: r.slug, why: `carried, it would overlap the parcel "${hit}"` });
         }
-        const verdict = parcelCapRefusals(candidates, { heldByCred, law });
-        capSeen = {
-          checked: true, cap: law.cap, law_date: law.lawDate, world_sha: law.sha, solo_counted: soloCounted,
-          refused: verdict.refused.map((r) => ({ slug: r.slug, held: r.held })),
-          excepted: verdict.admitted.filter((a) => a.excepted).map((a) => a.slug),
-          judged: candidates.length,
-        };
-        for (const r of verdict.refused) decide(r.id, "refused", r.check);
-        for (const line of parcelCapLines(verdict, law)) console.log(`  ⚑ ${line}`);
+        if (stuck.length) {
+          decide(claimId, "refused", `carry: a move carries all of its household's marks inside it or none, and ${stuck.map((s) => `${s.slug} cannot move (${s.why})`).join("; ")}`);
+          continue;
+        }
+        carries.set(claimId, plan);
       }
+      for (const plan of carries.values()) console.log(`  ⚑ carry: ${carrySentence(plan)}`);
     }
   }
 
@@ -432,21 +527,109 @@ try {
   //     itself is `materialize.mjs`'s — the same code the REVIEW lane's ruling
   //     runs, so a mark that arrives by a mind's ruling and one that arrives by
   //     the candle are the same row shape by construction.
+  //
+  //     ONE CLAIM THAT CANNOT BE FILED REFUSES ITSELF (POS-356, R5). Each claim is
+  //     filed under its own savepoint (materialize.mjs § ONE BAD CLAIM), and one
+  //     the store says no to is decided `refused` with its `unfileable` sentence
+  //     while the rest lock. So the docket's statuses are written AFTER the
+  //     filing, never before it: a claim written `locked` with no mark is the
+  //     state fold-delta's docket would carry as a lock that never landed.
+  //
+  //     A MOVER WITH A CARRY PLAN IS NOT FILED HERE: it is filed at 6.1 with its
+  //     riders, as one unit (Darko, 2026-10-08).
+  const materialize = pending.filter((c) => (outcomes.get(c.id)?.status ?? "locked") === "locked");
+  await materializeClaims(q, {
+    claims: materialize.filter((c) => !carries.has(String(c.id))), amends, revives, windowId, label: `window ${windowId}`,
+    refuseEach: refuseAlone,
+  });
+
+  // 6.1 · THE RIDERS, in the same transaction as their mover (POS-441). Each is
+  //     its own locked claim superseding its standing mark — the store's amend
+  //     law, "every version stays in the log: each is its own claim row" — so
+  //     materialize writes it the one lawful way. The claim keeps the rider's own
+  //     owner and HOUSE (a carry moves a mark; it never changes whose it is),
+  //     spelled as every new row is since the law date: the deriver's
+  //     `hh:<slug>` for that owner, never the standing row's old `gh:`/`solo:`
+  //     copied forward (POS-457),
+  //     and names the act that carried it in `data._carried_by`: the mover's
+  //     claim id. The file bookkeeping a seeded row carries (`_fileAt`,
+  //     `_origin`) is dropped, as any claim-made row's is: the numbers are world
+  //     numbers now, and the write-down frames them (store-writedown.mjs).
+  //
+  //     ONE MOVE, ONE UNIT (POS-356, ruled by Darko 2026-10-08). The mover's
+  //     filing, its riders' claim rows and their filing share one savepoint. If
+  //     any of it is refused (a constraint, a cycle, a revive no longer retired),
+  //     the savepoint is rolled back: no rider claim row survives, every rider
+  //     stays where it stands, and the mover alone is refused `unfileable`,
+  //     naming the rider and the constraint. Any other error refuses the window.
+  //     The savepoint's name is its own, because the per-claim one nests inside.
+  const carriedMoves = [];
+  for (const c of materialize) {
+    const plan = carries.get(String(c.id));
+    if (!plan) continue;
+    let failed = null;
+    const fail = (x, check) => { failed ??= { x, check }; };
+    await q("SAVEPOINT file_one_move");
+    await materializeClaims(q, { claims: [c], amends, revives, windowId, label: `window ${windowId}`, refuseEach: fail });
+    const riderClaims = [], riderAmends = new Map();
+    for (const r of failed ? [] : plan.riders) {
+      const { _fileAt, _origin, ...data } = r.row.data ?? {};
+      // The rider's house, resolved BEFORE the insert's try: a NO_SUCH_HOUSE
+      // carries no SQLSTATE, so inside the try it would rethrow and refuse the
+      // whole window. A rider the roll does not name refuses its move, alone
+      // (Darko, 2026-10-08: a mover and its riders are one unit). 5.7 checks this
+      // first today; the ruling holds here too, whatever runs before it.
+      const house = await houseOrRefusal(q, r.row.owner);
+      if (house.check) { fail({ slug: r.slug }, house.check); break; }
+      try {
+        const { rows: [rc] } = await q(
+          `INSERT INTO claims (window_id, slug, class, claimant, household, status, decided_at, body, geometry, bbox, stake, data, parent, supersedes)
+           VALUES ($1, $2, $3, $4, $5, 'locked', now(), $6, $7, $8, 0, $9, $10, $11)
+           RETURNING *`,
+          [windowId, r.slug, r.row.kind, r.row.owner, house.household, r.row.body ?? null, JSON.stringify(r.geometry),
+            r.geometry.extent ? boxOf(r.geometry.at, r.geometry.extent) : null,
+            JSON.stringify({ ...data, _carried_by: String(c.id) }), r.row.parent ?? null, r.row.id]);
+        riderClaims.push(rc);
+        riderAmends.set(String(rc.id), { id: r.row.id });
+      } catch (err) {
+        const check = unfileableCheckOf(err, { slug: r.slug });
+        if (!check) throw err;
+        fail({ slug: r.slug }, check);
+        break;
+      }
+    }
+    if (!failed && riderClaims.length)
+      await materializeClaims(q, { claims: riderClaims, amends: riderAmends, windowId, label: `window ${windowId} carry of ${plan.slug}`, refuseEach: fail });
+    if (failed) {
+      await q("ROLLBACK TO SAVEPOINT file_one_move");
+      await q("RELEASE SAVEPOINT file_one_move");
+      const who = slugOf(failed.x);
+      const why = failed.check.replace(/^unfileable: /, "").replace(" Nothing else waited on it.", "");
+      refuseAlone(c, who === plan.slug ? failed.check : `unfileable: the move of ${plan.slug} couldn't carry ${who}: ${why}`);
+      continue;
+    }
+    await q("RELEASE SAVEPOINT file_one_move");
+    carriedMoves.push({
+      claim: String(c.id), slug: plan.slug, dx: plan.dx, dy: plan.dy,
+      carried: plan.riders.map((r) => ({ slug: r.slug, from: r.from, to: r.to })),
+      stayed: plan.stayed,
+      sentence: carrySentence(plan),
+    });
+  }
+  for (const u of unfiled) console.log(`  ⚑ refused alone: ${u.slug} — ${u.check}`);
+
+  // The docket's statuses, written once every claim and every move has settled.
   const sixCount = { locked: 0, refused: 0, held_review: 0, retracted_before_close: 0, pending_carried: 0 };
-  const materialize = [];
   for (const c of pending) {
     const o = outcomes.get(c.id) ?? { status: "locked", refusal_check: null };
     await q("UPDATE claims SET status = $2, refusal_check = $3, decided_at = now() WHERE id = $1",
       [c.id, o.status, o.refusal_check]);
     sixCount[o.status === "locked" ? "locked" : o.status === "held_review" ? "held_review" : "refused"] += 1;
-    if (o.status !== "locked") continue;
-    materialize.push(c);
   }
 
-  await materializeClaims(q, { claims: materialize, amends, revives, windowId, label: `window ${windowId}` });
   // What each revive overwrote, on the window's own record: the row now says what
   // is true today, and this is where its retirement stays readable.
-  const revived = materialize.filter((c) => revives.has(String(c.id))).map((c) => {
+  const revived = materialize.filter((c) => revives.has(String(c.id)) && outcomes.get(c.id)?.status !== "refused").map((c) => {
     const was = revives.get(String(c.id));
     return { slug: slugOf(c), id: was.id, retired_window: was.retired_window, locked_window_before: was.locked_window };
   });
@@ -490,6 +673,38 @@ try {
   const { standing, moved, notes, containment: containmentSeen } = await recomputeStanding(q);
   for (const n of notes) console.log(`  ⚑ standing: ${n}`);
 
+  // 8 · THE SEAL — the World this window leaves, copied into the store's
+  //     snapshot tables in THIS transaction (054_world_snapshots.sql).
+  //
+  //     RULED (Darko, 2026-10-04, POS-337 R1): "Each 12-hour clearing writes a
+  //     content-addressed snapshot of every standing mark in the same transaction
+  //     that writes the marks, so the two can never disagree." And ("Agreed on
+  //     2"): the step is a PURE SQL COPY of the rows the clearing just wrote. No
+  //     engine, no fold, no files; the computed World is built outside, later.
+  //
+  //     AFTER STEP 7, because step 7 is the window's last write to `marks` (it
+  //     moves `data.tier`, which the fold reads), so the copy is of the register
+  //     as the window leaves it. A failed seal throws like any other step and the
+  //     window rolls back whole: a clearing without its snapshot does not happen.
+  //
+  //     AND THE HOUSEHOLD REGISTER BESIDE IT (POS-410, 064; Darko 2026-10-05:
+  //     the snapshot keeps the atomic upstream sources). The register rows as
+  //     they stand at the seal, so a past World folds with the past's houses.
+  //
+  //     AND WHETHER STANCES COUNT AT IT (POS-364, 072; Darko 2026-10-09, the
+  //     conservative cutover; Wright: decide once, at the seal). The cutover
+  //     this job holds (TOWN_STANCE_CUTOVER, from its own unit's env) against
+  //     the settlement this crossing makes, recorded on the header and covered
+  //     by its digest. Every reader reads the record; nothing recomputes it.
+  const stances = await stancesAtSeal({ query: q }, { env: process.env });
+  const sealed = await sealSnapshot(q, { windowId, stances });
+  console.log(`  ⚑ snapshot: ${sealed.marks} standing mark(s), ${sealed.new_versions} new version(s), register ${sealed.register_rows} row(s) (${sealed.new_register_versions} new), digest ${sealed.digest.slice(0, 12)}`);
+  // And whether the law it was sealed on carries ruling B (world#171): a cutover
+  // sealed on an older law returns every stance-opposed mark with its children,
+  // for good (DEPLOY.md § 072, step 0).
+  const b = lawCarriesRulingB(worldRepo, sealed.law_sha);
+  console.log(`  ⚑ stances: ${stances.counted ? "COUNTED" : "not counted"} at S${stances.settlement_inferred ?? "?"} (${stances.how}), cutover ${stances.cutover ?? "unset"}; law ${String(sealed.law_sha ?? "-").slice(0, 12)} ${b === true ? "carries ruling B" : b === false ? "does NOT carry ruling B (world#171)" : "unread for ruling B (no --world-repo, or the sha is not in it)"}`);
+
   // Close, pin, open the successor.
   //
   // `receipts` is REPLACED, so anything already written there has to be carried
@@ -517,6 +732,13 @@ try {
       // ground has to name the law-as-of it refused against.
       ...(capSeen ? { parcel_cap: capSeen } : {}),
       ...(revived.length ? { revived } : {}),
+      // The claims the store would not file, each refused alone (POS-356).
+      ...(unfiled.length ? { unfileable: unfiled } : {}),
+      // THE CARRY's own account (POS-441): each move, what it carried and what of
+      // other households' stayed — the one act, its riders named on the record.
+      ...(carriedMoves.length ? { carried: carriedMoves } : {}),
+      // The seal's own account: which snapshot this window wrote.
+      snapshot: { id: sealed.id, digest: sealed.digest, marks_digest: sealed.marks_digest, marks: sealed.marks, new_versions: sealed.new_versions, register_digest: sealed.register_digest, register_rows: sealed.register_rows },
       standing: {
         recomputed: standing.length, moved: moved.length,
         // Capped, because the receipt is evidence and not an export: the first

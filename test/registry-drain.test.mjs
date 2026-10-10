@@ -18,8 +18,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -28,6 +27,7 @@ import { rowsFromRegistry, renderRegistry } from "../src/registry-rows.mjs";
 import { loadRegistryRows } from "../src/registry-store.mjs";
 import { checkRegistry, drainRegistry, missingFromStore } from "../tools/registry-drain.mjs";
 import { REGISTRY_PATH, PINS_PATH } from "../src/residency.mjs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIX = join(HERE, "fixtures", "registry-2026-09-22");
@@ -57,7 +57,7 @@ function stubPool(rows = ROWS) {
 }
 
 function cloneWith(households, pins) {
-  const dir = mkdtempSync(join(tmpdir(), "pos187-"));
+  const dir = tempDir("pos187-");
   mkdirSync(join(dir, "tools"), { recursive: true });
   if (households !== null) writeFileSync(join(dir, REGISTRY_PATH), households);
   if (pins !== null) writeFileSync(join(dir, PINS_PATH), pins);

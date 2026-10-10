@@ -45,21 +45,27 @@ const DAY_MS = 24 * 60 * MINUTE_MS;
 const KEEP_MINUTES = 60;
 const SHOWN = 10; // stuck sessions written per minute; the count is always whole
 
-/** The role's sessions idle in a transaction for `stuckAfterS` seconds or more, and every session counted by state. */
+/**
+ * The role's sessions on this database idle in a transaction for `stuckAfterS` seconds or more,
+ * and every such session counted by state, on this database only. On a pool tree's shared test
+ * server (POS-479) another file's session of the same role is not this store's; on a cluster
+ * that holds more than one office's store (the box's dev and prod share one), it keeps each
+ * office's watch to its own sessions.
+ */
 export const STUCK_SQL = `
   SELECT pid, application_name, state,
          floor(EXTRACT(EPOCH FROM now() - state_change))::int AS idle_s,
          floor(EXTRACT(EPOCH FROM now() - xact_start))::int AS xact_s,
          left(query, 200) AS query
     FROM pg_stat_activity
-   WHERE usename = current_user AND pid <> pg_backend_pid()
+   WHERE usename = current_user AND datname = current_database() AND pid <> pg_backend_pid()
      AND state IN ('idle in transaction', 'idle in transaction (aborted)')
      AND now() - state_change >= make_interval(secs => $1)
    ORDER BY state_change`;
 export const STATES_SQL = `
   SELECT coalesce(state, 'unknown') AS state, count(*)::int AS n
     FROM pg_stat_activity
-   WHERE usename = current_user AND pid <> pg_backend_pid()
+   WHERE usename = current_user AND datname = current_database() AND pid <> pg_backend_pid()
    GROUP BY 1 ORDER BY 1`;
 
 /**

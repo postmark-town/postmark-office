@@ -68,6 +68,98 @@ import { soloHouseIndex, soloHouseOf, isSolo } from "../../src/solo-adoption.mjs
 export const PARCEL_CAP_CHECK = "parcel-cap";
 
 /**
+ * THE CLEARING'S OUTCOME FOR A PARCEL OVER A LIMIT (POS-364; Darko RULED A,
+ * 2026-10-08): `opposed: <the law mark>: <slug> — <the fold's sentence>`. The
+ * check name is `opposed`, because it is governance taking a claim away, not
+ * a gate refusing a malformed one; it names the law mark that holds the limit.
+ */
+export const OPPOSED_CHECK = "opposed";
+export const opposedCheck = (r) => `${OPPOSED_CHECK}: ${r.law}: ${r.slug} — ${r.error}`;
+
+/**
+ * THE CLEARING'S LIMITS, ASKED OF THE FOLD (POS-364; Darko RULED A, 2026-10-08;
+ * Wright's review of the A build: one rule, not two). The world's own engine,
+ * at the law the store pins (`projection_heads['world-law']`, which the seal
+ * stamps as the settlement's law_sha), folds every standing parcel with this
+ * window's parcel claims (an amend in place of the mark it moves), each dated by
+ * its FIRST claim and grouped into households exactly as the settlement's fold
+ * reads them. A claim the fold finds over a limit is opposed, citing the law its
+ * sentence names. Nothing here counts.
+ *
+ * NOT JUDGED (`checked: false`, with the reason) when there is no world
+ * checkout, the pinned law is not in it, or its engine predates the first-claim
+ * order (world#166): the settlement's limit pass is then the backstop, as it is
+ * for every limit the clearing could not see.
+ *
+ * `q` is `{ query }` under the clearing's pen. → `{ checked, reason?, opposed:
+ * [{ id, slug, law, error, check }], judged, cap, lawDate, lawSha, householdsSource }`.
+ */
+export async function limitsAtClearing(q, { worldRepo = null, townRepo = null, candidates = [] } = {}) {
+  if (!worldRepo) return { checked: false, reason: "no --world-repo was given, so the world's engine could not be asked", opposed: [] };
+  const { rows: [head] } = await q.query("SELECT sha FROM projection_heads WHERE repo = 'world-law'");
+  const lawSha = head?.sha ?? null;
+  if (!lawSha) return { checked: false, reason: "the store pins no world-law sha", opposed: [] };
+  let engine;
+  try {
+    const { materializeAtRef } = await import("../../src/world-branches.mjs");
+    engine = await import(pathToFileURL(join(materializeAtRef(worldRepo, lawSha, "tools"), "tools", "marks-fold.mjs")).href);
+  } catch (e) {
+    return { checked: false, reason: `the engine at the pinned law ${lawSha.slice(0, 12)} could not be read from ${worldRepo}: ${String(e?.message ?? e).slice(0, 160)}`, opposed: [] };
+  }
+  // LOUD (POS-364 delta review): the law pen pins forward only, from the newest
+  // blessing, so a pin older than world#166 means NO limit is judged here, and
+  // the settlement's pass needs the same engine, so it is no backstop either.
+  if (typeof engine.CLAIMED_AT_FIELD !== "string")
+    return { checked: false, limitsUnread: true, reason: `limits unread: the pinned law lacks the first-claim engine (law ${lawSha.slice(0, 12)} predates world#166), so this clearing judges no parcel limit and the settlement cannot apply one either`, opposed: [] };
+
+  const { marksFromRows } = await import("../../src/world2-fold.mjs");
+  const { withClaimedAt, foldHouseholds, registerRowsNow } = await import("../../src/world-snapshot.mjs");
+  const { limitOppositions, townAtSha } = await import("../../src/world-settlement.mjs");
+  const { rows: standing } = await q.query(
+    "SELECT id, slug, kind, owner, body, geometry, NULL::uuid AS parent, data FROM marks WHERE kind = 'parcel' AND status = 'standing'");
+  const bySlug = new Map(standing.map((r) => [r.slug, r]));
+  for (const c of candidates) bySlug.set(c.slug, { id: c.id, slug: c.slug, kind: c.kind, owner: c.owner, body: c.body, geometry: c.geometry, parent: null, data: c.data ?? {} });
+  const records = marksFromRows([...bySlug.values()], []);
+  await withClaimedAt(q, records, { pending: candidates });
+  // THE HOUSEHOLDS AT THE INGESTED TOWN SHA, the one the settlement seals and
+  // groups at (world-settlement.mjs § townAtSha), never the --town-repo HEAD.
+  const { rows: [townHead] } = await q.query("SELECT sha FROM projection_heads WHERE repo = 'town'");
+  let town = null, townNote = "";
+  if (townRepo && townHead?.sha) {
+    try {
+      town = townAtSha(townRepo, townHead.sha);
+    } catch (e) {
+      townNote = ` (the town at the ingested sha ${String(townHead.sha).slice(0, 12)} could not be read: ${String(e?.message ?? e).slice(0, 120)})`;
+    }
+  }
+  const grouped = await foldHouseholds(q, { lawSha, townRepo: town, registerRows: () => registerRowsNow(q) });
+  const households = grouped.households;
+  // The receipt names the sha the resolver actually ran at, read from that checkout.
+  const ranAt = town ? execFileSync("git", ["-C", town, "rev-parse", "HEAD"], { encoding: "utf8" }).trim() : null;
+  const householdsSource = (ranAt ? `${grouped.source}, town ${ranAt.slice(0, 12)}` : grouped.source) + townNote;
+  // THE FALLBACK NAMES ITSELF (Wright's review of #441). Without the town at the
+  // ingested sha the households are the printed roster at the law, or nobody's
+  // (every handle its own household). Either one can let a parcel over its
+  // household's cap lock here, so the verdict says so in a field of its own,
+  // beside the source. It does not refuse: the door and the clearing never
+  // refuse on governance grounds they cannot judge (R11), and the settlement,
+  // which groups by the register at its seal, is the backstop.
+  const householdsFallback = town ? null
+    : `${townRepo ? (townHead?.sha ? `the town at the ingested sha ${String(townHead.sha).slice(0, 12)} could not be read` : "the store pins no town sha") : "no --town-repo was given"}, `
+      + `so the households are ${households ? `the printed roster at law ${lawSha.slice(0, 12)}` : "unread and every handle is its own household"}: `
+      + "a parcel over its household's cap can lock at this clearing, and the settlement's limit pass is the backstop";
+  const state = engine.fold({ marks: records, terrain: null, stakes: [], households });
+  const bySlugCandidate = new Map(candidates.map((c) => [c.slug, c]));
+  const opposed = limitOppositions(state)
+    .filter((l) => bySlugCandidate.has(l.mark))
+    .map((l) => {
+      const r = { id: bySlugCandidate.get(l.mark).id, slug: l.mark, law: l.law, error: l.error };
+      return { ...r, check: opposedCheck(r) };
+    });
+  return { checked: true, opposed, judged: candidates.length, cap: engine.PARCEL_CLAIM_CAP, lawDate: engine.PARCEL_CAP_LAW_DATE, lawSha, householdsSource, ...(householdsFallback ? { householdsFallback } : {}) };
+}
+
+/**
  * The `<name>: <detail>` string a refused claim carries.
  *
  * The detail is the fold's own sentence, composed from the fold's own three
@@ -171,7 +263,7 @@ export function parcelCapRefusals(candidates, { heldByCred, law } = {}) {
     const postLaw = String(c?.date ?? "") > law.lawDate;
     const excepted = law.exceptions.has(c?.slug);
     if (!c?.amending && postLaw && n >= law.cap && !excepted) {
-      refused.push({ id: c.id, slug: c.slug, cred, held: n, check: parcelCapCheck(c.slug, n, law) });
+      refused.push({ id: c.id, slug: c.slug, cred, held: n, law: "the-town/claim-cap", check: parcelCapCheck(c.slug, n, law) });
       continue;
     }
     admitted.push({ id: c?.id, slug: c?.slug, cred, held: n, excepted, amending: !!c?.amending });

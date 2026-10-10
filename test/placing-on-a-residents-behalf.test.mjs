@@ -100,9 +100,11 @@ git("config", "user.name", "pos233 falsifier");
 git("add", "-A");
 git("commit", "-qm", "canon: reader holds a parcel, solace holds nothing");
 
-// THE TOWN'S PINS — the file `oauth.mjs § householdFor` reads a signed-in key's
-// household from. Solace's household is Ana's account; the placers share one.
-put(town, "tools/github-ids.json", JSON.stringify({
+// THE TOWN'S PINS — the record `oauth.mjs § householdFor` reads a signed-in
+// key's household from: the STORE's household_pins (POS-343), seeded into the
+// stub pen below, not a file in the clone. Solace's household is Ana's
+// account; the placers share one.
+const PINS = {
   solace: { login: "Ana-Login", id: 100 },
   reader: { login: "readerhouse", id: 9 },
   illuminator: { login: "keeminlee", id: 1 },
@@ -111,7 +113,7 @@ put(town, "tools/github-ids.json", JSON.stringify({
   stranger: { login: "strangerhouse", id: 77 },
   bird: { login: "bird-login", id: 55 },
   wren: { login: "wren-login", id: 56 },
-}));
+};
 
 process.env.WORLD_CLONE = repo;
 process.env.TOWN_CLONE = town;
@@ -128,7 +130,8 @@ const { installActsPen, uninstallActsPen, RECORD_ON } = await import("./acts-pen
 process.env.WORLD2_PG = RECORD_ON.WORLD2_PG;
 process.env.WORLD2_PG_URL = RECORD_ON.WORLD2_PG_URL;
 const claimsPen = await import("../src/world2-claims.mjs");
-const pen = installActsPen();
+const { rowsFromRegistry } = await import("../src/registry-rows.mjs");
+const pen = installActsPen({ pins: rowsFromRegistry({ households: {} }, PINS).pins });
 claimsPen.__setPoolForTest(pen);
 after(() => { uninstallActsPen(); claimsPen.__setPoolForTest(null); delete process.env.WORLD2_PG; delete process.env.WORLD2_PG_URL; });
 
@@ -173,7 +176,11 @@ test("a placer places a resident's first parcel: author and household are the re
   const data = dataOf(claim);
   console.log(`    RECEIPT · claim claimant=${claim.claimant} household=${claim.household} status=${claim.status} _placed_by=${data._placed_by} _consent=${data._consent} · acts rows for it: ${pen.state.acts.filter((a) => a.object === out.id).length}`);
   assert.equal(claim.claimant, "solace", "the author is the resident");
-  assert.equal(claim.household, "solo:Ana-Login", "the claim is scoped to the RESIDENT's household — their pinned login, the spelling their own key resolves to — never solo:keeminlee");
+  // POS-457 (review of #438): a resident in no house is filed under their own
+  // HANDLE, never their login. The login is never asked of the deriver as a bare
+  // string, and their own key (`keyHouseholdOf`) answers this same solo:<handle>,
+  // so the resident reads what the placer filed for them.
+  assert.equal(claim.household, "solo:solace", "the claim is scoped to the RESIDENT's household — the spelling their own key resolves to — never solo:keeminlee");
   assert.equal(data.by, "solace");
   assert.equal(data._placed_by, "illuminator", "who placed it rides the declaration");
   assert.equal(data._consent, "letter-2026-09-25-ana-to-illuminator", "and on whose asking");
@@ -201,16 +208,15 @@ test("without consent the placement bounces, naming consent", async () => {
 
 // ── LEG 3 · first placement only ────────────────────────────────────────────
 
-test("a resident who already holds a parcel bounces, and the defect names the parcel", async () => {
+test("a placement for a resident who already holds a parcel is ACCEPTED; the settlement applies one-per-resident (POS-364)", async () => {
+  // R11, Darko 2026-10-04: the office accepts every physically legal act; the settlement applies limits in act order (POS-364).
   const out = await leave(porch({ by: "reader", slug: "a-second-plot", at: { x: 900, y: 900 } }), IRIS);
-  assert.equal(out.code, 409, JSON.stringify(out));
-  assert.match(out.defect, /reader\/the-keepers-flat/);
+  assert.equal(out.ok, true, JSON.stringify(out));
 });
 
-test("the resident's LIVE parcel counts too: a second placement for Solace names the first", async () => {
+test("a second placement for Solace, whose first is live, is ACCEPTED too: the limit is the settlement's (POS-364)", async () => {
   const out = await leave(porch({ slug: "another-porch", at: { x: 1200, y: 1200 } }), IRIS);
-  assert.equal(out.code, 409, JSON.stringify(out));
-  assert.match(out.defect, /solace\/the-far-bank-porch/);
+  assert.equal(out.ok, true, JSON.stringify(out));
 });
 
 test("an amend on a resident's behalf is refused — never an amend", async () => {
@@ -259,6 +265,20 @@ test("a key holding several placers must say which is placing; placed_by names i
   assert.equal(wrong.code, 403, JSON.stringify(wrong));
 });
 
+// POS-389: a key in a resident's OWN hand carries the whole house, and places
+// only as the hand it was granted for.
+const ownKey = (handle) => ({ ...FOUNDER, handles: new Set([...FOUNDER.handles, "mari"]), keyKind: "claim", heldBy: "resident", claimedHandle: handle });
+
+test("a resident's own key is not a placer for its housemates (POS-389)", async () => {
+  const mari = await leave(porch({ slug: "mari-tries" }), ownKey("mari"));
+  assert.equal(mari.code, 403, JSON.stringify(mari));
+  assert.equal(mari.defect, `"solace" is not one of your residents`, "not a placement: the unchanged 403");
+  const named = await leave(porch({ slug: "keeper-names-wright", placed_by: "wright" }), ownKey("worldkeeper"));
+  assert.equal(named.code, 403, JSON.stringify(named));
+  assert.equal(named.defect, `"wright" is not a placer on this key`);
+  assert.equal(named.hint, "this key places as: worldkeeper");
+});
+
 test("consent on one's own resident bounces rather than riding silently", async () => {
   const out = await leave(porch({ slug: "own-porch", by: "illuminator" }), IRIS);
   assert.equal(out.code, 422, JSON.stringify(out));
@@ -290,7 +310,7 @@ test("a placer's stamps: 0 puts the resident's parcel forward free — on the do
   assert.equal(out.refused_the_stake, undefined, "the ground refused nothing");
   assert.equal(out.stake_bounce, undefined, "no ledger was asked, so the placer's key is never asked to act as the resident");
   assert.equal(claim?.status, "pending", "on the docket, where the crossing publishes it");
-  assert.equal(claim?.household, "solo:wren-login", "still the resident's own claim");
+  assert.equal(claim?.household, "solo:wren", "still the resident's own claim (their handle; POS-457)");
 });
 
 // ── LEG 8 · a stake that bounced is ruled as the ✦0 that landed (office #226)

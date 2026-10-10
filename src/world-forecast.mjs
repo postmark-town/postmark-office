@@ -48,7 +48,7 @@ import { foldedStateAtRef, mainRef, readJsonAtRef } from "./world-branches.mjs";
 // crossings on two clocks; a weight lands at this one. Reusing the ferry's helper
 // would have put a plausible, wrong time on every forecast.
 export const SETTLEMENTS_UTC = Object.freeze([[6, 0], [18, 0]]);
-export const SETTLEMENT_CLOCK = "the keeper's settlement, 06:00/18:00Z (the sweep's own timer) — not the ferry's 00:00/12:00Z crossing, and not the candle's window";
+export const SETTLEMENT_CLOCK = "the keeper's settlement, 06:00/18:00Z (the sweep's own timer) — not the ferry's 00:00/12:00Z crossing, and not candle N, the candle's own interval (LOGOS/classes.md § the register, crossing ③)";
 
 export function nextSettlement(now = new Date()) {
   for (const day of [0, 1]) {

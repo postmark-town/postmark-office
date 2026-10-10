@@ -35,6 +35,7 @@ import { handleTaken } from "./declare.mjs";
 import { mintHousehold, joinHousehold, collectingDrain, NO_DRAIN, REFUSALS } from "./ceremony.mjs";
 import { penCommit, landOrRefuse } from "./write.mjs";
 import { planHouseKey, appendHouseKey, houseKeyBounce, registryWith } from "./house-key.mjs";
+import { recordAshore } from "./ashore.mjs";
 
 export const BIND_REFUSALS = Object.freeze({
   NO_RECORD: Object.freeze({
@@ -160,6 +161,11 @@ export async function bindUnderLock({ args, key, clone, db, env = process.env, d
     `address: ${handle} joins · bound to ${plan.slug} at admission (via postmark-office)`));
   if (commit?.error) return commit;
 
+  // ASHORE, IN THIS ACT (POS-444, 071): the card is on the record as of
+  // `commit`, so the store records the handle ashore now, after the commit
+  // landed. It never refuses the admission; a miss waits for the next ingest.
+  const ashore = await recordAshore({ handle, sha: commit, road: "join-bind", clone }, env);
+
   return {
     admitted: handle,
     household: {
@@ -169,6 +175,7 @@ export async function bindUnderLock({ args, key, clone, db, env = process.env, d
     commit,
     registry: joined.registry,
     files: files.map((f) => f.path),
+    ashore: ashore.recorded,
   };
 }
 

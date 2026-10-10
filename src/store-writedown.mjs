@@ -383,6 +383,16 @@ export function planStoreWriteDown(marks, { publishedPathOf = null, canonBytesAt
     return path;
   };
 
+  // THE BATCH'S OWN PLACES, handed to the framer before anything is framed
+  // (POS-441, the carry): a mark written this crossing at a new world position
+  // frames its nested children, and is the parent their declared-parent check
+  // reads, where it stands NOW — not where the last fold left it. Only the
+  // world-framed records say a world place; a file-framed one is its file's own
+  // numbers and did not move.
+  if (typeof toFileFrame?.batch === "function")
+    toFileFrame.batch(marks.filter((m) => m.at_frame === "world" && m.fileRec?.at)
+      .map((m) => ({ id: m.id, at: m.fileRec.at, extent: m.fileRec.extent ?? null, points: m.fileRec.points ?? null })));
+
   const unchanged = [];
   const framed = [];
   for (const m of marks) {
@@ -520,7 +530,8 @@ export function planStoreWriteDown(marks, { publishedPathOf = null, canonBytesAt
       const standing = typeof toFileFrame.standingMark === "function" ? toFileFrame.standingMark(m.id) : null;
       const outside = declared && declaredParentRefusal({
         id: m.id, prior: standing, next: rec,
-        parentId: declared.parentId, parent: declared.parent, pointWithinMark: toFileFrame.pointWithinMark,
+        parentId: declared.parentId, parent: declared.parent, parentPrior: declared.parentPrior ?? null,
+        pointWithinMark: toFileFrame.pointWithinMark,
       });
       if (outside) throw new FoldInputRefusal(OUTSIDE_DECLARED_PARENT, outsideParentDetail(outside, path));
 
@@ -726,7 +737,7 @@ export function planStoreWriteDown(marks, { publishedPathOf = null, canonBytesAt
  * from this file and the failure would arrive as a refusal naming a resident.
  */
 export function starvingCheck({
-  marks = [], stakes = [], docketClaims = null, carriedAbsent = 0, window = null,
+  marks = [], stakes = [], docketClaims = null, carriedAbsent = 0, window = null, withheldBySettlement = 0,
 } = {}) {
   const staked = stakes.filter((s) => Number(s.n) > 0);
   const stakedMarks = new Set(staked.map((s) => s.mark));
@@ -804,10 +815,19 @@ export function starvingCheck({
   // WHAT THIS WINDOW'S OWN DOCKET PUT ON THE TABLE. Every test below is about
   // this number and not about `offered`, which is the whole of the repair.
   const docketOffered = offered - carried;
+  // THE FIFTH INPUT: WHAT THE SETTLEMENT TOOK AWAY (POS-364). Since R11 a docket
+  // mark the settlement opposes (a parcel over a limit, a word standing at the
+  // seal) is withheld from the sketchbooks before this guard sees the set
+  // (fold-input-cli.mjs § git is written from the settlement). It DID
+  // materialize, so it answers the docket as surely as a written mark does: a
+  // window whose only claim was opposed is a lawful crossing, never a starving
+  // one. A count, or nothing (0), by the shared test.
+  const withheld = isDocketCount(withheldBySettlement) ? withheldBySettlement : 0;
   const counts = {
     offered,
     docket_offered: docketOffered,
     carried_absent: carried,
+    ...(withheld ? { withheld_by_settlement: withheld } : {}),
     docket_claims: docket,
     staked_marks: stakedMarks.size,
     staked_positions: staked.length,
@@ -815,6 +835,12 @@ export function starvingCheck({
 
   if (docketOffered > 0) {
     return { starving: false, ...counts };
+  }
+  if (withheld > 0) {
+    return {
+      starving: false, ...counts, quiet: false,
+      why: `this window's docket materialized ${withheld} mark(s) and the settlement opposes every one, so none is written down`,
+    };
   }
 
   if (stakedMarks.size === 0) {
@@ -1030,6 +1056,7 @@ export function storeWriteDown({
     ...normalized,
     docketClaims: normalized.selection?.docket_claims ?? null,
     carriedAbsent: normalized.selection?.carried_absent?.count ?? 0,
+    withheldBySettlement: normalized.selection?.settlement?.withheld_from_docket ?? 0,
     window: normalized.as_of.window,
   });
 

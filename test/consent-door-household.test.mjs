@@ -315,9 +315,11 @@ test("the standing-scoped DO performs end to end, and the acts row carries a NON
   assert.equal(rows[0].object, "beta/on-wrights-edge");
 });
 
-test("latest wins — the second word supersedes the first, and neutral is still absence", async () => {
-  // Same class mark, the two clauses this asserts:
-  //   "latest wins" · "neutral is never stored, it is absence"
+test("latest wins — the second word supersedes the first, and a declared neutral is a word", async () => {
+  // Same class mark: "latest wins". Its second clause, "neutral is never
+  // stored, it is absence", was AMENDED BY RULING (Darko, 2026-10-06, POS-361):
+  // "Residents may also declare neutral (it clears 'awaiting your word'). One
+  // taxonomy." Silence is still the awaiting state.
   freshLog();
   await door({ do: ACTION_STANCE, args: { on: "beta/on-wrights-edge", stance: "welcomed" } });
   const second = await door({ do: ACTION_STANCE, args: { on: "beta/on-wrights-edge", stance: "opposed" } });
@@ -329,10 +331,10 @@ test("latest wins — the second word supersedes the first, and neutral is still
   assert.equal(standing[0].stance, "opposed");
 
   const neutral = await door({ do: ACTION_STANCE, args: { on: "beta/on-wrights-edge", stance: "neutral" } });
-  assert.equal(neutral.code, 422);
-  assert.equal(neutral.defect, "neutral is never stored, it is absence",
-    "the class mark's own words reach the caller at THIS door too");
-  assert.equal(stanceRows().length, 2, "the refusal wrote nothing");
+  assert.equal(neutral.result.stance, "neutral", "THIS door takes the declared neutral too");
+  assert.equal(neutral.result.superseded.stance, "opposed", "and it is the latest word");
+  assert.equal(stanceRows().length, 3, "a declared neutral is a row, unlike silence");
+  assert.equal(standingStances(stanceRows())[0].stance, "neutral");
 });
 
 test("THE GROUND'S HOLDER SPEAKS — the new door refuses a mark that stands on nobody's ground of yours, BY NAME", async () => {
@@ -400,10 +402,12 @@ test("card-by-its-own-name — household { read: \"declare-stance-on\" } answers
   // is absent from the flat schema map this door is handed, so the fallback
   // would have published `fields: {}` — which this file's own seam-4 note says
   // reads as THIS ACT TAKES NO ARGUMENTS.
-  assert.deepEqual(Object.keys(read.card.fields).sort(), ["handle", "on", "stance"]);
+  // `as` and `law` are the town's word (POS-361): as: "town", and the law an
+  // opposition cites.
+  assert.deepEqual(Object.keys(read.card.fields).sort(), ["as", "handle", "law", "on", "stance"]);
   assert.equal(read.card.fields.on.required, true);
   assert.equal(read.card.fields.stance.required, true);
-  assert.deepEqual(read.card.fields.stance.enum, ["welcomed", "opposed"]);
+  assert.deepEqual(read.card.fields.stance.enum, ["welcomed", "neutral", "opposed"]);
   // The read's own fields are NOT on the act's card: at this door the inbox is
   // `read: "stances"`, so a cursor here would mint an affordance button for a
   // call that cannot mean anything.
@@ -414,7 +418,7 @@ test("an unknown field bounces BY NAME against the act's own schema", async () =
   const bounced = await door({ do: ACTION_STANCE, args: { on: "beta/on-wrights-edge", stance: "welcomed", stanse: "typo" } });
   assert.equal(bounced.code, 422);
   assert.deepEqual(bounced.unknown_fields, ["stanse"]);
-  assert.deepEqual(bounced.allowed, ["on", "stance", "handle"]);
+  assert.deepEqual(bounced.allowed, ["on", "stance", "as", "law", "handle"]);
 });
 
 test("the two halves are one door: read: \"stances\" names what do: \"declare-stance-on\" answers", async () => {
@@ -488,6 +492,16 @@ test("THE PEN'S REFUSAL SURVIVES THE FOLD — an unreachable pen bounces 503 thr
   process.env.WORLD2_PG = "1";
   process.env.WORLD2_PG_URL = "postgres://nobody:nothing@127.0.0.1:1/absent";
   process.env.W2_PEN = "stance";
+  // THE STANDING GATE STILL ANSWERS (POS-347). It reads the record before the
+  // act, and a record it cannot read refuses with its own 503 — which would
+  // answer this test before the pen is ever reached. This test is about the
+  // PEN's refusal, so the gate's one read is answered (nobody suspended) and
+  // every other read on that pool fails as a dead server does.
+  const { __setPoolForTest: setActsPool } = await import("../src/world2-acts.mjs");
+  setActsPool({ query: async (q) => {
+    if (/FROM standing_acts/i.test(q)) return { rows: [] };
+    throw Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:1"), { code: "ECONNREFUSED" });
+  } });
   try {
     const refused = await door({ do: ACTION_STANCE, args: { on: "beta/on-wrights-edge", stance: "welcomed" } });
     assert.equal(refused.code, 503, `expected the ruled refusal, got ${JSON.stringify(refused).slice(0, 300)}`);

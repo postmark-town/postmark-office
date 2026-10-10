@@ -131,7 +131,7 @@ test("MARIGOLD · retired + pending on window 211 + stake 1 → the ledger runs 
   assert.equal(rows[0].window_id, W, "the claim moved windows");
   assert.equal(rows[0].stake, 1, "the claim row was rewritten; `stake` is the ask and stays the ask");
   assert.equal(out.window, W);
-  assert.match(out.effect, /✦1 more stands behind it on window 211's docket/);
+  assert.match(out.effect, /✦1 more stands behind it on candle 211's docket/);
   assert.ok(!("put_forward" in out), "this act put nothing forward; it must not say it did");
 });
 

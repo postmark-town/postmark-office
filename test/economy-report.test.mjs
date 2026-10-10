@@ -19,11 +19,12 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, copyFileSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { copyTownTools } from "./helpers/town-tools.mjs";
 import { join, resolve, dirname } from "node:path";
-import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "..");
@@ -61,7 +62,7 @@ function buildTown(root, { extraLines = [] } = {}) {
   const town = join(root, "town");
   initRepo(town);
   mkdirSync(join(town, "tools"), { recursive: true });
-  for (const f of NEEDED) copyFileSync(join(TOWN_TOOLS, f), join(town, "tools", f));
+  copyTownTools(join(TOWN_TOOLS, ".."), town);
   mkdirSync(join(town, "WHITE_PAGES"), { recursive: true });
 
   const lines = [
@@ -111,7 +112,7 @@ function run(town, world, out) {
 const skip = haveTools ? false : `town tools not found at ${TOWN_TOOLS} — set TOWN_CLONE`;
 
 test("the equity table is cumulative mint, past tense", { skip }, () => {
-  const root = mkdtempSync(join(tmpdir(), "econ-"));
+  const root = tempDir("econ-");
   try {
     const { data, html } = run(buildTown(root), buildWorld(root), join(root, "out"));
     // 4 correspondence stamps + a 10-stamp gift = 14 minted, all time.
@@ -131,7 +132,7 @@ test("the equity table is cumulative mint, past tense", { skip }, () => {
 });
 
 test("issuance classifies every minted stamp", { skip }, () => {
-  const root = mkdtempSync(join(tmpdir(), "econ-"));
+  const root = tempDir("econ-");
   try {
     const { data, html } = run(buildTown(root), buildWorld(root), join(root, "out"));
     assert.equal(data.issuance.totals.correspondence, 4);
@@ -143,10 +144,43 @@ test("issuance classifies every minted stamp", { skip }, () => {
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+// Every shape the live ledger mints through, one line each, cut from the real
+// ledger on 2026-10-09 (19,378 lines, M = 24,404) down to the fixture's names,
+// refs and amounts. On that day the page read 1,565 stamps unclassified: the join
+// bundle 775, holo 435, post stages 280 and first ideas 75 (POS-552).
+const LIVE_MINT_SHAPES = [
+  "- 2026-07-19 · MINT → bo · 1 · for: vote:a-name (stake)",
+  "- 2026-07-27 · MINT → ada · 5 · for: friendship:bo (via bo-2026-07-27-to-ada-the-load)",
+  "- 2026-07-27 · MINT → bo · 5 · for: friendship:ada (via bo-2026-07-27-to-ada-the-load)",
+  "- 2026-08-31 · MINT → ada · 5 · for: first-idea:ada/a-first-hour · by: the-town",
+  "- 2026-09-09 · MINT → the-town · 77 · for: issuance:founding-grant · by: founder · note: the founding act",
+  "- 2026-09-14 · MINT → bo · 5 · for: welcome:gh:1002 · by: the-town",
+  "- 2026-09-30 · holo · ada · 34 · pot:a-fund · epoch:2026-09 · ref: stripe:cs_test_fixture",
+  "- 2026-10-07 · MINT → bo · 2 · for: post:bo/a-bug/confirmed · by: the-town",
+  "- 2026-10-07 · MINT → bo · 3 · for: post:bo/a-bug/reproduced · by: the-town",
+];
+
+test("every shape the live ledger mints through has a source, by name (POS-552)", { skip }, () => {
+  const root = tempDir("econ-");
+  try {
+    const { data, html } = run(buildTown(root, { extraLines: LIVE_MINT_SHAPES }), buildWorld(root), join(root, "out"));
+    assert.equal(data.supply.minted, 14 + 1 + 10 + 5 + 77 + 5 + 34 + 5);
+    assert.deepEqual(data.issuance.totals, {
+      correspondence: 4, discretionary: 10, decisions: 1, friendship: 10, "first ideas": 5,
+      "town issuance": 77, "join bundle": 5, holo: 34, "post stages": 5,
+    });
+    assert.deepEqual(data.issuance.unclassified, {});
+    const classified = Object.values(data.issuance.totals).reduce((a, b) => a + b, 0);
+    assert.equal(classified, data.supply.minted);
+    assert.match(html, /every minted stamp is classified/);
+    assert.doesNotMatch(html, /UNCLASSIFIED ISSUANCE/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 // ── THE FALSIFIERS: each guard is shown going red ────────────────────────────
 
 test("FALSIFIER — an unknown mint class turns issuance RED rather than shrinking every share", { skip }, () => {
-  const root = mkdtempSync(join(tmpdir(), "econ-"));
+  const root = tempDir("econ-");
   try {
     // A mint line in a shape this page does not classify. It is a real MINT →
     // handle movement, so it counts toward M and toward equity — but no issuance
@@ -159,12 +193,15 @@ test("FALSIFIER — an unknown mint class turns issuance RED rather than shrinki
     assert.notEqual(classified, data.supply.minted);
     assert.match(html, /UNCLASSIFIED ISSUANCE/);
     assert.match(html, /7 stamp\(s\) entered supply/);
+    // and the red says which act wrote them: here a line the town cannot parse
+    assert.deepEqual(data.issuance.unclassified, { unknown: { stamps: 7, lines: 1 } });
+    assert.match(html, /a line the town's grammar does not parse 7 \(1 line\(s\)\)/);
     assert.doesNotMatch(html, /every minted stamp is classified/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test("FALSIFIER — escrow on a mark the world does not hold is flagged, not hidden", { skip }, () => {
-  const root = mkdtempSync(join(tmpdir(), "econ-"));
+  const root = tempDir("econ-");
   try {
     // Escrow implies existence: staking a mark the register does not carry is a
     // fold error waiting to happen, and the page must name it.
@@ -178,7 +215,7 @@ test("FALSIFIER — escrow on a mark the world does not hold is flagged, not hid
 });
 
 test("FALSIFIER — money from an account that never minted turns the supply chips RED", { skip }, () => {
-  const root = mkdtempSync(join(tmpdir(), "econ-"));
+  const root = tempDir("econ-");
   try {
     // A payment OUT of an account that never minted and was never pinned. The
     // fold still balances — that is the point: `liquid + escrow = M` cannot see
@@ -198,7 +235,7 @@ test("FALSIFIER — money from an account that never minted turns the supply chi
 });
 
 test("the transition set is un-sovereign marks with no escrow, split by tier", { skip }, () => {
-  const root = mkdtempSync(join(tmpdir(), "econ-"));
+  const root = tempDir("econ-");
   try {
     const { data } = run(buildTown(root), buildWorld(root), join(root, "out"));
     // three marks: bo/the-hill is commons WITH escrow (anchored, not eligible),
@@ -211,8 +248,26 @@ test("the transition set is un-sovereign marks with no escrow, split by tier", {
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test("an award on an idea post is its own issuance source, and keeps every minted stamp classified (POS-290)", { skip }, () => {
+  const root = tempDir("econ-");
+  try {
+    const town = buildTown(root, { extraLines: [
+      "- 2026-10-09 · MINT → bo · 25 · for: post:ada/a-lantern/the-lantern · by: wright",
+      "- 2026-10-09 · MINT → ada · 7 · for: post:ada/a-lantern/the-hook · by: keemin",
+    ] });
+    const { data, html } = run(town, buildWorld(root), join(root, "out"));
+    assert.equal(data.supply.minted, 46, "the 32 award stamps entered supply");
+    assert.equal(data.issuance.totals.awards, 32);
+    assert.equal(data.issuance.lines.awards, 2);
+    const classified = Object.values(data.issuance.totals).reduce((a, b) => a + b, 0);
+    assert.equal(classified, data.supply.minted);
+    assert.match(html, /every minted stamp is classified/);
+    assert.doesNotMatch(html, /UNCLASSIFIED ISSUANCE/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("town issuance is its own cumulative series, not just a row", () => {
-  const root = mkdtempSync(join(tmpdir(), "econ-"));
+  const root = tempDir("econ-");
   try {
     const town = buildTown(root, { extraLines: [
       issuanceLine("2026-08-10", "the-town", 100, "founding-grant", "k", "the founding act"),
@@ -237,7 +292,7 @@ test("FALSIFIER — constitution-tier marks are kept OUT of the top-backed ranki
   // The root and the terrain bind without stamps and absorb fan-up from
   // everything beneath them, so ranking them beside earned backing is a category
   // error. They must be named, not hidden — a silent exclusion is its own lie.
-  const root = mkdtempSync(join(tmpdir(), "econ-"));
+  const root = tempDir("econ-");
   try {
     // the fixture's the-town/the-quay is constitution tier; stake it heavily
     const town = buildTown(root, { extraLines: [

@@ -216,7 +216,7 @@ export function mirrorAct(row, seq, env = process.env) {
       // resolver on the docket pen's own input — never the key's name, never a
       // gh:<id>, or acts and claims spell one fact two ways and every reader
       // joining them loses rows silently (the guards lane measured it live).
-      const { householdKeyFor } = await import("./world2-claims.mjs");
+      const { actHouseholdFor } = await import("./world2-claims.mjs");
       // THE LATE-CROSSING GUARD RUNS HERE TOO (2026-09-04). This path inserted
       // straight into acts and, that evening, filed four backfilled holding rows
       // at crossing 157 — certified history — while the pen's insertAct would
@@ -224,7 +224,7 @@ export function mirrorAct(row, seq, env = process.env) {
       // not file through the door may not file through the mirror either.
       const { lateCrossingGuard, actsInsert } = await import("./world2-pen.mjs");
       const guarded = lateCrossingGuard(row, { env });
-      const household = guarded.household == null ? null : await householdKeyFor(p, guarded.household);
+      const household = guarded.household == null ? null : await actHouseholdFor(p, guarded);
       // `acts.journal_seq` IS DROPPED (G1 / POS-156, migration 025). This path
       // is the ARENA's now -- the one lane that still writes a sqlite row and
       // so the one caller that still HAS a seq -- and even here the column has

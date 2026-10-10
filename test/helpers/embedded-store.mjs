@@ -8,11 +8,21 @@
 // whose node_modules holds it) still overrides where it is found. Without it
 // the test FAILS with the reason: a store test that skips reads as green.
 //
-// Every file's server is its own: its port is asked of the OS (bind 0) and its
-// data directory is a fresh temp directory, so the five pool trees can run their
-// suites at once. A server is started and stopped with the package's own
-// pg_ctl (`stop -m fast`, a clean shutdown); the package's own stop is a forced
-// kill on Windows, which left every copy of a data directory needing recovery.
+// ON A POOL TREE, THE TREE'S OWN SERVER (POS-479). A tree that
+// G:/Postmark/pool/pg.mjs has provisioned keeps one long-lived Postgres beside it
+// (`<ROOT>.pg/`, whose READY names the port), started on claim and stopped on
+// release. There a store is a DATABASE, made from the migrated floor as a
+// template and dropped at teardown. A killed test leaves a database, never a
+// running server, and the next store start in the tree drops the databases
+// whose process is gone (on 10-08, killed tests had left 101 servers running).
+//
+// ANYWHERE ELSE (CI, a clone that isn't a pool tree, OFFICE_STORE_SERVER=own),
+// every file's server is its own: its port is asked of the OS (bind 0) and its
+// data directory is a fresh temp directory. A server is started and stopped with
+// the package's own pg_ctl (`stop -m fast`, a clean shutdown); the package's own
+// stop is a forced kill on Windows, which left every copy of a data directory
+// needing recovery. The folder records the pid that started it (`starter`), so
+// `pg.mjs reap` can stop a server whose test was killed.
 //
 // The floor is CI's (guard-falsifier-floor.sh): every world2/schema/[0-9]*.sql
 // in name order, 003 skipped, applied as `world2_owner`, after the roles the box
@@ -36,11 +46,16 @@ const PW = "local";
 // io_method=sync: Postgres 18's io_worker children outlived a Windows stop and
 // held the test file open.
 //
-// ONE SERVER PER FILE, NEVER ONE PER RUN. A run-wide server (one Postgres, a
-// database per file) was tried and refused connections under the suite: on
-// Windows every connection is a new process, and a burst of eight files'
-// offices overflowed the listen backlog (ECONNREFUSED with the server up and
-// logging). A server per file costs ~2 s from the floor and fails alone.
+// THE SHARED SERVER, MEASURED (POS-479). A run-wide server was tried once before
+// and was recorded here as refusing connections: on Windows every connection is
+// a process, and a burst of eight files' offices was said to overflow the listen
+// backlog. Measured on 10-09 against office-1's server at the default 100
+// connections, with the 126 store files at the suite's concurrency of 8: the
+// peak was 62 connections and nothing was refused. The reds that run did have
+// came from tests reading the whole server (pg_terminate_backend on every
+// office_api session, a pg_locks count). Those are scoped to the test's own
+// database now. A test that reads the server's views filters by
+// `store.database`. pg.mjs sizes the server at 200.
 const SERVER_OPTS = "-c io_method=sync -c listen_addresses=127.0.0.1";
 const FLOOR_DB = "floor";
 
@@ -147,6 +162,7 @@ async function ownServer() {
   const pkg = await thePackage();
   const floor = await floorDir(pkg);
   const scratch = mkdtempSync(join(tmpdir(), "office-store-"));
+  writeFileSync(join(scratch, "starter"), String(process.pid)); // pg.mjs reap stops the server once this pid is gone
   const data = join(scratch, "data");
   cpSync(join(floor, "data"), data, { recursive: true });
   // Postgres refuses a data directory others can read (0700 or 0750 only), and
@@ -157,6 +173,10 @@ async function ownServer() {
   await pgStart(pkg.pgCtl, data, port);
   return {
     port,
+    // An outage and its end, on the same data and port (POS-480): `pause` is a
+    // fast shutdown, which ends every session and rolls back its transaction.
+    pause: () => pgStop(pkg.pgCtl, data),
+    resume: () => pgStart(pkg.pgCtl, data, port),
     async stop() {
       await pgStop(pkg.pgCtl, data);
       // Windows can hold the directory a moment after the server has gone: named, not thrown
@@ -166,21 +186,137 @@ async function ownServer() {
   };
 }
 
+// ── THE TREE'S SERVER ─────────────────────────────────────────────────────────
+
+const TREE_PG = `${ROOT}.pg`;
+
+/** The tree's own server, `{ port }`, when pg.mjs provisioned one beside this checkout; else null. */
+function treeServer() {
+  if (process.env.OFFICE_STORE_SERVER === "own") return null;
+  try { return JSON.parse(readFileSync(join(TREE_PG, "READY"), "utf8")); } catch { return null; }
+}
+
+const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === "EPERM"; } };
+
+// A test database is t<pid>_<n>_<the db the caller asked for>: the pid says whose
+// it is, so a database whose process is gone is a killed test's, and is dropped.
+const TEST_DB = /^t(\d+)_\d+_/;
+let made = 0;
+let swept = false;
+
+// The floor in the tree's server: a template database keyed on the package's
+// version and every migration's bytes, built once under an advisory lock (the
+// other starters wait on it) and marked a template only when it is finished, so
+// a half-built floor is never cloned. A changed migration is a new key; the
+// newest three floors are kept, so a flip and its restore don't rebuild.
+const FLOOR_LOCK = 479;
+async function treeFloor(su, version) {
+  const h = createHash("sha256").update(version);
+  for (const f of migrations()) h.update(f).update(readFileSync(join(SCHEMA, f)));
+  const floor = `floor_${h.digest("hex").slice(0, 16)}`;
+  const isReady = async () => (await su.query("SELECT 1 FROM pg_database WHERE datname = $1 AND datistemplate", [floor])).rowCount === 1;
+  if (await isReady()) return floor;
+  await su.query("SELECT pg_advisory_lock($1)", [FLOOR_LOCK]);
+  try {
+    if (await isReady()) return floor;
+    await su.query(`DROP DATABASE IF EXISTS ${floor} WITH (FORCE)`); // a build that died half-way
+    for (const r of ROLES) {
+      const { rowCount } = await su.query("SELECT 1 FROM pg_roles WHERE rolname = $1", [r]);
+      if (!rowCount) await su.query(`CREATE ROLE ${r} LOGIN PASSWORD '${PW}'`);
+    }
+    await su.query(`CREATE DATABASE ${floor} OWNER world2_owner`);
+    const owner = await (await connector(su.port))("world2_owner", floor);
+    try { for (const f of migrations()) await owner.query(readFileSync(join(SCHEMA, f), "utf8")); }
+    finally { await owner.end(); }
+    await su.query(`ALTER DATABASE ${floor} IS_TEMPLATE true`);
+    const { rows } = await su.query("SELECT datname FROM pg_database WHERE datname ~ '^floor_' AND datname <> $1 ORDER BY oid DESC OFFSET 2", [floor]);
+    for (const { datname } of rows) {
+      await su.query(`ALTER DATABASE ${datname} IS_TEMPLATE false`).catch(() => {});
+      await su.query(`DROP DATABASE IF EXISTS ${datname}`).catch(() => {}); // one being cloned is kept for the next build
+    }
+    return floor;
+  } finally { await su.query("SELECT pg_advisory_unlock($1)", [FLOOR_LOCK]); }
+}
+
+// The databases of tests that were killed: their process is gone.
+async function sweepDead(su) {
+  const { rows } = await su.query("SELECT datname FROM pg_database WHERE datname ~ '^t[0-9]+_[0-9]+_'");
+  const dead = rows.map((r) => r.datname).filter((n) => !alive(Number(TEST_DB.exec(n)[1])));
+  for (const n of dead) await su.query(`DROP DATABASE IF EXISTS "${n}" WITH (FORCE)`).catch(() => {});
+  return dead;
+}
+
+async function superuser(port) {
+  try { const su = await (await connector(port))("postgres", "postgres"); su.port = port; return su; }
+  catch (e) {
+    throw new Error(`${NO_STORE}: this tree's Postgres (${TREE_PG}, port ${port}) is not answering (${e.code ?? e.message}). `
+      + `Start it: node G:/Postmark/pool/pg.mjs start ${ROOT.replace(/\\/g, "/").split("/").pop()} (claim.mjs starts it)`);
+  }
+}
+
+/** Build this checkout's floor in the tree's server, for pg.mjs provision. Returns its name. */
+export async function prepareTreeFloor() {
+  const tree = treeServer();
+  if (!tree) throw new Error(`no tree server at ${TREE_PG}`);
+  const su = await superuser(tree.port);
+  try { return await treeFloor(su, tree.version); } finally { await su.end(); }
+}
+
+async function treeStore(tree, db) {
+  const su = await superuser(tree.port);
+  let name;
+  try {
+    if (!swept) { swept = true; await sweepDead(su); }
+    const floor = await treeFloor(su, tree.version);
+    name = `t${process.pid}_${++made}_${db}`.slice(0, 63);
+    await su.query(`CREATE DATABASE "${name}" TEMPLATE ${floor} OWNER world2_owner`);
+  } finally { await su.end(); }
+  return {
+    port: tree.port,
+    database: name,
+    async stop() {
+      const s = await superuser(tree.port);
+      try { await s.query(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`); }
+      catch (e) { console.error(`[embedded-store] left database ${name} behind (${e.message}); the next start sweeps it`); }
+      finally { await s.end(); }
+    },
+  };
+}
+
 /**
- * Start a store with the whole schema applied: `{ connect(role), url(role), stop() }`,
+ * Start a store with the whole schema applied: `{ connect(role), url(role), stop(), database }`,
  * where `connect` hands back a connected `pg.Client`. Throws NO_STORE, with the
  * cause, when no embedded Postgres can be found or started.
+ *
+ * `db` names the store for its caller; `connect(role, db)` and `url(role, db)`
+ * reach it by that name. On a tree's server the database itself is named
+ * apart (`database`), since every file there shares one server.
+ *
+ * `own: true` asks for a server of this file's own even on a pool tree, and
+ * then the store also has `pause()` and `resume()`: the server stopped and
+ * started again, for a test of what an outage does. The tree's server is never
+ * paused, since every file in the tree shares it.
  */
-export async function startStore({ db = "town_index_test" } = {}) {
-  const server = await ownServer();
+export async function startStore({ db = "town_index_test", own = false } = {}) {
+  const tree = own ? null : treeServer();
+  let server;
+  if (tree) server = await treeStore(tree, db);
+  else {
+    const own = await ownServer();
+    const su = await (await connector(own.port))("postgres", "postgres");
+    try { await su.query(`CREATE DATABASE ${db} TEMPLATE ${FLOOR_DB} OWNER world2_owner`); }
+    finally { await su.end(); }
+    server = { ...own, database: db };
+  }
   const connectTo = await connector(server.port);
-  const su = await connectTo("postgres", "postgres");
-  try { await su.query(`CREATE DATABASE ${db} TEMPLATE ${FLOOR_DB} OWNER world2_owner`); }
-  finally { await su.end(); }
+  const real = (database) => (database === db ? server.database : database);
   return {
-    connect: (user, database = db) => connectTo(user, database),
+    connect: (user, database = db) => connectTo(user, real(database)),
     /** A connection string for a role, for a child process (a spawned office) to dial. */
-    url: (user, database = db) => `postgres://${user}:${PW}@127.0.0.1:${server.port}/${database}`,
+    url: (user, database = db) => `postgres://${user}:${PW}@127.0.0.1:${server.port}/${real(database)}`,
+    /** The database the store is, on its server: for a query that reads the server's own views. */
+    database: server.database,
     stop: () => server.stop(),
+    ...(tree ? {} : { pause: () => server.pause(), resume: () => server.resume() }),
   };
 }

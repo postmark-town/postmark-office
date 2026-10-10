@@ -326,8 +326,8 @@ export async function insertAct(client, rowIn, seq = null, { lateArrival = null 
   // fallen behind the open window (§ lateCrossingGuard). Absent it, this still
   // throws LateCrossingError — never a pen-unreachable, never silent.
   const row = lateCrossingGuard(rowIn, { lateArrival });
-  const { householdKeyFor } = await import("./world2-claims.mjs");
-  const household = row.household == null ? null : await householdKeyFor(client, row.household);
+  const { actHouseholdFor } = await import("./world2-claims.mjs");
+  const household = row.household == null ? null : await actHouseholdFor(client, row);
   // `acts.journal_seq` IS DROPPED (G1 / POS-156, migration 025). It held the
   // sqlite rowid an act was mirrored FROM, and there is no sqlite row any more
   // -- 001 called it "the shadow-era pairing key, dying at cutover", and this

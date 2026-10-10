@@ -67,6 +67,17 @@ const MAX_WINDOW = 150_000;  // a pane, not an app — and Ferry reads every pan
 // checks existence, never size, so the existing large art keeps rendering.
 // Anything genuinely bigger stays a PR, where a human looks.
 export const MAX_IMAGE = 1.5 * 1024 * 1024;
+// ONE pixel budget for every image door (POS-390). MAX_IMAGE bounds what
+// arrives; it never bounded what a decode allocates, because a flat picture
+// compresses about a thousand to one and the whole decode (§ decodeWhole)
+// writes every pixel to a raw buffer. Measured 2026-10-07 against the town's
+// 249 readable media originals: the largest is 2000 × 2600 (5.2 million
+// pixels), so 4096 × 4096 sits more than three times above every real picture.
+// It is the town's number, read from the header before any row is decoded,
+// and the same number is every sharp()'s limitInputPixels — so the library's
+// default (~268 million) is never the ceiling.
+export const MAX_PIXELS = 4096 * 4096;
+const PIXEL_LIMIT = { limitInputPixels: MAX_PIXELS };
 // No `display_name` entry here, and its absence is the point: that field is
 // sugar for the ADDRESS card's `agent` line, and `agent`'s own door already caps
 // it. A second cap in this table would be a second answer to one question.
@@ -1094,7 +1105,7 @@ export const loadSharp = () => (sharpModule ??= import("sharp").then((m) => m.de
 async function decodedRows(bytes) {
   try {
     const sharp = await loadSharp();
-    const { data, info } = await sharp(bytes, { failOn: "none" }).raw().toBuffer({ resolveWithObject: true });
+    const { data, info } = await sharp(bytes, { failOn: "none", ...PIXEL_LIMIT }).raw().toBuffer({ resolveWithObject: true });
     const { width, height, channels } = info;
     const stride = width * channels;
     if (!stride || !height) return null;
@@ -1109,14 +1120,23 @@ async function decodedRows(bytes) {
 }
 
 /**
- * Decode `bytes` whole, or bounce 422. `ext` is what imageFormat already
+ * Decode `bytes` whole, or bounce 422 (413 past MAX_PIXELS, before any decode). `ext` is what imageFormat already
  * sniffed — it names the format in the refusal and is never re-derived here.
  * Returns nothing: the answer is "it decoded", and the bytes are unchanged.
  */
 export async function decodeWhole(bytes, ext, what = "image") {
   const sharp = await loadSharp();
+  // THE BUDGET FIRST (POS-390): the header's width and height, read without
+  // decoding a row (the limit is off for this read only, so the refusal can
+  // say the size). A header that will not parse falls through to the decode,
+  // whose refusal already says so.
+  const { width = 0, height = 0 } = await sharp(bytes, { limitInputPixels: false }).metadata().catch(() => ({}));
+  if (width * height > MAX_PIXELS)
+    throw bounce(413,
+      `that ${what} is ${width} × ${height} pixels — the town decodes at most 4096 × 4096 (${MAX_PIXELS.toLocaleString("en-US")} pixels)`,
+      "nothing was stored; scale it down to 4096 × 4096 pixels or fewer and upload it again");
   try {
-    await sharp(bytes).raw().toBuffer();
+    await sharp(bytes, PIXEL_LIMIT).raw().toBuffer();
     return;
   } catch (e) {
     const got = await decodedRows(bytes);

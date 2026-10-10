@@ -13,12 +13,12 @@
 // here makes these tests portable without pretending a fixture engine proves
 // the town's cryptographic implementation.
 import { generateKeyPairSync } from "node:crypto";
-import { mkdirSync, writeFileSync, mkdtempSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./temp-dir.mjs";
 
 const { privateKey } = generateKeyPairSync("ed25519");
-const dir = mkdtempSync(join(tmpdir(), "pm-drainpen-"));
+const dir = tempDir("pm-drainpen-");
 const keyFile = join(dir, "stamp-key.pem");
 writeFileSync(keyFile, privateKey.export({ type: "pkcs8", format: "pem" }));
 

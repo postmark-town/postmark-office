@@ -12,12 +12,12 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { execFileSync, spawn } from "node:child_process";
 import {
-  copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync,
+  copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
-import { tmpdir } from "node:os";
 
 import { fixtureDb, fixtureKey } from "./fixture.mjs";
+import { copyTownTools } from "./helpers/town-tools.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
 import {
@@ -31,6 +31,8 @@ import { appendJournal, CLASS_MARK } from "../src/world-journal.mjs";
 import { enqueueLetter, outboxRelPath, validateLetter } from "../src/write.mjs";
 import { DYNAMIC_SCHEMA } from "../src/dynamic-store.mjs";
 import { townClone } from "./fixture-paths.mjs";
+import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 // The town index this file's offices read: a store seeded from each fixture
 // office.db (POS-268, office-under-test.mjs). Stopped when the file is done.
@@ -71,7 +73,7 @@ const LEDGER = "# the mail ledger\n\n- 2026-07-01 · limen-2026-07-01-to-wright-
 // cards, a sender's outbox, a recipient's inbox, and the ledger the ferry
 // rebuilds its dedupe from.
 function mailClone() {
-  const dir = mkdtempSync(join(tmpdir(), "pm-townmail-"));
+  const dir = tempDir("pm-townmail-");
   for (const h of ["wright", "limen"]) {
     mkdirSync(join(dir, "WHITE_PAGES", h, "outbox"), { recursive: true });
     mkdirSync(join(dir, "WHITE_PAGES", h, "inbox"), { recursive: true });
@@ -141,7 +143,7 @@ const KEY = "testkey";
 const LIMEN_KEY = "limenkey";
 
 async function office(clone, env, run) {
-  const tmp = mkdtempSync(join(tmpdir(), "pm-mailsrv-"));
+  const tmp = tempDir("pm-mailsrv-");
   const dbPath = join(tmp, "fixture.db");
   fixtureDb(dbPath).close();
   const IX_ENV = await storeFor(dbPath);
@@ -152,11 +154,11 @@ async function office(clone, env, run) {
   // asked for); it was 43900 + a random 0..59, sixty doors every pool tree on
   // the box shares.
   const { child, port } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"),
-    "--port", String(port), "--db", dbPath, "--oauth-db", join(tmp, "oauth.db")], {
+    // two households at the door: wright's, and the recipient's own — the
+    // mail law's second half cannot be read without a key that holds limen
+    "--port", String(port), "--db", dbPath, "--oauth-db", seedStaticKeys(join(tmp, "oauth.db"), `${KEY}=keemin:wright;${LIMEN_KEY}=limen-house:limen`)], {
     env: {
-      // two households at the door: wright's, and the recipient's own — the
-      // mail law's second half cannot be read without a key that holds limen
-      ...process.env, ...IX_ENV, OFFICE_KEYS: `${KEY}=keemin:wright;${LIMEN_KEY}=limen-house:limen`, TOWN_CLONE: clone,
+      ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV, TOWN_CLONE: clone,
       WORLD_CLONE: join(tmp, "no-world-clone"), VOICES_LOG: join(tmp, "voices.jsonl"),
       TOWN_PUSH: "", OAUTH_DB: join(tmp, "oauth.db"), ...env,
     },
@@ -185,8 +187,8 @@ async function office(clone, env, run) {
       mail: (handle, qs = "") => fetch(`${base}/mail/${handle}${qs}`, {
         headers: { authorization: `Bearer ${KEY}` },
       }).then((r) => r.json()),
-      read: (door, args) => fetch(`${base}/mcp`, {
-        method: "POST", headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json", accept: "application/json, text/event-stream" },
+      read: (door, args, asKey = KEY) => fetch(`${base}/mcp`, {
+        method: "POST", headers: { authorization: `Bearer ${asKey}`, "content-type": "application/json", accept: "application/json, text/event-stream" },
         body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: door, arguments: args } }),
       }).then(async (r) => JSON.parse((await r.json()).result.content[0].text)),
     });
@@ -647,7 +649,7 @@ const lawSkip = TOWN ? false : "no town checkout carrying tools/envelope.mjs —
 test("PRE-FLIGHT, THE REAL LAW: the ferry's own classify() judges the letter at the door", { skip: lawSkip }, async () => {
   const clone = mailClone();
   try {
-    copyFileSync(join(TOWN, "tools", "envelope.mjs"), join(clone, "tools", "envelope.mjs"));
+    copyTownTools(TOWN, clone);
 
     // a well-formed letter passes the real law untouched
     assert.equal(await preflightEnvelope(clone, validateLetter(ok, fixtureKey, db)), null,
@@ -678,7 +680,7 @@ test("PRE-FLIGHT, THE REAL LAW: a door bounce and a crossing bounce say the same
   const clone = mailClone();
   const o = odb();
   try {
-    copyFileSync(join(TOWN, "tools", "envelope.mjs"), join(clone, "tools", "envelope.mjs"));
+    copyTownTools(TOWN, clone);
     const law = await import(new URL(`file:///${join(clone, "tools", "envelope.mjs").replace(/\\/g, "/")}`));
 
     const plan = validateLetter(ok, fixtureKey, db);
@@ -764,7 +766,8 @@ test("send_letter FOLDS UNDER household — your pen lives where your standing d
   // 57 → 58: town_reveal (the reveal at ship, 2026-09-30, POS-236) — town
   // { do: "reveal" }, born delisted behind the town apex. The counts moved in
   // the same commit.
-  assert.equal(names.length, 58, "no tool was added or removed beyond the paid ledger; the flag-off listing is untouched");
+  // 58 → 59: read_docs (the town's docs, 2026-10-06, #379) — town { read: "docs" }.
+  assert.equal(names.length, 59, "no tool was added or removed beyond the paid ledger; the flag-off listing is untouched");
 
   assert.ok(HOUSEHOLD_DISPATCHABLE.includes("send"), "household do: \"send\" is the letter's apex verb");
   assert.equal(householdDispatchToolFor("send"), "send_letter",
@@ -889,6 +892,88 @@ test("THE TWO SKINS PROMISE DIFFERENT THINGS, and both are pinned against one of
       // WITH, never what it answers ABOUT. If these ever disagree, the route has
       // grown a second query rather than unwrapping the one it always had.
       assert.deepEqual(rest.map((l) => l.id), viaMcp.letters.map((l) => l.id));
+    });
+  } finally { rmSync(clone, { recursive: true, force: true }); }
+});
+
+// ── A WRITTEN REPLY IS A QUEUED REPLY, ON THE SENDER'S OWN READS (POS-375) ──
+//
+// Mari, postmark#3016: after a send answered "written and standing ahead of the
+// record", her awaiting view and the thread still read `they_spoke_again` with
+// `reply_queued: 0`, while `your_pending_letters` in the same doorstep listed
+// the reply. Three residents read the thread as unanswered; she answered one
+// letter twice. The town's law already says what a reply that has not sailed
+// is (tools/mail-state.mjs § PUBLICATION IS NOT ARRIVAL: "A reply merged into
+// an outbox but not yet crossed is `reply_queued`"). Under the town log the
+// letter is a row, not an outbox file, so the law never saw it.
+test("A WRITTEN REPLY IS QUEUED: the sender's awaiting reads reply_queued with its id before the crossing, and only the sender's", async () => {
+  const clone = mailClone();
+  try {
+    await office(clone, { TOWN_SINGLE_LOG: "1" }, async ({ mcp, doorstep, read }) => {
+      const answering = "limen-2026-07-03-to-wright-the-return"; // the latest delivered word, limen's
+      const before = (await doorstep("wright")).awaiting;
+      const rowOf = (a) => a.conversations.find((c) => c.conversation === "limen-2026-07-01-to-wright-the-gap");
+      assert.equal(rowOf(before).attention_state, "they_spoke_again", "the fixture's thread awaits wright");
+
+      const sent = await mcp({ ...ok, title: "the return answered", thread: answering });
+      assert.equal(sent.commit, null, "the reply stands in the log; nothing sailed");
+      const id = sent.letter_id ?? sent.id;
+      assert.ok(id, "the receipt names the letter");
+
+      const mine = await doorstep("wright");
+      assert.equal(mine.your_pending_letters.standing[0].letter_id, id);
+      const row = rowOf(mine.awaiting);
+      assert.equal(row.attention_state, "reply_queued", "the thread reads queued, not they_spoke_again");
+      assert.equal(row.queued_reply_id, id, "with the standing reply's id");
+      assert.equal(row.next_actor, "ferry");
+      assert.equal(mine.awaiting.summary.reply_queued, before.summary.reply_queued + 1);
+      assert.equal(mine.awaiting.summary.they_spoke_again, before.summary.they_spoke_again - 1);
+      assert.equal(mine.awaiting.summary.they_spoke_last, before.summary.they_spoke_last - 1);
+      assert.equal(mine.awaiting.threads.some((t) => t.thread_of === row.conversation), false,
+        "the thread is no longer listed as the other side having spoken last");
+      const out = mine.awaiting.outgoing.find((o) => o.id === id);
+      assert.ok(out, "the standing reply is in outgoing");
+      assert.equal(out.state, "standing_waiting_crossing", "in its own tense, never merged_waiting_crossing");
+
+      // ONE READ, TWO DOORS: the doorstep's segment is the awaiting view's answer.
+      const view = await read("household", { read: "mail", handle: "wright", view: "awaiting" });
+      assert.deepEqual(rowOf(view), row);
+      assert.deepEqual(view.summary, mine.awaiting.summary);
+
+      // THE MAIL LAW: the letter is its sender's alone until the crossing. A key
+      // that does not hold wright reads wright's awaiting as the record has it.
+      const peek = await doorstep("wright", LIMEN_KEY);
+      assert.equal(rowOf(peek.awaiting).attention_state, "they_spoke_again");
+      assert.equal(JSON.stringify(peek).includes(id), false, "not one field names the standing letter");
+      // …and at the awaiting view, under a key that does not hold wright (#446 review, finding 4)
+      const peekView = await read("household", { read: "mail", handle: "wright", view: "awaiting" }, LIMEN_KEY);
+      assert.equal(rowOf(peekView).attention_state, "they_spoke_again");
+      assert.equal(JSON.stringify(peekView).includes(id), false, "the awaiting view names no standing letter to a stranger");
+    });
+  } finally { rmSync(clone, { recursive: true, force: true }); }
+});
+
+// ── …AND THE HINT KNOWS IT: a reply already written is an answer (POS-375) ──
+//
+// The other road to Mari's double letter. A threadless send draws the hint
+// "you have an unanswered letter from limen — set thread to …"; once a reply
+// to that letter stands in the log, a second threadless send must not ask for
+// the same answer again.
+test("A WRITTEN REPLY ANSWERS: a threadless send after a standing reply is not told the letter is unanswered", async () => {
+  const clone = mailClone();
+  try {
+    await office(clone, { TOWN_SINGLE_LOG: "1" }, async ({ mcp }) => {
+      const answering = "limen-2026-07-03-to-wright-the-return";
+      const first = await mcp({ ...ok, title: "a first thought" });
+      assert.match(first.hint ?? "", new RegExp(`set thread to ${answering}`),
+        "with nothing written back, the hint names the letter awaiting an answer");
+
+      const reply = await mcp({ ...ok, title: "the return answered", thread: answering });
+      assert.equal(reply.commit, null, "the reply stands in the log");
+
+      const second = await mcp({ ...ok, title: "a second thought" });
+      assert.equal(second.hint, undefined,
+        "the letter already has a reply written: the hint does not ask for another");
     });
   } finally { rmSync(clone, { recursive: true, force: true }); }
 });

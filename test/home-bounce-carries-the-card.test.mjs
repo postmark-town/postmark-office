@@ -91,7 +91,9 @@ test("the REST skin is untouched — no card on either side, exactly as before",
 
   assert.equal(ok.card, undefined, "REST answers the domain, not the envelope — the card has never ridden here");
   assert.equal(bounced.card, undefined, "and a REST bounce must not start carrying one");
-  assert.deepEqual(Object.keys(bounced).sort(), ["code", "defect", "error", "hint"]);
+  // `refused` joined 2026-10-06 (POS-427, Darko's option b): every apex refusal
+  // says so, additively, at the end of the body.
+  assert.deepEqual(Object.keys(bounced).sort(), ["code", "defect", "error", "hint", "refused"]);
 });
 
 test("a card that cannot be built leaves the bounce a plain bounce, never a 500", async () => {

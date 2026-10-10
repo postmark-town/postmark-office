@@ -189,7 +189,9 @@ function runShipped(mode) {
   }
   // A refresh-clone that always succeeds, printing a 40-char sha on its last line.
   const SHA = "0".repeat(40);
-  writeFileSync(join(ops, "world2-refresh-clone.sh"), `#!/bin/bash\necho ${SHA}\n`);
+  // It logs which checkout it was asked for, so a test can say whose law the pen read (POS-364).
+  const refreshLog = join(dir, "refresh.log");
+  writeFileSync(join(ops, "world2-refresh-clone.sh"), `#!/bin/bash\necho "$1" >> ${JSON.stringify(refreshLog)}\necho ${SHA}\n`);
   // A `node` that records which pen it was asked to run and exits 0 — the pen
   // that did not really run. A `--blessed` run is logged with its flag, so the
   // law mode's two law-ingest runs can be told apart (POS-270).
@@ -218,10 +220,11 @@ function runShipped(mode) {
     code = err.status ?? 1;
   }
   const pens = existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").filter(Boolean) : [];
+  const checkouts = existsSync(refreshLog) ? readFileSync(refreshLog, "utf8").trim().split("\n").filter(Boolean) : [];
   const state = JSON.parse(readFileSync(join(lab, "state", mode === "law" ? "ingest-law.json"
     : mode === "stamps" ? "ingest-stamps.json" : "ingest.json"), "utf8"));
   rmSync(dir, { recursive: true, force: true });
-  return { code, pens, state };
+  return { code, pens, state, checkouts };
 }
 
 function bashAvailable() {
@@ -235,14 +238,16 @@ test("EXECUTED: `law` invokes law-ingest.mjs and never stamp-ingest.mjs", (t) =>
       "arms above still bound the dispatch, but nothing here proves which pen file runs");
     return;
   }
-  const { code, pens, state } = runShipped("law");
+  const { code, pens, state, checkouts } = runShipped("law");
   assert.equal(code, 0, "the law mode did not exit 0 against a stubbed tree where both pens succeed");
-  assert.deepEqual(pens, ["world2/tools/law-ingest.mjs", "world2/tools/law-ingest.mjs --blessed"],
-    `the law mode invoked ${pens.length} pen(s): ${pens.join(", ")} — anything but law-ingest (main, then ` +
-    "the blessed sha) re-adopts the rail the founder parked on 2026-08-31 or drops the office's blessed law");
+  assert.deepEqual(pens, ["world2/tools/law-ingest.mjs"],
+    `the law mode invoked ${pens.length} pen(s): ${pens.join(", ")} — ONE law-ingest, the settlement's law, which moves ` +
+    "the pin (POS-364); a second run, or the ledger pen, re-adopts the rail the founder parked on 2026-08-31");
+  assert.deepEqual(checkouts, ["world-blessed"],
+    "the law pen reads the NEWEST SETTLEMENT's checkout, never world main on a clock (POS-364, R2)");
   assert.equal(state.mode, "law");
   assert.equal(state.law.sha, "0".repeat(40));
-  assert.equal(state.law_blessed.sha, "0".repeat(40), "the blessed run's receipt is missing from the law state");
+  assert.equal(state.law_blessed, undefined, "there is no second, blessed-only run in law mode any more");
   assert.equal(state.stamp, undefined,
     "the law mode's state carries a `stamp` line for a pen that did not run — a zero-exit line " +
     "that reads like a receipt is worse than no line");

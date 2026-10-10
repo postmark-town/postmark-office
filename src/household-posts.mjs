@@ -24,13 +24,14 @@
 // post's words: announced, live (doors open or underway), ended; cancelled is
 // the one state an act stores. Nothing new is stored.
 //
-// IDEAS are still Think Tank marks until POS-290, read where `town { read:
-// "ideas" }` reads them (`ideasTank`) and backed where `town { read: "stake" }`
-// reads the backing (the town engine's `worldStakeState`, the stamp ledger's
-// world-stake rows). Every standing idea is in the window, and every one is
-// `posted`: the lifecycle states are POS-289's, not this read's to invent.
-// An idea's title is its body, resident text, never folded into a sentence of
-// the office's.
+// IDEAS come two ways since POS-290. The Think Tank's MARKS are read where
+// `town { read: "ideas" }` reads them (`ideasTank`) and backed where `town {
+// read: "stake" }` reads the backing (the town engine's `worldStakeState`, the
+// stamp ledger's world-stake rows). Every standing idea mark is in the window,
+// and every one is `posted`. An idea mark's title is its body, resident text,
+// never folded into a sentence of the office's. The idea POSTS (IDEA_POSTS) are
+// the posts table's, read like the events (§ ideaPostRows): their state is
+// their stage, and a resident who signed up to build a part takes part.
 //
 // QUESTS are not here. The town posts them and the household page keeps its
 // quest board beside these lists.
@@ -56,6 +57,7 @@ import { ideasTank } from "./world-classes.mjs";
 import { resolveHouse } from "./household-deriver.mjs";
 import { registryFor } from "./house-bundle.mjs";
 import { EVENT_CLASS, ENDED_LIST_DAYS, STATE_CANCELLED, phaseAt } from "./events.mjs";
+import { ideaPostsOn } from "./ideas.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TOWN_CLONE = process.env.TOWN_CLONE ?? resolve(HERE, "..", "town-clone");
@@ -64,7 +66,7 @@ const TOWN_CLONE = process.env.TOWN_CLONE ?? resolve(HERE, "..", "town-clone");
 export const POSTS_CAP = 20;
 
 const DAY_MS = 86_400_000;
-const IDEA_CLASS = "idea";
+const IDEA_CLASS = "idea";   // the marks' class, and the posts' (ideas.mjs) since POS-290
 const IDEA_STATE = "posted";
 /** A response counts while it stands (posts-fields.md § 4). */
 const COUNTED = new Set(["standing", "accepted"]);
@@ -170,11 +172,19 @@ export async function postRowsOf(client, cls, now, { keep = null } = {}) {
 }
 
 /** The events half: `{ rows }` or `{ unavailable }`. */
-async function eventRows(members, now, { env }) {
+const eventRows = (members, now, { env }) => tableRows(EVENT_CLASS, members, now, { env, what: "the events" });
+/**
+ * The idea posts' half (POS-290). No stake can stand on an idea post yet (the
+ * stake on posts is w43's), so `stake` and `ours` are 0, which is true.
+ */
+const ideaPostRows = (members, now, { env }) => tableRows(IDEA_CLASS, members, now, { env, what: "the idea posts" });
+
+/** One class of the posts table: the house's own posts and the ones it answered. `{ rows }` or `{ unavailable }`. */
+async function tableRows(cls, members, now, { env, what }) {
   const house = new Set(members);
   try {
     return await officeRead(async (client) => {
-      const rows = await postRowsOf(client, EVENT_CLASS, now,
+      const rows = await postRowsOf(client, cls, now,
         { keep: (p, who) => house.has(p.author) || who.some((h) => house.has(h)) });
       return {
         rows: rows.map((r) => ({
@@ -186,7 +196,7 @@ async function eventRows(members, now, { env }) {
       };
     }, { env });
   } catch {
-    return { unavailable: "the events could not be read from the office's record" };
+    return { unavailable: `${what} could not be read from the office's record` };
   }
 }
 
@@ -230,9 +240,9 @@ async function backingOf(townClone) {
 }
 
 /** The ideas half: `{ rows }` or `{ unavailable }`. */
-async function ideaRows(members, whose, { worldDb, townClone }) {
+async function ideaRows(members, whose, { townClone }) {
   const house = new Set(members);
-  const tank = ideasTank({ worldDb });
+  const tank = ideasTank();
   if (tank.source !== "store") return { unavailable: "the Think Tank could not be read from the world record" };
   if (!tank.ideas.length) return { rows: [] };
   if (!existsSync(join(townClone, "tools", "world-stake.mjs")))
@@ -292,24 +302,28 @@ export function postOrder(a, b) {
  * `household { read: "posts", handle }`.
  *
  * @param {string} handle  any resident of the house; the answer is the house's
- * @param {{ now?: number, env?: object, clone?: string|null, worldDb?: string|null, townClone?: string, readers?: object }} ctx
+ * @param {{ now?: number, env?: object, clone?: string|null, townClone?: string, readers?: object }} ctx
  */
-export async function householdPosts(handle, { now = Date.now(), env = process.env, clone = null, worldDb = null, townClone = TOWN_CLONE, readers = {} } = {}) {
+export async function householdPosts(handle, { now = Date.now(), env = process.env, clone = null, townClone = TOWN_CLONE, readers = {} } = {}) {
   const h = String(handle ?? "").trim();
   const house = await houseOf(h, { clone, readers });
   const mine = house.resolve ? house.resolve(h) : { key: `solo:${h}`, members: [h] };
   const whose = (author) => (house.resolve ? house.resolve(author).key : author === h ? mine.key : null);
-  const [events, ideas] = await Promise.all([
+  const [events, ideas, ideaPosts] = await Promise.all([
     eventRows(mine.members, now, { env }),
-    ideaRows(mine.members, whose, { worldDb, townClone }),
+    ideaRows(mine.members, whose, { townClone }),
+    ideaPostRows(mine.members, now, { env }),
   ]);
-  const rows = [...(events.rows ?? []), ...(ideas.rows ?? [])].sort(postOrder);
+  const rows = [...(events.rows ?? []), ...(ideas.rows ?? []), ...(ideaPosts.rows ?? [])].sort(postOrder);
   const list = (role) => {
     const all = rows.filter((r) => r.role === role);
     const plain = ({ [STARTS]: _starts, [RESPONDENTS]: _who, [FIELDS]: _fields, ...r }) => r;
     return { total: all.length, shown: Math.min(all.length, POSTS_CAP), rows: all.slice(0, POSTS_CAP).map(plain) };
   };
-  const unavailable = [house.unread, events.unavailable, ideas.unavailable].filter(Boolean);
+  // The idea posts' half is quiet when it cannot be read while the class is
+  // closed: an office that never opened it answers as it always did.
+  const ideaPostsGap = ideaPostsOn(env) ? ideaPosts.unavailable : null;
+  const unavailable = [house.unread, events.unavailable, ideas.unavailable, ideaPostsGap].filter(Boolean);
   return {
     household: mine.key,
     residents: mine.members,

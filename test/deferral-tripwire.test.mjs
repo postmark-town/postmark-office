@@ -64,6 +64,7 @@ import { REGISTRY_PATH } from "../src/residency.mjs";
 import { MAIL_ACT } from "../src/town-mail.mjs";
 import { outboxRelPath } from "../src/write.mjs";
 import { withRecordFrom } from "./registry-pool-stub.mjs";
+import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 
 // The town index this file's offices read: a store seeded from each fixture
 // office.db (POS-268, office-under-test.mjs). Stopped when the file is done.
@@ -342,9 +343,9 @@ test("T5 · THE IDENTITY FENCE: neither join door will append a row without a ve
     let PORT;
     let BASE;
     const STATIC = "statickey";
-    ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--db", dbPath, "--oauth-db", odbPath], {
+    ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--db", dbPath, "--oauth-db", seedStaticKeys(odbPath, `${STATIC}=keemin:wright`)], {
       env: {
-        ...process.env, ...IX_ENV, TOWN_SINGLE_LOG: "1", OFFICE_KEYS: `${STATIC}=keemin:wright`,
+        ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV, TOWN_SINGLE_LOG: "1",
         TOWN_CLONE: clone, WORLD_CLONE: join(work, "no-world"), VOICES_LOG: join(work, "voices.jsonl"), TOWN_PUSH: "",
         // so the pen check passes and the IDENTITY fence is what answers — the
         // door bounces "not-yet-open" first otherwise, which would make this
@@ -409,9 +410,9 @@ test("T6 · THE BERTH ARC OPENS NO WINDOW: `begin` parks a declaration, it does 
     // asked for); it was the fixed 43922, a door every pool tree on the box shares.
     let PORT;
     let BASE;
-    ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--db", dbPath, "--oauth-db", odbPath], {
+    ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--db", dbPath, "--oauth-db", seedStaticKeys(odbPath, "unused=keemin:wright")], {
       env: {
-        ...process.env, ...IX_ENV, TOWN_SINGLE_LOG: "1", OFFICE_KEYS: "unused=keemin:wright",
+        ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV, TOWN_SINGLE_LOG: "1",
         TOWN_CLONE: clone, WORLD_CLONE: join(work, "no-world"), VOICES_LOG: join(work, "voices.jsonl"), TOWN_PUSH: "",
       },
       stdio: ["ignore", "pipe", "pipe"],

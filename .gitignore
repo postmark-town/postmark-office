@@ -49,3 +49,6 @@ world-shadow-diff.jsonl*
 # The name is ALSO in the workflow's exclusion list beside telemetry/.github, as
 # the second net for the day somebody re-adds it by reflex.
 .omc/
+
+# the read-shape eval's run folders: each agent's working directory and MCP config (tools/read-eval/, POS-486)
+.read-eval/

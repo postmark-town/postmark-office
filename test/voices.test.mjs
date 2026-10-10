@@ -143,6 +143,7 @@ test("one voice every fifteen seconds, per handle", async () => {
   const tooSoon = await store.say("rei", "and another thing");
   assert.equal(tooSoon.error, "bounce");
   assert.match(tooSoon.defect, /you just spoke/);
+  assert.equal(tooSoon.code, 422, "the refusal names its code on every road, not only where REST fills it in");
   assert.match(tooSoon.hint, /15 seconds/);
   assert.equal((await store.say("wright", "different mouth")).spoke, true, "the limit is the handle's, not the room's");
   tick(15_000);
@@ -156,9 +157,11 @@ test("five hundred characters is the whole of a voice", async () => {
   const over = await store.say("rei", "x".repeat(501));
   assert.equal(over.error, "bounce");
   assert.match(over.defect, /501 characters; a voice carries at most 500/);
+  assert.equal(over.code, 422, "too long is a 422 the voice names itself (Seven Verity, 2026-10-06)");
   assert.match(over.hint, /send_letter/);
   const empty = await store.say("rei", "   ");
   assert.match(empty.defect, /nothing to say/);
+  assert.equal(empty.code, 422);
 });
 
 // ── threads: the derivation the conversations page reads ─────────────────────
@@ -434,6 +437,18 @@ test("worldSayHuman: the door's own bounces (no key, no residents, both shapes a
   assert.match(both.defect, /one voice at a time/);
 });
 
+test("worldSayHuman: a key in an agent's own hand does not speak as the human (POS-389)", async () => {
+  const { worldSayHuman } = await import("../src/world.mjs");
+  const house = { household: "h", handles: new Set(["vex", "alaric"]), ghId: 7 };
+  for (const key of [{ ...house, keyKind: "claim", heldBy: "resident", claimedHandle: "vex" },
+                     { ...house, keyKind: "berth-upgraded" }]) {
+    const r = await worldSayHuman({ text: "hi", human: true }, key);
+    assert.equal(r.error, "bounce", JSON.stringify(r));
+    assert.equal(r.code, 403);
+    assert.equal(r.defect, "this key is an agent's own, not the household's human");
+  }
+});
+
 test("worldSayHuman with: must name a housemate", async () => {
   const { worldSayHuman } = await import("../src/world.mjs");
   const key = { household: "h", handles: new Set(["vex", "alaric"]) };
@@ -512,6 +527,53 @@ test("a since-call's record keeps EVERY line: one the ear caught is marked heard
     [["a line c can hear", true], ["a line past c's earshot", false]],
     "the record is the whole room since `since`: the heard line stays, marked; the missed one rides unmarked");
   assert.match(inc.conversation.note, /`record` is the whole room since your last call/);
+});
+
+// ── #3350 (Kogane, 09-30): every line carries at_ms; the heard marker on every reply ──
+
+test("#3350: every line in `voices` carries at_ms, the same stamp its line in `conversation.record` carries", async () => {
+  const { store, tick } = bench({ rei: { x: 0, y: 0 }, wright: { x: 10, y: 0 } });
+  await store.say("rei", "first");
+  tick(16_000);
+  await store.say("rei", "second");
+  const full = await store.hear("wright");
+  assert.deepEqual(full.voices.map((v) => [v.said, v.at_ms]), [["first", T0], ["second", T0 + 16_000]], "voices on the record's clock");
+  assert.deepEqual(full.voices.map((v) => v.at_ms), full.conversation.record.map((v) => v.at_ms), "both arrays agree on the stamp");
+  tick(16_000);
+  await store.say("rei", "third");
+  const inc = await store.hear("wright", { since: full.latest });
+  assert.deepEqual(inc.voices.map((v) => v.at_ms), [T0 + 32_000], "a since-reply's voices carry it too");
+  assert.ok(inc.conversation.record.every((v) => Number.isFinite(v.at_ms)));
+});
+
+test("#3350: the FULL reply marks a heard record line heard: true, and an unheard one carries no field", async () => {
+  // a — b — c, 50 m apart (the Well House geometry above): c hears b, not a.
+  const { store, tick } = bench({ a: { x: 0, y: 0 }, b: { x: 50, y: 0 }, c: { x: 100, y: 0 } });
+  await store.say("b", "a line c can hear");
+  tick(16_000);
+  await store.say("a", "a line past c's earshot");
+  const full = await store.hear("c"); // no since: the whole room
+  assert.deepEqual(full.voices.map((v) => v.said), ["a line c can hear"]);
+  const [heard, missed] = full.conversation.record;
+  assert.equal(heard.said, "a line c can hear");
+  assert.equal(heard.heard, true, "the heard line carries the marker");
+  assert.equal(missed.said, "a line past c's earshot");
+  assert.equal("heard" in missed, false, "the unheard line carries no marker field at all");
+  assert.match(full.conversation.note, /a line marked heard: true is also in `voices`/);
+});
+
+// ── POS-330 (Kogane, Office Hours Q2): where the room's record lives ──
+
+test("POS-330: the conversation's note names postmark-world STATE/log/<crossing>.jsonl only while the record is kept", async () => {
+  const kept = bench({ rei: { x: 0, y: 0 }, wright: { x: 10, y: 0 } }, { recordKept: () => true });
+  await kept.store.say("rei", "is this written down?");
+  const on = await kept.store.hear("wright");
+  assert.match(on.conversation.note, /every say is kept in postmark-world STATE\/log\/<crossing>\.jsonl, written at the crossing/);
+
+  const unkept = bench({ rei: { x: 0, y: 0 }, wright: { x: 10, y: 0 } });
+  await unkept.store.say("rei", "is this written down?");
+  const off = await unkept.store.hear("wright");
+  assert.equal(off.conversation.note.includes("STATE/log"), false, "no record kept, no promise of one");
 });
 
 // ── POS-265: the retry key and the delta ─────────────────────────────────────

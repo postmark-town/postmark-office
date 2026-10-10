@@ -89,6 +89,21 @@ export function stopsOfService(service) {
 export const isVehicleStop = (markId, service) =>
   stopsOfService(service).some((s) => s.markId === String(markId ?? ""));
 
+/**
+ * THE DOORS IN, NEAREST FIRST (POS-379, postmark#3181). Every stop the
+ * timetable names, with its straight-line distance from `at` in whole metres,
+ * nearest first. The vessel's own mooring is a stop like any other, so it is
+ * among them. With no readable `at` the timetable's own order stands and every
+ * distance is null: a list sorted on nothing would only look ordered.
+ */
+export function stopDoorsNearest(service, at = null) {
+  const doors = stopsOfService(service).map((s) => {
+    const d = straightLineM(at, s.at);
+    return { mark: s.markId, at: s.at, distance_m: d == null ? null : Math.round(d) };
+  });
+  return doors.every((d) => d.distance_m != null) ? doors.sort((a, b) => a.distance_m - b.distance_m) : doors;
+}
+
 /** The vessel a service moves — the thing you are inside when you board. */
 export const vesselIdOf = (service) => service?.vessel?.markId ?? null;
 
@@ -483,8 +498,12 @@ export function stopUnderfoot(standpoint, service, worldState = null, { earshotM
  * told the wharf is for, with the ride times measured FROM HERE.
  *
  * Null away from a stop, so an answer from anywhere else is unchanged.
+ *
+ * `season` (POS-551): while the Mists stand, the line ends with the ferry's own
+ * word on them. The caller decides it from the world's schedule and the crossing;
+ * without it the line is the one it always was.
  */
-export function transportAt(markId, service, worldState = null) {
+export function transportAt(markId, service, worldState = null, { season = false } = {}) {
   const vessel = vehicleOf(service, worldState);
   if (!vessel || !isVehicleStop(markId, service)) return null;
   const from = anchorOfStop(markId, service);
@@ -503,7 +522,7 @@ export function transportAt(markId, service, worldState = null) {
   return {
     stop: markId,
     vehicle: vessel,
-    line: `${boarding}; from aboard, ride to: ${onward.map((o) => `${o.mark} (~${o.ride_minutes} min)`).join(", ") || "(nowhere else on her timetable)"}.`,
+    line: `${boarding}; from aboard, ride to: ${onward.map((o) => `${o.mark} (~${o.ride_minutes} min)`).join(", ") || "(nowhere else on her timetable)"}${season ? " (she sails only to the clear places now)" : ""}.`,
     ride_to: onward,
   };
 }
@@ -534,7 +553,10 @@ export function doorstepTransport(service, standpoint = null, worldState = null)
     vehicle: vessel,
     stops: stops.length,
     ...(nearest ? { nearest } : {}),
-    line: `${vessel}: stops at ${stops.length} place${stops.length === 1 ? "" : "s"}${nearest ? ` (nearest to you: ${nearest.mark}, ${nearest.distance_m} m away)` : ""}. Enter a stop to board.`,
+    // POS-483: "Enter a stop to board" was refused from anywhere off the stop
+    // (R15 keeps walk and entry decoupled), so the line names the composed walk
+    // in the ride bounce's own grammar (#448).
+    line: `${vessel}: stops at ${stops.length} place${stops.length === 1 ? "" : "s"}${nearest ? ` (nearest to you: ${nearest.mark}, ${nearest.distance_m} m away)` : ""}. To board: world { do: "walk", args: { mark_id: "${nearest ? nearest.mark : "<a stop>"}", enter_on_arrival: true } }, then walk again with accept: true to take her terms.`,
   };
 }
 

@@ -14,6 +14,7 @@ import { editClone, fixtureDb } from "./fixture.mjs";
 import { worldStoreFixture, AS_OF_WORLD } from "./world-graph-fixture.mjs";
 import { rowsEnv } from "./helpers/world-rows.mjs";
 import { indexStore, testIndex } from "./helpers/office-under-test.mjs";
+import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const KEY = "testkey";
@@ -43,8 +44,8 @@ before(async () => {
   // collision the port had, one directory over. The berth test below already
   // passed its own `--oauth-db`; this is that idiom applied to every spawn here.
   child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0", "--db", dbPath,
-    "--oauth-db", join(tmp, "oauth.db"), "--roles-db", join(tmp, "roles.db")], {
-    env: { ...process.env, OFFICE_KEYS: `${KEY}=keemin:wright`, TOWN_CLONE: join(tmp, "no-clone-here"), WORLD_CLONE: join(tmp, "no-world-clone"), VOICES_LOG: join(tmp, "voices-log.jsonl"), TOWN_PUSH: "", ...rowsEnv(join(tmp, "world.db"), tmp), ...ix.env },   // the world is the rows (POS-270 lane W 3a), never the file
+    "--oauth-db", seedStaticKeys(join(tmp, "oauth.db"), `${KEY}=keemin:wright`), "--roles-db", join(tmp, "roles.db")], {
+    env: { ...process.env, TOWN_CLONE: join(tmp, "no-clone-here"), WORLD_CLONE: join(tmp, "no-world-clone"), VOICES_LOG: join(tmp, "voices-log.jsonl"), TOWN_PUSH: "", ...rowsEnv(join(tmp, "world.db"), tmp), ...ix.env },   // the world is the rows (POS-270 lane W 3a), never the file
     stdio: ["ignore", "pipe", "pipe"],
   });
   await new Promise((ok, no) => {
@@ -240,13 +241,16 @@ test("PATCH /profile/{handle}/avatar reaches the REST image door and keeps its b
   const dbPath = join(dir, "fixture.db");
   fixtureDb(dbPath).close();
   const avatarServer = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0", "--db", dbPath,
-    "--oauth-db", join(dir, "oauth.db"), "--roles-db", join(dir, "roles.db")], {
-    env: { ...process.env, OFFICE_KEYS: `${KEY}=keemin:wright`, TOWN_CLONE: clone, WORLD_CLONE: join(dir, "no-world-clone"), TOWN_PUSH: "", ...ix.env },
+    "--oauth-db", seedStaticKeys(join(dir, "oauth.db"), `${KEY}=keemin:wright`), "--roles-db", join(dir, "roles.db")], {
+    env: { ...process.env, WORLD_GRAPH_NONE: "1", TOWN_CLONE: clone, WORLD_CLONE: join(dir, "no-world-clone"), TOWN_PUSH: "", ...ix.env },
     stdio: ["ignore", "pipe", "pipe"],
   });
   try {
     await new Promise((ok, no) => {
-      const timer = setTimeout(() => no(new Error("avatar fixture server never listened")), 10_000);
+      // 30 s: a switched office loads its roll and probe from the store before it
+      // listens, bounded at 10 s itself (server.mjs § AT BOOT), so 10 s here
+      // raced that bound on a busy machine
+      const timer = setTimeout(() => no(new Error("avatar fixture server never listened")), 30_000);
       avatarServer.stdout.on("data", (data) => {
         const m = /listening on :(\d+)/.exec(String(data));
         if (m) { port = m[1]; clearTimeout(timer); ok(); }
@@ -278,7 +282,8 @@ test("PATCH /profile/{handle}/avatar reaches the REST image door and keeps its b
     });
     assert.equal(truncated.status, 422);
     // `code` rides the body since POS-70 row 35 (2026-09-24) — the status, said twice.
-    assert.deepEqual(await truncated.json(), { error: "bounce", code: 422, defect: "the file ends mid-stream", hint: "re-export it and try again" });
+    // `refused` since POS-427 (2026-10-06): every refusal says so, last.
+    assert.deepEqual(await truncated.json(), { error: "bounce", code: 422, defect: "the file ends mid-stream", hint: "re-export it and try again", refused: true });
   } finally {
     if (avatarServer.exitCode === null) {
       const gone = new Promise((ok) => avatarServer.on("exit", ok));
@@ -485,7 +490,11 @@ test("MCP tools/list, apex OFF: the full flat list — the slim's delist is apex
   // 57 -> 58 (the reveal at ship, 2026-09-30, POS-236): town_reveal —
   // town { do: "reveal" }. Born delisted behind the town apex. The counts moved
   // in the same commit.
-  assert.equal(names.length, 58);
+  // 58 -> 59 (the town's docs, 2026-10-06, #379): read_docs —
+  // town { read: "docs" }. Born delisted behind the town apex. The counts moved
+  // in the same commit.
+  assert.equal(names.length, 59);
+  assert.ok(names.includes("read_docs"), "the docs read has a flat definition, delisted only while the apex serves it");
   assert.ok(names.includes("read_posts"), "the posts read has a flat definition, delisted only while the apex serves it");
   assert.ok(names.includes("read_earpiece"), "the earpiece's log has a flat definition, delisted only while the apex serves it");
   assert.ok(names.includes("read_calendar"), "the calendar read has a flat definition, delisted only while the apex serves it");
@@ -527,7 +536,10 @@ test("GET /join — the arrival page answers keyless, with the verb's real schem
 
 test("GET /me — a static key reads its own identity; anonymous is 401 + discovery", async () => {
   const me = await (await get("/me")).json();
-  assert.deepEqual(me, { household: "keemin", handles: ["wright"], visitor: false, verified_github: null, key_kind: "static", principal: false });
+  // the household block reads the store's registry (POS-342); wright stands in
+  // no house in this suite's store, so the block is the honest solo one
+  assert.deepEqual(me, { household: "keemin", handles: ["wright"], visitor: false, verified_github: null, key_kind: "static", principal: false,
+    households: { wright: { key: "solo:wright", slug: null, human: null, residents: ["wright"] } } });
   const anon = await get("/me", null);
   assert.equal(anon.status, 401);
   assert.match(anon.headers.get("www-authenticate") ?? "", /resource_metadata=/);
@@ -631,8 +643,8 @@ test("with NO store at all the window 404s — never an empty graph, which would
   // the one shape an operator meets on a box before the first hydration.
   let port;
   const bare = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0", "--db", join(tmp, "fixture.db"),
-    "--oauth-db", join(tmp, "oauth-bare.db"), "--roles-db", join(tmp, "roles-bare.db")], {
-    env: { ...process.env, OFFICE_KEYS: `${KEY}=keemin:wright`, TOWN_CLONE: join(tmp, "no-clone-here"), WORLD_CLONE: join(tmp, "no-world-clone"), VOICES_LOG: join(tmp, "voices-log-2.jsonl"), TOWN_PUSH: "", WORLD_STORE_DB: join(tmp, "no-store-here.db"), ...ix.env },
+    "--oauth-db", seedStaticKeys(join(tmp, "oauth-bare.db"), `${KEY}=keemin:wright`), "--roles-db", join(tmp, "roles-bare.db")], {
+    env: { ...process.env, WORLD_GRAPH_NONE: "1", TOWN_CLONE: join(tmp, "no-clone-here"), WORLD_CLONE: join(tmp, "no-world-clone"), VOICES_LOG: join(tmp, "voices-log-2.jsonl"), TOWN_PUSH: "", WORLD_STORE_DB: join(tmp, "no-store-here.db"), ...ix.env },
     stdio: ["ignore", "pipe", "pipe"],
   });
   try {
@@ -665,7 +677,8 @@ test("world_say bounces honestly when the office has no world to stand in", asyn
 
 test("MCP whoami mirrors GET /me", async () => {
   const signed = JSON.parse((await rpc("tools/call", { name: "whoami", arguments: {} })).body.result.content[0].text);
-  assert.deepEqual(signed, { household: "keemin", handles: ["wright"], visitor: false, verified_github: null, key_kind: "static", principal: false });
+  assert.deepEqual(signed, { household: "keemin", handles: ["wright"], visitor: false, verified_github: null, key_kind: "static", principal: false,
+    households: { wright: { key: "solo:wright", slug: null, human: null, residents: ["wright"] } } });
 });
 
 test("MCP list_letters / list_regions / read_home mirror the REST reads", async () => {
@@ -800,8 +813,8 @@ test("POST /berth: one keyless POST mints ephemeral standing; names are single-o
   const dbPath = join(dir, "fixture.db");
   fixtureDb(dbPath).close();
   const child2 = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0", "--db", dbPath,
-    "--oauth-db", join(dir, "oauth.db"), "--roles-db", join(dir, "roles.db")], {
-    env: { ...process.env, OFFICE_KEYS: `${KEY}=keemin:wright`, TOWN_CLONE: join(dir, "no-clone"), WORLD_CLONE: join(dir, "no-world-clone"), VOICES_LOG: join(dir, "voices.jsonl"), TOWN_PUSH: "", ...ix.env },
+    "--oauth-db", seedStaticKeys(join(dir, "oauth.db"), `${KEY}=keemin:wright`), "--roles-db", join(dir, "roles.db")], {
+    env: { ...process.env, WORLD_GRAPH_NONE: "1", TOWN_CLONE: join(dir, "no-clone"), WORLD_CLONE: join(dir, "no-world-clone"), VOICES_LOG: join(dir, "voices.jsonl"), TOWN_PUSH: "", ...ix.env },
     stdio: ["ignore", "pipe", "pipe"],
   });
   try {
@@ -930,14 +943,20 @@ test("GET /world/find with no q → 422, naming q", async () => {
 
 // POS-294: the posts read's plain twin. The judgement of the class comes before
 // any store read, so this office (no record) answers it in full.
-test("GET /posts takes a class: none → 422 naming it, an idea → 422 naming the read that answers ideas", async () => {
+test("GET /posts takes a class: none → 422 naming it; an idea is a post class since POS-290, and its read answers", async () => {
   const none = await get("/posts", null);
   assert.equal(none.status, 422);
   assert.match((await none.json()).defect, /which class/);
+  // the read is not switched (IDEA_POSTS gates the acts): it reports what the store holds
   const idea = await get("/posts?class=idea", null);
-  assert.equal(idea.status, 422);
-  assert.match((await idea.json()).hint, /read: "ideas"/);
+  assert.equal(idea.status, 200, "class idea is judged a post class, and its read answers");
+  const ideas = await idea.json();
+  assert.deepEqual([ideas.class, ideas.finished, ideas.total, ideas.posts], ["idea", ["shipped", "declined", "duplicate"], 0, []],
+    "this office holds no idea post, and says so rather than refusing the class");
   const one = await get("/posts/postmark-pen/first-idea?class=bounty", null);
   assert.equal(one.status, 422);
   assert.match((await one.json()).defect, /"bounty" is not a post class/);
+  // POS-558: the bug read pages, and the door hands it limit and offset
+  const bugs = await (await get("/posts?class=bug&limit=7&offset=3", null)).json();
+  assert.deepEqual([bugs.total, bugs.shown, bugs.limit, bugs.offset, bugs.complete, bugs.catchers, bugs.posts], [0, 0, 7, 3, true, [], []]);
 });

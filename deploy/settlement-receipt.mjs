@@ -577,6 +577,9 @@ const receipt = {
         ref: refusal.ref ?? null,
         paths_in_canon: refusal.paths_in_canon ?? [],
         paths_in_inputs: refusal.paths_in_inputs ?? [],
+        // Which sketchbook changed a path canon carries (POS-378): without it an
+        // input-bad receipt naming a path in canon reads as a contradiction.
+        amended_by_inputs: refusal.amended_by_inputs ?? {},
         errors_claimed: refusal.errors_claimed ?? null,
         errors_seen: refusal.errors_seen ?? null,
       }

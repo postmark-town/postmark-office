@@ -32,6 +32,7 @@
 
 import { officeRead, officeWrite, insertAct, PenUnreachableError } from "./world2-pen.mjs";
 import { householdKeyFor } from "./world2-claims.mjs";
+import { holdsHand } from "./named-hand.mjs";
 import { sessionKeysVia } from "./household-deriver.mjs";
 import { currentCrossing } from "./crossings.mjs";
 import { wakesNote, earpieceEnabled } from "./earpiece.mjs";
@@ -44,6 +45,7 @@ import {
   BUG_CLASS, BUG_FINISHED, BUG_LADDER, BUG_STAGES, BUG_HANDS, STATE_REPORTED, stageAmount,
   judgeBugText, judgeBugHand, judgeHandleField, judgeAdvance, judgeReveal, REVEAL_CANDIDATES, BUG_NO_STAKE, BUG_NO_CLOSE,
 } from "./bugs.mjs";
+import { ideaPostsOn } from "./ideas.mjs";
 import {
   EVENT_CLASS, ACT_POST, ACT_AMEND_POST, ACT_CLOSE, ACT_ADVANCE, ACT_REVEAL, ACT_RSVP, ACT_ANNOUNCE, ENDED_LIST_DAYS,
   STATE_CANCELLED, RESPONSE_RSVP, RESPONSE_STANDING,
@@ -57,7 +59,7 @@ import {
 // tables, generalized in place, with events their first class. The old names
 // are read-only views for the readers that have not moved (the earpiece, the
 // pinned board); nothing here reads or writes them.
-const POST_COLUMNS = "id, class, title, body, author, household, place_mark, place_x, place_y, starts, ends, state, fields, revised, posted_act, last_act";
+export const POST_COLUMNS = "id, class, title, body, author, household, place_mark, place_x, place_y, starts, ends, state, fields, revised, posted_act, last_act";
 const READ_HINT = (id) => `town { read: "calendar", args: { event: "${id}" } } — or GET /calendar/${id}`;
 const POST_READ_HINT = (id) => `town { read: "event", args: { post: "${id}" } } — or GET /calendar/${id}`;
 
@@ -76,7 +78,7 @@ async function write(fn, env, household = null) {
     return await officeWrite(fn, { env, household });
   } catch (e) {
     if (isRefusal(e)) throw e;
-    if (e?.name === "LateCrossingError") throw refuse(409, e.message, "the act was stamped for a window the record will not take; nothing was written");
+    if (e?.name === "LateCrossingError") throw refuse(409, e.message, "the act was stamped for a candle the record will not take; nothing was written");
     const pen = new PenUnreachableError(e);
     throw refuse(503, pen.message,
       "this door's pen is the office's record; when it cannot be reached the door refuses rather than writing anywhere else — the act is safe to try again");
@@ -113,7 +115,7 @@ export function standpointHandle(fields, key) {
 
 const isoOrNull = (v) => (v == null ? null : new Date(v).toISOString());
 const numOrNull = (v) => (v == null ? null : Number(v));
-const rowOf = (r) => (r ? { ...r, place_x: numOrNull(r.place_x), place_y: numOrNull(r.place_y), revised: Number(r.revised),
+export const rowOf = (r) => (r ? { ...r, place_x: numOrNull(r.place_x), place_y: numOrNull(r.place_y), revised: Number(r.revised),
   starts: isoOrNull(r.starts), ends: isoOrNull(r.ends),
   fields: typeof r.fields === "string" ? JSON.parse(r.fields) : { ...(r.fields ?? {}) } } : null);
 const doorsOf = (row) => row.fields?.doors_open ?? row.starts;
@@ -167,13 +169,13 @@ function actRow({ action, actor, event, payload, place, now }) {
 
 const placeOfRow = (r) => ({ mark: r.place_mark, x: r.place_x, y: r.place_y });
 
-async function insertPost(client, r) {
+export async function insertPost(client, r) {
   await client.query(
     `INSERT INTO posts (${POST_COLUMNS}) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
     [r.id, r.class, r.title, r.body, r.author, r.household, r.place_mark, r.place_x, r.place_y,
      r.starts, r.ends, r.state, JSON.stringify(r.fields ?? {}), r.revised, r.posted_act, r.last_act]);
 }
-async function updatePost(client, r) {
+export async function updatePost(client, r) {
   await client.query(
     `UPDATE posts SET title = $2, body = $3, place_mark = $4, place_x = $5, place_y = $6,
             starts = $7, ends = $8, state = $9, fields = $10, revised = $11, last_act = $12
@@ -335,16 +337,25 @@ export async function cancelAtOffice(fields, key, { now = Date.now(), env = proc
 // ── the town door: post · amend · close · advance (POS-288, POS-294) ───────
 //
 // `town { do: "post" | "amend" | "close" | "advance", args: { class, … } }`.
-// These answer class "event", class "quest" and class "bug"; town-post.mjs
-// routes every other class where it went before (an idea is still a mark at
-// the Think Tank until POS-290).
+// These answer class "event", class "quest", class "bug" and, behind
+// IDEA_POSTS (POS-290), class "idea", whose pen is idea-store.mjs. With the
+// switch off, town-post.mjs sends an idea where it went before: a mark at the
+// Think Tank.
 
+// class "idea" (POS-290) joins behind IDEA_POSTS; its pen is idea-store.mjs,
+// loaded when an idea act arrives (it imports this file's row helpers).
+const IDEA_CLASS = "idea";
 const POST_MACHINE_CLASSES = [EVENT_CLASS, QUEST_CLASS, BUG_CLASS];
+const ideaPen = () => import("./idea-store.mjs");
 
-function judgeClass(fields, { required }) {
+function judgeClass(fields, { required, env = process.env }) {
   const c = fields.class == null ? "" : String(fields.class).trim();
-  if (!c && required) throw refuse(422, "post needs a class", 'class: "event" puts it on the calendar; class: "quest" is the town\'s own; class: "bug" reports something broken', { field: "class" });
-  if (c && !POST_MACHINE_CLASSES.includes(c)) throw refuse(422, `this act answers class "event", "quest" or "bug", not "${c}"`, "the post machine's classes join it one by one", { field: "class" });
+  // The idea class is one of these only where it is open (IDEA_POSTS): off, an
+  // act naming class "idea" is refused exactly as it was before the class existed.
+  const ideas = ideaPostsOn(env);
+  const classes = ideas ? [...POST_MACHINE_CLASSES, IDEA_CLASS] : POST_MACHINE_CLASSES;
+  if (!c && required) throw refuse(422, "post needs a class", 'class: "event" puts it on the calendar; class: "quest" is the town\'s own; class: "bug" reports something broken' + (ideas ? '; class: "idea" puts an idea up' : ""), { field: "class" });
+  if (c && !classes.includes(c)) throw refuse(422, ideas ? `this act answers class "event", "quest", "bug" or "idea", not "${c}"` : `this act answers class "event", "quest" or "bug", not "${c}"`, "the post machine's classes join it one by one", { field: "class" });
   return c || null;
 }
 function postId(fields) {
@@ -365,16 +376,18 @@ function bodyOf(fields) {
  * path, which answers its own "no event", exactly as it did before they joined.
  */
 async function classOf(fields, id, env) {
-  const c = judgeClass(fields, { required: false });
+  const c = judgeClass(fields, { required: false, env });
   if (c) return c;
+  const { ideaRow } = await ideaPen();
   return read(async (client) => ((await questRow(client, id)) ? QUEST_CLASS
-    : (await bugRow(client, id)) ? BUG_CLASS : EVENT_CLASS), env);
+    : (await bugRow(client, id)) ? BUG_CLASS : (await ideaRow(client, id)) ? IDEA_CLASS : EVENT_CLASS), env);
 }
 
-export async function postAtTown(fields, key, { now = Date.now(), env = process.env, registry = undefined, roll = null } = {}) {
-  const cls = judgeClass(fields, { required: true });
+export async function postAtTown(fields, key, { now = Date.now(), env = process.env, registry = undefined, roll = null, titleOf = null } = {}) {
+  const cls = judgeClass(fields, { required: true, env });
   if (cls === QUEST_CLASS) return postQuest(fields, key, { now, env, registry });
   if (cls === BUG_CLASS) return postBug(fields, key, { now, env, roll });
+  if (cls === IDEA_CLASS) return (await ideaPen()).postIdea(fields, key, { now, env, roll, titleOf });
   const handle = standpointHandle(fields, key);
   return postEvent(handle, { title: fields.title, body: bodyOf(fields), place: fields.place,
     doors_open: fields.doors_open, starts: fields.starts, ends: fields.ends }, { now, env, door: "town" });
@@ -385,6 +398,7 @@ export async function amendAtTown(fields, key, { now = Date.now(), env = process
   const cls = await classOf(fields, id, env);
   if (cls === QUEST_CLASS) throw QUEST_NO_AMEND();
   if (cls === BUG_CLASS) return amendBug(fields, key, id, { now, env });
+  if (cls === IDEA_CLASS) return (await ideaPen()).amendIdea(fields, key, id, { now, env });
   const handle = standpointHandle(fields, key);
   return amendEvent(handle, id, { title: fields.title, body: bodyOf(fields), place: fields.place,
     doors_open: fields.doors_open, starts: fields.starts, ends: fields.ends }, { now, env, door: "town" });
@@ -395,6 +409,8 @@ export async function closeAtTown(fields, key, { now = Date.now(), env = process
   const cls = await classOf(fields, id, env);
   if (cls === QUEST_CLASS) return closeQuest(fields, key, id, { now, env });
   if (cls === BUG_CLASS) throw BUG_NO_CLOSE(id);
+  if (cls === IDEA_CLASS) throw refuse(422, `"${id}" is an idea, and an idea is not closed`,
+    "it finishes by advance: town { do: \"advance\", args: { post, to: \"shipped\" | \"declined\" | \"duplicate\" } }, by the town's hands");
   const handle = standpointHandle(fields, key);
   return closeEvent(handle, id, { now, env, door: "town" });
 }
@@ -403,14 +419,15 @@ export async function closeAtTown(fields, key, { now = Date.now(), env = process
  * `advance` moves a post along its class's lifecycle. An event has no such
  * move: its phases (announced · doors-open · underway · ended) follow its
  * clock, and its only act-made state beyond announced is cancelled, which is
- * `close`. A quest's one move is `close` too. A bug is the class that
- * advances (bugs.mjs), by the town's hands.
+ * `close`. A quest's one move is `close` too. A bug advances (bugs.mjs), by
+ * the town's hands, and so does an idea (ideas.mjs), to any named stage.
  */
 export async function advanceAtTown(fields, key, { now = Date.now(), env = process.env, roll = null } = {}) {
   const id = postId(fields);
   const cls = await classOf(fields, id, env);
   if (cls === QUEST_CLASS) throw QUEST_NO_ADVANCE();
   if (cls === BUG_CLASS) return advanceBug(fields, key, id, { now, env, roll });
+  if (cls === IDEA_CLASS) return (await ideaPen()).advanceIdea(fields, key, id, { now, env, roll });
   standpointHandle(fields, key);
   throw refuse(422, "an event's phases follow its clock",
     "announced, doors-open, underway and ended are read from its times — amend them to move it; close it to cancel it", { field: "to" });
@@ -588,7 +605,7 @@ async function amendBug(fields, key, id, { now, env }) {
   return write(async (client) => {
     const prev = await bugRow(client, id);
     if (!prev) throw refuse(404, `no bug "${id}"`, 'town { read: "posts", args: { class: "bug" } } lists them');
-    const isHand = BUG_HANDS.includes(acting);
+    const isHand = BUG_HANDS.includes(acting) && holdsHand(key, acting); // POS-389: this credential's own hand
     // A finished bug takes one amendment only: a hand linking its discussion (issue), at any stage.
     const onlyIssue = Object.keys(text.fields).length === 1 && text.fields.issue !== undefined && text.title === undefined && text.body === undefined;
     if (BUG_FINISHED.includes(prev.state) && !(isHand && onlyIssue))
@@ -630,7 +647,9 @@ async function advanceBug(fields, key, id, { now, env, roll }) {
       throw refuse(404, `no bug "${j.of}" to be a duplicate of`, 'of: a standing bug post — town { read: "posts", args: { class: "bug" } } lists them', { field: "of" });
     // The critter's namer is the fix's credit, kept beside the name so the post says who named it.
     const set = { ...(j.size ? { size: j.size } : {}), ...(j.critter ? { critter: j.critter, named_by: j.credit } : {}),
-      ...(j.grade ? { grade: j.grade } : {}), ...(j.of ? { of: j.of } : {}) };
+      ...(j.grade ? { grade: j.grade } : {}), ...(j.of ? { of: j.of } : {}),
+      // The link is kept per stage; the act carries the post's whole map after it, as the reveal does.
+      ...(j.link ? { links: { ...(prev.fields?.links ?? {}), [j.to]: j.link } } : {}) };
     const payload = { post: id, from: prev.state, to: j.to, ...(j.credit ? { credit: j.credit } : {}),
       ...(Object.keys(set).length ? { fields: set } : {}), hand };
     const actId = await insertAct(client, bugActRow({ action: ACT_ADVANCE, actor: hand, object: id, payload, now }));
@@ -645,8 +664,8 @@ async function advanceBug(fields, key, id, { now, env, roll }) {
       ? `the ladder owes ${j.credit} ${n} stamps for ${j.to}, paid by the reviewed stage pass (not by this act), subject to the town's meep law and, at confirmed, three paid reports per household a week`
       : `${j.to} pays nothing`;
     return { post: bugAnswer(row), act_id: actId, hand, stage: j.to, ...(j.credit ? { credit: j.credit } : {}), stamps: n,
-      ...(j.critter ? { critter: j.critter } : {}),
-      receipt: `advanced: ${id} ${prev.state} → ${j.to} by ${hand}'s hand; ${pays}${skipped.length ? `; skipped ${skipped.join(", ")}, and a skipped stage pays nothing` : ""}${j.critter ? `; its critter is "${j.critter}", named by ${j.credit}` : ""}`,
+      ...(j.critter ? { critter: j.critter } : {}), ...(j.link ? { link: j.link } : {}),
+      receipt: `advanced: ${id} ${prev.state} → ${j.to} by ${hand}'s hand; ${pays}${skipped.length ? `; skipped ${skipped.join(", ")}, and a skipped stage pays nothing` : ""}${j.critter ? `; its critter is "${j.critter}", named by ${j.credit}` : ""}${j.link ? `; ${j.to} points at ${j.link}` : ""}`,
       read: bugReadHint(id) };
   }, env);
 }

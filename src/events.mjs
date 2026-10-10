@@ -58,6 +58,25 @@ export const STATE_ANNOUNCED = "announced";
 export const STATE_CANCELLED = "cancelled";
 export const RESPONSE_RSVP = "rsvp";
 export const RESPONSE_STANDING = "standing";
+// The ballot class's response (POS-349, Darko 2026-10-05: "ballots are posts
+// ... votes as its responses"). Each stake is one `vote` act; the resident's
+// one `vote` response per ballot carries every stake they cast, in act order.
+export const ACT_VOTE = "vote";
+export const RESPONSE_VOTE = "vote";
+// The idea class's own acts (POS-290; ideas.mjs holds its law). A sign-up is a
+// `build` response, withdrawn by its resident and answered by the hands; an
+// award records stamps owed and changes no row (the reviewed award pass reads
+// the act). The stake acts are read here before anything writes them, so the
+// projection's law is in one place when the stake on posts lands (w43).
+export const ACT_SIGN_UP = "sign-up";
+export const ACT_WITHDRAW_SIGN_UP = "withdraw-sign-up";
+export const ACT_ANSWER_SIGN_UP = "answer-sign-up";
+export const ACT_AWARD = "award";
+export const ACT_STAKE = "stake";
+export const ACT_UNSTAKE = "unstake";
+export const ACT_RETURN = "return";
+export const RESPONSE_BUILD = "build";
+export const RESPONSE_STAKE = "stake";
 
 // ── THE DIALS, named once ───────────────────────────────────────────────────
 //
@@ -450,6 +469,56 @@ export function applyPostAct(state, act) {
     state.responses.set(responseKey(id, act.actor), row);
     return row;
   }
+  // A ballot's vote: the stake the act records joins the resident's response.
+  // The stake's `mint_key` is the household the town's ballot engine put it
+  // in (the cap's household), never the store's `hh:`; the row's `household`
+  // is the act's, as an RSVP's is.
+  if (act.action === ACT_VOTE) {
+    const key = responseKey(id, act.actor, RESPONSE_VOTE);
+    const before = state.responses.get(key);
+    const stake = { act: actId, candidate: p.candidate, n: Number(p.n), mint_key: p.mint_key, date: p.date, via: p.via, sig: p.sig };
+    const row = {
+      post: id, handle: act.actor, kind: RESPONSE_VOTE, state: RESPONSE_STANDING, household: act.household ?? null,
+      fields: { stakes: [...(before?.fields?.stakes ?? []), stake] },
+      act: actId,
+    };
+    state.responses.set(key, row);
+    return row;
+  }
+  // An idea's sign-up: the resident's one `build` response, which a second
+  // sign-up replaces (the answer it had is gone with it: a new piece is a new ask).
+  if (act.action === ACT_SIGN_UP) {
+    const row = { post: id, handle: act.actor, kind: RESPONSE_BUILD, state: RESPONSE_STANDING, household: act.household ?? null,
+      fields: { piece: p.piece, ...(p.note != null ? { note: p.note } : {}) }, act: actId };
+    state.responses.set(responseKey(id, act.actor, RESPONSE_BUILD), row);
+    return row;
+  }
+  if (act.action === ACT_WITHDRAW_SIGN_UP || act.action === ACT_ANSWER_SIGN_UP) {
+    const who = act.action === ACT_WITHDRAW_SIGN_UP ? act.actor : p.resident;
+    const key = responseKey(id, who, RESPONSE_BUILD);
+    const before = state.responses.get(key);
+    if (!before) return null;
+    const row = act.action === ACT_WITHDRAW_SIGN_UP
+      ? { ...before, state: "withdrawn", act: actId }
+      : { ...before, state: p.answer, fields: { ...before.fields, ...(p.note != null ? { answer_note: p.note } : {}) }, act: actId };
+    state.responses.set(key, row);
+    return row;
+  }
+  // A stake on a post: the resident's one `stake` response, one side, its n the
+  // position the ledger holds. Unstake and return take stamps off it.
+  if (act.action === ACT_STAKE || act.action === ACT_UNSTAKE || act.action === ACT_RETURN) {
+    const key = responseKey(id, act.actor, RESPONSE_STAKE);
+    const before = state.responses.get(key);
+    const was = Number(before?.fields?.n ?? 0);
+    const n = act.action === ACT_STAKE ? was + Number(p.n) : act.action === ACT_RETURN ? 0 : Math.max(0, was - Number(p.n));
+    const row = { post: id, handle: act.actor, kind: RESPONSE_STAKE, household: before?.household ?? act.household ?? null,
+      state: n > 0 ? RESPONSE_STANDING : act.action === ACT_RETURN ? "returned" : "withdrawn",
+      fields: { side: before?.fields?.side ?? p.side, n }, act: actId };
+    state.responses.set(key, row);
+    return row;
+  }
+  // An award changes no row: the act is the record, and the read and the
+  // reviewed award pass read it from `acts`.
   // An `announce` act changes no row: the announcement IS the act, and the
   // calendar read and the earpiece read it from `acts` (events-store.mjs §
   // announcementsOf). So the rebuild has nothing to restore for it.

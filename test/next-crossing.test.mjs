@@ -138,8 +138,14 @@ test("flag-on · the town-log receipt carries next_crossing too, and the duplica
     const stale = duplicateReceipt({ seq: 1, payload: { id: r.letter_id }, writtenAt: new Date(Date.now() - 13 * HOUR).toISOString() }, "n-1");
     assert.equal(stale.next_crossing.at, stale.expected_crossing);
     assert.match(stale.next_crossing.sentence, /^this crossing has sailed \(/);
-    // and one written a minute ago names the boat ahead in the ordinary words
-    const fresh = duplicateReceipt({ seq: 1, payload: { id: r.letter_id }, writtenAt: new Date(Date.now() - 60000).toISOString() }, "n-2");
+    // and one written a minute ago names the boat ahead in the ordinary words.
+    // THE MINUTE STAYS INSIDE THIS WINDOW (POS-419): read in the first minute
+    // after a crossing, "a minute ago" fell before it, rode the boat that had
+    // just sailed, and the sentence was "this crossing has sailed". So the row
+    // is written a minute ago or one second after the window opened, the later.
+    const nowMs = Date.now();
+    const windowOpened = Date.parse(nextCrossingAt(nowMs)) - CROSSING_MS;
+    const fresh = duplicateReceipt({ seq: 1, payload: { id: r.letter_id }, writtenAt: new Date(Math.max(nowMs - 60000, windowOpened + 1000)).toISOString() }, "n-2");
     assert.match(fresh.next_crossing.sentence, /^sails at the next crossing, /);
   } finally {
     delete process.env.TOWN_SINGLE_LOG;
@@ -160,7 +166,8 @@ test("the doorstep carries next_crossing right under as_of, on both skins — th
     const ctx = { db, key: null, meta, asOf: meta.as_of, canWrite: false, clone: null, pen: null, odb: null, dbPath: null };
     for (const slim of [false, true]) {
       const d = await doorstepBundle("wright", { ...ctx, slim });
-      assert.deepEqual(Object.keys(d).slice(0, 3), ["handle", "as_of", "next_crossing"], "the header, in reading order");
+      // `copy` (POS-332) sits beside the commit it describes, then the boat ahead
+      assert.deepEqual(Object.keys(d).slice(0, 4), ["handle", "as_of", "copy", "next_crossing"], "the header, in reading order");
       assert.equal(d.next_crossing.crossing, currentCrossing() + 1);
       assert.equal(d.next_crossing.at, nextCrossingAt());
       assert.match(d.next_crossing.sentence, /^crossing \d+ sails at .* A letter written before then rides it/);

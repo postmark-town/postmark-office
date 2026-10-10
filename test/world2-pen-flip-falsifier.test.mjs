@@ -24,13 +24,13 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 import { LANE_FLIPPED_AT, laneFlippedAt, flippedLanesAt } from "../src/world2-acts.mjs";
 import { laneOf } from "../src/world2-pen.mjs";
 import { sinceForLanes, readStateLog, twinSideOf, twinKey } from "../world2/tools/falsifier-pen-flip.mjs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 // ── finding 2: one clock for lanes that flip on different days ───────────────
 
@@ -142,7 +142,7 @@ test("a --since that is not a time is refused, not silently ignored", () => {
 // ── finding 1: the rollback set is the journal ∪ the drained photograph ──────
 
 const withStateLog = (lines, fn) => {
-  const dir = mkdtempSync(join(tmpdir(), "penflip-log-"));
+  const dir = tempDir("penflip-log-");
   try {
     mkdirSync(join(dir, "STATE", "log"), { recursive: true });
     for (const [file, rows] of Object.entries(lines)) {
@@ -480,7 +480,7 @@ test("a malformed log line is REFUSED, not skipped", () => {
   // could not parse calls an act lost by exactly the amount nobody will look
   // for. Both malformations are named, with the file and the line.
   const bad = (body) => {
-    const dir = mkdtempSync(join(tmpdir(), "penflip-bad-"));
+    const dir = tempDir("penflip-bad-");
     try {
       mkdirSync(join(dir, "STATE", "log"), { recursive: true });
       writeFileSync(join(dir, "STATE", "log", "1.jsonl"), body);

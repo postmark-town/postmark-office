@@ -23,7 +23,7 @@ import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
 
 import { startStore } from "./helpers/embedded-store.mjs";
@@ -57,7 +57,8 @@ before(async () => {
   if (store.skip) { skip = store.skip; return; }
   c = await store.connect("law_ingester");
 
-  cpSync(join(CLONE, "tools"), join(town, "tools"), { recursive: true });
+  // KEY_BASE_TOWN=<a town tree> takes the town's tools from there (the POS-341 part 4 test needs town #3540's engine)
+  cpSync(join(process.env.KEY_BASE_TOWN ?? CLONE, "tools"), join(town, "tools"), { recursive: true });
   cpSync(join(CLONE, "quest-registry.json"), join(town, "quest-registry.json"));
   for (const h of ["ada", "bex", "cyd"]) { put(`WHITE_PAGES/${h}/ADDRESS.md`, address(h)); put(`WHITE_PAGES/${h}/HOME/HOME.md`, home(h)); }
   put("WHITE_PAGES/_archived/README.md", "a shelf, not a resident\n");
@@ -141,6 +142,23 @@ test("seed, then the crossing as a snapshot, then a delta: every table equals hy
   assert.equal(await readHead(c), sha.after);
 });
 
+// POS-341: the mint's two store inputs ride the same ingest (067,
+// src/mint-inputs.mjs). After the seed, the crossing and the delta above they
+// hold the checkout's rooms (dee's arrival included, the `_archived` shelf not)
+// and its mail ledger's lines, raw and in order.
+test("the mint's inputs ride the ingest: every room with its ADDRESS login, and the mail ledger's lines raw", async (t) => {
+  if (skip) return t.skip(skip);
+  at(await readHead(c));
+  const { roomRows, mailLineRows } = await import("../src/mint-inputs.mjs");
+  const rooms = (await c.query(`SELECT handle, github FROM town_rooms ORDER BY handle COLLATE "C"`)).rows.map((r) => [r.handle, r.github]);
+  assert.deepEqual(rooms, roomRows(town));
+  assert.deepEqual(rooms.map((r) => r[0]), ["ada", "bex", "cyd", "dee"], "the shelf is not a room; dee arrived in the delta");
+  assert.deepEqual(rooms[0], ["ada", "fixture"], "the login as the mint reads it");
+  const lines = (await c.query("SELECT seq, line FROM town_mail_lines ORDER BY seq")).rows.map((r) => [r.seq, r.line]);
+  assert.deepEqual(lines, mailLineRows(town));
+  assert.equal(lines.length, 2);
+});
+
 test("a delta writes only what moved: one bulletin edit writes the bulletin row, the head's meta and its history rows, nothing else", async (t) => {
   if (skip) return t.skip(skip);
   at(sha.after);
@@ -188,4 +206,59 @@ test("the ingest refuses what it cannot apply, and writes nothing", async (t) =>
 
   // a seed over a head
   await assert.rejects(ingest(c, { townRepo: town, sha: rewritten, seed: true }), /already has a head/);
+});
+
+// POS-341 part 4: with STAMP_LINES=store the delta folds the quest rows on the
+// store's key base (src/mint-inputs.mjs § keyBaseVia), the base the mint
+// decides from. Every fixture room carries the login `fixture`, so the
+// printouts make one house of four; a pin only the STORE holds keys ada alone.
+// An empty chain is a refusal by name, and writes nothing.
+test("STAMP_LINES=store: the quest rows fold on the store's key base, and a store with no chain refuses", async (t) => {
+  if (skip) return t.skip(skip);
+  const { takesKeyBase } = await import("../src/mint-inputs.mjs");
+  const engine = await import(pathToFileURL(join(town, "tools", "stamp-mint.mjs")).href);
+  if (!takesKeyBase(engine, town)) return t.skip("the fixture's town engine takes no key base (town #3540): set KEY_BASE_TOWN to a town tree that does");
+  const sizeOf = async (h) => Number((await c.query("SELECT house_size FROM town_quest_progress WHERE handle = $1", [h])).rows[0]?.house_size);
+  at(await readHead(c));
+  assert.equal(await sizeOf("ada"), 4, "the printouts: one house of four by the shared login");
+  const owner = await store.connect("world2_owner");
+  const office = await store.connect("office_api");
+  const was = process.env.STAMP_LINES;
+  try {
+    await owner.query("INSERT INTO household_pins (handle, login, gh_id, pinned) VALUES ('ada', 'ada-gh', 4242, '2026-06-01')");
+    process.env.STAMP_LINES = "store";
+    put("TOWN_BULLETIN/notice.md", "---\ntitle: notice\n---\n\nThe quay floods at every tide.\n");
+    const edit = commit("notice: every tide");
+    at(edit);
+    await assert.rejects(ingest(c, { townRepo: town, sha: edit }), /stamp_lines is empty/, "no chain, no base: a refusal by name");
+    assert.notEqual(await readHead(c), edit, "and nothing was written");
+    const { syncStampLinesVia } = await import("../src/stamp-lines.mjs");
+    await office.query("BEGIN"); await syncStampLinesVia(office, town, { engine }); await office.query("COMMIT");
+    await ingest(c, { townRepo: town, sha: edit });
+    assert.equal(await sizeOf("ada"), 1, "the store's pin keys ada alone");
+    assert.equal(await sizeOf("bex"), 3, "and the rest share the login's house");
+
+    // the seed honours the switch too (Wright's review of #435): a reseed at the head folds on the store's base
+    await ingest(c, { townRepo: town, sha: edit, seed: true, reseed: true });
+    assert.equal(await sizeOf("ada"), 1, "the seed's quest rows: the store's pin keys ada alone");
+
+    // and a town engine that cannot take a base is a refusal, as the welcome pass and the snapshot runner refuse it
+    // (in a copy of the town: ESM caches an engine by its path, and each ingest on the box is its own process)
+    const town2 = join(tmp, "town-older-engine");
+    cpSync(town, town2, { recursive: true });
+    const mint = join(town2, "tools", "stamp-mint.mjs");
+    const text = readFileSync(mint, "utf8");
+    const older = text.replace("const map = base ? new Map(base) : householdKeys(repo);", "const map = householdKeys(repo);");
+    assert.notEqual(older, text, "the fixture's engine is #3540's");
+    writeFileSync(mint, older);
+    const g2 = (...a) => execFileSync("git", ["-C", town2, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    g2("-c", "user.name=Postmark Pen", "-c", "user.email=pen@test.invalid", "commit", "-qam", "an engine from before #3540");
+    const old = g2("rev-parse", "HEAD").trim();
+    await assert.rejects(ingest(c, { townRepo: town2, sha: old }), /takes no key base \(town #3540\): nothing was written/);
+    assert.equal(await readHead(c), edit, "and the head did not move");
+  } finally {
+    if (was === undefined) delete process.env.STAMP_LINES; else process.env.STAMP_LINES = was;
+    await owner.query("DELETE FROM household_pins WHERE handle = 'ada'").catch(() => {});
+    for (const x of [owner, office]) await x.end().catch(() => {});
+  }
 });

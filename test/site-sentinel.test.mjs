@@ -15,8 +15,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, existsSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -46,6 +45,7 @@ import {
   HOUR,
   CONFIG,
 } from "../tools/site-sentinel.mjs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 const T0 = Date.parse("2026-08-25T12:00:00Z");
 
@@ -584,7 +584,7 @@ const stubExec = ({ siteTip = "sitetip0000", townTip = "towntip0000", relSha = "
 // the sentinel at it rather than at the box's /srv paths.
 import { writeFileSync as _wf } from "node:fs";
 import { CONFIG as _CFG } from "../tools/site-sentinel.mjs";
-const _wdir = mkdtempSync(join(tmpdir(), "sentinel-watcher-"));
+const _wdir = tempDir("sentinel-watcher-");
 const _wstate = join(_wdir, "state.json");
 _wf(_wstate, "{}");
 import { utimesSync as _ut } from "node:fs";
@@ -667,7 +667,7 @@ test("LOUDLY BE NOTIFIED: an outage and a frozen index both surface from one tic
 });
 
 test("env-missing degrades LOUDLY: every reading is still taken, the board is still written, and it says nothing was sent", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "sentinel-degrade-"));
+  const dir = tempDir("sentinel-degrade-");
   const statePath = join(dir, "state.json");
   const outPath = join(dir, "status.json");
   const errs = [];
@@ -1306,7 +1306,7 @@ test("ONE ROUTE: nothing the office ships to the box posts to Discord except the
   assert.deepEqual(posters(files), [], "a box script posts to Discord on its own — make it a sentinel probe instead");
 
   // not vacuous: the retired disk watch's own line is caught
-  const dir = mkdtempSync(join(tmpdir(), "one-route-"));
+  const dir = tempDir("one-route-");
   const planted = join(dir, "planted.sh");
   _wf(planted, `HOOK="\${SENTINEL_DISCORD_WEBHOOK:-}"\ncurl -d '{}' "$HOOK"\n`);
   assert.ok(POSTER.test(readFileSync(planted, "utf8")));
@@ -1365,7 +1365,7 @@ test("§10 MISSING, UNPARSEABLE, UNDATED or an unread status is STALE, never UNK
 });
 
 test("§10 the probe reaches the board as `meeps` and the sentinel's message carries a stuck meep; a missing record alarms too", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "sentinel-meeps-"));
+  const dir = tempDir("sentinel-meeps-");
   const path = join(dir, "meeps.json");
   _wf(path, MEEPS_REC({ status: "DEGRADED", summary: STUCK_SUMMARY }));
   const cfg = { ...FIXTURE_CONFIG, meeps: { ...CONFIG.meeps, path } };

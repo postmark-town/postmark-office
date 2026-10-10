@@ -10,14 +10,16 @@ import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
 import { createServer } from "node:http";
 import { createHash, randomBytes } from "node:crypto";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { tmpdir } from "node:os";
 import { fixtureDb } from "./fixture.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
+import { indexStore, seedRegistry } from "./helpers/office-under-test.mjs";
 import { serializeRegistry, slugFromName, houseForAccount, houseForName, planRegistryJoin } from "../src/residency.mjs";
 import { BIND_REFUSALS } from "../src/join-bind.mjs";
+import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 // The port is asked of the OS, never chosen (spawn-office.mjs § the port,
@@ -77,12 +79,12 @@ const registryFromTree = (tree) => {
   return e ? { text: e.content, json: JSON.parse(e.content) } : null;
 };
 
-let child, tmp, ghServer, clone;
+let child, tmp, ghServer, clone, IX, bare, BARE;
 
 const readBody = (req) => new Promise((r) => { let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => r(b)); });
 
 before(async () => {
-  tmp = mkdtempSync(join(tmpdir(), "postmark-office-residency-"));
+  tmp = tempDir("postmark-office-residency-");
   const dbPath = join(tmp, "fixture.db");
   fixtureDb(dbPath).close();
 
@@ -97,6 +99,11 @@ before(async () => {
   const g = (...a) => execFileSync("git", ["-C", clone, ...a], { encoding: "utf8" });
   g("init", "-q"); g("add", "-A");
   g("-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-q", "-m", "fixture town");
+  // SIGN-IN READS THE STORE'S PINS (POS-343), and refuses when it cannot, so
+  // this office is pointed at a store holding the same pin. The same store
+  // holds the gangway rows the frozen section writes (POS-353).
+  IX = await indexStore(dbPath);
+  await seedRegistry(IX.store, null, { wright: { login: "keeminlee", id: 999, pinned: "2026-07-05" } });
 
   // one mock GitHub: OAuth login/user AND the pen's repo API
   ghServer = createServer(async (req, res) => {
@@ -154,11 +161,11 @@ before(async () => {
   await new Promise((ok) => ghServer.listen(0, "127.0.0.1", ok));
   GH_PORT = ghServer.address().port;
 
-  ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port),
-    "--db", dbPath, "--oauth-db", join(tmp, "oauth.db")], {
+  const spawnOffice = (oauthDb, extra) => bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port),
+    "--db", dbPath, "--oauth-db", seedStaticKeys(join(tmp, oauthDb), "statickey=keemin:wright")], {
     env: {
-      ...process.env,
-      OFFICE_KEYS: "statickey=keemin:wright",
+      ...process.env, WORLD_GRAPH_NONE: "1",
+      ...extra,
       TOWN_CLONE: clone, TOWN_PUSH: "",
       PUBLIC_BASE: `http://127.0.0.1:${port}`,
       POSTMARK_OAUTH_GITHUB_CLIENT_ID: "mock-gh-app",
@@ -171,12 +178,61 @@ before(async () => {
       POSTMARK_TOWN_BRANCH: "main",
     },
     stdio: ["ignore", "pipe", "pipe"],
-  })));
-  BASE = `http://127.0.0.1:${PORT}`;
+  }));
+  // The record's keys and the switch: the town index is the store seeded from
+  // this suite's fixture office.db (POS-268), and a test that writes a resident
+  // into the fixture copies it to the store and moves the store's as-of, as an
+  // ingest would (§ settleResident). The office polls its index every 200 ms
+  // here, so the new row is read at once. OFFICE_TEST_INDEX=office keeps
+  // the old way: no switch, the fixture office.db read live. One read worker:
+  // switched, every worker keeps a pen pool of its own and polls the store, and
+  // at cores − 1 workers one office held ~45 of the test server's 100
+  // connections (measured 2026-10-07), so a second office met "remaining
+  // connection slots are reserved".
+  const RECORD = { WORLD2_PG: IX.env.WORLD2_PG, WORLD2_PG_URL: IX.env.WORLD2_PG_URL,
+    TOWN_INDEX_READS: IX.env.TOWN_INDEX_READS, OFFICE_RELOAD_POLL_MS: "200", OFFICE_READ_WORKERS: "1" };
+  bootWith = async (extra = {}) => {
+    ({ child, port: PORT } = await spawnOffice("oauth.db", { ...RECORD, ...extra }));
+    BASE = `http://127.0.0.1:${PORT}`;
+  };
+  await bootWith();
+  // THE OFFICE THAT CANNOT REACH THE RECORD — its env names no store at all.
+  ({ child: bare, port: BARE } = await spawnOffice("bare-oauth.db", { TOWN_INDEX_READS: undefined, WORLD2_PG: undefined, WORLD2_PG_URL: undefined }));
 });
+
+// THE GANGWAY IS A STORE ROW (POS-353). The frozen section writes a frozen
+// gangway row into the suite's own store (the record the office reads, since
+// POS-343 points it there for sign-in) and reboots the office; the reopening
+// test writes the open row after it. The house-aware boarding assertions live in
+// join-pr-at-the-cosign.test.mjs, where the record is stubbed.
+let bootWith;
+let gangwayStore = null;
+const stopChild = async () => {
+  if (child && child.exitCode === null) { const gone = new Promise((ok) => child.on("exit", ok)); child.kill(); await gone; }
+};
+async function gangwayRow(state, reason) {
+  const c = await IX.store.connect("office_api");
+  try {
+    await c.query("INSERT INTO gangway_acts (state, since, reason, by_who, source) VALUES ($1, '2026-08-06', $2, 'founder', 'door')", [state, reason]);
+  } finally { await c.end(); }
+}
+async function bootFrozen() {
+  await gangwayRow("frozen", "the town froze arrivals at one hundred");
+  await stopChild();
+  await bootWith();
+}
+async function bootUnfrozen() {
+  await gangwayRow("open", "the gangway lowered");
+  await stopChild();
+  await bootWith();
+}
 
 after(async () => {
   ghServer?.close();
+  await stopChild();
+  await gangwayStore?.stop();
+  if (bare && bare.exitCode === null) { const gone = new Promise((ok) => bare.on("exit", ok)); bare.kill(); await gone; }
+  await IX?.stop();
   if (child && child.exitCode === null) {
     const gone = new Promise((ok) => child.on("exit", ok));
     child.kill();
@@ -252,23 +308,50 @@ const mcp = (token, method, params = {}) => fetch(`${BASE}/mcp`, {
 // card and the open-PR dedup moved in-process to
 // `test/join-pr-at-the-cosign.test.mjs`, where the record answers.
 
-test("request_residency (REST) with the record unreachable refuses by name, and the pen opens nothing", async () => {
+// AMENDED 2026-10-04 (POS-343): with the record unreachable the refusal now
+// comes one wall EARLIER. Sign-in reads the store's pins, and an office that
+// cannot read them refuses the sign-in itself by name, so no visitor token is
+// ever issued and request_residency (REST or MCP) is never reached. The
+// residency door's own NO_RECORD refusal is still the office's, and is
+// driven in-process where the record can be cut on purpose
+// (`test/join-pr-at-the-cosign.test.mjs`).
+test("with the record unreachable, sign-in refuses by name, and the pen opens nothing", async () => {
   ghIdentity = { id: 424242, login: "some-stranger" };
   captured = { trees: [], commits: [], refs: [], pulls: [] }; openPulls = [];
-  const token = await visitorToken();
-
-  const res = await postResidency(token, {
-    handle: "newcomer", card: "I am new here. Glad to meet the town.",
-    agent: "Newcomer", household: "Some House", architecture: "a persistent graph", since: "2026-07-01",
+  const base = `http://127.0.0.1:${BARE}`;
+  const reg = await fetch(`${base}/oauth/register`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ client_name: "test connector", redirect_uris: [REDIRECT] }),
   });
-  assert.equal(res.status, 503);
-  const body = await res.json();
-  assert.equal(body.defect, BIND_REFUSALS.NO_RECORD.defect);
-  assert.match(body.hint, /no PR was opened/);
-  assert.match(body.hint, /Try again/);
+  const clientId = (await reg.json()).client_id;
+  const verifier = randomBytes(32).toString("base64url");
+  const authorize = new URL(`${base}/oauth/authorize`);
+  for (const [k, v] of Object.entries({ response_type: "code", client_id: clientId, redirect_uri: REDIRECT, state: "s",
+    code_challenge: s256(verifier), code_challenge_method: "S256" })) authorize.searchParams.set(k, v);
+  const r1 = await fetch(authorize, { redirect: "manual" });
+  const r2 = await fetch(r1.headers.get("location"), { redirect: "manual" });
+  const consent = await fetch(r2.headers.get("location"), { headers: { accept: "text/html" } });
+  assert.equal(consent.status, 503, "the consent step cannot say which residents this account holds, so it refuses");
+  const html = await consent.text();
+  assert.match(html, /Sign-in cannot read the town(&#39;|')s record/);
+  assert.match(html, /Nothing was authorized/);
+  assert.doesNotMatch(html, /name="pending_id"/, "no consent form is offered");
   assert.deepEqual([captured.trees.length, captured.commits.length, captured.refs.length, captured.pulls.length], [0, 0, 0, 0],
     "no tree, no commit, no branch, no PR");
   assert.equal(execFileSync("git", ["-C", clone, "status", "--porcelain"], { encoding: "utf8" }), "", "and nothing in the town clone");
+
+  // AND A TOKEN ALREADY ISSUED is refused by name, not served as anonymous: the
+  // office cannot say which residents it acts for (server.mjs § handle).
+  const { DatabaseSync } = await import("node:sqlite");
+  const token = randomBytes(24).toString("base64url");
+  const odb = new DatabaseSync(join(tmp, "bare-oauth.db"));
+  odb.prepare("INSERT INTO tokens (token_hash, kind, gh_id, gh_login, client_id, expires, created) VALUES (?, 'access', ?, ?, 'test', ?, ?)")
+    .run(createHash("sha256").update(token).digest("base64url"), 999, "keeminlee", Math.floor(Date.now() / 1000) + 3600, Math.floor(Date.now() / 1000));
+  odb.close();
+  const read = await fetch(`${base}/town`, { headers: { authorization: `Bearer ${token}` } });
+  assert.equal(read.status, 503, "a live token whose household cannot be read is refused, not served as nobody");
+  assert.match((await read.json()).defect, /sign-in cannot read the town's record/);
+  assert.equal(captured.pulls.length, 0, "and still no PR");
 });
 
 test("residency validation bounces before the pen: taken, malformed, oversize", async () => {
@@ -305,18 +388,6 @@ test("visitor scope: writes other than request_residency are refused (REST + MCP
   const bounce = JSON.parse(mcpSend.result.content[0].text);
   assert.match(bounce.defect, /visitor/i);
   assert.match(bounce.hint, /request_residency/);
-});
-
-test("request_residency over MCP refuses the same way when the record is unreachable", async () => {
-  captured = { trees: [], commits: [], refs: [], pulls: [] }; openPulls = [];
-  const token = await visitorToken();
-
-  const out = await mcp(token, "tools/call", { name: "request_residency",
-    arguments: { handle: "mcpjoiner", card: "Arriving through the connector door." } });
-  const result = JSON.parse(out.result.content[0].text);
-  assert.equal(result.error, "bounce");
-  assert.equal(result.defect, BIND_REFUSALS.NO_RECORD.defect);
-  assert.equal(captured.pulls.length, 0);
 });
 
 // ── the door law: the join PR carries the registry diff (ruled 2026-08-07) ──
@@ -529,34 +600,57 @@ test("after merge, the same token resolves to the new household with no re-auth"
   // the send is (correctly) gated read+ephemeral (harbor-gate.mjs, the
   // 2026-08-16 ruling) — this test is about token re-resolution for a fully
   // SETTLED resident, so the simulation must settle them.
-  writeFileSync(join(clone, "tools", "github-ids.json"), JSON.stringify({
+  // (the pin lands in the store, the record sign-in reads — POS-343)
+  await seedRegistry(IX.store, null, {
     wright: { login: "keeminlee", id: 999, pinned: "2026-07-05" },
     arrival: { login: "some-stranger", id: 424242, pinned: "2026-07-08" },
-  }));
-  {
-    const { DatabaseSync } = await import("node:sqlite");
-    const idx = new DatabaseSync(join(tmp, "fixture.db"));
-    idx.prepare("INSERT OR REPLACE INTO residents (handle, json) VALUES (?, ?)")
-      .run("arrival", JSON.stringify({ handle: "arrival", github: "some-stranger" }));
-    idx.close();
-  }
+  });
+  await settleResident("arrival", { handle: "arrival", github: "some-stranger" });
 
-  // the SAME token now resolves to the new household — the send is accepted
-  const after = await fetch(`${BASE}/letters`, {
+  // the SAME token now resolves to the new household — the send is accepted.
+  // The office reads the resident ashore only once its index poll has run, and a
+  // loaded runner can take longer than any fixed wait (a 1 s sleep went red on
+  // CI, #453; with no wait it is red here too). So the send is retried while,
+  // and only while, the answer is the harbor gate's refusal, which writes
+  // nothing; any other answer is the verdict at once.
+  const send = () => fetch(`${BASE}/letters`, {
     method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
     body: JSON.stringify({ from: "arrival", to: "wright", title: "first hello", thread: "new", body: "hi" }),
   });
+  let after = await send();
+  for (const deadline = Date.now() + 20_000; after.status === 403 && Date.now() < deadline;) {
+    const refusal = await after.json();
+    assert.equal(refusal.defect, "the harbor is read + ephemeral", `only the harbor gate may be waited out: ${JSON.stringify(refusal)}`);
+    await new Promise((ok) => setTimeout(ok, 200));
+    after = await send();
+  }
   assert.equal(after.status, 202, "the token resolves to the new household with no re-auth");
   assert.ok((await after.json()).letter_id);
 });
 
-// ── the harbor (gangway frozen) — kept LAST: these write HARBOR/ into the
-// clone, and the door reads the gangway live per request (the pins pattern).
+/**
+ * A resident lands in the town index, as a join merge lands their ADDRESS: in
+ * the fixture office.db, and (switched) in the store the office reads, at a new
+ * as-of so the office's held roll and probe read it again. Resolves once the
+ * store holds the row; when the office reads it is its poll's business, so the
+ * caller waits on the office's own answer, never on a clock.
+ */
+async function settleResident(handle, card) {
+  const { DatabaseSync } = await import("node:sqlite");
+  const idx = new DatabaseSync(join(tmp, "fixture.db"));
+  idx.prepare("INSERT OR REPLACE INTO residents (handle, json) VALUES (?, ?)").run(handle, JSON.stringify(card));
+  idx.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('as_of', ?)").run(`fixture-with-${handle}`);
+  idx.close();
+  if (!IX.env.TOWN_INDEX_READS) return;
+  await IX.reseed();
+}
+
+// ── the harbor (gangway frozen) — kept LAST: the office is rebooted against a
+// store whose gangway is frozen (§ THE GANGWAY IS A STORE ROW, above), and the
+// door reads it per request.
 
 test("gangway frozen: request_residency boards the ship — a berth, not an address", async () => {
-  mkdirSync(join(clone, "HARBOR"), { recursive: true });
-  writeFileSync(join(clone, "HARBOR", "GANGWAY.md"),
-    "---\nstate: frozen\nsince: 2026-08-06\n---\n\n# The gangway\n");
+  await bootFrozen();
   captured = { trees: [], commits: [], refs: [], pulls: [] }; openPulls = [];
   ghIdentity = { id: 515151, login: "late-arrival" };
   const token = await visitorToken();
@@ -625,22 +719,25 @@ test("gangway frozen: already aboard → idempotent refusal, no second berth", a
   assert.equal(captured.pulls.length, 0, "no second berth for a passenger already on the manifest");
 });
 
-test("gangway reopens: the door stops boarding, and with no record here it refuses rather than join unbound", async () => {
-  rmSync(join(clone, "HARBOR"), { recursive: true, force: true });
+// AMENDED 2026-10-04 (POS-343): this office reads the record (sign-in needs
+// it), so the reopened gangway's join is the ordinary one and is not refused;
+// the "no record" half is the sign-in refusal above.
+test("gangway reopens: the door stops boarding", async () => {
+  await bootUnfrozen();
   captured = { trees: [], commits: [], refs: [], pulls: [] }; openPulls = [];
+  ghIdentity = { id: 616161, login: "after-thaw-gh" };
   const token = await visitorToken();
 
   const res = await postResidency(token, { handle: "after-thaw", card: "the gangway lowered." });
-  assert.equal(res.status, 503, "an open gangway is the ordinary join, which needs the record");
-  assert.equal((await res.json()).defect, BIND_REFUSALS.NO_RECORD.defect);
-  assert.equal(captured.pulls.length, 0, "no berth and no join PR");
+  const body = await res.json();
+  assert.equal(body.boarded, undefined, `an open gangway boards nobody (${res.status} ${JSON.stringify(body).slice(0, 200)})`);
+  assert.ok(!captured.trees.some((t) => t.tree.some((e) => e.path.startsWith("HARBOR/berths/"))), "no berth is written");
 });
 
 test("the human-of- prefix is reserved: a resident there would collide with a household's own voice", async () => {
   const { validateResidencyRequest } = await import("../src/residency.mjs");
-  const { DatabaseSync } = await import("node:sqlite");
-  const mem = new DatabaseSync(":memory:");
-  mem.exec("CREATE TABLE residents (handle TEXT PRIMARY KEY)");
+  // the index the check asks, handed in whole: nobody lives here yet (index-probe.mjs § probeOf)
+  const mem = { hasResident: () => false };
   assert.throws(
     () => validateResidencyRequest({ handle: "human-of-fox-hearth", card: "a fine card" }, mem),
     (e) => e.code === 409 && /reserved prefix/.test(e.defect) && /say-box/.test(e.hint),

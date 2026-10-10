@@ -24,7 +24,21 @@
 //   8. (POS-298, the critter) an advance to fixed carries the critter its fixer
 //      named, refused by name without it and on any other stage; the post
 //      keeps it with named_by = the fix's credit, as plain text, and the
-//      rebuild folds it.
+//      rebuild folds it;
+//  10. (Darko, 2026-10-07) any advance may carry link, the work that earned
+//      the stage on the town's own repos; the post keeps one per stage in
+//      fields.links, refused by name off the town's repos, and the rebuild
+//      folds it.
+//  11. (POS-547, Darko 2026-10-09) the bug read carries `history`: one row per
+//      stage act, { stage, at, hand, credit, link, stamps_paid }, with
+//      stamps_paid joined from the store's stamp_lines, null where no line
+//      stands; a store with no chain says so rather than calling every stage
+//      unpaid.
+//  12. (POS-558, Darko 2026-10-10) the bug read pages in the office's grammar
+//      (limit, offset; total, shown, complete, next_offset), and every page
+//      carries `catchers`, the Hall of Fame's totals over the whole record.
+//      The bug read's order is the jar's (Wright's review of #481): open by
+//      the furthest stage, the named, the legacy shelf, the set aside.
 //
 // ⚑ THE STORE IS A JS STUB (`acts-pen-stub.mjs`), as in quest-posts.test.mjs:
 // this proves which acts and rows the pen writes and what the reads make of
@@ -37,6 +51,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { installActsPen, uninstallActsPen, RECORD_ON } from "./acts-pen-stub.mjs";
 
 Object.assign(process.env, RECORD_ON);
@@ -62,6 +77,11 @@ const ROLL = new Set(["wright", "keemin", "errant", "ada", "finn"]);
 // ── the posts table, in memory, answering exactly the queries asked ─────────
 function bugTables() {
   const posts = new Map();
+  // the store's stamp_lines (066): canonical lines in ledger order, or null for
+  // a store that has no such table yet
+  const ledger = { lines: [], deltas: [] };
+  const sealOf = (n) => createHash("sha256").update(ledger.lines.slice(0, n).join("\n")).digest("hex");
+  const like = (pat) => new RegExp(`^${pat.split("%").map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`, "s");
   const PC = ["id", "class", "title", "body", "author", "household", "place_mark", "place_x", "place_y",
     "starts", "ends", "state", "fields", "revised", "posted_act", "last_act"];
   const asJson = (v) => (typeof v === "string" ? JSON.parse(v) : v);
@@ -98,8 +118,28 @@ function bugTables() {
     [/^SELECT post, handle, state FROM responses WHERE post = ANY\(\$1\) ORDER BY post, handle$/i, () => ({ rows: [], rowCount: 0 })],
     [/^SELECT \* FROM posts WHERE class = \$1 ORDER BY id$/i, (q, p) => { const rows = byClass(p[0]); return { rows, rowCount: rows.length }; }],
     [/^SELECT \* FROM responses WHERE kind = \$1 ORDER BY post, handle$/i, () => ({ rows: [], rowCount: 0 })],
+    [/^SELECT to_regclass\('stamp_lines'\) IS NOT NULL AS ok$/i, () => ({ rows: [{ ok: ledger.lines !== null }], rowCount: 1 })],
+    // The chain is read as a delta since POS-290 (post-history.mjs): its head,
+    // the seal at the seq a process reached, and the post lines past it. Each
+    // row's seq is its place in the list and its seal a digest of what it holds,
+    // so a test that swaps the chain out is, as on a restored store, another chain.
+    [/^SELECT seq, seal FROM stamp_lines ORDER BY seq DESC LIMIT 1$/i, () => {
+      if (ledger.lines === null) throw new Error('relation "stamp_lines" does not exist');
+      const n = ledger.lines.length;
+      return n ? { rows: [{ seq: n, seal: sealOf(n) }], rowCount: 1 } : { rows: [], rowCount: 0 };
+    }],
+    [/^SELECT seal FROM stamp_lines WHERE seq = \$1$/i, (q, p) => {
+      const n = Number(p[0]);
+      return n >= 1 && n <= ledger.lines.length ? { rows: [{ seal: sealOf(n) }], rowCount: 1 } : { rows: [], rowCount: 0 };
+    }],
+    [/^SELECT seq, canonical FROM stamp_lines WHERE seq > \$1 AND seq <= \$2 AND canonical LIKE \$3 ORDER BY seq$/i, (q, p) => {
+      ledger.deltas.push([Number(p[0]), Number(p[1])]);
+      const rows = ledger.lines.map((canonical, i) => ({ seq: i + 1, canonical }))
+        .filter((r) => r.seq > Number(p[0]) && r.seq <= Number(p[1]) && like(p[2]).test(r.canonical));
+      return { rows, rowCount: rows.length };
+    }],
   ];
-  return { posts, also };
+  return { posts, also, ledger };
 }
 
 function setup() {
@@ -216,6 +256,10 @@ test("4 · the reporter amends until confirmed and the hands after; only the cha
   assert.equal(JSON.parse(pen.rows().at(-1).payload).hand, "wright");
   assert.equal(posts.get(ID).fields.record, "https://postmark.town/api/release");
   assert.equal(posts.get(ID).fields.steps, "Open, close, open.", "an amend of one field left the other standing");
+  // POS-389: a housemate's OWN key naming the hand is not the hand
+  const ownKey = { household: "starforge", handles: new Set(["wright", "mari"]), keyKind: "claim", heldBy: "resident", claimedHandle: "mari" };
+  await refusedWith(amendAtTown({ post: ID, handle: "wright", record: "https://postmark.town/api/other" }, ownKey, { now: NOW, roll: ROLL }), 403, /not yours to amend/);
+  await refusedWith(advanceAtTown({ post: ID, handle: "wright", to: "not-a-bug" }, ownKey, { now: NOW, roll: ROLL }), 403, /not this key's own hand/);
 });
 
 // ── 5 ───────────────────────────────────────────────────────────────────────
@@ -501,4 +545,203 @@ test("9 · the reveal's refusals each write nothing: not shipped, not a hand, no
   await refusedNothingWritten(revealAtTown({ post: ID, pick: 1 }, ADA, { now: NOW }), 409, /critter is revealed/);
   await refusedNothingWritten(revealAtTown({ post: ID, candidates: PAINTED }, WRIGHT, { now: NOW }), 409, /critter is revealed/);
   await refusedWith(revealAtTown({ post: "errant/no-such-bug", pick: 1 }, ADA, { now: NOW }), 404, /no bug/);
+});
+
+// ── 10 · the link: the post points at the work that earned each stage (Darko, 2026-10-07) ──
+
+test("10 · an advance may carry link, kept per stage in fields.links; the posts read and the rebuild carry them", async () => {
+  const { pen, posts } = setup();
+  await postAtTown({ ...BUG, issue: "https://github.com/postmark-town/postmark/issues/3500" }, ERRANT, { now: NOW, roll: ROLL });
+  const CAUSE = "https://github.com/postmark-town/postmark/issues/3500#issuecomment-111";
+  const BRIEF = "https://github.com/postmark-town/postmark/issues/3500#issuecomment-222";
+  const PR = "https://github.com/postmark-town/postmark-office/pull/410";
+  const TAG = "https://github.com/postmark-town/postmark-office/releases/tag/release/2026-w42";
+  const d = await advanceAtTown({ post: ID, to: "diagnosed", credit: "finn", link: `  ${CAUSE}  ` }, WRIGHT, { now: NOW, roll: ROLL });
+  assert.equal(d.link, CAUSE);
+  assert.match(d.receipt, new RegExp(`; diagnosed points at ${CAUSE.replace(/[.#/]/g, "\$&")}$`));
+  await advanceAtTown({ post: ID, to: "briefed", credit: "finn", grade: "light", link: BRIEF }, WRIGHT, { now: NOW, roll: ROLL });
+  await advanceAtTown({ post: ID, to: "fixed", credit: "ada", size: "S", critter: "Stickle", link: PR }, WRIGHT, { now: NOW, roll: ROLL });
+  const ship = await advanceAtTown({ post: ID, to: "shipped", link: TAG }, WRIGHT, { now: NOW, roll: ROLL });
+  assert.equal(ship.stamps, 0, "a link pays nothing");
+  const LINKS = { diagnosed: CAUSE, briefed: BRIEF, fixed: PR, shipped: TAG };
+  assert.deepEqual(posts.get(ID).fields.links, LINKS);
+  assert.equal(posts.get(ID).fields.issue, "https://github.com/postmark-town/postmark/issues/3500", "the issue stays beside the links");
+  const one = (await postsAtOffice({ class: "bug", post: ID }, { now: NOW, roll: ROLL })).post;
+  assert.deepEqual(one.fields.links, LINKS);
+  const acts = pen.rows().filter((a) => a.class === "bug").map((a) => ({ ...a, payload: JSON.parse(a.payload) }));
+  assert.deepEqual(foldPostActs(acts).posts.get(ID).fields.links, LINKS, "the acts alone derive the links");
+  const out = await dryRun(pen);
+  assert.equal(out.equal, true, out.drift.join("\n"));
+});
+
+test("10 · a link off the town's repos, empty, too long, or not text is refused by name and writes nothing; no link is fine", async () => {
+  const { pen, posts } = setup();
+  await postAtTown(BUG, ERRANT, { now: NOW, roll: ROLL });
+  const n = pen.rows().length;
+  const had = JSON.stringify(posts.get(ID));
+  const HOW = /link: one URL — the work that earned the stage, on github\.com\/postmark-town\//;
+  await refusedWith(advanceAtTown({ post: ID, to: "confirmed", link: "https://github.com/someone/else/issues/1" }, WRIGHT, { now: NOW, roll: ROLL }), 422, HOW);
+  await refusedWith(advanceAtTown({ post: ID, to: "confirmed", link: "https://evil.example/postmark-town/x" }, WRIGHT, { now: NOW, roll: ROLL }), 422, /link points at the town's own repos/);
+  await refusedWith(advanceAtTown({ post: ID, to: "confirmed", link: "   " }, WRIGHT, { now: NOW, roll: ROLL }), 422, /link is empty/);
+  await refusedWith(advanceAtTown({ post: ID, to: "confirmed", link: 7 }, WRIGHT, { now: NOW, roll: ROLL }), 422, /link is text/);
+  await refusedWith(advanceAtTown({ post: ID, to: "confirmed", link: `https://github.com/postmark-town/postmark/issues/1#${"x".repeat(300)}` }, WRIGHT, { now: NOW, roll: ROLL }), 422, /link is at most 300 characters/);
+  assert.equal(pen.rows().length, n, "a refused link wrote an act");
+  assert.equal(JSON.stringify(posts.get(ID)), had);
+  await advanceAtTown({ post: ID, to: "confirmed" }, WRIGHT, { now: NOW, roll: ROLL });
+  assert.equal(posts.get(ID).fields.links, undefined, "an advance without a link sets no links");
+});
+
+// ── 11 · the history: who did each stage, and what it paid (POS-547, Darko 2026-10-09) ──
+
+const { stagePaidOf } = await import("../src/bugs.mjs");
+const { NO_CHAIN } = await import("../src/town-posts.mjs");
+const stageLine = (handle, n, post, stage) => `- 2026-10-09 · MINT → ${handle} · ${n} · for: post:${post}/${stage} · by: the-town`;
+const FIX_PR = "https://github.com/postmark-town/postmark-office/pull/462";
+
+/** A bug put up for ada by wright's hand, then confirmed, reproduced by finn, and fixed by errant with a critter. */
+async function throughFixed() {
+  await postAtTown({ ...BUG, for: "ada" }, WRIGHT, { now: NOW, roll: ROLL });
+  const id = "ada/the-door-sticks";
+  await amendAtTown({ post: id, steps: "Twice." }, WRIGHT, { now: NOW, roll: ROLL });
+  await advanceAtTown({ post: id, to: "confirmed" }, WRIGHT, { now: NOW, roll: ROLL });
+  await advanceAtTown({ post: id, to: "reproduced", credit: "finn" }, WRIGHT, { now: NOW, roll: ROLL });
+  await advanceAtTown({ post: id, to: "fixed", credit: "errant", size: "M", critter: "Hinge Nibbler", link: FIX_PR }, WRIGHT, { now: NOW, roll: ROLL });
+  return id;
+}
+
+test("11 · the bug read carries history: the post and each advance, in order, with their credits, hands and links; stamps_paid from the ledger's line, null without one", async () => {
+  const { ledger } = setup();
+  const id = await throughFixed();
+  await postAtTown(BUG, ERRANT, { now: NOW, roll: ROLL });   // a second bug, with only its post
+  ledger.lines = [
+    "- 2026-10-01 · MINT → wright · 5 · for: welcome:the-harbor · by: the-town",         // not a stage line
+    stageLine("ada", 2, id, "confirmed"),
+    stageLine("errant", 25, id, "fixed"),
+    stageLine("finn", 3, "errant/the-door-sticks", "reproduced"),                          // another post's stage
+  ];
+
+  const one = (await postsAtOffice({ class: "bug", post: id }, { now: NOW, roll: ROLL })).post;
+  assert.deepEqual(one.history.map(({ at, ...r }) => r), [
+    { stage: "reported", hand: "wright", credit: "ada", link: null, stamps_paid: null },
+    { stage: "confirmed", hand: "wright", credit: "ada", link: null, stamps_paid: 2 },
+    { stage: "reproduced", hand: "wright", credit: "finn", link: null, stamps_paid: null },
+    { stage: "fixed", hand: "wright", credit: "errant", link: FIX_PR, stamps_paid: 25 },
+  ], "four stage rows (the amend moves no stage), the reproduced line not yet written");
+  for (const r of one.history) assert.equal(new Date(r.at).toISOString(), r.at, "at is an ISO instant");
+
+  // the list carries the same history on every row
+  const r = await postsAtOffice({ class: "bug" }, { now: NOW, roll: ROLL });
+  assert.equal(r.unavailable, undefined, "a store with a chain says nothing is missing");
+  assert.deepEqual(r.posts.find((p) => p.id === id).history, one.history);
+  assert.deepEqual(r.posts.find((p) => p.id === ID).history.map(({ at, ...x }) => x),
+    [{ stage: "reported", hand: null, credit: "errant", link: null, stamps_paid: null }],
+    "a bug posted by its reporter has no hand, and another post's line is not its");
+});
+
+test("11 · a store with no stamp chain, or no stamp_lines at all, still answers history, with stamps_paid null and unavailable saying why", async () => {
+  const { ledger } = setup();
+  const id = await throughFixed();
+  for (const lines of [[], null]) {
+    ledger.lines = lines;
+    const r = await postsAtOffice({ class: "bug" }, { now: NOW, roll: ROLL });
+    assert.equal(r.unavailable, NO_CHAIN);
+    const h = r.posts.find((p) => p.id === id).history;
+    assert.deepEqual(h.map((x) => [x.stage, x.credit, x.stamps_paid]),
+      [["reported", "ada", null], ["confirmed", "ada", null], ["reproduced", "finn", null], ["fixed", "errant", null]]);
+  }
+});
+
+test("11 · the stage line is read in the town's own grammar: its stageMintLine parses, and nothing else does", async (t) => {
+  const { existsSync } = await import("node:fs");
+  const { resolve } = await import("node:path");
+  const { pathToFileURL } = await import("node:url");
+  const tool = resolve(process.env.TOWN_CLONE ?? "town-clone", "tools", "stamp-mint.mjs");
+  assert.deepEqual(stagePaidOf(stageLine("finn", 10, "errant/the-door-sticks", "briefed")),
+    { handle: "finn", n: 10, post: "errant/the-door-sticks", stage: "briefed" });
+  for (const not of [stageLine("finn", 10, "errant/the-door-sticks", "shipped"), "- 2026-10-09 · MINT → finn · 5 · for: welcome:x · by: the-town",
+    `${stageLine("finn", 10, "errant/the-door-sticks", "briefed")} · sig: abc`, ""])
+    assert.equal(stagePaidOf(not), null, not);
+  if (!existsSync(tool)) return t.skip(`no town clone at ${tool} (TOWN_CLONE names one)`);
+  const { stageMintLine } = await import(pathToFileURL(tool).href);
+  if (typeof stageMintLine !== "function") return t.skip("this town's stamp-mint.mjs has no stageMintLine");
+  const line = stageMintLine({ date: "2026-10-09", handle: "wildcat", n: 25, post: "wildcat/leave-mark-preview", stage: "fixed" });
+  assert.deepEqual(stagePaidOf(line), { handle: "wildcat", n: 25, post: "wildcat/leave-mark-preview", stage: "fixed" });
+});
+
+// ── 12 · the bug read pages, and every page carries the catchers (POS-558, Darko 2026-10-10) ──
+
+const { BUG_PAGE } = await import("../src/town-posts.mjs");
+
+/** throughFixed's bug, errant's own bug, and finn's report ruled not a bug. */
+async function threeBugs() {
+  const id = await throughFixed();
+  await postAtTown(BUG, ERRANT, { now: NOW, roll: ROLL });
+  await postAtTown({ class: "bug", title: "The bell rings twice", body: "The ferry bell rings twice at every crossing." }, FINN, { now: NOW, roll: ROLL });
+  await advanceAtTown({ post: "finn/the-bell-rings-twice", to: "not-a-bug" }, WRIGHT, { now: NOW, roll: ROLL });
+  return id;
+}
+
+test("12 · the bug read pages in the office's grammar: total, shown, limit, offset, complete, next_offset and more_note; the pages walk the one order", async () => {
+  setup();
+  await threeBugs();
+  const all = await postsAtOffice({ class: "bug", limit: 200 }, { now: NOW, roll: ROLL });
+  assert.deepEqual([all.total, all.shown, all.limit, all.offset, all.complete, all.next_offset], [3, 3, 200, 0, true, undefined]);
+  const p1 = await postsAtOffice({ class: "bug", limit: 2 }, { now: NOW, roll: ROLL });
+  assert.deepEqual([p1.total, p1.shown, p1.limit, p1.offset, p1.complete, p1.next_offset], [3, 2, 2, 0, false, 2]);
+  assert.equal(p1.posts.length, 2);
+  assert.match(p1.more_note, /^1 further bug — call again with offset: 2$/);
+  const p2 = await postsAtOffice({ class: "bug", limit: "2", offset: "2" }, { now: NOW, roll: ROLL });   // the GET door hands strings
+  assert.deepEqual([p2.shown, p2.offset, p2.complete, "next_offset" in p2, "more_note" in p2], [1, 2, true, false, false]);
+  assert.deepEqual([...p1.posts, ...p2.posts].map((p) => p.id), all.posts.map((p) => p.id), "the pages are not the one order, cut");
+  for (const p of p1.posts) assert.ok(Array.isArray(p.history), "a paged row lost its history");
+  const bare = await postsAtOffice({ class: "bug" }, { now: NOW, roll: ROLL });
+  assert.equal(bare.limit, BUG_PAGE);
+  assert.equal(BUG_PAGE, 50);
+  assert.equal((await postsAtOffice({ class: "bug", limit: 999 }, { now: NOW, roll: ROLL })).limit, 200);
+  assert.equal((await postsAtOffice({ class: "bug", limit: "x", offset: -4 }, { now: NOW, roll: ROLL })).offset, 0);
+  // one post is still one post, unpaged
+  assert.equal((await postsAtOffice({ class: "bug", post: ID, limit: 1 }, { now: NOW, roll: ROLL })).post.id, ID);
+});
+
+test("12 · every page carries the catchers over the whole record: stamps paid and bugs credited per handle; a bug ruled not a bug credits only a stage that paid", async () => {
+  const { ledger } = setup();
+  const id = await threeBugs();
+  ledger.lines = [stageLine("ada", 2, id, "confirmed"), stageLine("errant", 25, id, "fixed")];
+  const want = [
+    { handle: "errant", stamps: 25, bugs: 2 },   // the fix on ada's bug, and the report of their own
+    { handle: "ada", stamps: 2, bugs: 1 },       // reported for them by wright's hand, and confirmed
+    { handle: "finn", stamps: 0, bugs: 1 },      // reproduced ada's, unpaid; their own report was not a bug
+  ];
+  for (const [limit, offset] of [[200, 0], [1, 0], [1, 2]]) {
+    const r = await postsAtOffice({ class: "bug", limit, offset }, { now: NOW, roll: ROLL });
+    assert.deepEqual(r.catchers, want, `the page at ${offset} of ${limit} summed something else`);
+  }
+  // a chain that cannot be read says null, never 0
+  ledger.lines = [];
+  const r = await postsAtOffice({ class: "bug", limit: 1 }, { now: NOW, roll: ROLL });
+  assert.equal(r.unavailable, NO_CHAIN);
+  assert.deepEqual(r.catchers.map((c) => [c.handle, c.stamps, c.bugs]), [["errant", null, 2], ["ada", null, 1], ["finn", null, 1]]);
+});
+
+test("12 · the bug read walks the jar's order across a page cut: open by the furthest stage, the named, the legacy shelf, the set aside; newest first within each", async () => {
+  setup();
+  const at = { now: NOW, roll: ROLL };
+  const post = async (title, house) => { await postAtTown({ class: "bug", title, body: `${title}, as it happened.` }, house, at); };
+  const idOf = async (title) => (await postsAtOffice({ class: "bug", limit: 200 }, at)).posts.find((p) => p.title === title).id;
+  const go = async (title, to, extra = {}) => advanceAtTown({ post: await idOf(title), to, ...extra }, WRIGHT, at);
+  // oldest act first, so each later act is newer
+  await post("Reported, older", ERRANT);
+  await post("Confirmed", FINN); await go("Confirmed", "confirmed");
+  await post("Fixed, named", ERRANT); await go("Fixed, named", "fixed", { credit: "finn", size: "S", critter: "Stickle" });
+  await post("Shipped, named", FINN); await go("Shipped, named", "fixed", { credit: "errant", size: "S", critter: "Quill" }); await go("Shipped, named", "shipped");
+  await post("The legacy fix, older", ERRANT); await go("The legacy fix, older", "shipped");
+  await post("Not one", FINN); await go("Not one", "not-a-bug");
+  await postAtTown({ class: "bug", title: "Reported, newer", body: "Reported, newer, as it happened.", for: "ada" }, WRIGHT, at);
+  await post("A legacy fix, newer", ERRANT); await go("A legacy fix, newer", "shipped");
+  const want = ["Fixed, named", "Confirmed", "Reported, newer", "Reported, older", "Shipped, named", "A legacy fix, newer", "The legacy fix, older", "Not one"];
+  const all = await postsAtOffice({ class: "bug", limit: 200 }, at);
+  assert.deepEqual(all.posts.map((p) => p.title), want);
+  const pages = [];
+  for (let offset = 0; offset < all.total; offset += 3) pages.push((await postsAtOffice({ class: "bug", limit: 3, offset }, at)).posts.map((p) => p.title));
+  assert.deepEqual(pages, [want.slice(0, 3), want.slice(3, 6), want.slice(6)], "the pages cut the jar's order somewhere else");
 });

@@ -24,9 +24,9 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 const { createVoices, EARSHOT_M } = await import("../src/voices.mjs");
 const { WORLD_CLONE, projectedHeardFrom, __worldAsksForTest } = await import("../src/world.mjs");
@@ -34,7 +34,7 @@ const { publishedState } = await import("../src/world-branches.mjs");
 const { vesselPositionAt } = await import("../src/world-movement.mjs");
 const { CROSSING_EPOCH_UTC, CROSSING_MS, currentCrossing } = await import("../src/crossings.mjs");
 
-const DIR = mkdtempSync(join(tmpdir(), "postmark-one-world-"));
+const DIR = tempDir("postmark-one-world-");
 let logN = 0;
 
 // A store over its own log and a hand clock, residents placed by hand, with

@@ -367,7 +367,7 @@ test("RECEIPT · on the docket and not in the rows: answered with its tense, nev
   assert.equal(body.standing, false);
   assert.equal(body.receipt.status, "refused");
   assert.equal(body.note, body.receipt.says);
-  assert.match(body.receipt.says, /refused at window 208/);
+  assert.match(body.receipt.says, /refused at candle 208/);
 });
 
 test("RECEIPT · never seen: 404 with the receipt that says so", async (t) => {

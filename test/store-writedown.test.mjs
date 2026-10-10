@@ -27,9 +27,8 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
 
 import { loginKeys, sketchbookKeys } from "../src/household-logins.mjs";
 import { markRecord } from "../src/mark-record.mjs";
@@ -39,8 +38,9 @@ import {
   FoldInputRefusal, clearGitSketchbooks, normalizeFoldInput, normalizeMark,
   planStoreWriteDown, sketchbookNameFor, starvingCheck, storeWriteDown,
 } from "../src/store-writedown.mjs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
-const scratch = mkdtempSync(join(tmpdir(), "postmark-storewd-"));
+const scratch = tempDir("postmark-storewd-");
 after(() => { try { rmSync(scratch, { recursive: true, force: true }); } catch { /* litter */ } });
 
 const SEED_ISO = "2026-08-01T00:00:00.000Z";
@@ -622,6 +622,19 @@ test("F8c · it does NOT fire on a lawfully quiet DELTA — the trap the written
   assert.equal(r.staked_marks, 1);
 });
 
+test("F8s · a docket the SETTLEMENT took away whole is a lawful crossing, not a starving one (POS-364, R11)", () => {
+  // A window whose only claim was a parcel over the cap: it materialized, the
+  // settlement opposes it, and fold-input-cli withheld it from the sketchbooks.
+  // Escrow stands elsewhere. Without the withheld term this is F8a's refusal.
+  const stakes = [{ mark: "alpha/staked", holder: "beta", n: 3, weight: 3, tick: 0 }];
+  const r = starvingCheck({ marks: [], stakes, docketClaims: 1, withheldBySettlement: 1 });
+  assert.equal(r.starving, false);
+  assert.equal(r.withheld_by_settlement, 1);
+  assert.match(r.why, /the settlement opposes every one/);
+  // CONTROL: the same input with nothing withheld is still F8a's refusal.
+  assert.equal(caught(() => starvingCheck({ marks: [], stakes, docketClaims: 1 })).reason, "store-starving");
+});
+
 test("F8d · a stake position of zero is not escrow — it must not hold the guard open", () => {
   const r = starvingCheck({ marks: [], stakes: [{ mark: "alpha/one", holder: "beta", n: 0, weight: 0, tick: 0 }] });
   assert.equal(r.starving, false);
@@ -1098,4 +1111,83 @@ test("F8v · storeWriteDown reads the carry off the selection and histograms bot
     "the histogram names both windows: this crossing's own, and the one it swept up behind it");
   assert.equal(out.selection.carried_absent.count, 2, "and the slugs reach the receipt by name");
   assert.deepEqual(out.selection.carried_absent.slugs, ["alpha/reachability", "alpha/warm-stone"]);
+});
+
+// ── POS-364 review: A PRE-LAW PARCEL AMENDED TODAY DOES NOT STOP THE CROSSING ──
+//
+// Every door amend restamps `date`. A household holding four pre-law parcels
+// whose first is amended today: read by `date`, the tree's fold counts the
+// amended one as a fourth claim after the law ("capped — already holds 4",
+// settlement-sweep.mjs § foldRef) and the town stops. The write-down now carries
+// the parcel's first claim into its mark.md (`claimed_at`, mark-render.mjs §
+// recordFromRow), and the tree's fold reads it (world#166). Driven end to end:
+// the store row as the door's amend left it, rendered by the write-down,
+// written to the household's sketchbook, extracted and folded by the world's
+// own engine at world#166's head.
+
+test("F-claim · one door amend of a pre-law parcel goes through the write-down and the tree's fold with no error", async () => {
+  const { renderedMark } = await import("../world2/tools/mark-render.mjs");
+  const { materializeAtRef } = await import("../src/world-branches.mjs");
+  const { pathToFileURL, fileURLToPath } = await import("node:url");
+  const WORLD_CLONE = process.env.WORLD_CLONE ?? join(dirname(fileURLToPath(import.meta.url)), "..", "world-clone");
+  const ENGINE = "a01213a822fbddeec31dfdd0dfb72afb9b6b9367";   // postmark-world#166
+  const engine = await import(pathToFileURL(join(materializeAtRef(WORLD_CLONE, ENGINE, "tools"), "tools", "marks-fold.mjs")).href);
+
+  // Canon: one household, four residents, four parcels claimed before the law (2026-07-30).
+  const repo = join(scratch, `prelaw-${++seq}`);
+  const put = (p, t) => { const f = join(repo, p); mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, t); };
+  const g = (...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...SEED_ENV } });
+  const hands = ["sa", "sb", "sc", "sd"];
+  hands.forEach((h, i) => put(`WORLD/marks/${h}/plot/mark.md`,
+    markRecord({ kind: "parcel", by: h, date: `2026-07-2${i + 1}`, at: { x: i * 100, y: 0 }, extent: { w: 25, h: 25 } }, `${h}'s plot`)));
+  put("WORLD/households.json", JSON.stringify({ households: Object.fromEntries(hands.map((h) => [h, "sage-house"])) }, null, 2));
+  g("init", "-q", "-b", "main"); g("config", "user.email", "seed@postmark.invalid"); g("config", "user.name", "seed");
+  g("add", "-A"); g("commit", "-qm", "canon");
+
+  // The store row after sa's door amend: `date` restamped, the origin claim's date beside it.
+  const row = (firstClaimed, submittedAt = null) => ({
+    slug: "sa/plot", kind: "parcel", owner: "sa", household: "sa", body: "sa's plot, moved", locked_window: 177,
+    geometry: { at: { x: 10, y: 0 }, extent: { w: 25, h: 25 } }, data: { date: "2026-10-08T12:00:00.000Z" },
+    first_claimed: firstClaimed, first_claim_submitted_at: submittedAt,
+  });
+  const foldTree = (firstClaimed, submittedAt = null) => {
+    const r = row(firstClaimed, submittedAt);
+    const report = storeWriteDown({ repo, at: Date.parse(AT_ISO), input: foldInput([{ slug: r.slug, kind: r.kind, by: r.owner, household: r.household, locked_window: 177, ...renderedMark(r) }]) });
+    const branch = report.households[0].branch;
+    const out = join(scratch, `prelaw-tree-${++seq}`);
+    mkdirSync(out, { recursive: true });
+    execFileSync("git", ["-C", repo, "archive", "--format=tar", `--output=${join(out, "w.tar")}`, branch, "--", "WORLD"]);
+    execFileSync("tar", ["-xf", "w.tar"], { cwd: out });
+    const marks = engine.loadTreeMarks(join(out, "WORLD", "marks"));
+    return { marks, state: engine.fold({ marks, terrain: { features: [] }, stakes: [], tick: 1, households: Object.fromEntries(hands.map((h) => [h, "sage-house"])) }) };
+  };
+
+  const kept = foldTree("2026-07-21");
+  assert.equal(kept.marks.find((m) => m.id === "sa/plot")?.claimed_at, "2026-07-21", "the mark.md carries the first claim");
+  assert.deepEqual(kept.state.errors, [], "four pre-law parcels stand: the amended one is still prior estate");
+  // AN UNDATED ORIGIN CLAIM (POS-364 delta review): its submitted_at is the first
+  // claim, as the store's fold reads it (mark-render.mjs § firstClaimInstant).
+  const undated = foldTree(null, new Date("2026-07-21T09:00:00.000Z"));
+  assert.equal(undated.marks.find((m) => m.id === "sa/plot")?.claimed_at, "2026-07-21T09:00:00.000Z");
+  assert.deepEqual(undated.state.errors, [], "dated by its submitted_at, it is still prior estate");
+  // CONTROL: the same amend written without its first claim is the stopped town.
+  const restamped = foldTree(null);
+  assert.match(JSON.stringify(restamped.state.errors), /parcel claim capped — this credential household already holds 3/);
+});
+
+test("F-claim-undated · a parcel with no date keeps the bytes it has always had: no claimed_at from its submitted_at (Wright's review of #441)", async () => {
+  const { recordFromRow, renderRecord } = await import("../world2/tools/mark-render.mjs");
+  const geometry = { at: { x: 5000, y: 0 }, extent: { w: 25, h: 25 } };
+  const undated = { kind: "parcel", owner: "sa", body: "Sa's plot.", geometry, data: { tier: "market" }, first_claimed: null, first_claim_submitted_at: new Date("2026-07-21T09:00:00.000Z") };
+  assert.equal(recordFromRow(undated).claimed_at, undefined, "never amended, never dated: nothing to differ from");
+  assert.doesNotMatch(renderRecord(undated), /claimed_at/, "the first write-down after the deploy leaves its mark.md as it was");
+  // CONTROL: the same parcel amended today (the door restamps `date`) carries its first claim.
+  const amended = { ...undated, data: { tier: "market", date: "2026-10-08T12:00:00.000Z" } };
+  assert.equal(recordFromRow(amended).claimed_at, "2026-07-21T09:00:00.000Z");
+});
+
+test("F-claim-ingest · marks-ingest never reads claimed_at back as a resident's change: it is the store's fact printed into the file", async () => {
+  const { recordDiff } = await import("../world2/tools/marks-ingest.mjs");
+  assert.deepEqual(recordDiff({ kind: "parcel", body: "a", claimed_at: "2026-07-21" }, { kind: "parcel", body: "a" }), []);
+  assert.deepEqual(recordDiff({ kind: "parcel", body: "b", claimed_at: "2026-07-21" }, { kind: "parcel", body: "a" }), ["body"], "a real change is still read");
 });

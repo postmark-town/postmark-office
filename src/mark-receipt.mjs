@@ -61,7 +61,7 @@ import { execFileSync } from "node:child_process";
 // `window` is the candle's, and it is labelled as the candle's. Nothing here
 // re-uses the bare word "crossing" for either.
 export const RECEIPT_CLOCK =
-  "crossing = the SETTLEMENT epoch (S-number + the sha it blessed, 05:45/17:45Z) — not the ferry's 00:00/12:00Z crossing, and not the candle's window";
+  "crossing = the SETTLEMENT epoch (S-number + the sha it blessed, 05:45/17:45Z) — not the ferry's 00:00/12:00Z crossing, and not candle N, the candle's own interval (LOGOS/classes.md § the register, crossing ③)";
 
 /**
  * The bulletin's own five words for why a mark did not ride.
@@ -86,7 +86,7 @@ export const RECEIPT_CLOCK =
  * and `world2/tools/review-rule.mjs` at 247-248 — writes `<name>: <detail>`:
  *
  *     duplicate: a standing mark already carries this slug
- *     superseded: a later claim in this window amends this one
+ *     superseded: a later claim in this candle amends this one
  *     insufficient-stamps: staked 3, liquid 1 at town 9f2a1b0c
  *     parcel-overlap: standing parcel "k-of-garrison/the-long-field"
  *     counterclaim: collides with 77 — a mind rules (census D2)
@@ -123,7 +123,20 @@ export const RECEIPT_CLOCK =
  * carried up in `docs/2026-09-08/jetto-candle-refusal-report.md` with the exact
  * sentence to change rather than edited here.
  */
-export const CAUSE_WORDS = Object.freeze(["held", "contested", "unbacked", "malformed", "quarantined", "unpublished"]);
+/**
+ * ⚑ `opposed` IS THE SEVENTH WORD, RULED BY DARKO 2026-10-08 (POS-364).
+ *
+ * A parcel over one of the town's limits (the-town/claim-cap, the-town/one-per-
+ * resident) is decided at the clearing as OPPOSED, citing the law mark, and
+ * never holds ground (world2/tools/parcel-cap.mjs § opposedCheck). Governance
+ * taking a claim away, citing the law, is none of the six: nobody else claims
+ * it (not contested), the stake is fine (not unbacked), the record is fine (not
+ * malformed), and nothing waits on a person (not quarantined, not held, not
+ * unpublished). The town's and a parcel holder's stance oppositions return a
+ * mark at the settlement (the fold's `returned[]`) and write no refusal check
+ * on a claim today; when one does, its check is `opposed` and this word is it.
+ */
+export const CAUSE_WORDS = Object.freeze(["held", "contested", "unbacked", "malformed", "quarantined", "unpublished", "opposed"]);
 
 const CAUSE_OF_CHECK = Object.freeze({
   // ── the CANDLE's writers (world2/tools/clearing-job.mjs) ──────────────────
@@ -143,6 +156,16 @@ const CAUSE_OF_CHECK = Object.freeze({
   // `canon-absent` on the nightly read — land on different words on purpose,
   // because they ask a resident for different things.
   "escrow-absent": "unbacked",
+  // A claim the store would not file (the roll does not name its claimant, or
+  // Postgres refused its one row), refused alone so the rest of the window
+  // locks (POS-356). RULED 2026-10-08 by Darko: `quarantined`, set aside by the
+  // town's own gate until a person fixes what it names.
+  "unfileable": "quarantined",
+  // A parcel over a limit, decided at the clearing (`opposed: <law>: <slug> — …`),
+  // and the spelling the clearing's older count wrote on the rows it refused
+  // (`parcel-cap: …`, before the A build). RULED 2026-10-08 by Darko: `opposed`.
+  "opposed": "opposed",
+  "parcel-cap": "opposed",
   // ── the REVIEW lane's writer (world2/tools/review-rule.mjs) ───────────────
   //
   // ⚑ `contested`, NOT `held` (repaired 2026-09-07, reviewer-found — and it is
@@ -233,6 +256,19 @@ export function checkNameOf(refusalCheck) {
 }
 
 const CAUSE_ROW_PREFIX = "claims.refusal_check = ";
+
+/**
+ * THE LAW A CLEARING'S OPPOSITION CITES (POS-364; Darko RULED A, 2026-10-08): a
+ * parcel over a limit is decided `opposed: <law mark>: …` (world2/tools/
+ * parcel-cap.mjs § opposedCheck). The law mark, or null for any other check.
+ * Its bulletin word is `opposed` (CAUSE_WORDS); the sentence also names the law.
+ */
+export function opposedLawOf(refusalCheck) {
+  const raw = String(refusalCheck ?? "").trim();
+  if (checkNameOf(raw) !== "opposed") return null;
+  const m = /^opposed:\s*([^:\s]+)/i.exec(raw);
+  return m ? m[1] : null;
+}
 
 export function causeOf(refusalCheck) {
   const raw = String(refusalCheck ?? "").trim();
@@ -374,7 +410,9 @@ export function receiptFrom(records = {}) {
       ...base, status: "refused", cause, cause_row,
       crossing: settlement ?? null,
       settlement_sha: settlement?.sha ?? null,
-      says: `refused at window ${row.window_id}${cause ? ` — ${cause}` : ""}${row.decided_at ? ` (${row.decided_at})` : ""}`
+      says: opposedLawOf(row.refusal_check)
+        ? `opposed at candle ${row.window_id}, citing ${opposedLawOf(row.refusal_check)}: the parcel is over its limit and holds no ground${row.decided_at ? ` (${row.decided_at})` : ""}`
+        : `refused at candle ${row.window_id}${cause ? ` — ${cause}` : ""}${row.decided_at ? ` (${row.decided_at})` : ""}`
         + (cause ? "" : " — the check that refused it has no word in the bulletin's five yet; the row is named beside this"),
     };
   }
@@ -383,22 +421,22 @@ export function receiptFrom(records = {}) {
       ...base, status: "locked",
       crossing: settlement ?? null,
       settlement_sha: settlement?.sha ?? null,
-      says: `locked at window ${row.window_id} — the candle ruled for it; it reaches the world at the settlement that carries the window`,
+      says: `locked at candle ${row.window_id} — the candle ruled for it; it reaches the world at the settlement that carries that candle`,
     };
   }
   if (row?.status === "retracted") {
-    return { ...base, status: "retracted", says: `retracted at window ${row.window_id} — you took it off the docket before the close` };
+    return { ...base, status: "retracted", says: `retracted at candle ${row.window_id} — you took it off the docket before the close` };
   }
   if (row?.status === "held_review") {
     return { ...base, status: "held_review", cause: "held", cause_row: "claims.status = \"held_review\"",
-      says: `held at window ${row.window_id} — a mind rules on it; it did not ride and it was not refused` };
+      says: `held at candle ${row.window_id} — a mind rules on it; it did not ride and it was not refused` };
   }
 
   // 3 · PENDING. On the public docket, waiting for the candle.
   if (row?.status === "pending") {
     return {
       ...base, status: "pending",
-      says: `pending at window ${row.window_id} — staked and on the public docket since ${row.submitted_at ?? "its stake"}; it rides when that window closes`,
+      says: `pending at candle ${row.window_id} — staked and on the public docket since ${row.submitted_at ?? "its stake"}; it rides when that candle closes`,
     };
   }
 

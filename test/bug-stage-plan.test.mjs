@@ -33,12 +33,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, existsSync, rmSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
+import { copyTownTools } from "./helpers/town-tools.mjs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 import { execFileSync, spawnSync } from "node:child_process";
 import { installActsPen, uninstallActsPen, RECORD_ON } from "./acts-pen-stub.mjs";
 import { OFFICE_ROOT } from "./fixture-paths.mjs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 Object.assign(process.env, RECORD_ON);
 const { postAtTown, advanceAtTown } = await import("../src/events-store.mjs");
@@ -173,10 +174,10 @@ const TOWN_HAS_VERB = existsSync(join(TOWN_SRC, "tools", "stamp-mint.mjs"))
 
 /** A founded synthetic town carrying the town's own stamp-mint and stamp-verify. */
 function syntheticTown() {
-  const repo = mkdtempSync(join(tmpdir(), "bug-stage-town-"));
+  const repo = tempDir("bug-stage-town-");
   mkdirSync(join(repo, "tools"), { recursive: true });
   mkdirSync(join(repo, "WHITE_PAGES"), { recursive: true });
-  for (const f of ["stamp-mint.mjs", "stamp-verify.mjs"]) copyFileSync(join(TOWN_SRC, "tools", f), join(repo, "tools", f));
+  copyTownTools(TOWN_SRC, repo);
   writeFileSync(join(repo, "tools", "github-ids.json"), JSON.stringify({ carol: { id: 3 }, dan: { id: 4 } }));
   for (const h of ["carol", "dan"]) {
     mkdirSync(join(repo, "WHITE_PAGES", h), { recursive: true });
@@ -242,7 +243,7 @@ test("7 · --quiet (the tick's): a run that pays prints the header and the owed 
   });
 
 test("5 · the pass refuses a town whose stamp-mint has no stage grammar, before reading anything", async () => {
-  const repo = mkdtempSync(join(tmpdir(), "bug-stage-old-"));
+  const repo = tempDir("bug-stage-old-");
   mkdirSync(join(repo, "tools"), { recursive: true });
   writeFileSync(join(repo, "tools", "stamp-mint.mjs"), "export const classifyEntry = () => ({ kind: 'unknown' });\n");
   const errs = [];

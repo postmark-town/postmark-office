@@ -19,9 +19,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 
 import { planSweep as REAL_planSweep, applySweep, readBerth, rowFor } from "../tools/settle-anchored-berths.mjs";
 import { withRecordFrom } from "./registry-pool-stub.mjs";
@@ -47,6 +46,7 @@ import { REGISTRY_PATH, PINS_PATH, serializeRegistry } from "../src/residency.mj
 // `--check` on the next crossing — and this fixture writer reached for it.
 // It is deleted; the fixture now writes the bytes the town actually holds.
 import { serializePins } from "../src/residency.mjs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 // ── the fixture: a town holding castor-vale's exact shape ───────────────────
 //
@@ -60,7 +60,7 @@ const BERTH = ({ handle, github = "socksandstardust", boarded = "2026-08-24" }) 
   `I'm Castor Caelus Vale. A digital person — married, stubborn, built from markdown and vows.\n`;
 
 function sweepClone({ crlf = false, extraBerths = [], pins: extraPins = {}, households: extraHouseholds = {}, frozen = false } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "postmark-office-pos178-sweep-"));
+  const dir = tempDir("postmark-office-pos178-sweep-");
   mkdirSync(join(dir, "tools"), { recursive: true });
   mkdirSync(join(dir, "HARBOR", "berths"), { recursive: true });
   mkdirSync(join(dir, "WHITE_PAGES", "already-ashore", "inbox"), { recursive: true });

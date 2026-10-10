@@ -163,7 +163,7 @@ test("THE STAKE GESTURE DISPATCHES: stake and unstake reach their flat verbs, fi
 // says what each lane is FOR, in the five buildings' own plaques. The count is
 // the closed-union guard, so it is deliberately updated with the read rather
 // than loosened to a `>=`.
-test("THE COMMONS' READS: twenty-two (thirteen + the three lanes + the quarter + marks + calendar + event + posts + quest), and each one SERVES a flat verb rather than reimplementing it", async () => {
+test("THE COMMONS' READS: twenty-three (thirteen + the three lanes + the quarter + marks + calendar + event + posts + quest + docs), and each one SERVES a flat verb rather than reimplementing it", async () => {
   // The number is the guard, and the parenthesis is its derivation — a read born
   // unadvertised is exactly what this catches, so the count is updated by hand
   // and the sentence says which addition moved it. `marks` joined 2026-09-07
@@ -173,8 +173,10 @@ test("THE COMMONS' READS: twenty-two (thirteen + the three lanes + the quarter +
   // calendar — it serves the same flat verb, read_calendar, never a second one.
   // `posts` and `quest` joined 2026-09-28 evening (POS-294): the one posts read
   // that takes a class, and the quest class's alias of it — one flat verb,
-  // read_posts, with the class fixed for the alias.
-  assert.equal(TOWN_READABLE.length, 22);
+  // read_posts, with the class fixed for the alias. `docs` joined 2026-10-06:
+  // the town's own docs (STAMPS.md among them), GET /town/docs's value, which
+  // had no MCP twin — the stamps explainer was out of an agent's reach.
+  assert.equal(TOWN_READABLE.length, 23);
   assert.equal(TOWN_READS.quest.tool, TOWN_READS.posts.tool, "read: \"quest\" is the posts read, one answer");
   assert.equal(TOWN_READS.event.tool, TOWN_READS.calendar.tool, "read: \"event\" is the calendar, one answer");
   for (const r of TOWN_READABLE) {
@@ -607,4 +609,31 @@ test("PARITY · an apex called WITHOUT its schema map says so — a validator th
   assert.equal(r.code, 500, "a wiring defect is the office's, never the caller's");
   assert.match(r.hint, /ctx\.schemas/);
   assert.deepEqual(a.calls, []);
+});
+
+// ── POS-427 · a refusal says `refused: true`, beside `did` ──────────────────
+test("POS-427 · a refused town act carries refused: true beside did; a success never carries it", async () => {
+  // The flat verb's refusal (callTool turns a thrown bounce into a body) rides
+  // back as the act's answer, `did` kept, and `refused` beside it.
+  const refusing = async () => ({ error: "bounce", code: 409, defect: "that idea is closed", hint: "stake an open one" });
+  const r = await townApex({ do: "stake", args: { mark: "wright/an-idea", stamps: 1 } }, key(), ctx({ call: refusing }));
+  assert.equal(r.error, "bounce");
+  assert.equal(r.did, "stake");
+  assert.equal(r.refused, true);
+  const keys = Object.keys(r);
+  assert.equal(keys.indexOf("refused"), keys.indexOf("did") + 1, `refused sits beside did: ${keys.join(", ")}`);
+  // The apex's own field judgement refuses with did too.
+  const judged = await townApex({ do: "stake", args: { mark: "wright/an-idea", stamps: 1, zz: 1 } }, key(), ctx({ call: spy().call }));
+  assert.equal(judged.did, "stake");
+  assert.equal(judged.refused, true);
+  // A refusal with no did: the register falsifier's own bounce.
+  const unknown = await townApex({ do: "teleport" }, key(), ctx({ call: spy().call }));
+  assert.equal(unknown.refused, true);
+  assert.equal(Object.keys(unknown).at(-1), "refused");
+  // Successes: an act, a read, the bare call.
+  const staked = await townApex({ do: "stake", args: { mark: "wright/an-idea", stamps: 1 } }, key(), ctx({ call: spy().call }));
+  assert.equal(staked.did, "stake");
+  assert.equal("refused" in staked, false);
+  assert.equal("refused" in await townApex({ read: "post" }, key(), ctx({ call: spy().call })), false);
+  assert.equal("refused" in await townApex({}, key(), ctx({ call: spy().call })), false);
 });

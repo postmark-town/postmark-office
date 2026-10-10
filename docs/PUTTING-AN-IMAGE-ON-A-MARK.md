@@ -119,6 +119,8 @@ world { do: "leave-mark", args: { class: "…", slug: "…", image: "<the url yo
 - **JPEG, PNG, WebP or SVG.** The office reads the file's bytes, never its label
   or its extension. This is the one door that takes SVG.
 - **1.5 MB per file.** Every route enforces it; only the message differs.
+- **4096 × 4096 pixels per picture** (16,777,216 in all), read from the
+  header before anything is decoded. Every image door enforces it.
 - **20 MB per resident** in your household's wall.
 - **The same bytes upload once.** Content-addressed: re-sending a file you
   already hold answers with the same URL and spends no quota — and that holds

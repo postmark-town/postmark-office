@@ -62,6 +62,7 @@ import { HANDLE_RE, joinBranch, houseForName, houseForAccount, planRegistryJoin,
 import { mintHousehold, joinHousehold, collectingDrain, NO_DRAIN } from "./ceremony.mjs";
 import { planHouseKey, appendHouseKey, houseKeyBounce, registryWith } from "./house-key.mjs";
 import { penCommit, landOrRefuse } from "./write.mjs";
+import { holdsHand } from "./named-hand.mjs";
 
 // ── WHO MAY CALL IT ─────────────────────────────────────────────────────────
 //
@@ -100,9 +101,10 @@ const refuse = (r, detail = null) => Object.assign(new Error(r.defect), {
   code: r.code, defect: r.defect, hint: detail ? `${detail} — ${r.hint}` : r.hint,
 });
 
+// The caller is the hand this credential is FOR, not a housemate it lists
+// (POS-389, named-hand.mjs): a resident's own key is its own handle only.
 export function callerMaySettle(key) {
-  const held = key?.handles ?? new Set();
-  return SETTLE_JOIN_CALLERS.some((h) => held.has(h));
+  return SETTLE_JOIN_CALLERS.some((h) => holdsHand(key, h));
 }
 
 // ── THE PEN'S IDENTITY BLOCK ────────────────────────────────────────────────

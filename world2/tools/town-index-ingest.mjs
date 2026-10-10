@@ -52,13 +52,18 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { assertSha } from "./law-ingest.mjs";
 import { readTown } from "../../vendor/tools/lib/town.mjs";
 import {
-  TOWN_TABLES, deriveTownIndex, readHistory, residentRows, letterRows, threadRows, bulletinRows,
-  ledgerLines, mailStateRows, stampFold, fundingRows, questRows, atlasRows,
+  TOWN_TABLES, deriveTownIndex, readHistory, residentRows, letterRows, threadRows, bulletinRows, townDocsValue,
+  ledgerLines, mailStateRows, stampFold, stampTipOf, fundingRows, questRows, atlasRows,
 } from "../../src/town-index.mjs";
 import { isResidentHandle } from "../../src/residency.mjs";
+import { writeMintInputs, keyBaseVia, takesKeyBase } from "../../src/mint-inputs.mjs";
+import { stampLinesOn } from "../../src/stamp-lines.mjs";
+import { CROSSING_SEAL_SUBJECT } from "../../src/crossings.mjs";
 
 export const HEAD_KEY = "town-index";                     // projection_heads.repo
-export const SEAL_SUBJECT = "seal: re-seal at the crossing";
+// The crossing's seal, spelled once in src/crossings.mjs: the doorstep names the
+// crossing its copy holds by the same subject this ingest snapshots at (POS-332).
+export const SEAL_SUBJECT = CROSSING_SEAL_SUBJECT;
 const CHUNK = 500;
 const quiet = { log() {}, warn() {} };
 
@@ -189,6 +194,46 @@ async function recordSnapshot(client, repo, sha, kind) {
   return counts;
 }
 
+// ── the mint's inputs (067, POS-341) ─────────────────────────────────────────
+
+/**
+ * town_rooms and town_mail_lines, written in the index's own transaction from
+ * the same checkout (src/mint-inputs.mjs § writeMintInputs). `whole` replaces
+ * both, as the seed replaces every table. A store without 067 is skipped and
+ * logged, so the index never stops on a migration not yet applied; the mint
+ * runner refuses on its own when the tables are absent.
+ */
+async function mintInputs(client, townRepo, tally, { whole = false } = {}) {
+  const has = (await client.query("SELECT to_regclass('town_rooms') AS r, to_regclass('town_mail_lines') AS m")).rows[0];
+  if (!has.r || !has.m) { console.error("[town-index] 067_town_mint_inputs.sql is not applied: the mint's rooms and mail lines were not written"); return; }
+  let deleted = { rooms: 0, mail_lines: 0 };
+  if (whole) {
+    deleted.rooms = (await client.query("DELETE FROM town_rooms")).rowCount;
+    deleted.mail_lines = (await client.query("DELETE FROM town_mail_lines")).rowCount;
+  }
+  const w = await writeMintInputs(client, townRepo);
+  tally.rooms = { inserted: w.rooms.inserted, deleted: w.rooms.deleted + deleted.rooms };
+  tally.mail_lines = { inserted: w.mail_lines.inserted, deleted: deleted.mail_lines };
+}
+
+/**
+ * The key base the quest rows fold on (POS-341 part 4). With STAMP_LINES=store
+ * (the switch the mint runner honours; the timer's unit reads it from
+ * /etc/postmark-office.env, deploy/town-index-ingest.sh), the store's:
+ * keyBaseVia over household_pins, town_rooms and stamp_lines, an empty one a
+ * refusal by name. Unset, null: the town reads its printouts, as before. A town
+ * checkout whose engine cannot take a base is a refusal too, as the welcome
+ * pass and the snapshot runner refuse it (Wright's review of #435): with the
+ * switch on, a quest fold on the printouts would be the store not read.
+ */
+async function questKeyBase(client, townRepo) {
+  if (!stampLinesOn(process.env)) return null;
+  const engine = await import(pathToFileURL(resolve(townRepo, "tools", "stamp-mint.mjs")));
+  if (!takesKeyBase(engine, townRepo))
+    throw new Error("STAMP_LINES=store, but this town checkout's engine takes no key base (town #3540): nothing was written");
+  return keyBaseVia(client, engine);
+}
+
 // ── the seed ─────────────────────────────────────────────────────────────────
 
 /** The whole derivation, every table replaced, the seed snapshot. The one history walk. */
@@ -196,7 +241,11 @@ export async function seed(client, { townRepo, sha, log = quiet }) {
   const tally = {};
   const ms = {};
   let t0 = Date.now();
-  const { tables } = await deriveTownIndex(townRepo, { log });
+  // The mint inputs first: with STAMP_LINES=store the seed's quest rows fold on
+  // the store's key base too (POS-341 part 4), which reads this sha's rooms.
+  await mintInputs(client, townRepo, tally, { whole: true });
+  const base = await questKeyBase(client, townRepo);
+  const { tables } = await deriveTownIndex(townRepo, { log, base });
   ms.derive = Date.now() - t0; t0 = Date.now();
   for (const name of Object.keys(TOWN_TABLES)) {
     const r = await client.query(`DELETE FROM ${tableOf(name)}`);
@@ -343,6 +392,7 @@ export async function applyDelta(client, { townRepo, head, sha, log = quiet }) {
   // ledger's past must be the past the head saw.
   const meta = new Map((await client.query("SELECT key, value FROM town_meta")).rows.map((r) => [r.key, r.value]));
   let minted = meta.get("stamps_minted") ?? null;
+  let tip = meta.get("stamps_tip") ?? "";
   const hasStamps = existsSync(join(townRepo, "tools", "stamp-mint.mjs")) && existsSync(join(townRepo, "WHITE_PAGES", "stamp-ledger.md"));
   if (hasStamps) {
     const { parseStampLedger } = await import(pathToFileURL(resolve(townRepo, "tools", "stamp-mint.mjs")));
@@ -361,6 +411,7 @@ export async function applyDelta(client, { townRepo, head, sha, log = quiet }) {
     });
     await diffTable(client, "stamps", cands, tally, { scope: new Set([...accts].map((a) => JSON.stringify([a]))) });
     minted = String(Number(minted ?? 0) + -(d.balance.get("MINT") ?? 0));
+    tip = stampTipOf(all);
   }
   lap("stamps");
 
@@ -369,7 +420,12 @@ export async function applyDelta(client, { townRepo, head, sha, log = quiet }) {
   for (const name of ["pots", "funding_roll", "funding_holo", "funding_keeping_mint", "pot_receipts", "pot_escrow", "pot_stakers", "funding_invalid"])
     await diffTable(client, name, funding[name], tally);
   lap("funding");
-  const q = await questRows(townRepo, town, { log });
+  // The mint inputs before the quests: with STAMP_LINES=store the quests fold
+  // on the store's key base (POS-341 part 4), which reads this sha's rooms.
+  await mintInputs(client, townRepo, tally);
+  lap("mint inputs");
+  const base = await questKeyBase(client, townRepo);
+  const q = await questRows(townRepo, town, { log, base });
   if (q) {
     await diffTable(client, "quest_progress", q.progress, tally);
     if (q.standing) await diffTable(client, "quest_standing", q.standing, tally);
@@ -388,8 +444,9 @@ export async function applyDelta(client, { townRepo, head, sha, log = quiet }) {
       threads: town.threads.length, ledger: town.ledger.length,
       bulletin: (town.bulletin ?? []).length,
     })],
+    ["docs", townDocsValue(town, townRepo)], // POS-351, in the seed's position (src/town-index.mjs)
   ];
-  if (hasStamps) metaRows.push(["stamps_minted", minted]);
+  if (hasStamps) metaRows.push(["stamps_minted", minted], ["stamps_tip", tip]);
   if (q) metaRows.push(["quest_day", q.questDay], ["quest_registry", q.questRegistry]);
   await diffTable(client, "meta", metaRows, tally);
   lap("bulletin+atlas+meta");

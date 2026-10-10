@@ -101,17 +101,6 @@ if (process.env.STUB_FERRY_DELIVER) {
   execFileSync("git", ["push", "-q"]);
 }
 `,
-  "tools/ballot-pass.mjs": `
-import { mkdirSync, writeFileSync } from "node:fs";
-import { call } from "./stub-calls.mjs";
-import { append } from "./stub-append.mjs";
-call("ballot");
-if (process.env.STUB_BALLOT) {
-  append("${LEDGER}", process.env.STUB_BALLOT);
-  mkdirSync("WHITE_PAGES/office/outbox", { recursive: true });
-  writeFileSync("WHITE_PAGES/office/outbox/ballot-receipt.md", "your ballot was counted\\n");
-}
-`,
   "tools/quest-progress.mjs": `
 import { writeFileSync } from "node:fs";
 import { call } from "./stub-calls.mjs";
@@ -156,6 +145,78 @@ if (process.env.STUB_WELCOME_MAKES) {
 process.exit(Number(process.env.STUB_WELCOME_EXIT || 0));
 `,
   "tools/town-drain-run.mjs": `process.exit(Number(process.env.STUB_DRAIN_EXIT || 0));\n`,
+  // POS-349: the ballot pass is the office's (it judges from the store); the
+  // ferry runs it from inside the town clone, so the stub writes there.
+  "tools/ballot-pass-run.mjs": `
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+if (process.env.STUB_CALLS) appendFileSync(process.env.STUB_CALLS, "ballot\\n");
+if (process.env.STUB_BALLOT) {
+  for (const r of String(process.env.STUB_BALLOT).split("|")) appendFileSync("${LEDGER}", r + "\\n");
+  mkdirSync("WHITE_PAGES/office/outbox", { recursive: true });
+  writeFileSync("WHITE_PAGES/office/outbox/ballot-receipt.md", "your ballot was counted\\n");
+}
+`,
+  // POS-349: the tick takes the ballot files in as posts, store-only and non-fatal.
+  "tools/ballots-backfill.mjs": `process.exit(0);\n`,
+  // POS-347: the standing drain renders the town's standing ledger from the
+  // store; this tick has no store, and the drain is non-fatal either way.
+  "tools/standing-drain.mjs": `process.exit(0);\n`,
+  // POS-353: the gangway drain, the same shape.
+  "tools/gangway-drain.mjs": `process.exit(0);\n`,
+  // POS-341: the mint pass is the office's runner, deciding from the store. Its
+  // shell-facing contract: append the owed rows, verify, and only a green verify
+  // commits and pushes them (with --message's subject); a red one leaves the
+  // export as it arrived and exits 1. It records "mint-run --append", so the call
+  // trail says which branch of the STAMP_LINES switch ran.
+  "world2/tools/stamp-mint-run.mjs": `
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { join } from "node:path";
+const a = process.argv;
+const clone = a[a.indexOf("--clone") + 1];
+const msg = a.includes("--message") ? a[a.indexOf("--message") + 1] : "mint: crossing pass";
+if (process.env.STUB_CALLS) appendFileSync(process.env.STUB_CALLS, "mint-run --append\\n");
+const ledger = join(clone, "${LEDGER}");
+// POS-447: a pass that lost its push race to another writer and then refused
+// (its last re-decide) leaves the clone at the remote's tip, clean, and exits 1.
+// The other writer's row reaches origin here, and the clone follows it.
+if (process.env.STUB_RUN_LOST_RACE) {
+  appendFileSync(ledger, process.env.STUB_RUN_LOST_RACE + "\\n");
+  execFileSync("git", ["-C", clone, "commit", "-qam", "mint: the other writer's pass"]);
+  execFileSync("git", ["-C", clone, "push", "-q"]);
+  execFileSync("git", ["-C", clone, "reset", "-q", "--hard", "HEAD~1"]);
+  execFileSync("git", ["-C", clone, "merge", "-q", "--ff-only", "origin/main"]);
+  console.error("FATAL: the stamp chain's head moved under the mint 3 times running (another writer is appending; 3 of them a lost push race); nothing appended — the next pass decides again");
+  process.exit(1);
+}
+if (process.env.STUB_APPEND) {
+  const arrived = readFileSync(ledger, "utf8");
+  for (const r of process.env.STUB_APPEND.split("|")) appendFileSync(ledger, r + "\\n");
+  if (readFileSync(ledger, "utf8").split("\\n").some((l) => l.includes("RED"))) {
+    writeFileSync(ledger, arrived);
+    console.error("FATAL: stamp-verify is red over the appended ledger; nothing committed");
+    process.exit(1);
+  }
+  execFileSync("git", ["-C", clone, "add", "${LEDGER}"]);
+  execFileSync("git", ["-C", clone, "commit", "-qm", msg]);
+  execFileSync("git", ["-C", clone, "push", "-q"]);
+}
+`,
+  // POS-341 part 4: the quest snapshot on the store's key base, the switch's
+  // branch of the ferry's quest step. Its shell-facing contract is --snapshot's:
+  // write TOWN_BULLETIN/quests.md (the shell commits it). "quests-run" in the
+  // call trail says which branch ran.
+  "world2/tools/quest-snapshot-run.mjs": `
+import { appendFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+const a = process.argv;
+const clone = a[a.indexOf("--clone") + 1];
+if (process.env.STUB_CALLS) appendFileSync(process.env.STUB_CALLS, "quests-run\\n");
+if (process.env.STUB_QUESTS) writeFileSync(join(clone, "TOWN_BULLETIN/quests.md"), process.env.STUB_QUESTS + "\\n");
+`,
+  // the store's catch-up of lines a shell committed, and the ferry's ingest: no-ops here
+  "world2/tools/stamp-lines.mjs": `process.exit(0);\n`,
+  "deploy/town-index-ingest.sh": `exit 0\n`,
   "world2/tools/settlements-backfill.mjs": `console.log("0 rows written");\n`,
   "src/hydrate.mjs": `
 import { writeFileSync } from "node:fs";
@@ -440,4 +501,78 @@ test("ferry · a crossing stopped mid-pass restores too", { skip }, () => {
   assert.equal(status(fx), "", `the stopped crossing's mint row is gone: ${r.stderr}`);
   assert.match(r.stderr, /\[ferry\] a gate refused \(exit (143|130|129)\)/, "the trap says what it did");
   assert.equal(ledgerAt(fx), "row 1\n");
+});
+
+// ── POS-341, BEHIND STAMP_LINES ─────────────────────────────────────────────
+// Every test above runs with the switch unset: the town's own --append, as
+// before, and no store step. These run the same scripts with STAMP_LINES=store:
+// the office's runner mints from the store and commits its own verified rows
+// in its store transaction, so a later refusal keeps them, and the shell's own
+// commit carries only what the welcome and stage passes wrote.
+const STORE = { STAMP_LINES: "store" };
+
+test("tick · STAMP_LINES=store: the store's runner commits the mint rows, the shell commits the welcome's", { skip }, () => {
+  const fx = fixture(["row 1", "row 2"]);
+  const r = run(fx, [tickScript(fx)], { ...STORE, STUB_APPEND: "mint row 3", STUB_WELCOME: "welcome row 4" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(status(fx), "", "the clone ends clean");
+  assert.match(fx.g("-C", fx.origin, "show", `main:${LEDGER}`), /mint row 3\nwelcome row 4\n$/, "both rows reached origin");
+  assert.deepEqual(calls(fx), ["settle", "verify", "mint-run --append", "welcome", "verify"], "the switch took the runner, not the town's --append");
+  assert.deepEqual(fx.g("-C", fx.town, "log", "--format=%s", "-2").trim().split("\n"), ["mint: tick pass (welcome, bug stages)", "mint: tick catch-up pass"]);
+});
+
+test("tick · STAMP_LINES=store: a verify that fails after the welcome pass restores what it wrote and keeps the mint's committed rows", { skip }, () => {
+  const fx = fixture(["row 1", "row 2"]);
+  const before = ledgerAt(fx);
+  const at = head(fx);
+  const r = run(fx, [tickScript(fx)], { ...STORE, STUB_APPEND: "mint row 3", STUB_WELCOME: "a welcome the verify refuses: RED" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(tracked(fx), "");
+  assert.equal(ledgerAt(fx), before + "mint row 3\n", "the welcome's row is gone, the mint's committed row stays");
+  assert.equal(fx.g("-C", fx.town, "rev-parse", "HEAD~1").trim(), at, "one commit: the runner's");
+  assert.equal(originHead(fx), head(fx), "and it reached origin, nothing past it");
+  assert.match(r.stderr, /mint catch-up ROLLED BACK/);
+});
+
+test("tick · STAMP_LINES=store: a runner that lost its push race and refused leaves the clone at the remote's tip, never the arrival bytes over it (POS-447)", { skip }, () => {
+  const fx = fixture(["row 1", "row 2"]);
+  const r = run(fx, [tickScript(fx)], { ...STORE, STUB_RUN_LOST_RACE: "the other writer's row 3", STUB_WELCOME: "welcome row 4" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(head(fx), originHead(fx), "the clone is at the remote's tip");
+  assert.equal(tracked(fx), "", "and clean: the ledger is HEAD's, the other writer's row in it");
+  assert.equal(ledgerAt(fx), "row 1\nrow 2\nthe other writer's row 3\n");
+  assert.match(r.stderr, /mint catch-up ROLLED BACK/);
+});
+
+test("ferry · STAMP_LINES=store: the runner's commit is the crossing's mint commit, and nothing else moves", { skip }, () => {
+  const fx = fixture(["row 1"]);
+  const r = run(fx, ["-c", ferryScript(fx)], {
+    ...STORE, STUB_FERRY_DELIVER: "letter-1", STUB_APPEND: "mint row 2", STUB_BALLOT: "ballot row 3",
+    STUB_QUESTS: "quests moved", STUB_SEAL: "resealed",
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(status(fx), "");
+  assert.equal(head(fx), originHead(fx), "everything pushed");
+  assert.ok(calls(fx).includes("mint-run --append") && !calls(fx).includes("mint --append"), `the switch took the runner: ${calls(fx).join(", ")}`);
+  assert.ok(calls(fx).includes("quests-run") && !calls(fx).includes("quests"), `and the quest snapshot on the store's key base: ${calls(fx).join(", ")}`);
+  const log = fx.g("-C", fx.town, "log", "--format=%s", "-6").trim().split("\n");
+  assert.deepEqual(log.slice(0, 5), ["seal: re-seal at the crossing", "quests: crossing leaderboard", "ballot: crossing pass", "mint: crossing pass", "ferry: crossing"]);
+});
+
+test("ferry · STAMP_LINES=store: a crossing stopped after the runner keeps its committed rows", { skip }, () => {
+  const fx = fixture(["row 1"]);
+  const r = runKilled(fx, ["-c", ferryScript(fx)], { ...STORE, STUB_APPEND: "mint row 2", STUB_VERIFY_HANG: "1" });
+  assert.ok(existsSync(join(fx.root, "hanging")), `the kill never happened: ${r.stdout} ${r.stderr}`);
+  assert.equal(status(fx), "", `the stopped crossing left the clone clean: ${r.stderr}`);
+  assert.equal(ledgerAt(fx), "row 1\nmint row 2\n", "the runner committed its verified row in its own transaction");
+});
+
+test("the switch off is the town's --append: the unset tick and crossing never call the runner", { skip }, () => {
+  const tick = fixture(["row 1"]);
+  run(tick, [tickScript(tick)], { STUB_APPEND: "mint row 2" });
+  assert.ok(calls(tick).includes("mint --append") && !calls(tick).includes("mint-run --append"), calls(tick).join(", "));
+  const ferry = fixture(["row 1"]);
+  run(ferry, ["-c", ferryScript(ferry)], { STUB_APPEND: "mint row 2" });
+  assert.ok(calls(ferry).includes("mint --append") && !calls(ferry).includes("mint-run --append"), calls(ferry).join(", "));
+  assert.ok(calls(ferry).includes("quests") && !calls(ferry).includes("quests-run"), calls(ferry).join(", "));
 });

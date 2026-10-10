@@ -97,16 +97,34 @@ export function readEvents(lines, file = null) {
 
 const key = (file, name) => `${file}\u0000${name}`;
 
+// A KNOWN ROW'S SHAPE (POS-419, 2026-10-09). Every row names its file, test and
+// reason; `owner` is the Linear issue that owns the fix (a child of POS-419 per
+// cause); `date` is the day it was listed and `until` the day it is reviewed by.
+// A row past its `until` is OVERDUE: printed as such, never a failure of the run,
+// because a quarantine's deadline is a question for its owner, not for every PR.
+const DAY = /^\d{4}-\d{2}-\d{2}$/;
+export function rowShapeProblems(row) {
+  const out = [];
+  for (const k of ["file", "name", "reason", "owner", "date", "until"])
+    if (typeof row[k] !== "string" || !row[k].trim()) out.push(`no ${k}`);
+  if (typeof row.owner === "string" && row.owner.trim() && !/^POS-\d+$/.test(row.owner)) out.push(`owner "${row.owner}" is not a Linear issue (POS-N)`);
+  for (const k of ["date", "until"])
+    if (typeof row[k] === "string" && row[k].trim() && !DAY.test(row[k])) out.push(`${k} "${row[k]}" is not YYYY-MM-DD`);
+  if (DAY.test(row.date ?? "") && DAY.test(row.until ?? "") && row.until < row.date) out.push(`until ${row.until} is before date ${row.date}`);
+  return out;
+}
+
 /**
  * The verdict over a whole run.
  *   planned:  [file]                          every file some shard was dealt
  *   results:  { file: { exit, seconds, counts, reds, skips, ran, retry? } }
  *             retry: { ran, reds } from the file's one re-run, when a flaky row red
- *   known:    [{ file, name, reason, owner, date, flaky? }]
+ *   known:    [{ file, name, reason, owner, date, until, flaky? }]
  *   shards:   { planned: n, reported: [shard numbers that uploaded] }
- * Returns { ok, totals, problems: [{ kind, file, name?, detail }], listed: [...] }.
+ *   today:    "YYYY-MM-DD" (UTC today by default), the day `until` is read against
+ * Returns { ok, totals, problems: [{ kind, file, name?, detail }], listed: [...], overdue: [row] }.
  */
-export function verdict({ planned, results, known, shards }) {
+export function verdict({ planned, results, known, shards, today = new Date().toISOString().slice(0, 10) }) {
   const problems = [];
   const totals = { files: 0, tests: 0, pass: 0, fail: 0, skipped: 0, todo: 0, cancelled: 0, suites: 0, reds: 0 };
   const redKeys = new Map();
@@ -131,9 +149,13 @@ export function verdict({ planned, results, known, shards }) {
 
   const listed = [];
   const knownKeys = new Set();
+  const overdue = [];
   for (const row of known) {
     const k = key(row.file, row.name);
     knownKeys.add(k);
+    const shape = rowShapeProblems(row);
+    if (shape.length) problems.push({ kind: "row-malformed", file: row.file ?? null, name: row.name, detail: shape.join("; ") });
+    else if (row.until < today) overdue.push(row);
     if (!planned.includes(row.file)) {
       problems.push({ kind: "listed-not-run", file: row.file, name: row.name, detail: "its file is not in the suite: delete the row" });
       continue;
@@ -165,7 +187,7 @@ export function verdict({ planned, results, known, shards }) {
   for (const [k, red] of redKeys)
     if (!knownKeys.has(k)) problems.push({ kind: "new-red", file: red.file, name: red.name, detail: red.error ?? red.failureType ?? "failed" });
 
-  return { ok: problems.length === 0, totals, problems, listed };
+  return { ok: problems.length === 0, totals, problems, listed, overdue };
 }
 
 /** A fresh timings map from a run's results: { file: seconds }, sorted by file. */
@@ -176,4 +198,37 @@ export function timingsOf(results) {
     if (typeof s === "number") out[f] = Math.round(s * 10) / 10;
   }
   return out;
+}
+
+// ── a file's own cap (POS-354, Wright 2026-10-09) ────────────────────────────
+//
+// Every file runs as `node --test --test-timeout=<ms> <file>`, and under
+// node --test that timeout is the WHOLE FILE's, not each test's: the file runs
+// as one test of the parent, and its own `{ timeout }` options never get a say.
+// npm test's 180 s fits nearly every file. A file that is minutes by design (the
+// dev rehearsal's local proof runs a whole crossing) declares its own cap in its
+// header, one line within its first 40:
+//
+//   // suite-file-timeout: 600000
+//
+// The declaration is honoured up to FILE_CAP_MS and clamped there, and the
+// summary prints every file running under one, with its value, so a long file
+// is visible rather than silent. Declare about 3× the file's measured CI time,
+// and raise it when the file grows.
+
+export const TEST_TIMEOUT_MS = 180_000;
+/** Past this a file is killed and reads as crashed, never as passed; no declaration goes beyond it. */
+export const FILE_CAP_MS = 25 * 60 * 1000;
+const DECLARED_CAP = /^\s*\/\/\s*suite-file-timeout:\s*(\d+)\s*$/;
+/** A declaration below this is no declaration. */
+export const MIN_DECLARED_MS = 1000;
+
+/** The timeout a file runs under, from its source text: `{ ms, declared, clamped }` (declared null when it declares none). */
+export function fileTimeoutOf(text) {
+  const line = String(text ?? "").split(/\r?\n/).slice(0, 40).map((l) => DECLARED_CAP.exec(l)).find(Boolean);
+  const declared = line ? Number(line[1]) : null;
+  // under a second is no declaration (#453 review F4): --test-timeout=0 is NO timeout in node,
+  // so a 0 would run the file to the 25-minute kill instead of failing at its declared value
+  if (declared == null || declared < MIN_DECLARED_MS) return { ms: TEST_TIMEOUT_MS, declared: null, clamped: false };
+  return { ms: Math.min(declared, FILE_CAP_MS), declared, clamped: declared > FILE_CAP_MS };
 }

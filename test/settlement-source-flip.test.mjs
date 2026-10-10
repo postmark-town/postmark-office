@@ -42,6 +42,13 @@ import { fileURLToPath } from "node:url";
 const OFFICE = join(dirname(fileURLToPath(import.meta.url)), "..");
 const scratch = mkdtempSync(join(tmpdir(), "postmark-srcflip-"));
 after(() => { try { rmSync(scratch, { recursive: true, force: true }); } catch { /* litter */ } });
+// THE STORE the crossing's household export renders (POS-350): the export reads
+// the registry from the store, never the fixture town's printouts, so each
+// crossing re-states the store from the town seed first.
+import { registryStoreForTowns } from "./helpers/office-under-test.mjs";
+const REG = await registryStoreForTowns({ db: "source_flip_test" });
+after(() => REG.stop());
+
 
 const sh = (cmd, opts = {}) => execFileSync("sh", ["-c", cmd], { encoding: "utf8", ...opts });
 const has = (cmd) => { try { execFileSync("sh", ["-c", cmd], { stdio: "ignore" }); return true; } catch { return false; } };
@@ -266,6 +273,7 @@ function runCrossing(root, script, { env = {}, perturb = null } = {}) {
   const scriptPath = join(root, "settlement-auto.sh");
   writeFileSync(scriptPath, perturb ? perturb(script) : script);
 
+  REG.seedFromSync(join(root, "town-seed"));
   const res = spawnSync("sh", [scriptPath], {
     encoding: "utf8",
     env: {
@@ -285,6 +293,9 @@ function runCrossing(root, script, { env = {}, perturb = null } = {}) {
       WORLD_SINGLE_LOG: "1",
       WORLD_DYNAMIC_DB: join(root, "dynamic.db"),
       SWEEP_SAW_OUT: join(root, "sweep-saw.json"),
+      ...REG.env,
+      // the store path reaches the candle now (POS-350); this fixture lights none
+      SETTLEMENT_CLEARING_WAIT_S: "1",
       ...env,
     },
   });
@@ -414,11 +425,18 @@ test("F-git · SETTLEMENT_SOURCE=git matches the open train and runs the ghost s
     "the rollback must issue every command the train's chain issues — anything missing here is behaviour the "
     + "rollback silently dropped, and the rollback is the hatch reached for when the store path has already gone wrong");
 
-  const explained = [...GHOST_SWEEP, ...REGISTRY_REFRESH];
+  // POS-352 (2026-10-04): the crossing records its receipt in the store
+  // (crossing_receipts, 061) right after it writes the file. Bookkeeping beside
+  // the crossing, declared here by name like the two repairs above.
+  const CROSSING_RECEIPT = [
+    /^node crossing-receipt\.mjs --receipt <root>\/harbor\/settlement-auto\.json --attempt .*$/,
+  ];
+
+  const explained = [...GHOST_SWEEP, ...REGISTRY_REFRESH, ...CROSSING_RECEIPT];
   const unexplained = added.filter((c) => !explained.some((re) => re.test(c)));
   assert.deepEqual(unexplained, [],
-    "every command the rollback adds must belong to the ghost sweep (repair 1) or to the registry refresh "
-    + `(2026-09-09). An addition this test cannot name is a change to the crossing nobody declared: ${JSON.stringify(unexplained)}`);
+    "every command the rollback adds must belong to the ghost sweep (repair 1), the registry refresh "
+    + `(2026-09-09) or the crossing receipt's record (POS-352). An addition this test cannot name is a change to the crossing nobody declared: ${JSON.stringify(unexplained)}`);
   // Presence is asserted on the crossing itself, never inferred from `added`.
   // Once a repair reaches the open train it correctly vanishes from the delta, but
   // the git-source path must still run it and the store-source path must not.
@@ -455,8 +473,13 @@ test("F-store · the store path fetches no sketchbook and pushes no draft branch
   // does not exist, so `world2/tools/fold-input.mjs` refuses. That refusal IS
   // the assertion here: it must happen, it must be named, and the commands
   // issued before it must contain no sketchbook fetch.
+  // AMENDED 2026-10-05 (POS-350): the crossing's household export reads the
+  // registry from the STORE, so this suite's crossings hold a store read, and
+  // the store path now gets as far as the candle — which this fixture never
+  // lights. It refuses there, by name; the wait is shortened so the refusal
+  // arrives in a second, not the box's four minutes.
   const store = crossing("store", readFileSync(join(OFFICE, "deploy", "settlement-auto.sh"), "utf8"),
-    { env: { SETTLEMENT_SOURCE: "store" } });
+    { env: { SETTLEMENT_SOURCE: "store", SETTLEMENT_CLEARING_WAIT_S: "1" } });
 
   assert.equal(ghostSweepPresent(store.commands, store.root), false,
     "the store-source chain must not run the rollback ghost sweep");
@@ -483,7 +506,7 @@ test("F-store · the store path fetches no sketchbook and pushes no draft branch
   assert.equal(store.res.status, 1, "with no store entry point the crossing must refuse, not publish");
   assert.equal(store.receipt.status, "refused");
   assert.equal(store.receipt.source, "store", "and the refusal says which path refused");
-  assert.match(store.receipt.detail, /entry-point-absent|no-store-credential/,
+  assert.match(store.receipt.detail, /entry-point-absent|no-store-credential|clearing-did-not-run/,
     "the refusal names its own reason so the operator is not sent to the wrong repair");
 });
 

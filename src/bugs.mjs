@@ -32,7 +32,8 @@
 // A bug takes no stake, at post and at the stake door alike, refused by name
 // (BUG_NO_STAKE), with the ruling's reason in the refusal.
 
-import { refuse, TITLE_MAX, INVITATION_MAX } from "./events.mjs";
+import { refuse, TITLE_MAX, INVITATION_MAX, ACT_POST, ACT_ADVANCE } from "./events.mjs";
+import { handsOf, holdsHand, notThisHand } from "./named-hand.mjs";
 
 export const BUG_CLASS = "bug";
 
@@ -120,6 +121,30 @@ export function judgeCritter(v) {
   return s;
 }
 
+/**
+ * The link (Darko, 2026-10-07: "where the lifecycle pointers point TO"). The
+ * post holds a bug's state and its GitHub issue is where the work happens, in
+ * public: the cause, the fix brief, the PR. An advance may name the work that
+ * earned its stage, on the town's own repos: the issue comment holding the
+ * cause (diagnosed) or the fix brief (briefed), the PR (fixed), the release
+ * tag (shipped). The post keeps one per stage in fields.links, so the record
+ * points at everything the town paid for and the stage pass can check it.
+ * Optional: a stage our own fix proved may have nothing else to point at.
+ */
+export const LINK_RE = /^https:\/\/github\.com\/postmark-town\/[A-Za-z0-9._-]+\/\S+$/;
+export const LINK_MAX = RECORD_MAX;
+export const LINK_WHAT = "the work that earned the stage, on github.com/postmark-town/: the issue comment with the cause (diagnosed) or the fix brief (briefed), the PR (fixed), the release tag (shipped)";
+const LINK_HOW = `link: one URL — ${LINK_WHAT}`;
+
+export function judgeLink(v) {
+  if (typeof v !== "string") throw refuse(422, "link is text", LINK_HOW, { field: "link" });
+  const s = v.trim();
+  if (!s) throw refuse(422, "link is empty", "leave link off rather than sending it empty", { field: "link" });
+  if (s.length > LINK_MAX) throw refuse(422, `link is at most ${LINK_MAX} characters`, `this one is ${s.length}`, { field: "link" });
+  if (!LINK_RE.test(s)) throw refuse(422, "link points at the town's own repos", LINK_HOW, { field: "link" });
+  return s;
+}
+
 /** The fields a bug's reporter may send and amend, beside title and body. */
 export const BUG_FIELDS = Object.freeze(["issue", "steps", "record"]);
 
@@ -190,16 +215,18 @@ export function judgeBugHand(fields, key, { act }) {
   const held = [...(key?.handles ?? [])];
   const named = typeof fields?.handle === "string" ? fields.handle.trim() : "";
   if (named && !held.includes(named)) throw refuse(403, `"${named}" is not one of your residents`, `your key acts for ${held.join(", ") || "no resident"}`);
-  const hand = named || (held.length === 1 ? held[0] : held.find((h) => BUG_HANDS.includes(h)) ?? "");
+  const hand = named || (held.length === 1 ? held[0] : [...handsOf(key)].find((h) => BUG_HANDS.includes(h)) ?? "");
   if (!hand || !BUG_HANDS.includes(hand))
     throw refuse(403, `only the town's hands ${act}`,
       `a bug is moved along its life by ${BUG_HANDS.join(", ")}; anyone may post one as themselves with town { do: "post", args: { class: "bug", title, body } }`);
+  // POS-389: the hand is this credential's own, not a housemate it lists.
+  if (!holdsHand(key, hand)) { const r = notThisHand(hand, key); throw refuse(403, r.defect, r.hint); }
   return hand;
 }
 
 /**
  * Judge an advance against the post's current state. Returns the payload's
- * judged parts: `{ to, credit, size?, critter?, grade?, of? }`. `reporter` is the post's
+ * judged parts: `{ to, credit, size?, critter?, grade?, of?, link? }`. `reporter` is the post's
  * author, the credit a `confirmed` defaults to.
  */
 export function judgeAdvance(fields, prev, roll) {
@@ -237,6 +264,7 @@ export function judgeAdvance(fields, prev, roll) {
     if (!BUG_GRADES.includes(fields.grade)) throw refuse(422, "briefed needs a grade", `grade: ${BUG_GRADES.join(" or ")} — the bless's revision (${BUG_GRADES.map((g) => `${g} ${BUG_LADDER.briefed.n[g]}`).join(", ")})`, { field: "grade" });
     out.grade = fields.grade;
   }
+  if (fields.link !== undefined) out.link = judgeLink(fields.link);
   if (fields.of !== undefined && to !== STATE_DUPLICATE) throw refuse(422, "of is duplicate's", "only an advance to duplicate names the post it duplicates", { field: "of" });
   if (to === STATE_DUPLICATE) {
     const of = typeof fields.of === "string" ? fields.of.trim() : "";
@@ -298,6 +326,139 @@ export function judgeReveal(fields, prev, key, { urlOk }) {
   if (!Number.isInteger(n) || n < 1 || n > REVEAL_CANDIDATES)
     throw refuse(422, `pick is 1–${REVEAL_CANDIDATES}`, "pick: the candidate's place in the list, from 1", { field: "pick" });
   return { actor, reveal: { candidates: was.candidates, pick: n, image: was.candidates[n - 1], picked_by: actor } };
+}
+
+// ── THE HISTORY (POS-547, Darko 2026-10-09) ─────────────────────────────────
+//
+// "Clicking a bug shows what stage it's at, who contributed each earlier
+// stage, and where the links lead." Credit is the public record, so the bug
+// read carries it: one row per stage act, oldest first,
+//
+//   { stage, at, hand, credit, link, stamps_paid }
+//
+//   the post      stage `reported`; credit is the reporter (the act's actor),
+//                 hand the town hand who put it up `for:` them, else null
+//   an advance    stage is its `to`; credit and hand as the act recorded them
+//                 (shipped and the side exits credit no one: null); link is
+//                 the one the advance named for its own stage (the act carries
+//                 the post's whole `links` map after it, so it is `links[to]`)
+//   stamps_paid   the amount on the signed ledger's `post:<id>/<stage>` line,
+//                 or null: not paid yet (the tick pays within about fifteen
+//                 minutes), held by the weekly household cap, a meep's stage,
+//                 or a stage that pays nothing
+//
+// Amends and reveals move no stage, so they are not history rows; what they
+// set is on the post's fields. The line's grammar is the town's (stamp-mint.mjs
+// § STAGE_RE); it is read here only to find what a stage paid.
+
+const STAGE_LINE_RE = new RegExp(String.raw`^- \d{4}-\d{2}-\d{2} · MINT → (\S+) · ([1-9]\d*) · for: post:([a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9-]*)\/(${PAID_STAGES.join("|")}) · by: \S+$`);
+
+/** A ledger line's stage payment, `{ post, stage, handle, n }`, or null for any other line. */
+export function stagePaidOf(canonical) {
+  const m = STAGE_LINE_RE.exec(String(canonical ?? ""));
+  return m ? { handle: m[1], n: Number(m[2]), post: m[3], stage: m[4] } : null;
+}
+
+/**
+ * Every bug's history, PURE. `acts` are the class's acts on the posts asked
+ * (any action, oldest first by id); `paid` is what the chain's post lines paid,
+ * Map("<post>/<stage>" → n), as post-history.mjs § postPaymentsVia reads it —
+ * or the ledger's canonical lines themselves, read here. Returns Map(post id → rows).
+ */
+export function bugHistoryOf(acts, paid = []) {
+  if (!(paid instanceof Map)) {
+    const lines = paid;
+    paid = new Map();
+    for (const l of lines) {
+      const s = stagePaidOf(l);
+      if (s) paid.set(`${s.post}/${s.stage}`, s.n);
+    }
+  }
+  const out = new Map();
+  for (const a of acts) {
+    if (a.action !== ACT_POST && a.action !== ACT_ADVANCE) continue;
+    const p = typeof a.payload === "string" ? JSON.parse(a.payload) : (a.payload ?? {});
+    const post = String(a.object);
+    const at = new Date(a.at).toISOString();
+    const row = a.action === ACT_POST
+      ? { stage: STATE_REPORTED, at, hand: p.hand ?? null, credit: a.actor ?? null, link: null, stamps_paid: null }
+      : { stage: p.to, at, hand: p.hand ?? a.actor ?? null, credit: p.credit ?? null,
+        link: p.fields?.links?.[p.to] ?? null, stamps_paid: paid.get(`${post}/${p.to}`) ?? null };
+    out.set(post, [...(out.get(post) ?? []), row]);
+  }
+  return out;
+}
+
+// ── THE JAR'S ORDER (POS-558, Wright's review of #481, 2026-10-10) ──────────
+//
+// The bug read pages, so its order is what a resident walks page after page,
+// and it is the jar's, in four groups:
+//
+//   1. open bugs, the furthest stage first (fixed … reported)
+//   2. finished bugs with a name (a critter), the caught ones in the jar
+//   3. the legacy shelf: finished with no name (fixed or shipped without a
+//      critter; a critter is named only at fixed, so these never will be)
+//   4. set aside: duplicate, not a bug
+//
+// newest first within each (the post's latest act), then by id. This order is
+// the bug read's own; the shared postOrder, which events and quests read, is
+// untouched.
+
+const BUG_STAGE_RANK = new Map(BUG_STAGES.map((s, i) => [s, i]));
+/** A bug row's group in the jar's order: 0 open, 1 named and finished, 2 legacy, 3 set aside. */
+export function bugGroupOf(row) {
+  if (BUG_SIDE_EXITS.includes(row.state)) return 3;
+  const named = typeof row.fields?.critter === "string" && row.fields.critter.trim() !== "";
+  if (row.state === STATE_SHIPPED) return named ? 1 : 2;
+  if (row.state === STATE_FIXED && !named) return 2;
+  return 0;
+}
+/** The bug read's comparator: group, then (open) the furthest stage, then newest, then id. */
+export function bugJarOrder(a, b) {
+  const ga = bugGroupOf(a), gb = bugGroupOf(b);
+  return (ga - gb)
+    || (ga === 0 ? (BUG_STAGE_RANK.get(b.state) ?? -1) - (BUG_STAGE_RANK.get(a.state) ?? -1) : 0)
+    || String(b.latest?.at ?? "").localeCompare(String(a.latest?.at ?? ""))
+    || String(a.id).localeCompare(String(b.id));
+}
+
+// ── THE CATCHERS (POS-558, Darko 2026-10-10) ────────────────────────────────
+//
+// "The Bug Catchers' Hall of Fame … residents in order of amount of stamp
+// contribution towards bugs." The bug read pages (town-posts.mjs § THE BUG
+// READ PAGES), and a page cannot add up the town, so every page carries the
+// totals over the whole record, from the same history credits and
+// stamps_paid: one row per handle credited on any bug,
+//
+//   { handle, stamps, bugs }
+//
+//   stamps  the sum of stamps_paid on the history rows that credit them; null
+//           when the chain cannot be read (the read's `unavailable`), never 0
+//   bugs    the posts they hold a credit on (the post's row credits its reporter)
+//
+// A bug set aside (duplicate, not a bug) credits only a stage that paid: a
+// withdrawn report is not a catch. Every credited handle is listed, the town's
+// hands too; whom to rank is the reader's call (the site ranks no meep and no
+// founder). Ordered by stamps, then bugs, then handle.
+
+/** The Hall's totals over every bug post (each carrying its `history`), PURE. */
+export function bugCatchersOf(posts, { unavailable = false } = {}) {
+  const by = new Map();
+  for (const p of posts) {
+    const aside = BUG_SIDE_EXITS.includes(p.state);
+    for (const h of p.history ?? []) {
+      if (!h?.credit) continue;
+      const paid = Number.isInteger(h.stamps_paid) && h.stamps_paid > 0 ? h.stamps_paid : 0;
+      if (aside && !paid) continue;
+      const r = by.get(h.credit) ?? { handle: h.credit, stamps: 0, posts: new Set() };
+      r.stamps += paid;
+      r.posts.add(p.id);
+      by.set(h.credit, r);
+    }
+  }
+  return [...by.values()]
+    .map(({ handle, stamps, posts: credited }) => ({ handle, stamps: unavailable ? null : stamps, bugs: credited.size }))
+    .sort((a, b) => (b.stamps ?? 0) - (a.stamps ?? 0) || b.bugs - a.bugs || a.handle.localeCompare(b.handle));
 }
 
 // ── the refusals for what a bug does not take ───────────────────────────────

@@ -149,13 +149,16 @@ let binds = 0;
 const inProcess = (payload, { clone }) => { binds += 1; return bindUnderLock({ ...payload, clone, db, date: "2026-09-29" }); };
 
 /** Run one `request_residency` against a record seeded with the fixture town. */
-async function ask(args, key, { registry = REGISTRY(), pins = PINS(), pool = null, record = true } = {}) {
+// `gangway`: the store's gangway row (POS-353) — "frozen" seeds one, the
+// default seeds none (a town that never raised it).
+async function ask(args, key, { registry = REGISTRY(), pins = PINS(), pool = null, record = true, gangway = null } = {}) {
   captured = { trees: [], commits: [], refs: [], pulls: [] };
   openPulls = [];
   binds = 0;
   const clone = town(registry, pins);
   const head = git(clone, "rev-parse", "HEAD");
-  const p = pool ?? makePool(rowsFromRegistry(registry, pins));
+  const p = pool ?? makePool({ ...rowsFromRegistry(registry, pins),
+    gangway: gangway ? { id: 1, state: gangway, since: "2026-08-06", reason: null, by_who: "founder", actor_gh_id: null, source: "door" } : null });
   __setPoolForTest(p);
   const was = { pg: process.env.WORLD2_PG, url: process.env.WORLD2_PG_URL };
   if (record) Object.assign(process.env, ENV_ON);
@@ -211,6 +214,9 @@ test("an account already on the house is admitted and bound: pin + membership in
   assert.equal(JSON.parse(readFileSync(join(clone, PINS_PATH), "utf8")).tulip.id, 999);
   assert.deepEqual(JSON.parse(readFileSync(join(clone, REGISTRY_PATH), "utf8")).households["the-trueing-house"].residents, ["wright", "tulip"]);
   assert.equal(git(clone, "status", "--porcelain"), "", "nothing left behind");
+  // POS-444 (071): the store records the handle ashore in the same act, naming the commit that holds the card
+  assert.deepEqual(pool.state.ashore.map((a) => [a.handle, a.road, a.sha]), [["tulip", "join-bind", out.commit]],
+    "one ashore row, by the bind's road, naming the address's commit");
 });
 
 test("the card is written by the office: verified github, the house's own nameplate, the caller's prose", async () => {
@@ -466,7 +472,7 @@ test("a frozen gangway boards a household member and the berth names their house
   const wasClone = process.env.TOWN_CLONE;
   process.env.TOWN_CLONE = dir;
   try {
-    const { out, pool } = await ask({ handle: "hearth-second", card: "I'll wait aboard.", agent: "Hearth" }, HOUSE_KEY);
+    const { out, pool } = await ask({ handle: "hearth-second", card: "I'll wait aboard.", agent: "Hearth" }, HOUSE_KEY, { gangway: "frozen" });
     assert.equal(out.boarded, "hearth-second");
     assert.equal(out.household.slug, "the-trueing-house");
     assert.match(out.household.action, /declared at disembarkation/);
@@ -495,7 +501,7 @@ test("a frozen gangway mints NOTHING, even for an account with no house at all",
   process.env.TOWN_CLONE = dir;
   try {
     const { out, pool } = await ask(
-      { handle: "fresh-passenger", card: "nobody here yet", household: "A Wholly New House" }, STRANGER);
+      { handle: "fresh-passenger", card: "nobody here yet", household: "A Wholly New House" }, STRANGER, { gangway: "frozen" });
     assert.equal(out.boarded, "fresh-passenger", "it boarded, as a frozen gangway requires");
     assert.equal(pool.state.writes.households, 0,
       "and NO household row was written — a passenger is not a resident");

@@ -132,7 +132,7 @@ import { pathToFileURL, fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
 import { deriveSeed, canonicalJson, uuid5, boxOf } from "./seed-import.mjs";
-import { materializeClaims, retireMarks } from "./materialize.mjs";
+import { materializeClaims, retireMarks, ownerHouseholdFor } from "./materialize.mjs";
 import { REFUSED_BY_NAME } from "./backfill-register.mjs";
 import { marksFromRows } from "../../src/world2-fold.mjs";
 import { DERIVED } from "../../src/mark-record.mjs";
@@ -153,9 +153,14 @@ export const CAUSE = "marks-ingest";
 const RECORD_FIELDS_FROM_COLUMNS = new Set(["slug", "body", "household"]);
 export const STORE_STAMPS = new Set(DERIVED.filter((k) => !RECORD_FIELDS_FROM_COLUMNS.has(k)));
 
+// `claimed_at` is the store's own fact printed into the file (the origin claim's
+// date, mark-render.mjs § recordFromRow, POS-364 review): the file carries it
+// for the tree's fold, and it is never a resident's change to ingest back.
+export const PRINTED_FROM_THE_STORE = new Set(["claimed_at"]);
+
 /** Is `k` a key the fold's record carries as a fact of the mark? */
 export const isRecordField = (k, v) =>
-  !STORE_STAMPS.has(k)
+  !STORE_STAMPS.has(k) && !PRINTED_FROM_THE_STORE.has(k)
   && (!k.startsWith("_") || k === "_parentMarkId")
   // `source` as an OBJECT is the backfill's old stamp (mark-record.mjs § EMITS);
   // as a string it is the resident's word and counts.
@@ -416,6 +421,13 @@ export async function applyIngest(q, plan, { windowId, target }) {
     claims.push(c);
     amendMap.set(String(id), { id: am.was.id });
   }
+  // THE CLAIM'S HOUSEHOLD IS THE DERIVER'S, never the file's (POS-457). The
+  // record carries the world fold's own spelling (`mk.household`, a `gh:<id>`
+  // for most of the town), so an ingest at S99 wrote 65 `gh:` and 17 `solo:`
+  // claims after the law date. The mark row was always right, because
+  // `materializeClaims` asks `ownerHouseholdFor`; the claim now asks the same,
+  // and an owner the roll does not name refuses here exactly as it would there.
+  for (const c of claims) c.household = await ownerHouseholdFor(q, c.claimant);
   for (const c of claims) {
     await q(
       `INSERT INTO claims (id, window_id, slug, class, claimant, household, submitted_at,

@@ -30,6 +30,10 @@ import * as store from "../src/town-index-store.mjs";
 import { estateRead, questsRead, fundRead, fundReadOf } from "../src/household-stamps.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+// The office.db legs here read office.db, whatever switch the run was started
+// with; the switched legs set TOWN_INDEX_READS themselves (POS-268). These
+// twins go with office.db at 5b.
+delete process.env.TOWN_INDEX_READS;
 const TOWN = townClone();
 const tmp = mkdtempSync(join(tmpdir(), "town-index-quests-"));
 const dbPath = join(tmp, "office.db");
@@ -70,12 +74,14 @@ before(async () => {
   await w.end();
   api = await s.connect("office_api");
 
-  // the door, both ways, over the same office.db
-  for (const [name, env] of [["plain", {}], ["switched", { TOWN_INDEX_READS: "store", WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") }],
+  // the door, both ways, over the same office.db. Both are pointed at the store:
+  // the switch is TOWN_INDEX_READS alone, and a pot board's gifts name their
+  // households from the store's registry on either index (POS-550), as on the box.
+  for (const [name, env] of [["plain", { WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") }], ["switched", { TOWN_INDEX_READS: "store", WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") }],
     ["cut-off", { TOWN_INDEX_READS: "store", WORLD2_PG: "1", WORLD2_PG_URL: "postgres://office_api:x@127.0.0.1:9/none" }]]) {
     const child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0", "--db", dbPath,
       "--oauth-db", join(tmp, `${name}-oauth.db`), "--roles-db", join(tmp, `${name}-roles.db`)], {
-      env: { ...process.env, TOWN_CLONE: TOWN, WORLD_CLONE: join(tmp, "no-world-clone"), VOICES_LOG: join(tmp, `${name}-voices.jsonl`),
+      env: { ...process.env, WORLD_GRAPH_NONE: "1", TOWN_CLONE: TOWN, WORLD_CLONE: join(tmp, "no-world-clone"), VOICES_LOG: join(tmp, `${name}-voices.jsonl`),
         TOWN_PUSH: "", WORLD_STORE_DB: join(tmp, "no-world.db"), OFFICE_READ_WORKERS: "0",
         TOWN_INDEX_READS: undefined, WORLD2_PG: undefined, WORLD2_PG_URL: undefined, ...env },
       stdio: ["ignore", "pipe", "pipe"],
@@ -153,6 +159,7 @@ test("read_quests through callTool answers the same both ways", async (t) => {
   try {
     const norm = (o) => { const c = structuredClone(o); if (c?.today) c.today = { day: c.today.day }; return JSON.stringify(c); };
     const plain = [];
+    Object.assign(process.env, { WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") }); // the registry, on either index (POS-550)
     for (const h of ["wright", null]) plain.push(norm(await callTool("read_quests", { handle: h }, { db, meta, clone: TOWN })));
     Object.assign(process.env, { TOWN_INDEX_READS: "store", WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") });
     pen.__setPoolForTest(pool);
@@ -177,6 +184,7 @@ test("household { read: stamps | quests | fund } answers through the store when 
   const norm = (o) => { const c = structuredClone(o); if (c?.today) c.today = { day: c.today.day }; return JSON.stringify(c); };
   try {
     const plain = [];
+    Object.assign(process.env, { WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") }); // the registry, on either index (POS-550)
     for (const a of asks) plain.push(norm(await householdApex(a, KEY, CTX)));
     Object.assign(process.env, { TOWN_INDEX_READS: "store", WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") });
     pen.__setPoolForTest(pool);

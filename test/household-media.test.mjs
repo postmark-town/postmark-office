@@ -18,11 +18,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { tmpdir } from "node:os";
 import { indexStore } from "./helpers/office-under-test.mjs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 // The doors below run in this process. They never had a town index, and the
 // office will not run without one (POS-268): this file's is an empty store.
@@ -50,7 +50,7 @@ const WORLD_REPO = [
   join(REPO_ROOT, "..", "postmark", "postmark-world"),
 ].filter(Boolean).find((d) => existsSync(join(d, "WORLD", "marks"))) ?? "";
 
-const WORLD = mkdtempSync(join(tmpdir(), "pm-media-world-")).replace(/\\/g, "/");
+const WORLD = tempDir("pm-media-world-").replace(/\\/g, "/");
 process.env.WORLD_CLONE = WORLD;
 
 const { mediaUrlOk, mediaLedgerRows, mediaQuota, uploadMedia } = await import("../src/media.mjs");
@@ -122,7 +122,7 @@ function publishMarks(marks) {
 
 /** A town clone holding one resident's window pane. */
 function townWithWindow(handle, html) {
-  const dir = mkdtempSync(join(tmpdir(), "pm-media-town-"));
+  const dir = tempDir("pm-media-town-");
   mkdirSync(join(dir, "WHITE_PAGES", handle, "WINDOW"), { recursive: true });
   writeFileSync(join(dir, "WHITE_PAGES", handle, "WINDOW", "window.html"), html);
   return dir;

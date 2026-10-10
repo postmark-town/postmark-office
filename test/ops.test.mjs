@@ -8,16 +8,20 @@
 import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, copyFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { copyTownTools } from "./helpers/town-tools.mjs";
 import { join, resolve, dirname } from "node:path";
-import { tmpdir } from "node:os";
 import { spawn, execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { giftViaOffice, isPrincipal } from "../src/ops.mjs";
+import { giftViaOffice, isPrincipal, principalNow, loadPrincipals, __setPrincipalsForTest, ROLE_PRINCIPAL } from "../src/ops.mjs";
+import { openPaper } from "../src/paperwork.mjs";
+import { rolesSchema, grantRole, revokeRole } from "../src/roles.mjs";
 import { identityOf } from "../src/queries.mjs";
 import { fixtureDb } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
+import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 // The town index this file's offices read: a store seeded from each fixture
 // office.db (POS-268, office-under-test.mjs). Stopped when the file is done.
@@ -29,8 +33,7 @@ delete process.env.TOWN_PUSH; // belt and braces: the mint must stay local
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "..");
-const TOWN_TOOLS = resolve(ROOT, "town-clone", "tools");
-const TOOL_FILES = ["stamp-mint.mjs", "stamp-verify.mjs"];
+const TOWN = resolve(ROOT, "town-clone");
 const PRINCIPAL_ID = "67605380"; // keemin (github-ids.json) — the live pin
 
 const D = (date, id, from, to) => `- ${date} · ${id} · ${from} → ${to} · thread: new`;
@@ -39,11 +42,11 @@ const D = (date, id, from, to) => `- ${date} · ${id} · ${from} → ${to} · th
 // declared meep) and a founded, fully-minted stamp-ledger — the settled tail a
 // gift needs.
 function giftClone() {
-  const dir = mkdtempSync(join(tmpdir(), "office-ops-"));
+  const dir = tempDir("office-ops-");
   mkdirSync(join(dir, "tools"), { recursive: true });
   mkdirSync(join(dir, "WHITE_PAGES", "finn"), { recursive: true });
   mkdirSync(join(dir, "WHITE_PAGES", "postmaster"), { recursive: true });
-  for (const f of TOOL_FILES) copyFileSync(join(TOWN_TOOLS, f), join(dir, "tools", f));
+  copyTownTools(TOWN, dir);
 
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
   writeFileSync(join(dir, "tools", "stamp-pubkey.pem"), publicKey.export({ type: "spki", format: "pem" }));
@@ -80,22 +83,48 @@ const bounceOf = async (fn) => { try { await fn(); } catch (e) { return e; } ass
 
 // ── the principal gate ───────────────────────────────────────────────────────
 
-test("isPrincipal: only the pinned GitHub id passes; static keys never do", () => {
+test("isPrincipal: only a principal subject's verified GitHub id passes; static keys never do", () => {
   assert.equal(isPrincipal(principalKey, PRINCIPAL_ID), true);
   assert.equal(isPrincipal(strangerKey, PRINCIPAL_ID), false, "a different verified id is not the principal");
   assert.equal(isPrincipal(staticKey, PRINCIPAL_ID), false, "a static key has no verified id — never principal");
-  assert.equal(isPrincipal(principalKey, undefined), false, "no PRINCIPAL_GH_ID configured → nobody is principal");
+  assert.equal(isPrincipal(principalKey, undefined), false, "no principal subject → nobody is principal");
   assert.equal(isPrincipal(null, PRINCIPAL_ID), false);
 });
 
 test("/me carries principal: true only for the principal's session", () => {
-  const prev = process.env.PRINCIPAL_GH_ID;
-  process.env.PRINCIPAL_GH_ID = PRINCIPAL_ID;
+  __setPrincipalsForTest([PRINCIPAL_ID]);
   try {
     assert.equal(identityOf(principalKey).principal, true);
     assert.equal(identityOf(strangerKey).principal, false);
     assert.equal(identityOf(staticKey).principal, false);
-  } finally { if (prev === undefined) delete process.env.PRINCIPAL_GH_ID; else process.env.PRINCIPAL_GH_ID = prev; }
+  } finally { __setPrincipalsForTest([]); }
+});
+
+test("THE PRINCIPAL IS A ROLE ROW (POS-352): the env line is not read; the registry is, now and on reload", async () => {
+  const dir = tempDir("postmark-principal-");
+  const rdb = await openPaper(join(dir, "roles.db"), { schema: rolesSchema });
+  const prev = process.env.PRINCIPAL_GH_ID;
+  process.env.PRINCIPAL_GH_ID = PRINCIPAL_ID; // the retired env line: it must grant nothing
+  try {
+    assert.equal(await principalNow(rdb, principalKey), false, "the env line alone makes nobody principal");
+    assert.equal((await loadPrincipals(rdb)).size, 0);
+    assert.equal(identityOf(principalKey).principal, false);
+
+    await grantRole(rdb, { subject: principalKey.ghId, role: ROLE_PRINCIPAL, actor: "test" });
+    assert.equal(await principalNow(rdb, principalKey), true, "the role row makes the principal, at the next call");
+    assert.equal(await principalNow(rdb, strangerKey), false);
+    assert.equal(await principalNow(rdb, staticKey), false, "a static key with no id still never is");
+    await loadPrincipals(rdb);
+    assert.equal(identityOf(principalKey).principal, true, "and the describing flag follows the reload");
+
+    await revokeRole(rdb, { subject: principalKey.ghId, role: ROLE_PRINCIPAL, actor: "test" });
+    assert.equal(await principalNow(rdb, principalKey), false, "a revoke lands at the spending door's next call");
+  } finally {
+    if (prev === undefined) delete process.env.PRINCIPAL_GH_ID; else process.env.PRINCIPAL_GH_ID = prev;
+    __setPrincipalsForTest([]);
+    rdb.close?.();
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
 });
 
 // ── the gift mint mechanics (giftViaOffice → gift-exec → the town's CLI) ──────
@@ -152,13 +181,14 @@ let BASE;
 let child, tmp;
 
 before(async () => {
-  tmp = mkdtempSync(join(tmpdir(), "postmark-ops-srv-"));
+  tmp = tempDir("postmark-ops-srv-");
   const dbPath = join(tmp, "fixture.db");
   fixtureDb(dbPath).close();
   const IX_ENV = await storeFor(dbPath);
-  ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--db", dbPath], {
-    // a static key (no ghId → never principal) + the principal pin + no clone
-    env: { ...process.env, ...IX_ENV, OFFICE_KEYS: "shellkey=keemin:wright", PRINCIPAL_GH_ID: PRINCIPAL_ID, TOWN_CLONE: join(tmp, "no-clone"), TOWN_PUSH: "" },
+  ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--db", dbPath, "--oauth-db", seedStaticKeys(join(tmp, "oauth.db"), "shellkey=keemin:wright")], {
+    // a static key (no ghId → never principal) + no clone. The principal is a
+    // role row now (POS-352), and this office's registry holds none.
+    env: { ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV, TOWN_CLONE: join(tmp, "no-clone"), TOWN_PUSH: "" },
     stdio: ["ignore", "pipe", "pipe"],
   })));
   BASE = `http://127.0.0.1:${PORT}`;

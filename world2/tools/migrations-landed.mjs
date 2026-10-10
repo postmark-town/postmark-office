@@ -84,8 +84,36 @@ export const LANDED = {
   "052_world_act_nonce.sql":       { probe: rel("acts_world_nonce_once") },
   // 053 (POS-302): each resident's governing departure, kept once per clearing.
   "053_position_snapshots.sql":    { probe: `${rel("position_snapshots")} AND ${rel("position_snapshot_rows")} AND ${col("position_snapshot_rows", "first_ordinal")}` },
+  // 054 (POS-357): the clearing seals the World it leaves, in its own transaction.
+  "054_world_snapshots.sql":       { probe: `${rel("mark_versions")} AND ${rel("world_snapshot_marks")} AND ${rel("world_snapshots")} AND ${rel("world_snapshot_folds")} AND EXISTS (SELECT 1 FROM registry WHERE object = 'world_snapshot_folds')` },
+  // 055 (POS-350): identities is a VIEW over the registry, not the law pen's table.
+  "055_identities_from_the_registry.sql": { probe: "EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relname = 'identities' AND c.relkind = 'v')" },
+  // 060 (POS-347): the Registrar's standing ledger, append-only.
+  "060_standing_acts.sql":         { probe: `${rel("standing_acts")} AND ${trig("standing_acts_append_only")}` },
+  // 061 (POS-352): each decided crossing's receipt, append-only.
+  "061_crossing_receipts.sql":     { probe: `${rel("crossing_receipts")} AND ${trig("crossing_receipts_append_only")}` },
+  // 062 (POS-353): the arrivals breaker, append-only.
+  "062_gangway_acts.sql":          { probe: `${rel("gangway_acts")} AND ${trig("gangway_acts_append_only")}` },
   // 063 (POS-392): each resident's note to their returning self, in the office's record.
   "063_resident_notes.sql":        { probe: `${rel("resident_notes")} AND ${col("resident_notes", "written_at")}` },
+  // 064 (POS-410): the snapshot keeps the household register it was sealed against.
+  "064_snapshot_register.sql":     { probe: `${rel("register_versions")} AND ${rel("world_snapshot_register")} AND ${col("world_snapshots", "register_digest")} AND EXISTS (SELECT 1 FROM registry WHERE object = 'world_snapshot_register')` },
+  // 065 (POS-358): settlements point at their snapshot; a back-filled snapshot says where its sources came from.
+  "065_snapshot_backfill.sql":     { probe: `${col("world_snapshots", "source")} AND ${col("world_snapshots", "town_sha_from")} AND ${col("settlements", "snapshot_id")}` },
+  // 066 (POS-341 Q1): the stamp ledger's signed chain, one row per line.
+  "066_stamp_lines.sql":           { probe: `${rel("stamp_lines")} AND ${col("stamp_lines", "seal")}` },
+  // 067 (POS-341): the mint's rooms and raw mail lines, read from git.
+  "067_town_mint_inputs.sql":      { probe: `${rel("town_rooms")} AND ${rel("town_mail_lines")}` },
+  // 068 (POS-441): the clearing writes a carried mark's claim — its insert policy, then its trigger.
+  "068_clearing_carries.sql":      { probe: `${policy("claims_insert_clearing")} AND ${trig("claims_insert_carry_only")}` },
+  // 069 (POS-362): the seal keeps how far the town's words had reached.
+  "069_snapshot_stance_through.sql": { probe: `${col("world_snapshots", "stance_through")}` },
+  // 070 (POS-352): a static key's own household and handles, on its oauth_tokens row.
+  "070_static_office_keys.sql":    { probe: `${col("oauth_tokens", "household")} AND ${col("oauth_tokens", "handles")}` },
+  // 071 (POS-444): the store's record that a handle came ashore, append-only.
+  "071_ashore.sql":                { probe: `${rel("ashore")} AND ${trig("ashore_append_only")}` },
+  // 072 (POS-364): the seal records whether stances count at the settlement.
+  "072_snapshot_stances.sql":      { probe: `${col("world_snapshots", "stances")}` },
 };
 
 /** The schema files in the order a store takes them — name order, as the CI floor applies them. */

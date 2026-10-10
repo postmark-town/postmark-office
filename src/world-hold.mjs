@@ -364,8 +364,9 @@ export async function reachContext(thing, actor) {
     // everything else this door reaches for, and ABSENT rather than wrong when
     // the module cannot answer — `sameHousehold` degrades to handle identity
     // and says which test answered.
+    // A synchronous lookup over ONE read of the store's registry (POS-342).
     let householdOf = null;
-    try { ({ householdOf } = await import("./households.mjs")); } catch { householdOf = null; }
+    try { householdOf = await (await import("./households.mjs")).householdLookup(); } catch { householdOf = null; }
     return { mark, canon_readable: canon_marks > 0, within, standing, standsWithin, householdOf };
   } catch { return null; }
 }
@@ -850,7 +851,7 @@ function dressReceipt(did, { reached = null, stood = null, setDown = null } = {}
 //
 // The amend is filed through `leaveMarkViaOffice` with `amend: true` — the
 // exact call a resident makes to re-site their own mark, so every guard that
-// door runs (the key holds the author, the move guard, the put-forward verdict
+// door runs (the key holds the author, the carry forecast, the put-forward verdict
 // on the mark's escrow and the ground it now stands on) runs here unchanged,
 // and the store receives the one amend shape it already has: a mark-class
 // `amend` act whose candle half files a claim superseding the standing mark
@@ -941,7 +942,7 @@ export async function fileSetDownAmend({ did, stood, key, actId = null, deps = {
   try {
     let householdOf = deps.householdOf;
     if (householdOf === undefined) {
-      try { ({ householdOf } = await import("./households.mjs")); } catch { householdOf = null; }
+      try { householdOf = await (await import("./households.mjs")).householdLookup(); } catch { householdOf = null; }
     }
     const house = sameHousehold(madeBy, actor, householdOf);
     if (!house.same) {

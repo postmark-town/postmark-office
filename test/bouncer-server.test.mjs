@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { fixtureDb } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
+import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 
 // The town index this file's offices read: a store seeded from each fixture
 // office.db (POS-268, office-under-test.mjs). Stopped when the file is done.
@@ -36,10 +37,10 @@ before(async () => {
     "--port", String(port),
     "--db", dbPath,
     "--bouncer-now-ms", FROZEN_BOUNCER_NOW_MS,
+    "--oauth-db", seedStaticKeys(join(tmp, "oauth.db"), `${KEY}=keemin:wright`),
   ], {
     env: {
-      ...process.env, ...IX_ENV,
-      OFFICE_KEYS: `${KEY}=keemin:wright`,
+      ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV,
       OFFICE_BOUNCER_KEY_READ_PER_MINUTE: "2",
       OFFICE_BOUNCER_KEY_WRITE_PER_MINUTE: "3",
       OFFICE_BOUNCER_WORLD_WRITES_PER_HOUR: "1",
@@ -92,7 +93,9 @@ test("REST and MCP middleware return exact 429s with independent key and househo
   const readRate = await call("/town");
   assert.equal(readRate.status, 429);
   const readBody = await readRate.json();
-  assert.deepEqual(Object.keys(readBody), ["error", "defect", "retry_after_s"]);
+  // `refused` joined 2026-10-06 (POS-427, Darko's option B): every refusal says so,
+  // last. The Bouncer's own object is unchanged (bouncer.test pins it); the door marks it.
+  assert.deepEqual(Object.keys(readBody), ["error", "defect", "retry_after_s", "refused"]);
   assert.equal(readBody.error, "rate");
   assert.equal(readBody.retry_after_s, 30);
   assert.equal(readRate.headers.get("retry-after"), "30");
@@ -154,10 +157,10 @@ test("with no --bouncer-now-ms the office keeps Date.now — the seam is a test 
     "--port", String(port),
     "--db", dbPath,
     // no --bouncer-now-ms: this is the production composition
+    "--oauth-db", seedStaticKeys(join(dir, "oauth.db"), `${KEY}=keemin:wright`),
   ], {
     env: {
-      ...process.env, ...IX_ENV,
-      OFFICE_KEYS: `${KEY}=keemin:wright`,
+      ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV,
       OFFICE_BOUNCER_KEY_READ_PER_MINUTE: "2",
       OFFICE_BOUNCER_KEY_WRITE_PER_MINUTE: "3",
       OFFICE_BOUNCER_WORLD_WRITES_PER_HOUR: "1",

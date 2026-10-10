@@ -86,16 +86,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 
 import { INTAKE, USDC, TRANSFER_TOPIC, MIN_CONF } from "../src/usdc-witness.mjs";
 import { CROSSING_MS } from "../src/crossings.mjs";
 import { watch, decodeArrival, SINK_POT, SINK_AGE_DAYS, OUTSIDE_FROM, sinkEnabled } from "../tools/usdc-watch.mjs";
 import { NO_TOWN, townClone, townModuleUrl } from "./fixture-paths.mjs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 // `unresolvedSeen`, `journalRef` and the journal's two file functions are
 // imported INSIDE the cases that need them, on purpose. A static import of a
 // symbol the train tip does not export is a LOAD error, and a load error reds
@@ -167,7 +167,7 @@ function chain({ head, logs = [], blockTs = null, throws = false } = {}) {
 
 function seamTown() {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
-  const repo = mkdtempSync(join(tmpdir(), "usdc-held-"));
+  const repo = tempDir("usdc-held-");
   mkdirSync(join(repo, "tools"), { recursive: true });
   mkdirSync(join(repo, "WHITE_PAGES"), { recursive: true });
   writeFileSync(join(repo, "tools", "github-ids.json"), JSON.stringify({ paz: { login: "p", id: 2 }, stan: { login: "s", id: 1 } }));
@@ -439,7 +439,7 @@ test("F10 · the journal round-trips on a real file, and a torn line is surfaced
     "the journal lives in the same directory as the cursor it belongs to, derived rather than typed");
   assert.equal(slash(USDC_JOURNAL_PATH), `${dirname(STATE_PATH)}/${USDC_JOURNAL_NAME}`);
 
-  const dir = mkdtempSync(join(tmpdir(), "usdc-journal-"));
+  const dir = tempDir("usdc-journal-");
   const p = join(dir, USDC_JOURNAL_NAME);
   assert.deepEqual(readUsdcJournal(p), [], "a journal that does not exist yet is an empty one, not an error");
 

@@ -21,7 +21,10 @@ const execOf = (svc) => read(svc).split(/\r?\n/).find((l) => l.startsWith("ExecS
 const KEEPING = [
   ['git -C "$TOWN_CLONE" pull --ff-only', "the town pull"],
   ['git -C "$WORLD_CLONE" fetch --prune', "the world fetch (it carries the keeper's tag)"],
-  ["stamp-mint.mjs --append", "the mint catch-up"],
+  // POS-341: both branches of the STAMP_LINES switch: the town's own --append unset, the store's runner set
+  ["stamp-mint.mjs --append", "the mint catch-up (STAMP_LINES unset)"],
+  ["stamp-mint-run.mjs --append", "the mint catch-up (STAMP_LINES=store, POS-341)"],
+  ["[ \"${STAMP_LINES:-}\" = store ]", "the STAMP_LINES switch"],
   ["deploy/welcome-pass.mjs", "the welcome pass"],
   ["/srv/postmark-office/tools/bug-stage-plan.mjs", "the bug stage pass (Darko, 2026-10-07: payment rides the acceptance)"],
   ["--apply --quiet --key /srv/postmark-office/stamp-key.pem", "the bug stage pass's apply, quiet, with the box's stamp key"],
@@ -75,11 +78,13 @@ test("a box on the pre-split unit still runs both halves, keeping first", () => 
   assert.match(sh, /^set -eu$/m, "a failed pull stops the rehydrate, exactly as it did before the split");
 });
 
-test("the roll-call knows the new unit, parked until its files are installed", async () => {
+// The unit was parked until the w41 ship, when Wright installed its files and
+// enabled the timer (2026-10-04); the row says live and names that adoption.
+test("the roll-call knows the keep unit, live since its adoption at the w41 ship", async () => {
   const m = JSON.parse(read("box-rollcall-manifest.json"));
   const row = m.units.find((u) => u.unit === "postmark-office-keep.timer");
   assert.ok(row, "every postmark-* timer must have a manifest row");
-  assert.equal(row.stage, "parked");
-  assert.match(row.adopt_command, /enable --now postmark-office-keep\.timer/);
+  assert.equal(row.stage, "live");
+  assert.match(row.activation_owner, /ADOPTED 2026-10-04/);
   assert.ok(m.trees.rows.some((r) => r.unit === "postmark-office-keep.service"), "the keep unit names a tree, so the trees block must name it back");
 });

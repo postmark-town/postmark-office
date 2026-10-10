@@ -4,6 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   Bouncer,
+  clientIp,
   keyIdForToken,
   townDayWindow,
   worldWriteVerbForRest,
@@ -151,4 +152,14 @@ test("credential IDs are stable hashes and REST world doors map to contract verb
   assert.equal(worldWriteVerbForRest("POST", "/world/walks"), "world_walk");
   assert.equal(worldWriteVerbForRest("GET", "/world/stake"), null);
   assert.equal(worldWriteVerbForRest("POST", "/letters"), null);
+});
+
+// ── POS-391 · the address every per-caller limit keys on ─────────────────────
+
+test("the caller is the last X-Forwarded-For hop, else the socket", () => {
+  const req = (xff, socket = "127.0.0.1") => ({ headers: xff == null ? {} : { "x-forwarded-for": xff }, socket: { remoteAddress: socket } });
+  assert.equal(clientIp(req("198.51.100.7")), "198.51.100.7");
+  assert.equal(clientIp(req("203.0.113.9, 198.51.100.7")), "198.51.100.7", "the first hop is the caller's own word; the last is nginx's");
+  assert.equal(clientIp(req(null)), "127.0.0.1");
+  assert.equal(clientIp({ headers: {} }), "unknown");
 });

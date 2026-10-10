@@ -15,13 +15,14 @@ import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { fixtureDb } from "./fixture.mjs";
-import { indexStore } from "./helpers/office-under-test.mjs";
+import { indexStore, seedRegistry } from "./helpers/office-under-test.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
+import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 
 // The town index this file's offices read: a store seeded from each fixture
 // office.db (POS-268, office-under-test.mjs). Stopped when the file is done.
 const STORES = [];
-const storeFor = async (dbPath) => { const x = await indexStore(dbPath); STORES.push(x); return x.env; };
+const storeFor = async (dbPath) => { const x = await indexStore(dbPath); STORES.push(x); return x; };
 test.after(async () => { for (const x of STORES) await x.stop(); });
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -36,8 +37,8 @@ let PORT;
 let GH_PORT = null;
 let BASE;
 const KEY = "statickey";
-// A SECOND STATIC ROW, PINNED. `OFFICE_KEYS` entries may carry `#<gh_id>`
-// (server.mjs § KEYS, the founder's ruling 2026-08-26), and that changes what
+// A SECOND STATIC ROW, PINNED. A static row may carry a gh_id (an OFFICE_KEYS
+// entry's `#<gh_id>`, static-keys.mjs; the founder's ruling 2026-08-26), and that changes what
 // the row can do — which the lane's report got wrong and the reviewer caught by
 // minting a working key from one.
 const PINNED_KEY = "staticpinned";
@@ -51,7 +52,8 @@ before(async () => {
   tmp = mkdtempSync(join(tmpdir(), "postmark-office-oauth-"));
   const dbPath = join(tmp, "fixture.db");
   fixtureDb(dbPath).close();
-  const IX_ENV = await storeFor(dbPath);
+  const IX = await storeFor(dbPath);
+  const IX_ENV = IX.env;
 
   // a minimal town clone: just the pins file the household mapping reads
   const clone = join(tmp, "town-clone");
@@ -60,6 +62,10 @@ before(async () => {
   writeFileSync(join(clone, "tools", "github-ids.json"), JSON.stringify({
     wright: { login: "keeminlee", id: 999, pinned: "2026-07-05" },
   }));
+  // Sign-in reads the STORE's pins (POS-343), so the same pin is stated there.
+  // wright stands in no house in this registry, so the household block the
+  // office adds to /me (POS-342) is the honest solo one.
+  await seedRegistry(IX.store, null, { wright: { login: "keeminlee", id: 999, pinned: "2026-07-05" } });
 
   // mock GitHub: authorize redirects straight back; token + user are canned
   ghServer = createServer((req, res) => {
@@ -86,10 +92,9 @@ before(async () => {
   GH_PORT = ghServer.address().port;
 
   ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port),
-    "--db", dbPath, "--oauth-db", join(tmp, "oauth.db")], {
+    "--db", dbPath, "--oauth-db", seedStaticKeys(join(tmp, "oauth.db"), `${KEY}=keemin:wright;${PINNED_KEY}=keemin#999:wright`)], {
     env: {
-      ...process.env, ...IX_ENV,
-      OFFICE_KEYS: `${KEY}=keemin:wright;${PINNED_KEY}=keemin#999:wright`,
+      ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV,
       TOWN_CLONE: clone, TOWN_PUSH: "",
       PUBLIC_BASE: `http://127.0.0.1:${port}`,
       POSTMARK_OAUTH_GITHUB_CLIENT_ID: "mock-gh-app",
@@ -209,7 +214,8 @@ test("full dance: register → GitHub → consent → code → token → /town 2
   // GET /me — the signed-in household reads its own identity (the login island's key)
   const me = await (await fetch(`${BASE}/me`, { headers: { authorization: `Bearer ${grant.access_token}` } })).json();
   assert.deepEqual(me, { household: "keeminlee", handles: ["wright"], visitor: false,
-    verified_github: { login: "keeminlee", id: 999 }, key_kind: "oauth", principal: false });
+    verified_github: { login: "keeminlee", id: 999 }, key_kind: "oauth", principal: false,
+    households: { wright: { key: "solo:wright", slug: null, human: null, residents: ["wright"] } } });
 
   // refresh rotates: old refresh dies, new pair works
   const ref = await fetch(`${BASE}/oauth/token`, {
@@ -320,7 +326,8 @@ test("key desk: a signed-in household mints a pmk_ key that resolves like the si
 
   const me = await (await fetch(`${BASE}/me`, { headers: { authorization: `Bearer ${key}` } })).json();
   assert.deepEqual(me, { household: "keeminlee", handles: ["wright"], visitor: false,
-    verified_github: { login: "keeminlee", id: 999 }, key_kind: "household", principal: false });
+    verified_github: { login: "keeminlee", id: 999 }, key_kind: "household", principal: false,
+    households: { wright: { key: "solo:wright", slug: null, human: null, residents: ["wright"] } } });
 });
 
 test("key desk: minting again rotates — the old key dies, the new one works", async () => {
@@ -659,4 +666,32 @@ test("a berth's declared household and card are rendered as text on the co-sign 
   const denied = await consent(form, "deny");
   assert.equal(denied.status, 200);
   assert.match(await denied.text(), /Not co-signed/);
+});
+
+// ── POS-391 · registration is limited per CALLER, read as nginx names it ─────
+//
+// Behind nginx the office's socket peer is nginx itself; the caller is the last
+// X-Forwarded-For hop (bouncer.mjs § clientIp), which nginx appends. A limit
+// keyed on anything else is not a limit per caller. These callers name
+// themselves the way nginx would; none of them is the bare socket the tests
+// above register from, so neither spends the other's budget.
+const registerAs = (forwardedFor) => fetch(`${BASE}/oauth/register`, {
+  method: "POST",
+  headers: { "content-type": "application/json", "x-forwarded-for": forwardedFor },
+  body: JSON.stringify({ client_name: "per-caller test", redirect_uris: [REDIRECT] }),
+});
+
+test("registration: eleven callers at eleven addresses each register — one caller's budget is not another's", async () => {
+  const statuses = [];
+  for (let i = 1; i <= 11; i++) statuses.push((await registerAs(`203.0.113.${i}`)).status);
+  assert.deepEqual(statuses, Array(11).fill(201));
+});
+
+test("registration: one caller still has ten an hour, whatever first hop it writes itself", async () => {
+  const statuses = [];
+  for (let i = 1; i <= 10; i++) statuses.push((await registerAs(`192.0.2.${i}, 198.51.100.40`)).status);
+  assert.deepEqual(statuses, Array(10).fill(201));
+  const eleventh = await registerAs("192.0.2.99, 198.51.100.40");
+  assert.equal(eleventh.status, 429);
+  assert.equal((await eleventh.json()).error, "slow_down");
 });

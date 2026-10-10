@@ -318,15 +318,15 @@ test("a parcel filed AT ITS ID amends identically — the filing was never the v
 // or the one-line fix would quietly repeal the cap instead of scoping it. This
 // leg fails the moment the cap stops asking of a fresh claim.
 
-test("CONTROL: a genuinely NEW parcel for the same household is still refused at the cap", async () => {
+test("CONTROL: a genuinely NEW parcel for a household at the cap is ACCEPTED at the door; the settlement applies the cap (POS-364)", async () => {
+  // R11, Darko 2026-10-04: the office accepts every physically legal act; the settlement applies limits in act order (POS-364). The cap still holds, but at the settlement, citing the-town/claim-cap
+  // (test/world-settlement.test.mjs § the limits), never as this door's refusal.
   const out = await leave({
     slug: "the-fifth-plot", kind: "parcel", by: "reader",
     at: { x: 1500, y: 1500 }, body: "new ground, not an amendment",
   }, HOUSE);
-  assert.equal(out.code, 403, `the cap must still hold for new ground, got ${JSON.stringify(out)}`);
-  assert.match(out.defect, /already holds 4 parcels/,
-    "FOUR here — nothing is excluded, because this slug names no standing mark. The same arithmetic that showed Current `four` when his flat WAS excluded from five.");
-  assert.match(out.hint, /capped at 3 per household/);
+  assert.equal(out.ok, true, `the door accepts new ground over the cap, got ${JSON.stringify(out)}`);
+  assert.doesNotMatch(JSON.stringify(out), /already holds/);
 });
 
 // ── LEG 7 · a slug is unique PER AUTHOR, and the fix does not widen that ────
@@ -336,14 +336,12 @@ test("CONTROL: a genuinely NEW parcel for the same household is still refused at
 // way past it. Ids are author-scoped, so it cannot — asserted rather than
 // assumed, because the fix's whole effect is to trust `amending`.
 
-test("a DIFFERENT author's same slug is a fresh claim, capped as today — and cannot be amended into", async () => {
+test("a DIFFERENT author's same slug is a fresh claim (accepted; the settlement applies the cap) — and cannot be amended into", async () => {
   const fresh = await leave({
     slug: "the-keepers-flat", kind: "parcel", by: "sailor",
     at: { x: 1800, y: 1800 }, body: "the same word, a different author",
   }, HOUSE);
-  assert.equal(fresh.code, 403, `a different author's same slug is NEW ground, got ${JSON.stringify(fresh)}`);
-  assert.match(fresh.defect, /already holds 4 parcels/,
-    "FOUR — nothing excluded, because `sailor/the-keepers-flat` names no standing mark. Reader's flat is not sailor's to stand on.");
+  assert.equal(fresh.ok, true, `a different author's same slug is NEW ground, accepted (R11), got ${JSON.stringify(fresh)}`);
 
   const amend = await leave({
     slug: "the-keepers-flat", kind: "parcel", by: "sailor", amend: true,
@@ -368,4 +366,86 @@ test("and the path was never in doubt: gate A resolves the <by>/<slug> id to the
     pathFor({ id: "reader/the-keepers-flat", by: "reader", slug: "the-keepers-flat", kind: "parcel" }, { publishedPathOf: filed }),
     "WORLD/marks/let-there-be-light/the-doubled-coast/the-keepers-flat/mark.md",
     "an amend carrying the id lands on the existing file — never a WORLD/marks/reader/the-keepers-flat twin");
+});
+
+// ── LEG 8 · a published mark MOVES by amend on the single-log lane ──────────
+//
+// POS-483's lane (2026-10-09). The leave-mark card said "an amend that MOVES a
+// published mark is refused for now (#1862)". That refusal lives only in
+// leave-exec.mjs, the git lane, which prod never reaches (WORLD_SINGLE_LOG=1).
+// On the lane prod runs, the move guard is retired and the door forecasts the
+// carry (POS-441). This leg is that door's own word, so the card's new sentence
+// is pinned to what the door does.
+
+test("POS-483: on the single-log lane, an amend that MOVES a published parcel is not refused — no 409, and the answer forecasts the carry", async () => {
+  const out = await leave({
+    slug: "the-sloop-at-anchor", kind: "parcel", by: "sailor", amend: true,
+    at: { x: 520, y: 500 }, body: "the sloop, warped twenty metres east",
+  }, HOUSE);
+  assert.notEqual(out.code, 409, `a published move must not be refused on the single-log lane: ${JSON.stringify(out)}`);
+  assert.equal(out.ok, true, `the move goes forward: ${JSON.stringify(out)}`);
+  assert.equal(out.amended, true, "as an amendment of the standing mark");
+  assert.equal(out.carries?.forecast, true, "and the answer carries the carry's forecast (POS-441)");
+  assert.deepEqual([out.carries.dx, out.carries.dy], [20, 0], "for exactly the move asked");
+});
+
+// ── LEGS 9–11 · the leave door names your ground (POS-493) ──────────────────
+//
+// The read-shape eval (POS-486, 2026-10-09): two agents asked to leave a mark
+// on their own parcel landed it half a metre outside, because nothing they read
+// named the edge. The door now names the household's parcels as ranges on
+// every sited leave, and when a footprint lands outside them but within a
+// parcel's side of one, says by how much and where it would sit wholly inside.
+// This bottle's household (gh:9) holds four parcels; the flat spans
+// x 287.5..312.5, y 287.5..312.5. Its marksContain is the centre-only stub
+// above, so "outside" here is the verdict's own word, as it is on the box.
+
+const bench = (over = {}) => ({ slug: "the-bench", kind: "sited", by: "reader", extent: { w: 1, h: 1 }, body: "a bench by the flat", ...over });
+
+test("POS-493: a mark 0.5 m outside the parcel's edge warns, names the parcel's ranges and where it sits wholly inside, and the preview says it before anything is written", async () => {
+  for (const preview of [true, false]) {
+    const out = await leave(bench({ slug: preview ? "the-bench-preview" : "the-bench", at: { x: 300, y: 313 }, ...(preview ? { preview: true } : {}) }), HOUSE);
+    assert.equal(out.ok, true, `the act is accepted, never refused (R11): ${JSON.stringify(out)}`);
+    assert.equal(out.preview === true, preview);
+    assert.deepEqual(out.your_ground?.find((g) => g.parcel === "reader/the-keepers-flat"),
+      { parcel: "reader/the-keepers-flat", x: "287.5..312.5", y: "287.5..312.5" }, "the household's parcels, as ranges");
+    assert.equal(out.your_ground.length, 4, "every parcel the household holds");
+    const off = out.off_your_ground;
+    assert.ok(off, `the warning rides the answer: ${JSON.stringify(out)}`);
+    assert.equal(off.parcel, "reader/the-keepers-flat");
+    assert.match(off.note, /reaches 1 m outside your parcel reader\/the-keepers-flat \(x 287\.5\.\.312\.5, y 287\.5\.\.312\.5\)/);
+    assert.match(off.note, /publishes as a commons mark and needs ✦1/);
+    assert.deepEqual(off.corrected_at, { x: 300, y: 312 }, "the nearest point that holds the whole footprint inside");
+    assert.equal(off.preview.do, "leave-mark");
+    assert.deepEqual(off.preview.args, { slug: preview ? "the-bench-preview" : "the-bench", kind: "sited", by: "reader", body: "a bench by the flat",
+      extent: { w: 1, h: 1 }, at: { x: 300, y: 312 }, preview: true }, "the caller's own call, at the corrected point, as a preview");
+    assert.match(off.note, /writes nothing/);
+    assert.equal(out._ground_own, undefined, "the internal field never leaves the door");
+  }
+});
+
+test("POS-493: a mark inside the parcel does not warn, and still names your ground", async () => {
+  const out = await leave(bench({ slug: "the-inner-bench", at: { x: 300, y: 311 } }), HOUSE);
+  assert.equal(out.ok, true, JSON.stringify(out));
+  assert.equal(out.off_your_ground, undefined, `no warning inside: ${JSON.stringify(out.off_your_ground)}`);
+  assert.equal(out.your_ground?.length, 4);
+});
+
+test("POS-493: a mark far from every parcel is a deliberate commons mark — no warning, only the ranges", async () => {
+  const out = await leave(bench({ slug: "the-far-bench", at: { x: 1500, y: -1500 } }), HOUSE);
+  assert.equal(out.ok, true, JSON.stringify(out));
+  assert.equal(out.off_your_ground, undefined);
+  assert.equal(out.your_ground?.length, 4);
+});
+
+test("POS-493: the leave-mark read (world_my_marks) names your household's parcels as ranges", async () => {
+  const { worldMyMarks } = await import("../src/world.mjs");
+  const r = await worldMyMarks(HOUSE);
+  assert.ok(!r?.error, `the read answers: ${JSON.stringify(r)}`);
+  // The page's own household (the stake slice's `residents`, read from the
+  // town's pins), so the ranges and the page's other shelves name one house.
+  const expected = PUBLISHED.filter((m) => m.kind === "parcel" && r.residents.includes(m.by)).map((m) => m.id).sort();
+  assert.ok(expected.includes("reader/the-keepers-flat"), `the reader is a resident of the page: ${JSON.stringify(r.residents)}`);
+  assert.deepEqual(r.your_ground?.map((g) => g.parcel).sort(), expected, "exactly the household's published parcels");
+  assert.deepEqual(r.your_ground.find((g) => g.parcel === "reader/the-keepers-flat"), { parcel: "reader/the-keepers-flat", x: "287.5..312.5", y: "287.5..312.5" });
 });

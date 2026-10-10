@@ -27,7 +27,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { readTown } from "../vendor/tools/lib/town.mjs";
+import { readTown, parseFrontmatter } from "../vendor/tools/lib/town.mjs";
 import { isResidentHandle, REGISTRY_PATH } from "./residency.mjs"; // one definition of what a handle is — the door's
 import { homePictureIn } from "./registry-rows.mjs"; // the house's picture, off the household's record (POS-219)
 import { readProfile } from "./profiles.mjs"; // PROFILE.md postdates the vendored reader — see that file
@@ -85,6 +85,9 @@ const numbered = (rows) => rows.map((r, i) => [i + 1, ...r]);
  *                   the unconditional overwrite leaves the oldest add.
  *   last_active   — per resident, the newest commit touching their own pages,
  *                   inbox arrivals excluded (that's the ferry acting, not them).
+ *                   The INDEX's value only: since POS-481 no door serves it.
+ *                   Every door's `last_active` is the resident's newest act
+ *                   in the store (src/last-active.mjs), stamped at the read.
  * --no-renames matters: the ferry MOVES letters outbox -> inbox, and rename
  * detection would hide the arrival from the A-filter. Times normalized to UTC
  * so plain string compares sort correctly alongside bare `date` days.
@@ -207,6 +210,47 @@ export function bulletinRows(town) {
   return out.rows();
 }
 
+/**
+ * The docs the office serves beyond the vendored reader's five. The reader is
+ * the site's (vendor/tools/lib/town.mjs says fix upstream, never here), so the
+ * office reads these itself, in the reader's own `{ body, path }` shape.
+ * STAMPS.md is the town's stamps explainer, and `household { read: "stamps" }`
+ * points here for it.
+ */
+export const OFFICE_DOCS = Object.freeze(["STAMPS.md"]);
+
+/** The names `town { read: "docs" }` takes as `doc:`, each a key of the docs value lowercased. */
+export const DOC_NAMES = Object.freeze(["readme", "joining", "town-rules", "mail", "contributing", "stamps"]);
+
+/**
+ * `town { read: "docs" }`'s answer, shaped from the ONE docs value that GET
+ * /town/docs serves (`{ as_of, docs }`, from either index). Bare, the listing:
+ * each doc's name, path and size, never a body, so the bare read stays cheap.
+ * With `doc`, that one doc whole. Null when the index holds no such doc (an
+ * index that predates it, or a town without the file).
+ */
+export function docsAnswer({ as_of = null, docs = {} } = {}, doc = null) {
+  if (doc == null || doc === "") {
+    return {
+      as_of,
+      docs: Object.entries(docs).map(([k, d]) => ({ doc: k.toLowerCase(), path: d.path, chars: d.body?.length ?? 0 })),
+      open: 'args: { doc: "<name>" } answers one doc whole — doc: "stamps" is what stamps are and how they move',
+    };
+  }
+  const d = docs[String(doc).toUpperCase()];
+  return d ? { as_of, doc: String(doc).toLowerCase(), path: d.path, body: d.body } : null;
+}
+
+/** The town's docs as one meta value: `{ README: { body, path }, … }`, keys sorted, JSON. */
+export const townDocsValue = (town, TOWN) => {
+  const docs = { ...(town.docs ?? {}) };
+  for (const f of TOWN ? OFFICE_DOCS : []) {
+    const p = join(TOWN, f);
+    if (existsSync(p)) docs[f.replace(/\.md$/, "")] = { body: parseFrontmatter(readFileSync(p, "utf8")).body, path: f };
+  }
+  return JSON.stringify(Object.fromEntries(Object.entries(docs).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))));
+};
+
 /** The mail ledger, unnumbered: `[kind, date, id, from_h, to_h, json]` per line, in ledger order. */
 export function ledgerLines(town) {
   return town.ledger.map((e) => [e.kind, e.date ?? null, e.id ?? null, e.from ?? null, e.to ?? null, JSON.stringify(e)]);
@@ -261,8 +305,22 @@ export async function stampFold(TOWN, { entries = null } = {}) {
   if (!existsSync(stampTool) || !existsSync(stampLedger)) return null;
   const { parseStampLedger, foldBalances, foldMintCount, foldStaked } = await import(pathToFileURL(stampTool));
   const all = entries ?? parseStampLedger(readFileSync(stampLedger, "utf8"));
-  return { entries: all.length, balance: foldBalances(all), mintCount: foldMintCount(all), staked: foldStaked(all) };
+  return { entries: all.length, tip: stampTipOf(all), balance: foldBalances(all), mintCount: foldMintCount(all), staked: foldStaked(all) };
 }
+
+/**
+ * THE TIP (POS-314, Snapshot 7): the ledger's last line as the fold above saw
+ * it, kept in town_meta as `stamps_tip`, so a stamp door can add only the lines
+ * after it to town_stamps instead of re-folding the whole file. Only a SIGNED
+ * line is a tip: its signature is over the seal chain of every line before it,
+ * so finding the same line in a ledger proves that ledger's past is the past
+ * town_stamps was folded from. An unsigned last line (the verifier's to flag)
+ * gives "", and every door then folds the whole file, as it did before.
+ */
+export const stampTipOf = (entries) => {
+  const last = entries.at(-1);
+  return last?.sig ? last.raw : "";
+};
 
 /** A fold's rows: every account but MINT and BURN, and the minted total. */
 export function stampRows(fold) {
@@ -321,15 +379,19 @@ export async function fundingRows(TOWN, { log = console } = {}) {
  * live in src/quest-standing.mjs). Answers null when the checkout has no quest
  * tool or registry; `standing` is null when the town's quest file is too old to
  * export the standing folds. `questDay` and `questRegistry` go to meta.
+ *
+ * `base` is the store's key base when the caller read one (POS-341 part 4: the
+ * delta ingest, behind STAMP_LINES); the town's folds group households by it in
+ * place of the printouts. Null is the printouts, as before.
  */
-export async function questRows(TOWN, town, { log = console } = {}) {
+export async function questRows(TOWN, town, { log = console, base = null } = {}) {
   const questTool = join(TOWN, "tools", "quest-progress.mjs");
   const registryPath = join(TOWN, "quest-registry.json");
   if (!existsSync(questTool) || !existsSync(registryPath)) return null;
   const questMod = await import(pathToFileURL(questTool));
   const { foldQuestProgress, townDay } = questMod;
   const today = townDay();
-  const prog = foldQuestProgress(TOWN, { today });
+  const prog = foldQuestProgress(TOWN, base ? { today, base } : { today });
   const progress = keyed("quest_progress");
   for (const [handle, p] of prog) {
     progress.put([handle, p.send, p.receive, p.household.size, p.household.send, p.household.receive,
@@ -350,7 +412,7 @@ export async function questRows(TOWN, town, { log = console } = {}) {
     const handles = town.residents.map((r) => r.handle).filter(isResidentHandle);
     const { rows, friendships } = standingRowsFromTown(
       { parseDeliveries, foldFriendships, currentHouseholds, welcomedHouseholds, onboardingFactsFor },
-      TOWN, handles);
+      TOWN, handles, { base });
     const standing = keyed("quest_standing");
     for (const [h, row] of rows) standing.put([h, JSON.stringify(row)]);
     out.standing = standing.rows();
@@ -425,7 +487,7 @@ export function atlasRows(TOWN, town, { log = console } = {}) {
  * The whole index for one checkout, every table: what hydrate.mjs writes and
  * what the ingest's seed writes. `meta` rows come in hydrate's insert order.
  */
-export async function deriveTownIndex(TOWN, { log = console } = {}) {
+export async function deriveTownIndex(TOWN, { log = console, base = null } = {}) {
   const asOf = execFileSync("git", ["-C", TOWN, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   const town = readTown(TOWN);
   for (const p of town.problems) log.warn(`WARN (town): ${p}`);
@@ -438,6 +500,11 @@ export async function deriveTownIndex(TOWN, { log = console } = {}) {
       threads: town.threads.length, ledger: town.ledger.length,
       bulletin: (town.bulletin ?? []).length,
     })],
+    // THE TOWN'S DOCS (POS-351): README / JOINING / TOWN-RULES / MAIL /
+    // CONTRIBUTING, as the vendored reader keeps them, plus OFFICE_DOCS
+    // (STAMPS), so the site's docs.json comes through the office (GET
+    // /town/docs) and never from a checkout.
+    ["docs", townDocsValue(town, TOWN)],
   ];
   const history = readHistory(TOWN, { log });
   const t = {};
@@ -454,11 +521,11 @@ export async function deriveTownIndex(TOWN, { log = console } = {}) {
   if (fold) {
     const s = stampRows(fold);
     t.stamps = s.rows;
-    meta.push(["stamps_minted", s.minted]);
+    meta.push(["stamps_minted", s.minted], ["stamps_tip", fold.tip]);
   }
   Object.assign(t, await fundingRows(TOWN, { log }));
 
-  const q = await questRows(TOWN, town, { log });
+  const q = await questRows(TOWN, town, { log, base }); // the store's key base when the seed read one (POS-341 part 4); null in hydrate
   t.quest_progress = q?.progress ?? [];
   t.quest_standing = q?.standing ?? [];
   if (q) meta.push(["quest_day", q.questDay], ["quest_registry", q.questRegistry]);

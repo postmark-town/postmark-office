@@ -1,5 +1,5 @@
 [Unit]
-Description=Postmark office — rebuild the read indexes (office.db, world.db + the world graph snapshot) and confirm the door took them
+Description=Postmark office — rebuild the read indexes (office.db, and the world graph snapshot in the store) and confirm the door took them
 
 [Service]
 Type=oneshot

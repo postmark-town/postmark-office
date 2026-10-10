@@ -65,6 +65,15 @@ test("chooseStandpoint: an explicit handle must be one the key holds (scope)", (
   assert.match(bad.bounce.defect, /not one of your residents/);
 });
 
+test("chooseStandpoint: the handle: bounce says how to look someone up — read walk with who (POS-335, OH Q5)", () => {
+  const bad = chooseStandpoint({ handle: "zeta" }, two);
+  assert.equal(bad.bounce.defect, `"zeta" is not one of your residents`, "the defect is unchanged");
+  assert.equal(bad.bounce.hint,
+    `handle: picks which of your own residents you stand as (this key stands as: alpha, beta). To look someone up, read: "walk", args: { who: "zeta" }: where a resident stands is public, standing as them is not.`);
+  const none = chooseStandpoint({ handle: "zeta" }, visitor);
+  assert.match(none.bounce.hint, /^no residents on this key — sign in, or use a household key\. To look someone up, read: "walk", args: \{ who: "zeta" \}/);
+});
+
 test("chooseStandpoint: keyless and visitor stand at the Origin", () => {
   assert.equal(chooseStandpoint({}, null).coords.from, "the Origin");
   assert.equal(chooseStandpoint({}, visitor).coords.from, "the Origin");
@@ -397,8 +406,16 @@ test("overhang: a claim left where you stand, nesting one level out, is disclose
   // says where a mark would nest before anything is written. All three, or a
   // newcomer reads "move it" and finds the door closed.
   assert.match(r.remedy, /amend: true/, "the remedy says a draft can still move, and how");
-  assert.match(r.remedy, /a published mark cannot move/, "…and that a published one cannot");
   assert.match(r.remedy, /preview: true/, "…and names the preview for next time");
+  // POS-483's lane (2026-10-09): the move sentence is the lane's. On the
+  // single-log lane prod runs, a published mark moves by amend and carries its
+  // household's marks (POS-441); only the git lane still refuses that.
+  const live = overhangOf({ ...THE_GLASS, parent: PANDO.id, standing: ON_THE_FENCE, spine: [PANDO, VIEW_PEAK], singleLog: true });
+  assert.match(live.remedy, /draft or published/, "single-log: a published mark moves too");
+  assert.match(live.remedy, /carries your household's marks inside it/, "…and the move carries the household's marks");
+  assert.doesNotMatch(live.remedy, /cannot move/, "…so the remedy never says it cannot");
+  const git = overhangOf({ ...THE_GLASS, parent: PANDO.id, standing: ON_THE_FENCE, spine: [PANDO, VIEW_PEAK], singleLog: false });
+  assert.match(git.remedy, /a published mark cannot move/, "the git lane still refuses a published move (leave-exec.mjs, #1862)");
 });
 
 test("overhang: the ordinary case says nothing at all", async () => {
@@ -505,6 +522,29 @@ test("walk target: a long parcel names a few and counts the rest", () => {
   assert.equal(r.hint.includes("finn/thing-8"), false);
 });
 
+test("walk target: a parcel bounce names what stands ON it, the house, before what stands inside the house (POS-335)", () => {
+  // Office Hours 2026-10-02 Q12: a walk to wright/the-trueing-house-parcel off
+  // the calendar. The world clone's `within` for it, in its own order, has the
+  // furniture ahead of the house when a desk sorts first; the house and Rei's
+  // gift at the door are the two marks whose placementParent is the parcel.
+  const P = { id: "wright/the-trueing-house-parcel", kind: "parcel" };
+  const inHouse = (id) => ({ id, kind: "sited", placementParent: "wright/the-trueing-house" });
+  const within = [
+    inHouse("wright/comparison-desk"), inHouse("wright/the-drafting-table"), inHouse("wright/the-guest-book"),
+    inHouse("wright/the-kettle-ring"), inHouse("wright/the-keystone"), inHouse("wright/the-ledger-shelf"),
+    { id: "wright/the-trueing-house", kind: "sited", placementParent: P.id },
+    inHouse("wright/the-plumb-line"), inHouse("wright/the-trueing-wheel"), inHouse("wright/the-window-bench"),
+    { id: "rei/the-white-flower-at-wrights-door", kind: "sited", placementParent: P.id },
+  ];
+  const r = unwalkableTarget(P, within);
+  assert.equal(r.hint,
+    "walk to what stands on it — that is also the neighbourly way to arrive: wright/the-trueing-house, rei/the-white-flower-at-wrights-door (9 more stand inside those)");
+  assert.equal(r.hint.includes("comparison-desk"), false, "the desk is inside the house; the house is the destination");
+  // a parcel whose marks carry no placementParent keeps the old list, unchanged
+  const bare = unwalkableTarget(P, within.map(({ placementParent, ...m }) => m));
+  assert.match(bare.hint, /^walk to a sited mark within it/);
+});
+
 // ── the publish note (founder-ruled 2026-08-19, the Waiting Room finding) ────
 // Six furnished marks sat leftDrafted for days because "commons needs escrow
 // > 0" was judged silently at the crossing. The door now discloses at
@@ -552,7 +592,8 @@ test("the revision family stands at the door: amend on leave-mark, withdraw as i
   const leave = WORLD_TOOLS.find(({ name }) => name === "world_leave_mark");
   assert.equal(leave.inputSchema.properties.amend.type, "boolean");
   assert.match(leave.inputSchema.properties.amend.description, /SUPERSEDE/, "amend says what it does in the author's face");
-  assert.match(leave.inputSchema.properties.amend.description, /#1862/, "and names the seam that limits moves");
+  assert.match(leave.inputSchema.properties.amend.description, /MOVE the mark, draft or published/, "and says an amend moves a published mark (POS-441, the single-log lane)");
+  assert.match(leave.inputSchema.properties.amend.description, /carries the marks inside it that belong to your household/, "…carrying the household's marks inside it");
   const wd = WORLD_TOOLS.find(({ name }) => name === "world_withdraw_mark");
   assert.ok(wd, "world_withdraw_mark stands in WORLD_TOOLS");
   assert.deepEqual(wd.inputSchema.required, ["mark"]);

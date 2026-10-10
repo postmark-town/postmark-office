@@ -240,6 +240,14 @@ export function makeActsPen({ households = [], pins = [], meta = [], claims = []
         const hit = marks.filter((m) => m.slug === params[0]).slice(0, 1);
         return { rows: hit.map((m) => ({ slug: m.slug, status: m.status ?? "standing", kind: m.kind ?? "sited", geometry: m.geometry ?? null })), rowCount: hit.length };
       }
+      // THE IDEA POST'S ID (POS-290, idea-store.mjs § mintIdeaId): an id a Think
+      // Tank mark holds is never an idea post's, so the mint asks which of the
+      // author's ids the marks hold, and a duplicate asks whether one mark stands.
+      if (/^SELECT slug FROM marks WHERE slug (LIKE|=) \$1$/i.test(q)) {
+        const like = /LIKE/i.test(q);
+        const hit = marks.filter((m) => (like ? m.slug.startsWith(String(params[0]).replace(/%$/, "")) : m.slug === params[0]));
+        return { rows: hit.map((m) => ({ slug: m.slug })), rowCount: hit.length };
+      }
       return { rows: [], rowCount: 0 };
     }
     if (/^INSERT INTO claims/i.test(q)) {
@@ -268,11 +276,19 @@ export function makeActsPen({ households = [], pins = [], meta = [], claims = []
       return { rows: [{ keys: state.householdKeys.length ? state.householdKeys : null }], rowCount: 1 };
     }
     if (/^UPDATE claims/i.test(q)) return { rows: [], rowCount: 0 };
+    // The candle's lock (POS-404): the door shares it before it reads the open
+    // window. No clearing runs against a stub, so it is granted at once.
+    if (/^SELECT pg_advisory_xact_lock_shared\(/i.test(q)) return { rows: [{}], rowCount: 1 };
 
     // The registry, as `registry-store.mjs`'s three fixed SELECTs ask for it.
     if (/FROM households/i.test(q)) return { rows: households.map((r) => ({ ...r })), rowCount: households.length };
     if (/FROM household_pins/i.test(q)) return { rows: pins.map((r) => ({ ...r })), rowCount: pins.length };
     if (/FROM registry_meta/i.test(q)) return { rows: meta.map((r) => ({ ...r })), rowCount: meta.length };
+    // The standing gate (POS-347) asks the record before every act: this
+    // record has suspended nobody.
+    if (/FROM standing_acts/i.test(q)) return { rows: [], rowCount: 0 };
+    // …and has never raised the gangway (POS-353).
+    if (/FROM gangway_acts/i.test(q)) return { rows: [], rowCount: 0 };
 
     for (const [matcher, handler] of also) {
       const hit = typeof matcher === "function" ? matcher(q, params) : matcher.test(q);

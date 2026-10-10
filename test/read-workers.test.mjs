@@ -56,7 +56,10 @@ import { mcpWorkerTakes, startReadPool, workerTakes } from "../src/read-workers.
 import { WORLD_CLONE } from "../src/world-store.mjs";
 import { publishedSettlementAt } from "../src/hearing-window.mjs";
 import { writeFileSync } from "node:fs";
+import { indexStore } from "./helpers/office-under-test.mjs";
+import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 
+let IX = null; // the store this file's offices read (indexStore)
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const haveClone = existsSync(join(WORLD_CLONE, "WORLD", "walk-ledger.md"));
 
@@ -104,17 +107,20 @@ before(async () => {
   Object.assign(process.env, FLAGS);
   tmp = mkdtempSync(join(tmpdir(), "postmark-read-workers-"));
   fixtureDb(join(tmp, "fixture.db")).close();
+  // the offices here read their town index from a store seeded from this fixture (POS-268, office-under-test.mjs)
+  IX = await indexStore(join(tmp, "fixture.db"));
   // A read-role office refuses to boot without the writer's two stores (see
   // server.mjs § OAUTH_DB_PATH), so they are made here the way the writer makes them.
   const { openDynamic } = await import("../src/dynamic-store.mjs");
   openDynamic(join(tmp, "dynamic.db")).close();
   const { openOauthDb } = await import("../src/oauth.mjs");
   openOauthDb(join(tmp, "oauth.db")).close();
+  seedStaticKeys(join(tmp, "oauth.db"), `${KEY}=keemin:wright`); // POS-352: the static row every office here reads
   pool = startReadPool({
     size: 2,
     entry: new URL("../src/server.mjs", import.meta.url),
     argv: ["--port", "0", "--db", join(tmp, "fixture.db"), "--oauth-db", join(tmp, "oauth.db"), "--roles-db", join(tmp, "roles.db")],
-    env: { ...process.env, OFFICE_KEYS: `${KEY}=keemin:wright`, WORLD_DYNAMIC_DB: join(tmp, "dynamic.db"), TOWN_CLONE: join(ROOT, "town-clone") },
+    env: { ...process.env, ...IX?.env, WORLD_GRAPH_NONE: "1", WORLD_DYNAMIC_DB: join(tmp, "dynamic.db"), TOWN_CLONE: join(ROOT, "town-clone") },
     log: { error: () => {} },
   });
   await until("both workers to be ready", () => pool.disclose().ready === 2);
@@ -123,6 +129,7 @@ before(async () => {
 after(async () => {
   if (pool) await pool.close();
   for (const [k, v] of Object.entries(was)) if (v == null) delete process.env[k]; else process.env[k] = v;
+  await IX?.stop();
   if (tmp) rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
@@ -261,7 +268,7 @@ test("§ 4 a real office hands the agents' reads to its worker and keeps the act
     join(ROOT, "src", "server.mjs"), "--port", String(port),
     "--db", join(tmp, "fixture.db"), "--oauth-db", join(tmp, "oauth.db"), "--roles-db", join(tmp, "roles.db"),
   ], {
-    env: { ...process.env, OFFICE_READ_WORKERS: "1", OFFICE_KEYS: `${KEY}=keemin:wright`,
+    env: { ...process.env, ...IX?.env, WORLD_GRAPH_NONE: "1", OFFICE_READ_WORKERS: "1",
       WORLD_DYNAMIC_DB: join(tmp, "dynamic.db"), TOWN_CLONE: join(ROOT, "town-clone") },
     stdio: ["ignore", "pipe", "pipe"],
   }), { budgetMs: 30_000 });
@@ -311,7 +318,7 @@ test("§ 5 the REST listen is answered by the main thread and hears the say befo
     join(ROOT, "src", "server.mjs"), "--port", String(port),
     "--db", join(tmp, "fixture.db"), "--oauth-db", join(tmp, "oauth.db"), "--roles-db", join(tmp, "roles.db"),
   ], {
-    env: { ...process.env, OFFICE_READ_WORKERS: "1", WORLD_APEX: "1", OFFICE_KEYS: `${KEY}=keemin:wright`,
+    env: { ...process.env, ...IX?.env, OFFICE_READ_WORKERS: "1", WORLD_APEX: "1",
       WORLD_GRAPH_ROWS: `${worldDb}.rows.json`, WORLD_STORE_DB: join(tmp, "no-world-db-here.db"),   // the world is the rows (POS-270 lane W 3a)
       VOICES_LOG: join(tmp, "voices-5.jsonl"),
       WORLD_DYNAMIC_DB: join(tmp, "dynamic.db"), TOWN_CLONE: join(ROOT, "town-clone") },
@@ -364,7 +371,7 @@ test("§ 6 a `before:` page is answered by the main thread; at the door a voice 
     join(ROOT, "src", "server.mjs"), "--port", String(port),
     "--db", join(tmp, "fixture.db"), "--oauth-db", join(tmp, "oauth.db"), "--roles-db", join(tmp, "roles.db"),
   ], {
-    env: { ...process.env, OFFICE_READ_WORKERS: "1", WORLD_APEX: "1", OFFICE_KEYS: `${KEY}=keemin:wright`,
+    env: { ...process.env, ...IX?.env, OFFICE_READ_WORKERS: "1", WORLD_APEX: "1",
       WORLD_GRAPH_ROWS: `${worldDb}.rows.json`, WORLD_STORE_DB: join(tmp, "no-world-db-here.db"),   // the world is the rows (POS-270 lane W 3a)
       VOICES_LOG: voicesLog,
       WORLD_DYNAMIC_DB: join(tmp, "dynamic.db"), TOWN_CLONE: join(ROOT, "town-clone") },
@@ -423,13 +430,14 @@ test("§ 6 a `before:` page is answered by the main thread; at the door a voice 
 // one (which writes nothing) still goes to the worker. The answer's bytes are
 // the same on both threads. Whether the clear lands is proved with a store in
 // test/unread.test.mjs (§ 7, through the stub) and against a real Postgres in
-// the lane's paperwork; this office has no store, so it proves the ROUTING.
+// the lane's paperwork; this office proves the ROUTING.
 test("§ 7 a keyed full letter read stays on the main thread; a keyless one goes to the worker, and the bytes agree", async () => {
   const KEY2 = "read-workers-test-key-limen";
-  const env = { ...process.env, OFFICE_READ_WORKERS: "1", WORLD_APEX: "1",
-    OFFICE_KEYS: `${KEY}=keemin:wright;${KEY2}=limen-house:limen`,
+  seedStaticKeys(join(tmp, "oauth.db"), `${KEY2}=limen-house:limen`);
+  const env = { ...process.env, ...IX?.env, WORLD_GRAPH_NONE: "1", OFFICE_READ_WORKERS: "1", WORLD_APEX: "1",
     WORLD_DYNAMIC_DB: join(tmp, "dynamic.db"), TOWN_CLONE: join(ROOT, "town-clone") };
-  delete env.WORLD2_PG; delete env.WORLD2_PG_URL;
+  // no record of its own; switched, the index's store is the one store it is given (POS-268)
+  if (!IX?.env.WORLD2_PG) { delete env.WORLD2_PG; delete env.WORLD2_PG_URL; }
   // The port is asked of the OS, never chosen (spawn-office.mjs § the port,
   // asked for); it was a berth derived from the pid, a guess at a door every
   // pool tree on the box shares.

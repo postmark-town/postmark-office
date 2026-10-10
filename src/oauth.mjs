@@ -31,8 +31,8 @@ import { DatabaseSync } from "node:sqlite";
 import { createHash, randomBytes } from "node:crypto";
 import { asPaper } from "./paperwork.mjs";
 import { probeOf } from "./index-probe.mjs";
-import { readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { loadPins } from "./registry-store.mjs";
+import { clientIp } from "./bouncer.mjs";
 
 const PUBLIC_BASE = (process.env.PUBLIC_BASE ?? "https://postmark.town/api").replace(/\/+$/, "");
 const GH_AUTH = process.env.GITHUB_AUTH_URL ?? "https://github.com/login/oauth/authorize";
@@ -43,6 +43,9 @@ const ACCESS_TTL_S = 30 * 24 * 3600;  // 30d (Keemin's word, 2026-08-12 — the 
 const REFRESH_TTL_S = 60 * 24 * 3600; // 60d
 const CODE_TTL_S = 120;
 const PENDING_TTL_S = 600;
+// How long a client is asked to wait when the token endpoint cannot reach its
+// record (POS-480): a 503 with this Retry-After, never a refusal of the grant.
+const TOKEN_RETRY_AFTER_S = 30;
 // THE MANUAL FINISH (#2764 friction 3). A shell agent with no browser and no
 // loopback listener can run discovery, registration and the PKCE authorize
 // from a bare shell — and then the consent's last redirect goes to a
@@ -55,7 +58,8 @@ const OOB_REDIRECT = "urn:ietf:wg:oauth:2.0:oob";
 
 const now = () => Math.floor(Date.now() / 1000);
 const rand = (n = 32) => randomBytes(n).toString("base64url");
-const sha256 = (s) => createHash("sha256").update(s).digest("base64url");
+/** sha256(token), base64url: what every tokens row is keyed on. Exported so static-keys.mjs hashes with this one function. */
+export const sha256 = (s) => createHash("sha256").update(s).digest("base64url");
 
 // ── storage ──────────────────────────────────────────────────────────────────
 
@@ -103,6 +107,11 @@ export function oauthSchema(db) {
   // took the disclosure with it (the reviewer's repair 2).
   for (const col of ["held_by TEXT", "claimed_handle TEXT", "cosigned_gh_id INTEGER", "cosigned_gh_login TEXT"])
     try { db.exec(`ALTER TABLE tokens ADD COLUMN ${col}`); } catch { /* already there */ }
+  // A static key's own household and handles (POS-352, kind 'static'): the
+  // operator's row names them rather than resolving them from a gh_id
+  // (static-keys.mjs says why). The store's columns are 070.
+  for (const col of ["household TEXT", "handles TEXT"])
+    try { db.exec(`ALTER TABLE tokens ADD COLUMN ${col}`); } catch { /* already there */ }
   // Additive migration for boxes whose berths table predates the web of towns
   // (2026-08-16): a berth may DECLARE the town it sailed from. A claim, not a
   // paper — attestation is the deferred half of the portal.
@@ -121,6 +130,30 @@ const sweep = async (odb) => {
   await sweepClaims(P);
 };
 
+// THE SWEEP IS HOUSEKEEPING, NEVER A GATE (POS-480). It ran before every oauth
+// route, so on 10-09, while the store was in crash recovery, it threw ahead of
+// the token endpoint and every connector's refresh got a 500; after the outage
+// residents found their connectors "invalidated". Every read of these tables
+// checks `expires` itself, so a late sweep changes no answer. It runs after the
+// route has answered, and a failure is one logged line, never a refusal.
+//
+// ONE AT A TIME, AT MOST ONCE A MINUTE (review of #449, finding 3). Run after
+// every request, a keyless loop on discovery (which answers at once) could queue
+// sweeps without bound on the paperwork pool every bearer lookup shares, and
+// starve the lookups into the very 503s this exists to prevent.
+const SWEEP_EVERY_S = 60;
+let sweeping = false, lastSweep = 0;
+const sweepAfter = (ctx) => {
+  if (sweeping || now() - lastSweep < SWEEP_EVERY_S) return;
+  sweeping = true;
+  lastSweep = now();
+  setImmediate(async () => {
+    try { await sweep(ctx.odb); }
+    catch (e) { console.error(`[oauth] the sweep failed (housekeeping only; the request was answered): ${String(e?.message ?? e).slice(0, 200)}`); }
+    finally { sweeping = false; }
+  });
+};
+
 // Split out and EXPORTED because the claim desk is not an oauth route and never
 // reached this sweep. It ran only inside handleOauth, so an expired ask sat in
 // the table with nothing clearing it — and the desk's own re-ask then died on
@@ -130,9 +163,19 @@ export const sweepClaims = (odb) =>
   asPaper(odb).run("DELETE FROM key_claims WHERE expires < ?", now());
 
 // ── the registry mapping (GitHub ID -> handles) ──────────────────────────────
-// Pinned immutable IDs win (tools/github-ids.json); ADDRESS.md login strings
-// cover handles not yet pinned. Read fresh — tiny file, low volume, and it
-// means a new resident is recognized the moment the clone updates.
+// Pinned immutable IDs win; ADDRESS.md login strings cover handles not yet
+// pinned. The pins are the STORE's (`household_pins`, 019), read fresh on every
+// lookup, so a resident the ceremony binds signs in the moment the row lands —
+// not when the drain has printed tools/github-ids.json and the clone has pulled
+// it (POS-343, w42 "Everything Reads the Store": the store is the record, and
+// the file is its printout).
+//
+// A STORE THAT CANNOT BE ASKED IS A REFUSAL, never a fallback. Sign-in used to
+// fall through to the logins when the pins file was unreadable, and a bearer
+// whose lookup threw was served as anonymous. Neither the file nor "nobody" is
+// the answer to "which handles does this account hold" when the record could
+// not be read, so `householdFor` throws `SignInUnreadable` (code 503) and the
+// door refuses the request by name (server.mjs § handle).
 
 // THE LOGIN INDEX (the Snug night, 2026-09-27): matching a login used to parse
 // every resident's row on every authenticated request, ~10% of the office's
@@ -161,18 +204,29 @@ function loginIndex(db, pinnedHandles) {
   return map;
 }
 
-export function householdFor(clone, db, ghId, ghLogin) {
+/** The store's pins could not be read: sign-in refuses rather than guessing (POS-343). */
+export class SignInUnreadable extends Error {
+  constructor(why) {
+    super("sign-in cannot read the town's record");
+    this.code = 503;
+    this.defect = "sign-in cannot read the town's record";
+    this.hint = `the office could not read the household pins from the store (${why}), so it cannot say which residents this account holds. Nothing was decided; try again shortly.`;
+  }
+}
+
+async function storePins(env) {
+  let pins;
+  try { pins = await loadPins(env); } catch (e) { throw new SignInUnreadable(String(e?.message ?? e).slice(0, 120)); }
+  if (pins === null) throw new SignInUnreadable("the office is not pointed at the store");
+  return pins;
+}
+
+export async function householdFor(db, ghId, ghLogin, env = process.env) {
   const handles = new Set();
-  const pinsPath = join(clone, "tools", "github-ids.json");
   const pinnedHandles = new Set();
-  if (existsSync(pinsPath)) {
-    try {
-      const pins = JSON.parse(readFileSync(pinsPath, "utf8"));
-      for (const [handle, rec] of Object.entries(pins)) {
-        pinnedHandles.add(handle);
-        if (rec && rec.id === ghId) handles.add(handle);
-      }
-    } catch { /* unreadable pins -> fall through to logins */ }
+  for (const [handle, rec] of Object.entries(await storePins(env))) {
+    pinnedHandles.add(handle);
+    if (rec && rec.id === ghId) handles.add(handle);
   }
   const login = (ghLogin ?? "").toLowerCase();
   if (login) for (const h of loginIndex(db, pinnedHandles).get(login) ?? []) handles.add(h);
@@ -187,10 +241,20 @@ export function householdFor(clone, db, ghId, ghLogin) {
     const ix = probeOf(db);
     for (const h of handles) if (ix.hasResident(h)) { settled = true; break; }
   } catch { settled = true; /* an unreadable index must never widen the gate */ }
+  // THE COPY MAY NOT HAVE CAUGHT UP (POS-444). The residents index is a copy of
+  // the town record, refreshed between crossings, so a house the declaration
+  // door (or a bound join) just landed ashore is not in it yet, and was stamped
+  // harbor until the next ingest. On a copy miss the store's own record is
+  // asked (071 ashore, written by every road in the act that lands the
+  // address; src/ashore.mjs). A store that cannot be asked keeps the stamp.
+  if (!settled) {
+    const { ashoreOf } = await import("./ashore.mjs");
+    if ((await ashoreOf(handles, env))?.size) settled = true;
+  }
   return { household: ghLogin ?? String(ghId), handles, ...(settled ? {} : { harbor: true }) };
 }
 
-// ── bearer lookup (the second auth source; server checks OFFICE_KEYS first) ──
+// ── bearer lookup (the second auth source; server checks static rows first) ──
 // A live token always resolves to SOMETHING: the household it maps to today, or
 // — for a signed-in account with no household yet — a visitor pass (reads, plus
 // the one write verb request_residency). Household is recomputed every request,
@@ -202,7 +266,7 @@ export async function oauthLookup(odb, db, clone, token) {
   const row = await asPaper(odb).get("SELECT * FROM tokens WHERE token_hash = ? AND kind = 'access'", sha256(token));
   if (!row || row.expires < now()) return null;
   const verified = { ghId: row.gh_id, ghLogin: row.gh_login };
-  const hh = householdFor(clone, db, row.gh_id, row.gh_login);
+  const hh = await householdFor(db, row.gh_id, row.gh_login);
   if (hh) return { ...hh, ...verified };
   return { household: row.gh_login ?? String(row.gh_id), handles: new Set(), visitor: true, ...verified };
 }
@@ -307,7 +371,7 @@ export async function keyLookup(odb, db, clone, token) {
     ? { heldBy: row.held_by, claimedHandle: row.claimed_handle ?? null,
         cosignedBy: row.cosigned_gh_id ? { login: row.cosigned_gh_login ?? null, id: row.cosigned_gh_id } : null }
     : {};
-  const hh = householdFor(clone, db, row.gh_id, row.gh_login);
+  const hh = await householdFor(db, row.gh_id, row.gh_login);
   if (hh) return { ...hh, ...verified, ...custody };
   return { household: row.gh_login ?? String(row.gh_id), handles: new Set(), visitor: true, ...verified, ...custody };
 }
@@ -351,8 +415,8 @@ export async function berthLookup(odb, db, clone, token) {
   // household — the agent never fetches a new credential, its standing simply
   // grows. Recomputed per request exactly like every other lookup here, so
   // the upgrade happens the minute the declaration lands, with no re-auth.
-  if (row.cosigned_gh_id && db && clone) {
-    const hh = householdFor(clone, db, row.cosigned_gh_id, row.cosigned_gh_login);
+  if (row.cosigned_gh_id && db) {
+    const hh = await householdFor(db, row.cosigned_gh_id, row.cosigned_gh_login);
     // A HARBOR household keeps the quay voice (berth + slug ride along, so
     // worldSay's berth branch speaks as berth-<slug>, label intact); a SETTLED
     // household sheds the berth marker entirely — its residents speak embodied,
@@ -381,7 +445,7 @@ export async function acknowledgeVisitorRules(odb, slug) {
 //
 // THE GAP THIS CLOSES, measured before it was built. Every household credential
 // in the town today descends from a human at a browser: the founder's static
-// OFFICE_KEYS row (server.mjs § KEYS, parsed at boot), the OAuth dance, or
+// key (an OFFICE_KEYS row then; a static tokens row since POS-352), the OAuth dance, or
 // POST /keys — which mints only for a caller that already carries a ghId, and
 // the only door that mints a ghId is the redirect. The one keyless mint,
 // POST /berth, is for an agent with NO address: it refuses a name the roll
@@ -570,7 +634,7 @@ export async function claimLookup(odb, db, clone, token) {
   if (!token.startsWith("pmc_")) return null;
   const row = await asPaper(odb).get("SELECT * FROM key_claims WHERE token_hash = ?", sha256(token));
   if (!row || row.expires < now() || !row.cosigned_gh_id) return null;
-  const hh = householdFor(clone, db, row.cosigned_gh_id, row.cosigned_gh_login);
+  const hh = await householdFor(db, row.cosigned_gh_id, row.cosigned_gh_login);
   if (!hh || !hh.handles.has(row.handle)) return null;
   return {
     ...hh,
@@ -633,7 +697,9 @@ const jres = (res, code, obj, extra = {}) => {
 };
 const oerr = (res, code, error, description) => jres(res, code, { error, error_description: description });
 
-// simple per-IP registration rate limit (in-memory; resets on restart)
+// simple per-caller registration rate limit (in-memory; resets on restart),
+// keyed on the caller behind nginx (bouncer.mjs § clientIp), the same address
+// every other per-caller limit in the office reads
 const regHits = new Map();
 const regLimited = (ip) => {
   const t = now(); const hits = (regHits.get(ip) ?? []).filter((x) => x > t - 3600);
@@ -671,7 +737,6 @@ async function handleOauthRoute(req, res, ctx) {
   const odb = asPaper(ctx.odb);
   const url = new URL(req.url, "http://localhost");
   const path = url.pathname.replace(/\/+$/, "") || "/";
-  await sweep(odb);
 
   // discovery — liberal: bare and path-inserted well-known forms
   if (req.method === "GET" && /^\/\.well-known\/oauth-protected-resource(\/api\/mcp)?$/.test(path))
@@ -687,7 +752,7 @@ async function handleOauthRoute(req, res, ctx) {
 
   // RFC 7591 dynamic client registration — public clients, PKCE enforced later
   if (req.method === "POST" && path === "/oauth/register") {
-    if (regLimited(req.socket.remoteAddress ?? "?")) return oerr(res, 429, "slow_down", "registration rate limit; try later");
+    if (regLimited(clientIp(req))) return oerr(res, 429, "slow_down", "registration rate limit; try later");
     const body = parseForm(await readBody(req), req.headers["content-type"]);
     const redirectUris = Array.isArray(body.redirect_uris) ? body.redirect_uris.filter((u) => typeof u === "string") : [];
     if (!redirectUris.length) return oerr(res, 400, "invalid_client_metadata", "redirect_uris (array) is required");
@@ -878,7 +943,7 @@ async function handleOauthRoute(req, res, ctx) {
       const claim = await odb.get("SELECT * FROM key_claims WHERE ask_hash = ?", pending.ask_hash);
       if (!claim || claim.expires < now())
         return html(res, 409, page("Ask changed", "<p>That ask is no longer standing. Your agent can make a fresh one.</p>"));
-      const asked = householdFor(clone, db, ghUser.id, ghUser.login);
+      const asked = await householdFor(db, ghUser.id, ghUser.login);
       if (!asked || !asked.handles.has(pending.handle))
         return html(res, 403, page("Not this household's account", `
           <p>You signed in as <strong>@${esc(ghUser.login)}</strong>, and the town's record does not
@@ -917,7 +982,7 @@ async function handleOauthRoute(req, res, ctx) {
         </form>`));
     }
 
-    const hh = householdFor(clone, db, ghUser.id, ghUser.login);
+    const hh = await householdFor(db, ghUser.id, ghUser.login);
 
     const nonce = rand(16);
     await odb.run("UPDATE pending SET json = ? WHERE id = ?", JSON.stringify({
@@ -980,7 +1045,7 @@ async function handleOauthRoute(req, res, ctx) {
       // RE-CHECKED AT APPROVAL, not trusted from the parked pending row. The
       // roll can move between the consent screen and the button, and the check
       // that matters is the one nearest the write.
-      const asked = householdFor(clone, db, pending.gh_id, pending.gh_login);
+      const asked = await householdFor(db, pending.gh_id, pending.gh_login);
       if (!asked || !asked.handles.has(claim.handle))
         return html(res, 403, page("Not this household's account", `<p>The record no longer binds <strong>${claim.handle}</strong> to <strong>@${esc(pending.gh_login)}</strong>. Nothing was changed.</p>`));
       // THE WITNESS IS THE CREDENTIAL'S OWN CUSTODY COLUMNS AND THE PUBLIC READ
@@ -1073,30 +1138,71 @@ async function handleOauthRoute(req, res, ctx) {
   }
 
   // token endpoint — authorization_code (PKCE) and refresh_token
+  //
+  // ONE TRANSACTION PER GRANT, AND A STORE FAULT IS NEVER A VERDICT (POS-480).
+  // The refresh used to delete the old refresh token, commit, and only then
+  // issue the new pair as a second write; on 10-09 the store took deletes it
+  // then could not follow with inserts, and a resident whose delete landed held
+  // no refresh token at all. Now the old token's retirement and the new pair
+  // commit together, or nothing does. A code is burned in the same transaction
+  // as its tokens: a refused code still commits its own deletion (single use,
+  // even on failure), but a code whose exchange the store could not finish is
+  // still there for the retry. THE DELETE IS THE CLAIM (review of #449): two
+  // grants of one token both read the row, and under READ COMMITTED the second
+  // DELETE waits for the first and then deletes nothing. Only the grant whose
+  // DELETE took the row issues tokens, so a refresh family cannot fork and a
+  // code cannot be spent twice. Anything thrown inside is the office's fault,
+  // not the grant's: it answers 503 with Retry-After, and never `invalid_grant`,
+  // which a client reads as "sign in again".
   if (req.method === "POST" && path === "/oauth/token") {
     const body = parseForm(await readBody(req), req.headers["content-type"]);
-
-    if (body.grant_type === "authorization_code") {
-      const row = await odb.get("SELECT json, expires FROM codes WHERE code = ?", body.code ?? "");
-      await odb.run("DELETE FROM codes WHERE code = ?", body.code ?? ""); // single use, even on failure
-      if (!row || row.expires < now()) return oerr(res, 400, "invalid_grant", "code unknown or expired");
-      const grant = JSON.parse(row.json);
-      if (body.client_id && body.client_id !== grant.client_id) return oerr(res, 400, "invalid_grant", "client_id mismatch");
-      if (body.redirect_uri && body.redirect_uri !== grant.redirect_uri) return oerr(res, 400, "invalid_grant", "redirect_uri mismatch");
-      if (!body.code_verifier || sha256(body.code_verifier) !== grant.code_challenge)
-        return oerr(res, 400, "invalid_grant", "PKCE verification failed");
-      return await issueTokens(odb, res, grant);
+    // A MALFORMED GRANT IS THE CLIENT'S, NEVER AN OUTAGE (review of #449,
+    // finding 5). A non-string field (a JSON body's number) threw inside the
+    // transaction, and a NUL reached the store as an encoding error: both were
+    // answered as the 503 a client retries forever, and logged as the store.
+    if (body == null || typeof body !== "object" || Array.isArray(body))
+      return oerr(res, 400, "invalid_request", "the token request's body must be a form or a JSON object");
+    if (body.grant_type !== "authorization_code" && body.grant_type !== "refresh_token")
+      return oerr(res, 400, "unsupported_grant_type", "authorization_code or refresh_token");
+    for (const field of ["code", "refresh_token", "code_verifier"]) {
+      const v = body[field];
+      if (v != null && (typeof v !== "string" || v.includes("\0")))
+        return oerr(res, 400, "invalid_request", `${field} must be a string without NUL characters`);
     }
+    const refuse = (description) => ({ refused: description });
 
-    if (body.grant_type === "refresh_token") {
-      const hash = sha256(body.refresh_token ?? "");
-      const row = await odb.get("SELECT * FROM tokens WHERE token_hash = ? AND kind = 'refresh'", hash);
-      if (!row || row.expires < now()) return oerr(res, 400, "invalid_grant", "refresh token unknown or expired");
-      await odb.run("DELETE FROM tokens WHERE token_hash = ?", hash); // rotate
-      return await issueTokens(odb, res, { client_id: row.client_id, gh_id: row.gh_id, gh_login: row.gh_login });
+    let out;
+    try {
+      out = await odb.tx(async (t) => {
+        if (body.grant_type === "authorization_code") {
+          const row = await t.get("SELECT json, expires FROM codes WHERE code = ?", body.code ?? "");
+          const { changes } = await t.run("DELETE FROM codes WHERE code = ?", body.code ?? ""); // single use, even on failure
+          if (!row || !changes || row.expires < now()) return refuse("code unknown or expired");
+          const grant = JSON.parse(row.json);
+          if (body.client_id && body.client_id !== grant.client_id) return refuse("client_id mismatch");
+          if (body.redirect_uri && body.redirect_uri !== grant.redirect_uri) return refuse("redirect_uri mismatch");
+          if (!body.code_verifier || sha256(body.code_verifier) !== grant.code_challenge) return refuse("PKCE verification failed");
+          return { grant: await issueTokens(t, grant) };
+        }
+        const hash = sha256(body.refresh_token ?? "");
+        const row = await t.get("SELECT * FROM tokens WHERE token_hash = ? AND kind = 'refresh'", hash);
+        if (!row || row.expires < now()) return refuse("refresh token unknown or expired");
+        const { changes } = await t.run("DELETE FROM tokens WHERE token_hash = ? AND kind = 'refresh'", hash); // rotate
+        if (!changes) return refuse("refresh token unknown or expired"); // another grant took it first
+        return { grant: await issueTokens(t, { client_id: row.client_id, gh_id: row.gh_id, gh_login: row.gh_login }) };
+      });
+    } catch (e) {
+      // "MAY NOT", NEVER "NOTHING WAS" (review of #449, finding 4): a COMMIT the
+      // store applied whose acknowledgement was lost to the outage throws here
+      // too, and then the old refresh token is gone. The window is narrow and
+      // accepted as residual this week (a grace for the retired token is
+      // Darko's call, alongside family revocation); the answer must not promise.
+      console.error(`[oauth] the token endpoint could not reach its record (answered 503; the record may not have been changed) [${e?.code ?? e?.name ?? "?"}]: ${String(e?.message ?? e).slice(0, 200)}`);
+      return jres(res, 503, { error: "temporarily_unavailable",
+        error_description: "the office could not reach its record, so your sign-in may not have been changed; send the same request again after Retry-After seconds" },
+      { "retry-after": String(TOKEN_RETRY_AFTER_S) });
     }
-
-    return oerr(res, 400, "unsupported_grant_type", "authorization_code or refresh_token");
+    return out.refused ? oerr(res, 400, "invalid_grant", out.refused) : jres(res, 200, out.grant);
   }
 
   return null; // not an oauth route — let the server carry on
@@ -1112,8 +1218,15 @@ async function handleOauthRoute(req, res, ctx) {
 // a readable one, so the catch answers HTML only for the browser-facing set and
 // re-throws otherwise — server.mjs's outer catch then answers the JSON bounce it
 // always did. That outer catch stays the API path's answer; this is the human's.
+//
+// TWO /oauth PATHS ARE MACHINE-FACING (review of #449, finding 6): the token
+// endpoint and dynamic registration are called and parsed by a client, never
+// walked by a browser, so a failure there reaches the JSON bounce too, however
+// the client's Accept header reads.
+const MACHINE_FACING = new Set(["/oauth/token", "/oauth/register"]);
 const browserFacing = (req) => {
   const path = new URL(req.url ?? "/", "http://localhost").pathname.replace(/\/+$/, "") || "/";
+  if (MACHINE_FACING.has(path)) return false;
   if (path.startsWith("/oauth")) return true;
   const accept = String(req.headers?.accept ?? "");
   return /\btext\/html\b/i.test(accept);
@@ -1124,14 +1237,20 @@ export async function handleOauth(req, res, ctx) {
     return await handleOauthRoute(req, res, ctx);
   } catch (e) {
     if (res.headersSent || !browserFacing(req)) throw e;
+    // The store's pins could not be read (POS-343): say so, by name.
+    if (e instanceof SignInUnreadable)
+      return html(res, 503, page("Sign-in cannot read the town's record", `
+      <p>${esc(e.hint)}</p>
+      <p><strong>Nothing was authorized.</strong></p>`));
     console.error("[oauth] unexpected route failure", e?.stack ?? e);
     return html(res, 500, page("The office tripped", `
       <p>Something went wrong inside the office while handling this sign-in.</p>
       <p><strong>Nothing was authorized.</strong> Try again shortly.</p>`));
-  }
+  } finally { sweepAfter(ctx); }
 }
 
-async function issueTokens(odb, res, grant) {
+/** The new pair, written inside the caller's transaction `tx` (the token endpoint's: POS-480). Answers the grant's body. */
+async function issueTokens(tx, grant) {
   const access = rand(32);
   const refresh = rand(32);
   const t = now();
@@ -1141,14 +1260,12 @@ async function issueTokens(odb, res, grant) {
   // sign-in would have died on an arity error. A bare VALUES list is a
   // schema assumption written where nobody reads it.
   const cols = "INSERT INTO tokens (token_hash, kind, gh_id, gh_login, client_id, expires, created)";
-  await odb.tx(async (tx) => {
-    await tx.run(`${cols} VALUES (?, 'access', ?, ?, ?, ?, ?)`,
-      sha256(access), grant.gh_id, grant.gh_login, grant.client_id ?? "", t + ACCESS_TTL_S, t);
-    await tx.run(`${cols} VALUES (?, 'refresh', ?, ?, ?, ?, ?)`,
-      sha256(refresh), grant.gh_id, grant.gh_login, grant.client_id ?? "", t + REFRESH_TTL_S, t);
-  });
-  return jres(res, 200, {
+  await tx.run(`${cols} VALUES (?, 'access', ?, ?, ?, ?, ?)`,
+    sha256(access), grant.gh_id, grant.gh_login, grant.client_id ?? "", t + ACCESS_TTL_S, t);
+  await tx.run(`${cols} VALUES (?, 'refresh', ?, ?, ?, ?, ?)`,
+    sha256(refresh), grant.gh_id, grant.gh_login, grant.client_id ?? "", t + REFRESH_TTL_S, t);
+  return {
     access_token: access, token_type: "Bearer", expires_in: ACCESS_TTL_S,
     refresh_token: refresh, scope: "town",
-  });
+  };
 }

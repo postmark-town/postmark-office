@@ -15,7 +15,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
@@ -25,6 +25,7 @@ import { INTAKE, USDC, TRANSFER_TOPIC, MIN_CONF } from "../src/usdc-witness.mjs"
 import { foldRegistry, readWalletRegistry, handleForAddress, registrationLine, DEFAULT_REGISTRY } from "../src/wallet-registry.mjs";
 import { CROSSING_MS } from "../src/crossings.mjs";
 import { NO_TOWN, townClone, townModuleUrl } from "./fixture-paths.mjs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import {
   watch, resolveArrivals, decodeArrival, readIntakeMap, intakeAddresses,
   sinkEnabled, SINK_FLAG, SINK_POT, SINK_AGE_DAYS, OUTSIDE_FROM, UNREGISTERED,
@@ -88,7 +89,7 @@ function chain({ head = 5000, logs = [], blockTs = null } = {}) {
 
 function seamTown({ wallets = {}, pots = { "pot-a": 1000, "pot-b": 1000 } } = {}) {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
-  const repo = mkdtempSync(join(tmpdir(), "usdc-town-"));
+  const repo = tempDir("usdc-town-");
   mkdirSync(join(repo, "tools"), { recursive: true });
   mkdirSync(join(repo, "WHITE_PAGES"), { recursive: true });
   writeFileSync(join(repo, "tools", "github-ids.json"), JSON.stringify({ paz: { login: "p", id: 2 }, stan: { login: "s", id: 1 } }));

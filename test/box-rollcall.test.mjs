@@ -36,9 +36,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { writeFileSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { writeFileSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { tmpdir } from "node:os";
 import { join, dirname, delimiter } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -76,6 +75,7 @@ import {
   classifyTree,
   declaredTree,
   unrowedTrees,
+  parseDiscovery,
   serviceOf,
   pickEnv,
   readRelease,
@@ -84,6 +84,7 @@ import {
   COPY_SCAN_CAP,
   MINUTE,
 } from "../tools/box-rollcall.mjs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MANIFEST_PATH = join(HERE, "..", "deploy", "box-rollcall-manifest.json");
@@ -638,6 +639,46 @@ test("FALSIFIER (g): a PARKED row that the box has ENABLED is ALARM-unparked", (
   assert.match(row.reason, /recorded PARKED in the manifest but the box has it/);
 });
 
+test("FALSIFIER (g2): a PARKED read@ row alarms once its instance is ENABLED, and once it was started by hand and FAILED (#471 review)", () => {
+  // The read pool's rows are parked (POS-522). A worker someone starts by hand
+  // and that then dies is disabled AND failed, and until the #471 review that
+  // read PARKED: a quiet board over a rail that ran. Planted rather than read
+  // from the shipped read@ rows, so this keeps asserting after the pool is adopted.
+  const unit = "postmark-office-read@4399.service";
+  const m = manifest();
+  const planted = {
+    ...m,
+    units: [...m.units, {
+      unit,
+      label: "a planted read worker",
+      stage: "parked",
+      activation_owner: "planted by test/box-rollcall.test.mjs — this row is not on the box",
+      cadence: "always on, once adopted",
+      cadence_source: `systemctl show ${unit} -p ActiveState`,
+      parked_because: "planted",
+      adopt_command: `sudo systemctl enable --now ${unit}`,
+      heartbeat: { kind: "unit_active" },
+      no_staleness_because: "an always-on daemon is judged by being up",
+      stale_means: "nothing, while parked — a parked row is never alarmed for being inert",
+    }],
+  };
+  const base = healthy(planted);
+  const withUnit = (state) => mutate(base, (s) => { s.units[unit] = { load_state: "loaded", result: "", ...state }; });
+
+  // The control: the template is installed and the instance never ran.
+  const quiet = withUnit({ active_state: "inactive", unit_file_state: "disabled" });
+  assert.equal(rowFor(rollcall(planted, quiet, T0), unit).verdict, PARKED);
+
+  const enabled = withUnit({ active_state: "active", unit_file_state: "enabled" });
+  assert.equal(rowFor(rollcall(planted, enabled, T0), unit).verdict, ALARM_UNPARKED);
+
+  const died = withUnit({ active_state: "failed", unit_file_state: "disabled", result: "exit-code" });
+  const row = rowFor(rollcall(planted, died, T0), unit);
+  assert.equal(row.verdict, ALARM_UNPARKED);
+  assert.match(row.reason, /failed \(disabled\): it ran and died/);
+  assert.equal(rollcall(planted, died, T0).exitCode, 1);
+});
+
 test("a PARKED row is printed, counted apart from OK, and never contributes to the exit code", () => {
   const m = parkedManifest();
   const result = rollcall(m, healthy(m), T0);
@@ -678,6 +719,110 @@ test("FALSIFIER (h): a unit on the box that NO manifest row names is ALARM-unman
   assert.equal(result.exitCode, 1);
 });
 
+test("FALSIFIER (h2): a running INSTANCE of a template is discovered, and the template's own file line is not a unit (POS-522)", () => {
+  // `list-unit-files` lists files, so an enabled template is one line however
+  // many instances run, and a dead read worker raised no alarm in either
+  // direction (postmark-office#354). The live listing is where instances are.
+  const unitFiles = [
+    "postmark-ferry.timer                 enabled  enabled",
+    "postmark-ferry.service               static   -",
+    "postmark-office.service              enabled  enabled",
+    "postmark-office-read@.service        indirect enabled",
+    "postmark-settlement-by-hand.service  static   -",
+  ].join("\n");
+  const live = [
+    "postmark-ferry.service             loaded activating start   Postmark ferry crossing",
+    "postmark-ferry.timer               loaded active     waiting Postmark ferry crossing",
+    "postmark-office-read@4391.service  loaded active     running Postmark office READ WORKER on port 4391",
+    "● postmark-office-read@4392.service loaded failed    failed  Postmark office READ WORKER on port 4392",
+    "postmark-office.service            loaded active     running Postmark office",
+  ].join("\n");
+
+  assert.deepEqual(parseDiscovery(unitFiles, live), [
+    "postmark-ferry.timer",
+    "postmark-office-read@4391.service",
+    "postmark-office-read@4392.service",
+    "postmark-office.service",
+  ]);
+  // The control: the file listing alone, as discovery read the box before
+  // POS-522, never names an instance, so no row could be asked for one.
+  assert.deepEqual(parseDiscovery(unitFiles), ["postmark-ferry.timer", "postmark-office.service"]);
+
+  // And through the judgment: a worker the box runs that no row names alarms.
+  const m = manifest();
+  const s = mutate(healthy(m), (x) => {
+    x.discovered.push("postmark-office-read@4399.service");
+    x.services["postmark-office-read@4399.service"] = { load_state: "loaded", active_state: "active", unit_file_state: "enabled" };
+  });
+  assert.equal(rowFor(rollcall(m, s, T0), "postmark-office-read@4399.service").verdict, ALARM_UNMANIFESTED);
+});
+
+// The unit files a box can run on its own: every timer, and every service with
+// an [Install] section that is not a timer's body. A template counts once per
+// INSTANCE, so a row must name an instance of it.
+const DEPLOY_DIR = join(HERE, "..", "deploy");
+function deployUnitFiles() {
+  return readdirSync(DEPLOY_DIR)
+    .filter((f) => /^postmark-.*\.(service|timer)$/.test(f))
+    .map((f) => ({ file: f, installable: /^\[Install\]/m.test(readFileSync(join(DEPLOY_DIR, f), "utf8")) }));
+}
+
+function unrowedDeployUnits(m, files) {
+  const named = new Set(m.units.map((r) => r.unit));
+  const names = new Set(files.map((f) => f.file));
+  const gaps = [];
+  for (const { file, installable } of files) {
+    if (file.endsWith(".timer")) { if (!named.has(file)) gaps.push(file); continue; }
+    if (names.has(file.replace(/\.service$/, ".timer"))) continue; // its timer's row speaks for it
+    if (!installable) continue; // static: started by hand or pulled in, never enabled, never discovered
+    if (file.includes("@.")) {
+      const [pre, post] = file.split("@");
+      const instance = new RegExp(`^${pre}@[^.@]+${post.replace(/\./g, "\\.")}$`);
+      if (![...named].some((u) => instance.test(u))) gaps.push(file);
+      continue;
+    }
+    if (!named.has(file)) gaps.push(file);
+  }
+  return gaps;
+}
+
+function unfiledRows(m, files) {
+  const names = new Set(files.map((f) => f.file));
+  return [...new Set(m.units.filter((r) => !r.box_only && !names.has(r.unit.replace(/@[^.@]+\./, "@."))).map((r) => r.unit))];
+}
+
+test("FALSIFIER (h3): every unit in deploy/ the box could run has a row, and every row's unit is in deploy/ or says where it lives (POS-522)", () => {
+  // ALARM-unmanifested catches this on the box, the morning after an install.
+  // This catches it on the PR that adds the unit: the read pool's template sat
+  // in deploy/ from 2026-09-08 with no row, and the dev office's row named a
+  // unit whose file nobody could read.
+  const m = manifest();
+  const files = deployUnitFiles();
+  assert.ok(files.length > 30, `read ${files.length} unit files from deploy/; the reader is wrong`);
+  assert.deepEqual(unrowedDeployUnits(m, files), [], "a unit in deploy/ with no roll-call row");
+  assert.deepEqual(unfiledRows(m, files), [], "a roll-call row whose unit is not in deploy/ and does not say box_only");
+
+  // The check is not vacuous: a planted timer, an installable service and a
+  // template with no instance row are each named, and a static body is not.
+  const planted = [
+    ...files,
+    { file: "postmark-planted.timer", installable: true },
+    { file: "postmark-planted-daemon.service", installable: true },
+    { file: "postmark-planted-pool@.service", installable: true },
+    { file: "postmark-planted-by-hand.service", installable: false },
+  ];
+  assert.deepEqual(unrowedDeployUnits(m, planted), ["postmark-planted.timer", "postmark-planted-daemon.service", "postmark-planted-pool@.service"]);
+
+  // A box-only row carries its path and its reason, and the loader refuses one that does not.
+  const dir = tempDir("box-rollcall-");
+  const tmp = join(dir, "manifest.json");
+  const row = { unit: "postmark-x.service", stage: "live", activation_owner: "planted by the test" };
+  writeFileSync(tmp, JSON.stringify({ units: [{ ...row, box_only: { why: "only on the box" } }] }));
+  assert.throws(() => loadManifest(tmp), /names no absolute path/);
+  writeFileSync(tmp, JSON.stringify({ units: [{ ...row, box_only: { path: "/etc/systemd/system/postmark-x.service" } }] }));
+  assert.throws(() => loadManifest(tmp), /does not say why/);
+});
+
 // ── §7 THE MANIFEST'S OWN LAW ───────────────────────────────────────────────
 
 test("the manifest refuses a row with no activation owner — 'a mechanism folds only with … its activation owner named'", () => {
@@ -694,7 +839,7 @@ test("the manifest refuses a row with no activation owner — 'a mechanism folds
   // otherwise the rule holds only for rows that existed when it was written.
   const stripped = JSON.parse(JSON.stringify(m));
   delete stripped.units[0].activation_owner;
-  const dir = mkdtempSync(join(tmpdir(), "box-rollcall-"));
+  const dir = tempDir("box-rollcall-");
   const tmp = join(dir, "manifest.json");
   writeFileSync(tmp, JSON.stringify(stripped));
   assert.throws(() => loadManifest(tmp), /names no activation_owner/);
@@ -1152,7 +1297,7 @@ test("FALSIFIER (o3): a by-hand publication inside an otherwise-empty window doe
 test("a row judged by its output must declare unsettled_runs — the manifest refuses one that does not", () => {
   // Without it a refusal that returns twice a day forever reads green, which is
   // the exact silence this whole block exists to end.
-  const dir = mkdtempSync(join(tmpdir(), "rollcall-outcome-"));
+  const dir = tempDir("rollcall-outcome-");
   const m = manifest();
   const bad = {
     ...m,
@@ -1228,7 +1373,7 @@ test("FALSIFIER (k4): a custody path that is not on the box at all is an alarm, 
 test("a custody row must say what breaks when custody slips — the manifest refuses one that cannot", () => {
   // The same discipline as activation_owner on a unit row: a row that cannot say
   // why it matters is a row nobody will act on when it reddens.
-  const dir = mkdtempSync(join(tmpdir(), "rollcall-custody-"));
+  const dir = tempDir("rollcall-custody-");
   const m = manifest();
   const bad = { ...m, custody: [{ id: "x", path: "/tmp/x", must_be_owned_by: "meepo" }] };
   const p = join(dir, "manifest.json");
@@ -1322,12 +1467,13 @@ test("FALSIFIER (k5): a root-owned file in either dev clone is ALARM-custody, NA
   }
 });
 
-// The freshen itself, run for real under bash with two stubs on the road: a
-// `flock` that drops its lock arguments and execs the command, and a `git` that
+// The freshen itself, run for real under bash with three stubs on the road: a
+// `flock` that drops its lock arguments and execs the command, a `git` that
 // logs every call and — when FRESHEN_FAIL names a verb — refuses that verb the
-// way the box did (Permission denied, exit 128). The script is the shipped
-// file, unedited; POSTMARK_DEV_ROOT / POSTMARK_DEV_FLOCK are the two seams it
-// declares, and the unit sets neither.
+// way the box did (Permission denied, exit 128), and a `node` that logs the
+// re-sign it was asked for (POS-354) and refuses it when FRESHEN_NODE_FAIL is
+// set. The script is the shipped file, unedited; POSTMARK_DEV_ROOT /
+// POSTMARK_DEV_FLOCK are the seams it declares, and the unit sets neither.
 //
 // THE CAN-FAIL FLIP: delete the `  set -euo pipefail` line INSIDE the bash -c
 // body of deploy/postmark-dev-freshen.sh. The two refusal tests below go red —
@@ -1338,8 +1484,8 @@ const posix = (p) => p.replaceAll("\\", "/");
 const bashProbe = spawnSync("bash", ["-c", "exit 0"], { encoding: "utf8" });
 const noBash = bashProbe.status === 0 ? false : "no bash on this host — the freshen is a bash script and cannot be run without one";
 
-function runFreshen(failVerb) {
-  const dir = mkdtempSync(join(tmpdir(), "pos192-freshen-"));
+function runFreshen(failVerb, { nodeFails = false } = {}) {
+  const dir = tempDir("pos192-freshen-");
   const bin = join(dir, "bin");
   mkdirSync(bin);
   const log = join(dir, "git.log");
@@ -1359,20 +1505,33 @@ function runFreshen(failVerb) {
     'shift 4; exec "$@"',
     "",
   ].join("\n"), { mode: 0o755 });
+  const nodeLog = join(dir, "node.log");
+  writeFileSync(join(bin, "node"), [
+    "#!/usr/bin/env bash",
+    'echo "$*" >> "$FRESHEN_NODE_LOG"',
+    'if [ -n "${FRESHEN_NODE_FAIL:-}" ]; then echo "dev-ledger-resign: REFUSED, the key is prod\'s" >&2; exit 1; fi',
+    "exit 0",
+    "",
+  ].join("\n"), { mode: 0o755 });
   writeFileSync(log, "");
+  writeFileSync(nodeLog, "");
   // Windows keeps PATH under whatever case it was born with; write the one key.
   const env = { ...process.env };
   const pathKey = Object.keys(env).find((k) => k.toUpperCase() === "PATH") ?? "PATH";
   env[pathKey] = `${bin}${delimiter}${env[pathKey] ?? ""}`;
   Object.assign(env, {
     FRESHEN_LOG: posix(log),
+    FRESHEN_NODE_LOG: posix(nodeLog),
     POSTMARK_DEV_ROOT: "/srv/postmark-office-dev",
     POSTMARK_DEV_FLOCK: posix(join(bin, "flock")),
   });
   if (failVerb) env.FRESHEN_FAIL = failVerb; else delete env.FRESHEN_FAIL;
+  if (nodeFails) env.FRESHEN_NODE_FAIL = "1"; else delete env.FRESHEN_NODE_FAIL;
+  for (const k of ["POSTMARK_DEV_STAMP_KEY", "POSTMARK_PROD_PUBKEY"]) delete env[k]; // the box's defaults
   const r = spawnSync("bash", [posix(FRESHEN)], { encoding: "utf8", env });
   const calls = readFileSync(log, "utf8").split("\n").filter(Boolean);
-  return { status: r.status, stdout: r.stdout, stderr: r.stderr, calls };
+  const nodeCalls = readFileSync(nodeLog, "utf8").split("\n").filter(Boolean);
+  return { status: r.status, stdout: r.stdout, stderr: r.stderr, calls, nodeCalls };
 }
 
 const STOOD_BACK = /dev clones stood back on sandbox\/seed/;
@@ -1388,6 +1547,22 @@ test("the dev freshen, every step succeeding: exit 0, the stand-back line, all s
   ]);
   assert.ok(r.calls[2].startsWith("-C /srv/postmark-office-dev/world-clone reset"));
   assert.ok(r.calls[5].startsWith("-C /srv/postmark-office-dev/town-clone reset"));
+  // then the town clone moves onto dev's own key, refusing prod's by its PUBLIC half only (POS-354; #453 F2)
+  assert.deepEqual(r.nodeCalls, [
+    "/srv/postmark-office-dev/tools/dev-ledger-resign.mjs --town /srv/postmark-office-dev/town-clone " +
+    "--key /srv/postmark-office-dev/stamp-key.pem --not-key /srv/postmark-office/town-clone/tools/stamp-pubkey.pem --verify",
+  ]);
+});
+
+test("FALSIFIER (freshen): a refused re-sign (dev's key is prod's, or the verifier is red) exits nonzero with no stand-back line, after every reset ran", { skip: noBash }, () => {
+  // THE CAN-FAIL FLIP: drop the `node .../dev-ledger-resign.mjs` line from the
+  // freshen's bash -c body; this goes red (exit 0, the stand-back line printed).
+  const r = runFreshen(null, { nodeFails: true });
+  assert.equal(r.status, 1, "the re-sign's refusal must be the unit's exit code");
+  assert.doesNotMatch(r.stdout, STOOD_BACK);
+  assert.match(r.stderr, /REFUSED, the key is prod's/);
+  assert.equal(r.calls.length, 7, "the clones were stood back before the re-sign refused");
+  assert.equal(r.nodeCalls.length, 1);
 });
 
 test("FALSIFIER (freshen): a refused `git reset` exits nonzero with git's code and prints NO stand-back line", { skip: noBash }, () => {
@@ -1399,11 +1574,12 @@ test("FALSIFIER (freshen): a refused `git reset` exits nonzero with git's code a
   assert.ok(r.calls.at(-1).startsWith("-C /srv/postmark-office-dev/world-clone reset"), r.calls.join(" | "));
 });
 
-test("FALSIFIER (freshen): a refused draft-ref fetch, the LAST step, still exits nonzero with no stand-back line", { skip: noBash }, () => {
+test("FALSIFIER (freshen): a refused draft-ref fetch, the last git step, still exits nonzero with no stand-back line", { skip: noBash }, () => {
   const r = runFreshen("--prune");
   assert.equal(r.status, 128);
   assert.doesNotMatch(r.stdout, STOOD_BACK);
   assert.equal(r.calls.length, 7, "every step before the last one must have run");
+  assert.deepEqual(r.nodeCalls, [], "and the re-sign after it never ran");
 });
 
 // ── the list that must be empty (postmark#2594, ruled 2026-09-08) ───────────
@@ -1490,7 +1666,7 @@ test("the shipped manifest's NOTARY row declares the list alarm, and an empty de
   assert.match(row.outcome.history_path, /canon-locks\.jsonl$/);
   // A list-alarm that names no field would pass every other assertion in
   // loadManifest and watch nothing forever.
-  const dir = mkdtempSync(join(tmpdir(), "rollcall-manifest-"));
+  const dir = tempDir("rollcall-manifest-");
   const bad = join(dir, "m.json");
   const m = manifest();
   m.units.find((u) => u.unit === "postmark-world2-notary.timer").outcome.alarm_on_nonempty = [];
@@ -1578,7 +1754,7 @@ test("a row declaring no counts prints no count line, and an empty log leaves it
 });
 
 test("the manifest refuses a count that names no field, has no sentence, or is ALSO an alarm", () => {
-  const dir = mkdtempSync(join(tmpdir(), "rollcall-manifest-"));
+  const dir = tempDir("rollcall-manifest-");
   const bad = join(dir, "m.json");
   const notaryOf = (m) => m.units.find((u) => u.unit === "postmark-world2-notary.timer").outcome;
   let m = manifest(); notaryOf(m).report_counts = [];
@@ -1653,7 +1829,7 @@ test("the shipped NOTARY row declares the flag alarm, and a nameless or voiceles
   assert.match(row.outcome.unchecked_means, /migration 014/, "it must name the pending cause, or the operator hunts the wrong one");
   assert.match(row.outcome.unchecked_means, /never a stake/);
 
-  const dir = mkdtempSync(join(tmpdir(), "rollcall-flag-"));
+  const dir = tempDir("rollcall-flag-");
   for (const [mutate, want] of [
     [(o) => { o.alarm_on_false = []; }, /alarm_on_false that names no field/],
     [(o) => { delete o.unchecked_means; }, /alarm_on_false with no unchecked_means/],
@@ -1886,7 +2062,7 @@ test("a PARKED rail's tree row is reported and alarms on nothing", () => {
 // ── the manifest's own law for §2c ──────────────────────────────────────────
 
 test("the manifest refuses a tree row that cannot say who owns it, what breaks, or why it diverges", () => {
-  const dir = mkdtempSync(join(tmpdir(), "rollcall-trees-"));
+  const dir = tempDir("rollcall-trees-");
   const cases = [
     [(t) => { delete t.rows[0].activation_owner; }, /names no activation_owner/],
     [(t) => { delete t.rows[0].why; }, /does not say what breaks/],
@@ -2090,7 +2266,7 @@ test("§2e ABSENCE IS NOT FRESHNESS: no clone, an unreadable clone, and a clone 
 });
 
 test("§2e THE COLLECTOR, on a real repository: the newest is the HIGHEST NUMBER (S10 over S9), and its age is the tag's own date", () => {
-  const dir = mkdtempSync(join(tmpdir(), "rollcall-bless-"));
+  const dir = tempDir("rollcall-bless-");
   try {
     const git = (args, env = {}) => spawnSync("git", ["-C", dir, ...args], { encoding: "utf8", env: { ...process.env, ...env } });
     git(["init", "-q"]);
@@ -2113,7 +2289,7 @@ test("§2e THE ROW IS STRICT: a blessing row with no allowance or no why is refu
   for (const [drop, want] of [["max_age_hours", /names no max_age_hours/], ["why", /does not say what goes wrong/], ["activation_owner", /names no activation_owner/]]) {
     const m = JSON.parse(readFileSync(MANIFEST_PATH, "utf8"));
     delete m.blessings[0][drop];
-    const p = join(mkdtempSync(join(tmpdir(), "rollcall-bless-m-")), "m.json");
+    const p = join(tempDir("rollcall-bless-m-"), "m.json");
     writeFileSync(p, JSON.stringify(m));
     assert.throws(() => loadManifest(p), want);
   }

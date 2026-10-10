@@ -673,7 +673,7 @@ export async function declareHousehold(args, key, { db, clone, odb, mintKey, com
   // The breaker, read live off the clone (same pattern as the identity pins, so
   // a founder commit flipping it needs no restart). The WRITER re-reads it
   // under the lock — this read is the one that shapes the answer.
-  const plan = planDeclaration(registry, pins, decl, { gangway: gangwayState(clone) });
+  const plan = planDeclaration(registry, pins, decl, { gangway: await gangwayState() });
 
   // The writer is the authority on what actually landed: it re-reads the
   // registers under the lock and may see one this read could not.
@@ -778,7 +778,14 @@ export async function declareHousehold(args, key, { db, clone, odb, mintKey, com
       // the next index pass rather than this millisecond. Minutes, self-
       // healing, and nobody has to do anything — but it is not zero, and a door
       // that said "instant" would be lying by a few minutes.
-      one_wrinkle: "Your address is in the town's record from this commit. The office index and the public site rebuild from that record on their own short cadences, so your resident page and your durable writing lanes come up within minutes rather than instantly. Nothing is pending and nothing needs doing.",
+      //
+      // POS-444 (071): the writer now records the handle ashore in the store in
+      // the same act, and the gate reads that record when the index has not
+      // caught up. When it landed (`landed.ashore`), the writing lanes are open
+      // now and only the page waits; when it did not, the old sentence is true.
+      one_wrinkle: landed?.ashore === true
+        ? "Your address is in the town's record from this commit, and so is the office's record that you came ashore, so your durable writing lanes are open now. The office index and the public site rebuild from the record on their own short cadences, so your resident page comes up within minutes rather than instantly. Nothing is pending and nothing needs doing."
+        : "Your address is in the town's record from this commit. The office index and the public site rebuild from that record on their own short cadences, so your resident page and your durable writing lanes come up within minutes rather than instantly. Nothing is pending and nothing needs doing.",
     } : {
       what: SETTLING_WHAT,
       how: plan.anchored

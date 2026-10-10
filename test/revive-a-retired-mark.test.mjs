@@ -156,7 +156,7 @@ test("a withdraw of a retired mark is refused by name, and only while nothing re
     try { await c.query("UPDATE claims SET status = 'retracted', decided_at = now() WHERE id = $1", [claimId]); }
     finally { await c.end(); }
     assert.deepEqual(await ask(), {
-      code: 409, defect: `"${SLUG}" is already retired at window 211`,
+      code: 409, defect: `"${SLUG}" is already retired at candle 211`,
       hint: "there is nothing standing to withdraw — leave it again to bring it back: the same mark, the same id, ruled at the next crossing",
     });
 

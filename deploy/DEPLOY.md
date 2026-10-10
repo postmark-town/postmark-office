@@ -12,8 +12,10 @@ repo ~every 30 min for the site extractor. The office rides that rhythm.
 
 ## The weekly train (Keemin-directed 2026-08-23)
 
+> **The whole of how code ships, in one place:** `postmark-blueprints/documentation/SHIPPING.md` (each repo's PR base and route to live, hotfixes and their hand tag, the train taking main the same day, keeping the trains clean). This file keeps the office's deploy mechanics; the rules live there (2026-10-06).
+
 Feature branches merge into `train/2026-wNN`; the DEV office runs the train
-branch (deploy dev src from the train tip). ~Weekly the train PRs into `main`;
+branch when it is hand-carried there (the workflow deploys tags only; SHIPPING.md § 3). ~Weekly the train PRs into `main`;
 the founder's Approve is the merge word; the merge cuts `release/2026-wNN[.n]`
 (`.github/workflows/release-train.yml`). PROD deploys go FROM THE TAG — since
 POS-60 the same workflow carries them (§ below); before that they were
@@ -146,6 +148,165 @@ env), run by hand after the ship.
   precisely why the deploy job chains onto the tag-cutting job inside one run
   rather than living in a separate tag-triggered file that would never fire.
 
+### The dev rehearsal (POS-354, POS-366; first run Saturday 2026-10-10)
+
+`tools/dev-rehearsal.mjs` drives one crossing through the dev office's doors and
+the box's own jobs, and checks every step against the dev store. It gates the
+office tag (wright-ship-week § 2.5). Dev's store is `w2_devsandbox_20260925`;
+**`world2_dev` is PROD's**, and the tool refuses it before it connects. These are
+box writes on dev only, with Darko present. The switch-3 half of Saturday (the
+read-only pen and the world snapshot) is `G:/Starstory/docs/2026-10-04/rail/switch3/RUNBOOK.md`
+§ The dev rehearsal; its steps 1 and 3 are steps 1 and 2 here, done once.
+
+**1. Migrations 054–071 into dev's store, before the carry**, as `world2_owner`,
+from Wright's machine (Git bash). Every file is additive or `IF NOT EXISTS`:
+```sh
+CLONE=G:/Postmark/repo-clones/wright/office; REF=origin/train/2026-w42
+git -C $CLONE fetch -q origin
+for f in $(git -C $CLONE ls-tree --name-only $REF world2/schema/ | grep -E '/0(5[45]|6[0-9]|7[01])_'); do
+  echo "== $f"
+  git -C $CLONE show "$REF:$f" | ssh meepo-ec2 'sudo -n -u postgres psql -q -v ON_ERROR_STOP=1 -d w2_devsandbox_20260925 -c "SET ROLE world2_owner;" -f -' \
+    || { echo "FAILED at $f: stop here, nothing after it ran" >&2; break; }
+done
+```
+
+**2. Carry the train:** `bash deploy/dev-office-carry.sh origin/train/2026-w42`.
+
+**3. Dev's own stamp key** (Darko said yes on 10-07). On 10-07 the dev root's
+`stamp-key.pem` was a byte-identical copy of PROD's. In a box shell:
+```sh
+sudo -u meepo bash -c 'umask 077 && openssl genpkey -algorithm ed25519 -out /srv/postmark-office-dev/stamp-key.dev.pem'
+# both PUBLIC halves' fingerprints, never a private key of prod's: dev's new key, then prod's
+# public key from its town clone. They must differ. pipefail makes a failed read an error, and
+# e3b0c442… (the sha256 of nothing) also means a read failed: stop either way
+sudo -u meepo bash -o pipefail -c 'openssl pkey -in /srv/postmark-office-dev/stamp-key.dev.pem -pubout | sha256sum'
+sudo -u meepo bash -o pipefail -c 'openssl pkey -pubin -in /srv/postmark-office/town-clone/tools/stamp-pubkey.pem -pubout | sha256sum'
+```
+What this buys, plainly: dev and prod both run as `meepo`, so any dev-side
+process can still read prod's key. Dev's own key guards against signing with
+prod's key **by mistake**, not against a compromise. The tools compare keys by
+their public halves only (the seed's `tools/stamp-pubkey.pem` is prod's public
+key), so prod's private key is never read to make that check.
+
+The old `/srv/postmark-office-dev/stamp-key.pem` is a second copy of prod's
+signing key; prod's own stays at `/srv/postmark-office/stamp-key.pem`. Darko's
+word on removing the copy, then the new key takes its path (the freshen and the
+env line below name it):
+```sh
+sudo shred -u /srv/postmark-office-dev/stamp-key.pem
+sudo -u meepo mv /srv/postmark-office-dev/stamp-key.dev.pem /srv/postmark-office-dev/stamp-key.pem
+```
+
+**4. The env, without the stamp switch yet, STAMP_KEY first.** `sudoedit /etc/postmark-office-dev.env`
+and add (never in a shell line):
+`TOWN_INDEX_READS=store` · `OFFICE_PAPERWORK_STORE=1` · `STATE_LOG_SOURCE=store` ·
+`STAMP_KEY=/srv/postmark-office-dev/stamp-key.pem`. `GITHUB_API_URL` is already
+there (10-07). Then `sudo systemctl restart postmark-office-dev`.
+`OFFICE_PAPERWORK_STORE=1` moves dev's sign-ins from `oauth.db` to the store, so
+testers signed in on dev sign in again. The key goes in before the freshen (step
+5), so the dev office never signs with prod's default key path onto a clone
+already carrying dev's public key. Until step 5 lands, a stamped dev write reds
+the verifier (the clone still carries prod's public key): do none in between.
+
+**5. The freshen moves the town clone onto dev's key.** The unit runs the root
+copy, `/srv/postmark-office-dev/postmark-dev-freshen.sh`, and the carry does not
+install it. `cp` onto the existing file keeps its owner and mode:
+```sh
+sudo cp /srv/postmark-office-dev/deploy/postmark-dev-freshen.sh /srv/postmark-office-dev/postmark-dev-freshen.sh
+sudo systemctl start postmark-dev-freshen.service
+journalctl -u postmark-dev-freshen.service -n 3 --no-pager   # "... the town ledger on the dev key"
+sudo -u meepo git -C /srv/postmark-office-dev/town-clone log -1 --format='%an: %s'   # dev freshen: dev: the stamp ledger re-signed ...
+```
+The tool re-signs only a dev clone: every remote's push URL must be
+`DISABLED-dev-channel-never-pushes` and its real path under
+`/srv/postmark-office-dev` (it refuses prod's clone by both). Check the first before
+this step: `sudo -u meepo git -C /srv/postmark-office-dev/town-clone remote get-url --push origin`.
+Every night after, the freshen stands the clones on `sandbox/seed` and re-signs
+with `tools/dev-ledger-resign.mjs`. The commit is the same each night (fixed
+author and date, deterministic signatures). It refuses a key whose public half
+is prod's, and a refusal fails the unit.
+
+**6. The store's stamp chain, from the re-signed clone, once** (the box's switch
+order: 066/067, the chain, the index, then `STAMP_LINES=store`). As the dev
+office's own pen, with its env:
+```sh
+sudo systemd-run --uid=meepo -p EnvironmentFile=/etc/postmark-office-dev.env -p WorkingDirectory=/srv/postmark-office-dev --pipe --wait \
+  node world2/tools/stamp-lines.mjs --sync --clone /srv/postmark-office-dev/town-clone
+```
+It says `stamp_lines: N line(s) recorded past the 0 held`. It must run after
+step 5: a chain recorded from prod's signatures refuses dev's re-signed export
+as a changed past.
+
+**7. The town index, reseeded at the clone's head, as the law pen**, the stamp
+switch on for the seed (its quest rows fold on the chain from step 6):
+```sh
+cd /srv/postmark-office-dev && sudo bash -c '
+  export WORLD2_DB=w2_devsandbox_20260925 STAMP_LINES=store
+  . deploy/world2-lib.sh && w2_pgenv law_ingester PG_LAW_INGESTER_PASSWORD || exit 4
+  [ "$PGDATABASE" = w2_devsandbox_20260925 ] || { echo "REFUSED: $PGDATABASE is not the dev sandbox" >&2; exit 9; }
+  SHA=$(runuser -u meepo -- git -C /srv/postmark-office-dev/town-clone rev-parse HEAD)
+  exec runuser -u meepo -- node world2/tools/town-index-ingest.mjs --town-repo /srv/postmark-office-dev/town-clone --sha "$SHA" --seed'
+```
+`world2-lib.sh § w2_db` falls back to `world2_dev` (PROD) when `WORLD2_DB` is
+unset, so the line sets it and asserts it before anything writes.
+
+**8. The switch.** Add `STAMP_LINES=store` to `/etc/postmark-office-dev.env`
+(sudoedit), then `sudo systemctl restart postmark-office-dev`.
+
+**9. The pens file**, `/etc/postmark-dev-rehearsal.env` (root 0600, sudoedit),
+both URLs naming dev's database (the tool refuses any other):
+```
+WORLD2_INGEST_URL=postgres://law_ingester:<PG_LAW_INGESTER_PASSWORD from /etc/postmark-world2-dev.env>@localhost:5432/w2_devsandbox_20260925
+WORLD2_CLEARING_URL=postgres://clearing_job:<clearing_job's password, from the env file the box's clearing unit reads>@localhost:5432/w2_devsandbox_20260925
+```
+Roles are cluster-wide, so prod's `clearing_job` password is dev's too
+(`systemctl cat postmark-world2-clearing.service` names its env file).
+
+**10. The preflight, then the rehearsal.** In a box shell:
+```sh
+cd /srv/postmark-office-dev && sudo node tools/dev-rehearsal.mjs --user meepo --only preflight
+cd /srv/postmark-office-dev && sudo node tools/dev-rehearsal.mjs --user meepo --report /tmp/dev-rehearsal-$(date +%F).txt
+```
+The first line names the store it writes. The preflight names anything still
+missing: a migration, a flag, the key (dev's must not be prod's, and the clone's
+`tools/stamp-pubkey.pem` must be its public half), the town index off the
+clone's history, a stamp chain that disagrees with the clone.
+
+The last step is the stamp sandbox (POS-366). It cannot run on the box (the
+carry omits devDependencies, and it would share prod's CPU for 10–40 minutes),
+so it reads CI's `stamp sandbox` check on the sha in `release.json` through
+GitHub's public API, and is red unless the newest run there concluded success.
+Before the rehearsal, label the train's ship PR (`train/<week>` into `main`)
+`stamp-sandbox`: its runs report on the train's tip, which is the sha the carry
+takes. A skipped or cancelled run (another label's event cancels a running
+one) is never judged; if those are all there is, the step asks for a re-run.
+
+**The merge-ref gap.** A PR's sandbox run checks out the PR's merge ref
+(`refs/pull/N/merge`: main merged into the train), so a green attests main plus
+the train, not exactly the tree carried to dev. A hotfix on main that the train
+lacks is in what was tested and not in what dev runs. Close it by merging main
+into the train before the ship (SHIPPING.md), or, once `sandbox.yml` is on main,
+by a `workflow_dispatch` run on the train ref, which checks out the exact sha.
+
+**Before each later rehearsal** (the nightly freshen stands the clone back on
+the seed and the store keeps the last rehearsal's rows):
+- the stamp chain is trimmed to the seed, then checked. The re-sign is the same
+  every night, so the store's first N lines are the seed's exactly. In a box shell:
+  ```sh
+  N=$(sudo -u meepo node --input-type=module -e 'const e = await import("/srv/postmark-office-dev/town-clone/tools/stamp-mint.mjs"); const { readFileSync } = await import("node:fs"); console.log(e.parseStampLedger(readFileSync("/srv/postmark-office-dev/town-clone/WHITE_PAGES/stamp-ledger.md", "utf8")).length)')
+  sudo -u postgres psql -d w2_devsandbox_20260925 -v ON_ERROR_STOP=1 -c "SET ROLE world2_owner; DELETE FROM stamp_lines WHERE seq > $N"
+  sudo systemd-run --uid=meepo -p EnvironmentFile=/etc/postmark-office-dev.env -p WorkingDirectory=/srv/postmark-office-dev --pipe --wait \
+    node world2/tools/stamp-lines.mjs --verify --clone /srv/postmark-office-dev/town-clone
+  ```
+- then step 7 again (the index at the clone's head), and step 10.
+
+This trim is a recurring hand repair, and dev's stamped writes refuse every
+night until someone runs it. Folding it into the freshen (or a dev-only unit
+after it) is proposed, not built: it would give a dev unit the owner's DELETE on
+`stamp_lines`, which is Wright's call
+(`G:/Starstory/docs/2026-10-09/rail/plumb-dev-rehearsal/NOTES.md` § Proposal: the trim
+in the freshen).
+
 ### Repo secrets it needs
 
 `EC2_HOST`, `EC2_USER`, `EC2_SSH_KEY` — the same three names the site repo
@@ -166,21 +327,27 @@ by `workflow_dispatch` with `target: prod` and that tag's name.
 # 1. code + clones (as the deploy user, e.g. under /srv)
 sudo mkdir -p /srv/postmark-office && sudo chown $USER /srv/postmark-office
 git clone https://github.com/postmark-town/postmark-office.git /srv/postmark-office
-git clone https://github.com/keeminlee/postmark.git /srv/postmark-office/town-clone
+git clone https://github.com/postmark-town/postmark.git /srv/postmark-office/town-clone
 
 # 2. secrets — NEVER in either repo
 sudo tee /etc/postmark-office.env >/dev/null <<'EOF'
-OFFICE_KEYS=<key>=<household>:<handle>[,<handle>];<key2>=...
 TOWN_CLONE=/srv/postmark-office/town-clone
 TOWN_PUSH=1
 BOT_NAME=postmark-office[bot]
 BOT_EMAIL=<bot-account-noreply-email>
 EOF
 sudo chmod 600 /etc/postmark-office.env
+# static keys are store rows, not env lines (POS-352). Never put OFFICE_KEYS in
+# this file. Each key goes in by one run of the import, as meepo, with THIS env
+# loaded (it carries OFFICE_PAPERWORK_STORE=1, WORLD2_PG=1 and WORLD2_PG_URL, the
+# store the office reads) and --oauth-db naming the office's own file; without
+# them the key lands in the checkout's oauth.db and answers as anonymous. The
+# full command, entry on stdin: deploy/DEPLOY.md § Static keys leave the env
+# file, "Adding a static key later".
 
 # 2b. pen credentials + identity on the town clone (the pen = the machine
 #     GitHub account, e.g. postmark-pen: classic PAT, public_repo scope only,
-#     write access to keeminlee/postmark and NOTHING else; token custody =
+#     write access to postmark-town/postmark and NOTHING else; token custody =
 #     this box + the principal's password manager, never either repo)
 git -C /srv/postmark-office/town-clone config credential.helper \
   "store --file /srv/postmark-office/.git-credentials"
@@ -278,12 +445,17 @@ curl -s -H "Authorization: Bearer <key>" https://postmark.town/api/town
   adopt: § Sunday: adopting the tick split, below (the exact commands, the
   receipts, the manifest rows and the rollback). `office-tick.sh` stays until
   a clean week has passed.
-- **The town index (POS-268, 2026-09-30), PARKED.** office.db's tables have
+- **The town index (POS-268, 2026-09-30), adopted at the w41 ship (2026-10-04):
+  switch 2 needed it and went on that day, then was rolled back (§ Switch 2's
+  guard, below); the rollback is the env line, so the ingest keeps running.**
+  The `postmark-town-index.timer` row of `box-rollcall-manifest.json` still
+  says parked. office.db's tables have
   twins in the store (`world2/schema/033_town_index.sql`), kept by
   `postmark-town-index.timer` (:05/:20/:35/:50, `deploy/town-index-ingest.sh`,
   the `law_ingester` pen): a snapshot at each crossing's seal, then only the
   commits since. Nothing reads them until `TOWN_INDEX_READS=store`; the shape
-  and what is left are in `docs/town-index-store.md`. To adopt, in order: apply
+  and what is left are in `docs/town-index-store.md`. The adoption, in order (for a
+  rebuilt box): apply
   033 as `world2_owner`; copy the script to `/srv/world2-lab/ops/`; run the seed
   by hand (the script's header has the line); install and enable the timer.
 - The rehydrate timer rebuilds the index every 15 min. It **builds `office.db.new` and renames it
@@ -470,6 +642,163 @@ is there to raise it, never to remove it (0 means no limit).
 4. Roll back on the first stuck row or hung door: the env line out, the office
    restarted (the 2026-10-04 rollback, unchanged).
 
+### Static keys leave the env file (POS-352 part 2, w42)
+
+RULED (Darko, 2026-10-06, 2a): static office keys become a `static` kind with
+an explicit handles column and an explicit household column, imported from
+`OFFICE_KEYS` by hash, nothing re-issued, no token printed.
+
+From the release that carries this, the office no longer reads `OFFICE_KEYS`.
+A static key is an `oauth_tokens` row with `kind = 'static'` (migration 070
+adds its `household` and `handles` columns), written by
+`tools/static-keys-import.mjs` and read by `src/static-keys.mjs §
+staticLookup`. Every key keeps its value, its household, its handles and its
+gh_id; nobody is handed a new key. An office from before this change reads only
+the kinds `access`, `refresh` and `household`, so the rows are inert to it.
+That is why the import runs BEFORE the deploy, and why the rollback leaves the
+rows in place.
+
+**The order.** Dev first, before the train that carries this reaches dev (dev's
+office runs the train, and from that carry on it reads no env keys), then prod
+at the ship. Every step is on the box, as root. Nothing here prints a key or a
+hash.
+
+**0. Preconditions:**
+
+```sh
+sudo grep -c '^OFFICE_KEYS=' /etc/postmark-office.env      # 1: the line is there to import
+sudo grep '^OFFICE_KEYS=' /etc/postmark-office.env | cut -d= -f2- | tr ';' '\n' | grep -c .   # how many entries (no key printed)
+# Anything ELSE on the box that reads the line (paths only). The office's own
+# repos read it nowhere but server.mjs, checked 2026-10-08; a hand-installed
+# script would show here, and must move to its own key before step 5.
+sudo grep -rl 'OFFICE_KEYS' /etc /usr/local/bin /srv --include='*.sh' --include='*.mjs' --include='*.js' --include='*.service' --include='*.env' \
+  --exclude-dir=node_modules --exclude-dir=town-clone --exclude-dir=world-clone --exclude-dir=.git --exclude-dir=test 2>/dev/null
+# expected: the office trees' own src/ and tools/ files, and /etc/postmark-office.env and -dev.env themselves
+```
+
+**1. The migration, from the staged tip** (additive; the running office ignores
+it). Prod's store is the database `world2_dev` (POS-243: the name lies):
+
+```sh
+cd <the staged tip>
+sudo -n -u postgres psql -v ON_ERROR_STOP=1 -d world2_dev -c "SET ROLE world2_owner;" -f world2/schema/070_static_office_keys.sql
+sudo -n -u postgres psql -d world2_dev -tAc "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'oauth_tokens' AND column_name = 'handles');"   # t (070's own proof)
+```
+
+**2. The import, dry, then for real, from the same staged tip** (it needs that
+checkout's node_modules for `pg`, and meepo must be able to read it). It runs
+as **meepo**, the one hand that touches `/srv/postmark-office` (§ The one-hand
+rule): a root-owned journal beside the office's `oauth.db` would break meepo's
+next write. It loads the office's own env file, so it reads the same
+`OFFICE_KEYS` and writes the book the office reads: with
+`OFFICE_PAPERWORK_STORE=1`, `WORLD2_PG=1` and `WORLD2_PG_URL` (all three in
+prod's env since 10-04) the store's `oauth_tokens`, then the office's `oauth.db`
+as the mirror. `--oauth-db` must name the office's own file, because the
+default is the checkout's root. Its first line says which book it wrote.
+
+```sh
+sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; cd <the staged tip> && exec runuser -u meepo -- node tools/static-keys-import.mjs --dry --oauth-db /srv/postmark-office/oauth.db'
+#   book: the store (oauth_tokens), mirrored to /srv/postmark-office/oauth.db
+#   OFFICE_KEYS: N keys          <- N is step 0's count; "malformed entries skipped" means a line to fix first
+#   would add N · would replace 0 · unchanged 0 · refused 0
+#   households: ...              <- every household you expect, and no other
+sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; cd <the staged tip> && exec runuser -u meepo -- node tools/static-keys-import.mjs --oauth-db /srv/postmark-office/oauth.db'
+#   added N · ... · refused 0. A second run says "unchanged N".
+```
+
+A first line that names a file (`book: /srv/...`) instead of the store means
+the switch was not in the environment: stop, the rows went to the mirror only.
+A `refused` count means a key's hash already belongs to a minted token. The
+import then writes nothing; that entry needs a new key, issued by hand.
+
+**3. The first real key to check: the Bug Catcher's** (Meeps Come Home step 3,
+`the-town#301406700:bugcatcher`). Read-only, no hash printed:
+
+```sh
+sudo -n -u postgres psql -d world2_dev -c "SET ROLE world2_owner;" \
+  -c "SELECT household, handles, gh_id, expires FROM oauth_tokens WHERE kind = 'static' ORDER BY household, handles;"
+#   the-town | ["bugcatcher"] | 301406700 | (null)    <- first; then every other row against the env line
+```
+
+**4. Deploy** the release (the train ship). Then the Bug Catcher's key at the
+door, which now answers only from the store. The key never reaches a command
+line (`ps` shows argv): bash builtins write the header into a mode-600 file and
+curl reads it with `-H @file`.
+
+```sh
+sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; umask 077; h=$(mktemp); \
+  printf "Authorization: Bearer %s\n" "$(printf %s "$OFFICE_KEYS" | tr ";" "\n" | grep ":bugcatcher$" | cut -d= -f1)" > "$h"; \
+  curl -s -H @"$h" http://127.0.0.1:4380/me; rm -f "$h"' | jq '{household, handles, key_kind, verified_github}'
+#   { "household": "the-town", "handles": ["bugcatcher"], "key_kind": "oauth", "verified_github": { "login": null, "id": 301406700 } }
+#   (a pinned static key has always said key_kind "oauth"; that is unchanged)
+journalctl -u postmark-office -n 50 --no-pager | grep 'OFFICE_KEYS is set'          # expected until step 5: the line is no longer read
+journalctl -u postmark-office -n 50 --no-pager | grep -c 'holds no static keys'     # 0: the store holds the rows
+```
+
+Then the founder's key the same way (`grep ':wright$'`, or whichever handle
+ends its entry), and one round of each Meep that carries a static key.
+
+**5. Remove the line**, keeping a root-only copy for the rollback:
+
+```sh
+sudo install -d -m 700 /var/backups/postmark-static-keys
+sudo install -m 600 /etc/postmark-office.env /var/backups/postmark-static-keys/postmark-office.env.pre-pos352
+sudo sed -i '/^OFFICE_KEYS=/d' /etc/postmark-office.env
+sudo grep -c '^OFFICE_KEYS=' /etc/postmark-office.env      # 0
+sudo systemctl restart postmark-office
+journalctl -u postmark-office -n 50 --no-pager | grep -c 'OFFICE_KEYS is set'   # 0 since the restart
+# step 4's /me again, sourcing /var/backups/postmark-static-keys/postmark-office.env.pre-pos352
+# instead of /etc/postmark-office.env (the key is only in the backup now)
+```
+
+Dev: the same steps with `/etc/postmark-office-dev.env`, `/srv/postmark-office-dev`
+(its `oauth.db` in `--oauth-db`) and dev's port, the import as meepo too. Dev's
+paperwork is on the file unless its env sets `OFFICE_PAPERWORK_STORE=1`; the
+import's first line says which. Run 070 on dev's store too, so its switch finds
+the columns.
+
+The backup copy holds the same secrets the env file did. Delete it after a
+clean week (`sudo shred -u /var/backups/postmark-static-keys/postmark-office.env.pre-pos352`).
+
+**Adding a static key later** (Meeps Come Home). The env file no longer holds
+`OFFICE_KEYS`, but it still holds the switch and the store's address, so load it
+and hand the one new entry in on stdin, never on a command line. The
+command, in full:
+
+```sh
+read -rs ENTRY    # <key>=<household>[#<gh_id>]:<handle>[,<handle>...]; not echoed, not in history
+printf %s "$ENTRY" | sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; \
+  test "$OFFICE_PAPERWORK_STORE" = 1 && test "$WORLD2_PG" = 1 && test -n "$WORLD2_PG_URL" || { echo "the store switch is not in this env file: stop"; exit 1; }; \
+  OFFICE_KEYS=$(cat); export OFFICE_KEYS; cd /srv/postmark-office && \
+  exec runuser -u meepo -- node tools/static-keys-import.mjs --dry --oauth-db /srv/postmark-office/oauth.db'
+#   book: the store (oauth_tokens), mirrored to /srv/postmark-office/oauth.db   <- the store, or stop
+#   OFFICE_KEYS: 1 key · would add 1 · ... · static rows not in OFFICE_KEYS (left alone): N
+# then the same line without --dry, then step 4's /me with the new key
+unset ENTRY
+```
+
+Without the switch and `--oauth-db`, the import writes the checkout's own
+`oauth.db` and the key answers as anonymous on prod. The import never revokes,
+so the other rows are untouched. Removing a static key is deleting its row;
+there is no verb for it yet.
+
+**Rollback.**
+
+- Before step 5 (the line is still in the env file): redeploy the previous
+  release tag (`workflow_dispatch`, target prod, that tag). The old office reads
+  `OFFICE_KEYS` again. Leave the rows and 070; the old office never reads them.
+- After step 5: put back the `OFFICE_KEYS` line alone (the rest of the env file
+  may have changed since the backup), then redeploy the previous tag.
+  ```sh
+  sudo bash -c "grep '^OFFICE_KEYS=' /var/backups/postmark-static-keys/postmark-office.env.pre-pos352 >> /etc/postmark-office.env"
+  sudo grep -c '^OFFICE_KEYS=' /etc/postmark-office.env      # 1
+  ```
+  Restoring the line alone does nothing for the new office, which does not read it.
+- If one key is wrong (a row missing, a household mistyped) and the release is
+  otherwise fine, fix forward instead: re-run step 2 sourcing the backup copy
+  instead of `/etc/postmark-office.env` (it holds the switch and the line). An
+  edited entry replaces its row.
+
 ### The world write pool (tier 1, 2026-08-05)
 
 The draft-branch write lane — `world_leave_mark` (and its withdrawal), which
@@ -506,6 +835,49 @@ household branch the old pen left it on and back to `main`, once, and says so:
 `[world-pool] shared clone moved off draft/<x> → main`. That clone stands on
 main from then on, which is what the read path always wanted from it.
 
+### The store's record of who came ashore (071, POS-444, 2026-10-08)
+
+A house the declaration door answers `settled: true` used to be refused mail as
+a harbor act until the town-index ingest carried its address into the copy (up
+to 15 minutes). Since 071 the declaration and the bound join each write one
+`ashore` row when the address's commit lands, and sign-in's harbor stamp and
+the send door's recipient check read it when the copy does not know the handle
+yet. The rows the roads write start with this deploy; every resident who came
+ashore before it needs the one backfill, from the copy. Box steps, in this
+order, after the train is on the box (Wright's hand, never a lane's):
+
+1. The migration, as the owner:
+
+       sudo -n -u postgres psql -v ON_ERROR_STOP=1 -d world2_dev \
+         -c "SET ROLE world2_owner;" -f /srv/postmark-office/world2/schema/071_ashore.sql
+
+   Proof (the probe `world2/tools/migrations-landed.mjs` holds for 071):
+
+       sudo -n -u postgres psql -d world2_dev -tAc "SELECT to_regclass('public.ashore') IS NOT NULL AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'ashore_append_only')"   # t
+
+2. The dry run, as the office (the env file's `WORLD2_PG_URL`, role `office_api`):
+
+       sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; cd /srv/postmark-office && node world2/tools/ashore-backfill.mjs'
+
+   It prints `N residents in the town index · M already ashore · K to write
+   (J with no add commit in the index's history)` and the first twenty rows.
+   Expect N to equal the residents roll (`curl -s https://postmark.town/api/residents | jq length`),
+   M to be the declarations and bound joins since the deploy, and J small
+   (residents whose ADDRESS.md add predates the index's history).
+
+3. The run (the database is named `world2_dev`, so `--prod` is typed too):
+
+       sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; cd /srv/postmark-office && node world2/tools/ashore-backfill.mjs --apply --prod'
+
+   Then the dry run again: `0 to write`. Re-running is safe at any time (it
+   writes only the handles the table lacks), and it is also the repair for a
+   road's row that did not land (the road logs `[ashore] <handle> … was not
+   recorded` to its journal).
+
+Nothing to roll back in the ordinary sense: an empty table is today's behaviour
+(the readers fall back to the copy's answer on a miss). The drain's settle (the
+third road) writes its row from w43, with POS-268 5b.
+
 ## The site sentinel (loud notice when the town is down or stale, 2026-08-25)
 
 `tools/site-sentinel.mjs`, every 10 min via `postmark-site-sentinel.timer`.
@@ -523,6 +895,24 @@ outcome is a lie.
 
 It records nothing and repairs nothing. No pen, no clone, no `town.lock` —
 same posture as `postmark-harbor-watch` and `postmark-usdc-watch`.
+
+**It is the ONE alarm route (POS-556, Darko 2026-10-10).** Only the sentinel
+posts to the Meepo bot on Discord, and its board (`/ops/sentinel.json`) is what
+Wright's /fleet reads, so the two always hear the same thing from one record.
+A new box alarm is a probe in `tools/site-sentinel.mjs`, never a script with
+its own webhook call; `test/site-sentinel.test.mjs` § ONE ROUTE reds on a PR
+that adds one. The root disk is probe `disk_root` (DOWN at 85%, the line the
+retired disk watch used). The meeps are probe `meeps`: it reads
+`/srv/postmark-sentinel/meeps.json`, which Wright's watcher on Darko's desktop
+(`G:/Wright-HQ/tools/meep-watch.mjs`) lands every 5 minutes by scp. The record's
+DEGRADED or DOWN is DOWN, with its one-line summary as the reason. A record
+older than 15 minutes, or none at all, is STALE, never UNKNOWN, because /fleet
+barks only on DOWN or STALE. The one alarm outside the sentinel is the
+watchman's watchman: the town repo's `.github/workflows/offbox-watch.yml` runs
+off the box and alarms when the front door or the sentinel itself is dead or
+stale, which the sentinel cannot report about itself. It reads this same
+board's `generated_at`, so /fleet (which barks on a heartbeat over 30 min old)
+and it still agree. Darko's word on the exception is pending.
 
 **Install (all of it is Wright's hand; nothing here is installed):**
 
@@ -648,6 +1038,69 @@ from `deploy/awareness-by-hand.json`, one entry per ISO week, which the page
 labels "entered by hand, <date>". Its history is `history.jsonl` in the page's
 own directory, one line per week: the current week's line is rewritten each
 hour, so a week keeps its last reading. Deleting that file loses the history.
+
+### The ops gate (POS-395, 2026-10-07)
+
+The generated pages above (the hub and every dashboard, with their `data.json`
+twins and anything else in their directories) are operator telemetry, so they
+answer only to the operators. Each of their seven locations in
+`nginx-postmark-town.conf` includes `/etc/nginx/snippets/postmark-ops-gate.conf`.
+Three `/ops/` addresses stay open on purpose: `/ops/sentinel.json` (the status
+board every page reads), and the site-built `/ops/desk/` and `/ops/graph/`.
+
+Nothing on the box reads the generated pages over HTTP: the hub reads its
+siblings' twins from disk, and the generators write files. So the gate needs no
+credential on the box.
+
+**Two candidates; the operators pick one** and install it under the snippet's
+name:
+
+- **B, a password** (`nginx-ops-gate.basic.conf`). Self-contained on the box:
+  one line per operator in `/etc/nginx/postmark-ops.htpasswd`, asked for by the
+  browser or given to `curl -u`. No Cloudflare change.
+- **A, Cloudflare Access** (`nginx-ops-gate.access.conf`). The operators' own
+  sign-in at the edge and no shared password, as dev is gated. It needs an
+  Access application in the Cloudflare dashboard that covers the generated paths
+  and leaves the three open ones open. Access matches by path prefix and the hub
+  is `/ops/` itself, so the hub takes an application on `/ops/` plus Bypass
+  applications on `/ops/sentinel.json`, `/ops/desk/` and `/ops/graph/`.
+
+**Installing it** (on the box, the operators' hands):
+
+1. Read the live config first and backport anything it has that the repo copy
+   lacks: `sudo nginx -T | grep -n "location.*/ops\|add_header\|cf_edge"`. Any
+   `add_header` at the town server level is replaced inside the gated locations
+   by the snippet's own two; say so before going on.
+2. **B only:** write the password file, one operator at a time (each types their
+   own; `openssl passwd -6` asks twice and does not echo). The group is nginx's
+   worker user (`grep ^user /etc/nginx/nginx.conf`; www-data on Debian/Ubuntu):
+
+   ```
+   sudo install -m 640 -o root -g www-data /dev/null /etc/nginx/postmark-ops.htpasswd
+   printf 'darko:%s\n' "$(openssl passwd -6)" | sudo tee -a /etc/nginx/postmark-ops.htpasswd >/dev/null
+   printf 'wright:%s\n' "$(openssl passwd -6)" | sudo tee -a /etc/nginx/postmark-ops.htpasswd >/dev/null
+   ```
+
+   **A only:** confirm `$cf_edge` is defined (`sudo nginx -T | grep -n cf_edge`)
+   and the Access applications are live.
+3. `sudo install -m 644 deploy/nginx-ops-gate.<basic|access>.conf /etc/nginx/snippets/postmark-ops-gate.conf`
+4. Install `nginx-postmark-town.conf` (or add its seven `include` lines to the
+   live file), then `sudo nginx -t && sudo systemctl reload nginx`.
+5. Check from off the box. Every generated address refuses (401 for B, 403 or
+   Access's redirect for A), and the three open ones answer 200:
+
+   ```
+   for p in "" traffic/ git/ economy/ world/ activity/ awareness/ traffic/data.json; do
+     curl -s -o /dev/null -w "%{http_code} /ops/$p\n" "https://postmark.town/ops/$p"; done
+   for p in sentinel.json graph/ desk/; do
+     curl -s -o /dev/null -w "%{http_code} /ops/$p\n" "https://postmark.town/ops/$p"; done
+   curl -s -o /dev/null -w "%{http_code}\n" -u darko https://postmark.town/ops/traffic/   # B: 200
+   ```
+
+**Undoing it:** empty the snippet (`sudo truncate -s 0
+/etc/nginx/snippets/postmark-ops-gate.conf`), then `nginx -t` and reload. Do not
+remove the file or the `include` lines: without the file, `nginx -t` refuses the
+whole config.
 
 ## Branch previews (`/preview/<slug>/`, 2026-07-20)
 
@@ -1070,6 +1523,57 @@ two-day gap.
 carries the identical `:04/:19/:34/:49` marks, so adopting it now would run the
 law pen twice and the parked stamp pen once. Its row says so.
 
+### The store writes the house's key (2026-10-08, POS-457, the w42 ship)
+
+**What changes.** Since the law date (the w40 ship), every new row is supposed to
+name its house as `hh:<slug>` (POS-157). Three writers did not. The door filed a
+signed-in resident's acts and claims under `solo:<their GitHub login>`, because
+it asked the deriver about the key's LABEL. The clearing's marks-ingest and
+its carry copied an older spelling forward. The escrow and stamp projections
+carried the town resolver's `gh:<id>`. From this ship, every writer asks the one
+deriver: the door by the acting handle, the ingests by the owner, and
+`stamp-ingest § writeStamps` re-keys both projections in its one transaction.
+The reads the door keyed on that label (the guards, the drafts overlay, the
+stake's promotion) now derive the house from the key's handles.
+
+**No migration, by ruling.** Darko ruled A on POS-457: the store never respells
+(Ruling 4, 024's spelling set). Old rows keep their spellings and are read
+through the set. So the box step is two reads, around the deploy, with Darko
+present:
+
+```
+# before the deploy: the census, read only (one READ ONLY transaction)
+WORLD2_PG_URL=<a read role on world2_dev> node world2/tools/household-key-census.mjs --dry
+# deploy; the next town ingest (the clearing's first step) re-keys the head's two projections.
+# Or re-run it for the head now: it is idempotent per sha.
+# after that ingest: every row since the deploy names a house by its slug key, or exits 1
+WORLD2_PG_URL=<...> node world2/tools/household-key-census.mjs --dry --after <the deploy's ISO time>
+```
+
+Read in the first census: § 3's head line must say `weights EQUAL`. A sha where
+a re-key would move a weight is written with the town's spellings by the pen,
+and the census names the position. On the 10-08 dump that was one old sha
+(d418a8aec, POS-411's instance) and not the head.
+
+**Rollback.** Redeploy the previous release tag, then re-run `stamp-ingest` for
+the head sha: it is idempotent, and the old code writes the town's spellings
+back. Rows the new code wrote under `hh:<slug>` stay, and the old code's
+spelling set includes `hh:<slug>`, so they read. **But the old code's slug guard
+reads a signed-in resident's drafts by the key's login label (`solo:<login>`),
+so it cannot see a draft the new code filed under `hh:<slug>`, and it will
+PERMIT a second draft with the same slug** (the #438 flip F8 is exactly this).
+Its drafts overlay will also miss those drafts until the next roll-forward.
+Nothing is deleted. After a rollback, and again before rolling forward, look for
+duplicates by hand (read only):
+
+```
+SELECT slug, claimant, count(*) FROM claims
+ WHERE status IN ('draft','pending') GROUP BY 1, 2 HAVING count(*) > 1;
+```
+
+Any row this returns is a resident's duplicate. Name it to Darko; the resident
+withdraws the extra one through the door. It is never deleted by hand.
+
 ### Finishing a refused crossing by hand (2026-09-14, postmark#2786)
 
 **The recovery is one unit, and it is not the settlement's own.** When a crossing
@@ -1446,3 +1950,114 @@ records the measurement.
    the base backups stay on the box. Giving the box a private object-storage
    bucket turns that into about a dozen lines — see `world2-backup.sh` § *the
    off-box destination* for what was tried and why each was refused.
+
+## 069: the seal records its town words (POS-362)
+
+Order at the ship, and it matters:
+
+1. **Apply 069 before the code.** The new seal writes `world_snapshots.stance_through`. Against a store without the column, every clearing rolls back.
+2. **Restart the office before the first clearing that runs the new code.** An office still running the old code would keep a fold without the town's words under the new digest, and `ON CONFLICT DO NOTHING` would make that permanent: `world-snapshot.mjs --verify` would then report a difference for that settlement forever. If a clearing did run first, delete that digest's `world_snapshot_folds` row (office_api holds DELETE on it); the next read rebuilds it with its words, and `--verify --world-repo` reads VALUE-EQUAL again.
+3. Snapshots sealed before 069 carry `stance_through` NULL and fold with no words, which equals their published tag. Words spoken before those seals are not in them, by design: a backfill would change their digests.
+
+## 072: the seal records whether stances count (POS-364, the conservative cutover)
+
+Darko, 2026-10-09 10:25 EDT: `TOWN_STANCE_CUTOVER=S<n>` names a settlement number. A settlement below it folds with no stances (R14); from it on, every opposition standing at its seal counts, in git and in the served World alike. The **seal decides** (the clearing job, from the cutover in its own env and the settlement it is making: the store's newest plus one) and records `world_snapshots.stances` (`{counted, cutover, settlement_inferred, how}`, covered by the digest). Every reader reads that record; nothing recomputes it. A snapshot with no record (everything sealed before 072) reads as not counted.
+
+Order at the ship, with Sunday's migrations:
+
+0. **Before the cutover is set, the law must carry ruling B (world#171).** A settlement folds with the engine at its sealed `law_sha`, which is the store's `projection_heads` world-law at the seal. A cutover sealed on a law older than #171 records `counted: true` on an engine that returns every stance-opposed mark with its positioned children, for good (the law sha is in the digest; it is disclosed as `stance_returns_whole`, never undone). So, on the box:
+   ```sh
+   LAW=$(sudo -n -u postgres psql -d world2 -tAc "SELECT sha FROM projection_heads WHERE repo = 'world-law'")
+   W=/srv/world2-lab/ingest-clones/world      # the clearing's own --world-repo (world2-clearing.sh)
+   git -C "$W" fetch -q origin
+   git -C "$W" merge-base --is-ancestor e79babcff36e77db597b0433e99433cb5eb39fc3 "$LAW" \
+     && echo "law $LAW carries ruling B" || echo "law $LAW does NOT carry ruling B"
+   ```
+   (`e79babcff` is world#171's merge on world main.) If it does not, **do not set the cutover yet**: let law-ingest move the pin forward (the next blessing of a world main that contains #171), re-run the check, and set the cutover only after it reads "carries". Once the cutover is set, every clearing's journal says it too: `⚑ stances: … ; law <sha> carries ruling B` (or `does NOT carry ruling B (world#171)`).
+1. **Apply 072 after 069 and 071, before the code, between crossings.** The new seal writes `world_snapshots.stances`; against a store without the column, every clearing rolls back. The file waits at most 5 s for its lock (`lock_timeout`): behind a running clearing it fails with `lock_not_available` and changes nothing, so run it again once the clearing is done.
+   ```sh
+   sudo -n -u postgres psql -v ON_ERROR_STOP=1 -d world2 \
+     -c "SET ROLE world2_owner;" -f /srv/postmark-office/world2/schema/072_snapshot_stances.sql
+   ```
+   Proof (the probe `world2/tools/migrations-landed.mjs` holds for 072): `SELECT data_type FROM information_schema.columns WHERE table_name = 'world_snapshots' AND column_name = 'stances';` reads `jsonb`. Every existing snapshot keeps its digest (the column is NULL on them, and the digest's seventh part is written only when it is set).
+2. **Restart the office before the first clearing that runs the new code**, as for 069: an office on the old code would keep a fold under the new digest with the seal's words whether or not they count.
+3. **The cutover must reach the clearing job.** The clearing unit (`postmark-world2-clearing.service`) reads `/etc/postmark-world2-dev.env` and `/etc/postmark-world2-clearing.env`, **not** `/etc/postmark-office.env`, and the seal is now the one place the cutover is read for git and the World. When Darko picks n, set `TOWN_STANCE_CUTOVER=S<n>` in `/etc/postmark-world2-clearing.env` (the file `postmark-settlement.service` reads too) as well as in the office env (the stance inbox's town seat still reads it there). Not set: every seal records `counted: false`, which is R14. Read it back on the next clearing's journal line, `⚑ stances: COUNTED at S<k> (inferred), cutover S<n>; law <sha> carries ruling B`.
+   - **A malformed cutover** (anything but `S<n>` or `<n>`) refuses every clearing: the seal never guesses it, and each window rolls back whole (`CLEARING FAILED … names no settlement`). Correct `/etc/postmark-world2-clearing.env` and re-run the clearing (`sudo systemctl start postmark-world2-clearing.service`); nothing was lost.
+   - **A cutover set only in the office env** is not seen by the clearing, so every seal records `counted: false` for good: those settlements stay before the cutover whatever is set later, and the journal line says `cutover unset`. The remedy is not a rewrite: set it in `/etc/postmark-world2-clearing.env`, and pick an n at or after the next settlement to be sealed, so the cutover starts there.
+4. **On dev and rehearsal stores** (any store where train code from before #451 sealed with 069 and served): a World kept under a 069-era digest (`stance_through` set, `stances` NULL) may hold the seal's words. The office no longer reads those rows, but `--verify` still compares against them, so clear them once, as office_api:
+   ```sql
+   DELETE FROM world_snapshot_folds f USING world_snapshots s
+    WHERE s.digest = f.digest AND s.stance_through IS NOT NULL AND s.stances IS NULL;
+   ```
+   Prod is not exposed: 069 ships with this train, so prod has no such row.
+5. **The decision is made once.** A seal under a lagging ingest (the last tag not yet a settlements row) infers its number one low and records it; that record stands. To read what a settlement recorded: `SELECT id, window_id, stances FROM world_snapshots ORDER BY id DESC LIMIT 3;`.
+
+## The ground: the /tmp janitor, the disk watch, three site releases (2026-10-09)
+
+On 2026-10-09 the root disk filled (38G of 38G, about 03:00 EDT). Postgres went into crash recovery, sign-in failed, and the 08:00 ferry and ten timers refused. Nothing watched the ground. Installed the same morning on Darko's go:
+
+```sh
+sudo install -m 0755 deploy/postmark-tmp-janitor.sh deploy/postmark-disk-watch.sh /usr/local/sbin/
+sudo install -m 0644 deploy/postmark-tmp-janitor.{service,timer} deploy/postmark-disk-watch.{service,timer} /etc/systemd/system/
+sudo mkdir -p /etc/systemd/system/postmark-site-refresh.service.d
+sudo install -m 0644 deploy/postmark-site-refresh.service-dropin-keep-three.conf /etc/systemd/system/postmark-site-refresh.service.d/keep-three.conf
+sudo systemctl daemon-reload
+sudo systemctl enable --now postmark-tmp-janitor.timer postmark-disk-watch.timer
+```
+
+- **The janitor** (daily 05:37 UTC) removes meepo-owned top-level `/tmp` entries older than 3 days that no process holds open, except a keep list of caches the office prunes itself. Every removal is a journal line; the receipt is `/var/lib/postmark-tmp-janitor.json`.
+- **The disk watch** (every 15 min) shouts through the sentinel's webhook when `/` passes 85%, at most once every 6 hours, and once when it is back under. Its receipt is `/var/lib/postmark-disk-watch.json`. **SUPERSEDED 2026-10-10 (POS-556):** retired into the sentinel's `disk_root` probe; see the next section. Its files are gone from `deploy/`.
+- **Three site releases, not five** (`SITE_REFRESH_KEEP=3`): each release is about 700M.
+
+The real headroom is a bigger volume (38G today); that is a console change, not this file's.
+
+## One alarm route: the disk watch retires into the sentinel; the refresh's log loses its page lines (POS-556, POS-557, 2026-10-10)
+
+Darko, 2026-10-10: *"make sure we do it clean so there's ONE route to get to the Meepo bot on discord that the fleet also listens to."* The sentinel is that route (§ The site sentinel). The disk watch posted on its own timer through the same webhook; it is now the sentinel's `disk_root` probe, on the same 85% line, with the same words. What changes for a reader: the alarm arrives in the sentinel's message (`DOWN — the box's root disk: at 87% used (4.9G free; alarm at 85%). …`), it repeats every 12 hours while the disk stays over (the sentinel's reminder; the watch's was 6), it says RECOVERED when the disk is back under, and /fleet sees it on the board as `probes[key=disk_root]`.
+
+The same PR adds the `meeps` probe (Darko, 13:27): the desktop meep watcher's record, `/srv/postmark-sentinel/meeps.json`, read on every sentinel tick. A sick meep (the record's DEGRADED or DOWN) is DOWN, and its summary is the reason. A missing, unreadable or 15-minute-old record is STALE. Either one rides the sentinel's message and the board, so /fleet barks on it unchanged. The file is already landing there, so the box needs no new step.
+
+The site refresh (`deploy/site-refresh.sh`) also stops writing every built page into syslog (POS-557): the build's stdout passes through `quiet_build_log`, which cuts Astro's one-line-per-page output (about 900 MB a week) and logs how many lines it cut. The summary, the timings and stderr (Astro's warnings and errors) are unchanged.
+
+**Box steps, after the merge and the office deploy (Wright's hand):**
+
+```sh
+# 1. the sentinel carries the disk: confirm the new probe on the board
+sudo -u meepo systemctl start postmark-site-sentinel
+jq -r '.probes[] | select(.key=="disk_root" or .key=="meeps") | "\(.key) \(.verdict) \(.reason)"' /srv/postmark-sentinel/status.json
+#    expect: disk_root OK  NN% used, X.XG free: under 85%   (and `df -h /` agrees on NN)
+#            meeps     the watcher's own verdict and summary (STALE means meeps.json is missing or 15+ min old)
+
+# 2. retire the disk watch: timer, unit, script, receipts
+sudo systemctl disable --now postmark-disk-watch.timer
+sudo rm /etc/systemd/system/postmark-disk-watch.timer /etc/systemd/system/postmark-disk-watch.service
+sudo rm /usr/local/sbin/postmark-disk-watch.sh /var/lib/postmark-disk-watch.json /var/lib/postmark-disk-watch.last
+sudo systemctl daemon-reload
+systemctl list-timers --all | grep -c disk-watch      # expect 0
+
+# 3. the janitor's box copy is the repo's (the repo's posts nothing)
+sudo install -m 0755 /srv/postmark-office/deploy/postmark-tmp-janitor.sh /usr/local/sbin/
+grep -c -i -e discord -e curl -e webhook /usr/local/sbin/postmark-tmp-janitor.sh   # expect 0
+
+# 4. the roll-call agrees (no disk-watch row; box-sbin-scripts reads the janitor alone)
+sh /srv/postmark-office/deploy/box-rollcall.sh | grep -i -e disk -e janitor -e sentinel
+```
+
+The refresh needs no step: the box runs `deploy/site-refresh.sh` from the office tree, so it changes with the deploy. Check it on the first build after: `journalctl -u postmark-site-refresh --since -1h | grep -c '├─'` reads 0, and the run carries one `build: N per-page lines left out of the log (POS-557)` line.
+
+## The read shapes: three env values, MCP only (POS-486, office #455)
+
+The bare read an MCP caller gets at each door is set by one variable per door in `/etc/postmark-office.env`. Unset means today's read, byte for byte. The values are spelled per door, and **a wrong spelling is the 0 shape** with one line in the journal, never an error. So check the journal after a restart.
+
+| Variable | Today (unset) | Lean read | Names-only cards |
+|---|---|---|---|
+| `WORLD_READ_SHAPE` | `v0` | `v1` | `v2` |
+| `TOWN_READ_SHAPE` | `t0` | `t1` | `t2` |
+| `HOUSEHOLD_READ_SHAPE` | `h0` | `h1` | `h2` |
+
+- **The shape is the MCP door's only.** The REST doors always answer the full read whatever is set: `GET`/`POST /world/apex` (the site cockpit's read), `GET`/`POST /town/apex` and `GET /household`. This is held by `test/read-shape-mcp-only.test.mjs`.
+- **The eval's recommendation** (round 1, 2026-10-09) is `WORLD_READ_SHAPE=v1`. It made no call for town or household.
+- **To set it:** add the line, then `sudo systemctl restart postmark-office`.
+- **To check it:** an MCP `tools/list` shows the world tool's SIZE line reading "the lean read".
+- **To roll back:** delete the line and restart.
+- **Never `TOWN_READ_SHAPE=v1`:** that is t0, said once in the journal.

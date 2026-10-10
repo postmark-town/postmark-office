@@ -2,102 +2,163 @@
 //
 // Ruling 2026-08-07 (1 human = 1 household): wherever a surface answers "who
 // are you" or "stamps associated with you", HOUSEHOLD is the primary column
-// over resident. This module is the office's one resolver for that block —
-// it imports the town's OWN vocabulary (stamp-mint currentHouseholds(): the
-// from-genesis base + the ledger's dated registry: lines) and the declared
-// registry (tools/households.json), and never invents a second answer
-// (ruling 9: never a second resolver).
+// over resident. This module is the office's one resolver for that block.
 //
 // Shape, per handle:
-//   { key,                    the economy's current household key (hh:/gh:/login:/solo:)
-//     slug,                   declared household slug, null if undeclared
-//     human,                  declared human-facing name, null if undeclared
-//     residents }             every handle sharing the key (siblings incl. self)
+//   { key,                    the house's key: `hh:<slug>`, or `solo:<handle>` for a handle no house holds
+//     slug,                   the house's slug, null for a handle no house holds
+//     human,                  the house's human-facing name, null if the row names none
+//     residents }             the handles the house lists (sorted), or [handle] alone
 //
-// Sync by design — identity reads sit in sync routes — so the town engine is
-// imported once at module load (top-level await), and the fold is cached on
-// (ledger mtime, households.json mtime, pins mtime): the resolver parses the
-// full stamp ledger, and identity reads are frequent.
+// ── IT READS THE STORE (POS-342, w42 "Everything Reads the Store") ──────────
+//
+// Darko's ruling, 2026-10-04: git can be written to, the store reads git, the
+// store is the record, and every reader reads the store. This module used to
+// answer from the TOWN CLONE: the stamp ledger's `currentHouseholds` (the
+// economy's key, folded over the sealed `registry:` lines) plus the printed
+// `tools/households.json`. Both are copies; the registry's one writer is the
+// ceremony (src/ceremony.mjs) into `households`/`household_pins` (019), and the
+// files are printed from those rows by tools/registry-drain.mjs. So a housemate
+// bound in the store and not yet drained was "not of this household" at the
+// hold door, which is the exact gap the inventory named (B1).
+//
+// The walk is the deriver's (`household-deriver.mjs § resolveHouse`, POS-160),
+// over the rows `loadRegistryRows` reads, so this answers "which house NOW" the
+// same way every store-side resolver does. "Which key did this handle's mail
+// mint under on a date" is a different question with a date in it; it stays
+// the sealed ledger's (POS-341), and nothing here answers it.
+//
+// ONE HOUSE, WHICHEVER SPELLING IT WEARS (the Starling House, 2026-09-30). The
+// ledger can spell one house two ways at once (kinofire `hh:house-of-many-doors`,
+// the three PR-joined housemates `gh:334016343`); grouped by that spelling, the
+// publish note told kinofire the house's own parcel was another household's
+// ground. The w41 hotfix grouped the clone's answer by the resolved house and
+// carried it as `house` beside the ledger's `key`. Here there is no ledger
+// spelling to carry: `key` IS the house (`hh:<slug>`) and `residents` is the
+// house's own row, so every housemate answers the same block by construction,
+// and `world-hold.mjs § sameHousehold`'s `house ?? key` reads the house.
+//
+// ── ASYNC AT THE CALLER, SYNC IN THE LADDER ─────────────────────────────────
+//
+// The store read is async, and several readers ask it inside a synchronous
+// ladder (`world-hold.mjs § sameHousehold`, `setDownAnswer`) that falsifiers
+// drive with an injected function. So the read is split in two:
+// `householdLookup()` reads the rows ONCE and hands back a synchronous
+// `(handle) => block` over them; `householdOf(handle)` is the one-shot form.
+// A caller that asks many times per request takes the lookup at its own async
+// edge and passes it down, exactly as the ladders were already handed one.
+//
+// ── NULL IS "COULD NOT LOOK" ────────────────────────────────────────────────
+//
+// `householdLookup()` answers null when the office is not pointed at the record
+// (or the read failed): the block is garnish and the ladders already degrade
+// on an absent resolver ("handle-only", and they say so). A read that DID look
+// and found no house for a handle answers the solo block, which is a fact
+// ("this handle is a household of one"), not a guess about a house.
+//
+// No memo across calls, on purpose: the registry is three small reads, the
+// office runs several processes and a ceremony writes in only one of them, so
+// a per-process fold would answer with the town from before the ceremony in
+// every other process for as long as it lived.
 
-import { statSync, readFileSync } from "node:fs";
+import { loadRegistryRows } from "./registry-store.mjs";
+import { registryFromRows, pinsFromRows } from "./registry-rows.mjs";
+import { isResidentHandle } from "./residency.mjs"; // one definition of what a handle is
+import { resolveHouse, keyOfSlug } from "./household-deriver.mjs";
 
-import { join, resolve, dirname } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-
-import { resolveHouse } from "./household-deriver.mjs";
-
-const HERE = dirname(fileURLToPath(import.meta.url));
-const TOWN_CLONE = process.env.TOWN_CLONE ?? resolve(HERE, "..", "town-clone");
-
-// Guarded: with no town clone (test fixtures, a bare checkout) the module must
-// load anyway and householdOf must answer null — the block is garnish, and a
-// missing engine at import time took 73 tests down before this guard existed.
-const { currentHouseholds } = await (async () => {
-  try { return await import(pathToFileURL(join(TOWN_CLONE, "tools", "stamp-mint.mjs"))); }
-  catch (e) { console.warn("households: engine import failed:", e?.message); return { currentHouseholds: null }; }
-})();
-
-let cache = null; // { stamp, byHandle: Map<handle, block> }
-
-function stampOf() {
-  const mt = (p) => { try { return statSync(join(TOWN_CLONE, p)).mtimeMs; } catch { return 0; } };
-  return [mt("WHITE_PAGES/stamp-ledger.md"), mt("tools/households.json"), mt("tools/github-ids.json")].join("|");
+/**
+ * The synchronous `(handle) => block` over one registry read. PURE.
+ *
+ * @param registry `{ households: { slug: rec } }`, as `registryFromRows` gives it.
+ * @param pins     `{ handle: { login, id, … } }`, as `pinsFromRows` gives it.
+ */
+export function householdLookupOf(registry, pins = {}) {
+  const houses = registry?.households ?? {};
+  const memo = new Map();
+  return (handle) => {
+    if (handle == null || handle === "") return null;
+    const h = String(handle);
+    if (memo.has(h)) return memo.get(h);
+    const { slug } = resolveHouse(h, registry, pins);
+    const rec = slug ? houses[slug] ?? {} : null;
+    const block = slug
+      ? { key: keyOfSlug(slug), slug, human: rec.human ?? null, residents: [...(rec.residents ?? [])].map(String).sort() }
+      : { key: `solo:${h}`, slug: null, human: null, residents: [h] };
+    memo.set(h, block);
+    return block;
+  };
 }
 
-function build() {
-  const map = currentHouseholds(TOWN_CLONE); // handle -> { key, provisional }
-  let declared = {};
-  try { declared = JSON.parse(readFileSync(join(TOWN_CLONE, "tools", "households.json"), "utf8")).households ?? {}; } catch { /* registry optional */ }
-  // An entry answers to every key form its house can wear: the hh: key (post
-  // ledger re-key), each account's gh: key (the common case — one shared
-  // credential), the login: fallback, and — since POS-160 — a FORMER or
-  // provisional slug, through the one alias mechanism. The 2026-08-08 harvest
-  // declared eleven existing gh:-keyed houses; their nameplates must not wait
-  // on a ledger ceremony the economy doesn't need.
-  //
-  // THE WALK IS THE DERIVER'S (POS-160). This used to build its own key -> slug
-  // map, which was a fourth answer to "which house" and the only one that could
-  // not see `formerly` — so a house that re-keyed through the choose-once path
-  // lost its nameplate on every surface this module feeds, silently, for as
-  // long as a stale key was in play. Same question, same walk, one place.
-  //
-  // It stays SYNCHRONOUS and it stays on the town clone's file. Identity reads
-  // sit in sync routes, the deriver's loaded half is a store read, and the
-  // pure core takes the registry as an argument precisely so this caller can
-  // hand it one it already has. What moved here is the derivation; what did
-  // not move is where this module gets its bytes.
-  // RESIDENTS ARE GROUPED BY THE HOUSE, NOT BY THE LEDGER KEY (the Starling
-  // House, 2026-09-30). One house can wear two ledger keys at once: kinofire,
-  // declared through the office door, carries `hh:house-of-many-doors`, and the
-  // three residents who joined by PR under the same account carry
-  // `gh:334016343`. Grouped by key, wayward-archivist's residents left kinofire
-  // out, so the publish note told kinofire that building on the house's own
-  // parcel was building on another household's ground. Eight of 135 declared
-  // houses were split this way on the live town. `key` stays the ledger's own
-  // spelling (what the identity blocks have always shown); the grouping and
-  // `house` are the house's.
-  const houseOf = new Map(); // handle -> hh:<slug>, or the ledger key when no house resolves
-  for (const [handle, rec] of map) {
-    const slug = resolveHouse(rec.key, { households: declared }).slug;
-    houseOf.set(handle, { slug, house: slug ? `hh:${slug}` : rec.key });
-  }
-  const byHouse = new Map(); // house -> [handles]
-  for (const [handle, { house }] of houseOf) {
-    if (!byHouse.has(house)) byHouse.set(house, []);
-    byHouse.get(house).push(handle);
-  }
-  const byHandle = new Map();
-  for (const [handle, rec] of map) {
-    const { slug, house } = houseOf.get(handle);
-    byHandle.set(handle, {
-      key: rec.key,
-      house,
-      slug,
-      human: slug ? declared[slug]?.human ?? null : null,
-      residents: byHouse.get(house).slice().sort(),
-    });
-  }
-  return byHandle;
+// ── WHO GAVE: A GIFT SHOWS ITS HOUSEHOLD (POS-550, Darko 2026-10-09) ────────
+//
+// Gifts are household-scoped (POS-317), but the ledger files each one under the
+// household's first resident (`pot-receipt · … · from: keith`), so a read that
+// printed `from:` named one resident for the whole house's money. DISPLAY ONLY:
+// the ledger line, the close and the holo mint still read the handle, and holo
+// still lands on that resident (household-held stamps are POS-326).
+//
+// The name is the registry row's own `name`, else its slug: the one office rule
+// for a household's name (fund-holder.mjs § holderOf, the fund page's "for"
+// row). A handle no house holds has no house name (`household: null`), and a
+// payer that is not a resident handle (`outside:stripe`) is an outside gift.
+export const OUTSIDE_GIFT = "an outside gift";
+
+/**
+ * The synchronous `(payer) => giver` over one registry read (registryRowsVia's or
+ * loadRegistryRows' rows). PURE. A giver is `{ household, household_key, handle }`,
+ * or `{ outside: true, says }` for a payer no resident is.
+ */
+export function giversOf(rows) {
+  const registry = registryFromRows(rows);
+  const lookup = householdLookupOf(registry, pinsFromRows(rows));
+  return (payer) => {
+    const p = String(payer ?? "");
+    if (!isResidentHandle(p)) return { outside: true, says: OUTSIDE_GIFT };
+    const hh = lookup(p);
+    const rec = hh.slug ? registry.households?.[hh.slug] : null;
+    return { household: hh.slug ? rec?.name ?? hh.slug : null, household_key: hh.key, handle: p };
+  };
+}
+
+/** One registry read -> giversOf's `(payer) => giver`, or null when the store could not be asked. */
+export async function giverLookup(env = process.env) {
+  let rows;
+  try { rows = await loadRegistryRows(env); } catch (e) { warnOnce(e); return null; }
+  return rows === null ? null : giversOf(rows);
+}
+
+/** One registry read -> the synchronous lookup, or null when the store could not be asked. */
+export async function householdLookup(env = process.env) {
+  let rows;
+  try { rows = await loadRegistryRows(env); } catch (e) { warnOnce(e); return null; }
+  if (rows === null) return null;
+  return householdLookupOf(registryFromRows(rows), pinsFromRows(rows));
+}
+
+/** The block for one handle, from the store; null when the store could not be asked. */
+export async function householdOf(handle, env = process.env) {
+  const lookup = await householdLookup(env);
+  return lookup ? lookup(handle) : null;
+}
+
+/**
+ * The resident card's `household`, added at the door (the card's composer is
+ * synchronous and shared with the store's twin). Garnish-shaped: a store that
+ * cannot be asked leaves the card as it was, and never 500s a read.
+ */
+export async function withHouseholdBlock(card, handle, env = process.env) {
+  if (!card) return card;
+  try { const hh = await householdOf(handle, env); if (hh) card.household = hh; } catch { /* garnish only */ }
+  return card;
+}
+
+/** `{ handle: block }` for every handle, or null when no block could be read (the `/me` and `whoami` garnish). */
+export async function householdsFor(handles = [], env = process.env) {
+  const list = [...(handles ?? [])];
+  if (!list.length) return null;
+  const lookup = await householdLookup(env);
+  if (!lookup) return null;
+  return Object.fromEntries(list.map((h) => [h, lookup(h)]));
 }
 
 /**
@@ -119,46 +180,57 @@ function build() {
  * Null when there is no handle to name a household after — never a guessed
  * default, for the same reason `humanTokenUrl` returns null rather than
  * somebody else's face.
+ *
+ * `lookup` is the caller's own `householdLookup()` when it already holds one;
+ * otherwise this reads the store once.
  */
-export function humanHandFor(handles = []) {
+export async function humanHandFor(handles = [], lookup = undefined) {
   const list = [...handles].filter(Boolean).map(String);
   if (!list.length) return null;
+  const of = lookup === undefined ? await householdLookup() : lookup;
   let slug = null;
   for (const h of list) {
-    try { const hh = householdOf(h); if (hh?.slug) { slug = hh.slug; break; } } catch { /* garnish only */ }
+    try { const hh = of?.(h); if (hh?.slug) { slug = hh.slug; break; } } catch { /* garnish only */ }
   }
   return `human-of-${slug ?? list[0]}`;
 }
 
 /**
- * The household a resident's OWN key would carry, from the town's pins.
+ * `humanHandFor` read backwards: the slug or handle a `human-of-<x>` hand was
+ * named after, or null for any other actor. The prefix is reserved town-wide
+ * (see above), so a hand wearing it can only have been minted there, and
+ * `<x>` is handed to the deriver like any other spelling, never trusted as a
+ * house on its own (POS-457: the store files a human's act under the house).
+ */
+export const humanHandHouse = (actor) => {
+  const s = String(actor ?? "");
+  return s.startsWith("human-of-") ? s.slice("human-of-".length) || null : null;
+};
+
+/**
+ * The household a resident's OWN key would carry, from the store's pins.
  *
  * POS-233: a placer places a resident's first parcel as the resident's own act,
  * so the act must land under the household the resident's key names — and a
  * signed-in key names it by the GitHub login (`oauth.mjs § householdFor`, whose
  * pins are authoritative: "Pinned immutable IDs win"). This reads the same pin
- * that function matches, in the other direction.
+ * that function matches, in the other direction, from the same record
+ * (`household_pins`, POS-343).
  *
- * Null for a handle with no pin: the office then cannot say which household the
- * act belongs under, and the caller refuses rather than guessing.
+ * Null for a handle with no pin, AND when the store could not be asked: the
+ * office then cannot say which household the act belongs under, and the caller
+ * refuses rather than guessing.
  */
-export function pinnedLoginOf(handle) {
+export async function pinnedLoginOf(handle, env = process.env) {
   try {
-    const pins = JSON.parse(readFileSync(join(TOWN_CLONE, "tools", "github-ids.json"), "utf8"));
-    const login = pins?.[handle]?.login;
+    const rows = await loadRegistryRows(env);
+    if (rows === null) return null;
+    const login = pinsFromRows(rows)?.[handle]?.login;
     return login ? String(login) : null;
   } catch { return null; }
 }
 
 let warned = false;
-export function householdOf(handle) {
-  if (!currentHouseholds) return null; // no engine at this checkout — garnish stays absent
-  try {
-    const stamp = stampOf();
-    if (!cache || cache.stamp !== stamp) cache = { stamp, byHandle: build() };
-    return cache.byHandle.get(handle) ?? null;
-  } catch (e) {
-    if (!warned) { warned = true; console.warn("households: resolve failed:", e?.message); }
-    return null;
-  }
+function warnOnce(e) {
+  if (!warned) { warned = true; console.warn("households: the store's registry could not be read:", e?.message); }
 }

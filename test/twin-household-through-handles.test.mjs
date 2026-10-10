@@ -36,7 +36,7 @@ const LOST_KEY = { household: "nobody-human", handles: new Set(["drifter"]) };
 async function seed() {
   const c = await store.connect("world2_owner");
   try {
-    await c.query("TRUNCATE claims, marks, windows, identities, households, household_pins CASCADE");
+    await c.query("TRUNCATE claims, marks, windows, households, household_pins CASCADE");
     await c.query(
       `INSERT INTO windows (id, opens_at, closes_at, status)
        VALUES (300, now() - interval '1 hour', now() + interval '11 hours', 'open')`);
@@ -47,8 +47,8 @@ async function seed() {
     await c.query(
       `INSERT INTO household_pins (handle, login, gh_id, pinned)
        VALUES ('fern', 'fern', 201, '2026-08-01'), ('yan', 'yan', 202, '2026-08-01')`);
-    await c.query(
-      `INSERT INTO identities (handle, household) VALUES ('fern', 'hh:hearth'), ('yan', 'hh:yonder')`);
+    // `identities` is a VIEW over the two tables above since 055 (POS-350): it
+    // reads fern -> hh:hearth and yan -> hh:yonder with nothing more written.
     // fern's draft, filed under the house as the write path files it
     await c.query(
       `INSERT INTO claims (window_id, class, claimant, household, status, body, stake, slug)
@@ -103,10 +103,12 @@ test("that key reads the hearth's marks at /world2/my-marks", { skip }, async ()
 
 test("a key with no resolving handle reads nothing, and the answer names why", { skip }, async () => {
   const r = await claims.keyHouseholdOf(pool, LOST_KEY);
-  assert.equal(r.household, "solo:nobody-human");
+  // POS-457 (review of #438): the key's NAME is never asked of the deriver as a
+  // bare string (it could be some house's slug); a key in no house is its own
+  // first handle's solo:, which is what the pen files that handle's acts under.
+  assert.equal(r.household, "solo:drifter");
   assert.equal(r.via, null);
-  assert.match(r.disclosure, /none of this key's handles \(drifter\) is pinned to a house/);
-  assert.match(r.disclosure, /names no house either/);
+  assert.match(r.disclosure, /none of this key's handles \(drifter\) is placed in a house/);
   const drafts = await serve.world2MyDrafts(LOST_KEY);
   assert.deepEqual(drafts.drafts, []);
   assert.match(drafts.household_disclosure, /drifter/);

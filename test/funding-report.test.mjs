@@ -12,10 +12,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { copyTownTools } from "./helpers/town-tools.mjs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 
 import { foldFunding, readPots, parseLedgerText } from "../src/funding.mjs";
@@ -24,6 +24,7 @@ import { stripeQueue } from "../tools/funding-report.mjs";
 import { decide, decodeSession, OUTSIDE_FROM, HANDLE_FIELD } from "../tools/stripe-watch.mjs";
 import { townLoginHands } from "../src/household-logins.mjs";
 import { NO_TOWN, townClone, townModuleUrl } from "./fixture-paths.mjs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TOWN = [townClone()].filter(Boolean)
@@ -44,7 +45,7 @@ const EMPTY = { fold: { invalid: [] }, potsInvalid: [], stripe: { anomaly: [] },
 
 function seamTown({ pins = { paz: { login: "p", id: 2 }, stan: { login: "s", id: 1 } } } = {}) {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
-  const repo = mkdtempSync(join(tmpdir(), "report-town-"));
+  const repo = tempDir("report-town-");
   mkdirSync(join(repo, "tools"), { recursive: true });
   mkdirSync(join(repo, "WHITE_PAGES"), { recursive: true });
   writeFileSync(join(repo, "tools", "github-ids.json"), JSON.stringify(pins));
@@ -60,8 +61,7 @@ function seamTown({ pins = { paz: { login: "p", id: 2 }, stan: { login: "s", id:
   writeFileSync(keyFile, privateKey.export({ type: "pkcs8", format: "pem" }));
   // a real git repo and the town's real tools, so the command this report PRINTS
   // can be executed here exactly as the operator would paste it
-  for (const f of ["stamp-mint.mjs", "epoch-close.mjs"])
-    writeFileSync(join(repo, "tools", f), readFileSync(join(TOWN, "tools", f)));
+  copyTownTools(TOWN, repo);
   execFileSync("git", ["init", "-q"], { cwd: repo, encoding: "utf8" });
   execFileSync("git", ["add", "-A"], { cwd: repo, encoding: "utf8" });
   execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "fixture"], { cwd: repo, encoding: "utf8" });
@@ -432,7 +432,7 @@ test("POS-183 · the report reads a EUR payment's SETTLED dollars from the journ
   // row a tick after the session was first journalled, which is the case a
   // reader of `seen` rows alone would get wrong.
   const town = seamTown();
-  const scratch = mkdtempSync(join(tmpdir(), "report-settled-"));
+  const scratch = tempDir("report-settled-");
   const created = Math.floor(Date.now() / 1000) - 2 * 86_400;
   const raw = {
     id: "cs_live_eur000000000000000000000", object: "checkout.session", created, status: "complete", payment_status: "paid",

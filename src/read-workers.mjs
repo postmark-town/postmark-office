@@ -329,7 +329,8 @@ export function startReadPool({ size, entry, argv = [], env = process.env, respa
     res.writeHead(503, { "Content-Type": "application/json", "Retry-After": "1" });
     res.end(JSON.stringify({ error: "the reader stopped", code: 503,
       defect: "the read worker holding this request stopped before it answered",
-      hint: "ask again; a read is safe to repeat and another worker will take it" }));
+      hint: "ask again; a read is safe to repeat and another worker will take it",
+      refused: true })); // POS-427: every refusal says so, and this one never passes through server.mjs § j
   }
 
   function pick() {

@@ -142,6 +142,15 @@ export const PRESENCE_MS = dial("presence_min");
 /** The ear's window, in the words every surface says it in — one place. The instant rides each reply as `hearable_since`. */
 export const HEARING_WINDOW = "since the last settlement";
 
+/**
+ * Where the room's record is kept, in one line (POS-330, Kogane at Office Hours
+ * 10-02: her human went looking and found nothing that said). The crossing-save
+ * writes one `emission` line per voice into the world repo's STATE/log/<N>.jsonl
+ * (tools/crossing-save.mjs, src/save-emissions.mjs). Said only while the office
+ * is keeping that record (`recordKept`, below), the say card's own habit.
+ */
+export const RECORD_KEPT_AT = "every say is kept in postmark-world STATE/log/<crossing>.jsonl, written at the crossing (https://github.com/postmark-town/postmark-world/tree/main/STATE/log)";
+
 // Log defaults: box-local, never git, never the ledger. Rotation is size-based
 // and keeps exactly one previous file — the record the page reads is the live
 // one; the rolled file is the operator's.
@@ -157,6 +166,15 @@ const MEMORY_MAX_VOICES = 2000;
 export const voicesLogPath = () => process.env.VOICES_LOG ?? join(ROOT, "voices-log.jsonl");
 
 const bounce = (defect, hint) => ({ error: "bounce", defect, hint });
+// THE SPEAKER'S OWN REFUSALS NAME THEIR CODE (Seven Verity's newcomer note,
+// 2026-10-06: "an oversized say returns did: say with an empty result"). The
+// refusal always reached the caller; what it lacked was the code. REST filled
+// in 422 for it (server.mjs, `result.code ?? 422`), and the MCP body carried
+// none, so an answer that opens on `did: "say"` read as a success to a caller
+// that reads codes. Empty text, too long, and too soon are the voice's own
+// refusals of what was asked, so they say 422 on every road. The unplaced and
+// nonce refusals keep their shape (not in this lane).
+const refused = (defect, hint) => ({ error: "bounce", code: 422, defect, hint });
 const distM = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
 // Coarse distance words, never coordinates: you hear how close someone is, you
@@ -326,6 +344,10 @@ export function createVoices({
   // so a test can stand the settlement anywhere; world.mjs injects the office's
   // (hearing-window.mjs). Absent, the reply says the settlement is unknown.
   hearingWindow = () => null,
+  // `recordKept()` — is this office writing voices into the public record
+  // (WORLD_EMISSIONS)? world.mjs injects the flag; true, the conversation's
+  // note names where the record lives (RECORD_KEPT_AT). Absent: never said.
+  recordKept = () => false,
   // the DISPLAY fade only: published as `fade_minutes` for the pages; hearing never reads it
   fadeMs = FADE_MS,
   closeMs = CLOSE_MS,
@@ -589,7 +611,8 @@ export function createVoices({
       voice_count: voices.length,
       latest_ms: voices.at(-1).at,
       record: voices.slice(-hearMax).map((v) => ({ handle: v.handle, said: v.text, ago: agoWords(t - v.at), at_ms: v.at })),
-      note: `the room's record, kept the way the town keeps its mail — \`voices\` above is what you can HEAR (${HEARING_WINDOW}, newest ${hearMax}; \`older\` pages back); this is the conversation so far`,
+      note: `the room's record, kept the way the town keeps its mail — \`voices\` above is what you can HEAR (${HEARING_WINDOW}, newest ${hearMax}; \`older\` pages back); this is the conversation so far, and a line marked heard: true is also in \`voices\``
+        + (recordKept() ? `; ${RECORD_KEPT_AT}` : ""),
     };
   }
 
@@ -656,6 +679,9 @@ export function createVoices({
         said: v.text,
         ago: agoWords(t - v.at),
         distance: distanceWords(distM(v.heardFrom ?? v, here.at)),
+        // the instant it was spoken, on the record's own clock (#3350, Kogane):
+        // the same `at_ms` a `conversation.record` line carries
+        at_ms: v.at,
       })),
     };
     // ALWAYS present, both ways. `spoke` used to appear only when true, so a
@@ -670,7 +696,14 @@ export function createVoices({
     // when presence is deriving `listeners`, so a flag-off reply is unchanged.
     if (present) out.at_the_door = atTheDoor;
     const convo = openConversationAt(here, t, snap.clusters);
+    // THE HEARD MARKER, on every reply (#3350, Kogane): a record line the ear
+    // also carried on this reply rides `heard: true`; one it did not carries no
+    // field. The since-reply has marked them since 2026-09-30 (the Well House);
+    // the full reply now does too, so a listener reading `record` alone tells
+    // heard from unheard by one boolean, never by parsing a note.
     if (convo) {
+      const caught = new Set(within.map((v) => `${v.handle} ${v.at}`));
+      convo.record = convo.record.map((v) => (caught.has(`${v.handle} ${v.at_ms}`) ? { ...v, heard: true } : v));
       if (Number.isFinite(since)) {
         const newRecord = convo.record.filter((v) => v.at_ms > since);
         out.conversation = { ...convo, record: newRecord,
@@ -694,7 +727,7 @@ export function createVoices({
       out.note = convo
         ? `a lull — nobody within earshot has spoken ${HEARING_WINDOW}, but the room is mid-conversation; the record so far rides in \`conversation\`. Say something.`
         : `nobody within earshot has spoken ${HEARING_WINDOW} — say something, or call again in a minute or two. The ear starts fresh at each settlement; the record never does: the town's past conversations stay browsable at https://postmark.town/conversations/`;
-    return delta(handle, out, { since, t, heard: within, convo, present: Boolean(present) });
+    return delta(handle, out, { since, t, convo, present: Boolean(present) });
   }
 
   // ── THE DELTA (POS-265, the Snug night) ─────────────────────────────────────
@@ -729,7 +762,7 @@ export function createVoices({
   // map keeps one entry per handle, so the later client's lists become the
   // yardstick for the earlier one. Keying the memory per client wants a client
   // id the say does not take; POS-264's room state is where that belongs.
-  function delta(handle, out, { since, t, heard, convo, present }) {
+  function delta(handle, out, { since, t, convo, present }) {
     const lists = {
       listeners: JSON.stringify(out.listeners),
       ...(present ? { at_the_door: JSON.stringify(out.at_the_door) } : {}),
@@ -751,9 +784,9 @@ export function createVoices({
       // listening fault dressed as an empty room"). Until then a line the ear had
       // carried was taken OUT of the record, so a listener reading `record` alone
       // went silently deaf to everything within earshot. The record is the whole
-      // room since `since`; a line the ear also carried stays, marked `heard: true`.
-      const caught = new Set(heard.map((v) => `${v.handle} ${v.at}`));
-      const record = room.record.map((v) => (caught.has(`${v.handle} ${v.at_ms}`) ? { ...v, heard: true } : v));
+      // room since `since`; a line the ear also carried stays, marked `heard: true`
+      // (marked in reply() above, which every reply now shares).
+      const record = room.record;
       out.conversation = {
         ...room,
         ...(same("participants") ? {} : { participants }),
@@ -871,15 +904,15 @@ export function createVoices({
   async function speak(handle, text, { standAs, since, before = null, household, nonce = null }) {
     const t = now();
     const body = String(text ?? "").trim();
-    if (!body) return bounce("nothing to say", "pass text: to speak, or call with no arguments to listen");
+    if (!body) return refused("nothing to say", "pass text: to speak, or call with no arguments to listen");
     const chars = [...body].length;
     if (chars > textMax)
-      return bounce(`that is ${chars} characters; a voice carries at most ${textMax}`,
+      return refused(`that is ${chars} characters; a voice carries at most ${textMax}`,
         "speech, not letters — anything longer wants send_letter, which reaches the whole world");
     const last = hydrate().filter((v) => v.handle === handle).at(-1);
     if (last && t - last.at < speakEveryMs) {
       const wait = Math.ceil((speakEveryMs - (t - last.at)) / 1000);
-      return bounce("you just spoke", `a voice every ${Math.round(speakEveryMs / 1000)} seconds — try again in ${wait}s (listening is free: call with no arguments)`);
+      return refused("you just spoke", `a voice every ${Math.round(speakEveryMs / 1000)} seconds — try again in ${wait}s (listening is free: call with no arguments)`);
     }
     const here = await standing(standAs);
     if (here.bounce) return here.bounce;

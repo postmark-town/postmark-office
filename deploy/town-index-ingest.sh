@@ -30,6 +30,16 @@ TOOL="$WORLD2_OFFICE/world2/tools/town-index-ingest.mjs"
 DIR="$WORLD2_LAB/ingest-clones/town-index"
 URL="https://github.com/postmark-town/postmark.git"
 
+# THE ONE SWITCH (POS-341 part 4). STAMP_LINES lives in /etc/postmark-office.env
+# (the ferry and the keep tick read it there), and with it set the quest rows
+# fold on the store's key base. The ferry's run inherits it; the timer's unit
+# reads the dev env, so this reads that one line from its one home. Unset there,
+# unset here, and unsetting it is the rollback.
+if [ -z "${STAMP_LINES:-}" ] && [ -r /etc/postmark-office.env ]; then
+  STAMP_LINES="$(sed -n 's/^STAMP_LINES=//p' /etc/postmark-office.env | tail -n 1 | tr -d "\"'")"
+  export STAMP_LINES
+fi
+
 if ! w2_pgenv law_ingester PG_LAW_INGESTER_PASSWORD; then
   w2_state "$STATE" '"status":"cannot-run","detail":"PG_LAW_INGESTER_PASSWORD unreadable"'
   exit 2

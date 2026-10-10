@@ -26,7 +26,7 @@ import { doorstepBundle } from "../src/doorstep-bundle.mjs";
 import { householdApex } from "../src/household-apex.mjs";
 import { unreadFor, UNREAD_LISTED } from "../src/unread-store.mjs";
 import { installActsPen, uninstallActsPen, RECORD_ON } from "./acts-pen-stub.mjs";
-import { indexStore } from "./helpers/office-under-test.mjs";
+import { indexStore, testIndex } from "./helpers/office-under-test.mjs";
 
 const AS_OF = "unreadfixture000000000000000000000000000";
 // Two households. House A keeps ann and amos; house B keeps bea. With an empty
@@ -173,6 +173,17 @@ test("4 · mark-all-read clears all, for every resident the key holds; the secon
   const d = await doorstepBundle("ann", { db, key: A, meta: {}, asOf: AS_OF });
   assert.equal(d.unread.count, 0);
   assert.deepEqual(d.unread.letters, []);
+});
+
+test("4c · switched with no office.db, mark-all-read reads the deliveries from the store (POS-268 5a)", { skip: testIndex() === "office" && "OFFICE_TEST_INDEX=office: this process is not switched" }, async () => {
+  // what a switched office holds where office.db was (server.mjs § ABSENT_INDEX)
+  const gone = () => { throw new Error("office.db was read by a switched door"); };
+  const absent = Object.freeze({ prepare: gone, exec: gone, close() {} });
+  const r = await householdApex({ do: "mark-all-read" }, A, { ...ctx(), db: absent });
+  assert.equal(r.did, "mark-all-read", JSON.stringify(r).slice(0, 300));
+  assert.deepEqual(r.result.marked, { ann: 3, amos: 1 });
+  assert.equal(opens.rows.get(`ann\n${TO_ANN[2].id}`).how, "mark-all-read");
+  assert.equal(await countOf("ann"), 0);
 });
 
 test("4b · mark-all-read with handle: narrows to one resident", async () => {

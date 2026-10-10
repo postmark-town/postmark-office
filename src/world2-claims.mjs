@@ -24,7 +24,9 @@
 
 import { boxOf } from "../world2/tools/seed-import.mjs";
 import { ringOf, ringBox, ringAgrees } from "./ring-box.mjs"; // POS-322: the bbox of a ringed mark is its ring's
-import { houseOfVia, sessionKeysVia, sessionKeyString } from "./household-deriver.mjs";
+import { houseOfVia, sessionKeysVia, sessionKeyString, VIA } from "./household-deriver.mjs";
+import { humanHandHouse } from "./households.mjs";
+import { DOOR_SHARES_THE_CANDLE } from "../world2/tools/candle-lock.mjs"; // POS-404: see § openWindowFor
 // Phase 5.6's deferred act is released through world2-pen's insertAct, INSIDE
 // the promotion's own transaction (imported lazily there — R1, 2026-08-29).
 
@@ -130,23 +132,58 @@ const householdKeys = new Map();
  */
 export async function keyHouseholdOf(p, key) {
   const named = String(key?.household ?? "").trim();
-  const handles = [...(key?.handles ?? [])];
+  const handles = [...(key?.handles ?? [])].map(String);
+  // EVERY house the key's handles stand in, not only the first: a key whose
+  // handles live in two houses reads (and puts forward) the drafts of both.
+  const households = [];
+  let via = null;
   for (const handle of handles) {
-    const household = await householdKeyFor(p, handle);
-    if (household && !household.startsWith("solo:")) return { household, via: handle };
+    const { slug } = await houseOfVia(p, handle, { via: HANDLE_ROADS });
+    if (slug && !households.includes(`hh:${slug}`)) { households.push(`hh:${slug}`); via ??= handle; }
   }
-  const label = named || handles[0] || null;
-  const household = await householdKeyFor(p, label);
+  if (households.length) return { household: households[0], households, via };
+  // The key's VERIFIED account (`oauth.mjs` puts the GitHub id it signed in
+  // with on the key), on the ACCOUNT road alone: an id matches only by id, and
+  // the login only an account row that carries no id (`accountMatches`).
+  if (key?.ghId != null) {
+    const { slug } = await houseOfVia(p, { ghId: key.ghId, ghLogin: named || null }, { via: [VIA.ACCOUNT] });
+    if (slug) return { household: `hh:${slug}`, households: [`hh:${slug}`], via: `gh:${key.ghId}` };
+  }
+  // A label that IS a house key (a keys-file key that names its house) names
+  // itself, on the slug roads only.
+  if (named.startsWith("hh:")) {
+    const { slug } = await houseOfVia(p, named, { via: [VIA.SLUG, VIA.FORMERLY] });
+    if (slug) return { household: `hh:${slug}`, households: [`hh:${slug}`], via: named };
+  }
+  // NEVER THE BARE LABEL (POS-457, review of #438). The deriver reads a bare
+  // string as a handle, a pin, a slug or a former slug, so a stranger whose
+  // GitHub login is `starforge` (a visitor key: the login, no handles, its id)
+  // would have been answered `hh:starforge` and read that house's drafts. A key
+  // nothing above placed is its own first handle's `solo:`, or its account's
+  // `gh:<id>`, or NO house at all (null: every read then sees only what is
+  // public, and no write is scoped to anybody).
+  const household = handles[0] ? `solo:${handles[0]}` : key?.ghId != null ? `gh:${key.ghId}` : null;
   return {
-    household, via: null,
+    household, households: household ? [household] : [], via: null,
     disclosure: handles.length
-      ? `none of this key's handles (${handles.join(", ")}) is pinned to a house, so its household is read from the key's own name "${label}"${household?.startsWith("solo:") ? ", which names no house either: this answer holds only what was filed under that name" : ""}`
-      : `this key carries no handles, so its household is read from the key's own name "${label}"`,
+      ? `none of this key's handles (${handles.join(", ")}) is placed in a house, so it reads only what was filed under "${household}"`
+      : household
+        ? `this key carries no handles and its account (${household}) is in no house, so it reads only what was filed under that account`
+        : `this key carries no handles and no verified account, so it is in no house: it reads only what is public`,
   };
 }
 
+/** The roads a HANDLE reaches its house by: listed as a resident, or pinned by id. Never as a slug. */
+const HANDLE_ROADS = [VIA.RESIDENT, VIA.PIN];
+
 export async function householdKeyForKey(p, key) {
   return (await keyHouseholdOf(p, key)).household;
+}
+
+/** `withHousehold` for a KEY: its first house declared, every house's spellings in the set. */
+export async function withKeyHousehold(p, key, fn) {
+  const { household, households = [] } = await keyHouseholdOf(p, key);
+  return withHousehold(p, household, fn, { also: households.slice(1) });
 }
 
 /**
@@ -180,9 +217,26 @@ export async function householdKeyForKey(p, key) {
  * the office. On the pool it is folded once per process (`houseRowsVia`'s
  * WeakMap) and the transaction opens holding an array.
  */
-export async function withHousehold(p, household, fn) {
+export async function withHousehold(p, household, fn, { also = [] } = {}) {
+  // `also`: the other houses a key's handles stand in (keyHouseholdOf's
+  // `households`). Their spelling sets join this one, after it.
   const keys = await sessionKeysVia(p, household);
+  for (const h of also) for (const k of await sessionKeysVia(p, h)) if (!keys.includes(k)) keys.push(k);
   const client = await p.connect();
+  // ── A STORE RESTART NEVER CRASHES THE OFFICE (POS-484) ──────────────────
+  // `store-pool.mjs § onPenClient`'s rule, kept here for this client. pg emits a
+  // session the server ended (a restart's fast shutdown, a crash, the idle
+  // transaction timeout) as an 'error' event on the client, and while the client
+  // is checked out nobody else listens, so an unheard 'error' is a crashed
+  // office. And a client whose ROLLBACK failed may still be inside this
+  // transaction, `app.household` set, so it is destroyed (`release(true)`),
+  // never handed to the next caller (POS-370's rule).
+  let discard = false;
+  const heard = (e) => {
+    discard = true;
+    console.error(`[world2-claims] a household connection failed (${household}): ${String(e?.message ?? e).slice(0, 200)}`);
+  };
+  client.on?.("error", heard); // a test's stub client may be a plain object with query and release
   try {
     await client.query("BEGIN");
     await client.query("SELECT set_config('app.household', $1, true)", [household]);
@@ -195,10 +249,11 @@ export async function withHousehold(p, household, fn) {
     await client.query("COMMIT");
     return out;
   } catch (err) {
-    try { await client.query("ROLLBACK"); } catch { /* connection already gone */ }
+    try { await client.query("ROLLBACK"); } catch { discard = true; /* gone, or still inside the transaction */ }
     throw err;
   } finally {
-    client.release();
+    client.removeListener?.("error", heard);
+    client.release(discard ? true : undefined);
   }
 }
 
@@ -262,6 +317,52 @@ export async function householdKeyFor(p, handle) {
 }
 
 /**
+ * THE HOUSE AN ACT IS FILED UNDER — the one answer for `acts.household` and
+ * `claims.household` (POS-457), asked of the deriver in this order:
+ *
+ *   1. the ACTING HANDLE (`row.actor`): a resident's handle names its house;
+ *   2. a human's hand (`human-of-<x>`, `households.mjs § humanHandHouse`): the
+ *      house it was named after;
+ *   3. the row's `household`, which is whatever the door put there.
+ *
+ * THE ORDER IS THE FIX. A door puts the KEY'S LABEL on `row.household` (the
+ * GitHub login an OAuth key resolved to: the draft branch's name since 1.0,
+ * and `pinnedLoginOf`'s answer for a placer), and a login is not a spelling
+ * the deriver may read for an account pinned by id (`accountMatches`: a
+ * recycled login must not reach the house). So asking it first filed every act
+ * of a signed-in resident under `solo:<login>`: measured on the 10-08 dump,
+ * 2,938 acts and 260 claims since the law date, against 859 and 16 under the
+ * slug. Asked of the handle, the same rows name their house.
+ *
+ * THE ROADS ARE NARROW ON PURPOSE (review of #438). A handle reaches its house
+ * as a resident or through its pin's id, never as a slug: `mari` is a resident
+ * of starforge AND the slug of another house. A human's hand `human-of-<x>` was
+ * minted from a slug when the house had one, so `hh:<x>` is asked first (the
+ * slug roads), then `<x>` as a handle.
+ *
+ * A HOUSELESS ACTOR IS ITS OWN `solo:<handle>`. The row's `household` (the
+ * key's login label) is never handed to the deriver as a bare string: it would
+ * be read as a handle, a slug or a former slug, and a stranger whose login is
+ * some house's name would file into that house. Only a row with no actor falls
+ * back to its `household`, as before; one already carrying `solo:` is not
+ * wrapped twice (the census found `solo:solo:martes` on a ride act).
+ */
+export async function actHouseholdFor(p, row) {
+  const actor = row?.actor ? String(row.actor) : null;
+  const hand = humanHandHouse(actor);
+  const asks = hand
+    ? [[`hh:${hand}`, [VIA.SLUG, VIA.FORMERLY]], [hand, HANDLE_ROADS]]
+    : actor ? [[actor, HANDLE_ROADS]] : [];
+  for (const [x, via] of asks) {
+    const { slug } = await houseOfVia(p, x, { via });
+    if (slug) return `hh:${slug}`;
+  }
+  if (actor) return `solo:${hand ?? actor}`;
+  const named = /^solo:/.test(row?.household ?? "") ? row.household.slice("solo:".length) : row?.household;
+  return householdKeyFor(p, named);
+}
+
+/**
  * Called from appendJournal beside mirrorAct, with the same normalized row.
  *
  * -- THE STAKE IS THE BOUNDARY (Keemin's ruling, 2026-08-28) -----------------
@@ -298,7 +399,7 @@ export function claimEligible(row, env = process.env) {
  *  any transaction opens, so `officeWrite` can declare it at BEGIN. */
 export async function claimHouseholdFor(row, env = process.env) {
   const p = await pool(env);
-  return householdKeyFor(p, row.household ?? row.actor);
+  return actHouseholdFor(p, row);
 }
 
 /**
@@ -330,6 +431,26 @@ export async function declaredKeys(client, household) {
 }
 
 /**
+ * THE WINDOW A CLAIM FILES INTO, read on the claim's own transaction after the
+ * candle's lock (POS-404, postmark-office#349; world2/tools/candle-lock.mjs).
+ *
+ * Read with no lock, a door filing during a clearing saw the closing window as
+ * open, waited on the clearing's row lock at its INSERT, and wrote into the
+ * window after it closed: pending for good, on no docket, judged by no clearing.
+ * The shared lock puts the door behind a running clearing and the clearing
+ * behind a filing door, so the read below always answers with a window that
+ * stays open until this transaction commits. Held to COMMIT, and taken BEFORE
+ * any write on the claim, so the clearing never waits on a door that waits on it.
+ */
+export async function openWindowFor(client, dark) {
+  await client.query(DOOR_SHARES_THE_CANDLE);
+  const { rows: [win] } = await client.query(
+    "SELECT id FROM windows WHERE status = 'open' ORDER BY id DESC LIMIT 1");
+  if (!win) throw new Error(dark);
+  return win;
+}
+
+/**
  * THE CANDLE HALF OF ONE ACT, ON ONE CLIENT — R1 of the pen-flip design
  * (2026-08-29): this used to be the body of a second queue on a second pool,
  * which is the two-pens disease reproduced inside Postgres (DESIGN §2 R1).
@@ -341,9 +462,8 @@ export async function declaredKeys(client, household) {
  */
 export async function claimTxFromJournal(client, row, seq, { household, actId = null, env = process.env } = {}) {
       const payload = row.payload == null ? {} : JSON.parse(row.payload);
-      const { rows: [win] } = await client.query(
-        "SELECT id FROM windows WHERE status = 'open' ORDER BY id DESC LIMIT 1");
-      if (!win) throw new Error("no open window — the candle is dark; bootstrap the next window before the docket can take claims");
+      const win = await openWindowFor(client,
+        "no open candle — the candle is dark; the next candle must be lit (its windows row bootstrapped) before the docket can take claims");
 
       // -- withdraw ---------------------------------------------------------
       //
@@ -422,6 +542,26 @@ export async function claimTxFromJournal(client, row, seq, { household, actId = 
         supersedes = standing?.id ?? null; // a fresh slug amends nothing: null, as before
       }
 
+      // THE CONTINUATION EDGE, ON THE ROW (POS-446, 2026-10-08). A predicate or
+      // a naming mark IS its parent continued (004_marks_data.sql: "claims.parent
+      // ... resolved to marks.parent at materialization"), and the clearing copies
+      // `claims.parent` and nothing else. This pen wrote the parent only into
+      // `data.parent_id`, so every door-made naming claim since window 162 locked
+      // with `parent` NULL and materialized a mark with no continuation edge:
+      // quill-stem/the-fitting-room stands in the store with no parent while its
+      // file is filed under neth/little-free-library. The edge is set HERE, from
+      // the payload's own word, so the claim row is right when it is written —
+      // not repaired by a second resolver downstream. Only a STANDING parent is
+      // named: a parent that is itself still a claim may yet be refused, and a
+      // claim pointing at it would break the clearing's foreign key. That case
+      // stays NULL, as it always was.
+      let parent = null;
+      if ((kind === "predicated" || kind === "naming") && typeof payload.parent_id === "string" && payload.parent_id) {
+        const { rows: [ground] } = await client.query(
+          "SELECT id::text FROM marks WHERE slug = $1 AND status = 'standing' LIMIT 1", [payload.parent_id]);
+        parent = ground?.id ?? null;
+      }
+
       // THE DEFERRED ACT rides on the draft it belongs to (world2-acts.mjs
       // § the deferral). A draft is not a public deed, so nothing was mirrored;
       // the row is carried here, in the claim's own `data`, and mirrored the
@@ -476,7 +616,7 @@ export async function claimTxFromJournal(client, row, seq, { household, actId = 
       // declaration; only the declaration is a deed.
       const promoted = await client.query(
         `UPDATE claims SET status = $12, class = $2, body = $3, geometry = $4, bbox = $5,
-                stake = $6, supersedes = $7, data = $8, slug = $9,
+                stake = $6, supersedes = $7, data = $8, slug = $9, parent = $13,
                 window_id = CASE WHEN $12 = 'pending' THEN $1 ELSE window_id END,
                 submitted_at = CASE WHEN $12 = 'pending' THEN now() ELSE submitted_at END
           WHERE status = 'draft' AND claimant = $10 AND slug = $9 AND household = ANY($11)
@@ -494,7 +634,7 @@ export async function claimTxFromJournal(client, row, seq, { household, actId = 
         // is the whole of RULING 4 in one statement — the read widens, the row
         // never moves.
         [win.id, kind, body ?? null, JSON.stringify(geometry), bbox, stamps ?? 0,
-         supersedes, data, slug, row.actor, await declaredKeys(client, household), status]);
+         supersedes, data, slug, row.actor, await declaredKeys(client, household), status, parent]);
       if (promoted.rowCount) {
         state.written += 1;
         if (status === "pending") state.submitted += 1;
@@ -510,10 +650,10 @@ export async function claimTxFromJournal(client, row, seq, { household, actId = 
       // without saying whose it is. Pending rows would pass either way; one
       // path is fewer.
       await client.query(
-        `INSERT INTO claims (window_id, class, claimant, household, body, geometry, bbox, stake, supersedes, data, slug, status)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+        `INSERT INTO claims (window_id, class, claimant, household, body, geometry, bbox, stake, supersedes, data, slug, status, parent)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
         [win.id, kind, row.actor, household, body ?? null,
-         JSON.stringify(geometry), bbox, stamps ?? 0, supersedes, data, slug, status]);
+         JSON.stringify(geometry), bbox, stamps ?? 0, supersedes, data, slug, status, parent]);
       state.written += 1;
 }
 
@@ -597,7 +737,7 @@ export async function retractPendingClaim(q, { windowId, slug, claimant, env = p
  * draft put forward by a stake (`promoteDraftOnStake`). Either way the newest
  * declaration on the docket is the one the clearing rules on.
  */
-export const REPLACED_CHECK = "replaced: a later claim on this mark in the same window replaces this one";
+export const REPLACED_CHECK = "replaced: a later claim on this mark in the same candle replaces this one";
 
 export async function retractReplaced(client, { windowId, slug, claimant, except = null }) {
   const { rows } = await client.query(
@@ -666,15 +806,28 @@ export async function retractReplaced(client, { windowId, slug, claimant, except
  * for a stake on an already-public mark, and never an error. `window` is the
  * candle the claim joined, which is the key its retraction is written against.
  */
-export async function promoteDraftOnStake({ actor, householdName, slug, stamps = 0 }, env = process.env) {
+export async function promoteDraftOnStake({ actor, householdName, key = null, slug, stamps = 0 }, env = process.env) {
   if (!candleEnabled(env)) return { promoted: false, claim: null, window: null };
   const p = await pool(env);
-  const household = await householdKeyFor(p, householdName ?? actor);
-  const { rows: [win] } = await p.query(
-    "SELECT id FROM windows WHERE status = 'open' ORDER BY id DESC LIMIT 1");
-  if (!win) throw new Error("no open window — the candle is dark; the stake cannot put this mark forward");
+  // THE STAKER'S HOUSE, from the staker's KEY (POS-457): its handles, then its
+  // verified account, never a login label another house holds. The label alone
+  // answered `solo:<login>`, whose session cannot see a draft the pen filed
+  // under the slug, so the stake answered `promoted: false` on its own house's
+  // draft. It is the staker's house and not the author's on purpose: the row
+  // policy is what keeps a stranger's stake off a house's private draft.
+  const staker = key ? await keyHouseholdOf(p, key) : null;
+  const household = staker ? staker.household : await householdKeyFor(p, householdName ?? actor);
+  const also = staker?.households?.slice(1) ?? [];
 
+  let windowId = null;
   const out = await withHousehold(p, household, async (c, keys) => {
+    // The window, read INSIDE the transaction after the candle's lock (POS-404,
+    // § openWindowFor). It was read on the pool before the transaction opened,
+    // and a draft composed in the window it is put forward in moves no
+    // window_id, so nothing waited: a stake during a clearing promoted the draft
+    // into the window the clearing was closing, after its pending list was read.
+    const win = await openWindowFor(c, "no open candle — the candle is dark; the stake cannot put this mark forward");
+    windowId = win.id;
     // The spelling set, for `readDraftClaims`' reason: a stake on a draft the
     // house composed under its old key must find that draft, or the stake is
     // read as a stake on an already-public mark and the draft never goes
@@ -748,13 +901,13 @@ export async function promoteDraftOnStake({ actor, householdName, slug, stamps =
         WHERE id = $3`,
       [win.id, Number(stamps) || 0, draft.id, releasedActId == null ? null : String(releasedActId)]);
     return { ...draft, lateFrom };
-  });
-  if (!out) return { promoted: false, claim: null, window: win.id, late_from: null };
+  }, { also });
+  if (!out) return { promoted: false, claim: null, window: windowId, late_from: null };
   state.submitted += 1;
   // `late_from` — the crossing the draft was composed in, present ONLY when the
   // pen restamped the released deed into this window. The door says it in
   // words; a null here means the ordinary same-window promotion.
-  return { promoted: true, claim: out.id, window: win.id, late_from: out.lateFrom ?? null };
+  return { promoted: true, claim: out.id, window: windowId, late_from: out.lateFrom ?? null };
 }
 
 /**
@@ -811,7 +964,7 @@ export function withdrawRetiredRefusal(id, status) {
   if (!status?.found || !status.retired || status.docket_window != null) return null;
   return {
     code: 409,
-    defect: `"${id}" is already retired at window ${status.retired_window ?? "?"}`,
+    defect: `"${id}" is already retired at candle ${status.retired_window ?? "?"}`,
     hint: "there is nothing standing to withdraw — leave it again to bring it back: the same mark, the same id, ruled at the next crossing",
   };
 }
@@ -832,7 +985,7 @@ export function withdrawRetiredRefusal(id, status) {
  */
 export async function readDraftClaims(key, env = process.env) {
   const p = await pool(env);
-  const { household, disclosure } = await keyHouseholdOf(p, key);
+  const { household, households = [], disclosure } = await keyHouseholdOf(p, key);
   // `= ANY(keys)` and not `= household`: the store never re-spells a row, so a
   // draft composed under this house's OLD key is still this house's draft and
   // the door must ask for it by every name the house has worn. The WHERE and
@@ -840,7 +993,7 @@ export async function readDraftClaims(key, env = process.env) {
   // argument.
   const rows = await withHousehold(p, household, (c, keys) => c.query(
     `SELECT id, slug, class, claimant, body, geometry, stake, submitted_at AS composed_at
-       FROM claims WHERE status = 'draft' AND household = ANY($1) ORDER BY slug`, [keys]));
+       FROM claims WHERE status = 'draft' AND household = ANY($1) ORDER BY slug`, [keys]), { also: households.slice(1) });
   return { household, drafts: rows.rows, ...(disclosure ? { disclosure } : {}) };
 }
 
@@ -933,7 +1086,7 @@ export async function claimRowsForSlug(slug, { key = null, env = process.env, p:
   if (!key) return (await p.query(sql, [slug])).rows;
   const household = await householdKeyForKey(p, key);
   if (!household) return (await p.query(sql, [slug])).rows;
-  return (await withHousehold(p, household, (c) => c.query(sql, [slug]))).rows;
+  return (await withKeyHousehold(p, key, (c) => c.query(sql, [slug]))).rows;
 }
 
 /**
@@ -992,7 +1145,7 @@ export async function claimRowsSince(since, { claimants = [], slugs = [], key = 
   if (!key) return (await p.query(sql, args)).rows;
   const household = await householdKeyForKey(p, key);
   if (!household) return (await p.query(sql, args)).rows;
-  return (await withHousehold(p, household, (c) => c.query(sql, args))).rows;
+  return (await withKeyHousehold(p, key, (c) => c.query(sql, args))).rows;
 }
 
 /**
@@ -1024,5 +1177,5 @@ export async function parcelClaimFor(handle, { key = null, env = process.env } =
   if (!key) return read(p);
   const household = await householdKeyForKey(p, key);
   if (!household) return read(p);
-  return withHousehold(p, household, read);
+  return withKeyHousehold(p, key, read);
 }

@@ -11,13 +11,12 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 // No world clone: the walkers door answers an empty roll, so the driven test
 // below exercises the two absent sentences through the production shadow.
-process.env.WORLD_CLONE = join(mkdtempSync(join(tmpdir(), "postmark-walk-who-")), "no-world-clone");
+process.env.WORLD_CLONE = join(tempDir("postmark-walk-who-"), "no-world-clone");
 
 // The live row, as GET https://postmark.town/api/world/walkers served it on
 // 2026-09-25. Pinned as the shape the door publishes, not as a claim about

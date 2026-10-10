@@ -375,8 +375,22 @@
    "blurb": "string",
    "dispatches_to": "string",
    "fields": {
+    "as": {
+     "description": "string",
+     "enum": [
+      "string"
+     ],
+     "type": "string"
+    },
     "handle": {
      "description": "string",
+     "type": "string"
+    },
+    "law": {
+     "description": "string",
+     "items": {
+      "type": "string"
+     },
      "type": "string"
     },
     "on": {

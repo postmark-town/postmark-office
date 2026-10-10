@@ -64,6 +64,7 @@ import { pathToFileURL, fileURLToPath } from "node:url";
 import { deriveLaw, headSha, LAW_REPO_KEY } from "./law-ingest.mjs";
 import { deriveStamps, TOWN_REPO_KEY } from "./stamp-ingest.mjs";
 import { deriveRoll } from "./roll-ingest.mjs";
+import { liveHouseOfVia } from "../../src/household-deriver.mjs";
 
 // Canonical JSON: keys sorted at every depth, so two structurally equal values
 // have one spelling. Both sides are JS values by the time they get here — `pg`
@@ -131,30 +132,20 @@ async function checkLaw(client, lawRepo) {
       `This pen never moves a checkout — put it at the recorded sha. Comparing against a different sha would prove nothing.`] };
   }
 
-  const { rows: derived, identities } = await deriveLaw({ lawRepo });
+  // `identities` is no longer the law pen's (055, POS-350): it is a VIEW over the
+  // store's registry, so there is nothing of it to hold to the law repo.
+  const { rows: derived } = await deriveLaw({ lawRepo });
   const db = (await client.query(
     "SELECT kind, path, key, data FROM law_projection WHERE law_sha = $1", [head.sha])).rows;
-  const dbIdent = (await client.query(
-    "SELECT handle, household, human, gh_login, gh_id, since, status, data FROM identities")).rows;
 
   const findings = [
     ...diffKeyed(derived, db, {
       label: "law_projection", idOf: (r) => `${r.kind}/${r.key}`,
       fieldsOf: (r) => ({ path: r.path, data: r.data }),
     }),
-    ...diffKeyed(identities, dbIdent, {
-      label: "identities", idOf: (r) => r.handle,
-      fieldsOf: (r) => ({
-        household: r.household, human: r.human, gh_login: r.gh_login,
-        // gh_id arrives from pg as a string (bigint) and from the repo as a
-        // number; the projection's claim is the identity, not the JS type.
-        gh_id: r.gh_id === null || r.gh_id === undefined ? null : Number(r.gh_id),
-        status: r.status, data: r.data,
-      }),
-    }),
   ];
   return { lane: LAW_REPO_KEY, status: findings.length ? "drift" : "equal", sha: head.sha,
-    counts: { derived: derived.length, db: db.length, identities: identities.length, db_identities: dbIdent.length }, findings };
+    counts: { derived: derived.length, db: db.length }, findings };
 }
 
 /**
@@ -177,7 +168,11 @@ async function checkStamps(client, townRepo) {
       `checkout ${townRepo} is at ${at}; projection_heads['${TOWN_REPO_KEY}'] says ${head.sha}. Put it at the recorded sha.`] };
   }
 
-  const { rows: derived } = await deriveStamps({ townRepo });
+  // The pen re-keys the town's spellings to the house (stamp-ingest § writeStamps,
+  // POS-457); the derivation is held to the row through the same re-key.
+  const houseOf = await liveHouseOfVia(client);
+  const derived = (await deriveStamps({ townRepo })).rows
+    .map((r) => ({ ...r, household: r.household == null ? null : houseOf(r.household) }));
   const db = (await client.query(
     "SELECT handle, household, balance FROM stamp_projection WHERE town_sha = $1", [head.sha])).rows;
 

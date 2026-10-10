@@ -42,6 +42,7 @@ import { updateProfile, updateHome, updateWindow, updateAddressBody, updateAddre
 import * as doorsModule from "../src/edit.mjs";
 import { runTownDrain, TOWN_DOORS } from "../src/town-bridge.mjs";
 import { withRecordFrom } from "./registry-pool-stub.mjs";
+import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 
 // The town index this file's offices read: a store seeded from each fixture
 // office.db (POS-268, office-under-test.mjs). Stopped when the file is done.
@@ -115,9 +116,9 @@ test("P1-P4 · EVERY SKIN LOGS: REST PATCH, household apex, flat tool — one ro
     let PORT;
     let BASE;
     const KEY = "seamkey";
-    ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--db", dbPath, "--oauth-db", odbPath], {
+    ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--db", dbPath, "--oauth-db", seedStaticKeys(odbPath, `${KEY}=keemin:wright`)], {
       env: {
-        ...process.env, ...IX_ENV, TOWN_SINGLE_LOG: "1", OFFICE_KEYS: `${KEY}=keemin:wright`,
+        ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV, TOWN_SINGLE_LOG: "1",
         TOWN_CLONE: clone, WORLD_CLONE: join(tmp, "no-world"), VOICES_LOG: join(tmp, "voices.jsonl"), TOWN_PUSH: "",
       },
       stdio: ["ignore", "pipe", "pipe"],

@@ -182,9 +182,19 @@ test("CONTROL: a sited mark on the commons still needs ✦1 — a zero is refuse
 });
 
 test("CONTROL: a parcel left with NO stamps field is still a private draft — omitting is not putting forward", async () => {
-  const out = await leave({ slug: "a-quiet-plot", kind: "parcel", by: "solace",
-    at: { x: 4000, y: 4000 }, body: "a quiet plot" }, SOLACE);
+  // By `stranger`, who holds nothing: solace already holds the-far-bank-porch
+  // above, and a resident holds one parcel (the-town/one-per-resident, Darko
+  // 2026-10-04; POS-368) — the door now says so, which the next leg pins.
+  const out = await leave({ slug: "a-quiet-plot", kind: "parcel", by: "stranger",
+    at: { x: 4000, y: 4000 }, body: "a quiet plot" }, keyFor("strangerhouse", "stranger"));
   assert.equal(out.ok, true, JSON.stringify(out));
   assert.equal(out.put_forward, false);
   assert.ok(out.privacy, "the private-draft answer, as for any unstaked mark");
+});
+
+test("ONE PARCEL PER RESIDENT is the settlement's: solace's second parcel is ACCEPTED at the door (POS-364; the law is POS-368's)", async () => {
+  // R11, Darko 2026-10-04: the office accepts every physically legal act; the settlement applies limits in act order (POS-364).
+  const out = await leave({ slug: "a-second-plot", kind: "parcel", by: "solace",
+    at: { x: 4400, y: 4400 }, body: "a second plot" }, SOLACE);
+  assert.equal(out.ok, true, JSON.stringify(out));
 });

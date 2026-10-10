@@ -200,7 +200,7 @@ test("nothing to judge prints nothing", () => {
 
 // ── the wiring, and the docket ──────────────────────────────────────────────
 
-test("THE WIRING: clearing-job asks the gate and writes its check onto the claim", () => {
+test("THE WIRING: clearing-job DECIDES the limits ahead of the geometry, opposed and citing the law (POS-364, Darko's ruling A)", () => {
   // clearing-job.mjs connects to Postgres at import and is not importable, so
   // this reads its source — the same shape window-reanchor.test.mjs already uses
   // for this file. Weak as proofs go, and it is the only thing between the gate
@@ -214,15 +214,17 @@ test("THE WIRING: clearing-job asks the gate and writes its check onto the claim
   // (clearing-job.mjs:304). The check matched a DIFFERENT gate's wiring and
   // could not fail for the break it named. Found by the flip, which is the only
   // thing that could have found it.
-  const from = src.indexOf("// 5.6 · THE PARCEL CLAIM CAP");
-  const to = src.indexOf("// 6 · everything still undecided LOCKS");
-  assert.ok(from !== -1 && to > from, "step 5.6's block must be findable between its own marker and step 6");
+  const from = src.indexOf("// 2.5 · THE PARCEL LIMITS, DECIDED AT THE CLEARING");
+  const to = src.indexOf("// 3 · escrow sufficiency");   // Darko's A (2026-10-08) moved it ahead of the geometry
+  assert.ok(from !== -1 && to > from, "step 2.5's block must be findable between its own marker and step 3");
+  assert.ok(from < src.indexOf("// 4 · geometry vs STANDING marks") && from < src.indexOf("// 5.7 · THE CARRY"),
+    "ahead of step 4's overlap and step 5.7's carry: an over-limit parcel never holds ground");
   const step = src.slice(from, to);
 
-  assert.ok(step.includes("parcelCapRefusals("), "step 5.6 must ask the gate");
-  assert.ok(step.includes('decide(r.id, "refused", r.check)'), "and write its sentence onto the claim");
-  assert.ok(step.includes("parcelCapLawAt("), "reading the law from the world checkout, not from a constant here");
-  assert.ok(/amending:\s*amends\.has\(/.test(step), "and telling the gate which claims are amendments (POS-88)");
+  assert.ok(step.includes("limitsAtClearing("), "step 2.5 asks the world's own fold, never a parallel count (one rule, not two)");
+  assert.ok(!step.includes("parcelCapRefusals("), "and no longer counts for itself");
+  assert.ok(step.includes('decide(r.id, "refused", r.check)'), "and decides each over-limit claim opposed, citing its law");
+  assert.ok(step.includes("over_limit:"), "its account says which claims are over the limit");
   assert.ok(src.includes("parcel_cap: capSeen"), "and put its account on the window's receipt");
   assert.ok(/the sweep's own check is untouched/i.test(step), "the sweep stays the gate of last resort");
 
@@ -248,17 +250,26 @@ test("THE RUNNER: the crossing hands the clearing a world checkout, and omits it
     "the argument is decided before the clearing is invoked, not after");
 });
 
-test("THE DOCKET: `parcel-cap` has no bulletin word yet, and the receipt says so rather than guessing one", () => {
-  const { cause, cause_row } = causeOf(parcelCapCheck(MARI, 5, law));
-  assert.equal(cause, null,
-    "none of the six fits: not contested (nobody else claims it), not unbacked (the stake is fine), not malformed " +
-    "(the record is fine), not quarantined or held. mark-receipt.mjs's own rule — guessing one of the promised words " +
-    "for a refusal nobody has classified is the town keeping its promise in appearance only. canon-absent answered " +
-    "null for one lap for exactly this reason and got its word from the founder.");
-  assert.equal(CAUSE_WORDS.includes("capped"), false,
-    "when the founder rules a word, this line and the map in mark-receipt.mjs are where it lands");
-  // The resident is NOT left with nothing: the raw check rides on cause_row and
-  // carries the whole sentence, including the number and the remedy.
-  assert.match(cause_row, /parcel claim capped/);
-  assert.match(cause_row, /wait on the founder's word/);
+test("THE DOCKET: a parcel over a limit answers `opposed`, the bulletin's seventh word (Darko, POS-364, 2026-10-08)", async () => {
+  const { opposedCheck } = await import("../world2/tools/parcel-cap.mjs");
+  assert.equal(CAUSE_WORDS.length, 7);
+  assert.equal(CAUSE_WORDS.at(-1), "opposed", "the ruled word is in the receipt's vocabulary");
+  // the clearing's check (the A build), for each limit
+  for (const law of ["the-town/claim-cap", "the-town/one-per-resident"]) {
+    const { cause, cause_row } = causeOf(opposedCheck({ law, slug: MARI, error: "over its limit" }));
+    assert.equal(cause, "opposed", `${law} answers opposed`);
+    assert.ok(cause_row.includes(`opposed: ${law}: ${MARI}`), "and the raw check still rides beside it, naming the law");
+  }
+  // the older count's spelling, on rows the train's clearing refused before the A build
+  const older = causeOf(parcelCapCheck(MARI, 5, law));
+  assert.equal(older.cause, "opposed");
+  assert.match(older.cause_row, /parcel claim capped/);
+  assert.match(older.cause_row, /wait on the founder's word/);
+});
+
+test("the clearing's outcome sentence for a parcel over a limit names the law mark that holds it", async () => {
+  const { opposedCheck, OPPOSED_CHECK } = await import("../world2/tools/parcel-cap.mjs");
+  const check = opposedCheck({ law: "the-town/claim-cap", slug: "someone/the-fourth-parcel", error: "parcel claim capped — this credential household already holds 3 (cap 3 per household, ruled 2026-07-30; prior estate stands, new claims wait on the founder's word)" });
+  assert.equal(checkNameOf(check), OPPOSED_CHECK);
+  assert.match(check, /^opposed: the-town\/claim-cap: someone\/the-fourth-parcel — parcel claim capped — this credential household already holds/);
 });

@@ -46,7 +46,7 @@
 // change" — but R1 rules stamps, not dollars, so this leans on it by analogy
 // and wants the founder's word before it is called law.
 
-import { parseAccountRef, readFundRegistry, fundHolder, meepLawOf } from "./fund-holder.mjs";
+import { parseAccountRef, payerRegistry, fundHolder, meepLawOf } from "./fund-holder.mjs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { existsSync } from "node:fs";
@@ -169,6 +169,10 @@ export async function fundVerify(clone, body, {
   // with per-pot addresses the shipped deploy/intake-addresses.json does not
   // have. Null reads the shipped file, which is what production does.
   potMap = null,
+  // `{ houses, pins, residents }`, the payer registry (fund-holder.mjs §
+  // payerRegistry), injected by a falsifier. Null reads the store, which is
+  // what production does (POS-346).
+  payers = null,
   // the caller's key, when there is one: its GitHub account is the payer's (see THE KEY, below)
   key = null,
 } = {}) {
@@ -197,6 +201,17 @@ export async function fundVerify(clone, body, {
   if (keyAccount && handle && key?.handles instanceof Set && !key.handles.has(String(handle)))
     throw bounce(403, `"${handle}" is not one of the residents you are signed in as`,
       `your key acts for ${[...key.handles].join(", ") || "no resident"} — name one of them, or send nothing and the payment goes to your own household`);
+  // A KEY THAT IS NOBODY'S cannot witness a payment (POS-388, Wright's option A,
+  // 2026-10-07). A bare berth key carries no account and no resident: it reads
+  // and speaks at the quay, and nothing it does is durable. A receipt is
+  // durable and stands in a household's name, so the berth is refused here,
+  // before the town or the chain is read, and before the body's `handle` can
+  // name a resident it does not act for. A key with an account (a sign-in, a
+  // visitor pass) or with residents (a household key) goes on to the checks
+  // below; no key at all is the caller's business (the REST door 401s it).
+  if (key && keyAccount == null && !(key.handles instanceof Set && key.handles.size))
+    throw bounce(403, "this key names no account and no resident, so it cannot witness a payment",
+      "a payment is recorded in a household's name: sign in with GitHub on the fund page, or send your household key. A berth reads and speaks; durable acts come with residency");
   const account = keyAccount && !handle ? `g${keyAccount}` : body?.household;
   let holder = null;
 
@@ -219,7 +234,7 @@ export async function fundVerify(clone, body, {
   const eng = engine ?? await townEngine(clone);
   if (!eng) throw bounce(409, "not-yet-open", "the office has no town clone with the funding seam — the door is dark until the seam merges");
 
-  const { parseStampLedger, householdKeys } = eng;
+  const { parseStampLedger } = eng;
   const { readFileSync } = await import("node:fs");
   const ledgerPath = join(clone, "WHITE_PAGES", "stamp-ledger.md");
   const entries = existsSync(ledgerPath) ? parseStampLedger(readFileSync(ledgerPath, "utf8")) : [];
@@ -229,9 +244,13 @@ export async function fundVerify(clone, body, {
   if (!gate.ok) throw bounce(gate.code, gate.defect, gate.hint);
 
   // 3a · the household's holder, when the form named the account (POS-317).
+  // POS-346: the account, and the handle below, are resolved from the store.
+  let registry = payers;
+  if (!registry) {
+    try { registry = await payerRegistry(); }
+    catch { throw bounce(503, "the town's household registry could not be read", "nothing was recorded — try again shortly"); }
+  }
   if (account) {
-    const registry = readFundRegistry(clone);
-    if (!registry) throw bounce(503, "the town's household registry could not be read", "nothing was recorded — try again shortly");
     holder = fundHolder(parseAccountRef(account), { registry, isMeep: meepLawOf(eng, entries, new Date().toISOString().slice(0, 10)) });
     if (!holder)
       throw bounce(404, `no household holds account ${account}`, "holo mints to a town household, so this door needs a household the town knows. Not in town yet? Join first — or write to the postmaster and your dollars will be recorded by hand.");
@@ -241,8 +260,7 @@ export async function fundVerify(clone, body, {
   // 3 · the resident. § 8's holo law is household-shaped: a payer earns holo
   // only as a town household. An outsider's dollars are still welcome and are
   // still recorded — but by the founder's hand, not by a mint this door makes.
-  const households = householdKeys(clone);
-  if (!households.has(String(handle)))
+  if (!registry.residents.has(String(handle)))
     throw bounce(404, `no resident named "${handle}"`, "holo mints to a town household, so this door needs a handle the town knows. Not in town yet? Join first — or write to the postmaster and your dollars will be recorded by hand.");
 
   // 4 · the witness

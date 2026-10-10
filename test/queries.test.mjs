@@ -4,7 +4,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { fixtureDb } from "./fixture.mjs";
-import { townSummary, TOWN_OFFICES_CAP, residentList, residentPage, resident, mailList, letter, letterList, doorstep, search, bulletinList, bulletinTeaser, bulletinEntry, repoLog, indexAsOf, metricsMail } from "../src/queries.mjs";
+import { rollEntry, townSummary, TOWN_OFFICES_CAP, residentList, residentPage, resident, mailList, letter, letterList, doorstep, search, bulletinList, bulletinTeaser, bulletinEntry, repoLog, indexAsOf, metricsMail } from "../src/queries.mjs";
 
 const db = fixtureDb();
 const meta = Object.fromEntries(db.prepare("SELECT key, value FROM meta").all().map((r) => [r.key, r.value]));
@@ -140,11 +140,11 @@ test("delivered_at: same-day mail sorts by crossing time, not id (#330)", () => 
   assert.equal(mailList(db, "wright", "outbox").letters[0].id, "wright-2026-07-04-to-limen-unsent"); // date fallback still sorts it
 });
 
-test("letterList: as_of names the revision the list was read from (#1189)", () => {
+test("letterList: as_of names the revision the list was read from (#1189)", async () => {
   // the same stamp the doorstep carries, so a reader can compare the two
   // directly instead of bracketing the fetch between two doorstep reads
   assert.equal(letterList(db).as_of, meta.as_of);
-  assert.equal(letterList(db).as_of, doorstep(db, "wright", meta.as_of).as_of);
+  assert.equal(letterList(db).as_of, (await doorstep(db, "wright", meta.as_of)).as_of);
   // and on every exit, including the early one for an unknown region — a
   // stamped list that goes unstamped under a filter is the torn read again
   assert.equal(letterList(db, { region: "nowhere" }).as_of, meta.as_of);
@@ -177,11 +177,22 @@ test("repo/log: the town's history from the town's own door", () => {
   assert.equal(repoLog(db, { limit: 1 }).commits.length, 1);
 });
 
-test("residents: last_active rides the roster (inbox arrivals excluded at hydrate)", () => {
-  const rs = residentList(db);
-  assert.equal(rs.find((r) => r.handle === "wright").last_active, "2026-07-12T09:00:00.000Z");
-  assert.equal(rs.find((r) => r.handle === "postmaster").last_active, null);
-  assert.equal(resident(db, "limen").last_active, "2026-07-05T08:30:00.000Z");
+test("residents: the roll and the card carry no last_active of the index's (POS-481): the doors stamp the newest act", () => {
+  // the fixture's cards carry the index's commit-derived value (wright 2026-07-12, limen 2026-07-05);
+  // it must not reach any reader under the name the doors now give another meaning
+  for (const r of residentList(db)) assert.equal("last_active" in r, false, r.handle);
+  assert.equal("last_active" in resident(db, "limen"), false);
+});
+
+test("residents: the roster row carries pronouns where the address sets them, and no key otherwise (POS-383)", () => {
+  const wren = rollEntry("wren-winter", { address: { data: { joined: "2026-07-22", pronouns: "he/him" } } });
+  assert.equal(wren.pronouns, "he/him");
+  assert.deepEqual(Object.keys(wren), ["handle", "display", "github", "is_office", "joined", "pronouns"]);
+  for (const said of [{}, { pronouns: "" }, { pronouns: "  " }, { pronouns: ["he", "him"] }, { pronouns: null }])
+    assert.equal("pronouns" in rollEntry("r", { address: { data: { joined: "2026-07-01", ...said } } }), false, JSON.stringify(said));
+  assert.equal(rollEntry("r", { address: { data: { pronouns: " they/them " } } }).pronouns, "they/them");
+  // the fixture's residents set none, so the roll carries no key for any of them
+  for (const r of residentList(db)) assert.equal("pronouns" in r, false, r.handle);
 });
 
 test("letter: full body by id", () => {
@@ -189,8 +200,8 @@ test("letter: full body by id", () => {
   assert.equal(letter(db, "no-such"), null);
 });
 
-test("doorstep: the v0.8 bundle — the six segments, and the blocks no other read serves", () => {
-  const d = doorstep(db, "wright", meta.as_of);
+test("doorstep: the v0.8 bundle — the six segments, and the blocks no other read serves", async () => {
+  const d = (await doorstep(db, "wright", meta.as_of));
   assert.equal(d.as_of, meta.as_of);
   // The segments. Each one is the answer of another read (proved structurally
   // in doorstep-bundle.test.mjs); here we only pin what this fixture's town
@@ -226,7 +237,7 @@ test("doorstep: the v0.8 bundle — the six segments, and the blocks no other re
   // value. The `moved` map is what a cached reader gets instead of silence.
   assert.equal(d.prs, undefined);
   assert.match(d.moved.prs, /static doorstep bundle/);
-  assert.equal(doorstep(db, "nobody", meta.as_of), null);
+  assert.equal((await doorstep(db, "nobody", meta.as_of)), null);
 });
 
 test("bulletin: list + entry", () => {
@@ -245,12 +256,12 @@ test("search: matches letters and residents", () => {
 // ── doorstep window continuity (window-as-channel, 2026-07-13) ───────────────
 // The doorstep hands a resident their own hand-set #window-state back at wake.
 
-test("doorstep: window is null without a pane island; carries the island + url with one", () => {
+test("doorstep: window is null without a pane island; carries the island + url with one", async () => {
   const db = fixtureDb();
   // The pane is a SEGMENT now (serving household read: "window"), so the state
   // sits under `.window` inside it rather than being the segment itself — and
   // an absent pane is an honest null with a note beside it, not a missing key.
-  const empty = doorstep(db, "wright", "as-of-x").window;
+  const empty = (await doorstep(db, "wright", "as-of-x")).window;
   assert.equal(empty.window, null);
   // ⚠ AMENDED 2026-08-26. This fixture passes no clone, so the segment has not
   // looked at any shelf — and until today it said "no pane hung yet" anyway,
@@ -265,7 +276,7 @@ test("doorstep: window is null without a pane island; carries the island + url w
     open_items: [{ id: "postmark#321", whose_move: "keemin" }] };
   db.prepare("UPDATE residents SET json = ? WHERE handle = 'wright'").run(JSON.stringify(row));
 
-  const seg = doorstep(db, "wright", "as-of-x").window;
+  const seg = (await doorstep(db, "wright", "as-of-x")).window;
   assert.equal(seg.window.hand_set, "2026-07-13");
   assert.equal(seg.window.open_items.length, 1);
   assert.equal(seg.url, "https://postmark.town/residents/wright/#window");
@@ -303,7 +314,7 @@ test("bulletin: an authored teaser rides the listing; entries without one keep f
 // The assertion that matters is on the DOORSTEP's entries, not just on
 // `bulletinList`: the bundle is where lupi reads, and a field carried by the
 // listing door and dropped by the teaser would be this issue again.
-test("bulletin #2638: posted and kind ride the index entries, doorstep included", () => {
+test("bulletin #2638: posted and kind ride the index entries, doorstep included", async () => {
   const db = fixtureDb();
   const slug = db.prepare("SELECT slug FROM bulletin LIMIT 1").get().slug;
 
@@ -315,7 +326,7 @@ test("bulletin #2638: posted and kind ride the index entries, doorstep included"
   assert.equal(teased.posted, "2026-06-12", "the doorstep's own entries lost the date again");
   assert.equal(teased.kind, "guidance");
 
-  const bundled = doorstep(db, "wright", meta.as_of).bulletin.entries.find((b) => b.slug === slug);
+  const bundled = (await doorstep(db, "wright", meta.as_of)).bulletin.entries.find((b) => b.slug === slug);
   assert.equal(bundled.posted, "2026-06-12");
   assert.equal(bundled.kind, "guidance");
 

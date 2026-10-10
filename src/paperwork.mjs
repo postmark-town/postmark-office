@@ -205,6 +205,15 @@ class Paper {
     // A ROLLBACK that fails may leave the connection inside the transaction; it
     // is discarded, never handed to the next caller (POS-370, the pen's rule).
     let discard = false;
+    // A STORE THAT GOES AWAY MID-TRANSACTION (POS-480). pg-pool listens for a
+    // client's 'error' only while it is idle. A checked-out client whose server
+    // ends the session between two statements emits 'error' with no listener,
+    // an uncaught exception that takes the whole office down (measured: a fast
+    // shutdown right after the token rotation's DELETE). Heard here, the next
+    // statement carries the failure to the caller, the transaction is rolled
+    // back by the server, and the client is discarded.
+    const lost = () => { discard = true; };
+    client.on("error", lost);
     try {
       await client.query("BEGIN");
       const out = await fn(t);
@@ -214,7 +223,7 @@ class Paper {
     } catch (e) {
       try { await client.query("ROLLBACK"); } catch { discard = true; }
       throw e;
-    } finally { client.release(discard ? true : undefined); }
+    } finally { client.removeListener("error", lost); client.release(discard ? true : undefined); }
   }
 
   /** The file's own DDL, on the file only. The store's shape is 031/032's. */
