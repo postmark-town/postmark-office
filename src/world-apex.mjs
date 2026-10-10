@@ -64,6 +64,7 @@ import {
   worldInvestigate,
   worldFind,
   worldOrient,
+  worldAir,
   worldSay,
   worldSayHuman,
   worldStateRaw,
@@ -2094,6 +2095,9 @@ async function apexRead(args, key, ctx = {}) {
 
   const spine = oriented.you?.within ?? [];
   const nearby = seen.objects ?? [];
+  // POS-551: the air at the standpoint, in the engine's words; null (and so
+  // absent below) whenever the engine tells none.
+  const air = await worldAir(oriented);
   const store = openStore();
   // The header (postmark#2934): which settlement `within`/`nearby` stand on,
   // and main's candidate when the keeper has not accepted it. Off the fold's
@@ -2278,6 +2282,7 @@ async function apexRead(args, key, ctx = {}) {
         : {}),
     },
     crossing: oriented.crossing,
+    ...(air ? { air } : {}),
     // The private note rides exactly as orient carries it: embodied property,
     // key-gated there, null when none. Carrying it here is what lets the bare
     // read answer everything world_orient answers — the delisting precondition

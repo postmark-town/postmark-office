@@ -498,8 +498,12 @@ export function stopUnderfoot(standpoint, service, worldState = null, { earshotM
  * told the wharf is for, with the ride times measured FROM HERE.
  *
  * Null away from a stop, so an answer from anywhere else is unchanged.
+ *
+ * `season` (POS-551): while the Mists stand, the line ends with the ferry's own
+ * word on them. The caller decides it from the world's schedule and the crossing;
+ * without it the line is the one it always was.
  */
-export function transportAt(markId, service, worldState = null) {
+export function transportAt(markId, service, worldState = null, { season = false } = {}) {
   const vessel = vehicleOf(service, worldState);
   if (!vessel || !isVehicleStop(markId, service)) return null;
   const from = anchorOfStop(markId, service);
@@ -518,7 +522,7 @@ export function transportAt(markId, service, worldState = null) {
   return {
     stop: markId,
     vehicle: vessel,
-    line: `${boarding}; from aboard, ride to: ${onward.map((o) => `${o.mark} (~${o.ride_minutes} min)`).join(", ") || "(nowhere else on her timetable)"}.`,
+    line: `${boarding}; from aboard, ride to: ${onward.map((o) => `${o.mark} (~${o.ride_minutes} min)`).join(", ") || "(nowhere else on her timetable)"}${season ? " (she sails only to the clear places now)" : ""}.`,
     ride_to: onward,
   };
 }

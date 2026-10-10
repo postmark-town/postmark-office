@@ -1773,14 +1773,40 @@ export async function worldSummary(key = null) {
 // from any stop and null in a world with no vehicle, so every other answer this
 // office gives is byte-identical. Never throws: a telling must not be takeable
 // down by a timetable.
-export async function transportBlock(worldState, standpoint) {
+//
+// `crossing` (POS-551): from the Mists' first crossing on the world's own
+// schedule, the line carries the ferry's word on them (world-ride.mjs §
+// transportAt). A caller that names no crossing gets the line it always got.
+export async function transportBlock(worldState, standpoint, { crossing = null } = {}) {
   try {
     if (!worldHasVehicle(worldState)) return null;
     const { service } = await vesselServiceFrom(worldState, { repo: WORLD_CLONE });
     if (!service) return null;
     const stop = stopUnderfoot(standpoint, service, worldState);
     if (!stop) return null;
-    return transportAt(stop, service, worldState);
+    return transportAt(stop, service, worldState, { season: mistsStand(worldState, crossing) });
+  } catch { return null; }
+}
+
+// The Mists stand from the first crossing on the world's schedule
+// (`skeleton.mists`, which reaches the assembled world as `terrain.mists`): the
+// engine's own rule, `mistsAt` is null before it. No schedule, no Mists.
+export function mistsStand(worldState, crossing) {
+  const first = worldState?.terrain?.mists?.schedule?.[0]?.crossing;
+  return Number.isFinite(first) && Number.isFinite(crossing) && crossing >= first;
+}
+
+/**
+ * THE AIR AT A STANDPOINT (POS-551): one line of light, fog and the Mists, for
+ * the bare world read. The words are the engine's (world-verbs.mjs § airLine),
+ * from the `you` and the crossing `worldOrient` already returned; the office
+ * authors none of it. Null when the engine tells no air (no Mists at this
+ * crossing) or is too old to tell it, so the read is then the one it always was.
+ */
+export async function worldAir(oriented) {
+  try {
+    const { verbs } = await mods();
+    return verbs.airLine?.(oriented?.you, oriented?.crossing?.n) ?? null;
   } catch { return null; }
 }
 
@@ -1845,7 +1871,7 @@ export async function worldOrient(args = {}, key = null, { roll = [] } = {}) {
     roll,
     ...(await keptPresence()), // POS-284: the kept positions, as GET /world/present reads them
   });
-  const transport = await transportBlock(w, at);
+  const transport = await transportBlock(w, at, { crossing });
   return { standpoint: { ...at, stance: choice.stance }, crossing: { n: crossing, derivation: CROSSING_DERIVATION }, note, primer, ...o, ...(present ? { present } : {}), ...(transport ? { transport } : {}), ...(noteUnavailable ? { note_unavailable: noteUnavailable } : {}) };
 }
 
@@ -2085,7 +2111,7 @@ export async function worldEyes(args = {}, key = null, { roll = [] } = {}) {
   });
   const section = presenceTelling(present);
   const telling = section ? `${engineTelling ?? ""}\n\n${section}` : engineTelling;
-  const transport = await transportBlock(w, at);
+  const transport = await transportBlock(w, at, { crossing });
   const full = {
     ...(transport ? { transport } : {}),
     standpoint: { ...at, stance: choice.stance }, crossing: { n: crossing, derivation: CROSSING_DERIVATION },
