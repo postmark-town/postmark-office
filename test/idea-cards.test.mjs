@@ -18,8 +18,10 @@
 //   5. OFF is pinned: the town's whole card surface (the town tool and its
 //      schema, the bare read with its register law, every act's card, the
 //      town flat verbs, the listed names) is byte-identical to
-//      test/fixtures/town-cards-off.json, the surface the w42 train served
-//      before the idea class (dumped at a4c38821 with IDEA_POSTS unset).
+//      test/fixtures/town-cards-off.json: the surface the w42 train serves
+//      with the class shut (proved equal to a4c38821's src, #464 merged, and so
+//      to #463's; before #463 only read_posts differs, which takes class idea
+//      because the reads are not switched).
 //      A lane that changes a town card on purpose rewrites the fixture with
 //      UPDATE_TOWN_CARDS=1 node --test test/idea-cards.test.mjs, and the diff
 //      shows in its review.
@@ -130,7 +132,7 @@ test("4 · the award card states the label rule exactly as the ledger keeps it; 
   assert.throws(() => judgeAward({ to: "finn", stamps: 5, label: "briefed" }, roll), /a bug's stage/);
 });
 
-test("5 · OFF is pinned: the town's whole card surface is byte-identical to the surface the train served before the idea class", () => {
+test("5 · OFF is pinned: the town's whole card surface is byte-identical to the surface the train serves with the idea class shut", () => {
   const fixture = resolve(ROOT, "test", "fixtures", "town-cards-off.json");
   const now = JSON.stringify(OFF.surface, null, 1) + "\n";
   if (process.env.UPDATE_TOWN_CARDS === "1") writeFileSync(fixture, now);
@@ -145,4 +147,11 @@ test("6 · ON: the register law, the bounties sentence and the do: text teach wh
   assert.match(ON.townPost.description, /Bounties and listings open here after their migrations; until then bounties post at the world door\. AND class: "event"/);
   for (const a of ["sign-up", "answer-sign-up", "award"]) assert.match(ON.doText, new RegExp(`\\b${a} \\(`), `the do: text names ${a}`);
   assert.match(OFF.surface.bare.the_register_law, /class: "idea" publishes at the Think Tank, placement computed for you;/);
+});
+
+test("7 · a card swap keeps a dollar sign in its replacement as a dollar sign, and refuses a segment it does not find exactly once", async () => {
+  const { swapOnce } = await import("../src/town-apex.mjs");
+  assert.equal(swapOnce("a X b", "X", "$& and $1 and $$"), "a $& and $1 and $$ b");
+  assert.throws(() => swapOnce("a b", "X", "y"), /no longer finds its segment once/);
+  assert.throws(() => swapOnce("X X", "X", "y"), /no longer finds its segment once/);
 });
