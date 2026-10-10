@@ -14,6 +14,10 @@
 //     sudo -u meepo sh -c 'set -a; . /etc/postmark-office.env; cd /srv/postmark-office;
 //       node tools/post-award-plan.mjs --town "$TOWN_CLONE"'
 //   then, once the plan reads right, the command it printed beneath its digest.
+//   On the box, always this way: linux, as meepo. The --apply holds the town lock
+//   only where /usr/bin/flock exists (linux); off linux there is no lock at all,
+//   and POST_AWARD_LOCKED=1 (the marker the locked child carries) skips taking it,
+//   so never set it by hand.
 //
 // ── WHY IT EXISTS: THE AWARD RECORDS, A REVIEWED PASS WRITES (POS-290) ──────
 //

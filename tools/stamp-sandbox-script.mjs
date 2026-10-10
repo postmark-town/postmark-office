@@ -643,6 +643,46 @@ export function scenario(ctx) {
         return p;
       },
     },
+
+    // ── the idea awards (POS-290) ────────────────────────────────────────────
+    {
+      id: "28", event: "award", verify: true,
+      title: "awards on an idea post, paid by hand: two award acts (the door, IDEA_POSTS on), the plan, the apply with the plan's own --expect, then a fresh plan and its apply write nothing (tools/post-award-plan.mjs)",
+      run: async () => {
+        const env = { ...process.env, IDEA_POSTS: "1" };
+        const { postAtTown } = await ctx.importOffice("src/events-store.mjs");
+        const { awardAtTown } = await ctx.importOffice("src/idea-store.mjs");
+        const roll = new Set([...SANDBOX_RESIDENTS, "wright", "keemin"]);
+        const cid = { household: H("cid"), handles: new Set([H("cid")]) };
+        const posted = await postAtTown({ class: "idea", title: "A lamp for the box", body: "Light the sandbox box at night." }, cid, { env, roll });
+        state.ideaPost = posted.post.id;
+        // the hands record what is owed; the meep law is the town's (read from the clone)
+        await awardAtTown({ post: state.ideaPost, to: H("ada"), stamps: 6, label: "the-wick" }, { household: "starforge", handles: new Set(["wright"]) }, { env, roll });
+        await awardAtTown({ post: state.ideaPost, to: H("bea"), stamps: 4, label: "the-glass" }, { household: "darko", handles: new Set(["keemin"]) }, { env, roll });
+        // Wright's hand, as the box runs it: never under a unit (INVOCATION_ID is a
+        // runner service's here, not a timer's), the lock file inside the throwaway town
+        const extraEnv = { OFFICE_KEEP: "", INVOCATION_ID: "", TOWN_LOCK: join(ctx.town, ".git", "award-pass.lock") };
+        const pass = (more) => ctx.officeTool("tools/post-award-plan.mjs", ["--town", ctx.town, "--date", ctx.clock.date, "--key", ctx.keyPath, ...more], { extraEnv });
+        const digestOf = (out) => /^digest: (sha256:[0-9a-f]{16})$/m.exec(out)?.[1] ?? null;
+        const plan = pass([]);
+        const apply = pass(["--apply", "--expect", digestOf(plan.out)]);
+        const again = pass([]);
+        const reapply = pass(["--apply", "--expect", digestOf(again.out)]);
+        return { plan, apply, again, reapply };
+      },
+      // An award is MINT → its recipient for the act's own amount (stamp-mint.mjs § the award line): ✦6 and ✦4.
+      expect: { lines: { "post-award": 2 }, bal: { [H("ada")]: 6, [H("bea")]: 4 } },
+      check: (c, r) => {
+        const p = [];
+        if (!/2 owed \(10 stamps\)/.test(r.plan.out)) p.push(`the plan did not read 2 owed (10 stamps): ${r.plan.out.trim().split("\n")[0]}`);
+        if (!/apply exactly this plan with:/.test(r.plan.out)) p.push("the plan printed no apply command beneath its digest");
+        if (!/2 award line\(s\) verified and landed/.test(r.apply.out)) p.push(`the apply did not land 2 lines: ${r.apply.out.trim().split("\n").slice(-2).join(" | ")}`);
+        if (!/2 already paid, 0 pay nothing, 0 owed \(0 stamps\)/.test(r.again.out)) p.push(`the fresh plan still owes: ${r.again.out.trim().split("\n")[0]}`);
+        if (!/nothing owed/.test(r.reapply.out)) p.push(`the rerun did not say nothing owed: ${r.reapply.out.trim().split("\n").slice(-2).join(" | ")}`);
+        if (ctx.git("status", "--porcelain")) p.push("the pass left the town clone dirty: it lands its own commit");
+        return p;
+      },
+    },
   ];
 }
 
