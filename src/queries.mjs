@@ -4,7 +4,7 @@
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { isPrincipal } from "./ops.mjs";
-import { householdOf } from "./households.mjs";
+import { householdOf, giverLookup } from "./households.mjs";
 import { HOLO_CAPTION, TEACH, postingsWithoutPots } from "./funding.mjs";
 import { isResidentHandle } from "./residency.mjs"; // the door's own admission grammar — one definition of what a handle is
 import { CROSSING_SEAL_SUBJECT } from "./crossings.mjs"; // the crossing's closing commit, as the copy's history records it (POS-332)
@@ -2067,7 +2067,8 @@ export async function nextStepsFor(db, meta, handle, clone, { own = false, world
     // the very question the gate skipped, one layer down where the skip is
     // invisible; handing it the verdict keeps the gate whole and keeps the whole
     // doorstep to one world open.
-    const questBoard = ix ? await ix.questBoard(handle, { worldSited }) : await questBoardFor(db, meta, handle, clone, { worldSited });
+    // `givers: false`: the next steps show no pots, so no registry read for them (POS-550)
+    const questBoard = ix ? await ix.questBoard(handle, { worldSited, givers: false }) : await questBoardFor(db, meta, handle, clone, { worldSited, givers: false });
     // ── WHAT THE COMPOSER IS HANDED, AND WHY IT IS NOT THE BOARD VERBATIM ────
     //
     // `composeNextSteps` writes a step's tail as `(${q.progress}/${q.target}
@@ -2313,6 +2314,28 @@ const POT_ROWS = 20;
 
 export function potBoard(db, extraInvalid = []) {
   return potBoardOf(potBoardRows(db), extraInvalid);
+}
+
+// ── WHO GAVE (POS-550) ──────────────────────────────────────────────────────
+// Each gift a door shows names its household beside the handle the ledger filed
+// it under (households.mjs § giversOf): a `giver` on every patron and receipt
+// row the board lists. Added at the door, AFTER the index read, never inside it:
+// the registry is the store's and is read through its own short connection, so
+// a store twin holding its transaction never asks the pool for a second one
+// (POS-370), and the two indexes still answer the same board. A store that
+// cannot be asked leaves the board exactly as the index answered it.
+export async function withGivers(board) {
+  if (!board?.list?.length) return board;
+  const of = await giverLookup();
+  if (!of) return board;
+  return {
+    ...board,
+    list: board.list.map((p) => ({
+      ...p,
+      patrons: { ...p.patrons, roll: p.patrons.roll.map((x) => ({ ...x, giver: of(x.patron) })) },
+      receipts: { ...p.receipts, list: p.receipts.list.map((x) => ({ ...x, giver: of(x.payer) })) },
+    })),
+  };
 }
 
 /**
@@ -2853,7 +2876,7 @@ export async function questBoardFor(db, meta, handle, clone, opts = {}) {
 export const officeIndex = (db, meta, clone) => ({
   stampsDetail: async (handle) => stampsDetail(db, handle),
   questBoard: async (handle, opts) => questBoardFor(db, meta, handle, clone, opts),
-  potBoard: async (extraInvalid) => potBoard(db, extraInvalid),
+  potBoard: async (extraInvalid) => withGivers(potBoard(db, extraInvalid)),
   // the doorstep's and the house's reads (group 3)
   asOf: async () => indexAsOf(db),
   doorstep: async (handle, asOf, opts) => doorstep(db, handle, asOf, opts),
@@ -2884,7 +2907,9 @@ export const officeQuestSource = (db) => ({
  * reads: `src` answers progressRow, standing, pots and potIds, sync or async.
  * Shared with the store's twin (town-index-store.mjs § questBoardFor).
  */
-export async function questBoardWith(src, meta, handle, clone, { worldSited: decided = undefined, worldBlock = null } = {}) {
+export async function questBoardWith(src, meta, handle, clone, { worldSited: decided = undefined, worldBlock = null, givers = true } = {}) {
+  // the gifts' households (POS-550), unless the caller shows no pots (the doorstep)
+  const named = givers ? withGivers : async (board) => board;
   const registry = JSON.parse(meta.quest_registry ?? '{"quests":[]}');
   const { boardForHandle, townDay } = await questTools(clone);
   const today = townDay();
@@ -2898,7 +2923,7 @@ export async function questBoardWith(src, meta, handle, clone, { worldSited: dec
     const take = (r) => { if (r.e) throw r.e; return r.v; };
     const bountyIds = (registry.quests ?? []).filter((q) => q.subtype === "bounty").map((q) => q.id);
     const ids = await settle(() => src.potIds());
-    const pots = ids.e ? ids : await settle(() => src.pots(postingsWithoutPots(bountyIds, ids.v)));
+    const pots = ids.e ? ids : await settle(async () => named(await src.pots(postingsWithoutPots(bountyIds, ids.v))));
     return townQuestBoardOf({ registry, boardForHandle, today }, () => take(pots), () => take(ids));
   }
   const fresh = meta.quest_day === today; // stale hydrate across a midnight → zero
@@ -3023,7 +3048,7 @@ export async function questBoardWith(src, meta, handle, clone, { worldSited: dec
       const row = patch ? { ...q, ...patch } : q;
       return { ...row, measured: typeof row.progress === "number" };
     });
-  try { board.pots = await src.pots(postingsWithoutPots(bountyIds, await src.potIds())); }
+  try { board.pots = await named(await src.pots(postingsWithoutPots(bountyIds, await src.potIds()))); }
   catch { board.pots_note = "this index predates the funding seam — pots are not indexed here yet; they appear at the next rehydrate"; }
   // WHICH MIDNIGHT THE DAILY BARS RESET ON. `today` is already the variable this
   // whole board was computed against, two screens up; it was simply never said
