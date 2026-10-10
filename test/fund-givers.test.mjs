@@ -111,3 +111,20 @@ test("a store that cannot be asked leaves the board as the index answered it, an
     installActsPen({ households: STORE.households, pins: STORE.pins, meta: [] });
   }
 });
+
+test("the fund read's gifts are bounded: at most 20 per pot, the newest, with the total counting them all", async () => {
+  const many = Array.from({ length: 25 }, (_, i) => ({ rail: "stripe", usd: 1, date: `2026-10-${String(i + 1).padStart(2, "0")}`, receipt: `cs_${i}`, payer: i % 2 ? "keith" : "outside:stripe" }));
+  const db = {
+    prepare: (sql) => ({
+      all: () => (/FROM pots\b/.test(sql) ? [{ id: POT.pot, json: JSON.stringify(POT) }] : /FROM pot_receipts\b/.test(sql) ? many : []),
+      get: () => undefined,
+    }),
+  };
+  const pot = (await fundRead(null, { db })).pots[0];
+  assert.equal(pot.gifts.total, 25, "the total counts every receipt");
+  assert.equal(pot.gifts.shown, 20);
+  assert.equal(pot.gifts.list.length, 20, "the list never grows past the board's 20");
+  assert.equal(pot.gifts.list[0].date, "2026-10-06", "the newest 20 are the ones kept");
+  assert.equal(pot.gifts.list.at(-1).date, "2026-10-25");
+  assert.ok(pot.gifts.list.every((g) => g.giver), "and each still names its giver");
+});

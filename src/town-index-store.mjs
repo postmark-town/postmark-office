@@ -324,7 +324,10 @@ export const storeIndex = (q, clone) => ({
   // would still be holding it while the board asks the world (see above), and
   // the pen refuses that by name (store-pool.mjs § NestedStoreError)
   questBoard: async (handle, opts) => questBoardOfRows(await questIndexRows(q, handle), clone, opts),
-  potBoard: async (extraInvalid) => withGivers(await potBoard(q, extraInvalid)),
+  // the index's board only: the gifts' households (POS-550) are a second read,
+  // and a caller holding `q` must not ask the pool for one. The door's
+  // storeIndexPooled adds them once its connection is back.
+  potBoard: (extraInvalid) => potBoard(q, extraInvalid),
 });
 
 /** Thrown by a pooled index method when the store cannot be reached; a door turns it into its 503. */
