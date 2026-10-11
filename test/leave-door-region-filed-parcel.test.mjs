@@ -173,9 +173,13 @@ export function containmentParents(marks) {
 `);
 
 put("seeding/manifest.json", JSON.stringify({ homes: [] }));
-// FOUR HANDLES, ONE CREDENTIAL — the household is over the cap by itself.
+// THE EXPORT LAGS THE REGISTRY (POS-545). The four handles are one household in
+// the store's registry (below, `READERHOUSE`), and the world clone's printed copy
+// has not caught up: it lists only the stranger. The door reads the store, so the
+// household's ground is its four parcels; a door that read this file would see
+// four households of one.
 put("WORLD/households.json", JSON.stringify({ households: {
-  reader: "gh:9", sailor: "gh:9", pica: "gh:9", builder: "gh:9", stranger: "gh:77",
+  stranger: "gh:77",
 } }));
 put("WORLD/skeleton.json", JSON.stringify({ features: [], physics_registry: {} }));
 put("WORLD/world-state.json", JSON.stringify({
@@ -234,9 +238,15 @@ process.env.W2_PEN = "";
 process.env.TOWN_PUSH = "";
 
 const { installActsPen, uninstallActsPen, RECORD_ON } = await import("./acts-pen-stub.mjs");
+const { rowsFromRegistry } = await import("../src/registry-rows.mjs");
 process.env.WORLD2_PG = RECORD_ON.WORLD2_PG;
 process.env.WORLD2_PG_URL = RECORD_ON.WORLD2_PG_URL;
-const pen = installActsPen();
+// FOUR HANDLES, ONE HOUSEHOLD, in the record the door reads (households.mjs §
+// householdLookup): the household is over the cap by itself.
+const READERHOUSE = rowsFromRegistry({ schema_version: 1, households: {
+  readerhouse: { name: "readerhouse", residents: ["reader", "sailor", "pica", "builder"] },
+} }, {});
+const pen = installActsPen({ households: READERHOUSE.households, pins: READERHOUSE.pins, meta: [] });
 after(() => { uninstallActsPen(); delete process.env.WORLD2_PG; delete process.env.WORLD2_PG_URL; });
 
 const keyFor = (household, ...handles) => ({ household, handles: new Set(handles) });
@@ -396,7 +406,7 @@ test("POS-483: on the single-log lane, an amend that MOVES a published parcel is
 // named the edge. The door now names the household's parcels as ranges on
 // every sited leave, and when a footprint lands outside them but within a
 // parcel's side of one, says by how much and where it would sit wholly inside.
-// This bottle's household (gh:9) holds four parcels; the flat spans
+// This bottle's household (readerhouse, in the store) holds four parcels; the flat spans
 // x 287.5..312.5, y 287.5..312.5. Its marksContain is the centre-only stub
 // above, so "outside" here is the verdict's own word, as it is on the box.
 
@@ -443,9 +453,64 @@ test("POS-493: the leave-mark read (world_my_marks) names your household's parce
   const r = await worldMyMarks(HOUSE);
   assert.ok(!r?.error, `the read answers: ${JSON.stringify(r)}`);
   // The page's own household (the stake slice's `residents`, read from the
-  // town's pins), so the ranges and the page's other shelves name one house.
+  // store's registry since POS-545), so the ranges and the page's other shelves
+  // name one house, and the same house the leave door's verdict reads.
+  assert.deepEqual(r.residents, ["builder", "pica", "reader", "sailor"], "the store's household, which the world clone's export does not list");
   const expected = PUBLISHED.filter((m) => m.kind === "parcel" && r.residents.includes(m.by)).map((m) => m.id).sort();
-  assert.ok(expected.includes("reader/the-keepers-flat"), `the reader is a resident of the page: ${JSON.stringify(r.residents)}`);
   assert.deepEqual(r.your_ground?.map((g) => g.parcel).sort(), expected, "exactly the household's published parcels");
+  assert.equal(r.your_ground.length, 4);
   assert.deepEqual(r.your_ground.find((g) => g.parcel === "reader/the-keepers-flat"), { parcel: "reader/the-keepers-flat", x: "287.5..312.5", y: "287.5..312.5" });
+});
+
+// ── LEG 12 · the verdict reads the store (POS-545) ──────────────────────────
+//
+// The household is in the store's registry and missing from the world clone's
+// WORLD/households.json (the bottle's export lists only the stranger). A ✦0
+// mark on a housemate's parcel is on the household's own ground, so it goes
+// forward; the stranger, whose household holds no parcel here, is still on the
+// commons. THE FLIP: read the file again at world.mjs § groundMinimumStake and
+// the reader's ✦0 is held back as commons (put_forward false, ✦1 asked).
+
+test("POS-545: the ground verdict reads the store's registry: ✦0 on a housemate's parcel goes forward though WORLD/households.json lacks the house", async () => {
+  const shed = { slug: "the-shed-on-the-sloop", kind: "sited", by: "reader", extent: { w: 2, h: 2 },
+    at: { x: 500, y: 500 }, body: "a shed on a housemate's parcel", stamps: 0, preview: true };
+  const out = await leave(shed, HOUSE);
+  assert.equal(out.ok, true, JSON.stringify(out));
+  assert.equal(out.put_forward, true, `✦0 on the household's own ground goes forward: ${JSON.stringify(out)}`);
+  const stranger = await leave({ ...shed, by: "stranger", slug: "the-strangers-shed" }, STRANGER);
+  assert.equal(stranger.ok, true, JSON.stringify(stranger));
+  assert.equal(stranger.put_forward, false, "the same spot is the commons to another household");
+});
+
+// ── LEG 13 · a store blip is "could not tell", never "commons" (POS-545 review)
+//
+// `markStandsOnOwnGround` feeds the stake door's `unbackedRefusalFor`, which
+// takes a zero-balance promotion back off the docket only on `false`. Without
+// the registry the verdict falls to the solo grain, which cannot see a
+// housemate's parcel, so a blip read as `false` would retract a lawful
+// own-ground promotion. THE FLIP: return `min === 0` again and the blip leg
+// answers false, and the refusal fires.
+
+test("POS-545: with the registry unreadable, a mark on a housemate's parcel reads null (could not tell), and the promotion is not taken back", async () => {
+  const { markStandsOnOwnGround } = await import("../src/world.mjs");
+  const { unbackedRefusalFor } = await import("../src/world-stake.mjs");
+  const { __setPoolForTest } = await import("../src/world2-acts.mjs");
+  const shed = { by: "reader", kind: "sited", at: { x: 500, y: 500 }, extent: { w: 2, h: 2 } };
+  const far = { ...shed, at: { x: 1500, y: -1500 } };
+  assert.equal(await markStandsOnOwnGround(shed), true, "with the registry, the housemate's parcel is the household's own ground");
+  assert.equal(await markStandsOnOwnGround(far), false, "CONTROL: with the registry, open ground is the commons");
+
+  const blip = () => { throw Object.assign(new Error("Connection terminated unexpectedly (synthetic blip, POS-545)"), { code: "57P01" }); };
+  __setPoolForTest({ query: async () => blip(), connect: async () => blip() });
+  try {
+    const onMates = await markStandsOnOwnGround(shed);
+    assert.equal(onMates, null, "the registry could not be read, so the office cannot tell");
+    assert.equal(unbackedRefusalFor({ mark: "reader/the-shed", n: 1, promoted: true, applied: 0, ownGround: onMates }), null,
+      "and a lawful own-ground promotion stays on the docket");
+    assert.equal(await markStandsOnOwnGround({ ...shed, at: { x: 300, y: 300 } }), true,
+      "the author's OWN parcel is still a finding without the registry");
+  } finally {
+    __setPoolForTest(pen);
+  }
+  assert.equal(await markStandsOnOwnGround(shed), true, "and the store's answer is back");
 });

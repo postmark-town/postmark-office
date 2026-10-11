@@ -71,7 +71,7 @@ const PUBLISHED = [
   { id: "neighbour/the-big-house", by: "neighbour", kind: "sited", tier: "market", at: { x: 300, y: -300 }, extent: { w: 60, h: 60 }, body: "a painted house, standing on no parcel of anyone's" },
   { id: "neighbour/the-neighbour-parcel", by: "neighbour", kind: "parcel", tier: "home", at: { x: -300, y: 300 }, extent: { w: 25, h: 25 }, body: "the ground neighbour holds" },
   // POS-406's ground, kinofire's shape: alpha's home stands on a HOUSEMATE's
-  // parcel (one household, gh:1), so the parcel is not the home's parent by id.
+  // parcel (one household: hh:alpha-house in the store, POS-545), so the parcel is not the home's parent by id.
   { id: "alphamate/the-mates-parcel", by: "alphamate", kind: "parcel", tier: "home", at: { x: -200, y: -200 }, extent: { w: 25, h: 25 }, body: "the ground alpha's household holds, in alphamate's name" },
   { id: "alpha/the-manor", by: "alpha", kind: "sited", tier: "home", at: { x: -200, y: -200 }, extent: { w: 8, h: 8 }, body: "alpha's home, on the household's parcel" },
 ];
@@ -1377,24 +1377,28 @@ test("#3025 LEG 3 · NON-REGRESSION: a parcel claim over a neighbour's PARCEL is
 // a second rule: the publish note knew own ground only as "the parent IS your
 // household's parcel", and her home stands on a housemate's parcel. The note
 // now reads the ground the act read.
+// The household in the record the ground verdict reads (POS-545): alpha and
+// alphamate are one house in the store's registry, as kinofire and her housemates
+// are. The world clone's WORLD/households.json (gh:1) is no longer what decides.
+const HOUSEMATES = { alpha: "hh:alpha-house", alphamate: "hh:alpha-house", beta: "hh:beta-house" };
 test("POS-406 — a detail on a home on your household's ground is not told it is commons", async () => {
   process.env.WORLD_SINGLE_LOG = "1";
   const { leaveMarkViaOffice } = await import("../src/world.mjs");
   const detail = { kind: "predicated", parent_id: "alpha/the-manor", slot: "feature", value: "a big fireplace", body: "a fireplace in alpha's home" };
 
-  const store = guardStore();
+  const store = guardStore({ identities: HOUSEMATES });
   const forward = await withGuardsFlipped(store, () => leaveMarkViaOffice(repo, { slug: "pos406-fireplace", ...detail, stamps: 0 }, houseA));
   assert.equal(forward.put_forward, true, "the act rules it own ground, ✦0 puts it forward (true before this fix too)");
   assert.equal(forward.publishing, undefined,
     `and nothing tells the author it is commons or asks for a stake: ${JSON.stringify(forward.publishing)}`);
 
-  const draft = await withGuardsFlipped(guardStore(), () => leaveMarkViaOffice(repo, { slug: "pos406-firepit", ...detail }, houseA));
+  const draft = await withGuardsFlipped(guardStore({ identities: HOUSEMATES }), () => leaveMarkViaOffice(repo, { slug: "pos406-firepit", ...detail }, houseA));
   assert.equal(draft.put_forward, false, "left unstaked, it is a private draft");
   assert.equal(draft.publishing, undefined, `an unstaked draft on own ground gets no commons note either: ${JSON.stringify(draft.publishing)}`);
   assert.match(draft.to_publish, /stamps: 0 is enough/, "its way forward is the own-ground one");
 
   // THE CONTROL: the same detail on a mark on no one's parcel still hears the law.
-  const commons = await withGuardsFlipped(guardStore(), () => leaveMarkViaOffice(repo,
+  const commons = await withGuardsFlipped(guardStore({ identities: HOUSEMATES }), () => leaveMarkViaOffice(repo,
     { slug: "pos406-on-commons", ...detail, parent_id: "alpha/published-note" }, houseA));
   assert.ok(commons.publishing?.heads_up, "a detail on commons ground is still told escrow publishes it");
 });

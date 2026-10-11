@@ -3248,10 +3248,15 @@ async function groundMinimumStake(clean, canon) {
   }
   const { marksContain } = await foldConstants();
   if (typeof marksContain !== "function") return commons; // no geometry engine → the safe read
-  let registry = null;
-  try { registry = readJsonAtRef(WORLD_CLONE, mainRef(WORLD_CLONE), "WORLD/households.json")?.households ?? null; }
-  catch { /* no registry → solo grain, same as everywhere else */ }
-  const credOf = (h) => registry?.[h] ?? `solo:${h}`;
+  // WHOSE PARCELS ARE YOURS: THE STORE'S REGISTRY (POS-545). This read the world
+  // clone's WORLD/households.json, an export of the registry (POS-345), while the
+  // clearing judges the same mark by the store's (world2-fold.mjs § officeStoreFold,
+  // POS-350). A household whose file row lagged its registry row was charged here
+  // by one answer and judged there by another. `householdLookup` is the resolver
+  // `disclosePublishing` already reads; a store the office cannot ask (null) is
+  // the solo grain, as a missing registry always was.
+  const houses = await householdLookup();
+  const credOf = (h) => houses?.(h)?.key ?? `solo:${h}`;
   const mine = credOf(clean.by);
   // `own`: the household's parcels this verdict was judged against, so the
   // door's ground note (POS-493, § groundNoteOf) names the same ground the
@@ -3261,7 +3266,10 @@ async function groundMinimumStake(clean, canon) {
     if (marksContain(g, { at: clean.at, extent: clean.extent, points: clean.points }))
       return { min: 0, ground: g.id, own };
   }
-  return { ...commons, own };
+  // A COMMONS ANSWER READ WITHOUT THE REGISTRY IS A GUESS, NOT A FINDING: the
+  // solo grain cannot see a housemate's parcel. The act takes the safe read
+  // (the mark stays a draft); `markStandsOnOwnGround` must not take it as "commons".
+  return { ...commons, own, ...(houses ? {} : { registry_unread: true }) };
 }
 
 /**
@@ -3371,8 +3379,9 @@ export async function markStandsOnOwnGround(clean, canon = null) {
     if (typeof marksContain !== "function") return null; // could not look
     const board = canon ?? canonForGuards();
     if (!clean?.at && !board.byId.get(clean?.parent_id)) return null; // nothing to place it by
-    const { min } = await groundMinimumStake(clean, board);
-    return min === 0;
+    const { min, registry_unread } = await groundMinimumStake(clean, board);
+    if (min === 0) return true;
+    return registry_unread ? null : false; // a store blip is "could not tell" (POS-545 review)
   } catch { return null; }
 }
 

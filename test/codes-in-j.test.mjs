@@ -52,6 +52,10 @@ const SYNTHETIC = {
   "string-409": { code: "409", message: "synthetic edge: the string 409" },
   "status-0": { code: 0, message: "synthetic edge: status 0" },
   "status-200": { code: 200, message: "synthetic edge: status 200", defect: "a refusal that carried 200" },
+  // the two leaks the seam review of #475 found (POS-568): what a resident must never read
+  "codeless": { message: "relation \"oauth_tokens\" does not exist at /srv/postmark-office/src/oauth.mjs:412 (synthetic, POS-568)" },
+  "pg-hint": { code: "42P01", message: "relation \"household_pins\" does not exist (synthetic, POS-568)",
+    hint: "Perhaps you meant to reference the table \"public.household_pins_old\". (synthetic pg hint, POS-568)" },
 };
 
 const HOOKS = `
@@ -172,15 +176,47 @@ for (const name of ["status-99", "status-600", "string-409", "status-0", "status
     assert.equal(r.body.code, 500, "the body's code is the status line's");
     assert.equal(r.retryAfter, null);
     assert.ok(r.body.defect, "the 500 names what tripped");
-    if (name === "status-0") {
-      // the catch's own 500 path, which has always put the message in the hint
-      assert.equal(r.body.hint, SYNTHETIC[name].message);
-      return;
-    }
-    // stderr is written as the answer is, but read here on another stream
-    for (let i = 0; i < 40 && !office.stderr().includes(SYNTHETIC[name].message); i++) await new Promise((ok) => setTimeout(ok, 25));
-    assert.ok(office.stderr().includes(SYNTHETIC[name].message), `the office's log names the error's message (${SYNTHETIC[name].message})`);
+    // status 0 is the catch's own 500 path, which put the message in the hint
+    // until POS-568; no 500 carries it now (§ the two leaks, below)
+    assert.ok(!JSON.stringify(r.body).includes(SYNTHETIC[name].message), `the error's message stays out of the body: ${JSON.stringify(r.body)}`);
+    await logSays(SYNTHETIC[name].message);
   });
+}
+
+// stderr is written as the answer is, but read here on another stream
+async function logSays(text) {
+  for (let i = 0; i < 40 && !office.stderr().includes(text); i++) await new Promise((ok) => setTimeout(ok, 25));
+  assert.ok(office.stderr().includes(text), `the office's log names it (${text})`);
+}
+
+// ── the two leaks (POS-568, the seam review of #475) ────────────────────────
+//
+// 1. Every catch's last resort answered `bounce(res, 500, "<door> tripped",
+//    String(e?.message ?? e))`: the raw error message in the 500's hint.
+// 2. A pg error with a non-status string code carried pg's own `.hint` into the
+//    body, through `bounce(res, e.code, e.defect, e.hint)` and j's notAStatus.
+// Each is still the office's own 500, and says so in its own words; what failed
+// goes to the log. THE FLIPS: (1) put the message back as bounceFault's hint;
+// (2) restore `obj?.hint ??` in notAStatus. Each reddens its own legs.
+const LEAKS = {
+  "codeless": { leak: "the raw message in a tripped door's hint", secrets: (s) => [s.message] },
+  "pg-hint": { leak: "pg's own hint through a string code", secrets: (s) => [s.message, s.hint] },
+};
+for (const { door, ask } of DOORS) {
+  for (const [name, { leak, secrets }] of Object.entries(LEAKS)) {
+    test(`POS-568 ${door}: ${leak} stays out of the body, and in the log`, async (t) => {
+      const r = await ask(name);
+      t.diagnostic(`the door answered ${r.status}: ${JSON.stringify(r.body).slice(0, 300)}`);
+      assert.equal(r.status, 500, "the office's own fault");
+      assert.equal(r.body.refused, true);
+      assert.ok(r.body.defect, "the 500 names what tripped");
+      assert.match(r.body.hint, /What failed is in the office's log, not in this answer/);
+      for (const secret of secrets(SYNTHETIC[name])) {
+        assert.ok(!JSON.stringify(r.body).includes(secret), `the body does not carry "${secret.slice(0, 60)}…": ${JSON.stringify(r.body)}`);
+        await logSays(secret);
+      }
+    });
+  }
 }
 
 // ── a GET door through notAStatus: the read's words ─────────────────────────

@@ -160,6 +160,13 @@ test("GET /world/apex: an error with no code is still the door's own fault, 500"
   assert.equal(r.status, 500);
   assert.equal(r.body.defect, "the world door tripped");
   assert.equal(r.body.refused, true);
+  // POS-568: doorTripped (the catch of /world2/my-drafts, /world2/my-marks and
+  // both apex verbs) kept the raw message in the hint; it is in the log now.
+  // THE FLIP: hand bounceFault the message as its hint, and this reddens.
+  assert.ok(!JSON.stringify(r.body).includes("a synthetic fault, carrying no code"), `the error's message stays out of the body: ${JSON.stringify(r.body)}`);
+  assert.match(r.body.hint, /What failed is in the office's log, not in this answer/);
+  for (let i = 0; i < 40 && !office.stderr().includes("a synthetic fault, carrying no code"); i++) await wait(25);
+  assert.ok(office.stderr().includes("a synthetic fault, carrying no code"), "the office's log names what failed");
 });
 
 test("POS-544 at the apex: a store lost under GET /world/apex answers 503 with Retry-After", async () => {
