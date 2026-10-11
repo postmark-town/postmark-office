@@ -232,6 +232,14 @@ test("H5b · a co-signed begin (POS-570) lands the berth's parked answer by its 
   assert.equal(refused.out.error, undefined, JSON.stringify(refused.out));
   assert.match(refused.out.commit ?? "", /^[0-9a-f]{40}$/);
   assert.match(refused.stderr, /\[arrival-heard\] newcomer: not kept/);
+  // The road to here: the co-sign names its berth, and declareViaOffice hands
+  // it to this exec. The click itself is a field act (household-apex.test.mjs's
+  // header), so the wiring is read where it is written.
+  const oauth = readFileSync(join(ROOT, "src", "oauth.mjs"), "utf8");
+  assert.match(oauth, /declareViaOffice\(ctx\.clone, \{ \.\.\.decl, handle: pending\.slug \},[\s\S]{0,200}?mint: false, heardFrom: pending\.slug \}\)/,
+    "the berth co-sign passes its slug, so the parked answer lands");
+  const declareSrc = readFileSync(join(ROOT, "src", "declare.mjs"), "utf8");
+  assert.match(declareSrc, /dbPath,\n\s+\.\.\.\(heardFrom \? \{ heardFrom \} : \{\}\),\n\s+\}\);/, "declareViaOffice hands heardFrom to the exec's payload");
 });
 
 test("H6 · a join that SKIPS keeps nothing, and still lands", () => {
