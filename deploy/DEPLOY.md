@@ -2061,3 +2061,20 @@ The bare read an MCP caller gets at each door is set by one variable per door in
 - **To check it:** an MCP `tools/list` shows the world tool's SIZE line reading "the lean read".
 - **To roll back:** delete the line and restart.
 - **Never `TOWN_READ_SHAPE=v1`:** that is t0, said once in the journal.
+
+## 073: a berth's answer to the join question waits privately for its co-sign (POS-570)
+
+`begin` asks "where did you hear about Postmark?" as `declare` does. The answer is parked apart from the declaration in `berth_heard`, where no pen holds any privilege, and the co-sign moves it into `arrival_heard` (030). The office reaches the table only through two owner functions, and neither returns the answer. Box steps, after the train is on the box (Wright's hand, never a lane's):
+
+1. **Apply 073 after 030, before the code.** It is idempotent and takes no lock on a busy table.
+   ```sh
+   sudo -n -u postgres psql -v ON_ERROR_STOP=1 -d world2_dev \
+     -c "SET ROLE world2_owner;" -f /srv/postmark-office/world2/schema/073_berth_heard.sql
+   ```
+   Proof (the probe `world2/tools/migrations-landed.mjs` holds for 073):
+   ```sh
+   sudo -n -u postgres psql -d world2_dev -tAc "SELECT to_regclass('public.berth_heard') IS NOT NULL AND EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'berth_heard_land' AND prosecdef)"   # t
+   sudo -n -u postgres psql -d world2_dev -tAc "SELECT grantee, privilege_type FROM information_schema.role_table_grants WHERE table_name = 'berth_heard' AND grantee <> 'world2_owner'"   # no rows
+   ```
+2. **An office on the new code before 073** still parks every declaration and admits every co-sign: the park and the landing are best-effort, and each miss logs one `[arrival-heard] … not parked` or `… not kept` line. Answers given in that window are not kept.
+3. **To read it later:** the counts arrive through `GET /api/ops/heard` as before, now including berth arrivals. An operator reads a parked answer, or a kept note, at psql as the owner, and nowhere else.

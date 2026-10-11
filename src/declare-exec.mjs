@@ -42,7 +42,7 @@ const refusal = (code, field, defect, hint) => ({ error: { code, field, defect, 
 const err = (code, field, defect, hint) => answer(refusal(code, field, defect, hint));
 
 async function main() {
-  const { args, key, dbPath } = JSON.parse(process.argv[2] ?? "{}");
+  const { args, key, dbPath, heardFrom = null } = JSON.parse(process.argv[2] ?? "{}");
 
   if (!existsSync(CLONE))
     return err(409, null, "not-yet-open", "the office has no town clone to declare into");
@@ -205,8 +205,11 @@ async function main() {
     // private table and nowhere else: not in `plan.files`, not in the commit,
     // not in the journal. Best-effort AFTER the house, the pin and the commit
     // landed, so it can never refuse a join; `recordHeard` never throws and logs a miss.
+    // A co-signed begin (POS-570) carries no answer in its args: the berth's
+    // answer was parked apart, and `heardFrom` (the berth's slug) lands it.
     const heardGiven = heardAnswer(args);
-    const heard = heardGiven ? await recordHeard({ handle: decl.handle, household: plan.slug, answer: heardGiven }) : null;
+    const heard = heardGiven ? await recordHeard({ handle: decl.handle, household: plan.slug, answer: heardGiven })
+      : heardFrom ? await recordHeard({ handle: decl.handle, household: plan.slug, berth: heardFrom }) : null;
 
     // `settled` rides the answer because THIS process is the authority on it: the
     // door planned against a gangway it read before the lock, and this one re-read

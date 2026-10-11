@@ -14,13 +14,21 @@
 // egress, so the protection lives at the source. The note never leaves the
 // store; an operator reads it at psql as the owner.
 //
-// ── THE WRITE ───────────────────────────────────────────────────────────────
+// ── THE WRITE, ON BOTH ROADS ────────────────────────────────────────────────
 //
-// `src/declare-exec.mjs` calls `recordHeard` right after `joinHousehold`,
-// under the town lock, best-effort: a failure is logged once and the join
-// stands. Only `declare` asks. `begin` (the berth's bridge) parks its
-// declaration on the berth row until the human's co-sign click; carrying the
-// answer there is a follow-up, so begin's fields leave the question out.
+// `declare`: `src/declare-exec.mjs` calls `recordHeard` right after
+// `joinHousehold`, under the town lock, best-effort: a failure is logged once
+// and the join stands.
+//
+// `begin`, the berth's bridge, asks the same two fields (POS-570) but joins
+// nobody: it parks its declaration on the berth row until the human's co-sign
+// click runs it. THE ANSWER NEVER RIDES THAT ROW: `oauth_berths` is readable
+// by the office's own pen, mirrored into oauth.db, and never deleted. So
+// `parkHeard` hands it to the store's `berth_heard_park()` (073), which keeps
+// it where no pen can read it, and the co-sign's declare-exec calls
+// `recordHeard` with the berth's slug: `berth_heard_land()` moves the answer
+// into arrival_heard in one statement. The office writes the answer and never
+// reads it back, on either road.
 
 import { actsQuery } from "./world2-acts.mjs";
 
@@ -50,9 +58,9 @@ export const HEARD_GROUP = Object.freeze({
 });
 export const HEARD_FIELDS = Object.freeze({
   heard: { type: "string", title: "Where did you hear about Postmark?", ...HEARD_GROUP, enum: [...HEARD_LABELS],
-    description: "Optional. One choice. Private to the town's operators; only weekly counts are ever shown." },
+    description: "Optional. Pick the one that fits; \"Other\" means none of these, and the note says what it was. Private to the town's operators; only weekly counts are ever shown." },
   heard_note: { type: "string", title: "Anything to add?", ...HEARD_GROUP, "x-multiline": false, maxLength: HEARD_NOTE_MAX,
-    description: `Optional, up to ${HEARD_NOTE_MAX} characters — who told you, which video, which community. Private to the operators; it is never shown anywhere.` },
+    description: `Optional, up to ${HEARD_NOTE_MAX} characters: the detail behind the choice — which video, who told you, which community. Private to the operators; it is never shown anywhere.` },
 });
 export const HEARD_FIELD_NAMES = Object.freeze(Object.keys(HEARD_FIELDS));
 
@@ -73,37 +81,76 @@ export function heardAnswer(args = {}) {
   return { heard: hit[1], note, truncated: noteRaw.length > 0 && [...noteRaw].length > HEARD_NOTE_MAX };
 }
 
+const isoOf = (at) => (at instanceof Date ? at.toISOString() : at);
+
 /**
  * Keep the answer. Best-effort by contract: never throws, answers what
  * happened. `query` is `actsQuery`'s shape (null = the office is not pointed
  * at the record). The INSERT's ON CONFLICT has NO target on purpose: a
  * target needs SELECT, which no pen holds (030's proof).
+ *
+ * `berth` (POS-570): a co-signed begin's declaration carries no answer; the
+ * answer was parked under the berth's slug, and `berth_heard_land()` (073)
+ * moves it into arrival_heard without the office ever reading it. `kept` is
+ * false when nothing was parked.
  */
-export async function recordHeard({ handle, household, answer, at = new Date(), query = actsQuery, env = process.env, log = console.error } = {}) {
-  if (!answer?.heard) return { kept: false };
+export async function recordHeard({ handle, household, answer, berth = null, at = new Date(), query = actsQuery, env = process.env, log = console.error } = {}) {
+  if (!berth && !answer?.heard) return { kept: false };
   try {
-    const rows = await query(
-      `INSERT INTO arrival_heard (handle, household, heard, note, answered_at)
+    const rows = berth
+      ? await query("SELECT berth_heard_land($1, $2, $3, $4) AS kept", [berth, handle, household, isoOf(at)], env)
+      : await query(
+        `INSERT INTO arrival_heard (handle, household, heard, note, answered_at)
        VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING`,
-      [handle, household, answer.heard, answer.note ?? null, at instanceof Date ? at.toISOString() : at], env);
+        [handle, household, answer.heard, answer.note ?? null, isoOf(at)], env);
     if (rows === null) {
       log(`[arrival-heard] ${handle}: not kept — the office is not pointed at the record`);
       return { kept: false, why: "no record" };
     }
-    return { kept: true };
+    return berth ? { kept: rows[0]?.kept === true } : { kept: true };
   } catch (e) {
     log(`[arrival-heard] ${handle}: not kept — ${String(e?.message ?? e).slice(0, 200)}`);
     return { kept: false, why: "the store refused" };
   }
 }
 
-/** The one sentence the declaration's answer carries about the question, or null. */
-export function heardReceipt(answer, outcome) {
+/**
+ * Park a berth's answer until its human co-signs (POS-570, 073). An `answer`
+ * that keeps nothing (none, an off-list choice, a note alone) clears what an
+ * earlier begin parked, because begin again replaces the parked declaration
+ * whole. Best-effort by contract, like `recordHeard`: never throws, and the
+ * store's function returns nothing, so the answer is never read back.
+ */
+export async function parkHeard({ slug, answer, at = new Date(), query = actsQuery, env = process.env, log = console.error } = {}) {
+  const keep = answer?.heard ? answer : null;
+  try {
+    const rows = await query("SELECT berth_heard_park($1, $2, $3, $4)", [slug, keep?.heard ?? null, keep?.note ?? null, isoOf(at)], env);
+    if (rows === null) {
+      if (keep) log(`[arrival-heard] berth ${slug}: not parked — the office is not pointed at the record`);
+      return { parked: false, why: "no record" };
+    }
+    return { parked: Boolean(keep) };
+  } catch (e) {
+    log(`[arrival-heard] berth ${slug}: not parked — ${String(e?.message ?? e).slice(0, 200)}`);
+    return { parked: false, why: "the store refused" };
+  }
+}
+
+/**
+ * The one sentence the declaration's answer carries about the question, or
+ * null. `parked`: begin's answer, which waits for the co-sign (POS-570).
+ */
+export function heardReceipt(answer, outcome, { parked = false } = {}) {
   if (!answer) return null;
   if (answer.dropped) return "Your note was not kept: it rides with a choice from the list.";
   if (answer.unrecognised) return `Not kept: "where did you hear" takes one of: ${HEARD_LABELS.join(", ")}. It never blocks a join, and you can skip it.`;
+  const cut = answer.truncated ? ` The note was cut to ${HEARD_NOTE_MAX} characters.` : "";
+  if (parked) {
+    if (!outcome?.parked) return "Thanks — the answer could not be kept this time. Your declaration is parked all the same.";
+    return `Thanks — kept privately with your declaration until your human co-signs; only weekly counts ever leave the office.${cut}`;
+  }
   if (!outcome?.kept) return "Thanks — the answer could not be kept this time. Your join is unaffected.";
-  return `Thanks — kept privately; only weekly counts ever leave the office.${answer.truncated ? ` The note was cut to ${HEARD_NOTE_MAX} characters.` : ""}`;
+  return `Thanks — kept privately; only weekly counts ever leave the office.${cut}`;
 }
 
 /**

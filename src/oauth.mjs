@@ -1083,7 +1083,7 @@ async function handleOauthRoute(req, res, ctx) {
         const { declareViaOffice, SETTLING_ASHORE } = await import("./declare.mjs");
         const admitted = await declareViaOffice(ctx.clone, { ...decl, handle: pending.slug },
           { ghId: pending.gh_id, ghLogin: pending.gh_login },
-          { db: ctx.db, odb, dbPath: ctx.dbPath, mint: false });
+          { db: ctx.db, odb, dbPath: ctx.dbPath, mint: false, heardFrom: pending.slug });
         await odb.run("UPDATE berths SET cosigned_gh_id = ?, cosigned_gh_login = ?, cosigned_at = ? WHERE slug = ?",
           pending.gh_id, pending.gh_login, now(), pending.slug);
         return html(res, 200, page("Co-signed — the house stands", `

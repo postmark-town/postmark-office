@@ -11,6 +11,7 @@ import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { createHash, randomBytes } from "node:crypto";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
@@ -666,6 +667,83 @@ test("a berth's declared household and card are rendered as text on the co-sign 
   const denied = await consent(form, "deny");
   assert.equal(denied.status, 200);
   assert.match(await denied.text(), /Not co-signed/);
+});
+
+// ── POS-570 · a berth's "where did you hear" answer leaves through no read ─────
+//
+// begin asks the question now, and parks the answer APART from the declaration
+// (073; src/arrival-heard.mjs § THE WRITE). The parked declaration lives on the
+// berth row, so every reader of that row is driven here, on the real server,
+// with the berth's own key: begin's own answer; the bare household read (the
+// standing) and the doorstep, on REST and on MCP; begin's card; /me; the
+// co-sign link and its consent page; the denial; and the berth row itself,
+// read from the paper file the server writes. None may return the choice or
+// the note. The positive control: the store's owner sees the answer parked,
+// so the instrument is pointed at the answer that was given.
+test("POS-570: a berth's answer to the join question is parked privately, and no reader of the parked declaration returns it", async () => {
+  ghIdentity = { id: 999, login: "keeminlee" };
+  const MARK = "zz-berth-heard-5c1e";
+  const NOTE = `a zine at the Porto café, ${MARK}`;
+  const boarded = await fetch(`${BASE}/berth`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ slug: "heard-berth" }),
+  });
+  assert.equal(boarded.status, 201, "a berth boards keyless");
+  const { key } = await boarded.json();
+  const auth = { authorization: `Bearer ${key}` };
+  const rest = (body) => fetch(`${BASE}/household`, { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify(body) });
+  const mcp = (args) => fetch(`${BASE}/mcp`, {
+    method: "POST", headers: { "content-type": "application/json", ...auth },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "household", arguments: args } }),
+  }).then((r) => r.text());
+
+  const begun = await rest({ do: "begin", args: { household: "Heard House", card: "I listen first.\nThen I write.", heard: "Other", heard_note: NOTE } });
+  const seen = { begin: await begun.text() };
+  assert.equal(begun.status, 200, `begin takes the question: ${seen.begin}`);
+  assert.match(JSON.parse(seen.begin).result.heard_about, /kept privately with your declaration until your human co-signs/);
+
+  seen.bare = await (await fetch(`${BASE}/household`, { headers: auth })).text();
+  seen.doorstep = await (await rest({ read: "doorstep" })).text();
+  seen.card = await (await rest({ read: "begin" })).text();
+  seen.mcp_bare = await mcp({});
+  seen.mcp_doorstep = await mcp({ read: "doorstep" });
+  seen.mcp_card = await mcp({ read: "begin" });
+  seen.me = await (await fetch(`${BASE}/me`, { headers: auth })).text();
+
+  const r1 = await fetch(`${BASE}/oauth/berth-cosign?slug=heard-berth`, { redirect: "manual" });
+  assert.equal(r1.status, 302, "the co-sign link sends the human to GitHub");
+  const r2 = await fetch(r1.headers.get("location"), { redirect: "manual" });
+  const r3 = await fetch(r2.headers.get("location"));
+  seen.consent = await r3.text();
+  assert.equal(r3.status, 200);
+  const form = {
+    pending_id: /name="pending_id" value="([^"]+)"/.exec(seen.consent)[1],
+    nonce: /name="nonce" value="([^"]+)"/.exec(seen.consent)[1],
+  };
+  seen.denied = await (await consent(form, "deny")).text();
+
+  const paper = new DatabaseSync(join(tmp, "oauth.db"), { readOnly: true });
+  try { seen.berth_row = JSON.stringify(paper.prepare("SELECT * FROM berths WHERE slug = 'heard-berth'").all()); }
+  finally { paper.close(); }
+
+  // The readers did read the parked declaration, so their silence about the answer means something.
+  assert.match(seen.bare, /berth-declared/);
+  assert.match(seen.mcp_bare, /berth-declared/);
+  assert.match(seen.consent, /Heard House/);
+  assert.match(seen.berth_row, /I listen first/);
+  assert.match(seen.card, /Where did you hear about Postmark/, "begin's card asks the question");
+  assert.match(seen.mcp_card, /Where did you hear about Postmark/);
+  for (const [reader, text] of Object.entries(seen)) {
+    assert.equal(text.includes(MARK), false, `${reader} returns the note`);
+    assert.doesNotMatch(text, /\\?"heard(_note)?\\?"\s*:\s*\\?"(?!string)/, `${reader} returns an answer field`);
+  }
+  assert.equal(JSON.parse(JSON.parse(seen.berth_row)[0].card).heard, undefined, "the parked declaration carries no answer");
+
+  // The positive control: the answer that was given is parked, where only the owner reads it.
+  const owner = await STORES[0].store.connect("world2_owner");
+  try {
+    assert.deepEqual((await owner.query("SELECT heard, note FROM berth_heard WHERE slug = 'heard-berth'")).rows, [{ heard: "other", note: NOTE }]);
+  } finally { await owner.end(); }
 });
 
 // ── POS-391 · registration is limited per CALLER, read as nginx names it ─────
