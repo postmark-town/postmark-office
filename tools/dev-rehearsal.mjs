@@ -318,7 +318,8 @@ function pgEnv(url) {
 
 // ── the store ────────────────────────────────────────────────────────────────
 
-async function storeClients(t) {
+/** The store's pens for a target, one connection per role (also the local sandbox's, tools/sandbox.mjs). */
+export async function storeClients(t) {
   const { default: pg } = await import("pg");
   const clients = new Map();
   const client = async (role) => {
@@ -1028,6 +1029,139 @@ async function settled(ctx, r, { byHand, window, mark = ctx.mark }) {
 /** A short run id, unique enough for a handle: base36 minutes since 2026-01-01. */
 const runId = () => Math.floor((Date.now() - Date.UTC(2026, 0, 1)) / 60_000).toString(36);
 
+// ── the crossing's context ───────────────────────────────────────────────────
+//
+// What a crossing needs, apart from the rehearsal's own residents and checks:
+// the box's jobs with the dev office's env, the town lock, the store's pens,
+// the clearing and the settlement with every outward edge pointed into
+// `scratch`. runRehearsal builds its context here and adds its residents; the
+// local sandbox (tools/sandbox.mjs, POS-560) builds one to run a crossing by
+// hand through the same plan() steps. `s` is storeClients(t)'s, `stub` the
+// GitHub stub (or null). Callers add their own fields with Object.assign, never
+// a spread: the methods close over this object.
+
+export function crossingContext({ t, s, db, run, scratch, stub = null, stubPort = null, log = () => {} }) {
+  const ctx = {
+    t, s, db, run, scratch, stub, stubPort, log,
+    /** A job the box runs (an office deploy/ or tools/ script), with the dev office's env. */
+    job(rel, args = [], { extraEnv = {}, cwd = t.officeRoot } = {}) {
+      return ctx.spawn([process.execPath, join(t.officeRoot, rel), ...args], { extraEnv, cwd });
+    },
+    /**
+     * A child job, ASYNCHRONOUSLY. The GitHub stub lives in this process, so a
+     * child that calls it (the settle pass, the pen's join road) is answered
+     * only while this event loop runs: under spawnSync the child waited out
+     * fetch's headers timeout (300 s) and threw (the 10-09 local proof).
+     */
+    spawn(argv, { extraEnv = {}, cwd = t.officeRoot } = {}) {
+      return new Promise((ok) => {
+        let out = "", done = false;
+        const finish = (code, extra = "") => { if (!done) { done = true; ok({ code, out: out + extra }); } };
+        const child = spawn(argv[0], argv.slice(1), { cwd, env: childEnv(t, extraEnv), windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+        const add = (d) => { out += d; if (out.length > 32 * 1024 * 1024) out = out.slice(-16 * 1024 * 1024); };
+        child.stdout.on("data", add);
+        child.stderr.on("data", add);
+        child.on("error", (e) => finish(127, String(e.message)));
+        child.on("close", (code) => finish(code));
+      });
+    },
+    /**
+     * A crossing job under the dev office's town lock, as the ferry and the
+     * keeping tick take it (flock -w 300 <root>/town.lock): a dev door write
+     * landing mid-crossing waits its turn instead of racing the chain. Where
+     * there is no flock (a laptop), the job runs bare and the drain is told so.
+     */
+    locked(argv, { extraEnv = {}, cwd = t.officeRoot } = {}) {
+      const lock = t.env.TOWN_LOCK ?? join(t.officeRoot, "town.lock");
+      return ctx.useFlock ? ctx.spawn(["/usr/bin/flock", "-w", "300", lock, ...argv], { extraEnv, cwd }) : ctx.spawn(argv, { extraEnv, cwd });
+    },
+    useFlock: process.platform === "linux" && existsSync("/usr/bin/flock"),
+    // STAMP_LINES=store: the mint decides from the store (POS-341), as prod's will after the w42 ship
+    storeMint: t.env.STAMP_LINES === "store",
+    // the keep tick's registry, written from the store by deploy/registry-file.mjs
+    registryFile: join(scratch, "registry.json"),
+    /** Commit what a crossing job wrote on the dev town clone, as the pen would (never pushed). */
+    commitTown(message) {
+      if (!git(t.townClone, "status", "--porcelain")) return null;
+      git(t.townClone, "add", "-A");
+      git(t.townClone, "-c", `user.name=${t.env.BOT_NAME ?? "dev-rehearsal"}`, "-c", `user.email=${t.env.BOT_EMAIL ?? "dev-rehearsal@postmark.invalid"}`, "commit", "-q", "-m", message);
+      return git(t.townClone, "rev-parse", "HEAD");
+    },
+    /** An ingest the box runs as law_ingester (the town index, the stamps), against the dev store. */
+    ingest(rel, args = []) {
+      return ctx.job(rel, args, { extraEnv: { ...pgEnv(t.urls.law_ingester), WORLD2_INGEST_URL: t.urls.law_ingester } });
+    },
+    /** The candle's close for one window, as world2-clearing.sh runs it. */
+    clearing(windowId, extra = []) {
+      return ctx.job("world2/tools/clearing-job.mjs", ["--window", String(windowId), "--town-repo", t.townClone, ...(t.worldClone ? ["--world-repo", t.worldClone] : []), ...extra],
+        // the first step (stamp-ingest) dials PG*, as the box's clearing unit env file supplies them for law_ingester
+        { extraEnv: { ...pgEnv(t.urls.law_ingester), WORLD2_CLEARING_URL: t.urls.clearing_job, WORLD2_INGEST_URL: t.urls.law_ingester } });
+    },
+    /**
+     * The settlement, as postmark-settlement(-by-hand).service runs it, with
+     * every edge that leaves the run pointed into the scratch directory:
+     *   · world: SETTLEMENT_CLONE clones from WORLD_CLONE's origin, and that
+     *     origin is a bare copy of the dev world clone, so publish_main's push
+     *     and the keeper's tag land there and nowhere else;
+     *   · town: the crossing pins origin/main of TOWN_CLONE, so its town is a
+     *     view whose origin is the dev town clone (the rehearsal's commits),
+     *     never GitHub's town;
+     *   · the receipt: SETTLEMENT_REPORT, never /srv/postmark-harbor (prod's
+     *     public receipt, which the keeper reads before he blesses);
+     *   · escalation: SETTLEMENT_ESCALATE_CRED names a file that does not
+     *     exist, so a red files no GitHub issue (the tool prints ISSUE-WANTED).
+     */
+    async settlement({ byHand = false } = {}) {
+      if (!ctx.worldBare) {
+        if (!t.worldClone || !existsSync(join(t.worldClone, ".git"))) return { setup: `no world clone at ${t.worldClone}` };
+        ctx.worldBare = join(scratch, "world.git");
+        // tags come along: the bless numbers the next settlement after the world's real ones
+        execFileSync("git", ["clone", "-q", "--bare", "--local", t.worldClone, ctx.worldBare]);
+        const branch = gitQuiet(t.worldClone, "symbolic-ref", "--short", "-q", "HEAD").stdout.trim();
+        if (branch !== "main") git(ctx.worldBare, "update-ref", "refs/heads/main", git(t.worldClone, "rev-parse", "HEAD"));
+        git(ctx.worldBare, "symbolic-ref", "HEAD", "refs/heads/main");
+        ctx.worldView = join(scratch, "world-view");
+        execFileSync("git", ["clone", "-q", ctx.worldBare, ctx.worldView]);
+        ctx.townView = join(scratch, "town-view");
+        execFileSync("git", ["clone", "-q", "--local", "--no-checkout", t.townClone, ctx.townView]);
+        const tb = gitQuiet(t.townClone, "symbolic-ref", "--short", "-q", "HEAD").stdout.trim();
+        if (tb !== "main") return { setup: `the dev town clone is on ${tb || "a detached HEAD"}, not main: the settlement pins origin/main` };
+      }
+      const n = (ctx.settlements = (ctx.settlements ?? 0) + 1);
+      const report = join(scratch, `settlement-${n}.json`);
+      const logPath = join(scratch, `settlement-${n}.log`);
+      // Asynchronous, its output to a file: the scheduled crossing STARTS before
+      // the clearing and waits for the candle (await-clearing), as the box's two
+      // units fire at the same instant; a pipe would stall it while this process
+      // waits on the clearing.
+      const fd = openSync(logPath, "w");
+      const child = spawn("sh", [join(t.officeRoot, "deploy", "settlement-auto.sh")], {
+        cwd: t.officeRoot, stdio: ["ignore", fd, fd], windowsHide: true,
+        env: childEnv(t, {
+          OFFICE_ROOT: t.officeRoot,
+          TOWN_CLONE: ctx.townView, WORLD_CLONE: ctx.worldView,
+          SETTLEMENT_CLONE: join(scratch, `sweep-${n}`),
+          SETTLEMENT_REPORT: report,
+          SETTLEMENT_SOURCE: "store", STATE_LOG_SOURCE: "store",
+          SETTLEMENT_BY_HAND: byHand ? "1" : "0",
+          SETTLEMENT_ESCALATE_CRED: join(scratch, "no-credentials-on-purpose"),
+          SETTLEMENT_CLEARING_WAIT_S: "180",
+          SETTLEMENT_ATTEMPT: "1",
+          WORLD2_CLEARING_URL: t.urls.clearing_job,
+        }),
+      });
+      return new Promise((ok) => child.on("exit", (code) => {
+        try { closeSync(fd); } catch { /* closed */ }
+        ok({ code, out: readFileSync(logPath, "utf8"), report, log: logPath });
+      }));
+    },
+    // the town's date, as the ferry dates a crossing
+    today: new Intl.DateTimeFormat("en-CA", { timeZone: t.env.TOWN_TZ ?? "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()),
+    stampKey: t.stampKey,
+  };
+  return ctx;
+}
+
 /**
  * Run the rehearsal against `t` (a target from `targetFromFiles`, or a test's).
  * Answers `{ green, guard, steps: [{ id, title, ok, problems, notes, ms }] }`.
@@ -1066,8 +1200,8 @@ export async function runRehearsal(t, { only = null, keep = false, log = () => {
       log(`github: the stub answers ${owner}/${repo} on :${stubPort}`);
     }
 
-    ctx = {
-      t, s, db: guard.db, run, scratch, stub, stubPort, log,
+    ctx = crossingContext({ t, s, db: guard.db, run, scratch, stub, stubPort, log });
+    Object.assign(ctx, {
       // a defect the rehearsal measured and names on every run but does not gate on (a ruling or another lane's fix is owed)
       findings: [],
       who: {
@@ -1075,125 +1209,10 @@ export async function runRehearsal(t, { only = null, keep = false, log = () => {
         // A synthetic GitHub account: above every real id today (~2.4e8) and below 2^31.
         ghId: 2_100_000_000 + (parseInt(run, 36) % 40_000_000), login: `rh-${run}-human`,
       },
-      /** A job the box runs (an office deploy/ or tools/ script), with the dev office's env. */
-      job(rel, args = [], { extraEnv = {}, cwd = t.officeRoot } = {}) {
-        return ctx.spawn([process.execPath, join(t.officeRoot, rel), ...args], { extraEnv, cwd });
-      },
-      /**
-       * A child job, ASYNCHRONOUSLY. The GitHub stub lives in this process, so a
-       * child that calls it (the settle pass, the pen's join road) is answered
-       * only while this event loop runs: under spawnSync the child waited out
-       * fetch's headers timeout (300 s) and threw (the 10-09 local proof).
-       */
-      spawn(argv, { extraEnv = {}, cwd = t.officeRoot } = {}) {
-        return new Promise((ok) => {
-          let out = "", done = false;
-          const finish = (code, extra = "") => { if (!done) { done = true; ok({ code, out: out + extra }); } };
-          const child = spawn(argv[0], argv.slice(1), { cwd, env: childEnv(t, extraEnv), windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
-          const add = (d) => { out += d; if (out.length > 32 * 1024 * 1024) out = out.slice(-16 * 1024 * 1024); };
-          child.stdout.on("data", add);
-          child.stderr.on("data", add);
-          child.on("error", (e) => finish(127, String(e.message)));
-          child.on("close", (code) => finish(code));
-        });
-      },
-      /**
-       * A crossing job under the dev office's town lock, as the ferry and the
-       * keeping tick take it (flock -w 300 <root>/town.lock): a dev door write
-       * landing mid-crossing waits its turn instead of racing the chain. Where
-       * there is no flock (a laptop), the job runs bare and the drain is told so.
-       */
-      locked(argv, { extraEnv = {}, cwd = t.officeRoot } = {}) {
-        const lock = t.env.TOWN_LOCK ?? join(t.officeRoot, "town.lock");
-        return ctx.useFlock ? ctx.spawn(["/usr/bin/flock", "-w", "300", lock, ...argv], { extraEnv, cwd }) : ctx.spawn(argv, { extraEnv, cwd });
-      },
-      useFlock: process.platform === "linux" && existsSync("/usr/bin/flock"),
-      // STAMP_LINES=store: the mint decides from the store (POS-341), as prod's will after the w42 ship
-      storeMint: t.env.STAMP_LINES === "store",
-      // the keep tick's registry, written from the store by deploy/registry-file.mjs
-      registryFile: join(scratch, "registry.json"),
-      /** Commit what a crossing job wrote on the dev town clone, as the pen would (never pushed). */
-      commitTown(message) {
-        if (!git(t.townClone, "status", "--porcelain")) return null;
-        git(t.townClone, "add", "-A");
-        git(t.townClone, "-c", `user.name=${t.env.BOT_NAME ?? "dev-rehearsal"}`, "-c", `user.email=${t.env.BOT_EMAIL ?? "dev-rehearsal@postmark.invalid"}`, "commit", "-q", "-m", message);
-        return git(t.townClone, "rev-parse", "HEAD");
-      },
-      /** An ingest the box runs as law_ingester (the town index, the stamps), against the dev store. */
-      ingest(rel, args = []) {
-        return ctx.job(rel, args, { extraEnv: { ...pgEnv(t.urls.law_ingester), WORLD2_INGEST_URL: t.urls.law_ingester } });
-      },
-      /** The candle's close for one window, as world2-clearing.sh runs it. */
-      clearing(windowId, extra = []) {
-        return ctx.job("world2/tools/clearing-job.mjs", ["--window", String(windowId), "--town-repo", t.townClone, ...(t.worldClone ? ["--world-repo", t.worldClone] : []), ...extra],
-          // the first step (stamp-ingest) dials PG*, as the box's clearing unit env file supplies them for law_ingester
-          { extraEnv: { ...pgEnv(t.urls.law_ingester), WORLD2_CLEARING_URL: t.urls.clearing_job, WORLD2_INGEST_URL: t.urls.law_ingester } });
-      },
-      /**
-       * The settlement, as postmark-settlement(-by-hand).service runs it, with
-       * every edge that leaves the run pointed into the scratch directory:
-       *   · world: SETTLEMENT_CLONE clones from WORLD_CLONE's origin, and that
-       *     origin is a bare copy of the dev world clone, so publish_main's push
-       *     and the keeper's tag land there and nowhere else;
-       *   · town: the crossing pins origin/main of TOWN_CLONE, so its town is a
-       *     view whose origin is the dev town clone (the rehearsal's commits),
-       *     never GitHub's town;
-       *   · the receipt: SETTLEMENT_REPORT, never /srv/postmark-harbor (prod's
-       *     public receipt, which the keeper reads before he blesses);
-       *   · escalation: SETTLEMENT_ESCALATE_CRED names a file that does not
-       *     exist, so a red files no GitHub issue (the tool prints ISSUE-WANTED).
-       */
-      async settlement({ byHand = false } = {}) {
-        if (!ctx.worldBare) {
-          if (!t.worldClone || !existsSync(join(t.worldClone, ".git"))) return { setup: `no world clone at ${t.worldClone}` };
-          ctx.worldBare = join(scratch, "world.git");
-          // tags come along: the bless numbers the next settlement after the world's real ones
-          execFileSync("git", ["clone", "-q", "--bare", "--local", t.worldClone, ctx.worldBare]);
-          const branch = gitQuiet(t.worldClone, "symbolic-ref", "--short", "-q", "HEAD").stdout.trim();
-          if (branch !== "main") git(ctx.worldBare, "update-ref", "refs/heads/main", git(t.worldClone, "rev-parse", "HEAD"));
-          git(ctx.worldBare, "symbolic-ref", "HEAD", "refs/heads/main");
-          ctx.worldView = join(scratch, "world-view");
-          execFileSync("git", ["clone", "-q", ctx.worldBare, ctx.worldView]);
-          ctx.townView = join(scratch, "town-view");
-          execFileSync("git", ["clone", "-q", "--local", "--no-checkout", t.townClone, ctx.townView]);
-          const tb = gitQuiet(t.townClone, "symbolic-ref", "--short", "-q", "HEAD").stdout.trim();
-          if (tb !== "main") return { setup: `the dev town clone is on ${tb || "a detached HEAD"}, not main: the settlement pins origin/main` };
-        }
-        const n = (ctx.settlements = (ctx.settlements ?? 0) + 1);
-        const report = join(scratch, `settlement-${n}.json`);
-        const logPath = join(scratch, `settlement-${n}.log`);
-        // Asynchronous, its output to a file: the scheduled crossing STARTS before
-        // the clearing and waits for the candle (await-clearing), as the box's two
-        // units fire at the same instant; a pipe would stall it while this process
-        // waits on the clearing.
-        const fd = openSync(logPath, "w");
-        const child = spawn("sh", [join(t.officeRoot, "deploy", "settlement-auto.sh")], {
-          cwd: t.officeRoot, stdio: ["ignore", fd, fd], windowsHide: true,
-          env: childEnv(t, {
-            OFFICE_ROOT: t.officeRoot,
-            TOWN_CLONE: ctx.townView, WORLD_CLONE: ctx.worldView,
-            SETTLEMENT_CLONE: join(scratch, `sweep-${n}`),
-            SETTLEMENT_REPORT: report,
-            SETTLEMENT_SOURCE: "store", STATE_LOG_SOURCE: "store",
-            SETTLEMENT_BY_HAND: byHand ? "1" : "0",
-            SETTLEMENT_ESCALATE_CRED: join(scratch, "no-credentials-on-purpose"),
-            SETTLEMENT_CLEARING_WAIT_S: "180",
-            SETTLEMENT_ATTEMPT: "1",
-            WORLD2_CLEARING_URL: t.urls.clearing_job,
-          }),
-        });
-        return new Promise((ok) => child.on("exit", (code) => {
-          try { closeSync(fd); } catch { /* closed */ }
-          ok({ code, out: readFileSync(logPath, "utf8"), report, log: logPath });
-        }));
-      },
-      // the town's date, as the ferry dates a crossing
-      today: new Intl.DateTimeFormat("en-CA", { timeZone: t.env.TOWN_TZ ?? "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()),
-      stampKey: t.stampKey,
       // two parcels of ground for the rehearsal, apart from each other and moved by the run id
       parcelAt: { x: 30000 + (parseInt(run, 36) % 400) * 60, y: 30000 },
       parcelAt2: { x: 30000 + (parseInt(run, 36) % 400) * 60, y: 30100 },
-    };
+    });
 
     for (const step of plan()) {
       if (only && !only.includes(step.id) && step.id !== "preflight") continue;

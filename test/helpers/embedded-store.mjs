@@ -284,6 +284,55 @@ async function treeStore(tree, db) {
 }
 
 /**
+ * A NAMED database on the tree's own server that outlives this process: the
+ * local sandbox's (tools/sandbox.mjs, POS-560). Never named t<pid>_…, so no
+ * store start sweeps it; pg.mjs stops the server on release and the database
+ * waits in the tree's data directory for the next start.
+ *
+ * `from` is "floor" (the migrated floor, as a test store is made), the name of
+ * another database to copy (CREATE DATABASE … TEMPLATE, which needs nobody
+ * connected to it), or null to open one that already exists. `fresh: true`
+ * drops the database first. Answers the store shape startStore answers, with
+ * `stop()` closing nothing (the database stays) and `drop()` removing it.
+ */
+export async function treeDatabase(name, { from = null, fresh = false } = {}) {
+  if (!/^[a-z][a-z0-9_]{0,62}$/.test(name) || TEST_DB.test(name) || /^floor_/.test(name)) throw new Error(`not a name a tree database may take: ${name}`);
+  const tree = treeServer();
+  if (!tree) throw new Error(`no tree server at ${TREE_PG}: the sandbox runs on a pool tree's own Postgres (node G:/Postmark/pool/pg.mjs provision <tree>)`);
+  const su = await superuser(tree.port);
+  try {
+    if (fresh) await su.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
+    const exists = (await su.query("SELECT 1 FROM pg_database WHERE datname = $1", [name])).rowCount === 1;
+    if (!exists) {
+      if (from == null) throw new Error(`the tree's server holds no database ${name}`);
+      const template = from === "floor" ? await treeFloor(su, tree.version) : from;
+      await su.query(`CREATE DATABASE ${name} TEMPLATE ${template} OWNER world2_owner`);
+    }
+  } finally { await su.end(); }
+  const connectTo = await connector(tree.port);
+  return {
+    connect: (user, database = name) => connectTo(user, database),
+    url: (user, database = name) => `postgres://${user}:${PW}@127.0.0.1:${tree.port}/${database}`,
+    database: name,
+    port: tree.port,
+    stop: async () => {},
+    async drop() {
+      const s = await superuser(tree.port);
+      try { await s.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`); } finally { await s.end(); }
+    },
+  };
+}
+
+/** Whether the tree's server holds a database of this name (false when the tree has no server). */
+export async function treeDatabaseExists(name) {
+  const tree = treeServer();
+  if (!tree) return false;
+  const su = await superuser(tree.port);
+  try { return (await su.query("SELECT 1 FROM pg_database WHERE datname = $1", [name])).rowCount === 1; }
+  finally { await su.end(); }
+}
+
+/**
  * Start a store with the whole schema applied: `{ connect(role), url(role), stop(), database }`,
  * where `connect` hands back a connected `pg.Client`. Throws NO_STORE, with the
  * cause, when no embedded Postgres can be found or started.

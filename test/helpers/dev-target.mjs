@@ -67,14 +67,18 @@ export async function localDevTarget({
   boot = true,
   windowId = 240,
   worldSuite = false,
+  // The local sandbox (tools/sandbox.mjs, POS-560) builds its seed here and keeps it:
+  // `dir` is a folder of its own (kept by stop), `store` a database it made (not stopped).
+  dir: keptDir = null,
+  store: givenStore = null,
   log = () => {},
 } = {}) {
-  const dir = tempDir("dev-target-");
-  const cleanups = [() => rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })];
+  const dir = keptDir ?? tempDir("dev-target-");
+  const cleanups = keptDir ? [] : [() => rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })];
   const stop = async () => { for (const c of cleanups.reverse()) { try { await c(); } catch { /* litter */ } } };
   try {
-    const store = await startStore({ db });
-    cleanups.push(() => store.stop());
+    const store = givenStore ?? await startStore({ db });
+    if (!givenStore) cleanups.push(() => store.stop());
     const town = scratchClone(townSource, join(dir, "town-clone"));
     const world = scratchClone(worldSource, join(dir, "world-clone"));
     // The world's own checker suite (test:candle) runs after a settlement publishes, as a
