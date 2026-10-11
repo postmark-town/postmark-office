@@ -359,11 +359,13 @@ test("H14 · 073: begin's answer parks where no pen reads it, a second begin rep
       "INSERT INTO berth_heard (slug, heard, parked_at) VALUES ('x', 'youtube', now())", "UPDATE berth_heard SET note = 'x'", "DELETE FROM berth_heard"]) {
       await assert.rejects(api.query(sql), (e) => e.code === "42501", `office_api may not: ${sql}`);
     }
-    // The two functions are the owner's, and neither returns the answer.
+    // The two functions are the owner's, and neither returns the answer. Each
+    // searches the caller's pg_temp LAST (review of #482): a definer function
+    // with `search_path = public` alone still searches pg_temp first.
     assert.deepEqual((await owner.query(
-      "SELECT proname, pg_get_function_result(oid) AS returns, prosecdef, pg_get_userbyid(proowner) AS owner FROM pg_proc WHERE proname LIKE 'berth_heard\\_%' ORDER BY 1")).rows,
-      [{ proname: "berth_heard_land", returns: "boolean", prosecdef: true, owner: "world2_owner" },
-       { proname: "berth_heard_park", returns: "void", prosecdef: true, owner: "world2_owner" }]);
+      "SELECT proname, pg_get_function_result(oid) AS returns, prosecdef, pg_get_userbyid(proowner) AS owner, proconfig FROM pg_proc WHERE proname LIKE 'berth_heard\\_%' ORDER BY 1")).rows,
+      [{ proname: "berth_heard_land", returns: "boolean", prosecdef: true, owner: "world2_owner", proconfig: ["search_path=public, pg_temp"] },
+       { proname: "berth_heard_park", returns: "void", prosecdef: true, owner: "world2_owner", proconfig: ["search_path=public, pg_temp"] }]);
 
     // Begin again replaces the parked declaration whole: a new answer, or none.
     assert.deepEqual(await parkHeard({ slug: "dock-walker", answer: heardAnswer({ heard: "YouTube" }), at: T0, query }), { parked: true });
@@ -374,7 +376,14 @@ test("H14 · 073: begin's answer parks where no pen reads it, a second begin rep
     // The co-sign lands it: into arrival_heard at the co-sign's time, and out of berth_heard.
     await parkHeard({ slug: "dock-walker", answer: heardAnswer({ heard: "Reddit", heard_note: NOTE }), at: T0, query });
     const T1 = new Date("2026-10-12T08:00:00Z");
+    // THE SHADOW (review of #482): office_api makes a TEMP arrival_heard of its
+    // own and lets the owner write it, then calls the landing. The landing
+    // still writes the store's table, and the shadow stays empty.
+    await api.query("CREATE TEMP TABLE arrival_heard (handle text, household text, heard text, note text, answered_at timestamptz)");
+    await api.query("GRANT INSERT, SELECT ON arrival_heard TO world2_owner");
     assert.deepEqual(await recordHeard({ handle: "dock-walker", household: "dockside", berth: "dock-walker", at: T1, query }), { kept: true });
+    assert.deepEqual((await api.query("SELECT * FROM pg_temp.arrival_heard")).rows, [], "the caller's temp table caught nothing");
+    await api.query("DROP TABLE pg_temp.arrival_heard");
     assert.deepEqual((await owner.query("SELECT handle, household, heard, note, answered_at FROM arrival_heard")).rows,
       [{ handle: "dock-walker", household: "dockside", heard: "reddit", note: NOTE, answered_at: T1 }]);
     assert.deepEqual(await parked(), [], "moved, never copied");

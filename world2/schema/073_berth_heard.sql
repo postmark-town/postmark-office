@@ -74,14 +74,20 @@ CREATE TABLE IF NOT EXISTS berth_heard (
 ALTER TABLE berth_heard ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON berth_heard FROM office_api, clearing_job, law_ingester, snapshot_reader;
 
+-- THE SEARCH PATH (review of #482): a SECURITY DEFINER function resolves names
+-- as its owner, through its own search_path. With `public` alone, Postgres still
+-- searches the caller's pg_temp FIRST, so an office_api session could shadow
+-- arrival_heard with a TEMP table of its own and pull a parked answer into it.
+-- So both functions name `public, pg_temp` (temp searched last) and qualify
+-- every table they touch.
 CREATE OR REPLACE FUNCTION berth_heard_park(p_slug text, p_heard text, p_note text, p_at timestamptz)
-  RETURNS void LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public AS $$
+  RETURNS void LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $$
 BEGIN
-  DELETE FROM berth_heard WHERE parked_at < p_at - interval '8 days';
+  DELETE FROM public.berth_heard WHERE parked_at < p_at - interval '8 days';
   IF p_heard IS NULL THEN
-    DELETE FROM berth_heard WHERE slug = p_slug;
+    DELETE FROM public.berth_heard WHERE slug = p_slug;
   ELSE
-    INSERT INTO berth_heard (slug, heard, note, parked_at) VALUES (p_slug, p_heard, p_note, p_at)
+    INSERT INTO public.berth_heard (slug, heard, note, parked_at) VALUES (p_slug, p_heard, p_note, p_at)
       ON CONFLICT (slug) DO UPDATE SET heard = EXCLUDED.heard, note = EXCLUDED.note, parked_at = EXCLUDED.parked_at;
   END IF;
 END $$;
@@ -89,12 +95,12 @@ END $$;
 -- ON CONFLICT DO NOTHING as 030's own INSERT: one answer per handle, and the
 -- parked row is deleted either way, so an answer is never kept twice.
 CREATE OR REPLACE FUNCTION berth_heard_land(p_slug text, p_handle text, p_household text, p_at timestamptz)
-  RETURNS boolean LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public AS $$
+  RETURNS boolean LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE kept integer;
 BEGIN
-  DELETE FROM berth_heard WHERE parked_at < p_at - interval '8 days';
-  WITH taken AS (DELETE FROM berth_heard WHERE slug = p_slug RETURNING heard, note)
-  INSERT INTO arrival_heard (handle, household, heard, note, answered_at)
+  DELETE FROM public.berth_heard WHERE parked_at < p_at - interval '8 days';
+  WITH taken AS (DELETE FROM public.berth_heard WHERE slug = p_slug RETURNING heard, note)
+  INSERT INTO public.arrival_heard (handle, household, heard, note, answered_at)
     SELECT p_handle, p_household, heard, note, p_at FROM taken
     ON CONFLICT DO NOTHING;
   GET DIAGNOSTICS kept = ROW_COUNT;
