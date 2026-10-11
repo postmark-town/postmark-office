@@ -20,18 +20,35 @@
 //
 //   node --test test/my-marks-offset-reaches-the-door.test.mjs
 
-import test from "node:test";
+import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { WORLD_CLONE, worldMyMarks } from "../src/world.mjs";
+import { installActsPen, uninstallActsPen, RECORD_ON } from "./acts-pen-stub.mjs";
+import { rowsFromRegistry } from "../src/registry-rows.mjs";
 
 const TOWN_CLONE = process.env.TOWN_CLONE ?? join(WORLD_CLONE, "..", "town-clone");
 const HAVE = existsSync(join(WORLD_CLONE, "WORLD", "world-state.json"))
-  && existsSync(join(TOWN_CLONE, "tools", "stamp-mint.mjs"));
+  && existsSync(join(TOWN_CLONE, "tools", "stamp-mint.mjs"))
+  && existsSync(join(TOWN_CLONE, "tools", "households.json"));
 const WHY_NOT = `needs a world clone at ${WORLD_CLONE} and a town clone at ${TOWN_CLONE}`;
+
+// THE PAGE'S RESIDENTS ARE THE STORE'S HOUSEHOLD (POS-545). This file reads the
+// real clones, so the record is seeded from the town clone's own printout of it
+// (tools/households.json and tools/github-ids.json, which tools/registry-drain.mjs
+// prints from the store). At the pins of 2026-10-10 the two rosters are the
+// same six authors (104 marks), so this file asks the same question it always did.
+if (HAVE) {
+  const readJson = (p) => JSON.parse(readFileSync(join(TOWN_CLONE, "tools", p), "utf8"));
+  const rows = rowsFromRegistry(readJson("households.json"), existsSync(join(TOWN_CLONE, "tools", "github-ids.json")) ? readJson("github-ids.json") : {});
+  process.env.WORLD2_PG = RECORD_ON.WORLD2_PG;
+  process.env.WORLD2_PG_URL = RECORD_ON.WORLD2_PG_URL;
+  installActsPen({ households: rows.households, pins: rows.pins, meta: [] });
+  after(() => { uninstallActsPen(); delete process.env.WORLD2_PG; delete process.env.WORLD2_PG_URL; });
+}
 const KEY = () => ({ handles: new Set(["wright"]), household: "keeminlee" });
 
 const SERVER = readFileSync(

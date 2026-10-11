@@ -31,6 +31,7 @@ import { guardedDraftsForKey } from "./world2-guards.mjs"; // the §1c delta, ov
 import { forecastForMark, nextSettlement } from "./world-forecast.mjs";
 import { execUnderTownLock, lockTimedOut, LOCK_BUSY } from "./town-lock.mjs";
 import { heldFor, clipTo, stampsBlock, toConfirm, RULE_MARK, NOTHING_MOVED } from "./stamps-preview.mjs"; // POS-83: the confirmation step for every act that moves stamps
+import { householdLookup } from "./households.mjs"; // POS-545: the portfolio's roster is the store's registry
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TOWN_CLONE = process.env.TOWN_CLONE ?? resolve(HERE, "..", "town-clone");
@@ -364,8 +365,9 @@ export async function worldStakeRead(args = {}) {
 }
 
 // Ruling 9 portfolio seam. Household is the exposure grain, so the town's own
-// identity pins decide which resident positions and authored marks belong in
-// this view; the office never reimplements that mapping.
+// identity pins decide which resident positions belong in this view, and the
+// store's registry which authored marks do (POS-545); the office never
+// reimplements either mapping.
 // `also` is a SECOND source of mark bodies — the caller's own live layer (their
 // drafts and docket claims). It exists because of the row the 2026-09-06 walk
 // read on their own staked mark:
@@ -402,7 +404,17 @@ export async function worldPortfolioStakeSlice(key, marks = [], { also = [] } = 
   // id, because a published mark's fields are the town's answer and a draft
   // copy of one is the author's proposal.
   const byId = new Map([...also, ...marks].map((mark) => [mark.id, mark]));
-  const residents = [...new Set(marks.map((mark) => mark.by).filter(belongs))].sort();
+  // THE ROSTER READS THE STORE (POS-545). `residents`, and the `published` and
+  // `your_ground` the leave-mark read draws from it, are the household the
+  // store's registry names (households.mjs § householdLookup), the resolver the
+  // leave door's ground verdict reads, so the read's "your ground" and the act's
+  // verdict name one household. A store the office cannot ask (null) leaves the
+  // key's own handles. `backed` still asks the ledger's pins above: named on
+  // POS-545, not moved here.
+  const houses = await householdLookup();
+  const ours = houses ? new Set([...key.handles].map((h) => houses(h)?.key).filter(Boolean)) : null;
+  const onRoster = (handle) => (ours ? ours.has(houses(handle)?.key) : key.handles.has(handle));
+  const residents = [...new Set(marks.map((mark) => mark.by).filter(onRoster))].sort();
   const backed = derived.rows
     .filter((row) => belongs(row.holder))
     .map((row) => backedRow(row, { mark: byId.get(row.mark), belongs }))
