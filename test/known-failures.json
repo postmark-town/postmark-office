@@ -2,14 +2,6 @@
   "_doc": "The office suite's known reds on the train, as CI measures them (.github/workflows/suite.yml, POS-417). One row per test: file, name (the test's own name, exactly as node:test reports it), reason, owner (the Linear issue that owns the fix: a child of POS-419 per cause), date (listed on) and until (review by): a row past its until is printed as overdue, which does not fail the run. The CI summary fails on a red that is NOT here, and also on a row whose test passed (delete the row) or no longer exists. `flaky: true` is a flake: when it reds, its file runs once more, and green on that retry is allowed while red twice fails the run. Fixing the reds is POS-419.",
   "failures": [
     {
-      "file": "test/cli-guard.test.mjs",
-      "name": "test/cli-guard.test.mjs",
-      "reason": "the file's own after(): the office's file count changed across its run, because other suite files write into the tree while it counts (red locally too: office-16-train-plus-408, 10-07)",
-      "owner": "POS-490",
-      "date": "2026-10-07",
-      "until": "2026-10-18"
-    },
-    {
       "file": "test/crossing-refreshes-the-registry.test.mjs",
       "name": "test/crossing-refreshes-the-registry.test.mjs",
       "reason": "CI only (Linux): hangs past the 180 s test timeout before its first test reports. Cause not yet measured",
