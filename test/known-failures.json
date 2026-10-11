@@ -10,14 +10,6 @@
       "until": "2026-10-18"
     },
     {
-      "file": "test/refresher-blocked.test.mjs",
-      "name": "test/refresher-blocked.test.mjs",
-      "reason": "CI only (Linux): hangs past the 180 s test timeout; its Linux arm (a FIFO as GIT_CONFIG_GLOBAL) had never run before CI. Cause not yet measured",
-      "owner": "POS-491",
-      "date": "2026-10-07",
-      "until": "2026-10-18"
-    },
-    {
       "file": "test/server.test.mjs",
       "name": "PATCH /profile/{handle}/avatar reaches the REST image door and keeps its bounce prose",
       "reason": "the avatar flake: its spawned office has a 10 s listen timeout, missed under load (the w42 control); green in CI runs 37692083332 and 37693810179",
