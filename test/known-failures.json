@@ -1,13 +1,4 @@
 {
   "_doc": "The office suite's known reds on the train, as CI measures them (.github/workflows/suite.yml, POS-417). One row per test: file, name (the test's own name, exactly as node:test reports it), reason, owner (the Linear issue that owns the fix: a child of POS-419 per cause), date (listed on) and until (review by): a row past its until is printed as overdue, which does not fail the run. The CI summary fails on a red that is NOT here, and also on a row whose test passed (delete the row) or no longer exists. `flaky: true` is a flake: when it reds, its file runs once more, and green on that retry is allowed while red twice fails the run. Fixing the reds is POS-419.",
-  "failures": [
-    {
-      "file": "test/foyer-shrink.test.mjs",
-      "name": "F7c5 · THE MORNING PAGE DID NOT FATTEN — the doorstep bundle is byte-identical to the pre-parity capture, on BOTH skins",
-      "reason": "F7c5: the doorstep bundle grew past the pre-parity capture (a base red on train/2026-w42 since 10-05)",
-      "owner": "POS-491",
-      "date": "2026-10-07",
-      "until": "2026-10-18"
-    }
-  ]
+  "failures": []
 }
