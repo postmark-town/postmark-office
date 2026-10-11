@@ -581,7 +581,12 @@ build_once() {
   fi
 
   say "build: astro, release channel"
-  ( cd "$BUILD" && PUBLIC_CHANNEL=release PUBLIC_BUILD_SHA="$(git -C "$BUILD" rev-parse HEAD)" npm run build --silent ) \
+  # BUILD_CROSSING rides into the build too, not only the stamp: pages that key
+  # what they show to the crossing (the season's line under the ferry clock)
+  # read it at build time, and an unset one renders them as if no crossing were
+  # known. The SAME number the extract and the stamp get, asked once above;
+  # empty when the office did not answer, never a guess.
+  ( cd "$BUILD" && PUBLIC_CHANNEL=release PUBLIC_BUILD_SHA="$(git -C "$BUILD" rev-parse HEAD)" BUILD_CROSSING="$crossing" npm run build --silent ) \
     | quiet_build_log || die "the site build tripped"
 
   # ── the stamp: what this page was built from, in its own bytes ────────────

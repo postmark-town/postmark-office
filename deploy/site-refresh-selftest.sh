@@ -157,7 +157,7 @@ case "${1:-}" in
       esac
     done
     exit 0;;
-  run) if [ "${2:-}" = "build" ]; then mkdir -p dist-town; date -u +%s%N > dist-town/index.html; fi; exit 0;;
+  run) if [ "${2:-}" = "build" ]; then mkdir -p dist-town; date -u +%s%N > dist-town/index.html; echo "build_crossing=${BUILD_CROSSING+set}:${BUILD_CROSSING-}" > dist-town/build-env.txt; fi; exit 0;;
 esac
 exit 0
 EOF
@@ -199,6 +199,10 @@ STAMP="$TARGET1/build.json"
 grep -q '"code_ref": "release/2026-w35"' "$STAMP" && ok "the stamp names the release tag the code came from" || bad "no code_ref in $STAMP"
 grep -q "\"town_sha\": \"$(git -C "$TOWN_SRC" rev-parse HEAD)\"" "$STAMP" && ok "the stamp names the TOWN commit that was read" || bad "town_sha wrong: $(cat "$STAMP")"
 grep -q '"crossing": null' "$STAMP" && ok "and an unasked crossing is null in the stamp, not zero" || bad "crossing not null: $(cat "$STAMP")"
+# THE BUILD IS HANDED THE SAME CROSSING: pages that key what they show to the
+# crossing read BUILD_CROSSING at build time, so it must reach `npm run build` as
+# well as the stamp: set, and here the honest empty (the office is a closed port).
+grep -q "^build_crossing=set:$" "$TARGET1/build-env.txt" && ok "the build itself was handed BUILD_CROSSING (empty, as the stamp's null)" || bad "the build was not handed BUILD_CROSSING: $(cat "$TARGET1/build-env.txt" 2>&1)"
 [ -f "$TARGET1/../../site/public/renditions/a.html" ] || [ -f "$ROOT/build/public/renditions/a.html" ] && ok "approved renditions were overlaid onto the tag build" || bad "renditions did not reach the build tree"
 
 head_ "3 · THE NO-OP PATH: nothing moved, so nothing is done"
