@@ -2061,3 +2061,25 @@ The bare read an MCP caller gets at each door is set by one variable per door in
 - **To check it:** an MCP `tools/list` shows the world tool's SIZE line reading "the lean read".
 - **To roll back:** delete the line and restart.
 - **Never `TOWN_READ_SHAPE=v1`:** that is t0, said once in the journal.
+
+## 073: a berth's answer to the join question waits privately for its co-sign (POS-570)
+
+`begin` asks "where did you hear about Postmark?" as `declare` does. The answer is parked apart from the declaration in `berth_heard`, where no pen holds any privilege, and the co-sign moves it into `arrival_heard` (030). The office reaches the table only through two owner functions, and neither returns the answer. Box steps (Wright's hand, never a lane's):
+
+1. **Apply 073 after 030, before the code.** The file is not on the box until the tag is rsynced, so pipe it from the tag being shipped, from Wright's machine (Git bash), the way § 1 above does. The database is the one the office itself reads: the last path segment of `WORLD2_PG_URL` in `/etc/postmark-office.env`, read on the box rather than named here. The file is idempotent and takes no lock on a busy table.
+   ```sh
+   CLONE=G:/Postmark/repo-clones/wright/office; TAG=release/2026-wNN.M   # the tag being shipped
+   git -C $CLONE fetch -q origin --tags
+   git -C $CLONE show "$TAG:world2/schema/073_berth_heard.sql" | ssh meepo-ec2 'set -e
+     DB=$(sudo sed -n "s|^WORLD2_PG_URL=.*/\([^/?\"]*\).*|\1|p" /etc/postmark-office.env); echo "db: $DB"; test -n "$DB"
+     sudo -n -u postgres psql -q -v ON_ERROR_STOP=1 -d "$DB" -c "SET ROLE world2_owner;" -f -'
+   ```
+   Proof, on the box (the probe `world2/tools/migrations-landed.mjs` holds for 073, then the grants and the search path):
+   ```sh
+   DB=$(sudo sed -n 's|^WORLD2_PG_URL=.*/\([^/?"]*\).*|\1|p' /etc/postmark-office.env)
+   sudo -n -u postgres psql -d "$DB" -tAc "SELECT to_regclass('public.berth_heard') IS NOT NULL AND EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'berth_heard_land' AND prosecdef)"   # t
+   sudo -n -u postgres psql -d "$DB" -tAc "SELECT grantee, privilege_type FROM information_schema.role_table_grants WHERE table_name = 'berth_heard' AND grantee <> 'world2_owner'"   # no rows
+   sudo -n -u postgres psql -d "$DB" -tAc "SELECT proname, proconfig FROM pg_proc WHERE proname LIKE 'berth_heard%' ORDER BY 1"   # both: {"search_path=public, pg_temp"}
+   ```
+2. **An office on the new code before 073** still parks every declaration and admits every co-sign: the park and the landing are best-effort, and each miss logs one `[arrival-heard] … not parked` or `… not kept` line. Answers given in that window are not kept.
+3. **To read it later:** the counts arrive through `GET /api/ops/heard` as before, now including berth arrivals. An operator reads a parked answer, or a kept note, at psql as the owner, and nowhere else.

@@ -459,7 +459,11 @@ export function plan() {
       async check(ctx, r) {
         const p = [];
         if (r.status !== 200) p.push(`GET /release answered ${said(r)}`);
-        const have = new Set((await ctx.s.q("office_api", "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")).map((x) => x.table_name));
+        // Read from the catalog, not information_schema: information_schema
+        // lists only what the asking role holds a privilege on, and a private
+        // table no pen may touch (073's berth_heard, POS-570) exists all the same.
+        const have = new Set((await ctx.s.q("office_api",
+          "SELECT tablename AS table_name FROM pg_tables WHERE schemaname = 'public' UNION SELECT viewname FROM pg_views WHERE schemaname = 'public'")).map((x) => x.table_name));
         const missing = [...treeTables(ctx.t.officeRoot)].filter((n) => !have.has(n)).sort();
         if (missing.length) p.push(`the store lags this tree's migrations: ${missing.join(", ")} missing (apply them to ${ctx.db} first)`);
         const e = ctx.t.env;

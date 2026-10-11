@@ -433,6 +433,26 @@ test('F5 · OPERATIONS.md: "REST: stable/simple for frozen consumers" — the RE
   // the frozen copy AND the live door.
   assert.equal(homeFrozen?.fields?.image?.type, "string", "the frozen home card carries image");
   assert.equal(homeLive?.fields?.image?.type, "string", "the live home card takes image — a picture the card did not advertise would be refused for a field nobody was told about");
+  // ⚑ REGENERATED 2026-10-10 FOR POS-570 (the join question on the berth's
+  // road), named here for the same reason. What grew: begin's card gained
+  // declare's two optional fields, `heard` and `heard_note`. Because the
+  // golden keeps each act SHAPE once (shapeOf de-duplicates the acts list),
+  // begin's shape is now declare's, and the capture diff reads as one shape
+  // fewer: −1 shape, +0, and the removed shape plus {heard, heard_note} is
+  // exactly declare's (proved key by key in the lane's paperwork,
+  // docs/2026-10-10/rail/POS-570/proofs/). No key removed or retyped on any
+  // card. Both stay off the abridged index (household-apex.mjs § OFF_INDEX,
+  // F5d). PSA for the release notes: "begin asks the join question too: a
+  // berth's agent may pass heard and heard_note, kept privately until its
+  // human co-signs; only weekly counts ever leave the office."
+  //
+  // The witness: in the frozen copy, exactly one act shape carries `heard`,
+  // and on the live door begin's card is that shape, and so is declare's.
+  const heardShapes = frozen.acts.filter((a) => a.fields && "heard" in a.fields);
+  assert.equal(heardShapes.length, 1, "begin and declare share one shape in the frozen copy");
+  const beginLive = full.acts.find((a) => a.act === "begin");
+  assert.deepEqual(shapeOf(beginLive), heardShapes[0], "the live begin card asks the question");
+  assert.deepEqual(shapeOf(full.acts.find((a) => a.act === "declare")), heardShapes[0]);
 });
 
 test(`F5c · and the answer stays BOUNDED — REST under ${REST_CEILING}B, the connector's bare answer under ${SLIM_CEILING}B`, async () => {
@@ -453,15 +473,18 @@ test(`F5c · and the answer stays BOUNDED — REST under ${REST_CEILING}B, the c
 // stay off the ABRIDGED index; the ceiling stays (raising it is Keemin's call).
 // Measured on the POS-292 head with them off: connector bare 8,180 B, so the
 // headroom under SLIM_CEILING is 12 B; REST bare 21,668 B under 24,576.
-test("F5d · POS-292: the abridged index leaves declare's heard fields off, and the card still carries them", async () => {
+// POS-570: begin asks the same two fields, on the same rule.
+test("F5d · POS-292 + POS-570: the abridged index leaves declare's and begin's heard fields off, and both cards still carry them", async () => {
   const slim = await householdApex({}, KEY, ctx({ slim: true, schemas: SCHEMAS, schemaRequired: REQUIRED }));
-  const declare = slim.acts.find((a) => a.act === "declare");
-  assert.ok(declare, "declare is on the index");
-  for (const f of ["heard", "heard_note"]) assert.equal(f in declare.fields, false, `${f} rides the foyer`);
-  assert.ok("household" in declare.fields, "the rest of declare's fields are still listed");
-  const card = await householdApex({ read: "declare" }, KEY, ctx({ slim: true, schemas: SCHEMAS, schemaRequired: REQUIRED }));
-  const fields = card.card?.fields ?? card.fields ?? {};
-  for (const f of ["heard", "heard_note"]) assert.ok(f in fields, `${f} is on declare's card: ${JSON.stringify(Object.keys(fields))}`);
+  for (const act of ["declare", "begin"]) {
+    const entry = slim.acts.find((a) => a.act === act);
+    assert.ok(entry, `${act} is on the index`);
+    for (const f of ["heard", "heard_note"]) assert.equal(f in entry.fields, false, `${act}'s ${f} rides the foyer`);
+    assert.ok("household" in entry.fields, `the rest of ${act}'s fields are still listed`);
+    const card = await householdApex({ read: act }, KEY, ctx({ slim: true, schemas: SCHEMAS, schemaRequired: REQUIRED }));
+    const fields = card.card?.fields ?? card.fields ?? {};
+    for (const f of ["heard", "heard_note"]) assert.ok(f in fields, `${f} is on ${act}'s card: ${JSON.stringify(Object.keys(fields))}`);
+  }
 });
 
 test("F5b · and the slim-only keys never leak onto it", async () => {
