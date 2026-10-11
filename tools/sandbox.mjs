@@ -781,6 +781,9 @@ function down(L) {
   const run = readJson(L.run);
   if (!run || !alive(run.pid)) { rmSync(L.run, { force: true }); say("sandbox: already down"); return 0; }
   for (const pid of [...(run.children ?? []), run.pid]) if (pid && alive(pid)) { try { process.kill(pid); } catch { /* gone */ } }
+  // the office's instruments, which its own stop would have removed (src/loop-lag.mjs, store-txn-watch.mjs)
+  const port = (() => { try { return new URL(run.office).port; } catch { return null; } })();
+  if (port) for (const f of [`loop-lag-${port}.json`, `store-txn-${port}.json`]) rmSync(join(OFFICE, "telemetry", f), { force: true });
   rmSync(L.run, { force: true });
   say(`sandbox: stopped (pid ${run.pid})`);
   return 0;
