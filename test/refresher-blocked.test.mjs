@@ -37,6 +37,8 @@ import { tmpdir } from "node:os";
 
 import { blessed, draftRefForHousehold, mainRef, publishedState, readAtRef } from "../src/world-branches.mjs";
 import { startWorldRefresher, worldRefresher } from "../src/world-refresher.mjs";
+import { hangWatch } from "./helpers/hang-watch.mjs";
+hangWatch("refresher-blocked", 60); // MEASUREMENT ONLY (POS-491): CI's Linux hang
 
 const HOLD_MS = 30_000;
 const POLL_MS = HOLD_MS - 3_000;          // the poll ends inside the hold, so all of it saw a blocked refresher
