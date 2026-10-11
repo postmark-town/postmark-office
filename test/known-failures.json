@@ -51,46 +51,6 @@
       "flaky": true
     },
     {
-      "file": "test/state-log-check.test.mjs",
-      "name": "B4 · the fractional walk crossing keeps its own file, exactly as the drain grouped it",
-      "reason": "the drain family (the control's known reds since w41c): the fixture's state-log checkout has no current branch",
-      "owner": "POS-488",
-      "date": "2026-10-07",
-      "until": "2026-10-18"
-    },
-    {
-      "file": "test/state-log-check.test.mjs",
-      "name": "C2 · the on-disk horizon is filtered on BOTH sides, and the count dropped is reported",
-      "reason": "the drain family (the control's known reds since w41c): the fixture's state-log checkout has no current branch",
-      "owner": "POS-488",
-      "date": "2026-10-07",
-      "until": "2026-10-18"
-    },
-    {
-      "file": "test/state-log-check.test.mjs",
-      "name": "C3 · --write twice is one diff of zero",
-      "reason": "the drain family (the control's known reds since w41c): the fixture's state-log checkout has no current branch",
-      "owner": "POS-488",
-      "date": "2026-10-07",
-      "until": "2026-10-18"
-    },
-    {
-      "file": "test/state-log-check.test.mjs",
-      "name": "C5b · the window's own horizon cannot be overridden by an argument",
-      "reason": "the drain family (the control's known reds since w41c): the fixture's state-log checkout has no current branch",
-      "owner": "POS-488",
-      "date": "2026-10-07",
-      "until": "2026-10-18"
-    },
-    {
-      "file": "test/state-log-check.test.mjs",
-      "name": "C6 · the writer refuses a crossing the DRAIN already photographed",
-      "reason": "the drain family (the control's known reds since w41c): the fixture's state-log checkout has no current branch",
-      "owner": "POS-488",
-      "date": "2026-10-07",
-      "until": "2026-10-18"
-    },
-    {
       "file": "test/suite-baseline.test.mjs",
       "name": "a file that fails to load is named by the file alone",
       "reason": "CI only: the junit fixture names a file with a Windows separator, and Node 22's junit reporter carries no file attribute for the tool to prefix; green on Windows with Node 25",
