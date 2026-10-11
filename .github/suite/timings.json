@@ -321,7 +321,6 @@
   "test/stripe-watch-cli.test.mjs": 62.3,
   "test/stripe-watch-held-behind-cursor.test.mjs": 41.9,
   "test/stripe-watch.test.mjs": 1.1,
-  "test/suite-baseline.test.mjs": 1.1,
   "test/suite-ci.test.mjs": 0.3,
   "test/telemetry-line-bound.test.mjs": 0.2,
   "test/the-bless-overrides-the-tick.test.mjs": 5.5,

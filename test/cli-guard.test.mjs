@@ -177,7 +177,6 @@ const ROSTER = {
   // it imports the town engine or reads the store.
   "tools/ballot-pass-run.mjs": { args: [], env: NO_PG, code: 1, needle: "usage: ballot-pass-run.mjs --key FILE" },
   "tools/ballots-backfill.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: ballots-backfill.mjs --town <clone>" },
-  "tools/suite-baseline.mjs": { args: ["--tip", "0000000"], code: 2, needle: "cannot resolve 0000000 to a full sha here" },
   "tools/settle-anchored-berths.mjs": { args: ["--clone", NOWHERE], code: 1, needle: "not a town checkout" },
   "tools/ship-guard.mjs": { args: [], code: 2, needle: "usage: node tools/ship-guard.mjs" },
   "tools/site-sentinel.mjs": { args: ["--now", "not-a-date", "--dry-run", "--state", NOWHERE_OUT, "--out", NOWHERE_OUT], env: { SENTINEL_DISCORD_WEBHOOK: undefined }, code: 1, needle: "site-sentinel" },

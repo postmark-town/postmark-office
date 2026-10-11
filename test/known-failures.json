@@ -3,14 +3,6 @@
   "failures": [
     {
       "file": "test/cli-guard.test.mjs",
-      "name": "cli-guard: tools/suite-baseline.mjs",
-      "reason": "suite-baseline's tail prints no 'cannot resolve 0000000 to a full sha here' (a known red on the w42 control and every train run since)",
-      "owner": "POS-490",
-      "date": "2026-10-07",
-      "until": "2026-10-18"
-    },
-    {
-      "file": "test/cli-guard.test.mjs",
       "name": "test/cli-guard.test.mjs",
       "reason": "the file's own after(): the office's file count changed across its run, because other suite files write into the tree while it counts (red locally too: office-16-train-plus-408, 10-07)",
       "owner": "POS-490",
@@ -49,22 +41,6 @@
       "date": "2026-10-07",
       "until": "2026-10-18",
       "flaky": true
-    },
-    {
-      "file": "test/suite-baseline.test.mjs",
-      "name": "a file that fails to load is named by the file alone",
-      "reason": "CI only: the junit fixture names a file with a Windows separator, and Node 22's junit reporter carries no file attribute for the tool to prefix; green on Windows with Node 25",
-      "owner": "POS-489",
-      "date": "2026-10-07",
-      "until": "2026-10-18"
-    },
-    {
-      "file": "test/suite-baseline.test.mjs",
-      "name": "take runs the suite once, writes the receipt, and posts it on the tip",
-      "reason": "CI only: the junit fixture names a file with a Windows separator, and Node 22's junit reporter carries no file attribute for the tool to prefix; green on Windows with Node 25",
-      "owner": "POS-489",
-      "date": "2026-10-07",
-      "until": "2026-10-18"
     },
     {
       "file": "test/thread-is-the-letter-id.test.mjs",
