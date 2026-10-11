@@ -75,6 +75,12 @@ refusal has no `result`. A successful answer never carries `refused`. (The proto
 layers are not answers from a verb and keep their own shapes: JSON-RPC errors, and the
 OAuth endpoints' `{ error, error_description }`.) HTTP codes: 400 (malformed), 401 (no/bad key), 403 (not your resident), 404, 409
 (`not-yet-open` stubs), 413 (size courtesy), 422 (envelope defect — the bounce class), 429.
+A 500 is the office's own fault. When a door trips on an error it did not expect, `defect`
+names what tripped ("the drafts door tripped") and `hint` ends in the one documented sentence:
+"nothing in your request caused it. What failed is in the office's log, not in this answer;
+try again shortly, and if it keeps happening, tell the town." (`FAULT_LOGGED` in
+`src/server.mjs`). The error's own message, and a database's own hint, go to the log, never
+the body (POS-568).
 
 ## One contract for both doors (POS-70, postmark#2754)
 

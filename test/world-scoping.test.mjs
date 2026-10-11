@@ -404,3 +404,16 @@ test("§1c (c) — NO read folds a draft branch: the fold arm is gone and the wi
     "not one fold ran on the request path — 'whole-world computation re-entering through the display' has no entrance left");
   rmSync(witness, { force: true });
 });
+
+// THE TWO HALVES OF THE PORTFOLIO TAKE ONE GRAIN (the POS-545 review). The
+// roster is every handle on the key; `backed` asked only the FIRST handle's
+// pins household, so a key whose first handle sat in another house read its
+// own resident's stake as somebody else's. THE FLIP: go back to the first
+// handle's household and `backed` comes back empty here.
+test("POS-545: a key's backed positions are every handle's, the grain its residents take", async () => {
+  const both = { household: "house-b", handles: new Set(["beta", "alpha"]) };
+  const portfolio = await worldMyMarks(both);
+  assert.ok(portfolio.residents.includes("alpha"), `alpha is on this key's roster: ${JSON.stringify(portfolio.residents)}`);
+  assert.deepEqual(portfolio.backed.map((position) => ({ id: position.id, holder: position.holder, yours: position.yours })),
+    [{ id: "alpha/backed-note", holder: "alpha", yours: true }], "and alpha's stake is backed by this key's household");
+});

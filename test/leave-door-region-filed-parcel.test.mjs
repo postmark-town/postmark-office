@@ -481,3 +481,36 @@ test("POS-545: the ground verdict reads the store's registry: ✦0 on a housemat
   assert.equal(stranger.ok, true, JSON.stringify(stranger));
   assert.equal(stranger.put_forward, false, "the same spot is the commons to another household");
 });
+
+// ── LEG 13 · a store blip is "could not tell", never "commons" (POS-545 review)
+//
+// `markStandsOnOwnGround` feeds the stake door's `unbackedRefusalFor`, which
+// takes a zero-balance promotion back off the docket only on `false`. Without
+// the registry the verdict falls to the solo grain, which cannot see a
+// housemate's parcel, so a blip read as `false` would retract a lawful
+// own-ground promotion. THE FLIP: return `min === 0` again and the blip leg
+// answers false, and the refusal fires.
+
+test("POS-545: with the registry unreadable, a mark on a housemate's parcel reads null (could not tell), and the promotion is not taken back", async () => {
+  const { markStandsOnOwnGround } = await import("../src/world.mjs");
+  const { unbackedRefusalFor } = await import("../src/world-stake.mjs");
+  const { __setPoolForTest } = await import("../src/world2-acts.mjs");
+  const shed = { by: "reader", kind: "sited", at: { x: 500, y: 500 }, extent: { w: 2, h: 2 } };
+  const far = { ...shed, at: { x: 1500, y: -1500 } };
+  assert.equal(await markStandsOnOwnGround(shed), true, "with the registry, the housemate's parcel is the household's own ground");
+  assert.equal(await markStandsOnOwnGround(far), false, "CONTROL: with the registry, open ground is the commons");
+
+  const blip = () => { throw Object.assign(new Error("Connection terminated unexpectedly (synthetic blip, POS-545)"), { code: "57P01" }); };
+  __setPoolForTest({ query: async () => blip(), connect: async () => blip() });
+  try {
+    const onMates = await markStandsOnOwnGround(shed);
+    assert.equal(onMates, null, "the registry could not be read, so the office cannot tell");
+    assert.equal(unbackedRefusalFor({ mark: "reader/the-shed", n: 1, promoted: true, applied: 0, ownGround: onMates }), null,
+      "and a lawful own-ground promotion stays on the docket");
+    assert.equal(await markStandsOnOwnGround({ ...shed, at: { x: 300, y: 300 } }), true,
+      "the author's OWN parcel is still a finding without the registry");
+  } finally {
+    __setPoolForTest(pen);
+  }
+  assert.equal(await markStandsOnOwnGround(shed), true, "and the store's answer is back");
+});

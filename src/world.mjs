@@ -3266,7 +3266,10 @@ async function groundMinimumStake(clean, canon) {
     if (marksContain(g, { at: clean.at, extent: clean.extent, points: clean.points }))
       return { min: 0, ground: g.id, own };
   }
-  return { ...commons, own };
+  // A COMMONS ANSWER READ WITHOUT THE REGISTRY IS A GUESS, NOT A FINDING: the
+  // solo grain cannot see a housemate's parcel. The act takes the safe read
+  // (the mark stays a draft); `markStandsOnOwnGround` must not take it as "commons".
+  return { ...commons, own, ...(houses ? {} : { registry_unread: true }) };
 }
 
 /**
@@ -3376,8 +3379,9 @@ export async function markStandsOnOwnGround(clean, canon = null) {
     if (typeof marksContain !== "function") return null; // could not look
     const board = canon ?? canonForGuards();
     if (!clean?.at && !board.byId.get(clean?.parent_id)) return null; // nothing to place it by
-    const { min } = await groundMinimumStake(clean, board);
-    return min === 0;
+    const { min, registry_unread } = await groundMinimumStake(clean, board);
+    if (min === 0) return true;
+    return registry_unread ? null : false; // a store blip is "could not tell" (POS-545 review)
   } catch { return null; }
 }
 

@@ -395,11 +395,12 @@ export async function worldPortfolioStakeSlice(key, marks = [], { also = [] } = 
   // "keeminlee") than the pins' ids (e.g. "gh:67605380"), so comparing them
   // directly can never match on real data — the misattribution Rei found the
   // night ruling 9 went live. Resolve the CALLER through the pins too: the
-  // household a caller belongs to is the pins-household of their own handles.
-  const pinsHousehold = [...key.handles]
-    .map((h) => stakeState.currentHouseholdOf(h))
-    .find(Boolean) ?? household;
-  const belongs = (handle) => stakeState.currentHouseholdOf(handle) === pinsHousehold;
+  // household a caller belongs to is the pins-household of their own handles:
+  // EVERY handle on the key, the grain the roster below takes too (the POS-545
+  // review: the first handle's alone left `backed` narrower than `residents`).
+  const pinsHouseholds = new Set([...key.handles].map((h) => stakeState.currentHouseholdOf(h)).filter(Boolean));
+  if (!pinsHouseholds.size) pinsHouseholds.add(household);
+  const belongs = (handle) => pinsHouseholds.has(stakeState.currentHouseholdOf(handle));
   // Canon first, the caller's own live layer second — canon wins on a shared
   // id, because a published mark's fields are the town's answer and a draft
   // copy of one is the author's proposal.
