@@ -8,33 +8,6 @@
       "owner": "POS-491",
       "date": "2026-10-07",
       "until": "2026-10-18"
-    },
-    {
-      "file": "test/server.test.mjs",
-      "name": "PATCH /profile/{handle}/avatar reaches the REST image door and keeps its bounce prose",
-      "reason": "the avatar flake: its spawned office has a 10 s listen timeout, missed under load (the w42 control); green in CI runs 37692083332 and 37693810179",
-      "owner": "POS-491",
-      "date": "2026-10-07",
-      "until": "2026-10-18",
-      "flaky": true
-    },
-    {
-      "file": "test/thread-is-the-letter-id.test.mjs",
-      "name": "F13 · POST /letters — the REST skin hints too, and its own answer is otherwise the answer it was",
-      "reason": "a spawned office's first POST /letters runs cold and can hit the pen pool's 10 s acquire limit (503) under load: measured 10-07 on the plain train and on train + #376 (G:/Starstory/docs/2026-10-07/rail/POS-341/letters-503.md, POS-419). In CI it took 109-147 ms (F13) and 38-53 ms (F14) in runs 37692083332, 37693810179 and 37696624256",
-      "owner": "POS-491",
-      "date": "2026-10-07",
-      "until": "2026-10-18",
-      "flaky": true
-    },
-    {
-      "file": "test/thread-is-the-letter-id.test.mjs",
-      "name": "F14 · and POST /letters WITH a thread is byte-for-byte the receipt it always was — no key added when there is nothing to say",
-      "reason": "a spawned office's first POST /letters runs cold and can hit the pen pool's 10 s acquire limit (503) under load: measured 10-07 on the plain train and on train + #376 (G:/Starstory/docs/2026-10-07/rail/POS-341/letters-503.md, POS-419). In CI it took 109-147 ms (F13) and 38-53 ms (F14) in runs 37692083332, 37693810179 and 37696624256",
-      "owner": "POS-491",
-      "date": "2026-10-07",
-      "until": "2026-10-18",
-      "flaky": true
     }
   ]
 }
