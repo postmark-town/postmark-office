@@ -318,9 +318,12 @@ test("THE READ: a stranger's set-down reads 'set down by ana at <place> — unac
   assert.deepEqual(s.canon_at, GARAGE_AT, "canon has not moved");
   assert.equal(s.says, "set down by ana at (176, 425.5) — unaccepted; canon stays at (3978, -398), where keith put it");
 
-  const own = await hold.whereThingStands(STOOL, { attachments, journal: [{ ...journal[0], actor: "keith" }], fold: GARAGE_AT, householdOf: HOUSES });
+  // The promise is made over the amend THIS drop filed, on the docket (POS-451;
+  // set-down-moves-the-stool.test.mjs § E drives the read with the real port).
+  const amends = [{ thing: STOOL, act_id: "9001", status: "pending" }];
+  const own = await hold.whereThingStands(STOOL, { attachments, journal: [{ ...journal[0], actor: "keith" }], fold: GARAGE_AT, householdOf: HOUSES, amends });
   assert.equal(own.accepted, undefined, "the author's own set-down is not a stance question");
-  assert.match(own.says, /the record re-sites the mark at the next fold/, "and its promise is kept now, so it stays word for word");
+  assert.match(own.says, /the record re-sites the mark at the next fold/, "and its promise is kept over its filed amend, word for word");
 });
 
 test("a household record that cannot be read decides neither way: nothing filed, and the read promises nothing", async () => {

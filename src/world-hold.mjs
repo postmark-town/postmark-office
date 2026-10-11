@@ -553,15 +553,38 @@ export function latestDrop(rows, thingId) {
   return mine.length ? mine[mine.length - 1] : null;
 }
 
+/** The docket's amend filed from THIS drop (pending or locked), or null. PURE. */
+export function setDownAmendOf(amends, thingId, dropSeq) {
+  if (!Array.isArray(amends) || dropSeq == null) return null;
+  const hit = amends.find((a) => (a.thing == null || String(a.thing) === String(thingId))
+    && String(a.act_id) === String(dropSeq) && (a.status === "pending" || a.status === "locked"));
+  return hit ? { act_id: String(hit.act_id), status: hit.status } : null;
+}
+
+/** The author's one call that moves a set-down mark to where it stands, as a preview. PURE. */
+export function amendCallFor(thingId, at) {
+  const id = String(thingId), cut = id.indexOf("/");
+  return {
+    do: "leave-mark", tool: "world_leave_mark",
+    args: { by: id.slice(0, cut), slug: id.slice(cut + 1), amend: true, at: { x: Number(at.x), y: Number(at.y) }, preview: true },
+    note: "the author's own pen: send every other line of the mark as it stands (kind, extent, body, class), read the preview, then send it again without preview: true",
+  };
+}
+
 /**
  * Where a thing stands, derived — never stored, and it says which of the three.
  *
  * `deps` carries the readers so this is testable on hand-built rows with no
  * world engine, no journal file and no walk ledger: the same injection
  * `declareHolding` takes for `rows`, and for the same reason.
+ *
+ * `amends` are the docket's set-down amends (`world2-guards.mjs §
+ * setDownAmendsFromStore`): `{ thing, act_id, status }`, pending or locked.
+ * Null is "not read", and the read then promises no move (POS-451).
  */
 export async function whereThingStands(thingId, {
   attachments = null, journal = null, fold = null, standpointOf = null, centreOf = null, householdOf = null, stances = [],
+  amends = null,
 } = {}) {
   const id = String(thingId);
   if (attachments == null) return { where: null, source: "unreadable", says: "the office could not read the holding record — this is not an answer about where it stands" };
@@ -597,10 +620,25 @@ export async function whereThingStands(thingId, {
       const madeBy = id.split("/")[0];
       const setter = drop.actor == null ? null : String(drop.actor);
       const house = setter == null ? { same: false, how: "handle-only" } : sameHousehold(madeBy, setter, householdOf);
-      if (house.same)
-        return { ...base, says: `${setter} set it down here; it stands where they stood, and the record re-sites the mark at the next fold` };
       const foldAt = fold && Number.isFinite(Number(fold.x)) && Number.isFinite(Number(fold.y)) ? { x: Number(fold.x), y: Number(fold.y) } : null;
       const canonText = foldAt ? placeText(foldAt) : "the place it was last folded";
+      // ── THE PROMISE IS MADE OVER A FILED AMEND, NEVER OVER THE DROP (POS-451) ──
+      //
+      // "The record re-sites the mark at the next fold" is true only when an
+      // amend from THIS drop is on the docket, pending or locked. Keith's two
+      // set-downs predate POS-138, filed nothing, and this read told him the
+      // re-site was coming for a month. A drop with no amend says so, where
+      // canon keeps the mark, and the one call that moves it.
+      if (house.same) {
+        const filed = setDownAmendOf(amends, id, drop.seq);
+        if (filed)
+          return { ...base, amend: filed, says: `${setter} set it down here; it stands where they stood, and the record re-sites the mark at the next fold` };
+        if (amends == null)
+          return { ...base, amend: null, canon_at: foldAt,
+            says: `${setter} set it down here and it stands where they stood; the docket could not be read here, so whether an amend moves canon to this place is not known — canon has it at ${canonText}` };
+        return { ...base, amend: null, canon_at: foldAt, move: amendCallFor(id, at),
+          says: `${setter} set it down here and it stands where they stood, but no amend from this set-down is on the docket, so canon keeps the mark at ${canonText}. ${madeBy === setter ? setter : `${madeBy}'s house`} can move it here with one amend in ${madeBy}'s name: world_leave_mark with amend: true and at ${placeText(at)}, every other line of the mark as it stands (preview: true first)` };
+      }
       if (house.how === "household") {
         // THE AUTHOR'S HOUSE'S ANSWER, if it has spoken about THIS drop.
         const answer = setDownAnswer({ stances, thing: id, dropSeq: drop.seq ?? null, madeBy, householdOf });

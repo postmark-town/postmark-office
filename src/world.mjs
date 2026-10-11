@@ -2474,7 +2474,7 @@ export async function thingStandsBlock(id, w, r) {
     ]);
     const rows = await standsRowsFromStore(id);
     if (!rows) return null; // the register was not asked — the same answer an absent store gave
-    const { attachments, journal } = rows;
+    const { attachments, journal, amends } = rows;
     if (!attachments.some((a) => a.target === id)) return null; // never held — nothing new to say
     const marks = w?.marks ?? [];
     const centreOf = (mid) => marks.find((m) => m.id === mid)?.at ?? null;
@@ -2493,6 +2493,10 @@ export async function thingStandsBlock(id, w, r) {
         try { const { stanceRows } = await import("./world-stance.mjs"); return await stanceRows(); }
         catch { return []; }
       })(),
+      // …and whether an amend from the latest drop is on the docket (POS-451),
+      // read in the same snapshot: the re-site is promised over a filed amend,
+      // never over the drop.
+      amends: amends ?? null,
       standpointOf: async (h) => {
         const s = await residentStandpoint(h, w).catch(() => null);
         return s?.placed ? { x: s.x, y: s.y } : null;

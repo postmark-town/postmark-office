@@ -505,3 +505,65 @@ test("D · THE INVENTORY: over the drop and the fold, the stool's place is one p
   assert.ok(within(row.stands_at, room), "inside the Waiting Room");
   assert.equal(row.holder, undefined, "nobody holds it");
 });
+
+// ═════════════════════════════════════════════════════════════════════════════
+// E · THE READ PROMISES ONLY OVER A FILED AMEND (POS-451 part 4)
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// Prod's investigate read said, for Keith's git-era drop (act 4976, 09-11):
+// "keith set it down here; it stands where they stood, and the record re-sites
+// the mark at the next fold". No amend was ever filed from that drop, so the
+// promise was false. `whereThingStands` now makes it only over an amend from
+// THIS drop on the docket, read by the real port query against the real store.
+//
+// THE FLIP: make `setDownAmendOf` answer a filing for any drop and the git-era
+// drop reads the false promise again.
+
+const GIT_ERA_DROP = 4976;
+const port = await import("../world2/tools/guard-reads.mjs");
+const docketAmends = async () => {
+  const c = await store.connect("world2_owner");
+  try { return await port.pgSetDownAmends(c, { thing: STOOL }); } finally { await c.end(); }
+};
+const readAfter = (seq, amends, fold) => hold.whereThingStands(STOOL, {
+  attachments: [{ target: STOOL, entity: "keith", policy: "detach", born_at: "2026-09-11T16:37:20Z" }],
+  journal: [{ object: STOOL, action: "drop", actor: "keith", seq, at: { anchor: null, dx: WAITING_ROOM_AT.x, dy: WAITING_ROOM_AT.y } }],
+  fold, householdOf: HOUSES, amends,
+});
+
+test("E · THE READ: a post-POS-138 drop keeps the promise over its amend on the docket (pending, then locked); Keith's git-era drop says truthfully that no move was filed, where canon keeps it, and the one call that moves it", { skip: noStore }, async () => {
+  assert.ok(carried.claim, "A ran first and left its claim");
+  await seedStore(carried.claim);
+
+  // PENDING: the door's amend from A's drop is on the docket.
+  const pending = await docketAmends();
+  assert.deepEqual(pending, [{ thing: STOOL, act_id: String(carried.drop.id), status: "pending" }], "the port reads the docket's set-down amend");
+  const kept = await readAfter(carried.drop.id, pending, GARAGE_AT);
+  assert.equal(kept.says, "keith set it down here; it stands where they stood, and the record re-sites the mark at the next fold");
+  assert.deepEqual(kept.amend, { act_id: String(carried.drop.id), status: "pending" });
+
+  // LOCKED: still true — the clearing has moved it.
+  const { code, out } = clearWindow();
+  assert.equal(code, 0, out);
+  const locked = await docketAmends();
+  assert.equal(locked[0]?.status, "locked");
+  assert.match((await readAfter(carried.drop.id, locked, WAITING_ROOM_AT)).says, /the record re-sites the mark at the next fold$/);
+
+  // GIT-ERA: the same docket holds nothing from act 4976.
+  const lie = await readAfter(GIT_ERA_DROP, locked, GARAGE_AT);
+  assert.doesNotMatch(lie.says, /re-sites/, `the read promised a move nobody filed: ${lie.says}`);
+  assert.equal(lie.says,
+    "keith set it down here and it stands where they stood, but no amend from this set-down is on the docket, so canon keeps the mark at (3978, -398). "
+    + "keith can move it here with one amend in keith's name: world_leave_mark with amend: true and at (176, 425.5), every other line of the mark as it stands (preview: true first)");
+  assert.equal(lie.amend, null);
+  assert.deepEqual(lie.canon_at, GARAGE_AT);
+  assert.deepEqual(lie.where, WAITING_ROOM_AT, "it still stands where he set it down — the-reach's interim read is unchanged");
+  assert.deepEqual(lie.move.args, { by: "keith", slug: "waiting-room-stool-2026-09-10", amend: true, at: WAITING_ROOM_AT, preview: true });
+  assert.equal(lie.move.tool, "world_leave_mark");
+  console.log(`    READ · ${lie.says}`);
+
+  // UNREAD: a docket that could not be read promises nothing either way.
+  const unread = await readAfter(GIT_ERA_DROP, null, GARAGE_AT);
+  assert.doesNotMatch(unread.says, /re-sites/);
+  assert.match(unread.says, /the docket could not be read here/);
+});

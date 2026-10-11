@@ -1490,6 +1490,13 @@ export async function groundWithinReach(oriented, key = null) {
       try { const { stanceRows } = await import("./world-stance.mjs"); return await stanceRows(); }
       catch { return []; }
     })();
+    // The docket's set-down amends (POS-451), read ONCE for the whole ground:
+    // the re-site is promised over a filed amend only. Unreadable is null, and
+    // no row then promises a move.
+    const amends = await (async () => {
+      try { const { setDownAmendsFromStore } = await import("./world2-guards.mjs"); return await setDownAmendsFromStore(); }
+      catch { return null; }
+    })();
     const rows = store.db.prepare(GROUND_THINGS).all();
     const marks = rows.map((r) => ({ id: r.id, at: { x: Number(r.at_x), y: Number(r.at_y) }, extent: { w: Number(r.extent_w) || 1, h: Number(r.extent_h) || 1 } }));
     const centreOf = (id) => marks.find((m) => m.id === id)?.at ?? null;
@@ -1505,7 +1512,7 @@ export async function groundWithinReach(oriented, key = null) {
     for (const r of rows) {
       const mark = marks.find((m) => m.id === r.id);
       const stands = await hold.whereThingStands(r.id, {
-        attachments, journal, fold: mark.at, centreOf, householdOf, stances,
+        attachments, journal, fold: mark.at, centreOf, householdOf, stances, amends,
         standpointOf: async (h) => { const s = await residentStandpoint(h).catch(() => null); return s?.placed ? { x: s.x, y: s.y } : null; },
       });
       if (!stands?.where) continue; // a thing whose place cannot be derived is not "underfoot"

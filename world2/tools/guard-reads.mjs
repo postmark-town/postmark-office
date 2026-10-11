@@ -1026,6 +1026,31 @@ export async function pgHoldingRowsFor(client, thingId) {
   return { rows: await pgHoldingRows(client, { thing: thingId }) };
 }
 
+/**
+ * THE AMENDS A SET-DOWN FILED, on the docket (POS-451) — one row per claim
+ * that carries a drop act's id in `data._set_down.act_id` and that canon will
+ * act on: `pending` (the next clearing locks it) or `locked` (it has). A
+ * private draft is not on the docket for anyone but its household (007's
+ * `claims_read`), and a refused or retracted amend moves nothing, so neither is
+ * asked. `thing` narrows to one mark; without it, every such claim in the town,
+ * which is a handful (one per own-household set-down since POS-138).
+ *
+ * `act_id` is text, as the payload carries it, and the reader compares it as
+ * text to the drop act's id.
+ */
+export async function pgSetDownAmends(client, { thing = null } = {}) {
+  const args = [];
+  let sql = `SELECT slug, data->'_set_down'->>'act_id' AS act_id, status
+               FROM claims
+              WHERE data ? '_set_down' AND status IN ('pending', 'locked')`;
+  if (thing != null) {
+    args.push(String(thing));
+    sql += ` AND slug = $${args.length}`;
+  }
+  const { rows } = await client.query(sql, args);
+  return rows.map((r) => ({ thing: String(r.slug), act_id: r.act_id == null ? null : String(r.act_id), status: String(r.status) }));
+}
+
 /** The class name `readJournal` is asked for — 1.0's own constant, restated here because the port imports nothing from `src/`. */
 export const CLASS_HOLDING = "holding";
 

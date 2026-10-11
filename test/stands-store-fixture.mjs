@@ -65,7 +65,7 @@ export const legacyAttachmentAct = ({ id, at, actor, thing, policy, seq }) => ({
  * `acts` is the whole record; the two queries filter it the way the real SQL
  * does, so the ORDER and the PREDICATE are exercised here rather than assumed.
  */
-export function actsClient(acts = []) {
+export function actsClient(acts = [], { claims = [] } = {}) {
   const asked = [];
   return {
     asked,
@@ -108,6 +108,18 @@ export function actsClient(acts = []) {
           .filter((a) => thing === undefined || idOf(a) === thing)
           .filter((a) => makers === undefined || makers.includes(String(idOf(a)).split("/")[0]))
           .sort((x, y) => x.at - y.at || x.id - y.id) };
+      }
+
+      // pgSetDownAmends (POS-451) — claims carrying `data._set_down`, pending
+      // or locked, optionally one slug at the placeholder the text names. Empty
+      // by default: a docket with no set-down amend on it is the git-era case.
+      if (/FROM claims WHERE data \? '_set_down' AND status IN \('pending', 'locked'\)/i.test(text)) {
+        const slugAt = /AND slug = \$(\d+)/i.exec(text);
+        const slug = slugAt ? params[Number(slugAt[1]) - 1] : undefined;
+        return { rows: claims
+          .filter((c) => c.data?._set_down && (c.status === "pending" || c.status === "locked"))
+          .filter((c) => slug === undefined || c.slug === slug)
+          .map((c) => ({ slug: c.slug, act_id: c.data._set_down.act_id == null ? null : String(c.data._set_down.act_id), status: c.status })) };
       }
 
       throw new Error(`the hand-built acts store was asked something it does not know: ${text.slice(0, 120)}`);
