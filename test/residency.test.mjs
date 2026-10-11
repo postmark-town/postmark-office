@@ -18,6 +18,7 @@ import { bootOnFreePort } from "./spawn-office.mjs";
 import { indexStore, seedRegistry } from "./helpers/office-under-test.mjs";
 import { serializeRegistry, slugFromName, houseForAccount, houseForName, planRegistryJoin } from "../src/residency.mjs";
 import { BIND_REFUSALS } from "../src/join-bind.mjs";
+import { BOUNCER_LIMITS } from "../src/bouncer.mjs";
 import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 import { tempDir } from "./helpers/temp-dir.mjs";
 
@@ -613,6 +614,14 @@ test("after merge, the same token resolves to the new household with no re-auth"
   // CI, #453; with no wait it is red here too). So the send is retried while,
   // and only while, the answer is the harbor gate's refusal, which writes
   // nothing; any other answer is the verdict at once.
+  //
+  // EVERY REFUSED SEND SPENDS A WRITE TOKEN (POS-491). At one send per 200 ms
+  // the loop spent the key's write bucket (40 a minute, burst 40) in about 8 s,
+  // and a runner whose index poll took longer got 429 where 202 was expected:
+  // 2 of 186 CI runs (38013898241 and office#484's first, 38109734885). The
+  // sends are spaced at the bucket's own refill rate, so this loop can never
+  // outrun it, however long the office takes.
+  const SEND_SPACING_MS = Math.ceil(60_000 / BOUNCER_LIMITS.key.writePerMinute);
   const send = () => fetch(`${BASE}/letters`, {
     method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
     body: JSON.stringify({ from: "arrival", to: "wright", title: "first hello", thread: "new", body: "hi" }),
@@ -621,7 +630,7 @@ test("after merge, the same token resolves to the new household with no re-auth"
   for (const deadline = Date.now() + 20_000; after.status === 403 && Date.now() < deadline;) {
     const refusal = await after.json();
     assert.equal(refusal.defect, "the harbor is read + ephemeral", `only the harbor gate may be waited out: ${JSON.stringify(refusal)}`);
-    await new Promise((ok) => setTimeout(ok, 200));
+    await new Promise((ok) => setTimeout(ok, SEND_SPACING_MS));
     after = await send();
   }
   assert.equal(after.status, 202, "the token resolves to the new household with no re-auth");
