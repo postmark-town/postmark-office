@@ -882,7 +882,12 @@ test("F7c5 · THE MORNING PAGE DID NOT FATTEN — the doorstep bundle is byte-id
   //   1. THE STANCE STORE WAS THE TREE'S. The stub read `dynamicDbPath()`, the
   //      tree's dynamic.db, so a capture carried whatever marks that machine's
   //      office had left there (CI has none). It is now a fresh, empty store of
-  //      the case's own, here and in the capture tool alike.
+  //      the case's own, here and in the capture tool alike. This pin is
+  //      defensive, not the cause of the red: on the re-capturing tree the
+  //      tree's store and a fresh one gave the same bytes (flipped both ways),
+  //      but the ninth note's tree differed on base because of its store.
+  //      What reddened the case on CI was the golden itself, which was older
+  //      than the four merged changes and the world pin listed below.
   //   2. THE WORLD IS THE PINNED CLONE, and that one stays: `stances` and
   //      `stakes` read WORLD_CLONE, which is test/clone-pins.json's world
   //      (b8581dc9 at this capture). So those leaves move when the world pin
