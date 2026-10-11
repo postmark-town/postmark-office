@@ -469,12 +469,20 @@ async function speak(word, handle, key, extraDeps = {}) {
 }
 
 /** The read, over the record's own stance rows. */
-async function readStool(drop, fold = GARAGE_AT) {
+// THE DOCKET the read judges "canon follows" against (POS-451): the pen's
+// claims as `guard-reads.mjs § pgSetDownAmends` answers them (pending or
+// locked, carrying `_set_down`); the real query runs on a real store in
+// set-down-moves-the-stool.test.mjs § E and § F.
+const docketOf = (p) => p.claims()
+  .filter((c) => (c.status === "pending" || c.status === "locked") && parse(c.data)?._set_down)
+  .map((c) => ({ thing: c.slug, act_id: String(parse(c.data)._set_down.act_id), status: c.status }));
+
+async function readStool(drop, fold = GARAGE_AT, { escrow = stoolRecord.stamps } = {}) {
   const stances = await stance.stanceRows({ worldClone: repo });
   return hold.whereThingStands(STOOL, {
     attachments: [{ target: STOOL, entity: "ana", policy: "detach", born_at: "2026-09-24T01:00:00Z" }],
     journal: [{ object: STOOL, action: "drop", actor: "ana", seq: drop.id, at: { anchor: null, dx: ANA_AT.x, dy: ANA_AT.y } }],
-    fold, householdOf: HOUSES, stances,
+    fold, householdOf: HOUSES, stances, amends: docketOf(pen), escrowOf: () => escrow,
   });
 }
 
@@ -635,7 +643,9 @@ test("A WELCOME WHOSE AMEND THE DOOR REFUSES: the receipt says it was not filed,
   const s = await readStool(drop);
   assert.equal(s.accepted, true, "the word was spoken, and the read says so");
   assert.doesNotMatch(s.says, /is filed/, `the read claims a filing that did not happen: ${s.says}`);
-  assert.equal(s.says, "set down by ana at (4105, -305) — accepted by keith's house; canon follows when keith's amend publishes at a crossing");
+  // …nor a move nothing filed can make (POS-451): no amend on the docket.
+  assert.doesNotMatch(s.says, /canon follows/, `the read promised a move no amend can make: ${s.says}`);
+  assert.equal(s.says, `set down by ana at (4105, -305) — accepted by keith's house, but no amend from this set-down is on the docket, so canon stays at (3978, -398): keith's amend is a private draft or was refused, and a stake on ${STOOL} by keith's house puts a draft forward`);
 });
 
 // ═════════════════════════════════════════════════════════════════════════════

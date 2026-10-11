@@ -567,3 +567,64 @@ test("E · THE READ: a post-POS-138 drop keeps the promise over its amend on the
   assert.doesNotMatch(unread.says, /re-sites/);
   assert.match(unread.says, /the docket could not be read here/);
 });
+
+// ═════════════════════════════════════════════════════════════════════════════
+// F · AN ACCEPTED STRANGER'S SET-DOWN: "CANON FOLLOWS" ONLY OVER AN AMEND THAT CAN PUBLISH
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// Prod, 10-10: wildcat's first-lantern-charm-12 and gloamcap-cookie-two were
+// set down by keith at his garage and welcomed by wildcat's house, and read
+// "canon follows when wildcat's amend publishes at a crossing" at escrow ✦0.
+// On ground not the author's an amend with nothing behind it is the author's
+// private draft, and a draft never publishes until it is put forward. Here the
+// stranger is wildcat setting down Keith's stool, Keith's house welcoming it;
+// the docket is the real port on the real store.
+//
+// THE FLIP: make the welcomed branch skip `setDownAmendOf` (always promise) and
+// the ✦0 read promises a move no amend can make.
+
+const STRANGER_DROP = 14610;
+const HOUSES_F = (h) => (h === "wildcat" ? { key: "gh:7", slug: "house-of-many-doors" } : HOUSES(h));
+const welcome = [{ class: "stance", actor: "keith", object: STOOL, written_at: "2026-10-06T20:00:00Z", seq: 1,
+  payload: { stance: "welcomed", answers: "set-down", set_down: { act_id: String(STRANGER_DROP), by: "wildcat" } } }];
+const readStranger = (amends, escrow) => hold.whereThingStands(STOOL, {
+  attachments: [{ target: STOOL, entity: "wildcat", policy: "detach", born_at: "2026-10-06T19:00:00Z" }],
+  journal: [{ object: STOOL, action: "drop", actor: "wildcat", seq: STRANGER_DROP, at: { anchor: null, dx: WAITING_ROOM_AT.x, dy: WAITING_ROOM_AT.y } }],
+  fold: GARAGE_AT, householdOf: HOUSES_F, stances: welcome, amends, escrowOf: async () => escrow,
+});
+
+test("F · THE WELCOME: accepted at ✦0 with no amend on the docket, the read says the draft waits and names the stake; with the author's amend on the docket it keeps the promise", { skip: noStore }, async () => {
+  assert.ok(carried.claim, "A ran first and left its claim");
+  await seedStore(carried.claim);   // the docket holds A's own-drop amend, never this stranger's
+
+  const draft = await readStranger(await docketAmends(), 0);
+  assert.equal(draft.accepted, true, "the word was spoken");
+  assert.doesNotMatch(draft.says, /canon follows/, `the read promised a move no amend can make: ${draft.says}`);
+  assert.equal(draft.says,
+    "set down by wildcat at (176, 425.5) — accepted by keith's house, but keith's amend is keith's private draft at escrow ✦0: "
+    + "on ground that is not keith's household's it needs ✦1 behind it to go forward, so canon stays at (3978, -398) until keith's house stakes ✦1 on keith/waiting-room-stool-2026-09-10");
+  assert.equal(draft.stake_needed, 1);
+  assert.deepEqual(draft.canon_at, GARAGE_AT);
+  console.log(`    WELCOME · ${draft.says}`);
+
+  // Escrow behind it already, and still nothing on the docket: a draft (or a refusal), and a stake puts a draft forward.
+  const backed = await readStranger(await docketAmends(), 2);
+  assert.doesNotMatch(backed.says, /canon follows/);
+  assert.match(backed.says, /no amend from this set-down is on the docket, so canon stays at \(3978, -398\)/);
+
+  // The author's amend from THIS drop on the docket (the welcome's filing, put forward): the promise is true.
+  const c = await store.connect("world2_owner");
+  try {
+    await c.query(
+      `INSERT INTO claims (window_id, class, claimant, household, body, geometry, bbox, stake, supersedes, data, slug, status)
+       VALUES ($1, 'sited', 'keith', 'hh:shard-house', $2, $3, $4::box, 0, $5, $6, $7, 'pending')`,
+      [WIN, STOOL_BODY, JSON.stringify({ slug: STOOL, at: WAITING_ROOM_AT, extent: { w: 1, h: 1 } }), box(WAITING_ROOM_AT, { w: 1, h: 1 }),
+       STANDING_ID, JSON.stringify({ class: "thing", _set_down: { act_id: String(STRANGER_DROP), by: "wildcat", stance_act_id: "1" } }), STOOL]);
+  } finally { await c.end(); }
+  const forward = await readStranger(await docketAmends(), 0);
+  assert.equal(forward.says, "set down by wildcat at (176, 425.5) — accepted by keith's house; canon follows when keith's amend publishes at a crossing");
+  assert.deepEqual(forward.amend, { act_id: String(STRANGER_DROP), status: "pending" });
+
+  // An unread docket promises nothing.
+  assert.match((await readStranger(null, 0)).says, /the docket could not be read here/);
+});

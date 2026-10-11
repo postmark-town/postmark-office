@@ -1513,6 +1513,10 @@ export async function groundWithinReach(oriented, key = null) {
       const mark = marks.find((m) => m.id === r.id);
       const stands = await hold.whereThingStands(r.id, {
         attachments, journal, fold: mark.at, centreOf, householdOf, stances, amends,
+        escrowOf: async (mid) => {
+          const sr = await (await import("./world-stake.mjs")).callWorldStakeTool("world_stake_read", { mark: mid });
+          return Number.isFinite(Number(sr?.escrow)) ? Number(sr.escrow) : null;
+        },
         standpointOf: async (h) => { const s = await residentStandpoint(h).catch(() => null); return s?.placed ? { x: s.x, y: s.y } : null; },
       });
       if (!stands?.where) continue; // a thing whose place cannot be derived is not "underfoot"

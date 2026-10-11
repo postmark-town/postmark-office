@@ -553,6 +553,9 @@ export function latestDrop(rows, thingId) {
   return mine.length ? mine[mine.length - 1] : null;
 }
 
+/** A commons mark publishes only with escrow behind it: the ground's minimum off your own parcel (`world.mjs § groundMinimumStake`). */
+export const COMMONS_MIN_STAKE = 1;
+
 /** The docket's amend filed from THIS drop (pending or locked), or null. PURE. */
 export function setDownAmendOf(amends, thingId, dropSeq) {
   if (!Array.isArray(amends) || dropSeq == null) return null;
@@ -581,10 +584,12 @@ export function amendCallFor(thingId, at) {
  * `amends` are the docket's set-down amends (`world2-guards.mjs §
  * setDownAmendsFromStore`): `{ thing, act_id, status }`, pending or locked.
  * Null is "not read", and the read then promises no move (POS-451).
+ * `escrowOf(id)` answers the escrow behind a mark (the stake read), asked only
+ * for an accepted stranger's set-down with no amend on the docket.
  */
 export async function whereThingStands(thingId, {
   attachments = null, journal = null, fold = null, standpointOf = null, centreOf = null, householdOf = null, stances = [],
-  amends = null,
+  amends = null, escrowOf = null,
 } = {}) {
   const id = String(thingId);
   if (attachments == null) return { where: null, source: "unreadable", says: "the office could not read the holding record — this is not an answer about where it stands" };
@@ -646,13 +651,39 @@ export async function whereThingStands(thingId, {
           return { where: foldAt, source: "fold", set_down_by: setter, act_seq: drop.seq ?? null,
             accepted: false, refused_by: answer.by,
             says: `set down by ${setter} at ${placeText(at)} — refused by ${madeBy}'s house; canon stands at ${canonText}, where ${madeBy} put it` };
-        if (answer?.stance === "welcomed")
+        if (answer?.stance === "welcomed") {
           // WHAT THE STANCE PROVES, AND NOTHING MORE. The row is written before
           // the amend is filed, and the amend door can still refuse; this read
           // sees the word, never the filing, so it must not claim one (Wright's
           // review, #184). The receipt is where the filing's outcome is said.
-          return { ...base, accepted: true, accepted_by: answer.by, canon_at: foldAt,
-            says: `set down by ${setter} at ${placeText(at)} — accepted by ${madeBy}'s house; canon follows when ${madeBy}'s amend publishes at a crossing` };
+          //
+          // ── AND "CANON FOLLOWS" ONLY OVER AN AMEND THAT CAN PUBLISH (POS-451) ──
+          // The welcome files the author's amend, but on ground that is not the
+          // author's household's an amend with no escrow behind it is the
+          // author's PRIVATE DRAFT, and a draft never publishes until it is put
+          // forward. Wildcat's two charms read "canon follows" for days at ✦0.
+          // So the promise rides an amend from this drop on the docket (pending
+          // or locked); without one the read says where canon stays and what
+          // puts the draft forward: a stake on the mark (`promoteDraftOnStake`).
+          const accepted = { ...base, accepted: true, accepted_by: answer.by, canon_at: foldAt };
+          const filed = setDownAmendOf(amends, id, drop.seq);
+          if (filed)
+            return { ...accepted, amend: filed,
+              says: `set down by ${setter} at ${placeText(at)} — accepted by ${madeBy}'s house; canon follows when ${madeBy}'s amend publishes at a crossing` };
+          const lead = `set down by ${setter} at ${placeText(at)} — accepted by ${madeBy}'s house`;
+          if (amends == null)
+            return { ...accepted, amend: null,
+              says: `${lead}; the docket could not be read here, so whether ${madeBy}'s amend can publish is not known — canon has it at ${canonText}` };
+          const escrow = typeof escrowOf === "function" ? await Promise.resolve(escrowOf(id)).catch(() => null) : null;
+          const known = escrow != null && Number.isFinite(Number(escrow));
+          if (known && Number(escrow) < COMMONS_MIN_STAKE) {
+            const need = COMMONS_MIN_STAKE - Number(escrow);
+            return { ...accepted, amend: null, escrow: Number(escrow), stake_needed: need,
+              says: `${lead}, but ${madeBy}'s amend is ${madeBy}'s private draft at escrow ✦${Number(escrow)}: on ground that is not ${madeBy}'s household's it needs ✦${COMMONS_MIN_STAKE} behind it to go forward, so canon stays at ${canonText} until ${madeBy}'s house stakes ✦${need} on ${id}` };
+          }
+          return { ...accepted, amend: null, ...(known ? { escrow: Number(escrow) } : {}),
+            says: `${lead}, but no amend from this set-down is on the docket, so canon stays at ${canonText}: ${madeBy}'s amend is a private draft or was refused${known ? "" : " (the escrow behind it could not be read here)"}, and a stake on ${id} by ${madeBy}'s house puts a draft forward` };
+        }
         return { ...base, accepted: false, canon_at: foldAt,
           says: `set down by ${setter} at ${placeText(at)} — unaccepted; canon stays at ${canonText}, where ${madeBy} put it` };
       }

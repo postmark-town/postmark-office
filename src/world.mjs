@@ -2497,6 +2497,13 @@ export async function thingStandsBlock(id, w, r) {
       // read in the same snapshot: the re-site is promised over a filed amend,
       // never over the drop.
       amends: amends ?? null,
+      // …and, for an accepted stranger's set-down with no amend on the docket,
+      // the escrow behind the mark (the stake read), which says what puts the
+      // author's draft forward. Asked only in that branch.
+      escrowOf: async (mid) => {
+        const sr = await callWorldStakeTool("world_stake_read", { mark: mid });
+        return Number.isFinite(Number(sr?.escrow)) ? Number(sr.escrow) : null;
+      },
       standpointOf: async (h) => {
         const s = await residentStandpoint(h, w).catch(() => null);
         return s?.placed ? { x: s.x, y: s.y } : null;
