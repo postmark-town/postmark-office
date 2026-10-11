@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { sandboxProblems, officeEnvFor, layout, cleanEnv, DB } from "../tools/sandbox.mjs";
+import { sandboxProblems, officeEnvFor, layout, cleanEnv, dirRefusal, namesTheSandbox, DB } from "../tools/sandbox.mjs";
 import { LOOPBACK, mediaFile } from "../tools/lib/sandbox-fence.mjs";
 
 const OFFICE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -68,6 +68,14 @@ test("the guard refuses anything that could reach prod or dev, each by name", ()
     ["a clone outside the sandbox", (g) => { g.env.TOWN_CLONE = resolve(OFFICE, "..", "office-1", "town-clone"); }, /TOWN_CLONE names .*, outside the sandbox's folder/],
     ["a clone with a remote", (g) => { g.remotes.town = ["origin\thttps://github.com/postmark-town/postmark.git (fetch)"]; }, /the town clone has a remote/],
     ["prod's key", (g) => { g.keyPem = g.townKey; }, /the sandbox's stamp key is the town's \(prod's\) key/],
+    // libpq's other two roads to a store: PG* and a keyword string
+    ["PGHOST off this machine", (g) => { g.env.PGHOST = "192.0.2.1"; }, /PGHOST names 192\.0\.2\.1, not this machine/],
+    ["PGDATABASE = PROD's store", (g) => { g.env.PGDATABASE = "world2_dev"; }, /PGDATABASE names world2_dev: PROD's store/],
+    ["PGPORT on another tree", (g) => { g.env.PGPORT = "15501"; }, /PGPORT is 15501, not this tree's own Postgres/],
+    ["a service file", (g) => { g.env.PGSERVICE = "prod"; }, /PGSERVICE is set/],
+    ["a keyword string off this machine", (g) => { g.roles.WORLD2_INGEST_URL = "host=192.0.2.1 port=5432 dbname=sandbox user=law_ingester"; }, /WORLD2_INGEST_URL names 192\.0\.2\.1, not this machine/],
+    ["a keyword string naming PROD's store", (g) => { g.env.WORLD2_PG_URL = "host=127.0.0.1 port=15508 dbname=world2_dev user=office_api"; }, /WORLD2_PG_URL names world2_dev: PROD's store/],
+    ["a quoted keyword host", (g) => { g.env.WORLD2_STANCE_URL = "dbname=sandbox host='192.0.2.1'"; }, /WORLD2_STANCE_URL names 192\.0\.2\.1, not this machine/],
     ["no proof of the key", (g) => { g.townPub = null; }, /cannot be proved not prod's/],
   ];
   for (const [name, spoil, needle] of cases) {
@@ -76,6 +84,39 @@ test("the guard refuses anything that could reach prod or dev, each by name", ()
     const p = sandboxProblems(g);
     assert.ok(p.some((x) => needle.test(x)), `${name}: expected ${needle}, got ${JSON.stringify(p)}`);
   }
+});
+
+test("the guard passes a keyword string and PG* that stay on this tree's own Postgres", () => {
+  const g = good();
+  Object.assign(g.env, { PGHOST: "127.0.0.1", PGPORT: String(PORT), PGDATABASE: DB });
+  g.roles.WORLD2_INGEST_URL = `host=127.0.0.1 port=${PORT} dbname=${DB} user=law_ingester`;
+  assert.deepEqual(sandboxProblems(g), []);
+});
+
+test("--dir: only a postmark-sandbox-* folder directly under the temp dir (drop deletes it whole; reset cleans its clones)", () => {
+  const temp = tmpdir();
+  assert.equal(dirRefusal(join(temp, "postmark-sandbox-office-8"), { temp }), null);
+  for (const [dir, needle] of [
+    [OFFICE, /is not directly under the temp dir/],
+    [resolve(OFFICE, ".."), /is not directly under the temp dir/],
+    [temp, /is not directly under the temp dir/],
+    [join(temp, "postmark-sandbox-office-8", "live"), /is not directly under the temp dir/],
+    [join(temp, "office-store-abc"), /is not named postmark-sandbox-/],
+    [join(temp, "postmark-sandbox-"), /is not named postmark-sandbox-/],
+    [join(temp, "postmark-sandbox-x", ".."), /is not directly under the temp dir/],
+  ]) assert.match(dirRefusal(dir, { temp }) ?? "accepted", needle, dir);
+});
+
+test("down kills only a process whose command line names the sandbox (a pid in run.json may be reused)", () => {
+  const dir = "G:\\temp\\postmark-sandbox-office-8";
+  assert.equal(namesTheSandbox('"E:\\nodejs\\node.exe" tools/sandbox.mjs up', dir), true);
+  assert.equal(namesTheSandbox("node G:\\Postmark\\pool\\office-8\\tools\\sandbox.mjs up --port 4590", dir), true);
+  assert.equal(namesTheSandbox("node src\\server.mjs --port 4590 --db G:\\temp\\postmark-sandbox-office-8\\live\\office.db", dir), true);
+  assert.equal(namesTheSandbox("node G:/temp/postmark-sandbox-office-8/live/world-clone/spectator/server.mjs", dir), true);
+  assert.equal(namesTheSandbox("node tools\\loam-api.mjs", dir), false);
+  assert.equal(namesTheSandbox("node tools/sandbox.mjs status", dir), false);
+  assert.equal(namesTheSandbox("node G:/temp/postmark-sandbox-office-80/live/x.mjs", dir), false);
+  assert.equal(namesTheSandbox("", dir), false);
 });
 
 test("the children's base environment carries no store, key, bucket, token or remote", () => {

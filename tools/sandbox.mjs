@@ -12,7 +12,7 @@
 //
 // ── THE COMMANDS ────────────────────────────────────────────────────────────
 //
-//   node tools/sandbox.mjs up       [--port 4390] [--viewer-port 4391]
+//   node tools/sandbox.mjs up       [--port 4590] [--viewer-port 4591]
 //        Builds the seed the first time (about 8 minutes, once), then starts
 //        the office, the GitHub stub and the viewer, and stays in the
 //        foreground. Ctrl-C stops everything.
@@ -182,7 +182,9 @@ export function publicPem(pem) {
  */
 export function sandboxProblems({ env, roles = {}, remotes = {}, townPub = null, keyPem = null, dir, office = OFFICE, port = null }) {
   const p = [];
-  const urls = { ...Object.fromEntries(Object.entries(env).filter(([, v]) => /^[a-z][a-z0-9+.-]*:\/\//i.test(String(v)))), ...roles };
+  const looksLikeUrl = ([, v]) => /^[a-z][a-z0-9+.-]*:\/\//i.test(String(v));
+  // a pen given as a keyword string (host=… dbname=…) is read below, with PG*
+  const urls = Object.fromEntries([...Object.entries(env), ...Object.entries(roles)].filter(looksLikeUrl));
   for (const [k, v] of Object.entries(urls)) {
     let u;
     try { u = new URL(v); } catch { p.push(`${k} is not a URL: ${String(v).slice(0, 80)}`); continue; }
@@ -192,6 +194,21 @@ export function sandboxProblems({ env, roles = {}, remotes = {}, townPub = null,
       if (REFUSED_DBS.includes(db)) p.push(`${k} names ${db}: PROD's store or its rehearsal copy`);
       else if (db !== DB) p.push(`${k} names the database ${db}, not the sandbox's (${DB})`);
       if (port != null && Number(u.port) !== Number(port)) p.push(`${k} dials port ${u.port}, not this tree's own Postgres (${port})`);
+    }
+  }
+  // the other two ways a pen finds a store: PG* (libpq's environment) and a keyword string (host=… dbname=…)
+  const dbProblem = (k, db) => (REFUSED_DBS.includes(db) ? `${k} names ${db}: PROD's store or its rehearsal copy` : db !== DB ? `${k} names the database ${db}, not the sandbox's (${DB})` : null);
+  for (const [k, v] of Object.entries({ ...env, ...roles })) {
+    if (k === "PGHOST" || k === "PGHOSTADDR") { for (const h of String(v).split(",")) if (!LOOPBACK_HOST.test(h.trim()) && !h.trim().startsWith("/")) p.push(`${k} names ${h.trim()}, not this machine`); }
+    else if (k === "PGDATABASE") { const x = dbProblem(k, String(v)); if (x) p.push(x); }
+    else if (k === "PGPORT" && port != null && Number(v) !== Number(port)) p.push(`${k} is ${v}, not this tree's own Postgres (${port})`);
+    else if (k === "PGSERVICE" || k === "PGSERVICEFILE") p.push(`${k} is set: a service file can name any store`);
+    const words = /^[^:]*\b(host|hostaddr|dbname)\s*=/.test(String(v)) ? Object.fromEntries([...String(v).matchAll(/(\w+)\s*=\s*('(?:[^'\\]|\\.)*'|\S+)/g)].map(([, a, b]) => [a, b.replace(/^'|'$/g, "")])) : null;
+    if (words) {
+      for (const hk of ["host", "hostaddr"]) for (const h of String(words[hk] ?? "").split(",").filter(Boolean)) if (!LOOPBACK_HOST.test(h.trim()) && !h.trim().startsWith("/")) p.push(`${k} names ${h.trim()}, not this machine`);
+      if (words.dbname != null) { const x = dbProblem(k, words.dbname); if (x) p.push(x); }
+      if (words.service != null) p.push(`${k} names a service (${words.service}): a service file can name any store`);
+      if (port != null && words.port != null && Number(words.port) !== Number(port)) p.push(`${k} dials port ${words.port}, not this tree's own Postgres (${port})`);
     }
   }
   for (const k of ["WORLD2_PG_URL", "GITHUB_API_URL", "PUBLIC_BASE"]) if (!env[k]) p.push(`the office's env has no ${k}`);
@@ -590,7 +607,12 @@ async function githubStubFor(env) {
 export async function crossNow(L, { ferry = true, settle = true, keep = false, log = say } = {}) {
   const run = readJson(L.run);
   if (!run || !alive(run.pid)) return { green: false, problems: ["the sandbox is not up: start it with `node tools/sandbox.mjs up`"], notes: [] };
-  const { targetFromFiles, storeClients, crossingContext, plan } = await importFrom(join(OFFICE, "tools", "dev-rehearsal.mjs"));
+  const { targetFromFiles, storeClients, crossingContext, plan, parseEnvFile } = await importFrom(join(OFFICE, "tools", "dev-rehearsal.mjs"));
+  // the same guard `up` runs, on the env files the crossing's jobs are about to read
+  const { treeDatabase } = await importFrom(join(OFFICE, "test", "helpers", "embedded-store.mjs"));
+  try {
+    log(await guardOrThrow(L, parseEnvFile(readFileSync(L.officeEnv, "utf8")), parseEnvFile(readFileSync(L.rolesEnv, "utf8")), await treeDatabase(DB)));
+  } catch (e) { return { green: false, problems: [String(e.message)], notes: [] }; }
   // nothing in this process's own environment rides into a job
   for (const k of Object.keys(process.env)) if (!(k in cleanEnv())) delete process.env[k];
   Object.assign(process.env, pathWithSh(process.env), { GIT_ALLOW_PROTOCOL: "file" });
@@ -661,6 +683,22 @@ function treeName() { return OFFICE.replace(/\\/g, "/").split("/").pop(); }
  * reaper names this prefix).
  */
 export const defaultDir = () => join(tmpdir(), `postmark-sandbox-${treeName()}`);
+
+/**
+ * Why a folder may not be the sandbox's, or null. `drop` deletes the folder
+ * whole and `reset` runs git clean in its clones, so --dir is held to the one
+ * shape the sandbox makes: a folder directly under the temp dir, named
+ * postmark-sandbox-<something>.
+ */
+export function dirRefusal(dir, { temp = tmpdir() } = {}) {
+  const d = normalize(resolve(dir));
+  const parent = normalize(resolve(d, ".."));
+  const name = d.slice(parent.length).replace(/^[\\/]+/, "");
+  const same = (a, b) => (process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b);
+  if (!same(parent, normalize(resolve(temp)))) return `--dir ${dir} is not directly under the temp dir (${temp}): the sandbox's folder lives there and nowhere else`;
+  if (!/^postmark-sandbox-[A-Za-z0-9._-]+$/.test(name)) return `--dir ${dir} is not named postmark-sandbox-<name>: drop and reset act on the whole folder`;
+  return null;
+}
 
 async function up(L, opts) {
   const { treeDatabaseExists, treeDatabase } = await importFrom(join(OFFICE, "test", "helpers", "embedded-store.mjs"));
@@ -776,11 +814,40 @@ async function status(L) {
   return 0;
 }
 
+/** A process's command line, or "" when it cannot be read (then nothing is killed). */
+function commandLineOf(pid) {
+  try {
+    if (process.platform === "linux") return readFileSync(`/proc/${pid}/cmdline`, "utf8").replace(/\0/g, " ");
+    if (process.platform === "win32")
+      return execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `(Get-CimInstance Win32_Process -Filter "ProcessId=${Number(pid)}").CommandLine`], { encoding: "utf8", windowsHide: true }).trim();
+    return execFileSync("ps", ["-o", "command=", "-p", String(Number(pid))], { encoding: "utf8" }).trim();
+  } catch { return ""; }
+}
+
+/**
+ * Whether a command line is one the sandbox started: the `up` process
+ * (tools/sandbox.mjs up), or a child that names the sandbox's folder (the
+ * office's --db, the spectator under the sandbox's world clone).
+ */
+export function namesTheSandbox(cmdline, dir) {
+  const norm = (x) => String(x ?? "").replace(/\\/g, "/").toLowerCase();
+  const c = norm(cmdline);
+  if (!c) return false;
+  return (/(^|[\s/"])tools\/sandbox\.mjs["\s]+up(\s|$)/.test(c) || /(^|[\s/"])sandbox\.mjs["\s]+up(\s|$)/.test(c)) || c.includes(norm(dir) + "/");
+}
+
 /** Stop a running sandbox: its office and viewer, then the `up` process. */
 function down(L) {
   const run = readJson(L.run);
   if (!run || !alive(run.pid)) { rmSync(L.run, { force: true }); say("sandbox: already down"); return 0; }
-  for (const pid of [...(run.children ?? []), run.pid]) if (pid && alive(pid)) { try { process.kill(pid); } catch { /* gone */ } }
+  // a pid in run.json may have been reused since: kill only a process whose command line names the sandbox
+  const spared = [];
+  for (const pid of [...(run.children ?? []), run.pid]) {
+    if (!pid || !alive(pid)) continue;
+    if (!namesTheSandbox(commandLineOf(pid), L.dir)) { spared.push(pid); continue; }
+    try { process.kill(pid); } catch { /* gone */ }
+  }
+  if (spared.length) say(`sandbox: left pid ${spared.join(", ")} alone: its command line is not the sandbox's (the pid was reused)`);
   // the office's instruments, which its own stop would have removed (src/loop-lag.mjs, store-txn-watch.mjs)
   const port = (() => { try { return new URL(run.office).port; } catch { return null; } })();
   if (port) for (const f of [`loop-lag-${port}.json`, `store-txn-${port}.json`]) rmSync(join(OFFICE, "telemetry", f), { force: true });
@@ -827,7 +894,10 @@ async function main(argv = process.argv.slice(2)) {
   process.env.SANDBOX_FENCE = "1";
   await import(pathToFileURL(FENCE).href);
   if (!argv.length) { say(USAGE); return 2; }
-  const L = layout(resolve(flag("--dir") ?? defaultDir()));
+  const dir = resolve(flag("--dir") ?? defaultDir());
+  const badDir = dirRefusal(dir);
+  if (badDir) { say(`sandbox: ${badDir}`); return 2; }
+  const L = layout(dir);
   const cmd = argv.shift();
   try {
     switch (cmd) {
