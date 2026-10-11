@@ -38,6 +38,12 @@
 // Garrison's grove wharf and the Snug mooring. Vermillion's landing and the
 // brass-otter mooring are places residents have WALKED to, which is a different
 // fact.
+//
+// ⚑ AND THE FOURTH STOP IS THE JETTY NOW (POS-487). The wheelhouse's timetable
+// has named `current-the-reader/the-snug-jetty` since 2026-09-24 (Keemin's
+// ruling, the world's own tools/vessel.test.mjs:76 records it: the story starts
+// on the jetty); the mooring was the stop from 09-19. These thirteen tests kept
+// the mooring and were the known reds since w41c (test/known-failures.json).
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -71,7 +77,7 @@ const SHIP = "the-town/the-post-office";
 const WHEELHOUSE = "the-town/the-wheelhouse";
 const PANDO = "the-town/the-pando-landing";
 const WHARF = "sol-of-garrison/grove-wharf";
-const SNUG = "current-the-reader/the-snug-mooring";
+const SNUG = "current-the-reader/the-snug-jetty"; // the timetable's fourth stop since 2026-09-24
 
 const key = (...handles) => ({ handles: new Set(handles) });
 
@@ -498,7 +504,7 @@ test("exit AT OR AFTER the timer sets you down at the destination", { skip: !HAV
   assert.equal(out.set_down.arrived, true);
   const anchor = anchorOfStop(SNUG, await serviceOf(o.worldState));
   assert.deepEqual({ x: o.stops.at(-1).x, y: o.stops.at(-1).y }, { x: anchor.x, y: anchor.y },
-    "the deposit point is the stop mark's own anchor — you stand ON the mooring");
+    "the deposit point is the stop mark's own anchor — you stand ON the jetty");
   assert.deepEqual(o.stops.at(-1).from, { x: anchor.x, y: anchor.y },
     "and the leg's origin is that same anchor — a set-down at the landing, not a walk to it from the wharf");
 });
@@ -958,7 +964,7 @@ test("the quay's deposit point is derived from the RING, so it does not wobble w
   const walkMod = await import(pathToFileURL(join(CLONE, "tools", "walk.mjs")).href);
 
   const leg = ringLegInto(SHIP, service);
-  assert.equal(leg.from.markId, SNUG, "the leg into the quay comes from the Snug mooring -- the ring, in the timetable's own order");
+  assert.equal(leg.from.markId, SNUG, "the leg into the quay comes from the Snug jetty -- the ring, in the timetable's own order");
   const mine = depositPointFor(SHIP, service, { ashore: vessel.ashoreOf });
 
   // Every REAL sailing that arrives at the quay over two days, and they must all
