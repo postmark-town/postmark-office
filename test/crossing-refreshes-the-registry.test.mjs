@@ -51,8 +51,6 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { hangWatch } from "./helpers/hang-watch.mjs";
-hangWatch("crossing-refreshes-the-registry", 120); // MEASUREMENT ONLY (POS-491): CI's Linux hang
 
 const OFFICE = join(dirname(fileURLToPath(import.meta.url)), "..");
 const scratch = mkdtempSync(join(tmpdir(), "postmark-hhrefresh-"));
