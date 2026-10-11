@@ -90,9 +90,20 @@ const HOLDER = WINDOWS
      srv.listen(process.argv[1], () => console.log("ready"));
      setTimeout(() => { srv.close(); for (const s of held) s.destroy(); console.log("released " + held.length); setTimeout(() => process.exit(0), 100); }, Number(process.argv[2]));`
   : `const fs = require("node:fs"); console.log("ready");
-     setTimeout(() => { let held = 0;
-       try { const fd = fs.openSync(process.argv[1], fs.constants.O_WRONLY | fs.constants.O_NONBLOCK); held = 1; fs.closeSync(fd); } catch { held = 0; }
-       fs.rmSync(process.argv[1], { force: true }); console.log("released " + held); process.exit(0); }, Number(process.argv[2]));`;
+     setTimeout(() => { let held = 0, fd = null;
+       try { fd = fs.openSync(process.argv[1], fs.constants.O_WRONLY | fs.constants.O_NONBLOCK); held = 1; } catch { held = 0; }
+       fs.rmSync(process.argv[1], { force: true });
+       if (fd !== null) fs.closeSync(fd);
+       console.log("released " + held); console.error("[holder] released " + held); process.exit(0); }, Number(process.argv[2]));`;
+// THE LINUX RELEASE ORDER IS OPEN, UNLINK, CLOSE (POS-491). It was open, close,
+// unlink, and on CI's Linux runners the file hung past 180 s: the hang watcher
+// (office#484) found three of the refresher's git children 59 s old in
+// `wait_for_partner` (a FIFO open with no writer) with the holder already gone.
+// A git that opens its global config again between the writer's close and the
+// unlink finds a FIFO nobody will ever write, and waits for good. With the
+// write end held across the unlink, every open either finds the writer (and
+// reads EOF at the close) or finds no file (git reads a missing global config
+// as empty), so nothing is left waiting.
 
 const POLLER = `const [url, ms] = [process.argv[1], Number(process.argv[2])];
   const lat = []; const end = Date.now() + ms;

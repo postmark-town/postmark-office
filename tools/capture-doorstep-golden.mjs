@@ -34,12 +34,12 @@ import { fixtureDb } from "../test/fixture.mjs";
 // `unavailable`, which is a true sentence about a misconfigured office and the
 // wrong picture to freeze.
 //
-// The stub reads the same dynamic store the 1.0 arm read (`dynamicDbPath()`),
-// so the live half of this page is composed from exactly the source it was
-// composed from before. Imported from `test/` like `fixtureDb` above, for the
-// same reason: this tool and the falsifier must compose from ONE fixture.
+// The stub reads a dynamic store of the capture's own, fresh and empty, so the
+// live half of this page is the same on every machine (it read the tree's
+// `dynamicDbPath()` until POS-491; see the capture below). Imported from `test/`
+// like `fixtureDb` above, for the same reason: this tool and the falsifier must
+// compose from ONE fixture.
 import { stancePoolFromJournal, STANCE_ON } from "../test/stance-pool-stub.mjs";
-import { dynamicDbPath } from "../src/dynamic-store.mjs";
 import { doorstepBundle } from "../src/doorstep-bundle.mjs";
 
 // ── THE FROZEN CLOCK (POS-168) ───────────────────────────────────────────────
@@ -76,12 +76,14 @@ export const GOLDEN_NOW_MS = Date.parse("2026-09-21T09:00:00.000Z");
 export async function captureDoorstepGolden({ nowMs = GOLDEN_NOW_MS } = {}) {
   delete process.env.TOWN_PUSH;
   delete process.env.TOWN_SINGLE_LOG;
-  // The fourth pinned input (POS-195): the stance credential, and a store that
-  // answers from the same dynamic path the 1.0 arm read.
-  Object.assign(process.env, STANCE_ON);
-  stancePoolFromJournal(dynamicDbPath());
-
   const dir = mkdtempSync(join(tmpdir(), "pm-doorstep-golden-"));
+  // The fourth pinned input (POS-195): the stance credential, and a store that
+  // answers from a dynamic store of its OWN, fresh and empty (POS-491). It read
+  // `dynamicDbPath()`, the TREE's dynamic.db: whatever marks a machine's office
+  // or a neighbouring test had left there rode onto the golden, so a capture on
+  // one tree was red on every other, and on CI (no dynamic.db at all) always.
+  Object.assign(process.env, STANCE_ON);
+  stancePoolFromJournal(join(dir, "dynamic.db"));
   const dbPath = join(dir, "fixture.db");
   fixtureDb(dbPath).close();
   const db = new DatabaseSync(dbPath, { readOnly: true });

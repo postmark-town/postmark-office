@@ -713,10 +713,12 @@ test("F7c5 · THE MORNING PAGE DID NOT FATTEN — the doorstep bundle is byte-id
   // pins the same two lines — one fixture, composed the same way on both sides,
   // which is the same reason the instant above is imported rather than
   // re-spelled.
+  //
+  // AND ITS STORE IS ITS OWN, FRESH AND EMPTY (POS-491), as the capture's is:
+  // the tree's dynamic.db carried whatever a machine's office had left there.
   const { STANCE_ON, stancePoolFromJournal } = await import("./stance-pool-stub.mjs");
-  const { dynamicDbPath } = await import("../src/dynamic-store.mjs");
   Object.assign(process.env, STANCE_ON);
-  stancePoolFromJournal(dynamicDbPath());
+  stancePoolFromJournal(join(mkdtempSync(join(dir, "f7c5-")), "dynamic.db"));
   const meta = { as_of: "fixturesha000000000000000000000000000000" };
   const bctx = { db, key: null, meta, asOf: meta.as_of, canWrite: false, clone: null, pen: null, odb: null, dbPath: null, nowMs: GOLDEN_NOW_MS };
   const now = { full: await doorstepBundle("wright", bctx), slim: await doorstepBundle("wright", { ...bctx, slim: true }) };
@@ -871,6 +873,44 @@ test("F7c5 · THE MORNING PAGE DID NOT FATTEN — the doorstep bundle is byte-id
   //
   //   full  19754 -> 19992 (+238, +1.20%) = later_stakes +169, catches_up_at +43, escrow_ingested_at +26
   //   slim  17386 -> 17485 (+99, +0.57%)  = catches_up_at +43, abridged +30, escrow_ingested_at +26
+  //
+  // ⚠ AND RE-CAPTURED A TENTH TIME, 2026-10-11 (POS-491), because it had stopped
+  // gating anything again: it was a known red on the train from 10-05 (POS-419's
+  // list), so the lanes that moved the page after that had nothing to tell them.
+  // Two inputs were not pinned, and the fix is the instrument first:
+  //
+  //   1. THE STANCE STORE WAS THE TREE'S. The stub read `dynamicDbPath()`, the
+  //      tree's dynamic.db, so a capture carried whatever marks that machine's
+  //      office had left there (CI has none). It is now a fresh, empty store of
+  //      the case's own, here and in the capture tool alike. This pin is
+  //      defensive, not the cause of the red: on the re-capturing tree the
+  //      tree's store and a fresh one gave the same bytes (flipped both ways),
+  //      but the ninth note's tree differed on base because of its store.
+  //      What reddened the case on CI was the golden itself, which was older
+  //      than the four merged changes and the world pin listed below.
+  //   2. THE WORLD IS THE PINNED CLONE, and that one stays: `stances` and
+  //      `stakes` read WORLD_CLONE, which is test/clone-pins.json's world
+  //      (b8581dc9 at this capture). So those leaves move when the world pin
+  //      moves, and a PR that moves the pin re-captures here, with this note.
+  //
+  // Same discipline, and the diff was run leaf by leaf BEFORE the capture: 963
+  // paths before, 1057 after, 10 removed, 104 added and 142 changed. Every path
+  // outside the pinned world's data traces to a merged commit:
+  //   `copy` (5 leaves a skin), POS-332, 68c35c4c; `clocks`, the standing
+  //   tense, bbb233e9; `stakes.clock`, candle N, POS-355, d2492441;
+  //   `stances.stances_awaiting_ground` "resident:wright" -> "household",
+  //   POS-361, b1b7881a.
+  // The rest is the world at the pin: `stances` counts 61 awaiting where it
+  // counted 23, its `ground` names the 70 marks the household holds (23 before),
+  // its five rows are newer marks, and `stakes.rows[8].class` is "commons" (the
+  // crossing bench's own class in the world).
+  //
+  // Measured from the file (residual 0):
+  //
+  //   full  19992 -> 21848 (+1856, +9.28%)  = stances +1345, copy +356, clocks +88, stakes +67
+  //   slim  17485 -> 19341 (+1856, +10.61%) = stances +1345, copy +356, clocks +88, stakes +67
+  //
+  // Both skins move identically: none of the four is abridged on the connector.
   //
   // So the assertion below is the one that actually carries the promise, and it
   // is stated separately so a future regeneration cannot quietly absorb a card:

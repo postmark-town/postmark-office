@@ -258,10 +258,15 @@ export async function writeStateLog(client, {
 
   // The drain's own precondition, kept: STATE lives on main, and a writer that
   // switched branches to commit would be exactly the checkout this ladder
-  // retires.
-  const branch = g("branch", "--show-current");
-  if (commit && branch !== "main") {
-    return { refused: "not-on-main", detail: `the clone stands on "${branch}", not main — STATE is main's` };
+  // retires. Asked only when this run commits: a `commit: false` write touches
+  // the working set alone, and a checkout that is not a git repo at all (a
+  // scratch fixture under /tmp) would otherwise fail on git's own words before
+  // the writer's real refusals could speak (POS-488).
+  if (commit) {
+    const branch = g("branch", "--show-current");
+    if (branch !== "main") {
+      return { refused: "not-on-main", detail: `the clone stands on "${branch}", not main — STATE is main's` };
+    }
   }
 
   const namer = householdNamerFor(repo);

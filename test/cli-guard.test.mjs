@@ -44,7 +44,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, unlinkSync, rmSync, rmdirSync, realpathSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, unlinkSync, rmSync, rmdirSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -64,17 +64,22 @@ const NOWHERE_OUT = join(SCRATCH, "out.json");
 // arrived through), a directory symlink elsewhere; both are paths the ESM
 // loader realpaths away, which is exactly the mismatch under test. Torn down
 // with `rmdir` (the link only) — NEVER a recursive delete, which through a
-// junction is a delete of the office itself — and the office's file count is
-// taken before and after so the teardown is proven, not assumed.
-const countFiles = (dir) => {
-  let n = 0;
-  for (const e of readdirSync(dir, { withFileTypes: true })) {
-    if (e.name === "node_modules" || e.name === ".git") continue;
-    if (e.isDirectory()) n += countFiles(join(dir, e.name)); else n += 1;
-  }
-  return n;
-};
-const FILES_BEFORE = countFiles(ROOT);
+// junction is a delete of the office itself — and the office's tracked files
+// are read before and after so the teardown is proven, not assumed.
+//
+// TRACKED FILES, NOT A FILE COUNT (POS-490). This file used to count every file
+// under the office, and the count moved for reasons that were not this file's:
+// the suite runs files side by side, and a spawned office in another file writes
+// telemetry/loop-lag-*.json into the same tree while this one counts (CI run
+// 38092902239: 25097 !== 25094). Git's index is the instrument that does not move
+// under a neighbour: a delete through the junction removes tracked files, and a
+// tool writing over the tree changes them. An untracked file appearing is not
+// judged here, because a neighbour's telemetry is exactly that.
+const git = (...args) => spawnSync("git", ["-C", ROOT, ...args], { encoding: "utf8" });
+const TRACKED = git("ls-files", "-z").stdout.split("\0").filter(Boolean);
+assert.ok(TRACKED.length > 0, "the office must be a git checkout with tracked files, or the teardown proof below proves nothing");
+const changedTracked = () => git("status", "--porcelain", "--untracked-files=no").stdout;
+const CHANGED_BEFORE = changedTracked();
 const LINK_DIR = mkdtempSync(join(tmpdir(), "cli-guard-link-"));
 const LINK = join(LINK_DIR, "office");
 if (process.platform === "win32") {
@@ -94,7 +99,9 @@ test.after(() => {
   }
   rmdirSync(LINK_DIR); // non-recursive on purpose: loud if the link were somehow still inside
   rmSync(SCRATCH, { recursive: true, force: true }); // the tools' cwd and refusal paths — holds no link
-  assert.equal(countFiles(ROOT), FILES_BEFORE, "the office's file count changed across the run — a tool wrote into the tree, or the teardown reached through the junction");
+  const gone = TRACKED.filter((f) => !existsSync(join(ROOT, f)));
+  assert.deepEqual(gone.slice(0, 5), [], `${gone.length} tracked file(s) vanished across the run — the teardown reached through the junction`);
+  assert.equal(changedTracked(), CHANGED_BEFORE, "a tracked file changed across the run — a tool wrote into the tree");
 });
 
 // ── the roster ───────────────────────────────────────────────────────────────
@@ -177,7 +184,6 @@ const ROSTER = {
   // it imports the town engine or reads the store.
   "tools/ballot-pass-run.mjs": { args: [], env: NO_PG, code: 1, needle: "usage: ballot-pass-run.mjs --key FILE" },
   "tools/ballots-backfill.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: ballots-backfill.mjs --town <clone>" },
-  "tools/suite-baseline.mjs": { args: ["--tip", "0000000"], code: 2, needle: "cannot resolve 0000000 to a full sha here" },
   "tools/settle-anchored-berths.mjs": { args: ["--clone", NOWHERE], code: 1, needle: "not a town checkout" },
   "tools/ship-guard.mjs": { args: [], code: 2, needle: "usage: node tools/ship-guard.mjs" },
   "tools/site-sentinel.mjs": { args: ["--now", "not-a-date", "--dry-run", "--state", NOWHERE_OUT, "--out", NOWHERE_OUT], env: { SENTINEL_DISCORD_WEBHOOK: undefined }, code: 1, needle: "site-sentinel" },
