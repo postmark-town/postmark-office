@@ -118,6 +118,8 @@ test("GET /world/eyes and GET /world/apex: no `dials`, no `activity`, no house m
   assert.equal(focus?.porch_light?.lit, true, JSON.stringify(focus?.porch_light));
   assert.equal(focus.porch_light.last_active_crossing, C);
   assert.match(focus.porch_light.means, /C or C-1/);
+  const notHouse = (await get(`/world/apex?${AT}&mark=${encodeURIComponent("the-town/let-there-be-light")}`)).body.focus;
+  assert.ok(notHouse && !notHouse.error && !("porch_light" in notHouse), "a mark that is not a house carries no light");
   const past = (await get(`/world/apex?${AT}&crossing=${C - 3}`)).body;
   assert.equal(litsOf(past)[PARCEL], null, "a past crossing's house is unknown, not dark");
   assert.match(past.lit_unknown, /activity isn't kept per crossing/);

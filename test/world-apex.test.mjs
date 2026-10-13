@@ -2022,6 +2022,7 @@ test("LOCAL LIGHT, ONE BATCH: a co-resident's act lights the shown house (true),
     assert.ok(asked.indexOf(asked.find((t) => /^SET LOCAL/.test(t))) < asked.findIndex((t) => /FROM households\b/.test(t)), "before its first read");
     assert.deepEqual(litsOf(r), { [HOUSE]: true }, "alpha-kin's act lights alpha's house");
     assert.ok(!("lit_unknown" in r), "a known light says nothing more");
+    assert.doesNotMatch(JSON.stringify(r), /"(hh|solo):|alpha-kin|"dune"/, "no household key, no member: `lit` is all that rides");
     asked.length = 0; resetActivityCache();
     const eyes = await worldEyes({ ...A }, null);
     assert.equal(count(), 1, "the eyes door, alone, asks once too");
