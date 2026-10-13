@@ -1965,3 +1965,88 @@ test("THE READ'S MIDDLE · a historical apex read carries no lit state, and says
   assert.equal(r.activity.households, null);
   assert.match(r.activity.note, /activity isn't kept per crossing/);
 });
+
+// ── THE MIDDLE, ONCE PER ANSWER (first review, R4) ───────────────────────────
+// The apex composes the eyes; both used to ask the activity batch. A SPY STORE
+// under the pen pool counts what one whole apex read actually sends.
+async function withSpyStore(fn) {
+  const pen = await import("../src/world2-pen.mjs");
+  const { LAST_ACTIVE_SQL } = await import("../src/last-active.mjs");
+  const { ROLL_SQL } = await import("../src/household-activity.mjs");
+  const { rowsFromRegistry } = await import("../src/registry-rows.mjs");
+  const REG = rowsFromRegistry({ households: { "ash-house": { residents: ["ash", "ash-kin"], accounts: [{ login: "ash-gh", id: 1 }] } } }, {});
+  const asked = [];
+  const client = {
+    async query(sql, params = []) {
+      const t = String(sql);
+      asked.push(t);
+      if (/^\s*(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE)/i.test(t)) return { rows: [] };
+      if (/FROM households\b/.test(t)) return { rows: REG.households };
+      if (/FROM household_pins\b|FROM registry_meta\b/.test(t)) return { rows: [] };
+      if (t === ROLL_SQL) return { rows: [{ handle: "ash" }, { handle: "dune" }] };
+      if (t === LAST_ACTIVE_SQL) return { rows: [{ handle: "ash-kin", at: new Date().toISOString(), src: "act" }] };
+      return { rows: [] };
+    },
+    release() {},
+  };
+  const env = ["WORLD2_PG", "WORLD2_PG_URL"].map((k) => [k, process.env[k]]);
+  Object.assign(process.env, { WORLD2_PG: "1", WORLD2_PG_URL: "postgres://wld29-spy/none" });
+  pen.__setPoolForTest({ connect: async () => client, query: (...a) => client.query(...a) });
+  try { return await fn({ asked, count: () => asked.filter((t) => t === LAST_ACTIVE_SQL).length, LAST_ACTIVE_SQL }); }
+  finally { pen.__setPoolForTest(null); for (const [k, v] of env) { if (v == null) delete process.env[k]; else process.env[k] = v; } }
+}
+
+test("THE MIDDLE, ONCE: one whole apex read sends ONE activity batch (registry, roll, last-active), and a do:/read: act sends none", async () => {
+  on();
+  const { currentCrossing } = await import("../src/crossings.mjs");
+  await withSpyStore(async ({ asked, count }) => {
+    const r = await worldApex({ ...A }, null);
+    assert.ok(!r.error, JSON.stringify(r.error));
+    assert.equal(count(), 1, `last-active asked ${count()} times for one apex read`);
+    assert.equal(asked.filter((t) => /FROM households\b/.test(t)).length, 1, "one registry read");
+    assert.deepEqual(r.activity.households, { "hh:ash-house": currentCrossing(), "solo:dune": null }, "and it is that batch's answer on the read");
+    assert.equal(r.activity.clock, currentCrossing());
+    asked.length = 0;
+    const eyes = await (await import("../src/world.mjs")).worldEyes({ ...A }, null);
+    assert.equal(count(), 1, "the eyes door, alone, asks once too");
+    assert.deepEqual(eyes.activity, r.activity);
+    asked.length = 0;
+    await worldApex({ read: "say" }, KEY_BETA);
+    await worldApex({ do: "say", text: "hello" }, KEY_BETA);
+    assert.equal(count(), 0, "a read: or do: answer carries no middle and asks for none");
+  });
+});
+
+// Bevel's first-review probe R5 (credited): the read normalizes a negative
+// crossing to the current one, and its activity must say the same.
+test("Bevel: a crossing normalized to current cannot claim historical activity", async () => {
+  on();
+  const current = await worldApex({ ...A }, null);
+  const negative = await worldApex({ ...A, crossing: -1 }, null);
+  assert.ok(!current.error && !negative.error, JSON.stringify({ current: current.error, negative }));
+  assert.deepEqual(negative.crossing, current.crossing, "control: the read actually normalizes -1 to current");
+  assert.notEqual(negative.activity?.historical, true,
+    `current read disagrees with new activity block: ${JSON.stringify({ crossing: negative.crossing, activity: negative.activity })}`);
+  assert.equal(negative.activity?.clock, current.activity?.clock);
+});
+
+test("THE READ'S OWN CROSSING (R5): malformed and negative crossings are the current read's; a real past crossing stays historical", async () => {
+  on();
+  const { currentCrossing } = await import("../src/crossings.mjs");
+  // the activity block AGREES WITH THE READ, whatever the read made of the ask:
+  // a read standing at the current crossing carries the current activity and
+  // its clock; a read standing anywhere else (the 1.0 door reads "" and null
+  // as crossing 0, a pre-existing normalization this does not change) is
+  // historical. One rule, the read's own crossing.
+  for (const c of [-1, -40, "soon", undefined, "", null, currentCrossing() - 2, currentCrossing() + 3]) {
+    const r = await worldApex({ ...A, ...(c === undefined ? {} : { crossing: c }) }, null);
+    const isNow = r.crossing?.n === currentCrossing();
+    assert.equal(r.activity?.historical === true, !isNow, `${JSON.stringify(c)} → crossing ${r.crossing?.n}: activity ${JSON.stringify(r.activity)}`);
+    if (isNow) assert.equal(r.activity.clock, currentCrossing(), `${JSON.stringify(c)}: the current read's clock`);
+    else assert.equal(r.activity.clock, null);
+  }
+  for (const c of [-1, -40, "soon"]) assert.equal((await worldApex({ ...A, crossing: c }, null)).crossing.n, currentCrossing(), `control: ${c} is normalized to current by the read itself`);
+  const past = await worldApex({ ...A, crossing: currentCrossing() - 2 }, null);
+  assert.equal(past.activity.historical, true);
+  assert.equal(past.activity.clock, null);
+});

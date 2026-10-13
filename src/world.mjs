@@ -48,7 +48,7 @@ import { toConfirm } from "./stamps-preview.mjs"; // POS-83: the inline stake's 
 import { visitorRulesGate } from "./visitor-rules.mjs"; // POS-300: a berth reads the town's rules for visitors before its first say
 import { classNames, classRoster, classDials, departurePace, freeCellIn, RESIDENT_INSTANTIABLE, residentMayInstantiate } from "./world-classes.mjs";
 import { dialsDigestOf } from "./read-digests.mjs";
-import { readHouseholdActivity, isCurrentRead } from "./household-activity.mjs"; // which classes exist — read from the record, never held
+import { readHouseholdActivity } from "./household-activity.mjs"; // which classes exist — read from the record, never held
 import { HOLD_TOOLS, callHoldTool } from "./world-hold.mjs"; // the object primitive: who holds what
 import { createVoices, EARSHOT_M, HEAR_MAX, HEARING_WINDOW, RECORD_KEPT_AT } from "./voices.mjs";
 import { createHearingWindow } from "./hearing-window.mjs"; // earshot: speech at a position (the party line)
@@ -2072,16 +2072,30 @@ export async function worldDials(w = null) {
   return d;
 }
 
-/** The middle every resident and spectator read carries (WLD-29): the dials digest and the household activity digest. */
+/**
+ * The middle every resident and spectator read carries (WLD-29): the dials
+ * digest and the household activity digest. ONE per response: a composed read
+ * (the apex) asks it once and hands it to the eyes it composes.
+ *
+ * CURRENT OR HISTORICAL IS THE READ'S OWN ANSWER (first review, R5): the read
+ * stands at `crossingOf(args)` — a missing, malformed or negative crossing IS
+ * the current one there — so the activity block is classified by that same
+ * effective crossing, never by the raw argument.
+ */
 export async function readMiddle(args = {}, w = null) {
   const [dials, activity] = await Promise.all([
     worldDials(w),
-    readHouseholdActivity({ current: isCurrentRead(args?.crossing) }),
+    readHouseholdActivity({ current: crossingOf(args ?? {}) === currentCrossing() }),
   ]);
   return { dials, activity };
 }
 
-export async function worldEyes(args = {}, key = null, { roll = [] } = {}) {
+/**
+ * `middle`: the eyes door's own read computes its middle (`true`, the default);
+ * a composed read hands in the one it already holds (an object), and a caller
+ * that never returns the eyes' middle asks for none (`false`).
+ */
+export async function worldEyes(args = {}, key = null, { roll = [], middle = true } = {}) {
   const choice = chooseStandpoint(args, key);
   if (choice.bounce) return choice.bounce;
   const w = await world();
@@ -2178,7 +2192,7 @@ export async function worldEyes(args = {}, key = null, { roll = [] } = {}) {
     // here that names ids, so this is exactly those plus the ground.
     records: await markRecords(objects.map((o) => o.id), w),
     // THE MIDDLE (WLD-29): every dial, and which houses are lit, beside the records.
-    ...(await readMiddle(args, w)),
+    ...(middle === true ? await readMiddle(args, w) : (middle && typeof middle === "object" ? middle : {})),
     // Grouped by the engine's own distance bands, nearest band first — the same
     // organisation the telling uses, so the compact shape and the prose agree.
     // An empty array means nobody is about; the key's ABSENCE means presence is

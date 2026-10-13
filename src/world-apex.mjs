@@ -2128,9 +2128,13 @@ async function apexRead(args, key, ctx = {}) {
   const oriented = await worldOrient(args, key, { roll: ctx.roll ?? [] }); // DEC-11: the town roll rides into `present`
   if (oriented?.error) return oriented;
 
+  // THE MIDDLE, ONCE (first review, R4): the eyes this read composes carried
+  // their own, and the apex then asked again — two registry/roll/last-active
+  // rounds for one answer. Asked here, handed to the eyes, returned below.
+  const middle = await readMiddle(args);
   // Salience is open-your-eyes' ranking, unchanged: the FOV build already
   // decided what is worth seeing from here and capped it at the context budget.
-  const seen = await worldEyes(args, key);
+  const seen = await worldEyes(args, key, { middle });
   if (seen?.error) return seen;
 
   // WLD-11: the geometric spine, plus the vessel an embodied caller is aboard.
@@ -2297,8 +2301,7 @@ async function apexRead(args, key, ctx = {}) {
     ...spine.map((m) => m.id),
     ...nearbyOut.map((o) => o.id),
   ]);
-  // THE MIDDLE (WLD-29): every dial and the household activity, beside the records
-  const { dials, activity } = await readMiddle(args);
+  const { dials, activity } = middle;
 
   const answer = {
     standpoint: {
@@ -2410,7 +2413,8 @@ async function apexDo(args, key, ctx = {}) {
 
   const oriented = await worldOrient(args, key, { roll: ctx.roll ?? [] }); // DEC-11: the town roll rides into `present`
   if (oriented?.error) return oriented;
-  const seen = await worldEyes(args, key);
+  // no middle: this answer does not carry the eyes' digests (WLD-29, R4)
+  const seen = await worldEyes(args, key, { middle: false });
   if (seen?.error) return seen;
 
   const spine = oriented.you?.within ?? [];
@@ -3139,7 +3143,8 @@ async function apexReadAction(args, key, ctx = {}) {
 
   const oriented = await worldOrient(args, key, { roll: ctx.roll ?? [] }); // DEC-11: the town roll rides into `present`
   if (oriented?.error) return oriented;
-  const seen = await worldEyes(args, key);
+  // no middle: this answer does not carry the eyes' digests (WLD-29, R4)
+  const seen = await worldEyes(args, key, { middle: false });
   if (seen?.error) return seen;
 
   const spine = oriented.you?.within ?? [];

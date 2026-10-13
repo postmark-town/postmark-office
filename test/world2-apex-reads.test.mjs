@@ -540,3 +540,49 @@ test("RECORDS · THE PLANTED MARK: a mark that stands only in the store is in th
   assert.ok(!("ghost/only-in-the-store" in again.body.records), "withdrawing the planted mark from the store withdraws it from the block");
   assert.equal(p.asked.filter((a) => /FROM marks/i.test(a.sql)).length, 1, "one `marks` read composes the world, the spine, the view and the records");
 });
+
+// ── THE STORE DOOR'S ACTIVITY (WLD-29 first review, R4): current, historical,
+// unavailable, on world2Apex's own pool — the same digest 1.0's apex carries.
+function activityPool({ fail = false } = {}) {
+  const base = recordsPool();
+  let lastActive = 0;
+  return {
+    asked: base.asked, lastActive: () => lastActive,
+    query: async (sql, params) => {
+      const t = String(sql);
+      if (/FROM households\b/.test(t)) return { rows: [{ slug: "rig-house", ord: 0, name: null, human: null, accounts: [], residents: ["rig-a", "rig-b"], since: null, member_of: null, declared_by: null, formerly: [], provisional: false, home_images: {} }] };
+      if (/FROM household_pins\b|FROM registry_meta\b/.test(t)) return { rows: [] };
+      if (/FROM town_roll r\s+JOIN projection_heads h ON h\.repo = 'town'/.test(t) && /ORDER BY r\.handle$/.test(t.trim())) return { rows: [{ handle: "rig-a" }, { handle: "rig-solo" }] };
+      if (/SELECT handle, at, src FROM/.test(t.replace(/\s+/g, " "))) {
+        lastActive += 1;
+        if (fail) throw new Error("the store would not answer");
+        return { rows: [{ handle: "rig-b", at: new Date().toISOString(), src: "act" }] };
+      }
+      return base.query(sql, params);
+    },
+  };
+}
+
+test("THE STORE DOOR'S ACTIVITY: current (no crossing asked) folds the house by its residents; a past crossing is historical and asks nothing; an unread store is unknown, never dark", async (t) => {
+  if (!RECORDS_ENGINE) return t.skip(`no world engine: ${RECORDS_WHY}`);
+  const { currentCrossing } = await import("../src/crossings.mjs");
+  const at = { x: String(REC_STANDPOINT.x), y: String(REC_STANDPOINT.y) };
+  const now = activityPool();
+  const cur = await RECORDS_DOOR(new URLSearchParams(at), { p: now });
+  assert.ok(!cur.error, JSON.stringify(cur.error?.body));
+  assert.equal(now.lastActive(), 1, "one last-active statement for the town");
+  assert.deepEqual(cur.body.activity.households, { "hh:rig-house": currentCrossing(), "solo:rig-solo": null });
+  assert.equal(cur.body.activity.house_of["rig-a"], "hh:rig-house");
+  assert.equal(cur.body.activity.clock, currentCrossing());
+  const past = activityPool();
+  const hist = await RECORDS_DOOR(new URLSearchParams({ ...at, crossing: String(currentCrossing() - 2) }), { p: past });
+  assert.equal(hist.body.activity.historical, true);
+  assert.equal(hist.body.activity.clock, null);
+  assert.equal(past.lastActive(), 0, "a historical read asks the store nothing about activity");
+  const down = activityPool({ fail: true });
+  const un = await RECORDS_DOOR(new URLSearchParams(at), { p: down });
+  assert.ok(!un.error, "an unread activity does not fail the read");
+  assert.equal(un.body.activity.households, null);
+  assert.match(un.body.activity.unavailable, /could not be read from the store/);
+  assert.equal(un.body.activity.clock, currentCrossing());
+});
