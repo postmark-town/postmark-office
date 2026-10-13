@@ -1933,7 +1933,7 @@ test("THE ARENA IS CLOSED: do: strike and do: loot answer \"the arena is closed\
 // names. The digest carries dials and nothing else of a record.
 const MIDDLE_DIALS = { "the-town/resident": { pace_km_per_crossing: 47 }, "zeta/far-lamp": { glow: 3 } };
 
-test("THE READ'S MIDDLE: apex and eyes, spectator and resident, carry every dial (the off-reach class and far lamp too) and no record body; records stay narrow; the activity block rides beside", async () => {
+test("THE READ'S MIDDLE: apex and eyes, spectator and resident, carry every dial (the off-reach class and far lamp too) and no record body; records stay narrow but for the stride's compatibility record; the activity block rides beside", async () => {
   on();
   const { worldEyes } = await import("../src/world.mjs");
   const reads = {
@@ -1946,8 +1946,13 @@ test("THE READ'S MIDDLE: apex and eyes, spectator and resident, carry every dial
     assert.ok(r && !r.error, `${what}: ${JSON.stringify(r?.error ?? r)}`);
     assert.deepEqual(r.dials, MIDDLE_DIALS, `${what}: the digest is every dialled mark's dials, and only those (empty and array dials excluded)`);
     assert.doesNotMatch(JSON.stringify(r.dials), /WLD29-.*-BODY|by|tier|body/, `${what}: dials only, never the record`);
-    for (const id of Object.keys(MIDDLE_DIALS))
-      assert.ok(!Object.hasOwn(r.records, id), `${what}: ${id} is not smuggled into records — the answer never named it`);
+    // narrow records: the far lamp was never named, so it is not in them
+    assert.ok(!Object.hasOwn(r.records, "zeta/far-lamp"), `${what}: zeta/far-lamp is not smuggled into records — the answer never named it`);
+    // …save ONE named compatibility exception (Wright, AUTHORITY 2026-10-13T15:43:33.484Z):
+    // the mover's class rides records too, its pace usable by the pinned viewer
+    // that reads only records, and the same number the digest carries
+    assert.equal(r.records["the-town/resident"]?.dials?.pace_km_per_crossing, 47, `${what}: the old records-only consumer still finds the stride`);
+    assert.equal(r.dials["the-town/resident"].pace_km_per_crossing, r.records["the-town/resident"].dials.pace_km_per_crossing, `${what}: digest and compatibility record agree`);
     assert.ok(r.activity && Number.isInteger(r.activity.clock), `${what}: the activity block and its clock ride the read`);
     // this suite has no store: the digest says so rather than calling the town dark
     assert.equal(r.activity.households, null);
@@ -1989,11 +1994,13 @@ async function withSpyStore(fn) {
     },
     release() {},
   };
+  const { resetActivityCache } = await import("../src/household-activity.mjs");
+  resetActivityCache();   // a cold cache: what one read asks is counted, never hidden by an earlier warm one
   const env = ["WORLD2_PG", "WORLD2_PG_URL"].map((k) => [k, process.env[k]]);
   Object.assign(process.env, { WORLD2_PG: "1", WORLD2_PG_URL: "postgres://wld29-spy/none" });
   pen.__setPoolForTest({ connect: async () => client, query: (...a) => client.query(...a) });
   try { return await fn({ asked, count: () => asked.filter((t) => t === LAST_ACTIVE_SQL).length, LAST_ACTIVE_SQL }); }
-  finally { pen.__setPoolForTest(null); for (const [k, v] of env) { if (v == null) delete process.env[k]; else process.env[k] = v; } }
+  finally { pen.__setPoolForTest(null); resetActivityCache(); for (const [k, v] of env) { if (v == null) delete process.env[k]; else process.env[k] = v; } }
 }
 
 test("THE MIDDLE, ONCE: one whole apex read sends ONE activity batch (registry, roll, last-active), and a do:/read: act sends none", async () => {
@@ -2006,11 +2013,13 @@ test("THE MIDDLE, ONCE: one whole apex read sends ONE activity batch (registry, 
     assert.equal(asked.filter((t) => /FROM households\b/.test(t)).length, 1, "one registry read");
     assert.deepEqual(r.activity.households, { "hh:ash-house": currentCrossing(), "solo:dune": null }, "and it is that batch's answer on the read");
     assert.equal(r.activity.clock, currentCrossing());
-    asked.length = 0;
+    // each count below starts COLD, so a warm shared answer cannot hide an extra call
+    const { resetActivityCache } = await import("../src/household-activity.mjs");
+    asked.length = 0; resetActivityCache();
     const eyes = await (await import("../src/world.mjs")).worldEyes({ ...A }, null);
     assert.equal(count(), 1, "the eyes door, alone, asks once too");
     assert.deepEqual(eyes.activity, r.activity);
-    asked.length = 0;
+    asked.length = 0; resetActivityCache();
     await worldApex({ read: "say" }, KEY_BETA);
     await worldApex({ do: "say", text: "hello" }, KEY_BETA);
     assert.equal(count(), 0, "a read: or do: answer carries no middle and asks for none");
@@ -2049,4 +2058,19 @@ test("THE READ'S OWN CROSSING (R5): malformed and negative crossings are the cur
   const past = await worldApex({ ...A, crossing: currentCrossing() - 2 }, null);
   assert.equal(past.activity.historical, true);
   assert.equal(past.activity.clock, null);
+});
+
+test("SHARED ACROSS DOORS (independent review, b): apex, eyes and apex again against one store inside the TTL send ONE activity batch", async () => {
+  on();
+  await withSpyStore(async ({ count }) => {
+    const { worldEyes } = await import("../src/world.mjs");
+    const a = await worldApex({ ...A }, null);
+    const e = await worldEyes({ ...A }, null);
+    const b = await worldApex({ handle: "alpha" }, KEY_ALPHA);
+    assert.equal(count(), 1, `three reads of one store sent ${count()} batches`);
+    assert.deepEqual([e.activity, b.activity], [a.activity, a.activity], "one answer, the same for every door");
+    a.activity.households["hh:ash-house"] = -1;
+    const c = await worldApex({ ...A }, null);
+    assert.notEqual(c.activity.households["hh:ash-house"], -1, "one caller's answer is not another's object");
+  });
 });

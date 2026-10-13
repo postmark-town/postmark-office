@@ -106,7 +106,8 @@ import { myMarksRefused } from "./claim-effects.mjs";
 import { actorRoster } from "./human-actor.mjs";
 import { stopDepartures } from "./world-movement.mjs";
 // The class every reader IS — 1.0's own constant, so the two apexes name the
-// same mark in `records` (world.mjs § markRecords).
+// same compatibility record in `records` (world.mjs § markRecords).
+import { STRIDE_MARK_ID } from "./world-classes.mjs";
 import { dialsDigestOf } from "./read-digests.mjs";
 import { readHouseholdActivity, isCurrentRead } from "./household-activity.mjs";
 
@@ -1416,16 +1417,25 @@ export async function world2Apex(searchParams, { p: injected = null } = {}) {
   const records = apex.recordsBlock({
     marks: world.marks, ids: [...spine.map((m) => m.id), ...nearby.map((o) => o.id)], extra: ground,
   });
-  // THE MIDDLE (WLD-29), the same two digests 1.0's apex carries. The mover's
-  // class is no longer added to `records` by name: its dials ride the digest,
-  // with every other dialled mark's — the published marks' and the classes'
-  // from these same law rows. Activity is a current read's only (the crossing
+  // THE MOVER'S CLASS, BY NAME — the one compatibility exception 1.0's apex
+  // keeps too (world.mjs § markRecords; Wright 15:43:33.484Z): the site's pinned
+  // viewer prices a walk from records["the-town/resident"]. Remove only once the
+  // site's World pin holds #197.
+  if (!records[STRIDE_MARK_ID]) {
+    const stride = apex.classRecordOf(lawRows.find((r) => r.kind === "class" && r.data?.id === STRIDE_MARK_ID));
+    if (stride) records[STRIDE_MARK_ID] = stride;
+  }
+  // THE MIDDLE (WLD-29), the same two digests 1.0's apex carries: every dialled
+  // mark's dials — the published marks' and the classes' from these same law
+  // rows — and the activity. Activity is a current read's only (the crossing
   // asked, not `n`, decides: an absent `crossing` is the current one).
   const dials = dialsDigestOf([
     ...world.marks,
     ...lawRows.filter((r) => r.kind === "class").map((r) => apex.classRecordOf(r)).filter(Boolean),
   ]);
-  const activity = await readHouseholdActivity({ current: isCurrentRead(searchParams?.get("crossing")), read: (fn) => fn(p) });
+  // the shared answer is the STORE's: this door's own pool shares the office's
+  // (one store), an injected pool is its own — never this call's fresh closure
+  const activity = await readHouseholdActivity({ current: isCurrentRead(searchParams?.get("crossing")), read: (fn) => fn(p), backend: injected ?? undefined });
 
   return { body: {
     standpoint: { x: near.x, y: near.y, stance: "nobody" },

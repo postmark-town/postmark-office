@@ -55,8 +55,11 @@ export const LIT_WINDOW = 1;
 export const ROLL_SQL = `SELECT r.handle FROM town_roll r
   JOIN projection_heads h ON h.repo = 'town' AND h.sha = r.town_sha ORDER BY r.handle`;
 
+/** How long one current batch is served before the next read asks again (per office worker, per store). */
+export const ACTIVITY_TTL_MS = 60_000;
+
 export const ACTIVITY_MEANS =
-  `a house is lit when its newest act falls in the activity clock's crossing or the one before (C or C-1). An act is ${LAST_ACTIVE_MEANS}. A house's crossing is the newest over its residents who are not emeritus; null: none of them has an act on record`;
+  `a house is lit when its newest act falls in the activity clock's crossing or the one before (C or C-1). An act is ${LAST_ACTIVE_MEANS}. A house's crossing is the newest over its residents who are not emeritus; null: none of them has an act on record. FRESHNESS: each office worker reads the town's activity at most once per ${ACTIVITY_TTL_MS / 1000} s for the current crossing and serves that answer until then, so an act can take up to about ${ACTIVITY_TTL_MS / 1000} s (plus that read's own duration) to light its house; a new crossing reads afresh, and a failed read is not kept`;
 
 export const ACTIVITY_HISTORICAL =
   "activity isn't kept per crossing: the store keeps each resident's newest act only, so a past crossing's lights cannot be rebuilt — this read carries no lit state";
@@ -119,19 +122,69 @@ export async function householdActivity(q, { current = true, now = Date.now(), i
   return { clock, window: LIT_WINDOW, ...foldHouseholds({ houses, found, isEmeritus: emeritus }), means: ACTIVITY_MEANS };
 }
 
+// ── THE CURRENT ANSWER, SHARED (WLD-29 independent review, b) ─────────────────
+//
+// The batch reads the town's whole membership and every resident's newest act;
+// it grows with history and borrows a pen connection (Wright's measurement:
+// p50 56 ms at 20k acts, 80 ms at 60k — his, not this file's). So ONE answer per
+// store, per activity clock C, is shared for ACTIVITY_TTL_MS:
+//   · keyed by the STORE the read goes to (`backend`: the office's own store, or
+//     an injected one), never by a caller's closure — so both apex paths and the
+//     eyes door share it, and an injected test store never meets another's;
+//   · keyed by C, and only the current C is kept: a new crossing reads afresh,
+//     and a reply for an older C cannot land in the newer C's slot;
+//   · single-flight: concurrent misses wait on the one batch in flight;
+//   · a FAILURE IS NOT KEPT: the read that failed answers "unavailable", and the
+//     next read asks the store again — an outage never sticks as darkness;
+//   · the cached value is plain data (no connection held), and every caller gets
+//     its OWN copy, so shaping one answer cannot change another's.
+const shared = new Map();   // backend → Map(clock → { promise, value, at })
+
+/** Tests only: forget every cached answer. */
+export function resetActivityCache() { shared.clear(); }
+
+function sharedActivity(backend, clock, nowMs, compute) {
+  let byClock = shared.get(backend);
+  if (!byClock) shared.set(backend, byClock = new Map());
+  for (const c of [...byClock.keys()]) if (c !== clock) byClock.delete(c);
+  const held = byClock.get(clock);
+  if (held && (held.promise || nowMs - held.at < ACTIVITY_TTL_MS)) return held.promise ?? Promise.resolve(held.value);
+  const entry = { promise: null, value: null, at: nowMs };
+  entry.promise = (async () => {
+    try {
+      const value = await compute();
+      if (byClock.get(clock) === entry) { entry.value = value; entry.promise = null; }
+      return value;
+    } catch (e) {
+      if (byClock.get(clock) === entry) byClock.delete(clock);   // a failure is not kept
+      throw e;
+    }
+  })();
+  byClock.set(clock, entry);
+  return entry.promise;
+}
+
 /**
- * The digest for a door, with ONE store read of its own (the compatibility
- * path holds no store connection). A failure is disclosed, never thrown and
- * never filled from anywhere else.
+ * The digest for a door. A current read is served from the shared answer for
+ * its store and clock (above), read with ONE store round of its own when it
+ * must be read — the compatibility path holds no store connection. `backend`
+ * names the store: the office's own by default; a caller with an injected
+ * store passes that store. A failure is disclosed, never thrown and never
+ * filled from anywhere else.
  */
-export async function readHouseholdActivity({ current = true, env = process.env, read = null, now = Date.now() } = {}) {
+export async function readHouseholdActivity({ current = true, env = process.env, read = null, backend = null, now = Date.now() } = {}) {
   if (!current) return householdActivity(null, { current: false });
+  const clock = currentCrossing(now);
+  const store = backend ?? `store:${env.WORLD2_PG_URL ?? ""}`;
   try {
-    if (read) return await read((q) => householdActivity(q, { now }));
-    const { officeRead } = await import("./world2-pen.mjs");
-    return await officeRead((c) => householdActivity(c, { now }), { env, by: "householdActivity" });
+    const value = await sharedActivity(store, clock, now, async () => {
+      if (read) return read((q) => householdActivity(q, { now }));
+      const { officeRead } = await import("./world2-pen.mjs");
+      return officeRead((c) => householdActivity(c, { now }), { env, by: "householdActivity" });
+    });
+    return structuredClone(value);
   } catch {
-    return { clock: currentCrossing(now), households: null, house_of: null, unavailable: ACTIVITY_UNAVAILABLE };
+    return { clock, households: null, house_of: null, unavailable: ACTIVITY_UNAVAILABLE };
   }
 }
 

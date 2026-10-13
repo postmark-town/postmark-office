@@ -135,15 +135,23 @@ test("A HISTORICAL READ carries no lit state, and says why; a current read is on
 test("AN UNREAD STORE IS NOT A DARK TOWN: a failing read is disclosed, every house unknown, nothing filled from another source", async () => {
   for (const fail of [new RegExp(LAST_ACTIVE_SQL.slice(0, 20).replace(/[()*]/g, "\\$&")), /FROM households\b/, /town_roll/]) {
     const { q } = spyStore({ fail });
-    const a = await readHouseholdActivity({ read: (fn) => fn(q), now: NOW });
+    const a = await readHouseholdActivity({ read: (fn) => fn(q), backend: q, now: NOW });
     assert.deepEqual(a, { clock: C, households: null, house_of: null, unavailable: ACTIVITY_UNAVAILABLE }, String(fail));
     assert.equal(litAt(a.households?.["hh:ash-house"], a.clock), null, "unknown, not dark");
   }
-  const ok = await readHouseholdActivity({ read: (fn) => fn(spyStore().q), now: NOW });
+  const ok = await readHouseholdActivity({ read: (fn) => fn(spyStore().q), backend: {}, now: NOW });
   assert.equal(ok.unavailable, undefined);
 });
 
 test("housesOf: the registry's houses keyed hh:<slug>; a roll resident already housed is not a second house", () => {
   const houses = housesOf({ households: { "a-house": { residents: ["a", "b"] }, empty: { residents: [] } } }, ["a", "z"]);
   assert.deepEqual([...houses.entries()], [["hh:a-house", ["a", "b"]], ["solo:z", ["z"]]]);
+});
+
+test("SOLO MAPPINGS STAY (Wright, AUTHORITY 2026-10-13T15:44:10.855Z): house_of names every resident, a solo one too — the viewer looks up house_of[who], it infers no solo key", () => {
+  const houses = housesOf({ households: { "a-house": { residents: ["a", "b"] } } }, ["a", "solo-sam"]);
+  const { households, house_of } = foldHouseholds({ houses, found: new Map([["solo-sam", { crossing: 9 }]]) });
+  assert.equal(house_of["solo-sam"], "solo:solo-sam", "a solo resident's mapping is kept, not deduplicated away");
+  assert.equal(households["solo:solo-sam"], 9);
+  assert.deepEqual(Object.keys(house_of).sort(), ["a", "b", "solo-sam"]);
 });

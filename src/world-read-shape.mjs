@@ -155,6 +155,11 @@ export function shapeRead(answer, { shape = "v0", cards = null, within = [], nam
   const out = {};
   for (const [k, v] of Object.entries(answer)) {
     if (k === "records") { out.records = records; out.ground = ground; continue; }
+    // THE LEAN READ CARRIES NO ACTIVITY BLOCK (WLD-29 independent review, c):
+    // the town-wide porch-light map grows with every house, and the lean read's
+    // size is a stated contract. Its absence here is the shape, not an unread
+    // store and not a dark town; the v0 read and the HTTP doors carry it whole.
+    if (k === "activity") continue;
     if (k === "actions" && cards == null) {
       // the walk pace is law, read from the read's dials digest (WLD-29), not
       // from a class record smuggled into `records`

@@ -130,7 +130,7 @@ test("v1: bodies kept, records lean, polygons said, the ground by name, each act
     }
   }
   // WLD-29: the mover's class no longer rides `records`; its pace rides the dials digest, untouched by the shape
-  assert.ok(!("the-town/resident" in lean.records), "the class is not smuggled into records by name");
+  assert.ok(lean.records["the-town/resident"]?.dials, "the mover's class keeps the pace the walk is priced by (the compatibility record, Wright 15:43:33.484Z)");
   assert.ok(Number(lean.dials?.["the-town/resident"]?.pace_km_per_crossing) > 0, "the lean read keeps the pace the walk is priced by, in its dials");
   const groundIds = Object.keys(full.records).filter((id) => !named.has(id) && full.records[id].kind !== "class");
   assert.ok(groundIds.length > 0, "the rig's read carries a ground set");
@@ -212,3 +212,42 @@ test("the lean read's stated size is near what it measures at the rig's standpoi
     } finally { setEnv("WORLD_READ_SHAPE", undefined); }
   }
 });
+
+// ── THE LEAN READ OMITS THE ACTIVITY BLOCK (WLD-29 independent review, c) ────
+// A realistically large town-wide map — 400 houses, 600 handles, solo houses
+// among them — rides the FULL answer; the lean v1/v2 answer carries none of it
+// and stays inside the SIZE_LEAN sentences' own figures (v1 ~15k, v2 ~14k).
+function bigActivity() {
+  const households = {}, house_of = {};
+  for (let i = 0; i < 400; i++) {
+    const key = i % 4 === 0 ? `solo:rig-solo-${i}` : `hh:rig-house-${i}`;
+    households[key] = i % 3 === 0 ? null : 240 + (i % 9);
+    house_of[i % 4 === 0 ? `rig-solo-${i}` : `rig-a-${i}`] = key;
+    if (i % 4 !== 0) house_of[`rig-b-${i}`] = key;
+  }
+  return { clock: 247, window: 1, households, house_of, means: "a long sentence ".repeat(20) };
+}
+const LEAN_BUDGET = { v1: 15_000, v2: 14_000 };   // the SIZE_LEAN sentences' own numbers, not raised
+
+test("LEAN v1/v2 OMIT `activity` and stay inside SIZE_LEAN's figures with a large town map on the full read; v0 keeps it whole; shaping does not mutate", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
+  const full = await bareAt(undefined);
+  const big = bigActivity();
+  const withMap = { ...full, activity: big };
+  const fullChars = JSON.stringify(withMap).length;
+  const mapChars = JSON.stringify(big).length;
+  assert.ok(mapChars > 15_000, `the fixture's map is large enough to matter (${mapChars} chars)`);
+  const snapshot = JSON.stringify(withMap);
+  for (const shape of ["v1", "v2"]) {
+    const lean = shapeRead(withMap, { shape, within: (full.within ?? []).map((m) => m.id), named: [...(full.within ?? []), ...(full.nearby ?? [])].map((m) => m.id) });
+    assert.ok(!("activity" in lean), `${shape}: the lean read carries no activity block`);
+    const chars = JSON.stringify(lean).length;
+    console.log(`    LEAN PARTS · ${shape} ${JSON.stringify(Object.fromEntries(Object.entries(lean).map(([k, v]) => [k, JSON.stringify(v ?? null).length])))}`);
+    console.log(`    LEAN SIZE · ${shape} ${chars} chars (budget ${LEAN_BUDGET[shape]}); full v0 with the map ${fullChars}; the map alone ${mapChars}`);
+    assert.ok(chars <= LEAN_BUDGET[shape], `${shape}: ${chars} chars is past SIZE_LEAN's ${LEAN_BUDGET[shape]}`);
+    assert.ok(lean.records && lean.ground && lean.dials, `${shape}: records, ground and dials are kept`);
+    assert.ok(lean.records["the-town/resident"]?.dials, `${shape}: the compatibility stride record is kept`);
+  }
+  assert.equal(JSON.stringify(withMap), snapshot, "shaping did not touch the full answer");
+  assert.deepEqual(shapeRead(withMap, { shape: "v0" }).activity, big, "v0 carries the activity block whole");
+});
+

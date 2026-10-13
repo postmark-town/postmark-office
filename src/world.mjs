@@ -46,9 +46,9 @@ import { guardedDraftsForKey, guardedLiveChildrenOf, guardedLiveMarks } from "./
 import { WORLD_STAKE_TOOLS, actingAs, callWorldStakeTool, emptyPurseRefusalFor, heldAtOffice, worldPortfolioStakeSlice, markStakeBlock } from "./world-stake.mjs"; // P3 draft, append-shaped
 import { toConfirm } from "./stamps-preview.mjs"; // POS-83: the inline stake's half of the confirmation step
 import { visitorRulesGate } from "./visitor-rules.mjs"; // POS-300: a berth reads the town's rules for visitors before its first say
-import { classNames, classRoster, classDials, departurePace, freeCellIn, RESIDENT_INSTANTIABLE, residentMayInstantiate } from "./world-classes.mjs";
-import { dialsDigestOf } from "./read-digests.mjs";
-import { readHouseholdActivity } from "./household-activity.mjs"; // which classes exist — read from the record, never held
+import { classNames, classRoster, classDials, departurePace, freeCellIn, RESIDENT_INSTANTIABLE, residentMayInstantiate, STRIDE_MARK_ID } from "./world-classes.mjs"; // which classes exist — read from the record, never held
+import { dialsDigestOf } from "./read-digests.mjs"; // WLD-29: every dial a read carries
+import { readHouseholdActivity } from "./household-activity.mjs"; // WLD-29: which houses are lit
 import { HOLD_TOOLS, callHoldTool } from "./world-hold.mjs"; // the object primitive: who holds what
 import { createVoices, EARSHOT_M, HEAR_MAX, HEARING_WINDOW, RECORD_KEPT_AT } from "./voices.mjs";
 import { createHearingWindow } from "./hearing-window.mjs"; // earshot: speech at a position (the party line)
@@ -2051,11 +2051,14 @@ export async function markRecords(ids = [], w = null) {
   let byId = _byIds.get(w);
   if (!byId) _byIds.set(w, byId = new Map((w?.marks ?? []).map((m) => [m.id, m])));
   const out = {};
-  // THE MOVER'S CLASS NO LONGER RIDES HERE BY NAME (WLD-29). From 2026-09-13
-  // `the-town/resident` was added to every read's records so the viewer could
-  // price a walk; the read now carries every dial in its own digest
-  // (`dials`, read-digests.mjs), and `records` is what the answer names.
-  for (const id of [...ids, ...(await groundMarkIds(w))]) {
+  // THE MOVER'S CLASS STILL RIDES HERE, BY NAME — ONE COMPATIBILITY EXCEPTION
+  // (Wright, AUTHORITY 2026-10-13T15:43:33.484Z). The read carries every dial in
+  // its own digest (`dials`, read-digests.mjs), but the site's pinned viewer
+  // still prices a walk from `records["the-town/resident"].dials` (09-13: the
+  // "?" chip and the 15 km ETA), so the class keeps riding beside the digest.
+  // Remove it in a later follow-up ONLY once the site's World pin holds #197,
+  // the viewer that reads the digest. Not the other classes; not the fold.
+  for (const id of [...ids, ...(await groundMarkIds(w)), STRIDE_MARK_ID]) {
     if (id == null || out[id]) continue;
     const mark = byId.get(id);
     if (mark) out[id] = mark;
