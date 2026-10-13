@@ -1192,13 +1192,10 @@ export async function callHoldTool(name, args = {}, key = null) {
     refuseGiveOfUnheld({ thing: args.thing, to: args.to ?? null, actor, holder: preHolder });
     const face = faceOf(preHolder, args.to ?? null);
     const reached = await refuseOutOfReach({ thing: args.thing, to: args.to ?? null, actor, act: face, holder: preHolder });
-    // The thing's own mark, read once: `null` when canon does not hold it,
-    // `undefined` when canon could not be read (worldMarkById § the count).
-    let m;
-    try {
-      const got = await (await import("./world.mjs")).worldMarkById(String(args.thing));
-      m = got.mark ?? (got.canon_marks > 0 ? null : undefined);
-    } catch { m = undefined; }
+    // The thing's own mark, read once; null when canon does not hold it or
+    // could not be read — either way its class cannot be told.
+    let m = null;
+    try { m = (await (await import("./world.mjs")).worldMarkById(String(args.thing))).mark ?? null; } catch { m = null; }
     // A FIXED CHEST IS NOT CARRIED (WLD-27): a bowl stands where it was set.
     if (face === "take" && m?.class === "chest" && m.portable === false)
       throw bounce(409, `${args.thing} is fixed where it stands`, "a chest declared portable: false (a bowl) is not carried — take from it instead: world { do: \"take\", args: { from: \"" + args.thing + "\" } }. Nothing was recorded.");
@@ -1206,8 +1203,8 @@ export async function callHoldTool(name, args = {}, key = null) {
     // not given, taken or dropped until it is returned. The thing's class is
     // read here; whether that class is taken is asked inside the hold turn, of
     // the law published at that moment (declareHoldingFlipped § classGuard).
-    const { wholeThingTakenRefusal, classViewOf } = await import("./world-units.mjs");
-    const classGuard = () => wholeThingTakenRefusal(m, classViewOf(lawSnapshot()), String(args.thing));
+    const { takenClassRefusal, markClassFor, classViewOf } = await import("./world-units.mjs");
+    const classGuard = () => takenClassRefusal(markClassFor(m), classViewOf(lawSnapshot()), String(args.thing));
 
     // The hold lane is flipped here — the door refused above if it was not —
     // so there is one pen: the holding act, awaited. (The unflipped pen, which

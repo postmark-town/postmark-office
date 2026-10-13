@@ -19,6 +19,7 @@ after(() => resetLawSnapshot());
 
 const LABELS = [{ label: "test-comets", name: "Test Comets", creator: "sbx-ana" }];
 const LAW = () => ({
+  "postmark-node": { dials: {} },
   mark: { extends: "postmark-node", dials: {} },
   thing: { extends: "mark", dials: { carry_cap: 24 } },
   consumable: { extends: "thing", dials: {} },
@@ -180,28 +181,83 @@ test("THE OTHER GATES FIRST: a closed chest and a thing you do not hold keep the
   assert.match(unheld.e.defect, /you are not holding/);
 });
 
-test("HELPER-LEVEL (no door): what the whole-thing hook answers when the law or the thing's class cannot be read", async () => {
-  const { wholeThingTakenRefusal } = await import("../src/world-units.mjs");
+const unknownClass = (out) => {
+  assert.equal(out.r, undefined, `admitted: ${JSON.stringify(out.r)}`);
+  assert.equal(out.e.code, 503, `${out.e.code} ${out.e.defect}`);
+  assert.equal(out.e.reason, "taken-class-unknown");
+  assert.match(out.e.defect, /can't tell whether .* is of a taken class right now/);
+  assert.match(out.e.hint, /Nothing was recorded — try again/);
+};
+
+// Bevel's first review, R1 (direct route; credited): a thing canon does not hold
+// is not a `thing` by default when it comes out of a chest.
+test("R1 · A WHOLE THING CANON DOES NOT HOLD, OUT OF A CHEST: refused by name while candy is taken; moves on an ordinary day", async () => {
+  const UNKNOWN = "sbx-ana/no-canon-candy";
+  const mk = () => world({ marks: { [CHEST]: { id: CHEST, by: "sbx-ana", class: "chest" } },
+    things: [{ entity: CHEST, target: UNKNOWN, policy: "cascade", born_at: "2026-10-13T00:00:00.000Z" }] });
+  await publish(TAKEN());
+  const w = mk();
+  const before = w.census();
+  unknownClass(await run("thing-from-chest", { thing: UNKNOWN, from: CHEST }, w));
+  assert.equal(w.census(), before, "no holding act for an unclassified thing");
+  await publish(LAW());
+  const ok = await run("thing-from-chest", { thing: UNKNOWN, from: CHEST }, mk());
+  assert.equal(ok.r?.did, "take", JSON.stringify(ok.e ?? ok.r));
+});
+
+// Bevel's first review, R2 (direct route; credited): the selected label is judged,
+// never the chest's aggregate display class.
+test("R2 · A MIXED CHEST: selected candy refuses with the clue, a label the law does not register refuses by name, while taken; both move on an ordinary day", async () => {
+  const mk = () => {
+    const w = world({ marks: { [CHEST]: { id: CHEST, by: "sbx-ana", class: "chest" } } });
+    w.seed(UNIT_ACTION.stock, [{ from: null, to: CHEST, label: "retired-label", n: 1 }], CHEST);
+    w.seed(UNIT_ACTION.stock, [{ from: null, to: CHEST, label: "test-comets", n: 2 }], CHEST);
+    return w;
+  };
+  await publish(TAKEN());
+  const w = mk();
+  const before = w.census();
+  refusedTaken(await run("take", { from: CHEST, label: "test-comets", count: 1 }, w));
+  unknownClass(await run("take", { from: CHEST, label: "retired-label", count: 1 }, w));
+  assert.equal(w.census(), before);
+  await publish(LAW());
+  const day = mk();
+  assert.equal((await run("take", { from: CHEST, label: "test-comets", count: 1 }, day)).r?.count, 1);
+  assert.equal((await run("take", { from: CHEST, label: "retired-label", count: 1 }, day)).r?.count, 1);
+});
+
+test("SELECTED LABEL ON EVERY UNIT ROUTE: holding an unregistered label beside candy does not hide the candy, and the unregistered label is refused by name, while taken", async () => {
+  await publish(TAKEN());
+  const w = world({ marks: { [CHEST]: { id: CHEST, by: "sbx-ana", class: "chest" } } });
+  w.seed(UNIT_ACTION.give, [{ from: null, to: "sbx-cy", label: "retired-label", n: 2 }]);
+  w.seed(UNIT_ACTION.give, [{ from: null, to: "sbx-cy", label: "test-comets", n: 2 }]);
+  const before = w.census();
+  refusedTaken(await run("give", { to: "sbx-dee", label: "test-comets" }, w));
+  refusedTaken(await run("give", { to: CHEST, label: "test-comets" }, w));
+  refusedTaken(await run("drop", { label: "test-comets" }, w));
+  refusedTaken(await run("consume", { label: "test-comets" }, w));
+  unknownClass(await run("give", { to: "sbx-dee", label: "retired-label" }, w));
+  unknownClass(await run("drop", { label: "retired-label" }, w));
+  assert.equal(w.census(), before);
+});
+
+test("HELPER-LEVEL (no door): the one taken question — inert while nothing is taken; unknown, a class the law lacks, or a missing ancestor refused by name while something is", async () => {
+  const { takenClassRefusal, markClassFor } = await import("../src/world-units.mjs");
+  assert.deepEqual([markClassFor({ class: "candy" }), markClassFor({}), markClassFor(null), markClassFor(undefined)], ["candy", null, undefined, undefined]);
   const floor = classViewOf(null);
   assert.equal(floor.readable, false);
-  // no law loaded: the root thing and a thing canon does not hold move as before; anything else is not guessed
-  assert.equal(wholeThingTakenRefusal({ class: null }, floor, "x/pebble"), null);
-  assert.equal(wholeThingTakenRefusal({ class: "thing" }, floor, "x/toaster"), null);
-  assert.equal(wholeThingTakenRefusal(null, floor, "x/draft"), null);
-  for (const mark of [{ class: "candy" }, { class: "chest" }, undefined])
-    assert.equal(wholeThingTakenRefusal(mark, floor, "x/y")?.code, 503, JSON.stringify(mark));
-  // law loaded, nothing taken: a class the record cannot show moves
-  await publish(LAW());
-  const now = classViewOf(lawSnapshot());
-  assert.equal(now.takenAny(), false);
-  assert.equal(wholeThingTakenRefusal(undefined, now, "x/y"), null);
-  assert.equal(wholeThingTakenRefusal(null, now, "x/y"), null);
-  // law loaded, candy taken: an unreadable class is not moved; a known toaster is
-  await publish(TAKEN());
-  const t = classViewOf(lawSnapshot());
-  assert.equal(t.takenAny(), true);
-  assert.equal(wholeThingTakenRefusal(undefined, t, "x/y")?.code, 503);
-  assert.equal(wholeThingTakenRefusal(null, t, "x/y")?.code, 409);
-  assert.equal(wholeThingTakenRefusal({ class: "thing" }, t, "x/toaster"), null);
-  assert.equal(wholeThingTakenRefusal({ class: "candy" }, t, "x/bar")?.code, 423);
+  for (const k of ["candy", "ghost", null, undefined]) assert.equal(takenClassRefusal(k, floor, "x/y"), null, `no law loaded: inert (${k})`);
+  const law = { ...LAW(), wobbly: { extends: "nowhere", dials: {} }, ghostly: { extends: "thing", dials: {} } };
+  await publish(law);
+  const day = classViewOf(lawSnapshot());
+  assert.equal(day.takenAny(), false);
+  for (const k of ["candy", "ghost", "wobbly", null, undefined]) assert.equal(takenClassRefusal(k, day, "x/y"), null, `nothing taken: inert (${k})`);
+  law.candy.dials = { taken: true, clue: CLUE };
+  await publish(law);
+  const heist = classViewOf(lawSnapshot());
+  assert.equal(heist.takenAny(), true);
+  assert.equal(takenClassRefusal("candy", heist, "x/bar")?.code, 423);
+  for (const [k, why] of [[undefined, "no mark / canon unread / unregistered label"], ["ghost", "a class the law does not hold"], ["wobbly", "an ancestor the law does not hold"]])
+    assert.equal(takenClassRefusal(k, heist, "x/y")?.reason, "taken-class-unknown", why);
+  for (const k of [null, "thing", "chest", "ghostly"]) assert.equal(takenClassRefusal(k, heist, "x/y"), null, `proven not candy: ${k}`);
 });

@@ -31,6 +31,7 @@ const put = (path, text) => { const full = join(repo, path); mkdirSync(dirname(f
 const HOME = { x: 1000, y: 1000 };
 const thing = (slug, klass, over = {}) => ({ id: `cy/${slug}`, kind: "sited", by: "cy", tier: "home", household: "cy",
   at: HOME, extent: { w: 1, h: 1 }, body: `a synthetic ${klass ?? "unclassed thing"}`, ...(klass ? { class: klass } : {}), ...over });
+const GHOST = "cy/test-ghost", WOBBLY = "cy/test-wobbly";
 const COMET = "cy/test-comet-bar", LOLLY = "cy/test-lolly", TOASTER = "cy/test-toaster", TIN = "cy/test-tin", PLAIN = "cy/test-pebble";
 const PUBLISHED = [
   { id: "the-town/let-there-be-light", by: "the-town", kind: "sited", tier: "constitution", at: { x: 0, y: 0 }, extent: { w: 20000, h: 20000 }, body: "the world frame" },
@@ -42,6 +43,8 @@ const PUBLISHED = [
   thing("test-toaster", "thing"),
   thing("test-tin", "chest", { portable: true, capacity: 10 }),
   thing("test-pebble", null),                 // unclassed
+  thing("test-ghost", "ghost"),               // a class the law does not hold
+  thing("test-wobbly", "wobbly"),             // a class whose ancestor the law does not hold
 ];
 put("tools/world-build.mjs", `export function assembleWorld({ worldState, skeleton }) { return { ...worldState, skeleton }; }\n`);
 put("tools/where-is.mjs", `
@@ -115,6 +118,20 @@ const fresh = async () => {
   pen = installActsPen({ households: REGISTRY_ROWS.households });
   claimsPen.__setPoolForTest(pen);
   unread(); unread = await readHoldsFrom(pen);
+  // Bevel's fixture adapter (first review; credited): the stub has no reader for
+  // the unit rows (world2-guards § pgHoldingRows), which chest dispatch reads.
+  // This answers exactly that statement — the class filter, at/id order — from
+  // the same pen rows; every other query keeps the stub's own answer.
+  const query = pen.query.bind(pen);
+  pen.query = async (sql, params = []) => {
+    const text = String(sql).replace(/\s+/g, " ").trim();
+    if (/^SELECT id, at, crossing, actor, action, object, at_anchor, at_dx, at_dy, witnesses, class, payload, effect, household FROM acts WHERE class = \$1 ORDER BY acts\.at, acts\.id$/i.test(text)) {
+      const rows = pen.rows().filter((r) => r.class === params[0])
+        .sort((a, b) => Number(new Date(a.at)) - Number(new Date(b.at)) || Number(a.id) - Number(b.id));
+      return { rows, rowCount: rows.length };
+    }
+    return query(sql, params);
+  };
   return pen;
 };
 
@@ -129,6 +146,7 @@ const LAW = () => ({
   candy: { extends: "consumable", dials: {}, labels: LABELS },
   lollipop: { extends: "candy", dials: {} },
   chest: { extends: "thing", dials: { capacity: 30, capacity_min: 1, capacity_max: 120, portable: true, welcome: "open" } },
+  wobbly: { extends: "nowhere", dials: {} },
 });
 let blessing = 0;
 /** Publish `classes` as the newest blessing's law, through reloadLawSnapshot. */
@@ -302,7 +320,14 @@ test("QUEUED, THEN RETURNED: a give that came in while candy was taken, waiting 
 
 // ── 3 · what cannot be read is not proof of untaken ─────────────────────────
 
-test("A THING CANON DOES NOT HOLD: moves while nothing is taken; refused by name while a class is taken", async () => {
+function unknownClass(out) {
+  assert.equal(out.r, undefined, `admitted: ${JSON.stringify(out.r)}`);
+  assert.equal(out.e.code, 503, `${out.e.code} ${out.e.defect}`);
+  assert.equal(out.e.reason, "taken-class-unknown");
+  assert.match(out.e.defect, /can't tell whether .* is of a taken class right now/);
+}
+
+test("A THING CANON DOES NOT HOLD: moves on an ordinary day; refused by name, retryably, while a class is taken", async () => {
   await fresh();
   await publish(LAW());
   const draft = "cy/test-unpublished-draft";
@@ -310,8 +335,61 @@ test("A THING CANON DOES NOT HOLD: moves while nothing is taken; refused by name
   assert.equal(t.r?.did, "take", JSON.stringify(t.e ?? t.r));
   await publish(taken());
   const before = await census([draft]);
-  const d = await door({ thing: draft, handle: "cy" }, CY);
-  assert.equal(d.e?.code, 409, JSON.stringify(d.e ?? d.r));
-  assert.match(d.e.defect, /class is not on the record, and a class is taken right now/);
+  unknownClass(await door({ thing: draft, handle: "cy" }, CY));
   assert.equal(await census([draft]), before);
+});
+
+test("A CLASS THE LAW LACKS, AN ANCESTOR IT LACKS: both move on an ordinary day; both refused by name while candy is taken", async () => {
+  await fresh();
+  await publish(LAW());
+  for (const id of [GHOST, WOBBLY]) {
+    const t = await door({ thing: id, handle: "cy" }, CY);
+    assert.equal(t.r?.did, "take", `${id}: ${JSON.stringify(t.e ?? t.r)}`);
+  }
+  await publish(taken());
+  const before = await census([GHOST, WOBBLY]);
+  for (const id of [GHOST, WOBBLY]) unknownClass(await door({ thing: id, to: "dee", handle: "cy" }, CY));
+  assert.equal(await census([GHOST, WOBBLY]), before);
+});
+
+// Bevel's first review, R1 through the public dispatcher (credited): a thing
+// held by a chest is routed to thing-from-chest, which must not read a missing
+// canon class as `thing`.
+test("R1 · THE PUBLIC DOOR, A CHEST'S UNCANONED THING: refused by name while candy is taken, the chest keeps it; moves on an ordinary day", async () => {
+  const seedInTin = (id) => {
+    const entry = hold.holdingEntry({ did: "give", thing: id, holder: TIN, previous_holder: "cy", made_by: "cy", declared_by: "cy", policy: "cascade", at: new Date().toISOString() },
+      { crossing: 1, at: {}, witnesses: [], cls: "holding", household: "cyhouse" });
+    pen.seedAct({ ...entry, class: entry.cls, at: new Date() });
+  };
+  await fresh();
+  await publish(taken());
+  const unknown = "cy/not-on-canon";
+  seedInTin(unknown);
+  assert.equal(await holderOf(unknown), TIN, "the fixture puts it in the tin");
+  const before = await census([unknown]);
+  unknownClass(await door({ thing: unknown, handle: "cy" }, CY));
+  assert.equal(await census([unknown]), before);
+  assert.equal(await holderOf(unknown), TIN);
+  await publish(LAW());
+  const ok = await door({ thing: unknown, handle: "cy" }, CY);
+  assert.equal(ok.r?.did, "take", JSON.stringify(ok.e ?? ok.r));
+  assert.equal(await holderOf(unknown), "cy");
+});
+
+// Bevel's first review, R2 through the public dispatcher (credited).
+test("R2 · THE PUBLIC DOOR, A MIXED CHEST: the selected candy refuses with the clue while taken, an unregistered label refuses by name; both move on an ordinary day", async () => {
+  await fresh();
+  for (const label of ["retired-label", "test-comets"])
+    pen.seedAct({ class: "holding", actor: "the-town", action: "units:stock", object: TIN, at: new Date(),
+      payload: { units: true, moves: [{ from: null, to: TIN, label, n: 2 }] } });
+  await publish(taken());
+  const before = await census([TIN]);
+  refusedTaken(await door({ from: TIN, label: "test-comets", count: 1, handle: "cy" }, CY), "candy");
+  unknownClass(await door({ from: TIN, label: "retired-label", count: 1, handle: "cy" }, CY));
+  assert.equal(await census([TIN]), before);
+  await publish(LAW());
+  for (const label of ["test-comets", "retired-label"]) {
+    const t = await door({ from: TIN, label, count: 1, handle: "cy" }, CY);
+    assert.equal(t.r?.count, 1, `${label}: ${JSON.stringify(t.e ?? t.r)}`);
+  }
 });
