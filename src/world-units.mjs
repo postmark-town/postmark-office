@@ -252,9 +252,13 @@ const refuseIfTakenNow = (deps, klassOf, what) => { const now = classesNow(deps)
  *                       class that cannot be told, or a chain with a class the
  *                       law does not hold, is refused by name and retryable —
  *                       unknown is never untaken while a heist runs
- *   no law loaded       inert here; whether a taken flag exists cannot be read,
- *                       and the unit door's own "class layer could not be
- *                       read" refusal (which predates WLD-7) is unchanged
+ *   no law loaded       inert here — THE COLD-START WINDOW, accepted and
+ *                       disclosed (Wright 10:36:28.315Z): before a process's
+ *                       first law snapshot nothing can be known taken, and a
+ *                       published snapshot is never replaced by none, so this
+ *                       is only that window. No second flag stands in for it.
+ *                       The unit door's own "class layer could not be read"
+ *                       refusal (which predates WLD-7) is unchanged
  */
 export function takenClassRefusal(klass, view, what) {
   if (!view.readable || !view.takenAny()) return null;
@@ -340,8 +344,12 @@ export async function callUnits(route, args, key, actor, deps) {
       return holdTurn(async () => {
         const { units } = await deps.readRows();
         const fold = foldUnits(units);
-        const plan = planConsume({ fold, actor, label: args.label ?? null, classOfLabel: classOfLabelIn(view), extendsOf: view.extendsOf });
-        refuseIfTakenNow(deps, (now) => labelClassIn(now)(plan.label), plan.label);
+        // the selection first (what you hold, which label), then the taken
+        // question, THEN whether it is consumable: while a class is taken an
+        // unregistered label is not proven non-consumable (Wright 10:36:28.315Z)
+        const edge = selectLabel(edgesOf(fold, actor), args.label ?? null, { where: "your hands", verb: "consume" });
+        refuseIfTakenNow(deps, (now) => labelClassIn(now)(edge.label), edge.label);
+        const plan = planConsume({ fold, actor, label: edge.label, classOfLabel: classOfLabelIn(view), extendsOf: view.extendsOf });
         const w = await writeUnits(deps, key, actor, { ...plan, payload: { label: plan.label, returns: [], returns_note: plan.returns_note } });
         const after = foldUnits([...units, { class: "holding", action: plan.action, payload: { moves: plan.moves } }]);
         return { did: "consume", units: true, label: plan.label, count: 1, returns: [], returns_note: plan.returns_note, ...w, holds: holdsBlock(after, actor, view) };
@@ -482,6 +490,8 @@ async function lateReturns(id, deps) {
 async function markExit(route, args, key, actor, deps, view, cap) {
   const id = String(args.thing);
   const mark = await deps.markById(id);
+  // no mark to read is an unknown class, not a proven non-unit, while a class is taken
+  if (!mark) refuseIfTakenNow(deps, () => undefined, id);
   if (!isDroppedUnitMark(mark)) throw bounce(422, `${id} is not a unit that was set down`, "only a dropped unit's mark goes back into a holding or is consumed where it stands. Nothing was recorded.");
   const label = String(mark.label);
   if (route === "consume-in-place") {
@@ -677,13 +687,15 @@ async function thingIntoChest(args, key, actor, deps, view) {
   if (thing === chestId) throw bounce(422, "a chest cannot hold itself", "Nothing was recorded.");
   const { capacity } = await chestOrThrow(deps, chestId, view);
   const mark = await deps.markById(thing);
-  if (!mark) throw bounce(409, `${thing} does not stand on the world`, "only a published thing goes into a chest; a private draft changes no hands. Nothing was recorded.");
   await deps.reachTake(chestId, actor);
   return holdTurn(async () => {
     const { units, attachments } = await deps.readRows();
     const holder = liveHolder(attachments, thing);
     if (holder !== actor) throw bounce(409, `you are not holding ${thing} — ${holder ?? "nobody"} is`, "a thing goes into a chest from your hands. Nothing was recorded.");
+    // yours first, then the taken question, THEN whether canon holds it: while a
+    // class is taken a thing canon does not show is an unknown class (Wright 10:36:28.315Z)
     refuseIfTakenNow(deps, () => markClassFor(mark), thing);
+    if (!mark) throw bounce(409, `${thing} does not stand on the world`, "only a published thing goes into a chest; a private draft changes no hands. Nothing was recorded.");
     // NO CHEST INSIDE ITSELF, however deep: walk the chest's own holders.
     for (let h = liveHolder(attachments, chestId), hops = 0; h && hops < 64; h = liveHolder(attachments, h), hops++)
       if (h === thing) throw bounce(422, `${chestId} is inside ${thing}`, "a chest cannot be put inside what it is carried in. Nothing was recorded.");

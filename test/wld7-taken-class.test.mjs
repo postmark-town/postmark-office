@@ -393,3 +393,58 @@ test("R2 · THE PUBLIC DOOR, A MIXED CHEST: the selected candy refuses with the 
     assert.equal(t.r?.count, 1, `${label}: ${JSON.stringify(t.e ?? t.r)}`);
   }
 });
+
+// ── Wright 10:36:28.315Z, through the public door (Bevel's second-review probes,
+// credited, with the ordinary-day return added) ──────────────────────────────
+
+test("ORDER · THE PUBLIC DOOR, consume of an unregistered held label: 422 ordinary, the named 503 while taken, 422 once returned — nothing written", async () => {
+  await fresh();
+  await publish(LAW());
+  pen.seedAct({ class: "holding", actor: "the-town", action: "units:stock", object: "cy", at: new Date(),
+    payload: { units: true, moves: [{ from: null, to: "cy", label: "retired-label", n: 1 }] } });
+  const args = { act: "consume", label: "retired-label", handle: "cy" };
+  assert.equal((await door(args, CY)).e?.code, 422, "ordinary validation remains");
+  const before = await census([]);
+  await publish(taken());
+  unknownClass(await door(args, CY));
+  assert.equal(await census([]), before, "no effect on refusal");
+  await publish(LAW());
+  assert.equal((await door(args, CY)).e?.code, 422);
+  assert.equal(await census([]), before);
+});
+
+test("ORDER · THE PUBLIC DOOR, a held thing canon does not show into a chest: 409 ordinary, the named 503 while taken, 409 once returned — the same object stays in hand", async () => {
+  await fresh();
+  await publish(LAW());
+  const id = "cy/missing-canon-held-thing";
+  assert.equal((await door({ thing: id, handle: "cy" }, CY)).r?.did, "take");
+  const args = { thing: id, to: TIN, handle: "cy" };
+  const ordinary = await door(args, CY);
+  assert.equal(ordinary.e?.code, 409, "ordinary unpublished-thing validation remains");
+  assert.match(ordinary.e.defect, /does not stand on the world/);
+  const before = await census([id]);
+  await publish(taken());
+  unknownClass(await door(args, CY));
+  assert.equal(await census([id]), before, "the original holder and record remain");
+  await publish(LAW());
+  assert.match((await door(args, CY)).e?.defect ?? "", /does not stand on the world/);
+  assert.equal(await holderOf(id), "cy");
+});
+
+// ── THE COLD-START WINDOW (Wright 10:36:28.315Z: accepted, disclosed) ────────
+
+test("COLD START · before this process's first law snapshot nothing can be known taken: the whole-object guard is inert and candy moves; the unit door keeps its own pre-WLD-7 'class layer could not be read' 503", async () => {
+  await fresh();
+  resetLawSnapshot();
+  assert.equal(lawSnapshot(), null, "no snapshot has been published in this process");
+  const t = await door({ thing: COMET, handle: "cy" }, CY);
+  assert.equal(t.r?.did, "take", `the bootstrap window admits: ${JSON.stringify(t.e ?? t.r)}`);
+  const d = await door({ thing: COMET, handle: "cy" }, CY);
+  assert.equal(d.r?.did, "drop", JSON.stringify(d.e ?? d.r));
+  pen.seedAct({ class: "holding", actor: "the-town", action: "units:stock", object: "cy", at: new Date(),
+    payload: { units: true, moves: [{ from: null, to: "cy", label: "test-comets", n: 1 }] } });
+  const u = await door({ act: "consume", handle: "cy" }, CY);
+  assert.equal(u.e?.code, 503);
+  assert.match(u.e.defect, /class layer could not be read/);
+  assert.equal(u.e.reason, undefined, "not the taken-class refusal: nothing is known taken");
+});

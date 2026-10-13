@@ -261,3 +261,80 @@ test("HELPER-LEVEL (no door): the one taken question — inert while nothing is 
     assert.equal(takenClassRefusal(k, heist, "x/y")?.reason, "taken-class-unknown", why);
   for (const k of [null, "thing", "chest", "ghostly"]) assert.equal(takenClassRefusal(k, heist, "x/y"), null, `proven not candy: ${k}`);
 });
+
+// ── Wright 10:36:28.315Z: the named refusal supersedes a legacy 422/409 ONLY when
+// the cause is an unknown class while a class is taken. Bevel's second-review
+// probes (credited), with the ordinary-day return added.
+
+test("ORDER · consume of an unregistered held label: 422 on an ordinary day, the named 503 while candy is taken, 422 again once returned — nothing written", async () => {
+  const w = world();
+  w.seed(UNIT_ACTION.give, [{ from: null, to: "sbx-cy", label: "retired-label", n: 1 }]);
+  await publish(LAW());
+  const ordinary = await run("consume", { label: "retired-label" }, w);
+  assert.equal(ordinary.e?.code, 422, "ordinary non-consumable validation remains");
+  assert.match(ordinary.e.defect, /retired-label is not a consumable/);
+  const before = w.census();
+  await publish(TAKEN());
+  unknownClass(await run("consume", { label: "retired-label" }, w));
+  assert.equal(w.census(), before);
+  await publish(LAW());
+  assert.equal((await run("consume", { label: "retired-label" }, w)).e?.code, 422, "returned: the original answer");
+  assert.equal(w.census(), before);
+});
+
+test("ORDER · a held thing canon does not show, into a chest: 409 on an ordinary day, the named 503 while taken, 409 again once returned — it stays in hand", async () => {
+  const id = "sbx-cy/missing-canon";
+  const w = world({ marks: { [CHEST]: { id: CHEST, by: "sbx-ana", class: "chest" } },
+    things: [{ entity: "sbx-cy", target: id, policy: "cascade", born_at: "2026-10-13T00:00:00.000Z" }] });
+  await publish(LAW());
+  const ordinary = await run("thing-into-chest", { thing: id, to: CHEST }, w);
+  assert.equal(ordinary.e?.code, 409, "ordinary unpublished-thing validation remains");
+  assert.match(ordinary.e.defect, /does not stand on the world/);
+  const before = w.census();
+  await publish(TAKEN());
+  unknownClass(await run("thing-into-chest", { thing: id, to: CHEST }, w));
+  assert.equal(w.census(), before);
+  await publish(LAW());
+  assert.match((await run("thing-into-chest", { thing: id, to: CHEST }, w)).e?.defect ?? "", /does not stand on the world/);
+});
+
+test("ORDER · consume-in-place of a mark canon does not show: 422 on an ordinary day, the named 503 while taken", async () => {
+  const w = world();
+  await publish(LAW());
+  const ordinary = await run("consume-in-place", { thing: "sbx-bo/test-comets-404", act: "consume" }, w);
+  assert.equal(ordinary.e?.code, 422);
+  assert.match(ordinary.e.defect, /is not a unit that was set down/);
+  await publish(TAKEN());
+  const before = w.census();
+  unknownClass(await run("consume-in-place", { thing: "sbx-bo/test-comets-404", act: "consume" }, w));
+  assert.equal(w.census(), before);
+});
+
+test("ORDER · the genuine answers keep their own codes while candy is taken: not holding it, nothing to consume, a label you do not hold, a toaster into a full chest, a known non-unit consumed in place", async () => {
+  const TOASTER = "sbx-cy/test-toaster", ELSE = "sbx-dee/test-lamp";
+  const w = world({
+    marks: { [CHEST]: { id: CHEST, by: "sbx-ana", class: "chest", capacity: 1 }, [TOASTER]: { id: TOASTER, by: "sbx-cy", class: "thing" },
+      [ELSE]: { id: ELSE, by: "sbx-dee" }, "sbx-ana/test-lamp": { id: "sbx-ana/test-lamp", by: "sbx-ana", class: "thing" } },
+    things: [{ entity: "sbx-cy", target: TOASTER, policy: "cascade", born_at: "2026-10-13T00:00:00.000Z" },
+      { entity: "sbx-dee", target: ELSE, policy: "cascade", born_at: "2026-10-13T00:00:00.000Z" },
+      { entity: "sbx-dee", target: "sbx-dee/uncanoned", policy: "cascade", born_at: "2026-10-13T00:00:00.000Z" }],
+  });
+  w.seed(UNIT_ACTION.stock, [{ from: null, to: CHEST, label: "test-comets", n: 1 }], CHEST);
+  await publish(TAKEN());
+  const before = w.census();
+  const notHolding = await run("thing-into-chest", { thing: ELSE, to: CHEST }, w);
+  assert.equal(notHolding.e?.code, 409); assert.match(notHolding.e.defect, /you are not holding/);
+  // ownership before classification: dee's uncanoned thing is not yours, whatever its class
+  const notYours = await run("thing-into-chest", { thing: "sbx-dee/uncanoned", to: CHEST }, w);
+  assert.equal(notYours.e?.code, 409); assert.match(notYours.e.defect, /you are not holding/);
+  const nothing = await run("consume", {}, w);
+  assert.equal(nothing.e?.code, 409); assert.match(nothing.e.defect, /nothing to consume/);
+  const notHeld = await run("consume", { label: "retired-label" }, w);
+  assert.equal(notHeld.e?.code, 409); assert.match(notHeld.e.defect, /no retired-label/);
+  const full = await run("thing-into-chest", { thing: TOASTER, to: CHEST }, w);
+  assert.equal(full.e?.code, 409); assert.match(full.e.defect, /has no room/);
+  const notUnit = await run("consume-in-place", { thing: "sbx-ana/test-lamp", act: "consume" }, w);
+  assert.equal(notUnit.e?.code, 422); assert.match(notUnit.e.defect, /is not a unit that was set down/);
+  for (const e of [notHolding.e, notYours.e, nothing.e, notHeld.e, full.e, notUnit.e]) assert.equal(e.reason, undefined, "no classification reason on a genuine answer");
+  assert.equal(w.census(), before);
+});
