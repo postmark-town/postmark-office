@@ -129,7 +129,7 @@ test("v1: bodies kept, records lean, polygons said, the ground by name, each act
       else assert.ok(!("points" in rec), `${id} (not within) is said, not drawn`);
     }
   }
-  // WLD-29: the mover's class no longer rides `records`; its pace rides the dials digest, untouched by the shape
+  // WLD-29: the mover's class rides lean `records` as the compatibility record (Wright 15:43:33.484Z) AND its pace rides the dials digest, untouched by the shape
   assert.ok(lean.records["the-town/resident"]?.dials, "the mover's class keeps the pace the walk is priced by (the compatibility record, Wright 15:43:33.484Z)");
   assert.ok(Number(lean.dials?.["the-town/resident"]?.pace_km_per_crossing) > 0, "the lean read keeps the pace the walk is priced by, in its dials");
   const groundIds = Object.keys(full.records).filter((id) => !named.has(id) && full.records[id].kind !== "class");
@@ -214,7 +214,7 @@ test("the lean read's stated size is near what it measures at the rig's standpoi
 });
 
 // ── THE LEAN READ OMITS THE ACTIVITY BLOCK (WLD-29 independent review, c) ────
-// A realistically large town-wide map — 400 houses, 600 handles, solo houses
+// A realistically large town-wide map — 400 houses, 700 handle mappings, solo houses
 // among them — rides the FULL answer; the lean v1/v2 answer carries none of it
 // and stays under the ceiling the SIZE_LEAN sentences themselves state. The
 // budget is Wright's option B (AUTHORITY 2026-10-13T16:54:46.023Z): the dials

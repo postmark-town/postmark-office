@@ -589,3 +589,56 @@ test("THE STORE DOOR'S ACTIVITY: current (no crossing asked) folds the house by 
   assert.match(un.body.activity.unavailable, /could not be read from the store/);
   assert.equal(un.body.activity.clock, currentCrossing());
 });
+
+// ── ONE STORE THROUGH THE REAL DISPATCHER (WLD-29 review 3887dfe1) ───────────
+// world2Serve('/world2/apex') used to hand its OWN pool to the apex as if a
+// caller had injected it, so the office store's activity was cached twice:
+// once under the pool (this door) and once under the store URL (1.0's apex and
+// eyes). These drive the actual dispatcher, the office pool set the way pool()
+// would have made it, beside a compatibility-path read of the same store.
+async function viaDispatcher(fn) {
+  const serve = await import("../src/world2-serve.mjs");
+  const { resetActivityCache } = await import("../src/household-activity.mjs");
+  const saved = ["WORLD2_PG", "WORLD2_PG_URL"].map((k) => [k, process.env[k]]);
+  Object.assign(process.env, { WORLD2_PG: "1", WORLD2_PG_URL: "postgres://wld29-dispatch/none" });
+  resetActivityCache();
+  try { return await fn(serve); }
+  finally { serve.__setPoolForTest(null); resetActivityCache(); for (const [k, v] of saved) { if (v == null) delete process.env[k]; else process.env[k] = v; } }
+}
+const AT = () => new URLSearchParams({ x: String(REC_STANDPOINT.x), y: String(REC_STANDPOINT.y) });
+
+test("THE REAL DISPATCHER, THE OFFICE'S OWN STORE: /world2/apex and a compatibility read of the same store share ONE activity batch and one answer — interleaved and concurrent", async (t) => {
+  if (!RECORDS_ENGINE) return t.skip(`no world engine: ${RECORDS_WHY}`);
+  const { readHouseholdActivity, resetActivityCache } = await import("../src/household-activity.mjs");
+  await viaDispatcher(async (serve) => {
+    const office = activityPool();
+    serve.__setPoolForTest(office);
+    const compat = await readHouseholdActivity({ read: (fn) => fn(office) });   // 1.0's shape: the office store, no injection
+    assert.equal(office.lastActive(), 1);
+    const r = await serve.world2Serve("/world2/apex", AT());
+    assert.equal(r.code, 200, JSON.stringify(r.body).slice(0, 200));
+    assert.equal(office.lastActive(), 1, "the dispatcher's own pool is the office store: no second batch");
+    assert.deepEqual(r.body.activity, compat, "one store, one answer");
+    resetActivityCache();
+    const fresh = activityPool();
+    serve.__setPoolForTest(fresh);
+    const [a, b] = await Promise.all([serve.world2Serve("/world2/apex", AT()), readHouseholdActivity({ read: (fn) => fn(fresh) })]);
+    assert.equal(fresh.lastActive(), 1, "concurrent misses across the two doors share one flight");
+    assert.deepEqual(a.body.activity, b);
+  });
+});
+
+test("THE REAL DISPATCHER, INJECTED STORES: store A and store B each read their own, the office's store is not asked, and an injected pool is actually used", async (t) => {
+  if (!RECORDS_ENGINE) return t.skip(`no world engine: ${RECORDS_WHY}`);
+  await viaDispatcher(async (serve) => {
+    const office = activityPool();
+    serve.__setPoolForTest(office);
+    const A = activityPool(), B = activityPool();
+    const ra = await serve.world2Serve("/world2/apex", AT(), { p: A });
+    const rb = await serve.world2Serve("/world2/apex", AT(), { p: B });
+    assert.equal(ra.code, 200); assert.equal(rb.code, 200);
+    assert.deepEqual([A.lastActive(), B.lastActive(), office.lastActive()], [1, 1, 0], "each injected store read its own activity; the office store was not asked");
+    await serve.world2Serve("/world2/apex", AT(), { p: A });
+    assert.equal(A.lastActive(), 1, "store A's own answer is shared within its TTL");
+  });
+});
