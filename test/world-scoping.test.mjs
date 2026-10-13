@@ -247,9 +247,10 @@ test("world_open_your_eyes defaults to telling + compact objects and preserves d
   // world.mjs § `records`). THIS FIXTURE'S WORLD HAS NO REGIONS, so the ground
   // is empty here — which is the arm worth having under the lock: the field is
   // exactly what the answer named, and a world with no floor still answers.
-  // `dials` and `activity` JOINED ON 2026-10-13 (WLD-29), deliberately: the
-  // read's middle — every dial, and which houses are lit — beside the records.
-  assert.deepEqual(Object.keys(narrative), ["stance", "telling", "objects", "records", "dials", "activity"]);
+  // NO `dials` OR `activity` (WLD-29, the pointer model): no town-wide table
+  // rides this read. A house it shows carries `lit`, and an unknown light one
+  // `lit_unknown`; this fixture's radial shows no house, so neither appears.
+  assert.deepEqual(Object.keys(narrative), ["stance", "telling", "objects", "records"]);
   assert.equal(narrative.stance, "spectator", "a coords glance says what it is");
   assert.equal(typeof narrative.telling, "string");
   assert.ok(narrative.objects.length > 0);

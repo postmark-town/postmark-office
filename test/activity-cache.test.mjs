@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { currentCrossing } from "../src/crossings.mjs";
 import { LAST_ACTIVE_SQL } from "../src/last-active.mjs";
 import { rowsFromRegistry } from "../src/registry-rows.mjs";
-import { readHouseholdActivity, resetActivityCache, ACTIVITY_TTL_MS, ACTIVITY_MEANS, ACTIVITY_UNAVAILABLE, ROLL_SQL } from "../src/household-activity.mjs";
+import { readHouseholdActivity, resetActivityCache, ACTIVITY_TTL_MS, LIGHT_MEANS as ACTIVITY_MEANS, ACTIVITY_UNAVAILABLE, ROLL_SQL } from "../src/household-activity.mjs";
 
 const T0 = Date.parse("2026-10-13T12:00:00Z");
 const C = currentCrossing(T0);

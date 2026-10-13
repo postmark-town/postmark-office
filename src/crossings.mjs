@@ -31,6 +31,20 @@ export function currentCrossing(now = Date.now()) {
   return Math.max(0, Math.floor((now - CROSSING_EPOCH_UTC) / CROSSING_MS));
 }
 
+/**
+ * The crossing a world read stands at, from the `crossing` it was asked with
+ * (WLD-29): absent, empty, malformed or negative is the CURRENT crossing; any
+ * other number is its floor, so an explicit `0` is crossing 0, a past one.
+ * ONE rule for both apex doors and every lights read — `Number(null)` and
+ * `Number("")` are 0, so a door that reads the raw number answers a bare read
+ * at crossing 0.
+ */
+export function askedCrossing(raw, now = Date.now()) {
+  if (raw == null || String(raw).trim() === "") return currentCrossing(now);
+  const c = Number(raw);
+  return Number.isFinite(c) && c >= 0 ? Math.floor(c) : currentCrossing(now);
+}
+
 // ── THE NEXT CROSSING, AS A THING A WRITER CAN READ (postmark#2922) ──────────
 //
 // Pica: "show when the next ferry crossing is on the doorstep or send receipt,

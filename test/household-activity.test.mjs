@@ -11,11 +11,11 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { currentCrossing } from "../src/crossings.mjs";
+import { currentCrossing, askedCrossing } from "../src/crossings.mjs";
 import { LAST_ACTIVE_SQL } from "../src/last-active.mjs";
 import { rowsFromRegistry } from "../src/registry-rows.mjs";
 import {
-  householdActivity, readHouseholdActivity, foldHouseholds, housesOf, litAt, isCurrentRead, isEmeritus,
+  householdActivity, readHouseholdActivity, foldHouseholds, housesOf, litAt, isEmeritus,
   ROLL_SQL, ACTIVITY_HISTORICAL, ACTIVITY_UNAVAILABLE, LIT_WINDOW,
 } from "../src/household-activity.mjs";
 
@@ -89,8 +89,8 @@ test("THE FOLD: each house's crossing is the newest over its residents; the roll
   assert.equal(a.clock, C);
   assert.deepEqual(a.households, { "hh:ash-house": C - 1, "hh:birch-house": C - 2, "hh:cedar-house": null, "solo:dune": C });
   assert.deepEqual(a.house_of, { ash: "hh:ash-house", "ash-kin": "hh:ash-house", birch: "hh:birch-house", cedar: "hh:cedar-house", "cedar-elder": "hh:cedar-house", dune: "solo:dune" });
-  assert.deepEqual(Object.keys(a).sort(), ["clock", "house_of", "households", "means", "window"].sort(),
-    "metadata only: no instants, no sources, no per-actor history");
+  assert.deepEqual(Object.keys(a).sort(), ["clock", "house_of", "households"].sort(),
+    "the office's working state only: no instants, no sources, no per-actor history (and none of it leaves the office: § what leaves)");
   assert.equal(litAt(a.households["hh:ash-house"], a.clock), true, "an active co-resident lights the house");
   assert.equal(litAt(a.households["hh:birch-house"], a.clock), false);
 });
@@ -119,17 +119,18 @@ test("PRODUCTION'S SEAM: isEmeritus is false for everyone until POS-453 wires it
   assert.equal(litAt(a.households["hh:cedar-house"], a.clock), true, "the retired pin's resident still lights the house in production");
 });
 
-test("A HISTORICAL READ carries no lit state, and says why; a current read is one with no crossing, or today's", async () => {
+test("A HISTORICAL READ carries no lit state, and says why; the read's crossing is askedCrossing's — absent, empty, malformed or negative is today's, an explicit 0 is crossing 0", async () => {
   const { q, asked } = spyStore();
   const h = await householdActivity(q, { current: false, now: NOW });
   assert.deepEqual(h, { clock: null, households: null, house_of: null, historical: true, note: ACTIVITY_HISTORICAL });
   assert.equal(asked.length, 0, "a historical read asks the store nothing — today's activity is not painted onto it");
   assert.match(ACTIVITY_HISTORICAL, /activity isn't kept per crossing/);
-  assert.equal(isCurrentRead(undefined, NOW), true);
-  assert.equal(isCurrentRead("", NOW), true);
-  assert.equal(isCurrentRead(String(C), NOW), true);
-  assert.equal(isCurrentRead(C - 3, NOW), false);
-  assert.equal(isCurrentRead(C + 4, NOW), false);
+  for (const raw of [undefined, null, "", "  ", "soon", -1, "-3", String(C)]) assert.equal(askedCrossing(raw, NOW), C, `${JSON.stringify(raw)} is today's crossing`);
+  assert.equal(askedCrossing(0, NOW), 0, "an explicit 0 is crossing 0 — a past one, never today's");
+  assert.equal(askedCrossing("0", NOW), 0);
+  assert.equal(askedCrossing(C - 3, NOW), C - 3);
+  assert.equal(askedCrossing("12.7", NOW), 12, "the floor of a number asked");
+  assert.equal(askedCrossing(C + 4, NOW), C + 4, "a future crossing is not today's either");
 });
 
 test("AN UNREAD STORE IS NOT A DARK TOWN: a failing read is disclosed, every house unknown, nothing filled from another source", async () => {

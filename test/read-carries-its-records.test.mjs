@@ -100,13 +100,13 @@ test("FALSIFIER 2 — and NOTHING ELSE: every record is named or is ground", asy
     const read = await worldEyes(at);
     const named = new Set(read.objects.map((o) => o.id));
     for (const id of Object.keys(read.records)) {
-      assert.ok(named.has(id) || ground.ids.has(id) || id === STRIDE_MARK_ID,
+      assert.ok(named.has(id) || ground.ids.has(id),
         `${where}: \`records\` carries ${id}, which this read never named and which is not the town's ground `
-        + `and is not the mover's own class — the fold is coming back through the door`);
+        + `— the fold is coming back through the door`);
     }
     // and the two sets together are the WHOLE of it: no third source
     assert.equal(Object.keys(read.records).length,
-      new Set([...named, ...ground.ids, STRIDE_MARK_ID]).size,
+      new Set([...named, ...ground.ids]).size,
       `${where}: the record count does not equal |named ∪ ground|`);
   }
 });
@@ -114,9 +114,7 @@ test("FALSIFIER 2 — and NOTHING ELSE: every record is named or is ground", asy
 test("FALSIFIER 3 — the ground set is there, whole, and is not the fold", async (t) => {
   if (!HAVE_WORLD) return t.skip(NO_WORLD);
   const ground = await groundFromTheRecord();
-  const bare = await markRecords([]);          // no ids named at all: the ground alone
-  // …plus the mover's own class (2026-09-13, falsifier 5): it rides every read and is not ground
-  delete bare[STRIDE_MARK_ID];
+  const bare = await markRecords([]);          // no ids named at all: the ground alone (no class by name, falsifier 5)
   const ids = new Set(Object.keys(bare));
   assert.deepEqual([...ids].sort(), [...ground.ids].sort(),
     "the ground the door carries is not the ground the record describes");
@@ -145,28 +143,23 @@ test("FALSIFIER 4 — a read with the ground set gone is DETECTABLY gone", async
   assert.ok(Object.keys(read.records).length > namedOnly.length,
     "the ground contributes nothing to this read — falsifier 3 could not tell a missing floor from a present one");
   assert.equal(Object.keys(read.records).length,
-    new Set([...namedOnly, ...ground.ids, STRIDE_MARK_ID]).size);
+    new Set([...namedOnly, ...ground.ids]).size);
 });
 
-test("FALSIFIER 5 — the mover's own class rides every read, with its stride (2026-09-13)", async (t) => {
-  // Keemin: "people are getting confused by the fallback '?' walking ETA". The
-  // viewer prices a walk preview by the stride class's dial and, on the resident
-  // path, looks it up in THIS read's records. A class mark has no place, so
-  // neither the spine nor the nearby set ever named it, and every signed-in
-  // reader's desk priced legs at the legacy 15 km and wore a "?". The class a
-  // reader IS travels with them, the way the town's ground does.
+test("FALSIFIER 5 — NO CLASS RIDES BY NAME (WLD-29, the pointer model): the mover's class is in `records` only where the read names it", async (t) => {
+  // 2026-09-13 to 2026-10-13 the resident class rode every read by name, so a
+  // page could price a walk from records["the-town/resident"].dials. The
+  // approved rework (Wright, AUTHORITY 2026-10-13T19:16:02.257Z) takes it out
+  // of every default read, on both apex paths: a page asks GET /world/dials,
+  // and an agent's walk card is priced from the class's own dial. A class mark
+  // has no place, so no standpoint names it — so it is in no read's records.
   if (!HAVE_WORLD) return t.skip(NO_WORLD);
   for (const [where, at] of STANDPOINTS) {
     const read = await worldEyes(at);
-    const stride = read.records[STRIDE_MARK_ID];
-    assert.ok(stride, `${where}: \`records\` does not carry ${STRIDE_MARK_ID}`);
-    const pace = Number(stride?.dials?.pace_km_per_crossing);
-    assert.ok(Number.isFinite(pace) && pace > 0, `${where}: the stride mark carries no pace dial (${pace})`);
-    // WLD-29: the dials digest carries it too, the same number — the new viewer
-    // reads the digest, and the pinned one still reads this record (Wright,
-    // AUTHORITY 2026-10-13T15:43:33.484Z: both, until the site's pin holds #197)
-    assert.equal(Number(read.dials?.[STRIDE_MARK_ID]?.pace_km_per_crossing), pace, `${where}: the digest and the compatibility record agree`);
+    assert.ok(!read.objects.some((o) => o.id === STRIDE_MARK_ID), `${where}: the radial named the class — this falsifier would be vacuous`);
+    assert.ok(!Object.hasOwn(read.records, STRIDE_MARK_ID), `${where}: \`records\` carries ${STRIDE_MARK_ID}, which this read never named`);
+    assert.ok(!("dials" in read), `${where}: a town-wide dial table rides the read`);
   }
-  // ⚑ THE FLIP: drop STRIDE_MARK_ID from markRecords' appended list → the first
-  //   assertion reds on every standpoint; FALSIFIER 2 stays green either way.
+  // ⚑ THE FLIP: put STRIDE_MARK_ID back on markRecords' list → this and
+  //   FALSIFIERS 2–4 red on every standpoint.
 });

@@ -1,5 +1,17 @@
-// household-activity.mjs — WHICH HOUSES ARE LIT: the town-wide household
-// activity digest the resident and spectator reads carry (WLD-29).
+// household-activity.mjs — WHICH HOUSES ARE LIT (WLD-29): the household
+// activity the office derives for the porch lights, kept INSIDE the office.
+//
+// THE POINTER MODEL (Wright, AUTHORITY 2026-10-13T19:16:02.257Z; Darko's go,
+// "Gaps closed: build"): the town-wide answer is never carried on a default
+// read. What leaves this file is small and local:
+//   · `lit: true|false|null` on a house a read already shows (litOf);
+//   · a focused house's "lit; last active crossing N; what lights a house"
+//     (houseFocus) — when, never who or what;
+//   · GET /world/lights' `{ crossing, window, lit: [<household keys>] }`
+//     (lightsAnswer) — the lit keys only: no resident→house map, no members,
+//     no acts.
+// `households` and `house_of` below are this module's working state; no
+// answer carries them.
 //
 // THE PORCH LIGHT IS HOUSEHOLD ACTIVITY, FROM THE STORE (Darko, 2026-10-08):
 // not somebody resting inside. Presence stays on the walkers and in earshot;
@@ -12,27 +24,35 @@
 // `acts.crossing`). This file adds only the household fold:
 //
 //   members     the store's registry (`registry_households`: each house's
-//               residents, keyed `hh:<slug>`) and the town roll's residents who
-//               belong to no house, each a house of one (`solo:<handle>`).
-//               Parcel labels and account/pin ids are NOT house keys; a parcel
-//               names its owner's handle, which `house_of` maps.
+//               residents) and the town roll's residents who belong to no
+//               house, each a house of one.
+//   the key     THE FOLD'S HOUSEHOLD KEY, `declared_household`'s spelling
+//               (marks-fold.mjs § the household grain; world2-claims.mjs):
+//               a declared house is `hh:<registry slug>`, anyone else
+//               `solo:<handle>` — as the published world-state.json spells
+//               every parcel's `declared_household`. A page joins a parcel's
+//               own `declared_household` to the lit list, so the two must be
+//               one spelling.
 //   the fold    MAX of the last-active crossing over the house's residents who
 //               are NOT emeritus. An emeritus resident contributes nothing — the
 //               exclusion happens before the max, so an active co-resident still
 //               lights the house and an emeritus one never does.
-//   the window  lit when the house's crossing is the clock C or C-1. The digest
-//               carries the clock and the crossings; the reader decides lit, by
-//               this rule, against THIS clock (never a browser's preview).
+//   the window  lit when the house's crossing is the clock C or C-1, against
+//               THIS clock (never a browser's preview).
 //
 // A HISTORICAL READ (a crossing other than the current one) carries no lit
 // state: activity is kept as each resident's newest act only, so a past
 // crossing's lights cannot be rebuilt, and today's are not painted onto it.
 //
-// AN UNREAD STORE IS NOT A DARK TOWN: the digest says it could not read, and
-// every house is unknown — never "nobody was active", never a fallback source.
+// AN UNREAD STORE IS NOT A DARK TOWN: the answer says it could not read, and
+// every house is unknown (null) — never "nobody was active", never a fallback.
 //
-// ONE STATEMENT PAGE: the registry, the roll and last-active, three reads on one
-// pen connection per call; never one per resident or per house.
+// BOUNDED (the approved rework): a caller waits at most CALLER_WAIT_MS for the
+// answer, then is told `unavailable` by name; the batch it was waiting on runs
+// on and fills the cache for the next reader. The batch runs in its own
+// read-only transaction with `statement_timeout` BATCH_STATEMENT_TIMEOUT_MS, so
+// a statement stuck behind a lock is cancelled by Postgres, rolled back and its
+// connection handed back — never left holding the pen.
 
 import { currentCrossing } from "./crossings.mjs";
 import { lastActiveFor, LAST_ACTIVE_MEANS } from "./last-active.mjs";
@@ -57,15 +77,23 @@ export const ROLL_SQL = `SELECT r.handle FROM town_roll r
 
 /** How long one current batch is served before the next read asks again (per office worker, per store). */
 export const ACTIVITY_TTL_MS = 60_000;
+/** How long a reader waits for the answer before it is told `unavailable`. */
+export const CALLER_WAIT_MS = 1_500;
+/** Postgres's own limit on each statement of the batch (SET LOCAL, this transaction only). */
+export const BATCH_STATEMENT_TIMEOUT_MS = 5_000;
 
-export const ACTIVITY_MEANS =
-  `a house is lit when its newest act falls in the activity clock's crossing or the one before (C or C-1). An act is ${LAST_ACTIVE_MEANS}. A house's crossing is the newest over its residents who are not emeritus; null: none of them has an act on record. FRESHNESS: each office worker reads the town's activity at most once per ${ACTIVITY_TTL_MS / 1000} s for the current crossing and serves that answer until then, so an act can take up to about ${ACTIVITY_TTL_MS / 1000} s (plus that read's own duration) to light its house; a new crossing reads afresh, and a failed read is not kept`;
+/** What lights a house — the sentence a focused house carries. */
+export const LIGHT_MEANS =
+  `a house is lit when its newest act falls in the current crossing or the one before (C or C-1). An act is ${LAST_ACTIVE_MEANS}. A house's last active crossing is the newest over its residents who are not emeritus; null: none of them has an act on record. FRESHNESS: each office worker reads the town's activity at most once per ${ACTIVITY_TTL_MS / 1000} s for the current crossing, so an act can take up to about ${ACTIVITY_TTL_MS / 1000} s (plus that read's own duration) to light its house; a new crossing reads afresh, and a failed read is not kept`;
 
 export const ACTIVITY_HISTORICAL =
   "activity isn't kept per crossing: the store keeps each resident's newest act only, so a past crossing's lights cannot be rebuilt — this read carries no lit state";
 
 export const ACTIVITY_UNAVAILABLE =
   "household activity could not be read from the store just now, so no house's light is known on this answer — not because nobody was active";
+
+export const ACTIVITY_SLOW =
+  `household activity did not answer within ${CALLER_WAIT_MS / 1000} s, so no house's light is known on this answer — not because nobody was active; the read carries on, and a later answer can know`;
 
 /** Whether a house whose last act fell in `last` is lit at activity clock `clock`. null when either is unknown. */
 export function litAt(last, clock) {
@@ -77,7 +105,7 @@ export function litAt(last, clock) {
 }
 
 /**
- * The fold, pure: membership + last-active → the digest's two maps.
+ * The fold, pure: membership + last-active → the two working maps.
  * `houses`: Map key → handles; `found`: Map handle → { crossing }.
  */
 export function foldHouseholds({ houses, found, isEmeritus: emeritus = isEmeritus }) {
@@ -96,7 +124,7 @@ export function foldHouseholds({ houses, found, isEmeritus: emeritus = isEmeritu
   return { households, house_of };
 }
 
-/** Every house and its residents: the registry's houses, then the roll's residents of no house. */
+/** Every house and its residents, keyed as the fold keys them: `hh:<slug>` for the registry's houses, then `solo:<handle>` for the roll's residents of no house. */
 export function housesOf(registry, roll = []) {
   const houses = new Map();
   for (const [slug, h] of Object.entries(registry?.households ?? {})) {
@@ -109,8 +137,8 @@ export function housesOf(registry, roll = []) {
 }
 
 /**
- * The digest, on the caller's queryable `q`. `current: false` is a historical
- * read. `now` is the clock's instant (tests pin it).
+ * The working answer, on the caller's queryable `q`. `current: false` is a
+ * historical read. `now` is the clock's instant (tests pin it).
  */
 export async function householdActivity(q, { current = true, now = Date.now(), isEmeritus: emeritus = isEmeritus } = {}) {
   if (!current) return { clock: null, households: null, house_of: null, historical: true, note: ACTIVITY_HISTORICAL };
@@ -119,23 +147,30 @@ export async function householdActivity(q, { current = true, now = Date.now(), i
   const roll = (await q.query(ROLL_SQL)).rows.map((r) => r.handle);
   const houses = housesOf(registry, roll);
   const found = await lastActiveFor(q, [...houses.values()].flat());
-  return { clock, window: LIT_WINDOW, ...foldHouseholds({ houses, found, isEmeritus: emeritus }), means: ACTIVITY_MEANS };
+  return { clock, ...foldHouseholds({ houses, found, isEmeritus: emeritus }) };
 }
 
-// ── THE CURRENT ANSWER, SHARED (WLD-29 independent review, b) ─────────────────
+/** The batch on a pen connection: its own statement limit first, then the three reads. */
+export async function boundedActivity(c, { now = Date.now() } = {}) {
+  await c.query(`SET LOCAL statement_timeout = ${BATCH_STATEMENT_TIMEOUT_MS}`);
+  return householdActivity(c, { now });
+}
+
+// ── THE CURRENT ANSWER, SHARED ───────────────────────────────────────────────
 //
 // The batch reads the town's whole membership and every resident's newest act;
-// it grows with history and borrows a pen connection (Wright's measurement:
-// p50 56 ms at 20k acts, 80 ms at 60k — his, not this file's). So ONE answer per
-// store, per activity clock C, is shared for ACTIVITY_TTL_MS:
+// it grows with history and borrows a pen connection. So ONE answer per store,
+// per activity clock C, is shared for ACTIVITY_TTL_MS:
 //   · keyed by the STORE the read goes to (`backend`: the office's own store, or
-//     an injected one), never by a caller's closure — so both apex paths and the
-//     eyes door share it, and an injected test store never meets another's;
+//     an injected one), never by a caller's closure — so every door shares it,
+//     and an injected test store never meets another's;
 //   · keyed by C, and only the current C is kept: a new crossing reads afresh,
 //     and a reply for an older C cannot land in the newer C's slot;
-//   · single-flight: concurrent misses wait on the one batch in flight;
-//   · a FAILURE IS NOT KEPT: the read that failed answers "unavailable", and the
-//     next read asks the store again — an outage never sticks as darkness;
+//   · single-flight: concurrent misses wait on the one batch in flight, and a
+//     caller who stopped waiting (CALLER_WAIT_MS) leaves it running: its answer
+//     still lands for the next reader, and no second batch is started;
+//   · a FAILURE IS NOT KEPT: the next read asks the store again — an outage
+//     never sticks as darkness;
 //   · the cached value is plain data (no connection held), and every caller gets
 //     its OWN copy, so shaping one answer cannot change another's.
 const shared = new Map();   // backend → Map(clock → { promise, value, at })
@@ -160,37 +195,95 @@ function sharedActivity(backend, clock, nowMs, compute) {
       throw e;
     }
   })();
+  entry.promise.catch(() => {});   // a batch nobody is still waiting on fails quietly
   byClock.set(clock, entry);
   return entry.promise;
 }
 
+/** The answer, or `undefined` when `ms` passed first; the timer never outlives the race. */
+function within(promise, ms) {
+  let timer = null;
+  const late = new Promise((resolve) => { timer = setTimeout(resolve, ms, undefined); });
+  return Promise.race([promise, late]).finally(() => clearTimeout(timer));
+}
+
 /**
- * The digest for a door. A current read is served from the shared answer for
- * its store and clock (above), read with ONE store round of its own when it
- * must be read — the compatibility path holds no store connection. `backend`
- * names the store: the office's own by default; a caller with an injected
- * store passes that store. A failure is disclosed, never thrown and never
- * filled from anywhere else.
+ * The working answer for a read. A current read is served from the shared
+ * answer for its store and clock (above). `backend` names the store: the
+ * office's own by default; a caller with an injected pool passes it as `pool`
+ * (and so as the key). `read` is the unit tests' seam: a function handed the
+ * batch, in place of the pen. A failure or a slow store is disclosed, never
+ * thrown and never filled from anywhere else.
  */
-export async function readHouseholdActivity({ current = true, env = process.env, read = null, backend = null, now = Date.now() } = {}) {
+export async function readHouseholdActivity({ current = true, env = process.env, read = null, pool = null, backend = null, now = Date.now(), waitMs = CALLER_WAIT_MS } = {}) {
   if (!current) return householdActivity(null, { current: false });
   const clock = currentCrossing(now);
-  const store = backend ?? `store:${env.WORLD2_PG_URL ?? ""}`;
+  const store = backend ?? pool ?? `store:${env.WORLD2_PG_URL ?? ""}`;
+  const unknown = (why) => ({ clock, households: null, house_of: null, unavailable: why });
   try {
-    const value = await sharedActivity(store, clock, now, async () => {
+    const batch = sharedActivity(store, clock, now, async () => {
       if (read) return read((q) => householdActivity(q, { now }));
       const { officeRead } = await import("./world2-pen.mjs");
-      return officeRead((c) => householdActivity(c, { now }), { env, by: "householdActivity" });
+      return officeRead((c) => boundedActivity(c, { now }), { env, pool: pool ?? null, by: "householdActivity" });
     });
-    return structuredClone(value);
+    const value = await within(batch, waitMs);
+    return value === undefined ? unknown(ACTIVITY_SLOW) : structuredClone(value);
   } catch {
-    return { clock, households: null, house_of: null, unavailable: ACTIVITY_UNAVAILABLE };
+    return unknown(ACTIVITY_UNAVAILABLE);
   }
 }
 
-/** Whether a read is of the current crossing: no crossing asked, or the one it is now. */
-export function isCurrentRead(asked, now = Date.now()) {
-  if (asked == null || asked === "") return true;
-  const n = Math.floor(Number(asked));
-  return !Number.isFinite(n) || n === currentCrossing(now);
+// ── WHAT LEAVES THE OFFICE ───────────────────────────────────────────────────
+
+/** Why no house's light is known on this answer, or null when they are. */
+export function lightsUnknownWhy(activity) {
+  if (!activity) return ACTIVITY_UNAVAILABLE;
+  if (activity.historical) return activity.note ?? ACTIVITY_HISTORICAL;
+  if (!activity.households || !Number.isInteger(activity.clock)) return activity.unavailable ?? ACTIVITY_UNAVAILABLE;
+  return null;
+}
+
+/**
+ * A mark's household key: its own `declared_household` (the fold's key, the one
+ * a page joins on) where the answer knows that house; otherwise its owner's
+ * house in the store's registry. null: neither is known.
+ */
+export function houseKeyOf(mark, activity) {
+  const houses = activity?.households;
+  if (!houses || !mark) return null;
+  const declared = mark.declared_household == null ? null : String(mark.declared_household);
+  if (declared && Object.hasOwn(houses, declared)) return declared;
+  const owner = mark.by ?? mark.household ?? null;
+  const key = owner == null ? null : activity.house_of?.[String(owner)] ?? null;
+  return key && Object.hasOwn(houses, key) ? key : null;
+}
+
+/** A shown house's light: true or false when known, null when it is not (an unread store, a past crossing, a house the answer does not name). */
+export function litOf(mark, activity) {
+  if (lightsUnknownWhy(activity)) return null;
+  const key = houseKeyOf(mark, activity);
+  return key == null ? null : litAt(activity.households[key], activity.clock);
+}
+
+/** A focused house: lit, its last active crossing, and what lights a house. When, never who or what. */
+export function houseFocus(mark, activity) {
+  const why = lightsUnknownWhy(activity);
+  if (why) return { lit: null, last_active_crossing: null, unknown: why, means: LIGHT_MEANS };
+  const key = houseKeyOf(mark, activity);
+  if (key == null) return { lit: null, last_active_crossing: null, unknown: "this house is not one the store's registry or roll names, so its light is not known", means: LIGHT_MEANS };
+  const last = activity.households[key];
+  return { lit: litAt(last, activity.clock), last_active_crossing: last, crossing: activity.clock, means: LIGHT_MEANS };
+}
+
+/**
+ * GET /world/lights' answer for the crossing `n` it stands at: the lit
+ * household keys only, sorted. A past crossing or an unread store says so,
+ * with `lit: null` — never an empty list that would read as a dark town.
+ */
+export function lightsAnswer(activity, n) {
+  const why = lightsUnknownWhy(activity);
+  if (activity?.historical) return { crossing: n, window: LIT_WINDOW, lit: null, historical: true, note: why };
+  if (why) return { crossing: n, window: LIT_WINDOW, lit: null, unavailable: why };
+  const lit = Object.entries(activity.households).filter(([, last]) => litAt(last, activity.clock) === true).map(([key]) => key).sort();
+  return { crossing: activity.clock, window: LIT_WINDOW, lit };
 }

@@ -46,9 +46,9 @@ import { guardedDraftsForKey, guardedLiveChildrenOf, guardedLiveMarks } from "./
 import { WORLD_STAKE_TOOLS, actingAs, callWorldStakeTool, emptyPurseRefusalFor, heldAtOffice, worldPortfolioStakeSlice, markStakeBlock } from "./world-stake.mjs"; // P3 draft, append-shaped
 import { toConfirm } from "./stamps-preview.mjs"; // POS-83: the inline stake's half of the confirmation step
 import { visitorRulesGate } from "./visitor-rules.mjs"; // POS-300: a berth reads the town's rules for visitors before its first say
-import { classNames, classRoster, classDials, departurePace, freeCellIn, RESIDENT_INSTANTIABLE, residentMayInstantiate, STRIDE_MARK_ID } from "./world-classes.mjs"; // which classes exist — read from the record, never held
-import { dialsDigestOf } from "./read-digests.mjs"; // WLD-29: every dial a read carries
-import { readHouseholdActivity } from "./household-activity.mjs"; // WLD-29: which houses are lit
+import { classNames, classRoster, classDials, departurePace, freeCellIn, RESIDENT_INSTANTIABLE, residentMayInstantiate } from "./world-classes.mjs"; // which classes exist — read from the record, never held
+import { readHouseholdActivity, litOf, lightsUnknownWhy, houseFocus, lightsAnswer } from "./household-activity.mjs"; // WLD-29: a shown house's porch light
+import { dialsDigestOf, DIALS_MEANS } from "./read-digests.mjs"; // WLD-29: GET /world/dials, the page's stride
 import { HOLD_TOOLS, callHoldTool } from "./world-hold.mjs"; // the object primitive: who holds what
 import { createVoices, EARSHOT_M, HEAR_MAX, HEARING_WINDOW, RECORD_KEPT_AT } from "./voices.mjs";
 import { createHearingWindow } from "./hearing-window.mjs"; // earshot: speech at a position (the party line)
@@ -94,7 +94,7 @@ export const WORLD_CLONE = process.env.WORLD_CLONE
 // a clone, and pulls in graphology). Re-exported here so every caller that has
 // always read `currentCrossing` from `world.mjs` still does.
 export { currentCrossing, CROSSING_DERIVATION } from "./crossings.mjs";
-import { arrivesAt, CROSSING_DERIVATION, currentCrossing } from "./crossings.mjs";
+import { arrivesAt, askedCrossing, CROSSING_DERIVATION, currentCrossing } from "./crossings.mjs";
 import { myMarksRefused } from "./claim-effects.mjs"; // POS-241 part 5: my-marks hears what the candle refused
 import { ringOf, ringBox, ringAgrees, ringMovedTo, RING_SHAPE_SENTENCE, RING_CLAIM_SENTENCE } from "./ring-box.mjs"; // POS-322: a mark's box is derived from its ring
 
@@ -1744,9 +1744,9 @@ export function worldConversations() {
     : base;
 }
 
+// the crossings.mjs rule (WLD-29): an empty `?crossing=` is the current crossing, never 0
 function crossingOf(args) {
-  const c = Number(args.crossing);
-  return Number.isFinite(c) && c >= 0 ? Math.floor(c) : currentCrossing();
+  return askedCrossing(args?.crossing);
 }
 
 // ── the verbs (shared by REST and MCP) ───────────────────────────────────────
@@ -2051,14 +2051,13 @@ export async function markRecords(ids = [], w = null) {
   let byId = _byIds.get(w);
   if (!byId) _byIds.set(w, byId = new Map((w?.marks ?? []).map((m) => [m.id, m])));
   const out = {};
-  // THE MOVER'S CLASS STILL RIDES HERE, BY NAME — ONE COMPATIBILITY EXCEPTION
-  // (Wright, AUTHORITY 2026-10-13T15:43:33.484Z). The read carries every dial in
-  // its own digest (`dials`, read-digests.mjs), but the site's pinned viewer
-  // still prices a walk from `records["the-town/resident"].dials` (09-13: the
-  // "?" chip and the 15 km ETA), so the class keeps riding beside the digest.
-  // Remove it in a later follow-up ONLY once the site's World pin holds #197,
-  // the viewer that reads the digest. Not the other classes; not the fold.
-  for (const id of [...ids, ...(await groundMarkIds(w)), STRIDE_MARK_ID]) {
+  // NO CLASS RIDES HERE BY NAME (WLD-29, the pointer model: Wright, AUTHORITY
+  // 2026-10-13T19:16:02.257Z). `the-town/resident` used to be added to every
+  // read so a page could price a walk from its dials (2026-09-13). A page reads
+  // its stride from GET /world/dials now; an agent's walk card is priced from
+  // the class's own dial (world-apex.mjs § the walk's pace), and a class's dials
+  // are World law, public in postmark-world (APEX_DESCRIPTION § DIALS).
+  for (const id of [...ids, ...(await groundMarkIds(w))]) {
     if (id == null || out[id]) continue;
     const mark = byId.get(id);
     if (mark) out[id] = mark;
@@ -2066,39 +2065,94 @@ export async function markRecords(ids = [], w = null) {
   return out;
 }
 
-// THE DIALS DIGEST of one world, built once per world object (read-digests.mjs).
-const _dials = new WeakMap();
-export async function worldDials(w = null) {
-  w ??= await world();
-  let d = _dials.get(w);
-  if (!d) _dials.set(w, d = dialsDigestOf(w?.marks ?? []));
-  return d;
+// ── THE PORCH LIGHTS A READ SHOWS (WLD-29, the pointer model) ────────────────
+//
+// A house a read already shows (a parcel in `within`, `nearby` or the eyes'
+// `objects`) carries `lit: true|false`, from the office's shared activity
+// answer (household-activity.mjs); null when that answer is not known — an
+// unread or slow store, or a read of a past crossing — and then ONE
+// `lit_unknown` sentence on the answer says why, never a paragraph per house.
+// Nothing else of the town's activity rides a read: no table, no far house,
+// no member, no act.
+const isHouse = (m) => m?.kind === "parcel";
+
+/** Whether the read stands at the current crossing (crossingOf's own rule, so a malformed or negative crossing is current here too). */
+export const readsNow = (args = {}) => crossingOf(args ?? {}) === currentCrossing();
+
+/**
+ * The activity the lights on these marks need, or null when none of them is a
+ * house (no store is asked for a read that shows no house). `byId` resolves an
+ * entry to its mark, for a list (like `within`) whose entries carry no kind.
+ */
+export async function lightsFor(entries, args = {}, { byId = null } = {}) {
+  const houses = (entries ?? []).filter((e) => isHouse(e) || isHouse(byId?.get(e?.id)));
+  if (!houses.length) return null;
+  return readHouseholdActivity({ current: readsNow(args) });
+}
+
+/** `entries` with `lit` on each house among them; the list itself when there is no activity to read. */
+export function withLit(entries, activity, { byId = null } = {}) {
+  if (!activity) return entries;
+  return (entries ?? []).map((e) => {
+    const mark = isHouse(e) ? (byId?.get(e.id) ?? e) : byId?.get(e?.id);
+    return isHouse(mark) ? { ...e, lit: litOf(mark, activity) } : e;
+  });
+}
+
+/** `{ lit_unknown }` when the lights these entries carry are not known, else {}. */
+export function litUnknownBlock(activity) {
+  const why = activity ? lightsUnknownWhy(activity) : null;
+  return why ? { lit_unknown: why } : {};
+}
+
+// ── THE PAGE'S TWO SOURCES (WLD-29, the pointer model) ────────────────────────
+//
+// What a page needs that no default read carries, each from its own door:
+//
+//   GET /world/dials   every published mark's dials, by id, as the BLESSED
+//                      SETTLEMENT has them — the snapshot this office's world
+//                      stands on (`world()._raw.blessed`: the settlement tag,
+//                      peeled to its commit; the same identity the apex's
+//                      `law.canon_sha` names). Cached by that sha, so a new
+//                      settlement is a new answer and nothing else is: not a
+//                      branch head, not the crossing, not the wall clock. With
+//                      no blessed settlement the answer says so and is built
+//                      afresh, never cached under a stand-in identity.
+//   GET /world/lights  `{ crossing, window, lit: [<household keys>] }` — the lit
+//                      households, keyed as a parcel's own `declared_household`,
+//                      from the office's per-crossing activity answer
+//                      (household-activity.mjs § lightsAnswer). A past crossing
+//                      or an unread store says so, with `lit: null`.
+let _dialsPage = null;   // { sha, answer } — the newest settlement's only
+
+export async function worldDialsPage() {
+  const w = await world();
+  // a SETTLEMENT's sha only: with no settlement tag the read tier serves main,
+  // and `blessed.sha` is then main's head — a branch, not a snapshot identity
+  const b = w?._raw?.blessed?.source === "settlement" ? w._raw.blessed : null;
+  const sha = b?.sha ?? null;
+  if (sha && _dialsPage?.sha === sha) return _dialsPage.answer;
+  const answer = {
+    settlement: b?.n == null ? null : `S${b.n}`,
+    sha,
+    dials: dialsDigestOf(w?.marks ?? []),
+    means: DIALS_MEANS,
+    ...(sha ? {} : { note: "this office's world stands on no blessed settlement, so these dials are its published fold's and are not kept between reads" }),
+  };
+  if (sha) _dialsPage = { sha, answer };
+  return answer;
+}
+
+export async function worldLights(raw = null) {
+  const n = askedCrossing(raw);
+  return lightsAnswer(await readHouseholdActivity({ current: n === currentCrossing() }), n);
 }
 
 /**
- * The middle every resident and spectator read carries (WLD-29): the dials
- * digest and the household activity digest. ONE per response: a composed read
- * (the apex) asks it once and hands it to the eyes it composes.
- *
- * CURRENT OR HISTORICAL IS THE READ'S OWN ANSWER (first review, R5): the read
- * stands at `crossingOf(args)` — a missing, malformed or negative crossing IS
- * the current one there — so the activity block is classified by that same
- * effective crossing, never by the raw argument.
+ * `lights`: the eyes door's own read lights the houses it shows (`true`, the
+ * default); a composed read that lights them itself passes `false`.
  */
-export async function readMiddle(args = {}, w = null) {
-  const [dials, activity] = await Promise.all([
-    worldDials(w),
-    readHouseholdActivity({ current: crossingOf(args ?? {}) === currentCrossing() }),
-  ]);
-  return { dials, activity };
-}
-
-/**
- * `middle`: the eyes door's own read computes its middle (`true`, the default);
- * a composed read hands in the one it already holds (an object), and a caller
- * that never returns the eyes' middle asks for none (`false`).
- */
-export async function worldEyes(args = {}, key = null, { roll = [], middle = true } = {}) {
+export async function worldEyes(args = {}, key = null, { roll = [], lights = true } = {}) {
   const choice = chooseStandpoint(args, key);
   if (choice.bounce) return choice.bounce;
   const w = await world();
@@ -2183,8 +2237,11 @@ export async function worldEyes(args = {}, key = null, { roll = [], middle = tru
       tier: mark?.tier ?? null,
     };
   });
+  // THE PORCH LIGHTS (WLD-29): `lit` on each house among the objects, nothing else
+  const activity = lights ? await lightsFor(objects, args, { byId: markById }) : null;
   return {
-    stance: choice.stance, telling, objects,
+    stance: choice.stance, telling, objects: withLit(objects, activity, { byId: markById }),
+    ...litUnknownBlock(activity),
     // THE TRANSPORT LINE RIDES THE NARRATIVE SHAPE TOO (#2986 § 11 item 1), and
     // it has to: `diagnostic` is a diagnostic — nothing a resident actually
     // reads is allowed to depend on it, which is the ruling one screen up. A
@@ -2194,8 +2251,6 @@ export async function worldEyes(args = {}, key = null, { roll = [], middle = tru
     // THE RECORDS THIS ANSWER NAMES (2026-09-10). `objects` is the only list
     // here that names ids, so this is exactly those plus the ground.
     records: await markRecords(objects.map((o) => o.id), w),
-    // THE MIDDLE (WLD-29): every dial, and which houses are lit, beside the records.
-    ...(middle === true ? await readMiddle(args, w) : (middle && typeof middle === "object" ? middle : {})),
     // Grouped by the engine's own distance bands, nearest band first — the same
     // organisation the telling uses, so the compact shape and the prose agree.
     // An empty array means nobody is about; the key's ABSENCE means presence is
@@ -2335,6 +2390,25 @@ export async function markImageBytes(url, { fetchImpl = null, maxBytes = INVESTI
   };
 }
 
+// ── A HOUSE'S LIGHT, ON A CLOSE LOOK (WLD-29, the pointer model) ─────────────
+//
+// Investigating a household's ground (its parcel) or its declared home says
+// "lit; last active crossing N; what lights a house" — when, never who or
+// what. Any other mark carries nothing. A past crossing's look or an unread
+// store says so (household-activity.mjs § houseFocus), and nothing is rebuilt
+// from the newest-act projection for a crossing it does not describe.
+async function porchLightOn(id, w, args) {
+  const mark = (w?.marks ?? []).find((m) => m.id === id);
+  if (!mark) return null;
+  let house = mark.kind === "parcel";
+  if (!house && mark.by) {
+    try { const { homeOf } = await whereMod(); house = homeOf(String(mark.by), w)?.home_mark === id; }
+    catch { house = false; }
+  }
+  if (!house) return null;
+  return houseFocus(mark, await readHouseholdActivity({ current: readsNow(args) }));
+}
+
 export async function worldInvestigate(args = {}, key = null) {
   if (!args.mark) return { error: "bounce", defect: "which mark?", hint: "pass mark: '<by>/<slug>' (ids in /world/state; the telling's [id] tags)" };
   const w = await world();
@@ -2394,9 +2468,11 @@ export async function worldInvestigate(args = {}, key = null) {
   // never a substitution for it.
   if (args.with_image === true && typeof r.image === "string") {
     const got = await markImageBytes(r.image);
+    const light = await porchLightOn(String(args.mark), w, args);
     return {
       ...r,
       ...(receipt ? { receipt } : {}),
+      ...(light ? { porch_light: light } : {}),
       image_note: got.note,
       // The transport carrier, not door vocabulary — mcp.mjs lifts these out
       // of the answer and into the MCP content array, and strips the field
@@ -2428,7 +2504,8 @@ export async function worldInvestigate(args = {}, key = null) {
       transportNote = service ? stopAnnotationFor(String(args.mark), service, w) : null;
     }
   } catch { transportNote = null; }
-  return { ...r, ...(receipt ? { receipt } : {}), ...(stands ? { stands } : {}), ...(transportNote ? { transport: transportNote } : {}) };
+  const light = await porchLightOn(String(args.mark), w, args);
+  return { ...r, ...(receipt ? { receipt } : {}), ...(stands ? { stands } : {}), ...(transportNote ? { transport: transportNote } : {}), ...(light ? { porch_light: light } : {}) };
 }
 
 // ── FIND A MARK BY NAME, FROM ANYWHERE (2026-09-26) ─────────────────────────

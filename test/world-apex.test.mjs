@@ -160,13 +160,14 @@ const MARKS = [
   { id: "the-town/the-old-signal-hut", by: "the-town", kind: "sited", tier: "market", at: { x: 500, y: 640 }, extent: { w: 20, h: 20 },
     body: "A hut the town keeps but has not made law.",
     props: { class: "timetable", class_version: 1, dials: { pace_km_per_crossing: 405 }, timetable: TIMETABLE, affordances: BOARD_AFFORDANCE } },
-  // ── THE READ'S MIDDLE (WLD-29): dials in the fold's own place, `mark.dials` ──
+  // ── NO TOWN-WIDE TABLE ON A READ (WLD-29, the pointer model) ──────────────
   // The mover's class, with a DISTINCTIVE stride no other source names; it has
-  // no place, so no standpoint's spine or field of view ever reaches it.
+  // no place, so no standpoint's spine or field of view ever reaches it — and
+  // so no read may carry it, by name or in a dial table.
   { id: "the-town/resident", by: "the-town", kind: "class", tier: "constitution", body: "WLD29-CLASS-BODY-NOT-FOR-THE-DIGEST",
     dials: { pace_km_per_crossing: 47 } },
   // a dialled mark far from every standpoint the suite reads from, and two
-  // malformed dials a digest must not carry or choke on
+  // malformed dials GET /world/dials must not carry or choke on
   { id: "zeta/far-lamp", by: "zeta", kind: "sited", tier: "market", at: { x: -30000, y: -30000 }, extent: { w: 2, h: 2 },
     body: "WLD29-LAMP-BODY-NOT-FOR-THE-DIGEST", dials: { glow: 3 } },
   { id: "zeta/empty-dials", by: "zeta", kind: "sited", tier: "market", at: { x: -30010, y: -30000 }, extent: { w: 2, h: 2 }, dials: {} },
@@ -1926,16 +1927,24 @@ test("THE ARENA IS CLOSED: do: strike and do: loot answer \"the arena is closed\
   assert.equal(existsSync(dyn), false, "an arena verb at the apex created dynamic.db");
 });
 
-// ── THE READ'S MIDDLE (WLD-29) ───────────────────────────────────────────────
+// ── THE POINTER MODEL (WLD-29: Wright, AUTHORITY 2026-10-13T19:16:02.257Z) ──
 //
-// Every dial a page needs rides the read's own digest — the mover's class, off
-// every standpoint, among them — and `records` stays exactly what the answer
-// names. The digest carries dials and nothing else of a record.
-const MIDDLE_DIALS = { "the-town/resident": { pace_km_per_crossing: 47 }, "zeta/far-lamp": { glow: 3 } };
+// No default read carries a town-wide `dials` table or the `activity` map, at
+// any door. A house the read already shows carries `lit`; an unknown light is
+// null with ONE `lit_unknown` sentence; a focused house says its last active
+// crossing. The page's dials and lights are their own doors (GET /world/dials,
+// GET /world/lights).
+const PAGE_DIALS = { "the-town/resident": { pace_km_per_crossing: 47 }, "zeta/far-lamp": { glow: 3 } };
+const HOUSE = "alpha/quiet-parcel";   // the fixture's one house, beside A
 
-test("THE READ'S MIDDLE: apex and eyes, spectator and resident, carry every dial (the off-reach class and far lamp too) and no record body; records stay narrow but for the stride's compatibility record; the activity block rides beside", async () => {
+/** Every `lit` a read carries, by id, from within/nearby/objects. */
+const litsOf = (r) => Object.fromEntries([...(r.within ?? []), ...(r.nearby ?? []), ...(r.objects ?? [])]
+  .filter((o) => "lit" in o).map((o) => [o.id, o.lit]));
+
+test("NO DIGEST AT ANY DOOR: apex and eyes, spectator and resident, carry no `dials`, no `activity`, no house map and no class by name; the house they show carries `lit`, unknown here with ONE named sentence", async () => {
   on();
   const { worldEyes } = await import("../src/world.mjs");
+  const { ACTIVITY_UNAVAILABLE } = await import("../src/household-activity.mjs");
   const reads = {
     "apex · spectator": await worldApex({ ...A }, null),
     "apex · resident": await worldApex({ handle: "alpha" }, KEY_ALPHA),
@@ -1944,52 +1953,48 @@ test("THE READ'S MIDDLE: apex and eyes, spectator and resident, carry every dial
   };
   for (const [what, r] of Object.entries(reads)) {
     assert.ok(r && !r.error, `${what}: ${JSON.stringify(r?.error ?? r)}`);
-    assert.deepEqual(r.dials, MIDDLE_DIALS, `${what}: the digest is every dialled mark's dials, and only those (empty and array dials excluded)`);
-    assert.doesNotMatch(JSON.stringify(r.dials), /WLD29-.*-BODY|by|tier|body/, `${what}: dials only, never the record`);
-    // narrow records: the far lamp was never named, so it is not in them
-    assert.ok(!Object.hasOwn(r.records, "zeta/far-lamp"), `${what}: zeta/far-lamp is not smuggled into records — the answer never named it`);
-    // …save ONE named compatibility exception (Wright, AUTHORITY 2026-10-13T15:43:33.484Z):
-    // the mover's class rides records too, its pace usable by the pinned viewer
-    // that reads only records, and the same number the digest carries
-    assert.equal(r.records["the-town/resident"]?.dials?.pace_km_per_crossing, 47, `${what}: the old records-only consumer still finds the stride`);
-    assert.equal(r.dials["the-town/resident"].pace_km_per_crossing, r.records["the-town/resident"].dials.pace_km_per_crossing, `${what}: digest and compatibility record agree`);
-    assert.ok(r.activity && Number.isInteger(r.activity.clock), `${what}: the activity block and its clock ride the read`);
-    // this suite has no store: the digest says so rather than calling the town dark
-    assert.equal(r.activity.households, null);
-    assert.match(r.activity.unavailable, /could not be read from the store/);
+    for (const k of ["dials", "activity"]) assert.ok(!(k in r), `${what}: the read carries \`${k}\``);
+    const text = JSON.stringify(r);
+    assert.doesNotMatch(text, /"house_of"|"households"|pace_km_per_crossing":47|"glow"/, `${what}: a town-wide table rides the read`);
+    assert.ok(!Object.hasOwn(r.records, "the-town/resident") && !Object.hasOwn(r.records, "zeta/far-lamp"), `${what}: records carry what the answer never named`);
+    // the house it shows: `lit` on it and on nothing else; this suite has no store
+    const lits = litsOf(r);
+    assert.deepEqual(Object.keys(lits), [HOUSE], `${what}: \`lit\` rides the shown house only (${JSON.stringify(lits)})`);
+    assert.equal(lits[HOUSE], null, `${what}: an unread store is unknown, never dark`);
+    assert.equal(r.lit_unknown, ACTIVITY_UNAVAILABLE, `${what}: ONE sentence says why`);
+    assert.equal(text.split(ACTIVITY_UNAVAILABLE).length - 1, 1, `${what}: the sentence is said once, not per house`);
   }
 });
 
-test("THE READ'S MIDDLE · a historical apex read carries no lit state, and says why; the dials still ride", async () => {
+test("GET /world/dials' table: every dialled published mark, its dials only (empty and array dials excluded); no record body", async () => {
   on();
-  const { currentCrossing } = await import("../src/crossings.mjs");
-  const r = await worldApex({ ...A, crossing: currentCrossing() - 3 }, null);
-  assert.deepEqual(r.dials, MIDDLE_DIALS);
-  assert.equal(r.activity.historical, true);
-  assert.equal(r.activity.clock, null);
-  assert.equal(r.activity.households, null);
-  assert.match(r.activity.note, /activity isn't kept per crossing/);
+  const { worldDialsPage } = await import("../src/world.mjs");
+  const page = await worldDialsPage();
+  for (const [id, d] of Object.entries(PAGE_DIALS)) assert.deepEqual(page.dials[id], d, id);
+  assert.ok(!("zeta/empty-dials" in page.dials) && !("zeta/array-dials" in page.dials));
+  assert.doesNotMatch(JSON.stringify(page), /WLD29-.*-BODY/, "dials only, never the record");
+  assert.match(page.means, /pace_km_per_crossing/);
 });
 
-// ── THE MIDDLE, ONCE PER ANSWER (first review, R4) ───────────────────────────
-// The apex composes the eyes; both used to ask the activity batch. A SPY STORE
-// under the pen pool counts what one whole apex read actually sends.
-async function withSpyStore(fn) {
+// ── A SPY STORE under the pen pool, counting what a read actually sends ──────
+// alpha's house is `hh:alpha-house` (alpha, alpha-kin); dune lives alone. The
+// batch runs in its own transaction with a statement limit (SET LOCAL).
+async function withSpyStore(fn, { kinAt = () => new Date().toISOString() } = {}) {
   const pen = await import("../src/world2-pen.mjs");
   const { LAST_ACTIVE_SQL } = await import("../src/last-active.mjs");
   const { ROLL_SQL } = await import("../src/household-activity.mjs");
   const { rowsFromRegistry } = await import("../src/registry-rows.mjs");
-  const REG = rowsFromRegistry({ households: { "ash-house": { residents: ["ash", "ash-kin"], accounts: [{ login: "ash-gh", id: 1 }] } } }, {});
+  const REG = rowsFromRegistry({ households: { "alpha-house": { residents: ["alpha", "alpha-kin"], accounts: [{ login: "alpha-gh", id: 1 }] } } }, {});
   const asked = [];
   const client = {
     async query(sql, params = []) {
       const t = String(sql);
       asked.push(t);
-      if (/^\s*(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE)/i.test(t)) return { rows: [] };
+      if (/^\s*(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE|SET LOCAL)/i.test(t)) return { rows: [] };
       if (/FROM households\b/.test(t)) return { rows: REG.households };
       if (/FROM household_pins\b|FROM registry_meta\b/.test(t)) return { rows: [] };
-      if (t === ROLL_SQL) return { rows: [{ handle: "ash" }, { handle: "dune" }] };
-      if (t === LAST_ACTIVE_SQL) return { rows: [{ handle: "ash-kin", at: new Date().toISOString(), src: "act" }] };
+      if (t === ROLL_SQL) return { rows: [{ handle: "alpha" }, { handle: "dune" }] };
+      if (t === LAST_ACTIVE_SQL) return { rows: [{ handle: "alpha-kin", at: kinAt(), src: "act" }] };
       return { rows: [] };
     },
     release() {},
@@ -1999,68 +2004,70 @@ async function withSpyStore(fn) {
   const env = ["WORLD2_PG", "WORLD2_PG_URL"].map((k) => [k, process.env[k]]);
   Object.assign(process.env, { WORLD2_PG: "1", WORLD2_PG_URL: "postgres://wld29-spy/none" });
   pen.__setPoolForTest({ connect: async () => client, query: (...a) => client.query(...a) });
-  try { return await fn({ asked, count: () => asked.filter((t) => t === LAST_ACTIVE_SQL).length, LAST_ACTIVE_SQL }); }
+  try { return await fn({ asked, count: () => asked.filter((t) => t === LAST_ACTIVE_SQL).length }); }
   finally { pen.__setPoolForTest(null); resetActivityCache(); for (const [k, v] of env) { if (v == null) delete process.env[k]; else process.env[k] = v; } }
 }
 
-test("THE MIDDLE, ONCE: one whole apex read sends ONE activity batch (registry, roll, last-active), and a do:/read: act sends none", async () => {
+test("LOCAL LIGHT, ONE BATCH: a co-resident's act lights the shown house (true), in ONE bounded batch per read; the eyes alone ask once; a do:/read: act asks nothing", async () => {
   on();
-  const { currentCrossing } = await import("../src/crossings.mjs");
+  const { worldEyes } = await import("../src/world.mjs");
+  const { resetActivityCache } = await import("../src/household-activity.mjs");
   await withSpyStore(async ({ asked, count }) => {
     const r = await worldApex({ ...A }, null);
     assert.ok(!r.error, JSON.stringify(r.error));
     assert.equal(count(), 1, `last-active asked ${count()} times for one apex read`);
     assert.equal(asked.filter((t) => /FROM households\b/.test(t)).length, 1, "one registry read");
-    assert.deepEqual(r.activity.households, { "hh:ash-house": currentCrossing(), "solo:dune": null }, "and it is that batch's answer on the read");
-    assert.equal(r.activity.clock, currentCrossing());
-    // each count below starts COLD, so a warm shared answer cannot hide an extra call
-    const { resetActivityCache } = await import("../src/household-activity.mjs");
+    assert.ok(asked.some((t) => /^SET LOCAL statement_timeout = 5000$/.test(t)), "the batch sets its own statement limit");
+    assert.ok(asked.indexOf(asked.find((t) => /^SET LOCAL/.test(t))) < asked.findIndex((t) => /FROM households\b/.test(t)), "before its first read");
+    assert.deepEqual(litsOf(r), { [HOUSE]: true }, "alpha-kin's act lights alpha's house");
+    assert.ok(!("lit_unknown" in r), "a known light says nothing more");
     asked.length = 0; resetActivityCache();
-    const eyes = await (await import("../src/world.mjs")).worldEyes({ ...A }, null);
+    const eyes = await worldEyes({ ...A }, null);
     assert.equal(count(), 1, "the eyes door, alone, asks once too");
-    assert.deepEqual(eyes.activity, r.activity);
+    assert.deepEqual(litsOf(eyes), { [HOUSE]: true });
     asked.length = 0; resetActivityCache();
     await worldApex({ read: "say" }, KEY_BETA);
     await worldApex({ do: "say", text: "hello" }, KEY_BETA);
-    assert.equal(count(), 0, "a read: or do: answer carries no middle and asks for none");
+    assert.equal(count(), 0, "a read: or do: answer shows no house and asks for none");
+    asked.length = 0; resetActivityCache();
+    await worldApex({ ...FAR }, null);
+    assert.equal(count(), 0, "a read that shows no house asks for no activity");
   });
 });
 
-// Bevel's first-review probe R5 (credited): the read normalizes a negative
-// crossing to the current one, and its activity must say the same.
-test("Bevel: a crossing normalized to current cannot claim historical activity", async () => {
+test("LOCAL LIGHT · an old act is dark (false), never unknown; the light is C or C-1", async () => {
   on();
-  const current = await worldApex({ ...A }, null);
-  const negative = await worldApex({ ...A, crossing: -1 }, null);
-  assert.ok(!current.error && !negative.error, JSON.stringify({ current: current.error, negative }));
-  assert.deepEqual(negative.crossing, current.crossing, "control: the read actually normalizes -1 to current");
-  assert.notEqual(negative.activity?.historical, true,
-    `current read disagrees with new activity block: ${JSON.stringify({ crossing: negative.crossing, activity: negative.activity })}`);
-  assert.equal(negative.activity?.clock, current.activity?.clock);
+  const { CROSSING_MS } = await import("../src/crossings.mjs");
+  await withSpyStore(async () => {
+    assert.deepEqual(litsOf(await worldApex({ ...A }, null)), { [HOUSE]: false });
+  }, { kinAt: () => new Date(Date.now() - 3 * CROSSING_MS).toISOString() });
+  await withSpyStore(async () => {
+    assert.deepEqual(litsOf(await worldApex({ ...A }, null)), { [HOUSE]: true }, "C-1 still lights");
+  }, { kinAt: () => new Date(Date.now() - CROSSING_MS).toISOString() });
 });
 
-test("THE READ'S OWN CROSSING (R5): malformed and negative crossings are the current read's; a real past crossing stays historical", async () => {
+test("THE READ'S OWN CROSSING: absent, empty, null, malformed and negative stand at today's crossing and light today; a past crossing — 0 included — is historical, never dark, and asks nothing", async () => {
   on();
   const { currentCrossing } = await import("../src/crossings.mjs");
-  // the activity block AGREES WITH THE READ, whatever the read made of the ask:
-  // a read standing at the current crossing carries the current activity and
-  // its clock; a read standing anywhere else (the 1.0 door reads "" and null
-  // as crossing 0, a pre-existing normalization this does not change) is
-  // historical. One rule, the read's own crossing.
-  for (const c of [-1, -40, "soon", undefined, "", null, currentCrossing() - 2, currentCrossing() + 3]) {
-    const r = await worldApex({ ...A, ...(c === undefined ? {} : { crossing: c }) }, null);
-    const isNow = r.crossing?.n === currentCrossing();
-    assert.equal(r.activity?.historical === true, !isNow, `${JSON.stringify(c)} → crossing ${r.crossing?.n}: activity ${JSON.stringify(r.activity)}`);
-    if (isNow) assert.equal(r.activity.clock, currentCrossing(), `${JSON.stringify(c)}: the current read's clock`);
-    else assert.equal(r.activity.clock, null);
-  }
-  for (const c of [-1, -40, "soon"]) assert.equal((await worldApex({ ...A, crossing: c }, null)).crossing.n, currentCrossing(), `control: ${c} is normalized to current by the read itself`);
-  const past = await worldApex({ ...A, crossing: currentCrossing() - 2 }, null);
-  assert.equal(past.activity.historical, true);
-  assert.equal(past.activity.clock, null);
+  const { ACTIVITY_HISTORICAL } = await import("../src/household-activity.mjs");
+  await withSpyStore(async ({ count, asked }) => {
+    for (const c of [undefined, "", null, -1, -40, "soon"]) {
+      const r = await worldApex({ ...A, ...(c === undefined ? {} : { crossing: c }) }, null);
+      assert.equal(r.crossing?.n, currentCrossing(), `${JSON.stringify(c)}: the read stands at today's crossing (never 0)`);
+      assert.deepEqual(litsOf(r), { [HOUSE]: true }, `${JSON.stringify(c)}: and lights today`);
+    }
+    asked.length = 0;
+    for (const c of [currentCrossing() - 2, 0, "0", currentCrossing() + 3]) {
+      const r = await worldApex({ ...A, crossing: c }, null);
+      assert.equal(r.crossing?.n, Number(c), `${JSON.stringify(c)}: the read stands where it was asked`);
+      assert.deepEqual(litsOf(r), { [HOUSE]: null }, `${JSON.stringify(c)}: a past or future crossing's light is unknown, not dark`);
+      assert.equal(r.lit_unknown, ACTIVITY_HISTORICAL);
+    }
+    assert.equal(count(), 0, "a historical read asks the store nothing");
+  });
 });
 
-test("SHARED ACROSS DOORS (independent review, b): apex, eyes and apex again against one store inside the TTL send ONE activity batch", async () => {
+test("SHARED ACROSS DOORS: apex, eyes and apex again against one store inside the TTL send ONE activity batch", async () => {
   on();
   await withSpyStore(async ({ count }) => {
     const { worldEyes } = await import("../src/world.mjs");
@@ -2068,9 +2075,7 @@ test("SHARED ACROSS DOORS (independent review, b): apex, eyes and apex again aga
     const e = await worldEyes({ ...A }, null);
     const b = await worldApex({ handle: "alpha" }, KEY_ALPHA);
     assert.equal(count(), 1, `three reads of one store sent ${count()} batches`);
-    assert.deepEqual([e.activity, b.activity], [a.activity, a.activity], "one answer, the same for every door");
-    a.activity.households["hh:ash-house"] = -1;
-    const c = await worldApex({ ...A }, null);
-    assert.notEqual(c.activity.households["hh:ash-house"], -1, "one caller's answer is not another's object");
+    assert.deepEqual([litsOf(e)[HOUSE], litsOf(a)[HOUSE]], [true, true]);
+    assert.ok(!b.error);
   });
 });

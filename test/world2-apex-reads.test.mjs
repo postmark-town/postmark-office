@@ -512,20 +512,18 @@ test("RECORDS: the door's block is 1.0's own `markRecords` over the same world �
   const mine = r.body.records;
   const theirs = await oracleRecords();
   assert.ok(mine && typeof mine === "object", "the door answered no `records` block — A7's sixty reds, one standpoint at a time");
-  assert.deepEqual(Object.keys(mine), Object.keys(theirs), "the id set and its order are 1.0's: the spine, the field of view, the ground, the mover's class");
+  assert.deepEqual(Object.keys(mine), Object.keys(theirs), "the id set and its order are 1.0's: the spine, the field of view, the ground");
   for (const id of Object.keys(theirs)) {
     assert.deepEqual(mine[id], stripUnanswered(theirs[id]), `records[${id}]`);
     for (const k of Object.keys(apex.RECORD_FIELDS_NOT_ANSWERED)) assert.ok(!(k in mine[id]), `records[${id}].${k} must be absent, not approximated`);
   }
-  // the ground and the class rode along, as 1.0 appends them
+  // the ground rode along, as 1.0 appends it
   assert.ok("the-town/the-town-centre" in mine, "the town's ground is in the block whether or not the field of view reached it");
-  // the mover's class rides both doors' records — the ONE compatibility record
-  // (Wright, AUTHORITY 2026-10-13T15:43:33.484Z; remove once the site's World pin
-  // holds #197) — and its dials ride the digest too, from the same law row
-  assert.ok("the-town/resident" in mine, "the mover's own class travels with every reader");
-  assert.equal(mine["the-town/resident"].parent, "the-town/entity", "a class mark's authored parent is the fold's, read from its law row");
-  assert.equal(mine["the-town/resident"].dials.pace_km_per_crossing, 60, "the pinned viewer's records-only read still finds the stride");
-  assert.deepEqual(r.body.dials["the-town/resident"], REC_CLASS_ROW.data.dials, "the class's dials ride the digest, from its law row");
+  // NO CLASS BY NAME AND NO DIAL TABLE (WLD-29, the pointer model): the mover's
+  // class is in neither door's records unless the read names it, and no
+  // `dials` or `activity` rides the store door either
+  assert.ok(!("the-town/resident" in mine), "the mover's class does not ride the store door's records by name");
+  for (const k of ["dials", "activity"]) assert.ok(!(k in r.body), `the store door carries \`${k}\``);
   // A predicate carries no geometry, so no field of view names it and no
   // `records` carries it — its `parent` reaches a reader through
   // `/world2/investigate`, which lists a mark's predicates by exactly that edge.
@@ -544,100 +542,127 @@ test("RECORDS · THE PLANTED MARK: a mark that stands only in the store is in th
   assert.equal(p.asked.filter((a) => /FROM marks/i.test(a.sql)).length, 1, "one `marks` read composes the world, the spine, the view and the records");
 });
 
-// ── THE STORE DOOR'S ACTIVITY (WLD-29 first review, R4): current, historical,
-// unavailable, on world2Apex's own pool — the same digest 1.0's apex carries.
-function activityPool({ fail = false } = {}) {
+// ── THE STORE DOOR'S PORCH LIGHTS (WLD-29, the pointer model) ────────────────
+// The standpoint stands on wright's parcel, a house: it carries `lit`, from the
+// office's shared activity answer, read in ONE bounded batch on its own pen
+// connection. wright's house is `hh:trueing-house` (wright, rig-b); rig-solo
+// lives alone. Nothing of the town's activity rides the answer but `lit`.
+const PARCEL_ID = "wright/the-trueing-house-parcel";
+function activityPool({ fail = false, kinAt = () => new Date().toISOString() } = {}) {
   const base = recordsPool();
-  let lastActive = 0;
+  let lastActive = 0, connects = 0;
+  const query = async (sql, params) => {
+    const t = String(sql);
+    if (/^\s*(BEGIN|COMMIT|ROLLBACK|SET LOCAL)/i.test(t)) { base.asked.push({ sql: t.trim(), params }); return { rows: [] }; }
+    if (/FROM households\b/.test(t)) return { rows: [{ slug: "trueing-house", ord: 0, name: null, human: null, accounts: [], residents: ["wright", "rig-b"], since: null, member_of: null, declared_by: null, formerly: [], provisional: false, home_images: {} }] };
+    if (/FROM household_pins\b|FROM registry_meta\b/.test(t)) return { rows: [] };
+    if (/FROM town_roll r\s+JOIN projection_heads h ON h\.repo = 'town'/.test(t) && /ORDER BY r\.handle$/.test(t.trim())) return { rows: [{ handle: "wright" }, { handle: "rig-solo" }] };
+    if (/SELECT handle, at, src FROM/.test(t.replace(/\s+/g, " "))) {
+      lastActive += 1;
+      if (fail) throw new Error("the store would not answer");
+      return { rows: [{ handle: "rig-b", at: kinAt(), src: "act" }] };
+    }
+    return base.query(sql, params);
+  };
   return {
-    asked: base.asked, lastActive: () => lastActive,
-    query: async (sql, params) => {
-      const t = String(sql);
-      if (/FROM households\b/.test(t)) return { rows: [{ slug: "rig-house", ord: 0, name: null, human: null, accounts: [], residents: ["rig-a", "rig-b"], since: null, member_of: null, declared_by: null, formerly: [], provisional: false, home_images: {} }] };
-      if (/FROM household_pins\b|FROM registry_meta\b/.test(t)) return { rows: [] };
-      if (/FROM town_roll r\s+JOIN projection_heads h ON h\.repo = 'town'/.test(t) && /ORDER BY r\.handle$/.test(t.trim())) return { rows: [{ handle: "rig-a" }, { handle: "rig-solo" }] };
-      if (/SELECT handle, at, src FROM/.test(t.replace(/\s+/g, " "))) {
-        lastActive += 1;
-        if (fail) throw new Error("the store would not answer");
-        return { rows: [{ handle: "rig-b", at: new Date().toISOString(), src: "act" }] };
-      }
-      return base.query(sql, params);
-    },
+    asked: base.asked, lastActive: () => lastActive, connects: () => connects, query,
+    connect: async () => { connects += 1; return { query, release() {} }; },
   };
 }
+const litOn = (body) => Object.fromEntries([...(body.within ?? []), ...(body.nearby ?? [])].filter((o) => "lit" in o).map((o) => [o.id, o.lit]));
 
-test("THE STORE DOOR'S ACTIVITY: current (no crossing asked) folds the house by its residents; a past crossing is historical and asks nothing; an unread store is unknown, never dark", async (t) => {
+test("THE STORE DOOR'S LIGHT: a bare read stands at TODAY's crossing (never 0) and its house is lit by a co-resident's act, in one bounded batch on its own connection; a past crossing — 0 included — is unknown and asks nothing; an unread store is unknown, never dark", async (t) => {
   if (!RECORDS_ENGINE) return t.skip(`no world engine: ${RECORDS_WHY}`);
   const { currentCrossing } = await import("../src/crossings.mjs");
+  const { resetActivityCache, ACTIVITY_HISTORICAL, ACTIVITY_UNAVAILABLE } = await import("../src/household-activity.mjs");
   const at = { x: String(REC_STANDPOINT.x), y: String(REC_STANDPOINT.y) };
+  resetActivityCache();
   const now = activityPool();
   const cur = await RECORDS_DOOR(new URLSearchParams(at), { p: now });
   assert.ok(!cur.error, JSON.stringify(cur.error?.body));
+  assert.equal(cur.body.crossing.n, currentCrossing(), "no `crossing` asked is today's (Number(null) is 0: the old trap)");
   assert.equal(now.lastActive(), 1, "one last-active statement for the town");
-  assert.deepEqual(cur.body.activity.households, { "hh:rig-house": currentCrossing(), "solo:rig-solo": null });
-  assert.equal(cur.body.activity.house_of["rig-a"], "hh:rig-house");
-  assert.equal(cur.body.activity.clock, currentCrossing());
-  const past = activityPool();
-  const hist = await RECORDS_DOOR(new URLSearchParams({ ...at, crossing: String(currentCrossing() - 2) }), { p: past });
-  assert.equal(hist.body.activity.historical, true);
-  assert.equal(hist.body.activity.clock, null);
-  assert.equal(past.lastActive(), 0, "a historical read asks the store nothing about activity");
+  assert.equal(now.connects(), 1, "on one connection of the injected store");
+  assert.ok(now.asked.some((a) => a.sql === "SET LOCAL statement_timeout = 5000"), "the batch bounds its own statements");
+  assert.deepEqual(litOn(cur.body), { [PARCEL_ID]: true }, "rig-b's act lights wright's house; nothing else carries `lit`");
+  assert.ok(!("lit_unknown" in cur.body));
+  assert.doesNotMatch(JSON.stringify(cur.body), /rig-b|rig-solo|"house_of"|"households"/, "no member, no map");
+  for (const c of ["", "-1", "soon"]) {
+    resetActivityCache();
+    const r = await RECORDS_DOOR(new URLSearchParams({ ...at, crossing: c }), { p: activityPool() });
+    assert.equal(r.body.crossing.n, currentCrossing(), `${JSON.stringify(c)} is today's crossing`);
+    assert.deepEqual(litOn(r.body), { [PARCEL_ID]: true });
+  }
+  for (const c of [String(currentCrossing() - 2), "0"]) {
+    const past = activityPool();
+    const hist = await RECORDS_DOOR(new URLSearchParams({ ...at, crossing: c }), { p: past });
+    assert.equal(hist.body.crossing.n, Number(c), `${c}: the read stands where it was asked`);
+    assert.deepEqual(litOn(hist.body), { [PARCEL_ID]: null });
+    assert.equal(hist.body.lit_unknown, ACTIVITY_HISTORICAL);
+    assert.equal(past.lastActive(), 0, "a historical read asks the store nothing about activity");
+  }
+  resetActivityCache();
   const down = activityPool({ fail: true });
   const un = await RECORDS_DOOR(new URLSearchParams(at), { p: down });
   assert.ok(!un.error, "an unread activity does not fail the read");
-  assert.equal(un.body.activity.households, null);
-  assert.match(un.body.activity.unavailable, /could not be read from the store/);
-  assert.equal(un.body.activity.clock, currentCrossing());
+  assert.deepEqual(litOn(un.body), { [PARCEL_ID]: null });
+  assert.equal(un.body.lit_unknown, ACTIVITY_UNAVAILABLE);
+  resetActivityCache();
 });
 
 // ── ONE STORE THROUGH THE REAL DISPATCHER (WLD-29 review 3887dfe1) ───────────
-// world2Serve('/world2/apex') used to hand its OWN pool to the apex as if a
-// caller had injected it, so the office store's activity was cached twice:
-// once under the pool (this door) and once under the store URL (1.0's apex and
-// eyes). These drive the actual dispatcher, the office pool set the way pool()
-// would have made it, beside a compatibility-path read of the same store.
+// world2Serve('/world2/apex') passes only a CALLER-injected pool to the apex:
+// the office's own store is read under the pen's default key, the one 1.0's
+// apex, the eyes and GET /world/lights share. These drive the actual
+// dispatcher with the office's pools set the way pool() would have made them.
 async function viaDispatcher(fn) {
   const serve = await import("../src/world2-serve.mjs");
+  const pen = await import("../src/world2-pen.mjs");
   const { resetActivityCache } = await import("../src/household-activity.mjs");
   const saved = ["WORLD2_PG", "WORLD2_PG_URL"].map((k) => [k, process.env[k]]);
   Object.assign(process.env, { WORLD2_PG: "1", WORLD2_PG_URL: "postgres://wld29-dispatch/none" });
   resetActivityCache();
-  try { return await fn(serve); }
-  finally { serve.__setPoolForTest(null); resetActivityCache(); for (const [k, v] of saved) { if (v == null) delete process.env[k]; else process.env[k] = v; } }
+  try { return await fn(serve, pen); }
+  finally { serve.__setPoolForTest(null); pen.__setPoolForTest(null); resetActivityCache(); for (const [k, v] of saved) { if (v == null) delete process.env[k]; else process.env[k] = v; } }
 }
 const AT = () => new URLSearchParams({ x: String(REC_STANDPOINT.x), y: String(REC_STANDPOINT.y) });
 
-test("THE REAL DISPATCHER, THE OFFICE'S OWN STORE: /world2/apex and a compatibility read of the same store share ONE activity batch and one answer — interleaved and concurrent", async (t) => {
+test("THE REAL DISPATCHER, THE OFFICE'S OWN STORE: /world2/apex, GET /world/lights' reader and 1.0's default share ONE activity batch — interleaved and concurrent", async (t) => {
   if (!RECORDS_ENGINE) return t.skip(`no world engine: ${RECORDS_WHY}`);
   const { readHouseholdActivity, resetActivityCache } = await import("../src/household-activity.mjs");
-  await viaDispatcher(async (serve) => {
+  const { worldLights } = await import("../src/world.mjs");
+  await viaDispatcher(async (serve, pen) => {
     const office = activityPool();
-    serve.__setPoolForTest(office);
-    const compat = await readHouseholdActivity({ read: (fn) => fn(office) });   // 1.0's shape: the office store, no injection
+    serve.__setPoolForTest(office); pen.__setPoolForTest(office);
+    const compat = await readHouseholdActivity({});   // 1.0's shape: the office store, no injection
     assert.equal(office.lastActive(), 1);
     const r = await serve.world2Serve("/world2/apex", AT());
     assert.equal(r.code, 200, JSON.stringify(r.body).slice(0, 200));
-    assert.equal(office.lastActive(), 1, "the dispatcher's own pool is the office store: no second batch");
-    assert.deepEqual(r.body.activity, compat, "one store, one answer");
+    assert.deepEqual(litOn(r.body), { [PARCEL_ID]: true });
+    const lights = await worldLights(null);
+    assert.equal(office.lastActive(), 1, "the dispatcher's door and the lights door read the office store's one answer: no second batch");
+    assert.deepEqual(lights.lit, ["hh:trueing-house"], "and it is that answer");
+    assert.equal(compat.households["hh:trueing-house"], lights.crossing);
     resetActivityCache();
     const fresh = activityPool();
-    serve.__setPoolForTest(fresh);
-    const [a, b] = await Promise.all([serve.world2Serve("/world2/apex", AT()), readHouseholdActivity({ read: (fn) => fn(fresh) })]);
-    assert.equal(fresh.lastActive(), 1, "concurrent misses across the two doors share one flight");
-    assert.deepEqual(a.body.activity, b);
+    serve.__setPoolForTest(fresh); pen.__setPoolForTest(fresh);
+    await Promise.all([serve.world2Serve("/world2/apex", AT()), worldLights(null), readHouseholdActivity({})]);
+    assert.equal(fresh.lastActive(), 1, "concurrent misses across three doors share one flight");
   });
 });
 
 test("THE REAL DISPATCHER, INJECTED STORES: store A and store B each read their own, the office's store is not asked, and an injected pool is actually used", async (t) => {
   if (!RECORDS_ENGINE) return t.skip(`no world engine: ${RECORDS_WHY}`);
-  await viaDispatcher(async (serve) => {
+  await viaDispatcher(async (serve, pen) => {
     const office = activityPool();
-    serve.__setPoolForTest(office);
-    const A = activityPool(), B = activityPool();
+    serve.__setPoolForTest(office); pen.__setPoolForTest(office);
+    const A = activityPool(), B = activityPool({ kinAt: () => "2026-07-01T00:00:00Z" });
     const ra = await serve.world2Serve("/world2/apex", AT(), { p: A });
     const rb = await serve.world2Serve("/world2/apex", AT(), { p: B });
     assert.equal(ra.code, 200); assert.equal(rb.code, 200);
     assert.deepEqual([A.lastActive(), B.lastActive(), office.lastActive()], [1, 1, 0], "each injected store read its own activity; the office store was not asked");
+    assert.deepEqual([A.connects(), B.connects(), office.connects()], [1, 1, 0], "on its own connection");
+    assert.deepEqual([litOn(ra.body)[PARCEL_ID], litOn(rb.body)[PARCEL_ID]], [true, false], "store B's old act is B's answer, never A's");
     await serve.world2Serve("/world2/apex", AT(), { p: A });
     assert.equal(A.lastActive(), 1, "store A's own answer is shared within its TTL");
   });

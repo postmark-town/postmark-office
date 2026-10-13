@@ -14,8 +14,9 @@
 //   - Bodies are always kept (Darko, 10-09: no read strips mark bodies).
 //   - A record keeps id, by, kind, class, tier, at, extent, body, weight (the
 //     total; never weight_parts) and the image link. A class record also keeps
-//     its dials, which are the class's physics: the walking pace rides every
-//     read on `the-town/resident` for that reason (world.mjs § markRecords).
+//     its dials, which are the class's physics. No class rides a read by name
+//     (WLD-29): the walk's one-liner is priced from the class's own dial, which
+//     the apex hands in (`paceKmPerCrossing`).
 //   - A polygon is said, not drawn: `shape: "polygon", vertices: n`. A mark the
 //     caller stands inside (`within`) keeps an outline of at most 8 vertices.
 //   - The always-sent ground set (the region rings and the water) becomes
@@ -83,9 +84,10 @@ export const paceKmH = (dials) => {
 
 /**
  * One card, one line. An act with no approved line says its blurb's first
- * sentence and its own fields. Walk's pace is read from the dial the read
- * carries (`the-town/resident`'s `pace_km_per_crossing`), so a ruled change
- * of pace changes the line; with no dial in hand the line names no speed.
+ * sentence and its own fields. Walk's pace is the resident class's own dial
+ * (`the-town/resident`'s `pace_km_per_crossing`, as the walk itself is priced),
+ * so a ruled change of pace changes the line; with no dial in hand the line
+ * names no speed.
  */
 export function oneLine(card, { pace = null } = {}) {
   const fixed = ONE_LINERS[card.action];
@@ -140,9 +142,10 @@ const CARDS_NOTE = {
 /**
  * The bare read's answer at `shape`. v0 answers the same object, untouched.
  * `named` is every id the read names for itself (within and nearby); a record
- * outside it is the always-sent ground set.
+ * outside it is the always-sent ground set. `paceKmPerCrossing` is the
+ * resident class's walking dial, for the walk's one-liner (null: none in hand).
  */
-export function shapeRead(answer, { shape = "v0", cards = null, within = [], named = [] } = {}) {
+export function shapeRead(answer, { shape = "v0", cards = null, within = [], named = [], paceKmPerCrossing = null } = {}) {
   if (shape === "v0" || !answer || answer.error) return answer;
   const inside = new Set(within);
   const own = new Set(named);
@@ -155,15 +158,9 @@ export function shapeRead(answer, { shape = "v0", cards = null, within = [], nam
   const out = {};
   for (const [k, v] of Object.entries(answer)) {
     if (k === "records") { out.records = records; out.ground = ground; continue; }
-    // THE LEAN READ CARRIES NO ACTIVITY BLOCK (WLD-29 independent review, c):
-    // the town-wide porch-light map grows with every house, and the lean read's
-    // size is a stated contract. Its absence here is the shape, not an unread
-    // store and not a dark town; the v0 read and the HTTP doors carry it whole.
-    if (k === "activity") continue;
     if (k === "actions" && cards == null) {
-      // the walk pace is law, read from the read's dials digest (WLD-29), not
-      // from a class record smuggled into `records`
-      const pace = paceKmH(answer.dials?.["the-town/resident"]);
+      // the walk pace is law: the class's own dial, handed in by the apex
+      const pace = paceKmH({ pace_km_per_crossing: paceKmPerCrossing });
       out.actions = shape === "v2" ? v.map((e) => e.action) : v.map((e) => oneLine(e, { pace }));
       out.cards = shape === "v2" ? "names-only" : "one-line";
       out.cards_note = CARDS_NOTE[shape];
@@ -184,8 +181,8 @@ export const RECORDS_V0 = "`records` — the full mark record for everything `wi
 const RECORDS_LEAN = "`records` — each mark `within` and `nearby` names, with its body (a polygon is said as its vertex count; a place you stand inside keeps an 8-point outline), `ground` — the town's region rings and water by name —";
 export const SIZE_V0 = 'SIZE: a bare call returns roughly 50–80k characters as of 2026-10, most of it `records` and the action cards, so use targeted reads: cards: "names" (the cards alone, shrunk), mark: "<id>" (one mark whole), find: "<q>", or read: "<action>" (one act).';
 const SIZE_LEAN = {
-  v1: "SIZE: a bare call is the lean read, roughly 17k characters as of 2026-10 (pinned under 18k; it grows with what stands near you), with each act as one line: mark: \"<id>\" is one mark whole, find: \"<q>\" finds one, read: \"<action>\" is one act's full card, and cards: \"full\" gives every card whole.",
-  v2: "SIZE: a bare call is the lean read, roughly 16k characters as of 2026-10 (pinned under 17k; it grows with what stands near you), with the acts by name only: mark: \"<id>\" is one mark whole, find: \"<q>\" finds one, read: \"<action>\" is one act's full card, and cards: \"full\" gives every card whole.",
+  v1: "SIZE: a bare call is the lean read, roughly 14k characters as of 2026-10 (it grows with what stands near you), with each act as one line: mark: \"<id>\" is one mark whole, find: \"<q>\" finds one, read: \"<action>\" is one act's full card, and cards: \"full\" gives every card whole.",
+  v2: "SIZE: a bare call is the lean read, roughly 13k characters as of 2026-10 (it grows with what stands near you), with the acts by name only: mark: \"<id>\" is one mark whole, find: \"<q>\" finds one, read: \"<action>\" is one act's full card, and cards: \"full\" gives every card whole.",
 };
 
 let moved = false;
