@@ -113,6 +113,9 @@ import { readHouseholdActivity, isCurrentRead } from "./household-activity.mjs";
 
 const state = { pool: null };
 
+/** Tests only: the office's own serve pool, as `pool()` would have made it. */
+export function __setPoolForTest(p) { state.pool = p; }
+
 export function world2ServeEnabled(env = process.env) {
   return env.WORLD2_PG === "1" && !!env.WORLD2_PG_URL;
 }
@@ -1232,7 +1235,11 @@ export async function world2Serve(path, searchParams, { p: injected = null } = {
   }
 
   if (path === "/world2/apex") {
-    const r = await world2Apex(searchParams, { p });
+    // ONE STORE, ONE ACTIVITY ANSWER (WLD-29 review 3887dfe1): only a store a
+    // CALLER injected travels as `p`. The office's own pool is left for the apex
+    // to obtain itself, so it reads (and shares) the office store's activity
+    // under the same key the 1.0 apex and eyes use — never as a second store.
+    const r = await world2Apex(searchParams, injected ? { p: injected } : {});
     return r.error ? r.error : { code: 200, body: r.body };
   }
 
