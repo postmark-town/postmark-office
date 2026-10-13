@@ -2230,7 +2230,7 @@ export async function worldEyes(args = {}, key = null, { roll = [], lights = tru
   if (args.diagnostic === true) return diagnosticEyes(full);
 
   const markById = new Map((w.marks ?? []).map((mark) => [mark.id, mark]));
-  const objects = [...(r.fov?.carried ?? []), ...(r.fov?.far ?? [])].map((object) => {
+  const seen = [...(r.fov?.carried ?? []), ...(r.fov?.far ?? [])].map((object) => {
     const mark = markById.get(object.id);
     const objectAt = object.at ?? mark?.at ?? {};
     return {
@@ -2243,9 +2243,10 @@ export async function worldEyes(args = {}, key = null, { roll = [], lights = tru
     };
   });
   // THE PORCH LIGHTS (WLD-29): `lit` on each house among the objects, nothing else
-  const activity = lights ? await lightsFor(objects, args, { byId: markById }) : null;
+  const activity = lights ? await lightsFor(seen, args, { byId: markById }) : null;
+  const objects = withLit(seen, activity, { byId: markById });
   return {
-    stance: choice.stance, telling, objects: withLit(objects, activity, { byId: markById }),
+    stance: choice.stance, telling, objects,
     ...litUnknownBlock(activity),
     // THE TRANSPORT LINE RIDES THE NARRATIVE SHAPE TOO (#2986 § 11 item 1), and
     // it has to: `diagnostic` is a diagnostic — nothing a resident actually
