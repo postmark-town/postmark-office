@@ -512,15 +512,17 @@ test("RECORDS: the door's block is 1.0's own `markRecords` over the same world �
   const mine = r.body.records;
   const theirs = await oracleRecords();
   assert.ok(mine && typeof mine === "object", "the door answered no `records` block — A7's sixty reds, one standpoint at a time");
-  assert.deepEqual(Object.keys(mine), Object.keys(theirs), "the id set and its order are 1.0's: the spine, the field of view, the ground, the mover's class");
+  assert.deepEqual(Object.keys(mine), Object.keys(theirs), "the id set and its order are 1.0's: the spine, the field of view, the ground");
   for (const id of Object.keys(theirs)) {
     assert.deepEqual(mine[id], stripUnanswered(theirs[id]), `records[${id}]`);
     for (const k of Object.keys(apex.RECORD_FIELDS_NOT_ANSWERED)) assert.ok(!(k in mine[id]), `records[${id}].${k} must be absent, not approximated`);
   }
   // the ground and the class rode along, as 1.0 appends them
   assert.ok("the-town/the-town-centre" in mine, "the town's ground is in the block whether or not the field of view reached it");
-  assert.ok("the-town/resident" in mine, "the mover's own class travels with every reader");
-  assert.equal(mine["the-town/resident"].parent, "the-town/entity", "a class mark's authored parent is the fold's, read from its law row");
+  // WLD-29: the mover's class no longer rides `records` by name, on either door;
+  // its dials ride the read's digest, read from the same law row
+  assert.ok(!("the-town/resident" in mine) && !("the-town/resident" in theirs), "no class record is smuggled into records by name");
+  assert.deepEqual(r.body.dials["the-town/resident"], REC_CLASS_ROW.data.dials, "the class's dials ride the digest, from its law row");
   // A predicate carries no geometry, so no field of view names it and no
   // `records` carries it — its `parent` reaches a reader through
   // `/world2/investigate`, which lists a mark's predicates by exactly that edge.

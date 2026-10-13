@@ -129,7 +129,9 @@ test("v1: bodies kept, records lean, polygons said, the ground by name, each act
       else assert.ok(!("points" in rec), `${id} (not within) is said, not drawn`);
     }
   }
-  assert.ok(lean.records["the-town/resident"]?.dials, "the mover's class keeps the pace the walk is priced by");
+  // WLD-29: the mover's class no longer rides `records`; its pace rides the dials digest, untouched by the shape
+  assert.ok(!("the-town/resident" in lean.records), "the class is not smuggled into records by name");
+  assert.ok(Number(lean.dials?.["the-town/resident"]?.pace_km_per_crossing) > 0, "the lean read keeps the pace the walk is priced by, in its dials");
   const groundIds = Object.keys(full.records).filter((id) => !named.has(id) && full.records[id].kind !== "class");
   assert.ok(groundIds.length > 0, "the rig's read carries a ground set");
   assert.deepEqual(lean.ground.map((g) => g.id), groundIds, "the ground set becomes names, in order");
@@ -183,7 +185,7 @@ test("a description that moved fails soft: the v0 words come back, nothing throw
 
 test("walk's pace is the resident class's dial: the read's own dial gives the line, and a changed dial changes it", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
   const full = await bareAt(undefined);
-  const dial = full.records["the-town/resident"]?.dials?.pace_km_per_crossing;
+  const dial = full.dials?.["the-town/resident"]?.pace_km_per_crossing;
   assert.ok(Number(dial) > 0, "the read carries the pace dial");
   const lean = await bareAt("v1");
   assert.ok(lean.actions.find((a) => a.action === "walk").line.includes(`about ${dial / 12} km an hour`), "the line says the dial's pace");

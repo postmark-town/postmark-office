@@ -46,7 +46,9 @@ import { guardedDraftsForKey, guardedLiveChildrenOf, guardedLiveMarks } from "./
 import { WORLD_STAKE_TOOLS, actingAs, callWorldStakeTool, emptyPurseRefusalFor, heldAtOffice, worldPortfolioStakeSlice, markStakeBlock } from "./world-stake.mjs"; // P3 draft, append-shaped
 import { toConfirm } from "./stamps-preview.mjs"; // POS-83: the inline stake's half of the confirmation step
 import { visitorRulesGate } from "./visitor-rules.mjs"; // POS-300: a berth reads the town's rules for visitors before its first say
-import { classNames, classRoster, classDials, departurePace, freeCellIn, RESIDENT_INSTANTIABLE, residentMayInstantiate, STRIDE_MARK_ID } from "./world-classes.mjs"; // which classes exist — read from the record, never held
+import { classNames, classRoster, classDials, departurePace, freeCellIn, RESIDENT_INSTANTIABLE, residentMayInstantiate } from "./world-classes.mjs";
+import { dialsDigestOf } from "./read-digests.mjs";
+import { readHouseholdActivity, isCurrentRead } from "./household-activity.mjs"; // which classes exist — read from the record, never held
 import { HOLD_TOOLS, callHoldTool } from "./world-hold.mjs"; // the object primitive: who holds what
 import { createVoices, EARSHOT_M, HEAR_MAX, HEARING_WINDOW, RECORD_KEPT_AT } from "./voices.mjs";
 import { createHearingWindow } from "./hearing-window.mjs"; // earshot: speech at a position (the party line)
@@ -2049,21 +2051,34 @@ export async function markRecords(ids = [], w = null) {
   let byId = _byIds.get(w);
   if (!byId) _byIds.set(w, byId = new Map((w?.marks ?? []).map((m) => [m.id, m])));
   const out = {};
-  // THE MOVER'S OWN CLASS RIDES EVERY READ (2026-09-13, Keemin: "people are getting
-  // confused by the fallback '?' walking ETA"). The viewer prices a walk preview
-  // by `the-town/resident`'s `dials.pace_km_per_crossing` (60, ruled by 008b) —
-  // `departPaceKm(byId)` — and on the resident path `byId` is THIS map. A class
-  // mark has no place, so it was never nearby and never on the spine, the dial
-  // was never in hand, and every signed-in reader's desk fell back to the legacy
-  // 15 km stride: a "?" chip and an ETA four times too long. Spectators, whose
-  // map is the fold, never saw it. The class every reader IS travels with them,
-  // the way the town's ground does.
-  for (const id of [...ids, ...(await groundMarkIds(w)), STRIDE_MARK_ID]) {
+  // THE MOVER'S CLASS NO LONGER RIDES HERE BY NAME (WLD-29). From 2026-09-13
+  // `the-town/resident` was added to every read's records so the viewer could
+  // price a walk; the read now carries every dial in its own digest
+  // (`dials`, read-digests.mjs), and `records` is what the answer names.
+  for (const id of [...ids, ...(await groundMarkIds(w))]) {
     if (id == null || out[id]) continue;
     const mark = byId.get(id);
     if (mark) out[id] = mark;
   }
   return out;
+}
+
+// THE DIALS DIGEST of one world, built once per world object (read-digests.mjs).
+const _dials = new WeakMap();
+export async function worldDials(w = null) {
+  w ??= await world();
+  let d = _dials.get(w);
+  if (!d) _dials.set(w, d = dialsDigestOf(w?.marks ?? []));
+  return d;
+}
+
+/** The middle every resident and spectator read carries (WLD-29): the dials digest and the household activity digest. */
+export async function readMiddle(args = {}, w = null) {
+  const [dials, activity] = await Promise.all([
+    worldDials(w),
+    readHouseholdActivity({ current: isCurrentRead(args?.crossing) }),
+  ]);
+  return { dials, activity };
 }
 
 export async function worldEyes(args = {}, key = null, { roll = [] } = {}) {
@@ -2162,6 +2177,8 @@ export async function worldEyes(args = {}, key = null, { roll = [] } = {}) {
     // THE RECORDS THIS ANSWER NAMES (2026-09-10). `objects` is the only list
     // here that names ids, so this is exactly those plus the ground.
     records: await markRecords(objects.map((o) => o.id), w),
+    // THE MIDDLE (WLD-29): every dial, and which houses are lit, beside the records.
+    ...(await readMiddle(args, w)),
     // Grouped by the engine's own distance bands, nearest band first — the same
     // organisation the telling uses, so the compact shape and the prose agree.
     // An empty array means nobody is about; the key's ABSENCE means presence is

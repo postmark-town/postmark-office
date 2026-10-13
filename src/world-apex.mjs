@@ -58,7 +58,7 @@ import {
   walkersAround,
   whoOnRoll,
   witnessStamp,
-  markRecords,
+  markRecords, readMiddle,
   worldEyes,
   worldNoteViaOffice,
   worldInvestigate,
@@ -2297,6 +2297,8 @@ async function apexRead(args, key, ctx = {}) {
     ...spine.map((m) => m.id),
     ...nearbyOut.map((o) => o.id),
   ]);
+  // THE MIDDLE (WLD-29): every dial and the household activity, beside the records
+  const { dials, activity } = await readMiddle(args);
 
   const answer = {
     standpoint: {
@@ -2342,6 +2344,8 @@ async function apexRead(args, key, ctx = {}) {
     // region rings and the water) — the one small whole a painting needs for
     // its floor. See world.mjs § `records`.
     records,
+    dials,
+    activity,
     ...(oriented.present ? { present: oriented.present } : {}),
     ...(happened ? { happened } : {}),
     ...(focus ? { focus } : {}),

@@ -160,6 +160,17 @@ const MARKS = [
   { id: "the-town/the-old-signal-hut", by: "the-town", kind: "sited", tier: "market", at: { x: 500, y: 640 }, extent: { w: 20, h: 20 },
     body: "A hut the town keeps but has not made law.",
     props: { class: "timetable", class_version: 1, dials: { pace_km_per_crossing: 405 }, timetable: TIMETABLE, affordances: BOARD_AFFORDANCE } },
+  // ── THE READ'S MIDDLE (WLD-29): dials in the fold's own place, `mark.dials` ──
+  // The mover's class, with a DISTINCTIVE stride no other source names; it has
+  // no place, so no standpoint's spine or field of view ever reaches it.
+  { id: "the-town/resident", by: "the-town", kind: "class", tier: "constitution", body: "WLD29-CLASS-BODY-NOT-FOR-THE-DIGEST",
+    dials: { pace_km_per_crossing: 47 } },
+  // a dialled mark far from every standpoint the suite reads from, and two
+  // malformed dials a digest must not carry or choke on
+  { id: "zeta/far-lamp", by: "zeta", kind: "sited", tier: "market", at: { x: -30000, y: -30000 }, extent: { w: 2, h: 2 },
+    body: "WLD29-LAMP-BODY-NOT-FOR-THE-DIGEST", dials: { glow: 3 } },
+  { id: "zeta/empty-dials", by: "zeta", kind: "sited", tier: "market", at: { x: -30010, y: -30000 }, extent: { w: 2, h: 2 }, dials: {} },
+  { id: "zeta/array-dials", by: "zeta", kind: "sited", tier: "market", at: { x: -30020, y: -30000 }, extent: { w: 2, h: 2 }, dials: [1, 2] },
 ];
 
 // THE STAGE-D WORLD: main, plus the wheelhouse's `board` affordance restored.
@@ -1913,4 +1924,44 @@ test("THE ARENA IS CLOSED: do: strike and do: loot answer \"the arena is closed\
     if (was === undefined) delete process.env.WORLD_DYNAMIC_DB; else process.env.WORLD_DYNAMIC_DB = was;
   }
   assert.equal(existsSync(dyn), false, "an arena verb at the apex created dynamic.db");
+});
+
+// ── THE READ'S MIDDLE (WLD-29) ───────────────────────────────────────────────
+//
+// Every dial a page needs rides the read's own digest — the mover's class, off
+// every standpoint, among them — and `records` stays exactly what the answer
+// names. The digest carries dials and nothing else of a record.
+const MIDDLE_DIALS = { "the-town/resident": { pace_km_per_crossing: 47 }, "zeta/far-lamp": { glow: 3 } };
+
+test("THE READ'S MIDDLE: apex and eyes, spectator and resident, carry every dial (the off-reach class and far lamp too) and no record body; records stay narrow; the activity block rides beside", async () => {
+  on();
+  const { worldEyes } = await import("../src/world.mjs");
+  const reads = {
+    "apex · spectator": await worldApex({ ...A }, null),
+    "apex · resident": await worldApex({ handle: "alpha" }, KEY_ALPHA),
+    "eyes · spectator": await worldEyes({ ...A }, null),
+    "eyes · resident": await worldEyes({ handle: "alpha" }, KEY_ALPHA),
+  };
+  for (const [what, r] of Object.entries(reads)) {
+    assert.ok(r && !r.error, `${what}: ${JSON.stringify(r?.error ?? r)}`);
+    assert.deepEqual(r.dials, MIDDLE_DIALS, `${what}: the digest is every dialled mark's dials, and only those (empty and array dials excluded)`);
+    assert.doesNotMatch(JSON.stringify(r.dials), /WLD29-.*-BODY|by|tier|body/, `${what}: dials only, never the record`);
+    for (const id of Object.keys(MIDDLE_DIALS))
+      assert.ok(!Object.hasOwn(r.records, id), `${what}: ${id} is not smuggled into records — the answer never named it`);
+    assert.ok(r.activity && Number.isInteger(r.activity.clock), `${what}: the activity block and its clock ride the read`);
+    // this suite has no store: the digest says so rather than calling the town dark
+    assert.equal(r.activity.households, null);
+    assert.match(r.activity.unavailable, /could not be read from the store/);
+  }
+});
+
+test("THE READ'S MIDDLE · a historical apex read carries no lit state, and says why; the dials still ride", async () => {
+  on();
+  const { currentCrossing } = await import("../src/crossings.mjs");
+  const r = await worldApex({ ...A, crossing: currentCrossing() - 3 }, null);
+  assert.deepEqual(r.dials, MIDDLE_DIALS);
+  assert.equal(r.activity.historical, true);
+  assert.equal(r.activity.clock, null);
+  assert.equal(r.activity.households, null);
+  assert.match(r.activity.note, /activity isn't kept per crossing/);
 });

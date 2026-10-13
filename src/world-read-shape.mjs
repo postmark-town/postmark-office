@@ -140,7 +140,7 @@ const CARDS_NOTE = {
 /**
  * The bare read's answer at `shape`. v0 answers the same object, untouched.
  * `named` is every id the read names for itself (within and nearby); a record
- * outside it is the always-sent ground set (or the mover's class).
+ * outside it is the always-sent ground set.
  */
 export function shapeRead(answer, { shape = "v0", cards = null, within = [], named = [] } = {}) {
   if (shape === "v0" || !answer || answer.error) return answer;
@@ -156,7 +156,9 @@ export function shapeRead(answer, { shape = "v0", cards = null, within = [], nam
   for (const [k, v] of Object.entries(answer)) {
     if (k === "records") { out.records = records; out.ground = ground; continue; }
     if (k === "actions" && cards == null) {
-      const pace = paceKmH(answer.records?.["the-town/resident"]?.dials);
+      // the walk pace is law, read from the read's dials digest (WLD-29), not
+      // from a class record smuggled into `records`
+      const pace = paceKmH(answer.dials?.["the-town/resident"]);
       out.actions = shape === "v2" ? v.map((e) => e.action) : v.map((e) => oneLine(e, { pace }));
       out.cards = shape === "v2" ? "names-only" : "one-line";
       out.cards_note = CARDS_NOTE[shape];
