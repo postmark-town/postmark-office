@@ -216,7 +216,11 @@ test("the lean read's stated size is near what it measures at the rig's standpoi
 // ── THE LEAN READ OMITS THE ACTIVITY BLOCK (WLD-29 independent review, c) ────
 // A realistically large town-wide map — 400 houses, 600 handles, solo houses
 // among them — rides the FULL answer; the lean v1/v2 answer carries none of it
-// and stays inside the SIZE_LEAN sentences' own figures (v1 ~15k, v2 ~14k).
+// and stays under the ceiling the SIZE_LEAN sentences themselves state. The
+// budget is Wright's option B (AUTHORITY 2026-10-13T16:54:46.023Z): the dials
+// digest rides the lean read, measured 17,152 / 16,052 chars on the World pin
+// at kogane, described as ~17k / ~16k and pinned under 18k / 17k (about 5% / 6%
+// headroom). Growth past the ceiling is an owner decision, not an edit here.
 function bigActivity() {
   const households = {}, house_of = {};
   for (let i = 0; i < 400; i++) {
@@ -227,10 +231,15 @@ function bigActivity() {
   }
   return { clock: 247, window: 1, households, house_of, means: "a long sentence ".repeat(20) };
 }
-const LEAN_BUDGET = { v1: 15_000, v2: 14_000 };   // the SIZE_LEAN sentences' own numbers, not raised
+// the ceiling is READ from the published sentence, so the two cannot drift apart
+const leanCeiling = (shape) => Number(/pinned under (\d+)k/.exec(SIZE_LEAN_TEXT[shape])?.[1]) * 1000;
+const SIZE_LEAN_TEXT = { v1: null, v2: null };
 
-test("LEAN v1/v2 OMIT `activity` and stay inside SIZE_LEAN's figures with a large town map on the full read; v0 keeps it whole; shaping does not mutate", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
+test("LEAN v1/v2 OMIT `activity`, KEEP the dials digest, and stay under the ceiling SIZE_LEAN states, with a large town map on the full read; v0 keeps it whole; shaping does not mutate", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
   const full = await bareAt(undefined);
+  for (const shape of ["v1", "v2"]) SIZE_LEAN_TEXT[shape] = describeAt(APEX_DESCRIPTION, shape);   // the tool's real published sentence
+  const LEAN_BUDGET = { v1: leanCeiling("v1"), v2: leanCeiling("v2") };
+  assert.deepEqual(LEAN_BUDGET, { v1: 18_000, v2: 17_000 }, "the published ceilings are the ruled ones");
   const big = bigActivity();
   const withMap = { ...full, activity: big };
   const fullChars = JSON.stringify(withMap).length;
@@ -241,9 +250,10 @@ test("LEAN v1/v2 OMIT `activity` and stay inside SIZE_LEAN's figures with a larg
     const lean = shapeRead(withMap, { shape, within: (full.within ?? []).map((m) => m.id), named: [...(full.within ?? []), ...(full.nearby ?? [])].map((m) => m.id) });
     assert.ok(!("activity" in lean), `${shape}: the lean read carries no activity block`);
     const chars = JSON.stringify(lean).length;
-    console.log(`    LEAN PARTS · ${shape} ${JSON.stringify(Object.fromEntries(Object.entries(lean).map(([k, v]) => [k, JSON.stringify(v ?? null).length])))}`);
     console.log(`    LEAN SIZE · ${shape} ${chars} chars (budget ${LEAN_BUDGET[shape]}); full v0 with the map ${fullChars}; the map alone ${mapChars}`);
-    assert.ok(chars <= LEAN_BUDGET[shape], `${shape}: ${chars} chars is past SIZE_LEAN's ${LEAN_BUDGET[shape]}`);
+    assert.ok(chars <= LEAN_BUDGET[shape], `${shape}: ${chars} chars is past the stated ceiling ${LEAN_BUDGET[shape]}`);
+    assert.ok(lean.dials && lean.dials["the-town/resident"], `${shape}: the full dials digest rides the lean read (option B)`);
+    assert.deepEqual(lean.dials, full.dials, `${shape}: the whole digest, not a subset`);
     assert.ok(lean.records && lean.ground && lean.dials, `${shape}: records, ground and dials are kept`);
     assert.ok(lean.records["the-town/resident"]?.dials, `${shape}: the compatibility stride record is kept`);
   }

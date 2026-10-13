@@ -184,8 +184,8 @@ export const RECORDS_V0 = "`records` — the full mark record for everything `wi
 const RECORDS_LEAN = "`records` — each mark `within` and `nearby` names, with its body (a polygon is said as its vertex count; a place you stand inside keeps an 8-point outline), `ground` — the town's region rings and water by name —";
 export const SIZE_V0 = 'SIZE: a bare call returns roughly 50–80k characters as of 2026-10, most of it `records` and the action cards, so use targeted reads: cards: "names" (the cards alone, shrunk), mark: "<id>" (one mark whole), find: "<q>", or read: "<action>" (one act).';
 const SIZE_LEAN = {
-  v1: "SIZE: a bare call is the lean read, roughly 15k characters as of 2026-10 (it grows with what stands near you), with each act as one line: mark: \"<id>\" is one mark whole, find: \"<q>\" finds one, read: \"<action>\" is one act's full card, and cards: \"full\" gives every card whole.",
-  v2: "SIZE: a bare call is the lean read, roughly 14k characters as of 2026-10 (it grows with what stands near you), with the acts by name only: mark: \"<id>\" is one mark whole, find: \"<q>\" finds one, read: \"<action>\" is one act's full card, and cards: \"full\" gives every card whole.",
+  v1: "SIZE: a bare call is the lean read, roughly 17k characters as of 2026-10 (pinned under 18k; it grows with what stands near you), with each act as one line: mark: \"<id>\" is one mark whole, find: \"<q>\" finds one, read: \"<action>\" is one act's full card, and cards: \"full\" gives every card whole.",
+  v2: "SIZE: a bare call is the lean read, roughly 16k characters as of 2026-10 (pinned under 17k; it grows with what stands near you), with the acts by name only: mark: \"<id>\" is one mark whole, find: \"<q>\" finds one, read: \"<action>\" is one act's full card, and cards: \"full\" gives every card whole.",
 };
 
 let moved = false;
