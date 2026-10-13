@@ -117,6 +117,8 @@ test("GET /world/eyes and GET /world/apex: no `dials`, no `activity`, no house m
   const focus = (await get(`/world/apex?${AT}&mark=${encodeURIComponent(PARCEL)}`)).body.focus;
   assert.equal(focus?.porch_light?.lit, true, JSON.stringify(focus?.porch_light));
   assert.equal(focus.porch_light.last_active_crossing, C);
+  assert.deepEqual(Object.keys(focus.porch_light).sort(), ["crossing", "last_active_crossing", "lit", "means"], "when, and what lights a house — nothing else");
+  assert.doesNotMatch(JSON.stringify(focus.porch_light), /kogane-kin|"who"|"house_of"/, "never who");
   assert.match(focus.porch_light.means, /C or C-1/);
   const notHouse = (await get(`/world/apex?${AT}&mark=${encodeURIComponent("the-town/let-there-be-light")}`)).body.focus;
   assert.ok(notHouse && !notHouse.error && !("porch_light" in notHouse), "a mark that is not a house carries no light");
