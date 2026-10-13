@@ -113,6 +113,7 @@ process.env.WORLD2_PG_URL = RECORD_ON.WORLD2_PG_URL;
 const claimsPen = await import("../src/world2-claims.mjs");
 let unread = () => {};
 let pen;
+const DROP_SWEEP = /^SELECT nonce FROM acts WHERE COALESCE\(household, ''\) = \$1 AND actor = \$2 AND action = 'units:drop-sweep'/i;
 const fresh = async () => {
   uninstallActsPen();
   pen = installActsPen({ households: REGISTRY_ROWS.households });
@@ -130,8 +131,21 @@ const fresh = async () => {
         .sort((a, b) => Number(new Date(a.at)) - Number(new Date(b.at)) || Number(a.id) - Number(b.id));
       return { rows, rowCount: rows.length };
     }
+    if (DROP_SWEEP.test(text)) return { rows: [], rowCount: 0 };
     return query(sql, params);
   };
+  // …and #503's drop-sweep cursor (WLD-27, now on the train), asked through a
+  // pooled client (officeRead) when a chest dispatch reads the set-down units
+  // still out: this rig has none. That one statement only; the rest is the stub's.
+  if (typeof pen.connect === "function") {
+    const connect = pen.connect.bind(pen);
+    pen.connect = async (...a) => {
+      const c = await connect(...a);
+      const q = c.query.bind(c);
+      c.query = async (sql, params = []) => (DROP_SWEEP.test(String(sql).replace(/\s+/g, " ").trim()) ? { rows: [], rowCount: 0 } : q(sql, params));
+      return c;
+    };
+  }
   return pen;
 };
 

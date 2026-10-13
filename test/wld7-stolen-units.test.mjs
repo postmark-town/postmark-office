@@ -66,6 +66,9 @@ function world({ marks = {}, holders = {}, things = [] } = {}) {
       return { applied: n };
     },
     withdraw: async (m) => { withdrawn.push(m); return { withdrawn: true }; },
+    // the exit's settled holder read (WLD-27 #503, now on the train): no ledger
+    // process here to order against — the train's own unit fixtures do the same
+    markTurn: (id, fn) => fn(),
   };
   const seed = (action, moves, object = null) => acts.push({ id: acts.length + 100, class: "holding", action, object, payload: { units: true, moves } });
   const census = () => JSON.stringify({ acts: acts.length, ledger, left: left.length, withdrawn: withdrawn.length, positions });
