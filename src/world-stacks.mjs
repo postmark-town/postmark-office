@@ -285,23 +285,26 @@ export function refuseOverCarry({ who, units, things, adding, cap }) {
   return { carried: now + adding, cap };
 }
 
-// ── THE TAKEN-CLASS HOOK (WLD-7's, built inactive) ──────────────────────────
+// ── THE STOLEN-CLASS HOOK (WLD-7's, built inactive) ─────────────────────────
 //
-// "An act on a holding whose top class is taken candy refuses with its clue
+// "An act on a holding whose top class is stolen candy refuses with its clue
 // sentence." WLD-7 owns the flag, its activation and the clue; this is only the
-// hook. A class is TAKEN when its record says so — `dials.taken: true`, its
-// sentence in `dials.clue` — and no class in the Keeping Works says so today,
-// so the hook stands and refuses nothing. It asks the holding's TOP class and
-// that class's ancestors: a holding of candies is a holding of consumables too.
+// hook. A class is STOLEN when its record says so — `dials.stolen: true` (the
+// boolean, nothing else), its sentence in `dials.clue` — and no class in the
+// Keeping Works says so today, so the hook stands and refuses nothing. It asks
+// the holding's TOP class and that class's ancestors: a holding of candies is a
+// holding of consumables too. The heist's word is STOLEN (Darko, via Wright,
+// AUTHORITY 2026-10-13T14:54:34.436Z), with no alias: a record saying
+// `taken: true` is not read as stolen.
 
-export function takenRefusal(topClass, classRecord, extendsOf) {
+export function stolenRefusal(topClass, classRecord, extendsOf) {
   if (!topClass) return null;
   for (const c of ancestry(topClass, extendsOf)) {
     const rec = classRecord(c);
     const d = rec?.dials && typeof rec.dials === "object" ? rec.dials : {};
-    if (d.taken === true) {
-      const clue = typeof d.clue === "string" && d.clue.trim() ? d.clue.trim() : `the ${c} is gone.`;
-      return bounce(423, clue, `the ${c} class is taken; this act waits until it is returned. Nothing was recorded.`, { taken: c });
+    if (d.stolen === true) {
+      const clue = typeof d.clue === "string" && d.clue.trim() ? d.clue.trim() : `the ${c} has been stolen.`;
+      return bounce(423, clue, `the ${c} has been stolen; nothing moves until it is returned. Nothing was recorded.`, { stolen: c });
     }
   }
   return null;

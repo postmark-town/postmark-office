@@ -23,7 +23,7 @@ const CLASSES = {
   chest: { extends: "thing", dials: { capacity: 30, capacity_min: 1, capacity_max: 120, first_stock: 30, portable: true, welcome: "open" } },
   mark: { extends: "postmark-node", dials: {} },
   // the root the Keeping Works carries (postmark-node/mark.md): while a class is
-  // taken, a chain that names a class the law lacks is refused as unknown (WLD-7)
+  // stolen, a chain that names a class the law lacks is refused as unknown (WLD-7)
   "postmark-node": { dials: {} },
 };
 const snapOf = (classes) => ({ classes: new Map(Object.entries(classes)) });
@@ -221,9 +221,9 @@ test("a return that fails halfway is finished by the retry — never doubled", a
   assert.equal(w.ledger.length, 3);
 });
 
-test("the taken-class hook at the door: refuses with the clue, inactive otherwise, restored allows", async () => {
+test("the stolen-class hook at the door: refuses with the clue, inactive otherwise, restored allows", async () => {
   const classes = structuredClone(CLASSES);
-  classes.candy.dials = { taken: true, clue: "The sweet jars are empty; follow the wrappers." };
+  classes.candy.dials = { stolen: true, clue: "The sweet jars are empty; follow the wrappers." };
   const w = world({ classes, marks: { [CHEST]: chestMark() } });
   w.seed(UNIT_ACTION.stock, [{ from: null, to: CHEST, label: "test-comets", n: 30 }], CHEST);
   await assert.rejects(callUnits("take", { from: CHEST }, KEY, "sbx-cy", w.deps), (e) => e.code === 423 && e.defect === "The sweet jars are empty; follow the wrappers.");

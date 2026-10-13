@@ -1,4 +1,4 @@
-// wld7-taken-class.test.mjs — WLD-7: a TAKEN class refuses give, take and drop
+// wld7-stolen-class.test.mjs — WLD-7: a STOLEN class refuses give, take and drop
 // of a whole thing of that class (or of a class under it), with its clue, and
 // the same thing moves again once the class is returned.
 //
@@ -6,11 +6,11 @@
 // as prod runs it (flipped, guards on), against an in-memory record
 // (`acts-pen-stub.mjs`) and a synthetic world clone. The class layer is a REAL
 // law snapshot, published through `reloadLawSnapshot` — the office's one way of
-// learning the law moved — from synthetic rows: the candy class is marked taken
+// learning the law moved — from synthetic rows: the candy class is marked stolen
 // and returned by publishing a new snapshot, never by poking a view. Nothing
 // here reads a real record, a store or a ledger.
 //
-//   node --test test/wld7-taken-class.test.mjs
+//   node --test test/wld7-stolen-class.test.mjs
 
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
@@ -160,8 +160,9 @@ async function publish(classes) {
   assert.equal(r.changed, true, "the snapshot was published");
   assert.equal(lawSnapshot().pin.settlement, n);
 }
-const CLUE = "Test clue: the sweet jars are empty; follow the wrappers.";
-const taken = (over = {}) => { const l = LAW(); l.candy.dials = { taken: true, clue: CLUE }; Object.assign(l, over); return l; };
+// Darko's exact sentence (AUTHORITY 2026-10-13T14:53:34.636Z), as a fixture — the door reads the class's own clue
+const CLUE = "No such thing as candy exists";
+const stolen = (over = {}) => { const l = LAW(); l.candy.dials = { stolen: true, clue: CLUE }; Object.assign(l, over); return l; };
 
 after(() => {
   unread(); uninstallActsPen(); claimsPen.__setPoolForTest(null); resetLawSnapshot();
@@ -179,33 +180,38 @@ const holderOf = async (id) => hold.liveHolder(await guardedAttachments(), id);
 /** Everything a refusal must leave alone: the acts, the docket, who holds what. */
 const census = async (ids) => JSON.stringify({ acts: pen.rows().map((a) => [a.id, a.action, a.object]), claims: pen.claims().length, holders: await Promise.all(ids.map(holderOf)) });
 
-function refusedTaken(out, klass, clue = CLUE) {
+// THE RESIDENT'S WORDS (WLD-7 stolen correction): the headline is the class's
+// own clue; the explanation is Wright's proposed sentence (AUTHORITY
+// 2026-10-13T14:54:34.436Z) — Darko may change it at the sitting.
+const EXPLAIN = (c) => `the ${c} has been stolen; nothing moves until it is returned. Nothing was recorded.`;
+function refusedStolen(out, klass, clue = CLUE) {
   assert.equal(out.r, undefined, `admitted: ${JSON.stringify(out.r)}`);
   assert.equal(out.e.code, 423, `${out.e.code} ${out.e.defect}`);
-  assert.equal(out.e.defect, clue);
-  assert.equal(out.e.taken, klass);
-  assert.match(out.e.hint, /Nothing was recorded/);
+  assert.equal(out.e.defect, clue, "the headline is the class's clue");
+  assert.equal(out.e.hint, EXPLAIN(klass), "the explanation, exactly");
+  assert.equal(out.e.stolen, klass, "the refusal names the stolen class in `stolen`");
+  assert.ok(!("taken" in out.e), "no `taken` field rides any refusal");
 }
 
-// ── 1 · one candy, normal → taken → returned, through the real door ────────
+// ── 1 · one candy, normal → stolen → returned, through the real door ────────
 
-test("WHOLE CANDY, ONE OBJECT: take works; taken refuses give, drop and take with the clue and moves nothing; returned, the same object gives and drops again", async () => {
+test("WHOLE CANDY, ONE OBJECT: take works; stolen refuses give, drop and take with the clue and moves nothing; returned, the same object gives and drops again", async () => {
   await fresh();
   await publish(LAW());
   const t = await door({ thing: COMET, handle: "cy" }, CY);
   assert.equal(t.r?.did, "take", JSON.stringify(t.e ?? t.r));
 
-  await publish(taken());
+  await publish(stolen());
   const before = await census([COMET]);
-  refusedTaken(await door({ thing: COMET, to: "dee", handle: "cy" }, CY), "candy");    // give
-  refusedTaken(await door({ thing: COMET, handle: "cy" }, CY), "candy");               // drop (cy holds it)
+  refusedStolen(await door({ thing: COMET, to: "dee", handle: "cy" }, CY), "candy");    // give
+  refusedStolen(await door({ thing: COMET, handle: "cy" }, CY), "candy");               // drop (cy holds it)
   assert.equal(await census([COMET]), before, "no act, no claim, no holder moved — and no set-down amend was filed");
   assert.equal(await holderOf(COMET), "cy", "a refusal is not a disappearance: cy still holds it");
   // the class is still registered, its labels and identity intact — only the flag moved
   const snap = lawSnapshot();
   assert.deepEqual(snap.classes.get("candy").labels, LABELS);
   assert.equal(snap.classes.get("candy").extends, "consumable");
-  // the read stays truthful while the class is taken
+  // the read stays truthful while the class is stolen
   const reads = await hold.callHoldTool("world_holdings", { handle: "cy" }, CY);
   assert.deepEqual(reads.holding.map((h) => h.thing), [COMET]);
 
@@ -215,28 +221,65 @@ test("WHOLE CANDY, ONE OBJECT: take works; taken refuses give, drop and take wit
   const d = await door({ thing: COMET, handle: "dee" }, DEE);
   assert.equal(d.r?.did, "drop", JSON.stringify(d.e ?? d.r));
   assert.equal(await holderOf(COMET), null, "the same object, not a recreated one, stands on the ground");
-  // and a take from the ground while taken is refused too (the third face)
-  await publish(taken());
+  // and a take from the ground while stolen is refused too (the third face)
+  await publish(stolen());
   const b2 = await census([COMET]);
-  refusedTaken(await door({ thing: COMET, handle: "cy" }, CY), "candy");
+  refusedStolen(await door({ thing: COMET, handle: "cy" }, CY), "candy");
   assert.equal(await census([COMET]), b2);
 });
 
-test("INHERITED, DEEPER, ITS OWN CLUE: a lollipop is candy; a taken lollipop answers its own clue; a blank clue answers the fallback", async () => {
+test("INHERITED, DEEPER, ITS OWN CLUE: a lollipop is candy; a stolen lollipop answers its own clue; a blank clue answers the fallback", async () => {
   await fresh();
-  await publish(taken());
-  refusedTaken(await door({ thing: LOLLY, handle: "cy" }, CY), "candy");
-  await publish({ ...LAW(), lollipop: { extends: "candy", dials: { taken: true, clue: "Test clue: a stick, licked clean." } } });
-  refusedTaken(await door({ thing: LOLLY, handle: "cy" }, CY), "lollipop", "Test clue: a stick, licked clean.");
+  await publish(stolen());
+  refusedStolen(await door({ thing: LOLLY, handle: "cy" }, CY), "candy");
+  await publish({ ...LAW(), lollipop: { extends: "candy", dials: { stolen: true, clue: "Test clue: a stick, licked clean." } } });
+  refusedStolen(await door({ thing: LOLLY, handle: "cy" }, CY), "lollipop", "Test clue: a stick, licked clean.");
   const comet = await door({ thing: COMET, handle: "cy" }, CY);
-  assert.equal(comet.r?.did, "take", "a taken subclass does not take its parent with it");
-  await publish(taken({ candy: { ...LAW().candy, dials: { taken: true, clue: "   " } } }));
-  refusedTaken(await door({ thing: LOLLY, handle: "cy" }, CY), "candy", "the candy is gone.");
+  assert.equal(comet.r?.did, "take", "a stolen subclass does not take its parent with it");
+  await publish(stolen({ candy: { ...LAW().candy, dials: { stolen: true, clue: "   " } } }));
+  refusedStolen(await door({ thing: LOLLY, handle: "cy" }, CY), "candy", "the candy has been stolen.");
 });
 
-test("ONLY `true` IS TAKEN: absent, false, and the string \"true\" leave candy moving", async () => {
+test("NO ALIAS: `taken` is not read as stolen — taken:true alone moves; taken:true with stolen:false moves; taken:false with stolen:true refuses", async () => {
   await fresh();
-  for (const dials of [{}, { taken: false, clue: "x" }, { taken: "true", clue: "x" }, { taken: 1 }]) {
+  const withDials = (dials) => ({ ...LAW(), candy: { ...LAW().candy, dials } });
+  for (const dials of [{ taken: true, clue: CLUE }, { taken: true, stolen: false, clue: CLUE }]) {
+    await publish(withDials(dials));
+    const t = await door({ thing: COMET, handle: "cy" }, CY);
+    assert.equal(t.r?.did, "take", `${JSON.stringify(dials)} must not refuse: ${t.e?.code} ${t.e?.defect}`);
+    const d = await door({ thing: COMET, handle: "cy" }, CY);
+    assert.equal(d.r?.did, "drop", `${JSON.stringify(dials)}: ${d.e?.defect}`);
+  }
+  await publish(withDials({ taken: false, stolen: true, clue: CLUE }));
+  refusedStolen(await door({ thing: COMET, handle: "cy" }, CY), "candy");
+  // and an unknown class reads a stolen class, never a taken one, by name
+  const draft = "cy/test-unpublished-draft-2";
+  const u = await door({ thing: draft, handle: "cy" }, CY);
+  assert.equal(u.e?.reason, "stolen-class-unknown");
+  assert.match(u.e.defect, /can't tell whether .* is of a stolen class right now/);
+  assert.match(u.e.hint, /^a class is stolen, and this one's class/);
+  assert.ok(!/taken/.test(JSON.stringify(u.e)), "no old wording on the unknown-class refusal");
+  await publish(withDials({ taken: true }));
+  const quiet = await door({ thing: draft, handle: "cy" }, CY);
+  assert.equal(quiet.r?.did, "take", "taken:true is not a heist: an unknown class is not refused for it");
+});
+
+test("THE WORDS: the headline is the class's clue (Darko's sentence in this fixture); a blank clue falls back exactly; the explanation is exact", async () => {
+  await fresh();
+  await publish(stolen());
+  const r = await door({ thing: COMET, handle: "cy" }, CY);
+  refusedStolen(r, "candy");
+  assert.equal(r.e.defect, "No such thing as candy exists", "the fixture carries Darko's exact sentence, no punctuation added");
+  await publish(stolen({ candy: { ...LAW().candy, dials: { stolen: true } } }));
+  const fallback = await door({ thing: COMET, handle: "cy" }, CY);
+  refusedStolen(fallback, "candy", "the candy has been stolen.");
+  await publish(stolen({ candy: { ...LAW().candy, dials: { stolen: true, clue: "Another law's own clue." } } }));
+  refusedStolen(await door({ thing: COMET, handle: "cy" }, CY), "candy", "Another law's own clue.");
+});
+
+test("ONLY `true` IS STOLEN: absent, false, and the string \"true\" leave candy moving", async () => {
+  await fresh();
+  for (const dials of [{}, { stolen: false, clue: "x" }, { stolen: "true", clue: "x" }, { stolen: 1 }]) {
     await publish({ ...LAW(), candy: { ...LAW().candy, dials } });
     const t = await door({ thing: COMET, handle: "cy" }, CY);
     assert.equal(t.r?.did, "take", `${JSON.stringify(dials)}: ${t.e?.defect}`);
@@ -245,9 +288,9 @@ test("ONLY `true` IS TAKEN: absent, false, and the string \"true\" leave candy m
   }
 });
 
-test("NOT CANDY: a toaster, an unclassed pebble and a chest move while candy is taken — a chest of candy units is still a chest", async () => {
+test("NOT CANDY: a toaster, an unclassed pebble and a chest move while candy is stolen — a chest of candy units is still a chest", async () => {
   await fresh();
-  await publish(taken());
+  await publish(stolen());
   // the tin holds candy units: its own class is still chest
   pen.seedAct({ class: "holding", actor: "the-town", action: "units:stock", object: TIN, at: new Date(),
     payload: { units: true, moves: [{ from: null, to: TIN, label: "test-comets", n: 5 }] } });
@@ -259,9 +302,9 @@ test("NOT CANDY: a toaster, an unclassed pebble and a chest move while candy is 
   }
 });
 
-test("THE OTHER GATES FIRST: a wrong key, the freeze and a give of what you do not hold keep their own refusals while candy is taken — no clue leaks past them", async () => {
+test("THE OTHER GATES FIRST: a wrong key, the freeze and a give of what you do not hold keep their own refusals while candy is stolen — no clue leaks past them", async () => {
   await fresh();
-  await publish(taken());
+  await publish(stolen());
   const before = await census([COMET]);
   const wrongKey = await door({ thing: COMET, handle: "cy" }, EVE);
   assert.equal(wrongKey.e?.code, 403, JSON.stringify(wrongKey.e ?? wrongKey.r));
@@ -289,7 +332,7 @@ function shutTheQueue() {
 }
 const settle = () => new Promise((r) => setTimeout(r, 300)); // the call's door-side reads (reach, the mark) are in-memory
 
-test("QUEUED, THEN TAKEN: a give admitted at the door while candy was untaken, waiting in the queue when the taken law is published, is refused in its turn — nothing recorded", async () => {
+test("QUEUED, THEN STOLEN: a give admitted at the door while candy was unstolen, waiting in the queue when the stolen law is published, is refused in its turn — nothing recorded", async () => {
   await fresh();
   await publish(LAW());
   assert.equal((await door({ thing: COMET, handle: "cy" }, CY)).r?.did, "take");
@@ -297,17 +340,17 @@ test("QUEUED, THEN TAKEN: a give admitted at the door while candy was untaken, w
   const release = shutTheQueue();
   const pending = door({ thing: COMET, to: "dee", handle: "cy" }, CY);
   await settle();                  // the door has asked reach and read the mark; the act waits for its turn
-  await publish(taken());          // ← the publication lands while the give waits
+  await publish(stolen());          // ← the publication lands while the give waits
   await release();
-  refusedTaken(await pending, "candy");
+  refusedStolen(await pending, "candy");
   assert.equal(await census([COMET]), before, "nothing reached the record");
 });
 
-test("QUEUED, THEN RETURNED: a give that came in while candy was taken, waiting when the class is returned, goes through in its turn", async () => {
+test("QUEUED, THEN RETURNED: a give that came in while candy was stolen, waiting when the class is returned, goes through in its turn", async () => {
   await fresh();
   await publish(LAW());
   assert.equal((await door({ thing: COMET, handle: "cy" }, CY)).r?.did, "take");
-  await publish(taken());
+  await publish(stolen());
   const release = shutTheQueue();
   const pending = door({ thing: COMET, to: "dee", handle: "cy" }, CY);
   await settle();
@@ -318,35 +361,35 @@ test("QUEUED, THEN RETURNED: a give that came in while candy was taken, waiting 
   assert.equal(await holderOf(COMET), "dee");
 });
 
-// ── 3 · what cannot be read is not proof of untaken ─────────────────────────
+// ── 3 · what cannot be read is not proof of unstolen ─────────────────────────
 
 function unknownClass(out) {
   assert.equal(out.r, undefined, `admitted: ${JSON.stringify(out.r)}`);
   assert.equal(out.e.code, 503, `${out.e.code} ${out.e.defect}`);
-  assert.equal(out.e.reason, "taken-class-unknown");
-  assert.match(out.e.defect, /can't tell whether .* is of a taken class right now/);
+  assert.equal(out.e.reason, "stolen-class-unknown");
+  assert.match(out.e.defect, /can't tell whether .* is of a stolen class right now/);
 }
 
-test("A THING CANON DOES NOT HOLD: moves on an ordinary day; refused by name, retryably, while a class is taken", async () => {
+test("A THING CANON DOES NOT HOLD: moves on an ordinary day; refused by name, retryably, while a class is stolen", async () => {
   await fresh();
   await publish(LAW());
   const draft = "cy/test-unpublished-draft";
   const t = await door({ thing: draft, handle: "cy" }, CY);
   assert.equal(t.r?.did, "take", JSON.stringify(t.e ?? t.r));
-  await publish(taken());
+  await publish(stolen());
   const before = await census([draft]);
   unknownClass(await door({ thing: draft, handle: "cy" }, CY));
   assert.equal(await census([draft]), before);
 });
 
-test("A CLASS THE LAW LACKS, AN ANCESTOR IT LACKS: both move on an ordinary day; both refused by name while candy is taken", async () => {
+test("A CLASS THE LAW LACKS, AN ANCESTOR IT LACKS: both move on an ordinary day; both refused by name while candy is stolen", async () => {
   await fresh();
   await publish(LAW());
   for (const id of [GHOST, WOBBLY]) {
     const t = await door({ thing: id, handle: "cy" }, CY);
     assert.equal(t.r?.did, "take", `${id}: ${JSON.stringify(t.e ?? t.r)}`);
   }
-  await publish(taken());
+  await publish(stolen());
   const before = await census([GHOST, WOBBLY]);
   for (const id of [GHOST, WOBBLY]) unknownClass(await door({ thing: id, to: "dee", handle: "cy" }, CY));
   assert.equal(await census([GHOST, WOBBLY]), before);
@@ -355,14 +398,14 @@ test("A CLASS THE LAW LACKS, AN ANCESTOR IT LACKS: both move on an ordinary day;
 // Bevel's first review, R1 through the public dispatcher (credited): a thing
 // held by a chest is routed to thing-from-chest, which must not read a missing
 // canon class as `thing`.
-test("R1 · THE PUBLIC DOOR, A CHEST'S UNCANONED THING: refused by name while candy is taken, the chest keeps it; moves on an ordinary day", async () => {
+test("R1 · THE PUBLIC DOOR, A CHEST'S UNCANONED THING: refused by name while candy is stolen, the chest keeps it; moves on an ordinary day", async () => {
   const seedInTin = (id) => {
     const entry = hold.holdingEntry({ did: "give", thing: id, holder: TIN, previous_holder: "cy", made_by: "cy", declared_by: "cy", policy: "cascade", at: new Date().toISOString() },
       { crossing: 1, at: {}, witnesses: [], cls: "holding", household: "cyhouse" });
     pen.seedAct({ ...entry, class: entry.cls, at: new Date() });
   };
   await fresh();
-  await publish(taken());
+  await publish(stolen());
   const unknown = "cy/not-on-canon";
   seedInTin(unknown);
   assert.equal(await holderOf(unknown), TIN, "the fixture puts it in the tin");
@@ -377,14 +420,14 @@ test("R1 · THE PUBLIC DOOR, A CHEST'S UNCANONED THING: refused by name while ca
 });
 
 // Bevel's first review, R2 through the public dispatcher (credited).
-test("R2 · THE PUBLIC DOOR, A MIXED CHEST: the selected candy refuses with the clue while taken, an unregistered label refuses by name; both move on an ordinary day", async () => {
+test("R2 · THE PUBLIC DOOR, A MIXED CHEST: the selected candy refuses with the clue while stolen, an unregistered label refuses by name; both move on an ordinary day", async () => {
   await fresh();
   for (const label of ["retired-label", "test-comets"])
     pen.seedAct({ class: "holding", actor: "the-town", action: "units:stock", object: TIN, at: new Date(),
       payload: { units: true, moves: [{ from: null, to: TIN, label, n: 2 }] } });
-  await publish(taken());
+  await publish(stolen());
   const before = await census([TIN]);
-  refusedTaken(await door({ from: TIN, label: "test-comets", count: 1, handle: "cy" }, CY), "candy");
+  refusedStolen(await door({ from: TIN, label: "test-comets", count: 1, handle: "cy" }, CY), "candy");
   unknownClass(await door({ from: TIN, label: "retired-label", count: 1, handle: "cy" }, CY));
   assert.equal(await census([TIN]), before);
   await publish(LAW());
@@ -397,7 +440,7 @@ test("R2 · THE PUBLIC DOOR, A MIXED CHEST: the selected candy refuses with the 
 // ── Wright 10:36:28.315Z, through the public door (Bevel's second-review probes,
 // credited, with the ordinary-day return added) ──────────────────────────────
 
-test("ORDER · THE PUBLIC DOOR, consume of an unregistered held label: 422 ordinary, the named 503 while taken, 422 once returned — nothing written", async () => {
+test("ORDER · THE PUBLIC DOOR, consume of an unregistered held label: 422 ordinary, the named 503 while stolen, 422 once returned — nothing written", async () => {
   await fresh();
   await publish(LAW());
   pen.seedAct({ class: "holding", actor: "the-town", action: "units:stock", object: "cy", at: new Date(),
@@ -405,7 +448,7 @@ test("ORDER · THE PUBLIC DOOR, consume of an unregistered held label: 422 ordin
   const args = { act: "consume", label: "retired-label", handle: "cy" };
   assert.equal((await door(args, CY)).e?.code, 422, "ordinary validation remains");
   const before = await census([]);
-  await publish(taken());
+  await publish(stolen());
   unknownClass(await door(args, CY));
   assert.equal(await census([]), before, "no effect on refusal");
   await publish(LAW());
@@ -413,7 +456,7 @@ test("ORDER · THE PUBLIC DOOR, consume of an unregistered held label: 422 ordin
   assert.equal(await census([]), before);
 });
 
-test("ORDER · THE PUBLIC DOOR, a held thing canon does not show into a chest: 409 ordinary, the named 503 while taken, 409 once returned — the same object stays in hand", async () => {
+test("ORDER · THE PUBLIC DOOR, a held thing canon does not show into a chest: 409 ordinary, the named 503 while stolen, 409 once returned — the same object stays in hand", async () => {
   await fresh();
   await publish(LAW());
   const id = "cy/missing-canon-held-thing";
@@ -423,7 +466,7 @@ test("ORDER · THE PUBLIC DOOR, a held thing canon does not show into a chest: 4
   assert.equal(ordinary.e?.code, 409, "ordinary unpublished-thing validation remains");
   assert.match(ordinary.e.defect, /does not stand on the world/);
   const before = await census([id]);
-  await publish(taken());
+  await publish(stolen());
   unknownClass(await door(args, CY));
   assert.equal(await census([id]), before, "the original holder and record remain");
   await publish(LAW());
@@ -433,7 +476,7 @@ test("ORDER · THE PUBLIC DOOR, a held thing canon does not show into a chest: 4
 
 // ── THE COLD-START WINDOW (Wright 10:36:28.315Z: accepted, disclosed) ────────
 
-test("COLD START · before this process's first law snapshot nothing can be known taken: the whole-object guard is inert and candy moves; the unit door keeps its own pre-WLD-7 'class layer could not be read' 503", async () => {
+test("COLD START · before this process's first law snapshot nothing can be known stolen: the whole-object guard is inert and candy moves; the unit door keeps its own pre-WLD-7 'class layer could not be read' 503", async () => {
   await fresh();
   resetLawSnapshot();
   assert.equal(lawSnapshot(), null, "no snapshot has been published in this process");
@@ -446,5 +489,5 @@ test("COLD START · before this process's first law snapshot nothing can be know
   const u = await door({ act: "consume", handle: "cy" }, CY);
   assert.equal(u.e?.code, 503);
   assert.match(u.e.defect, /class layer could not be read/);
-  assert.equal(u.e.reason, undefined, "not the taken-class refusal: nothing is known taken");
+  assert.equal(u.e.reason, undefined, "not the stolen-class refusal: nothing is known stolen");
 });

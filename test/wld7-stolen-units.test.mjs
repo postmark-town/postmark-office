@@ -1,11 +1,11 @@
-// wld7-taken-units.test.mjs — WLD-7 on the counted-unit door: the taken-class
+// wld7-stolen-units.test.mjs — WLD-7 on the counted-unit door: the stolen-class
 // hook WLD-27 built is asked of the law the HOLD TURN reads, not the law the
-// call came in on, and every route it guards moves nothing while candy is taken.
+// call came in on, and every route it guards moves nothing while candy is stolen.
 //
 // `callUnits` (src/world-units.mjs) with an in-memory record, stake ledger and
 // leave/withdraw injected — as world-units.test.mjs drives it — EXCEPT the class
 // layer, which is the office's live one: `classViewOf(lawSnapshot())`, the law
-// published through `reloadLawSnapshot` from synthetic rows. So "taken" and
+// published through `reloadLawSnapshot` from synthetic rows. So "stolen" and
 // "returned" here are new snapshots published the office's own way.
 
 import { test, after } from "node:test";
@@ -26,8 +26,9 @@ const LAW = () => ({
   candy: { extends: "consumable", dials: {}, labels: LABELS },
   chest: { extends: "thing", dials: { capacity: 30, capacity_min: 1, capacity_max: 120, first_stock: 30, portable: true, welcome: "open" } },
 });
-const CLUE = "Test clue: the sweet jars are empty; follow the wrappers.";
-const TAKEN = () => { const l = LAW(); l.candy.dials = { taken: true, clue: CLUE }; return l; };
+// Darko's exact sentence (AUTHORITY 2026-10-13T14:53:34.636Z), as a fixture — the door reads the class's own clue
+const CLUE = "No such thing as candy exists";
+const STOLEN = () => { const l = LAW(); l.candy.dials = { stolen: true, clue: CLUE }; return l; };
 let blessing = 0;
 async function publish(classes) {
   const n = ++blessing;
@@ -71,11 +72,13 @@ function world({ marks = {}, holders = {}, things = [] } = {}) {
   return { deps, acts, ledger, left, withdrawn, seed, census, fold: () => foldUnits(acts) };
 }
 const run = (route, args, w, actor = "sbx-cy", key = KEY) => callUnits(route, args, key, actor, w.deps).then((r) => ({ r }), (e) => ({ e }));
-const refusedTaken = (out) => {
+const refusedStolen = (out) => {
   assert.equal(out.r, undefined, `admitted: ${JSON.stringify(out.r)}`);
   assert.equal(out.e.code, 423, `${out.e.code} ${out.e.defect}`);
   assert.equal(out.e.defect, CLUE);
-  assert.equal(out.e.taken, "candy");
+  assert.equal(out.e.stolen, "candy");
+  assert.equal(out.e.hint, "the candy has been stolen; nothing moves until it is returned. Nothing was recorded.");
+  assert.ok(!("taken" in out.e), "no `taken` field rides a unit refusal");
 };
 function shutTheQueue() {
   let open;
@@ -84,7 +87,7 @@ function shutTheQueue() {
 }
 const settle = () => new Promise((r) => setTimeout(r, 50));
 
-test("QUEUED, THEN TAKEN: a unit take that came in under an untaken law and waits in the queue is refused in its turn by the newly published taken law", async () => {
+test("QUEUED, THEN STOLEN: a unit take that came in under an unstolen law and waits in the queue is refused in its turn by the newly published stolen law", async () => {
   await publish(LAW());
   const w = world({ marks: { [CHEST]: { id: CHEST, by: "sbx-ana", class: "chest" } } });
   w.seed(UNIT_ACTION.stock, [{ from: null, to: CHEST, label: "test-comets", n: 30 }], CHEST);
@@ -92,15 +95,15 @@ test("QUEUED, THEN TAKEN: a unit take that came in under an untaken law and wait
   const release = shutTheQueue();
   const pending = run("take", { from: CHEST, count: 2 }, w);
   await settle();
-  await publish(TAKEN());
+  await publish(STOLEN());
   await release();
-  refusedTaken(await pending);
+  refusedStolen(await pending);
   assert.equal(w.census(), before, "nothing written");
   assert.equal(totalOf(w.fold(), CHEST), 30);
 });
 
-test("QUEUED, THEN RETURNED: a unit give that came in while candy was taken goes through once the class is returned before its turn", async () => {
-  await publish(TAKEN());
+test("QUEUED, THEN RETURNED: a unit give that came in while candy was stolen goes through once the class is returned before its turn", async () => {
+  await publish(STOLEN());
   const w = world();
   w.seed(UNIT_ACTION.give, [{ from: null, to: "sbx-cy", label: "test-comets", n: 3 }]);
   const release = shutTheQueue();
@@ -113,18 +116,18 @@ test("QUEUED, THEN RETURNED: a unit give that came in while candy was taken goes
   assert.deepEqual([totalOf(w.fold(), "sbx-cy"), totalOf(w.fold(), "sbx-dee")], [1, 2]);
 });
 
-test("EVERY UNIT ROUTE refuses while candy is taken, writes nothing, and the same holding moves again once returned", async () => {
+test("EVERY UNIT ROUTE refuses while candy is stolen, writes nothing, and the same holding moves again once returned", async () => {
   const w = world({ marks: { [CHEST]: { id: CHEST, by: "sbx-ana", class: "chest" } } });
   w.seed(UNIT_ACTION.stock, [{ from: null, to: CHEST, label: "test-comets", n: 20 }], CHEST);
   w.seed(UNIT_ACTION.give, [{ from: null, to: "sbx-cy", label: "test-comets", n: 4 }]);
-  await publish(TAKEN());
+  await publish(STOLEN());
   const before = w.census();
-  refusedTaken(await run("take", { from: CHEST }, w));
-  refusedTaken(await run("give", { to: "sbx-dee", label: "test-comets" }, w));
-  refusedTaken(await run("give", { to: CHEST, label: "test-comets" }, w));
-  refusedTaken(await run("drop", { label: "test-comets" }, w));
-  refusedTaken(await run("consume", {}, w));
-  refusedTaken(await run("refill", { chest: CHEST }, w, "sbx-ana", { handles: new Set(["sbx-ana"]) }));
+  refusedStolen(await run("take", { from: CHEST }, w));
+  refusedStolen(await run("give", { to: "sbx-dee", label: "test-comets" }, w));
+  refusedStolen(await run("give", { to: CHEST, label: "test-comets" }, w));
+  refusedStolen(await run("drop", { label: "test-comets" }, w));
+  refusedStolen(await run("consume", {}, w));
+  refusedStolen(await run("refill", { chest: CHEST }, w, "sbx-ana", { handles: new Set(["sbx-ana"]) }));
   assert.equal(w.census(), before, "no unit act, no filing, no ledger line");
   assert.deepEqual([totalOf(w.fold(), CHEST), totalOf(w.fold(), "sbx-cy")], [20, 4], "and the counts read as they did");
   await publish(LAW());
@@ -133,13 +136,13 @@ test("EVERY UNIT ROUTE refuses while candy is taken, writes nothing, and the sam
   assert.deepEqual([totalOf(w.fold(), CHEST), totalOf(w.fold(), "sbx-cy")], [19, 4], "the same units, no recreation");
 });
 
-test("A SET-DOWN CANDY: take-back and consume-in-place refuse while taken — no stake returned, no exit act, no withdrawal — and work once returned", async () => {
+test("A SET-DOWN CANDY: take-back and consume-in-place refuse while stolen — no stake returned, no exit act, no withdrawal — and work once returned", async () => {
   const unitMark = { id: UNIT_MARK, by: "sbx-bo", class: "candy", kind: "sited", label: "test-comets", dropped: "act:41" };
   const w = world({ marks: { [UNIT_MARK]: unitMark }, holders: { [UNIT_MARK]: [{ handle: "sbx-bo", stamps: 1 }, { handle: "sbx-ana", stamps: 2 }] } });
-  await publish(TAKEN());
+  await publish(STOLEN());
   const before = w.census();
-  refusedTaken(await run("take-back", { thing: UNIT_MARK }, w));
-  refusedTaken(await run("consume-in-place", { thing: UNIT_MARK, act: "consume" }, w));
+  refusedStolen(await run("take-back", { thing: UNIT_MARK }, w));
+  refusedStolen(await run("consume-in-place", { thing: UNIT_MARK, act: "consume" }, w));
   assert.equal(w.census(), before, "nobody's position on the mark moved, and it did not leave");
   await publish(LAW());
   const back = await run("take-back", { thing: UNIT_MARK }, w);
@@ -148,7 +151,7 @@ test("A SET-DOWN CANDY: take-back and consume-in-place refuse while taken — no
   assert.equal(totalOf(w.fold(), "sbx-cy"), 1);
 });
 
-test("A CHEST'S WHOLE THINGS: a candy thing neither goes in nor comes out while taken; the toaster beside it does; the chest's own units stay blocked", async () => {
+test("A CHEST'S WHOLE THINGS: a candy thing neither goes in nor comes out while stolen; the toaster beside it does; the chest's own units stay blocked", async () => {
   const CANDY_BAR = "sbx-ana/test-bar", TOASTER = "sbx-ana/test-toaster";
   const things = [
     { entity: CHEST, target: CANDY_BAR, policy: "cascade", born_at: "2026-10-13T00:00:00.000Z" },
@@ -159,21 +162,21 @@ test("A CHEST'S WHOLE THINGS: a candy thing neither goes in nor comes out while 
     [TOASTER]: { id: TOASTER, by: "sbx-ana", class: "thing" }, "sbx-cy/test-bar-2": { id: "sbx-cy/test-bar-2", by: "sbx-cy", class: "candy" } };
   const w = world({ marks, things });
   w.seed(UNIT_ACTION.stock, [{ from: null, to: CHEST, label: "test-comets", n: 5 }], CHEST);
-  await publish(TAKEN());
+  await publish(STOLEN());
   const before = w.census();
-  refusedTaken(await run("thing-from-chest", { thing: CANDY_BAR, from: CHEST }, w));
-  refusedTaken(await run("thing-into-chest", { thing: "sbx-cy/test-bar-2", to: CHEST }, w));
-  refusedTaken(await run("take", { from: CHEST, label: "test-comets" }, w));
+  refusedStolen(await run("thing-from-chest", { thing: CANDY_BAR, from: CHEST }, w));
+  refusedStolen(await run("thing-into-chest", { thing: "sbx-cy/test-bar-2", to: CHEST }, w));
+  refusedStolen(await run("take", { from: CHEST, label: "test-comets" }, w));
   assert.equal(w.census(), before);
   const toaster = await run("thing-from-chest", { thing: TOASTER, from: CHEST }, w);
   assert.equal(toaster.r?.did, "take", JSON.stringify(toaster.e ?? toaster.r));
 });
 
-test("THE OTHER GATES FIRST: a closed chest and a thing you do not hold keep their own refusals while candy is taken", async () => {
+test("THE OTHER GATES FIRST: a closed chest and a thing you do not hold keep their own refusals while candy is stolen", async () => {
   const marks = { [CHEST]: { id: CHEST, by: "sbx-ana", class: "chest", welcome: "closed" }, "sbx-ana/test-bar": { id: "sbx-ana/test-bar", by: "sbx-ana", class: "candy" } };
   const w = world({ marks, things: [{ entity: "sbx-dee", target: "sbx-ana/test-bar", policy: "cascade", born_at: "2026-10-13T00:00:00.000Z" }] });
   w.seed(UNIT_ACTION.stock, [{ from: null, to: CHEST, label: "test-comets", n: 5 }], CHEST);
-  await publish(TAKEN());
+  await publish(STOLEN());
   const closed = await run("take", { from: CHEST }, w);
   assert.equal(closed.e?.code, 403, JSON.stringify(closed.e));
   const unheld = await run("thing-into-chest", { thing: "sbx-ana/test-bar", to: CHEST }, w);
@@ -184,18 +187,18 @@ test("THE OTHER GATES FIRST: a closed chest and a thing you do not hold keep the
 const unknownClass = (out) => {
   assert.equal(out.r, undefined, `admitted: ${JSON.stringify(out.r)}`);
   assert.equal(out.e.code, 503, `${out.e.code} ${out.e.defect}`);
-  assert.equal(out.e.reason, "taken-class-unknown");
-  assert.match(out.e.defect, /can't tell whether .* is of a taken class right now/);
+  assert.equal(out.e.reason, "stolen-class-unknown");
+  assert.match(out.e.defect, /can't tell whether .* is of a stolen class right now/);
   assert.match(out.e.hint, /Nothing was recorded — try again/);
 };
 
 // Bevel's first review, R1 (direct route; credited): a thing canon does not hold
 // is not a `thing` by default when it comes out of a chest.
-test("R1 · A WHOLE THING CANON DOES NOT HOLD, OUT OF A CHEST: refused by name while candy is taken; moves on an ordinary day", async () => {
+test("R1 · A WHOLE THING CANON DOES NOT HOLD, OUT OF A CHEST: refused by name while candy is stolen; moves on an ordinary day", async () => {
   const UNKNOWN = "sbx-ana/no-canon-candy";
   const mk = () => world({ marks: { [CHEST]: { id: CHEST, by: "sbx-ana", class: "chest" } },
     things: [{ entity: CHEST, target: UNKNOWN, policy: "cascade", born_at: "2026-10-13T00:00:00.000Z" }] });
-  await publish(TAKEN());
+  await publish(STOLEN());
   const w = mk();
   const before = w.census();
   unknownClass(await run("thing-from-chest", { thing: UNKNOWN, from: CHEST }, w));
@@ -207,17 +210,17 @@ test("R1 · A WHOLE THING CANON DOES NOT HOLD, OUT OF A CHEST: refused by name w
 
 // Bevel's first review, R2 (direct route; credited): the selected label is judged,
 // never the chest's aggregate display class.
-test("R2 · A MIXED CHEST: selected candy refuses with the clue, a label the law does not register refuses by name, while taken; both move on an ordinary day", async () => {
+test("R2 · A MIXED CHEST: selected candy refuses with the clue, a label the law does not register refuses by name, while stolen; both move on an ordinary day", async () => {
   const mk = () => {
     const w = world({ marks: { [CHEST]: { id: CHEST, by: "sbx-ana", class: "chest" } } });
     w.seed(UNIT_ACTION.stock, [{ from: null, to: CHEST, label: "retired-label", n: 1 }], CHEST);
     w.seed(UNIT_ACTION.stock, [{ from: null, to: CHEST, label: "test-comets", n: 2 }], CHEST);
     return w;
   };
-  await publish(TAKEN());
+  await publish(STOLEN());
   const w = mk();
   const before = w.census();
-  refusedTaken(await run("take", { from: CHEST, label: "test-comets", count: 1 }, w));
+  refusedStolen(await run("take", { from: CHEST, label: "test-comets", count: 1 }, w));
   unknownClass(await run("take", { from: CHEST, label: "retired-label", count: 1 }, w));
   assert.equal(w.census(), before);
   await publish(LAW());
@@ -226,47 +229,47 @@ test("R2 · A MIXED CHEST: selected candy refuses with the clue, a label the law
   assert.equal((await run("take", { from: CHEST, label: "retired-label", count: 1 }, day)).r?.count, 1);
 });
 
-test("SELECTED LABEL ON EVERY UNIT ROUTE: holding an unregistered label beside candy does not hide the candy, and the unregistered label is refused by name, while taken", async () => {
-  await publish(TAKEN());
+test("SELECTED LABEL ON EVERY UNIT ROUTE: holding an unregistered label beside candy does not hide the candy, and the unregistered label is refused by name, while stolen", async () => {
+  await publish(STOLEN());
   const w = world({ marks: { [CHEST]: { id: CHEST, by: "sbx-ana", class: "chest" } } });
   w.seed(UNIT_ACTION.give, [{ from: null, to: "sbx-cy", label: "retired-label", n: 2 }]);
   w.seed(UNIT_ACTION.give, [{ from: null, to: "sbx-cy", label: "test-comets", n: 2 }]);
   const before = w.census();
-  refusedTaken(await run("give", { to: "sbx-dee", label: "test-comets" }, w));
-  refusedTaken(await run("give", { to: CHEST, label: "test-comets" }, w));
-  refusedTaken(await run("drop", { label: "test-comets" }, w));
-  refusedTaken(await run("consume", { label: "test-comets" }, w));
+  refusedStolen(await run("give", { to: "sbx-dee", label: "test-comets" }, w));
+  refusedStolen(await run("give", { to: CHEST, label: "test-comets" }, w));
+  refusedStolen(await run("drop", { label: "test-comets" }, w));
+  refusedStolen(await run("consume", { label: "test-comets" }, w));
   unknownClass(await run("give", { to: "sbx-dee", label: "retired-label" }, w));
   unknownClass(await run("drop", { label: "retired-label" }, w));
   assert.equal(w.census(), before);
 });
 
-test("HELPER-LEVEL (no door): the one taken question — inert while nothing is taken; unknown, a class the law lacks, or a missing ancestor refused by name while something is", async () => {
-  const { takenClassRefusal, markClassFor } = await import("../src/world-units.mjs");
+test("HELPER-LEVEL (no door): the one stolen question — inert while nothing is stolen; unknown, a class the law lacks, or a missing ancestor refused by name while something is", async () => {
+  const { stolenClassRefusal, markClassFor } = await import("../src/world-units.mjs");
   assert.deepEqual([markClassFor({ class: "candy" }), markClassFor({}), markClassFor(null), markClassFor(undefined)], ["candy", null, undefined, undefined]);
   const floor = classViewOf(null);
   assert.equal(floor.readable, false);
-  for (const k of ["candy", "ghost", null, undefined]) assert.equal(takenClassRefusal(k, floor, "x/y"), null, `no law loaded: inert (${k})`);
+  for (const k of ["candy", "ghost", null, undefined]) assert.equal(stolenClassRefusal(k, floor, "x/y"), null, `no law loaded: inert (${k})`);
   const law = { ...LAW(), wobbly: { extends: "nowhere", dials: {} }, ghostly: { extends: "thing", dials: {} } };
   await publish(law);
   const day = classViewOf(lawSnapshot());
-  assert.equal(day.takenAny(), false);
-  for (const k of ["candy", "ghost", "wobbly", null, undefined]) assert.equal(takenClassRefusal(k, day, "x/y"), null, `nothing taken: inert (${k})`);
-  law.candy.dials = { taken: true, clue: CLUE };
+  assert.equal(day.stolenAny(), false);
+  for (const k of ["candy", "ghost", "wobbly", null, undefined]) assert.equal(stolenClassRefusal(k, day, "x/y"), null, `nothing stolen: inert (${k})`);
+  law.candy.dials = { stolen: true, clue: CLUE };
   await publish(law);
   const heist = classViewOf(lawSnapshot());
-  assert.equal(heist.takenAny(), true);
-  assert.equal(takenClassRefusal("candy", heist, "x/bar")?.code, 423);
+  assert.equal(heist.stolenAny(), true);
+  assert.equal(stolenClassRefusal("candy", heist, "x/bar")?.code, 423);
   for (const [k, why] of [[undefined, "no mark / canon unread / unregistered label"], ["ghost", "a class the law does not hold"], ["wobbly", "an ancestor the law does not hold"]])
-    assert.equal(takenClassRefusal(k, heist, "x/y")?.reason, "taken-class-unknown", why);
-  for (const k of [null, "thing", "chest", "ghostly"]) assert.equal(takenClassRefusal(k, heist, "x/y"), null, `proven not candy: ${k}`);
+    assert.equal(stolenClassRefusal(k, heist, "x/y")?.reason, "stolen-class-unknown", why);
+  for (const k of [null, "thing", "chest", "ghostly"]) assert.equal(stolenClassRefusal(k, heist, "x/y"), null, `proven not candy: ${k}`);
 });
 
 // ── Wright 10:36:28.315Z: the named refusal supersedes a legacy 422/409 ONLY when
-// the cause is an unknown class while a class is taken. Bevel's second-review
+// the cause is an unknown class while a class is stolen. Bevel's second-review
 // probes (credited), with the ordinary-day return added.
 
-test("ORDER · consume of an unregistered held label: 422 on an ordinary day, the named 503 while candy is taken, 422 again once returned — nothing written", async () => {
+test("ORDER · consume of an unregistered held label: 422 on an ordinary day, the named 503 while candy is stolen, 422 again once returned — nothing written", async () => {
   const w = world();
   w.seed(UNIT_ACTION.give, [{ from: null, to: "sbx-cy", label: "retired-label", n: 1 }]);
   await publish(LAW());
@@ -274,7 +277,7 @@ test("ORDER · consume of an unregistered held label: 422 on an ordinary day, th
   assert.equal(ordinary.e?.code, 422, "ordinary non-consumable validation remains");
   assert.match(ordinary.e.defect, /retired-label is not a consumable/);
   const before = w.census();
-  await publish(TAKEN());
+  await publish(STOLEN());
   unknownClass(await run("consume", { label: "retired-label" }, w));
   assert.equal(w.census(), before);
   await publish(LAW());
@@ -282,7 +285,7 @@ test("ORDER · consume of an unregistered held label: 422 on an ordinary day, th
   assert.equal(w.census(), before);
 });
 
-test("ORDER · a held thing canon does not show, into a chest: 409 on an ordinary day, the named 503 while taken, 409 again once returned — it stays in hand", async () => {
+test("ORDER · a held thing canon does not show, into a chest: 409 on an ordinary day, the named 503 while stolen, 409 again once returned — it stays in hand", async () => {
   const id = "sbx-cy/missing-canon";
   const w = world({ marks: { [CHEST]: { id: CHEST, by: "sbx-ana", class: "chest" } },
     things: [{ entity: "sbx-cy", target: id, policy: "cascade", born_at: "2026-10-13T00:00:00.000Z" }] });
@@ -291,26 +294,26 @@ test("ORDER · a held thing canon does not show, into a chest: 409 on an ordinar
   assert.equal(ordinary.e?.code, 409, "ordinary unpublished-thing validation remains");
   assert.match(ordinary.e.defect, /does not stand on the world/);
   const before = w.census();
-  await publish(TAKEN());
+  await publish(STOLEN());
   unknownClass(await run("thing-into-chest", { thing: id, to: CHEST }, w));
   assert.equal(w.census(), before);
   await publish(LAW());
   assert.match((await run("thing-into-chest", { thing: id, to: CHEST }, w)).e?.defect ?? "", /does not stand on the world/);
 });
 
-test("ORDER · consume-in-place of a mark canon does not show: 422 on an ordinary day, the named 503 while taken", async () => {
+test("ORDER · consume-in-place of a mark canon does not show: 422 on an ordinary day, the named 503 while stolen", async () => {
   const w = world();
   await publish(LAW());
   const ordinary = await run("consume-in-place", { thing: "sbx-bo/test-comets-404", act: "consume" }, w);
   assert.equal(ordinary.e?.code, 422);
   assert.match(ordinary.e.defect, /is not a unit that was set down/);
-  await publish(TAKEN());
+  await publish(STOLEN());
   const before = w.census();
   unknownClass(await run("consume-in-place", { thing: "sbx-bo/test-comets-404", act: "consume" }, w));
   assert.equal(w.census(), before);
 });
 
-test("ORDER · the genuine answers keep their own codes while candy is taken: not holding it, nothing to consume, a label you do not hold, a toaster into a full chest, a known non-unit consumed in place", async () => {
+test("ORDER · the genuine answers keep their own codes while candy is stolen: not holding it, nothing to consume, a label you do not hold, a toaster into a full chest, a known non-unit consumed in place", async () => {
   const TOASTER = "sbx-cy/test-toaster", ELSE = "sbx-dee/test-lamp";
   const w = world({
     marks: { [CHEST]: { id: CHEST, by: "sbx-ana", class: "chest", capacity: 1 }, [TOASTER]: { id: TOASTER, by: "sbx-cy", class: "thing" },
@@ -320,7 +323,7 @@ test("ORDER · the genuine answers keep their own codes while candy is taken: no
       { entity: "sbx-dee", target: "sbx-dee/uncanoned", policy: "cascade", born_at: "2026-10-13T00:00:00.000Z" }],
   });
   w.seed(UNIT_ACTION.stock, [{ from: null, to: CHEST, label: "test-comets", n: 1 }], CHEST);
-  await publish(TAKEN());
+  await publish(STOLEN());
   const before = w.census();
   const notHolding = await run("thing-into-chest", { thing: ELSE, to: CHEST }, w);
   assert.equal(notHolding.e?.code, 409); assert.match(notHolding.e.defect, /you are not holding/);

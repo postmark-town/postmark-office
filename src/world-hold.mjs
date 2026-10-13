@@ -1199,12 +1199,12 @@ export async function callHoldTool(name, args = {}, key = null) {
     // A FIXED CHEST IS NOT CARRIED (WLD-27): a bowl stands where it was set.
     if (face === "take" && m?.class === "chest" && m.portable === false)
       throw bounce(409, `${args.thing} is fixed where it stands`, "a chest declared portable: false (a bowl) is not carried — take from it instead: world { do: \"take\", args: { from: \"" + args.thing + "\" } }. Nothing was recorded.");
-    // A TAKEN CLASS (WLD-7): a thing whose class (or an ancestor) is taken is
+    // A STOLEN CLASS (WLD-7): a thing whose class (or an ancestor) is stolen is
     // not given, taken or dropped until it is returned. The thing's class is
-    // read here; whether that class is taken is asked inside the hold turn, of
+    // read here; whether that class is stolen is asked inside the hold turn, of
     // the law published at that moment (declareHoldingFlipped § classGuard).
-    const { takenClassRefusal, markClassFor, classViewOf } = await import("./world-units.mjs");
-    const classGuard = () => takenClassRefusal(markClassFor(m), classViewOf(lawSnapshot()), String(args.thing));
+    const { stolenClassRefusal, markClassFor, classViewOf } = await import("./world-units.mjs");
+    const classGuard = () => stolenClassRefusal(markClassFor(m), classViewOf(lawSnapshot()), String(args.thing));
 
     // The hold lane is flipped here — the door refused above if it was not —
     // so there is one pen: the holding act, awaited. (The unflipped pen, which
@@ -1327,7 +1327,7 @@ export async function declareHoldingFlipped({ db, thing, to = null, actor, dials
     // (`carry: null`) for a caller that measures no load.
     if (carry && (did.did === "take" || did.did === "give")) await carry({ who: did.holder, attachments: rows });
     const { at, witnesses } = await witnessStamp(did.declared_by);
-    // THE TAKEN CLASS (WLD-7), the door's own question handed in, so this
+    // THE STOLEN CLASS (WLD-7), the door's own question handed in, so this
     // function still runs on a hand-built store. Asked after every refusal
     // above (holder, ownership, carry) and with no await between it and the
     // append: this read is the linearisation point. A law published before it
