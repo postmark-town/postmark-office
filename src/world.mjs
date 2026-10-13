@@ -47,6 +47,7 @@ import { WORLD_STAKE_TOOLS, actingAs, callWorldStakeTool, emptyPurseRefusalFor, 
 import { toConfirm } from "./stamps-preview.mjs"; // POS-83: the inline stake's half of the confirmation step
 import { visitorRulesGate } from "./visitor-rules.mjs"; // POS-300: a berth reads the town's rules for visitors before its first say
 import { classNames, classRoster, classDials, departurePace, freeCellIn, RESIDENT_INSTANTIABLE, residentMayInstantiate } from "./world-classes.mjs"; // which classes exist — read from the record, never held
+import { askedCrossing } from "./crossings.mjs"; // WLD-29: one rule for the crossing a read asked
 import { readHouseholdActivity, litOf, lightsUnknownWhy, houseFocus, lightsAnswer } from "./household-activity.mjs"; // WLD-29: a shown house's porch light
 import { dialsDigestOf, DIALS_MEANS } from "./read-digests.mjs"; // WLD-29: GET /world/dials, the page's stride
 import { HOLD_TOOLS, callHoldTool } from "./world-hold.mjs"; // the object primitive: who holds what
@@ -95,7 +96,6 @@ export const WORLD_CLONE = process.env.WORLD_CLONE
 // always read `currentCrossing` from `world.mjs` still does.
 export { currentCrossing, CROSSING_DERIVATION } from "./crossings.mjs";
 import { arrivesAt, CROSSING_DERIVATION, currentCrossing } from "./crossings.mjs";
-import { askedCrossing } from "./crossings.mjs"; // WLD-29: one rule for the crossing a read asked
 import { myMarksRefused } from "./claim-effects.mjs"; // POS-241 part 5: my-marks hears what the candle refused
 import { ringOf, ringBox, ringAgrees, ringMovedTo, RING_SHAPE_SENTENCE, RING_CLAIM_SENTENCE } from "./ring-box.mjs"; // POS-322: a mark's box is derived from its ring
 
