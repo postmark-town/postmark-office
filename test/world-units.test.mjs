@@ -22,6 +22,9 @@ const CLASSES = {
   candy: { extends: "consumable", dials: {}, labels: LABELS },
   chest: { extends: "thing", dials: { capacity: 30, capacity_min: 1, capacity_max: 120, first_stock: 30, portable: true, welcome: "open" } },
   mark: { extends: "postmark-node", dials: {} },
+  // the root the Keeping Works carries (postmark-node/mark.md): while a class is
+  // taken, a chain that names a class the law lacks is refused as unknown (WLD-7)
+  "postmark-node": { dials: {} },
 };
 const snapOf = (classes) => ({ classes: new Map(Object.entries(classes)) });
 
