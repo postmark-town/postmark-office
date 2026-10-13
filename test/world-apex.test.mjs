@@ -1956,6 +1956,7 @@ test("NO DIGEST AT ANY DOOR: apex and eyes, spectator and resident, carry no `di
     for (const k of ["dials", "activity"]) assert.ok(!(k in r), `${what}: the read carries \`${k}\``);
     const text = JSON.stringify(r);
     assert.doesNotMatch(text, /"house_of"|"households"|pace_km_per_crossing":47|"glow"/, `${what}: a town-wide table rides the read`);
+    assert.doesNotMatch(text, /"(hh|solo):/, `${what}: a household key rides the read (no fixture mark declares one, so only a lights table could)`);
     assert.ok(!Object.hasOwn(r.records, "the-town/resident") && !Object.hasOwn(r.records, "zeta/far-lamp"), `${what}: records carry what the answer never named`);
     // the house it shows: `lit` on it and on nothing else; this suite has no store
     const lits = litsOf(r);

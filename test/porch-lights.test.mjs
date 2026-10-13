@@ -154,3 +154,22 @@ test("THE DEFAULT BOUND is the real one: an unanswered batch holds a reader abou
   assert.equal(r.unavailable, ACTIVITY_SLOW);
   assert.ok(waited >= 1400 && waited < 2500, `waited ${waited.toFixed(0)} ms`);
 });
+
+// ── GET /world/dials: one answer per SETTLEMENT (world.mjs § dialsPageOf) ────
+test("GET /world/dials is cached by the settlement's sha: the same sha is the same answer, a new settlement a new one, and main (no settlement) is never kept under a stand-in identity", async () => {
+  const { dialsPageOf } = await import("../src/world.mjs");
+  const settled = (n, sha, pace) => ({ marks: [{ id: "the-town/resident", dials: { pace_km_per_crossing: pace } }, { id: "x/plain", body: "no dials" }],
+    _raw: { blessed: { source: "settlement", n, sha, tag: `settlement/S${n}` } } });
+  const a = dialsPageOf(settled(7, "a".repeat(40), 60));
+  assert.deepEqual([a.settlement, a.sha, a.dials], ["S7", "a".repeat(40), { "the-town/resident": { pace_km_per_crossing: 60 } }]);
+  assert.equal(dialsPageOf(settled(7, "a".repeat(40), 999)), a, "the same settlement sha is served from the cache — not rebuilt per request");
+  const b = dialsPageOf(settled(8, "b".repeat(40), 72));
+  assert.equal(b.dials["the-town/resident"].pace_km_per_crossing, 72, "a new settlement is a new answer");
+  assert.equal(b.settlement, "S8");
+  const main = { marks: [{ id: "the-town/resident", dials: { pace_km_per_crossing: 61 } }], _raw: { blessed: { source: "main", sha: "c".repeat(40), n: null } } };
+  const m1 = dialsPageOf(main);
+  assert.equal(m1.sha, null, "main's head is not a settlement identity");
+  assert.match(m1.note, /no blessed settlement/);
+  main.marks[0].dials.pace_km_per_crossing = 62;
+  assert.equal(dialsPageOf(main).dials["the-town/resident"].pace_km_per_crossing, 62, "and is never cached under one");
+});

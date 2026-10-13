@@ -2125,8 +2125,8 @@ export function litUnknownBlock(activity) {
 //                      or an unread store says so, with `lit: null`.
 let _dialsPage = null;   // { sha, answer } — the newest settlement's only
 
-export async function worldDialsPage() {
-  const w = await world();
+/** The page's dial table for world `w`, cached by its settlement's sha (pure over `w`; worldDialsPage hands it this office's world). */
+export function dialsPageOf(w) {
   // a SETTLEMENT's sha only: with no settlement tag the read tier serves main,
   // and `blessed.sha` is then main's head — a branch, not a snapshot identity
   const b = w?._raw?.blessed?.source === "settlement" ? w._raw.blessed : null;
@@ -2141,6 +2141,10 @@ export async function worldDialsPage() {
   };
   if (sha) _dialsPage = { sha, answer };
   return answer;
+}
+
+export async function worldDialsPage() {
+  return dialsPageOf(await world());
 }
 
 export async function worldLights(raw = null) {
