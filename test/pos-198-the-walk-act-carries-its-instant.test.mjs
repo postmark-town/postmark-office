@@ -155,7 +155,10 @@ test("the DOOR makes that one read, and hands it to the pen", () => {
   // without the instant would be noticed.
   const src = readFileSync(join(HERE, "..", "src", "world.mjs"), "utf8");
 
-  const reads = src.match(/const declaredAt = new Date\(\)\.toISOString\(\);/g) ?? [];
+  // WLD-5: a set-down due later (`__at`, a portal's landing at a walk's
+  // arrival) is dated at THAT instant instead of the clock: still one read,
+  // and never a second one.
+  const reads = src.match(/const declaredAt = (?:dueLater \? crossingSailsAt\(at\) : )?new Date\(\)\.toISOString\(\);/g) ?? [];
   assert.equal(reads.length, 1, "`walkViaOffice` should read the declaration clock exactly once");
 
   assert.match(src, /actor: who, from, toward, crossing: at, at: declaredAt,/,
