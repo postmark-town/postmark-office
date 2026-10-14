@@ -11,16 +11,27 @@ test("#2859: enter_on_arrival does not re-stop the walk that already arrived", (
   const end = source.indexOf("\n  return {", start);
   assert.notEqual(end, -1, "the enter_on_arrival branch is bounded before the walk reply");
 
+  // The branch composes its deps in ONE function (WLD-5 moved them there, so a
+  // test can drive the composition itself): the ordinary crossing deps go in.
   const block = source.slice(start, end);
-  const spread = block.indexOf("...crossingDeps(),");
-  const walking = block.indexOf("walking: null,");
-  const stop = block.indexOf("stop: null,");
-  const now = block.indexOf("now: () => arrivedAtCrossing,");
+  assert.notEqual(block.indexOf("arrivalEntryDeps(crossingDeps(),"), -1,
+    "arrival entry still starts from the ordinary crossing dependencies, through arrivalEntryDeps");
 
-  assert.notEqual(spread, -1, "arrival entry still starts from the ordinary crossing dependencies");
-  assert.ok(walking > spread, "arrival entry explicitly disables the manual-entry walking hook after spreading crossingDeps");
-  assert.ok(stop > walking, "arrival entry explicitly disables the manual-entry stop hook too");
-  assert.ok(now > stop, "the arrival-time override remains after the stop hooks are disabled");
+  const fn = source.indexOf("export function arrivalEntryDeps(");
+  assert.notEqual(fn, -1, "arrivalEntryDeps is where the arrival's overrides live");
+  const body = source.slice(fn, source.indexOf("\n}\n", fn));
+  const spread = body.indexOf("...base,");
+  const walking = body.indexOf("walking: null,");
+  const stop = body.indexOf("stop: typeof base?.stop");
+  const now = body.indexOf("now: () => arrivedAtCrossing,");
+
+  assert.notEqual(spread, -1, "the overrides start from the base deps");
+  assert.ok(walking > spread, "arrival entry explicitly disables the manual-entry walking hook after spreading the base");
+  // WLD-5: the stop is no longer null. With `walking` null the only stop an
+  // entry can issue is a portal's landing, and that one is dated at the arrival.
+  assert.ok(stop > walking, "the stop is overridden after the spread too: the base's stop, dated at the arrival");
+  assert.notEqual(body.indexOf("at: arrivedAtCrossing"), -1, "and its date is the arrival crossing");
+  assert.ok(now > stop, "the arrival-time override remains after the hooks");
 });
 
 // ── THE SAME RULING, READ AS BEHAVIOUR ──────────────────────────────────────
@@ -65,7 +76,8 @@ const THE_REFUSAL = "You are within current-the-reader/the-taproom — this walk
 
 /** One office in a closure, with the walk hooks made observable.
  *  `hooks: "manual"` is what crossingDeps() hands an ordinary entry;
- *  `hooks: "arrival"` is what walkViaOffice overrides them to. */
+ *  `hooks: "arrival"` is the composition walkViaOffice itself hands the door
+ *  (world.mjs § arrivalEntryDeps, over these same manual hooks). */
 async function officeWith({ hooks, stopThrows = false, standing = { x: -9, y: 35.5 } }) { // POS-220: the post office's anchor — a door is entered only from within its extent, so the walker stands AT it (the old { -30, 40 } was ~21 m off, inside the retired 60 m reach)
   const worldState = JSON.parse(readFileSync(join(CLONE, "WORLD", "world-state.json"), "utf8"));
   const mod = await import(`file:///${join(CLONE, "tools", GRAMMAR).replace(/\\/g, "/")}`);
@@ -88,8 +100,8 @@ async function officeWith({ hooks, stopThrows = false, standing = { x: -9, y: 35
       // The one line under test. An ordinary entry gets the hooks; the
       // arrival-bundled entry is handed null for both, which is exactly the
       // override src/world.mjs writes after spreading crossingDeps().
-      walking: hooks === "manual" ? walkHook : null,
-      stop: hooks === "manual" ? stopHook : null,
+      walking: walkHook,
+      stop: stopHook,
       record: async ({ lines, handle }) => {
         text += lines.join("\n") + "\n";
         const acts = thresholds.parseEnterExitLedger(text).acts;
@@ -99,6 +111,7 @@ async function officeWith({ hooks, stopThrows = false, standing = { x: -9, y: 35
   };
 }
 
+const { arrivalEntryDeps } = await import("../src/world.mjs");
 const enter = (deps) => import("../src/world-crossings.mjs")
   .then((m) => m.enterViaOffice(CLONE, { mark: SHIP, handle: WHO, accept: true }, { handles: new Set([WHO]) }, deps));
 
@@ -129,12 +142,16 @@ test("#2859 · the reported contradiction, reproduced: a successful entry whose 
 test("#2859 · the arrival-bundled entry attempts no stop at all, so it cannot contradict itself",
   { skip: !HAVE_CLONE && WHY_NOT }, async () => {
   // The same door, the same refusing stop hook available in principle — but
-  // walkViaOffice hands the arrival composition `walking: null, stop: null`,
-  // and a hook that is never consulted cannot refuse. The walk needs no stop
-  // here: it is a departure whose position is a function of the clock, and it
-  // has already arrived.
+  // walkViaOffice hands the arrival composition `walking: null` (world.mjs §
+  // arrivalEntryDeps, driven here over the very hooks that refuse), so the
+  // walk-ending stop is never consulted, and a hook that is never consulted
+  // cannot refuse. The walk needs no stop here: it is a departure whose position
+  // is a function of the clock, and it has already arrived. (Its `stop` is still
+  // there, dated at the arrival, for the one stop an entry can still issue: a
+  // portal's landing, test/wld5-walk-enter-landing.test.mjs. The Post Office is
+  // a vehicle stop, not a WLD-5 portal, so it issues none.)
   const o = await officeWith({ hooks: "arrival", stopThrows: true });
-  const answer = await enter(o.deps);
+  const answer = await enter(arrivalEntryDeps(o.deps, { arrivedAtCrossing: AT, toward: { x: -9, y: 35.5 }, who: WHO }));
 
   assert.ok(answer.entered.length > 0, "entry still succeeds — the fix changes nothing about the threshold");
   assert.equal(o.stops.length, 0, "no second stop is attempted after an arrival that already happened");

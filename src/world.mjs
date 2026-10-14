@@ -4985,6 +4985,38 @@ export function walkEntryReceipt(entry, { arrived, stop, eta } = {}) {
     note: "the entry is adjudicated when you arrive; nothing has been entered yet" } };
 }
 
+/**
+ * THE ARRIVAL ENTRY'S DEPS — what `walkViaOffice`'s `enter_on_arrival` hands
+ * `enterViaOffice` (§ THE ENTRY LEG), in one place so a test drives exactly what
+ * the door composes. Over the office's own crossing deps it substitutes the
+ * INSTANT (the arrival crossing) and the STANDPOINT (the arrival point), and:
+ *
+ *   · `walking: null` (#2859). An entry made by the walk's own arrival must not
+ *     end that walk again: a stop issued after the entry is judged as a fresh
+ *     walk OUT of the room just entered and refused, and the answer contradicted
+ *     itself. With `walking` null, the "entering ends the walk" stops never run.
+ *   · `stop`, DATED AT THE ARRIVAL. With `walking` null the one stop an entry can
+ *     still issue is a portal's landing (world-crossings.mjs § passThroughPortal):
+ *     the zero-length set-down every plain enter through a portal writes. It was
+ *     null here too, so a walk that entered a portal on arrival wrote the passage
+ *     and never the landing: the walker stood on the old room's side of the wall,
+ *     the read dropped the room they had entered, and every portal of the room
+ *     they had left was hidden from them (WLD-5, found walking the Spire's shell,
+ *     2026-10-13). Now the landing is the same write, dated at the arrival
+ *     crossing (`at` → walkViaOffice's `__at`), so it governs when they arrive.
+ */
+export function arrivalEntryDeps(base, { arrivedAtCrossing, toward, who }) {
+  return {
+    ...base,
+    walking: null,
+    stop: typeof base?.stop === "function"
+      ? (h, to, k, opts = {}) => base.stop(h, to, k, { ...opts, at: arrivedAtCrossing })
+      : null,
+    now: () => arrivedAtCrossing,
+    standpointOf: async () => ({ x: toward.x, y: toward.y, name: who }),
+  };
+}
+
 export async function walkViaOffice(worldClone, payload = {}, key = null) {
   { const fz = worldFreezeBounce(); if (fz) return fz; }
   const bounce = (code, defect, hint, extra = {}) => {
@@ -5125,7 +5157,19 @@ export async function walkViaOffice(worldClone, payload = {}, key = null) {
   // WHERE FROM — the derived position of your current departure, or home if you
   // have never walked. Deriving rather than storing is the whole design law, and
   // it is what makes supersede free: a new leg simply starts where you are now.
-  const at = fractionalCrossing();
+  //
+  // `__at` (WLD-5): a set-down that happens at an instant still to come. A
+  // portal entered by a walk's `enter_on_arrival` sets its walker down at the
+  // portal's landing WHEN THE WALK ARRIVES, and the entry it follows is stamped
+  // at that arrival crossing (§ THE ENTRY LEG, below). So the set-down is
+  // judged and dated at that instant too: the occupancy the guard reads, the
+  // act's crossing and its written instant. The record's own reads then hold it
+  // back until it falls due (world-movement.mjs § storedDepartures skips an act
+  // written after the instant read; position-projection.mjs § record keeps it
+  // pending). The office's own key, like `__from`: set only by the crossing
+  // deps' `stop`, never admitted by the door's schema.
+  const at = Number.isFinite(Number(payload.__at)) ? Number(payload.__at) : fractionalCrossing();
+  const dueLater = Number.isFinite(Number(payload.__at));
   // BOTH ERAS, or a new leg starts from where this resident was standing before
   // the freeze — which for the thirty set down ashore is a berth they are no
   // longer at. From the kept positions when this office keeps them (POS-302).
@@ -5357,8 +5401,10 @@ export async function walkViaOffice(worldClone, payload = {}, key = null) {
     if (law?.thresholds && typeof law.verbs?.pointWithinMark === "function") {
       const deps = crossingDeps();
       // The clock, the ledger and the fold — § DEC-5, THE WALK GUARD — THE
-      // OCCUPANCY READ, above this function, where a test can drive them.
-      const stack = await occupiedNowBy(who, law.thresholds, deps);
+      // OCCUPANCY READ, above this function, where a test can drive them. A
+      // set-down due later is judged by the occupancy of ITS instant (`__at`):
+      // at a portal's landing that is the room the passage put you in.
+      const stack = await occupiedNowBy(who, law.thresholds, dueLater ? { ...deps, now: () => at } : deps);
       // pointWithinMark takes the MARK OBJECT (world-verbs.mjs:92), resolved from
       // the same world the enter door adjudicates against (deps.world().marks).
       const w = stack.length ? await deps.world() : null;
@@ -5457,7 +5503,7 @@ export async function walkViaOffice(worldClone, payload = {}, key = null) {
     // (`storedDepartureEvents`). The read stays here rather than moving into
     // `walkEntry` because the answer below reports it too, and a second read
     // for the answer would be the same drift in a smaller place.
-    const declaredAt = new Date().toISOString();
+    const declaredAt = dueLater ? crossingSailsAt(at) : new Date().toISOString();
     const movement = {
       actor: who, from, toward, crossing: at, at: declaredAt,
       within: targetExtent, toMark: targetMarkId, declaredBy: who, pace,
@@ -5600,13 +5646,8 @@ export async function walkViaOffice(worldClone, payload = {}, key = null) {
     try {
       const { enterViaOffice } = await import("./world-crossings.mjs");
       const { crossingDeps } = await import("./world-apex.mjs");
-      entry = await enterViaOffice(worldClone, { mark: targetMarkId, handle: who, accept: payload.accept === true }, key, {
-        ...crossingDeps(),
-        walking: null,
-        stop: null,
-        now: () => arrivedAtCrossing,
-        standpointOf: async () => ({ x: toward.x, y: toward.y, name: who }),
-      });
+      entry = await enterViaOffice(worldClone, { mark: targetMarkId, handle: who, accept: payload.accept === true }, key,
+        arrivalEntryDeps(crossingDeps(), { arrivedAtCrossing, toward, who }));
     } catch (e) {
       // THE WALK STILL STANDS. The leg is already recorded; an entry that
       // refuses is a fact about the door, not about the journey — so it is

@@ -103,9 +103,22 @@ export function createPositionProjection({ rebuild, maxAgeMs = PROJECTION_MAX_AG
   let building = null;       // one rebuild in flight, shared by every caller that arrives during it
   let pending = [];          // records written while a rebuild was reading — it may have read before them
   let epoch = 0;             // bumps on every change, so a grid knows when it is stale
+  let dueLater = [];         // records written for an instant still to come, in write order
+
+  /** The records that have fallen due since they were written, applied in write order. */
+  function promote() {
+    if (!governing || !dueLater.length) return;
+    const t = now();
+    const due = dueLater.filter((r) => Date.parse(r.iso) <= t);
+    if (!due.length) return;
+    dueLater = dueLater.filter((r) => Date.parse(r.iso) > t);
+    for (const rec of due) governing.set(rec.handle, rec);
+    recorded += due.length;
+    epoch += 1;
+  }
 
   async function ensure() {
-    if (governing && now() - builtAt <= maxAgeMs) return;
+    if (governing && now() - builtAt <= maxAgeMs) return promote();
     if (!building) {
       const startedAt = now();
       building = (async () => {
@@ -130,6 +143,7 @@ export function createPositionProjection({ rebuild, maxAgeMs = PROJECTION_MAX_AG
       })().finally(() => { building = null; });
     }
     await building;
+    promote();
   }
 
   return {
@@ -169,6 +183,17 @@ export function createPositionProjection({ rebuild, maxAgeMs = PROJECTION_MAX_AG
      */
     record(rec) {
       if (!rec?.handle) return false;
+      // A NEWER WRITE SUPERSEDES A SET-DOWN STILL TO COME. The record orders by
+      // write, so once both are due the later one governs; dropping the earlier
+      // here keeps the projection saying the same.
+      dueLater = dueLater.filter((r) => r.handle !== rec.handle);
+      // DUE LATER (WLD-5): a set-down written now for an instant still to come
+      // (world.mjs § walkViaOffice `__at`, a portal's landing at a walk's
+      // arrival). The record's own read skips an act written after the instant
+      // asked (world-movement.mjs § storedDepartures), so the projection holds
+      // it until then and applies it in its turn (§ promote).
+      const due = Date.parse(rec.iso ?? "");
+      if (Number.isFinite(due) && due > now()) { dueLater.push(rec); return true; }
       if (building) pending.push(rec);
       if (!governing) return Boolean(building);
       governing.set(rec.handle, rec);

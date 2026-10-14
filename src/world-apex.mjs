@@ -447,8 +447,12 @@ export function crossingDeps() {
     // rider remains within something after stepping off; the walk door keeps the
     // judgement of WHAT that walk actually leaves — `leavingWhileOccupying` is
     // its predicate and there is no second copy of it on this side.
+    // `at` (WLD-5) rides the same channel as `__at`: a portal's landing reached by
+    // a walk's enter_on_arrival is a set-down at the ARRIVAL crossing, not now
+    // (world.mjs § walkViaOffice, § THE ENTRY LEG).
     stop: async (who, here, key, opts = {}) => walkViaOffice(WORLD_CLONE, { handle: who, x: here.x, y: here.y,
       ...(opts?.from && Number.isFinite(Number(opts.from.x)) && Number.isFinite(Number(opts.from.y)) ? { __from: { x: Number(opts.from.x), y: Number(opts.from.y) } } : {}),
+      ...(Number.isFinite(Number(opts?.at)) ? { __at: Number(opts.at) } : {}),
       ...(opts?.exit === true ? { exit: true } : {}) }, key),
     now: () => (Date.now() - Date.UTC(2026, 5, 12)) / (12 * 3600 * 1000),
     // THE ACTS THIS ACTOR HAS WRITTEN, oldest first — the ride fold's one input
