@@ -158,6 +158,9 @@ const SOURCE_OF = {
   // An award on an idea post (POS-290): a hand pays a credited resident, one
   // line per post and label, written by the reviewed award pass.
   "post-award": "awards",
+  // A quest the town pays by hand-reviewed pass (POS-632): one line per quest
+  // and household, written by tools/quest-pay-plan.mjs.
+  "quest-pay": "quests",
 };
 // What one ledger line minted, asked of the town's own fold: foldMintCount over
 // that line alone. So a line counts here exactly when it counts in M, and a kind
