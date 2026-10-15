@@ -586,9 +586,13 @@ test("at the pin the law loads through the blessed-ref materializer; a kind the 
   assert.equal(law.unavailable, undefined, law.unavailable);
   assert.equal(law.creaturesMod.TOWN, "the-town");
   assert.deepEqual([...law.creaturesMod.DESPAWN_REASONS], ["faded", "fled"]);
-  assert.equal(law.kindOf("wolf"), null, "WORLD/kinds/wolf.kind is not on the pin yet");
+  // the pin carries WLD-56 part 2's kinds (world#219): the ruled wolf parses, and a kind the ref lacks is no kind
+  assert.equal(law.kindOf("wolf")?.ring_m, 80, "WORLD/kinds/wolf.kind at the pin, as ruled (D4)");
+  assert.equal(law.kindOf("fox"), null);
   assert.equal(law.kindOf("../escape"), null);
-  const living = new LivingSet({ law }).fold([spawnRow("creature:wolf-270-1")]);
+  const fox = spawnRow("creature:fox-270-1");
+  fox.payload.kind = "fox";
+  const living = new LivingSet({ law }).fold([fox]);
   assert.deepEqual(await reactTo(act(), { living, ask: () => { throw new Error("asked"); }, env: ENV, now: T0 }), [], "a creature of a kind the ref lacks has no ring");
 });
 
