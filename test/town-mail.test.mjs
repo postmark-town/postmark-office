@@ -785,8 +785,8 @@ test("send_letter FOLDS UNDER household — your pen lives where your standing d
       const apexNames = (await list()).map((t) => t.name);
       assert.ok(!apexNames.includes("send_letter"),
         "delisted apex-on: household serves it, so the listing stops carrying the flat name");
-      assert.deepEqual(apexNames.sort(), ["household", "town", "upload_media", "world", "world_investigate", "world_note"],
-        "the fourth round's whole listing: three apexes and three deliberate flats");
+      assert.deepEqual(apexNames.sort(), ["doorstep", "household", "town", "upload_media", "world", "world_investigate", "world_note"],
+        "the listing: four apexes (the doorstep joined, POS-632) and three deliberate flats");
     });
   } finally { rmSync(clone, { recursive: true, force: true }); }
 });

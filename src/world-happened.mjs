@@ -69,6 +69,62 @@ export function readCrossingLogs(worldClone, fromCrossing, toCrossing) {
   return { lines, covered, absent };
 }
 
+// ── THE LIVE LINES (POS-632 PR-3, the gap read's finding 6) ────────────────
+//
+// The crossing log is written a few minutes after each ferry, so inside a
+// crossing it holds almost nothing of that crossing. A cursor that only read
+// the log would answer "nothing new" for twelve hours. So the window the log
+// has not caught up with is read from the store's act record itself: the acts
+// that make the log's three kinds (walk → departure, say → emission, a take,
+// give or drop → attachment), placed by their witnessed anchor the way the
+// save places them (save-emissions.mjs § emissionRowsFromActs), and read by
+// the primary key: after the cursor's high-water mark, or the newest LIVE_SCAN.
+export const LIVE_KINDS = Object.freeze({ walk: "departure", say: "emission", take: "attachment", give: "attachment", drop: "attachment" });
+export const LIVE_SCAN = 500;
+export const LIVE_HW_SQL = "SELECT max(id)::text AS hw FROM acts";
+// NEWEST FIRST after the cursor (review-559 § 1): a long gap is a capped glance
+// of its NEWEST acts, and the cursor handed back is the top, so nothing between
+// is skipped silently; `complete` says when the gap was cut.
+export const LIVE_AFTER_SQL = `SELECT id::text AS id, actor, action, at, at_anchor, at_dx, at_dy FROM acts
+  WHERE id > $1::bigint AND action = ANY($2::text[]) ORDER BY id DESC LIMIT $3`;
+export const LIVE_NEWEST_SQL = `SELECT id::text AS id, actor, action, at, at_anchor, at_dx, at_dy FROM acts
+  WHERE action = ANY($1::text[]) ORDER BY id DESC LIMIT $2`;
+
+/**
+ * { lines, hw, complete } — the log's line shape for the live window — or null
+ * when the record cannot be read (the caller keeps the log's lines alone).
+ * `afterId`: every kind-act after it (a cursor's hw). Else the newest LIVE_SCAN
+ * at or after `sinceMs`.
+ */
+export async function liveLines({ afterId = null, sinceMs = null, query, centreOf, compose }) {
+  try {
+    const top = await query(LIVE_HW_SQL, []);
+    if (top == null) return null;
+    const hw = top[0]?.hw ?? null;
+    const kinds = Object.keys(LIVE_KINDS);
+    const newest = afterId != null
+      ? await query(LIVE_AFTER_SQL, [afterId, kinds, LIVE_SCAN])
+      : (await query(LIVE_NEWEST_SQL, [kinds, LIVE_SCAN])).filter((r) => sinceMs == null || Date.parse(r.at instanceof Date ? r.at.toISOString() : r.at) >= sinceMs);
+    const capped = (newest?.length ?? 0) >= LIVE_SCAN;
+    const rows = [...(newest ?? [])].reverse();
+    const lines = [];
+    for (const r of rows ?? []) {
+      const pos = compose({ anchor: r.at_anchor, dx: r.at_dx, dy: r.at_dy }, centreOf);
+      if (!pos) continue;
+      lines.push({ at: r.at instanceof Date ? r.at.toISOString() : r.at, type: LIVE_KINDS[r.action], actor: r.actor, payload: { x: pos.x, y: pos.y }, live: true });
+    }
+    // the mark handed back is the highest of the store's top and the newest row
+    // read: an act inserted between the two queries is shown now, never again
+    const big = (v) => { try { return v == null ? null : BigInt(v); } catch { return null; } };
+    const ids = [big(hw), big(rows.at(-1)?.id), big(afterId)].filter((v) => v != null);
+    const mark = ids.length ? ids.reduce((a, b) => (a > b ? a : b)).toString() : null;
+    return { lines, hw: mark, complete: !capped };
+  } catch (e) {
+    console.error(`[world] the live lines could not be read (${String(e?.message ?? e).slice(0, 160)}); happened reads the crossing log alone`);
+    return null;
+  }
+}
+
 /** The newest crossing the log actually holds — the cursor's ceiling. */
 export function latestSavedCrossing(worldClone) {
   const dir = join(worldClone, "STATE", "log");

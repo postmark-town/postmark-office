@@ -56,7 +56,7 @@ import { fundVerifyViaOffice, intakeDisclosure, POT_RE as FUND_POT_RE, INTAKE as
 import { channelOf, countAct, actsByChannel } from "./channel.mjs";
 import { logAccess } from "./telemetry.mjs";
 import { settlements } from "./settlements.mjs";
-import { worldSummary, worldOrient, worldEyes, worldInvestigate, worldFind, worldStateRaw, worldSkeletonRaw, worldMyMarks, leaveMarkViaOffice, walkViaOffice, worldNoteViaOffice, worldWalkers, worldPresent, worldConversations, worldSay, worldSayHuman, worldSayStream, serveSayStream, whoami, worldBlockForHandle, WORLD_CLONE, MISTS_UNREADABLE, MISTS_RETRY_AFTER_S } from "./world.mjs";
+import { worldSummary, worldOrient, worldEyes, worldInvestigate, worldFind, worldStateRaw, worldSkeletonRaw, worldMyMarks, leaveMarkViaOffice, walkViaOffice, worldNoteViaOffice, worldWalkers, worldPresent, worldConversations, worldSay, worldSayHuman, worldSayStream, serveSayStream, whoami, earshotSnapshot, worldBlockForHandle, WORLD_CLONE, MISTS_UNREADABLE, MISTS_RETRY_AFTER_S } from "./world.mjs";
 import { world2MyDrafts, world2MyMarks, world2Pool, world2Serve, world2ServeEnabled } from "./world2-serve.mjs";
 import { isStoreLostCode, isStoreUnreachable } from "./store-pool.mjs"; // POS-544: a store lost mid-request answers 503, not 500
 import { STORE_LOST, READ_RETRY, ACT_RETRY, FAULT_LOGGED, STORE_RETRY_AFTER_S, isHttpStatus, foreignAnswer } from "./fault-words.mjs"; // the office's own words for its own fault, one owner (POS-568, POS-573/578)
@@ -84,7 +84,8 @@ import { readReleaseStamp } from "./release.mjs"; // POS-60: the deploy receipt 
 import { currentCrossing, CROSSING_DERIVATION } from "./crossings.mjs"; // the town clock, served at the door
 import { withLastActive, withLastActiveOn } from "./last-active.mjs"; // the roster's and the card's last_active, from the store's acts (POS-481)
 import { roleFrom, workerSafe, writerAddressFrom, readRoleBounce, penTokenFor, roleDisclosure } from "./role.mjs"; // DEC-4/G3: read-only workers behind nginx
-import { IN_READ_WORKER, announce, mcpWorkerTakes, onAnnounce, readWorkerCount, serveReadsInWorker, startReadPool, workerTakes } from "./read-workers.mjs"; // POS-266: reads on the other cores
+import { IN_READ_WORKER, announce, mcpWorkerTakes, onAnnounce, readWorkerCount, serveReadsInWorker, startReadPool, workerTakes, wantsEarshot } from "./read-workers.mjs"; // POS-266: reads on the other cores
+import { readShape } from "./world-read-shape.mjs"; // POS-632 W4: the office's default shape decides whether a handover carries earshot
 import { heardDoor } from "./arrival-heard.mjs"; // POS-292: how arrivals heard, weekly counts only
 import { freshFor } from "./paper-fresh.mjs"; // POS-271: the pending paper rows, read before a composed read
 
@@ -913,6 +914,16 @@ const setWwwAuth = (res) => {
 // worker, in a read-role process, and with OFFICE_READ_WORKERS=0.
 let readPool = null;
 
+// POS-284's handover of an agent's read to a worker, plus POS-632 W4: a v2 bare
+// world read carries `heard`, and earshot is this thread's memory, so it is
+// snapshotted here, at admission, with no listen mark, and handed over with the call.
+async function handOverRead(req, res, raw, messages) {
+  if (!mcpWorkerTakes(messages)) return false;
+  let earshot = null;
+  if (wantsEarshot(messages, readShape())) { try { earshot = await earshotSnapshot(); } catch { earshot = null; } }
+  return readPool.forward(req, res, { body: raw, mcp: true, earshot });
+}
+
 // `route` is the office's one request handler; `handle` (below it) resolves the
 // bearer credential first and hands it in, because since POS-271 the lookup is a
 // read of the paperwork and may be a round trip to the store.
@@ -1462,7 +1473,8 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         worldVerb: write ? verb : null,
       }),
       // POS-284: the agents' reads, on another core (read-workers.mjs § mcpWorkerTakes).
-      handOver: readPool ? (raw, messages) => mcpWorkerTakes(messages) && readPool.forward(req, res, { body: raw, mcp: true }) : null,
+      handOver: readPool ? (raw, messages) => handOverRead(req, res, raw, messages) : null, // + POS-632 W4's earshot
+      earshot: req.handedEarshot ?? null,
       onlyReads: IN_READ_WORKER ? mcpWorkerTakes : null,
       // The household world-write budget as a READ (POS-139). Same bouncer
       // instance the `rateLimit` closure above enforces with, so the standing

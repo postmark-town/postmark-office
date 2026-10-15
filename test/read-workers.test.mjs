@@ -481,3 +481,15 @@ test("§ 7 a keyed full letter read stays on the main thread; a keyless one goes
     await gone;
   }
 });
+
+// ── POS-632 W4: which handovers carry the main thread's earshot ─────────────
+test("wantsEarshot: a bare world read at v2 (by the call or the office's default) carries earshot; nothing else does", async () => {
+  const { wantsEarshot } = await import("../src/read-workers.mjs");
+  const call = (name, args) => [{ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }];
+  assert.equal(wantsEarshot(call("world", { read_shape: "v2" })), true);
+  assert.equal(wantsEarshot(call("world", {}), "v2"), true, "the office's default");
+  assert.equal(wantsEarshot(call("world", {}), "v1"), false);
+  assert.equal(wantsEarshot(call("world", { read_shape: "v1" }), "v2"), false, "the call's own shape wins");
+  assert.equal(wantsEarshot(call("world", { read_shape: "v2", read: "view" })), false, "a block read has no heard");
+  assert.equal(wantsEarshot(call("world_orient", {})), false);
+});

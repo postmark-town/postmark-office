@@ -40,28 +40,29 @@
 // carry the lane's recommendation as the default until he rules. Changing one
 // is a one-line PR; nothing else reads the number.
 //
-// THE KIND'S SHAPE this file reads (WLD-56 owns the file and its parser; this is
-// the shape agreed through Wright, and the adapter from the parsed file lands
-// with the real kinds):
+// THE KIND IS THE WORLD'S, READ BY THE WORLD'S OWN CODE (PR-A2; Wright, no
+// adapter; Starstory docs/2026-10-13/rail/WLD-56/shape-check-561.md). The
+// office imports `tools/creature-kind.mjs` (parseKind, scopeOf,
+// allowedReactions, applyEffects, voiceLine, RING_VERBS) and
+// `tools/creatures.mjs` (TOWN, DESPAWN_REASONS, isCreatureId) at the BLESSED ref, and keeps
+// only what is the office's: the ring's RAM, the caps, Jev, the d20, the slice
+// and the row. A kind is `WORLD/kinds/<kind>.kind` at the same ref. Until a
+// blessing carries `tools/creature-kind.mjs`, `loadCreatureLaw` answers
+// `unavailable` and nothing reacts: FAIL CLOSED, never the working tree.
 //
-//   { kind, name, what, ring_m, span_h,
-//     moods: { <mood>: { lo, hi, start, levels: [4 described levels] } },
-//     reactions: [{ name, sentence, when(scope) → boolean,
-//                   effects: [{ do: "add", field, by } | { do: "set"|"clear", name } | { do: "flee" }],
-//                   says }] }
-//
-// `when` is handed a scope of `self.<mood>`, `self.<flag>`, `act.verb`,
-// `act.distance_m`, `act.approaching` and `actor.times` (this creature's
-// reactions to this actor in its span). There are no `actor.` effects: a
-// creature in the Mists cannot touch a resident.
-//
-// THE ROWS IT FOLDS (class `creature`; WLD-56 W4):
-//   spawn     actor the-town, object = the creature id, payload { kind, x, y, fades_at?, moods? }
+// THE ROWS IT FOLDS (class `creature`; WLD-56 W4, F3, F6):
+//   spawn     actor the-town, object = the creature id, payload { kind, at, x, y, fades_at, moods, flags };
+//             `at` (its minute) and `fades_at` are both required: a spawn without them is skipped
 //   react     actor = the creature, object = the trigger act id, payload as `reactionPayload`
-//   withdraw  object = the creature id, payload { reason: "faded" | "fled" }
+//   withdraw  object = the creature id, actor the-town or the creature itself,
+//             payload { reason: "faded" | "fled" }; any other withdraw is ignored
 
 import { createHash } from "node:crypto";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { actsQuery } from "./world2-acts.mjs";
+import { blessedRef, materializeAtRef, readAtRef } from "./world-branches.mjs";
+import { WORLD_CLONE } from "./world-store.mjs";
 import { faultLogged } from "./fault-words.mjs";
 import { normalizeRow, WORLD_ANCHOR } from "./world-journal.mjs";
 import { currentCrossing } from "./crossings.mjs";
@@ -70,8 +71,64 @@ export const CREATURE_CLASS = "creature";
 export const REACT_ACTION = "react";
 export const SPAWN_ACTION = "spawn";
 export const WITHDRAW_ACTION = "withdraw";
-export const DESPAWN_REASONS = Object.freeze(["faded", "fled"]);
-export const isCreatureId = (id) => typeof id === "string" && id.startsWith("creature:");
+
+// ── the world's law, at the blessed ref ─────────────────────────────────────
+
+/**
+ * The world's creature code and kinds at one ref: { ref, kindMod, creaturesMod,
+ * kindOf(name) }, or { unavailable } when that ref cannot supply them (a
+ * blessing from before world#218, a clone that cannot be read). Never the
+ * working tree: an engine that silently fell back would run draft law.
+ * `importTool(file)` and `readText(path)` are the seams a test drives.
+ */
+export async function loadCreatureLaw({ repo = WORLD_CLONE, ref = null, importTool = null, readText = null } = {}) {
+  let at = ref;
+  try {
+    at ??= blessedRef(repo);
+    const tool = importTool ?? ((file) => import(pathToFileURL(join(materializeAtRef(repo, at, "tools"), "tools", file)).href));
+    const [kindMod, creaturesMod] = await Promise.all([tool("creature-kind.mjs"), tool("creatures.mjs")]);
+    for (const name of ["parseKind", "scopeOf", "allowedReactions", "applyEffects", "voiceLine"])
+      if (typeof kindMod?.[name] !== "function") throw new Error(`tools/creature-kind.mjs has no ${name}`);
+    if (!Array.isArray(kindMod.RING_VERBS) || !Array.isArray(creaturesMod?.DESPAWN_REASONS) || !creaturesMod?.TOWN || typeof creaturesMod.isCreatureId !== "function")
+      throw new Error("tools/creature-kind.mjs or tools/creatures.mjs lacks RING_VERBS, DESPAWN_REASONS, TOWN or isCreatureId");
+    const read = readText ?? ((path) => readAtRef(repo, at, path));
+    const kinds = new Map();
+    const kindOf = (name) => {
+      if (typeof name !== "string" || !/^[a-z][a-z0-9-]*$/.test(name)) return null;
+      if (!kinds.has(name)) {
+        try { kinds.set(name, kindMod.parseKind(read(`WORLD/kinds/${name}.kind`), { source: `WORLD/kinds/${name}.kind at ${at}` })); }
+        catch (e) { faultLogged(`the creature kind "${name}" could not be read at ${at}`, e); kinds.set(name, null); }
+      }
+      return kinds.get(name);
+    };
+    return { ref: at, kindMod, creaturesMod, kindOf };
+  } catch (e) {
+    faultLogged(`the creature law could not be loaded at ${at ?? "the blessed ref"}`, e);
+    return { ref: at, unavailable: `the world's creature law cannot be read at ${at ?? "the blessed ref"}, so no creature reacts` };
+  }
+}
+
+// The IN-FLIGHT load is what is cached, per ref (review of #566): every caller
+// for one ref awaits the same promise, so none sees null or the previous ref's
+// law while a load is under way, and a load for a ref the blessing has since
+// left answers only the callers that asked for that ref.
+let lawCache = { ref: null, promise: null };
+/** The law at the current blessed ref, loaded once per ref. `refOf` and `load` are the seams a test drives. */
+export async function creatureLaw({ repo = WORLD_CLONE, refOf = blessedRef, load = loadCreatureLaw } = {}) {
+  let ref;
+  try { ref = refOf(repo); } catch (e) {
+    faultLogged("the blessed ref could not be read for the creature law", e);
+    return { unavailable: "the blessed ref could not be read, so no creature reacts" };
+  }
+  if (lawCache.ref !== ref || !lawCache.promise) {
+    const promise = Promise.resolve().then(() => load({ repo, ref }))
+      .catch((e) => { faultLogged("the creature law could not be loaded", e); return { ref, unavailable: `the world's creature law cannot be read at ${ref}, so no creature reacts` }; });
+    lawCache = { ref, promise };
+  }
+  return lawCache.promise;
+}
+export function __resetCreatureLawForTest() { lawCache = { ref: null, promise: null }; }
+const lawReady = (law) => !!law && !law.unavailable && !!law.kindMod;
 
 /** A dial whose value waits on Darko's word: the lane's recommendation, and the call that rules it. */
 const pending = (value, call) => Object.freeze({ value, pending: call });
@@ -81,11 +138,10 @@ const pending = (value, call) => Object.freeze({ value, pending: call });
  * POS-637; `CREATURE_DIALS_PENDING` lists them for the PR body and the tests.
  */
 export const CREATURE_DIALS = Object.freeze({
-  // C5: the eight ruled acts (Sitting E § 7), not withdraw or stake.
-  perceived_acts: pending(Object.freeze(["walk", "enter", "exit", "say", "take", "give", "drop", "leave-mark"]), "C5"),
   // C4: what the actor's own answer carries beside the creature's id and kind.
   answer_fields: pending(Object.freeze(["line", "reaction", "roll", "judged_by"]), "C4"),
-  // C5: at most this many creatures answer one act, the nearest first.
+  // C5: at most this many creatures answer one act, the nearest first. (Which acts
+  // a creature perceives is the world's RING_VERBS: one home for that law.)
   most_per_act: pending(3, "C5"),
   // C2: one reaction per resident per creature in this window; a second act inside it gets none.
   per_actor_ms: pending(60_000, "C2"),
@@ -176,11 +232,13 @@ export const PRUNE_AFTER_MS = 3600_000;
 /**
  * The creatures this process knows, folded from their rows. A creature is
  * living while it has no withdraw and its fade instant has not come.
- * `kindOf(name)` answers a kind (its span when a spawn names no fade).
+ * `law` is `loadCreatureLaw`'s answer: its kinds, its town and its despawn reasons.
  */
 export class LivingSet {
-  constructor({ kindOf = () => null } = {}) {
-    this.kindOf = kindOf;
+  constructor({ law } = {}) {
+    this.law = law;
+    this.kindOf = law?.kindOf ?? (() => null);
+    this.skipped = []; // spawn rows the fold would not take, and why (logged)
     this.byId = new Map();
     this.answered = new Map(); // trigger act id → the creatures that answered it (a retry's lookup)
     this.cursor = "0";
@@ -203,26 +261,40 @@ export class LivingSet {
         this.cursor = String(r.id);
       }
       const p = asPayload(r.payload);
-      if (r.action === SPAWN_ACTION) { if (!this.byId.has(r.object)) this.#spawn(r, p); }
+      if (r.action === SPAWN_ACTION) {
+        // the world's fold takes a spawn only from the town, for a creature's id: so does this one
+        if (r.actor === this.law?.creaturesMod?.TOWN && this.law.creaturesMod.isCreatureId?.(r.object) && !this.byId.has(r.object)) this.#spawn(r, p);
+      }
       else if (r.action === REACT_ACTION) this.#react(r, p);
       else if (r.action === WITHDRAW_ACTION) {
+        // only the town (faded) or the creature itself (fled) withdraws it, and only for a ruled reason (R4)
         const c = this.byId.get(r.object);
-        if (c && !c.gone) { c.gone = DESPAWN_REASONS.includes(p.reason) ? p.reason : (p.reason ?? "gone"); c.gone_at = msOf(r.at); }
+        const by = r.actor === this.law?.creaturesMod?.TOWN || r.actor === r.object;
+        if (c && !c.gone && by && (this.law?.creaturesMod?.DESPAWN_REASONS ?? []).includes(p.reason)) { c.gone = p.reason; c.gone_at = msOf(r.at); }
       }
     }
     return this;
   }
 
   #spawn(r, p) {
+    // its minute and its fade are on every spawn the world's tick writes; a row
+    // without them is not one, so it is skipped, never given a guessed span (K6, R2)
+    const spawnedAt = msOf(p.at);
+    const fadesAt = msOf(p.fades_at);
+    if (!Number.isFinite(spawnedAt) || !Number.isFinite(fadesAt)) {
+      const why = `a spawn without ${Number.isFinite(spawnedAt) ? "fades_at" : "at"} (act ${r.id})`;
+      this.skipped.push({ id: r.object, why });
+      console.error(`[creatures] skipped ${r.object}: ${why}`);
+      return;
+    }
     const kind = this.kindOf(p.kind);
-    const spawnedAt = msOf(r.at);
-    const fadesAt = Number.isFinite(msOf(p.fades_at)) ? msOf(p.fades_at)
-      : spawnedAt + (Number(kind?.span_h) || 12) * 3600_000;
     const moods = {};
-    for (const [m, d] of Object.entries(kind?.moods ?? {})) moods[m] = Number.isFinite(p.moods?.[m]) ? p.moods[m] : d.start;
+    for (const [m, d] of Object.entries(kind?.moods ?? {}))
+      moods[m] = p.moods && Object.hasOwn(p.moods, m) && Number.isFinite(p.moods[m]) ? p.moods[m] : d.start;
+    const flags = Array.isArray(p.flags) ? p.flags.filter((f) => typeof f === "string").sort() : [];
     this.byId.set(r.object, {
       id: r.object, kind: p.kind, x: Number(p.x), y: Number(p.y),
-      spawned_at: spawnedAt, fades_at: fadesAt, moods, flags: {}, gone: null,
+      spawned_at: spawnedAt, fades_at: fadesAt, moods, flags, gone: null,
       reactions: [], // { act, to, verb, reaction, roll, judged_by, distance_m, approaching, at }
     });
   }
@@ -232,8 +304,8 @@ export class LivingSet {
     if (!c || c.reactions.some((x) => x.act === String(r.object))) return;
     const by = this.answered.get(String(r.object)) ?? new Set();
     this.answered.set(String(r.object), by.add(c.id));
-    if (p.moods_after && typeof p.moods_after === "object") Object.assign(c.moods, p.moods_after);
-    if (p.flags_after && typeof p.flags_after === "object") c.flags = { ...p.flags_after };
+    if (p.moods_after && typeof p.moods_after === "object" && !Array.isArray(p.moods_after)) c.moods = { ...p.moods_after }; // replaces, as the world's fold does
+    if (Array.isArray(p.flags_after)) c.flags = [...p.flags_after].sort();
     c.reactions.push({ act: r.object, to: p.to, verb: p.verb, reaction: p.reaction, roll: p.roll, judged_by: p.judged_by,
       distance_m: p.distance_m, approaching: !!p.approaching, at: msOf(r.at) });
   }
@@ -317,19 +389,16 @@ export function capOf(creature, actor, { now = Date.now() } = {}) {
 
 // ── the menu and the scope ──────────────────────────────────────────────────
 
-export function scopeFor(creature, { verb, distance_m, approaching, actor }) {
-  return {
-    self: { ...creature.moods, ...Object.fromEntries(Object.entries(creature.flags).map(([k, v]) => [k, !!v])) },
-    act: { verb, distance_m: Math.round(distance_m), approaching: !!approaching },
-    actor: { handle: actor, times: creature.reactions.filter((r) => r.to === actor).length },
-  };
+/** The world's scope (S2): self (moods and set flags), the act, and actor.times. */
+export function scopeFor(law, creature, { verb, distance_m, approaching, actor }) {
+  return law.kindMod.scopeOf({ moods: creature.moods, flags: creature.flags },
+    { verb, distance_m: Math.round(distance_m), approaching: !!approaching },
+    { times: creature.reactions.filter((r) => r.to === actor).length });
 }
 
-/** The reactions whose `when` holds. A `when` that throws is false, never an exception on the act's path. */
-export function allowedReactions(kind, scope) {
-  return (kind?.reactions ?? []).filter((r) => {
-    try { return !!r.when(scope); } catch { return false; }
-  });
+/** The world's menu (K1): the reactions whose `when` holds. A throw is no menu, never an exception on the act's path. */
+export function allowedReactions(law, kind, scope) {
+  try { return law.kindMod.allowedReactions(kind, scope); } catch { return []; }
 }
 
 // ── the creature's own world read (W9: built on the writer's main thread) ───
@@ -436,7 +505,7 @@ export function buildSlice(creature, kind, act, around = {}, { now = Date.now() 
       kind: creature.kind,
       what_it_is: kind.what,
       moods: Object.fromEntries(Object.keys(kind.moods ?? {}).map((m) => [m, mood(m)])),
-      conditions: Object.keys(creature.flags).filter((f) => creature.flags[f]),
+      conditions: [...creature.flags],
       out_for: spanWords(now - creature.spawned_at),
       fades_in: spanWords(creature.fades_at - now),
       remembers: creature.reactions.slice(-MEMORY_SHOWN).map((r) => memoryLine(r, now)),
@@ -550,39 +619,34 @@ export async function judgmentFor({ kind, allowed, slice, cap, mode, ask }) {
 
 const clamp = (v, d) => Math.max(d.lo, Math.min(d.hi, v));
 
-/** W6's order: each Score sets its mood (scaled onto its range), then the picked reaction's effects apply. Pure. */
-export function applyReaction(creature, kind, reaction, scores = {}) {
+/**
+ * W6's order: each Score sets its mood (scaled onto its range, F2), then the
+ * world's `applyEffects` applies the picked reaction (K2, K3, K10). Pure.
+ * Answers { moods, flags (sorted), flees }.
+ */
+export function applyReaction(law, creature, kind, reaction, scores = {}) {
   const moods = { ...creature.moods };
-  const flags = { ...creature.flags };
-  // A Score lies on [0, levels − 1]; it is scaled onto the mood's own range,
-  // which need not span four steps (review of #561, F2: a 0..10 hunger).
   for (const [m, sc] of Object.entries(scores)) {
-    const d = kind.moods?.[m];
-    if (!d) continue;
+    if (!Object.hasOwn(kind.moods ?? {}, m) || !Object.hasOwn(moods, m)) continue;
+    const d = kind.moods[m];
     const steps = Math.max(1, (d.levels?.length ?? 4) - 1);
     moods[m] = clamp(d.lo + Math.round((sc / steps) * (d.hi - d.lo)), d);
   }
-  let flees = false;
-  for (const e of reaction?.effects ?? []) {
-    if (e.do === "add" && kind.moods?.[e.field]) moods[e.field] = clamp(moods[e.field] + Number(e.by || 0), kind.moods[e.field]);
-    else if (e.do === "set") flags[e.name] = true;
-    else if (e.do === "clear") delete flags[e.name];
-    else if (e.do === "flee") flees = true;
-  }
-  return { moods, flags, flees };
+  const { state, fled } = law.kindMod.applyEffects(kind, { moods, flags: creature.flags }, reaction?.effects ?? []);
+  return { moods: state.moods, flags: state.flags, flees: fled };
 }
 
-/** The line: the kind's template with the actor named. Never model prose. */
-export const lineOf = (reaction, actor) => String(reaction?.says ?? "").replaceAll("{actor}", actor);
+/** The line (S3): the world's voiceLine, the kind's template with the actor named. Never model prose. */
+export const lineOf = (law, reaction, actor) => law.kindMod.voiceLine(reaction, { actor });
 
-/** The odds over `allowed`, summing to 1, unrounded. */
-function normalized(allowed, probabilities) {
+/** The odds over `allowed`, summing to 1, unrounded: what the d20 samples and the row stores. */
+export function normalized(allowed, probabilities) {
   const total = allowed.reduce((t, r) => t + (probabilities[r.name] ?? 0), 0) || 1;
   return Object.fromEntries(allowed.map((r) => [r.name, (probabilities[r.name] ?? 0) / total]));
 }
 
 /** The reaction row's payload (W4): the record of the exchange, never Jev's slice. */
-export function reactionPayload({ act, distance_m, approaching, reaction, roll, judgment, allowed, after, slice }) {
+export function reactionPayload({ act, distance_m, approaching, reaction, roll, judgment, odds, after, slice }) {
   const sliceText = slice ? JSON.stringify(slice) : null;
   return {
     to: act.actor,
@@ -595,7 +659,7 @@ export function reactionPayload({ act, distance_m, approaching, reaction, roll, 
     ...(judgment.why ? { why: judgment.why } : {}),
     // the exact odds, normalized as the sampler reads them, so the pick re-derives
     // from the row with `sampleWith(roll, allowed)` (review of #561, F4)
-    allowed: normalized(allowed, judgment.probabilities),
+    allowed: odds,
     moods_after: after.moods,
     flags_after: after.flags,
     ...(judgment.latency_ms != null ? { latency_ms: judgment.latency_ms } : {}),
@@ -659,7 +723,7 @@ function serialized(id, fn) {
  * what each creature whose ring holds it does about it.
  *
  *   act  { actor, verb, actId, atIso, point: { x, y }, toward? }
- *   deps { living (a LivingSet), kindOf, around(creature, act) → the world read at the creature,
+ *   deps { living (a LivingSet), law (loadCreatureLaw's; else the set's), around(creature, act) → the world read at the creature,
  *          ask(state, questions) → Jev, write(rows) → writeReaction, env, now }
  *
  * Answers [{ id, kind, …answer_fields }] (C4), nearest creature
@@ -670,7 +734,9 @@ export async function reactTo(act, deps = {}) {
   const env = deps.env ?? process.env;
   const mode = judgeMode(env);
   if (mode === "off") return [];
-  if (!dial("perceived_acts").includes(act?.verb)) return [];
+  const law = deps.law ?? deps.living?.law;
+  if (!lawReady(law)) return []; // fail closed: no law at the blessed ref, nothing perceives
+  if (!law.kindMod.RING_VERBS.includes(act?.verb)) return [];
   const living = deps.living;
   if (!living?.byId?.size || !act?.point || !Number.isFinite(act.point.x) || !Number.isFinite(act.point.y)) return [];
   const now = deps.now ?? Date.now();
@@ -683,14 +749,15 @@ export async function reactTo(act, deps = {}) {
   }
   if (!near.length) return [];
   const turns = near.map(({ creature, distance_m }) => serialized(creature.id, () =>
-    creatureTurn(creature, act, distance_m, { ...deps, env, mode, now: deps.now ?? Date.now() })));
+    creatureTurn(creature, act, distance_m, { ...deps, law, env, mode, now: deps.now ?? Date.now() })));
   const settled = await Promise.allSettled(turns);
   return settled.map((s) => (s.status === "fulfilled" ? s.value : null)).filter(Boolean);
 }
 
 async function creatureTurn(creature, act, distance_m, deps) {
   try {
-    const { living, kindOf = living.kindOf, mode, now } = deps;
+    const { living, law, mode, now } = deps;
+    const kindOf = law.kindOf;
     const kind = kindOf(creature.kind);
     if (!kind) return null;
     // A retried act: the creature already answered it, so the answer is the one
@@ -699,14 +766,14 @@ async function creatureTurn(creature, act, distance_m, deps) {
     const known = creature.reactions.find((r) => r.act === String(act.actId));
     if (known) {
       const r = kind.reactions.find((x) => x.name === known.reaction);
-      return r ? answerOf({ id: creature.id, kind: creature.kind, line: lineOf(r, act.actor), reaction: r.name, roll: known.roll ?? t20(creature.id, act.actId, act.atIso), judged_by: known.judged_by }) : null;
+      return r ? answerOf({ id: creature.id, kind: creature.kind, line: lineOf(law, r, act.actor), reaction: r.name, roll: known.roll ?? t20(creature.id, act.actId, act.atIso), judged_by: known.judged_by }) : null;
     }
     if (creature.gone || creature.fades_at <= now) return null; // it fled while this act waited its turn
     const cap = capOf(creature, act.actor, { now });
     if (cap === "minute") return null;
     const approaching = act.approaching ?? approachingOf(act.point, act.toward, creature);
-    const scope = scopeFor(creature, { verb: act.verb, distance_m, approaching, actor: act.actor });
-    const allowed = allowedReactions(kind, scope);
+    const scope = scopeFor(law, creature, { verb: act.verb, distance_m, approaching, actor: act.actor });
+    const allowed = allowedReactions(law, kind, scope);
     if (!allowed.length) return null;
 
     // the slice only when Jev will read it (W9: the read is the expensive part)
@@ -716,16 +783,17 @@ async function creatureTurn(creature, act, distance_m, deps) {
       : null;
     const judgment = await judgmentFor({ kind, allowed, slice, cap, mode, ask: deps.ask ?? ((s, q) => askJev(s, q, { env: deps.env })) });
     const roll = t20(creature.id, act.actId, act.atIso);
-    const { picked } = sampleWith(roll, judgment.probabilities);
+    const odds = normalized(allowed, judgment.probabilities);
+    const { picked } = sampleWith(roll, odds); // the same odds the row stores, so the pick re-derives from it
     const reaction = allowed.find((r) => r.name === picked) ?? allowed[0];
-    const after = applyReaction(creature, kind, reaction, judgment.scores);
-    const payload = reactionPayload({ act, distance_m, approaching, reaction, roll, judgment, allowed, after, slice });
+    const after = applyReaction(law, creature, kind, reaction, judgment.scores);
+    const payload = reactionPayload({ act, distance_m, approaching, reaction, roll, judgment, odds, after, slice });
     const rows = reactionRows(creature, act, payload, { now, flees: after.flees });
     const written = await (deps.write ?? writeReaction)(rows);
     living.fold(written.rows.map((r) => ({ ...r, payload: asPayload(r.payload) })), { advance: false });
     const stored = asPayload(written.rows[0].payload);
     const shown = kind.reactions.find((r) => r.name === stored.reaction) ?? reaction;
-    return answerOf({ id: creature.id, kind: creature.kind, line: lineOf(shown, act.actor), reaction: shown.name, roll: stored.roll ?? roll,
+    return answerOf({ id: creature.id, kind: creature.kind, line: lineOf(law, shown, act.actor), reaction: shown.name, roll: stored.roll ?? roll,
       judged_by: stored.judged_by ?? judgment.judged_by });
   } catch (e) {
     faultLogged(`a creature's turn tripped (${creature?.id})`, e);

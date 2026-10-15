@@ -1,4 +1,4 @@
-// creatures.test.mjs — the creatures core (POS-637 PR-A; src/creatures.mjs).
+// creatures.test.mjs — the creatures core (POS-637 PR-A, PR-A2; src/creatures.mjs).
 //
 // RULED (Darko, Sitting E, 2026-10-14 21:31–21:32 EDT): a creature has an
 // awareness ring and no verbs; code checks the ring, Jev chooses among the
@@ -6,38 +6,55 @@
 // is the kind's template. The settled engineering (W1–W10) is on POS-637.
 //
 // Everything is driven with its store, its judge and its clock injected. The
-// kind is a fixture in the shape agreed with WLD-56 (its `when`s compiled to
-// functions, as the adapter from the parsed file will hand them over).
+// LAW is the world's own (PR-A2, no adapter): `tools/creature-kind.mjs` and
+// `tools/creatures.mjs` from the pinned world clone, and the kind is a real
+// kind file parsed by the world's `parseKind`. With no world clone the cases
+// skip and say why.
 
-import { test } from "node:test";
+import { test as nodeTest } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import {
-  LIVING_TOP_SQL, PRUNE_AFTER_MS,
+  LIVING_TOP_SQL, PRUNE_AFTER_MS, loadCreatureLaw, normalized, creatureLaw, __resetCreatureLawForTest,
   CREATURE_DIALS, CREATURE_DIALS_PENDING, LivingSet, PRIOR_REACTION_SQL, SLICE_CAPS, SLICE_FIELDS,
   allowedReactions, applyReaction, askJev, buildSlice, capOf, dial, judgmentFor, reactTo,
   reactionRows, sampleWith, t20, writeReaction,
 } from "../src/creatures.mjs";
+import { NO_WORLD, worldClone, worldModuleUrl } from "./fixture-paths.mjs";
 
-const levels = (m) => [`no ${m}`, `a little ${m}`, `plain ${m}`, `overwhelming ${m}`];
-const WOLF = Object.freeze({
-  kind: "wolf", name: "a grey wolf", what: "A grey wolf come out of the Mists. It belongs to no one.", ring_m: 80, span_h: 12,
-  moods: { fear: { lo: 0, hi: 3, start: 1, levels: levels("fear") }, curiosity: { lo: 0, hi: 3, start: 1, levels: levels("curiosity") }, hunger: { lo: 0, hi: 3, start: 2, levels: levels("hunger") } },
-  reactions: [
-    { name: "watch", sentence: "it stands still and watches", when: () => true, effects: [], says: "At the edge of the Mists a grey wolf stands perfectly still, watching {actor}." },
-    { name: "snarl", sentence: "it bares its teeth, a warning only", when: (s) => s.act.approaching && s.act.distance_m < 40, effects: [], says: "The wolf's lip curls back. It snarls at {actor}, low and steady." },
-    { name: "stalk", sentence: "it paces along the mist-line with you", when: (s) => s.act.verb === "walk", effects: [], says: "The wolf paces along the edge of the Mists, keeping level with {actor}, never closer." },
-    { name: "slink", sentence: "it slinks back a step", when: (s) => s.self.fear >= 2, effects: [{ do: "add", field: "fear", by: -1 }], says: "The wolf slinks back a step into the fog, its eyes still on {actor}." },
-    { name: "flee", sentence: "it turns and is gone", when: (s) => s.self.fear >= 3, effects: [{ do: "flee" }], says: "The wolf wheels and is gone, a grey shape folding back into the grey." },
-    { name: "fussy", sentence: "a `when` that throws", when: () => { throw new Error("a broken condition"); }, effects: [], says: "never" },
-  ],
-});
-const kindOf = (k) => (k === "wolf" ? WOLF : null);
+// a case that reads the law skips without a world clone; the d20, the sampler and the Jev call do not need one
+const test = (name, fn) => nodeTest(name, { skip: NO_WORLD || false }, fn);
+
+// A wolf in the kind file's own grammar (WLD-56 § 6's draft, cut to what the cases need).
+const levels = (m) => `none | a little ${m} | plain ${m} | overwhelming ${m}`;
+export const WOLF_TEXT = `kind: wolf
+name: a grey wolf
+ring_m: 80
+what: >
+  A grey wolf come out of the Mists. It belongs to no one.
+moods:
+  fear: 0..3 = 1 | ${levels("fear")}
+  curiosity: 0..3 = 1 | ${levels("curiosity")}
+  hunger: 0..3 = 2 | ${levels("hunger")}
+flags: wary
+reaction watch "it stands still and watches": when true says At the edge of the Mists a grey wolf stands perfectly still, watching {actor}.
+reaction snarl "it bares its teeth, a warning only": when act.approaching and act.distance_m < 40 says The wolf's lip curls back. It snarls at {actor}, low and steady.
+reaction stalk "it paces along the mist-line with you": when act.verb == "walk" says The wolf paces along the edge of the Mists, keeping level with {actor}, never closer.
+reaction slink "it slinks back a step": when self.fear >= 2 does self.fear -1 says The wolf slinks back a step into the fog, its eyes still on {actor}.
+reaction flee "it turns and is gone": when self.fear >= 3 does flee says The wolf wheels and is gone, a grey shape folding back into the grey.
+`;
+const KINDS = { "WORLD/kinds/wolf.kind": WOLF_TEXT };
+const worldTool = (file) => import(worldModuleUrl("tools", file));
+const LAW = NO_WORLD ? null : await loadCreatureLaw({ ref: "the pinned clone", importTool: worldTool,
+  readText: (path) => { if (!(path in KINDS)) throw new Error(`no fixture kind at ${path}`); return KINDS[path]; } });
+const WOLF = LAW?.kindOf("wolf");
 
 const T0 = Date.parse("2026-10-25T13:00:00Z");
-const spawnRow = (id, { n = 1, x = 0, y = 0, at = T0 - 3600_000, moods } = {}) =>
-  ({ id: String(n), at: new Date(at).toISOString(), actor: "the-town", action: "spawn", object: id, payload: { kind: "wolf", x, y, ...(moods ? { moods } : {}) } });
-const livingWith = (...rows) => new LivingSet({ kindOf }).fold(rows);
+const spawnRow = (id, { n = 1, x = 0, y = 0, at = T0 - 3600_000, moods, flags } = {}) =>
+  ({ id: String(n), at: new Date(at).toISOString(), actor: "the-town", action: "spawn", object: id,
+    payload: { kind: "wolf", at: new Date(at).toISOString(), fades_at: new Date(at + 12 * 3600_000).toISOString(), x, y, ...(moods ? { moods } : {}), ...(flags ? { flags } : {}) } });
+const livingWith = (...rows) => new LivingSet({ law: LAW }).fold(rows);
 const act = (over = {}) => ({ actor: "kai", verb: "walk", actId: "9001", atIso: new Date(T0).toISOString(), point: { x: 30, y: 0 }, ...over });
 
 // A store write that records what it was handed and answers with ids.
@@ -59,7 +76,9 @@ const ENV = { TYPESAFE_API_KEY: "k" };
 // ── the dials ───────────────────────────────────────────────────────────────
 
 test("every C value is a dial marked pending, carrying the lane's recommendation", () => {
-  assert.deepEqual([...dial("perceived_acts")], ["walk", "enter", "exit", "say", "take", "give", "drop", "leave-mark"]);
+  // which acts a creature perceives is the world's RING_VERBS now (S4), not an office dial
+  assert.ok(!("perceived_acts" in CREATURE_DIALS));
+  assert.deepEqual([...LAW.kindMod.RING_VERBS], ["walk", "enter", "exit", "say", "take", "give", "drop", "leave-mark"]);
   assert.equal(dial("per_actor_ms"), 60_000);
   assert.equal(dial("judgments_per_creature"), 100);
   assert.equal(dial("emission_m"), 500);
@@ -71,7 +90,7 @@ test("every C value is a dial marked pending, carrying the lane's recommendation
 
 // ── the d20 and the sampler ─────────────────────────────────────────────────
 
-test("the d20 is the server stamp's: re-derivable, 1–20, and it moves with each of its three inputs", () => {
+nodeTest("the d20 is the server stamp's: re-derivable, 1–20, and it moves with each of its three inputs", () => {
   const r = t20("creature:wolf-270-1", "9001", "2026-10-25T13:00:00.000Z");
   assert.equal(r, t20("creature:wolf-270-1", "9001", "2026-10-25T13:00:00.000Z"));
   const rolls = new Set();
@@ -82,7 +101,7 @@ test("the d20 is the server stamp's: re-derivable, 1–20, and it moves with eac
   assert.ok(byStamp.size > 5 && byCreature.size > 5, "the stamp and the creature each move the roll");
 });
 
-test("the sampler walks the distribution most likely first, as the prototypes do", () => {
+nodeTest("the sampler walks the distribution most likely first, as the prototypes do", () => {
   const p = { watch: 0.6, snarl: 0.3, stalk: 0.1 };
   assert.equal(sampleWith(1, p).picked, "watch");   // u 0.025
   assert.equal(sampleWith(12, p).picked, "watch");  // u 0.575
@@ -156,17 +175,21 @@ test("the caps: one reaction per resident per creature a minute; past the creatu
   assert.equal(capOf(c, "ash", { now: T0 }), "daily");
 });
 
-test("a `when` that throws is false, never an exception on the act's path", () => {
+test("the menu is the world's allowedReactions; a menu that throws is empty, never an exception on the act's path", () => {
   const c = livingWith(spawnRow("creature:wolf-270-1")).byId.get("creature:wolf-270-1");
-  const names = allowedReactions(WOLF, { self: c.moods, act: { verb: "say", distance_m: 30, approaching: false }, actor: { times: 0 } }).map((r) => r.name);
-  assert.deepEqual(names, ["watch"]);
+  const scope = { self: c.moods, act: { verb: "say", distance_m: 30, approaching: false }, actor: { times: 0 } };
+  assert.deepEqual(allowedReactions(LAW, WOLF, scope).map((r) => r.name), ["watch"]);
+  const broken = { ...LAW, kindMod: { ...LAW.kindMod, allowedReactions: () => { throw new Error("a broken condition"); } } };
+  assert.deepEqual(allowedReactions(broken, WOLF, scope), []);
+  // and every `when` the office hands it is the world's parsed tree, not a function (K1)
+  assert.ok(WOLF.reactions.every((r) => r.when && typeof r.when === "object"));
 });
 
 // ── reactTo: the whole turn ─────────────────────────────────────────────────
 
 test("no living creature: an act costs nothing — no read, no judge, no write", async () => {
   const boom = () => { throw new Error("touched"); };
-  const out = await reactTo(act(), { living: new LivingSet({ kindOf }), around: boom, ask: boom, write: boom, env: ENV, now: T0 });
+  const out = await reactTo(act(), { living: new LivingSet({ law: LAW }), around: boom, ask: boom, write: boom, env: ENV, now: T0 });
   assert.deepEqual(out, []);
   const far = await reactTo(act({ point: { x: 900, y: 0 } }), { living: livingWith(spawnRow("creature:wolf-270-1")), around: boom, ask: boom, write: boom, env: ENV, now: T0 });
   assert.deepEqual(far, []);
@@ -355,7 +378,7 @@ test("the slice is the lean projection: nearest residents and marks with their w
 
 test("the whitelist: a field outside SLICE_FIELDS never reaches the slice, nor any resident-only url", () => {
   const c = livingWith(spawnRow("creature:wolf-270-1")).byId.get("creature:wolf-270-1");
-  c.flags = { wary: true };
+  c.flags = ["wary"];
   c.reactions.push({ to: "ash", verb: "say", reaction: "watch", judged_by: "jev", distance_m: 20, at: T0 - 60_000 });
   const s = buildSlice(c, WOLF, { actor: "kai", verb: "walk", distance_m: 30, approaching: true }, busyAround(), { now: T0 });
   const allowed = new Set(SLICE_FIELDS);
@@ -384,11 +407,14 @@ test("the whitelist: a field outside SLICE_FIELDS never reaches the slice, nor a
 });
 
 test("the Score sets the mood, then the reaction's effects apply, inside the kind's range", () => {
-  const c = { moods: { fear: 1, curiosity: 1, hunger: 2 }, flags: {} };
+  const c = { moods: { fear: 1, curiosity: 1, hunger: 2 }, flags: [] };
   const slink = WOLF.reactions.find((r) => r.name === "slink");
-  assert.deepEqual(applyReaction(c, WOLF, slink, { fear: 3 }).moods, { fear: 2, curiosity: 1, hunger: 2 });
-  assert.equal(applyReaction(c, WOLF, slink, { fear: 9 }).moods.fear, 2);
-  assert.equal(applyReaction(c, WOLF, WOLF.reactions.find((r) => r.name === "flee")).flees, true);
+  assert.deepEqual(applyReaction(LAW, c, WOLF, slink, { fear: 3 }).moods, { fear: 2, curiosity: 1, hunger: 2 });
+  assert.equal(applyReaction(LAW, c, WOLF, slink, { fear: 9 }).moods.fear, 2);
+  assert.equal(applyReaction(LAW, c, WOLF, WOLF.reactions.find((r) => r.name === "flee")).flees, true);
+  // the world's effects carry `mood` and `flag` (K2, K3), and a moods name from Object.prototype is no mood (K10)
+  assert.deepEqual(slink.effects, [{ do: "add", mood: "fear", by: -1 }]);
+  assert.deepEqual(applyReaction(LAW, c, WOLF, slink, { constructor: 3, toString: 1 }).moods, { fear: 0, curiosity: 1, hunger: 2 });
 });
 
 test("the judge refuses a distribution over reactions that were never offered", async () => {
@@ -400,7 +426,7 @@ test("the judge refuses a distribution over reactions that were never offered", 
   assert.equal(j.probabilities.watch, 0);
 });
 
-test("askJev: no key, a refusal and the deadline each throw with their reason", async () => {
+nodeTest("askJev: no key, a refusal and the deadline each throw with their reason", async () => {
   await assert.rejects(askJev({}, {}, { env: {} }), (e) => e.why === "no key");
   await assert.rejects(askJev({}, {}, { env: ENV, fetchFn: async () => ({ ok: false, status: 503, text: async () => "busy" }) }), (e) => e.why === "http 503");
   const hang = (url, { signal }) => new Promise((_, reject) => signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" }))));
@@ -452,14 +478,19 @@ test("F1: ids that commit out of order lose no reaction — an own write folds w
   assert.equal(living.byId.get("creature:wolf-270-1").x, 0, "a spawn the set holds is not re-spawned");
 });
 
-test("F2: a Score is scaled onto its mood's own range (a 0..10 hunger)", () => {
-  const kind = { ...WOLF, moods: { ...WOLF.moods, hunger: { lo: 0, hi: 10, start: 8, levels: levels("hunger") } } };
-  const c = { moods: { fear: 1, curiosity: 1, hunger: 8 }, flags: {} };
+test("F2: a Score is read onto its mood's own range (a 0..10 hunger, a 1..4 mood)", () => {
+  // the world's kind gives one label per level, so a Score lies on [0, hi − lo] and lands lo above it
+  const labels = (n) => Array.from({ length: n }, (_, i) => `level ${i}`).join(" | ");
+  const kind = LAW.kindMod.parseKind(WOLF_TEXT
+    .replace(/  hunger: .*\n/, `  hunger: 0..10 = 8 | ${labels(11)}\n`)
+    .replace(/  curiosity: .*\n/, `  curiosity: 1..4 = 2 | ${labels(4)}\n`));
+  const c = { moods: { fear: 1, curiosity: 2, hunger: 8 }, flags: [] };
   const watch = kind.reactions[0];
-  assert.equal(applyReaction(c, kind, watch, { hunger: 2.6 }).moods.hunger, 9, "2.6 of 3 steps is 8.67 of 10");
-  assert.equal(applyReaction(c, kind, watch, { hunger: 3 }).moods.hunger, 10);
-  assert.equal(applyReaction(c, kind, watch, { hunger: 0 }).moods.hunger, 0);
-  assert.equal(applyReaction(c, WOLF, watch, { fear: 2 }).moods.fear, 2, "a four-step mood is unchanged by the scaling");
+  assert.equal(applyReaction(LAW, c, kind, watch, { hunger: 8.6 }).moods.hunger, 9);
+  assert.equal(applyReaction(LAW, c, kind, watch, { hunger: 10 }).moods.hunger, 10);
+  assert.equal(applyReaction(LAW, c, kind, watch, { hunger: 0 }).moods.hunger, 0);
+  assert.equal(applyReaction(LAW, c, kind, watch, { curiosity: 0 }).moods.curiosity, 1, "Score 0 is the mood's lo");
+  assert.equal(applyReaction(LAW, c, kind, watch, { curiosity: 3 }).moods.curiosity, 4, "Score 3 is the mood's hi");
 });
 
 test("F3: a negative or non-finite odd is garbage, and code answers", async () => {
@@ -490,7 +521,7 @@ test("F4: the logged odds re-derive the pick exactly", async () => {
 });
 
 test("F5: a boot whose window is empty starts at the class's newest id, never at 0", async () => {
-  const living = new LivingSet({ kindOf });
+  const living = new LivingSet({ law: LAW });
   const query = async (sql) => (sql === LIVING_TOP_SQL ? [{ id: "48211" }] : []);
   assert.deepEqual(await living.refresh({ query, now: T0 }), { ok: true, read: 0 });
   assert.equal(living.cursor, "48211");
@@ -529,4 +560,142 @@ test("a mark's body is never dropped or excerpted, whatever its length (Darko 22
   const around = { view: { N: [{ id: "a/b", name: "A Bench", m: 20 }] }, bodies: { "a/b": long } };
   const s = buildSlice(c, WOLF, { actor: "kai", verb: "walk", distance_m: 30, approaching: false }, around, { now: T0 });
   assert.equal(s.marks[0].body, long);
+});
+
+// ── PR-A2: the world's law, read at the blessed ref (no adapter) ─────────────
+
+const PIN = JSON.parse(readFileSync(new URL("./clone-pins.json", import.meta.url), "utf8")).world.sha;
+const BEFORE_218 = "5d1ef1e41c5f3f61e2cf321c9c66e1f149e0771f"; // postmark-world#212's merge: no tools/creature-kind.mjs
+
+test("fail closed: a blessed ref without tools/creature-kind.mjs supplies no law, and nothing reacts", async () => {
+  const old = await loadCreatureLaw({ repo: worldClone(), ref: BEFORE_218 });
+  assert.ok(old.unavailable, "the law before world#218 is unavailable");
+  assert.equal(old.kindMod, undefined);
+  // a module that will not import is the same answer
+  const missing = await loadCreatureLaw({ ref: "x", importTool: async (f) => { throw Object.assign(new Error(`Cannot find module ${f}`), { code: "ERR_MODULE_NOT_FOUND" }); } });
+  assert.ok(missing.unavailable);
+  // and a creature the RAM holds perceives nothing under a law that is unavailable
+  const boom = () => { throw new Error("touched"); };
+  const living = livingWith(spawnRow("creature:wolf-270-1"));
+  assert.deepEqual(await reactTo(act(), { living, law: old, around: boom, ask: boom, write: boom, env: ENV, now: T0 }), []);
+  assert.deepEqual(await reactTo(act(), { living: new LivingSet({ law: missing }), around: boom, ask: boom, write: boom, env: ENV, now: T0 }), []);
+});
+
+test("at the pin the law loads through the blessed-ref materializer; a kind the ref lacks is no kind", async () => {
+  const law = await loadCreatureLaw({ repo: worldClone(), ref: PIN });
+  assert.equal(law.unavailable, undefined, law.unavailable);
+  assert.equal(law.creaturesMod.TOWN, "the-town");
+  assert.deepEqual([...law.creaturesMod.DESPAWN_REASONS], ["faded", "fled"]);
+  assert.equal(law.kindOf("wolf"), null, "WORLD/kinds/wolf.kind is not on the pin yet");
+  assert.equal(law.kindOf("../escape"), null);
+  const living = new LivingSet({ law }).fold([spawnRow("creature:wolf-270-1")]);
+  assert.deepEqual(await reactTo(act(), { living, ask: () => { throw new Error("asked"); }, env: ENV, now: T0 }), [], "a creature of a kind the ref lacks has no ring");
+});
+
+test("R2 and K6: a spawn is born at its own minute, and one without its minute or its fade is skipped", () => {
+  const late = spawnRow("creature:wolf-270-1", { at: T0 - 3600_000 });
+  late.at = new Date(T0 - 3600_000 + 20_000).toISOString(); // written 20 s late
+  const living = livingWith(late);
+  assert.equal(living.byId.get("creature:wolf-270-1").spawned_at, T0 - 3600_000);
+  const noMinute = spawnRow("creature:wolf-270-2", { n: 2 }); delete noMinute.payload.at;
+  const noFade = spawnRow("creature:wolf-270-3", { n: 3 }); delete noFade.payload.fades_at;
+  const set = livingWith(noMinute, noFade);
+  assert.equal(set.byId.size, 0);
+  assert.deepEqual(set.skipped.map((s) => s.why.split(" (")[0]), ["a spawn without at", "a spawn without fades_at"]);
+});
+
+test("R4: only the town or the creature itself withdraws it, and only as faded or fled", () => {
+  const w = (n, actor, reason) => ({ id: String(n), at: new Date(T0).toISOString(), actor, action: "withdraw", object: "creature:wolf-270-1", payload: { reason } });
+  const living = livingWith(spawnRow("creature:wolf-270-1"));
+  living.fold([w(2, "kai", "faded"), w(3, "the-town", "eaten"), w(4, "creature:wolf-270-2", "fled")]);
+  assert.equal(living.byId.get("creature:wolf-270-1").gone, null, "a resident, an unruled reason and another creature withdraw nothing");
+  living.fold([w(5, "the-town", "faded")]);
+  assert.equal(living.byId.get("creature:wolf-270-1").gone, "faded");
+  const fled = livingWith(spawnRow("creature:wolf-270-1"));
+  fled.fold([w(2, "creature:wolf-270-1", "fled")]);
+  assert.equal(fled.byId.get("creature:wolf-270-1").gone, "fled");
+});
+
+test("S1: flags are one sorted array on the creature, on the row and in the slice", async () => {
+  const living = livingWith(spawnRow("creature:wolf-270-1", { flags: ["wary"] }));
+  const c = living.byId.get("creature:wolf-270-1");
+  assert.deepEqual(c.flags, ["wary"]);
+  const clearWary = { name: "x", effects: LAW.kindMod.parseEffects("clear wary", WOLF) };
+  assert.deepEqual(applyReaction(LAW, c, WOLF, clearWary).flags, []);
+  const { calls, write } = recordingWrite();
+  await reactTo(act(), { living, around: async () => ({}), ask: jevAnswer({ stalk: 1 }), write, env: ENV, now: T0 });
+  assert.deepEqual(JSON.parse(calls[0][0].payload).flags_after, ["wary"]);
+  // a legacy object form on a row is not read as flags
+  living.fold([{ id: "50", at: new Date(T0).toISOString(), actor: "creature:wolf-270-1", action: "react", object: "9050",
+    payload: { to: "ash", reaction: "watch", flags_after: { wary: true, alert: true } } }], { advance: false });
+  assert.deepEqual(living.byId.get("creature:wolf-270-1").flags, ["wary"]);
+  assert.deepEqual(buildSlice(c, WOLF, { actor: "kai", verb: "walk", distance_m: 30 }, {}, { now: T0 }).creature.conditions, ["wary"]);
+});
+
+test("S3: the line is the world's voiceLine — a handle carrying $& is only a name", async () => {
+  const living = livingWith(spawnRow("creature:wolf-270-1"));
+  const { write } = recordingWrite();
+  const [out] = await reactTo(act({ actor: "a$&b$'c" }), { living, around: async () => ({}), ask: jevAnswer({ stalk: 1 }), write, env: ENV, now: T0 });
+  assert.ok(out.line.includes("keeping level with a$&b$'c, never closer"), out.line);
+});
+
+test("the d20 samples the same normalized odds the row stores", async () => {
+  const living = livingWith(spawnRow("creature:wolf-270-1"));
+  const { calls, write } = recordingWrite();
+  const [out] = await reactTo(act(), { living, around: async () => ({}), ask: jevAnswer({ stalk: 3, watch: 1 }), write, env: ENV, now: T0 });
+  const p = JSON.parse(calls[0][0].payload);
+  assert.deepEqual(p.allowed, normalized(WOLF.reactions.filter((r) => ["watch", "stalk"].includes(r.name)), { stalk: 3, watch: 1 }));
+  assert.deepEqual(p.allowed, { watch: 0.25, stalk: 0.75 });
+  assert.equal(sampleWith(p.roll, p.allowed).picked, out.reaction);
+});
+
+// ── the review of #566 (FIX at b65cc359b) ────────────────────────────────────
+
+const deferred = () => { let resolve; const promise = new Promise((r) => { resolve = r; }); return { promise, resolve }; };
+
+nodeTest("creatureLaw: two concurrent first calls share one load, and neither sees null", async () => {
+  __resetCreatureLawForTest();
+  let loads = 0;
+  const gate = deferred();
+  const load = async ({ ref }) => { loads += 1; await gate.promise; return { ref, kindMod: {}, mark: "the one law" }; };
+  const a = creatureLaw({ refOf: () => "S110", load });
+  const b = creatureLaw({ refOf: () => "S110", load });
+  gate.resolve();
+  const [la, lb] = await Promise.all([a, b]);
+  assert.equal(loads, 1);
+  assert.equal(la, lb);
+  assert.equal(la.mark, "the one law");
+  assert.equal(await creatureLaw({ refOf: () => "S110", load }), la, "a later call for the same ref reads the cache");
+  __resetCreatureLawForTest();
+});
+
+nodeTest("creatureLaw: a ref that changes mid-load answers each caller with its own ref's law, never the old one", async () => {
+  __resetCreatureLawForTest();
+  const slow = deferred();
+  const load = async ({ ref }) => { if (ref === "S110") await slow.promise; return { ref, kindMod: {} }; };
+  const first = creatureLaw({ refOf: () => "S110", load });
+  const second = await creatureLaw({ refOf: () => "S111", load }); // the blessing moved while S110 loads
+  assert.equal(second.ref, "S111");
+  slow.resolve();
+  assert.equal((await first).ref, "S110", "the earlier caller gets the law it asked for");
+  assert.equal((await creatureLaw({ refOf: () => "S111", load })).ref, "S111");
+  // a load that throws is an unavailable law, never a rejection
+  const broke = await creatureLaw({ refOf: () => "S112", load: async () => { throw new Error("the clone is gone"); } });
+  assert.ok(broke.unavailable);
+  __resetCreatureLawForTest();
+});
+
+test("a spawn's flags come back sorted", () => {
+  const living = livingWith(spawnRow("creature:wolf-270-1", { flags: ["zeta", "alpha"] }));
+  assert.deepEqual(living.byId.get("creature:wolf-270-1").flags, ["alpha", "zeta"]);
+});
+
+test("parity with the world's fold: a spawn only from the town for a creature's id; moods_after replaces", () => {
+  const byKai = { ...spawnRow("creature:wolf-270-1"), actor: "kai" };
+  const notAnId = spawnRow("wolf-270-2", { n: 2 });
+  assert.equal(livingWith(byKai, notAnId).byId.size, 0);
+  const living = livingWith(spawnRow("creature:wolf-270-1"));
+  living.fold([{ id: "9", at: new Date(T0).toISOString(), actor: "creature:wolf-270-1", action: "react", object: "9009",
+    payload: { to: "kai", reaction: "watch", moods_after: { fear: 2 } } }], { advance: false });
+  assert.deepEqual(living.byId.get("creature:wolf-270-1").moods, { fear: 2 });
 });

@@ -956,20 +956,32 @@ export function placeWordsFrom(marks, { x, y }, verbs) {
   // Class-keyed, not size-keyed — a bench is ground, a giant sculpture is not.
   // Filtered BEFORE the chain so the nest is built over ground alone; the full
   // list still names things (a naming mark may name anything).
-  const ground = marks.filter((m) => m?.class !== "thing");
-  const spine = verbs.containmentChain({ x, y }, ground).filter((m) => m.id !== WORLD_FRAME);
+  const { spine, near } = placeMarksFrom(marks, { x, y }, verbs);
   if (spine.length) {
     const inner = markName(spine[spine.length - 1], marks);
     const outer = markName(spine[0], marks);
     return inner === outer ? inner : `${inner}, ${outer}`;
   }
+  return near ? `near ${markName(near, marks)}` : "open ground";
+}
+
+/**
+ * The marks place words name: the containment spine over ground (root first,
+ * the world frame left out), else the nearest sited mark or parcel within
+ * PLACE_NEAR_M. One derivation for the words and for the rows a read shows
+ * beside them (POS-632: a mark named is shown whole).
+ */
+export function placeMarksFrom(marks, { x, y }, verbs) {
+  const ground = marks.filter((m) => m?.class !== "thing");
+  const spine = verbs.containmentChain({ x, y }, ground).filter((m) => m.id !== WORLD_FRAME);
+  if (spine.length) return { spine, near: null };
   let best = null, bd = Infinity;
   for (const m of ground) {
     if (!m.at || !(m.kind === "sited" || m.kind === "parcel")) continue;
     const d = Math.hypot(m.at.x - x, m.at.y - y);
     if (d < bd) { bd = d; best = m; }
   }
-  return best && bd <= PLACE_NEAR_M ? `near ${markName(best, marks)}` : "open ground";
+  return { spine, near: best && bd <= PLACE_NEAR_M ? best : null };
 }
 
 // THE ONE READ SERVED FROM THE STORE IN STAGE 1, and it is the honest choice
@@ -1543,6 +1555,21 @@ const sayPush = createSayPush({ voices, nearbyMany: projectedNearbyMany });
 /** The office's waiters, for the stats a surface may print and for tests. */
 export const sayPushStats = () => ({ open: sayPush.open, ...sayPush.stats, room: { ...voices.room.stats } });
 
+/**
+ * THE EAR AT A POINT (POS-632 W4) — the one function the world read v2's
+ * `heard` and a creature's world read (POS-637, src/creatures.mjs) both call.
+ *
+ *   heardAt({ x, y }, { aboard?, since?, cap?, exclude?, snapshot? })
+ *     → [{ handle, said, ago, distance, at_ms }], newest last
+ *
+ * It marks NOBODY present (voices.mjs § heardAt). `snapshot` is an
+ * earshotSnapshot() the main thread took at admission, for a read answered on
+ * a read worker; omitted, the voices window is read where this runs.
+ */
+export const heardAt = (at, opts = {}) => voices.heardAt(at, opts);
+/** The earshot as plain data, taken on the main thread and handed to a read worker (W4). */
+export const earshotSnapshot = () => voices.earshotSnapshot();
+
 export async function worldSay(args = {}, key = null) {
   { const fz = worldFreezeBounce(); if (fz) return fz; }
   // A berth speaks from the quay (the arrival ruling, 2026-08-15): emissions
@@ -1851,7 +1878,7 @@ export async function worldAir(oriented) {
   } catch { return null; }
 }
 
-export async function worldOrient(args = {}, key = null, { roll = [] } = {}) {
+export async function worldOrient(args = {}, key = null, { roll = [], crowd = false } = {}) {
   const choice = chooseStandpoint(args, key);
   if (choice.bounce) return choice.bounce; // a multi-resident key must name a handle
   const w = await sightFor(await world(), choice.handle, key);
@@ -1884,8 +1911,12 @@ export async function worldOrient(args = {}, key = null, { roll = [] } = {}) {
   // Who else is standing here (Stage 2, WORLD_PRESENCE). `presentNear` returns
   // null on its first line with the flag off, so this spreads nothing and the
   // answer is the one orient has always given.
+  // THE WHOLE CROWD (POS-632, the world read v2): `who` splits everyone within
+  // presence's radius by activity, so v2 asks for every row, uncapped, and
+  // without place words (its rows say distance, bearing and what they are
+  // doing, never where). v1 asks exactly as it always did.
   const present = await presentNear(at, {
-    place: (p) => placeWords(p),
+    ...(crowd ? crowdPresence() : { place: (p) => placeWords(p) }),
     // ⚑ AVAILABLE IS PARKED (2026-09-10, the founder's word). `the-town/available`
     // was world#19, reverted off the record; the derived was voices.mjs's to
     // compute and this door's only to inject. With the injection gone the
@@ -2088,6 +2119,42 @@ async function groundMarkIds(w) {
  * catches a genuinely broken read is the one that compares the response's own
  * named ids against these keys, and it lives beside the doors, not here.
  */
+/**
+ * MARKS SHOWN WITH THEIR BODIES (Darko, 2026-10-14 22:33: "every read that shows
+ * a mark includes its WHOLE body"). { id, name, body } for each id the fold knows,
+ * in order: the name is the mark's naming mark, else its slug in words, and the
+ * body is whole (≤150 characters by the class grammar, never cut here).
+ */
+export async function markRows(ids = [], w = null) {
+  w ??= await world();
+  let byId = _byIds.get(w);
+  if (!byId) _byIds.set(w, byId = new Map((w?.marks ?? []).map((m) => [m.id, m])));
+  const out = [];
+  for (const id of ids) {
+    const m = byId.get(id);
+    if (m) out.push({ id, name: markName(m, w.marks ?? []), body: m.body ?? "" });
+  }
+  return out;
+}
+
+/**
+ * The marks a place line names, each with its whole body: `{ within: [rows] }`
+ * root first (as v2's you.within), or `{ near: row }` on open ground beside a
+ * place, or {} on open ground. The same derivation as placeWords (§ placeMarksFrom).
+ */
+export async function placeMarksAt({ x, y } = {}) {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return {};
+  const w = await world();
+  const { verbs } = await mods();
+  const marks = w.marks ?? [];
+  const row = (m) => ({ id: m.id, name: markName(m, marks), body: m.body ?? "" });
+  const { spine, near } = placeMarksFrom(marks, { x, y }, verbs);
+  return spine.length ? { within: spine.map(row) } : near ? { near: row(near) } : {};
+}
+
+/** THE PRESENCE CHAIN, for v2 (POS-632): v2's `who` splits everyone within reach, uncapped and without place words. */
+export const crowdPresence = () => ({ limit: Infinity });
+
 export async function markRecords(ids = [], w = null) {
   w ??= await world();   // cached by ref+sha; the apex has no world of its own in hand
   let byId = _byIds.get(w);
@@ -2110,7 +2177,7 @@ export async function markRecords(ids = [], w = null) {
   return out;
 }
 
-export async function worldEyes(args = {}, key = null, { roll = [] } = {}) {
+export async function worldEyes(args = {}, key = null, { roll = [], v2 = false, budget = null } = {}) {
   const choice = chooseStandpoint(args, key);
   if (choice.bounce) return choice.bounce;
   const w = await sightFor(await world(), choice.handle, key);
@@ -2139,7 +2206,8 @@ export async function worldEyes(args = {}, key = null, { roll = [] } = {}) {
   // the engine can only do that if it is told who is acting. `choice.handle` is the
   // handle chooseStandpoint SELECTED (an embodied read only; a spectator's x/y has
   // none), never `args.name` and never a key's first handle.
-  const r = verbs.openYourEyes({ x: at.x, y: at.y, name: args.name }, w, { crossing, actor: choice.handle ?? null });
+  // `budget`: read: "view" (POS-632 G9) asks for more seats than the glance's twelve.
+  const r = verbs.openYourEyes({ x: at.x, y: at.y, name: args.name }, w, { crossing, actor: choice.handle ?? null, ...(budget ? { budget } : {}) });
   // tell is a lazy thunk on the verb's return — render it here so the JSON
   // skin carries the prose (a function would vanish in serialization).
   const engineTelling = typeof r.tell === "function" ? r.tell() : r.tell ?? null;
@@ -2149,7 +2217,8 @@ export async function worldEyes(args = {}, key = null, { roll = [] } = {}) {
   // answer around the telling (it already adds standpoint and crossing), and
   // re-rendering the engine's prose to weave people through it would make the
   // office a second author of the world's voice.
-  const present = await presentNear(at, {
+  // v2 (POS-632) reads presence once, through orient's crowd; the eyes skip it.
+  const present = v2 ? null : await presentNear(at, {
     place: (p) => placeWords(p),
     // (`available` was injected here too — parked; see worldOrient's note.)
     exclude: choice.handle ? [choice.handle] : [],
@@ -2195,7 +2264,18 @@ export async function worldEyes(args = {}, key = null, { roll = [] } = {}) {
       tier: mark?.tier ?? null,
     };
   });
+  // THE VIEW'S OWN ROWS, for v2 only (POS-632): the engine's rank, bearing,
+  // band and `lifted`, with each place's name (its naming mark, else its slug)
+  // and whether it has a picture. `_fov` never reaches an answer: the apex
+  // composes its answer field by field and only v2's shaping reads this.
+  const v2Rows = v2 ? [...(r.fov?.carried ?? []), ...(r.fov?.far ?? [])].map((o) => {
+    const mark = markById.get(o.id);
+    return { id: o.id, name: o.far && o.label ? o.label : markName(mark ?? { id: o.id }, w.marks ?? []), body: mark?.body ?? o.body ?? "",
+      bearing: o.bearing, band: o.band, distM: o.distM, weight: o.weight ?? mark?.weight ?? 0,
+      ...(o.lifted ? { lifted: true } : {}), ...(typeof mark?.image === "string" ? { image: true } : {}) };
+  }) : null;
   return {
+    ...(v2Rows ? { _fov: { rows: v2Rows, mists: r.fov?.mists ?? null } } : {}),
     stance: choice.stance, telling, objects,
     // THE TRANSPORT LINE RIDES THE NARRATIVE SHAPE TOO (#2986 § 11 item 1), and
     // it has to: `diagnostic` is a diagnostic — nothing a resident actually

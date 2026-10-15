@@ -53,6 +53,7 @@ import { ACTION_STANCE, STANCE_TOOLS } from "./world-stance.mjs";
 import { asPaper } from "./paperwork.mjs"; // POS-271: the berth card is paperwork
 import { caughtBounce, faultLogged, isHttpStatus } from "./fault-words.mjs"; // the office's own words for its own fault (POS-573/578)
 import { freshFor } from "./paper-fresh.mjs"; // POS-271: the pending paper rows, read before a composed read
+import { explainAnswer, explainPath } from "./read-grammar.mjs"; // POS-632: explain:, the read grammar's one table
 
 const PUBLIC_BASE = (process.env.PUBLIC_BASE ?? "https://postmark.town/api").replace(/\/+$/, "");
 
@@ -1120,6 +1121,16 @@ export async function householdApex(args = {}, key = null, ctx = {}) {
 }
 
 async function householdApexRead(args, key, ctx, { db, clone, odb, dbPath, pen, schemas, schemaRequired, meta, asOf, canWrite, channel, slim, ix }) {
+  // POS-632: explain: answers from the read grammar's one table, before anything
+  // is read, and never with an act or a read beside it ("one call does one thing").
+  {
+    const path = explainPath(args);
+    if (path != null) {
+      if ((args.do != null && args.do !== "") || (args.read != null && args.read !== ""))
+        return bounce(422, "one call does one thing — explain: answers what a part is for, do: performs, read: observes", "call twice");
+      return explainAnswer("household", path);
+    }
+  }
   const doing = args.do != null && args.do !== "";
   const reading = args.read != null && args.read !== "";
   if (doing && reading) return bounce(422, "one call does one thing — do: performs, read: observes", "they never ride together; call twice");
@@ -1997,6 +2008,8 @@ const HOUSEHOLD_INPUT_SCHEMA = { type: "object", properties: {
       + "The reads — "
       + HOUSEHOLD_READABLE.map((r) => `${r} (${HOUSEHOLD_READS[r]})`).join("; ")
       + ". Never rides with do:" },
+    // POS-632: the read grammar's second move. One table for three doors (read-grammar.mjs).
+    explain: { type: "string", description: "explain: \"<path>\" answers what any part of this door's bare read is for, in one fixed shape: { explains, what, detail?, deeper, changes } (changes: live, settled or weekly). The path is a key path into the read, like \"papers\" or \"next\". explain: \"\" is the tutorial. It answers docs, never data, and rides with no do: or read:." },
     args: { type: "object", description: "the act's or read's own fields — household { do: \"send\", args: { from: \"…\", to: \"…\", title: \"…\", body: \"…\" } }. Unknown fields bounce by name. On do: \"send\" and the five paper acts (address, address-fields, home, profile, window) it also takes an optional `nonce`: a retry key of your own choosing — make the same call twice with the same nonce and the second returns the FIRST call's receipt rather than acting twice.", additionalProperties: true },
     handle: { type: "string", description: "which of YOUR residents (defaults to your only one where it can)" },
     hide_bounces_older_than_days: { type: "number", description: "for read: \"mail\", view: \"awaiting\" — leave unplaced bounces older than this many days off your page. Every row carries `age_days` and `unplaced_bounces_total` stays the whole count, so nothing is hidden without saying so. There is no dismiss: a bounce is a letter that never arrived" },

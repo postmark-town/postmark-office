@@ -30,7 +30,8 @@
 # discard ever missed once.
 #
 # So the checkout PERSISTS and is re-derived from origin on every run:
-# fetch --depth 1, hard reset to FETCH_HEAD, clean -fdx. What the stateless
+# fetch --depth 1 (world-blessed: whole history, POS-635 below), hard reset to
+# FETCH_HEAD, clean -fdx. What the stateless
 # contract is protecting — that no run can inherit state from the last one, and
 # that the sha a pen reports is origin's and not a local edit's — is preserved
 # exactly, because reset+clean leaves nothing of the previous run behind. What
@@ -83,12 +84,31 @@ esac
 DIR="$WORLD2_LAB/ingest-clones/$1"
 mkdir -p "$(dirname "$DIR")"
 
+# ── THE BLESSED CHECKOUT KEEPS ITS HISTORY (POS-635, 2026-10-14) ────────────
+# The law pen moves the clearing's pin only to a DESCENDANT of where it stands
+# (world2/tools/law-ingest.mjs § pinMove), and it asks that question with
+# `git merge-base --is-ancestor` in THIS checkout. At --depth 1 the checkout
+# holds one commit, so a pin one settlement back can never be placed: git exits
+# 128, the pen holds the pin, and the run still exits 0. On the box the pin sat
+# at b0db90f from 2026-10-11 15:04Z while S103..S109 were blessed on top of it
+# (328 PIN HELD runs; seven snapshots sealed on the 10-11 law). So world-blessed
+# fetches whole history: a shallow checkout is unshallowed once, then every
+# fetch after it brings only the new commits. world and town stay --depth 1;
+# no pen asks ancestry there.
+if [ "$1" = world-blessed ]; then DEPTH=(--single-branch); else DEPTH=(--depth 1); fi
+
 if [ ! -d "$DIR/.git" ]; then
   echo "[refresh-clone] first clone of $1 ($URL @ $BRANCH)"
   rm -rf "$DIR"
-  git clone --quiet --depth 1 --branch "$BRANCH" "$URL" "$DIR" || exit 2
+  git clone --quiet "${DEPTH[@]}" --branch "$BRANCH" "$URL" "$DIR" || exit 2
 else
-  git -C "$DIR" fetch --quiet --depth 1 origin "$BRANCH" || exit 2
+  if [ "$1" = world-blessed ] && [ -f "$DIR/.git/shallow" ]; then
+    git -C "$DIR" fetch --quiet --unshallow origin "$BRANCH" || exit 2
+  elif [ "$1" = world-blessed ]; then
+    git -C "$DIR" fetch --quiet origin "$BRANCH" || exit 2
+  else
+    git -C "$DIR" fetch --quiet --depth 1 origin "$BRANCH" || exit 2
+  fi
   git -C "$DIR" reset --quiet --hard FETCH_HEAD || exit 2
   # -x reaches ignored files too, which is the point: an ignored artifact left
   # by a pen is still a file the next derivation would see.

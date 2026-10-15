@@ -1011,7 +1011,7 @@ test("F7c5 · THE MORNING PAGE DID NOT FATTEN — the doorstep bundle is byte-id
   // its old origin/main and shows no move, which red this lane's first try):
   // against the thirteenth capture, 1063 paths before and after, NONE removed
   // or added, ONE changed, `full.stakes.rule`. The slim skin drops `rule`.
-  // Re-checked at #212's merge, 5d1ef1e4: 0 paths moved.
+  // Re-checked at #218's merge, eb8428e2 (the world pin since POS-637 PR-A2): 0 paths moved.
   //
   //   full  21974 -> 21905 (-69, -0.31%) = stakes.rule -69
   //   slim  19467 -> 19467 (0)
@@ -1546,4 +1546,22 @@ test("F17c · a GOOD store renders with NO warning — the stamp is a disclosure
 test("F14 · the capability index is generated from the acts table, so it cannot name an act the door will not dispatch", () => {
   assert.deepEqual(capabilityIndex().map((a) => a.act), [...HOUSEHOLD_DISPATCHABLE]);
   for (const { teaches } of capabilityIndex()) assert.ok(teaches && teaches.length > 10);
+});
+
+// ── POS-632: explain: covers the household's bare read, every shape ─────────
+test("explain: every key of the household's bare read (full, slim, h1, h2; resident, berth, visitor, anonymous; with the world-write budget) has a row", async () => {
+  const { unexplained } = await import("../src/read-grammar.mjs");
+  const budget = { worldWriteBudget: () => ({ used: 0, cap: 200, per: "hour", resets_at: "2026-10-15T02:00:00.000Z" }) };
+  const BERTH = { berth: true, slug: "newcomer" };
+  const VISITOR = { visitor: true, ghLogin: "someone", handles: new Set() };
+  for (const [who, key] of [["resident", KEY], ["berth", BERTH], ["visitor", VISITOR], ["anonymous", null]])
+    for (const extra of [{}, { slim: true }, { slim: true, readShape: "h1" }, { slim: true, readShape: "h2" }, { slim: true, ...budget }]) {
+      const bare = await householdApex({}, key, ctx(extra));
+      assert.ok(!bare.error, `the bare read answers (${who} ${JSON.stringify(extra)})`);
+      assert.deepEqual(unexplained("household", bare, 1), [], `household ${who} ${JSON.stringify(extra)}`);
+    }
+  const withBudget = await householdApex({}, KEY, ctx({ slim: true, ...budget }));
+  assert.ok("world_writes" in withBudget, "the budget case does carry world_writes, so the row is held");
+  const ex = await householdApex({ explain: "papers" }, KEY, ctx({ slim: true }));
+  assert.equal(ex.explains, "papers");
 });

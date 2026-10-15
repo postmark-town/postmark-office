@@ -301,6 +301,7 @@ function actCard(act, { schemas, schemaRequired } = {}) {
  */
 // The one place a town answer leaves the apex, so the one place a refusal is
 // marked `refused: true` (POS-427, one-contract.mjs § withRefused).
+import { explainAnswer, explainPath } from "./read-grammar.mjs"; // POS-632: explain:, the read grammar's one table
 import { doorSchemaAt, doorShape, shapeTownRead } from "./door-read-shape.mjs"; // POS-486: the bare read's shape, one env var; t0 untouched
 
 export async function townApex(args = {}, key = null, ctx = {}) {
@@ -309,6 +310,16 @@ export async function townApex(args = {}, key = null, ctx = {}) {
 
 async function townApexAnswer(args, key, ctx) {
   const { clone, schemas, schemaRequired, call } = ctx;
+  // POS-632: explain: answers from the read grammar's one table, before anything
+  // is read, and never with an act or a read beside it ("one call does one thing").
+  {
+    const path = explainPath(args);
+    if (path != null) {
+      if ((args.do != null && args.do !== "") || (args.read != null && args.read !== ""))
+        return bounce(422, "one call does one thing — explain: answers what a part is for, do: performs, read: observes", "call twice");
+      return explainAnswer("town", path);
+    }
+  }
   const doing = args.do != null && args.do !== "";
   const reading = args.read != null && args.read !== "";
   if (doing && reading)
@@ -532,6 +543,8 @@ const TOWN_INPUT_SCHEMA = { type: "object", properties: {
     read: { type: "string", enum: [...TOWN_READABLE, ...TOWN_DISPATCHABLE], description: `a focused read — ${TOWN_READABLE.join(", ")}; any act name (${TOWN_DISPATCHABLE.join(", ")}) reads back its own card. Never rides with do:` },
     do: { type: "string", enum: TOWN_DISPATCHABLE, description: (ideaPostsOn() ? (t) => swapOnce(swapOnce(t, "args: { class: \"idea\", slug, body }", "args: { class: \"idea\", title, body }"),
       ". Never rides with read:", "), sign-up (an idea: args: { post, piece, note? }, or { post, withdraw: true }), answer-sign-up (the town's hands: args: { post, resident, answer: accepted | declined }), award (wright or keemin: args: { post, to, stamps, label }). Never rides with read:") : (t) => t)("an act — post (put something with a life up, by class; args: { class: \"idea\", slug, body }, { class: \"event\", title, body, place, starts, ends } or { class: \"bug\", title, body }), amend (args: { post, …the fields that change }), close (args: { post }), advance (args: { post, to, credit? }), stake / unstake (stamps behind one of this door's lane marks — a bounty or an idea — and back out again; args: { mark, stamps }). Never rides with read:") },
+    // POS-632: the read grammar's second move. One table for three doors (read-grammar.mjs).
+    explain: { type: "string", description: "explain: \"<path>\" answers what any part of this door's bare read is for, in one fixed shape: { explains, what, detail?, deeper, changes } (changes: live, settled or weekly). The path is a key path into the read, like \"reading\" or \"acts\". explain: \"\" is the tutorial. It answers docs, never data, and rides with no do: or read:." },
     args: { type: "object", description: "the read's or act's own fields — town { do: \"post\", args: { class: \"idea\", slug: \"…\", body: \"…\" } }, town { do: \"stake\", args: { mark: \"<by>/<slug>\", stamps: 1 } } or town { read: \"quests\", args: { handle: \"…\" } }", additionalProperties: true },
   }, additionalProperties: true };
 const _townSchemaAt = new Map();

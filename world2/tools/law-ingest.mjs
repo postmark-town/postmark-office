@@ -504,11 +504,37 @@ const CHUNK = 500;
 export function pinMove(current, next, isAncestor = null) {
   if (!current) return { move: true, why: "no pin yet" };
   if (current === next) return { move: true, why: "the same sha" };
-  let ok = false;
-  try { ok = typeof isAncestor === "function" && isAncestor(current, next) === true; } catch { ok = false; }
-  return ok
-    ? { move: true, why: `${next.slice(0, 12)} descends from the pin ${current.slice(0, 12)}` }
-    : { move: false, why: `${next.slice(0, 12)} does not descend from the pin ${current.slice(0, 12)} (or this checkout cannot place it): the pin stays, and the rows for ${next.slice(0, 12)} are written beside it` };
+  // "Cannot place" is its own sentence (POS-635): a checkout that cannot answer
+  // (git threw, e.g. exit 128 on a pin a shallow clone does not hold) is a fault
+  // in the checkout, and "does not descend" is a fact about the law. Both hold.
+  let ok = false, placed = typeof isAncestor === "function";
+  if (placed) { try { ok = isAncestor(current, next) === true; } catch { placed = false; } }
+  const stays = `the pin stays, and the rows for ${next.slice(0, 12)} are written beside it`;
+  if (ok) return { move: true, why: `${next.slice(0, 12)} descends from the pin ${current.slice(0, 12)}` };
+  return placed
+    ? { move: false, why: `${next.slice(0, 12)} does not descend from the pin ${current.slice(0, 12)}: ${stays}` }
+    : { move: false, why: `this checkout cannot place the pin ${current.slice(0, 12)} against ${next.slice(0, 12)} (a shallow checkout, or a pin it does not hold): ${stays}` };
+}
+
+/**
+ * The pen's ancestry question in a checkout: `(a, b) => a is an ancestor of b`.
+ * Git's 1 is "no" only in a checkout with whole history. In a SHALLOW one the
+ * walk stops at the cut, so 1 means "could not see", and it is thrown as such
+ * (POS-635: the box's --depth 1 checkout answered "does not descend" about a
+ * pin 93 commits back, and the pin held for three days). A throw is what
+ * pinMove reads as "this checkout cannot place the pin".
+ */
+export function ancestryIn(repo) {
+  let shallow = null;
+  return (a, b) => {
+    try { execFileSync("git", ["-C", repo, "merge-base", "--is-ancestor", a, b], { stdio: "ignore" }); return true; }
+    catch (e) {
+      if (e?.status !== 1) throw e;
+      shallow ??= execFileSync("git", ["-C", repo, "rev-parse", "--is-shallow-repository"], { encoding: "utf8" }).trim() === "true";
+      if (shallow) throw new Error(`${repo} is a shallow checkout: it cannot say that ${a.slice(0, 12)} is not an ancestor of ${b.slice(0, 12)}`);
+      return false;
+    }
+  };
 }
 
 export async function writeLaw(client, { lawSha, rows, blessed = false, isAncestor = null }) {
@@ -603,10 +629,7 @@ async function main() {
   const { default: pg } = await import("pg");
   const client = new pg.Client();               // PGHOST/PGDATABASE/PGUSER/PGPASSWORD
   await client.connect();
-  const isAncestor = (a, b) => {
-    try { execFileSync("git", ["-C", lawRepo, "merge-base", "--is-ancestor", a, b], { stdio: "ignore" }); return true; }
-    catch (e) { if (e?.status === 1) return false; throw e; }
-  };
+  const isAncestor = ancestryIn(lawRepo);
   let wrote;
   try { wrote = await writeLaw(client, { lawSha, rows, blessed, isAncestor }); }
   finally { await client.end(); }
