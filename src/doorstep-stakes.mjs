@@ -134,6 +134,8 @@ export const stakeEnvelope = (mark) => `world { do: "stake", args: { mark: "${ma
 // on the open docket); and it is not standing again (a revive sets it back to
 // `standing`, which leaves this list by itself). It is the household's own:
 // its owner is one of the handles asked about, the same scope as the rows.
+// Each row carries the mark's whole body (Darko, 10-14 22:33: a read that
+// shows a mark carries its body).
 
 export const LEFT_THE_WORLD_DAYS = 7;
 
@@ -142,7 +144,7 @@ export const leftTheWorldNote = (mark, at) =>
   `${mark} had no stamps behind it, so it left the world at the ${at} settlement. It's back in your drafts. Stake it, or leave it again with a stamp, to bring it back.`;
 
 export const LEFT_THE_WORLD_SQL = `
-  SELECT m.slug, m.kind, w.opens_at
+  SELECT m.slug, m.kind, m.body, w.opens_at
     FROM marks m JOIN windows w ON w.id = m.retired_window
    WHERE m.status = 'retired' AND m.retired_cause = 'settlement-unpublish'
      AND m.owner = ANY($1)
@@ -156,7 +158,7 @@ export function leftTheWorldRows(found = []) {
   return (found ?? []).map((r) => {
     const at = r.opens_at instanceof Date ? r.opens_at.toISOString() : String(r.opens_at);
     const until = new Date(Date.parse(at) + LEFT_THE_WORLD_DAYS * 24 * 3600e3).toISOString();
-    return { mark: r.slug, kind: r.kind ?? null, left_at: at, note_until: until, note: leftTheWorldNote(r.slug, at), act: stakeEnvelope(r.slug) };
+    return { mark: r.slug, kind: r.kind ?? null, body: r.body ?? null, left_at: at, note_until: until, note: leftTheWorldNote(r.slug, at), act: stakeEnvelope(r.slug) };
   });
 }
 

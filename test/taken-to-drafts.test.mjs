@@ -234,7 +234,7 @@ test("G3, THE NOTE: listed for the house that owns it, for 7 days, until it is p
 
   const now = new Date(OPENED.getTime() + 3600e3);
   assert.deepEqual(await ask(["rei", "ghost"], now), [{
-    mark: "rei/the-garage", kind: "sited", left_at: at,
+    mark: "rei/the-garage", kind: "sited", body: "rei/the-garage, as it stood.", left_at: at,
     note_until: new Date(OPENED.getTime() + 7 * 24 * 3600e3).toISOString(),
     note: `rei/the-garage had no stamps behind it, so it left the world at the ${at} settlement. It's back in your drafts. Stake it, or leave it again with a stamp, to bring it back.`,
     act: 'world { do: "stake", args: { mark: "rei/the-garage", stamps: 1 } }',

@@ -371,13 +371,13 @@ test("WLD-51 G3 · a mark the settlement took is on the segment with its note, a
   assert.equal(called, 0, "no handle, no question");
 });
 
-test("WLD-51 G3 · the note's words (Darko's, G1 drafts), and its row", async () => {
+test("WLD-51 G3 · the note's words (Darko's, G1 drafts), and its row, with the mark's whole body", async () => {
   const { leftTheWorldRows, leftTheWorldNote, LEFT_THE_WORLD_DAYS } = await import("../src/doorstep-stakes.mjs");
   assert.equal(LEFT_THE_WORLD_DAYS, 7);
   assert.equal(leftTheWorldNote("lupi/rootwood-bookend", "2026-10-16T18:00:00.000Z"),
     "lupi/rootwood-bookend had no stamps behind it, so it left the world at the 2026-10-16T18:00:00.000Z settlement. It's back in your drafts. Stake it, or leave it again with a stamp, to bring it back.");
-  assert.deepEqual(leftTheWorldRows([{ slug: "lupi/rootwood-bookend", kind: "sited", opens_at: new Date("2026-10-16T18:00:00Z") }]), [{
-    mark: "lupi/rootwood-bookend", kind: "sited", left_at: "2026-10-16T18:00:00.000Z", note_until: "2026-10-23T18:00:00.000Z",
+  assert.deepEqual(leftTheWorldRows([{ slug: "lupi/rootwood-bookend", kind: "sited", body: "A bookend of rootwood.", opens_at: new Date("2026-10-16T18:00:00Z") }]), [{
+    mark: "lupi/rootwood-bookend", kind: "sited", body: "A bookend of rootwood.", left_at: "2026-10-16T18:00:00.000Z", note_until: "2026-10-23T18:00:00.000Z",
     note: leftTheWorldNote("lupi/rootwood-bookend", "2026-10-16T18:00:00.000Z"), act: stakeEnvelope("lupi/rootwood-bookend"),
   }]);
 });
