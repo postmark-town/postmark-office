@@ -20,7 +20,7 @@ import {
   EMISSIONS_SHOWN, creatureHappening, creatureToYou, creaturesForRead, creaturesInWho, findCreatures, investigateCreature,
   savedCreatureOf, __resetCreaturesReadForTest,
 } from "../src/creatures-read.mjs";
-import { ACTIVE_CAP, happeningBlock, shapeV2, withCreaturesInWho } from "../src/world-read-v2.mjs";
+import { ACTIVE_CAP, happeningBlock, shapeV2, whoBlock, withCreaturesInWho } from "../src/world-read-v2.mjs";
 import { toYou } from "../src/world-happened.mjs";
 import { NO_WORLD, worldModuleUrl } from "./fixture-paths.mjs";
 
@@ -102,6 +102,9 @@ test("happening_here: a reaction stands 30 minutes within 500 m, as the kind's o
     "At the edge of the Mists a grey wolf stands perfectly still, watching lu.",
   ]);
   assert.deepEqual(said[0], { what: said[0].what, kind: "creature", id: W, ago: "1 min ago" });
+  // alone, the reaction 31 minutes old says nothing: only the far line stands
+  const stale = fold(spawn(W, { x: 400, y: 0 }), react(W, { to: "kai", at: NOW - 31 * 60_000 }));
+  assert.deepEqual(creatureHappening(stale, { x: 0, y: 0 }, { nowMs: NOW, engine: ENGINE }).map((r) => r.ago ?? "far"), ["far"]);
   // 600 m from the creature: out of the emission's reach, but the far line still names it
   const far = creatureHappening(cur, { x: -200, y: 0 }, { nowMs: NOW, engine: ENGINE });
   assert.equal(far.filter((r) => r.ago).length, 0);
@@ -130,6 +133,9 @@ nodeTest("happening_here: the creatures' rows ride after the block's own; none, 
 nodeTest("v2 with no creature is byte-identical to v2 before them", () => {
   const p = { standpoint: { x: 1, y: 2 }, crowd: [], active: new Map(), nowMs: NOW, viewRows: [], entries: [], heard: [] };
   assert.equal(JSON.stringify(shapeV2({ ...p, creatures: null })), JSON.stringify(shapeV2(p)));
+  const none = shapeV2(p);
+  assert.ok(!("happening_here" in none), "nothing happening, no block");
+  assert.deepEqual(none.who, whoBlock([], new Map(), { nowMs: NOW }));
   const withOne = shapeV2({ ...p, creatures: { who: [{ kind: "creature", id: "creature:wolf-270-1", m: 40 }], happening: [{ what: "w", kind: "creature", id: "creature:wolf-270-1" }] } });
   assert.equal(withOne.who.active[0].id, "creature:wolf-270-1");
   assert.equal(withOne.happening_here[0].what, "w");
