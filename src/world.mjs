@@ -1265,13 +1265,38 @@ export async function mistsGroundCheck(worldClone, readSkeleton, ground, crossin
 // ── THE MISTS ON A ROAD (POS-468) ────────────────────────────────────────────
 // The world's engine owns the reading (tools/world-engine.mjs § mistsRoad); the
 // office only asks it, from the same clone it walks by, and a clone without it
-// answers null so the walk is untouched.
-export async function mistsOnTheRoad(worldClone, skeleton, from, toward, crossing) {
+// answers null so the walk is untouched. `shelter` is the walker's (roadShelter,
+// below): an engine older than the ruling takes no fifth argument and ignores it.
+export async function mistsOnTheRoad(worldClone, skeleton, from, toward, crossing, { shelter = null } = {}) {
   if (!skeleton?.mists) return null;
   let eng;
   try { eng = await import(pathToFileURL(join(worldClone, "tools", "world-engine.mjs"))); } catch { return null; }
   if (typeof eng.mistsRoad !== "function") return null;
-  return eng.mistsRoad(from, toward, crossing, skeleton.mists);
+  return eng.mistsRoad(from, toward, crossing, skeleton.mists, { shelter });
+}
+
+// ── AN ENTERED MARK IS SHELTER (Darko 2026-10-15; WORLD/ENGINE.md § The Mists) ──
+// Within a mark the walker has entered, the Mists neither slow the walk nor stop
+// it. The shelter on a road is the marks on the walker's enter stack that the
+// road does not carry them out of: one it does is exited before the walk goes
+// (DEC-5), so it shelters nothing. The world's verbs own the test (shelterOf);
+// a clone that predates the ruling has none, and the road reads as it always did.
+export function roadShelter(verbs, world, stack, leaving = []) {
+  if (typeof verbs?.shelterOf !== "function") return null;
+  const gone = new Set(leaving ?? []);
+  return verbs.shelterOf(world, (stack ?? []).filter((id) => !gone.has(id)));
+}
+
+/** What a resident is within now (DEC-5's read), for the eyes and the air; null
+ *  when the clone carries no enter/exit law or the ledger will not read. */
+async function enteredNow(handle) {
+  if (!handle) return null;
+  try {
+    const { crossingLaw } = await import("./world-crossings.mjs");
+    const { crossingDeps } = await import("./world-apex.mjs");
+    const law = await crossingLaw(WORLD_CLONE);
+    return await occupiedNowBy(handle, law.thresholds, crossingDeps());
+  } catch { return null; }
 }
 
 /** The refusal for a road into the wall, in plain words. */
@@ -1906,7 +1931,9 @@ export async function worldOrient(args = {}, key = null, { roll = [], crowd = fa
   // have left the two doors disagreeing about the fog at one standpoint — a
   // NEW defect, manufactured by a partial fix, and a worse one than two doors
   // being wrong together. The falsifier asserts that agreement directly.
-  const o = verbs.orient({ x: at.x, y: at.y }, w, { crossing });
+  // an entered mark is shelter (§ roadShelter): a body's read carries what it is within
+  const entered = choice.coords ? null : await enteredNow(choice.handle);
+  const o = verbs.orient({ x: at.x, y: at.y }, w, { crossing, entered });
   // the note is embodied property: only the body's standpoint carries it — a
   // spectator glance (coords) is nobody's, so it reads nobody's note.
   const { note, unavailable: noteUnavailable } = choice.handle ? await noteForHandle(key, choice.handle) : { note: null };
@@ -2212,7 +2239,9 @@ export async function worldEyes(args = {}, key = null, { roll = [], v2 = false, 
   // handle chooseStandpoint SELECTED (an embodied read only; a spectator's x/y has
   // none), never `args.name` and never a key's first handle.
   // `budget`: read: "view" (POS-632 G9) asks for more seats than the glance's twelve.
-  const r = verbs.openYourEyes({ x: at.x, y: at.y, name: args.name }, w, { crossing, actor: choice.handle ?? null, ...(budget ? { budget } : {}) });
+  // an entered mark is shelter (§ roadShelter): nothing inside it is cut from this reader's eyes
+  const entered = choice.coords ? null : await enteredNow(choice.handle);
+  const r = verbs.openYourEyes({ x: at.x, y: at.y, name: args.name }, w, { crossing, actor: choice.handle ?? null, entered, ...(budget ? { budget } : {}) });
   // tell is a lazy thunk on the verb's return — render it here so the JSON
   // skin carries the prose (a function would vanish in serialization).
   const engineTelling = typeof r.tell === "function" ? r.tell() : r.tell ?? null;
@@ -5460,18 +5489,6 @@ async function walkAct(worldClone, payload = {}, key = null) {
     targetFrom = onGround.targetFrom;
   }
 
-  // ── THE MISTS ON THIS ROAD (POS-468) ─────────────────────────────────────
-  // The stride falls the deeper a road goes into the fringe, to nothing at the
-  // wall's face. The world's engine reads the road once, here at the
-  // declare: one that ends in the wall, on its face, crosses it or starts in it
-  // is refused in plain words (no creeping in by short legs); one through the
-  // fringe walks at an even, slowed stride, stamped on the leg as its pace below.
-  // Read BEFORE the exits under DEC-5 run, so a refused road writes no act at all.
-  // No Mists this crossing, or a clone that predates them: null, and nothing here
-  // changes.
-  let mistRoad = await mistsOnTheRoad(worldClone, skeleton, from, toward, at);
-  if (mistRoad?.refused) throw mistsRefusal(bounce, mistRoad.refused);
-
   // THE WATER GATE IS OFF FOR v0 — Keemin's ruling: "walking on water is fine for
   // v0 lol". A leg across the channel is permitted, and no bounce is raised.
   //
@@ -5500,69 +5517,88 @@ async function walkAct(worldClone, payload = {}, key = null) {
   // world-movement.mjs § leavingWhileOccupying; the occupancy and the
   // point-in-mark law are the clone's own (crossingLaw), the same instruments
   // the enter door adjudicates with — one derivation, two doors.
-  {
-    const { crossingLaw, exitViaOffice } = await import("./world-crossings.mjs");
-    const { crossingDeps } = await import("./world-apex.mjs");
-    const law = await crossingLaw(worldClone).catch(() => null);
-    if (law?.thresholds && typeof law.verbs?.pointWithinMark === "function") {
-      const deps = crossingDeps();
-      // The clock, the ledger and the fold — § DEC-5, THE WALK GUARD — THE
-      // OCCUPANCY READ, above this function, where a test can drive them.
-      const stack = await occupiedNowBy(who, law.thresholds, deps);
-      // pointWithinMark takes the MARK OBJECT (world-verbs.mjs:92), resolved from
-      // the same world the enter door adjudicates against (deps.world().marks).
-      const w = stack.length ? await deps.world() : null;
-      const byId = new Map((w?.marks ?? []).map((m) => [m.id, m]));
-      // ── THE WALK INSIDE A DUNGEON IS FENCED TO THE ROOM YOU ENTERED (WLD-5,
-      // G4). Asked before DEC-5 could offer `exit: true`, because a dungeon
-      // offers no exit at all; world-movement.mjs § walkFenceRefusal holds it.
-      const fenced = w ? walkFenceRefusal({ stack, toward, marks: w.marks ?? [], verbs: law.verbs }) : null;
-      if (fenced) throw bounce(403, fenced.defect, fenced.hint, fenced.fields);
-      const leaving = leavingWhileOccupying(stack, toward, (pt, id) => { const m = byId.get(id); return m ? law.verbs.pointWithinMark(pt, m) : null; });
-      // ── A WALK DECLARED ABOARD IS THE CHOICE TO GO ASHORE (#2986) ────────
-      //
-      // ENGINE.md has said since the timetable mechanic shipped that "a walk
-      // declared from her deck is the choice to go ashore", and the brief makes
-      // it one act: the walk handler, seeing occupancy within a vehicle-class
-      // mark, performs the exit under the deposit rule and then walks FROM THE
-      // DEPOSIT POINT. No refusal — DEC-5's refusal exists so that a resident
-      // cannot be carried out of a room without leaving it, and stepping off a
-      // boat you are aboard is not that: it is the leaving, declared.
-      //
-      // The narrowing matters. If the stack also holds a mark that is NOT a
-      // vehicle, the refusal stands exactly as it did: this only ever spares a
-      // caller the `exit: true` for a hull, never for a room.
-      const vehicleLeaving = leaving.filter((id) => String(byId.get(id)?.class ?? "") === "vehicle");
-      const allVehicles = leaving.length > 0 && vehicleLeaving.length === leaving.length;
-      if (leaving.length) {
-        if (payload.exit !== true && !allVehicles) {
-          throw bounce(409, `you are within ${leaving[0]} — this walk would carry you out of it without leaving`,
-            `the-town/the-occupancy-invariant: "You occupy a mark only by entering, and only while your feet stand inside it; a walk that would carry you out is refused until you exit." Step out first — world { do: "exit"${leaving.length > 1 ? ", args: { mark }" : ""} } — or pass exit: true on this walk to exit (${leaving.join(" → ")}) and walk in one call.`,
-            { law: "the-town/the-occupancy-invariant (DEC-5, founder-ruled 2026-09-03)", within: stack, leaving });
-        }
-        for (const markId of leaving) {
-          const stepped = await exitViaOffice(worldClone, { handle: who, mark: markId }, key, deps);
-          if (stepped?.error) throw bounce(stepped.error.code ?? 409, `could not exit ${markId} before walking: ${stepped.error.defect ?? stepped.error}`, stepped.error.hint ?? "exit first, then walk");
-          // THE ROAD STARTS WHERE THE DEPOSIT PUT YOU. A rider's standpoint was
-          // the hull's, and the hull is not where they have just been set down
-          // — walking from it would draw a line across open water from a boat
-          // that is somewhere else entirely. The exit's own answer names the
-          // point, so there is no second derivation of it here.
-          if (stepped?.set_down?.recorded && Number.isFinite(stepped.set_down.x)) {
-            from = { x: stepped.set_down.x, y: stepped.set_down.y };
-            setDownFirst = { at: stepped.set_down.at, arrived: stepped.set_down.arrived, x: from.x, y: from.y };
-          }
-        }
-        // The exits stand as their own acts on the record; the walk below is the
-        // second act of one call. If the walk's pen refuses, the exits remain —
-        // said here and in the answer, never smoothed over.
-        exitedFirst = leaving;
+  const { crossingLaw, exitViaOffice } = await import("./world-crossings.mjs");
+  const { crossingDeps } = await import("./world-apex.mjs");
+  const law = await crossingLaw(worldClone).catch(() => null);
+  let occupying = null;
+  if (law?.thresholds && typeof law.verbs?.pointWithinMark === "function") {
+    const deps = crossingDeps();
+    // The clock, the ledger and the fold — § DEC-5, THE WALK GUARD — THE
+    // OCCUPANCY READ, above this function, where a test can drive them.
+    const stack = await occupiedNowBy(who, law.thresholds, deps);
+    // pointWithinMark takes the MARK OBJECT (world-verbs.mjs:92), resolved from
+    // the same world the enter door adjudicates against (deps.world().marks).
+    const w = stack.length ? await deps.world() : null;
+    const byId = new Map((w?.marks ?? []).map((m) => [m.id, m]));
+    // ── THE WALK INSIDE A DUNGEON IS FENCED TO THE ROOM YOU ENTERED (WLD-5,
+    // G4). Asked before DEC-5 could offer `exit: true`, because a dungeon
+    // offers no exit at all; world-movement.mjs § walkFenceRefusal holds it.
+    const fenced = w ? walkFenceRefusal({ stack, toward, marks: w.marks ?? [], verbs: law.verbs }) : null;
+    if (fenced) throw bounce(403, fenced.defect, fenced.hint, fenced.fields);
+    const leaving = leavingWhileOccupying(stack, toward, (pt, id) => { const m = byId.get(id); return m ? law.verbs.pointWithinMark(pt, m) : null; });
+    occupying = { deps, stack, w, byId, leaving };
+  }
+
+  // ── THE MISTS ON THIS ROAD (POS-468) ─────────────────────────────────────
+  // The stride falls the deeper a road goes into the fringe, to nothing at the
+  // wall's face. The world's engine reads the road once, here at the
+  // declare: one that ends in the wall, on its face, crosses it or starts in it
+  // is refused in plain words (no creeping in by short legs); one through the
+  // fringe walks at an even, slowed stride, stamped on the leg as its pace below.
+  // Read BEFORE the exits under DEC-5 run, so a refused road writes no act at all,
+  // and AFTER its occupancy read, whose stack is the walker's shelter: an entered
+  // mark the road stays within is not slowed or stopped by the Mists (§ roadShelter).
+  // No Mists this crossing, or a clone that predates them: null, and nothing here
+  // changes.
+  const shelter = occupying ? roadShelter(law.verbs, occupying.w, occupying.stack, occupying.leaving) : null;
+  let mistRoad = await mistsOnTheRoad(worldClone, skeleton, from, toward, at, { shelter });
+  if (mistRoad?.refused) throw mistsRefusal(bounce, mistRoad.refused);
+
+  if (occupying) {
+    const { deps, stack, byId, leaving } = occupying;
+    // ── A WALK DECLARED ABOARD IS THE CHOICE TO GO ASHORE (#2986) ────────
+    //
+    // ENGINE.md has said since the timetable mechanic shipped that "a walk
+    // declared from her deck is the choice to go ashore", and the brief makes
+    // it one act: the walk handler, seeing occupancy within a vehicle-class
+    // mark, performs the exit under the deposit rule and then walks FROM THE
+    // DEPOSIT POINT. No refusal — DEC-5's refusal exists so that a resident
+    // cannot be carried out of a room without leaving it, and stepping off a
+    // boat you are aboard is not that: it is the leaving, declared.
+    //
+    // The narrowing matters. If the stack also holds a mark that is NOT a
+    // vehicle, the refusal stands exactly as it did: this only ever spares a
+    // caller the `exit: true` for a hull, never for a room.
+    const vehicleLeaving = leaving.filter((id) => String(byId.get(id)?.class ?? "") === "vehicle");
+    const allVehicles = leaving.length > 0 && vehicleLeaving.length === leaving.length;
+    if (leaving.length) {
+      if (payload.exit !== true && !allVehicles) {
+        throw bounce(409, `you are within ${leaving[0]} — this walk would carry you out of it without leaving`,
+          `the-town/the-occupancy-invariant: "You occupy a mark only by entering, and only while your feet stand inside it; a walk that would carry you out is refused until you exit." Step out first — world { do: "exit"${leaving.length > 1 ? ", args: { mark }" : ""} } — or pass exit: true on this walk to exit (${leaving.join(" → ")}) and walk in one call.`,
+          { law: "the-town/the-occupancy-invariant (DEC-5, founder-ruled 2026-09-03)", within: stack, leaving });
       }
+      for (const markId of leaving) {
+        const stepped = await exitViaOffice(worldClone, { handle: who, mark: markId }, key, deps);
+        if (stepped?.error) throw bounce(stepped.error.code ?? 409, `could not exit ${markId} before walking: ${stepped.error.defect ?? stepped.error}`, stepped.error.hint ?? "exit first, then walk");
+        // THE ROAD STARTS WHERE THE DEPOSIT PUT YOU. A rider's standpoint was
+        // the hull's, and the hull is not where they have just been set down
+        // — walking from it would draw a line across open water from a boat
+        // that is somewhere else entirely. The exit's own answer names the
+        // point, so there is no second derivation of it here.
+        if (stepped?.set_down?.recorded && Number.isFinite(stepped.set_down.x)) {
+          from = { x: stepped.set_down.x, y: stepped.set_down.y };
+          setDownFirst = { at: stepped.set_down.at, arrived: stepped.set_down.arrived, x: from.x, y: from.y };
+        }
+      }
+      // The exits stand as their own acts on the record; the walk below is the
+      // second act of one call. If the walk's pen refuses, the exits remain —
+      // said here and in the answer, never smoothed over.
+      exitedFirst = leaving;
     }
   }
   // stepping ashore moved the road's start: read the Mists again from where it now begins
   if (setDownFirst) {
-    mistRoad = await mistsOnTheRoad(worldClone, skeleton, from, toward, at);
+    mistRoad = await mistsOnTheRoad(worldClone, skeleton, from, toward, at, { shelter });
     if (mistRoad?.refused) throw mistsRefusal(bounce, mistRoad.refused, { exited_first: exitedFirst });
   }
   const mistFactor = mistRoad && mistRoad.factor < 1 ? mistRoad.factor : null;
