@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import {
-  CREATURE_TICK_MS, LOOKBACK_MS, PRIOR_ROW_SQL, REVEAL_ACTION, SEED_ACTION, TICK_ACTIONS,
+  ABANDON_ACTION, CREATURE_TICK_MS, LOOKBACK_MS, PRIOR_ROW_SQL, REVEAL_ACTION, SEED_ACTION, TICK_ACTIONS, keyFingerprint,
   creatureTick, startCreatureTick, stopCreatureTick, townRow, windowInputsAt, windowObject, writeOnce,
 } from "../src/creature-tick.mjs";
 import { currentCrossing } from "../src/crossings.mjs";
@@ -66,14 +66,26 @@ test("the window's inputs are the world's, read at a sha: the ruled law, the kin
   assert.equal(W.inputs.world_sha, PIN);
 });
 
-test("off by the launch dial, or with no key: nothing is written", async () => {
+test("off by the launch dial, or with no key: nothing is seeded or spawned", async () => {
   const s = store();
   const r = await tickAt(s, startMs + MIN, { inputsAt: async () => W });
-  assert.deepEqual([r.wrote, s.acts.length], [{ seed: 0, spawn: 0, fade: 0, reveal: 0 }, 0], "the pin's dial is null");
-  const k = await creatureTick({ now: startMs + MIN, key: "", query: () => { throw new Error("read"); } });
-  assert.match(k.line, /no CREATURE_SEED_KEY/);
+  assert.deepEqual([r.wrote, s.acts.length], [{ seed: 0, spawn: 0, fade: 0, reveal: 0, abandon: 0 }, 0], "the pin's dial is null");
+  const k = await tickAt(s, startMs + MIN, { key: null });
+  assert.deepEqual([k.wrote, s.acts.length], [{ seed: 0, spawn: 0, fade: 0, reveal: 0, abandon: 0 }, 0], "no key: no seed, even with the dial on");
+  assert.match(k.line, /no key \(fades only\)/);
   const n = await tickAt(s, startMs + MIN, { query: async () => null });
   assert.match(n.line, /not switched on/);
+});
+
+test("fades need no key: a creature out when the key goes is still faded at its span, once (review of #572, L3)", async () => {
+  const s = store();
+  await runThrough(s, startMs, endMs - 1);
+  const spawns = s.acts.filter((a) => a.action === "spawn");
+  assert.equal(spawns.length, 9);
+  await runThrough(s, endMs, endMs + 13 * 3600_000, 15 * MIN, { key: null });
+  assert.equal(s.acts.some((a) => a.action === SEED_ACTION && a.payload.crossing !== N), false, "no key: no new window");
+  assert.equal(s.acts.some((a) => a.action === REVEAL_ACTION), false, "and no reveal, which needs the key");
+  for (const sp of spawns) assert.equal(s.acts.filter((a) => a.action === "withdraw" && a.object === sp.object).length, 1, `${sp.object} faded without the key`);
 });
 
 test("a window: seeded first, each spawn at its minute and once, the reveal after it closes, and the world's audit passes", async () => {
@@ -83,7 +95,7 @@ test("a window: seeded first, each spawn at its minute and once, the reveal afte
   const first = await tickAt(s, startMs);
   assert.equal(first.wrote.seed, 1);
   const seed = s.acts.find((a) => a.action === SEED_ACTION);
-  assert.deepEqual(seed.payload, { crossing: N, world_sha: PIN, commitment: W.creaturesMod.commitmentOf(W.creaturesMod.secretFor(KEY, N), PIN) });
+  assert.deepEqual(seed.payload, { crossing: N, world_sha: PIN, commitment: W.creaturesMod.commitmentOf(W.creaturesMod.secretFor(KEY, N), PIN), key_fingerprint: keyFingerprint(KEY) });
   assert.equal(seed.object, windowObject(N));
   await runThrough(s, startMs, endMs - 1);
   const spawns = s.acts.filter((a) => a.action === "spawn");
@@ -177,12 +189,46 @@ test("a window is derived at its seed's sha: a blessing that lands mid-window mo
   assert.deepEqual(W.creaturesMod.auditWindow(N, [...s.acts, { at: new Date(endMs + 1).toISOString(), actor: "the-town", action: "reveal", object: windowObject(N), payload: { crossing: N, secret: W.creaturesMod.secretFor(KEY, N) } }], on().inputs).problems, []);
 });
 
-test("a wrong key writes nothing for a window it did not commit, and says so", async () => {
+test("a key rotated mid-window: one abandon row with both fingerprints, said once; no more spawns, no reveal; its creatures still fade (L2)", async () => {
+  const s = store();
+  const sched = W.creaturesMod.scheduleFor(N, W.creaturesMod.secretFor(KEY, N), on().inputs);
+  const mid = sched.spawns[3].at_ms;
+  await runThrough(s, startMs, mid);
+  await tickAt(s, mid);
+  const before = s.acts.filter((a) => a.action === "spawn").map((a) => a.object);
+  assert.equal(before.length, 4);
+  const faults = [];
+  const err = console.error;
+  console.error = (...a) => faults.push(a.join(" "));
+  let first;
+  try {
+    first = await tickAt(s, mid + MIN, { key: "another key" });
+    await runThrough(s, mid + 2 * MIN, endMs + 13 * 3600_000, 15 * MIN, { key: "another key" });
+  } finally { console.error = err; }
+  const abandon = s.acts.filter((a) => a.action === ABANDON_ACTION);
+  assert.equal(abandon.length, 1, "abandoned once");
+  assert.deepEqual(abandon[0].payload, { crossing: N, reason: "the seed key changed mid-window", seed_key_fingerprint: keyFingerprint(KEY), key_fingerprint: keyFingerprint("another key") });
+  assert.equal(abandon[0].object, windowObject(N));
+  assert.match(first.held.join(" "), /does not match the seed's commitment.*abandoned/);
+  assert.equal(faults.filter((l) => /abandoned/.test(l)).length, 1, "the fault is logged once, not every 30 s");
+  assert.deepEqual(s.acts.filter((a) => a.action === "spawn" && a.payload.crossing === N).map((a) => a.object), before, "no spawn the commitment does not cover");
+  assert.equal(s.acts.some((a) => a.action === REVEAL_ACTION && a.payload.crossing === N), false, "no reveal of an abandoned window");
+  for (const id of before) assert.equal(s.acts.filter((a) => a.action === "withdraw" && a.object === id).length, 1, `${id} still fades`);
+  const next = s.acts.find((a) => a.action === SEED_ACTION && a.payload.crossing === N + 1);
+  assert.equal(next.payload.key_fingerprint, keyFingerprint("another key"), "the next window is seeded by the new key, and the log says which");
+});
+
+test("the key's fingerprint: each seed names its key without telling it (L1)", async () => {
   const s = store();
   await tickAt(s, startMs);
-  const r = await tickAt(s, startMs + 6 * 3600_000, { key: "another key" });
-  assert.equal(s.acts.filter((a) => a.action !== SEED_ACTION).length, 0);
-  assert.match(r.held.join(" "), /does not match the seed's commitment/);
+  await tickAt(s, endMs + MIN, { key: "a second key" });
+  const [a, b] = [N, N + 1].map((M) => s.acts.find((r) => r.action === SEED_ACTION && r.payload.crossing === M).payload.key_fingerprint);
+  assert.equal(a, keyFingerprint(KEY));
+  assert.equal(b, keyFingerprint("a second key"));
+  assert.notEqual(a, b, "a key changed between windows shows in the record");
+  assert.match(a, /^[0-9a-f]{64}$/);
+  assert.notEqual(a, W.creaturesMod.secretFor(KEY, N), "nor is it any window's secret");
+  assert.ok(!JSON.stringify(s.acts).includes(KEY), "the key itself is never written");
 });
 
 test("the clock starts only in a writer with a store, a port and the key, and not when the operator says off", () => {
@@ -191,12 +237,16 @@ test("the clock starts only in a writer with a store, a port and the key, and no
   const env = { WORLD2_PG: "1", WORLD2_PG_URL: "postgres://nowhere", CREATURE_SEED_KEY: "k" };
   assert.equal(startCreatureTick({ port: 0, env, log, tick }), false, "a suite's office");
   assert.equal(startCreatureTick({ port: 3000, env: { ...env, CREATURE_TICK: "off" }, log, tick }), false);
-  assert.equal(startCreatureTick({ port: 3000, env: { WORLD2_PG: "1", WORLD2_PG_URL: "postgres://nowhere" }, log, tick }), false, "no key");
   assert.equal(startCreatureTick({ port: 3000, env: { CREATURE_SEED_KEY: "k" }, log, tick }), false, "no store");
   assert.equal(startCreatureTick({ port: 3000, env, log, tick }), true);
   assert.equal(startCreatureTick({ port: 3000, env, log, tick }), false, "idempotent");
   stopCreatureTick();
+  const seen = [];
+  assert.equal(startCreatureTick({ port: 3000, env: { WORLD2_PG: "1", WORLD2_PG_URL: "postgres://nowhere" }, log: { log: (l) => seen.push(l) },
+    tick: async (o) => { seen.push(`key ${o.key}`); return { wrote: { seed: 0, spawn: 0, fade: 0, reveal: 0, abandon: 0 }, held: [], line: "" }; } }), true, "no key: it starts, for the fades");
+  stopCreatureTick();
+  assert.match(seen.join(" | "), /no CREATURE_SEED_KEY .*the fades still run \| key null/);
   assert.ok(CREATURE_TICK_MS <= 60_000, "a spawn is written within a minute of its own");
   assert.ok(LOOKBACK_MS >= 13 * 3600_000);
-  assert.deepEqual([...TICK_ACTIONS].sort(), ["reveal", "seed", "spawn", "withdraw"]);
+  assert.deepEqual([...TICK_ACTIONS].sort(), ["abandon", "reveal", "seed", "spawn", "withdraw"]);
 });

@@ -41,15 +41,26 @@
 // for the row first, inside one transaction, so a restart, a crash between two
 // writes, or two offices overlapping at a deploy cannot write a row twice.
 //
-// A WRONG KEY WRITES NOTHING. Before a window's spawns or its reveal, the
-// secret the key derives must hash, with the seed's sha, to the seed's
-// commitment. If it does not (the key was changed mid-window), the window is
-// left alone and the operator is told: a spawn the commitment does not cover
-// would fail the audit, and so would a reveal.
+// THE KEY IS SEEN IN THE RECORD, NEVER SHOWN (review of #572, L1–L3).
+//   · Every seed carries `key_fingerprint` (sha256 of HMAC(key, "creatures/
+//     fingerprint")), so a key changed between windows shows in the log as two
+//     fingerprints, though neither tells the key.
+//   · A WRONG KEY WRITES NOTHING FOR A WINDOW IT DID NOT COMMIT. Before a window's
+//     spawns or its reveal, the secret the key derives must hash, with the seed's
+//     sha, to the seed's commitment: a spawn the commitment does not cover would
+//     fail the audit, and so would a reveal. If it does not (the key was rotated
+//     mid-window), the tick writes ONE `abandon` row for that window, by the-town,
+//     with both fingerprints, and logs a fault once. The window is then closed:
+//     no more spawns, no reveal, and its creatures already out still fade. It is
+//     not held for ever with a line every 30 s.
+//   · FADES NEED NO KEY. Without CREATURE_SEED_KEY the clock still runs and writes
+//     the fades, so no creature outlives its span in the written fold; only the
+//     seed, the spawns and the reveal wait for the key.
 //
-// Env: CREATURE_SEED_KEY (the box's master key; absent, the tick does not
-// start), CREATURE_TICK=off (the operator's door).
+// Env: CREATURE_SEED_KEY (the box's master key; absent, only the fades run),
+// CREATURE_TICK=off (the operator's door).
 
+import { createHash, createHmac } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -64,7 +75,10 @@ import { CREATURE_CLASS, SPAWN_ACTION, WITHDRAW_ACTION } from "./creatures.mjs";
 export const CREATURE_TICK_MS = 30_000;
 export const SEED_ACTION = "seed";
 export const REVEAL_ACTION = "reveal";
-export const TICK_ACTIONS = Object.freeze([SEED_ACTION, SPAWN_ACTION, WITHDRAW_ACTION, REVEAL_ACTION]);
+export const ABANDON_ACTION = "abandon";
+export const TICK_ACTIONS = Object.freeze([SEED_ACTION, SPAWN_ACTION, WITHDRAW_ACTION, REVEAL_ACTION, ABANDON_ACTION]);
+/** A key's public fingerprint: it names which key seeded a window and tells nothing of it. Hex. */
+export const keyFingerprint = (key) => createHash("sha256").update(createHmac("sha256", String(key)).update("creatures/fingerprint").digest()).digest("hex");
 /** How far back the tick reads its own rows: a window's seed and spawns, and a
  *  fade still unwritten after an outage. Older rows are the record's, not the tick's. */
 export const LOOKBACK_MS = 7 * 24 * 3600 * 1000;
@@ -160,10 +174,11 @@ export async function writeOnce(row, { officeWrite: ow = null, insertAct: ins = 
 // ── one tick ────────────────────────────────────────────────────────────────
 
 /**
- * One run of the clock at `now`. Seeds the open window if the law at the
- * blessed sha would spawn in it; writes every seeded window's due spawns; reveals
- * each closed window once its spawns are all written; writes every due fade.
- * Answers { wrote: { seed, spawn, fade, reveal }, held: [why], line }.
+ * One run of the clock at `now`. With the key: seeds the open window if the law
+ * at the blessed sha would spawn in it; writes every seeded window's due spawns;
+ * reveals each closed window once its spawns are all written; abandons a window
+ * the key did not commit. With or without it: writes every due fade.
+ * Answers { wrote: { seed, spawn, fade, reveal, abandon }, held: [why], line }.
  *
  * Seams a test drives: `query`, `write` (writeOnce's shape), `inputsAt(sha)`,
  * `blessed()` (the blessed sha).
@@ -172,9 +187,8 @@ export async function creatureTick({
   now = Date.now(), key = process.env.CREATURE_SEED_KEY, query = actsQuery, write = writeOnce,
   inputsAt = (sha) => cachedInputsAt(sha), blessed = () => blessedSha(WORLD_CLONE),
 } = {}) {
-  const wrote = { seed: 0, spawn: 0, fade: 0, reveal: 0 }, held = [];
-  const said = () => `seed ${wrote.seed} · spawn ${wrote.spawn} · fade ${wrote.fade} · reveal ${wrote.reveal}${held.length ? ` · held: ${held.join("; ")}` : ""}`;
-  if (!key) return { wrote, held: ["no CREATURE_SEED_KEY"], line: "no CREATURE_SEED_KEY: the creatures' clock is stopped" };
+  const wrote = { seed: 0, spawn: 0, fade: 0, reveal: 0, abandon: 0 }, held = [];
+  const said = () => `${key ? "" : "no key (fades only) · "}seed ${wrote.seed} · spawn ${wrote.spawn} · fade ${wrote.fade} · reveal ${wrote.reveal}${wrote.abandon ? ` · abandon ${wrote.abandon}` : ""}${held.length ? ` · held: ${held.join("; ")}` : ""}`;
   const got = await query(TICK_ROWS_SQL, [[...TICK_ACTIONS], new Date(now - LOOKBACK_MS).toISOString()]);
   if (got == null) return { wrote, held: ["the store is not switched on here"], line: "the store is not switched on here" };
   const rows = got.map(rowOf);
@@ -186,9 +200,9 @@ export async function creatureTick({
   const town = (a) => a.actor === "the-town";
   const N = currentCrossing(now);
 
-  // 1. the open window's seed, from the law at the blessed sha
+  // 1. the open window's seed, from the law at the blessed sha (the key's work)
   const seedOf = (M) => rows.find((r) => town(r) && r.action === SEED_ACTION && Number(r.payload.crossing) === M);
-  if (!seedOf(N)) {
+  if (key && !seedOf(N)) {
     const sha = blessed();
     const w = await inputsAt(sha);
     if (w.law) {
@@ -196,16 +210,16 @@ export async function creatureTick({
       const s = w.creaturesMod.scheduleFor(N, secret, w.inputs);
       if (s.spawns.length + s.unplaced.length > 0) {
         const r = await put(townRow({ action: SEED_ACTION, object: windowObject(N), now,
-          payload: { crossing: N, world_sha: sha, commitment: w.creaturesMod.commitmentOf(secret, sha) },
+          payload: { crossing: N, world_sha: sha, commitment: w.creaturesMod.commitmentOf(secret, sha), key_fingerprint: keyFingerprint(key) },
           effect: `the town commits to crossing ${N}'s creatures` }));
         if (!r.prior) wrote.seed += 1;
       }
     }
   }
 
-  // 2. every seeded window not yet revealed: its due spawns, then (once closed) its reveal
-  const revealed = new Set(rows.filter((r) => town(r) && r.action === REVEAL_ACTION).map((r) => Number(r.payload.crossing)));
-  const seeds = rows.filter((r) => town(r) && r.action === SEED_ACTION && !revealed.has(Number(r.payload.crossing)))
+  // 2. every seeded window not yet revealed or abandoned: its due spawns, then (once closed) its reveal
+  const closed = new Set(rows.filter((r) => town(r) && (r.action === REVEAL_ACTION || r.action === ABANDON_ACTION)).map((r) => Number(r.payload.crossing)));
+  const seeds = !key ? [] : rows.filter((r) => town(r) && r.action === SEED_ACTION && !closed.has(Number(r.payload.crossing)))
     .sort((a, b) => Number(a.payload.crossing) - Number(b.payload.crossing));
   for (const seed of seeds) {
     const M = Number(seed.payload.crossing);
@@ -215,7 +229,11 @@ export async function creatureTick({
     if (!w.law) { held.push(`crossing ${M}: ${w.why}`); continue; }
     const secret = w.creaturesMod.secretFor(key, M);
     if (w.creaturesMod.commitmentOf(secret, seed.payload.world_sha) !== seed.payload.commitment) {
-      held.push(`crossing ${M}: this key's secret does not match the seed's commitment (was CREATURE_SEED_KEY changed?)`);
+      const why = `crossing ${M}: this key's secret does not match the seed's commitment (CREATURE_SEED_KEY was changed mid-window), so the window is abandoned: no more spawns and no reveal; its creatures out still fade`;
+      const r = await put(townRow({ action: ABANDON_ACTION, object: windowObject(M), now,
+        payload: { crossing: M, reason: "the seed key changed mid-window", seed_key_fingerprint: seed.payload.key_fingerprint ?? null, key_fingerprint: keyFingerprint(key) },
+        effect: `the town abandons crossing ${M}'s creatures: its key changed` }));
+      if (!r.prior) { wrote.abandon += 1; held.push(why); faultLogged(why, new Error("the seed key changed")); }
       continue;
     }
     const sched = w.creaturesMod.scheduleFor(M, secret, w.inputs);
@@ -235,7 +253,7 @@ export async function creatureTick({
     }
   }
 
-  // 3. the fades: every creature past its span whose withdraw is not yet written
+  // 3. the fades, key or none: every creature past its span whose withdraw is not yet written
   const fold = (await inputsAt(blessed())).creaturesMod;
   for (const f of fold.dueFades(null, rows, now)) {
     const c = rows.find((r) => r.action === SPAWN_ACTION && r.object === f.id);
@@ -252,20 +270,21 @@ const timer = { handle: null, running: false, last: null };
 
 /**
  * Start the clock: the writer process only, pointed at a store, never on port 0
- * (a suite's office), not when the operator says CREATURE_TICK=off, and not
- * without the box's key. One run now (the restart's catch-up), then every
+ * (a suite's office), and not when the operator says CREATURE_TICK=off. Without
+ * the box's key it runs the fades only, and says so once. One run now (the
+ * restart's catch-up), then every
  * CREATURE_TICK_MS, serial. Unref'd. Idempotent.
  */
 export function startCreatureTick({ port, env = process.env, log = console, tick = creatureTick } = {}) {
   if (timer.handle) return false;
   if (String(env.CREATURE_TICK ?? "").toLowerCase() === "off") { log.log?.("[creatures] CREATURE_TICK=off: no creature is seeded, spawned, faded or revealed until it is on"); return false; }
   if (!world2Enabled(env) || Number(port) === 0) return false;
-  if (!env.CREATURE_SEED_KEY) { log.log?.("[creatures] no CREATURE_SEED_KEY in this office's env: the creatures' clock is not started"); return false; }
+  if (!env.CREATURE_SEED_KEY) log.log?.("[creatures] no CREATURE_SEED_KEY in this office's env: no creature is seeded, spawned or revealed; the fades still run");
   const run = async () => {
     if (timer.running) return;
     timer.running = true;
     try {
-      const r = await tick({ key: env.CREATURE_SEED_KEY });
+      const r = await tick({ key: env.CREATURE_SEED_KEY || null });
       timer.last = { at: new Date().toISOString(), line: r.line };
       const n = Object.values(r.wrote).reduce((a, b) => a + b, 0);
       if (n || r.held.length) log.log?.(`[creatures] ${r.line}`);
