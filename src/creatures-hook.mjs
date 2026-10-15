@@ -146,36 +146,56 @@ export async function actOfRow(row, { query = actsQuery, centreOf = null, standp
  * (C4), or the answer goes out as it was. Never throws.
  */
 export async function creaturesAnswer(rows, result, deps = state.testDeps ?? {}) {
-  try {
-    const now = creaturesNow();
-    if (!now || result == null || typeof result !== "object" || Array.isArray(result) || result.error) return result;
-    const ring = now.law.kindMod.RING_VERBS;
-    const trigger = [...rows].reverse().find((r) => ring.includes(r.action));
-    if (!trigger) return result;
-    // near: a ring holds the point, or a creature already answered this act (a retry, F6)
-    const act = await actOfRow(trigger, { ...deps,
-      near: (pt) => now.living.inRing(pt).length > 0 || now.living.answered.has(String(trigger.id)) });
-    if (!act) return result;
-    const answers = await answerWithin(act, { ...now, ...deps });
-    if (!answers.length) return result;
-    result.creatures = answers;
-    return result;
-  } catch (e) {
-    faultLogged("the creatures could not answer an act; it answered without them", e);
-    return result;
-  }
+  const now = creaturesNow();
+  if (!now || result == null || typeof result !== "object" || Array.isArray(result) || result.error) return result;
+  // THE BOUND STARTS HERE (review-571 B1): the actor's standpoint, the marks'
+  // centres and the crossing row's read-back are inside ANSWER_WAIT_MS with the
+  // turns, so nothing the hook reads can hold the act's answer past it. What
+  // the turns finished by then rides; a turn still running finishes on its own.
+  const clock = deps.clock ?? Date.now;
+  const deadline = clock() + ANSWER_WAIT_MS;
+  const partial = [];
+  const work = (async () => {
+    try {
+      const ring = now.law.kindMod.RING_VERBS;
+      const trigger = [...rows].reverse().find((r) => ring.includes(r.action));
+      if (!trigger) return [];
+      // near: a ring holds the point, or a creature already answered this act (a retry, F6)
+      const act = await actOfRow(trigger, { ...deps,
+        near: (pt) => now.living.inRing(pt).length > 0 || now.living.answered.has(String(trigger.id)) });
+      if (!act) return [];
+      return await answerWithin(act, { ...now, ...deps, clock, deadline, partial });
+    } catch (e) {
+      faultLogged("the creatures could not answer an act; it answered without them", e);
+      return [];
+    }
+  })();
+  const answers = await byDeadline(work, deadline, clock, partial);
+  if (answers.length) result.creatures = answers;
+  return result;
 }
 
-/** The creatures' turns for one act, outside the door's key (act-watch.mjs runs this after the watched act), bounded by ANSWER_WAIT_MS. */
-export function answerWithin(act, { living, law, around = aroundCreature, ask, write, env, clock = Date.now } = {}) {
-  const deadline = clock() + ANSWER_WAIT_MS;
-  const turns = outsideRetryKey(() =>
-    reactTo(act, { living, law, around, ...(ask ? { ask } : {}), ...(write ? { write } : {}), ...(env ? { env } : {}), clock, deadline }));
+/** `work`'s answers if it settles by `deadline`; else the turns that had finished (nearest first). A held timer. */
+async function byDeadline(work, deadline, clock, partial) {
   let timer;
-  // a held timer, never unref'd: the act's answer is waiting on it (on node 22 an unref'd one let a
-  // test's event loop end under a hung turn, CI 38770755044)
-  const late = new Promise((r) => { timer = setTimeout(() => r([]), Math.max(0, deadline - clock())); });
-  return Promise.race([turns, late]).finally(() => clearTimeout(timer));
+  const late = new Promise((r) => { timer = setTimeout(() => r(null), Math.max(0, deadline - clock())); });
+  const got = await Promise.race([work, late]).finally(() => clearTimeout(timer));
+  return got ?? partial.filter(Boolean);
+}
+
+/**
+ * The creatures' turns for one act, outside the door's key (act-watch.mjs runs
+ * this after the watched act), bounded by `deadline` (default ANSWER_WAIT_MS
+ * from now). A turn late at the deadline drops only its own line (review-571
+ * note 3): the turns that finished ride, nearest first. The deadline's timer
+ * is held, never unref'd: on node 22 an unref'd one let a test's event loop
+ * end under a hung turn (CI 38770755044).
+ */
+export function answerWithin(act, { living, law, around = aroundCreature, ask, write, env, clock = Date.now, deadline = null, partial = [] } = {}) {
+  const until = deadline ?? clock() + ANSWER_WAIT_MS;
+  const turns = outsideRetryKey(() =>
+    reactTo(act, { living, law, around, ...(ask ? { ask } : {}), ...(write ? { write } : {}), ...(env ? { env } : {}), clock, deadline: until, partial }));
+  return byDeadline(turns, until, clock, partial);
 }
 
 // ── the creature's own world read (W9) ──────────────────────────────────────
