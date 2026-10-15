@@ -18,6 +18,7 @@
 // tier 1) so two households do not queue behind one working tree.
 
 import { worldFreezeBounce } from "./freeze.mjs";
+import { perceived } from "./act-watch.mjs"; // POS-637 PR-B: every act door perceives creatures
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -1570,7 +1571,9 @@ export const heardAt = (at, opts = {}) => voices.heardAt(at, opts);
 /** The earshot as plain data, taken on the main thread and handed to a read worker (W4). */
 export const earshotSnapshot = () => voices.earshotSnapshot();
 
-export async function worldSay(args = {}, key = null) {
+// POS-637 PR-B: the act, perceived by any creature whose ring holds it (act-watch.mjs § perceived).
+export async function worldSay(args = {}, key = null) { return perceived(() => sayAct(args, key)); }
+async function sayAct(args = {}, key = null) {
   { const fz = worldFreezeBounce(); if (fz) return fz; }
   // A berth speaks from the quay (the arrival ruling, 2026-08-15): emissions
   // are the one write a berth holds — ephemeral by class, sixty metres and
@@ -1702,7 +1705,9 @@ async function humanStand(args = {}, key = null) {
   return { speaker, standAs };
 }
 
-export async function worldSayHuman(args = {}, key = null) {
+// POS-637 PR-B: the act, perceived by any creature whose ring holds it (act-watch.mjs § perceived).
+export async function worldSayHuman(args = {}, key = null) { return perceived(() => sayHumanAct(args, key)); }
+async function sayHumanAct(args = {}, key = null) {
   { const fz = worldFreezeBounce(); if (fz) return fz; }
   const stood = await humanStand(args, key);
   if (stood.error) return stood;
@@ -4135,7 +4140,9 @@ async function placementForecast({ worldClone, w, worldUnread, id, ring, mistsCr
   return { as_of: f.as_of, fringe: r.fringe, wall: r.wall, says: r.says };
 }
 
-export async function leaveMarkViaOffice(worldClone, payload = {}, key = null, { setDown = null, mistsCrossing = null, dropUnit = null } = {}) {
+// POS-637 PR-B: the act, perceived by any creature whose ring holds it (act-watch.mjs § perceived).
+export async function leaveMarkViaOffice(worldClone, payload = {}, key = null, opts = {}) { return perceived(() => leaveMarkAct(worldClone, payload, key, opts)); }
+async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = null, mistsCrossing = null, dropUnit = null } = {}) {
   { const fz = worldFreezeBounce(); if (fz) return fz; }
   const bounce = (code, defect, hint) => { const e = new Error(defect); Object.assign(e, { code, defect, hint }); return e; };
   const handles = [...(key?.handles ?? [])];
@@ -5126,7 +5133,9 @@ export function walkEntryReceipt(entry, { arrived, stop, eta, queued = true, why
     note: "the entry is adjudicated when you arrive; nothing has been entered yet" } };
 }
 
-export async function walkViaOffice(worldClone, payload = {}, key = null) {
+// POS-637 PR-B: the act, perceived by any creature whose ring holds it (act-watch.mjs § perceived).
+export async function walkViaOffice(worldClone, payload = {}, key = null) { return perceived(() => walkAct(worldClone, payload, key)); }
+async function walkAct(worldClone, payload = {}, key = null) {
   { const fz = worldFreezeBounce(); if (fz) return fz; }
   const bounce = (code, defect, hint, extra = {}) => {
     const e = new Error(defect); Object.assign(e, { code, defect, hint, ...extra }); return e;

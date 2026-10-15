@@ -63,6 +63,7 @@ import { readAttachments, declareAttachment } from "./dynamic-entities.mjs";
 import { holdEdgeOnActs } from "./hold-edge.mjs";
 import { IN_READ_WORKER } from "./read-workers.mjs";
 import { classDials } from "./world-classes.mjs";
+import { perceived } from "./act-watch.mjs"; // POS-637 PR-B: every act door perceives creatures
 
 /** The thing class's own params, read from the record every time (never cached here). */
 export const thingDials = () => classDials("thing");
@@ -1274,7 +1275,9 @@ export function setDownNote(setDown) {
   return `${lead}; no amend was filed (${a.why}), so canon keeps it where it was folded and the set-down is the read's answer until one is.`;
 }
 
-export async function callHoldTool(name, args = {}, key = null) {
+// POS-637 PR-B: the act, perceived by any creature whose ring holds it (act-watch.mjs § perceived).
+export async function callHoldTool(name, args = {}, key = null) { return perceived(() => holdAct(name, args, key)); }
+async function holdAct(name, args = {}, key = null) {
   if (name === "world_hold") { const fz = worldFreezeBounce(); if (fz) return fz; }
   const actor = actingHandle(args, key);
   // ⚑ THE READ ASKS FOR A READ HANDLE, AND ONLY THE WRITE ASKS FOR A WRITE ONE
