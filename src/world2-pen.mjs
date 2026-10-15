@@ -53,6 +53,7 @@ import { world2Enabled } from "./world2-acts.mjs";
 import { currentCrossing } from "./crossings.mjs";
 import { sessionKeysVia, sessionKeyString } from "./household-deriver.mjs";
 import { nonceForActRow } from "./act-nonce.mjs";
+import { noteActWritten } from "./act-watch.mjs";
 import { storePoolOptions, watchPoolErrors, onPenClient, refuseNested } from "./store-pool.mjs"; // POS-370: the acquire timeout, the server's idle-transaction limit, one pen connection per call chain
 
 // ── A LATE ROW MAY NOT ENTER A CERTIFIED WINDOW (the act-4171 class, 2026-09-04) ─
@@ -347,6 +348,9 @@ export async function insertAct(client, rowIn, seq = null, { lateArrival = null 
   // it is ignored here, deliberately and in writing.
   const { text, values } = actsInsert(row, household);
   const { rows: [r] } = await client.query(`${text} RETURNING id`, values);
+  // Inside an act door, the creatures are told what reached the record (POS-637
+  // PR-B; act-watch.mjs § perceived). Outside one, this is nothing.
+  noteActWritten(row, r.id);
   return r.id;
 }
 

@@ -38,6 +38,7 @@
 
 import { renamedRow, DOOR_FIELDS, withRefused } from "./one-contract.mjs"; // POS-70: the one rename shape; POS-246: the door's own fields; POS-427: refused beside did
 import { actUnderNonce, nonceDefect } from "./act-nonce.mjs"; // POS-246: a world act's retry key
+import { noteActWritten } from "./act-watch.mjs"; // POS-637: the crossing pass's row, told to the act door's creatures
 import { readFileSync, readdirSync } from "node:fs";
 import { IDENTITIES_SQL } from "./world2-fold.mjs"; // POS-350: the household grain is the store's identities
 import { refShaFromDisk } from "./world-branches.mjs";
@@ -489,6 +490,9 @@ export function crossingDeps() {
       }
       const result = JSON.parse(out.trim().split("\n").at(-1));
       if (result.error) { const err = new Error(result.error.defect); Object.assign(err, result.error); throw err; }
+      // The pass wrote its row in a child process, so the act door's creatures
+      // are told its id here; the hook reads the rest back (POS-637 PR-B).
+      if (result.seq != null) noteActWritten({ actor: handle, action: act ?? "enter" }, result.seq);
       return result;
     },
   };

@@ -12,8 +12,8 @@
 // stands. No combat, no harm, no tamed or befriended state; "creatures", never
 // "critters".
 //
-// THIS FILE IS THE CORE (PR-A, part 1 of 3), and nothing calls it yet. PR-B
-// wraps the six act implementations around `reactTo` and puts its lines in each
+// THIS FILE IS THE CORE (PR-A and PR-A2). PR-B (creatures-hook.mjs) calls it
+// from every act door and from the arrival tick, and puts its lines in each
 // answer; PR-C reads creatures into `who`, `happening_here` and `investigate`.
 // The shapes it holds were settled on POS-637 (W1–W10, Wright 10-14 22:0x):
 //
@@ -36,9 +36,10 @@
 //   · W7  CREATURE_JUDGE = jev | code | off (default jev) is the operator's
 //         door; TYPESAFE_API_KEY is the office env's.
 //
-// PENDING (Darko's Call, C1–C6 on POS-637): the dials below marked `pending`
-// carry the lane's recommendation as the default until he rules. Changing one
-// is a one-line PR; nothing else reads the number.
+// RULED (Darko, 2026-10-15 12:09 EDT, C1–C6 on POS-637, all as recommended):
+// the dials below carry those values. Changing one is a one-line PR; nothing
+// else reads the number. PR-B (creatures-hook.mjs, act-watch.mjs) is the hook
+// and the arrival; PR-C the reads.
 //
 // THE KIND IS THE WORLD'S, READ BY THE WORLD'S OWN CODE (PR-A2; Wright, no
 // adapter; Starstory docs/2026-10-13/rail/WLD-56/shape-check-561.md). The
@@ -81,7 +82,7 @@ export const WITHDRAW_ACTION = "withdraw";
  * working tree: an engine that silently fell back would run draft law.
  * `importTool(file)` and `readText(path)` are the seams a test drives.
  */
-export async function loadCreatureLaw({ repo = WORLD_CLONE, ref = null, importTool = null, readText = null } = {}) {
+export async function loadCreatureLaw({ repo = WORLD_CLONE, ref = null, importTool = null, readText = null, clock = Date.now } = {}) {
   let at = ref;
   try {
     at ??= blessedRef(repo);
@@ -92,14 +93,20 @@ export async function loadCreatureLaw({ repo = WORLD_CLONE, ref = null, importTo
     if (!Array.isArray(kindMod.RING_VERBS) || !Array.isArray(creaturesMod?.DESPAWN_REASONS) || !creaturesMod?.TOWN || typeof creaturesMod.isCreatureId !== "function")
       throw new Error("tools/creature-kind.mjs or tools/creatures.mjs lacks RING_VERBS, DESPAWN_REASONS, TOWN or isCreatureId");
     const read = readText ?? ((path) => readAtRef(repo, at, path));
-    const kinds = new Map();
+    // A kind read is cached per ref; a kind that could not be read is asked
+    // again after LAW_RETRY_MS, so one git blip never silences that kind until
+    // the next blessing (PR-B carry 7).
+    const kinds = new Map(); // name → { kind, at }
     const kindOf = (name) => {
       if (typeof name !== "string" || !/^[a-z][a-z0-9-]*$/.test(name)) return null;
-      if (!kinds.has(name)) {
-        try { kinds.set(name, kindMod.parseKind(read(`WORLD/kinds/${name}.kind`), { source: `WORLD/kinds/${name}.kind at ${at}` })); }
-        catch (e) { faultLogged(`the creature kind "${name}" could not be read at ${at}`, e); kinds.set(name, null); }
+      const had = kinds.get(name);
+      if (!had || (had.kind === null && clock() - had.at >= LAW_RETRY_MS)) {
+        let kind = null;
+        try { kind = kindMod.parseKind(read(`WORLD/kinds/${name}.kind`), { source: `WORLD/kinds/${name}.kind at ${at}` }); }
+        catch (e) { faultLogged(`the creature kind "${name}" could not be read at ${at}`, e); }
+        kinds.set(name, { kind, at: clock() });
       }
-      return kinds.get(name);
+      return kinds.get(name).kind;
     };
     return { ref: at, kindMod, creaturesMod, kindOf };
   } catch (e) {
@@ -112,49 +119,64 @@ export async function loadCreatureLaw({ repo = WORLD_CLONE, ref = null, importTo
 // for one ref awaits the same promise, so none sees null or the previous ref's
 // law while a load is under way, and a load for a ref the blessing has since
 // left answers only the callers that asked for that ref.
-let lawCache = { ref: null, promise: null };
-/** The law at the current blessed ref, loaded once per ref. `refOf` and `load` are the seams a test drives. */
-export async function creatureLaw({ repo = WORLD_CLONE, refOf = blessedRef, load = loadCreatureLaw } = {}) {
+//
+// AN UNAVAILABLE LAW IS ASKED AGAIN after LAW_RETRY_MS (PR-B carry 7; Wright
+// prefers about 5 min). Cached until the next blessing, one git blip at the
+// wrong moment would silence every creature for up to 12 h. A ref that truly
+// lacks the law (any blessing before world#218) costs one load per 5 min, and
+// only while something asks.
+export const LAW_RETRY_MS = 5 * 60_000;
+let lawCache = { ref: null, promise: null, settled: null };
+/** The law at the current blessed ref, loaded once per ref. `refOf`, `load` and `clock` are the seams a test drives. */
+export async function creatureLaw({ repo = WORLD_CLONE, refOf = blessedRef, load = loadCreatureLaw, clock = Date.now } = {}) {
   let ref;
   try { ref = refOf(repo); } catch (e) {
     faultLogged("the blessed ref could not be read for the creature law", e);
     return { unavailable: "the blessed ref could not be read, so no creature reacts" };
   }
-  if (lawCache.ref !== ref || !lawCache.promise) {
-    const promise = Promise.resolve().then(() => load({ repo, ref }))
-      .catch((e) => { faultLogged("the creature law could not be loaded", e); return { ref, unavailable: `the world's creature law cannot be read at ${ref}, so no creature reacts` }; });
-    lawCache = { ref, promise };
+  const stale = lawCache.settled?.unavailable && clock() - lawCache.settled.at >= LAW_RETRY_MS;
+  if (lawCache.ref !== ref || !lawCache.promise || stale) {
+    const entry = { ref, promise: null, settled: null };
+    entry.promise = Promise.resolve().then(() => load({ repo, ref }))
+      .catch((e) => { faultLogged("the creature law could not be loaded", e); return { ref, unavailable: `the world's creature law cannot be read at ${ref}, so no creature reacts` }; })
+      .then((law) => { entry.settled = { unavailable: !lawReady(law), at: clock() }; return law; });
+    lawCache = entry;
   }
   return lawCache.promise;
 }
-export function __resetCreatureLawForTest() { lawCache = { ref: null, promise: null }; }
+export function __resetCreatureLawForTest() { lawCache = { ref: null, promise: null, settled: null }; }
 const lawReady = (law) => !!law && !law.unavailable && !!law.kindMod;
 
 /** A dial whose value waits on Darko's word: the lane's recommendation, and the call that rules it. */
 const pending = (value, call) => Object.freeze({ value, pending: call });
+/** A dial Darko has ruled: its value, and the call and the hour that ruled it. */
+const ruled = (value, call) => Object.freeze({ value, ruled: call });
+const C_RULED = "Darko 2026-10-15 12:09 EDT";
 
 /**
- * THE DIALS. Each `pending` one is a recommendation awaiting its call on
- * POS-637; `CREATURE_DIALS_PENDING` lists them for the PR body and the tests.
+ * THE DIALS. C1–C6 were RULED as recommended (Darko, 2026-10-15 12:09 EDT,
+ * "seems fine"; POS-637). C1 has no number: the walk is perceived when it is
+ * declared AND when it lands (creatures-hook.mjs § the arrival).
  */
 export const CREATURE_DIALS = Object.freeze({
   // C4: what the actor's own answer carries beside the creature's id and kind.
-  answer_fields: pending(Object.freeze(["line", "reaction", "roll", "judged_by"]), "C4"),
+  answer_fields: ruled(Object.freeze(["line", "reaction", "roll", "judged_by"]), `C4, ${C_RULED}`),
   // C5: at most this many creatures answer one act, the nearest first. (Which acts
   // a creature perceives is the world's RING_VERBS: one home for that law.)
-  most_per_act: pending(3, "C5"),
+  most_per_act: ruled(3, `C5, ${C_RULED}`),
   // C2: one reaction per resident per creature in this window; a second act inside it gets none.
-  per_actor_ms: pending(60_000, "C2"),
+  per_actor_ms: ruled(60_000, `C2, ${C_RULED}`),
   // C2: Jev judgments per creature over its whole span; past it, code answers.
-  judgments_per_creature: pending(100, "C2"),
+  judgments_per_creature: ruled(100, `C2, ${C_RULED}`),
   // C3: how far the emission reaches and how long it stands in happening_here (read by PR-C).
-  emission_m: pending(500, "C3"),
-  emission_ms: pending(30 * 60_000, "C3"),
+  emission_m: ruled(500, `C3, ${C_RULED}`),
+  emission_ms: ruled(30 * 60_000, `C3, ${C_RULED}`),
   // C6: the far line names the nearest living creature within this distance (read by PR-C).
-  far_line_m: pending(5000, "C6"),
+  far_line_m: ruled(5000, `C6, ${C_RULED}`),
 });
+/** The C dials still waiting on a call: none since 2026-10-15 12:09. */
 export const CREATURE_DIALS_PENDING = Object.freeze(
-  Object.entries(CREATURE_DIALS).map(([k, d]) => `${k} (${d.pending})`));
+  Object.entries(CREATURE_DIALS).filter(([, d]) => d.pending).map(([k, d]) => `${k} (${d.pending})`));
 export const dial = (name) => CREATURE_DIALS[name].value;
 
 /** C4: one creature's entry in the actor's answer: its id and kind, and the fields the dial names. */
@@ -164,6 +186,15 @@ export const answerOf = (full) =>
 /** W2: Jev's own deadline. The act's answer waits at most ANSWER_WAIT_MS (PR-B's hook). */
 export const JEV_TIMEOUT_MS = 900;
 export const ANSWER_WAIT_MS = 1000;
+/**
+ * INSIDE ANSWER_WAIT_MS (PR-B carry 4): the creature's world read gets at most
+ * AROUND_WAIT_MS, and Jev what is left of the deadline after the write's
+ * reserve, never more than JEV_TIMEOUT_MS. Less than JEV_MIN_MS left, and code
+ * answers ("timeout") without asking.
+ */
+export const AROUND_WAIT_MS = 250;
+export const WRITE_RESERVE_MS = 80;
+export const JEV_MIN_MS = 150;
 /** W3: how often the living set catches up with the store. */
 export const REFRESH_MS = 10_000;
 /** How many of its own reactions a creature remembers in its slice. */
@@ -205,8 +236,8 @@ export const codeDistribution = (allowed) =>
 export const distanceM = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
 /**
- * Approaching (the gap read § 10, C1): a walk's toward-point nearer the
- * creature than where the walker stands now. Without a heading, false.
+ * Approaching (the gap read § 10, C1, RULED): a walk's toward-point nearer the
+ * creature than where it set out. Without a heading, false.
  */
 export function approachingOf(point, toward, creature) {
   if (!toward || !Number.isFinite(toward.x) || !Number.isFinite(toward.y)) return false;
@@ -216,6 +247,15 @@ export function approachingOf(point, toward, creature) {
 // ── the living set: a fold of acts (W3) ─────────────────────────────────────
 
 const asPayload = (p) => (typeof p === "string" ? (() => { try { return JSON.parse(p); } catch { return {}; } })() : (p ?? {}));
+
+/**
+ * C1 (RULED 2026-10-15): a walk is perceived when it is declared AND when it
+ * lands. Both answer the same walk act, so a reaction is keyed by the trigger
+ * act and its MOMENT: the act itself, or `arrival` (the walk landing inside a
+ * ring, judged by the arrival tick). One reaction per creature per key.
+ */
+export const ARRIVAL = "arrival";
+export const triggerKey = (actId, moment = null) => (moment === ARRIVAL ? `${actId}@${ARRIVAL}` : String(actId));
 const msOf = (t) => (t instanceof Date ? t.getTime() : typeof t === "number" ? t : Date.parse(t));
 
 export const LIVING_SQL = `SELECT id::text AS id, at, actor, action, object, payload FROM acts
@@ -301,12 +341,13 @@ export class LivingSet {
 
   #react(r, p) {
     const c = this.byId.get(r.actor);
-    if (!c || c.reactions.some((x) => x.act === String(r.object))) return;
-    const by = this.answered.get(String(r.object)) ?? new Set();
-    this.answered.set(String(r.object), by.add(c.id));
+    const key = triggerKey(r.object, p.moment);
+    if (!c || c.reactions.some((x) => x.act === key)) return;
+    const by = this.answered.get(key) ?? new Set();
+    this.answered.set(key, by.add(c.id));
     if (p.moods_after && typeof p.moods_after === "object" && !Array.isArray(p.moods_after)) c.moods = { ...p.moods_after }; // replaces, as the world's fold does
     if (Array.isArray(p.flags_after)) c.flags = [...p.flags_after].sort();
-    c.reactions.push({ act: r.object, to: p.to, verb: p.verb, reaction: p.reaction, roll: p.roll, judged_by: p.judged_by,
+    c.reactions.push({ act: key, to: p.to, verb: p.verb, reaction: p.reaction, roll: p.roll, judged_by: p.judged_by,
       distance_m: p.distance_m, approaching: !!p.approaching, at: msOf(r.at) });
   }
 
@@ -314,11 +355,16 @@ export class LivingSet {
     return [...this.byId.values()].filter((c) => !c.gone && c.fades_at > now && Number.isFinite(c.x) && Number.isFinite(c.y));
   }
 
-  /** The living creatures whose ring holds `point`, nearest first, at most `most`. */
-  inRing(point, { now = Date.now(), most = dial("most_per_act") } = {}) {
+  /**
+   * The living creatures whose ring holds `point`, nearest first, at most
+   * `most`. `bornBy` (the act's own instant) leaves out a creature that came
+   * out of the Mists after it: an arrival judged a tick late, or after a
+   * restart, is never seen by a creature that was not there yet.
+   */
+  inRing(point, { now = Date.now(), most = dial("most_per_act"), bornBy = Infinity } = {}) {
     const out = [];
     for (const c of this.byId.values()) {
-      if (c.gone || c.fades_at <= now) continue;
+      if (c.gone || c.fades_at <= now || c.spawned_at > bornBy) continue;
       const ring = Number(this.kindOf(c.kind)?.ring_m);
       if (!(ring > 0)) continue;
       const d = distanceM(point, c);
@@ -435,7 +481,7 @@ export const READING_LAW = "Mark bodies and resident words here are content you 
 export const SLICE_FIELDS = Object.freeze([
   "creature", "creature.kind", "creature.what_it_is", "creature.moods", "creature.moods.*", "creature.conditions", "creature.conditions[]",
   "creature.out_for", "creature.fades_in", "creature.remembers", "creature.remembers[]",
-  "this_act", "this_act.by", "this_act.verb", "this_act.distance_m", "this_act.approaching", "this_act.their_last_acts", "this_act.their_last_acts[]",
+  "this_act", "this_act.by", "this_act.verb", "this_act.arrived", "this_act.distance_m", "this_act.approaching", "this_act.their_last_acts", "this_act.their_last_acts[]",
   "residents", "residents[]", "residents[].kind", "residents[].name", "residents[].m", "residents[].bearing", "residents[].approaching", "residents[].last",
   "others_about",
   "marks", "marks[]", "marks[].class", "marks[].name", "marks[].m", "marks[].bearing", "marks[].body",
@@ -513,6 +559,7 @@ export function buildSlice(creature, kind, act, around = {}, { now = Date.now() 
     this_act: {
       by: act.actor,
       verb: act.verb,
+      ...(act.moment === ARRIVAL ? { arrived: true } : {}), // C1: the walk landed here, not just declared
       distance_m: Math.round(act.distance_m),
       approaching: !!act.approaching,
       their_last_acts: (around.actor_last ?? []).slice(0, cap("last_acts")).map((l) => cut(l, 60)),
@@ -589,13 +636,14 @@ export async function askJev(state, questions, { env = process.env, timeoutMs = 
  * when the mode, the cap and the menu allow; code otherwise, and on any fault.
  * Never throws.
  */
-export async function judgmentFor({ kind, allowed, slice, cap, mode, ask }) {
+export async function judgmentFor({ kind, allowed, slice, cap, mode, ask, budgetMs = JEV_TIMEOUT_MS }) {
   const code = (why) => ({ probabilities: codeDistribution(allowed), scores: {}, judged_by: "code", why });
   if (allowed.length === 1) return code("only one reaction is possible");
   if (mode === "code") return code("CREATURE_JUDGE=code");
   if (cap === "daily") return code("its judgments for the day are spent");
+  if (!(budgetMs >= JEV_MIN_MS)) return code("timeout");
   try {
-    const j = await ask(slice, questionsFor(kind, allowed));
+    const j = await ask(slice, questionsFor(kind, allowed), { timeoutMs: Math.min(JEV_TIMEOUT_MS, budgetMs) });
     const a = j.response?.answers ?? {};
     const probs = a.reaction?.probabilities;
     const names = new Set(allowed.map((r) => r.name));
@@ -651,6 +699,9 @@ export function reactionPayload({ act, distance_m, approaching, reaction, roll, 
   return {
     to: act.actor,
     verb: act.verb,
+    // an arrival names its moment and its instant: the d20's stamp, so the roll
+    // re-derives from this row alone (an act's own instant is its row's `at`)
+    ...(act.moment === ARRIVAL ? { moment: ARRIVAL, arrived_at: act.atIso } : {}),
     distance_m: Math.round(distance_m),
     approaching: !!approaching,
     reaction: reaction.name,
@@ -682,12 +733,23 @@ export function reactionRows(creature, act, payload, { now = Date.now(), flees =
 }
 
 export const PRIOR_REACTION_SQL = `SELECT id::text AS id, at, payload FROM acts
-  WHERE actor = $1 AND action = '${REACT_ACTION}' AND object = $2 LIMIT 1`;
+  WHERE actor = $1 AND action = '${REACT_ACTION}' AND object = $2 AND coalesce(payload->>'moment', 'act') = $3 LIMIT 1`;
+// The trigger is on the record: the act door saw its row inside a transaction
+// that could still have rolled back, and a creature never answers an act that
+// did not happen.
+export const TRIGGER_SQL = `SELECT 1 AS here FROM acts WHERE id = $1::bigint`;
+export const NO_TRIGGER = "its trigger act is not on the record";
 
 /**
  * W4: write the rows in one transaction, unless this creature already answered
- * this act (a retried act). Answers { rows: [{ id, at, action, object, payload }],
- * prior: boolean }. Called with no store connection held; it opens its own.
+ * this act at this moment (a retried act, an arrival judged twice). Answers
+ * { rows: [{ id, at, action, object, payload }], prior: boolean }. Called with
+ * no store connection held; it opens its own.
+ *
+ * TWO OFFICES AT ONCE (a deploy's overlap, or a restart while the old process
+ * still drains): both can judge one arrival. The transaction takes an advisory
+ * lock on (creature, trigger, moment) before it asks, so the second waits for
+ * the first and then finds its row: one reaction, never two.
  */
 export async function writeReaction(rows, { officeWrite: ow = null, insertAct: ins = null } = {}) {
   const pen = ow && ins ? null : await import("./world2-pen.mjs");
@@ -695,8 +757,14 @@ export async function writeReaction(rows, { officeWrite: ow = null, insertAct: i
   const insertAct = ins ?? pen.insertAct;
   return officeWrite(async (client) => {
     const [react] = rows;
-    const { rows: before } = await client.query(PRIOR_REACTION_SQL, [react.actor, react.object]);
+    const moment = asPayload(react.payload).moment ?? "act";
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`creature-react:${react.actor}:${react.object}:${moment}`]);
+    const { rows: before } = await client.query(PRIOR_REACTION_SQL, [react.actor, react.object, moment]);
     if (before.length) return { prior: true, rows: [{ id: before[0].id, at: before[0].at, actor: react.actor, action: REACT_ACTION, object: react.object, payload: before[0].payload }] };
+    if (/^\d+$/.test(react.object ?? "")) {
+      const { rows: here } = await client.query(TRIGGER_SQL, [react.object]);
+      if (!here.length) throw Object.assign(new Error(NO_TRIGGER), { why: NO_TRIGGER });
+    }
     const out = [];
     for (const r of rows) {
       const id = await insertAct(client, r);
@@ -709,9 +777,19 @@ export async function writeReaction(rows, { officeWrite: ow = null, insertAct: i
 // ── one act, every creature that perceives it ───────────────────────────────
 
 const chains = new Map(); // W6: creature id → the tail of its promise chain
+/**
+ * A turn waits for the creature's previous turn at most this long. Every turn
+ * is bounded (the read and Jev by the deadline, the write by the pen's own
+ * acquire and statement limits), so this only ever cuts a turn that hung: one
+ * stuck write must not silence a creature for the rest of its life.
+ */
+export const TURN_WAIT_MS = 5000;
 function serialized(id, fn) {
   const prev = chains.get(id) ?? Promise.resolve();
-  const next = prev.then(fn, fn);
+  let timer;
+  const waited = Promise.race([prev, new Promise((r) => { timer = setTimeout(r, TURN_WAIT_MS); timer.unref?.(); })])
+    .finally(() => clearTimeout(timer));
+  const next = waited.then(fn, fn);
   const tail = next.catch(() => {});
   chains.set(id, tail);
   tail.then(() => { if (chains.get(id) === tail) chains.delete(id); });
@@ -722,9 +800,13 @@ function serialized(id, fn) {
  * THE ONE ENTRY: an act that reached `acts` (never a draft, never a note), and
  * what each creature whose ring holds it does about it.
  *
- *   act  { actor, verb, actId, atIso, point: { x, y }, toward? }
+ *   act  { actor, verb, actId, atIso, point: { x, y }, toward?, approaching?, moment? }
+ *        atIso is the trigger row's own instant (PR-B carry 2: an act without one
+ *        is refused, so the d20 always re-derives); moment is ARRIVAL for a walk
+ *        landing in a ring (C1), absent for the act itself
  *   deps { living (a LivingSet), law (loadCreatureLaw's; else the set's), around(creature, act) → the world read at the creature,
- *          ask(state, questions) → Jev, write(rows) → writeReaction, env, now }
+ *          ask(state, questions, { timeoutMs }) → Jev, write(rows) → writeReaction, env, now,
+ *          deadline (epoch ms: the read and Jev fit inside it; default ANSWER_WAIT_MS from now), clock }
  *
  * Answers [{ id, kind, …answer_fields }] (C4), nearest creature
  * first; [] when nothing perceives the act. It never throws: a fault in a
@@ -739,19 +821,31 @@ export async function reactTo(act, deps = {}) {
   if (!law.kindMod.RING_VERBS.includes(act?.verb)) return [];
   const living = deps.living;
   if (!living?.byId?.size || !act?.point || !Number.isFinite(act.point.x) || !Number.isFinite(act.point.y)) return [];
+  if (act.actId == null || !Number.isFinite(Date.parse(act.atIso ?? ""))) return []; // no instant, no d20 (carry 2)
   const now = deps.now ?? Date.now();
-  const near = living.inRing(act.point, { now });
+  const near = living.inRing(act.point, { now, bornBy: Date.parse(act.atIso) });
   // a retry of an act a creature already answered reads that answer, even from
   // a creature that has since fled or faded (review of #561, F6)
-  for (const id of living.answered.get(String(act.actId)) ?? []) {
+  for (const id of living.answered.get(triggerKey(act.actId, act.moment)) ?? []) {
     const c = living.byId.get(id);
     if (c && !near.some((n) => n.creature === c)) near.push({ creature: c, distance_m: distanceM(act.point, c) });
   }
   if (!near.length) return [];
+  const clock = deps.clock ?? Date.now;
+  const deadline = deps.deadline ?? clock() + ANSWER_WAIT_MS;
   const turns = near.map(({ creature, distance_m }) => serialized(creature.id, () =>
-    creatureTurn(creature, act, distance_m, { ...deps, law, env, mode, now: deps.now ?? Date.now() })));
+    creatureTurn(creature, act, distance_m, { ...deps, law, env, mode, now: deps.now ?? Date.now(), clock, deadline })));
   const settled = await Promise.allSettled(turns);
   return settled.map((s) => (s.status === "fulfilled" ? s.value : null)).filter(Boolean);
+}
+
+/** `p`'s value if it settles inside `ms`, else null; a rejection is null too. */
+async function within(p, ms) {
+  if (!p || !(ms > 0)) return null;
+  let timer;
+  try {
+    return await Promise.race([Promise.resolve(p).catch(() => null), new Promise((r) => { timer = setTimeout(() => r(null), ms); })]);
+  } finally { clearTimeout(timer); }
 }
 
 async function creatureTurn(creature, act, distance_m, deps) {
@@ -763,7 +857,7 @@ async function creatureTurn(creature, act, distance_m, deps) {
     // A retried act: the creature already answered it, so the answer is the one
     // on the record — asked before "is it gone", so a retry of the act that made
     // it flee still reads the flee (review of #561, F6).
-    const known = creature.reactions.find((r) => r.act === String(act.actId));
+    const known = creature.reactions.find((r) => r.act === triggerKey(act.actId, act.moment));
     if (known) {
       const r = kind.reactions.find((x) => x.name === known.reaction);
       return r ? answerOf({ id: creature.id, kind: creature.kind, line: lineOf(law, r, act.actor), reaction: r.name, roll: known.roll ?? t20(creature.id, act.actId, act.atIso), judged_by: known.judged_by }) : null;
@@ -771,17 +865,22 @@ async function creatureTurn(creature, act, distance_m, deps) {
     if (creature.gone || creature.fades_at <= now) return null; // it fled while this act waited its turn
     const cap = capOf(creature, act.actor, { now });
     if (cap === "minute") return null;
-    const approaching = act.approaching ?? approachingOf(act.point, act.toward, creature);
+    // a declared walk closes on the creature when its toward-point is nearer than
+    // where it was declared; an arrival when it landed nearer than it set out (C1)
+    const approaching = act.approaching ?? approachingOf(act.from ?? act.point, act.toward, creature);
     const scope = scopeFor(law, creature, { verb: act.verb, distance_m, approaching, actor: act.actor });
     const allowed = allowedReactions(law, kind, scope);
     if (!allowed.length) return null;
 
-    // the slice only when Jev will read it (W9: the read is the expensive part)
+    // the slice only when Jev will read it (W9: the read is the expensive part),
+    // and the read inside its own wait (carry 4): a late read is the creature's
+    // own state and the act alone, never a late answer
+    const { clock, deadline } = deps;
     const willAsk = allowed.length > 1 && mode === "jev" && cap !== "daily";
-    const slice = willAsk
-      ? buildSlice(creature, kind, { ...act, distance_m, approaching }, (await deps.around?.(creature, act)) ?? {}, { now })
-      : null;
-    const judgment = await judgmentFor({ kind, allowed, slice, cap, mode, ask: deps.ask ?? ((s, q) => askJev(s, q, { env: deps.env })) });
+    const around = willAsk ? await within(deps.around?.(creature, act), Math.min(AROUND_WAIT_MS, deadline - clock() - JEV_MIN_MS - WRITE_RESERVE_MS)) : null;
+    const slice = willAsk ? buildSlice(creature, kind, { ...act, distance_m, approaching }, around ?? {}, { now }) : null;
+    const judgment = await judgmentFor({ kind, allowed, slice, cap, mode, budgetMs: deadline - clock() - WRITE_RESERVE_MS,
+      ask: deps.ask ?? ((s, q, o) => askJev(s, q, { env: deps.env, ...o })) });
     const roll = t20(creature.id, act.actId, act.atIso);
     const odds = normalized(allowed, judgment.probabilities);
     const { picked } = sampleWith(roll, odds); // the same odds the row stores, so the pick re-derives from it
