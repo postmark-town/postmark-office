@@ -143,7 +143,10 @@ const answerOf = (seg) => Object.fromEntries(Object.entries(seg).filter(([k]) =>
 async function ask(serves, args) {
   const [door, read] = serves.split(".");
   assert.ok(door === "town" || door === "household", `a serves pointer names an apex: got "${serves}"`);
-  return callTool(door, { read, ...(args ?? {}) }, ctx);
+  // The segment's `args` are the read's own `args:`. A top-level `handle` is
+  // the actor, never a read's subject (postmark#3589), so spreading them at the
+  // top level would ask town.stamps for the roster.
+  return callTool(door, { read, ...(args ? { args } : {}) }, ctx);
 }
 
 // ── the falsifier ───────────────────────────────────────────────────────────
