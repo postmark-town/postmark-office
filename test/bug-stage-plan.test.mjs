@@ -40,6 +40,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { installActsPen, uninstallActsPen, RECORD_ON } from "./acts-pen-stub.mjs";
 import { OFFICE_ROOT } from "./fixture-paths.mjs";
 import { tempDir } from "./helpers/temp-dir.mjs";
+import { createServer } from "node:http";
 
 Object.assign(process.env, RECORD_ON);
 const { postAtTown, advanceAtTown } = await import("../src/events-store.mjs");
@@ -50,7 +51,7 @@ const WRIGHT = { household: "starforge", handles: new Set(["wright"]) };
 const key = (h) => ({ household: h, handles: new Set([h]) });
 
 // ada and bram keep one house; carol keeps her own. dan and eve are residents no house holds.
-const HOUSES = [{ slug: "the-harbor", ord: 1, residents: ["ada", "bram"] }, { slug: "carols", ord: 2, residents: ["carol"] }];
+const HOUSES = [{ slug: "the-harbor", ord: 1, residents: ["ada", "bram"], accounts: [{ login: "harbor-human", id: 1001 }] }, { slug: "carols", ord: 2, residents: ["carol"] }];
 const ROLL = new Set(["wright", "ada", "bram", "carol", "dan", "eve", "bugcatcher"]);
 
 function bugTables() {
@@ -62,10 +63,26 @@ function bugTables() {
     [/^INSERT INTO posts/i, (q, p) => { const r = Object.fromEntries(PC.map((k, i) => [k, p[i]])); r.fields = asJson(r.fields); posts.set(p[0], r); return { rows: [], rowCount: 1 }; }],
     [/^UPDATE posts SET/i, (q, p) => { Object.assign(posts.get(p[0]), { state: p[8], fields: asJson(p[9]), revised: p[10], last_act: p[11] }); return { rows: [], rowCount: 1 }; }],
     [/FROM posts WHERE id = \$1 AND class = \$2$/i, (q, p) => { const r = posts.get(p[0]); const hit = r && r.class === p[1]; return { rows: hit ? [{ ...r, fields: { ...r.fields } }] : [], rowCount: hit ? 1 : 0 }; }],
+    // POS-649: an earned stage's letter, as the store's town index holds it
+    [/^SELECT json FROM town_letters WHERE id = \$1$/i, (q, p) => (p[0] === ADA_LETTER ? { rows: [{ json: JSON.stringify({ id: ADA_LETTER, from: "ada", to: "wright" }) }], rowCount: 1 } : { rows: [], rowCount: 0 })],
     [/^SELECT id, state, ends FROM posts WHERE id LIKE \$1$/i, (q, p) => { const pre = p[0].replace(/%$/, ""); const rows = [...posts.values()].filter((r) => r.id.startsWith(pre)); return { rows, rowCount: rows.length }; }],
   ];
 }
 function setup() { return installActsPen({ households: HOUSES, also: bugTables() }); }
+
+// POS-649: diagnosed, briefed and fixed each link their work, by the credited
+// resident's household: ada's letter for the first two, a PR by the harbor's
+// account for the fix, served by a GitHub stub.
+const ADA_LETTER = "ada-2026-10-15-to-wright-the-bell";
+const ADA_PR = "https://github.com/postmark-town/postmark-office/pull/77";
+const github = createServer((req, res) => {
+  const hit = req.url === "/repos/postmark-town/postmark-office/pulls/77";
+  res.writeHead(hit ? 200 : 404, { "content-type": "application/json" });
+  res.end(JSON.stringify(hit ? { number: 77, user: { id: 1001, login: "harbor-human" } } : { message: "Not Found" }));
+});
+await new Promise((ok) => github.listen(0, "127.0.0.1", ok));
+process.env.GITHUB_API_URL = `http://127.0.0.1:${github.address().port}`;
+github.unref();   // never holds the run open; closing it in an after hook ran early under --test-name-pattern
 test.afterEach(() => uninstallActsPen());
 
 /** Post a bug by `who` and confirm it by a hand; returns its id. */
@@ -258,7 +275,7 @@ test("5 · the pass refuses a town whose stamp-mint has no stage grammar, before
 test("6 · (POS-298) the critter changes no amount: the plan for a fixed bug is the same with and without its name", async () => {
   setup();
   const r = await postAtTown({ class: "bug", title: "The bell rings twice", body: "It broke." }, key("carol"), { now: NOW, roll: ROLL });
-  for (const [to, more] of [["diagnosed", {}], ["briefed", { grade: "heavy" }], ["fixed", { size: "L", critter: "Double Dinger" }]])
+  for (const [to, more] of [["diagnosed", { link: ADA_LETTER }], ["briefed", { grade: "heavy", link: ADA_LETTER }], ["fixed", { size: "L", critter: "Double Dinger", link: ADA_PR }]])
     await advanceAtTown({ post: r.post.id, to, credit: "ada", ...more }, WRIGHT, { now: NOW, roll: ROLL });
   const facts = await storeFacts();
   const fixedAct = facts.acts.find((a) => (typeof a.payload === "string" ? JSON.parse(a.payload) : a.payload).to === "fixed");
