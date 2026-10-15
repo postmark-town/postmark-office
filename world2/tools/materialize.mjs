@@ -603,8 +603,9 @@ export async function retireMarks(q, { slugs, windowId, cause = "settlement-unpu
  * Called by the retire step, in its transaction, right after `retireMarks`, for
  * the slugs that call newly retired (never `already_retired`: a re-run writes
  * nothing twice). Each draft is the retired row as it last stood: its kind,
- * body, place, parent and declared fields, claimed by its owner, in its owner's
- * house, at ✦0. Staked or put forward, it goes pending, and the clearing's
+ * body, place, parent and declared fields, claimed by its owner, in the house
+ * the mark stood in (`marks.household`), at ✦0. 076's trigger binds all of it
+ * in SQL: the house, the window of the take, and once per take. Staked or put forward, it goes pending, and the clearing's
  * step 1 revives the same row ("a mark keeps one id for life").
  *
  * THE PEN: `clearing_job`, under 076's narrowing (a draft, ✦0, naming in
@@ -639,16 +640,18 @@ export async function returnToDrafts(q, { slugs, windowId, cause = "settlement-u
   try {
     for (const slug of [...new Set(slugs.map((s) => String(s)))].sort()) {
       const { rows: [m] } = await q(
-        `SELECT id::text, slug, kind, owner, body, geometry, bbox::text AS bbox, data, parent::text AS parent
+        `SELECT id::text, slug, kind, owner, household, body, geometry, bbox::text AS bbox, data, parent::text AS parent
            FROM marks WHERE slug = $1 AND status = 'retired' AND retired_cause = $2`, [slug, cause]);
       if (!m) { unreturned.push({ slug, why: "no mark retired by the sweep carries this slug" }); continue; }
-      let household;
-      try { household = await ownerHouseholdFor(q, m.owner); }
+      // Its author must be on the roll: only the author can put the draft forward.
+      try { await ownerHouseholdFor(q, m.owner); }
       catch (err) {
         if (err?.refusal !== REFUSALS.NO_SUCH_HOUSE) throw err;
-        unreturned.push({ slug, why: `the town's roll does not name ${m.owner}, so the mark has no household's drafts to go back to; it stays retired, deleted nowhere` });
+        unreturned.push({ slug, why: `the town's roll does not name ${m.owner}, so no one could put the draft forward; it stays retired, deleted nowhere` });
         continue;
       }
+      const household = m.household;
+      if (!household) { unreturned.push({ slug, why: "the mark names no household to go back to; it stays retired, deleted nowhere" }); continue; }
       const keys = await sessionKeysVia(via, household);
       if (!keys.includes(household)) keys.unshift(household);
       await q("SELECT set_config('app.household_keys', $1, true)", [keys.join(",")]);

@@ -37,7 +37,10 @@ const JOB = join(ROOT, "world2", "tools", "clearing-job.mjs");
 const TOWN_SHA = "t".repeat(40);
 const LAW_SHA = "l".repeat(40);
 const WIN = 240;
-const OPENED = new Date(Date.UTC(2026, 9, 6, 18) + 12 * 3600e3); // the open window's opening: the settlement that took it
+// The open window's opening, as prod's windows open: 05:45:40Z, fourteen minutes
+// and twenty seconds before the 06:00Z settlement that took the mark. A window
+// opening on the dot would hide which of the two the note names (review 4a).
+const OPENED = new Date(Date.UTC(2026, 9, 7, 5, 45, 40));
 
 const store = await startStore({ db: "taken_to_drafts_test" });
 after(() => store.stop());
@@ -180,27 +183,49 @@ test("AN OWNER THE ROLL DOES NOT NAME: the mark is retired, named unreturned, an
   assert.equal((await draftsOf("ghost/the-lantern")).length, 0);
 });
 
-test("THE PEN IS NARROW (076): clearing_job may plant only the return of a mark the sweep retired, by its owner, in the house it declared", { skip }, async () => {
+test("THE PEN IS NARROW (076): clearing_job may plant only the return of a mark the sweep retired, by its owner, in the mark's own house and window, once per take", { skip }, async () => {
   await seed();
-  assert.equal(retire(["rei/the-garage"]).code, 0);
+  // The take, set by hand so no return has been written yet (the control must be lawful):
+  // the garage retired by the sweep at WIN; the lamp retired by marks-ingest at WIN;
+  // the lantern, standing again with an old take's cause and window (a revive's shape,
+  // its window kept so that only the status clause stands between it and the pen).
+  await owner(async (c) => {
+    await c.query("UPDATE marks SET status = 'retired', retired_window = $1, retired_cause = 'settlement-unpublish' WHERE id = $2", [WIN, IDS.garage]);
+    await c.query("UPDATE marks SET status = 'retired', retired_window = $1, retired_cause = 'marks-ingest' WHERE id = $2", [WIN, IDS.lamp]);
+    await c.query("UPDATE marks SET status = 'standing', retired_window = $1, retired_cause = 'settlement-unpublish', owner = 'rei' WHERE id = $2", [WIN, IDS.ghost]);
+  });
   const c = await store.connect("clearing_job");
-  const tryInsert = async ({ slug, claimant, household, mark, keys = household, stake = 0 }) => {
+  const garage = { slug: "rei/the-garage", claimant: "rei", household: "hh:starforge", mark: IDS.garage };
+  const plant = async ({ slug, claimant, household, mark, keys = household, stake = 0, window = WIN, said = window }, { keep = false } = {}) => {
     await c.query("BEGIN");
     try {
       await c.query("SELECT set_config('app.household_keys', $1, true)", [keys]);
       await c.query(
         `INSERT INTO claims (window_id, slug, class, claimant, household, status, body, geometry, stake, data)
          VALUES ($1, $2, 'sited', $3, $4, 'draft', 'x', '{}', $5, $6)`,
-        [WIN, slug, claimant, household, stake, JSON.stringify({ _returned: { mark, window: WIN, cause: "settlement-unpublish" } })]);
+        [window, slug, claimant, household, stake, JSON.stringify({ _returned: { mark, window: said, cause: "settlement-unpublish" } })]);
+      if (keep) await c.query("COMMIT");
       return "inserted";
-    } catch (e) { return e.message; } finally { await c.query("ROLLBACK"); }
+    } catch (e) { return e.message; } finally { await c.query("ROLLBACK").catch(() => {}); }   // after a COMMIT, a no-op
   };
+  const REFUSED = /clearing_job may insert only/;
   try {
-    assert.equal(await tryInsert({ slug: "rei/the-garage", claimant: "rei", household: "hh:starforge", mark: IDS.garage }), "inserted", "the control: the lawful return");
-    assert.match(await tryInsert({ slug: "sable/the-lamp", claimant: "sable", household: "hh:rabbit", mark: IDS.lamp }), /clearing_job may insert only/, "a STANDING mark is not returned");
-    assert.match(await tryInsert({ slug: "rei/the-garage", claimant: "sable", household: "hh:rabbit", mark: IDS.garage }), /clearing_job may insert only/, "only to its own author");
-    assert.match(await tryInsert({ slug: "rei/the-garage", claimant: "rei", household: "hh:starforge", mark: IDS.garage, stake: 1 }), /clearing_job may insert only/, "at ✦0");
-    assert.match(await tryInsert({ slug: "rei/the-garage", claimant: "rei", household: "hh:starforge", mark: IDS.garage, keys: "hh:rabbit" }), /row-level security/, "in the house the transaction declared");
+    assert.equal(await plant(garage), "inserted", "the control: the lawful return");
+    assert.match(await plant({ ...garage, household: "hh:rabbit" }), REFUSED,
+      "the reviewer's plant: another house the pen declared itself (review-220-577 2b read \"inserted\")");
+    assert.match(await plant({ ...garage, keys: "hh:rabbit,hh:starforge", household: "hh:rabbit" }), REFUSED, "and with the mark's own house declared beside it");
+    assert.match(await plant({ ...garage, claimant: "sable" }), REFUSED, "only to its own author");
+    assert.match(await plant({ ...garage, stake: 1 }), REFUSED, "at ✦0");
+    assert.match(await plant({ slug: "sable/the-lamp", claimant: "sable", household: "hh:rabbit", mark: IDS.lamp }), REFUSED,
+      "a mark marks-ingest retired is not a take (the cause clause)");
+    assert.match(await plant({ slug: "ghost/the-lantern", claimant: "rei", household: "hh:starforge", mark: IDS.ghost }), REFUSED,
+      "a mark standing again keeps its old cause, and is never returned (the status clause)");
+    assert.match(await plant({ ...garage, slug: "rei/the-garage-again" }), REFUSED, "the claim carries the mark's own slug (the slug clause)");
+    assert.match(await plant({ ...garage, window: WIN - 1, said: WIN - 1 }), REFUSED, "a return belongs to its take's window");
+    assert.match(await plant({ ...garage, said: WIN - 1 }), REFUSED, "and says which take it returns");
+    assert.match(await plant({ ...garage, keys: "hh:rabbit" }), /row-level security/, "in a transaction that declared the house");
+    assert.equal(await plant(garage, { keep: true }), "inserted", "the first return, kept");
+    assert.match(await plant(garage), REFUSED, "a second return of the same take is refused");
   } finally { await c.end(); }
 });
 
@@ -230,13 +255,13 @@ test("G3, THE NOTE: listed for the house that owns it, for 7 days, until it is p
   // a mark marks-ingest retired (a file-side change on main) is not a take
   await owner((c) => c.query("UPDATE marks SET status = 'retired', retired_window = $1, retired_cause = 'marks-ingest' WHERE id = $2", [WIN, IDS.ghost]));
   const ask = async (handles, now) => leftTheWorldRows((await read(LEFT_THE_WORLD_SQL, [handles, now.toISOString(), LEFT_THE_WORLD_DAYS])));
-  const at = OPENED.toISOString();
+  const at = "2026-10-07T06:00:00.000Z";   // the settlement, never the window's opening
 
   const now = new Date(OPENED.getTime() + 3600e3);
   assert.deepEqual(await ask(["rei", "ghost"], now), [{
-    mark: "rei/the-garage", kind: "sited", body: "rei/the-garage, as it stood.", left_at: at,
+    mark: "rei/the-garage", kind: "sited", by: "rei", body: "rei/the-garage, as it stood.", left_at: at,
     note_until: new Date(OPENED.getTime() + 7 * 24 * 3600e3).toISOString(),
-    note: `rei/the-garage had no stamps behind it, so it left the world at the ${at} settlement. It's back in your drafts. Stake it, or leave it again with a stamp, to bring it back.`,
+    note: "rei/the-garage had no stamps behind it, so it left the world at the Oct 7, 2:00 am EDT settlement. It's back in your household's drafts, and its author, rei, can stake it, or leave it again with a stamp, to bring it back.",
     act: 'world { do: "stake", args: { mark: "rei/the-garage", stamps: 1 } }',
   }], "the house's own take only: not sable's lamp, not the ingest's lantern");
   assert.deepEqual((await ask(["rei"], new Date(OPENED.getTime() + 7 * 24 * 3600e3 + 1000))).map((r) => r.mark), [], "gone after 7 days");

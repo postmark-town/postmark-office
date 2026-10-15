@@ -37,12 +37,20 @@
 --     `retired_cause = 'settlement-unpublish'`, carrying this claim's slug,
 --     whose OWNER is this claim's claimant (a mark goes back to its own
 --     author's drafts, and the clearing's revive then asks the same thing:
---     clearing-job.mjs § step 1, "only its author may leave it again").
+--     clearing-job.mjs § step 1, "only its author may leave it again");
+--   · the claim's `household` IS the mark's (`m.household`, the house it
+--     stood in: G1's "its household"), so the pen cannot choose the house;
+--   · the claim is written in the window the mark was retired at
+--     (`m.retired_window = window_id`, and `data._returned.window` says so):
+--     a return is part of its take, never a later act;
+--   · no claim already returns this mark from this take: once per take.
 --
--- And the row policy holds it to the household the transaction declared, as
--- 024 holds the door's drafts: `household = ANY(app.household_keys)`. So the
--- pen cannot plant a draft in a house it did not name, and cannot plant one at
--- all outside a declared transaction.
+-- And the row policy holds it to a household the transaction declared, as 024
+-- holds the door's drafts: `household = ANY(app.household_keys)`, so it cannot
+-- plant one at all outside a declared transaction. The binding to the mark's
+-- own house is the trigger's, in SQL, and does not rest on what the pen
+-- declares (review-220-577, finding 2b: with only the policy, a return planted
+-- into another house it declared read "inserted").
 --
 -- ── WHAT THIS DOES NOT CHANGE ───────────────────────────────────────────────
 --
@@ -94,16 +102,22 @@ BEGIN
      AND NEW.data IS NOT NULL AND NEW.data ? '_carried_by' THEN
     RETURN NEW;
   END IF;
-  -- 076: a taken mark, returned to its author's drafts
+  -- 076: a taken mark, returned to its author's drafts, in its own house, once per take
   IF NEW.status = 'draft' AND NEW.stake = 0 AND NEW.supersedes IS NULL
      AND NEW.data IS NOT NULL AND jsonb_typeof(NEW.data -> '_returned') = 'object'
      AND EXISTS (SELECT 1 FROM marks m
                   WHERE m.id::text = NEW.data -> '_returned' ->> 'mark'
                     AND m.slug = NEW.slug AND m.owner = NEW.claimant
-                    AND m.status = 'retired' AND m.retired_cause = 'settlement-unpublish') THEN
+                    AND NEW.household = m.household
+                    AND m.status = 'retired' AND m.retired_cause = 'settlement-unpublish'
+                    AND m.retired_window = NEW.window_id
+                    AND NEW.data -> '_returned' ->> 'window' = m.retired_window::text
+                    AND NOT EXISTS (SELECT 1 FROM claims c
+                                     WHERE c.data -> '_returned' ->> 'mark' = m.id::text
+                                       AND c.data -> '_returned' ->> 'window' = m.retired_window::text)) THEN
     RETURN NEW;
   END IF;
-  RAISE EXCEPTION 'claims: clearing_job may insert only a carried mark''s claim (status locked, superseding a standing mark, data._carried_by naming the move: POS-441) or a taken mark''s return to its author''s drafts (status draft, stake 0, data._returned naming the mark the sweep retired: WLD-51)';
+  RAISE EXCEPTION 'claims: clearing_job may insert only a carried mark''s claim (status locked, superseding a standing mark, data._carried_by naming the move: POS-441) or a taken mark''s return to its author''s drafts, once, in its own house and window (status draft, stake 0, data._returned naming the mark the sweep retired: WLD-51)';
 END $$;
 
 UPDATE registry SET ruling = ruling || ' + 076: clearing_job returns a mark the sweep took to its author''s drafts (WLD-51 G1, data._returned), narrowed by trigger and by app.household_keys; marks.retired_cause names the door a mark left by (G3)'

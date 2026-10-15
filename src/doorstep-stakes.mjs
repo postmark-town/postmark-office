@@ -139,12 +139,37 @@ export const stakeEnvelope = (mark) => `world { do: "stake", args: { mark: "${ma
 
 export const LEFT_THE_WORLD_DAYS = 7;
 
-/** The household's note for one taken mark. The settlement is named by its instant. */
-export const leftTheWorldNote = (mark, at) =>
-  `${mark} had no stamps behind it, so it left the world at the ${at} settlement. It's back in your drafts. Stake it, or leave it again with a stamp, to bring it back.`;
+/**
+ * THE SETTLEMENT THAT TOOK IT, NAMED AS A RESIDENT READS A TIME (review-220-577
+ * 4a). The retire step runs in the window the settlement opened, and windows
+ * open at 05:45:40 / 17:45:40Z while the settlement runs at 06:00 / 18:00Z, so
+ * the window's opening is a time no settlement ran. The settlement is the next
+ * one on the sweep's own clock (world-forecast.mjs § nextSettlement), asked a
+ * millisecond before the opening so a window that opens on the dot names its
+ * own settlement. In the town's time, in words: "Oct 15, 2:00 pm EDT".
+ */
+export function settlementOfWindow(opensAt) {
+  const t = opensAt instanceof Date ? opensAt.getTime() : Date.parse(String(opensAt));
+  return Number.isFinite(t) ? nextSettlement(new Date(t - 1)) : null;
+}
+export function townWhen(iso, tz = process.env.TOWN_TZ ?? "America/New_York") {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: tz, month: "short", day: "numeric", hour: "numeric", minute: "2-digit", hour12: true, timeZoneName: "short" })
+    .formatToParts(new Date(iso));
+  const p = Object.fromEntries(parts.map((x) => [x.type, x.value]));
+  return `${p.month} ${p.day}, ${p.hour}:${p.minute} ${String(p.dayPeriod).toLowerCase()} ${p.timeZoneName}`;
+}
+
+/**
+ * The household's note for one taken mark. Every handle of the house reads it,
+ * and only the mark's AUTHOR can put the returned draft forward (the stake door
+ * finds a draft by its claimant: world2-claims.mjs § promoteDraftOnStake), so the
+ * note names who can (review-220-577 4b).
+ */
+export const leftTheWorldNote = (mark, by, when) =>
+  `${mark} had no stamps behind it, so it left the world at the ${when} settlement. It's back in your household's drafts, and its author, ${by}, can stake it, or leave it again with a stamp, to bring it back.`;
 
 export const LEFT_THE_WORLD_SQL = `
-  SELECT m.slug, m.kind, m.body, w.opens_at
+  SELECT m.slug, m.kind, m.owner, m.body, w.opens_at
     FROM marks m JOIN windows w ON w.id = m.retired_window
    WHERE m.status = 'retired' AND m.retired_cause = 'settlement-unpublish'
      AND m.owner = ANY($1)
@@ -156,9 +181,13 @@ export const LEFT_THE_WORLD_SQL = `
 /** The rows, pure: `found` is LEFT_THE_WORLD_SQL's rows. */
 export function leftTheWorldRows(found = []) {
   return (found ?? []).map((r) => {
-    const at = r.opens_at instanceof Date ? r.opens_at.toISOString() : String(r.opens_at);
-    const until = new Date(Date.parse(at) + LEFT_THE_WORLD_DAYS * 24 * 3600e3).toISOString();
-    return { mark: r.slug, kind: r.kind ?? null, body: r.body ?? null, left_at: at, note_until: until, note: leftTheWorldNote(r.slug, at), act: stakeEnvelope(r.slug) };
+    const opened = r.opens_at instanceof Date ? r.opens_at.getTime() : Date.parse(String(r.opens_at));
+    const at = settlementOfWindow(r.opens_at);
+    // the row leaves the list 7 days after the window opened (LEFT_THE_WORLD_SQL)
+    const until = new Date(opened + LEFT_THE_WORLD_DAYS * 24 * 3600e3).toISOString();
+    const by = r.owner ?? String(r.slug).split("/")[0];
+    return { mark: r.slug, kind: r.kind ?? null, by, body: r.body ?? null, left_at: at, note_until: until,
+      note: leftTheWorldNote(r.slug, by, at ? townWhen(at) : "last"), act: stakeEnvelope(r.slug) };
   });
 }
 
