@@ -22,8 +22,8 @@
 // 2026-10-14 superseded "this crossing" there), applied here so the two reads
 // of one resident's activity cannot disagree.
 //
-// Creatures join when the creature class lands (WLD-46): an id under
-// `creature/` answers "not yet", by name.
+// A creature (`creature:<kind>-<crossing>-<i>`) is answered by
+// creatures-read.mjs § investigateCreature (POS-637 PR-C).
 
 import { PUBLIC_ACTS, ACTIVE_WINDOW_MS, doingOf, distanceOf } from "./world-read-v2.mjs";
 
@@ -33,13 +33,15 @@ export const RECENT_CAP = 10;
 async function placeRows(placeMarks, p) {
   return (await Promise.resolve(placeMarks({ x: p.x, y: p.y })).catch(() => null)) ?? {};
 }
-export const CREATURE_PREFIX = "creature/";
+// A creature's id is `creature:<kind>-<crossing>-<i>` (WLD-56 W8; the world's
+// tools/creatures.mjs § ID_PREFIX). The colon keeps it apart from a mark's `<by>/<slug>`.
+export const CREATURE_PREFIX = "creature:";
 
 export const RECENT_SQL = `SELECT action, at, at_anchor, at_dx, at_dy FROM acts
   WHERE actor = $1 AND action = ANY($2::text[]) AND at > now() - make_interval(secs => $3)
   ORDER BY id DESC LIMIT $4`;
 
-/** What kind of thing an investigate: names: a resident, a creature (not yet), or a mark (that is mark:'s). */
+/** What kind of thing an investigate: names: a resident, a creature, or a mark (that is mark:'s). */
 export function entityKindOf(value) {
   const v = String(value ?? "").trim();
   if (!v) return { kind: "none" };

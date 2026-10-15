@@ -191,6 +191,22 @@ export function whoBlock(crowd = [], active = new Map(), { nowMs = Date.now(), u
   return out;
 }
 
+/**
+ * WHO WITH THE CREATURES (POS-637 PR-C; C6, Darko 2026-10-15 12:09): a living
+ * creature within presence's radius joins `active` by distance, the block
+ * keeps its own cap, and the overflow is counted in `more_active`. The rows
+ * are creatures-read.mjs § creaturesInWho's. No creature, the block unchanged.
+ */
+export function withCreaturesInWho(who, creatures, { cap = ACTIVE_CAP } = {}) {
+  if (!who || who.unavailable || !Array.isArray(who.active) || !creatures?.length) return who;
+  const metres = (r) => (Number.isFinite(r.m) ? r.m : Number.isFinite(r.km) ? r.km * 1000 : Infinity);
+  const all = [...who.active, ...creatures].map((r, i) => ({ r, i })).sort((a, b) => metres(a.r) - metres(b.r) || a.i - b.i).map(({ r }) => r);
+  const { active, more_active: more = 0, ...rest } = who;
+  const shown = all.slice(0, cap);
+  const over = all.length - shown.length + (Number(more) || 0);
+  return { active: shown, ...(over > 0 ? { more_active: over } : {}), ...rest };
+}
+
 /** NOW.HAPPENED: the apex's happened block, said as a glance (its shelves trimmed, never invented). */
 export function happenedGlance(h, { sinceCrossing } = {}) {
   if (!h) return { since: `crossing ${sinceCrossing}`, unavailable: "the delta is not read at this office" };
@@ -268,7 +284,7 @@ export function heardBlock(voices = []) {
  * the Mists where you stand in them. Null when nothing is. `markOf` gives a
  * place or a destination as { id, name, body }: a mark shown is shown whole.
  */
-export function happeningBlock({ events = [], departures = null, mists = null, markOf = () => null } = {}) {
+export function happeningBlock({ events = [], departures = null, mists = null, markOf = () => null, creatures = [] } = {}) {
   const rows = [];
   for (const e of events) {
     const place = e.place?.mark ? markOf(e.place.mark) : null;
@@ -281,6 +297,8 @@ export function happeningBlock({ events = [], departures = null, mists = null, m
   }
   if (mists && (mists.in_wall || mists.thickness > 0))
     rows.push({ what: "the Mists", kind: "emission", note: mists.in_wall ? "you stand in the wall: arm's reach, and walking slows to nothing" : "you stand in their fringe: sight is short and walking slows" });
+  // the creatures' answers within reach, and the nearest out at the edge (POS-637 PR-C; C3, C6)
+  for (const c of creatures ?? []) rows.push(c);
   return rows.length ? rows : null;
 }
 
@@ -377,13 +395,15 @@ export function shapeV2(p) {
     happened: happenedGlance(p.happened ? { ...p.happened, to_you: toYouWhole(p.happened.to_you, whole) } : p.happened, { sinceCrossing: p.sinceCrossing }),
   };
   const markOf = (id) => p.marks?.get(id) ?? null;
-  const happening = happeningBlock({ events: p.events, departures: p.departures, mists: p.mists, markOf });
+  const happening = happeningBlock({ events: p.events, departures: p.departures, mists: p.mists, markOf, creatures: p.creatures?.happening });
   const out = {
     you,
     now,
     view: viewBlock(p.viewRows),
     // presence off or failed: say so, never an empty room (presence's own rule: absence ≠ nobody)
-    who: p.presenceUnavailable ? { unavailable: p.presenceUnavailable } : whoBlock(p.crowd, p.active, { nowMs: p.nowMs, unavailable: p.activeUnavailable, whole: p.deep?.block === "who" ? p.deep : null }),
+    who: p.presenceUnavailable ? { unavailable: p.presenceUnavailable }
+      : withCreaturesInWho(whoBlock(p.crowd, p.active, { nowMs: p.nowMs, unavailable: p.activeUnavailable, whole: p.deep?.block === "who" ? p.deep : null }),
+        p.deep?.block === "who" ? null : p.creatures?.who),
     heard: p.heard == null ? { unavailable: "earshot is not read on this path; read: \"say\" hears the room" } : heardBlock(p.heard),
     ...(happening ? { happening_here: happening } : {}),
     // the class layer unreadable: say so, as v1's law does, never an empty can (review-555 § 1)

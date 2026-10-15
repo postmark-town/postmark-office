@@ -64,7 +64,7 @@ export const EXPLAIN = Object.freeze({
 
     who: row("the living things in sight; active = acted in the last 12 hours; quiet ones are counted, not listed", 'world { read: "who" }', "live",
       "A resident's public acts are readable about them (LOGOS § The privacy scope): a walk, an entry, a take or gift, a mark, a stake, and the fact of a say, never its words."),
-    "who.active": row("who near you acted in the last 12 hours, nearest first, with what they did last", 'world { read: "who" }', "live"),
+    "who.active": row("who near you acted in the last 12 hours, nearest first, with what they did last; a creature out of the Mists within reach is one of them (kind: creature)", 'world { read: "who" }', "live"),
     "who.more_active": row("how many more active neighbours there are than the glance lists", 'world { read: "who" }', "live"),
     "who.around_but_quiet": row("everyone else within reach: counted, with the nearest few named", 'world { read: "who" }', "live"),
     "who.active_unavailable": row("why who acted could not be read this time (the crowd is still counted)", 'world { read: "who" }', "live"),
@@ -74,7 +74,7 @@ export const EXPLAIN = Object.freeze({
     heard: row("the last few sounds in earshot, newest last; each is cut at 140 characters", 'world { read: "say" }', "live",
       "Looking does not make you a listener: only read: \"say\" marks you present in the room."),
     "heard.unavailable": row("why earshot was not read on this path", 'world { read: "say" }', "live"),
-    happening_here: row("events on now, departures from here, the Mists where you stand in them", 'world { read: "happening" }', "live"),
+    happening_here: row("events on now, departures from here, the Mists where you stand in them, what a creature within reach just did, and the nearest creature out at the edge", 'world { read: "happening" }', "live"),
 
     can: row("what you can do from here, grouped by intent; each act's full law is a read away", 'world { read: "<act>" }', "settled"),
     "can.*": row("the acts for one intent, each with what it does in one line", 'world { read: "<act>" }', "settled"),
@@ -87,8 +87,8 @@ export const EXPLAIN = Object.freeze({
 
     focus: row("the close look you asked for with mark:", 'mark: "<id>", depth: 2', "settled"),
     "focus.*": row("one part of the close look: the mark's record, what stands in it, its receipt", 'mark: "<id>", depth: 2', "settled"),
-    found: row("the marks your find: matched, best first", 'find: "<q>", find_offset: <n>', "settled"),
-    investigated: row("the close look at a living thing you asked for with investigate:: where they are, their newest public acts, what they carry", 'world { investigate: "<handle>" }', "live",
+    found: row("the marks your find: matched, best first, and the living creatures it named (creatures), nearest first", 'find: "<q>", find_offset: <n>', "settled"),
+    investigated: row("the close look at a living thing you asked for with investigate:: where they are, their newest public acts, what they carry; for a creature, its state and its newest reactions with their odds", 'world { investigate: "<handle>" }', "live",
       "Public acts only: a say is named, never its words, and a note to self never shows (LOGOS § The privacy scope)."),
     "investigated.*": row("one part of the close look at a living thing", 'world { investigate: "<handle>" }', "live"),
     "found.*": row("one part of the find: its hits, and how to page them", 'find: "<q>", find_offset: <n>', "settled"),
