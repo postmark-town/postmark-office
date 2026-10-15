@@ -1016,6 +1016,19 @@ test("F7c5 · THE MORNING PAGE DID NOT FATTEN — the doorstep bundle is byte-id
   //   full  21974 -> 21905 (-69, -0.31%) = stakes.rule -69
   //   slim  19467 -> 19467 (0)
   //
+  // ⚠ AND RE-CAPTURED A FIFTEENTH TIME, 2026-10-15 (lane plumb-wld51, WLD-51
+  // part 3), because the page dropped bodies: every stakes row named a mark and
+  // left out what it says. Darko, 2026-10-14 22:33: "There's a reason why there
+  // are 150 characters ... We include them in reads." Save size with fewer
+  // marks, never by losing bodies. Diffed leaf by leaf BEFORE the capture, on
+  // CI-shaped clones (suite-clones.sh's fetch at the pins, world daef8487, town
+  // 5efee017): against the fourteenth capture, 1063 -> 1115 paths, NONE removed
+  // or changed, 52 added, and they are exactly `stakes.rows.N.body` for the 26
+  // rows on each skin. The page grows by the bodies and by nothing else.
+  //
+  //   full  21905 -> 24972 (+3067, +14.0%) = 26 bodies
+  //   slim  19467 -> 22534 (+3067, +15.8%) = the same 26 bodies
+  //
   // So the assertion below is the one that actually carries the promise, and it
   // is stated separately so a future regeneration cannot quietly absorb a card:
   assert.equal(JSON.stringify(now).includes('"card"'), false,

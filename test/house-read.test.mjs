@@ -302,6 +302,15 @@ test("NEEDS-YOU: every row names its cause, and a key ask never carries its co-s
     for (const row of n[group].rows) assert.ok(typeof row.cause === "string" && row.cause.length > 10, `${group} row names its cause`);
 });
 
+test("NEEDS-YOU (WLD-51 part 3): an at-risk row carries the stakes row whole, its mark's body included", async () => {
+  const { readers } = worldReaders();
+  readers.stakesFor = async () => ({ next_settlement: { at: "2026-09-28T00:00:00.000Z" }, count: 1, at_risk: 1,
+    rows: [{ mark: "r001/shed", kind: "sited", body: "A shed of salvaged boards, door on a leather hinge.", class: "commons", escrow: 0, at_risk: true, act: 'world { do: "stake" }' }] });
+  const key = { household: "fixture", handles: new Set(["r000", "r001"]) };
+  const n = await needsYou({}, ctx({ readers, key }));
+  assert.equal(n.stakes_at_risk.rows[0].body, "A shed of salvaged boards, door on a leather hinge.");
+});
+
 test("NEEDS-YOU, G3 (WLD-51, Darko 2026-10-15): a mark the settlement took is listed with the stakes segment's own note, and counts", async () => {
   const { readers } = worldReaders();
   const note = "r000/kite had no stamps behind it, so it left the world at the Oct 15, 2:00 pm EDT settlement. It's back in your household's drafts, and its author, r000, can stake it, or leave it again with a stamp, to bring it back.";
