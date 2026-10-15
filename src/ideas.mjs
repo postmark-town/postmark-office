@@ -219,6 +219,8 @@ export function judgeAward(fields, roll, { used = new Set(), isMeep = () => fals
     throw refuse(422, "label names what the award is for", "label: lowercase letters, digits and -, at most 40 — e.g. design, the-map-piece", { field: "label" });
   if (PAID_STAGES.includes(label))
     throw refuse(422, `"${label}" is a bug's stage, and an award's label is never one`, `the ledger reads post:<id>/${label} as a bug's stage pay; name the award something else`, { field: "label" });
+  if (/^(diagnosed|briefed|fixed)-recredit$/.test(label))
+    throw refuse(422, `"${label}" is a bug stage's correction, and an award's label is never one`, `the town's ledger reads post:<id>/${label} as a stage's recredit (POS-649); name the award something else`, { field: "label" });
   if (used.has(label)) throw refuse(409, `"${label}" is already awarded on this idea`, "one award per label per idea: name this one differently", { field: "label" });
   return { to, stamps: n, label, ...(fields.note !== undefined ? { note: judgeNote(fields.note) } : {}) };
 }

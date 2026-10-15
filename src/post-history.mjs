@@ -27,8 +27,8 @@
 // different chain, and the memo starts again from the top. Each office process
 // (the main one, each read worker) keeps its own.
 
-import { ACT_POST, ACT_ADVANCE, ACT_CLOSE, ACT_HOST, ACT_CANCEL, EVENT_CLASS, STATE_ANNOUNCED, STATE_CANCELLED } from "./events.mjs";
-import { BUG_CLASS, bugHistoryOf, stagePaidOf } from "./bugs.mjs";
+import { ACT_POST, ACT_ADVANCE, ACT_RECREDIT, ACT_CLOSE, ACT_HOST, ACT_CANCEL, EVENT_CLASS, STATE_ANNOUNCED, STATE_CANCELLED } from "./events.mjs";
+import { BUG_CLASS, bugHistoryOf, stagePaidOf, recreditPaidOf } from "./bugs.mjs";
 import { IDEA_CLASS, ideaHistoryOf, ideaAwardsOf, awardPaidOf, ACT_AWARD } from "./ideas.mjs";
 import { QUEST_CLASS, STATE_OPEN, STATE_CLOSED } from "./quests.mjs";
 
@@ -41,6 +41,10 @@ const POST_LINES_LIKE = "%· for: post:%";
 export function postLineOf(canonical) {
   const s = stagePaidOf(canonical);
   if (s) return { post: s.post, part: s.stage, handle: s.handle, n: s.n };
+  // A stage's correction (POS-649) before the award: its `<stage>-recredit`
+  // segment would otherwise read as an award's label.
+  const r = recreditPaidOf(canonical);
+  if (r) return { post: r.post, part: `${r.stage}-recredit`, handle: r.handle, n: r.n };
   const a = awardPaidOf(canonical);
   return a ? { post: a.post, part: a.label, handle: a.handle, n: a.n } : null;
 }
@@ -94,7 +98,7 @@ export async function postPaymentsVia(client) {
  * itself (`revised`, and its fields), and every revision stays in the act log.
  */
 export const HISTORY_ACTIONS = Object.freeze({
-  [BUG_CLASS]: Object.freeze([ACT_POST, ACT_ADVANCE]),
+  [BUG_CLASS]: Object.freeze([ACT_POST, ACT_ADVANCE, ACT_RECREDIT]),
   [IDEA_CLASS]: Object.freeze([ACT_POST, ACT_ADVANCE, ACT_AWARD]),
   [EVENT_CLASS]: Object.freeze([ACT_HOST, ACT_POST, ACT_CANCEL, ACT_CLOSE]),
   [QUEST_CLASS]: Object.freeze([ACT_POST, ACT_CLOSE]),

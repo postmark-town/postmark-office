@@ -63,20 +63,31 @@ export async function githubAuthorOf(j, { env = process.env, fetchImpl = fetch }
   if (!ref || ref.kind === "letter") return null;
   const api = String(env.GITHUB_API_URL ?? GITHUB_API).replace(/\/+$/, "");
   const token = api === GITHUB_API ? readToken(env) : null;
-  const headers = { accept: "application/vnd.github+json", "user-agent": "postmark-office", "x-github-api-version": "2022-11-28",
-    ...(token ? { authorization: `Bearer ${token}` } : {}) };
+  const plain = { accept: "application/vnd.github+json", "user-agent": "postmark-office", "x-github-api-version": "2022-11-28" };
+  const headers = { ...plain, ...(token ? { authorization: `Bearer ${token}` } : {}) };
   const cannot = refuse(503, `GitHub could not be read, so the office cannot prove who wrote ${j.link}`,
     `nothing was written: the office never pays a stage on doubt — ask again shortly`, { field: "link" });
   let res, body;
+  let tokenRefused = false;
+  // A refused token is named, so an expired one is found at its first refusal (review-649 § 4).
+  const tokenWas = () => refuse(503, `the office's GitHub read token was refused, and the keyless retry could not read ${j.link} either, so the office cannot prove who wrote it`,
+    "nothing was written: renew the token (/srv/postmark-office/git-metrics-token), or ask again shortly", { field: "link" });
   try {
-    res = await fetchImpl(`${api}${githubPath(ref)}`, { headers, signal: AbortSignal.timeout(READ_TIMEOUT_MS) });
+    const url = `${api}${githubPath(ref)}`;
+    res = await fetchImpl(url, { headers, signal: AbortSignal.timeout(READ_TIMEOUT_MS) });
+    // A refused token (expired or revoked: review-649 § 4) would refuse every
+    // linked advance. The repos are public, so the one retry is keyless.
+    if (token && res.status === 401) {
+      tokenRefused = true;
+      res = await fetchImpl(url, { headers: plain, signal: AbortSignal.timeout(READ_TIMEOUT_MS) });
+    }
     if (res.status === 404 || res.status === 410)
       throw refuse(422, `${j.link} is not on GitHub`, `${EARNED_BY[j.to]} — link the work as GitHub shows it`, { field: "link" });
     if (!res.ok) throw cannot;
     body = await res.json();
   } catch (e) {
     if (e?.code === 422) throw e;
-    throw cannot;
+    throw tokenRefused ? tokenWas() : cannot;
   }
   if (ref.kind === "comment") {
     const want = `/repos/postmark-town/${ref.repo}/issues/${ref.number}`.toLowerCase();

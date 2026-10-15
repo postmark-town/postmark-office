@@ -32,7 +32,7 @@
 // A bug takes no stake, at post and at the stake door alike, refused by name
 // (BUG_NO_STAKE), with the ruling's reason in the refusal.
 
-import { refuse, TITLE_MAX, INVITATION_MAX, ACT_POST, ACT_ADVANCE } from "./events.mjs";
+import { refuse, TITLE_MAX, INVITATION_MAX, ACT_POST, ACT_ADVANCE, ACT_RECREDIT } from "./events.mjs";
 import { handsOf, holdsHand, notThisHand } from "./named-hand.mjs";
 
 export const BUG_CLASS = "bug";
@@ -156,6 +156,11 @@ export function judgeLink(v) {
 // fit the stage, and the credited resident must be its author
 // (bug-credit.mjs § judgeEarnedCredit reads the author and judges the binding).
 // Confirmed, reproduced, shipped and the side exits are left as they were.
+//
+// A COMMENT OR ISSUE LINK IS ON THE BUG'S OWN ISSUE when the bug names one
+// (fields.issue): work on another issue earned another bug's stage (Wright,
+// 10-15, on review-649 § 6). Whether a resident's own PR earns diagnosed or
+// briefed is Darko's Call (review-649 § 2); until he rules, a PR never does.
 export const EARNED_STAGES = Object.freeze([STATE_DIAGNOSED, STATE_BRIEFED, STATE_FIXED]);
 
 /** What earns each checked stage, in the words every refusal teaches with. */
@@ -180,7 +185,8 @@ const KIND_NAME = Object.freeze({ comment: "an issue comment", issue: "an issue"
 export const FOUNDER_ACCOUNTS = Object.freeze({ 306351151: "wright-starforge", 67605380: "keeminlee" });
 export const FOUNDER_HANDLES = Object.freeze(["wright", "keemin"]);
 
-const REPO = "([A-Za-z0-9._-]+)";
+// A repo name never starts with a dot, so `.` and `..` can never steer the API path (review-649 § 6).
+const REPO = "([A-Za-z0-9_-][A-Za-z0-9._-]*)";
 const COMMENT_LINK_RE = new RegExp(`^https://github\\.com/postmark-town/${REPO}/issues/(\\d+)#issuecomment-(\\d+)$`);
 const ISSUE_LINK_RE = new RegExp(`^https://github\\.com/postmark-town/${REPO}/issues/(\\d+)$`);
 const PULL_LINK_RE = new RegExp(`^https://github\\.com/postmark-town/${REPO}/pull/(\\d+)$`);
@@ -218,6 +224,20 @@ export function judgeEarnedLink(to, v) {
     throw refuse(422, defect, how, { field: "link" });
   }
   return { link: s, ref };
+}
+
+/**
+ * A comment or issue link is on the bug's own issue, when the bug names one
+ * (fields.issue). A bug with no issue named takes the link as it is; a PR or a
+ * letter is not judged here.
+ */
+export function judgeOnBugIssue(to, link, ref, prev) {
+  if (ref?.kind !== "comment" && ref?.kind !== "issue") return;
+  const m = /^https:\/\/github\.com\/postmark-town\/([A-Za-z0-9._-]+)\/issues\/(\d+)$/.exec(String(prev?.fields?.issue ?? ""));
+  if (!m) return;
+  if (m[1].toLowerCase() === ref.repo.toLowerCase() && Number(m[2]) === ref.number) return;
+  throw refuse(422, `${link} is on ${ref.repo}#${ref.number}, and "${prev.id}" is ${m[1]}#${m[2]}`,
+    `${EARNED_BY[to]} — link the work on this bug's own issue, ${prev.fields.issue}`, { field: "link" });
 }
 
 /** The fields a bug's reporter may send and amend, beside title and body. */
@@ -342,6 +362,7 @@ export function judgeAdvance(fields, prev, roll) {
   }
   if (EARNED_STAGES.includes(to)) {
     const e = judgeEarnedLink(to, fields.link);
+    judgeOnBugIssue(to, e.link, e.ref, prev);
     out.link = e.link;
     out.earned = e.ref;
   } else if (fields.link !== undefined) out.link = judgeLink(fields.link);
@@ -353,6 +374,85 @@ export function judgeAdvance(fields, prev, roll) {
     out.of = of;
   }
   return out;
+}
+
+// ── THE RECREDIT (POS-649, a hotfix; Darko 2026-10-15) ──────────────────────
+//
+// Darko 12:40: "I should not have to hand gift Kino in these situations." And
+// 12:51: "the mint to kino to give them the 10 … burning the 10 that you
+// mistakenly got." A stage paid to the wrong resident is re-credited at the
+// advance door, `{ post, to: <the stage>, recredit: true, credit, link, note }`,
+// and recorded as its own `recredit` act: the old advance is never rewritten.
+// The reviewed stage pass (tools/bug-stage-plan.mjs) then writes the town's two
+// lines together under the town lock: the stage's amount to the new credit
+// (`post:<id>/<stage>-recredit`) and the wrong mint burned, exactly (the town's
+// stamp-mint.mjs § THE BUG STAGE CORRECTION). The new credit passes the same
+// author check as an advance (bug-credit.mjs). Only diagnosed, briefed and
+// fixed; only a stage the post passed and that paid someone; once per stage.
+//
+// The hands are wright and keemin only: a recredit burns stamps, and the town
+// gives moving money to them alone (AWARD_HANDS, its CORRECTION_HANDS).
+export const RECREDIT_HANDS = Object.freeze(["wright", "keemin"]);
+export const RECREDIT_NOTE_MAX = BODY_MAX;
+const RECREDIT_HOW = `town { do: "advance", args: { post, to: "${EARNED_STAGES.join("\" | \"")}", recredit: true, credit, link, note } }`;
+const payloadOfAct = (a) => (typeof a.payload === "string" ? JSON.parse(a.payload) : (a.payload ?? {}));
+
+/** A recredit's own fields, judged before the store is read: `{ to, credit, link, earned, note }`. */
+export function judgeRecreditFields(fields, roll) {
+  if (fields.recredit !== true) throw refuse(422, "recredit is true, or left off", RECREDIT_HOW, { field: "recredit" });
+  const to = typeof fields.to === "string" ? fields.to.trim() : "";
+  if (!EARNED_STAGES.includes(to))
+    throw refuse(422, `only ${EARNED_STAGES.join(", ")} are re-credited`, `to: the stage whose credit was wrong — ${RECREDIT_HOW}`, { field: "to" });
+  for (const k of ["size", "grade", "critter", "of"])
+    if (fields[k] !== undefined)
+      throw refuse(422, `a recredit takes no ${k}`, `it pays the stage again at exactly what the stage paid — ${RECREDIT_HOW}`, { field: k });
+  if (fields.credit === undefined)
+    throw refuse(422, "a recredit names whom it credits", `credit: the resident whose work earned ${to} — ${RECREDIT_HOW}`, { field: "credit" });
+  const credit = judgeHandleField("credit", fields.credit, roll);
+  // Never a founder as the new credit (review-3842-578 § 2, Wright 10-15): a
+  // recredit moves a resident's paid stage, and burns it, to the resident whose
+  // work earned it. Moving one to a founder is Darko's Call, by hand.
+  if (FOUNDER_HANDLES.includes(credit))
+    throw refuse(422, `a recredit never credits a founder (${credit})`,
+      `a correction gives a stage to the resident whose work earned it; moving one to ${FOUNDER_HANDLES.join(" or ")} is Darko's Call, never a recredit`, { field: "credit" });
+  const e = judgeEarnedLink(to, fields.link);
+  const note = typeof fields.note === "string" ? fields.note.trim() : "";
+  if (!note)
+    throw refuse(422, "a recredit says why", `note: what the stage's credit got wrong, at most ${RECREDIT_NOTE_MAX} characters; it stays on the bug's history beside both credits`, { field: "note" });
+  if (note.length > RECREDIT_NOTE_MAX)
+    throw refuse(422, `a recredit's note is at most ${RECREDIT_NOTE_MAX} characters`, `this one is ${note.length}`, { field: "note" });
+  return { to, credit, link: e.link, earned: e.ref, note };
+}
+
+/**
+ * Judge a recredit against the bug. `acts` are the post's advance and recredit
+ * acts, oldest first; `paid` is what the chain's stage lines paid,
+ * Map("<post>/<stage>" → n), or null when the chain can't be read. Returns
+ * `{ was, n }`: the stage's credit now, and what the chain says it paid (null
+ * when the chain doesn't say; the stage pass reads the ledger either way).
+ */
+export function judgeRecredit(r, prev, acts, paid) {
+  const id = prev.id;
+  judgeOnBugIssue(r.to, r.link, r.earned, prev);
+  const adv = acts.find((a) => a.action === ACT_ADVANCE && payloadOfAct(a).to === r.to);
+  if (!adv) {
+    const ahead = BUG_STAGES.indexOf(prev.state) < BUG_STAGES.indexOf(r.to);
+    throw refuse(409, `"${id}" never passed ${r.to}`, ahead
+      ? `it stands ${prev.state}; advance it to ${r.to}, crediting the right resident, rather than re-crediting`
+      : `${r.to} was skipped, and a skipped stage paid no one: there is nothing to re-credit`, { field: "to" });
+  }
+  const done = acts.find((a) => a.action === ACT_RECREDIT && payloadOfAct(a).to === r.to);
+  if (done)
+    throw refuse(409, `"${id}"'s ${r.to} was already re-credited, to ${payloadOfAct(done).credit}`, "one recredit per post and stage, ever: the town burns a mint once", { field: "to" });
+  const was = payloadOfAct(adv).credit ?? null;
+  if (r.credit === was)
+    throw refuse(422, `${r.to} on "${id}" already credits ${was}`, "a recredit names someone else: the resident whose work earned the stage", { field: "credit" });
+  // WHAT THE STAGE PAID IS THE PASS'S TO READ (review-3842-578 § 1). Prod's
+  // store holds no stamp chain yet (STAMP_LINES is off), so a door that gated
+  // on it refused every recredit. The act records what the chain says when it
+  // can (`n`, else null), and the stage pass reads the town's ledger itself:
+  // it corrects only a stage line paid to `was`, and holds anything else.
+  return { was, n: paid?.get(`${id}/${r.to}`) ?? null };
 }
 
 // ── THE REVEAL AT SHIP (Keemin, 2026-09-26, on POS-236) ─────────────────────
@@ -427,6 +527,11 @@ export function judgeReveal(fields, prev, key, { urlOk }) {
 //                 minutes), held by the weekly household cap, a meep's stage,
 //                 or a stage that pays nothing
 //
+//   a recredit    (POS-649) its own row beside the stage it corrects:
+//                 { stage, recredit: true, at, hand, credit, was, link, note,
+//                 stamps_paid } (the `post:<id>/<stage>-recredit` line), and the
+//                 corrected row gains `recredited_to`; neither is rewritten
+//
 // Amends and reveals move no stage, so they are not history rows; what they
 // set is on the post's fields. The line's grammar is the town's (stamp-mint.mjs
 // § STAGE_RE); it is read here only to find what a stage paid.
@@ -436,6 +541,16 @@ const STAGE_LINE_RE = new RegExp(String.raw`^- \d{4}-\d{2}-\d{2} · MINT → (\S
 /** A ledger line's stage payment, `{ post, stage, handle, n }`, or null for any other line. */
 export function stagePaidOf(canonical) {
   const m = STAGE_LINE_RE.exec(String(canonical ?? ""));
+  return m ? { handle: m[1], n: Number(m[2]), post: m[3], stage: m[4] } : null;
+}
+
+// A stage's correction line (the town's stamp-mint.mjs § RECREDIT_RE, POS-649):
+// what the recredit paid, read the same way and keyed `<post>/<stage>-recredit`.
+const RECREDIT_LINE_RE = new RegExp(String.raw`^- \d{4}-\d{2}-\d{2} · MINT → (\S+) · ([1-9]\d*) · for: post:([a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9-]*)\/(${EARNED_STAGES.join("|")})-recredit · by: the-town$`);
+
+/** A ledger line's recredit payment, `{ post, stage, handle, n }`, or null for any other line. */
+export function recreditPaidOf(canonical) {
+  const m = RECREDIT_LINE_RE.exec(String(canonical ?? ""));
   return m ? { handle: m[1], n: Number(m[2]), post: m[3], stage: m[4] } : null;
 }
 
@@ -452,19 +567,35 @@ export function bugHistoryOf(acts, paid = []) {
     for (const l of lines) {
       const s = stagePaidOf(l);
       if (s) paid.set(`${s.post}/${s.stage}`, s.n);
+      const r = recreditPaidOf(l);
+      if (r) paid.set(`${r.post}/${r.stage}-recredit`, r.n);
     }
   }
   const out = new Map();
   for (const a of acts) {
-    if (a.action !== ACT_POST && a.action !== ACT_ADVANCE) continue;
+    if (a.action !== ACT_POST && a.action !== ACT_ADVANCE && a.action !== ACT_RECREDIT) continue;
     const p = typeof a.payload === "string" ? JSON.parse(a.payload) : (a.payload ?? {});
     const post = String(a.object);
     const at = new Date(a.at).toISOString();
+    const rows = out.get(post) ?? [];
+    // POS-649: a recredit is its own row, beside the stage it corrects, and
+    // that row says where its credit went; neither is rewritten. stamps_paid
+    // is the recredit's own line. The burn of the wrong mint is the town's,
+    // and the original row's stamps_paid stays what that line paid.
+    if (a.action === ACT_RECREDIT) {
+      rows.push({ stage: p.to, recredit: true, at, hand: p.hand ?? a.actor ?? null, credit: p.credit ?? null, was: p.was ?? null,
+        link: p.link ?? null, note: p.note ?? null, stamps_paid: paid.get(`${post}/${p.to}-recredit`) ?? null });
+      const original = rows.find((r) => r.stage === p.to && !r.recredit);
+      if (original) original.recredited_to = p.credit ?? null;
+      out.set(post, rows);
+      continue;
+    }
     const row = a.action === ACT_POST
       ? { stage: STATE_REPORTED, at, hand: p.hand ?? null, credit: a.actor ?? null, link: null, stamps_paid: null }
       : { stage: p.to, at, hand: p.hand ?? a.actor ?? null, credit: p.credit ?? null,
         link: p.fields?.links?.[p.to] ?? null, stamps_paid: paid.get(`${post}/${p.to}`) ?? null };
-    out.set(post, [...(out.get(post) ?? []), row]);
+    rows.push(row);
+    out.set(post, rows);
   }
   return out;
 }
@@ -528,6 +659,9 @@ export function bugCatchersOf(posts, { unavailable = false } = {}) {
     const aside = BUG_SIDE_EXITS.includes(p.state);
     for (const h of p.history ?? []) {
       if (!h?.credit) continue;
+      // A stage re-credited counts for its recredit's resident (that row), never
+      // the one it was taken from: the town burned that mint (POS-649).
+      if (h.recredited_to) continue;
       const paid = Number.isInteger(h.stamps_paid) && h.stamps_paid > 0 ? h.stamps_paid : 0;
       if (aside && !paid) continue;
       const r = by.get(h.credit) ?? { handle: h.credit, stamps: 0, posts: new Set() };

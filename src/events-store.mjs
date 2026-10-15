@@ -44,11 +44,12 @@ import {
 import {
   BUG_CLASS, BUG_FINISHED, BUG_LADDER, BUG_STAGES, BUG_HANDS, STATE_REPORTED, stageAmount,
   judgeBugText, judgeBugHand, judgeHandleField, judgeAdvance, judgeReveal, REVEAL_CANDIDATES, BUG_NO_STAKE, BUG_NO_CLOSE,
+  RECREDIT_HANDS, judgeRecreditFields, judgeRecredit,
 } from "./bugs.mjs";
 import { githubAuthorOf, judgeEarnedCreditVia } from "./bug-credit.mjs";
 import { ideaPostsOn } from "./ideas.mjs";
 import {
-  EVENT_CLASS, ACT_POST, ACT_AMEND_POST, ACT_CLOSE, ACT_ADVANCE, ACT_REVEAL, ACT_RSVP, ACT_ANNOUNCE, ENDED_LIST_DAYS,
+  EVENT_CLASS, ACT_POST, ACT_AMEND_POST, ACT_CLOSE, ACT_ADVANCE, ACT_REVEAL, ACT_RECREDIT, ACT_RSVP, ACT_ANNOUNCE, ENDED_LIST_DAYS,
   STATE_CANCELLED, RESPONSE_RSVP, RESPONSE_STANDING,
   BUDGET_DEFAULT, BUDGET_MAX, FELL_BACK_NO_ECHO, SECRET_BYTES, SECRET_NOTE, HARNESS_REUSED_NOTE,
   refuse, mintEventId, judgeInterval, judgePlaceShape, placeFromMarkRow, anchorForPlace,
@@ -636,9 +637,54 @@ async function amendBug(fields, key, id, { now, env }) {
   }, env);
 }
 
+/**
+ * Re-credit a bug's stage (POS-649): one `recredit` act by wright or keemin,
+ * naming the stage, the resident whose work earned it, that work's link and
+ * why. It moves no stage, rewrites no advance and mints nothing: the reviewed
+ * stage pass pays the new credit and burns the wrong mint, together.
+ */
+async function recreditBug(fields, key, id, { now, env, roll }) {
+  if (fields.stamps !== undefined) throw BUG_NO_STAKE(id);
+  const hand = judgeBugHand(fields, key, { act: "re-credit a bug's stage" });
+  if (!RECREDIT_HANDS.includes(hand))
+    throw refuse(403, `only ${RECREDIT_HANDS.join(" and ")} re-credit a stage`, "a recredit burns a mint the town paid, and only the founders move money");
+  const r = judgeRecreditFields(fields, roll);
+  const stageActs = (c) => c.query(
+    "SELECT id, object, action, payload FROM acts WHERE class = $1 AND object = ANY($2) ORDER BY id", [BUG_CLASS, [id]])
+    .then((x) => x.rows.filter((a) => a.object === id && (a.action === ACT_ADVANCE || a.action === ACT_RECREDIT)));
+  const { postPaymentsVia } = await import("./post-history.mjs");
+  // As at the advance: the stage is judged, then its linked work is read from
+  // GitHub before the write's transaction opens.
+  const before = await read(async (c) => {
+    const prev = await bugRow(c, id);
+    return prev ? { prev, acts: await stageActs(c), paid: (await postPaymentsVia(c)).paid } : null;
+  }, env);
+  if (before) judgeRecredit(r, before.prev, before.acts, before.paid);
+  const gh = before ? await githubAuthorOf(r, { env }) : null;
+  return write(async (client) => {
+    // ONE RECREDIT PER STAGE, UNDER CONCURRENCY (review-3842-578 § 3). A
+    // recredit updates no posts row, so nothing else serialises two writers:
+    // the bug's row is locked first, and a second recredit of the stage waits,
+    // then reads the first one's act and is refused.
+    await client.query("SELECT id FROM posts WHERE id = $1 AND class = $2 FOR UPDATE", [id, BUG_CLASS]);
+    const prev = await bugRow(client, id);
+    if (!prev) throw refuse(404, `no bug "${id}"`, 'town { read: "posts", args: { class: "bug" } } lists them');
+    const { was, n } = judgeRecredit(r, prev, await stageActs(client), (await postPaymentsVia(client)).paid);
+    await judgeEarnedCreditVia(client, r, gh);
+    const payload = { post: id, to: r.to, was, credit: r.credit, link: r.link, note: r.note, paid: n, hand };
+    const actId = await insertAct(client, bugActRow({ action: ACT_RECREDIT, actor: hand, object: id, payload, now }));
+    return { post: id, act_id: actId, hand, stage: r.to, recredit: true, was, credit: r.credit, stamps: n, link: r.link,
+      receipt: `re-credited: ${id}'s ${r.to} from ${was} to ${r.credit} by ${hand}'s hand; ${r.to} points at ${r.link}. `
+        + `The reviewed stage pass reads the town's ledger: it pays ${r.credit} what ${r.to}'s line paid ${was}${n ? ` (${n} stamps, by the office's chain)` : ""} (post:${id}/${r.to}-recredit) and burns that mint, together or not at all; this act moves no stamps. `
+        + `If the ledger holds no such line paid to ${was}, or ${was} no longer holds its amount in liquid stamps, the pass holds the correction and says why.`,
+      read: bugReadHint(id) };
+  }, env);
+}
+
 /** Advance a bug: one `advance` act by a town hand, naming the stage and whom it credits. It mints nothing. */
 async function advanceBug(fields, key, id, { now, env, roll }) {
   if (fields.stamps !== undefined) throw BUG_NO_STAKE(id);
+  if (fields.recredit !== undefined) return recreditBug(fields, key, id, { now, env, roll });
   const hand = judgeBugHand(fields, key, { act: "advance a bug" });
   // POS-649: who wrote an earned stage's linked work is read from GitHub before
   // the write's transaction opens, so no store connection waits on the network.
