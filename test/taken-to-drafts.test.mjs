@@ -74,9 +74,10 @@ async function seed() {
     }
     await c.query("INSERT INTO projection_heads (repo, sha, ingested_at) VALUES ('world-law', $1, now()), ('town', $2, now())", [LAW_SHA, TOWN_SHA]);
     await c.query(
-      `INSERT INTO households (slug, ord, name, residents, since, declared_by)
-       VALUES ('starforge', 0, 'Starforge', ARRAY['rei'], '2026-08-01', 'rei'),
-              ('rabbit', 1, 'Rabbit', ARRAY['sable'], '2026-08-01', 'sable')`);
+      // starforge lists rei's account, as prod's houses do: gh:201 is one of its spellings (024)
+      `INSERT INTO households (slug, ord, name, residents, since, declared_by, accounts)
+       VALUES ('starforge', 0, 'Starforge', ARRAY['rei'], '2026-08-01', 'rei', '[{"id": 201, "login": "rei"}]'),
+              ('rabbit', 1, 'Rabbit', ARRAY['sable'], '2026-08-01', 'sable', '[]')`);
     await c.query(
       `INSERT INTO household_pins (handle, login, gh_id, pinned)
        VALUES ('rei', 'rei', 201, '2026-08-01'), ('sable', 'sable', 204, '2026-08-01')`);
@@ -272,4 +273,26 @@ test("G3, THE NOTE: listed for the house that owns it, for 7 days, until it is p
   await asHouse(["hh:starforge"], (c) => c.query(
     "UPDATE claims SET status = 'pending', window_id = $1, submitted_at = now(), stake = 1 WHERE status = 'draft' AND slug = 'rei/the-garage'", [WIN]));
   assert.deepEqual(await ask(["rei"], now), [], "put forward again, the note is gone");
+});
+
+test("G1, ITS HOUSEHOLD: the draft goes to the house the mark stood in, under the spelling it stood under, and that house sees it", { skip }, async () => {
+  await seed();
+  // a mark of rei's that stood under the house's older spelling (her GitHub id, 024's set)
+  const SHED = "c0000000-0000-4000-8000-000000000004";
+  await owner(async (c) => {
+    const geometry = JSON.stringify({ at: { x: 4300, y: 4000 }, extent: EXT });
+    await c.query(`INSERT INTO claims (id, window_id, class, claimant, household, status, decided_at, body, geometry, bbox, stake, data, slug)
+                   VALUES ($1, $2, 'sited', 'rei', 'gh:201', 'locked', now(), 'a shed', $3, $4::box, 1, '{}', 'rei/the-old-shed')`,
+      [SHED, WIN - 1, geometry, box({ x: 4300, y: 4000 }, EXT)]);
+    await c.query(`INSERT INTO marks (id, slug, kind, owner, household, body, geometry, bbox, status, locked_window, data)
+                   VALUES ($1, 'rei/the-old-shed', 'sited', 'rei', 'gh:201', 'a shed', $2, $3::box, 'standing', $4, '{}')`,
+      [SHED, geometry, box({ x: 4300, y: 4000 }, EXT), WIN - 1]);
+  });
+  const run = retire(["rei/the-old-shed"]);
+  assert.equal(run.code, 0, run.raw);
+  assert.deepEqual(run.out.drafts.returned, [{ slug: "rei/the-old-shed", household: "gh:201" }], "the mark's own house, never a house the pen chose");
+  const { sessionKeysVia } = await import("../src/household-deriver.mjs");
+  const keys = await owner((c) => sessionKeysVia({ query: (t, a) => c.query(t, a) }, "hh:starforge"));
+  const seen = await asHouse(keys, async (c) => (await c.query("SELECT slug, household FROM claims WHERE status = 'draft'")).rows);
+  assert.deepEqual(seen, [{ slug: "rei/the-old-shed", household: "gh:201" }], `the house reads it under its spelling set (${keys.join(", ")})`);
 });
