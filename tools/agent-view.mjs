@@ -83,7 +83,7 @@ export const STEPS = [
   { kind: "step", title: "Advance: diagnosed, pointing at the cause", who: WRIGHT, env: { do: "advance", args: { post: ID, to: "diagnosed", credit: "finn", link: "https://github.com/postmark-town/postmark-office/issues/256#issuecomment-1" } }, note: "finn named the cause on the issue; the post keeps the comment as fields.links.diagnosed." },
   { kind: "refusal", title: "Advance to briefed without a grade", who: WRIGHT, env: { do: "advance", args: { post: ID, to: "briefed", credit: "finn" } } },
   { kind: "refusal", title: "Name the critter before fixed", who: WRIGHT, env: { do: "advance", args: { post: ID, to: "briefed", credit: "finn", grade: "light", critter: "Hinge Nibbler" } } },
-  { kind: "refusal", title: "Advance to briefed pointing at a pull request", who: WRIGHT, env: { do: "advance", args: { post: ID, to: "briefed", credit: "finn", grade: "light", link: "https://github.com/postmark-town/postmark-office/pull/258" } }, note: "A brief is a comment, an issue or a letter; a PR earns fixed." },
+  { kind: "refusal", title: "Advance to briefed pointing at a founder's pull request", who: WRIGHT, env: { do: "advance", args: { post: ID, to: "briefed", credit: "finn", grade: "light", link: "https://github.com/postmark-town/postmark-office/pull/259" } }, note: "A resident's own PR may earn diagnosed or briefed; a founder's PR never does, for anyone (POS-649)." },
   { kind: "step", title: "Advance: briefed (light), pointing at the brief", who: WRIGHT, env: { do: "advance", args: { post: ID, to: "briefed", credit: "finn", grade: "light", link: "https://github.com/postmark-town/postmark-office/issues/256#issuecomment-2" } } },
   { kind: "refusal", title: "Advance to fixed without a size", who: WRIGHT, env: { do: "advance", args: { post: ID, to: "fixed", credit: "finn" } } },
   { kind: "refusal", title: "Advance to fixed without a critter", who: WRIGHT, env: { do: "advance", args: { post: ID, to: "fixed", credit: "finn", size: "M" } } },
@@ -170,6 +170,7 @@ const GITHUB_WORK = {
   "/repos/postmark-town/postmark-office/issues/comments/2": { id: 2, issue_url: onIssue(256), user: FINN_GH },
   "/repos/postmark-town/postmark-office/issues/comments/3": { id: 3, issue_url: onIssue(257), user: FINN_GH },
   "/repos/postmark-town/postmark-office/pulls/258": { number: 258, user: FINN_GH },
+  "/repos/postmark-town/postmark-office/pulls/259": { number: 259, user: { login: "wright-starforge", id: 306351151 } },
 };
 
 const bytes = (v) => Buffer.byteLength(JSON.stringify(v));

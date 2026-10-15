@@ -854,10 +854,25 @@ async function refusedNothing({ pen, posts }, p, code, re) {
 const adv = (fields) => advanceAtTown({ post: KINO_BUG, ...fields }, WRIGHT, { now: NOW, roll: ROLL });
 const esc = (s) => s.replace(/[.#/?()]/g, "\\$&");
 
-test("13 · #3757's exact case: briefed, credit wright, linking world#208 (a PR) is refused, and teaches what earns briefed", async () => {
+test("13 · #3757's exact case: briefed, credit wright, linking world#208 (a founder's PR) is refused, and teaches what earns briefed", async () => {
   const t = await kinoBug();
   await refusedNothing(t, adv({ to: "briefed", grade: "light", credit: "wright", link: WORLD_208 }), 422,
-    /^briefed is never earned by a pull request briefed is earned by the brief: link the issue comment, the issue, or the letter that holds it; its author is who's credited/);
+    /^https:\/\/github\.com\/postmark-town\/postmark-world\/pull\/208 is a founder's pull request \(GitHub account wright-starforge \(id 306351151\)\), and a founder's pull request never earns briefed briefed is earned by the brief: link the issue comment, the issue, the letter, or the resident's own pull request that holds it; its author is who's credited, and a founder's pull request never earns it — the founders' own builds are paid at fixed/);
+});
+
+test("13 · (Wright 10-15, review-649 § 2) a resident's own PR earns diagnosed and briefed; a founder's PR never does, for anyone, linked as a PR or as the issue GitHub answers as one", async () => {
+  const t = await kinoBug();
+  // a founder's PR, at diagnosed or briefed, for a founder or a resident
+  await refusedNothing(t, adv({ to: "diagnosed", credit: "kinofire", link: pull("wright") }), 422, /is a founder's pull request \(GitHub account wright-starforge \(id 306351151\)\), and a founder's pull request never earns diagnosed/);
+  await refusedNothing(t, adv({ to: "diagnosed", credit: "mari", link: pull("keemin") }), 422, /is a founder's pull request \(GitHub account keeminlee \(id 67605380\)\), and a founder's pull request never earns diagnosed/);
+  await refusedNothing(t, adv({ to: "diagnosed", credit: "wright", link: issue("wright", { pr: true }) }), 422, /is a founder's pull request .* never earns diagnosed/);
+  // another household's PR is still another household's work
+  await refusedNothing(t, adv({ to: "diagnosed", credit: "kinofire", link: pull("errant") }), 422, /of hh:the-harbor, and kinofire stands in hh:house-of-many-doors/);
+  // the resident's own PR, and the housemate's
+  assert.equal((await adv({ to: "diagnosed", credit: "kinofire", link: pull("kinofire") })).credit, "kinofire");
+  assert.equal((await adv({ to: "briefed", grade: "light", credit: "wayward-archivist", link: issue("kinofire", { pr: true }) })).credit, "wayward-archivist");
+  // and a founder's own PR still earns fixed for a founder (Darko 10-07)
+  assert.equal((await adv({ to: "fixed", size: "S", critter: "Sweepling", credit: "wright", link: pull("wright") })).credit, "wright");
 });
 
 test("13 · a comment or issue link is on the bug's own issue when the bug names one; a PR or a letter is not held to it", async () => {
@@ -945,7 +960,7 @@ test("13 · no pass on doubt: an unbound author, a link GitHub doesn't have, a c
   await refusedNothing(t, adv({ ...d, link: "https://github.com/postmark-town/postmark/issues/3500#issuecomment-404404" }), 422, /is not on GitHub/);
   const onOther = comment("kinofire", { issue: 3499 }).replace("/issues/3499#", "/issues/3500#");
   await refusedNothing(t, adv({ ...d, link: onOther }), 422, /^comment \d+ is not on postmark#3500/);
-  await refusedNothing(t, adv({ ...d, link: issue("kinofire", { pr: true }) }), 422, /is a pull request, and diagnosed is never earned by a pull request/);
+  await refusedNothing(t, adv({ to: "diagnosed", credit: "wright", link: issue("wright", { pr: true }) }), 422, /is a founder's pull request .* never earns diagnosed/);
   // GitHub answering 500
   const id = ++ghSeq;
   const broken = comment("kinofire", { id });
@@ -1014,7 +1029,7 @@ test("14 · a recredit to someone who did not write the linked work is refused, 
     /^letter "kinofire-2026-10-12-to-wright-the-sweep-plan" is from kinofire, of hh:house-of-many-doors, and finn stands in solo:finn/);
   await refusedNothing(t, rc({ credit: "kinofire", link: comment("errant") }), 422, /was written by GitHub account harbor-human \(id 1001\), of hh:the-harbor, and kinofire stands in hh:house-of-many-doors/);
   await refusedNothing(t, rc({ credit: "mari", link: comment("keemin") }), 422, /a founder's work credits only wright or keemin/);
-  await refusedNothing(t, rc({ credit: "kinofire", link: pull("kinofire") }), 422, /^briefed is never earned by a pull request/);
+  await refusedNothing(t, rc({ credit: "mari", link: pull("keemin") }), 422, /is a founder's pull request \(GitHub account keeminlee \(id 67605380\)\), and a founder's pull request never earns briefed/);
   await refusedNothing(t, rc({ credit: "kinofire" }), 422, /^briefed needs a link to the work that earned it/);
 });
 
@@ -1122,12 +1137,12 @@ test("15 · the read token goes to api.github.com only: never to another base, a
     assert.equal(elsewhere.calls[0].headers.authorization, undefined, "the token went to a base that is not api.github.com");
     // api.github.com: the token, once
     const there = recordingFetch([200]);
-    assert.deepEqual(await githubAuthorOf(LINKED, { env: { GITHUB_READ_TOKEN_FILE: tokenFile }, fetchImpl: there.fetchImpl }), { id: 1001, login: "harbor-human" });
+    assert.deepEqual(await githubAuthorOf(LINKED, { env: { GITHUB_READ_TOKEN_FILE: tokenFile }, fetchImpl: there.fetchImpl }), { id: 1001, login: "harbor-human", pull: false });
     assert.deepEqual(there.calls.map((c) => [c.url, c.headers.authorization]),
       [["https://api.github.com/repos/postmark-town/postmark/issues/comments/7", "Bearer tok-not-a-secret"]]);
     // a refused token: one keyless retry, which answers
     const refused = recordingFetch([401, 200]);
-    assert.deepEqual(await githubAuthorOf(LINKED, { env: { GITHUB_READ_TOKEN_FILE: tokenFile }, fetchImpl: refused.fetchImpl }), { id: 1001, login: "harbor-human" });
+    assert.deepEqual(await githubAuthorOf(LINKED, { env: { GITHUB_READ_TOKEN_FILE: tokenFile }, fetchImpl: refused.fetchImpl }), { id: 1001, login: "harbor-human", pull: false });
     assert.deepEqual(refused.calls.map((c) => c.headers.authorization), ["Bearer tok-not-a-secret", undefined]);
     // the keyless retry refused too: no pass on doubt, and no third call
     const both = recordingFetch([401, 403]);
