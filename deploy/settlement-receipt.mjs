@@ -504,6 +504,13 @@ const receipt = {
             cause: retire.cause ?? null,
             already_retired: (retire.already_retired ?? []).map((r) => r.slug),
             absent: (retire.absent ?? []).map((r) => r.slug),
+            // WLD-51 G1: where each taken mark went. `unreturned` in full, for
+            // the reason `absent` is: it is the row a keeper has to act on.
+            ...(retire.drafts ? { drafts: {
+              returned: (retire.drafts.returned ?? []).map((r) => r.slug),
+              kept: (retire.drafts.kept ?? []).map((r) => r.slug),
+              unreturned: retire.drafts.unreturned ?? [],
+            } } : {}),
           })
     : { ran: false, reason: "the retire step did not run for this crossing" },
 

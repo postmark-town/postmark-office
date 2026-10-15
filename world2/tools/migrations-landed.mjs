@@ -120,6 +120,8 @@ export const LANDED = {
   "074_arrival_entries.sql":       { probe: `${rel("arrival_entries")} AND ${trig("arrival_entries_settle_once")}` },
   // 075 (POS-612): which settlement carried each door amend; the receipt's `last_amended`.
   "075_amend_carried.sql":         { probe: rel("amend_carried") },
+  // 076 (WLD-51): why a mark left (the note), and the clearing's insert policy admitting a returned draft.
+  "076_taken_to_drafts.sql":       { probe: `${col("marks", "retired_cause")} AND ${policy("claims_insert_clearing", " AND with_check LIKE '%draft%'")}` },
 };
 
 /** The schema files in the order a store takes them — name order, as the CI floor applies them. */

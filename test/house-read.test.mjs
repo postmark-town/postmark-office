@@ -302,6 +302,21 @@ test("NEEDS-YOU: every row names its cause, and a key ask never carries its co-s
     for (const row of n[group].rows) assert.ok(typeof row.cause === "string" && row.cause.length > 10, `${group} row names its cause`);
 });
 
+test("NEEDS-YOU, G3 (WLD-51, Darko 2026-10-15): a mark the settlement took is listed with the stakes segment's own note, and counts", async () => {
+  const { readers } = worldReaders();
+  const note = "r000/kite had no stamps behind it, so it left the world at the 2026-10-15T18:00:00.000Z settlement. It's back in your drafts. Stake it, or leave it again with a stamp, to bring it back.";
+  const plain = readers.stakesFor;
+  readers.stakesFor = async (handles) => ({ ...(await plain(handles)),
+    left_the_world: [{ mark: "r000/kite", kind: "sited", left_at: "2026-10-15T18:00:00.000Z", note_until: "2026-10-22T18:00:00.000Z", note, act: 'world { do: "stake", args: { mark: "r000/kite", stamps: 1 } }' }] });
+  const key = { household: "fixture", handles: new Set(["r000", "r001"]) };
+  const n = await needsYou({}, ctx({ readers, key }));
+  assert.deepEqual(n.left_the_world.rows.map((r) => [r.mark, r.cause, r.act]), [["r000/kite", note, 'world { do: "stake", args: { mark: "r000/kite", stamps: 1 } }']]);
+  assert.equal(n.count, 3 + 1, "the take counts beside the stances, the bounces and the at-risk mark");
+  readers.stakesFor = async (handles) => ({ ...(await plain(handles)), left_the_world_unavailable: "the marks a settlement took from you could not be read (down) — unknown, not none" });
+  const blind = await needsYou({}, ctx({ readers, key }));
+  assert.deepEqual(blind.left_the_world, { rows: [], unavailable: "the marks a settlement took from you could not be read (down) — unknown, not none" });
+});
+
 // ── the door ────────────────────────────────────────────────────────────────
 
 test("THE DOOR: both reads are on the household door's list, declare their field, and refuse an unknown one", async () => {

@@ -393,7 +393,11 @@ export async function needsYou({ household = null } = {}, ctx = {}) {
     ...r, cause: `${r.mark} is a commons mark holding ✦0 — the next settlement (${stakes.next_settlement?.at ?? "its time unknown"}) sweeps it first`,
   }));
 
-  const count = stanceRows.length + setDowns.length + bounces.length + keyAsks.length + atRisk.length;
+  // WLD-51 G3 (Darko, 2026-10-15 12:59): a mark the settlement took, for 7 days
+  // or until it is put forward again — the stakes segment's own rows and words.
+  const leftTheWorld = (stakes.left_the_world ?? []).map((r) => ({ ...r, cause: r.note }));
+
+  const count = stanceRows.length + setDowns.length + bounces.length + keyAsks.length + atRisk.length + leftTheWorld.length;
   return {
     read: "needs-you", household: house.slug, residents: mine, as_of: ctx.asOf ?? null,
     count,
@@ -408,7 +412,9 @@ export async function needsYou({ household = null } = {}, ctx = {}) {
     key_asks: { rows: keyAsks, ...(keyAsksUnavailable ? { unavailable: keyAsksUnavailable } : {}) },
     stakes_at_risk: { next_settlement: stakes.next_settlement ?? null, rows: atRisk,
       ...(stakes.unavailable ? { unavailable: stakes.unavailable } : {}) },
-    ...(count === 0 && !stances.unavailable && !stakes.unavailable && !keyAsksUnavailable
+    left_the_world: { rows: leftTheWorld,
+      ...(stakes.left_the_world_unavailable ? { unavailable: stakes.left_the_world_unavailable } : {}) },
+    ...(count === 0 && !stances.unavailable && !stakes.unavailable && !stakes.left_the_world_unavailable && !keyAsksUnavailable
       ? { note: "nothing waits on you — every list below was read and is empty. An ordinary state, not a quiet failure." } : {}),
   };
 }

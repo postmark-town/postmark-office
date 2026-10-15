@@ -273,7 +273,10 @@ export function liveMarkOf(row) {
   // slips through it is the one nobody thought to name. Every field the pen
   // adds to `data` gets a line in this destructure, or it reaches the doors as
   // something the resident wrote.
-  const { _journal_seq, _act_id, _deferred_act, ...declared } = data;
+  //
+  // `_returned` joined them 2026-10-15 (WLD-51 G1, 076): the retire step's note
+  // on a draft it wrote back for a mark the settlement took, naming that mark.
+  const { _journal_seq, _act_id, _deferred_act, _returned, ...declared } = data;
 
   const payload = {
     ...declared,

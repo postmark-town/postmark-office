@@ -352,3 +352,32 @@ test("postmark#3757 · THE SAFETY HALF: a commons row whose mark now walks home 
   assert.equal(by["keith/a-bench-on-the-road"].at_risk, true, "THE CONTROL: a commons mark that walks market is");
   assert.match(SWEEP_RULE, /your household's ground or the town's never does/);
 });
+
+test("WLD-51 G3 · a mark the settlement took is on the segment with its note, asked for the handles in scope at the segment's clock", async () => {
+  const asked = [];
+  const row = { mark: "berthillon/the-old-kite", kind: "sited", left_at: "2026-09-17T18:00:00.000Z", note_until: "2026-09-24T18:00:00.000Z", note: "the note", act: stakeEnvelope("berthillon/the-old-kite") };
+  const seg = await stakesFor(["berthillon"], readers({ left: async (handles, now) => { asked.push([handles, now.toISOString()]); return { rows: [row] }; } }));
+  assert.deepEqual(asked, [[["berthillon"], "2026-09-18T04:10:00.000Z"]]);
+  assert.deepEqual(seg.left_the_world, [row]);
+  assert.equal(seg.at_risk, 1, "the at-risk count is the published marks' alone");
+
+  const none = await stakesFor(["berthillon"], readers({ left: async () => ({ rows: [] }) }));
+  assert.equal("left_the_world" in none, false, "nothing taken: no field, and the segment reads as before");
+  const blind = await stakesFor(["berthillon"], readers({ left: async () => { throw new Error("connection refused"); } }));
+  assert.match(blind.left_the_world_unavailable, /could not be read \(connection refused\) — unknown, not none/);
+  assert.equal(blind.rows.length, 4, "a note that cannot be read empties nothing else");
+  let called = 0;
+  await stakesFor([], readers({ left: async () => { called += 1; return { rows: [row] }; } }));
+  assert.equal(called, 0, "no handle, no question");
+});
+
+test("WLD-51 G3 · the note's words (Darko's, G1 drafts), and its row", async () => {
+  const { leftTheWorldRows, leftTheWorldNote, LEFT_THE_WORLD_DAYS } = await import("../src/doorstep-stakes.mjs");
+  assert.equal(LEFT_THE_WORLD_DAYS, 7);
+  assert.equal(leftTheWorldNote("lupi/rootwood-bookend", "2026-10-16T18:00:00.000Z"),
+    "lupi/rootwood-bookend had no stamps behind it, so it left the world at the 2026-10-16T18:00:00.000Z settlement. It's back in your drafts. Stake it, or leave it again with a stamp, to bring it back.");
+  assert.deepEqual(leftTheWorldRows([{ slug: "lupi/rootwood-bookend", kind: "sited", opens_at: new Date("2026-10-16T18:00:00Z") }]), [{
+    mark: "lupi/rootwood-bookend", kind: "sited", left_at: "2026-10-16T18:00:00.000Z", note_until: "2026-10-23T18:00:00.000Z",
+    note: leftTheWorldNote("lupi/rootwood-bookend", "2026-10-16T18:00:00.000Z"), act: stakeEnvelope("lupi/rootwood-bookend"),
+  }]);
+});
