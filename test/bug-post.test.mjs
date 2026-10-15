@@ -40,10 +40,13 @@
 //      The bug read's order is the jar's (Wright's review of #481): open by
 //      the furthest stage, the named, the legacy shelf, the set aside.
 //  13. (POS-649, a hotfix, Darko 2026-10-15) diagnosed, briefed and fixed each
-//      need a link of their own kind (a comment, issue or letter; a PR), and
-//      the credited resident must be its author: the GitHub account's id bound
-//      to their household, or the letter's sender's household; a founder's
-//      work credits only a founder. Any doubt refuses and writes nothing.
+//      need a link of their own kind (a comment, issue, letter or the
+//      resident's own PR, never a founder's; a PR), and the credited resident
+//      must be its author: the GitHub account's id bound to their household,
+//      or the letter's sender's household; a founder's work credits only a
+//      founder. Any doubt refuses and writes nothing.
+//  14. (POS-649) a paid stage is re-credited as its own act, under the same
+//      author check; a founder may be the new credit (Darko 2026-10-15 19:02).
 //      GitHub is a local stub here (GITHUB_API_URL), the letters a stub table.
 //
 // ⚑ THE STORE IS A JS STUB (`acts-pen-stub.mjs`), as in quest-posts.test.mjs:
@@ -53,9 +56,12 @@
 // THE FLIPS (NOTES.md in the lane folder holds the red lines): make
 // judgeBugHand accept any handle and 1 goes red; drop the residents-index
 // check from judgeHandleField and 7 goes red; the critter's four flips are in
-// the bug-critter lane's NOTES.md. POS-649's flips: let a PR earn briefed and
-// #3757's case goes red (it is accepted: wright's own PR is a founder's work
-// crediting a founder, so the author check alone passes it); skip the author
+// the bug-critter lane's NOTES.md. POS-649's flips: drop the founder's-PR refusal
+// (bug-credit.mjs) and #3757's case goes red (it is accepted: wright's own PR
+// is a founder's work crediting a founder, so the author check alone passes
+// it); refuse every PR at diagnosed and briefed again and 13's own-PR case
+// goes red; restore the recredit's founder refusal and 14's founder case goes
+// red; skip the author
 // check and 13's household, founder and unbound cases go red; make the link
 // optional again and 13's missing-link case goes red.
 
@@ -1091,11 +1097,30 @@ test("14 · the recredit's own law: wright and keemin only, a note, recredit tru
   await refusedNothing(t, rc({ link: KINO_PLAN }), 422, /^a recredit names whom it credits/);
 });
 
-test("14 · (review-3842-578 § 2) a recredit never credits a founder, whoever wrote the link; and it names someone other than the stage's credit", async () => {
-  const t = await paidToWright();
-  for (const founder of ["wright", "keemin"])
-    await refusedNothing(t, rc({ credit: founder, link: comment(founder) }), 422,
-      new RegExp(`^a recredit never credits a founder \\(${founder}\\) a correction gives a stage to the resident whose work earned it; moving one to wright or keemin is Darko's Call, never a recredit`));
+test("14 · (Darko 2026-10-15 19:02, \"sure whatever\") a founder may be a recredit's new credit, by a founder's own work only; and it names someone other than the stage's credit", async () => {
+  // a resident's paid stage, re-credited to each founder by that founder's own comment
+  for (const founder of ["wright", "keemin"]) {
+    const b = await kinoBug();
+    resetChainMemo();
+    await adv({ to: "briefed", grade: "light", credit: "kinofire", link: KINO_PLAN });
+    b.ledger.lines = [stageLine("kinofire", 10, KINO_BUG, "briefed")];
+    const link = comment(founder);
+    const r = await rc({ credit: founder, link });
+    assert.deepEqual([r.recredit, r.was, r.credit, r.stamps], [true, "kinofire", founder, 10]);
+    const act = b.pen.rows().at(-1);
+    assert.deepEqual([act.action, JSON.parse(act.payload).credit, JSON.parse(act.payload).was], ["recredit", founder, "kinofire"]);
+  }
+  // the author check still holds for a founder: a resident's letter or comment, or a founder's PR at briefed
+  const t = await kinoBug();
+  resetChainMemo();
+  await adv({ to: "briefed", grade: "light", credit: "kinofire", link: KINO_PLAN });
+  t.ledger.lines = [stageLine("kinofire", 10, KINO_BUG, "briefed")];
+  await refusedNothing(t, rc({ credit: "wright", link: KINO_PLAN }), 422, /^only a founder's own letter earns wright a stage, and letter "kinofire-2026-10-12-to-wright-the-sweep-plan" is from kinofire/);
+  await refusedNothing(t, rc({ credit: "keemin", link: comment("kinofire") }), 422, /^only a founder's account earns keemin a stage, and .* was written by GitHub account/);
+  await refusedNothing(t, rc({ credit: "wright", link: pull("wright") }), 422, /is a founder's pull request \(GitHub account wright-starforge \(id 306351151\)\), and a founder's pull request never earns briefed/);
+  // a founder's stage, re-credited to the same founder
+  const w = await paidToWright();
+  await refusedNothing(w, rc({ credit: "wright", link: comment("wright") }), 422, /^briefed on "kinofire\/false-sweep-warning" already credits wright a recredit names someone else/);
   // a resident's stage, re-credited to the same resident
   const k = await kinoBug();
   resetChainMemo();

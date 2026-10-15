@@ -408,12 +408,9 @@ export function judgeRecreditFields(fields, roll) {
   if (fields.credit === undefined)
     throw refuse(422, "a recredit names whom it credits", `credit: the resident whose work earned ${to} — ${RECREDIT_HOW}`, { field: "credit" });
   const credit = judgeHandleField("credit", fields.credit, roll);
-  // Never a founder as the new credit (review-3842-578 § 2, Wright 10-15): a
-  // recredit moves a resident's paid stage, and burns it, to the resident whose
-  // work earned it. Moving one to a founder is Darko's Call, by hand.
-  if (FOUNDER_HANDLES.includes(credit))
-    throw refuse(422, `a recredit never credits a founder (${credit})`,
-      `a correction gives a stage to the resident whose work earned it; moving one to ${FOUNDER_HANDLES.join(" or ")} is Darko's Call, never a recredit`, { field: "credit" });
+  // A founder may be the new credit (RULED, Darko 2026-10-15 19:02 EDT: "sure
+  // whatever"; the w42.6 hotfix refused one). The author check still holds: a
+  // founder is credited only by a founder's own work (bug-credit.mjs).
   const e = judgeEarnedLink(to, fields.link);
   const note = typeof fields.note === "string" ? fields.note.trim() : "";
   if (!note)
