@@ -61,6 +61,13 @@ export function nonceForActRow(row) {
   return s.kept;
 }
 
+/**
+ * Run `fn` outside any door's key scope. A creature's reaction is written after
+ * the act it answers and is not that act, so it must never take the act's key
+ * (POS-637 PR-B; act-watch.mjs).
+ */
+export const outsideRetryKey = (fn) => scope.exit(fn);
+
 const SPENT_SQL =
   "SELECT id, at, crossing, actor, action, object FROM acts " +
   "WHERE nonce = $1 AND actor = ANY($2::text[]) AND action <> 'say' ORDER BY id LIMIT 1";

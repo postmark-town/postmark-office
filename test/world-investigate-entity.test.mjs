@@ -36,10 +36,11 @@ const deps = (over = {}) => ({
   ...over,
 });
 
-test("the kinds: a handle is a resident, a creature/ id waits on its class, any other slash is a mark", () => {
+test("the kinds: a handle is a resident, a creature: id is a creature (WLD-56 W8), any slash is a mark", () => {
   assert.deepEqual(entityKindOf("elowen"), { kind: "resident", handle: "elowen" });
   assert.deepEqual(entityKindOf("@elowen"), { kind: "resident", handle: "elowen" });
-  assert.equal(entityKindOf("creature/mist-hare-7").kind, "creature");
+  assert.equal(entityKindOf("creature:wolf-270-1").kind, "creature");
+  assert.equal(entityKindOf("creature/mist-hare-7").kind, "mark", "a slash is a mark's, whatever its first word");
   assert.equal(entityKindOf("the-town/the-quay-reach").kind, "mark");
 });
 

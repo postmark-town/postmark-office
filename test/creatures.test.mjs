@@ -19,7 +19,7 @@ import {
   LIVING_TOP_SQL, PRUNE_AFTER_MS, loadCreatureLaw, normalized, creatureLaw, __resetCreatureLawForTest,
   CREATURE_DIALS, CREATURE_DIALS_PENDING, LivingSet, PRIOR_REACTION_SQL, SLICE_CAPS, SLICE_FIELDS,
   allowedReactions, applyReaction, askJev, buildSlice, capOf, dial, judgmentFor, reactTo,
-  reactionRows, sampleWith, t20, writeReaction,
+  reactionRows, sampleWith, t20, writeReaction, TRIGGER_SQL, NO_TRIGGER, reactionPayload, LAW_RETRY_MS, TO_YOU_REACH_MS,
 } from "../src/creatures.mjs";
 import { NO_WORLD, worldClone, worldModuleUrl } from "./fixture-paths.mjs";
 
@@ -75,7 +75,7 @@ const ENV = { TYPESAFE_API_KEY: "k" };
 
 // ── the dials ───────────────────────────────────────────────────────────────
 
-test("every C value is a dial marked pending, carrying the lane's recommendation", () => {
+test("every C value is a dial RULED as recommended (Darko 2026-10-15 12:09 EDT), and none is pending", () => {
   // which acts a creature perceives is the world's RING_VERBS now (S4), not an office dial
   assert.ok(!("perceived_acts" in CREATURE_DIALS));
   assert.deepEqual([...LAW.kindMod.RING_VERBS], ["walk", "enter", "exit", "say", "take", "give", "drop", "leave-mark"]);
@@ -84,8 +84,9 @@ test("every C value is a dial marked pending, carrying the lane's recommendation
   assert.equal(dial("emission_m"), 500);
   assert.equal(dial("emission_ms"), 30 * 60_000);
   assert.equal(dial("far_line_m"), 5000);
-  for (const d of Object.values(CREATURE_DIALS)) assert.match(d.pending, /^C[1-6]$/);
-  assert.deepEqual([...new Set(CREATURE_DIALS_PENDING.map((s) => /\((C\d)\)/.exec(s)[1]))].sort(), ["C2", "C3", "C4", "C5", "C6"]);
+  for (const d of Object.values(CREATURE_DIALS)) { assert.match(d.ruled, /^C[1-6], Darko 2026-10-15 12:09 EDT$/); assert.equal(d.pending, undefined); }
+  assert.deepEqual([...new Set(Object.values(CREATURE_DIALS).map((d) => /^(C\d)/.exec(d.ruled)[1]))].sort(), ["C2", "C3", "C4", "C5", "C6"]);
+  assert.deepEqual(CREATURE_DIALS_PENDING, []);
 });
 
 // ── the d20 and the sampler ─────────────────────────────────────────────────
@@ -435,25 +436,63 @@ nodeTest("askJev: no key, a refusal and the deadline each throw with their reaso
   assert.ok(Date.now() - t < 1000);
 });
 
-test("writeReaction: one transaction; a creature that already answered this act writes nothing", async () => {
+// A client that answers the lock, the prior read and the trigger read as told.
+function txClient({ prior = false, trigger = true } = {}) {
+  const seen = { txns: 0, sql: [], inserted: [] };
+  const client = { query: async (sql, params) => {
+    seen.sql.push([sql, params]);
+    if (sql === PRIOR_REACTION_SQL) return { rows: prior ? [{ id: "77", at: "x", payload: { reaction: "watch" } }] : [] };
+    if (sql === TRIGGER_SQL) return { rows: trigger ? [{ here: 1 }] : [] };
+    return { rows: [] };
+  } };
+  return { seen, deps: { officeWrite: async (fn) => { seen.txns += 1; return fn(client); }, insertAct: async (_c, r) => { seen.inserted.push(r.action); return 500 + seen.inserted.length; } } };
+}
+
+test("writeReaction: one transaction, locked on (creature, trigger, moment); a creature that already answered this act writes nothing", async () => {
   const c = livingWith(spawnRow("creature:wolf-270-1")).byId.get("creature:wolf-270-1");
   const rows = reactionRows(c, act(), { to: "kai", reaction: "flee" }, { now: T0, flees: true });
-  const make = (prior) => {
-    const seen = { txns: 0, sql: [], inserted: [] };
-    const client = { query: async (sql, params) => { seen.sql.push([sql, params]); return { rows: prior ? [{ id: "77", at: "x", payload: { reaction: "watch" } }] : [] }; } };
-    return { seen, deps: { officeWrite: async (fn) => { seen.txns += 1; return fn(client); }, insertAct: async (_c, r) => { seen.inserted.push(r.action); return 500 + seen.inserted.length; } } };
-  };
-  const fresh = make(false);
+  const fresh = txClient();
   const w = await writeReaction(rows, fresh.deps);
   assert.equal(fresh.seen.txns, 1);
   assert.deepEqual(fresh.seen.inserted, ["react", "withdraw"]);
   assert.deepEqual(w.rows.map((r) => r.id), ["501", "502"]);
-  assert.equal(fresh.seen.sql[0][0], PRIOR_REACTION_SQL);
-  assert.deepEqual(fresh.seen.sql[0][1], ["creature:wolf-270-1", "9001"]);
-  const retried = make(true);
+  // two offices at once: the lock comes before the ask, so the second waits and then finds the first's row
+  assert.match(fresh.seen.sql[0][0], /pg_advisory_xact_lock/);
+  assert.deepEqual(fresh.seen.sql[0][1], ["creature-react:creature:wolf-270-1:9001:act"]);
+  assert.equal(fresh.seen.sql[1][0], PRIOR_REACTION_SQL);
+  assert.deepEqual(fresh.seen.sql[1][1], ["creature:wolf-270-1", "9001", "act"]);
+  assert.equal(fresh.seen.sql[2][0], TRIGGER_SQL);
+  const retried = txClient({ prior: true });
   const again = await writeReaction(rows, retried.deps);
   assert.equal(again.prior, true);
   assert.deepEqual(retried.seen.inserted, []);
+});
+
+test("writeReaction: a trigger that never reached the record (its transaction rolled back) gets no reaction", async () => {
+  const c = livingWith(spawnRow("creature:wolf-270-1")).byId.get("creature:wolf-270-1");
+  const rows = reactionRows(c, act(), { to: "kai", reaction: "watch" }, { now: T0 });
+  const gone = txClient({ trigger: false });
+  await assert.rejects(writeReaction(rows, gone.deps), (e) => e.why === NO_TRIGGER);
+  assert.deepEqual(gone.seen.inserted, []);
+});
+
+test("C1: an arrival is its own moment — keyed apart from the walk's declaration, locked and asked by it", async () => {
+  const c = livingWith(spawnRow("creature:wolf-270-1")).byId.get("creature:wolf-270-1");
+  const arriving = act({ moment: "arrival", atIso: new Date(T0 + 60_000).toISOString() });
+  const payload = reactionPayload({ act: arriving, distance_m: 20, approaching: true, reaction: { name: "watch" }, roll: 3,
+    judgment: { judged_by: "code" }, odds: { watch: 1 }, after: { moods: {}, flags: [] } });
+  assert.equal(payload.moment, "arrival");
+  assert.equal(payload.arrived_at, arriving.atIso, "the d20's stamp rides the row");
+  const tx = txClient();
+  await writeReaction(reactionRows(c, arriving, payload, { now: T0 }), tx.deps);
+  assert.deepEqual(tx.seen.sql[0][1], ["creature-react:creature:wolf-270-1:9001:arrival"]);
+  assert.deepEqual(tx.seen.sql[1][1], ["creature:wolf-270-1", "9001", "arrival"]);
+  // the fold keeps the two moments apart, so the creature remembers both
+  const living = livingWith(spawnRow("creature:wolf-270-1"));
+  living.fold([{ id: "50", at: new Date(T0).toISOString(), actor: "creature:wolf-270-1", action: "react", object: "9001", payload: { to: "kai", verb: "walk", reaction: "watch", judged_by: "code" } },
+    { id: "51", at: new Date(T0).toISOString(), actor: "creature:wolf-270-1", action: "react", object: "9001", payload: { to: "kai", verb: "walk", reaction: "stalk", judged_by: "code", moment: "arrival" } }], { advance: false });
+  assert.deepEqual(living.byId.get("creature:wolf-270-1").reactions.map((r) => r.act), ["9001", "9001@arrival"]);
+  assert.deepEqual([...living.answered.keys()], ["9001", "9001@arrival"]);
 });
 
 // ── the review of #561 (FIX at d8b6d32f7): F1–F6 ─────────────────────────────
@@ -541,7 +580,7 @@ test("F6: a retry of the act that made a creature flee reads the flee again", as
   assert.equal(calls.length, 1, "nothing written twice");
 });
 
-test("an ended creature leaves RAM an hour after it ended; its retry index goes with it", async () => {
+test("an ended creature leaves RAM an hour after it ended and once its newest reaction is TO_YOU_REACH_MS old; its retry index goes with it", async () => {
   const living = livingWith(spawnRow("creature:wolf-270-1", { moods: { fear: 3 } }), spawnRow("creature:wolf-270-2", { n: 2, x: 5 }));
   const { write } = recordingWrite();
   await reactTo(act(), { living, around: async () => ({}), ask: jevAnswer({ flee: 1 }), write, env: ENV, now: T0 });
@@ -549,9 +588,14 @@ test("an ended creature leaves RAM an hour after it ended; its retry index goes 
   living.prune(T0 + PRUNE_AFTER_MS - 1);
   assert.ok(living.byId.has("creature:wolf-270-1"), "inside the hour, a retry can still find it");
   living.prune(T0 + PRUNE_AFTER_MS + 1);
+  assert.ok(living.byId.has("creature:wolf-270-1"), "past the hour, to_you still owes kai its flee (review-574 C1)");
+  // 13 h on, the fled one leaves; the other, still living at 11 h 59 m … (it came out at T0 − 1 h)
+  living.prune(T0 + 11 * 3600_000 - 60_000 + PRUNE_AFTER_MS);
+  assert.ok(living.byId.has("creature:wolf-270-2"));
+  living.prune(T0 + TO_YOU_REACH_MS + 1);
   assert.ok(!living.byId.has("creature:wolf-270-1"));
-  assert.deepEqual([...living.answered.get("9001")], ["creature:wolf-270-2"], "the pruned one leaves the retry index; the other answer stays");
-  assert.ok(living.byId.has("creature:wolf-270-2"), "the living one stays");
+  assert.ok(!living.byId.has("creature:wolf-270-2"), "faded at T0 + 11 h, its reaction 13 h old: it leaves too");
+  assert.equal(living.answered.has("9001"), false, "the pruned leave the retry index with them");
 });
 
 test("a mark's body is never dropped or excerpted, whatever its length (Darko 22:33, standing)", () => {
@@ -687,6 +731,45 @@ nodeTest("creatureLaw: a ref that changes mid-load answers each caller with its 
   const broke = await creatureLaw({ refOf: () => "S112", load: async () => { throw new Error("the clone is gone"); } });
   assert.ok(broke.unavailable);
   __resetCreatureLawForTest();
+});
+
+// ── PR-B carry 7: a failed load is asked again after a back-off ──────────────
+
+nodeTest("carry 7: an unavailable law is asked again after LAW_RETRY_MS, never before; a law that loaded is kept for its ref", async () => {
+  __resetCreatureLawForTest();
+  assert.equal(LAW_RETRY_MS, 5 * 60_000, "about 5 min (Wright)");
+  let t = 0, loads = 0, blip = true;
+  const clock = () => t;
+  const load = async ({ ref }) => { loads += 1; if (blip) throw new Error("git blipped"); return { ref, kindMod: {} }; };
+  const ask = () => creatureLaw({ refOf: () => "S120", load, clock });
+  assert.ok((await ask()).unavailable);
+  blip = false;
+  t = LAW_RETRY_MS - 1;
+  assert.ok((await ask()).unavailable, "inside the back-off the cached answer stands");
+  assert.equal(loads, 1);
+  t = LAW_RETRY_MS;
+  assert.ok(!(await ask()).unavailable, "after it, the law is asked again and the creatures come back");
+  assert.equal(loads, 2);
+  t = 10 * LAW_RETRY_MS;
+  await ask();
+  assert.equal(loads, 2, "a law that loaded is never re-read for its ref");
+  __resetCreatureLawForTest();
+});
+
+test("carry 7: a kind that could not be read is read again after LAW_RETRY_MS, and a kind that was read is kept", async () => {
+  let t = 0, reads = 0, blip = true;
+  const law = await loadCreatureLaw({ ref: "the pinned clone", importTool: worldTool, clock: () => t,
+    readText: (path) => { reads += 1; if (blip) throw new Error("git blipped"); return KINDS[path]; } });
+  assert.equal(law.kindOf("wolf"), null);
+  blip = false;
+  t = LAW_RETRY_MS - 1;
+  assert.equal(law.kindOf("wolf"), null, "inside the back-off: no second read");
+  assert.equal(reads, 1);
+  t = LAW_RETRY_MS;
+  assert.equal(law.kindOf("wolf")?.ring_m, 80);
+  t = 100 * LAW_RETRY_MS;
+  law.kindOf("wolf");
+  assert.equal(reads, 2);
 });
 
 test("a spawn's flags come back sorted", () => {

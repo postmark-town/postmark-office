@@ -38,6 +38,7 @@
 
 import { renamedRow, DOOR_FIELDS, withRefused } from "./one-contract.mjs"; // POS-70: the one rename shape; POS-246: the door's own fields; POS-427: refused beside did
 import { actUnderNonce, nonceDefect } from "./act-nonce.mjs"; // POS-246: a world act's retry key
+import { noteActWritten } from "./act-watch.mjs"; // POS-637: the crossing pass's row, told to the act door's creatures
 import { readFileSync, readdirSync } from "node:fs";
 import { IDENTITIES_SQL } from "./world2-fold.mjs"; // POS-350: the household grain is the store's identities
 import { refShaFromDisk } from "./world-branches.mjs";
@@ -489,6 +490,9 @@ export function crossingDeps() {
       }
       const result = JSON.parse(out.trim().split("\n").at(-1));
       if (result.error) { const err = new Error(result.error.defect); Object.assign(err, result.error); throw err; }
+      // The pass wrote its row in a child process, so the act door's creatures
+      // are told its id here; the hook reads the rest back (POS-637 PR-B).
+      if (result.seq != null) noteActWritten({ actor: handle, action: act ?? "enter" }, result.seq);
       return result;
     },
   };
@@ -1821,8 +1825,17 @@ export function buildTerms({ affording, spine, means = null }) {
 async function investigateOn(args, oriented) {
   if (args.investigate == null || String(args.investigate).trim() === "") return null;
   const kind = entityKindOf(args.investigate);
-  if (kind.kind === "creature")
-    return { kind: "creature", id: kind.id, unavailable: "creatures join the world with their class (WLD-46); nothing answers for one yet" };
+  if (kind.kind === "creature") {
+    // POS-637 PR-C: the creature as of now, its newest reactions with their odds, and the crossing save's row
+    const { creaturesForRead, investigateCreature, savedCreatureOf, REACTIONS_SQL } = await import("./creatures-read.mjs");
+    const { actsQuery } = await import("./world2-acts.mjs");
+    return investigateCreature(kind.id, {
+      creatures: await creaturesForRead(),
+      from: oriented?.standpoint ?? null,
+      rows: (id, n) => actsQuery(REACTIONS_SQL, [id, n]),
+      saved: (id) => savedCreatureOf(id),
+    });
+  }
   // the town's roll says who is a resident; when it cannot be read, nobody is
   // called unknown for it (the standpoint read then says what it can)
   const houseOf = await worldHouseholds().catch(() => () => "unreadable");
@@ -1904,7 +1917,37 @@ export const FIND_FOCUS_WORDS = Object.freeze({ offset: "find_offset", limit: "f
 
 async function findOn(args, key) {
   const payload = findFocusArgs(args);
-  return payload ? worldFind(payload, key, { words: FIND_FOCUS_WORDS }) : null;
+  if (!payload) return null;
+  const found = await worldFind(payload, key, { words: FIND_FOCUS_WORDS });
+  // C6 (Darko 2026-10-15 12:09): the living creatures a find names ride beside
+  // the marks, nearest first, with distance and bearing (creatures-read.mjs).
+  if (found && !found.error) {
+    try {
+      const { creaturesForRead, findCreatures } = await import("./creatures-read.mjs");
+      const cur = await creaturesForRead();
+      const hits = cur ? findCreatures(cur, payload.q, found.standpoint, { engine: await worldEngine() }) : null;
+      if (hits) found.creatures = hits;
+    } catch { /* a find answers its marks whatever the creatures do */ }
+  }
+  return found;
+}
+
+/** The world engine's bearing and band words, for creatures said the way residents are (or null). */
+async function worldEngine() {
+  try { return await (await import("./dynamic-entities.mjs")).worldToolModule("world-engine.mjs", { repo: WORLD_CLONE }); } catch { return null; }
+}
+
+/** v2's creature rows at a standpoint: { who, happening }, or null when none is living here. */
+async function creaturesAt(at, nowMs) {
+  try {
+    const { creaturesForRead, creaturesInWho, creatureHappening } = await import("./creatures-read.mjs");
+    const cur = await creaturesForRead({ nowMs });
+    if (!cur?.living?.byId.size) return null;
+    const engine = await worldEngine();
+    const who = creaturesInWho(cur, at, { nowMs, engine });
+    const happening = creatureHappening(cur, at, { nowMs, engine });
+    return who.length || happening.length ? { who, happening } : null;
+  } catch { return null; }
 }
 
 /** The landing's answer: the vessel's next departures from the stop you stand at. Null away from any stop. */
@@ -2249,8 +2292,20 @@ export async function happenedFor(oriented, args, key, { town = true, live = fal
       headlines = await readHeadlines({ sinceCrossing: since });
     } catch { headlines = null; }
 
+    // THE CREATURES' ANSWERS TO YOU (POS-637 PR-C; C1): v2's live read only.
+    let creatureEffects = null;
+    if (who && live) try {
+      const { creaturesForRead, creatureToYou } = await import("./creatures-read.mjs");
+      const { CROSSING_EPOCH_UTC, CROSSING_MS } = await import("./crossings.mjs");
+      const cur = await creaturesForRead();
+      // whenever the law is read here, an empty fold included: a since older than
+      // the fold's reach is then said incomplete rather than silently whole (review-574 C1)
+      if (cur?.living)
+        creatureEffects = creatureToYou(cur, who, { sinceMs: cursor ? cursor.ms : CROSSING_EPOCH_UTC + since * CROSSING_MS });
+    } catch { creatureEffects = null; }
+
     const block = happenedBlock({
-      transitions, carriedLegs, claimEffects, holdEffects, lines, at,
+      transitions, carriedLegs, claimEffects, holdEffects, creatureEffects, lines, at,
       sinceCrossing: since, nowCrossing,
       latestSettlement: town ? latestSettlement(WORLD_CLONE) : null,
       notices: town ? activeNotices() : [],
@@ -2568,6 +2623,10 @@ async function apexRead(args, key, ctx = {}) {
     const at = { x: answer.standpoint?.x, y: answer.standpoint?.y };
     const here = await placeWords(at);
     const near = /^near /.test(here ?? "") ? (await placeMarksAt(at).catch(() => ({}))).near ?? null : null;
+    // THE CREATURES (POS-637 PR-C; C3, C6): those within presence's radius in
+    // who, their answers within reach and the nearest out at the edge in
+    // happening_here. None living, or no law at the blessed ref: nothing added.
+    const creatures = await creaturesAt(at, nowMs);
     const shaped = shapeV2({
       heard,
       deep,
@@ -2606,6 +2665,7 @@ async function apexRead(args, key, ctx = {}) {
       focus,
       found,
       investigated,
+      creatures,
       diagnostics: args.diagnostics === true
         ? { law: answer.law, ...(oriented.present?.disclosed ? { disclosed: oriented.present.disclosed } : {}), crowd: { radius_m: oriented.present?.radius_m, count: oriented.present?.count } }
         : null,

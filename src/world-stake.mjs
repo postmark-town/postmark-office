@@ -33,6 +33,7 @@ import { execUnderTownLock, lockTimedOut, LOCK_BUSY } from "./town-lock.mjs";
 import { heldFor, clipTo, stampsBlock, toConfirm, RULE_MARK, NOTHING_MOVED } from "./stamps-preview.mjs"; // POS-83: the confirmation step for every act that moves stamps
 import { householdLookup } from "./households.mjs"; // POS-545: the portfolio's roster is the store's registry
 import { faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
+import { perceived } from "./act-watch.mjs"; // POS-637 PR-B: every act door perceives creatures
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TOWN_CLONE = process.env.TOWN_CLONE ?? resolve(HERE, "..", "town-clone");
@@ -906,7 +907,10 @@ export const WORLD_STAKE_TOOLS = [
     }, required: ["mark"], additionalProperties: false } },
 ];
 
-export async function callWorldStakeTool(name, args = {}, key = null) {
+// POS-637 PR-B: a stake that releases a private draft's leave-mark into the record is the
+// leave-mark the creatures perceive (act-watch.mjs § perceived; the draft itself never is).
+export async function callWorldStakeTool(name, args = {}, key = null) { return perceived(() => stakeAct(name, args, key)); }
+async function stakeAct(name, args = {}, key = null) {
   if (name === "world_stake" || name === "world_unstake") { const fz = worldFreezeBounce(); if (fz) return fz; }
   switch (name) {
     case "world_stake": return worldStakeViaOffice(args, key);
