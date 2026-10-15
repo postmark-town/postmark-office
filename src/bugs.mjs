@@ -129,7 +129,8 @@ export function judgeCritter(v) {
  * cause (diagnosed) or the fix brief (briefed), the PR (fixed), the release
  * tag (shipped). The post keeps one per stage in fields.links, so the record
  * points at everything the town paid for and the stage pass can check it.
- * Optional: a stage our own fix proved may have nothing else to point at.
+ * Optional for confirmed, reproduced and shipped; diagnosed, briefed and fixed
+ * need one, of their own kind, by the credited resident (POS-649, below).
  */
 export const LINK_RE = /^https:\/\/github\.com\/postmark-town\/[A-Za-z0-9._-]+\/\S+$/;
 export const LINK_MAX = RECORD_MAX;
@@ -143,6 +144,80 @@ export function judgeLink(v) {
   if (s.length > LINK_MAX) throw refuse(422, `link is at most ${LINK_MAX} characters`, `this one is ${s.length}`, { field: "link" });
   if (!LINK_RE.test(s)) throw refuse(422, "link points at the town's own repos", LINK_HOW, { field: "link" });
   return s;
+}
+
+// ── AN EARNED STAGE IS CHECKED AGAINST ITS WORK (POS-649, a hotfix) ─────────
+//
+// Darko, 2026-10-15 12:37: "a deterministic check, not tighter wording …
+// pretty much every mistake that is made is irreversible." On 10-14 a hand
+// advanced #3757 to briefed crediting wright and linked wright's own PR, while
+// the brief was Kino's letter; the pass minted 10 stamps the ledger can't take
+// back. So diagnosed, briefed and fixed each need a link, the link's kind must
+// fit the stage, and the credited resident must be its author
+// (bug-credit.mjs § judgeEarnedCredit reads the author and judges the binding).
+// Confirmed, reproduced, shipped and the side exits are left as they were.
+export const EARNED_STAGES = Object.freeze([STATE_DIAGNOSED, STATE_BRIEFED, STATE_FIXED]);
+
+/** What earns each checked stage, in the words every refusal teaches with. */
+export const EARNED_BY = Object.freeze({
+  [STATE_DIAGNOSED]: "diagnosed is earned by the cause: link the issue comment, the issue, or the letter that names it; its author is who's credited",
+  [STATE_BRIEFED]: "briefed is earned by the brief: link the issue comment, the issue, or the letter that holds it; its author is who's credited",
+  [STATE_FIXED]: "fixed is earned by the fix: link its pull request; its author is who's credited",
+});
+const EARNED_SHAPES = Object.freeze({
+  [STATE_DIAGNOSED]: 'link: "https://github.com/postmark-town/<repo>/issues/<n>#issuecomment-<id>", ".../issues/<n>", or a letter\'s id',
+  [STATE_BRIEFED]: 'link: "https://github.com/postmark-town/<repo>/issues/<n>#issuecomment-<id>", ".../issues/<n>", or a letter\'s id',
+  [STATE_FIXED]: 'link: "https://github.com/postmark-town/<repo>/pull/<n>"',
+});
+const EARNED_KINDS = Object.freeze({
+  [STATE_DIAGNOSED]: Object.freeze(["comment", "issue", "letter"]),
+  [STATE_BRIEFED]: Object.freeze(["comment", "issue", "letter"]),
+  [STATE_FIXED]: Object.freeze(["pull"]),
+});
+const KIND_NAME = Object.freeze({ comment: "an issue comment", issue: "an issue", pull: "a pull request", letter: "a letter" });
+
+/** The founders' GitHub accounts, by id (the login is a label), and the handles they credit. */
+export const FOUNDER_ACCOUNTS = Object.freeze({ 306351151: "wright-starforge", 67605380: "keeminlee" });
+export const FOUNDER_HANDLES = Object.freeze(["wright", "keemin"]);
+
+const REPO = "([A-Za-z0-9._-]+)";
+const COMMENT_LINK_RE = new RegExp(`^https://github\\.com/postmark-town/${REPO}/issues/(\\d+)#issuecomment-(\\d+)$`);
+const ISSUE_LINK_RE = new RegExp(`^https://github\\.com/postmark-town/${REPO}/issues/(\\d+)$`);
+const PULL_LINK_RE = new RegExp(`^https://github\\.com/postmark-town/${REPO}/pull/(\\d+)$`);
+/** A letter's id, as the town spells one (`<from>-<date>-to-<to>-<slug>`): no slash, no colon. */
+const LETTER_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/** What a link names: `{ kind, repo?, number?, comment?, id? }`, or null for no shape we read. */
+export function earnedRef(s) {
+  let m;
+  if ((m = COMMENT_LINK_RE.exec(s))) return { kind: "comment", repo: m[1], number: Number(m[2]), comment: m[3] };
+  if ((m = ISSUE_LINK_RE.exec(s))) return { kind: "issue", repo: m[1], number: Number(m[2]) };
+  if ((m = PULL_LINK_RE.exec(s))) return { kind: "pull", repo: m[1], number: Number(m[2]) };
+  if (LETTER_ID_RE.test(s)) return { kind: "letter", id: s };
+  return null;
+}
+
+/**
+ * The link an earned stage needs: present, and of the kind the stage is earned
+ * by. Returns `{ link, ref }`; whose work it is is judged with the store and
+ * GitHub (bug-credit.mjs), never here.
+ */
+export function judgeEarnedLink(to, v) {
+  const how = `${EARNED_BY[to]} — ${EARNED_SHAPES[to]}`;
+  if (v === undefined) throw refuse(422, `${to} needs a link to the work that earned it`, how, { field: "link" });
+  if (typeof v !== "string") throw refuse(422, "link is text", how, { field: "link" });
+  const s = v.trim();
+  if (!s) throw refuse(422, `${to} needs a link to the work that earned it`, how, { field: "link" });
+  if (s.length > LINK_MAX) throw refuse(422, `link is at most ${LINK_MAX} characters`, `this one is ${s.length}`, { field: "link" });
+  const ref = earnedRef(s);
+  if (!ref) throw refuse(422, `${to}'s link is not one the office can read`, how, { field: "link" });
+  if (!EARNED_KINDS[to].includes(ref.kind)) {
+    const defect = ref.kind === "pull"
+      ? `${to} is never earned by a pull request`
+      : `${to} is earned by a pull request, and this link is ${KIND_NAME[ref.kind]}`;
+    throw refuse(422, defect, how, { field: "link" });
+  }
+  return { link: s, ref };
 }
 
 /** The fields a bug's reporter may send and amend, beside title and body. */
@@ -226,7 +301,8 @@ export function judgeBugHand(fields, key, { act }) {
 
 /**
  * Judge an advance against the post's current state. Returns the payload's
- * judged parts: `{ to, credit, size?, critter?, grade?, of?, link? }`. `reporter` is the post's
+ * judged parts: `{ to, credit, size?, critter?, grade?, of?, link?, earned? }`
+ * (`earned`: what an earned stage's link names, for bug-credit.mjs). `reporter` is the post's
  * author, the credit a `confirmed` defaults to.
  */
 export function judgeAdvance(fields, prev, roll) {
@@ -264,7 +340,11 @@ export function judgeAdvance(fields, prev, roll) {
     if (!BUG_GRADES.includes(fields.grade)) throw refuse(422, "briefed needs a grade", `grade: ${BUG_GRADES.join(" or ")} — the bless's revision (${BUG_GRADES.map((g) => `${g} ${BUG_LADDER.briefed.n[g]}`).join(", ")})`, { field: "grade" });
     out.grade = fields.grade;
   }
-  if (fields.link !== undefined) out.link = judgeLink(fields.link);
+  if (EARNED_STAGES.includes(to)) {
+    const e = judgeEarnedLink(to, fields.link);
+    out.link = e.link;
+    out.earned = e.ref;
+  } else if (fields.link !== undefined) out.link = judgeLink(fields.link);
   if (fields.of !== undefined && to !== STATE_DUPLICATE) throw refuse(422, "of is duplicate's", "only an advance to duplicate names the post it duplicates", { field: "of" });
   if (to === STATE_DUPLICATE) {
     const of = typeof fields.of === "string" ? fields.of.trim() : "";

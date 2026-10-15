@@ -45,6 +45,7 @@ import {
   BUG_CLASS, BUG_FINISHED, BUG_LADDER, BUG_STAGES, BUG_HANDS, STATE_REPORTED, stageAmount,
   judgeBugText, judgeBugHand, judgeHandleField, judgeAdvance, judgeReveal, REVEAL_CANDIDATES, BUG_NO_STAKE, BUG_NO_CLOSE,
 } from "./bugs.mjs";
+import { githubAuthorOf, judgeEarnedCreditVia } from "./bug-credit.mjs";
 import { ideaPostsOn } from "./ideas.mjs";
 import {
   EVENT_CLASS, ACT_POST, ACT_AMEND_POST, ACT_CLOSE, ACT_ADVANCE, ACT_REVEAL, ACT_RSVP, ACT_ANNOUNCE, ENDED_LIST_DAYS,
@@ -639,10 +640,15 @@ async function amendBug(fields, key, id, { now, env }) {
 async function advanceBug(fields, key, id, { now, env, roll }) {
   if (fields.stamps !== undefined) throw BUG_NO_STAKE(id);
   const hand = judgeBugHand(fields, key, { act: "advance a bug" });
+  // POS-649: who wrote an earned stage's linked work is read from GitHub before
+  // the write's transaction opens, so no store connection waits on the network.
+  const before = await read((c) => bugRow(c, id), env);
+  const gh = before ? await githubAuthorOf(judgeAdvance(fields, before, roll), { env }) : null;
   return write(async (client) => {
     const prev = await bugRow(client, id);
     if (!prev) throw refuse(404, `no bug "${id}"`, 'town { read: "posts", args: { class: "bug" } } lists them');
     const j = judgeAdvance(fields, prev, roll);
+    if (j.earned) await judgeEarnedCreditVia(client, j, gh);
     if (j.of && !(await bugRow(client, j.of)))
       throw refuse(404, `no bug "${j.of}" to be a duplicate of`, 'of: a standing bug post — town { read: "posts", args: { class: "bug" } } lists them', { field: "of" });
     // The critter's namer is the fix's credit, kept beside the name so the post says who named it.

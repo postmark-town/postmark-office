@@ -392,7 +392,7 @@ Move a post along its class's lifecycle — town { do: "advance" }'s flat charge
 | `critter` | string | class "bug", to: "fixed" only, and required there — the critter's name, as the fixer chose it and told the hands in the PR or the issue: 1–40 characters, one line, plain text |
 | `grade` | `light` \\| `heavy` | class "bug", to: "briefed" only — the bless's revision, light (10 stamps) or heavy (5) |
 | `of` | string | class "bug", to: "duplicate" only — the bug post it duplicates, <author>/<slug> |
-| `link` | string | class "bug", optional — the work that earned the stage, on github.com/postmark-town/: the issue comment with the cause (diagnosed) or the fix brief (briefed), the PR (fixed), the release tag (shipped); at most 300 characters |
+| `link` | string | class "bug", required at diagnosed, briefed and fixed, whose credit is its author — the work that earned the stage, on github.com/postmark-town/: the issue comment with the cause (diagnosed) or the fix brief (briefed), the PR (fixed), the release tag (shipped), or a letter's id at diagnosed or briefed; at most 300 characters |
 
 ### `town_reveal` · **write (credentialed)** · *delisted · still answers*
 

@@ -34,6 +34,7 @@
 // description that changed shows up as a diff in review.
 
 import { execFileSync } from "node:child_process";
+import { createServer } from "node:http";
 import { writeFileSync, mkdirSync, realpathSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -77,9 +78,12 @@ export const STEPS = [
   { kind: "refusal", title: "Advance backwards", who: WRIGHT, env: { do: "advance", args: { post: ID, to: "confirmed" } } },
   { kind: "refusal", title: "A side exit after confirmed", who: WRIGHT, env: { do: "advance", args: { post: ID, to: "not-a-bug" } } },
   { kind: "refusal", title: "A link off the town's repos", who: WRIGHT, env: { do: "advance", args: { post: ID, to: "diagnosed", credit: "finn", link: "https://example.com/finn/notes" } } },
+  { kind: "refusal", title: "Advance to diagnosed without a link", who: WRIGHT, env: { do: "advance", args: { post: ID, to: "diagnosed", credit: "finn" } }, note: "POS-649: diagnosed, briefed and fixed each link the work that earned them." },
+  { kind: "refusal", title: "Credit someone other than the work's author", who: WRIGHT, env: { do: "advance", args: { post: ID, to: "diagnosed", credit: "errant", link: "https://github.com/postmark-town/postmark-office/issues/256#issuecomment-1" } }, note: "finn's account wrote that comment, and errant stands in another household." },
   { kind: "step", title: "Advance: diagnosed, pointing at the cause", who: WRIGHT, env: { do: "advance", args: { post: ID, to: "diagnosed", credit: "finn", link: "https://github.com/postmark-town/postmark-office/issues/256#issuecomment-1" } }, note: "finn named the cause on the issue; the post keeps the comment as fields.links.diagnosed." },
   { kind: "refusal", title: "Advance to briefed without a grade", who: WRIGHT, env: { do: "advance", args: { post: ID, to: "briefed", credit: "finn" } } },
   { kind: "refusal", title: "Name the critter before fixed", who: WRIGHT, env: { do: "advance", args: { post: ID, to: "briefed", credit: "finn", grade: "light", critter: "Hinge Nibbler" } } },
+  { kind: "refusal", title: "Advance to briefed pointing at a pull request", who: WRIGHT, env: { do: "advance", args: { post: ID, to: "briefed", credit: "finn", grade: "light", link: "https://github.com/postmark-town/postmark-office/pull/258" } }, note: "A brief is a comment, an issue or a letter; a PR earns fixed." },
   { kind: "step", title: "Advance: briefed (light), pointing at the brief", who: WRIGHT, env: { do: "advance", args: { post: ID, to: "briefed", credit: "finn", grade: "light", link: "https://github.com/postmark-town/postmark-office/issues/256#issuecomment-2" } } },
   { kind: "refusal", title: "Advance to fixed without a size", who: WRIGHT, env: { do: "advance", args: { post: ID, to: "fixed", credit: "finn" } } },
   { kind: "refusal", title: "Advance to fixed without a critter", who: WRIGHT, env: { do: "advance", args: { post: ID, to: "fixed", credit: "finn", size: "M" } } },
@@ -87,7 +91,7 @@ export const STEPS = [
   { kind: "refusal", title: "Close a bug", who: WRIGHT, env: { do: "close", args: { post: ID } } },
   { kind: "step", title: "Advance: shipped", who: WRIGHT, env: { do: "advance", args: { post: ID, to: "shipped" } } },
   { kind: "refusal", title: "Advance a finished bug", who: WRIGHT, env: { do: "advance", args: { post: ID, to: "shipped" } } },
-  { kind: "step", title: "A hand jumps a bug: reported → diagnosed", who: WRIGHT, env: { do: "advance", args: { post: "ada/the-map-drifts", to: "diagnosed", credit: "finn" } }, note: "A skipped stage pays nothing; the receipt says which." },
+  { kind: "step", title: "A hand jumps a bug: reported → diagnosed", who: WRIGHT, env: { do: "advance", args: { post: "ada/the-map-drifts", to: "diagnosed", credit: "finn", link: "https://github.com/postmark-town/postmark-office/issues/257#issuecomment-3" } }, note: "A skipped stage pays nothing; the receipt says which." },
   { kind: "step", title: "A hand links the issue on a finished bug", who: WRIGHT, env: { do: "amend", args: { post: ID, issue: "https://github.com/postmark-town/postmark-office/issues/256" } }, note: "Wright's ruling on #257: a discussion opened after the post has to be linkable." },
   { kind: "step", title: "Read the bug posts", who: null, env: { read: "posts", args: { class: "bug" } } },
 ];
@@ -158,6 +162,16 @@ function postsTable() {
   ];
 }
 
+// The work finn did on GitHub, as its API answers (POS-649: an earned stage's credit is its author).
+const FINN_GH = { login: "finn-gh", id: 1002 };
+const onIssue = (n) => `https://api.github.com/repos/postmark-town/postmark-office/issues/${n}`;
+const GITHUB_WORK = {
+  "/repos/postmark-town/postmark-office/issues/comments/1": { id: 1, issue_url: onIssue(256), user: FINN_GH },
+  "/repos/postmark-town/postmark-office/issues/comments/2": { id: 2, issue_url: onIssue(256), user: FINN_GH },
+  "/repos/postmark-town/postmark-office/issues/comments/3": { id: 3, issue_url: onIssue(257), user: FINN_GH },
+  "/repos/postmark-town/postmark-office/pulls/258": { number: 258, user: FINN_GH },
+};
+
 const bytes = (v) => Buffer.byteLength(JSON.stringify(v));
 const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 const pretty = (v) => esc(JSON.stringify(v, (k, x) => (x instanceof Set ? [...x] : x), 2));
@@ -174,7 +188,16 @@ export async function collect({ cls = "bug" } = {}) {
   const { townDispatchToolFor, TOWN_READS } = await import("../src/town-apex.mjs");
   const { planStages, renderPlan, storeFacts } = await import("./bug-stage-plan.mjs");
 
-  const pen = installActsPen({ households: [{ slug: "the-harbor", ord: 1, residents: ["errant", "ada"] }, { slug: "finns-place", ord: 2, residents: ["finn"] }], also: postsTable() });
+  // finn's place signs in as finn-gh, the account that wrote finn's work on GitHub.
+  const pen = installActsPen({ households: [{ slug: "the-harbor", ord: 1, residents: ["errant", "ada"] }, { slug: "finns-place", ord: 2, residents: ["finn"], accounts: [FINN_GH] }], also: postsTable() });
+  // GitHub, offline (POS-649): the one GET an earned advance makes, answered here.
+  const github = createServer((req, res) => {
+    const hit = GITHUB_WORK[req.url];
+    res.writeHead(hit ? 200 : 404, { "content-type": "application/json" });
+    res.end(JSON.stringify(hit ?? { message: "Not Found" }));
+  });
+  await new Promise((ok) => github.listen(0, "127.0.0.1", ok));
+  process.env.GITHUB_API_URL = `http://127.0.0.1:${github.address().port}`;
   // The office's residents index, which a bug's `for` and `credit` must stand in: an in-memory
   // office.db `residents` table, read by the door's own residentList.
   const { DatabaseSync } = await import("node:sqlite");
@@ -196,7 +219,7 @@ export async function collect({ cls = "bug" } = {}) {
     const facts = await storeFacts();
     const rows = planStages({ acts: facts.acts, houseOf: (h) => facts.houses.get(h) ?? null, isMeep: () => false, paid: new Set() });
     return { town, steps: out, plan: renderPlan(rows), acts: pen.rows().length, cls };
-  } finally { uninstallActsPen(); }
+  } finally { uninstallActsPen(); github.close(); }
 }
 
 function commitOf() {
