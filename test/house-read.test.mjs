@@ -311,19 +311,22 @@ test("NEEDS-YOU (WLD-51 part 3): an at-risk row carries the stakes row whole, it
   assert.equal(n.stakes_at_risk.rows[0].body, "A shed of salvaged boards, door on a leather hinge.");
 });
 
-test("NEEDS-YOU, G3 (WLD-51, Darko 2026-10-15): a mark the settlement took is listed with the stakes segment's own note, and counts", async () => {
+test("NEEDS-YOU, ALERTS (WLD-51, Darko 2026-10-15 19:29): the house's alerts in the doorstep's one shape, counted; an unread kind is named, and the quiet note never claims nothing waits", async () => {
   const { readers } = worldReaders();
-  const note = "r000/kite had no stamps behind it, so it left the world at the Oct 15, 2:00 pm EDT settlement. It's back in your household's drafts, and its author, r000, can stake it, or leave it again with a stamp, to bring it back.";
-  const plain = readers.stakesFor;
-  readers.stakesFor = async (handles) => ({ ...(await plain(handles)),
-    left_the_world: [{ mark: "r000/kite", kind: "sited", left_at: "2026-10-15T18:00:00.000Z", note_until: "2026-10-22T18:00:00.000Z", note, act: 'world { do: "stake", args: { mark: "r000/kite", stamps: 1 } }' }] });
+  const taken = { kind: "mark-taken", severity: "act", about: { mark: "r000/kite", body: "A kite of waxed paper." },
+    message: "r000/kite had no stamps behind it, so it left the world at the Oct 15, 2:00 pm EDT settlement. It's back in your household's drafts, and its author, r000, can stake it, or leave it again with a stamp, to bring it back.",
+    act: { verb: "stake", args: { mark: "r000/kite", stamps: 1 } }, since: "2026-10-15T18:00:00.000Z", until: "2026-10-22T18:00:00.000Z" };
+  const asked = [];
+  readers.alertsFor = async (handles) => { asked.push([...handles]); return { alerts: [taken], unread: [] }; };
   const key = { household: "fixture", handles: new Set(["r000", "r001"]) };
   const n = await needsYou({}, ctx({ readers, key }));
-  assert.deepEqual(n.left_the_world.rows.map((r) => [r.mark, r.cause, r.act]), [["r000/kite", note, 'world { do: "stake", args: { mark: "r000/kite", stamps: 1 } }']]);
-  assert.equal(n.count, 3 + 1, "the take counts beside the stances, the bounces and the at-risk mark");
-  readers.stakesFor = async (handles) => ({ ...(await plain(handles)), left_the_world_unavailable: "the marks a settlement took from you could not be read (down) — unknown, not none" });
+  assert.deepEqual(asked, [["r000", "r001"]], "every resident of the house here");
+  assert.deepEqual(n.alerts, [taken]);
+  assert.equal("left_the_world" in n, false, "the loose rows are gone: the alert replaces them");
+  assert.equal(n.count, 3 + 1, "the alert counts beside the stances, the bounces and the at-risk mark");
+  readers.alertsFor = async () => ({ alerts: [], unread: [{ kind: "mark-taken", reason: "down" }] });
   const blind = await needsYou({}, ctx({ readers, key }));
-  assert.deepEqual(blind.left_the_world, { rows: [], unavailable: "the marks a settlement took from you could not be read (down) — unknown, not none" });
+  assert.deepEqual([blind.alerts, blind.alerts_unread], [[], [{ kind: "mark-taken", reason: "down" }]]);
 });
 
 // ── the door ────────────────────────────────────────────────────────────────

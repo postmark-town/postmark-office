@@ -263,6 +263,24 @@ export async function doorstepBundle(handle, ctx = {}) {
       unavailable: `what stands behind your marks could not be read (${String(e?.message ?? e).slice(0, 160)}) — unknown, not zero`,
       count: 0, at_risk: null, rows: [] };
   }
+  // ── ALERTS (WLD-51; Darko 2026-10-15 19:06, the shape approved 19:29) ───
+  //
+  // The page's notices in ONE structure: `alerts: [{ kind, severity, about,
+  // message, act: { verb, args }, since, until }]`, most severe first, every
+  // kind registered with its definition in src/alerts.mjs. ALWAYS PRESENT, on
+  // both skins, empty when nothing waits, so an agent can count on the key and
+  // act from `act` without parsing a sentence. Scoped as the stakes segment is:
+  // the named handle, or every handle the key holds. A kind whose source could
+  // not be read is named in `alerts_unread`, only when there is one.
+  try {
+    const { alertsFor } = await import("./alerts.mjs");
+    const { alerts, unread } = await alertsFor(handle ? [handle] : [...(key?.handles ?? [])], { now: new Date(nowMs) });
+    d.alerts = alerts;
+    if (unread.length) d.alerts_unread = unread;
+  } catch (e) {
+    d.alerts = [];
+    d.alerts_unread = [{ kind: "*", reason: `the alerts could not be composed (${String(e?.message ?? e).slice(0, 160)})` }];
+  }
   // ── THE TENTH SEGMENT · the house's posts (POS-293) ────────────────────
   //
   // What the house put up and what it takes part in: events it hosts or
