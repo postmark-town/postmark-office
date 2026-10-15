@@ -54,16 +54,21 @@
 //   already paid   the household already holds its quest:<id> line (the town's
 //                  law: one line per quest and household, ever).
 //   rejected       a hand read it and named it in --reject: not feedback.
-//   unbound        a comment's GitHub account binds no resident here, or a
-//                  letter's sender has no room.
+//   no file        the ledger delivered a marked letter, but the inbox holds no
+//                  file for a hand to read (Q4 cannot be met): "no letter on file".
+//   unbound        a comment's GitHub account binds no resident here (by its
+//                  id; the login only for a binding with no id), or a letter's
+//                  sender has no room.
 //   duplicate      the same household's earlier feedback in this plan, from
-//                  either source, is the one paid.
+//                  either source, is the one paid. Only an owed row holds the
+//                  house: a meep's or a refused row never does.
 //   meep           the recipient is a meep (the town's meep law).
 //   refused        the town's builder would refuse the line.
 //   owed           everything else: the pass writes it.
 //
 // The recipient: a comment pays the resident of the author's house it names
-// (@handle), else the house's first; a letter pays its sender.
+// (@handle; only a handle holding the house's key), else the house's first; a
+// letter pays its sender.
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -109,7 +114,7 @@ export function commentItems(comments, { discussion }) {
 /** The letters delivered to the quest's recipient and marked as its feedback, as feedback items. `letters` are { id, from, to, date (delivery), body }. PURE. */
 export function letterItems(letters, { source }) {
   return (letters ?? []).filter((l) => l.to === source.letters_to && isMarkedLetter(l.id, source)).map((l) => ({
-    ref: `letter:${l.id}`, source: "letter", link: l.id, date: l.date, body: l.body, author: l.from, sender: l.from,
+    ref: `letter:${l.id}`, source: "letter", link: l.id, date: l.date, body: l.body, author: l.from, sender: l.from, to: l.to,
   }));
 }
 
@@ -137,6 +142,7 @@ export function planQuestPays({ items, quest, terms, houseOf, isMeep, paid = new
     const base = { ref: d.ref, source: d.source, link: d.link, author: d.author, first: firstLineOf(d.body), date: d.date };
     const nothing = (why, extra = {}) => rows.push({ ...base, ...extra, n: 0, why, owed: false });
     if (rejected.has(d.ref)) { nothing("rejected: a hand read it — not feedback"); continue; }
+    if (d.source === "letter" && d.body == null) { nothing(`no letter on file: the ledger delivered it, and WHITE_PAGES/${d.to}/inbox holds no ${d.link} for a hand to read`); continue; }
     const house = houseOf(d);
     if (!house) { nothing(d.source === "letter" ? `unbound: ${d.author} has no room here` : `unbound: ${d.author} binds no resident here`); continue; }
     const handle = d.source === "letter" ? d.sender : recipientOf(d, house);
@@ -144,11 +150,13 @@ export function planQuestPays({ items, quest, terms, houseOf, isMeep, paid = new
     const was = paid.get(house.household);
     if (was) { rows.push({ ...base, ...at, n: terms.amount, owed: false, why: `already paid: ${was.handle} on ${was.date}` }); continue; }
     if (held.has(house.household)) { nothing(`duplicate: the household's ${held.get(house.household)} is the one paid`, at); continue; }
-    held.set(house.household, d.ref);
+    // A row that pays nothing (a meep, a line the town refuses) never holds the
+    // house: the household's next piece of feedback is still the one paid.
     if (isMeep(handle, date)) { nothing("meep: a meep never receives stamps", at); continue; }
     let line;
     try { line = lineOf({ date, handle, quest, household: house.household }); }
     catch (e) { nothing(`refused: ${String(e?.message ?? e).split(/\r?\n/)[0]}`, at); continue; }
+    held.set(house.household, d.ref);
     rows.push({ ...base, ...at, n: terms.amount, why: "owed", owed: true, line });
   }
   return rows;
@@ -261,8 +269,8 @@ export async function townEngine(town, quest) {
  * The letters delivered to `to`, from the town clone: the mail ledger's delivery
  * lines (the ferry's own record; the date is the crossing's), each with its body
  * from the recipient's inbox (`<id>.md`, or a folder letter's `<id>/letter.md`).
- * A delivered letter whose file is gone still lists, with an empty body: the
- * hand reads it before the apply.
+ * A delivered letter whose file is gone has body null, and the plan lists it
+ * as paying nothing (no letter on file): a hand cannot read it.
  */
 export function deliveredLetters(town, to, parseMailLedger) {
   const file = join(town, MAIL_LEDGER_REL);
@@ -271,7 +279,7 @@ export function deliveredLetters(town, to, parseMailLedger) {
   const bodyOf = (id) => {
     for (const p of [join(inbox, `${id}.md`), join(inbox, id, "letter.md")])
       if (existsSync(p)) return readFileSync(p, "utf8").replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "");
-    return "";
+    return null; // delivered, but no file: the plan pays it nothing (no letter on file)
   };
   return parseMailLedger(readFileSync(file, "utf8"))
     .filter((e) => e.kind === "delivery" && e.to === to)
@@ -317,9 +325,17 @@ export function housesFrom(bindings, { keyOf, hasRoom, date }) {
     const author = item?.gh ?? item?.author;
     const id = author?.databaseId == null ? null : String(author.databaseId);
     const login = String(author?.login ?? "").toLowerCase();
-    const mine = bindings.filter((b) => (id && b.gh_id === id) || (login && String(b.gh_login ?? "").toLowerCase() === login)).map((b) => b.handle).filter(hasRoom);
+    // By GitHub id: a binding that carries an id matches that id only (a renamed
+    // account's old login, taken by someone else, binds nothing); the login is
+    // the match only for a binding with no id.
+    const mine = bindings.filter((b) => (b.gh_id ? id !== null && String(b.gh_id) === id : login && String(b.gh_login ?? "").toLowerCase() === login))
+      .map((b) => b.handle).filter(hasRoom);
     if (!mine.length) return null;
-    return { household: keyOf(mine[0], date), handles: mine };
+    // The house is the first handle's key, and only the handles holding that key
+    // are its residents here: a named handle pinned to the same account under
+    // another key could never be paid on this line (the minter refuses it).
+    const household = keyOf(mine[0], date);
+    return { household, handles: mine.filter((h) => keyOf(h, date) === household) };
   };
 }
 

@@ -157,6 +157,56 @@ test("the letters come from the mail ledger's deliveries to the postmaster, with
   rmSync(town, { recursive: true });
 });
 
+// ── review-quest F1–F4 (2026-10-15) ─────────────────────────────────────────
+
+test("F3: a marked letter the ledger delivered but the inbox does not hold pays nothing, and says why", () => {
+  const town = mkdtempSync(join(tmpdir(), "quest-letters-"));
+  mkdirSync(join(town, "WHITE_PAGES", "postmaster", "inbox"), { recursive: true });
+  writeFileSync(join(town, "WHITE_PAGES", "mail-ledger.md"), "- 2026-10-16 · dana-2026-10-16-to-postmaster-v2-feedback · dana → postmaster · thread: new\n");
+  const parse = (text) => text.split("\n").map((l) => /^- (\S+) · (\S+) · (\S+) → (\S+)/.exec(l)).filter(Boolean).map((m) => ({ kind: "delivery", date: m[1], id: m[2], from: m[3], to: m[4] }));
+  const letters = deliveredLetters(town, "postmaster", parse);
+  rmSync(town, { recursive: true });
+  assert.equal(letters[0].body, null, "no file: no body, never an empty one");
+  const rows = planQuestPays({ items: items([], letters), quest: Q, terms: TERMS, houseOf, isMeep: () => false, lineOf, date: "2026-10-17" });
+  assert.equal(rows[0].owed, false);
+  assert.match(rows[0].why, /^no letter on file: .*WHITE_PAGES\/postmaster\/inbox holds no dana-2026-10-16-to-postmaster-v2-feedback/);
+  assert.match(renderPlan(rows, { date: "2026-10-17", quest: Q }), /0 owed \(0 stamps\)/);
+});
+
+test("F1: a comment's named recipient is chosen only among the handles holding the house's key", () => {
+  // one GitHub account pins ann (gh:1) and zed-bot (its own solo key): the line names gh:1, so it can only pay ann.
+  const bindings = [{ handle: "ann", gh_login: "annie", gh_id: "1" }, { handle: "zed-bot", gh_login: "annie", gh_id: "1" }];
+  const keys = { ann: "gh:1", "zed-bot": "solo:zed-bot" };
+  const houses = housesFrom(bindings, { keyOf: (h) => keys[h], hasRoom: () => true, date: "2026-10-17" });
+  const rows = planQuestPays({ items: items([C(1, "annie", 1, undefined, "from @zed-bot: the view is lovely")]), quest: Q, terms: TERMS, houseOf: houses, isMeep: () => false, lineOf, date: "2026-10-17" });
+  assert.deepEqual([rows[0].handle, rows[0].household, rows[0].owed], ["ann", "gh:1", true], "never zed-bot on gh:1's line, which the minter refuses");
+});
+
+test("F2: a meep's or a refused row never holds the house, so the household's next feedback is still paid", () => {
+  // one account pins aa-meep and bob under one key: the unnamed comment goes to aa-meep (the first) and pays nothing.
+  const bindings = [{ handle: "aa-meep", gh_login: "acct", gh_id: "1" }, { handle: "bob", gh_login: "acct", gh_id: "1" }];
+  const houses = housesFrom(bindings, { keyOf: () => "gh:1", hasRoom: () => true, date: "2026-10-17" });
+  const rows = planQuestPays({ items: items([C(1, "acct", 1)], [L("bob-2026-10-16-to-postmaster-v2-feedback", "bob")]),
+    quest: Q, terms: TERMS, houseOf: houses, isMeep: (h) => h === "aa-meep", lineOf, date: "2026-10-17" });
+  assert.deepEqual(rows.map((r) => [r.ref, r.owed]), [["comment:1", false], ["letter:bob-2026-10-16-to-postmaster-v2-feedback", true]]);
+  assert.match(rows[0].why, /^meep/);
+  // a line the town refuses holds nothing either.
+  const refusing = (row) => { if (row.handle === "aa-meep") throw new Error("no room"); return lineOf(row); };
+  const refused = planQuestPays({ items: items([C(1, "acct", 1)], [L("bob-2026-10-16-to-postmaster-v2-feedback", "bob")]),
+    quest: Q, terms: TERMS, houseOf: houses, isMeep: () => false, lineOf: refusing, date: "2026-10-17" });
+  assert.deepEqual(refused.map((r) => [r.why.split(":")[0], r.owed]), [["refused", false], ["owed", true]]);
+});
+
+test("F4: a comment binds by its author's GitHub id; a login alone binds only a binding with no id", () => {
+  const bindings = [{ handle: "dee", gh_login: "old", gh_id: "5" }, { handle: "eve", gh_login: "eve-gh", gh_id: null }];
+  const houses = housesFrom(bindings, { keyOf: (h) => `gh:${h}`, hasRoom: () => true, date: "2026-10-17" });
+  const rows = planQuestPays({ items: items([C(1, "old", 99), C(2, "old", 5), C(3, "eve-gh", 7)]), quest: Q, terms: TERMS, houseOf: houses, isMeep: () => false, lineOf, date: "2026-10-17" });
+  const by = Object.fromEntries(rows.map((r) => [r.ref, r]));
+  assert.match(by["comment:1"].why, /^unbound: old binds no resident here/, "the login matches but the id is another account's");
+  assert.deepEqual([by["comment:2"].handle, by["comment:2"].owed], ["dee", true]);
+  assert.deepEqual([by["comment:3"].handle, by["comment:3"].owed], ["eve", true], "a binding with no id still matches by login");
+});
+
 test("the comments are read from the one designated discussion, by number, every page", async () => {
   const asked = [];
   const pages = [
