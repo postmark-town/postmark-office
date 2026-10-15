@@ -223,6 +223,34 @@ test("a turn that hangs holds its creature's next turn for TURN_WAIT_MS at most,
   assert.deepEqual(writes, ["41", "42"], "after TURN_WAIT_MS the creature answers again: the reaction is written and stands");
 });
 
+test("B1 (review-571): the bound starts at the hook — a slow standpoint or a slow read-back never holds the act past ANSWER_WAIT_MS", async () => {
+  __setCreaturesForTest(livingWith(spawnRow("creature:wolf-270-4")));
+  const enter = { actor: "kai", action: "enter", id: "51" };
+  const slow = (ms, v) => new Promise((r) => setTimeout(() => r(v), ms));
+  for (const [name, deps] of [
+    ["a standpoint that takes 3 s", { standpointOf: () => slow(3000, { x: 20, y: 0, placed: true }) }],
+    ["a read-back that takes 3 s", { standpointOf: async () => ({ x: 20, y: 0, placed: true }), query: () => slow(3000, [{ id: "51", at: new Date(), actor: "kai", action: "enter" }]) }],
+  ]) {
+    const t0 = Date.now();
+    const out = await creaturesAnswer([enter], { entered: ["a/room"] }, { centreOf, around: quiet, ask: jev({ watch: 1 }), write: recordingWrite().write, env: ENV, ...deps });
+    const took = Date.now() - t0;
+    assert.ok(took < ANSWER_WAIT_MS + 200, `${name}: took ${took} ms`);
+    assert.deepEqual(out, { entered: ["a/room"] }, `${name}: the answer goes out as it was`);
+  }
+  __setCreaturesForTest(null);
+});
+
+test("note 3 (review-571): a late creature drops only its own line; the creatures that answered in time ride", async () => {
+  const fast = "creature:wolf-270-5", slowWolf = "creature:wolf-270-6";
+  __setCreaturesForTest(livingWith(spawnRow(fast, { n: 1, x: 0 }), spawnRow(slowWolf, { n: 2, x: 10 })));
+  const write = (rows) => (rows[0].actor === slowWolf ? new Promise(() => {}) : recordingWrite().write(rows));
+  const t0 = Date.now();
+  const out = await creaturesAnswer([walkPen(52)], {}, { centreOf, around: quiet, ask: jev({ watch: 1 }), write, env: ENV });
+  assert.ok(Date.now() - t0 < ANSWER_WAIT_MS + 200);
+  assert.deepEqual(out.creatures.map((c) => c.id), [fast]);
+  __setCreaturesForTest(null);
+});
+
 // ── carry 3: the creatures' rows are never the act's ─────────────────────────
 
 test("carry 3: through a real act door's watch — the creatures' turns run outside it, so their writes are never the act's", async () => {

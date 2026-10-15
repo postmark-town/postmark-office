@@ -833,8 +833,11 @@ export async function reactTo(act, deps = {}) {
   if (!near.length) return [];
   const clock = deps.clock ?? Date.now;
   const deadline = deps.deadline ?? clock() + ANSWER_WAIT_MS;
-  const turns = near.map(({ creature, distance_m }) => serialized(creature.id, () =>
-    creatureTurn(creature, act, distance_m, { ...deps, law, env, mode, now: deps.now ?? Date.now(), clock, deadline })));
+  // `partial` (the hook's): each turn's answer as it finishes, in this order, so a
+  // deadline that cuts the act's wait keeps the lines already in hand
+  const turns = near.map(({ creature, distance_m }, i) => serialized(creature.id, () =>
+    creatureTurn(creature, act, distance_m, { ...deps, law, env, mode, now: deps.now ?? Date.now(), clock, deadline }))
+    .then((v) => { if (deps.partial) deps.partial[i] = v; return v; }));
   const settled = await Promise.allSettled(turns);
   return settled.map((s) => (s.status === "fulfilled" ? s.value : null)).filter(Boolean);
 }
