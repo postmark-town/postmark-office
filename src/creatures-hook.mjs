@@ -172,7 +172,9 @@ export function answerWithin(act, { living, law, around = aroundCreature, ask, w
   const turns = outsideRetryKey(() =>
     reactTo(act, { living, law, around, ...(ask ? { ask } : {}), ...(write ? { write } : {}), ...(env ? { env } : {}), clock, deadline }));
   let timer;
-  const late = new Promise((r) => { timer = setTimeout(() => r([]), Math.max(0, deadline - clock())); timer.unref?.(); });
+  // a held timer, never unref'd: the act's answer is waiting on it (on node 22 an unref'd one let a
+  // test's event loop end under a hung turn, CI 38770755044)
+  const late = new Promise((r) => { timer = setTimeout(() => r([]), Math.max(0, deadline - clock())); });
   return Promise.race([turns, late]).finally(() => clearTimeout(timer));
 }
 

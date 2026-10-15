@@ -787,7 +787,7 @@ export const TURN_WAIT_MS = 5000;
 function serialized(id, fn) {
   const prev = chains.get(id) ?? Promise.resolve();
   let timer;
-  const waited = Promise.race([prev, new Promise((r) => { timer = setTimeout(r, TURN_WAIT_MS); timer.unref?.(); })])
+  const waited = Promise.race([prev, new Promise((r) => { timer = setTimeout(r, TURN_WAIT_MS); })])
     .finally(() => clearTimeout(timer));
   const next = waited.then(fn, fn);
   const tail = next.catch(() => {});
