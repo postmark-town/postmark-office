@@ -2197,3 +2197,24 @@ The bare read an MCP caller gets at each door is set by one variable per door in
    ```
 2. **An office on the new code before 073** still parks every declaration and admits every co-sign: the park and the landing are best-effort, and each miss logs one `[arrival-heard] … not parked` or `… not kept` line. Answers given in that window are not kept.
 3. **To read it later:** the counts arrive through `GET /api/ops/heard` as before, now including berth arrivals. An operator reads a parked answer, or a kept note, at psql as the owner, and nowhere else.
+
+## 076: a taken mark goes back to its household's drafts, and the store says why it left (WLD-51, the w43 ship)
+
+When the settlement takes a mark (no stamps behind it), the retire step now writes it back to its household as a private draft at ✦0, in the same transaction, and the doorstep and needs-you carry a 7-day note (Darko, WLD-51 G1 and G3, 2026-10-15). 076 adds `marks.retired_cause` and lets `clearing_job` insert exactly that draft, bound in its trigger to the mark's owner, house and take window, once per take. Box steps (Wright's hand, never a lane's), in this order:
+
+1. **Apply 076 after 075 (POS-612's `amend_carried`), BEFORE the w43 code.** The w43 `retireMarks` writes `retired_cause`, and it is also marks-ingest's retirement: on a store without 076, every retire step that takes a mark refuses, every marks-ingest run that retires one refuses whole, and the doorstep's note read fails for every household (`left_the_world_unavailable`). Apply it away from the clearing (05:45:40 / 17:45:40Z) and the sweep (06:00 / 18:00Z). Same pipe as 073 above; idempotent, under `lock_timeout = 5s`, so a blocked apply fails whole and is simply re-run:
+   ```sh
+   CLONE=G:/Postmark/repo-clones/wright/office; TAG=release/2026-w43   # the tag being shipped
+   git -C $CLONE fetch -q origin --tags
+   git -C $CLONE show "$TAG:world2/schema/076_taken_to_drafts.sql" | ssh meepo-ec2 'set -e
+     DB=$(sudo sed -n "s|^WORLD2_PG_URL=.*/\([^/?\"]*\).*|\1|p" /etc/postmark-office.env); echo "db: $DB"; test -n "$DB"
+     sudo -n -u postgres psql -q -v ON_ERROR_STOP=1 -d "$DB" -c "SET ROLE world2_owner;" -f -'
+   ```
+   Proof, on the box (the probe `world2/tools/migrations-landed.mjs` holds for 076):
+   ```sh
+   DB=$(sudo sed -n 's|^WORLD2_PG_URL=.*/\([^/?"]*\).*|\1|p' /etc/postmark-office.env)
+   sudo -n -u postgres psql -d "$DB" -tAc "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'marks' AND column_name = 'retired_cause') AND EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'claims_insert_clearing' AND with_check LIKE '%draft%')"   # t
+   ```
+2. **Then deploy w43.** Then merge postmark-world#220 (the take reaches the 13 stale rows and the cone; G2), never before.
+3. **After the first real take,** the crossing's receipt says where each mark went: `retired.drafts.returned`, `kept` (the house already held a draft of it) and `unreturned` (named, with why). An `unreturned` row is a keeper's finding.
+4. **On `RETIRE REFUSED`** (the crossing still published), re-run the retire step against THAT crossing's sweep report before the next bless: `node world2/tools/retire-unpublished.mjs --sweep <that crossing's sweep.json>` under the clearing pen. The next sweep never names the mark again, and if marks-ingest retires it first it is retired as `marks-ingest`, with no draft and no note.

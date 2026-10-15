@@ -45,7 +45,7 @@ const ALLOWED = {
   "crossing-exec.mjs": [2, `${OWN}: PenUnreachableError's ruled sentence; the push error a receipt discloses`],
   "declare-exec.mjs": [1, `${OWN}: mintRefusal relays a refusal (an HTTP status) by its own defect; any other error, codeless or foreign, is FAULT_LOGGED above it`],
   "doorstep-bundle.mjs": [6, DISCLOSURE],
-  "doorstep-stakes.mjs": [3, DISCLOSURE],
+  "doorstep-stakes.mjs": [4, DISCLOSURE],
   "drop-recovery.mjs": [2, DISCLOSURE],
   "dynamic-entities.mjs": [1, DISCLOSURE],
   "dynamic-presence.mjs": [1, DISCLOSURE],
