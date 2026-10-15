@@ -75,6 +75,7 @@ function runOne(file, suffix = "") {
     writeFileSync(join(out, "stderr", `${s}.txt`), `suite-shard: ${file} could not be read to find its cap: ${e.code ?? e.message}\n`);
     return Promise.resolve({ exit: 128, signal: null, seconds: 0, unread: e.code ?? e.message });
   }
+  if (process.env.POS652_MARKS) writeFileSync(join(process.env.POS652_MARKS, s), "");
   return new Promise((done) => {
     const errFd = openSync(join(out, "stderr", `${s}.txt`), "w");
     const t0 = Date.now();

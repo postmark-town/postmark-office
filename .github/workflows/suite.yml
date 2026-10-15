@@ -79,8 +79,8 @@ defaults:
 
 env:
   NODE_VERSION: "22.22.1"
-  SHARDS: 8
-  SUITE_JOBS: 4
+  SHARDS: 16
+  SUITE_JOBS: 1
 
 jobs:
   prepare:
@@ -127,7 +127,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     env:
       WORLD_CLONE: ${{ github.workspace }}/world-clone
     steps:
@@ -176,7 +176,18 @@ jobs:
       # The output goes OUTSIDE the checkout: cli-guard counts the office's files
       # across its run and reds when one appears, and a shard's own TAP landing in
       # the tree beside it is exactly that (CI's first run).
+      - name: POS-652 measure, watch the clones
+        run: |
+          sudo apt-get install -y -qq inotify-tools > /dev/null
+          sudo sysctl -w fs.inotify.max_user_watches=1048576
+          mkdir -p "$RUNNER_TEMP/marks" "$RUNNER_TEMP/opens"
+          inotifywait -m -r -e open,create --exclude '(^|/)[.]git(/|$)' --format '%e|%w%f' town-clone world-clone "$RUNNER_TEMP/marks" > "$RUNNER_TEMP/opens/opens-${{ matrix.shard }}.log" 2> "$RUNNER_TEMP/inotify.err" &
+          for i in $(seq 1 120); do grep -q "Watches established" "$RUNNER_TEMP/inotify.err" && break; sleep 1; done
+          cat "$RUNNER_TEMP/inotify.err"
+
       - name: Shard ${{ matrix.shard }} of ${{ env.SHARDS }}
+        env:
+          POS652_MARKS: ${{ runner.temp }}/marks
         run: node .github/scripts/suite-shard.mjs --shard ${{ matrix.shard }} --of "$SHARDS" --jobs "$SUITE_JOBS" --out "$RUNNER_TEMP/suite-out"
 
       # A store that would not start says only "pg_ctl start exited 1" in the
@@ -190,6 +201,19 @@ jobs:
           logs=("$TMP"/office-store-*/postgres.log "$TMP"/office-pg-floor-*/postgres.log)
           echo "${#logs[@]} store logs left in $TMP"
           for f in "${logs[@]:0:3}"; do echo "── $f"; tail -25 "$f"; done
+
+      - name: POS-652 measure, stop the watch
+        if: always()
+        run: |
+          sleep 3; pkill inotifywait || true; sleep 1
+          wc -l "$RUNNER_TEMP"/opens/*.log; gzip -9 "$RUNNER_TEMP"/opens/*.log
+
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: opens-${{ matrix.shard }}
+          path: ${{ runner.temp }}/opens/
+          retention-days: 7
 
       - if: always()
         uses: actions/upload-artifact@v4
