@@ -866,7 +866,7 @@ test("13 · #3757's exact case: briefed, credit wright, linking world#208 (a fou
     /^https:\/\/github\.com\/postmark-town\/postmark-world\/pull\/208 is a founder's pull request \(GitHub account wright-starforge \(id 306351151\)\), and a founder's pull request never earns briefed briefed is earned by the brief: link the issue comment, the issue, the letter, or the resident's own pull request that holds it; its author is who's credited, and a founder's pull request never earns it — the founders' own builds are paid at fixed/);
 });
 
-test("13 · (Wright 10-15, review-649 § 2) a resident's own PR earns diagnosed and briefed; a founder's PR never does, for anyone, linked as a PR or as the issue GitHub answers as one", async () => {
+test("13 · (RULED, Darko 2026-10-15 19:02 EDT; review-649 § 2) a resident's own PR earns diagnosed and briefed; a founder's PR never does, for anyone, linked as a PR or as the issue GitHub answers as one", async () => {
   const t = await kinoBug();
   // a founder's PR, at diagnosed or briefed, for a founder or a resident
   await refusedNothing(t, adv({ to: "diagnosed", credit: "kinofire", link: pull("wright") }), 422, /is a founder's pull request \(GitHub account wright-starforge \(id 306351151\)\), and a founder's pull request never earns diagnosed/);

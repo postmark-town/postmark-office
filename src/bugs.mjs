@@ -157,9 +157,10 @@ export function judgeLink(v) {
 // (bug-credit.mjs § judgeEarnedCredit reads the author and judges the binding).
 // Confirmed, reproduced, shipped and the side exits are left as they were.
 //
-// A RESIDENT'S OWN PULL REQUEST EARNS DIAGNOSED OR BRIEFED TOO (Wright, 10-15,
-// on review-649 § 2: the replay of 59 live advances found 6 legitimate lupi and
-// little-bird credits linking their own PRs, refused by "never a PR"). A
+// A RESIDENT'S OWN PULL REQUEST EARNS DIAGNOSED OR BRIEFED TOO (RULED, Darko
+// 2026-10-15 19:02 EDT, on review-649 § 2: the replay of 59 live advances found
+// 6 legitimate lupi and little-bird credits linking their own PRs, refused by
+// "never a PR"). A
 // founder account's PR never earns diagnosed or briefed for anyone, so #3757's
 // link (wright-starforge's world#208) stays refused (bug-credit.mjs).
 // AND A COMMENT OR ISSUE LINK IS ON THE BUG'S OWN ISSUE when the bug names one
