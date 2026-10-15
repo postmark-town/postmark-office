@@ -40,10 +40,13 @@
 //      The bug read's order is the jar's (Wright's review of #481): open by
 //      the furthest stage, the named, the legacy shelf, the set aside.
 //  13. (POS-649, a hotfix, Darko 2026-10-15) diagnosed, briefed and fixed each
-//      need a link of their own kind (a comment, issue or letter; a PR), and
-//      the credited resident must be its author: the GitHub account's id bound
-//      to their household, or the letter's sender's household; a founder's
-//      work credits only a founder. Any doubt refuses and writes nothing.
+//      need a link of their own kind (a comment, issue, letter or the
+//      resident's own PR, never a founder's; a PR), and the credited resident
+//      must be its author: the GitHub account's id bound to their household,
+//      or the letter's sender's household; a founder's work credits only a
+//      founder. Any doubt refuses and writes nothing.
+//  14. (POS-649) a paid stage is re-credited as its own act, under the same
+//      author check; a founder may be the new credit (Darko 2026-10-15 19:02).
 //      GitHub is a local stub here (GITHUB_API_URL), the letters a stub table.
 //
 // ⚑ THE STORE IS A JS STUB (`acts-pen-stub.mjs`), as in quest-posts.test.mjs:
@@ -53,9 +56,12 @@
 // THE FLIPS (NOTES.md in the lane folder holds the red lines): make
 // judgeBugHand accept any handle and 1 goes red; drop the residents-index
 // check from judgeHandleField and 7 goes red; the critter's four flips are in
-// the bug-critter lane's NOTES.md. POS-649's flips: let a PR earn briefed and
-// #3757's case goes red (it is accepted: wright's own PR is a founder's work
-// crediting a founder, so the author check alone passes it); skip the author
+// the bug-critter lane's NOTES.md. POS-649's flips: drop the founder's-PR refusal
+// (bug-credit.mjs) and #3757's case goes red (it is accepted: wright's own PR
+// is a founder's work crediting a founder, so the author check alone passes
+// it); refuse every PR at diagnosed and briefed again and 13's own-PR case
+// goes red; restore the recredit's founder refusal and 14's founder case goes
+// red; skip the author
 // check and 13's household, founder and unbound cases go red; make the link
 // optional again and 13's missing-link case goes red.
 
@@ -854,10 +860,25 @@ async function refusedNothing({ pen, posts }, p, code, re) {
 const adv = (fields) => advanceAtTown({ post: KINO_BUG, ...fields }, WRIGHT, { now: NOW, roll: ROLL });
 const esc = (s) => s.replace(/[.#/?()]/g, "\\$&");
 
-test("13 · #3757's exact case: briefed, credit wright, linking world#208 (a PR) is refused, and teaches what earns briefed", async () => {
+test("13 · #3757's exact case: briefed, credit wright, linking world#208 (a founder's PR) is refused, and teaches what earns briefed", async () => {
   const t = await kinoBug();
   await refusedNothing(t, adv({ to: "briefed", grade: "light", credit: "wright", link: WORLD_208 }), 422,
-    /^briefed is never earned by a pull request briefed is earned by the brief: link the issue comment, the issue, or the letter that holds it; its author is who's credited/);
+    /^https:\/\/github\.com\/postmark-town\/postmark-world\/pull\/208 is a founder's pull request \(GitHub account wright-starforge \(id 306351151\)\), and a founder's pull request never earns briefed briefed is earned by the brief: link the issue comment, the issue, the letter, or the resident's own pull request that holds it; its author is who's credited, and a founder's pull request never earns it — the founders' own builds are paid at fixed/);
+});
+
+test("13 · (Wright 10-15, review-649 § 2) a resident's own PR earns diagnosed and briefed; a founder's PR never does, for anyone, linked as a PR or as the issue GitHub answers as one", async () => {
+  const t = await kinoBug();
+  // a founder's PR, at diagnosed or briefed, for a founder or a resident
+  await refusedNothing(t, adv({ to: "diagnosed", credit: "kinofire", link: pull("wright") }), 422, /is a founder's pull request \(GitHub account wright-starforge \(id 306351151\)\), and a founder's pull request never earns diagnosed/);
+  await refusedNothing(t, adv({ to: "diagnosed", credit: "mari", link: pull("keemin") }), 422, /is a founder's pull request \(GitHub account keeminlee \(id 67605380\)\), and a founder's pull request never earns diagnosed/);
+  await refusedNothing(t, adv({ to: "diagnosed", credit: "wright", link: issue("wright", { pr: true }) }), 422, /is a founder's pull request .* never earns diagnosed/);
+  // another household's PR is still another household's work
+  await refusedNothing(t, adv({ to: "diagnosed", credit: "kinofire", link: pull("errant") }), 422, /of hh:the-harbor, and kinofire stands in hh:house-of-many-doors/);
+  // the resident's own PR, and the housemate's
+  assert.equal((await adv({ to: "diagnosed", credit: "kinofire", link: pull("kinofire") })).credit, "kinofire");
+  assert.equal((await adv({ to: "briefed", grade: "light", credit: "wayward-archivist", link: issue("kinofire", { pr: true }) })).credit, "wayward-archivist");
+  // and a founder's own PR still earns fixed for a founder (Darko 10-07)
+  assert.equal((await adv({ to: "fixed", size: "S", critter: "Sweepling", credit: "wright", link: pull("wright") })).credit, "wright");
 });
 
 test("13 · a comment or issue link is on the bug's own issue when the bug names one; a PR or a letter is not held to it", async () => {
@@ -945,7 +966,7 @@ test("13 · no pass on doubt: an unbound author, a link GitHub doesn't have, a c
   await refusedNothing(t, adv({ ...d, link: "https://github.com/postmark-town/postmark/issues/3500#issuecomment-404404" }), 422, /is not on GitHub/);
   const onOther = comment("kinofire", { issue: 3499 }).replace("/issues/3499#", "/issues/3500#");
   await refusedNothing(t, adv({ ...d, link: onOther }), 422, /^comment \d+ is not on postmark#3500/);
-  await refusedNothing(t, adv({ ...d, link: issue("kinofire", { pr: true }) }), 422, /is a pull request, and diagnosed is never earned by a pull request/);
+  await refusedNothing(t, adv({ to: "diagnosed", credit: "wright", link: issue("wright", { pr: true }) }), 422, /is a founder's pull request .* never earns diagnosed/);
   // GitHub answering 500
   const id = ++ghSeq;
   const broken = comment("kinofire", { id });
@@ -1014,7 +1035,7 @@ test("14 · a recredit to someone who did not write the linked work is refused, 
     /^letter "kinofire-2026-10-12-to-wright-the-sweep-plan" is from kinofire, of hh:house-of-many-doors, and finn stands in solo:finn/);
   await refusedNothing(t, rc({ credit: "kinofire", link: comment("errant") }), 422, /was written by GitHub account harbor-human \(id 1001\), of hh:the-harbor, and kinofire stands in hh:house-of-many-doors/);
   await refusedNothing(t, rc({ credit: "mari", link: comment("keemin") }), 422, /a founder's work credits only wright or keemin/);
-  await refusedNothing(t, rc({ credit: "kinofire", link: pull("kinofire") }), 422, /^briefed is never earned by a pull request/);
+  await refusedNothing(t, rc({ credit: "mari", link: pull("keemin") }), 422, /is a founder's pull request \(GitHub account keeminlee \(id 67605380\)\), and a founder's pull request never earns briefed/);
   await refusedNothing(t, rc({ credit: "kinofire" }), 422, /^briefed needs a link to the work that earned it/);
 });
 
@@ -1076,11 +1097,30 @@ test("14 · the recredit's own law: wright and keemin only, a note, recredit tru
   await refusedNothing(t, rc({ link: KINO_PLAN }), 422, /^a recredit names whom it credits/);
 });
 
-test("14 · (review-3842-578 § 2) a recredit never credits a founder, whoever wrote the link; and it names someone other than the stage's credit", async () => {
-  const t = await paidToWright();
-  for (const founder of ["wright", "keemin"])
-    await refusedNothing(t, rc({ credit: founder, link: comment(founder) }), 422,
-      new RegExp(`^a recredit never credits a founder \\(${founder}\\) a correction gives a stage to the resident whose work earned it; moving one to wright or keemin is Darko's Call, never a recredit`));
+test("14 · (Darko 2026-10-15 19:02, \"sure whatever\") a founder may be a recredit's new credit, by a founder's own work only; and it names someone other than the stage's credit", async () => {
+  // a resident's paid stage, re-credited to each founder by that founder's own comment
+  for (const founder of ["wright", "keemin"]) {
+    const b = await kinoBug();
+    resetChainMemo();
+    await adv({ to: "briefed", grade: "light", credit: "kinofire", link: KINO_PLAN });
+    b.ledger.lines = [stageLine("kinofire", 10, KINO_BUG, "briefed")];
+    const link = comment(founder);
+    const r = await rc({ credit: founder, link });
+    assert.deepEqual([r.recredit, r.was, r.credit, r.stamps], [true, "kinofire", founder, 10]);
+    const act = b.pen.rows().at(-1);
+    assert.deepEqual([act.action, JSON.parse(act.payload).credit, JSON.parse(act.payload).was], ["recredit", founder, "kinofire"]);
+  }
+  // the author check still holds for a founder: a resident's letter or comment, or a founder's PR at briefed
+  const t = await kinoBug();
+  resetChainMemo();
+  await adv({ to: "briefed", grade: "light", credit: "kinofire", link: KINO_PLAN });
+  t.ledger.lines = [stageLine("kinofire", 10, KINO_BUG, "briefed")];
+  await refusedNothing(t, rc({ credit: "wright", link: KINO_PLAN }), 422, /^only a founder's own letter earns wright a stage, and letter "kinofire-2026-10-12-to-wright-the-sweep-plan" is from kinofire/);
+  await refusedNothing(t, rc({ credit: "keemin", link: comment("kinofire") }), 422, /^only a founder's account earns keemin a stage, and .* was written by GitHub account/);
+  await refusedNothing(t, rc({ credit: "wright", link: pull("wright") }), 422, /is a founder's pull request \(GitHub account wright-starforge \(id 306351151\)\), and a founder's pull request never earns briefed/);
+  // a founder's stage, re-credited to the same founder
+  const w = await paidToWright();
+  await refusedNothing(w, rc({ credit: "wright", link: comment("wright") }), 422, /^briefed on "kinofire\/false-sweep-warning" already credits wright a recredit names someone else/);
   // a resident's stage, re-credited to the same resident
   const k = await kinoBug();
   resetChainMemo();
@@ -1122,12 +1162,12 @@ test("15 · the read token goes to api.github.com only: never to another base, a
     assert.equal(elsewhere.calls[0].headers.authorization, undefined, "the token went to a base that is not api.github.com");
     // api.github.com: the token, once
     const there = recordingFetch([200]);
-    assert.deepEqual(await githubAuthorOf(LINKED, { env: { GITHUB_READ_TOKEN_FILE: tokenFile }, fetchImpl: there.fetchImpl }), { id: 1001, login: "harbor-human" });
+    assert.deepEqual(await githubAuthorOf(LINKED, { env: { GITHUB_READ_TOKEN_FILE: tokenFile }, fetchImpl: there.fetchImpl }), { id: 1001, login: "harbor-human", pull: false });
     assert.deepEqual(there.calls.map((c) => [c.url, c.headers.authorization]),
       [["https://api.github.com/repos/postmark-town/postmark/issues/comments/7", "Bearer tok-not-a-secret"]]);
     // a refused token: one keyless retry, which answers
     const refused = recordingFetch([401, 200]);
-    assert.deepEqual(await githubAuthorOf(LINKED, { env: { GITHUB_READ_TOKEN_FILE: tokenFile }, fetchImpl: refused.fetchImpl }), { id: 1001, login: "harbor-human" });
+    assert.deepEqual(await githubAuthorOf(LINKED, { env: { GITHUB_READ_TOKEN_FILE: tokenFile }, fetchImpl: refused.fetchImpl }), { id: 1001, login: "harbor-human", pull: false });
     assert.deepEqual(refused.calls.map((c) => c.headers.authorization), ["Bearer tok-not-a-secret", undefined]);
     // the keyless retry refused too: no pass on doubt, and no third call
     const both = recordingFetch([401, 403]);

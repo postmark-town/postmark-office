@@ -198,13 +198,13 @@ const TOWN_HAS_VERB = existsSync(join(TOWN_SRC, "tools", "stamp-mint.mjs"))
 const TOWN_HAS_RECREDIT = TOWN_HAS_VERB && readFileSync(join(TOWN_SRC, "tools", "stamp-mint.mjs"), "utf8").includes("'--stage-recredit'");
 
 /** A founded synthetic town carrying the town's own stamp-mint and stamp-verify. */
-function syntheticTown() {
+function syntheticTown({ rooms = [] } = {}) {
   const repo = tempDir("bug-stage-town-");
   mkdirSync(join(repo, "tools"), { recursive: true });
   mkdirSync(join(repo, "WHITE_PAGES"), { recursive: true });
   copyTownTools(TOWN_SRC, repo);
   writeFileSync(join(repo, "tools", "github-ids.json"), JSON.stringify({ carol: { id: 3 }, dan: { id: 4 } }));
-  for (const h of ["carol", "dan", "ada"]) {
+  for (const h of ["carol", "dan", "ada", ...rooms]) {
     mkdirSync(join(repo, "WHITE_PAGES", h), { recursive: true });
     writeFileSync(join(repo, "WHITE_PAGES", h, "ADDRESS.md"), `---\nhandle: ${h}\n---\n`);
   }
@@ -362,6 +362,21 @@ test("8 · nothing burns on doubt: short liquid stamps (counting this pass's oth
   assert.equal(renderRecredits([]), "", "no recredit recorded prints nothing");
 });
 
+test("8 · (Darko 2026-10-15 19:02) a founder may be a correction's new credit: the plan owes it like any resident's, and the town's builder writes it", async () => {
+  const founderAct = rcAct(21602, { post: "ada/other", to: "fixed", was: "ada", credit: "wright", link: "https://github.com/postmark-town/postmark-office/pull/601", paid: 25 });
+  const rows = planRecredits({ acts: [founderAct], houseOf: (h) => ({ wright: "hh:starforge", ada: "hh:the-harbor" })[h] ?? null, isMeep: () => false,
+    stageLines: new Map([["ada/other/fixed", { handle: "ada", n: 25, sig: "C".repeat(86) }]]), corrected: new Set(), liquid: new Map([["ada", 25]]) });
+  assert.deepEqual(rows.map((r) => [r.from, r.to, r.household, r.n, r.owed, r.why]), [["ada", "wright", "hh:starforge", 25, true, "owed"]]);
+  const [r] = parseRecreditPlan(renderRecredits(rows), { recorded: true }).owed;
+  assert.deepEqual([r.from, r.to, r.n], ["ada", "wright", 25]);
+  if (!TOWN_HAS_RECREDIT) return;
+  const { stageRecreditLines } = await import(pathToFileURL(join(TOWN_SRC, "tools", "stamp-mint.mjs")).href);
+  assert.deepEqual(stageRecreditLines({ date: "2026-10-15", handle: r.to, wrong: { post: r.post, stage: r.stage, n: r.n, handle: r.from, sig: "C".repeat(86) }, by: r.hand }), [
+    "- 2026-10-15 · MINT → wright · 25 · for: post:ada/other/fixed-recredit · by: the-town",
+    `- 2026-10-15 · ada → BURN · 25 · for: correction:${"C".repeat(86)} · by: wright`,
+  ]);
+});
+
 test("8 · the corrections are bound to their own plan: a count the rows don't match, a header it can't read, or an unreadable row refuses", () => {
   const text = renderRecredits(rcPlan());
   assert.throws(() => parseRecreditPlan(text.replace("1 owed (10 stamps)", "2 owed (20 stamps)"), { recorded: true }), /the recredit plan says 2 owed and this pass parsed 1/);
@@ -405,6 +420,35 @@ test("8 · end to end: the pass pays a stage, then corrects it — both lines in
       assert.equal(await main(argv, { facts: withRecredit(await storeFacts(), id), log: (s) => third.push(s), err: (s) => third.push(`ERR ${s}`) }), 0, third.join("\n"));
       assert.match(third.join("\n"), /1 already corrected, 0 held, 0 owed/);
       assert.equal(readFileSync(join(repo, "WHITE_PAGES", "stamp-ledger.md"), "utf8").trimEnd().split(/\r?\n/).slice(-2).map((l) => l.replace(/ · sig: \S+$/, ""))[1], tail[1], "a second pass wrote a line");
+    } finally { rmSync(repo, { recursive: true, force: true }); }
+  });
+
+test("8 · end to end (Darko 2026-10-15 19:02): a stage re-credited to a FOUNDER — both lines in one call, and the town's verifier green",
+  { skip: TOWN_HAS_RECREDIT ? false : `the town at ${TOWN_SRC} has no --stage-recredit yet; set STAGE_MINT_TOWN to a town tree that carries it` },
+  async () => {
+    setup();
+    const id = await confirmed("carol", "The bell rings twice");
+    await advanceAtTown({ post: id, to: "diagnosed", credit: "ada", link: ADA_LETTER }, WRIGHT, { now: NOW, roll: ROLL });
+    const { repo, keyFile } = syntheticTown({ rooms: ["wright"] });
+    try {
+      const argv = ["--town", repo, "--apply", "--key", keyFile, "--date", "2026-10-15"];
+      const out = [];
+      assert.equal(await main(argv, { facts: await storeFacts(), log: (s) => out.push(s), err: (s) => out.push(`ERR ${s}`) }), 0, out.join("\n"));
+      const paid = stageLinesOf(repo).find((l) => l.includes(`post:${id}/diagnosed `));
+      assert.ok(paid, out.join("\n"));
+      const sig = / · sig: (\S+)$/.exec(paid)[1];
+      const facts = withRecredit(await storeFacts(), id, { credit: "wright", link: "wright-2026-10-15-to-carol-the-cause", note: "the cause was wright's" });
+      facts.houses.set("wright", "hh:starforge");
+      const second = [];
+      assert.equal(await main(argv, { facts, log: (s) => second.push(s), err: (s) => second.push(`ERR ${s}`) }), 0, second.join("\n"));
+      assert.match(second.join("\n"), /re-credited 5 → wright · post:carol\/the-bell-rings-twice\/diagnosed-recredit, and burned ada's 5/);
+      const tail = readFileSync(join(repo, "WHITE_PAGES", "stamp-ledger.md"), "utf8").trimEnd().split(/\r?\n/).slice(-2).map((l) => l.replace(/ · sig: \S+$/, ""));
+      assert.deepEqual(tail, [
+        `- 2026-10-15 · MINT → wright · 5 · for: post:${id}/diagnosed-recredit · by: the-town`,
+        `- 2026-10-15 · ada → BURN · 5 · for: correction:${sig} · by: wright`,
+      ]);
+      const verify = spawnSync(process.execPath, [join(repo, "tools", "stamp-verify.mjs"), "--repo", repo], { encoding: "utf8" });
+      assert.equal(verify.status, 0, verify.stdout + verify.stderr);
     } finally { rmSync(repo, { recursive: true, force: true }); }
   });
 

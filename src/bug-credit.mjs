@@ -94,11 +94,10 @@ export async function githubAuthorOf(j, { env = process.env, fetchImpl = fetch }
     if (!String(body?.issue_url ?? "").toLowerCase().endsWith(want))
       throw refuse(422, `comment ${ref.comment} is not on ${ref.repo}#${ref.number}`, `${EARNED_BY[j.to]} — link the comment from the issue it sits on`, { field: "link" });
   }
-  if (ref.kind === "issue" && body?.pull_request)
-    throw refuse(422, `${ref.repo}#${ref.number} is a pull request, and ${j.to} is never earned by a pull request`, EARNED_BY[j.to], { field: "link" });
   const id = body?.user?.id;
   if (!Number.isSafeInteger(id)) throw cannot;
-  return { id, login: String(body.user.login ?? "") };
+  // An issue link GitHub answers as a PR is a PR (its issues API serves both).
+  return { id, login: String(body.user.login ?? ""), pull: ref.kind === "pull" || Boolean(body?.pull_request) };
 }
 
 /** The household a handle stands in, as the act would be filed: `hh:<slug>`, else `solo:<handle>`. */
@@ -130,6 +129,10 @@ export function judgeEarnedCredit({ to, credit, link }, author, { registry, pins
     const { id, login } = author.gh;
     const who = `GitHub account ${login || "?"} (id ${id})`;
     const authorFounder = Object.hasOwn(FOUNDER_ACCOUNTS, String(id));
+    // A founder's PR never earns diagnosed or briefed, for anyone (#3757's link).
+    if (authorFounder && author.gh.pull && (to === "diagnosed" || to === "briefed"))
+      throw refuse(422, `${link} is a founder's pull request (${who}), and a founder's pull request never earns ${to}`,
+        `${teach} — the founders' own builds are paid at fixed`, { field: "link" });
     if (authorFounder && !creditFounder)
       throw refuse(422, `${link} was written by a founder's account, ${who}, and a founder's work credits only ${FOUNDER_HANDLES.join(" or ")}`, teach, { field: "credit" });
     if (!authorFounder && creditFounder)
