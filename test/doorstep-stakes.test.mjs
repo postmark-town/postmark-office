@@ -352,3 +352,13 @@ test("postmark#3757 · THE SAFETY HALF: a commons row whose mark now walks home 
   assert.equal(by["keith/a-bench-on-the-road"].at_risk, true, "THE CONTROL: a commons mark that walks market is");
   assert.match(SWEEP_RULE, /your household's ground or the town's never does/);
 });
+
+test("WLD-51 part 3 · every stakes row carries its mark's whole body (Darko, 2026-10-14 22:33: a read that shows a mark carries its body)", async () => {
+  const body = "A rootwood bookend, carved from a fallen root — the grain still runs the way the tree grew, and it holds up four books.";
+  const marks = MARKS.map((m) => ({ ...m, body: `${m.id}: ${body}` }));
+  const seg = await stakesFor(["berthillon"], readers({ world: async () => ({ state: { marks }, ref: "origin/main", sha: "abc" }) }));
+  assert.equal(seg.rows.length, 4);
+  for (const row of seg.rows) assert.equal(row.body, `${row.mark}: ${body}`, `${row.mark} carries its body, whole`);
+  const bare = stakesRowsFrom({ handles: ["berthillon"], marks: [{ id: "berthillon/x", kind: "sited", by: "berthillon" }], registry: {}, byMark: new Map() });
+  assert.equal(bare[0].body, null, "a mark the fold holds no body for says so: null, never a missing key");
+});

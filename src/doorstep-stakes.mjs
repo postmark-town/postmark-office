@@ -127,9 +127,10 @@ export const stakeEnvelope = (mark) => `world { do: "stake", args: { mark: "${ma
  * null = unread). An input not measured makes `at_risk` null, never false.
  *
  * At-risk rows first (by id), then the rest (by id) — the one order a morning
- * reader needs. Each row: the id, its kind, the sweep's class (null = not in
- * the registry, founding estate), the escrow, the verdict, and — on an at-risk
- * row — the act.
+ * reader needs. Each row: the id, its kind, its whole body (Darko, 2026-10-14
+ * 22:33: a read that shows a mark carries its body; WLD-51 part 3), the sweep's
+ * class (null = not in the registry, founding estate), the escrow, the verdict,
+ * and — on an at-risk row — the act.
  */
 export function stakesRowsFrom({ handles = [], marks = [], registry = {}, byMark = null, rule = null, pathOnMain = () => null } = {}) {
   const mine = new Set(handles.filter(Boolean));
@@ -147,7 +148,7 @@ export function stakesRowsFrom({ handles = [], marks = [], registry = {}, byMark
       : typeof rule !== "function" ? null
       : rule(entry, { escrow, pathOnMain: () => pathOnMain(entry.path), standing: m.tier ?? null }).unpublish;
     rows.push({
-      mark: m.id, kind: m.kind ?? null, class: cls, escrow, at_risk: atRisk,
+      mark: m.id, kind: m.kind ?? null, body: m.body ?? null, class: cls, escrow, at_risk: atRisk,
       ...(atRisk ? { act: stakeEnvelope(m.id) } : {}),
     });
   }
