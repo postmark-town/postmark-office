@@ -15,10 +15,10 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { LivingSet, loadCreatureLaw, REFRESH_MS } from "../src/creatures.mjs";
+import { LivingSet, loadCreatureLaw, REFRESH_MS, TO_YOU_REACH_MS, BOOT_SPAN_S, LIVING_BOOT_SQL } from "../src/creatures.mjs";
 import {
   EMISSIONS_SHOWN, creatureHappening, creatureToYou, creaturesForRead, creaturesInWho, findCreatures, investigateCreature,
-  savedCreatureOf, __resetCreaturesReadForTest,
+  savedCreatureOf, __resetCreaturesReadForTest, TO_YOU_FOLD,
 } from "../src/creatures-read.mjs";
 import { ACTIVE_CAP, happeningBlock, shapeV2, whoBlock, withCreaturesInWho } from "../src/world-read-v2.mjs";
 import { toYou } from "../src/world-happened.mjs";
@@ -158,26 +158,83 @@ test("find: a kind, its name or \"creature\" names the living creatures, nearest
 // ── to_you (C1) ─────────────────────────────────────────────────────────────
 
 test("to_you: a creature's answer to you rides your own happened, the arrival named so, wherever you are now", () => {
-  const W = "creature:wolf-270-1";
+  const W = "creature:wolf-270-1", R = "creature:wolf-270-2";
   const cur = fold(spawn(W), react(W, { to: "kai", at: NOW - 3 * 3600_000, moment: "arrival", trigger: 501 }),
-    react(W, { to: "mo", at: NOW - 3600_000 }), react(W, { to: "kai", reaction: "snarl", at: NOW - 20 * 60_000 }));
+    react(W, { to: "mo", at: NOW - 3600_000 }), spawn(R, { x: 50 }), react(R, { to: "kai", reaction: "snarl", at: NOW - 20 * 60_000 }));
   const got = creatureToYou(cur, "kai", { sinceMs: NOW - 6 * 3600_000, nowMs: NOW });
   assert.equal(got.readable, true);
-  assert.deepEqual(got.events.map((e) => [e.reaction, e.arrival ?? false]), [["watch", true], ["snarl", false]]);
+  assert.deepEqual(got.events.map((e) => [e.creature, e.reaction, e.arrival ?? false]), [[W, "watch", true], [R, "snarl", false]]);
   assert.deepEqual(got.events[0], { kind: "creature", creature: W, at: iso(NOW - 3 * 3600_000),
     line: "At the edge of the Mists a grey wolf stands perfectly still, watching kai.", reaction: "watch", roll: 7, judged_by: "jev", arrival: true });
   assert.deepEqual(creatureToYou(cur, "kai", { sinceMs: NOW - 2 * 3600_000, nowMs: NOW }).events.map((e) => e.reaction), ["snarl"], "since is since");
-  // a since older than the fold reaches is answered from what it holds, and the shelf says it is not complete
-  const old = creatureToYou(cur, "kai", { sinceMs: NOW - 20 * 3600_000, nowMs: NOW });
+  // a since older than the fold's reach: answered from what it holds, and the shelf says it is not complete
+  const old = creatureToYou(cur, "kai", { sinceMs: NOW - TO_YOU_REACH_MS - 60_000, nowMs: NOW });
   assert.equal(old.readable, false);
   const shelf = toYou({ creatureEffects: old, sinceCrossing: 270, nowCrossing: 272 });
   assert.equal(shelf.complete, false);
-  assert.match(shelf.note, /crossing save, which does not carry them yet/);
+  assert.match(shelf.note, /older than the last 13 hours are not held here/);
   const whole = toYou({ creatureEffects: got, sinceCrossing: 270, nowCrossing: 272 });
   assert.equal(whole.complete, true);
   assert.equal(whole.count, 2);
   assert.match(whole.note, /so does every hold on a thing of yours or by your own hand, and every creature's answer to you$/);
   assert.doesNotMatch(toYou({ sinceCrossing: 270, nowCrossing: 272 }).note, /creature/, "no creatures read, the sentence it always was");
+});
+
+test("C1 (review-574): the reaction an 11 h-old arrival drew from a wolf that FADED is still read, after every prune, and the shelf is whole", () => {
+  const W = "creature:wolf-270-1";
+  // out 12 h ago, it answered kai's arrival 11 h ago, and faded at its 12 h (now); 1.5 h later (an hour past its
+  // end, so A's prune would have dropped it) the reaction is 12.5 h old, and the walker reading since 12.9 h ago gets it
+  const later = NOW + 1.5 * 3600_000;
+  const cur = fold(spawn(W, { at: NOW - 12 * 3600_000 }), react(W, { to: "kai", at: NOW - 11 * 3600_000, moment: "arrival", trigger: 601 }));
+  cur.living.prune(later);
+  const got = creatureToYou(cur, "kai", { sinceMs: later - 12.9 * 3600_000, nowMs: later });
+  assert.deepEqual(got.events.map((e) => [e.creature, e.arrival]), [[W, true]]);
+  assert.equal(got.readable, true);
+  assert.equal(toYou({ creatureEffects: got, sinceCrossing: 270, nowCrossing: 272 }).complete, true);
+  // past its 13 h the reaction leaves RAM, and a since that old is said incomplete, never whole
+  cur.living.prune(NOW - 11 * 3600_000 + TO_YOU_REACH_MS + 1);
+  assert.equal(cur.living.byId.size, 0);
+});
+
+test("C1 (review-574): the reaction from a wolf that FLED 3 h ago is still read", () => {
+  const W = "creature:wolf-270-1";
+  const cur = fold(spawn(W, { at: NOW - 5 * 3600_000 }), react(W, { to: "kai", reaction: "flee", at: NOW - 3 * 3600_000, moment: "arrival", trigger: 602 }), withdraw(W, NOW - 3 * 3600_000));
+  cur.living.prune(NOW);
+  const got = creatureToYou(cur, "kai", { sinceMs: NOW - 12 * 3600_000, nowMs: NOW });
+  assert.deepEqual(got.events.map((e) => e.line), ["The wolf wheels and is gone, a grey shape folding back into the grey."]);
+  assert.equal(got.readable, true);
+});
+
+nodeTest("C1 (review-574): a process boots far enough back to hold every reaction to_you can owe (13 h, from a creature out 12 h before it)", async () => {
+  assert.equal(BOOT_SPAN_S, 26 * 3600);
+  let asked = null;
+  await new LivingSet({ law: LAW }).refresh({ query: async (sql, params) => { if (sql === LIVING_BOOT_SQL) asked = params; return []; } });
+  assert.deepEqual(asked, [BOOT_SPAN_S]);
+});
+
+test("C2 (review-574; the cap is PENDING Darko): per creature, its reactions to you fold into one event, the newest line and the count", () => {
+  assert.match(TO_YOU_FOLD.pending, /Darko/);
+  const W = "creature:wolf-270-1", R = "creature:wolf-270-2";
+  const rows = [spawn(W), spawn(R, { x: 50 })];
+  for (let i = 0; i < 60; i += 1) rows.push(react(W, { to: "kai", reaction: i === 59 ? "snarl" : "watch", at: NOW - (60 - i) * 60_000 }));
+  rows.push(react(R, { to: "kai", at: NOW - 30 * 60_000 }));
+  const got = creatureToYou(fold(...rows), "kai", { sinceMs: NOW - 6 * 3600_000, nowMs: NOW });
+  assert.equal(got.events.length, 2, "an hour beside one wolf is one row, not sixty");
+  const [w] = got.events.filter((e) => e.creature === W);
+  assert.equal(w.reaction, "snarl");
+  assert.equal(w.at, iso(NOW - 60_000));
+  assert.equal(w.and_more, 59);
+  assert.equal(w.more, "and 59 more");
+  assert.equal(got.events.find((e) => e.creature === R).and_more, undefined, "one reaction: no count");
+});
+
+nodeTest("C3 (review-574): read: \"who\" carries the creatures the glance shows, beside the paged residents", () => {
+  const creature = { kind: "creature", id: "creature:wolf-270-1", m: 40 };
+  const whole = { total: 0, active: 0, shown: 0, offset: 0, rows: [], complete: true };
+  assert.deepEqual(withCreaturesInWho(whole, [creature]), { ...whole, creatures: [creature] });
+  const p = { standpoint: { x: 1, y: 2 }, crowd: [], active: new Map(), nowMs: NOW, viewRows: [], entries: [], heard: [],
+    deep: { block: "who", limit: 50, offset: 0 }, creatures: { who: [creature], happening: [] } };
+  assert.deepEqual(shapeV2(p).who.creatures, [creature]);
 });
 
 // ── investigate ─────────────────────────────────────────────────────────────

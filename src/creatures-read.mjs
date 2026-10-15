@@ -31,7 +31,7 @@
 // Every function below takes its creatures, law and engine as arguments, so
 // the shapes are testable on fixtures; `creaturesForRead` is the office's own.
 
-import { LivingSet, REFRESH_MS, creatureLaw, dial, distanceM, lineOf } from "./creatures.mjs";
+import { LivingSet, REFRESH_MS, TO_YOU_REACH_MS, creatureLaw, dial, distanceM, lineOf } from "./creatures.mjs";
 import { ago, distanceOf, inWords } from "./world-read-v2.mjs";
 import { PRESENCE_DIALS } from "./dynamic-presence.mjs";
 import { faultLogged } from "./fault-words.mjs";
@@ -191,31 +191,36 @@ export function findCreatures({ living, law }, q, at, { nowMs = Date.now(), engi
 // ── to_you (C1) ─────────────────────────────────────────────────────────────
 
 /**
- * The creatures' reactions to `handle` since `sinceMs`, as to_you events:
- * { kind: "creature", creature, at, line, reaction, roll, judged_by, arrival? }.
- * From this process's fold, which holds every creature still living and each
- * one an hour past its end; `covers_since` says whether that reaches back to
- * `sinceMs`, so the shelf never calls itself complete when it is not.
+ * TO_YOU'S CREATURE CAP (review-574 C2; PENDING Darko, the lane's
+ * recommendation as the default): per creature, its reactions to you fold
+ * into ONE event, the newest line with "and N more", so to_you grows by at
+ * most one row per creature that noticed you, however long you stood by it.
+ */
+export const TO_YOU_FOLD = Object.freeze({ value: "one event per creature, the newest line and the count", pending: "the to_you cap (review-574 C2), Darko" });
+
+/**
+ * The creatures' reactions to `handle` since `sinceMs`, as to_you events,
+ * one per creature: { kind: "creature", creature, at, line, reaction, roll,
+ * judged_by, arrival?, and_more?, more? } (the newest; `and_more` counts the rest).
+ *
+ * From this process's fold, which keeps every reaction TO_YOU_REACH_MS (13 h)
+ * after it was written, however soon its creature ended or fled (review-574
+ * C1), and boots that far back. A since older than that cannot be seen whole
+ * here, so it answers `readable: false` and the shelf says it is incomplete.
  */
 export function creatureToYou({ living, law }, handle, { sinceMs, nowMs = Date.now() } = {}) {
   if (!handle || !living || !lawReady(law)) return { events: [], readable: true };
   const events = [];
-  let oldest = Infinity;
   for (const c of living.byId.values()) {
-    oldest = Math.min(oldest, c.spawned_at);
-    for (const r of c.reactions) {
-      if (r.to !== handle || !(r.at > sinceMs) || r.at > nowMs) continue;
-      const reaction = reactionOf(law, c, r.reaction);
-      if (!reaction) continue;
-      events.push({ kind: "creature", creature: c.id, at: new Date(r.at).toISOString(), line: lineOf(law, reaction, r.to),
-        reaction: r.reaction, roll: r.roll, judged_by: r.judged_by, ...(r.act.endsWith("@arrival") ? { arrival: true } : {}) });
-    }
+    const mine = c.reactions.filter((r) => r.to === handle && r.at > sinceMs && r.at <= nowMs && reactionOf(law, c, r.reaction));
+    if (!mine.length) continue;
+    const r = mine.reduce((a, b) => (b.at >= a.at ? b : a));
+    events.push({ kind: "creature", creature: c.id, at: new Date(r.at).toISOString(), line: lineOf(law, reactionOf(law, c, r.reaction), r.to),
+      reaction: r.reaction, roll: r.roll, judged_by: r.judged_by, ...(r.act.endsWith("@arrival") ? { arrival: true } : {}),
+      ...(mine.length > 1 ? { and_more: mine.length - 1, more: `and ${mine.length - 1} more` } : {}) });
   }
-  // the fold reaches back to its boot window (a creature's span and an hour);
-  // a since older than that is answered from what the fold holds, and says so
-  const reach = nowMs - 13 * 3600_000;
-  return sinceMs >= reach ? { events, readable: true }
-    : { events, readable: false, reason: "a creature's reactions older than the last 13 hours are read from the crossing save, which does not carry them yet" };
+  return sinceMs >= nowMs - TO_YOU_REACH_MS ? { events, readable: true }
+    : { events, readable: false, reason: "a creature's reactions older than the last 13 hours are not held here, and the crossing save does not carry them yet" };
 }
 
 // ── investigate ─────────────────────────────────────────────────────────────

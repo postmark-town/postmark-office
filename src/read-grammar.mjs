@@ -65,6 +65,7 @@ export const EXPLAIN = Object.freeze({
     who: row("the living things in sight; active = acted in the last 12 hours; quiet ones are counted, not listed", 'world { read: "who" }', "live",
       "A resident's public acts are readable about them (LOGOS § The privacy scope): a walk, an entry, a take or gift, a mark, a stake, and the fact of a say, never its words."),
     "who.active": row("who near you acted in the last 12 hours, nearest first, with what they did last; a creature out of the Mists within reach is one of them (kind: creature)", 'world { read: "who" }', "live"),
+    "who.creatures": row("on read: \"who\", the creatures out of the Mists within reach, beside the paged residents", 'world { read: "who" }', "live"),
     "who.more_active": row("how many more active neighbours there are than the glance lists", 'world { read: "who" }', "live"),
     "who.around_but_quiet": row("everyone else within reach: counted, with the nearest few named", 'world { read: "who" }', "live"),
     "who.active_unavailable": row("why who acted could not be read this time (the crowd is still counted)", 'world { read: "who" }', "live"),

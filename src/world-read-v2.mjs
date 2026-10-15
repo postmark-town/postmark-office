@@ -198,7 +198,11 @@ export function whoBlock(crowd = [], active = new Map(), { nowMs = Date.now(), u
  * are creatures-read.mjs § creaturesInWho's. No creature, the block unchanged.
  */
 export function withCreaturesInWho(who, creatures, { cap = ACTIVE_CAP } = {}) {
-  if (!who || who.unavailable || !Array.isArray(who.active) || !creatures?.length) return who;
+  if (!who || who.unavailable || !creatures?.length) return who;
+  // read: "who", the whole block (review-574 C3): it pages the residents by
+  // offset, so the creatures the glance shows ride beside the page, whole
+  if (Array.isArray(who.rows)) return { ...who, creatures };
+  if (!Array.isArray(who.active)) return who;
   const metres = (r) => (Number.isFinite(r.m) ? r.m : Number.isFinite(r.km) ? r.km * 1000 : Infinity);
   const all = [...who.active, ...creatures].map((r, i) => ({ r, i })).sort((a, b) => metres(a.r) - metres(b.r) || a.i - b.i).map(({ r }) => r);
   const { active, more_active: more = 0, ...rest } = who;
@@ -403,7 +407,7 @@ export function shapeV2(p) {
     // presence off or failed: say so, never an empty room (presence's own rule: absence ≠ nobody)
     who: p.presenceUnavailable ? { unavailable: p.presenceUnavailable }
       : withCreaturesInWho(whoBlock(p.crowd, p.active, { nowMs: p.nowMs, unavailable: p.activeUnavailable, whole: p.deep?.block === "who" ? p.deep : null }),
-        p.deep?.block === "who" ? null : p.creatures?.who),
+        p.creatures?.who),
     heard: p.heard == null ? { unavailable: "earshot is not read on this path; read: \"say\" hears the room" } : heardBlock(p.heard),
     ...(happening ? { happening_here: happening } : {}),
     // the class layer unreadable: say so, as v1's law does, never an empty can (review-555 § 1)

@@ -2298,7 +2298,9 @@ export async function happenedFor(oriented, args, key, { town = true, live = fal
       const { creaturesForRead, creatureToYou } = await import("./creatures-read.mjs");
       const { CROSSING_EPOCH_UTC, CROSSING_MS } = await import("./crossings.mjs");
       const cur = await creaturesForRead();
-      if (cur?.living?.byId.size)
+      // whenever the law is read here, an empty fold included: a since older than
+      // the fold's reach is then said incomplete rather than silently whole (review-574 C1)
+      if (cur?.living)
         creatureEffects = creatureToYou(cur, who, { sinceMs: cursor ? cursor.ms : CROSSING_EPOCH_UTC + since * CROSSING_MS });
     } catch { creatureEffects = null; }
 

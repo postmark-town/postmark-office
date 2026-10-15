@@ -19,7 +19,7 @@ import {
   LIVING_TOP_SQL, PRUNE_AFTER_MS, loadCreatureLaw, normalized, creatureLaw, __resetCreatureLawForTest,
   CREATURE_DIALS, CREATURE_DIALS_PENDING, LivingSet, PRIOR_REACTION_SQL, SLICE_CAPS, SLICE_FIELDS,
   allowedReactions, applyReaction, askJev, buildSlice, capOf, dial, judgmentFor, reactTo,
-  reactionRows, sampleWith, t20, writeReaction, TRIGGER_SQL, NO_TRIGGER, reactionPayload, LAW_RETRY_MS,
+  reactionRows, sampleWith, t20, writeReaction, TRIGGER_SQL, NO_TRIGGER, reactionPayload, LAW_RETRY_MS, TO_YOU_REACH_MS,
 } from "../src/creatures.mjs";
 import { NO_WORLD, worldClone, worldModuleUrl } from "./fixture-paths.mjs";
 
@@ -580,7 +580,7 @@ test("F6: a retry of the act that made a creature flee reads the flee again", as
   assert.equal(calls.length, 1, "nothing written twice");
 });
 
-test("an ended creature leaves RAM an hour after it ended; its retry index goes with it", async () => {
+test("an ended creature leaves RAM an hour after it ended and once its newest reaction is TO_YOU_REACH_MS old; its retry index goes with it", async () => {
   const living = livingWith(spawnRow("creature:wolf-270-1", { moods: { fear: 3 } }), spawnRow("creature:wolf-270-2", { n: 2, x: 5 }));
   const { write } = recordingWrite();
   await reactTo(act(), { living, around: async () => ({}), ask: jevAnswer({ flee: 1 }), write, env: ENV, now: T0 });
@@ -588,9 +588,14 @@ test("an ended creature leaves RAM an hour after it ended; its retry index goes 
   living.prune(T0 + PRUNE_AFTER_MS - 1);
   assert.ok(living.byId.has("creature:wolf-270-1"), "inside the hour, a retry can still find it");
   living.prune(T0 + PRUNE_AFTER_MS + 1);
+  assert.ok(living.byId.has("creature:wolf-270-1"), "past the hour, to_you still owes kai its flee (review-574 C1)");
+  // 13 h on, the fled one leaves; the other, still living at 11 h 59 m … (it came out at T0 − 1 h)
+  living.prune(T0 + 11 * 3600_000 - 60_000 + PRUNE_AFTER_MS);
+  assert.ok(living.byId.has("creature:wolf-270-2"));
+  living.prune(T0 + TO_YOU_REACH_MS + 1);
   assert.ok(!living.byId.has("creature:wolf-270-1"));
-  assert.deepEqual([...living.answered.get("9001")], ["creature:wolf-270-2"], "the pruned one leaves the retry index; the other answer stays");
-  assert.ok(living.byId.has("creature:wolf-270-2"), "the living one stays");
+  assert.ok(!living.byId.has("creature:wolf-270-2"), "faded at T0 + 11 h, its reaction 13 h old: it leaves too");
+  assert.equal(living.answered.has("9001"), false, "the pruned leave the retry index with them");
 });
 
 test("a mark's body is never dropped or excerpted, whatever its length (Darko 22:33, standing)", () => {
