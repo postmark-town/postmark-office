@@ -362,3 +362,41 @@ test("WLD-51 part 3 · every stakes row carries its mark's whole body (Darko, 20
   const bare = stakesRowsFrom({ handles: ["berthillon"], marks: [{ id: "berthillon/x", kind: "sited", by: "berthillon" }], registry: {}, byMark: new Map() });
   assert.equal(bare[0].body, null, "a mark the fold holds no body for says so: null, never a missing key");
 });
+
+test("WLD-51 G3 · a mark the settlement took is on the segment with its note, asked for the handles in scope at the segment's clock", async () => {
+  const asked = [];
+  const row = { mark: "berthillon/the-old-kite", kind: "sited", left_at: "2026-09-17T18:00:00.000Z", note_until: "2026-09-24T18:00:00.000Z", note: "the note", act: stakeEnvelope("berthillon/the-old-kite") };
+  const seg = await stakesFor(["berthillon"], readers({ left: async (handles, now) => { asked.push([handles, now.toISOString()]); return { rows: [row] }; } }));
+  assert.deepEqual(asked, [[["berthillon"], "2026-09-18T04:10:00.000Z"]]);
+  assert.deepEqual(seg.left_the_world, [row]);
+  assert.equal(seg.at_risk, 1, "the at-risk count is the published marks' alone");
+
+  const none = await stakesFor(["berthillon"], readers({ left: async () => ({ rows: [] }) }));
+  assert.equal("left_the_world" in none, false, "nothing taken: no field, and the segment reads as before");
+  const blind = await stakesFor(["berthillon"], readers({ left: async () => { throw new Error("connection refused"); } }));
+  assert.match(blind.left_the_world_unavailable, /could not be read \(connection refused\) — unknown, not none/);
+  assert.equal(blind.rows.length, 4, "a note that cannot be read empties nothing else");
+  let called = 0;
+  await stakesFor([], readers({ left: async () => { called += 1; return { rows: [row] }; } }));
+  assert.equal(called, 0, "no handle, no question");
+});
+
+test("WLD-51 G3 · the note's words, its row with the mark's whole body, and the settlement named in the town's time, never the window's ISO opening", async () => {
+  const { leftTheWorldRows, leftTheWorldNote, LEFT_THE_WORLD_DAYS, settlementOfWindow, townWhen } = await import("../src/doorstep-stakes.mjs");
+  assert.equal(LEFT_THE_WORLD_DAYS, 7);
+  // prod's windows open at 05:45:40 / 17:45:40Z; the settlement that took the mark ran at 06:00 / 18:00Z (review 4a)
+  assert.equal(settlementOfWindow("2026-10-16T17:45:40Z"), "2026-10-16T18:00:00.000Z");
+  assert.equal(settlementOfWindow("2026-10-16T05:45:40Z"), "2026-10-16T06:00:00.000Z");
+  assert.equal(settlementOfWindow("2026-10-16T18:00:00Z"), "2026-10-16T18:00:00.000Z", "a window opening on the dot names its own settlement");
+  assert.equal(townWhen("2026-10-16T18:00:00.000Z"), "Oct 16, 2:00 pm EDT");
+  assert.equal(townWhen("2026-12-01T18:00:00.000Z"), "Dec 1, 1:00 pm EST");
+  // only the author's stake puts the draft forward, and every handle of the house reads the note (4b)
+  assert.equal(leftTheWorldNote("lupi/rootwood-bookend", "lupi", "Oct 16, 2:00 pm EDT"),
+    "lupi/rootwood-bookend had no stamps behind it, so it left the world at the Oct 16, 2:00 pm EDT settlement. It's back in your household's drafts, and its author, lupi, can stake it, or leave it again with a stamp, to bring it back.");
+  const [row] = leftTheWorldRows([{ slug: "lupi/rootwood-bookend", kind: "sited", owner: "lupi", body: "A bookend of rootwood.", opens_at: new Date("2026-10-16T17:45:40Z") }]);
+  assert.deepEqual(row, {
+    mark: "lupi/rootwood-bookend", kind: "sited", by: "lupi", body: "A bookend of rootwood.", left_at: "2026-10-16T18:00:00.000Z", note_until: "2026-10-23T17:45:40.000Z",
+    note: leftTheWorldNote("lupi/rootwood-bookend", "lupi", "Oct 16, 2:00 pm EDT"), act: stakeEnvelope("lupi/rootwood-bookend"),
+  });
+  assert.doesNotMatch(row.note, /\d{4}-\d{2}-\d{2}T/, "no ISO instant reaches the words");
+});
