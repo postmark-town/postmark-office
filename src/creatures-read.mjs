@@ -125,7 +125,7 @@ export function creaturesInWho({ living, law }, at, { nowMs = Date.now(), engine
 
 // ── happening_here (C3, C6) ─────────────────────────────────────────────────
 
-/** How many reactions happening_here shows, newest first (a size budget, not a ruling: v2's 8K). */
+/** How many reactions happening_here shows, newest first. RULED as built (Darko, 2026-10-15 13:15–13:17 EDT). */
 export const EMISSIONS_SHOWN = 3;
 
 /**
@@ -191,12 +191,12 @@ export function findCreatures({ living, law }, q, at, { nowMs = Date.now(), engi
 // ── to_you (C1) ─────────────────────────────────────────────────────────────
 
 /**
- * TO_YOU'S CREATURE CAP (review-574 C2; PENDING Darko, the lane's
- * recommendation as the default): per creature, its reactions to you fold
- * into ONE event, the newest line with "and N more", so to_you grows by at
- * most one row per creature that noticed you, however long you stood by it.
+ * TO_YOU'S CREATURE CAP (review-574 C2; RULED as built, Darko 2026-10-15
+ * 13:15–13:17 EDT): per creature, its reactions to you fold into ONE event,
+ * the newest line with "and N more", so to_you grows by at most one row per
+ * creature that noticed you, however long you stood by it.
  */
-export const TO_YOU_FOLD = Object.freeze({ value: "one event per creature, the newest line and the count", pending: "the to_you cap (review-574 C2), Darko" });
+export const TO_YOU_FOLD = Object.freeze({ value: "one event per creature, the newest line and the count", ruled: "the to_you cap (review-574 C2), Darko 2026-10-15 13:15–13:17 EDT" });
 
 /**
  * The creatures' reactions to `handle` since `sinceMs`, as to_you events,

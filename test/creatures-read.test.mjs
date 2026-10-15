@@ -212,8 +212,9 @@ nodeTest("C1 (review-574): a process boots far enough back to hold every reactio
   assert.deepEqual(asked, [BOOT_SPAN_S]);
 });
 
-test("C2 (review-574; the cap is PENDING Darko): per creature, its reactions to you fold into one event, the newest line and the count", () => {
-  assert.match(TO_YOU_FOLD.pending, /Darko/);
+test("C2 (review-574; RULED as built, Darko 13:15–13:17): per creature, its reactions to you fold into one event, the newest line and the count", () => {
+  assert.equal(TO_YOU_FOLD.ruled, "the to_you cap (review-574 C2), Darko 2026-10-15 13:15–13:17 EDT");
+  assert.equal(TO_YOU_FOLD.pending, undefined);
   const W = "creature:wolf-270-1", R = "creature:wolf-270-2";
   const rows = [spawn(W), spawn(R, { x: 50 })];
   for (let i = 0; i < 60; i += 1) rows.push(react(W, { to: "kai", reaction: i === 59 ? "snarl" : "watch", at: NOW - (60 - i) * 60_000 }));
