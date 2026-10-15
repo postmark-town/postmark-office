@@ -135,10 +135,12 @@ test("FAR from every ring, nothing is read: no standpoint, no read-back, no judg
   const out = await creaturesAnswer([far], { did: "say" }, { centreOf, standpointOf: boom, query: boom, around: boom, ask: boom, write: boom, env: ENV });
   assert.equal(out.creatures, undefined);
   // a row from the crossing pass (only its id came back): its actor's standpoint is asked, and nothing else when it is far
-  let asked = 0;
+  let asked = 0, reads = 0;
   const enter = { actor: "kai", action: "enter", id: "14" };
-  await creaturesAnswer([enter], {}, { centreOf, standpointOf: async () => { asked += 1; return { x: 900, y: 0, placed: true }; }, query: boom, around: boom, ask: boom, write: boom, env: ENV });
+  await creaturesAnswer([enter], {}, { centreOf, standpointOf: async () => { asked += 1; return { x: 900, y: 0, placed: true }; },
+    query: async () => { reads += 1; return []; }, around: boom, ask: boom, write: boom, env: ENV });
   assert.equal(asked, 1);
+  assert.equal(reads, 0, "an enter far from every ring is never read back");
   __setCreaturesForTest(null);
 });
 
@@ -170,9 +172,10 @@ test("a walk's trigger carries where it set out and where it is going: approachi
 
 test("a bounce is no act: an answer with an error gets no creatures, whatever rows the call wrote", async () => {
   __setCreaturesForTest(livingWith(spawnRow()));
-  const boom = async () => { throw new Error("must not be called"); };
-  const out = await creaturesAnswer([{ ...penRow(), id: "20" }], { error: "bounce", defect: "no" }, { centreOf, around: boom, ask: boom, write: boom, env: ENV });
+  const { calls, write } = recordingWrite();
+  const out = await creaturesAnswer([walkPen(20)], { error: "bounce", defect: "no" }, { centreOf, around: quiet, ask: jev({ watch: 1 }), write, env: ENV });
   assert.equal(out.creatures, undefined);
+  assert.equal(calls.length, 0, "nothing judged, nothing written");
   __setCreaturesForTest(null);
 });
 

@@ -109,6 +109,16 @@ test("ON THE STORE · an act door's own row wakes the wolf: one reaction row nam
     assert.equal(arrivals.length, 1, "the lock and the prior read leave one row");
     assert.equal(arrivals[0].payload.arrived_at, arrival.atIso);
 
+    // TWO OFFICES, ONE ARRIVAL, written at once past both processes' own turn chains: the lock leaves one row
+    const twice = reactionRows(wolfAlive().byId.get(WOLF), { ...arrival, actor: "mo", actId: far.seq, atIso: iso(Date.now() + 1) },
+      { to: "mo", verb: "walk", reaction: "watch", moment: "arrival", arrived_at: arrival.atIso }, {});
+    // each insert waits a moment inside its transaction, so the second office asks while the first has not committed
+    const { officeWrite, insertAct } = await import("../src/world2-pen.mjs");
+    const slowly = { officeWrite, insertAct: async (c, r) => { await new Promise((res) => setTimeout(res, 300)); return insertAct(c, r); } };
+    const both = await Promise.all([writeReaction(twice, slowly), writeReaction(twice, slowly)]);
+    assert.deepEqual(both.map((w) => w.prior).sort(), [false, true]);
+    assert.equal((await q("SELECT count(*)::int AS n FROM acts WHERE action = 'react' AND payload->>'to' = 'mo' AND payload->>'moment' = 'arrival'"))[0].n, 1);
+
     // a trigger that never reached the record gets no reaction
     const ghost = reactionRows(wolfAlive().byId.get(WOLF), { actor: "kai", verb: "say", actId: "987654321", atIso: iso(Date.now()) },
       { to: "kai", verb: "say", reaction: "watch" }, {});

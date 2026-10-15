@@ -45,7 +45,7 @@ import { join } from "node:path";
 import {
   ANSWER_WAIT_MS, ARRIVAL, LivingSet, REFRESH_MS, creatureLaw, reactTo,
 } from "./creatures.mjs";
-import { outsideWatch, setCreaturesAwake } from "./act-watch.mjs";
+import { setCreaturesAwake } from "./act-watch.mjs";
 import { outsideRetryKey } from "./act-nonce.mjs";
 import { actsQuery, world2Enabled } from "./world2-acts.mjs";
 import { faultLogged } from "./fault-words.mjs";
@@ -166,11 +166,11 @@ export async function creaturesAnswer(rows, result, deps = state.testDeps ?? {})
   }
 }
 
-/** The creatures' turns for one act, outside the door's key and the watched act, bounded by ANSWER_WAIT_MS. */
+/** The creatures' turns for one act, outside the door's key (act-watch.mjs runs this after the watched act), bounded by ANSWER_WAIT_MS. */
 export function answerWithin(act, { living, law, around = aroundCreature, ask, write, env, clock = Date.now } = {}) {
   const deadline = clock() + ANSWER_WAIT_MS;
-  const turns = outsideRetryKey(() => outsideWatch(() =>
-    reactTo(act, { living, law, around, ...(ask ? { ask } : {}), ...(write ? { write } : {}), ...(env ? { env } : {}), clock, deadline })));
+  const turns = outsideRetryKey(() =>
+    reactTo(act, { living, law, around, ...(ask ? { ask } : {}), ...(write ? { write } : {}), ...(env ? { env } : {}), clock, deadline }));
   let timer;
   const late = new Promise((r) => { timer = setTimeout(() => r([]), Math.max(0, deadline - clock())); timer.unref?.(); });
   return Promise.race([turns, late]).finally(() => clearTimeout(timer));

@@ -60,6 +60,8 @@ export function noteActWritten(row, id) {
 export async function perceived(run) {
   if (!awake || watch.getStore()) return run();
   const s = { rows: [], closed: false };
+  // The hook runs AFTER `watch.run` has returned, so it is outside the watch by
+  // construction: a creature's own write is never taken for the act's row.
   const result = await watch.run(s, run);
   s.closed = true;
   if (!s.rows.length) return result;
@@ -72,7 +74,5 @@ export async function perceived(run) {
   }
 }
 
-/** Run `fn` outside any watched act, so the creatures' own writes are never taken for the act's. */
-export const outsideWatch = (fn) => watch.exit(fn);
 /** Whether this code runs inside a watched act (tests: a creature's write must not). */
 export const insideWatchedAct = () => !!watch.getStore();
