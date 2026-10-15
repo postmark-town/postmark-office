@@ -221,6 +221,7 @@ test("THE PEN IS NARROW (076): clearing_job may plant only the return of a mark 
     assert.match(await plant({ slug: "ghost/the-lantern", claimant: "rei", household: "hh:starforge", mark: IDS.ghost }), REFUSED,
       "a mark standing again keeps its old cause, and is never returned (the status clause)");
     assert.match(await plant({ ...garage, slug: "rei/the-garage-again" }), REFUSED, "the claim carries the mark's own slug (the slug clause)");
+    assert.match(await plant({ ...garage, window: WIN - 1, said: WIN }), REFUSED, "a return is written in its take's window");
     assert.match(await plant({ ...garage, window: WIN - 1, said: WIN - 1 }), REFUSED, "a return belongs to its take's window");
     assert.match(await plant({ ...garage, said: WIN - 1 }), REFUSED, "and says which take it returns");
     assert.match(await plant({ ...garage, keys: "hh:rabbit" }), /row-level security/, "in a transaction that declared the house");
