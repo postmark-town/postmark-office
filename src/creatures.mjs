@@ -261,13 +261,24 @@ const msOf = (t) => (t instanceof Date ? t.getTime() : typeof t === "number" ? t
 export const LIVING_SQL = `SELECT id::text AS id, at, actor, action, object, payload FROM acts
   WHERE class = '${CREATURE_CLASS}' AND id > $1::bigint ORDER BY id LIMIT $2`;
 // The first read of a process: every creature row young enough to belong to a
-// living creature or its memory (a span plus an hour of slack).
+// living creature, its memory, or a reaction to_you still owes a reader
+// (BOOT_SPAN_S: a reaction up to TO_YOU_REACH_MS old, from a creature that came
+// out up to 12 h before it, plus an hour of slack).
 export const LIVING_BOOT_SQL = `SELECT id::text AS id, at, actor, action, object, payload FROM acts
   WHERE class = '${CREATURE_CLASS}' AND at > now() - make_interval(secs => $1) ORDER BY id`;
 export const LIVING_TOP_SQL = `SELECT max(id)::text AS id FROM acts WHERE class = '${CREATURE_CLASS}'`;
 export const LIVING_BATCH = 2000;
 /** How long an ended creature stays in RAM (a retry of its last act still finds its answer). */
 export const PRUNE_AFTER_MS = 3600_000;
+/**
+ * HOW FAR BACK to_you SEES (review-574 C1): every reaction stays in RAM this
+ * long after it was written, however soon its creature ended, so the walker
+ * who answers every 12 hours still reads what the wolf did when they arrived,
+ * even from a wolf that fled at once. A since older than this is answered as
+ * incomplete (creatures-read.mjs § creatureToYou).
+ */
+export const TO_YOU_REACH_MS = 13 * 3600_000;
+export const BOOT_SPAN_S = (TO_YOU_REACH_MS + 13 * 3600_000) / 1000;
 
 /**
  * The creatures this process knows, folded from their rows. A creature is
@@ -373,11 +384,15 @@ export class LivingSet {
     return out.sort((a, b) => a.distance_m - b.distance_m).slice(0, most);
   }
 
-  /** A creature gone or faded more than PRUNE_AFTER_MS ago leaves RAM; its rows stay on the record. */
+  /**
+   * A creature gone or faded more than PRUNE_AFTER_MS ago, whose newest
+   * reaction is older than TO_YOU_REACH_MS, leaves RAM; its rows stay on the record.
+   */
   prune(now = Date.now()) {
     for (const [id, c] of this.byId) {
       const ended = c.gone ? (c.gone_at ?? c.fades_at) : c.fades_at;
       if (ended >= now - PRUNE_AFTER_MS) continue;
+      if ((c.reactions.at(-1)?.at ?? -Infinity) >= now - TO_YOU_REACH_MS) continue; // to_you still owes it (C1)
       this.byId.delete(id);
       for (const r of c.reactions) {
         const by = this.answered.get(r.act);
@@ -388,7 +403,7 @@ export class LivingSet {
   }
 
   /** Catch up with the store. A failed read leaves the set as it was (the next tick retries). */
-  async refresh({ query = actsQuery, spanS = 13 * 3600, now = Date.now() } = {}) {
+  async refresh({ query = actsQuery, spanS = BOOT_SPAN_S, now = Date.now() } = {}) {
     try {
       if (!this.booted) {
         const rows = await query(LIVING_BOOT_SQL, [spanS]);

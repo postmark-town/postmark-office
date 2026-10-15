@@ -314,8 +314,9 @@ test("PR-4: investigate: on a resident rides the bare read, v1 and v2, with publ
   assert.equal((await worldApex({ handle: WHO, investigate: KOGANE_PARCEL }, KEY, {})).code, 422, "a mark is mark:'s");
   assert.equal((await worldApex({ handle: WHO, investigate: WHO, mark: KOGANE_PARCEL }, KEY, {})).code, 422, "one focus at a time");
   assert.equal((await worldApex({ handle: WHO, investigate: WHO, read: "view" }, KEY, {})).code, 422);
-  const critter = await v2At({ investigate: "creature/mist-hare-7" });
-  assert.match(critter.investigated.unavailable, /WLD-46/);
+  // a creature (POS-637 PR-C): one no fold holds is "no creature", or the law is unreadable and it says so
+  const creature = (await v2At({ investigate: "creature:wolf-270-1" })).investigated;
+  assert.ok(creature.code === 404 || /creatures' law cannot be read/.test(creature.unavailable ?? ""), JSON.stringify(creature).slice(0, 200));
 });
 
 test("explain: every key of the real v2 read at the rig's standpoint has a row", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
