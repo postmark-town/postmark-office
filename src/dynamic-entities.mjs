@@ -357,7 +357,7 @@ export function declareAttachment(db, { entity, target, policy = "cascade", decl
 // deletion rather than a port: `storedDepartures` moved to `acts` in POS-154,
 // and `refreshEntities` and `crossing-save`'s `<N>.jsonl` half moved in
 // POS-156's part 0. Every walk writes one act, awaited, through `appendJournal`
-// -- `world.mjs § walkViaOffice` and `world-apex.mjs § spawnOnEnter`, which was
+// -- `world.mjs § walkViaOffice` and `world-apex.mjs § landOnEnter`, which was
 // a THIRD writer of this table that POS-156's own measurement had not listed.
 //
 // `readMovements` STAYS, below, and so does the table. It holds the frozen era

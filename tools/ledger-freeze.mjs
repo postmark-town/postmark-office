@@ -369,7 +369,7 @@ async function main() {
     // freeze itself already happened (2026-08-10) and this arm is a one-off
     // whose event has passed; if it is ever needed again it writes the record
     // through `walkEntry` + `appendJournal`, the way `world-apex.mjs §
-    // spawnOnEnter` does since G1.
+    // landOnEnter` does since G1.
     const db = openDynamic(DB_PATH ?? undefined);
     try {
       const already = new Set(readMovements(db).map((m) => `${m.actor}|${m.at}`));
@@ -380,7 +380,7 @@ async function main() {
         : `REFUSED: ${owed.length} resident(s) would need a set-down departure, and G1 (POS-156) deleted the `
           + "`dynamic.db/movements` pen this arm wrote through. Rows written there now would be placements no "
           + "reader sees. Port this arm to the record (`walkEntry` + `appendJournal`, as world-apex.mjs § "
-          + "spawnOnEnter does) before running it again.";
+          + "landOnEnter does) before running it again.";
       if (owed.length) { console.error(report.set_down_refused); }
       else { putMeta(db, "ledger_frozen_at", atIso); putMeta(db, "ledger_freeze_set_down", "0"); }
     } finally { db.close(); }
