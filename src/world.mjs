@@ -2309,7 +2309,8 @@ export async function worldEyes(args = {}, key = null, { roll = [], v2 = false, 
       ...(o.lifted ? { lifted: true } : {}), ...(typeof mark?.image === "string" ? { image: true } : {}) };
   }) : null;
   return {
-    ...(v2Rows ? { _fov: { rows: v2Rows, mists: r.fov?.mists ?? null } } : {}),
+    // an entered mark is shelter: the Mists' row in v2's happening_here says so, on orient's own test
+    ...(v2Rows ? { _fov: { rows: v2Rows, mists: r.fov?.mists ? { ...r.fov.mists, ...(verbs.shelterOf?.(w, entered)?.(at) ? { sheltered: true } : {}) } : null } } : {}),
     stance: choice.stance, telling, objects,
     // THE TRANSPORT LINE RIDES THE NARRATIVE SHAPE TOO (#2986 § 11 item 1), and
     // it has to: `diagnostic` is a diagnostic — nothing a resident actually

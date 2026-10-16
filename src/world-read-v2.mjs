@@ -300,7 +300,8 @@ export function happeningBlock({ events = [], departures = null, mists = null, m
     rows.push({ what: `the Post Office leaves here${to ? ` for ${to.name}` : ""}`, kind: "departure", at: hourZ(d.at), ...(to ? { to } : {}) });
   }
   if (mists && (mists.in_wall || mists.thickness > 0))
-    rows.push({ what: "the Mists", kind: "emission", note: mists.in_wall ? "you stand in the wall: arm's reach, and walking slows to nothing" : "you stand in their fringe: sight is short and walking slows" });
+    rows.push({ what: "the Mists", kind: "emission", note: mists.in_wall && mists.sheltered ? "the wall stands around the mark you have entered; inside it, nothing is hidden"
+      : mists.in_wall ? "you stand in the wall: arm's reach, and walking slows to nothing" : "you stand in their fringe: sight is short and walking slows" });
   // the creatures' answers within reach, and the nearest out at the edge (POS-637 PR-C; C3, C6)
   for (const c of creatures ?? []) rows.push(c);
   return rows.length ? rows : null;

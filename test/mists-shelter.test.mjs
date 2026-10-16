@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { mistsOnTheRoad, roadShelter } from "../src/world.mjs";
+import { happeningBlock } from "../src/world-read-v2.mjs";
 import { worldClone, NO_WORLD } from "./fixture-paths.mjs";
 
 const SOURCE = readFileSync(new URL("../src/world.mjs", import.meta.url), "utf8");
@@ -65,6 +66,15 @@ test("the eyes and the air read with the reader's enter stack; a look from coord
     const read = body.indexOf("const entered = choice.coords ? null : await enteredNow(choice.handle);");
     assert.ok(read > 0 && body.indexOf(call) > read, `${name} passes the reader's stack`);
   }
+});
+
+test("v2's happening_here: entered, the wall stands around the mark and hides nothing; unentered, arm's reach as ever", () => {
+  const note = (mists) => happeningBlock({ mists })[0].note;
+  assert.equal(note({ in_wall: true, thickness: 1, sheltered: true }), "the wall stands around the mark you have entered; inside it, nothing is hidden");
+  assert.equal(note({ in_wall: true, thickness: 1 }), "you stand in the wall: arm's reach, and walking slows to nothing");
+  assert.equal(note({ in_wall: false, thickness: 0.4, sheltered: true }), "you stand in their fringe: sight is short and walking slows");
+  assert.match(SOURCE, /mists: r\.fov\?\.mists \? \{ \.\.\.r\.fov\.mists, \.\.\.\(verbs\.shelterOf\?\.\(w, entered\)\?\.\(at\) \? \{ sheltered: true \} : \{\}\) \} : null/,
+    "the eyes mark the Mists sheltered on orient's own test: the reader's entered marks, at the standpoint");
 });
 
 // The real engine, where the clone carries the ruling (World shelter/entered-mark).
