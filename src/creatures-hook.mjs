@@ -227,9 +227,15 @@ export async function aroundCreature(creature, act, reads = {}) {
   const w = reads.world ?? await import("./world.mjs");
   const query = reads.query ?? actsQuery;
   const part = (p) => Promise.resolve().then(p).catch(() => null);
-  // the view the tick saw for this creature (row 51); none yet (it came out
-  // since the last tick), and the slice goes without its marks, never a
-  // line of sight on the act's path
+  // KEPT vs FRESH (row 51). KEPT: only the view the tick saw for this
+  // creature: the published marks in its sight, their names and bodies,
+  // through the terrain and the Mists of this crossing. It is the spectator's
+  // field of view (no residents in it), and nothing in it can change within
+  // (published sha, crossing). FRESH on every act: everything about residents,
+  // namely who is near and what each last did (presence + activeOf), what was
+  // heard (the shared ear), the actor's own last acts, and the air. A creature
+  // with no kept view yet (out since the last tick) goes without its marks,
+  // never a line of sight on the act's path.
   const seen = (reads.views ?? views).get(creature.id) ?? null;
   const [oriented, heardRows, lastRows] = await Promise.all([
     part(() => w.worldOrient({ x: at.x, y: at.y }, null, { crowd: true })),

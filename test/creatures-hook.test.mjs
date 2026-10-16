@@ -343,6 +343,12 @@ test("W9: the creature's read is the resident read's own blocks at the creature'
   assert.equal(out.bodies["mo/cairn"], "Stones, stacked.");
   assert.equal(out.air, "fog low over the fringe");
   assert.deepEqual(out.actor_last, ["walked, 2 min ago"]);
+  // the room is read FRESH on every act, never kept: a resident who arrives is in the very next slice
+  const crowded = await aroundCreature(wolf, { actor: "kai", actId: "33" }, { query, nowMs: NOW, world: { ...world,
+    worldOrient: async () => ({ present: { residents: [{ handle: "zed", distance_m: 12, bearing: "S", band: "near" }] } }),
+    heardAt: async () => [{ handle: "zed", said: "a new voice", ago: "just now" }] } });
+  assert.deepEqual(crowded.heard.map((h) => h.who), ["zed"], "what was heard is this act's");
+  assert.equal(crowded.view.N[0].name, "a cairn", "while the marks in its sight are the kept view");
   // a creature the tick has not seen for yet: no marks in its slice, and still no line of sight on the act
   const fresh = await aroundCreature({ id: "creature:wolf-270-32", x: 0, y: 0 }, { actor: "kai", actId: "32" },
     { world: { ...world, worldEyes: async () => { throw new Error("must not be asked on the act"); }, heardAt: async () => { throw new Error("deaf"); } }, query, nowMs: NOW });
