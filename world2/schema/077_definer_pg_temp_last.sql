@@ -26,9 +26,13 @@
 -- this one, and 073's `berth_heard_park` and `berth_heard_land`, which already
 -- name `public, pg_temp` and qualify every table. The last statement below
 -- holds the store to it: the migration refuses, and rolls back whole, if any
--- SECURITY DEFINER function in `public` does not end its search_path with
--- pg_temp. test/definer-pg-temp-last.test.mjs holds the files and the store to
--- the same rule.
+-- SECURITY DEFINER function in `public` does not search pg_temp LAST and only
+-- there: a list of plain schema names (or "$user") whose last entry is pg_temp,
+-- which appears once and is not the only entry. A quoted single string
+-- ('public, pg_temp') is one schema name with a comma in it, and a quoted
+-- "PG_TEMP" is another schema; both are refused (review of #589).
+-- test/definer-pg-temp-last.test.mjs holds the files and the store to the same
+-- rule.
 --
 -- Idempotent (CREATE OR REPLACE keeps the owner and the grants, which are also
 -- re-stated), one transaction, under lock_timeout = 5s so a blocked apply fails
@@ -56,8 +60,8 @@ $$;
 REVOKE ALL ON FUNCTION arrival_heard_weekly(timestamptz) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION arrival_heard_weekly(timestamptz) TO office_api;
 
--- The store holds the rule: no SECURITY DEFINER function in public may search
--- the caller's pg_temp before its own schemas.
+-- The store holds the rule: every SECURITY DEFINER function in public searches
+-- the caller's pg_temp last, once, after at least one schema of its own.
 DO $$
 DECLARE bad text;
 BEGIN
@@ -65,7 +69,8 @@ BEGIN
     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
    WHERE n.nspname = 'public' AND p.prosecdef
      AND NOT EXISTS (SELECT 1 FROM unnest(coalesce(p.proconfig, '{}')) c
-                      WHERE c ~ '^search_path=(.*,\s*)?"?pg_temp"?\s*$');
+                      WHERE c ~ '^search_path=(?:(?:"\$user"|[a-z_][a-z0-9_$]*)\s*,\s*)+pg_temp$'
+                        AND c !~ '(=|,)\s*pg_temp\s*,');
   IF bad IS NOT NULL THEN
     RAISE EXCEPTION 'POS-579: these SECURITY DEFINER functions do not search pg_temp last: %', bad;
   END IF;
