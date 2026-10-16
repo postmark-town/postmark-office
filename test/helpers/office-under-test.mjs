@@ -51,7 +51,16 @@ export async function indexStore(dbPath, { db: name = "office_test", own = false
     if (dbPath == null) return;
     const db = typeof dbPath === "string" ? new DatabaseSync(dbPath, { readOnly: true }) : dbPath;
     const w = await s.connect("law_ingester");
-    try { await copyIndexToStore(w, db); }
+    // ONE TRANSACTION, as the ingest writes it (POS-639). The copy writes
+    // town_meta's as_of first and the residents after, statement by statement,
+    // so an office polling mid-copy read the NEW as-of over a half-copied
+    // roll, held that probe, and never read again: its as-of had not moved
+    // since. Committed whole, a reader sees the old index or the new.
+    try {
+      await w.query("BEGIN");
+      try { await copyIndexToStore(w, db); await w.query("COMMIT"); }
+      catch (e) { await w.query("ROLLBACK").catch(() => {}); throw e; }
+    }
     finally { await w.end(); if (typeof dbPath === "string") db.close(); }
   };
   await seed();

@@ -18,7 +18,6 @@ import { bootOnFreePort } from "./spawn-office.mjs";
 import { indexStore, seedRegistry } from "./helpers/office-under-test.mjs";
 import { serializeRegistry, slugFromName, houseForAccount, houseForName, planRegistryJoin } from "../src/residency.mjs";
 import { BIND_REFUSALS } from "../src/join-bind.mjs";
-import { BOUNCER_LIMITS } from "../src/bouncer.mjs";
 import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 import { tempDir } from "./helpers/temp-dir.mjs";
 
@@ -602,40 +601,46 @@ test("after merge, the same token resolves to the new household with no re-auth"
   // 2026-08-16 ruling) — this test is about token re-resolution for a fully
   // SETTLED resident, so the simulation must settle them.
   // (the pin lands in the store, the record sign-in reads — POS-343)
+  // THE OFFICE SAYS WHEN IT HAS READ THE MERGE (POS-639). It reads the resident
+  // ashore only once its index poll has run, and every wait this test tried was
+  // a clock: a 1 s sleep (red on CI, #453), then sends retried for 20 s (red on
+  // CI under load, office#558, #561, #566). Two things made the poll late or
+  // never: the reseed wrote the new as-of before the new resident, so an office
+  // polling mid-copy held that half index for good (office-under-test.mjs §
+  // seed, now one transaction), and an older store read could land after a
+  // newer one (server.mjs § ONE STORE READ IN FLIGHT). Now the test listens for
+  // the office's own line, "index reloaded — as-of <the merge's>", and sends
+  // ONCE. No clock decides it: a line that never comes is the test's timeout,
+  // and an office that resolves the token at sign-in still answers 403 here.
+  const reloaded = officeSays(/\[office\] index reloaded — as-of fixture-with/);
   await seedRegistry(IX.store, null, {
     wright: { login: "keeminlee", id: 999, pinned: "2026-07-05" },
     arrival: { login: "some-stranger", id: 424242, pinned: "2026-07-08" },
   });
   await settleResident("arrival", { handle: "arrival", github: "some-stranger" });
+  await reloaded;
 
   // the SAME token now resolves to the new household — the send is accepted.
-  // The office reads the resident ashore only once its index poll has run, and a
-  // loaded runner can take longer than any fixed wait (a 1 s sleep went red on
-  // CI, #453; with no wait it is red here too). So the send is retried while,
-  // and only while, the answer is the harbor gate's refusal, which writes
-  // nothing; any other answer is the verdict at once.
-  //
-  // EVERY REFUSED SEND SPENDS A WRITE TOKEN (POS-491). At one send per 200 ms
-  // the loop spent the key's write bucket (40 a minute, burst 40) in about 8 s,
-  // and a runner whose index poll took longer got 429 where 202 was expected:
-  // 2 of 186 CI runs (38013898241 and office#484's first, 38109734885). The
-  // sends are spaced at the bucket's own refill rate, so this loop can never
-  // outrun it, however long the office takes.
-  const SEND_SPACING_MS = Math.ceil(60_000 / BOUNCER_LIMITS.key.writePerMinute);
-  const send = () => fetch(`${BASE}/letters`, {
+  const after = await fetch(`${BASE}/letters`, {
     method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
     body: JSON.stringify({ from: "arrival", to: "wright", title: "first hello", thread: "new", body: "hi" }),
   });
-  let after = await send();
-  for (const deadline = Date.now() + 20_000; after.status === 403 && Date.now() < deadline;) {
-    const refusal = await after.json();
-    assert.equal(refusal.defect, "the harbor is read + ephemeral", `only the harbor gate may be waited out: ${JSON.stringify(refusal)}`);
-    await new Promise((ok) => setTimeout(ok, SEND_SPACING_MS));
-    after = await send();
-  }
   assert.equal(after.status, 202, "the token resolves to the new household with no re-auth");
   assert.ok((await after.json()).letter_id);
 });
+
+/**
+ * Resolves on the first line the office under test writes to stdout that
+ * matches `re`, from now on (the listener is attached before the act it
+ * waits on, so the line cannot pass unseen).
+ */
+function officeSays(re) {
+  return new Promise((ok) => {
+    let seen = "";
+    const hear = (d) => { seen += d; if (re.test(seen)) { child.stdout.off("data", hear); ok(); } };
+    child.stdout.on("data", hear);
+  });
+}
 
 /**
  * A resident lands in the town index, as a join merge lands their ADDRESS: in
