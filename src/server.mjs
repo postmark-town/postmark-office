@@ -46,6 +46,7 @@ import { openPaper, paperworkStoreOn } from "./paperwork.mjs"; // POS-271: sign-
 import { arrivalPage } from "./arrival.mjs";
 import { townSummary, residentList, residentPage, resident, mailList, letter, search, bulletinList, bulletinEntry, townLedger, townDocs, stampsRoster, stampsFor, stampsDetail, questBoardFor, metricsMail, letterList, LETTER_IDS_MAX, regionList, regionOne, home, identityOf, repoLog } from "./queries.mjs";
 import { householdsFor, withHouseholdBlock } from "./households.mjs";
+import { storeRefresher, STORE_READ_BOUND_MS } from "./store-refresh.mjs"; // the poll's store read, one in flight and bounded (POS-639)
 import * as townIndexStore from "./town-index-store.mjs"; // the office.db readers moved to the store (POS-268)
 import { probeOf, isUnreachable, UNREACHABLE_DEFECT } from "./index-probe.mjs"; // the write path's questions of the index, office.db's or the store's (POS-268)
 const { townIndexReads } = townIndexStore;
@@ -495,29 +496,30 @@ function sweepRetired(now = Date.now()) {
 // snapshot, which the "world-graph" announcement below moves (POS-270 lane W 3b).
 onAnnounce("index", reloadIndex);
 
-// ONE STORE READ IN FLIGHT (POS-639). The tick used to start a roll and a probe
-// read every RELOAD_POLL_MS whether the last pair had answered or not. On a
-// loaded machine they piled up, and an older read finishing after a newer one
-// put the older index back. A tick that finds the last pair still reading skips.
-let storeReading = false;
+// ONE STORE READ IN FLIGHT, AND NEVER FOREVER (POS-639; store-refresh.mjs says
+// why): a tick that finds the last roll+probe pair still reading skips, and a
+// pair that has not answered within STORE_READ_BOUND_MS frees the guard, named
+// in the journal, so the next tick reads again.
+const storeTick = storeRefresher({
+  read: () => Promise.all([
+    townIndexStore.refreshStoreRoll().catch(() => {}),
+    townIndexStore.refreshStoreProbe().catch(() => {}),
+  ]),
+  onRead: () => {
+    if (!INDEX_SWITCHED) return;
+    const was = AS_OF;
+    INDEX.asOf = AS_OF = storeAsOf();
+    // The switched office's twin of reloadIndex's line, in the same words:
+    // the moment this office answers from a new index is one an operator
+    // (or a test) can see from the outside.
+    if (AS_OF !== was) journal.log(`[office] index reloaded — as-of ${AS_OF.slice(0, 12)} (was ${was.slice(0, 12)})`);
+  },
+  log: (line) => journal.error(line),
+});
 setInterval(() => {
   reloadIndex(); sweepRetired();
   // the store's roll and the write path's probe, on the same clock the index reload keeps (POS-268)
-  if (townIndexReads() && !storeReading) {
-    storeReading = true;
-    Promise.all([
-      townIndexStore.refreshStoreRoll().catch(() => {}),
-      townIndexStore.refreshStoreProbe().then(() => {
-        if (!INDEX_SWITCHED) return;
-        const was = AS_OF;
-        INDEX.asOf = AS_OF = storeAsOf();
-        // The switched office's twin of reloadIndex's line, in the same words:
-        // the moment this office answers from a new index is one an operator
-        // (or a test) can see from the outside.
-        if (AS_OF !== was) journal.log(`[office] index reloaded — as-of ${AS_OF.slice(0, 12)} (was ${was.slice(0, 12)})`);
-      }).catch(() => {}),
-    ]).finally(() => { storeReading = false; });
-  }
+  if (townIndexReads()) storeTick.tick();
 }, RELOAD_POLL_MS).unref();
 // AT BOOT, BEFORE THE OFFICE LISTENS (POS-268): the roll and the write path's
 // probe are loaded first, so the first ask is never answered by a process that
@@ -526,7 +528,7 @@ setInterval(() => {
 // leaves both unloaded, the checks answer the store's 503 and the poll retries.
 if (townIndexReads()) await Promise.race([
   Promise.all([townIndexStore.refreshStoreRoll().catch(() => {}), townIndexStore.refreshStoreProbe().catch(() => {})]),
-  new Promise((ok) => setTimeout(ok, 10_000).unref()),
+  new Promise((ok) => setTimeout(ok, STORE_READ_BOUND_MS).unref()),
 ]);
 // INDEX.asOf too: the manifest (GET /) answers the borrowed index's as-of
 if (INDEX_SWITCHED) INDEX.asOf = AS_OF = storeAsOf();
