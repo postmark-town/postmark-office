@@ -25,12 +25,13 @@ const GUARD = pathToFileURL(join(OFFICE, "test", "helpers", "sparse-guard.mjs"))
 const git = (repo, ...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8" }).trim();
 
 /** A repo holding `files` (path → text), one commit. */
-function repoWith(files) {
+function repoWith(files, date = null) {
   const dir = tempDir("clone-sparse-src-");
   git(dir, "init", "-q");
   for (const [p, text] of Object.entries(files)) { mkdirSync(dirname(join(dir, p)), { recursive: true }); writeFileSync(join(dir, p), text); }
   git(dir, "add", "-A");
-  git(dir, "-c", "user.name=t", "-c", "user.email=t@t.invalid", "commit", "-qm", "seed");
+  execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t.invalid", "commit", "-qm", "seed"],
+    { env: { ...process.env, ...(date ? { GIT_COMMITTER_DATE: date, GIT_AUTHOR_DATE: date } : {}) }, windowsHide: true });
   return dir;
 }
 
@@ -46,7 +47,9 @@ function sparseCloneOf(source, patterns, set) {
 /** Runs `body` (an ES module's text) in a child carrying the guard, with TOWN_CLONE at `clone`. */
 function guarded(clone, body) {
   const r = spawnSync(process.execPath, ["--import", GUARD, "--input-type=module", "-e", body],
-    { encoding: "utf8", windowsHide: true, env: { ...process.env, NODE_OPTIONS: "", TOWN_CLONE: clone, WORLD_CLONE: "" } });
+    // its own misses file (it is the root of its tree): these children miss on purpose,
+    // and a miss must never reach the run this file is part of
+    { encoding: "utf8", windowsHide: true, env: { ...process.env, NODE_OPTIONS: "", POSTMARK_SPARSE_MISSES: "", TOWN_CLONE: clone, WORLD_CLONE: "" } });
   return { code: r.status, out: r.stdout.trim(), err: r.stderr };
 }
 
@@ -134,6 +137,52 @@ test("the guard carries itself into a child node process", () => {
   assert.equal(r.out, "ESPARSE 1", r.err);
 });
 
+test("a miss in a spawned process the test never asks about still reds the root (an office server's)", () => {
+  const src = repoWith({ "tools/a.mjs": "1\n", "MEEPS/m.md": "m\n" });
+  const clone = sparseCloneOf(src, ["/*", "!/*/", "/tools/"], "town");
+  // the child swallows its miss and exits 0; the parent never looks at it
+  const r = guarded(clone, `
+    import { spawnSync } from "node:child_process";
+    spawnSync(process.execPath, ["--input-type=module", "-e", 'import { readFileSync } from "node:fs"; try { readFileSync(process.env.TOWN_CLONE + "/MEEPS/m.md"); } catch {} process.exit(0);'], { windowsHide: true, stdio: "ignore" });
+    console.log("parent done");
+  `);
+  assert.equal(r.out, "parent done");
+  assert.equal(r.code, 1, "the root reds on its tree's misses");
+  assert.match(r.err, /1 miss\(es\) in child processes of this run:\n\[clone-sparse\] town-clone\/MEEPS\/m\.md is not checked out/);
+});
+
+test("the guard: a link into the clone, a copy, an opendir and a realpath are guarded too", () => {
+  const src = repoWith({ "tools/a.mjs": "1\n", "WHITE_PAGES/r/ADDRESS.md": "a\n", "WHITE_PAGES/r/inbox/l.md": "l\n" });
+  const clone = sparseCloneOf(src, ["/*", "!/*/", "/tools/", "/WHITE_PAGES/", "!/WHITE_PAGES/*/inbox/"], "town");
+  const r = guarded(clone, `
+    import { symlinkSync, readdirSync, cpSync, opendirSync, realpathSync, mkdtempSync, existsSync } from "node:fs";
+    import { join } from "node:path";
+    import { tmpdir } from "node:os";
+    const C = process.env.TOWN_CLONE, out = [], scratch = mkdtempSync(join(tmpdir(), "guard-link-"));
+    const tryIt = (name, f) => { try { f(); out.push(name + ":ok"); } catch (e) { out.push(name + ":" + (e.code ?? e.message)); } };
+    tryIt("link-read-in", () => { symlinkSync(join(C, "WHITE_PAGES"), join(scratch, "wp"), process.platform === "win32" ? "junction" : undefined); readdirSync(join(scratch, "wp")); });
+    tryIt("link-probe-out", () => existsSync(join(scratch, "wp", "r", "inbox", "l.md")));
+    tryIt("copy-in", () => cpSync(join(C, "tools"), join(scratch, "tools"), { recursive: true }));
+    tryIt("copy-out", () => cpSync(join(C, "WHITE_PAGES"), join(scratch, "wp-copy"), { recursive: true }));
+    tryIt("opendir-out", () => opendirSync(join(C, "WHITE_PAGES", "r")).closeSync());
+    tryIt("realpath-out", () => realpathSync(join(C, "WHITE_PAGES", "r", "inbox")));
+    console.log(out.join("\\n"));
+  `);
+  assert.deepEqual(r.out.split("\n"), ["link-read-in:ok", "link-probe-out:ESPARSE", "copy-in:ok", "copy-out:ESPARSE", "opendir-out:ESPARSE", "realpath-out:ESPARSE"], r.err);
+  assert.match(r.err, /a copy of town-clone\/WHITE_PAGES would leave out 1 file \(WHITE_PAGES\/r\/inbox\/l\.md\)/);
+});
+
+test("the guard: a clone whose git config cannot be read is a miss, never a silent pass", () => {
+  const dir = tempDir("clone-sparse-gitfile-");
+  const clone = join(dir, "clone");
+  mkdirSync(clone);
+  writeFileSync(join(clone, ".git"), "gitdir: ./no-such-git-dir\n"); // a gitfile that leads nowhere
+  const r = guarded(clone, `import { existsSync } from "node:fs"; console.log(existsSync(process.env.TOWN_CLONE + "/x"));`);
+  assert.equal(r.out, "false");
+  assert.equal(r.code, 1);
+  assert.match(r.err, /\[clone-sparse\] cannot read the git config of .*clone/);
+});
+
 test("globMatch keeps * within one path segment", () => {
   assert.ok(globMatch("STATE/log/*.meta.json", "STATE/log/118.meta.json"));
   assert.ok(globMatch("STATE/log/*.meta.json", "STATE/log/226.3619.journal.meta.json"));
@@ -142,29 +191,33 @@ test("globMatch keeps * within one path segment", () => {
   assert.ok(globMatch("*", "MEEPS"));
 });
 
-test("a town stand-in leaves out the older letters only, and its office can add a new one", () => {
+test("a town stand-in leaves out the letters older than its source's own last days, and its office can add a new one", () => {
+  // the source's HEAD is dated 2026-10-10 (a pin days behind the wall): the cutoff is two
+  // days before THAT, never before today, so a stand-in made today keeps the pin's last days
   const src = repoWith({
     "WHITE_PAGES/r/ADDRESS.md": "a\n",
     "WHITE_PAGES/r/inbox/x-2026-09-01-to-r-old.md": "old\n",
     "WHITE_PAGES/r/inbox/2026-07-24-to-r-dated-first.md": "old too\n",
-    "WHITE_PAGES/r/inbox/x-2026-10-14-to-r-recent.md": "recent\n",
+    "WHITE_PAGES/r/inbox/w-2026-10-07-to-r-last-week.md": "older than the cutoff, in its month\n",
+    "WHITE_PAGES/r/inbox/x-2026-10-09-to-r-recent.md": "the pin's last days\n",
     "WHITE_PAGES/r/inbox/.gitkeep": "",
     "WHITE_PAGES/r/outbox/x-2026-09-01-to-s.md": "outbox stays whole\n",
     "MEEPS/m/m.md": "m\n",
-  });
-  const now = new Date("2026-10-15T23:00:00Z");
-  assert.deepEqual(standinPatterns("town", src, { now }), ["/*", "!/WHITE_PAGES/*/inbox/*2026-07-24*", "!/WHITE_PAGES/*/inbox/*2026-09-01*"]);
+  }, "2026-10-10T14:12:55Z");
+  assert.deepEqual(standinPatterns("town", src), ["/*", "!/WHITE_PAGES/*/inbox/2026-07-*", "!/WHITE_PAGES/*/inbox/w-2026-10-07-*", "!/WHITE_PAGES/*/inbox/x-2026-09-*"]);
   // a synthetic clock (tools/stamp-sandbox.mjs) names its own first day: only letters before it go
-  assert.deepEqual(standinPatterns("town", src, { now, before: "2026-08-01" }), ["/*", "!/WHITE_PAGES/*/inbox/*2026-07-24*"]);
+  assert.deepEqual(standinPatterns("town", src, { before: "2026-08-01" }), ["/*", "!/WHITE_PAGES/*/inbox/2026-07-*"]);
   const dest = join(tempDir("clone-sparse-standin-"), "town-clone");
-  standinClone("town", src, dest, { now });
+  standinClone("town", src, dest);
   const inbox = join(dest, "WHITE_PAGES", "r", "inbox");
-  assert.deepEqual(["x-2026-09-01-to-r-old.md", "2026-07-24-to-r-dated-first.md", "x-2026-10-14-to-r-recent.md", ".gitkeep"].map((f) => existsSync(join(inbox, f))), [false, false, true, true]);
+  assert.deepEqual(["x-2026-09-01-to-r-old.md", "2026-07-24-to-r-dated-first.md", "w-2026-10-07-to-r-last-week.md", "x-2026-10-09-to-r-recent.md", ".gitkeep"].map((f) => existsSync(join(inbox, f))), [false, false, false, true, true]);
   assert.ok(existsSync(join(dest, "MEEPS", "m", "m.md")) && existsSync(join(dest, "WHITE_PAGES", "r", "outbox", "x-2026-09-01-to-s.md")), "everything else is there");
   assert.equal(git(dest, "config", "--get", "postmark.sparse"), "standin-town", "a stand-in is not a guarded set");
+  // a new letter, and a reply whose name carries its older parent's date: both add
   writeFileSync(join(inbox, "y-2026-10-15-to-r-new.md"), "new\n");
+  writeFileSync(join(inbox, "z-2026-10-16-to-r-re-x-2026-09-01-to-r-old.md"), "a reply\n");
   git(dest, "add", "-A");
-  assert.equal(git(dest, "status", "--porcelain"), "A  WHITE_PAGES/r/inbox/y-2026-10-15-to-r-new.md");
+  assert.deepEqual(git(dest, "status", "--porcelain").split("\n"), ["A  WHITE_PAGES/r/inbox/y-2026-10-15-to-r-new.md", "A  WHITE_PAGES/r/inbox/z-2026-10-16-to-r-re-x-2026-09-01-to-r-old.md"]);
 });
 
 test("a world stand-in leaves out the metas of all but the newest two crossings", () => {

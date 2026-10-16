@@ -33,8 +33,11 @@
 // its assertions, not here.
 //
 // THE CLONES ARE SPARSE (POS-652): only the paths test/clone-sparse.json names are
-// checked out. Importing this file loads test/helpers/sparse-guard.mjs, so a suite that
-// reads, probes or lists a path outside them fails loudly, naming the path to add.
+// checked out, and test/helpers/sparse-guard.mjs makes a read, probe or listing outside
+// them fail loudly, naming the path to add. The guard is loaded for EVERY suite by the
+// runner (`npm test` and the lanes' `node --import ./test/helpers/sparse-guard.mjs --test
+// …`, and NODE_OPTIONS on CI); about sixty suites read the clones without this file.
+// Importing it here as well is only a belt for a bare `node --test` on one of these.
 
 import "./helpers/sparse-guard.mjs";
 import { existsSync } from "node:fs";

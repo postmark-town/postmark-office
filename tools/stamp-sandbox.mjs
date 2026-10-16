@@ -26,7 +26,10 @@
 //      checkout with its remotes REMOVED (nothing can push), SPARSE: the whole
 //      town less the letters dated before the synthetic clock's first day, which
 //      no step writes (POS-652, test/helpers/clone-sparse.mjs § standinPatterns;
-//      a full checkout here was ~17,000 files, twice a run), a fresh ed25519
+//      a full checkout here was ~17,000 files, twice a run). So the residents'
+//      mail history before that day is not on disk: a future step that reads it
+//      (a thread, a reply's parent, "answered" in the town's tools/mail-state.mjs) would see
+//      an empty history and must widen the cutoff first. Then a fresh ed25519
 //      key, and a fresh Postgres from test/helpers/embedded-store.mjs (every
 //      migration, every role, its own port and data directory; WORLD2_PG_URL
 //      and PG* are never read, so no run can reach the dev or prod store).

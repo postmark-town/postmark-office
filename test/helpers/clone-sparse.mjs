@@ -41,7 +41,7 @@ export const SPARSE_FILE = join(OFFICE, "test", "clone-sparse.json");
 export const CLONES = Object.freeze(["town", "world"]);
 
 const git = (repo, args, input) => execFileSync("git", ["-C", repo, ...args],
-  { encoding: "utf8", maxBuffer: 256 * 1024 * 1024, input, stdio: [input == null ? "ignore" : "pipe", "pipe", "pipe"] }).trim();
+  { encoding: "utf8", maxBuffer: 256 * 1024 * 1024, input, stdio: [input == null ? "ignore" : "pipe", "pipe", "pipe"], windowsHide: true }).trim();
 
 /** test/clone-sparse.json, parsed (an office checkout's own, by default). */
 export function readSparse(officeRoot = OFFICE) {
@@ -102,31 +102,39 @@ export function sparseProblem(clone, which, spec = readSparse()) {
 
 // ── the stand-ins ────────────────────────────────────────────────────────────
 
-/** YYYY-MM-DD, `days` before `now`, in UTC. PURE. */
-const dayBefore = (now, days) => new Date(now.getTime() - days * 86400000).toISOString().slice(0, 10);
+/** YYYY-MM-DD, `days` before the instant `at`, in UTC. PURE. */
+const dayBefore = (at, days) => new Date(at.getTime() - days * 86400000).toISOString().slice(0, 10);
+/** A string as a literal in a sparse-checkout (gitignore) pattern. PURE. */
+const literal = (s) => s.replace(/[*?[\]\\!#]/g, "\\$&");
 
 /**
  * A stand-in's patterns for a clone of `source` (its HEAD). The whole tree, less:
- *   town  · each letter in a WHITE_PAGES/<room>/inbox/ whose name carries a date before
- *           `before` (YYYY-MM-DD; by default two days before `now`). A letter the office
- *           writes is named by the day it is sent, so it falls inside the patterns and
- *           `git add` takes it. A run on a synthetic clock (tools/stamp-sandbox.mjs) passes
- *           its clock's first day, which may be days behind the wall;
+ *   town  · each letter in a WHITE_PAGES/<room>/inbox/ whose OWN date (the one after its
+ *           sender: `<sender>-<YYYY-MM-DD>-…`) is before `before`. By default that is two
+ *           days before the SOURCE HEAD's commit date, never the wall clock: a pin a week
+ *           old keeps its last days of mail. A letter the office writes is named by the day
+ *           it is sent, so it falls inside the patterns and `git add` takes it, a reply that
+ *           names an older parent's date included (the patterns match the sender-and-date
+ *           prefix, never a date anywhere in the name). A run on a synthetic clock
+ *           (tools/stamp-sandbox.mjs) passes its clock's first day. One pattern per sender
+ *           and month before the cutoff's month, per sender and day within it;
  *   world · STATE/log/<N>.meta.json and <N>.*.meta.json for every crossing N but the
  *           newest two in the source (the drain writes the current crossing's).
  * Each exclusion is a whole name or a date, never a directory, so a stand-in's office can
  * write anywhere it could before.
  */
-export function standinPatterns(which, source, { now = new Date(), before = null } = {}) {
+export function standinPatterns(which, source, { before = null } = {}) {
   if (which === "town") {
-    const cutoff = before ?? dayBefore(now, 2);
-    const dates = new Set();
+    const cutoff = before ?? dayBefore(new Date(git(source, ["log", "-1", "--format=%cI", "HEAD"])), 2);
+    const month = cutoff.slice(0, 7);
+    const out = new Set();
     for (const p of git(source, ["ls-tree", "-r", "--name-only", "HEAD", "WHITE_PAGES"]).split("\n")) {
       const m = /^WHITE_PAGES\/[^/]+\/inbox\/([^/]+)/.exec(p);
-      const d = m && /(\d{4}-\d{2}-\d{2})/.exec(m[1]);
-      if (d && d[1] < cutoff) dates.add(d[1]);
+      const d = m && /^([^/]*?)(\d{4}-\d{2})(-\d{2})/.exec(m[1]); // the sender (with its dash, or none) and the letter's own date
+      if (!d || `${d[2]}${d[3]}` >= cutoff) continue;
+      out.add(`!/WHITE_PAGES/*/inbox/${literal(d[1])}${d[2]}${d[2] < month ? "" : d[3]}-*`);
     }
-    return ["/*", ...[...dates].sort().map((d) => `!/WHITE_PAGES/*/inbox/*${d}*`)];
+    return ["/*", ...[...out].sort()];
   }
   if (which === "world") {
     const crossings = new Set();
@@ -144,9 +152,9 @@ export function standinPatterns(which, source, { now = new Date(), before = null
  * A stand-in clone of `source` at `dest`: `git clone --local --no-checkout`, its
  * stand-in patterns, then the checkout. Answers `dest`, on the source's HEAD.
  */
-export function standinClone(which, source, dest, { now, before } = {}) {
-  execFileSync("git", ["-c", "core.autocrlf=false", "clone", "--local", "--quiet", "--no-checkout", "--config", "core.autocrlf=false", source, dest]);
-  applySparse(dest, standinPatterns(which, source, { now, before }), `standin-${which}`);
+export function standinClone(which, source, dest, { before } = {}) {
+  execFileSync("git", ["-c", "core.autocrlf=false", "clone", "--local", "--quiet", "--no-checkout", "--config", "core.autocrlf=false", source, dest], { windowsHide: true });
+  applySparse(dest, standinPatterns(which, source, { before }), `standin-${which}`);
   git(dest, ["-c", "advice.detachedHead=false", "checkout", "-q", "--detach", "HEAD"]);
   return dest;
 }
