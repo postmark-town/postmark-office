@@ -495,12 +495,28 @@ function sweepRetired(now = Date.now()) {
 // snapshot, which the "world-graph" announcement below moves (POS-270 lane W 3b).
 onAnnounce("index", reloadIndex);
 
+// ONE STORE READ IN FLIGHT (POS-639). The tick used to start a roll and a probe
+// read every RELOAD_POLL_MS whether the last pair had answered or not. On a
+// loaded machine they piled up, and an older read finishing after a newer one
+// put the older index back. A tick that finds the last pair still reading skips.
+let storeReading = false;
 setInterval(() => {
   reloadIndex(); sweepRetired();
   // the store's roll and the write path's probe, on the same clock the index reload keeps (POS-268)
-  if (townIndexReads()) {
-    townIndexStore.refreshStoreRoll().catch(() => {});
-    townIndexStore.refreshStoreProbe().then(() => { if (INDEX_SWITCHED) INDEX.asOf = AS_OF = storeAsOf(); }).catch(() => {});
+  if (townIndexReads() && !storeReading) {
+    storeReading = true;
+    Promise.all([
+      townIndexStore.refreshStoreRoll().catch(() => {}),
+      townIndexStore.refreshStoreProbe().then(() => {
+        if (!INDEX_SWITCHED) return;
+        const was = AS_OF;
+        INDEX.asOf = AS_OF = storeAsOf();
+        // The switched office's twin of reloadIndex's line, in the same words:
+        // the moment this office answers from a new index is one an operator
+        // (or a test) can see from the outside.
+        if (AS_OF !== was) journal.log(`[office] index reloaded — as-of ${AS_OF.slice(0, 12)} (was ${was.slice(0, 12)})`);
+      }).catch(() => {}),
+    ]).finally(() => { storeReading = false; });
   }
 }, RELOAD_POLL_MS).unref();
 // AT BOOT, BEFORE THE OFFICE LISTENS (POS-268): the roll and the write path's

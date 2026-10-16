@@ -120,6 +120,8 @@ function seamTown({ pots = { keep: 1000, small: 5 }, pins = { paz: { login: "p",
 }
 
 const ledgerText = (repo) => readFileSync(join(repo, "WHITE_PAGES", "stamp-ledger.md"), "utf8");
+/** The ledger's words without each line's ` · sig: …`, for a scan that must not match a random signature. */
+const unsigned = (text) => text.replace(/ · sig: \S+/g, "");
 const entriesOf = (repo) => ENGINE.parseStampLedger(ledgerText(repo));
 const ctx = (town, over = {}) => ({
   engine: ENGINE,
@@ -727,7 +729,11 @@ test("S1 · a session PRESENTED in EUR whose balance transaction is in USD is WI
   const { receipts } = ENGINE.foldPotReceipts(entriesOf(town.repo));
   const got = receipts.find((r) => r.ref === `stripe:${CS_A}`);
   assert.equal(got.usd, 20);
-  assert.ok(!/eur|1840|presented/i.test(ledgerText(town.repo)), "the presentment rides the journal, never the ledger");
+  // The scan reads the lines WITHOUT their signatures (POS-639's class). Each
+  // line carries an ed25519 signature from this run's fresh key, and a random
+  // signature holds "eur" or "1840" about 0.23% of the time (measured over
+  // 200,000), so scanning the signed text went red by chance (office#591).
+  assert.ok(!/eur|1840|presented/i.test(unsigned(ledgerText(town.repo))), "the presentment rides the journal, never the ledger");
 });
 
 test("S2 · a session whose balance transaction is itself in EUR is `not-usd`, and nothing is witnessed", { skip: SKIP }, async () => {
