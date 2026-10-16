@@ -115,6 +115,16 @@ jobs:
           git config --global user.name "postmark-office-ci"
           git config --global user.email "postmark-office-ci@users.noreply.github.com"
 
+      - name: POS-652 measure, watch the temp dir
+        run: |
+          sudo apt-get install -y -qq inotify-tools > /dev/null
+          sudo sysctl -w fs.inotify.max_user_watches=1048576 fs.inotify.max_queued_events=4194304
+          mkdir -p "$RUNNER_TEMP/opens"
+          T=$(node -p 'require("os").tmpdir()'); echo "tmpdir $T"
+          inotifywait -m -r -e open --exclude '(^|/)[.]git(/|$)|/office-store-|/office-pg-|/pg-' --format '%e|%w%f' "$T" > "$RUNNER_TEMP/opens/opens.log" 2> "$RUNNER_TEMP/inotify.err" &
+          for i in $(seq 1 120); do grep -q "Watches established" "$RUNNER_TEMP/inotify.err" && break; sleep 1; done
+          cat "$RUNNER_TEMP/inotify.err"
+
       - name: The sandbox
         id: run
         run: |
@@ -124,6 +134,19 @@ jobs:
           set -e
           echo "code=$code" >> "$GITHUB_OUTPUT"
           exit 0
+
+      - name: POS-652 measure, stop the watch
+        if: always()
+        run: |
+          sleep 3; pkill inotifywait || true; sleep 1
+          wc -l "$RUNNER_TEMP"/opens/opens.log; grep -c "stamp-sandbox-" "$RUNNER_TEMP"/opens/opens.log || true; gzip -9 "$RUNNER_TEMP"/opens/opens.log
+
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: opens-stamp-sandbox
+          path: ${{ runner.temp }}/opens/
+          retention-days: 7
 
       - if: always()
         uses: actions/upload-artifact@v4
