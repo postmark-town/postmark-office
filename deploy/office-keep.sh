@@ -22,10 +22,24 @@
 #
 # Env (from /etc/postmark-office.env via the unit): TOWN_CLONE, WORLD_CLONE.
 # And PG_LAW_INGESTER_PASSWORD (from /etc/postmark-world2-dev.env, read by
-# systemd and handed in): the world graph's store write takes the law pen.
+# systemd and handed in, optional): the world graph's store write takes the law
+# pen. That file carries four store passwords, the OWNER's among them, so this
+# script takes the one it needs into a shell variable and unsets all four
+# before any child runs (§ the store's passwords, below).
 # Cwd: /srv/postmark-office (the unit's WorkingDirectory).
 
 set -eu
+
+# ── THE STORE'S PASSWORDS NEVER REACH THE TICK'S CHILDREN (review-593 a) ─────
+# The keep units read /etc/postmark-world2-dev.env for the law pen, and systemd
+# hands every key in it to this script: four PG_*_PASSWORD values, the store
+# owner's included. The tick runs town-repo code (tools/stamp-verify.mjs,
+# tools/stamp-mint.mjs, tools/household-keys.mjs) that has no business holding
+# any of them. So the law pen's is kept in a shell variable, never exported, and
+# all four leave the environment here, before the first child; the world step
+# alone is handed the one it needs (§ the world hydration).
+KEEP_LAW_PW="${PG_LAW_INGESTER_PASSWORD:-}"
+unset PG_WORLD2_OWNER_PASSWORD PG_OFFICE_API_PASSWORD PG_LAW_INGESTER_PASSWORD PG_SNAPSHOT_READER_PASSWORD
 
 # The tick says it is the tick: a tool that must never run here (the reviewed
 # award pass, tools/post-award-plan.mjs, POS-290) refuses while this is set.
@@ -418,9 +432,12 @@ fi
 # it ran before (two minutes after this tick), and before the panes, whose
 # publish fails the tick loudly and must never take this step down with it.
 # It never takes the lock (it reads refs, not the pen's checkout) and it never
-# fails the tick: every outcome is a journal line (deploy/office-world-hydrate.sh).
-sh deploy/office-world-hydrate.sh \
-  || echo "[office-keep] the world hydration step did not run (non-fatal) — deploy/office-world-hydrate.sh is missing or unreadable in this tree" >&2
+# fails the tick, but it is a receipt step (review-593 c): a snapshot that stops
+# being written reads on the roll-call, not only in the journal. It is the only
+# child handed the law pen's password (§ the store's passwords, above).
+if PG_LAW_INGESTER_PASSWORD="$KEEP_LAW_PW" sh deploy/office-world-hydrate.sh; then keep_step world ok
+else keep_step world refused "exit:$?"
+fi
 
 # ── outside the lock: the panes, from the frozen snapshot ────────────────────
 # publish-windows keeps its stage-and-swap: a failed publish leaves the live

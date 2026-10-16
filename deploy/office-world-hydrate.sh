@@ -25,13 +25,16 @@
 #
 # THE STORE IS THE ONLY OUTPUT. The write connects as the law pen
 # (deploy/world2-lib.sh § w2_pgenv — sed-read, never sourced; bash, for the
-# lib). NON-FATAL, ALWAYS: this exits 0 whatever happened, and says loudly
-# which way it went. A miss (the store refused or unreachable, or the
-# credential unreadable) leaves the office on the snapshot it already has.
+# lib). It exits with the hydration's own code (4: the credential unreadable)
+# and says loudly which way it went; the keeping tick records it as its `world`
+# step and never fails on it (review-593 c). A miss (the store refused or
+# unreachable, or the credential unreadable) leaves the office on the snapshot
+# it already has.
 #
-# Env (from the keep unit's EnvironmentFile lines): WORLD_CLONE, and
-# PG_LAW_INGESTER_PASSWORD (from /etc/postmark-world2-dev.env, root:root 0600,
-# so systemd reads it and hands the value in; meepo never opens it).
+# Env: WORLD_CLONE (the keep unit's), and PG_LAW_INGESTER_PASSWORD, handed to
+# this script alone by deploy/office-keep.sh, which takes it from
+# /etc/postmark-world2-dev.env (root:root 0600, read by systemd; meepo never
+# opens it) and unsets every store password before the tick's other children.
 # Cwd: /srv/postmark-office (the unit's WorkingDirectory).
 
 set -u
@@ -46,4 +49,4 @@ case "$WORLD_RC" in
   4) echo "[office-keep] WORLD STORE NOT WRITTEN (non-fatal) — the law pen's credential is unreadable (PG_LAW_INGESTER_PASSWORD, /etc/postmark-world2-dev.env); the office keeps reading the snapshot it has" >&2 ;;
   *) echo "[office-keep] WORLD STORE NOT WRITTEN (non-fatal, exit $WORLD_RC) — the reason is in the hydrate's stderr above; the office keeps reading the snapshot it has" >&2 ;;
 esac
-exit 0
+exit "$WORLD_RC"

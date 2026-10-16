@@ -49,29 +49,50 @@ test("the keeping tick carries every keeping step, the world hydration among the
   assert.ok(!read("office-world-hydrate.sh").includes("src/hydrate.mjs"), "the world hydration builds office.db too");
 });
 
-test("the world hydration runs after the settlements row and before the panes, and cannot stop the tick", () => {
+test("the world hydration runs after the settlements row and before the panes, is a receipt step, and cannot stop the tick", () => {
   const sh = read("office-keep.sh");
   const settled = sh.indexOf("settlements-backfill.mjs --apply");
   const world = sh.indexOf("sh deploy/office-world-hydrate.sh");
   const panes = sh.indexOf("node deploy/publish-windows.mjs");
   assert.ok(settled < world, "the hydration ran after the settlements row before the move (two minutes after the keeping tick); it still does");
   assert.ok(world < panes, "the panes publish fails the tick loudly (set -e), so a step after it would be skipped whenever the panes fail");
-  // its own line can never trip the tick's set -e: the script exits 0, and a tree missing it says so
-  assert.match(sh, /sh deploy\/office-world-hydrate\.sh \\\n\s*\|\| echo "\[office-keep\] the world hydration step did not run \(non-fatal\)/);
-  assert.match(read("office-world-hydrate.sh"), /\nexit 0\n$/, "every outcome is a journal line, never a failed tick");
+  // review-593 c: its exit is its receipt, inside an if, so set -e never fires on it
+  assert.match(sh, /\nif PG_LAW_INGESTER_PASSWORD="\$KEEP_LAW_PW" sh deploy\/office-world-hydrate\.sh; then keep_step world ok\nelse keep_step world refused "exit:\$\?"\nfi\n/);
+  assert.match(read("office-world-hydrate.sh"), /\nexit "\$WORLD_RC"\n$/, "the hydration's own code, which the tick records");
+});
+
+test("review-593 a: the four store passwords leave the tick's environment before its first child; only the world step is handed one", () => {
+  const sh = read("office-keep.sh");
+  const KEYS = ["PG_WORLD2_OWNER_PASSWORD", "PG_OFFICE_API_PASSWORD", "PG_LAW_INGESTER_PASSWORD", "PG_SNAPSHOT_READER_PASSWORD"];
+  const unset = sh.match(/\nunset (PG_[A-Z0-9_ ]+)\n/);
+  assert.ok(unset, "office-keep.sh unsets the store passwords");
+  assert.deepEqual(unset[1].trim().split(/\s+/).sort(), [...KEYS].sort(), "all four, the store owner's among them");
+  // nothing runs before it: the first command line that starts a program (node, sh, git, flock) comes after
+  const lines = sh.split("\n");
+  const at = lines.findIndex((l) => l.startsWith("unset PG_"));
+  const firstChild = lines.findIndex((l) => /^\s*(?:[A-Z_]+=\S+\s+)*(?:node|sh|git|flock|bash)\s/.test(l) && !/^\s*#/.test(l));
+  assert.ok(at > 0 && at < firstChild, "the unset (line " + (at + 1) + ") comes before the first child (line " + (firstChild + 1) + ")");
+  assert.match(sh, /\nKEEP_LAW_PW="\$\{PG_LAW_INGESTER_PASSWORD:-\}"\n/, "the law pen's kept in a shell variable");
+  assert.doesNotMatch(sh, /export\s+KEEP_LAW_PW|export\s+PG_[A-Z0-9_]*_PASSWORD/, "and never exported");
+  const handed = [...sh.matchAll(/PG_LAW_INGESTER_PASSWORD="\$KEEP_LAW_PW"/g)].length;
+  assert.equal(handed, 1, "one child is handed it: the world step");
+  // the world script reads the law pen's and no other
+  assert.deepEqual([...new Set(read("office-world-hydrate.sh").match(/PG_[A-Z0-9_]*_PASSWORD/g))], ["PG_LAW_INGESTER_PASSWORD"]);
 });
 
 test("the rehydrate unit, its timer and both of its scripts are gone from deploy/", () => {
   for (const f of RETIRED) assert.equal(existsSync(at(f)), false, `deploy/${f} is still in the repo; the rehydrate was retired (POS-268 5b)`);
 });
 
-test("the keep unit runs the keeping tick, as meepo, with the law pen's credential and the office's values winning", () => {
+test("the keep units run the keeping tick, as meepo, with the law pen's credential optional and the office's values winning", () => {
   assert.match(execOf("postmark-office-keep.service"), /deploy\/office-keep\.sh$/);
-  const unit = read("postmark-office-keep.service");
-  assert.match(unit, /^User=meepo$/m, "the User= line is load-bearing (the 2026-07-09 outage)");
-  const files = unit.split(/\r?\n/).filter((l) => l.startsWith("EnvironmentFile=")).map((l) => l.slice(16));
-  assert.deepEqual(files, ["/etc/postmark-world2-dev.env", "/etc/postmark-office.env"],
-    "the world2 file for PG_LAW_INGESTER_PASSWORD, read FIRST, so a key both carry is the office's and no step the tick ran before sees a new value");
+  for (const name of ["postmark-office-keep.service", "postmark-office-keep-by-hand.service"]) {
+    const unit = read(name);
+    assert.match(unit, /^User=meepo$/m, name + ": the User= line is load-bearing (the 2026-07-09 outage)");
+    const files = unit.split(/\r?\n/).filter((l) => l.startsWith("EnvironmentFile=")).map((l) => l.slice(16));
+    assert.deepEqual(files, ["-/etc/postmark-world2-dev.env", "/etc/postmark-office.env"],
+      name + ": the world2 file for PG_LAW_INGESTER_PASSWORD, read FIRST so a key both carry is the office's, and OPTIONAL (the dash: review-593 b), so a box without it still runs the mint, the settlements row and the panes");
+  }
 });
 
 test("the keeping tick keeps the old clock", () => {

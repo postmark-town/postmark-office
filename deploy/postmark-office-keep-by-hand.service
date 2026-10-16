@@ -9,8 +9,8 @@ Type=oneshot
 User=meepo
 # The law pen's credential first, exactly as postmark-office-keep.service reads
 # it (POS-268 part 5b: the world graph snapshot's store write moved into the
-# keeping tick), so a hand run is the same run.
-EnvironmentFile=/etc/postmark-world2-dev.env
+# keeping tick), so a hand run is the same run. Optional, as there (review-593 b).
+EnvironmentFile=-/etc/postmark-world2-dev.env
 EnvironmentFile=/etc/postmark-office.env
 WorkingDirectory=/srv/postmark-office
 # The keeping half of the old office tick (POS-268 split it, 2026-09-27). It

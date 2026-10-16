@@ -88,10 +88,10 @@ test("0 · ONE hydration writes the store, as the law pen, and no world.db", { s
   assert.match(r.stdout, /\[office-keep\] the world graph snapshot written to the store/);
 });
 
-test("1 · a refused hydration or a store miss leaves the office on the snapshot it has, and the tick goes on", { skip }, () => {
+test("1 · a refused hydration or a store miss leaves the office on the snapshot it has, and says so with its own code (the tick records it, never fails on it: review-593 c)", { skip }, () => {
   const fx = fixture();
   const r = hydrate(fx, { STUB_WORLD_EXIT: "1" });
-  assert.equal(r.status, 0, "a world miss must never fail the tick (the panes run after it)");
+  assert.equal(r.status, 1, "the hydration's own code, for the tick's receipt (office-keep.sh runs it inside an if, so set -e never fires)");
   assert.match(r.stderr, /WORLD STORE NOT WRITTEN \(non-fatal, exit 1\)/);
   assert.equal(r.worldDb, false);
 });
@@ -99,7 +99,7 @@ test("1 · a refused hydration or a store miss leaves the office on the snapshot
 test("no credentials · no hydration is attempted, and the journal names the missing credential", { skip }, () => {
   const fx = fixture();
   const r = hydrate(fx, { STUB_WORLD_EXIT: "0", PG_LAW_INGESTER_PASSWORD: undefined });
-  assert.equal(r.status, 0);
+  assert.equal(r.status, 4, "4: the credential unreadable, which the tick's receipt records as refused exit:4");
   assert.equal(r.calls.includes("world-hydrate"), false, "a hydration ran with no credential to write what it built");
   assert.match(r.stderr, /WORLD STORE NOT WRITTEN \(non-fatal\) — the law pen's credential is unreadable/);
   assert.equal(r.worldDb, false);

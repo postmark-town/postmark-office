@@ -12,9 +12,13 @@ User=meepo
 # retired (POS-268 part 5b). The same file the law-ingest and town-index units
 # read: root:root 0600, so systemd reads it and hands the values in, and meepo
 # never opens it. Read FIRST, so a key both files carry is the office's: every
-# step this tick ran before the move sees exactly the values it saw then, and
-# the world hydration takes PG_LAW_INGESTER_PASSWORD and WORLD2_DB from it.
-EnvironmentFile=/etc/postmark-world2-dev.env
+# step this tick ran before the move sees exactly the values it saw then. The
+# file holds the four store passwords and nothing else; the world hydration
+# takes PG_LAW_INGESTER_PASSWORD (the database is w2_db's default, world2_dev),
+# and office-keep.sh unsets all four before its other children run. OPTIONAL
+# (the leading dash): a box without the file still runs every other keeping
+# step, and the world step says its credential is unreadable (review-593 b).
+EnvironmentFile=-/etc/postmark-world2-dev.env
 EnvironmentFile=/etc/postmark-office.env
 WorkingDirectory=/srv/postmark-office
 # The keeping half of the old office tick (POS-268 split it, 2026-09-27). It
