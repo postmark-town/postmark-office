@@ -35,6 +35,16 @@
 //     of view with its bodies (view), the shared ear that marks nobody present
 //     (heard, office#564), the air, the hour, and what the actor last did.
 //     One reader for residents and creatures.
+//   · A CREATURE'S VIEW IS KEPT, NOT RE-SEEN ON THE ACT (play row 51,
+//     2026-10-15). The field of view is the expensive part of that read: the
+//     engine's line of sight over the whole world, about 270 ms of synchronous
+//     work per standpoint, plus ~110 ms of a blocking `git` in markRecords,
+//     measured in the playground. A creature does not move (WLD-56 D3), and
+//     what it can see changes only with the published world or the crossing, so
+//     the tick sees for each living creature once per (published sha,
+//     crossing), off the act's path, and the act reads what it saw. Three
+//     creatures seeing on the act's path held the thread 1.2–1.7 s, so the
+//     1 s answer had no time left for Jev and code judged every reaction.
 //
 // TWO OFFICES AT ONCE (a deploy's overlap): both fold the same rows and both
 // may judge one arrival. creatures.mjs § writeReaction locks on (creature,
@@ -51,6 +61,8 @@ import { actsQuery, world2Enabled } from "./world2-acts.mjs";
 import { faultLogged } from "./fault-words.mjs";
 import { CLASS_MOVE, composeAnchor } from "./world-journal.mjs";
 import { CROSSING_EPOCH_UTC, CROSSING_MS, currentCrossing } from "./crossings.mjs";
+import { publishedState } from "./world-branches.mjs";
+import { WORLD_CLONE } from "./world-store.mjs";
 import { departureRecordOf } from "../world2/tools/live-reads.mjs";
 import { PUBLIC_ACTS, activeOf, ago, hourZ, viewBlock, whoBlock } from "./world-read-v2.mjs";
 
@@ -215,9 +227,12 @@ export async function aroundCreature(creature, act, reads = {}) {
   const w = reads.world ?? await import("./world.mjs");
   const query = reads.query ?? actsQuery;
   const part = (p) => Promise.resolve().then(p).catch(() => null);
-  const [oriented, seen, heardRows, lastRows] = await Promise.all([
+  // the view the tick saw for this creature (row 51); none yet (it came out
+  // since the last tick), and the slice goes without its marks, never a
+  // line of sight on the act's path
+  const seen = (reads.views ?? views).get(creature.id) ?? null;
+  const [oriented, heardRows, lastRows] = await Promise.all([
     part(() => w.worldOrient({ x: at.x, y: at.y }, null, { crowd: true })),
-    part(() => w.worldEyes({ x: at.x, y: at.y }, null, { v2: true })),
     // the shared ear (office#564): touching nobody, newest last, the actor's own words left out
     part(() => w.heardAt(at, { cap: 3, exclude: act.actor })),
     part(() => query(ACTOR_LAST_SQL, [act.actor, Object.keys(PUBLIC_ACTS), String(act.actId)])),
@@ -230,15 +245,61 @@ export async function aroundCreature(creature, act, reads = {}) {
     const air = await part(() => w.worldAir(oriented));
     if (air) out.air = air;
   }
-  const rows = seen?._fov?.rows ?? [];
-  if (rows.length) {
-    out.view = viewBlock(rows);
-    out.bodies = Object.fromEntries(rows.filter((r) => r.body).map((r) => [r.id, r.body]));
-  }
+  if (seen?.view) { out.view = seen.view; out.bodies = seen.bodies; }
   if (Array.isArray(heardRows)) out.heard = heardRows.slice(-3).map((h) => ({ who: h.handle, said: h.said, ...(h.ago ? { ago: h.ago } : {}) }));
   if (Array.isArray(lastRows))
     out.actor_last = lastRows.map((r) => `${PUBLIC_ACTS[r.action] ?? r.action}, ${ago(r.at instanceof Date ? r.at.getTime() : Date.parse(r.at), nowMs)}`);
   return out;
+}
+
+// ── a creature's view, seen by the tick (play row 51) ────────────────────────
+
+/** creature id → { key, view, bodies }: what the tick saw from where it stands. */
+export const views = new Map();
+export function __resetViewsForTest() { views.clear(); }
+/** At most this many creatures see per tick: one line of sight holds the thread ~0.3–0.5 s (measured), so a tick holds it for one. */
+export const VIEWS_PER_TICK = 1;
+
+/** What a creature's view depends on besides where it stands: the published world and the crossing. */
+export function viewKeyNow({ repo = WORLD_CLONE, now = Date.now() } = {}) {
+  let sha = "?";
+  try { sha = publishedState(repo).sha ?? "?"; } catch { /* an unreadable ref keys as "?" and is seen again once it reads */ }
+  return `${sha}:${currentCrossing(now)}`;
+}
+
+/** One creature's view, in the blocks buildSlice reads: { view, bodies }, or null when the eyes could not see. */
+export async function seeFrom(creature, { world = null } = {}) {
+  const w = world ?? await import("./world.mjs");
+  const seen = await w.worldEyes({ x: creature.x, y: creature.y }, null, { v2: true });
+  // and the orient the act will ask, once, so its first call after a boot (about 1 s cold, measured) is not on an act
+  await Promise.resolve(w.worldOrient?.({ x: creature.x, y: creature.y }, null, { crowd: true })).catch(() => null);
+  const rows = seen?._fov?.rows;
+  if (!Array.isArray(rows)) return null;
+  return { view: rows.length ? viewBlock(rows) : null, bodies: Object.fromEntries(rows.filter((r) => r.body).map((r) => [r.id, r.body])) };
+}
+
+/**
+ * The tick's part: each living creature whose view is missing or was seen
+ * for another (sha, crossing) sees again, at most VIEWS_PER_TICK a tick,
+ * newest-spawned first (a creature just out has none). The ended leave the
+ * map. Answers how many saw.
+ */
+export async function warmViews(living, { key = viewKeyNow(), see = seeFrom, now = Date.now(), most = VIEWS_PER_TICK } = {}) {
+  const alive = living.living(now);
+  const ids = new Set(alive.map((c) => c.id));
+  for (const id of views.keys()) if (!ids.has(id)) views.delete(id);
+  const due = alive.filter((c) => views.get(c.id)?.key !== key)
+    .sort((a, b) => (views.has(a.id) ? 1 : 0) - (views.has(b.id) ? 1 : 0) || b.spawned_at - a.spawned_at)
+    .slice(0, most);
+  let saw = 0;
+  for (const c of due) {
+    try {
+      const v = await see(c);
+      if (v) { views.set(c.id, { key, ...v }); saw += 1; }
+    } catch (e) { faultLogged(`a creature's view could not be seen (${c.id})`, e); }
+    await new Promise((r) => setImmediate(r)); // let the acts waiting on the thread through between two
+  }
+  return saw;
 }
 
 // ── the arrival (C1) ────────────────────────────────────────────────────────
@@ -346,6 +407,7 @@ export function startCreatures({ port, env = process.env, log = console } = {}) 
     try {
       const r = await refreshCreatures();
       const a = r.ok ? await arrivalTick() : null;
+      if (r.ok && state.living) await warmViews(state.living);
       state.last = { at: new Date().toISOString(), living: state.living?.living().length ?? 0, ...(r.ok ? {} : { why: r.why }), ...(a?.judged ? { arrivals: a } : {}) };
       if (a?.judged) log.log?.(`[creatures] arrivals: ${a.landed} landed · ${a.judged} judged · ${a.answered} answered`);
     } catch (e) {

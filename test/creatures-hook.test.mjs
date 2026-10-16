@@ -24,7 +24,7 @@ import { LivingSet, loadCreatureLaw, ANSWER_WAIT_MS, AROUND_WAIT_MS, JEV_TIMEOUT
 import { perceived, noteActWritten, setCreaturesAwake, creaturesAwake, insideWatchedAct } from "../src/act-watch.mjs";
 import {
   __setCreaturesForTest, __resetArrivalsForTest, actOfRow, aroundCreature, arrivalTick, arrivals, creaturesAnswer, foldWalks, landingOf,
-  ARRIVAL_STALE_MS,
+  ARRIVAL_STALE_MS, VIEWS_PER_TICK, seeFrom, views, warmViews, __resetViewsForTest,
 } from "../src/creatures-hook.mjs";
 import { NO_WORLD, worldModuleUrl } from "./fixture-paths.mjs";
 
@@ -309,7 +309,8 @@ nodeTest("W1: the apex, the flat MCP tools and the REST doors all dispatch the a
 
 // ── the creature's own world read (W9) ──────────────────────────────────────
 
-test("W9: the creature's read is the resident read's own blocks at the creature's point, as a spectator", async () => {
+test("W9: the creature's read is the resident read's own blocks at the creature's point, as a spectator; its view is the one the tick saw", async () => {
+  __resetViewsForTest();
   const asked = [];
   const world = {
     worldOrient: async (args, key, opts) => { asked.push(["orient", args, key, opts]); return { present: { residents: [
@@ -325,24 +326,58 @@ test("W9: the creature's read is the resident read's own blocks at the creature'
     asked.push(["last", params]);
     return [{ action: "walk", at: new Date(NOW - 120_000) }];
   };
-  const out = await aroundCreature({ x: 5, y: 7 }, { actor: "kai", actId: "31" }, { world, query, nowMs: NOW });
+  const wolf = { id: "creature:wolf-270-31", x: 5, y: 7 };
+  // the tick sees for it, at its point, as a spectator (play row 51)
+  views.set(wolf.id, { key: "k", ...(await seeFrom(wolf, { world })) });
+  assert.deepEqual(asked.find((a) => a[0] === "eyes").slice(1), [{ x: 5, y: 7 }, null, { v2: true }]);
+  asked.length = 0;
+  const out = await aroundCreature(wolf, { actor: "kai", actId: "31" }, { world, query, nowMs: NOW });
+  assert.equal(asked.filter((a) => a[0] === "eyes").length, 0, "no line of sight on the act's path");
   assert.deepEqual(asked[0].slice(1), [{ x: 5, y: 7 }, null, { crowd: true }], "orient at the creature's point, nobody's key");
-  assert.deepEqual(asked[1].slice(1), [{ x: 5, y: 7 }, null, { v2: true }]);
-  assert.deepEqual(asked[2][2], { cap: 3, exclude: "kai" }, "the shared ear, the actor's own words left out");
-  assert.equal(asked[3][1][0], "kai");
-  assert.equal(asked[3][1][2], "31", "the actor's last acts leave out this act itself");
+  assert.deepEqual(asked[1][2], { cap: 3, exclude: "kai" }, "the shared ear, the actor's own words left out");
+  assert.equal(asked[2][1][0], "kai");
+  assert.equal(asked[2][1][2], "31", "the actor's last acts leave out this act itself");
   assert.deepEqual(out.heard.map((h) => h.who), ["h2", "h3", "h4"], "rows come newest last: the newest three, handle as who");
   assert.equal(out.who.active[0].handle, "mo");
   assert.equal(out.view.N[0].name, "a cairn");
   assert.equal(out.bodies["mo/cairn"], "Stones, stacked.");
   assert.equal(out.air, "fog low over the fringe");
   assert.deepEqual(out.actor_last, ["walked, 2 min ago"]);
-  // a part that cannot be read is left out, never a fault on the act
-  const broken = await aroundCreature({ x: 0, y: 0 }, { actor: "kai", actId: "32" },
-    { world: { ...world, worldEyes: async () => { throw new Error("eyes shut"); }, heardAt: async () => { throw new Error("deaf"); } }, query, nowMs: NOW });
-  assert.equal(broken.view, undefined);
-  assert.equal(broken.heard, undefined);
-  assert.ok(broken.who);
+  // a creature the tick has not seen for yet: no marks in its slice, and still no line of sight on the act
+  const fresh = await aroundCreature({ id: "creature:wolf-270-32", x: 0, y: 0 }, { actor: "kai", actId: "32" },
+    { world: { ...world, worldEyes: async () => { throw new Error("must not be asked on the act"); }, heardAt: async () => { throw new Error("deaf"); } }, query, nowMs: NOW });
+  assert.equal(fresh.view, undefined);
+  assert.equal(fresh.heard, undefined, "a part that cannot be read is left out, never a fault on the act");
+  assert.ok(fresh.who);
+  __resetViewsForTest();
+});
+
+test("play row 51: the tick sees for each living creature once per (published sha, crossing), one a tick, the newest first; the ended leave", async () => {
+  __resetViewsForTest();
+  assert.equal(VIEWS_PER_TICK, 1);
+  const c = (n, spawned) => ({ id: `creature:wolf-270-${n}`, x: n, y: 0, spawned_at: spawned, fades_at: NOW + 3600_000 });
+  let alive = [c(1, NOW - 3000), c(2, NOW - 1000), c(3, NOW - 2000)];
+  const living = { living: () => alive };
+  const seen = [];
+  const see = async (cr) => { seen.push(cr.id); return { view: { N: [] }, bodies: {} }; };
+  await warmViews(living, { key: "s1:257", see, now: NOW });
+  assert.deepEqual(seen, ["creature:wolf-270-2"], "one a tick, the newest out first");
+  await warmViews(living, { key: "s1:257", see, now: NOW });
+  await warmViews(living, { key: "s1:257", see, now: NOW });
+  await warmViews(living, { key: "s1:257", see, now: NOW });
+  assert.deepEqual(seen, ["creature:wolf-270-2", "creature:wolf-270-3", "creature:wolf-270-1"], "each once; then nothing is due");
+  // a new published sha: each sees again, the old view standing until it does
+  await warmViews(living, { key: "s2:257", see, now: NOW });
+  assert.equal(seen.length, 4);
+  assert.equal(views.get("creature:wolf-270-1").key, "s1:257", "not yet re-seen: its last view still answers the act");
+  // a creature that ended leaves the map
+  alive = [c(2, NOW - 1000)];
+  await warmViews(living, { key: "s2:257", see, now: NOW });
+  assert.deepEqual([...views.keys()].sort(), ["creature:wolf-270-2"]);
+  // eyes that fail leave no view and fault nothing
+  __resetViewsForTest();
+  assert.equal(await warmViews(living, { key: "s3:258", see: async () => { throw new Error("blind"); }, now: NOW }), 0);
+  assert.equal(views.size, 0);
 });
 
 // ── C1: the arrival ─────────────────────────────────────────────────────────
