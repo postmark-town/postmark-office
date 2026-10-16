@@ -14,7 +14,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
-import { MISTS_FIRST_CROSSING, mistsOnTheRoad, roadShelter, shelterInPlay } from "../src/world.mjs";
+import { MISTS_FIRST_CROSSING, mistsOnTheRoad, roadShelter, shelterInPlay, shelteredAt } from "../src/world.mjs";
 import { happeningBlock } from "../src/world-read-v2.mjs";
 import { worldClone, NO_WORLD } from "./fixture-paths.mjs";
 
@@ -94,6 +94,24 @@ test("v2's happening_here: entered, the wall and the fringe hide nothing within 
   assert.equal(happeningBlock({ mists: { in_wall: false, thickness: 0, sheltered: true } }), null, "clear air: no row, sheltered or not");
 });
 
+// WLD-6 A (Darko via Wright, 2026-10-15 20:50): entering a ground sets you down at its spawn point even behind the
+// wall, because it is inside the mark you just entered. The apex asks spawnSheltered → shelteredAt.
+test("spawnOnEnter: behind the wall, a spawn inside the mark just entered sets the entrant down, sheltered; outside it, refused as before", () => {
+  const APEX = readFileSync(new URL("../src/world-apex.mjs", import.meta.url), "utf8");
+  const spawn = APEX.slice(APEX.indexOf("async function spawnOnEnter"), APEX.indexOf("// ── the read mode"));
+  const wall = spawn.indexOf("await mistsGroundCheck(WORLD_CLONE,");
+  const asked = spawn.indexOf("const sheltered = !!seen?.wall && await spawnSheltered(target, spawn.at);");
+  const refused = spawn.indexOf("if (seen?.wall && !sheltered)");
+  const written = spawn.indexOf("await appendJournal(null, walkEntry(");
+  assert.ok(wall > 0 && asked > wall && refused > asked && written > refused, `order: wall ${wall}, shelter ${asked}, refusal ${refused}, walk ${written}`);
+  assert.match(spawn, /\.\.\.\(sheltered \? \{ sheltered: true \} : \{\}\)/, "the receipt says the entrant stands sheltered");
+  // the question itself, on a stub of the world's verbs: never skips
+  const verbs = { shelterOf: (w, ids, at) => (ids.includes("g") && at.y < -1000 ? () => true : null) };
+  assert.equal(shelteredAt({ verbs, w: {}, entered: ["g"], at: { x: 0, y: -1100 } }), true);
+  assert.equal(shelteredAt({ verbs, w: {}, entered: ["g"], at: { x: 0, y: -900 } }), false);
+  assert.equal(shelteredAt({ verbs: {}, w: {}, entered: ["g"], at: { x: 0, y: -1100 } }), false, "a clone older than the ruling: the wall refuses as before");
+});
+
 // The real engine, where the clone carries the ruling (World shelter/entered-mark).
 const CLONE = worldClone();
 const VERBS = CLONE ? join(CLONE, "tools", "world-verbs.mjs") : null;
@@ -118,4 +136,7 @@ test("with the world's own law: a road inside an entered mark in the wall walks;
     assert.deepEqual([inside.factor, inside.deepest], [1, 0]);
     // a road out of the Grounds: DEC-5 names it leaving, so it shelters nothing
     assert.ok((await mistsOnTheRoad(CLONE, skel, a, out, 10, { shelter: roadShelter(verbs, world, [GROUNDS.id], [GROUNDS.id]) }))?.refused);
+    // the spawn (WLD-6 A): a point inside the entered Grounds, in the wall, is sheltered; one outside them is not
+    assert.equal(shelteredAt({ verbs, w: world, entered: [GROUNDS.id], at: { x: 60, y: -1250 } }), true);
+    assert.equal(shelteredAt({ verbs, w: world, entered: [GROUNDS.id], at: { x: 400, y: -1100 } }), false);
   });
