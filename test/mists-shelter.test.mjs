@@ -14,7 +14,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
-import { mistsOnTheRoad, roadShelter } from "../src/world.mjs";
+import { MISTS_FIRST_CROSSING, mistsOnTheRoad, roadShelter, shelterInPlay } from "../src/world.mjs";
 import { happeningBlock } from "../src/world-read-v2.mjs";
 import { worldClone, NO_WORLD } from "./fixture-paths.mjs";
 
@@ -63,18 +63,35 @@ test("the eyes and the air read with the reader's enter stack; a look from coord
     ["worldEyes", "verbs.openYourEyes({ x: at.x, y: at.y, name: args.name }, w, { crossing, actor: choice.handle ?? null, entered,"],
   ]) {
     const body = SOURCE.slice(SOURCE.indexOf(`export async function ${name}(`));
-    const read = body.indexOf("const entered = choice.coords ? null : await enteredNow(choice.handle);");
-    assert.ok(read > 0 && body.indexOf(call) > read, `${name} passes the reader's stack`);
+    const read = body.indexOf("const entered = choice.coords ? null : ");
+    assert.ok(read > 0 && body.indexOf("enteredNow(choice.handle, { verbs, w, crossing })", read) > read && body.indexOf(call) > read, `${name} passes the reader's stack`);
   }
 });
 
-test("v2's happening_here: entered, the wall stands around the mark and hides nothing; unentered, arm's reach as ever", () => {
+test("the stack is read only when shelter is in play: the clone knows the ruling and the Mists stand this crossing (cost)", () => {
+  const verbs = { shelterOf: () => null };
+  const w = { terrain: { mists: {} } };
+  assert.equal(shelterInPlay({ verbs, w, crossing: MISTS_FIRST_CROSSING }), true);
+  assert.equal(shelterInPlay({ verbs, w, crossing: MISTS_FIRST_CROSSING - 1 }), false, "before the Mists, no ledger");
+  assert.equal(shelterInPlay({ verbs, w: { terrain: {} }, crossing: 300 }), false, "a skeleton without the Mists, no ledger");
+  assert.equal(shelterInPlay({ verbs: {}, w, crossing: 300 }), false, "a clone older than the ruling, no ledger");
+  assert.equal(shelterInPlay({}), false);
+});
+
+test("the v2 read hands orient's stack to its eyes, so the ledger is read once, and no answer carries it", () => {
+  const APEX = readFileSync(new URL("../src/world-apex.mjs", import.meta.url), "utf8");
+  assert.match(APEX, /const seen = await worldEyes\(args, key, \{ v2, entered: oriented\?\._entered,/);
+  assert.match(SOURCE, /Object\.defineProperty\(out, "_entered", \{ value: entered \}\);/, "orient's copy is not enumerable");
+  assert.match(SOURCE, /given !== undefined \? given : await enteredNow\(choice\.handle/);
+});
+
+test("v2's happening_here: entered, the wall and the fringe hide nothing within the mark; unentered, as ever", () => {
   const note = (mists) => happeningBlock({ mists })[0].note;
   assert.equal(note({ in_wall: true, thickness: 1, sheltered: true }), "the wall stands around the mark you have entered; inside it, nothing is hidden");
   assert.equal(note({ in_wall: true, thickness: 1 }), "you stand in the wall: arm's reach, and walking slows to nothing");
-  assert.equal(note({ in_wall: false, thickness: 0.4, sheltered: true }), "you stand in their fringe: sight is short and walking slows");
-  assert.match(SOURCE, /mists: r\.fov\?\.mists \? \{ \.\.\.r\.fov\.mists, \.\.\.\(verbs\.shelterOf\?\.\(w, entered\)\?\.\(at\) \? \{ sheltered: true \} : \{\}\) \} : null/,
-    "the eyes mark the Mists sheltered on orient's own test: the reader's entered marks, at the standpoint");
+  assert.equal(note({ in_wall: false, thickness: 0.4, sheltered: true }), "the Mists' fringe is on the mark you have entered; inside it, nothing is hidden");
+  assert.equal(note({ in_wall: false, thickness: 0.4 }), "you stand in their fringe: sight is short and walking slows");
+  assert.equal(happeningBlock({ mists: { in_wall: false, thickness: 0, sheltered: true } }), null, "clear air: no row, sheltered or not");
 });
 
 // The real engine, where the clone carries the ruling (World shelter/entered-mark).

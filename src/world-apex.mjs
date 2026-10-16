@@ -2342,7 +2342,7 @@ async function apexRead(args, key, ctx = {}) {
   // Salience is open-your-eyes' ranking, unchanged: the FOV build already
   // decided what is worth seeing from here and capped it at the context budget.
   const deep = ctx.v2Deep ?? null; // POS-632 G9: read: "<block>", the whole of one v2 block
-  const seen = await worldEyes(args, key, { v2, ...(deep?.block === "view" ? { budget: deep.limit } : {}) });
+  const seen = await worldEyes(args, key, { v2, entered: oriented?._entered, ...(deep?.block === "view" ? { budget: deep.limit } : {}) });
   if (seen?.error) return seen;
 
   // WLD-11: the geometric spine, plus the vessel an embodied caller is aboard.

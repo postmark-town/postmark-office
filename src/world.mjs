@@ -1287,10 +1287,19 @@ export function roadShelter(verbs, world, stack, leaving = []) {
   return verbs.shelterOf(world, (stack ?? []).filter((id) => !gone.has(id)));
 }
 
+/** Whether a read's shelter can matter at all (review-shelter, cost): the clone
+ *  knows the ruling (shelterOf) and the Mists stand this crossing. Otherwise the
+ *  enter stack is never read, so a read out of season, or on an older clone,
+ *  costs no ledger. */
+export function shelterInPlay({ verbs, w, crossing }) {
+  return typeof verbs?.shelterOf === "function" && !!w?.terrain?.mists && Number(crossing) >= MISTS_FIRST_CROSSING;
+}
+
 /** What a resident is within now (DEC-5's read), for the eyes and the air; null
- *  when the clone carries no enter/exit law or the ledger will not read. */
-async function enteredNow(handle) {
-  if (!handle) return null;
+ *  when shelter is not in play, the clone carries no enter/exit law or the ledger
+ *  will not read. */
+async function enteredNow(handle, inPlay) {
+  if (!handle || !shelterInPlay(inPlay)) return null;
   try {
     const { crossingLaw } = await import("./world-crossings.mjs");
     const { crossingDeps } = await import("./world-apex.mjs");
@@ -1932,7 +1941,7 @@ export async function worldOrient(args = {}, key = null, { roll = [], crowd = fa
   // NEW defect, manufactured by a partial fix, and a worse one than two doors
   // being wrong together. The falsifier asserts that agreement directly.
   // an entered mark is shelter (§ roadShelter): a body's read carries what it is within
-  const entered = choice.coords ? null : await enteredNow(choice.handle);
+  const entered = choice.coords ? null : await enteredNow(choice.handle, { verbs, w, crossing });
   const o = verbs.orient({ x: at.x, y: at.y }, w, { crossing, entered });
   // the note is embodied property: only the body's standpoint carries it — a
   // spectator glance (coords) is nobody's, so it reads nobody's note.
@@ -1979,7 +1988,11 @@ export async function worldOrient(args = {}, key = null, { roll = [], crowd = fa
   // An entry queued on this walker's walk, or refused at its arrival, on their
   // own standpoint and nowhere else (WLD-5, Darko's G3). Absent otherwise.
   const arrival = choice.handle ? await (await import("./arrival-entries.mjs")).arrivalLineFor(choice.handle).catch(() => ({})) : {};
-  return { standpoint: { ...at, stance: choice.stance, ...arrival }, crossing: { n: crossing, derivation: CROSSING_DERIVATION }, note, primer, ...o, ...(present ? { present } : {}), ...(transport ? { transport } : {}), ...(noteUnavailable ? { note_unavailable: noteUnavailable } : {}) };
+  const out = { standpoint: { ...at, stance: choice.stance, ...arrival }, crossing: { n: crossing, derivation: CROSSING_DERIVATION }, note, primer, ...o, ...(present ? { present } : {}), ...(transport ? { transport } : {}), ...(noteUnavailable ? { note_unavailable: noteUnavailable } : {}) };
+  // the stack this read used, for the eyes of the same read (the apex hands it on, so
+  // the ledger is read once); not enumerable, so no answer ever carries it
+  Object.defineProperty(out, "_entered", { value: entered });
+  return out;
 }
 
 // The telling's own line grammar, for residents: `  · <m> <bearing> — <who>`,
@@ -2209,7 +2222,7 @@ export async function markRecords(ids = [], w = null) {
   return out;
 }
 
-export async function worldEyes(args = {}, key = null, { roll = [], v2 = false, budget = null } = {}) {
+export async function worldEyes(args = {}, key = null, { roll = [], v2 = false, budget = null, entered: given = undefined } = {}) {
   const choice = chooseStandpoint(args, key);
   if (choice.bounce) return choice.bounce;
   const w = await sightFor(await world(), choice.handle, key);
@@ -2240,7 +2253,8 @@ export async function worldEyes(args = {}, key = null, { roll = [], v2 = false, 
   // none), never `args.name` and never a key's first handle.
   // `budget`: read: "view" (POS-632 G9) asks for more seats than the glance's twelve.
   // an entered mark is shelter (§ roadShelter): nothing inside it is cut from this reader's eyes
-  const entered = choice.coords ? null : await enteredNow(choice.handle);
+  // (`given`: the stack orient already read for this same read, handed on by the apex)
+  const entered = choice.coords ? null : given !== undefined ? given : await enteredNow(choice.handle, { verbs, w, crossing });
   const r = verbs.openYourEyes({ x: at.x, y: at.y, name: args.name }, w, { crossing, actor: choice.handle ?? null, entered, ...(budget ? { budget } : {}) });
   // tell is a lazy thunk on the verb's return — render it here so the JSON
   // skin carries the prose (a function would vanish in serialization).
@@ -2309,8 +2323,8 @@ export async function worldEyes(args = {}, key = null, { roll = [], v2 = false, 
       ...(o.lifted ? { lifted: true } : {}), ...(typeof mark?.image === "string" ? { image: true } : {}) };
   }) : null;
   return {
-    // an entered mark is shelter: the Mists' row in v2's happening_here says so, on orient's own test
-    ...(v2Rows ? { _fov: { rows: v2Rows, mists: r.fov?.mists ? { ...r.fov.mists, ...(verbs.shelterOf?.(w, entered)?.(at) ? { sheltered: true } : {}) } : null } } : {}),
+    // (an entered mark the reader stands in is shelter: the engine marks fov.mists `sheltered`, and v2's happening_here says so)
+    ...(v2Rows ? { _fov: { rows: v2Rows, mists: r.fov?.mists ?? null } } : {}),
     stance: choice.stance, telling, objects,
     // THE TRANSPORT LINE RIDES THE NARRATIVE SHAPE TOO (#2986 § 11 item 1), and
     // it has to: `diagnostic` is a diagnostic — nothing a resident actually
