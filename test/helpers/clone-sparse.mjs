@@ -14,7 +14,8 @@
 //     CI suite. CI (.github/scripts/suite-clones.sh), the pool's provisioning
 //     (G:/Postmark/pool/claims-lib.mjs) and test/clone-sparse.test.mjs read them here.
 //   · The stand-ins (test/helpers/dev-target.mjs: the dev rehearsal's, tools/sandbox.mjs's
-//     and so the playground's scratch clones): standinPatterns() below. A stand-in runs a
+//     and so the playground's scratch clones; tools/stamp-sandbox.mjs's town and its
+//     town-at-setup snapshot): standinPatterns() below. A stand-in runs a
 //     whole office that WRITES, and git refuses `git add` of a new file outside a clone's
 //     patterns, so a stand-in keeps the whole tree except what was written before it and
 //     is never written again: the town's letters dated before the clone, and the world's
@@ -106,17 +107,19 @@ const dayBefore = (now, days) => new Date(now.getTime() - days * 86400000).toISO
 
 /**
  * A stand-in's patterns for a clone of `source` (its HEAD). The whole tree, less:
- *   town  · each letter in a WHITE_PAGES/<room>/inbox/ whose name carries a date more than
- *           two days before `now` (a letter the office writes is named by the day it is
- *           sent, so it always falls inside the patterns and `git add` takes it);
+ *   town  · each letter in a WHITE_PAGES/<room>/inbox/ whose name carries a date before
+ *           `before` (YYYY-MM-DD; by default two days before `now`). A letter the office
+ *           writes is named by the day it is sent, so it falls inside the patterns and
+ *           `git add` takes it. A run on a synthetic clock (tools/stamp-sandbox.mjs) passes
+ *           its clock's first day, which may be days behind the wall;
  *   world · STATE/log/<N>.meta.json and <N>.*.meta.json for every crossing N but the
  *           newest two in the source (the drain writes the current crossing's).
  * Each exclusion is a whole name or a date, never a directory, so a stand-in's office can
  * write anywhere it could before.
  */
-export function standinPatterns(which, source, { now = new Date() } = {}) {
+export function standinPatterns(which, source, { now = new Date(), before = null } = {}) {
   if (which === "town") {
-    const cutoff = dayBefore(now, 2);
+    const cutoff = before ?? dayBefore(now, 2);
     const dates = new Set();
     for (const p of git(source, ["ls-tree", "-r", "--name-only", "HEAD", "WHITE_PAGES"]).split("\n")) {
       const m = /^WHITE_PAGES\/[^/]+\/inbox\/([^/]+)/.exec(p);
@@ -141,9 +144,9 @@ export function standinPatterns(which, source, { now = new Date() } = {}) {
  * A stand-in clone of `source` at `dest`: `git clone --local --no-checkout`, its
  * stand-in patterns, then the checkout. Answers `dest`, on the source's HEAD.
  */
-export function standinClone(which, source, dest, { now } = {}) {
+export function standinClone(which, source, dest, { now, before } = {}) {
   execFileSync("git", ["-c", "core.autocrlf=false", "clone", "--local", "--quiet", "--no-checkout", "--config", "core.autocrlf=false", source, dest]);
-  applySparse(dest, standinPatterns(which, source, { now }), `standin-${which}`);
+  applySparse(dest, standinPatterns(which, source, { now, before }), `standin-${which}`);
   git(dest, ["-c", "advice.detachedHead=false", "checkout", "-q", "--detach", "HEAD"]);
   return dest;
 }

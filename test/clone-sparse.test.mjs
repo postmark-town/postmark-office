@@ -154,6 +154,8 @@ test("a town stand-in leaves out the older letters only, and its office can add 
   });
   const now = new Date("2026-10-15T23:00:00Z");
   assert.deepEqual(standinPatterns("town", src, { now }), ["/*", "!/WHITE_PAGES/*/inbox/*2026-07-24*", "!/WHITE_PAGES/*/inbox/*2026-09-01*"]);
+  // a synthetic clock (tools/stamp-sandbox.mjs) names its own first day: only letters before it go
+  assert.deepEqual(standinPatterns("town", src, { now, before: "2026-08-01" }), ["/*", "!/WHITE_PAGES/*/inbox/*2026-07-24*"]);
   const dest = join(tempDir("clone-sparse-standin-"), "town-clone");
   standinClone("town", src, dest, { now });
   const inbox = join(dest, "WHITE_PAGES", "r", "inbox");
