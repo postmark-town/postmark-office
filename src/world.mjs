@@ -1295,23 +1295,6 @@ export function shelterInPlay({ verbs, w, crossing }) {
   return typeof verbs?.shelterOf === "function" && !!w?.terrain?.mists && Number(crossing) >= MISTS_FIRST_CROSSING;
 }
 
-/** Whether a point is sheltered for a resident whose enter stack is `entered`:
- *  inside one of those marks, on the world's own test (shelterOf, standpoint and
- *  all). False on a clone older than the ruling, so the Mists stand as ever. */
-export function shelteredAt({ verbs, w, entered, at }) {
-  return typeof verbs?.shelterOf === "function" && !!verbs.shelterOf(w, entered, at);
-}
-
-/** The spawn's question (WLD-6 A, Darko via Wright 2026-10-15 20:50): is a ground's
- *  spawn point inside the mark the entrant has just entered? Then the wall covering
- *  it does not stop the set-down: within that mark, the Mists do not. */
-export async function spawnSheltered(markId, at) {
-  try {
-    const { verbs } = await mods();
-    return shelteredAt({ verbs, w: await world(), entered: [markId], at });
-  } catch { return false; }
-}
-
 /** What a resident is within now (DEC-5's read), for the eyes and the air; null
  *  when shelter is not in play, the clone carries no enter/exit law or the ledger
  *  will not read. */

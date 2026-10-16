@@ -3141,15 +3141,10 @@ async function spawnOnEnter(args, key, who) {
     // writes its own zero-length walk past the walk door's road check, so it
     // asks the wall itself: a spawn point behind it sets nobody down, and the
     // entrant stays where the entry left them, told why.
-    // UNLESS IT IS INSIDE THE MARK JUST ENTERED (WLD-6 A, Darko via Wright
-    // 2026-10-15 20:50): an entered mark is shelter, so a spawn point within it
-    // sets the entrant down though the wall covers it. One outside the mark
-    // entered, or a clone older than the ruling, refuses exactly as before.
-    const { walkEntry, mistsGroundCheck, worldSkeletonRaw, MISTS_UNREADABLE, spawnSheltered } = await import("./world.mjs");
+    const { walkEntry, mistsGroundCheck, worldSkeletonRaw, MISTS_UNREADABLE } = await import("./world.mjs");
     const seen = await mistsGroundCheck(WORLD_CLONE, worldSkeletonRaw, [spawn.at], currentCrossing());
     if (seen?.unreadable) return { ground: place.ground, refused: `${MISTS_UNREADABLE}: this ground sets no one down behind a wall it cannot see; you stay where you entered` };
-    const sheltered = !!seen?.wall && await spawnSheltered(target, spawn.at);
-    if (seen?.wall && !sheltered)
+    if (seen?.wall)
       return { ground: place.ground, refused: "this ground's spawn point stands behind the wall of the Mists, so it sets no one down there; you stay where you entered" };
     const { appendJournal } = await import("./world-journal.mjs");
     const declaredAt = new Date().toISOString();
@@ -3162,8 +3157,7 @@ async function spawnOnEnter(args, key, who) {
     return {
       ground: place.ground, at: spawn.at,
       ...(spawn.jitter ? { jitter_m: spawn.jitter, from_spawn: spawn.from } : {}),
-      ...(sheltered ? { sheltered: true } : {}),
-      note: `${place.ground} sets its entrants down at its own spawn point — you did not walk here, the ground placed you${sheltered ? "; the Mists stand around it, but within the mark you have entered they hide nothing" : ""}`,
+      note: `${place.ground} sets its entrants down at its own spawn point — you did not walk here, the ground placed you`,
     };
   } catch { return null; }
   finally {
