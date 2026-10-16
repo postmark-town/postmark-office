@@ -1029,6 +1029,17 @@ test("F7c5 · THE MORNING PAGE DID NOT FATTEN — the doorstep bundle is byte-id
   //   full  21905 -> 24972 (+3067, +14.0%) = 26 bodies
   //   slim  19467 -> 22534 (+3067, +15.8%) = the same 26 bodies
   //
+  // ⚠ AND RE-CAPTURED A SIXTEENTH TIME, 2026-10-15 (lane plumb-wld51-alerts,
+  // WLD-51), for `alerts`: the page's notices in one structure, every kind
+  // registered (Darko, 19:06; the shape approved 19:29, "I love the alerts
+  // shape"). ALWAYS PRESENT, so a reader can count on the key: the fixture
+  // office has no store, so it is the empty array. Diffed leaf by leaf BEFORE
+  // the capture, on CI-shaped clones at the pins (world daef8487, town
+  // 5efee017): against the fifteenth capture, 1115 -> 1117 paths, NONE removed
+  // or changed, TWO added, `full.alerts` and `slim.alerts`.
+  //
+  //   full  24972 -> 24984 (+12) · slim  22534 -> 22546 (+12)
+  //
   // So the assertion below is the one that actually carries the promise, and it
   // is stated separately so a future regeneration cannot quietly absorb a card:
   assert.equal(JSON.stringify(now).includes('"card"'), false,

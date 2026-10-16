@@ -190,6 +190,12 @@ async function outcomesOf(handles, { stances, key, nowMs, readers = {} }) {
 }
 
 /** What stands behind the house's published marks, once. Never throws (stakesFor's own promise). */
+async function alertsOf(handles, { nowMs, readers = {} }) {
+  const { alertsFor } = readers.alertsFor ? { alertsFor: readers.alertsFor } : await import("./alerts.mjs");
+  try { return await alertsFor(handles, { now: new Date(nowMs) }); }
+  catch (e) { return { alerts: [], unread: [{ kind: "*", reason: `the alerts could not be composed (${String(e?.message ?? e).slice(0, 160)})` }] }; }
+}
+
 async function stakesOf(handles, { nowMs, readers = {} }) {
   const { stakesFor } = readers.stakesFor ? { stakesFor: readers.stakesFor } : await import("./doorstep-stakes.mjs");
   return stakesFor(handles, { now: new Date(nowMs) });
@@ -348,9 +354,10 @@ export async function needsYou({ household = null } = {}, ctx = {}) {
   if (!mine.length) return { refused: [403, `this key holds no resident of "${house.slug}"`,
     "needs-you is read by the house it is about — the public half of any house is household { read: \"house\", household: \"<slug>\" }", { your_residents: held }] };
 
-  const [stances, stakes] = await Promise.all([
+  const [stances, stakes, alerted] = await Promise.all([
     stancesOf(mine, { limit: NEEDS_YOU_STANCES, readers }),
     stakesOf(mine, { nowMs, readers }),
+    alertsOf(mine, { nowMs, readers }),
   ]);
 
   const stanceRows = (stances.awaiting ?? []).map((c) => ({
@@ -393,11 +400,12 @@ export async function needsYou({ household = null } = {}, ctx = {}) {
     ...r, cause: `${r.mark} is a commons mark holding ✦0 — the next settlement (${stakes.next_settlement?.at ?? "its time unknown"}) sweeps it first`,
   }));
 
-  // WLD-51 G3 (Darko, 2026-10-15 12:59): a mark the settlement took, for 7 days
-  // or until it is put forward again — the stakes segment's own rows and words.
-  const leftTheWorld = (stakes.left_the_world ?? []).map((r) => ({ ...r, cause: r.note }));
+  // ALERTS (WLD-51, Darko 2026-10-15 19:29): the house's, in the doorstep's
+  // one shape and order (src/alerts.mjs), for every resident here. They replace
+  // the loose `left_the_world` rows the 7-day take note rode first.
+  const alerts = alerted.alerts ?? [];
 
-  const count = stanceRows.length + setDowns.length + bounces.length + keyAsks.length + atRisk.length + leftTheWorld.length;
+  const count = stanceRows.length + setDowns.length + bounces.length + keyAsks.length + atRisk.length + alerts.length;
   return {
     read: "needs-you", household: house.slug, residents: mine, as_of: ctx.asOf ?? null,
     count,
@@ -412,9 +420,9 @@ export async function needsYou({ household = null } = {}, ctx = {}) {
     key_asks: { rows: keyAsks, ...(keyAsksUnavailable ? { unavailable: keyAsksUnavailable } : {}) },
     stakes_at_risk: { next_settlement: stakes.next_settlement ?? null, rows: atRisk,
       ...(stakes.unavailable ? { unavailable: stakes.unavailable } : {}) },
-    left_the_world: { rows: leftTheWorld,
-      ...(stakes.left_the_world_unavailable ? { unavailable: stakes.left_the_world_unavailable } : {}) },
-    ...(count === 0 && !stances.unavailable && !stakes.unavailable && !stakes.left_the_world_unavailable && !keyAsksUnavailable
+    alerts,
+    ...(alerted.unread?.length ? { alerts_unread: alerted.unread } : {}),
+    ...(count === 0 && !stances.unavailable && !stakes.unavailable && !alerted.unread?.length && !keyAsksUnavailable
       ? { note: "nothing waits on you — every list below was read and is empty. An ordinary state, not a quiet failure." } : {}),
   };
 }

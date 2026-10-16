@@ -38,14 +38,15 @@ const LOGGED = /console\.(error|warn|log|info)\(|\blog\(|log\.(warn|error|info)\
 const DISCLOSURE = "a 200 read's disclosure of what could not be read (the read-side follow-up, left by POS-578's ruling)";
 const OWN = "the office's own words, a refusal relayed by its own defect, or plumbing that never reaches an answer";
 const ALLOWED = {
+  "alerts.mjs": [3, DISCLOSURE],
   "ashore.mjs": [1, `${OWN}: a backfill's why, printed by its tool`],
   "ballots-store.mjs": [6, `${OWN}: LateCrossingError's ruled message (x2), an UNREACHABLE refusal's \`cause\` field (x3, never sent); and ${DISCLOSURE} (a ballot file that does not parse)`],
   "ceremony.mjs": [1, `${OWN}: a log variable`],
   "claim-effects.mjs": [2, DISCLOSURE],
   "crossing-exec.mjs": [2, `${OWN}: PenUnreachableError's ruled sentence; the push error a receipt discloses`],
   "declare-exec.mjs": [1, `${OWN}: mintRefusal relays a refusal (an HTTP status) by its own defect; any other error, codeless or foreign, is FAULT_LOGGED above it`],
-  "doorstep-bundle.mjs": [6, DISCLOSURE],
-  "doorstep-stakes.mjs": [4, DISCLOSURE],
+  "doorstep-bundle.mjs": [7, DISCLOSURE],
+  "doorstep-stakes.mjs": [3, DISCLOSURE],
   "drop-recovery.mjs": [2, DISCLOSURE],
   "dynamic-entities.mjs": [1, DISCLOSURE],
   "dynamic-presence.mjs": [1, DISCLOSURE],
@@ -60,7 +61,7 @@ const ALLOWED = {
   "funding.mjs": [1, DISCLOSURE],
   "gangway-exec.mjs": [1, `${OWN}: a refusal (an HTTP status) relayed by its own defect`],
   "gift-exec.mjs": [1, `${OWN}: classifyFatal's input (its last word is FAULT_LOGGED)`],
-  "house-bundle.mjs": [2, DISCLOSURE],
+  "house-bundle.mjs": [3, DISCLOSURE],
   "household-media.mjs": [3, DISCLOSURE],
   "idea-store.mjs": [1, `${OWN}: LateCrossingError's ruled message`],
   "intake-map.mjs": [1, DISCLOSURE],

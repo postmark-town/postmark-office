@@ -119,88 +119,13 @@ export const LATER_STAKES = 'a stake or unstake made after escrow_ingested_at sh
 /** The act that takes a mark off the at-risk list — the stake envelope, by name. */
 export const stakeEnvelope = (mark) => `world { do: "stake", args: { mark: "${mark}", stamps: 1 } }`;
 
-// ── LEFT THE WORLD: THE NOTE AFTER A TAKE (WLD-51 G3) ───────────────────────
+// ── A TAKE IS NOT A STAKES ROW: IT IS AN ALERT (WLD-51, Darko 2026-10-15 19:29) ──
 //
-// RULED (Darko, 2026-10-15 12:59): "every taken mark gets a doorstep and
-// needs-you note for 7 days, or until it's put forward again; no letter." And
-// G1 (13:00): the take writes the mark back to the household's drafts, so the
-// note's second sentence is true (world2/tools/materialize.mjs § returnToDrafts).
-//
-// A mark is listed while ALL of: the store retired it by the sweep's door
-// (`marks.retired_cause = 'settlement-unpublish'`, 076; a file-side retirement
-// by marks-ingest is not a take and gets no note); the settlement that took it
-// was under 7 days ago (`retired_window`'s opening: the retire step runs in the
-// window the settlement opens); it is not put forward again (no pending claim
-// on the open docket); and it is not standing again (a revive sets it back to
-// `standing`, which leaves this list by itself). It is the household's own:
-// its owner is one of the handles asked about, the same scope as the rows.
-// Each row carries the mark's whole body (Darko, 10-14 22:33: a read that
-// shows a mark carries its body).
-
-export const LEFT_THE_WORLD_DAYS = 7;
-
-/**
- * THE SETTLEMENT THAT TOOK IT, NAMED AS A RESIDENT READS A TIME (review-220-577
- * 4a). The retire step runs in the window the settlement opened, and windows
- * open at 05:45:40 / 17:45:40Z while the settlement runs at 06:00 / 18:00Z, so
- * the window's opening is a time no settlement ran. The settlement is the next
- * one on the sweep's own clock (world-forecast.mjs § nextSettlement), asked a
- * millisecond before the opening so a window that opens on the dot names its
- * own settlement. In the town's time, in words: "Oct 15, 2:00 pm EDT".
- */
-export function settlementOfWindow(opensAt) {
-  const t = opensAt instanceof Date ? opensAt.getTime() : Date.parse(String(opensAt));
-  return Number.isFinite(t) ? nextSettlement(new Date(t - 1)) : null;
-}
-export function townWhen(iso, tz = process.env.TOWN_TZ ?? "America/New_York") {
-  const parts = new Intl.DateTimeFormat("en-US", { timeZone: tz, month: "short", day: "numeric", hour: "numeric", minute: "2-digit", hour12: true, timeZoneName: "short" })
-    .formatToParts(new Date(iso));
-  const p = Object.fromEntries(parts.map((x) => [x.type, x.value]));
-  return `${p.month} ${p.day}, ${p.hour}:${p.minute} ${String(p.dayPeriod).toLowerCase()} ${p.timeZoneName}`;
-}
-
-/**
- * The household's note for one taken mark. Every handle of the house reads it,
- * and only the mark's AUTHOR can put the returned draft forward (the stake door
- * finds a draft by its claimant: world2-claims.mjs § promoteDraftOnStake), so the
- * note names who can (review-220-577 4b).
- */
-export const leftTheWorldNote = (mark, by, when) =>
-  `${mark} had no stamps behind it, so it left the world at the ${when} settlement. It's back in your household's drafts, and its author, ${by}, can stake it, or leave it again with a stamp, to bring it back.`;
-
-export const LEFT_THE_WORLD_SQL = `
-  SELECT m.slug, m.kind, m.owner, m.body, w.opens_at
-    FROM marks m JOIN windows w ON w.id = m.retired_window
-   WHERE m.status = 'retired' AND m.retired_cause = 'settlement-unpublish'
-     AND m.owner = ANY($1)
-     AND w.opens_at > $2::timestamptz - make_interval(days => $3)
-     AND NOT EXISTS (SELECT 1 FROM claims c JOIN windows cw ON cw.id = c.window_id
-                      WHERE c.slug = m.slug AND c.status = 'pending' AND cw.status = 'open')
-   ORDER BY w.opens_at DESC, m.slug`;
-
-/** The rows, pure: `found` is LEFT_THE_WORLD_SQL's rows. */
-export function leftTheWorldRows(found = []) {
-  return (found ?? []).map((r) => {
-    const opened = r.opens_at instanceof Date ? r.opens_at.getTime() : Date.parse(String(r.opens_at));
-    const at = settlementOfWindow(r.opens_at);
-    // the row leaves the list 7 days after the window opened (LEFT_THE_WORLD_SQL)
-    const until = new Date(opened + LEFT_THE_WORLD_DAYS * 24 * 3600e3).toISOString();
-    const by = r.owner ?? String(r.slug).split("/")[0];
-    return { mark: r.slug, kind: r.kind ?? null, by, body: r.body ?? null, left_at: at, note_until: until,
-      note: leftTheWorldNote(r.slug, by, at ? townWhen(at) : "last"), act: stakeEnvelope(r.slug) };
-  });
-}
-
-// The rows. An office with no store has retired nothing, so it answers none;
-// its escrow line already says the store is absent. A store that throws is
-// disclosed by the segment (`left_the_world_unavailable`), never read as none.
-const defaultLeft = async (handles, now) => {
-  const { world2ServeEnabled, world2Pool } = await import("./world2-serve.mjs");
-  if (!world2ServeEnabled()) return { rows: [] };
-  const p = await world2Pool();
-  const { rows } = await p.query(LEFT_THE_WORLD_SQL, [handles, now.toISOString(), LEFT_THE_WORLD_DAYS]);
-  return { rows: leftTheWorldRows(rows) };
-};
+// The 7-day note for a mark a settlement took (G3) rode this segment as
+// `left_the_world` until Darko ruled the doorstep's notices into one
+// structure: `alerts`, with a registered kind each. The note is now the
+// `mark-taken` alert, and its reader lives with the kind's definition in
+// src/alerts.mjs. This segment is the published marks and their escrow again.
 
 /**
  * The rows, pure. `marks` is world main's mark list, `registry` the sweep's
@@ -253,7 +178,6 @@ export async function stakesFor(handles, {
   escrow = defaultEscrow,
   rule = defaultRule,
   pathAt = defaultPathAt,
-  left = defaultLeft,
   now = new Date(),
 } = {}) {
   const scope = [...new Set((handles ?? []).filter(Boolean))];
@@ -283,11 +207,6 @@ export async function stakesFor(handles, {
   try { pathOnMain = (await pathAt(ref)) ?? pathOnMain; } catch { /* every registered path reads unread: null, disclosed by the rows */ }
 
   const rows = stakesRowsFrom({ handles: scope, marks: state?.marks ?? [], registry: published, byMark: esc?.byMark ?? null, rule: verdict, pathOnMain });
-  let gone = [], goneNote = null;
-  if (scope.length) {
-    try { gone = (await left(scope, now))?.rows ?? []; }
-    catch (e) { goneNote = `the marks a settlement took from you could not be read (${String(e?.message ?? e).slice(0, 120)}) — unknown, not none`; }
-  }
   const escrowRead = esc?.byMark instanceof Map;
   const measured = escrowRead && !ruleNote;
   const atRisk = measured ? rows.filter((r) => r.at_risk === true).length : null;
@@ -309,8 +228,6 @@ export async function stakesFor(handles, {
     ...(measured && atRisk === 0 && unjudged === 0 && rows.length
       ? { note: "nothing of yours is at risk at the next settlement — every commons mark you hold has stamps behind it, as of the town head named above" } : {}),
     ...(rows.length === 0 ? { note: "no published mark of yours stands on world main — drafts and the docket are at world { read: \"leave-mark\" }" } : {}),
-    ...(gone.length ? { left_the_world: gone } : {}),
-    ...(goneNote ? { left_the_world_unavailable: goneNote } : {}),
     read_the_rest: 'world { read: "leave-mark" } is the whole portfolio — drafts, the docket, what you have backed; world { read: "stake", args: { mark: "<by>/<slug>" } } is one mark\'s escrow with its holders',
     rows,
   };
