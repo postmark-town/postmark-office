@@ -180,6 +180,14 @@ export const ALARM_UNMANIFESTED = "ALARM-unmanifested";
 // what came out of it. (2026-08-30 — the settlement row judged timer recency
 // alone, so a crossing refusing identically twice a day read as a green tick.)
 export const ALARM_OUTCOME = "ALARM-outcome";
+
+/**
+ * A row's outcome blocks: `outcomes` (a list, for a row whose unit writes more
+ * than one log: the keep tick's receipt and its household-keys line, since the
+ * rehydrate row that carried the second retired, POS-268 part 5b) or the one
+ * `outcome`. Each is validated and judged exactly as a lone `outcome` is.
+ */
+export const outcomesOf = (row) => (Array.isArray(row?.outcomes) ? row.outcomes : row?.outcome ? [row.outcome] : []);
 // Somebody else owns the files a service must write. Its own class because the
 // repair is `chown`, not `systemctl` — see §2b in the manifest's readme.
 export const ALARM_CUSTODY = "ALARM-custody";
@@ -237,7 +245,7 @@ export function loadManifest(path = DEFAULT_MANIFEST) {
       // An outcome on a retired row would never be judged, so the alarm it
       // carries would go quiet without anyone deciding it should: move it to
       // the row whose rail now writes its log.
-      if (row.outcome) throw new Error(`manifest row ${row.unit} is retired and still carries an outcome — move it to the live row that writes ${row.outcome.history_path}`);
+      if (outcomesOf(row).length) throw new Error(`manifest row ${row.unit} is retired and still carries an outcome — move it to the live row that writes ${outcomesOf(row).map((o) => o.history_path).join(", ")}`);
     }
     if (!row.activation_owner) {
       // The law's third clause is not decorative. A row that cannot say who
@@ -319,15 +327,17 @@ export function loadManifest(path = DEFAULT_MANIFEST) {
   // and the long one a reviewer weighs are different jobs, and a row that only
   // has the long one puts a paragraph on the board every morning.
   for (const row of m.units) {
-    if (!row.outcome) continue;
-    if (!row.outcome.history_path) throw new Error(`${row.unit} declares an outcome with no history_path`);
+    if (row.outcome && row.outcomes) throw new Error(`${row.unit} declares both outcome and outcomes — one list, or one block`);
+    if (Object.hasOwn(row, "outcomes") && (!Array.isArray(row.outcomes) || !row.outcomes.length)) throw new Error(`${row.unit} declares outcomes that is not a non-empty list`);
+    for (const spec of outcomesOf(row)) {
+    if (!spec.history_path) throw new Error(`${row.unit} declares an outcome with no history_path`);
     // THE KEEP OUTCOME (POS-524) is judged per step from its own receipts
     // (deploy/keep-history.mjs § judgeKeep), not by the crossing's status
     // rules, so it is validated on its own fields and carries no unsettled_runs.
-    if (Object.hasOwn(row.outcome, "kind") && row.outcome.kind !== "keep_steps")
-      throw new Error(`${row.unit} declares an outcome kind "${row.outcome.kind}" this roll-call does not know`);
-    if (row.outcome.kind === "keep_steps") {
-      const o = row.outcome;
+    if (Object.hasOwn(spec, "kind") && spec.kind !== "keep_steps")
+      throw new Error(`${row.unit} declares an outcome kind "${spec.kind}" this roll-call does not know`);
+    if (spec.kind === "keep_steps") {
+      const o = spec;
       if (!Array.isArray(o.steps) || !o.steps.length || o.steps.some((x) => !SOFT_STEPS.includes(x)))
         throw new Error(`${row.unit} declares a keep outcome whose steps are not a non-empty list of the tick's soft steps (${SOFT_STEPS.join(", ")})`);
       if (!Number.isInteger(o.step_refused_runs) || o.step_refused_runs < 1)
@@ -336,43 +346,44 @@ export function loadManifest(path = DEFAULT_MANIFEST) {
         throw new Error(`${row.unit} declares a keep outcome with no positive stale_after_minutes — an old receipt would read as today's`);
       if (Object.hasOwn(o, "unsettled_runs"))
         throw new Error(`${row.unit} declares unsettled_runs on a keep outcome — it judges steps, not crossing statuses`);
-    } else if (!Number.isFinite(Number(row.outcome.unsettled_runs))) throw new Error(`${row.unit} declares an outcome with no unsettled_runs — a refusal that keeps returning would read green`);
-    if (!row.outcome.means) throw new Error(`${row.unit} declares an outcome with no means — nothing to print on the alarm line`);
-    if (!row.outcome.why) throw new Error(`${row.unit} declares an outcome with no why — its thresholds are numbers nobody can review`);
+    } else if (!Number.isFinite(Number(spec.unsettled_runs))) throw new Error(`${row.unit} declares an outcome with no unsettled_runs — a refusal that keeps returning would read green`);
+    if (!spec.means) throw new Error(`${row.unit} declares an outcome with no means — nothing to print on the alarm line`);
+    if (!spec.why) throw new Error(`${row.unit} declares an outcome with no why — its thresholds are numbers nobody can review`);
     // A list-alarm names the fields it watches, and an empty declaration is the
     // shape that reads green forever: `alarm_on_nonempty: []` would pass every
     // check above and watch nothing.
-    if (Object.prototype.hasOwnProperty.call(row.outcome, "alarm_on_nonempty")) {
-      const l = row.outcome.alarm_on_nonempty;
+    if (Object.prototype.hasOwnProperty.call(spec, "alarm_on_nonempty")) {
+      const l = spec.alarm_on_nonempty;
       if (!Array.isArray(l) || !l.length || l.some((f) => typeof f !== "string" || !f))
         throw new Error(`${row.unit} declares alarm_on_nonempty that names no field — a list-alarm watching nothing reads green forever`);
       // Its own sentence, always — never the shared one, whose install-day note
       // would excuse a finding that is never install-day noise.
-      if (!row.outcome.list_means)
+      if (!spec.list_means)
         throw new Error(`${row.unit} declares alarm_on_nonempty with no list_means — it would print the shared means, whose install-day excuse is false of a named slug`);
     }
     // Same discipline for the present-and-false alarm: a flag list naming no
     // field watches nothing, and one without its own sentence borrows a means
     // that sends the operator after the wrong cause.
-    if (Object.prototype.hasOwnProperty.call(row.outcome, "alarm_on_false")) {
-      const f = row.outcome.alarm_on_false;
+    if (Object.prototype.hasOwnProperty.call(spec, "alarm_on_false")) {
+      const f = spec.alarm_on_false;
       if (!Array.isArray(f) || !f.length || f.some((x) => typeof x !== "string" || !x))
         throw new Error(`${row.unit} declares alarm_on_false that names no field — a flag-alarm watching nothing reads green forever`);
-      if (!row.outcome.unchecked_means)
+      if (!spec.unchecked_means)
         throw new Error(`${row.unit} declares alarm_on_false with no unchecked_means — a check that did not run has a different repair from a check that found something`);
     }
     // And for the count that is NOT an alarm (postmark#2935): a declaration
     // naming no field prints nothing forever, and one with no sentence prints a
     // bare number the operator cannot read.
-    if (Object.prototype.hasOwnProperty.call(row.outcome, "report_counts")) {
-      const c = row.outcome.report_counts;
+    if (Object.prototype.hasOwnProperty.call(spec, "report_counts")) {
+      const c = spec.report_counts;
       if (!Array.isArray(c) || !c.length || c.some((x) => typeof x !== "string" || !x))
         throw new Error(`${row.unit} declares report_counts that names no field — a count line reporting nothing is a line nobody reads`);
-      if (!row.outcome.count_means)
+      if (!spec.count_means)
         throw new Error(`${row.unit} declares report_counts with no count_means — a bare number on the board is a number nobody can read`);
-      const alarmed = c.filter((x) => (row.outcome.alarm_on_nonempty ?? []).includes(x) || (row.outcome.alarm_on_false ?? []).includes(x));
+      const alarmed = c.filter((x) => (spec.alarm_on_nonempty ?? []).includes(x) || (spec.alarm_on_false ?? []).includes(x));
       if (alarmed.length)
         throw new Error(`${row.unit} names ${alarmed.join(", ")} in report_counts AND in an alarm list — a count is not an alarm, and one field cannot be both`);
+    }
     }
   }
   return m;
@@ -882,7 +893,7 @@ export function collect(manifest, { now = Date.now() } = {}) {
     // §9's input: the rolling receipt log, read like any other state file. A
     // single receipt answers "what did the LAST crossing do"; only the log can
     // answer "has it published anything in three days".
-    if (row.outcome && row.outcome.history_path) files[row.outcome.history_path] = readFile(row.outcome.history_path);
+    for (const spec of outcomesOf(row)) if (spec.history_path) files[spec.history_path] = readFile(spec.history_path);
   }
 
   for (const row of manifest.custody ?? []) {
@@ -1186,11 +1197,12 @@ export function classifyRow(row, snapshot, now) {
   // Judged last, and that ordering is the point: staleness says the work did
   // not happen, and this says it happened and was wrong. A stale row must not
   // be relabelled by its own stale contents.
-  const outcome = judgeOutcome(row, snapshot, now);
+  const specs = outcomesOf(row);
+  const outcome = specs.map((spec) => judgeOutcome({ ...row, outcome: spec }, snapshot, now)).filter(Boolean).join(" · ") || null;
   // The count line rides on BOTH verdicts below — beside an alarm it is the
   // context on the finding, beside a green tick it is the whole of what the
   // rail had to say — and on neither is it a verdict (postmark#2935).
-  const counts = outcomeCounts(row, snapshot);
+  const counts = specs.map((spec) => outcomeCounts({ ...row, outcome: spec }, snapshot)).filter(Boolean).join(" · ") || null;
   const tail = counts ? ` · ${counts}` : "";
   if (outcome) {
     return { unit: row.unit, label, verdict: ALARM_OUTCOME, reason: `${label} ${outcome}${tail}` };

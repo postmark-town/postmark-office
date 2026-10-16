@@ -43,6 +43,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   loadManifest,
+  outcomesOf,
   rollcall,
   classifyRow,
   outcomeCounts,
@@ -223,15 +224,16 @@ function healthy(m = manifest()) {
     // POS-524: a keep row is judged from its own receipts (deploy/keep-history.mjs),
     // so its healthy log is three scheduled ticks with every step ok, the newest
     // at the heartbeat's own time.
-    if (row.outcome && row.outcome.kind === "keep_steps") {
+    for (const spec of outcomesOf(row)) {   // a row may write more than one log (POS-268 5b: the keep row)
+    if (spec.kind === "keep_steps") {
       const lines = [2, 1, 0].map((i) => JSON.stringify({
         v: 1, kind: "office-keep", run: `healthy-${i}`, source: "scheduled",
         started: new Date(beatAt - i * 15 * MINUTE - MINUTE).toISOString(), at: new Date(beatAt - i * 15 * MINUTE).toISOString(),
         exit: 0, steps: Object.fromEntries(KEEP_STEPS.map((id) => [id, { s: "ok" }])),
       }));
-      files[row.outcome.history_path] = { exists: true, mtime_ms: beatAt, text: `${lines.join("\n")}\n` };
-    } else if (row.outcome && row.outcome.history_path) {
-      const n = Math.max(Number(row.outcome.zero_published_runs) || 3, 3) + 2;
+      files[spec.history_path] = { exists: true, mtime_ms: beatAt, text: `${lines.join("\n")}\n` };
+    } else if (spec.history_path) {
+      const n = Math.max(Number(spec.zero_published_runs) || 3, 3) + 2;
       const lines = [];
       for (let i = n - 1; i >= 0; i--) {
         lines.push(JSON.stringify({
@@ -248,19 +250,20 @@ function healthy(m = manifest()) {
           // declaration rather than hard-coded, for the same reason the window
           // length is: a manifest that names a third list must not go green here
           // because nobody remembered to widen a fixture.
-          ...Object.fromEntries((row.outcome.alarm_on_nonempty ?? []).map((f) => [f, []])),
+          ...Object.fromEntries((spec.alarm_on_nonempty ?? []).map((f) => [f, []])),
           // …and a row that declares a present-and-false alarm gets the flag
           // TRUE, which is its healthy shape: the check RAN. Generated from the
           // row's own declaration for the same reason as the lists above — a
           // manifest that names a second flag must not go green here because
           // nobody remembered to widen a fixture.
-          ...Object.fromEntries((row.outcome.alarm_on_false ?? []).map((f) => [f, true])),
+          ...Object.fromEntries((spec.alarm_on_false ?? []).map((f) => [f, true])),
           // …and a row that declares a COUNT gets a number, which is its only
           // healthy shape: a count is printed, never judged (postmark#2935).
-          ...Object.fromEntries((row.outcome.report_counts ?? []).map((f) => [f, 0])),
+          ...Object.fromEntries((spec.report_counts ?? []).map((f) => [f, 0])),
         }));
       }
-      files[row.outcome.history_path] = { exists: true, mtime_ms: beatAt, text: `${lines.join("\n")}\n` };
+      files[spec.history_path] = { exists: true, mtime_ms: beatAt, text: `${lines.join("\n")}\n` };
+    }
     }
   }
 
@@ -822,13 +825,14 @@ test("a RETIRED row stopped and disabled but still installed is not retired yet"
 });
 
 test("the manifest refuses a retired row that cannot say why, or that still carries an outcome", () => {
-  const dir = mkdtempSync(join(tmpdir(), "rollcall-retired-"));
+  const dir = tempDir("rollcall-retired-");
   try {
     const base = JSON.parse(readFileSync(MANIFEST_PATH, "utf8"));
     const planted = retiredManifest(base).units.at(-1);
     const cases = [
       [{ ...planted, retired_because: undefined }, /is retired and does not say why or when/],
       [{ ...planted, outcome: { history_path: "/srv/x.jsonl", unsettled_runs: 0, means: "m", why: "w" } }, /is retired and still carries an outcome — move it to the live row that writes \/srv\/x\.jsonl/],
+      [{ ...planted, outcomes: [{ history_path: "/srv/y.jsonl", unsettled_runs: 0, means: "m", why: "w" }] }, /is retired and still carries an outcome — move it to the live row that writes \/srv\/y\.jsonl/],
     ];
     for (const [row, want] of cases) {
       const p = join(dir, "m.json");
@@ -931,8 +935,9 @@ function unrowedDeployUnits(m, files) {
 }
 
 function unfiledRows(m, files) {
+  // a RETIRED row's unit left deploy/ in the change that retired it (POS-268 5b): its row stays, its file does not
   const names = new Set(files.map((f) => f.file));
-  return [...new Set(m.units.filter((r) => !r.box_only && !names.has(r.unit.replace(/@[^.@]+\./, "@."))).map((r) => r.unit))];
+  return [...new Set(m.units.filter((r) => !r.box_only && r.stage !== "retired" && !names.has(r.unit.replace(/@[^.@]+\./, "@."))).map((r) => r.unit))];
 }
 
 test("FALSIFIER (h3): every unit in deploy/ the box could run has a row, and every row's unit is in deploy/ or says where it lives (POS-522)", () => {
@@ -2453,7 +2458,10 @@ test("§2e THE ROW IS STRICT: a blessing row with no allowance or no why is refu
 // unchecked tests red, the clean one stays green as the control. (The row moved
 // off the rehydrate timer when that unit was retired, POS-268 5b: office-keep.sh
 // writes the line, so its timer carries the alarm.)
-const HK_ROW = manifest().units.find((u) => u.unit === "postmark-office-keep.timer");
+// The keep row carries TWO outcome blocks (outcomes[]: the tick's receipt and this line), so the
+// household-keys block is judged as the roll-call judges each: the row with that one block.
+const HK_KEEP = manifest().units.find((u) => u.unit === "postmark-office-keep.timer");
+const HK_ROW = { ...HK_KEEP, outcome: outcomesOf(HK_KEEP).find((o) => /household-keys\.jsonl$/.test(o.history_path ?? "")) };
 const hkLog = (...lines) => ({ files: { [HK_ROW.outcome?.history_path]: { exists: true, text: lines.map((l) => JSON.stringify(l)).join("\n") + "\n" } } });
 const HK_CLEAN = { at: "2026-10-04T04:44:20Z", split_households: [], shared_keys: [], detail: [], checked: true };
 
@@ -2680,4 +2688,37 @@ test("(p10) readEnvFileKeys over a real file with real grep: names, the quoted s
   // grep's 1 on the names (an empty file) is "no keys", read cleanly.
   writeFileSync(join(dir, "empty.env"), "");
   assert.deepEqual(readEnvFileKeys(join(dir, "empty.env"), { grep: realGrep }), { readable: true, keys: [] });
+});
+
+// ── A ROW WITH TWO OUTCOMES (POS-268 5b) ────────────────────────────────────
+//
+// The keep row writes two logs: the tick's receipt (POS-524) and the
+// household-keys line, which rode the rehydrate row until that unit retired.
+// Each block is validated and judged as a lone outcome is, and the verdict
+// names every alarm. THE CAN-FAIL FLIP: judge only the first block; the split
+// house goes green.
+test("outcomes[]: each block on a row is judged, and a split house on the keep row alarms beside a healthy receipt", () => {
+  const m = manifest();
+  const keep = m.units.find((u) => u.unit === "postmark-office-keep.timer");
+  assert.equal(outcomesOf(keep).length, 2);
+  const snap = healthy(m);
+  const hk = outcomesOf(keep).find((o) => /household-keys\.jsonl$/.test(o.history_path));
+  assert.equal(classifyRow(keep, snap, T0).verdict, "OK", "the control: both logs healthy");
+  snap.files[hk.history_path] = { exists: true, mtime_ms: T0, text: JSON.stringify({ at: "x", split_households: ["house-of-many-doors"], shared_keys: [], detail: [], checked: true }) + "\n" };
+  const r = classifyRow(keep, snap, T0);
+  assert.equal(r.verdict, "ALARM-outcome");
+  assert.match(r.reason, /house-of-many-doors/);
+});
+
+test("outcomes[]: the loader refuses both forms on one row, an empty list, and a block that breaks the outcome law", () => {
+  const dir = tempDir("box-rollcall-outcomes-");
+  const tmp = join(dir, "manifest.json");
+  const spec = { history_path: "/srv/x.jsonl", unsettled_runs: 0, means: "m", why: "w" };
+  const row = { unit: "postmark-x.timer", stage: "live", activation_owner: "planted by the test", box_only: { path: "/etc/systemd/system/postmark-x.timer", why: "planted" } };
+  writeFileSync(tmp, JSON.stringify({ units: [{ ...row, outcome: spec, outcomes: [spec] }] }));
+  assert.throws(() => loadManifest(tmp), /declares both outcome and outcomes/);
+  writeFileSync(tmp, JSON.stringify({ units: [{ ...row, outcomes: [] }] }));
+  assert.throws(() => loadManifest(tmp), /outcomes that is not a non-empty list/);
+  writeFileSync(tmp, JSON.stringify({ units: [{ ...row, outcomes: [spec, { ...spec, means: undefined }] }] }));
+  assert.throws(() => loadManifest(tmp), /declares an outcome with no means/, "each block in the list is held to the same law");
 });
