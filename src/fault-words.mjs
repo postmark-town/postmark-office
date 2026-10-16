@@ -60,6 +60,20 @@ export function foreignAnswer(code, obj, { read = true } = {}) {
 // Node's ENOENT with neither. A refusal (its code a status) is rebuilt exactly as
 // each catch always did; a foreign code keeps only the code, so the door that
 // answers classifies it (above), and its message and hint go to the log here.
+// THE EXTRAS A REBUILT BOUNCE CARRIES, BY NAME, in ONE list for both doors that
+// rebuild one (world-apex.mjs § actCaught, the REST act branch, and mcp.mjs's
+// world catch). A field the door underneath added and this list does not name is
+// dropped there and reaches nobody, and two hand-kept copies drifted exactly so:
+// `choose` (which way, at a portal that leads more than one) and the dungeon's
+// `portals` were thrown by world-crossings.mjs and reached no caller (WLD-63).
+//   choices      which resident? (the multi-resident bounce)
+//   walk         the enter door's reach refusal: the walk to the threshold (2026-09-11)
+//   choose       which way, at a portal whose `into` is a list; a wrong `into` names them again (WLD-5/63)
+//   dungeon, portals, law   a dungeon's refusal names its ways in as a field (WLD-5)
+//   broken, stranded_at     a portal that leads nowhere, quoted by its own field (WLD-18)
+export const BOUNCE_EXTRAS = ["choices", "walk", "choose", "dungeon", "portals", "law", "broken", "stranded_at"];
+export const bounceExtras = (e) => Object.fromEntries(BOUNCE_EXTRAS.filter((k) => e?.[k] != null).map((k) => [k, e[k]]));
+
 export function caughtBounce(e, fields) {
   if (isHttpStatus(e?.code)) return { error: "bounce", ...fields };
   faultLogged(`a caught error carried code ${JSON.stringify(e?.code)}`, e);

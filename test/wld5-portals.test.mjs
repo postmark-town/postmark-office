@@ -22,6 +22,8 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { enterViaOffice, exitViaOffice, dungeonEntryVia, CROSSING_TOOLS } from "../src/world-crossings.mjs";
+import { actCaught } from "../src/world-apex.mjs";
+import { bounceExtras } from "../src/fault-words.mjs";
 import { walkFenceRefusal } from "../src/world-movement.mjs";
 import { NO_WORLD, worldClone } from "./fixture-paths.mjs";
 
@@ -33,10 +35,12 @@ const grammarOf = async () => import(pathToFileURL(join(CLONE, "tools", "enter-e
 
 const HEIST = "spire/the-gilded-doo-YOULL-NEVER-CATCH-ME";
 const SPIRE = "spire/the-spire";
-function marks({ heist = false } = {}) {
+function marks({ heist = false, spireInto = false } = {}) {
   return [
     { id: "spire/grounds", kind: "sited", by: "spire", at: { x: 1000, y: 1000 }, extent: { w: 500, h: 400 }, body: "The open Grounds." },
-    { id: SPIRE, kind: "sited", by: "spire", class: "dungeon", at: { x: 1000, y: 1000 }, extent: { w: 300, h: 300 }, body: "The Spire." },
+    { id: SPIRE, kind: "sited", by: "spire", class: "dungeon", at: { x: 1000, y: 1000 }, extent: { w: 300, h: 300 }, body: "The Spire.",
+      // WLD-63: the Starforge Spire's own entry, "into: spire/<vestibule> with lands_at: <the Gilded Doors>"
+      ...(spireInto ? { entry: { into: "spire/vestibule", lands_at: "spire/doors-inside" } } : {}) },
     { id: "spire/vestibule", kind: "sited", by: "spire", at: { x: 880, y: 1000 }, extent: { w: 50, h: 50 }, body: "The vestibule." },
     { id: "spire/hall", kind: "sited", by: "spire", at: { x: 1030, y: 1000 }, extent: { w: 200, h: 200 }, body: "The hall." },
     { id: "spire/the-approach", kind: "sited", by: "spire", at: { x: 820, y: 1000 }, extent: { w: 30, h: 30 }, body: "The approach." },
@@ -59,9 +63,9 @@ const ENTERED_BY_THE_DOORS = { action: "enter", object: "spire/vestibule",
 /** A whole office in a closure: the fixture world, one resident standing where
  *  we put them, an in-memory ledger, a pen that appends, the acts the journal
  *  holds, and a `stop` that records where it was asked to set the body down. */
-async function officeWith({ standing, ledger = "", heist = false, at = 300, acts = [] } = {}) {
+async function officeWith({ standing, ledger = "", heist = false, spireInto = false, at = 300, acts = [] } = {}) {
   const thresholds = await grammarOf();
-  const worldState = { marks: marks({ heist }) };
+  const worldState = { marks: marks({ heist, spireInto }) };
   let text = ledger;
   const written = [], records = [], stops = [];
   return {
@@ -123,6 +127,43 @@ test("a portal that leads more than one way answers with its ways, and `into` pi
   assert.deepEqual(went.exited, ["spire/vestibule"]);
   assert.deepEqual(went.entered, ["spire/hall"]);
   assert.ok(CROSSING_TOOLS.find((t) => t.name === "world_enter").inputSchema.properties.into, "world_enter takes into");
+});
+
+// WLD-63: ENTERING A DUNGEON GOES THROUGH ITS `into` (the WLD-5 ruling, as
+// built). The Spire carrying its own entry is entered from anywhere in its
+// extent, straight through to the vestibule, and set down inside the doors.
+const SPIRE_HAS_INTO = "the world clone predates WLD-63 (a dungeon's own into)";
+const verbsHaveWld63 = HAVE && readFileSync(join(CLONE, "tools", "portals.mjs"), "utf8").includes("passageTargetOf");
+test("WLD-63: the Spire itself is a way in: entered from its far corner, through to the vestibule, set down inside the doors", { skip: SKIP || (!verbsHaveWld63 && SPIRE_HAS_INTO) }, async () => {
+  const o = await officeWith({ standing: { x: 1140, y: 1140 }, spireInto: true });
+  const a = await enterViaOffice(CLONE, { mark: SPIRE }, key("ann"), o.deps);
+  assert.equal(a.via, SPIRE);
+  assert.deepEqual(a.entered, [SPIRE, "spire/vestibule"]);
+  assert.equal(o.records[0].via, SPIRE, "the journal names the Spire as the way in");
+  assert.deepEqual(a.landed, { x: 860, y: 1000, mark: "spire/doors-inside", clamped: false, recorded: true });
+  assert.deepEqual(o.stops, [{ who: "ann", to: { x: 860, y: 1000 }, from: { x: 860, y: 1000 } }], "no walk to a door: set down at the landing");
+  // from outside its extent: the reach refusal, with the walk, nothing written
+  const far = await officeWith({ standing: { x: 800, y: 1180 }, spireInto: true });
+  await assert.rejects(() => enterViaOffice(CLONE, { mark: SPIRE }, key("ann"), far.deps),
+    (e) => e.code === 409 && /not at that portal/.test(e.defect) && e.walk?.mark === SPIRE);
+  assert.equal(far.written.length, 0);
+});
+
+test("WLD-63: the act door's rebuilt bounce carries a wrong pick's ways and a dungeon's ways in (they were dropped)", { skip: SKIP }, async () => {
+  const o = await officeWith({ standing: { x: 900, y: 1000 }, ledger: inTheVestibule });
+  const wrong = await enterViaOffice(CLONE, { mark: "spire/hall-door", into: "spire/chapel" }, key("ann"), o.deps).catch((e) => e);
+  assert.equal(wrong.code, 422);
+  const body = actCaught(wrong, { did: "enter" });
+  assert.deepEqual(body.choose.map((c) => c.id), ["spire/hall", "spire/the-approach"], "the picker can redraw from the bounce");
+  assert.equal(o.written.length, 0);
+  const shut = await officeWith({ standing: { x: 1000, y: 1000 } });
+  const refused = await enterViaOffice(CLONE, { mark: SPIRE }, key("ann"), shut.deps).catch((e) => e);
+  assert.equal(refused.code, 403);
+  const told = actCaught(refused, {});
+  assert.equal(told.dungeon, SPIRE);
+  assert.deepEqual(told.portals, ["spire/doors-outside"]);
+  assert.deepEqual(bounceExtras(refused), { dungeon: SPIRE, portals: ["spire/doors-outside"], law: "the-town/dungeon (WLD-5)" },
+    "the MCP door's rebuild reads the same list");
 });
 
 // THE EXIT, AS DARKO CHANGED IT AT 21:13. Until then this block asserted a 403

@@ -141,7 +141,7 @@ import { ARENA_TOOLS, ARENA_VERBS, arenaActViaOffice, arenaClosed } from "./aren
 // THE PORTAL GROUND'S OWN LAW outlived the arena: which room you stand in, its
 // stride and its spawn (src/portal-ground.mjs). Rides and vehicles are not this.
 import { cockpitPortal, groundAt, spawnPointFor } from "./portal-ground.mjs";
-import { caughtBounce, isHttpStatus, trippedError } from "./fault-words.mjs"; // the office's own words for its own fault (POS-573/578)
+import { bounceExtras, caughtBounce, isHttpStatus, trippedError } from "./fault-words.mjs"; // the office's own words for its own fault (POS-573/578)
 
 export const apexEnabled = () => process.env.WORLD_APEX === "1";
 
@@ -2703,17 +2703,14 @@ async function apexRead(args, key, ctx = {}) {
 // because the MCP door's answer classifies the code too).
 export function actCaught(e, done = {}) {
   if (!isHttpStatus(e.code)) return { ...caughtBounce(e), ...done }; // a foreign code (pg's SQLSTATE, Node's ENOENT): its words go to the log (fault-words.mjs § caughtBounce, POS-573)
-  // THE EXTRAS A CALLER READS ARE CARRIED, BY NAME, and this list is the
-  // whole reason to read it twice: this line REBUILDS the bounce, so a
-  // field the door underneath added and this list does not name is dropped
-  // here and reaches nobody. `choices` (which resident?) has ridden since
-  // the multi-resident bounce; `walk` joined 2026-09-11 with the enter
-  // door's reach refusal, because the world page's "walk there and enter"
-  // button reads `walk.mark` off THIS body — the apex is the door it calls.
-  // A value nothing can read is the quiet failure this office has a museum
-  // of; adding a field below without adding it here builds one.
-  return { ...bounce(e.code, e.defect, e.hint,
-    { ...(e.choices ? { choices: e.choices } : {}), ...(e.walk ? { walk: e.walk } : {}) }), ...done };
+  // THE EXTRAS A CALLER READS ARE CARRIED, BY NAME (fault-words.mjs §
+  // BOUNCE_EXTRAS, the one list): this line REBUILDS the bounce, so a field
+  // the door underneath added and that list does not name is dropped here and
+  // reaches nobody. The world page's "walk there and enter" button reads
+  // `walk.mark` off THIS body, and its door picker reads `choose`. A value
+  // nothing can read is the quiet failure this office has a museum of; adding
+  // a field below without adding it there builds one.
+  return { ...bounce(e.code, e.defect, e.hint, bounceExtras(e)), ...done };
 }
 
 async function apexDo(args, key, ctx = {}) {
