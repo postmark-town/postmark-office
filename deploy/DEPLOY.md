@@ -2218,3 +2218,25 @@ When the settlement takes a mark (no stamps behind it), the retire step now writ
 2. **Then deploy w43.** Then merge postmark-world#220 (the take reaches the 13 stale rows and the cone; G2), never before.
 3. **After the first real take,** the crossing's receipt says where each mark went: `retired.drafts.returned`, `kept` (the house already held a draft of it) and `unreturned` (named, with why). An `unreturned` row is a keeper's finding.
 4. **On `RETIRE REFUSED`** (the crossing still published), re-run the retire step against THAT crossing's sweep report before the next bless: `node world2/tools/retire-unpublished.mjs --sweep <that crossing's sweep.json>` under the clearing pen. The next sweep never names the mark again, and if marks-ingest retires it first it is retired as `marks-ingest`, with no draft and no note.
+
+## 077: every SECURITY DEFINER function searches pg_temp last (POS-579, the w43 ship)
+
+030's `arrival_heard_weekly` (the counts behind `GET /api/ops/heard`) said `SET search_path = public`, so Postgres searched the calling session's temp schema first: an `office_api` session could shadow `arrival_heard` with a TEMP table and the owner's function would count it. Nothing leaked (the function only answers counts of what it reads), but it is the class #482 closed for 073. 077 re-creates the function with `SET search_path = public, pg_temp` and `public.arrival_heard`, its body, result and grants unchanged, and then refuses (rolling back whole) if any SECURITY DEFINER function in `public` does not end its search_path with pg_temp. No code changes with it, so it can go before or after the w43 code. Box step (Wright's hand, never a lane's):
+
+1. **Apply 077 after 076,** away from the clearing (05:45:40 / 17:45:40Z) and the sweep (06:00 / 18:00Z). Same pipe as 073 above; idempotent, one transaction, under `lock_timeout = 5s`, so a blocked apply fails whole and is simply re-run:
+   ```sh
+   CLONE=G:/Postmark/repo-clones/wright/office; TAG=release/2026-w43   # the tag being shipped
+   git -C $CLONE fetch -q origin --tags
+   git -C $CLONE show "$TAG:world2/schema/077_definer_pg_temp_last.sql" | ssh meepo-ec2 'set -e
+     DB=$(sudo sed -n "s|^WORLD2_PG_URL=.*/\([^/?\"]*\).*|\1|p" /etc/postmark-office.env); echo "db: $DB"; test -n "$DB"
+     sudo -n -u postgres psql -q -v ON_ERROR_STOP=1 -d "$DB" -c "SET ROLE world2_owner;" -f -'
+   ```
+   Proof, on the box (the probe `world2/tools/migrations-landed.mjs` holds for 077, then every definer function's search path):
+   ```sh
+   DB=$(sudo sed -n 's|^WORLD2_PG_URL=.*/\([^/?"]*\).*|\1|p' /etc/postmark-office.env)
+   sudo -n -u postgres psql -d "$DB" -tAc "SELECT proname, proconfig FROM pg_proc WHERE prosecdef AND pronamespace = 'public'::regnamespace ORDER BY 1"
+   # arrival_heard_weekly|{"search_path=public, pg_temp"}
+   # berth_heard_land|{"search_path=public, pg_temp"}
+   # berth_heard_park|{"search_path=public, pg_temp"}
+   ```
+2. **If the apply refuses with `POS-579: these SECURITY DEFINER functions do not search pg_temp last: …`,** nothing was written: a definer function on the box that is not in `world2/schema` was found. Name it to Wright before anything else; it is a finding, not a step to skip.
