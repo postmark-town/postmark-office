@@ -505,15 +505,37 @@ export function blessedSha(repo) { return blessed(repo).sha; }
 // imports inside the modules keep working because the whole subtree is written
 // out together — which is why this copies a DIRECTORY rather than one file.
 const ENGINE_CACHE = join(tmpdir(), "postmark-engine");
+
+// THE PEEL, PAID ONCE (POS-654, 2026-10-15). The tag a blessing names (and any
+// name that is not a branch) was peeled by a synchronous `git rev-parse` on
+// EVERY call: ~107–110 ms of blocking work on the office thread, measured in the
+// playground, and every bare world read reaches here (markRecords →
+// groundMarkIds → engineImport → engineDir). A name is now peeled once per change
+// of the ref files that could move it (`remembered`, keyed by refStamp: the memo
+// `blessed` already uses), so a read pays it once per settlement or fetch. A full
+// sha names one object forever, so its peel is kept for good.
+const shaPeels = new Map();
+let peels = 0;
+/** Tests only: how many times a name was actually peeled by git. */
+export const __peelCount = () => peels;
+function peeledCommit(repo, ref) {
+  const peel = () => { peels += 1; return git(repo, ["rev-parse", `${ref}^{commit}`]).trim(); };
+  if (!/^[0-9a-f]{40}$/i.test(ref)) return remembered(`peel\u0000${ref}`, repo, peel);
+  const key = `${repo}\u0000${ref}`;
+  if (!shaPeels.has(key)) shaPeels.set(key, peel());
+  return shaPeels.get(key);
+}
+
 export function materializeAtRef(repo, ref, subdir, cacheRoot = ENGINE_CACHE) {
   // ^{commit}: a settlement tag is an ANNOTATED tag object, and a cache keyed on
   // the tag object rather than the commit it blesses would be keyed on a thing
   // no `git log` can find (settlements.mjs:120 learned the same lesson).
   // A branch or remote-tracking ref points at a commit already, so its sha comes
   // from git's own ref file (refShaFromDisk, the w39.14 relief) with no process;
-  // a tag still asks git, because a cache key must be the PEELED commit.
+  // a tag still asks git, because a cache key must be the PEELED commit, but
+  // once per change of the ref files, not per call (POS-654, peeledCommit).
   const onDisk = /^refs\/(heads|remotes)\//.test(ref) ? refShaFromDisk(repo, ref) : undefined;
-  const sha = onDisk || git(repo, ["rev-parse", `${ref}^{commit}`]).trim();
+  const sha = onDisk || peeledCommit(repo, ref);
   const dir = join(cacheRoot, `${sha}--${subdir.replace(/[^\w.-]/g, "_")}`);
   const stamp = join(dir, ".materialized");
   if (existsSync(stamp)) return dir;
