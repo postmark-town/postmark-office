@@ -1416,13 +1416,13 @@ export async function landAt(worldClone, { who, at, via = null, why, key = null,
   const exited = exit === true ? await exitWhatThisPointLeaves(worldClone, who, point, key) : [];
   const { fractionalCrossing } = await import(pathToFileURL(join(worldClone, "tools", "walk.mjs")));
   const crossing = fractionalCrossing();
-  const declaredAt = new Date().toISOString();
+  const landedAt = new Date().toISOString();   // ONE clock read (POS-198), carried into the act and the projection
   const { at: stampAt, witnesses } = await witnessStampAt(who, point);
-  const entry = landEntry({ crossing, who, at: point, via, why, household: household ?? (key ? resolvedWorldHousehold(key) : null), writtenAt: declaredAt, declaredBy: who });
+  const entry = landEntry({ crossing, who, at: point, via, why, household: household ?? (key ? resolvedWorldHousehold(key) : null), writtenAt: landedAt, declaredBy: who });
   entry.at = stampAt; entry.witnesses = witnesses;
   const row = laneFlipped("walk") ? await appendActFlipped(null, entry) : await appendJournal(null, entry);
   // THE PROJECTION, IN THE SAME STEP (POS-264), in the shape storedDepartures hands it back
-  if (worldClone === WORLD_CLONE) recordMoved({ actor: who, from: point, toward: point, crossing, at: declaredAt, within: null, toMark: null, declaredBy: who, pace: null, landed: { via, why: String(why) } });
+  if (worldClone === WORLD_CLONE) recordMoved({ actor: who, from: point, toward: point, crossing, at: landedAt, within: null, toMark: null, declaredBy: who, pace: null, landed: { via, why: String(why) } });
   return { at: point, via, why, recorded: true, ...(exited.length ? { exited } : {}), ...(row?.seq != null ? { seq: row.seq } : {}) };
 }
 
