@@ -388,7 +388,7 @@ test("THE REACH AT ARRIVAL is the ordinary one, from where the walker really sta
 test("[pin] the line rides the walker's own standpoint (every read) and their doorstep's world block, and nothing else (G3)", async () => {
   const { readFileSync } = await import("node:fs");
   const src = readFileSync(new URL("../src/world.mjs", import.meta.url), "utf8");
-  assert.match(src, /const arrival = choice\.handle \? await \(await import\("\.\/arrival-entries\.mjs"\)\)\.arrivalLineFor\(choice\.handle\)\.catch\(\(\) => \(\{\}\)\) : \{\};\n  return \{ standpoint: \{ \.\.\.at, stance: choice\.stance, \.\.\.arrival \},/,
+  assert.match(src, /const arrival = choice\.handle \? await \(await import\("\.\/arrival-entries\.mjs"\)\)\.arrivalLineFor\(choice\.handle\)\.catch\(\(\) => \(\{\}\)\) : \{\};\n  const out = \{ standpoint: \{ \.\.\.at, stance: choice\.stance, \.\.\.arrival \},/,
     "worldOrient: a spectator's glance (coords, no handle) carries nobody's line");
   const block = src.slice(src.indexOf("export async function worldBlockForHandle("), src.indexOf("async function doorstepTransportFor("));
   assert.match(block, /const arrival = await \(await import\("\.\/arrival-entries\.mjs"\)\)\.arrivalLineFor\(handle\)/);
