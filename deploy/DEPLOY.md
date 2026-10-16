@@ -2217,6 +2217,7 @@ The bare read an MCP caller gets at each door is set by one variable per door in
    sudo -n -u postgres psql -d "$DB" -tAc "SELECT string_agg(privilege_type, ',' ORDER BY privilege_type) FROM information_schema.role_table_grants WHERE table_name = 'arrival_entries' AND grantee = 'office_api'"   # INSERT,SELECT,UPDATE
    ```
 2. **After the w43 code,** the office logs `[arrivals] …` when its tick settles a due row; `ARRIVAL_TICK=off` in the office env is the operator's door if it must stop.
+3. **A rollback to w42 strands the queue.** w42 has no arrival tick (`src/arrival-entries.mjs § arrivalTick` is w43's), so every row still unsettled in `arrival_entries` stays queued and its walker is never entered: they enter by hand when they get there. The rows are harmless and stay; on the next w43 deploy the tick settles each one, entered if its walk is still the walker's current departure, overtaken if a later walk replaced it (`src/arrival-entries.mjs`'s own rules). Count what a rollback would strand first: `sudo -n -u postgres psql -d "$DB" -tAc "SELECT count(*) FROM arrival_entries WHERE settled_at IS NULL"`.
 
 ## 075: the store records which settlement carried each door amend (POS-612, the w43 ship)
 
@@ -2238,12 +2239,46 @@ A mark's receipt named only the settlement that FIRST carried it, so an amended 
    sudo -n -u postgres psql -d "$DB" -tAc "SELECT to_regclass('public.amend_carried') IS NOT NULL"   # t
    sudo -n -u postgres psql -d "$DB" -tAc "SELECT count(*) FROM amend_carried WHERE issue = 'POS-446'"   # 5
    ```
-2. **The history, written and audited BEFORE the w43 code** (POS-612's own box steps, in its order: review-612 F3). The keep tick writes at most 200 rows (`TICK_CAP`) and skips with `the one-time history has not run` past that, so the history is a hand step. Run `world2/tools/amend-carried.mjs` from the w43 tag's code, never from `/srv/postmark-office` while it still runs w42, with the env the keep unit runs `settlements-backfill.mjs` with (`/etc/postmark-office.env`: `WORLD2_PG_URL`, `WORLD_CLONE`):
-   - dry run: `node world2/tools/amend-carried.mjs --world-repo "$WORLD_CLONE"`. It lists every unproven, unsettled and POS-446 amend, and the count of proven ones (about 118 of 126 door amends on the 10-14 count);
-   - hand-audit the proven rows: each named settlement's file holds the amend (`git -C "$WORLD_CLONE" show settlement/S<n>:<path>` carries the claim's `date`). An amend that drops out shows as unproven: a person's finding, never a row;
-   - apply: `node world2/tools/amend-carried.mjs --world-repo "$WORLD_CLONE" --apply --prod`;
-   - verify: `node world2/tools/amend-carried.mjs --world-repo "$WORLD_CLONE" --verify`. Expect EQUAL, with 5 by hand.
+2. **The history, listed, audited and written BEFORE the w43 code** (POS-612's own box steps, in its order: review-612 F3). WHY BEFORE: about 118 door amends are proven and have no row, which is under the keep tick's 200-row cap (`TICK_CAP`), so the w43 keep tick would write them all itself on its first run, unaudited, if the code went first. The audit has to come first, so the history is a hand step. `world2/tools/amend-carried.mjs` imports `pg` and the office's own `src/` (`src/world-journal.mjs`, `src/settlements.mjs`), so it runs from a staged w43 tree with its own `node_modules`, never from `/srv/postmark-office` while that still runs w42, and never as a pipe from the tag.
+   - **Stage the w43 tree on the box, once** (from Wright's machine, Git bash). `/srv/postmark-office-w43-stage` is a new directory beside the office, and the step refuses one that already holds anything:
+     ```sh
+     CLONE=G:/Postmark/repo-clones/wright/office; TAG=release/2026-w43   # the tag being shipped
+     git -C $CLONE fetch -q origin --tags
+     git -C $CLONE archive --format=tar "$TAG" | ssh meepo-ec2 'set -e; S=/srv/postmark-office-w43-stage
+       sudo install -d -o meepo -g meepo -m 0755 "$S"; test -z "$(sudo ls -A "$S")"
+       sudo -u meepo tar -x -C "$S"
+       cd "$S" && sudo -u meepo npm ci --omit=dev --no-audit --no-fund'
+     ```
+     It holds the tag's tree and its production `node_modules` and nothing else: no clone, no `.db`, no env. It needs the network for `npm ci`, as the deploy does.
+   - **The dry run, listing every proven row** (`--list`: settlement, mark and claim, one line each, the rows `--apply` will write; the other lines name each amend that gets none):
+     ```sh
+     ssh meepo-ec2
+     sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; cd /srv/postmark-office-w43-stage && exec runuser -u meepo -- node world2/tools/amend-carried.mjs --world-repo "$WORLD_CLONE" --list'
+     #   new        S104  keith/<the stool's slug>  claim <uuid>  candle 244      <- one line per proven row
+     #   unproven   <mark> candle <w> → S<n> (S<n-1>..S<n> did not change the file)
+     #   amends: wrote 0 ...; ... · no row: unproven N, unsettled N, POS-446 owed 0
+     ```
+   - **The hand audit, of those `new` lines:** each named settlement's file holds that claim's amend. `git -C "$WORLD_CLONE" show settlement/S<n>:<the mark's file>` carries the claim's own `date` (`SELECT data->>'date' FROM claims WHERE id = '<claim>'` as the owner). Expect about 118 of 126 door amends on the 10-14 count. An amend you cannot confirm is a person's finding: stop, and do not apply.
+   - **Note the time, then apply** (the undo below needs the start instant):
+     ```sh
+     date -u +%Y-%m-%dT%H:%M:%SZ      # write it down: the apply's start, UTC
+     sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; cd /srv/postmark-office-w43-stage && exec runuser -u meepo -- node world2/tools/amend-carried.mjs --world-repo "$WORLD_CLONE" --apply --prod --list'
+     #   the same new lines, and: amends: wrote N (S..: n, ...); the table holds N+5
+     ```
+   - **Verify:**
+     ```sh
+     sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; cd /srv/postmark-office-w43-stage && exec runuser -u meepo -- node world2/tools/amend-carried.mjs --world-repo "$WORLD_CLONE" --verify'
+     #   EQUAL: N row(s) re-proved by git; 5 carried by hand (the table holds N+5)
+     ```
+   - **Undo, if the audit or the verify says no, and only BEFORE the w43 code is deployed:** the rows the apply wrote are the ones with no `by_hand` since its start. As the owner:
+     ```sh
+     DB=$(sudo sed -n 's|^WORLD2_PG_URL=.*/\([^/?"]*\).*|\1|p' /etc/postmark-office.env)
+     sudo -n -u postgres psql -v ON_ERROR_STOP=1 -d "$DB" -c "SET ROLE world2_owner;" -c "DELETE FROM amend_carried WHERE by_hand IS NULL AND recorded_at >= '<the apply's start, UTC>'"
+     ```
+     That is clean while w42 runs, because only the w43 receipts read `last_amended` (`src/mark-receipt.mjs`, the w43 reader); POS-446's five (`by_hand` set) stay. After the w43 code a row has been read by residents, and a wrong one is a finding, not a delete.
+   - The stage directory is not the office: leave it until the ship is done, then remove it by hand (`/srv/postmark-office-w43-stage`, one named path).
 3. **After the w43 code,** the keep tick writes each new amend's row within one tick of its blessing (the `amends:` line in the office-keep journal), and keith's stool's receipt names S104. Three ticks that are not ok alarm through the sentinel.
+4. **Then regenerate the MCP roster** (POS-612's step 8): `node tools/mcp-roster.mjs` on a checkout of the shipped tag where the class store loads, and commit the regenerated `docs/MCP-ROSTER.md`.
 
 ## 076: a taken mark goes back to its household's drafts, and the store says why it left (WLD-51, the w43 ship)
 

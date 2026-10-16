@@ -52,7 +52,7 @@ import { fileURLToPath } from "node:url";
 import { startStore } from "./helpers/embedded-store.mjs";
 import {
   planAmendsCarried, proofFrom, holdsAmend, markFileParts, recordAmendsCarried, verifyAmendsCarried, amendsLine, isDoorAmend,
-  HAND_CARRIED, TICK_CAP,
+  HAND_CARRIED, TICK_CAP, proposedLines,
 } from "../world2/tools/amend-carried.mjs";
 import { amendsOnTick, softStepStatus } from "../world2/tools/settlements-backfill.mjs";
 import { SOFT_STEPS, STEPS, buildReceipt, appendReceipt, judgeKeep } from "../deploy/keep-history.mjs";
@@ -122,6 +122,20 @@ const proves = (yes) => () => yes;
 test("plan: the lowest settlement whose window is at or after the amend's, written only when proven", () => {
   const plan = planAmendsCarried({ amends: [amend()], settlements: SETTLED, proof: proves(true) });
   assert.deepEqual(plan, [{ claim: "a", mark: STOOL, window: 103, state: "new", settlement: 3 }], "window 103 had no settlement; S3 closed 104");
+});
+
+test("--list's lines: every proven row, by settlement then mark, with its claim; no other state is listed (POS-579 follow-up)", () => {
+  const plan = [
+    { claim: "c2", mark: "z/two", window: 103, state: "new", settlement: 6 },
+    { claim: "c1", mark: "a/one", window: 102, state: "new", settlement: 3 },
+    { claim: "c3", mark: "b/unproven", window: 102, state: "unproven", candidate: 3, prev: 2 },
+    { claim: "c4", mark: "c/late", window: 120, state: "unsettled" },
+  ];
+  assert.deepEqual(proposedLines(plan), [
+    "  new        S3  a/one  claim c1  candle 102",
+    "  new        S6  z/two  claim c2  candle 103",
+  ]);
+  assert.deepEqual(proposedLines([]), []);
 });
 
 test("plan: an unproven candidate is named with its settlement and gets no row", () => {
@@ -245,6 +259,25 @@ async function seed() {
 
 test("FRESH STORE: 075 applied on empty claims writes no POS-446 row", { skip }, async () => {
   assert.deepEqual(await rowsNow(), []);
+});
+
+test("--list on the dry run names each row --apply would write (settlement, mark, claim) and writes nothing; --list with --verify is refused", { skip }, async () => {
+  await seed();
+  const cli = (...a) => spawnSync(process.execPath, ["world2/tools/amend-carried.mjs", "--world-repo", world, "--pg-url", store.url("office_api"), ...a],
+    { cwd: OFFICE, encoding: "utf8", env: { ...process.env, PGUSER: "", WORLD2_PG_URL: "" }, timeout: 120000 });
+  const dry = cli("--list");
+  assert.equal(dry.status, 0, dry.stderr);
+  const listed = dry.stdout.split("\n").filter((l) => l.startsWith("  new "));
+  assert.deepEqual(listed, [`  new        S3  ${STOOL}  claim ${C.stoolA}  candle 103`, `  new        S6  ${STOOL}  claim ${C.stoolB}  candle 107`]);
+  assert.match(dry.stdout, /unproven\s+lupi\/the-step candle 102 → S2/, "the rows that get none are still named");
+  assert.deepEqual(await rowsNow(), [], "a dry run writes nothing");
+  const plain = cli();
+  assert.equal(plain.stdout.split("\n").some((l) => l.startsWith("  new ")), false, "without --list the dry run is as it was");
+  const asJson = JSON.parse(cli("--list", "--json").stdout);
+  assert.deepEqual(asJson.proposed, [{ settlement: 3, mark: STOOL, claim: C.stoolA, window: 103 }, { settlement: 6, mark: STOOL, claim: C.stoolB, window: 107 }]);
+  const both = cli("--list", "--verify");
+  assert.equal(both.status, 2);
+  assert.match(both.stderr, /ask one/);
 });
 
 test("APPLY writes the proven amends and nothing else; the migration-touched candidate is named unproven", { skip }, async () => {
