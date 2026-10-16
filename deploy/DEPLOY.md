@@ -2217,7 +2217,11 @@ The bare read an MCP caller gets at each door is set by one variable per door in
    sudo -n -u postgres psql -d "$DB" -tAc "SELECT string_agg(privilege_type, ',' ORDER BY privilege_type) FROM information_schema.role_table_grants WHERE table_name = 'arrival_entries' AND grantee = 'office_api'"   # INSERT,SELECT,UPDATE
    ```
 2. **After the w43 code,** the office logs `[arrivals] …` when its tick settles a due row; `ARRIVAL_TICK=off` in the office env is the operator's door if it must stop.
-3. **A rollback to w42 strands the queue.** w42 has no arrival tick (`src/arrival-entries.mjs § arrivalTick` is w43's), so every row still unsettled in `arrival_entries` stays queued and its walker is never entered: they enter by hand when they get there. The rows are harmless and stay; on the next w43 deploy the tick settles each one, entered if its walk is still the walker's current departure, overtaken if a later walk replaced it (`src/arrival-entries.mjs`'s own rules). Count what a rollback would strand first: `sudo -n -u postgres psql -d "$DB" -tAc "SELECT count(*) FROM arrival_entries WHERE settled_at IS NULL"`.
+3. **A rollback to w42 strands the queue.** w42 has no arrival tick (`src/arrival-entries.mjs § arrivalTick` is w43's), so every row still unsettled in `arrival_entries` stays queued and its walker is never entered: they enter by hand when they get there. The rows are harmless and stay; on the next w43 deploy the tick settles each one, entered if its walk is still the walker's current departure, overtaken if a later walk replaced it, and `already` if the walker entered by hand during the rollback (`src/arrival-entries.mjs`'s own rules). Count what a rollback would strand first, on the box:
+   ```sh
+   DB=$(sudo sed -n 's|^WORLD2_PG_URL=.*/\([^/?"]*\).*|\1|p' /etc/postmark-office.env)
+   sudo -n -u postgres psql -d "$DB" -tAc "SELECT count(*) FROM arrival_entries WHERE settled_at IS NULL"
+   ```
 
 ## 075: the store records which settlement carried each door amend (POS-612, the w43 ship)
 
@@ -2245,9 +2249,10 @@ A mark's receipt named only the settlement that FIRST carried it, so an amended 
      CLONE=G:/Postmark/repo-clones/wright/office; TAG=release/2026-w43   # the tag being shipped
      git -C $CLONE fetch -q origin --tags
      git -C $CLONE archive --format=tar "$TAG" | ssh meepo-ec2 'set -e; S=/srv/postmark-office-w43-stage
+       df -h /srv    # the tree and its node_modules: check the room first
        sudo install -d -o meepo -g meepo -m 0755 "$S"; test -z "$(sudo ls -A "$S")"
        sudo -u meepo tar -x -C "$S"
-       cd "$S" && sudo -u meepo npm ci --omit=dev --no-audit --no-fund'
+       cd "$S" && sudo -H -u meepo npm ci --omit=dev --no-audit --no-fund'
      ```
      It holds the tag's tree and its production `node_modules` and nothing else: no clone, no `.db`, no env. It needs the network for `npm ci`, as the deploy does.
    - **The dry run, listing every proven row** (`--list`: settlement, mark and claim, one line each, the rows `--apply` will write; the other lines name each amend that gets none):
@@ -2258,7 +2263,17 @@ A mark's receipt named only the settlement that FIRST carried it, so an amended 
      #   unproven   <mark> candle <w> → S<n> (S<n-1>..S<n> did not change the file)
      #   amends: wrote 0 ...; ... · no row: unproven N, unsettled N, POS-446 owed 0
      ```
-   - **The hand audit, of those `new` lines:** each named settlement's file holds that claim's amend. `git -C "$WORLD_CLONE" show settlement/S<n>:<the mark's file>` carries the claim's own `date` (`SELECT data->>'date' FROM claims WHERE id = '<claim>'` as the owner). Expect about 118 of 126 door amends on the 10-14 count. An amend you cannot confirm is a person's finding: stop, and do not apply.
+   - **The hand audit, of those `new` lines:** each named settlement's file holds that claim's amend. For a line `new S<n> <slug> claim <claim>`, on the box (the world clone is meepo's, and `WORLD_CLONE` lives only in the office's env, so both git reads go through the same wrapper):
+     ```sh
+     # 1. the mark's file at that settlement (--list names the slug, not the path)
+     sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; exec runuser -u meepo -- git -C "$WORLD_CLONE" ls-tree -r --name-only settlement/S<n>' | grep -F '<slug>'
+     # 2. the file itself, at that path: its `date:` line
+     sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; exec runuser -u meepo -- git -C "$WORLD_CLONE" show settlement/S<n>:<path>'
+     # 3. the claim's own date, from the store the office reads
+     DB=$(sudo sed -n 's|^WORLD2_PG_URL=.*/\([^/?"]*\).*|\1|p' /etc/postmark-office.env)
+     sudo -n -u postgres psql -d "$DB" -tAc "SELECT data->>'date' FROM claims WHERE id = '<claim>'"
+     ```
+     The file's `date:` is the claim's date. Expect about 118 of 126 door amends on the 10-14 count. An amend you cannot confirm is a person's finding: stop, and do not apply.
    - **Note the time, then apply** (the undo below needs the start instant):
      ```sh
      date -u +%Y-%m-%dT%H:%M:%SZ      # write it down: the apply's start, UTC
@@ -2273,6 +2288,8 @@ A mark's receipt named only the settlement that FIRST carried it, so an amended 
    - **Undo, if the audit or the verify says no, and only BEFORE the w43 code is deployed:** the rows the apply wrote are the ones with no `by_hand` since its start. As the owner:
      ```sh
      DB=$(sudo sed -n 's|^WORLD2_PG_URL=.*/\([^/?"]*\).*|\1|p' /etc/postmark-office.env)
+     # first, the count: it must equal the apply's "wrote N". If it does not, stop: something else wrote rows since
+     sudo -n -u postgres psql -d "$DB" -tAc "SELECT count(*) FROM amend_carried WHERE by_hand IS NULL AND recorded_at >= '<the apply's start, UTC>'"
      sudo -n -u postgres psql -v ON_ERROR_STOP=1 -d "$DB" -c "SET ROLE world2_owner;" -c "DELETE FROM amend_carried WHERE by_hand IS NULL AND recorded_at >= '<the apply's start, UTC>'"
      ```
      That is clean while w42 runs, because only the w43 receipts read `last_amended` (`src/mark-receipt.mjs`, the w43 reader); POS-446's five (`by_hand` set) stay. After the w43 code a row has been read by residents, and a wrong one is a finding, not a delete.
