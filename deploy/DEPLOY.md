@@ -2198,6 +2198,105 @@ The bare read an MCP caller gets at each door is set by one variable per door in
 2. **An office on the new code before 073** still parks every declaration and admits every co-sign: the park and the landing are best-effort, and each miss logs one `[arrival-heard] … not parked` or `… not kept` line. Answers given in that window are not kept.
 3. **To read it later:** the counts arrive through `GET /api/ops/heard` as before, now including berth arrivals. An operator reads a parked answer, or a kept note, at psql as the owner, and nowhere else.
 
+## 074: a walk's "enter on arrival" waits in a queue until the walker arrives (WLD-5, POS-618, the w43 ship)
+
+`walk { mark_id, enter_on_arrival: true }` used to write the entry's rows at departure, stamped with the arrival crossing: 49 of the ledger's 52 backward ferry steps (POS-618). Now the walk queues one row in `arrival_entries`, keyed to the walk act, and the office's arrival tick (`src/arrival-entries.mjs`) runs the ordinary enter when the walk arrives, settling the row once (Darko, WLD-5, 2026-10-14). 074 adds the table, its settle-once trigger (no DELETE, a settled row never changes, the intent's columns never change) and `office_api`'s SELECT, INSERT and UPDATE. Box step (Wright's hand, never a lane's):
+
+1. **Apply 074 first of the w43 migrations, BEFORE the w43 code.** On a store without it the w43 walk still lands, but its queue INSERT fails and the answer says the entry was not queued, so every `enter_on_arrival` in that window is lost. It creates a new table only (no lock on a busy one). Same pipe as 073 above; idempotent:
+   ```sh
+   CLONE=G:/Postmark/repo-clones/wright/office; TAG=release/2026-w43   # the tag being shipped
+   git -C $CLONE fetch -q origin --tags
+   git -C $CLONE show "$TAG:world2/schema/074_arrival_entries.sql" | ssh meepo-ec2 'set -e
+     DB=$(sudo sed -n "s|^WORLD2_PG_URL=.*/\([^/?\"]*\).*|\1|p" /etc/postmark-office.env); echo "db: $DB"; test -n "$DB"
+     sudo -n -u postgres psql -q -v ON_ERROR_STOP=1 -d "$DB" -c "SET ROLE world2_owner;" -f -'
+   ```
+   Proof, on the box (the probe `world2/tools/migrations-landed.mjs` holds for 074, then the pen's grants):
+   ```sh
+   DB=$(sudo sed -n 's|^WORLD2_PG_URL=.*/\([^/?"]*\).*|\1|p' /etc/postmark-office.env)
+   sudo -n -u postgres psql -d "$DB" -tAc "SELECT to_regclass('public.arrival_entries') IS NOT NULL AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'arrival_entries_settle_once')"   # t
+   sudo -n -u postgres psql -d "$DB" -tAc "SELECT string_agg(privilege_type, ',' ORDER BY privilege_type) FROM information_schema.role_table_grants WHERE table_name = 'arrival_entries' AND grantee = 'office_api'"   # INSERT,SELECT,UPDATE
+   ```
+2. **After the w43 code,** the office logs `[arrivals] …` when its tick settles a due row; `ARRIVAL_TICK=off` in the office env is the operator's door if it must stop.
+3. **A rollback to w42 strands the queue.** w42 has no arrival tick (`src/arrival-entries.mjs § arrivalTick` is w43's), so every row still unsettled in `arrival_entries` stays queued and its walker is never entered: they enter by hand when they get there. The rows are harmless and stay; on the next w43 deploy the tick settles each one, entered if its walk is still the walker's current departure, overtaken if a later walk replaced it, and `already` if the walker entered by hand during the rollback (`src/arrival-entries.mjs`'s own rules). Count what a rollback would strand first, on the box:
+   ```sh
+   DB=$(sudo sed -n 's|^WORLD2_PG_URL=.*/\([^/?"]*\).*|\1|p' /etc/postmark-office.env)
+   sudo -n -u postgres psql -d "$DB" -tAc "SELECT count(*) FROM arrival_entries WHERE settled_at IS NULL"
+   ```
+
+## 075: the store records which settlement carried each door amend (POS-612, the w43 ship)
+
+A mark's receipt named only the settlement that FIRST carried it, so an amended mark kept saying "published at S<first>" (keith's stool, amended at S104, still read S65). 075 adds `amend_carried`, `mark_carried`'s sibling for every later version a resident put forward at the door: one row per door amend, written by `world2/tools/amend-carried.mjs` on the keep tick only when git proves the settlement carried that amend. It also writes POS-446's five hand-carried amends itself (S100, commit `10e5b194`). Box step (Wright's hand, never a lane's):
+
+1. **Apply 075 after 074, BEFORE the w43 code** (076 then follows it). The code reads it, but tolerates its absence: without 075 a receipt says `amends: … 075 not applied` and the keep tick's amend step reports `no amend_carried table yet`. Its foreign keys onto `claims` and `settlements` take SHARE ROW EXCLUSIVE until COMMIT, so door writes on claims queue behind it: apply away from the clearing (05:45:40 / 17:45:40Z) and the sweep (06:00 / 18:00Z). Same pipe as 073 above; idempotent, under `lock_timeout = 5s`, so a blocked apply fails whole and is simply re-run:
+   ```sh
+   CLONE=G:/Postmark/repo-clones/wright/office; TAG=release/2026-w43   # the tag being shipped
+   git -C $CLONE fetch -q origin --tags
+   git -C $CLONE show "$TAG:world2/schema/075_amend_carried.sql" | ssh meepo-ec2 'set -e
+     DB=$(sudo sed -n "s|^WORLD2_PG_URL=.*/\([^/?\"]*\).*|\1|p" /etc/postmark-office.env); echo "db: $DB"; test -n "$DB"
+     sudo -n -u postgres psql -q -v ON_ERROR_STOP=1 -d "$DB" -c "SET ROLE world2_owner;" -f -'
+   ```
+   On prod the apply prints no `amend_carried: no door amend for …` notice: that notice means this store does not hold one of POS-446's five claims, which only a suite, pglite or the sandbox should say. A `RAISE` (two amends for one mark, or settlement 100 missing) rolls it back whole: a finding for Wright.
+
+   Proof, on the box (the probe `world2/tools/migrations-landed.mjs` holds for 075, then 075's own ship check):
+   ```sh
+   DB=$(sudo sed -n 's|^WORLD2_PG_URL=.*/\([^/?"]*\).*|\1|p' /etc/postmark-office.env)
+   sudo -n -u postgres psql -d "$DB" -tAc "SELECT to_regclass('public.amend_carried') IS NOT NULL"   # t
+   sudo -n -u postgres psql -d "$DB" -tAc "SELECT count(*) FROM amend_carried WHERE issue = 'POS-446'"   # 5
+   ```
+2. **The history, listed, audited and written BEFORE the w43 code** (POS-612's own box steps, in its order: review-612 F3). WHY BEFORE: about 118 door amends are proven and have no row, which is under the keep tick's 200-row cap (`TICK_CAP`), so the w43 keep tick would write them all itself on its first run, unaudited, if the code went first. The audit has to come first, so the history is a hand step. `world2/tools/amend-carried.mjs` imports `pg` and the office's own `src/` (`src/world-journal.mjs`, `src/settlements.mjs`), so it runs from a staged w43 tree with its own `node_modules`, never from `/srv/postmark-office` while that still runs w42, and never as a pipe from the tag.
+   - **Stage the w43 tree on the box, once** (from Wright's machine, Git bash). `/srv/postmark-office-w43-stage` is a new directory beside the office, and the step refuses one that already holds anything:
+     ```sh
+     CLONE=G:/Postmark/repo-clones/wright/office; TAG=release/2026-w43   # the tag being shipped
+     git -C $CLONE fetch -q origin --tags
+     git -C $CLONE archive --format=tar "$TAG" | ssh meepo-ec2 'set -e; S=/srv/postmark-office-w43-stage
+       df -h /srv    # the tree and its node_modules: check the room first
+       sudo install -d -o meepo -g meepo -m 0755 "$S"; test -z "$(sudo ls -A "$S")"
+       sudo -u meepo tar -x -C "$S"
+       cd "$S" && sudo -H -u meepo npm ci --omit=dev --no-audit --no-fund'
+     ```
+     It holds the tag's tree and its production `node_modules` and nothing else: no clone, no `.db`, no env. It needs the network for `npm ci`, as the deploy does.
+   - **The dry run, listing every proven row** (`--list`: settlement, mark and claim, one line each, the rows `--apply` will write; the other lines name each amend that gets none):
+     ```sh
+     ssh meepo-ec2
+     sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; cd /srv/postmark-office-w43-stage && exec runuser -u meepo -- node world2/tools/amend-carried.mjs --world-repo "$WORLD_CLONE" --list'
+     #   new        S104  keith/<the stool's slug>  claim <uuid>  candle 244      <- one line per proven row
+     #   unproven   <mark> candle <w> → S<n> (S<n-1>..S<n> did not change the file)
+     #   amends: wrote 0 ...; ... · no row: unproven N, unsettled N, POS-446 owed 0
+     ```
+   - **The hand audit, of those `new` lines:** each named settlement's file holds that claim's amend. For a line `new S<n> <slug> claim <claim>`, on the box (the world clone is meepo's, and `WORLD_CLONE` lives only in the office's env, so both git reads go through the same wrapper):
+     ```sh
+     # 1. the mark's file at that settlement (--list names the slug, not the path)
+     sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; exec runuser -u meepo -- git -C "$WORLD_CLONE" ls-tree -r --name-only settlement/S<n>' | grep -F '<slug>'
+     # 2. the file itself, at that path: its `date:` line
+     sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; exec runuser -u meepo -- git -C "$WORLD_CLONE" show settlement/S<n>:<path>'
+     # 3. the claim's own date, from the store the office reads
+     DB=$(sudo sed -n 's|^WORLD2_PG_URL=.*/\([^/?"]*\).*|\1|p' /etc/postmark-office.env)
+     sudo -n -u postgres psql -d "$DB" -tAc "SELECT data->>'date' FROM claims WHERE id = '<claim>'"
+     ```
+     The file's `date:` is the claim's date. Expect about 118 of 126 door amends on the 10-14 count. An amend you cannot confirm is a person's finding: stop, and do not apply.
+   - **Note the time, then apply** (the undo below needs the start instant):
+     ```sh
+     date -u +%Y-%m-%dT%H:%M:%SZ      # write it down: the apply's start, UTC
+     sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; cd /srv/postmark-office-w43-stage && exec runuser -u meepo -- node world2/tools/amend-carried.mjs --world-repo "$WORLD_CLONE" --apply --prod --list'
+     #   the same new lines, and: amends: wrote N (S..: n, ...); the table holds N+5
+     ```
+   - **Verify:**
+     ```sh
+     sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; cd /srv/postmark-office-w43-stage && exec runuser -u meepo -- node world2/tools/amend-carried.mjs --world-repo "$WORLD_CLONE" --verify'
+     #   EQUAL: N row(s) re-proved by git; 5 carried by hand (the table holds N+5)
+     ```
+   - **Undo, if the audit or the verify says no, and only BEFORE the w43 code is deployed:** the rows the apply wrote are the ones with no `by_hand` since its start. As the owner:
+     ```sh
+     DB=$(sudo sed -n 's|^WORLD2_PG_URL=.*/\([^/?"]*\).*|\1|p' /etc/postmark-office.env)
+     # first, the count: it must equal the apply's "wrote N". If it does not, stop: something else wrote rows since
+     sudo -n -u postgres psql -d "$DB" -tAc "SELECT count(*) FROM amend_carried WHERE by_hand IS NULL AND recorded_at >= '<the apply's start, UTC>'"
+     sudo -n -u postgres psql -v ON_ERROR_STOP=1 -d "$DB" -c "SET ROLE world2_owner;" -c "DELETE FROM amend_carried WHERE by_hand IS NULL AND recorded_at >= '<the apply's start, UTC>'"
+     ```
+     That is clean while w42 runs, because only the w43 receipts read `last_amended` (`src/mark-receipt.mjs`, the w43 reader); POS-446's five (`by_hand` set) stay. After the w43 code a row has been read by residents, and a wrong one is a finding, not a delete.
+   - The stage directory is not the office: leave it until the ship is done, then remove it by hand (`/srv/postmark-office-w43-stage`, one named path).
+3. **After the w43 code,** the keep tick writes each new amend's row within one tick of its blessing (the `amends:` line in the office-keep journal), and keith's stool's receipt names S104. Three ticks that are not ok alarm through the sentinel.
+4. **Then regenerate the MCP roster** (POS-612's step 8): `node tools/mcp-roster.mjs` on a checkout of the shipped tag where the class store loads, and commit the regenerated `docs/MCP-ROSTER.md`.
+
 ## 076: a taken mark goes back to its household's drafts, and the store says why it left (WLD-51, the w43 ship)
 
 When the settlement takes a mark (no stamps behind it), the retire step now writes it back to its household as a private draft at ✦0, in the same transaction, and the doorstep and needs-you carry a 7-day note (Darko, WLD-51 G1 and G3, 2026-10-15). 076 adds `marks.retired_cause` and lets `clearing_job` insert exactly that draft, bound in its trigger to the mark's owner, house and take window, once per take. Box steps (Wright's hand, never a lane's), in this order:

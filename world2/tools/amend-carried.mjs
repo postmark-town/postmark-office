@@ -1,7 +1,13 @@
 #!/usr/bin/env node
 // amend-carried.mjs — WHICH SETTLEMENT CARRIED EACH DOOR AMEND (POS-612, 075).
 //
-//   node world2/tools/amend-carried.mjs --world-repo <checkout> [--apply [--prod] | --verify] [--json]
+//   node world2/tools/amend-carried.mjs --world-repo <checkout> [--apply [--prod] | --verify] [--list] [--json]
+//
+//   --list   also prints every PROVEN row, one line each: the settlement, the
+//            mark and the claim (dry run: the rows --apply would write; with
+//            --apply: the rows it wrote). The dry run's other lines name only
+//            the amends that get no row, so --list is what a person audits
+//            before --apply --prod (DEPLOY.md § 075). With --json, `proposed`.
 //
 //   env: PG* or --pg-url or WORLD2_PG_URL, the office's own connection (075's pen
 //        is `office_api`, as 049's is).
@@ -265,6 +271,13 @@ export async function verifyAmendsCarried(client, repo, { proof = null } = {}) {
   return { rows: rows.length, hand: rows.length - compared, compared, verdict: disagree.length ? "DRIFT" : "ok", disagree };
 }
 
+/** The proven rows of a plan, one audit line each: what --apply writes (or wrote). */
+export function proposedLines(plan = []) {
+  return plan.filter((p) => p.state === "new")
+    .sort((a, b) => a.settlement - b.settlement || (a.mark < b.mark ? -1 : a.mark > b.mark ? 1 : 0))
+    .map((p) => `  new        S${p.settlement}  ${p.mark}  claim ${p.claim}  candle ${p.window}`);
+}
+
 /** The one line a tick journals. */
 export function amendsLine(r) {
   if (r.verdict === "skipped") return `amends: SKIPPED — ${r.why}`;
@@ -280,8 +293,9 @@ export function amendsLine(r) {
 if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split(/[\\/]/).pop())) {
   const arg = (k, d = null) => { const i = process.argv.indexOf(`--${k}`); return i === -1 ? d : process.argv[i + 1]; };
   const flag = (k) => process.argv.includes(`--${k}`);
-  const apply = flag("apply"), verify = flag("verify"), json = flag("json");
+  const apply = flag("apply"), verify = flag("verify"), json = flag("json"), list = flag("list");
   if (apply && verify) { console.error("--apply and --verify are two different questions; ask one"); process.exit(2); }
+  if (list && verify) { console.error("--list names the rows a plan proves; --verify re-proves the table: ask one"); process.exit(2); }
   const mode = apply ? "APPLY" : verify ? "VERIFY" : "dry-run";
 
   const repoArg = arg("world-repo");
@@ -323,6 +337,7 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split(/[\\/]/).p
     } else {
       out = await recordAmendsCarried(client, repo, { apply });
       if (!json) {
+        if (list) for (const line of proposedLines(out.plan)) console.log(line);
         for (const p of (out.plan ?? []).filter((x) => x.state !== "new"))
           console.log(`  ${p.state.padEnd(10)} ${p.mark} candle ${p.window}${p.candidate != null ? ` → S${p.candidate} (S${p.prev}..S${p.candidate} did not change the file)` : ""}`);
         console.log(amendsLine(out));
@@ -331,7 +346,8 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split(/[\\/]/).p
   } finally {
     await client.end();
   }
-  if (json) console.log(JSON.stringify({ mode, ...out, plan: undefined, ms: Date.now() - t0 }, null, 1));
+  const proposed = list && out?.plan ? out.plan.filter((p) => p.state === "new").map(({ settlement, mark, claim, window }) => ({ settlement, mark, claim, window })) : undefined;
+  if (json) console.log(JSON.stringify({ mode, ...out, plan: undefined, proposed, ms: Date.now() - t0 }, null, 1));
   else console.log(`(${((Date.now() - t0) / 1000).toFixed(1)} s)`);
   process.exit(code);
 }
