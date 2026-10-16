@@ -58,7 +58,7 @@ test("mark-taken: the settlement that took it, named in the town's time, never t
     kind: "mark-taken", severity: "act",
     about: { mark: "lupi/rootwood-bookend", body: "A bookend of rootwood." },
     message: markTakenMessage("lupi/rootwood-bookend", "lupi", "Oct 15, 2:00 pm EDT"),
-    act: { verb: "stake", args: { mark: "lupi/rootwood-bookend", stamps: 1 } },
+    act: { verb: "world.stake", args: { mark: "lupi/rootwood-bookend", stamps: 1, handle: "lupi" } },
     since: "2026-10-15T18:00:00.000Z", until: "2026-10-22T18:00:00.000Z",
   });
   assert.equal(a.message, "lupi/rootwood-bookend had no stamps behind it, so it left the world at the Oct 15, 2:00 pm EDT settlement. It's back in your household's drafts, and its author, lupi, can stake it, or leave it again with a stamp, to bring it back.");
@@ -75,9 +75,9 @@ test("escrow-on-missing-mark: the message and the act that resolves it; a mark o
   const out = escrowOnMissingAlerts(found, (id) => id === "vireo/understory");
   assert.deepEqual(out.map((a) => [a.about, a.message, a.act]), [
     [{ mark: "vireo/the-understory", body: "The understory, as its twin stood." }, "✦2 on vireo/the-understory, which isn't in the world; unstake to bring it home",
-      { verb: "unstake", args: { mark: "vireo/the-understory", stamps: 2 } }],
+      { verb: "world.unstake", args: { mark: "vireo/the-understory", stamps: 2, handle: "vireo" } }],
     [{ mark: "caelum-reeves/the-sky-side", body: null }, "✦5 on caelum-reeves/the-sky-side, which isn't in the world; unstake to bring it home",
-      { verb: "unstake", args: { mark: "caelum-reeves/the-sky-side", stamps: 5 } }],
+      { verb: "world.unstake", args: { mark: "caelum-reeves/the-sky-side", stamps: 5, handle: "caelum-reeves" } }],
   ]);
 });
 
@@ -91,4 +91,23 @@ test("alertsFor: no handle asks nothing; no store answers none; an unreadable ki
   assert.deepEqual(half, { alerts: [], unread: [{ kind: "mark-taken", reason: "column \"retired_cause\" does not exist" }] });
   const down = await alertsFor(["rei"], { store: async () => { throw new Error("ECONNREFUSED"); } });
   assert.deepEqual(down.unread.map((u) => u.kind), ["mark-taken", "escrow-on-missing-mark"]);
+});
+
+test("EVERY ACT RUNS AS GIVEN on a key that holds more than one resident (review-583-584 F1): the door-qualified verb is a world tool, its args fit that tool's schema, and the handle answers the 422", async () => {
+  const { WORLD_STAKE_TOOLS, actingAs } = await import("../src/world-stake.mjs");
+  const taken = markTakenAlerts([{ slug: "lupi/rootwood-bookend", owner: "lupi", body: "b", opens_at: new Date("2026-10-15T17:45:40Z") }], new Date("2026-10-16T00:00:00Z"));
+  const missing = escrowOnMissingAlerts([{ mark: "vireo/the-understory", holder: "vireo", n: 2, body: null }]);
+  const house = { household: "hh:a-house", handles: new Set(["lupi", "vireo", "someone-else"]) };
+  assert.equal(actingAs(undefined, house).bounce?.defect, "which resident is staking?", "the control: a bare act on this key bounces 422");
+  for (const a of [...taken, ...missing]) {
+    const [door, verb] = a.act.verb.split(".");
+    assert.equal(door, "world", `${a.kind}: the verb names its door`);
+    const tool = WORLD_STAKE_TOOLS.find((t) => t.name === `world_${verb}`);
+    assert.ok(tool, `${a.kind}: world.${verb} is a world tool`);
+    for (const k of Object.keys(a.act.args)) assert.ok(k in tool.inputSchema.properties, `${a.kind}: ${k} is one of world_${verb}'s args`);
+    for (const k of tool.inputSchema.required) assert.ok(k in a.act.args, `${a.kind}: carries ${k}`);
+    assert.deepEqual(actingAs(a.act.args.handle, house), { handle: a.act.args.handle }, `${a.kind}: the act names who acts, and the key accepts it`);
+  }
+  assert.equal(taken[0].act.args.handle, "lupi", "a take's stake is its AUTHOR's: only the author's stake promotes the draft");
+  assert.equal(missing[0].act.args.handle, "vireo", "an unstake is the HOLDER's: it clips to their own position");
 });

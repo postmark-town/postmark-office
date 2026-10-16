@@ -21,7 +21,13 @@
 //             where no mark exists to carry one.
 //   message   one plain sentence for a person.
 //   act       the exact verb and args that resolve it, so an agent can act
-//             without parsing the message: { verb, args }.
+//             without parsing the message: { verb, args }. The verb names its
+//             door the way a segment's `serves` does ("world.unstake"), since
+//             one verb can live on two doors (`stake` is also the household
+//             door's pot stake). The args carry the acting resident (`handle`),
+//             so the act runs as given on a key that holds more than one
+//             resident (review-583-584 F1: without it, the world door answers
+//             422 "which resident is staking?").
 //   since     when the condition began, ISO; null when the record cannot say.
 //   until     when the alert expires, ISO; null when it stays until its
 //             condition clears.
@@ -128,7 +134,8 @@ export function markTakenAlerts(found = [], now = new Date()) {
     out.push(alert("mark-taken", {
       about: { mark: r.slug, body: r.body ?? null },
       message: markTakenMessage(r.slug, by, townWhen(at)),
-      act: { verb: "stake", args: { mark: r.slug, stamps: 1 } },
+      // the AUTHOR acts: only the author's stake promotes the draft (world2-claims.mjs § promoteDraftOnStake)
+      act: { verb: "world.stake", args: { mark: r.slug, stamps: 1, handle: by } },
       since: at, until,
     }));
   }
@@ -140,8 +147,11 @@ export function markTakenAlerts(found = [], now = new Date()) {
 // An open position in the store's copy of the ledger (`escrow_projection` at
 // the ingested town head: the stakes segment's own source) held by one of the
 // asked handles, on a mark that does not stand on world main, does not stand in
-// the store, and has no live claim (a pending one is a mark being put forward,
-// and its stamps are the putting-forward). On 10-15: ✦12 on 7 such marks.
+// the store, and has no pending claim (a mark being put forward, whose stamps
+// are the putting-forward). A draft is not asked about: it holds no escrow
+// (staking a draft promotes it), and the doorstep's pen cannot see one anyway
+// (024's row policy, with no house declared; review-583-584 F2). On 10-15:
+// ✦12 on 7 such marks.
 
 export const ESCROW_ON_MISSING_SQL = `
   SELECT e.mark, e.holder, sum(e.n)::int AS n,
@@ -150,7 +160,7 @@ export const ESCROW_ON_MISSING_SQL = `
    WHERE e.town_sha = (SELECT sha FROM projection_heads WHERE repo = 'town')
      AND e.holder = ANY($1)
      AND NOT EXISTS (SELECT 1 FROM marks m WHERE m.slug = e.mark AND m.status = 'standing')
-     AND NOT EXISTS (SELECT 1 FROM claims c WHERE c.slug = e.mark AND c.status IN ('pending', 'draft'))
+     AND NOT EXISTS (SELECT 1 FROM claims c WHERE c.slug = e.mark AND c.status = 'pending')
    GROUP BY e.mark, e.holder
   HAVING sum(e.n) > 0
    ORDER BY e.mark, e.holder`;
@@ -160,7 +170,8 @@ export function escrowOnMissingAlerts(found = [], inWorld = () => false) {
   return (found ?? []).filter((r) => !inWorld(r.mark)).map((r) => alert("escrow-on-missing-mark", {
     about: { mark: r.mark, body: r.body ?? null },
     message: `✦${r.n} on ${r.mark}, which isn't in the world; unstake to bring it home`,
-    act: { verb: "unstake", args: { mark: r.mark, stamps: r.n } },
+    // the HOLDER acts: an unstake clips to the staker's own position
+    act: { verb: "world.unstake", args: { mark: r.mark, stamps: r.n, handle: r.holder } },
   }));
 }
 

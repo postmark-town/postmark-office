@@ -268,7 +268,7 @@ test("G3, THE ALERT (mark-taken): for the house that owns it, for 14 settlements
     kind: "mark-taken", severity: "act",
     about: { mark: "rei/the-garage", body: "rei/the-garage, as it stood." },
     message: "rei/the-garage had no stamps behind it, so it left the world at the Oct 7, 2:00 am EDT settlement. It's back in your household's drafts, and its author, rei, can stake it, or leave it again with a stamp, to bring it back.",
-    act: { verb: "stake", args: { mark: "rei/the-garage", stamps: 1 } },
+    act: { verb: "world.stake", args: { mark: "rei/the-garage", stamps: 1, handle: "rei" } },
     since: at, until,
   }], unread: [] }, "the house's own take only: not sable's lamp, not the ingest's lantern");
   assert.deepEqual((await ask(["rei"], new Date(Date.parse(until)))).alerts, [], "gone at the 14th settlement");
@@ -282,9 +282,8 @@ test("G3, THE ALERT (mark-taken): for the house that owns it, for 14 settlements
 
 test("THE ALERT (escrow-on-missing-mark): stamps on a mark that isn't in the world, the holder's own; never a mark that stands, is being put forward, or is on world main", { skip }, async () => {
   await seed();
-  assert.equal(retire(["rei/the-garage"]).code, 0);   // retired, and its return is a DRAFT: a draft is not a live claim on escrow
+  assert.equal(retire(["rei/the-garage"]).code, 0);   // retired; its returned DRAFT stays, and a draft is not asked about (review F2)
   await owner(async (c) => {
-    await c.query("DELETE FROM claims WHERE status = 'draft'");   // the stake door would have promoted it; here, only the retired row is left
     await c.query(`INSERT INTO claims (window_id, class, claimant, household, status, body, geometry, stake, data, slug)
                    VALUES ($1, 'sited', 'sable', 'hh:rabbit', 'pending', 'put forward', '{}', 1, '{}', 'sable/the-new-kite')`, [WIN]);
     await c.query(`INSERT INTO escrow_projection (town_sha, mark, holder, household, own_household, n, weight_k) VALUES
@@ -299,9 +298,9 @@ test("THE ALERT (escrow-on-missing-mark): stamps on a mark that isn't in the wor
   const out = await ask(["rei"], now, async () => new Set(["rei/on-main-only"]));
   assert.deepEqual(out.alerts.map((a) => [a.kind, a.severity, a.about.mark, a.about.body, a.message, a.act, a.since, a.until]), [
     ["escrow-on-missing-mark", "info", "caelum-reeves/the-sky-side", null, "✦5 on caelum-reeves/the-sky-side, which isn't in the world; unstake to bring it home",
-      { verb: "unstake", args: { mark: "caelum-reeves/the-sky-side", stamps: 5 } }, null, null],
+      { verb: "world.unstake", args: { mark: "caelum-reeves/the-sky-side", stamps: 5, handle: "rei" } }, null, null],
     ["escrow-on-missing-mark", "info", "rei/the-garage", "rei/the-garage, as it stood.", "✦2 on rei/the-garage, which isn't in the world; unstake to bring it home",
-      { verb: "unstake", args: { mark: "rei/the-garage", stamps: 2 } }, null, null],
+      { verb: "world.unstake", args: { mark: "rei/the-garage", stamps: 2, handle: "rei" } }, null, null],
   ], "a mark that never stood and a retired one; not sable's standing lamp, not a mark on world main, not another holder's");
   assert.deepEqual((await ask(["sable"], now)).alerts.map((a) => a.about.mark), ["lu-yu/call-it-yu-tai"], "a mark being put forward is not missing");
 });

@@ -315,7 +315,7 @@ test("NEEDS-YOU, ALERTS (WLD-51, Darko 2026-10-15 19:29): the house's alerts in 
   const { readers } = worldReaders();
   const taken = { kind: "mark-taken", severity: "act", about: { mark: "r000/kite", body: "A kite of waxed paper." },
     message: "r000/kite had no stamps behind it, so it left the world at the Oct 15, 2:00 pm EDT settlement. It's back in your household's drafts, and its author, r000, can stake it, or leave it again with a stamp, to bring it back.",
-    act: { verb: "stake", args: { mark: "r000/kite", stamps: 1 } }, since: "2026-10-15T18:00:00.000Z", until: "2026-10-22T18:00:00.000Z" };
+    act: { verb: "world.stake", args: { mark: "r000/kite", stamps: 1, handle: "r000" } }, since: "2026-10-15T18:00:00.000Z", until: "2026-10-22T18:00:00.000Z" };
   const asked = [];
   readers.alertsFor = async (handles) => { asked.push([...handles]); return { alerts: [taken], unread: [] }; };
   const key = { household: "fixture", handles: new Set(["r000", "r001"]) };
