@@ -75,16 +75,17 @@ const ENV = { TYPESAFE_API_KEY: "k" };
 
 // ── the dials ───────────────────────────────────────────────────────────────
 
-test("every C value is a dial RULED as recommended (Darko 2026-10-15 12:09 EDT), and none is pending", () => {
+test("every C value is a dial RULED (Darko 2026-10-15 12:09 EDT; C2 again 2026-10-16 17:50 EDT), and none is pending", () => {
   // which acts a creature perceives is the world's RING_VERBS now (S4), not an office dial
   assert.ok(!("perceived_acts" in CREATURE_DIALS));
   assert.deepEqual([...LAW.kindMod.RING_VERBS], ["walk", "enter", "exit", "say", "take", "give", "drop", "leave-mark"]);
-  assert.equal(dial("per_actor_ms"), 60_000);
-  assert.equal(dial("judgments_per_creature"), 100);
+  assert.equal(dial("per_actor_ms"), 10_000, "C2, 2026-10-16: once every ten seconds");
+  assert.ok(!("judgments_per_creature" in CREATURE_DIALS), "C2, 2026-10-16: the judgment cap is gone, not set high");
   assert.equal(dial("emission_m"), 500);
   assert.equal(dial("emission_ms"), 30 * 60_000);
   assert.equal(dial("far_line_m"), 5000);
-  for (const d of Object.values(CREATURE_DIALS)) { assert.match(d.ruled, /^C[1-6], Darko 2026-10-15 12:09 EDT$/); assert.equal(d.pending, undefined); }
+  for (const d of Object.values(CREATURE_DIALS)) { assert.match(d.ruled, /^C[1-6], Darko 2026-10-1(5 12:09|6 17:50) EDT$/); assert.equal(d.pending, undefined); }
+  assert.equal(CREATURE_DIALS.per_actor_ms.ruled, "C2, Darko 2026-10-16 17:50 EDT");
   assert.deepEqual([...new Set(Object.values(CREATURE_DIALS).map((d) => /^(C\d)/.exec(d.ruled)[1]))].sort(), ["C2", "C3", "C4", "C5", "C6"]);
   assert.deepEqual(CREATURE_DIALS_PENDING, []);
 });
@@ -166,14 +167,14 @@ test("a store that cannot be read leaves the living set as it was", async () => 
 
 // ── the caps (C2) and the menu ──────────────────────────────────────────────
 
-test("the caps: one reaction per resident per creature a minute; past the creature's judgments, code answers", () => {
+test("the cap (C2, 2026-10-16): one reaction per resident per creature every 10 s, and no cap on a creature's judgments", () => {
   const c = livingWith(spawnRow("creature:wolf-270-1")).byId.get("creature:wolf-270-1");
-  c.reactions.push({ to: "kai", reaction: "watch", judged_by: "jev", at: T0 - 30_000 });
-  assert.equal(capOf(c, "kai", { now: T0 }), "minute");
-  assert.equal(capOf(c, "kai", { now: T0 + 31_000 }), null);
+  c.reactions.push({ to: "kai", reaction: "watch", judged_by: "jev", at: T0 });
+  assert.equal(capOf(c, "kai", { now: T0 + 9_999 }), "window", "not before 10 s");
+  assert.equal(capOf(c, "kai", { now: T0 + 10_000 }), null, "at 10 s, again");
   assert.equal(capOf(c, "ash", { now: T0 }), null);
-  for (let i = 1; i < dial("judgments_per_creature"); i += 1) c.reactions.push({ to: `r${i}`, judged_by: "jev", at: T0 - 3600_000 });
-  assert.equal(capOf(c, "ash", { now: T0 }), "daily");
+  for (let i = 1; i < 250; i += 1) c.reactions.push({ to: `r${i}`, judged_by: "jev", at: T0 - 3600_000 });
+  assert.equal(capOf(c, "ash", { now: T0 }), null, "250 Jev judgments in, the creature still may react");
 });
 
 test("the menu is the world's allowedReactions; a menu that throws is empty, never an exception on the act's path", () => {
@@ -276,7 +277,7 @@ test("a judgment the store cannot record answers nothing, and the act's caller n
   assert.equal(living.byId.get("creature:wolf-270-1").reactions.length, 0, "no line, no memory, for a row that never landed");
 });
 
-test("CREATURE_JUDGE=code and a spent creature never ask Jev; one possible reaction asks nobody", async () => {
+test("CREATURE_JUDGE=code never asks Jev; one possible reaction asks nobody; a creature past 100 judgments still asks Jev (C2, 2026-10-16)", async () => {
   const boom = async () => { throw new Error("asked"); };
   const living = livingWith(spawnRow("creature:wolf-270-1"));
   const { calls, write } = recordingWrite();
@@ -287,22 +288,23 @@ test("CREATURE_JUDGE=code and a spent creature never ask Jev; one possible react
   const one = await reactTo(act({ verb: "say", actor: "ash", actId: "9002" }), { living, around: boom, ask: boom, write, env: ENV, now: T0 });
   assert.equal(one[0].reaction, "watch");
   assert.equal(why(), "only one reaction is possible");
+  // C2, 2026-10-16: a creature past 100 Jev judgments is still judged by Jev (the cap is gone)
   const c = living.byId.get("creature:wolf-270-1");
-  for (let i = 0; i < dial("judgments_per_creature"); i += 1) c.reactions.push({ to: `r${i}`, judged_by: "jev", at: T0 - 3600_000 });
-  const [spent] = await reactTo(act({ actor: "lupi", actId: "9003" }), { living, around: boom, ask: boom, write, env: ENV, now: T0 });
-  assert.equal(spent.judged_by, "code");
-  assert.equal(why(), "its judgments for the day are spent");
+  for (let i = 0; i < 150; i += 1) c.reactions.push({ to: `r${i}`, judged_by: "jev", at: T0 - 3600_000 });
+  const [still] = await reactTo(act({ actor: "lupi", actId: "9003" }), { living, around: async () => ({}), ask: jevAnswer({ stalk: 1 }), write, env: ENV, now: T0 });
+  assert.equal(still.judged_by, "jev");
+  assert.equal(why(), undefined, "judged by Jev: no why");
 });
 
-test("the per-minute cap: a second act inside the minute gets no reaction; a retried act gets the first answer again", async () => {
+test("the per-actor window (10 s): a second act inside it gets no reaction, one at 10 s does; a retried act gets the first answer again", async () => {
   const living = livingWith(spawnRow("creature:wolf-270-1"));
   const { calls, write } = recordingWrite();
   const deps = { living, around: async () => ({}), ask: jevAnswer({ stalk: 1 }), write, env: ENV };
   const first = await reactTo(act(), { ...deps, now: T0 });
   const again = await reactTo(act(), { ...deps, now: T0 + 5_000 });
   assert.deepEqual(again, first, "the same act, retried, reads its answer from the record");
-  assert.deepEqual(await reactTo(act({ actId: "9010" }), { ...deps, now: T0 + 20_000 }), []);
-  assert.equal((await reactTo(act({ actId: "9011" }), { ...deps, now: T0 + 61_000 })).length, 1);
+  assert.deepEqual(await reactTo(act({ actId: "9010" }), { ...deps, now: T0 + 9_999 }), [], "not before 10 s");
+  assert.equal((await reactTo(act({ actId: "9011" }), { ...deps, now: T0 + 10_000 })).length, 1, "at 10 s, a second reaction");
   assert.equal(calls.length, 2);
 });
 

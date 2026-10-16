@@ -152,11 +152,15 @@ const pending = (value, call) => Object.freeze({ value, pending: call });
 /** A dial Darko has ruled: its value, and the call and the hour that ruled it. */
 const ruled = (value, call) => Object.freeze({ value, ruled: call });
 const C_RULED = "Darko 2026-10-15 12:09 EDT";
+const C2_RULED_1016 = "Darko 2026-10-16 17:50 EDT";
 
 /**
  * THE DIALS. C1–C6 were RULED as recommended (Darko, 2026-10-15 12:09 EDT,
  * "seems fine"; POS-637). C1 has no number: the walk is perceived when it is
- * declared AND when it lands (creatures-hook.mjs § the arrival).
+ * declared AND when it lands (creatures-hook.mjs § the arrival). C2 was ruled
+ * again in the playground's QA sitting (Darko, 2026-10-16 17:50 EDT; the RULED
+ * comment on POS-637): the per-actor window is 10 s, and the per-creature cap
+ * on Jev judgments is gone.
  */
 export const CREATURE_DIALS = Object.freeze({
   // C4: what the actor's own answer carries beside the creature's id and kind.
@@ -165,9 +169,13 @@ export const CREATURE_DIALS = Object.freeze({
   // a creature perceives is the world's RING_VERBS: one home for that law.)
   most_per_act: ruled(3, `C5, ${C_RULED}`),
   // C2: one reaction per resident per creature in this window; a second act inside it gets none.
-  per_actor_ms: ruled(60_000, `C2, ${C_RULED}`),
-  // C2: Jev judgments per creature over its whole span; past it, code answers.
-  judgments_per_creature: ruled(100, `C2, ${C_RULED}`),
+  // Was 60_000 (C2, Darko 2026-10-15 12:09 EDT). Ruled 10 s: "the one minute rate limit is a bit
+  // punishing … a resident tries something, the creature responds, and then it gets excited and
+  // tries another thing … once every ten seconds."
+  per_actor_ms: ruled(10_000, `C2, ${C2_RULED_1016}`),
+  // (C2's judgments_per_creature, 100 Jev judgments per creature over its span with code past it
+  // (Darko 2026-10-15 12:09 EDT), is REMOVED: "we could just do away with it" (Darko 2026-10-16
+  // 17:50 EDT). Code answers only on a timeout, an error, one possible reaction, or CREATURE_JUDGE=code.)
   // C3: how far the emission reaches and how long it stands in happening_here (read by PR-C).
   emission_m: ruled(500, `C3, ${C_RULED}`),
   emission_ms: ruled(30 * 60_000, `C3, ${C_RULED}`),
@@ -434,18 +442,16 @@ export class LivingSet {
   }
 }
 
-// ── the caps (C2, pending) ──────────────────────────────────────────────────
+// ── the cap (C2, ruled 2026-10-16 17:50 EDT) ────────────────────────────────
 
 /**
- * null when the creature may react; otherwise why not, or how:
- *   "minute"  this actor already got a reaction inside the window: no reaction at all
- *   "daily"   the creature's Jev judgments are spent: code answers
+ * null when the creature may react; "window" when this actor already got a
+ * reaction from it inside per_actor_ms (10 s): no reaction at all. There is no
+ * cap on a creature's Jev judgments any more (C2, 2026-10-16).
  */
 export function capOf(creature, actor, { now = Date.now() } = {}) {
   const window = dial("per_actor_ms");
-  if (creature.reactions.some((r) => r.to === actor && now - r.at < window)) return "minute";
-  const judged = creature.reactions.filter((r) => r.judged_by === "jev").length;
-  return judged >= dial("judgments_per_creature") ? "daily" : null;
+  return creature.reactions.some((r) => r.to === actor && now - r.at < window) ? "window" : null;
 }
 
 // ── the menu and the scope ──────────────────────────────────────────────────
@@ -649,14 +655,13 @@ export async function askJev(state, questions, { env = process.env, timeoutMs = 
 
 /**
  * The distribution over `allowed` and the moods' scores, and who judged. Jev
- * when the mode, the cap and the menu allow; code otherwise, and on any fault.
+ * when the mode, the menu and the time left allow; code otherwise, and on any fault.
  * Never throws.
  */
-export async function judgmentFor({ kind, allowed, slice, cap, mode, ask, budgetMs = JEV_TIMEOUT_MS }) {
+export async function judgmentFor({ kind, allowed, slice, mode, ask, budgetMs = JEV_TIMEOUT_MS }) {
   const code = (why) => ({ probabilities: codeDistribution(allowed), scores: {}, judged_by: "code", why });
   if (allowed.length === 1) return code("only one reaction is possible");
   if (mode === "code") return code("CREATURE_JUDGE=code");
-  if (cap === "daily") return code("its judgments for the day are spent");
   if (!(budgetMs >= JEV_MIN_MS)) return code("timeout");
   try {
     const j = await ask(slice, questionsFor(kind, allowed), { timeoutMs: Math.min(JEV_TIMEOUT_MS, budgetMs) });
@@ -883,7 +888,7 @@ async function creatureTurn(creature, act, distance_m, deps) {
     }
     if (creature.gone || creature.fades_at <= now) return null; // it fled while this act waited its turn
     const cap = capOf(creature, act.actor, { now });
-    if (cap === "minute") return null;
+    if (cap === "window") return null;
     // a declared walk closes on the creature when its toward-point is nearer than
     // where it was declared; an arrival when it landed nearer than it set out (C1)
     const approaching = act.approaching ?? approachingOf(act.from ?? act.point, act.toward, creature);
@@ -895,12 +900,12 @@ async function creatureTurn(creature, act, distance_m, deps) {
     // and the read inside its own wait (carry 4): a late read is the creature's
     // own state and the act alone, never a late answer
     const { clock, deadline } = deps;
-    const willAsk = allowed.length > 1 && mode === "jev" && cap !== "daily";
+    const willAsk = allowed.length > 1 && mode === "jev";
     const readFrom = clock();
     const around = willAsk ? await within(deps.around?.(creature, act), Math.min(AROUND_WAIT_MS, deadline - clock() - JEV_MIN_MS - WRITE_RESERVE_MS)) : null;
     const readMs = clock() - readFrom;
     const slice = willAsk ? buildSlice(creature, kind, { ...act, distance_m, approaching }, around ?? {}, { now }) : null;
-    const judgment = await judgmentFor({ kind, allowed, slice, cap, mode, budgetMs: deadline - clock() - WRITE_RESERVE_MS,
+    const judgment = await judgmentFor({ kind, allowed, slice, mode, budgetMs: deadline - clock() - WRITE_RESERVE_MS,
       ask: deps.ask ?? ((s, q, o) => askJev(s, q, { env: deps.env, ...o })) });
     // WHERE THE SECOND WENT, said once per such turn (play row 51: every reaction fell to code with
     // why "timeout" and nothing said why). The operator's line, never the record: acts is published.
