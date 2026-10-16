@@ -157,7 +157,9 @@ test("office-keep.sh records chests and drops as their own keep steps, from the 
 
 test("the roll-call alarms on three scheduled ticks whose chests or drops step was refused, though settlements read ok", () => {
   const manifest = JSON.parse(readFileSync(join(OFFICE, "deploy", "box-rollcall-manifest.json"), "utf8"));
-  const keep = manifest.units.find((r) => r.unit === "postmark-office-keep.timer");
+  const keepRow = manifest.units.find((r) => r.unit === "postmark-office-keep.timer");
+  // the receipt's block: the keep row carries two outcomes since POS-268 5b (outcomes[])
+  const keep = { outcome: [keepRow.outcome, ...(keepRow.outcomes ?? [])].find((o) => o?.kind === "keep_steps") };
   for (const step of ["chests", "drops"]) {
     assert.ok(SOFT_STEPS.includes(step), `${step} is a soft step`);
     assert.ok(STEPS.includes(step), `${step} is in the receipt's step list`);

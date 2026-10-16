@@ -480,7 +480,9 @@ test("the roll-call alarms on three scheduled ticks whose amends step was refuse
   const manifest = JSON.parse(readFileSync(join(OFFICE, "deploy", "box-rollcall-manifest.json"), "utf8"));
   const keep = (function find(o) {
     if (o && typeof o === "object") {
-      if (o.outcome?.kind === "keep_steps") return o;
+      // a row's one outcome, or one block of its outcomes[] (the keep row carries two since POS-268 5b)
+      const spec = [o.outcome, ...(Array.isArray(o.outcomes) ? o.outcomes : [])].find((x) => x?.kind === "keep_steps");
+      if (spec) return { outcome: spec };
       for (const v of Object.values(o)) { const hit = find(v); if (hit) return hit; }
     }
     return null;
