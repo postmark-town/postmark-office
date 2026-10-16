@@ -589,18 +589,18 @@ Most of `office-keep.sh` is deliberately non-fatal: a step that fails prints a l
 - **Accepted limitation:** starting `postmark-office-keep.service` itself by hand is recorded as **scheduled**, because the unit cannot tell who started it, and there is deliberately no `INVOCATION_ID` or `LastTrigger` detection. Use the by-hand unit instead. `/etc/postmark-office.env` must not set `POSTMARK_KEEP_SOURCE`: an `EnvironmentFile=` value overrides the unit's `Environment=` line.
 - **Install day:** copy both units, as in One-time setup step 3 (the by-hand unit is copied, never enabled). Until the first receipt is written at `history_path`, this row is **expected** to show ALARM-outcome ("empty or unreadable"). The first scheduled tick after the release clears it, if every step is `ok`.
 
-### Retiring the rehydrate (POS-268 part 5b)
+### Retiring the rehydrate (POS-268 part 5b, at the w43 deploy)
 
-Part 5b deleted `postmark-office-rehydrate.{service,timer}`, `deploy/office-rehydrate.sh` and the transitional `deploy/office-tick.sh` from the repo, and moved the rehydrate's world hydration (the store's world graph snapshot; `world.db` is retired since switch 3, office #294) into the keeping tick as `deploy/office-world-hydrate.sh`. A code deploy never removes an installed unit, so the box keeps firing the old rehydrate until these steps run. Every step is on the box, as root. **Wright or Darko runs them; no lane does.**
+Part 5b (built on w42 as office #433, re-landed on w43) deleted `postmark-office-rehydrate.{service,timer}`, `deploy/office-rehydrate.sh` and the transitional `deploy/office-tick.sh` from the repo, and moved the rehydrate's world hydration (the store's world graph snapshot; `world.db` is retired since switch 3, office #294) into the keeping tick as `deploy/office-world-hydrate.sh`. A code deploy never removes an installed unit, so the box keeps firing the old rehydrate until these steps run. Every step is on the box, as root. **Wright or Darko runs them; no lane does.**
 
-**When.** In the same sitting as the w42 deploy (`release/2026-w42` or later), once the release is live and step 0 reads true. **Never before it**, and not on the Saturday ahead of the ship: until the w42 tag is live the office still reads `office.db` in three places (part 5a's static inventory found them and w42 fixes them), and the w41 keeping tick has no world step, so retiring the rehydrate early freezes the world the w41 office reads (`world.db`) and the store's world graph snapshot until the deploy. And not long after it: the deploy's `rsync --delete` takes `office-rehydrate.sh` off the box, so from the first :09 after the deploy the installed rehydrate unit fails (loud in its journal, harmless: the keeping tick has taken its world step), and the keeping tick's world step finds no law pen credential (`WORLD STORE NOT WRITTEN`, the office keeps the snapshot it has) until step 2 installs its new unit.
+**When.** In the same sitting as the w43 deploy (`release/2026-w43` or later), once the release is live and step 0 reads true. **Never before it**: until the w43 tag is live the keeping tick has no world step, so retiring the rehydrate early freezes the store's world graph snapshot (the world every office door reads) until the deploy. Nothing on prod reads `office.db` any more (switch 2 on since the w42 ship, 10-11's Done check; part 5a's absent sweep and static inventory re-run green on the w43 tip, 10-15), so the timeline only matters for the world step. And not long after it: the deploy's `rsync --delete` takes `office-rehydrate.sh` off the box, so from the first :09 after the deploy the installed rehydrate unit fails (loud in its journal, harmless: the keeping tick has taken its world step), and the keeping tick's world step finds no law pen credential (`WORLD STORE NOT WRITTEN`, the office keeps the snapshot it has) until step 2 installs its new unit.
 
 **What this ends.** After step 3 nothing rebuilds `office.db`. Switch 2's rollback (`TOWN_INDEX_READS=store` out of `/etc/postmark-office.env`, § Switch 2's guard) stops being a rollback: an unswitched office would read `office.db` as it stood at step 3. If switch 2 ever has to come off, the rehydrate comes back first (§ Rollback, below).
 
 **0. Preconditions** (all must hold, or stop):
 
 ```sh
-curl -s https://postmark.town/api/release                         # names release/2026-w42 or later (it carries parts 5a and 5b)
+curl -s https://postmark.town/api/release                         # names release/2026-w43 or later (it carries part 5b)
 grep -c '^TOWN_INDEX_READS=store$' /etc/postmark-office.env       # 1: the office reads the store's town index
 find /proc/[0-9]*/fd -lname '*/office.db' 2>/dev/null | wc -l     # 0: no process holds office.db open (part 5a's Done check, read on prod)
 ls /srv/postmark-office/deploy/office-world-hydrate.sh            # exists: the tree is the release
@@ -619,10 +619,12 @@ sudo cp -p /etc/systemd/system/postmark-office-rehydrate.service /etc/systemd/sy
            /etc/systemd/system/postmark-office-keep.service /var/backups/postmark-rehydrate-retire/
 ```
 
-**2. The keep unit that hands the world hydration the law pen.** It reads `/etc/postmark-world2-dev.env` first and `/etc/postmark-office.env` second, so a key both files carry keeps the office's value, which is what every step of the tick saw before:
+**2. The keep units that hand the world hydration the law pen**, the scheduled one and the by-hand one (POS-524). Each reads `/etc/postmark-world2-dev.env` first and `/etc/postmark-office.env` second, so a key both files carry keeps the office's value, which is what every step of the tick saw before:
 
 ```sh
-sudo cp /srv/postmark-office/deploy/postmark-office-keep.service /etc/systemd/system/
+sudo cp -p /etc/systemd/system/postmark-office-keep-by-hand.service /var/backups/postmark-rehydrate-retire/ 2>/dev/null || true
+sudo cp /srv/postmark-office/deploy/postmark-office-keep.service /srv/postmark-office/deploy/postmark-office-keep-by-hand.service /etc/systemd/system/
+sudo systemctl daemon-reload
 ```
 
 **3. Retire the rehydrate: stop it, disable it, remove both unit files.**
@@ -644,14 +646,23 @@ systemctl show postmark-office-keep.service -p EnvironmentFiles   # world2-dev.e
 journalctl -u postmark-office-keep -n 60 --no-pager | grep -E 'world|FAILED|NOT WRITTEN'
 #   "[office-keep] the world graph snapshot written to the store", and no NOT WRITTEN
 sh /srv/postmark-office/deploy/box-rollcall.sh
-#   "RETIRED  postmark-office-rehydrate.timer", the keep row OK (it carries the household-keys alarm now), and no ALARM;
+#   "RETIRED  postmark-office-rehydrate.timer", the keep row OK (it carries two outcomes now: the tick's receipt and the household-keys line), and no ALARM;
 #   ALARM-unretired on the rehydrate row means step 3 is not done
 curl -sI https://postmark.town/api/town | grep -i x-postmark-as-of   # the town's newest sha, still moving
 ```
 
-**5. What stays.** `/srv/postmark-office/office.db` stays on disk, unread; deleting it is a later step, after a clean week. So does `/srv/postmark-office/world.db`, unread since switch 3 (POS-270, office #294), for the same later step.
+**5. The file.** Move `office.db` aside, so a reader nobody found fails loudly by name instead of reading a frozen copy, and the rollback still has it:
 
-**Rollback.** The rehydrate cannot come back on a w42 tree: its script is not there. Partial, for a keeping tick whose world step misbehaves with the new unit: put the old keep unit back (`sudo cp -p /var/backups/postmark-rehydrate-retire/postmark-office-keep.service /etc/systemd/system/ && sudo systemctl daemon-reload`); the tick's world step then finds no credential and writes nothing, and the office keeps the snapshot it has. Whole, with the office rolled back to w41 (the release workflow's rollback): restore both rehydrate unit files from `/var/backups/postmark-rehydrate-retire/`, `sudo systemctl daemon-reload`, `sudo systemctl enable --now postmark-office-rehydrate.timer`, and put the old keep unit back as above. The roll-call manifest then reads the rehydrate row `retired` against a box that loads it (ALARM-unretired) until the w41 manifest is the deployed one, which it is once the rollback deploy lands.
+```sh
+sudo -u meepo mv /srv/postmark-office/office.db /srv/postmark-office/office.db.retired-2026-10-18
+ls /srv/postmark-office/office.db* 2>/dev/null   # office.db.retired-2026-10-18 only (no -wal, -shm or .new left beside it)
+curl -s -o /dev/null -w '%{http_code}
+' https://postmark.town/api/town   # 200: the office never opened it (a switched office opens no office.db, part 5a)
+```
+
+After a clean week (the roll-call green each morning, no `office.db` in the office's journal), delete it: `sudo rm /srv/postmark-office/office.db.retired-2026-10-18`. `/srv/postmark-office/world.db`, unread since switch 3 (POS-270, office #294), goes in the same later step.
+
+**Rollback** (until the file is deleted). First the file: `sudo -u meepo mv /srv/postmark-office/office.db.retired-2026-10-18 /srv/postmark-office/office.db`. The rehydrate cannot come back on a w43 tree: its script is not there. Partial, for a keeping tick whose world step misbehaves with the new unit: put the old keep unit back (`sudo cp -p /var/backups/postmark-rehydrate-retire/postmark-office-keep.service /etc/systemd/system/ && sudo systemctl daemon-reload`); the tick's world step then finds no credential and writes nothing, and the office keeps the snapshot it has. Whole, with the office rolled back to the w42.x release (the release workflow's rollback): put the file back as above, restore both rehydrate unit files and both keep units from `/var/backups/postmark-rehydrate-retire/`, `sudo systemctl daemon-reload`, `sudo systemctl enable --now postmark-office-rehydrate.timer`. The first rehydrate run rebuilds `office.db` from the town clone. The roll-call manifest then reads the rehydrate row `retired` against a box that loads it (ALARM-unretired) until the w42.x manifest is the deployed one, which it is once the rollback deploy lands.
 
 ### Switch 2's guard: the store never waits on a held transaction (POS-370, 2026-10-04)
 
