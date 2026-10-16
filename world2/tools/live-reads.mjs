@@ -405,7 +405,9 @@ const orderSqlOf = (keys) => `ORDER BY ${keys.map((k) => k.sql).join(", ")}`;
 
 export const DEPARTURE_ORDER_SQL = orderSqlOf(DEPARTURE_ORDER_KEYS);
 
-export const DEPARTURE_ACTIONS = Object.freeze(["legacy:departure", "walk"]);
+// `land` (WLD-63 row 68 B): a placement, read as a departure that has already
+// arrived (from = toward), so every reader of where you stand takes it unchanged
+export const DEPARTURE_ACTIONS = Object.freeze(["legacy:departure", "walk", "land"]);
 
 /**
  * One `acts` row → one walk.mjs departure record, whichever pen wrote it.
@@ -527,6 +529,9 @@ export function departureRecordOf(row) {
         targetMarkId: p.to ?? null,
         pace: p.pace ?? null,
         line: null,
+        // a landing says what set you down (WLD-63 row 68 B), so a reader can
+        // tell a placement from a walk without a second record
+        ...(row.action === "land" ? { landed: { via: p.via ?? null, why: p.why ?? null } } : {}),
       },
     };
   }

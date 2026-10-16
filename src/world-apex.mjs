@@ -462,6 +462,14 @@ export function crossingDeps() {
     stop: async (who, here, key, opts = {}) => walkViaOffice(WORLD_CLONE, { handle: who, x: here.x, y: here.y,
       ...(opts?.from && Number.isFinite(Number(opts.from.x)) && Number.isFinite(Number(opts.from.y)) ? { __from: { x: Number(opts.from.x), y: Number(opts.from.y) } } : {}),
       ...(opts?.exit === true ? { exit: true } : {}) }, key),
+    // A PLACEMENT IS A LANDING, NOT A WALK (WLD-63 row 68 B, Darko 2026-10-16 19:15).
+    // `land` is the set-down's pen (world.mjs § landAt): a passage, a whole-dungeon
+    // exit, the Post Office's deposit. `stop` above stays the walk door's, for the one
+    // set-down that IS a walk ending: "entering ends the walk".
+    land: async (who, at, key, opts = {}) => {
+      const { landAt } = await import("./world.mjs");
+      return landAt(WORLD_CLONE, { who, at, key, via: opts.via ?? null, why: opts.why, exit: opts.exit === true });
+    },
     // given the door's one reading (world-crossings.mjs § passageInstant), it names that reading's ferry
     now: (ms = Date.now()) => (ms - Date.UTC(2026, 5, 12)) / (12 * 3600 * 1000),
     // THE ACTS THIS ACTOR HAS WRITTEN, oldest first — the ride fold's one input
