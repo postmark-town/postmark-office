@@ -586,14 +586,15 @@ export function buildSlice(creature, kind, act, around = {}, { now = Date.now() 
       ...(r.last ? { last: cut(r.last, 60) } : {}),
     })),
     ...(others ? { others_about: others } : {}),
-    marks: marks.map((k) => {
+    // no view yet (the tick has not seen for it): marks are left out, never [] (an empty view says "none", truly)
+    ...(around.view !== undefined ? { marks: marks.map((k) => {
       const body = bodyOf(k.id);
       return {
         ...(k.class ? { class: k.class } : {}),
         name: k.name ?? k.id, m: Math.round(metresOf(k)), bearing: k.bearing,
         ...(body ? { body: String(body) } : {}), // whole, never cut (22:33)
       };
-    }),
+    }) } : {}),
     heard: (around.heard ?? []).slice(0, cap("heard")).map((h) => ({ who: h.who, said: cut(h.said, cap("said_chars")), ...(h.ago ? { ago: h.ago } : {}) })),
     ...(around.air ? { air: cut(typeof around.air === "string" ? around.air : String(around.air?.line ?? ""), cap("air_chars")) } : {}),
     ...(around.hour ? { hour: around.hour } : {}),
@@ -895,10 +896,16 @@ async function creatureTurn(creature, act, distance_m, deps) {
     // own state and the act alone, never a late answer
     const { clock, deadline } = deps;
     const willAsk = allowed.length > 1 && mode === "jev" && cap !== "daily";
+    const readFrom = clock();
     const around = willAsk ? await within(deps.around?.(creature, act), Math.min(AROUND_WAIT_MS, deadline - clock() - JEV_MIN_MS - WRITE_RESERVE_MS)) : null;
+    const readMs = clock() - readFrom;
     const slice = willAsk ? buildSlice(creature, kind, { ...act, distance_m, approaching }, around ?? {}, { now }) : null;
     const judgment = await judgmentFor({ kind, allowed, slice, cap, mode, budgetMs: deadline - clock() - WRITE_RESERVE_MS,
       ask: deps.ask ?? ((s, q, o) => askJev(s, q, { env: deps.env, ...o })) });
+    // WHERE THE SECOND WENT, said once per such turn (play row 51: every reaction fell to code with
+    // why "timeout" and nothing said why). The operator's line, never the record: acts is published.
+    if (judgment.why === "timeout" && willAsk)
+      console.log(`[creatures] ${creature.id} judged by code (timeout): its turn began ${Math.round(readFrom - (deadline - ANSWER_WAIT_MS))} ms into the act's second, its read took ${Math.round(readMs)} ms`);
     const roll = t20(creature.id, act.actId, act.atIso);
     const odds = normalized(allowed, judgment.probabilities);
     const { picked } = sampleWith(roll, odds); // the same odds the row stores, so the pick re-derives from it

@@ -598,6 +598,13 @@ test("an ended creature leaves RAM an hour after it ended and once its newest re
   assert.equal(living.answered.has("9001"), false, "the pruned leave the retry index with them");
 });
 
+test("review-588 F2: a creature not yet seen leaves its marks out; one seen as empty says none", () => {
+  const c = livingWith(spawnRow("creature:wolf-270-1")).byId.get("creature:wolf-270-1");
+  const a = { actor: "kai", verb: "walk", distance_m: 30, approaching: false };
+  assert.ok(!("marks" in buildSlice(c, WOLF, a, {}, { now: T0 })), "no view yet: not \"no marks\"");
+  assert.deepEqual(buildSlice(c, WOLF, a, { view: { how: "x" } }, { now: T0 }).marks, [], "an empty view is an empty view");
+});
+
 test("a mark's body is never dropped or excerpted, whatever its length (Darko 22:33, standing)", () => {
   const c = livingWith(spawnRow("creature:wolf-270-1")).byId.get("creature:wolf-270-1");
   const long = "A body longer than the design's 150 characters still rides whole: the read never cuts a resident's words about their own place. ".repeat(3);
