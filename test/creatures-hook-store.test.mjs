@@ -91,7 +91,7 @@ test("ON THE STORE · an act door's own row wakes the wolf: one reaction row nam
       noteActWritten({ actor: "lu", action: "enter" }, id); // as world-apex.mjs § crossingDeps.record does
       return { entered: ["a/room"], seq: id };
     }) });
-    assert.equal(enterKeyed.result.creatures?.length, 1, "the enter is perceived where lu stands (kai, a minute ago, has had the wolf's answer: C2)");
+    assert.equal(enterKeyed.result.creatures?.length, 1, "the enter is perceived where lu stands (kai, seconds ago, has had the wolf's answer: C2's 10 s window)");
     const enterReacts = await q("SELECT nonce FROM acts WHERE action = 'react' AND object = $1", [enterKeyed.result.seq]);
     assert.deepEqual(enterReacts, [{ nonce: null }], "the reaction never takes the enter's key");
 
