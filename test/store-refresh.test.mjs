@@ -17,7 +17,15 @@ import { storeRefresher, STORE_READ_BOUND_MS } from "../src/store-refresh.mjs";
 
 const never = () => new Promise(() => {});
 
-test("a hung store read is released after the bound, named in the log, and the next tick reads again", { timeout: 5_000 }, async () => {
+test("a hung store read is released after the bound, named in the log, and the next tick reads again", { timeout: 5_000 }, async (t) => {
+  // The bound's timer is unref'd, as it must be in the office (a pending bound
+  // never keeps a process up), so here something has to hold the event loop
+  // open the way the office's own server does. Without it, node 22 sees an
+  // empty loop while the bound is pending and cancels the file (office#595's
+  // first CI run: "Promise resolution is still pending but the event loop has
+  // already resolved").
+  const alive = setInterval(() => {}, 1_000);
+  t.after(() => clearInterval(alive));
   const lines = [];
   let reads = 0, applied = 0;
   const r = storeRefresher({
