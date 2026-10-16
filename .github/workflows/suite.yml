@@ -179,7 +179,7 @@ jobs:
       - name: POS-652 measure, watch the clones
         run: |
           sudo apt-get install -y -qq inotify-tools > /dev/null
-          sudo sysctl -w fs.inotify.max_user_watches=1048576
+          sudo sysctl -w fs.inotify.max_user_watches=1048576 fs.inotify.max_queued_events=4194304
           mkdir -p "$RUNNER_TEMP/marks" "$RUNNER_TEMP/opens"
           inotifywait -m -r -e open,create --exclude '(^|/)[.]git(/|$)' --format '%e|%w%f' town-clone world-clone "$RUNNER_TEMP/marks" > "$RUNNER_TEMP/opens/opens-${{ matrix.shard }}.log" 2> "$RUNNER_TEMP/inotify.err" &
           for i in $(seq 1 120); do grep -q "Watches established" "$RUNNER_TEMP/inotify.err" && break; sleep 1; done
