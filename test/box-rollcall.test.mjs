@@ -43,6 +43,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   loadManifest,
+  outcomesOf,
   rollcall,
   classifyRow,
   outcomeCounts,
@@ -55,6 +56,8 @@ import {
   DEFAULT_MANIFEST,
   OK,
   PARKED,
+  RETIRED,
+  ALARM_UNRETIRED,
   ALARM_MISSING,
   ALARM_UNBOUNDED,
   ALARM_DISABLED,
@@ -168,8 +171,9 @@ function healthy(m = manifest()) {
     const halfway = Number.isFinite(hb.stale_after_minutes) ? (hb.stale_after_minutes / 2) * MINUTE : 60 * MINUTE;
     const beatAt = T0 - halfway;
 
-    if (row.stage === "parked") {
-      // A parked unit is honestly ABSENT from the box — which is what "parked"
+    if (row.stage === "parked" || row.stage === "retired") {
+      // A parked unit is honestly ABSENT from the box (and a retired one is, once
+      // its box steps are done: the healthy state) — which is what "parked"
       // means on postmark-stripe-watch today: never installed, by design.
       units[row.unit] = { load_state: "not-found", active_state: "inactive", unit_file_state: "" };
       if (hb.kind === "state_file" && hb.path) files[hb.path] = { exists: false };
@@ -220,15 +224,16 @@ function healthy(m = manifest()) {
     // POS-524: a keep row is judged from its own receipts (deploy/keep-history.mjs),
     // so its healthy log is three scheduled ticks with every step ok, the newest
     // at the heartbeat's own time.
-    if (row.outcome && row.outcome.kind === "keep_steps") {
+    for (const spec of outcomesOf(row)) {   // a row may write more than one log (POS-268 5b: the keep row)
+    if (spec.kind === "keep_steps") {
       const lines = [2, 1, 0].map((i) => JSON.stringify({
         v: 1, kind: "office-keep", run: `healthy-${i}`, source: "scheduled",
         started: new Date(beatAt - i * 15 * MINUTE - MINUTE).toISOString(), at: new Date(beatAt - i * 15 * MINUTE).toISOString(),
         exit: 0, steps: Object.fromEntries(KEEP_STEPS.map((id) => [id, { s: "ok" }])),
       }));
-      files[row.outcome.history_path] = { exists: true, mtime_ms: beatAt, text: `${lines.join("\n")}\n` };
-    } else if (row.outcome && row.outcome.history_path) {
-      const n = Math.max(Number(row.outcome.zero_published_runs) || 3, 3) + 2;
+      files[spec.history_path] = { exists: true, mtime_ms: beatAt, text: `${lines.join("\n")}\n` };
+    } else if (spec.history_path) {
+      const n = Math.max(Number(spec.zero_published_runs) || 3, 3) + 2;
       const lines = [];
       for (let i = n - 1; i >= 0; i--) {
         lines.push(JSON.stringify({
@@ -245,19 +250,20 @@ function healthy(m = manifest()) {
           // declaration rather than hard-coded, for the same reason the window
           // length is: a manifest that names a third list must not go green here
           // because nobody remembered to widen a fixture.
-          ...Object.fromEntries((row.outcome.alarm_on_nonempty ?? []).map((f) => [f, []])),
+          ...Object.fromEntries((spec.alarm_on_nonempty ?? []).map((f) => [f, []])),
           // …and a row that declares a present-and-false alarm gets the flag
           // TRUE, which is its healthy shape: the check RAN. Generated from the
           // row's own declaration for the same reason as the lists above — a
           // manifest that names a second flag must not go green here because
           // nobody remembered to widen a fixture.
-          ...Object.fromEntries((row.outcome.alarm_on_false ?? []).map((f) => [f, true])),
+          ...Object.fromEntries((spec.alarm_on_false ?? []).map((f) => [f, true])),
           // …and a row that declares a COUNT gets a number, which is its only
           // healthy shape: a count is printed, never judged (postmark#2935).
-          ...Object.fromEntries((row.outcome.report_counts ?? []).map((f) => [f, 0])),
+          ...Object.fromEntries((spec.report_counts ?? []).map((f) => [f, 0])),
         }));
       }
-      files[row.outcome.history_path] = { exists: true, mtime_ms: beatAt, text: `${lines.join("\n")}\n` };
+      files[spec.history_path] = { exists: true, mtime_ms: beatAt, text: `${lines.join("\n")}\n` };
+    }
     }
   }
 
@@ -751,6 +757,91 @@ test("a PARKED row is printed, counted apart from OK, and never contributes to t
   assert.match(lines, /parked by design \(/);
 });
 
+// ── §5 RETIRED: ended on purpose, and green only once the box agrees ────────
+//
+// POS-268 part 5b retired the rehydrate unit. A retired rail keeps its row so
+// it can still be asked about, and is judged the other way round from a live
+// one: ABSENT is green, and a box that still loads the unit (enabled, or merely
+// installed) has not finished the retirement. Asserted over a planted row, for
+// the parked rows' reason: whether the town carries a retired rail today is a
+// fact about the town, not about this checker.
+const PLANTED_RETIRED_UNIT = "postmark-example-retired.timer";
+
+function retiredManifest(m = manifest()) {
+  return {
+    ...m,
+    units: [
+      ...m.units,
+      {
+        unit: PLANTED_RETIRED_UNIT,
+        label: "a rail deliberately ended",
+        stage: "retired",
+        activation_owner: "planted by test/box-rollcall.test.mjs — this row is not on the box and never will be",
+        retired_because: "what it built is read from somewhere else now",
+        retire_steps: "systemctl disable --now postmark-example-retired.timer, remove its unit files, daemon-reload",
+      },
+    ],
+  };
+}
+
+test("a RETIRED row the box no longer loads reads RETIRED, is counted apart from OK, and the roll-call stays clean", () => {
+  const m = retiredManifest();
+  const result = rollcall(m, healthy(m), T0);
+  const row = rowFor(result, PLANTED_RETIRED_UNIT);
+  assert.equal(row.verdict, RETIRED);
+  assert.match(row.reason, /is retired — what it built is read from somewhere else now/);
+  assert.equal(result.exitCode, 0);
+  assert.ok(result.counts.RETIRED >= 1, "a retired rail is not a running one");
+  const lines = formatLines(result);
+  assert.match(lines.at(-1), /^roll-call clean — \d+ running, \d+ retired, \d+ parked by design \(/);
+});
+
+test("FALSIFIER: a RETIRED row the box still has ENABLED is ALARM-unretired, and names the steps", () => {
+  // CAN-FAIL: take the retired branch out of classifyRow and this row is judged
+  // as live, which reads OK on an enabled, recently-fired timer.
+  const m = retiredManifest();
+  const live = mutate(healthy(m), (s) => {
+    s.units[PLANTED_RETIRED_UNIT] = {
+      load_state: "loaded", active_state: "active", unit_file_state: "enabled",
+      last_trigger_ms: T0 - 5 * MINUTE, triggers: PLANTED_RETIRED_UNIT.replace(/\.timer$/, ".service"),
+    };
+    s.discovered.push(PLANTED_RETIRED_UNIT);
+  });
+  const result = rollcall(m, live, T0);
+  const row = rowFor(result, PLANTED_RETIRED_UNIT);
+  assert.equal(row.verdict, ALARM_UNRETIRED);
+  assert.match(row.reason, /recorded RETIRED in the manifest but the box still loads it/);
+  assert.match(row.reason, /systemctl disable --now postmark-example-retired\.timer/);
+  assert.equal(result.exitCode, 1);
+});
+
+test("a RETIRED row stopped and disabled but still installed is not retired yet", () => {
+  // The next `enable` would revive it: the unit files leaving the box is the step.
+  const m = retiredManifest();
+  const half = mutate(healthy(m), (s) => {
+    s.units[PLANTED_RETIRED_UNIT] = { load_state: "loaded", active_state: "inactive", unit_file_state: "disabled" };
+  });
+  assert.equal(rowFor(rollcall(m, half, T0), PLANTED_RETIRED_UNIT).verdict, ALARM_UNRETIRED);
+});
+
+test("the manifest refuses a retired row that cannot say why, or that still carries an outcome", () => {
+  const dir = tempDir("rollcall-retired-");
+  try {
+    const base = JSON.parse(readFileSync(MANIFEST_PATH, "utf8"));
+    const planted = retiredManifest(base).units.at(-1);
+    const cases = [
+      [{ ...planted, retired_because: undefined }, /is retired and does not say why or when/],
+      [{ ...planted, outcome: { history_path: "/srv/x.jsonl", unsettled_runs: 0, means: "m", why: "w" } }, /is retired and still carries an outcome — move it to the live row that writes \/srv\/x\.jsonl/],
+      [{ ...planted, outcomes: [{ history_path: "/srv/y.jsonl", unsettled_runs: 0, means: "m", why: "w" }] }, /is retired and still carries an outcome — move it to the live row that writes \/srv\/y\.jsonl/],
+    ];
+    for (const [row, want] of cases) {
+      const p = join(dir, "m.json");
+      writeFileSync(p, JSON.stringify({ ...base, units: [...base.units, row] }));
+      assert.throws(() => loadManifest(p), want);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 // ── §6 THE REVERSE DIRECTION ────────────────────────────────────────────────
 
 test("FALSIFIER (h): a unit on the box that NO manifest row names is ALARM-unmanifested", () => {
@@ -844,8 +935,9 @@ function unrowedDeployUnits(m, files) {
 }
 
 function unfiledRows(m, files) {
+  // a RETIRED row's unit left deploy/ in the change that retired it (POS-268 5b): its row stays, its file does not
   const names = new Set(files.map((f) => f.file));
-  return [...new Set(m.units.filter((r) => !r.box_only && !names.has(r.unit.replace(/@[^.@]+\./, "@."))).map((r) => r.unit))];
+  return [...new Set(m.units.filter((r) => !r.box_only && r.stage !== "retired" && !names.has(r.unit.replace(/@[^.@]+\./, "@."))).map((r) => r.unit))];
 }
 
 test("FALSIFIER (h3): every unit in deploy/ the box could run has a row, and every row's unit is in deploy/ or says where it lives (POS-522)", () => {
@@ -889,7 +981,9 @@ test("the manifest refuses a row with no activation owner — 'a mechanism folds
       typeof row.activation_owner === "string" && row.activation_owner.length > 20,
       `${row.unit} names no activation owner`,
     );
-    assert.ok(typeof row.stale_means === "string" && row.stale_means.length > 20, `${row.unit} does not say what stale means`);
+    // a retired rail has no staleness to describe; it says why it ended instead (POS-268 5b)
+    if (row.stage === "retired") assert.ok(typeof row.retired_because === "string" && row.retired_because.length > 20, `${row.unit} does not say why it was retired`);
+    else assert.ok(typeof row.stale_means === "string" && row.stale_means.length > 20, `${row.unit} does not say what stale means`);
   }
 
   // And the loader is the thing that enforces it, not this test's goodwill —
@@ -902,7 +996,7 @@ test("the manifest refuses a row with no activation owner — 'a mechanism folds
   assert.throws(() => loadManifest(tmp), /names no activation_owner/);
 
   writeFileSync(tmp, JSON.stringify({ units: [{ unit: "x.timer", stage: "someday", activation_owner: "nobody" }] }));
-  assert.throws(() => loadManifest(tmp), /must be "live" or "parked"/);
+  assert.throws(() => loadManifest(tmp), /must be "live", "parked" or "retired"/);
 
   writeFileSync(tmp, JSON.stringify({ units: [{ stage: "live", activation_owner: "nobody" }] }));
   assert.throws(() => loadManifest(tmp), /no unit name/);
@@ -982,7 +1076,8 @@ test("the printed board puts every ALARM above the green rows, and names the cou
   const lines = formatLines(rollcall(m, broken, T0));
 
   assert.match(lines[0], /^ALARM-disabled\s+postmark-settlement-shadow\.timer/);
-  assert.match(lines[lines.length - 1], /^1 ALARM · \d+ ok · \d+ parked by design/);
+  // (a retired row, POS-268 5b, is counted between the ok and the parked ones)
+  assert.match(lines[lines.length - 1], /^1 ALARM · \d+ ok( · \d+ retired)? · \d+ parked by design/);
 });
 
 // ── §9 THE RAIL RAN. WHAT CAME OUT OF IT. (v1 #9, 2026-08-30) ───────────────
@@ -2359,9 +2454,14 @@ test("§2e THE ROW IS STRICT: a blessing row with no allowance or no why is refu
 // that step writes (exercised on the town at d95e81c1c: clean, tool absent, and
 // a ledger with one 07fa74d6a line dropped).
 //
-// THE CAN-FAIL FLIP: drop the outcome block from the rehydrate row; the split
-// and unchecked tests red, the clean one stays green as the control.
-const HK_ROW = manifest().units.find((u) => u.unit === "postmark-office-rehydrate.timer");
+// THE CAN-FAIL FLIP: drop the outcome block from the keep row; the split and
+// unchecked tests red, the clean one stays green as the control. (The row moved
+// off the rehydrate timer when that unit was retired, POS-268 5b: office-keep.sh
+// writes the line, so its timer carries the alarm.)
+// The keep row carries TWO outcome blocks (outcomes[]: the tick's receipt and this line), so the
+// household-keys block is judged as the roll-call judges each: the row with that one block.
+const HK_KEEP = manifest().units.find((u) => u.unit === "postmark-office-keep.timer");
+const HK_ROW = { ...HK_KEEP, outcome: outcomesOf(HK_KEEP).find((o) => /household-keys\.jsonl$/.test(o.history_path ?? "")) };
 const hkLog = (...lines) => ({ files: { [HK_ROW.outcome?.history_path]: { exists: true, text: lines.map((l) => JSON.stringify(l)).join("\n") + "\n" } } });
 const HK_CLEAN = { at: "2026-10-04T04:44:20Z", split_households: [], shared_keys: [], detail: [], checked: true };
 
@@ -2588,4 +2688,37 @@ test("(p10) readEnvFileKeys over a real file with real grep: names, the quoted s
   // grep's 1 on the names (an empty file) is "no keys", read cleanly.
   writeFileSync(join(dir, "empty.env"), "");
   assert.deepEqual(readEnvFileKeys(join(dir, "empty.env"), { grep: realGrep }), { readable: true, keys: [] });
+});
+
+// ── A ROW WITH TWO OUTCOMES (POS-268 5b) ────────────────────────────────────
+//
+// The keep row writes two logs: the tick's receipt (POS-524) and the
+// household-keys line, which rode the rehydrate row until that unit retired.
+// Each block is validated and judged as a lone outcome is, and the verdict
+// names every alarm. THE CAN-FAIL FLIP: judge only the first block; the split
+// house goes green.
+test("outcomes[]: each block on a row is judged, and a split house on the keep row alarms beside a healthy receipt", () => {
+  const m = manifest();
+  const keep = m.units.find((u) => u.unit === "postmark-office-keep.timer");
+  assert.equal(outcomesOf(keep).length, 2);
+  const snap = healthy(m);
+  const hk = outcomesOf(keep).find((o) => /household-keys\.jsonl$/.test(o.history_path));
+  assert.equal(classifyRow(keep, snap, T0).verdict, "OK", "the control: both logs healthy");
+  snap.files[hk.history_path] = { exists: true, mtime_ms: T0, text: JSON.stringify({ at: "x", split_households: ["house-of-many-doors"], shared_keys: [], detail: [], checked: true }) + "\n" };
+  const r = classifyRow(keep, snap, T0);
+  assert.equal(r.verdict, "ALARM-outcome");
+  assert.match(r.reason, /house-of-many-doors/);
+});
+
+test("outcomes[]: the loader refuses both forms on one row, an empty list, and a block that breaks the outcome law", () => {
+  const dir = tempDir("box-rollcall-outcomes-");
+  const tmp = join(dir, "manifest.json");
+  const spec = { history_path: "/srv/x.jsonl", unsettled_runs: 0, means: "m", why: "w" };
+  const row = { unit: "postmark-x.timer", stage: "live", activation_owner: "planted by the test", box_only: { path: "/etc/systemd/system/postmark-x.timer", why: "planted" } };
+  writeFileSync(tmp, JSON.stringify({ units: [{ ...row, outcome: spec, outcomes: [spec] }] }));
+  assert.throws(() => loadManifest(tmp), /declares both outcome and outcomes/);
+  writeFileSync(tmp, JSON.stringify({ units: [{ ...row, outcomes: [] }] }));
+  assert.throws(() => loadManifest(tmp), /outcomes that is not a non-empty list/);
+  writeFileSync(tmp, JSON.stringify({ units: [{ ...row, outcomes: [spec, { ...spec, means: undefined }] }] }));
+  assert.throws(() => loadManifest(tmp), /declares an outcome with no means/, "each block in the list is held to the same law");
 });

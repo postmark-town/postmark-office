@@ -43,6 +43,8 @@ export const SOFT_STEPS = Object.freeze([
   // in the order it runs them, recorded apart from it because each is
   // non-fatal by design (POS-612 and POS-627, review-612).
   "settlements", "carried", "chests", "amends", "drops", "positions", "hhkeys", "hhkeys_log",
+  // the world graph snapshot (POS-268 5b moved it off the rehydrate; review-593 c)
+  "world",
 ]);
 export const STEPS = Object.freeze(["lock", "pull", "fetch", ...SOFT_STEPS.slice(0, 13), "snapshot", ...SOFT_STEPS.slice(13), "publish"]);
 export const STATUSES = Object.freeze(["ok", "refused", "skip", "notrun"]);

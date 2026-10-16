@@ -7,12 +7,16 @@ Type=oneshot
 # meepo's. This User= line is load-bearing — the 2026-07-09 tick outage was a
 # repo copy of the tick's unit drifting rootward from the live one.
 User=meepo
+# The law pen's credential first, exactly as postmark-office-keep.service reads
+# it (POS-268 part 5b: the world graph snapshot's store write moved into the
+# keeping tick), so a hand run is the same run. Optional, as there (review-593 b).
+EnvironmentFile=-/etc/postmark-world2-dev.env
 EnvironmentFile=/etc/postmark-office.env
 WorkingDirectory=/srv/postmark-office
 # The keeping half of the old office tick (POS-268 split it, 2026-09-27). It
-# touches neither office.db nor world.db; postmark-office-rehydrate does that,
-# two minutes later, from the clones this pulled. The ferry, the pen and both
-# halves share the one town lock.
+# touches no office.db, which nothing builds any more (part 5b retired the
+# rehydrate unit that did). It does write the store's world graph snapshot.
+# The ferry, the pen and this tick share the one town lock.
 # THE HAND RUN (POS-524, Wright 2026-10-13): the keeping tick exactly as
 # postmark-office-keep.service runs it, recorded as source "by-hand" in the
 # keep receipt. A by-hand run never extends or clears a scheduled step's

@@ -17,7 +17,7 @@ import {
   STEPS, SOFT_STEPS, FATAL_STEPS, REASON_RE, RETAIN_SCHEDULED, RETAIN_OTHER, MAX_LINE_BYTES,
   sourceOf, invalidity, parseLog, buildReceipt, appendReceipt, judgeKeep, writeReceipt,
 } from "../deploy/keep-history.mjs";
-import { loadManifest, judgeOutcome, DEFAULT_MANIFEST } from "../tools/box-rollcall.mjs";
+import { loadManifest, judgeOutcome, outcomesOf, DEFAULT_MANIFEST } from "../tools/box-rollcall.mjs";
 // read through the namespace so this file still loads over an older module (the baseline-red run)
 import * as keepHistory from "../deploy/keep-history.mjs";
 const { RETAIN_EVIDENCE } = keepHistory;
@@ -47,15 +47,16 @@ const alarmsFor = (alarms, step) => alarms.filter((a) => a.startsWith(`${step} `
 
 // 26 since POS-627: settlements-backfill's four soft steps (carried and amends
 // from POS-612, chests and drops from POS-627) are recorded apart from it, in the
-// order it runs them, between settlements and positions (review-612).
-test("the step list is the script's: 26 steps, 5 fatal and 21 soft, no step twice", () => {
-  assert.equal(STEPS.length, 26);
-  assert.equal(new Set(STEPS).size, 26);
+// order it runs them, between settlements and positions (review-612). 27 since
+// review-593 c: the world snapshot (POS-268 5b) is a soft step, after hhkeys_log.
+test("the step list is the script's: 27 steps, 5 fatal and 22 soft, no step twice", () => {
+  assert.equal(STEPS.length, 27);
+  assert.equal(new Set(STEPS).size, 27);
   assert.deepEqual(STEPS.slice(STEPS.indexOf("settlements"), STEPS.indexOf("settlements") + 6), ["settlements", "carried", "chests", "amends", "drops", "positions"]);
   assert.deepEqual([...STEPS].sort(), [...FATAL_STEPS, ...SOFT_STEPS].sort());
   assert.deepEqual(STEPS.slice(0, 3), ["lock", "pull", "fetch"]);
   assert.equal(STEPS[16], "snapshot");
-  assert.equal(STEPS.at(-1), "publish");
+  assert.deepEqual(STEPS.slice(-3), ["hhkeys_log", "world", "publish"]);
 });
 
 test("N-1 refused scheduled ticks are quiet; the Nth alarms; a skip, a notrun or a missing status never resets", () => {
@@ -301,18 +302,21 @@ test("the manifest validates the keep outcome on its own fields, with no dummy u
   assert.throws(loads({ ...KEEP_ROW, outcome: { history_path: "/fixture/x.jsonl" } }), /no unsettled_runs/);
 });
 
-test("the shipped manifest's keep row loads, judges the 21 soft steps at N=3 and 45 minutes, beside unchanged crossing rows", () => {
+test("the shipped manifest's keep row loads, judges the 22 soft steps at N=3 and 45 minutes, beside unchanged crossing rows", () => {
   const m = loadManifest(DEFAULT_MANIFEST);
-  const keep = m.units.find((r) => r.unit === "postmark-office-keep.timer");
+  const keepRow = m.units.find((r) => r.unit === "postmark-office-keep.timer");
+  // the keep row carries two blocks since POS-268 5b: this receipt, and the household-keys line
+  const keep = { outcome: outcomesOf(keepRow).find((o) => o.kind === "keep_steps") };
   assert.equal(keep.outcome.kind, "keep_steps");
   assert.deepEqual(keep.outcome.steps, [...SOFT_STEPS]);
   assert.equal(keep.outcome.step_refused_runs, 3);
   assert.equal(keep.outcome.stale_after_minutes, 45);
   assert.equal(Object.hasOwn(keep.outcome, "unsettled_runs"), false);
   assert.match(keep.outcome.means, /INSTALL-DAY/);
-  for (const r of m.units.filter((x) => x.outcome && x !== keep)) {
-    assert.equal(Object.hasOwn(r.outcome, "kind"), false, `${r.unit}: a crossing row keeps its shape`);
-    assert.ok(Number.isFinite(Number(r.outcome.unsettled_runs)), r.unit);
+  for (const r of m.units) for (const o of outcomesOf(r)) {
+    if (o === keep.outcome) continue;
+    assert.equal(Object.hasOwn(o, "kind"), false, `${r.unit}: a crossing row keeps its shape`);
+    assert.ok(Number.isFinite(Number(o.unsettled_runs)), r.unit);
   }
 });
 

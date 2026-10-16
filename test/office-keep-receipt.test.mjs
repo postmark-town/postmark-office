@@ -58,7 +58,11 @@ const skip = process.platform === "win32" ? "the PATH-only seam needs symlinks a
 // ── the stubs: each records its name, then does its one effect, then may hang or refuse ──
 const PRELUDE = `
 import { appendFileSync } from "node:fs";
-const trail = (n) => appendFileSync(process.env.STUB_CALLS, n + "\\n");
+const trail = (n) => {
+  appendFileSync(process.env.STUB_CALLS, n + "\\n");
+  // review-593 a: no child of the tick but the world step may hold a store password
+  for (const k of Object.keys(process.env)) if (/^PG_[A-Z0-9_]*_PASSWORD$/.test(k)) appendFileSync(process.env.STUB_CALLS, "LEAK:" + n + ":" + k + "\\n");
+};
 const outcome = async (n) => {
   if (process.env.STUB_HANG === n) { appendFileSync(process.env.STUB_HANG_MARK, "x"); await new Promise((r) => setTimeout(r, 20000)); }
   if ((process.env.STUB_FAIL || "").split(",").includes(n)) { console.error("stub " + n + ": refused"); process.exit(7); }
@@ -133,6 +137,18 @@ console.log(process.env.STUB_AMENDS_FAIL ? "amends: NOT recorded (non-fatal) —
 console.log(process.env.STUB_DROPS_FAIL ? "drops: NOT reconciled (non-fatal) — stub" : "drops: restored 0");
 `,
   "world2/tools/position-snapshot.mjs": plain("positions", `console.log("positions: none owed");`),
+  // The world step (POS-268 5b; review-593 a and c), in shell builtins only, since the run's PATH
+  // has no env or sed: it records which store passwords it was handed, and STUB_FAIL=world makes it
+  // exit 4 (the credential unreadable).
+  "deploy/office-world-hydrate.sh": [
+    "#!/bin/sh",
+    "echo world >> \"$STUB_CALLS\"",
+    ...["PG_WORLD2_OWNER_PASSWORD", "PG_OFFICE_API_PASSWORD", "PG_LAW_INGESTER_PASSWORD", "PG_SNAPSHOT_READER_PASSWORD"]
+      .map((k) => "[ -n \"${" + k + ":-}\" ] && echo WORLD-SAW:" + k + " >> \"$STUB_CALLS\""),
+    "case \",${STUB_FAIL:-},\" in *,world,*) exit 4;; esac",
+    "exit 0",
+    "",
+  ].join("\n"),
   "deploy/publish-windows.mjs": plain("publish", `
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -185,6 +201,7 @@ function fixture(ledger = ["row 1", "row 2"], { realFlock = false } = {}) {
   write(fx.office, { "deploy/keep-history.mjs": readFileSync(join(OFFICE, "deploy", "keep-history.mjs"), "utf8") });
   for (const d of [fx.bin, fx.harbor, fx.tmp]) mkdirSync(d, { recursive: true });
   symlinkSync(process.execPath, join(fx.bin, "node"));
+  symlinkSync(SH, join(fx.bin, "sh"));   // the tick runs its world step as `sh deploy/office-world-hydrate.sh`
   for (const n of REAL) symlinkSync(which(n), join(fx.bin, n));
   if (realFlock) symlinkSync(which("flock"), join(fx.bin, "flock"));
   else write(fx.bin, { flock: FLOCK_STUB }, 0o755);
@@ -263,7 +280,7 @@ const GREEN = {
   lock: "ok", pull: "ok", fetch: "ok", registry: "ok", settle: "ok", standing: "ok", gangway: "ok",
   mint: "ok", welcome: "ok", bugstage: "ok", ballots: "ok", verify: "ok", commit: "ok", push: "ok",
   sync: "ok:switch-off", rollback: "ok:not-needed", snapshot: "ok", settlements: "ok", carried: "ok", chests: "ok", amends: "ok", drops: "ok", positions: "ok",
-  hhkeys: "ok", hhkeys_log: "ok", publish: "ok",
+  hhkeys: "ok", hhkeys_log: "ok", world: "ok", publish: "ok",
 };
 const OWED = { STUB_APPEND: "mint row 3" };
 
@@ -537,4 +554,26 @@ test("overlapping finishers (the real flock): six ticks finishing at once into o
   assert.deepEqual(results, [0, 0, 0, 0, 0, 0]);
   const lines = readFileSync(shared, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
   assert.deepEqual(lines.map((l) => l.run).sort(), [...ids].sort(), "every run's receipt, once");
+});
+
+// ── THE WORLD STEP: A RECEIPT, AND THE ONLY CHILD WITH A STORE PASSWORD (review-593 a, c) ──
+
+const STORE_PASSWORDS = { PG_WORLD2_OWNER_PASSWORD: "owner", PG_OFFICE_API_PASSWORD: "api", PG_LAW_INGESTER_PASSWORD: "law", PG_SNAPSHOT_READER_PASSWORD: "reader" };
+
+test("review-593 a: the four store passwords reach no child of the tick; the world step alone is handed the law pen's", { skip }, () => {
+  const fx = fixture();
+  const r = run(fx, { ...OWED, ...STORE_PASSWORDS });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(calls(fx).filter((l) => l.startsWith("LEAK:")), [], "no stub (stamp-verify, stamp-mint, household-keys, every pass) sees a PG_*_PASSWORD");
+  assert.deepEqual(calls(fx).filter((l) => l.startsWith("WORLD-SAW:")), ["WORLD-SAW:PG_LAW_INGESTER_PASSWORD"], "the world step: the law pen's, and no other");
+  assert.ok(calls(fx).includes("hhkeys") && calls(fx).includes("verify"), "the control: the town-repo tools ran in this run");
+  assert.deepEqual(steps(receipt(fx)), GREEN);
+});
+
+test("review-593 c: a world step that fails is refused on the receipt with its exit code, and the tick goes on to the panes", { skip }, () => {
+  const fx = fixture();
+  const r = run(fx, { ...OWED, STUB_FAIL: "world" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(steps(receipt(fx)), { ...GREEN, world: "refused:exit:4" });
+  assert.equal(published(fx), true, "the panes still publish");
 });

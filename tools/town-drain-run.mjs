@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // town-drain-run.mjs — the ferry's call into the town-log drain.
 //
-//   node tools/town-drain-run.mjs [--clone PATH] [--db PATH] [--oauth-db PATH]
+//   node tools/town-drain-run.mjs [--clone PATH] [--oauth-db PATH]
 //                                 [--date YYYY-MM-DD] [--dry-run] [--unlocked]
 //                                 [--json]
 //
 // THE ENTRYPOINT AND NOTHING ELSE. Every decision lives in src/town-bridge.mjs;
-// this file resolves paths, opens two databases, calls once, prints, and exits.
+// this file resolves paths, opens the log's paper, calls once, prints, and exits.
 // The split is the same one crossing-save.mjs and world-drain.mjs keep — a tool
 // that also held policy would be a second place to read the drain's law.
 //
@@ -24,17 +24,15 @@
 //      non-zero holds the rest of the crossing on purpose: a refusal means the
 //      office does not understand its own log, and delivering mail on top of
 //      that would be building on a floor nobody has checked.
-//   2  a bad argument
+//   2  a bad argument, --db among them (office.db is retired, POS-268 5b)
 //
 // A THROW IS NOT AN EXIT CODE HERE. It propagates, systemd records it, and the
 // chain stops — same outcome as 1, louder. The drain has no failure it should
 // absorb: the town log's whole promise is that a row is either settled or still
 // pending, and a swallowed error is the one state that is neither.
 
-import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { DatabaseSync } from "node:sqlite";
 
 import { oauthSchema } from "../src/oauth.mjs";
 import { openPaper } from "../src/paperwork.mjs";
@@ -46,30 +44,36 @@ const argOf = (n, d = null) => { const i = process.argv.indexOf(n); return i !==
 const flag = (n) => process.argv.includes(n);
 
 const CLONE = resolve(argOf("--clone", process.env.TOWN_CLONE ?? join(ROOT, "town-clone")));
-const DB_PATH = resolve(argOf("--db", join(ROOT, "office.db")));
 const ODB_PATH = resolve(argOf("--oauth-db", join(ROOT, "oauth.db")));
 const DATE = argOf("--date", null);
+
+// --db IS RETIRED (POS-268 part 5b). It named office.db, the read index the
+// doors took, and nothing builds office.db any more: the rehydrate unit that
+// rebuilt it is gone. A caller still passing it is told so and nothing runs, so
+// a hand-run from an old note never replays the log against a frozen file.
+if (flag("--db")) {
+  console.error("[town-drain] --db is retired (POS-268 part 5b): office.db is no longer built, and the drain reads the town index from the store. Drop --db; nothing replaces it.");
+  process.exit(2);
+}
 
 if (DATE && !/^\d{4}-\d{2}-\d{2}$/.test(DATE)) {
   console.error(`unparseable --date: ${DATE} (want YYYY-MM-DD)`);
   process.exit(2);
 }
 
-// The read index the doors take. Read-only would be wrong — validateLetter and
-// the paper doors only read it, but opening it read-only would make a future
-// door that writes fail here and nowhere else, which is a trap rather than a
-// safeguard. Missing is fine and common on a fresh box: the doors that need it
-// bounce in their own vocabulary.
-//
-// With TOWN_INDEX_READS=store (POS-268) the doors' index is the store's: its
-// resident handles and letter ids, loaded once here, and office.db is not
-// opened. A store that cannot answer stops the run before a row is replayed,
-// cursor unmoved: replaying against no index would bounce every letter past it.
-let db = null;
-if (indexSwitched()) {
-  const { refreshStoreProbe } = await import("../src/town-index-store.mjs");
-  if (!(await refreshStoreProbe({ logins: false }))) { console.error(`[town-drain] ${UNREACHABLE_DEFECT}`); process.exit(1); }
-} else db = existsSync(DB_PATH) ? new DatabaseSync(DB_PATH) : null;
+// THE DOORS' INDEX IS THE STORE'S, ALWAYS (POS-268 part 5b): its resident
+// handles and letter ids, loaded once here. office.db is not built any more, so
+// this process takes the switch itself rather than inheriting it: a ferry unit
+// whose environment lost TOWN_INDEX_READS=store would otherwise replay the log
+// against a file frozen on the day the rehydrate stopped. A store that cannot
+// answer stops the run before a row is replayed, cursor unmoved: replaying
+// against no index would bounce every letter past it.
+if (!indexSwitched()) {
+  console.error(`[town-drain] TOWN_INDEX_READS is ${JSON.stringify(process.env.TOWN_INDEX_READS ?? null)} here; the drain reads the store's town index regardless (office.db is retired, POS-268 5b)`);
+  process.env.TOWN_INDEX_READS = "store";
+}
+const { refreshStoreProbe } = await import("../src/town-index-store.mjs");
+if (!(await refreshStoreProbe({ logins: false }))) { console.error(`[town-drain] ${UNREACHABLE_DEFECT}`); process.exit(1); }
 // THE TOWN LOG'S PAPER (POS-271), opened the way the office opens its own:
 // oauth.db by default, the store's office_town_journal + office_meta with
 // OFFICE_PAPERWORK_STORE=1. The drain must read the log the office writes and
@@ -97,7 +101,7 @@ const odb = await openPaper(ODB_PATH, { schema: oauthSchema });
 let code = 0;
 try {
   const report = await runTownDrain(odb, {
-    db, clone: CLONE, date: DATE,
+    clone: CLONE, date: DATE,
     dryRun: flag("--dry-run"),
     requireLock: !flag("--unlocked"),
   });
@@ -105,6 +109,5 @@ try {
   code = report.refused ? 1 : 0;
 } finally {
   try { odb.close(); } catch { /* already gone */ }
-  try { db?.close(); } catch { /* already gone */ }
 }
 process.exit(code);
