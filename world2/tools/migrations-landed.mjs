@@ -122,6 +122,8 @@ export const LANDED = {
   "075_amend_carried.sql":         { probe: rel("amend_carried") },
   // 076 (WLD-51): why a mark left (the note), and the clearing's insert policy admitting a returned draft.
   "076_taken_to_drafts.sql":       { probe: `${col("marks", "retired_cause")} AND ${policy("claims_insert_clearing", " AND with_check LIKE '%draft%'")}` },
+  // 077 (POS-579): arrival_heard_weekly searches the caller's pg_temp last.
+  "077_definer_pg_temp_last.sql":  { probe: "EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'arrival_heard_weekly' AND prosecdef AND proconfig @> ARRAY['search_path=public, pg_temp'])" },
 };
 
 /** The schema files in the order a store takes them — name order, as the CI floor applies them. */
