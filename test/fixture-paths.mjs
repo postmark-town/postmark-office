@@ -31,7 +31,12 @@
 // `tools/quest-progress.mjs`, `WORLD/world-state.json`, `tools/enter-exit.mjs`),
 // because the marker is part of what that suite is asserting and belongs with
 // its assertions, not here.
+//
+// THE CLONES ARE SPARSE (POS-652): only the paths test/clone-sparse.json names are
+// checked out. Importing this file loads test/helpers/sparse-guard.mjs, so a suite that
+// reads, probes or lists a path outside them fails loudly, naming the path to add.
 
+import "./helpers/sparse-guard.mjs";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";

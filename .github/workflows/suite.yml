@@ -32,7 +32,10 @@ name: Office suite (sharded)
 #   · the town and world checkouts at `town-clone/` and `world-clone/`, at the
 #     shas test/clone-pins.json names: HEAD, origin/main and the tags as they
 #     stood at the pin (.github/scripts/suite-clones.sh). The pins move only by
-#     a PR to that file.
+#     a PR to that file. Both are SPARSE (POS-652): only the paths
+#     test/clone-sparse.json names are checked out, and every process here
+#     loads test/helpers/sparse-guard.mjs (NODE_OPTIONS on the shard step), so a suite
+#     that reads, probes or lists a path outside them reds, naming the path.
 #   · Postgres: the suite starts its own, one per file, from the
 #     embedded-postgres devDependency (test/helpers/embedded-store.mjs), so no
 #     service container. The PGlite suites skip by name without
@@ -110,7 +113,7 @@ jobs:
           path: |
             town-clone
             world-clone
-          key: office-clones-${{ hashFiles('test/clone-pins.json', '.github/scripts/suite-clones.sh') }}
+          key: office-clones-${{ hashFiles('test/clone-pins.json', 'test/clone-sparse.json', 'test/helpers/clone-sparse.mjs', '.github/scripts/suite-clones.sh') }}
 
       - if: steps.clones.outputs.cache-hit != 'true'
         run: bash .github/scripts/suite-clones.sh
@@ -148,7 +151,7 @@ jobs:
           path: |
             town-clone
             world-clone
-          key: office-clones-${{ hashFiles('test/clone-pins.json', '.github/scripts/suite-clones.sh') }}
+          key: office-clones-${{ hashFiles('test/clone-pins.json', 'test/clone-sparse.json', 'test/helpers/clone-sparse.mjs', '.github/scripts/suite-clones.sh') }}
           fail-on-cache-miss: true
 
       - run: bash .github/scripts/suite-clones.sh --check
@@ -177,6 +180,10 @@ jobs:
       # across its run and reds when one appears, and a shard's own TAP landing in
       # the tree beside it is exactly that (CI's first run).
       - name: Shard ${{ matrix.shard }} of ${{ env.SHARDS }}
+        # the sparse guard in every process of the suite (POS-652); on this step
+        # only, so the actions' own node never loads a file from the checkout
+        env:
+          NODE_OPTIONS: --import=${{ github.workspace }}/test/helpers/sparse-guard.mjs
         run: node .github/scripts/suite-shard.mjs --shard ${{ matrix.shard }} --of "$SHARDS" --jobs "$SUITE_JOBS" --out "$RUNNER_TEMP/suite-out"
 
       # A store that would not start says only "pg_ctl start exited 1" in the
