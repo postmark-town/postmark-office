@@ -586,14 +586,15 @@ export function buildSlice(creature, kind, act, around = {}, { now = Date.now() 
       ...(r.last ? { last: cut(r.last, 60) } : {}),
     })),
     ...(others ? { others_about: others } : {}),
-    marks: marks.map((k) => {
+    // no view yet (the tick has not seen for it): marks are left out, never [] (an empty view says "none", truly)
+    ...(around.view !== undefined ? { marks: marks.map((k) => {
       const body = bodyOf(k.id);
       return {
         ...(k.class ? { class: k.class } : {}),
         name: k.name ?? k.id, m: Math.round(metresOf(k)), bearing: k.bearing,
         ...(body ? { body: String(body) } : {}), // whole, never cut (22:33)
       };
-    }),
+    }) } : {}),
     heard: (around.heard ?? []).slice(0, cap("heard")).map((h) => ({ who: h.who, said: cut(h.said, cap("said_chars")), ...(h.ago ? { ago: h.ago } : {}) })),
     ...(around.air ? { air: cut(typeof around.air === "string" ? around.air : String(around.air?.line ?? ""), cap("air_chars")) } : {}),
     ...(around.hour ? { hour: around.hour } : {}),

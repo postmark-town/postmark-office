@@ -24,7 +24,7 @@ import { LivingSet, loadCreatureLaw, ANSWER_WAIT_MS, AROUND_WAIT_MS, JEV_TIMEOUT
 import { perceived, noteActWritten, setCreaturesAwake, creaturesAwake, insideWatchedAct } from "../src/act-watch.mjs";
 import {
   __setCreaturesForTest, __resetArrivalsForTest, actOfRow, aroundCreature, arrivalTick, arrivals, creaturesAnswer, foldWalks, landingOf,
-  ARRIVAL_STALE_MS, VIEWS_PER_TICK, seeFrom, views, warmViews, __resetViewsForTest,
+  ARRIVAL_STALE_MS, VIEWS_PER_TICK, VIEW_RETRY_MS, seeFrom, views, warmViews, __resetViewsForTest,
 } from "../src/creatures-hook.mjs";
 import { NO_WORLD, worldModuleUrl } from "./fixture-paths.mjs";
 
@@ -380,10 +380,30 @@ test("play row 51: the tick sees for each living creature once per (published sh
   alive = [c(2, NOW - 1000)];
   await warmViews(living, { key: "s2:257", see, now: NOW });
   assert.deepEqual([...views.keys()].sort(), ["creature:wolf-270-2"]);
-  // eyes that fail leave no view and fault nothing
+  // eyes that fail leave no view, and the try is recorded (review-588 F1)
   __resetViewsForTest();
   assert.equal(await warmViews(living, { key: "s3:258", see: async () => { throw new Error("blind"); }, now: NOW }), 0);
-  assert.equal(views.size, 0);
+  assert.equal(views.get("creature:wolf-270-2").view, undefined);
+  assert.equal(views.get("creature:wolf-270-2").failed, true);
+});
+
+test("review-588 F1: a creature whose eyes keep failing never holds the queue; it is tried again after VIEW_RETRY_MS or at the next key, its last view standing", async () => {
+  __resetViewsForTest();
+  const c = (n, spawned) => ({ id: `creature:wolf-270-${n}`, x: n, y: 0, spawned_at: spawned, fades_at: NOW + 3600_000 });
+  const living = { living: () => [c(1, NOW - 3000), c(2, NOW - 2000), c(9, NOW - 1000)] };
+  const seen = [];
+  const see = async (cr) => { seen.push(cr.id); return cr.id.endsWith("-9") ? null : { view: { N: [] }, bodies: {} }; };
+  for (let i = 0; i < 6; i += 1) await warmViews(living, { key: "s1:257", see, now: NOW + i * 10_000 });
+  assert.deepEqual(seen, ["creature:wolf-270-9", "creature:wolf-270-2", "creature:wolf-270-1"], "the broken one is tried once, and the queue moves on");
+  assert.ok(views.get("creature:wolf-270-1").view && views.get("creature:wolf-270-2").view);
+  await warmViews(living, { key: "s1:257", see, now: NOW + VIEW_RETRY_MS });
+  assert.equal(seen.at(-1), "creature:wolf-270-9", "past VIEW_RETRY_MS it is tried again");
+  // a failed re-see under a new key keeps the last good view for the act
+  const good = views.get("creature:wolf-270-1").view;
+  await warmViews({ living: () => [c(1, NOW - 3000)] }, { key: "s2:257", see: async () => null, now: NOW + VIEW_RETRY_MS });
+  assert.equal(views.get("creature:wolf-270-1").view, good);
+  assert.equal(views.get("creature:wolf-270-1").failed, true);
+  __resetViewsForTest();
 });
 
 // ── C1: the arrival ─────────────────────────────────────────────────────────

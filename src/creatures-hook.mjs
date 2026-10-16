@@ -251,7 +251,8 @@ export async function aroundCreature(creature, act, reads = {}) {
     const air = await part(() => w.worldAir(oriented));
     if (air) out.air = air;
   }
-  if (seen?.view) { out.view = seen.view; out.bodies = seen.bodies; }
+  // never seen (or every try failed): no view, so the slice leaves its marks out rather than saying "none" (review-588 F2)
+  if (seen?.view !== undefined) { out.view = seen.view; out.bodies = seen.bodies; }
   if (Array.isArray(heardRows)) out.heard = heardRows.slice(-3).map((h) => ({ who: h.handle, said: h.said, ...(h.ago ? { ago: h.ago } : {}) }));
   if (Array.isArray(lastRows))
     out.actor_last = lastRows.map((r) => `${PUBLIC_ACTS[r.action] ?? r.action}, ${ago(r.at instanceof Date ? r.at.getTime() : Date.parse(r.at), nowMs)}`);
@@ -265,6 +266,8 @@ export const views = new Map();
 export function __resetViewsForTest() { views.clear(); }
 /** At most this many creatures see per tick: one line of sight holds the thread ~0.3–0.5 s (measured), so a tick holds it for one. */
 export const VIEWS_PER_TICK = 1;
+/** A sighting that failed is tried again after this, or at the next key, whichever is first (review-588 F1). */
+export const VIEW_RETRY_MS = 5 * 60_000;
 
 /** What a creature's view depends on besides where it stands: the published world and the crossing. */
 export function viewKeyNow({ repo = WORLD_CLONE, now = Date.now() } = {}) {
@@ -281,7 +284,8 @@ export async function seeFrom(creature, { world = null } = {}) {
   await Promise.resolve(w.worldOrient?.({ x: creature.x, y: creature.y }, null, { crowd: true })).catch(() => null);
   const rows = seen?._fov?.rows;
   if (!Array.isArray(rows)) return null;
-  return { view: rows.length ? viewBlock(rows) : null, bodies: Object.fromEntries(rows.filter((r) => r.body).map((r) => [r.id, r.body])) };
+  // a view seen as empty (the Mists' wall, open country) is a view: the slice says no marks, which is true
+  return { view: viewBlock(rows), bodies: Object.fromEntries(rows.filter((r) => r.body).map((r) => [r.id, r.body])) };
 }
 
 /**
@@ -294,15 +298,26 @@ export async function warmViews(living, { key = viewKeyNow(), see = seeFrom, now
   const alive = living.living(now);
   const ids = new Set(alive.map((c) => c.id));
   for (const id of views.keys()) if (!ids.has(id)) views.delete(id);
-  const due = alive.filter((c) => views.get(c.id)?.key !== key)
+  // due: never seen, seen for another key, or a failed try past its retry time.
+  // A FAILED TRY IS RECORDED (review-588 F1): it answers its key until the
+  // retry, so a creature whose eyes keep failing never holds the head of the
+  // queue and every other creature is still seen. Its last good view, if any,
+  // still answers the act meanwhile.
+  const isDue = (e) => !e || e.key !== key || (e.failed && now - e.tried_at >= VIEW_RETRY_MS);
+  const due = alive.filter((c) => isDue(views.get(c.id)))
     .sort((a, b) => (views.has(a.id) ? 1 : 0) - (views.has(b.id) ? 1 : 0) || b.spawned_at - a.spawned_at)
     .slice(0, most);
   let saw = 0;
   for (const c of due) {
-    try {
-      const v = await see(c);
-      if (v) { views.set(c.id, { key, ...v }); saw += 1; }
-    } catch (e) { faultLogged(`a creature's view could not be seen (${c.id})`, e); }
+    const had = views.get(c.id);
+    let v = null;
+    try { v = await see(c); }
+    catch (e) { if (!(had?.failed && had.key === key)) faultLogged(`a creature's view could not be seen (${c.id})`, e); }
+    if (v) { views.set(c.id, { key, ...v }); saw += 1; }
+    else {
+      if (v === null && !(had?.failed && had.key === key)) console.error(`[creatures] ${c.id}: its eyes answered no view at ${key}; tried again in ${VIEW_RETRY_MS / 60_000} min`);
+      views.set(c.id, { ...(had?.view !== undefined ? { view: had.view, bodies: had.bodies } : {}), key, failed: true, tried_at: now });
+    }
     await new Promise((r) => setImmediate(r)); // let the acts waiting on the thread through between two
   }
   return saw;
