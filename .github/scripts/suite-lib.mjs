@@ -20,6 +20,8 @@
 //   · a listed test that did not run at all (renamed or deleted: the row is stale);
 //   · a planned file with no result, or a file that exited non-zero with no red
 //     of its own (it crashed, or was killed: its tests vanished, they did not pass);
+//   · a file whose run read outside the pinned clones' sparse set (`sparse`, from
+//     test/helpers/sparse-guard.mjs, POS-652), in any process it spawned;
 //   · a shard that reported nothing.
 // Everything it counts is printed with its denominator.
 
@@ -142,6 +144,8 @@ export function verdict({ planned, results, known, shards, today = new Date().to
     for (const k of Object.keys(r.counts)) totals[k] += r.counts[k];
     for (const n of r.ran ?? []) ranKeys.add(key(file, n));
     for (const red of r.reds) { redKeys.set(key(file, red.name), { file, ...red }); ranKeys.add(key(file, red.name)); }
+    if (r.sparse?.length)
+      problems.push({ kind: "sparse-miss", file, detail: `${r.sparse.length} read(s) outside test/clone-sparse.json: ${r.sparse[0]}` });
     if (r.exit !== 0 && r.reds.length === 0)
       problems.push({ kind: "file-crashed", file, detail: `exited ${r.exit} with no red of its own (${r.counts.tests} tests reported)` });
   }

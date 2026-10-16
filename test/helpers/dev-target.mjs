@@ -23,6 +23,7 @@ import { startStore } from "./embedded-store.mjs";
 import { seedRegistry } from "./office-under-test.mjs";
 import { awaitListening } from "../spawn-office.mjs";
 import { tempDir } from "./temp-dir.mjs";
+import { standinClone } from "./clone-sparse.mjs";
 
 const OFFICE = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const g = (repo, ...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }).trim();
@@ -34,9 +35,14 @@ export const freePort = () => new Promise((ok, no) => {
   s.listen(0, "127.0.0.1", () => { const { port } = s.address(); s.close(() => ok(port)); });
 });
 
-/** A scratch clone with no remote, committing as the harness. */
-function scratchClone(source, dest) {
-  execFileSync("git", ["-c", "core.autocrlf=false", "clone", "--local", "--quiet", "--config", "core.autocrlf=false", source, dest]);
+/**
+ * A scratch clone with no remote, committing as the harness. SPARSE (POS-652): a stand-in
+ * leaves out the town's older letters and the world's older STATE/log/*.meta.json, which
+ * its office never writes (test/helpers/clone-sparse.mjs § standinPatterns); a full clone
+ * here was ~25,000 files written on every sandbox setup or reset.
+ */
+function scratchClone(which, source, dest) {
+  standinClone(which, source, dest);
   g(dest, "checkout", "-q", "-B", "main"); // the box's clones sit on main, and the settlement pins it
   g(dest, "remote", "remove", "origin");
   g(dest, "config", "user.name", "dev-rehearsal-harness");
@@ -85,8 +91,8 @@ export async function localDevTarget({
   try {
     const store = givenStore ?? await startStore({ db });
     if (!givenStore) cleanups.push(() => store.stop());
-    const town = scratchClone(townSource, join(dir, "town-clone"));
-    const world = scratchClone(worldSource, join(dir, "world-clone"));
+    const town = scratchClone("town", townSource, join(dir, "town-clone"));
+    const world = scratchClone("world", worldSource, join(dir, "world-clone"));
     // The world's own checker suite (test:candle) runs after a settlement publishes, as a
     // warning, never a hold; on this machine it costs ~25 minutes a settlement. The box's
     // run keeps it. Here it is replaced in the scratch world, and the stand-in says so.

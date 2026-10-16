@@ -107,6 +107,14 @@ test("a clean run is GREEN, and its totals carry the denominator", () => {
   assert.equal(v.totals.tests, 4);
 });
 
+test("a green file that read outside the sparse clones fails the run (POS-652: a miss in a spawned office counts)", () => {
+  const results = { "test/a.test.mjs": { ...green(), sparse: ["[clone-sparse] town-clone/MEEPS/x.md is not checked out: ..."] }, "test/b.test.mjs": green() };
+  const v = verdict({ planned: Object.keys(results), results, known: [] });
+  assert.equal(v.ok, false);
+  assert.deepEqual(v.problems.map((p) => [p.kind, p.file]), [["sparse-miss", "test/a.test.mjs"]]);
+  assert.match(v.problems[0].detail, /^1 read\(s\) outside test\/clone-sparse\.json: \[clone-sparse\] town-clone\/MEEPS\/x\.md/);
+});
+
 test("A NEW RED fails the run, and a listed red does not", () => {
   const results = { "test/a.test.mjs": red("listed one"), "test/b.test.mjs": red("new one") };
   const v = verdict({ planned: Object.keys(results), results, known: [row("test/a.test.mjs", "listed one")] });

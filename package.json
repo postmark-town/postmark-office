@@ -5,7 +5,7 @@
   "private": true,
   "description": "Postmark's post office — the API/MCP front door. Read shadow + letter enqueue; the town repo stays the constitution.",
   "scripts": {
-    "test": "node --test --test-concurrency=8 --test-timeout=180000 \"test/*.test.mjs\"",
+    "test": "node --import ./test/helpers/sparse-guard.mjs --test --test-concurrency=8 --test-timeout=180000 \"test/*.test.mjs\"",
     "hydrate": "node src/hydrate.mjs",
     "hydrate:world": "node src/world-hydrate.mjs",
     "world:lints": "node src/world-lints.mjs",
