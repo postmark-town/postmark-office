@@ -113,7 +113,6 @@ import { validateReadArgs } from "./validate-args.mjs"; // the flat tools' own v
 import { callHoldTool, holdingsOf, liveHolder } from "./world-hold.mjs";
 // The stride a placement is stamped with — read off the record like every other
 // departure's, never a constant here (decision 008b).
-import { departurePace } from "./world-classes.mjs";
 import { EARSHOT_M } from "./voices.mjs"; // postmark#3592: the description names both distances
 import { PRESENCE_DIALS } from "./dynamic-presence.mjs";
 import { AMBIENT_REACH_SQL, CLASS_MARK_GATE_SQL, WORKS_PATH_SQL } from "./world-store.mjs";
@@ -3146,19 +3145,16 @@ async function spawnOnEnter(args, key, who) {
     // writes its own zero-length walk past the walk door's road check, so it
     // asks the wall itself: a spawn point behind it sets nobody down, and the
     // entrant stays where the entry left them, told why.
-    const { walkEntry, mistsGroundCheck, worldSkeletonRaw, MISTS_UNREADABLE } = await import("./world.mjs");
+    const { mistsGroundCheck, worldSkeletonRaw, MISTS_UNREADABLE } = await import("./world.mjs");
     const seen = await mistsGroundCheck(WORLD_CLONE, worldSkeletonRaw, [spawn.at], currentCrossing());
     if (seen?.unreadable) return { ground: place.ground, refused: `${MISTS_UNREADABLE}: this ground sets no one down behind a wall it cannot see; you stay where you entered` };
     if (seen?.wall)
       return { ground: place.ground, refused: "this ground's spawn point stands behind the wall of the Mists, so it sets no one down there; you stay where you entered" };
-    const { appendJournal } = await import("./world-journal.mjs");
-    const declaredAt = new Date().toISOString();
-    await appendJournal(null, walkEntry({
-      crossing: currentCrossing(), who, targetMarkId: place.ground,
-      stampAt: null, witnesses: null,
-      from: spawn.at, toward: spawn.at, pace: departurePace(), targetExtent: null,
-      household: null, writtenAt: declaredAt, declaredBy: who,
-    }));
+    // A GROUND THAT PLACES ITS ENTRANTS WRITES A LANDING (WLD-63 row 68 B), through
+    // the one land pen: never a walk. The pen reads the walk door's own fractional
+    // clock, so the landing is never stamped behind a walk made earlier this crossing.
+    const { landAt } = await import("./world.mjs");
+    await landAt(WORLD_CLONE, { who, at: spawn.at, via: place.ground, why: "ground", key });
     return {
       ground: place.ground, at: spawn.at,
       ...(spawn.jitter ? { jitter_m: spawn.jitter, from_spawn: spawn.from } : {}),

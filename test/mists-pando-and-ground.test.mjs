@@ -91,7 +91,8 @@ test("THE PLACEMENT DOOR forecasts the Mists for the mark's ground after every o
 test("A PORTAL GROUND never sets anyone down behind the wall: the spawn asks before its walk is written", () => {
   const spawn = APEX.slice(APEX.indexOf("async function spawnOnEnter"), APEX.indexOf("// ── the read mode"));
   const asked = spawn.indexOf("await mistsGroundCheck(WORLD_CLONE,");
-  assert.ok(asked > 0 && asked < spawn.indexOf("await appendJournal(null, walkEntry("), "asked before the set-down walk");
+  // since WLD-63 row 68 B the set-down is a landing through the land pen, not a walk
+  assert.ok(asked > 0 && asked < spawn.indexOf("await landAt(WORLD_CLONE,"), "asked before the landing is written");
   assert.match(spawn, /sets no one down there; you stay where you entered/);
 });
 
