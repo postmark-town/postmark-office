@@ -5,8 +5,9 @@
 //
 //   the stride   `walk_min_step` snaps a walk's destination inside the ground,
 //                and a ground that declares none snaps nothing
-//   the spawn    a ground with `spawn` sets its entrants down inside its own
-//                fence, witnessed-jittered, and a spawn outside it is refused
+//   the landing  a ground with `lands_at` sets its entrants down inside its own
+//                fence, witnessed-jittered, and a landing outside it is refused
+//                (WLD-66: "spawn" is the creatures' word; the old `spawn` key still reads)
 //   the door     `standpoint.portal` carries the room, its space and its stride
 //   no fight     no ground keeps a wheel
 //
@@ -21,7 +22,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import { SCHEMA } from "../src/world-store.mjs";
-import { cockpitPortal, groundAt, groundAtPoint, snapTo, spawnPointFor, strideOnGround, walkMinStepOf } from "../src/portal-ground.mjs";
+import { cockpitPortal, groundAt, groundAtPoint, snapTo, landingPointFor, strideOnGround, walkMinStepOf } from "../src/portal-ground.mjs";
 
 const CELLAR = "the-town/the-cellar-door";
 const VAULT = "the-town/the-candle-vault";
@@ -80,25 +81,31 @@ test("THE WALK: a step on the vault floor snaps to its 0.25 m stride and says so
   } finally { db.close(); }
 });
 
-test("THE SPAWN: inside its own fence, two entrants apart, the same hand the same tile, and only where declared", () => {
+test("THE LANDING: inside its own fence, two entrants apart, the same hand the same tile, and only where declared", () => {
   const db = worldDb();
   try {
     const vault = groundAt(db, IN_VAULT);
     const inVault = (p) => p.x >= 1095.5 && p.x <= 1098.5 && p.y >= -784.5 && p.y <= -782.5;
-    const one = spawnPointFor(db, vault, { who: "darko", crossing: 155.5 });
+    const one = landingPointFor(db, vault, { who: "darko", crossing: 155.5 });
     assert.ok(one?.at && inVault(one.at), `an entrant was placed at ${JSON.stringify(one?.at)} — outside the vault`);
-    const two = spawnPointFor(db, vault, { who: "rei", crossing: 155.5 });
+    const two = landingPointFor(db, vault, { who: "rei", crossing: 155.5 });
     assert.ok(inVault(two.at));
     assert.notDeepEqual(one.at, two.at, "two entrants were set down on the same tile");
-    assert.deepEqual(spawnPointFor(db, vault, { who: "darko", crossing: 155.5 }).at, one.at, "the same hand landed somewhere else on a second read");
+    assert.deepEqual(landingPointFor(db, vault, { who: "darko", crossing: 155.5 }).at, one.at, "the same hand landed somewhere else on a second read");
     const corner = { ...vault, row: { ...vault.row, dials: JSON.stringify({ walk_min_step: 0.25, spawn: { x: 1095.5, y: -784.5 }, spawn_jitter_m: 1 }) } };
     for (const hand of ["darko", "rei", "keeminlee", "limen", "meep"])
-      assert.ok(inVault(spawnPointFor(db, corner, { who: hand, crossing: 155.5 }).at), `a corner spawn put ${hand} outside the fence`);
-    assert.equal(spawnPointFor(db, groundAt(db, IN_ANTECHAMBER), { who: "darko", crossing: 155.5 }), null, "the cellar door placed an entrant it never asked to place");
+      assert.ok(inVault(landingPointFor(db, corner, { who: hand, crossing: 155.5 }).at), `a corner landing put ${hand} outside the fence`);
+    assert.equal(landingPointFor(db, groundAt(db, IN_ANTECHAMBER), { who: "darko", crossing: 155.5 }), null, "the cellar door placed an entrant it never asked to place");
     const wrong = { ...vault, row: { ...vault.row, dials: JSON.stringify({ spawn: { x: 1083, y: -791.4 } }) } };
-    const r = spawnPointFor(db, wrong, { who: "darko", crossing: 155.5 });
-    assert.equal(r?.at, null, "a spawn outside the ground was honoured");
+    const r = landingPointFor(db, wrong, { who: "darko", crossing: 155.5 });
+    assert.equal(r?.at, null, "a landing outside the ground was honoured");
     assert.match(String(r?.refused ?? ""), /outside its own extent/);
+    // WLD-66: the dial is `lands_at` now, and the old `spawn` key still reads, landing exactly the same
+    const asLands = { ...vault, row: { ...vault.row, dials: JSON.stringify({ walk_min_step: 0.25, lands_at: { x: 1095.5, y: -784.5 }, lands_at_jitter_m: 1 }) } };
+    for (const hand of ["darko", "rei", "limen"])
+      assert.deepEqual(landingPointFor(db, asLands, { who: hand, crossing: 155.5 }), landingPointFor(db, corner, { who: hand, crossing: 155.5 }), `lands_at and the old spawn key landed ${hand} apart`);
+    const both = { ...vault, row: { ...vault.row, dials: JSON.stringify({ lands_at: { x: 1097, y: -783 }, spawn: { x: 1083, y: -791.4 } }) } };
+    assert.ok(inVault(landingPointFor(db, both, { who: "darko", crossing: 155.5 }).at), "lands_at wins over the old key where a mark carries both");
   } finally { db.close(); }
 });
 
@@ -120,13 +127,13 @@ test("THE DOOR: standpoint.portal names the room, its space and its stride (abse
   } finally { db.close(); }
 });
 
-test("THE WIRING: the walk desk snaps by the ground, the read carries standpoint.portal, and an enter is set down at the spawn", () => {
+test("THE WIRING: the walk desk snaps by the ground, the read carries standpoint.portal, and an enter is set down at the landing", () => {
   const code = (f) => readFileSync(join(import.meta.dirname, "..", "src", f), "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
   const world = code("world.mjs"), apex = code("world-apex.mjs");
   assert.match(world, /strideOnGround\(\{ toward, targetFrom \}, groundHere\(targetMarkId, toward\)\)/, "the walk desk no longer asks the ground for its stride");
   assert.match(apex, /portal = groundAt\(store\.db, spineIds\);/, "the read no longer finds the portal ground it stands in");
   assert.match(apex, /\.\.\.\(portal \? \{ portal: cockpitPortal\(portal\) \} : \{\}\)/, "the standpoint no longer carries `portal`");
-  assert.match(apex, /if \(action === "enter" && !result\?\.error\) \{\s*const placed = await spawnOnEnter\(/, "an enter is no longer set down at the ground's spawn");
+  assert.match(apex, /if \(action === "enter" && !result\?\.error\) \{\s*const placed = await landOnEnter\(/, "an enter is no longer set down at the ground's landing");
 });
 
 test("INNERMOST FIRST (Keemin, 2026-09-30): a hand in the vault is told the vault, with its stride; a hand in the parlor outside it, the parlor", () => {
