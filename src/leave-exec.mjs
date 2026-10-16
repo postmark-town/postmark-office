@@ -33,6 +33,7 @@ import { penCommit } from "./write.mjs";
 import { markRecord } from "./mark-record.mjs";
 import { ensureDraftCheckout } from "./world-branches.mjs";
 import { isDroppedUnitMark } from "./world-stacks.mjs";
+import { faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578, POS-617)
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 // WORLD_CLONE is the LEASED WORKTREE when the pool is on (tier 1) and the shared
@@ -94,7 +95,9 @@ async function main() {
   try {
     branch = timed("checkout", () => ensureDraftCheckout(CLONE, p.household, { pooled: !!SLOT, shared: SHARED }));
   } catch (e) {
-    return err(409, "the household sketchbook is not ready", String(e?.message ?? e).slice(0, 300));
+    // git's own words about the checkout (a path on the box, a lock, a ref) go to this
+    // child's stderr, the office's log; the resident reads that nothing of theirs caused it (POS-617)
+    return err(409, "the household sketchbook is not ready", faultLogged("the household sketchbook is not ready", e));
   }
 
   const marks = timed("load", () => loadMarks(MARKS_DIR));

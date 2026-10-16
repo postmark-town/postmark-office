@@ -22,7 +22,7 @@ import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 
 import { WHAT_THIS_BUYS } from "../src/funding.mjs";
-import { verifyUsdcPayment, INTAKE, USDC, TRANSFER_TOPIC, MIN_CONF } from "../src/usdc-witness.mjs";
+import { verifyUsdcPayment, INTAKE, USDC, TRANSFER_TOPIC, MIN_CONF, BASE_BLIND } from "../src/usdc-witness.mjs";
 import { fundVerify, fundGuards, intakeDisclosure } from "../src/fund.mjs";
 import { NO_TOWN, townClone, townModuleUrl } from "./fixture-paths.mjs";
 import { startPayerStore } from "./helpers/payer-store.mjs";
@@ -170,6 +170,9 @@ test("an unreachable chain is DISCLOSED, never refused — a refusal would call 
   assert.equal(out.verified, false);
   assert.equal(out.unreadable, true, "unreadable is a THIRD answer, distinct from refused");
   assert.match(out.refused, /this says nothing about your payment/);
+  // POS-617: the town's own sentence, never the RPC's words (they go to the log)
+  assert.equal(out.refused, BASE_BLIND);
+  assert.doesNotMatch(out.refused, /ETIMEDOUT|RPCs failed/);
 });
 
 // ── THE DOOR — the happy path, and the three bounces ────────────────────────
