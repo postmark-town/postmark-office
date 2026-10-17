@@ -78,18 +78,30 @@ test("oldFormKind: identity on the old form's words, a W2 class back to its stan
   assert.equal(oldFormKind("no-such-class", extendsOf), "no-such-class");
 });
 
-test("stakeKindsInOldForm rewrites stakes rows only, wherever the segment stands, and reads the chain only when it must", async () => {
+// The record those rows name: each mark's own `kind` on W2.
+const RECORD = new Map([["a/x", "thing"], ["a/y", "predicate"], ["a/w", "thing"]]);
+const W2 = { extendsOf, kindOf: (id) => RECORD.get(id) };
+
+test("stakeKindsInOldForm rewrites stakes rows only, wherever the segment stands, and reads the world only when it must", async () => {
   const page = {
     full: { stakes: { rows: [{ mark: "a/x", kind: "thing", class: "commons" }, { mark: "a/y", kind: "predicate", class: "home" }] }, stances: { awaiting: [{ mark: "b/z", kind: "thing" }] } },
     slim: { stakes: { rows: [{ mark: "a/x", kind: "sited", class: "commons" }] } },
   };
   let asked = 0;
-  await stakeKindsInOldForm(page, async () => { asked++; return extendsOf; });
+  await stakeKindsInOldForm(page, async () => { asked++; return W2; });
   assert.deepEqual(page.full.stakes.rows.map((r) => r.kind), ["sited", "predicated"]);
   assert.equal(page.full.stakes.rows[0].class, "commons", "the stake's own class is not the mark's kind, and is untouched");
   assert.equal(page.full.stances.awaiting[0].kind, "thing", "a row outside a stakes segment is not this helper's");
-  assert.equal(asked, 1, "the chain is read once");
+  assert.equal(asked, 1, "the world is read once");
   let none = 0;
-  await stakeKindsInOldForm({ stakes: { rows: [{ kind: "sited" }, { kind: "predicated" }] } }, async () => { none++; return extendsOf; });
+  await stakeKindsInOldForm({ stakes: { rows: [{ kind: "sited" }, { kind: "predicated" }] } }, async () => { none++; return W2; });
   assert.equal(none, 0, "a page in the old form never reads the clone");
+});
+
+test("stakeKindsInOldForm reads back only the FORM: a row that misstates its mark's kind keeps the wrong word, and the golden reds on it", async () => {
+  // The flip this closes: the page says portal-ground where the record says
+  // thing. Both stand under sited, so a bare read-back would hide the change.
+  const page = { stakes: { rows: [{ mark: "a/w", kind: "portal-ground" }, { mark: "no/such-mark", kind: "thing" }] } };
+  await stakeKindsInOldForm(page, async () => W2);
+  assert.deepEqual(page.stakes.rows.map((r) => r.kind), ["portal-ground", "thing"]);
 });

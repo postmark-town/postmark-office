@@ -763,8 +763,8 @@ test("F7c5 · THE MORNING PAGE DID NOT FATTEN — the doorstep bundle is byte-id
   // segment's world data is compared by its shape. On the world the golden was
   // captured on, the first is the identity.
   const { worldClone } = await import("./fixture-paths.mjs");
-  const { stakeKindsInOldForm, worldExtendsOf } = await import("./helpers/kind-forms.mjs");
-  const page = async (b) => JSON.stringify(worldDataByShape(await stakeKindsInOldForm(structuredClone(b), () => worldExtendsOf(worldClone()))));
+  const { stakeKindsInOldForm, worldKinds } = await import("./helpers/kind-forms.mjs");
+  const page = async (b) => JSON.stringify(worldDataByShape(await stakeKindsInOldForm(structuredClone(b), () => worldKinds(worldClone()))));
   assert.equal(await page(now), JSON.stringify(worldDataByShape(JSON.parse(readFileSync(GOLD, "utf8")))),
     "the morning page moved — every byte here is served on every doorstep, and this design exists to keep that number still");
   // ⚠ THE GOLDEN WAS REGENERATED ONCE, 2026-08-31, and this is the honest note
@@ -1055,8 +1055,9 @@ test("F7c5 · THE MORNING PAGE DID NOT FATTEN — the doorstep bundle is byte-id
   //   1. `stakes.rows.N.kind`, 7 rows a skin: the mark's own `kind`, which W2's
   //      kind rung spells as its class (`thing`, `portal-ground`) or as
   //      `predicate`. Each is read back in the old form's word through the
-  //      world's own class chain (helpers/kind-forms.mjs): identity on the
-  //      pinned world, so nothing loosens there.
+  //      world's own class chain (helpers/kind-forms.mjs), and only when it is
+  //      its mark's own `kind` in the record: identity on the pinned world, so
+  //      nothing loosens there, and a row that misstates its mark still reds.
   //   2. `stances`, 54 paths a skin: the count awaiting and the five rows, the
   //      world's own data, which W2 carries newer marks in. The tenth note had a
   //      pin move re-capture them; they are compared by their shape instead, and

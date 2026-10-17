@@ -100,9 +100,9 @@ const inRecordForm = async (text) => {
   let v;
   try { v = text.includes('"stakes"') ? JSON.parse(text) : null; } catch { v = null; }
   if (v == null) return text;
-  const { stakeKindsInOldForm, worldExtendsOf } = await import("./helpers/kind-forms.mjs");
+  const { stakeKindsInOldForm, worldKinds } = await import("./helpers/kind-forms.mjs");
   const { worldClone } = await import("./fixture-paths.mjs");
-  return JSON.stringify(await stakeKindsInOldForm(v, () => worldExtendsOf(worldClone())));
+  return JSON.stringify(await stakeKindsInOldForm(v, () => worldKinds(worldClone())));
 };
 // the twin's answer as recorded (helpers/twin-golden.mjs), against the store's
 const same = async (label, newAnswer) => {

@@ -11,20 +11,30 @@
 // class chain: a kind whose lineage reaches `sited` reads `sited`, one that
 // reaches the predicate reads `predicated`. A word the old form already used
 // passes unchanged, so on the world the goldens were captured on this is the
-// identity and the comparison is exactly as strict as it was. A kind whose
-// lineage reaches neither is left as it is, and the comparison reds on it.
+// identity and the comparison is exactly as strict as it was. Two things are
+// left as they are, so the comparison reds on them: a kind whose lineage
+// reaches neither, and a row whose kind is not its mark's own `kind` in the
+// record (the page must still say what the record says; only the form is read
+// back).
 
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { extendsFromMarks, standingOf } from "../../src/world-grants.mjs";
+import { extendsFromMarks, kindFieldOf, standingOf } from "../../src/world-grants.mjs";
 
 /** The words the old form wrote in `kind`, each meaning itself. */
 export const OLD_FORM_KINDS = Object.freeze(new Set(["sited", "predicated", "parcel", "naming", "post", "class", "property"]));
 
-/** An `extendsOf` read off the clone's own marks, by the world's own loader. */
-export async function worldExtendsOf(clone) {
+/** The clone's own marks, by the world's own loader: its class chain and each mark's `kind`. Read once a clone. */
+const read = new Map();
+export function worldKinds(clone) {
+  if (!read.has(clone)) read.set(clone, readKinds(clone));
+  return read.get(clone);
+}
+async function readKinds(clone) {
   const { loadMarks } = await import(pathToFileURL(join(clone, "tools", "marks-fold.mjs")).href);
-  return extendsFromMarks(loadMarks(join(clone, "WORLD", "marks")));
+  const marks = loadMarks(join(clone, "WORLD", "marks"));
+  const byId = new Map(marks.map((m) => [m.id, kindFieldOf(m)]));
+  return { extendsOf: extendsFromMarks(marks), kindOf: (id) => byId.get(String(id)) };
 }
 
 /** A kind in the old form's word: identity on an old word, the standing for a class. PURE. */
@@ -36,11 +46,12 @@ export function oldFormKind(kind, extendsOf) {
 
 /**
  * `value` with every `stakes.rows[n].kind` in the old form, wherever a stakes
- * segment stands in it. `extendsOf` is asked only when a row carries a word the
- * old form did not use (a function returning one, so the clone is read only then).
+ * segment stands in it. `worldLater` answers `{ extendsOf, kindOf }` (worldKinds)
+ * and is asked only when a row carries a word the old form did not use, so the
+ * clone is read only then.
  */
-export async function stakeKindsInOldForm(value, extendsOfLater) {
-  let extendsOf = null;
+export async function stakeKindsInOldForm(value, worldLater) {
+  let world = null;
   const rows = [];
   const find = (v) => {
     if (Array.isArray(v)) { v.forEach(find); return; }
@@ -53,8 +64,9 @@ export async function stakeKindsInOldForm(value, extendsOfLater) {
   find(value);
   for (const r of rows) {
     if (typeof r.kind !== "string" || OLD_FORM_KINDS.has(r.kind)) continue;
-    extendsOf ??= await extendsOfLater();
-    r.kind = oldFormKind(r.kind, extendsOf);
+    world ??= await worldLater();
+    if (world.kindOf(r.mark) !== r.kind) continue;
+    r.kind = oldFormKind(r.kind, world.extendsOf);
   }
   return value;
 }
