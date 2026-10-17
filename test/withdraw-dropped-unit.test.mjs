@@ -24,6 +24,9 @@ import { NO_TOWN, townClone } from "./fixture-paths.mjs";
 import { copyTownTools } from "./helpers/town-tools.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
 
+// WLD-27's doors ship dark by default (src/chests-candy.mjs); these are their own tests, so they run with them open.
+process.env.WORLD_CHESTS_CANDY = "1";
+
 const TOWN = townClone();
 const litter = [];
 after(() => { for (const d of litter) { try { rmSync(d, { recursive: true, force: true }); } catch { /* litter */ } } });
