@@ -22,6 +22,9 @@ import { readIntakeMap } from "../src/intake-map.mjs";
 
 const SECRET = "relation \"acts_hidden\" does not exist at /srv/postmark/box/world2.sql (pg hint: SELECT payload FROM acts)";
 const boom = () => { throw Object.assign(new Error(SECRET), { code: "42P01", hint: "SELECT payload FROM acts" }); };
+// The world's files fail the way git does: a child's stderr, never a SQLSTATE.
+const GIT_SECRET = "fatal: bad object refs/hidden/acts_hidden in /srv/postmark/box/world-clone";
+const boomGit = () => { throw Object.assign(new Error("Command failed: git show"), { stderr: GIT_SECRET, status: 128 }); };
 const REASONS = Object.values(PLAIN_REASONS);
 
 /** Run `fn` with console.error captured: { value, logged }. */
@@ -33,7 +36,7 @@ async function logging(fn) {
 }
 const clean = (answer) => {
   const s = JSON.stringify(answer);
-  assert.doesNotMatch(s, /acts_hidden|\/srv\/postmark|SELECT payload|42P01/, `no raw error reaches the answer: ${s.slice(0, 300)}`);
+  assert.doesNotMatch(s, /acts_hidden|\/srv\/postmark|SELECT payload|42P01|fatal:|world-clone/, `no raw error reaches the answer: ${s.slice(0, 300)}`);
   return s;
 };
 
@@ -48,6 +51,19 @@ test("the four reasons are the ruling's words, and a read is given one of them, 
   assert.equal((await logging(() => plainReason(new Error("x"), "no such kind"))).value, "the record did not answer", "an unknown kind is the record");
 });
 
+test("each raw cause maps to one reason: the cause outranks the site, and the chain stays the chain", async () => {
+  const said = async (e, kind) => (await logging(() => plainReason(e, kind, "a read"))).value;
+  assert.equal(await said(Object.assign(new Error(SECRET), { code: "42P01" }), "files"), "the record did not answer", "pg's SQLSTATE is the record");
+  assert.equal(await said(Object.assign(new Error("invalid input syntax for type json"), { code: "22P02" }), "files"), "the record did not answer", "pg's code outranks its text");
+  assert.equal(await said(new Error("connect ECONNREFUSED 127.0.0.1:5432"), "files"), "the record did not answer");
+  assert.equal(await said(Object.assign(new Error("Command failed: git show"), { stderr: GIT_SECRET }), "record"), "the world's files could not be read", "a child's stderr is the files");
+  assert.equal(await said(new Error("world clone has no main ref"), "record"), "the world's files could not be read");
+  assert.equal(await said(Object.assign(new Error("ENOENT: no such file"), { code: "ENOENT" }), "record"), "the world's files could not be read");
+  assert.equal(await said(new SyntaxError("Unexpected end of JSON input"), "record"), "a saved file does not parse");
+  assert.equal(await said(new Error("connect ECONNREFUSED"), "chain"), "the chain could not be reached", "the chain's RPC failing is the chain");
+  assert.equal(await said(new Error("something odd"), "files"), "the world's files could not be read", "no named cause: the site's kind stands");
+});
+
 test("alerts: a store that cannot be reached, and a query that fails, say the plain reason", async () => {
   const lost = await logging(() => alertsFor(["kai"], { store: async () => boom() }));
   const s = clean(lost.value);
@@ -59,7 +75,7 @@ test("alerts: a store that cannot be reached, and a query that fails, say the pl
 });
 
 test("the doorstep's stakes: an unreadable world, registry and escrow keep 'unknown, not zero' with plain reasons", async () => {
-  const noWorld = await logging(() => stakesFor(["kai"], { world: async () => boom() }));
+  const noWorld = await logging(() => stakesFor(["kai"], { world: async () => boomGit() }));
   assert.match(clean(noWorld.value), /the world record could not be read \(the world's files could not be read\) — what you hold is unknown here, not empty/);
   const noEscrow = await logging(() => stakesFor(["kai"], {
     world: async () => ({ state: { marks: [] }, ref: "refs/tags/settlement/S1" }), registry: async () => boom(), escrow: async () => boom(),
@@ -73,7 +89,7 @@ test("the Mists forecast: a registry, marks or ground that cannot be read says t
   const base = { pointed: () => true, household: async () => ({ residents: ["kai"] }), publishedMarks: () => [], ringOf: async () => [], engine: async () => null, skeleton: () => null };
   for (const [part, d, want] of [
     ["registry", { ...base, household: async () => boom() }, /the household registry could not be read \(the record did not answer\)/],
-    ["marks", { ...base, publishedMarks: () => boom() }, /the house's published marks could not be read \(the world's files could not be read\)/],
+    ["marks", { ...base, publishedMarks: () => boomGit() }, /the house's published marks could not be read \(the world's files could not be read\)/],
   ]) {
     const { value } = await logging(() => householdMistsForecast("kai", { deps: d }));
     assert.match(clean(value), want, part);

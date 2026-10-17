@@ -354,8 +354,11 @@ export async function storedDepartures({ atMs = Date.now(), withActId = false } 
     // ruled sentence to every resident whatever went wrong ("the office's record
     // cannot be reached"), and it puts the real reason on `cause`. A disclosure
     // that printed only the outer sentence would send an operator looking at the
-    // pool when the office is simply pointed at no record.
-    return { records: [], absent: plainReason(e, "record", "the store's departures") };
+    // pool when the office is simply pointed at no record. `absent` is the
+    // OPERATOR's detail (crossing-save reads it through storedDepartureEvents); the
+    // resident's read says it plainly (world.mjs § the departures, POS-657).
+    const why = e?.cause?.message ? `${e.message} (${e.cause.message})` : String(e?.message ?? e);
+    return { records: [], absent: why.slice(0, 200) };
   }
 }
 

@@ -39,10 +39,27 @@ export const PLAIN_REASONS = Object.freeze({
  */
 export const ownWordsError = (sentence) => Object.assign(new Error(sentence), { own_words: true });
 
-/** The plain reason for a read that failed on `kind`, with the raw error logged beside `what`. A file read whose JSON is bad is `parse`; the office's own words (ownWordsError) are said as they are. */
+/**
+ * The reason an error's own CAUSE names, when it names one (Wright's brief: map
+ * each raw cause to one reason): pg's own code outranks its text (a json
+ * column's 22P02 is the record); a parser's error is `parse`; pg's SQLSTATE, a
+ * lost or unconfigured store or a refused connection is `record`; git, a missing
+ * file or a clone is `files`. Anything else is null, and the site's kind stands.
+ */
+export function causeKind(e) {
+  const said = `${e?.name ?? ""} ${e?.message ?? ""} ${e?.cause?.message ?? ""}`;
+  if (isStoreLostCode(e?.code) || (typeof e?.code === "string" && /^[0-9A-Z]{5}$/.test(e.code))) return "record";
+  if (e instanceof SyntaxError || /\bJSON\b|Unexpected token|is not valid JSON|parse error/i.test(said)) return "parse";
+  if (/ECONNREFUSED|ETIMEDOUT|ECONNRESET|connection|\bpool\b|\brelation\b|\bcolumn\b|PenUnreachable|GuardsUnreachable|NoRecord|not pointed at a record|record (cannot|is not) (be )?reach/i.test(said)) return "record";
+  if (e?.stderr || e?.code === "ENOENT" || e?.code === "EACCES" || /ENOENT|EACCES|\bgit\b|fatal:|\bclone\b|\brefs?\/|\bref\b|worktree|checkout/i.test(said)) return "files";
+  return null;
+}
+
+/** The plain reason for a read that failed on `kind`, with the raw error logged beside `what`. The error's own cause, when it names one, outranks the site's kind (`causeKind`); the chain stays the chain; the office's own words (ownWordsError) are said as they are. */
 export function plainReason(e, kind, what = "a read") {
   if (e?.own_words === true) return String(e.message);
-  const k = kind === "files" && e instanceof SyntaxError ? "parse" : (Object.hasOwn(PLAIN_REASONS, kind) ? kind : "record");
+  const site = Object.hasOwn(PLAIN_REASONS, kind) ? kind : "record";
+  const k = site === "chain" ? "chain" : (causeKind(e) ?? site);
   console.error(`[office] ${String(what).slice(0, 160)} could not be read (${PLAIN_REASONS[k]}): ${errorSaid(e)}`);
   return PLAIN_REASONS[k];
 }

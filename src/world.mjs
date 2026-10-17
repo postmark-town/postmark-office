@@ -510,7 +510,8 @@ export async function departuresAcrossEras(worldClone = WORLD_CLONE, { atMs = Da
     // `movements-unreadable`, which was true of a sqlite file and is false of
     // the store — a disclosure that names the wrong thing sends whoever reads it
     // to look in a place that cannot be the cause.
-    disclosed.push(`record-unreadable: ${absent} — reading the founding era alone`);
+    // the departures' own detail goes to the log; the read says a plain reason (POS-657)
+    disclosed.push(`record-unreadable: ${plainReason({ message: absent }, "record", "the store's departures")} — reading the founding era alone`);
     return { departures: ledger, eras: ["ledger"], disclosed, ledgerUnreadable };
   }
   if (!records.length) return { departures: ledger, eras: ["ledger", "store"], disclosed, ledgerUnreadable };
