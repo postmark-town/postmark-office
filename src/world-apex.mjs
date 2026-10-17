@@ -2682,6 +2682,9 @@ async function apexRead(args, key, ctx = {}) {
     // who, their answers within reach and the nearest out at the edge in
     // happening_here. None living, or no law at the blessed ref: nothing added.
     const creatures = await creaturesAt(at, nowMs);
+    // what your own hands hold by kind, beside the whole things (QA fail 5); unread, the kinds are left out
+    const standing = oriented.standpoint?.stance === "embodied" ? standingHandle(args, key) : null;
+    const heldKinds = standing ? await (await import("./world-kinds.mjs")).kindsHeldBy(standing) : null;
     const shaped = shapeV2({
       heard,
       deep,
@@ -2694,6 +2697,7 @@ async function apexRead(args, key, ctx = {}) {
       here,
       near,
       holdings,
+      heldKinds,
       stancesAwaiting: stances?.stances_awaiting ?? 0,
       note: oriented.note,
       frame,

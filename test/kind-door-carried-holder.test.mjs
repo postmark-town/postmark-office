@@ -339,3 +339,18 @@ test("QA fail 4 · a refusal's \"From here you can\" is the bare read's own trim
     assert.doesNotMatch(String(refused.hint), /\brefill\b/, `the hint offers no refill: ${refused.hint}`);
   }, { verbs: ["leave-mark", "take", "give", "drop", "refill"] });
 });
+
+test("QA fail 5 · the v2 read's you.holding carries what you hold by kind, beside your whole things", { skip }, async () => {
+  await seed();
+  await carry(BAG);
+  await leaveMarkViaOffice(repo, { kind: "pocket-comet", count: 3, to: "sbx-cy" }, KEY);
+  await withApex(async (worldApex) => {
+    const v2 = await worldApex({ read_shape: "v2" }, KEY);
+    const holding = v2.you?.holding;
+    assert.ok(Array.isArray(holding), JSON.stringify(v2).slice(0, 400));
+    assert.ok(holding.includes(BAG), `the whole bag: ${JSON.stringify(holding)}`);
+    const kinds = holding.filter((h) => typeof h === "object");
+    assert.deepEqual(kinds.map((k) => [k.kind, k.count]), [["pocket-comet", 3]], `the three pocket comets, a kind and a number: ${JSON.stringify(holding)}`);
+    assert.equal(kinds[0].shows, "3 pocket-comets");
+  });
+});
