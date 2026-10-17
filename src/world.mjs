@@ -51,6 +51,7 @@ import { classNames, classRoster, classDials, departurePace, freeCellIn, RESIDEN
 import { askedCrossing } from "./crossings.mjs"; // WLD-29: one rule for the crossing a read asked
 import { readHouseholdActivity, litOf, lightsUnknownWhy, houseFocus, lightsAnswer } from "./household-activity.mjs"; // WLD-29: a shown house's porch light
 import { dialsDigestOf, DIALS_MEANS } from "./read-digests.mjs"; // WLD-29: GET /world/dials, the page's stride
+import { lawSnapshot } from "./law-snapshot.mjs"; // WLD-29: the blessing the class layer's dials answer from
 import { HOLD_TOOLS, callHoldTool } from "./world-hold.mjs"; // the object primitive: who holds what
 import { createVoices, EARSHOT_M, HEAR_MAX, HEARING_WINDOW, RECORD_KEPT_AT } from "./voices.mjs";
 import { createHearingWindow } from "./hearing-window.mjs"; // earshot: speech at a position (the party line)
@@ -2282,28 +2283,44 @@ export function litUnknownBlock(activity) {
 //                      from the office's per-crossing activity answer
 //                      (household-activity.mjs § lightsAnswer). A past crossing
 //                      or an unread store says so, with `lit: null`.
-let _dialsPage = null;   // { sha, answer } — the newest settlement's only
+let _dialsPage = null;   // { key, answer } — the newest settlement's only
 
-/** The page's dial table for world `w`, cached by its settlement's sha (pure over `w`; worldDialsPage hands it this office's world). */
-export function dialsPageOf(w) {
+/**
+ * The page's dial table for world `w`, cached by its settlement's sha (pure over
+ * `w`; worldDialsPage hands it this office's world). A class's dials come from
+ * `classDialsOf` (the class layer, read-digests.mjs § dialsDigestOf), and `law`
+ * names the blessing that layer answers from (law-snapshot.mjs' pin): it is part
+ * of the cache key, so a class layer that catches up to a new settlement after
+ * the world did is a new answer too, and the answer says when the two differ.
+ */
+export function dialsPageOf(w, { classDialsOf = null, law = null } = {}) {
   // a SETTLEMENT's sha only: with no settlement tag the read tier serves main,
   // and `blessed.sha` is then main's head — a branch, not a snapshot identity
   const b = w?._raw?.blessed?.source === "settlement" ? w._raw.blessed : null;
   const sha = b?.sha ?? null;
-  if (sha && _dialsPage?.sha === sha) return _dialsPage.answer;
+  const key = sha ? `${sha}|${law?.sha ?? "-"}` : null;
+  if (key && _dialsPage?.key === key) return _dialsPage.answer;
+  const behind = law?.sha && sha && law.sha !== sha;
   const answer = {
     settlement: b?.n == null ? null : `S${b.n}`,
     sha,
-    dials: dialsDigestOf(w?.marks ?? []),
+    dials: dialsDigestOf(w?.marks ?? [], { classDialsOf }),
     means: DIALS_MEANS,
     ...(sha ? {} : { note: "this office's world stands on no blessed settlement, so these dials are its published fold's and are not kept between reads" }),
+    ...(behind ? { class_layer: `the classes' dials are read from the class layer at S${law.settlement} (${String(law.sha).slice(0, 12)}), not yet this settlement's` } : {}),
   };
-  if (sha) _dialsPage = { sha, answer };
+  if (key) _dialsPage = { key, answer };
   return answer;
 }
 
+/** A class node's name, as the class layer keys it: its `class:`, else its slug. */
+const classNodeName = (m) => (m?.class == null || String(m.class).trim() === "" ? String(m?.id ?? "").split("/").pop() || null : String(m.class).trim());
+
 export async function worldDialsPage() {
-  return dialsPageOf(await world());
+  return dialsPageOf(await world(), {
+    classDialsOf: (m) => { const name = classNodeName(m); return name ? classDials(name) : null; },
+    law: lawSnapshot()?.pin ?? null,
+  });
 }
 
 export async function worldLights(raw = null) {

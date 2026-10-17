@@ -10,17 +10,35 @@
 
 const isDials = (d) => d && typeof d === "object" && !Array.isArray(d) && Object.keys(d).length > 0;
 
-/** id → dials, for every mark in `marks` that carries a non-empty dials object. */
-export function dialsDigestOf(marks = []) {
+/**
+ * id → dials, for every mark in `marks` that carries a non-empty dials object.
+ *
+ * A CLASS's dials are read through the class layer when one is handed in
+ * (`classDialsOf(mark)`, world-classes.mjs § classDials): its property nodes
+ * and predicate children first, an old frontmatter `dials:` second, the order
+ * every class reader uses. LOGOS v2 part 2 moves a class's dials into
+ * `kind: property` nodes and empties the class node's `dials:` (the resident's
+ * pace becomes resident-pace-km-per-crossing), so a frontmatter-only table
+ * would lose the page's stride the day that law is blessed. Any other mark
+ * keeps its own frontmatter.
+ */
+export function dialsDigestOf(marks = [], { classDialsOf = null } = {}) {
   const out = {};
   for (const m of marks ?? []) {
     const id = m?.id == null ? null : String(m.id);
-    if (!id || !isDials(m.dials)) continue;
-    out[id] = structuredClone(m.dials);
+    if (!id) continue;
+    const own = isDials(m.dials) ? m.dials : null;
+    let layer = null;
+    if (m.kind === "class" && classDialsOf) {
+      try { layer = classDialsOf(m); } catch { layer = null; }
+    }
+    const dials = isDials(layer) ? { ...(own ?? {}), ...layer } : own;
+    if (!isDials(dials)) continue;
+    out[id] = structuredClone(dials);
   }
   return out;
 }
 
 /** What a reader is told the table is. */
 export const DIALS_MEANS =
-  "every published mark of this settlement that carries dials, by id → its dials (frontmatter); a class's dials are law (a walk's pace is the-town/resident's pace_km_per_crossing)";
+  "every published mark of this settlement that carries dials, by id → its dials: a class's from its class layer (property and predicate nodes first, an old frontmatter dials: second), any other mark's from its own frontmatter. A class's dials are law (a walk's pace is the-town/resident's pace_km_per_crossing)";

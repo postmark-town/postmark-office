@@ -173,3 +173,35 @@ test("GET /world/dials is cached by the settlement's sha: the same sha is the sa
   main.marks[0].dials.pace_km_per_crossing = 62;
   assert.equal(dialsPageOf(main).dials["the-town/resident"].pace_km_per_crossing, 62, "and is never cached under one");
 });
+
+// ── LOGOS v2 part 2: a class's dials are property nodes, not frontmatter ─────
+test("GET /world/dials reads a CLASS's dials through the class layer: a v2 class node with no `dials:` still gives the page its stride, the layer wins over an old frontmatter value, and a new class-layer blessing is a new answer", async () => {
+  const { dialsPageOf } = await import("../src/world.mjs");
+  // W2 (postmark-world#236): the resident class node carries no `dials:`; its pace is resident-pace-km-per-crossing
+  const w = (sha) => ({ marks: [
+    { id: "the-town/resident", kind: "class", class: "resident", body: "the class" },
+    { id: "the-town/chest", kind: "class", class: "chest", dials: { capacity: 3, keep: 1 } },
+    { id: "kogane/a-bench", kind: "thing", class: "resident", dials: { seats: 2 } },
+  ], _raw: { blessed: { source: "settlement", n: 120, sha, tag: "settlement/S120" } } });
+  const layer = { resident: { pace_km_per_crossing: 60 }, chest: { capacity: 5 } };
+  const asked = [];
+  const classDialsOf = (m) => { asked.push(m.id); return layer[m.class] ?? {}; };
+  const a = dialsPageOf(w("d".repeat(40)), { classDialsOf, law: { settlement: 120, sha: "d".repeat(40) } });
+  assert.deepEqual(a.dials["the-town/resident"], { pace_km_per_crossing: 60 }, "the page's stride, from the class layer");
+  assert.deepEqual(a.dials["the-town/chest"], { capacity: 5, keep: 1 }, "the layer's value wins; an old slot the layer lacks stays");
+  assert.deepEqual(a.dials["kogane/a-bench"], { seats: 2 }, "a mark that is not a class node keeps its own");
+  assert.deepEqual(asked.sort(), ["the-town/chest", "the-town/resident"], "only class nodes ask the class layer");
+  assert.ok(!("class_layer" in a), "the layer answers from this settlement: nothing to say");
+  // the world moved on to S121 before the class layer was ingested: said, and keyed by both
+  const b = dialsPageOf(w("e".repeat(40)), { classDialsOf, law: { settlement: 120, sha: "d".repeat(40) } });
+  assert.match(b.class_layer, /class layer at S120/);
+  layer.resident.pace_km_per_crossing = 72;
+  const c = dialsPageOf(w("e".repeat(40)), { classDialsOf, law: { settlement: 121, sha: "e".repeat(40) } });
+  assert.notEqual(c, b, "the class layer catching up is a new answer, not the cached one");
+  assert.equal(c.dials["the-town/resident"].pace_km_per_crossing, 72);
+  assert.ok(!("class_layer" in c));
+  // a class layer that throws is not the page's fault: the record's own dials, if any, stand
+  const d = dialsPageOf(w("f".repeat(40)), { classDialsOf: () => { throw new Error("no law"); }, law: null });
+  assert.ok(!("the-town/resident" in d.dials), "no dial invented for a class the layer could not read");
+  assert.deepEqual(d.dials["the-town/chest"], { capacity: 3, keep: 1 });
+});
