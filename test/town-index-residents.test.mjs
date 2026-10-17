@@ -29,9 +29,10 @@ import { twinGolden, steady } from "./helpers/twin-golden.mjs";
 import { PSA_SLUG } from "../src/queries.mjs";
 import * as store from "../src/town-index-store.mjs";
 
-// The twins' record was taken with WLD-27's doors open (the doorstep's `holds`), and these suites are about the index,
-// not the flag: the offices they spawn inherit it open. Dark by default is chests-candy-flag.test.mjs's.
-process.env.WORLD_CHESTS_CANDY = "1";
+// WLD-27's chest and candy doors ship dark (chests-candy.mjs), so these offices run dark, and the doorstep
+// answer whose record is read with its `holds` stripped is named here (helpers/twin-golden.mjs § withoutHolds).
+delete process.env.WORLD_CHESTS_CANDY;
+const DARK = new Set(["REST /doorstep/wright"]);
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const TWINS = twinGolden("town-index-residents");
@@ -149,7 +150,7 @@ test("every moved REST door answers as the unswitched office did", async (t) => 
   if (skip) return t.skip(skip);
   for (const door of DOORS) {
     const b = await fetch(offices.switched.base + door);
-    const got = steady({ status: b.status, body: steady(await b.text()) }), was = TWINS.of(`REST ${door}`);
+    const got = steady({ status: b.status, body: steady(await b.text()) }), was = TWINS.of(`REST ${door}`, { dark: DARK.has(`REST ${door}`) });
     if (got !== was) assert.fail(`${door}: ${firstDiff(JSON.parse(got), JSON.parse(was))}`);
   }
 });

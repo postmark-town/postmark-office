@@ -62,6 +62,16 @@ export function steady(value, { today = townDay() } = {}) {
   try { return JSON.stringify(walk(JSON.parse(text))); } catch { return text.split(today).join("<today>"); }
 }
 
+// The doorstep's `holds` block, as the record kept it: the doors ship dark (chests-candy.mjs); this removal goes when LOGOS v2's doors open.
+const DARK_HOLDS = /"holds":\{"serves":"world\.holdings","args":\{"handle":"[a-z0-9-]+"\},"unavailable":"[^"]*"\},/g;
+
+/** The record's text with the dark doors' `holds` taken out. A strip that removes nothing is stale, and fails by name. */
+export function withoutHolds(label, text) {
+  const out = text.replace(DARK_HOLDS, "");
+  if (out === text) throw new Error(`${label}: the record holds no doorstep holds block, so this strip is stale`);
+  return out;
+}
+
 export function twinGolden(suite) {
   const recording = process.env.TWIN_GOLDEN_RECORD;
   const taken = {};
@@ -69,10 +79,11 @@ export function twinGolden(suite) {
   let book = null;
   const read = () => (book ??= JSON.parse(readFileSync(new URL(`../golden/office-db-twins/${suite}.json`, import.meta.url), "utf8")));
   // read back through `steady` too, so the record and a new answer are held to one rule
-  const of = (label) => {
+  // `dark: true` reads the record as the dark doors answer it (withoutHolds): the RECORD side only, never a live answer
+  const of = (label, { dark = false } = {}) => {
     const b = read();
     if (!Object.hasOwn(b, label)) throw new Error(`${suite}: no recorded twin answer for "${label}" (test/golden/office-db-twins/${suite}.json)`);
-    return steady(b[label]);
+    return dark ? withoutHolds(label, steady(b[label])) : steady(b[label]);
   };
   return {
     /** The base tree's side: keep the twin's answer under its label. A label asked twice must answer alike. */
