@@ -1829,12 +1829,15 @@ async function investigateOn(args, oriented) {
     // POS-637 PR-C: the creature as of now, its newest reactions with their odds, and the crossing save's row
     const { creaturesForRead, investigateCreature, savedCreatureOf, REACTIONS_SQL } = await import("./creatures-read.mjs");
     const { actsQuery } = await import("./world2-acts.mjs");
-    return investigateCreature(kind.id, {
-      creatures: await creaturesForRead(),
+    const creatures = await creaturesForRead();
+    const seen = await investigateCreature(kind.id, {
+      creatures,
       from: oriented?.standpoint ?? null,
       rows: (id, n) => actsQuery(REACTIONS_SQL, [id, n]),
       saved: (id) => savedCreatureOf(id),
     });
+    // its class is its kind (`wolf`), off the fold that answered; one no longer held there points nowhere
+    return pointed(seen, creatures?.living?.byId?.get(kind.id)?.kind ?? null);
   }
   // the town's roll says who is a resident; when it cannot be read, nobody is
   // called unknown for it (the standpoint read then says what it can)
@@ -1842,7 +1845,7 @@ async function investigateOn(args, oriented) {
   const { actsQuery } = await import("./world2-acts.mjs");
   const { composeAnchor } = await import("./world-journal.mjs");
   const centreOf = await markCentreOf();
-  return investigateResident(kind.handle, {
+  const seen = await investigateResident(kind.handle, {
     from: oriented?.standpoint ?? null,
     known: (h) => houseOf(h) != null,
     standpoint: (h) => residentStandpoint(h),
@@ -1858,6 +1861,15 @@ async function investigateOn(args, oriented) {
     placeMarks: (p) => placeMarksAt(p),
     marksOf: (ids) => markRows(ids),
   });
+  return pointed(seen, "resident");
+}
+
+/** POS-659: an investigated resident or creature carries its class pointer (class-read.mjs). */
+async function pointed(answer, klass) {
+  try {
+    const { namedPointer, withPointer } = await import("./class-read.mjs");
+    return withPointer(answer, namedPointer(klass));
+  } catch { return answer; }
 }
 
 /** Where the newest crossing save put a resident: { crossing, x, y }, or null (STATE/snapshot/<n>/entities.json). */
@@ -3595,6 +3607,23 @@ async function apexReadAction(args, key, ctx = {}) {
   } finally { store.db?.close(); }
 }
 
+// POS-659: explain climbs the class. A read-grammar path answers first (above);
+// a name no path carries is asked of the class layer, by its slug or its full
+// id, and a name neither knows keeps the grammar's bounce, with the classes
+// nearest it and where a class name is found (class-read.mjs).
+async function explainClassOr(path, bounced) {
+  const { explainClass, nearestClasses } = await import("./class-read.mjs");
+  const store = openStore();
+  if (!store.db) return { ...bounced, classes_unreadable: store.unavailable };
+  const answer = explainClass(store.db, path);
+  if (answer) return answer;
+  const near = nearestClasses(store.db, path);
+  return { ...bounced,
+    defect: `nothing here is called "${path}", and no class is either`,
+    hint: `${bounced.hint} A class is explained by its name: every instance read names its kind in class_pointer, like kind: thing · a mark — explain: "thing".`,
+    ...(near.length ? { nearest_classes: near } : {}) };
+}
+
 // THE ONE PLACE A WORLD ANSWER LEAVES THE APEX, so the one place a refusal is
 // marked `refused: true` (POS-427, one-contract.mjs § withRefused). Every
 // return below, the act's catch included, comes back through here.
@@ -3611,7 +3640,8 @@ async function worldApexAnswer(args, key, ctx) {
     if (path != null) {
       if ((args.do != null && args.do !== "") || (args.read != null && args.read !== ""))
         return bounce(422, "one call does one thing — explain: answers what a part is for, do: performs, read: observes", "call twice");
-      return explainAnswer("world", path);
+      const answer = explainAnswer("world", path);
+      return answer.error ? explainClassOr(path, answer) : answer;
     }
   }
   const doing = args.do != null && args.do !== "";
@@ -3745,7 +3775,7 @@ const APEX_INPUT_SCHEMA = { type: "object", properties: {
     beside: { type: "string", description: "with as: \"human\" — which of your residents the human stands beside (optional; omitted, the house chooses the housemate it is awake at). Must be one of your own key's residents." },
     telling: { type: "boolean", description: "true adds the prose telling of what you see; omit for the cheap structural read" },
     // POS-632: the read grammar's second move. One table for three doors (read-grammar.mjs).
-    explain: { type: "string", description: "explain: \"<path>\" answers what any part of this door's bare read is for, in one fixed shape: { explains, what, detail?, deeper, changes } (changes: live, settled or weekly). The path is a key path into the read, like \"who\" or \"now.happened\". explain: \"\" is the tutorial. It answers docs, never data, and rides with no do: or read:." },
+    explain: { type: "string", description: "explain: \"<path>\" answers what any part of this door's bare read is for, in one fixed shape: { explains, what, detail?, deeper, changes } (changes: live, settled or weekly). The path is a key path into the read, like \"who\" or \"now.happened\". explain: \"\" is the tutorial. A class name climbs the class instead (POS-659): explain: \"thing\" answers the class's body, its extends chain, its properties (tier, default, children), its afforded actions with their conditions, and makers; every instance read names its class in class_pointer. It answers docs, never data, and rides with no do: or read:." },
     // POS-632 (W1): the shape, per call. It wins over the office's default.
     read_shape: { type: "string", enum: ["v1", "v2"], description: "read_shape: \"v2\" is the new compact read, opt-in this week: you, now (with what happened since the last crossing), view (what fills your eyes, by bearing), who (who is active near you), happening_here, can (each act in one line) and law, in about 5k characters. Omit it for the read you get today." },
     diagnostics: { type: "boolean", description: "with read_shape: \"v2\", also bring the engine's notes (the full law block, presence's disclosures). v1 always carries them." },
