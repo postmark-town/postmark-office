@@ -20,7 +20,7 @@ import { spawn, execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { indexStore, seedRegistry } from "./helpers/office-under-test.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
 import { NO_WORLD, OFFICE_ROOT, worldClone } from "./fixture-paths.mjs";
@@ -40,9 +40,8 @@ let IX = null, child = null, tmp = null, BASE = null;
 before(async () => {
   if (!HAVE_CLONE) return;
   tmp = mkdtempSync(join(tmpdir(), "porch-lights-http-"));
-  const dbPath = join(tmp, "fixture.db");
-  fixtureDb(dbPath).close();
-  IX = await indexStore(dbPath, { db: "porch_lights_http" });
+  // the suite's town is rows in the store (POS-656): no office.db, no --db
+  IX = await indexStore(fixtureTown(), { db: "porch_lights_http" });
   await seedRegistry(IX.store, { schema_version: 1, households: {
     "shard-house": { residents: ["kogane", "kogane-kin"], accounts: [{ login: "kogane-gh", id: 301 }], since: "2026-06-12", declared_by: "kogane" },
   } }, {});
@@ -54,7 +53,7 @@ before(async () => {
   } finally { await c.end(); }
   ({ child } = await bootOnFreePort((port) => {
     BASE = `http://127.0.0.1:${port}`;
-    return spawn(process.execPath, [join(OFFICE_ROOT, "src", "server.mjs"), "--port", String(port), "--db", dbPath, "--oauth-db", join(tmp, "oauth.db"), "--roles-db", join(tmp, "roles.db")], {
+    return spawn(process.execPath, [join(OFFICE_ROOT, "src", "server.mjs"), "--port", String(port), "--oauth-db", join(tmp, "oauth.db"), "--roles-db", join(tmp, "roles.db")], {
       env: { ...process.env, ...IX.env, WORLD_GRAPH_NONE: "1", WORLD_APEX: "1", WORLD_CLONE: CLONE, TOWN_CLONE: join(tmp, "no-town-clone"), WORLD_READ_SHAPE: "" },
       stdio: ["ignore", "pipe", "pipe"],
     });

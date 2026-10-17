@@ -2028,8 +2028,13 @@ async function withSpyStore(fn, { kinAt = () => new Date().toISOString() } = {})
   const env = ["WORLD2_PG", "WORLD2_PG_URL"].map((k) => [k, process.env[k]]);
   Object.assign(process.env, { WORLD2_PG: "1", WORLD2_PG_URL: "postgres://wld29-spy/none" });
   pen.__setPoolForTest({ connect: async () => client, query: (...a) => client.query(...a) });
+  // The apex's other store read (POS-350: the household registry, through
+  // world2-acts' own pool) answers no rows here, so every handle is its own
+  // solo household; it is not the activity batch and is not counted in `asked`.
+  const acts = await import("../src/world2-acts.mjs");
+  acts.__setPoolForTest({ query: async () => ({ rows: [] }) });
   try { return await fn({ asked, count: () => asked.filter((t) => t === LAST_ACTIVE_SQL).length }); }
-  finally { pen.__setPoolForTest(null); resetActivityCache(); for (const [k, v] of env) { if (v == null) delete process.env[k]; else process.env[k] = v; } }
+  finally { pen.__setPoolForTest(null); acts.__setPoolForTest(null); resetActivityCache(); for (const [k, v] of env) { if (v == null) delete process.env[k]; else process.env[k] = v; } }
 }
 
 test("LOCAL LIGHT, ONE BATCH: a co-resident's act lights the shown house (true), in ONE bounded batch per read; the eyes alone ask once; a do:/read: act asks nothing", async () => {

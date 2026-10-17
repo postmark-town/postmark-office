@@ -412,12 +412,15 @@ test("the lean read's stated size is near what it measures at the rig's standpoi
 // (WLD-29, the pointer model: Wright, AUTHORITY 2026-10-13T19:16:02.257Z.)
 // Neither the dials digest nor the activity map rides a default read at v0, v1
 // or v2; the 18k/17k budget the digest was given is gone with it. Measured at
-// kogane on the CI world pin (ddc8cdd2): before WLD-29 (train 13a9c24f) v1
-// 14,200 / v2 13,100 chars; with the digest (5db0d39f) 16,362 / 15,262; this
-// shape 14,055 / 12,955 — so SIZE_LEAN says ~14k / ~13k. The stated number must
-// stay within 85–108% of the measured read: the old 17k/16k text fails it, and
-// so does a dials table put back on the read (the control below proves the
-// check can see one).
+// kogane on the CI world pin: before WLD-29 (train 13a9c24f, ddc8cdd2) v1
+// 14,200 chars; with the digest (5db0d39f) 16,362; the pointer model 14,055.
+// On train/2026-w43 of 10-17 (world pin daef8487) v1 measures 15,613, so
+// SIZE_LEAN keeps the train's own ~15k. The stated number must stay within
+// 85–108% of the measured read: the old 17k text fails it, and so does a dials
+// table put back on the read (the control below proves the check can see one).
+// v2 is the world read v2 since POS-632 (world-read-v2.mjs § shapeV2), its own
+// shape with its own size words: it is held to carrying no table here, and its
+// size is that module's to pin.
 const stated = (shape) => Number(/the lean read, roughly (\d+)k characters/.exec(describeAt(APEX_DESCRIPTION, shape))?.[1]) * 1000;
 
 test("NO DIGEST AT ANY VERSION: v0, v1 and v2 carry no `dials` and no `activity`, and the lean read measures what SIZE_LEAN says — a digest put back is past it", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
@@ -430,7 +433,7 @@ test("NO DIGEST AT ANY VERSION: v0, v1 and v2 carry no `dials` and no `activity`
   const { worldDialsPage } = await import("../src/world.mjs");
   const table = (await worldDialsPage()).dials;
   assert.ok(Object.keys(table).length > 10 && table["the-town/resident"], "the page's dial table exists, at its own door");
-  for (const shape of ["v1", "v2"]) {
+  for (const shape of ["v1"]) {
     const lean = await bareAt(shape);
     const chars = JSON.stringify(lean).length;
     console.log(`    LEAN SIZE · ${shape} ${chars} chars, stated roughly ${stated(shape)}`);

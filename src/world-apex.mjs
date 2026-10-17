@@ -2541,8 +2541,11 @@ async function apexRead(args, key, ctx = {}) {
   // `lit` on each house `within` and `nearby` already show, from one activity
   // answer; `within`'s entries carry no kind, so the fold's own marks say
   // which are houses. No town-wide table rides the read.
+  // The v2 read (POS-632) is shaped from its own blocks (shapeV2), which carry
+  // no `lit` today, so it asks for no activity: whether v2's `view` and
+  // `you.within` light their houses is a shape for Darko, not built here.
   const byId = { get: await markLookup() };
-  const activity = await lightsFor([...spine, ...nearbyOut], args, { byId });
+  const activity = v2 ? null : await lightsFor([...spine, ...nearbyOut], args, { byId });
 
   const answer = {
     standpoint: {
