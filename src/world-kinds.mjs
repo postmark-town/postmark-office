@@ -432,6 +432,8 @@ async function keeper() {
   ]);
   _keeper = holdRecordKeeper({
     readTop: async () => (await actsQuery(HOLD_TOP_SQL, []).catch(() => null))?.[0]?.top ?? null,
+    // the settlement window the office counts by: one full read per settlement (hold-record § ONE FULL READ PER SETTLEMENT)
+    readEpoch: async () => { try { return (await import("./crossings.mjs")).currentCrossing(); } catch { return null; } },
     readHolding: ({ afterId = null } = {}) => guards.storeHoldingRows(afterId != null ? { afterId } : {}),
     readAttachments: ({ afterId = null } = {}) => guards.storeAttachmentRows(afterId != null ? { afterId } : {}),
     // where each set-down thing stands now: its latest drop act's witnessed line, by the anchor it names

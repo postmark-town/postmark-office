@@ -114,3 +114,60 @@ test("F1 · the high-water read is answered by the class index, never a scan of 
     assert.match(old, /Filter: .*OR/, old);
   } finally { await c.end(); }
 });
+
+test("round 3 · K2: a late commit below a compacted cutoff is missed by the deltas — and picked up at the next settlement's full read", async () => {
+  const rec = record();
+  let epoch = 300;
+  for (let i = 1; i <= 20; i++) if (i !== 7) rec.commit(make(i, "x/bowl", 1)); // 7 holds its id, uncommitted
+  const k = holdRecordKeeper({ ...rec.readers, readEpoch: async () => epoch, width: 5 });
+  assert.equal(totalOf((await k.now()).fold, "x/bowl"), 19);
+  for (let i = 21; i <= 40; i++) rec.commit(make(i, "x/bowl", 1));
+  await k.now();
+  assert.ok(k.stats().cutoff > 7, "the window compacted past act 7");
+  rec.commit(make(7, "x/bowl", 100)); // 7 commits now, below the cutoff
+  rec.commit(make(41, "x/bowl", 1));
+  assert.equal(totalOf((await k.now()).fold, "x/bowl"), 40, "inside one settlement the deltas cannot see below the cutoff: the bound");
+  epoch = 301; // the next settlement
+  const r = await k.now();
+  assert.equal(totalOf(r.fold, "x/bowl"), 140, "the settlement's full read picks it up");
+  assert.deepEqual(r.fold.kinds, rec.full().kinds);
+  assert.equal(k.stats().fullReads, 2);
+});
+
+test("round 3 · K1: a failed rebuild leaves the kept state where it was — the next read tries again and answers the new record", async () => {
+  const rec = record();
+  for (let i = 1; i <= 10; i++) rec.commit(make(i, "x/bowl", 1));
+  let fail = false;
+  // the change fails while it COMPOSES (after its rows were read): probe K1's case
+  const placesOf = async () => { if (fail) { fail = false; throw new Error("the store hiccuped"); } return new Map(); };
+  const k = holdRecordKeeper({ ...rec.readers, placesOf, width: 5 });
+  assert.equal(totalOf((await k.now()).fold, "x/bowl"), 10);
+  for (let i = 11; i <= 15; i++) rec.commit(make(i, "x/bowl", 1));
+  fail = true;
+  await assert.rejects(k.now(), /hiccuped/);
+  assert.equal(k.stats().top, "10", "the kept top did not move with a change that never composed");
+  assert.equal(totalOf((await k.now()).fold, "x/bowl"), 15, "never the old record under the new top");
+});
+
+test("round 3 · K3: reversed clocks across the cutoff — attachments merge back into the readers' order (born_at first) before last-row-wins", async () => {
+  const rec = record();
+  for (let i = 1; i <= 12; i++) rec.commit(make(i, "x/bowl", 1));
+  // act 3 (base) sets x/lamp down in a's hands at T+20; act 11 (window) gave it to b at T+10, its clock earlier
+  rec.commit({ act_id: "3", entity: "a", target: "x/lamp", policy: "cascade", born_at: "2026-10-17T00:00:20Z" });
+  rec.commit({ act_id: "11", entity: "b", target: "x/lamp", policy: "cascade", born_at: "2026-10-17T00:00:10Z" });
+  const k = holdRecordKeeper({ ...rec.readers, width: 5 });
+  const r = await k.now();
+  assert.ok(r.cutoff >= 3 && r.cutoff < 11, "the two rows sit either side of the cutoff");
+  assert.equal(liveHolder(r.attachments, "x/lamp"), "a", "the later clock wins, as the readers' ORDER BY has it");
+});
+
+test("round 3 · the legacy half of the high-water read: a frozen-era act above every hold act is the top", { skip: store.skip ?? false }, async () => {
+  const c = await store.connect("world2_owner");
+  try {
+    await c.query("TRUNCATE acts CASCADE");
+    await c.query("INSERT INTO acts (at,crossing,actor,action,object,class,payload,household) VALUES (now(),300,'cy','units:make','x/bowl','holding','{}','cy')");
+    const { rows: [l] } = await c.query("INSERT INTO acts (at,crossing,actor,action,object,class,payload,household) VALUES (now(),300,'cy','legacy:attachment','x/lamp','legacy','{}','cy') RETURNING id::text");
+    await c.query("INSERT INTO acts (at,crossing,actor,action,object,class,payload,household) VALUES (now(),300,'cy','say',NULL,'voice','{}','cy')");
+    assert.equal((await c.query(HOLD_TOP_SQL)).rows[0].top, l.id, "the legacy act is the high water; the say after it is not a hold act");
+  } finally { await c.end(); }
+});
