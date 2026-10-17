@@ -13,9 +13,21 @@
 # oauth.db is deliberately KEPT: sign-ins are box-side state, not town state,
 # and wiping it would lock every tester out after each reset.
 set -euo pipefail
-D="${SANDBOX_DIR:-/srv/postmark-office-dev}"   # the dev office's tree (a test points it elsewhere)
+DEV_TREE=/srv/postmark-office-dev
+D="${SANDBOX_RESET_TEST_DIR:-$DEV_TREE}"   # the dev office's tree; only test/sandbox-reset-guard.test.mjs sets this
 SEED=sandbox/seed
 SANDBOX_DB=w2_devsandbox_20260925
+
+# THE DEV TREE, AND NOTHING ELSE (review-606). $D is the tree this script
+# hard-resets, cleans and deletes *.db in, and prod's tree is one path over. So
+# the test seam may point anywhere but prod's tree or below it, however spelled.
+D_REAL="$( (realpath -m -- "$D" 2>/dev/null || printf '%s' "$D") | tr -s /)"
+case "$D_REAL" in
+  "$DEV_TREE") ;;
+  /srv/postmark-office|/srv/postmark-office/*)
+    echo "REFUSED: $D is prod's office tree, not the dev sandbox ($DEV_TREE); nothing was stopped, reset or written" >&2
+    exit 9 ;;
+esac
 
 # THE SANDBOX, AND NOTHING ELSE (review-606). The rebuild below reseeds the town
 # index and rewrites the world graph snapshot in whatever PGDATABASE names, and
