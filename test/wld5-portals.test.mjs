@@ -99,11 +99,11 @@ test("THROUGH THE GILDED DOORS: one passage, written once, and the body set down
   assert.equal(o.records.length, 1);
   assert.equal(o.records[0].mark, "spire/vestibule", "the journal row's object is where the passage leads");
   assert.equal(o.records[0].via, "spire/doors-outside", "and `via` names the portal, as the Post Office's stops do");
-  // row 68: the set-down is a LANDING through the land pen, never a walk, a step in from the inside face
-  assert.deepEqual(o.lands, [{ who: "ann", to: { x: 863, y: 1000 }, via: "spire/doors-outside", why: "passage" }], "a landing, not a walk");
+  // row 68: the set-down is a LANDING through the land pen, never a walk, a 1.5 m step in from the inside face
+  assert.deepEqual(o.lands, [{ who: "ann", to: { x: 863.5, y: 1000 }, via: "spire/doors-outside", why: "passage" }], "a landing, not a walk");
   assert.deepEqual(o.stops, [], "and no walk is written at all");
-  assert.deepEqual(a.landed, { x: 863, y: 1000, mark: "spire/doors-inside", clamped: false, recorded: true, via: "spire/doors-outside" });
-  assert.match(a.note, /, and landed at \(863, 1000\)\./);
+  assert.deepEqual(a.landed, { x: 863.5, y: 1000, mark: "spire/doors-inside", clamped: false, recorded: true, via: "spire/doors-outside" });
+  assert.match(a.note, /, and landed at \(863\.5, 1000\)\./);
   assert.deepEqual(a.portals.map((p) => p.id), ["spire/doors-inside", "spire/hall-door"]);
 });
 
@@ -165,8 +165,8 @@ test("WLD-63: the Spire itself is a way in: entered from its far corner, through
   assert.equal(a.via, SPIRE);
   assert.deepEqual(a.entered, [SPIRE, "spire/vestibule"]);
   assert.equal(o.records[0].via, SPIRE, "the journal names the Spire as the way in");
-  assert.deepEqual(a.landed, { x: 863, y: 1000, mark: "spire/doors-inside", clamped: false, recorded: true, via: SPIRE });
-  assert.deepEqual(o.lands, [{ who: "ann", to: { x: 863, y: 1000 }, via: SPIRE, why: "passage" }], "no walk to a door: landed, a step in");
+  assert.deepEqual(a.landed, { x: 863.5, y: 1000, mark: "spire/doors-inside", clamped: false, recorded: true, via: SPIRE });
+  assert.deepEqual(o.lands, [{ who: "ann", to: { x: 863.5, y: 1000 }, via: SPIRE, why: "passage" }], "no walk to a door: landed, a step in");
   assert.deepEqual(o.stops, []);
   // from outside its extent: the reach refusal, with the walk, nothing written
   const far = await officeWith({ standing: { x: 800, y: 1180 }, spireInto: true });

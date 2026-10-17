@@ -350,8 +350,8 @@ test("THE TRANSCRIPT · at arrival on the Gilded Doors' outside face, the walker
   assert.equal(o.records[0].via, "spire/doors-outside");
   assert.equal(o.records[0].arrival_of, "4242", "the pen is told which walk this entry arrived with");
   assert.equal(seq, "901");
-  // WLD-63 row 68: a LANDING (never a walk), a step in from the inside face: its 2×2 reaches x 861, so 862
-  const STEPPED_IN = { x: 862, y: 1000 };
+  // WLD-63 row 68: a LANDING (never a walk), a step in from the inside face: its 2×2 reaches x 861, so 1.5 m past it is 862.5
+  const STEPPED_IN = { x: 862.5, y: 1000 };
   assert.deepEqual(o.lands, [{ who: "ann", to: STEPPED_IN, via: "spire/doors-outside", why: "passage" }], "THE LANDING: set down a step in from the inside face, now");
   assert.deepEqual(o.stops, [], "and no walk is written");
   assert.deepEqual(answer.landed, { ...STEPPED_IN, mark: "spire/doors-inside", clamped: false, recorded: true, via: "spire/doors-outside" });
