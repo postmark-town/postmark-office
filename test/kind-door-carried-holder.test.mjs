@@ -264,3 +264,24 @@ test("F3 · a set-down holder is judged where it was set down: carried 1 km and 
   const made = await leaveMarkViaOffice(repo, { kind: "pocket-comet", count: 2, to: BAG }, KEY);
   assert.equal(made.holds.count, 2, "not carried, and made 1 km off: in reach at its drop point");
 });
+
+test("round 4 · the production keeper re-bases from one full read when the clock crosses into the next settlement (its readEpoch is the crossings seam)", { skip }, async (t) => {
+  await seed();
+  const { holdRecordNow, holdRecordStats } = await import("../src/world-kinds.mjs");
+  const { currentCrossing } = await import("../src/crossings.mjs");
+  await carry(BAG);
+  await holdRecordNow();
+  const before = await holdRecordStats();
+  assert.equal(before.epoch, currentCrossing(), "the keeper stands in the crossing the office counts by");
+  await holdRecordNow();
+  assert.equal((await holdRecordStats()).fullReads, before.fullReads, "the same settlement, no change: no full read");
+  // the clock moves through the crossings seam into the next settlement window
+  const real = Date.now();
+  let ahead = real;
+  while (currentCrossing(ahead) === before.epoch) ahead += 60 * 60 * 1000;
+  t.mock.method(Date, "now", () => ahead);
+  await holdRecordNow();
+  const after = await holdRecordStats();
+  assert.equal(after.epoch, currentCrossing(ahead), "the next settlement's crossing");
+  assert.equal(after.fullReads, before.fullReads + 1, "one full read re-bases the record in the new settlement");
+});

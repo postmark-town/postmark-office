@@ -451,6 +451,8 @@ async function keeper() {
   return _keeper;
 }
 export async function holdRecordNow() { return (await keeper()).now(); }
+/** The production keeper's own counters (rebuilds, full reads, the epoch it stands in), for the falsifier that pins its wiring. */
+export async function holdRecordStats() { return (await keeper()).stats(); }
 
 /**
  * `investigate: "<by>/<slug>"` on a mark: its column of the matrix (`can`, the
