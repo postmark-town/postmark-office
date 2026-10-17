@@ -139,6 +139,8 @@ test("A W2 THING LEFT, STAKED AND CROSSED: own ground locks ✦0, the staked one
     // inside Rei's chest: one the chest's holder welcomed, one it did not
     { slug: "sable/the-second-letter", kind: "sited", owner: "sable", household: "hh:rabbit", at: { x: 998, y: 1002 }, ext: { w: 1, h: 1 } },
     { slug: "sable/the-unasked-letter", kind: "sited", owner: "sable", household: "hh:rabbit", at: { x: 1002, y: 998 }, ext: { w: 1, h: 1 } },
+    // a NEW-form claim on a W2-form ground row: Rei's ✦0 thing, staked nothing, set in her own chest
+    { slug: "rei/the-key", kind: "thing", owner: "rei", household: "hh:starforge", at: { x: 1002, y: 1002 }, ext: { w: 1, h: 1 } },
   ]);
   const run = clear();
   assert.equal(run.code, 0, run.out);
@@ -150,10 +152,12 @@ test("A W2 THING LEFT, STAKED AND CROSSED: own ground locks ✦0, the staked one
   assert.equal((await statusOf(ids["sable/the-second-letter"])).status, "locked",
     "the chest is the letter's ground and its holder welcomed it: home, ✦0 is enough");
   assert.equal((await statusOf(ids["sable/the-unasked-letter"])).status, "refused", "standing in the chest unwelcomed is commons");
+  assert.equal((await statusOf(ids["rei/the-key"])).status, "locked", "a ✦0 `kind: thing` in its own house's `kind: thing` on its parcel is home");
 
   const rows = await read("SELECT slug, kind, data->>'tier' AS tier FROM marks WHERE status = 'standing' AND slug = ANY($1) ORDER BY slug",
-    [["rei/the-new-chest", "sable/the-staked-lamp", "sable/the-second-letter"]]);
+    [["rei/the-new-chest", "sable/the-staked-lamp", "sable/the-second-letter", "rei/the-key"]]);
   assert.deepEqual(rows.map((r) => [r.slug, r.kind, r.tier]), [
+    ["rei/the-key", "thing", "home"],
     ["rei/the-new-chest", "thing", "home"],
     ["sable/the-second-letter", "sited", "home"],
     ["sable/the-staked-lamp", "thing", "market"],
