@@ -497,13 +497,15 @@ function sweepRetired(now = Date.now()) {
 onAnnounce("index", reloadIndex);
 
 // ONE STORE READ IN FLIGHT, AND NEVER FOREVER (POS-639; store-refresh.mjs says
-// why): a tick that finds the last roll+probe pair still reading skips, and a
-// pair that has not answered within STORE_READ_BOUND_MS frees the guard, named
-// in the journal, so the next tick reads again.
+// why): a tick that finds the last roll+probe pair still reading skips. Each
+// read carries statement_timeout = STORE_READ_BOUND_MS, so Postgres ends a
+// read that runs past the bound, and the guard is freed only when the pair has
+// settled: the poll holds at most the pair's two of the thread's three pen
+// connections (world2-pen.mjs § pool), whatever the store does.
 const storeTick = storeRefresher({
   read: () => Promise.all([
-    townIndexStore.refreshStoreRoll().catch(() => {}),
-    townIndexStore.refreshStoreProbe().catch(() => {}),
+    townIndexStore.refreshStoreRoll({ statementTimeoutMs: STORE_READ_BOUND_MS }).catch(() => {}),
+    townIndexStore.refreshStoreProbe({ statementTimeoutMs: STORE_READ_BOUND_MS }).catch(() => {}),
   ]),
   onRead: () => {
     if (!INDEX_SWITCHED) return;
@@ -519,7 +521,8 @@ const storeTick = storeRefresher({
 setInterval(() => {
   reloadIndex(); sweepRetired();
   // the store's roll and the write path's probe, on the same clock the index reload keeps (POS-268)
-  if (townIndexReads()) storeTick.tick();
+  // a throw from onRead must never become an unhandled rejection that ends the process
+  if (townIndexReads()) storeTick.tick().catch((e) => journal.error(`[office] the store poll's tick tripped: ${String(e?.message ?? e).slice(0, 160)}`));
 }, RELOAD_POLL_MS).unref();
 // AT BOOT, BEFORE THE OFFICE LISTENS (POS-268): the roll and the write path's
 // probe are loaded first, so the first ask is never answered by a process that
@@ -527,7 +530,10 @@ setInterval(() => {
 // a 503 or an anonymous key). Bounded: a store that does not answer within 10 s
 // leaves both unloaded, the checks answer the store's 503 and the poll retries.
 if (townIndexReads()) await Promise.race([
-  Promise.all([townIndexStore.refreshStoreRoll().catch(() => {}), townIndexStore.refreshStoreProbe().catch(() => {})]),
+  Promise.all([
+    townIndexStore.refreshStoreRoll({ statementTimeoutMs: STORE_READ_BOUND_MS }).catch(() => {}),
+    townIndexStore.refreshStoreProbe({ statementTimeoutMs: STORE_READ_BOUND_MS }).catch(() => {}),
+  ]),
   new Promise((ok) => setTimeout(ok, STORE_READ_BOUND_MS).unref()),
 ]);
 // INDEX.asOf too: the manifest (GET /) answers the borrowed index's as-of

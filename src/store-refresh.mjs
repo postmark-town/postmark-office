@@ -6,23 +6,27 @@
 // newer one put the older index back. A tick that finds the last pair still
 // reading skips.
 //
-// AND THE GUARD IS BOUNDED (the review of office#591). The pen pool sets no
-// statement timeout, so a read that hangs would hold the guard for good and the
-// office would stop reading its index without a word. The boot path already
-// races its first read against 10 s (server.mjs § AT BOOT); the poll uses the
-// same bound. Past it the tick logs the timeout by name and frees the guard, so
-// the next tick reads again. The hung read is not cancelled. If it ever answers
-// it may hold an older probe for a moment, which the next tick replaces: a probe
-// re-reads whenever the store's as-of differs from the one it holds.
+// THE BOUND IS POSTGRES'S, AND THE GUARD WAITS FOR IT (the reviews of office#591
+// and #595). The pen pool sets no statement timeout, so a read that hung would
+// have held the guard for good. #595's first answer, a JS race that freed the
+// guard at the bound, freed the guard and NOT the connection: the next tick took
+// a third connection and queued for a fourth, and the pen pool is three per
+// thread (world2-pen.mjs § pool), shared with every resident read and write.
+// The poll would have held the whole pen, and residents met StoreAcquireTimeout.
+// So the bound rides each read itself: the poll's two reads run with
+// statement_timeout = STORE_READ_BOUND_MS (server.mjs), Postgres cancels a read
+// that runs past it, and the guard is freed only when the read has SETTLED. The
+// poll therefore holds at most the pair's two connections. The JS timer here
+// only names the moment the bound passed, in the journal.
 
 /** The bound a store read gets, in the poll and at boot. */
 export const STORE_READ_BOUND_MS = 10_000;
 
 /**
  * A tick for the poll. `read()` is the roll+probe pair, answering a promise;
- * `onRead()` runs after it answers. Answers `tick()`, which starts one read
- * unless one is in flight, and resolves when that read answers or the bound
- * passes. `inFlight()` says whether a read holds the guard.
+ * `onRead()` runs after it settles (answered or refused, as the poll's swallowed
+ * errors always did). Answers `tick()`, which starts one read unless one is in
+ * flight and resolves when that read settles, and `inFlight()`.
  */
 export function storeRefresher({ read, onRead = () => {}, boundMs = STORE_READ_BOUND_MS, log = console.error,
   setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
@@ -30,19 +34,16 @@ export function storeRefresher({ read, onRead = () => {}, boundMs = STORE_READ_B
   async function tick() {
     if (reading) return "skipped";
     reading = true;
-    let timer;
-    const bound = new Promise((ok) => {
-      timer = setTimer(() => ok("timed-out"), boundMs);
-      timer?.unref?.();
-    });
+    let late = false;
+    const timer = setTimer(() => {
+      late = true;
+      log(`[office] the store read has not answered within ${boundMs / 1000}s — the store's statement timeout ends it, and the poll waits for it before reading again`);
+    }, boundMs);
+    timer?.unref?.();
     try {
-      const how = await Promise.race([Promise.resolve().then(read).then(() => "read", () => "read"), bound]);
-      if (how === "timed-out") {
-        log(`[office] the store read did not answer within ${boundMs / 1000}s — the poll reads again on its next tick`);
-        return how;
-      }
+      await Promise.resolve().then(read).catch(() => {});
       onRead();
-      return how;
+      return late ? "late" : "read";
     } finally {
       clearTimer(timer);
       reading = false;
