@@ -87,6 +87,38 @@ test("GET /ops/heard is keyless and answers counts only (POS-292)", async () => 
   assert.equal(body.choices.youtube, "YouTube");
 });
 
+// An office pointed at no store at all still boots (one-contract.test.mjs
+// § GET /calendar asks the same shape), and its heard counts say so rather than
+// answer zero weeks, which would read as nobody heard.
+test("GET /ops/heard on an office not pointed at the record says so, never zeroes (POS-292)", async () => {
+  let port;
+  const bare = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0",
+    "--oauth-db", seedStaticKeys(join(tmp, "oauth-heard.db"), `${KEY}=keemin:wright`), "--roles-db", join(tmp, "roles-heard.db")], {
+    env: { ...process.env, TOWN_CLONE: join(tmp, "no-clone-here"), WORLD_CLONE: join(tmp, "no-world-clone"), VOICES_LOG: join(tmp, "voices-log-heard.jsonl"), TOWN_PUSH: "", WORLD_STORE_DB: join(tmp, "no-store-here.db"), WORLD2_PG: "", WORLD2_PG_URL: "",
+      WORLD_GRAPH_NONE: "1" /* no store, so no world graph either: the office boots saying so */ },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  try {
+    await new Promise((ok, no) => {
+      const t = setTimeout(() => no(new Error("the storeless office never listened")), 10_000);
+      bare.stdout.on("data", (d) => { const m = /listening on :(\d+)/.exec(String(d)); if (m) { port = m[1]; clearTimeout(t); ok(); } });
+      bare.on("exit", (c) => no(new Error(`the storeless office exited early (${c})`)));
+    });
+    const res = await fetch(`http://127.0.0.1:${port}/ops/heard`);
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.weeks, null, "never zero weeks");
+    assert.match(body.note, /not pointed at the record/);
+    assert.match(body.small_counts, /fewer than 3/);
+  } finally {
+    if (bare.exitCode === null && bare.signalCode === null) {
+      const gone = new Promise((ok) => bare.on("exit", ok));
+      bare.kill();
+      await gone;
+    }
+  }
+});
+
 test("a stale/invalid token still serves a public read (anonymous, not 401)", async () => {
   const res = await get("/town", "wrongkey");
   assert.equal(res.status, 200);

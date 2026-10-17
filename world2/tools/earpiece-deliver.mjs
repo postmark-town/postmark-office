@@ -34,7 +34,7 @@
 //        (the world engine's containment law) · EARPIECE_STATE (the stamp file)
 //        · TOWN_CLONE, TOWN_PUSH, TOWN_SINGLE_LOG (the pen's, as the office has them)
 // Exit:  0 ran, idle or disabled · 1 the record could not be reached (the
-//        stamp says so) · 2 usage.
+//        stamp says so) · 2 usage, --db among them (office.db is retired, POS-656).
 
 import { writeFileSync, mkdirSync, realpathSync, existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -226,6 +226,13 @@ function writeState(path, body) {
 }
 
 async function main(argv) {
+  // --db IS RETIRED (POS-656), as town-drain-run's is: it named office.db, which
+  // nothing builds or reads any more. A caller still passing it is told so and
+  // nothing runs, rather than have it quietly ignored.
+  if (argv.includes("--db")) {
+    console.error("[earpiece] --db is retired (POS-656): office.db is no longer built, and the deliverer reads the town index from the store. Drop --db; nothing replaces it.");
+    process.exit(2);
+  }
   if (!argv.includes("--run")) {
     console.error("usage: earpiece-deliver.mjs --run [--state <file>]   (the box's timer runs it every minute; W2_EARPIECE=1 or it sends nothing)");
     process.exit(2);

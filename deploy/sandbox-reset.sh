@@ -13,8 +13,20 @@
 # oauth.db is deliberately KEPT: sign-ins are box-side state, not town state,
 # and wiping it would lock every tester out after each reset.
 set -euo pipefail
-D=/srv/postmark-office-dev
+D="${SANDBOX_DIR:-/srv/postmark-office-dev}"   # the dev office's tree (a test points it elsewhere)
 SEED=sandbox/seed
+SANDBOX_DB=w2_devsandbox_20260925
+
+# THE SANDBOX, AND NOTHING ELSE (review-606). The rebuild below reseeds the town
+# index and rewrites the world graph snapshot in whatever PGDATABASE names, and
+# dev and prod share one cluster: world2-lib.sh § w2_db falls back to world2_dev,
+# PROD's store, when WORLD2_DB is unset. So an exported PG* that names any other
+# database is refused here, before anything is stopped or reset (DEPLOY.md § the
+# dev box, step 7, asserts the same).
+if [ -n "${PGDATABASE:-}" ] && [ "$PGDATABASE" != "$SANDBOX_DB" ]; then
+  echo "REFUSED: PGDATABASE is $PGDATABASE, not the dev sandbox ($SANDBOX_DB); nothing was stopped, reset or written" >&2
+  exit 9
+fi
 
 echo "== sandbox reset -> $SEED =="
 sudo systemctl stop postmark-office-dev.service
@@ -35,6 +47,8 @@ cd "$D"
 # it; without them neither is rebuilt, and this says so rather than leave the
 # dev office on an older town or world quietly.
 if [ -n "${PGDATABASE:-}" ] && [ -n "${PGUSER:-}" ]; then
+  # asserted again where it writes: the guard at the top is this line's reason
+  [ "$PGDATABASE" = "$SANDBOX_DB" ] || { echo "REFUSED: $PGDATABASE is not the dev sandbox ($SANDBOX_DB)" >&2; exit 9; }
   # the town index, reseeded at the seed's head (DEPLOY.md § the dev box, step 7:
   # the quest rows fold on the store's stamp chain, STAMP_LINES=store)
   STAMP_LINES=store node world2/tools/town-index-ingest.mjs --town-repo "$D/town-clone" --sha "$(git -C "$D/town-clone" rev-parse HEAD)" --seed --reseed >/dev/null
@@ -42,7 +56,7 @@ if [ -n "${PGDATABASE:-}" ] && [ -n "${PGUSER:-}" ]; then
   node src/world-hydrate.mjs --world "$D/world-clone" --office "$D" --to-store >/dev/null
   echo "  the world graph snapshot rebuilt from the seed (store $PGDATABASE, as $PGUSER)"
 else
-  echo "  TOWN INDEX AND WORLD GRAPH NOT REBUILT: export the sandbox store's law-pen PG* (PGHOST/PGDATABASE/PGUSER/PGPASSWORD) and run again" >&2
+  echo "  TOWN INDEX AND WORLD GRAPH NOT REBUILT: export the sandbox store's law-pen PG* (PGHOST, PGDATABASE=$SANDBOX_DB, PGUSER, PGPASSWORD) and run again" >&2
 fi
 
 echo "== start dev office =="

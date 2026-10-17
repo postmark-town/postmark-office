@@ -108,9 +108,13 @@ test("questsRead takes a HANDLE, not a key — the guess has nowhere to grow bac
   // no longer find a resident in it at all: there is no `handles` to index [0]
   // of, so a regression that reverted the call site would fail loudly here
   // rather than quietly answering for somebody else.
-  // (office.db's reader threw on the object, so this once read `quests: null`;
-  // the store's reader, prod's since the w42 switch, answers the registry's board
-  // with nobody's progress on it. Either way no resident is named.)
+  // (office.db's reader threw on the object, so this once read `quests: null`.
+  // The store's reader, prod's since the w42 switch, asks the store for a
+  // handle the object matches no row of, so the board it answers carries no
+  // resident's progress, and `of` echoes the object back, never a handle.)
   const answer = await questsRead(KEY, { ix: storeIndexPooled(TOWN) });
-  for (const h of KEY.handles) assert.notEqual(answer.of, h, "a key is not a handle and must never resolve to one");
+  assert.notEqual(typeof answer.of, "string", "a key is not a handle and must never resolve to one");
+  const row = send(answer);
+  assert.notEqual(row?.progress, 1, "wright's letter today is not on a board asked for a key");
+  assert.ok(!(row?.counted ?? []).includes("errant"), "nor is wright's correspondent");
 });

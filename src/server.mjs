@@ -878,7 +878,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       version: 1,
       town: "https://postmark.town",
       as_of: AS_OF,
-      freshness: { index: "rehydrates from the town repo every few minutes; every payload carries as_of (the exact commit it was built from)" },
+      freshness: { index: "the office's store re-reads the town repo every fifteen minutes; every payload carries as_of (the exact commit it was built from)" },
       // THE TOWN CLOCK, SERVED. Mail moves at crossings, not at wall-clock
       // minutes, so "how old is this page?" is only answerable in crossings —
       // and the site's baked pages need something to compare their own baked

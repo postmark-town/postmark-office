@@ -1,9 +1,12 @@
 // read-once-per-change.test.mjs — a whole read the office paid per call,
 // now paid per change (POS-272).
 //
-// (The ROLL half, office.db's residentList kept per sqlite handle, went with
-// office.db, POS-656: the store's roll is held per store head,
-// town-index-store.mjs § roster.)
+//   ROLL      `town-index-store.mjs § roster` parses every resident's card once
+//             per store head (town_meta as_of), not per call. office.db's
+//             residentList kept per sqlite handle went with office.db
+//             (POS-656); this is the same memo on the store's clock, so a
+//             second call with the head unchanged re-reads nothing, each
+//             caller gets its own copies, and a moved head is read again.
 //
 //   PASSAGES  `enter-exit-ledger.mjs § livePassageRows` read every passage act
 //             from the record on every call (the say's aboard-by-occupancy
@@ -14,17 +17,63 @@
 //
 // ── THE FLIPS (run after the commit; the red lines go in the report) ────────
 //
-//   1. `passageMark` keys on `max(id)` alone: "a passage committed below the
+//   1. `roster` ignores the head and always re-reads: "re-reads nothing" goes
+//      red. `roster` ignores the head and always answers the kept lines: "a
+//      moved head is read again" goes red. `residentList` hands back the kept
+//      lines themselves: "its own copies" goes red.
+//   2. `passageMark` keys on `max(id)` alone: "a passage committed below the
 //      mark" goes red.
-//   2. `livePassageRows` never answers from the memo: the two "reads once"
+//   3. `livePassageRows` never answers from the memo: the two "reads once"
 //      counts go red.
 
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { livePassageRows, __forgetPassages } from "../src/enter-exit-ledger.mjs";
 import { __setPoolForTest } from "../src/world2-acts.mjs";
+import { residentList, __resetRosterForTest } from "../src/town-index-store.mjs";
 
-after(() => { __setPoolForTest(null); __forgetPassages(); });
+after(() => { __setPoolForTest(null); __forgetPassages(); __resetRosterForTest(); });
+
+// ── ROLL ─────────────────────────────────────────────────────────────────────
+
+// A store that answers the two questions the roster asks, the way Postgres
+// would: the head (town_meta as_of) and the residents in bytewise order.
+// Anything else throws, so a new question cannot pass unseen.
+function storeOf(handles, asOf) {
+  const town = { asOf, rows: handles.map((h) => ({ handle: h, json: JSON.stringify({ display: h.toUpperCase() }) })), reads: 0 };
+  town.query = async (sql) => {
+    if (/FROM town_meta WHERE key = 'as_of'/.test(sql)) return { rows: [{ value: town.asOf }] };
+    if (/FROM town_residents/.test(sql)) { town.reads += 1; return { rows: [...town.rows].sort((a, b) => (a.handle < b.handle ? -1 : 1)) }; }
+    throw new Error(`the roster asked a question this store does not answer: ${sql}`);
+  };
+  return town;
+}
+
+test("ROLL: a second ask with the head unchanged re-reads nothing, and hands back its own copies", async () => {
+  __resetRosterForTest();
+  const town = storeOf(["alder", "birch"], "2026-10-16T12:00:00Z");
+  const first = await residentList(town);
+  const second = await residentList(town);
+  assert.equal(town.reads, 1, "the roll was read again with the head unchanged");
+  assert.deepEqual(second, first);
+  second[0].display = "edited by a caller";
+  assert.equal((await residentList(town))[0].display, "ALDER", "one caller's edit reached the next caller");
+  assert.equal(town.reads, 1);
+});
+
+test("ROLL: a moved head is read again, once", async () => {
+  __resetRosterForTest();
+  const town = storeOf(["alder"], "2026-10-16T12:00:00Z");
+  assert.deepEqual((await residentList(town)).map((x) => x.handle), ["alder"]);
+  town.rows.push({ handle: "cedar", json: "{}" });
+  town.rows[0].json = JSON.stringify({ display: "Renamed" });
+  town.asOf = "2026-10-16T12:05:00Z"; // the next ingest
+  const after = await residentList(town);
+  assert.deepEqual(after.map((x) => x.handle), ["alder", "cedar"]);
+  assert.equal(after[0].display, "Renamed", "an edited card was answered from before the ingest");
+  await residentList(town);
+  assert.equal(town.reads, 2, "one read per head");
+});
 
 // ── PASSAGES ─────────────────────────────────────────────────────────────────
 

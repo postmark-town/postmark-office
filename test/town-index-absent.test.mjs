@@ -103,9 +103,21 @@ function firstDiff(a, b) {
   };
   return walk(x, y, "$") ?? { at: "(whitespace)", plain: a.slice(0, 120), absent: b.slice(0, 120) };
 }
+// THE ONE DELIBERATE TEXT CHANGE since the record (review-606): the manifest's
+// freshness line said the index "rehydrates", which office.db did and the store
+// does not. The record keeps what the twin said; this is the line it now says
+// instead, and nothing else in that answer may move.
+const CHANGED = {
+  "REST /": [["rehydrates from the town repo every few minutes;", "the office's store re-reads the town repo every fifteen minutes;"]],
+};
 // the twin's recorded answer under `label` (helpers/twin-golden.mjs), against this one
 const same = (what, label, answer) => {
-  const got = steady(answer), was = TWINS.of(label);
+  const got = steady(answer);
+  let was = TWINS.of(label);
+  for (const [then, now] of CHANGED[label] ?? []) {
+    assert.ok(was.includes(then), `${label}: the record no longer says "${then}", so this substitution is stale`);
+    was = was.split(then).join(now);
+  }
   if (got === was) return;
   const d = firstDiff(was, got);
   assert.fail(`${what}: the answers part at ${d?.at}

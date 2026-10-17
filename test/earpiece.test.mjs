@@ -780,3 +780,15 @@ test("026 · earpiece_wakes carries kind and announcement, and the check ties th
   assert.match(sql, /ALTER TABLE earpiece_wakes ADD COLUMN IF NOT EXISTS announcement bigint;/);
   assert.match(sql, /CHECK \(kind IN \('news','announcement'\) AND \(kind = 'announcement'\) = \(announcement IS NOT NULL\)\)/);
 });
+
+test("--db is refused, as town-drain-run refuses it: office.db is retired, and nothing runs (POS-656)", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const { mkdtempSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const state = join(mkdtempSync(join(tmpdir(), "earpiece-db-")), "stamp.json");
+  const r = spawnSync(process.execPath, [join(HERE, "..", "world2", "tools", "earpiece-deliver.mjs"), "--run", "--db", "office.db", "--state", state],
+    { env: { ...process.env, ...ON, WORLD2_PG_URL: "postgres://earpiece-db/none" }, encoding: "utf8", timeout: 30_000 });
+  assert.equal(r.status, 2, r.stderr);
+  assert.match(r.stderr, /--db is retired \(POS-656\)/);
+  assert.equal(existsSync(state), false, "no stamp: the run never started");
+});

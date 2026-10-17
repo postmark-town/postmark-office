@@ -24,7 +24,7 @@
 // built from these; they live here because that module imports the checks that
 // import this one.
 export const UNREACHABLE_DEFECT = "the office's town index (the store) cannot be reached — nothing was read";
-export const UNREACHABLE_HINT = "this door reads the store (TOWN_INDEX_READS=store); ask again shortly, and it answers when the store does";
+export const UNREACHABLE_HINT = "the office keeps the town's record in its store, and the store did not answer this time; ask again shortly, and it answers when the store does";
 const unreachable = () => { const e = new Error(UNREACHABLE_DEFECT); Object.assign(e, { code: 503, field: null, defect: UNREACHABLE_DEFECT, hint: UNREACHABLE_HINT }); return e; };
 
 /** Is this the refusing probe's 503? A door that answers its own 500 answers this one as itself. */

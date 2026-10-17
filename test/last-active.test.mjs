@@ -9,10 +9,11 @@
 // stored), limen's is a letter they sent (at the crossing that sailed it),
 // postmaster's only a letter, decorator's only a window re-hung (a page edit),
 // and quiet has nothing of their own: a letter received and a join row. The
-// roster, the card and the household's address are asked over REST on two
-// offices (switch 2 off and on), and search is asked to carry none of it. Over
-// MCP, in this process, the store's statements are counted: one per page.
-// Then an office whose store is gone says why both fields are null.
+// roster, the card and the household's address are asked over REST on an
+// office reading its town index from the store, and search is asked to carry
+// none of it. Over MCP, in this process, the store's statements are counted:
+// one per page. Then a store that cannot read the acts says why both fields are
+// null (LAST_ACTIVE_UNAVAILABLE), through stampRowsOn's savepoint and the door.
 //
 // Falsifier (POS-481): point LAST_ACTIVE_SQL at `acts.inserted_at` instead of
 // `acts.at` and the act-led rows go red here (every seeded act was inserted
@@ -30,7 +31,7 @@ import { fixtureKey, fixtureTown, put } from "./fixture.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { seedTownIndex } from "./helpers/index-to-store.mjs";
 import { seedStaticKeys } from "./helpers/static-keys.mjs";
-import { pickLastActive } from "../src/last-active.mjs";
+import { LAST_ACTIVE_UNAVAILABLE, pickLastActive } from "../src/last-active.mjs";
 import { currentCrossing } from "../src/crossings.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -228,4 +229,49 @@ test("pickLastActive: the newest of the two sources wins, and its crossing is th
   assert.deepEqual(m.get("a"), { at: "2026-07-03T10:00:00.000Z", crossing: 42 });
   assert.deepEqual(m.get("b"), { at: "2026-07-05T20:00:00.000Z", crossing: 47 });
   assert.equal(m.has("c"), false);
+});
+
+// ── LAST_ACTIVE_UNAVAILABLE: a store that cannot read the acts says so ────────
+//
+// The town index and the acts are one store now (POS-656), so the disclosure is
+// reached when the acts read fails inside a read that otherwise answers: the
+// statement runs under a savepoint (stampRowsOn), and the roll still answers
+// with every last_active null and the sentence that says why.
+
+test("stampRowsOn: an acts read that fails is rolled back to its savepoint, the rows read null, and the caller's transaction is still usable", async (t) => {
+  if (skip) return t.skip(skip);
+  const { stampRowsOn } = await import("../src/last-active.mjs");
+  const c = await s.connect("office_api");
+  try {
+    await c.query("BEGIN READ ONLY");
+    // the acts statement errors as a real one would, aborting the transaction until the savepoint is rolled back to
+    const q = { query: (text, ...rest) => (typeof text === "string" && /FROM acts/.test(text) ? c.query("SELECT * FROM no_such_table_pos656") : c.query(text, ...rest)) };
+    const rows = [{ handle: "wright" }, { handle: "limen" }];
+    assert.equal(await stampRowsOn(q, rows), LAST_ACTIVE_UNAVAILABLE);
+    for (const r of rows) assert.deepEqual(pick(r), { last_active: null, last_active_crossing: null }, r.handle);
+    assert.equal((await c.query("SELECT 1 AS ok")).rows[0].ok, 1, "the caller's own read goes on after the failed statement");
+    await c.query("ROLLBACK");
+  } finally { await c.end(); }
+});
+
+test("stampRows: a reader that throws stamps every row null and says why, never 'nobody acted'", async () => {
+  const { stampRows } = await import("../src/last-active.mjs");
+  const rows = [{ handle: "wright" }];
+  assert.equal(await stampRows(rows, { find: async () => { throw new Error("the store blinked"); } }), LAST_ACTIVE_UNAVAILABLE);
+  assert.deepEqual(pick(rows[0]), { last_active: null, last_active_crossing: null });
+  assert.equal(await stampRows([], { find: async () => { throw new Error("never asked"); } }), null, "no rows, nothing to disclose");
+});
+
+test("an office whose store cannot read the acts answers the roll and the card, and says why last_active is null", async (t) => {
+  if (skip) return t.skip(skip);
+  await su.query("REVOKE SELECT ON acts FROM office_api");
+  try {
+    const page = await get("office", "/residents");
+    assert.ok(page.residents.length >= 4, "the roll answers from the store's town index");
+    assert.equal(page.last_active_unavailable, LAST_ACTIVE_UNAVAILABLE);
+    for (const r of page.residents) assert.deepEqual(pick(r), { last_active: null, last_active_crossing: null }, r.handle);
+    const card = await get("office", "/residents/wright");
+    assert.equal(card.last_active_unavailable, LAST_ACTIVE_UNAVAILABLE);
+    assert.equal(card.last_active, null, "never the index's commit-derived value");
+  } finally { await su.query("GRANT SELECT ON acts TO office_api"); }
 });
