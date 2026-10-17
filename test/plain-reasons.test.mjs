@@ -71,6 +71,7 @@ test("the structured fields are read before the text, because a path says anythi
   const git = (stderr) => Object.assign(new Error("Command failed: git show"), { stderr, status: 128 });
   for (const [what, e, kind, want] of [
     ["an ENOENT on a .json file is the files, never a parse", errno("ENOENT", "ENOENT: no such file or directory, open 'G:/w/WHITE_PAGES/ballot-x.json'"), "parse", FILES],
+    ["a .json path in the text alone is not a parse", new Error("cannot open WHITE_PAGES/pot-x.json at the settlement's law"), "files", FILES],
     ["git showing a missing .json is the files", git("fatal: path 'WHITE_PAGES/pot-x.json' does not exist in 'refs/tags/settlement/S9'"), "record", FILES],
     ["EPERM is a Node errno, not a SQLSTATE", errno("EPERM", "EPERM: operation not permitted, rename"), "record", FILES],
     ["EBUSY is a Node errno, not a SQLSTATE", errno("EBUSY", "EBUSY: resource busy or locked"), "record", FILES],
