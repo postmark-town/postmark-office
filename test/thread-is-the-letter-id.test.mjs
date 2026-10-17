@@ -60,15 +60,14 @@ import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown, emptyTown, put, probeOfTown } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 // F8-F11 test the reply hint's logic over a mail_state row they write themselves, so
 // they hand the hint that row through an explicit probe; the switch is not theirs.
-import { officeProbe } from "../src/index-probe.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
 import { householdApex } from "../src/household-apex.mjs";
 import { callTool, TOOLS } from "../src/mcp.mjs";
-import { mailAwaiting } from "../src/queries.mjs";
+import { mailAwaiting } from "../src/town-index-store.mjs";
 import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 import {
   CONVERSATION_IS_THE_ROOT, THREAD_FIELD_IS_A_PARENT, THREAD_IS_THE_LETTER_ID,
@@ -76,9 +75,9 @@ import {
 } from "../src/mail-thread.mjs";
 
 // The town index this file's offices read: a store seeded from each fixture
-// office.db (POS-268, office-under-test.mjs). Stopped when the file is done.
+// town (POS-268, office-under-test.mjs). Stopped when the file is done.
 const STORES = [];
-const storeFor = async (dbPath) => { const x = await indexStore(dbPath); STORES.push(x); return x.env; };
+const storeFor = async (town) => { const x = await indexStore(town); STORES.push(x); return x.env; };
 test.after(async () => { for (const x of STORES) await x.stop(); });
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -95,15 +94,14 @@ const trash = [];
 after(() => { for (const d of trash.splice(0)) rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
 
 const dir = mkdtempSync(join(tmpdir(), "pm-thread-"));
-const dbPath = join(dir, "fixture.db");
-fixtureDb(dbPath).close();
-const db = new DatabaseSync(dbPath, { readOnly: true });
+const town = fixtureTown();
 // The checks this file calls in-process read their town index from a store
 // seeded from this fixture (POS-268, office-under-test.mjs).
-const IX_IN = await indexStore(dbPath);
+const IX_IN = await indexStore(town);
 const IX_IN_RESTORE = await IX_IN.useInProcess();
-test.after(async () => { await IX_IN_RESTORE(); await IX_IN.stop(); });
-after(() => { db.close(); rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+const api = await IX_IN.store.connect("office_api"); // the store's readers, asked directly
+test.after(async () => { await api.end(); await IX_IN_RESTORE(); await IX_IN.stop(); });
+after(() => { rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
 
 const KEY = { household: "keemin", handles: new Set(["wright"]), ghId: "42", ghLogin: "keeminlee" };
 
@@ -139,7 +137,7 @@ const flagOn = async (fn) => {
 const SCHEMAS = Object.fromEntries(TOOLS.map((t) => [t.name, t.inputSchema?.properties ?? {}]));
 const REQUIRED = Object.fromEntries(TOOLS.map((t) => [t.name, t.inputSchema?.required ?? []]));
 
-const ctx = (extra = {}) => ({ db, worldBlock, schemas: SCHEMAS, schemaRequired: REQUIRED, ...extra });
+const ctx = (extra = {}) => ({ worldBlock, schemas: SCHEMAS, schemaRequired: REQUIRED, ...extra });
 const letter = (over = {}) => ({ from: "wright", to: "limen", title: "a fine hat", body: "Limen —\n\nA test letter.", ...over });
 
 /** Every sentence present, in one assertion, with the surface named. */
@@ -172,8 +170,8 @@ test("F1c · the REST card — GET /household?read=send — carries the same thr
   carriesTheThree(rest, "the REST card at GET /household?read=send");
 });
 
-test("F1d · the awaiting read — the page Solan was reading — names which of its OWN keys is the write value, and which is not", () => {
-  const a = mailAwaiting(db, "wright");
+test("F1d · the awaiting read — the page Solan was reading — names which of its OWN keys is the write value, and which is not", async () => {
+  const a = await mailAwaiting(api, "wright");
   const row = a.conversations.find((c) => c.conversation === ITS_OWN_THREAD);
   assert.ok(row, "the fixture's one live conversation");
   assert.equal(row.conversation, ITS_OWN_THREAD, "this page labels the ROOT — Solan's string 3");
@@ -304,16 +302,15 @@ test("F7 · ADDITIVE and nothing else — every key the receipt already answered
 
 // ── (3) THE PLURAL, AND WHERE "NEWEST" COMES FROM ──────────────────────────
 
-test("F8 · several unanswered letters → the NEWEST by the ledger's own ordinal, and the count said out loud", () => {
-  const d = new DatabaseSync(":memory:");
-  d.exec("CREATE TABLE mail_state (handle TEXT PRIMARY KEY, json TEXT)");
+test("F8 · several unanswered letters → the NEWEST by the ledger's own ordinal, and the count said out loud", async () => {
+  const d = emptyTown();
   // Two conversations, both awaiting wright, both from limen. The NEWER one is
   // written SECOND in the array and carries the LOWER ordinal — so a reader
   // that took array order would name the wrong letter, and this is the probe
   // that tells the two apart. mail-state.mjs § the three rulings: "ORDER IS THE
   // LEDGER'S. Events sort by ledger ordinal (file line order), never by
   // day-only date."
-  d.prepare("INSERT INTO mail_state VALUES (?, ?)").run("wright", JSON.stringify({
+  put(d, "mail_state", { handle: "wright", json: JSON.stringify({
     handle: "wright",
     conversations: [
       { conversation: "root-a", attention_state: "they_spoke_again",
@@ -323,22 +320,21 @@ test("F8 · several unanswered letters → the NEWEST by the ledger's own ordina
         latest_delivered_id: "limen-2026-07-02-to-wright-the-older", latest_delivered_from: "limen",
         latest_event: { ordinal: 2, date: "2026-07-02" }, next_actor: "you" },
     ],
-  }));
-  const open = unansweredFrom(officeProbe(d), { handle: "wright", sender: "limen" });
+  }) });
+  const probe = await probeOfTown(d);
+  const open = unansweredFrom(probe, { handle: "wright", sender: "limen" });
   assert.deepEqual(open.map((o) => o.id),
     ["limen-2026-07-09-to-wright-the-newest", "limen-2026-07-02-to-wright-the-older"],
     "newest first, by the ledger ordinal the law publishes — not by the order the rows happened to arrive in");
-  const hint = threadlessReplyHint(officeProbe(d), { from: "wright", to: "limen" });
+  const hint = threadlessReplyHint(probe, { from: "wright", to: "limen" });
   assert.match(hint, /2 unanswered letters from limen/, "several → say how many");
   assert.ok(hint.includes("limen-2026-07-09-to-wright-the-newest"), "and name the newest");
   assert.equal(hint.includes("limen-2026-07-02-to-wright-the-older"), false, "one id, so there is one thing to copy");
-  d.close();
 });
 
-test("F9 · the states the law calls NOT-yours draw nothing — a queued reply and a bounce are not unanswered mail", () => {
-  const d = new DatabaseSync(":memory:");
-  d.exec("CREATE TABLE mail_state (handle TEXT PRIMARY KEY, json TEXT)");
-  d.prepare("INSERT INTO mail_state VALUES (?, ?)").run("wright", JSON.stringify({
+test("F9 · the states the law calls NOT-yours draw nothing — a queued reply and a bounce are not unanswered mail", async () => {
+  const d = emptyTown();
+  put(d, "mail_state", { handle: "wright", json: JSON.stringify({
     handle: "wright",
     conversations: [
       // `reply_queued`: the law already knows this leaf is answered — the answer
@@ -352,24 +348,26 @@ test("F9 · the states the law calls NOT-yours draw nothing — a queued reply a
         latest_delivered_id: "wright-2026-07-07-to-limen-mine", latest_delivered_from: "wright",
         latest_event: { ordinal: 7 }, next_actor: "them" },
     ],
-  }));
-  assert.deepEqual(unansweredFrom(officeProbe(d), { handle: "wright", sender: "limen" }), []);
-  assert.equal(threadlessReplyHint(officeProbe(d), { from: "wright", to: "limen" }), null);
-  d.close();
+  }) });
+  const probe = await probeOfTown(d);
+  assert.deepEqual(unansweredFrom(probe, { handle: "wright", sender: "limen" }), []);
+  assert.equal(threadlessReplyHint(probe, { from: "wright", to: "limen" }), null);
 });
 
-test("F10 · an index built before the seam says nothing rather than guessing — the July-30 wound, not repeated", () => {
-  const d = new DatabaseSync(":memory:"); // no mail_state table at all
-  assert.deepEqual(unansweredFrom(d, { handle: "wright", sender: "limen" }), []);
-  assert.equal(threadlessReplyHint(d, { from: "wright", to: "limen" }), null,
-    "the office NEVER falls back to a private second law (src/hydrate.mjs § mail-state) — absence is silence, never a derived guess");
-  d.close();
+test("F10 · an index with no mail_state row for the resident says nothing rather than guessing — the July-30 wound, not repeated", async () => {
+  const d = emptyTown();
+  put(d, "residents", { handle: "wright", json: JSON.stringify({ handle: "wright" }) }); // a resident, and no mail_state row
+  const probe = await probeOfTown(d);
+  assert.deepEqual(unansweredFrom(probe, { handle: "wright", sender: "limen" }), []);
+  assert.equal(threadlessReplyHint(probe, { from: "wright", to: "limen" }), null,
+    "the office NEVER falls back to a private second law — absence is silence, never a derived guess");
 });
 
-test("F11 · an explicit `thread: \"new\"` reads the same as leaving it off — both are the resident saying 'this is a root'", () => {
-  assert.equal(threadlessReplyHint(officeProbe(db), { from: "wright", to: "limen", thread: "new" })?.includes(THE_ID_TO_WRITE), true);
-  assert.equal(threadlessReplyHint(officeProbe(db), { from: "wright", to: "limen", thread: "  " })?.includes(THE_ID_TO_WRITE), true);
-  assert.equal(threadlessReplyHint(officeProbe(db), { from: "wright", to: "limen", thread: THE_ID_TO_WRITE }), null);
+test("F11 · an explicit `thread: \"new\"` reads the same as leaving it off — both are the resident saying 'this is a root'", async () => {
+  const probe = await probeOfTown(town);
+  assert.equal(threadlessReplyHint(probe, { from: "wright", to: "limen", thread: "new" })?.includes(THE_ID_TO_WRITE), true);
+  assert.equal(threadlessReplyHint(probe, { from: "wright", to: "limen", thread: "  " })?.includes(THE_ID_TO_WRITE), true);
+  assert.equal(threadlessReplyHint(probe, { from: "wright", to: "limen", thread: THE_ID_TO_WRITE }), null);
 });
 
 test("F12 · the sentences are the resident's terms, and each names its own string", () => {
@@ -395,10 +393,9 @@ let child, restTmp;
 
 before(async () => {
   restTmp = mkdtempSync(join(tmpdir(), "pm-thread-rest-"));
-  const p = join(restTmp, "fixture.db");
-  fixtureDb(p).close();
+  const p = fixtureTown();
   const IX_ENV = await storeFor(p);
-  ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--db", p, "--oauth-db", seedStaticKeys(join(restTmp, "oauth.db"), `${REST_KEY}=keemin:wright`)], {
+  ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--oauth-db", seedStaticKeys(join(restTmp, "oauth.db"), `${REST_KEY}=keemin:wright`)], {
     env: { ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV, TOWN_CLONE: mailClone(),
       WORLD_CLONE: join(restTmp, "no-world-clone") },
     stdio: ["ignore", "pipe", "pipe"],

@@ -25,7 +25,7 @@ import { REGISTRY_PATH, PINS_PATH, serializeRegistry, serializePins } from "../s
 import { resolveHouse } from "../src/household-deriver.mjs";
 import { conformance, isHouseholdName } from "../src/declare.mjs";
 import { REFUSALS } from "../src/ceremony.mjs";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 
 // ── the town, as Emmett's house stood on 2026-09-29 ─────────────────────────
@@ -101,7 +101,7 @@ async function rekey(clone, opts = {}) {
 
 // The doors below run in this process and read their town index from a store
 // seeded from this fixture (POS-268, office-under-test.mjs).
-const IX = await indexStore(fixtureDb());
+const IX = await indexStore(fixtureTown());
 const IX_RESTORE = await IX.useInProcess();
 test.after(async () => { await IX_RESTORE(); await IX.stop(); });
 
@@ -247,7 +247,7 @@ test("refused: a ledger whose last line is dated after today", async () => {
 // ── the door ────────────────────────────────────────────────────────────────
 
 test("the door refuses the paragraph, a two-line name and a 61-character one; it accepts The Held Place at Fern Hollow and a name with an abbreviation", () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const key = { ghId: 424242, ghLogin: "some-stranger", handles: new Set() };
   const ask = (household) => conformance(
     { handle: "wren-of-the-hours", card: "I keep small accurate records.", household }, { db, registry: { households: {} }, key });

@@ -33,7 +33,7 @@ import { staticLookup, importStaticKeys, RETIRED_KIND } from "../src/static-keys
 import { planRetire, retireStaticKey, mirrorOnly, LOCK_TIMEOUT_MS, STATEMENT_TIMEOUT_MS } from "../src/static-keys-retire.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -566,8 +566,7 @@ test("§ I the CLIs: exit codes, and no key or hash in any output", async () => 
 // ── § J the door ────────────────────────────────────────────────────────────
 
 test("§ J a booted office on the store: the static bearer authenticates, the SAME bearer is refused 401 once retired, its replacement still works", async () => {
-  const dbPath = join(TMP, "j-fixture.db");
-  fixtureDb(dbPath).close();
+  const dbPath = fixtureTown();
   const ix = await indexStore(dbPath, { db: "retire_door", own: true });
   CLEANUP.push(() => ix.stop());
   const jpool = new pg.Pool({ connectionString: ix.store.url("office_api"), max: 4, types: paperworkPoolTypes(pg) });
@@ -580,7 +579,7 @@ test("§ J a booted office on the store: the static bearer authenticates, the SA
   await seedFile(oauthDb, spec);
   let said = "";
   const office = await bootOnFreePort((port) => { const c = spawn(process.execPath, [join(ROOT, "src", "server.mjs"),
-    "--port", String(port), "--db", dbPath, "--oauth-db", oauthDb, "--roles-db", join(TMP, "j-roles.db")], {
+    "--port", String(port), "--oauth-db", oauthDb, "--roles-db", join(TMP, "j-roles.db")], {
     env: { ...process.env, ...ix.env, OFFICE_PAPERWORK_STORE: "1", OFFICE_READ_WORKERS: "0", WORLD_GRAPH_NONE: "1", OFFICE_KEYS: "",
       TOWN_CLONE: join(TMP, "j-no-clone"), WORLD_CLONE: join(TMP, "j-no-world-clone"), TOWN_PUSH: "" },
     stdio: ["ignore", "pipe", "pipe"],

@@ -27,7 +27,7 @@ import { CROSSING_EPOCH_UTC, CROSSING_MS, currentCrossing, nextCrossingAt, nextC
 import { enqueueLetter, nextCrossing } from "../src/write.mjs";
 import { sendLetterAsRow, duplicateReceipt } from "../src/town-mail.mjs";
 import { doorstepBundle } from "../src/doorstep-bundle.mjs";
-import { fixtureDb, tempClone, fixtureKey } from "./fixture.mjs";
+import { tempClone, fixtureKey, fixtureTown } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 
 delete process.env.TOWN_PUSH;
@@ -36,7 +36,7 @@ const onTheBeat = (iso) => { const d = new Date(iso); return d.getUTCMinutes() =
 
 // The doors below run in this process and read their town index from a store
 // seeded from this fixture (POS-268, office-under-test.mjs).
-const IX = await indexStore(fixtureDb());
+const IX = await indexStore(fixtureTown());
 const IX_RESTORE = await IX.useInProcess();
 test.after(async () => { await IX_RESTORE(); await IX.stop(); });
 
@@ -95,10 +95,10 @@ test("the two sentences: the doorstep's is read before writing; the receipt's na
 // ── the receipts, through the doors ─────────────────────────────────────────
 
 test("flag-off · enqueueLetter's receipt carries next_crossing beside expected_crossing, naming ONE boat", () => {
-  const db = fixtureDb();
   const clone = tempClone();
   try {
-    const r = enqueueLetter({ from: "wright", to: "limen", title: "the boat", thread: "new", body: "Limen —\n\nwhich boat?" }, fixtureKey, db, clone);
+    // the recipient check asks the store's held probe (null: no probe of its own)
+    const r = enqueueLetter({ from: "wright", to: "limen", title: "the boat", thread: "new", body: "Limen —\n\nwhich boat?" }, fixtureKey, null, clone);
     assert.equal(typeof r.expected_crossing, "string", "the frozen key stays");
     assert.equal(r.next_crossing.at, r.expected_crossing, "one boat, two spellings");
     assert.ok(Date.parse(r.next_crossing.at) > Date.now());
@@ -130,8 +130,7 @@ test("flag-on · the town-log receipt carries next_crossing too, and the duplica
   const odb = logDb();
   const clone = mailClone();
   try {
-    const db = fixtureDb();
-    const r = await sendLetterAsRow({ from: "wright", to: "limen", title: "the boat", thread: "new", body: "Limen —\n\nwhich boat?" }, KEY, db, clone, odb);
+    const r = await sendLetterAsRow({ from: "wright", to: "limen", title: "the boat", thread: "new", body: "Limen —\n\nwhich boat?" }, KEY, null, clone, odb);
     assert.equal(r.next_crossing.at, r.expected_crossing);
     assert.match(r.next_crossing.sentence, /^sails at the next crossing, /);
     // a duplicate receipt for a row written before a boat that has since sailed
@@ -158,12 +157,9 @@ test("flag-on · the town-log receipt carries next_crossing too, and the duplica
 
 test("the doorstep carries next_crossing right under as_of, on both skins — the same number the receipt will name", async () => {
   const dir = mkdtempSync(join(tmpdir(), "pm-next-crossing-"));
-  const dbPath = join(dir, "fixture.db");
-  fixtureDb(dbPath).close();
-  const db = new DatabaseSync(dbPath, { readOnly: true });
   try {
-    const meta = { as_of: "fixturesha000000000000000000000000000000" };
-    const ctx = { db, key: null, meta, asOf: meta.as_of, canWrite: false, clone: null, pen: null, odb: null, dbPath: null };
+    const asOf = "fixturesha000000000000000000000000000000";
+    const ctx = { key: null, asOf, canWrite: false, clone: null, pen: null, odb: null };
     for (const slim of [false, true]) {
       const d = await doorstepBundle("wright", { ...ctx, slim });
       // `copy` (POS-332) sits beside the commit it describes, then the boat ahead
@@ -174,5 +170,5 @@ test("the doorstep carries next_crossing right under as_of, on both skins — th
       assert.equal(d.next_crossing.minutes_away, undefined, "the page carries no minute counter — two doors, one answer");
       assert.ok(!d.segments.includes("next_crossing"), "a header field, not a segment — no other read serves it");
     }
-  } finally { db.close(); rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
+  } finally { rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
 });

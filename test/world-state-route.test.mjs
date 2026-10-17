@@ -16,7 +16,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { settlementRig, WORLD } from "./helpers/settlement-seed.mjs";
 
@@ -24,8 +24,7 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 let tmp, ix, rig;
 before(async () => {
   tmp = mkdtempSync(join(tmpdir(), "postmark-world-state-route-"));
-  const db = join(tmp, "fixture.db");
-  fixtureDb(db).close();
+  const db = fixtureTown();
   ix = await indexStore(db, { db: "world_state_route" });
   rig = settlementRig(ix.store);
 });
@@ -40,7 +39,7 @@ async function withOffice(fn, extra = {}) {
   for (const [k, v] of Object.entries(extra)) if (v == null) delete env[k];
   const proc = spawn(process.execPath, [
     join(ROOT, "src", "server.mjs"), "--port", "0",
-    "--db", join(tmp, "fixture.db"), "--oauth-db", join(tmp, "oauth.db"), "--roles-db", join(tmp, "roles.db"),
+    "--oauth-db", join(tmp, "oauth.db"), "--roles-db", join(tmp, "roles.db"),
   ], {
     env,
     stdio: ["ignore", "pipe", "pipe"],

@@ -55,11 +55,11 @@ test("the rehearsal refuses a pen pointed at PROD's database before it writes an
 
 test("the preflight goes red on a dev office that does not read the store as prod's does", async () => {
   const t = target();
-  t.env = { ...t.env, TOWN_INDEX_READS: undefined, STAMP_KEY: undefined };
+  t.env = { ...t.env, OFFICE_PAPERWORK_STORE: undefined, STAMP_KEY: undefined };
   const r = await runRehearsal(t, { only: ["preflight"] });
   assert.equal(r.green, false);
   const pre = r.steps.find((s) => s.id === "preflight");
-  assert.ok(pre.problems.some((p) => /without TOWN_INDEX_READS=store/.test(p)), pre.problems.join("; "));
+  assert.ok(pre.problems.some((p) => /without OFFICE_PAPERWORK_STORE=1/.test(p)), pre.problems.join("; "));
   assert.ok(pre.problems.some((p) => /sets no STAMP_KEY, so its pens sign with PROD's key file/.test(p)), pre.problems.join("; "));
 });
 

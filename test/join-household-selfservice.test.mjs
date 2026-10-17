@@ -31,7 +31,7 @@ import {
 } from "../src/edit.mjs";
 import { conformance, ownHandle, OWN_HANDLE_HINT } from "../src/declare.mjs";
 import { buildJoinCard } from "../src/residency.mjs";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 
 // ── the instance, rebuilt ───────────────────────────────────────────────────
@@ -75,7 +75,7 @@ const householdLine = (dir) => cardOf(dir).match(/^household: (.*)$/m)?.[1];
 
 // The doors below run in this process and read their town index from a store
 // seeded from this fixture (POS-268, office-under-test.mjs).
-const IX = await indexStore(fixtureDb());
+const IX = await indexStore(fixtureTown());
 const IX_RESTORE = await IX.useInProcess();
 test.after(async () => { await IX_RESTORE(); await IX.stop(); });
 
@@ -165,7 +165,7 @@ test("…and a real profile edit still lands, so only the already-failing branch
 });
 
 test("THE WRONG DIRECTION: declare tells a resident their own handle is theirs, not to pick another", () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   // wright stands in the fixture index, and this key acts for wright — so the
   // handle is taken BY THE CALLER. The pre-change answer was "someone already
   // lives there; try list_residents and pick a free handle", which reads as
@@ -190,7 +190,7 @@ test("THE WRONG DIRECTION: declare tells a resident their own handle is theirs, 
 });
 
 test("…and a STRANGER's taken handle still gets the ordinary answer", () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const stranger = { ghId: 424242, ghLogin: "some-stranger", household: "some-stranger", handles: new Set(), visitor: true };
   assert.throws(() => conformance(
     { household: "A New House", handle: "wright", card: "x".repeat(80) },

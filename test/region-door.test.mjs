@@ -15,11 +15,11 @@
 //   KEYED BY SLUG     — the viewer holds the slug, not the founder's handle
 //   EMPTY, NOT 404    — a region whose founder wrote no page still EXISTS
 //
-// It runs the real `src/hydrate.mjs` over a throwaway town and then the real
-// `src/server.mjs` over that index, because status codes are the claim here and
+// It runs the box's own town-index ingest over a throwaway town and then the
+// real `src/server.mjs` over that store, because status codes are the claim here and
 // a unit test on the query would prove the object while saying nothing about
 // what the door answers. The flip that reds the first case: cap `description`
-// in `regionOne` at 200 the way the list does.
+// in the store's `regionOne` at 200 the way the list does.
 
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
@@ -33,7 +33,6 @@ import { indexStoreFromTown } from "./helpers/office-under-test.mjs";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const tmp = mkdtempSync(join(tmpdir(), "postmark-region-door-"));
 const town = join(tmp, "town");
-const dbPath = join(tmp, "office.db");
 let child, BASE, IX;
 
 const put = (path, text) => {
@@ -79,15 +78,13 @@ before(async () => {
   git("init", "-q");
   git("add", "-A");
   git("-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-q", "-m", "fixture town");
-  execFileSync("node", [join(ROOT, "src", "hydrate.mjs"), "--town", town, "--db", dbPath],
-    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-  // the store, seeded from the same town by the box's own ingest (POS-268)
+  // the store, seeded from the town by the box's own ingest (POS-268)
   IX = await indexStoreFromTown(town);
 
   // PORT 0 and per-run oauth/roles dbs, the idiom server.test.mjs settled on:
   // a fixed port and root-relative sqlite files are how two lanes on one box
   // kill each other's runs.
-  child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0", "--db", dbPath,
+  child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0",
     "--oauth-db", join(tmp, "oauth.db"), "--roles-db", join(tmp, "roles.db")], {
     env: { ...process.env, WORLD_GRAPH_NONE: "1", TOWN_CLONE: join(tmp, "no-clone-here"), WORLD_CLONE: join(tmp, "no-world-clone"),
       VOICES_LOG: join(tmp, "voices-log.jsonl"), TOWN_PUSH: "", WORLD_STORE_DB: join(tmp, "no-world.db"), ...IX.env },

@@ -33,12 +33,10 @@
 //
 // ⚠ REGENERATE ONLY FROM A COMMIT YOU MEAN TO FREEZE. Re-capturing after a
 // change makes the assertion say your change equals your change.
-import { mkdtempSync, rmSync, realpathSync } from "node:fs";
-import { join } from "node:path";
+import { realpathSync } from "node:fs";
 import { pathToFileURL, fileURLToPath } from "node:url";
-import { tmpdir } from "node:os";
-import { DatabaseSync } from "node:sqlite";
-import { fixtureDb } from "../test/fixture.mjs";
+import { fixtureTown } from "../test/fixture.mjs";
+import { indexStore } from "../test/helpers/office-under-test.mjs";
 import { householdApex } from "../src/household-apex.mjs";
 import { TOOLS } from "../src/mcp.mjs";
 
@@ -76,10 +74,9 @@ const isMain = (() => {
   catch { return pathToFileURL(process.argv[1]).href === import.meta.url; }
 })();
 if (isMain) {
-  const dir = mkdtempSync(join(tmpdir(), "pm-golden-"));
-  const dbPath = join(dir, "fixture.db");
-  fixtureDb(dbPath).close();
-  const db = new DatabaseSync(dbPath, { readOnly: true });
+  // the town index: a store seeded from the fixture town, read in this process
+  const ix = await indexStore(fixtureTown(), { db: "household_golden" });
+  const restore = await ix.useInProcess();
   const KEY = { household: "keemin", handles: new Set(["wright"]), ghId: "42", ghLogin: "keeminlee" };
   const worldBlock = async () => ({ sited: true, unreadable: false });
 
@@ -87,8 +84,11 @@ if (isMain) {
   const schemas = Object.fromEntries(TOOLS.map((t) => [t.name, t.inputSchema?.properties ?? {}]));
   const schemaRequired = Object.fromEntries(TOOLS.map((t) => [t.name, t.inputSchema?.required ?? []]));
 
-  const out = await householdApex({}, KEY, { db, worldBlock, schemas, schemaRequired });
-  process.stdout.write(JSON.stringify(shapeOf(out), null, 1));
-  db.close();
-  rmSync(dir, { recursive: true, force: true });
+  try {
+    const out = await householdApex({}, KEY, { worldBlock, schemas, schemaRequired });
+    process.stdout.write(JSON.stringify(shapeOf(out), null, 1));
+  } finally {
+    await restore();
+    await ix.stop();
+  }
 }

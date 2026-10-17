@@ -7,15 +7,15 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
 import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 
 // The town index this file's offices read: a store seeded from each fixture
-// office.db (POS-268, office-under-test.mjs). Stopped when the file is done.
+// town (POS-268, office-under-test.mjs). Stopped when the file is done.
 const STORES = [];
-const storeFor = async (dbPath) => { const x = await indexStore(dbPath); STORES.push(x); return x.env; };
+const storeFor = async (town) => { const x = await indexStore(town); STORES.push(x); return x.env; };
 test.after(async () => { for (const x of STORES) await x.stop(); });
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -29,13 +29,11 @@ let child, tmp;
 
 before(async () => {
   tmp = mkdtempSync(join(tmpdir(), "postmark-office-bouncer-"));
-  const dbPath = join(tmp, "fixture.db");
-  fixtureDb(dbPath).close();
-  const IX_ENV = await storeFor(dbPath);
+  const town = fixtureTown();
+  const IX_ENV = await storeFor(town);
   ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [
     join(ROOT, "src", "server.mjs"),
     "--port", String(port),
-    "--db", dbPath,
     "--bouncer-now-ms", FROZEN_BOUNCER_NOW_MS,
     "--oauth-db", seedStaticKeys(join(tmp, "oauth.db"), `${KEY}=keemin:wright`),
   ], {
@@ -149,13 +147,11 @@ test("REST and MCP middleware return exact 429s with independent key and househo
 
 test("with no --bouncer-now-ms the office keeps Date.now — the seam is a test affordance, never a new default", async () => {
   const dir = mkdtempSync(join(tmpdir(), "postmark-office-liveclock-"));
-  const dbPath = join(dir, "fixture.db");
-  fixtureDb(dbPath).close();
-  const IX_ENV = await storeFor(dbPath);
+  const town = fixtureTown();
+  const IX_ENV = await storeFor(town);
   const { child: live, port: LIVE_PORT } = await bootOnFreePort((port) => spawn(process.execPath, [
     join(ROOT, "src", "server.mjs"),
     "--port", String(port),
-    "--db", dbPath,
     // no --bouncer-now-ms: this is the production composition
     "--oauth-db", seedStaticKeys(join(dir, "oauth.db"), `${KEY}=keemin:wright`),
   ], {

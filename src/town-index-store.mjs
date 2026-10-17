@@ -1,19 +1,17 @@
-// town-index-store.mjs — the office.db readers that have moved to the store
-// (POS-268). Each one answers exactly what its office.db twin in queries.mjs
-// answers, over the town_* tables (033_town_index.sql), and each has a test
-// holding the two equal: test/town-index-reads.test.mjs.
+// town-index-store.mjs — the office's town index readers, over the store's
+// town_* tables (033_town_index.sql). Each was ported from its office.db twin in
+// queries.mjs (POS-268), answering exactly what the twin answered; the twins
+// went with office.db (POS-656), and their answers over the suites' fixture are
+// kept as the record the readers are still held to (test/golden/office-db-twins,
+// test/town-index-reads.test.mjs and its siblings).
 //
-// ── THE SWITCH ───────────────────────────────────────────────────────────────
-//
-// `TOWN_INDEX_READS=store` moves every door listed in MOVED to these readers.
-// Unset, the office reads office.db exactly as before; rolling back is unsetting
-// it. There is no fallback between the two: a door switched to the store that
-// cannot reach it says so (the pen's 503), rather than quietly answering from the
-// other index (`the-town/the-disclosure`).
+// A door that cannot reach the store says so (the pen's 503); there is no other
+// index to answer from (`the-town/the-disclosure`).
 //
 // ── WHAT A PORT HAS TO CARRY ─────────────────────────────────────────────────
 //
-// Three sqlite behaviours the doors' answers depended on without saying so:
+// Three sqlite behaviours the doors' answers depended on without saying so, and
+// still do:
 //   · text compares and sorts BYTEWISE. Postgres' default collation does not, so
 //     every comparison and ORDER BY on text here is `COLLATE "C"`.
 //   · LIKE ignores ASCII case, and only ASCII case. `ilike` would fold more
@@ -34,7 +32,6 @@ import {
   potBoardOf, questBoardWith, withGivers,
   excerpt, LETTER_READING_LAW_LINE, withWhole, MAIL_PAGE, SEARCH_LETTERS, SEARCH_RESIDENTS,
   mailListOf, letterListNoRegion, letterListPage, letterPageCap, correspondentsOf, mailAwaitingOf, searchPage, metricsMailOf,
-  indexCopy as officeIndexCopy,
   rollEntry, residentPageOf, townSummaryOf, residentOf, windowReadOf, psaFoldOf, doorstepOf, DOORSTEP_SIZES, PSA_SLUG, CARD_MAIL,
 } from "./queries.mjs";
 import { isResidentHandle } from "./residency.mjs"; // the door's admission grammar, as readRoll filters by it
@@ -46,14 +43,6 @@ import { holdStoreProbe, UNREACHABLE_DEFECT, UNREACHABLE_HINT } from "./index-pr
 // readers call; only the SQL is written twice. A port that restated the shape
 // would be the private copy that drifts.
 import { freshnessFor, composeHome, composeFoundedHome } from "./paper-fresh.mjs"; // the freshness ladder, as queries.home uses it
-
-export const MOVED = Object.freeze(["repoLog", "regionList", "regionOne", "bulletinList", "bulletinTeaser", "bulletinEntry", "home", "stampsRoster", "stampsDetail", "potBoard", "questBoardFor", "standingFor", "townQuestBoard",
-  "letter", "letterAnswer", "letterList", "mailList", "mailCorrespondents", "mailAwaiting", "search", "metricsMail", "outboxSettled",
-  "residentList", "residentPage", "resident", "townSummary", "officeHandles", "windowRead", "psaFold", "doorstep",
-  "hasResident", "hasLetter", "loginIndex", "unansweredFrom", "townLedger", "townDocs"]);
-
-/** Is the switch on? Only the exact value `store` turns it on. */
-export const townIndexReads = (env = process.env) => env.TOWN_INDEX_READS === "store";
 
 const UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ", LOWER = "abcdefghijklmnopqrstuvwxyz";
 /** sqlite's LIKE: ASCII case folded on both sides, nothing else. */
@@ -93,17 +82,15 @@ export async function indexCopy(q) {
 
 /**
  * The 404 for a letter id the door's index does not hold (POS-332): the copy
- * that was read, and the crossing it has caught up to, from the same index the
- * lookup asked (office.db's repo_log, or the store's with the switch on). A
- * history that cannot be read is said; it never turns the 404 into a 500.
+ * that was read, and the crossing it has caught up to, from the store's
+ * repo_log, the index the lookup asked. A history that cannot be read is said;
+ * it never turns the 404 into a 500.
  */
-export async function letterNotInCopy(db, { env = process.env } = {}) {
+export async function letterNotInCopy({ env = process.env } = {}) {
   let copy;
   try {
-    if (townIndexReads(env)) {
-      const r = await storeAnswer((c) => indexCopy(c), { env });
-      copy = r.refused ? undefined : r.out;
-    } else copy = officeIndexCopy(db);
+    const r = await storeAnswer((c) => indexCopy(c), { env });
+    copy = r.refused ? undefined : r.out;
   } catch { copy = undefined; }
   return notInCopyDefect(copy === undefined ? undefined : copyCrossing(copy.seal));
 }
@@ -172,7 +159,7 @@ export async function bulletinList(q) {
   return (await q.query(`SELECT slug, json FROM town_bulletin ORDER BY slug COLLATE "C"`)).rows.map(bulletinListing);
 }
 
-/** queries.bulletinTeaser, from the store (read_bulletin's paged answer; the doorstep keeps office.db's until it moves). */
+/** queries.bulletinTeaser, from the store (read_bulletin's paged answer, and the doorstep's teaser). */
 export async function bulletinTeaser(q, opts = {}) {
   return bulletinTeaserOf(await bulletinList(q), opts);
 }
@@ -620,7 +607,7 @@ export async function hasResident(q, handle) {
   return (await q.query("SELECT 1 FROM town_residents WHERE handle = $1", [handle])).rows.length > 0;
 }
 
-/** unread-store § deliveredTo, from the store: the resident's deliveries, newest first. */
+/** The ferry's delivery rows to `handle`, newest first (the ledger's own order), each with the letter's `delivered_at` where the index has it. */
 export async function deliveredTo(q, handle) {
   return (await q.query(`SELECT d.id, d.from_h AS "from", d.date, l.delivered_at
        FROM town_ledger d LEFT JOIN town_letters l ON l.id = d.id

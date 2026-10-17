@@ -41,7 +41,7 @@
 // please"), so isoAt here is now belt-and-braces over an ISO string.
 
 
-import { doorstep, DOORSTEP_STANCES, mailList, mailAwaiting, stampsDetail, windowRead, outboxSettled } from "./queries.mjs";
+import { DOORSTEP_STANCES } from "./queries.mjs";
 import { ownerGate } from "./doorstep-bundle.mjs";
 import { unreadFor } from "./unread-store.mjs";
 import { hotMailBlock } from "./town-mail.mjs";
@@ -202,32 +202,18 @@ async function stakesOf(handles, { nowMs, readers = {} }) {
   return stakesFor(handles, { now: new Date(nowMs) });
 }
 
-/**
- * ONE RESIDENT'S OWN SEGMENTS, as `queries.mjs § doorstep` composes them —
- * the same reads, called at the same args, wrapped in the same `serves`/`args`
- * pointers. It is a second call site of those reads, not a second rendering of
- * them, and `test/house-read.test.mjs § THE DOORSTEP'S NAMES` deep-equals every
- * key here against the doorstep's own for the same resident, so the day the
- * doorstep's composition moves, that falsifier goes red before this drifts.
- * The REST skin's bounds: the house read has no connector abridgement.
- */
+/** The REST skin's inbox bound: the house read has no connector abridgement. */
 export const DOORSTEP_INBOX = 20;
-export async function residentSegments(db, handle, fresh) {
-  const one = (sql, ...p) => Object.values(db.prepare(sql).get(...p))[0];
-  return residentSegmentsOf({
-    mail: mailList(db, handle, "inbox", { limit: DOORSTEP_INBOX }),
-    awaiting: mailAwaiting(db, handle, { offset: 0 }),
-    stamps: await stampsDetail(db, handle),
-    window: windowRead(db, handle, fresh),
-    pendingOutbox: outboxSettled(db, handle),
-    counts: {
-      received: one("SELECT COUNT(*) FROM ledger WHERE kind = 'delivery' AND to_h = ?", handle),
-      sent: one("SELECT COUNT(*) FROM ledger WHERE kind = 'delivery' AND from_h = ?", handle),
-    },
-  }, handle);
-}
 
-/** One resident's segments from their reads' answers. Shared with the store's twin (town-index-store.mjs). */
+/**
+ * ONE RESIDENT'S OWN SEGMENTS, as the doorstep composes them — the same reads
+ * (town-index-store.mjs § residentSegments), called at the same args, wrapped in
+ * the same `serves`/`args` pointers. It is a second call site of those reads,
+ * not a second rendering of them, and `test/house-read.test.mjs § THE DOORSTEP'S
+ * NAMES` deep-equals every key here against the doorstep's own for the same
+ * resident, so the day the doorstep's composition moves, that falsifier goes red
+ * before this drifts.
+ */
 export function residentSegmentsOf({ mail, awaiting, stamps, window, pendingOutbox, counts }, handle) {
   return {
     mail: { serves: "household.mail", args: { handle, view: "inbox", limit: DOORSTEP_INBOX }, ...mail },
@@ -239,11 +225,7 @@ export function residentSegmentsOf({ mail, awaiting, stamps, window, pendingOutb
   };
 }
 
-const ashoreIn = (db, handles) => handles.filter((h) => {
-  try { return Boolean(db.prepare("SELECT 1 FROM residents WHERE handle = ?").get(h)); } catch { return false; }
-});
-
-// The same test through an index the door picked (POS-268), in the house's order.
+// Which of `handles` the town index holds a resident for, in the house's order (POS-268).
 const ashoreVia = async (ix, handles) => {
   const out = [];
   for (const h of handles) if (await ix.hasResident(h)) out.push(h);
@@ -253,20 +235,20 @@ const ashoreVia = async (ix, handles) => {
 // ── household { read: "house" } ──────────────────────────────────────────────
 
 /**
- * The house, whole. `ctx` is the doorstep's: `{ db, key, meta, asOf, clone,
- * odb, nowMs }`, plus `readers` for the suite. It answers the REST shape on
+ * The house, whole. `ctx` is the doorstep's: `{ key, clone, odb, nowMs, ix }`,
+ * plus `readers` for the suite. It answers the REST shape on
  * every skin: a whole house is a page's read, and the connector's abridgements
  * are per-person cuts it does not take. Returns the answer or
  * `{ refused: [code, defect, hint] }`.
  */
 export async function houseBundle({ household = null } = {}, ctx = {}) {
-  const { db, key = null, meta, clone, odb, nowMs = Date.now(), readers = {}, ix = null } = ctx;
+  const { key = null, clone, odb, nowMs = Date.now(), readers = {} } = ctx;
+  const ix = ctx.ix ?? (await import("./town-index-store.mjs")).storeIndexPooled(clone);
   const house = await houseMembers({ household, key, clone, readers });
   if (house.refused) return house;
-  // With the store's index (the switch), the house is dated by the store's
-  // head and every per-resident read goes through it.
-  const asOf = ix ? await ix.asOf() : ctx.asOf;
-  const ashore = ix ? await ashoreVia(ix, house.members) : ashoreIn(db, house.members);
+  // The house is dated by the store's head and every per-resident read goes through it.
+  const asOf = await ix.asOf();
+  const ashore = await ashoreVia(ix, house.members);
   const notAshore = house.members.filter((h) => !ashore.includes(h));
   const holds = ashore.some((h) => key?.handles?.has?.(h) === true);
 
@@ -294,14 +276,14 @@ export async function houseBundle({ household = null } = {}, ctx = {}) {
   // arrivals and folds the PSA board and the pulse), so it is paid once here
   // where nine doorsteps paid it nine times.
   const firstOpts = ashore.length ? { fresh: await freshFor(ashore[0], { odb, clone, asOf }), nowMs } : null;
-  const first = !ashore.length ? null : ix ? await ix.doorstep(ashore[0], asOf, firstOpts) : await doorstep(db, ashore[0], asOf, firstOpts);
+  const first = !ashore.length ? null : await ix.doorstep(ashore[0], asOf, firstOpts);
   const once = first ? Object.fromEntries(HOUSE_ONCE.filter((k) => k in first).map((k) => [k, first[k]])) : {};
 
   // UNREAD, ONCE FOR THE HOUSE (POS-286): one store read for every resident
   // this key holds, handed to each resident's owner gate.
   const held = ashore.filter((h) => key?.handles?.has?.(h) === true);
   const unread = held.length
-    ? await unreadFor(db, held, { ix }).then((rows) => ({ rows }), (error) => ({ error }))
+    ? await unreadFor(held, { ix }).then((rows) => ({ rows }), (error) => ({ error }))
     : null;
 
   const residents = {};
@@ -313,15 +295,14 @@ export async function houseBundle({ household = null } = {}, ctx = {}) {
     let pendingMail;
     if (held.includes(h)) { try { pendingMail = { block: await hotMailBlock(odb, key, { handle: h }) }; } catch { pendingMail = null; } }
     const standing = pendingMail?.block?.standing ?? null;
-    const d = { handle: h, ...(ix ? await ix.residentSegments(h, fresh, standing) : await residentSegments(db, h, fresh)) };
-    await ownerGate(d, h, { db, clone, key, odb, meta, asOf, unread, ix, pendingMail });
+    const d = { handle: h, ...(await ix.residentSegments(h, fresh, standing)) };
+    await ownerGate(d, h, { clone, key, odb, asOf, unread, ix, pendingMail });
     d.stands = stands.byHandle[h] ?? null;
     residents[h] = d;
   }
   // LAST ACTIVE, ONCE FOR THE HOUSE (POS-481): one store read for every
   // resident here, never one per resident (last-active.mjs).
-  const find = ix ? (handles) => ix.lastActiveFor(handles) : readers.lastActiveFor ?? null;
-  const lastActiveUnavailable = await stampRows(Object.values(residents), find ? { find } : {});
+  const lastActiveUnavailable = await stampRows(Object.values(residents), { find: (handles) => ix.lastActiveFor(handles) });
 
   return {
     ...out,
@@ -346,12 +327,13 @@ export async function houseBundle({ household = null } = {}, ctx = {}) {
  * house only: every list here is either the house's own ground or its own mail.
  */
 export async function needsYou({ household = null } = {}, ctx = {}) {
-  const { db, key = null, clone, odb, nowMs = Date.now(), readers = {}, ix = null } = ctx;
+  const { key = null, clone, odb, nowMs = Date.now(), readers = {} } = ctx;
+  const ix = ctx.ix ?? (await import("./town-index-store.mjs")).storeIndexPooled(clone);
   const held = [...(key?.handles ?? [])];
   if (!held.length) return { refused: [401, "whose house?", "needs-you is your own house's list — call with a key that holds its residents"] };
   const house = await houseMembers({ household, key, clone, readers });
   if (house.refused) return house;
-  const mine = (ix ? await ashoreVia(ix, house.members) : ashoreIn(db, house.members)).filter((h) => key.handles.has(h));
+  const mine = (await ashoreVia(ix, house.members)).filter((h) => key.handles.has(h));
   if (!mine.length) return { refused: [403, `this key holds no resident of "${house.slug}"`,
     "needs-you is read by the house it is about — the public half of any house is household { read: \"house\", household: \"<slug>\" }", { your_residents: held }] };
 
@@ -373,7 +355,7 @@ export async function needsYou({ household = null } = {}, ctx = {}) {
   const bounces = [];
   for (const h of mine) {
     try {
-      const a = readers.mailAwaiting ? readers.mailAwaiting(h) : ix ? await ix.mailAwaiting(h) : (await import("./queries.mjs")).mailAwaiting(db, h);
+      const a = readers.mailAwaiting ? readers.mailAwaiting(h) : await ix.mailAwaiting(h);
       for (const b of a?.unplaced_bounces ?? []) bounces.push({ handle: h, ...b,
         cause: b.reason ? `a letter that never arrived: ${b.reason}` : "a letter that never arrived — the ferry could not place its recipient" });
     } catch (e) { if (e?.name === "TownIndexUnreachable") throw e; /* one resident's mail law not reading does not empty the others' */ }
