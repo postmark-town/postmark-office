@@ -59,7 +59,7 @@ test("NO STORE, BY CONSTRUCTION: arena.mjs imports nothing and names no store op
 test("NOTHING LEFT OF THE FIGHT: the fold, the wheel, the adversary, the encounter on the read, the shroud and the journal writer are gone from src", () => {
   assert.equal(existsSync(join(SRC, "encounter.mjs")), false, "the encounter fold is back");
   // The portal ground's own law is NOT on this list, and must not be: the
-  // ground lookup, its stride, its spawn and `standpoint.portal` outlived the
+  // ground lookup, its stride, its landing and `standpoint.portal` outlived the
   // arena (src/portal-ground.mjs; the rooms are walked with no fight in them).
   const gone = ["encounterOn", "arenaGroundAt", "arrivalOnGround", "entryPointInto", "adversaryIn", "joinOnCrossing", "leaveOnCrossing",
     "portalBlockAt", "withLoose", "actingBlocked", "cockpitEncounter", "lootHiddenReason", "lootShroudedIn",

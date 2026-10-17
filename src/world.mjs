@@ -1134,7 +1134,7 @@ const EARSHOT_PRESENCE_CAP = 500;
  * runs". A falsifier that builds its acts with the live builder cannot drift
  * from the live builder. Nothing else imports it. */
 // ── GROUND BEHIND THE WALL (POS-468 B) ────────────────────────────────────────
-// The placement door and the portal spawn ask it.
+// The placement door and the portal landing ask it.
 /** The first point of `ground` that stands behind the wall this crossing, as
  *  {x, y}, or null; `{ unreadable: true }` when the engine cannot be read.
  *  `ground` is `{ points, edges }` (or a bare array of points): every point is
@@ -4548,7 +4548,7 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
     // read, `mists-forecast-unavailable: <why>`, never a silent clear. It is
     // computed HERE, before either pen writes and with no write of its own, so
     // nothing after the commit can turn a written mark into an error. The walk,
-    // portal and spawn checks keep `mistsGroundCheck` exactly as it was.
+    // portal and landing checks keep `mistsGroundCheck` exactly as it was.
     mistsWarning = dialUnread
       ? { unavailable: `mists-forecast-unavailable: the parcel dial could not be read, so this parcel's ground is unknown (${String(dialUnread?.message ?? dialUnread).slice(0, 120)})` }
       : await placementForecast({ worldClone, w, worldUnread, id: `${by}/${slug}`, ring: ground, mistsCrossing });

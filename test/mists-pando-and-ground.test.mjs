@@ -75,7 +75,7 @@ test("the wall helper: a point in town is clear, a point past the border is behi
 // vetoes: placement no longer refuses ground behind the wall (422) or refuses
 // while it cannot read the wall (503) — it writes the valid mark and its receipt
 // carries the forecast, or `mists-forecast-unavailable`. The walk, portal and
-// spawn checks below keep the wall exactly as before. The real door is driven
+// landing checks below keep the wall exactly as before. The real door is driven
 // in test/mists-forecast.test.mjs; this pin keeps the ORDER.
 test("THE PLACEMENT DOOR forecasts the Mists for the mark's ground after every other judgment and before either pen writes; it vetoes nothing", () => {
   const door = SOURCE.slice(SOURCE.indexOf("export async function leaveMarkViaOffice"), SOURCE.indexOf("export async function withdrawMarkViaOffice") > 0 ? SOURCE.indexOf("export async function withdrawMarkViaOffice") : undefined);
@@ -88,8 +88,8 @@ test("THE PLACEMENT DOOR forecasts the Mists for the mark's ground after every o
   assert.ok(!door.includes("bounce(503, MISTS_UNREADABLE"), "nor refuses while it cannot read it");
 });
 
-test("A PORTAL GROUND never sets anyone down behind the wall: the spawn asks before its walk is written", () => {
-  const spawn = APEX.slice(APEX.indexOf("async function spawnOnEnter"), APEX.indexOf("// ── the read mode"));
+test("A PORTAL GROUND never sets anyone down behind the wall: the landing asks before its walk is written", () => {
+  const spawn = APEX.slice(APEX.indexOf("async function landOnEnter"), APEX.indexOf("// ── the read mode"));
   const asked = spawn.indexOf("await mistsGroundCheck(WORLD_CLONE,");
   // since WLD-63 row 68 B the set-down is a landing through the land pen, not a walk
   assert.ok(asked > 0 && asked < spawn.indexOf("await landAt(WORLD_CLONE,"), "asked before the landing is written");
@@ -129,11 +129,11 @@ test("the floor the office holds while it cannot read the record is the record's
   assert.equal(MISTS_FIRST_CROSSING, SKELETON.mists.schedule[0].crossing);
 });
 
-test("FAIL CLOSED AT THE DOORS: the mark door answers 503 in plain words with Retry-After; the spawn sets no one down", () => {
+test("FAIL CLOSED AT THE DOORS: the mark door answers 503 in plain words with Retry-After; the landing sets no one down", () => {
   assert.equal(MISTS_UNREADABLE, "the office cannot read the world to check the wall; try again");
   const server = readFileSync(new URL("../src/server.mjs", import.meta.url), "utf8");
   assert.ok(server.includes('if (code === 503 && obj?.defect === MISTS_UNREADABLE && !res.hasHeader?.("retry-after"))') && server.includes('res.setHeader("retry-after", String(MISTS_RETRY_AFTER_S));'), "the 503 carries Retry-After");
-  const spawn = APEX.slice(APEX.indexOf("async function spawnOnEnter"), APEX.indexOf("// ── the read mode"));
+  const spawn = APEX.slice(APEX.indexOf("async function landOnEnter"), APEX.indexOf("// ── the read mode"));
   assert.ok(spawn.includes("if (seen?.unreadable) return { ground: place.ground, refused: `${MISTS_UNREADABLE}:"), "a wall it cannot read sets no one down");
 });
 

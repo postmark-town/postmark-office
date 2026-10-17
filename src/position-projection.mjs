@@ -44,7 +44,7 @@ export const GRID_CELL_M = 64;
  * How long a projection may be trusted without a rebuild. The office's own
  * walk door records in the same step (`record` below), so this bounds only the
  * writers that do not call in: the enter door's set-down (`world-apex.mjs §
- * spawnOnEnter`) and any pen outside this process.
+ * landOnEnter`) and any pen outside this process.
  */
 export const PROJECTION_MAX_AGE_MS = 60_000;
 

@@ -14,7 +14,7 @@
 // arena's sqlite journal writer.
 //
 // WHAT DID NOT: the PORTAL GROUND's own law (the room you stand in, its stride,
-// its spawn, `standpoint.portal`). The rooms are walked with no fight in them,
+// its landing, `standpoint.portal`). The rooms are walked with no fight in them,
 // so that lives on in src/portal-ground.mjs. Its rows were archived once
 // (tools/arena-archive.mjs) before the door closed. The implementation lives in
 // git history (office train/2026-w41 before this commit) for whoever builds the
