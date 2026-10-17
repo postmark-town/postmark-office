@@ -21,6 +21,8 @@
 //       still answering first, an unknown name bounced with the nearest classes
 //   C6  the pointer on a mark read (markPointer): class field, then kind, then
 //       mark; a class node points at itself
+//   C6b a failing statement throws to the door (an empty answer would read as
+//       "no such class"); putting a catch back in `ask` reds it
 //   C7  every statement this module registers is its SQL, row for row, over the
 //       fixture (the census in world-graph-db.test.mjs holds them over the
 //       blessed world too)
@@ -270,6 +272,13 @@ test("C6: the pointer on a mark read: its class, else its kind, else mark; a cla
     assert.deepEqual(cr.withPointer({ error: "bounce" }, "p"), { error: "bounce" }, "a bounce carries no pointer");
     assert.deepEqual(cr.withPointer({ id: "x" }, null), { id: "x" });
   });
+});
+
+test("C6b: a statement that fails throws to the door, never answering as if no class were there (review-602)", () => {
+  const broken = { prepare() { throw new Error("the store would not answer"); } };
+  assert.throws(() => cr.explainClass(broken, "candy"), /the store would not answer/, "explain: the throw reaches the caller");
+  assert.throws(() => cr.classPointer(broken, "candy"), /the store would not answer/, "the pointer: the same");
+  assert.throws(() => cr.nearestClasses(broken, "cand"), /the store would not answer/, "the nearest names: the same");
 });
 
 const dir = mkdtempSync(join(tmpdir(), "class-read-"));
