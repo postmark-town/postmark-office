@@ -26,7 +26,7 @@ import { holderLawOf, roomIn, affordedActions } from "./kind-holding.mjs";
 import { truth } from "./holding-law.mjs";
 
 /** The verbs this calculus decides; every other act keeps its own grant. */
-export const HOLD_VERBS = Object.freeze(["take", "give", "drop", "refill"]);
+export const HOLD_VERBS = Object.freeze(["take", "give", "drop", "consume", "refill"]);
 
 /** Is a thing portable? `thing/portable` is sovereign, default true (the lead's settlement, 2026-10-17). */
 export function portableOf(mark, view) {
@@ -50,6 +50,8 @@ export function usablePairs({ actor, here, marks = [], residents = [], fold, att
   const pairs = [];
   const add = (verb, object) => { if (!pairs.some((p) => p.verb === verb && p.object === object)) pairs.push({ verb, object }); };
   if (carrying) add("drop", null);
+  // consume: a consumable kind in your own hands (10:30's roster)
+  if (kindEdgesOf(fold, me).some((e) => lineageOf(e.kind, view.extendsOf).includes("consumable"))) add("consume", null);
   const seen = new Set();
   for (const m of marks) {
     if (!m?.id || seen.has(m.id)) continue;

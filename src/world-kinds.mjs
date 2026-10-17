@@ -27,7 +27,7 @@ import { inFlightFor, writeThingHolding } from "./world-units.mjs";
 import { markClassOf, lineageOf } from "./world-grants.mjs";
 import {
   makeableKind, holderLawOf, roomIn, refuseOverRoom, blurOf, planMake, planTakeKinds, planGiveKinds,
-  oneHolderOf, drawSeed, affordedActions,
+  oneHolderOf, drawSeed, affordedActions, selectKind,
 } from "./kind-holding.mjs";
 
 const bounce = (code, defect, hint, extra = {}) => {
@@ -46,7 +46,12 @@ const ownerOf = (mark, id) => String(mark?.by ?? String(id).split("/")[0]);
  */
 export function kindRouteOf(args = {}, verb = null) {
   if (args.label != null || args.chest != null) return null;          // #499's label door (dark, #608)
-  if (args.act != null) return String(args.act) === "refill" ? "refill" : null;
+  if (args.act != null) {
+    if (String(args.act) === "refill") return "refill";
+    // consume { kind } (12:36): one held mark of a consumable kind; a set-down's mark (thing:) is #499's consume-in-place
+    if (String(args.act) === "consume" && args.thing == null) return "consume";
+    return null;
+  }
   if (args.thing != null && args.from != null) return "thing-from-holder";   // a whole mark out of a holder
   if (args.thing != null && isHolderId(args.to)) return "thing-into-holder";  // a whole mark into one
   if (args.thing != null) return null;                                 // the thing door's
@@ -304,6 +309,28 @@ export async function callKinds(route, args, key, actor, deps) {
         return { did: "give", kind, count: n, to, ...w, holds: await shownIn(after, actor, attachments, view, deps),
           receiver: await shownIn(after, to, attachments, view, deps),
           ...(law.resident ? { stands: "neutral: a give between residents needs no consent to land, so it is theirs now" } : {}) };
+      });
+    }
+    case "consume": {
+      // CONSUME { kind } (ruled 12:36): one mark of a consumable kind, from your
+      // own hands, used up. A count names no unit, so the one consumed is one of
+      // the kind; with one kind in hand it may be omitted, with several it is named.
+      const n = unitCount(args.count);
+      if (n !== 1) throw bounce(422, "consume one at a time", "consume uses up one mark of a kind; call again for another. Nothing was changed.");
+      return holdTurn(async () => {
+        const { units, attachments } = await deps.readRows();
+        const fold = foldUnits(units);
+        const edible = kindEdgesOf(fold, actor).filter((e) => lineageOf(e.kind, view.extendsOf).includes("consumable"));
+        if (args.kind != null && !edible.some((e) => e.kind === String(args.kind))) {
+          const held = kindEdgesOf(fold, actor).some((e) => e.kind === String(args.kind));
+          throw bounce(held ? 422 : 409, held ? `a ${args.kind} is not a consumable` : `no ${args.kind} in your hands`,
+            held ? "consume uses up what is made to be used up (a consumable, as candy is). Nothing was changed." : "Nothing was changed.");
+        }
+        const edge = selectKind(edible, args.kind ?? null, { where: "your hands", verb: "consume" });
+        const plan = { action: UNIT_ACTION.consume, object: String(actor), moves: [{ from: String(actor), to: null, kind: edge.kind, n: 1 }], edge: { giver: String(actor), receiver: null } };
+        const w = await writeKinds(deps, key, actor, plan, { words: `${actor} consumed 1 ${edge.kind}` });
+        const after = foldUnits([...units, { class: "holding", action: plan.action, payload: { moves: plan.moves } }]);
+        return { did: "consume", kind: edge.kind, count: 1, ...w, holds: await shownIn(after, actor, attachments, view, deps) };
       });
     }
     case "thing-into-holder": return thingIntoHolder({ args, key, actor, deps, view });

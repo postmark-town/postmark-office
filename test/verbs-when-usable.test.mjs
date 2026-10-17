@@ -20,7 +20,7 @@ const prop = (klass, name, dflt, tier, parent = null) => ({ number: 300, tag_sha
   key: `${klass}/${name}`, data: { class: klass, parent, name, tier, default: dflt, id: `the-town/${klass}-${name}` } });
 const VIEW = classViewOf(lawSnapshotFromRows([
   cls("postmark-node"), cls("mark", { extends: "postmark-node" }), cls("sited", { extends: "mark" }), cls("thing", { extends: "sited" }),
-  cls("candy", { extends: "thing" }), cls("pocket-comet", { extends: "candy" }), cls("entity", { extends: "postmark-node" }), cls("resident", { extends: "entity" }),
+  cls("consumable", { extends: "thing" }), cls("candy", { extends: "consumable" }), cls("pocket-comet", { extends: "candy" }), cls("entity", { extends: "postmark-node" }), cls("resident", { extends: "entity" }),
   cls("halloween-candy-bowl", { extends: "thing", actions: [{ action: "refill", who: "maker", from: "reach" }] }),
   prop("resident", "holder", true, "constitution"), prop("resident", "capacity", 24, "constitution", "holder"),
   prop("thing", "holder", false, "sovereign"), prop("thing", "capacity", 30, "sovereign", "holder"), prop("thing", "open", true, "sovereign", "holder"),
@@ -47,7 +47,7 @@ test("22 · take shows only with a takeable in reach: a portable thing on the gr
 });
 
 test("22 · give shows only while carrying with a receiver in reach; drop only while carrying", () => {
-  const carrying = { units: [make("cy", 2)] };
+  const carrying = { units: [make("cy", 2, "thing")] }; // a thing that is not a consumable, so consume stays out of view
   assert.deepEqual(canVerbs(pairsOf({ ...carrying })), ["drop"], "carrying, nobody to give to");
   assert.deepEqual(canVerbs(pairsOf({ ...carrying, residents: [{ handle: "dee", distance_m: 3 }] })), ["give", "drop"]);
   assert.deepEqual(canVerbs(pairsOf({ ...carrying, residents: [{ handle: "dee", distance_m: 300 }] })), ["drop"], "beyond arm's length");
@@ -121,4 +121,10 @@ test("25 + 26 · the read's actions are trimmed to what is usable; the always-on
   assert.deepEqual(onlyUsable(entries, []).map((e) => e.action), ["walk", "say", "note-to-self", "leave-mark", "enter", "stake"]);
   const p = pairsOf({ units: [make("cy", 1)] });
   assert.deepEqual(onlyUsable(entries, p).map((e) => e.action), ["walk", "say", "note-to-self", "leave-mark", "drop", "enter", "stake"]);
+});
+
+test("22 · consume shows only with a consumable kind in your own hands", () => {
+  assert.ok(canVerbs(pairsOf({ units: [make("cy", 1, "pocket-comet")] })).includes("consume"));
+  assert.ok(!canVerbs(pairsOf({ units: [make("cy", 1, "thing")] })).includes("consume"), "a thing that is not a consumable");
+  assert.ok(!canVerbs(pairsOf({})).includes("consume"));
 });

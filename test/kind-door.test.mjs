@@ -315,7 +315,9 @@ test("27 · labels and kinds never mix: a label move is never read as a kind hol
 test("the route is read off the arguments: label and chest are #499's, thing is the thing door's, the rest by kind", () => {
   assert.equal(kindRouteOf({ from: BOWL, label: "x" }), null);
   assert.equal(kindRouteOf({ act: "refill", chest: BOWL }), null);
-  assert.equal(kindRouteOf({ act: "consume" }), null);
+  assert.equal(kindRouteOf({ act: "consume" }), "consume", "consume { kind } is the kind door's (12:36)");
+  assert.equal(kindRouteOf({ act: "consume", thing: "a/set-down" }), null, "a set-down's mark consumed in place is #499's");
+  assert.equal(kindRouteOf({ act: "consume", label: "x" }), null);
   assert.equal(kindRouteOf({ thing: "a/b" }), null);
   assert.equal(kindRouteOf({ thing: "a/b", to: "kai" }), null);
   assert.equal(kindRouteOf({ from: BOWL }), "take");
@@ -379,4 +381,18 @@ test("a holder's own capacity outside its class's bounds is refused at the door,
   for (const [route, args] of [["make", { kind: "pocket-comet", count: 1, to: big }], ["take", { from: big }], ["give", { to: big, kind: "pocket-comet" }]])
     await assert.rejects(go(w, route, args, "sbx-ana"), (e) => /own capacity is refused/.test(e.defect) && /outside 1\.\.120/.test(e.hint), route);
   assert.equal(w.acts.length, 0);
+});
+
+test("consume { kind } (12:36): one mark of a consumable kind from your own hands; a non-consumable refuses; several kinds are named", async () => {
+  const w = world();
+  w.seed([{ from: null, to: "sbx-cy", kind: "pocket-comet", n: 2 }, { from: null, to: "sbx-cy", kind: "toaster", n: 1 }]);
+  const r = await go(w, "consume", { act: "consume" });
+  assert.deepEqual([r.did, r.kind, r.count], ["consume", "pocket-comet", 1], "one consumable kind in hand: it may be omitted (the toaster is not one)");
+  assert.deepEqual(w.acts.at(-1).payload.moves, [{ from: "sbx-cy", to: null, kind: "pocket-comet", n: 1 }]);
+  await assert.rejects(go(w, "consume", { act: "consume", kind: "toaster" }), (e) => e.code === 422 && /not a consumable/.test(e.defect));
+  await assert.rejects(go(w, "consume", { act: "consume", kind: "carbon-ghost" }), (e) => /no carbon-ghost in your hands/.test(e.defect));
+  await assert.rejects(go(w, "consume", { act: "consume", count: 2 }), /one at a time/);
+  w.seed([{ from: null, to: "sbx-cy", kind: "carbon-ghost", n: 1 }]);
+  await assert.rejects(go(w, "consume", { act: "consume" }), (e) => /consume which kind\?/.test(e.defect));
+  assert.deepEqual(kindEdgesOf(w.fold(), "sbx-cy"), [{ kind: "carbon-ghost", count: 1 }, { kind: "pocket-comet", count: 1 }, { kind: "toaster", count: 1 }]);
 });
