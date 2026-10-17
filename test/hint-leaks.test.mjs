@@ -316,6 +316,29 @@ for (const [child, defect] of [["src/fund-exec.mjs", "the receipt refused"], ["s
   });
 }
 
+// ── fund-exec: the receipt verb's close-at-fill refusals (POS-653, review-3896) ──
+// THE FLIP: drop either row and the town's own sentence (a path, "appended
+// locally") reaches the payer as an unclassified 500.
+test("POS-653 src/fund-exec.mjs § classifyFatal: a pot that closed in the same minute is a 409 in plain words; a pot that could not be closed is a fixed 500, its words in the log", async () => {
+  const { classifyFatal } = await load("src/fund-exec.mjs");
+  for (const stderr of [
+    `FATAL: pot "meeps-home" is closed, not open — a draft or closed pot takes no dollars; opening one is the founder's word`,
+    `FATAL: pot "meeps-home" is draft, not open — a draft or closed pot takes no dollars; opening one is the founder's word`,
+    `FATAL: pot "meeps-home" takes its need once and has already closed — it takes its need once, ever`,
+  ]) {
+    const { value, log } = await logged(() => classifyFatal(stderr));
+    assert.deepEqual(value, { code: 409, defect: "this pot has what it asked for", hint: "nothing was recorded; your payment is untouched" }, stderr);
+    keepsOut(value, ["meeps-home", "founder"], "a closed pot's refusal");
+    assert.equal(log.length, 0, "an ordinary race is not a fault");
+  }
+  const PATH = "/srv/postmark-office/town-clone/WHITE_PAGES/pot-meeps-home.json";
+  const stderr = `FATAL: the receipt was appended locally and took pot "meeps-home" to its need, but its file could not be closed (EACCES: permission denied, open '${PATH}'); under the office's recorder nothing lands, and by hand set its status to closed before any other dollar`;
+  const { value, log } = await logged(() => classifyFatal(stderr));
+  assert.deepEqual(value, { code: 500, defect: "the receipt refused", hint: "nothing was recorded; your payment is untouched" });
+  keepsOut(value, [PATH, "appended locally", "is on the ledger"], "a pot that could not be closed");
+  logSays(log, [PATH], "a pot that could not be closed");
+});
+
 // ── the review of #525 ──────────────────────────────────────────────────────
 
 // THE FLIP: drop the hint from the answer's log line.
