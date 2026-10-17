@@ -169,7 +169,10 @@ test("FALSIFIER 5 — NO CLASS RIDES BY NAME (WLD-29, the pointer model): the mo
   // from the class layer (read-digests.mjs § dialsDigestOf). The class layer is
   // the law snapshot, seeded from the same checkout the fold reads, as the
   // train's version of this test did for `records` before WLD-29 took the class
-  // out of them. On the world CI pins the frontmatter carries the pace either way.
+  // out of them. On the world CI pins the frontmatter carries the pace either way,
+  // and so does the W2 branch today: its published world-state.json is still the
+  // old fold, so this goes red without the class layer only once a W2
+  // settlement has been folded and the clone is pinned to it.
   const { deriveLaw } = await import("../world2/tools/law-ingest.mjs");
   const { reloadLawSnapshot, resetLawSnapshot, LAW_REFRESH_SQLS } = await import("../src/law-snapshot.mjs");
   const { resetClassRosterCache } = await import("../src/world-classes.mjs");
@@ -189,6 +192,42 @@ test("FALSIFIER 5 — NO CLASS RIDES BY NAME (WLD-29, the pointer model): the mo
     assert.ok(Number.isFinite(pace) && pace > 0, `GET /world/dials carries no pace for ${STRIDE_MARK_ID} (${pace})`);
   } finally { resetLawSnapshot(); resetClassRosterCache(); }
   // ⚑ THE FLIP: drop the class layer from worldDialsPage (classDialsOf) → the
-  //   pace assertion reds ONLY on W2, with the seed above in place: on the world
-  //   CI pins the class mark's own `dials:` carries the pace, so it stays green.
+  //   pace assertion reds only on a folded W2 world, with the seed above in place;
+  //   on the world CI pins (and the W2 branch's unfolded state) the class mark's
+  //   own `dials:` carries the pace, so it stays green. The synthetic case below
+  //   (FALSIFIER 6) is the one that reds on any world.
+});
+
+// ── FALSIFIER 6 — A CLASS A READ NAMES CARRIES ITS CLASS LAYER'S DIALS ───────
+// (LOGOS v2, W1 G3/G5; world.mjs § withClassDials, review-wld29.) With no class
+// riding `records` by name, a class mark is in a read's records only when the
+// read names it, and then markRecords must hand it the class layer's dials: a
+// W2 class node carries no `dials:` of its own. Synthetic world, synthetic law,
+// so this reds on any world when withClassDials is dropped.
+test("FALSIFIER 6 — a class mark a read names carries its class layer's dials, though its node has no `dials:` (withClassDials)", async (t) => {
+  if (!HAVE_WORLD) return t.skip(NO_WORLD);
+  const { reloadLawSnapshot, resetLawSnapshot, LAW_REFRESH_SQLS } = await import("../src/law-snapshot.mjs");
+  const { resetClassRosterCache } = await import("../src/world-classes.mjs");
+  const at = { number: 1, tag_sha: "e".repeat(40), newest: 1 };
+  const law = [
+    { ...at, kind: "class", key: "lantern", data: { id: "the-town/lantern", class: "lantern" } },
+    { ...at, kind: "property", key: "lantern/glow", data: { class: "lantern", name: "glow", default: 7, id: "the-town/lantern-glow" } },
+  ];
+  const answers = new Map([[LAW_REFRESH_SQLS.pin, [{ newest: 1, pinned: 1 }]], [LAW_REFRESH_SQLS.law, law]]);
+  await reloadLawSnapshot({ force: true, query: async (sql) => {
+    if (!answers.has(sql)) throw new Error(`the law stub was asked a statement it does not answer: ${String(sql).slice(0, 80)}`);
+    return { rows: answers.get(sql) };
+  } });
+  resetClassRosterCache();
+  try {
+    const w = { marks: [
+      { id: "the-town/lantern", kind: "class", by: "the-town", class: "lantern", tier: "constitution", body: "A lantern, W2-shaped: no dials of its own." },
+      { id: "ash/a-lamp", kind: "sited", by: "ash", tier: "market", body: "a lamp", dials: { glow: 2 } },
+    ] };
+    const out = await markRecords(["the-town/lantern", "ash/a-lamp"], w);
+    assert.deepEqual(out["the-town/lantern"]?.dials, { glow: 7 }, "the class's dials, from its property node");
+    assert.deepEqual(out["ash/a-lamp"].dials, { glow: 2 }, "a mark that is not a class keeps its own");
+    assert.ok(!("dials" in w.marks[0]), "the world's own mark is not written to");
+  } finally { resetLawSnapshot(); resetClassRosterCache(); }
+  // ⚑ THE FLIP: markRecords' `withClassDials(mark)` back to `mark` → red.
 });
