@@ -23,7 +23,7 @@ import { markRecord } from "../src/mark-record.mjs";
 const WORLD = worldClone();
 const store = await startStore({ db: "kind_door_carried_holder" });
 const skip = store.skip ?? ((!WORLD && NO_WORLD) || false);
-const BAG = "sbx-cy/my-bag", MY_BOWL = "sbx-cy/my-bowl", FAR_BOWL = "sbx-ana/the-bowl", LAMP = "sbx-cy/a-lamp";
+const BAG = "sbx-cy/my-bag", MY_BOWL = "sbx-cy/my-bowl", FAR_BOWL = "sbx-ana/the-bowl", LAMP = "sbx-cy/a-lamp", STONE = "sbx-ana/a-stone", PEBBLE = "sbx-ana/a-pebble";
 const repo = mkdtempSync(join(tmpdir(), "o2-carried-"));
 const put = (p, content) => { const f = join(repo, p); mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, content); };
 const FLAGS = ["WORLD2_PG", "WORLD2_PG_URL", "W2_PEN", "W2_GUARDS", "WORLD_CLONE", "WORLD_SINGLE_LOG", "WORLD_POOL"];
@@ -71,7 +71,9 @@ export function sourceLabel() { return "home"; }
 `);
   const root = { id: "the-town/let-there-be-light", by: "the-town", slug: "let-there-be-light", kind: "sited", at: { x: 0, y: 0 }, extent: { w: 10000, h: 10000 } };
   const mark = (id, klass, body) => ({ rec: { id, by: id.split("/")[0], slug: id.split("/")[1], kind: "sited", class: klass, at: { x: 10, y: 10 }, extent: { w: 2, h: 2 } }, body });
-  const ms = [mark(BAG, "halloween-candy-bag", "A bag for gathering."), mark(MY_BOWL, "halloween-candy-bowl", "My bowl of candy."), mark(FAR_BOWL, "halloween-candy-bowl", "A bowl by a far door."), mark(LAMP, "thing", "A small lamp.")];
+  const ms = [mark(BAG, "halloween-candy-bag", "A bag for gathering."), mark(MY_BOWL, "halloween-candy-bowl", "My bowl of candy."), mark(FAR_BOWL, "halloween-candy-bowl", "A bowl by a far door."), mark(LAMP, "thing", "A small lamp."),
+    { rec: { id: STONE, by: "sbx-ana", slug: "a-stone", kind: "sited", class: "thing", portable: false, at: { x: 1010, y: 10 }, extent: { w: 2, h: 2 } }, body: "A stone too heavy to lift." },
+    { rec: { id: PEBBLE, by: "sbx-ana", slug: "a-pebble", kind: "sited", class: "thing", at: { x: 1010, y: 10 }, extent: { w: 2, h: 2 } }, body: "A pebble." }];
   put("WORLD/marks/let-there-be-light/mark.md", markRecord(root, "Synthetic world frame."));
   for (const m of ms) put(`WORLD/marks/${m.rec.id}/mark.md`, markRecord(m.rec, m.body));
   put("WORLD/world-state.json", JSON.stringify({ tick: 0, dials: {}, marks: [root, ...ms.map((m) => m.rec)] }));
@@ -239,4 +241,26 @@ test("S5 · the hold record is folded once per change: two reads with no hold ac
   const c = await holdRecordNow();
   assert.notEqual(c, b, "the hold lane moved: refolded");
   assert.equal(c.fold.kinds.get(BAG).get("pocket-comet"), 2);
+});
+
+test("F2 · B2 driven: withdrawing a holder (not a chest) that holds something is refused; a thing its maker made portable: false is not taken through world_hold", { skip }, async () => {
+  await seed();
+  await carry(MY_BOWL);
+  await leaveMarkViaOffice(repo, { kind: "pocket-comet", count: 2, to: MY_BOWL }, KEY);
+  const { journalWithdraw } = await import("../src/world.mjs");
+  await assert.rejects(journalWithdraw({ by: "sbx-cy", slug: "my-bowl", household: "sbx-cy" }), (e) => e.code === 409 && /still holds 2 units/.test(e.defect),
+    "a Candy Bowl is a holder by its holder property: withdrawn only when empty");
+  await assert.rejects(callHoldTool("world_hold", { thing: STONE }, KEY, { verb: "take" }), (e) => e.code === 409 && /fixed where it stands/.test(e.defect),
+    "thing/portable false: not carried");
+  const took = await callHoldTool("world_hold", { thing: PEBBLE }, KEY, { verb: "take" });
+  assert.equal(took.did, "take", "a portable thing in reach is taken (the refusal is the property's, not the reach's)");
+});
+
+test("F3 · a set-down holder is judged where it was set down: carried 1 km and set down, it is filled where it now stands", { skip }, async () => {
+  await seed();
+  await carry(BAG);
+  const dropped = await callHoldTool("world_hold", { thing: BAG }, KEY, { verb: "drop" });
+  assert.equal(dropped.did, "drop");
+  const made = await leaveMarkViaOffice(repo, { kind: "pocket-comet", count: 2, to: BAG }, KEY);
+  assert.equal(made.holds.count, 2, "not carried, and made 1 km off: in reach at its drop point");
 });

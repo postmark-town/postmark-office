@@ -107,7 +107,8 @@ export function usablePairs({ actor, here, marks = [], residents = [], fold, att
     if (welcome && toIt && room > 0 && (carryingKinds || carriedThings.some((t) => t !== m.id))) add("give", m.id);
     // its class's own afforded actions (the Candy Bowl's refill): its maker, within reach, with room
     for (const a of affordedActions(className, view))
-      if (a.action === "refill" && (a.who !== "maker" || String(m.by ?? "") === me) && toIt && room > 0) add("refill", m.id);
+      // refill is a make: at it or carrying it, never into another's hands (the lead's settlement)
+      if (a.action === "refill" && (a.who !== "maker" || String(m.by ?? "") === me) && atIt && room > 0) add("refill", m.id);
   }
   if (carryingKinds || carriedThings.length)
     for (const r of residents) {

@@ -45,7 +45,9 @@ const mk = (id, over = {}) => ({ id, by: id.split("/")[0], kind: "thing", at: { 
 const make = (to, n, kind = "pocket-comet") => ({ class: "holding", action: UNIT_ACTION.make, payload: { moves: [{ from: null, to, kind, n }] } });
 const held = (thing, entity) => ({ entity, target: thing, policy: "cascade", born_at: "2026-10-17T00:00:00Z" });
 const house = (h) => ({ key: h, house: h });
-const pairsOf = (o) => usablePairs({ actor: "cy", here: HERE, view: VIEW, householdOf: house, fold: foldUnits(o.units ?? []), attachments: o.attachments ?? [], marks: o.marks ?? [], residents: o.residents ?? [] });
+// PRESENCE-SHAPED ROWS for the matrix (F4): the bare read hands it presence's `{ handle, distance_m }`; the doors measure positions
+const presenceOf = (residents = []) => residents.map((r) => (Number.isFinite(Number(r.x)) ? { handle: r.handle, distance_m: Math.round(Math.hypot(Number(r.x) - HERE.x, Number(r.y) - HERE.y)) } : r));
+const pairsOf = (o) => usablePairs({ actor: "cy", here: HERE, view: VIEW, householdOf: house, fold: foldUnits(o.units ?? []), attachments: o.attachments ?? [], marks: o.marks ?? [], residents: presenceOf(o.residents), places: o.places ?? null });
 
 test("22 · take shows only with a takeable in reach and a slot to carry it", () => {
   assert.deepEqual(canVerbs(pairsOf({})), [], "nothing in view, nothing carried: no hold verb");
@@ -133,11 +135,15 @@ function busyRoom(seed) {
   if (r() < 0.4) attachments.push(held(holders[0], "cy"));
   if (r() < 0.4) attachments.push(held(holders[1], "dee"));
   if (r() < 0.4) units.push(make(holders[2], 30)); // a full one: no give into it, no refill of it
+  // SET-DOWN HOLDERS (F3): made far off and set down near, or made near and set down far — judged where they were set down
+  const places = new Map();
+  if (r() < 0.5) { marks.find((m) => m.id === holders[3]).at = { x: 600, y: 600 }; places.set(holders[3], { x: Math.round(r() * 8), y: 0 }); }
+  if (r() < 0.5) { marks.find((m) => m.id === holders[4]).at = { x: 1, y: 1 }; places.set(holders[4], { x: 700, y: 0 }); }
   if (r() < 0.6) units.push(make("cy", 1 + Math.floor(r() * 4), pick(["pocket-comet", "thing"])));
   if (r() < 0.2) units.push(make("cy", 20, "thing"));
   const residents = ["dee", "eli"].map((handle) => ({ handle, x: Math.round(r() * 30), y: 0 }));
   if (r() < 0.3) units.push(make("eli", 24, "thing"));
-  return { marks, units, attachments, residents };
+  return { marks, units, attachments, residents, places };
 }
 
 test("24 · THE INVARIANT over busy rooms: can = the object-less verbs ∪ every investigate(m).can; investigate(m).can ⊆ can", () => {
@@ -168,14 +174,23 @@ function doorsOf(room) {
     // THE REAL REACH: the thing door's measures, over the room's own geometry
     reachTake: async (id) => { const r = standsWithin(HERE, byId[id]); if (!r.stands) throw Object.assign(new Error("out of reach"), { code: 409, defect: `${id} is out of reach` }); return r; },
     reachGive: async (to) => { const p = posOf(to); const r = p ? withinArmsLength(HERE, p) : { stands: false }; if (!r.stands) throw Object.assign(new Error("not beside"), { code: 409, defect: `${to} is not within arm's length` }); return r; },
-    holderPlace: async (id) => { const h = liveHolder(room.attachments, id); return { holder: h == null ? null : String(h), at: h == null ? byId[id]?.at ?? null : null, moved: false }; },
+    holderPlace: async (id) => {
+      const h = liveHolder(room.attachments, id);
+      if (h != null) return { holder: String(h), at: null, moved: false };
+      const set = room.places?.get?.(id);
+      return set ? { holder: null, at: set, moved: true } : { holder: null, at: byId[id]?.at ?? null, moved: false };
+    },
     standpoint: async () => HERE, householdOf: house, dropsOut: async () => 0,
     append: async (entry) => { acts.push({ id: acts.length + 100, class: entry.cls, action: entry.action, payload: entry.payload }); return { actId: acts.length + 99 }; },
     stamp: async () => ({ at: "t", witnesses: [] }), crossing: () => 260, household: () => "hh:test",
   };
 }
 const KEY = { handles: new Set(["cy"]) };
-const lands = async (route, args, room) => { try { await callKinds(route, args, KEY, "cy", doorsOf(room)); return true; } catch { return false; } };
+// A REFUSAL IS A DOOR'S ANSWER (a code and a defect); anything else is a crash, and a crash fails the test (F4)
+const lands = async (route, args, room) => {
+  try { await callKinds(route, args, KEY, "cy", doorsOf(room)); return true; }
+  catch (e) { if (Number.isInteger(e?.code) && typeof e?.defect === "string") return false; throw e; }
+};
 
 test("B3 · THE DIFFERENTIAL over busy rooms: every verb the matrix shows lands at its door, and every verb it hides is refused there", async () => {
   let driven = 0;

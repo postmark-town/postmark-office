@@ -405,6 +405,7 @@ test("nit · give { to: <resident> } naming nothing answers G7, never \"you are 
   await assert.rejects(go(w, "give", { to: "sbx-dee" }), (e) => /give which kind?/.test(e.defect) && /2 carbon-ghosts, 1 pocket-comet/.test(e.hint));
 });
 
+const MY_BOWL_FOR_REFILL = "sbx-ana/the-bowl";
 test("B1 · a holder in your own hands is in reach wherever you stand: the door asks where it is now, not where it was made", async () => {
   const w = world({ reach: () => false }); // the canon place is out of reach
   w.deps.holderPlace = async (id) => ({ holder: id === BAG ? "sbx-cy" : null, at: null, moved: false });
@@ -415,6 +416,12 @@ test("B1 · a holder in your own hands is in reach wherever you stand: the door 
   await assert.rejects(go(w, "make", { kind: "pocket-comet", count: 1, to: BOWL }, "sbx-ana"), /out of reach/, "not carried: the canon place, out of reach");
   w.deps.holderPlace = async () => ({ holder: "sbx-dee", at: null, moved: false });
   await assert.rejects(go(w, "take", { from: BAG }), (e) => /in sbx-dee's hands/.test(e.defect), "another's carried holder is theirs to give from");
+  // SETTLED: making into another resident's carried holder is refused (make into yourself, then give); a give into it stands
+  await assert.rejects(go(w, "make", { kind: "pocket-comet", count: 1, to: BAG }), (e) => e.code === 422 && /make into yourself, then give/.test(e.defect));
+  await assert.rejects(go(w, "refill", { act: "refill", thing: MY_BOWL_FOR_REFILL, kind: "pocket-comet", count: 1 }, "sbx-ana"), (e) => /make into yourself, then give/.test(e.defect), "refill is a make");
+  w.seed([{ from: null, to: "sbx-cy", kind: "pocket-comet", n: 1 }]);
+  const g = await go(w, "give", { to: BAG, kind: "pocket-comet", count: 1 });
+  assert.equal(g.did, "give", "a give into another's carried holder at arm's length stands");
   w.deps.holderPlace = async () => ({ holder: BOWL, at: null, moved: false });
   await assert.rejects(go(w, "take", { from: BAG }), (e) => /inside sbx-ana\/the-bowl/.test(e.defect));
 });

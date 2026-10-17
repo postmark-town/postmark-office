@@ -128,6 +128,11 @@ async function reachHolder(id, mark, actor, deps, { verb = "take" } = {}) {
   if (place.holder != null && isHolderId(place.holder))
     throw bounce(409, `${id} is inside ${place.holder}`, `take ${id} out of ${place.holder} first. Nothing was changed.`);
   if (place.holder != null) {
+    // SETTLED (the lead, 2026-10-17): making into another resident's carried holder is refused, as making
+    // into another resident is — make into yourself, then give. A give into it at arm's length stands.
+    if (verb === "make") throw bounce(422, `${id} is in ${place.holder}'s hands: make into yourself, then give`,
+      `leave-mark { kind, count, to } makes into you or a holder at hand; one another resident carries is given into, at arm's length. Nothing was made.`);
+    // FOR DARKO'S CALL (new law, the conservative reading): never take out of a holder in another's hands, even an open one
     if (verb !== "give") throw bounce(409, `${id} is in ${place.holder}'s hands`, `a holder someone carries is theirs to give from; ask them, or give into it at arm's length. Nothing was changed.`);
     return deps.reachGive(place.holder, actor);
   }
@@ -190,7 +195,7 @@ async function makeInto({ args, key, actor, deps, view, via = "leave-mark" }) {
   } else {
     ({ mark, law } = await holderOrThrow(deps, to, view));
     refuseIfClosed({ mark, id: to, law, actor, deps, verb: "make into" });
-    await reachHolder(to, mark, actor, deps, { verb: "give" });
+    await reachHolder(to, mark, actor, deps, { verb: "make" });
   }
   return holdTurn(async () => {
     const inFlight = law.resident ? await inFlightFor(to, deps) : 0; // BEFORE the rows (world-units § inFlightFor)
