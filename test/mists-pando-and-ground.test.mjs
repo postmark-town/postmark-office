@@ -91,7 +91,9 @@ test("THE PLACEMENT DOOR forecasts the Mists for the mark's ground after every o
 // WLD-6 A (RULED by Darko 2026-10-16 20:04): turned round. Entering a ground sets you
 // down at its landing point even behind the Mists' wall: you entered it, it shelters you.
 test("A PORTAL GROUND sets its entrant down at its landing point even behind the wall: no wall check before the landing", () => {
-  const land = APEX.slice(APEX.indexOf("async function landOnEnter"), APEX.indexOf("// ── the read mode"));
+  // the slice starts at the guard (review-600): a wall check added there, before landOnEnter, is caught too
+  assert.ok(APEX.indexOf("export async function groundLandsAfterEnter") > 0 && APEX.indexOf("export async function groundLandsAfterEnter") < APEX.indexOf("async function landOnEnter"), "the guard stands before the landing");
+  const land = APEX.slice(APEX.indexOf("export async function groundLandsAfterEnter"), APEX.indexOf("// ── the read mode"));
   assert.ok(land.indexOf("await write(WORLD_CLONE,") > 0, "the landing is written through the land pen");
   assert.equal(land.includes("mistsGroundCheck("), false, "no wall check is asked");
   assert.doesNotMatch(land, /sets no one down there; you stay where you entered/);
@@ -135,7 +137,7 @@ test("FAIL CLOSED AT THE DOORS: the mark door answers 503 in plain words with Re
   const server = readFileSync(new URL("../src/server.mjs", import.meta.url), "utf8");
   assert.ok(server.includes('if (code === 503 && obj?.defect === MISTS_UNREADABLE && !res.hasHeader?.("retry-after"))') && server.includes('res.setHeader("retry-after", String(MISTS_RETRY_AFTER_S));'), "the 503 carries Retry-After");
   // a ground's landing no longer reads the wall at all (WLD-6 A), so it cannot fail on reading it
-  const land = APEX.slice(APEX.indexOf("async function landOnEnter"), APEX.indexOf("// ── the read mode"));
+  const land = APEX.slice(APEX.indexOf("export async function groundLandsAfterEnter"), APEX.indexOf("// ── the read mode"));
   assert.equal(land.includes("MISTS_UNREADABLE"), false);
 });
 

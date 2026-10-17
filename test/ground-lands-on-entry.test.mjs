@@ -13,12 +13,13 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { enterViaOffice } from "../src/world-crossings.mjs";
 import { groundLandsAfterEnter, enteredTheTarget, enterTargetOfArgs } from "../src/world-apex.mjs";
+import { mistsGroundCheck } from "../src/world.mjs";
 import { NO_WORLD, worldClone } from "./fixture-paths.mjs";
 
 const CLONE = worldClone();
@@ -57,23 +58,34 @@ async function office({ standing, ledger = "" }) {
   };
 }
 
-/** The apex's own guard, with every ground declaring a landing point and the pen observed. */
+// THE WALL, READ FOR REAL (review-600's nit): the world's own skeleton and the
+// office's own wall check (world.mjs § mistsGroundCheck, the one the landing used
+// to ask) say this point stands behind the Mists' wall now, far past the border.
+const SKELETON_PATH = CLONE ? join(CLONE, "WORLD", "skeleton.json") : null;
+const SKELETON = SKELETON_PATH && existsSync(SKELETON_PATH) ? JSON.parse(readFileSync(SKELETON_PATH, "utf8")) : null;
+const BEHIND = SKELETON?.mists?.border_m ? { x: 0, y: SKELETON.mists.border_m.minY - 5000 } : { x: -9, y: -9 };
+const nowCrossing = () => (Date.now() - Date.UTC(2026, 5, 12)) / (12 * 3600 * 1000);
+
+/** The apex's own guard, with every ground declaring its landing point behind the wall and the pen observed. */
 async function afterEnter(args, result) {
   const written = [];
   const placed = await groundLandsAfterEnter(args, result, key("ann"), "ann", {
-    // every ground here lands you at its north-west corner, which stands behind the Mists' wall
-    ground: async (target) => ({ place: { ground: target }, landing: { at: { x: -9, y: -9 }, behind_the_wall: true } }),
+    ground: async (target) => ({ place: { ground: target }, landing: { at: BEHIND } }),
     landAt: async (_clone, w) => { written.push(w); },
   });
   return { placed, written };
 }
 
-test("a real entry lands you at the ground's landing point, behind the Mists' wall included", { skip: SKIP }, async () => {
+test("a real entry lands you at the ground's landing point, behind the Mists' wall included", { skip: SKIP }, async (t) => {
+  const wall = await mistsGroundCheck(CLONE, async () => SKELETON, [BEHIND], Math.floor(nowCrossing()));
+  if (!wall?.wall) { t.skip("this world's Mists do not stand over the landing point now, so the wall cannot be proven absent"); return; }
+  assert.deepEqual(wall, { wall: { x: BEHIND.x, y: BEHIND.y } }, "the office's own wall check would refuse this landing point");
   const deps = await office({ standing: { x: 0, y: 0 } });
   const answer = await enterViaOffice(CLONE, { mark: "g/parlor" }, key("ann"), deps);
   assert.ok(answer.entered.includes("g/parlor"), "the enter put the parlor on the stack");
   const { placed, written } = await afterEnter({ mark: "g/parlor" }, answer);
-  assert.deepEqual(written, [{ who: "ann", at: { x: -9, y: -9 }, via: "g/parlor", why: "ground", key: key("ann") }]);
+  assert.deepEqual(written, [{ who: "ann", at: BEHIND, via: "g/parlor", why: "ground", key: key("ann") }],
+    "and the landing is written there anyway: WLD-6 A asks no wall check");
   assert.equal(placed.ground, "g/parlor");
   assert.match(placed.note, /the ground placed you/);
 });
