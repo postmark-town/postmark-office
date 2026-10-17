@@ -251,6 +251,8 @@ export const SOFT_STEP_RULES = Object.freeze({
     [/^not stocked — the law at S\d+ declares no chest class, and S\d+'s law is not ingested yet/, "refused prereq:law"],
     [/^not stocked — the store holds no settlement whose law is ingested/, "refused prereq:law"],
     [/^not stocked this tick — the carried step did not settle/, "refused prereq:carried"],
+    // the doors ship dark (src/chests-candy.mjs): a switch, not a failure, so the roll-call stays quiet
+    [/^not stocked — chests and candy are off at this office/, "ok switch-off"],
   ],
   drops: [[/ · \d+ failed \(/, "refused write-failed"], [/^restored \d+/, "ok"]],
 });

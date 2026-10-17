@@ -104,3 +104,42 @@ test("3 · OFF: the reads offer nothing (pinned in source: GET /world/chests, th
   assert.match(src("src/world-hold.mjs"), /\.\.\.\(\(await import\("\.\/chests-candy\.mjs"\)\)\.chestsCandyOn\(\) \? \{ units: await unitsHeldBy\(actor\) \} : \{\}\)/,
     "world_holdings carries units only with the doors open");
 });
+
+test("4 · OFF: the tick's line grades as a switch, not a failure: softStepStatus answers `ok switch-off`, so the roll-call stays quiet", async () => {
+  const { softStepStatus } = await import("../world2/tools/settlements-backfill.mjs");
+  const off = await stockedOnTick(null, { stock: async () => ({ line: "x" }), crossing: () => 1 });
+  assert.equal(softStepStatus(off.line, "chests"), "ok switch-off");
+  // the neighbours are unchanged
+  assert.equal(softStepStatus("chests: stocked 2", "chests"), "ok");
+  assert.equal(softStepStatus("chests: something else", "chests"), "refused write-failed");
+});
+
+test("2 · OFF: the town-only hint does not offer chest among what a resident may make", async () => {
+  const candy = { slug: "a-sweet", kind: "sited", at: { x: 3, y: 4 }, extent: { w: 1, h: 1 }, body: "A sweet.", class: "candy" };
+  let hint = null;
+  try { await leaveMarkViaOffice(process.env.WORLD_CLONE, candy, one); } catch (e) { hint = String(e.hint ?? ""); }
+  assert.match(hint, /residents may instantiate only \[bounty, thing, note, idea\] today/);
+  let onHint = null;
+  await withFlag("1", async () => { try { await leaveMarkViaOffice(process.env.WORLD_CLONE, candy, one); } catch (e) { onHint = String(e.hint ?? ""); } });
+  assert.match(onHint, /\[bounty, thing, note, idea, chest\]/);
+});
+
+test("3 · OFF, behaviourally: a spawned office's GET /world/chests answers no chest and says why", { timeout: 60_000 }, async (t) => {
+  const { spawn } = await import("node:child_process");
+  const { mkdtempSync } = await import("node:fs");
+  const { fixtureDb } = await import("./fixture.mjs");
+  const { bootOnFreePort } = await import("./spawn-office.mjs");
+  const ROOT = new URL("..", import.meta.url).pathname.replace(/^\/(\w:)/, "$1");
+  const tmp = mkdtempSync(join(tmpdir(), "chests-candy-flag-"));
+  const db = join(tmp, "office.db");
+  fixtureDb(db).close();
+  const env = { ...process.env, TOWN_CLONE: join(tmp, "no-clone"), WORLD_CLONE: join(tmp, "no-world"), TOWN_PUSH: "", OFFICE_READ_WORKERS: "0",
+    WORLD_STORE_DB: join(tmp, "no-world.db"), WORLD_GRAPH_NONE: "1", TOWN_INDEX_READS: undefined, WORLD2_PG: undefined, WORLD2_PG_URL: undefined };
+  delete env.WORLD_CHESTS_CANDY;
+  const { child, port } = await bootOnFreePort((p) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(p), "--db", db,
+    "--oauth-db", join(tmp, "oauth.db"), "--roles-db", join(tmp, "roles.db")], { env, stdio: ["ignore", "pipe", "pipe"] }));
+  t.after(async () => { if (child.exitCode === null) { const gone = new Promise((ok) => child.on("exit", ok)); child.kill(); await gone; } });
+  const r = await fetch(`http://127.0.0.1:${port}/world/chests`);
+  assert.equal(r.status, 200);
+  assert.deepEqual(await r.json(), { chests: [], count: 0, off: CHESTS_CANDY_OFF.defect });
+});
