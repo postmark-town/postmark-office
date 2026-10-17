@@ -23,7 +23,7 @@ import { markRecord } from "../src/mark-record.mjs";
 const WORLD = worldClone();
 const store = await startStore({ db: "kind_door_carried_holder" });
 const skip = store.skip ?? ((!WORLD && NO_WORLD) || false);
-const BAG = "sbx-cy/my-bag", MY_BOWL = "sbx-cy/my-bowl", FAR_BOWL = "sbx-ana/the-bowl";
+const BAG = "sbx-cy/my-bag", MY_BOWL = "sbx-cy/my-bowl", FAR_BOWL = "sbx-ana/the-bowl", LAMP = "sbx-cy/a-lamp";
 const repo = mkdtempSync(join(tmpdir(), "o2-carried-"));
 const put = (p, content) => { const f = join(repo, p); mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, content); };
 const FLAGS = ["WORLD2_PG", "WORLD2_PG_URL", "W2_PEN", "W2_GUARDS", "WORLD_CLONE", "WORLD_SINGLE_LOG", "WORLD_POOL"];
@@ -71,7 +71,7 @@ export function sourceLabel() { return "home"; }
 `);
   const root = { id: "the-town/let-there-be-light", by: "the-town", slug: "let-there-be-light", kind: "sited", at: { x: 0, y: 0 }, extent: { w: 10000, h: 10000 } };
   const mark = (id, klass, body) => ({ rec: { id, by: id.split("/")[0], slug: id.split("/")[1], kind: "sited", class: klass, at: { x: 10, y: 10 }, extent: { w: 2, h: 2 } }, body });
-  const ms = [mark(BAG, "halloween-candy-bag", "A bag for gathering."), mark(MY_BOWL, "halloween-candy-bowl", "My bowl of candy."), mark(FAR_BOWL, "halloween-candy-bowl", "A bowl by a far door.")];
+  const ms = [mark(BAG, "halloween-candy-bag", "A bag for gathering."), mark(MY_BOWL, "halloween-candy-bowl", "My bowl of candy."), mark(FAR_BOWL, "halloween-candy-bowl", "A bowl by a far door."), mark(LAMP, "thing", "A small lamp.")];
   put("WORLD/marks/let-there-be-light/mark.md", markRecord(root, "Synthetic world frame."));
   for (const m of ms) put(`WORLD/marks/${m.rec.id}/mark.md`, markRecord(m.rec, m.body));
   put("WORLD/world-state.json", JSON.stringify({ tick: 0, dials: {}, marks: [root, ...ms.map((m) => m.rec)] }));
@@ -167,4 +167,64 @@ test("S3 · through the apex: do: leave-mark { kind, count, to: <the bag you car
     assert.equal(took.error, undefined, JSON.stringify(took).slice(0, 500));
     assert.deepEqual((await unitActs()).map((a) => a.action), ["units:make", "units:take"]);
   } finally { delete process.env.WORLD_APEX; resetWorldGraph?.(); }
+});
+
+test("S1 · what a resident holds by kind shows in world_holdings, a class and a number sharpened to kinds, never a unit", { skip }, async () => {
+  await seed();
+  await leaveMarkViaOffice(repo, { kind: "pocket-comet", count: 3, to: "sbx-cy" }, KEY);
+  const h = await callHoldTool("world_holdings", {}, KEY);
+  assert.equal(h.kinds.count, 3);
+  assert.equal(h.kinds.shows, "3 pocket-comets");
+  assert.deepEqual(h.kinds.kinds.map((k) => [k.kind, k.count]), [["pocket-comet", 3]]);
+  assert.doesNotMatch(JSON.stringify(h.kinds), /\bpiece/i);
+  const { kindsHeldBy } = await import("../src/world-kinds.mjs");
+  assert.equal((await kindsHeldBy("sbx-dee")).count, 0, "someone who holds nothing reads empty, not unknown");
+});
+
+// the apex's class layer, as the town's resident class grants these acts ambiently
+async function withApex(fn) {
+  const { publishWorldGraphForTest, resetWorldGraph } = await import("../src/world-graph-snapshot.mjs");
+  const n = (id, props) => ({ id, kind: "mark", subkind: "sited", tier: "constitution", by: "the-town", at_x: 0, at_y: 0, extent_w: 100000, extent_h: 100000, props: JSON.stringify(props) });
+  const actions = ["leave-mark", "take", "give", "drop", "consume", "refill"].map((action) => ({ action, residue: `the-town/${action}` }));
+  publishWorldGraphForTest({ meta: [{ key: "hydration_status", value: "OK" }, { key: "as_of_world", value: "o2fixture" }],
+    nodes: [n("the-town/let-there-be-light", { slug: "let-there-be-light", body: "Let there be light.", path: "WORLD/marks/let-there-be-light/mark.md" }),
+      n("the-town/resident", { slug: "resident", class: "resident", class_version: 1, ambient: true, actions, body: "A household's living voice.",
+        path: "WORLD/marks/let-there-be-light/the-town-centre/the-keeping-works/resident/mark.md" })],
+    edges: [], events: [], geometryVersions: [], lintFindings: [] }, { label: "o2-apex" });
+  process.env.WORLD_APEX = "1";
+  try { return await fn((await import("../src/world-apex.mjs")).worldApex); } finally { delete process.env.WORLD_APEX; resetWorldGraph?.(); }
+}
+
+test("S2 · the bare read's actions are trimmed by the matrix: with an empty carried bag, take hides and drop shows; investigate's can is the column", { skip }, async () => {
+  await seed();
+  await carry(BAG);
+  await withApex(async (worldApex) => {
+    const read = await worldApex({}, KEY);
+    const acts = (read.actions ?? []).map((e) => e.action);
+    assert.ok(acts.includes("drop"), `a whole thing in hand drops: ${acts}`);
+    assert.ok(!acts.includes("take"), `nothing takeable in reach: take hides, though the resident class grants it (${acts})`);
+    assert.ok(!acts.includes("consume") && !acts.includes("refill"), `${acts}`);
+    assert.ok(acts.includes("leave-mark"), "the always-on roster passes untouched");
+    // fill it: take shows (from the bag in your hands)
+    await leaveMarkViaOffice(repo, { kind: "pocket-comet", count: 2, to: BAG }, KEY);
+    const after = (await worldApex({}, KEY)).actions.map((e) => e.action);
+    assert.ok(after.includes("take"), `${after}`);
+    // the close look carries the column: the bag in your hands holds two, so take; nothing else in hand to give into it
+    const look = await worldApex({ mark: BAG }, KEY);
+    assert.deepEqual(look.focus?.can, ["take"], JSON.stringify(look.focus ?? look).slice(0, 400));
+    assert.equal(look.focus?.holds?.count, 2, "and what it holds, sharpened to kinds");
+    // investigate on a resident carries its column too (presence is off here, so no one is beside: an empty column, not an absent one)
+    const dee = await worldApex({ investigate: "sbx-dee" }, KEY);
+    assert.deepEqual(dee.investigated?.can, []);
+  });
+});
+
+test("S2 · naming a whole mark a holder holds takes it out through the kind door (the hold door's redirect)", { skip }, async () => {
+  await seed();
+  await carry(BAG);
+  await carry(LAMP);
+  const into = await callHoldTool("world_hold", { thing: LAMP, to: BAG }, KEY, { verb: "give" });
+  assert.deepEqual([into.did, into.to], ["give", BAG]);
+  const out = await callHoldTool("world_hold", { thing: LAMP }, KEY, { verb: "take" });
+  assert.deepEqual([out.did, out.from, out.holder], ["take", BAG, "sbx-cy"], "the redirect reached thing-from-holder for a v2 holder");
 });

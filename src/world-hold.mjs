@@ -1344,6 +1344,8 @@ async function holdAct(name, args = {}, key = null, verb = null) {
         holding: page.map((id) => ({ thing: id, made_by: id.split("/")[0] })),
         // THE COUNTED HOLDING (WLD-27): one edge per label, and what it shows.
         ...((await import("./chests-candy.mjs")).chestsCandyOn() ? { units: await unitsHeldBy(actor) } : {}),
+        // BY KIND (LOGOS v2, O2; review-610 S1): live whatever WORLD_CHESTS_CANDY says — the kind doors are not #499's
+        kinds: await (await import("./world-kinds.mjs")).kindsHeldBy(actor),
       };
     }
     // ── TWO INPUTS THIS DOOR DOES NOT YET COMPUTE ──────────────────────────

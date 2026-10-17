@@ -132,3 +132,31 @@ test("leave-mark { kind, count, to: yourself } through the flat tool's implement
     assert.equal(totalOf(foldUnits(await rows()), ACTOR), 3);
   } finally { resetLawSnapshot(); }
 });
+
+test("S4 · a pot-luck take that draws a whole mark commits the draw and the mark's holding act in ONE transaction; a failing half leaves nothing", { skip }, async () => {
+  await seed(); await onThePen();
+  const { liveUnitDeps } = await import("../src/world-units.mjs");
+  const live = await liveUnitDeps();
+  const lamp = "sbx-ana/a-lamp";
+  const deps = depsOver({
+    append: live.append,
+    readRows: async () => ({ units: await rows(), attachments: [{ entity: BOWL, target: lamp, policy: "cascade", born_at: "2026-10-17T00:00:00Z" }] }),
+    markById: async (id) => (id === BOWL ? { id, by: "sbx-ana", kind: "halloween-candy-bowl", at: { x: 1, y: 1 } } : id === lamp ? { id, by: "sbx-ana", kind: "thing" } : null),
+  });
+  const r = await callKinds("take", { from: BOWL, count: 1 }, KEY, ACTOR, deps);
+  assert.deepEqual(r.whole?.map((x) => x.thing), [lamp], "the draw took the lamp, the only thing held");
+  const all = await owner(async (c) => (await c.query("SELECT action, object FROM acts ORDER BY id")).rows);
+  assert.deepEqual(all.map((a) => a.action), ["take", "units:take"], "both acts, one transaction (the mark's act inside the draw's)");
+  assert.equal(all[0].object, lamp);
+  // and when the draw's own act cannot be written AFTER the mark's act went in, the transaction rolls back: neither lands
+  const before = all.length;
+  const good = { crossing: currentCrossing(), actor: ACTOR, action: "take", object: lamp, cls: "holding", household: HH,
+    payload: { thing: lamp, holder: ACTOR, previous_holder: BOWL, made_by: "sbx-ana", policy: "cascade", declared_by: ACTOR }, effect: "taken", writtenAt: new Date().toISOString() };
+  // the draw's act reuses a spent world nonce (052's unique index), so its INSERT — the transaction's last — is refused
+  const draw = { crossing: currentCrossing(), actor: ACTOR, action: "units:take", object: BOWL, cls: "holding", household: HH, nonce: "o2-spent-once",
+    payload: { units: true, kinds: true, moves: [] }, effect: "x", writtenAt: new Date().toISOString() };
+  await live.append(draw);
+  const spent = before + 1;
+  await assert.rejects(live.append({ ...draw, writtenAt: new Date().toISOString() }, { also: [good] }), (e) => /23505|duplicate|unique|cannot be reached/i.test(`${e.code} ${e.message} ${e.cause?.code ?? ""}`), "the pen refuses the whole write (it names a failed write as unreachable; the count below is the proof)");
+  assert.equal((await owner(async (c) => (await c.query("SELECT count(*)::int AS n FROM acts")).rows[0].n)), spent, "the mark's act, written first, rolled back with the refused draw: nothing of the edge was written");
+});

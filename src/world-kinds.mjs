@@ -23,7 +23,7 @@
 import { foldUnits, kindEdgesOf, totalOf, unitCount, refuseOverCarry, UNIT_ACTION } from "./world-stacks.mjs";
 import { holdingsOf, sameHousehold, holdTurn, liveHolder } from "./world-hold.mjs";
 import { chestRoomGuard } from "./chest-lock.mjs";
-import { inFlightFor, writeThingHolding } from "./world-units.mjs";
+import { inFlightFor, writeThingHolding, thingHoldingEntry } from "./world-units.mjs";
 import { markClassOf, lineageOf } from "./world-grants.mjs";
 import { standsWithin, EARSHOT_M } from "./reach.mjs";
 import {
@@ -70,7 +70,7 @@ const sentence = {
 };
 
 /** The act, written once on the hold lane; `stamp` is read before the plan when the plan needs it (the draw). */
-async function writeKinds(deps, key, actor, plan, { stamp = null, guard = null, words }) {
+async function writeKinds(deps, key, actor, plan, { stamp = null, guard = null, words, also = [] }) {
   const { at, witnesses } = stamp ?? await deps.stamp(actor);
   const entry = {
     crossing: deps.crossing(), actor, action: plan.action, object: String(plan.object), at, witnesses,
@@ -78,7 +78,7 @@ async function writeKinds(deps, key, actor, plan, { stamp = null, guard = null, 
     payload: { units: true, kinds: true, moves: plan.moves, edge: plan.edge, ...(plan.via ? { via: plan.via } : {}), ...(plan.draw ? { draw: plan.draw, seed: plan.seed, things: plan.things ?? [] } : {}) },
     effect: words,
   };
-  const row = await deps.append(entry, guard ? { guard } : {});
+  const row = await deps.append(entry, { ...(guard ? { guard } : {}), ...(also.length ? { also } : {}) });
   return { seq: row?.actId ?? row?.seq ?? null, effect: entry.effect };
 }
 
@@ -306,16 +306,18 @@ export async function callKinds(route, args, key, actor, deps) {
         for (const t of holdingsOf(attachments, from)) inside.push({ thing: t, class: markClassOf(await deps.markById(t).catch(() => null)) ?? "thing" });
         const plan = { ...planTakeKinds({ fold, actor, from, kind, n, seed, things: inside, extendsOf: view.extendsOf }), seed };
         refuseOverCarry({ who: actor, units: totalOf(fold, actor) + inFlight, things: holdingsOf(attachments, actor).length, adding: n, cap });
-        // THE DRAW'S RECORD FIRST (its seed, its kinds, the whole marks it took), then each whole mark's own holding act
-        const w = await writeKinds(deps, key, actor, plan, { stamp, words: sentence.take({ actor, n, from }) });
-        const moved = [];
+        // ONE EDGE, ONE TRANSACTION (review-610 S4): the draw's record (its seed, its kinds, the whole
+        // marks it took) and each whole mark's own holding act commit together, or nothing moves
+        const also = [];
         let rows = attachments;
         for (const t of plan.things) {
           const m = await deps.markById(t).catch(() => null);
-          const tw = await writeThingHolding(deps, key, actor, rows, { did: "take", thing: t, holder: String(actor), previous: from, madeBy: ownerOf(m, t) });
-          rows = [...rows, { entity: String(actor), target: t, policy: "cascade", born_at: tw.at }];
-          moved.push({ thing: t, seq: tw.seq });
+          const { entry, at } = await thingHoldingEntry(deps, key, actor, rows, { did: "take", thing: t, holder: String(actor), previous: from, madeBy: ownerOf(m, t) }, stamp);
+          also.push(entry);
+          rows = [...rows, { entity: String(actor), target: t, policy: "cascade", born_at: at }];
         }
+        const w = await writeKinds(deps, key, actor, plan, { stamp, words: sentence.take({ actor, n, from }), also });
+        const moved = plan.things.map((t) => ({ thing: t, with: w.seq }));
         const after = foldUnits([...units, { class: "holding", action: plan.action, payload: { moves: plan.moves } }]);
         return { did: "take", count: n, from, draw: plan.draw, ...w, ...(moved.length ? { whole: moved } : {}),
           took: blurOf({ edges: plan.moves.map((m) => ({ kind: m.kind, count: m.n })), things: inside.filter((x) => plan.things.includes(x.thing)).map((x) => x.class), extendsOf: view.extendsOf }),
@@ -431,4 +433,18 @@ export async function investigateMark(id, usable = null) {
   const fold = foldUnits(units.filter(isUnitRow));
   return { ...out, holder: { capacity: law.capacity, open: law.open }, holds: await shownIn(fold, id, attachments, view,
     { markById: async (m) => (await world.worldMarkById(m)).mark }, { sharp: true }) };
+}
+
+/**
+ * WHAT A RESIDENT HOLDS BY KIND (review-610 S1): a class and a number, and
+ * sharpened, each kind with its count — never a unit. For world_holdings and
+ * investigate on a resident. Null when the hold record cannot be read.
+ */
+export async function kindsHeldBy(handle) {
+  try {
+    const [guards, { lawSnapshot }, { classViewOf }, { isUnitRow }] = await Promise.all([
+      import("./world2-guards.mjs"), import("./law-snapshot.mjs"), import("./world-units.mjs"), import("./world-stacks.mjs")]);
+    const fold = foldUnits((await guards.storeHoldingRows()).filter(isUnitRow));
+    return { holder: String(handle), ...blurOf({ edges: kindEdgesOf(fold, String(handle)), extendsOf: classViewOf(lawSnapshot()).extendsOf, sharp: true }) };
+  } catch { return null; }
 }

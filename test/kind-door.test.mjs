@@ -60,7 +60,8 @@ function world({ marks = MARKS, things = [], snap = SNAP, reach = () => true } =
     reachGive: async () => ({ stands: true }),
     standpoint: async () => ({ x: 5, y: 6 }),
     householdOf: (h) => ({ key: `hh:${h}`, house: `hh:${h}` }),
-    append: async (entry) => { const id = acts.length + 100; acts.push({ id, class: entry.cls, action: entry.action, object: entry.object, actor: entry.actor, at: entry.at, payload: entry.payload, effect: entry.effect }); return { actId: id }; },
+    // `also` commits with the act or not at all (the live pen's one transaction): here, all pushed together
+    append: async (entry, { also = [] } = {}) => { const id = acts.length + 100; for (const e of [entry, ...also]) acts.push({ id: acts.length + 100, class: e.cls, action: e.action, object: e.object, actor: e.actor, at: e.at, payload: e.payload, effect: e.effect }); return { actId: id }; },
     stamp: async (actor) => ({ at: `2026-10-17T06:00:00Z@${actor}#${acts.length}`, witnesses: [] }),
     crossing: () => 260,
     household: () => "hh:test",

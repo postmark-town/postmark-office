@@ -1881,7 +1881,10 @@ async function investigateOn(args, oriented, usable = null) {
     placeMarks: (p) => placeMarksAt(p),
     marksOf: (ids) => markRows(ids),
   });
-  return pointed(usable && seen && !seen.error ? { ...seen, can: canOn(usable, kind.handle) } : seen, "resident");
+  // what they hold by kind, beside their whole things (review-610 S1): a class and a number each, never a unit
+  const kinds = seen && !seen.error ? await (await import("./world-kinds.mjs")).kindsHeldBy(kind.handle) : null;
+  const read = seen && !seen.error ? { ...seen, ...(kinds?.count ? { holds_by_kind: kinds } : {}), ...(usable ? { can: canOn(usable, kind.handle) } : {}) } : seen;
+  return pointed(read, "resident");
 }
 
 /** POS-659: an investigated resident or creature carries its class pointer (class-read.mjs). */
