@@ -178,11 +178,55 @@ test("THE CIVIC PREDICATES (world-classes § civicQuarter): a plaque's predicate
     nodes: [n("the-town/the-think-tank", "sited", { body: "The Think Tank." }),
       n("the-town/think-tank-old", "predicated", { slot: "lane", value: "ideas" }),
       n("the-town/think-tank-new", "predicate", { slot: "stage", value: "one" })],
-    edges: [{ seq: 1, src: "the-town/the-think-tank", dst: "the-town/think-tank-old", type: "describes", props: "{}" },
-      { seq: 2, src: "the-town/the-think-tank", dst: "the-town/think-tank-new", type: "describes", props: "{}" }],
+    edges: [{ seq: 1, src: "the-town/the-think-tank", dst: "the-town/think-tank-old", type: "describes", props: "{}", born_at: null },
+      { seq: 2, src: "the-town/the-think-tank", dst: "the-town/think-tank-new", type: "describes", props: "{}", born_at: null }],
     events: [], geometryVersions: [], lintFindings: [],
   };
   publishWorldGraphForTest(tables, { label: "o1-civic" });
   const tank = civicQuarter().quarter.find((l) => l.place === "the-town/the-think-tank");
   assert.deepEqual(tank.predicates, { lane: "ideas", stage: "one" }, "the old form's `predicated` and the new form's `predicate` both read");
+  // and the statement's SQL answers what its twin does, over the same rows
+  const { writeFixtureDb } = await import("./helpers/world-rows.mjs");
+  const { DatabaseSync } = await import("node:sqlite");
+  const { twinnedStatements, graphDb } = await import("../src/world-graph-db.mjs");
+  const sql = twinnedStatements().find((q) => q.includes("FROM edges AS e") && q.includes("ORDER BY json_extract(p.props, '$.slot')"));
+  assert.ok(sql, "the civic predicates' statement is registered");
+  const dir = mkdtempSync(join(tmpdir(), "pm-o1-civic-"));
+  try {
+    writeFixtureDb(tables, join(dir, "civic.db"));
+    const db = new DatabaseSync(join(dir, "civic.db"), { readOnly: true });
+    try { assert.deepEqual(db.prepare(sql).all("the-town/the-think-tank").map((r) => ({ ...r })), graphDb(tables).prepare(sql).all("the-town/the-think-tank")); }
+    finally { db.close(); }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("THE STORE'S STATEMENTS: each new SQL and its twin give the same rows over the hydrated property tree (SQL and twin held equal)", { timeout: 180_000 }, async (t) => {
+  if (!HAVE_WORLD) return t.skip(`no world clone at ${WORLD_CLONE}`);
+  hydrateRows();
+  const { writeFixtureDb } = await import("./helpers/world-rows.mjs");
+  const { DatabaseSync } = await import("node:sqlite");
+  const { twinnedStatements, graphDb } = await import("../src/world-graph-db.mjs");
+  await import("../src/world-classes.mjs"); // registers the class layer's statements and their twins
+  const dbPath = join(world(), "o1.db");
+  writeFixtureDb(join(world(), "rows.json"), dbPath);
+  const sqlite = new DatabaseSync(dbPath, { readOnly: true });
+  const tables = hydrateRows();
+  const g = graphDb(tables);
+  const find = (needle) => { const s = twinnedStatements().filter((q) => q.includes(needle)); assert.equal(s.length >= 1, true, `a statement with ${needle}`); return s; };
+  const holderId = tables.nodes.find((n) => n.id.endsWith("/thing-holder"))?.id;
+  const cases = [
+    [find("AS dflt").find((q) => q.includes("FROM nodes AS c")), ["thing"]],
+    [find("AS dflt").find((q) => q.includes("FROM edges AS e")), [holderId]],
+    [find("AS ext")[0], []],
+  ];
+  try {
+    for (const [sql, args] of cases) {
+      assert.ok(sql, "the statement is registered");
+      const viaSql = sqlite.prepare(sql).all(...args).map((r) => ({ ...r }));
+      const viaTwin = g.prepare(sql).all(...args);
+      assert.ok(viaSql.length > 0, `the SQL answers rows over the property tree: ${sql.slice(0, 80)}`);
+      const norm = (rows) => rows.map((r) => JSON.stringify(Object.fromEntries(Object.entries(r).map(([k, v]) => [k, v == null ? null : String(v)])))).sort();
+      assert.deepEqual(norm(viaTwin), norm(viaSql), `the twin answers what its SQL answers: ${sql.slice(0, 80)}`);
+    }
+  } finally { sqlite.close(); }
 });
