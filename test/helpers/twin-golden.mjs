@@ -48,7 +48,8 @@ export function steady(value, { today = townDay() } = {}) {
     if (typeof v === "string" && v.includes("(Command failed: ")) return v.replace(/\(Command failed: [\s\S]*$/, "(<a command failed>)");
     if (typeof v === "string") {
       // a checkout's line endings are the machine's (git's autocrlf on Windows), not the office's
-      const s = v.replace(/\r\n/g, "\n");
+      // and a hung pane's size in the checkout (queries.mjs § the window's note) is the checkout's
+      const s = v.replace(/\r\n/g, "\n").replace(/\b\d+ bytes at (WHITE_PAGES\/[^ ]+\/WINDOW\/window\.html)/g, "<n> bytes at $1");
       return s === today ? "<today>" : s.split(`-${today}-to-`).join("-<today>-to-");
     }
     if (!v || typeof v !== "object") return v;
