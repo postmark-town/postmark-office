@@ -1434,8 +1434,9 @@ async function holdAct(name, args = {}, key = null, verb = null) {
     if (face === "take") {
       let m = null;
       try { m = (await (await import("./world.mjs")).worldMarkById(String(args.thing))).mark; } catch { m = null; }
-      if (markClassOf(m) === "chest" && m.portable === false)
-        throw bounce(409, `${args.thing} is fixed where it stands`, "a chest declared portable: false (a bowl) is not carried — take from it instead: world { do: \"take\", args: { from: \"" + args.thing + "\" } }. Nothing was recorded.");
+      // FROM THE thing/portable PROPERTY (sovereign, default true), for any thing (LOGOS v2, O2; review-610 B2)
+      if (m && !(await import("./kind-holding.mjs")).portableMark(m, classProperty))
+        throw bounce(409, `${args.thing} is fixed where it stands`, "its maker made it portable: false, so it is not carried; if it holds things, take from it instead: world { do: \"take\", args: { from: \"" + args.thing + "\" } }. Nothing was recorded.");
     }
 
     // The hold lane is flipped here — the door refused above if it was not —

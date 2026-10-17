@@ -25,6 +25,7 @@ import { holdingsOf, sameHousehold, holdTurn, liveHolder } from "./world-hold.mj
 import { chestRoomGuard } from "./chest-lock.mjs";
 import { inFlightFor, writeThingHolding } from "./world-units.mjs";
 import { markClassOf, lineageOf } from "./world-grants.mjs";
+import { standsWithin, EARSHOT_M } from "./reach.mjs";
 import {
   makeableKind, holderLawOf, roomIn, refuseOverRoom, blurOf, planMake, planTakeKinds, planGiveKinds,
   oneHolderOf, drawSeed, affordedActions, selectKind,
@@ -109,6 +110,36 @@ function refuseIfClosed({ mark, id, law, actor, deps, verb }) {
 const carryOf = (view) => holderLawOf({ holder: "resident", view }).capacity;
 
 /**
+ * THE REACH OF A HOLDER, where it is NOW (review-610 B1): "refill: at, or
+ * carrying" (10:30); the Bag's "fill it at chests, share from it" (12:34). A
+ * holder in your own hands is in reach wherever you stand. One in another
+ * resident's hands is at them: you give into it at arm's length, and you do not
+ * take out of it — they give from it. One inside another holder is reached by
+ * taking it out first. One set down is judged where it was set down (the hold
+ * lane's drop act), never where it was made; one never moved is judged by the
+ * thing door's own reach at its canon place. `deps.holderPlace` answers
+ * `{ holder, at, moved }`; absent (a test's hand-built record), the canon reach stands.
+ */
+async function reachHolder(id, mark, actor, deps, { verb = "take" } = {}) {
+  const place = deps.holderPlace ? await deps.holderPlace(String(id), mark) : { holder: null, at: mark?.at ?? null, moved: false };
+  const me = String(actor);
+  if (place.holder === me) return { stands: true, how: "in hand" };
+  if (place.holder != null && isHolderId(place.holder))
+    throw bounce(409, `${id} is inside ${place.holder}`, `take ${id} out of ${place.holder} first. Nothing was changed.`);
+  if (place.holder != null) {
+    if (verb !== "give") throw bounce(409, `${id} is in ${place.holder}'s hands`, `a holder someone carries is theirs to give from; ask them, or give into it at arm's length. Nothing was changed.`);
+    return deps.reachGive(place.holder, actor);
+  }
+  if (!place.moved || !place.at) return deps.reachTake(String(id), actor);
+  const here = await deps.standpoint(actor);
+  if (!here) throw bounce(409, "the record does not place you anywhere", `a holder is reached where it stands, and the walk ledger has no position for ${me}: walk somewhere first. Nothing was changed.`);
+  const r = standsWithin(here, { ...mark, at: place.at });
+  if (!r.stands) throw bounce(409, `you are not standing where ${id} stands: it was set down ${r.distance_round} m${r.bearing ? ` ${r.bearing}` : ""} of you`,
+    `a holder is reached within its reach (the-town/the-reach), where it was set down, not where it was made. Walk there first. Nothing was changed.`);
+  return r;
+}
+
+/**
  * Every holder in reach that holds the kind (or anything, with no kind): the
  * candidates for a take that names no `from` — each with its owner and its
  * distance from where the actor stands.
@@ -116,16 +147,31 @@ const carryOf = (view) => holderLawOf({ holder: "resident", view }).capacity;
 async function holdersInReach(fold, attachments, actor, kind, deps, extendsOf = () => null) {
   const here = await deps.standpoint(actor);
   const out = [];
-  const holders = new Map(fold.kinds ?? []);
-  // a holder of whole marks holds too, for a draw that names no kind
-  if (kind == null) for (const r of attachments) { const h = liveHolder(attachments, r.target); if (isHolderId(h) && !holders.has(h)) holders.set(h, new Map()); }
-  for (const [holder, kinds] of holders) {
-    if (!isHolderId(holder) || (kind != null && ![...kinds.keys()].some((k) => lineageOf(k, extendsOf).includes(String(kind))))) continue;
+  // the whole marks each holder holds, in ONE pass over the hold rows (the last row per thing decides)
+  const last = new Map();
+  for (const r of attachments) last.set(String(r.target), r);
+  const inside = new Map();
+  for (const [t, r] of last) if (r.policy === "cascade" && isHolderId(String(r.entity))) {
+    if (!inside.has(String(r.entity))) inside.set(String(r.entity), []);
+    inside.get(String(r.entity)).push(t);
+  }
+  const holders = new Set([...(fold.kinds ?? new Map()).keys(), ...inside.keys()].filter(isHolderId));
+  const is = (c) => kind == null || (c != null && lineageOf(c, extendsOf).includes(String(kind)));
+  for (const holder of holders) {
+    // the kind, among its counted kinds or its whole marks (as potLuck draws)
+    let holds = [...(fold.kinds?.get(holder)?.keys() ?? [])].some(is);
+    if (!holds) for (const t of inside.get(holder) ?? []) if (is(markClassOf(await deps.markById(t).catch(() => null)) ?? "thing")) { holds = true; break; }
+    if (!holds) continue;
     const mark = await deps.markById(holder).catch(() => null);
     if (!mark) continue;
-    try { await deps.reachTake(holder, actor); } catch { continue; }
+    // CHEAP FIRST: a holder far past the reach is never asked (its own hands, or a set-down, are asked anyway)
     const d = here && mark.at ? Math.round(Math.hypot(Number(mark.at.x) - here.x, Number(mark.at.y) - here.y)) : null;
-    out.push({ id: holder, owner: ownerOf(mark, holder), distance_m: d ?? 0 });
+    const span = Math.max(Number(mark.extent?.w ?? 0), Number(mark.extent?.h ?? 0));
+    const near = d == null || d <= EARSHOT_M + span;
+    const place = deps.holderPlace ? await deps.holderPlace(holder, mark) : null;
+    if (!near && !(place?.holder === String(actor)) && !place?.moved) continue;
+    try { await reachHolder(holder, mark, actor, deps, { verb: "take" }); } catch { continue; }
+    out.push({ id: holder, owner: ownerOf(mark, holder), distance_m: place?.holder === String(actor) ? 0 : d ?? 0 });
   }
   return out;
 }
@@ -143,7 +189,7 @@ async function makeInto({ args, key, actor, deps, view, via = "leave-mark" }) {
   } else {
     ({ mark, law } = await holderOrThrow(deps, to, view));
     refuseIfClosed({ mark, id: to, law, actor, deps, verb: "make into" });
-    await deps.reachTake(to, actor);
+    await reachHolder(to, mark, actor, deps, { verb: "give" });
   }
   return holdTurn(async () => {
     const inFlight = law.resident ? await inFlightFor(to, deps) : 0; // BEFORE the rows (world-units § inFlightFor)
@@ -172,7 +218,7 @@ async function thingIntoHolder({ args, key, actor, deps, view }) {
   refuseIfClosed({ mark: holderMark, id: to, law, actor, deps, verb: "give into" });
   const mark = await deps.markById(thing);
   if (!mark) throw bounce(409, `${thing} does not stand on the world`, "only a published thing goes into a holder; a private draft changes no hands. Nothing was changed.");
-  await deps.reachTake(to, actor);
+  await reachHolder(to, holderMark, actor, deps, { verb: "give" });
   return holdTurn(async () => {
     const { units, attachments } = await deps.readRows();
     const holder = liveHolder(attachments, thing);
@@ -196,7 +242,7 @@ export async function thingFromHolder({ args, key, actor, deps, view }) {
   const { mark: holderMark, law } = await holderOrThrow(deps, from, view);
   refuseIfClosed({ mark: holderMark, id: from, law, actor, deps, verb: "take from" });
   const mark = await deps.markById(thing);
-  await deps.reachTake(from, actor);
+  await reachHolder(from, holderMark, actor, deps, { verb: "take" });
   return holdTurn(async () => {
     const inFlight = await inFlightFor(actor, deps); // BEFORE the rows
     const { units, attachments } = await deps.readRows();
@@ -243,7 +289,7 @@ export async function callKinds(route, args, key, actor, deps) {
       if (from != null) {
         const { mark, law } = await holderOrThrow(deps, from, view);
         refuseIfClosed({ mark, id: from, law, actor, deps, verb: "take from" });
-        await deps.reachTake(from, actor);
+        await reachHolder(from, mark, actor, deps, { verb: "take" });
       }
       return holdTurn(async () => {
         const inFlight = await inFlightFor(actor, deps); // BEFORE the rows
@@ -284,7 +330,7 @@ export async function callKinds(route, args, key, actor, deps) {
       if (isHolderId(to)) {
         ({ mark, law } = await holderOrThrow(deps, to, view));
         refuseIfClosed({ mark, id: to, law, actor, deps, verb: "give into" });
-        await deps.reachTake(to, actor);
+        await reachHolder(to, mark, actor, deps, { verb: "give" });
       } else {
         law = holderLawOf({ holder: to, view });
         await deps.reachGive(to, actor);

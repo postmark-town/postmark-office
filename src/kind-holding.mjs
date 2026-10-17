@@ -31,7 +31,7 @@
 import { createHash } from "node:crypto";
 import { kindEdgesOf, totalOf, nearestCommonClass, UNIT_ACTION } from "./world-stacks.mjs";
 import { lineageOf, markClassOf } from "./world-grants.mjs";
-import { holdingOf, makersOf } from "./holding-law.mjs";
+import { holdingOf, makersOf, truth } from "./holding-law.mjs";
 
 const bounce = (code, defect, hint, extra = {}) => {
   const e = new Error(defect);
@@ -92,6 +92,29 @@ export function holderLawOf({ holder, mark = null, view }) {
   return { resident: false, holder: h.holder === true, capacity: h.capacity, open: h.open !== false, className,
     // an own capacity outside its class's bounds is refused, never clamped (holding-law § holdingOf, O1 review-606)
     ...(h.capacity_refused ? { capacity_refused: h.capacity_refused } : {}) };
+}
+
+/**
+ * Is this mark a holder, by the holder property (16:03: "a holder is anything
+ * with `holder: true`") — never by a class named chest. `classProperty` is
+ * the class layer's reader. #499's chest class still answers, for its own
+ * marks, until its doors go.
+ */
+export function isHolderMark(mark, classProperty) {
+  const className = markClassOf(mark);
+  if (className == null) return false;
+  if (className === "chest") return true;
+  return holdingOf({ mark, className, classProperty }).holder === true;
+}
+
+/** Is this thing portable? `thing/portable` is sovereign, default true (the lead's settlement, 2026-10-17). */
+export function portableMark(mark, classProperty) {
+  const className = markClassOf(mark);
+  const p = className == null ? null : classProperty(className, "portable") ?? null;
+  const own = p?.tier === "sovereign" && mark?.portable !== undefined ? truth(mark.portable) : null;
+  // #499's chest marks said portable on themselves, with no property behind them
+  const legacy = p == null && typeof mark?.portable === "boolean" ? mark.portable : null;
+  return own ?? legacy ?? truth(p?.value) ?? true;
 }
 
 /** Room left in a holder: its capacity less everything it holds (both maps, plus whole things). */

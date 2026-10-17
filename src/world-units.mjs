@@ -147,6 +147,18 @@ export async function liveUnitDeps() {
       const s = await world.residentStandpoint(String(actor)).catch(() => null);
       return hold.armsLengthOrThrow({ thing: "units", to, here: s?.placed ? { x: s.x, y: s.y } : null, actor });
     },
+    // WHERE A HOLDER IS NOW (LOGOS v2, O2; review-610 B1): in someone's hands, set down, or where it was made
+    holderPlace: async (id, mark) => {
+      const rows = await guards.standsRowsFromStore(String(id)).catch(() => null);
+      if (!rows) return { holder: null, at: mark?.at ?? null, moved: false };
+      const holder = hold.liveHolder(rows.attachments ?? [], String(id));
+      if (holder) return { holder: String(holder), at: null, moved: false };
+      const drop = hold.latestDrop(rows.journal ?? [], String(id));
+      if (!drop) return { holder: null, at: mark?.at ?? null, moved: false };
+      const marks = await world.worldMarksAll().catch(() => []);
+      const at = journal.composeAnchor(drop.at ?? {}, (mid) => marks.find((m) => m.id === mid)?.at ?? null);
+      return at ? { holder: null, at, moved: true } : { holder: null, at: mark?.at ?? null, moved: false };
+    },
     standpoint: async (actor) => { const s = await world.residentStandpoint(String(actor)).catch(() => null); return s?.placed ? { x: s.x, y: s.y } : null; },
     householdOf: await (async () => { try { return await (await import("./households.mjs")).householdLookup(); } catch { return null; } })(),
     append: (entry, opts = {}) => journal.appendActFlipped(null, entry, opts),

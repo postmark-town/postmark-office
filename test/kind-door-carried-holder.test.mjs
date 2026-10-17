@@ -1,0 +1,170 @@
+// kind-door-carried-holder.test.mjs — LOGOS v2 part 2, lane O2; review-610 B1
+// and S3: the SUCCESSFUL reach acts, through the real doors with the REAL reach.
+//
+// "refill: at, or carrying" (10:30); the Bag's "fill it at chests, share from
+// it" (12:34). A holder carried 1 km from where it was made is in reach, in
+// your hands; one left where it was made, 1 km off, is not. Through the flat
+// tools' own implementations (world_hold via callHoldTool, world_leave_mark via
+// leaveMarkViaOffice) with prod's flags on a real store, over a throwaway world
+// whose resident positions come from the world's own `where-is` seam (a home
+// for each resident, as world-apex.test.mjs stands its residents), and the law
+// in W1's shape. Nothing here injects a reach.
+
+import test, { after } from "node:test";
+import assert from "node:assert/strict";
+import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
+import { NO_WORLD, worldClone } from "./fixture-paths.mjs";
+import { startStore } from "./helpers/embedded-store.mjs";
+import { markRecord } from "../src/mark-record.mjs";
+
+const WORLD = worldClone();
+const store = await startStore({ db: "kind_door_carried_holder" });
+const skip = store.skip ?? ((!WORLD && NO_WORLD) || false);
+const BAG = "sbx-cy/my-bag", MY_BOWL = "sbx-cy/my-bowl", FAR_BOWL = "sbx-ana/the-bowl";
+const repo = mkdtempSync(join(tmpdir(), "o2-carried-"));
+const put = (p, content) => { const f = join(repo, p); mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, content); };
+const FLAGS = ["WORLD2_PG", "WORLD2_PG_URL", "W2_PEN", "W2_GUARDS", "WORLD_CLONE", "WORLD_SINGLE_LOG", "WORLD_POOL"];
+const saved = Object.fromEntries(FLAGS.map((k) => [k, process.env[k]]));
+let pool;
+
+const SHA = "f".repeat(40);
+const cls = (key, data = {}) => ({ number: 300, tag_sha: SHA, newest: 300, kind: "class", key, data: { class: key, ...data } });
+const prop = (klass, name, dflt, tier, parent = null) => ({ number: 300, tag_sha: SHA, newest: 300, kind: "property",
+  key: `${klass}/${name}`, data: { class: klass, parent, name, tier, default: dflt, id: `the-town/${klass}-${name}` } });
+const LAW = [
+  cls("postmark-node"), cls("mark", { extends: "postmark-node" }), cls("sited", { extends: "mark" }), cls("thing", { extends: "sited" }),
+  cls("consumable", { extends: "thing" }), cls("candy", { extends: "consumable" }), cls("pocket-comet", { extends: "candy" }),
+  cls("entity", { extends: "postmark-node" }), cls("resident", { extends: "entity" }),
+  cls("halloween-candy-bowl", { extends: "thing", actions: [{ action: "refill", who: "maker", from: "reach", effect: "leave-mark { kind, count, to: this bowl }" }] }),
+  cls("halloween-candy-bag", { extends: "thing" }),
+  prop("postmark-node", "makers", false, "constitution"), prop("thing", "makers", true, "constitution"),
+  prop("resident", "holder", true, "constitution"), prop("resident", "capacity", 24, "constitution", "holder"),
+  prop("thing", "holder", false, "sovereign"), prop("thing", "capacity", 30, "sovereign", "holder"),
+  prop("thing", "min", 1, "constitution", "capacity"), prop("thing", "max", 120, "constitution", "capacity"),
+  prop("thing", "open", true, "sovereign", "holder"), prop("thing", "portable", true, "sovereign"),
+  prop("halloween-candy-bowl", "holder", true, "constitution"),
+  prop("halloween-candy-bag", "holder", true, "constitution"), prop("halloween-candy-bag", "capacity", 200, "sovereign", "holder"),
+  prop("halloween-candy-bag", "max", 200, "constitution", "capacity"),
+];
+
+let callHoldTool, leaveMarkViaOffice, resetLawSnapshot, writeThingHolding, appendActFlipped, currentCrossing;
+if (!skip) {
+  mkdirSync(join(repo, "tools"), { recursive: true });
+  for (const f of readdirSync(join(WORLD, "tools")).filter((f) => f.endsWith(".mjs") && !f.endsWith(".test.mjs")))
+    copyFileSync(join(WORLD, "tools", f), join(repo, "tools", f));
+  // THE POSITIONS, by the world's own where-is seam: cy stands 1 km east of where her bag and bowl were made; dee beside her
+  put("tools/where-is.mjs", `
+export const NOWHERE = Object.freeze({ x: null, y: null, placed: false, source: null, mark_id: null });
+export const QUAY_MARK_ID = "the-town/the-quay";
+const HOMES = { "sbx-cy": { x: 1010, y: 10 }, "sbx-dee": { x: 1012, y: 10 } };
+export function homeOf(handle) { const h = HOMES[handle]; return h ? { ...h, mark_id: handle + "/home", placed: true, source: "home", parcel: { id: handle + "/home", at: { x: h.x, y: h.y }, extent: { w: 25, h: 25 } } } : NOWHERE; }
+export function whereIs(handle) { const h = homeOf(handle); return h.placed ? { ...h, position: null } : NOWHERE; }
+export function publicResidents() { return []; }
+export function porchOf() { return null; }
+export function householdOf() { return null; }
+export function parcelsFor() { return []; }
+export function parcelFor() { return null; }
+export function sourceLabel() { return "home"; }
+`);
+  const root = { id: "the-town/let-there-be-light", by: "the-town", slug: "let-there-be-light", kind: "sited", at: { x: 0, y: 0 }, extent: { w: 10000, h: 10000 } };
+  const mark = (id, klass, body) => ({ rec: { id, by: id.split("/")[0], slug: id.split("/")[1], kind: "sited", class: klass, at: { x: 10, y: 10 }, extent: { w: 2, h: 2 } }, body });
+  const ms = [mark(BAG, "halloween-candy-bag", "A bag for gathering."), mark(MY_BOWL, "halloween-candy-bowl", "My bowl of candy."), mark(FAR_BOWL, "halloween-candy-bowl", "A bowl by a far door.")];
+  put("WORLD/marks/let-there-be-light/mark.md", markRecord(root, "Synthetic world frame."));
+  for (const m of ms) put(`WORLD/marks/${m.rec.id}/mark.md`, markRecord(m.rec, m.body));
+  put("WORLD/world-state.json", JSON.stringify({ tick: 0, dials: {}, marks: [root, ...ms.map((m) => m.rec)] }));
+  copyFileSync(join(WORLD, "WORLD", "skeleton.json"), join(repo, "WORLD", "skeleton.json"));
+  execFileSync("git", ["init", "-q", "-b", "main", repo]);
+  execFileSync("git", ["-C", repo, "add", "-A", "WORLD", "tools"]);
+  execFileSync("git", ["-C", repo, "-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-qm", "synthetic canon"]);
+  const { default: pg } = await import("pg");
+  pool = new pg.Pool({ connectionString: store.url("office_api") });
+  Object.assign(process.env, { WORLD_CLONE: repo, WORLD_SINGLE_LOG: "", WORLD_POOL: "0", WORLD2_PG: "1", WORLD2_PG_URL: store.url("office_api"), W2_PEN: "hold", W2_GUARDS: "1" });
+  (await import("../src/world2-pen.mjs")).__setPoolForTest(pool);
+  const snap = await import("../src/law-snapshot.mjs");
+  resetLawSnapshot = snap.resetLawSnapshot;
+  await snap.reloadLawSnapshot({ force: true, query: async (sql) => ({ rows: sql === snap.LAW_REFRESH_SQLS.pin ? [{ newest: 300, pinned: 300 }] : LAW }) });
+  ({ callHoldTool } = await import("../src/world-hold.mjs"));
+  ({ leaveMarkViaOffice } = await import("../src/world.mjs"));
+  ({ writeThingHolding } = await import("../src/world-units.mjs"));
+  ({ appendActFlipped } = await import("../src/world-journal.mjs"));
+  ({ currentCrossing } = await import("../src/crossings.mjs"));
+}
+after(async () => {
+  for (const k of FLAGS) { if (saved[k] == null) delete process.env[k]; else process.env[k] = saved[k]; }
+  resetLawSnapshot?.();
+  if (!skip) (await import("../src/world2-pen.mjs")).__setPoolForTest(null);
+  if (pool) await pool.end(); await store.stop();
+});
+const KEY = { household: "sbx-cy", handles: new Set(["sbx-cy"]) };
+const owner = async (fn) => { const c = await store.connect("world2_owner"); try { return await fn(c); } finally { await c.end(); } };
+async function seed() {
+  await owner(async (c) => {
+    await c.query("TRUNCATE acts, claims, marks, windows, settlements, households, household_pins CASCADE");
+    await c.query("INSERT INTO windows (id,opens_at,closes_at,status) VALUES (300,now()-interval '1 day',now()+interval '1 day','open')");
+  });
+}
+// THE REAL HOLD ACT for picking a thing up, by the hold lane's own writer (world-units § writeThingHolding)
+const carry = (thing, who = "sbx-cy") => writeThingHolding({
+  stamp: async () => ({ at: { anchor: null, dx: null, dy: null, unplaced: true }, witnesses: { source: "presence", list: [] } }),
+  crossing: () => currentCrossing(), household: () => "sbx-cy",
+  append: (e, opts = {}) => appendActFlipped(null, { ...e, writtenAt: new Date().toISOString() }, opts),
+}, KEY, who, [], { did: "take", thing, holder: who, previous: null, madeBy: thing.split("/")[0] });
+const unitActs = () => owner(async (c) => (await c.query("SELECT action, payload FROM acts WHERE action LIKE 'units:%' ORDER BY id")).rows);
+
+test("B1 · a carried bag, 1 km from where it was made, is filled, taken from and given into — and a holder left where it was made is out of reach", { skip }, async () => {
+  await seed();
+  // not carried yet: the bag stands where it was made, 1 km west — the real reach refuses
+  await assert.rejects(leaveMarkViaOffice(repo, { kind: "pocket-comet", count: 3, to: BAG }, KEY), (e) => e.code === 409 && /not standing where/.test(`${e.defect}`), "the canon place, judged by the thing door's own reach");
+  assert.equal((await unitActs()).length, 0);
+  await carry(BAG);
+  const made = await leaveMarkViaOffice(repo, { kind: "pocket-comet", count: 3, to: BAG }, KEY);
+  assert.deepEqual([made.did, made.count, made.holds.count], ["make", 3, 3], "in your hands is in reach, wherever you stand");
+  const took = await callHoldTool("world_hold", { from: BAG, count: 1 }, KEY, { verb: "take" });
+  assert.deepEqual([took.did, took.count], ["take", 1]);
+  const gave = await callHoldTool("world_hold", { to: BAG, kind: "pocket-comet", count: 1 }, KEY, { verb: "give" });
+  assert.equal(gave.did, "give");
+  assert.equal(gave.receiver.count, 3);
+  // and the far bowl, never carried, refuses by the reach with nothing written
+  const before = (await unitActs()).length;
+  await assert.rejects(callHoldTool("world_hold", { to: FAR_BOWL, kind: "pocket-comet", count: 1 }, KEY, { verb: "give" }), (e) => e.code === 409);
+  assert.equal((await unitActs()).length, before);
+});
+
+test("S3 · a give to a resident at arm's length, and the refill of a bowl you carry, land through world_hold", { skip }, async () => {
+  await seed();
+  await carry(MY_BOWL);
+  const refilled = await callHoldTool("world_hold", { act: "refill", thing: MY_BOWL, kind: "pocket-comet", count: 4 }, KEY, { verb: "refill" });
+  assert.deepEqual([refilled.did, refilled.count, refilled.holds.count], ["refill", 4, 4]);
+  await leaveMarkViaOffice(repo, { kind: "pocket-comet", count: 2, to: "sbx-cy" }, KEY);
+  const gave = await callHoldTool("world_hold", { to: "sbx-dee", kind: "pocket-comet", count: 1 }, KEY, { verb: "give" });
+  assert.deepEqual([gave.did, gave.to, gave.receiver.count], ["give", "sbx-dee", 1], "beside, by the walk ledger's own measure");
+  const acts = await unitActs();
+  assert.deepEqual(acts.map((a) => a.action), ["units:make", "units:make", "units:give"]);
+  assert.equal(acts[0].payload.via, "refill");
+});
+
+test("S3 · through the apex: do: leave-mark { kind, count, to: <the bag you carry> } and do: take from it land, by the apex's own gate and dispatch", { skip }, async () => {
+  await seed();
+  await carry(BAG);
+  // the class layer the apex's gate reads: the resident class grants these acts ambiently, as the town's own does
+  const { publishWorldGraphForTest, resetWorldGraph } = await import("../src/world-graph-snapshot.mjs");
+  const n = (id, subkind, props, extra = {}) => ({ id, kind: "mark", subkind, tier: "constitution", by: "the-town", at_x: 0, at_y: 0, extent_w: 100000, extent_h: 100000, props: JSON.stringify(props), ...extra });
+  const actions = ["leave-mark", "take", "give", "refill"].map((action) => ({ action, residue: `the-town/${action}` }));
+  publishWorldGraphForTest({ meta: [{ key: "hydration_status", value: "OK" }, { key: "as_of_world", value: "o2fixture" }],
+    nodes: [n("the-town/let-there-be-light", "sited", { slug: "let-there-be-light", body: "Let there be light.", path: "WORLD/marks/let-there-be-light/mark.md" }),
+      n("the-town/resident", "sited", { slug: "resident", class: "resident", class_version: 1, ambient: true, actions, body: "A household's living voice.",
+        path: "WORLD/marks/let-there-be-light/the-town-centre/the-keeping-works/resident/mark.md" })],
+    edges: [], events: [], geometryVersions: [], lintFindings: [] }, { label: "o2-apex" });
+  process.env.WORLD_APEX = "1";
+  try {
+    const { worldApex } = await import("../src/world-apex.mjs");
+    const made = await worldApex({ do: "leave-mark", args: { kind: "pocket-comet", count: 2, to: BAG } }, KEY);
+    assert.equal(made.error, undefined, JSON.stringify(made).slice(0, 500));
+    const took = await worldApex({ do: "take", args: { from: BAG, count: 1 } }, KEY);
+    assert.equal(took.error, undefined, JSON.stringify(took).slice(0, 500));
+    assert.deepEqual((await unitActs()).map((a) => a.action), ["units:make", "units:take"]);
+  } finally { delete process.env.WORLD_APEX; resetWorldGraph?.(); }
+});

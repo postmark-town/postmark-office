@@ -4077,7 +4077,8 @@ export async function journalWithdraw({ by, slug, household, cause = null, guard
     // judged under the chest's own lock inside this write's transaction
     // (chest-lock.mjs § chestEmptyGuard), so no give or stock can slip contents
     // in behind the decision. Any other mark withdraws exactly as before.
-    const isChest = markClassOf(live.find((m) => m.id === id) ?? canon.marks.find((m) => m.id === id)) === "chest";
+    // ANY HOLDER, by the holder property (LOGOS v2, O2; review-610 B2), not a class named chest
+    const isChest = (await import("./kind-holding.mjs")).isHolderMark(live.find((m) => m.id === id) ?? canon.marks.find((m) => m.id === id), classProperty);
     const chestGuard = isChest ? (await import("./chest-lock.mjs")).chestEmptyGuard({ chest: id }) : null;
     // `asked` (WLD-27 A): the door's own check that must hold in this same
     // transaction — the public withdrawal's escrow, read under the mark's lock.
