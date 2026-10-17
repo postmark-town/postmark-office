@@ -127,16 +127,13 @@ test("2 · OFF: the town-only hint does not offer chest among what a resident ma
 test("3 · OFF, behaviourally: a spawned office's GET /world/chests answers no chest and says why", { timeout: 60_000 }, async (t) => {
   const { spawn } = await import("node:child_process");
   const { mkdtempSync } = await import("node:fs");
-  const { fixtureDb } = await import("./fixture.mjs");
   const { bootOnFreePort } = await import("./spawn-office.mjs");
   const ROOT = new URL("..", import.meta.url).pathname.replace(/^\/(\w:)/, "$1");
   const tmp = mkdtempSync(join(tmpdir(), "chests-candy-flag-"));
-  const db = join(tmp, "office.db");
-  fixtureDb(db).close();
   const env = { ...process.env, TOWN_CLONE: join(tmp, "no-clone"), WORLD_CLONE: join(tmp, "no-world"), TOWN_PUSH: "", OFFICE_READ_WORKERS: "0",
     WORLD_STORE_DB: join(tmp, "no-world.db"), WORLD_GRAPH_NONE: "1", TOWN_INDEX_READS: undefined, WORLD2_PG: undefined, WORLD2_PG_URL: undefined };
   delete env.WORLD_CHESTS_CANDY;
-  const { child, port } = await bootOnFreePort((p) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(p), "--db", db,
+  const { child, port } = await bootOnFreePort((p) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(p),
     "--oauth-db", join(tmp, "oauth.db"), "--roles-db", join(tmp, "roles.db")], { env, stdio: ["ignore", "pipe", "pipe"] }));
   t.after(async () => { if (child.exitCode === null) { const gone = new Promise((ok) => child.on("exit", ok)); child.kill(); await gone; } });
   const r = await fetch(`http://127.0.0.1:${port}/world/chests`);

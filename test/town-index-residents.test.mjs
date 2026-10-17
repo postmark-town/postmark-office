@@ -29,6 +29,10 @@ import { twinGolden, steady } from "./helpers/twin-golden.mjs";
 import { PSA_SLUG } from "../src/queries.mjs";
 import * as store from "../src/town-index-store.mjs";
 
+// The twins' record was taken with WLD-27's doors open (the doorstep's `holds`), and these suites are about the index,
+// not the flag: the offices they spawn inherit it open. Dark by default is chests-candy-flag.test.mjs's.
+process.env.WORLD_CHESTS_CANDY = "1";
+
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const TWINS = twinGolden("town-index-residents");
 const tmp = mkdtempSync(join(tmpdir(), "town-index-residents-"));

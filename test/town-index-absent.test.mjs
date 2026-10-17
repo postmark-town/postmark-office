@@ -25,6 +25,10 @@ import { twinGolden, steady } from "./helpers/twin-golden.mjs";
 import { townClone, townModuleUrl } from "./fixture-paths.mjs";
 import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 
+// The twins' record was taken with WLD-27's doors open (the doorstep's `holds`), and these suites are about the index,
+// not the flag: the offices they spawn inherit it open. Dark by default is chests-candy-flag.test.mjs's.
+process.env.WORLD_CHESTS_CANDY = "1";
+
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const TWINS = twinGolden("town-index-absent");
 const tmp = mkdtempSync(join(tmpdir(), "town-index-absent-"));
