@@ -342,9 +342,6 @@ let BASE = null; // set per office, since each one is handed a different port
 
 async function withOffice(env, fn) {
   const dir = tempDir("postmark-apex-srv-");
-  const officeDb = join(dir, "fixture.db");
-  const { fixtureDb } = await import("./fixture.mjs");
-  fixtureDb(officeDb).close();
   const port = await freePort();
   BASE = `http://127.0.0.1:${port}`;
   // The child gets its OWN temp and its OWN oauth.db. Without the first it
@@ -353,7 +350,7 @@ async function withOffice(env, fn) {
   // second it opens the CHECKOUT's oauth.db (server.mjs defaults `--oauth-db`
   // to the office root), which is a live file the developer's own office holds:
   // a test must not write there, and two test offices must not write it at once.
-  const child = spawn(process.execPath, [new URL("../src/server.mjs", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"), "--port", String(port), "--db", officeDb, "--oauth-db", seedStaticKeys(join(dir, "oauth.db"), "apexkey=house-a:alpha")], {
+  const child = spawn(process.execPath, [new URL("../src/server.mjs", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"), "--port", String(port), "--oauth-db", seedStaticKeys(join(dir, "oauth.db"), "apexkey=house-a:alpha")], {
     env: { ...process.env, ...env, TOWN_CLONE: join(dir, "no-clone"), WORLD_CLONE: repo, ...W.rowsEnv(dbPath, dir), VOICES_LOG: join(dir, "voices.jsonl"), TOWN_PUSH: "", TEMP: dir, TMP: dir, TMPDIR: dir },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -480,8 +477,9 @@ test("the slim: rounds three and four take the listing to six; world_note and wo
     // transport door with no register semantics and two world flats that have
     // no apex twin yet (the standing ruling: a delist must never hide a
     // capability with no other door).
-    assert.deepEqual([...names].sort(), ["household", "town", "upload_media", "world", "world_investigate", "world_note"]);
-    assert.equal(names.length, 6);
+    // POS-632 PR-6 (Darko 2026-10-14 20:50): the doorstep joins as the fourth apex, the apex of apexes.
+    assert.deepEqual([...names].sort(), ["doorstep", "household", "town", "upload_media", "world", "world_investigate", "world_note"]);
+    assert.equal(names.length, 7);
   });
 });
 
@@ -1840,16 +1838,39 @@ test("a class that opens a verb to two kinds keeps both — the human's grant su
 // `since_crossing`; the old spelling answers one cycle with the contract's
 // `renamed` pointer beside the same answer.
 
-test("POS-70 · `since_crossing` is the crossing cursor, and `since` answers the same read with a pointer for one cycle", async () => {
+test("POS-632 W3 · both crossing numbers still answer the same read for one train, each with a renamed row pointing at the one cursor", async () => {
   on();
-  const now = await worldApex({ x: String(A.x), y: String(A.y), since_crossing: 1 }, null);
+  const sc = await worldApex({ x: String(A.x), y: String(A.y), since_crossing: 1 }, null);
   const old = await worldApex({ x: String(A.x), y: String(A.y), since: 1 }, null);
-  assert.ok(!now.error, JSON.stringify(now).slice(0, 300));
-  assert.equal(now.renamed, undefined, "the new name carries no pointer");
-  assert.deepEqual(old.renamed?.map((r) => [r.field, r.now]), [["since", "since_crossing"]]);
-  const { renamed: _r, ...oldBody } = old;
-  assert.deepEqual(Object.keys(oldBody).sort(), Object.keys(now).sort(), "the same read under either name");
-  assert.deepEqual(oldBody.happened ?? null, now.happened ?? null);
+  assert.ok(!sc.error, JSON.stringify(sc).slice(0, 300));
+  assert.deepEqual(sc.renamed?.map((r) => [r.field, r.answers_until]), [["since_crossing", "train/2026-w44"]]);
+  assert.deepEqual(old.renamed?.map((r) => r.field), ["since (a crossing number)"]);
+  for (const r of [...sc.renamed, ...old.renamed]) assert.match(r.now, /since: "<cursor>"/);
+  const { renamed: _a, ...scBody } = sc;
+  const { renamed: _b, ...oldBody } = old;
+  assert.deepEqual(Object.keys(oldBody).sort(), Object.keys(scBody).sort(), "the same read under either number");
+  assert.deepEqual(oldBody.happened ?? null, scBody.happened ?? null);
+});
+
+test("POS-632 · since: takes the cursor; a string that is not one is refused by name", async () => {
+  on();
+  const bad = await worldApex({ x: String(A.x), y: String(A.y), since: "yesterday" }, null);
+  assert.equal(bad.code, 422);
+  assert.match(bad.defect, /the cursor your last answer handed you/);
+  const ok = await worldApex({ x: String(A.x), y: String(A.y), since: "c1.250.1792022882579.18234" }, null);
+  assert.ok(!ok.error, JSON.stringify(ok).slice(0, 300));
+  assert.equal(ok.renamed, undefined, "the cursor is the new word: no pointer");
+});
+
+test("POS-632 W3 · the say room's millisecond since still answers, with a renamed row; a top-level cursor carries its clock", async () => {
+  on();
+  const old = await worldApex({ read: "say", args: { since: 1 } }, KEY_ALPHA);
+  assert.ok(!old.error, JSON.stringify(old).slice(0, 300));
+  assert.deepEqual(old.renamed?.map((r) => r.field), ["args.since (milliseconds)"]);
+  const cur = await worldApex({ read: "say", since: "c1.250.1.5" }, KEY_ALPHA);
+  assert.ok(!cur.error, JSON.stringify(cur).slice(0, 300));
+  assert.equal(cur.renamed, undefined);
+  assert.equal((await worldApex({ read: "say", since: "nope" }, KEY_ALPHA)).code, 422);
 });
 
 test("POS-70 · both spellings at once is refused by name — one cursor, one word", async () => {
@@ -1858,6 +1879,8 @@ test("POS-70 · both spellings at once is refused by name — one cursor, one wo
   assert.equal(r.error, "bounce");
   assert.equal(r.code, 422);
   assert.match(r.defect, /both "since" and "since_crossing"/);
+  const both = await worldApex({ x: String(A.x), y: String(A.y), since: "c1.250.1.5", since_crossing: 2 }, null);
+  assert.equal(both.code, 422, "a cursor beside a crossing number is two cursors");
 });
 
 test("POS-70 · GET /world/apex carries every field the apex declares — `read:` and the cursor used to be dropped in silence", async () => {
@@ -1913,4 +1936,38 @@ test("THE ARENA IS CLOSED: do: strike and do: loot answer \"the arena is closed\
     if (was === undefined) delete process.env.WORLD_DYNAMIC_DB; else process.env.WORLD_DYNAMIC_DB = was;
   }
   assert.equal(existsSync(dyn), false, "an arena verb at the apex created dynamic.db");
+});
+
+// ── LOGOS v2, lane O2 · leave-mark { kind, count, to } through the apex's do: ──
+//
+// The apex dispatches leave-mark to the flat door, and a `to:` there is the
+// kind door's (world-kinds.mjs). Its first refusals are the class law's, asked
+// before any record is read — so the answers below can only come from the kind
+// door, reached through the apex's own gate and dispatch.
+test("O2 · do: leave-mark { kind, count, to } reaches the kind door through the apex: an unknown kind and a makers-false kind refuse by the class law", async () => {
+  on();
+  const law = [
+    { id: "the-town/resident", by: "the-town", kind: "sited", tier: "constitution", at: { x: 2400, y: 2400 }, extent: { w: 10, h: 10 },
+      body: "A household's living voice.",
+      props: { class: "resident", class_version: 5, ambient: true, actions: [{ action: "leave-mark", residue: "the-town/sound" }] } },
+  ];
+  const path = join(repo, "apex-world-o2-kinds.db");
+  buildStore([...MARKS, ...law], path);
+  const { reloadLawSnapshot, resetLawSnapshot, LAW_REFRESH_SQLS } = await import("../src/law-snapshot.mjs");
+  const row = (key, data) => ({ number: 300, tag_sha: "9".repeat(40), newest: 300, kind: "class", key, data: { class: key, ...data } });
+  const prow = (klass, name, dflt) => ({ number: 300, tag_sha: "9".repeat(40), newest: 300, kind: "property", key: `${klass}/${name}`, data: { class: klass, parent: null, name, tier: "constitution", default: dflt, id: `the-town/${klass}-${name}` } });
+  const rows = [row("postmark-node", {}), row("mark", { extends: "postmark-node" }), row("sited", { extends: "mark" }), row("portal-ground", { extends: "sited" }),
+    row("vehicle", { extends: "portal-ground" }), prow("postmark-node", "makers", false), prow("sited", "makers", true), prow("portal-ground", "makers", false)];
+  await reloadLawSnapshot({ force: true, query: async (sql) => ({ rows: sql === LAW_REFRESH_SQLS.pin ? [{ newest: 300, pinned: 300 }] : rows }) });
+  try {
+    await withStore(path, async () => {
+      const unknown = await worldApex({ do: "leave-mark", args: { kind: "no-such-kind", count: 2, to: "alpha" } }, KEY_ALPHA);
+      assert.equal(unknown.did, "leave-mark", JSON.stringify(unknown).slice(0, 300));
+      assert.match(String(unknown.defect), /no kind "no-such-kind" in the law/, "the kind door's own refusal, through the apex");
+      const vehicle = await worldApex({ do: "leave-mark", args: { kind: "vehicle", count: 1, to: "alpha" } }, KEY_ALPHA);
+      assert.match(String(vehicle.defect), /"vehicle" is the town's to make/);
+      const own = await worldApex({ do: "leave-mark", args: { kind: "vehicle", count: 1, to: "alpha", body: "mine" } }, KEY_ALPHA);
+      assert.match(String(own.defect), /carries no body/, "a count carries nothing of its own, said before the class law");
+    });
+  } finally { resetLawSnapshot(); }
 });

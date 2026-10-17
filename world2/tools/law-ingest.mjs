@@ -62,6 +62,7 @@ import { join, resolve, relative } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 
 import { actionEntriesOf } from "../../src/world-store.mjs";
+import { classNodeNameOf, dialsOfClassNode, extendsFromMarks, isSited, kindFieldOf, propertyParentId } from "../../src/world-grants.mjs"; // the kind rung (LOGOS v2, O1)
 
 export const LAW_REPO_KEY = "world-law"; // projection_heads.repo for this pen
 
@@ -91,12 +92,13 @@ async function readersOf(lawRepo) {
     import(toolUrl(lawRepo, "marks-fold.mjs")),
     entryLawReader(),
   ]);
-  return { loadMarks: fold.loadMarks, termsAt: enterExit.termsAt, entryLawOf: enterExit.entryLawOf };
+  return { loadMarks: fold.loadMarks, termsAt: enterExit.termsAt, entryLawOf: enterExit.entryLawOf,
+    lossyValues: fold.lossyValues, lossyMessage: fold.lossyMessage };
 }
 
 // ── the ONE vendored predicate ───────────────────────────────────────────────
 //
-// VENDOR SHIM. Source: keeminlee/postmark-world `tools/mark-lint.mjs` lines
+// VENDOR SHIM. Source: postmark-town/postmark-world `tools/mark-lint.mjs` lines
 // 114–124 at world commit c701988f9ff937661297a8acc87a48925ba3b37f (blob
 // 68b1e35a67522cb03488cd8d8b940231d769f0c5), where it is `standsInTheWorks` +
 // `isClassDeclaration`. The world does not export it — it is a `const` inside a
@@ -123,8 +125,11 @@ const standsInTheWorks = (rec, byId) => {
   }
   return false;
 };
+// In either form (LOGOS v2, O1): the old form names the class in `class:`; the
+// new form is `kind: class` and names it by its own slug (ruled 16:02).
 const isClassDeclaration = (m, byId) =>
-  m.by === "the-town" && m.tier === "constitution" && m.class !== undefined && standsInTheWorks(m, byId);
+  m.by === "the-town" && m.tier === "constitution" && (m.class !== undefined || kindFieldOf(m) === "class")
+  && classNodeNameOf(m) != null && standsInTheWorks(m, byId);
 
 // A mark record carries `_dir` as an ABSOLUTE path on the machine that parsed it.
 // Left in `data` it would make the projection machine-dependent — two honest
@@ -228,7 +233,7 @@ const jsonSafe = (v) => JSON.parse(JSON.stringify(v ?? null));
  */
 export async function deriveLaw({ lawRepo }) {
   const repo = resolve(lawRepo);
-  const { loadMarks, termsAt } = await readersOf(repo);
+  const { loadMarks, termsAt, lossyValues, lossyMessage } = await readersOf(repo);
 
   const marksDir = join(repo, "WORLD", "marks");
   if (!existsSync(marksDir)) throw new Error(`no WORLD/marks under ${repo} — is this a world-law checkout?`);
@@ -243,8 +248,16 @@ export async function deriveLaw({ lawRepo }) {
   // whole record the world's own loader built (dials, implements, actions,
   // extends, version, body — the fields that make a class mark law).
   const declarations = marks.filter((m) => isClassDeclaration(m, byId));
+  // A class's DIALS are its property nodes first, its old `dials:` second (LOGOS
+  // v2, W1 G3/G5), so the row carries the one merged map and every reader of a
+  // class row's `dials` reads a dial in either form.
+  const childrenOf = new Map();
+  for (const m of marks) if (m._parentMarkId) { if (!childrenOf.has(m._parentMarkId)) childrenOf.set(m._parentMarkId, []); childrenOf.get(m._parentMarkId).push(m); }
   for (const m of declarations) {
-    push("class", relPath(repo, join(m._dir, "mark.md")), String(m.class), recordData(m));
+    const data = recordData(m);
+    const dials = dialsOfClassNode(m, childrenOf.get(m.id));
+    if (dials) data.dials = dials;
+    push("class", relPath(repo, join(m._dir, "mark.md")), String(classNodeNameOf(m)), data);
   }
 
   // ── kind: grant ────────────────────────────────────────────────────────────
@@ -268,8 +281,8 @@ export async function deriveLaw({ lawRepo }) {
   for (const m of declarations) {
     const path = relPath(repo, join(m._dir, "mark.md"));
     for (const entry of actionEntriesOf({ props: m })) {
-      push("grant", path, grantKey(m.class, entry),
-        { class: String(m.class), ...entry, from: m.id });
+      push("grant", path, grantKey(classNodeNameOf(m), entry),
+        { class: String(classNodeNameOf(m)), ...entry, from: m.id });
     }
   }
 
@@ -294,13 +307,36 @@ export async function deriveLaw({ lawRepo }) {
   // LAST for classPredicates, the FIRST for dialNode's `LIMIT 1` — and `ord`
   // (the loader's order, which is the order the hydrator writes its edges in)
   // lets law-classes.mjs answer the same way.
-  const isGeometric = (m) => m?.kind === "sited" || m?.kind === "parcel";
-  const classOfId = new Map(declarations.map((m) => [m.id, String(m.class)]));
+  const lineage = extendsFromMarks(marks);
+  const isGeometric = (m) => isSited(m, lineage);
+  const classOfId = new Map(declarations.map((m) => [m.id, String(classNodeNameOf(m))]));
   marks.forEach((m, ord) => {
     const klass = classOfId.get(m._parentMarkId);
     if (klass === undefined || isGeometric(m) || m.slot === undefined || m.slot === null) return;
     push("predicate", relPath(repo, join(m._dir, "mark.md")), `${klass}/${m.slot}/${m.id}`,
       { class: klass, slot: m.slot, value: m.value ?? null, id: m.id, ord });
+  });
+
+  // ── kind: property ─────────────────────────────────────────────────────────
+  // A class's PROPERTY NODES (LOGOS v2, lane O1; classes.md § Property: "The
+  // four fields of a property are fixed … a name, a tier, a default and a
+  // body", and "A property may have child properties, each with its own tier").
+  // A `kind: property` mark filed under its class node is the class's own, and
+  // properties nest: one filed under a property node is that property's child,
+  // to any depth (holder → capacity → min, max; holder → open). The row names
+  // its class, its own name and its immediate parent property's name.
+  // KEYED BY (class, the names down from the class): a class states each once.
+  const propName = (m) => String(m.name ?? m.slug ?? String(m.id).split("/").pop());
+  marks.forEach((m, ord) => {
+    if (kindFieldOf(m) !== "property") return;
+    // the parent is `of:` when the node names one (W1's flat layout), else its directory parent
+    const path = [propName(m)];
+    let up = byId.get(propertyParentId(m)), hops = 0;
+    while (up && kindFieldOf(up) === "property" && hops++ < 16) { path.unshift(propName(up)); up = byId.get(propertyParentId(up)); }
+    const klass = up ? classOfId.get(up.id) : undefined;
+    if (klass === undefined) return;
+    push("property", relPath(repo, join(m._dir, "mark.md")), `${klass}/${path.join("/")}`,
+      { class: klass, parent: path.length > 1 ? path[path.length - 2] : null, name: path[path.length - 1], tier: m.tier ?? null, default: m.default ?? null, id: m.id, ord });
   });
 
   // ── kind: threshold ────────────────────────────────────────────────────────
@@ -386,8 +422,37 @@ export async function deriveLaw({ lawRepo }) {
   rows.sort((a, b) => (a.kind === b.kind ? (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
     : (a.kind < b.kind ? -1 : 1)));
   assertUniqueKeys(rows);
-  return { rows };
+
+  // ── A LAW THE PARSER WOULD READ DIMINISHED (POS-619) ──────────────────────
+  // The class marks are LAW, so a dial reaches the store here and nowhere else
+  // (marks-ingest skips them). The world's parser keeps what it can read and
+  // drops the rest without a word, so `dials: { stolen: true, clue: "…" }`
+  // (bare keys) would project as {} and the class would read as untouched. Every
+  // mark.md a row was derived from is read raw and asked with the checkout's
+  // OWN helper (marks-fold.mjs § lossyValues, § lossyMessage: the lint's words).
+  // A snapshot cannot hold one class back, so a hit refuses the WHOLE sha
+  // (`lossyRefusal`, main below): nothing is written and the law stays where
+  // it was (Wright 2026-10-14, G1). A checkout before world #204 has no helper,
+  // and `lossyChecked` says so.
+  const lossyChecked = typeof lossyValues === "function" && typeof lossyMessage === "function";
+  const lossy = [];
+  if (lossyChecked) {
+    for (const path of [...new Set(rows.map((r) => r.path).filter((x) => x?.endsWith("/mark.md")))].sort()) {
+      const found = lossyValues(readFileSync(join(repo, path), "utf8"));
+      if (found.length) lossy.push({ path, sentences: found.map((l) => lossyMessage(l)) });
+    }
+  }
+  return { rows, lossy, lossyChecked };
 }
+
+/** The refusal for a law with a value the parser would lose, or null. PURE. */
+export function lossyRefusal(lawSha, lossy) {
+  if (!lossy?.length) return null;
+  return [`REFUSED: the law at ${lawSha} carries ${lossy.length} mark(s) with a value the parser would silently lose, ` +
+    "so law_projection would hold less than the law says. Nothing was written; the law stays where it was (POS-619).",
+  ...lossy.flatMap(({ path, sentences }) => sentences.map((t) => `  ${path}: ${t}`))].join("\n");
+}
+export const LAW_LOSSY_NOT_CHECKED = "[law-ingest] lossy values: NOT CHECKED — this checkout's marks-fold predates world #204 (no lossyValues/lossyMessage) (POS-619)";
 
 /**
  * `law_projection`'s primary key is (law_sha, kind, key), so two derived rows
@@ -576,7 +641,14 @@ async function main() {
     process.exit(2);
   }
   const lawSha = assertSha(lawRepo, declared);
-  const { rows } = await deriveLaw({ lawRepo });
+  const { rows, lossy, lossyChecked } = await deriveLaw({ lawRepo });
+  if (!lossyChecked) console.error(LAW_LOSSY_NOT_CHECKED);
+  const refusal = lossyRefusal(lawSha, lossy);
+  if (refusal) {
+    console.error(refusal);
+    process.exitCode = 1;
+    return;
+  }
   const census = censusOf(rows);
   const blessed = flag("--blessed");
   const summary = blessed

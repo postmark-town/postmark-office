@@ -176,6 +176,7 @@ const ROSTER = {
   // imports the town engine, reads the store, spawns a mint or touches a key.
   "tools/bug-stage-plan.mjs": { args: [], env: NO_PG, code: 1, needle: "--town <town-clone> is required" },
   "tools/post-award-plan.mjs": { args: [], env: { ...NO_PG, OFFICE_KEEP: undefined, INVOCATION_ID: undefined }, code: 1, needle: "--town <town-clone> is required" },
+  "tools/quest-pay-plan.mjs": { args: [], env: { ...NO_PG, OFFICE_KEEP: undefined, INVOCATION_ID: undefined }, code: 1, needle: "--town <town-clone> is required" },
   // The offline agent view (Posts phase 2): no --out, so it refuses before it
   // drives any door or writes a page.
   "tools/agent-view.mjs": { args: [], env: NO_PG, code: 2, needle: "--out <file.html> is required" },
@@ -205,6 +206,7 @@ const ROSTER = {
   // A safe entry proof for a tool that SIGNS: no --town, so it refuses before it
   // reads a plan, spawns a mint or touches a key. The needle is that refusal.
   "deploy/registry-file.mjs": { args: [], code: 2, needle: "usage: registry-file.mjs <path>" },
+  "deploy/keep-history.mjs": { args: [], code: 2, needle: "usage: keep-history.mjs write" },
   "deploy/welcome-pass.mjs": { args: [], code: 1, needle: "--town <town-clone> is required" },
   "deploy/settle-pass.mjs": { args: [], code: 1, needle: "--town <town-clone> is required" },
   "tools/rekey-household.mjs": { args: [], code: 1, needle: "--from <slug> --to <slug> --name" },
@@ -260,6 +262,7 @@ const ROSTER = {
   // No --tree: stops on usage before any git read or Postgres connect (POS-242).
   "world2/tools/rehearse.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: rehearse.mjs" },
   "world2/tools/retire-unpublished.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: retire-unpublished.mjs" },
+  "world2/tools/return-past-takes.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: return-past-takes.mjs" },
   // The calendar's rebuild (POS-207): no --dry-run, so it refuses before it
   // opens any connection — it has no write mode at all.
   "world2/tools/events-rebuild.mjs": { args: [], env: NO_PG, code: 2, needle: "only --dry-run exists" },
@@ -271,6 +274,8 @@ const ROSTER = {
   "world2/tools/earpiece-deliver.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: earpiece-deliver.mjs --run" },
   // No --world-repo: stops on usage before any git or Postgres (POS-142 Proposal B).
   "world2/tools/mark-carried-backfill.mjs": { args: [], env: NO_PG, code: 2, needle: "--world-repo <checkout> is required" },
+  // No --world-repo: stops on usage before any git or Postgres (POS-612, 075).
+  "world2/tools/amend-carried.mjs": { args: [], env: NO_PG, code: 2, needle: "--world-repo <checkout> is required" },
   "world2/tools/review-rule.mjs": { args: [], env: NO_PG, code: 2, needle: "review-rule.mjs: which claim?" },
   "world2/tools/roll-ingest.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: roll-ingest.mjs" },
   "world2/tools/seed-import.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: seed-import.mjs" },

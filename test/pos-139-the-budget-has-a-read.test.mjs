@@ -22,26 +22,22 @@ import assert from "node:assert/strict";
 import { readFileSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { DatabaseSync } from "node:sqlite";
 import { Bouncer, WORLD_WRITE_VERBS, BOUNCER_LIMITS, townDayWindow } from "../src/bouncer.mjs";
 import { householdStanding, HOUSEHOLD_READS } from "../src/household-apex.mjs";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 
 const quiet = () => {};
 const HOUSE = "keemin";
 
 const dir = mkdtempSync(join(tmpdir(), "postmark-pos139-"));
-const dbPath = join(dir, "fixture.db");
-fixtureDb(dbPath).close();
+const town = fixtureTown();
 // The doors below run in this process and read their town index from a store
 // seeded from this fixture (POS-268, office-under-test.mjs).
-const IX = await indexStore(dbPath);
+const IX = await indexStore(town);
 const IX_RESTORE = await IX.useInProcess();
 test.after(async () => { await IX_RESTORE(); await IX.stop(); });
-const db = new DatabaseSync(dbPath, { readOnly: true });
 after(() => {
-  db.close();
   rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
@@ -224,7 +220,7 @@ test("the standing read carries world_writes on BOTH household tiers, and its de
   // A settled resident, and a house still at the harbor. The bouncer keys on
   // the HOUSEHOLD, so the budget is the same read at both tiers — a harbor
   // household writing to the world is charged exactly like a settled one.
-  const settled = await householdStanding({ household: HOUSE, handles: new Set(["wright"]) }, { ...ctx, db });
+  const settled = await householdStanding({ household: HOUSE, handles: new Set(["wright"]) }, ctx);
   assert.equal(settled.tier, "resident");
   const atHarbor = await householdStanding({ household: HOUSE, handles: new Set(["not-yet"]) }, ctx);
   assert.equal(atHarbor.tier, "harbor");
@@ -256,7 +252,7 @@ test("the budget rides the HOUSEHOLD tier only — a berth or visitor has no cou
 // ── the silence this read could fail into ───────────────────────────────────
 //
 // The block is a garnish: a ctx with no `worldWriteBudget` simply has none, so
-// every unit test that hands householdStanding a bare `{ db }` keeps passing.
+// every unit test that hands householdStanding a bare ctx keeps passing.
 // That is also how this read could quietly stop answering in production without
 // a single suite going red — so the wiring is asserted from the SOURCE, the way
 // HOUSEHOLD_READ_FIELDS' own falsifier does.

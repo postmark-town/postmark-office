@@ -42,6 +42,15 @@
 // gate, the key desk's `key.ghId` gate) reads the same object it read before.
 // test/static-keys.test.mjs pins it against the old parse for every shape.
 //
+// ── RETIRING ONE (POS-604) ──────────────────────────────────────────────────
+//
+// A static key ends when its row is deleted, but a deleted row is exactly what
+// the import writes back from OFFICE_KEYS. So retiring leaves a `retired` row
+// on the same hash (RETIRED_KIND below; src/static-keys-retire.mjs says how, and
+// deploy/DEPLOY.md § Retiring a static key says how to run it). The import
+// refuses a retired hash by name. A key hand-deleted before this existed has no
+// row, so nothing protects it: take its entry out of the OFFICE_KEYS you import.
+//
 // ── NOTHING SECRET LEAVES ───────────────────────────────────────────────────
 //
 // A row holds sha256(key), base64url, as every other token row does; the key
@@ -53,6 +62,17 @@ import { sha256 } from "./oauth.mjs"; // the one hash every tokens row is keyed 
 
 /** The kind a static row carries in the tokens table. */
 export const STATIC_KIND = "static";
+
+/**
+ * The kind a RETIRED static key's row carries (POS-604). Retiring deletes the
+ * `static` row and writes this row in its place, keyed on the same token_hash
+ * and keeping the nonsecret household, handles and gh_id the operator selects
+ * by (src/static-keys-retire.mjs, tools/static-keys-retire.mjs). No bearer
+ * reader matches it (each filters its own kind) and the sweep skips it (NULL
+ * expires). It is the record the import consults, so a retired key cannot be
+ * written back from OFFICE_KEYS.
+ */
+export const RETIRED_KIND = "retired";
 
 /**
  * OFFICE_KEYS -> one entry per key, in the boot parse's exact semantics (the
@@ -128,6 +148,14 @@ const sameRow = (row, { household, handles, ghId }) =>
  * Static rows the spec does not name are counted and left alone: the import
  * never revokes.
  *
+ * A key whose hash is held by a RETIRED row (POS-604, tools/static-keys-retire)
+ * is refused BY NAME (`retired`: "<household>:<handles>", never the key) and
+ * counted in `retired_refused`; the other eligible entries are still written.
+ * `outcome` says which of three things happened: "complete"; "partial" (some
+ * entries were refused as retired, the rest COMMITTED); "rolled_back" (a foreign
+ * kind owned a hash, so nothing was written, even if a retired entry also
+ * appeared). A foreign-kind refusal always wins over a partial one.
+ *
  * `dry` reads and counts and writes nothing. Answers counts and the households
  * named, never a key or a hash.
  */
@@ -135,12 +163,13 @@ export async function importStaticKeys(odb, spec, { dry = false, now = Math.floo
   const { keys, warnings, skipped } = parseOfficeKeys(spec);
   const P = asPaper(odb);
   const plan = async (t) => {
-    const out = { entries: keys.size, skipped, added: 0, replaced: 0, unchanged: 0, refused: 0, not_in_spec: 0, households: [], warnings };
+    const out = { entries: keys.size, skipped, added: 0, replaced: 0, unchanged: 0, refused: 0, retired_refused: 0, retired: [], outcome: "complete", not_in_spec: 0, households: [], warnings };
     const named = new Set();
     for (const [token, entry] of keys) {
       const args = staticRowArgs(token, entry, now);
       named.add(args[0]);
       const row = await t.get("SELECT kind, household, handles, gh_id FROM tokens WHERE token_hash = ?", args[0]);
+      if (row && row.kind === RETIRED_KIND) { out.retired_refused += 1; out.retired.push(`${entry.household}:${entry.handles.join(",")}`); continue; }
       if (row && row.kind !== STATIC_KIND) { out.refused += 1; continue; }
       if (row && sameRow(row, entry)) { out.unchanged += 1; continue; }
       if (row) { out.replaced += 1; if (!dry) await t.run("DELETE FROM tokens WHERE token_hash = ? AND kind = 'static'", args[0]); }
@@ -150,6 +179,7 @@ export async function importStaticKeys(odb, spec, { dry = false, now = Math.floo
     for (const r of await t.all("SELECT token_hash FROM tokens WHERE kind = 'static'"))
       if (!named.has(r.token_hash)) out.not_in_spec += 1;
     out.households = [...new Set([...keys.values()].map((e) => e.household))].sort();
+    out.outcome = out.refused > 0 ? "rolled_back" : out.retired_refused > 0 ? "partial" : "complete";
     return out;
   };
   // A dry run reads through the paper and opens no transaction: it holds no pen.

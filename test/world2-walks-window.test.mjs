@@ -254,8 +254,15 @@ test("the clock bounces before the window does — ?at is still its own question
 test("an unordered read still bounces, window or no window", async () => {
   const outOfOrder = [ROWS[2], ROWS[0]]; // a ledger act after a live one
   const p = { query: async () => ({ rows: outOfOrder }) };
-  const { code, body } = await world2Serve("/world2/walks", new URLSearchParams("since=2026-01-01T00:00:00Z"), { p });
+  // The register's own sentence goes to the office's log, not the answer (POS-578).
+  const lines = [];
+  const was = console.error;
+  console.error = (...a) => { lines.push(a.join(" ")); };
+  let code, body;
+  try { ({ code, body } = await world2Serve("/world2/walks", new URLSearchParams("since=2026-01-01T00:00:00Z"), { p })); }
+  finally { console.error = was; }
   assert.equal(code, 500);
   assert.equal(body.error, "bounce");
-  assert.match(body.hint, /append order/);
+  assert.match(body.hint, /What failed is in the office's log, not in this answer/);
+  assert.match(lines.join("\n"), /append order/, "the log says which");
 });

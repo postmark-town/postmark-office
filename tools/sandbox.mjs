@@ -122,7 +122,7 @@ const readJson = (p, d = null) => { try { return JSON.parse(readFileSync(p, "utf
 export function layout(dir) {
   return {
     dir,
-    live: join(dir, "live"),               // the stand-in's folder: clones, office.db, keys, env files
+    live: join(dir, "live"),               // the stand-in's folder: clones, keys, env files
     seedFiles: join(dir, "seed-files"),    // the seed's copies of the office's file databases
     media: join(dir, "media"),             // the media endpoint's objects (R2 keys), served at /shelf/
     logs: join(dir, "logs"),
@@ -280,7 +280,7 @@ async function guardOrThrow(L, env, roles, store) {
 async function bootOffice(L, env, port, { logFile }) {
   const { awaitListening } = await importFrom(join(OFFICE, "test", "spawn-office.mjs"));
   const child = spawn(process.execPath, [join(OFFICE, "src", "server.mjs"), "--port", String(port),
-    "--db", join(L.live, "office.db"), "--oauth-db", join(L.live, "oauth.db"), "--roles-db", join(L.live, "roles.db")],
+    "--oauth-db", join(L.live, "oauth.db"), "--roles-db", join(L.live, "roles.db")],
   { cwd: OFFICE, env: { ...cleanEnv(), ...env }, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
   const { createWriteStream } = await import("node:fs");
   const out = createWriteStream(logFile, { flags: "a" });
@@ -472,9 +472,20 @@ async function seedThings(base, houses, log) {
     const key = houses[i].key;
     const by = h.residents[0];
     for (const t of h.things) {
-      const thing = await rest(base, "POST", "/world/marks", { key, body: {
-        by, slug: t.slug, kind: "sited", class: "thing", at: t.at, extent: { w: 1, h: 1 }, body: t.body, stamps: 0,
-      } });
+      // WHO MAY MAKE A THING is read from the class layer now (LOGOS v2, O1: its
+      // `makers`, no floor), and right after the seed's bless the office's class
+      // layer may still be the pre-bless one, where the new class nodes do not yet
+      // stand in the works. The door says so with a 503; the seed waits for the
+      // office's refresh (up to two minutes) rather than failing.
+      let thing = null;
+      for (let tries = 0; tries < 13; tries++) {
+        thing = await rest(base, "POST", "/world/marks", { key, body: {
+          by, slug: t.slug, kind: "sited", class: "thing", at: t.at, extent: { w: 1, h: 1 }, body: t.body, stamps: 0,
+        } });
+        if (!(thing.status === 503 && /could not be read/.test(String(thing.body?.defect ?? "")))) break;
+        log(`thing ${by}/${t.slug}: the class layer is not readable yet (${thing.body.defect}); waiting 10 s for the office's refresh`);
+        await new Promise((r) => setTimeout(r, 10_000));
+      }
       if (thing.status >= 300 || thing.body?.error) throw new Error(`the seed's thing ${t.slug} answered ${said(thing)}`);
       log(`thing ${by}/${t.slug} at ${t.at.x},${t.at.y}`);
     }
@@ -494,7 +505,7 @@ async function snapshot(L, store) {
   const env = readEnv(L);
   for (const repo of [env.TOWN_CLONE, env.WORLD_CLONE]) git(repo, "tag", "-f", SEED_TAG, "HEAD");
   mkdirSync(L.seedFiles, { recursive: true });
-  for (const f of ["office.db", "oauth.db", "roles.db"]) if (existsSync(join(L.live, f))) copyFileSync(join(L.live, f), join(L.seedFiles, f));
+  for (const f of ["oauth.db", "roles.db"]) if (existsSync(join(L.live, f))) copyFileSync(join(L.live, f), join(L.seedFiles, f));
   const su = await superuser(store.port);
   try {
     await su.query(`ALTER DATABASE ${SEED_DB} IS_TEMPLATE false`).catch(() => {});
@@ -765,7 +776,7 @@ async function resetTo(L) {
     for (const tag of git(repo, "tag", "-l", "settlement/S*").split("\n").filter(Boolean))
       if (gitQuiet(repo, "merge-base", "--is-ancestor", tag, SEED_TAG).status !== 0) git(repo, "tag", "-d", tag);
   }
-  for (const f of ["office.db", "oauth.db", "roles.db"]) if (existsSync(join(L.seedFiles, f))) copyFileSync(join(L.seedFiles, f), join(L.live, f));
+  for (const f of ["oauth.db", "roles.db"]) if (existsSync(join(L.seedFiles, f))) copyFileSync(join(L.seedFiles, f), join(L.live, f));
   rmSync(L.media, { recursive: true, force: true });
   mkdirSync(L.media, { recursive: true });
   say(`sandbox: reset to the seed in ${ms(t0)} (database ${DB} from ${SEED_DB}; town ${state.seed.town.slice(0, 9)}, world ${state.seed.world.slice(0, 9)})`);

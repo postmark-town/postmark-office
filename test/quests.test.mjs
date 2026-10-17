@@ -1,18 +1,18 @@
 // quests.test.mjs — the quest card's data path through the office.
 //
 // The rule itself lives in the town (tools/quest-progress.mjs, tested there);
-// what the office owns is the round trip: hydrate writes today's progress into
-// the index, questBoardFor reads it back and joins it against the registry with
+// what the office owns is the round trip: the ingest writes today's progress into
+// the town index, the quest board reads it back and joins it against the registry with
 // the town's OWN boardForHandle. These tests pin the part that can silently rot
 // — the columns. A dropped field here shows up as a card that says 3/5 and
 // names nobody, which is exactly the failure the field was added to fix.
 
-import test from "node:test";
+import test, { after } from "node:test";
 import assert from "node:assert/strict";
-import { DatabaseSync } from "node:sqlite";
-import { SCHEMA } from "../src/schema.mjs";
-import { questBoardFor } from "../src/queries.mjs";
+import { storeIndexPooled } from "../src/town-index-store.mjs";
 import { NO_TOWN, townClone, townModuleUrl } from "./fixture-paths.mjs";
+import { putValues, emptyTown, setMeta } from "./fixture.mjs";
+import { indexStore } from "./helpers/office-under-test.mjs";
 
 const TOWN = townClone(); // a real checkout — the office imports the town's tool live
 const SKIP = !TOWN && NO_TOWN;
@@ -25,17 +25,26 @@ const REGISTRY = JSON.stringify({
 });
 
 function dbWith(row, day) {
-  const db = new DatabaseSync(":memory:");
-  db.exec(SCHEMA);
+  const db = emptyTown();
   if (row) {
-    db.prepare(`INSERT INTO quest_progress
-      (handle, send, receive, house_size, house_send, house_receive, sent_to, heard_from)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(row.handle, row.send, row.receive, row.house_size, row.house_send, row.house_receive, row.sent_to, row.heard_from);
+    putValues(db, "quest_progress", [row.handle, row.send, row.receive, row.house_size, row.house_send, row.house_receive, row.sent_to, row.heard_from], ["handle", "send", "receive", "house_size", "house_send", "house_receive", "sent_to", "heard_from"]);
   }
   return db;
 }
 const meta = (day) => ({ quest_registry: REGISTRY, quest_day: day });
+
+// The boards are read from the store's town index (the suite's embedded store),
+// re-seeded with each case's rows and meta.
+const seated = emptyTown();
+const IX = await indexStore(seated);
+after(async () => { await IX.stop(); });
+async function boardFor(rows, m, handle, opts = {}) {
+  setMeta(rows, "quest_registry", m.quest_registry);
+  setMeta(rows, "quest_day", m.quest_day);
+  for (const k of Object.keys(seated)) seated[k] = rows[k] ?? [];
+  await IX.reseed();
+  return storeIndexPooled(TOWN, { env: IX.env }).questBoard(handle, opts);
+}
 const q = (board, id) => board.quests.find((x) => x.id === id);
 
 // the office zeroes a stale snapshot across midnight, so tests must use the
@@ -51,7 +60,7 @@ test("counted survives the round trip through the index", { skip: SKIP }, async 
     handle: "alice", send: 2, receive: 1, house_size: 1, house_send: 2, house_receive: 1,
     sent_to: JSON.stringify(["bob", "carol"]), heard_from: JSON.stringify(["dave"]),
   }, day);
-  const board = await questBoardFor(db, meta(day), "alice", TOWN);
+  const board = await boardFor(db, meta(day), "alice");
   assert.deepEqual(q(board, "correspond-send").counted, ["bob", "carol"]);
   assert.deepEqual(q(board, "correspond-receive").counted, ["dave"]);
 });
@@ -62,7 +71,7 @@ test("counted.length always equals progress — the card can't contradict its ba
     handle: "alice", send: 3, receive: 0, house_size: 1, house_send: 3, house_receive: 0,
     sent_to: JSON.stringify(["bob", "carol", "dave"]), heard_from: JSON.stringify([]),
   }, day);
-  const board = await questBoardFor(db, meta(day), "alice", TOWN);
+  const board = await boardFor(db, meta(day), "alice");
   for (const quest of board.quests) {
     assert.equal(quest.counted.length, quest.progress, `${quest.id}: ${quest.counted.length} names for ${quest.progress}/${quest.target}`);
   }
@@ -75,7 +84,7 @@ test("a pre-field row degrades to [] rather than 500ing", { skip: SKIP }, async 
     handle: "alice", send: 2, receive: 0, house_size: 1, house_send: 2, house_receive: 0,
     sent_to: null, heard_from: null,
   }, day);
-  const board = await questBoardFor(db, meta(day), "alice", TOWN);
+  const board = await boardFor(db, meta(day), "alice");
   assert.equal(q(board, "correspond-send").progress, 2, "the bar still reads");
   assert.deepEqual(q(board, "correspond-send").counted, []);
 });
@@ -86,14 +95,14 @@ test("malformed JSON in a column degrades to [] rather than 500ing", { skip: SKI
     handle: "alice", send: 1, receive: 0, house_size: 1, house_send: 1, house_receive: 0,
     sent_to: "{not json", heard_from: '"a string, not an array"',
   }, day);
-  const board = await questBoardFor(db, meta(day), "alice", TOWN);
+  const board = await boardFor(db, meta(day), "alice");
   assert.deepEqual(q(board, "correspond-send").counted, []);
   assert.deepEqual(q(board, "correspond-receive").counted, []);
 });
 
 test("a resident absent from the index reads a clean zero with empty lists", { skip: SKIP }, async () => {
   const day = await today();
-  const board = await questBoardFor(dbWith(null, day), meta(day), "nobody", TOWN);
+  const board = await boardFor(dbWith(null, day), meta(day), "nobody");
   for (const quest of board.quests) {
     assert.equal(quest.progress, 0);
     assert.deepEqual(quest.counted, []);
@@ -172,7 +181,7 @@ test("every quest row says whether it is measured — a number is measured, a nu
     handle: "alice", send: 2, receive: 1, house_size: 1, house_send: 2, house_receive: 1,
     sent_to: JSON.stringify(["bob", "carol"]), heard_from: JSON.stringify(["dave"]),
   }, day);
-  const board = await questBoardFor(db, mixedMeta(day), "alice", TOWN, BLIND_WORLD);
+  const board = await boardFor(db, mixedMeta(day), "alice", BLIND_WORLD);
 
   assert.equal(board.quests.length, 3, "the board is every registry row (BOARD_LAW), or this proves nothing");
   assert.equal(q(board, "correspond-send").measured, true);
@@ -209,7 +218,7 @@ test("`measured` is ADDITIVE — progress survives, null and all, for the reader
   // asked for the key to go, and a key removed is a shape change every reader
   // has to survive.
   const day = await today();
-  const board = await questBoardFor(dbWith(null, day), mixedMeta(day), "nobody", TOWN, BLIND_WORLD);
+  const board = await boardFor(dbWith(null, day), mixedMeta(day), "nobody", BLIND_WORLD);
 
   const uncounted = q(board, "walk-the-world");
   assert.ok("progress" in uncounted, "the `progress` key is still on the row");
@@ -232,7 +241,7 @@ test("a stale snapshot does not make a countable row unmeasured — the two are 
     handle: "alice", send: 4, receive: 0, house_size: 1, house_send: 4, house_receive: 0,
     sent_to: JSON.stringify(["bob", "carol", "dave", "erin"]), heard_from: JSON.stringify([]),
   }, day);
-  const board = await questBoardFor(db, mixedMeta("2000-01-01"), "alice", TOWN, BLIND_WORLD);
+  const board = await boardFor(db, mixedMeta("2000-01-01"), "alice", BLIND_WORLD);
   assert.equal(q(board, "correspond-send").progress, 0, "the stale snapshot is zeroed");
   assert.equal(q(board, "correspond-send").measured, true, "and it is still a row the fold can count");
   assert.equal(q(board, "walk-the-world").measured, false, "while the uncounted row is unchanged by the staleness");
@@ -246,7 +255,7 @@ test("a stale snapshot across midnight zeroes the names too, not just the bars",
   }, day);
   // meta says the snapshot is from a PREVIOUS town day → the office must not
   // serve yesterday's correspondents as though they counted today
-  const board = await questBoardFor(db, meta("2000-01-01"), "alice", TOWN);
+  const board = await boardFor(db, meta("2000-01-01"), "alice");
   assert.equal(q(board, "correspond-send").progress, 0);
   assert.deepEqual(q(board, "correspond-send").counted, []);
 });

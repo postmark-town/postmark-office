@@ -29,6 +29,7 @@ import { pathToFileURL } from "node:url";
 
 import { NO_WORLD, OFFICE_ROOT, worldClone } from "./fixture-paths.mjs";
 import { publishWorld } from "./helpers/world-rows.mjs";
+import { markClassOf } from "../src/world-grants.mjs";
 
 const CLONE = worldClone();
 const HAVE_CLONE = Boolean(CLONE) && existsSync(join(CLONE, "WORLD", "world-state.json")) && existsSync(join(CLONE, "tools", "vessel.mjs"));
@@ -64,6 +65,9 @@ before(async () => {
     const text = String(sql).replace(/\s+/g, " ");
     if (/max\(id\) AS hw, count\(\*\) AS n FROM acts/.test(text)) return { rows: [{ hw: null, n: "0" }] };
     if (/SELECT id, at, crossing, actor, action, payload FROM acts/.test(text)) return { rows: [] };
+    // The apex asks the store whose household each ground is (POS-350). This
+    // record holds no registry, so every handle is its own household.
+    if (/^SELECT handle, household FROM identities/.test(text)) return { rows: [] };
     throw new Error(`the record was asked something it does not answer: ${text.slice(0, 160)}`);
   } });
   worldState = JSON.parse(readFileSync(join(CLONE, "WORLD", "world-state.json"), "utf8"));
@@ -102,8 +106,11 @@ function assertNamesTheStops(r) {
   for (const e of r.affordable_at) {
     assert.deepEqual(Object.keys(e).sort(), ["at", "class", "mark"], `${e.mark}: the field's entry shape`);
     // `class` is the DOOR's own class off the fold, often null; never the vessel
-    // class put back in for a door that has none.
-    assert.equal(e.class, worldState.marks.find((m) => m.id === e.mark)?.class ?? null, `${e.mark}'s own class`);
+    // class put back in for a door that has none. Read in either form (LOGOS v2
+    // W2: her berth is `kind: vehicle` with no `class:` line), so the oracle is
+    // the office's resolver and not the raw field.
+    assert.equal(e.class, markClassOf(worldState.marks.find((m) => m.id === e.mark)) ?? null, `${e.mark}'s own class`);
+    if (e.mark !== vesselIdOf(service)) assert.notEqual(e.class, "vehicle", `${e.mark} is a stop, not the vessel`);
     assert.ok(Number.isFinite(e.at?.x) && Number.isFinite(e.at?.y), `${e.mark} stands somewhere: ${JSON.stringify(e.at)}`);
   }
   // Never the class, and never the promise that cannot be kept.

@@ -195,7 +195,7 @@ test("FALSIFIER 4b · houseForAccount's question does not reach a slug", () => {
   assert.equal(resolveHouse("starforge", REGISTRY, PINS, { via: VIA.ACCOUNT }).slug, null);
 });
 
-test("a house's own name and human find it, but only when asked by name", () => {
+test("a house's own name finds it, but only when asked by name (its private human never does: POS-609)", () => {
   const named = Object.entries(REGISTRY.households).find(([, r]) => r.name);
   assert.ok(named, "the fixture has a house with a nameplate");
   const [slug, rec] = named;

@@ -30,7 +30,7 @@ import { spawn } from "node:child_process";
 import { rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { seedStaticKeys } from "./helpers/static-keys.mjs";
 import { removeTempDir, tempDir } from "./helpers/temp-dir.mjs";
@@ -69,7 +69,7 @@ const EDITS = {
     "if (typeof payload?.body === 'string' && payload.body.startsWith('synthetic:') && Object.hasOwn(SYNTHETIC_THROWS, payload.body.slice(10))) " + THROW("payload.body.slice(10)")],
   "/src/world-settlement.mjs": ["export async function settlementOrFile({ asked = null, fileAnswer, engaged, pool, worldRepo, townRepo = null }) {",
     "if (typeof asked === 'string' && asked.startsWith('synthetic:') && Object.hasOwn(SYNTHETIC_THROWS, asked.slice(10))) " + THROW("asked.slice(10)")],
-  "/src/town-index-store.mjs": ["export async function storeAnswer(fn, { env = process.env, then = null } = {}) {",
+  "/src/town-index-store.mjs": ["export async function storeAnswer(fn, { env = process.env, then = null, statementTimeoutMs = null } = {}) {",
     "if (process.env.SYNTHETIC_TOWN_DOWN && (await import('node:fs')).existsSync(process.env.SYNTHETIC_TOWN_DOWN)) return { refused: UNREACHABLE };"],
 };
 export async function load(url, context, nextLoad) {
@@ -86,14 +86,13 @@ export async function load(url, context, nextLoad) {
 let ix = null, office = null;
 
 before(async () => {
-  const dbPath = join(tmp, "office.db");
-  fixtureDb(dbPath).close();
-  ix = await indexStore(dbPath, { db: "codes_in_j" });
+  const town = fixtureTown();
+  ix = await indexStore(town, { db: "codes_in_j" });
   const hooks = join(tmp, "hooks.mjs");
   writeFileSync(hooks, HOOKS);
   const register = join(tmp, "register.mjs");
   writeFileSync(register, `import { register } from "node:module";\nregister(${JSON.stringify(pathToFileURL(hooks).href)});\n`);
-  const child = spawn(process.execPath, ["--import", pathToFileURL(register).href, join(ROOT, "src", "server.mjs"), "--port", "0", "--db", dbPath,
+  const child = spawn(process.execPath, ["--import", pathToFileURL(register).href, join(ROOT, "src", "server.mjs"), "--port", "0",
     "--oauth-db", seedStaticKeys(join(tmp, "oauth.db"), `${KEY}=fixture-house:wright`), "--roles-db", join(tmp, "roles.db")], {
     env: { ...process.env, TOWN_CLONE: join(tmp, "no-clone-here"), WORLD_CLONE: join(tmp, "no-world-clone"), VOICES_LOG: join(tmp, "voices.jsonl"),
       TOWN_PUSH: "", WORLD_APEX: "1", WORLD_STORE_DB: join(tmp, "no-world.db"), SYNTHETIC_TOWN_DOWN: TOWN_DOWN, ...ix.env },

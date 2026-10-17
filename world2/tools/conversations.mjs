@@ -68,9 +68,9 @@
 // falsifier states this rather than reporting a green it did not earn.
 
 export const VENDOR = Object.freeze({
-  voices: { repo: "keeminlee/postmark-office", path: "src/voices.mjs",
+  voices: { repo: "postmark-town/postmark-office", path: "src/voices.mjs",
             blob: "e1004a5257f6b84756f0a28e22ea3a4cd3baa321", at: "207cdaa52314ffc4ab16109c10dddbead1c92bdd" },
-  journal: { repo: "keeminlee/postmark-office", path: "src/world-journal.mjs",
+  journal: { repo: "postmark-town/postmark-office", path: "src/world-journal.mjs",
              blob: "70c5a1f8ee751062678c696aee40975fcf969cd7", at: "207cdaa52314ffc4ab16109c10dddbead1c92bdd" },
 });
 

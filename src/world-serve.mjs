@@ -52,6 +52,7 @@ import { join } from "node:path";
 
 import { OFFICE_ROOT, containmentSpine } from "./world-store.mjs";
 import { NO_WORLD } from "./world-graph-db.mjs";
+import { isSited, PREDICATE_KINDS } from "./world-grants.mjs"; // the kind rung (LOGOS v2, O1)
 import { worldGraphSnapshot } from "./world-graph-snapshot.mjs";
 import { blessed, draftRefForKey, refExists } from "./world-branches.mjs";
 import { nextSettlementAttemptAt } from "./settlements.mjs";
@@ -169,7 +170,7 @@ export function markRecords(graph) {
       // publishing it here under the fold's field name would put a `parent` on
       // 309 marks the fold leaves bare, and every record comparison would read
       // as a disagreement about a field neither side disputes.
-      parent: p.explicit_parent ?? (a.subkind === "predicated" || a.subkind === "naming" ? p.parent_dir_mark ?? null : null),
+      parent: p.explicit_parent ?? (PREDICATE_KINDS.has(String(a.subkind ?? "")) ? p.parent_dir_mark ?? null : null),
       _ring_vertices: p.points ?? null,
     };
     if (a.x != null) rec.at = { x: a.x, y: a.y };
@@ -180,7 +181,25 @@ export function markRecords(graph) {
   return rows;
 }
 
-const GEOMETRIC = (m) => m?.kind === "sited" || m?.kind === "parcel";
+// SITED, in either form (LOGOS v2, O1): a `kind: thing` stands by its class's
+// lineage, read off the graph's own declarations (the hydrator stamps each
+// declaration's `class` and `extends`), once per graph.
+const LINEAGE = new WeakMap();
+function lineageIn(graph) {
+  if (!graph || typeof graph !== "object") return () => null;
+  let f = LINEAGE.get(graph);
+  if (!f) {
+    const ext = new Map();
+    graph.forEachNode?.((id, a) => {
+      const p = a?.props ?? {};
+      if (a?.kind === "mark" && p.declares && p.class != null && !ext.has(String(p.class))) ext.set(String(p.class), p.extends ?? null);
+    });
+    f = (n) => { const e = ext.get(String(n)); return e == null ? null : String(e); };
+    LINEAGE.set(graph, f);
+  }
+  return f;
+}
+const GEOMETRIC = (m, graph) => isSited(m, lineageIn(graph));
 
 /**
  * May the store answer a question asked AT A POINT?
@@ -224,7 +243,7 @@ export function pointAnswerable(snap, { x, y }, geom, { checkNearest = true } = 
 
   const areas = [];
   for (const m of snap.marks) {
-    if (!m.at || !GEOMETRIC(m) || !pointInRect(x, y, rect(m))) continue;
+    if (!m.at || !GEOMETRIC(m, snap.graph) || !pointInRect(x, y, rect(m))) continue;
     areas.push((m.extent?.w ?? 1) * (m.extent?.h ?? 1));
   }
   if (new Set(areas).size !== areas.length) return "equal-extent-tie";
@@ -232,7 +251,7 @@ export function pointAnswerable(snap, { x, y }, geom, { checkNearest = true } = 
 
   let best = Infinity, ties = 0;
   for (const m of snap.marks) {
-    if (!m.at || !GEOMETRIC(m)) continue;
+    if (!m.at || !GEOMETRIC(m, snap.graph)) continue;
     const d = Math.hypot(m.at.x - x, m.at.y - y);
     if (d < best) { best = d; ties = 1; } else if (d === best) ties++;
   }
@@ -263,7 +282,7 @@ export function markSpine(snap, id) { return containmentSpine(snap.graph, id); }
 export function fanUp(snap, id) {
   let n = 0;
   for (const m of snap.marks) {
-    if (!GEOMETRIC(m) || !m.at || m.id === id) continue;
+    if (!GEOMETRIC(m, snap.graph) || !m.at || m.id === id) continue;
     if (containmentSpine(snap.graph, m.id).includes(id)) n++;
   }
   return n;

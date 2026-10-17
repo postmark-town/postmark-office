@@ -142,7 +142,7 @@
 //
 // ── USAGE ───────────────────────────────────────────────────────────────────
 //
-//   git clone https://github.com/keeminlee/postmark-world.git /tmp/world-full
+//   git clone https://github.com/postmark-town/postmark-world.git /tmp/world-full
 //
 //   export PGHOST=localhost PGDATABASE=world2_dev PGUSER=world2_owner PGPASSWORD=…
 //   export WORLD2_CLEARING_URL=postgres://clearing_job:…@localhost/world2_dev
@@ -2166,7 +2166,7 @@ TO RE-FLOOR THE STORE (world2/tools/README.md § The seed — the sanctioned res
   for f in 001_tables 002_grants 003_falsifier_roles 004_marks_data 005_candle_tiling; do
     psql -f world2/schema/$f.sql
   done
-  git clone --depth 1 --branch sandbox/seed https://github.com/keeminlee/postmark-world.git /tmp/frozen
+  git clone --depth 1 --branch sandbox/seed https://github.com/postmark-town/postmark-world.git /tmp/frozen
   node world2/tools/seed-import.mjs --world-repo /tmp/frozen --tag sandbox/seed \\
     --town-sha 830a69963d8e4801ad4ed8bb80da38e79fd3fdbf --with-acts
   # then re-run the two projections at the frozen shas (law-ingest, stamp-ingest)

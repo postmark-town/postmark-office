@@ -227,9 +227,16 @@ test("a mark nobody stakes answers ZERO, and its k has no source to name", async
 
 test("A TORN INGEST REFUSES rather than folding with whichever k came back first", async () => {
   const torn = [pos("wright", "gh:67605380", 3), { ...pos("amber", "solo:a", 2), weight_k: 9 }];
-  const { code, body } = await stake(`mark=${MARK}`, fixturePool({ rows: torn }));
+  // What the fold said goes to the office's log, not the answer (POS-578).
+  const lines = [];
+  const was = console.error;
+  console.error = (...a) => { lines.push(a.join(" ")); };
+  let code, body;
+  try { ({ code, body } = await stake(`mark=${MARK}`, fixturePool({ rows: torn }))); }
+  finally { console.error = was; }
   assert.equal(code, 503);
-  assert.match(body.hint, /torn ingest/);
+  assert.match(body.hint, /What failed is in the office's log, not in this answer/);
+  assert.match(lines.join("\n"), /torn ingest/, "the log says which");
 });
 
 test("the two tree-only fields are named on the answer, and the note is 1.0's own sentence", async () => {

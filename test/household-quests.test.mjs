@@ -17,15 +17,12 @@
 
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { DatabaseSync } from "node:sqlite";
-import { SCHEMA } from "../src/schema.mjs";
 import { householdApex } from "../src/household-apex.mjs";
 import { questsRead } from "../src/household-stamps.mjs";
 import { NO_TOWN, townClone, townModuleUrl } from "./fixture-paths.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
+import { emptyTown, put, setMeta } from "./fixture.mjs";
+import { storeIndexPooled } from "../src/town-index-store.mjs";
 
 // A real town checkout — the office imports the town's own board rule live,
 // exactly as quests.test.mjs does, so "today" is the town's day and not ours.
@@ -41,8 +38,6 @@ const REGISTRY = JSON.stringify({
   ],
 });
 
-const dir = mkdtempSync(join(tmpdir(), "pm-hh-quests-"));
-
 // THE TWO-RESIDENT HOUSEHOLD, and the two must differ or the test proves
 // nothing: `architect` sorts first and has done nothing today; `wright` is the
 // one who wrote a letter and the one the caller names.
@@ -51,29 +46,20 @@ const dir = mkdtempSync(join(tmpdir(), "pm-hh-quests-"));
 // state — so the fallback is a placeholder nothing reads, never a second
 // opinion about what day it is.
 const day = townDay ? townDay() : "1970-01-01";
-const db = new DatabaseSync(join(dir, "quests.db"));
-db.exec(SCHEMA);
-const put = db.prepare("INSERT INTO meta VALUES (?, ?)");
-put.run("quest_registry", REGISTRY);
-put.run("quest_day", day);
-const progress = db.prepare(`INSERT INTO quest_progress
-  (handle, send, receive, house_size, house_send, house_receive, sent_to, heard_from)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
-progress.run("architect", 0, 0, 2, 1, 0, "[]", "[]");
-progress.run("wright", 1, 0, 2, 1, 0, JSON.stringify(["errant"]), "[]");
-// One hook, in this order: on Windows the directory cannot be removed while the
-// index is still open, and two hooks run in registration order.
-after(() => {
-  db.close();
-  rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-});
+const db = emptyTown();
+setMeta(db, "quest_registry", REGISTRY);
+setMeta(db, "quest_day", day);
+const progress = (handle, send, receive, house_size, house_send, house_receive, sent_to, heard_from) =>
+  put(db, "quest_progress", { handle, send, receive, house_size, house_send, house_receive, sent_to, heard_from });
+progress("architect", 0, 0, 2, 1, 0, "[]", "[]");
+progress("wright", 1, 0, 2, 1, 0, JSON.stringify(["errant"]), "[]");
 
 const KEY = { household: "keeminlee", handles: new Set(["architect", "wright"]) };
-const CTX = { db, meta: { quest_registry: REGISTRY, quest_day: day }, clone: TOWN, asOf: "test" };
+const CTX = { clone: TOWN, asOf: "test" };
 const send = (board) => (board.quests ?? []).find((q) => q.id === "correspond-send");
 
 // The doors below run in this process and read their town index from a store
-// seeded from this fixture (POS-268, office-under-test.mjs).
+// seeded from these rows (POS-268, office-under-test.mjs).
 const IX = await indexStore(db);
 const IX_RESTORE = await IX.useInProcess();
 test.after(async () => { await IX_RESTORE(); await IX.stop(); });
@@ -122,7 +108,13 @@ test("questsRead takes a HANDLE, not a key — the guess has nowhere to grow bac
   // no longer find a resident in it at all: there is no `handles` to index [0]
   // of, so a regression that reverted the call site would fail loudly here
   // rather than quietly answering for somebody else.
-  const answer = await questsRead(KEY, { db, meta: CTX.meta, clone: TOWN });
-  assert.notEqual(answer.of, "architect", "a key is not a handle and must never resolve to one");
-  assert.equal(answer.quests, null, "an object where a handle belongs buys no board");
+  // (office.db's reader threw on the object, so this once read `quests: null`.
+  // The store's reader, prod's since the w42 switch, asks the store for a
+  // handle the object matches no row of, so the board it answers carries no
+  // resident's progress, and `of` echoes the object back, never a handle.)
+  const answer = await questsRead(KEY, { ix: storeIndexPooled(TOWN) });
+  assert.notEqual(typeof answer.of, "string", "a key is not a handle and must never resolve to one");
+  const row = send(answer);
+  assert.notEqual(row?.progress, 1, "wright's letter today is not on a board asked for a key");
+  assert.ok(!(row?.counted ?? []).includes("errant"), "nor is wright's correspondent");
 });

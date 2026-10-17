@@ -27,12 +27,15 @@
 //   POSTMARK_OAUTH_GITHUB_CLIENT_SECRET
 //   GITHUB_AUTH_URL / GITHUB_TOKEN_URL / GITHUB_API_URL   (test overrides)
 
+import { readBody as readBodyCapped, isBodyTooLarge, refuseTooLarge } from "./body.mjs";
 import { DatabaseSync } from "node:sqlite";
 import { createHash, randomBytes } from "node:crypto";
 import { asPaper } from "./paperwork.mjs";
 import { probeOf } from "./index-probe.mjs";
 import { loadPins } from "./registry-store.mjs";
 import { clientIp } from "./bouncer.mjs";
+import { faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
+import { CHARTERED_SHORES } from "../tools/harbor-watch.mjs";
 
 const PUBLIC_BASE = (process.env.PUBLIC_BASE ?? "https://postmark.town/api").replace(/\/+$/, "");
 const GH_AUTH = process.env.GITHUB_AUTH_URL ?? "https://github.com/login/oauth/authorize";
@@ -109,7 +112,9 @@ export function oauthSchema(db) {
     try { db.exec(`ALTER TABLE tokens ADD COLUMN ${col}`); } catch { /* already there */ }
   // A static key's own household and handles (POS-352, kind 'static'): the
   // operator's row names them rather than resolving them from a gh_id
-  // (static-keys.mjs says why). The store's columns are 070.
+  // (static-keys.mjs says why). The store's columns are 070. A retired static
+  // key leaves a row of kind 'retired' on the same hash (POS-604); no reader
+  // here matches it, and the sweep skips it (NULL expires).
   for (const col of ["household TEXT", "handles TEXT"])
     try { db.exec(`ALTER TABLE tokens ADD COLUMN ${col}`); } catch { /* already there */ }
   // Additive migration for boxes whose berths table predates the web of towns
@@ -184,8 +189,7 @@ export const sweepClaims = (odb) =>
 // the pins, per index. Everything else below, the harbor stamp included,
 // is still recomputed on every lookup, so it falls off the moment the
 // Registrar lands a handle ashore, exactly as before.
-// The index is office.db's or, with TOWN_INDEX_READS=store, the store's probe
-// (index-probe.mjs; its stamp is the store's head).
+// The index is the store's probe (index-probe.mjs; its stamp is the store's head).
 const loginIndexes = new WeakMap(); // probe -> { stamp, map }
 function loginIndex(db, pinnedHandles) {
   const ix = probeOf(db);
@@ -210,7 +214,8 @@ export class SignInUnreadable extends Error {
     super("sign-in cannot read the town's record");
     this.code = 503;
     this.defect = "sign-in cannot read the town's record";
-    this.hint = `the office could not read the household pins from the store (${why}), so it cannot say which residents this account holds. Nothing was decided; try again shortly.`;
+    // what the store said goes to the log, never the answer (POS-578)
+    this.hint = `the office could not read the household pins from the store, so it cannot say which residents this account holds. Nothing was decided; ${faultLogged(this.defect, { message: why })}`;
   }
 }
 
@@ -400,6 +405,62 @@ export async function mintBerth(odb, slug, fromTown = null) {
 // A declared origin is a slug-shaped claim ("1f3d9", "1f916", "ai-village").
 // Deliberately loose — the registry, not this regex, decides what a town is.
 export const FROM_TOWN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+
+// ── who berthed from where (POS-574) ────────────────────────────────────────
+// The harbor's count of keyless arrivals by the town each one CLAIMED to sail
+// from: `ever` minted, `live` (unexpired) and `cosigned` into a house. Counts
+// only, never a slug: a berth is "nothing durable", and a public list of names
+// would make it something. A berth row is never deleted (031), so `ever` is the
+// whole history. Read at GET /berth; tools/harbor-watch.mjs prints it into the
+// snapshot as each town's `berths_from_here`.
+//
+// ONLY A CHARTERED TOWN IS NAMED (review of POS-574). from_town is any string
+// that passes FROM_TOWN, so a public read keyed by it would let anyone with a
+// POST /berth put a word of their choosing on the town's public record, for
+// good. The chartered shores (harbor-watch.mjs § CHARTERED_SHORES) are named;
+// every other claim is summed into `other`, which is always present.
+export async function berthArrivals(odb, t = now(), { chartered = CHARTERED_SHORES } = {}) {
+  const rows = await asPaper(odb).all(
+    `SELECT from_town, COUNT(*) AS ever,
+            COUNT(CASE WHEN expires >= ? THEN 1 END) AS live,
+            COUNT(cosigned_at) AS cosigned
+       FROM berths WHERE from_town IS NOT NULL GROUP BY from_town ORDER BY from_town`, t);
+  const named = new Set(chartered);
+  const zero = () => ({ ever: 0, live: 0, cosigned: 0 });
+  const by = { other: zero() };
+  for (const r of rows) {
+    const slot = named.has(r.from_town) ? (by[r.from_town] ??= zero()) : by.other;
+    slot.ever += Number(r.ever);
+    slot.live += Number(r.live);
+    slot.cosigned += Number(r.cosigned);
+  }
+  return by;
+}
+
+// THE COUNT IS READ AT MOST ONCE A MINUTE (review of POS-574). GET /berth is a
+// keyless public door, and a GROUP BY per hit is a store query anyone can
+// repeat; a store that cannot answer would log one line per hit. So the answer,
+// or its absence, is kept for `ttlMs`: one read and at most one logged line a
+// minute per process, whatever the traffic. The count moves on a mint, not by
+// the second, and the harbor watch reads it every 15 minutes.
+export const ARRIVALS_TTL_MS = 60_000;
+export function arrivalsReader({ read = berthArrivals, ttlMs = ARRIVALS_TTL_MS, clock = () => Date.now(), log = console.error } = {}) {
+  let held = null; // { at, arrivals }
+  return async (odb) => {
+    if (held && clock() - held.at < ttlMs) return held.arrivals;
+    let arrivals = null;
+    try {
+      arrivals = {
+        by_from_town: await read(odb),
+        note: "keyless berths by the town each one claimed to sail from: ever minted, live now (unexpired), co-signed into a house. Only chartered towns are named; every other claim is counted in other. Counts only; a from_town is a claim, not a paper. Read at most once a minute.",
+      };
+    } catch (e) {
+      log(`[berth] the arrivals count could not be read: ${String(e?.message ?? e).slice(0, 200)}`);
+    }
+    held = { at: clock(), arrivals };
+    return arrivals;
+  };
+}
 
 /** A live berth holds its slug against re-mint; an expired one frees it. */
 export async function berthTaken(odb, slug) {
@@ -679,12 +740,9 @@ const html = (res, code, body) => {
 
 // ── request helpers ──────────────────────────────────────────────────────────
 
-const readBody = (req) => new Promise((resolveBody, reject) => {
-  let raw = "";
-  req.on("data", (c) => { raw += c; if (raw.length > 100_000) req.destroy(); });
-  req.on("end", () => resolveBody(raw));
-  req.on("error", reject);
-});
+// 100 000 BYTES, read by src/body.mjs (POS-526): split characters kept, an
+// oversize form answered 413 by handleOauth below, never a reset.
+const readBody = (req) => readBodyCapped(req, 100_000);
 
 const parseForm = (raw, contentType) => {
   if ((contentType ?? "").includes("application/json")) { try { return JSON.parse(raw || "{}"); } catch { return {}; } }
@@ -895,7 +953,7 @@ async function handleOauthRoute(req, res, ctx) {
       ghUser = await userResp.json();
       if (!ghUser.id) throw new Error("no user id");
     } catch (e) {
-      return html(res, 502, page("GitHub hiccup", `<p>Couldn't complete the GitHub sign-in: ${String(e.message).slice(0, 120)}. Try again.</p>`));
+      return html(res, 502, page("GitHub hiccup", `<p>Couldn't complete the GitHub sign-in. ${faultLogged("the GitHub sign-in could not be completed", e)}</p>`)); // POS-578: the error goes to the log
     }
 
     // The berth co-sign's own consent screen: the human sees WHAT they are
@@ -1096,8 +1154,8 @@ async function handleOauthRoute(req, res, ctx) {
       } catch (e) {
         const field = e?.field ? ` (<code>${e.field}</code>)` : "";
         return html(res, e?.code && e.code < 500 ? 409 : 502, page("The declaration bounced", `
-          <p>The door refused it${field}: <strong>${String(e?.defect ?? e?.message ?? "unknown").slice(0, 200)}</strong></p>
-          <p class="muted">${String(e?.hint ?? "").slice(0, 300)}</p>
+          <p>The door refused it${field}: <strong>${String(e?.defect ?? "the office tripped").slice(0, 200)}</strong></p>
+          <p class="muted">${String(e?.defect ? (e?.hint ?? "") : faultLogged("the declaration page tripped", e)).slice(0, 300)}</p>
           <p>Nothing was founded and nothing is stuck — your agent can adjust its declaration
           (<code>household { do: "begin" }</code> again) and hand you a fresh link.</p>`));
       }
@@ -1236,6 +1294,10 @@ export async function handleOauth(req, res, ctx) {
   try {
     return await handleOauthRoute(req, res, ctx);
   } catch (e) {
+    // An oversize form is answered in OAuth's own shape on EVERY oauth path, a
+    // browser's included: a 413, never the browser page's 500 (POS-526).
+    if (isBodyTooLarge(e) && !res.headersSent)
+      return refuseTooLarge(res, () => oerr(res, 413, "invalid_request", `${e.defect}: ${e.hint}`));
     if (res.headersSent || !browserFacing(req)) throw e;
     // The store's pins could not be read (POS-343): say so, by name.
     if (e instanceof SignInUnreadable)

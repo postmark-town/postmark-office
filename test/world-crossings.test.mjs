@@ -397,7 +397,8 @@ test("THE WALK FIELD SURVIVES EVERY DOOR THAT REBUILDS THIS BOUNCE", async () =>
   const { readFileSync } = await import("node:fs");
   const sites = [
     ["src/world-apex.mjs", /return \{ \.\.\.bounce\(e\.code, e\.defect, e\.hint,[\s\S]{0,400}?\), \.\.\.done \};/],
-    ["src/mcp.mjs", /if \(e\.code\) return \{ error: "bounce", code: e\.code,[\s\S]{0,400}?\};/],
+    // POS-573: mcp.mjs's rebuild goes through fault-words.mjs § caughtBounce, with the same list
+    ["src/mcp.mjs", /if \(e\.code\) return caughtBounce\(e, \{ code: e\.code,[\s\S]{0,400}?\}\);/],
   ];
   for (const [file, re] of sites) {
     const src = readFileSync(new URL(`../${file}`, import.meta.url), "utf8");

@@ -71,6 +71,7 @@
 import { execFileSync } from "node:child_process";
 
 import { singleLogEnabled } from "./dynamic-store.mjs";
+import { refShaFromDisk } from "./world-branches.mjs";
 import { mirrorAct, mirrorSettled, world2Enabled } from "./world2-acts.mjs";
 import { candleEnabled, claimEligible, claimHouseholdFor, claimTxFromJournal, docketSettled } from "./world2-claims.mjs";
 import { PenUnreachableError, laneFlipped, laneOf, penSettled, penWrite, shadowWrite } from "./world2-pen.mjs";
@@ -115,6 +116,8 @@ export const WORLD_ANCHOR = "the-town/let-there-be-light";
 // `frame` is a reparenting (§8's ruling (b)). Both ride one table, and the drain
 // sorts them by this column: marks to the sketchbook, frames to STATE/log.
 import { TOWN_CLASSES } from "./town-journal.mjs";
+import { isSited } from "./world-grants.mjs"; // the kind rung: sited in both forms (LOGOS v2, O1)
+import { classExtendsOf } from "./world-classes.mjs";
 
 export const CLASS_MARK = "mark";
 export const CLASS_FRAME = "frame";
@@ -370,7 +373,7 @@ const ROW_COLUMNS = "crossing, actor, action, object, at_anchor, at_dx, at_dy, w
  * more — and `actId` is the record's own id, which is the receipt a caller
  * names its write by.
  */
-export async function appendJournal(db, entry = {}) {
+export async function appendJournal(db, entry = {}, { guard = null } = {}) {
   const row = normalizeRow(entry);
 
   // World 2.0 is the record. A mark-class declaration also takes its place on
@@ -409,8 +412,11 @@ export async function appendJournal(db, entry = {}) {
       // dying at cutover". The closure falsifier pairs an act to its claim by
       // the claim's own slug and claimant, never by that column.
       claimFn: (client, actId, household) => claimTxFromJournal(client, row, null, { household, actId }),
+      // `guard` (WLD-27): a check that must hold inside this write's own
+      // transaction, as appendActFlipped's — a door's guard holds on either arm
+      guard,
     }
-    : {});   // throws PenUnreachableError — the door bounces, nothing was written
+    : { guard });   // throws PenUnreachableError — the door bounces, nothing was written
 
   // `record` is what the door's `log:` field says, decided HERE because this is
   // the line that knows which table received the row. A private draft has no
@@ -474,7 +480,7 @@ const FLIP_REFUSED = Object.freeze({
   arena: "the arena is closed (Keemin, 2026-09-30) and writes nothing; unset it from W2_PEN",
 });
 
-export async function appendActFlipped(db, entry = {}) {
+export async function appendActFlipped(db, entry = {}, { guard = null } = {}) {
   const row = normalizeRow(entry);
   const lane = laneOf(row);
   if (FLIP_REFUSED[lane]) {
@@ -505,8 +511,9 @@ export async function appendActFlipped(db, entry = {}) {
       act: !draft,
       household: () => claimHouseholdFor(row),
       claimFn: (client, actId, household) => claimTxFromJournal(client, row, null, { household, actId }),
+      guard,
     }
-    : {}); // throws PenUnreachableError — the door bounces, nothing was written
+    : { guard }); // throws PenUnreachableError — the door bounces, nothing was written
 
   // ── THE REVERSE MIRROR IS GONE (G1 / POS-156, 2026-09-22) ─────────────────
   //
@@ -926,7 +933,7 @@ export function pathFor(record, { parentPathOf = null, publishedPathOf = null } 
   const { by, slug } = idPartsOf(record);
   if (!slug) return null;
 
-  if (record?.kind === "sited" || record?.kind === "parcel") {
+  if (isSited(record, classExtendsOf())) {
     // GATE A: an existing filing never moves.
     const filed = record?.id && typeof publishedPathOf === "function" ? publishedPathOf(record.id) : null;
     if (filed) return filed;
@@ -1120,7 +1127,26 @@ export function liveChildrenOf(db, id, { household = undefined } = {}) {
 // The manifest carries directories; a caller wants the record, so `/mark.md` is
 // appended here rather than at four call sites.
 let _frozen = null;
-export function frozenFilingAt(repo, sha) {
+
+// THE KEY IS THE COMMIT, NEVER THE NAME IT WAS ASKED BY (the rule
+// `world-branches.mjs § materializeAtRef` states: "a cache key must be the
+// PEELED commit"). `world.mjs` asks both caches here by "refs/heads/main", a
+// name that points at a different tree after every crossing; keyed on the name,
+// the answer read before main moved was handed back after it, until a caller
+// asking by a real commit evicted it. A branch's commit comes off disk with no
+// process (`refShaFromDisk`); anything else asks git once; a ref that resolves
+// to nothing keeps its own text, and the read below answers as it always did.
+function commitAt(repo, ref) {
+  const onDisk = refShaFromDisk(repo, String(ref));
+  if (onDisk) return onDisk;
+  try {
+    return execFileSync("git", ["-C", repo, "rev-parse", "--verify", "-q", `${ref}^{commit}`],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() || String(ref);
+  } catch { return String(ref); }
+}
+
+export function frozenFilingAt(repo, ref) {
+  const sha = commitAt(repo, ref);
   if (_frozen?.repo === repo && _frozen.sha === sha) return _frozen.byId;
   const byId = new Map();
   try {
@@ -1143,7 +1169,8 @@ export function frozenFilingAt(repo, sha) {
 // id genuinely is not derivable from the path — and there an ambiguous slug still
 // resolves to nothing, because a wrong-but-plausible filing is worse than none.
 let _pathIndex = null;
-function publishedPathIndex(repo, sha) {
+function publishedPathIndex(repo, ref) {
+  const sha = commitAt(repo, ref);
   if (_pathIndex?.repo === repo && _pathIndex.sha === sha) return _pathIndex;
   const bySlug = new Map();
   const byId = new Map();
@@ -1173,7 +1200,10 @@ function publishedPathIndex(repo, sha) {
  * manifest does not name — the slug index. `null` is the gate-B case, and it is
  * the ONLY case in which a mark is filed at its id.
  */
-export function filedPathOfAt(repo, sha) {
+export function filedPathOfAt(repo, ref) {
+  // Resolved ONCE, here: the lookup below runs per mark id, and a commit is
+  // answered by both caches without touching the disk again.
+  const sha = commitAt(repo, ref);
   return (id) => {
     const key = String(id);
     const frozen = frozenFilingAt(repo, sha).get(key);

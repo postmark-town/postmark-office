@@ -279,7 +279,10 @@ test("THE REF: the writer measures the ledger at mainRef, so a clone holding onl
   const dir = mkdtempSync(join(tmpdir(), "pos302-ref-"));
   try {
     const clone = join(dir, "w");
-    execFileSync("git", ["clone", "--quiet", "--local", WORLD_CLONE, clone]);
+    // only tools/ is read from the copy's working tree (tools/walk.mjs, which ledgerNewestIso
+    // imports); the ledger is read at the ref. So the copy checks out tools/ alone (POS-652).
+    execFileSync("git", ["clone", "--quiet", "--local", "--no-checkout", WORLD_CLONE, clone]);
+    execFileSync("git", ["-C", clone, "sparse-checkout", "set", "--no-cone", "/tools/"]);
     // The copy's origin/main is the source's main, wherever the source keeps it: a
     // pool tree's world-clone may hold only origin/main itself, and a --local clone
     // maps the source's BRANCHES to origin/*, so it would come out with no main at all.

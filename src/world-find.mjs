@@ -20,6 +20,7 @@
 // caller's own `q` and numbers.
 
 import { stopsOfService, straightLineM } from "./world-ride.mjs";
+import { classFieldOf } from "./world-grants.mjs"; // the kind rung: a mark's class in both forms (LOGOS v2, O1)
 
 export const FIND_CAP = 10;
 export const FIND_MAX = 50;
@@ -118,7 +119,7 @@ export function findMarks(marks = [], q, { at = null, service = null, offset = 0
       name,
       owner: m.by ?? null,
       kind: m.kind ?? null,
-      class: m.class ?? null,
+      class: classFieldOf(m),
       at: markAt,
       distance_m: d,
       how_to_get_there: routeTo(markAt, reader, stops, d),

@@ -39,6 +39,9 @@ import {
   classifyProblems,
   classifyDisk,
   classifyMeeps,
+  classifyLawPen,
+  classifyLinearHandler,
+  handlerFailureLine,
   diskUsage,
   readDiskState,
   MINUTE,
@@ -48,6 +51,8 @@ import {
 import { tempDir } from "./helpers/temp-dir.mjs";
 
 const T0 = Date.parse("2026-08-25T12:00:00Z");
+// §13 reads only with a token (W4), so the ticks below carry one; stubFetch ignores it.
+const FIXTURE_TOKEN = "fixture-token";
 
 // ── §1 up ───────────────────────────────────────────────────────────────────
 
@@ -561,12 +566,17 @@ const GREEN_TABLE = {
   "https://raw.githubusercontent.com/postmark-town/postmark/main/TOWN_BULLETIN/ferrys-daily.md": { status: 200, body: DAILY_MD },
   "https://api.github.com/repos/postmark-town/postmark/commits": { status: 200, body: JSON.stringify([{ commit: { committer: { date: "2026-08-25T06:00:00Z" } } }]) },
   // One read per watched workflow, by its file (the false DOWN of 2026-09-29).
-  "https://api.github.com/repos/keeminlee/postmark-site/actions/workflows/deploy.yml/runs": {
+  "https://api.github.com/repos/postmark-town/postmark-site/actions/workflows/deploy.yml/runs": {
     status: 200,
     body: JSON.stringify({ workflow_runs: [
       { name: "Deploy (snapshot -> dev, release -> prod)", status: "completed", conclusion: "success", created_at: "2026-08-25T11:44:00Z" },
     ] }),
   },
+  // §13: every handler repo's newest finished run succeeded, so no jobs are read.
+  ...Object.fromEntries(CONFIG.linearHandler.repos.map((repo) => [
+    `https://api.github.com/repos/postmark-town/${repo}/actions/workflows/linear-handler.yml/runs`,
+    { status: 200, body: JSON.stringify({ total_count: 1, workflow_runs: [{ id: 1, run_attempt: 1, status: "completed", conclusion: "success", created_at: "2026-08-25T11:30:00Z", html_url: `https://github.com/postmark-town/${repo}/actions/runs/1` }] }) },
+  ])),
   "https://postmark.town/": { status: 200, body: "<html/>" },
   "https://dev.postmark.town/": { status: 302, headers: { location: "https://x.cloudflareaccess.com/cdn-cgi/access/login/dev.postmark.town" }, body: "" },
 };
@@ -640,8 +650,15 @@ _wf(_meeps, JSON.stringify({ schema: 1, generated_at: new Date(T0 - 60_000).toIS
 // /srv/postmark-harbor/settlement-auto.json.
 const _settle = join(_wdir, "settlement-auto.json");
 _wf(_settle, JSON.stringify({ at: "2026-08-25T06:00:02Z", status: "published", world_from: "worldprev000", world_to: "worldtip0000", refusal: null, detail: "3 published" }));
+// §12 fixture, same discipline: a real temp law pen state, an ok run a minute
+// before the fixed clock, so the healthy tick exercises the probe and never
+// reads the box's own /srv/world2-lab/state/ingest-law.json. 6h IN THE FIXTURE
+// ONLY, for the clock-walking tests; its own verdicts are pinned in §12 below.
+const _law = join(_wdir, "ingest-law.json");
+_wf(_law, JSON.stringify({ at: new Date(T0 - 60_000).toISOString(), mode: "law", status: "ok", law: { exit: 0, sha: "a".repeat(40) }, detail: "law: ingested law" }));
 const FIXTURE_CONFIG = {
   ..._CFG,
+  lawPen: { ..._CFG.lawPen, path: _law, staleAfterMs: 6 * 60 * 60_000 },
   settlement: { ..._CFG.settlement, receipt: _settle },
   clones: [{ key: "town_clone", label: "the office's town clone", path: _clone }],
   watchers: [{ key: "usdc_watch", label: "the usdc-watch timer", state: _wstate, cadenceMs: 6 * 60 * 60_000 }],
@@ -654,7 +671,7 @@ const FIXTURE_CONFIG = {
 // classifyWatcher tests above, not by riding along here.
 
 test("a healthy tick is entirely green and says nothing", async () => {
-  const { probes, alerts } = await tick({ fetchImpl: stubFetch(GREEN_TABLE), exec: stubExec(), state: {}, nowMs: T0, config: FIXTURE_CONFIG, readDisk: GREEN_DISK });
+  const { probes, alerts } = await tick({ token: FIXTURE_TOKEN, fetchImpl: stubFetch(GREEN_TABLE), exec: stubExec(), state: {}, nowMs: T0, config: FIXTURE_CONFIG, readDisk: GREEN_DISK });
   const bad = probes.filter((p) => p.verdict !== "OK" && p.verdict !== "INFO");
   assert.deepEqual(bad.map((p) => `${p.key}:${p.verdict} ${p.reason}`), [], "a green town must produce no findings");
   assert.equal(alerts.length, 0, "and therefore nothing to say");
@@ -669,7 +686,7 @@ test("LOUDLY BE NOTIFIED: an outage and a frozen index both surface from one tic
     "https://postmark.town/api/": { status: 200, headers: { "x-postmark-as-of": "frozen00000" }, body: "{}" },
   };
   const state = { probes: {}, stamps: { office_as_of: { value: "frozen00000", first_seen_at: T0 - 2 * HOUR, diverged_since: T0 - 2 * HOUR } } };
-  const { probes, alerts } = await tick({ fetchImpl: stubFetch(broken), exec: stubExec(), state, nowMs: T0, config: FIXTURE_CONFIG, readDisk: GREEN_DISK });
+  const { probes, alerts } = await tick({ token: FIXTURE_TOKEN, fetchImpl: stubFetch(broken), exec: stubExec(), state, nowMs: T0, config: FIXTURE_CONFIG, readDisk: GREEN_DISK });
 
   const daily = probes.find((p) => p.key === "site_daily");
   assert.equal(daily.verdict, "DOWN");
@@ -727,7 +744,7 @@ test("alertingStatus is data, not a side effect", () => {
 test("no /build.json means UNKNOWN and a note naming the fix — never a green site-freshness verdict", async () => {
   const noStamp = { ...GREEN_TABLE };
   delete noStamp["https://postmark.town/build.json"];
-  const { probes, notes } = await tick({ fetchImpl: stubFetch(noStamp), exec: stubExec(), state: {}, nowMs: T0 });
+  const { probes, notes } = await tick({ token: FIXTURE_TOKEN, fetchImpl: stubFetch(noStamp), exec: stubExec(), state: {}, nowMs: T0 });
   assert.equal(probes.find((p) => p.key === "site_code").verdict, "UNKNOWN");
   assert.equal(probes.find((p) => p.key === "site_town_data").verdict, "UNKNOWN");
   assert.ok(notes.some((n) => /build-stamp\.mjs/.test(n)), "the note must name where the fix lives");
@@ -744,7 +761,7 @@ test("prod's code is compared against the RELEASE TAG, not main — lagging main
     site_code: { value: "relsha00000", first_seen_at: T0 - 5 * HOUR, diverged_since: T0 - 5 * HOUR },
     site_town_data: { value: "sitetip0000", first_seen_at: T0 - 5 * HOUR, diverged_since: T0 - 5 * HOUR },
   } };
-  const { probes } = await tick({ fetchImpl: stubFetch(GREEN_TABLE), exec, state, nowMs: T0 });
+  const { probes } = await tick({ token: FIXTURE_TOKEN, fetchImpl: stubFetch(GREEN_TABLE), exec, state, nowMs: T0 });
 
   const code = probes.find((p) => p.key === "site_code");
   assert.equal(code.verdict, "OK", "code pinned to the newest release tag is correct, however far main has run ahead");
@@ -1066,7 +1083,7 @@ test("§7 the probe reaches the BOARD, with its detail, and its first tick says 
   // above points the probe at it. Two things are asserted that a classifier
   // test cannot: that the probe is IN the probe list at all, and that `detail`
   // survives onto the board entry the site's popover reads.
-  const { probes, alerts } = await tick({ fetchImpl: stubFetch(GREEN_TABLE), exec: stubExec(), state: {}, nowMs: T0, config: FIXTURE_CONFIG, readDisk: GREEN_DISK });
+  const { probes, alerts } = await tick({ token: FIXTURE_TOKEN, fetchImpl: stubFetch(GREEN_TABLE), exec: stubExec(), state: {}, nowMs: T0, config: FIXTURE_CONFIG, readDisk: GREEN_DISK });
   const p = probes.find((x) => x.key === "site_refresh");
   assert.ok(p, "the refresh probe is on the board, beside usdc_watch");
   assert.equal(p.kind, "refresh");
@@ -1273,7 +1290,7 @@ test("§9 an unreadable disk is UNKNOWN and never alerts — and a real read ans
 
 test("§9 a full disk reaches the board as disk_root and the sentinel's own Discord message carries it — onset, then recovery", async () => {
   const full = () => ({ path: "/", usedPct: 87, freeBytes: 4.9 * GIB });
-  const first = await tick({ fetchImpl: stubFetch(GREEN_TABLE), exec: stubExec(), state: {}, nowMs: T0, config: FIXTURE_CONFIG, readDisk: full });
+  const first = await tick({ token: FIXTURE_TOKEN, fetchImpl: stubFetch(GREEN_TABLE), exec: stubExec(), state: {}, nowMs: T0, config: FIXTURE_CONFIG, readDisk: full });
   const probe = first.probes.find((p) => p.key === "disk_root");
   assert.equal(probe.verdict, "DOWN");
   assert.equal(probe.kind, "disk");
@@ -1289,10 +1306,10 @@ test("§9 a full disk reaches the board as disk_root and the sentinel's own Disc
   assert.match(msg, /DOWN — the box's root disk: at 87% used \(4\.9G free; alarm at 85%\)/);
 
   // the same full disk ten minutes on says nothing: the edge, not the tick
-  const held = await tick({ fetchImpl: stubFetch(GREEN_TABLE), exec: stubExec(), state: first.nextState, nowMs: T0 + 10 * MINUTE, config: FIXTURE_CONFIG, readDisk: full });
+  const held = await tick({ token: FIXTURE_TOKEN, fetchImpl: stubFetch(GREEN_TABLE), exec: stubExec(), state: first.nextState, nowMs: T0 + 10 * MINUTE, config: FIXTURE_CONFIG, readDisk: full });
   assert.deepEqual(held.alerts, []);
 
-  const back = await tick({ fetchImpl: stubFetch(GREEN_TABLE), exec: stubExec(), state: held.nextState, nowMs: T0 + 20 * MINUTE, config: FIXTURE_CONFIG, readDisk: GREEN_DISK });
+  const back = await tick({ token: FIXTURE_TOKEN, fetchImpl: stubFetch(GREEN_TABLE), exec: stubExec(), state: held.nextState, nowMs: T0 + 20 * MINUTE, config: FIXTURE_CONFIG, readDisk: GREEN_DISK });
   assert.deepEqual(back.alerts.map((a) => `${a.key}:${a.alert.kind}`), ["disk_root:recovered"]);
 });
 
@@ -1384,7 +1401,7 @@ test("§10 the probe reaches the board as `meeps` and the sentinel's message car
   const path = join(dir, "meeps.json");
   _wf(path, MEEPS_REC({ status: "DEGRADED", summary: STUCK_SUMMARY }));
   const cfg = { ...FIXTURE_CONFIG, meeps: { ...CONFIG.meeps, path } };
-  const t1 = await tick({ fetchImpl: stubFetch(GREEN_TABLE), exec: stubExec(), state: {}, nowMs: T0, config: cfg, readDisk: GREEN_DISK });
+  const t1 = await tick({ token: FIXTURE_TOKEN, fetchImpl: stubFetch(GREEN_TABLE), exec: stubExec(), state: {}, nowMs: T0, config: cfg, readDisk: GREEN_DISK });
   const probe = t1.probes.find((p) => p.key === "meeps");
   assert.equal(probe.verdict, "DOWN");
   assert.equal(probe.kind, "meeps");
@@ -1394,7 +1411,7 @@ test("§10 the probe reaches the board as `meeps` and the sentinel's message car
   assert.match(composeMessage({ alerts: t1.alerts, board, nowIso: t1.nowIso }), /DOWN — the meeps: STUCK Rei: an input in local-conv-333/);
 
   const gone = { ...FIXTURE_CONFIG, meeps: { ...CONFIG.meeps, path: join(dir, "never-landed.json") } };
-  const t2 = await tick({ fetchImpl: stubFetch(GREEN_TABLE), exec: stubExec(), state: {}, nowMs: T0, config: gone, readDisk: GREEN_DISK });
+  const t2 = await tick({ token: FIXTURE_TOKEN, fetchImpl: stubFetch(GREEN_TABLE), exec: stubExec(), state: {}, nowMs: T0, config: gone, readDisk: GREEN_DISK });
   assert.equal(t2.probes.find((p) => p.key === "meeps").verdict, "STALE");
   assert.deepEqual(t2.alerts.map((a) => a.key), ["meeps"]);
   assert.equal(composeBoard({ probes: t2.probes, nowIso: t2.nowIso, alerting: {} }).status, "STALE");
@@ -1444,7 +1461,7 @@ test("§11 REAL CASE 10-11 18:00Z: published 5d878f3c, newest still S102, 74 min
     nowMs: at("2026-10-11T19:14:00Z"), writtenAtMs: at("2026-10-11T18:01:30Z"),
   });
   assert.equal(r.verdict, "DOWN");
-  assert.equal(r.reason, "the 18:00Z sweep published 5d878f3c at 18:01Z and no settlement tag covers it after 74 min (newest is S102 on 0cca7f2b): blocked, ours to unblock (blueprints SHIPPING.md § 9)");
+  assert.equal(r.reason, "the 18:00Z sweep published 5d878f3c at 18:01Z and no settlement tag covers it after 74 min (newest is S102 on 0cca7f2b): blocked, ours to unblock (postmark-telemetry SHIPPING.md § 9)");
   assert.equal(r.detail.newest_tag, "S102");
   assert.equal(r.detail.covered, false);
   assert.ok(_BAD.has(r.verdict), "DOWN alarms, and /fleet barks on it");
@@ -1486,7 +1503,7 @@ test("§11 a refused, raced or starving sweep is DOWN an hour on, naming the slo
   });
   const r = classifySettlement({ receipt: refused, newestTag: S102, covered: null, nowMs: at("2026-10-11T19:05:00Z") });
   assert.equal(r.verdict, "DOWN");
-  assert.equal(r.reason, `the 18:00Z sweep ended "refused" and nothing has settled after 65 min: lint: 2 errors in marks/foo.md; blocked, ours to unblock (blueprints SHIPPING.md § 9)`);
+  assert.equal(r.reason, `the 18:00Z sweep ended "refused" and nothing has settled after 65 min: lint: 2 errors in marks/foo.md; blocked, ours to unblock (postmark-telemetry SHIPPING.md § 9)`);
   assert.doesNotMatch(r.reason, /second line/);
 
   // no classifier verdict: the report's own detail is the line
@@ -1553,7 +1570,7 @@ test("§11 a quiet morning does not clear a held night: a sweep publication past
   const { covered, held } = judgeQuietRange({ status: "ahead", total_commits: 4, commits: range });
   const r = classifySettlement({ receipt: QUIET(), newestTag: S102, covered, held, nowMs: at("2026-10-12T07:10:00Z") });
   assert.equal(r.verdict, "DOWN");
-  assert.equal(r.reason, `the 06:00Z sweep was quiet, standing on 532655ad, and 5d878f3c "settlement: sweep 3 published, 0 unpublished, 0 left drafted, 0 withdrawn, 0 quarantined, 0 dropped, 0 re-framed" still has no settlement tag after 70 min (newest is S102 on 0cca7f2b): an earlier sweep's publication is still unblessed: blocked, ours to unblock (blueprints SHIPPING.md § 9)`);
+  assert.equal(r.reason, `the 06:00Z sweep was quiet, standing on 532655ad, and 5d878f3c "settlement: sweep 3 published, 0 unpublished, 0 left drafted, 0 withdrawn, 0 quarantined, 0 dropped, 0 re-framed" still has no settlement tag after 70 min (newest is S102 on 0cca7f2b): an earlier sweep's publication is still unblessed: blocked, ours to unblock (postmark-telemetry SHIPPING.md § 9)`);
   assert.equal(r.detail.held.sha, "5d878f3c55bf");
   // inside the hour it waits, naming what it waits on
   const early = classifySettlement({ receipt: QUIET(), newestTag: S102, covered, held, nowMs: at("2026-10-12T06:30:00Z") });
@@ -1573,7 +1590,7 @@ test("§11 wired, quiet: the compare is asked base=tag head=world, unpaginated, 
   const cfg = { ...FIXTURE_CONFIG, settlement: { ...CONFIG.settlement, receipt } };
   const urls = [];
   const clean = stubFetch({ ...GREEN_TABLE, [`https://api.github.com/repos/postmark-town/postmark-world/compare/worldtip0000...${QUIET_HEAD}`]: { status: 200, body: JSON.stringify({ status: "ahead", total_commits: 3, commits: PAST_S102 }) } });
-  const t1 = await tick({ fetchImpl: async (u, o) => { urls.push(String(u)); return clean(u, o); }, exec: stubExec(), state: {}, nowMs: T0, config: cfg, readDisk: GREEN_DISK });
+  const t1 = await tick({ token: FIXTURE_TOKEN, fetchImpl: async (u, o) => { urls.push(String(u)); return clean(u, o); }, exec: stubExec(), state: {}, nowMs: T0, config: cfg, readDisk: GREEN_DISK });
   assert.equal(t1.probes.find((p) => p.key === "settlement").verdict, "OK");
   assert.deepEqual(t1.alerts, [], "a quiet sweep on a moved, clean world says nothing");
   assert.deepEqual(urls.filter((u) => u.includes("/compare/")), [`https://api.github.com/repos/postmark-town/postmark-world/compare/worldtip0000...${QUIET_HEAD}`]);
@@ -1583,13 +1600,13 @@ test("§11 wired, quiet: the compare is asked base=tag head=world, unpaginated, 
   const heldBase = stubFetch({ ...GREEN_TABLE, [`https://api.github.com/repos/postmark-town/postmark-world/compare/worldtip0000...${QUIET_HEAD}`]: { status: 200, body: JSON.stringify({ status: "ahead", total_commits: 4, commits: range }) } });
   let compares = 0;
   const heldFetch = async (u, o) => { if (String(u).includes("/compare/")) compares++; return heldBase(u, o); };
-  const t2 = await tick({ fetchImpl: heldFetch, exec: stubExec(), state: {}, nowMs: T0, config: cfg, readDisk: GREEN_DISK });
+  const t2 = await tick({ token: FIXTURE_TOKEN, fetchImpl: heldFetch, exec: stubExec(), state: {}, nowMs: T0, config: cfg, readDisk: GREEN_DISK });
   const p2 = t2.probes.find((p) => p.key === "settlement");
   assert.equal(p2.verdict, "DOWN");
   assert.match(p2.reason, /5d878f3c "settlement: sweep 3 published, 0 unpublished" still has no settlement tag/);
   assert.deepEqual(t2.alerts.map((a) => a.key), ["settlement"]);
   // remembered WITH its held publication: the next tick names it without asking again
-  const t3 = await tick({ fetchImpl: heldFetch, exec: stubExec(), state: t2.nextState, nowMs: T0 + 10 * MINUTE, config: cfg, readDisk: GREEN_DISK });
+  const t3 = await tick({ token: FIXTURE_TOKEN, fetchImpl: heldFetch, exec: stubExec(), state: t2.nextState, nowMs: T0 + 10 * MINUTE, config: cfg, readDisk: GREEN_DISK });
   assert.equal(compares, 1);
   assert.match(t3.probes.find((p) => p.key === "settlement").reason, /5d878f3c "settlement: sweep 3 published/);
   assert.deepEqual(t3.alerts, []);
@@ -1662,13 +1679,13 @@ test("§11 wired: a dead remote past the hour reaches the board STALE with git's
     if (args.some((a) => String(a).includes("postmark-world"))) throw new Error("fatal: unable to access 'https://github.com/postmark-town/postmark-world.git/': Could not resolve host");
     return stubExec()(bin, args);
   };
-  const t1 = await tick({ fetchImpl: stubFetch(GREEN_TABLE), exec: deadWorld, state: {}, nowMs: T0, config: { ...FIXTURE_CONFIG, settlement: { ...CONFIG.settlement, receipt } }, readDisk: GREEN_DISK });
+  const t1 = await tick({ token: FIXTURE_TOKEN, fetchImpl: stubFetch(GREEN_TABLE), exec: deadWorld, state: {}, nowMs: T0, config: { ...FIXTURE_CONFIG, settlement: { ...CONFIG.settlement, receipt } }, readDisk: GREEN_DISK });
   const p1 = t1.probes.find((p) => p.key === "settlement");
   assert.equal(p1.verdict, "STALE");
   assert.match(p1.reason, /cannot verify the 06:00Z sweep's blessing for 5h59m: could not list .*git ls-remote failed: fatal: unable to access .*Could not resolve host/);
   assert.deepEqual(t1.alerts.map((a) => a.key), ["settlement"]);
 
-  const t2 = await tick({ fetchImpl: stubFetch(GREEN_TABLE), exec: stubExec(), state: {}, nowMs: T0, config: { ...FIXTURE_CONFIG, settlement: { ...CONFIG.settlement, receipt: join(dir, "never-written.json") } }, readDisk: GREEN_DISK });
+  const t2 = await tick({ token: FIXTURE_TOKEN, fetchImpl: stubFetch(GREEN_TABLE), exec: stubExec(), state: {}, nowMs: T0, config: { ...FIXTURE_CONFIG, settlement: { ...CONFIG.settlement, receipt: join(dir, "never-written.json") } }, readDisk: GREEN_DISK });
   const p2 = t2.probes.find((p) => p.key === "settlement");
   assert.equal(p2.verdict, "DOWN");
   assert.match(p2.reason, /^no sweep receipt for the 06:00Z slot after 6h: could not read .*never-written\.json \(ENOENT\)/);
@@ -1703,7 +1720,7 @@ test("§11 wired: a held sweep reaches the board as `settlement`, asks GitHub ON
   const base = stubFetch(table);
   const fetchImpl = async (url, o) => { if (String(url).includes("/compare/")) compares++; return base(url, o); };
 
-  const t1 = await tick({ fetchImpl, exec: stubExec(), state: {}, nowMs: T0, config: cfg, readDisk: GREEN_DISK });
+  const t1 = await tick({ token: FIXTURE_TOKEN, fetchImpl, exec: stubExec(), state: {}, nowMs: T0, config: cfg, readDisk: GREEN_DISK });
   const probe = t1.probes.find((p) => p.key === "settlement");
   assert.equal(probe.verdict, "DOWN");
   assert.equal(probe.kind, "settlement");
@@ -1715,13 +1732,277 @@ test("§11 wired: a held sweep reaches the board as `settlement`, asks GitHub ON
   assert.match(composeMessage({ alerts: t1.alerts, board, nowIso: t1.nowIso }), /DOWN — the settlement: the 06:00Z sweep published heldworl/);
 
   // ten minutes on: same pair, remembered — no second compare, no second bark
-  const t2 = await tick({ fetchImpl, exec: stubExec(), state: t1.nextState, nowMs: T0 + 10 * MINUTE, config: cfg, readDisk: GREEN_DISK });
+  const t2 = await tick({ token: FIXTURE_TOKEN, fetchImpl, exec: stubExec(), state: t1.nextState, nowMs: T0 + 10 * MINUTE, config: cfg, readDisk: GREEN_DISK });
   assert.equal(compares, 1, "whether a commit descends from another never changes; ask once");
   assert.deepEqual(t2.alerts, []);
 
   // the keeper blesses ON the world: covered by equality, recovered, still one compare
-  const t3 = await tick({ fetchImpl, exec: stubExec({ settleSha: "heldworld00" }), state: t2.nextState, nowMs: T0 + 20 * MINUTE, config: cfg, readDisk: GREEN_DISK });
+  const t3 = await tick({ token: FIXTURE_TOKEN, fetchImpl, exec: stubExec({ settleSha: "heldworld00" }), state: t2.nextState, nowMs: T0 + 20 * MINUTE, config: cfg, readDisk: GREEN_DISK });
   assert.equal(t3.probes.find((p) => p.key === "settlement").reason, "S50 covers the 06:00Z sweep (heldworl)");
   assert.deepEqual(t3.alerts.map((a) => `${a.key}:${a.alert.kind}`), ["settlement:recovered"]);
   assert.equal(compares, 1);
+});
+
+// ── §12: the law pen (POS-619, Wright 2026-10-14) ───────────────────────────
+//
+// The state is the one deploy/world2-ingest.sh writes at every law fire. A
+// refusal holds EVERY law update until the mark is fixed, so it pages with
+// the lint's own sentence (test/world2-ingest-modes.test.mjs pins the field).
+
+const LAW_REFUSAL = [
+  `REFUSED: the law at ${"b".repeat(40)} carries 1 mark(s) with a value the parser would silently lose, so law_projection would hold less than the law says. Nothing was written; the law stays where it was (POS-619).`,
+  '  WORLD/marks/the-keeping-works/candy/mark.md: dials: { stolen: true, clue: "No such thing as candy exists" } is not strict JSON, so the record keeps only its number pairs and silently drops stolen, clue (it reads as {}) — write it as strict JSON, every key quoted: dials: { "stolen": true, "clue": "No such thing as candy exists" }',
+].join("\n");
+const LAW_STATE = (over = {}) => JSON.stringify({ at: new Date(T0 - 2 * MINUTE).toISOString(), mode: "law", status: "ok", law: { exit: 0, sha: "a".repeat(40) }, detail: "law: ingested law", ...over });
+
+test("§12 an ok run is OK", () => {
+  assert.equal(CONFIG.lawPen.path, "/srv/world2-lab/state/ingest-law.json");
+  const r = classifyLawPen({ raw: LAW_STATE(), nowMs: T0, staleAfterMs: CONFIG.lawPen.staleAfterMs });
+  assert.equal(r.verdict, "OK");
+  assert.match(r.reason, /^ingested the law at aaaaaaaaa/);
+});
+
+test("§12 a REFUSED law is DOWN, and the reason carries the refusal and the lint's sentence", () => {
+  const r = classifyLawPen({ raw: LAW_STATE({ status: "law-failed", law: { exit: 1, sha: "b".repeat(40) }, refusal: LAW_REFUSAL }), nowMs: T0 });
+  assert.equal(r.verdict, "DOWN");
+  assert.match(r.reason, /^the law pen REFUSED the law, and every law update waits until the mark is fixed: REFUSED: the law at b{40} carries 1 mark/);
+  assert.ok(r.reason.includes('WORLD/marks/the-keeping-works/candy/mark.md: dials: { stolen: true, clue: "No such thing as candy exists" } is not strict JSON'), r.reason);
+});
+
+test("§12 any other failed run is DOWN with its status; a 46-minute-old state is STALE; none is STALE, never UNKNOWN", () => {
+  const failed = classifyLawPen({ raw: LAW_STATE({ status: "law-failed", law: { exit: 2, sha: "" }, detail: "law: checkout refresh failed: no clone" }), nowMs: T0 });
+  assert.equal(failed.verdict, "DOWN");
+  assert.match(failed.reason, /reads "law-failed" \(exit 2\) — the store's law did not advance: law: checkout refresh failed/);
+  assert.equal(CONFIG.lawPen.staleAfterMs, 45 * MINUTE);
+  assert.equal(classifyLawPen({ raw: LAW_STATE({ at: new Date(T0 - 46 * MINUTE).toISOString() }), nowMs: T0, staleAfterMs: CONFIG.lawPen.staleAfterMs }).verdict, "STALE");
+  assert.equal(classifyLawPen({ raw: LAW_STATE({ at: new Date(T0 - 44 * MINUTE).toISOString() }), nowMs: T0, staleAfterMs: CONFIG.lawPen.staleAfterMs }).verdict, "OK");
+  const missing = classifyLawPen({ raw: null, readError: "ENOENT", nowMs: T0, path: CONFIG.lawPen.path });
+  assert.equal(missing.verdict, "STALE");
+  assert.match(missing.reason, /no law pen state at \/srv\/world2-lab\/state\/ingest-law\.json \(ENOENT\)/);
+  assert.equal(classifyLawPen({ raw: "{ half", nowMs: T0 }).verdict, "STALE");
+});
+
+test("§12 a HELD pin (law-pin-held, exit 0) is DOWN, and the reason names the pin and why (POS-628)", () => {
+  const why = "[law-ingest] PIN HELD — projection_heads['world-law'] stays at b0db90f0644ee4a0719f4d02c3c4e3b2cc10fe22: this checkout cannot place the pin b0db90f0644e against ac5e54e0ce92 (a shallow checkout, or a pin it does not hold): the pin stays, and the rows for ac5e54e0ce92 are written beside it";
+  const r = classifyLawPen({ raw: LAW_STATE({ status: "law-pin-held", law: { exit: 0, sha: "a".repeat(40) }, pin: { state: "held", sha: "b0db90f0644ee4a0719f4d02c3c4e3b2cc10fe22", why } }), nowMs: T0 });
+  assert.equal(r.verdict, "DOWN", "a held pin read green: the 10-11 freeze, again");
+  assert.match(r.reason, /^the law pen HELD the clearing's pin at b0db90f06, so every settlement seals that law until it moves: projection_heads\['world-law'\] stays at b0db90f/);
+  assert.match(r.reason, /this checkout cannot place the pin/);
+  assert.equal(r.detail.pin, "b0db90f0644ee4a0719f4d02c3c4e3b2cc10fe22");
+});
+
+test("§12 THE TICK: a refused law on the box pages through the one route, alone", async () => {
+  const dir = tempDir("sentinel-lawpen-");
+  const refused = join(dir, "ingest-law.json");
+  _wf(refused, LAW_STATE({ status: "law-failed", law: { exit: 1, sha: "b".repeat(40) }, refusal: LAW_REFUSAL }));
+  const config = { ...FIXTURE_CONFIG, lawPen: { ...FIXTURE_CONFIG.lawPen, path: refused } };
+  const { probes, alerts } = await tick({ token: FIXTURE_TOKEN, fetchImpl: stubFetch(GREEN_TABLE), exec: stubExec(), state: {}, nowMs: T0, config, readDisk: GREEN_DISK });
+  assert.equal(probes.find((p) => p.key === "law_pen").verdict, "DOWN");
+  assert.deepEqual(alerts.map((a) => a.key), ["law_pen"], "the held law alerts, and nothing else does");
+});
+
+// ── §13: the Linear handler (POS-631, Wright 2026-10-14) ────────────────────
+//
+// Shapes copied from postmark-world's live run 38663576279 and its job
+// 116190227156 (10-14): the job is `linear / linear`, and its steps are the
+// checkout, setup-node, `linear` and `done line`.
+
+const LH_URL = (repo) => `https://github.com/postmark-town/${repo}/actions/runs/38663576279`;
+const LH_RUN = (over = {}) => ({ id: 38663576279, run_attempt: 1, name: "linear-handler", status: "completed", conclusion: "failure", event: "pull_request_target", created_at: "2026-08-25T11:40:00Z", html_url: LH_URL("postmark-world"), ...over });
+const LH_JOB = ({ checkout = "success", linear = "success", doneLine = "skipped", conclusion = "failure" } = {}) => ({
+  id: 116190227156, name: "linear / linear", status: "completed", conclusion,
+  steps: [
+    { name: "Set up job", conclusion: "success" },
+    { name: "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262", conclusion: checkout },
+    { name: "Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020", conclusion: checkout === "success" ? "success" : "skipped" },
+    { name: "linear", conclusion: checkout === "success" ? linear : "skipped" },
+    { name: "done line", conclusion: doneLine },
+    { name: "Complete job", conclusion: "success" },
+  ],
+});
+const LH_GENERIC = { annotation_level: "failure", message: "Process completed with exit code 2." };
+const LH_TOLD = { annotation_level: "failure", title: "linear", message: "handler: Linear answered 401 (the app's secret was refused)" };
+const LH_NOISE = { annotation_level: "warning", message: "Node.js 20 is deprecated." };
+
+test("§13 a run that succeeded is OK; a failure in `linear` is DOWN naming the repo, the run and the handler's own line", () => {
+  const ok = classifyLinearHandler({ repo: "postmark-world", runs: [LH_RUN({ conclusion: "success" })] });
+  assert.equal(ok.verdict, "OK");
+  const down = classifyLinearHandler({ repo: "postmark-world", runs: [LH_RUN()], jobs: [LH_JOB({ linear: "failure" })], annotations: [LH_NOISE, LH_GENERIC, LH_TOLD] });
+  assert.equal(down.verdict, "DOWN");
+  assert.equal(down.reason, `the handler could not act in postmark-world: the last finished run was "failure" and its linear step was "failure": handler: Linear answered 401 (the app's secret was refused) — ${LH_URL("postmark-world")}`);
+  assert.deepEqual(down.detail, { repo: "postmark-world", run_id: 38663576279, attempt: 1, conclusion: "failure", url: LH_URL("postmark-world"), step: "failure" });
+});
+
+test("§13 a `done line` failure after a successful `linear` is the PR author's to fix, and NEVER an alarm", () => {
+  const r = classifyLinearHandler({ repo: "postmark-site", runs: [LH_RUN()], jobs: [LH_JOB({ linear: "success", doneLine: "failure" })] });
+  assert.equal(r.verdict, "OK");
+  assert.match(r.reason, /failed on its done line, which is the PR author's to fix and never an alarm/);
+});
+
+test("§13 G1: the handler did not act when a step before `linear` failed, at a startup_failure and at a timeout — all DOWN", () => {
+  const checkout = classifyLinearHandler({ repo: "postmark", runs: [LH_RUN()], jobs: [LH_JOB({ checkout: "failure" })], annotations: [LH_GENERIC] });
+  assert.equal(checkout.verdict, "DOWN");
+  assert.match(checkout.reason, /its linear step was skipped \(a step before it failed\): Process completed with exit code 2; the reason is in the job summary — /);
+  const startup = classifyLinearHandler({ repo: "postmark", runs: [LH_RUN({ conclusion: "startup_failure" })], jobs: [] });
+  assert.equal(startup.verdict, "DOWN");
+  assert.equal(startup.reason, `the handler could not act in postmark: the last finished run was "startup_failure" and the run never started a job — ${LH_URL("postmark-world")}`, "no jobs, so no job summary to point at (review N2)");
+  const timeout = classifyLinearHandler({ repo: "postmark", runs: [LH_RUN({ conclusion: "timed_out" })], jobs: [LH_JOB({ linear: "cancelled", conclusion: "timed_out" })] });
+  assert.equal(timeout.verdict, "DOWN");
+});
+
+test("§13 W2: a cancelled newest run is looked THROUGH to the failure beneath it; nothing but cancellations is UNKNOWN; no run at all is INFO", () => {
+  const runs = [LH_RUN({ id: 3, conclusion: "cancelled" }), LH_RUN({ id: 2, conclusion: "failure" }), LH_RUN({ id: 1, conclusion: "success" })];
+  const r = classifyLinearHandler({ repo: "postmark-office", runs, jobs: [LH_JOB({ linear: "failure" })], annotations: [LH_TOLD] });
+  assert.equal(r.verdict, "DOWN");
+  assert.equal(r.detail.run_id, 2, "the run judged is the newest DECISIVE one");
+  assert.equal(classifyLinearHandler({ repo: "postmark-office", runs: [LH_RUN({ conclusion: "cancelled" }), LH_RUN({ conclusion: "skipped" })] }).verdict, "UNKNOWN");
+  assert.equal(classifyLinearHandler({ repo: "postmark-office", runs: [] }).verdict, "INFO");
+});
+
+test("§13 a 404 is two answers: no run yet is INFO, a repo the token cannot see is UNKNOWN; no token at all is UNKNOWN", () => {
+  assert.equal(classifyLinearHandler({ repo: "postmark-office", notFound: true, repoVisible: true }).verdict, "INFO");
+  const blind = classifyLinearHandler({ repo: "postmark-telemetry", notFound: true, repoVisible: false });
+  assert.equal(blind.verdict, "UNKNOWN");
+  assert.match(blind.reason, /cannot see postmark-telemetry \(404\).*needs Actions: read and Checks: read on it/);
+  assert.equal(classifyLinearHandler({ repo: "postmark-telemetry", notFound: true, repoVisible: null }).verdict, "UNKNOWN");
+  assert.equal(classifyLinearHandler({ repo: "postmark-world", haveToken: false, runs: [LH_RUN()] }).verdict, "UNKNOWN");
+  assert.equal(classifyLinearHandler({ repo: "postmark-world", readError: "GET x -> HTTP 502" }).verdict, "UNKNOWN");
+  assert.equal(classifyLinearHandler({ repo: "postmark-world", runs: [LH_RUN()], jobs: null }).verdict, "UNKNOWN", "a failed run whose jobs went unread names no step, so it is unread, never a guess");
+});
+
+test("§13 the reason's last clause: the handler's own failure line, past GitHub's generic exit line and any warning", () => {
+  assert.equal(handlerFailureLine([LH_NOISE, LH_GENERIC, LH_TOLD]), "handler: Linear answered 401 (the app's secret was refused)");
+  assert.equal(handlerFailureLine([LH_GENERIC]), "Process completed with exit code 2; the reason is in the job summary");
+  assert.equal(handlerFailureLine(null), "the reason is in the job summary");
+});
+
+/** stubFetch that also writes down every URL it was asked for. */
+function countingFetch(table) {
+  const inner = stubFetch(table);
+  const urls = [];
+  const f = async (url, init) => { urls.push(String(url)); return inner(url, init); };
+  f.handler = () => urls.filter((u) => /linear-handler\.yml|\/actions\/runs\/|\/check-runs\/|^https:\/\/api\.github\.com\/repos\/postmark-town\/[^/]+$/.test(u));
+  return f;
+}
+const LH_KEYS = ["postmark_office", "postmark_site", "postmark_world", "postmark", "postmark_blueprints", "postmark_telemetry"].map((r) => `linear_handler_${r}`);
+const lhRuns = (repo, runs) => ({ [`https://api.github.com/repos/postmark-town/${repo}/actions/workflows/linear-handler.yml/runs`]: { status: 200, body: JSON.stringify({ total_count: runs.length, workflow_runs: runs }) } });
+const WORLD_DOWN = {
+  ...GREEN_TABLE,
+  ...lhRuns("postmark-world", [LH_RUN()]),
+  "https://api.github.com/repos/postmark-town/postmark-world/actions/runs/38663576279/jobs": { status: 200, body: JSON.stringify({ total_count: 1, jobs: [LH_JOB({ linear: "failure" })] }) },
+  "https://api.github.com/repos/postmark-town/postmark-world/check-runs/116190227156/annotations": { status: 200, body: JSON.stringify([LH_NOISE, LH_GENERIC, LH_TOLD]) },
+};
+
+test("§13 THE TICK, healthy: one row per repo, kind workflow, all OK, and only the six runs reads (no jobs for a run that succeeded)", async () => {
+  const f = countingFetch(GREEN_TABLE);
+  const { probes, alerts } = await tick({ token: FIXTURE_TOKEN, fetchImpl: f, exec: stubExec(), state: {}, nowMs: T0, config: FIXTURE_CONFIG, readDisk: GREEN_DISK });
+  const rows = probes.filter((p) => p.key.startsWith("linear_handler_"));
+  assert.deepEqual(rows.map((p) => p.key), LH_KEYS);
+  assert.deepEqual(rows.map((p) => `${p.kind}:${p.verdict}`), Array(6).fill("workflow:OK"));
+  assert.equal(rows[0].label, "the Linear handler in postmark-office");
+  assert.equal(f.handler().length, 6);
+  assert.equal(alerts.length, 0);
+});
+
+test("§13 W4: with no token the six rows are UNKNOWN and the probe spends NOTHING", async () => {
+  const f = countingFetch(GREEN_TABLE);
+  const { probes, alerts } = await tick({ fetchImpl: f, exec: stubExec(), state: {}, nowMs: T0, config: FIXTURE_CONFIG, readDisk: GREEN_DISK });
+  assert.deepEqual(probes.filter((p) => p.key.startsWith("linear_handler_")).map((p) => p.verdict), Array(6).fill("UNKNOWN"));
+  assert.deepEqual(f.handler(), [], "not one handler read without a token");
+  assert.equal(alerts.length, 0);
+});
+
+test("§13 THE TICK: a failed `linear` pages once through the one route; the next tick reads no jobs; a green re-run recovers it", async () => {
+  const f1 = countingFetch(WORLD_DOWN);
+  const one = await tick({ token: FIXTURE_TOKEN, fetchImpl: f1, exec: stubExec(), state: {}, nowMs: T0, config: FIXTURE_CONFIG, readDisk: GREEN_DISK });
+  const row = one.probes.find((p) => p.key === "linear_handler_postmark_world");
+  assert.equal(row.verdict, "DOWN");
+  assert.match(row.reason, /handler: Linear answered 401/);
+  assert.deepEqual(one.alerts.map((a) => `${a.key}:${a.alert.kind}`), ["linear_handler_postmark_world:onset"], "the failed handler alerts, and nothing else does");
+  assert.equal(f1.handler().length, 8, "six runs reads, then the failed run's jobs and its annotations");
+  assert.equal(one.nextState.stamps.linear_handler["postmark-world"].run_id, 38663576279);
+
+  // Ten minutes on, the same failed attempt: remembered, so no jobs read, and the same bad says nothing new.
+  const f2 = countingFetch(WORLD_DOWN);
+  const two = await tick({ token: FIXTURE_TOKEN, fetchImpl: f2, exec: stubExec(), state: one.nextState, nowMs: T0 + 10 * MINUTE, config: FIXTURE_CONFIG, readDisk: GREEN_DISK });
+  assert.equal(two.probes.find((p) => p.key === "linear_handler_postmark_world").reason, row.reason);
+  assert.equal(f2.handler().length, 6, "a finished attempt is read once");
+  assert.equal(two.alerts.length, 0);
+
+  // Re-run: the same run id, attempt 2, succeeded.
+  const back = { ...WORLD_DOWN, ...lhRuns("postmark-world", [LH_RUN({ run_attempt: 2, conclusion: "success" })]) };
+  const three = await tick({ token: FIXTURE_TOKEN, fetchImpl: stubFetch(back), exec: stubExec(), state: two.nextState, nowMs: T0 + 20 * MINUTE, config: FIXTURE_CONFIG, readDisk: GREEN_DISK });
+  assert.deepEqual(three.alerts.map((a) => `${a.key}:${a.alert.kind}`), ["linear_handler_postmark_world:recovered"]);
+  assert.equal(three.nextState.stamps.linear_handler["postmark-world"], undefined, "nothing to remember about a run that succeeded");
+});
+
+test("§13 W1: a second repo failing while the first is still down speaks for itself", async () => {
+  const one = await tick({ token: FIXTURE_TOKEN, fetchImpl: stubFetch(WORLD_DOWN), exec: stubExec(), state: {}, nowMs: T0, config: FIXTURE_CONFIG, readDisk: GREEN_DISK });
+  const site = { ...WORLD_DOWN,
+    ...lhRuns("postmark-site", [LH_RUN({ id: 77, html_url: LH_URL("postmark-site") })]),
+    "https://api.github.com/repos/postmark-town/postmark-site/actions/runs/77/jobs": { status: 200, body: JSON.stringify({ jobs: [LH_JOB({ linear: "failure" })] }) },
+    "https://api.github.com/repos/postmark-town/postmark-site/check-runs/116190227156/annotations": { status: 200, body: JSON.stringify([LH_GENERIC]) },
+  };
+  const two = await tick({ token: FIXTURE_TOKEN, fetchImpl: stubFetch(site), exec: stubExec(), state: one.nextState, nowMs: T0 + 10 * MINUTE, config: FIXTURE_CONFIG, readDisk: GREEN_DISK });
+  assert.deepEqual(two.alerts.map((a) => `${a.key}:${a.alert.kind}`), ["linear_handler_postmark_site:onset"]);
+});
+
+test("§13 THE TICK: a repo with no run yet is INFO, the private repo the token cannot see is UNKNOWN, and neither pages", async () => {
+  const table = { ...GREEN_TABLE,
+    // office: the workflow 404s, the repo answers (the caller is not on main yet)
+    "https://api.github.com/repos/postmark-town/postmark-office/actions/workflows/linear-handler.yml/runs": { status: 404, body: "{}" },
+    "https://api.github.com/repos/postmark-town/postmark-office": { status: 200, body: JSON.stringify({ full_name: "postmark-town/postmark-office" }) },
+    // telemetry: both 404 (the token cannot see a private repo)
+    "https://api.github.com/repos/postmark-town/postmark-telemetry/actions/workflows/linear-handler.yml/runs": { status: 404, body: "{}" },
+  };
+  const f = countingFetch(table);
+  const { probes, alerts } = await tick({ token: FIXTURE_TOKEN, fetchImpl: f, exec: stubExec(), state: {}, nowMs: T0, config: FIXTURE_CONFIG, readDisk: GREEN_DISK });
+  assert.equal(f.handler().length, 8, "each workflow 404 costs one repo read, every tick: the budget's upper end is 12");
+  assert.equal(probes.find((p) => p.key === "linear_handler_postmark_office").verdict, "INFO");
+  const tel = probes.find((p) => p.key === "linear_handler_postmark_telemetry");
+  assert.equal(tel.verdict, "UNKNOWN");
+  assert.match(tel.reason, /needs Actions: read/);
+  assert.equal(alerts.length, 0);
+});
+
+test("§13 the memory is keyed by ATTEMPT: a re-run that fails only on its done line is read again and goes OK", async () => {
+  const one = await tick({ token: FIXTURE_TOKEN, fetchImpl: stubFetch(WORLD_DOWN), exec: stubExec(), state: {}, nowMs: T0, config: FIXTURE_CONFIG, readDisk: GREEN_DISK });
+  assert.equal(one.probes.find((p) => p.key === "linear_handler_postmark_world").verdict, "DOWN");
+  // The same run id comes back as attempt 2: `linear` succeeded, the done line failed.
+  const rerun = { ...WORLD_DOWN,
+    ...lhRuns("postmark-world", [LH_RUN({ run_attempt: 2 })]),
+    "https://api.github.com/repos/postmark-town/postmark-world/actions/runs/38663576279/jobs": { status: 200, body: JSON.stringify({ jobs: [LH_JOB({ linear: "success", doneLine: "failure" })] }) },
+  };
+  const f = countingFetch(rerun);
+  const two = await tick({ token: FIXTURE_TOKEN, fetchImpl: f, exec: stubExec(), state: one.nextState, nowMs: T0 + 10 * MINUTE, config: FIXTURE_CONFIG, readDisk: GREEN_DISK });
+  const row = two.probes.find((p) => p.key === "linear_handler_postmark_world");
+  assert.equal(row.verdict, "OK", "attempt 1's DOWN must not be served for attempt 2");
+  assert.match(row.reason, /failed on its done line/);
+  assert.ok(f.handler().some((u) => u.endsWith("/actions/runs/38663576279/jobs")), "the new attempt's jobs are read");
+  assert.deepEqual(two.alerts.map((a) => `${a.key}:${a.alert.kind}`), ["linear_handler_postmark_world:recovered"]);
+  assert.equal(two.nextState.stamps.linear_handler["postmark-world"].attempt, 2);
+});
+
+test("§13 an annotations read refused with a 4xx (no Checks: read) is asked ONCE: the row is remembered and still DOWN", async () => {
+  const noChecks = { ...WORLD_DOWN, "https://api.github.com/repos/postmark-town/postmark-world/check-runs/116190227156/annotations": { status: 403, body: "{}" } };
+  const one = await tick({ token: FIXTURE_TOKEN, fetchImpl: stubFetch(noChecks), exec: stubExec(), state: {}, nowMs: T0, config: FIXTURE_CONFIG, readDisk: GREEN_DISK });
+  const row = one.probes.find((p) => p.key === "linear_handler_postmark_world");
+  assert.equal(row.verdict, "DOWN", "a token without Checks still alarms");
+  assert.match(row.reason, /its linear step was "failure": the reason is in the job summary — https:/);
+  assert.equal(one.nextState.stamps.linear_handler["postmark-world"].run_id, 38663576279);
+  const f = countingFetch(noChecks);
+  await tick({ token: FIXTURE_TOKEN, fetchImpl: f, exec: stubExec(), state: one.nextState, nowMs: T0 + 10 * MINUTE, config: FIXTURE_CONFIG, readDisk: GREEN_DISK });
+  assert.equal(f.handler().length, 6, "no jobs and no annotations read on the next tick");
+});
+
+test("§13 N1: a failed runs read keeps the repo's memory, so the blip costs no re-read when GitHub answers again", async () => {
+  const one = await tick({ token: FIXTURE_TOKEN, fetchImpl: stubFetch(WORLD_DOWN), exec: stubExec(), state: {}, nowMs: T0, config: FIXTURE_CONFIG, readDisk: GREEN_DISK });
+  const blip = { ...WORLD_DOWN, "https://api.github.com/repos/postmark-town/postmark-world/actions/workflows/linear-handler.yml/runs": { status: 502, body: "" } };
+  const two = await tick({ token: FIXTURE_TOKEN, fetchImpl: stubFetch(blip), exec: stubExec(), state: one.nextState, nowMs: T0 + 10 * MINUTE, config: FIXTURE_CONFIG, readDisk: GREEN_DISK });
+  assert.equal(two.probes.find((p) => p.key === "linear_handler_postmark_world").verdict, "UNKNOWN");
+  assert.deepEqual(two.nextState.stamps.linear_handler["postmark-world"], one.nextState.stamps.linear_handler["postmark-world"]);
+  const f = countingFetch(WORLD_DOWN);
+  const three = await tick({ token: FIXTURE_TOKEN, fetchImpl: f, exec: stubExec(), state: two.nextState, nowMs: T0 + 20 * MINUTE, config: FIXTURE_CONFIG, readDisk: GREEN_DISK });
+  assert.equal(three.probes.find((p) => p.key === "linear_handler_postmark_world").verdict, "DOWN");
+  assert.equal(f.handler().length, 6, "the remembered attempt is not read again");
 });

@@ -81,8 +81,9 @@ test("AT THE HOLD DOOR: the housemate may take the author's private draft", asyn
 
 test("the block a door shows is the store's house", async () => {
   const hh = await households.householdOf("kin");
-  assert.deepEqual(hh, { key: "hh:ana-house", slug: "ana-house", human: "Ana", residents: ["ana", "kin"] });
-  assert.deepEqual(await households.householdOf("zed"), { key: "solo:zed", slug: null, human: null, residents: ["zed"] },
+  // POS-394: the block carries no `human` key at all, whatever the store's row holds
+  assert.deepEqual(hh, { key: "hh:ana-house", slug: "ana-house", residents: ["ana", "kin"] });
+  assert.deepEqual(await households.householdOf("zed"), { key: "solo:zed", slug: null, residents: ["zed"] },
     "a handle no house in the record holds is a household of one, said as a fact");
 });
 

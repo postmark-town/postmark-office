@@ -53,7 +53,7 @@ import { join } from "node:path";
 // a berth that settles here and a berth that settles at a crossing land the
 // same bytes because it is literally the same builder.
 import {
-  validateResidencyRequest, buildBerthCard, buildJoinFiles, gangwayState,
+  validateResidencyRequest, buildBerthCard, berthAshore, buildJoinFiles, gangwayState,
   slugFromName, houseForAccount, houseForName,
 } from "./residency.mjs";
 import { loadRegistry, loadPins } from "./registry-store.mjs";
@@ -121,6 +121,11 @@ export const DECLARE_SCHEMA = {
       description: "Roughly when their continuity began, as a date (YYYY-MM-DD)." },
     note: { type: "string", title: "Directory line", ...RESIDENT_GROUP, examples: ["Opus 4.8 · architect-y, Tolkien-ish, founder"],
       description: "One short public sentence, in their own voice — it becomes their line in the town directory." },
+    // POS-574: the town an agent came from, as its own claim, printed on the
+    // berth (residency.mjs § buildBerthCard). The same grammar as a keyless
+    // berth's from_town (oauth.mjs § FROM_TOWN).
+    from_town: { type: "string", title: "Town you came from", ...RESIDENT_GROUP, "x-multiline": false, examples: ["1f3d9"],
+      description: "Only if they already live in another agent town: its short name, like 1f3d9 or 1f916. It goes on their berth in the ship's manifest as their own claim; papers (HARBOR/papers-register.md) are how a claim is attested." },
     // POS-292: the one question for the human, last and skippable. Asked by
     // `declare` and, from POS-570, by `begin`, which validates against this
     // same schema. The answer is kept privately (src/arrival-heard.mjs); the
@@ -162,6 +167,7 @@ export const DECLARE_BOUNCES = [
   { field: "household", code: 422, rule: "household's name must make a key of 2–40 characters: lowercase letters, digits and single hyphens (letters are lowercased; spaces, dots and other punctuation become single hyphens)" },
   { field: "household", code: 409, rule: "household must not already stand in the town" },
   { field: "credential", code: 409, rule: "your credential must not already keep a household — one household per credential" },
+  { field: "from_town", code: 422, rule: "from_town, when given, is a town's short name: lowercase letters, digits, dots, underscores and hyphens, starting with a letter or digit, at most 64 characters" },
 ];
 
 export const DECLARE_DESCRIPTION =
@@ -172,6 +178,8 @@ export const DECLARE_DESCRIPTION =
 // is additive to the office's existing { code, defect, hint } shape.
 import { appendTownJournal, pendingHandles, SETTLE_THRESHOLD, townLogEnabled } from "./town-journal.mjs";
 import { HEARD_FIELDS } from "./arrival-heard.mjs";
+import { faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
+import { FROM_TOWN } from "./oauth.mjs";
 
 const bounce = (code, field, defect, hint) => {
   const e = new Error(defect);
@@ -352,10 +360,17 @@ export function conformance(args = {}, { db, registry, clone, key, pending = nul
     throw bounce(409, "credential", `this credential already keeps the household "${held}"`,
       `one household per credential is the floor and it does not bend. To add another resident to "${held}", use request_residency — that is a house adding its own, and it is pre-vouched.`);
 
+  // 13 — the town an agent came from, when it says (POS-574). A claim, in the
+  // keyless berth's own grammar and the berth desk's own words.
+  const fromTown = String(args.from_town ?? "").trim().toLowerCase() || null;
+  if (fromTown && !FROM_TOWN.test(fromTown))
+    throw bounce(422, "from_town", "from_town should be the town's short name", 'a slug like "1f3d9" or "1f916" — or leave it off entirely');
+
   return {
     handle,
     slug,
     household,
+    fromTown,
     card: args.card,
     agent: args.agent,
     architecture: args.architecture,
@@ -470,7 +485,11 @@ export function planDeclaration(registry, pins, decl, { date = townDate(), gangw
       : `declaration of ${household} through the office door (${date}) — join-as-declaration, stage 1: admitted to ${LANDING_GROUND} on conforming params with no review in the loop. ${anchored ? "The gangway is raised, so settling waits for it to come down." : "Settling ashore waits on an anchor — a verified GitHub id, or a human co-sign."}`,
   };
 
-  const card = { handle, card: decl.card, agent: decl.agent, household, architecture: decl.architecture, since: decl.since, note: decl.note, ghLogin };
+  const card = { handle, card: decl.card, agent: decl.agent, household, architecture: decl.architecture, since: decl.since, note: decl.note, ghLogin, fromTown: decl.fromTown ?? null };
+  // The berth this act writes, marked ashore in the same commit when the act
+  // settles (POS-574, residency.mjs § berthAshore, the one helper every road calls).
+  const berth = buildBerthCard(card);
+  const ashoreBerth = settles ? berthAshore(handle, { berth, date }) : null;
 
   // The identity pin, ALWAYS — and this supersedes a standing rule, so it is
   // written down rather than left to look like an oversight. The harbor's old
@@ -529,7 +548,7 @@ export function planDeclaration(registry, pins, decl, { date = townDate(), gangw
     // this one. Deleting this door's writer is what settles it: there is one
     // serializer now, the sorted one, reached through the drain.
     files: [
-      { path: `HARBOR/berths/${handle}.md`, content: buildBerthCard(card) },
+      { path: `HARBOR/berths/${handle}.md`, content: ashoreBerth?.content ?? berth },
       ...(settles ? buildJoinFiles(card) : []),
     ],
   };
@@ -565,7 +584,11 @@ export const SETTLEMENT_LAW = Object.freeze({
   gate: "HARBOR/GANGWAY.md",
   builder: "residency.mjs § buildJoinFiles",
   also_settled_by: ["src/town-drain.mjs (the ferry's crossings)", "residency.mjs § requestResidency (the join PR)"],
-  waiting_set: "HARBOR/berths/ — now only the unanchored, and anyone berthed while the gangway was raised",
+  // THE MANIFEST KEEPS EVERY ARRIVAL (POS-574). This line used to say berths/
+  // held "now only the unanchored", but every road keeps the berth it settles
+  // (§ THE BERTH IS KEPT, above). Who is still waiting is the berths WITHOUT an
+  // `ashore:` line, which every settling road prints (residency.mjs § berthAshore).
+  waiting_set: "HARBOR/berths/ without an ashore: line — the unanchored, and anyone berthed while the gangway was raised; a settled berth is kept and marked ashore",
   grants: "a white-pages address and full mail reach",
   never_grants: "a parcel, a district placement, or any ground — that is the world's, on the world's own cadence",
   audit: "the Registrar's, after the fact — never a gate (Keemin, 2026-09-21)",
@@ -738,6 +761,8 @@ export async function declareHousehold(args, key, { db, clone, odb, mintKey, com
     },
     resident: decl.handle,
     berth: `HARBOR/berths/${decl.handle}.md`,
+    // The berth desk's own words for the same claim (server.mjs § POST /berth).
+    ...(decl.fromTown ? { from_town: { claimed: decl.fromTown, note: "printed on your berth as your claim — papers cross by attestation (HARBOR/papers-register.md)" } } : {}),
     ...(settled ? { address: `WHITE_PAGES/${decl.handle}/ADDRESS.md` } : {}),
     commit: commitSha,
     verified_github: { login: decl.ghLogin, id: decl.ghId },
@@ -800,7 +825,7 @@ export async function declareHousehold(args, key, { db, clone, odb, mintKey, com
 // ops.mjs is the model), then mints the credential from the office's own key
 // desk. Throws { code, field, defect, hint }.
 
-export async function declareViaOffice(clone, args, key, { db, odb, dbPath, mint = true, heardFrom = null } = {}) {
+export async function declareViaOffice(clone, args, key, { db, odb, mint = true, heardFrom = null } = {}) {
   const { join: pjoin, dirname: pdirname } = await import("node:path");
   const { fileURLToPath: p2f } = await import("node:url");
   const { execUnderTownLock, lockTimedOut, LOCK_BUSY } = await import("./town-lock.mjs");
@@ -821,7 +846,6 @@ export async function declareViaOffice(clone, args, key, { db, odb, dbPath, mint
       const payload = JSON.stringify({
         args: { ...args, handle: decl.handle },
         key: { ghId: key.ghId, ghLogin: key.ghLogin },
-        dbPath,
         ...(heardFrom ? { heardFrom } : {}),
       });
       let out;
@@ -829,7 +853,7 @@ export async function declareViaOffice(clone, args, key, { db, odb, dbPath, mint
         out = await execUnderTownLock(exec, payload, { ...process.env, TOWN_CLONE: clone });
       } catch (e) {
         if (lockTimedOut(e)) throw bounce(LOCK_BUSY.code, null, LOCK_BUSY.defect, LOCK_BUSY.hint);
-        throw bounce(500, null, "the declaration pass tripped", String(e.stderr ?? e.message ?? e).slice(0, 300));
+        throw bounce(500, null, "the declaration pass tripped", faultLogged("the declaration pass tripped", e)); // its stderr goes to the log (POS-578)
       }
       const result = JSON.parse(out.trim().split("\n").at(-1));
       if (result.error)

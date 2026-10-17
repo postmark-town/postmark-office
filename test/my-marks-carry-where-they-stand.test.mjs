@@ -106,5 +106,9 @@ test("the door's other lists and its bound are untouched by the addition", async
   assert.equal(typeof answer.counts, "object");
   assert.equal(typeof answer.complete, "boolean");
   assert.ok(answer.published.length <= 20, "the published page is still bounded at 20");
-  assert.ok("withheld" in answer, "and still names what it withheld");
+  // `withheld` rides exactly when a page did not hold everything. (It used to be
+  // asserted bare: with no store here, `backed` reads the key's own handles
+  // since POS-573, the fallback `residents` takes, so this resident's lists can
+  // now fit their pages.)
+  assert.equal("withheld" in answer, !answer.complete, "and names what it withheld exactly when it withheld something");
 });

@@ -6,7 +6,7 @@
 //   world.db `events` (the walk ledger, hydrated) -> the governing departure per
 //   actor -> tools/walk.mjs `positionAt(departure, clock)` -> one entities row
 //
-// Three laws this module obeys, all of them from LOGOS/kinds.md:
+// Three laws this module obeys, all of them from LOGOS/lifetimes.md:
 //
 //   1. LATEST WINS. A resident's current departure is their last recorded one.
 //      Superseding is a new departure from the derived position, never a
@@ -33,6 +33,7 @@ import { WORLD_CLONE } from "./world-store.mjs";
 import { metaIn, openWorldStore, registerTwin, NO_WORLD } from "./world-graph-db.mjs";
 import { freshestMainRef, materializeAtRef } from "./world-branches.mjs";
 import { servedCanonSha } from "./world-serve.mjs";
+import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
 
 // The vessel appears in the walk ledger as an actor — she is a mark that moves,
 // not a resident. She is never an entity; her position is `derived` mobility,
@@ -221,7 +222,7 @@ export function readDepartureEvents({ repo = WORLD_CLONE } = {}) {
     rows = db.prepare(DEPARTURES_SQL).all();
   } catch (e) {
     db.close();
-    return { refused: { gate: "world-store", detail: `events unreadable (${String(e?.message ?? e).slice(0, 160)})` } };
+    return { refused: { gate: "world-store", detail: `events unreadable (${plainReason(e, "record", "the world store's events")})` } };
   }
   db.close();
 
@@ -357,7 +358,7 @@ export function declareAttachment(db, { entity, target, policy = "cascade", decl
 // deletion rather than a port: `storedDepartures` moved to `acts` in POS-154,
 // and `refreshEntities` and `crossing-save`'s `<N>.jsonl` half moved in
 // POS-156's part 0. Every walk writes one act, awaited, through `appendJournal`
-// -- `world.mjs § walkViaOffice` and `world-apex.mjs § spawnOnEnter`, which was
+// -- `world.mjs § walkViaOffice` and `world-apex.mjs § landOnEnter`, which was
 // a THIRD writer of this table that POS-156's own measurement had not listed.
 //
 // `readMovements` STAYS, below, and so does the table. It holds the frozen era

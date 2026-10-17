@@ -30,6 +30,26 @@
 // static row the env no longer names is counted ("not in OFFICE_KEYS") and left
 // in place: removing a key is a decision, not a side effect of an import.
 //
+// ── A RETIRED KEY IS NOT WRITTEN BACK (POS-604) ─────────────────────────────
+//
+// tools/static-keys-retire.mjs leaves a `retired` row on the key's hash. An
+// OFFICE_KEYS entry that hashes to one is REFUSED BY NAME ("household:handles",
+// never the key), counted apart, and every other eligible entry still imports.
+// The first line of output says which of three things happened, and the exit
+// status matches:
+//
+//   complete     exit 0   every entry was written or already right
+//   partial      exit 3   the rest COMMITTED; N entries were refused as retired
+//   rolled_back  exit 1   a foreign kind (access, refresh, household) owns a
+//                         hash, so NOTHING was written, even when a retired
+//                         entry is also named
+//   (exit 2: OFFICE_KEYS is not set)
+//
+// A dry run follows the same words and codes and writes nothing.
+//
+// A key the owner deleted by hand BEFORE retirement existed has no row, so there
+// is no hash to refuse: remove its entry from the OFFICE_KEYS you import from.
+//
 // ── WHICH BOOK (POS-271) ────────────────────────────────────────────────────
 //
 // With OFFICE_PAPERWORK_STORE=1 and the store's WORLD2_PG / WORLD2_PG_URL in
@@ -81,15 +101,18 @@ async function main() {
   if (JSON_OUT) { console.log(JSON.stringify({ book, dry: DRY, ...out }, null, 1)); }
   else {
     console.log(`${DRY ? "DRY RUN, nothing written. " : ""}book: ${book}`);
+    console.log(`outcome: ${out.outcome}${out.outcome === "partial" ? ` (the rest ${DRY ? "would commit" : "COMMITTED"}; ${out.retired_refused} refused as retired)` : out.outcome === "rolled_back" ? ` (${DRY ? "a real run would write" : "the import wrote"} nothing)` : ""}`);
     console.log(`OFFICE_KEYS: ${out.entries} key${out.entries === 1 ? "" : "s"}${out.skipped ? `, ${out.skipped} malformed entr${out.skipped === 1 ? "y" : "ies"} skipped` : ""}`);
     console.log(`  ${DRY ? "would add" : "added"} ${out.added} · ${DRY ? "would replace" : "replaced"} ${out.replaced} · unchanged ${out.unchanged} · refused ${out.refused}`);
     console.log(`  static rows not in OFFICE_KEYS (left alone): ${out.not_in_spec}`);
+    for (const n of out.retired) console.log(`  RETIRED, refused by name: ${n}`);
     console.log(`  households: ${out.households.join(", ") || "(none)"}`);
     for (const w of out.warnings) console.log(`  WARN: ${w}`);
   }
   if (out.refused > 0)
     die(1, `static-keys-import: ${out.refused} key${out.refused === 1 ? "" : "s"} already belong${out.refused === 1 ? "s" : ""} to another kind of token, so ${DRY ? "a real run would write" : "the import wrote"} nothing. Find the entry by its household and issue it a new key.`);
   if (out.entries === 0) die(1, "static-keys-import: no entry in OFFICE_KEYS parsed, so nothing was imported.");
+  return out.outcome === "partial" ? 3 : 0;
 }
 
-main().then(() => process.exit(0), (e) => die(1, `static-keys-import: ${String(e?.message ?? e)}`));
+main().then((code) => process.exit(code), (e) => die(1, `static-keys-import: ${String(e?.message ?? e)}`));

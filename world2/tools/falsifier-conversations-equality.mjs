@@ -123,7 +123,7 @@ const firstDiff = (a, b) => { let i = 0; while (i < a.length && i < b.length && 
  * THE VENDOR TRIPWIRE, for the OFFICE half.
  *
  * `falsifier-live-equality.mjs`'s own tripwire skips everything that is not in
- * the world repo (`if (v.repo !== "keeminlee/postmark-world") continue`) — the
+ * the world repo (`if (v.repo !== "postmark-town/postmark-world") continue`) — the
  * office-side vendors there are unwatched. These two are in THIS repo, so the
  * check is one `git rev-parse` and there is no reason not to make it.
  *
@@ -136,7 +136,7 @@ const firstDiff = (a, b) => { let i = 0; while (i < a.length && i < b.length && 
 export function vendorDrift(repoRoot) {
   const out = [];
   for (const [name, v] of Object.entries(talk.VENDOR)) {
-    if (v.repo !== "keeminlee/postmark-office") continue;
+    if (v.repo !== "postmark-town/postmark-office") continue;
     let blob = null;
     try { blob = execFileSync("git", ["-C", repoRoot, "rev-parse", `HEAD:${v.path}`], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); }
     catch { continue; }   // not a checkout, or a path this sha does not carry

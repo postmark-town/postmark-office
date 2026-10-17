@@ -23,6 +23,7 @@ import { startStore } from "./embedded-store.mjs";
 import { seedRegistry } from "./office-under-test.mjs";
 import { awaitListening } from "../spawn-office.mjs";
 import { tempDir } from "./temp-dir.mjs";
+import { standinClone } from "./clone-sparse.mjs";
 
 const OFFICE = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const g = (repo, ...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }).trim();
@@ -34,9 +35,14 @@ export const freePort = () => new Promise((ok, no) => {
   s.listen(0, "127.0.0.1", () => { const { port } = s.address(); s.close(() => ok(port)); });
 });
 
-/** A scratch clone with no remote, committing as the harness. */
-function scratchClone(source, dest) {
-  execFileSync("git", ["-c", "core.autocrlf=false", "clone", "--local", "--quiet", "--config", "core.autocrlf=false", source, dest]);
+/**
+ * A scratch clone with no remote, committing as the harness. SPARSE (POS-652): a stand-in
+ * leaves out the town's older letters and the world's older STATE/log/*.meta.json, which
+ * its office never writes (test/helpers/clone-sparse.mjs § standinPatterns); a full clone
+ * here was ~25,000 files written on every sandbox setup or reset.
+ */
+function scratchClone(which, source, dest) {
+  standinClone(which, source, dest);
   g(dest, "checkout", "-q", "-B", "main"); // the box's clones sit on main, and the settlement pins it
   g(dest, "remote", "remove", "origin");
   g(dest, "config", "user.name", "dev-rehearsal-harness");
@@ -46,17 +52,21 @@ function scratchClone(source, dest) {
 
 /** The world's law into the store at the world clone's HEAD (world2/tools/law-ingest.mjs, its main run). */
 export async function ingestLaw(store, world) {
-  const { deriveLaw, writeLaw } = await import("../../world2/tools/law-ingest.mjs");
-  const { rows } = await deriveLaw({ lawRepo: world });
+  const { deriveLaw, writeLaw, lossyRefusal } = await import("../../world2/tools/law-ingest.mjs");
+  const { rows, lossy } = await deriveLaw({ lawRepo: world });
+  const lawSha = g(world, "rev-parse", "HEAD");
+  const refusal = lossyRefusal(lawSha, lossy); // the main run refuses a lossy law whole (POS-619)
+  if (refusal) throw new Error(refusal);
   const c = await store.connect("law_ingester");
-  try { await writeLaw(c, { lawSha: g(world, "rev-parse", "HEAD"), rows }); } // the main run: it sets projection_heads['world-law'], the clearing's pin
+  try { await writeLaw(c, { lawSha, rows }); } // the main run: it sets projection_heads['world-law'], the clearing's pin
   finally { await c.end(); }
 }
 
 /**
  * Build the stand-in. `db` is the store's database name (the guard reads it from
  * the env file this writes). `envOverrides` changes lines of the dev env file,
- * so a test can hand the rehearsal a misconfigured office.
+ * so a test can hand the rehearsal a misconfigured office. `mistsAtLastKeyframe`
+ * moves the world's Mists schedule so its last keyframe stands now (POS-595).
  */
 export async function localDevTarget({
   db = "w2_devsandbox_rehearsal",
@@ -67,6 +77,8 @@ export async function localDevTarget({
   boot = true,
   windowId = 240,
   worldSuite = false,
+  // POS-595: the world's Mists at their last keyframe from now on (below)
+  mistsAtLastKeyframe = false,
   // The local sandbox (tools/sandbox.mjs, POS-560) builds its seed here and keeps it:
   // `dir` is a folder of its own (kept by stop), `store` a database it made (not stopped).
   dir: keptDir = null,
@@ -79,8 +91,8 @@ export async function localDevTarget({
   try {
     const store = givenStore ?? await startStore({ db });
     if (!givenStore) cleanups.push(() => store.stop());
-    const town = scratchClone(townSource, join(dir, "town-clone"));
-    const world = scratchClone(worldSource, join(dir, "world-clone"));
+    const town = scratchClone("town", townSource, join(dir, "town-clone"));
+    const world = scratchClone("world", worldSource, join(dir, "world-clone"));
     // The world's own checker suite (test:candle) runs after a settlement publishes, as a
     // warning, never a hold; on this machine it costs ~25 minutes a settlement. The box's
     // run keeps it. Here it is replaced in the scratch world, and the stand-in says so.
@@ -90,6 +102,28 @@ export async function localDevTarget({
       pkg.scripts["test:candle"] = "node -e \"console.log('# the local stand-in skips the world checker suite (test/helpers/dev-target.mjs); the box runs it')\"";
       writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
       g(world, "commit", "-qam", "harness: the world checker suite skipped in the local stand-in");
+    }
+    // THE MISTS AT THEIR LAST KEYFRAME (POS-595). The town clock is the wall clock
+    // (src/crossings.mjs), so a rehearsal cannot be run at crossing 400. The same
+    // world is had by moving the schedule instead: every keyframe earlier by as
+    // many crossings as the last stands ahead of now, so the wall stands at its
+    // last front (and holds there) from this crossing on. The door reads the
+    // skeleton at the BLESSED ref (src/world-branches.mjs § publishedSkeleton), so
+    // the moved schedule is committed on main and blessed by a harness tag, the
+    // newest settlement; the rehearsal's own blessings follow it on main.
+    if (mistsAtLastKeyframe) {
+      const path = join(world, "WORLD", "skeleton.json");
+      const skeleton = JSON.parse(readFileSync(path, "utf8"));
+      const schedule = skeleton.mists?.schedule ?? [];
+      if (!schedule.length) throw new Error("the stand-in's world has no Mists schedule to move to its last keyframe");
+      const { currentCrossing } = await import("../../src/crossings.mjs");
+      const by = Math.max(0, schedule.at(-1).crossing - currentCrossing());
+      skeleton.mists.schedule = schedule.map((k) => ({ ...k, crossing: k.crossing - by }));
+      writeFileSync(path, JSON.stringify(skeleton, null, 2) + "\n");
+      g(world, "commit", "-qam", `harness: the Mists' schedule ${by} crossings earlier, so its last keyframe stands now`);
+      const newest = Math.max(0, ...g(world, "tag", "-l", "settlement/S*").split("\n").map((t) => Number(t.slice(12))).filter(Number.isInteger));
+      g(world, "tag", "-a", `settlement/S${newest + 1}`, "-m", `S${newest + 1} (the local stand-in's harness): the Mists at their last keyframe`);
+      log(`world: the Mists' last keyframe (crossing ${schedule.at(-1).crossing}) stands from crossing ${schedule.at(-1).crossing - by}, blessed as S${newest + 1}`);
     }
     log(`clones: town ${g(town, "rev-parse", "--short", "HEAD")}, world ${g(world, "rev-parse", "--short", "HEAD")}`);
 
@@ -125,26 +159,26 @@ export async function localDevTarget({
       houses[slug] = { since: "2026-01-01", declared_by: (rec?.residents ?? [])[0] ?? slug, ...rec };
     await seedRegistry(store, { ...doc, households: houses }, read("tools/github-ids.json") ?? {});
 
-    // office.db, as the dev box holds one (the office opens it at boot even with
-    // TOWN_INDEX_READS=store), and the town index copied from it into the store
-    // with its head at the clone's HEAD, so the rehearsal's ingests are deltas
-    // (the suites' seam, test/helpers/index-to-store.mjs; the git-walking seed
-    // costs as much again for the same rows)
+    // the town index, derived from the clone (the one derivation the ingest writes
+    // from, src/town-index.mjs) and written into the store with its head at the
+    // clone's HEAD, so the rehearsal's ingests are deltas (the suites' seam,
+    // test/helpers/index-to-store.mjs; the git-walking seed costs as much again
+    // for the same rows)
     const t0 = Date.now();
-    const officeDb = join(dir, "office.db");
-    execFileSync(process.execPath, [join(OFFICE, "src", "hydrate.mjs"), "--town", town, "--db", officeDb], { cwd: OFFICE, stdio: "ignore", env: { ...process.env, NODE_NO_WARNINGS: "1" } });
-    const { DatabaseSync } = await import("node:sqlite");
-    const { copyIndexToStore } = await import("./index-to-store.mjs");
+    const { deriveTownIndex, TOWN_TABLES } = await import("../../src/town-index.mjs");
+    const { tables } = await deriveTownIndex(town, { log: { log() {}, warn() {}, error() {} } });
+    const rows = Object.fromEntries(Object.entries(TOWN_TABLES).map(([name, { cols }]) =>
+      [name, (tables[name] ?? []).map((r) => Object.fromEntries(cols.map((c, i) => [c, r[i]])))]));
+    const { seedTownIndex } = await import("./index-to-store.mjs");
     const { HEAD_KEY } = await import("../../world2/tools/town-index-ingest.mjs");
     const w = await store.connect("law_ingester");
-    const sdb = new DatabaseSync(officeDb, { readOnly: true });
     try {
       await w.query("BEGIN");
-      await copyIndexToStore(w, sdb);
+      await seedTownIndex(w, rows);
       await w.query("INSERT INTO projection_heads (repo, sha, ingested_at) VALUES ($1, $2, now()) ON CONFLICT (repo) DO UPDATE SET sha = EXCLUDED.sha, ingested_at = now()", [HEAD_KEY, g(town, "rev-parse", "HEAD")]);
       await w.query("COMMIT");
-    } finally { sdb.close(); await w.end(); }
-    log(`store: registry seeded; office.db hydrated and its town index copied in ${Math.round((Date.now() - t0) / 1000)} s`);
+    } finally { await w.end(); }
+    log(`store: registry seeded; the town index derived and written in ${Math.round((Date.now() - t0) / 1000)} s`);
 
     // THE STORE'S STAMP CHAIN, in the box's switch order (066/067, one ingest, one
     // stamp-lines --sync, then STAMP_LINES=store; deploy/DEPLOY.md § The dev
@@ -185,7 +219,7 @@ export async function localDevTarget({
       WORLD2_PG_URL: store.url("office_api"), WORLD2_STANCE_URL: store.url("stance_reader"),
       W2_PEN: "stance,hold,say,walk,frame,mark", W2_GUARDS: "1", WORLD_POSITIONS: "1",
       OFFICE_READ_WORKERS: "0", STAMP_KEY: stampKey, STAMP_LINES: "store",
-      STATE_LOG_SOURCE: "store", OFFICE_PAPERWORK_STORE: "1", TOWN_INDEX_READS: "store",
+      STATE_LOG_SOURCE: "store", OFFICE_PAPERWORK_STORE: "1",
       ...envOverrides,
     };
     for (const [k, v] of Object.entries(env)) if (v === undefined) delete env[k];
@@ -201,7 +235,7 @@ export async function localDevTarget({
       const childEnv = { ...process.env };
       for (const k of Object.keys(childEnv)) if (/^(PG[A-Z]*|WORLD2_[A-Z_]*URL|OFFICE_KEYS)$/.test(k)) delete childEnv[k];
       const child = spawn(process.execPath, [join(OFFICE, "src", "server.mjs"), "--port", String(officePort),
-        "--db", officeDb, "--oauth-db", join(dir, "oauth.db"), "--roles-db", join(dir, "roles.db")],
+        "--oauth-db", join(dir, "oauth.db"), "--roles-db", join(dir, "roles.db")],
       { cwd: OFFICE, env: { ...childEnv, ...env }, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
       // the office writes its instruments under the tree's telemetry/ by port (src/loop-lag.mjs, store-txn-watch.mjs);
       // registered before the kill, so (cleanups run in reverse) they go after the office has stopped writing them

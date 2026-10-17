@@ -179,19 +179,19 @@
 // ═════════════════════════════════════════════════════════════════════════════
 
 export const VENDOR = Object.freeze({
-  walk: { repo: "keeminlee/postmark-world", path: "tools/walk.mjs",
+  walk: { repo: "postmark-town/postmark-world", path: "tools/walk.mjs",
           blob: "606b47f0577d35addde2df6b9398e7679f371ea1", at: "c701988f9ff937661297a8acc87a48925ba3b37f" },
-  geometry: { repo: "keeminlee/postmark-world", path: "tools/geometry.mjs",
+  geometry: { repo: "postmark-town/postmark-world", path: "tools/geometry.mjs",
           blob: "6539c129f430fa53f071b380ed9447c6dcee0417", at: "c701988f9ff937661297a8acc87a48925ba3b37f" },
-  whereIs: { repo: "keeminlee/postmark-world", path: "tools/where-is.mjs",
+  whereIs: { repo: "postmark-town/postmark-world", path: "tools/where-is.mjs",
           blob: "83e6a766e16bea763c6a118c44d634093c99742a", at: "c701988f9ff937661297a8acc87a48925ba3b37f" },
-  enterExit: { repo: "keeminlee/postmark-world", path: "tools/enter-exit.mjs",
+  enterExit: { repo: "postmark-town/postmark-world", path: "tools/enter-exit.mjs",
           blob: "c3817c10a6d3ee3e1fe7b37365a0cc8ae64692a4", at: "c701988f9ff937661297a8acc87a48925ba3b37f" },
-  world: { repo: "keeminlee/postmark-office", path: "src/world.mjs",
+  world: { repo: "postmark-town/postmark-office", path: "src/world.mjs",
           blob: "466130cc38c03991ebf9deb1d6966a08390c6d65", at: "5aaee01c05b3c028efaaa7f6131fc1cb51c86173" },
-  emissions: { repo: "keeminlee/postmark-office", path: "src/dynamic-emissions.mjs",
+  emissions: { repo: "postmark-town/postmark-office", path: "src/dynamic-emissions.mjs",
           blob: "826e6c30779a764dcd048233affc0ba6c9255287", at: "5aaee01c05b3c028efaaa7f6131fc1cb51c86173" },
-  movement: { repo: "keeminlee/postmark-office", path: "src/world-movement.mjs",
+  movement: { repo: "postmark-town/postmark-office", path: "src/world-movement.mjs",
           blob: "be594f42ac42846175e7a043d9db361069a21635", at: "5aaee01c05b3c028efaaa7f6131fc1cb51c86173" },
 });
 
@@ -1249,7 +1249,7 @@ export const DISCLOSURES = Object.freeze({
   // answer reads two rosters for two questions and says so.
   roll_source: "the roll here is `town_roll` — the TOWN repo's WHITE_PAGES at the pinned town_sha, which is " +
                "the same roster 1.0's doors take (`ctx.roll`). Household grouping still comes from " +
-               "`identities` (the world repo's households.json): the roll says who to ask about, the " +
+               "`identities` (the store's household registry): the roll says who to ask about, the " +
                "identities say whose ground counts as yours. A resident in the roll with no identity row " +
                "is asked about and stands alone — registry lag never unplaces anyone.",
 });

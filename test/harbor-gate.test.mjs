@@ -11,14 +11,13 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { DatabaseSync } from "node:sqlite";
 import { harborGated, HARBOR_ALLOWED, HARBOR_BOUNCE, harborWritesOpen } from "../src/harbor-gate.mjs";
 import { SETTLING_ASHORE } from "../src/declare.mjs";
 import { householdFor } from "../src/oauth.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 // The stamp test below writes its residents mid-test and asks householdFor's logic
 // over exactly those rows, so it hands them through an explicit probe.
-import { officeProbe } from "../src/index-probe.mjs";
+import { emptyTown, put, probeOfTown } from "./fixture.mjs";
 
 const harborKey = { household: "newhuman", handles: new Set(["newcomer"]), harbor: true };
 const settledKey = { household: "keeminlee", handles: new Set(["wright"]) };
@@ -76,20 +75,19 @@ test("householdFor stamps the tier from the residents index — and the stamp fa
       "newcomer": { id: 555 },
       "wright": { id: 111 },
     }));
-    const db = new DatabaseSync(":memory:");
-    db.exec("CREATE TABLE residents (handle TEXT PRIMARY KEY, json TEXT)");
-    db.prepare("INSERT INTO residents VALUES (?, ?)").run("wright", "{}");
+    const town = emptyTown();
+    put(town, "residents", { handle: "wright", json: "{}" });
 
     // the pins are the store's (POS-343), seeded from the same two documents
     await withRecordFrom(clone, async () => {
-      const atHarbor = await householdFor(officeProbe(db), 555, "newhuman");
+      const atHarbor = await householdFor(await probeOfTown(town), 555, "newhuman");
       assert.equal(atHarbor.harbor, true, "no handle in the index → the harbor stamp");
-      const ashore = await householdFor(officeProbe(db), 111, "keeminlee");
+      const ashore = await householdFor(await probeOfTown(town), 111, "keeminlee");
       assert.equal(ashore.harbor, undefined, "a settled handle → no stamp, no gate");
 
       // settlement lands the newcomer ashore; the same lookup sheds the stamp
-      db.prepare("INSERT INTO residents VALUES (?, ?)").run("newcomer", "{}");
-      assert.equal((await householdFor(officeProbe(db), 555, "newhuman")).harbor, undefined);
+      put(town, "residents", { handle: "newcomer", json: "{}" });
+      assert.equal((await householdFor(await probeOfTown(town), 555, "newhuman")).harbor, undefined);
     });
   } finally {
     rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });

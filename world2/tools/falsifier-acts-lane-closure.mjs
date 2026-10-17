@@ -125,6 +125,13 @@ const LANE_OF = Object.freeze({
   walk: "lane",  // check 3 · dynamic.db/movements (WORLD_MOVEMENT_V2); the
                  // flag-off arm is journalled, and both are the same act
   give: "lane", drop: "lane", take: "lane",  // check 2 · dynamic.db/attachments
+  // THE COUNTED UNITS' TWO NEW FACES (WLD-27, 2026-10-13). Which lane: hold.
+  // Which table: `acts` itself, class `holding`, action `units:consume` /
+  // `units:refill` — written by the hold lane's flipped pen (appendActFlipped,
+  // world-units.mjs), the only record a unit has, so there is no second store
+  // to mirror and nothing for check 2's attachments to twin. Answered here
+  // because the census asked, as it did for `ride`.
+  consume: "lane", refill: "lane",
 
   // ruled out, each with its reason
   "note-to-self": "none",
@@ -184,6 +191,11 @@ const CLASS_LANE_OF = Object.freeze({
   ride: "journal",        // #2986 — naming a destination from inside a vehicle
   voice: "lane",          // check 1 — never written to the journal; see world-journal.mjs
   holding: "lane",        // check 2 — likewise
+  // POS-637 / WLD-56: a creature's spawn, reaction and withdraw. `acts` is its
+  // only pen (src/creatures.mjs § writeReaction and the creature tick), so
+  // there is no first pen to close against. Its payload was checked against
+  // the public export: a reaction row never carries the slice Jev read.
+  creature: "lane",
 });
 
 function checkClassCensus(classesInJournal) {

@@ -8,13 +8,13 @@ import assert from "node:assert/strict";
 import { existsSync, rmSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
-import { fixtureDb, tempClone, fixtureKey } from "./fixture.mjs";
+import { tempClone, fixtureKey, fixtureTown } from "./fixture.mjs";
 import { enqueueLetter, nextCrossing } from "../src/write.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 
 delete process.env.TOWN_PUSH; // belt and braces: the spine must stay local
 
-const db = fixtureDb();
+const db = fixtureTown();
 // The doors below run in this process and read their town index from a store
 // seeded from this fixture (POS-268, office-under-test.mjs).
 const IX = await indexStore(db);

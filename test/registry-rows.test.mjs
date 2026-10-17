@@ -246,10 +246,11 @@ test("a field the templates do not name REFUSES rather than renders without it",
 //   fox-hearth        `name` AND `human`, one account, a renamed login
 //   casa-nera         `name`, no `human`, `member_of: the-harbor`
 //
+// Names here are a house's key or public `name` only; its private `human` finds no house (POS-609).
 const PROBES = [
-  { slug: "cadaeic.space", id: 306985727, login: "vertas-marginalia", names: ["cadaeic.space", "Cadaeic"] },
+  { slug: "cadaeic.space", id: 306985727, login: "vertas-marginalia", names: ["cadaeic.space"] },
   { slug: "cadaeic.space", id: 314099683, login: "cadaeix-bot", names: ["cadaeic.space"] },
-  { slug: "fox-hearth", id: 20786448, login: "fox-hearth", names: ["fox-hearth", "Fox Hearth", "Sydney"] },
+  { slug: "fox-hearth", id: 20786448, login: "fox-hearth", names: ["fox-hearth", "Fox Hearth"] },
   { slug: "casa-nera", id: 317614670, login: "creepitalism", names: ["casa-nera", "Casa Nera"] },
 ];
 

@@ -84,13 +84,175 @@ export const kindOf = (entry) => String(entry?.for ?? "resident");
 export function classOfInstance(row) {
   if (!row) return null;
   if (row.declares) return null;
-  const named = row.class == null ? null : String(row.class).trim();
-  if (named) return named;
-  const kind = String(row.subkind ?? "").trim();
-  if (kind === "parcel") return "parcel";
-  if (kind === "sited") return "mark";
+  const named = markClassOf(row);
+  if (named) return PREDICATE_KINDS.has(named) ? null : named;
+  if (kindFieldOf(row) === "sited") return "mark";
   return null;
 }
+
+// ── THE KIND RUNG (LOGOS v2; classes.md § kind, ruled 2026-10-16 15:43/16:02) ──
+//
+// "`kind` is a flat field naming the node's own class … The `class:` field
+// folds into `kind`: … `kind: candy` names `the-town/candy`." Until the
+// instance migration (W2) lands, the record holds BOTH spellings of one fact:
+//
+//   the old form   kind: sited  + class: thing     kind names a standing
+//   the new form   kind: thing                     kind names the class
+//
+// and a `kind: parcel` mark was already the new form. Every reader asks these
+// three functions, so the two forms are one question with one answer, and the
+// migration can land after the readers instead of with them.
+
+/** The old form's standings: a `kind` with one of these names how a mark stands, not its class. */
+export const STANDING_KINDS = Object.freeze(["sited", "predicated"]);
+/** The predicate family, in either form (naming is a predicate whose claim is a name). */
+export const PREDICATE_KINDS = new Set(["predicated", "predicate", "naming"]);
+/** Class-space nodes: a declaration, never an instance. */
+export const NODE_KINDS = Object.freeze(["class", "property"]);
+
+/** The `kind` field as either source spells it: the store's row keeps it as `subkind` (its `kind` is `mark`). */
+export const kindFieldOf = (m) => String((m?.subkind !== undefined ? m.subkind : m?.kind) ?? "").trim();
+
+/**
+ * The class a mark NAMES, in either form, and nothing else: no `declares`
+ * rule, no grant semantics. `class:` when the mark carries one (the old form);
+ * otherwise its `kind`, unless that kind is a standing (`sited`, `predicated`)
+ * or class-space (`class`, `property`), which name no class of their own. A
+ * plain sited mark names none, exactly as `m.class` was undefined on it.
+ */
+export function markClassOf(m) {
+  if (!m) return null;
+  const named = m.class == null ? "" : String(m.class).trim();
+  if (named) return named;
+  const kind = kindFieldOf(m);
+  if (!kind || STANDING_KINDS.includes(kind) || NODE_KINDS.includes(kind) || kind === "mark") return null;
+  return kind;
+}
+
+/**
+ * The class a CLASS NODE declares, in either form: its `class:` field (the old
+ * form), or its own slug when it is `kind: class` without one ("a class node's
+ * name is its own slug", ruled 16:02).
+ */
+export function classNodeNameOf(m) {
+  if (!m) return null;
+  const named = m.class == null ? "" : String(m.class).trim();
+  if (named) return named;
+  if (kindFieldOf(m) !== "class") return null;
+  const slug = String(m.slug ?? String(m.id ?? "").split("/").pop() ?? "").trim();
+  return slug || null;
+}
+
+/**
+ * The `class` a projection stores for a mark, in either form: the class it
+ * names, or the class a class node declares. A parcel stores none, as it never
+ * did (its class is its kind, and the parcel rail draws its instance-of edge),
+ * and neither does a predicate or a naming, so the old form projects exactly
+ * as it always has.
+ */
+export function classFieldOf(m) {
+  if (!m) return null;
+  const kind = kindFieldOf(m);
+  if (kind === "class") return classNodeNameOf(m);
+  const named = m.class != null && String(m.class).trim() !== "";
+  if (!named && (kind === "parcel" || PREDICATE_KINDS.has(kind))) return null;
+  return markClassOf(m);
+}
+
+/**
+ * A class name → its lineage, itself first, up `extends` to the root.
+ * `extendsOf(name)` is the caller's reader of the class layer (law snapshot,
+ * store or world state); a cycle or a missing link ends the walk, never loops.
+ */
+export function lineageOf(name, extendsOf) {
+  const out = [];
+  let at = name == null ? "" : String(name).trim();
+  while (at && !out.includes(at) && out.length < 32) {
+    out.push(at);
+    let up = null;
+    try { up = extendsOf?.(at); } catch { up = null; }
+    at = up == null ? "" : String(up).trim();
+  }
+  return out;
+}
+
+/**
+ * How a mark stands: "sited", "predicate", "class", "property", "node" (a post
+ * or an entity: in the tree, but neither of mark's two subclasses), or null
+ * when its class's lineage cannot be read. The old form says it outright; the
+ * new form says it by lineage, sited and predicate being `mark`'s two mutually
+ * exclusive subclasses (ruled 13:56). `parcel` is sited in both forms: on the
+ * record before the class tree moved, the parcel class extends `mark` directly.
+ */
+export function standingOf(m, extendsOf) {
+  const kind = kindFieldOf(m);
+  if (kind === "sited" || kind === "parcel") return "sited";
+  if (PREDICATE_KINDS.has(kind)) return "predicate";
+  if (NODE_KINDS.includes(kind)) return kind;
+  const line = lineageOf(kind, extendsOf);
+  if (line.includes("sited")) return "sited";
+  if (line.some((c) => PREDICATE_KINDS.has(c))) return "predicate";
+  return line.length > 1 ? "node" : null;
+}
+
+/**
+ * An `extendsOf` read off a loaded set of marks: each `kind: class` node's own
+ * `extends`, first declaration winning. For a reader that holds the marks
+ * themselves (a subprocess over the clone) rather than the office's class layer.
+ */
+export function extendsFromMarks(marks) {
+  const ext = new Map();
+  for (const m of marks ?? []) {
+    if (kindFieldOf(m) !== "class") continue;
+    const n = classNodeNameOf(m);
+    if (n && !ext.has(n)) ext.set(n, m.extends == null ? null : String(m.extends));
+  }
+  return (name) => ext.get(String(name)) ?? null;
+}
+
+/**
+ * A class node's DIALS, in either form (LOGOS v2, lane O1; W1 G3/G5): "Every
+ * dial becomes a property, and a locked value is its default" (ruled 16:02),
+ * and a dial's property node is named by the dial's key verbatim. So a class's
+ * dials are its own top-level `kind: property` children (name → default),
+ * PROPERTY FIRST, then whatever `dials:` frontmatter the class still carries.
+ * `children` is the class node's direct child marks. Null when neither says
+ * anything, as the projections always stored an absent `dials:`.
+ */
+export function dialsOfClassNode(m, children = []) {
+  const old = m?.dials && typeof m.dials === "object" && !Array.isArray(m.dials) ? m.dials : null;
+  const props = {};
+  for (const c of children ?? []) {
+    if (kindFieldOf(c) !== "property") continue;
+    // A CHILD property names its parent in `of:` (W1's flat layout, filed in its
+    // class's directory beside the top-level ones); it is no dial of the class.
+    if (c.of != null && String(c.of).trim() && String(c.of).trim() !== String(m?.id ?? "")) continue;
+    const name = String(c.name ?? c.slug ?? String(c.id ?? "").split("/").pop() ?? "").trim();
+    if (name && !(name in props) && c.default !== undefined) props[name] = propertyValue(c.default);
+  }
+  if (!old && !Object.keys(props).length) return null;
+  return { ...(old ?? {}), ...props };
+}
+
+/**
+ * A property's value as a reader holds it. The world's parser leaves a
+ * `default:` as bare text, so a true/false/null arrives as the WORD
+ * ("true", "false", "null"); numbers already arrive as numbers. The words
+ * become their values here, once (as W1's own `propertyValue` does, and
+ * holding-law § truth for makers and holder); any other text stays text.
+ */
+export function propertyValue(v) {
+  if (v === "true") return true;
+  if (v === "false") return false;
+  if (v === "null") return null;
+  return v;
+}
+
+/** A property node's parent: its `of:` when it names one (W1's flat layout), else the directory parent the loader gives. */
+export const propertyParentId = (m) => (m?.of != null && String(m.of).trim() ? String(m.of).trim() : (m?._parentMarkId ?? null));
+
+/** Is this mark sited, in either form? (`kind === "sited" || kind === "parcel"` before the kind rung.) */
+export const isSited = (m, extendsOf) => standingOf(m, extendsOf) === "sited";
 
 /**
  * Does this entry's `scope:` admit this actor at this ground?

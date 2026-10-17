@@ -83,7 +83,7 @@ export const STEPS = [
   { kind: "step", title: "Advance: diagnosed, pointing at the cause", who: WRIGHT, env: { do: "advance", args: { post: ID, to: "diagnosed", credit: "finn", link: "https://github.com/postmark-town/postmark-office/issues/256#issuecomment-1" } }, note: "finn named the cause on the issue; the post keeps the comment as fields.links.diagnosed." },
   { kind: "refusal", title: "Advance to briefed without a grade", who: WRIGHT, env: { do: "advance", args: { post: ID, to: "briefed", credit: "finn" } } },
   { kind: "refusal", title: "Name the critter before fixed", who: WRIGHT, env: { do: "advance", args: { post: ID, to: "briefed", credit: "finn", grade: "light", critter: "Hinge Nibbler" } } },
-  { kind: "refusal", title: "Advance to briefed pointing at a pull request", who: WRIGHT, env: { do: "advance", args: { post: ID, to: "briefed", credit: "finn", grade: "light", link: "https://github.com/postmark-town/postmark-office/pull/258" } }, note: "A brief is a comment, an issue or a letter; a PR earns fixed." },
+  { kind: "refusal", title: "Advance to briefed pointing at a founder's pull request", who: WRIGHT, env: { do: "advance", args: { post: ID, to: "briefed", credit: "finn", grade: "light", link: "https://github.com/postmark-town/postmark-office/pull/259" } }, note: "A resident's own PR may earn diagnosed or briefed; a founder's PR never does, for anyone (POS-649)." },
   { kind: "step", title: "Advance: briefed (light), pointing at the brief", who: WRIGHT, env: { do: "advance", args: { post: ID, to: "briefed", credit: "finn", grade: "light", link: "https://github.com/postmark-town/postmark-office/issues/256#issuecomment-2" } } },
   { kind: "refusal", title: "Advance to fixed without a size", who: WRIGHT, env: { do: "advance", args: { post: ID, to: "fixed", credit: "finn" } } },
   { kind: "refusal", title: "Advance to fixed without a critter", who: WRIGHT, env: { do: "advance", args: { post: ID, to: "fixed", credit: "finn", size: "M" } } },
@@ -170,6 +170,7 @@ const GITHUB_WORK = {
   "/repos/postmark-town/postmark-office/issues/comments/2": { id: 2, issue_url: onIssue(256), user: FINN_GH },
   "/repos/postmark-town/postmark-office/issues/comments/3": { id: 3, issue_url: onIssue(257), user: FINN_GH },
   "/repos/postmark-town/postmark-office/pulls/258": { number: 258, user: FINN_GH },
+  "/repos/postmark-town/postmark-office/pulls/259": { number: 259, user: { login: "wright-starforge", id: 306351151 } },
 };
 
 const bytes = (v) => Buffer.byteLength(JSON.stringify(v));
@@ -198,18 +199,21 @@ export async function collect({ cls = "bug" } = {}) {
   });
   await new Promise((ok) => github.listen(0, "127.0.0.1", ok));
   process.env.GITHUB_API_URL = `http://127.0.0.1:${github.address().port}`;
-  // The office's residents index, which a bug's `for` and `credit` must stand in: an in-memory
-  // office.db `residents` table, read by the door's own residentList.
-  const { DatabaseSync } = await import("node:sqlite");
-  const db = new DatabaseSync(":memory:");
-  db.exec("CREATE TABLE residents (handle TEXT PRIMARY KEY, json TEXT)");
-  for (const h of ["wright", "keemin", "architect", "errant", "ada", "finn"]) db.prepare("INSERT INTO residents VALUES (?, ?)").run(h, JSON.stringify({ display: h }));
+  // The office's residents index, which a bug's `for` and `credit` must stand in: the store's
+  // town index (a store of the suites' own, test/helpers/office-under-test.mjs), read by the
+  // door's own roll.
+  const { emptyTown, put } = await import("../test/fixture.mjs");
+  const { indexStore } = await import("../test/helpers/office-under-test.mjs");
+  const residents = emptyTown();
+  for (const h of ["wright", "keemin", "architect", "errant", "ada", "finn"]) put(residents, "residents", { handle: h, json: JSON.stringify({ display: h }) });
+  const ix = await indexStore(residents, { db: "agent_view" });
+  const restoreIndex = await ix.useInProcess();
   try {
     const town = toolList().find((t) => t.name === "town");
     const flat = (name) => TOOLS.find((t) => t.name === name) ?? null;
     const out = [];
     for (const s of cls === "idea" ? IDEA_STEPS : STEPS) {
-      const answer = await callTool("town", s.env, { key: s.who, clone: null, db });
+      const answer = await callTool("town", s.env, { key: s.who, clone: null });
       const verb = s.env.do ? townDispatchToolFor(s.env.do) : TOWN_READS[s.env.read]?.tool ?? townDispatchToolFor(s.env.read);
       const status = answer?.error === "bounce" ? (answer.code ?? 422) : 200;
       out.push({ ...s, who: s.who ? [...s.who.handles][0] : null, answer, verb, flat: flat(verb), status, bytes: bytes(answer),
@@ -219,7 +223,7 @@ export async function collect({ cls = "bug" } = {}) {
     const facts = await storeFacts();
     const rows = planStages({ acts: facts.acts, houseOf: (h) => facts.houses.get(h) ?? null, isMeep: () => false, paid: new Set() });
     return { town, steps: out, plan: renderPlan(rows), acts: pen.rows().length, cls };
-  } finally { uninstallActsPen(); github.close(); }
+  } finally { uninstallActsPen(); github.close(); await restoreIndex(); await ix.stop(); }
 }
 
 function commitOf() {

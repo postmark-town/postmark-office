@@ -23,7 +23,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { __setPoolForTest } from "../src/world2-acts.mjs";
-import { rowsFromRegistry, renderRegistry } from "../src/registry-rows.mjs";
+import { rowsFromRegistry, renderRegistry, renderPublicRegistry } from "../src/registry-rows.mjs";
 import { loadRegistryRows } from "../src/registry-store.mjs";
 import { checkRegistry, drainRegistry, missingFromStore } from "../tools/registry-drain.mjs";
 import { REGISTRY_PATH, PINS_PATH } from "../src/residency.mjs";
@@ -34,6 +34,9 @@ const FIX = join(HERE, "fixtures", "registry-2026-09-22");
 const HOUSEHOLDS_RAW = readFileSync(join(FIX, "households.json"), "utf8");
 const PINS_RAW = readFileSync(join(FIX, "github-ids.json"), "utf8");
 const ROWS = rowsFromRegistry(JSON.parse(HOUSEHOLDS_RAW), JSON.parse(PINS_RAW));
+// POS-394: the town's printout is the PUBLIC render (no `human` key). Computed
+// from the fixture's own rows, so the suite never spells a private value.
+const PUBLIC_HOUSEHOLDS_RAW = renderPublicRegistry(ROWS).households;
 
 const ENV_ON = { WORLD2_PG: "1", WORLD2_PG_URL: "postgres://stub/none" };
 const ENV_OFF = {};
@@ -118,7 +121,7 @@ test("the metadata block renders in ONE order however the rows arrive", async ()
   // which is the law the rest of this suite holds.
   __setPoolForTest(stubPool());
   try {
-    const clone = cloneWith(HOUSEHOLDS_RAW, PINS_RAW);
+    const clone = cloneWith(PUBLIC_HOUSEHOLDS_RAW, PINS_RAW);
     assert.equal((await checkRegistry({ clone, env: ENV_ON })).ok, true);
   } finally { __setPoolForTest(null); }
 });
@@ -148,7 +151,7 @@ test("the meta query the reader SENDS orders explicitly, and not by key text", a
 test("--check is GREEN when the store renders the clone's files byte for byte", async () => {
   __setPoolForTest(stubPool());
   try {
-    const clone = cloneWith(HOUSEHOLDS_RAW, PINS_RAW);
+    const clone = cloneWith(PUBLIC_HOUSEHOLDS_RAW, PINS_RAW);
     const r = await checkRegistry({ clone, env: ENV_ON });
     assert.equal(r.ok, true);
     assert.deepEqual(r.diffs, []);
@@ -162,8 +165,8 @@ test("--check is RED, and names the line, when one byte moves", async () => {
   // gate must find it and say where.
   __setPoolForTest(stubPool());
   try {
-    const tampered = HOUSEHOLDS_RAW.replace('"name": "Fox Hearth"', '"name": "Fox Hearths"');
-    assert.notEqual(tampered, HOUSEHOLDS_RAW, "the tamper must actually change the file");
+    const tampered = PUBLIC_HOUSEHOLDS_RAW.replace('"name": "Fox Hearth"', '"name": "Fox Hearths"');
+    assert.notEqual(tampered, PUBLIC_HOUSEHOLDS_RAW, "the tamper must actually change the file");
     const clone = cloneWith(tampered, PINS_RAW);
     const r = await checkRegistry({ clone, env: ENV_ON });
     assert.equal(r.ok, false);
@@ -199,7 +202,7 @@ test("--apply writes both files and commits ONCE, through the injected pen", asy
     assert.equal(calls[0].paths.length, 2);
     assert.match(calls[0].message, /118 households, 190 pins/);
 
-    assert.equal(readFileSync(join(clone, REGISTRY_PATH), "utf8"), HOUSEHOLDS_RAW);
+    assert.equal(readFileSync(join(clone, REGISTRY_PATH), "utf8"), PUBLIC_HOUSEHOLDS_RAW, "the PUBLIC printout (POS-394)");
     assert.equal(readFileSync(join(clone, PINS_PATH), "utf8"), PINS_RAW);
   } finally { __setPoolForTest(null); }
 });
@@ -207,7 +210,7 @@ test("--apply writes both files and commits ONCE, through the injected pen", asy
 test("--apply on files that already match writes nothing and commits nothing", async () => {
   __setPoolForTest(stubPool());
   try {
-    const clone = cloneWith(HOUSEHOLDS_RAW, PINS_RAW);
+    const clone = cloneWith(PUBLIC_HOUSEHOLDS_RAW, PINS_RAW);
     const calls = [];
     const r = await drainRegistry({ clone, env: ENV_ON, commit: (...a) => { calls.push(a); return "x"; } });
     assert.equal(r.ran, true);
@@ -233,7 +236,7 @@ test("the meta pair renders in the FILE's order, not the table's", async () => {
   // drain would rewrite the whole registry.
   __setPoolForTest(stubPool());
   try {
-    const clone = cloneWith(HOUSEHOLDS_RAW, PINS_RAW);
+    const clone = cloneWith(PUBLIC_HOUSEHOLDS_RAW, PINS_RAW);
     const r = await checkRegistry({ clone, env: ENV_ON });
     assert.equal(r.ok, true);
     assert.deepEqual(Object.keys(r.rows.meta), ["schema_version", "note"]);

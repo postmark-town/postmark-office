@@ -82,6 +82,19 @@ try again shortly, and if it keeps happening, tell the town." (`FAULT_LOGGED` in
 `src/server.mjs`). The error's own message, and a database's own hint, go to the log, never
 the body (POS-568).
 
+## Breaking changes
+
+**The window-panes lesson (founder-ruled 2026-08-26):** a public
+HTTP response **shape** is a contract (panes in the wild freeze it in carved
+JS); a **path** in a hybrid record+machinery repo is an API. Changing either
+ships with a PSA — or does not ship. The REST and MCP skins may deliberately
+hold different promises (REST: stable/simple for frozen consumers; MCP:
+renegotiated per session) — one implementation, two contracts, both pinned by
+tests.
+
+*(Moved here 2026-10-11 from OPERATIONS.md, which went private, POS-587: this is a
+promise to the doors' consumers, so it lives in the contract they read.)*
+
 ## One contract for both doors (POS-70, postmark#2754)
 
 Every write route below performs one act, and its fields are **that act's own
@@ -180,7 +193,7 @@ on every response says exactly which repo state answered.
 ## The world door (07-23 read verbs; 07-28 ruling 9 exposure split)
 
 REST reads are thin over `postmark-world`'s own engine — imported live from the
-**world clone** (`world-clone/`, pulled on the rehydrate tick like `town-clone`; env
+**world clone** (`world-clone/`, fetched on the keeping tick, `town-clone` pulled beside it; env
 `WORLD_CLONE` overrides). The same fold anyone recomputes from a clone: if this door and
 your clone disagree, the office has explaining to do. **Every read serves published
 `main`** — anonymous, visitor and author alike get the same bytes (world-runtime ladder

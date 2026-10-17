@@ -62,6 +62,7 @@ test("the pool options: the acquire timeout and the idle-transaction limit defau
   assert.equal(o.max, 3);
   assert.equal(o.connectionTimeoutMillis, ACQUIRE_MS_DEFAULT);
   assert.equal(o.idle_in_transaction_session_timeout, IDLE_TX_MS_DEFAULT);
+  assert.equal(o.keepAlive, true, "every store connection keeps TCP keepalive on (review-595: the half-open socket)");
   assert.match(o.application_name, /^postmark-office:pen:t\d+$/);
 });
 

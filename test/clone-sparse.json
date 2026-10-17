@@ -1,0 +1,38 @@
+{
+  "_doc": "What the office suite may read from its pinned clones (town-clone/, world-clone/, at test/clone-pins.json's shas), as git sparse-checkout patterns (non-cone: gitignore syntax, a later line overrides an earlier one). POS-652, Darko 2026-10-15 19:51: \"sparse checkout 100% ... We should never be checking out the full town clone at this point.\" Every office pool tree, CI (.github/scripts/suite-clones.sh) and the pool's provisioning (G:/Postmark/pool/claims-lib.mjs) check out exactly these, from this one file; test/helpers/clone-sparse.mjs reads it. MEASURED, not guessed: on 2026-10-15 the whole suite ran on CI with every file it opened in either clone recorded per test file (inotify on both clones, run 38827539430 on the branch pos652/measure-clone-reads): 5,692 files and 3,473 directories, no letter, no MEEPS, PROJECTS or HARBOR file, and no STATE/log/*.meta.json. Each pattern names who reads it. THE GUARD: test/helpers/sparse-guard.mjs (loaded by npm test and the lanes' local runs through --import, by test/fixture-paths.mjs, and on CI by NODE_OPTIONS in every process; a miss in any process a test spawns reds the run) makes a read of a path that is in the pinned commit but outside these patterns throw, naming the path and this file; a directory listing that lacks an entry the commit has throws the same way, unless the entry matches the clone's `unlisted` (an absence measured safe, with its reader). To add a path: add a pattern here with its reader, and the pool trees convert in place (node G:/Postmark/pool/claim.mjs sparse office-N). THE STAND-INS (test/helpers/dev-target.mjs: the dev rehearsal's and tools/sandbox.mjs's scratch clones, the playground's among them) are a different set, made in test/helpers/clone-sparse.mjs § standinPatterns: they run a whole office that writes, so they keep the whole tree except the town's older letters and the world's older STATE/log/*.meta.json.",
+  "town": {
+    "patterns": [
+      { "pattern": "/*", "readers": "the root files: quest-registry.json (next-steps, quest-posts, quest-standing, stamp-mint-parity, stamp-tail, town-index-*), ECONOMY-DIALS.json (my-marks-*, leave-door-region-filed-parcel, ring-derives-box, twin-household-through-handles, world-journal); 44 suites in all" },
+      { "pattern": "!/*/", "readers": "no top-level directory unless named below: MEEPS/, PROJECTS/, HARBOR/, TEMPLATE/, .github/, .claude/, .agents/ are read by no suite" },
+      { "pattern": "/tools/", "readers": "the town's code and its registry data (households.json, github-ids.json, meep-accounts.json, stamp-pubkey.pem, standing-ledger.md): 68 suites; test/helpers/town-tools.mjs copies every module" },
+      { "pattern": "/WHITE_PAGES/", "readers": "the room census: 21 suites list WHITE_PAGES and read every room's ADDRESS.md and PROFILE.md (profiles, next-steps, my-marks-*, stamp-mint-run, stamp-sandbox, town-index-*, world-snapshot ...); HOME/ (7: next-steps, quest-standing, read-worker, town-index-absent ...), WINDOW/ (3: read-worker, town-index-absent, town-index-release); the ledgers stamp-ledger.md and mail-ledger.md (27)" },
+      { "pattern": "!/WHITE_PAGES/*/inbox/", "readers": "nobody: 14,362 letters, and no suite reads one from the pinned clone (the fixtures write their own)" },
+      { "pattern": "!/WHITE_PAGES/*/outbox/", "readers": "nobody: 234 files, none read" },
+      { "pattern": "!/WHITE_PAGES/*/MEDIA/", "readers": "nobody: 64 files, none read" },
+      { "pattern": "/TOWN_BULLETIN/", "readers": "bulletin-newest-first (lists it), doorstep-psa, stamp-mint-parity" }
+    ],
+    "unlisted": [
+      { "entry": "MEEPS", "readers": "a listing of the town root may lack this left-out top-level directory: src/world-snapshot.mjs § householdsAt (world-snapshot) links every top-level entry into an overlay, and the town engine there reads only tools/ and WHITE_PAGES/ (the links are guarded too)" },
+      { "entry": "PROJECTS", "readers": "a listing of the town root may lack this left-out top-level directory: src/world-snapshot.mjs § householdsAt (world-snapshot) links every top-level entry into an overlay, and the town engine there reads only tools/ and WHITE_PAGES/ (the links are guarded too)" },
+      { "entry": "HARBOR", "readers": "a listing of the town root may lack this left-out top-level directory: src/world-snapshot.mjs § householdsAt (world-snapshot) links every top-level entry into an overlay, and the town engine there reads only tools/ and WHITE_PAGES/ (the links are guarded too)" },
+      { "entry": "TEMPLATE", "readers": "a listing of the town root may lack this left-out top-level directory: src/world-snapshot.mjs § householdsAt (world-snapshot) links every top-level entry into an overlay, and the town engine there reads only tools/ and WHITE_PAGES/ (the links are guarded too)" },
+      { "entry": ".github", "readers": "a listing of the town root may lack this left-out top-level directory: src/world-snapshot.mjs § householdsAt (world-snapshot) links every top-level entry into an overlay, and the town engine there reads only tools/ and WHITE_PAGES/ (the links are guarded too)" },
+      { "entry": ".claude", "readers": "a listing of the town root may lack this left-out top-level directory: src/world-snapshot.mjs § householdsAt (world-snapshot) links every top-level entry into an overlay, and the town engine there reads only tools/ and WHITE_PAGES/ (the links are guarded too)" },
+      { "entry": ".agents", "readers": "a listing of the town root may lack this left-out top-level directory: src/world-snapshot.mjs § householdsAt (world-snapshot) links every top-level entry into an overlay, and the town engine there reads only tools/ and WHITE_PAGES/ (the links are guarded too)" }
+    ]
+  },
+  "world": {
+    "patterns": [
+      { "pattern": "/*", "readers": "the root files: .gitattributes (12 suites: hydrate-bounty, read-workers, say-dials, world-graph-db, world-read-shape ...), package.json" },
+      { "pattern": "!/*/", "readers": "no top-level directory unless named below: spectator/, docs/, seeding/, .github/ are read by no suite" },
+      { "pattern": "/tools/", "readers": "the world's code: 114 suites (containment-map, roles, store-writedown-* list tools/ and tools/qa/)" },
+      { "pattern": "/WORLD/", "readers": "WORLD/marks/ whole (8 suites walk it: world-ride, world-ride-read, world-movement, mists-season-lines, household-stamps, stamps-preview ...) and the record files world-state.json, skeleton.json, households.json, walk-ledger.md, enter-exit-ledger*.md, containment.json (54 suites)" },
+      { "pattern": "/STATE/", "readers": "STATE/log/: era-one-from-the-store and position-snapshot read every .jsonl (3,230), town-stance 66; STATE/snapshot/: world-read-shape lists it" },
+      { "pattern": "!/STATE/log/*.meta.json", "readers": "nobody: 3,230 files, none opened by the suite" },
+      { "pattern": "/LOGOS/", "readers": "cli-guard and foyer-shrink read LOGOS/the-response-function.md (the directory is 20 files)" }
+    ],
+    "unlisted": [
+      { "entry": "STATE/log/*.meta.json", "readers": "era-one-from-the-store, position-snapshot and town-stance list STATE/log/ and open only its .jsonl files (measured: every .jsonl opened, no .meta.json)" }
+    ]
+  }
+}

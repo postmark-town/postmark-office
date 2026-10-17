@@ -79,8 +79,14 @@ export function mailLineRows(TOWN) {
  * count, after every held line is checked against the checkout. A changed past
  * throws and the caller's transaction writes nothing: the mail ledger is
  * append-only by town law. Returns `{ rooms: { inserted, deleted }, mail_lines: { inserted } }`.
+ *
+ * `appended` (POS-523) is the ledger text the delta PROVED appended since the
+ * index's head (town-index-ingest.mjs § ledgerAppend, CRLF already read as LF):
+ * its `- ` lines go past the held count, and neither the file nor a held line
+ * is read again. An empty table takes the whole road: there is no held count
+ * to append past (067 applied after the seed).
  */
-export async function writeMintInputs(client, TOWN) {
+export async function writeMintInputs(client, TOWN, { appended = null } = {}) {
   const out = { rooms: { inserted: 0, deleted: 0 }, mail_lines: { inserted: 0 } };
 
   const want = new Map(roomRows(TOWN).map((r) => [r[0], { row: r, digest: digest(r) }]));
@@ -96,14 +102,20 @@ export async function writeMintInputs(client, TOWN) {
     out.rooms.inserted++;
   }
 
-  const lines = mailLineRows(TOWN);
-  const stored = (await client.query("SELECT seq, digest FROM town_mail_lines ORDER BY seq")).rows;
-  if (lines.length < stored.length)
-    throw new Error(`the mail ledger shrank (${stored.length} lines held, ${lines.length} now): it is append-only by town law. Nothing was written.`);
-  for (const { seq, digest: d } of stored)
-    if (d !== digest(lines[seq - 1]))
-      throw new Error(`the mail ledger's line ${seq} is not the line the store holds: its past changed, and it is append-only by town law. Nothing was written.`);
-  const fresh = lines.slice(stored.length);
+  const heldLines = appended == null ? 0 : (await client.query("SELECT coalesce(max(seq), 0)::int n FROM town_mail_lines")).rows[0].n;
+  let fresh;
+  if (heldLines) {
+    fresh = appended.split("\n").filter((l) => l.startsWith("- ")).map((line, i) => [heldLines + i + 1, line]);
+  } else {
+    const lines = mailLineRows(TOWN);
+    const stored = (await client.query("SELECT seq, digest FROM town_mail_lines ORDER BY seq")).rows;
+    if (lines.length < stored.length)
+      throw new Error(`the mail ledger shrank (${stored.length} lines held, ${lines.length} now): it is append-only by town law. Nothing was written.`);
+    for (const { seq, digest: d } of stored)
+      if (d !== digest(lines[seq - 1]))
+        throw new Error(`the mail ledger's line ${seq} is not the line the store holds: its past changed, and it is append-only by town law. Nothing was written.`);
+    fresh = lines.slice(stored.length);
+  }
   for (let i = 0; i < fresh.length; i += 500) {
     const chunk = fresh.slice(i, i + 500);
     await client.query(

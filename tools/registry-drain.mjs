@@ -20,11 +20,15 @@
 // ── `--check` IS THE GATE, NOT A REPORT ─────────────────────────────────────
 //
 // It answers exactly one question — does the store render today's real files,
-// byte for byte — and it is the condition on every later step. It runs at the
+// byte for byte — and it is the condition on every later step. Since POS-394
+// the files are the PUBLIC render (`renderPublicRegistry`: each house's private
+// `human` key left out; the store and the private render keep it), so the
+// gate and the write below both use the public render, and a printout that
+// still carries a `human` key is a differing line until the next drain. It runs at the
 // crossing, before anything trusts the store, and its red is the whole flip
 // stopping. The law it enforces is `src/registry-rows.mjs`'s header:
 //
-//     renderRegistry(rowsFromRegistry(the files)) === the files
+//     renderPublicRegistry(rowsFromRegistry(the files)) === the files   (POS-394: the printout is the public render)
 //
 // proven there against the 2026-09-22 fixtures, and proven HERE against
 // whatever the clone holds this morning. The two are the same law read from
@@ -65,7 +69,7 @@ import { readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { renderRegistry, firstDifferingLine, rowsFromRegistry } from "../src/registry-rows.mjs";
+import { renderPublicRegistry, firstDifferingLine, rowsFromRegistry } from "../src/registry-rows.mjs";
 import { loadRegistryRows, upsertHousehold, upsertPin } from "../src/registry-store.mjs";
 import { REGISTRY_PATH, PINS_PATH } from "../src/residency.mjs";
 import { penCommit } from "../src/write.mjs";
@@ -92,7 +96,7 @@ const parseFile = (clone, rel) => {
 
 // ── THE DRAIN NEVER SHRINKS THE REGISTRY (POS-158, Keemin 2026-09-22) ───────
 //
-// THE HAZARD THIS CLOSES, exactly. `renderRegistry` renders the WHOLE registry
+// THE HAZARD THIS CLOSES, exactly. `renderPublicRegistry` renders the WHOLE registry
 // from the table and `--apply` writes it over the town's file. So a house that
 // stands in the FILE and not in the TABLE is DELETED by the next drain — and
 // there is a road that produces exactly that state: the town's witness rule 2b
@@ -161,7 +165,7 @@ export async function checkRegistry({ clone = CLONE, env = process.env } = {}) {
   const missing = missingFromStore(rows, parseFile(clone, REGISTRY_PATH), parseFile(clone, PINS_PATH));
   const shrinks = missing.households.length > 0 || missing.pins.length > 0;
 
-  const rendered = renderRegistry(rows);
+  const rendered = renderPublicRegistry(rows); // the PUBLIC printout (POS-394)
   const diffs = [];
   for (const [path, got] of [[REGISTRY_PATH, rendered.households], [PINS_PATH, rendered.pins]]) {
     const actual = readFile(clone, path);
@@ -256,7 +260,7 @@ export async function drainRegistry({ clone = CLONE, env = process.env, commit =
   if (missing.households.length || missing.pins.length)
     return { ran: false, refused: MISSING_SENTENCE(missing), missing, commit: null, changed: [] };
 
-  const rendered = renderRegistry(rows);
+  const rendered = renderPublicRegistry(rows); // the PUBLIC printout (POS-394): no human key
   const counts = { households: rows.households.length, pins: rows.pins.length };
 
   const changed = [];

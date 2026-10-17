@@ -59,7 +59,7 @@ import {
 } from "../src/world-ride.mjs";
 import { VEHICLE_CLASS, crossingLaw, enterViaOffice, exitViaOffice, groundBlockOf, portalEntryFor } from "../src/world-crossings.mjs";
 import { spineWithVehicles } from "../src/world-apex.mjs";
-import { entriesOfClass, guardsPass, resolveGrants } from "../src/world-grants.mjs";
+import { entriesOfClass, guardsPass, kindFieldOf, markClassOf, resolveGrants } from "../src/world-grants.mjs";
 import { leavingWhileOccupying, vehicleStandpoint, vehicleWithin, worldHasVehicle } from "../src/world-movement.mjs";
 import { carriersFrom, inRect } from "../src/world-frames.mjs";
 import { NO_WORLD, worldClone } from "./fixture-paths.mjs";
@@ -115,20 +115,42 @@ function vehicleWorld() {
  *  decays with the next crossing.
  *
  *  So the control is now DEFINED by the one property it needs. `worldHasVehicle`
- *  (src/world-movement.mjs) gates on exactly this: a mark whose `class` is
+ *  (src/world-movement.mjs) gates on exactly this: a mark whose class is
  *  `vehicle` and which is not itself a class row. Clearing that predicate and
  *  nothing else is what makes these legs a control — one variable between the
  *  two worlds — rather than two unrelated folds compared. It cannot decay,
- *  because it is derived from whatever the world is today. */
-function plainWorld() {
-  const w = vehicleWorld();
-  const carriesTheClass = (m) => String(m?.class ?? "") === VEHICLE_CLASS && m?.kind !== "class" && m?.subkind !== "class";
+ *  because it is derived from whatever the world is today.
+ *
+ *  ⚑ AND THE CLASS HAS TWO FORMS NOW (LOGOS v2 part 2, W2). The world's kind
+ *  migration writes her as `kind: vehicle` with no `class:` line, so deleting
+ *  `class:` lifted nothing and six controls went red against a W2 world while
+ *  CI's pinned world stayed green. The predicate is the office's own resolver
+ *  (`markClassOf`, the one `worldHasVehicle` asks), and the lift undoes either
+ *  form: the `class:` line goes, and a `kind: vehicle` stands back as the plain
+ *  sited mark she was before the class was planted. */
+function withoutTheVehicleClass(m) {
+  if (markClassOf(m) !== VEHICLE_CLASS || kindFieldOf(m) === "class") return m;
+  const { class: _lifted, ...lifted } = m;
+  if (lifted.subkind !== undefined) { if (lifted.subkind === VEHICLE_CLASS) lifted.subkind = "sited"; }
+  else if (lifted.kind === VEHICLE_CLASS) lifted.kind = "sited";
+  return lifted;
+}
+function plainWorld(w = vehicleWorld()) {
+  return { ...w, marks: w.marks.map(withoutTheVehicleClass) };
+}
+
+/** This world with every vehicle written in ONE form: "class" (`kind: sited`,
+ *  `class: vehicle`, the world before W2) or "kind" (`kind: vehicle`, no
+ *  `class:`, the world after it). Whichever form the clone is in, both are
+ *  asserted below, so the controls cover the world CI pins and the one W2
+ *  ships. */
+function inForm(form, w = vehicleWorld()) {
   return {
     ...w,
     marks: w.marks.map((m) => {
-      if (!carriesTheClass(m)) return m;
-      const { class: _lifted, ...withoutTheClass } = m;
-      return withoutTheClass;
+      if (markClassOf(m) !== VEHICLE_CLASS || kindFieldOf(m) === "class") return m;
+      const { class: _c, subkind: _s, ...rest } = m;
+      return form === "class" ? { ...rest, kind: "sited", class: VEHICLE_CLASS } : { ...rest, kind: VEHICLE_CLASS };
     }),
   };
 }
@@ -1087,6 +1109,29 @@ test("the composed transport block: a vehicle world answers at a wharf, the real
   assert.equal(await transportBlock(plainWorld(), wharf), null);
 });
 
+test("the control lifts the class in EITHER form — the world CI pins and the one W2 ships", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
+  for (const form of ["class", "kind"]) {
+    const w = inForm(form);
+    const her = markIn(w, SHIP);
+    assert.equal(form === "class" ? her.class : her.kind, VEHICLE_CLASS, `${form} form: she is written the ${form} way`);
+    assert.equal(markClassOf(her), VEHICLE_CLASS, `${form} form: the office's resolver reads her class`);
+    assert.equal(worldHasVehicle(w), true, `${form} form: the world holds a vehicle`);
+    assert.equal(vehicleWithin([SHIP], w), SHIP, `${form} form: aboard her is inside a vehicle`);
+    const service = await serviceOf(w);
+    assert.ok(transportAt(WHARF, service, w), `${form} form: the wharf says she calls`);
+
+    const plain = plainWorld(w);
+    const lifted = markIn(plain, SHIP);
+    assert.equal(lifted.class, undefined, `${form} form: no class line is left`);
+    assert.equal(lifted.kind, "sited", `${form} form: she stands as a plain sited mark`);
+    assert.equal(worldHasVehicle(plain), false, `${form} form: the control holds no vehicle`);
+    assert.equal(vehicleWithin([SHIP], plain), null, `${form} form: aboard her is inside nothing`);
+    assert.equal(transportAt(WHARF, service, plain), null, `${form} form: the wharf says nothing`);
+    assert.ok(markIn(w, "the-town/vehicle"), `${form} form: the world declares the class node`);
+    assert.deepEqual(markIn(plain, "the-town/vehicle"), markIn(w, "the-town/vehicle"), `${form} form: the class node itself is untouched`);
+  }
+});
+
 test("the transport line rides the NARRATIVE eyes shape, not only the diagnostic one", () => {
   // A visibility line that appeared only under `diagnostic: true` would be the
   // invisibility § 11 exists to close — and the first draft of this lane had
@@ -1095,7 +1140,7 @@ test("the transport line rides the NARRATIVE eyes shape, not only the diagnostic
   // DIAGNOSTIC. Nothing the town's pages run is allowed to depend on it."
   const src = readFileSync(new URL("../src/world.mjs", import.meta.url), "utf8");
   const sites = [
-    ["orient", "  return { standpoint: { ...at, stance: choice.stance }, crossing: { n: crossing, derivation: CROSSING_DERIVATION }, note, primer,"],
+    ["orient", "  const out = { standpoint: { ...at, stance: choice.stance, ...arrival }, crossing: { n: crossing, derivation: CROSSING_DERIVATION }, note, primer,"],
     ["eyes · diagnostic", "  const full = {"],
     ["eyes · narrative", "    stance: choice.stance, telling, objects,"],
   ];

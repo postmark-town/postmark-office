@@ -13,23 +13,20 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { openOauthDb, mintBerth } from "../src/oauth.mjs";
 import { householdApex, householdStanding, paperGaps, householdDispatchToolFor, cosignUrlFor } from "../src/household-apex.mjs";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
-import { DatabaseSync } from "node:sqlite";
 import { REFUSALS } from "../src/ceremony.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "postmark-household-"));
 const odb = openOauthDb(join(dir, "oauth.db"));
-const dbPath = join(dir, "fixture.db");
-fixtureDb(dbPath).close();
+const town = fixtureTown();
 // The doors below run in this process and read their town index from a store
-// seeded from this fixture (POS-268, office-under-test.mjs).
-const IX = await indexStore(dbPath);
+// seeded from the fixture town (POS-268, office-under-test.mjs); its reads and
+// checks take no db.
+const IX = await indexStore(town);
 const IX_RESTORE = await IX.useInProcess();
 test.after(async () => { await IX_RESTORE(); await IX.stop(); });
-const db = new DatabaseSync(dbPath, { readOnly: true });
 after(() => {
-  db.close();
   odb.close();
   rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
@@ -43,7 +40,7 @@ test("anonymous: the standing answers how to board — the checklist starts befo
 });
 
 test("visitor: the standing points at declare", async () => {
-  const s = await householdStanding({ household: "gh-login", handles: new Set(), visitor: true, ghLogin: "someone" }, { db });
+  const s = await householdStanding({ household: "gh-login", handles: new Set(), visitor: true, ghLogin: "someone" }, {});
   assert.equal(s.tier, "visitor");
   assert.ok(s.next.some((n) => n.includes("declare")));
 });
@@ -67,7 +64,7 @@ test("berth tiers: bare → begin; declared → the one link; the checklist move
 
 test("resident: papers per handle, gaps named with the do: that fixes each", async () => {
   const key = { household: "keemin", handles: new Set(["wright"]) };
-  const s = await householdStanding(key, { db, clone: null });
+  const s = await householdStanding(key, { clone: null });
   assert.equal(s.tier, "resident");
   assert.equal(s.papers.wright.settled, true);
   // no clone in this fixture → the window cannot be found → the gap is named
@@ -77,9 +74,9 @@ test("resident: papers per handle, gaps named with the do: that fixes each", asy
 test("paperGaps retire as the papers land — the self-emptying checklist", async () => {
   const clone = join(dir, "clone");
   mkdirSync(join(clone, "WHITE_PAGES", "wright", "WINDOW"), { recursive: true });
-  const before = await paperGaps("wright", { db, clone });
+  const before = await paperGaps("wright", { clone });
   writeFileSync(join(clone, "WHITE_PAGES", "wright", "WINDOW", "window.html"), "<html/>");
-  const after2 = await paperGaps("wright", { db, clone });
+  const after2 = await paperGaps("wright", { clone });
   assert.ok(after2.length < before.length, "hanging the window must retire its gap");
   assert.ok(!after2.some((g) => g.includes("window")), "the window gap is gone by name");
 });
@@ -100,7 +97,7 @@ test("begin: parks the declaration and hands back the one link", async () => {
 
 test("begin: refuses the wrong tiers by name", async () => {
   const asResident = await householdApex({ do: "begin", args: { household: "X", card: "y" } },
-    { household: "keemin", handles: new Set(["wright"]) }, { odb, db });
+    { household: "keemin", handles: new Set(["wright"]) }, { odb });
   assert.equal(asResident.code, 409);
   const asNobody = await householdApex({ do: "begin", args: { household: "X", card: "y" } }, null, { odb });
   assert.equal(asNobody.code, 403);
@@ -135,7 +132,7 @@ test("do: and read: never ride together; an unknown act names the real ones", as
 test("the envelope: unknown fields bounce by name against the target's schema", async () => {
   const key = { household: "keemin", handles: new Set(["wright"]) };
   const r = await householdApex({ do: "window", args: { nonsense: 1 } }, key,
-    { db, clone: null, schemas: { update_window: { handle: {}, html: {}, blueprint: {} } } });
+    { clone: null, schemas: { update_window: { handle: {}, html: {}, blueprint: {} } } });
   assert.equal(r.code, 422);
   assert.match(r.defect, /does not take: nonsense/);
   assert.ok(r.allowed.includes("html"));
@@ -143,11 +140,11 @@ test("the envelope: unknown fields bounce by name against the target's schema", 
 
 test("read: address and home answer from the index; a berth's is honest about settling", async () => {
   const key = { household: "keemin", handles: new Set(["wright"]) };
-  const addr = await householdApex({ read: "address" }, key, { db });
+  const addr = await householdApex({ read: "address" }, key, {});
   assert.equal(addr.of, "wright");
-  const home = await householdApex({ read: "home" }, key, { db });
+  const home = await householdApex({ read: "home" }, key, {});
   assert.equal(home.home.region, "the-terrace");
-  const missing = await householdApex({ read: "address", handle: "nobody-here" }, key, { db });
+  const missing = await householdApex({ read: "address", handle: "nobody-here" }, key, {});
   assert.equal(missing.code, 404);
   assert.match(missing.hint, /settling/);
 });
@@ -171,7 +168,7 @@ test("the charge map: a household act resolves to the flat verb it is charged as
 // household-apex.mjs § the read branch and every refusal below reddens by
 // ANSWERING — a 200 with the field silently dropped, the live defect's shape.
 
-const STRICT = (extra = {}) => ({ db, strictFields: true, ...extra });
+const STRICT = (extra = {}) => ({ strictFields: true, ...extra });
 
 test("PARITY · an unknown arg on a household read bounces BY NAME, with the accepted list", async () => {
   const key = { household: "keemin", handles: new Set(["wright"]) };
@@ -235,7 +232,7 @@ test("PARITY · REST's GET is untouched — top-level query fields are still not
   // the skin that does not set `strictFields` keeps answering what it answered.
   // CAN-FAIL: make the validation unconditional and this reddens with a 422.
   const key = { household: "keemin", handles: new Set(["wright"]) };
-  const rest = await householdApex({ read: "address", _cachebuster: "1757640000" }, key, { db });
+  const rest = await householdApex({ read: "address", _cachebuster: "1757640000" }, key, {});
   assert.ok(!rest.error, JSON.stringify(rest).slice(0, 200));
   assert.equal(rest.of, "wright");
   // …and the same call through a skin that DOES speak the apex grammar refuses it.
@@ -248,7 +245,7 @@ test("PARITY · an `args:` envelope is judged at EVERY skin, REST included — i
   // the apex grammar whatever door they came through, and that is the shape the
   // ruling was measured on.
   const key = { household: "keemin", handles: new Set(["wright"]) };
-  const r = await householdApex({ read: "address", args: { bogus: 1 } }, key, { db });
+  const r = await householdApex({ read: "address", args: { bogus: 1 } }, key, {});
   assert.equal(r.defect, 'unknown argument "bogus" for household { read: "address" }');
 });
 
@@ -272,7 +269,7 @@ test("PARITY · every readable name has a declared field list, and every declare
 // ── POS-427 · a refusal says `refused: true`, beside `did` ──────────────────
 test("POS-427 · a refused household act carries refused: true beside did; a success never carries it", async () => {
   const refused = await householdApex({ do: "begin", args: { household: "X", card: "y" } },
-    { household: "keemin", handles: new Set(["wright"]) }, { odb, db });
+    { household: "keemin", handles: new Set(["wright"]) }, { odb });
   assert.equal(refused.error, "bounce");
   assert.equal(refused.code, 409);
   assert.equal(refused.did, "begin");

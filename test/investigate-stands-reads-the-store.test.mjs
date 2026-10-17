@@ -247,6 +247,46 @@ test("A RECORD THAT WILL NOT ANSWER: the throw becomes an absent block and never
   }
 });
 
+// A DOCKET THAT WILL NOT ANSWER costs the stands block nothing but its promise
+// (POS-451): `amends` is null ("I could not look"), the holder and the set-down
+// still answer, and the read says it could not see the docket.
+//
+// THE FLIP: in `standsRowsFromStore`, drop the `.catch(() => null)` on the
+// docket read and both legs red (the whole read throws, so the block is absent).
+const DOCKET_DOWN = new Error("the docket cannot be read");
+
+test("A DOCKET THAT WILL NOT ANSWER: `standsRowsFromStore` keeps both halves and answers `amends: null`", async () => {
+  const guards = await import("../src/world2-guards.mjs");
+  let rows = null;
+  await withActs(SET_DOWN, async () => { rows = await guards.standsRowsFromStore(CANON); }, { claims: DOCKET_DOWN });
+  assert.ok(rows, "the read survived the docket");
+  assert.equal(rows.amends, null, "an unreadable docket is null, never [] (which would say: nothing was filed)");
+  assert.equal(rows.journal.length, 2, "the set-down half still answered");
+  assert.ok(rows.attachments.length >= 1, "the holder half still answered");
+});
+
+// The author's OWN set-down, so the read reaches the docket question (a
+// stranger's with no registry stops earlier, at "whose household").
+const OWN_SET_DOWN = [
+  holdingAct({ id: 401, at: "2026-09-07T21:53:00Z", actor: "quill-stem", action: "take", thing: CANON, holder: "quill-stem", made_by: "quill-stem" }),
+  holdingAct({ id: 402, at: "2026-09-07T22:10:00Z", actor: "quill-stem", action: "drop", thing: CANON, made_by: "quill-stem",
+    anchor: null, dx: -1850, dy: -2650 }),
+];
+
+test("A DOCKET THAT WILL NOT ANSWER, through the door: the author's set-down still answers, and promises nothing", async (t) => {
+  if (!MARK) return t.skip(`no canon mark: ${WHY}`);
+  const { worldInvestigate } = await import("../src/world.mjs");
+  let answer = null;
+  await withActs(OWN_SET_DOWN, async () => { answer = await worldInvestigate({ mark: CANON }); }, { claims: DOCKET_DOWN });
+  assert.ok(!answer.error, `the focus bounced: ${answer.defect}`);
+  assert.ok(answer.stands, "an unreadable docket cost the card its whole stands block");
+  assert.equal(answer.stands.source, "set-down");
+  assert.deepEqual(answer.stands.where, { x: -1850, y: -2650 });
+  assert.equal(answer.stands.amend, null);
+  assert.doesNotMatch(String(answer.stands.says), /re-sites the mark/, `the read promised a move over a docket it could not see: ${answer.stands.says}`);
+  assert.match(String(answer.stands.says), /the docket could not be read here/);
+});
+
 // ═════════════════════════════════════════════════════════════════════════════
 // 4 · THE SQLITE READ IS GONE, not layered under
 // ═════════════════════════════════════════════════════════════════════════════

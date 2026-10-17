@@ -30,7 +30,7 @@ import { tmpdir } from "node:os";
 import { openDynamic } from "../src/dynamic-store.mjs";
 import {
   ACTION_AMEND, ACTION_LEAVE, ACTION_WITHDRAW, CLASS_FRAME, CLASS_MARK, WORLD_ANCHOR,
-  anchorAt, composeAnchor, journalHead, liveChildrenOf,
+  anchorAt, composeAnchor, filedPathOfAt, frozenFilingAt, journalHead, liveChildrenOf,
   liveMarks, pathFor, pinWitnesses, readJournal, replayDrafts, resetPathIndex,
 } from "../src/world-journal.mjs";
 // ── THE ROWS ARE SEEDED, NOT WRITTEN BY A DOOR (G1 / POS-156) ───────────────
@@ -1114,6 +1114,10 @@ const guardStore = ({ claims = [], identities = { alpha: "hh:alpha-house", beta:
           return { rows: claims.filter((c) => statuses.includes(c.status) && (keys == null || keys.includes(c.household))) };
         }
         if (/^(BEGIN|COMMIT|ROLLBACK)/.test(sql.trim())) return { rows: [] };
+        // the withdrawal's mark lock (WLD-27 A): one client, nothing to wait on
+        if (/^SELECT pg_advisory_(xact_)?(un)?lock(_shared)?\(hashtext\((\$1|'[^']*')\)\)$/.test(sql.trim())) return { rows: [{}] };
+        // the withdrawal's replay question (WLD-27 D, R2): has a withdrawal of this mark returned a set-down unit? Never, here
+        if (/FROM acts\s+WHERE object = \$1 AND class = 'holding' AND action = \$2 AND actor = \$3/.test(sql)) return { rows: [] };
 
         // THE WRITE. `insertAct`'s column list, in its order; the id is
         // assigned here because that is what the sequence does.
@@ -1401,4 +1405,143 @@ test("POS-406 — a detail on a home on your household's ground is not told it i
   const commons = await withGuardsFlipped(guardStore({ identities: HOUSEMATES }), () => leaveMarkViaOffice(repo,
     { slug: "pos406-on-commons", ...detail, parent_id: "alpha/published-note" }, houseA));
   assert.ok(commons.publishing?.heads_up, "a detail on commons ground is still told escrow publishes it");
+});
+
+// ── postmark#3528: ONE RECEIPT, AND THE CANDLE AGREES WITH IT ───────────────
+//
+// cassian's report (town bug post cassian/leave-mark-preview-and-act-disagree-
+// on-a-holder-s-own-parcel): a 1×1 lamp left at ✦0 inside his own household's
+// parcel. Under release/2026-w41.5 the preview named the parcel and the write
+// answered `parent: null`; the write's own `on_your_ground` named the parcel
+// while its heads_up said "open ground … publishes only with escrow"; and the
+// candle refused the put-forward act `escrow-absent` at window 233 (claim
+// 6167625e), because the claim was spelled `solo:drememynd` and the parcel
+// `hh:dreme-mynd`. Three answers, three rules (limen's diagnosis). POS-413,
+// POS-406 and the house's spelling set closed them one at a time; this pins
+// all of them on ONE fixture, both sides of the ground line, so the door's
+// prediction and the candle's disposal cannot part again unnoticed.
+test("postmark#3528 — preview, write, publish note and the candle agree about one mark on own ground, and off it", async () => {
+  process.env.WORLD_SINGLE_LOG = "1";
+  const { leaveMarkViaOffice } = await import("../src/world.mjs");
+  const { computeStanding } = await import("../world2/tools/standing.mjs");
+  const { escrowAbsentAmong } = await import("../world2/tools/escrow-presence.mjs");
+  const { liveHouseOf } = await import("../src/household-deriver.mjs");
+
+  // The household's ground is alphamate's parcel (-200,-200, 25×25): a
+  // housemate's, so the household grain is under test as well as the
+  // geometry. The lamp sits inside it and outside alpha's manor (8×8).
+  const PARCEL = "alphamate/the-mates-parcel";
+  const lamp = { kind: "sited", extent: { w: 1, h: 1 }, body: "a lamp left on for the lodger" };
+  const ON = { x: -192, y: -192 };
+  const OFF = { x: -150, y: -150 };   // on the world frame, inside no parcel of anyone's
+
+  // ── the door: the preview and the write, at ✦0 ──
+  const door = async (slug, at) => {
+    const seen = await withGuardsFlipped(guardStore({ identities: HOUSEMATES }), () =>
+      leaveMarkViaOffice(repo, { slug, ...lamp, at, stamps: 0, preview: true }, houseA));
+    const real = await withGuardsFlipped(guardStore({ identities: HOUSEMATES }), () =>
+      leaveMarkViaOffice(repo, { slug, ...lamp, at, stamps: 0 }, houseA));
+    return { seen, real };
+  };
+
+  const own = await door("bug3528-lamp", ON);
+  assert.equal(own.seen.preview, true);
+  assert.equal(own.seen.parent, PARCEL, "the preview nests it in the parcel");
+  assert.equal(own.real.parent, own.seen.parent, "the write names the parent its own preview named (quarter 1)");
+  assert.equal(own.real.on_your_ground, PARCEL, "the write finds the household's ground");
+  assert.equal(own.real.put_forward, true, "✦0 on own ground puts it forward");
+  assert.equal(own.seen.put_forward, true, "and the preview said so first");
+  assert.equal(own.real.publishing, undefined,
+    `own ground, put forward: no commons heads_up rides the receipt (quarter 2): ${JSON.stringify(own.real.publishing)}`);
+  assert.equal(own.seen.publishing, undefined, "nor the preview's");
+
+  // A lamp INSIDE the home that stands on that parcel: its parent is the
+  // manor, not the parcel, so a note that read the parent field for "own
+  // ground" (w41.5's rule) would call it commons. The note must read the act.
+  const IN_HOME = { x: -199, y: -199 };
+  const home = await door("bug3528-lamp-in-home", IN_HOME);
+  assert.equal(home.real.parent, "alpha/the-manor", "it nests in the home");
+  assert.equal(home.seen.parent, home.real.parent);
+  assert.equal(home.real.on_your_ground, PARCEL, "and stands on the household's ground all the same");
+  assert.equal(home.real.put_forward, true);
+  assert.equal(home.real.publishing, undefined,
+    `a parent that is not the parcel is still own ground: no commons heads_up (quarter 2): ${JSON.stringify(home.real.publishing)}`);
+
+  const away = await door("bug3528-lamp-away", OFF);
+  assert.equal(away.real.on_your_ground, undefined, "the control: off the parcel, no ground of yours");
+  assert.equal(away.real.put_forward, false, "✦0 off your ground is a private draft");
+  assert.equal(away.real.refused_the_stake, true);
+
+  // ── the candle: the same two marks as the store holds them at the lock ──
+  // The parcel as the store reads today; the claim in the spelling cassian's
+  // carried (the house's account login, under solo:).
+  const REGISTRY = { households: { "alpha-house": { name: "alpha-house",
+    accounts: [{ login: "alpha-login", id: 9001 }], residents: ["alpha", "alphamate"], since: "2026-08-08" } } };
+  const houseOf = liveHouseOf(REGISTRY, {});
+  const row = (slug, owner, household, kind, at, extent) =>
+    ({ id: `id-${slug}`, slug, kind, owner, household, geometry: { at, extent }, parent: null, data: {} });
+  const parcelRow = row(PARCEL, "alphamate", "hh:alpha-house", "parcel", { x: -200, y: -200 }, { w: 25, h: 25 });
+  const manorRow = row("alpha/the-manor", "alpha", "hh:alpha-house", "sited", { x: -200, y: -200 }, { w: 8, h: 8 });
+  const candle = (at) => {
+    const claim = row("alpha/bug3528-lamp", "alpha", "solo:alpha-login", "sited", at, lamp.extent);
+    const only = new Set([claim.slug]);
+    const tiers = computeStanding([parcelRow, manorRow, claim], { only, houseOf });
+    const verdict = escrowAbsentAmong([{ id: claim.id, slug: claim.slug }],
+      { tiers, escrowByMark: new Map(), townSha: "8250aed8" });
+    return { tier: tiers.get(claim.slug), refused: verdict.refused.map((r) => r.check) };
+  };
+
+  const lockedOn = candle(ON);
+  assert.equal(lockedOn.tier, "home", "the walk reaches the household's parcel through the spelling set");
+  assert.deepEqual(lockedOn.refused, [],
+    "THE PARITY: an act the door put forward at ✦0 is not refused escrow-absent at the candle (quarter 3)");
+  assert.equal(own.real.put_forward, lockedOn.refused.length === 0, "the door's prediction is the candle's disposal");
+
+  const lockedInHome = candle(IN_HOME);
+  assert.equal(lockedInHome.tier, "home", "through the home to the parcel");
+  assert.equal(home.real.put_forward, lockedInHome.refused.length === 0, "inside the home, too, prediction = disposal");
+
+  const lockedOff = candle(OFF);
+  assert.equal(lockedOff.tier, "market");
+  assert.equal(lockedOff.refused.length, 1, "off the parcel the candle refuses a ✦0 claim");
+  assert.equal(away.real.put_forward, lockedOff.refused.length === 0, "and the door had already said it would not publish");
+
+  // The control leg for quarter 3: the walk that compares spellings, not
+  // houses, is the refusal cassian got.
+  const bare = computeStanding([parcelRow, row("alpha/bug3528-lamp", "alpha", "solo:alpha-login", "sited", ON, lamp.extent)],
+    { only: new Set(["alpha/bug3528-lamp"]) });
+  assert.equal(bare.get("alpha/bug3528-lamp"), "market", "without the spelling set the walk reads market, as at window 233");
+});
+
+// ── THE FILING CACHE IS KEYED BY COMMIT, NOT BY THE NAME IT WAS ASKED BY ─────
+//
+// `world.mjs` asks the freeze and the path index by "refs/heads/main", and that
+// name points at a different tree after every crossing. Keyed on the name, the
+// answer read before main moved was handed back after it, until some caller
+// asking by a real commit happened to evict it. THE FLIP: key the cache on the
+// `sha` argument again and both halves of this red.
+test("THE FILING CACHE follows main: asked by name after main moves, the new commit answers", () => {
+  const r = mkdtempSync(join(tmpdir(), "postmark-filing-cache-"));
+  after(() => sweep(r));
+  const g = (...args) => execFileSync("git", ["-C", r, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  const write = (path, text) => { mkdirSync(dirname(join(r, path)), { recursive: true }); writeFileSync(join(r, path), text); };
+  const commit = (msg) => { g("add", "-A"); g("-c", "user.email=t@postmark.test", "-c", "user.name=t", "commit", "-qm", msg); };
+  g("init", "-q", "-b", "main");
+  write("WORLD/filing-freeze.json", JSON.stringify({ marks: { "corwin/the-second-chair": "WORLD/marks/let-there-be-light/the-post-office/the-second-chair" } }));
+  write("WORLD/marks/corwin/a-stool/mark.md", "a stool\n");
+  commit("the freeze");
+
+  const MAIN = "refs/heads/main";
+  assert.equal(frozenFilingAt(r, MAIN).get("corwin/the-second-chair"), "WORLD/marks/let-there-be-light/the-post-office/the-second-chair/mark.md");
+  assert.equal(filedPathOfAt(r, MAIN)("corwin/a-lamp"), null, "the control: no lamp is filed yet");
+
+  // A crossing re-files the chair at its id (POS-441) and publishes a lamp.
+  write("WORLD/filing-freeze.json", JSON.stringify({ marks: { "corwin/the-second-chair": "WORLD/marks/corwin/the-second-chair" } }));
+  write("WORLD/marks/corwin/a-lamp/mark.md", "a lamp\n");
+  commit("a crossing");
+
+  assert.equal(frozenFilingAt(r, MAIN).get("corwin/the-second-chair"), "WORLD/marks/corwin/the-second-chair/mark.md",
+    "the freeze read before main moved was handed back after it");
+  assert.equal(filedPathOfAt(r, MAIN)("corwin/a-lamp"), "WORLD/marks/corwin/a-lamp/mark.md",
+    "the path index read before main moved was handed back after it");
 });

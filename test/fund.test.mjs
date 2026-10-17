@@ -22,7 +22,7 @@ import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 
 import { WHAT_THIS_BUYS } from "../src/funding.mjs";
-import { verifyUsdcPayment, INTAKE, USDC, TRANSFER_TOPIC, MIN_CONF } from "../src/usdc-witness.mjs";
+import { verifyUsdcPayment, INTAKE, USDC, TRANSFER_TOPIC, MIN_CONF, BASE_BLIND } from "../src/usdc-witness.mjs";
 import { fundVerify, fundGuards, intakeDisclosure } from "../src/fund.mjs";
 import { NO_TOWN, townClone, townModuleUrl } from "./fixture-paths.mjs";
 import { startPayerStore } from "./helpers/payer-store.mjs";
@@ -170,6 +170,9 @@ test("an unreachable chain is DISCLOSED, never refused — a refusal would call 
   assert.equal(out.verified, false);
   assert.equal(out.unreadable, true, "unreadable is a THIRD answer, distinct from refused");
   assert.match(out.refused, /this says nothing about your payment/);
+  // POS-617: the town's own sentence, never the RPC's words (they go to the log)
+  assert.equal(out.refused, BASE_BLIND);
+  assert.doesNotMatch(out.refused, /ETIMEDOUT|RPCs failed/);
 });
 
 // ── THE DOOR — the happy path, and the three bounces ────────────────────────
@@ -319,6 +322,25 @@ test("a draft pot takes no dollars — opening one is the founder's word", { ski
   assert.equal(g.ok, false);
   assert.equal(g.code, 409);
   assert.match(g.defect, /is draft, not open/);
+});
+
+test("POS-653 · a once pot's over-cap hint promises no next epoch; a monthly pot's still does", { skip: SKIP }, async () => {
+  const town = seamTown({ pots: {
+    home: { target_usd_per_epoch: 100, epoch_cadence: "once", closes_at_fill: true },
+    ec2: { target_usd_per_epoch: 100, epoch_cadence: "monthly" },
+  }, gifts: [{ handle: "paz", n: 10 }] });
+  const paid = (pot, usd) => ({ canonical: ENGINE.potReceiptLine({ date: "2026-07-03", pot, rail: "usdc", usd, from: "paz", ref: `usdc:base:${pot}-${usd}` }) });
+  const guard = (pot, usd, entries) => fundGuards({ engine: ENGINE, entries, clone: town.repo, pot, handle: "paz", usd, receiptRef: "usdc:base:new" });
+  const base = entriesOf(town.repo);
+
+  const partOnce = guard("home", 50, [...base, paid("home", 80)]);
+  assert.equal(partOnce.hint, "this pot can still take $20 — send that much and the whole of it converts");
+  const fullOnce = guard("home", 1, [...base, paid("home", 100)]);
+  assert.equal(fullOnce.hint, "this pot has what it asked for, once and for good; the board has others");
+  assert.doesNotMatch(fullOnce.hint + partOnce.hint, /epoch/, "a once pot has no next epoch to promise");
+
+  assert.equal(guard("ec2", 50, [...base, paid("ec2", 80)]).hint, "this pot can still take $20 this epoch — send that much and the whole of it converts");
+  assert.equal(guard("ec2", 1, [...base, paid("ec2", 100)]).hint, "this pot has what it asked for; the board has others, and the next epoch opens fresh");
 });
 
 test("THE CENTS: whole dollars are recorded, the remainder is disclosed, sub-dollar is refused", { skip: SKIP }, async () => {

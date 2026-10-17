@@ -22,11 +22,15 @@
 //   503 { error, defect, hint }    the office could not read the store; nothing is guessed in its place
 //   422 { … }                      a malformed ?h=
 //
-// `registry` and `pins` are the SAME objects the drain renders the two files
-// from (`registryFromRows` / `pinsFromRows`), key order included, so a reader
-// that used to parse the files reads `registry` and `pins` with nothing in
-// between. A caller holding a file today can hand this answer's two halves to
-// the same function.
+// `registry` is the PUBLIC face of the object the drain renders
+// tools/households.json from (`registryFromRows`): the same houses, keys and key
+// order, with each house's private `human` KEY removed (POS-394; Darko
+// 2026-10-05, Wright 2026-10-12; src/registry-public.mjs). `pins` is the object
+// the drain renders tools/github-ids.json from (`pinsFromRows`), unchanged. So
+// this answer equals the drain's objects EXCEPT that a house carrying a `human`
+// in the store does not carry it here, and a reader comparing a printout house
+// with this answer field for field will see that one difference. The store, the
+// fold and the drain still hold the name; only this public read leaves it out.
 //
 // `?h=a,b` (comma-separated resident handles, at most 50): `pins` keeps only
 // those handles' pins, and `registry.households` keeps only the houses those
@@ -38,6 +42,7 @@
 import { loadRegistryRows } from "./registry-store.mjs";
 import { registryFromRows, pinsFromRows } from "./registry-rows.mjs";
 import { resolveHouse } from "./household-deriver.mjs";
+import { publicRegistry } from "./registry-public.mjs";
 
 const HANDLE = /^[a-z0-9][a-z0-9._-]{0,63}$/i;
 export const MAX_HANDLES = 50;
@@ -82,6 +87,9 @@ export async function householdsRead(query = {}, { rows: given } = {}) {
     hint: "the registry store did not answer, so nothing is guessed in its place — the town's printed tools/households.json and tools/github-ids.json are not the record. Try again shortly." } };
   let registry = registryFromRows(rows);
   let pins = pinsFromRows(rows);
+  // Narrow on the PRIVATE fold (its resolution is the deriver's, unchanged), then
+  // show the public face of whatever is left.
   if (asked.handles) ({ registry, pins } = narrowTo(registry, pins, asked.handles));
+  registry = publicRegistry(registry);
   return { status: 200, body: { read: "households", registry, pins, ...(asked.handles ? { handles: asked.handles } : {}), from: "the registry store" } };
 }

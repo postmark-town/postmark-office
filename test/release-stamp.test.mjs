@@ -46,7 +46,7 @@ test("a stamped office reports the release it is running", () => {
       sha: "0123456789abcdef0123456789abcdef01234567",
       deployed_at: "2026-08-26T12:00:00.000Z",
       target: "prod",
-      run: "https://github.com/keeminlee/postmark-office/actions/runs/1",
+      run: "https://github.com/postmark-town/postmark-office/actions/runs/1",
     }));
 
     const r = readReleaseStamp(dir);

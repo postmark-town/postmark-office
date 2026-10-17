@@ -26,7 +26,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { withRecordFrom } from "./registry-pool-stub.mjs";
 import { NO_TOWN, townClone, townModuleUrl } from "./fixture-paths.mjs";
@@ -46,7 +46,7 @@ const VERIFY = HAS_ENGINE ? await import(townModuleUrl("tools", "stamp-verify.mj
 const KEYS = HAS_ENGINE ? await import(townModuleUrl("tools", "household-keys.mjs")) : null;
 
 const D = "2026-10-05";
-const db = fixtureDb();
+const db = fixtureTown();
 const IX = await indexStore(db);
 const IX_RESTORE = await IX.useInProcess();
 test.after(async () => { await IX_RESTORE(); await IX.stop(); });

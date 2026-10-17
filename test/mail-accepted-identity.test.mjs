@@ -10,7 +10,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { fixtureDb, fixtureKey } from "./fixture.mjs";
+import { fixtureKey, fixtureTown } from "./fixture.mjs";
 import { MAIL_ACT, MAIL_DOOR, replayLetter } from "../src/town-mail.mjs";
 import { enqueueLetter } from "../src/write.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
@@ -34,13 +34,13 @@ function mailClone() {
 
 // The doors below run in this process and read their town index from a store
 // seeded from this fixture (POS-268, office-under-test.mjs).
-const IX = await indexStore(fixtureDb());
+const IX = await indexStore(fixtureTown());
 const IX_RESTORE = await IX.useInProcess();
 test.after(async () => { await IX_RESTORE(); await IX.stop(); });
 
 test("#2678 · drain replay preserves the id, path, and date accepted by the send door", () => {
   const clone = mailClone();
-  const db = fixtureDb();
+  const db = fixtureTown();
   try {
     const args = {
       from: "wright",
@@ -82,7 +82,6 @@ test("#2678 · drain replay preserves the id, path, and date accepted by the sen
     assert.match(paper, new RegExp(`\\ndate: ${acceptedDate}\\n`),
       "frontmatter date is part of the accepted identity too");
   } finally {
-    db.close();
     rmSync(clone, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });

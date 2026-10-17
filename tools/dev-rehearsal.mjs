@@ -39,7 +39,9 @@
 //               do (STAMP_LINES=store included); its pens sign with dev's own
 //               key, never prod's, and the town clone is on it; the store's
 //               stamp chain agrees with the clone; nothing it can reach pushes
-//               (TOWN_PUSH=0, GitHub stubbed)
+//               (TOWN_PUSH=0, GitHub stubbed); and the rehearsal's ground is
+//               found, inside the Mists at every keyframe, on free ground
+//               (POS-595; it never stands on fixed coordinates)
 //   sign-in     the one seam that is not a door: a household key minted for a
 //               synthetic GitHub account, through the office's own key desk
 //               function, into the store's paperwork (on prod it is GitHub's
@@ -456,7 +458,7 @@ export function plan() {
         ctx.release = r.body;
         return r;
       },
-      async check(ctx, r) {
+      async check(ctx, r, rec) {
         const p = [];
         if (r.status !== 200) p.push(`GET /release answered ${said(r)}`);
         // Read from the catalog, not information_schema: information_schema
@@ -469,7 +471,7 @@ export function plan() {
         const e = ctx.t.env;
         // The flags prod reads the store with (/etc/postmark-office.env, measured 2026-10-07), and
         // STAMP_LINES=store, which the w42 ship sets on prod (POS-341): the rehearsal runs the next tag's path.
-        for (const [k, v] of [["TOWN_INDEX_READS", "store"], ["OFFICE_PAPERWORK_STORE", "1"], ["STATE_LOG_SOURCE", "store"], ["WORLD2_PG", "1"], ["TOWN_SINGLE_LOG", "1"], ["WORLD_SINGLE_LOG", "1"], ["STAMP_LINES", "store"]])
+        for (const [k, v] of [["OFFICE_PAPERWORK_STORE", "1"], ["STATE_LOG_SOURCE", "store"], ["WORLD2_PG", "1"], ["TOWN_SINGLE_LOG", "1"], ["WORLD_SINGLE_LOG", "1"], ["STAMP_LINES", "store"]])
           if (e[k] !== v) p.push(`the dev office runs without ${k}=${v} (prod has it${k === "STAMP_LINES" ? " from the w42 ship" : ""}): a rehearsal on dev would not run the path the box runs`);
         p.push(...(await keyProblems(ctx)));
         if (e.TOWN_PUSH !== "0") p.push(`the dev office's TOWN_PUSH is ${e.TOWN_PUSH ?? "unset"}, not 0: its pen could push the real town`);
@@ -483,6 +485,14 @@ export function plan() {
           if (!h) p.push("the store has no town-index head: seed it from the dev town clone first (town-index-ingest.mjs --seed)");
           else if (gitQuiet(ctx.t.townClone, "merge-base", "--is-ancestor", h.sha, head).status !== 0)
             p.push(`the store's town index is at ${h.sha.slice(0, 9)}, which is not on the dev town clone's history (HEAD ${head.slice(0, 9)}): reseed it at HEAD (node world2/tools/town-index-ingest.mjs --town-repo ${ctx.t.townClone} --sha ${head} --seed, as law_ingester)`);
+        }
+        // THE GROUND (POS-595), last: a store that lags or an office misread is named first
+        if (!p.length) {
+          try {
+            const ground = await rehearsalGround(ctx);
+            Object.assign(ctx, { parcelAt: ground.parcelAt, parcelAt2: ground.parcelAt2, ground });
+            rec.notes.push(ground.line);
+          } catch (e) { p.push(e?.refusal ? e.message : `finding the rehearsal's ground threw: ${thrown(e)}`); }
         }
         return p;
       },
@@ -747,7 +757,8 @@ export function plan() {
         // row, and the world's real S<n> arrives later with another sha, so a view
         // carrying every tag would refuse the next rehearsal for the last one's row.
         const view = join(ctx.scratch, `bless-${ctx.blessed}`);
-        execFileSync("git", ["clone", "-q", "--no-tags", "--single-branch", "--branch", "main", ctx.worldBare, view]);
+        // refs only (the backfill reads its tags), so no working tree (POS-652)
+        execFileSync("git", ["clone", "-q", "--no-checkout", "--no-tags", "--single-branch", "--branch", "main", ctx.worldBare, view]);
         git(view, "fetch", "-q", "origin", `refs/tags/${tag}:refs/tags/${tag}`);
         // The blessed commit into the dev world clone too (a tag, never main, never
         // pushed), so the dev office can read the settlement its store now names;
@@ -822,7 +833,7 @@ export function plan() {
         ctx.mark3 = `rh-${ctx.run}-lamp`;
         ctx.ghost = `rh-${ctx.run}-gone`;
         const claim = await door(ctx.t, "POST", "/world/marks", { key: ctx.key, body: {
-          by: ctx.who.a, slug: ctx.mark3, kind: "sited", at: ctx.parcelAt, extent: { w: 2, h: 2 }, stamps: 0, body: `A lamp on the rehearsal's own ground (POS-354, run ${ctx.run}).`,
+          by: ctx.who.a, slug: ctx.mark3, kind: "sited", at: ctx.parcelAt, extent: GROUND.lamp, stamps: 0, body: `A lamp on the rehearsal's own ground (POS-354, run ${ctx.run}).`,
         } });
         if (claim.status >= 300 || claim.body?.error) return { claim };
         const [good] = await ctx.s.q("clearing_job", "SELECT id::text, window_id FROM claims WHERE slug = $1 AND claimant = $2 AND status = 'pending'", [`${ctx.who.a}/${ctx.mark3}`, ctx.who.a]);
@@ -833,12 +844,12 @@ export function plan() {
         // every column the door wrote, copied, but the claimant and the name
         const cols = (await ctx.s.q("office_api", "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'claims' AND column_name <> 'id' AND is_generated = 'NEVER' AND is_identity = 'NO' ORDER BY ordinal_position")).map((r) => r.column_name);
         // ITS OWN GROUND (#453 review F8): the 10-04 claim was an ordinary separate claim, so the
-        // copy moves ten metres east (geometry's at.x and the bbox) and is submitted now, and the
+        // copy moves GROUND.plantedShiftM (ten metres) east (geometry's at.x and the bbox) and is submitted now, and the
         // step tests only "unfileable refuses alone", never an overlap or a tie on time
         const named = "CASE WHEN geometry ? 'slug' THEN jsonb_set(geometry, '{slug}', to_jsonb($3::text)) ELSE geometry END";
         const pick = cols.map((c) => c === "claimant" ? "$2::text" : c === "slug" ? "$3::text"
-          : c === "geometry" ? `CASE WHEN jsonb_typeof(geometry #> '{at,x}') = 'number' THEN jsonb_set(${named}, '{at,x}', to_jsonb((geometry #>> '{at,x}')::numeric + 10)) ELSE ${named} END`
-          : c === "bbox" ? "CASE WHEN bbox IS NULL THEN NULL ELSE bbox + point(10, 0) END"
+          : c === "geometry" ? `CASE WHEN jsonb_typeof(geometry #> '{at,x}') = 'number' THEN jsonb_set(${named}, '{at,x}', to_jsonb((geometry #>> '{at,x}')::numeric + ${GROUND.plantedShiftM})) ELSE ${named} END`
+          : c === "bbox" ? `CASE WHEN bbox IS NULL THEN NULL ELSE bbox + point(${GROUND.plantedShiftM}, 0) END`
           : c === "submitted_at" || c === "created_at" ? "now()"
           : `"${c}"`);
         const [planted] = await ctx.s.q("office_api", `INSERT INTO claims (${cols.map((c) => `"${c}"`).join(", ")}) SELECT ${pick.join(", ")} FROM claims WHERE id = $1 RETURNING id::text`, [good.id, ctx.ghost, ctx.ghostSlug]);
@@ -1028,6 +1039,165 @@ async function settled(ctx, r, { byHand, window, mark = ctx.mark }) {
   return p;
 }
 
+// ── THE REHEARSAL'S GROUND (POS-595) ─────────────────────────────────────────
+//
+// Until crossing 244 the rehearsal stood on fixed ground, 30 km out at x 30000,
+// y 30000. That crossing the Mists' wall rose at the border (the skeleton's
+// mists.border_m, x −4600..5850, y −4600..9700), the ground was behind it, and
+// the door refused the claim 422 "this ground stands behind the wall of the
+// Mists". The code had not regressed; the ground had gone out of the world.
+//
+// So the preflight finds the ground when the rehearsal starts:
+//   · THE SAFE BOX. The clear box the engine gives at EVERY keyframe of the
+//     schedule (tools/world-engine.mjs § mistsAt), intersected, then inset by the
+//     fringe and GROUND.marginM. Between two keyframes each front moves in a
+//     straight line, so the intersection is clear at every crossing, the last
+//     keyframe's and after included, even if a front ever pulls back. The
+//     skeleton is the one the office's own wall check reads (the blessed ref,
+//     src/world-branches.mjs § publishedSkeleton), the engine the clone's, as
+//     src/world.mjs § mistsWallOn imports it. A world with no Mists keeps the old
+//     strip of ground: any free ground there will do.
+//   · FREE GROUND IN IT. All four footprints (groundOf) on ground no standing
+//     mark of any kind and no pending parcel claim covers, asked of the store
+//     with the clearing's own overlap (world2/tools/overlap.mjs: one question,
+//     one owner). The clearing judges parcels alone; keeping off every standing
+//     mark is stricter, so safe, and keeps the rehearsal off residents' homes
+//     and lamps in dev's copy of the town.
+//     The two parcels stand GROUND.parcelGapM apart, so they never meet; the lamp
+//     and the planted copy stand on the first parcel, the rehearsal's own ground.
+//   · THE RUN ID picks where the walk over the places starts, so two runs on dev
+//     do not reach for the same spot.
+//   · NOTHING FITS: the preflight goes red, naming the box and how many places
+//     it tried. It never falls back to fixed ground.
+
+export const GROUND = {
+  /** past the fringe, the safe box's inset */
+  marginM: 100,
+  /** the by-hand road's parcel stands this far south (+y) of the first, as it always did */
+  parcelGapM: 100,
+  /** the lamp on the first parcel (refused-alone) and the planted copy's shift east (at.x + 10) */
+  lamp: { w: 2, h: 2 },
+  plantedShiftM: 10,
+  /** the walk's stride over the box: across, then down */
+  stepX: 60, stepY: 200,
+  /** a bounded search: at most this many places asked of the store */
+  maxTries: 2000,
+  /** the old strip, for a world with no Mists: anchors x 30000..53940, y 30000 */
+  noMists: { x0: 30000, x1: 30000 + 399 * 60, y0: 30000, y1: 30000 },
+};
+
+/** The rehearsal's four footprints, `{ name, at, extent }`, with the first parcel's centre at `at`. */
+export function groundOf(at, parcelM) {
+  const parcel = { w: parcelM, h: parcelM };
+  return [
+    { name: "the claim's parcel", at: { x: at.x, y: at.y }, extent: parcel },
+    { name: "the by-hand parcel", at: { x: at.x, y: at.y + GROUND.parcelGapM }, extent: parcel },
+    { name: "the lamp", at: { x: at.x, y: at.y }, extent: GROUND.lamp },
+    { name: "the planted copy", at: { x: at.x + GROUND.plantedShiftM, y: at.y }, extent: GROUND.lamp },
+  ];
+}
+
+const edgesOf = ({ at, extent }) => ({ minX: at.x - extent.w / 2, maxX: at.x + extent.w / 2, minY: at.y - extent.h / 2, maxY: at.y + extent.h / 2 });
+
+/**
+ * The box clear of the Mists at every keyframe, inset by the fringe and
+ * `marginM`: `{ box, insetM, keyframes }`, or null when the world has no Mists
+ * (no schedule, or the engine reads none at any keyframe, as the door then
+ * sees no wall). `mistsAt` is the engine's. An empty box is returned, not
+ * refused: the search names it.
+ */
+export function mistsSafeBox(mists, mistsAt, { marginM = GROUND.marginM } = {}) {
+  const schedule = Array.isArray(mists?.schedule) ? mists.schedule : [];
+  let box = null, fringeM = 0;
+  const keyframes = [];
+  for (const k of schedule) {
+    const m = mistsAt(k.crossing, mists);
+    if (!m) continue;
+    keyframes.push(m.crossing);
+    fringeM = Math.max(fringeM, m.fringeM);
+    box = box ? { minX: Math.max(box.minX, m.clear.minX), maxX: Math.min(box.maxX, m.clear.maxX), minY: Math.max(box.minY, m.clear.minY), maxY: Math.min(box.maxY, m.clear.maxY) } : { ...m.clear };
+  }
+  if (!box) return null;
+  const insetM = fringeM + marginM;
+  return { box: { minX: box.minX + insetM, maxX: box.maxX - insetM, minY: box.minY + insetM, maxY: box.maxY - insetM }, insetM, keyframes };
+}
+
+/**
+ * Walk the places the rehearsal's ground could stand inside `safe` (a
+ * mistsSafeBox answer, or null for the old strip), starting where `run` says,
+ * and answer the first one `taken(footprints)` calls free (it answers null, or
+ * a name for what covers it): `{ parcelAt, parcelAt2, footprints, tried, of }`.
+ * Refuses (an Error with `refusal`) when none is free in `maxTries`.
+ */
+export async function findGround({ run, safe, parcelM, taken, maxTries = GROUND.maxTries }) {
+  // the anchor's range: where the first parcel's centre may stand with all four inside the box
+  const env = groundOf({ x: 0, y: 0 }, parcelM).map(edgesOf);
+  const lo = { x: Math.min(...env.map((e) => e.minX)), y: Math.min(...env.map((e) => e.minY)) };
+  const hi = { x: Math.max(...env.map((e) => e.maxX)), y: Math.max(...env.map((e) => e.maxY)) };
+  // whole metres, as the old ground was: the range rounded inward
+  const a = safe ? { x0: Math.ceil(safe.box.minX - lo.x), x1: Math.floor(safe.box.maxX - hi.x), y0: Math.ceil(safe.box.minY - lo.y), y1: Math.floor(safe.box.maxY - hi.y) } : GROUND.noMists;
+  const cols = a.x1 >= a.x0 ? Math.floor((a.x1 - a.x0) / GROUND.stepX) + 1 : 0;
+  const rows = a.y1 >= a.y0 ? Math.floor((a.y1 - a.y0) / GROUND.stepY) + 1 : 0;
+  const of = cols * rows;
+  const where = safe
+    ? `inside the Mists' safe box x ${safe.box.minX}..${safe.box.maxX}, y ${safe.box.minY}..${safe.box.maxY} (clear at keyframes ${safe.keyframes.join(", ")}, inset ${safe.insetM} m)`
+    : `on the old strip x ${a.x0}..${a.x1}, y ${a.y0} (the world has no Mists)`;
+  const refuse = (msg) => { throw Object.assign(new Error(msg), { refusal: true }); };
+  if (!of) refuse(`no ground for the rehearsal ${where}: the box holds no place for its two ${parcelM} m parcels ${GROUND.parcelGapM} m apart (0 places tried)`);
+  const start = (parseInt(run, 36) || 0) % of;
+  let last = null, tried = 0;
+  for (; tried < Math.min(of, maxTries); tried += 1) {
+    const k = (start + tried) % of;
+    const at = { x: a.x0 + (k % cols) * GROUND.stepX, y: a.y0 + Math.floor(k / cols) * GROUND.stepY };
+    const footprints = groundOf(at, parcelM);
+    last = await taken(footprints);
+    if (!last) return { parcelAt: footprints[0].at, parcelAt2: footprints[1].at, footprints, tried: tried + 1, of, where };
+  }
+  return refuse(`no free ground for the rehearsal ${where}: ${tried} of ${of} places tried, each covered (the last by ${last})`);
+}
+
+/** The store's answer for one place: null when free, else what covers it ("the standing <kind> "slug"" or "the pending parcel claim "slug""), by the clearing's OVERLAP; claims are read as clearing_job, past their row security. */
+export function groundTakenIn(s, OVERLAP, boxOf) {
+  return async (footprints) => {
+    const boxes = footprints.map((f) => boxOf(f.at, f.extent));
+    const rows = await s.q("clearing_job",
+      // every standing mark, of ANY kind (Wright's review of #494): stricter than the clearing, which
+      // judges parcels alone, and so always safe; and on dev the ground no longer sits 30 km out, so
+      // a resident's home or lamp in the town's copy is ground the rehearsal keeps off
+      `SELECT 'the standing ' || b.kind || ' "' || b.slug || '"' AS what FROM marks b, (SELECT unnest($1::text[])::box AS bbox) a
+        WHERE b.status = 'standing' AND ${OVERLAP}
+       UNION ALL
+       SELECT 'the pending parcel claim "' || b.slug || '"' FROM claims b, (SELECT unnest($1::text[])::box AS bbox) a
+        WHERE b.class = 'parcel' AND b.status = 'pending' AND ${OVERLAP}
+       LIMIT 1`, [boxes]);
+    return rows[0]?.what ?? null;
+  };
+}
+
+/** The preflight's ground for `ctx`: the safe box from the target's world, then free ground from its store. */
+async function rehearsalGround(ctx) {
+  const t = ctx.t;
+  const refuse = (msg) => { throw Object.assign(new Error(msg), { refusal: true }); };
+  if (!t.worldClone || !existsSync(join(t.worldClone, ".git"))) refuse(`no world clone at ${t.worldClone}: the rehearsal cannot read the Mists to find its ground`);
+  const { publishedSkeleton, blessedRef, materializeAtRef } = await importFrom(join(t.officeRoot, "src", "world-branches.mjs"));
+  const { OVERLAP } = await importFrom(join(t.officeRoot, "world2", "tools", "overlap.mjs"));
+  const { boxOf } = await importFrom(join(t.officeRoot, "world2", "tools", "seed-import.mjs"));
+  const { ref, skeleton } = publishedSkeleton(t.worldClone);
+  let safe = null;
+  if (skeleton?.mists) {
+    // as the door does, fail closed: a world with Mists and an engine that cannot read them is no ground at all
+    let eng = null;
+    try { eng = await importFrom(join(t.worldClone, "tools", "world-engine.mjs")); } catch { /* named below */ }
+    if (typeof eng?.mistsAt !== "function") refuse(`the world at ${ref} has Mists, and its engine (${join(t.worldClone, "tools", "world-engine.mjs")}) has no mistsAt to read them: the rehearsal cannot find ground the door will take`);
+    safe = mistsSafeBox(skeleton.mists, eng.mistsAt);
+  }
+  // the parcel dial, as the door reads it (src/world.mjs § parcelDial: the clone's marks-fold at the blessed ref)
+  let parcelM = 25;
+  try { parcelM = Number((await importFrom(join(materializeAtRef(t.worldClone, blessedRef(t.worldClone), "tools"), "tools", "marks-fold.mjs"))).PARCEL_EXTENT_M) || 25; } catch { /* the door's own fallback */ }
+  const g = await findGround({ run: ctx.run, safe, parcelM, taken: groundTakenIn(ctx.s, OVERLAP, boxOf) });
+  return { ...g, line: `ground: the parcels at (${g.parcelAt.x}, ${g.parcelAt.y}) and (${g.parcelAt2.x}, ${g.parcelAt2.y}), ${g.where}, place ${g.tried} of ${g.of} asked (${parcelM} m parcels, world ${ref})` };
+}
+
 // ── the run ──────────────────────────────────────────────────────────────────
 
 /** A short run id, unique enough for a handle: base36 minutes since 2026-01-01. */
@@ -1125,7 +1295,9 @@ export function crossingContext({ t, s, db, run, scratch, stub = null, stubPort 
         if (branch !== "main") git(ctx.worldBare, "update-ref", "refs/heads/main", git(t.worldClone, "rev-parse", "HEAD"));
         git(ctx.worldBare, "symbolic-ref", "HEAD", "refs/heads/main");
         ctx.worldView = join(scratch, "world-view");
-        execFileSync("git", ["clone", "-q", ctx.worldBare, ctx.worldView]);
+        // settlement-auto.sh reads WORLD_CLONE for its origin URL only, as TOWN_CLONE below:
+        // no working tree (POS-652; the sweep makes its own clone)
+        execFileSync("git", ["clone", "-q", "--no-checkout", ctx.worldBare, ctx.worldView]);
         ctx.townView = join(scratch, "town-view");
         execFileSync("git", ["clone", "-q", "--local", "--no-checkout", t.townClone, ctx.townView]);
         const tb = gitQuiet(t.townClone, "symbolic-ref", "--short", "-q", "HEAD").stdout.trim();
@@ -1213,9 +1385,7 @@ export async function runRehearsal(t, { only = null, keep = false, log = () => {
         // A synthetic GitHub account: above every real id today (~2.4e8) and below 2^31.
         ghId: 2_100_000_000 + (parseInt(run, 36) % 40_000_000), login: `rh-${run}-human`,
       },
-      // two parcels of ground for the rehearsal, apart from each other and moved by the run id
-      parcelAt: { x: 30000 + (parseInt(run, 36) % 400) * 60, y: 30000 },
-      parcelAt2: { x: 30000 + (parseInt(run, 36) % 400) * 60, y: 30100 },
+      // the rehearsal's ground (parcelAt, parcelAt2) is found by the preflight (rehearsalGround, POS-595)
     });
 
     for (const step of plan()) {

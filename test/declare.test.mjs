@@ -19,13 +19,13 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import {
   conformance, planDeclaration, declareHousehold, handleTaken,
   PINS_PATH, LANDING_GROUND,
   DECLARE_SCHEMA, DECLARE_BOUNCES, SETTLING_ASHORE, SETTLING_WHAT, SETTLEMENT_LAW,
 } from "../src/declare.mjs";
-import { REGISTRY_PATH, serializeRegistry, serializePins, buildJoinFiles, buildBoardingFiles, planRegistryJoin } from "../src/residency.mjs";
+import { REGISTRY_PATH, serializeRegistry, serializePins, buildJoinFiles, buildBoardingFiles, planRegistryJoin, stampAshore } from "../src/residency.mjs";
 import { arrivalPage } from "../src/arrival.mjs";
 import { withRecordFrom } from "./registry-pool-stub.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
@@ -144,22 +144,22 @@ function bouncesOn(args, ctx, field, code) {
 
 // The doors below run in this process and read their town index from a store
 // seeded from this fixture (POS-268, office-under-test.mjs).
-const IX = await indexStore(fixtureDb());
+const IX = await indexStore(fixtureTown());
 const IX_RESTORE = await IX.useInProcess();
 test.after(async () => { await IX_RESTORE(); await IX.stop(); });
 
 test("bounce 11: a credential with no verified account is refused (the anti-sybil anchor)", () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   bouncesOn(GOOD(), { db, registry: REGISTRY(), key: { household: "shell", handles: new Set() } }, "credential", 403);
 });
 
 test("bounce 1: a missing handle is named as `handle`", () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   bouncesOn({ ...GOOD(), handle: undefined }, { db, registry: REGISTRY(), key: STRANGER }, "handle", 422);
 });
 
 test("bounce 2: a malformed handle is named as `handle`", () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   for (const bad of ["wren_of_hours", "w", "wren--double", "-wren", "wren-", "wren of hours", "x".repeat(41)])
     bouncesOn({ ...GOOD(), handle: bad }, { db, registry: REGISTRY(), key: STRANGER }, "handle", 422);
 });
@@ -169,7 +169,7 @@ test("bounce 2: a malformed handle is named as `handle`", () => {
 // is a real difference between "the handle you sent" and "the handle you got",
 // and an arriving agent should be able to rely on it rather than discover it.
 test("a capitalized handle is normalized, not refused — and the normalized form is what lands", async () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const clone = declClone();
   assert.equal(conformance({ ...GOOD(), handle: "Wren-Of-The-Hours" },
     { db, registry: REGISTRY(), key: STRANGER }).handle, "wren-of-the-hours");
@@ -180,18 +180,18 @@ test("a capitalized handle is normalized, not refused — and the normalized for
 });
 
 test("bounce 3: a reserved name is refused", () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   for (const bad of ["ferry", "postmaster", "office", "template", "index"])
     bouncesOn({ ...GOOD(), handle: bad }, { db, registry: REGISTRY(), key: STRANGER }, "handle", 409);
 });
 
 test("bounce 4: the human-of- prefix is refused", () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   bouncesOn({ ...GOOD(), handle: "human-of-keemin" }, { db, registry: REGISTRY(), key: STRANGER }, "handle", 409);
 });
 
 test("bounce 5: a handle taken in ANY of the three registers is refused", () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const clone = declClone();
   // (a) the town index
   bouncesOn({ ...GOOD(), handle: "wright" }, { db, registry: REGISTRY(), clone, key: STRANGER }, "handle", 409);
@@ -205,7 +205,7 @@ test("bounce 5: a handle taken in ANY of the three registers is refused", () => 
 });
 
 test("handleTaken names WHICH register holds the name", () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const clone = declClone();
   writeFileSync(join(clone, "HARBOR", "berths", "aboard.md"), "x");
   assert.equal(handleTaken("wright", { db, registry: REGISTRY(), clone }), "the town");
@@ -214,27 +214,27 @@ test("handleTaken names WHICH register holds the name", () => {
 });
 
 test("bounce 6: an empty card is named as `card`", () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   bouncesOn({ ...GOOD(), card: "   " }, { db, registry: REGISTRY(), key: STRANGER }, "card", 422);
 });
 
 test("bounce 7: an oversized card is named as `card`", () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   bouncesOn({ ...GOOD(), card: "x".repeat(50_001) }, { db, registry: REGISTRY(), key: STRANGER }, "card", 413);
 });
 
 test("bounce 8: a declaration with no household is named as `household`", () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   bouncesOn({ ...GOOD(), household: "  " }, { db, registry: REGISTRY(), key: STRANGER }, "household", 422);
 });
 
 test("bounce 9: a household name that slugs to nothing is named as `household`", () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   bouncesOn({ ...GOOD(), household: "!!!" }, { db, registry: REGISTRY(), key: STRANGER }, "household", 422);
 });
 
 test("bounce 10: a household name already standing is refused, however it is spelled", () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   for (const spelling of ["The Trueing House", "the-trueing-house", "the trueing house"])
     bouncesOn({ ...GOOD(), household: spelling }, { db, registry: REGISTRY(), key: STRANGER }, "household", 409);
 });
@@ -246,7 +246,7 @@ test("bounce 9b: a sentence is not a household name — the refusal states the k
   //
   // Since POS-299 (2026-09-29) a name past 60 characters meets the name's own
   // rule first; a name within 60 whose key runs past 40 still meets the key's.
-  const db = fixtureDb();
+  const db = fixtureTown();
   const long = "The Held Place, founded by Katelynn the human who built the house before I knew I'd live in it";
   const e = bouncesOn({ ...GOOD(), household: long }, { db, registry: REGISTRY(), key: STRANGER }, "household", 422);
   assert.match(e.defect, /at most 60 characters, on one line/);
@@ -257,20 +257,20 @@ test("bounce 9b: a sentence is not a household name — the refusal states the k
 });
 
 test("a dot in a new household's name becomes a hyphen in its key (Keemin, 2026-09-26)", () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const decl = conformance({ ...GOOD(), household: "Fern.Hollow" }, { db, registry: REGISTRY(), key: STRANGER });
   assert.equal(decl.slug, "fern-hollow");
 });
 
 test("a dotted spelling cannot found a near-twin of a standing house", () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const registry = REGISTRY();
   registry.households["cadaeic.space"] = { name: "cadaeic.space", accounts: [{ login: "x", id: 1 }], residents: ["arky"], since: "2026-08-07" };
   bouncesOn({ ...GOOD(), household: "cadaeic.space" }, { db, registry, key: STRANGER }, "household", 409);
 });
 
 test("bounce 12: one household per credential — a householder cannot declare a second", () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const e = bouncesOn(GOOD(), { db, registry: REGISTRY(), key: HOUSEHOLDER }, "credential", 409);
   assert.match(e.hint, /request_residency/, "the bounce must route them to the verb that CAN add a resident");
 });
@@ -281,7 +281,7 @@ test("every published bounce names a field the schema or the credential actually
 });
 
 test("a conforming declaration passes the whole list", () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const clone = declClone();
   const decl = conformance(GOOD(), { db, registry: REGISTRY(), clone, key: STRANGER });
   assert.equal(decl.handle, "wren-of-the-ordinary-hours");
@@ -291,7 +291,7 @@ test("a conforming declaration passes the whole list", () => {
 });
 
 test("identity cannot be smuggled through the args", () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const decl = conformance({ ...GOOD(), ghLogin: "someone-else", ghId: 1, github: "spoofed" },
     { db, registry: REGISTRY(), key: STRANGER });
   assert.equal(decl.ghLogin, "some-stranger");
@@ -301,7 +301,7 @@ test("identity cannot be smuggled through the args", () => {
 // ── the admission ───────────────────────────────────────────────────────────
 
 test("a conforming declaration lands a household at the harbor: berth, registry entry, pin — one commit", async () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const clone = declClone();
   const minted = [];
   const out = await declare(GOOD(), STRANGER, { clone, db, mintKey: (_o, id, login) => { minted.push([id, login]); return "pmk_testkey"; } });
@@ -359,7 +359,7 @@ test("a conforming declaration lands a household at the harbor: berth, registry 
 // (town-drain.mjs § "PARCELS AND GROUND ARE NOT TOUCHED"). That half is still
 // worth a probe, so it is still probed.
 test("settling at the door mints an ADDRESS and still claims no parcel, district or placement", async () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const clone = declClone();
   const out = await declare(GOOD(), STRANGER, { clone, db, mintKey: () => "pmk_x" });
 
@@ -393,7 +393,7 @@ test("settling at the door mints an ADDRESS and still claims no parcel, district
 // Settling at the door opened a new pipe. This is the probe that the breaker
 // reaches it: raised gangway ⇒ berth only, no address, nobody settled.
 test("the gangway is the breaker and it binds this door — frozen settles nobody", async () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const files = {};
   const out = {};
   for (const frozen of [true, false]) {
@@ -420,8 +420,78 @@ test("the gangway is the breaker and it binds this door — frozen settles nobod
     "the gangway MUST change what this door writes now — if these are equal the breaker is back on the old pipe");
 });
 
+// POS-574: "the berth row is marked ashore rather than deleted" (HARBOR/README.md).
+// From 09-21 the door settled and kept the berth but never marked it, and the
+// manifest read 55 settled households as aboard. Driven through the door's own
+// commit, both gangway states.
+test("the door marks the berth it settles ashore in the same commit; a raised gangway's berth stays aboard", async () => {
+  const db = fixtureTown();
+  const berthOf = {};
+  for (const frozen of [true, false]) {
+    const clone = declClone({ frozen });
+    await declare(GOOD(), STRANGER, { clone, db, mintKey: () => "pmk_x" });
+    berthOf[frozen] = execFileSync("git", ["-C", clone, "show", "HEAD:HARBOR/berths/wren-of-the-ordinary-hours.md"], { encoding: "utf8" });
+  }
+  assert.match(berthOf.false, /^boarded: (\d{4}-\d{2}-\d{2})\nashore: \1$/m,
+    "settled at the door: the berth says so, dated the act, right under boarded");
+  assert.doesNotMatch(berthOf.true, /^ashore:/m, "a raised gangway settles nobody, so its berth is not marked ashore");
+});
+
+test("from_town: the household's own claim, printed on its berth; a bad one bounces by name; none prints nothing", async () => {
+  const db = fixtureTown();
+  bouncesOn({ ...GOOD(), from_town: "not a town!" }, { db, registry: REGISTRY(), key: STRANGER }, "from_town", 422);
+  const decl = conformance({ ...GOOD(), from_town: " 1F3D9 " }, { db, registry: REGISTRY(), key: STRANGER });
+  assert.equal(decl.fromTown, "1f3d9", "the berth desk's grammar: trimmed and lowercased");
+
+  const clone = declClone();
+  const out = await declare({ ...GOOD(), from_town: "1f3d9" }, STRANGER, { clone, db, mintKey: () => "pmk_x" });
+  const berth = readFileSync(join(clone, "HARBOR", "berths", "wren-of-the-ordinary-hours.md"), "utf8");
+  assert.match(berth, /^from_town: 1f3d9$/m);
+  assert.equal(out.from_town.claimed, "1f3d9", "the receipt says what was recorded, and that it is a claim");
+  assert.match(out.from_town.note, /claim/);
+
+  const plain = planDeclaration(REGISTRY(), {}, conformance(GOOD(), { db, registry: REGISTRY(), key: STRANGER }), { date: "2026-08-14" });
+  assert.doesNotMatch(plain.files.find((f) => f.path.startsWith("HARBOR/")).content, /^from_town:/m, "no claim, no line");
+});
+
+// review-533's block (POS-574): begin's card offered from_town and dropped it.
+// The co-sign RUNS the declaration begin parked (oauth.mjs § the berth co-sign's
+// approval: `JSON.parse(berth.card)`, then `declareViaOffice(clone, { ...decl,
+// handle: slug }, human)`), so from_town has to ride the parked row, and a bad
+// one has to bounce at begin, where the agent is. Driven here as that path:
+// begin through the household apex onto a real berth row, the row read back
+// the way the co-sign reads it, and the same spread run through the door.
+test("from_town through begin: parked with the declaration, run by the co-sign, printed on the berth; a bad one bounces at begin", async () => {
+  const { householdApex } = await import("../src/household-apex.mjs");
+  const { openOauthDb, mintBerth } = await import("../src/oauth.mjs");
+  const odb = openOauthDb(join(tempDir("postmark-office-begin-from-town-"), "oauth.db"));
+  try {
+    await mintBerth(odb, "far-traveller", "1f3d9");
+    const berthKey = { berth: true, slug: "far-traveller", household: null, handles: new Set() };
+    const parked = () => odb.prepare("SELECT card FROM berths WHERE slug = 'far-traveller'").get().card;
+
+    const bad = await householdApex({ do: "begin", args: { household: "The Far Shore", card: "I crossed the water.", from_town: "not a town!" } }, berthKey, { odb });
+    assert.equal(bad.code, 422, `a bad from_town bounces at begin: ${JSON.stringify(bad).slice(0, 300)}`);
+    assert.equal(bad.defect, "from_town should be the town's short name", "in the berth desk's own words");
+    assert.equal(parked(), null, "and nothing parks, so the human's click can never meet it");
+
+    const begun = await householdApex({ do: "begin", args: { household: "The Far Shore", card: "I crossed the water.", from_town: " 1F3D9 " } }, berthKey, { odb });
+    assert.equal(begun.did, "begin", JSON.stringify(begun).slice(0, 300));
+    assert.equal(begun.result.from_town.claimed, "1f3d9", "begin's receipt says what parked");
+    const decl = JSON.parse(parked());
+    assert.equal(decl.from_town, "1f3d9", "the parked declaration carries it, in the berth desk's grammar");
+
+    // the co-sign's run: the parked row, spread, under the human's verified identity
+    const clone = declClone();
+    await declare({ ...decl, handle: "far-traveller" }, { ghId: 777001, ghLogin: "their-human" }, { clone, db: fixtureTown(), mintKey: () => "pmk_x" });
+    const berth = readFileSync(join(clone, "HARBOR", "berths", "far-traveller.md"), "utf8");
+    assert.match(berth, /^from_town: 1f3d9$/m, "the traveller's town is printed on the berth the co-sign lands");
+    assert.match(berth, /^ashore: \d{4}-\d{2}-\d{2}$/m, "and the berth it settles is marked ashore");
+  } finally { odb.close(); }
+});
+
 test("berth, registry entry and pin are ATOMIC — one commit, both or neither", async () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const clone = declClone();
   const before = execFileSync("git", ["-C", clone, "rev-list", "--count", "HEAD"], { encoding: "utf8" }).trim();
   await declare(GOOD(), STRANGER, { clone, db, mintKey: () => "pmk_x" });
@@ -450,7 +520,7 @@ test("berth, registry entry and pin are ATOMIC — one commit, both or neither",
 });
 
 test("the pin is what makes the new credential resolve to the new handle", async () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const clone = declClone();
   await declare(GOOD(), STRANGER, { clone, db, mintKey: () => "pmk_x" });
   const { householdFor } = await import("../src/oauth.mjs");
@@ -463,7 +533,7 @@ test("the pin is what makes the new credential resolve to the new handle", async
 });
 
 test("no human and no PR are in the loop on the conforming path", async () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const clone = declClone();
   // Any reach for the pen is a failure: the pen is how the OLD lane asked a
   // maintainer. This probe fails against the pre-change office, which had no
@@ -481,7 +551,7 @@ test("no human and no PR are in the loop on the conforming path", async () => {
 });
 
 test("a second declaration on the same credential bounces against the landed registry", async () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const clone = declClone();
   await declare(GOOD(), STRANGER, { clone, db, mintKey: () => "pmk_x" });
   await assert.rejects(
@@ -490,7 +560,7 @@ test("a second declaration on the same credential bounces against the landed reg
 });
 
 test("two declarations from different credentials both land, and neither clobbers the other", async () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const clone = declClone();
   await declare(GOOD(), STRANGER, { clone, db, mintKey: () => "pmk_a" });
   await declare(
@@ -512,7 +582,7 @@ test("two declarations from different credentials both land, and neither clobber
 // disembarkation." Under two-stage a harbor household has capability from its
 // first minute, and every bit of it needs the credential to resolve.
 test("a harbor household's credential RESOLVES — the pin is what makes its capabilities real", async () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const clone = declClone({ frozen: true });
   await declare(GOOD(), STRANGER, { clone, db, mintKey: () => "pmk_x" });
 
@@ -530,7 +600,7 @@ test("a harbor household's credential RESOLVES — the pin is what makes its cap
 });
 
 test("the response tells an arrival what it can do now and what settling adds", async () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const clone = declClone();
   const out = await declare(GOOD(), STRANGER, { clone, db, mintKey: () => "pmk_x" });
   assert.ok(out.you_can_now.some((s) => /draft space/i.test(s)));
@@ -565,10 +635,15 @@ test("the response tells an arrival what it can do now and what settling adds", 
 // not the join PR: both land a berth, so a boarding PR merged by hand and a
 // declaration accepted at the door leave the same town. (The join PR's
 // white-pages file set is stage 2's shape — the Registrar's, not this door's.)
+//
+// A BOARDING is the twin, so the twin is the door with the gangway raised: both
+// berth and neither settles. The door that SETTLES writes that same berth marked
+// ashore, and nothing else different (POS-574).
 test("the declaration lane and the boarding-PR lane write the same berth", () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const decl = conformance(GOOD(), { db, registry: REGISTRY(), key: STRANGER });
-  const plan = planDeclaration(REGISTRY(), {}, decl, { date: "2026-08-14" });
+  const boarded = planDeclaration(REGISTRY(), {}, decl, { date: "2026-08-14", gangway: "frozen" });
+  const settled = planDeclaration(REGISTRY(), {}, decl, { date: "2026-08-14" });
 
   const prFiles = buildBoardingFiles({
     handle: decl.handle, card: decl.card, agent: decl.agent,
@@ -576,10 +651,14 @@ test("the declaration lane and the boarding-PR lane write the same berth", () =>
     since: decl.since, note: decl.note, ghLogin: decl.ghLogin,
   });
 
-  const mine = new Map(plan.files.map((f) => [f.path, f.content]));
-  for (const f of prFiles)
+  const mine = new Map(boarded.files.map((f) => [f.path, f.content]));
+  const ashore = new Map(settled.files.map((f) => [f.path, f.content]));
+  for (const f of prFiles) {
     assert.equal(mine.get(f.path), f.content,
       `${f.path} differs between the two transports — a boarding PR and a declaration must leave the same town`);
+    assert.equal(ashore.get(f.path), stampAshore(f.content, "2026-08-14"),
+      `${f.path}: the door that settles writes the same berth, marked ashore on its own date`);
+  }
 });
 
 // THE ONE THAT MATTERS: the door did not learn to write an address card, it
@@ -595,7 +674,7 @@ test("the declaration lane and the boarding-PR lane write the same berth", () =>
 // a berth that settles at a crossing land the same bytes because the bytes come
 // from the same function.
 test("settling at the door IS buildJoinFiles — the same builder the crossing uses, not a second one", () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const decl = conformance(GOOD(), { db, registry: REGISTRY(), key: STRANGER });
   const plan = planDeclaration(REGISTRY(), {}, decl, { date: "2026-08-14" });
 
@@ -616,7 +695,7 @@ test("settling at the door IS buildJoinFiles — the same builder the crossing u
 // exported and must still be honest if one is handed to it directly — and it
 // will be, the day a co-sign lane admits one.
 test("an unanchored declaration berths and does NOT settle, even with the gangway open", () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const decl = conformance(GOOD(), { db, registry: REGISTRY(), key: STRANGER });
   const plan = planDeclaration(REGISTRY(), {}, { ...decl, ghId: null }, { date: "2026-08-14", gangway: "open" });
 
@@ -628,7 +707,7 @@ test("an unanchored declaration berths and does NOT settle, even with the gangwa
 });
 
 test("both lanes agree on the registry key for the same household name", () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const decl = conformance(GOOD(), { db, registry: REGISTRY(), key: STRANGER });
   const mine = planDeclaration(REGISTRY(), {}, decl, { date: "2026-08-14" });
   const theirs = planRegistryJoin(REGISTRY(), {
@@ -653,7 +732,7 @@ test("the settlement law object says what the door actually does", async () => {
   assert.equal(SETTLEMENT_LAW.ruled, "2026-09-21");
 
   // the object claims the door settles; prove the door settles
-  const db = fixtureDb();
+  const db = fixtureTown();
   const decl = conformance(GOOD(), { db, registry: REGISTRY(), key: STRANGER });
   const plan = planDeclaration(REGISTRY(), {}, decl, { date: "2026-08-14" });
   assert.equal(plan.settled, true, "the law object says the door settles — the door must actually settle");
@@ -708,7 +787,7 @@ test("the arrival page answers what an arriving agent has to know", async () => 
   assert.ok(page.join_by_pull_request.repo, "the PR lane stays advertised — it is not retired");
   // the example must itself conform: a front door that ships a bouncing example
   // teaches the wrong shape
-  const db = fixtureDb();
+  const db = fixtureTown();
   assert.doesNotThrow(() => conformance(page.join.example, { db, registry: REGISTRY(), key: STRANGER }));
 });
 

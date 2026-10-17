@@ -39,7 +39,19 @@
 
 import { __setPoolForTest as __setActsPool } from "../src/world2-acts.mjs";
 import { __setPoolForTest as __setPenPool } from "../src/world2-pen.mjs";
-import { __clearHouseCache } from "../src/household-deriver.mjs";
+import { __clearHouseCache, resolveHouse } from "../src/household-deriver.mjs";
+import { registryFromRows, pinsFromRows } from "../src/registry-rows.mjs";
+
+/** The `identities` view's `handle, household` over seeded registry rows, by handle. */
+function identitiesOf(households, pins) {
+  const rows = { households, pins, meta: [] };
+  const registry = registryFromRows(rows), pinned = pinsFromRows(rows);
+  const handles = new Set([...households.flatMap((h) => h.residents ?? []), ...pins.map((p) => p.handle)]);
+  return [...handles].sort().map((handle) => {
+    const { slug } = resolveHouse(handle, registry, pinned);
+    return { handle, household: slug ? `hh:${slug}` : `solo:${handle}` };
+  });
+}
 
 /** The env that says "this office IS pointed at the record". */
 export const RECORD_ON = Object.freeze({ WORLD2_PG: "1", WORLD2_PG_URL: "postgres://acts-pen-stub/none" });
@@ -95,6 +107,12 @@ export function makeActsPen({ households = [], pins = [], meta = [], claims = []
     }
 
     if (/^BEGIN/i.test(q)) return { rows: [], rowCount: 0 };
+    // A TRANSACTION-SCOPED ADVISORY LOCK (WLD-27: the mark's stake lock, the
+    // drop's and the chest's) is granted at once: this pen is one client with
+    // no second transaction to wait on, so there is nothing to order. The
+    // ordering those locks give is proved against a real Postgres
+    // (test/exit-stake-boundary.test.mjs, test/drop-recovery.test.mjs).
+    if (/^SELECT pg_advisory_(xact_)?(un)?lock(_shared)?\(hashtext\((\$1|'[^']*')\)\)$/i.test(q)) return { rows: [{}], rowCount: 1 };
     if (/^COMMIT/i.test(q)) { state.committed += 1; return { rows: [], rowCount: 0 }; }
     if (/^ROLLBACK/i.test(q)) { state.rolledBack += 1; return { rows: [], rowCount: 0 }; }
     if (/set_config\('app\.household'/i.test(q)) { state.household = params[0] ?? null; return { rows: [], rowCount: 0 }; }
@@ -203,6 +221,15 @@ export function makeActsPen({ households = [], pins = [], meta = [], claims = []
       const open = state.windows[state.windows.length - 1];
       return { rows: open ? [{ id: open.id }] : [], rowCount: open ? 1 : 0 };
     }
+    if (/^SELECT/i.test(q) && /FROM claims WHERE slug = \$1/i.test(q)) {
+      // THE DOCKET FOR ONE SLUG, every status (`claimRowsForSlug`, which the
+      // receipt reads and the hold door asks when the live layer says no —
+      // a LOCKED claim is in neither live status). It names `window_id` in its
+      // column list, so without this branch the supersession matcher below
+      // took it for its own question and answered nothing.
+      const rows = state.claims.filter((c) => c.slug === params[0]);
+      return { rows: rows.map((c) => ({ ...c })), rowCount: rows.length };
+    }
     if (/^SELECT/i.test(q) && /FROM claims/i.test(q)) {
       // The amend's supersession lookup is a different question with different
       // arguments ("is there a PENDING claim for this slug in this window");
@@ -280,6 +307,14 @@ export function makeActsPen({ households = [], pins = [], meta = [], claims = []
     // window. No clearing runs against a stub, so it is granted at once.
     if (/^SELECT pg_advisory_xact_lock_shared\(/i.test(q)) return { rows: [{}], rowCount: 1 };
 
+    // `identities`, the registry's VIEW (055, POS-350), over the same seeded
+    // rows: every listed resident and every pinned handle, housed by the office's
+    // one deriver (resolveHouse), which test/identities-from-the-registry.test.mjs
+    // holds equal to the view on a real Postgres.
+    if (/^SELECT handle, household FROM identities/i.test(q)) {
+      const rows = identitiesOf(households, pins);
+      return { rows, rowCount: rows.length };
+    }
     // The registry, as `registry-store.mjs`'s three fixed SELECTs ask for it.
     if (/FROM households/i.test(q)) return { rows: households.map((r) => ({ ...r })), rowCount: households.length };
     if (/FROM household_pins/i.test(q)) return { rows: pins.map((r) => ({ ...r })), rowCount: pins.length };

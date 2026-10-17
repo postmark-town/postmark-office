@@ -1,21 +1,18 @@
 // town-index.mjs — THE ONE DERIVATION of the office's town index (POS-268).
 //
-// Everything office.db holds is derived here, from a town checkout, as plain
-// rows in office.db's own column order. Two writers take these rows and never
-// derive anything themselves:
+// The whole town index is derived here, from a town checkout, as plain rows in
+// the column order of the store's town_* tables (town-tables.mjs). One writer
+// takes these rows and derives nothing itself:
 //
-//   src/hydrate.mjs                       writes them into office.db (sqlite),
-//                                         as it always has
 //   world2/tools/town-index-ingest.mjs    writes them into the store's town_*
 //                                         tables: whole once at the seed, then
 //                                         only the rows a delta changed
 //
-// So "the store equals office.db" is a claim about the two WRITERS, never about
-// two derivations that drifted. The rules themselves are not restated here:
-// they are the town's own exported folds (mail-state, stamp-mint,
-// quest-progress), the vendored `readTown`, and the office's own readers
-// (residency, profiles, panes, funding, quest-standing), exactly as hydrate.mjs
-// called them before this file existed. The move is a cut and paste; the only
+// (office.db's hydrate.mjs was the second writer until POS-656 retired it.)
+// The rules themselves are not restated here: they are the town's own exported
+// folds (mail-state, stamp-mint, quest-progress), the vendored `readTown`, and
+// the office's own readers (residency, profiles, panes, funding, quest-standing),
+// exactly as hydrate.mjs called them before this file existed. The move is a cut and paste; the only
 // new code is the shape the pieces return in.
 //
 // The pieces are separate on purpose: a delta re-derives only the tables its
@@ -33,35 +30,9 @@ import { homePictureIn } from "./registry-rows.mjs"; // the house's picture, off
 import { readProfile } from "./profiles.mjs"; // PROFILE.md postdates the vendored reader — see that file
 import { readWindowState } from "./panes.mjs"; // the pane's machine twin — one island parser, two readers
 
-/**
- * The tables, in office.db's column order (src/schema.mjs). `key` names the
- * primary key for a keyed table; `seq` marks the AUTOINCREMENT tables, whose
- * `seq` is the row's 1-based position in the derivation, as sqlite assigns it.
- * `repo_log` has neither: it is append-only, one row per commit x file.
- */
-export const TOWN_TABLES = Object.freeze({
-  meta:                 { cols: ["key", "value"], key: ["key"] },
-  residents:            { cols: ["handle", "json"], key: ["handle"] },
-  letters:              { cols: ["id", "from_h", "to_h", "date", "thread", "box", "owner", "path", "json", "delivered_at"], key: ["id"] },
-  threads:              { cols: ["root", "json"], key: ["root"] },
-  bulletin:             { cols: ["slug", "json"], key: ["slug"] },
-  ledger:               { cols: ["seq", "kind", "date", "id", "from_h", "to_h", "json"], seq: true },
-  stamps:               { cols: ["handle", "balance", "mint_count", "staked"], key: ["handle"] },
-  mail_state:           { cols: ["handle", "json"], key: ["handle"] },
-  quest_progress:       { cols: ["handle", "send", "receive", "house_size", "house_send", "house_receive", "sent_to", "heard_from"], key: ["handle"] },
-  quest_standing:       { cols: ["handle", "json"], key: ["handle"] },
-  repo_log:             { cols: ["sha", "committed_at", "author", "subject", "op", "path"] },
-  regions:              { cols: ["id", "name", "json"], key: ["id"] },
-  homes:                { cols: ["handle", "region", "json"], key: ["handle"] },
-  pots:                 { cols: ["id", "json"], key: ["id"] },
-  funding_roll:         { cols: ["seq", "patron", "pot", "usd", "date", "receipt", "holo"], seq: true },
-  funding_holo:         { cols: ["seq", "party", "pot", "holo", "epoch", "date", "receipt"], seq: true },
-  funding_keeping_mint: { cols: ["seq", "party", "pot", "n", "epoch", "date"], seq: true },
-  pot_receipts:         { cols: ["seq", "pot", "rail", "usd", "date", "receipt", "payer"], seq: true },
-  pot_escrow:           { cols: ["pot", "staked"], key: ["pot"] },
-  pot_stakers:          { cols: ["pot", "handle", "staked"], key: ["pot", "handle"] },
-  funding_invalid:      { cols: ["seq", "row_kind", "line", "reason"], seq: true },
-});
+// The tables (town-tables.mjs, kept apart so the shape loads without the derivation).
+import { TOWN_TABLES } from "./town-tables.mjs";
+export { TOWN_TABLES };
 
 /** A keyed table's rows, last write wins at the FIRST write's position — sqlite's INSERT OR REPLACE, as an array. */
 function keyed(table) {
@@ -383,8 +354,12 @@ export async function fundingRows(TOWN, { log = console } = {}) {
  * `base` is the store's key base when the caller read one (POS-341 part 4: the
  * delta ingest, behind STAMP_LINES); the town's folds group households by it in
  * place of the printouts. Null is the printouts, as before.
+ *
+ * `welcomeLines` is the store's welcome rows when the ingest read them
+ * (POS-495, src/stamp-lines.mjs § welcomeLinesVia): they date the welcome row.
+ * Null is undated, as before (the hydrate always passes null).
  */
-export async function questRows(TOWN, town, { log = console, base = null } = {}) {
+export async function questRows(TOWN, town, { log = console, base = null, welcomeLines = null } = {}) {
   const questTool = join(TOWN, "tools", "quest-progress.mjs");
   const registryPath = join(TOWN, "quest-registry.json");
   if (!existsSync(questTool) || !existsSync(registryPath)) return null;
@@ -407,12 +382,12 @@ export async function questRows(TOWN, town, { log = console, base = null } = {})
   // is the office's own admission grammar: the raw list carries `_archived`.
   if (typeof questMod.onboardingFactsFor === "function" && typeof questMod.foldFriendships === "function") {
     const { onboardingFactsFor, foldFriendships, welcomedHouseholds } = questMod;
-    const { parseDeliveries, currentHouseholds } = await import(pathToFileURL(join(TOWN, "tools", "stamp-mint.mjs")));
+    const { parseDeliveries, currentHouseholds, classifyEntry } = await import(pathToFileURL(join(TOWN, "tools", "stamp-mint.mjs")));
     const { standingRowsFromTown } = await import("./quest-standing.mjs");
     const handles = town.residents.map((r) => r.handle).filter(isResidentHandle);
     const { rows, friendships } = standingRowsFromTown(
-      { parseDeliveries, foldFriendships, currentHouseholds, welcomedHouseholds, onboardingFactsFor },
-      TOWN, handles, { base });
+      { parseDeliveries, foldFriendships, currentHouseholds, welcomedHouseholds, onboardingFactsFor, classifyEntry },
+      TOWN, handles, { base, welcomeLines });
     const standing = keyed("quest_standing");
     for (const [h, row] of rows) standing.put([h, JSON.stringify(row)]);
     out.standing = standing.rows();
@@ -487,7 +462,7 @@ export function atlasRows(TOWN, town, { log = console } = {}) {
  * The whole index for one checkout, every table: what hydrate.mjs writes and
  * what the ingest's seed writes. `meta` rows come in hydrate's insert order.
  */
-export async function deriveTownIndex(TOWN, { log = console, base = null } = {}) {
+export async function deriveTownIndex(TOWN, { log = console, base = null, welcomeLines = null } = {}) {
   const asOf = execFileSync("git", ["-C", TOWN, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   const town = readTown(TOWN);
   for (const p of town.problems) log.warn(`WARN (town): ${p}`);
@@ -525,7 +500,7 @@ export async function deriveTownIndex(TOWN, { log = console, base = null } = {})
   }
   Object.assign(t, await fundingRows(TOWN, { log }));
 
-  const q = await questRows(TOWN, town, { log, base }); // the store's key base when the seed read one (POS-341 part 4); null in hydrate
+  const q = await questRows(TOWN, town, { log, base, welcomeLines }); // the store's key base and welcome rows when the seed read them (POS-341 part 4, POS-495); null in hydrate
   t.quest_progress = q?.progress ?? [];
   t.quest_standing = q?.standing ?? [];
   if (q) meta.push(["quest_day", q.questDay], ["quest_registry", q.questRegistry]);

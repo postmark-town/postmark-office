@@ -99,6 +99,15 @@ test("a PUBLISHED mark carries its receipt, naming the settlement that carried i
   assert.equal(r.id ?? r.mark ?? STANDING, STANDING, "the engine's own answer is unchanged beside it");
 });
 
+// postmark#3589: `handle` is accepted and never read, so it cannot change the
+// answer, even when it names a resident the key does not hold.
+test("a handle changes nothing: the same answer with or without one", { skip }, async () => {
+  const plain = await (await door())({ mark: STANDING }, KEY);
+  const named = await (await door())({ mark: STANDING, handle: "kogane" }, KEY);
+  assert.ok(!plain.error, `the door bounced: ${JSON.stringify(plain).slice(0, 200)}`);
+  assert.deepEqual(named, plain);
+});
+
 test("ONE STAMP FOR ONE ANSWER: the receipt names the ref and sha the answer was folded from", { skip }, async () => {
   const r = await (await door())({ mark: STANDING }, KEY);
   // the READ tier's ref is the newest BLESSING (postmark#2934, the bless

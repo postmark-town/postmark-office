@@ -83,16 +83,24 @@ const project = (households = HOUSEHOLDS, pins = PINS) => {
 // logins, so a second key can never answer a question the town's pins already
 // answered. Asserting the projection alone would leave that line untested.
 //
-// The town is a stub `stamp-mint.mjs` exporting `currentHouseholds`, which is
-// the injection the module's own header blesses: "an engine is injected — so a
-// falsifier hands in a fixture engine rather than a real town".
+// THE STORE IS WHAT THE TOOL RENDERS (POS-350). The fixture town carries the
+// registry's printouts (households.json, github-ids.json), which each run
+// re-states into the store; the export reads no town ledger. So the end-to-end
+// fixture is the same five handles as HOUSEHOLDS, said as the STORE holds them:
+//   aion-solare   pinned, no house holds the account → `solo:aion-solare`
+//                 (CASE (a), Darko 10-04), its login keeps the account's gh: key
+//   argos, vertas one house, two residents → `hh:argos-and-prometheus`
+//   arky          a house whose slug has a DOT → `hh:cadaeic.space`
+//   ev-attractor  in the town and NOT in the registry → absent (CASE (b))
+const DECLARED = { schema_version: 1, households: {
+  "argos-and-prometheus": { name: "Argos and Prometheus", accounts: [], residents: ["argos", "vertas"] },
+  "cadaeic.space": { name: "cadaeic.space", accounts: [], residents: ["arky"] },
+} };
 
-function fixtureTown(label, { households = HOUSEHOLDS, pins = PINS } = {}) {
+function fixtureTown(label, { declared = DECLARED, pins = PINS } = {}) {
   const repo = join(scratch, label);
   mkdirSync(join(repo, "tools"), { recursive: true });
-  const entries = Object.entries(households).map(([h, key]) => `["${h}", { key: ${JSON.stringify(key)} }]`);
-  writeFileSync(join(repo, "tools", "stamp-mint.mjs"),
-    `export function currentHouseholds() { return new Map([${entries.join(", ")}]); }\n`);
+  writeFileSync(join(repo, "tools", "households.json"), JSON.stringify(declared));
   writeFileSync(join(repo, "tools", "github-ids.json"), JSON.stringify(pins));
   return repo;
 }
@@ -108,23 +116,30 @@ async function runExport(label, opts) {
   return { out, emitted: JSON.parse(readFileSync(join(world, "WORLD", "households.json"), "utf8")) };
 }
 
-test("H1 · the emitted registry binds a household of EVERY shape the town can mint", async () => {
+test("H1 · the emitted registry binds a household of EVERY shape the store answers", async () => {
   const { emitted } = (await runExport("h1"));
 
   assert.equal(emitted.logins.aionsolare, "gh:293432145",
     "the pin's own binding is untouched — this projection adds to the map, it never answers over it");
-  assert.equal(emitted.logins["ev-attractor"], "solo:ev-attractor",
-    "draft/ev-attractor now resolves to the household it belongs to; before this it resolved to nothing");
+  assert.equal(emitted.households["aion-solare"], "solo:aion-solare", "case (a): a pinned handle no house holds is its own household");
+  assert.equal(emitted.logins["aion-solare"], "solo:aion-solare",
+    "draft/aion-solare resolves to the household it belongs to: a solo: key is bound by its sketchbook name");
   assert.equal(emitted.logins["argos-and-prometheus"], "hh:argos-and-prometheus",
     "and a house key is bound once, under the house's name, not once per handle in it");
   assert.equal(emitted.logins["cadaeic.space"], "hh:cadaeic.space",
     "a dot is legal in a branch component and the name is taken as it stands — nothing is cleaned up");
+  assert.equal(emitted.households["ev-attractor"], undefined, "case (b): a handle the store does not hold is not in the file");
+  assert.equal(emitted.logins["ev-attractor"], undefined);
 
   // THE CONJUNCTION. The sweep walls a mark only when the branch AND the author
   // both resolve (settlement-sweep.mjs:1123-1128), so an emitted map that binds
-  // a branch whose author side is null has fixed nothing.
+  // a branch whose author side is null has fixed nothing. ONE NAMED EXCEPTION,
+  // case (a)'s residual (POS-350): a pin's login binds its account's gh: key,
+  // which a handle no house holds does not wear (it wears solo:<handle>).
+  const residual = new Set(["aionsolare"]);
   for (const [name, key] of Object.entries(emitted.logins)) {
     const carried = Object.values(emitted.households).includes(key);
+    if (residual.has(name)) { assert.equal(carried, false, "the case (a) residual is what it says it is"); continue; }
     assert.ok(carried, `logins["${name}"] binds ${key}, which no handle in the same file carries`);
   }
 
@@ -184,7 +199,9 @@ test("H4 · a name a real login already holds is LEFT ALONE and said out loud", 
   assert.deepEqual(c.keys, ["hh:aionsolare"]);
   assert.equal(c.holds, "gh:293432145", "the report names what already holds the name");
 
-  const { out } = (await runExport("h4", { households }));
+  // End to end, the store holds a house whose SLUG is the pin's login.
+  const { out } = (await runExport("h4", { declared: { schema_version: 1, households: {
+    ...DECLARED.households, aionsolare: { name: "aionsolare", accounts: [], residents: ["someone"] } } } }));
   assert.equal(JSON.parse(readFileSync(join(scratch, "h4-world", "WORLD", "households.json"), "utf8"))
     .logins.aionsolare, "gh:293432145", "and the emitted file keeps the pin's answer");
   assert.match(out, /1 key\(s\) LEFT UNBINDABLE/, "the run says a key was left unbindable");

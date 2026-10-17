@@ -56,7 +56,7 @@ import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync, realpa
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { buildJoinFiles, gangwayState } from "../src/residency.mjs";
+import { buildJoinFiles, berthAshore, gangwayState } from "../src/residency.mjs";
 import { loadRegistry, loadPins } from "../src/registry-store.mjs";
 import { penCommit } from "../src/write.mjs";
 
@@ -205,12 +205,15 @@ export async function planSweep(clone, { only = null } = {}) {
       ghLogin,
     };
 
+    // The berth it settles is marked ashore in the same commit, by the one
+    // helper every settling road calls (POS-574, residency.mjs § berthAshore).
+    const files = [...buildJoinFiles(args), ...[berthAshore(handle, { clone })].filter(Boolean)];
     settle.push({
       handle, verdict: "would-settle", slug: row.slug,
       boarded: berth.data.boarded ?? berth.data.since ?? null,
       ghLogin, ghId,
-      files: buildJoinFiles(args).map((f) => f.path),
-      _files: buildJoinFiles(args),
+      files: files.map((f) => f.path),
+      _files: files,
     });
   }
 

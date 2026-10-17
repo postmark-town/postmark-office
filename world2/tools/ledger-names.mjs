@@ -20,7 +20,7 @@
 //
 // ── WHAT IS MEASURED, NOT ASSUMED ────────────────────────────────────────────
 //
-// Every field below was measured in a read-only clone of keeminlee/postmark-world
+// Every field below was measured in a read-only clone of postmark-town/postmark-world
 // on 2026-09-17, not taken from an issue body. Two of those measurements
 // CORRECTED the issue that asked for this fix:
 //

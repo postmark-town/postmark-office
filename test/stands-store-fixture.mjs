@@ -65,7 +65,7 @@ export const legacyAttachmentAct = ({ id, at, actor, thing, policy, seq }) => ({
  * `acts` is the whole record; the two queries filter it the way the real SQL
  * does, so the ORDER and the PREDICATE are exercised here rather than assumed.
  */
-export function actsClient(acts = []) {
+export function actsClient(acts = [], { claims = [] } = {}) {
   const asked = [];
   return {
     asked,
@@ -110,6 +110,20 @@ export function actsClient(acts = []) {
           .sort((x, y) => x.at - y.at || x.id - y.id) };
       }
 
+      // pgSetDownAmends (POS-451) — claims carrying `data._set_down`, pending
+      // or locked, optionally one slug at the placeholder the text names. Empty
+      // by default: a docket with no set-down amend on it is the git-era case.
+      // An Error for `claims` is a docket that will not answer: it is thrown.
+      if (/FROM claims WHERE data \? '_set_down' AND status IN \('pending', 'locked'\)/i.test(text)) {
+        if (claims instanceof Error) throw claims;
+        const slugAt = /AND slug = \$(\d+)/i.exec(text);
+        const slug = slugAt ? params[Number(slugAt[1]) - 1] : undefined;
+        return { rows: claims
+          .filter((c) => c.data?._set_down && (c.status === "pending" || c.status === "locked"))
+          .filter((c) => slug === undefined || c.slug === slug)
+          .map((c) => ({ slug: c.slug, act_id: c.data._set_down.act_id == null ? null : String(c.data._set_down.act_id), status: c.status })) };
+      }
+
       throw new Error(`the hand-built acts store was asked something it does not know: ${text.slice(0, 120)}`);
     },
   };
@@ -124,12 +138,12 @@ export function actsClient(acts = []) {
  * and the door's "the register was not asked" arm is a different case with its
  * own test.
  */
-export async function withActs(acts, fn) {
+export async function withActs(acts, fn, { claims = [] } = {}) {
   const guards = await import("../src/world2-guards.mjs");
   const prev = { pg: process.env.WORLD2_PG, url: process.env.WORLD2_PG_URL };
   process.env.WORLD2_PG = "1";
   process.env.WORLD2_PG_URL = `postgres://stands-store-fixture/${randomUUID()}`;
-  const client = actsClient(acts);
+  const client = actsClient(acts, { claims });
   // ⚑ HOW MANY TIMES THE ROAD WAS TAKEN. `useGuardReader` REPLACES `officeRead`
   // whole, so a fixture client never sees a `BEGIN READ ONLY` and an assertion
   // about one here would be measuring the fixture, not the office. What this

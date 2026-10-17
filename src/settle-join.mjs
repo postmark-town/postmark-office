@@ -63,6 +63,7 @@ import { mintHousehold, joinHousehold, collectingDrain, NO_DRAIN } from "./cerem
 import { planHouseKey, appendHouseKey, houseKeyBounce, registryWith } from "./house-key.mjs";
 import { penCommit, landOrRefuse } from "./write.mjs";
 import { holdsHand } from "./named-hand.mjs";
+import { trippedError } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 
 // ── WHO MAY CALL IT ─────────────────────────────────────────────────────────
 //
@@ -342,8 +343,7 @@ async function runUnderTownLock(payload, { clone }) {
     out = await execUnderTownLock(EXEC, JSON.stringify(payload), { ...process.env, TOWN_CLONE: clone });
   } catch (e) {
     if (lockTimedOut(e)) throw Object.assign(new Error(LOCK_BUSY.defect), LOCK_BUSY);
-    throw Object.assign(new Error("the settle-join pass tripped"),
-      { code: 500, defect: "the settle-join pass tripped", hint: String(e.stderr ?? e.message ?? e).slice(0, 300) });
+    throw trippedError("the settle-join pass tripped", e); // its stderr goes to the log (POS-578)
   }
   const result = JSON.parse(out.trim().split("\n").at(-1));
   if (result.error)

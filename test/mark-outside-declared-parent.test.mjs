@@ -622,3 +622,37 @@ test("amendMovedGround: the move guard's own answer, plus the ring it cannot see
   assert.equal(amendMovedGround(ring([[0, 0], [1, 1], [2, 2]]), at(0, 0)), null,
     "an amend carrying no points says nothing about the ring, exactly as with extent");
 });
+
+// ── THE GUARD FOLLOWS A RE-FILING (bug post little-bird/the-office-s-filing-cache-can-answer-from-before-main-moved) ─
+//
+// The guard reads the freeze by the name "refs/heads/main". When a re-filing
+// (POS-441's shape) moves the mooring to its own id, it no longer declares the
+// harbour as its parent, and a move out to sea is the owner's to make. Keyed on
+// the name, the cache handed the guard the freeze from before the re-filing,
+// and it went on refusing. THE FLIP: key `frozenFilingAt` on its argument again
+// and this reds on "judged against a parent the freeze no longer declares".
+test("THE GUARD FOLLOWS A RE-FILING: once the mooring is filed at its own id, a move out to sea is no longer refused", { skip: WHY_SKIP }, async (t) => {
+  const { repo, git } = snugShapedWorld(t);
+  const canon = canonOf(repo);
+  const ID = "current-the-reader/the-snug-mooring";
+  const move = () => declaredParentGuard(ID, { at: { ...AT_SEA }, extent: { ...MOORING_EXTENT } }, canon, repo);
+
+  const before = await move();
+  assert.equal(before?.code, 409, `the control: filed in the harbour, a point out at sea is refused: ${JSON.stringify(before)}`);
+
+  const refiled = "WORLD/marks/current-the-reader/the-snug-mooring";
+  mkdirSync(join(repo, "WORLD/marks/current-the-reader"), { recursive: true });
+  git("mv", MOORING_DIR, refiled);
+  writeFileSync(join(repo, "WORLD/filing-freeze.json"), `${JSON.stringify({
+    frozen_at: "2026-08-25",
+    marks: {
+      "spar/the-doubled-coast": COAST_DIR,
+      "current-the-reader/the-snug-harbour": HARBOUR_DIR,
+      [ID]: refiled,
+    },
+  }, null, 2)}\n`);
+  git("add", "-A");
+  git("-c", "user.name=fixture", "-c", "user.email=f@t.invalid", "commit", "-q", "-m", "the mooring re-filed at its id");
+
+  assert.equal(await move(), null, "judged against a parent the freeze no longer declares");
+});

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // train-week-check.mjs — A TRAIN IS A WEEK'S SHIP, NAMED FOR THE WEEK IT SHIPS IN.
 //
-// The law (blueprints documentation/OPERATIONS.md § Release Day, founder-ruled
+// The law (postmark-telemetry docs/SHIPPING.md § 2, founder-ruled
 // 2026-08-31): release day is SUNDAY, the first day of the release week —
 // `train/2026-w37` is the train that ships Sunday 2026-09-06, and
 // `train/2026-w(NN+1)` opens THAT day, after w(NN) ships. Extra work during the
@@ -70,7 +70,7 @@ export function judge(ref, { on = todayLocal(), flexed = FLEXED } = {}) {
     if (week === cur.week) return { ok: true, note: `${name} is this week's train, shipped or shipping — patch work rides release/${year}-w${week}.N` };
     if (flex) return { ok: true, warn: `${name}: ${flex}` };
     if (week > open) return refuse(`is ${week - open} week(s) AHEAD of the open train (today is release week ${cur.week}; the open train is w${open})`,
-      `put this work on train/${year}-w${open} — "train/2026-w(NN+1) opens the same day" as w(NN) ships (OPERATIONS.md § Release Day); a new train opens on release day, never before`);
+      `put this work on train/${year}-w${open} — "train/2026-w(NN+1) opens the same day" as w(NN) ships (SHIPPING.md § 2); a new train opens on release day, never before`);
     return refuse(`is ${cur.week - week} week(s) behind (release week ${cur.week})`, "an old train does not reopen — cut a patch tag of the current week, or start the open train");
   }
   // release/* tags
@@ -184,7 +184,7 @@ if (import.meta.url === new URL(`file://${process.argv[1].replace(/\\/g, "/")}`)
     const r = tagBaseFor(ref, { on });
     if (r.ok) { console.error(`OK · ${r.note}`); console.log(r.base); process.exit(0); }
     const cur = releaseWeek(on);
-    console.error(`REFUSED · ${r.defect}${r.hint ? "\n  " + r.hint : ""}\n  (today is release week ${cur.year}-w${cur.week}; a train is a week's ship — OPERATIONS.md § Release Day)`);
+    console.error(`REFUSED · ${r.defect}${r.hint ? "\n  " + r.hint : ""}\n  (today is release week ${cur.year}-w${cur.week}; a train is a week's ship — postmark-telemetry docs/SHIPPING.md § 2)`);
     process.exit(1);
   }
   else {
@@ -194,7 +194,7 @@ if (import.meta.url === new URL(`file://${process.argv[1].replace(/\\/g, "/")}`)
     const on = onIdx >= 0 ? new Date(`${args[onIdx + 1]}T00:00:00Z`) : todayLocal();
     const r = judge(ref, { on });
     if (r.ok) { if (r.warn) console.log(`WARN · ${r.warn}`); else console.log(`OK · ${r.note}`); process.exit(0); }
-    console.error(`REFUSED · ${r.defect}\n  ${r.hint}\n  (today is release week ${r.current}; a train is a week's ship — OPERATIONS.md § Release Day)`);
+    console.error(`REFUSED · ${r.defect}\n  ${r.hint}\n  (today is release week ${r.current}; a train is a week's ship — postmark-telemetry docs/SHIPPING.md § 2)`);
     process.exit(1);
   }
 }

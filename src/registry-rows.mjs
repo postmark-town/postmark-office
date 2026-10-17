@@ -8,6 +8,17 @@
 // `tools/registry-drain.mjs` uses the unfold, and `src/registry-store.mjs`
 // uses the unfold's object half.
 //
+// ── TWO RENDERINGS SINCE POS-394: THE PRIVATE ONE AND THE PUBLIC ONE ────────
+//
+// `renderRegistry` is the PRIVATE unfold: every column the store holds,
+// `human` included. It is the round trip below, and it stays exact.
+// `renderPublicRegistry` is what the drain PRINTS into the town repo, which
+// is public: the same bytes with each house's private `human` KEY left out
+// (src/registry-public.mjs; Darko 2026-10-05, Wright 2026-10-12). The store,
+// the fold and the private render keep the name; only the printout drops it.
+// So the town's files equal the PUBLIC render, and the private law below is
+// proved against the fold, not against today's printout.
+//
 // ── THE LAW THIS FILE EXISTS TO SATISFY ─────────────────────────────────────
 //
 //     renderRegistry(rowsFromRegistry(households, pins))  ===  the two files,
@@ -70,6 +81,7 @@
 // rather than fixed in it.
 
 import { serializeRegistry, serializePins } from "./residency.mjs";
+import { publicRegistry } from "./registry-public.mjs";
 
 // The two key templates, stated once. Every renderer below walks these in
 // order and skips what the row does not carry; every reader above checks its
@@ -369,8 +381,23 @@ export function pinsFromRows(rows) {
  * the round-trip falsifier proves against the real files.
  */
 export function renderRegistry(rows) {
+  return renderOf(registryFromRows(rows), rows);
+}
+
+/**
+ * The rows -> the two files as the town repo PRINTS them (POS-394): the
+ * private render with each house's `human` key left out, every other byte the
+ * same (pins exactly). What `registry-drain.mjs` checks against and writes.
+ */
+export function renderPublicRegistry(rows) {
+  return renderOf(publicRegistry(registryFromRows(rows)), rows);
+}
+
+// THE ONE PLACE THE TWO SERIALIZERS ARE CALLED (test/registry-no-file-writer
+// holds it): both renders go through here, so the bytes are made in one spot.
+function renderOf(registry, rows) {
   return {
-    households: serializeRegistry(registryFromRows(rows)),
+    households: serializeRegistry(registry),
     pins: serializePins(pinsFromRows(rows)),
   };
 }

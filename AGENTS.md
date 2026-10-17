@@ -16,4 +16,6 @@ To rehearse a store write, restore a copy into a database whose name says so
 (`world2_rehearsal`, POS-242) and run the write there. Never write
 `world2_dev` from a lane.
 
-Everything else: `README.md`, `OPERATIONS.md`, `deploy/DEPLOY.md`.
+Everything else: `README.md`, `CONTRACT.md`, `deploy/DEPLOY.md`. The maintainers' docs
+(how code ships, the operations ladder) are in the private `postmark-telemetry` repo;
+`OPERATIONS.md` here points at every home.

@@ -26,7 +26,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { __setPoolForTest } from "../src/world2-acts.mjs";
-import { rowsFromRegistry, renderRegistry, registryFromRows, HOUSEHOLD_KEYS } from "../src/registry-rows.mjs";
+import { rowsFromRegistry, renderRegistry, renderPublicRegistry, registryFromRows, HOUSEHOLD_KEYS } from "../src/registry-rows.mjs";
 import { REGISTRY_PATH, PINS_PATH, HANDLE_RE } from "../src/residency.mjs";
 import {
   mintHousehold, joinHousehold, REFUSALS, SLUG_RE, SLUG_MIN, SLUG_MAX,
@@ -36,6 +36,7 @@ import { drainRegistry, checkRegistry, ingestMissing, missingFromStore } from ".
 import { conformance } from "../src/declare.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { tempDir } from "./helpers/temp-dir.mjs";
+import { fixtureTown } from "./fixture.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIX = join(HERE, "fixtures", "registry-2026-09-22");
@@ -152,7 +153,7 @@ const withPool = async (fn, pool = stubPool()) => {
 
 // The doors below run in this process and read their town index from a store
 // seeded from this fixture (POS-268, office-under-test.mjs).
-const IX = await indexStore((await import("./fixture.mjs")).fixtureDb());
+const IX = await indexStore((await import("./fixture.mjs")).fixtureTown());
 const IX_RESTORE = await IX.useInProcess();
 test.after(async () => { await IX_RESTORE(); await IX.stop(); });
 
@@ -467,7 +468,8 @@ test("a pin the FILE holds and the table does not refuses it too", async () => {
 
 test("--ingest-missing adopts the row, and THEN the drain renders byte-equal", async () => {
   await withPool(async (pool) => {
-    const doc = JSON.parse(HOUSEHOLDS_RAW);
+    // POS-394: the printout the drain keeps is the PUBLIC render, computed from the fixture's rows
+    const doc = JSON.parse(renderPublicRegistry(rowsFromRegistry(JSON.parse(HOUSEHOLDS_RAW), JSON.parse(PINS_RAW))).households);
     doc.households["a-merged-house"] = {
       name: "A Merged House", accounts: [{ login: "someone", id: 5551212 }],
       residents: ["a-merged-resident"], since: "2026-09-22", declared_by: "a hand PR the witness allowed",
@@ -529,7 +531,8 @@ test("collectingDrain writes the files and hands back the paths, committing noth
     assert.equal(r.ran, true);
     assert.equal(r.commit, null, "the caller holds the pen, not the drain");
     assert.equal(paths.length, 2, "and it hands back both paths to be staged beside the caller's own");
-    assert.equal(readFileSync(join(clone, REGISTRY_PATH), "utf8"), HOUSEHOLDS_RAW);
+    // POS-394: the drain writes the PUBLIC render, computed from the fixture's own rows
+    assert.equal(readFileSync(join(clone, REGISTRY_PATH), "utf8"), renderPublicRegistry(rowsFromRegistry(JSON.parse(HOUSEHOLDS_RAW), JSON.parse(PINS_RAW))).households);
     assert.equal(readFileSync(join(clone, PINS_PATH), "utf8"), PINS_RAW);
   });
 });
@@ -665,7 +668,6 @@ test("a mint whose write fails REFUSES the join — never a warn with a false no
   // way `test/join-pr-at-the-cosign.test.mjs` drives it, over a temp clone.
   const { requestResidency } = await import("../src/residency.mjs");
   const { bindUnderLock } = await import("../src/join-bind.mjs");
-  const { fixtureDb } = await import("./fixture.mjs");
   const { mkdtempSync, mkdirSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
@@ -673,7 +675,7 @@ test("a mint whose write fails REFUSES the join — never a warn with a false no
   const clone = tempDir("mint-refuses-");
   mkdirSync(join(clone, "WHITE_PAGES"));
   execFileSync("git", ["-C", clone, "init", "-q"]);
-  const db = fixtureDb();
+  const db = fixtureTown();
   const bind = (payload, { clone: c }) => bindUnderLock({ ...payload, clone: c, db, date: "2026-09-29" });
 
   const seeded = stubPool();

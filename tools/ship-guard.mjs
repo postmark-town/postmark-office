@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // ship-guard.mjs — A PULL REQUEST INTO MAIN IS A SHIP OR A HOTFIX, AND A SHIP CARRIES MAIN.
 //
-// The law (blueprints documentation/OPERATIONS.md § Release Day; Darko,
+// The law (public: postmark-blueprints CONTRIBUTING.md § Code; the maintainers'
+// detail: postmark-telemetry docs/SHIPPING.md § 1 and § 6; Darko,
 // 2026-10-06): feature work merges into the open train (train/2026-wNN); main
 // takes only the weekly ship (a train/* PR) and a mid-week fix carried to prod
 // (a hotfix/* PR). The train takes main: before the ship PR merges, every
@@ -108,7 +109,7 @@ if (isMain) {
   let refused = 0;
   for (const v of verdicts) {
     if (v.ok) console.log(`OK · ${v.note}`);
-    else { refused++; console.error(`REFUSED · ${v.defect}\n  ${v.hint}\n  (OPERATIONS.md § Release Day; tools/ship-guard.mjs)`); }
+    else { refused++; console.error(`REFUSED · ${v.defect}\n  ${v.hint}\n  (postmark-blueprints CONTRIBUTING.md § Code; tools/ship-guard.mjs)`); }
   }
   process.exit(refused ? 1 : 0);
 }

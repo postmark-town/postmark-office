@@ -3,7 +3,7 @@
 // An emission is a thing that HAPPENS. Its PRESENCE lives in the store under a
 // TTL and then it is gone, exactly the way air clears; its OCCURRENCE is an
 // event in the crossing log, and that is kept forever. Presence fades;
-// occurrence is history (LOGOS/kinds.md).
+// occurrence is history (LOGOS/lifetimes.md).
 //
 // That one law shapes every function here:
 //

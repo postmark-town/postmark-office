@@ -306,6 +306,11 @@ export function refusalCheckOf(causeRow) {
  *   withdrawn     true when the caller's delta proposes its deletion
  *   settlement    { s, sha, at } — the newest settlement the record holds
  *   site_pin      the postmark-world sha the SITE is pinned to, or null
+ *   last_amended  { s, sha, at, window } — the settlement that carried the
+ *                 mark's most recent door amend (`amend_carried`, POS-612), or
+ *                 null when it was never amended
+ *   amends_unread the reason `amend_carried` could not be read, or null — by
+ *                 the-disclosure law, an unread table is not "never amended"
  *
  * ── THREE ABSENCES, THREE SENTENCES (walk #7 item 4) ──────────────────────
  *
@@ -320,7 +325,7 @@ export function receiptFrom(records = {}) {
   const {
     id = null, canon = null, published_at = null, claims = null,
     sketchbook = null, withdrawn = false, settlement = null, site_pin = null,
-    terrain = false,
+    terrain = false, last_amended = null, amends_unread = null, settled_window = null,
   } = records;
 
   // ── 0 · TERRAIN IS NOT A MARK (repaired 2026-09-07, reviewer-found) ───────
@@ -387,15 +392,37 @@ export function receiptFrom(records = {}) {
 
   // 1 · PUBLISHED. Canon holds it, so the settlement ruled and the answer is a
   // fact about the world, whatever the docket says about the claim behind it.
+  //
+  // ── THE LAST AMEND (POS-612, ruled by Darko 2026-10-14) ──────────────────
+  //
+  // `crossing` names the settlement that FIRST carried the mark, and it stays
+  // that: `mark_carried` (049) is checked against it on every keep tick, and
+  // "a later amend … does not change which settlement first carried the mark".
+  // So keith's stool, amended at S104, read "published at S65 (fc74bf68)" and
+  // looked as if the amend never landed. `last_amended` is the settlement that
+  // carried the most recent door amend, read from `amend_carried`, and the
+  // sentence names both and stays short: "published at S65, last amended at
+  // S104". The shas, the dates and the candle are in the fields. A mark never
+  // amended reads exactly as before.
   if (canon) {
+    // An amend carried by the first carriage itself (the claim and its amend in
+    // one candle) is the version that was first published, not a later one.
+    const amended = last_amended && Number.isInteger(Number(last_amended.s))
+      && !(published_at && Number(last_amended.s) <= Number(published_at.s)) ? last_amended : null;
     return {
       ...base,
       status: "published",
       crossing: published_at ?? settlement ?? null,
       settlement_sha: published_at?.sha ?? settlement?.sha ?? null,
+      last_amended: amended,
+      ...(amends_unread
+        ? { amends: { readable: false, reason: `the office could not read amend_carried (${amends_unread}) — whether this mark was amended since it was first carried is not answered` } }
+        : {}),
       says: published_at
-        ? `published at S${published_at.s} (${String(published_at.sha).slice(0, 8)})${published_at.at ? ` on ${published_at.at}` : ""}`
-        : "published — the record holds this mark, and which settlement carried it could not be read from the tags",
+        ? (amended
+          ? `published at S${published_at.s}, last amended at S${amended.s}`
+          : `published at S${published_at.s} (${String(published_at.sha).slice(0, 8)})${published_at.at ? ` on ${published_at.at}` : ""}`)
+        : `published${amended ? `, last amended at S${amended.s}` : ""} — the record holds this mark, and which settlement carried it could not be read from the tags`,
       ...(withdrawn
         ? { withdrawal_standing: "you have declared this mark withdrawn; it stands in the world until a crossing carries the removal" }
         : {}),
@@ -417,6 +444,26 @@ export function receiptFrom(records = {}) {
     };
   }
   if (row?.status === "locked") {
+    // A CANDLE A SETTLEMENT HAS ALREADY CLOSED (Wright, on office #539). Canon
+    // does not hold the mark, but the record says a settlement has closed its
+    // candle, so "it reaches the world at the settlement that carries that
+    // candle" is a promise about the past: a swept mark (little-bird's box of
+    // nine, swept at S86) still has a locked claim as its newest row.
+    // `settled_window` is the newest candle a settlement closed; only a door that
+    // can read it passes it, and without it the sentence stays as it was.
+    const closed = settled_window != null && Number.isFinite(Number(settled_window))
+      && row.window_id != null && Number(row.window_id) <= Number(settled_window);
+    if (closed) {
+      return {
+        ...base, status: "locked",
+        crossing: published_at ?? settlement ?? null,
+        settlement_sha: published_at?.sha ?? settlement?.sha ?? null,
+        says: (published_at
+          ? `locked at candle ${row.window_id} and carried to the world at S${published_at.s} (${String(published_at.sha).slice(0, 8)}), but the world does not hold it now`
+          : `locked at candle ${row.window_id}, and a settlement has closed that candle since, but the world does not hold this mark now`)
+          + ": it left after it was ruled, by a withdrawal or by the sweep (a commons mark with no escrow behind it is unpublished at a settlement)",
+      };
+    }
     return {
       ...base, status: "locked",
       crossing: settlement ?? null,
@@ -506,17 +553,61 @@ const git = (repo, args) => execFileSync("git", ["-C", repo, ...args], {
  * Each flag fixes a different case and BOTH are needed: `--follow` alone still
  * answers S6 for the re-leave, oldest-add alone still answers S8 for the move.
  * `test/mark-receipt.test.mjs § THE THREE LIVES A MARK'S FILE CAN HAVE`.
+ *
+ * ── A LOOK-ALIKE IS NOT A MOVE (repaired 2026-10-13, postmark#3548) ──────────
+ *
+ * `git log --follow` follows more than renames: it runs copy detection as well,
+ * so a NEW file that is mostly the same as an older file reads as a copy of it
+ * and the walk carries on down the OLDER file's history. Mark files are short
+ * and share a frontmatter shape, so two marks with the same body are copies to
+ * git. Live: little-bird/a-second-cold-cup-on-the-long-bench first lands in the
+ * S97 commit, and its receipt named S42 — the settlement that added the FIRST
+ * cup — with a real sha, which is the one thing this function exists to prevent.
+ *
+ *   a look-alike of an older mark   truth S10 · answered S9   wrong
+ *
+ * So the walk is done by hand, one move at a time, and a hop is taken only when
+ * the commit that added the path RENAMED another path into it (`-M`, renames
+ * only: the source is gone). A copy leaves its source standing and is not a
+ * move. Exact matches only (`--follow -M100%`) is not the repair: the world's
+ * household un-nesting (857dc401) renamed 255 mark files and edited 99 of them
+ * in the same commit, and every one of those would have read as a fresh add.
+ * `test/mark-receipt.test.mjs § TWO MORE LIVES`.
  */
+const MAX_MOVES = 16;
+
+/** The path `commit` RENAMED into `path`, or null. Renames only — never copies. */
+function renamedFrom(repo, commit, path) {
+  let out;
+  try {
+    out = git(repo, ["diff-tree", "-r", "-M", "-z", "--root", "--no-commit-id", "--name-status", "--diff-filter=R", commit]);
+  } catch { return null; }
+  // -z: `R<score>\0<from>\0<to>\0`, repeated.
+  const f = out.split("\0");
+  for (let i = 0; i + 2 < f.length; i += 3) {
+    if (/^R\d*$/.test(f[i]) && f[i + 2] === path) return f[i + 1];
+  }
+  return null;
+}
+
 export function settlementThatCarried(repo, path, { tags = null, ref = "HEAD" } = {}) {
   if (!repo || !path) return null;
-  let added;
+  let added = "";
   try {
-    // --follow so a rename is one life, not two; no -1 so every add is listed
-    // (newest first) and the OLDEST is taken below. `--follow` takes exactly one
-    // pathspec, which is what this function is handed.
-    const adds = git(repo, ["log", "--follow", "--diff-filter=A", "--format=%H", ref, "--", path])
-      .split("\n").map((s) => s.trim()).filter(Boolean);
-    added = adds.length ? adds[adds.length - 1] : "";
+    // No -1, so every add of the path is listed (newest first) and the OLDEST
+    // is taken. Then one hop back for each RENAME into it, so a move is one
+    // life, not two — and a look-alike is its own life, not its twin's.
+    let at = ref, p = path;
+    for (let hop = 0; hop < MAX_MOVES; hop++) {
+      const adds = git(repo, ["log", "--diff-filter=A", "--format=%H", at, "--", p])
+        .split("\n").map((s) => s.trim()).filter(Boolean);
+      if (!adds.length) break;
+      added = adds[adds.length - 1];
+      const from = renamedFrom(repo, added, p);
+      if (!from) break;
+      p = from;
+      at = `${added}^`;
+    }
   } catch { return null; }
   if (!added) return null;
   let containing;
@@ -624,6 +715,22 @@ export async function readMarkReceipt(id, { repo, key = null, canon = null, publ
     }
   } catch { claims = null; }
 
+  // ── the last amend (POS-612) ─────────────────────────────────────────────
+  //
+  // Asked only of a mark canon holds: `last_amended` belongs to the published
+  // tense. The twin asks the same row (world2-serve.mjs § twinReceipt).
+  let last_amended = null, amends_unread = null;
+  if (canonRow) {
+    try {
+      const { world2Enabled } = await import("./world2-acts.mjs");
+      if (!world2Enabled()) amends_unread = "no store is configured";
+      else {
+        const { lastAmendedRow } = await import("./world2-claims.mjs");
+        last_amended = await lastAmendedRow(markId);
+      }
+    } catch (e) { last_amended = null; amends_unread = e?.code === "42P01" ? "075 not applied" : "the store did not answer"; }
+  }
+
   // ── the caller's own compose space ───────────────────────────────────────
   let sketchbook = null, withdrawn = false;
   if (key) {
@@ -637,9 +744,9 @@ export async function readMarkReceipt(id, { repo, key = null, canon = null, publ
 
   return receiptFrom({
     id: markId, canon: canonRow, published_at: carried, claims,
-    sketchbook, withdrawn, settlement,
+    sketchbook, withdrawn, settlement, last_amended, amends_unread,
     // ⚑ NOTHING RECORDS THE SITE PIN, and this is the honest null rather than a
-    // guess. `site_pin` is the `postmark-world` version `keeminlee/postmark-site`
+    // guess. `site_pin` is the `postmark-world` version `postmark-town/postmark-site`
     // is built against; the office holds no clone of the site and no record of
     // its pin, so the one field of the plan's receipt shape that the store
     // cannot derive is this one. It is a FINDING, not a schema change: either

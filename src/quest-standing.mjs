@@ -77,10 +77,47 @@ export function depthByHandle(friendships) {
   return out;
 }
 
+/**
+ * The day each household's welcome bundle was paid, from the STORE's stamp
+ * lines (POS-495). `lines` is the canonical text of the store's welcome rows
+ * (src/stamp-lines.mjs § welcomeLinesVia); null means the store was not read,
+ * and the answer is null too, never an empty map standing in for "nobody".
+ *
+ * The date is the line's own leading day, read by the town's `classifyEntry`:
+ * the grammar stays the town's. It is never the row's `written_at`, which is
+ * when the store recorded the line, and every line the first --sync carried
+ * holds the sync's time.
+ *
+ * WHICH HOUSE A LINE DATES is the town's `welcomedHouseholds` join, and it is
+ * restated here because the town's fold returns keys without days and the
+ * issue rules out a new field on it. A line counts for the key it names
+ * (`welcome:<key>`) AND for the paid resident's key on today's roll, so a
+ * re-keyed house keeps its day. The earliest day wins. The falsifier
+ * (test/quest-welcome-date.test.mjs) holds this key set equal to the town's
+ * own over the same ledger, so a change to the town's join reds here.
+ */
+export function welcomeDatesFrom(lines, { classifyEntry, roll }) {
+  if (!lines) return null;
+  const out = new Map();
+  const put = (key, date) => { if (key && (!out.has(key) || date < out.get(key))) out.set(key, date); };
+  for (const canonical of lines) {
+    const c = classifyEntry(canonical);
+    if (c?.kind !== "welcome") continue;
+    put(c.household, c.date);
+    put(roll?.get(c.handle)?.key, c.date);
+  }
+  return out;
+}
+
 /** One resident's standing row — the JSON the index stores. PURE. */
-export function standingRow(handle, { facts, first, depth, ladderActive }) {
+export function standingRow(handle, { facts, first, depth, ladderActive, welcomedSince = null }) {
   return {
     ...(facts ?? {}),
+    // The day the bundle was paid, ONLY on a row the town calls welcomed
+    // (POS-495). Who counts as welcomed is the town's fact above, and the
+    // store never changes it: no line in the store leaves the row welcomed
+    // and undated, never "not welcomed".
+    welcomed_since: facts?.welcomed === true ? welcomedSince : null,
     sent_since: first?.sent.get(handle)?.date ?? null,
     sent_via: first?.sent.get(handle)?.id ?? null,
     received_since: first?.received.get(handle)?.date ?? null,
@@ -95,15 +132,18 @@ export function standingRow(handle, { facts, first, depth, ladderActive }) {
 /**
  * Every resident's standing row, from the town's own folds. `factsFor` is the
  * town's `onboardingFactsFor` bound to a repo, passed in so this stays pure and
- * so a test can drive it without a checkout.
+ * so a test can drive it without a checkout. `welcomedOn` is
+ * `welcomeDatesFrom`'s map (or null), and `keyOf` a handle's household key,
+ * the key the town's `welcomed` fact looks up.
  */
-export function standingRowsFor(handles, { deliveries, friendships, factsFor }) {
+export function standingRowsFor(handles, { deliveries, friendships, factsFor, welcomedOn = null, keyOf = null }) {
   const first = firstEachWay(deliveries);
   const depth = depthByHandle(friendships);
   const ladderActive = Boolean(friendships?.active);
   const out = new Map();
   for (const h of handles ?? []) {
-    out.set(h, standingRow(h, { facts: factsFor(h), first, depth, ladderActive }));
+    const welcomedSince = (welcomedOn && keyOf ? welcomedOn.get(keyOf(h)) : null) ?? null;
+    out.set(h, standingRow(h, { facts: factsFor(h), first, depth, ladderActive, welcomedSince }));
   }
   return out;
 }
@@ -138,17 +178,28 @@ export function standingRowsFor(handles, { deliveries, friendships, factsFor }) 
  * `base` is the store's key base when the caller read one (POS-341 part 4,
  * src/mint-inputs.mjs § keyBaseVia): the town folds the roll and the
  * friendships from it in place of the printouts. Null is the printouts, as before.
+ *
+ * `welcomeLines` is the store's welcome rows (POS-495, src/stamp-lines.mjs §
+ * welcomeLinesVia), read by the ingest beside the key base. They date the
+ * welcome row and decide nothing else. Null (the hydrate, a store that did not
+ * answer, a checkout too old to export `classifyEntry` or `currentHouseholds`)
+ * leaves every row undated, as before.
  */
-export function standingRowsFromTown(tools, repo, handles, { base = null } = {}) {
+export function standingRowsFromTown(tools, repo, handles, { base = null, welcomeLines = null } = {}) {
   const deliveries = tools.parseDeliveries(repo);
   const friendships = base ? tools.foldFriendships(repo, { base }) : tools.foldFriendships(repo);
   const households = typeof tools.currentHouseholds === "function"
     ? (base ? tools.currentHouseholds(repo, { base }) : tools.currentHouseholds(repo)) : undefined;
   const welcomed = households !== undefined && typeof tools.welcomedHouseholds === "function"
     ? tools.welcomedHouseholds(repo, households) : undefined;
+  const welcomedOn = households !== undefined && typeof tools.classifyEntry === "function"
+    ? welcomeDatesFrom(welcomeLines, { classifyEntry: tools.classifyEntry, roll: households }) : null;
   const rows = standingRowsFor(handles, {
     deliveries, friendships,
     factsFor: (h) => tools.onboardingFactsFor(repo, h, { deliveries, households, welcomed }),
+    welcomedOn,
+    // the key the town's `welcomed` fact looks up (quest-progress.mjs § onboardingFactsFor)
+    keyOf: (h) => households?.get(h)?.key ?? `solo:${h}`,
   });
   return { rows, friendships };
 }

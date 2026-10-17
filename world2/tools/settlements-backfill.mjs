@@ -92,6 +92,10 @@ import { resolve } from "node:path";
 
 import { SETTLEMENT_TAG, isRepoRoot } from "../../src/settlements.mjs";
 import { recordCarried, receiptLine, TICK_CAP } from "./mark-carried-backfill.mjs";
+import { recordAmendsCarried, amendsLine, TICK_CAP as AMENDS_CAP } from "./amend-carried.mjs";
+import { stockChests } from "./chest-stock.mjs";
+import { recoverOrphanDrops } from "../../src/drop-recovery.mjs";
+import { currentCrossing } from "../../src/crossings.mjs";
 
 const NL = String.fromCharCode(10);
 const arg = (n, d = null) => { const i = process.argv.indexOf(`--${n}`); return i === -1 ? d : process.argv[i + 1]; };
@@ -194,6 +198,131 @@ export async function carriedOnTick(client, repo) {
   }
 }
 
+/**
+ * A SOFT STEP'S KEEP STATUS, read from this tool's own output (POS-612 and
+ * POS-627, review-612). The carried, amends, chests and drops steps are
+ * non-fatal by design: rows already committed stay committed and the tool exits
+ * 0. But a step that fails on every tick must still reach the one alarm route,
+ * so office-keep.sh records each as its own keep step (`keep_step <step>
+ * <status> [reason]`), and box-rollcall alarms on N consecutive scheduled ticks
+ * that are not ok (deploy/keep-history.mjs § SOFT_STEPS). PURE.
+ *
+ * Each step's own lines, first match wins:
+ *
+ *   carried, amends  `wrote …`                         ok
+ *                    `SKIPPED …` (the cap)             refused prereq:history
+ *                    `no \`…\` table yet` (absent)     refused prereq:migration
+ *   chests           `stocked N …`                     ok
+ *                    `not stocked — the law at S<n>
+ *                     declares no chest class —
+ *                     nothing to stock` (a CURRENT
+ *                     law)                             ok prereq:chest_class: nothing to stock
+ *                                                      yet; the reason keeps it visible, so the
+ *                                                      step reads `stocked N` once the class lands
+ *                    `… declares no chest class, and
+ *                     S<newest>'s law is not ingested
+ *                     yet` (a stalled ingest)          refused prereq:law
+ *                    `not stocked — the store holds
+ *                     no settlement whose law is
+ *                     ingested`                        refused prereq:law
+ *                    `not stocked this tick — the
+ *                     carried step did not settle`     refused prereq:carried
+ *   drops            `… · N failed (…)` (a write the
+ *                     store would not take; it fails
+ *                     again every tick)                refused write-failed
+ *                    `restored N …` (undecided drops,
+ *                     a guard's designed bounces, are
+ *                     asked again: the design)         ok
+ *   any step         `NOT recorded/stocked/reconciled`,
+ *                    `REFUSED …`, or a line this does
+ *                    not know                          refused write-failed
+ *                    no `<step>:` line at all          notrun (it never ran)
+ *
+ * Returns the words office-keep.sh hands keep_step: "ok", "refused <reason>"
+ * or "notrun". The reasons are keep-history's fixed vocabulary (REASON_RE).
+ */
+const ROWS_STEP = [[/^wrote /, "ok"], [/^SKIPPED/, "refused prereq:history"], [/^no `/, "refused prereq:migration"]];
+export const SOFT_STEP_RULES = Object.freeze({
+  carried: ROWS_STEP,
+  amends: ROWS_STEP,
+  chests: [
+    [/^stocked \d+/, "ok"],
+    [/^not stocked — the law at S\d+ declares no chest class — nothing to stock$/, "ok prereq:chest_class"],
+    [/^not stocked — the law at S\d+ declares no chest class, and S\d+'s law is not ingested yet/, "refused prereq:law"],
+    [/^not stocked — the store holds no settlement whose law is ingested/, "refused prereq:law"],
+    [/^not stocked this tick — the carried step did not settle/, "refused prereq:carried"],
+    // the doors ship dark (src/chests-candy.mjs): a switch, not a failure, so the roll-call stays quiet
+    [/^not stocked — chests and candy are off at this office/, "ok switch-off"],
+  ],
+  drops: [[/ · \d+ failed \(/, "refused write-failed"], [/^restored \d+/, "ok"]],
+});
+export function softStepStatus(text, step) {
+  const line = String(text ?? "").split(/\r?\n/).map((l) => l.trim()).find((l) => l.startsWith(`${step}: `));
+  if (!line) return "notrun";
+  const rest = line.slice(step.length + 2);
+  const hit = (SOFT_STEP_RULES[step] ?? []).find(([re]) => re.test(rest));
+  return hit ? hit[1] : "refused write-failed";
+}
+
+/**
+ * WHICH SETTLEMENT CARRIED EACH DOOR AMEND (POS-612, 075): amend-carried.mjs §
+ * recordAmendsCarried on the same connection and clone, capped like the carried
+ * step. Its own failures are one named line and never undo the rows above; a
+ * store without 075 says so. It reads claims and settlements, not mark_carried,
+ * so it does not wait on the carried step.
+ */
+export async function amendsOnTick(client, repo, { record = recordAmendsCarried } = {}) {
+  try {
+    const r = await record(client, repo, { apply: true, cap: AMENDS_CAP });
+    return { verdict: r.verdict, line: amendsLine(r) };
+  } catch (e) {
+    if (e?.code === "42P01") return { verdict: "absent", line: "amends: no `amend_carried` table yet (075 not applied) — nothing recorded" };
+    return { verdict: "error", line: `amends: NOT recorded (non-fatal) — ${String(e?.message ?? e).slice(0, 200)}` };
+  }
+}
+
+/**
+ * THE FIRST STOCK OF EVERY CHEST THE SETTLEMENTS ADMITTED (WLD-27,
+ * chest-stock.mjs): once per chest, ever, by the plan and by the nonce. Like
+ * the carried step, its failure is one named line and never undoes the
+ * settlement rows already committed; a store without the unit acts or the law
+ * says so. An unstocked chest is a line, not a failure.
+ */
+export async function stockedOnTick(client, { stock = stockChests, crossing = currentCrossing, on = null } = {}) {
+  // dark by default (src/chests-candy.mjs): the first stock writes nothing
+  const open = on ?? (await import("../../src/chests-candy.mjs")).chestsCandyOn();
+  if (!open) return { verdict: "ok", line: "chests: not stocked — chests and candy are off at this office (WORLD_CHESTS_CANDY unset)" };
+  try {
+    const r = await stock(client, { crossing: crossing() });
+    return { verdict: "ok", line: r.line, result: r };
+  } catch (e) {
+    return { verdict: "error", line: `chests: NOT stocked (non-fatal) — ${String(e?.message ?? e).slice(0, 200)}` };
+  }
+}
+
+/**
+ * ORPHANED SET-DOWNS COME BACK (WLD-27 F0, drop-recovery.mjs): every
+ * `units:drop` older than one tick with neither a mark filed for it nor an
+ * undo is returned to its dropper, once, with a line. Not gated on the carried
+ * step — it reads acts and claims, not settlements. Non-fatal like its
+ * neighbours: an error is one named line and the next tick tries again.
+ */
+export async function dropsRecoveredOnTick(client, { recover = recoverOrphanDrops, now = Date.now, crossing = currentCrossing } = {}) {
+  try {
+    const r = await recover(client, { now: now(), crossing: crossing() });
+    return { verdict: "ok", line: r.line, result: r };
+  } catch (e) {
+    return { verdict: "error", line: `drops: NOT reconciled (non-fatal) — ${String(e?.message ?? e).slice(0, 200)}` };
+  }
+}
+
+/** The stock step, gated on the carried step that proves admission (finding 7). */
+export async function chestsAfterCarried(client, carried, { stock = stockedOnTick } = {}) {
+  if (carried?.verdict !== "ok")
+    return { verdict: "held", line: `chests: not stocked this tick — the carried step did not settle (${carried?.verdict ?? "not run"}), and a chest is stocked only on the settlement that carried it` };
+  return stock(client);
+}
+
 // ── the arm ──────────────────────────────────────────────────────────────────
 
 const iso = (d) => (d == null ? "—" : new Date(d).toISOString().replace(/\.\d{3}Z$/, "Z"));
@@ -217,6 +346,18 @@ function render(plan, extra, { dbName, user, repo, mode }) {
 }
 
 if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split(/[\\/]/).pop())) {
+  // `--soft-step <carried|amends|chests|drops>`: read a previous run's output on stdin and
+  // print that step's keep status (softStepStatus). office-keep.sh's use; it
+  // opens no checkout and no connection.
+  if (flag("soft-step")) {
+    const step = arg("soft-step");
+    if (!Object.hasOwn(SOFT_STEP_RULES, step)) { console.error(`--soft-step takes ${Object.keys(SOFT_STEP_RULES).join(", ")}`); process.exit(2); }
+    const { readFileSync } = await import("node:fs");
+    let text = "";
+    try { text = readFileSync(0, "utf8"); } catch { text = ""; }
+    console.log(softStepStatus(text, step));
+    process.exit(0);
+  }
   const apply = flag("apply"), verify = flag("verify"), json = flag("json"), quiet = flag("quiet");
   if (apply && verify) { console.error("--apply and --verify are two different questions; ask one"); process.exit(2); }
   const mode = apply ? "APPLY" : verify ? "VERIFY" : "dry-run";
@@ -269,7 +410,7 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split(/[\\/]/).p
     const text = render(plan, extra, { dbName: who.d, user: who.u, repo, mode });
     if (!json && !quiet) console.log(text);
 
-    let wrote = 0, verdict = "ok", carried = null;
+    let wrote = 0, verdict = "ok", carried = null, drops = null, amends = null;
     if (quiet && !apply && !verify) console.log(text.split(NL)[1]);   // the census line, nothing else
     if (conflicts.length) {
       verdict = "CONFLICT";
@@ -308,6 +449,17 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split(/[\\/]/).p
       // git cannot answer. Before it, the cap skips and says so.
       carried = await carriedOnTick(client, repo);
       if (!json) console.log(carried.line);
+      // THE FIRST STOCK (WLD-27), after the settlement rows: a chest the newest
+      // settlement admitted is stocked by the tick that first sees it.
+      // ONLY ON A SETTLED CARRIED STEP (Bevel's review, finding 7): the stock's proof
+      // of admission IS the carried rows, so a tick whose carried step erred,
+      // refused or skipped stocks nothing and says why; the next tick tries again.
+      const chests = await chestsAfterCarried(client, carried);
+      if (!json) console.log(chests.line);
+      // WHICH SETTLEMENT CARRIED EACH DOOR AMEND (POS-612, 075): the receipt's
+      // `last_amended`. Non-fatal; an unproven amend is named, never written.
+      amends = await amendsOnTick(client, repo);
+      if (!json) console.log(amends.line);
       if (carried.verdict === "DISAGREE") verdict = "CONFLICT";
     } else if (verify) {
       const missing = fresh.map((r) => r.number);
@@ -322,10 +474,19 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split(/[\\/]/).p
         console.log(`${NL}EQUAL: ${plan.length} tag(s), ${plan.length} row(s), every column agrees (compared ${plan.length})`);
       }
     }
+    // ORPHANED SET-DOWNS (WLD-27 F0), on EVERY --apply tick — a new settlement
+    // or none, a refused tag or not: it reads acts and claims, not the tags.
+    // This is the office tick's one live step (postmark-office-keep.timer →
+    // office-keep.sh → here, every 15 minutes), so "older than one tick" is
+    // measured against that cadence (drop-recovery.mjs § TICK_MS).
+    if (apply) {
+      drops = await dropsRecoveredOnTick(client);
+      if (!json) console.log(drops.line);
+    }
     receipt = { mode, verdict, db: who.d, user: who.u, repo, tags: derived.length, new: fresh.length, present: plan.filter((r) => r.state === "present").length,
       drift: drift.map((r) => r.number), conflict: conflicts.map((r) => r.number), extra, wrote, compared: plan.length,
       rows: plan.map((r) => ({ number: r.number, state: r.state, tag_sha: r.tag_sha, published_at: iso(r.published_at), window_id: r.window_id, blessed_at: iso(r.blessed_at) })),
-      ...(carried ? { carried: carried.line } : {}) };
+      ...(carried ? { carried: carried.line } : {}), ...(amends ? { amends: amends.line } : {}), ...(drops ? { drops: drops.line } : {}) };
   } finally {
     await client.end();
   }

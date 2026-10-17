@@ -639,7 +639,7 @@ export function e6Occupancy(passages, at, ledgerRel) {
 function vendorDrift() {
   const out = [];
   for (const [name, v] of Object.entries(live.VENDOR)) {
-    if (v.repo !== "keeminlee/postmark-world") continue;   // only the world half is in this checkout
+    if (v.repo !== "postmark-town/postmark-world") continue;   // only the world half is in this checkout
     let blob = null;
     // stderr swallowed: a checkout predating a RENAME has no such path and says
     // so on stderr, which is a true fact about that sha and not a finding. (The

@@ -124,10 +124,11 @@ const householdKeys = new Map();
  * residents' handles resolved to `solo:<login>` and read an empty portfolio
  * and none of their own drafts, while the write path, which resolves from the
  * acting HANDLE (`world-apex.mjs § worldHouseholdOf`), had filed those drafts
- * under their house. 1.0 already answers this (`world-stake.mjs §
- * worldPortfolioStakeSlice`): "the household a caller belongs to is the
- * pins-household of their own handles". So: the first of the key's handles
- * the registry places in a house names it. Only when none does is the label
+ * under their house. 1.0 answers it the same way (`world-stake.mjs §
+ * worldPortfolioStakeSlice`, which since POS-573 asks the store's registry
+ * for every handle on the key, never the town ledger's pins): the household is
+ * where the key's HANDLES live. So: the first of the key's handles the
+ * registry places in a house names it. Only when none does is the label
  * asked, and `keyHouseholdOf` says so on `disclosure`.
  */
 export async function keyHouseholdOf(p, key) {
@@ -507,7 +508,8 @@ export async function claimTxFromJournal(client, row, seq, { household, actId = 
       // ring. The door has already derived it; this holds the store to the same
       // arithmetic for any row that reaches the pen another way. A claim that
       // already agrees within the lint's 0.5 m keeps its numbers byte for byte.
-      const derive = placed && points && payload.kind === "sited" && ringOf(points) && !ringAgrees({ at: sentAt, extent: sentExtent }, points);
+      // Every placed mark but a parcel (whose box is the town's dial) is sited, in either form: `kind: thing` included.
+      const derive = placed && points && payload.kind !== "parcel" && ringOf(points) && !ringAgrees({ at: sentAt, extent: sentExtent }, points);
       const { at, extent } = derive ? ringBox(points) : { at: sentAt, extent: sentExtent };
       const geometry = placed ? { slug, at, extent, ...(points ? { points } : {}) } : { slug };
       const bbox = placed ? boxOf(at, extent) : null;
@@ -806,7 +808,7 @@ export async function retractReplaced(client, { windowId, slug, claimant, except
  * for a stake on an already-public mark, and never an error. `window` is the
  * candle the claim joined, which is the key its retraction is written against.
  */
-export async function promoteDraftOnStake({ actor, householdName, key = null, slug, stamps = 0 }, env = process.env) {
+export async function promoteDraftOnStake({ actor, householdName, key = null, slug, stamps = 0, guard = null }, env = process.env) {
   if (!candleEnabled(env)) return { promoted: false, claim: null, window: null };
   const p = await pool(env);
   // THE STAKER'S HOUSE, from the staker's KEY (POS-457): its handles, then its
@@ -828,6 +830,10 @@ export async function promoteDraftOnStake({ actor, householdName, key = null, sl
     // into the window the clearing was closing, after its pending list was read.
     const win = await openWindowFor(c, "no open candle — the candle is dark; the stake cannot put this mark forward");
     windowId = win.id;
+    // `guard` (WLD-27 A): the stake door's question that must hold in THIS
+    // transaction — a dropped unit that has left is never put forward
+    // (mark-stake-lock.mjs § stakeGuard). Its refusal rolls the promotion back.
+    if (guard) await guard(c);
     // The spelling set, for `readDraftClaims`' reason: a stake on a draft the
     // house composed under its old key must find that draft, or the stake is
     // read as a stake on an already-public mark and the draft never goes
@@ -1087,6 +1093,36 @@ export async function claimRowsForSlug(slug, { key = null, env = process.env, p:
   const household = await householdKeyForKey(p, key);
   if (!household) return (await p.query(sql, [slug])).rows;
   return (await withKeyHousehold(p, key, (c) => c.query(sql, [slug]))).rows;
+}
+
+/**
+ * THE SETTLEMENT THAT CARRIED A MARK'S MOST RECENT DOOR AMEND (POS-612), from
+ * `amend_carried` (075) joined to `settlements` and to the amend's own claim:
+ * `{ s, sha, at, window }`, or null when the table holds no amend of the mark.
+ *
+ * The receipt's `last_amended`, read the same way by 1.0's reader and the twin,
+ * so the two doors answer one row. The fact is recorded, never derived here:
+ * `world2/tools/amend-carried.mjs` writes it on the keep tick, and only when
+ * git proves the settlement changed the mark's file. Throws when the table
+ * cannot be read; the caller discloses that rather than answering null.
+ */
+export async function lastAmendedRow(mark, { env = process.env, p: injected = null } = {}) {
+  const p = injected ?? await pool(env);
+  const { rows: [r] } = await p.query(
+    `SELECT a.settlement, s.tag_sha, s.published_at, c.window_id
+       FROM amend_carried a
+       JOIN settlements s ON s.number = a.settlement
+       JOIN claims c ON c.id = a.claim
+      WHERE a.mark = $1
+      ORDER BY a.settlement DESC, c.window_id DESC
+      LIMIT 1`, [String(mark)]);
+  if (!r) return null;
+  return {
+    s: Number(r.settlement),
+    sha: r.tag_sha,
+    at: r.published_at == null ? null : new Date(r.published_at).toISOString().replace(/\.\d{3}Z$/, "Z"),
+    window: r.window_id == null ? null : Number(r.window_id),
+  };
 }
 
 /**

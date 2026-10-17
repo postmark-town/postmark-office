@@ -157,26 +157,30 @@ export function judgeLink(v) {
 // (bug-credit.mjs § judgeEarnedCredit reads the author and judges the binding).
 // Confirmed, reproduced, shipped and the side exits are left as they were.
 //
-// A COMMENT OR ISSUE LINK IS ON THE BUG'S OWN ISSUE when the bug names one
-// (fields.issue): work on another issue earned another bug's stage (Wright,
-// 10-15, on review-649 § 6). Whether a resident's own PR earns diagnosed or
-// briefed is Darko's Call (review-649 § 2); until he rules, a PR never does.
+// A RESIDENT'S OWN PULL REQUEST EARNS DIAGNOSED OR BRIEFED TOO (RULED, Darko
+// 2026-10-15 19:02 EDT, on review-649 § 2: the replay of 59 live advances found
+// 6 legitimate lupi and little-bird credits linking their own PRs, refused by
+// "never a PR"). A
+// founder account's PR never earns diagnosed or briefed for anyone, so #3757's
+// link (wright-starforge's world#208) stays refused (bug-credit.mjs).
+// AND A COMMENT OR ISSUE LINK IS ON THE BUG'S OWN ISSUE when the bug names one
+// (fields.issue): work on another issue earned another bug's stage.
 export const EARNED_STAGES = Object.freeze([STATE_DIAGNOSED, STATE_BRIEFED, STATE_FIXED]);
 
 /** What earns each checked stage, in the words every refusal teaches with. */
 export const EARNED_BY = Object.freeze({
-  [STATE_DIAGNOSED]: "diagnosed is earned by the cause: link the issue comment, the issue, or the letter that names it; its author is who's credited",
-  [STATE_BRIEFED]: "briefed is earned by the brief: link the issue comment, the issue, or the letter that holds it; its author is who's credited",
+  [STATE_DIAGNOSED]: "diagnosed is earned by the cause: link the issue comment, the issue, the letter, or the resident's own pull request that names it; its author is who's credited, and a founder's pull request never earns it",
+  [STATE_BRIEFED]: "briefed is earned by the brief: link the issue comment, the issue, the letter, or the resident's own pull request that holds it; its author is who's credited, and a founder's pull request never earns it",
   [STATE_FIXED]: "fixed is earned by the fix: link its pull request; its author is who's credited",
 });
 const EARNED_SHAPES = Object.freeze({
-  [STATE_DIAGNOSED]: 'link: "https://github.com/postmark-town/<repo>/issues/<n>#issuecomment-<id>", ".../issues/<n>", or a letter\'s id',
-  [STATE_BRIEFED]: 'link: "https://github.com/postmark-town/<repo>/issues/<n>#issuecomment-<id>", ".../issues/<n>", or a letter\'s id',
+  [STATE_DIAGNOSED]: 'link: "https://github.com/postmark-town/<repo>/issues/<n>#issuecomment-<id>", ".../issues/<n>", ".../pull/<n>", or a letter\'s id',
+  [STATE_BRIEFED]: 'link: "https://github.com/postmark-town/<repo>/issues/<n>#issuecomment-<id>", ".../issues/<n>", ".../pull/<n>", or a letter\'s id',
   [STATE_FIXED]: 'link: "https://github.com/postmark-town/<repo>/pull/<n>"',
 });
 const EARNED_KINDS = Object.freeze({
-  [STATE_DIAGNOSED]: Object.freeze(["comment", "issue", "letter"]),
-  [STATE_BRIEFED]: Object.freeze(["comment", "issue", "letter"]),
+  [STATE_DIAGNOSED]: Object.freeze(["comment", "issue", "letter", "pull"]),
+  [STATE_BRIEFED]: Object.freeze(["comment", "issue", "letter", "pull"]),
   [STATE_FIXED]: Object.freeze(["pull"]),
 });
 const KIND_NAME = Object.freeze({ comment: "an issue comment", issue: "an issue", pull: "a pull request", letter: "a letter" });
@@ -217,12 +221,8 @@ export function judgeEarnedLink(to, v) {
   if (s.length > LINK_MAX) throw refuse(422, `link is at most ${LINK_MAX} characters`, `this one is ${s.length}`, { field: "link" });
   const ref = earnedRef(s);
   if (!ref) throw refuse(422, `${to}'s link is not one the office can read`, how, { field: "link" });
-  if (!EARNED_KINDS[to].includes(ref.kind)) {
-    const defect = ref.kind === "pull"
-      ? `${to} is never earned by a pull request`
-      : `${to} is earned by a pull request, and this link is ${KIND_NAME[ref.kind]}`;
-    throw refuse(422, defect, how, { field: "link" });
-  }
+  if (!EARNED_KINDS[to].includes(ref.kind))
+    throw refuse(422, `${to} is earned by a pull request, and this link is ${KIND_NAME[ref.kind]}`, how, { field: "link" });
   return { link: s, ref };
 }
 
@@ -409,12 +409,9 @@ export function judgeRecreditFields(fields, roll) {
   if (fields.credit === undefined)
     throw refuse(422, "a recredit names whom it credits", `credit: the resident whose work earned ${to} — ${RECREDIT_HOW}`, { field: "credit" });
   const credit = judgeHandleField("credit", fields.credit, roll);
-  // Never a founder as the new credit (review-3842-578 § 2, Wright 10-15): a
-  // recredit moves a resident's paid stage, and burns it, to the resident whose
-  // work earned it. Moving one to a founder is Darko's Call, by hand.
-  if (FOUNDER_HANDLES.includes(credit))
-    throw refuse(422, `a recredit never credits a founder (${credit})`,
-      `a correction gives a stage to the resident whose work earned it; moving one to ${FOUNDER_HANDLES.join(" or ")} is Darko's Call, never a recredit`, { field: "credit" });
+  // A founder may be the new credit (RULED, Darko 2026-10-15 19:02 EDT: "sure
+  // whatever"; the w42.6 hotfix refused one). The author check still holds: a
+  // founder is credited only by a founder's own work (bug-credit.mjs).
   const e = judgeEarnedLink(to, fields.link);
   const note = typeof fields.note === "string" ? fields.note.trim() : "";
   if (!note)

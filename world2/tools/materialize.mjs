@@ -20,8 +20,8 @@
 // caller's `q(text, args)` and runs inside the caller's transaction, because a
 // materialization that could commit on its own would be a second candle.
 
-import { computeStanding, admissionNotes, gistContainment } from "./standing.mjs";
-import { houseKeyOfVia, houseRowsVia, liveHouseOfVia as liveHouseOfStore } from "../../src/household-deriver.mjs";
+import { computeStanding, admissionNotes, gistContainment, classLayerVia } from "./standing.mjs";
+import { houseKeyOfVia, houseRowsVia, liveHouseOfVia as liveHouseOfStore, sessionKeysVia } from "../../src/household-deriver.mjs";
 import { REFUSALS, refuse } from "../../src/ceremony.mjs";
 
 /**
@@ -438,7 +438,11 @@ export async function recomputeStanding(q) {
   // unindexed it is slower than the walk it would replace.
   const containment = await gistContainment(q);
   const houseOf = await liveHouseOfVia(q);
-  const tiers = computeStanding(standing, { containment, houseOf });
+  // HOW A ROW OF A CLASS KIND STANDS is its class chain's answer, read from the
+  // law of the commit the rows came from, and only when the pens agree on it
+  // (standing.mjs § classLayerVia). W2's re-kinded rows (`kind: thing`, `town`, …) are ground by that chain.
+  const classes = await classLayerVia(q);
+  const tiers = computeStanding(standing, { containment, houseOf, classes });
   const moved = [];
   for (const m of standing) {
     const next = tiers.get(m.slug);
@@ -539,10 +543,10 @@ export async function recomputeStanding(q) {
  * the UPDATE below:
  *
  *     -    const { rows } = await q(
- *     -      `UPDATE marks SET status = 'retired', retired_window = $2
+ *     -      `UPDATE marks SET status = 'retired', retired_window = $2, retired_cause = $3
  *     -        WHERE slug = $1 AND status = 'standing'
  *     -        RETURNING slug, locked_window`,
- *     -      [slug, windowId]);
+ *     -      [slug, windowId, cause]);
  *     +    const { rows } = await q(
  *     +      `SELECT status, retired_window FROM marks WHERE slug = $1 AND FALSE`,
  *     +      [slug, windowId]);
@@ -562,7 +566,9 @@ export async function recomputeStanding(q) {
  *               `locked_window`, which records when the mark was ruled IN.
  * @param cause  a short word naming which door the mark left canon by, carried
  *               into the receipt so a keeper reading it knows what happened
- *               rather than only that something did.
+ *               rather than only that something did. Since 076 it is also
+ *               written to `marks.retired_cause`: the household's note (WLD-51
+ *               G3) is true of the sweep's door only, and reads it there.
  */
 export async function retireMarks(q, { slugs, windowId, cause = "settlement-unpublish" }) {
   if (!Number.isInteger(windowId)) {
@@ -573,10 +579,10 @@ export async function retireMarks(q, { slugs, windowId, cause = "settlement-unpu
   const absent = [];
   for (const slug of [...new Set(slugs.map((s) => String(s)))].sort()) {
     const { rows } = await q(
-      `UPDATE marks SET status = 'retired', retired_window = $2
+      `UPDATE marks SET status = 'retired', retired_window = $2, retired_cause = $3
         WHERE slug = $1 AND status = 'standing'
         RETURNING slug, locked_window`,
-      [slug, windowId]);
+      [slug, windowId, cause]);
     if (rows.length) { retired.push({ slug, window: windowId, locked_window: rows[0].locked_window, cause }); continue; }
     // Tell the two zeroes apart. A zero meaning "already done" and a zero
     // meaning "never here" must not be spelled the same way — the RLS lesson,
@@ -586,4 +592,89 @@ export async function retireMarks(q, { slugs, windowId, cause = "settlement-unpu
     else absent.push({ slug });
   }
   return { retired, already_retired: alreadyRetired, absent, window: windowId, cause };
+}
+
+/**
+ * A MARK THE SETTLEMENT TAKES GOES BACK TO ITS HOUSEHOLD'S DRAFTS (WLD-51 G1,
+ * ruled by Darko 2026-10-15 13:00).
+ *
+ *   "When the settlement takes a mark, it writes the mark back to its household
+ *    as a private draft claim (`claims.status = 'draft'`) at its last place,
+ *    with nothing staked behind it. It then shows in their drafts, and staking
+ *    it or putting it forward brings it back, as the git era's 'return to the
+ *    draft branch' did."
+ *
+ * Called by the retire step, in its transaction, right after `retireMarks`, for
+ * the slugs that call newly retired (never `already_retired`: a re-run writes
+ * nothing twice). Each draft is the retired row as it last stood: its kind,
+ * body, place, parent and declared fields, claimed by its owner, in the house
+ * the mark stood in (`marks.household`), at ✦0. 076's trigger binds all of it
+ * in SQL: the house, the window of the take, and once per take. Staked or put forward, it goes pending, and the clearing's
+ * step 1 revives the same row ("a mark keeps one id for life").
+ *
+ * THE PEN: `clearing_job`, under 076's narrowing (a draft, ✦0, naming in
+ * `data._returned` a mark the sweep retired, owned by the claimant) and under
+ * 024's row policy: the transaction declares the owner's house
+ * (`app.household_keys`) for each mark, exactly as the door declares a house
+ * before it writes a draft, and clears it after.
+ *
+ * NOTHING IS WRITTEN TWICE, AND NOTHING OF THE HOUSE'S IS TOUCHED. If the house
+ * already holds a draft of this mark (one composed while it stood), that draft
+ * IS the mark in their drafts: it is reported `kept`, and no second draft of
+ * the slug is made. An owner the town's roll does not name has no drafts to go
+ * back to: `unreturned`, by name, and the mark stays retired, deleted nowhere.
+ *
+ * THE PLUMBING STAYS BEHIND. A mark's `data` carries the docket's and the
+ * file's bookkeeping beside what its author declared. `_act_id` and
+ * `_journal_seq` pair a claim with the ACT that filed it (the closure
+ * falsifier counts exactly one claim per act), `_deferred_act` is a draft's
+ * held deed, `_carried_by` and `_ingested_from` name how a version arrived, and
+ * `_fileAt`/`_origin` are file numbers (068 drops them for the same reason).
+ * None is true of a draft nobody has filed yet.
+ *
+ * @returns `{ returned, kept, unreturned }`: `returned` `{ slug, household }`,
+ *          `kept` `{ slug }`, `unreturned` `{ slug, why }`.
+ */
+export const RETURN_DROPS = Object.freeze(["_act_id", "_journal_seq", "_deferred_act", "_carried_by", "_ingested_from", "_fileAt", "_origin", "_returned"]);
+
+export async function returnToDrafts(q, { slugs, windowId, cause = "settlement-unpublish" }) {
+  if (!Number.isInteger(windowId)) throw new Error(`returnToDrafts needs the window the drafts are written in; got ${JSON.stringify(windowId)}`);
+  const returned = [], kept = [], unreturned = [];
+  const via = queryableFor(q);
+  try {
+    for (const slug of [...new Set(slugs.map((s) => String(s)))].sort()) {
+      const { rows: [m] } = await q(
+        `SELECT id::text, slug, kind, owner, household, body, geometry, bbox::text AS bbox, data, parent::text AS parent
+           FROM marks WHERE slug = $1 AND status = 'retired' AND retired_cause = $2`, [slug, cause]);
+      if (!m) { unreturned.push({ slug, why: "no mark retired by the sweep carries this slug" }); continue; }
+      // Its author must be on the roll: only the author can put the draft forward.
+      try { await ownerHouseholdFor(q, m.owner); }
+      catch (err) {
+        if (err?.refusal !== REFUSALS.NO_SUCH_HOUSE) throw err;
+        unreturned.push({ slug, why: `the town's roll does not name ${m.owner}, so no one could put the draft forward; it stays retired, deleted nowhere` });
+        continue;
+      }
+      const household = m.household;
+      if (!household) { unreturned.push({ slug, why: "the mark names no household to go back to; it stays retired, deleted nowhere" }); continue; }
+      const keys = await sessionKeysVia(via, household);
+      if (!keys.includes(household)) keys.unshift(household);
+      await q("SELECT set_config('app.household_keys', $1, true)", [keys.join(",")]);
+      const { rows: [theirs] } = await q(
+        "SELECT 1 FROM claims WHERE status = 'draft' AND slug = $1 AND claimant = $2 AND household = ANY($3) LIMIT 1",
+        [slug, m.owner, keys]);
+      if (theirs) { kept.push({ slug }); continue; }
+      const data = Object.fromEntries(Object.entries(m.data ?? {}).filter(([k]) => !RETURN_DROPS.includes(k)));
+      await q(
+        `INSERT INTO claims (window_id, slug, class, claimant, household, status, body, geometry, bbox, stake, data, parent)
+         VALUES ($1, $2, $3, $4, $5, 'draft', $6, $7, $8::box, 0, $9, $10)`,
+        [windowId, slug, m.kind, m.owner, household, m.body ?? null,
+          // a box only for a placed mark, as the door writes one (world2-claims.mjs: `placed ? boxOf(…) : null`)
+          JSON.stringify({ slug, ...(m.geometry ?? {}) }), m.geometry?.at && m.geometry?.extent ? m.bbox : null,
+          JSON.stringify({ ...data, _returned: { mark: m.id, window: windowId, cause } }), m.parent ?? null]);
+      returned.push({ slug, household });
+    }
+  } finally {
+    await q("SELECT set_config('app.household_keys', '', true)");
+  }
+  return { returned, kept, unreturned };
 }

@@ -18,8 +18,8 @@
 // two tenses.
 
 import { moveOf, carrySentence } from "../world2/tools/carry.mjs";
+import { extendsFromMarks, isSited } from "./world-grants.mjs"; // the kind rung: positioned is sited, in both forms (LOGOS v2, O1)
 
-const POSITIONED = new Set(["sited", "parcel"]);
 const houseOfMark = (m) => m?.declared_household ?? m?.household ?? (m?.id ? `solo:${String(m.id).split("/")[0]}` : null);
 const LIST_CAP = 25;
 
@@ -32,6 +32,7 @@ export function carryForecast({ id, prior, next, marks, filedParentOf = () => nu
   const move = moveOf(prior, next);
   if (!move) return null;
   const byId = new Map(marks.map((m) => [m.id, m]));
+  const lineage = extendsFromMarks(marks);
   // Up one step both ways, mixed, as the clearing walks it (carry.mjs § up one step).
   const geoUp = (m) => byId.get(m)?.placementParent ?? null;
   const under = (start) => {
@@ -49,7 +50,7 @@ export function carryForecast({ id, prior, next, marks, filedParentOf = () => nu
   const moverHouse = houseOfMark(byId.get(id) ?? prior);
   const riders = [], stayed = [];
   for (const m of marks) {
-    if (m.id === id || !POSITIONED.has(m.kind) || !m.at) continue;
+    if (m.id === id || !isSited(m, lineage) || !m.at) continue;
     if (!under(m.id)) continue;
     const house = houseOfMark(m);
     if (house === moverHouse) riders.push({ slug: m.id, from: m.at, to: { x: m.at.x + move.dx, y: m.at.y + move.dy } });

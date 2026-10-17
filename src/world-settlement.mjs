@@ -71,6 +71,8 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { snapshotFoldArgs } from "./world-snapshot.mjs";
+import { extendsFromMarks, isSited } from "./world-grants.mjs"; // the kind rung: a mark's class in both forms (LOGOS v2, O1)
+import { faultLogged, plainReason } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 
 const bounce = (code, defect, hint) => { const e = new Error(defect); Object.assign(e, { code, defect, hint }); return e; };
 
@@ -418,7 +420,9 @@ export function foldWithWords(inputs, words, cleared = null) {
  */
 export function stanceReturnsWhole(inputs, state) {
   if (inputs?.returnsAloneRead) return {};
-  const positioned = new Set((inputs?.args?.marks ?? []).filter((m) => (m?.kind === "sited" || m?.kind === "parcel") && m.at).map((m) => String(m.id)));
+  const marks = inputs?.args?.marks ?? [];
+  const lineage = extendsFromMarks(marks); // sited in either form (LOGOS v2, O1), by the fold's own class nodes
+  const positioned = new Set(marks.filter((m) => isSited(m, lineage) && m.at).map((m) => String(m.id)));
   const whole = (state?.returned ?? [])
     .filter((r) => r?.state === "returned" && !r.law && (r.subtree ?? []).some((s) => positioned.has(String(s))))
     .map((r) => r.mark);
@@ -620,7 +624,7 @@ export async function vetoesNow(p, { worldRepo } = {}) {
     if (read.unreachable) return { unread: read.unreachable };
     return vetoesFrom(rows, read.versions);
   } catch (e) {
-    return { unread: String(e?.message ?? e).slice(0, 200) };
+    return { unread: plainReason(e, "record", "the settlement's vetoes") };
   }
 }
 
@@ -719,9 +723,9 @@ export async function settlementOrFile({ asked = null, fileAnswer, engaged, pool
     served = await servedSettlement(await pool(), { settlement: asked, worldRepo, townRepo });
     if (!served) reason = number == null ? "the store holds no settlement that names a snapshot yet" : null;
   } catch (e) {
-    if (number != null) throw e?.code ? e : bounce(503, `S${number} could not be read`, String(e?.message ?? e).slice(0, 200));
-    reason = `the newest settlement could not be read: ${String(e?.message ?? e).slice(0, 200)}`;
-    console.error(`[world-settlement] ${reason} — serving the published file`);
+    if (number != null) throw e?.code ? e : bounce(503, `S${number} could not be read`, faultLogged(`S${number} could not be read`, e)); // its error goes to the log (POS-578)
+    // plainReason's one log line says it all; the read serves the published file
+    reason = `the newest settlement could not be read: ${plainReason(e, "record", "the newest settlement (serving the published file)")}`;
   }
   if (served) return served;
   if (number != null) throw bounce(404, `S${number} is not a settlement this store holds a snapshot for`, "GET /world/state with no settlement serves the newest one; GET /world/settlements lists them");
@@ -747,7 +751,7 @@ export async function settledMarkIds({ engaged, pool, worldRepo, townRepo = null
     return { ids: new Set((served.marks ?? []).map((m) => m.id)), settlement: served.meta.as_of.settlement, digest: served.meta.as_of.digest };
   } catch (e) {
     if (e?.code === "42P01") return null;              // a store without 054/065: nothing to narrow to
-    return { unread: String(e?.message ?? e).slice(0, 200) };
+    return { unread: plainReason(e, "record", "the settlement's narrowing") };
   }
 }
 
@@ -966,6 +970,6 @@ async function labelsFor(p, header, world, words, { worldRepo, servedKey, seal =
     if (LABELLED.size > 6) LABELLED.delete(LABELLED.keys().next().value);
     return { marks };
   } catch (e) {
-    return { unread: `the labels could not be read: ${String(e?.defect ?? e?.message ?? e).slice(0, 200)}` };
+    return { unread: `the labels could not be read: ${String(e?.defect ?? plainReason(e, "files", "the settlement's labels")).slice(0, 200)}` };
   }
 }

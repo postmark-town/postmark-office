@@ -34,7 +34,7 @@ import { parseOfficeKeys, staticLookup, importStaticKeys } from "../src/static-k
 import { identityOf } from "../src/queries.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -155,6 +155,7 @@ test("§ 3 the import: dry writes nothing, a re-run changes nothing, an edit rep
   const count = () => db.prepare("SELECT count(*) AS n FROM tokens WHERE kind = 'static'").get().n;
   const dry = await importStaticKeys(db, SPEC, { dry: true });
   assert.deepEqual([dry.added, dry.replaced, dry.unchanged, dry.refused], [TOKENS.length, 0, 0, 0]);
+  assert.deepEqual([dry.outcome, dry.retired_refused, dry.retired], ["complete", 0, []], "POS-604: nothing retired, a plain complete");
   assert.equal(count(), 0, "a dry run writes nothing");
   await importStaticKeys(db, SPEC);
   const again = await importStaticKeys(db, SPEC);
@@ -177,6 +178,7 @@ test("§ 3b a key whose hash belongs to another kind of token refuses the whole 
     .run(sha("collides"), 9e9, 1);
   const out = await importStaticKeys(db, `${SCOPED}=keemin:wright;collides=keemin:wright`);
   assert.equal(out.refused, 1);
+  assert.equal(out.outcome, "rolled_back", "POS-604: a foreign kind is a full rollback, and says so");
   assert.equal(db.prepare("SELECT count(*) AS n FROM tokens WHERE kind = 'static'").get().n, 0, "nothing at all was written");
   assert.equal(db.prepare("SELECT kind FROM tokens WHERE token_hash = ?").get(sha("collides")).kind, "access", "and the other token is untouched");
 });
@@ -205,9 +207,8 @@ test("§ 4 the CLI prints counts and households, never a key or any part of a ha
 });
 
 test("§ 5 the doors: /me answers each key as it did, and OFFICE_KEYS in the env is not read", async () => {
-  const dbPath = join(TMP, "s5-fixture.db");
-  fixtureDb(dbPath).close();
-  const ix = await indexStore(dbPath, { db: "static_keys_doors" });
+  const town = fixtureTown();
+  const ix = await indexStore(town, { db: "static_keys_doors" });
   CLEANUP.push(() => ix.stop());
   const oauthPath = join(TMP, "s5-oauth.db");
   openOauthDb(oauthPath).close();
@@ -219,7 +220,7 @@ test("§ 5 the doors: /me answers each key as it did, and OFFICE_KEYS in the env
   const stderrOf = new Map(); // child -> what it said on stderr, from its first byte
   const boot = (oauthDb, extra = {}) => bootOnFreePort((port) => {
     const c = spawn(process.execPath, [join(ROOT, "src", "server.mjs"),
-      "--port", String(port), "--db", dbPath, "--oauth-db", oauthDb, "--roles-db", `${oauthDb}.roles.db`], {
+      "--port", String(port), "--oauth-db", oauthDb, "--roles-db", `${oauthDb}.roles.db`], {
       env: { ...process.env, ...ix.env, WORLD_GRAPH_NONE: "1", OFFICE_KEYS: "", TOWN_CLONE: join(TMP, "no-clone"),
         WORLD_CLONE: join(TMP, "no-world-clone"), TOWN_PUSH: "", ...extra },
       stdio: ["ignore", "pipe", "pipe"],

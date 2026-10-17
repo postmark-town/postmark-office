@@ -81,9 +81,12 @@ export function householdLookupOf(registry, pins = {}) {
     if (memo.has(h)) return memo.get(h);
     const { slug } = resolveHouse(h, registry, pins);
     const rec = slug ? houses[slug] ?? {} : null;
+    // NO `human` (POS-394: a household block is printed on resident cards and
+    // pages, which show the display name, never the private human name). Not
+    // even a null: the key itself is gone. Nothing in the office read it.
     const block = slug
-      ? { key: keyOfSlug(slug), slug, human: rec.human ?? null, residents: [...(rec.residents ?? [])].map(String).sort() }
-      : { key: `solo:${h}`, slug: null, human: null, residents: [h] };
+      ? { key: keyOfSlug(slug), slug, residents: [...(rec.residents ?? [])].map(String).sort() }
+      : { key: `solo:${h}`, slug: null, residents: [h] };
     memo.set(h, block);
     return block;
   };

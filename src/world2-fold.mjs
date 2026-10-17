@@ -135,8 +135,10 @@ export const foldFromStoreEnabled = (env = process.env) => env.W2_FOLD === "stor
  *
  * THE SAME INPUTS THE SWEEP USES (world `tools/settlement-sweep.mjs` runs
  * `marks-fold.mjs --stakes <escrow>`): marks, terrain (`WORLD/skeleton.json`),
- * the escrow stakes, households (`WORLD/households.json`), prev = null, tick 0,
- * the default dials, fanup "legacy". Two of them are NOT the sweep's exact
+ * the escrow stakes, households, prev = null, tick 0, the default dials, fanup
+ * "legacy". The sweep reads its households from `WORLD/households.json`; this
+ * fold reads the store's `identities` (POS-350, § householdsFromIdentities),
+ * which the crossing renders that file from. Two inputs are NOT the sweep's exact
  * bytes, and `as_of` names both so a reader can tell:
  *   · stakes are read at the store's ingested town head, which may be a town
  *     commit after the one the settlement pinned;
@@ -179,9 +181,9 @@ export async function storeFoldInputs(p) {
  * @param {object} o
  * @param {Function} o.fold the world's `fold`, imported at the blessed ref
  * @param {object} o.terrain the blessed ref's `WORLD/skeleton.json`
- * @param {object|null} o.households the blessed ref's `WORLD/households.json` `.households`
+ * @param {object|null} o.households `handle -> house slug`, the store's `identities` (§ householdsFromIdentities)
  * @param {string[]|null} o.publishedIds the published fold's mark ids, in order
- * @param {object} o.world  `{ ref, sha }` of the blessed ref the terrain/households/engine came from
+ * @param {object} o.world  `{ ref, sha }` of the blessed ref the terrain/engine came from
  */
 export async function foldFromStore(p, { fold, terrain, households = null, publishedIds = null, world = null }) {
   const inputs = await storeFoldInputs(p);
@@ -205,7 +207,10 @@ export async function storeFingerprint(p) {
     "SELECT count(*)::int AS n, max(locked_window) AS lw, max(retired_window) AS rw FROM marks");
   const { rows: heads } = await p.query(
     "SELECT repo, sha FROM projection_heads WHERE repo IN ('world-law', 'town') ORDER BY repo");
-  return JSON.stringify([m?.n, m?.lw, m?.rw, heads.map((h) => `${h.repo}:${h.sha}`)]);
+  // The households are a fold input too (POS-350): a ceremony that moves a
+  // handle into a house changes the fold without touching a mark or a head.
+  const { rows: [hh] } = await p.query(IDENTITIES_DIGEST_SQL);
+  return JSON.stringify([m?.n, m?.lw, m?.rw, heads.map((h) => `${h.repo}:${h.sha}`), hh?.digest ?? null]);
 }
 
 /**
@@ -229,8 +234,9 @@ export async function worldStateServed({ env = process.env, fileState, storeStat
     if (key != null) { cache.key = key; cache.state = state; }
     return state;
   } catch (e) {
-    const reason = String(e?.message ?? e).slice(0, 300);
-    console.error(`[world2-fold] W2_FOLD=store could not answer (${reason}) — serving the published file`);
+    // what the store said goes to the log; the read says a plain reason (POS-657)
+    const { plainReason } = await import("./fault-words.mjs");
+    const reason = plainReason(e, "record", "W2_FOLD=store's rows fold (serving the published file)");
     const file = await fileState();
     return { ...file, meta: { source: "file", fell_through: reason } };
   } finally {
@@ -239,35 +245,42 @@ export async function worldStateServed({ env = process.env, fileState, storeStat
 }
 
 /**
- * THE FOLD'S HOUSEHOLDS, FROM THE STORE'S REGISTRY (POS-350). PURE.
+ * THE FOLD'S HOUSEHOLDS, FROM THE STORE'S `identities` (POS-350). PURE.
  *
  * `handle -> declared house slug`, the map marks-fold's household law asks
  * for: the world's own projector (postmark-world tools/households-project.mjs)
  * keys by the declared slug for the same reason — a household is a human, and
  * the credential key `gh:<id>` files one house's residents as strangers. A
- * handle no house lists is absent here and folds as `solo:<handle>`, the
- * fold's own default. It was the blessed ref's WORLD/households.json: the
- * sweep's export of the town's ledger resolver, a printout of a printout.
+ * `solo:<handle>` row is left out and folds as `solo:<handle>`, the fold's
+ * own default, and so does a handle the registry does not know.
  *
- * The registry holds NOW, not a history, so this is current-state household
- * identity — the projector's own words: "what a fold of the present world asks
- * for" (ruled with the VIEW, 10-05).
+ * `identities` is the registry's view (055): a house that LISTS the handle,
+ * then the house holding the handle's PIN's account, lowest `ord` on a tie —
+ * the office's one deriver (household-deriver.mjs § resolveHouse). This read
+ * used to walk the houses' `residents` alone, a second rule beside the view,
+ * and it filed a retired handle whose account a house holds as a stranger
+ * (Wright, 2026-10-13: the fold reads `identities`). Before that it was the
+ * blessed ref's WORLD/households.json, a printout of a printout.
  *
- * It REFUSES, as the projector does, a resident two houses both list: a grain
- * nobody declared is not handed to the law.
+ * The view holds NOW, not a history, so this is current-state household
+ * identity; a past settlement's fold reads its snapshotted register (POS-410).
+ *
+ * A row in any other spelling is refused: the view writes only `hh:` and
+ * `solo:`, and a fold handed a grain it cannot read would guess.
  */
-export function householdsFromRegistry(registry) {
+export const IDENTITIES_SQL = "SELECT handle, household FROM identities ORDER BY handle";
+export const IDENTITIES_DIGEST_SQL =
+  "SELECT md5(string_agg(handle || '=' || household, ',' ORDER BY handle)) AS digest FROM identities";
+
+export function householdsFromIdentities(rows) {
   const out = {};
-  const seen = new Map();
-  const twice = [];
-  for (const [slug, rec] of Object.entries(registry?.households ?? {})) {
-    for (const r of rec?.residents ?? []) {
-      if (seen.has(r)) { twice.push(`${r} (${seen.get(r)} and ${slug})`); continue; }
-      seen.set(r, slug);
-      out[r] = slug;
-    }
+  const odd = [];
+  for (const { handle, household } of rows ?? []) {
+    const k = String(household ?? "");
+    if (k.startsWith("hh:") && k.length > 3) out[handle] = k.slice(3);
+    else if (k !== `solo:${handle}`) odd.push(`${handle} = ${JSON.stringify(household)}`);
   }
-  if (twice.length) throw new Error(`the registry lists a resident in two houses: ${twice.join(", ")} — the fold's household law will not guess which`);
+  if (odd.length) throw new Error(`identities answered a household the fold cannot read: ${odd.join(", ")} — the view writes only hh:<slug> and solo:<handle>`);
   return Object.fromEntries(Object.entries(out).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
 }
 
@@ -288,11 +301,9 @@ export async function officeStoreFold({ p, repo, fileState }) {
   const tools = materializeAtRef(repo, b.ref, "tools");
   const { fold } = await import(pathToFileURL(join(tools, "tools", "marks-fold.mjs")).href);
   const terrain = readJsonAtRef(repo, b.ref, "WORLD/skeleton.json");
-  // The households are the STORE's registry, read through the fold's own
+  // The households are the STORE's `identities`, read through the fold's own
   // queryable (POS-350), never the blessed ref's WORLD/households.json.
-  const { registryRowsVia } = await import("./registry-store.mjs");
-  const { registryFromRows } = await import("./registry-rows.mjs");
-  const households = householdsFromRegistry(registryFromRows(await registryRowsVia(p)));
+  const households = householdsFromIdentities((await p.query(IDENTITIES_SQL)).rows);
   const published = await fileState();
   return foldFromStore(p, {
     fold, terrain, households,

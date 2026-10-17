@@ -5,11 +5,13 @@
 // household column must be the answer the office's one deriver gives
 // (src/household-deriver.mjs § resolveHouse) for every handle the registry
 // knows: a house that lists the handle, else the house holding its pin's
-// account, else `solo:<handle>`. The store fold's households are the same
-// registry, keyed by declared slug as the world's own projector keys them.
+// account, else `solo:<handle>`. The store fold's households ARE that view
+// (Wright 2026-10-13, POS-350 gap 1), keyed by declared slug as the world's own
+// projector keys them, so a handle housed by its pin's account folds in its house.
 //
 // THE FLIPS: 055 as a plain table (law_ingester's, unfilled) answers no rows;
-// a fold that reads WORLD/households.json again answers the file's keys.
+// a fold that walks the houses' residents alone again leaves `kit` out; a
+// fingerprint without the households keeps a stale fold after a ceremony.
 
 import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -17,7 +19,7 @@ import { startStore } from "./helpers/embedded-store.mjs";
 import { seedRegistry } from "./helpers/office-under-test.mjs";
 import { rowsFromRegistry, registryFromRows, pinsFromRows } from "../src/registry-rows.mjs";
 import { resolveHouse } from "../src/household-deriver.mjs";
-import { householdsFromRegistry } from "../src/world2-fold.mjs";
+import { householdsFromIdentities, IDENTITIES_SQL, storeFingerprint } from "../src/world2-fold.mjs";
 
 const REGISTRY = { schema_version: 1, households: {
   hearth: { name: "The Hearth", human: "Fern", since: "2026-08-01", declared_by: "fern",
@@ -78,21 +80,42 @@ test("nobody writes identities: it is a view, and the law pen holds no grant on 
   } finally { await owner.end(); }
 });
 
-test("the store fold's households: handle -> declared slug, from the registry", () => {
-  const registry = registryFromRows(rowsFromRegistry(REGISTRY, PINS));
-  assert.deepEqual(householdsFromRegistry(registry), { fern: "hearth", yan: "yonder" },
-    "the houses' own residents, as the world's households-project keys them; everyone else folds solo");
-  assert.throws(() => householdsFromRegistry({ households: { a: { residents: ["x"] }, b: { residents: ["x"] } } }),
-    /lists a resident in two houses: x \(a and b\)/);
-  assert.deepEqual(householdsFromRegistry({ households: {} }), {});
+test("the store fold's households are the identities view: handle -> declared slug", async (t) => {
+  if (skip) return t.skip(skip);
+  const c = await s.connect("office_api");
+  try {
+    const rows = (await c.query(IDENTITIES_SQL)).rows;
+    assert.deepEqual(householdsFromIdentities(rows), { fern: "hearth", kit: "hearth", yan: "yonder" },
+      "the houses' residents AND the handle a house holds by its pin's account (kit); everyone else folds solo");
+  } finally { await c.end(); }
+  assert.throws(() => householdsFromIdentities([{ handle: "x", household: "gh:1" }]),
+    /a household the fold cannot read: x = "gh:1"/, "a spelling the view never writes is refused, never guessed");
+  assert.deepEqual(householdsFromIdentities([{ handle: "x", household: "solo:x" }]), {});
+  assert.deepEqual(householdsFromIdentities([]), {});
 });
 
 test("the office's store fold is handed those households, read through its own queryable", async () => {
   // officeStoreFold needs the blessed engine and a world clone to run; its wiring
-  // is read as text, and the FLIP is putting the WORLD/households.json read back.
+  // is read as text, and the FLIP is putting the residents-only walk back.
   const { readFileSync } = await import("node:fs");
   const src = readFileSync(new URL("../src/world2-fold.mjs", import.meta.url), "utf8");
   const body = src.slice(src.indexOf("export async function officeStoreFold"));
-  assert.match(body, /householdsFromRegistry\(registryFromRows\(await registryRowsVia\(p\)\)\)/);
+  assert.match(body, /householdsFromIdentities\(\(await p\.query\(IDENTITIES_SQL\)\)\.rows\)/);
   assert.doesNotMatch(body.slice(0, body.indexOf("return foldFromStore")), /WORLD\/households\.json"\)/, "never the blessed ref's file");
+});
+
+test("the fold's cache key moves when a ceremony moves a handle into a house", async (t) => {
+  if (skip) return t.skip(skip);
+  const c = await s.connect("office_api");
+  const owner = await s.connect("world2_owner");
+  try {
+    const before = await storeFingerprint(c);
+    assert.equal(await storeFingerprint(c), before, "a store that did not change keeps its key");
+    await owner.query("UPDATE households SET residents = residents || ARRAY['stray'] WHERE slug = 'yonder'");
+    const after = await storeFingerprint(c);
+    assert.notEqual(after, before, "no mark and no head moved, and the fold's households did");
+  } finally {
+    await owner.query("UPDATE households SET residents = array_remove(residents, 'stray') WHERE slug = 'yonder'");
+    await owner.end(); await c.end();
+  }
 });

@@ -20,6 +20,15 @@
 #
 # Exit 0 ingested (or nothing new) · 1 the pen refused or failed (the reason is in
 # $WORLD2_STATE_DIR/town-index.json) · 2 the lane could not run · 3 no head yet.
+#
+# ── THE SEAL'S AUDIT (POS-523) ───────────────────────────────────────────────
+# A delta derives the letters, the threads and the mail ledger from what changed
+# only; each seal's --snapshot run derives those four whole, writes any row the
+# deltas missed, and prints the count (`· audit {...}`). The state file keeps
+# every seal's count from this run as "audits": [{ "sha", "audit" }], until the
+# next run; the record keeps it in the seal's town_index_snapshots row
+# (digests.audit). A count above zero is a delta that missed a row, written
+# back, and worth reading.
 
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -76,6 +85,7 @@ run() {                          # run <sha> [--snapshot]
   (cd "$WORLD2_OFFICE" && node "$TOOL" --town-repo "$DIR" --sha "$1" "${@:2}" 2>"$ERR")
 }
 
+audits=""
 for seal in $seals; do
   if ! out="$(run "$seal" --snapshot)"; then
     echo "[town-index] the crossing at $seal did not ingest: $(tail -n 5 "$ERR")" >&2
@@ -83,6 +93,8 @@ for seal in $seals; do
     exit 1
   fi
   echo "[town-index] $out"
+  audit="$(printf '%s' "$out" | sed -n 's/.* · audit \({[^}]*}\).*/\1/p')"
+  audits="${audits:+$audits,}{\"sha\":\"$seal\",\"audit\":${audit:-null}}"
 done
 
 if ! out="$(run "$TARGET")"; then
@@ -91,4 +103,4 @@ if ! out="$(run "$TARGET")"; then
   exit 1
 fi
 echo "[town-index] $out"
-w2_state "$STATE" "\"status\":\"ok\",\"sha\":\"$TARGET\",\"detail\":$(printf '%s' "$out" | w2_json_escape)"
+w2_state "$STATE" "\"status\":\"ok\",\"sha\":\"$TARGET\",\"audits\":[$audits],\"detail\":$(printf '%s' "$out" | w2_json_escape)"

@@ -19,8 +19,20 @@
 // crossing of movement.
 //
 //   STATE/snapshot/<N>/entities.json   state AT THE BOUNDARY of crossing N
+//   STATE/snapshot/<N>/creatures.json  the living creatures at that boundary (WLD-56)
 //   STATE/log/<N>.jsonl                events DURING crossing N
 //   STATE/log/<N>.meta.json            the window that file actually covers
+//
+// THE CREATURES (WLD-56 part 4; W5, Wright 10-14). A creature is a fold of the
+// store's `acts` rows of class `creature`: the tick's (`the-town`: seed, spawn,
+// fade, reveal) and the creature's own (`react`, and its `withdraw` when it
+// flees, POS-637). The log carries every one of them whole, typed `creature`
+// (the town's) or `creature-act` (the creature's own). The photograph is the
+// world's own fold (`tools/creatures.mjs § creaturesSnapshot`): the newest
+// photograph on disk from before this run, plus the rows since it, never the
+// whole history. A creature's memory is never saved. No creature rows and no
+// photograph to carry (before the launch dial) writes no creatures.json, so a
+// save before the launch is byte for byte what it was.
 //
 // SNAPSHOT-AT-THE-BOUNDARY is the only reading under which snapshot and log
 // compose: if the snapshot held save-instant state, replaying the crossing's own
@@ -65,7 +77,7 @@
 // Env: WORLD_CLONE, TOWN_PUSH=1 to push, BOT_NAME/BOT_EMAIL (penCommit's).
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 import { penCommit } from "../src/write.mjs";
@@ -81,6 +93,8 @@ import { holdEdgeOnActs } from "../src/hold-edge.mjs";
 import { storeAttachmentRows } from "../src/world2-guards.mjs";
 import { laneFlipped } from "../src/world2-pen.mjs";
 import { emissionRowsFromActs, readSayActs } from "../src/save-emissions.mjs";
+import { actsQuery } from "../src/world2-acts.mjs";
+import { worldToolModule } from "../src/dynamic-entities.mjs";
 
 const argOf = (name, fallback = null) => { const i = process.argv.indexOf(name); return i !== -1 ? process.argv[i + 1] : fallback; };
 const flag = (name) => process.argv.includes(name);
@@ -153,6 +167,55 @@ export async function emissionsForSave({ fromIso, toIso, onActs = laneFlipped("s
   return emissionRowsFromActs(await readActs(fromIso, toIso), { centreOf: await centres(), cls: law, ttlMs, earshotM });
 }
 
+// ── THE CREATURES (WLD-56 part 4) ───────────────────────────────────────────
+
+export const CREATURE_CLASS = "creature";
+export const CREATURE_ROWS_SQL = `SELECT id::text AS id, at, actor, action, object, payload FROM acts
+  WHERE class = '${CREATURE_CLASS}' AND at > $1::timestamptz AND at <= $2::timestamptz ORDER BY id`;
+const asPayload = (p) => (typeof p === "string" ? JSON.parse(p) : (p ?? {}));
+const isoOf = (t) => (t instanceof Date ? t.toISOString() : new Date(Date.parse(t)).toISOString());
+/** A creature row as the log and the world's fold read it. */
+export const creatureRowOf = (r) => ({ id: String(r.id), at: isoOf(r.at), actor: r.actor, action: r.action, object: r.object ?? null, payload: asPayload(r.payload) });
+/** Its log type: the town's rows are `creature`; the creature's own are `creature-act`. */
+export const creatureLineType = (r) => (r.actor === "the-town" ? "creature" : "creature-act");
+export const CREATURE_LINE_TYPES = Object.freeze(["creature", "creature-act"]);
+
+/**
+ * The creature rows written in (fromMs, toMs], oldest first: the store's, or the
+ * fixture's `creature_acts`. An office with no store has no creatures. A store
+ * that will not answer throws, and `main` refuses by name.
+ */
+export async function creatureRowsForSave({ fromMs, toMs, fixture = FIXTURE, query = actsQuery } = {}) {
+  const inRange = (r) => { const t = Date.parse(r.at); return t > fromMs && t <= toMs; };
+  if (fixture) return (fixture.creature_acts ?? []).map(creatureRowOf).filter(inRange);
+  if (!world2Enabled()) return [];
+  const rows = await query(CREATURE_ROWS_SQL, [new Date(Number.isFinite(fromMs) ? fromMs : 0).toISOString(), new Date(toMs).toISOString()]);
+  return (rows ?? []).map(creatureRowOf);
+}
+
+/** The newest creatures.json on disk for a crossing before `before`, or null. */
+export function newestCreaturePhoto(stateDir, before) {
+  const root = join(stateDir, "snapshot");
+  if (!existsSync(root)) return null;
+  const ns = readdirSync(root).map(Number).filter((n) => Number.isInteger(n) && n < before).sort((a, b) => b - a);
+  for (const n of ns) {
+    const p = join(root, String(n), "creatures.json");
+    if (existsSync(p)) return JSON.parse(readFileSync(p, "utf8"));
+  }
+  return null;
+}
+
+/**
+ * The creatures' photograph at one boundary: the world's fold of `base` (an
+ * older photograph, or null) and the rows since it. Null when there is nothing
+ * to photograph: no creature written and none carried.
+ */
+export function creaturePhotoAt({ crossing, boundaryMs, base, rows, creaturesMod }) {
+  const since = rows.filter((r) => { const t = Date.parse(r.at); return t > (base ? Date.parse(base.evaluated_at) : -Infinity) && t <= boundaryMs; });
+  if (!since.length && !(base?.creature_count > 0)) return null;
+  return creaturesMod.creaturesSnapshot(crossing, boundaryMs, base, since);
+}
+
 const die = (code, gate, detail) => {
   console.error(`\nGATE REFUSED ${gate} — ${detail}`);
   console.error("nothing was written; STATE/ is untouched.");
@@ -177,7 +240,7 @@ const snapshotEntity = (e) => ({
  * half-open window [from, to). Pure: given the same rows and instants it
  * produces the same objects.
  */
-export function buildSave({ crossing, boundaryMs, fromMs, toMs, crossingMs, events, attachments, emissions, walk, asOfWorld }) {
+export function buildSave({ crossing, boundaryMs, fromMs, toMs, crossingMs, events, attachments, emissions, walk, asOfWorld, creatureRows = [] }) {
   const entities = [...governingAt(events, boundaryMs).entries()]
     .map(([handle, dep]) => snapshotEntity(entityFromDeparture(handle, dep, boundaryMs, walk)))
     .sort(byHandle);
@@ -232,12 +295,18 @@ export function buildSave({ crossing, boundaryMs, fromMs, toMs, crossingMs, even
         ttl_min: e.props.ttl_min ?? null,
       },
     })),
+    // the creatures' rows, whole (WLD-56): the town's and the creature's own
+    ...creatureRows.filter((r) => inWindow(r.at)).map((r) => ({
+      at: r.at, type: creatureLineType(r), actor: r.actor, id: r.id, action: r.action, object: r.object, payload: r.payload,
+    })),
   ].sort((a, b) => (a.at === b.at
     ? String(a.id ?? a.seq ?? "").localeCompare(String(b.id ?? b.seq ?? ""))
     : a.at.localeCompare(b.at)));
 
+  // A type this save does not name is never NaN: the creature types count only
+  // when a window holds one, so a save before the launch writes the meta it did.
   const counts = { departure: 0, attachment: 0, emission: 0 };
-  for (const l of lines) counts[l.type]++;
+  for (const l of lines) counts[l.type] = (counts[l.type] ?? 0) + 1;
 
   const meta = {
     crossing,
@@ -565,6 +634,21 @@ async function main() {
     });
   } catch (e) { return die(4, "emissions", `the voices could not be read from the record: ${String(e?.message ?? e).slice(0, 200)}`); }
 
+  // The creatures (WLD-56): one read, from the newest photograph older than
+  // anything this run may write, so a re-run reads the same base and writes the
+  // same bytes. Before the launch there are no rows and no photograph, and the
+  // world's module is not even asked for.
+  const creatureBase = newestCreaturePhoto(STATE_DIR, crossing - 1);
+  let creatureRows = [], creaturesMod = null;
+  try { creatureRows = await creatureRowsForSave({ fromMs: creatureBase ? Date.parse(creatureBase.evaluated_at) : -Infinity, toMs: saveMs }); }
+  catch (e) { return die(4, "creatures", `the creatures could not be read from the record: ${String(e?.message ?? e).slice(0, 200)}`); }
+  if (creatureRows.length || creatureBase) {
+    try { creaturesMod = await worldToolModule("creatures.mjs", { repo: CLONE }); }
+    catch (e) { return die(3, "world-tools", `cannot import the world's tools/creatures.mjs (${String(e?.message ?? e).slice(0, 160)})`); }
+  }
+  const photoFor = (c, boundary) => (creaturesMod
+    ? creaturePhotoAt({ crossing: c, boundaryMs: boundary, base: creatureBase, rows: creatureRows, creaturesMod }) : null);
+
   const written = [];
   const saves = [];
 
@@ -580,22 +664,22 @@ async function main() {
       catch { prevComplete = false; }
     }
     if (!prevComplete) {
-      saves.push(buildSave({
+      saves.push({ ...buildSave({
         crossing: prev, boundaryMs: crossingStartMs(prev),
         fromMs: crossingStartMs(prev), toMs: boundaryMs, crossingMs,
         events: departureEvents, attachments, emissions: allEmissions, walk,
-        asOfWorld: read.as_of_world,
-      }));
+        asOfWorld: read.as_of_world, creatureRows,
+      }), creatures: photoFor(prev, crossingStartMs(prev)) });
     }
   }
 
   // 2. The crossing we are in, up to the save instant.
-  saves.push(buildSave({
+  saves.push({ ...buildSave({
     crossing, boundaryMs,
     fromMs: boundaryMs, toMs: saveMs, crossingMs,
     events: departureEvents, attachments, emissions: allEmissions, walk,
-    asOfWorld: read.as_of_world,
-  }));
+    asOfWorld: read.as_of_world, creatureRows,
+  }), creatures: photoFor(crossing, boundaryMs) });
 
   // The pen stands on main before it writes. The clone is shared with the write
   // pen, which parks it on household draft branches; the walk ledger once lost
@@ -612,6 +696,10 @@ async function main() {
     if (writeIfChanged(snapPath, stableJson(s.snapshot))) written.push(snapPath);
     if (writeIfChanged(logPath, s.lines.map((l) => JSON.stringify(l)).join("\n") + (s.lines.length ? "\n" : ""))) written.push(logPath);
     if (writeIfChanged(metaPath, stableJson(s.meta))) written.push(metaPath);
+    if (s.creatures) {
+      const creaturesPath = join(STATE_DIR, "snapshot", String(s.snapshot.crossing), "creatures.json");
+      if (writeIfChanged(creaturesPath, stableJson(s.creatures))) written.push(creaturesPath);
+    }
   }
 
   // ── THE PASSAGES ARE NOT WRITTEN HERE. THEY ARE NOT WRITTEN ANYWHERE (#2152)
@@ -686,6 +774,7 @@ async function main() {
       covers_from: s.meta.covers_from, covers_to: s.meta.covers_to, complete: s.meta.complete,
       entities: s.snapshot.entity_count, attachments: s.snapshot.attachment_count,
       events: s.meta.event_count, counts: s.meta.counts,
+      ...(s.creatures ? { creatures: s.creatures.creature_count } : {}),
     })),
     files_changed: written,
     commit, pushed, push_error,

@@ -26,6 +26,11 @@ const {
   activeNotices,
 } = await import("../src/world.mjs");
 const { classNames } = await import("../src/world-classes.mjs");
+// The leave door asks the class's own makers (LOGOS v2, O1); this env has no store, so the law it reads is seeded.
+const { seedMakersLaw } = await import("./helpers/makers-law.mjs");
+const { resetLawSnapshot } = await import("../src/law-snapshot.mjs");
+await seedMakersLaw();
+test.after(() => resetLawSnapshot());
 
 const one = { household: "house-a", handles: new Set(["alpha"]) };
 const two = { household: "house-a", handles: new Set(["alpha", "beta"]) };
@@ -33,7 +38,6 @@ const visitor = { handles: new Set() };
 
 // ── 3a: which resident a bare call stands as ─────────────────────────────────
 
-import { RESIDENT_INSTANTIABLE, residentMayInstantiate } from "../src/world-classes.mjs";
 
 test("chooseStandpoint: coords are the spectator shape — nobody's eyes", () => {
   assert.deepEqual(chooseStandpoint({ x: 5, y: -6 }, two),
@@ -226,20 +230,11 @@ test("unknown classes bounce — the law knows only what the record declares", a
   await bounced({ ...validBounty, class: "quest" }, 'unknown class "quest"');
 });
 
-test('town-only classes: "residents may instantiate only [bounty, thing, note] today" (#1797)', () => {
-  // The law function the door consumes — testable even where the class store
-  // is absent and the roster stands on its floor (this env), which is exactly
-  // where the end-to-end bounce cannot be exercised. The shadow's full suite
-  // covers the live-tree half.
-  // + idea (the Think Tank ruling, 2026-08-30) — the door-side twin of the
-  // world repo's whitelist; the two move together or the door refuses what
-  // the law allows. This assert is the tripwire for the stale-twin class.
-  assert.deepEqual([...RESIDENT_INSTANTIABLE], ["bounty", "thing", "note", "idea"]);
-  assert.ok(residentMayInstantiate("bounty") && residentMayInstantiate("thing") && residentMayInstantiate("note"));
-  assert.ok(residentMayInstantiate("idea"), "stage 1 is a resident's own hand — the announcement's whole mechanic");
-  assert.ok(!residentMayInstantiate("home"), '"home" is town-only — the 2026-08-22 shadow catch');
-  assert.ok(!residentMayInstantiate("parcel") && !residentMayInstantiate("resident"));
-});
+// The hand-kept whitelist this test pinned (#1797; idea 08-30; chest 10-12) is
+// retired by LOGOS v2: who may make an instance is the class's own `makers`,
+// inherited down `extends` (classes.md § makers, ruled 16:02 / 18:44). Its
+// law is asserted in test/holding-law.test.mjs and at the door in
+// test/candy-and-chest-at-the-door.test.mjs.
 
 // ── the object primitive at the door (2026-08-14) ───────────────────────────
 //

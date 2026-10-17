@@ -34,7 +34,7 @@ const WORLD_CLONE = process.env.WORLD_CLONE || "/srv/postmark-office/world-clone
 const TOWN_CLONE = process.env.TOWN_CLONE || "/srv/postmark-office/town-clone";
 const OFFICE_TEL = process.env.OFFICE_TELEMETRY || "/srv/postmark-office/telemetry";
 const OUT_DIR = process.env.OUT_DIR || "/var/www/postmark-ops/world";
-const PIN_URL = "https://raw.githubusercontent.com/keeminlee/postmark-site/main/package.json";
+const PIN_URL = "https://raw.githubusercontent.com/postmark-town/postmark-site/main/package.json";
 
 const git = (repo, args) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" });
 

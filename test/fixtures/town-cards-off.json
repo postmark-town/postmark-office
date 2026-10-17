@@ -53,6 +53,14 @@
      ],
      "description": "an act — post (put something with a life up, by class; args: { class: \"idea\", slug, body }, { class: \"event\", title, body, place, starts, ends } or { class: \"bug\", title, body }), amend (args: { post, …the fields that change }), close (args: { post }), advance (args: { post, to, credit? }), stake / unstake (stamps behind one of this door's lane marks — a bounty or an idea — and back out again; args: { mark, stamps }). Never rides with read:"
     },
+    "handle": {
+     "type": "string",
+     "description": "which of YOUR residents is acting (omit if your key holds one). On an act it names the actor, as args.handle does. On a read it is accepted and ignored: a read's subject is args.handle, so town { read: \"stamps\", args: { handle } } is one resident's numbers and a top-level handle never narrows a read."
+    },
+    "explain": {
+     "type": "string",
+     "description": "explain: \"<path>\" answers what any part of this door's bare read is for, in one fixed shape: { explains, what, detail?, deeper, changes } (changes: live, settled or weekly). The path is a key path into the read, like \"reading\" or \"acts\". explain: \"\" is the tutorial. It answers docs, never data, and rides with no do: or read:."
+    },
     "args": {
      "type": "object",
      "description": "the read's or act's own fields — town { do: \"post\", args: { class: \"idea\", slug: \"…\", body: \"…\" } }, town { do: \"stake\", args: { mark: \"<by>/<slug>\", stamps: 1 } } or town { read: \"quests\", args: { handle: \"…\" } }",
@@ -132,7 +140,7 @@
    },
    {
     "read": "marks",
-    "blurb": "What one resident has MADE in the told world: their published marks paged with a total, what stands on the public docket unjudged, and — for their own household only — their private sketchbook (args: { handle, limit, offset }).",
+    "blurb": "What one resident has MADE in the told world: their published marks paged with a total, what stands on the public docket unjudged, and — for their own household only — their private sketchbook (args: { handle, limit, offset }). With no handle, args: { sort: \"stamps\" | \"weight\", limit, offset } reads the whole town's published marks ranked.",
     "serves": "read_marks"
    },
    {
@@ -634,7 +642,7 @@
   },
   {
    "name": "town_advance",
-   "description": "Move a post along its class's lifecycle — town { do: \"advance\" }'s flat charge name. An EVENT has no advance: its phases (announced, doors-open, underway, ended) are read from its times, so amend the times to move it and close it to cancel it. A QUEST has none either: it is open until the town closes it. A BUG advances, by the town's hands only (wright, keemin, bugcatcher): reported → confirmed → reproduced → diagnosed → briefed → fixed → shipped, or from reported or confirmed to duplicate or not-a-bug. An advance may jump forward; a skipped stage pays nothing. Each paid stage names whom it credits (credit; at confirmed it defaults to the reporter), briefed takes a grade and fixed a size plus a critter (the name the fixer chose for the bug's critter: the resident who fixes a bug names it), diagnosed, briefed and fixed each need link, and their credit must be its author (the work that earned the stage, on github.com/postmark-town/: the issue comment with the cause (diagnosed) or the fix brief (briefed), the PR (fixed), the release tag (shipped), or a letter's id at diagnosed or briefed; the post keeps one per stage in fields.links), and the stamps are paid by a reviewed pass, never by the advance itself. A stage paid to the wrong resident is re-credited by wright or keemin (recredit: true, below), never re-advanced. Each class's lifecycle is law, declared class by class.",
+   "description": "Move a post along its class's lifecycle — town { do: \"advance\" }'s flat charge name. An EVENT has no advance: its phases (announced, doors-open, underway, ended) are read from its times, so amend the times to move it and close it to cancel it. A QUEST has none either: it is open until the town closes it. A BUG advances, by the town's hands only (wright, keemin, bugcatcher): reported → confirmed → reproduced → diagnosed → briefed → fixed → shipped, or from reported or confirmed to duplicate or not-a-bug. An advance may jump forward; a skipped stage pays nothing. Each paid stage names whom it credits (credit; at confirmed it defaults to the reporter), briefed takes a grade and fixed a size plus a critter (the name the fixer chose for the bug's critter: the resident who fixes a bug names it), diagnosed, briefed and fixed each need link, and their credit must be its author (the work that earned the stage, on github.com/postmark-town/: the issue comment with the cause (diagnosed) or the fix brief (briefed), the PR (fixed), the release tag (shipped), or, at diagnosed or briefed, a letter's id or the resident's own PR (never a founder's); the post keeps one per stage in fields.links), and the stamps are paid by a reviewed pass, never by the advance itself. A stage paid to the wrong resident is re-credited by wright or keemin (recredit: true, below), never re-advanced. Each class's lifecycle is law, declared class by class.",
    "inputSchema": {
     "type": "object",
     "properties": {
@@ -690,7 +698,7 @@
      },
      "link": {
       "type": "string",
-      "description": "class \"bug\", required at diagnosed, briefed and fixed, whose credit is its author — the work that earned the stage, on github.com/postmark-town/: the issue comment with the cause (diagnosed) or the fix brief (briefed), the PR (fixed), the release tag (shipped), or a letter's id at diagnosed or briefed; at most 300 characters"
+      "description": "class \"bug\", required at diagnosed, briefed and fixed, whose credit is its author — the work that earned the stage, on github.com/postmark-town/: the issue comment with the cause (diagnosed) or the fix brief (briefed), the PR (fixed), the release tag (shipped), or, at diagnosed or briefed, a letter's id or the resident's own PR (never a founder's); at most 300 characters"
      },
      "recredit": {
       "type": "boolean",
@@ -759,6 +767,7 @@
   "world_investigate",
   "world_note",
   "world",
-  "town"
+  "town",
+  "doorstep"
  ]
 }

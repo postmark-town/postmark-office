@@ -93,7 +93,7 @@ jobs:
           path: |
             town-clone
             world-clone
-          key: office-clones-${{ hashFiles('test/clone-pins.json', '.github/scripts/suite-clones.sh') }}
+          key: office-clones-${{ hashFiles('test/clone-pins.json', 'test/clone-sparse.json', 'test/helpers/clone-sparse.mjs', '.github/scripts/suite-clones.sh') }}
 
       - if: steps.clones.outputs.cache-hit != 'true'
         run: bash .github/scripts/suite-clones.sh

@@ -529,6 +529,16 @@ export function materializeAtRef(repo, ref, subdir, cacheRoot = ENGINE_CACHE) {
   return dir;
 }
 
+// IS THIS PATH IN THE TREE AT THIS REF? `true` / `false`, or `null` when the
+// ref itself cannot be resolved: a question this clone could not ask is not a
+// "no" (postmark#3757: the sweep's unpublish rule turns on the answer).
+export function pathAtRef(repo, ref, path) {
+  let sha;
+  try { sha = refShaFromDisk(repo, ref) ?? git(repo, ["rev-parse", "--verify", `${ref}^{commit}`]).trim(); } catch { return null; }
+  if (!sha) return null;
+  try { git(repo, ["cat-file", "-e", `${sha}:${String(path).replace(/\\/g, "/")}`]); return true; } catch { return false; }
+}
+
 export function readJsonAtRef(repo, ref, path) {
   return JSON.parse(readAtRef(repo, ref, path));
 }

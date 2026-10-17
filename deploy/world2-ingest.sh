@@ -1,7 +1,8 @@
 #!/bin/bash
 # world2-ingest.sh — the two projection pens on a poll.
 #
-#   law-ingest    world-law repo -> law_projection + identities
+#   law-ingest    world-law repo -> law_projection (`identities` is the registry's
+#                 VIEW since 055, POS-350; no pen writes it)
 #   stamp-ingest  town repo      -> stamp_projection
 #
 # ── WHY A POLL AT ALL, AND WHAT A DEAD ONE COSTS ────────────────────────────
@@ -80,13 +81,39 @@ case "${1:-both}" in
   *)      echo "usage: world2-ingest.sh [law|stamps|both]   (no argument = both)" >&2; exit 2 ;;
 esac
 
+# ── `at` IS THE LAST RUN; `ok_at` IS THE LAST HEALTHY ONE (POS-628) ─────────
+# `at` is stamped on every run, the refused and the held ones included, so a
+# heartbeat on `at` says only that the timer fires. The roll-call's law row
+# reads `ok_at` instead: stamped when a run ends `ok`, and otherwise carried
+# forward from the previous state file, so three unhealthy runs in a row age
+# it past the row's 45 minutes. A file that never had one carries none.
+prev_ok_at() {
+  local f="$WORLD2_STATE_DIR/$STATE"
+  [ -f "$f" ] && sed -n 's/.*"ok_at":"\([0-9TZ:-]*\)".*/\1/p' "$f" | head -n1
+}
+ok_at_line() {                  # ok_at_line <status>
+  local t
+  if [ "$1" = ok ]; then t="$(date -u +%Y-%m-%dT%H:%M:%SZ)"; else t="$(prev_ok_at)"; fi
+  [ -n "$t" ] && printf ',"ok_at":"%s"' "$t"
+}
+
 # Both pens are `new pg.Client()` with no argument — PG*, not a URL
 # (world2-lib.sh § two connection shapes). Both connect as the same role, so
 # this guard is every mode's, not the law mode's.
 if ! w2_pgenv law_ingester PG_LAW_INGESTER_PASSWORD; then
-  w2_state "$STATE" "\"mode\":\"$MODE\",\"status\":\"cannot-run\",\"detail\":\"PG_LAW_INGESTER_PASSWORD unreadable\""
+  w2_state "$STATE" "\"mode\":\"$MODE\",\"status\":\"cannot-run\"$(ok_at_line cannot-run),\"detail\":\"PG_LAW_INGESTER_PASSWORD unreadable\""
   exit 2
 fi
+
+# A JSON string of stdin's first 2000 bytes, escaped in bash: no python, and
+# no `node` (a stubbed PATH may own it). w2_json_escape keeps the TAIL; a
+# refusal's head is the part that says what was refused (POS-619).
+json_head() {
+  local s
+  s="$(head -c 2000)"
+  s="${s//\\/\\\\}"; s="${s//\"/\\\"}"; s="${s//$'\t'/\\t}"; s="${s//$'\r'/}"; s="${s//$'\n'/\\n}"
+  printf '"%s"' "$s"
+}
 
 run_pen() {                     # run_pen <world|town|world-blessed> <tool> <repo-flag> [extra flag]
   local which="$1" tool="$2" flag="$3" extra="${4:-}" dir="$WORLD2_LAB/ingest-clones/$1" sha out rc
@@ -104,7 +131,7 @@ run_pen() {                     # run_pen <world|town|world-blessed> <tool> <rep
 
 # A pen that does not run in this mode contributes exit 0 and no line, so the
 # STATUS ladder and the unit's exit code keep exactly the shape they had.
-LAW_RC=0;  LAW_SHA="";  LAW_LINE="";  LAW_OUT=""
+LAW_RC=0;  LAW_SHA="";  LAW_LINE="";  LAW_OUT="";  REFUSAL_LINE=""; PIN_HELD=0; PIN_LINE=""
 BLESSED_RC=0; BLESSED_SHA=""; BLESSED_LINE=""; BLESSED_OUT=""
 TOWN_RC=0; TOWN_SHA=""; TOWN_LINE=""; TOWN_OUT=""
 
@@ -122,6 +149,34 @@ if [ "$RUN_LAW" -eq 1 ]; then
   LAW_RC=$PEN_RC; LAW_SHA=$PEN_SHA; LAW_OUT=$PEN_OUT
   LAW_LINE="$(printf ',"law":{"exit":%d,"sha":"%s"}' "$LAW_RC" "$LAW_SHA")"
   [ "$LAW_RC" -ne 0 ] && echo "[world2-ingest] LAW INGEST FAILED (exit $LAW_RC)" >&2
+  # ── A LAW THE PARSER WOULD READ DIMINISHED IS REFUSED WHOLE (POS-619) ──────
+  # law-ingest exits 1 with "REFUSED: …" and the lint's sentence per lossy mark,
+  # and nothing is written: every law update is held until the mark is fixed.
+  # So the refusal rides the state file in its OWN field, from its head:
+  # `detail` keeps only the output's last 600 characters, which can cut the
+  # REFUSED line itself. The sentinel's law_pen probe reads this field
+  # (tools/site-sentinel.mjs § 12), so a held law pages; it never stalls quietly.
+  if [ "$LAW_RC" -ne 0 ]; then
+    refusal="$(printf '%s\n' "$LAW_OUT" | sed -n '/^REFUSED: /,$p')"
+    [ -n "$refusal" ] && REFUSAL_LINE=",\"refusal\":$(printf '%s' "$refusal" | json_head)"
+  fi
+  # ── A HELD PIN IS NOT OK (POS-628, POS-635) ───────────────────────────────
+  # law-ingest can write the rows and still HOLD the clearing's pin (§ pinMove)
+  # and exit 0. From 2026-10-11 15:04Z the box held it at b0db90f for three
+  # days while this file read `ok` and both alarms read green. Since POS-364
+  # the pin is always a settlement's law, and settlements descend from each
+  # other, so a hold is a fault every time: its own status, exit still 0 (the
+  # rows were written), and `pin` says where the pin stands and why.
+  if [ "$LAW_RC" -eq 0 ]; then
+    pin_sha="$(printf '%s\n' "$LAW_OUT" | sed -n "s/.*projection_heads\['world-law'\] = \([0-9a-f]\{40\}\).*/\1/p" | head -n1)"
+    held="$(printf '%s\n' "$LAW_OUT" | grep -m1 '^\[law-ingest\] PIN HELD' || true)"
+    if [ -n "$held" ]; then
+      PIN_HELD=1
+      PIN_LINE=",\"pin\":{\"state\":\"held\",\"sha\":\"$pin_sha\",\"why\":$(printf '%s' "$held" | json_head)}"
+    elif [ -n "$pin_sha" ]; then
+      PIN_LINE=",\"pin\":{\"state\":\"current\",\"sha\":\"$pin_sha\"}"
+    fi
+  fi
 fi
 
 # ── THE BLESSED LAW (POS-270, 2026-09-27) ────────────────────────────────────
@@ -129,8 +184,8 @@ fi
 # class reads ask law_projection at the newest settlements.tag_sha — "the bless
 # overrides the tick" (Keemin, 2026-09-18, postmark#2934) — and main runs ahead
 # of the tag between a crossing and its blessing. `--blessed` writes only that
-# sha's law_projection rows: identities and projection_heads['world-law'] stay
-# the main run's, so the clearing's pin never moves backwards. After the main
+# sha's law_projection rows: projection_heads['world-law'] stays the main
+# run's, so the clearing's pin never moves backwards. After the main
 # run, so a failure here can never hold the clearing's rulebook hostage.
 if [ "$RUN_BLESSED" -eq 1 ]; then
   run_pen world-blessed law-ingest.mjs --law-repo --blessed
@@ -150,6 +205,7 @@ if   [ "$LAW_RC" -ne 0 ] && [ "$TOWN_RC" -ne 0 ]; then STATUS=both-failed
 elif [ "$LAW_RC" -ne 0 ];                        then STATUS=law-failed
 elif [ "$TOWN_RC" -ne 0 ];                       then STATUS=stamp-failed
 elif [ "$BLESSED_RC" -ne 0 ];                    then STATUS=law-blessed-failed
+elif [ "$PIN_HELD" -eq 1 ];                      then STATUS=law-pin-held
 else                                                  STATUS=ok
 fi
 
@@ -161,11 +217,15 @@ if [ "$RUN_STAMPS" -eq 1 ]; then
   else                      DETAIL="$(printf 'stamp: %s' "$TOWN_OUT")"; fi
 fi
 
-w2_state "$STATE" "$(printf '"mode":"%s","status":"%s"%s%s,"detail":%s' \
-  "$MODE" "$STATUS" "$LAW_LINE$BLESSED_LINE" "$TOWN_LINE" \
+w2_state "$STATE" "$(printf '"mode":"%s","status":"%s"%s%s%s%s%s,"detail":%s' \
+  "$MODE" "$STATUS" "$(ok_at_line "$STATUS")" "$LAW_LINE$BLESSED_LINE" "$TOWN_LINE" "$REFUSAL_LINE" "$PIN_LINE" \
   "$(printf '%s' "$DETAIL" | w2_json_escape)")"
 
 if [ "$LAW_RC" -ne 0 ] || [ "$TOWN_RC" -ne 0 ] || [ "$BLESSED_RC" -ne 0 ]; then exit 1; fi
+if [ "$PIN_HELD" -eq 1 ]; then
+  echo "[world2-ingest] law-pin-held — the rows for $LAW_SHA are written, the clearing's pin stays at $pin_sha" >&2
+  exit 0
+fi
 case "$MODE" in
   law)    echo "[world2-ingest] ok — law $LAW_SHA / blessed $BLESSED_SHA" ;;
   stamps) echo "[world2-ingest] ok — town $TOWN_SHA" ;;

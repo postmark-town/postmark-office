@@ -105,7 +105,7 @@ export const DOOR_FIELDS = Object.freeze({
 });
 
 /** One `renamed` row — the same shape for a field, a read and a segment. */
-export const renamedRow = (kind, from, now) => ({ [kind]: from, now, answers_until: ANSWERS_UNTIL });
+export const renamedRow = (kind, from, now, until = ANSWERS_UNTIL) => ({ [kind]: from, now, answers_until: until });
 
 /**
  * THE ONE JUDGEMENT: does this act take these fields?

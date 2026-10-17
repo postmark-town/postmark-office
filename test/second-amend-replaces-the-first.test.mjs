@@ -68,12 +68,12 @@ async function seed() {
 }
 
 /** One act through the door's own candle arm, in a household transaction, as office_api. */
-async function file(mod, pool, { body, seq, put_forward = true, stamps }) {
+async function file(mod, pool, { body, seq, put_forward = true, stamps, at = { x: 5, y: 5 }, slug = SLUG }) {
   const row = {
     // A journal row as the door writes one (world-journal's shape), on the store's open window.
-    action: "amend", actor: "wright", object: SLUG, class: "mark", crossing: 212, at: new Date().toISOString(),
-    payload: JSON.stringify({ slug: "furnish-ferrys-waiting-room", by: "wright", kind: "sited", body,
-      at: { x: 5, y: 5 }, extent: { w: 2, h: 2 }, put_forward, ...(stamps == null ? {} : { stamps }) }),
+    action: "amend", actor: "wright", object: slug, class: "mark", crossing: 212, at: new Date().toISOString(),
+    payload: JSON.stringify({ slug: slug.split("/")[1], by: "wright", kind: "sited", body,
+      at, extent: { w: 2, h: 2 }, put_forward, ...(stamps == null ? {} : { stamps }) }),
   };
   // The key the door files under is the registry's own spelling (`householdKeyFor`), never the handle.
   const household = await mod.householdKeyFor(pool, "wright");
@@ -156,6 +156,23 @@ test("a private draft replaces nothing: the pending amend still stands on the do
   });
   const rows = await read("SELECT status FROM claims WHERE slug = $1 AND window_id = 212 ORDER BY submitted_at", [SLUG]);
   assert.deepEqual(rows.map((r) => r.status), ["pending", "draft"]);
+});
+
+// postmark#3663: a set-down of the author's own private draft files an amend
+// that is itself private, and it must REWRITE that draft, not stand a second one
+// beside it. This is the pen's half of the fix, against the real store; the
+// in-memory pen in set-down-files-the-amend.test.mjs never runs this UPDATE.
+test("a private draft re-sited by its author's set-down is the same draft, now at the set-down place (postmark#3663)", { skip }, async () => {
+  await seed();
+  const CUP = "wright/a-tin-cup"; // never published: no standing mark, only the author's draft
+  await withDoor(async (mod, pool) => {
+    await file(mod, pool, { body: "A tin cup.", seq: 1, put_forward: false, at: { x: 5, y: 5 }, slug: CUP });
+    await file(mod, pool, { body: "A tin cup.", seq: 2, put_forward: false, at: { x: 40, y: 12 }, slug: CUP });
+  });
+  const rows = await read("SELECT status, geometry FROM claims WHERE slug = $1", [CUP]);
+  assert.equal(rows.length, 1, `the set-down rewrote the draft rather than standing a second: ${JSON.stringify(rows)}`);
+  assert.equal(rows[0].status, "draft");
+  assert.deepEqual(rows[0].geometry.at, { x: 40, y: 12 }, "the draft carries the place it was set down");
 });
 
 test.after(async () => { if (!skip) await store.stop(); });

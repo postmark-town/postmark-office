@@ -12,8 +12,10 @@
 // The export now keys every handle a declared house lists by that house
 // (`hh:<slug>`), resolves every spelling of the house (each account's gh:, the
 // current key, each former key) to it, and binds each house's own sketchbook
-// name. The stub town below is the one the export's other suites use: a
-// `stamp-mint.mjs` whose `currentHouseholds` answers the ledger's keys.
+// name. Since POS-350 the export renders the STORE's registry (`identities`,
+// the pins, the declared houses) and reads no town ledger, so the fixture town
+// below carries only the printouts each run re-states the store from. LEDGER is
+// the money surfaces' input (the last test), which still reads the ledger.
 
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
@@ -67,8 +69,6 @@ const DECLARED = {
 async function run(label, { declared = DECLARED } = {}) {
   const town = join(scratch, `${label}-town`);
   mkdirSync(join(town, "tools"), { recursive: true });
-  const entries = Object.entries(LEDGER).map(([h, key]) => `["${h}", { key: ${JSON.stringify(key)} }]`);
-  writeFileSync(join(town, "tools", "stamp-mint.mjs"), `export function currentHouseholds() { return new Map([${entries.join(", ")}]); }\n`);
   writeFileSync(join(town, "tools", "github-ids.json"), JSON.stringify(PINS));
   if (declared) writeFileSync(join(town, "tools", "households.json"), JSON.stringify(declared));
   const world = join(scratch, `${label}-world`);
@@ -103,16 +103,37 @@ test("a re-keyed house: its resident and its former sketchbook name resolve to t
   assert.equal(emitted.logins["sunflower-vertigo"], "hh:the-held-place-at-fern-hollow");
 });
 
-test("a handle no declared house lists keeps its ledger key; every login binds a key some handle carries", async () => {
+// CASE (b), POS-350 (Wright 2026-10-13: the store is the record, no hybrid town
+// read). `wanderer` is in the town's ledger and NOT in the store's registry (no
+// house lists it, no pin): the export renders the store, so the file does not
+// name it, and the fold files it as `solo:wanderer` by its own default. Until
+// 2026-10-13 the export took the ledger's `solo:wanderer`.
+test("a handle the store's registry does not know is not in the file; every login binds a key some handle carries", async () => {
   const { emitted } = (await run("undeclared"));
-  assert.equal(emitted.households.wanderer, "solo:wanderer");
+  assert.equal(emitted.households.wanderer, undefined, "the ledger's handle is not the store's");
+  assert.equal(emitted.logins.wanderer, undefined, "and no sketchbook is bound for a household the store does not hold");
   for (const [name, key] of Object.entries(emitted.logins))
     assert.ok(Object.values(emitted.households).includes(key), `logins["${name}"] binds ${key}, which no handle carries`);
 });
 
-test("a town with no households.json keeps the ledger's keys exactly (nothing to resolve to)", async () => {
+// CASE (a), POS-350 (Darko 10-04: `solo:<handle>` for a handle with no house).
+// With no declared house, every pinned handle is `solo:<handle>` in `identities`,
+// and its sketchbook name binds that key. The pin's own LOGIN still binds the
+// account's `gh:<id>` (loginKeys, unchanged), which no handle carries: the named
+// residual of case (a), 0 on prod 2026-10-13 (every handle housed). The ledger's
+// keys used to come through here exactly; the store's answer replaces them.
+test("a registry with no houses keys every pinned handle solo, and the pins' logins keep their gh: keys", async () => {
   const { emitted } = (await run("none", { declared: null }));
-  assert.deepEqual(emitted.households, Object.fromEntries(Object.entries(LEDGER).sort(([a], [b]) => a.localeCompare(b))));
+  assert.deepEqual(emitted.households, {
+    "emmett-songbound": "solo:emmett-songbound",
+    kinofire: "solo:kinofire",
+    seasiren: "solo:seasiren",
+    "wayward-archivist": "solo:wayward-archivist",
+    wildcat: "solo:wildcat",
+  });
+  assert.equal(emitted.logins["commander-and-chief"], "gh:334016343", "the pin's login binds its account");
+  assert.equal(emitted.logins["sunflower-vertigo"], "gh:240802882");
+  assert.equal(emitted.logins.kinofire, "solo:kinofire", "each handle's own sketchbook binds its household");
 });
 
 test("the money surfaces' projections do not move: loginKeys and householdsOf answer the ledger's keys", () => {

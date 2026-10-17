@@ -121,6 +121,7 @@
 import { world2Enabled } from "./world2-acts.mjs";
 import { officeRead } from "./world2-pen.mjs";
 import * as port from "../world2/tools/guard-reads.mjs";
+import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
 
 /**
  * The guard port could not answer. Carries D2's sentence, because the resident
@@ -353,7 +354,7 @@ export async function guardedDraftsForKey(repo, key) {
     // This is NOT the permissive direction — the overlay is a READ a resident
     // sees, not a gate that lets a write through — so the door tells the truth
     // rather than refusing a page.
-    return { ...gitDelta, log: { readable: false, source: "acts", reason: String(e?.message ?? e).slice(0, 200) } };
+    return { ...gitDelta, log: { readable: false, source: "acts", reason: plainReason(e, "record", "the acts delta") } };
   }
 
   const byId = new Map();
@@ -453,10 +454,10 @@ const unconfigured = (which) => {
  * `since` / `until` are crossing bounds, both optional and both pushed only
  * when finite (the port's own § explains why that IS the equality).
  */
-export async function storeHoldingRows({ thing = null, since = null, until = null } = {}) {
+export async function storeHoldingRows({ thing = null, since = null, until = null, afterId = null } = {}) {
   const off = unconfigured("holding");
   if (off) throw off;
-  return reading(async (client) => port.pgHoldingRows(client, { thing, since, until }));
+  return reading(async (client) => port.pgHoldingRows(client, { thing, since, until, ...(afterId != null ? { afterId } : {}) }));
 }
 
 /**
@@ -514,11 +515,11 @@ export async function setDownRowsForMakers(handles) {
  * call the same `pgAttachmentsFor` underneath, so there is one answer with two
  * doors to it, and the doors collapse when row 29 lands.
  */
-export async function storeAttachmentRows({ until = null } = {}) {
+export async function storeAttachmentRows({ until = null, afterId = null } = {}) {
   const off = unconfigured("holder");
   if (off) throw off;
   return reading(async (client) => {
-    const { rows } = await port.pgAttachmentsFor(client, { until });
+    const { rows } = await port.pgAttachmentsFor(client, { until, ...(afterId != null ? { afterId } : {}) });
     return rows;
   });
 }
@@ -674,7 +675,15 @@ export async function standsRowsFromStore(thingId) {
       port.pgAttachmentsFor(client, { target: String(thingId) }),
       port.pgHoldingRowsFor(client, String(thingId)),
     ]);
-    return { attachments: held.rows, journal: holding.rows };
+    // `amends` (POS-451): the docket's set-down amends for this thing, in the
+    // same snapshot, so the read's "re-sites the mark" promise is judged against
+    // the docket as it stood when the drop was read. A docket that will not
+    // answer is `null` ("I could not look"), and the rest of the block stands:
+    // where the thing is never waited on the docket. Asked LAST, because a
+    // failed statement aborts the transaction, and asked first it would take
+    // the two halves above down with it.
+    const amends = await port.pgSetDownAmends(client, { thing: String(thingId) }).catch(() => null);
+    return { attachments: held.rows, journal: holding.rows, amends };
   });
 }
 

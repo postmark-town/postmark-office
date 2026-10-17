@@ -68,6 +68,14 @@ export const CONFIG = {
   },
 };
 
+// The chartered shores: every town in CONFIG but the hub. The office's public
+// berth count names only these (oauth.mjs § berthArrivals) and folds any other
+// claimed town into `other`, so the one list of towns the harbor reads is also
+// the one list a stranger's POST /berth can put a name on.
+export const CHARTERED_SHORES = Object.freeze(
+  Object.keys(CONFIG.towns).filter((slug) => CONFIG.towns[slug].role !== "hub"),
+);
+
 // ---------- pure derivations (unit-tested) ----------
 
 // Carriage manifest, DERIVED (Keemin-directed 2026-08-17, replacing the hand
@@ -205,8 +213,14 @@ export const recentFrom = (notes, things, placeName, cap = 20) => {
 
 // ---------- adapters ----------
 
-async function getJson(url, fetchImpl) {
-  const res = await fetchImpl(url, { headers: { accept: "application/json" } });
+// A READ THAT NEVER ANSWERS MUST NOT HOLD THE WATCH (review of POS-574): the
+// unit is a oneshot on a 15-minute timer, so a shore or an office that accepts
+// the connection and then says nothing would stall every lane behind it. Every
+// read gets the same deadline; a timeout is that lane's error, like a 503.
+export const FETCH_TIMEOUT_MS = 15_000;
+
+async function getJson(url, fetchImpl, timeoutMs = FETCH_TIMEOUT_MS) {
+  const res = await fetchImpl(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(timeoutMs) });
   if (!res.ok) throw new Error(`${url} -> HTTP ${res.status}`);
   return res.json();
 }
@@ -306,6 +320,30 @@ export async function watch1f916({ fetchImpl = fetch, state = {} } = {}) {
   };
 }
 
+// ---------- our own shore's count (POS-574) ----------
+//
+// Who has berthed in Postmark from each chartered town: the office's count of
+// keyless berths by the town each one claimed (ever, live now, co-signed into a
+// house). It is the town's own record, so it is read the way this watch reads
+// everything, over a public door with no key (GET /berth's `arrivals`), and
+// never from the store: this unit carries no store credentials, by design.
+// Each foreign town in the snapshot gets it as `berths_from_here`; a town no
+// berth has claimed reads zeros, which is true.
+export const OFFICE_BASE = "https://postmark.town/api";
+
+export async function watchOfficeBerths({ fetchImpl = fetch, base = OFFICE_BASE, timeoutMs = FETCH_TIMEOUT_MS } = {}) {
+  const body = await getJson(`${base}/berth`, fetchImpl, timeoutMs);
+  const by = body?.arrivals?.by_from_town;
+  if (!by || typeof by !== "object") throw new Error(`${base}/berth -> no arrivals count`);
+  return by;
+}
+
+export const berthsFromHere = (by, slug) => ({
+  ever: by?.[slug]?.ever ?? 0,
+  live: by?.[slug]?.live ?? 0,
+  cosigned: by?.[slug]?.cosigned ?? 0,
+});
+
 // ---------- main ----------
 
 const argOf = (name) => {
@@ -352,6 +390,19 @@ async function main() {
     }
   }
 
+  // Counted before the office's read below: "both shores dark" is about the shores.
+  const shoreErrors = snapshot.errors.length;
+
+  try {
+    const by = await watchOfficeBerths({ base: process.env.HARBOR_OFFICE_URL ?? OFFICE_BASE });
+    for (const slug of Object.keys(CONFIG.towns)) {
+      if (slug === "postmark" || !snapshot.towns[slug]) continue;
+      snapshot.towns[slug].berths_from_here = berthsFromHere(by, slug);
+    }
+  } catch (err) {
+    snapshot.errors.push(`postmark berths: ${err?.message ?? err}`);
+  }
+
   const cargo = Object.values(snapshot.towns).flatMap((t) => t.cargo_waiting || []);
   snapshot.cargo_alarm = cargo.filter((c) => c.status === "alarm").length;
   snapshot.cargo_warn = cargo.filter((c) => c.status === "warn").length;
@@ -362,7 +413,7 @@ async function main() {
   if (statePath) writeFileSync(statePath, JSON.stringify(nextState, null, 2));
 
   const laneCount = lanes.length;
-  const failed = snapshot.errors.length;
+  const failed = shoreErrors;
   console.log(
     `harbor-watch: ${laneCount - failed}/${laneCount} shores read, ` +
       `${cargo.length} cargo waiting (${snapshot.cargo_alarm} alarm), ` +

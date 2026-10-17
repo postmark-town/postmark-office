@@ -38,23 +38,31 @@ import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown, emptyTown } from "./fixture.mjs";
+import { indexStore } from "./helpers/office-under-test.mjs";
 import { openOauthDb } from "../src/oauth.mjs";
 import { ensureTownJournal, TOWN_DRAIN_CURSOR } from "../src/town-journal.mjs";
 import { logPaperAct, PAPER_ACTS, PAPER_ACT_NAMES, SETTLES_AT, hotTenseBlock } from "../src/town-updates.mjs";
-import { resident, home, windowRead, residentPage } from "../src/queries.mjs";
+import { storeIndexPooled, storeAnswer, residentPage } from "../src/town-index-store.mjs";
 import { TENSE, LADDER_NOTE, freshFor } from "../src/paper-fresh.mjs";
 import {
   updateAddressBody, updateAddressFields, updateHome, updateProfile, updateWindow,
 } from "../src/edit.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-// The cards here are office.db's (queries.mjs § resident, read on the fixture's
-// office.db), so the ladder they carry is office.db's too, whatever switch the
-// run was started with (POS-268). The store's card has its own twin
-// (town-index-residents.test.mjs); this one goes with office.db at 5b.
-delete process.env.TOWN_INDEX_READS;
 delete process.env.TOWN_PUSH; // nothing here may leave the machine
+
+// THE CARDS ARE THE STORE'S (POS-656): town-index-store.mjs § resident, home and
+// windowRead, read through the pooled index this process holds over ONE store,
+// re-stated from each test's fixture town. The pen's checks are handed no index
+// (null): they ask the store's held probe, which the re-statement reloads.
+const live = emptyTown();
+const IX = await indexStore(live, { db: "freshness_ladder" });
+const IX_RESTORE = await IX.useInProcess();
+test.after(async () => { await IX_RESTORE(); await IX.stop(); });
+const ix = storeIndexPooled(null);
+/** The store's index holds `town` now; answers it, for the rows a test changes. */
+async function seeded(town) { Object.assign(live, town); await IX.reseed(); return town; }
 
 // ── fixtures ────────────────────────────────────────────────────────────────
 
@@ -103,26 +111,13 @@ const flagOn = async (fn) => {
 };
 
 // THE LEDGER IS THE STORE'S (POS-347): a quarantine is a row in `standing_acts`,
-// and `freshFor` asks the store. This points THIS process's one pool at a store
-// of its own holding the act, and answers the function that puts it all back.
+// and `freshFor` asks the store through the town index's own read
+// (paper-fresh.mjs § standingForRead). This plants the act in the store this
+// file's index reads, and answers the function that clears it.
 const quarantine = async (handle, reason) => {
-  const { startStore } = await import("./helpers/embedded-store.mjs");
-  const { plantStanding } = await import("./helpers/standing-rows.mjs");
-  const { __setPoolForTest } = await import("../src/world2-acts.mjs");
-  const { default: pg } = await import("pg");
-  const store = await startStore({ db: "freshness_standing" });
-  await plantStanding(store, `- 2026-08-25 · quarantine · ${handle} · by: registrar · reason: ${reason}`);
-  const keep = { pg: process.env.WORLD2_PG, url: process.env.WORLD2_PG_URL };
-  const pool = new pg.Pool({ connectionString: store.url("office_api"), max: 2 });
-  __setPoolForTest(pool);
-  Object.assign(process.env, { WORLD2_PG: "1", WORLD2_PG_URL: store.url("office_api") });
-  return async () => {
-    __setPoolForTest(null);
-    await pool.end().catch(() => {});
-    if (keep.pg === undefined) delete process.env.WORLD2_PG; else process.env.WORLD2_PG = keep.pg;
-    if (keep.url === undefined) delete process.env.WORLD2_PG_URL; else process.env.WORLD2_PG_URL = keep.url;
-    await store.stop();
-  };
+  const { plantStanding, resetStanding } = await import("./helpers/standing-rows.mjs");
+  await plantStanding(IX.store, `- 2026-08-25 · quarantine · ${handle} · by: registrar · reason: ${reason}`);
+  return () => resetStanding(IX.store);
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -130,20 +125,20 @@ const quarantine = async (handle, reason) => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 test("F0 · WRITTEN: the pen's edit reaches the PUBLIC card before the next rehydrate, stamped", async () => {
-  const db = fixtureDb();
+  const db = await seeded(fixtureTown());
   const clone = townClone();
   try {
-    const before = resident(db, "wright", { clone });
+    const before = await ix.resident("wright", { clone });
     assert.equal(before.address.body, "# wright", "the fixtures agree to start with");
     assert.equal(before.freshness.fields["address.body"].tense, TENSE.settled,
       "…and the office says so: nothing is ahead of the index yet");
 
     // The pen writes the record. No log, no flag, no crossing — this is exactly
     // what a resident's edit does on the live box today.
-    const out = await updateAddressBody({ handle: "wright", body: "the trueing house, repainted" }, KEY, db, clone);
+    const out = await updateAddressBody({ handle: "wright", body: "the trueing house, repainted" }, KEY, null, clone);
     assert.ok(out.commit, "the pen committed to the town record");
 
-    const after = resident(db, "wright", { clone });
+    const after = await ix.resident("wright", { clone });
     assert.equal(after.address.body, "the trueing house, repainted",
       "the PUBLIC card carries the new prose — this is the whole point of the middle rung");
     assert.equal(after.freshness.fields["address.body"].tense, TENSE.written);
@@ -158,28 +153,28 @@ test("F0 · WRITTEN: the pen's edit reaches the PUBLIC card before the next rehy
     // `written` for the whole card would be as useless as no stamp at all.
     assert.equal(after.freshness.fields.profile.tense, TENSE.settled);
     assert.equal(after.freshness.fields.window_state.tense, TENSE.settled);
-  } finally { db.close(); }
+  } finally { /* the town is rows: nothing to close */ }
 });
 
 test("F0b · WRITTEN reaches home and window too, and each names its own act", async () => {
-  const db = fixtureDb();
+  const db = await seeded(fixtureTown());
   const clone = townClone();
   try {
-    await updateHome({ handle: "wright", title: "the Trueing-House", body: "the roof is off this week." }, KEY, db, clone);
-    const h = home(db, "wright", { clone });
+    await updateHome({ handle: "wright", title: "the Trueing-House", body: "the roof is off this week." }, KEY, null, clone);
+    const h = await ix.home("wright", { clone });
     assert.equal(h.description, "the roof is off this week.");
     assert.equal(h.freshness.fields.home.tense, TENSE.written);
     assert.equal(h.freshness.fields.home.act, "home");
     assert.equal(h.region, "the-terrace",
       "placement is the atlas ledger's and is never composed — no door can move it");
 
-    await updateWindow({ handle: "wright", html: '<!doctype html><html><body><script type="application/json" id="window-state">{"lamp":"lit"}</script></body></html>' }, KEY, db, clone);
-    const w = windowRead(db, "wright", { clone });
+    await updateWindow({ handle: "wright", html: '<!doctype html><html><body><script type="application/json" id="window-state">{"lamp":"lit"}</script></body></html>' }, KEY, null, clone);
+    const w = await ix.windowRead("wright", { clone });
     assert.deepEqual(w.window, { lamp: "lit" });
     assert.equal(w.freshness.fields.window.tense, TENSE.written);
     assert.match(w.note, /hand-set state/,
       "a pane hung a minute ago must not be described as 'no pane hung yet'");
-  } finally { db.close(); }
+  } finally { /* the town is rows: nothing to close */ }
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -187,19 +182,19 @@ test("F0b · WRITTEN reaches home and window too, and each names its own act", a
 // ═══════════════════════════════════════════════════════════════════════════
 
 test("F1 · PENDING is public: a stranger's read of the card carries the tense and the crossing", async () => {
-  const db = fixtureDb();
+  const db = await seeded(fixtureTown());
   const clone = townClone();
   const odb = odbFile();
   try {
     await flagOn(async () => {
       const seq = await logPaperAct(odb, { act: "address-body", handle: "wright", household: "keemin", args: { body: "x" }, key: KEY });
       assert.ok(seq, "the row is in the town log");
-      await updateAddressBody({ handle: "wright", body: "written at the door, not yet settled" }, KEY, db, clone);
+      await updateAddressBody({ handle: "wright", body: "written at the door, not yet settled" }, KEY, null, clone);
 
       // NO KEY AT ALL. This is the half the founder ruled in: the compose is
       // the town's, not the caller's. `hotPaperActs` is the caller-scoped one
       // and is untouched (F5).
-      const card = resident(db, "wright", (await freshFor("wright", { clone, odb })));
+      const card = await ix.resident("wright", (await freshFor("wright", { clone, odb })));
       assert.equal(card.address.body, "written at the door, not yet settled");
       const stamp = card.freshness.fields["address.body"];
       assert.equal(stamp.tense, TENSE.pending, "an un-drained row outranks the written file");
@@ -210,24 +205,24 @@ test("F1 · PENDING is public: a stranger's read of the card carries the tense a
         "pending is the only rung that owes the reader a settling time");
       assert.equal(card.freshness.note, LADDER_NOTE, "the three words are defined in the answer that uses them");
     });
-  } finally { db.close(); odb.close(); }
+  } finally { odb.close(); }
 });
 
 test("F1b · POST-DRAIN the same field steps DOWN the ladder — pending, then written, then settled", async () => {
-  const db = fixtureDb();
+  const db = await seeded(fixtureTown());
   const clone = townClone();
   const odb = odbFile();
   try {
     await flagOn(async () => {
       const seq = await logPaperAct(odb, { act: "profile", handle: "wright", household: "keemin", args: { bio: "b" }, key: KEY });
-      await updateProfile({ handle: "wright", bio: "a house that shows its bones" }, KEY, db, clone);
-      assert.equal(resident(db, "wright", (await freshFor("wright", { clone, odb }))).freshness.fields.profile.tense, TENSE.pending);
+      await updateProfile({ handle: "wright", bio: "a house that shows its bones" }, KEY, null, clone);
+      assert.equal((await ix.resident("wright", (await freshFor("wright", { clone, odb })))).freshness.fields.profile.tense, TENSE.pending);
 
       // The drain advances its cursor past the row. The record is unchanged —
       // a paper replay writes the same bytes — so the field is now `written`:
       // in the record, not yet in the index.
       odb.prepare("INSERT OR REPLACE INTO meta VALUES (?, ?)").run(TOWN_DRAIN_CURSOR, String(seq));
-      const drained = resident(db, "wright", (await freshFor("wright", { clone, odb })));
+      const drained = await ix.resident("wright", (await freshFor("wright", { clone, odb })));
       assert.equal(drained.freshness.fields.profile.tense, TENSE.written);
       assert.equal(drained.freshness.settles_at, undefined);
       assert.deepEqual(drained.profile, { bio: "a house that shows its bones" },
@@ -237,13 +232,13 @@ test("F1b · POST-DRAIN the same field steps DOWN the ladder — pending, then w
     // And the bottom rung: an index rebuilt from this checkout agrees with it,
     // so there is nothing left ahead of the record and every field is settled.
     // Simulated by writing the index row the hydration would have written.
-    db.prepare("UPDATE residents SET json = ? WHERE handle = ?").run(
-      JSON.stringify({ ...JSON.parse(db.prepare("SELECT json FROM residents WHERE handle = ?").get("wright").json),
-        profile: { bio: "a house that shows its bones" } }), "wright");
-    const settled = resident(db, "wright", (await freshFor("wright", { clone, odb })));
+    const row = db.residents.find((r) => r.handle === "wright");
+    row.json = JSON.stringify({ ...JSON.parse(row.json), profile: { bio: "a house that shows its bones" } });
+    await seeded(db);
+    const settled = await ix.resident("wright", (await freshFor("wright", { clone, odb })));
     assert.equal(settled.freshness.fields.profile.tense, TENSE.settled);
     assert.equal(settled.freshness.tense, TENSE.settled, "the whole read is back on the floor");
-  } finally { db.close(); odb.close(); }
+  } finally { odb.close(); }
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -251,20 +246,20 @@ test("F1b · POST-DRAIN the same field steps DOWN the ladder — pending, then w
 // ═══════════════════════════════════════════════════════════════════════════
 
 test("F2 · a SUSPENDED handle's pending row does not compose, and their record still reads", async () => {
-  const db = fixtureDb();
+  const db = await seeded(fixtureTown());
   const clone = townClone();
   const odb = odbFile();
   let lift = null;
   try {
     await flagOn(async () => {
       await logPaperAct(odb, { act: "address-body", handle: "wright", household: "keemin", args: { body: "x" }, key: KEY });
-      await updateAddressBody({ handle: "wright", body: "a claim the audit has not seen" }, KEY, db, clone);
-      assert.equal(resident(db, "wright", (await freshFor("wright", { clone, odb }))).address.body, "a claim the audit has not seen",
+      await updateAddressBody({ handle: "wright", body: "a claim the audit has not seen" }, KEY, null, clone);
+      assert.equal((await ix.resident("wright", (await freshFor("wright", { clone, odb })))).address.body, "a claim the audit has not seen",
         "…which composes freely while the resident is in good standing");
 
       lift = await quarantine("wright", "sybil suspicion, pending audit");
 
-      const card = resident(db, "wright", (await freshFor("wright", { clone, odb })));
+      const card = await ix.resident("wright", (await freshFor("wright", { clone, odb })));
       assert.equal(card.address.body, "# wright",
         "the overlay is withheld: the card answers from the settled index");
       for (const [name, stamp] of Object.entries(card.freshness.fields))
@@ -279,13 +274,13 @@ test("F2 · a SUSPENDED handle's pending row does not compose, and their record 
       // …and the gate is one resident wide. limen is in good standing, so
       // limen's own pen still reaches limen's own card while wright's is held.
       await updateAddressBody({ handle: "limen", body: "still at the lamplight's edge" },
-        { household: "limen-house", handles: new Set(["limen"]) }, db, clone);
-      const neighbour = resident(db, "limen", (await freshFor("limen", { clone, odb })));
+        { household: "limen-house", handles: new Set(["limen"]) }, null, clone);
+      const neighbour = await ix.resident("limen", (await freshFor("limen", { clone, odb })));
       assert.equal(neighbour.address.body, "still at the lamplight's edge");
       assert.equal(neighbour.freshness.fields["address.body"].tense, TENSE.written,
         "nobody else is gated by one resident's standing");
     });
-  } finally { db.close(); odb.close(); await lift?.(); }
+  } finally { odb.close(); await lift?.(); }
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -293,25 +288,25 @@ test("F2 · a SUSPENDED handle's pending row does not compose, and their record 
 // ═══════════════════════════════════════════════════════════════════════════
 
 test("F3 · a pending window body SERVES — the pane is not held for a crossing", async () => {
-  const db = fixtureDb();
+  const db = await seeded(fixtureTown());
   const clone = townClone();
   const odb = odbFile();
   try {
     await flagOn(async () => {
       const seq = await logPaperAct(odb, { act: "window", handle: "wright", household: "keemin", args: { html: "h" }, key: KEY });
-      await updateWindow({ handle: "wright", html: '<!doctype html><html><body>hello<script type="application/json" id="window-state">{"note":"back at six"}</script></body></html>' }, KEY, db, clone);
+      await updateWindow({ handle: "wright", html: '<!doctype html><html><body>hello<script type="application/json" id="window-state">{"note":"back at six"}</script></body></html>' }, KEY, null, clone);
 
-      const w = windowRead(db, "wright", (await freshFor("wright", { clone, odb })));
+      const w = await ix.windowRead("wright", (await freshFor("wright", { clone, odb })));
       assert.deepEqual(w.window, { note: "back at six" }, "the pane's state serves at once");
       assert.equal(w.freshness.fields.window.tense, TENSE.pending);
       assert.equal(w.freshness.fields.window.seq, seq);
 
       // …and through the card, which is where a stranger meets it.
-      const card = resident(db, "wright", (await freshFor("wright", { clone, odb })));
+      const card = await ix.resident("wright", (await freshFor("wright", { clone, odb })));
       assert.deepEqual(card.window_state, { note: "back at six" });
       assert.equal(card.freshness.fields.window_state.tense, TENSE.pending);
     });
-  } finally { db.close(); odb.close(); }
+  } finally { odb.close(); }
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -344,31 +339,31 @@ test("F4 · `your_pending_edits` is what it was: DISCLOSED to the owner, key-sco
 // ═══════════════════════════════════════════════════════════════════════════
 
 test("F5 · the ROSTER is not composed — a list read never touches the checkout", async () => {
-  const db = fixtureDb();
+  const db = await seeded(fixtureTown());
   const clone = townClone();
   try {
-    await updateAddressBody({ handle: "wright", body: "fresh prose the roster must not go looking for" }, KEY, db, clone);
-    const page = residentPage(db, {});
+    await updateAddressBody({ handle: "wright", body: "fresh prose the roster must not go looking for" }, KEY, null, clone);
+    const page = (await storeAnswer((c) => residentPage(c, {}))).out;
     for (const r of page.residents) {
       assert.equal(r.freshness, undefined,
         "the roster is 131 rows today and composing it would be 131 handles × four files per call");
       assert.equal(r.address, undefined, "…and it never carried the prose anyway");
     }
-  } finally { db.close(); }
+  } finally { /* the town is rows: nothing to close */ }
 });
 
-test("F5b · NO CHECKOUT is a real state and says so — every field settled, never a missing block", () => {
-  const db = fixtureDb();
+test("F5b · NO CHECKOUT is a real state and says so — every field settled, never a missing block", async () => {
+  const db = await seeded(fixtureTown());
   try {
-    const card = resident(db, "wright");
+    const card = await ix.resident("wright");
     assert.ok(card.freshness, "an office with no clone still stamps: an office that cannot tell and an office that checked must not look alike");
     assert.equal(card.freshness.tense, TENSE.settled);
     assert.equal(Object.keys(card.freshness.fields).length, 5,
       "all five composable fields are listed — settled must never be something a reader deduces from an absence");
     assert.equal(card.address.body, "# wright", "and the answer is byte-for-byte what it always was");
-    assert.equal(resident(db, "wright", { clone: join(tmpdir(), "pm-fresh-does-not-exist") }).freshness.tense, TENSE.settled,
+    assert.equal((await ix.resident("wright", { clone: join(tmpdir(), "pm-fresh-does-not-exist") })).freshness.tense, TENSE.settled,
       "a clone path that is not a checkout is the same state, not a 500");
-  } finally { db.close(); }
+  } finally { /* the town is rows: nothing to close */ }
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -383,15 +378,15 @@ test("F5b · NO CHECKOUT is a real state and says so — every field settled, ne
 // table were wrong. Comparing the table to the doors closes the class.
 
 test("F6 · PAPER_ACTS declares, for every act, the exact file that act's door writes", async () => {
-  const db = fixtureDb();
+  const db = await seeded(fixtureTown());
   const clone = townClone();
   const html = '<!doctype html><html><body>pane</body></html>';
   const doors = {
-    "address-body": async () => await updateAddressBody({ handle: "wright", body: "prose" }, KEY, db, clone),
-    "address-fields": async () => await updateAddressFields({ handle: "wright", fields: { note: "a note" } }, KEY, db, clone),
-    home: async () => await updateHome({ handle: "wright", title: "the Trueing-House", body: "a home" }, KEY, db, clone),
-    profile: async () => await updateProfile({ handle: "wright", bio: "a bio" }, KEY, db, clone),
-    window: async () => await updateWindow({ handle: "wright", html }, KEY, db, clone),
+    "address-body": async () => await updateAddressBody({ handle: "wright", body: "prose" }, KEY, null, clone),
+    "address-fields": async () => await updateAddressFields({ handle: "wright", fields: { note: "a note" } }, KEY, null, clone),
+    home: async () => await updateHome({ handle: "wright", title: "the Trueing-House", body: "a home" }, KEY, null, clone),
+    profile: async () => await updateProfile({ handle: "wright", bio: "a bio" }, KEY, null, clone),
+    window: async () => await updateWindow({ handle: "wright", html }, KEY, null, clone),
   };
   try {
     assert.deepEqual(Object.keys(doors).sort(), [...PAPER_ACT_NAMES].sort(),
@@ -404,7 +399,7 @@ test("F6 · PAPER_ACTS declares, for every act, the exact file that act's door w
       assert.ok(readFileSync(join(clone, ...out.file.split("/")), "utf8").length,
         `…and that file must actually exist in the checkout`);
     }
-  } finally { db.close(); }
+  } finally { /* the town is rows: nothing to close */ }
 });
 
 // ═══════════════════════════════════════════════════════════════════════════

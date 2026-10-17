@@ -22,7 +22,7 @@ import { readFileSync } from "node:fs";
 
 import {
   refuseOutOfReach, refuseGiveOfUnheld, whereThingStands, holdEffectsFrom,
-  liveHolder, PROPAGATION,
+  liveHolder, PROPAGATION, nearestIds,
 } from "../src/world-hold.mjs";
 import { standsWithin, withinArmsLength, metresBetween, bearingWord, EARSHOT_M } from "../src/reach.mjs";
 
@@ -119,7 +119,104 @@ test("WALK #10 item 4 — a private draft cannot be given to a neighbour", async
   assert.match(e.defect, /does not stand on the world/);
   assert.match(e.hint, /private draft/);
   assert.match(e.hint, /nobody outside wright's household/);
-  assert.match(e.hint, /do: "stake"/, "the refusal must carry the publishing hint");
+  // The stake call was the OWNER's next step, handed to a stranger; it went
+  // with kogane's 2026-10-14 bug post. The stranger's next step is the name.
+  assert.match(e.hint, /world \{ find: "a-try-square-for-the-joinery" \}/, "the refusal must point the stranger at the name");
+});
+
+// ── A MISSPELLED NAME IS NOT A DRAFT (kogane's bug posts, 2026-10-14) ───────
+//
+// dom-pidgey reached for `kogane/bucket-drops` under a wrong slug and was told
+// the candy "is a private draft", with the owner's stake call — so a published
+// candy read as unstaked. And inside the house, `keith/spare-part` (a typo for
+// `keith/spare-parts`) was TAKEN: holder kogane, reach "unpublished", then set
+// down at the garage, for a draft that never existed.
+
+test("outside the house, a missing name is NOT asserted to be a draft, and the hint is the name", async () => {
+  const e = await refusal(() => refuseOutOfReach({
+    thing: "kogane/bucket-drop", to: null, actor: "dom-pidgey", act: "take", holder: null,
+    ctx: { mark: null, canon_readable: true, within, standing: { placed: true, x: 0, y: 0 }, standsWithin },
+  }));
+  assert.equal(e.code, 409);
+  assert.match(e.defect, /kogane\/bucket-drop does not stand on the world/);
+  assert.doesNotMatch(e.hint, /it is a private draft/, "a typo and a draft must answer alike, so neither may be claimed");
+  assert.doesNotMatch(e.hint, /do: "stake"/, "the stake call is the owner's step, not the stranger's");
+  assert.match(e.hint, /nothing by that name is published/);
+  assert.match(e.hint, /world \{ find: "bucket-drop" \}/);
+});
+
+test("…and it answers the same whether or not the owner has such a draft — nothing leaks", async () => {
+  const ask = (own_draft_exists) => refusal(() => refuseOutOfReach({
+    thing: "kogane/bucket-drop", to: null, actor: "dom-pidgey", act: "take", holder: null,
+    ctx: { mark: null, canon_readable: true, within, standing: { placed: true, x: 0, y: 0 }, standsWithin, own_draft_exists },
+  }));
+  const [a, b, c] = await Promise.all([ask(true), ask(false), ask(undefined)]);
+  assert.deepEqual([a.code, a.defect, a.hint], [b.code, b.defect, b.hint]);
+  assert.deepEqual([a.code, a.defect, a.hint], [c.code, c.defect, c.hint]);
+});
+
+test("inside the house, a take of a name that is neither published nor drafted is REFUSED", async () => {
+  const e = await refusal(() => refuseOutOfReach({
+    thing: "wright/a-try-square-for-the-joinry", to: null, actor: "rei", act: "take", holder: null,
+    ctx: { ...draftCtx({ x: 0, y: 0 }), own_draft_exists: false },
+  }));
+  assert.ok(e, "a hold edge for nothing at all — the take must not succeed");
+  assert.equal(e.code, 404);
+  assert.match(e.defect, /neither published nor one of your household's drafts/);
+  assert.match(e.hint, /world \{ find: "a-try-square-for-the-joinry" \}/);
+  assert.match(e.hint, /Nothing was recorded/);
+});
+
+// DID YOU MEAN — added on review (Emily, 2026-10-14): the commonest way into the
+// 404 is an author mistyping their own draft, and `find` can't see drafts.
+
+test("nearestIds finds a typo's neighbours, nearest first, and leaves the rest", () => {
+  const ids = ["keith/spare-parts", "keith/the-garage", "keith/tin-cup", "kogane/bucket-drops"];
+  assert.deepEqual(nearestIds("keith/spare-part", ids), ["keith/spare-parts"]);
+  assert.deepEqual(nearestIds("keith/tin-cups", ids), ["keith/tin-cup"]);
+  assert.deepEqual(nearestIds("keith/something-else-entirely", ids), []);
+  assert.deepEqual(nearestIds("keith/tin-cup", ["keith/tin-cup"]), [], "the name itself is not a suggestion");
+});
+
+test("…the in-house refusal names the nearest of the household's own marks", async () => {
+  const e = await refusal(() => refuseOutOfReach({
+    thing: "keith/spare-part", to: null, actor: "kogane", act: "take", holder: null,
+    ctx: { mark: null, canon_readable: true, within, standing: { placed: true, x: 0, y: 0 }, standsWithin,
+           householdOf: (h) => ({ keith: { key: "hh:shard-house" }, kogane: { key: "hh:shard-house" } })[h] ?? null,
+           own_draft_exists: false, own_draft_near: ["keith/spare-parts"] },
+  }));
+  assert.equal(e.code, 404);
+  assert.match(e.hint, /^Did you mean "keith\/spare-parts"\? /);
+  assert.match(e.hint, /world \{ read: "leave-mark" \} lists your own marks, drafts included/);
+});
+
+test("…and a stranger is never offered one, whatever the context carries", async () => {
+  const e = await refusal(() => refuseOutOfReach({
+    thing: "kogane/bucket-drop", to: null, actor: "dom-pidgey", act: "take", holder: null,
+    ctx: { mark: null, canon_readable: true, within, standing: { placed: true, x: 0, y: 0 }, standsWithin,
+           own_draft_exists: false, own_draft_near: ["kogane/bucket-drops"] },
+  }));
+  assert.equal(e.code, 409);
+  assert.doesNotMatch(e.hint, /Did you mean|bucket-drops/);
+});
+
+test("…and so is a give of one, before any reach is measured", async () => {
+  const e = await refusal(() => refuseOutOfReach({
+    thing: "wright/a-try-square-for-the-joinry", to: "rei", actor: "wright", act: "give", holder: "wright",
+    ctx: { ...draftCtx({ x: 0, y: 0 }), own_draft_exists: false },
+    standpointOfOther: async () => ({ placed: true, x: 1, y: 0 }),
+  }));
+  assert.equal(e.code, 404);
+});
+
+test("…while a real draft is still taken in-house, and an unread live layer changes nothing", async () => {
+  for (const own_draft_exists of [true, undefined]) {
+    const out = await refuseOutOfReach({
+      thing: "wright/a-try-square-for-the-joinery", to: null, actor: "rei", act: "take", holder: null,
+      ctx: { ...draftCtx({ x: 0, y: 0 }), own_draft_exists },
+    });
+    assert.equal(out.unpublished_own_draft, true, `own_draft_exists: ${own_draft_exists}`);
+  }
 });
 
 test("…and its own author may still pick it up — the clause says 'by nobody BUT its author's household'", async () => {
@@ -530,12 +627,22 @@ test("the id this lane cites is the convention its live siblings keep", async ()
   // and this asserts the convention it rests on against the record — two
   // predicated children of a class, each `<by>/<leaf-directory>`, so the same
   // reading gives `.../attach/the-reach/mark.md` its id.
+  //
+  // ⚑ EITHER FORM (LOGOS v2 part 2, W2): a class's clause child is `kind:
+  // predicated` on the world CI pins and `kind: property` on W2 ("every dial
+  // becomes a property", ruled 16:02). The id convention is the same in both,
+  // so the siblings may stand in either form, but both in ONE form: the record
+  // filed them together.
   const { worldMarkById } = await import("../src/world.mjs");
+  const CLAUSE_FORMS = ["predicated", "property"];
+  const forms = new Set();
   for (const id of ["the-town/the-anchor", "the-town/the-not-ground"]) {
     const { mark } = await worldMarkById(id);
     assert.ok(mark, `${id} must stand in canon for this convention to be evidence`);
-    assert.equal(mark.kind, "predicated");
+    assert.ok(CLAUSE_FORMS.includes(mark.kind), `${id} is kind ${mark.kind}, not a class's clause child in either form`);
+    forms.add(mark.kind);
   }
+  assert.equal(forms.size, 1, `the two siblings stand in different forms (${[...forms]}) — the record filed them together`);
 });
 
 // ── the since: shelf's WIRING (found by this lane's own flip run) ────────────
@@ -677,12 +784,54 @@ function groundRowOf(mod, mark, at, stands) {
 // takes their own private draft (admitted, clause 4's own carve-out), then
 // tries to hand it to another household (must be refused).
 
-test("THE DOOR REFUSES AN AUTHOR GIVING THEIR OWN PRIVATE DRAFT AWAY — walk #10's end state, end to end", async () => {
+// ── A LOCKED CLAIM IS STILL THE HOUSE'S OWN (Wright's review of #553) ───────
+//
+// The live layer is `draft` and `pending` only. A claim the candle has locked
+// but no settlement has carried yet is in neither, and not in canon either —
+// unpublished, in its author's house, and takeable before this PR. The door
+// asks the docket when the live layer says no, and refuses only an empty one.
+// The second half is the falsifier: if the docket read failed and the door fell
+// back to admitting, the take of a name with no row at all would pass too.
+
+test("THE DOOR STILL LETS A HOUSE TAKE ITS OWN LOCKED, NOT-YET-CARRIED CLAIM — and refuses a name with no row, end to end", async () => {
   const { installHoldRecord } = await import("./acts-pen-stub.mjs");
-  const rec = await installHoldRecord();
+  const LOCKED = "wright/a-try-square-for-the-joinery";
+  const rec = await installHoldRecord({ claims: [{ id: "claim-try-square-locked", slug: LOCKED, status: "locked",
+    household: "solo:wright", claimant: "wright", window_id: 1, body: "a try-square for the joinery",
+    geometry: { kind: "sited", at: { x: 0, y: 0 }, extent: { w: 1, h: 1 } } }] });
+  const claims = await import("../src/world2-claims.mjs");
+  claims.__setPoolForTest(rec.pen);
   try {
     const { callHoldTool } = await import("../src/world-hold.mjs");
-    const DRAFT = "wright/a-try-square-for-the-joinery";
+    const key = { handles: new Set(["wright"]) };
+
+    const took = await callHoldTool("world_hold", { thing: LOCKED }, key)
+      .then((r) => r, (e) => ({ refused: e }));
+    assert.ok(!took.refused, `a locked claim of the author's own house was refused: ${took.refused?.defect}`);
+    assert.equal(took.did, "take");
+
+    const none = await callHoldTool("world_hold", { thing: "wright/a-try-square-for-the-joinry" }, key)
+      .then((r) => ({ admitted: r }), (e) => e);
+    assert.equal(none?.code, 404, `a name with no row anywhere was admitted: ${JSON.stringify(none?.admitted)}`);
+    assert.match(none.defect, /neither published nor one of your household's drafts/);
+    assert.equal(rec.pen.rows().length, 1, "the locked take is the one act in the record");
+  } finally { claims.__setPoolForTest(null); rec.restore(); }
+});
+
+test("THE DOOR REFUSES AN AUTHOR GIVING THEIR OWN PRIVATE DRAFT AWAY — walk #10's end state, end to end", async () => {
+  const { installHoldRecord } = await import("./acts-pen-stub.mjs");
+  const DRAFT = "wright/a-try-square-for-the-joinery";
+  // THE DRAFT IS ON THE DOCKET, because the door now asks. This test used to
+  // rest on the assumption kogane's 2026-10-14 bug posts removed — that any
+  // name canon doesn't carry is a draft — so step 1 "took" a draft that existed
+  // nowhere. The claim is filed under `solo:wright`, the spelling this stub's
+  // household resolver gives a resident with no registered house, which is
+  // what the door's own live read asks for.
+  const rec = await installHoldRecord({ claims: [{ id: "claim-try-square", slug: DRAFT, status: "draft",
+    household: "solo:wright", claimant: "wright", body: "a try-square for the joinery",
+    geometry: { kind: "sited", at: { x: 0, y: 0 }, extent: { w: 1, h: 1 } } }] });
+  try {
+    const { callHoldTool } = await import("../src/world-hold.mjs");
     const key = { handles: new Set(["wright"]) };
 
     // 1 · the author takes their own draft — clause 4 allows this, and it is

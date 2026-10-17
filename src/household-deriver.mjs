@@ -93,7 +93,7 @@ const VIA = Object.freeze({
   ACCOUNT: "account",    // `gh:<id>`, or an (id, login) pair, through accounts[]
   RESIDENT: "resident",  // a handle the house lists
   PIN: "pin",            // a handle, through its pin's id, through accounts[]
-  NAME: "name",          // the house's name or human, as a person writes it
+  NAME: "name",          // the house's key or public name, as a person writes it; never its private human (POS-609)
   UNKNOWN: "unknown",
 });
 export { VIA };
@@ -269,14 +269,16 @@ export function resolveHouse(x, registry, pins = {}, opts = {}) {
       return null;
     },
 
-    // the name a person writes, only when the caller asked for that question
+    // the name a person writes, only when the caller asked for that question:
+    // the house's own key or its public `name`. NEVER its private `human`
+    // (POS-609): a join or a declaration that types a household's private name
+    // must not find, claim or be refused by that house.
     [VIA.NAME]: () => {
       const want = slugFromName(raw);
       if (!want) return null;
       for (const [slug, rec] of Object.entries(houses)) {
         if (slug.toLowerCase() === want) return hit(slug, VIA.NAME);
         if (rec?.name && slugFromName(rec.name) === want) return hit(slug, VIA.NAME);
-        if (rec?.human && slugFromName(rec.human) === want) return hit(slug, VIA.NAME);
       }
       return null;
     },

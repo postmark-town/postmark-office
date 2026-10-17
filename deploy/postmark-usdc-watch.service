@@ -17,14 +17,23 @@ Description=usdc-watch — read the town's intake address on Base and report wha
 #
 # ONE CREDENTIAL, THE STORE'S (POS-346, 2026-10-04): a wallet registration must
 # name a resident on the store's roll (town_residents), so the watch reads the
-# store. /etc/postmark-usdc-watch.env holds WORLD2_PG_URL and nothing else (mode
-# 600, owner meepo, the stripe-watch convention), never the whole office env,
-# which also carries keys this unit has no use for. Without the file systemd
-# refuses to start the unit (a missing EnvironmentFile= without "-" fails it),
-# so the unit reddens. The cursor doesn't move, so no arrival is lost, but none
-# is seen until the file exists.
+# store. /etc/postmark-usdc-watch.env holds TWO lines and nothing else (mode 600,
+# owner meepo, the stripe-watch convention), never the whole office env, which
+# also carries keys this unit has no use for:
+#   WORLD2_PG_URL=<the store's office_api URL, as in /etc/postmark-office.env>
+#   WORLD2_PG=1
+# BOTH, because the office's code reads the store only when the switch AND the
+# URL are set (src/world2-acts.mjs § world2Enabled). With the URL alone every
+# run refuses with "not pointed at a record (WORLD2_PG / WORLD2_PG_URL are
+# unset)", which is how the w42 ship found it (POS-581, 2026-10-11). The
+# roll-call's ALARM-env row checks this pair for every unit (box-rollcall §5f).
+# Without the file systemd refuses to start the unit (a missing
+# EnvironmentFile= without "-" fails it), so the unit reddens. The cursor
+# doesn't move, so no arrival is lost, but none is seen until the file exists.
 #
-# NOT INSTALLED. Repo copy only — the box install is Wright's hand:
+# INSTALLED at the w42 ship (2026-10-11, Wright's hand, POS-581). A reinstall:
+#   sudo install -m600 -o meepo -g meepo /dev/null /etc/postmark-usdc-watch.env
+#   (then the two lines above, by sudoedit; never echo the URL on a command line)
 #   sudo cp deploy/postmark-usdc-watch.{service,timer} /etc/systemd/system/
 #   sudo mkdir -p /srv/postmark-usdc && sudo chown meepo /srv/postmark-usdc
 #   sudo systemctl daemon-reload

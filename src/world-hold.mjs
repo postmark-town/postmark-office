@@ -12,7 +12,7 @@
 // resident, and children ride their parent's frame." It cannot be built, and
 // the reason is law rather than a gap:
 //
-//   AN ENTITY HAS NO GEOMETRIC PARENT, EVER (LOGOS/kinds.md, restated at
+//   AN ENTITY HAS NO GEOMETRIC PARENT, EVER (LOGOS/lifetimes.md, restated at
 //   dynamic-store.mjs § entities and dynamic-entities.mjs law 2). The entities
 //   table has no parent column and never will. A resident is not a mark, has no
 //   directory in WORLD/marks/, and cannot be a carrier — carriers are marks
@@ -62,7 +62,11 @@ import { worldFreezeBounce } from "./freeze.mjs";
 import { readAttachments, declareAttachment } from "./dynamic-entities.mjs";
 import { holdEdgeOnActs } from "./hold-edge.mjs";
 import { IN_READ_WORKER } from "./read-workers.mjs";
-import { classDials } from "./world-classes.mjs";
+import { classDials, classProperty } from "./world-classes.mjs";
+import { holdingOf } from "./holding-law.mjs"; // the resident's capacity, read from the class tree (LOGOS v2, O1)
+import { perceived } from "./act-watch.mjs"; // POS-637 PR-B: every act door perceives creatures
+import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
+import { markClassOf } from "./world-grants.mjs"; // the kind rung: a mark's class in both forms (LOGOS v2, O1)
 
 /** The thing class's own params, read from the record every time (never cached here). */
 export const thingDials = () => classDials("thing");
@@ -254,12 +258,18 @@ export function declareHolding({ db, thing, to = null, actor, roster = null, gro
 
 export const HOLD_TOOLS = [
   { name: "world_hold",
-    description: "Declare who holds a thing — the one act behind give, drop and take. Name a thing and, to hand it over, the resident who takes it; omit `to` and you either SET IT DOWN where you stand (if you are holding it) or PICK IT UP (if it is standing on the ground). Which of the three happens is read off the thing's current holder, not from what you call it — and a `to:` on a thing you are NOT holding is refused by name rather than performed as something else. THE REACH OF A HOLD (the-town/the-reach): a take is a threshold act — you stand within the thing's extent to take it, exactly as an entry stands at a threshold you truly stand before, and a take from further off is refused naming the distance and the walk that closes it. A set-down stands where you stood: the act carries your standpoint and the thing stands there, not where it was last folded. A give is a take at arm's length — giver and receiver within earshot of each other. And only what stands on the world changes hands: a private draft is on no docket and in no public answer, so nobody outside its author's household can take it or be given it until it publishes. WHO MADE IT IS NOT WHO HOLDS IT: authorship is the mark's `by` and never moves; holding is this edge and moves freely; where it stands is a third answer again, derived from the holder, then from the set-down, then from canon's fold. BY LAW, taking from another household's ground also answers to that ground's word; the door does not yet resolve which ground you are standing on, so today it does not enforce that — what it does instead is RECORD every take with the resident who made it, so a ground-holder who objects has the record to point at. The enforcement lands with ground resolution.",
+    description: "Declare who holds a thing — the one act behind give, drop and take. Name a thing and, to hand it over, the resident who takes it; omit `to` and you either SET IT DOWN where you stand (if you are holding it) or PICK IT UP (if it is standing on the ground). Which of the three happens is read off the thing's current holder, not from what you call it — and a `to:` on a thing you are NOT holding is refused by name rather than performed as something else. THE REACH OF A HOLD (the-town/the-reach): a take is a threshold act — you stand within the thing's extent to take it, exactly as an entry stands at a threshold you truly stand before, and a take from further off is refused naming the distance and the walk that closes it. A set-down stands where you stood: the act carries your standpoint and the thing stands there, not where it was last folded. A give is a take at arm's length — giver and receiver within earshot of each other. And only what stands on the world changes hands: a private draft is on no docket and in no public answer, so nobody outside its author's household can take it or be given it until it publishes. WHO MADE IT IS NOT WHO HOLDS IT: authorship is the mark's `by` and never moves; holding is this edge and moves freely; where it stands is a third answer again, derived from the holder, then from the set-down, then from canon's fold. BY LAW, taking from another household's ground also answers to that ground's word; the door does not yet resolve which ground you are standing on, so today it does not enforce that — what it does instead is RECORD every take with the resident who made it, so a ground-holder who objects has the record to point at. The enforcement lands with ground resolution. COUNTED UNITS (candy): one edge per label, holder to label. Take from a chest with from: (and label: when it holds several, else the refusal lists them), give with to: a resident or a chest, set ONE unit down with label: alone (it becomes a sited mark under the standard one-stamp rule), take a set-down unit back by naming its mark as thing:, use one up with act: \"consume\", and — as a label's creator — top a chest up with act: \"refill\". Every unit carried is one slot of the thing class's carry_cap; a portable chest is one slot whatever it holds, and a fixed one is not carried.",
     inputSchema: { type: "object", properties: {
-      thing: { type: "string", description: "the thing's mark id, <by>/<slug> — as ids appear in the telling" },
-      to: { type: "string", description: "the resident who takes it (a give). Omit to set it down where you stand, or to pick up a thing standing on the ground" },
+      thing: { type: "string", description: "the thing's mark id, <by>/<slug> — as ids appear in the telling. A unit that was set down is a mark too: name it to take it back, or with act: \"consume\" to eat it where it stands" },
+      to: { type: "string", description: "the resident who takes it (a give), or a chest's id to put counted units into it. Omit to set it down where you stand, or to pick up a thing standing on the ground" },
+      kind: { type: "string", description: "BY KIND (LOGOS v2): which kind — a class id, e.g. a kind of candy. A take that names no kind is pot luck over everything the holder holds, and naming one narrows the draw; a give with one kind in hand may omit it. With from: omitted, the one holder in reach that holds it is the source, and several are refused with the candidates listed" },
+      label: { type: "string", description: "COUNTED UNITS (candy): which label — e.g. a candy's slug. With one label in hand or in the chest it may be omitted; with several it must be named, and an omission is refused listing what is there" },
+      count: { type: "number", description: "COUNTED UNITS: how many, a whole number (default 1). A set-down is always one unit, one mark, one stamp" },
+      from: { type: "string", description: "COUNTED UNITS: the chest to take from, <by>/<slug> — you stand within its extent to take" },
+      act: { type: "string", enum: ["consume", "refill"], description: "consume: use up ONE held consumable unit (name label: when you hold several), or name thing: to consume a set-down unit where it stands. refill: the creator of a candy label tops a chest up to its capacity with their own label (name chest:)" },
+      chest: { type: "string", description: "with act: \"refill\" — the chest's id, <by>/<slug>" },
       handle: { type: "string", description: "which of YOUR residents acts (omit if your key holds one; a multi-resident key must name one)" },
-    }, required: ["thing"], additionalProperties: false } },
+    }, additionalProperties: false } },
   { name: "world_holdings",
     description: "What you are carrying. Every thing whose live holding edge names one of your residents, with what each one is and who made it. A thing you made and gave away is not here; a thing someone gave you is, whoever authored it.",
     inputSchema: { type: "object", properties: {
@@ -349,10 +359,40 @@ const standsOff = (id, reach) =>
   `${id} stands ${reach.distance_round} m${reach.bearing ? ` ${reach.bearing}` : ""} of you`;
 
 /**
+ * Up to three ids from `ids` within a typo's distance of `id`, nearest first —
+ * the in-house refusal's "did you mean". Plain edit distance; "a typo's
+ * distance" is a third of the id's length, at least two, so `keith/spare-part`
+ * finds `keith/spare-parts` and `keith/tin-cups` finds `keith/tin-cup`. The ids
+ * offered are only ever the asker's own household's, so a loose match costs a
+ * wrong suggestion, never a leak.
+ */
+export function nearestIds(id, ids) {
+  const want = String(id);
+  const limit = Math.max(2, Math.floor(want.length / 3));
+  const dist = (a, b) => {
+    let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+    for (let i = 1; i <= a.length; i++) {
+      const cur = [i];
+      for (let j = 1; j <= b.length; j++)
+        cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = cur;
+    }
+    return prev[b.length];
+  };
+  return [...new Set(ids.map(String))]
+    .filter((other) => other !== want)
+    .map((other) => [other, dist(want, other)])
+    .filter(([, d]) => d <= limit)
+    .sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0]))
+    .slice(0, 3)
+    .map(([other]) => other);
+}
+
+/**
  * The world's answer about one thing and one resident, or `null` when the world
  * could not be read at all. Never throws.
  */
-export async function reachContext(thing, actor) {
+export async function reachContext(thing, actor, { key = null } = {}) {
   try {
     const [{ worldMarkById, pointWithinMarkFn, residentStandpoint }, { standsWithin }] = await Promise.all([
       import("./world.mjs"), import("./reach.mjs"),
@@ -367,7 +407,46 @@ export async function reachContext(thing, actor) {
     // A synchronous lookup over ONE read of the store's registry (POS-342).
     let householdOf = null;
     try { householdOf = await (await import("./households.mjs")).householdLookup(); } catch { householdOf = null; }
-    return { mark, canon_readable: canon_marks > 0, within, standing, standsWithin, householdOf };
+    // WHETHER AN UNPUBLISHED NAME IS A DRAFT AT ALL, for clause 4's in-house
+    // half. Canon not carrying a thing proves only that it isn't published; a
+    // typo looks exactly the same. The actor's OWN household's live layer is
+    // the one place that can tell the two apart, and reading it shows the actor
+    // nothing they couldn't already see (withdraw asks the same question the
+    // same way). Another household's drafts are never read here. UNDEFINED
+    // when the layer can't answer, so the door degrades to what it did before
+    // rather than refusing a real draft.
+    let ownDraftExists, ownDraftNear = [];
+    if (!mark && canon_marks > 0) {
+      try {
+        const { guardedLiveMarks } = await import("./world2-guards.mjs");
+        const live = await guardedLiveMarks(null, { actor });
+        ownDraftExists = live.some((m) => m.id === thing);
+        // THE LIVE LAYER IS ONLY `draft` AND `pending` (Wright's review of
+        // #553). A claim the candle has LOCKED, or that waits in
+        // `held_review`, has left the live layer and is not yet in canon:
+        // unpublished, in its author's house, and takeable, for minutes when
+        // settlements run on time and for hours when one is held (kogane's
+        // Swallets sat locked from 18:00Z on 10-13 to the next morning's).
+        // So a "no" from the live layer is asked again of the docket, the way
+        // the receipt asks it, and only a docket with NO row for this slug
+        // counts as nothing there.
+        if (!ownDraftExists) {
+          const { claimRowsForSlug } = await import("./world2-claims.mjs");
+          const rows = await claimRowsForSlug(thing, { key });
+          if (rows.length) ownDraftExists = true;
+        }
+        // DID YOU MEAN, from the same read. Added after the first review of
+        // this fix (Emily, 2026-10-14): the commonest way to land in the refusal
+        // below is an author mistyping their OWN draft, and `world { find }`
+        // searches only what is published, so it cannot show them the draft
+        // they meant. This list is the actor's own household's marks and
+        // nothing else, so naming the nearest of them shows the actor only what
+        // `read: "leave-mark"` already would. It is never offered to a stranger.
+        if (!ownDraftExists) ownDraftNear = nearestIds(thing, live.map((m) => m.id));
+      } catch { ownDraftExists = undefined; ownDraftNear = []; }
+    }
+    return { mark, canon_readable: canon_marks > 0, within, standing, standsWithin, householdOf,
+             own_draft_exists: ownDraftExists, own_draft_near: ownDraftNear };
   } catch { return null; }
 }
 
@@ -383,7 +462,7 @@ export async function reachContext(thing, actor) {
  * false comment above a second copy. The reviewer caught both; the copy is
  * gone and the sentence now describes what happens.
  */
-export async function refuseOutOfReach({ thing, to, actor, act, holder, ctx: given = null, standpointOfOther = null }) {
+export async function refuseOutOfReach({ thing, to, actor, act, holder, ctx: given = null, standpointOfOther = null, key = null }) {
   // A DROP IS ALWAYS IN REACH. You set a thing down where you stand; there is
   // no distance to be wrong about, and no canon gate either — letting go of an
   // unpublished thing is the repair for a hold that should never have been
@@ -394,7 +473,7 @@ export async function refuseOutOfReach({ thing, to, actor, act, holder, ctx: giv
   // same reason: the four clauses are adjudication, and a falsifier must be
   // able to put a resident 379 m from a try-square without a world engine, a
   // clone and a walk ledger. The door hands over the real one.
-  const ctx = given ?? await reachContext(thing, actor);
+  const ctx = given ?? await reachContext(thing, actor, { key });
   if (!ctx) return null; // the world could not be read — the ordinary door stands
 
   const { mark, within, standing, standsWithin, householdOf = null } = ctx;
@@ -425,10 +504,31 @@ export async function refuseOutOfReach({ thing, to, actor, act, holder, ctx: giv
   if (!mark && !canonReadable) return null; // canon did not answer — nothing measured, nothing refused
   if (!mark) {
     const madeBy = String(thing).split("/")[0];
+    const slug = String(thing).split("/").slice(1).join("/") || String(thing);
     const mine = sameHousehold(madeBy, actor, householdOf);
+    // OUTSIDE THE HOUSE, A MISSPELLED NAME AND A PRIVATE DRAFT MUST ANSWER
+    // ALIKE, or the refusal tells a stranger which slugs are someone's drafts.
+    // So this cannot say which it is — and it must not claim either. It used
+    // to say "it is a private draft" and hand the stranger the owner's stake
+    // call, so a resident who mistyped a slug walked away believing a
+    // published thing was unstaked (kogane's bug post, 2026-10-14). The
+    // stranger's useful next step is the name, so that is what it offers.
     if (!mine.same)
       throw bounce(409, `${thing} does not stand on the world`,
-        `it is a private draft — on no docket, in no export, in no public answer — so nobody outside ${madeBy}'s household can take it or be given it, and you are not of that household (${byWhat(mine)}). ${madeBy} puts it forward by staking it (world { do: "stake", args: { mark: "${thing}", stamps: 1 } }); it changes hands after the crossing that carries it.`);
+        `nothing by that name is published, so it cannot change hands. Check the name: world { find: "${slug}" } searches what is published. A thing that is still a private draft answers exactly the same, on purpose: a draft is on no docket and in no public answer, so nobody outside ${madeBy}'s household can take it or be given it until it publishes, and you are not of that household (${byWhat(mine)}). Nothing was recorded.`);
+
+    // INSIDE THE HOUSE THE DOOR CAN TELL, so it does. The household may see its
+    // own drafts, and a take of a name that is neither published nor drafted
+    // used to SUCCEED — a hold edge, and then a set-down, for nothing at all
+    // (kogane's bug post, 2026-10-14: `keith/spare-part` for `keith/spare-parts`).
+    // Only a definite "no such draft" refuses; an unread live layer leaves the
+    // door as it was.
+    if (ctx.own_draft_exists === false) {
+      const near = Array.isArray(ctx.own_draft_near) ? ctx.own_draft_near : [];
+      const meant = near.length ? `Did you mean ${near.map((n) => `"${n}"`).join(" or ")}? ` : "";
+      throw bounce(404, `${thing} is neither published nor one of your household's drafts`,
+        `${meant}nothing by that name stands on the world or in ${madeBy}'s household's drafts. Check the name: world { read: "leave-mark" } lists your own marks, drafts included, and world { find: "${slug}" } searches what is published. Nothing was recorded.`);
+    }
 
     // A GIVE OF AN UNPUBLISHED THING IS STILL A GIVE. Both halves of clause 3
     // apply — who receives, and how far away they are.
@@ -477,8 +577,14 @@ export async function refuseOutOfReach({ thing, to, actor, act, holder, ctx: giv
  * of an arm's-length rule would be two answers to "how far is beside", which is
  * the split this lane exists to close.
  */
-async function armsLengthOrThrow({ thing, to, here, actor, standpointOfOther = null }) {
+export async function armsLengthOrThrow({ thing, to, here, actor, standpointOfOther = null }) {
   const { withinArmsLength } = await import("./reach.mjs");
+  // A give BY KIND ("units") has no set-down to offer: setting a kind down is not built (G8, w44),
+  // so the other way to reach someone is a holder they can take from (the playground's QA of part 2).
+  const byKind = thing === "units";
+  const setDown = byKind
+    ? `give it into a holder where they can take from it — world { do: "give", args: { kind, count, to: "<a holder>" } } (setting a kind down is not built yet)`
+    : null;
   if (!here)
     throw bounce(409, "the record does not place you anywhere",
       `a give is a take at arm's length (the-town/the-reach), and the walk ledger has no position for ${actor} — there is no length to measure. Walk somewhere first.`);
@@ -487,11 +593,11 @@ async function armsLengthOrThrow({ thing, to, here, actor, standpointOfOther = n
     : await (await import("./world.mjs")).residentStandpoint(String(to)).catch(() => null);
   if (!theirs?.placed)
     throw bounce(409, `the record does not place ${to} anywhere`,
-      `a give is a take at arm's length (the-town/the-reach) and the town cannot measure the length: ${to} has no position in the walk ledger. Set it down where you both can reach it instead — world { do: "drop", args: { thing: "${thing}" } }.`);
+      `a give is a take at arm's length (the-town/the-reach) and the town cannot measure the length: ${to} has no position in the walk ledger. ${setDown ? `Instead, ${setDown}.` : `Set it down where you both can reach it instead — world { do: "drop", args: { thing: "${thing}" } }.`}`);
   const reach = withinArmsLength(here, { x: theirs.x, y: theirs.y });
   if (!reach.stands)
     throw bounce(409, `${to} is not within arm's length — they stand ${reach.distance_round} m${reach.bearing ? ` ${reach.bearing}` : ""} of you`,
-      `a give is a take at arm's length (the-town/the-reach): giver and receiver stand within earshot of each other, ${reach.earshot_m} m, the town's one measure of beside. Walk to them and hand it over there — world { do: "walk", args: { mark_id: "<their ground>", mode: "center" } } — or set it down where they will find it: world { do: "drop", args: { thing: "${thing}" } }. Nothing was recorded.`);
+      `a give is a take at arm's length (the-town/the-reach): giver and receiver stand within earshot of each other, ${reach.earshot_m} m, the town's one measure of beside. Walk to them and hand it over there — world { do: "walk", args: { mark_id: "<their ground>", mode: "center" } } — or ${setDown ?? `set it down where they will find it: world { do: "drop", args: { thing: "${thing}" } }`}. Nothing was recorded.`);
   return reach;
 }
 
@@ -553,15 +659,43 @@ export function latestDrop(rows, thingId) {
   return mine.length ? mine[mine.length - 1] : null;
 }
 
+/** A commons mark publishes only with escrow behind it: the ground's minimum off your own parcel (`world.mjs § groundMinimumStake`). */
+export const COMMONS_MIN_STAKE = 1;
+
+/** The docket's amend filed from THIS drop (pending or locked), or null. PURE. */
+export function setDownAmendOf(amends, thingId, dropSeq) {
+  if (!Array.isArray(amends) || dropSeq == null) return null;
+  const hit = amends.find((a) => (a.thing == null || String(a.thing) === String(thingId))
+    && String(a.act_id) === String(dropSeq) && (a.status === "pending" || a.status === "locked"));
+  return hit ? { act_id: String(hit.act_id), status: hit.status } : null;
+}
+
+/** The author's one call that moves a set-down mark to where it stands, as a preview. PURE. */
+export function amendCallFor(thingId, at) {
+  const id = String(thingId), cut = id.indexOf("/");
+  return {
+    do: "leave-mark", tool: "world_leave_mark",
+    args: { by: id.slice(0, cut), slug: id.slice(cut + 1), amend: true, at: { x: Number(at.x), y: Number(at.y) }, preview: true },
+    note: "the author's own pen: send every other line of the mark as it stands (kind, extent, body, and class if it carries one: a thing is kind: thing now, and the old kind: sited with class: thing is still taken), read the preview, then send it again without preview: true",
+  };
+}
+
 /**
  * Where a thing stands, derived — never stored, and it says which of the three.
  *
  * `deps` carries the readers so this is testable on hand-built rows with no
  * world engine, no journal file and no walk ledger: the same injection
  * `declareHolding` takes for `rows`, and for the same reason.
+ *
+ * `amends` are the docket's set-down amends (`world2-guards.mjs §
+ * standsRowsFromStore`): `{ thing, act_id, status }`, pending or locked.
+ * Null is "not read", and the read then promises no move (POS-451).
+ * `escrowOf(id)` answers the escrow behind a mark (the stake read), asked only
+ * for an accepted stranger's set-down with no amend on the docket.
  */
 export async function whereThingStands(thingId, {
   attachments = null, journal = null, fold = null, standpointOf = null, centreOf = null, householdOf = null, stances = [],
+  amends = null, escrowOf = null,
 } = {}) {
   const id = String(thingId);
   if (attachments == null) return { where: null, source: "unreadable", says: "the office could not read the holding record — this is not an answer about where it stands" };
@@ -597,10 +731,38 @@ export async function whereThingStands(thingId, {
       const madeBy = id.split("/")[0];
       const setter = drop.actor == null ? null : String(drop.actor);
       const house = setter == null ? { same: false, how: "handle-only" } : sameHousehold(madeBy, setter, householdOf);
-      if (house.same)
-        return { ...base, says: `${setter} set it down here; it stands where they stood, and the record re-sites the mark at the next fold` };
       const foldAt = fold && Number.isFinite(Number(fold.x)) && Number.isFinite(Number(fold.y)) ? { x: Number(fold.x), y: Number(fold.y) } : null;
       const canonText = foldAt ? placeText(foldAt) : "the place it was last folded";
+      // ── THE PROMISE IS MADE OVER A FILED AMEND, NEVER OVER THE DROP (POS-451) ──
+      //
+      // "The record re-sites the mark at the next fold" is true only when an
+      // amend from THIS drop is on the docket, pending or locked. Keith's two
+      // set-downs predate POS-138, filed nothing, and this read told him the
+      // re-site was coming for a month. A drop with no amend says so, where
+      // canon keeps the mark, and the one call that moves it.
+      //
+      // AND CANON MAY ALREADY BE HERE. Keith's stool moved by an amend he filed
+      // by hand (act 16921, S104), which carries no `_set_down.act_id`, so it is
+      // never this drop's amend. Canon now has the stool where he set it down,
+      // and the read says that: no re-site to come, no "canon keeps it at…",
+      // no call to move it. ASKED BEFORE THE FILED AMEND: `locked` is terminal,
+      // so once an own set-down's amend publishes, the docket keeps its locked
+      // row while canon already stands here, and "re-sites the mark at the next
+      // fold" would be promised forever. Locked but not yet printed still
+      // promises, because the fold is still the old place.
+      if (house.same) {
+        const filed = setDownAmendOf(amends, id, drop.seq);
+        if (foldAt && foldAt.x === at.x && foldAt.y === at.y)
+          return { ...base, amend: filed, canon_at: foldAt,
+            says: `${setter} set it down here, and it stands where they stood: canon has it here too` };
+        if (filed)
+          return { ...base, amend: filed, says: `${setter} set it down here; it stands where they stood, and the record re-sites the mark at the next fold` };
+        if (amends == null)
+          return { ...base, amend: null, canon_at: foldAt,
+            says: `${setter} set it down here and it stands where they stood; the docket could not be read here, so whether an amend moves canon to this place is not known — canon has it at ${canonText}` };
+        return { ...base, amend: null, canon_at: foldAt, move: amendCallFor(id, at),
+          says: `${setter} set it down here and it stands where they stood, but no amend from this set-down is on the docket, so canon keeps the mark at ${canonText}. ${madeBy === setter ? setter : `${madeBy}'s house`} can move it here with one amend in ${madeBy}'s name: world_leave_mark with amend: true and at ${placeText(at)}, every other line of the mark as it stands (preview: true first)` };
+      }
       if (house.how === "household") {
         // THE AUTHOR'S HOUSE'S ANSWER, if it has spoken about THIS drop.
         const answer = setDownAnswer({ stances, thing: id, dropSeq: drop.seq ?? null, madeBy, householdOf });
@@ -608,13 +770,46 @@ export async function whereThingStands(thingId, {
           return { where: foldAt, source: "fold", set_down_by: setter, act_seq: drop.seq ?? null,
             accepted: false, refused_by: answer.by,
             says: `set down by ${setter} at ${placeText(at)} — refused by ${madeBy}'s house; canon stands at ${canonText}, where ${madeBy} put it` };
-        if (answer?.stance === "welcomed")
+        if (answer?.stance === "welcomed") {
           // WHAT THE STANCE PROVES, AND NOTHING MORE. The row is written before
           // the amend is filed, and the amend door can still refuse; this read
           // sees the word, never the filing, so it must not claim one (Wright's
           // review, #184). The receipt is where the filing's outcome is said.
-          return { ...base, accepted: true, accepted_by: answer.by, canon_at: foldAt,
-            says: `set down by ${setter} at ${placeText(at)} — accepted by ${madeBy}'s house; canon follows when ${madeBy}'s amend publishes at a crossing` };
+          //
+          // ── AND "CANON FOLLOWS" ONLY OVER AN AMEND THAT CAN PUBLISH (POS-451) ──
+          // The welcome files the author's amend, but on ground that is not the
+          // author's household's an amend with no escrow behind it is the
+          // author's PRIVATE DRAFT, and a draft never publishes until it is put
+          // forward. Wildcat's two charms read "canon follows" for days at ✦0.
+          // So the promise rides an amend from this drop on the docket (pending
+          // or locked); without one the read says where canon stays and what
+          // puts a draft forward: a stake on the mark (`promoteDraftOnStake`).
+          // It never says a draft exists: the amend door may have refused.
+          const accepted = { ...base, accepted: true, accepted_by: answer.by, canon_at: foldAt };
+          const filed = setDownAmendOf(amends, id, drop.seq);
+          if (filed)
+            return { ...accepted, amend: filed,
+              says: `set down by ${setter} at ${placeText(at)} — accepted by ${madeBy}'s house; canon follows when ${madeBy}'s amend publishes at a crossing` };
+          const lead = `set down by ${setter} at ${placeText(at)} — accepted by ${madeBy}'s house`;
+          if (amends == null)
+            return { ...accepted, amend: null,
+              says: `${lead}; the docket could not be read here, so whether ${madeBy}'s amend can publish is not known — canon has it at ${canonText}` };
+          const escrow = typeof escrowOf === "function" ? await Promise.resolve(escrowOf(id)).catch(() => null) : null;
+          const known = escrow != null && Number.isFinite(Number(escrow));
+          const nothing = `${lead}, but no amend from this set-down is on the docket, so canon stays at ${canonText}: ${madeBy}'s amend is a private draft or was refused`;
+          // At ✦0 the read still cannot tell a draft from a refusal (the door
+          // refuses a mark carrying `loot`, and then there is no draft at all),
+          // and it does not ask whose ground the set-down is on. What it knows:
+          // a draft exists only where the ground's minimum is ✦1 (own ground is
+          // ✦0 and publishes), so a draft goes forward with ✦1 behind it.
+          if (known && Number(escrow) < COMMONS_MIN_STAKE) {
+            const need = COMMONS_MIN_STAKE - Number(escrow);
+            return { ...accepted, amend: null, escrow: Number(escrow), stake_needed: need,
+              says: `${nothing}, and ${id} has ✦${Number(escrow)} behind it: a draft goes forward with ✦${COMMONS_MIN_STAKE} behind it, so a stake of ✦${need} on ${id} by ${madeBy}'s house puts a draft forward` };
+          }
+          return { ...accepted, amend: null, ...(known ? { escrow: Number(escrow) } : {}),
+            says: `${nothing}${known ? "" : " (the escrow behind it could not be read here)"}, and a stake on ${id} by ${madeBy}'s house puts a draft forward` };
+        }
         return { ...base, accepted: false, canon_at: foldAt,
           says: `set down by ${setter} at ${placeText(at)} — unaccepted; canon stays at ${canonText}, where ${madeBy} put it` };
       }
@@ -662,6 +857,9 @@ export function holdEffectsFrom({ rows = [], handles = [], sinceCrossing, nowCro
   const out = [];
   for (const r of rows) {
     if (r?.class !== "holding") continue;
+    // A counted unit's act (WLD-27, `units:*`) names no thing changing hands;
+    // its effects are not this shelf's sentence, so it is not read as one.
+    if (String(r.action ?? "").startsWith("units:")) continue;
     const thing = r.object;
     if (!thing) continue;                       // an act naming no thing names nothing
     const c = r.crossing == null ? null : Number(r.crossing);
@@ -729,7 +927,7 @@ export async function readHoldEffects({ handles = [], sinceCrossing, nowCrossing
     const rows = await storeHoldingRows({ since: sinceCrossing, until: nowCrossing });
     return { readable: true, events: holdEffectsFrom({ rows, handles, sinceCrossing, nowCrossing }) };
   } catch (e) {
-    return { readable: false, events: [], reason: `the holding record could not be read (${String(e?.message ?? e).slice(0, 160)})` };
+    return { readable: false, events: [], reason: `the holding record could not be read (${plainReason(e, "record", "the holding record")})` };
   }
 }
 
@@ -898,7 +1096,11 @@ const placeText = (p) => `(${Number(p.x)}, ${Number(p.y)})`;
  * amend). Any key in neither list is an authored line the door cannot carry,
  * and the amend is refused rather than made to drop it.
  */
-export const AMEND_CARRIES = Object.freeze(["kind", "extent", "points", "body", "slot", "value", "class", "ask", "reward", "status", "image"]);
+// `kind` and `class` are carried as the record spells them, in either form: the
+// door judges both alike and writes the form the class tree says (world.mjs §
+// THE FORM IT IS WRITTEN IN). `holder` and `open` are a thing's holder word,
+// which the door re-declares (kind-holding § holderWordOf; O2, review-610 S8).
+export const AMEND_CARRIES = Object.freeze(["kind", "extent", "points", "body", "slot", "value", "class", "ask", "reward", "status", "image", "capacity", "portable", "welcome", "holder", "open"]);
 export const AMEND_LEAVES = Object.freeze([
   "id", "by", "at", "tier", "sovereign", "placementParent", "household", "declared_household",
   "stamps", "weight", "weight_parts", "ledger_weight", "date", "signal",
@@ -953,7 +1155,7 @@ export async function fileSetDownAmend({ did, stood, key, actId = null, deps = {
     const amend = await fileAuthorsAmend({ thing, stood, key, actor, actId, writtenAt: did.at ?? null, deps });
     return { ...base, whose: "your household's", amend };
   } catch (e) {
-    return { ...base, whose: "your household's", amend: { filed: false, why: `the amend door refused: ${String(e?.defect ?? e?.message ?? e).slice(0, 200)}` } };
+    return { ...base, whose: "your household's", amend: { filed: false, why: `the amend door refused: ${String(e?.defect ?? plainReason(e, "record", "a set-down's amend")).slice(0, 200)}` } };
   }
 }
 
@@ -968,8 +1170,26 @@ export async function fileSetDownAmend({ did, stood, key, actId = null, deps = {
  */
 export async function fileAuthorsAmend({ thing, stood, key, actor, actId = null, writtenAt = null, extra = {}, deps = {} }) {
   try {
-    const mark = deps.mark !== undefined ? deps.mark
+    let mark = deps.mark !== undefined ? deps.mark
       : await (async () => { const { worldMarkById } = await import("./world.mjs"); return (await worldMarkById(String(thing))).mark; })();
+    // ── THE AUTHOR'S OWN DRAFT (postmark#3663, kogane) ─────────────────────
+    //
+    // An unpublished thing may be taken and dropped inside its author's house
+    // (§ CLAUSE 4), but this read only ever asked canon, found nothing, and
+    // filed nothing: the claim kept the fold place and published there, and
+    // the set-down was lost. A PRIVATE DRAFT is the author's to re-site, so its
+    // live record is amended in place (the claims pen rewrites the author's
+    // own draft rather than adding a second). A claim already PUT FORWARD is
+    // on the docket, and re-siting it waits on a ruling; it says so instead of
+    // promising an amend that will never come.
+    let draft = false;
+    if (!mark) {
+      const live = deps.liveClaim !== undefined ? deps.liveClaim : await ownLiveClaim(thing, key, actor);
+      if (live?.claim_status === "draft") { mark = draftRecordOf(live); draft = true; }
+      else if (live && (live.claim_status === "pending" || live.put_forward === true))
+        return { filed: false, put_forward_unpublished: true,
+          why: `${thing} is put forward and not yet published, and re-siting a claim already on the docket waits on a ruling (postmark#3663)` };
+    }
     const built = setDownAmend({ thing, mark, stood, actor, actId, writtenAt });
     if (built.refused) return { filed: false, why: built.refused };
     const leave = deps.leave ?? (async (payload, k, opts) => {
@@ -980,11 +1200,32 @@ export async function fileAuthorsAmend({ thing, stood, key, actor, actId = null,
     if (res?.error) return { filed: false, why: `the amend door answered: ${res.defect ?? res.error}` };
     return {
       filed: true, mark: res?.id ?? String(thing), seq: res?.seq ?? null, put_forward: res?.put_forward === true,
+      ...(draft ? { draft: true } : {}),
       ...(res?.put_forward === true ? {} : { to_publish: res?.to_publish ?? null }),
     };
   } catch (e) {
-    return { filed: false, why: `the amend door refused: ${String(e?.defect ?? e?.message ?? e).slice(0, 200)}` };
+    return { filed: false, why: `the amend door refused: ${String(e?.defect ?? plainReason(e, "record", "a set-down's amend")).slice(0, 200)}` };
   }
+}
+
+/** The author's own live claim on `thing` (draft or pending), or null when none or unreadable. */
+async function ownLiveClaim(thing, key, actor) {
+  try {
+    const { guardedLiveMarks } = await import("./world2-guards.mjs");
+    const live = await guardedLiveMarks(null, { household: key?.household, actor });
+    return (live ?? []).find((m) => m?.id === String(thing)) ?? null;
+  } catch { return null; }
+}
+
+/**
+ * A live claim's record as `setDownAmend` reads a canon one: the fields the
+ * live read adds about the CLAIM (its row, its status, its slug and sequence,
+ * whether it is put forward) are not lines the author wrote, so they are not
+ * carried into the amend.
+ */
+const LIVE_ONLY = Object.freeze(["slug", "seq", "put_forward", "claim_id", "claim_status", "amend"]);
+export function draftRecordOf(live) {
+  return Object.fromEntries(Object.entries(live ?? {}).filter(([k]) => !LIVE_ONLY.includes(k)));
 }
 
 // ── THE AUTHOR'S HOUSE ANSWERS A STRANGER'S SET-DOWN (POS-138, ruled 10:1x) ──
@@ -1037,14 +1278,20 @@ export function setDownNote(setDown) {
   if (!a) return `${lead}.`;
   if (a.filed && a.put_forward)
     return `${lead}; the amend that re-sites the mark is filed${a.seq != null ? ` (act ${a.seq})` : ""}, and canon moves it here at the next crossing.`;
+  if (a.filed && a.draft)
+    return `${lead}; your private draft is re-sited here, and it publishes here when it is put forward.`;
   if (a.filed)
     return `${lead}; the amend that re-sites the mark is filed as ${setDown.made_by}'s private draft — no escrow behind it clears the ground it now stands on, so canon keeps it where it was folded until it is put forward.`;
+  if (a.put_forward_unpublished)
+    return `${lead}; it is put forward and not yet published, so it publishes where it was folded — re-siting a claim already on the docket waits on a ruling (postmark#3663).`;
   if (setDown.whose === "another household's")
     return `${lead} — but ${setDown.made_by} made it, and a set-down by another household moves nothing in canon on its own: it reads as set down by you, unaccepted, and canon stays where ${setDown.made_by} put it.`;
   return `${lead}; no amend was filed (${a.why}), so canon keeps it where it was folded and the set-down is the read's answer until one is.`;
 }
 
-export async function callHoldTool(name, args = {}, key = null) {
+// POS-637 PR-B: the act, perceived by any creature whose ring holds it (act-watch.mjs § perceived).
+export async function callHoldTool(name, args = {}, key = null, { verb = null } = {}) { return perceived(() => holdAct(name, args, key, verb)); }
+async function holdAct(name, args = {}, key = null, verb = null) {
   if (name === "world_hold") { const fz = worldFreezeBounce(); if (fz) return fz; }
   const actor = actingHandle(args, key);
   // ⚑ THE READ ASKS FOR A READ HANDLE, AND ONLY THE WRITE ASKS FOR A WRITE ONE
@@ -1105,6 +1352,10 @@ export async function callHoldTool(name, args = {}, key = null) {
               more_note: `${held.length - next} more thing${held.length - next === 1 ? "" : "s"} in your hands — call again with offset: ${next}` }
           : {}),
         holding: page.map((id) => ({ thing: id, made_by: id.split("/")[0] })),
+        // THE COUNTED HOLDING (WLD-27): one edge per label, and what it shows.
+        ...((await import("./chests-candy.mjs")).chestsCandyOn() ? { units: await unitsHeldBy(actor) } : {}),
+        // BY KIND (LOGOS v2, O2; review-610 S1): live whatever WORLD_CHESTS_CANDY says — the kind doors are not #499's
+        kinds: await (await import("./world-kinds.mjs")).kindsHeldBy(actor),
       };
     }
     // ── TWO INPUTS THIS DOOR DOES NOT YET COMPUTE ──────────────────────────
@@ -1133,6 +1384,26 @@ export async function callHoldTool(name, args = {}, key = null) {
     // — a door that promised enforcement it does not perform would be the exact
     // schema-vs-runtime defect this branch flagged on `leave_mark`'s `tier:`, and
     // it is not better for being mine.
+    // ── BY KIND (LOGOS v2, lane O2) — the kind door, the same lane and queue ──
+    // Every count that names no `label:` is a kind's: take, give and refill by
+    // kind (world-kinds.mjs). A `label:` is #499's door, below.
+    {
+      const { kindRouteOf, callKinds } = await import("./world-kinds.mjs");
+      const route = kindRouteOf(args, verb);
+      if (route) return await callKinds(route, args, key, actor, await (await import("./world-units.mjs")).liveUnitDeps());
+    }
+    // ── COUNTED UNITS (WLD-27) — their own door, the same lane and queue ─────
+    if (args.thing == null && args.to == null && args.from == null && args.label == null && args.count == null && args.act == null)
+      throw bounce(422, "which thing?", "a thing's mark id, <by>/<slug> — or label:/count:/from: for counted units");
+    {
+      const { unitRouteOf, callUnits, liveUnitDeps } = await import("./world-units.mjs");
+      let thingMark = null;
+      if (args.thing != null && args.to == null && args.act == null) {
+        try { thingMark = (await (await import("./world.mjs")).worldMarkById(String(args.thing))).mark; } catch { thingMark = null; }
+      }
+      const route = unitRouteOf(args, { thingMark });
+      if (route) return await callUnits(route, args, key, actor, await liveUnitDeps());
+    }
     const dials = thingDials();
     // ── LANE TWO OF THE PEN FLIP (W2_PEN=hold; runbook C2, 2026-09-03) ────────
     // The record is Postgres `acts`, committed and awaited. Unreachable
@@ -1161,9 +1432,24 @@ export async function callHoldTool(name, args = {}, key = null) {
     const { guardedAttachments: guardRows } = await import("./world2-guards.mjs");
     const preRows = await guardRows();
     const preHolder = liveHolder(preRows, String(args.thing));
+    // A THING A HOLDER HOLDS (WLD-27; LOGOS v2, O2): naming it takes that mark out
+    // of its holder — the kind door's, whose holder is any thing with holder: true.
+    if (preHolder != null && String(preHolder).includes("/") && args.to == null) {
+      const { callKinds } = await import("./world-kinds.mjs");
+      const { liveUnitDeps } = await import("./world-units.mjs");
+      return await callKinds("thing-from-holder", { ...args, from: String(preHolder) }, key, actor, await liveUnitDeps());
+    }
     refuseGiveOfUnheld({ thing: args.thing, to: args.to ?? null, actor, holder: preHolder });
     const face = faceOf(preHolder, args.to ?? null);
-    const reached = await refuseOutOfReach({ thing: args.thing, to: args.to ?? null, actor, act: face, holder: preHolder });
+    const reached = await refuseOutOfReach({ thing: args.thing, to: args.to ?? null, actor, act: face, holder: preHolder, key });
+    // A FIXED CHEST IS NOT CARRIED (WLD-27): a bowl stands where it was set.
+    if (face === "take") {
+      let m = null;
+      try { m = (await (await import("./world.mjs")).worldMarkById(String(args.thing))).mark; } catch { m = null; }
+      // FROM THE thing/portable PROPERTY (sovereign, default true), for any thing (LOGOS v2, O2; review-610 B2)
+      if (m && !(await import("./kind-holding.mjs")).portableMark(m, classProperty))
+        throw bounce(409, `${args.thing} is fixed where it stands`, "its maker made it portable: false, so it is not carried; if it holds things, take from it instead: world { do: \"take\", args: { from: \"" + args.thing + "\" } }. Nothing was recorded.");
+    }
 
     // The hold lane is flipped here — the door refused above if it was not —
     // so there is one pen: the holding act, awaited. (The unflipped pen, which
@@ -1171,7 +1457,7 @@ export async function callHoldTool(name, args = {}, key = null) {
     // dynamic.db, POS-269.)
     {
       const stood = await standpointOfActor(actor);
-      const out = await declareHoldingFlipped({ db: null, thing: args.thing, to: args.to ?? null, actor, dials, key, reached, stood });
+      const out = await declareHoldingFlipped({ db: null, thing: args.thing, to: args.to ?? null, actor, dials, key, reached, stood, carry: carryForThings });
       if (out?.did !== "drop") return out;
       // AFTER the drop's COMMIT, never inside its transaction: the amend is the
       // mark lane's own act on the mark lane's own pen, and holding the hold
@@ -1238,7 +1524,7 @@ export function holdingEntry(did, { crossing, at, witnesses, cls, household }) {
 // off the hold lane this refuses as the door does. `deps` exist so the
 // ordering can be proven with no world db and no Postgres; the door injects the
 // real ones.
-export async function declareHoldingFlipped({ db, thing, to = null, actor, dials = {}, key = null, deps = {}, reached = null, stood = null }) {
+export async function declareHoldingFlipped({ db, thing, to = null, actor, dials = {}, key = null, deps = {}, reached = null, stood = null, carry = null }) {
   // THE QUEUE IS ONE THREAD'S. `holdingQueue` serializes the holder check
   // against the commit only among the holds THIS thread runs; a hold written
   // from a read worker would run beside the main thread's with no lock between
@@ -1281,6 +1567,10 @@ export async function declareHoldingFlipped({ db, thing, to = null, actor, dials
     // and no Postgres, and a world read inside the transaction would take that
     // away from the three tests that exist to prove the pen's ordering.
     const did = declareHolding({ db, thing, to, actor, roster: null, groundOwner: null, dials, rows, writeEdge: false }); // throws the door's own bounce on refusal
+    // THE CARRY CAP (WLD-27), asked of whoever ends up holding it, inside the
+    // turn so two holds cannot both pass a cap only one of them fits. Absent
+    // (`carry: null`) for a caller that measures no load.
+    if (carry && (did.did === "take" || did.did === "give")) await carry({ who: did.holder, attachments: rows });
     const { at, witnesses } = await witnessStamp(did.declared_by);
     const row = await appendActFlipped(db, holdingEntry(did, { crossing: currentCrossing(), at, witnesses, cls: CLASS_HOLDING, household: resolvedWorldHousehold(key) }));
     // Which store is the RECORD for this act — said in the answer, as the stance
@@ -1302,3 +1592,45 @@ export async function declareHoldingFlipped({ db, thing, to = null, actor, dials
 // One flipped hold at a time, in this process (see THE FLIPPED HOLD above).
 // A turn that refuses or throws still hands the queue on.
 let holdingQueue = Promise.resolve();
+
+/**
+ * ONE TURN OF THE HOLDING QUEUE, for a door that is not `declareHoldingFlipped`
+ * (WLD-27's counted units, world-units.mjs). Units and things are one hold
+ * lane, so they serialize on one queue: a give of a thing and a take of units
+ * that both read the carrier's load cannot both pass a cap only one of them fits.
+ */
+export function holdTurn(fn) {
+  if (IN_READ_WORKER) throw new Error("a hold is written on the main thread only — the holding queue serializes one thread, and this is a read worker");
+  const turn = holdingQueue.then(() => fn());
+  holdingQueue = turn.catch(() => {});
+  return turn;
+}
+
+/**
+ * THE CARRY CAP FOR A THING TAKEN OR GIVEN (WLD-27): every thing held whole is
+ * one slot — a portable chest included, whatever it holds — and every counted
+ * unit is one. The cap is the thing class's declared `carry_cap`, read here.
+ */
+async function carryForThings({ who, attachments }) {
+  // the resident's own capacity (constitution, 24), property first; the thing class's older carry_cap second (G4)
+  const cap = holdingOf({ className: "resident", classProperty, legacy: { capacity: thingDials()?.carry_cap } }).capacity;
+  if (!Number.isInteger(cap)) return;
+  const [{ storeHoldingRows }, { foldUnits, totalOf, isUnitRow, refuseOverCarry }] = await Promise.all([import("./world2-guards.mjs"), import("./world-stacks.mjs")]);
+  const { inFlightFor } = await import("./world-units.mjs");
+  const { officeRead } = await import("./world2-pen.mjs");
+  const dropsOut = async (h) => officeRead(async (c) => (await import("./drop-recovery.mjs")).dropsStillOut(c, h), { by: "dropsOut" });
+  const inFlight = await inFlightFor(who, { dropsOut });   // BEFORE the held rows (world-units.mjs § inFlightFor)
+  const units = totalOf(foldUnits((await storeHoldingRows()).filter(isUnitRow)), who) + inFlight;
+  refuseOverCarry({ who, units, things: holdingsOf(attachments, who).length, adding: 1, cap });
+}
+
+/** The counted holding, for the holdings read: one edge per label and what it shows. */
+async function unitsHeldBy(handle) {
+  try {
+    const [{ storeHoldingRows }, { foldUnits, isUnitRow }, { classViewOf, holdsBlock }, { lawSnapshot }] = await Promise.all([
+      import("./world2-guards.mjs"), import("./world-stacks.mjs"), import("./world-units.mjs"), import("./law-snapshot.mjs")]);
+    return holdsBlock(foldUnits((await storeHoldingRows()).filter(isUnitRow)), handle, classViewOf(lawSnapshot()));
+  } catch (e) {
+    return { unreadable: `the counted holding could not be read (${plainReason(e, "record", "the counted holding")})` };
+  }
+}

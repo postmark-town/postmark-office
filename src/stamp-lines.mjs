@@ -79,6 +79,20 @@ const sigOk = (key, seal, sig) => {
   catch { return false; }
 };
 
+/**
+ * The canonical text of the store's welcome rows, in ledger order (POS-495): the
+ * quest rows date the welcome bundle by them. The LIKE only narrows; the town's
+ * `classifyEntry` decides which are welcomes (quest-standing.mjs §
+ * welcomeDatesFrom). Null when the store has no stamp_lines table (066 not
+ * applied); an empty table is an empty list. SQL only.
+ */
+export async function welcomeLinesVia(q) {
+  const { rows: [t] } = await q.query("SELECT to_regclass('stamp_lines') IS NOT NULL AS ok");
+  if (!t?.ok) return null;
+  const { rows } = await q.query("SELECT canonical FROM stamp_lines WHERE canonical LIKE '% · for: welcome:%' ORDER BY seq");
+  return rows.map((r) => r.canonical);
+}
+
 /** The store's last row, `{ seq, canonical, sig, seal }` or null: one SQL read. */
 export async function stampHeadVia(q) {
   const { rows: [head] } = await q.query("SELECT seq, canonical, sig, seal FROM stamp_lines ORDER BY seq DESC LIMIT 1");

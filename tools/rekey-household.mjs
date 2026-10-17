@@ -45,7 +45,7 @@ import { join, resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { execFileSync } from "node:child_process";
 import { loadRegistryRows, renameHousehold } from "../src/registry-store.mjs";
-import { registryFromRows, pinsFromRows, renderRegistry } from "../src/registry-rows.mjs";
+import { registryFromRows, pinsFromRows, renderPublicRegistry } from "../src/registry-rows.mjs";
 import { slugIsWellFormed, collectingDrain } from "../src/ceremony.mjs";
 import { isHouseholdName } from "../src/declare.mjs";
 import { registryLine } from "../src/house-key.mjs";
@@ -131,7 +131,7 @@ export function planRekey({ from, to, name, rows, clone, date }) {
   // COLLATERAL: what the drain would print must differ from the town's files
   // only in the named household. Anything else means the files are behind the
   // store somewhere else, and this act would carry that change unasked.
-  const printed = renderRegistry(after);
+  const printed = renderPublicRegistry(after); // what the drain PRINTS (POS-394: the public render)
   const filesHouses = JSON.parse(read(clone, REGISTRY_PATH) ?? "{}").households ?? {};
   const printedHouses = JSON.parse(printed.households).households ?? {};
   const moved = [];

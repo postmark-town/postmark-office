@@ -362,7 +362,12 @@ test("world_hold and world_holdings are on the flat tool list", async () => {
   assert.ok(names.includes("world_hold"));
   assert.ok(names.includes("world_holdings"));
   const hold = WORLD_TOOLS.find((t) => t.name === "world_hold");
-  assert.deepEqual(hold.inputSchema.required, ["thing"]);
+  // `thing` stopped being required with WLD-27: counted units move by
+  // label/count/from/to with no thing named. The door itself refuses a call
+  // naming none of them ("which thing?"), so the requirement moved, not left.
+  assert.equal(hold.inputSchema.required, undefined);
+  for (const field of ["thing", "to", "label", "count", "from", "act", "chest", "handle"]) assert.ok(field in hold.inputSchema.properties, field);
+  assert.deepEqual(hold.inputSchema.properties.act.enum, ["consume", "refill"]);
   assert.equal(hold.inputSchema.additionalProperties, false);
   // The door must SAY the decoupling, not merely implement it.
   assert.match(hold.description, /WHO MADE IT IS NOT WHO HOLDS IT/);

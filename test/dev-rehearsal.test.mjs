@@ -16,9 +16,9 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { CROSSING, PROD_DB, SANDBOX_CHECK, carried, databaseOf, githubStub, parseEnvFile, sandboxProblems, sandboxVerdictFromGitHub, storeGuard, treeTables } from "../tools/dev-rehearsal.mjs";
+import { CROSSING, PROD_DB, SANDBOX_CHECK, carried, databaseOf, findGround, githubStub, mistsSafeBox, parseEnvFile, sandboxProblems, sandboxVerdictFromGitHub, storeGuard, treeTables } from "../tools/dev-rehearsal.mjs";
 
 const OFFICE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const TOOL = join(OFFICE, "tools", "dev-rehearsal.mjs");
@@ -220,4 +220,95 @@ test("a skipped or cancelled run never shadows a verdict, and alone it asks for 
   const [why] = sandboxProblems("abc1234", only, "train/2026-w42");
   assert.match(why, /every "stamp sandbox" run on abc1234 \(train\/2026-w42\) was skipped or cancelled \(2\), so none judged the code: re-run the sandbox/);
   assert.doesNotMatch(why, /a stamp event is red/);
+});
+
+// ── the rehearsal's ground (POS-595) ─────────────────────────────────────────
+//
+// Until crossing 244 the rehearsal stood at x 30000, y 30000, outside the Mists'
+// border, and the door refused its claim 422 at the wall. These hold the search
+// that replaced the fixed ground: the box it searches is clear at every keyframe,
+// it refuses by name when nothing in the box is free, and it never falls back.
+
+const WORLD = join(OFFICE, "world-clone");
+const { publishedSkeleton } = await import("../src/world-branches.mjs");
+const engine = () => import(pathToFileURL(join(WORLD, "tools", "world-engine.mjs")).href);
+const corners = (f) => [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([dx, dy]) => ({ x: f.at.x + (dx * f.extent.w) / 2, y: f.at.y + (dy * f.extent.h) / 2 }));
+
+test("ground chosen at crossing 244 is still clear of the wall and its fringe at the last keyframe, and long after it", async () => {
+  const { mistsAt, mistsHere } = await engine();
+  const { skeleton } = publishedSkeleton(WORLD);
+  assert.ok(skeleton?.mists?.schedule?.length, "the pinned world's blessed skeleton carries the Mists (POS-466)");
+  const safe = mistsSafeBox(skeleton.mists, mistsAt);
+  assert.deepEqual(safe.keyframes, skeleton.mists.schedule.map((k) => k.crossing));
+  const last = skeleton.mists.schedule.at(-1).crossing;
+  // the old ground, the control: behind the wall from the first keyframe on
+  assert.equal(mistsHere({ x: 30000, y: 30000 }, mistsAt(244, skeleton.mists)).inWall, true);
+  // many runs' ground, the run id's walk from several starts, every corner of all four footprints
+  for (const run of ["0", "1", "abc1", "zzzz", "gm3k2"]) {
+    const g = await findGround({ run, safe, parcelM: 25, taken: async () => null });
+    for (const crossing of [244, 260, 272, last, 400]) {
+      const m = mistsAt(crossing, skeleton.mists);
+      for (const f of g.footprints) for (const q of corners(f)) {
+        const h = mistsHere(q, m);
+        assert.equal(h.inWall, false, `run ${run}: ${f.name}'s corner (${q.x}, ${q.y}) is behind the wall at crossing ${crossing}`);
+        assert.ok(h.wallM >= m.fringeM, `run ${run}: ${f.name}'s corner (${q.x}, ${q.y}) stands in the fringe at crossing ${crossing} (${h.wallM} m from the wall)`);
+      }
+    }
+  }
+});
+
+test("a safe box filled with standing parcels refuses by name, with the box and the count of places tried, and never falls back to fixed ground", async () => {
+  const { mistsAt } = await engine();
+  // a small world: a 1200 m border, the pinned world's fringe, the wall at the border
+  const mists = { border_m: { minX: 0, minY: 0, maxX: 1200, maxY: 1200 }, fringe_m: 400, schedule: [{ crossing: 244, front_m: 0, veil: 0.1 }] };
+  const safe = mistsSafeBox(mists, mistsAt);
+  assert.deepEqual(safe.box, { minX: 500, maxX: 700, minY: 500, maxY: 700 });
+  const asked = [];
+  const full = async (footprints) => { asked.push(footprints[0].at); return `the standing parcel "rh-old/ground-${asked.length}"`; };
+  await assert.rejects(findGround({ run: "abc1", safe, parcelM: 25, taken: full }), (e) => {
+    assert.equal(e.refusal, true);
+    assert.match(e.message, /^no free ground for the rehearsal inside the Mists' safe box x 500\.\.700, y 500\.\.700 \(clear at keyframes 244, inset 500 m\): 3 of 3 places tried, each covered \(the last by the standing parcel "rh-old\/ground-3"\)$/);
+    return true;
+  });
+  assert.equal(asked.length, 3);
+  assert.ok(asked.every((at) => at.x < 1200 && at.y < 1200), `every place asked stands in the box: ${JSON.stringify(asked)}`);
+  // a box too small for the two parcels refuses before it asks anything
+  const tight = mistsSafeBox({ ...mists, border_m: { minX: 0, minY: 0, maxX: 1100, maxY: 1100 } }, mistsAt);
+  await assert.rejects(findGround({ run: "abc1", safe: tight, parcelM: 25, taken: full }), /no ground for the rehearsal inside the Mists' safe box x 500\.\.600, y 500\.\.600 .*: the box holds no place for its two 25 m parcels 100 m apart \(0 places tried\)/);
+  // a bounded search: at most maxTries places asked
+  asked.length = 0;
+  await assert.rejects(findGround({ run: "abc1", safe: mistsSafeBox(skeletonMists(), mistsAt), parcelM: 25, taken: full, maxTries: 7 }), /: 7 of \d+ places tried, each covered/);
+  assert.equal(asked.length, 7);
+});
+
+const skeletonMists = () => publishedSkeleton(WORLD).skeleton.mists;
+
+test("the run id picks where the walk starts, so two runs a minute apart stand on different ground; the first free place is taken", async () => {
+  const { mistsAt } = await engine();
+  const safe = mistsSafeBox(skeletonMists(), mistsAt);
+  const free = async () => null;
+  const a = await findGround({ run: (1000).toString(36), safe, parcelM: 25, taken: free });
+  const b = await findGround({ run: (1001).toString(36), safe, parcelM: 25, taken: free });
+  assert.notDeepEqual(a.parcelAt, b.parcelAt);
+  assert.ok(Math.abs(a.parcelAt.x - b.parcelAt.x) >= 25 || Math.abs(a.parcelAt.y - b.parcelAt.y) >= 25, "their parcels do not meet");
+  // the two parcels of one run stand apart, and the lamp and the planted copy stand on the first
+  const [p1, p2, lamp, copy] = a.footprints;
+  assert.ok(p2.at.y - p1.at.y > 25, "the by-hand parcel does not meet the first");
+  for (const f of [lamp, copy]) assert.ok(Math.abs(f.at.x - p1.at.x) + f.extent.w / 2 <= 12.5 && Math.abs(f.at.y - p1.at.y) + f.extent.h / 2 <= 12.5, `${f.name} stands on the first parcel`);
+  // covered places are walked past, in order, and the first free one is the answer
+  let n = 0;
+  const twoCovered = async () => (++n <= 2 ? "the pending parcel claim \"x\"" : null);
+  const c = await findGround({ run: (1000).toString(36), safe, parcelM: 25, taken: twoCovered });
+  assert.equal(c.tried, 3);
+  assert.deepEqual(c.parcelAt, { x: a.parcelAt.x + 120, y: a.parcelAt.y });
+});
+
+test("a world with no Mists keeps the old strip of ground, still asked for free ground", async () => {
+  const g = await findGround({ run: "abc1", safe: null, parcelM: 25, taken: async () => null });
+  assert.equal(g.parcelAt.y, 30000);
+  assert.equal(g.parcelAt2.y, 30100);
+  assert.equal(g.parcelAt.x, 30000 + (parseInt("abc1", 36) % 400) * 60);
+  assert.match(g.where, /the world has no Mists/);
+  assert.equal(mistsSafeBox(undefined, () => null), null);
+  assert.equal(mistsSafeBox({ schedule: [] }, () => null), null);
 });

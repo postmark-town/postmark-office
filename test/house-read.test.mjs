@@ -22,52 +22,58 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
-import { SCHEMA } from "../src/schema.mjs";
-import { doorstep } from "../src/queries.mjs";
+import { storeIndexPooled } from "../src/town-index-store.mjs";
 import { doorstepBundle } from "../src/doorstep-bundle.mjs";
 import { appendTownJournal } from "../src/town-journal.mjs";
 import { houseBundle, needsYou, isoAt, isoEvents, HOUSE_ONCE } from "../src/house-bundle.mjs";
 import { householdApex, HOUSEHOLD_READS, HOUSEHOLD_READ_FIELDS } from "../src/household-apex.mjs";
 import { poolFromClone, RECORD_ON } from "./registry-pool-stub.mjs";
 import { __setPoolForTest } from "../src/world2-acts.mjs";
-import { indexStore, testIndex } from "./helpers/office-under-test.mjs";
+import { indexStore } from "./helpers/office-under-test.mjs";
+import { putValues, emptyTown } from "./fixture.mjs";
 
 const AS_OF = "housefixture0000000000000000000000000000";
 const HOUSE = "fixture-house";
 const MEMBERS = ["r000", "r001", "r002", "r-harbor"];
 
 function houseDb() {
-  const db = new DatabaseSync(":memory:");
-  db.exec(SCHEMA);
-  const put = db.prepare("INSERT INTO meta VALUES (?, ?)");
-  put.run("as_of", AS_OF);
-  put.run("town_path", "fixture");
-  put.run("hydrated_counts", JSON.stringify({}));
-  const insR = db.prepare("INSERT INTO residents VALUES (?, ?)");
+  const db = emptyTown();
+  const put = (...v) => putValues(db, "meta", v);
+  put("as_of", AS_OF);
+  put("town_path", "fixture");
+  put("hydrated_counts", JSON.stringify({}));
+  const insR = (...v) => putValues(db, "residents", v);
   for (const [i, h] of ["r000", "r001", "r002", "r-stranger"].entries()) {
-    insR.run(h, JSON.stringify({ handle: h, is_office: false, last_active: `2026-09-2${i}T10:00:00.000Z`,
+    insR(h, JSON.stringify({ handle: h, is_office: false, last_active: `2026-09-2${i}T10:00:00.000Z`,
       address: { data: { since: "2026-01-01", joined: `2026-06-1${i}` } },
       window_state: { hand_set: "2026-08-24", sections: [{ title: "what I need", body: `pane of ${h}` }] } }));
   }
-  const insL = db.prepare("INSERT INTO letters VALUES (?,?,?,?,?,?,?,?,?,?)");
+  const insL = (...v) => putValues(db, "letters", v);
   for (let i = 0; i < 4; i++) {
     const id = `r001-2026-07-0${i + 1}-to-r000-n${i}`;
-    insL.run(id, "r001", "r000", `2026-07-0${i + 1}`, null, "inbox", "r000",
+    insL(id, "r001", "r000", `2026-07-0${i + 1}`, null, "inbox", "r000",
       `WHITE_PAGES/r000/inbox/${i}.md`, JSON.stringify({ id, from: "r001", to: "r000", body: `# letter ${i}` }), `2026-07-0${i + 1}T08:00:00.000Z`);
   }
-  const insB = db.prepare("INSERT INTO bulletin VALUES (?, ?)");
-  for (let i = 0; i < 4; i++) insB.run(`2026-07-0${i + 1}-n${i}`, JSON.stringify({ slug: `2026-07-0${i + 1}-n${i}`, data: { title: `notice ${i}` }, body: "# notice" }));
-  db.prepare("INSERT INTO ledger (kind, date, id, from_h, to_h, json) VALUES (?,?,?,?,?,?)").run("delivery", "2026-07-04", "l0", "r001", "r000", null);
-  db.prepare("INSERT INTO stamps VALUES (?,?,?,?)").run("r000", 12, 30, 3);
-  db.prepare("INSERT INTO mail_state VALUES (?, ?)").run("r000", JSON.stringify({
+  const insB = (...v) => putValues(db, "bulletin", v);
+  for (let i = 0; i < 4; i++) insB(`2026-07-0${i + 1}-n${i}`, JSON.stringify({ slug: `2026-07-0${i + 1}-n${i}`, data: { title: `notice ${i}` }, body: "# notice" }));
+  // the store keeps every ledger line's json (town_ledger.json is NOT NULL)
+  putValues(db, "ledger", ["delivery", "2026-07-04", "l0", "r001", "r000", "{}"], ["kind", "date", "id", "from_h", "to_h", "json"]);
+  putValues(db, "stamps", ["r000", 12, 30, 3]);
+  putValues(db, "mail_state", ["r000", JSON.stringify({
     handle: "r000", language: "sequence, never debt", conversations: [],
     unplaced_bounces: [{ date: "2026-06-16", path: "WHITE_PAGES/r000/outbox/x.md", reason: "no resident \"nobody\"" }],
     summary: { they_spoke_last: 0, new_inbound: 0, they_spoke_again: 0, reply_queued: 0, last_word_yours: 0, bounced: 1 },
-  }));
+  })]);
   return db;
 }
 
 const db = houseDb();
+// THE TOWN INDEX IS THE STORE'S (POS-656): one store for the file, holding the
+// fixture house (a test that needs other rows re-states it, and puts it back),
+// read through its own pool beside the registry's stubbed one below.
+const IX = await indexStore(db, { db: "house_read" });
+const IX_RESTORE = await IX.useInProcess();
+after(async () => { await IX_RESTORE(); await IX.stop(); });
 const scratch = mkdtempSync(join(tmpdir(), "postmark-house-"));
 after(() => rmSync(scratch, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
 mkdirSync(join(scratch, "tools"), { recursive: true });
@@ -87,7 +93,6 @@ after(() => {
   if (keepRecord.on === undefined) delete process.env.WORLD2_PG; else process.env.WORLD2_PG = keepRecord.on;
   if (keepRecord.url === undefined) delete process.env.WORLD2_PG_URL; else process.env.WORLD2_PG_URL = keepRecord.url;
 });
-const meta = { as_of: AS_OF, quest_registry: JSON.stringify({ quests: [] }) };
 const NOW = Date.parse("2026-09-27T06:00:00Z");
 
 /** Every world reader, counted, so "asked once" is a number and not a hope. */
@@ -119,7 +124,12 @@ function worldReaders() {
   };
 }
 
-const ctx = (over = {}) => ({ db, key: null, meta, asOf: AS_OF, clone: scratch, odb: null, nowMs: NOW, ...over });
+// The house's index: the store's pooled index, with last_active (the store's acts
+// and town_letters) answered by the suite's counted reader where a test hands one.
+const ixFor = (readers) => ({ ...storeIndexPooled(scratch), ...(readers?.lastActiveFor ? { lastActiveFor: (h) => readers.lastActiveFor(h) } : {}) });
+const ctx = (over = {}) => ({ key: null, asOf: AS_OF, clone: scratch, odb: null, nowMs: NOW, ix: ixFor(over.readers), ...over });
+/** The doorstep's own core, from the same index (town-index-store.mjs § doorstep). */
+const doorstep = (handle, opts) => storeIndexPooled(scratch).doorstep(handle, AS_OF, opts);
 
 test("THE HOUSE: residents ashore, one answer, the harbor named rather than dropped", async () => {
   const { readers } = worldReaders();
@@ -136,7 +146,7 @@ test("THE DOORSTEP'S NAMES: each resident's segments deep-equal the doorstep's, 
   const { readers } = worldReaders();
   const h = await houseBundle({ household: HOUSE }, ctx({ readers }));
   for (const who of h.ashore) {
-    const d = (await doorstep(db, who, AS_OF, { fresh: { odb: null, clone: scratch, asOf: AS_OF }, nowMs: NOW }));
+    const d = (await doorstep(who, { fresh: { odb: null, clone: scratch, asOf: AS_OF }, nowMs: NOW }));
     for (const k of ["mail", "awaiting", "stamps", "window", "pending_outbox", "counts"])
       assert.deepEqual(h.residents[who][k], d[k], `${who}.${k} is the doorstep's own ${k}`);
     assert.equal(h.residents[who].window.handle ?? who, who);
@@ -146,7 +156,7 @@ test("THE DOORSTEP'S NAMES: each resident's segments deep-equal the doorstep's, 
 test("ONCE: the town-wide blocks ride at the top and on no resident", async () => {
   const { readers } = worldReaders();
   const h = await houseBundle({ household: HOUSE }, ctx({ readers }));
-  const d = (await doorstep(db, "r000", AS_OF, { fresh: { odb: null, clone: scratch, asOf: AS_OF }, nowMs: NOW }));
+  const d = (await doorstep("r000", { fresh: { odb: null, clone: scratch, asOf: AS_OF }, nowMs: NOW }));
   for (const k of HOUSE_ONCE) {
     assert.deepEqual(h[k], d[k], `${k} at the top is the doorstep's`);
     for (const who of h.ashore) assert.ok(!(k in h.residents[who]), `${k} is not repeated on ${who}`);
@@ -207,7 +217,7 @@ test("THE GATE: a key holding r000 adds r000's owner-only blocks — the doorste
     const key = { household: "fixture", handles: new Set(["r000"]) };
     const { readers } = worldReaders();
     const h = await houseBundle({ household: HOUSE }, ctx({ readers, key, odb }));
-    const d = await doorstepBundle("r000", { db, key, meta, asOf: AS_OF, clone: scratch, odb, nowMs: NOW });
+    const d = await doorstepBundle("r000", { key, asOf: AS_OF, clone: scratch, odb, nowMs: NOW });
     assert.ok(h.residents.r000.your_pending_letters, "the sender's own unsailed letter rides their own resident");
     assert.deepEqual(h.residents.r000.your_pending_letters, d.your_pending_letters);
     assert.equal(h.residents.r000.pending_outbox, d.pending_outbox);
@@ -222,41 +232,39 @@ test("THE GATE: a key holding r000 adds r000's owner-only blocks — the doorste
 
 // ── the gate on the store's road, with a threaded standing letter (POS-375; #446 review, finding 4) ──
 //
-// The test above reads office.db, where no standing letter is read. Here the
-// house and the doorstep read the store, r000 holds a delivered letter from
-// r001, and r000's reply to it stands in the log: the awaiting segment turns
+// Here r000 holds a delivered letter from r001, and r000's reply to it stands
+// in the log: the awaiting segment turns
 // reply_queued on the key that holds r000, the house's segment is the
 // doorstep's, and no other read (no key, another household's key, the
 // awaiting view under a key that does not hold r000) names the reply.
-const STORE = testIndex() === "office" && "the office.db road reads no standing letters (POS-268)";
-test("THE GATE, ON THE STORE: a threaded standing reply turns r000's thread queued on r000's key, and on no other read", { skip: STORE }, async () => {
+test("THE GATE, ON THE STORE: a threaded standing reply turns r000's thread queued on r000's key, and on no other read", async () => {
   const sdb = houseDb();
   const answering = "r001-2026-07-04-to-r000-n3";
-  sdb.prepare("UPDATE mail_state SET json = ? WHERE handle = ?").run(JSON.stringify({
+  sdb.mail_state.find((r) => r.handle === "r000").json = JSON.stringify({
     handle: "r000", language: "sequence, never debt",
     conversations: [{ conversation: answering, attention_state: "new_inbound", reason: "a letter with no word of yours in the conversation yet",
       latest_delivered_id: answering, latest_delivered_from: "r001", queued_reply_id: null,
       latest_event: { ordinal: 0, date: "2026-07-04" }, next_actor: "you", others: ["r001"], letters: 1 }],
     summary: { they_spoke_last: 1, new_inbound: 1, they_spoke_again: 0, reply_queued: 0, last_word_yours: 0, bounced: 0 },
-  }), "r000");
-  sdb.exec("UPDATE ledger SET json = '{}' WHERE json IS NULL"); // the store keeps every ledger line's json
+  });
   const reply = "r000-2026-09-26-to-r001-answered";
   const odb = new DatabaseSync(":memory:");
   odb.exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)");
   await appendTownJournal(odb, { cls: "letter", act: "send-letter", household: "fixture", handle: "r000",
     payload: { args: { from: "r000", to: "r001", title: "answered", body: "standing", thread: answering },
       id: reply, file: "WHITE_PAGES/r000/outbox/answered.md" } });
-  const store = await indexStore(sdb);
-  const restore = await store.useInProcess();
+  // the file's store re-stated with this test's house, and put back after
+  const kept = { ...db };
+  Object.assign(db, sdb);
+  await IX.reseed();
   process.env.TOWN_SINGLE_LOG = "1";
   try {
-    const tis = await import("../src/town-index-store.mjs");
-    const ix = tis.storeIndexPooled(scratch);
+    const ix = storeIndexPooled(scratch);
     const key = { household: "fixture", handles: new Set(["r000"]) };
     const { readers } = worldReaders();
-    const sctx = (over) => ctx({ db: sdb, readers, odb, ix, ...over });
+    const sctx = (over) => ctx({ readers, odb, ix, ...over });
     const h = await houseBundle({ household: HOUSE }, sctx({ key }));
-    const d = await doorstepBundle("r000", { db: sdb, key, meta, asOf: AS_OF, clone: scratch, odb, nowMs: NOW, ix });
+    const d = await doorstepBundle("r000", { key, asOf: AS_OF, clone: scratch, odb, nowMs: NOW, ix });
     const row = h.residents.r000.awaiting.conversations.find((c) => c.conversation === answering);
     assert.equal(row.attention_state, "reply_queued", "the house read's store road turns the thread queued");
     assert.equal(row.queued_reply_id, reply);
@@ -268,10 +276,10 @@ test("THE GATE, ON THE STORE: a threaded standing reply turns r000's thread queu
     const stranger = await houseBundle({ household: HOUSE }, sctx({ key: strangerKey }));
     assert.equal(JSON.stringify(stranger).includes(reply), false, "another household's key: no trace");
     const view = await householdApex({ read: "mail", handle: "r000", view: "awaiting" }, strangerKey,
-      { db: sdb, clone: scratch, odb, meta, asOf: AS_OF });
+      { clone: scratch, odb, asOf: AS_OF });
     assert.equal(JSON.stringify(view).includes(reply), false, "the awaiting view under a key that does not hold r000: no trace");
     assert.equal(view.conversations?.find((c) => c.conversation === answering)?.attention_state, "new_inbound");
-  } finally { delete process.env.TOWN_SINGLE_LOG; await restore(); await store.stop(); odb.close(); }
+  } finally { delete process.env.TOWN_SINGLE_LOG; Object.assign(db, kept); await IX.reseed(); odb.close(); }
 });
 
 // ── needs-you ───────────────────────────────────────────────────────────────
@@ -302,17 +310,44 @@ test("NEEDS-YOU: every row names its cause, and a key ask never carries its co-s
     for (const row of n[group].rows) assert.ok(typeof row.cause === "string" && row.cause.length > 10, `${group} row names its cause`);
 });
 
+test("NEEDS-YOU (WLD-51 part 3): an at-risk row carries the stakes row whole, its mark's body included", async () => {
+  const { readers } = worldReaders();
+  readers.stakesFor = async () => ({ next_settlement: { at: "2026-09-28T00:00:00.000Z" }, count: 1, at_risk: 1,
+    rows: [{ mark: "r001/shed", kind: "sited", body: "A shed of salvaged boards, door on a leather hinge.", class: "commons", escrow: 0, at_risk: true, act: 'world { do: "stake" }' }] });
+  const key = { household: "fixture", handles: new Set(["r000", "r001"]) };
+  const n = await needsYou({}, ctx({ readers, key }));
+  assert.equal(n.stakes_at_risk.rows[0].body, "A shed of salvaged boards, door on a leather hinge.");
+});
+
+test("NEEDS-YOU, ALERTS (WLD-51, Darko 2026-10-15 19:29): the house's alerts in the doorstep's one shape, counted; an unread kind is named, and the quiet note never claims nothing waits", async () => {
+  const { readers } = worldReaders();
+  const taken = { kind: "mark-taken", severity: "act", about: { mark: "r000/kite", body: "A kite of waxed paper." },
+    message: "r000/kite had no stamps behind it, so it left the world at the Oct 15, 2:00 pm EDT settlement. It's back in your household's drafts, and its author, r000, can stake it, or leave it again with a stamp, to bring it back.",
+    act: { verb: "world.stake", args: { mark: "r000/kite", stamps: 1, handle: "r000" } }, since: "2026-10-15T18:00:00.000Z", until: "2026-10-22T18:00:00.000Z" };
+  const asked = [];
+  readers.alertsFor = async (handles) => { asked.push([...handles]); return { alerts: [taken], unread: [] }; };
+  const key = { household: "fixture", handles: new Set(["r000", "r001"]) };
+  const n = await needsYou({}, ctx({ readers, key }));
+  assert.deepEqual(asked, [["r000", "r001"]], "every resident of the house here");
+  assert.deepEqual(n.alerts, [taken]);
+  assert.equal("left_the_world" in n, false, "the loose rows are gone: the alert replaces them");
+  assert.equal(n.count, 3 + 1, "the alert counts beside the stances, the bounces and the at-risk mark");
+  readers.alertsFor = async () => ({ alerts: [], unread: [{ kind: "mark-taken", reason: "down" }] });
+  const blind = await needsYou({}, ctx({ readers, key }));
+  assert.deepEqual([blind.alerts, blind.alerts_unread], [[], [{ kind: "mark-taken", reason: "down" }]]);
+});
+
 // ── the door ────────────────────────────────────────────────────────────────
 
 test("THE DOOR: both reads are on the household door's list, declare their field, and refuse an unknown one", async () => {
   assert.ok(HOUSEHOLD_READS.house && HOUSEHOLD_READS["needs-you"]);
   assert.deepEqual(Object.keys(HOUSEHOLD_READ_FIELDS.house), ["household"]);
   const bad = await householdApex({ read: "house", args: { household: HOUSE, bogus: 1 } }, null,
-    { db, clone: scratch, meta, asOf: AS_OF, strictFields: true });
+    { clone: scratch, asOf: AS_OF, strictFields: true });
   assert.equal(bad.code, 422);
-  const none = await householdApex({ read: "house", household: "no-such-house" }, null, { db, clone: scratch, meta, asOf: AS_OF });
+  const none = await householdApex({ read: "house", household: "no-such-house" }, null, { clone: scratch, asOf: AS_OF });
   assert.equal(none.code, 404);
-  const anon = await householdApex({ read: "needs-you" }, null, { db, clone: scratch, meta, asOf: AS_OF });
+  const anon = await householdApex({ read: "needs-you" }, null, { clone: scratch, asOf: AS_OF });
   assert.equal(anon.code, 401);
 });
 

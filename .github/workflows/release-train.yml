@@ -109,8 +109,8 @@ jobs:
           while git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; do
             N=$((N+1)); TAG="$BASE.$N"
           done
-          # A TRAIN IS A WEEK'S SHIP, NAMED FOR THE WEEK IT SHIPS IN (OPERATIONS.md
-          # § Release Day). This refuses a tag named for a week that has not begun
+          # A TRAIN IS A WEEK'S SHIP, NAMED FOR THE WEEK IT SHIPS IN (postmark-telemetry
+          # docs/SHIPPING.md § 2). This refuses a tag named for a week that has not begun
           # — the 2026-09-03 class: w37 merged and tagged on a Thursday of week 36.
           # The founder flexes single instances by name in tools/train-week-check.mjs.
           TZ=America/New_York node tools/train-week-check.mjs "$TAG"
@@ -228,7 +228,7 @@ jobs:
             || { echo "::error::$TAG is not a tag in this repo"; exit 1; }
           case "$TAG" in
             release/*) : ;;
-            *) echo "::error::$TAG is not a release/* tag. OPERATIONS.md: branches are train/*, tags are release/* — prod deploys FROM THE TAG, never from a branch."; exit 1 ;;
+            *) echo "::error::$TAG is not a release/* tag. SHIPPING.md § 3 (postmark-telemetry): branches are train/*, tags are release/* — prod deploys FROM THE TAG, never from a branch."; exit 1 ;;
           esac
           SHA=$(git rev-parse "refs/tags/$TAG^{commit}")
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"

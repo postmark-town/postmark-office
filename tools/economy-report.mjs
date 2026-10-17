@@ -162,6 +162,9 @@ const SOURCE_OF = {
   // An award on an idea post (POS-290): a hand pays a credited resident, one
   // line per post and label, written by the reviewed award pass.
   "post-award": "awards",
+  // A quest the town pays by hand-reviewed pass (POS-632): one line per quest
+  // and household, written by tools/quest-pay-plan.mjs.
+  "quest-pay": "quests",
   // A bug stage paid again to the right resident (POS-649), `for:
   // post:<post>/<stage>-recredit`. Its twin, the burn of the wrong mint, mints
   // nothing, so it never reaches this table; it is the supply's `burned`.

@@ -40,6 +40,10 @@ lawful AS (
     -- each mark, written once from the same clone and connection as the
     -- settlement row above; INSERT only, because that fact never moves.
     ('office_api',   'mark_carried',     'INSERT'),
+    -- 075_amend_carried.sql (POS-612). Which settlement carried each door amend,
+    -- written on the same tick from the same clone and connection, and only when
+    -- git proves that settlement changed the mark's file; INSERT only.
+    ('office_api',   'amend_carried',    'INSERT'),
     -- 053_position_snapshots.sql (POS-302). Each resident's governing departure,
     -- kept once per clearing from the keep tick's own connection; INSERT only,
     -- because a snapshot is written once and never moves.
@@ -70,6 +74,11 @@ lawful AS (
     -- the road that lands the address after its commit; INSERT only, because
     -- coming ashore is a fact that happened and never an edit.
     ('office_api',   'ashore',                 'INSERT'),
+    -- 074_arrival_entries.sql (WLD-5, POS-618). A walk's enter-on-arrival:
+    -- INSERT by the walk door, UPDATE by the arrival tick's settle, which 074's
+    -- trigger allows once per row and only on the settle columns; no DELETE.
+    ('office_api',   'arrival_entries',        'INSERT'),
+    ('office_api',   'arrival_entries',        'UPDATE'),
     -- 019_households.sql. The household registry as store-of-record: the two
     -- town JSON files become a rendering of these tables. `office_api` because
     -- it is the role the door that DECLARES a household already connects as
