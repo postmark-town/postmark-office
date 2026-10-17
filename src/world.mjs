@@ -47,7 +47,7 @@ import { guardedDraftsForKey, guardedLiveChildrenOf, guardedLiveMarks } from "./
 import { WORLD_STAKE_TOOLS, actingAs, callWorldStakeTool, emptyPurseRefusalFor, heldAtOffice, worldPortfolioStakeSlice, markStakeBlock } from "./world-stake.mjs"; // P3 draft, append-shaped
 import { toConfirm } from "./stamps-preview.mjs"; // POS-83: the inline stake's half of the confirmation step
 import { visitorRulesGate } from "./visitor-rules.mjs"; // POS-300: a berth reads the town's rules for visitors before its first say
-import { classNodeNameOf, isSited, kindFieldOf, markClassOf } from "./world-grants.mjs"; // the kind rung: a mark's class and standing, in both forms (LOGOS v2, O1)
+import { classNodeNameOf, isSited, kindFieldOf, lineageOf, markClassOf } from "./world-grants.mjs"; // the kind rung: a mark's class and standing, in both forms (LOGOS v2, O1)
 import { classNames, classRoster, classDials, classExtendsOf, classProperty, departurePace, freeCellIn, STRIDE_MARK_ID } from "./world-classes.mjs";
 import { makersOf } from "./holding-law.mjs"; // who may make an instance: the class's own makers (LOGOS v2, O1) // which classes exist — read from the record, never held
 import { HOLD_TOOLS, callHoldTool } from "./world-hold.mjs"; // the object primitive: who holds what
@@ -4318,31 +4318,35 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
       throw bounce(422, `unknown class "${klass}"`,
         `the law knows: ${[...roster].sort().join(", ")}${disclosed ? ` — NOTE: ${disclosed}` : ""}`);
     if (source === "floor") console.error(`[world_leave_mark] class roster from floor: ${disclosed}`);
-    // ── WHO may instantiate (#1797): the roster says a class EXISTS; it does
-    // not say a resident may cite it. Residents instantiate only the ruled
-    // whitelist — the same set board-grammar.test.mjs asserts on the live
-    // tree ("this set grows by ruling, never by drift"). Every caller at THIS
-    // door is a resident household; the town's own class marks arrive by the
-    // town's pen, never here. Found 2026-08-22 when a resident's class: home
-    // sailed through and the settlement shadow caught it as a would-refuse.
-    // ── A HELD UNIT SET DOWN IS NOT A RESIDENT PLACING CANDY (WLD-27; Wright,
-    // 2026-10-13T00:09Z). Candy stays off the whitelist: town alone makes it.
-    // The one road a resident's candy mark arrives by is the hold door's drop
-    // (world-hold.mjs § THE UNIT SET DOWN), which hands its own act in as
-    // `dropUnit` — a parameter no caller's payload can set — and the mark it
-    // files must name that very act and label. Anything else carrying class:
-    // candy falls to the whitelist refusal below, exactly as before.
+    // ── WHO may make it is the CLASS's own answer (LOGOS v2, lane O1). The roster
+    // says a class EXISTS; its `makers` property, inherited down `extends`, says
+    // whether a resident may make one (classes.md § makers, ruled 16:02, shaped
+    // 18:44). The hand-kept whitelist that stood here (#1797; idea 08-30; chest
+    // 10-12) is retired, and so is "candy stays off it": the candy kinds inherit
+    // thing's `makers: true` ("residents may make instances of any of them").
+    // Every caller at THIS door is a resident household; the town's own class
+    // marks arrive by the town's pen, never here.
+    //
+    // A held unit set down (WLD-27) still passes on its own road: the hold
+    // door's drop hands its own act in as `dropUnit`, a parameter no caller's
+    // payload can set, and the mark it files names that very act and label.
     const droppedUnit = klass === "candy" && dropUnit != null
       && payload.dropped === `act:${dropUnit.actId}` && payload.label === dropUnit.label && kind === "sited";
-    // ── WHO may make it is the CLASS's own answer (LOGOS v2, lane O1): its
-    // `makers` property, inherited down `extends`; the hand-kept whitelist that
-    // stood here is retired (classes.md § makers, ruled 16:02 / 18:44).
+    // AN UNREADABLE CLASS LAYER IS AN OUTAGE, NOT A REFUSAL (review-606 B2). When
+    // the roster stands on its floor, or the class's lineage dangles (it ends at
+    // a class the layer does not hold), the office cannot tell whether a
+    // resident may make one, and saying "town-only" would be a false sentence.
+    // It says what happened instead, as the roster's own bounce above does.
+    const lineage = droppedUnit ? [] : lineageOf(klass, classExtendsOf());
+    if (!droppedUnit && (source === "floor" || !roster.has(String(lineage[lineage.length - 1] ?? klass))))
+      throw bounce(503, `who may make a "${klass}" could not be read`,
+        `the class layer is not readable here, so the office cannot tell whether this class is a resident's to make; nothing was written — try again shortly${disclosed ? ` — NOTE: ${disclosed}` : ""}`);
     const makers = droppedUnit ? null : makersOf(klass, classProperty);
     if (!droppedUnit && !makers.may)
       throw bounce(422, `class "${klass}" is town-only`,
         makers.read
-          ? `its makers is false (set on ${makers.from}): a resident may make an instance unless it would give them control over something that mints or confers standing (the-town/nothing-you-control-mints), so this class is the town's to make — explain: "${klass}" says who makes what`
-          : `no class in "${klass}"'s lineage states makers, and an unread makers answers false, the root's own answer (postmark-node) — the class exists in the law, but making one is the town's act, not a resident's`);
+          ? `its makers is false (set on ${makers.from}): a resident may make an instance unless it would give them control over something that mints or confers standing (the-town/nothing-you-control-mints), so this class is the town's to make — world { explain: "${klass}" } says who makes what`
+          : `no class in "${klass}"'s lineage states makers, and an unread makers answers false, the root's own answer (postmark-node), so making one is the town's act, not a resident's — world { explain: "${klass}" } says who makes what`);
   }
 
   // ── the thing grammar (the object primitive) ────────────────────────────────

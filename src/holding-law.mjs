@@ -59,11 +59,17 @@ export function holdingOf({ mark = null, className, classProperty, legacy = {} }
   const min = whole(c?.children?.min?.value) ?? whole(legacy.capacity_min);
   const max = whole(c?.children?.max?.value) ?? whole(legacy.capacity_max);
   const ownCap = own("capacity", c);
-  const capacity = whole(ownCap) ?? whole(c?.value) ?? whole(legacy.capacity);
+  // AN OWN CAPACITY OUTSIDE ITS BOUNDS IS REFUSED, never clamped (review-606):
+  // a Candy Bag asking 500 beside its max 200 holds no number here, and says
+  // why, so no reader can act on a capacity the law does not allow.
+  const asked = whole(ownCap);
+  const outside = asked != null && ((min != null && asked < min) || (max != null && asked > max));
+  const capacity = outside ? null : asked ?? whole(c?.value) ?? whole(legacy.capacity);
   const o = read("open");
   const open = truth(own("open", o) ?? o?.value) ?? (legacy.open === undefined ? null : legacy.open === true);
   return {
     holder, capacity, min, max, open,
+    ...(outside ? { capacity_refused: `a capacity of ${asked} is outside ${min ?? "…"}..${max ?? "…"}, the bounds its class sets` } : {}),
     capacity_said_by: ownCap !== undefined ? "the mark" : c ? c.from : legacy.capacity !== undefined ? "the older dial" : null,
     from: { holder: h?.from ?? null, capacity: c?.from ?? null, open: o?.from ?? null },
     source: { holder: h?.source ?? null, capacity: c?.source ?? null, open: o?.source ?? null },
