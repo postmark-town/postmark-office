@@ -32,7 +32,7 @@ export const chestsCandyOn = (env = process.env) => env[CHESTS_CANDY_ENV] === "1
 export const CHESTS_CANDY_OFF = Object.freeze({
   code: 409,
   defect: "the older chest-and-label doors are closed",
-  hint: "candy works by kind now: leave-mark { kind, count, to } makes it, and take, give, refill and consume name a kind and a holder (to:, from: or thing:, never chest: or label:); a chest is any thing made with holder: true — nothing was changed",
+  hint: "candy works by kind now: leave-mark { kind, count, to } makes it; take, give and refill name a kind and a holder (to:, from: or thing:, never chest: or label:), and consume names the kind you carry; a chest is any thing made with holder: true — nothing was changed",
 });
 
 /** The refusal as the doors throw it: a refusal-shaped error every door's catch already sends. */

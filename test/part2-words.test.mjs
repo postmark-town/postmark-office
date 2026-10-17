@@ -50,3 +50,9 @@ test("v2 · the carry lines name part 2's acts: making by count, taking from a h
   assert.match(ONE_LINERS.refill.says, /made/, "refill is the maker's");
   for (const v of ["consume", "refill"]) assert.ok(ACT_GROUPS.carry.includes(v), `${v} rides with the carry acts, not under more`);
 });
+
+test("review-616 nit · the dark door's hint gives consume no holder: it uses up a kind you carry", () => {
+  assert.doesNotMatch(CHESTS_CANDY_OFF.hint, /consume names? a kind and a holder/);
+  assert.match(CHESTS_CANDY_OFF.hint, /consume names the kind you carry/);
+});
+
