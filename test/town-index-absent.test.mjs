@@ -24,6 +24,7 @@ import { seedTownIndex } from "./helpers/index-to-store.mjs";
 import { twinGolden, steady } from "./helpers/twin-golden.mjs";
 import { townClone, townModuleUrl } from "./fixture-paths.mjs";
 import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
+import { currentCrossing } from "../src/crossings.mjs"; // the town clock the manifest serves
 
 // WLD-27's chest and candy doors ship dark (chests-candy.mjs), so these offices run dark, and the doorstep
 // answers whose record is read with its `holds` stripped are named here (helpers/twin-golden.mjs § withoutHolds).
@@ -116,13 +117,32 @@ function firstDiff(a, b) {
 const CHANGED = {
   "REST /": [["rehydrates from the town repo every few minutes;", "the office's store re-reads the town repo every fifteen minutes;"]],
 };
-// the twin's recorded answer under `label` (helpers/twin-golden.mjs), against this one
-const same = (what, label, answer) => {
+// THE TOWN CLOCK AT THE DOOR: the manifest serves crossing.number as
+// currentCrossing() at the moment it answers (server.mjs § the manifest), so the
+// record's number is the crossing it was made in, not the index's. The expected
+// number is derived as the office derives it, from crossings.mjs, across the ask:
+// the answer must name a crossing between the clock's reading before the ask and
+// its reading after, and the record is held to that number; nothing else moves.
+const CLOCKED = { "REST /": (a) => a?.body?.["<json>"]?.crossing };
+// the twin's recorded answer under `label` (helpers/twin-golden.mjs), against this one;
+// `asked` is the town clock's crossing read just before the ask
+const same = (what, label, answer, asked = null) => {
   const got = steady(answer);
   let was = TWINS.of(label, { dark: DARK.has(label) });
   for (const [then, now] of CHANGED[label] ?? []) {
     assert.ok(was.includes(then), `${label}: the record no longer says "${then}", so this substitution is stale`);
     was = was.split(then).join(now);
+  }
+  const clocked = CLOCKED[label];
+  if (clocked) {
+    const after = currentCrossing();
+    const rec = JSON.parse(was), live = JSON.parse(got);
+    assert.ok(Number.isInteger(clocked(rec)?.number), `${label}: the record carries no crossing number, so this derivation is stale`);
+    assert.ok(Number.isInteger(asked), `${label}: asked without the town clock's reading before the ask`);
+    const n = clocked(live)?.number;
+    assert.ok(Number.isInteger(n) && n >= asked && n <= after, `${what}: crossing.number ${n}, but the town clock read ${asked}..${after} across the ask`);
+    clocked(rec).number = n;
+    was = JSON.stringify(rec);
   }
   if (got === was) return;
   const d = firstDiff(was, got);
@@ -184,9 +204,10 @@ async function mcp(name, tool, args) {
 test("every index door answers as the unswitched office did: status, body and as-of", async (t) => {
   if (skip) return t.skip(skip);
   for (const [door, headers] of REST) {
+    const asked = currentCrossing();
     const b = await rest("absent", door, headers);
     const what = `${door}${headers ? " (keyed)" : ""}`;
-    same(what, `REST ${door}${headers ? " (keyed)" : ""}`, b);
+    same(what, `REST ${door}${headers ? " (keyed)" : ""}`, b, asked);
   }
   for (const door of REST_STATUS_ONLY) {
     const b = await rest("absent", door);
