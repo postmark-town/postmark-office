@@ -62,7 +62,7 @@ import { join, resolve, relative } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 
 import { actionEntriesOf } from "../../src/world-store.mjs";
-import { classNodeNameOf, dialsOfClassNode, extendsFromMarks, isSited, kindFieldOf } from "../../src/world-grants.mjs"; // the kind rung (LOGOS v2, O1)
+import { classNodeNameOf, dialsOfClassNode, extendsFromMarks, isSited, kindFieldOf, propertyParentId } from "../../src/world-grants.mjs"; // the kind rung (LOGOS v2, O1)
 
 export const LAW_REPO_KEY = "world-law"; // projection_heads.repo for this pen
 
@@ -329,9 +329,10 @@ export async function deriveLaw({ lawRepo }) {
   const propName = (m) => String(m.name ?? m.slug ?? String(m.id).split("/").pop());
   marks.forEach((m, ord) => {
     if (kindFieldOf(m) !== "property") return;
+    // the parent is `of:` when the node names one (W1's flat layout), else its directory parent
     const path = [propName(m)];
-    let up = byId.get(m._parentMarkId), hops = 0;
-    while (up && kindFieldOf(up) === "property" && hops++ < 16) { path.unshift(propName(up)); up = byId.get(up._parentMarkId); }
+    let up = byId.get(propertyParentId(m)), hops = 0;
+    while (up && kindFieldOf(up) === "property" && hops++ < 16) { path.unshift(propName(up)); up = byId.get(propertyParentId(up)); }
     const klass = up ? classOfId.get(up.id) : undefined;
     if (klass === undefined) return;
     push("property", relPath(repo, join(m._dir, "mark.md")), `${klass}/${path.join("/")}`,

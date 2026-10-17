@@ -19,6 +19,8 @@
 // Every row the class readers need, at the pin. `number`/`tag_sha` ride on each
 // row so one round trip answers both "which blessing" and "what it says".
 // `newest` is the newest settlement at all, so a pin behind it is disclosed.
+import { propertyValue } from "./world-grants.mjs"; // a property's bare "true"/"false"/"null" as its value (LOGOS v2, O1)
+
 export const LAW_AT_BLESSING_SQL = `
   WITH newest AS (SELECT max(number) AS n FROM settlements),
        pin AS (
@@ -72,7 +74,7 @@ export function lawSnapshotFromRows(rows) {
     if (own.has(path)) continue; // a second statement of one path: the first stands
     const parts = path.split("/");
     own.set(path, { name: String(d.name ?? parts[parts.length - 1]), path, parentName: d.parent == null ? null : String(d.parent),
-      parent: parts.length > 1 ? parts.slice(0, -1).join("/") : null, default: d.default ?? null, tier: d.tier ?? null, id: d.id ?? null, ord: Number(d.ord ?? 0), children: new Map() });
+      parent: parts.length > 1 ? parts.slice(0, -1).join("/") : null, default: propertyValue(d.default ?? null), tier: d.tier ?? null, id: d.id ?? null, ord: Number(d.ord ?? 0), children: new Map() });
   }
   for (const own of properties.values()) {
     for (const p of own.values()) {

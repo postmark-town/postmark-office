@@ -450,7 +450,7 @@ for (const m of marks) {
       // A PROPERTY NODE's own fields (LOGOS v2: name, tier, default, body; the
       // tier is the column). Carried only on `kind: property`, so every other
       // mark projects exactly as it did.
-      ...(m.kind === "property" ? { name: m.name ?? m.slug ?? null, default: m.default ?? null } : {}),
+      ...(m.kind === "property" ? { name: m.name ?? m.slug ?? null, default: m.default ?? null, of: m.of ?? null } : {}),
       far: m.far === true || m.far === "true" || null,
       feature: m.feature ?? null, mechanic: m.mechanic ?? null, timetable: m.timetable ?? null,
       points: Array.isArray(m.points) ? m.points.length : null,

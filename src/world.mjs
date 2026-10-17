@@ -2233,10 +2233,12 @@ export async function markRecords(ids = [], w = null) {
 // from the class layer, which reads the property nodes first and an old
 // `dials:` second. A class node still carrying `dials:` is shown as it is.
 function withClassDials(mark) {
-  if (kindFieldOf(mark) !== "class" || mark.dials) return mark;
+  if (kindFieldOf(mark) !== "class") return mark;
   const name = classNodeNameOf(mark);
   const d = name ? classDials(name) : {};
-  return Object.keys(d).length ? { ...mark, dials: d } : mark;
+  // PROPERTY FIRST, as both projections are (review-606): the class layer's
+  // dials (its property nodes over any old `dials:`) over the record's own.
+  return Object.keys(d).length ? { ...mark, dials: { ...(mark.dials ?? {}), ...d } } : mark;
 }
 
 export async function worldEyes(args = {}, key = null, { roll = [], v2 = false, budget = null, entered: given = undefined } = {}) {

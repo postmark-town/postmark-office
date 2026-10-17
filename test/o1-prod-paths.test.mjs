@@ -10,10 +10,11 @@
 //   └ mark └ sited  makers: true
 //            ├ thing  holder (sovereign, false) → capacity (sovereign, 30) → min 1, max 120; holder → open (sovereign, true)
 //            │ ├ candy             a class node named by its SLUG (no `class:`)
-//            │ └ halloween-candy-bag  holder (constitution, true) → capacity 200 → max 200
+//            │ └ halloween-candy-bag  holder (constitution, true) → capacity 200 → max 200, FILED FLAT with `of:` (W1's settled layout)
 //            └ parcel  makers: false
 //   resident  holder (constitution, true) → capacity (constitution, 24)
 //   say       the OLD dials: frontmatter      sound  the NEW property node
+//   arena     dial-named properties whose defaults arrive as bare words: true, null
 //
 // and three marks: a thing in each form, and a new-form candy.
 
@@ -38,7 +39,7 @@ const K = "let-there-be-light/the-town-centre/the-keeping-works";
 const PN = `${K}/postmark-node`, MARK = `${PN}/mark`, SITED = `${MARK}/sited`, THING = `${SITED}/thing`;
 const town = (front) => `by: the-town\ntier: constitution\ndate: 2026-10-17\n${front}`;
 const cls = (name, ext, extra = "") => town(`kind: class\n${name ? `class: ${name}\n` : ""}${ext ? `extends: ${ext}\n` : ""}version: 1${extra ? `\n${extra}` : ""}`);
-const prop = (name, dflt, tier) => `kind: property\nby: the-town\ntier: ${tier}\ndate: 2026-10-17\nname: ${name}\ndefault: ${dflt}`;
+const prop = (name, dflt, tier, of = null) => `kind: property\nby: the-town\ntier: ${tier}\ndate: 2026-10-17\nname: ${name}\n${of ? `of: ${of}\n` : ""}default: ${dflt}`;
 
 function buildWorld() {
   const dir = mkdtempSync(join(tmpdir(), "pm-o1-paths-"));
@@ -62,9 +63,10 @@ function buildWorld() {
   mark(`${THING}/thing-holder/thing-open`, prop("open", "true", "sovereign"));
   mark(`${THING}/candy`, cls(null, "thing"), "Candy, a class node named by its slug.");
   mark(`${THING}/halloween-candy-bag`, cls("halloween-candy-bag", "thing"), "The Candy Bag.");
-  mark(`${THING}/halloween-candy-bag/bag-holder`, prop("holder", "true", "constitution"));
-  mark(`${THING}/halloween-candy-bag/bag-holder/bag-capacity`, prop("capacity", "200", "sovereign"));
-  mark(`${THING}/halloween-candy-bag/bag-holder/bag-capacity/bag-capacity-max`, prop("max", "200", "constitution"));
+  // W1's settled layout: every property files FLAT in its class's directory, a child naming its parent in `of:`
+  mark(`${THING}/halloween-candy-bag/halloween-candy-bag-holder`, prop("holder", "true", "constitution"));
+  mark(`${THING}/halloween-candy-bag/halloween-candy-bag-capacity`, prop("capacity", "200", "sovereign", "the-town/halloween-candy-bag-holder"));
+  mark(`${THING}/halloween-candy-bag/halloween-candy-bag-capacity-max`, prop("max", "200", "constitution", "the-town/halloween-candy-bag-capacity"));
   mark(`${SITED}/parcel`, cls("parcel", "sited"), "A parcel.");
   mark(`${SITED}/parcel/parcel-makers`, prop("makers", "false", "constitution"));
   mark(`${PN}/resident`, cls("resident", "postmark-node"), "A resident.");
@@ -73,6 +75,10 @@ function buildWorld() {
   mark(`${PN}/say`, cls("say", "postmark-node", "dials: { presence_min: 15 }"), "Say, its dial in the OLD form.");
   mark(`${PN}/sound`, cls("sound", "postmark-node"), "Sound, its dial in the NEW form.");
   mark(`${PN}/sound/sound-radius-m`, prop("radius_m", "60", "constitution"));
+  mark(`${PN}/arena`, cls("arena", "postmark-node"), "The arena, its dials as bare words.");
+  mark(`${PN}/arena/arena-round-boundary-joins`, prop("round_boundary_joins", "true", "constitution"));
+  mark(`${PN}/arena/arena-from-crossing`, prop("from_crossing", "null", "constitution"));
+  mark(`${PN}/arena/arena-beta`, prop("beta", "false", "constitution"));
 
   mark("wright/old-form-thing", "kind: sited\nby: wright\ndate: 2026-10-17\nat: { x: 1000, y: 1000 }\nextent: { w: 1, h: 1 }\nclass: thing", "Old form.");
   mark("wright/new-form-thing", "kind: thing\nby: wright\ndate: 2026-10-17\nat: { x: 1010, y: 1010 }\nextent: { w: 1, h: 1 }", "New form.");
@@ -105,7 +111,7 @@ test("LAW-INGEST (prod's class layer): the property tree projects nested, and ma
   const rows = Array.isArray(derived) ? derived : derived.rows;
   const keys = rows.filter((r) => r.kind === "property").map((r) => r.key).sort();
   for (const k of ["thing/holder", "thing/holder/capacity", "thing/holder/capacity/max", "thing/holder/capacity/min", "thing/holder/open",
-    "halloween-candy-bag/holder/capacity/max", "postmark-node/makers", "sited/makers", "parcel/makers", "resident/holder/capacity", "sound/radius_m"])
+    "halloween-candy-bag/holder/capacity/max", "halloween-candy-bag/holder/capacity", "postmark-node/makers", "sited/makers", "parcel/makers", "resident/holder/capacity", "sound/radius_m"])
     assert.ok(keys.includes(k), `law-ingest projects ${k} (got ${keys.join(", ")})`);
   assert.ok(rows.some((r) => r.kind === "class" && r.key === "candy"), "a class node named by its slug is declared under its slug");
   const snap = lawSnapshotFromRows(rows.map((r) => ({ number: 1, tag_sha: "fixture", newest: 1, ...r })));
@@ -120,6 +126,13 @@ test("LAW-INGEST (prod's class layer): the property tree projects nested, and ma
   assert.deepEqual(((h) => [h.holder, h.capacity, h.min, h.max])(holdingOf({ className: "halloween-candy-bag", classProperty: cp })), [true, 200, 1, 200]);
   assert.equal(holdingOf({ className: "resident", mark: { capacity: 99 }, classProperty: cp }).capacity, 24, "constitution: the resident's own field never moves it");
   assert.deepEqual(dialsOf(snap, "say"), { presence_min: 15 }, "an old dial projects as it did");
+  // THE ROW ITSELF (review-606 D5): apex-reads and the unit door read a class row's `data.dials` directly
+  const row = (key) => rows.find((r) => r.kind === "class" && r.key === key)?.data ?? {};
+  assert.deepEqual(row("say").dials, { presence_min: 15 });
+  assert.equal(row("sound").dials?.radius_m, 60, "law-ingest's class row carries the property dial");
+  assert.deepEqual(row("arena").dials, { round_boundary_joins: true, from_crossing: null, beta: false }, "the bare words arrive as true, null and false");
+  assert.equal(row("halloween-candy-bag").dials?.capacity, undefined, "a child property (`of:`) is no dial of its class");
+  assert.equal(row("halloween-candy-bag").dials?.holder, true);
   assert.equal(Number(dialsOf(snap, "sound").radius_m), 60, "a new dial reads off its property node");
 });
 
@@ -142,7 +155,10 @@ test("THE HYDRATOR (the store's fallback): both forms project one class, one ins
   assert.equal(propsOf(candy).declares, true);
   assert.deepEqual(io("wright/new-form-candy"), ["the-town/candy"]);
   assert.deepEqual(propsOf(node("the-town/say")).dials, { presence_min: 15 }, "an old dial projects as it did");
-  assert.equal(Number(propsOf(node("the-town/sound")).dials?.radius_m), 60, "a new dial projects off its property node");
+  assert.equal(propsOf(node("the-town/sound")).dials?.radius_m, 60, "a new dial projects off its property node");
+  assert.deepEqual(propsOf(node("the-town/arena")).dials, { round_boundary_joins: true, from_crossing: null, beta: false }, "the bare words coerced at the projection");
+  assert.deepEqual(propsOf(node("the-town/halloween-candy-bag")).dials, { holder: true }, "only the class's top-level properties are its dials");
+  assert.equal(propsOf(node("the-town/halloween-candy-bag-capacity")).of, "the-town/halloween-candy-bag-holder", "a property node carries its `of`");
   const problems = tables.nodes.flatMap((n) => propsOf(n)?.frontmatter_problems ?? []).join(" ");
   assert.doesNotMatch(problems, /unknown kind: (thing|candy|property)/, "a new-form kind naming a declared class is no unknown kind");
 });
@@ -166,6 +182,16 @@ test("THE STORE PATH (no law snapshot): classProperty, makers, holding and dials
   assert.equal(holdingOf({ className: "halloween-candy-bag", classProperty }).max, 200);
   assert.equal(holdingOf({ className: "resident", classProperty }).capacity, 24);
   assert.equal(Number(classDials("sound").radius_m), 60);
+  assert.deepEqual(classDials("arena"), { round_boundary_joins: true, from_crossing: null, beta: false });
+  assert.deepEqual(((h) => [h.holder, h.capacity, h.min, h.max])(holdingOf({ className: "halloween-candy-bag", classProperty })), [true, 200, 1, 200], "the flat layout's `of:` children read by the store path");
+  // D6: a class RECORD shown by markRecords takes its dials from the class layer, PROPERTY FIRST
+  const { markRecords } = await import("../src/world.mjs");
+  const w = { marks: [{ id: "the-town/sound", kind: "class", class: "sound", by: "the-town" }, { id: "the-town/say", kind: "class", class: "say", by: "the-town", dials: { presence_min: 15 } },
+    { id: "the-town/arena", kind: "class", class: "arena", by: "the-town", dials: { round_boundary_joins: false, guest_hp: 20 } }] };
+  const recs = await markRecords(["the-town/sound", "the-town/say", "the-town/arena"], w);
+  assert.equal(recs["the-town/sound"].dials?.radius_m, 60, "a class record with no dials: takes the class layer's");
+  assert.deepEqual(recs["the-town/say"].dials, { presence_min: 15 });
+  assert.deepEqual(recs["the-town/arena"].dials, { round_boundary_joins: true, guest_hp: 20, from_crossing: null, beta: false }, "the property wins over the record's own old dial");
   assert.deepEqual(dialNumber("say", "presence_min", 99), { value: 15, read: true, source: "record" });
 });
 

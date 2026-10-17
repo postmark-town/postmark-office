@@ -39,7 +39,7 @@ import { lawSnapshot } from "./law-snapshot.mjs";
 // reader stands on its floor and says so.
 import { byId, classRosterGate, classRosterGateValue, jx, openWorldStore, registerTwin, sqlCompare, HYDRATION_STATUS, NO_WORLD } from "./world-graph-db.mjs";
 import { rosterOf, dialsOf, predicatesOf, predicateNodeOf, propertiesOf, snapProperty } from "./law-classes.mjs";
-import { lineageOf } from "./world-grants.mjs"; // the kind rung's lineage walk (LOGOS v2, O1)
+import { lineageOf, propertyValue } from "./world-grants.mjs"; // the kind rung's lineage walk (LOGOS v2, O1)
 import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
 
 // ── THE FOURTH RUNG, ABOVE THE OTHER THREE (POS-270, 2026-09-27) ─────────────
@@ -182,15 +182,23 @@ export function classOwnProperties(name) {
     // Properties nest (holder → capacity → min, max): walk down from the
     // class's own, holding each BY NAME (a class names each once) with its
     // direct children — the shape law-classes § propertiesOf answers.
+    // W1's flat layout files a child property in its class's directory with
+    // `of:` naming its parent; the folder-nested clauses the freeze kept are
+    // reached by the describes walk. A row's parent is its `of` if it names
+    // one, else the property it was reached from.
+    const top = db.prepare(PROPERTY_SQL).all(String(name));
+    const nameOfId = new Map(top.map((r) => [String(r.id), String(r.name)]));
     const out = {};
-    const queue = db.prepare(PROPERTY_SQL).all(String(name)).map((r) => ({ r, parent: null }));
+    const queue = top.map((r) => ({ r, parent: null }));
     for (let i = 0; i < queue.length && i < 512; i++) {
-      const { r, parent } = queue[i];
+      const { r, parent: reachedFrom } = queue[i];
       if (r?.name == null || out[String(r.name)]) continue;
-      out[String(r.name)] = { default: r.dflt ?? null, tier: r.tier ?? null, id: r.id ?? null, parent, children: {} };
-      if (parent && out[parent] && !out[parent].children[String(r.name)]) out[parent].children[String(r.name)] = { default: r.dflt ?? null, tier: r.tier ?? null, id: r.id ?? null };
-      for (const k of db.prepare(PROPERTY_CHILD_SQL).all(String(r.id))) queue.push({ r: k, parent: String(r.name) });
+      const parent = r.parent_id != null ? (nameOfId.get(String(r.parent_id)) ?? null) : reachedFrom;
+      const v = propertyValue(r.dflt ?? null);
+      out[String(r.name)] = { default: v, tier: r.tier ?? null, id: r.id ?? null, parent, children: {} };
+      for (const k of db.prepare(PROPERTY_CHILD_SQL).all(String(r.id))) { nameOfId.set(String(k.id), String(k.name)); queue.push({ r: k, parent: String(r.name) }); }
     }
+    for (const [n, p] of Object.entries(out)) if (p.parent && out[p.parent] && !out[p.parent].children[n]) out[p.parent].children[n] = { default: p.default, tier: p.tier, id: p.id };
     db.close();
     return out;
   } catch (e) { plainReason(e, "files", "a class's properties"); return {}; }
@@ -701,6 +709,7 @@ const DIAL_NODE_SQL = `
 const PROPERTY_SQL = `
   SELECT json_extract(p.props, '$.name') AS name,
          json_extract(p.props, '$.default') AS dflt,
+         json_extract(p.props, '$.of') AS parent_id,
          p.tier AS tier, p.id AS id
     FROM nodes AS c
     JOIN edges AS e ON e.src = c.id AND e.type = 'describes'
@@ -880,7 +889,7 @@ registerTwin(ROSTER_SQL, (g) => {
   return [...seen].map((c) => ({ class: c }));
 });
 registerTwin(PROPERTY_SQL, (g, klass) => describedBy(g, klass).filter((p) => p.subkind === "property")
-  .map((p) => ({ name: jx(p.p, "name"), dflt: jx(p.p, "default"), tier: p.tier ?? null, id: p.id })));
+  .map((p) => ({ name: jx(p.p, "name"), dflt: jx(p.p, "default"), parent_id: jx(p.p, "of"), tier: p.tier ?? null, id: p.id })));
 registerTwin(PROPERTY_CHILD_SQL, (g, src) => edgesFrom(g, String(src), "describes").map((e) => g.byId.get(e.dst))
   .filter((p) => p && p.subkind === "property").map((p) => ({ name: jx(p.p, "name"), dflt: jx(p.p, "default"), tier: p.tier ?? null, id: p.id })));
 registerTwin(CLASS_EXTENDS_SQL, (g) => rosterRows(g).map((n) => ({ class: jx(n.p, "class"), ext: jx(n.p, "extends") })));

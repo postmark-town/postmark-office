@@ -224,12 +224,32 @@ export function dialsOfClassNode(m, children = []) {
   const props = {};
   for (const c of children ?? []) {
     if (kindFieldOf(c) !== "property") continue;
+    // A CHILD property names its parent in `of:` (W1's flat layout, filed in its
+    // class's directory beside the top-level ones); it is no dial of the class.
+    if (c.of != null && String(c.of).trim() && String(c.of).trim() !== String(m?.id ?? "")) continue;
     const name = String(c.name ?? c.slug ?? String(c.id ?? "").split("/").pop() ?? "").trim();
-    if (name && !(name in props) && c.default !== undefined) props[name] = c.default;
+    if (name && !(name in props) && c.default !== undefined) props[name] = propertyValue(c.default);
   }
   if (!old && !Object.keys(props).length) return null;
   return { ...(old ?? {}), ...props };
 }
+
+/**
+ * A property's value as a reader holds it. The world's parser leaves a
+ * `default:` as bare text, so a true/false/null arrives as the WORD
+ * ("true", "false", "null"); numbers already arrive as numbers. The words
+ * become their values here, once (as W1's own `propertyValue` does, and
+ * holding-law § truth for makers and holder); any other text stays text.
+ */
+export function propertyValue(v) {
+  if (v === "true") return true;
+  if (v === "false") return false;
+  if (v === "null") return null;
+  return v;
+}
+
+/** A property node's parent: its `of:` when it names one (W1's flat layout), else the directory parent the loader gives. */
+export const propertyParentId = (m) => (m?.of != null && String(m.of).trim() ? String(m.of).trim() : (m?._parentMarkId ?? null));
 
 /** Is this mark sited, in either form? (`kind === "sited" || kind === "parcel"` before the kind rung.) */
 export const isSited = (m, extendsOf) => standingOf(m, extendsOf) === "sited";
