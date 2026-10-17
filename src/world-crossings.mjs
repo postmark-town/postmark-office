@@ -693,7 +693,9 @@ async function passThroughPortal(answer, { who, w, at, here, markId, verbs, payl
     return { handle: who, target: markId, via: markId, entered: [], within: written.within ?? held,
              refused: answer.refused, stranded_at: markId,
              ledger: written.commit ? { lines: written.lines, commit: written.commit, pushed: written.pushed } : null,
-             note: "refused at the threshold — you are standing at that portal, not back where you started.", reading_law };
+             note: atHand
+               ? "refused at the threshold — you are where you were, in the room that holds that portal, not back where you started."
+               : "refused at the threshold — you are standing at that portal, not back where you started.", reading_law };
 
   // A PASSAGE LANDS YOU; IT NEVER WALKS YOU (WLD-63 row 68 B): the set-down is a
   // landing on the record, through the land pen, never a walk

@@ -72,3 +72,10 @@ test("the reads name it as a landing, never a walk", () => {
   assert.equal(PUBLIC_ACTS.land, "landed");
   assert.equal(LIVE_KINDS.land, "landing");
 });
+
+test("/world2/walks carries a landing's `landed`, and the apex's present reads tenths of a metre as /world/present does", async () => {
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../src/world2-serve.mjs", import.meta.url), "utf8");
+  assert.match(src, /\.\.\.\(d\.landed \? \{ landed: d\.landed \} : \{\}\),/, "the walks row map drops nothing a landing says");
+  assert.match(src, /at: \{ x: Math\.round\(r\.x \* 10\) \/ 10, y: Math\.round\(r\.y \* 10\) \/ 10 \},/, "apexPresent at the record's precision");
+});

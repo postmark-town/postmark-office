@@ -140,7 +140,7 @@ import { ARENA_TOOLS, ARENA_VERBS, arenaActViaOffice, arenaClosed } from "./aren
 // THE PORTAL GROUND'S OWN LAW outlived the arena: which room you stand in, its
 // stride and its landing (src/portal-ground.mjs). Rides and vehicles are not this.
 import { cockpitPortal, groundAt, landingPointFor } from "./portal-ground.mjs";
-import { bounceExtras, caughtBounce, isHttpStatus, trippedError } from "./fault-words.mjs"; // the office's own words for its own fault (POS-573/578)
+import { bounceExtras, caughtBounce, faultLogged, isHttpStatus, trippedError } from "./fault-words.mjs"; // the office's own words for its own fault (POS-573/578)
 
 export const apexEnabled = () => process.env.WORLD_APEX === "1";
 
@@ -3114,56 +3114,79 @@ async function apexDo(args, key, ctx = {}) {
       return actCaught(e, done);
     }
     // ── THE GROUND SETS ITS ENTRANT DOWN (LOGOS § The portal ground) ────────
-    // AFTER the enter and only when it succeeded. The receipt keeps the shape
-    // it had while the arena's wheel rode here too: `joined: { placed }`.
-    if (action === "enter" && !result?.error) {
-      const placed = await landOnEnter(args, key, hand || standingHandle(args, key));
+    // AFTER the enter, and only when the enter actually put the ground on the
+    // entrant's stack (review-shelter, WLD-6 A): refused terms, a refused door,
+    // awaiting and already-within all answer with no `.error`, and none of them
+    // entered anything. The receipt keeps the shape it had while the arena's wheel
+    // rode here too: `joined: { placed }`.
+    if (action === "enter") {
+      const placed = await groundLandsAfterEnter(args, result, key, hand || standingHandle(args, key));
       if (placed) return { ...done, result, joined: { placed }, ...(nonceSays ?? {}) };
     }
     return result?.error === "bounce" ? { ...result, ...done } : { ...done, result, ...(nonceSays ?? {}) };
   } finally { store.db?.close(); }
 }
 
+/** The mark an enter names: landOnEnter's own parse, the one the guard asks about. */
+export function enterTargetOfArgs(args = {}) {
+  return String(args.mark ?? args.mark_id ?? parseEnvelope(args)?.mark ?? parseEnvelope(args)?.mark_id ?? "").trim();
+}
+
+/** Whether this enter's answer put `target` on the entrant's stack: the ONLY case
+ *  a ground sets anyone down (review-shelter, WLD-6 A). */
+export const enteredTheTarget = (result, target) => !!target && !result?.error && Array.isArray(result?.entered) && result.entered.includes(target);
+
+/** After an enter: the ground's landing, or null. `deps` lets a test hand in the
+ *  ground's lookup and the pen; the apex passes none. */
+export async function groundLandsAfterEnter(args, result, key, who, deps = {}) {
+  const target = enterTargetOfArgs(args);
+  if (!enteredTheTarget(result, target)) return null;
+  return landOnEnter(target, key, who, deps);
+}
+
 /**
  * Where a portal ground with a `lands_at` dial sets an entrant down (they LAND:
- * "spawn" is the creatures' word, WLD-66), written as a walk: entry writes
- * occupancy and moves nobody, so a hand entering from outside the fence would be
- * inside by the record and outside by geometry. Null for every ground that
- * declares no landing.
+ * "spawn" is the creatures' word, WLD-66), written as a landing (WLD-63 row 68 B):
+ * entry writes occupancy and moves nobody, so a hand entering from outside the
+ * fence would be inside by the record and outside by geometry. Null for every
+ * ground that declares no landing.
+ *
+ * BEHIND THE WALL TOO (WLD-6 A, RULED by Darko 2026-10-16 20:04): a ground sets
+ * its entrant down at its landing point even when the Mists' wall stands over
+ * it. You entered it; it shelters you. So no wall check is asked here.
  */
-async function landOnEnter(args, key, who) {
-  const target = String(args.mark ?? args.mark_id ?? parseEnvelope(args)?.mark ?? parseEnvelope(args)?.mark_id ?? "").trim();
+async function landOnEnter(target, key, who, { ground = null, landAt: pen = null } = {}) {
   if (!target || !who) return null;
-  const store = openStore();
+  const store = ground ? null : openStore();
+  let place = null;
   try {
-    if (!store.db) return null;
-    const place = groundAt(store.db, [target]);
-    if (!place) return null;
-    const landing = landingPointFor(store.db, place, { who, crossing: currentCrossing() });
-    if (!landing) return null;
+    let landing = null;
+    if (ground) ({ place, landing } = (await ground(target, who)) ?? {});
+    else {
+      if (!store.db) return null;
+      place = groundAt(store.db, [target]);
+      if (place) landing = landingPointFor(store.db, place, { who, crossing: currentCrossing() });
+    }
+    if (!place || !landing) return null;
     if (landing.refused) return { ground: place.ground, refused: landing.refused };
-    // A GROUND NEVER SETS ANYONE DOWN BEHIND THE MISTS (POS-468 B). The landing
-    // writes its own zero-length walk past the walk door's road check, so it
-    // asks the wall itself: a landing point behind it sets nobody down, and the
-    // entrant stays where the entry left them, told why.
-    const { mistsGroundCheck, worldSkeletonRaw, MISTS_UNREADABLE } = await import("./world.mjs");
-    const seen = await mistsGroundCheck(WORLD_CLONE, worldSkeletonRaw, [landing.at], currentCrossing());
-    if (seen?.unreadable) return { ground: place.ground, refused: `${MISTS_UNREADABLE}: this ground sets no one down behind a wall it cannot see; you stay where you entered` };
-    if (seen?.wall)
-      return { ground: place.ground, refused: "this ground's landing point stands behind the wall of the Mists, so it sets no one down there; you stay where you entered" };
     // A GROUND THAT PLACES ITS ENTRANTS WRITES A LANDING (WLD-63 row 68 B), through
     // the one land pen: never a walk. The pen reads the walk door's own fractional
     // clock, so the landing is never stamped behind a walk made earlier this crossing.
-    const { landAt } = await import("./world.mjs");
-    await landAt(WORLD_CLONE, { who, at: landing.at, via: place.ground, why: "ground", key });
+    const write = pen ?? (await import("./world.mjs")).landAt;
+    await write(WORLD_CLONE, { who, at: landing.at, via: place.ground, why: "ground", key });
     return {
       ground: place.ground, at: landing.at,
       ...(landing.jitter ? { jitter_m: landing.jitter, from_landing: landing.from } : {}),
       note: `${place.ground} sets its entrants down at its own landing point — you did not walk here, the ground placed you`,
     };
-  } catch { return null; }
+  } catch (e) {
+    // SAID, NEVER SWALLOWED, as the passage and the deposit say theirs: the entry
+    // stands, and the entrant is told they were not set down
+    faultLogged("a ground's landing could not be written", e);
+    return { ground: place?.ground ?? target, refused: "you entered, but the ground could not set you down at its landing point; you stand where you entered" };
+  }
   finally {
-    try { store.db?.close(); } catch { /* a writer that cannot close still wrote */ }
+    try { store?.db?.close(); } catch { /* a writer that cannot close still wrote */ }
   }
 }
 
