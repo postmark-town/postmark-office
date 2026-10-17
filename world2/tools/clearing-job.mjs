@@ -167,11 +167,12 @@ try {
     throw new Error("no town projection head — staked claims cannot be judged without a pinned stamp read; run stamp-ingest first (the census first-step)");
   if (pending.length && !lawSha)
     throw new Error("no world-law projection head — a clearing computes against law-as-of a sha; run law-ingest first");
-  // THE CLASS LAYER AT THE PINNED LAW: how a row or a claim of a class kind
-  // stands (`kind: thing` and W2's other re-kinded marks are ground by their
-  // chain), for every walk and every ground test below (standing.mjs § the
-  // kind rung).
-  const classes = await classLayerVia(q, lawSha);
+  // THE CLASS LAYER THE ROWS WERE WRITTEN UNDER: how a row or a claim of a
+  // class kind stands (`kind: thing` and W2's other re-kinded marks are ground
+  // by their chain), for every walk and every ground test below. It is read at
+  // the marks' commit, not at `lawSha`, which may be another commit's rulebook
+  // (standing.mjs § classLayerVia).
+  const classes = await classLayerVia(q);
   const outcomes = new Map(); // id -> { status, refusal_check }
   const decide = (id, status, check = null) => outcomes.set(id, { status, refusal_check: check });
 
@@ -409,7 +410,7 @@ try {
   //     that set it down; that act must exist and match the claimant and the
   //     label, or THIS claim alone is refused `dropped-unit-unproven: act <N>`
   //     (drop-provenance.mjs). Never the window: refused alone, like 5.4.
-  await checkDroppedUnits(q, pending, { decided: (c) => outcomes.has(c.id), refuse: refuseAlone });
+  await checkDroppedUnits(q, pending, { decided: (c) => outcomes.has(c.id), refuse: refuseAlone, classes });
 
   // 5.5 · A COMMONS MARK NEEDS SOMEBODY'S STAMPS BEHIND IT (postmark#2594's
   //     second half; ruled a G1 blocker 2026-09-08 after lane 2's reviewer found

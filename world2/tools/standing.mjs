@@ -288,8 +288,8 @@ export const PARCEL_CAP_LAW_DATE = "2026-07-30";       // marks-fold.mjs:530
 // the class nodes among the marks it folds; the store keeps those nodes as law
 // (`law_projection`, kind `class`, keyed by the class name, `extends` in
 // `data`), never in `marks`. `classLayerOf` reads those rows and `classLayerVia`
-// reads them at the store's law head. A walk handed no layer is the world's
-// fold with no class nodes in hand: the place answers.
+// reads them AT THE COMMIT THE ROWS CAME FROM (§ classLayerVia). A walk handed
+// no layer is the world's fold with no class nodes in hand: the place answers.
 
 /** The standing words `kind:` wrote before it named the class, and the node kinds (mark-kind.mjs § STANDING_WORDS). */
 export const STANDING_WORDS = Object.freeze(new Set(["sited", "predicated", "predicate", "naming", "parcel", "class", "property", "post"]));
@@ -309,20 +309,37 @@ export function classLayerOf(lawRows) {
   return layer;
 }
 
-/** The class layer at the store's law head (`projection_heads['world-law']`), or at `lawSha`. Empty when none is ingested. */
-export async function classLayerVia(q, lawSha = null) {
-  let sha = lawSha;
-  if (sha == null) {
-    const { rows } = await q(`SELECT sha FROM projection_heads WHERE repo = 'world-law'`);
-    sha = rows[0]?.sha ?? null;
-  }
-  if (sha == null) return new Map();
+/**
+ * The class layer the store's rows were written under, or null (the place answers).
+ *
+ * AT THE MARKS' COMMIT, NEVER AT THE LAW PIN (review-614, B1). The world's fold
+ * reads the class nodes of the SAME commit as the marks it folds. The store has
+ * two pens on two timers: marks-ingest moves `projection_heads['world-marks']`
+ * (:12/:27/:42/:57) and law-ingest moves `projection_heads['world-law']`
+ * (:04/:19/:34/:49), and the clearing runs no law ingest of its own. Both read
+ * the newest settlement tag's commit (marks-ingest `--ref blessed`;
+ * world2-ingest.sh `law`, world2-refresh-clone.sh `world-blessed`), so at a
+ * settlement they carry the same sha. They part when one pen is behind: a bless
+ * not yet reached by the law timer, a law sha refused whole as lossy (POS-619),
+ * a held pin (POS-635), a parked law unit. Then a pre-W2 layer (`thing`
+ * extends `mark`, no `sited`) over W2 rows makes every re-kinded row no ground,
+ * and the crossing seals its children at the root.
+ *
+ * So the layer is read at `world-marks`'s sha, whichever pin `world-law` holds:
+ * law-ingest writes a sha's rows even when it holds the pin. No marks head, or
+ * no class rows at that sha, is null, and the place answers, which agrees with
+ * the chain wherever the world's lint holds (G13; 1,549 of 1,549 rows on W2).
+ */
+export async function classLayerVia(q) {
+  const { rows: heads } = await q(`SELECT sha FROM projection_heads WHERE repo = 'world-marks'`);
+  const sha = heads[0]?.sha ?? null;
+  if (sha == null) return null;
   const { rows } = await q(`SELECT kind, key, data FROM law_projection WHERE law_sha = $1 AND kind = 'class'`, [sha]);
-  return classLayerOf(rows);
+  return rows.length ? classLayerOf(rows) : null;
 }
 
 /** class-properties.mjs § classChain: the name, then up `extends` while a class row names the next link. */
-function classChainOf(classes, name) {
+export function classChainOf(classes, name) {
   const out = [];
   for (let c = String(name); classes?.has(c) && !out.includes(c); c = classes.get(c)) {
     out.push(c);

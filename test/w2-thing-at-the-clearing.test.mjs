@@ -26,7 +26,8 @@ import { startStore } from "./helpers/embedded-store.mjs";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const JOB = join(ROOT, "world2", "tools", "clearing-job.mjs");
 const TOWN_SHA = "t".repeat(40);
-const LAW_SHA = "l".repeat(40);
+const LAW_SHA = "l".repeat(40);        // the blessed commit: both pens at a settlement
+const OLD_LAW_SHA = "0".repeat(40);    // a law pin left behind on a pre-W2 commit
 const WIN = 240;
 
 const store = await startStore({ db: "w2_thing_test" });
@@ -45,9 +46,13 @@ const PARCEL_AT = { x: 1000, y: 1000 }, CHEST_EXT = { w: 6, h: 6 };
 
 // The class layer at W2, as law-ingest writes it: one row per class, `extends` in `data`.
 const CLASSES = [["postmark-node", null], ["mark", "postmark-node"], ["sited", "mark"], ["parcel", "sited"],
-  ["predicate", "mark"], ["naming", "predicate"], ["thing", "sited"]];
+  ["predicate", "mark"], ["naming", "predicate"], ["thing", "sited"],
+  // a kind whose chain and place disagree: a post class's instance with a place is no ground
+  ["post", "postmark-node"], ["notice", "post"]];
+// The rulebook before W2: `thing` extends `mark`, never `sited` (review-614, B1).
+const PRE_W2 = [["postmark-node", null], ["mark", "postmark-node"], ["sited", "mark"], ["parcel", "sited"], ["thing", "mark"]];
 
-async function seed(claims) {
+async function seed(claims, { lawHead = LAW_SHA, layers = { [LAW_SHA]: CLASSES } } = {}) {
   const c = await store.connect("world2_owner");
   try {
     await c.query("TRUNCATE escrow_projection, claims, marks, windows, projection_heads, households, household_pins, law_projection CASCADE");
@@ -58,11 +63,15 @@ async function seed(claims) {
          VALUES ($1, $2, $2::timestamptz + interval '12 hours', $3, $4)`,
         [id, opens, id === WIN ? "open" : "closed", id === WIN ? null : opens]);
     }
-    await c.query("INSERT INTO projection_heads (repo, sha, ingested_at) VALUES ('world-law', $1, now()), ('town', $2, now())", [LAW_SHA, TOWN_SHA]);
-    for (const [key, ext] of CLASSES)
-      await c.query("INSERT INTO law_projection (law_sha, kind, path, key, data) VALUES ($1, 'class', $2, $3, $4)",
-        [LAW_SHA, `WORLD/marks/the-town/the-keeping-works/${key}/mark.md`, key,
-          JSON.stringify(ext ? { class: key, extends: ext } : { class: key })]);
+    // marks-ingest's head is the blessed commit; law-ingest's pin is `lawHead`
+    await c.query(
+      "INSERT INTO projection_heads (repo, sha, ingested_at) VALUES ('world-law', $1, now()), ('world-marks', $2, now()), ('town', $3, now())",
+      [lawHead, LAW_SHA, TOWN_SHA]);
+    for (const [sha, layer] of Object.entries(layers))
+      for (const [key, ext] of layer)
+        await c.query("INSERT INTO law_projection (law_sha, kind, path, key, data) VALUES ($1, 'class', $2, $3, $4)",
+          [sha, `WORLD/marks/the-town/the-keeping-works/${key}/mark.md`, key,
+            JSON.stringify(ext ? { class: key, extends: ext } : { class: key })]);
     await c.query(
       `INSERT INTO households (slug, ord, name, residents, since, declared_by)
        VALUES ('starforge', 0, 'Starforge', ARRAY['rei'], '2026-08-01', 'rei'),
@@ -181,4 +190,52 @@ test("A MOVED THING IS A MOVER: it carries its household's coin, and the guest's
   // Left outside the moved chest, the letter's ground is the parcel now, whose
   // consent does not name it: the walk says market, as the world's fold would.
   assert.equal(await tierOf("sable/the-letter"), "market");
+});
+
+test("A STALE LAW PIN never reads its rulebook over W2 rows: the layer is the marks' commit's, and none there means the place answers", { skip }, async () => {
+  // review-614, B1. The law pen and the marks pen run on separate timers and
+  // the clearing ingests no law, so the law pin can sit on a pre-W2 commit while
+  // the rows are W2's. At 7caba61d6 the walk read the pin's layer, where
+  // `thing` extends `mark`: the chest was no ground and the letter went to market.
+  const bench = [{ slug: "rei/the-bench", kind: "sited", owner: "rei", household: "hh:starforge", at: { x: 1008, y: 1008 }, ext: { w: 1, h: 1 } }];
+  // the pin held on the old commit; law_projection holds only its rows
+  await seed(bench, { lawHead: OLD_LAW_SHA, layers: { [OLD_LAW_SHA]: PRE_W2 } });
+  let run = clear();
+  assert.equal(run.code, 0, run.out);
+  assert.equal(await tierOf("sable/the-letter"), "home", "no class rows at the marks' commit: the place answers, and the chest is ground");
+  // the pin held, the blessed commit's rows written beside it (law-ingest writes a sha's rows when it holds the pin)
+  await seed(bench, { lawHead: OLD_LAW_SHA, layers: { [OLD_LAW_SHA]: PRE_W2, [LAW_SHA]: CLASSES } });
+  run = clear();
+  assert.equal(run.code, 0, run.out);
+  assert.equal(await tierOf("sable/the-letter"), "home", "the marks' commit's own rulebook: thing > sited");
+});
+
+test("THE CHAIN, NOT THE PLACE, where they disagree: a placed `notice` (post) holds no one, so a guest it welcomes stands on the parcel", { skip }, async () => {
+  // A real law_projection layer whose chain says `post` for a row with a place.
+  // The place alone would make the notice ground and its welcome would confer
+  // home; the chain says a post stands nowhere, as the world's standingOf does.
+  const c = await store.connect("world2_owner");
+  await seed([]);
+  try {
+    for (const [id, slug, kind, owner, hh, at, ext, data] of [
+      ["c0000000-0000-4000-8000-000000000011", "rei/the-notice", "notice", "rei", "hh:starforge", { x: 1008, y: 992 }, { w: 4, h: 4 }, { consent: { "sable/the-poster": "welcomed" } }],
+      ["c0000000-0000-4000-8000-000000000012", "sable/the-poster", "sited", "sable", "hh:rabbit", { x: 1008, y: 992 }, { w: 1, h: 1 }, {}],
+    ]) {
+      const g = JSON.stringify({ at, extent: ext }), d = JSON.stringify({ tier: "home", ...data });
+      await c.query(
+        `INSERT INTO claims (id, window_id, class, claimant, household, status, decided_at, body, geometry, bbox, stake, data, slug)
+         VALUES ($1, $2, $3, $4, $5, 'locked', now(), $6, $7, $8::box, 0, $9, $10)`, [id, WIN - 1, kind, owner, hh, slug, g, box(at, ext), d, slug]);
+      await c.query(
+        `INSERT INTO marks (id, slug, kind, owner, household, body, geometry, bbox, status, locked_window, data)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::box, 'standing', $9, $10)`, [id, slug, kind, owner, hh, slug, g, box(at, ext), WIN - 1, d]);
+    }
+    await c.query(
+      `INSERT INTO claims (window_id, class, claimant, household, status, body, geometry, bbox, stake, data, slug)
+       VALUES ($1, 'sited', 'rei', 'hh:starforge', 'pending', 'A bench.', $2, $3::box, 0, '{"date":"2026-10-17"}', 'rei/the-bench')`,
+      [WIN, JSON.stringify({ slug: "rei/the-bench", at: { x: 1008, y: 1008 }, extent: { w: 1, h: 1 } }), box({ x: 1008, y: 1008 }, { w: 1, h: 1 })]);
+  } finally { await c.end(); }
+  const run = clear();
+  assert.equal(run.code, 0, run.out);
+  assert.equal(await tierOf("sable/the-poster"), "market", "the notice is no ground: the poster stands on Rei's parcel, which does not name it");
+  assert.equal(await tierOf("sable/the-letter"), "home", "the chest, a thing, still is");
 });

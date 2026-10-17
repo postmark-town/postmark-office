@@ -19,7 +19,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { computeStanding, containmentParentOf, recordOf, rankCandidates, worldRootOf,
-  standsAs, isGround, classLayerOf } from "../world2/tools/standing.mjs";
+  standsAs, isGround, classLayerOf, classLayerVia } from "../world2/tools/standing.mjs";
 import { carryPlan } from "../world2/tools/carry.mjs";
 import { isCandyClaim } from "../world2/tools/drop-provenance.mjs";
 import { markRecordOf } from "../world2/tools/apex-reads.mjs";
@@ -143,4 +143,54 @@ test("a W2 `kind: predicate` continues its parent, as `predicated` did (apex-rea
   }
   assert.equal(markRecordOf({ slug: "rei/the-chest", kind: "thing", owner: "rei", data: { _parentMarkId: "rei/the-parcel" } }).parent, null,
     "a sited kind's directory is no edge");
+});
+
+// ── the layer is the marks' commit's (review-614, B1) ──────────────────────
+
+/** A store that answers the two heads and law_projection's class rows, by sha. */
+const storeOf = ({ heads, law }) => async (text, args = []) => {
+  const head = /FROM projection_heads WHERE repo = '([a-z-]+)'/.exec(text);
+  if (head) return { rows: heads[head[1]] ? [{ sha: heads[head[1]] }] : [] };
+  if (/FROM law_projection WHERE law_sha = \$1 AND kind = 'class'/.test(text)) return { rows: law[args[0]] ?? [] };
+  throw new Error(`the stub store does not answer: ${text}`);
+};
+const PRE_W2 = [["postmark-node", null], ["mark", "postmark-node"], ["sited", "mark"], ["parcel", "sited"], ["thing", "mark"]]
+  .map(([key, ext]) => ({ kind: "class", key, data: ext == null ? { class: key } : { class: key, extends: ext } }));
+const OLD = "0".repeat(40), NEW = "b".repeat(40);
+
+test("a STALE LAW PIN: a pre-W2 rulebook is never read over W2 rows; the marks' commit has none, so the place answers", async () => {
+  // At 7caba61d6 the layer came from projection_heads['world-law']: here the
+  // pre-W2 one, where `thing` extends `mark`, so the chest was no ground and
+  // the letter went to market.
+  const q = storeOf({ heads: { "world-law": OLD, "world-marks": NEW }, law: { [OLD]: PRE_W2 } });
+  const classes = await classLayerVia(q);
+  assert.equal(classes, null, "no class rows at the marks' commit");
+  assert.equal(computeStanding(world(), { classes }).get("sable/the-letter"), "home");
+});
+
+test("the layer is read at the marks' commit, whichever pin the law holds", async () => {
+  const q = storeOf({ heads: { "world-law": OLD, "world-marks": NEW }, law: { [OLD]: PRE_W2, [NEW]: LAW } });
+  const classes = await classLayerVia(q);
+  assert.equal(classes?.get("thing"), "sited", "W2's rulebook, the rows' own");
+  assert.equal(computeStanding(world(), { classes }).get("sable/the-letter"), "home");
+  assert.equal(await classLayerVia(storeOf({ heads: { "world-law": NEW }, law: { [NEW]: LAW } })), null,
+    "no marks head: the rows' commit is unknown, so the place answers");
+});
+
+test("a real layer whose chain disagrees with the place: the chain answers (a placed post is no ground)", async () => {
+  const q = storeOf({ heads: { "world-law": NEW, "world-marks": NEW }, law: { [NEW]: LAW } });
+  const notice = row({ slug: "rei/the-notice", kind: "notice", owner: "rei", household: RIGHT,
+    at: { x: 1008, y: 992 }, extent: { w: 4, h: 4 }, consent: { "sable/the-poster": "welcomed" } });
+  const poster = row({ slug: "sable/the-poster", kind: "sited", owner: "sable", household: SABLE, at: { x: 1008, y: 992 }, extent: { w: 1, h: 1 } });
+  const rows = [ROOT, PARCEL, notice, poster];
+  assert.equal(computeStanding(rows, { classes: await classLayerVia(q) }).get("sable/the-poster"), "market", "the chain: notice > post, no ground");
+  assert.equal(computeStanding(rows).get("sable/the-poster"), "home", "the place alone would have made the notice ground");
+});
+
+test("a kind of candy is candy: isCandyClaim follows the lineage", () => {
+  const classes = classLayerOf([...LAW, { kind: "class", key: "lollipop", data: { class: "lollipop", extends: "candy" } }]);
+  assert.equal(isCandyClaim({ class: "lollipop", claimant: "rei", data: { dropped: "act:7" } }, classes), true, "the new form, by lineage");
+  assert.equal(isCandyClaim({ class: "sited", claimant: "rei", data: { class: "lollipop", dropped: "act:7" } }, classes), true, "the old form, by lineage");
+  assert.equal(isCandyClaim({ class: "lollipop", claimant: "rei", data: {} }), false, "with no layer only candy itself is known");
+  assert.equal(isCandyClaim({ class: "thing", claimant: "rei", data: {} }, classes), false, "thing is not under candy");
 });
