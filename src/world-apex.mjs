@@ -130,7 +130,7 @@ import { actorRoster, resolveHumanActor } from "./human-actor.mjs";
 // that one derivation, moved somewhere both doors can read it.
 import { humanHandFor, householdLookup } from "./households.mjs";
 import {
-  classOfInstance, markClassOf, entriesOfClass, guardsPass, heldEntries, kindOf, resolveGrants, resolveForActor,
+  classOfInstance, markClassOf, entriesOfClass, guardsPass, heldEntries, kindOf, lineageOf, resolveGrants, resolveForActor,
 } from "./world-grants.mjs";
 import { exitAllowed, fenceGroundFor, walkAllowed } from "./embodiment.mjs";
 // THE ARENA IS CLOSED (Keemin, 2026-09-30). Its five verbs are still granted
@@ -1725,18 +1725,29 @@ function affordableAt(db, action) {
  * to. A grant on a class node the Keeping Works declares stands nowhere: it is that class's own
  * afforded action, used at one of its instances (the playground's QA of part 2, I1: refill's hint
  * sent the reader to "the-town/halloween-candy-bowl (null, null)", when the answer was "stand on
- * your bowl"). Exported for the bounce's own test.
+ * your bowl"). "Or carry it" is said only of a class whose lineage reaches thing, since only a thing
+ * is carried, and only where the class tree can be read (`extendsOf`). Exported for the bounce's own test.
  */
-export function elsewhereHint(elsewhere = []) {
+export function elsewhereHint(elsewhere = [], { extendsOf = null } = {}) {
   const placed = elsewhere.filter((w) => Number.isFinite(w?.at?.x) && Number.isFinite(w?.at?.y));
   const classes = elsewhere.filter((w) => !placed.includes(w));
   const said = [];
   if (placed.length) said.push(`It is afforded at ${placed.map((w) => `${w.mark} (${w.at.x}, ${w.at.y})`).join("; ")} — walk there and it appears.`);
+  const an = (word) => (/^[aeiou]/i.test(word) ? "an" : "a");
   for (const w of classes) {
-    const klass = w.class ?? w.mark;
-    said.push(`It is a ${klass}'s own action${w.who === "maker" ? ", for its maker" : ""}: stand within a ${klass}'s footprint, or carry it, and it appears.`);
+    const klass = String(w.class ?? w.mark);
+    const carried = typeof extendsOf === "function" && lineageOf(klass, extendsOf).includes("thing");
+    said.push(`It is ${an(klass)} ${klass}'s own action${w.who === "maker" ? ", for its maker" : ""}: stand within ${an(klass)} ${klass}'s footprint${carried ? ", or carry it," : ","} and it appears.`);
   }
   return said.join(" ");
+}
+
+/** The class tree's `extendsOf` for a bounce's words, or null when the class layer cannot be read. */
+async function classExtendsForWords() {
+  try {
+    const [{ lawSnapshot }, { classViewOf }] = await Promise.all([import("./law-snapshot.mjs"), import("./world-units.mjs")]);
+    return classViewOf(lawSnapshot()).extendsOf ?? null;
+  } catch { return null; }
 }
 
 // ── seam 2 · the terms block ────────────────────────────────────────────────
@@ -2999,7 +3010,7 @@ async function apexDo(args, key, ctx = {}) {
           { ride_doors: ride.doors, affordable_at: ride.affordable_at, ...(ride.timetable_unreadable ? { timetable_unreadable: ride.timetable_unreadable } : {}), affordable_here: here });
       return elsewhere.length
         ? bounce(422, `"${action}" is not afforded where you stand`,
-          `${elsewhereHint(elsewhere)} ${canDo}`,
+          `${elsewhereHint(elsewhere, { extendsOf: await classExtendsForWords() })} ${canDo}`,
           { affordable_at: elsewhere, affordable_here: here })
         : bounce(422, `"${action}" is afforded nowhere in the world — no place grants it`,
           `No class mark in the world affords it, so there is nowhere to walk to for it. ${canDo}`,
