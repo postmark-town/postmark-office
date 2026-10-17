@@ -14,16 +14,15 @@
 // composeNextSteps, ownProse and CARD_MIN_CHARS are the town's code, never a copy
 // or a stub. This is its own file (its own process) because queries.mjs caches
 // the first quest-progress module it imports. Every input is a fixed literal in a
-// temp dir: the office index (test/fixture.mjs plus a synthetic quest registry
-// and a STALE quest_standing row), the card template, the cards, the pages. Both
-// indexes: office.db, and the suite's embedded store seeded from it.
+// temp dir: the town index (test/fixture.mjs plus a synthetic quest registry
+// and a STALE quest_standing row, in the suite's embedded store), the card
+// template, the cards, the pages.
 
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import { fixtureTown } from "./fixture.mjs";
+import { fixtureTown, put, setMeta, drop } from "./fixture.mjs";
 
 delete process.env.TOWN_INDEX_READS;
 delete process.env.WORLD2_PG;
@@ -31,9 +30,8 @@ delete process.env.WORLD2_PG_URL;
 
 const { tempDir } = await import("./helpers/temp-dir.mjs");
 const { NO_TOWN, townClone } = await import("./fixture-paths.mjs");
-const { fixtureDb } = await import("./fixture.mjs");
-const { indexStore, testIndex } = await import("./helpers/office-under-test.mjs");
-const { nextStepsFor, home: homeQ } = await import("../src/queries.mjs");
+const { indexStore } = await import("./helpers/office-under-test.mjs");
+const { nextStepsFor } = await import("../src/queries.mjs");
 const tis = await import("../src/town-index-store.mjs");
 
 const TOWN = townClone();
@@ -41,9 +39,8 @@ const QP = TOWN ? join(TOWN, "tools", "quest-progress.mjs") : null;
 const SKIP = !TOWN ? NO_TOWN : (!existsSync(QP) && "the town clone has no tools/quest-progress.mjs");
 
 const scratch = tempDir("postmark-pos603-steps-");
-const dbPath = join(scratch, "office.db");
 
-// ── the synthetic office index ──────────────────────────────────────────────
+// ── the synthetic town index ────────────────────────────────────────────────
 const ONE_TIME = [
   ["write-your-card", "write_card"], ["tend-your-home", "update_home"], ["hang-your-window", "update_window"],
   ["first-letter-out", "send_letter"], ["first-answer", null], ["walk-the-world", null], ["welcome-to-postmark", null],
@@ -52,20 +49,13 @@ const REGISTRY = { quests: ONE_TIME.map(([id, tool]) => ({ id, title: `the ${id}
 // STALE on purpose: the index says card, home and window are not done; sent is
 // not done either (an unrelated fact that must stay as the index says).
 const STALE = { card: false, home: false, window: false, sent: false, received: true, welcomed: true };
-if (!SKIP) {
-  fixtureTown().close();
-  const w = new DatabaseSync(dbPath);
-  w.prepare("INSERT OR REPLACE INTO meta VALUES (?, ?)").run("quest_registry", JSON.stringify(REGISTRY));
-  for (const h of ["wright", "limen"]) w.prepare("INSERT INTO quest_standing VALUES (?, ?)").run(h, JSON.stringify(STALE));
-  // limen has no indexed home row (the first-home case of this PR's first pass)
-  w.prepare("DELETE FROM homes WHERE handle = ?").run("limen");
-  w.close();
-}
-const db = SKIP ? null : new DatabaseSync(dbPath, { readOnly: true });
-const IX = SKIP ? null : await indexStore(dbPath);
-const STORE = !SKIP && testIndex() === "store";
-after(async () => { db?.close(); await IX?.stop(); });
-const meta = () => Object.fromEntries(db.prepare("SELECT key, value FROM meta").all().map((r) => [r.key, r.value]));
+const town = fixtureTown();
+setMeta(town, "quest_registry", JSON.stringify(REGISTRY));
+for (const h of ["wright", "limen"]) put(town, "quest_standing", { handle: h, json: JSON.stringify(STALE) });
+// limen has no indexed home row (the first-home case of this PR's first pass)
+drop(town, "homes", (r) => r.handle === "limen");
+const IX = SKIP ? null : await indexStore(town);
+after(async () => { await IX?.stop(); });
 
 // ── the synthetic clone ─────────────────────────────────────────────────────
 // A card template whose prompt lines are boilerplate the town strikes out.
@@ -97,22 +87,21 @@ function clone({ card = null, home = false, window = false } = {}) {
 const keyFor = (h) => ({ household: `house-${h}`, handles: new Set([h]) });
 const stepIds = (ns) => (ns?.steps ?? []).map((s) => s.id);
 
-/** Every scenario on both indexes. */
+/** Every scenario on the store's index, this process switched to it. */
 function both(name, fn) {
-  test(`${name} [office.db]`, { skip: SKIP }, () => fn(null));
-  test(`${name} [store]`, { skip: SKIP || (!STORE && "OFFICE_TEST_INDEX=office: no store variant in this run") }, async () => {
+  test(`${name} [store]`, { skip: SKIP }, async () => {
     const restore = await IX.useInProcess();
-    try { await fn(true); } finally { await restore(); }
+    try { await fn(); } finally { await restore(); }
   });
 }
-const steps = (handle, dir, { own = true, store = null } = {}) =>
-  nextStepsFor(db, meta(), handle, dir, { own, key: own ? keyFor(handle) : keyFor("limen"), worldBlock: async () => null, ix: store ? tis.storeIndexPooled(dir) : null });
+const steps = (handle, dir, { own = true } = {}) =>
+  nextStepsFor(handle, dir, { own, key: own ? keyFor(handle) : keyFor("limen"), worldBlock: async () => null, ix: tis.storeIndexPooled(dir) });
 
 // ═══ the owner, stale index, fresh record ═══════════════════════════════════
 
-both("OWNER · the record shows card, home and window done: the next steps stop asking, though the index still says not", async (store) => {
+both("OWNER · the record shows card, home and window done: the next steps stop asking, though the index still says not", async () => {
   const dir = clone({ card: `---\nhandle: limen\n---\n\n${OWN_250}\n`, home: true, window: true });
-  const ns = await steps("limen", dir, { store });
+  const ns = await steps("limen", dir);
   assert.ok(ns, "next steps were composed");
   const ids = stepIds(ns);
   for (const id of ["write-your-card", "tend-your-home", "hang-your-window"]) assert.equal(ids.includes(id), false, `${id} is done on the record: ${ids}`);
@@ -120,18 +109,18 @@ both("OWNER · the record shows card, home and window done: the next steps stop 
   assert.equal(ids.includes("welcome-to-postmark"), false, "and a complete one stays complete");
 });
 
-both("OWNER · still owed stays owed: a template-only card, a short card, no home page and no window", async (store) => {
+both("OWNER · still owed stays owed: a template-only card, a short card, no home page and no window", async () => {
   for (const card of [TEMPLATE, `${TEMPLATE}\nToo short to count.\n`]) {
-    const ids = stepIds(await steps("limen", clone({ card }), { store }));
+    const ids = stepIds(await steps("limen", clone({ card })));
     for (const id of ["write-your-card", "tend-your-home", "hang-your-window"]) assert.equal(ids.includes(id), true, `${id} is still owed: ${ids}`);
   }
 });
 
 // ═══ a stranger stays on the index ══════════════════════════════════════════
 
-both("STRANGER · the same fresh record changes nothing: the line is the index's", async (store) => {
+both("STRANGER · the same fresh record changes nothing: the line is the index's", async () => {
   const dir = clone({ card: `---\nhandle: limen\n---\n\n${OWN_250}\n`, home: true, window: true });
-  const ns = await steps("limen", dir, { own: false, store });
+  const ns = await steps("limen", dir, { own: false });
   const ids = stepIds(ns);
   for (const id of ["write-your-card", "tend-your-home", "hang-your-window"]) assert.equal(ids.includes(id), true, `${id} stays as indexed for a stranger: ${ids}`);
   assert.match(ns.withheld ?? "", /OWN doorstep only/);
@@ -139,9 +128,9 @@ both("STRANGER · the same fresh record changes nothing: the line is the index's
 
 // ═══ the founded home's shape ═══════════════════════════════════════════════
 
-test("FIRST HOME · the founded page carries picture: null, the /homes/:h shape [office.db]", { skip: SKIP }, () => {
+both("FIRST HOME · the founded page carries picture: null, the /homes/:h shape", async () => {
   const dir = clone({ home: true });
-  const h = homeQ(db, "limen", { clone: dir });
+  const h = await tis.storeIndexPooled(dir).home("limen", { clone: dir });
   assert.ok(h, "the founded page composes");
   assert.equal(Object.hasOwn(h, "picture"), true, "picture is a field of the answer");
   assert.equal(h.picture, null);

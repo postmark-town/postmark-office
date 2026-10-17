@@ -22,13 +22,27 @@
 // door — decides what may be indexed AS a handle and what may be served as one.
 // One definition, imported by both, so there is no second grammar to drift.
 
-import test from "node:test";
+import test, { after } from "node:test";
 import assert from "node:assert/strict";
-import { DatabaseSync } from "node:sqlite";
 
 import { HANDLE_RE, isResidentHandle } from "../src/residency.mjs";
-import { residentList } from "../src/queries.mjs";
+import { residentList, __resetRosterForTest } from "../src/town-index-store.mjs";
 import { putValues, fixtureTown } from "./fixture.mjs";
+import { indexStore } from "./helpers/office-under-test.mjs";
+
+// The roll reader is the store's (town-index-store.mjs § residentList), over the
+// fixture town in the suite's embedded store, re-seeded per read. The roll is
+// held per store head and the fixture's head never moves, so it is forgotten first.
+const town = fixtureTown();
+const IX = await indexStore(town);
+const api = await IX.store.connect("office_api");
+after(async () => { await api.end(); await IX.stop(); });
+async function rollOf(rows) {
+  for (const k of Object.keys(town)) town[k] = rows[k];
+  await IX.reseed();
+  __resetRosterForTest();
+  return residentList(api);
+}
 
 // The two non-resident directories the town actually carries, plus the shapes a
 // future one could take. `TEMPLATE` is already skipped upstream; `_archived` is
@@ -46,23 +60,23 @@ test("R1: the office has ONE definition of a well-formed handle, and it is expor
   for (const n of NOT_HANDLES) assert.ok(!isResidentHandle(n), `${n} could never have been admitted as a handle, so it is not one`);
 });
 
-test("R2: the roll reader refuses what the door would have refused — no _archived on the roll", () => {
+test("R2: the roll reader refuses what the door would have refused — no _archived on the roll", async () => {
   const db = fixtureTown();
   // Exactly what the live index holds: the retirement shelf, indexed as if it
   // were a person, by a hydration that filtered one name instead of applying a
   // rule.
   putValues(db, "residents", ["_archived", JSON.stringify({ handle: "_archived", is_office: false, address: { data: {}, body: "" } })]);
-  const handles = residentList(db).map((r) => r.handle);
+  const handles = (await rollOf(db)).map((r) => r.handle);
   assert.ok(!handles.includes("_archived"),
     "a folder was standing on the town's porch in the live walkers answer");
   for (const n of NOT_HANDLES) assert.ok(!handles.includes(n), `${n} must not read as a resident`);
 });
 
-test("R3: it is a FILTER, not a replacement — every real resident survives", () => {
+test("R3: it is a FILTER, not a replacement — every real resident survives", async () => {
   const db = fixtureTown();
-  const before = residentList(db).map((r) => r.handle).sort();
+  const before = (await rollOf(db)).map((r) => r.handle).sort();
   putValues(db, "residents", ["_archived", JSON.stringify({ handle: "_archived", is_office: false, address: { data: {}, body: "" } })]);
-  const after = residentList(db).map((r) => r.handle).sort();
+  const after = (await rollOf(db)).map((r) => r.handle).sort();
   assert.deepEqual(after, before,
     "adding a non-handle row must change nothing; dropping a real one would show up here");
   assert.ok(after.includes("wright") && after.includes("limen") && after.includes("postmaster"),
@@ -74,8 +88,8 @@ test("R4: the index refuses it at the door too, so the row never exists after a 
   // is ALREADY hydrated on the box. This one is the durable half: the office
   // should not be indexing a folder as a person in the first place. Asserted on
   // the source because hydration needs a real town clone and a real git history.
-  // The derivation moved to src/town-index.mjs (POS-268), which both office.db
-  // and the store's town-index ingest are written from, so that is the source read.
+  // The derivation moved to src/town-index.mjs (POS-268), which the store's
+  // town-index ingest is written from, so that is the source read.
   const fs = await import("node:fs");
   const { fileURLToPath } = await import("node:url");
   const { dirname, join } = await import("node:path");

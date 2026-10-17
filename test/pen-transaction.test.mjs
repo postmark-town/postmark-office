@@ -493,7 +493,6 @@ export function appendHouseKey(clone, signed) {
 const STUB_SETTLE = `
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { fixtureTown } from "./fixture.mjs";
 import { penCommit } from ${JSON.stringify(writeUrl)};
 export async function settleUnderLock({ handle, clone }) {
   const files = ["tools/households.json", "tools/github-ids.json"].map((rel) => join(clone, rel));

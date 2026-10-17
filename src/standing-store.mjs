@@ -59,8 +59,7 @@ export async function standingForHandles(handles, env = process.env) {
 /**
  * The same read on a client the caller already holds (`c.query`). The
  * freshness ladder asks standing on every resident read, and those run in the
- * read workers; on a switched office (TOWN_INDEX_READS=store) it rides the
- * town index's own read (src/paper-fresh.mjs § freshFor) rather than open a
+ * read workers; it rides the town index's own read (src/paper-fresh.mjs § freshFor) rather than open a
  * second pool in every worker on a cluster dev and prod share.
  */
 export async function standingForHandlesVia(c, handles) {

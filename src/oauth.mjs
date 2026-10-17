@@ -189,8 +189,7 @@ export const sweepClaims = (odb) =>
 // the pins, per index. Everything else below, the harbor stamp included,
 // is still recomputed on every lookup, so it falls off the moment the
 // Registrar lands a handle ashore, exactly as before.
-// The index is office.db's or, with TOWN_INDEX_READS=store, the store's probe
-// (index-probe.mjs; its stamp is the store's head).
+// The index is the store's probe (index-probe.mjs; its stamp is the store's head).
 const loginIndexes = new WeakMap(); // probe -> { stamp, map }
 function loginIndex(db, pinnedHandles) {
   const ix = probeOf(db);

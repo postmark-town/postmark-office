@@ -16,7 +16,7 @@ import {
 } from "node:fs";
 import { join, resolve } from "node:path";
 
-import { fixtureKey, putValues, fixtureTown } from "./fixture.mjs";
+import { fixtureKey, putValues, fixtureTown, drop } from "./fixture.mjs";
 import { copyTownTools } from "./helpers/town-tools.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
@@ -35,7 +35,7 @@ import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static k
 import { tempDir } from "./helpers/temp-dir.mjs";
 
 // The town index this file's offices read: a store seeded from each fixture
-// office.db (POS-268, office-under-test.mjs). Stopped when the file is done.
+// town (POS-268, office-under-test.mjs). Stopped when the file is done.
 const STORES = [];
 const storeFor = async (town) => { const x = await indexStore(town); STORES.push(x); return x.env; };
 test.after(async () => { for (const x of STORES) await x.stop(); });
@@ -350,7 +350,7 @@ test("THE MAIL LAW: a flag-on send is visible to the SENDER and invisible to the
 
       // and nothing about the recipient changed anywhere in the record
       assert.deepEqual(inboxFiles(clone, "limen"), []);
-      assert.equal(db.prepare("SELECT 1 FROM letters WHERE id = ?").get(mine.standing[0].letter_id), undefined,
+      assert.equal(db.letters.find((l) => l.id === mine.standing[0].letter_id), undefined,
         "no projection row either — the office index learns about a letter when the record does");
     });
   } finally { rmSync(clone, { recursive: true, force: true }); }
@@ -580,7 +580,8 @@ test("the disclosed path survives a hyphenated recipient — it is carried, neve
     assert.ok(existsSync(join(clone, shown)),
       "the disclosed path is the real one — a sender told the wrong address for their own letter is a door lying quietly");
   } finally {
-    db.prepare("DELETE FROM residents WHERE handle = ?").run("jetto-walk");
+    drop(db, "residents", (r) => r.handle === "jetto-walk");
+    await IX_IN.reseed();
     rmSync(clone, { recursive: true, force: true });
   }
 });

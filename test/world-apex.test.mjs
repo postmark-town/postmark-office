@@ -194,7 +194,6 @@ export function pointInPolygon() { return false; }
 `);
 put("tools/world-verbs.mjs", `
 import { rect, contains, pointInRect } from "./geometry.mjs";
-import { fixtureTown } from "./fixture.mjs";
 const area = (m) => (m.extent?.w ?? 1) * (m.extent?.h ?? 1);
 export function containmentChain(pos, marks) {
   const containing = marks
@@ -343,8 +342,6 @@ let BASE = null; // set per office, since each one is handed a different port
 
 async function withOffice(env, fn) {
   const dir = tempDir("postmark-apex-srv-");
-  const { fixtureDb } = await import("./fixture.mjs");
-  fixtureTown().close();
   const port = await freePort();
   BASE = `http://127.0.0.1:${port}`;
   // The child gets its OWN temp and its OWN oauth.db. Without the first it

@@ -18,8 +18,8 @@
 // (`parseStampLedger` + `foldBalances` + `foldStaked`, imported live from the
 // clone, never vendored). That is the same fold `tools/world-stake.mjs
 // § worldStakeState` performs for balances — the fold the CLIP itself reads —
-// and the same one `src/hydrate.mjs` performs to fill the index's `stamps`
-// table.
+// and the same one the town index's derivation (`src/town-index.mjs` §
+// stampFold) performs to fill the index's `stamps` table.
 //
 // ⚑ AND IT IS DELIBERATELY NOT THE INDEX. The lane brief says "from the same
 // fold the estate read uses", and the estate read (`household-stamps.mjs

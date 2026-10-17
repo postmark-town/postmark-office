@@ -39,7 +39,7 @@ async function withOffice(fn, extra = {}) {
   for (const [k, v] of Object.entries(extra)) if (v == null) delete env[k];
   const proc = spawn(process.execPath, [
     join(ROOT, "src", "server.mjs"), "--port", "0",
-    "--db", join(tmp, "fixture.db"), "--oauth-db", join(tmp, "oauth.db"), "--roles-db", join(tmp, "roles.db"),
+    "--oauth-db", join(tmp, "oauth.db"), "--roles-db", join(tmp, "roles.db"),
   ], {
     env,
     stdio: ["ignore", "pipe", "pipe"],

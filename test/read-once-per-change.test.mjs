@@ -1,11 +1,10 @@
-// read-once-per-change.test.mjs — two whole reads the office paid per call,
+// read-once-per-change.test.mjs — a whole read the office paid per call,
 // now paid per change (POS-272).
 //
-//   ROLL      `queries.mjs § residentList` parsed every resident's card on every
-//             MCP world call (`mcp.mjs § rollFor`). It is kept per sqlite handle
-//             under the handle's change stamp (`PRAGMA data_version` for other
-//             connections, `total_changes()` for its own), so a second call
-//             re-reads nothing, and a write through either connection is seen.
+// (The ROLL half, office.db's residentList kept per sqlite handle, went with
+// office.db, POS-656: the store's roll is held per store head,
+// town-index-store.mjs § roster.)
+//
 //   PASSAGES  `enter-exit-ledger.mjs § livePassageRows` read every passage act
 //             from the record on every call (the say's aboard-by-occupancy
 //             branch, the crossing doors). It is kept under the passage set's
@@ -15,73 +14,17 @@
 //
 // ── THE FLIPS (run after the commit; the red lines go in the report) ────────
 //
-//   1. `residentList` ignores its stamp and always answers the kept rows:
-//      "a write through the other connection" and "a write through its own"
-//      go red.
-//   2. `passageMark` keys on `max(id)` alone: "a passage committed below the
+//   1. `passageMark` keys on `max(id)` alone: "a passage committed below the
 //      mark" goes red.
-//   3. `livePassageRows` never answers from the memo: the two "reads once"
+//   2. `livePassageRows` never answers from the memo: the two "reads once"
 //      counts go red.
 
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { DatabaseSync } from "node:sqlite";
-
-import { residentList } from "../src/queries.mjs";
 import { livePassageRows, __forgetPassages } from "../src/enter-exit-ledger.mjs";
 import { __setPoolForTest } from "../src/world2-acts.mjs";
 
-const scratch = mkdtempSync(join(tmpdir(), "read-once-"));
-after(() => { __setPoolForTest(null); __forgetPassages(); rmSync(scratch, { recursive: true, force: true }); });
-
-// ── ROLL ─────────────────────────────────────────────────────────────────────
-
-function indexWith(path, handles) {
-  const w = new DatabaseSync(path);
-  w.exec("CREATE TABLE residents (handle TEXT PRIMARY KEY, json TEXT NOT NULL)");
-  const put = w.prepare("INSERT INTO residents VALUES (?, ?)");
-  for (const h of handles) put.run(h, JSON.stringify({ display: h.toUpperCase() }));
-  return w;
-}
-
-test("ROLL: a second ask with nothing changed re-reads nothing, and hands back its own copies", () => {
-  const w = indexWith(join(scratch, "a.db"), ["alder", "birch"]);
-  const r = new DatabaseSync(join(scratch, "a.db"), { readOnly: true });
-  let reads = 0;
-  const counted = new Proxy(r, { get(target, prop) {
-    if (prop !== "prepare") return typeof target[prop] === "function" ? target[prop].bind(target) : target[prop];
-    return (sql) => { if (/FROM residents/.test(sql)) reads += 1; return target.prepare(sql); };
-  } });
-  const first = residentList(counted);
-  const second = residentList(counted);
-  assert.equal(reads, 1, "the roll was read again with nothing changed");
-  assert.deepEqual(second, first);
-  second[0].display = "edited by a caller";
-  assert.equal(residentList(counted)[0].display, "ALDER", "one caller's edit reached the next caller");
-  r.close(); w.close();
-});
-
-test("ROLL: a write through the other connection is seen on the next ask", () => {
-  const w = indexWith(join(scratch, "b.db"), ["alder"]);
-  const r = new DatabaseSync(join(scratch, "b.db"), { readOnly: true });
-  assert.deepEqual(residentList(r).map((x) => x.handle), ["alder"]);
-  w.prepare("INSERT INTO residents VALUES (?, ?)").run("cedar", "{}");
-  assert.deepEqual(residentList(r).map((x) => x.handle), ["alder", "cedar"]);
-  w.prepare("UPDATE residents SET json = ? WHERE handle = ?").run(JSON.stringify({ display: "Renamed" }), "alder");
-  assert.equal(residentList(r)[0].display, "Renamed", "an edited card was answered from before the edit");
-  r.close(); w.close();
-});
-
-test("ROLL: a write through its own connection is seen on the next ask", () => {
-  const w = indexWith(join(scratch, "c.db"), ["alder"]);
-  assert.deepEqual(residentList(w).map((x) => x.handle), ["alder"]);
-  w.prepare("INSERT INTO residents VALUES (?, ?)").run("dogwood", "{}");
-  assert.deepEqual(residentList(w).map((x) => x.handle), ["alder", "dogwood"]);
-  w.close();
-});
+after(() => { __setPoolForTest(null); __forgetPassages(); });
 
 // ── PASSAGES ─────────────────────────────────────────────────────────────────
 

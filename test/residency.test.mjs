@@ -13,7 +13,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { fixtureTown } from "./fixture.mjs";
+import { fixtureTown, put, setMeta } from "./fixture.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
 import { indexStore, seedRegistry } from "./helpers/office-under-test.mjs";
 import { serializeRegistry, slugFromName, houseForAccount, houseForName, planRegistryJoin } from "../src/residency.mjs";
@@ -83,9 +83,10 @@ let child, tmp, ghServer, clone, IX, bare, BARE;
 
 const readBody = (req) => new Promise((r) => { let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => r(b)); });
 
+let town; // the fixture town the office's store is seeded from (§ settleResident)
 before(async () => {
   tmp = tempDir("postmark-office-residency-");
-  const town = fixtureTown();
+  town = fixtureTown();
 
   // a git-backed town clone: the pins file the mapping reads + a real repo so
   // the post-merge send can commit through the write spine
@@ -178,12 +179,11 @@ before(async () => {
     },
     stdio: ["ignore", "pipe", "pipe"],
   }));
-  // The record's keys and the switch: the town index is the store seeded from
-  // this suite's fixture office.db (POS-268), and a test that writes a resident
-  // into the fixture copies it to the store and moves the store's as-of, as an
-  // ingest would (§ settleResident). The office polls its index every 200 ms
-  // here, so the new row is read at once. OFFICE_TEST_INDEX=office keeps
-  // the old way: no switch, the fixture office.db read live. One read worker:
+  // The record's keys: the town index is the store seeded from this suite's
+  // fixture town (POS-268), and a test that writes a resident into the fixture
+  // copies it to the store and moves the store's as-of, as an ingest would
+  // (§ settleResident). The office polls its index every 200 ms here, so the
+  // new row is read at once. One read worker:
   // switched, every worker keeps a pen pool of its own and polls the store, and
   // at cores − 1 workers one office held ~45 of the test server's 100
   // connections (measured 2026-10-07), so a second office met "remaining
@@ -643,18 +643,13 @@ function officeSays(re) {
 
 /**
  * A resident lands in the town index, as a join merge lands their ADDRESS: in
- * the fixture office.db, and (switched) in the store the office reads, at a new
- * as-of so the office's held roll and probe read it again. Resolves once the
+ * the fixture town, and in the store the office reads, at a new as-of so the office's held roll and probe read it again. Resolves once the
  * store holds the row; when the office reads it is its poll's business, so the
  * caller waits on the office's own answer, never on a clock.
  */
 async function settleResident(handle, card) {
-  const { DatabaseSync } = await import("node:sqlite");
-  const idx = new DatabaseSync(join(tmp, "fixture.db"));
-  idx.prepare("INSERT OR REPLACE INTO residents (handle, json) VALUES (?, ?)").run(handle, JSON.stringify(card));
-  idx.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('as_of', ?)").run(`fixture-with-${handle}`);
-  idx.close();
-  if (!IX.env.TOWN_INDEX_READS) return;
+  put(town, "residents", { handle, json: JSON.stringify(card) });
+  setMeta(town, "as_of", `fixture-with-${handle}`);
   await IX.reseed();
 }
 

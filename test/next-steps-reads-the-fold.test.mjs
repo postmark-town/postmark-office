@@ -35,7 +35,7 @@
 // drive a CHILD process with `--import`. A counting case that could not fail
 // would be worth nothing, so each child ends by proving the counter moves.
 
-import test from "node:test";
+import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, writeFileSync, rmSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -44,7 +44,9 @@ import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 
 import { nextStepsFor, onboardingFactsFromStanding, STANDING_FACT } from "../src/queries.mjs";
-import { putValues, fixtureTown } from "./fixture.mjs";
+import { put, drop, setMeta, fixtureTown } from "./fixture.mjs";
+import { indexStore } from "./helpers/office-under-test.mjs";
+import { storeIndexPooled } from "../src/town-index-store.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "..");
@@ -61,7 +63,6 @@ const registryText = () => {
     `no town checkout at ${TOWN} — set TOWN_CLONE. The office imports the town's quest law live; there is nothing to guard without it.`);
   return readFileSync(p, "utf8");
 };
-const META = () => ({ quest_registry: registryText(), quest_day: "1970-01-01" });
 
 // The two rows, in the shape `standingRowsFromTown` writes them.
 const SETTLED = {
@@ -76,11 +77,20 @@ const FRESH = {
   depth: { eachWay: 0, best: 0, since: null, friends: [] },
 };
 
-const withRow = (handle, row) => {
-  const db = fixtureTown();
-  if (row) putValues(db, "quest_standing", [handle, JSON.stringify(row)], ["handle", "json"]);
-  return db;
+// The town index the reads answer from: the fixture's, in the suite's embedded
+// store, with the town's own quest registry and (per case) one standing row.
+const town = fixtureTown();
+const IX = await indexStore(town);
+after(async () => { await IX.stop(); });
+const withRow = async (handle, row) => {
+  setMeta(town, "quest_registry", registryText());
+  setMeta(town, "quest_day", "1970-01-01");
+  drop(town, "quest_standing");
+  if (row) put(town, "quest_standing", { handle, json: JSON.stringify(row) });
+  await IX.reseed();
+  return storeIndexPooled(TOWN, { env: IX.env });
 };
+const steps = async (handle, row) => nextStepsFor(handle, TOWN, { ix: await withRow(handle, row) });
 const onboardingIds = (ns) => new Set(ns.steps.filter((s) => s.kind === "onboarding").map((s) => s.id));
 
 // ── THE PRECONDITION THAT MAKES F2 MEAN ANYTHING ────────────────────────────
@@ -144,7 +154,7 @@ test("F1 · the six onboarding facts are projected off the standing row, by the 
 });
 
 test("F2 · the doorstep's onboarding steps follow the ROW, not the clone — both directions", async () => {
-  const fresh = await nextStepsFor(withRow("wright", FRESH), META(), "wright", TOWN);
+  const fresh = await steps("wright", FRESH);
   assert.ok(fresh, `nextStepsFor returned null — the checkout at ${TOWN} has no composeNextSteps`);
   const open = onboardingIds(fresh);
   for (const id of Object.keys(STANDING_FACT)) {
@@ -154,7 +164,7 @@ test("F2 · the doorstep's onboarding steps follow the ROW, not the clone — bo
   // The other direction, against the SAME clone: a settled row empties the list.
   // Without this half the case would pass against a block that simply listed
   // every onboarding row unconditionally.
-  const settled = await nextStepsFor(withRow("wright", SETTLED), META(), "wright", TOWN);
+  const settled = await steps("wright", SETTLED);
   const still = onboardingIds(settled);
   for (const id of Object.keys(STANDING_FACT)) {
     assert.equal(still.has(id), false, `"${id}" is settled on the row and still on the checklist`);
@@ -162,12 +172,11 @@ test("F2 · the doorstep's onboarding steps follow the ROW, not the clone — bo
   assert.notDeepEqual([...open], [...still], "the two rows produced the same answer — the row is not being read at all");
 });
 
-test("F3 · a doorstep read with a standing row parses the stamp ledger ZERO times", () => {
+test("F3 · a doorstep read with a standing row parses the stamp ledger ZERO times", async () => {
+  await withRow("wright", SETTLED);
   const out = child(`
-    const db = fixtureTown();
-    db.prepare("INSERT INTO quest_standing (handle, json) VALUES (?, ?)").run("wright", JSON.stringify(SETTLED));
     const c0 = count();
-    const ns = await nextStepsFor(db, META(), "wright", TOWN);
+    const ns = await nextStepsFor("wright", TOWN, { ix });
     const parses = count() - c0;
     console.log(ns ? ("RESULT parses=" + parses + " steps=" + ns.steps.length) : "RESULT VOID no-compose-next-steps");
   `);
@@ -192,7 +201,7 @@ test("F3 · a doorstep read with a standing row parses the stamp ledger ZERO tim
 // TODAY'S behaviour, unchanged, at today's cost, for exactly that case.
 
 test("F4 · with no standing row the block still answers from the clone — unchanged behaviour", async () => {
-  const ns = await nextStepsFor(withRow("wright", null), META(), "wright", TOWN);
+  const ns = await steps("wright", null);
   assert.ok(ns, "an index with no standing row must still answer");
   const open = onboardingIds(ns);
   for (const id of Object.keys(STANDING_FACT)) {
@@ -201,16 +210,17 @@ test("F4 · with no standing row the block still answers from the clone — unch
   }
   // Can-fail: the same call must be able to SURFACE a row. Driven against a
   // handle the checkout has nothing for, so the clone itself says "not done".
-  const stranger = await nextStepsFor(withRow("nobody-by-this-name", null), META(), "nobody-by-this-name", TOWN);
+  const stranger = await steps("nobody-by-this-name", null);
   assert.ok(stranger, "the block answers for a handle the checkout does not know");
   assert.ok(onboardingIds(stranger).size > 0,
     "a handle with nothing done surfaced no onboarding step at all — this case would pass by having nothing to check");
 });
 
-test("F5 · the fallback costs what it always cost — three ledger parses, and it is the ONLY path that parses", () => {
+test("F5 · the fallback costs what it always cost — three ledger parses, and it is the ONLY path that parses", async () => {
+  await withRow("wright", null);
   const out = child(`
     const c0 = count();
-    const ns = await nextStepsFor(fixtureTown(), META(), "wright", TOWN);
+    const ns = await nextStepsFor("wright", TOWN, { ix });
     const parses = count() - c0;
     console.log(ns ? ("RESULT parses=" + parses + " steps=" + ns.steps.length) : "RESULT VOID no-compose-next-steps");
   `);
@@ -240,7 +250,7 @@ function child(body) {
     try {
       return execFileSync(process.execPath,
         ["--import", pathToFileUrlString(join(dir, "register.mjs")), join(dir, "driver.mjs")],
-        { encoding: "utf8", env: { ...process.env, POS167_TOWN: TOWN, POS167_ROOT: ROOT }, stdio: ["ignore", "pipe", "pipe"] });
+        { encoding: "utf8", env: { ...process.env, POS167_TOWN: TOWN, POS167_ROOT: ROOT, POS167_STORE: JSON.stringify(IX.env) }, stdio: ["ignore", "pipe", "pipe"] });
     } catch (e) {
       // A child that died still has to REPORT. Swallowing the throw here and
       // handing the assertions its output is what turns "the test crashed" into
@@ -283,13 +293,14 @@ import { pathToFileURL } from 'node:url';
 const TOWN = process.env.POS167_TOWN;
 const ROOT = process.env.POS167_ROOT;
 const { nextStepsFor } = await import(pathToFileURL(join(ROOT, 'src', 'queries.mjs')).href);
-const { fixtureDb } = await import(pathToFileURL(join(ROOT, 'test', 'fixture.mjs')).href);
+const { storeIndexPooled } = await import(pathToFileURL(join(ROOT, 'src', 'town-index-store.mjs')).href);
 const qp = await import(pathToFileURL(join(TOWN, 'tools', 'quest-progress.mjs')).href);
-const META = () => ({ quest_registry: readFileSync(join(TOWN, 'quest-registry.json'), 'utf8'), quest_day: '1970-01-01' });
+const ix = storeIndexPooled(TOWN, { env: JSON.parse(process.env.POS167_STORE) });
 const SETTLED = ${JSON.stringify(SETTLED)};
 const count = () => globalThis.__POS167 ?? 0;
 ${body}
 const c1 = count();
 qp.onboardingFactsFor(TOWN, 'wright');
 console.log('CONTROL moved=' + (count() - c1));
+process.exit(0); // the store's pool would hold the child open
 `;

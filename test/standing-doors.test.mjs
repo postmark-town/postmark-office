@@ -313,14 +313,10 @@ test("S7 · REST AND MCP: writes bounce, reads pass, lift reopens, revoke shuts 
   const clone = townClone();
   let child;
   try {
-    const dbPath = fixtureTown();
-    const IX = await storeFor(dbPath);
+    const IX = await storeFor(fixtureTown());
     const IX_ENV = { ...IX.env };
-    // The spawned office reads standing from its own store; with the suite's
-    // index forced back to office.db (OFFICE_TEST_INDEX=office) it has none, so
-    // it reads the in-process ledger store instead.
-    const LEDGER_STORE = IX.store ?? STANDING;
-    if (!IX.store) Object.assign(IX_ENV, { WORLD2_PG: "1", WORLD2_PG_URL: STANDING.url("office_api") });
+    // The spawned office reads standing from its own store.
+    const LEDGER_STORE = IX.store;
     await resetStanding(LEDGER_STORE);
     const odbPath = join(work, "oauth.db");
     openOauthDb(odbPath).close();

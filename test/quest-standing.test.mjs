@@ -18,14 +18,32 @@
 // or a db — the alternative would be greps over the call site, and a grep for a
 // call is not a check on a value.
 
-import test from "node:test";
+import test, { after } from "node:test";
 import assert from "node:assert/strict";
-import { DatabaseSync } from "node:sqlite";
-import { questBoardFor, standingJoin, standingFor, STANDING_FACT, STANDING_NOTES } from "../src/queries.mjs";
+import { standingJoin, STANDING_FACT, STANDING_NOTES } from "../src/queries.mjs";
+import { storeIndexPooled } from "../src/town-index-store.mjs";
+import { indexStore } from "./helpers/office-under-test.mjs";
 import { NO_TOWN, townClone, townModuleUrl } from "./fixture-paths.mjs";
 
 const TOWN = townClone(); // the same real checkout every office test imports the town's tools from
 const SKIP = !TOWN && NO_TOWN;
+
+// The boards are read from the store's town index (the suite's embedded store),
+// re-seeded with each case's rows: the store's quest reads are the board's reads.
+const seated = emptyTown();
+const IX = await indexStore(seated);
+after(async () => { await IX.stop(); });
+async function seat(rows) {
+  for (const k of Object.keys(seated)) seated[k] = rows[k] ?? [];
+  await IX.reseed();
+  return storeIndexPooled(TOWN, { env: IX.env });
+}
+/** The board for wright over `rows`, the index's meta `m` (the registry and the day the progress is good for). */
+async function boardFor(rows, m, opts = {}) {
+  setMeta(rows, "quest_registry", m.quest_registry);
+  setMeta(rows, "quest_day", m.quest_day);
+  return (await seat(rows)).questBoard("wright", opts);
+}
 
 // A registry that carries one of every SHAPE the join branches on, not one of
 // every id in the town's file: the shapes are what the code distinguishes.
@@ -281,7 +299,7 @@ test("NO unmeasured row anywhere on a board is left without a note — driven bo
   // `read_quests` now promises an uncounted row "always names in `note` the
   // surface that CAN answer it". This is that sentence, executable.
   for (const [what, standing] of [["settled", SETTLED], ["fresh", FRESH], ["no index", null]]) {
-    const board = await questBoardFor(dbWith(standing, day), meta(day), "wright", TOWN);
+    const board = await boardFor(dbWith(standing, day), meta(day));
     const silent = board.quests.filter((q) => q.measured === false && !q.note).map((q) => q.id);
     assert.deepEqual(silent, [],
       `${what}: these rows say "nothing looked" and do not say who could. That is the founder's blank row, one row narrower.`);
@@ -378,7 +396,7 @@ async function today() {
 
 test("the founder's own board: every settled row measured, with its day", { skip: SKIP }, async () => {
   const day = await today();
-  const board = await questBoardFor(dbWith(SETTLED, day), meta(day), "wright", TOWN);
+  const board = await boardFor(dbWith(SETTLED, day), meta(day));
   // the two dailies are untouched by this seam
   assert.equal(q(board, "correspond-send").progress, 3);
   assert.equal(q(board, "correspond-send").measured, true);
@@ -428,7 +446,7 @@ test("the founder's own board: every settled row measured, with its day", { skip
 
 const boardWithWorld = async (block) => {
   const day = await today();
-  return questBoardFor(dbWith(SETTLED, day), meta(day), "wright", TOWN, { worldBlock: async () => block });
+  return boardFor(dbWith(SETTLED, day), meta(day), { worldBlock: async () => block });
 };
 
 test("#2773 the served board carries the world row the office actually read", { skip: SKIP }, async () => {
@@ -466,7 +484,7 @@ test("#2773 a decided verdict is used VERBATIM and the board reads nothing — t
   let asks = 0;
   const spy = async () => { asks += 1; return { sited: true }; };
 
-  const withheld = await questBoardFor(dbWith(SETTLED, day), meta(day), "wright", TOWN,
+  const withheld = await boardFor(dbWith(SETTLED, day), meta(day),
     { worldSited: null, worldBlock: spy });
   assert.equal(asks, 0, "a board handed a verdict must not go and ask anyway — that is the gate leaking");
   assert.equal(q(withheld, "walk-the-world").complete, null, "nobody looked, so the row says nobody looked");
@@ -474,7 +492,7 @@ test("#2773 a decided verdict is used VERBATIM and the board reads nothing — t
 
   // …and a verdict of `true` is equally taken at its word, so the leg above is
   // not passing on the strength of null being falsy somewhere.
-  const told = await questBoardFor(dbWith(SETTLED, day), meta(day), "wright", TOWN,
+  const told = await boardFor(dbWith(SETTLED, day), meta(day),
     { worldSited: true, worldBlock: spy });
   assert.equal(asks, 0);
   assert.equal(q(told, "walk-the-world").complete, true);
@@ -493,27 +511,20 @@ test("#2773 the board's world fact comes from the same reader the doorstep uses"
   // and the reader is asked exactly once per board, because the world is not free
   let asks = 0;
   const day = await today();
-  await questBoardFor(dbWith(SETTLED, day), meta(day), "wright", TOWN,
+  await boardFor(dbWith(SETTLED, day), meta(day),
     { worldBlock: async () => { asks += 1; return block; } });
   assert.equal(asks, 1, `the board opened the world ${asks} times for one row`);
 });
 
 test("a board served off an index without the fold is exactly as unmeasured as it was", { skip: SKIP }, async () => {
   const day = await today();
-  const board = await questBoardFor(dbWith(null, day), meta(day), "wright", TOWN);
+  const board = await boardFor(dbWith(null, day), meta(day));
   for (const id of ["write-your-card", "first-letter-out", "correspond-depth"]) {
     const r = q(board, id);
     assert.equal(r.measured, false, `${id}`);
     assert.equal(r.complete, null, `${id} must read null — "nothing looked" — never false`);
     assert.equal(r.note, STANDING_NOTES.no_index, `${id}`);
   }
-});
-
-test("standingFor survives an index with no such table and an index with no such row", () => {
-  const bare = new DatabaseSync(":memory:");
-  assert.equal(standingFor(bare, "wright"), null, "no table must be a null, not a throw — an old index still serves boards");
-  const db = emptyTown();
-  assert.equal(standingFor(db, "nobody"), null);
 });
 
 // ── the doorstep: the SAME derivation, and it shrinks with the board ─────────
@@ -534,7 +545,7 @@ test("standingFor survives an index with no such table and an index with no such
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { nextStepsFor } from "../src/queries.mjs";
-import { putValues, emptyTown, fixtureTown } from "./fixture.mjs";
+import { putValues, emptyTown, fixtureTown, setMeta } from "./fixture.mjs";
 
 // the office's own resolution order, matching next-steps.test.mjs. It WAS a
 // second order of its own — `process.cwd()/town-clone`, which names a different
@@ -547,8 +558,9 @@ async function stepsWith(standing) {
   const { readFileSync } = await import("node:fs");
   const db = fixtureTown();
   if (standing) putValues(db, "quest_standing", ["wright", JSON.stringify(standing)], ["handle", "json"]);
-  const meta = { quest_registry: readFileSync(join(LIVE_TOWN, "quest-registry.json"), "utf8"), quest_day: "1970-01-01" };
-  return nextStepsFor(db, meta, "wright", LIVE_TOWN);
+  setMeta(db, "quest_registry", readFileSync(join(LIVE_TOWN, "quest-registry.json"), "utf8"));
+  setMeta(db, "quest_day", "1970-01-01");
+  return nextStepsFor("wright", LIVE_TOWN, { ix: await seat(db) });
 }
 
 test("no step ever tells a resident a standing fact happened TODAY", { skip: SKIP }, async () => {
@@ -591,9 +603,11 @@ test("the doorstep and the board agree about the seven arrival rows", { skip: SK
   const { readFileSync } = await import("node:fs");
   const db = fixtureTown();
   putValues(db, "quest_standing", ["wright", JSON.stringify(SETTLED)], ["handle", "json"]);
-  const meta = { quest_registry: readFileSync(join(LIVE_TOWN, "quest-registry.json"), "utf8"), quest_day: "1970-01-01" };
-  const ns = await nextStepsFor(db, meta, "wright", LIVE_TOWN);
-  const board = await questBoardFor(db, meta, "wright", LIVE_TOWN);
+  setMeta(db, "quest_registry", readFileSync(join(LIVE_TOWN, "quest-registry.json"), "utf8"));
+  setMeta(db, "quest_day", "1970-01-01");
+  const ix = await seat(db);
+  const ns = await nextStepsFor("wright", LIVE_TOWN, { ix });
+  const board = await ix.questBoard("wright");
   const open = new Set(ns.steps.filter((s) => s.kind === "onboarding").map((s) => s.id));
   for (const id of Object.keys(STANDING_FACT)) {
     const r = board.quests.find((x) => x.id === id);

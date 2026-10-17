@@ -26,19 +26,23 @@ for C in "$D/town-clone" "$D/world-clone"; do
 done
 
 echo "== derived state: delete + rebuild =="
+# office.db is retired (POS-656) and nothing reads it; a leftover copy goes here too
 rm -f "$D"/office.db* "$D"/dynamic.db* "$D"/world.db*
 cd "$D"
-node src/hydrate.mjs --town "$D/town-clone" --db "$D/office.db" >/dev/null
-echo "  office.db rebuilt from the seed"
-# world.db is retired (POS-270 lane W 3b): the dev office reads the world graph
-# snapshot from its sandbox store, written as that store's law pen. The
-# operator supplies PG* for it; without them the snapshot is NOT rebuilt, and
-# this says so rather than leave the dev office on an older world quietly.
+# world.db is retired (POS-270 lane W 3b) and office.db too (POS-656): the dev
+# office reads the world graph snapshot and the town index from its sandbox
+# store, both written as that store's law pen. The operator supplies PG* for
+# it; without them neither is rebuilt, and this says so rather than leave the
+# dev office on an older town or world quietly.
 if [ -n "${PGDATABASE:-}" ] && [ -n "${PGUSER:-}" ]; then
+  # the town index, reseeded at the seed's head (DEPLOY.md § the dev box, step 7:
+  # the quest rows fold on the store's stamp chain, STAMP_LINES=store)
+  STAMP_LINES=store node world2/tools/town-index-ingest.mjs --town-repo "$D/town-clone" --sha "$(git -C "$D/town-clone" rev-parse HEAD)" --seed --reseed >/dev/null
+  echo "  the town index reseeded from the seed (store $PGDATABASE, as $PGUSER)"
   node src/world-hydrate.mjs --world "$D/world-clone" --office "$D" --to-store >/dev/null
   echo "  the world graph snapshot rebuilt from the seed (store $PGDATABASE, as $PGUSER)"
 else
-  echo "  WORLD GRAPH NOT REBUILT: export the sandbox store's law-pen PG* (PGHOST/PGDATABASE/PGUSER/PGPASSWORD) and run again" >&2
+  echo "  TOWN INDEX AND WORLD GRAPH NOT REBUILT: export the sandbox store's law-pen PG* (PGHOST/PGDATABASE/PGUSER/PGPASSWORD) and run again" >&2
 fi
 
 echo "== start dev office =="

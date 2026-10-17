@@ -7,12 +7,18 @@
 // measured over the 7105 inbox letters of the town clone at
 // G:/Wright-HQ/postmark/WHITE_PAGES on 2026-09-09, not estimated.
 
-import test from "node:test";
+import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
 import { fixtureTown } from "./fixture.mjs";
-import { letterExcerpt, mailList, letterList, search, bulletinList } from "../src/queries.mjs";
+import { indexStore } from "./helpers/office-under-test.mjs";
+import { letterExcerpt } from "../src/queries.mjs";
+import { mailList, letterList, search, bulletinList } from "../src/town-index-store.mjs";
 
-const db = fixtureTown();
+// THE DOORS' READS ARE THE STORE'S (POS-656): the fixture town in a store, read
+// as the office's role through town-index-store.mjs.
+let ix = null, api = null;
+before(async () => { ix = await indexStore(fixtureTown(), { db: "letter_excerpt" }); api = await ix.store.connect("office_api"); });
+after(async () => { await api?.end().catch(() => {}); await ix?.stop(); });
 
 // ── (1) THE SHAPES THAT ARE NOT A TEASER ────────────────────────────────────
 
@@ -155,16 +161,16 @@ test("the caller's own length class is honoured — the bulletin's is 160, not 2
 
 // ── (4) ONE FUNCTION, EVERY DOOR ────────────────────────────────────────────
 
-test("THE FALSIFIER: every door that serves first_line serves the SAME teaser", () => {
+test("THE FALSIFIER: every door that serves first_line serves the SAME teaser", async () => {
   // The whole point of fixing this at the office rather than on the site: a
   // reader still wired to the body's literal first line would show up here as
   // one door disagreeing with the others about the same letter.
   const ID = "limen-2026-07-03-to-wright-the-return";
   const EXPECTED = "The asking is the keeping."; // fixture body: "# The return\n\nThe asking is the keeping."
 
-  const fromMailList = mailList(db, "wright").letters.find((l) => l.id === ID);
-  const fromLetterList = letterList(db).letters.find((l) => l.id === ID);
-  const fromSearch = search(db, "asking").letters?.find((l) => l.id === ID);
+  const fromMailList = (await mailList(api, "wright")).letters.find((l) => l.id === ID);
+  const fromLetterList = (await letterList(api)).letters.find((l) => l.id === ID);
+  const fromSearch = (await search(api, "asking")).letters?.find((l) => l.id === ID);
 
   assert.equal(fromMailList.first_line, EXPECTED, "list_mail / the address card's mail excerpt / the doorstep's mail segment");
   assert.equal(fromLetterList.first_line, EXPECTED, "list_letters");
@@ -173,16 +179,16 @@ test("THE FALSIFIER: every door that serves first_line serves the SAME teaser", 
 
   // and the bulletin listing, whose first_line the site's doorstep renderer
   // prints for every posting with no authored teaser
-  const settling = bulletinList(db).find((e) => e.slug === "settling-in");
+  const settling = (await bulletinList(api)).find((e) => e.slug === "settling-in");
   assert.equal(settling.first_line, "Welcome to the town.",
     "the bulletin summarised a posting with the title printed directly above it");
 });
 
-test("the excerpt never carries a letter's body — the bound the doors were given", () => {
+test("the excerpt never carries a letter's body — the bound the doors were given", async () => {
   // A teaser that grew into a body would undo the 2026-08-25 mail bound
   // silently. Cheap to assert, and it is the shape of the defect that would
   // matter most.
-  for (const l of letterList(db).letters) {
+  for (const l of (await letterList(api)).letters) {
     assert.ok(l.first_line.length <= 200, `${l.id}: ${l.first_line.length} characters`);
     assert.equal(l.first_line.includes("\n"), false, `${l.id}: an excerpt is one line`);
   }

@@ -1872,8 +1872,9 @@ export function stampsRosterPage({ minted, accounts, n, start }, balances) {
 // repealed; the stamps are like any other, but are holo to signify the special
 // source." Holo is fresh mint to a giver, liquid like any stamp; the word names
 // its source and its ink. This read does NOT gain a holo arm for it: `balance`,
-// `mint_count` and `staked` come off the `stamps` table, which src/hydrate.mjs
-// writes from the TOWN's own foldBalances / foldMintCount / foldStaked imported
+// `mint_count` and `staked` come off the `stamps` table, which the town index
+// (src/town-index.mjs § stampFold) derives from the TOWN's own foldBalances /
+// foldMintCount / foldStaked imported
 // live from the checkout. So `minted` and `liquid` here carry holo BY
 // DERIVATION the moment the town's folds credit it (postmark-town/postmark
 // #2811) and the box rehydrates — and adding a second credit here would pay the

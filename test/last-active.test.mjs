@@ -26,17 +26,16 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 
-import { fixtureKey, fixtureTown } from "./fixture.mjs";
+import { fixtureKey, fixtureTown, put } from "./fixture.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
-import { copyIndexToStore } from "./helpers/index-to-store.mjs";
+import { seedTownIndex } from "./helpers/index-to-store.mjs";
 import { seedStaticKeys } from "./helpers/static-keys.mjs";
-import { LAST_ACTIVE_UNAVAILABLE, pickLastActive } from "../src/last-active.mjs";
+import { pickLastActive } from "../src/last-active.mjs";
 import { currentCrossing } from "../src/crossings.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const tmp = mkdtempSync(join(tmpdir(), "last-active-"));
-const dbPath = join(tmp, "office.db");
-const KEEP = Object.fromEntries(["TOWN_INDEX_READS", "WORLD2_PG", "WORLD2_PG_URL"].map((k) => [k, process.env[k]]));
+const KEEP = Object.fromEntries(["WORLD2_PG", "WORLD2_PG_URL"].map((k) => [k, process.env[k]]));
 let s = null, su = null, skip = false, db = null, pool = null, pen = null;
 const offices = {};
 const statements = [];
@@ -57,17 +56,17 @@ before(async () => {
   s = await startStore({ db: "last_active" });
   if (s.skip) { skip = s.skip; return; }
   db = fixtureTown();
-  db.prepare("INSERT INTO residents VALUES (?, ?)").run("quiet", JSON.stringify({ handle: "quiet", is_office: false,
-    last_active: "2026-07-06T09:00:00.000Z", address: { data: { joined: "2026-07-01", pronouns: "they/them" }, body: "# Quiet" } }));
-  db.prepare("INSERT INTO residents VALUES (?, ?)").run("decorator", JSON.stringify({ handle: "decorator", is_office: false,
-    address: { data: { joined: "2026-07-02" }, body: "# Decorator" } }));
+  put(db, "residents", { handle: "quiet", json: JSON.stringify({ handle: "quiet", is_office: false,
+    last_active: "2026-07-06T09:00:00.000Z", address: { data: { joined: "2026-07-01", pronouns: "they/them" }, body: "# Quiet" } }) });
+  put(db, "residents", { handle: "decorator", json: JSON.stringify({ handle: "decorator", is_office: false,
+    address: { data: { joined: "2026-07-02" }, body: "# Decorator" } }) });
   // quiet RECEIVES a letter, delivered after every other seed: if received mail counted, quiet would read
   // it (POS-481 review, O7). Its sender is a stranger to the roll, so no other row moves.
-  db.prepare("INSERT INTO letters VALUES (?,?,?,?,?,?,?,?,?,?)").run("a-stranger-2026-07-10-to-quiet-hello", "a-stranger", "quiet",
-    "2026-07-10", null, "inbox", "quiet", "WHITE_PAGES/quiet/inbox/x.md",
-    JSON.stringify({ id: "a-stranger-2026-07-10-to-quiet-hello", from: "a-stranger", to: "quiet", date: "2026-07-10", body: "# Hello", delivered_at: "2026-07-10T12:04:00.000Z" }), "2026-07-10T12:04:00.000Z");
+  put(db, "letters", { id: "a-stranger-2026-07-10-to-quiet-hello", from_h: "a-stranger", to_h: "quiet",
+    date: "2026-07-10", thread: null, box: "inbox", owner: "quiet", path: "WHITE_PAGES/quiet/inbox/x.md",
+    json: JSON.stringify({ id: "a-stranger-2026-07-10-to-quiet-hello", from: "a-stranger", to: "quiet", date: "2026-07-10", body: "# Hello", delivered_at: "2026-07-10T12:04:00.000Z" }), delivered_at: "2026-07-10T12:04:00.000Z" });
   const w = await s.connect("law_ingester");
-  await copyIndexToStore(w, db);
+  await seedTownIndex(w, db);
   await w.end();
   su = await s.connect("postgres");
   // the acts: at, crossing, actor, action, class. Each is inserted now, long after its `at`;
@@ -101,14 +100,15 @@ before(async () => {
   } });
   pen = await import("../src/world2-pen.mjs");
 
-  for (const [name, env] of [["plain", { WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") }],
-    ["switched", { TOWN_INDEX_READS: "store", WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") }],
-    ["cut-off", { WORLD2_PG: "1", WORLD2_PG_URL: "postgres://office_api:x@127.0.0.1:9/none" }]]) {
-    const child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0", "--db", dbPath,
+  // one office, reading its town index and the acts from the store (POS-656: the
+  // office.db office, and the one whose store was cut off but whose roll still
+  // answered from office.db, went with the file)
+  for (const [name, env] of [["office", { WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") }]]) {
+    const child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0",
       "--oauth-db", seedStaticKeys(join(tmp, `${name}-oauth.db`), `${KEY}=fixture-house:wright`), "--roles-db", join(tmp, `${name}-roles.db`)], {
       env: { ...process.env, TOWN_CLONE: join(tmp, "no-clone-here"), WORLD_CLONE: join(tmp, "no-world-clone"), VOICES_LOG: join(tmp, `${name}-voices.jsonl`),
         TOWN_PUSH: "", WORLD_APEX: "1" /* the apexes, as prod serves them */, WORLD_STORE_DB: join(tmp, "no-world.db"), OFFICE_READ_WORKERS: "0",
-        TOWN_INDEX_READS: undefined, WORLD2_PG: undefined, WORLD2_PG_URL: undefined, ...env },
+        WORLD2_PG: undefined, WORLD2_PG_URL: undefined, ...env },
       stdio: ["ignore", "pipe", "pipe"],
     });
     await new Promise((ok, no) => {
@@ -125,7 +125,6 @@ after(async () => {
   if (pool) await Promise.race([pool.end().catch(() => {}), new Promise((ok) => setTimeout(ok, 2000))]);
   if (su) await su.end().catch(() => {});
   if (s?.stop) await s.stop();
-  db?.close();
   for (const [k, v] of Object.entries(KEEP)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
   rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
@@ -150,7 +149,7 @@ const get = async (office, path) => {
   return res.json();
 };
 
-for (const office of ["plain", "switched"]) {
+for (const office of ["office"]) {
   test(`${office} office: GET /residents carries each resident's newest act of their own`, async (t) => {
     if (skip) return t.skip(skip);
     const page = await get(office, "/residents");
@@ -195,42 +194,28 @@ for (const office of ["plain", "switched"]) {
 
 test("a letter sent at crossing N reads crossing N (the acceptance)", async (t) => {
   if (skip) return t.skip(skip);
-  const card = await get("plain", "/residents/limen");
+  const card = await get("office", "/residents/limen");
   assert.equal(card.last_active, LIMEN_LETTER);
   assert.equal(card.last_active_crossing, 46);
 });
 
-test("an office whose store is gone answers the roll, and says why last_active is null", async (t) => {
+test("MCP: one statement reads the acts for a whole page", async (t) => {
   if (skip) return t.skip(skip);
-  const page = await get("cut-off", "/residents");
-  assert.ok(page.residents.length >= 4, "the roll still answers from office.db");
-  assert.equal(page.last_active_unavailable, LAST_ACTIVE_UNAVAILABLE);
-  for (const r of page.residents) assert.deepEqual(pick(r), { last_active: null, last_active_crossing: null }, r.handle);
-  const card = await get("cut-off", "/residents/wright");
-  assert.equal(card.last_active_unavailable, LAST_ACTIVE_UNAVAILABLE);
-  assert.equal(card.last_active, null, "never the index's commit-derived value");
+  Object.assign(process.env, { WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") });
+  pen.__setPoolForTest(pool);
+  const { callTool } = await import("../src/mcp.mjs");
+  const ctx = { key: fixtureKey, asOf: "fixture", clone: join(tmp, "no-clone-here"), canWrite: false };
+  statements.length = 0;
+  const page = await callTool("list_residents", {}, ctx);
+  assert.equal(statements.length, 1, `one statement for ${page.residents.length} residents, got ${statements.length}`);
+  for (const [h, want] of Object.entries(EXPECT)) assert.deepEqual(pick(page.residents.find((r) => r.handle === h)), want, h);
+  statements.length = 0;
+  const card = await callTool("read_resident", { handle: "limen" }, ctx);
+  assert.deepEqual(pick(card), EXPECT.limen);
+  const found = await callTool("search_town", { q: "wright" }, ctx);
+  assert.equal("residents_last_active" in found, false);
+  assert.equal(statements.length, 1, "one for the card; search reads no acts");
 });
-
-for (const switched of [false, true]) {
-  test(`MCP (switch ${switched ? "on" : "off"}): one statement reads the acts for a whole page`, async (t) => {
-    if (skip) return t.skip(skip);
-    Object.assign(process.env, { WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") });
-    if (switched) process.env.TOWN_INDEX_READS = "store"; else delete process.env.TOWN_INDEX_READS;
-    pen.__setPoolForTest(pool);
-    const { callTool } = await import("../src/mcp.mjs");
-    const ctx = { db, meta: {}, key: fixtureKey, asOf: "fixture", clone: join(tmp, "no-clone-here"), canWrite: false };
-    statements.length = 0;
-    const page = await callTool("list_residents", {}, ctx);
-    assert.equal(statements.length, 1, `one statement for ${page.residents.length} residents, got ${statements.length}`);
-    for (const [h, want] of Object.entries(EXPECT)) assert.deepEqual(pick(page.residents.find((r) => r.handle === h)), want, h);
-    statements.length = 0;
-    const card = await callTool("read_resident", { handle: "limen" }, ctx);
-    assert.deepEqual(pick(card), EXPECT.limen);
-    const found = await callTool("search_town", { q: "wright" }, ctx);
-    assert.equal("residents_last_active" in found, false);
-    assert.equal(statements.length, 1, "one for the card; search reads no acts");
-  });
-}
 
 test("pickLastActive: the newest of the two sources wins, and its crossing is the clock's at that time", () => {
   const m = pickLastActive([

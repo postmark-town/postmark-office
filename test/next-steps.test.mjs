@@ -25,7 +25,7 @@
 // suite therefore depends on the town branch being merged FIRST, which is the
 // merge order the gold plan sets: town → office → site.
 
-import test from "node:test";
+import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -37,7 +37,9 @@ import { HOUSEHOLD_DISPATCHABLE, householdDispatchToolFor, paperGapRows, worldSi
 import { DISPATCHABLE as WORLD_DISPATCHABLE, dispatchToolFor as worldDispatchToolFor } from "../src/world-apex.mjs";
 import { WORLD_WRITE_VERBS } from "../src/bouncer.mjs";
 import { nextStepsFor } from "../src/queries.mjs";
-import { fixtureTown } from "./fixture.mjs";
+import { fixtureTown, setMeta, drop } from "./fixture.mjs";
+import { indexStore } from "./helpers/office-under-test.mjs";
+import { storeIndexPooled } from "../src/town-index-store.mjs";
 import { townClone } from "./fixture-paths.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -111,11 +113,17 @@ test("the guard can see a bad door — a fabricated verb is caught, so the pass 
 
 // ── "their next steps" — the field the office door now carries ──────────────
 
-const META = () => ({ quest_registry: JSON.stringify(registry()), quest_day: "1970-01-01" });
+// The town index the reads answer from: the fixture's, in the suite's embedded
+// store, with the town's own quest registry.
+const town = fixtureTown();
+setMeta(town, "quest_registry", JSON.stringify(registry()));
+setMeta(town, "quest_day", "1970-01-01");
+const IX = await indexStore(town);
+after(async () => { await IX.stop(); });
+const ixFor = (clone = TOWN) => storeIndexPooled(clone, { env: IX.env });
 
 test("the office's next_steps derives from the TOWN's own tool — every step, its shape", async () => {
-  const db = fixtureTown();
-  const ns = await nextStepsFor(db, META(), "wright", TOWN);
+  const ns = await nextStepsFor("wright", TOWN, { ix: ixFor() });
   assert.ok(ns, `nextStepsFor returned null — the checkout at ${TOWN} has no composeNextSteps; merge the town branch first`);
   assert.ok(Array.isArray(ns.steps));
   assert.match(ns.source, /tools\/quest-progress\.mjs/, "the block names the town tool it derives from");
@@ -129,8 +137,7 @@ test("the office's next_steps derives from the TOWN's own tool — every step, i
 });
 
 test("every door in a LIVE next_steps answer is dispatchable — the guard, run against real output", async () => {
-  const db = fixtureTown();
-  const ns = await nextStepsFor(db, META(), "wright", TOWN);
+  const ns = await nextStepsFor("wright", TOWN, { ix: ixFor() });
   assert.ok(ns);
   for (const s of ns.steps) {
     if (!s.door) continue;
@@ -146,7 +153,7 @@ async function allPaperGapIds() {
   const bare = mkdtempSync(join(tmpdir(), "no-town-"));
   try {
     const rows = await paperGapRows("nobody-by-this-name", {
-      db: fixtureTown(), clone: bare, worldBlock: async () => ({ sited: false }),
+      ix: ixFor(bare), clone: bare, worldBlock: async () => ({ sited: false }),
     });
     return rows.map((r) => r.id);
   } finally { rmSync(bare, { recursive: true, force: true }); }
@@ -163,8 +170,7 @@ test("one obligation, one voice: every paper-gap id is one the town's onboarding
 });
 
 test("one obligation, one voice: composeNextSteps drops the overlap rather than appending it", async () => {
-  const db = fixtureTown();
-  const ns = await nextStepsFor(db, META(), "wright", TOWN);
+  const ns = await nextStepsFor("wright", TOWN, { ix: ixFor() });
   assert.ok(ns);
   const byId = new Map();
   for (const s of ns.steps) byId.set(s.id, (byId.get(s.id) ?? 0) + 1);
@@ -185,10 +191,9 @@ test("one obligation, one voice: composeNextSteps drops the overlap rather than 
 });
 
 test("paperGapRows keeps the sentences paperGaps has always returned", async () => {
-  const db = fixtureTown();
   const { paperGaps } = await import("../src/household-apex.mjs");
-  const rows = await paperGapRows("limen", { db, clone: TOWN });
-  const flat = await paperGaps("limen", { db, clone: TOWN });
+  const rows = await paperGapRows("limen", { ix: ixFor(), clone: TOWN });
+  const flat = await paperGaps("limen", { ix: ixFor(), clone: TOWN });
   assert.deepEqual(rows.map((r) => r.text), flat, "the id-carrying shape and the sentence shape are the same list");
   for (const r of rows) assert.match(r.id, /^[a-z][a-z0-9-]*$/, "every gap knows what it is a gap in");
 });
@@ -227,9 +232,8 @@ const countingWorld = (verdict) => {
 };
 
 test('08-15: a foreign read never even LOOKS UP the gaps — "not theirs to be seen by"', async () => {
-  const db = fixtureTown();
   const spy = countingWorld({ sited: false });
-  const ns = await nextStepsFor(db, META(), "wright", TOWN, { own: false, worldBlock: spy.block });
+  const ns = await nextStepsFor("wright", TOWN, { ix: ixFor(), own: false, worldBlock: spy.block });
   assert.ok(ns, "the block still rides — what the public page shows is not a secret");
   assert.equal(spy.calls, 0,
     "a stranger's read must not consult the world record at all; a fact never looked up cannot leak through a later refactor of a filter");
@@ -242,9 +246,8 @@ test('08-15: a foreign read never even LOOKS UP the gaps — "not theirs to be s
 });
 
 test("08-15: your OWN read carries the gaps — the gate withholds from strangers, not from you", async () => {
-  const db = fixtureTown();
   const spy = countingWorld({ sited: false });
-  const ns = await nextStepsFor(db, META(), "wright", TOWN, { own: true, worldBlock: spy.block });
+  const ns = await nextStepsFor("wright", TOWN, { ix: ixFor(), own: true, worldBlock: spy.block });
   assert.ok(ns);
   assert.ok(spy.calls > 0, "your own door does read the world for you");
   assert.ok(ns.steps.some((s) => s.id === "walk-the-world"),
@@ -253,9 +256,8 @@ test("08-15: your OWN read carries the gaps — the gate withholds from stranger
 });
 
 test("08-15: the two reads differ ONLY by the gap-shaped rows — the gate is narrow", async () => {
-  const db = fixtureTown();
-  const mine = await nextStepsFor(db, META(), "wright", TOWN, { own: true, worldBlock: countingWorld({ sited: false }).block });
-  const theirs = await nextStepsFor(db, META(), "wright", TOWN, { own: false, worldBlock: countingWorld({ sited: false }).block });
+  const mine = await nextStepsFor("wright", TOWN, { ix: ixFor(), own: true, worldBlock: countingWorld({ sited: false }).block });
+  const theirs = await nextStepsFor("wright", TOWN, { ix: ixFor(), own: false, worldBlock: countingWorld({ sited: false }).block });
   const ids = (ns) => ns.steps.map((s) => s.id);
   const gapShaped = new Set(["walk-the-world"]);
   assert.deepEqual(ids(theirs), ids(mine).filter((id) => !gapShaped.has(id)),
@@ -264,22 +266,25 @@ test("08-15: the two reads differ ONLY by the gap-shaped rows — the gate is na
 });
 
 test("08-15: the gate defaults CLOSED — a caller that forgets to say whose door it is gets the stranger's answer", async () => {
-  const db = fixtureTown();
   const spy = countingWorld({ sited: false });
-  const ns = await nextStepsFor(db, META(), "wright", TOWN, { worldBlock: spy.block });
+  const ns = await nextStepsFor("wright", TOWN, { ix: ixFor(), worldBlock: spy.block });
   assert.equal(spy.calls, 0, "no `own` flag means not yours — the safe default is the one that discloses less");
   assert.ok(ns.withheld, "and it says so");
 });
 
 test("the block never throws — an unreadable handle costs the doorstep nothing", async () => {
-  const db = fixtureTown();
   // The two doors attach this as a garnish; a rejected promise there would take
   // a whole doorstep down over a checklist. Every failure mode must be a value.
-  const ns = await nextStepsFor(db, META(), "nobody-by-this-name", TOWN);
+  const ns = await nextStepsFor("nobody-by-this-name", TOWN, { ix: ixFor() });
   assert.ok(ns === null || Array.isArray(ns.steps), "a value, never a rejection");
-  const noRegistry = await nextStepsFor(db, {}, "wright", TOWN);
-  assert.ok(noRegistry === null || noRegistry.steps.length === 0,
-    "an index with no quest_registry in meta yields nothing to do, not a crash");
+  const registryRow = town.meta.find((r) => r.key === "quest_registry");
+  drop(town, "meta", (r) => r.key === "quest_registry");
+  await IX.reseed();
+  try {
+    const noRegistry = await nextStepsFor("wright", TOWN, { ix: ixFor() });
+    assert.ok(noRegistry === null || noRegistry.steps.length === 0,
+      "an index with no quest_registry in meta yields nothing to do, not a crash");
+  } finally { town.meta.push(registryRow); await IX.reseed(); }
 });
 
 test("the town tool is imported once per process — one office, one checkout", async () => {
@@ -289,10 +294,8 @@ test("the town tool is imported once per process — one office, one checkout", 
   // old to carry the fold" degradation is decided at the FIRST import of the
   // process and cannot be exercised after one has succeeded — the null path in
   // nextStepsFor is a boot-time guarantee, not a per-call one.
-  const { questBoardFor } = await import("../src/queries.mjs");
-  const db = fixtureTown();
-  const a = await questBoardFor(db, META(), "wright", TOWN);
-  const b = await questBoardFor(db, META(), "wright", join(TOWN, "no-such-checkout"));
+  const a = await ixFor().questBoard("wright");
+  const b = await ixFor(join(TOWN, "no-such-checkout")).questBoard("wright");
   assert.deepEqual(a.quests.map((q) => q.id), b.quests.map((q) => q.id),
     "the second call answers from the cached module, not from the bogus path");
 });

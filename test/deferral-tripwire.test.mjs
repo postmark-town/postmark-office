@@ -67,7 +67,7 @@ import { withRecordFrom } from "./registry-pool-stub.mjs";
 import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 
 // The town index this file's offices read: a store seeded from each fixture
-// office.db (POS-268, office-under-test.mjs). Stopped when the file is done.
+// town (POS-268, office-under-test.mjs). Stopped when the file is done.
 const STORES = [];
 const storeFor = async (town) => { const x = await indexStore(town); STORES.push(x); return x.env; };
 test.after(async () => { for (const x of STORES) await x.stop(); });

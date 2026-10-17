@@ -16,14 +16,12 @@
 // deliberately LARGER than the bound it tests. A fixture that fits inside the
 // bound would make this whole file green against the defect.
 
-import test from "node:test";
+import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
-import { DatabaseSync } from "node:sqlite";
-import { putValues, emptyTown } from "./fixture.mjs";
-import {
-  resident, mailList, letterList, repoLog, residentPage, residentList,
-  doorstep, bulletinTeaser, stampsRoster, search, regionList, CARD_MAIL, mailAwaiting,
-} from "../src/queries.mjs";
+import { putValues, emptyTown, setMeta } from "./fixture.mjs";
+import { indexStore } from "./helpers/office-under-test.mjs";
+import { CARD_MAIL } from "../src/queries.mjs";
+import * as store from "../src/town-index-store.mjs";
 
 const AS_OF = "bigfixture00000000000000000000000000000";
 
@@ -109,12 +107,31 @@ function bigDb() {
 
 const db = bigDb();
 
+// THE READS, FROM THE STORE (POS-656): the big town seeded once, read through
+// the doors' own readers (town-index-store.mjs) as the office's role.
+let ix = null, api = null;
+before(async () => {
+  ix = await indexStore(db, { db: "bounded_reads" });
+  api = await ix.store.connect("office_api");
+  store.__resetRosterForTest();
+});
+after(async () => { await api?.end().catch(() => {}); await ix?.stop(); });
+
+/** A small town of its own: seeded, read once through `read(api)`, stopped. */
+let smallTowns = 0;
+async function withTown(town, read) {
+  const own = await indexStore(town, { db: `bounded_reads_small_${++smallTowns}` });
+  const c = await own.store.connect("office_api");
+  try { store.__resetRosterForTest(); return await read(c); }
+  finally { await c.end().catch(() => {}); await own.stop(); store.__resetRosterForTest(); }
+}
+
 // ── the address card ────────────────────────────────────────────────────────
 
-test("resident card: the inbox is bounded, and the total is a DIFFERENT number", () => {
+test("resident card: the inbox is bounded, and the total is a DIFFERENT number", async () => {
   // "A bound and its count are ONE change, never two" — a count that could
   // never differ from its own list is the list length wearing a total's name.
-  const r = resident(db, "r000");
+  const r = await store.resident(api, "r000");
   assert.equal(r.inbox.length, CARD_MAIL, "the card renders the newest few, not the box");
   assert.equal(r.inbox_total, 40, "the total counts the whole box");
   assert.notEqual(r.inbox_total, r.inbox.length,
@@ -124,8 +141,8 @@ test("resident card: the inbox is bounded, and the total is a DIFFERENT number",
   assert.notEqual(r.outbox_total, r.outbox.length);
 });
 
-test("resident card: the excerpt carries no letter body, and names the door to the rest", () => {
-  const r = resident(db, "r000");
+test("resident card: the excerpt carries no letter body, and names the door to the rest", async () => {
+  const r = await store.resident(api, "r000");
   for (const l of r.inbox) {
     assert.equal(l.body, undefined, "a body on the identity card is the 782 KB defect returning");
     assert.ok(typeof l.first_line === "string", "list_mail's excerpt shape, not a bare id");
@@ -137,10 +154,10 @@ test("resident card: the excerpt carries no letter body, and names the door to t
   assert.match(r.mail_note, /\b36 further letters\b/, "35 inbox + 1 outbox withheld, said out loud");
 });
 
-test("resident card: a bound not reached says so, rather than looking like a cut one", () => {
+test("resident card: a bound not reached says so, rather than looking like a cut one", async () => {
   // "A cap must be visible": r002 has no mail at all, and must not read like
   // someone whose card merely stopped at five.
-  const r = resident(db, "r002");
+  const r = await store.resident(api, "r002");
   assert.equal(r.inbox_total, 0);
   assert.equal(r.inbox.length, 0);
   assert.match(r.mail_note, /nothing is withheld/);
@@ -149,8 +166,8 @@ test("resident card: a bound not reached says so, rather than looking like a cut
 
 // ── list_mail ───────────────────────────────────────────────────────────────
 
-test("list_mail: total, page, and a door past the bound that actually walks", () => {
-  const page = mailList(db, "r000", "inbox", { limit: 10 });
+test("list_mail: total, page, and a door past the bound that actually walks", async () => {
+  const page = await store.mailList(api, "r000", "inbox", { limit: 10 });
   assert.equal(page.shown, 10);
   assert.equal(page.total, 40);
   assert.notEqual(page.total, page.shown, "THE FALSIFIER: bound < total, count still true");
@@ -160,7 +177,7 @@ test("list_mail: total, page, and a door past the bound that actually walks", ()
   const seen = [];
   let offset = 0;
   for (let guard = 0; guard < 10; guard++) {
-    const p = mailList(db, "r000", "inbox", { limit: 10, offset });
+    const p = await store.mailList(api, "r000", "inbox", { limit: 10, offset });
     seen.push(...p.letters.map((l) => l.id));
     if (p.complete) break;
     offset = p.next_offset;
@@ -169,8 +186,8 @@ test("list_mail: total, page, and a door past the bound that actually walks", ()
   assert.equal(new Set(seen).size, 40, "the pages tile the box — no letter served twice");
 });
 
-test("list_mail: the last page says complete, and carries no read-more it cannot honour", () => {
-  const last = mailList(db, "r000", "inbox", { limit: 10, offset: 30 });
+test("list_mail: the last page says complete, and carries no read-more it cannot honour", async () => {
+  const last = await store.mailList(api, "r000", "inbox", { limit: 10, offset: 30 });
   assert.equal(last.complete, true);
   assert.equal(last.next_offset, undefined, "a cursor that points past the end is a lie in a field");
   assert.equal(last.more_note, undefined);
@@ -178,8 +195,8 @@ test("list_mail: the last page says complete, and carries no read-more it cannot
 
 // ── list_letters ────────────────────────────────────────────────────────────
 
-test("list_letters: `count` keeps its old meaning; `total` is the new, honest one", () => {
-  const l = letterList(db, { limit: 5 });
+test("list_letters: `count` keeps its old meaning; `total` is the new, honest one", async () => {
+  const l = await store.letterList(api, { limit: 5 });
   assert.equal(l.shown, 5);
   assert.equal(l.count, 5, "cached readers read `count` as the rows in hand — unchanged");
   assert.equal(l.total, 46, "40 in + 6 out");
@@ -187,20 +204,20 @@ test("list_letters: `count` keeps its old meaning; `total` is the new, honest on
   assert.equal(l.complete, false);
 });
 
-test("list_letters: the total counts the FILTER's matches, not the table", () => {
+test("list_letters: the total counts the FILTER's matches, not the table", async () => {
   // "A budget decides how much gets said; it must not decide what is true."
-  const filtered = letterList(db, { resident: "r001", limit: 5 });
+  const filtered = await store.letterList(api, { resident: "r001", limit: 5 });
   assert.equal(filtered.total, 46, "every letter in this fixture touches r001");
-  const narrow = letterList(db, { since: "2026-07-20", limit: 2 });
+  const narrow = await store.letterList(api, { since: "2026-07-20", limit: 2 });
   assert.ok(narrow.total < 46, "a narrower filter must move the total, or it is not reading the filter");
   assert.ok(narrow.total >= narrow.shown);
 });
 
-test("list_letters: full: true carries bodies; the default still carries none", () => {
-  const lean = letterList(db, { limit: 2 });
+test("list_letters: full: true carries bodies; the default still carries none", async () => {
+  const lean = await store.letterList(api, { limit: 2 });
   assert.equal(lean.letters[0].body, undefined);
   assert.equal(lean.full, undefined);
-  const full = letterList(db, { limit: 2, full: true });
+  const full = await store.letterList(api, { limit: 2, full: true });
   assert.equal(full.full, true);
   assert.match(full.letters[0].body, /body/, "the bulk-body door the address-card bound made necessary");
   assert.equal(full.total, lean.total, "the shape dial must not move the total");
@@ -208,20 +225,20 @@ test("list_letters: full: true carries bodies; the default still carries none", 
 
 // ── list_commits ────────────────────────────────────────────────────────────
 
-test("list_commits: the total is COMMITS, not file-change rows", () => {
-  const c = repoLog(db, { limit: 10 });
+test("list_commits: the total is COMMITS, not file-change rows", async () => {
+  const c = await store.repoLog(api, { limit: 10 });
   assert.equal(c.shown, 10);
   assert.equal(c.total, 45, "45 commits — the table holds 47 rows, because one commit touched three files");
-  const rows = Object.values(db.prepare("SELECT COUNT(*) AS n FROM repo_log").get())[0];
+  const rows = db.repo_log.length;
   assert.equal(rows, 47);
   assert.notEqual(c.total, rows,
     "THE FALSIFIER: a plain COUNT(*) here would report file rows under a commits noun");
   assert.notEqual(c.total, c.shown);
 });
 
-test("list_commits: offset reaches the tail of history the bound could not", () => {
-  const first = repoLog(db, { limit: 10 });
-  const tail = repoLog(db, { limit: 10, offset: 40 });
+test("list_commits: offset reaches the tail of history the bound could not", async () => {
+  const first = await store.repoLog(api, { limit: 10 });
+  const tail = await store.repoLog(api, { limit: 10, offset: 40 });
   assert.equal(tail.shown, 5);
   assert.equal(tail.complete, true);
   assert.equal(tail.total, 45, "the total does not shrink as you walk");
@@ -231,8 +248,8 @@ test("list_commits: offset reaches the tail of history the bound could not", () 
 
 // ── list_residents ──────────────────────────────────────────────────────────
 
-test("list_residents: bounded, counted, and it takes arguments at all now", () => {
-  const p = residentPage(db, {});
+test("list_residents: bounded, counted, and it takes arguments at all now", async () => {
+  const p = await store.residentPage(api, {});
   assert.equal(p.shown, 50);
   assert.equal(p.total, 60);
   assert.notEqual(p.total, p.shown, "THE FALSIFIER: bound < roll, count still true");
@@ -240,34 +257,34 @@ test("list_residents: bounded, counted, and it takes arguments at all now", () =
   assert.equal(p.next_offset, 50);
 });
 
-test("list_residents: FILTER FIRST, THEN SLICE — the total counts every match", () => {
+test("list_residents: FILTER FIRST, THEN SLICE — the total counts every match", async () => {
   // "A budget decides how much gets said; it must not decide what is true."
   // The August joiners are every ODD index across all 60 residents, so a
   // slice-then-filter bug would find 25 of them inside the first 50 and report
   // 25. Filtering first finds all 30.
-  const lately = residentPage(db, { since: "2026-08-01", limit: 5 });
+  const lately = await store.residentPage(api, { since: "2026-08-01", limit: 5 });
   assert.equal(lately.total, 30, "every August joiner, not the ones that survived a page cut");
   assert.equal(lately.shown, 5);
   assert.ok(lately.residents.every((r) => r.joined >= "2026-08-01"));
   assert.equal(lately.town_total, 60, "the roll's own size stays visible beside the filtered total");
   // and the filtered set is genuinely walkable to its end
-  const rest = residentPage(db, { since: "2026-08-01", limit: 5, offset: 25 });
+  const rest = await store.residentPage(api, { since: "2026-08-01", limit: 5, offset: 25 });
   assert.equal(rest.complete, true);
   assert.equal(rest.total, 30);
 });
 
-test("list_residents: the office filter narrows the total too", () => {
-  const offices = residentPage(db, { office: true });
+test("list_residents: the office filter narrows the total too", async () => {
+  const offices = await store.residentPage(api, { office: true });
   assert.equal(offices.total, 1);
   assert.equal(offices.complete, true);
-  const people = residentPage(db, { office: false });
+  const people = await store.residentPage(api, { office: false });
   assert.equal(people.total, 59);
 });
 
-test("residentList stays WHOLE — the bound lives at the door, not in the derivation", () => {
+test("residentList stays WHOLE — the bound lives at the door, not in the derivation", async () => {
   // Half the office derives from this roll (the walkers roll, the letter
   // filters, the doorstep's arrivals) and every one of them wants everyone.
-  assert.equal(residentList(db).length, 60);
+  assert.equal((await store.residentList(api)).length, 60);
 });
 
 // ── the doorstep ────────────────────────────────────────────────────────────
@@ -279,7 +296,7 @@ test("residentList stays WHOLE — the bound lives at the door, not in the deriv
 // assertion at the new address; the bundle's own structural falsifier lives in
 // test/doorstep-bundle.test.mjs.
 test("doorstep: the conversation ledger is bounded and the summary counts the whole of it", async () => {
-  const d = (await doorstep(db, "r000", AS_OF));
+  const d = (await store.doorstep(api, "r000", AS_OF));
   assert.equal(d.awaiting.conversations.length, 20);
   assert.equal(d.awaiting.conversations_total, 30);
   assert.notEqual(d.awaiting.conversations_total, d.awaiting.conversations.length,
@@ -307,20 +324,20 @@ test("doorstep: the awaiting threads are DERIVED FROM THE WHOLE LEDGER, then bou
   // that cannot fail proves nothing, so it is replaced rather than deleted: the
   // claim is now tested by SHRINKING THE BUDGET, which is the law's own words —
   // "a budget decides how much gets said; it must not decide what is true."
-  const d = (await doorstep(db, "r000", AS_OF));
+  const d = (await store.doorstep(api, "r000", AS_OF));
   assert.equal(d.awaiting.threads_total, 5);
   assert.equal(d.awaiting.threads.length, 5);
   assert.ok(d.awaiting.threads.every((a) => a.state === "new_inbound"));
   // The budget cut to two rows. Derive from the slice and `threads_total` falls
   // with it; derive from the whole ledger and it does not move.
-  const tight = mailAwaiting(db, "r000", { limit: 2 });
+  const tight = await store.mailAwaiting(api, "r000", { limit: 2 });
   assert.equal(tight.conversations.length, 2, "the budget did decide how much gets said");
   assert.equal(tight.threads_total, 5, "…and did not decide what is true");
   assert.equal(tight.outgoing_total, d.awaiting.outgoing_total, "the queued replies are whole-set too");
   assert.equal(tight.conversations_total, 30, "and the total is the ledger's, never the page's");
 });
 
-test("doorstep: what awaits YOU is on the first page, and the summary still counts the whole ledger", () => {
+test("doorstep: what awaits YOU is on the first page, and the summary still counts the whole ledger", async () => {
   // Walk #1 (docs/2026-09-05/resident-walk.md, 21:23 EDT, item 2), verbatim:
   //
   //   "Summary: they_spoke_last: 109 · new_inbound: 27. Rows shown: five
@@ -329,7 +346,7 @@ test("doorstep: what awaits YOU is on the first page, and the summary still coun
   //
   // Both numbers were right about different questions. The rows move; the
   // summary does not.
-  const a = mailAwaiting(db, "r000", { limit: 3 });
+  const a = await store.mailAwaiting(api, "r000", { limit: 3 });
   assert.ok(a.conversations.every((c) => c.next_actor === "you"),
     "the first rows a resident sees are the ones on their side of the table");
   assert.equal(a.conversations_awaiting_you, 5, "and the page says how many of the whole those are");
@@ -347,7 +364,7 @@ test("doorstep: what awaits YOU is on the first page, and the summary still coun
 });
 
 test("doorstep: the correspondence cursor walks to the end and stops", async () => {
-  const d = (await doorstep(db, "r000", AS_OF, { conversationsOffset: 20 }));
+  const d = (await store.doorstep(api, "r000", AS_OF, { conversationsOffset: 20 }));
   assert.equal(d.awaiting.conversations.length, 10);
   assert.equal(d.awaiting.conversations_offset, 20);
   assert.equal(d.awaiting.conversations_complete, true);
@@ -356,7 +373,7 @@ test("doorstep: the correspondence cursor walks to the end and stops", async () 
 });
 
 test("doorstep: the bulletin is a teaser with a total, newest first", async () => {
-  const d = (await doorstep(db, "r000", AS_OF));
+  const d = (await store.doorstep(api, "r000", AS_OF));
   // Three on the morning page now, not ten: the bundle's bulletin segment IS
   // `town read: "bulletin", limit: 3` — a teaser and a pointer, per the
   // refactor. `read_bulletin` with no arguments still answers the whole board.
@@ -368,32 +385,32 @@ test("doorstep: the bulletin is a teaser with a total, newest first", async () =
   assert.equal(d.bulletin.entries[0].slug, "2026-07-15-notice-14", "newest first — the tail is what a teaser drops");
 });
 
-test("bulletinTeaser: the offset the more_note names actually walks the board", () => {
+test("bulletinTeaser: the offset the more_note names actually walks the board", async () => {
   // "A cap must be visible" has a sibling: a read-more a caller cannot take is
   // a pointer at a door that does not open. The note said the whole listing was
   // one read away and meant fetching all fifteen; now it names an offset.
-  const first = bulletinTeaser(db, { limit: 3 });
+  const first = await store.bulletinTeaser(api, { limit: 3 });
   assert.equal(first.next_offset, 3);
-  const second = bulletinTeaser(db, { limit: 3, offset: first.next_offset });
+  const second = await store.bulletinTeaser(api, { limit: 3, offset: first.next_offset });
   assert.equal(second.offset, 3);
   assert.equal(second.total, 15, "the total does not shrink as you walk");
   assert.notEqual(second.entries[0].slug, first.entries[0].slug, "the second page is a different page");
-  const last = bulletinTeaser(db, { limit: 3, offset: 12 });
+  const last = await store.bulletinTeaser(api, { limit: 3, offset: 12 });
   assert.equal(last.complete, true);
   assert.equal(last.next_offset, undefined, "a cursor is null exactly when there is nothing more");
 });
 
-test("bulletinTeaser: a board shorter than the bound reports itself complete", () => {
+test("bulletinTeaser: a board shorter than the bound reports itself complete", async () => {
   const small = emptyTown();
   putValues(small, "bulletin", ["a", JSON.stringify({ data: {}, body: "# a" })]);
-  const t = bulletinTeaser(small);
+  const t = await withTown(small, (c) => store.bulletinTeaser(c));
   assert.equal(t.total, 1);
   assert.equal(t.complete, true);
   assert.equal(t.more, undefined, "a short list and a cut list must not look alike");
 });
 // ── the second pass: the surfaces the first wave left standing ───────────────
 
-test("stampsRoster: minted_cumulative is NOT the account count, so the roster needed its own", () => {
+test("stampsRoster: minted_cumulative is NOT the account count, so the roster needed its own", async () => {
   // The trap this closes is subtler than the others: this read always carried a
   // total — `minted_cumulative` — and it is a total of STAMPS, in a different
   // unit from the list beside it. A reader could not learn from it how many
@@ -402,7 +419,8 @@ test("stampsRoster: minted_cumulative is NOT the account count, so the roster ne
   const small = emptyTown();
   const insS = (...v) => putValues(small, "stamps", v, ["handle", "balance", "mint_count", "staked"]);
   for (let i = 0; i < 70; i++) insS(`h${String(i).padStart(3, "0")}`, 100 - i, 100 - i, 0);
-  const r = stampsRoster(small, { stamps_minted: "9999" }, {});
+  setMeta(small, "stamps_minted", "9999"); // the minted total is the index's own meta
+  const [r, tail] = await withTown(small, async (c) => [await store.stampsRoster(c, {}), await store.stampsRoster(c, { offset: 50 })]);
   assert.equal(r.balances.length, 50);
   assert.equal(r.accounts, 70);
   assert.equal(r.minted_cumulative, 9999);
@@ -412,17 +430,16 @@ test("stampsRoster: minted_cumulative is NOT the account count, so the roster ne
   assert.equal(r.next_offset, 50);
   // sorted by balance descending, so the page is the top of the table
   assert.equal(r.balances[0].balance, 100);
-  const tail = stampsRoster(small, { stamps_minted: "9999" }, { offset: 50 });
   assert.equal(tail.balances.length, 20);
   assert.equal(tail.complete, true);
   assert.equal(tail.accounts, 70, "the total does not shrink as you walk");
 });
 
-test("search: a truncated search SAYS it truncated, per bucket", () => {
+test("search: a truncated search SAYS it truncated, per bucket", async () => {
   // "A search that silently truncates at 25 and says nothing is the `capped`
   // lesson unlearned." The two buckets cut at different sizes and are capped
   // independently, so one flag for both would be a lie half the time.
-  const hits = search(db, "letter", {});
+  const hits = await store.search(api, "letter", {});
   assert.equal(hits.letters.length, 25);
   assert.equal(hits.matches.letters, 40);
   assert.notEqual(hits.matches.letters, hits.letters.length,
@@ -430,16 +447,16 @@ test("search: a truncated search SAYS it truncated, per bucket", () => {
   assert.equal(hits.capped.letters, true);
   assert.equal(hits.capped.residents, false, "no resident matches 'letter' — an honest false, not a copied flag");
   assert.equal(hits.next_offset, 25);
-  const rest = search(db, "letter", { offset: 25 });
+  const rest = await store.search(api, "letter", { offset: 25 });
   assert.equal(rest.letters.length, 15);
   assert.equal(rest.complete, true);
   assert.equal(rest.matches.letters, 40);
 });
 
-test("search: a term that fits reports capped false in both buckets", () => {
+test("search: a term that fits reports capped false in both buckets", async () => {
   // "out2" hits exactly one letter id and no resident — a search whose answer
   // is genuinely the whole answer, which must not read like a page of one.
-  const hits = search(db, "out2", {});
+  const hits = await store.search(api, "out2", {});
   assert.equal(hits.matches.letters, 1);
   assert.equal(hits.letters.length, 1);
   assert.equal(hits.capped.letters, false);
@@ -448,14 +465,14 @@ test("search: a term that fits reports capped false in both buckets", () => {
   assert.equal(hits.next_offset, undefined, "no cursor that points past the end");
 });
 
-test("regionList: the region page and the per-region roll are counted separately", () => {
+test("regionList: the region page and the per-region roll are counted separately", async () => {
   const small = emptyTown();
   const insReg = (...v) => putValues(small, "regions", v);
   for (let i = 0; i < 30; i++) {
     const residents = Array.from({ length: i === 0 ? 40 : 2 }, (_, k) => `r${k}`);
     insReg(`reg-${String(i).padStart(2, "0")}`, `Region ${i}`, JSON.stringify({ body: `Description ${i}`, residents }));
   }
-  const a = regionList(small, {});
+  const a = await withTown(small, (c) => store.regionList(c, {}));
   assert.equal(a.shown, 25);
   assert.equal(a.total, 30);
   assert.notEqual(a.total, a.shown, "THE FALSIFIER: the atlas page is not the atlas");

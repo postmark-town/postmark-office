@@ -8,28 +8,26 @@
 // (src/paper-fresh.mjs) already composes the written record over the index; three
 // household-door reads were never handed its context:
 //
-//   G1  household { read: "address" } on office.db (the store's branch had it)
-//   G2  household { read: "home" }, both indexes
+//   G1  household { read: "address" } (the store's branch already had it)
+//   G2  household { read: "home" }
 //   G3  the papers check (paperGapRows): "tend your HOME page" after the page
 //       was tended — on the bare household read and read: "standing"
 //
 // WHAT RUNS. The real household apex (householdApex), the real paper doors
 // (edit.mjs through paperDoor/penTransaction), the real freshFor and the real
 // composed readers and hydration parsers, over:
-//   · the suite's synthetic office.db (test/fixture.mjs, fixed literals), whose
-//     index is never rebuilt here, so every pen write leaves it STALE;
+//   · the suite's synthetic town index (test/fixture.mjs, fixed literals) in the
+//     suite's embedded store (test/helpers/office-under-test.mjs § indexStore),
+//     never an env-named database; it is never re-ingested here, so every pen
+//     write leaves it STALE;
 //   · a fresh synthetic town checkout per test (fixed literals, a temp dir, a
-//     local bare origin for the push case), never a real clone;
-//   · the store variant through the suite's embedded store
-//     (test/helpers/office-under-test.mjs § indexStore), seeded from that same
-//     office.db, never an env-named database.
+//     local bare origin for the push case), never a real clone.
 // Injected, and only at the outside boundary: the world block (a fixed `null`)
 // for the household reads; WORLD_CLONE pointed at an absent temp path, so the
 // doorstep's own world read (which takes no injector) reports "unreadable" and
-// never opens a world; the record's acts pool (world2-acts.mjs §
-// __setPoolForTest) for the suspended and unreadable-standing cases; the store
-// index's pool (town-index-store.mjs § __setTownIndexPoolForTest) for the
-// unreachable-store case. Nothing here pushes beyond the temp origin, reads a
+// never opens a world; the store index's pool (town-index-store.mjs §
+// __setTownIndexPoolForTest) for the suspended, unreadable-standing and
+// unreachable-store cases. Nothing here pushes beyond the temp origin, reads a
 // real record, or calls an office endpoint.
 
 import test, { after } from "node:test";
@@ -37,8 +35,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import { fixtureTown } from "./fixture.mjs";
+import { fixtureTown, drop } from "./fixture.mjs";
 
 delete process.env.TOWN_INDEX_READS;
 delete process.env.TOWN_PUSH; // set only inside the push-refusal test, against its temp origin
@@ -50,16 +47,13 @@ const { tempDir } = await import("./helpers/temp-dir.mjs");
 const scratch = tempDir("postmark-pos603-");
 // read at world.mjs's load, so set before anything imports it: no world is opened
 process.env.WORLD_CLONE = join(scratch, "no-world-clone");
-const { fixtureDb } = await import("./fixture.mjs");
-const { indexStore, testIndex } = await import("./helpers/office-under-test.mjs");
+const { indexStore } = await import("./helpers/office-under-test.mjs");
 const { householdApex } = await import("../src/household-apex.mjs");
 const { openOauthDb } = await import("../src/oauth.mjs");
 const { ensureTownJournal } = await import("../src/town-journal.mjs");
 const { TENSE, freshFor } = await import("../src/paper-fresh.mjs");
-const { home: homeQ } = await import("../src/queries.mjs");
 const { ownerGate } = await import("../src/doorstep-bundle.mjs");
 const tis = await import("../src/town-index-store.mjs");
-const acts = await import("../src/world2-acts.mjs");
 
 const town = fixtureTown();
 // Two index states, set on the fixture's own rows (no row is invented):
@@ -67,16 +61,12 @@ const town = fixtureTown();
 //   · A BLANK INDEXED PAGE: wright's row keeps its title and loses its description,
 //     which is what the papers check reads as "owed".
 {
-  const w = new DatabaseSync(town);
-  w.prepare("DELETE FROM homes WHERE handle = ?").run("limen");
-  const row = JSON.parse(w.prepare("SELECT json FROM homes WHERE handle = ?").get("wright").json);
-  w.prepare("UPDATE homes SET json = ? WHERE handle = ?").run(JSON.stringify({ ...row, description: "" }), "wright");
-  w.close();
+  drop(town, "homes", (r) => r.handle === "limen");
+  const row = town.homes.find((r) => r.handle === "wright");
+  row.json = JSON.stringify({ ...JSON.parse(row.json), description: "" });
 }
-const db = new DatabaseSync(town, { readOnly: true });
 const IX = await indexStore(town);
-const STORE = testIndex() === "store";
-after(async () => { db.close(); await IX.stop(); });
+after(async () => { await IX.stop(); });
 
 // ── fixtures: fixed literals only ──────────────────────────────────────────
 const GIT = { GIT_AUTHOR_NAME: "fixture", GIT_AUTHOR_EMAIL: "fixture@postmark.invalid", GIT_COMMITTER_NAME: "fixture", GIT_COMMITTER_EMAIL: "fixture@postmark.invalid" };
@@ -113,7 +103,7 @@ function townLog() {
   return o;
 }
 const keyFor = (...handles) => ({ household: `house-${handles[0]}`, handles: new Set(handles), ghId: "42", ghLogin: "keeminlee" });
-const ctxFor = (clone, odb = null) => ({ db, clone, odb, town, schemas: {}, schemaRequired: {}, canWrite: true, worldBlock: async () => null });
+const ctxFor = (clone, odb = null) => ({ clone, odb, schemas: {}, schemaRequired: {}, canWrite: true, worldBlock: async () => null });
 const act = (verb, handle, args, clone, odb = null, key = keyFor(handle)) => householdApex({ do: verb, handle, args: { handle, ...args } }, key, ctxFor(clone, odb));
 const read = (what, handle, clone, odb = null, key = keyFor(handle), extra = {}) => householdApex({ read: what, ...(handle ? { handle } : {}), ...extra }, key, ctxFor(clone, odb));
 const okAct = (r, what) => { assert.equal(r.error, undefined, `${what}: ${JSON.stringify(r).slice(0, 300)}`); assert.ok(r.result, what); return r.result; };
@@ -123,10 +113,9 @@ const owesHome = (gaps) => gaps.some((g) => /tend your HOME page/.test(g));
 const HOME = { title: "the Lantern Workshop", body: "Benches, sawdust and a lamp that never goes out." };
 const WINDOW_HTML = '<!doctype html><html><body><script type="application/json" id="window-state">{"lamp":"lit"}</script></body></html>';
 
-/** Every scenario on both indexes: office.db, then (where the suite has one) the store. */
+/** Every scenario on the store's index, this process switched to it. */
 function both(name, fn) {
-  test(`${name} [office.db]`, () => fn());
-  test(`${name} [store]`, { skip: STORE ? false : "OFFICE_TEST_INDEX=office: no store variant in this run" }, async () => {
+  test(`${name} [store]`, async () => {
     const restore = await IX.useInProcess();
     try { await fn(); } finally { await restore(); }
   });
@@ -256,42 +245,45 @@ both("GATE · placement is never composed: a page carrying region frontmatter st
   assert.equal((await read("home", "wright", clone)).home.region, "the-terrace");
 });
 
-// The record's standing, through its own pool seam (office.db's road; the
-// store's road reads standing from the index store and is unchanged here).
-async function withActsPool(pool, fn) {
-  const keep = { pg: process.env.WORLD2_PG, url: process.env.WORLD2_PG_URL };
-  Object.assign(process.env, { WORLD2_PG: "1", WORLD2_PG_URL: "postgres://unused@127.0.0.1:9/never" }); // the pool below answers; this is never dialled
-  acts.__setPoolForTest(pool);
-  try { return await fn(); } finally {
-    acts.__setPoolForTest(null);
-    if (keep.pg === undefined) delete process.env.WORLD2_PG; else process.env.WORLD2_PG = keep.pg;
-    if (keep.url === undefined) delete process.env.WORLD2_PG_URL; else process.env.WORLD2_PG_URL = keep.url;
-  }
+// The record's standing, as the read reads it: through the town index's own
+// read (paper-fresh.mjs § standingForRead), here through its pool seam. `answer`
+// answers the standing query; every other statement the read sends (its
+// transaction, the as-of) answers no rows. The home is then read from the real
+// store, on the real pool.
+async function freshWithStanding(answer, clone) {
+  const restore = await IX.useInProcess();
+  let fresh;
+  try {
+    const client = { query: async (sql) => (/standing_acts/.test(String(sql?.text ?? sql)) ? answer() : { rows: [] }), release() {} };
+    tis.__setTownIndexPoolForTest({ connect: async () => client, query: client.query, end: async () => {}, on() {} });
+    fresh = await freshFor("limen", { clone });
+  } finally { await restore(); }
+  return fresh;
+}
+async function storeHome(handle, clone, fresh) {
+  const restore = await IX.useInProcess();
+  try { return await tis.storeIndexPooled(clone).home(handle, fresh); } finally { await restore(); }
 }
 const QUARANTINE = { id: 1, date: "2026-10-01", act: "quarantine", handle: "limen", by_who: "registrar", founder_word: null,
   reason: "fixture", line: "- 2026-10-01 · quarantine · limen · by: registrar · reason: fixture", source: "door", actor: null };
 
-test("GATE · a SUSPENDED handle's page is not composed ahead of the index (freshFor's standing gate) [office.db]", async () => {
+test("GATE · a SUSPENDED handle's page is not composed ahead of the index (freshFor's standing gate) [store]", async () => {
   const clone = townClone();
   pageOnRecord(clone, "limen");
-  await withActsPool({ query: async () => ({ rows: [QUARANTINE] }) }, async () => {
-    const fresh = await freshFor("limen", { clone });
-    assert.equal(fresh.suspended, true, "the stub's row reads as a quarantine");
-    assert.equal(homeQ(db, "limen", fresh), null);
-  });
+  const fresh = await freshWithStanding(() => ({ rows: [QUARANTINE] }), clone);
+  assert.equal(fresh.suspended, true, "the stub's row reads as a quarantine");
+  assert.equal(await storeHome("limen", clone, fresh), null);
 });
 
-test("GATE · an UNREADABLE standing keeps the overlay off too — never read as good standing [office.db]", async () => {
+test("GATE · an UNREADABLE standing keeps the overlay off too — never read as good standing [store]", async () => {
   const clone = townClone();
   pageOnRecord(clone, "limen");
-  await withActsPool({ query: async () => { throw new Error("standing store down"); } }, async () => {
-    const fresh = await freshFor("limen", { clone });
-    assert.equal(fresh.suspended, true, "fail closed");
-    assert.equal(homeQ(db, "limen", fresh), null);
-  });
+  const fresh = await freshWithStanding(() => { throw new Error("standing store down"); }, clone);
+  assert.equal(fresh.suspended, true, "fail closed");
+  assert.equal(await storeHome("limen", clone, fresh), null);
 });
 
-test("GATE · an unreachable store index is a 503, never a fallback page [store]", { skip: STORE ? false : "no store variant in this run" }, async () => {
+test("GATE · an unreachable store index is a 503, never a fallback page [store]", async () => {
   const clone = townClone();
   pageOnRecord(clone, "limen");
   const restore = await IX.useInProcess();
@@ -308,8 +300,8 @@ test("GATE · an unreachable store index is a 503, never a fallback page [store]
 both("DOORSTEP · ownerGate's settling_in stops asking for the page once it is tended (wright: indexed blank page; limen: first home)", async () => {
   for (const h of ["wright", "limen"]) {
     const clone = townClone();
-    const ix = tis.townIndexReads() ? tis.storeIndexPooled(clone) : null;
-    const gate = async () => (await ownerGate({ pending_outbox: 0 }, h, { db, clone, key: keyFor(h), odb: null, meta: {}, asOf: null, ix })).settling_in?.next ?? [];
+    const ix = tis.storeIndexPooled(clone);
+    const gate = async () => (await ownerGate({ pending_outbox: 0 }, h, { clone, key: keyFor(h), odb: null, asOf: null, ix })).settling_in?.next ?? [];
     assert.equal(owesHome(await gate()), true, `${h}: owed to start with`);
     okAct(await act("home", h, HOME, clone), `${h}: home`);
     assert.equal(owesHome(await gate()), false, `${h}: settling_in no longer asks`);
@@ -433,13 +425,13 @@ export function composeNextSteps({ paperRows }) {
   return { steps: (paperRows ?? []).map((r) => ({ id: r.id, text: r.text })) };
 }
 `;
-test("NEXT STEPS (office wiring only) · the paper rows handed to the composer stop asking once the first home is founded [office.db]", async () => {
+both("NEXT STEPS (office wiring only) · the paper rows handed to the composer stop asking once the first home is founded", async () => {
   const { nextStepsFor } = await import("../src/queries.mjs");
   const clone = townClone();
   writeFileSync(join(clone, "tools", "quest-progress.mjs"), QUEST_STUB);
   const run = async () => {
     delete globalThis.__pos603PaperRows;
-    const ns = await nextStepsFor(db, {}, "limen", clone, { own: true, key: keyFor("limen"), worldBlock: async () => null });
+    const ns = await nextStepsFor("limen", clone, { own: true, key: keyFor("limen"), worldBlock: async () => null, ix: tis.storeIndexPooled(clone) });
     const rows = globalThis.__pos603PaperRows;
     assert.ok(Array.isArray(rows), `the composer was reached with paperRows (next steps: ${JSON.stringify(ns)?.slice(0, 160)})`);
     return rows.map((r) => r.id);

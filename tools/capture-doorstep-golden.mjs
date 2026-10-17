@@ -10,7 +10,7 @@
 //
 // The household door's shadow reads (`address`, `home`, `window`) grew a card
 // beside their domain on 2026-08-31. `window` is a doorstep SEGMENT
-// (src/queries.mjs § doorstep), so a card that leaked into the read's composed
+// (src/town-index-store.mjs § doorstep), so a card that leaked into the read's composed
 // form would land on every morning page ever served. This file is the
 // before-picture that makes "it did not" a receipt rather than a claim.
 //
@@ -19,13 +19,15 @@
 // ⚠ REGENERATE IT ONLY FROM A COMMIT YOU MEAN TO FREEZE. Re-capturing after a
 // change makes the assertion say your change equals your change, which is the
 // shape of a test that cannot fail. The one in the tree was captured at
-// c552296 — the w37 train tip, BEFORE the shadow-read parity.
+// c552296 — the w37 train tip, BEFORE the shadow-read parity — from office.db;
+// since POS-656 the page reads the store seeded from the same fixture rows, and
+// the frozen picture is unchanged.
 import { mkdtempSync, rmSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { DatabaseSync } from "node:sqlite";
-import { fixtureDb } from "../test/fixture.mjs";
+import { fixtureTown } from "../test/fixture.mjs";
+import { indexStore } from "../test/helpers/office-under-test.mjs";
 // THE STANCE SEGMENT READS THE STORE (POS-195, 2026-09-22). `worldForStances`
 // moved off the sqlite journal onto `claims` through `stance_reader`, so this
 // page needs an office that HOLDS that credential — which is the office that
@@ -37,7 +39,7 @@ import { fixtureDb } from "../test/fixture.mjs";
 // The stub reads a dynamic store of the capture's own, fresh and empty, so the
 // live half of this page is the same on every machine (it read the tree's
 // `dynamicDbPath()` until POS-491; see the capture below). Imported from `test/`
-// like `fixtureDb` above, for the same reason: this tool and the falsifier must
+// like `fixtureTown` above, for the same reason: this tool and the falsifier must
 // compose from ONE fixture.
 import { stancePoolFromJournal, STANCE_ON } from "../test/stance-pool-stub.mjs";
 import { doorstepBundle } from "../src/doorstep-bundle.mjs";
@@ -84,12 +86,11 @@ export async function captureDoorstepGolden({ nowMs = GOLDEN_NOW_MS } = {}) {
   // one tree was red on every other, and on CI (no dynamic.db at all) always.
   Object.assign(process.env, STANCE_ON);
   stancePoolFromJournal(join(dir, "dynamic.db"));
-  const dbPath = join(dir, "fixture.db");
-  fixtureDb(dbPath).close();
-  const db = new DatabaseSync(dbPath, { readOnly: true });
+  // the town index: a store seeded from the fixture town, read in this process
+  const ix = await indexStore(fixtureTown(), { db: "doorstep_golden" });
+  const restore = await ix.useInProcess();
 
-  const meta = { as_of: "fixturesha000000000000000000000000000000" };
-  const ctx = { db, key: null, meta, asOf: meta.as_of, canWrite: false, clone: null, pen: null, odb: null, dbPath: null, nowMs };
+  const ctx = { key: null, asOf: "fixturesha000000000000000000000000000000", canWrite: false, clone: null, pen: null, odb: null, nowMs };
 
   try {
     return {
@@ -97,7 +98,8 @@ export async function captureDoorstepGolden({ nowMs = GOLDEN_NOW_MS } = {}) {
       slim: await doorstepBundle("wright", { ...ctx, slim: true }),
     };
   } finally {
-    db.close();
+    await restore();
+    await ix.stop();
     rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
   }
 }

@@ -23,12 +23,10 @@ import { indexStore } from "./helpers/office-under-test.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const tmp = mkdtempSync(join(tmpdir(), "town-index-boot-"));
-const dbPath = join(tmp, "office.db");
 let ix;
 
 before(async () => {
-  fixtureTown().close();
-  ix = await indexStore(dbPath);
+  ix = await indexStore(fixtureTown());
 });
 
 after(async () => {

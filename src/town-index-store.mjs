@@ -1,19 +1,17 @@
-// town-index-store.mjs — the office.db readers that have moved to the store
-// (POS-268). Each one answers exactly what its office.db twin in queries.mjs
-// answers, over the town_* tables (033_town_index.sql), and each has a test
-// holding the two equal: test/town-index-reads.test.mjs.
+// town-index-store.mjs — the office's town index readers, over the store's
+// town_* tables (033_town_index.sql). Each was ported from its office.db twin in
+// queries.mjs (POS-268), answering exactly what the twin answered; the twins
+// went with office.db (POS-656), and their answers over the suites' fixture are
+// kept as the record the readers are still held to (test/golden/office-db-twins,
+// test/town-index-reads.test.mjs and its siblings).
 //
-// ── THE SWITCH ───────────────────────────────────────────────────────────────
-//
-// `TOWN_INDEX_READS=store` moves every door listed in MOVED to these readers.
-// Unset, the office reads office.db exactly as before; rolling back is unsetting
-// it. There is no fallback between the two: a door switched to the store that
-// cannot reach it says so (the pen's 503), rather than quietly answering from the
-// other index (`the-town/the-disclosure`).
+// A door that cannot reach the store says so (the pen's 503); there is no other
+// index to answer from (`the-town/the-disclosure`).
 //
 // ── WHAT A PORT HAS TO CARRY ─────────────────────────────────────────────────
 //
-// Three sqlite behaviours the doors' answers depended on without saying so:
+// Three sqlite behaviours the doors' answers depended on without saying so, and
+// still do:
 //   · text compares and sorts BYTEWISE. Postgres' default collation does not, so
 //     every comparison and ORDER BY on text here is `COLLATE "C"`.
 //   · LIKE ignores ASCII case, and only ASCII case. `ilike` would fold more
@@ -45,11 +43,6 @@ import { holdStoreProbe, UNREACHABLE_DEFECT, UNREACHABLE_HINT } from "./index-pr
 // readers call; only the SQL is written twice. A port that restated the shape
 // would be the private copy that drifts.
 import { freshnessFor, composeHome, composeFoundedHome } from "./paper-fresh.mjs"; // the freshness ladder, as queries.home uses it
-
-export const MOVED = Object.freeze(["repoLog", "regionList", "regionOne", "bulletinList", "bulletinTeaser", "bulletinEntry", "home", "stampsRoster", "stampsDetail", "potBoard", "questBoardFor", "standingFor", "townQuestBoard",
-  "letter", "letterAnswer", "letterList", "mailList", "mailCorrespondents", "mailAwaiting", "search", "metricsMail", "outboxSettled",
-  "residentList", "residentPage", "resident", "townSummary", "officeHandles", "windowRead", "psaFold", "doorstep",
-  "hasResident", "hasLetter", "loginIndex", "unansweredFrom", "townLedger", "townDocs"]);
 
 const UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ", LOWER = "abcdefghijklmnopqrstuvwxyz";
 /** sqlite's LIKE: ASCII case folded on both sides, nothing else. */

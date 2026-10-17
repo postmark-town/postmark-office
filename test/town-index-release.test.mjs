@@ -12,9 +12,8 @@
 // reader throws inside the transaction, the ROLLBACK path) and the same is
 // asserted again.
 //
-// Each door is handed an office.db that throws on any read and a meta that
-// throws on any key, as a switched office now holds (server.mjs §
-// ABSENT_INDEX), so a door that still read office.db would fail here too.
+// The doors are handed no index of their own: the store's is the only one
+// (office.db is gone, POS-656).
 
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
@@ -22,25 +21,20 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { fixtureKey, putValues } from "./fixture.mjs";
+import { fixtureKey, fixtureTown, putValues } from "./fixture.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
-import { copyIndexToStore } from "./helpers/index-to-store.mjs";
+import { seedTownIndex } from "./helpers/index-to-store.mjs";
 import { townClone, townModuleUrl } from "./fixture-paths.mjs";
 
 const TOWN = townClone();
 const tmp = mkdtempSync(join(tmpdir(), "town-index-release-"));
-const KEEP = Object.fromEntries(["TOWN_INDEX_READS", "WORLD2_PG", "WORLD2_PG_URL"].map((k) => [k, process.env[k]]));
+const KEEP = Object.fromEntries(["WORLD2_PG", "WORLD2_PG_URL"].map((k) => [k, process.env[k]]));
 let s = null, su = null, pool = null, pen = null, skip = false;
-
-// what a switched office holds where office.db was (server.mjs § ABSENT_INDEX)
-const officeDbRead = () => { throw new Error("office.db was read by a switched door"); };
-const ABSENT_DB = Object.freeze({ prepare: officeDbRead, exec: officeDbRead, close() {} });
-const ABSENT_META = new Proxy({}, { get: (_t, k) => (typeof k === "symbol" || k === "then" ? undefined : officeDbRead()), ownKeys: officeDbRead });
 
 before(async () => {
   s = await startStore({ db: "index_release" });
   if (s.skip) { skip = s.skip; return; }
-  const db = fixtureDb(join(tmp, "office.db"));
+  const db = fixtureTown();
   if (TOWN) {
     const { townDay } = await import(townModuleUrl("tools", "quest-progress.mjs"));
     const put = (...v) => putValues(db, "meta", v);
@@ -50,11 +44,10 @@ before(async () => {
     putValues(db, "pots", ["darko-fund", JSON.stringify({ title: "Darko's fund", beneficiary: "keeminlee", target_usd_per_epoch: 100, status: "open", close: "epoch" })]);
   }
   const w = await s.connect("law_ingester");
-  await copyIndexToStore(w, db);
+  await seedTownIndex(w, db);
   await w.end();
-  db.close();
   su = await s.connect("postgres"); // the superuser, on this test's own database
-  Object.assign(process.env, { TOWN_INDEX_READS: "store", WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") });
+  Object.assign(process.env, { WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") });
   const { default: pg } = await import("pg");
   pool = new pg.Pool({ connectionString: s.url("office_api"), max: 3 });
   pool.on("error", () => {});
@@ -88,7 +81,7 @@ async function without(table, ask) {
   finally { await su.query(`ALTER TABLE ${table}_away RENAME TO ${table}`); }
 }
 
-const ctx = () => ({ db: ABSENT_DB, meta: ABSENT_META, key: fixtureKey, asOf: "fixture", clone: TOWN, canWrite: false });
+const ctx = () => ({ key: fixtureKey, asOf: "fixture", clone: TOWN, canWrite: false });
 const tool = (name, args) => async () => (await import("../src/mcp.mjs")).callTool(name, args, ctx());
 const house = (args) => async () => (await import("../src/household-apex.mjs")).householdApex(args, fixtureKey, ctx());
 const store = async () => import("../src/town-index-store.mjs");
@@ -97,7 +90,7 @@ const store = async () => import("../src/town-index-store.mjs");
 // family whose answer needs the town's own tools from a clone; `roster` one
 // whose reader keeps the roster memo per as-of, forgotten before each ask so
 // the ask reads the table; `keeps` one whose refresh keeps the last snapshot
-// when its read fails (as a failed office.db reload kept its file), so only the
+// when its read fails, so only the
 // connection is asserted after the throw.
 const FAMILIES = [
   ["the repo log", "town_repo_log", [tool("list_commits", {})]],
@@ -129,7 +122,7 @@ for (const [family, table, doors, needs] of FAMILIES) {
       const ask = needs?.includes("roster") ? async () => { tis.__resetRosterForTest(); return door(); } : door;
       const got = await settle(ask);
       assert.equal(got.threw, undefined, `${family} door ${i}: ${got.threw?.stack ?? ""}`);
-      assert.doesNotMatch(JSON.stringify(got.ok ?? null), /office\.db was read|cannot be reached/, `${family} door ${i} answered from the store`);
+      assert.doesNotMatch(JSON.stringify(got.ok ?? null), /cannot be reached/, `${family} door ${i} answered from the store`);
       await nothingHeld(`${family} door ${i}, answered`);
       const broken = await without(table, ask);
       const said = (r) => (r.threw ? `threw: ${r.threw.message}` : JSON.stringify(r.ok));

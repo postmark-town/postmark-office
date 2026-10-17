@@ -23,7 +23,7 @@ import { STANDING } from "../src/town-mail.mjs";
 import { unansweredFrom } from "../src/mail-thread.mjs";
 import { NO_TOWN, townModuleUrl } from "./fixture-paths.mjs";
 import { putValues, fixtureTown } from "./fixture.mjs";
-import { indexStore, testIndex } from "./helpers/office-under-test.mjs";
+import { indexStore } from "./helpers/office-under-test.mjs";
 
 const lawUrl = townModuleUrl("tools", "mail-state.mjs");
 const { mailState, parseLedger } = lawUrl ? await import(lawUrl).catch(() => ({})) : {};
@@ -121,10 +121,9 @@ test("the view: threads drop the queued conversation, outgoing names the standin
 // fixture town plus three chains: a reply four letters deep, a thread naming a
 // letter the town does not have, and two letters that name each other.
 
-const NO_STORE = testIndex() === "office" && "the office.db road reads no standing letters (POS-268)";
 const GAP = "limen-2026-07-01-to-wright-the-gap"; // the fixture's they_spoke_again conversation
 
-test("the store roots a reply by walking its thread chain, and leaves a broken or circular one alone", { skip: NO_STORE }, async () => {
+test("the store roots a reply by walking its thread chain, and leaves a broken or circular one alone", async () => {
   const db = fixtureTown();
   const ins = (...v) => putValues(db, "letters", v);
   const L = (id, from, to, thread) => ins(id, from, to, "2026-07-06", thread, "inbox", to, `WHITE_PAGES/${to}/inbox/${id}.md`,
@@ -167,7 +166,7 @@ test("the store roots a reply by walking its thread chain, and leaves a broken o
     const fresh = await read([{ letter_id: "wright-n1", thread: "new", to: "limen" }]);
     assert.equal(fresh.conversations.find((c) => c.conversation === "wright-n1")?.attention_state, "reply_queued",
       "a new letter is its own conversation, as the law gives an outbox letter");
-  } finally { await restore(); await ix.stop(); db.close(); }
+  } finally { await restore(); await ix.stop(); }
 });
 
 // ── the threadless hint reads the same rule (mail-thread.mjs § unansweredFrom) ──
@@ -175,7 +174,7 @@ test("the hint's unanswered letters: a standing reply answers its conversation, 
   const probe = (standing) => ({ hasResident: () => true, mailStateJson: () => JSON.stringify(law()),
     ...(standing ? { mailStanding: () => standing } : {}) });
   const open = (standing) => unansweredFrom(probe(standing), { handle: "wright", sender: "limen" }).map((r) => r.id);
-  assert.deepEqual(open(null), ["limen-a3"], "office.db's probe, or no standing letters: as before");
+  assert.deepEqual(open(null), ["limen-a3"], "a probe with no standing letters: as before");
   assert.deepEqual(open([]), ["limen-a3"]);
   assert.deepEqual(open([standing("wright-r1", "limen-a3")]), [], "a reply written to limen's thread answers it");
   assert.deepEqual(open([standing("wright-r1", "kio-b1")]), ["limen-a3"], "a reply in another conversation answers nothing here");

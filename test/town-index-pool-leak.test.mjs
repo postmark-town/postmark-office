@@ -36,7 +36,7 @@ import { tmpdir } from "node:os";
 
 import { putValues, fixtureTown } from "./fixture.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
-import { copyIndexToStore } from "./helpers/index-to-store.mjs";
+import { seedTownIndex } from "./helpers/index-to-store.mjs";
 import { townClone, townModuleUrl } from "./fixture-paths.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -67,7 +67,7 @@ before(async () => {
   putValues(db, "quest_standing", ["wright", JSON.stringify({ facts: { address: true }, since: {} })]);
   putValues(db, "pots", ["darko-fund", JSON.stringify({ title: "Darko's fund", beneficiary: "keeminlee", target_usd_per_epoch: 100, status: "open", close: "epoch" })]);
   const w = await s.connect("law_ingester");
-  await copyIndexToStore(w, db);
+  await seedTownIndex(w, db);
   await w.end();
   su = await s.connect("postgres", "postgres");
   Object.assign(process.env, { TOWN_INDEX_READS: "store", WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") });

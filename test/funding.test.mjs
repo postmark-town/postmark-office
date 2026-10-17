@@ -60,16 +60,28 @@
 //     dollar, outside payment, ρ-capped household and sole staker would be
 //     re-counted and re-minted at every future close
 
-import test from "node:test";
+import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { parseLedgerText, foldFunding, classifyFundingRow, readPots, HOLO_CAPTION, HOLO_EXPANSION, WHAT_THIS_BUYS, TEACH } from "../src/funding.mjs";
-import { stampsDetail, potBoard, questBoardFor } from "../src/queries.mjs";
+import * as store from "../src/town-index-store.mjs";
+import { indexStore } from "./helpers/office-under-test.mjs";
 import { NO_TOWN, townClone, townModuleUrl } from "./fixture-paths.mjs";
 import { tempDir } from "./helpers/temp-dir.mjs";
-import { putValues, emptyTown } from "./fixture.mjs";
+import { putValues, emptyTown, setMeta } from "./fixture.mjs";
+
+// THE DOOR READS ARE THE STORE'S (POS-656): stampsDetail, potBoard and the quest
+// board (town-index-store.mjs), read as the office's role from ONE store,
+// re-stated from each read's own town.
+const live = emptyTown();
+const IX = await indexStore(live, { db: "funding_reads" });
+const API = await IX.store.connect("office_api");
+after(async () => { await API.end().catch(() => {}); await IX.stop(); });
+/** The store, holding `town` now: the client a read asks. */
+async function on(town) { Object.assign(live, town); await IX.reseed(); store.__resetRosterForTest(); return API; }
+const stampsDetail = async (town, handle) => store.stampsDetail(await on(town), handle);
+const potBoard = async (town) => store.potBoard(await on(town));
 
 const SKIP = !townClone() && NO_TOWN;
 
@@ -316,7 +328,7 @@ test("rows malformed under the landed grammar are surfaced by name", () => {
 const WITHOUT_THE_ZERO_ROW = LEDGER.replace(
   "- 2026-08-31 · holo · marbinner · 0 · pot:keeping-ec2 · epoch:2026-08 · ref: 0xdeadbeef · sig: sigL\n", "");
 
-test("a receipt that minted ZERO holo is still settled — and a second close cannot count it again", () => {
+test("a receipt that minted ZERO holo is still settled — and a second close cannot count it again", async () => {
   // 1 · a holo row of 0 is a lawful row. `([1-9]\d*)` would have refused it.
   const zero = classifyFundingRow("- 2026-08-31 · holo · marbinner · 0 · pot:keeping-ec2 · epoch:2026-08 · ref: 0xdeadbeef");
   assert.equal(zero.kind, "holo", "0 is a real answer, not a malformed row");
@@ -331,7 +343,7 @@ test("a receipt that minted ZERO holo is still settled — and a second close ca
 
   // 3 · and the pot's OPEN dollars are 0 — nothing is left for a next close to
   //     take, which is the whole point
-  const pot = potBoard(fundingDb()).list[0];
+  const pot = (await potBoard(fundingDb())).list[0];
   assert.equal(pot.funding.dollars_open, 0, "a settled epoch's dollars do not fund the next one");
 
   // 4 · THE FLIP. Delete that one row and the same $50 comes back as open
@@ -404,8 +416,8 @@ test("readPots reads the town's real pot file and surfaces the malformed one", (
 
 function fundingDb() {
   const db = emptyTown();
-  // THE `stamps` TABLE IS THE TOWN'S FOLD, MATERIALIZED — src/hydrate.mjs
-  // § Stamps writes it from the town's own foldBalances / foldMintCount /
+  // THE `stamps` TABLE IS THE TOWN'S FOLD, MATERIALIZED — src/town-index.mjs
+  // § stampRows writes it from the town's own foldBalances / foldMintCount /
   // foldStaked. So these rows are seeded as that AMENDED fold will write them
   // (postmark-town/postmark #2811): a holo row of n is credited to the payer by
   // kind, so it is already inside both `mint_count` and `balance` here. That is
@@ -420,7 +432,7 @@ function fundingDb() {
   // of it may show up in any of his four tense numbers
   putValues(db, "stamps", ["wright", 5, 9, 0], ["handle", "balance", "mint_count", "staked"]);
   const f = foldFunding(parseLedgerText(LEDGER + GUESSED + RETIRED + LOOSE + FORGED));
-  // hydrate's inserts, in miniature — keyed by handle here (no household
+  // the derivation's rows, in miniature — keyed by handle here (no household
   // registry in a fixture; the read answers to slug AND handle)
   const insHolo = (...v) => putValues(db, "funding_holo", v, ["party", "pot", "holo", "epoch", "date", "receipt"]);
   for (const [party, ms] of f.holoByParty) for (const m of ms) insHolo(party, m.pot, m.holo, m.epoch, m.date, m.receipt);
@@ -433,7 +445,7 @@ function fundingDb() {
   for (const [pot, n] of f.potEscrow) putValues(db, "pot_escrow", [pot, n], ["pot", "staked"]);
   const insStaker = (...v) => putValues(db, "pot_stakers", v, ["pot", "handle", "staked"]);
   for (const [handle, mine] of f.potEscrowByHandle) for (const [pot, n] of mine) if (n > 0) insStaker(pot, handle, n);
-  for (const iv of f.invalid) db.prepare("INSERT INTO funding_invalid (row_kind, line, reason) VALUES (?,?,?)").run(iv.row_kind, iv.line, iv.reason);
+  for (const iv of f.invalid) putValues(db, "funding_invalid", [iv.row_kind, iv.line, iv.reason], ["row_kind", "line", "reason"]);
   putValues(db, "pots", ["keeping-ec2", JSON.stringify(POT_FILE)], ["id", "json"]);
   return db;
 }
@@ -689,8 +701,8 @@ test("the clip admits a stake the holo made affordable — it clips to the town'
   assert.equal(before.clipped, true);
 });
 
-test("the pot board carries the landed pot file's own fields, the roll, and the escrow", () => {
-  const b = potBoard(fundingDb());
+test("the pot board carries the landed pot file's own fields, the roll, and the escrow", async () => {
+  const b = await potBoard(fundingDb());
   assert.equal(b.list.length, 1, "the reserved treasury pot has receipts but no file — it is not a board row");
   const pot = b.list[0];
   assert.equal(pot.target_usd_per_epoch, 150, "the target is per epoch, not a lifetime total");
@@ -754,8 +766,9 @@ const BOUNTY_ROW = {
 async function board(db, quests) {
   const TOWN = townClone(); // same live-checkout convention as quests.test.mjs
   const { townDay } = await import(townModuleUrl("tools", "quest-progress.mjs"));
-  const meta = { quest_day: townDay(), quest_registry: JSON.stringify({ version: 1, quests }) };
-  return questBoardFor(db, meta, "keemin", TOWN);
+  setMeta(db, "quest_day", townDay());
+  setMeta(db, "quest_registry", JSON.stringify({ version: 1, quests }));
+  return store.questBoardOfRows(await store.questIndexRows(await on(db), "keemin"), TOWN);
 }
 
 const DAILY = { id: "correspond-send", title: "Reach out", cadence: "daily", validation: "automatic", target: 5, reward: "1 stamp per unit" };
@@ -852,7 +865,7 @@ test("POS-218 · a pot-correction row is folded by the town's rule: before its r
   assert.deepEqual(shape(f.corrections), shape(town.corrections), "and it applies and refuses exactly what the town does");
 });
 
-test("POS-218 · the fund door's pot rows name the corrected hand — the receipt list AND the patron roll", () => {
+test("POS-218 · the fund door's pot rows name the corrected hand — the receipt list AND the patron roll", async () => {
   // CONSUMER: hydrate writes receiptsByPot → pot_receipts.payer and rollByPot →
   // funding_roll.patron; potBoard (the town's quest board and the household's
   // own board) reads both. This is that path in miniature.
@@ -863,7 +876,7 @@ test("POS-218 · the fund door's pot rows name the corrected hand — the receip
   const insRcpt = (...v) => putValues(db, "pot_receipts", v, ["pot", "rail", "usd", "date", "receipt", "payer"]);
   for (const [pot, rs] of f.receiptsByPot) for (const r of rs) insRcpt(pot, r.rail, r.usd, r.date, r.receipt, r.from);
   putValues(db, "pots", ["keeping-ec2", JSON.stringify(POT_FILE)], ["id", "json"]);
-  const pot = potBoard(db).list[0];
+  const pot = (await potBoard(db)).list[0];
   const payers = Object.fromEntries(pot.receipts.list.map((r) => [r.receipt, r.payer]));
   assert.equal(payers["stripe:cs_twice"], "fabel", "the $50 is fabel's on the door, as the close mints it");
   assert.equal(payers["stripe:cs_plain"], "outside:stripe", "an uncorrected outside receipt stays outside");
@@ -884,8 +897,8 @@ test("POS-218 · the fund door's pot rows name the corrected hand — the receip
 // per-staker list is that second key materialized, never a second derivation.
 // That is why the sum-equality below is a property and not a coincidence.
 
-test("POS-184 — the board names WHO staked, netted by the fold's own second key", () => {
-  const pot = potBoard(fundingDb()).list[0];
+test("POS-184 — the board names WHO staked, netted by the fold's own second key", async () => {
+  const pot = (await potBoard(fundingDb())).list[0];
 
   // 1 · THE LIST. The fixture ledger stakes three residents on keeping-ec2 and
   //     drains two of them by the two lawful routes — limen's 2 returns whole
@@ -906,13 +919,13 @@ test("POS-184 — the board names WHO staked, netted by the fold's own second ke
   // 4 · THE ORDER IS TOTAL — biggest first, ties broken by handle — so the rows
   //     never ride on SQLite's insertion order, which is a hydrate detail.
   const many = fundingDb();
-  many.prepare("INSERT INTO pot_stakers (pot, handle, staked) VALUES (?,?,?)").run("keeping-ec2", "aaa", 6);
-  many.prepare("INSERT INTO pot_stakers (pot, handle, staked) VALUES (?,?,?)").run("keeping-ec2", "zzz", 9);
-  assert.deepEqual(potBoard(many).list[0].escrow.stakers.map((s) => s.handle), ["zzz", "aaa", "keemin"],
+  putValues(many, "pot_stakers", ["keeping-ec2", "aaa", 6], ["pot", "handle", "staked"]);
+  putValues(many, "pot_stakers", ["keeping-ec2", "zzz", 9], ["pot", "handle", "staked"]);
+  assert.deepEqual((await potBoard(many)).list[0].escrow.stakers.map((s) => s.handle), ["zzz", "aaa", "keemin"],
     "sorted by stake desc, then by handle — a tie is not left to the rowid");
 });
 
-test("POS-184 — sum(stakers) IS `staked`, and the flip that breaks the netting turns this red", () => {
+test("POS-184 — sum(stakers) IS `staked`, and the flip that breaks the netting turns this red", async () => {
   // THE LOAD-BEARING INVARIANT, in a test of its own on purpose: in the test
   // above it sat behind a list assertion that fires first, so a flip breaking
   // the netting reddened that line and this claim was never actually exercised.
@@ -924,18 +937,18 @@ test("POS-184 — sum(stakers) IS `staked`, and the flip that breaks the netting
   // fold's own second key, never a second derivation. Break exactly that (count
   // stakes only on the by-handle arm, keep the pot total netted) and the fixture
   // reads 12 against a `staked` of 6.
-  const pot = potBoard(fundingDb()).list[0];
+  const pot = (await potBoard(fundingDb())).list[0];
   const sum = pot.escrow.stakers.reduce((n, s) => n + s.staked, 0);
   assert.equal(sum, pot.escrow.staked, "sum(stakers) IS `staked` — one escrow, two keys, never two answers");
   assert.equal(pot.escrow.staked, 6, "and `staked` itself is unmoved by this lane");
 });
 
-test("POS-184 — a pot nobody has staked answers `stakers: []`, not a missing field", () => {
+test("POS-184 — a pot nobody has staked answers `stakers: []`, not a missing field", async () => {
   // "Nobody yet" is an answer a resident can act on; an absent field is a door
   // that did not look. The pot file lands with no stake row anywhere behind it.
   const db = fundingDb();
   putValues(db, "pots", ["unstaked-pot", JSON.stringify({ ...POT_FILE, pot: "unstaked-pot", title: "Nobody has staked here" })], ["id", "json"]);
-  const pot = potBoard(db).list.find((p) => p.id === "unstaked-pot");
+  const pot = (await potBoard(db)).list.find((p) => p.id === "unstaked-pot");
   assert.ok(pot, "the pot is on the board");
   assert.deepEqual(pot.escrow.stakers, [], "an empty list, present");
   assert.equal(pot.escrow.staked, 0, "beside the zero it sums to");

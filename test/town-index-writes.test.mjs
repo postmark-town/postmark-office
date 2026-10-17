@@ -1,5 +1,6 @@
 // town-index-writes.test.mjs — group 4 of POS-268: the write path's questions
-// of the index (index-probe.mjs) answer from the store exactly as from office.db.
+// of the index (index-probe.mjs) answer from the store exactly as office.db's
+// probe answered them.
 //
 //   EMBEDDED_PG_DIR=<dir with embedded-postgres> node --test test/town-index-writes.test.mjs
 //
@@ -8,10 +9,12 @@
 // by the two spellings (the card's and the top level), a JSON-null `github`
 // that falls through to the card's, an empty one that does not, and a pinned
 // handle the roll does not hold (the harbor stamp). The store is seeded from
-// the same office.db. Then: every check both ways, compared as what it answers
-// or throws; the refusing probe; the out-of-process pens (join-bind-exec) over
-// office.db, the store, and a store that is gone; and the keyless desks and
-// POST /letters over two offices and one whose store is gone.
+// those rows. Then: every check, compared as what it answers or throws to what
+// it answered over office.db's probe on the same rows, recorded in the last tree
+// that had office.db (helpers/twin-golden.mjs, POS-656); the refusing probe; the
+// out-of-process pens (join-bind-exec) over the store and a store that is gone;
+// and the keyless desks and POST /letters over an office and one whose store is
+// gone.
 
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
@@ -21,11 +24,12 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 
-import { tempClone, fixtureTown } from "./fixture.mjs";
+import { tempClone, fixtureTown, putValues } from "./fixture.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
-import { copyIndexToStore } from "./helpers/index-to-store.mjs";
+import { seedTownIndex } from "./helpers/index-to-store.mjs";
+import { twinGolden } from "./helpers/twin-golden.mjs";
 import { seedRegistry, recordInProcess } from "./helpers/office-under-test.mjs";
-import { officeProbe, holdStoreProbe, UNREACHABLE_DEFECT } from "../src/index-probe.mjs";
+import { holdStoreProbe, UNREACHABLE_DEFECT } from "../src/index-probe.mjs";
 import { STANDING_UNREADABLE } from "../src/standing.mjs";
 import * as store from "../src/town-index-store.mjs";
 import { validateLetter } from "../src/write.mjs";
@@ -36,34 +40,26 @@ import { threadlessReplyHint } from "../src/mail-thread.mjs";
 import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-// The office.db legs here read office.db, whatever switch the run was started
-// with; the switched legs set TOWN_INDEX_READS themselves (POS-268). These
-// twins go with office.db at 5b.
-delete process.env.TOWN_INDEX_READS;
+const TWINS = twinGolden("town-index-writes");
 const tmp = mkdtempSync(join(tmpdir(), "town-index-writes-"));
-const dbPath = join(tmp, "office.db");
 const KEY = "writes-test-key";
-let s = null, skip = false, api, db, empty, rows, clone, unrecord = null;
+let s = null, skip = false, api, db, rows, clone, unrecord = null;
 const offices = {};
 
 before(async () => {
   s = await startStore();
   if (s.skip) { skip = s.skip; return; }
   db = fixtureTown();
-  const R = db.prepare("INSERT INTO residents VALUES (?, ?)");
-  R.run("Zed", JSON.stringify({ handle: "Zed", address: { data: { joined: "2026-07-13", github: "Zed-GH" } } }));
-  R.run("_archived", JSON.stringify({ handle: "_archived", address: { data: { joined: "2026-07-13" } } }));
-  R.run("nullgh", JSON.stringify({ handle: "nullgh", github: null, address: { data: { github: "fallback" } } }));
-  R.run("emptygh", JSON.stringify({ handle: "emptygh", github: "", address: { data: { github: "never-read" } } }));
-  R.run("zed-two", JSON.stringify({ handle: "zed-two", github: "zed-gh", address: { data: {} } }));
-  // rowid order made bytewise, as the vendored readTown's sorted listing makes it on a hydrated office.db
-  const all = db.prepare("SELECT handle, json FROM residents").all().sort((a, b) => Buffer.compare(Buffer.from(a.handle), Buffer.from(b.handle)));
-  db.exec("DELETE FROM residents");
-  for (const r of all) R.run(r.handle, r.json);
-  empty = fixtureTown();
-  for (const t of ["residents", "letters", "mail_state"]) empty.exec(`DELETE FROM ${t}`);
+  const R = (...v) => putValues(db, "residents", v);
+  R("Zed", JSON.stringify({ handle: "Zed", address: { data: { joined: "2026-07-13", github: "Zed-GH" } } }));
+  R("_archived", JSON.stringify({ handle: "_archived", address: { data: { joined: "2026-07-13" } } }));
+  R("nullgh", JSON.stringify({ handle: "nullgh", github: null, address: { data: { github: "fallback" } } }));
+  R("emptygh", JSON.stringify({ handle: "emptygh", github: "", address: { data: { github: "never-read" } } }));
+  R("zed-two", JSON.stringify({ handle: "zed-two", github: "zed-gh", address: { data: {} } }));
+  // the rows in bytewise order, as the vendored readTown's sorted listing gives them
+  db.residents.sort((a, b) => Buffer.compare(Buffer.from(a.handle), Buffer.from(b.handle)));
   const w = await s.connect("law_ingester");
-  await copyIndexToStore(w, db);
+  await seedTownIndex(w, db);
   await w.end();
   api = await s.connect("office_api");
   rows = await store.probeRows(api);
@@ -76,14 +72,13 @@ before(async () => {
   await seedRegistry(s, null, { ghost: { login: "ghost-gh", id: 999 } });
   unrecord = await recordInProcess(s);
 
-  for (const [name, env] of [["plain", { WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") }],
-    ["switched", { TOWN_INDEX_READS: "store", WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") }],
-    ["cut-off", { TOWN_INDEX_READS: "store", WORLD2_PG: "1", WORLD2_PG_URL: "postgres://office_api:x@127.0.0.1:9/none" }]]) {
-    const child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0", "--db", dbPath,
+  for (const [name, env] of [["switched", { WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") }],
+    ["cut-off", { WORLD2_PG: "1", WORLD2_PG_URL: "postgres://office_api:x@127.0.0.1:9/none" }]]) {
+    const child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0",
       "--oauth-db", seedStaticKeys(join(tmp, `${name}-oauth.db`), `${KEY}=keemin:limen`), "--roles-db", join(tmp, `${name}-roles.db`)], {
       env: { ...process.env, TOWN_CLONE: clone, WORLD_CLONE: join(tmp, "no-world-clone"), VOICES_LOG: join(tmp, `${name}-voices.jsonl`),
         TOWN_PUSH: "", WORLD_STORE_DB: join(tmp, "no-world.db"), OFFICE_READ_WORKERS: "0",
-        TOWN_INDEX_READS: undefined, WORLD2_PG: undefined, WORLD2_PG_URL: undefined, ...env },
+        WORLD2_PG: undefined, WORLD2_PG_URL: undefined, ...env },
       stdio: ["ignore", "pipe", "pipe"],
     });
     await new Promise((ok, no) => {
@@ -105,7 +100,6 @@ after(async () => {
   for (const { child } of Object.values(offices)) if (child.exitCode === null) { const gone = new Promise((ok) => child.on("exit", ok)); child.kill(); await gone; }
   if (api) await api.end().catch(() => {});
   if (s?.stop) await s.stop();
-  db?.close(); empty?.close();
   for (const d of [tmp, clone]) if (d) rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
@@ -121,30 +115,29 @@ const outcome = async (fn) => {
   catch (e) { return JSON.stringify({ threw: e?.code ?? e?.name, defect: e?.defect ?? e?.message, hint: e?.hint ?? null }); }
 };
 
-async function withSwitch(probe, fn) {
-  const keep = process.env.TOWN_INDEX_READS;
-  process.env.TOWN_INDEX_READS = "store";
+// a check run with `probe` as this process's held probe (null: none loaded, the refusing probe)
+async function withProbe(probe, fn) {
   holdStoreProbe(probe);
-  try { return await fn(); } finally { holdStoreProbe(null); if (keep === undefined) delete process.env.TOWN_INDEX_READS; else process.env.TOWN_INDEX_READS = keep; }
+  try { return await fn(); } finally { holdStoreProbe(null); }
 }
 
-test("the store's probe answers every question as office.db's does", async (t) => {
+test("the store's probe answers every question as office.db's did", async (t) => {
   if (skip) return t.skip(skip);
-  const off = officeProbe(db), st = store.probeOver(rows);
-  const handles = db.prepare("SELECT handle FROM residents").all().map((r) => r.handle);
-  for (const h of [...handles, "nobody", "WRIGHT", "zed", "", "wright "]) assert.equal(st.hasResident(h), off.hasResident(h), `hasResident ${JSON.stringify(h)}`);
-  const ids = db.prepare("SELECT id FROM letters").all().map((r) => r.id);
-  for (const id of [...ids, "nope", ids[0].toUpperCase(), `${ids[0]} `]) assert.equal(st.hasLetter(id), off.hasLetter(id), `hasLetter ${id}`);
-  assert.deepEqual(st.loginRows(), off.loginRows(), "the GitHub lines, in the same order");
+  const st = store.probeOver(rows);
+  const handles = db.residents.map((r) => r.handle);
+  for (const h of [...handles, "nobody", "WRIGHT", "zed", "", "wright "]) TWINS.equal(`hasResident ${JSON.stringify(h)}`, JSON.stringify(st.hasResident(h)));
+  const ids = db.letters.map((r) => r.id);
+  for (const id of [...ids, "nope", ids[0].toUpperCase(), `${ids[0]} `]) TWINS.equal(`hasLetter ${id}`, JSON.stringify(st.hasLetter(id)));
+  TWINS.equal("loginRows", JSON.stringify(st.loginRows()), "the GitHub lines, in the same order");
   const mail = new Map();
   for (const h of ["wright", "limen", "nobody"]) mail.set(h, (await api.query("SELECT json FROM town_mail_state WHERE handle = $1", [h])).rows[0]?.json ?? null);
   const withMail = store.probeOver(rows, { mail });
-  for (const h of mail.keys()) assert.equal(withMail.mailStateJson(h), off.mailStateJson(h), `mail_state ${h}`);
+  for (const h of mail.keys()) TWINS.equal(`mail_state ${h}`, JSON.stringify(withMail.mailStateJson(h)));
   assert.match(st.loginStamp(), /^store:/, "the login memo keys on the store's head");
 });
 
-// Each check, as a door calls it. `ix` is office.db, or (switched) a db with no rows
-// at all: the switched answers can only have come from the store.
+// Each check, as a door calls it, with no probe handed in: the answers can only
+// have come from the store's held probe.
 const LIMEN = { household: "keemin", handles: new Set(["limen"]) };
 const RETURN = { id: "limen-2026-07-03-to-wright-the-return", file: "WHITE_PAGES/limen/outbox/letter-2026-07-03-to-wright-the-return.md" };
 const runAll = async (fns) => { const out = []; for (const fn of fns) out.push(await outcome(fn)); return out; };
@@ -167,23 +160,22 @@ const checks = (ix) => [
   () => householdFor(ix, 5, "stranger"),
 ];
 
-test("every check answers the same over the store as over office.db", async (t) => {
+test("every check answers over the store as it did over office.db", async (t) => {
   if (skip) return t.skip(skip);
-  const plain = await runAll(checks(db));
-  assert.ok(plain.some((o) => o.includes('"threw":409')) && plain.some((o) => o.includes('"threw":422')), "the asks exercise both refusals");
-  assert.ok(plain.some((o) => o.includes('"harbor":true')), "and the harbor stamp");
-  const switched = await withSwitch(store.probeOver(rows), async () => await runAll(checks(empty)));
-  for (const [i, o] of plain.entries()) assert.equal(switched[i], o, `check ${i}`);
+  const got = await withProbe(store.probeOver(rows), async () => await runAll(checks(null)));
+  assert.ok(got.some((o) => o.includes('"threw":409')) && got.some((o) => o.includes('"threw":422')), "the asks exercise both refusals");
+  assert.ok(got.some((o) => o.includes('"harbor":true')), "and the harbor stamp");
+  for (const [i, o] of got.entries()) TWINS.equal(`check ${i}`, o, `check ${i}`);
   // the reply hint, off the row the send read
   const mail = new Map([["wright", (await api.query("SELECT json FROM town_mail_state WHERE handle = 'wright'")).rows[0].json]]);
-  const hint = threadlessReplyHint(db, { from: "wright", to: "limen" });
+  const hint = await withProbe(store.probeOver(rows), () => threadlessReplyHint(store.probeOver(rows, { mail }), { from: "wright", to: "limen" }));
   assert.ok(hint, "the fixture's wright has an unanswered letter from limen");
-  assert.equal(await withSwitch(store.probeOver(rows), () => threadlessReplyHint(store.probeOver(rows, { mail }), { from: "wright", to: "limen" })), hint);
+  TWINS.equal("hint", JSON.stringify(hint));
 });
 
-test("switched with no snapshot, every check refuses with the store's 503, and the hint says nothing", async (t) => {
+test("with no snapshot, every check refuses with the store's 503, and the hint says nothing", async (t) => {
   if (skip) return t.skip(skip);
-  const outs = await withSwitch(null, async () => await runAll(checks(db)));
+  const outs = await withProbe(null, async () => await runAll(checks(null)));
   for (const [i, o] of outs.entries()) {
     if (i === 14) continue; // below
     const r = JSON.parse(o);
@@ -192,7 +184,7 @@ test("switched with no snapshot, every check refuses with the store's 503, and t
   }
   // a pinned household whose settled test cannot be read is never stamped harbor: an unreadable index never widens the gate
   assert.equal(outs[14], JSON.stringify({ household: "999", handles: ["ghost"] }));
-  assert.equal(await withSwitch(null, () => threadlessReplyHint(db, { from: "wright", to: "limen" })), null);
+  assert.equal(await withProbe(null, () => threadlessReplyHint(null, { from: "wright", to: "limen" })), null);
   assert.equal(await store.refreshStoreProbe({ env: { WORLD2_PG: "1", WORLD2_PG_URL: "postgres://office_api:x@127.0.0.1:9/none" } }), false);
 });
 
@@ -200,19 +192,18 @@ test("a send draws the same reply hint from the store's row, and a store gone af
   if (skip) return t.skip(skip);
   const { sendAtDoor } = await import("../src/send-at-door.mjs");
   const WRIGHT = { household: "keemin", handles: new Set(["wright"]) };
-  const send = (title) => sendAtDoor({ from: "wright", to: "limen", title, body: "x" }, WRIGHT, { db, clone, odb: null });
-  const plain = (await send("Plain ask")).result;
-  assert.ok(plain.hint, "the office.db send carries the hint");
-  const keep = { TOWN_INDEX_READS: process.env.TOWN_INDEX_READS, WORLD2_PG: process.env.WORLD2_PG, WORLD2_PG_URL: process.env.WORLD2_PG_URL };
+  const send = (title) => sendAtDoor({ from: "wright", to: "limen", title, body: "x" }, WRIGHT, { clone, odb: null });
+  const keep = { WORLD2_PG: process.env.WORLD2_PG, WORLD2_PG_URL: process.env.WORLD2_PG_URL };
   const { default: pg } = await import("pg");
   const pool = new pg.Pool({ connectionString: s.url("office_api"), max: 2 });
   const pen = await import("../src/world2-pen.mjs");
   try {
-    Object.assign(process.env, { TOWN_INDEX_READS: "store", WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") });
+    Object.assign(process.env, { WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") });
     pen.__setPoolForTest(pool);
     assert.equal(await store.refreshStoreProbe(), true);
     const switched = (await send("Switched ask")).result;
-    assert.equal(switched.hint, plain.hint);
+    assert.ok(switched.hint, "the send carries the hint");
+    TWINS.equal("send hint", JSON.stringify(switched.hint), "the hint office.db's send carried");
     pen.__setPoolForTest({ connect: async () => { throw new Error("ECONNREFUSED"); } });
     const gone = (await send("Gone ask")).result;
     assert.ok(gone.letter_id, "the letter went");
@@ -224,28 +215,27 @@ test("a send draws the same reply hint from the store's row, and a store gone af
 });
 
 function joinBind(env) {
-  const payload = JSON.stringify({ args: { handle: "wright", card: "me" }, key: { ghId: 7, ghLogin: "someone", handles: [] }, dbPath });
+  const payload = JSON.stringify({ args: { handle: "wright", card: "me" }, key: { ghId: 7, ghLogin: "someone", handles: [] } });
   const r = spawnSync(process.execPath, [join(ROOT, "src", "join-bind-exec.mjs"), payload], {
-    env: { ...process.env, TOWN_CLONE: clone, TOWN_PUSH: "", TOWN_INDEX_READS: undefined, ...env }, encoding: "utf8", timeout: 30_000 });
+    env: { ...process.env, TOWN_CLONE: clone, TOWN_PUSH: "", ...env }, encoding: "utf8", timeout: 30_000 });
   return JSON.parse(r.stdout.trim().split("\n").pop());
 }
 
-test("the join pen reads the store under the lock when switched, and refuses when it is gone", async (t) => {
+test("the join pen reads the store under the lock, as it read office.db, and refuses when the store is gone", async (t) => {
   if (skip) return t.skip(skip);
-  const pg = { WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") };
-  const plain = joinBind(pg);
-  assert.equal(plain.error?.code, 409, JSON.stringify(plain));
-  assert.deepEqual(joinBind({ ...pg, TOWN_INDEX_READS: "store", OFFICE_DB: join(tmp, "no-office.db") }), plain);
-  const gone = joinBind({ TOWN_INDEX_READS: "store", WORLD2_PG: "1", WORLD2_PG_URL: "postgres://office_api:x@127.0.0.1:9/none" });
+  const got = joinBind({ WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") });
+  assert.equal(got.error?.code, 409, JSON.stringify(got));
+  TWINS.equal("join", JSON.stringify(got));
+  const gone = joinBind({ WORLD2_PG: "1", WORLD2_PG_URL: "postgres://office_api:x@127.0.0.1:9/none" });
   assert.equal(gone.error?.code, 503, JSON.stringify(gone));
   assert.equal(gone.error?.defect, UNREACHABLE_DEFECT);
 });
 
-test("the drain stops before a row when the store cannot answer, and never opens office.db", async (t) => {
+test("the drain stops before a row when the store cannot answer", async (t) => {
   if (skip) return t.skip(skip);
   // no --db: the flag is retired (POS-268 5b) and refused with exit 2, before the store is asked
   const r = spawnSync(process.execPath, [join(ROOT, "tools", "town-drain-run.mjs"), "--clone", clone, "--oauth-db", join(tmp, "drain-oauth.db"), "--dry-run"], {
-    env: { ...process.env, TOWN_INDEX_READS: "store", WORLD2_PG: "1", WORLD2_PG_URL: "postgres://office_api:x@127.0.0.1:9/none" }, encoding: "utf8", timeout: 30_000 });
+    env: { ...process.env, WORLD2_PG: "1", WORLD2_PG_URL: "postgres://office_api:x@127.0.0.1:9/none" }, encoding: "utf8", timeout: 30_000 });
   assert.equal(r.status, 1, r.stderr);
   assert.ok(r.stderr.includes(UNREACHABLE_DEFECT), r.stderr);
 });
@@ -257,17 +247,14 @@ const ASKS = [
   ["/letters", { from: "limen", to: "nobody", title: "Hi", body: "x" }, KEY],
   // (A thread the index does not hold was a refusal here until POS-332; it is
   // accepted now, so a POST of it WRITES and two offices sharing one town log
-  // cannot both send it. Its parity is held at `checks` above, where
-  // validateLetter answers both indexes alike, and in test/stale-copy.test.mjs.)
+  // cannot both send it. It is held at `checks` above, where validateLetter
+  // answers as it did over office.db, and in test/stale-copy.test.mjs.)
 ];
 
-test("the keyless desks and POST /letters answer the switched office exactly as the unswitched one", async (t) => {
+test("the keyless desks and POST /letters answer as the unswitched office did", async (t) => {
   if (skip) return t.skip(skip);
-  for (const [path, body, auth] of ASKS) {
-    const a = await post("plain", path, body, auth), b = await post("switched", path, body, auth);
-    assert.equal(b.status, a.status, `${path} ${JSON.stringify(body)}: status`);
-    assert.equal(await b.text(), await a.text(), `${path} ${JSON.stringify(body)}: body`);
-  }
+  for (const [path, body, auth] of ASKS)
+    await TWINS.equalResponse(`POST ${path} ${JSON.stringify(body)}`, await post("switched", path, body, auth), `${path} ${JSON.stringify(body)}: status and body`);
 });
 
 test("a door whose store is gone answers the store's 503", async (t) => {

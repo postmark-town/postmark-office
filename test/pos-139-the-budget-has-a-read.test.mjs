@@ -22,7 +22,6 @@ import assert from "node:assert/strict";
 import { readFileSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { DatabaseSync } from "node:sqlite";
 import { Bouncer, WORLD_WRITE_VERBS, BOUNCER_LIMITS, townDayWindow } from "../src/bouncer.mjs";
 import { householdStanding, HOUSEHOLD_READS } from "../src/household-apex.mjs";
 import { fixtureTown } from "./fixture.mjs";
@@ -38,9 +37,7 @@ const town = fixtureTown();
 const IX = await indexStore(town);
 const IX_RESTORE = await IX.useInProcess();
 test.after(async () => { await IX_RESTORE(); await IX.stop(); });
-const db = new DatabaseSync(town, { readOnly: true });
 after(() => {
-  db.close();
   rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
@@ -223,7 +220,7 @@ test("the standing read carries world_writes on BOTH household tiers, and its de
   // A settled resident, and a house still at the harbor. The bouncer keys on
   // the HOUSEHOLD, so the budget is the same read at both tiers — a harbor
   // household writing to the world is charged exactly like a settled one.
-  const settled = await householdStanding({ household: HOUSE, handles: new Set(["wright"]) }, { ...ctx, db });
+  const settled = await householdStanding({ household: HOUSE, handles: new Set(["wright"]) }, ctx);
   assert.equal(settled.tier, "resident");
   const atHarbor = await householdStanding({ household: HOUSE, handles: new Set(["not-yet"]) }, ctx);
   assert.equal(atHarbor.tier, "harbor");
@@ -255,7 +252,7 @@ test("the budget rides the HOUSEHOLD tier only — a berth or visitor has no cou
 // ── the silence this read could fail into ───────────────────────────────────
 //
 // The block is a garnish: a ctx with no `worldWriteBudget` simply has none, so
-// every unit test that hands householdStanding a bare `{ db }` keeps passing.
+// every unit test that hands householdStanding a bare ctx keeps passing.
 // That is also how this read could quietly stop answering in production without
 // a single suite going red — so the wiring is asserted from the SOURCE, the way
 // HOUSEHOLD_READ_FIELDS' own falsifier does.

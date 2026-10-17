@@ -4,7 +4,7 @@
 // commit's files in the order they were put). Test-only: it lets a suite state
 // its town as rows and read it through the doors' own readers.
 
-import { TOWN_TABLES } from "../../src/town-index.mjs";
+import { TOWN_TABLES } from "../../src/town-tables.mjs";
 import { digestOf } from "../../world2/tools/town-index-ingest.mjs";
 
 /** Replace every town_* table with `town`'s rows (an absent table is emptied). */

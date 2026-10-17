@@ -1,5 +1,5 @@
 // bulletin-newest-first.test.mjs — the bulletin's "newest first" is the date the
-// author posted, on both twins, and the standing read says what it checks
+// author posted, on the store's reader, and the standing read says what it checks
 // (POS-543).
 //
 //   EMBEDDED_PG_DIR=<dir with embedded-postgres> node --test test/bulletin-newest-first.test.mjs
@@ -10,7 +10,7 @@
 // fixture here is the PINNED town's own TOWN_BULLETIN (test/clone-pins.json),
 // read the way the index reads it (vendor/tools/lib/town.mjs § readTown), so
 // the order is checked against real slugs and real dates. Without a Postgres
-// the store twin's test SKIPS and says so; the rest run.
+// the store's tests SKIP and say so; the rest run.
 
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
@@ -18,9 +18,9 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { fixtureTown } from "./fixture.mjs";
+import { fixtureTown, drop, put } from "./fixture.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
-import { copyIndexToStore } from "./helpers/index-to-store.mjs";
+import { seedTownIndex } from "./helpers/index-to-store.mjs";
 import { parseFrontmatter } from "../vendor/tools/lib/town.mjs";
 import * as office from "../src/queries.mjs";
 import * as store from "../src/town-index-store.mjs";
@@ -74,13 +74,12 @@ before(async () => {
   assert.ok(existsSync(BULLETIN_DIR), `the pinned town clone has no TOWN_BULLETIN at ${BULLETIN_DIR}`);
   postings = townPostings();
   db = fixtureTown();
-  db.exec("DELETE FROM bulletin");
-  const b = db.prepare("INSERT INTO bulletin VALUES (?, ?)");
-  for (const p of postings) b.run(p.slug, JSON.stringify(p));
+  drop(db, "bulletin");
+  for (const p of postings) put(db, "bulletin", { slug: p.slug, json: JSON.stringify(p) });
   s = await startStore();
   if (s.skip) { skip = s.skip; return; }
   const w = await s.connect("law_ingester");
-  await copyIndexToStore(w, db);
+  await seedTownIndex(w, db);
   await w.end();
   api = await s.connect("office_api");
 });
@@ -90,27 +89,29 @@ after(async () => {
   if (s?.stop) await s.stop();
 });
 
-test("the pinned town: the slugs are out of date order, and the office.db twin lists the newest posting first", () => {
+test("the pinned town: the slugs are out of date order, and the store's reader lists the newest posting first", async (t) => {
+  if (skip) return t.skip(skip);
   const want = expectedOrder(postings);
   const bySlugReversed = postings.map((p) => p.slug).sort().reverse();
   assert.notDeepEqual(bySlugReversed, want, "the pinned town's slug order must differ from its date order, or this proves nothing");
-  const all = office.bulletinTeaser(db, { limit: 200 });
+  const all = await store.bulletinTeaser(api, { limit: 200 });
   assert.deepEqual(all.entries.map((e) => e.slug), want);
   // the doorstep's segment is the same read at its own bound
-  const page = office.bulletinTeaser(db, { limit: 3 });
+  const page = await store.bulletinTeaser(api, { limit: 3 });
   assert.deepEqual(page.entries.map((e) => e.slug), want.slice(0, 3));
   const newest = postings.reduce((m, p) => (p.data.posted && (!m || p.data.posted > m.data.posted) ? p : m), null);
   assert.equal(page.entries[0].slug, newest.slug, `the newest posting (${newest.slug}, ${newest.data.posted}) leads`);
 });
 
-test("the pinned town: the store twin lists the same order as the office.db twin", async (t) => {
+test("the pinned town: the store's pages walk that same order, a page at a time", async (t) => {
   if (skip) return t.skip(skip);
   const want = expectedOrder(postings);
-  for (const a of [{ limit: 200 }, { limit: 3 }, { limit: 3, offset: 3 }, {}]) {
+  // the default page (BULLETIN_PAGE, 10), the doorstep's three, and the next three the more_note names
+  for (const [a, from, to] of [[{}, 0, 10], [{ limit: 3 }, 0, 3], [{ limit: 3, offset: 3 }, 3, 6]]) {
     const fromStore = await store.bulletinTeaser(api, a);
-    assert.equal(JSON.stringify(fromStore), JSON.stringify(office.bulletinTeaser(db, a)), `bulletinTeaser ${JSON.stringify(a)}`);
+    assert.deepEqual(fromStore.entries.map((e) => e.slug), want.slice(from, to), `bulletinTeaser ${JSON.stringify(a)}`);
+    assert.equal(fromStore.total, want.length, `bulletinTeaser ${JSON.stringify(a)}: the total`);
   }
-  assert.deepEqual((await store.bulletinTeaser(api, { limit: 200 })).entries.map((e) => e.slug), want);
 });
 
 // ── standing: "papers" names what paperGapRows checks ─────────────────────────
@@ -121,7 +122,9 @@ const PAPER_WORDS = { "tend-your-home": "HOME page", "hang-your-window": "window
 test("paperGapRows checks exactly three papers, and both descriptions name those three", async () => {
   // a settled resident with nothing done: no home, no window, no parcel
   const gaps = await paperGapRows("nobody-yet", {
-    db: fixtureTown(), clone: null,
+    clone: null,
+    // the town index holds no HOME page for a resident with nothing done
+    ix: { home: async () => null },
     worldBlock: async () => ({ sited: false }),
     parcelClaim: async () => null,
   });

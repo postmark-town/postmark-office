@@ -40,7 +40,8 @@
 //     `$?`. The broken caller exited 0 there, so the exit code separates them.
 //
 // Two more pin the retirement itself: `--db` is refused before anything runs,
-// and an environment without TOWN_INDEX_READS=store still drains from the store.
+// and an environment without TOWN_INDEX_READS (no longer read, POS-656) still
+// drains from the store.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -55,7 +56,7 @@ import { fixtureTown } from "./fixture.mjs";
 import { appendTownJournal, ensureTownJournal } from "../src/town-journal.mjs";
 import { letterDate, outboxRelPath } from "../src/write.mjs";
 import { MAIL_ACT } from "../src/town-mail.mjs";
-import { indexStore, testIndex } from "./helpers/office-under-test.mjs";
+import { indexStore } from "./helpers/office-under-test.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const TOOL = join(ROOT, "tools", "town-drain-run.mjs");
@@ -95,8 +96,8 @@ async function seededDb(seed) {
 
 /** Run the REAL entrypoint and read what an operator reads. */
 function runTool(clone, odbPath, { args = [], unswitched = false } = {}) {
-  // unswitched: an environment without TOWN_INDEX_READS=store (the store is
-  // still reachable through the rest of IX.env); the drain takes the switch itself.
+  // unswitched: an environment without TOWN_INDEX_READS (the store is still
+  // reachable through the rest of IX.env); the drain reads the store regardless.
   const env = { ...process.env, ...IX.env, TOWN_SINGLE_LOG: "1" };
   if (unswitched) delete env.TOWN_INDEX_READS;
   // spawnSync, not execFileSync: an operator reads the tool's stderr on a clean
@@ -116,9 +117,7 @@ const outbox = (clone, h) => {
 test.after(() => { for (const d of temps.splice(0)) rmSync(d, { recursive: true, force: true, maxRetries: 5 }); });
 
 // The tool reads its town index and its record from a store seeded from this
-// fixture (POS-268, office-under-test.mjs). With the suite's index forced back
-// to office.db there is no store to hand it, and the tool no longer reads one.
-const SKIP = testIndex() === "office" && "OFFICE_TEST_INDEX=office: the drain reads only the store (POS-268 5b)";
+// fixture (POS-268, office-under-test.mjs).
 const IX = await indexStore(fixtureTown());
 const IX_RESTORE = await IX.useInProcess();
 test.after(async () => { await IX_RESTORE(); await IX.stop(); });
@@ -137,7 +136,7 @@ const letterLog = () => seededDb(async (o) => {
   });
 });
 
-test("THE ENTRYPOINT SETTLES: a letter row becomes real files, and the tool exits 0", { skip: SKIP }, async () => {
+test("THE ENTRYPOINT SETTLES: a letter row becomes real files, and the tool exits 0", async () => {
   // CAN-FAIL, and it is the half that catches the exact defect: drop the
   // `await` in `tools/town-drain-run.mjs` and this still exits 0 — because the
   // broken caller always did — but the outbox is EMPTY, because the process
@@ -153,7 +152,7 @@ test("THE ENTRYPOINT SETTLES: a letter row becomes real files, and the tool exit
   assert.equal(report.counts.letter, 1);
 });
 
-test("THE ENTRYPOINT REFUSES: a deferred row reaches `$?` as a 1, and stays pending", { skip: SKIP }, async () => {
+test("THE ENTRYPOINT REFUSES: a deferred row reaches `$?` as a 1, and stays pending", async () => {
   // THE REFUSAL THIS TOOL REALLY MEETS. A foreign-class row cannot be seeded —
   // `appendTownJournal` refuses one at WRITE time, which is its own tripwire
   // working — so the refusal exercised here is the deferral tripwire: a join
@@ -183,7 +182,7 @@ test("THE ENTRYPOINT REFUSES: a deferred row reaches `$?` as a 1, and stays pend
     "and nobody was settled");
 });
 
-test("the report is real JSON with real fields, never a stringified promise", { skip: SKIP }, async () => {
+test("the report is real JSON with real fields, never a stringified promise", async () => {
   // `JSON.stringify(aPromise, null, 2)` is `{}`, which parses, has no fields
   // and asserts nothing. This names the shape so a future un-awaited call
   // cannot pass by being merely parseable.
@@ -199,7 +198,7 @@ test("the report is real JSON with real fields, never a stringified promise", { 
 
 // ── office.db is retired (POS-268 part 5b) ──────────────────────────────────
 
-test("--db is refused by name before anything runs: exit 2, no letter written", { skip: SKIP }, async () => {
+test("--db is refused by name before anything runs: exit 2, no letter written", async () => {
   // CAN-FAIL: take the --db refusal out of the tool and the flag is ignored, the
   // letter drains from the store, and this exits 0 with a letter in the outbox.
   const clone = townClone();
@@ -210,15 +209,12 @@ test("--db is refused by name before anything runs: exit 2, no letter written", 
   assert.deepEqual(outbox(clone, "wright"), [], "nothing was drained");
 });
 
-test("an environment without TOWN_INDEX_READS=store still drains from the store, and says so", { skip: SKIP }, async () => {
+test("an environment without TOWN_INDEX_READS still drains from the store", async () => {
   // The ferry's unit reads /etc/postmark-office.env; a box whose file lost the
-  // switch line must not replay the log against no index at all.
-  // CAN-FAIL: take out the line where the tool takes the switch itself and the
-  // letter door looks for office.db, which this tool never opens: the letter
-  // bounces and the outbox stays empty.
+  // old switch line must not replay the log against no index at all. The switch
+  // is no longer read anywhere (POS-656): the store's index is the only one.
   const clone = townClone();
   const r = runTool(clone, await letterLog(), { unswitched: true });
   assert.equal(r.status, 0, `the tool exited ${r.status}: ${r.stderr.slice(0, 400)}`);
-  assert.match(r.stderr, /TOWN_INDEX_READS is null here; the drain reads the store's town index regardless/);
   assert.deepEqual(outbox(clone, "wright").length, 1, "the letter drained against the store's index");
 });

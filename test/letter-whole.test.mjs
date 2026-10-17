@@ -12,17 +12,27 @@
 // The store's twin (town-index-store § letter) is held to these same bytes by
 // test/town-index-mail.test.mjs, which compares the two answers whole.
 
-import { test } from "node:test";
+import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { putValues, fixtureTown } from "./fixture.mjs";
+import { putValues, fixtureTown, emptyTown, drop } from "./fixture.mjs";
+import { indexStore } from "./helpers/office-under-test.mjs";
 import { parseFrontmatter } from "../vendor/tools/lib/town.mjs";
-import { letterAnswer, letter, LETTER_WHOLE_CHECK } from "../src/queries.mjs";
+import { LETTER_WHOLE_CHECK } from "../src/queries.mjs";
+import * as store from "../src/town-index-store.mjs";
 import { callTool, contentFor } from "../src/mcp.mjs";
 
-// The office.db twin, whatever switch the run was started with (the store twin
-// is held to the same bytes by town-index-mail).
-delete process.env.TOWN_INDEX_READS;
+// THE LETTER READS ARE THE STORE'S (POS-656): one store for the file, holding
+// each test's town, read through town-index-store.mjs (in this process, for the
+// MCP door, through the index's own pool).
+const live = emptyTown();
+const IX = await indexStore(live, { db: "letter_whole" });
+const IX_RESTORE = await IX.useInProcess();
+after(async () => { await IX_RESTORE(); await IX.stop(); });
+async function on(town) { Object.assign(live, town); await IX.reseed(); return town; }
+const read = async (fn) => { const r = await store.storeAnswer(fn); assert.equal(r.refused, undefined, "the store answered"); return r.out; };
+const letterAnswer = (id) => read((c) => store.letterAnswer(c, id));
+const letter = (id) => read((c) => store.letter(c, id));
 
 /** A checker's own reading of a town letter file: everything after the
  *  frontmatter's closing `---` line, trimmed. Deliberately not the office's regex. */
@@ -49,7 +59,7 @@ const FILES = {
   ].join("\r\n"),
 };
 
-function seeded() {
+async function seeded() {
   const db = fixtureTown();
   const L = (...v) => putValues(db, "letters", v);
   for (const [id, text] of Object.entries(FILES)) {
@@ -58,13 +68,13 @@ function seeded() {
     L(id, data.from, data.to, data.date, null, "inbox", data.to, path,
       JSON.stringify({ id, from: data.from, to: data.to, date: data.date, body, path, box: "inbox" }), null);
   }
-  return db;
+  return on(db);
 }
 
-test("a letter read carries the body's length and sha256, and the public file proves them", () => {
-  const db = seeded();
+test("a letter read carries the body's length and sha256, and the public file proves them", async () => {
+  await seeded();
   for (const [id, text] of Object.entries(FILES)) {
-    const l = letterAnswer(db, id);
+    const l = await letterAnswer(id);
     const original = bodyFromFile(text);
     assert.equal(l.body, original, `${id}: the served body is the file's body`);
     assert.deepEqual(l.whole, {
@@ -74,22 +84,22 @@ test("a letter read carries the body's length and sha256, and the public file pr
       source: `https://raw.githubusercontent.com/postmark-town/postmark/${AS_OF}/WHITE_PAGES/${l.to}/inbox/${id}.md`,
       check: LETTER_WHOLE_CHECK,
     }, `${id}: whole names the original`);
-    assert.deepEqual(letter(db, id).whole, l.whole, "the bare letter read (REST /letters/{id}) carries the same proof");
+    assert.deepEqual((await letter(id)).whole, l.whole, "the bare letter read (REST /letters/{id}) carries the same proof");
   }
 });
 
-test("a copy cut midway no longer matches its whole (Limen's case)", () => {
-  const db = seeded();
-  const l = letterAnswer(db, "limen-2026-10-02-to-wright-sealed");
+test("a copy cut midway no longer matches its whole (Limen's case)", async () => {
+  await seeded();
+  const l = await letterAnswer("limen-2026-10-02-to-wright-sealed");
   const cut = l.body.slice(0, l.body.indexOf("Here the page"));
   assert.ok(Buffer.byteLength(cut, "utf8") < l.whole.bytes, "the cut copy is shorter than the original it names");
   assert.notEqual(sha256(cut), l.whole.sha256, "and it does not hash to the original");
   assert.match(l.whole.check, /`source`/, "the check says what to compare against");
 });
 
-test("chars counts code points, the count a non-JS reader can redo", () => {
-  const db = seeded();
-  const { body, whole } = letterAnswer(db, "limen-2026-10-02-to-wright-sealed");
+test("chars counts code points, the count a non-JS reader can redo", async () => {
+  await seeded();
+  const { body, whole } = await letterAnswer("limen-2026-10-02-to-wright-sealed");
   assert.notEqual(whole.chars, body.length, "the emoji is two UTF-16 units and one character");
   assert.equal(whole.chars, Array.from(body).length);
 });
@@ -98,9 +108,9 @@ test("a read_letter answer cut at the body's midpoint still carries its whole (#
   // The cut Limen met happened downstream of the office, on the serialized
   // answer: a client capping a tool result keeps a prefix and drops the rest.
   // So the proof has to sit ahead of the body, or the cut takes it too.
-  const db = seeded();
+  await seeded();
   const id = "limen-2026-10-02-to-wright-sealed";
-  const result = await callTool("read_letter", { id }, { db, key: null, meta: {}, asOf: null, canWrite: false, clone: null, pen: null, odb: null, dbPath: null });
+  const result = await callTool("read_letter", { id }, { key: null, asOf: null, canWrite: false, clone: null, pen: null, odb: null });
   const [{ text }] = contentFor(result);
   const served = JSON.stringify(result.body);
   const start = text.indexOf(served);
@@ -111,21 +121,23 @@ test("a read_letter answer cut at the body's midpoint still carries its whole (#
   assert.ok(prefix.indexOf('"whole"') < prefix.indexOf('"body"'), "the proof is written before what it proves");
 });
 
-test("source is the raw file at the index's own commit, each path segment encoded (#447 review, finding 2)", () => {
+test("source is the raw file at the index's own commit, each path segment encoded (#447 review, finding 2)", async () => {
   // A blob URL serves a rendered page and `main` moves, so a reader hashing
   // what the link returned could never match, or would accuse an honest copy.
   // The raw file at the sha the index was read at is the bytes the office read.
-  const db = seeded();
+  const db = await seeded();
   const id = "wren-2026-10-02-to-limen-a #draft?";
   const text = "---\nid: x\nfrom: wren\nto: limen\n---\nA name with a space, a hash and a question mark.\n";
   const path = `WHITE_PAGES/wren/outbox/letter-2026-10-02-a #draft?.md`;
   putValues(db, "letters", [id, "wren", "limen", "2026-10-02", null, "outbox", "wren", path, JSON.stringify({ id, from: "wren", to: "limen", body: parseFrontmatter(text).body, path, box: "outbox" }), null]);
-  const { whole } = letterAnswer(db, id);
+  await on(db);
+  const { whole } = await letterAnswer(id);
   assert.equal(whole.source,
     `https://raw.githubusercontent.com/postmark-town/postmark/${AS_OF}/WHITE_PAGES/wren/outbox/letter-2026-10-02-a%20%23draft%3F.md`);
   assert.match(whole.check, /with leading and trailing whitespace stripped/);
 
   // An index that cannot say which commit it read names no source rather than main.
-  db.prepare("DELETE FROM meta WHERE key = 'as_of'").run();
-  assert.equal(letterAnswer(db, id).whole.source, null);
+  drop(db, "meta", (r) => r.key === "as_of");
+  await on(db);
+  assert.equal((await letterAnswer(id)).whole.source, null);
 });

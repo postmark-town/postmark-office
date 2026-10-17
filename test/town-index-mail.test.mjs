@@ -1,5 +1,5 @@
 // town-index-mail.test.mjs — group 2 of POS-268: letters and mail answer from
-// the store exactly as from office.db.
+// the store exactly as their office.db twins did.
 //
 //   EMBEDDED_PG_DIR=<dir with embedded-postgres> node --test test/town-index-mail.test.mjs
 //
@@ -8,10 +8,11 @@
 // bare-date letter beside a timestamped one on the same day, a letter to three
 // recipients (toList), an office resident, a letter whose body names a word in
 // capitals (search folds ASCII case, and only ASCII), and a `%` in a body. The
-// store is seeded from that same office.db, so the readers are all that can
-// differ; every answer is compared as the bytes a door sends. Then the doors:
-// the REST routes over two offices (switch off and on) and one whose store is
-// gone, the MCP cases through callTool, and household { read: "mail" | "letter" }.
+// store is seeded from those rows, and every answer is compared as the bytes a
+// door sends to the twin's answer over the same rows, recorded in the last tree
+// that had office.db (helpers/twin-golden.mjs, POS-656). Then the doors: the
+// REST routes over an office reading the store and one whose store is gone,
+// the MCP cases through callTool, and household { read: "mail" | "letter" }.
 
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
@@ -21,19 +22,15 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 
-import { fixtureTown } from "./fixture.mjs";
+import { fixtureTown, putValues } from "./fixture.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
-import { copyIndexToStore } from "./helpers/index-to-store.mjs";
-import * as office from "../src/queries.mjs";
+import { seedTownIndex } from "./helpers/index-to-store.mjs";
+import { twinGolden } from "./helpers/twin-golden.mjs";
 import * as store from "../src/town-index-store.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-// The office.db legs here read office.db, whatever switch the run was started
-// with; the switched legs set TOWN_INDEX_READS themselves (POS-268). These
-// twins go with office.db at 5b.
-delete process.env.TOWN_INDEX_READS;
+const TWINS = twinGolden("town-index-mail");
 const tmp = mkdtempSync(join(tmpdir(), "town-index-mail-"));
-const dbPath = join(tmp, "office.db");
 let s = null, skip = false, api, db;
 const offices = {};
 
@@ -41,9 +38,9 @@ before(async () => {
   s = await startStore();
   if (s.skip) { skip = s.skip; return; }
   db = fixtureTown();
-  const L = db.prepare("INSERT INTO letters VALUES (?,?,?,?,?,?,?,?,?,?)");
+  const L = (...v) => putValues(db, "letters", v);
   const letter = (id, from, to, date, at, extra = {}, box = "inbox") =>
-    L.run(id, from, to, date, null, box, to, `WHITE_PAGES/${to}/${box}/${id}.md`,
+    L(id, from, to, date, null, box, to, `WHITE_PAGES/${to}/${box}/${id}.md`,
       JSON.stringify({ id, from, to, date, box, body: extra.body ?? `# ${id}\n\nA sentence.`, ...(at ? { delivered_at: at } : {}), ...extra }), at);
   letter("zed-2026-07-10-to-wright-b", "Zed", "wright", "2026-07-10", "2026-07-10T08:00:00.000Z");
   letter("zed-2026-07-10-to-wright-A", "Zed", "wright", "2026-07-10", "2026-07-10T08:00:00.000Z");
@@ -53,29 +50,26 @@ before(async () => {
       // the file the town reader names, as a real index row carries it: whole.source is built from it at the index's as_of (POS-334)
       path: "WHITE_PAGES/limen/inbox/wright-2026-07-11-to-many.md" });
   letter("wright-2026-07-12-unsent", "wright", "Zed", "2026-07-12", null, {}, "outbox");
-  db.prepare("INSERT INTO residents VALUES (?, ?)").run("Zed", JSON.stringify({ handle: "Zed", is_office: false, address: { data: {}, body: "# Zed, of the Lamplight" } }));
-  db.prepare("INSERT INTO mail_state VALUES (?, ?)").run("limen", JSON.stringify({
+  putValues(db, "residents", ["Zed", JSON.stringify({ handle: "Zed", is_office: false, address: { data: {}, body: "# Zed, of the Lamplight" } })]);
+  putValues(db, "mail_state", ["limen", JSON.stringify({
     handle: "limen", conversations: [], summary: { they_spoke_last: 0 },
     unplaced_bounces: [{ date: "2026-07-01", path: "WHITE_PAGES/limen/outbox/x.md", defect: "no such resident" }, { date: "2026-07-09", path: "y", defect: "late" }],
-  }));
-  const G = db.prepare("INSERT INTO ledger (kind, date, id, from_h, to_h, json) VALUES (?,?,?,?,?,?)");
-  G.run("delivery", "2026-07-10", "zed-2026-07-10-to-wright-b", "Zed", "wright", "{}");
-  G.run("bounce", "2026-07-10", null, "limen", null, "{}");
+  })]);
+  const G = (...v) => putValues(db, "ledger", v, ["kind", "date", "id", "from_h", "to_h", "json"]);
+  G("delivery", "2026-07-10", "zed-2026-07-10-to-wright-b", "Zed", "wright", "{}");
+  G("bounce", "2026-07-10", null, "limen", null, "{}");
   const w = await s.connect("law_ingester");
-  await copyIndexToStore(w, db);
+  await seedTownIndex(w, db);
   await w.end();
   api = await s.connect("office_api");
 
-  // "plain" reaches the same store as prod's unswitched office does (WORLD2_PG
-  // since 10-04): search's last_active is read from the store's acts on both
-  // offices (POS-481), so the ONE difference between them is the switch.
-  for (const [name, env] of [["plain", { WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") }], ["switched", { TOWN_INDEX_READS: "store", WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") }],
-    ["cut-off", { TOWN_INDEX_READS: "store", WORLD2_PG: "1", WORLD2_PG_URL: "postgres://office_api:x@127.0.0.1:9/none" }]]) {
-    const child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0", "--db", dbPath,
+  for (const [name, env] of [["switched", { WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") }],
+    ["cut-off", { WORLD2_PG: "1", WORLD2_PG_URL: "postgres://office_api:x@127.0.0.1:9/none" }]]) {
+    const child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0",
       "--oauth-db", join(tmp, `${name}-oauth.db`), "--roles-db", join(tmp, `${name}-roles.db`)], {
       env: { ...process.env, WORLD_GRAPH_NONE: "1", TOWN_CLONE: join(tmp, "no-clone-here"), WORLD_CLONE: join(tmp, "no-world-clone"), VOICES_LOG: join(tmp, `${name}-voices.jsonl`),
         TOWN_PUSH: "", WORLD_STORE_DB: join(tmp, "no-world.db"), OFFICE_READ_WORKERS: "0",
-        TOWN_INDEX_READS: undefined, WORLD2_PG: undefined, WORLD2_PG_URL: undefined, ...env },
+        WORLD2_PG: undefined, WORLD2_PG_URL: undefined, ...env },
       stdio: ["ignore", "pipe", "pipe"],
     });
     await new Promise((ok, no) => {
@@ -90,66 +84,65 @@ after(async () => {
   for (const { child } of Object.values(offices)) if (child.exitCode === null) { const gone = new Promise((ok) => child.on("exit", ok)); child.kill(); await gone; }
   if (api) await api.end().catch(() => {});
   if (s?.stop) await s.stop();
-  db?.close();
   rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
-const same = async (label, oldAnswer, newAnswer) => assert.equal(JSON.stringify(await newAnswer), JSON.stringify(await oldAnswer), label);
+const same = async (label, newAnswer) => TWINS.equal(label, JSON.stringify(await newAnswer));
 const IDS = ["limen-2026-07-01-to-wright-the-gap", "wright-2026-07-11-to-many", "wright-2026-07-12-unsent", "nope"];
 
-test("letter, letterAnswer and outboxSettled answer as office.db does", async (t) => {
+test("letter, letterAnswer and outboxSettled answer as their office.db twins did", async (t) => {
   if (skip) return t.skip(skip);
   for (const id of IDS) {
-    await same(`letter ${id}`, office.letter(db, id), store.letter(api, id));
-    await same(`letterAnswer ${id}`, office.letterAnswer(db, id), store.letterAnswer(api, id));
+    await same(`letter ${id}`, store.letter(api, id));
+    await same(`letterAnswer ${id}`, store.letterAnswer(api, id));
   }
-  for (const h of ["wright", "Zed", "nobody"]) await same(`outboxSettled ${h}`, office.outboxSettled(db, h), store.outboxSettled(api, h));
+  for (const h of ["wright", "Zed", "nobody"]) await same(`outboxSettled ${h}`, store.outboxSettled(api, h));
 });
 
-test("mailList answers as office.db does, in either box, on every page", async (t) => {
+test("mailList answers as its office.db twin did, in either box, on every page", async (t) => {
   if (skip) return t.skip(skip);
   for (const h of ["wright", "limen", "Zed", "nobody"])
     for (const box of ["inbox", "outbox"])
       for (const o of [{}, { limit: 1 }, { limit: 2, offset: 1 }, { since: "2026-07-10" }, { until: "2026-07-03" }, { since: "2026-07-05", until: "2026-07-10", limit: 1, offset: 1 }])
-        await same(`mailList ${h} ${box} ${JSON.stringify(o)}`, office.mailList(db, h, box, o), store.mailList(api, h, box, o));
+        await same(`mailList ${h} ${box} ${JSON.stringify(o)}`, store.mailList(api, h, box, o));
 });
 
-test("letterList answers as office.db does, under every filter", async (t) => {
+test("letterList answers as its office.db twin did, under every filter", async (t) => {
   if (skip) return t.skip(skip);
   const asks = [{}, { limit: 2 }, { limit: 2, offset: 2 }, { resident: "wright" }, { resident: "Zed", full: true }, { region: "the-terrace" },
     { region: "the Trueing Terrace" }, { region: "nowhere" }, { since: "2026-07-05" }, { until: "2026-07-02" }, { excludeOffice: true },
     { excludeOffice: true, resident: "limen", full: true }, { limit: "x", offset: -3 }];
-  for (const a of asks) await same(`letterList ${JSON.stringify(a)}`, office.letterList(db, a), store.letterList(api, a));
+  for (const a of asks) await same(`letterList ${JSON.stringify(a)}`, store.letterList(api, a));
 });
 
-test("mailCorrespondents and mailAwaiting answer as office.db does", async (t) => {
+test("mailCorrespondents and mailAwaiting answer as their office.db twins did", async (t) => {
   if (skip) return t.skip(skip);
   for (const h of ["wright", "limen", "Zed", "postmaster", "nobody"])
     for (const o of [{}, { limit: 1 }, { limit: 1, offset: 1 }])
-      await same(`mailCorrespondents ${h} ${JSON.stringify(o)}`, office.mailCorrespondents(db, h, o), store.mailCorrespondents(api, h, o));
+      await same(`mailCorrespondents ${h} ${JSON.stringify(o)}`, store.mailCorrespondents(api, h, o));
   for (const h of ["wright", "limen", "nobody"])
     for (const o of [{}, { limit: 1 }, { offset: 1 }, { hide_bounces_older_than_days: 3 }, { hide_bounces_older_than_days: 0 }])
-      await same(`mailAwaiting ${h} ${JSON.stringify(o)}`, office.mailAwaiting(db, h, o), store.mailAwaiting(api, h, o));
+      await same(`mailAwaiting ${h} ${JSON.stringify(o)}`, store.mailAwaiting(api, h, o));
 });
 
-test("search and metricsMail answer as office.db does", async (t) => {
+test("search and metricsMail answer as their office.db twins did", async (t) => {
   if (skip) return t.skip(skip);
   for (const [q, o] of [["gap", {}], ["WRIGHT", {}], ["lamplight", {}], ["100%", {}], ["zed", { limit: 1 }], ["zed", { limit: 1, offset: 1 }], ["_", {}], ["nothing-matches", {}], ["a", { limit: 2, offset: 3 }]])
-    await same(`search ${q} ${JSON.stringify(o)}`, office.search(db, q, o), store.search(api, q, o));
-  for (const o of [{}, { days: 7 }, { days: 1 }, { days: 400 }]) await same(`metricsMail ${JSON.stringify(o)}`, office.metricsMail(db, o), store.metricsMail(api, o));
+    await same(`search ${q} ${JSON.stringify(o)}`, store.search(api, q, o));
+  for (const o of [{}, { days: 7 }, { days: 1 }, { days: 400 }]) await same(`metricsMail ${JSON.stringify(o)}`, store.metricsMail(api, o));
 });
 
 const DOORS = ["/letters", "/letters?resident=wright&limit=2", "/letters?region=the-terrace&full=1", "/letters?exclude-office=1",
   "/letters/wright-2026-07-11-to-many", "/letters/nope", "/mail/wright", "/mail/wright?box=outbox", "/mail/Zed?limit=1&offset=1",
   "/search?q=lamplight", "/search?q=WRIGHT&limit=1", "/metrics/mail"];
 
-test("every moved REST door answers the switched office exactly as the unswitched one", async (t) => {
+test("every moved REST door answers as the unswitched office did, and names the index it read", async (t) => {
   if (skip) return t.skip(skip);
   for (const door of DOORS) {
-    const a = await fetch(offices.plain.base + door), b = await fetch(offices.switched.base + door);
-    assert.equal(b.status, a.status, `${door}: status`);
-    assert.equal(await b.text(), await a.text(), `${door}: body`);
-    if (a.status === 200) assert.equal(b.headers.get("x-postmark-town-index-as-of"), "fixturesha000000000000000000000000000000", `${door}: names the index it read`);
+    const b = await fetch(offices.switched.base + door);
+    const status = b.status;
+    await TWINS.equalResponse(`REST ${door}`, b, `${door}: status and body`);
+    if (status === 200) assert.equal(b.headers.get("x-postmark-town-index-as-of"), "fixturesha000000000000000000000000000000", `${door}: names the index it read`);
   }
 });
 
@@ -162,35 +155,32 @@ test("a switched door whose store is gone answers the store's 503", async (t) =>
   }
 });
 
-test("the MCP cases and household { read: mail | letter } answer the same both ways, and 503 when the store is gone", async (t) => {
+test("the MCP cases and household { read: mail | letter } answer as the unswitched office did, and 503 when the store is gone", async (t) => {
   if (skip) return t.skip(skip);
   const { callTool } = await import("../src/mcp.mjs");
   const { householdApex } = await import("../src/household-apex.mjs");
-  const meta = Object.fromEntries(db.prepare("SELECT key, value FROM meta").all().map((r) => [r.key, r.value]));
   const KEY = { household: "keemin", handles: new Set(["wright"]) };
-  const CTX = { db, meta, clone: join(tmp, "no-clone-here"), asOf: meta.as_of };
+  const CTX = { clone: join(tmp, "no-clone-here"), asOf: "fixturesha000000000000000000000000000000" };
   const asks = [
-    () => callTool("list_mail", { handle: "wright" }, { db, meta }),
-    () => callTool("list_mail", { handle: "wright", box: "outbox" }, { db, meta }),
-    () => callTool("read_letter", { id: "wright-2026-07-11-to-many" }, { db, meta }),
-    () => callTool("search_town", { q: "gap" }, { db, meta }),
-    () => callTool("list_letters", { resident: "Zed", full: true }, { db, meta }),
+    () => callTool("list_mail", { handle: "wright" }, {}),
+    () => callTool("list_mail", { handle: "wright", box: "outbox" }, {}),
+    () => callTool("read_letter", { id: "wright-2026-07-11-to-many" }, {}),
+    () => callTool("search_town", { q: "gap" }, {}),
+    () => callTool("list_letters", { resident: "Zed", full: true }, {}),
     () => householdApex({ read: "mail", handle: "wright" }, KEY, CTX),
     () => householdApex({ read: "mail", handle: "wright", view: "outbox" }, KEY, CTX),
     () => householdApex({ read: "mail", handle: "wright", view: "awaiting" }, KEY, CTX),
     () => householdApex({ read: "mail", handle: "wright", view: "correspondents" }, KEY, CTX),
     () => householdApex({ read: "letter", id: "wright-2026-07-11-to-many" }, KEY, CTX),
   ];
-  const keep = { TOWN_INDEX_READS: process.env.TOWN_INDEX_READS, WORLD2_PG: process.env.WORLD2_PG, WORLD2_PG_URL: process.env.WORLD2_PG_URL };
+  const keep = { WORLD2_PG: process.env.WORLD2_PG, WORLD2_PG_URL: process.env.WORLD2_PG_URL };
   const { default: pg } = await import("pg");
   const pool = new pg.Pool({ connectionString: s.url("office_api"), max: 2 });
   const pen = await import("../src/world2-pen.mjs");
   try {
-    const plain = [];
-    for (const ask of asks) plain.push(JSON.stringify(await ask()));
-    Object.assign(process.env, { TOWN_INDEX_READS: "store", WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") });
+    Object.assign(process.env, { WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") });
     pen.__setPoolForTest(pool);
-    for (const [i, ask] of asks.entries()) assert.equal(JSON.stringify(await ask()), plain[i], `ask ${i}`);
+    for (const [i, ask] of asks.entries()) TWINS.equal(`ask ${i}`, JSON.stringify(await ask()));
     pen.__setPoolForTest({ connect: async () => { throw new Error("ECONNREFUSED"); } });
     for (const [i, ask] of asks.entries()) {
       const r = await ask();

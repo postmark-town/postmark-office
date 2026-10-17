@@ -59,7 +59,7 @@ export async function indexStore(town, { db: name = "office_test", own = false }
   };
   await seed();
   let inProcess = null; // this process's index module, once useInProcess switched it
-  const env = { TOWN_INDEX_READS: "store", WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api"), OFFICE_READ_WORKERS: ONE_WORKER };
+  const env = { WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api"), OFFICE_READ_WORKERS: ONE_WORKER };
   return {
     env,
     store: s,
@@ -77,17 +77,15 @@ export async function indexStore(town, { db: name = "office_test", own = false }
       await inProcess.refreshStoreProbe();
     },
     /**
-     * Switch THIS process to the store (for a test that calls mcp / household
-     * in-process) and load the roll and the write path's probe. Answers a
-     * function that puts the environment back.
+     * Point THIS process's town index at the store (for a test that calls mcp /
+     * household in-process) and load the roll and the write path's probe.
+     * Answers a function that puts the pool back.
      */
-    // The switch, and the index read through a pool of its own
+    // The index, read through a pool of its own
     // (town-index-store.mjs § __setTownIndexPoolForTest): the record's env is
     // left as the test set it, so a suite that stubs the record's pen keeps its
     // stub and still reads a real index.
     async useInProcess() {
-      const keep = process.env.TOWN_INDEX_READS;
-      process.env.TOWN_INDEX_READS = "store";
       const { default: pg } = await import("pg");
       const pool = new pg.Pool({ connectionString: s.url("office_api"), max: 3 });
       pool.on("error", () => {});
@@ -103,7 +101,6 @@ export async function indexStore(town, { db: name = "office_test", own = false }
         tis.__setTownIndexPoolForTest(null);
         inProcess = null;
         await pool.end().catch(() => {});
-        if (keep === undefined) delete process.env.TOWN_INDEX_READS; else process.env.TOWN_INDEX_READS = keep;
       };
     },
     stop: () => s.stop(),
@@ -123,7 +120,7 @@ export async function indexStoreFromTown(townRepo, { sha = null, db: name = "off
   const w = await s.connect("law_ingester");
   try { await ingest(w, { townRepo, sha: at, seed: true }); }
   finally { await w.end(); }
-  return { env: { TOWN_INDEX_READS: "store", WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api"), OFFICE_READ_WORKERS: ONE_WORKER }, store: s, stop: () => s.stop() };
+  return { env: { WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api"), OFFICE_READ_WORKERS: ONE_WORKER }, store: s, stop: () => s.stop() };
 }
 
 /**

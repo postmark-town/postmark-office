@@ -19,14 +19,14 @@
 
 import test, { after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { DatabaseSync } from "node:sqlite";
-import { letterAnswer, mailAwaiting, NEW_INBOUND_NOTE } from "../src/queries.mjs";
+import { NEW_INBOUND_NOTE } from "../src/queries.mjs";
+import { letterAnswer, mailAwaiting } from "../src/town-index-store.mjs";
 import { doorstepBundle } from "../src/doorstep-bundle.mjs";
 import { householdApex } from "../src/household-apex.mjs";
 import { unreadFor, UNREAD_LISTED } from "../src/unread-store.mjs";
 import { installActsPen, uninstallActsPen, RECORD_ON } from "./acts-pen-stub.mjs";
-import { indexStore, testIndex } from "./helpers/office-under-test.mjs";
-import { putValues, emptyTown, fixtureTown } from "./fixture.mjs";
+import { indexStore } from "./helpers/office-under-test.mjs";
+import { putValues, emptyTown } from "./fixture.mjs";
 
 const AS_OF = "unreadfixture000000000000000000000000000";
 // Two households. House A keeps ann and amos; house B keeps bea. With an empty
@@ -41,7 +41,7 @@ const FROM_ANN = [L(5, "ann", "bea", "23")];
 // In the index, but the ferry has not delivered it: no delivery row.
 const UNDELIVERED = L(6, "bea", "ann", "24");
 
-function fixtureTown() {
+function unreadTown() {
   const db = emptyTown();
   const put = (...v) => putValues(db, "meta", v);
   put("as_of", AS_OF);
@@ -52,12 +52,12 @@ function fixtureTown() {
     insR(h, JSON.stringify({ handle: h, is_office: false, address: { data: { since: "2026-01-01", joined: "2026-06-01" } } }));
   const insL = (...v) => putValues(db, "letters", v);
   // json is the event itself, as the hydrator writes every ledger line (town-index.mjs § ledgerLines); the store refuses a null
-  const insD = db.prepare("INSERT INTO ledger (kind, date, id, from_h, to_h, json) VALUES ('delivery',?,?,?,?,?)");
+  const insD = (...v) => putValues(db, "ledger", ["delivery", ...v], ["kind", "date", "id", "from_h", "to_h", "json"]);
   for (const l of [...TO_ANN, ...TO_AMOS, ...FROM_ANN, UNDELIVERED]) {
     const at = `${l.date}T12:00:00.000Z`;
     insL(l.id, l.from, l.to, l.date, null, "inbox", l.to, `WHITE_PAGES/${l.to}/inbox/${l.id}.md`,
       JSON.stringify({ ...l, body: `# ${l.id}`, delivered_at: at }), at);
-    if (l !== UNDELIVERED) insD.run(l.date, l.id, l.from, l.to, JSON.stringify({ kind: "delivery", date: l.date, id: l.id, from: l.from, to: l.to }));
+    if (l !== UNDELIVERED) insD(l.date, l.id, l.from, l.to, JSON.stringify({ kind: "delivery", date: l.date, id: l.id, from: l.from, to: l.to }));
   }
   // The correspondence law's own row, as the town derives it: ann's newest
   // conversation is bea's, so the law calls it new_inbound.
@@ -104,26 +104,27 @@ function opensTable() {
   return { rows, also };
 }
 
-let db, opens, pen;
+let opens, pen;
 // The doors below run in this process and read their town index from a store
-// seeded from this fixture (POS-268, office-under-test.mjs).
-const IX = await indexStore(fixtureTown());
+// seeded from this fixture (POS-268, office-under-test.mjs); `api` asks the
+// store's readers directly, for the town's own answer.
+const IX = await indexStore(unreadTown());
 const IX_RESTORE = await IX.useInProcess();
-test.after(async () => { await IX_RESTORE(); await IX.stop(); });
+const api = await IX.store.connect("office_api");
+test.after(async () => { await api.end(); await IX_RESTORE(); await IX.stop(); });
 beforeEach(() => {
   process.env.WORLD2_PG = RECORD_ON.WORLD2_PG;
   process.env.WORLD2_PG_URL = RECORD_ON.WORLD2_PG_URL;
-  db = fixtureTown();
   opens = opensTable();
   pen = installActsPen({ also: opens.also });
 });
 after(() => { uninstallActsPen(); delete process.env.WORLD2_PG; delete process.env.WORLD2_PG_URL; });
 
-const countOf = async (h) => (await unreadFor(db, [h])).get(h).length;
-const ctx = () => ({ db, meta: {}, asOf: AS_OF });
+const countOf = async (h) => (await unreadFor([h])).get(h).length;
+const ctx = () => ({ asOf: AS_OF });
 
 test("1 · a delivered letter is unread, newest first; a letter with no delivery row is not", async () => {
-  const rows = (await unreadFor(db, ["ann"])).get("ann");
+  const rows = (await unreadFor(["ann"])).get("ann");
   assert.deepEqual(rows.map((r) => r.id), [TO_ANN[2].id, TO_ANN[1].id, TO_ANN[0].id]);
   assert.equal(rows.some((r) => r.id === UNDELIVERED.id), false, "unread starts at delivery, never at send");
   assert.equal(await countOf("bea"), 1, "bea's one delivered letter (from ann) is unread to bea");
@@ -133,7 +134,7 @@ test("1 · a delivered letter is unread, newest first; a letter with no delivery
 test("2 · a full read clears it, for the recipient, and answers the town's bytes", async () => {
   const id = TO_ANN[1].id;
   const got = await householdApex({ read: "letter", args: { id } }, A, ctx());
-  assert.deepEqual(got, letterAnswer(db, id), "the household read is still the town's answer");
+  assert.deepEqual(got, await letterAnswer(api, id), "the household read is still the town's answer");
   assert.equal(await countOf("ann"), 2);
   const row = opens.rows.get(`ann\n${id}`);
   assert.equal(row.how, "read");
@@ -151,7 +152,7 @@ test("3 · a list read does NOT clear it: inbox, awaiting, and the doorstep itse
   const inbox = await householdApex({ read: "mail", args: { view: "inbox", handle: "ann" } }, A, ctx());
   assert.ok(inbox.letters?.length >= 3, JSON.stringify(inbox).slice(0, 200));
   await householdApex({ read: "mail", args: { view: "awaiting", handle: "ann" } }, A, ctx());
-  const d = await doorstepBundle("ann", { db, key: A, meta: {}, asOf: AS_OF });
+  const d = await doorstepBundle("ann", { key: A, asOf: AS_OF });
   assert.equal(d.unread.count, 3);
   assert.equal(opens.rows.size, 0, "no read but a full fetch writes an opening");
   assert.equal(await countOf("ann"), 3);
@@ -169,16 +170,13 @@ test("4 · mark-all-read clears all, for every resident the key holds; the secon
   assert.equal(opens.rows.get(`ann\n${TO_ANN[0].id}`).how, "read", "an opening already made is kept, not overwritten");
   const again = await householdApex({ do: "mark-all-read" }, A, ctx());
   assert.equal(again.result.receipt, "nothing was unread");
-  const d = await doorstepBundle("ann", { db, key: A, meta: {}, asOf: AS_OF });
+  const d = await doorstepBundle("ann", { key: A, asOf: AS_OF });
   assert.equal(d.unread.count, 0);
   assert.deepEqual(d.unread.letters, []);
 });
 
-test("4c · switched with no office.db, mark-all-read reads the deliveries from the store (POS-268 5a)", { skip: testIndex() === "office" && "OFFICE_TEST_INDEX=office: this process is not switched" }, async () => {
-  // what a switched office holds where office.db was (server.mjs § ABSENT_INDEX)
-  const gone = () => { throw new Error("office.db was read by a switched door"); };
-  const absent = Object.freeze({ prepare: gone, exec: gone, close() {} });
-  const r = await householdApex({ do: "mark-all-read" }, A, { ...ctx(), db: absent });
+test("4c · mark-all-read reads the deliveries from the store (POS-268 5a)", async () => {
+  const r = await householdApex({ do: "mark-all-read" }, A, ctx());
   assert.equal(r.did, "mark-all-read", JSON.stringify(r).slice(0, 300));
   assert.deepEqual(r.result.marked, { ann: 3, amos: 1 });
   assert.equal(opens.rows.get(`ann\n${TO_ANN[2].id}`).how, "mark-all-read");
@@ -193,10 +191,10 @@ test("4b · mark-all-read with handle: narrows to one resident", async () => {
 });
 
 test("5 · another household never sees your unread count, and cannot clear it", async () => {
-  const mine = await doorstepBundle("ann", { db, key: A, meta: {}, asOf: AS_OF });
+  const mine = await doorstepBundle("ann", { key: A, asOf: AS_OF });
   assert.equal(mine.unread.count, 3);
   for (const key of [B, null]) {
-    const theirs = await doorstepBundle("ann", { db, key, meta: {}, asOf: AS_OF });
+    const theirs = await doorstepBundle("ann", { key, asOf: AS_OF });
     assert.equal("unread" in theirs, false, `a ${key ? "stranger's key" : "keyless read"} was shown ann's unread block`);
     assert.doesNotMatch(JSON.stringify(theirs), /"unread"/);
   }
@@ -237,7 +235,7 @@ test("5b · the house read carries each held resident's unread, asked once per h
     const asked = () => pen.asked().filter((q) => /FROM letter_opens/.test(q)).length;
     for (const [key, shown] of [[A, true], [B, false], [null, false]]) {
       const before = asked();
-      const house = await houseBundle({ household: "house-a" }, { db, key, meta: { as_of: AS_OF }, asOf: AS_OF, clone, readers });
+      const house = await houseBundle({ household: "house-a" }, { key, asOf: AS_OF, clone, readers });
       assert.equal(house.refused, undefined, JSON.stringify(house.refused));
       if (shown) {
         assert.equal(house.residents.ann.unread.count, 3);
@@ -254,17 +252,17 @@ test("5b · the house read carries each held resident's unread, asked once per h
 test("5c · an unreadable record is said on the doorstep, never a zero", async () => {
   uninstallActsPen();
   installActsPen({ also: opens.also, failOn: (q) => /letter_opens/.test(q) });
-  const d = await doorstepBundle("ann", { db, key: A, meta: {}, asOf: AS_OF });
+  const d = await doorstepBundle("ann", { key: A, asOf: AS_OF });
   assert.equal(d.unread.count, null);
   assert.match(d.unread.unavailable, /unknown, not zero/);
 });
 
 test("6 · new_inbound still answers, with its pointer to where the count moved", async () => {
-  const a = mailAwaiting(db, "ann");
+  const a = await mailAwaiting(api, "ann");
   assert.equal(a.summary.new_inbound, 1, "the law's sequence state is untouched");
   assert.equal(a.new_inbound_moved, NEW_INBOUND_NOTE);
   assert.match(NEW_INBOUND_NOTE, /`unread`/);
-  const d = await doorstepBundle("ann", { db, key: null, meta: {}, asOf: AS_OF });
+  const d = await doorstepBundle("ann", { key: null, asOf: AS_OF });
   assert.equal(d.awaiting.summary.new_inbound, 1, "keyless readers (glitch's window) still read it");
   assert.equal(d.awaiting.new_inbound_moved, NEW_INBOUND_NOTE);
   assert.equal(UNREAD_LISTED, 20);
@@ -279,9 +277,9 @@ test("6 · new_inbound still answers, with its pointer to where the count moved"
 
 test("7 · the flat read_letter and town { read: \"letter\" } clear it for a recipient, and answer the town's bytes", async () => {
   const { callTool } = await import("../src/mcp.mjs");
-  const tctx = { db, key: A, meta: {}, asOf: AS_OF };
+  const tctx = { key: A, asOf: AS_OF };
   const flat = await callTool("read_letter", { id: TO_ANN[0].id }, tctx);
-  assert.deepEqual(flat, letterAnswer(db, TO_ANN[0].id), "the flat read's answer moved");
+  assert.deepEqual(flat, await letterAnswer(api, TO_ANN[0].id), "the flat read's answer moved");
   assert.equal(await countOf("ann"), 2);
   assert.equal(opens.rows.get(`ann\n${TO_ANN[0].id}`).how, "read");
   const town = await callTool("town", { read: "letter", args: { id: TO_ANN[1].id } }, tctx);
@@ -291,9 +289,9 @@ test("7 · the flat read_letter and town { read: \"letter\" } clear it for a rec
 
 test("7b · a non-recipient's or a keyless full read writes nothing", async () => {
   const { callTool } = await import("../src/mcp.mjs");
-  await callTool("read_letter", { id: TO_ANN[0].id }, { db, key: B, meta: {}, asOf: AS_OF });
-  await callTool("read_letter", { id: TO_ANN[0].id }, { db, key: null, meta: {}, asOf: AS_OF });
-  await callTool("town", { read: "letter", args: { id: TO_ANN[0].id } }, { db, key: B, meta: {}, asOf: AS_OF });
+  await callTool("read_letter", { id: TO_ANN[0].id }, { key: B, asOf: AS_OF });
+  await callTool("read_letter", { id: TO_ANN[0].id }, { key: null, asOf: AS_OF });
+  await callTool("town", { read: "letter", args: { id: TO_ANN[0].id } }, { key: B, asOf: AS_OF });
   assert.equal(opens.rows.size, 0);
   assert.equal(await countOf("ann"), 3);
 });

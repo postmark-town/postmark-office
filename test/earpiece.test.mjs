@@ -27,7 +27,7 @@ import { penMailPort, PEN_KEY } from "../src/earpiece-mail.mjs";
 import { tempClone, fixtureTown } from "./fixture.mjs";
 import { runEarpiece, MAIL_STOPPED } from "../world2/tools/earpiece-deliver.mjs";
 import { installActsPen, uninstallActsPen, withRecordOn } from "./acts-pen-stub.mjs";
-import { indexStore, testIndex } from "./helpers/office-under-test.mjs";
+import { indexStore } from "./helpers/office-under-test.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MIN = 60_000;
@@ -441,7 +441,7 @@ test("decideWake · an event that ends between crossings gets its one letter in 
 });
 
 test("THE FALSIFIER · two mail RSVPs, one webhook, three says: at the crossing exactly two letters from postmark-pen, each carrying the three; the next crossing with nothing new writes nothing", async () => {
-  const db = fixtureTown();                        // residents: wright, limen, postmaster
+  // the recipients the pen checks: the fixture town's residents (wright, limen, postmaster), in the store above
   const clone = tempClone();
   try {
     const C1 = Date.parse("2026-10-04T00:00:00Z"), C2 = Date.parse("2026-10-04T12:00:00Z");
@@ -457,7 +457,7 @@ test("THE FALSIFIER · two mail RSVPs, one webhook, three says: at the crossing 
       voice: [sayIn("bo", T0 + 41 * MIN, "one"), sayIn("cy", T0 + 62 * MIN, "two"), sayIn("bo", T0 + 93 * MIN, "three")] });
     const posted = [];
     const fetchImpl = async (u) => { posted.push(u); return { status: 200 }; };
-    const sendMail = penMailPort({ db, clone });
+    const sendMail = penMailPort({ clone });
     // the timer's cadence, one run every 5 minutes from the doors to the second crossing
     for (let t = T0 + 5 * MIN; t < C2; t += 5 * MIN) await runEarpiece({ now: t, env: ON, store: s, withinFn: withinRect, fetchImpl, sendMail });
 
@@ -488,21 +488,15 @@ test("THE FALSIFIER · two mail RSVPs, one webhook, three says: at the crossing 
 });
 
 test("the pen's key: postmark-pen and only postmark-pen; a key that does not hold it bounces 403 at the office's own fence", async () => {
-  const db = fixtureTown();
   const clone = tempClone();
   try {
     assert.deepEqual([...PEN_KEY.handles], [PEN_HANDLE]);
-    const r = await penMailPort({ db, clone })({ to: "limen", title: "The Reading (wake 1)", body: "hello" });
+    const r = await penMailPort({ clone })({ to: "limen", title: "The Reading (wake 1)", body: "hello" });
     assert.equal(r.ok, true);
     assert.match(r.letter_id, /^postmark-pen-\d{4}-\d{2}-\d{2}-to-limen-the-reading-wake-1$/);
     const stranger = { household: "keemin", handles: new Set(["wright"]) };
-    await assert.rejects(() => penMailPort({ db, clone, key: stranger })({ to: "limen", title: "x", body: "y" }),
+    await assert.rejects(() => penMailPort({ clone, key: stranger })({ to: "limen", title: "x", body: "y" }),
       (e) => e.code === 403 && /"postmark-pen" is not one of your residents/.test(e.defect));
-    const none = await penMailPort({ db: null, clone })({ to: "limen", title: "x", body: "y" });
-    // Switched, the recipient check reads the store's index, never the db the
-    // port was handed, so a port with no office.db still checks and sends (POS-268).
-    // The old mode refuses: its index IS that file.
-    assert.equal(none.ok, testIndex() === "store");
   } finally { rmSync(clone, { recursive: true, force: true }); }
 });
 
@@ -510,10 +504,9 @@ test("a pen bounce is logged failed and uncharged with the fence's own sentence"
   const ev = hallEvent();
   const s = memStore({ events: [ev], rsvps: [{ event: ev.id, handle: "nobody", household: "hh:nobody", harness: "mail", budget: 6 }],
     voice: [sayIn("bo", T0 + 30_000, "hi")] });
-  const db = fixtureTown();
   const clone = tempClone();
   try {
-    await runEarpiece({ now: LETTER, env: ON, store: s, withinFn: withinRect, sendMail: penMailPort({ db, clone }) });
+    await runEarpiece({ now: LETTER, env: ON, store: s, withinFn: withinRect, sendMail: penMailPort({ clone }) });
     assert.equal(s.wakes[0].status, "failed");
     assert.equal(s.wakes[0].budget_left, 6);
     assert.match(s.wakes[0].detail, /no resident "nobody"/);

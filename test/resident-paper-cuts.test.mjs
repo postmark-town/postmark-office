@@ -11,10 +11,11 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { DatabaseSync } from "node:sqlite";
-import { search, mailAwaiting, townClock, paneUrl, resident, questBoardFor } from "../src/queries.mjs";
+import { townClock, paneUrl } from "../src/queries.mjs";
+import * as tis from "../src/town-index-store.mjs";
 import { NO_TOWN, townClone, townModuleUrl } from "./fixture-paths.mjs";
-import { putValues, emptyTown } from "./fixture.mjs";
+import { putValues, emptyTown, setMeta } from "./fixture.mjs";
+import { indexStore } from "./helpers/office-under-test.mjs";
 
 const TOWN = townClone();
 const { townDay } = TOWN ? await import(townModuleUrl("tools", "quest-progress.mjs")) : {};
@@ -22,7 +23,15 @@ const SKIP = !TOWN && NO_TOWN;
 
 const dir = mkdtempSync(join(tmpdir(), "pm-papercuts-"));
 const db = emptyTown();
-after(() => { db.close(); rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+// The reads answer from the store's town index (the suite's embedded store),
+// seeded from these rows as each case reads them: the rows grow down the file.
+let IX = null, api = null;
+async function seated() {
+  if (!IX) { IX = await indexStore(db); api = await IX.store.connect("office_api"); }
+  else await IX.reseed();
+  return api;
+}
+after(async () => { await api?.end(); await IX?.stop(); rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
 
 // ── 7a · SEARCH: the exact handle first ──────────────────────────────────────
 //
@@ -44,8 +53,8 @@ prose("errant-the-second", "a handle that STARTS with the term");
 prose("the-errant-annex", "a handle that CONTAINS the term");
 prose("errant", "the resident the term names");
 
-test("7a search: the exact handle leads, then prefix, then contains, then prose", { skip: SKIP }, () => {
-  const r = search(db, "errant");
+test("7a search: the exact handle leads, then prefix, then contains, then prose", { skip: SKIP }, async () => {
+  const r = await tis.search(await seated(), "errant");
   assert.equal(r.residents[0], "errant", "the resident whose handle IS the term comes first");
   assert.equal(r.residents[1], "errant-the-second", "then handles that start with it");
   assert.equal(r.residents[2], "the-errant-annex", "then handles that contain it");
@@ -60,9 +69,9 @@ test("7a search: the exact handle leads, then prefix, then contains, then prose"
     "the note explains the order rather than telling an exact match to narrow the term");
 });
 
-test("7a search: a term that is nobody's handle still finds the prose", { skip: SKIP }, () => {
+test("7a search: a term that is nobody's handle still finds the prose", { skip: SKIP }, async () => {
   // The fix must not have turned a prose search into a handle lookup.
-  const r = search(db, "thought");
+  const r = await tis.search(await seated(), "thought");
   assert.ok(r.residents.length > 0, "prose matches still answer");
   assert.equal(r.residents[0], "argos", "with no exact handle to lead, it is handle order");
 });
@@ -106,7 +115,10 @@ test("7c the quest board says which day its bars were folded for", { skip: SKIP 
   const meta = { quest_registry: JSON.stringify({ version: 1, quests: [
     { id: "correspond-send", title: "Reach out", cadence: "daily", validation: "automatic", target: 5, reward: "1 stamp per unit" },
   ] }), quest_day: day };
-  const board = await questBoardFor(db, meta, "errant", TOWN);
+  setMeta(db, "quest_registry", meta.quest_registry);
+  setMeta(db, "quest_day", meta.quest_day);
+  await seated();
+  const board = await tis.storeIndexPooled(TOWN, { env: IX.env }).questBoard("errant");
   assert.equal(board.today.day, day, "the day is the one the rows were folded for, never a second derivation");
   assert.ok(board.today.clock, "and it names the clock beside it");
   assert.match(board.today.note, /the town's own day/);
@@ -131,8 +143,8 @@ putValues(db, "mail_state", ["wright", JSON.stringify({
   summary: { they_spoke_last: 0, new_inbound: 0, they_spoke_again: 0, reply_queued: 0, last_word_yours: 0, bounced: 2 },
 })]);
 
-test("7d every bounce says how old it is, measured against the ledger and not the wall clock", { skip: SKIP }, () => {
-  const a = mailAwaiting(db, "wright");
+test("7d every bounce says how old it is, measured against the ledger and not the wall clock", { skip: SKIP }, async () => {
+  const a = await tis.mailAwaiting(await seated(), "wright");
   const june = a.unplaced_bounces.find((b) => b.date === "2026-06-16");
   // 2026-06-16 → 2026-09-05, the newest day the ledger holds: 81 days.
   assert.equal(june.age_days, 81, "the age is deterministic per checkout, like every other 'today' here");
@@ -143,13 +155,14 @@ test("7d every bounce says how old it is, measured against the ledger and not th
     "and the read says plainly that the office does not get to decide when a bounce stops mattering");
 });
 
-test("7d the resident may leave the old ones off their page, and the total still counts them", { skip: SKIP }, () => {
-  const a = mailAwaiting(db, "wright", { hide_bounces_older_than_days: 30 });
+test("7d the resident may leave the old ones off their page, and the total still counts them", { skip: SKIP }, async () => {
+  const q = await seated();
+  const a = await tis.mailAwaiting(q, "wright", { hide_bounces_older_than_days: 30 });
   assert.deepEqual(a.unplaced_bounces.map((b) => b.date), ["2026-09-01"], "the June one is off the page");
   assert.equal(a.unplaced_bounces_total, 2, "and still counted — a cut that changed the total would be a lie");
   assert.match(a.unplaced_bounces_note, /at your asking, not the office's/);
   // A cutoff of zero hides everything but same-day, and is not read as "off".
-  assert.deepEqual(mailAwaiting(db, "wright", { hide_bounces_older_than_days: 0 }).unplaced_bounces, []);
+  assert.deepEqual((await tis.mailAwaiting(q, "wright", { hide_bounces_older_than_days: 0 })).unplaced_bounces, []);
 });
 
 // ── 7e (office half) · THE PANE'S ADDRESS ───────────────────────────────────
@@ -159,7 +172,7 @@ test("7d the resident may leave the old ones off their page, and the total still
 // counts, no URLs. The resident card carries `window_state` but no pane URL. …
 // The `~handle/` pattern appears only in the page's HTML source."
 
-test("7e the resident card carries the pane's address when a pane is actually hung", { skip: SKIP }, () => {
+test("7e the resident card carries the pane's address when a pane is actually hung", { skip: SKIP }, async () => {
   const clone = join(dir, "town");
   mkdirSync(join(clone, "WHITE_PAGES", "ethan-thorne", "WINDOW"), { recursive: true });
   writeFileSync(join(clone, "WHITE_PAGES", "ethan-thorne", "WINDOW", "window.html"), "<p>the bench light is on</p>");
@@ -167,7 +180,8 @@ test("7e the resident card carries the pane's address when a pane is actually hu
   insR("ethan-thorne", JSON.stringify({ handle: "ethan-thorne", address: { body: "# ethan" } }));
   insR("nobody", JSON.stringify({ handle: "nobody", address: { body: "# nobody" } }));
 
-  const hung = resident(db, "ethan-thorne", { clone });
+  const q = await seated();
+  const hung = await tis.resident(q, "ethan-thorne", { clone });
   assert.equal(hung.window.hung, true);
   assert.equal(hung.window.pane_url, paneUrl("ethan-thorne"));
   assert.equal(hung.window.pane_url, "https://panes.postmark.town/~ethan-thorne/",
@@ -176,12 +190,12 @@ test("7e the resident card carries the pane's address when a pane is actually hu
 
   // AND NOT WHEN THERE IS NONE. An address for a pane that does not exist is
   // the same false promise from the other direction.
-  const bare = resident(db, "nobody", { clone });
+  const bare = await tis.resident(q, "nobody", { clone });
   assert.equal(bare.window.hung, false);
   assert.equal(bare.window.pane_url, undefined);
 
   // A checkout the office cannot read is a DECLINING TO SAY, never a "no".
-  const blind = resident(db, "ethan-thorne", { clone: null });
+  const blind = await tis.resident(q, "ethan-thorne", { clone: null });
   assert.equal(blind.window.hung, null);
   assert.equal(blind.window.pane_url, undefined);
   assert.match(blind.window.note, /never a 'nothing hangs'/);

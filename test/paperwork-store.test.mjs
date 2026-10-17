@@ -35,7 +35,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown, probeOfTown } from "./fixture.mjs";
 import { openOauthDb, oauthSchema, oauthLookup, keyLookup, claimLookup, berthLookup, mintHouseholdKey, mintClaim, claimByAsk, cosignClaim, mintBerth } from "../src/oauth.mjs";
 import { openRolesDb, rolesSchema, grantRole, revokeRole, listRoles, auditTrail, roleCheck } from "../src/roles.mjs";
 import { ensureMediaTable, mediaLedgerRows, mediaQuota } from "../src/media.mjs";
@@ -70,7 +70,7 @@ test(`THE SWITCH on a real store: G1–G5 ${SKIP ? `(${SKIP})` : ""}`, { skip: S
   await owner.connect();
   const tmp = mkdtempSync(join(tmpdir(), "paperwork-store-"));
   const oauthPath = join(tmp, "oauth.db"), rolesPath = join(tmp, "roles.db");
-  const db = fixtureDb(join(tmp, "fixture.db"));
+  const db = await probeOfTown(fixtureTown()); // the sign-in lookups ask the town index's probe
   const clone = join(tmp, "town-clone");
   mkdirSync(join(clone, "tools"), { recursive: true });
   process.env.TOWN_SINGLE_LOG = "1";
@@ -219,7 +219,6 @@ test(`THE SWITCH on a real store: G1–G5 ${SKIP ? `(${SKIP})` : ""}`, { skip: S
     for (const p of papers) p.close();
     await closePaperworkPools();
     await owner.end();
-    db.close();
     // Never let the sweep mask the verdict: a handle still open on Windows makes
     // rmSync throw, and a throw here would replace the assertion that failed.
     try { rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* left in tmp */ }

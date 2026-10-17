@@ -19,7 +19,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { TOWN_TABLES } from "../src/town-index.mjs";
+import { TOWN_TABLES } from "../src/town-tables.mjs";
 import { tempDir } from "./helpers/temp-dir.mjs";
 
 /** A town with every table and no rows. */

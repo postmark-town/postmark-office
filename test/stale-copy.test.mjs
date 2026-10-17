@@ -7,8 +7,8 @@
 // and on 2026-09-29 three 422s on one reply's `thread:` that sailed untouched
 // once the copy caught up.
 //
-// The copy each case reads is a real index: office.db (the fixture) and the
-// store's twin seeded from it (POS-268), so the switched door is the one asked.
+// The copy each case reads is a real index: the store's town index, seeded from
+// the fixture town's rows (POS-268; office.db's twin went with it, POS-656).
 //
 //   node --test test/stale-copy.test.mjs
 
@@ -21,7 +21,6 @@ import { execFileSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 
 import { copyBlock, crossingSailsAt, currentCrossing, nextCrossingForDoorstep, CROSSING_SEAL_SUBJECT } from "../src/crossings.mjs";
-import { indexCopy } from "../src/queries.mjs";
 import { doorstepBundle } from "../src/doorstep-bundle.mjs";
 import { validateLetter, enqueueLetter } from "../src/write.mjs";
 import { sendLetterAsRow } from "../src/town-mail.mjs";
@@ -41,7 +40,7 @@ const CROSSING = currentCrossing(Date.parse(SEAL));        // 59: the boat that 
 const BEFORE_NEXT = Date.parse("2026-07-11T20:00:00Z");    // the copy holds the last boat by the timetable
 const AFTER_NEXT = Date.parse("2026-07-12T09:30:00Z");     // 07-12 00:00Z has sailed by the timetable; the copy lacks it
 
-function copyDb(path = ":memory:", { seals = true } = {}) {
+function copyTown({ seals = true } = {}) {
   const db = fixtureTown();
   if (seals) {
     const log = (...v) => putValues(db, "repo_log", v);
@@ -52,23 +51,22 @@ function copyDb(path = ":memory:", { seals = true } = {}) {
   return db;
 }
 
-const IX = await indexStore(copyDb());
-const IX_RESTORE = await IX.useInProcess();
-test.after(async () => { await IX_RESTORE(); await IX.stop(); });
+const IX = await indexStore(copyTown());
+let IX_RESTORE = await IX.useInProcess();
+// a copy with no seal at all, on a store of its own
+const NO_SEAL = await indexStore(copyTown({ seals: false }), { db: "stale_copy_no_seal" });
+test.after(async () => { await IX_RESTORE(); await IX.stop(); await NO_SEAL.stop(); });
 const tis = await import("../src/town-index-store.mjs");
 const storeIx = () => tis.storeIndexPooled(null);
 
 // ── 1. the doorstep names the crossing its copy has caught up to ─────────────
 
-test("the copy's history is read alike from office.db and from the store", async () => {
-  const office = indexCopy(copyDb());
-  assert.deepEqual(office, { newest: NEWEST, seal: { sha: "s1sha", at: SEAL } });
-  assert.deepEqual(await storeIx().copy(), office, "one SQL, written twice, one answer");
+test("the copy's history: the newest change, and the newest crossing's seal", async () => {
+  assert.deepEqual(await storeIx().copy(), { newest: NEWEST, seal: { sha: "s1sha", at: SEAL } });
 });
 
 test("THE STALE COPY IS NAMED: a copy without the last boat says so, in words and in fields, on every skin", async () => {
-  const db = copyDb();
-  const ctx = { db, key: null, meta: { as_of: AS_OF }, asOf: AS_OF, canWrite: false, clone: null, pen: null, odb: null, dbPath: null };
+  const ctx = { key: null, asOf: AS_OF, canWrite: false, clone: null, pen: null, odb: null };
   for (const slim of [false, true]) {
     const behind = (await doorstepBundle("wright", { ...ctx, slim, nowMs: AFTER_NEXT })).copy;
     assert.equal(behind.caught_up, false);
@@ -85,13 +83,12 @@ test("THE STALE COPY IS NAMED: a copy without the last boat says so, in words an
   }
 });
 
-test("beside the commit, on the switched door too, and the same block", async () => {
-  const db = copyDb();
-  const ctx = { db, key: null, meta: { as_of: AS_OF }, asOf: AS_OF, canWrite: false, clone: null, pen: null, odb: null, dbPath: null, nowMs: AFTER_NEXT };
-  const office = await doorstepBundle("wright", ctx);
-  const store = await doorstepBundle("wright", { ...ctx, ix: storeIx() });
-  for (const d of [office, store]) assert.deepEqual(Object.keys(d).slice(0, 4), ["handle", "as_of", "copy", "next_crossing"], "the header, in reading order");
-  assert.deepEqual(store.copy, office.copy);
+test("beside the commit, in the header, the door's own index or one handed in alike", async () => {
+  const ctx = { key: null, asOf: AS_OF, canWrite: false, clone: null, pen: null, odb: null, nowMs: AFTER_NEXT };
+  const own = await doorstepBundle("wright", ctx);
+  const handed = await doorstepBundle("wright", { ...ctx, ix: storeIx() });
+  for (const d of [own, handed]) assert.deepEqual(Object.keys(d).slice(0, 4), ["handle", "as_of", "copy", "next_crossing"], "the header, in reading order");
+  assert.deepEqual(handed.copy, own.copy);
 });
 
 test("the crossing the copy names is the boat next_crossing named before it sailed", () => {
@@ -102,17 +99,20 @@ test("the crossing the copy names is the boat next_crossing named before it sail
 });
 
 test("a copy holding no seal says it cannot name one, never a clock guess", async () => {
-  const db = copyDb(":memory:", { seals: false });
-  const d = await doorstepBundle("wright", { db, key: null, meta: { as_of: AS_OF }, asOf: AS_OF, canWrite: false, clone: null, odb: null, nowMs: AFTER_NEXT });
+  const c = await NO_SEAL.store.connect("office_api");
+  let copy;
+  try { copy = await tis.indexCopy(c); } finally { await c.end(); }
+  assert.deepEqual(copy, { newest: NEWEST, seal: null }, "the store's history holds no seal");
+  const ix = { ...storeIx(), copy: async () => copy };
+  const d = await doorstepBundle("wright", { key: null, asOf: AS_OF, canWrite: false, clone: null, odb: null, ix, nowMs: AFTER_NEXT });
   assert.equal(d.copy.crossing, null);
   assert.equal(d.copy.caught_up, null);
   assert.match(d.copy.sentence, /holds no crossing's seal, so it cannot name a crossing it has caught up to\.$/);
 });
 
 test("a history that cannot be read is said, and the page still arrives", async () => {
-  const db = copyDb();
   const ix = { ...storeIx(), copy: async () => { throw new Error("the store blinked"); } };
-  const d = await doorstepBundle("wright", { db, key: null, meta: { as_of: AS_OF }, asOf: AS_OF, canWrite: false, clone: null, odb: null, ix, nowMs: AFTER_NEXT });
+  const d = await doorstepBundle("wright", { key: null, asOf: AS_OF, canWrite: false, clone: null, odb: null, ix, nowMs: AFTER_NEXT });
   assert.equal(d.copy.caught_up, null);
   assert.match(d.copy.sentence, /could not say what it has caught up to/);
   assert.equal(d.handle, "wright");
@@ -140,29 +140,22 @@ function mailClone() {
 const logDb = () => { const d = new DatabaseSync(":memory:"); d.exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)"); return d; };
 const reply = { from: "wright", to: "limen", title: "after the boat", thread: SAILED_AFTER, body: "Limen —\n\nyour letter came on the boat." };
 
-test("THE OLD REFUSAL, GONE: a thread the copy does not hold is accepted, on office.db and on the store", () => {
-  const db = copyDb();
-  const keep = process.env.TOWN_INDEX_READS;
-  try {
-    delete process.env.TOWN_INDEX_READS;                       // office.db's probe
-    const office = validateLetter(reply, fixtureKey, db);
-    assert.equal(office.thread, SAILED_AFTER, "the thread rides as written");
-    assert.equal(office.threadUnseen, true);
-  } finally { if (keep === undefined) delete process.env.TOWN_INDEX_READS; else process.env.TOWN_INDEX_READS = keep; }
-  const store = validateLetter(reply, fixtureKey, db);        // switched: the store's held probe
-  assert.equal(store.threadUnseen, true);
+test("THE OLD REFUSAL, GONE: a thread the copy does not hold is accepted", () => {
+  const plan = validateLetter(reply, fixtureKey, null);        // the store's held probe
+  assert.equal(plan.thread, SAILED_AFTER, "the thread rides as written");
+  assert.equal(plan.threadUnseen, true);
   // and a thread the copy does hold is the plain plan, byte for byte as before
-  const known = validateLetter({ ...reply, thread: "limen-2026-07-01-to-wright-the-gap" }, fixtureKey, db);
+  const known = validateLetter({ ...reply, thread: "limen-2026-07-01-to-wright-the-gap" }, fixtureKey, null);
   assert.equal("threadUnseen" in known, false);
 });
 
 test("flag-off · the receipt says the thread was not in the copy, and the letter is written", () => {
   const clone = tempClone();
   try {
-    const r = enqueueLetter(reply, fixtureKey, copyDb(), clone);
+    const r = enqueueLetter(reply, fixtureKey, null, clone);
     assert.match(r.commit, /^[0-9a-f]{40}$/);
     assert.match(r.thread_note, new RegExp(`^thread "${SAILED_AFTER}" names no letter in the office's copy of the town record yet\\. Your letter is accepted`));
-    const plain = enqueueLetter({ ...reply, title: "the gap again", thread: "limen-2026-07-01-to-wright-the-gap" }, fixtureKey, copyDb(), clone);
+    const plain = enqueueLetter({ ...reply, title: "the gap again", thread: "limen-2026-07-01-to-wright-the-gap" }, fixtureKey, null, clone);
     assert.equal(plain.thread_note, undefined, "a held thread draws no note");
   } finally { rmSync(clone, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
 });
@@ -172,7 +165,7 @@ test("flag-on · the town-log receipt says so too, and the row is logged", async
   const odb = logDb();
   const clone = mailClone();
   try {
-    const r = await sendLetterAsRow(reply, { ...fixtureKey, ghId: "42", ghLogin: "keeminlee" }, copyDb(), clone, odb);
+    const r = await sendLetterAsRow(reply, { ...fixtureKey, ghId: "42", ghLogin: "keeminlee" }, null, clone, odb);
     assert.equal(typeof r.logged.seq, "number");
     assert.match(r.thread_note, /names no letter in the office's copy of the town record yet/);
   } finally {
@@ -192,51 +185,41 @@ test("flag-on · the town-log receipt says so too, and the row is logged", async
 
 const NOT_IN_COPY = `no letter by that id in the office's copy of the town record, which has caught up to crossing ${CROSSING}, sealed ${SEAL}; a letter that sailed after that crossing is not in it yet`;
 
-test("THE 404 TELLS THE TRUTH: read_letter and household { read: \"letter\" } name the copy and its crossing, on the store and on office.db", async () => {
+test("THE 404 TELLS THE TRUTH: read_letter and household { read: \"letter\" } name the copy and its crossing", async () => {
   const { callTool } = await import("../src/mcp.mjs");
   const { householdApex } = await import("../src/household-apex.mjs");
-  const db = copyDb();
   const asks = {
-    read_letter: () => callTool("read_letter", { id: SAILED_AFTER }, { db, meta: { as_of: AS_OF } }),
-    household: () => householdApex({ read: "letter", id: SAILED_AFTER }, fixtureKey, { db, meta: { as_of: AS_OF }, asOf: AS_OF, clone: null }),
+    read_letter: () => callTool("read_letter", { id: SAILED_AFTER }, {}),
+    household: () => householdApex({ read: "letter", id: SAILED_AFTER }, fixtureKey, { asOf: AS_OF, clone: null }),
   };
   for (const [name, ask] of Object.entries(asks)) {
-    const switched = await ask();                              // the store's copy
-    const keep = process.env.TOWN_INDEX_READS;
-    delete process.env.TOWN_INDEX_READS;
-    let office;
-    try { office = await ask(); }                              // office.db's copy
-    finally { if (keep === undefined) delete process.env.TOWN_INDEX_READS; else process.env.TOWN_INDEX_READS = keep; }
-    const bodyOf = (a) => a?.body ?? a;
-    for (const a of [switched, office]) {
-      assert.equal(bodyOf(a).defect, NOT_IN_COPY, `${name}: the copy and its crossing, said`);
-      if (a?.status !== undefined) assert.equal(a.status, 404, `${name}: still a 404`);
-    }
+    const a = await ask();
+    const bodyOf = (x) => x?.body ?? x;
+    assert.equal(bodyOf(a).defect, NOT_IN_COPY, `${name}: the copy and its crossing, said`);
+    if (a?.status !== undefined) assert.equal(a.status, 404, `${name}: still a 404`);
   }
   // the doorstep and the lookup name one crossing in one set of words
-  const d = await doorstepBundle("wright", { db, key: null, meta: { as_of: AS_OF }, asOf: AS_OF, canWrite: false, clone: null, odb: null, ix: storeIx(), nowMs: AFTER_NEXT });
+  const d = await doorstepBundle("wright", { key: null, asOf: AS_OF, canWrite: false, clone: null, odb: null, ix: storeIx(), nowMs: AFTER_NEXT });
   const words = NOT_IN_COPY.slice(NOT_IN_COPY.indexOf("has caught up"), NOT_IN_COPY.indexOf(";"));
   assert.ok(d.copy.sentence.includes(words), "the doorstep says the same crossing words");
   // a letter the copy holds still opens
-  const held = await callTool("read_letter", { id: "limen-2026-07-01-to-wright-the-gap" }, { db, meta: { as_of: AS_OF } });
+  const held = await callTool("read_letter", { id: "limen-2026-07-01-to-wright-the-gap" }, {});
   assert.equal(held.id, "limen-2026-07-01-to-wright-the-gap");
 });
 
-test("GET /letters/{id}: the same truthful 404, from a running office both ways", async () => {
+test("GET /letters/{id}: the same truthful 404, from a running office", async () => {
   const { spawn } = await import("node:child_process");
   const { fileURLToPath } = await import("node:url");
   const ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..");
   const tmp = mkdtempSync(join(tmpdir(), "pm-stale-copy-rest-"));
-  const dbPath = join(tmp, "office.db");
-  copyDb(dbPath).close();
   const offices = [];
   try {
-    for (const [name, env] of [["plain", {}], ["switched", IX.env]]) {
-      const child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0", "--db", dbPath,
+    for (const [name, env] of [["office", IX.env]]) {
+      const child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0",
         "--oauth-db", join(tmp, name + "-oauth.db"), "--roles-db", join(tmp, name + "-roles.db")], {
         env: { ...process.env, WORLD_GRAPH_NONE: "1", TOWN_CLONE: join(tmp, "no-clone-here"), WORLD_CLONE: join(tmp, "no-world-clone"), VOICES_LOG: join(tmp, name + "-voices.jsonl"),
           TOWN_PUSH: "", WORLD_STORE_DB: join(tmp, "no-world.db"), OFFICE_READ_WORKERS: "0",
-          TOWN_INDEX_READS: undefined, WORLD2_PG: undefined, WORLD2_PG_URL: undefined, ...env },
+          WORLD2_PG: undefined, WORLD2_PG_URL: undefined, ...env },
         stdio: ["ignore", "pipe", "pipe"],
       });
       const base = await new Promise((ok, no) => {
@@ -259,12 +242,12 @@ test("GET /letters/{id}: the same truthful 404, from a running office both ways"
 
 test("a copy whose history cannot be read still answers the 404, and says it could not read it", async () => {
   const { letterNotInCopy } = await import("../src/town-index-store.mjs");
-  const keep = process.env.TOWN_INDEX_READS;
-  delete process.env.TOWN_INDEX_READS;
+  // this process's own index seam off, so the store asked is the one the env names: gone
+  await IX_RESTORE();
   try {
-    const bent = { prepare: () => { throw new Error("no such table: repo_log"); } };
-    assert.equal(await letterNotInCopy(bent), "no letter by that id in the office's copy of the town record, which could not say what it has caught up to just now");
-  } finally { if (keep === undefined) delete process.env.TOWN_INDEX_READS; else process.env.TOWN_INDEX_READS = keep; }
+    assert.equal(await letterNotInCopy({ env: { WORLD2_PG: "1", WORLD2_PG_URL: "postgres://office_api:x@127.0.0.1:9/none" } }),
+      "no letter by that id in the office's copy of the town record, which could not say what it has caught up to just now");
+  } finally { IX_RESTORE = await IX.useInProcess(); }
 });
 
 // ── 4. a recipient the copy has not caught up to ─────────────────────────────
@@ -294,16 +277,15 @@ test("THE OLD REFUSAL, GONE AT THE DOOR: a resident the copy does not hold yet, 
   } finally { await pen.end(); }
   const clone = tempClone();
   try {
-    const db = copyDb();
     const letter = { from: "wright", to: "newcomer", title: "welcome aboard", thread: "new", body: "Newcomer —\n\nwelcome." };
     // the copy alone still says no: this is the refusal the door used to give
-    assert.throws(() => validateLetter(letter, fixtureKey, db), (e) => e.code === 422 && /no resident "newcomer"/.test(e.defect));
-    const { result } = await sendAtDoor(letter, fixtureKey, { db, clone, odb: null });
+    assert.throws(() => validateLetter(letter, fixtureKey, null), (e) => e.code === 422 && /no resident "newcomer"/.test(e.defect));
+    const { result } = await sendAtDoor(letter, fixtureKey, { clone, odb: null });
     assert.match(result.commit, /^[0-9a-f]{40}$/, "the letter was written");
     assert.ok(result.letter_id.endsWith("-to-newcomer-welcome-aboard"));
     // a retired pin, a harbor resident the registry holds with no address, and nobody: refused as before
     for (const to of ["gone", "at-the-quay", "nobody-at-all"]) {
-      await assert.rejects(sendAtDoor({ ...letter, to, title: "to " + to }, fixtureKey, { db, clone, odb: null }),
+      await assert.rejects(sendAtDoor({ ...letter, to, title: "to " + to }, fixtureKey, { clone, odb: null }),
         (e) => e.code === 422 && e.defect === "no resident \"" + to + "\"", to);
     }
   } finally {
@@ -318,7 +300,7 @@ test("an office not pointed at the record keeps the copy's answer: no registry, 
   const keep = { on: process.env.WORLD2_PG, url: process.env.WORLD2_PG_URL };
   delete process.env.WORLD2_PG; delete process.env.WORLD2_PG_URL;
   try {
-    await assert.rejects(sendAtDoor({ from: "wright", to: "newcomer", title: "x", thread: "new", body: "y" }, fixtureKey, { db: copyDb(), clone: "unused", odb: null }),
+    await assert.rejects(sendAtDoor({ from: "wright", to: "newcomer", title: "x", thread: "new", body: "y" }, fixtureKey, { clone: "unused", odb: null }),
       (e) => e.code === 422 && e.defect === "no resident \"newcomer\"");
   } finally {
     if (keep.on !== undefined) process.env.WORLD2_PG = keep.on;

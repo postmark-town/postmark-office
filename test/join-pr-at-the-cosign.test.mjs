@@ -37,7 +37,7 @@ import { requestResidency, REGISTRY_PATH, PINS_PATH, serializeRegistry, serializ
 import { bindUnderLock, BIND_REFUSALS } from "../src/join-bind.mjs";
 import { penTransaction } from "../src/write.mjs";
 import { rowsFromRegistry } from "../src/registry-rows.mjs";
-import { indexStore, testIndex } from "./helpers/office-under-test.mjs";
+import { indexStore } from "./helpers/office-under-test.mjs";
 import { UNREACHABLE_DEFECT } from "../src/index-probe.mjs";
 
 // THE PORT IS ASKED FOR, NEVER CHOSEN (world-apex.test.mjs § the port). This
@@ -438,24 +438,16 @@ test("the exec under the town lock answers ONE JSON line, and an unreachable rec
   const clone = town(REGISTRY(), PINS());
   const env = { ...process.env, TOWN_CLONE: clone };
   delete env.WORLD2_PG; delete env.WORLD2_PG_URL; delete env.TOWN_PUSH;
-  const dir = mkdtempSync(join(tmpdir(), "join-bind-db-"));
-  clones.push(dir);
-  const dbPath = fixtureTown();
   const out = await execUnderTownLock(join(import.meta.dirname, "..", "src", "join-bind-exec.mjs"),
-    JSON.stringify({ args: { handle: "tulip", card: "hello" }, key: { ghId: 999, ghLogin: "keeminlee", handles: ["wright"] }, dbPath }), env);
+    JSON.stringify({ args: { handle: "tulip", card: "hello" }, key: { ghId: 999, ghLogin: "keeminlee", handles: ["wright"] } }), env);
   const lines = out.trim().split("\n");
   assert.equal(lines.length, 1);
-  // Switched, the exec reads its index from the store before the record, and a
-  // store it cannot reach is the store's 503 by name (POS-268, as ruled for the
-  // deletion: "record unreachable" becomes "store unreachable"). The old mode
-  // still answers the record's own refusal.
-  if (testIndex() === "store") {
-    const err = JSON.parse(lines[0]).error;
-    assert.equal(err.code, 503);
-    assert.equal(err.defect, UNREACHABLE_DEFECT);
-  } else assert.deepEqual(JSON.parse(lines[0]).error, {
-    code: BIND_REFUSALS.NO_RECORD.code, field: null, defect: BIND_REFUSALS.NO_RECORD.defect, hint: BIND_REFUSALS.NO_RECORD.hint,
-  });
+  // The exec reads its index from the store before the record, and a store it
+  // cannot reach is the store's 503 by name (POS-268, as ruled for the
+  // deletion: "record unreachable" becomes "store unreachable").
+  const err = JSON.parse(lines[0]).error;
+  assert.equal(err.code, 503);
+  assert.equal(err.defect, UNREACHABLE_DEFECT);
 });
 
 // ── THE GANGWAY ─────────────────────────────────────────────────────────────

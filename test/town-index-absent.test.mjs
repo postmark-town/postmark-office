@@ -1,33 +1,33 @@
-// town-index-absent.test.mjs — a switched office answers every door with office.db GONE (POS-268 part 5a).
+// town-index-absent.test.mjs — every door that reads the town index answers
+// from the store as it answered from office.db (POS-268 part 5a, POS-656).
 //
 //   node --test test/town-index-absent.test.mjs
 //
-// Two offices over one town and one record. "plain" has the switch off and reads the fixture's
-// office.db, as prod does today. "absent" has TOWN_INDEX_READS=store, a store
-// seeded from that same office.db, and a --db path where NO FILE EXISTS. Every
-// door that reads the town index (REST and MCP, keyed and keyless) must answer
-// the absent office exactly as it answers the plain one: the same status, the
-// same body, the same x-postmark-as-of. A reader still asking office.db meets
-// server.mjs § ABSENT_INDEX, which throws by name, so it cannot pass quietly.
+// One office over one town and one record: a store seeded from the fixture
+// town's rows. Every door that reads the town index (REST and MCP, keyed and
+// keyless) must answer exactly as the unswitched office answered from office.db
+// over the same rows, recorded in the last tree that had it (part 5a's sweep,
+// helpers/twin-golden.mjs): the same status, the same body, the same
+// x-postmark-as-of.
 
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 
 import { putValues, fixtureTown } from "./fixture.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
-import { copyIndexToStore } from "./helpers/index-to-store.mjs";
+import { seedTownIndex } from "./helpers/index-to-store.mjs";
+import { twinGolden, steady } from "./helpers/twin-golden.mjs";
 import { townClone, townModuleUrl } from "./fixture-paths.mjs";
 import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const TWINS = twinGolden("town-index-absent");
 const tmp = mkdtempSync(join(tmpdir(), "town-index-absent-"));
-const dbPath = join(tmp, "office.db");
-const NO_DB = join(tmp, "there-is-no-office.db");
 const KEY = "absent-test-key";
 // The town clone, when the tree has one: the quest board and the doorstep's next
 // steps read the town's own quest tools from it, and without one they never
@@ -36,12 +36,12 @@ const TOWN = townClone();
 let store = null, skip = false;
 const offices = {};
 
-function office(name, db, env) {
+function office(name, env) {
   const child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0",
     "--oauth-db", seedStaticKeys(join(tmp, `${name}-oauth.db`), `${KEY}=keemin:wright`), "--roles-db", join(tmp, `${name}-roles.db`)], {
     env: { ...process.env, TOWN_CLONE: TOWN ?? join(tmp, "no-clone-here"), WORLD_CLONE: join(tmp, "no-world-clone"),
       VOICES_LOG: join(tmp, `${name}-voices.jsonl`), TOWN_PUSH: "", WORLD_STORE_DB: join(tmp, "no-world.db"),
-      OFFICE_READ_WORKERS: "0", TOWN_INDEX_READS: undefined, WORLD2_PG: undefined, WORLD2_PG_URL: undefined, ...env },
+      OFFICE_READ_WORKERS: "0", WORLD2_PG: undefined, WORLD2_PG_URL: undefined, ...env },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let err = "";
@@ -69,11 +69,9 @@ before(async () => {
     putValues(db, "quest_standing", ["wright", JSON.stringify({ facts: { address: true }, since: {} })]);
   }
   const w = await store.connect("law_ingester");
-  await copyIndexToStore(w, db);
+  await seedTownIndex(w, db);
   await w.end();
-  // prod has the record (WORLD2_PG) and the switch off; only the switch differs between the two
-  await office("plain", dbPath, { WORLD2_PG: "1", WORLD2_PG_URL: store.url("office_api") });
-  await office("absent", NO_DB, { TOWN_INDEX_READS: "store", WORLD2_PG: "1", WORLD2_PG_URL: store.url("office_api") });
+  await office("absent", { WORLD2_PG: "1", WORLD2_PG_URL: store.url("office_api") });
 });
 
 after(async () => {
@@ -105,9 +103,15 @@ function firstDiff(a, b) {
   };
   return walk(x, y, "$") ?? { at: "(whitespace)", plain: a.slice(0, 120), absent: b.slice(0, 120) };
 }
-const same = (what, a, b) => { const d = firstDiff(a, b); assert.equal(d, null, `${what}: the answers part at ${d?.at}
-  plain:  ${d?.plain}
-  absent: ${d?.absent}`); };
+// the twin's recorded answer under `label` (helpers/twin-golden.mjs), against this one
+const same = (what, label, answer) => {
+  const got = steady(answer), was = TWINS.of(label);
+  if (got === was) return;
+  const d = firstDiff(was, got);
+  assert.fail(`${what}: the answers part at ${d?.at}
+  office.db: ${d?.plain}
+  store:     ${d?.absent}`);
+};
 
 // The doors that read the town index: every family the store answers.
 const REST = [
@@ -159,41 +163,23 @@ async function mcp(name, tool, args) {
   return { status: r.status, body: await r.text() };
 }
 
-test("the absent office booted with no office.db on disk", (t) => {
-  if (skip) return t.skip(skip);
-  assert.equal(existsSync(NO_DB), false, "the switched office was handed a --db path that holds nothing");
-});
-
-test("every index door answers the absent office exactly as the plain one: status, body and as-of", async (t) => {
+test("every index door answers as the unswitched office did: status, body and as-of", async (t) => {
   if (skip) return t.skip(skip);
   for (const [door, headers] of REST) {
-    const a = await rest("plain", door, headers);
     const b = await rest("absent", door, headers);
     const what = `${door}${headers ? " (keyed)" : ""}`;
-    assert.equal(b.status, a.status, `${what}: status (absent said ${b.body.slice(0, 300)})`);
-    same(what, a.body, b.body);
-    assert.equal(b.asOf, a.asOf, `${what}: x-postmark-as-of`);
+    same(what, `REST ${door}${headers ? " (keyed)" : ""}`, b);
   }
   for (const door of REST_STATUS_ONLY) {
-    const a = await rest("plain", door), b = await rest("absent", door);
-    assert.equal(b.status, a.status, `${door}: status (absent said ${b.body.slice(0, 300)})`);
+    const b = await rest("absent", door);
+    assert.equal(b.status, JSON.parse(TWINS.of(`REST ${door}`)).status, `${door}: status (said ${b.body.slice(0, 300)})`);
   }
-  assert.doesNotMatch(offices.absent.err(), /office\.db is not opened/, "no reader asked the absent index");
 });
 
-test("every MCP index read answers the absent office exactly as the plain one", async (t) => {
+test("every MCP index read answers as the unswitched office did", async (t) => {
   if (skip) return t.skip(skip);
   for (const [tool, args] of MCP) {
-    const a = await mcp("plain", tool, args);
     const b = await mcp("absent", tool, args);
-    const what = `${tool} ${JSON.stringify(args)}`;
-    assert.equal(b.status, a.status, `${what}: status`);
-    same(what, a.body, b.body);
+    same(`${tool} ${JSON.stringify(args)}`, `MCP ${tool} ${JSON.stringify(args)}`, b);
   }
-  assert.doesNotMatch(offices.absent.err(), /office\.db is not opened/, "no reader asked the absent index");
-});
-
-test("unswitched, an office with no office.db still refuses to boot (the rollback is unchanged)", async (t) => {
-  if (skip) return t.skip(skip);
-  await assert.rejects(office("plain-no-db", NO_DB, {}), /exited early/);
 });

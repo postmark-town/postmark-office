@@ -22,7 +22,6 @@ import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
-import { DatabaseSync } from "node:sqlite";
 
 import { rowsFromRegistry, registryFromRows, pinsFromRows } from "../src/registry-rows.mjs";
 import { publicRegistry, publicHouse, PRIVATE_HOUSE_KEYS } from "../src/registry-public.mjs";
@@ -129,6 +128,10 @@ test("§ 3 the household block: no human key, the house and its members kept", (
 test("§ 4 the house bundle names the house and never its human", async () => {
   const db = emptyTown();
   putValues(db, "meta", ["as_of", "fixture-as-of"]);
+  // the house's index is the store's, over this empty town (POS-268)
+  const sx = await indexStore(db, { db: "registry_public_house" });
+  CLEANUP.push(() => sx.stop());
+  const ix = (await import("../src/town-index-store.mjs")).storeIndexPooled(TMP, { env: sx.env });
   const none = async () => ({});
   const readers = {
     registry: { registry: registryFromRows(ROWS), pins: pinsFromRows(ROWS), from: "injected" },
@@ -136,7 +139,7 @@ test("§ 4 the house bundle names the house and never its human", async () => {
     lastActiveFor: async () => new Map(), walkers: async () => ({ walkers: [] }), claimEffects: async () => ({ events: [] }), standsOf: none,
   };
   for (const [house, name] of [["lantern-row", "Lantern Row"], ["unnamed-hall", null]]) {
-    const h = await houseBundle({ household: house }, { db, key: null, meta: { as_of: "fixture-as-of" }, asOf: "fixture-as-of", clone: TMP, odb: null, nowMs: Date.parse("2026-10-12T00:00:00Z"), readers });
+    const h = await houseBundle({ household: house }, { ix, key: null, asOf: "fixture-as-of", clone: TMP, odb: null, nowMs: Date.parse("2026-10-12T00:00:00Z"), readers });
     assert.equal(h.refused, undefined, JSON.stringify(h.refused ?? null));
     assert.equal(h.household, house);
     assert.equal(h.name, name, `${house}: the display name, or null when it has none`);

@@ -668,7 +668,6 @@ test("a mint whose write fails REFUSES the join — never a warn with a false no
   // way `test/join-pr-at-the-cosign.test.mjs` drives it, over a temp clone.
   const { requestResidency } = await import("../src/residency.mjs");
   const { bindUnderLock } = await import("../src/join-bind.mjs");
-  const { fixtureDb } = await import("./fixture.mjs");
   const { mkdtempSync, mkdirSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
