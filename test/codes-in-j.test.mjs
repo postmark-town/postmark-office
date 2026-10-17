@@ -69,7 +69,7 @@ const EDITS = {
     "if (typeof payload?.body === 'string' && payload.body.startsWith('synthetic:') && Object.hasOwn(SYNTHETIC_THROWS, payload.body.slice(10))) " + THROW("payload.body.slice(10)")],
   "/src/world-settlement.mjs": ["export async function settlementOrFile({ asked = null, fileAnswer, engaged, pool, worldRepo, townRepo = null }) {",
     "if (typeof asked === 'string' && asked.startsWith('synthetic:') && Object.hasOwn(SYNTHETIC_THROWS, asked.slice(10))) " + THROW("asked.slice(10)")],
-  "/src/town-index-store.mjs": ["export async function storeAnswer(fn, { env = process.env, then = null } = {}) {",
+  "/src/town-index-store.mjs": ["export async function storeAnswer(fn, { env = process.env, then = null, statementTimeoutMs = null } = {}) {",
     "if (process.env.SYNTHETIC_TOWN_DOWN && (await import('node:fs')).existsSync(process.env.SYNTHETIC_TOWN_DOWN)) return { refused: UNREACHABLE };"],
 };
 export async function load(url, context, nextLoad) {

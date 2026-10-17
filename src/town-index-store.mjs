@@ -464,8 +464,8 @@ export async function roster(q) {
 // empty town.
 let _rollHandles = null;
 export const storeRollHandles = () => _rollHandles;
-export async function refreshStoreRoll({ env = process.env } = {}) {
-  const r = await storeAnswer((c) => residentList(c), { env }).catch(() => ({ refused: UNREACHABLE }));
+export async function refreshStoreRoll({ env = process.env, statementTimeoutMs = null } = {}) {
+  const r = await storeAnswer((c) => residentList(c), { env, statementTimeoutMs }).catch(() => ({ refused: UNREACHABLE }));
   if (!r.refused) _rollHandles = r.out.map((e) => e.handle);
   return _rollHandles;
 }
@@ -509,11 +509,11 @@ export function probeOver(rows, { mail = null, standing = null } = {}) {
 // reach the store keeps the last snapshot, as a failed office.db reload kept
 // the file it had; a process that never loaded one refuses every check (503).
 let _probeRows = null;
-export async function refreshStoreProbe({ env = process.env, letters = true, logins = true } = {}) {
+export async function refreshStoreProbe({ env = process.env, letters = true, logins = true, statementTimeoutMs = null } = {}) {
   const r = await storeAnswer(async (c) => {
     if (_probeRows && _probeRows.asOf === await townIndexAsOf(c)) return _probeRows;
     return probeRows(c, { letters, logins });
-  }, { env }).catch(() => ({ refused: UNREACHABLE }));
+  }, { env, statementTimeoutMs }).catch(() => ({ refused: UNREACHABLE }));
   if (!r.refused) { _probeRows = r.out; holdStoreProbe(probeOver(_probeRows)); }
   return !r.refused;
 }
@@ -837,13 +837,13 @@ export async function home(q, handle, fresh = null) {
  * as-of from the same snapshot. A caller that cannot reach the store gets the
  * pen's own error, which its door turns into the 503.
  */
-export async function readTownIndex(fn, { env = process.env } = {}) {
+export async function readTownIndex(fn, { env = process.env, statementTimeoutMs = null } = {}) {
   const read = async (client) => ({ out: await fn(client), asOf: await townIndexAsOf(client) });
   const { officeRead } = await import("./world2-pen.mjs");
   // the test seam's pool takes the pen's own shape, its one-connection-per-chain
   // guard included, so a suite on it sees what the office would
-  if (_indexPoolForTest) return officeRead(read, { pool: _indexPoolForTest, by: "readTownIndex" });
-  return officeRead(read, { env });
+  if (_indexPoolForTest) return officeRead(read, { pool: _indexPoolForTest, by: "readTownIndex", statementTimeoutMs });
+  return officeRead(read, { env, statementTimeoutMs });
 }
 
 // TEST SEAM: the town index's own pool. A suite that stubs the record's pen (a
@@ -860,13 +860,13 @@ export const UNREACHABLE = Object.freeze({ error: "bounce", defect: UNREACHABLE_
  * A switched door's answer: `{ out, asOf }` from the store, or `{ refused }`
  * (UNREACHABLE) when it cannot be read. Doors turn the refusal into their 503.
  */
-export async function storeAnswer(fn, { env = process.env, then = null } = {}) {
+export async function storeAnswer(fn, { env = process.env, then = null, statementTimeoutMs = null } = {}) {
   // Only a store that cannot be reached is the refusal. An error the reader
   // itself throws (a clone with no quest tools, say) is that reader's own, and
   // goes to the door's own catch exactly as it does on office.db's path: calling
   // it "the store cannot be reached" would name the wrong thing.
   let own = null, r;
-  try { r = await readTownIndex(async (c) => { try { return await fn(c); } catch (e) { own = e; throw e; } }, { env }); }
+  try { r = await readTownIndex(async (c) => { try { return await fn(c); } catch (e) { own = e; throw e; } }, { env, statementTimeoutMs }); }
   catch (e) { if (own && e === own) throw e; return { refused: UNREACHABLE }; }
   // THE REST OF THE ANSWER, AFTER THE CONNECTION IS BACK (POS-370). `then` is
   // whatever the read needs that is not the index (the quest board's quest tools
