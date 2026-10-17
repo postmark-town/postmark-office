@@ -14,8 +14,9 @@
 //   - Bodies are always kept (Darko, 10-09: no read strips mark bodies).
 //   - A record keeps id, by, kind, class, tier, at, extent, body, weight (the
 //     total; never weight_parts) and the image link. A class record also keeps
-//     its dials, which are the class's physics: the walking pace rides every
-//     read on `the-town/resident` for that reason (world.mjs § markRecords).
+//     its dials, which are the class's physics. No class rides a read by name
+//     (WLD-29): the walk's one-liner is priced from the class's own dial, which
+//     the apex hands in (`paceKmPerCrossing`).
 //   - A polygon is said, not drawn: `shape: "polygon", vertices: n`. A mark the
 //     caller stands inside (`within`) keeps an outline of at most 8 vertices.
 //   - The always-sent ground set (the region rings and the water) becomes
@@ -91,9 +92,10 @@ export const paceKmH = (dials) => {
 
 /**
  * One card, one line. An act with no approved line says its blurb's first
- * sentence and its own fields. Walk's pace is read from the dial the read
- * carries (`the-town/resident`'s `pace_km_per_crossing`), so a ruled change
- * of pace changes the line; with no dial in hand the line names no speed.
+ * sentence and its own fields. Walk's pace is the resident class's own dial
+ * (`the-town/resident`'s `pace_km_per_crossing`, as the walk itself is priced),
+ * so a ruled change of pace changes the line; with no dial in hand the line
+ * names no speed.
  */
 export function oneLine(card, { pace = null } = {}) {
   const fixed = ONE_LINERS[card.action];
@@ -147,9 +149,10 @@ const CARDS_NOTE = {
 /**
  * The bare read's answer at `shape`. v0 answers the same object, untouched.
  * `named` is every id the read names for itself (within and nearby); a record
- * outside it is the always-sent ground set (or the mover's class).
+ * outside it is the always-sent ground set. `paceKmPerCrossing` is the
+ * resident class's walking dial, for the walk's one-liner (null: none in hand).
  */
-export function shapeRead(answer, { shape = "v0", cards = null, within = [], named = [] } = {}) {
+export function shapeRead(answer, { shape = "v0", cards = null, within = [], named = [], paceKmPerCrossing = null } = {}) {
   if (shape === "v0" || !answer || answer.error) return answer;
   if (shape === "v2") throw new Error("the v2 read is shaped by world-read-v2.mjs § shapeV2, from reads the apex asks only for it");
   const inside = new Set(within);
@@ -164,7 +167,8 @@ export function shapeRead(answer, { shape = "v0", cards = null, within = [], nam
   for (const [k, v] of Object.entries(answer)) {
     if (k === "records") { out.records = records; out.ground = ground; continue; }
     if (k === "actions" && cards == null) {
-      const pace = paceKmH(answer.records?.["the-town/resident"]?.dials);
+      // the walk pace is law: the class's own dial, handed in by the apex (WLD-29)
+      const pace = paceKmH({ pace_km_per_crossing: paceKmPerCrossing });
       out.actions = v.map((e) => oneLine(e, { pace }));
       out.cards = "one-line";
       out.cards_note = CARDS_NOTE[shape];

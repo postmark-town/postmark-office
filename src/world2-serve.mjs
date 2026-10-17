@@ -102,16 +102,18 @@ import { backedRow } from "./world-stake.mjs";
 // 1.0's own settlements rules — which tags count, the order, the cap — imported
 // rather than restated; see § THE SETTLEMENTS TWIN below.
 import { settlementsFrom } from "./settlements.mjs";
-import { CROSSING_DERIVATION, currentCrossing } from "./crossings.mjs";
+import { askedCrossing, CROSSING_DERIVATION, currentCrossing } from "./crossings.mjs";
 import { myMarksRefused } from "./claim-effects.mjs";
 import { actorRoster } from "./human-actor.mjs";
 import { stopDepartures } from "./world-movement.mjs";
-// The class every reader IS — 1.0's own constant, so the two apexes name the
-// same mark in `records` (world.mjs § markRecords).
-import { STRIDE_MARK_ID } from "./world-classes.mjs";
+// WLD-29: a shown house's porch light, from the office's shared activity answer
+import { readHouseholdActivity, litOf, lightsUnknownWhy } from "./household-activity.mjs";
 import { faultLogged, plainReason } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 
 const state = { pool: null };
+
+/** Tests only: the office's own serve pool, as `pool()` would have made it. */
+export function __setPoolForTest(p) { state.pool = p; }
 
 export function world2ServeEnabled(env = process.env) {
   return env.WORLD2_PG === "1" && !!env.WORLD2_PG_URL;
@@ -1247,7 +1249,11 @@ export async function world2Serve(path, searchParams, { p: injected = null } = {
   }
 
   if (path === "/world2/apex") {
-    const r = await world2Apex(searchParams, { p });
+    // ONE STORE, ONE ACTIVITY ANSWER (WLD-29 review 3887dfe1): only a store a
+    // CALLER injected travels as `p`. The office's own pool is left for the apex
+    // to obtain itself, so it reads (and shares) the office store's activity
+    // under the same key the 1.0 apex and eyes use — never as a second store.
+    const r = await world2Apex(searchParams, injected ? { p: injected } : {});
     return r.error ? r.error : { code: 200, body: r.body };
   }
 
@@ -1311,8 +1317,11 @@ export async function world2Apex(searchParams, { p: injected = null } = {}) {
   if (near?.error) return { error: near.error };
   if (!near) return bounce(422, "an apex answer is taken from somewhere",
     "?x=<m>&y=<m> — the town's grid, metres from the Origin. This is the keyless spectator read; the embodied one is 1.0's `world {}` verb with a key.");
-  const askedCrossing = Number(searchParams?.get("crossing"));
-  const n = Number.isFinite(askedCrossing) ? askedCrossing : currentCrossing();
+  // THE CROSSING ASKED, BY 1.0's RULE (WLD-29; crossings.mjs § askedCrossing):
+  // this read `Number(searchParams.get("crossing"))`, and Number(null) is 0, so
+  // every bare read stood at crossing 0. Absent, empty, malformed or negative
+  // is the current crossing; an explicit 0 is crossing 0.
+  const n = askedCrossing(searchParams?.get("crossing"));
 
   // ── the law pin, BEFORE anything reads law ───────────────────────────────
   const [{ rows: [open] }, { rows: [closed] }, { rows: [head] }] = await Promise.all([
@@ -1414,8 +1423,7 @@ export async function world2Apex(searchParams, { p: injected = null } = {}) {
   // standpoints: "the full mark record for everything `within` and `nearby`
   // just named, plus the town's ground (its region rings and its water), so a
   // reader never has to go and fetch what this answer already told them
-  // about" — then the mover's own class, so the walk desk can price a stride
-  // (world.mjs § markRecords, 2026-09-13). Same ids, same order, from the
+  // about". Same ids, same order, from the
   // world this answer was just judged over. `nearby` here is the final list:
   // this door composes no portal, so there is no loose-thing injection to
   // take the ids after (1.0's note on `withLoose` applies to the standpoint
@@ -1423,8 +1431,7 @@ export async function world2Apex(searchParams, { p: injected = null } = {}) {
   //
   // Each record is the fold's PUBLISHED shape, projected from the row —
   // `apex-reads.mjs § records` names the seven fields no row holds and why
-  // they are absent rather than zero. The mover's class is law, not a row, so
-  // it is read from the same `law_projection` rows the affordances were.
+  // they are absent rather than zero.
   const ground = apex.groundMarkIdsOf({
     marks: world.marks, skeleton, regionSlugs: eng.regions.REGION_SLUGS,
     polygonOf: eng.geometry.polygonOf, waterFeatures: eng.water.waterFeatures, seaFeature: eng.water.seaFeature,
@@ -1432,10 +1439,21 @@ export async function world2Apex(searchParams, { p: injected = null } = {}) {
   const records = apex.recordsBlock({
     marks: world.marks, ids: [...spine.map((m) => m.id), ...nearby.map((o) => o.id)], extra: ground,
   });
-  if (!records[STRIDE_MARK_ID]) {
-    const stride = apex.classRecordOf(lawRows.find((r) => r.kind === "class" && r.data?.id === STRIDE_MARK_ID));
-    if (stride) records[STRIDE_MARK_ID] = stride;
-  }
+  // No class rides `records` by name (WLD-29, the pointer model): a page reads
+  // its stride from GET /world/dials, as 1.0's apex says (world.mjs § markRecords).
+  //
+  // ── THE PORCH LIGHTS (WLD-29) ────────────────────────────────────────────
+  // `lit` on each house `within` and `nearby` show, as 1.0's apex carries it,
+  // from the office's shared activity answer: the STORE's, so this door's own
+  // store shares the office's (the pen's default key) and an injected pool is
+  // its own. No house in sight, no activity asked.
+  const isHouse = (id) => markById.get(id)?.kind === "parcel";
+  const houses = [...spine, ...nearby].some((o) => isHouse(o.id));
+  const activity = houses
+    ? await readHouseholdActivity({ current: n === currentCrossing(), pool: injected ?? null })
+    : null;
+  const lit = (list) => (activity ? list.map((o) => (isHouse(o.id) ? { ...o, lit: litOf(markById.get(o.id), activity) } : o)) : list);
+  const litUnknown = activity ? lightsUnknownWhy(activity) : null;
 
   return { body: {
     standpoint: { x: near.x, y: near.y, stance: "nobody" },
@@ -1444,10 +1462,11 @@ export async function world2Apex(searchParams, { p: injected = null } = {}) {
     // carries the key at all, and a spectator's note is nobody's. An absent key
     // here would read as "this door does not do notes", a different claim.
     note: null,
-    within: spine,
-    nearby,
-    // Every id `within` and `nearby` name, plus the town's ground set and the
-    // mover's class — the one small whole a painting needs for its floor.
+    within: lit(spine),
+    nearby: lit(nearby),
+    ...(litUnknown ? { lit_unknown: litUnknown } : {}),
+    // Every id `within` and `nearby` name, plus the town's ground set — the one
+    // small whole a painting needs for its floor.
     records,
     ...(departures ? { departures } : {}),
     ...(present ? { present } : {}),

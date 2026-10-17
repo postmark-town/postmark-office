@@ -452,8 +452,13 @@ export function blockFields(block, f = {}) {
   return { block };
 }
 
-/** The pace dial in km an hour, from the resident class's record (the walk line names it). */
-export const paceFrom = (records) => paceKmH(records?.["the-town/resident"]?.dials);
+/**
+ * The walk line's pace in km an hour, from the resident class's own dial
+ * (`pace_km_per_crossing`, as world-classes.mjs § departurePace prices the walk
+ * itself). No class rides a read's records by name (WLD-29), so the apex hands
+ * the dial in; null names no speed.
+ */
+export const paceFrom = (kmPerCrossing) => paceKmH({ pace_km_per_crossing: kmPerCrossing });
 
 // ── the one new store read: each resident's newest public act ───────────────
 

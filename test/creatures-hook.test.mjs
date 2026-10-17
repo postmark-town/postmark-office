@@ -329,7 +329,9 @@ test("W9: the creature's read is the resident read's own blocks at the creature'
   const wolf = { id: "creature:wolf-270-31", x: 5, y: 7 };
   // the tick sees for it, at its point, as a spectator (play row 51)
   views.set(wolf.id, { key: "k", ...(await seeFrom(wolf, { world })) });
-  assert.deepEqual(asked.find((a) => a[0] === "eyes").slice(1), [{ x: 5, y: 7 }, null, { v2: true }]);
+  // lights: false (WLD-29 review): a creature reads no `lit`, so its tick never runs the
+  // activity batch or waits out its 1.5 s for a house that happens to be in sight
+  assert.deepEqual(asked.find((a) => a[0] === "eyes").slice(1), [{ x: 5, y: 7 }, null, { v2: true, lights: false }], "a creature asks for no porch lights");
   asked.length = 0;
   const out = await aroundCreature(wolf, { actor: "kai", actId: "31" }, { world, query, nowMs: NOW });
   assert.equal(asked.filter((a) => a[0] === "eyes").length, 0, "no line of sight on the act's path");
