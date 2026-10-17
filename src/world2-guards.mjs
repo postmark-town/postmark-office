@@ -454,10 +454,10 @@ const unconfigured = (which) => {
  * `since` / `until` are crossing bounds, both optional and both pushed only
  * when finite (the port's own § explains why that IS the equality).
  */
-export async function storeHoldingRows({ thing = null, since = null, until = null } = {}) {
+export async function storeHoldingRows({ thing = null, since = null, until = null, afterId = null } = {}) {
   const off = unconfigured("holding");
   if (off) throw off;
-  return reading(async (client) => port.pgHoldingRows(client, { thing, since, until }));
+  return reading(async (client) => port.pgHoldingRows(client, { thing, since, until, ...(afterId != null ? { afterId } : {}) }));
 }
 
 /**
@@ -515,11 +515,11 @@ export async function setDownRowsForMakers(handles) {
  * call the same `pgAttachmentsFor` underneath, so there is one answer with two
  * doors to it, and the doors collapse when row 29 lands.
  */
-export async function storeAttachmentRows({ until = null } = {}) {
+export async function storeAttachmentRows({ until = null, afterId = null } = {}) {
   const off = unconfigured("holder");
   if (off) throw off;
   return reading(async (client) => {
-    const { rows } = await port.pgAttachmentsFor(client, { until });
+    const { rows } = await port.pgAttachmentsFor(client, { until, ...(afterId != null ? { afterId } : {}) });
     return rows;
   });
 }

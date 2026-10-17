@@ -22,7 +22,7 @@
 // 06:36Z (crossing 10.55). Nothing is read off the wall clock.
 import test, { after, before, mock } from "node:test";
 import assert from "node:assert/strict";
-import { copyFileSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 
@@ -30,6 +30,7 @@ import { fixtureWorldCloneWithEngine, fixtureWorldDb, mainShaOf, scratchDir } fr
 import { NO_WORLD_DB } from "./helpers/world-rows.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { ENGINE_FILES, fixtureMarks, atCrossing } from "./movement-fixture.mjs";
+import { copyEngineFiles } from "./helpers/engine-closure.mjs";
 
 const REAL_CLONE = (await import("../src/world-store.mjs")).WORLD_CLONE;
 const scratch = scratchDir("wld11");
@@ -50,7 +51,8 @@ const DEPARTURES = ["marigold", "dom-pidgey", "kestrel", "sparrow"].map((actor, 
   { at: iso(10.1), actor, from: OFF_HARBOUR, toward: OFF_HARBOUR, crossing: 10, line_no: i + 1 }));
 
 const repo = fixtureWorldCloneWithEngine({ label: "wld11", marks: MARKS, departures: DEPARTURES });
-for (const f of [...ENGINE_FILES, "enter-exit.mjs"]) copyFileSync(join(REAL_CLONE, "tools", f), join(repo, "tools", f));
+// The engine and its imports (W2's enter-exit.mjs reads mark-kind.mjs).
+copyEngineFiles(REAL_CLONE, repo, [...ENGINE_FILES, "enter-exit.mjs"]);
 writeFileSync(join(repo, "tools", "world-verbs.mjs"),
   readFileSync(join(repo, "tools", "world-verbs.mjs"), "utf8") + "\nexport function enter() { return null; }\n");
 const quiet = { stdio: ["ignore", "pipe", "pipe"] };

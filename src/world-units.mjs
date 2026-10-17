@@ -147,9 +147,27 @@ export async function liveUnitDeps() {
       const s = await world.residentStandpoint(String(actor)).catch(() => null);
       return hold.armsLengthOrThrow({ thing: "units", to, here: s?.placed ? { x: s.x, y: s.y } : null, actor });
     },
+    // WHERE A HOLDER IS NOW (LOGOS v2, O2; review-610 B1): in someone's hands, set down, or where it was made
+    holderPlace: async (id, mark) => {
+      const rows = await guards.standsRowsFromStore(String(id)).catch(() => null);
+      if (!rows) return { holder: null, at: mark?.at ?? null, moved: false };
+      const holder = hold.liveHolder(rows.attachments ?? [], String(id));
+      if (holder) return { holder: String(holder), at: null, moved: false };
+      const drop = hold.latestDrop(rows.journal ?? [], String(id));
+      if (!drop) return { holder: null, at: mark?.at ?? null, moved: false };
+      const marks = await world.worldMarksAll().catch(() => []);
+      const at = journal.composeAnchor(drop.at ?? {}, (mid) => marks.find((m) => m.id === mid)?.at ?? null);
+      return at ? { holder: null, at, moved: true } : { holder: null, at: mark?.at ?? null, moved: false };
+    },
     standpoint: async (actor) => { const s = await world.residentStandpoint(String(actor)).catch(() => null); return s?.placed ? { x: s.x, y: s.y } : null; },
     householdOf: await (async () => { try { return await (await import("./households.mjs")).householdLookup(); } catch { return null; } })(),
-    append: (entry, opts = {}) => journal.appendActFlipped(null, entry, opts),
+    // `also`: further acts that commit in the SAME transaction as this one, or none of them do (O2; review-610 S4)
+    append: async (entry, { guard = null, also = [] } = {}) => {
+      if (!also.length) return journal.appendActFlipped(null, entry, guard ? { guard } : {});
+      const { insertAct } = pen;
+      const rows = also.map((e) => journal.normalizeRow(e));
+      return journal.appendActFlipped(null, entry, { guard: async (client) => { if (guard) await guard(client); for (const r of rows) await insertAct(client, r, null); } });
+    },
     stamp: (actor) => world.witnessStamp(actor),
     crossing: () => crossings.currentCrossing(),
     household: (key) => branches.resolvedWorldHousehold(key),
@@ -831,14 +849,20 @@ async function thingFromChest(args, key, actor, deps, view, cap) {
  * shape — stamped strictly after the thing's newest holding row, the same
  * guard `declareHolding` keeps against the same-millisecond swallow.
  */
-async function writeThingHolding(deps, key, actor, attachments, { did, thing, holder, previous, madeBy }, { guard = null } = {}) {
+export async function writeThingHolding(deps, key, actor, attachments, change, { guard = null } = {}) {
+  const { entry, at } = await thingHoldingEntry(deps, key, actor, attachments, change);
+  const row = await deps.append(entry, guard ? { guard } : {});
+  return { seq: row?.actId ?? row?.seq ?? null, at, effect: entry.effect };
+}
+
+/** The holding act for a thing changing hands, composed and not written: `{ entry, at }` (LOGOS v2, O2: one transaction may carry several). */
+export async function thingHoldingEntry(deps, key, actor, attachments, { did, thing, holder, previous, madeBy }, stamp = null) {
   const prior = rowsFor(attachments, thing);
   const newest = prior.length ? Date.parse(prior[prior.length - 1].born_at) : NaN;
   const now = Date.now();
   const at = new Date(Number.isFinite(newest) && newest >= now ? newest + 1 : now).toISOString();
-  const { at: anchor, witnesses } = await deps.stamp(actor);
+  const { at: anchor, witnesses } = stamp ?? await deps.stamp(actor);
   const entry = holdingEntry({ did, thing, holder, previous_holder: previous, made_by: madeBy, policy: "cascade", declared_by: actor, at },
     { crossing: deps.crossing(), at: anchor, witnesses, cls: "holding", household: deps.household(key) });
-  const row = await deps.append(entry, guard ? { guard } : {});
-  return { seq: row?.actId ?? row?.seq ?? null, at, effect: entry.effect };
+  return { entry, at };
 }

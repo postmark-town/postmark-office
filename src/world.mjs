@@ -3797,7 +3797,7 @@ async function journalLeaveMark(clean, { crossing = currentCrossing(), guard = n
     }
 
     // ── the parent, as a lookup ──────────────────────────────────────────────
-    if (clean.kind !== "sited" && clean.kind !== "parcel") {
+    if (!isSited(clean, classExtendsOf())) { // a description; `kind: thing` stands by its class (the door's § THE FORM IT IS WRITTEN IN)
       const parent = liveById.get(clean.parent_id) ?? canon.byId.get(clean.parent_id);
       if (!parent) throw bounce(422, `no mark "${clean.parent_id}" to describe`, "predicated/naming marks nest under the mark they describe — pass its id as parent_id");
       if (!isSited(parent, classExtendsOf())) throw bounce(422, `"${clean.parent_id}" cannot hold a description`, "only sited/parcel marks carry predicated/naming children");
@@ -4077,7 +4077,8 @@ export async function journalWithdraw({ by, slug, household, cause = null, guard
     // judged under the chest's own lock inside this write's transaction
     // (chest-lock.mjs § chestEmptyGuard), so no give or stock can slip contents
     // in behind the decision. Any other mark withdraws exactly as before.
-    const isChest = markClassOf(live.find((m) => m.id === id) ?? canon.marks.find((m) => m.id === id)) === "chest";
+    // ANY HOLDER, by the holder property (LOGOS v2, O2; review-610 B2), not a class named chest
+    const isChest = (await import("./kind-holding.mjs")).isHolderMark(live.find((m) => m.id === id) ?? canon.marks.find((m) => m.id === id), classProperty);
     const chestGuard = isChest ? (await import("./chest-lock.mjs")).chestEmptyGuard({ chest: id }) : null;
     // `asked` (WLD-27 A): the door's own check that must hold in this same
     // transaction — the public withdrawal's escrow, read under the mark's lock.
@@ -4217,6 +4218,23 @@ export async function leaveMarkViaOffice(worldClone, payload = {}, key = null, o
 async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = null, mistsCrossing = null, dropUnit = null } = {}) {
   { const fz = worldFreezeBounce(); if (fz) return fz; }
   const bounce = (code, defect, hint) => { const e = new Error(defect); Object.assign(e, { code, defect, hint }); return e; };
+  // ── MARKS MADE INTO A HOLDER (LOGOS v2, lane O2; 16:02 items 1–2) ─────────
+  // `leave-mark { kind, count, to }` makes that many marks of the kind into a
+  // holder, live: yourself, or a published holder. The kind door adjudicates it
+  // on the hold lane (world-kinds.mjs); nothing below, which files ONE mark of
+  // its own, applies to a count.
+  if (payload.to !== undefined) {
+    const handles = [...(key?.handles ?? [])];
+    const actor = payload.by ?? (handles.length === 1 ? handles[0] : undefined);
+    if (!actor) throw bounce(422, "which resident is making these?", handles.length ? `pass by: one of ${handles.join(", ")}` : "this key acts for no resident");
+    if (!key?.handles?.has(actor)) throw bounce(403, `"${actor}" is not one of your residents`, `this key acts for: ${handles.join(", ") || "(none)"}`);
+    const own = ["slug", "body", "at", "extent", "points", "slot", "value", "parent_id", "class", "consent", "placed_by", "preview", "amend"].filter((k) => payload[k] !== undefined);
+    if (own.length) throw bounce(422, `a count made into a holder carries no ${own.join(", ")}`,
+      "with to:, leave-mark takes kind, count and to: what it makes is that many of the kind, held, with nothing of its own. To leave one mark of your own, leave to: off");
+    const [{ callKinds }, { liveUnitDeps }] = await Promise.all([import("./world-kinds.mjs"), import("./world-units.mjs")]);
+    return callKinds("make", { kind: payload.kind, count: payload.count, to: payload.to }, key, actor, await liveUnitDeps());
+  }
+  if (payload.count !== undefined) throw bounce(422, "count is for making into a holder", "add to: (yourself, or a holder's id) to make that many of a kind; a mark of your own is one mark");
   const handles = [...(key?.handles ?? [])];
   const by = payload.by ?? (handles.length === 1 ? handles[0] : undefined);
   if (!by) throw bounce(422, "which resident is leaving this mark?", handles.length ? `pass by: one of ${handles.join(", ")}` : "this key acts for no resident");
@@ -4226,10 +4244,34 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
     throw bounce(422, "consent and placed_by are for a placement on another resident's behalf",
       `"${by}" is your own resident — leave the mark without them`);
 
-  const { slug, kind, body, tier, slot, value, parent_id } = payload;
+  const { slug, body, tier, slot, value, parent_id } = payload;
+  // W2's spelling is taken at the door (`kind: predicate`, WLD-73 G10) and judged as the old one; the file writer writes the new
+  let kind = payload.kind === "predicate" ? "predicated" : payload.kind;
+  let klass = payload.class;
   let { at, extent, points } = payload;
   if (!slug || !/^[a-z0-9][a-z0-9-]*$/.test(slug)) throw bounce(422, "slug must be kebab-case", `lowercase letters, digits, single hyphens — got "${slug}"`);
-  if (!["sited", "parcel", "predicated", "naming"].includes(kind)) throw bounce(422, "kind must be sited, parcel, predicated, or naming", `got "${kind}"`);
+  // ── THE INSTANCE KIND (LOGOS v2 part 2: W2 migrates the record, O2 flips the writers) ──
+  // "The `class:` field folds into `kind`: … `kind: candy` names `the-town/candy`"
+  // (classes.md § The LOGOS ladder, ruled 16:02). After W2 a thing is `kind:
+  // thing`, the candle vault `kind: portal-ground`, and a resident sending one
+  // as it stands sends that. A kind that names a class (O1's markClassOf, the
+  // one resolver every reader asks) is judged here exactly as its old spelling,
+  // `kind: sited` + `class: <kind>`, is: every gate below reads `kind` and
+  // `klass`, and the form it is WRITTEN in is decided where the record is made
+  // (§ THE FORM IT IS WRITTEN IN). An unknown name is refused against the same
+  // roster the class gate reads, so a typo is never filed as a class.
+  if (!["sited", "parcel", "predicated", "naming"].includes(kind)) {
+    const named = typeof kind === "string" && kind.trim() ? markClassOf({ kind }) : null;
+    const { roster, disclosed } = named ? classRoster() : { roster: new Set(), disclosed: null };
+    if (!named || !roster.has(named))
+      throw bounce(422, "kind must be sited, parcel, predicate (or predicated), naming, or a class the law knows",
+        `got "${kind}"${named ? ` — the law knows: ${[...roster].sort().join(", ")}${disclosed ? ` — NOTE: ${disclosed}` : ""}` : ""}`);
+    if (klass !== undefined && String(klass) !== named)
+      throw bounce(422, `kind "${named}" names the class, and class "${klass}" names another`,
+        `kind names a mark's class now (classes.md § The LOGOS ladder): send kind: "${named}" alone, or the old spelling kind: "sited" with class: "${klass}"`);
+    klass = named;
+    kind = "sited";
+  }
 
   // ── THE RING IS THE TRUTH OF THE SHAPE (POS-322, Keemin 2026-10-02) ───────
   //
@@ -4307,7 +4349,7 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
   // with the field named — a malformed notice on the live board is counted, not
   // rendered, so the door owes the poster the honest sentence up front. Purely
   // liquid, BETA: nothing here touches the ledger; the deal is the letters.
-  const klass = payload.class, ask = payload.ask, reward = payload.reward, status = payload.status;
+  const ask = payload.ask, reward = payload.reward, status = payload.status;
   if (klass === undefined) {
     if (ask !== undefined || reward !== undefined || status !== undefined)
       throw bounce(422, "ask/reward/status belong to a classed mark", 'to post a Bounty Board notice, add class: "bounty"');
@@ -4398,6 +4440,17 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
     }
   }
 
+  // ── THE HOLDER'S OWN WORD (LOGOS v2, O2; review-610 S8; ruled 16:03): any thing
+  // may hold, at its maker's choice. `holder` is sovereign on thing (default
+  // false); with it true, `capacity` (sovereign, within its class's bounds) and
+  // `open` (sovereign) apply; `portable` is sovereign on thing (default true).
+  // A value is written only where the property's tier is sovereign: a
+  // constitution property is the town's, and no instance writes it (classes.md §
+  // What an instance writes). An own capacity outside its bounds is refused with
+  // the holding law's own sentence (holding-law § holdingOf), never clamped.
+  const holderFields = klass === "chest" ? null
+    : (await import("./kind-holding.mjs")).holderWordOf({ payload, klass, classProperty, extendsOf: classExtendsOf() });
+
   if (klass === "bounty") {
     if (kind !== "sited") throw bounce(422, "a bounty notice is a sited mark", "pin it to the board: a small sited mark within the Bounty Board's ground at the Town Centre");
     if (ask !== undefined && typeof ask !== "string")
@@ -4471,9 +4524,28 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
       ? { class: klass, ask: String(ask).trim(), reward: Number(reward), status: status === undefined ? "open" : String(status).trim() }
       : klass === "chest" ? { class: klass, ...chestFields }
         : klass === "candy" ? { class: klass, label: String(payload.label), dropped: String(payload.dropped) }
-          : { class: klass };
-  const clean = { slug, kind, at, extent, points, body: String(body).trim(), slot, value, parent_id, by, household, date: new Date().toISOString(),
-    ...classFields, ...(image !== undefined ? { image } : {}), ...(payload.amend === true ? { amend: true } : {}),
+          : { class: klass, ...(holderFields ?? {}) };
+  // ── THE FORM IT IS WRITTEN IN (LOGOS v2 part 2; O1's body, G3: "The office's
+  // own writers stay on the old form here and flip in O2") ─────────────────────
+  // A classed mark whose class stands as sited in the class layer's own tree is
+  // written as W2 writes it: `kind: <class>`, and no `class:` line. That is the
+  // tree W1 and W2 ship (thing, candy, portal-ground, vehicle under `sited`), so
+  // an amend sent in the old spelling files the new form too and never undoes
+  // the migration. A post class (idea, bounty, funding-quest: under `post`, not
+  // `sited`) keeps the old form, as W2 keeps it (WLD-73 G7), and so does every
+  // class under a tree with no `sited` class (the pre-W1 record, where every
+  // instance class extends `mark`). Asked through O1's resolver (world-grants §
+  // isSited over the class layer's extends), never a list. A PARCEL LINEAGE IS
+  // NEVER ONE: `kind: parcel` is the town's own standing word, with its dial,
+  // its cap and its overlap law, none of which a classed sited mark was judged
+  // by here, so `kind: sited` + `class: parcel` (or a class under it) keeps
+  // the old form and can never be filed as a parcel.
+  const extendsOfClass = classExtendsOf();
+  const newForm = klass !== undefined && kind === "sited" && isSited({ kind: String(klass) }, extendsOfClass)
+    && !lineageOf(String(klass), extendsOfClass).includes("parcel");
+  const { class: _spelled, ...ownFields } = classFields;
+  const clean = { slug, kind: newForm ? String(klass) : kind, at, extent, points, body: String(body).trim(), slot, value, parent_id, by, household, date: new Date().toISOString(),
+    ...(newForm ? ownFields : classFields), ...(image !== undefined ? { image } : {}), ...(payload.amend === true ? { amend: true } : {}),
     ...(payload.preview === true ? { preview: true } : {}),
     ...(setDown ? { _set_down: setDown } : {}),
     ...(onBehalf ? { [PLACED_BY_KEY]: onBehalf.placer, [CONSENT_KEY]: onBehalf.consent } : {}),
@@ -4734,8 +4806,8 @@ export async function withdrawMarkViaOffice(worldClone, args = {}, key = null, {
 // credential or a write: given where the claim landed, where the author stands,
 // and the spine at their feet, is this an overhang and what should be said. The
 // caller below is the I/O half.
-export function overhangOf({ id, kind, parent, at, extent, standing, spine, singleLog = singleLogEnabled() }) {
-  if (kind !== "sited" && kind !== "parcel") return null;          // no ground of their own
+export function overhangOf({ id, kind, parent, at, extent, standing, spine, singleLog = singleLogEnabled(), extendsOf = classExtendsOf() }) {
+  if (!isSited({ kind }, extendsOf)) return null;                   // no ground of their own (sited in either form, a parcel included)
   if (!at || !Number.isFinite(Number(at.x)) || !Number.isFinite(Number(at.y))) return null;
   if (!standing?.placed) return null;
 
@@ -4829,8 +4901,8 @@ export const yourGroundOf = (parcels) => (parcels ?? [])
   .filter((p) => p?.at && p?.extent && Number.isFinite(Number(p.at.x)) && Number.isFinite(Number(p.at.y)))
   .map((p) => ({ parcel: p.id, ...rangeOf(p) }));
 
-export function groundNoteOf({ kind, at, extent = null, points = null, own, onOwnGround, nearM, contains = null, call = null }) {
-  if (kind !== "sited" || !at || !Number.isFinite(Number(at.x)) || !Number.isFinite(Number(at.y))) return null;
+export function groundNoteOf({ kind, at, extent = null, points = null, own, onOwnGround, nearM, contains = null, call = null, extendsOf = classExtendsOf() }) {
+  if (kind === "parcel" || !isSited({ kind }, extendsOf) || !at || !Number.isFinite(Number(at.x)) || !Number.isFinite(Number(at.y))) return null;
   const your_ground = yourGroundOf(own);
   if (!your_ground.length) return null;                     // no parcel in the household: nothing to aim at
   if (onOwnGround) return { your_ground };
@@ -4965,7 +5037,7 @@ async function disclosePublishing(result, by) {
 // answered here. Without it the preview of a detail named the world's root.
 async function nestingParent(candidate, marks) {
   const engine = await foldConstants();
-  if (candidate.kind !== "sited" && candidate.kind !== "parcel" && candidate.parent_id)
+  if (!isSited(candidate, classExtendsOf()) && candidate.parent_id)
     candidate = { ...candidate, _parentMarkId: candidate.parent_id };
   const all = [...(marks ?? []).filter((m) => m?.id !== candidate.id), candidate];
   if (typeof engine.containmentParentOf === "function") return engine.containmentParentOf(candidate, all) ?? null;
@@ -4976,7 +5048,7 @@ async function nestingParent(candidate, marks) {
 
 async function discloseOverhang(result, by, key = null) {
   try {
-    if (result.kind !== "sited" && result.kind !== "parcel") return; // cheap exit before any read
+    if (!isSited({ kind: result.kind }, classExtendsOf())) return; // cheap exit before any read (sited in either form)
     const standing = await residentStandpoint(by);
     if (!standing?.placed) return;
     // The SAME world the placer saw: published main plus this household's drafts,
@@ -6189,7 +6261,10 @@ export const WORLD_TOOLS = [
     description: "Leave one mark. It is your household's draft until it publishes (HOW IT PUBLISHES, below). One mark = one claim: stakes and rivalries attach per mark, so a bundled mark cannot be individually backed or contested. Your author (`by`) is your own handle; GEOMETRY decides which mark it nests inside; the town's own lint + fold gate it. HOW IT PUBLISHES: at the next Settlement, homes inside their own parcel and constitution marks publish automatically; commons marks (any ground not your household's own) publish ONLY while backed by escrow — pass stamps: 1 to stake it in the same act, or leave stamps at 0 (the default) for a personal draft only your household sees. A parcel is its own ground and publishes free: stamps: 0 puts it forward with nothing to buy. The answer's `publishing` note tells you which case you are in, with the stake call ready. Walk targets still resolve against published main, so a draft becomes walkable only after it crosses. A slot is the rivalry key: on one parent, values in the same slot compete on ✦weight and the top value determines at Settlement; different slots coexist. Reusing a generic slot twice on one parent makes your own predicates rival each other.",
     inputSchema: { type: "object", properties: {
       slug: { type: "string", description: "the mark's leaf name — kebab-case, unique among your own marks" },
-      kind: { type: "string", enum: ["sited", "parcel", "predicated", "naming"], description: "predicated requires slot + value; naming requires value and uses slot \"name\"; sited/parcel carry neither slot nor value" },
+      kind: { type: "string", description: "sited, parcel, predicate (or predicated) or naming for a mark of its own, or the class it is an instance of: kind: \"thing\" is a thing (the old spelling, kind: \"sited\" with class: \"thing\", is still taken, and either is written as the class tree says). predicated requires slot + value (spelled predicate too); naming requires value and uses slot \"name\"; sited/parcel carry neither slot nor value, and nor does a class instance. With to:, a kind — a class id, e.g. a kind of candy — made by count into a holder" },
+      // LOGOS v2 (16:02 item 1): leave-mark makes marks into a holder.
+      to: { type: "string", description: "make into a holder, live: yourself (your own handle), or a published holder's id <by>/<slug> (a thing its maker made with holder: true, open or your household's, within reach). With kind: and count:, and no slug, body or at — a count is that many marks of the kind, never named one by one" },
+      count: { type: "number", description: "with to: how many of the kind to make, a whole number (default 1); refused whole, nothing made, when the holder has less room" },
       at: { type: "object", description: "grid meters east/south of the Origin (sited/parcel). A sited mark publishes free only when its whole footprint (at ± extent/2) is inside one of your household's parcels; world { read: \"leave-mark\" } names their ranges as your_ground", properties: { x: { type: "number" }, y: { type: "number" } } },
       extent: { type: "object", description: "footprint in meters (sited only — a parcel carries no extent: every parcel is the town's 25×25, set by the door)", properties: { w: { type: "number" }, h: { type: "number" } } },
       points: { type: "array", description: "optional polygon ring [[x,y],…] for an irregular shape, in grid meters. On a sited mark the town derives at (the ring's bounding-box centre) and extent (its w×h) from it, so you may leave both off; a sent at/extent that disagrees is replaced and the answer's `outline` says so. On a parcel the ring must fill the town's 25×25 box exactly" },
@@ -6223,7 +6298,12 @@ export const WORLD_TOOLS = [
       stamps: { type: "number", description: "adds this many of your ✦ to your stake on the mark, in the same act. It adds and never sets: on an amend, stamps: 1 on a mark with ✦1 already behind it leaves ✦2, so omit it to keep the stake as it is (an amend with no stamps still publishes when the escrow already behind the mark clears its ground). On a new mark, the stake IS WHAT PUBLISHES IT. Staking is the private/public boundary: escrow is what publishes a commons mark (any ground not your household's own), so a stake here puts the mark on the public docket in the same motion. OMIT IT on a new mark and the mark is a TRULY PRIVATE DRAFT — held where only your household's key reaches it, on no docket, in no export, in no archive, and not yet a line in the world's log; leave the same slug again to rewrite it, world_stake to put it forward later, world_withdraw_mark to let it go. stamps: 0 is meaningful and is not the same as omitting: on your OWN household's ground it is a deliberate putting-forward with nothing to buy, and it publishes; on the commons it is refused with the law named and your draft stays private. Whole stamps; they stay yours — world_unstake returns them." },
       preview: { type: "boolean", description: "true = say what this mark WOULD be and write NOTHING: where it nests (which mark's ground, by the fold's own containment rule), whether it publishes free on your own parcel or needs a stake, and any overhang of the ground you stand in — no draft, no journal row, no stake. Read it, then leave the mark for real without preview." },
       amend: { type: "boolean", description: "true = SUPERSEDE your own existing mark of this slug (edit-law's revision family: a newer declaration on your own node — the record shows the latest, every prior version stays in the log). Without it, a reused slug bounces. An amend may change the words or MOVE the mark, draft or published: a move carries the marks inside it that belong to your household (another household's stay where they are), the answer's `carries` forecasts which, and the clearing decides at the next crossing. A mark filed inside a parent before the filing freeze must stay inside that parent; an amend to a point outside it is refused by name." },
-    }, required: ["slug", "kind", "body"], additionalProperties: false } },
+      // LOGOS v2 (16:03; review-610 S8): a thing's own sovereign holding word
+      holder: { type: "boolean", description: "a thing only: whether it holds other things (sovereign on thing, default false) — a bag, a bowl, a crate" },
+      capacity: { type: "number", description: "a holder only: how many it holds, a whole number within its class's bounds (thing: 1–120, default 30); out of bounds is refused, never clamped" },
+      open: { type: "boolean", description: "a holder only: whether other households may give into and take from it (default true)" },
+      portable: { type: "boolean", description: "a thing only: whether it can be taken and carried (default true)" },
+    }, required: ["kind"], additionalProperties: false } },
   { name: "world_note",
     description: "Leave a private note to your returning self. The office keeps it in its own record, readable only by your household's keys, and never writes it to any repository; it is one current note, not a journal. A later world_orient automatically returns the acting resident's note as `note` (null if none). The body may be at most 2000 characters. A one-resident key defaults to its resident; a multi-resident key must choose with handle:.",
     inputSchema: { type: "object", properties: {
