@@ -76,13 +76,16 @@ const NEW = { id: "keith/stool-new-form", ...stoolFields, kind: "thing" };
 const STOOLS = { old: OLD, new: NEW };
 // A thing its maker made a holder (O2, review-610 S8: holder and open are the maker's word on the record).
 const CRATE = { id: "keith/a-holder-crate", ...stoolFields, body: "A slatted crate with a rope handle.", kind: "thing", holder: true, open: true };
-const STANDING = { [OLD.id]: "7f3a0c1e-0000-4000-8000-000000000701", [NEW.id]: "7f3a0c1e-0000-4000-8000-000000000702", [CRATE.id]: "7f3a0c1e-0000-4000-8000-000000000703" };
+// A RESIDENT'S HOLDER AS THE FOLD PUBLISHES IT (postmark-world#238: marks-fold carries the record's own
+// spelling, and the world's parser has no boolean case, so holder and open arrive as "true"/"false").
+const POUCH = { id: "keith/a-small-pouch", ...stoolFields, body: "A small leather pouch.", kind: "thing", holder: "true", capacity: 10, open: "false" };
+const STANDING = { [OLD.id]: "7f3a0c1e-0000-4000-8000-000000000701", [NEW.id]: "7f3a0c1e-0000-4000-8000-000000000702", [CRATE.id]: "7f3a0c1e-0000-4000-8000-000000000703", [POUCH.id]: "7f3a0c1e-0000-4000-8000-000000000704" };
 
 const PUBLISHED = [
   { id: "the-town/let-there-be-light", by: "the-town", kind: "sited", tier: "constitution", at: { x: 0, y: 0 }, extent: { w: 20000, h: 20000 }, body: "the world frame" },
   { id: "keith/the-garage", by: "keith", kind: "sited", tier: "home", at: GARAGE_AT, extent: { w: 20, h: 20 }, body: "one bay door up" },
   { id: "keith/the-yard", by: "keith", kind: "parcel", tier: "home", at: YARD_AT, extent: { w: 25, h: 25 }, body: "the yard behind the garage" },
-  OLD, NEW, CRATE,
+  OLD, NEW, CRATE, POUCH,
 ];
 
 put(repo, "tools/world-build.mjs", `export function assembleWorld({ worldState, skeleton }) { return { ...worldState, skeleton }; }\n`);
@@ -190,7 +193,9 @@ const TREES = {
   w2: [row("postmark-node", null, false), row("mark", "postmark-node"), row("sited", "mark", true),
     row("thing", "sited", true), row("parcel", "sited"), row("portal-ground", "sited", false),
     row("post", "postmark-node"), row("bounty", "post", true), row("predicate", "mark"), row("naming", "predicate"),
-    prop("thing", "holder", false, "sovereign"), prop("thing", "open", true, "sovereign", "holder"), prop("thing", "portable", true, "sovereign")],
+    prop("thing", "holder", false, "sovereign"), prop("thing", "capacity", 30, "sovereign", "holder"),
+    prop("thing", "min", 1, "constitution", "capacity"), prop("thing", "max", 120, "constitution", "capacity"),
+    prop("thing", "open", true, "sovereign", "holder"), prop("thing", "portable", true, "sovereign")],
 };
 const underTree = (name) => reloadLawSnapshot({ force: true,
   query: async (sql) => ({ rows: sql === LAW_REFRESH_SQLS.pin ? [{ newest: 260, pinned: 260 }] : TREES[name] }) });
@@ -350,6 +355,25 @@ test("[w2 tree] a holder thing set down keeps its holder word, in the new form",
   const data = parse(p.claims().at(-1).data);
   assert.equal(data.holder, true, "holder rides the amend");
   assert.equal(data.open, true, "open rides the amend");
+});
+
+// SF3 (review-616): THE AMEND CARRIES A RESIDENT HOLDER'S WHOLE WORD. The pouch is published as the fold
+// publishes it (holder, capacity and open in the record's own spelling); its author sets it down, and the
+// amend must carry all three. A word AMEND_CARRIES does not name is refused at the amend ("carrying …"),
+// so canon would keep the pouch where it was folded: POS-138's shape. Each word is pinned by name.
+test("[w2 tree] SF3 · a fold-published resident holder set down by its author files an amend carrying holder, capacity and open", async () => {
+  await underTree("w2");
+  for (const word of ["holder", "capacity", "open"]) assert.ok(hold.AMEND_CARRIES.includes(word), `AMEND_CARRIES names ${word}`);
+  const p = await fresh(); hand(POUCH.id, "keith");
+  const r = await hold.callHoldTool("world_hold", { thing: POUCH.id, handle: "keith" }, KEITH);
+  assert.equal(r.did, "drop", JSON.stringify(r).slice(0, 400));
+  assert.equal(r.set_down?.amend?.filed, true, `no amend filed: ${JSON.stringify(r.set_down?.amend)}`);
+  assertForm(written(p), { kind: "thing" }, "the pouch's set-down");
+  const data = parse(p.claims().at(-1).data);
+  assert.equal(String(data.holder), "true", "holder rides the amend");
+  assert.equal(Number(data.capacity), 10, "capacity rides the amend");
+  assert.equal(String(data.open), "false", "open rides the amend");
+  assert.deepEqual(p.claims().at(-1).geometry.at, YARD_AT, "re-sited to the standpoint");
 });
 
 test("the hold door's guidance names the new spelling (amendCallFor)", () => {

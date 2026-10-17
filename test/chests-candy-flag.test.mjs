@@ -62,7 +62,7 @@ test("0 · OFF by default: only WORLD_CHESTS_CANDY=1 opens the doors", () => {
 test("1 · OFF: every counted-unit route refuses in the office's own words, and reads nothing first", async () => {
   for (const route of ["take", "give", "drop", "consume", "consume-in-place", "refill", "take-back", "thing-into-chest", "thing-from-chest"]) {
     await assert.rejects(() => callUnits(route, { label: "test-comets", count: 1, from: "alpha/the-bowl" }, null, "alpha", untouched),
-      (e) => e.code === 409 && e.defect === "chests and candy aren't open in town yet" && /nothing was changed/.test(e.hint), route);
+      (e) => e.code === 409 && e.defect === "the older chest-and-label doors are closed" && /nothing was changed/.test(e.hint), route);
   }
 });
 

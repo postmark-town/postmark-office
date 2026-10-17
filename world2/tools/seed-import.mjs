@@ -489,8 +489,12 @@ export async function deriveSeed({ worldRepo, lawSha, townSha = null, window: gi
  * column is NULL because the schema has no other answer; the edge is not lost, and
  * nothing about it is quiet.
  */
+// The predicate family in either form (LOGOS v2 part 2, W2: `kind: predicate` is the class
+// `predicated` was the standing word for; a naming is a predicate whose claim is a name).
+const CONTINUES = new Set(["predicated", "predicate", "naming"]);
+
 export function resolveParent(rec, byId) {
-  if (rec.kind !== "predicated" && rec.kind !== "naming") return { parent: null, parentIsLaw: null };
+  if (!CONTINUES.has(String(rec.kind))) return { parent: null, parentIsLaw: null };
   const named = rec.parent ?? rec._parentMarkId ?? null;
   if (named == null) {
     throw new Error(

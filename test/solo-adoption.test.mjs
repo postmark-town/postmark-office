@@ -161,6 +161,8 @@ function worldStore({ registry = REGISTRY, pins = PINS, marks = fixtureMarks() }
     if (/FROM marks WHERE status = 'standing'$/.test(t))
       return { rows: S.marks.filter((m) => m.status === "standing").map((m) => structuredClone(m)) };
     if (/FROM pg_indexes/.test(t)) return { rows: [] };
+    // the recompute's class layer (standing.mjs § classLayerVia): no heads, so the place answers
+    if (/AS marks,/.test(t) && /AS door/.test(t)) return { rows: [{ marks: null, law: null, door: null }] };
     if (/^UPDATE marks SET data = jsonb_set/.test(t)) {
       const m = S.marks.find((r) => String(r.id) === String(params[0]));
       if (m) m.data = { ...(m.data ?? {}), tier: params[1] };

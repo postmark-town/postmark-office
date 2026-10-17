@@ -69,7 +69,7 @@
 // PURE. Rows in, values out. No pg client, no fs, no network.
 
 import {
-  classOfInstance, entriesOfClass, resolveForActor, resolveGrants,
+  classOfInstance, entriesOfClass, resolveForActor, resolveGrants, PREDICATE_KINDS,
 } from "../../src/world-grants.mjs";
 import { DISPATCH_TOOLS, fieldsFor } from "../../src/world-apex.mjs";
 
@@ -144,7 +144,8 @@ const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
 export function markRecordOf(row, { parentSlug = null } = {}) {
   const g = row?.geometry ?? null;
   const d = row?.data ?? {};
-  const continues = row?.kind === "predicated" || row?.kind === "naming";
+  // The predicate family in either form: W2 writes `kind: predicate` where the old form wrote `predicated`.
+  const continues = PREDICATE_KINDS.has(String(row?.kind ?? ""));
   return {
     // ⚑ THE WHOLE RECORD RIDES, and an allowlist here was a live defect.
     //

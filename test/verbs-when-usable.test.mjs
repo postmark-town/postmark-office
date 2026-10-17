@@ -12,10 +12,17 @@
 // generated rooms, every (verb, object) the matrix shows is driven through the
 // kind door and must land, and every one it hides must be refused — with the
 // real reach (reach.mjs § standsWithin, withinArmsLength), never an admit-all.
+//
+// AND THE MATRIX SEES WHAT THE APEX HANDS IT (the playground's QA, PART2-MCP-QA fail 4). The
+// differential used to hand the matrix every mark in the room, while the apex handed it only what
+// the eyes see (`nearby`). A bowl you stand ON is in your spine (`within`), never in `nearby`,
+// so the bowl's take, give and refill landed at their doors while the read hid them, and 120 rooms
+// never put a holder under the reader's feet. Now the rooms do, and the differential's matrix is
+// handed the apex's own gathering (usable-verbs § viewMarkIds over the room's spine and its eyes).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { usablePairs, canVerbs, canOn, objectlessVerbs, onlyUsable, HOLD_VERBS, portableOf } from "../src/usable-verbs.mjs";
+import { usablePairs, canVerbs, canOn, objectlessVerbs, onlyUsable, HOLD_VERBS, portableOf, viewMarkIds } from "../src/usable-verbs.mjs";
 import { callKinds } from "../src/world-kinds.mjs";
 import { classViewOf } from "../src/world-units.mjs";
 import { foldUnits, UNIT_ACTION } from "../src/world-stacks.mjs";
@@ -143,6 +150,8 @@ function busyRoom(seed) {
   if (r() < 0.2) units.push(make("cy", 20, "thing"));
   const residents = ["dee", "eli"].map((handle) => ({ handle, x: Math.round(r() * 30), y: 0 }));
   if (r() < 0.3) units.push(make("eli", 24, "thing"));
+  // A HOLDER UNDER THE READER'S FEET, sometimes (QA fail 4): it stands in the spine, not in the eyes
+  if (r() < 0.5) marks.find((m) => m.id === holders[5]).at = { x: 0, y: 0 };
   return { marks, units, attachments, residents, places };
 }
 
@@ -160,6 +169,32 @@ test("24 · THE INVARIANT over busy rooms: can = the object-less verbs ∪ every
     shown += can.length;
   }
   assert.ok(shown > 200, "the rooms are busy enough to show verbs");
+});
+
+// THE APEX'S GATHERING over a room: the marks whose footprint holds the reader are the spine (`within`),
+// the rest are what the eyes see (`nearby`), and the matrix gets the marks viewMarkIds names, plus the
+// things in the reader's hands (world-kinds § usableAt) — never the room handed over whole.
+function gathered(room) {
+  const where = (m) => room.places?.get?.(m.id) ?? m.at;
+  // the footprint holds the reader (a mark's `at` is its centre), never the looser reach of standsWithin
+  const under = (m) => { const a = where(m), e = m.extent ?? { w: 0, h: 0 }; return Math.abs(HERE.x - a.x) <= e.w / 2 && Math.abs(HERE.y - a.y) <= e.h / 2; };
+  const within = room.marks.filter((m) => liveHolder(room.attachments, m.id) == null && under(m));
+  const nearby = room.marks.filter((m) => !within.includes(m));
+  const ids = new Set([...viewMarkIds({ within, nearby }), ...room.attachments.filter((a) => liveHolder(room.attachments, a.target) === "cy").map((a) => a.target)]);
+  return { ...room, marks: room.marks.filter((m) => ids.has(m.id)), within };
+}
+
+test("QA fail 4 · the apex's gathering hands the matrix the spine as well as the eyes", () => {
+  const bowl = mk("ana/bowl", { kind: "halloween-candy-bowl", portable: false, at: { x: 0, y: 0 } });
+  assert.deepEqual(viewMarkIds({ within: [{ id: "the-town/root" }, bowl], nearby: [{ id: "ana/a-lamp" }, bowl] }), ["the-town/root", "ana/bowl", "ana/a-lamp"], "each id once, the spine first");
+  assert.deepEqual(viewMarkIds({}), []);
+  const room = { marks: [bowl], units: [make("ana/bowl", 2), make("cy", 1)], attachments: [] };
+  const g = gathered(room);
+  assert.deepEqual(g.within.map((m) => m.id), ["ana/bowl"], "standing on the bowl: it is the spine's");
+  assert.deepEqual(canOn(pairsOf(g), "ana/bowl"), ["take", "give"], "and the matrix still sees it");
+  let standingOn = 0;
+  for (let seed = 1; seed <= 120; seed++) if (gathered(busyRoom(seed)).within.some((m) => m.id.includes("/h"))) standingOn++;
+  assert.ok(standingOn >= 30, `the differential's rooms put a holder under the reader's feet (${standingOn} of 120)`);
 });
 
 // ── THE DIFFERENTIAL: what the matrix shows, the door admits; what it hides, the door refuses ──
@@ -196,7 +231,7 @@ test("B3 · THE DIFFERENTIAL over busy rooms: every verb the matrix shows lands 
   let driven = 0;
   for (let seed = 1; seed <= 120; seed++) {
     const room = busyRoom(seed);
-    const p = pairsOf(room);
+    const p = pairsOf(gathered(room));
     const fold = foldUnits(room.units);
     const kinds = [...(fold.kinds.get("cy") ?? new Map()).keys()];
     const things = room.attachments.filter((a) => liveHolder(room.attachments, a.target) === "cy").map((a) => a.target);

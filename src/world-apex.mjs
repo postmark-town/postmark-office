@@ -111,7 +111,7 @@ import { validateReadArgs } from "./validate-args.mjs"; // the flat tools' own v
 // here was reachable: the resident class grants no `subscribe`, `gather` or
 // `hand-to-human`, so no resident could open these doors on any day they stood.
 import { callHoldTool, holdingsOf, liveHolder } from "./world-hold.mjs";
-import { onlyUsable, canOn } from "./usable-verbs.mjs"; // verbs show when usable (LOGOS v2, O2)
+import { onlyUsable, canOn, viewMarkIds } from "./usable-verbs.mjs"; // verbs show when usable (LOGOS v2, O2)
 // The stride a placement is stamped with — read off the record like every other
 // departure's, never a constant here (decision 008b).
 import { departurePace } from "./world-classes.mjs";
@@ -130,7 +130,7 @@ import { actorRoster, resolveHumanActor } from "./human-actor.mjs";
 // that one derivation, moved somewhere both doors can read it.
 import { humanHandFor, householdLookup } from "./households.mjs";
 import {
-  classOfInstance, markClassOf, entriesOfClass, guardsPass, heldEntries, kindOf, resolveGrants, resolveForActor,
+  classOfInstance, markClassOf, entriesOfClass, guardsPass, heldEntries, kindOf, lineageOf, resolveGrants, resolveForActor,
 } from "./world-grants.mjs";
 import { exitAllowed, fenceGroundFor, walkAllowed } from "./embodiment.mjs";
 // THE ARENA IS CLOSED (Keemin, 2026-09-30). Its five verbs are still granted
@@ -1712,9 +1712,42 @@ function affordableAt(db, action) {
   for (const row of db.prepare(ACTION_QUERY_ALL).all()) {
     if (!entriesFrom(row, db).some((e) => e.action === action)) continue;
     const node = db.prepare(NODE_AT).get(row.id);
-    where.push({ mark: row.id, class: row.class, at: { x: node?.at_x ?? null, y: node?.at_y ?? null } });
+    // who may take it, as the class declares (the Candy Bowl's refill: its maker)
+    const declared = parseJson(row.actions, null) ?? parseJson(row.affordances, []);
+    const who = Array.isArray(declared) ? declared.find((a) => String(a?.action ?? a?.subverb ?? "").trim() === action)?.who ?? null : null;
+    where.push({ mark: row.id, class: row.class, at: { x: node?.at_x ?? null, y: node?.at_y ?? null }, ...(who ? { who } : {}) });
   }
   return where;
+}
+
+/**
+ * "Not here — there", in words a resident can act on. A grant on a placed mark is somewhere to walk
+ * to. A grant on a class node the Keeping Works declares stands nowhere: it is that class's own
+ * afforded action, used at one of its instances (the playground's QA of part 2, I1: refill's hint
+ * sent the reader to "the-town/halloween-candy-bowl (null, null)", when the answer was "stand on
+ * your bowl"). "Or carry it" is said only of a class whose lineage reaches thing, since only a thing
+ * is carried, and only where the class tree can be read (`extendsOf`). Exported for the bounce's own test.
+ */
+export function elsewhereHint(elsewhere = [], { extendsOf = null } = {}) {
+  const placed = elsewhere.filter((w) => Number.isFinite(w?.at?.x) && Number.isFinite(w?.at?.y));
+  const classes = elsewhere.filter((w) => !placed.includes(w));
+  const said = [];
+  if (placed.length) said.push(`It is afforded at ${placed.map((w) => `${w.mark} (${w.at.x}, ${w.at.y})`).join("; ")} — walk there and it appears.`);
+  const an = (word) => (/^[aeiou]/i.test(word) ? "an" : "a");
+  for (const w of classes) {
+    const klass = String(w.class ?? w.mark);
+    const carried = typeof extendsOf === "function" && lineageOf(klass, extendsOf).includes("thing");
+    said.push(`It is ${an(klass)} ${klass}'s own action${w.who === "maker" ? ", for its maker" : ""}: stand within ${an(klass)} ${klass}'s footprint${carried ? ", or carry it," : ","} and it appears.`);
+  }
+  return said.join(" ");
+}
+
+/** The class tree's `extendsOf` for a bounce's words, or null when the class layer cannot be read. */
+async function classExtendsForWords() {
+  try {
+    const [{ lawSnapshot }, { classViewOf }] = await Promise.all([import("./law-snapshot.mjs"), import("./world-units.mjs")]);
+    return classViewOf(lawSnapshot()).extendsOf ?? null;
+  } catch { return null; }
 }
 
 // ── seam 2 · the terms block ────────────────────────────────────────────────
@@ -1837,7 +1870,8 @@ async function usableHere(args, key, oriented, nearby = []) {
   if (!who || sp?.stance !== "embodied" || !Number.isFinite(Number(sp?.x)) || !Number.isFinite(Number(sp?.y))) return null;
   try {
     const { usableAt } = await import("./world-kinds.mjs");
-    return await usableAt({ actor: who, here: { x: Number(sp.x), y: Number(sp.y) }, markIds: nearby.map((o) => o.id).filter(Boolean),
+    // the spine as well as the eyes: a bowl you stand on is in `within`, never in `nearby` (QA fail 4)
+    return await usableAt({ actor: who, here: { x: Number(sp.x), y: Number(sp.y) }, markIds: viewMarkIds({ within: oriented?.you?.within ?? [], nearby }),
       residents: oriented.present?.residents ?? [] });
   } catch { return null; }
 }
@@ -2681,6 +2715,9 @@ async function apexRead(args, key, ctx = {}) {
     // who, their answers within reach and the nearest out at the edge in
     // happening_here. None living, or no law at the blessed ref: nothing added.
     const creatures = await creaturesAt(at, nowMs);
+    // what your own hands hold by kind, beside the whole things (QA fail 5); unread, the kinds are left out
+    const standing = oriented.standpoint?.stance === "embodied" ? standingHandle(args, key) : null;
+    const heldKinds = standing ? await (await import("./world-kinds.mjs")).kindsHeldBy(standing) : null;
     const shaped = shapeV2({
       heard,
       deep,
@@ -2693,6 +2730,7 @@ async function apexRead(args, key, ctx = {}) {
       here,
       near,
       holdings,
+      heldKinds,
       stancesAwaiting: stances?.stances_awaiting ?? 0,
       note: oriented.note,
       frame,
@@ -2946,7 +2984,10 @@ async function apexDo(args, key, ctx = {}) {
       // looking for a place that does not exist. `affordable_at` already encoded
       // the difference and the prose ignored it; now the prose branches on it.
       const elsewhere = affordableAt(store.db, action);
-      const here = entries.map((e) => e.action);
+      // WHAT YOU CAN DO HERE IS THE BARE READ'S OWN LIST, trimmed by the same matrix (QA fail 4: the
+      // untrimmed grants offered refill to a resident who made no bowl). Unread, nothing is trimmed.
+      const usable = await usableHere(args, key, oriented, seen.objects ?? []);
+      const here = (usable ? onlyUsable(entries, usable) : entries).map((e) => e.action);
       const canDo = `From here you can: ${here.join(", ") || "(nothing yet)"}.`;
       // ⚑ A THIRD CONDITION (#2392, 2026-09-02): the act has a STANDING door.
       //
@@ -2969,7 +3010,7 @@ async function apexDo(args, key, ctx = {}) {
           { ride_doors: ride.doors, affordable_at: ride.affordable_at, ...(ride.timetable_unreadable ? { timetable_unreadable: ride.timetable_unreadable } : {}), affordable_here: here });
       return elsewhere.length
         ? bounce(422, `"${action}" is not afforded where you stand`,
-          `It is afforded at ${elsewhere.map((w) => `${w.mark} (${w.at.x}, ${w.at.y})`).join("; ")} — walk there and it appears. ${canDo}`,
+          `${elsewhereHint(elsewhere, { extendsOf: await classExtendsForWords() })} ${canDo}`,
           { affordable_at: elsewhere, affordable_here: here })
         : bounce(422, `"${action}" is afforded nowhere in the world — no place grants it`,
           `No class mark in the world affords it, so there is nowhere to walk to for it. ${canDo}`,
