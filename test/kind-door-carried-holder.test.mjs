@@ -12,8 +12,9 @@
 
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
-import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { NO_WORLD, worldClone } from "./fixture-paths.mjs";
@@ -26,6 +27,13 @@ const skip = store.skip ?? ((!WORLD && NO_WORLD) || false);
 const BAG = "sbx-cy/my-bag", MY_BOWL = "sbx-cy/my-bowl", FAR_BOWL = "sbx-ana/the-bowl", LAMP = "sbx-cy/a-lamp", STONE = "sbx-ana/a-stone", PEBBLE = "sbx-ana/a-pebble";
 // THE SET-OUT BOWLS under cy's feet (the playground's QA, PART2-MCP-QA fail 4): ana's, open, and cy's own
 const ANA_DOOR_BOWL = "sbx-ana/a-door-bowl", CY_DOOR_BOWL = "sbx-cy/a-door-bowl";
+// A RESIDENT'S OWN HOLDER (QA fail 2): a thing cy made with holder: true, published by the world's REAL fold
+const POUCH = "sbx-cy/a-small-pouch";
+// END TO END ON THE WORLD'S OWN LAW: a world that carries part 2's class tree (W1 and after). The
+// pinned pre-W1 world has no consumable class and no resident holding word to carry, so it says so.
+const KEEPING = "WORLD/marks/let-there-be-light/the-town-centre/the-keeping-works/postmark-node";
+const PART2_WORLD = Boolean(WORLD) && existsSync(join(WORLD, KEEPING, "mark/thing/consumable/mark.md"));
+const notPart2 = PART2_WORLD ? false : "the world clone predates LOGOS v2 part 2 (no the-town/consumable): its law has nothing of part 2 to drive";
 const repo = mkdtempSync(join(tmpdir(), "o2-carried-"));
 const put = (p, content) => { const f = join(repo, p); mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, content); };
 const FLAGS = ["WORLD2_PG", "WORLD2_PG_URL", "W2_PEN", "W2_GUARDS", "WORLD_CLONE", "WORLD_SINGLE_LOG", "WORLD_POOL"];
@@ -80,7 +88,19 @@ export function sourceLabel() { return "home"; }
     { rec: { id: CY_DOOR_BOWL, by: "sbx-cy", slug: "a-door-bowl", kind: "sited", class: "halloween-candy-bowl", portable: false, at: { x: 1010, y: 10 }, extent: { w: 2, h: 2 } }, body: "A carved pumpkin bowl by cy's door." }];
   put("WORLD/marks/let-there-be-light/mark.md", markRecord(root, "Synthetic world frame."));
   for (const m of ms) put(`WORLD/marks/${m.rec.id}/mark.md`, markRecord(m.rec, m.body));
-  put("WORLD/world-state.json", JSON.stringify({ tick: 0, dials: {}, marks: [root, ...ms.map((m) => m.rec)] }));
+  // THE POUCH IS PUBLISHED BY THE WORLD'S OWN FOLD (QA fail 2): its file is written, read back through the
+  // clone's parseRecord (no boolean case: holder arrives as "true"), and folded by the clone's fold, so
+  // world-state.json carries exactly what that fold publishes, as the door reads it at the box
+  const pouch = { id: POUCH, by: "sbx-cy", slug: "a-small-pouch", kind: "sited", class: "thing", holder: true, capacity: 10, at: { x: 10, y: 10 }, extent: { w: 1, h: 1 } };
+  put(`WORLD/marks/${POUCH}/mark.md`, markRecord(pouch, "A small leather pouch."));
+  let published = pouch;
+  if (PART2_WORLD) {
+    const { fold, parseRecord } = await import(pathToFileURL(join(WORLD, "tools", "marks-fold.mjs")).href);
+    const read = (id, file) => ({ ...parseRecord(readFileSync(join(repo, file), "utf8"), file), id, household: id.split("/")[0] });
+    const folded = fold({ marks: [read(root.id, "WORLD/marks/let-there-be-light/mark.md"), read(POUCH, `WORLD/marks/${POUCH}/mark.md`)], terrain: { features: [] }, stakes: [], tick: 1 });
+    published = folded.marks.find((m) => m.id === POUCH);
+  }
+  put("WORLD/world-state.json", JSON.stringify({ tick: 0, dials: {}, marks: [root, ...ms.map((m) => m.rec), published] }));
   copyFileSync(join(WORLD, "WORLD", "skeleton.json"), join(repo, "WORLD", "skeleton.json"));
   execFileSync("git", ["init", "-q", "-b", "main", repo]);
   execFileSync("git", ["-C", repo, "add", "-A", "WORLD", "tools"]);
@@ -380,4 +400,28 @@ test("QA H1 · the office side of consume is ready: with the resident class gran
     assert.equal(ate.error, undefined, JSON.stringify(ate).slice(0, 400));
     assert.deepEqual((await unitActs()).map((a) => a.action), ["units:make", "units:consume"]);
   });
+});
+
+test("QA fail 2 · end to end: a resident's own holder:true thing, published by the world's own fold, holds", { skip: skip || notPart2 }, async () => {
+  await seed();
+  await carry(POUCH);
+  const made = await leaveMarkViaOffice(repo, { kind: "pocket-comet", count: 3, to: POUCH }, KEY);
+  assert.deepEqual([made.did, made.count, made.holds.count], ["make", 3, 3], "the pouch's own holder: true, read off the published fold");
+  const took = await callHoldTool("world_hold", { from: POUCH, count: 1 }, KEY, { verb: "take" });
+  assert.equal(took.did, "take");
+  await assert.rejects(leaveMarkViaOffice(repo, { kind: "pocket-comet", count: 9, to: POUCH }, KEY), (e) => e.code === 409 && /room for 8, not 9/.test(String(e.defect)), "its own capacity, 10, governs");
+});
+
+test("QA fail 1 · end to end: the world's own resident class grants consume, and it lands through the apex", { skip: skip || notPart2 }, async () => {
+  await seed();
+  const { parseRecord } = await import(pathToFileURL(join(WORLD, "tools", "marks-fold.mjs")).href);
+  const file = join(WORLD, KEEPING, "entity/resident/mark.md");
+  const verbs = (parseRecord(readFileSync(file, "utf8"), file).actions ?? []).map((a) => a.action);
+  assert.ok(verbs.includes("take") && verbs.includes("give"), `the resident class's grants were read: ${verbs}`);
+  await leaveMarkViaOffice(repo, { kind: "pocket-comet", count: 2, to: "sbx-cy" }, KEY);
+  await withApex(async (worldApex) => {
+    const ate = await worldApex({ do: "consume", args: { kind: "pocket-comet" } }, KEY);
+    assert.equal(ate.error, undefined, `consume through the apex on the world's own grants (${verbs}): ${JSON.stringify(ate).slice(0, 300)}`);
+    assert.deepEqual((await unitActs()).map((a) => a.action), ["units:make", "units:consume"]);
+  }, { verbs });
 });
