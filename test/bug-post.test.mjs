@@ -39,6 +39,15 @@
 //      carries `catchers`, the Hall of Fame's totals over the whole record.
 //      The bug read's order is the jar's (Wright's review of #481): open by
 //      the furthest stage, the named, the legacy shelf, the set aside.
+//  13. (POS-649, a hotfix, Darko 2026-10-15) diagnosed, briefed and fixed each
+//      need a link of their own kind (a comment, issue, letter or the
+//      resident's own PR, never a founder's; a PR), and the credited resident
+//      must be its author: the GitHub account's id bound to their household,
+//      or the letter's sender's household; a founder's work credits only a
+//      founder. Any doubt refuses and writes nothing.
+//  14. (POS-649) a paid stage is re-credited as its own act, under the same
+//      author check; a founder may be the new credit (Darko 2026-10-15 19:02).
+//      GitHub is a local stub here (GITHUB_API_URL), the letters a stub table.
 //
 // ⚑ THE STORE IS A JS STUB (`acts-pen-stub.mjs`), as in quest-posts.test.mjs:
 // this proves which acts and rows the pen writes and what the reads make of
@@ -47,11 +56,19 @@
 // THE FLIPS (NOTES.md in the lane folder holds the red lines): make
 // judgeBugHand accept any handle and 1 goes red; drop the residents-index
 // check from judgeHandleField and 7 goes red; the critter's four flips are in
-// the bug-critter lane's NOTES.md.
+// the bug-critter lane's NOTES.md. POS-649's flips: drop the founder's-PR refusal
+// (bug-credit.mjs) and #3757's case goes red (it is accepted: wright's own PR
+// is a founder's work crediting a founder, so the author check alone passes
+// it); refuse every PR at diagnosed and briefed again and 13's own-PR case
+// goes red; restore the recredit's founder refusal and 14's founder case goes
+// red; skip the author
+// check and 13's household, founder and unbound cases go red; make the link
+// optional again and 13's missing-link case goes red.
 
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { createServer } from "node:http";
 import { installActsPen, uninstallActsPen, RECORD_ON } from "./acts-pen-stub.mjs";
 
 Object.assign(process.env, RECORD_ON);
@@ -70,9 +87,64 @@ const WRIGHT = { household: "starforge", handles: new Set(["wright"]) };
 const ERRANT = { household: "errant", handles: new Set(["errant"]) };
 const FINN = { household: "finn", handles: new Set(["finn"]) };
 
-const HOUSES = [{ slug: "the-harbor", ord: 1, residents: ["errant", "ada"] }];
-// The office's residents index (the door reads it from office.db; see mcp.mjs § rollOf).
-const ROLL = new Set(["wright", "keemin", "errant", "ada", "finn"]);
+// ── 13's accounts (POS-649): who wrote what on GitHub, and the houses they're bound to ──
+// the-harbor's human signs in as harbor-human; finn is a solo resident pinned
+// to finn-gh; drifter is bound to nothing; the founders' ids are their real ones.
+const GH_ACCOUNT = Object.freeze({
+  harbor: { id: 1001, login: "harbor-human" },
+  finn: { id: 1002, login: "finn-gh" },
+  drifter: { id: 1003, login: "drifter" },
+  doors: { id: 334016343, login: "commander-and-chief" },
+  wright: { id: 306351151, login: "wright-starforge" },
+  keemin: { id: 67605380, login: "keeminlee" },
+});
+// whose account a resident's own work on GitHub comes from
+const ACCOUNT_OF = { errant: "harbor", ada: "harbor", finn: "finn", kinofire: "doors", "wayward-archivist": "doors", wright: "wright", keemin: "keemin" };
+
+const HOUSES = [
+  { slug: "the-harbor", ord: 1, residents: ["errant", "ada"], accounts: [GH_ACCOUNT.harbor] },
+  { slug: "house-of-many-doors", ord: 2, residents: ["kinofire", "wayward-archivist"], accounts: [GH_ACCOUNT.doors] },
+  { slug: "starforge", ord: 3, residents: ["wright", "mari"], accounts: [GH_ACCOUNT.keemin] },
+];
+const PINS = [{ handle: "finn", login: "finn-gh", gh_id: 1002 }];
+// The office's residents index (the door reads the store's roll; see mcp.mjs § rollOf).
+const ROLL = new Set(["wright", "keemin", "errant", "ada", "finn", "kinofire", "wayward-archivist", "mari"]);
+
+// ── GitHub, stubbed: the one GET an earned advance makes (bug-credit.mjs) ────
+const GITHUB = new Map();   // API path -> { status, body }
+const github = createServer((req, res) => {
+  const hit = GITHUB.get(req.url) ?? { status: 404, body: { message: "Not Found" } };
+  res.writeHead(hit.status, { "content-type": "application/json" });
+  res.end(JSON.stringify(hit.body));
+});
+await new Promise((ok) => github.listen(0, "127.0.0.1", ok));
+const GITHUB_UP = `http://127.0.0.1:${github.address().port}`;
+process.env.GITHUB_API_URL = GITHUB_UP;
+github.unref();   // never holds the run open; closing it in an after hook ran early under --test-name-pattern
+
+let ghSeq = 5000;
+const userOf = (who) => GH_ACCOUNT[ACCOUNT_OF[who] ?? who];
+/** An issue comment by `who`'s account, served by the stub; its link. */
+function comment(who, { repo = "postmark", issue = 3500, id = ++ghSeq } = {}) {
+  GITHUB.set(`/repos/postmark-town/${repo}/issues/comments/${id}`,
+    { status: 200, body: { id, issue_url: `https://api.github.com/repos/postmark-town/${repo}/issues/${issue}`, user: userOf(who) } });
+  return `https://github.com/postmark-town/${repo}/issues/${issue}#issuecomment-${id}`;
+}
+/** A pull request by `who`'s account; its link. */
+function pull(who, { repo = "postmark-office", n = ++ghSeq } = {}) {
+  GITHUB.set(`/repos/postmark-town/${repo}/pulls/${n}`, { status: 200, body: { number: n, user: userOf(who) } });
+  return `https://github.com/postmark-town/${repo}/pull/${n}`;
+}
+/** An issue opened by `who`'s account (a pull request when `pr`, as GitHub's issues API answers one); its link. */
+function issue(who, { repo = "postmark", n = ++ghSeq, pr = false } = {}) {
+  GITHUB.set(`/repos/postmark-town/${repo}/issues/${n}`,
+    { status: 200, body: { number: n, user: userOf(who), ...(pr ? { pull_request: { url: "x" } } : {}) } });
+  return `https://github.com/postmark-town/${repo}/issues/${n}`;
+}
+
+// ── the town's letters, as the store's town index holds them ────────────────
+const LETTERS = new Map();   // id -> the letter's json
+const letter = (id, from, to = "wright") => { LETTERS.set(id, { id, from, to, title: id, body: "the plan" }); return id; };
 
 // ── the posts table, in memory, answering exactly the queries asked ─────────
 function bugTables() {
@@ -138,13 +210,24 @@ function bugTables() {
         .filter((r) => r.seq > Number(p[0]) && r.seq <= Number(p[1]) && like(p[2]).test(r.canonical));
       return { rows, rowCount: rows.length };
     }],
+    // the recredit's row lock (review-3842-578 § 3): the bug's row, FOR UPDATE
+    [/^SELECT id FROM posts WHERE id = \$1 AND class = \$2 FOR UPDATE$/i, (q, p) => {
+      const r = posts.get(p[0]);
+      const hit = r && r.class === p[1];
+      return { rows: hit ? [{ id: r.id }] : [], rowCount: hit ? 1 : 0 };
+    }],
+    [/^SELECT json FROM town_letters WHERE id = \$1$/i, (q, p) => {
+      const l = LETTERS.get(p[0]);
+      return l ? { rows: [{ json: JSON.stringify(l) }], rowCount: 1 } : { rows: [], rowCount: 0 };
+    }],
   ];
   return { posts, also, ledger };
 }
 
 function setup() {
   const t = bugTables();
-  const pen = installActsPen({ households: HOUSES, also: t.also });
+  process.env.GITHUB_API_URL = GITHUB_UP;
+  const pen = installActsPen({ households: HOUSES, pins: PINS, also: t.also });
   return { ...t, pen };
 }
 test.afterEach(() => uninstallActsPen());
@@ -276,17 +359,19 @@ test("5 · the advance's law: forward only, a skip pays nothing, credit from rep
   await refusedWith(advanceAtTown({ post: ID, to: "wontfix" }, WRIGHT, { now: NOW, roll: ROLL }), 422, /not a stage a bug advances to/);
 
   // a jump: reported → diagnosed pays diagnosed only, and says what it skipped
-  const jump = await advanceAtTown({ post: ID, to: "diagnosed", credit: "finn" }, WRIGHT, { now: NOW, roll: ROLL });
+  const jump = await advanceAtTown({ post: ID, to: "diagnosed", credit: "finn", link: comment("finn") }, WRIGHT, { now: NOW, roll: ROLL });
   assert.equal(jump.stamps, 5);
   assert.match(jump.receipt, /skipped confirmed, reproduced, and a skipped stage pays nothing/);
   await refusedWith(advanceAtTown({ post: ID, to: "reproduced", credit: "finn" }, WRIGHT, { now: NOW, roll: ROLL }), 409, /already stands diagnosed/);
   await refusedWith(advanceAtTown({ post: ID, to: "not-a-bug" }, WRIGHT, { now: NOW, roll: ROLL }), 409, /leaves as not-a-bug only from reported or confirmed/);
 
-  const brief = await advanceAtTown({ post: ID, to: "briefed", credit: "finn", grade: "heavy" }, WRIGHT, { now: NOW, roll: ROLL });
+  const brief = await advanceAtTown({ post: ID, to: "briefed", credit: "finn", grade: "heavy", link: comment("finn") }, WRIGHT, { now: NOW, roll: ROLL });
   assert.equal(brief.stamps, 5, "a heavy revision pays 5");
-  const fix = await advanceAtTown({ post: ID, to: "fixed", credit: "finn", size: "M", critter: "Hinge Nibbler" }, WRIGHT, { now: NOW, roll: ROLL });
+  const fix = await advanceAtTown({ post: ID, to: "fixed", credit: "finn", size: "M", critter: "Hinge Nibbler", link: pull("finn") }, WRIGHT, { now: NOW, roll: ROLL });
   assert.equal(fix.stamps, 25);
-  assert.deepEqual(posts.get(ID).fields, { grade: "heavy", size: "M", critter: "Hinge Nibbler", named_by: "finn" });
+  const { links, ...rest } = posts.get(ID).fields;
+  assert.deepEqual(rest, { grade: "heavy", size: "M", critter: "Hinge Nibbler", named_by: "finn" });
+  assert.deepEqual(Object.keys(links), ["diagnosed", "briefed", "fixed"], "each earned stage keeps its link");
   const ship = await advanceAtTown({ post: ID, to: "shipped" }, WRIGHT, { now: NOW, roll: ROLL });
   assert.equal(ship.stamps, 0);
   assert.match(ship.receipt, /shipped pays nothing/);
@@ -340,7 +425,8 @@ test("6 · the posts read answers class bug with its finished states; the rebuil
   await postAtTown({ ...BUG, for: "ada" }, WRIGHT, { now: NOW, roll: ROLL });
   await advanceAtTown({ post: ID, to: "confirmed" }, WRIGHT, { now: NOW, roll: ROLL });
   await amendAtTown({ post: ID, steps: "Twice." }, WRIGHT, { now: NOW, roll: ROLL });
-  await advanceAtTown({ post: ID, to: "fixed", credit: "finn", size: "S", critter: "Stickle" }, WRIGHT, { now: NOW, roll: ROLL });
+  const FIXED_BY_FINN = pull("finn");
+  await advanceAtTown({ post: ID, to: "fixed", credit: "finn", size: "S", critter: "Stickle", link: FIXED_BY_FINN }, WRIGHT, { now: NOW, roll: ROLL });
 
   const r = await postsAtOffice({ class: "bug" }, { now: NOW, roll: ROLL });
   assert.deepEqual(r.finished, [...BUG_FINISHED]);
@@ -348,7 +434,7 @@ test("6 · the posts read answers class bug with its finished states; the rebuil
   assert.equal(r.total, 2);
   const one = r.posts.find((p) => p.id === ID);
   assert.deepEqual([one.class, one.state, one.author, one.latest.act], ["bug", "fixed", "errant", "advance"]);
-  assert.deepEqual(one.fields, { steps: "Twice.", size: "S", critter: "Stickle", named_by: "finn" });
+  assert.deepEqual(one.fields, { steps: "Twice.", size: "S", critter: "Stickle", named_by: "finn", links: { fixed: FIXED_BY_FINN } });
   const single = await postsAtOffice({ class: "bug", post: "ada/the-door-sticks" }, { now: NOW, roll: ROLL });
   assert.equal(single.post.state, "reported");
 
@@ -385,22 +471,22 @@ test("7 · for and credit name a resident in the office's residents index, or ar
 /** Walk the door-sticks bug up to briefed, crediting finn; returns nothing. */
 async function toBriefed() {
   await postAtTown(BUG, ERRANT, { now: NOW, roll: ROLL });
-  await advanceAtTown({ post: ID, to: "diagnosed", credit: "finn" }, WRIGHT, { now: NOW, roll: ROLL });
-  await advanceAtTown({ post: ID, to: "briefed", credit: "finn", grade: "light" }, WRIGHT, { now: NOW, roll: ROLL });
+  await advanceAtTown({ post: ID, to: "diagnosed", credit: "finn", link: comment("finn") }, WRIGHT, { now: NOW, roll: ROLL });
+  await advanceAtTown({ post: ID, to: "briefed", credit: "finn", grade: "light", link: comment("finn") }, WRIGHT, { now: NOW, roll: ROLL });
 }
 
 test("8 · an advance to fixed without a critter is refused by name, says who names it and how, and writes nothing", async () => {
   const { pen, posts } = setup();
   await toBriefed();
   const before = pen.rows().length;
-  await refusedWith(advanceAtTown({ post: ID, to: "fixed", credit: "finn", size: "M" }, WRIGHT, { now: NOW, roll: ROLL }), 422,
+  await refusedWith(advanceAtTown({ post: ID, to: "fixed", credit: "finn", size: "M", link: pull("finn") }, WRIGHT, { now: NOW, roll: ROLL }), 422,
     /fixed needs a critter: the resident who fixes a bug names it .*critter: "<name>", 1–40 characters on one line — the fixer chooses it and tells the town's hands \(wright, keemin, bugcatcher\) in the PR or the issue/);
   for (const bad of ["", "   ", 7, "Hinge\nNibbler", "x".repeat(41)])
     await refusedWith(advanceAtTown({ post: ID, to: "fixed", credit: "finn", size: "M", critter: bad }, WRIGHT, { now: NOW, roll: ROLL }), 422, /critter is/);
   assert.equal(pen.rows().length, before, "a refused fixed wrote an act");
   assert.equal(posts.get(ID).state, "briefed");
   // 40 characters is a name; the count is characters, not UTF-16 units
-  const ok = await advanceAtTown({ post: ID, to: "fixed", credit: "finn", size: "M", critter: "🐛".repeat(40) }, WRIGHT, { now: NOW, roll: ROLL });
+  const ok = await advanceAtTown({ post: ID, to: "fixed", credit: "finn", size: "M", critter: "🐛".repeat(40), link: pull("finn") }, WRIGHT, { now: NOW, roll: ROLL });
   assert.equal(ok.critter, "🐛".repeat(40));
 });
 
@@ -416,8 +502,8 @@ test("8 · critter on any stage but fixed is refused by name", async () => {
   await refusedWith(advanceAtTown({ post: ID, to: "not-a-bug", critter: "Nib" }, WRIGHT, { now: NOW, roll: ROLL }), 422, WHY);
   await refusedWith(advanceAtTown({ post: "finn/the-door-sticks-again", to: "duplicate", of: ID, critter: "Nib" }, WRIGHT, { now: NOW, roll: ROLL }), 422, WHY);
   assert.equal(pen.rows().length, before);
-  await advanceAtTown({ post: ID, to: "diagnosed", credit: "finn" }, WRIGHT, { now: NOW, roll: ROLL });
-  await advanceAtTown({ post: ID, to: "fixed", credit: "finn", size: "S", critter: "Nib" }, WRIGHT, { now: NOW, roll: ROLL });
+  await advanceAtTown({ post: ID, to: "diagnosed", credit: "finn", link: comment("finn") }, WRIGHT, { now: NOW, roll: ROLL });
+  await advanceAtTown({ post: ID, to: "fixed", credit: "finn", size: "S", critter: "Nib", link: pull("finn") }, WRIGHT, { now: NOW, roll: ROLL });
   await refusedWith(advanceAtTown({ post: ID, to: "shipped", critter: "Nib" }, WRIGHT, { now: NOW, roll: ROLL }), 422, WHY);
   assert.equal(posts.get(ID).state, "fixed");
 });
@@ -425,11 +511,12 @@ test("8 · critter on any stage but fixed is refused by name", async () => {
 test("8 · a fixed bug's posts read carries critter and named_by (the fixer's credit), and the rebuild folds them", async () => {
   const { pen, posts } = setup();
   await toBriefed();
-  const fix = await advanceAtTown({ post: ID, to: "fixed", credit: "ada", size: "L", critter: "  Hinge Nibbler  " }, WRIGHT, { now: NOW, roll: ROLL });
+  const ADA_PR = pull("ada");
+  const fix = await advanceAtTown({ post: ID, to: "fixed", credit: "ada", size: "L", critter: "  Hinge Nibbler  ", link: ADA_PR }, WRIGHT, { now: NOW, roll: ROLL });
   assert.deepEqual([fix.critter, fix.credit, fix.stamps], ["Hinge Nibbler", "ada", 50]);
-  assert.match(fix.receipt, /; its critter is "Hinge Nibbler", named by ada$/);
+  assert.ok(fix.receipt.endsWith(`; its critter is "Hinge Nibbler", named by ada; fixed points at ${ADA_PR}`), fix.receipt);
   assert.deepEqual(JSON.parse(pen.rows().at(-1).payload),
-    { post: ID, from: "briefed", to: "fixed", credit: "ada", fields: { size: "L", critter: "Hinge Nibbler", named_by: "ada" }, hand: "wright" });
+    { post: ID, from: "briefed", to: "fixed", credit: "ada", fields: { size: "L", critter: "Hinge Nibbler", named_by: "ada", links: { ...posts.get(ID).fields.links, fixed: ADA_PR } }, hand: "wright" });
   assert.deepEqual([posts.get(ID).fields.critter, posts.get(ID).fields.named_by], ["Hinge Nibbler", "ada"]);
 
   const one = (await postsAtOffice({ class: "bug", post: ID }, { now: NOW, roll: ROLL })).post;
@@ -459,7 +546,7 @@ test("8 · a name with markup is stored and returned as plain text, exactly as s
   await toBriefed();
   const NAME = `<b>Bitey</b> & <img src=x onerror="1">`;
   assert.ok([...NAME].length <= 40);
-  const fix = await advanceAtTown({ post: ID, to: "fixed", credit: "finn", size: "M", critter: NAME }, WRIGHT, { now: NOW, roll: ROLL });
+  const fix = await advanceAtTown({ post: ID, to: "fixed", credit: "finn", size: "M", critter: NAME, link: pull("finn") }, WRIGHT, { now: NOW, roll: ROLL });
   assert.equal(fix.critter, NAME);
   assert.equal(JSON.parse(pen.rows().at(-1).payload).fields.critter, NAME, "the act keeps the characters, not an escaped or stripped copy");
   assert.equal(posts.get(ID).fields.critter, NAME);
@@ -478,7 +565,7 @@ const ADA = { household: "the-harbor", handles: new Set(["ada"]) };
 
 async function toShipped() {
   await toBriefed();
-  await advanceAtTown({ post: ID, to: "fixed", credit: "ada", size: "M", critter: "Hinge Nibbler" }, WRIGHT, { now: NOW, roll: ROLL });
+  await advanceAtTown({ post: ID, to: "fixed", credit: "ada", size: "M", critter: "Hinge Nibbler", link: pull("ada") }, WRIGHT, { now: NOW, roll: ROLL });
   await advanceAtTown({ post: ID, to: "shipped" }, WRIGHT, { now: NOW, roll: ROLL });
 }
 
@@ -517,7 +604,7 @@ test("9 · the reveal: a hand sets Iris's three candidates, the fixer picks one,
 test("9 · the reveal's refusals each write nothing: not shipped, not a hand, not three media URLs, no candidates, not the fixer, a pick out of range, both at once, and after the pick", async () => {
   const { pen, posts } = setup();
   await toBriefed();
-  await advanceAtTown({ post: ID, to: "fixed", credit: "ada", size: "M", critter: "Hinge Nibbler" }, WRIGHT, { now: NOW, roll: ROLL });
+  await advanceAtTown({ post: ID, to: "fixed", credit: "ada", size: "M", critter: "Hinge Nibbler", link: pull("ada") }, WRIGHT, { now: NOW, roll: ROLL });
   const refusedNothingWritten = async (p, code, re) => {
     const n = pen.rows().length;
     const had = JSON.stringify(posts.get(ID));
@@ -552,9 +639,11 @@ test("9 · the reveal's refusals each write nothing: not shipped, not a hand, no
 test("10 · an advance may carry link, kept per stage in fields.links; the posts read and the rebuild carry them", async () => {
   const { pen, posts } = setup();
   await postAtTown({ ...BUG, issue: "https://github.com/postmark-town/postmark/issues/3500" }, ERRANT, { now: NOW, roll: ROLL });
-  const CAUSE = "https://github.com/postmark-town/postmark/issues/3500#issuecomment-111";
-  const BRIEF = "https://github.com/postmark-town/postmark/issues/3500#issuecomment-222";
-  const PR = "https://github.com/postmark-town/postmark-office/pull/410";
+  const CAUSE = comment("finn", { id: 111 });
+  const BRIEF = comment("finn", { id: 222 });
+  const PR = pull("ada", { n: 410 });
+  assert.deepEqual([CAUSE, BRIEF, PR], ["https://github.com/postmark-town/postmark/issues/3500#issuecomment-111",
+    "https://github.com/postmark-town/postmark/issues/3500#issuecomment-222", "https://github.com/postmark-town/postmark-office/pull/410"]);
   const TAG = "https://github.com/postmark-town/postmark-office/releases/tag/release/2026-w42";
   const d = await advanceAtTown({ post: ID, to: "diagnosed", credit: "finn", link: `  ${CAUSE}  ` }, WRIGHT, { now: NOW, roll: ROLL });
   assert.equal(d.link, CAUSE);
@@ -596,7 +685,7 @@ test("10 · a link off the town's repos, empty, too long, or not text is refused
 const { stagePaidOf } = await import("../src/bugs.mjs");
 const { NO_CHAIN } = await import("../src/town-posts.mjs");
 const stageLine = (handle, n, post, stage) => `- 2026-10-09 · MINT → ${handle} · ${n} · for: post:${post}/${stage} · by: the-town`;
-const FIX_PR = "https://github.com/postmark-town/postmark-office/pull/462";
+const FIX_PR = pull("errant", { n: 462 });
 
 /** A bug put up for ada by wright's hand, then confirmed, reproduced by finn, and fixed by errant with a critter. */
 async function throughFixed() {
@@ -732,8 +821,8 @@ test("12 · the bug read walks the jar's order across a page cut: open by the fu
   // oldest act first, so each later act is newer
   await post("Reported, older", ERRANT);
   await post("Confirmed", FINN); await go("Confirmed", "confirmed");
-  await post("Fixed, named", ERRANT); await go("Fixed, named", "fixed", { credit: "finn", size: "S", critter: "Stickle" });
-  await post("Shipped, named", FINN); await go("Shipped, named", "fixed", { credit: "errant", size: "S", critter: "Quill" }); await go("Shipped, named", "shipped");
+  await post("Fixed, named", ERRANT); await go("Fixed, named", "fixed", { credit: "finn", size: "S", critter: "Stickle", link: pull("finn") });
+  await post("Shipped, named", FINN); await go("Shipped, named", "fixed", { credit: "errant", size: "S", critter: "Quill", link: pull("errant") }); await go("Shipped, named", "shipped");
   await post("The legacy fix, older", ERRANT); await go("The legacy fix, older", "shipped");
   await post("Not one", FINN); await go("Not one", "not-a-bug");
   await postAtTown({ class: "bug", title: "Reported, newer", body: "Reported, newer, as it happened.", for: "ada" }, WRIGHT, at);
@@ -744,4 +833,363 @@ test("12 · the bug read walks the jar's order across a page cut: open by the fu
   const pages = [];
   for (let offset = 0; offset < all.total; offset += 3) pages.push((await postsAtOffice({ class: "bug", limit: 3, offset }, at)).posts.map((p) => p.title));
   assert.deepEqual(pages, [want.slice(0, 3), want.slice(3, 6), want.slice(6)], "the pages cut the jar's order somewhere else");
+});
+
+// ── 13 · an earned stage's credit is its linked work's author (POS-649, a hotfix, Darko 2026-10-15) ──
+
+const KINO_BUG = "kinofire/false-sweep-warning";
+const WORLD_208 = pull("wright", { repo: "postmark-world", n: 208 });   // wright's own PR, the safety half
+const KINO_PLAN = letter("kinofire-2026-10-12-to-wright-the-sweep-plan", "kinofire");
+const KINO = { household: "house-of-many-doors", handles: new Set(["kinofire"]) };
+
+/** Kino's bug, confirmed, ready for the earned stages; `pen` and `posts` for the "writes nothing" checks. */
+async function kinoBug() {
+  const t = setup();
+  await postAtTown({ class: "bug", title: "False sweep warning", body: "The sweep warns about a mark that is fine." }, KINO, { now: NOW, roll: ROLL });
+  await advanceAtTown({ post: KINO_BUG, to: "confirmed" }, WRIGHT, { now: NOW, roll: ROLL });
+  return t;
+}
+/** Refused with `code` and `re`, and nothing written: no act, the post unchanged. */
+async function refusedNothing({ pen, posts }, p, code, re) {
+  const n = pen.rows().length;
+  const had = JSON.stringify(posts.get(KINO_BUG));
+  await refusedWith(p, code, re);
+  assert.equal(pen.rows().length, n, "a refused advance wrote an act");
+  assert.equal(JSON.stringify(posts.get(KINO_BUG)), had, "a refused advance changed the post");
+}
+const adv = (fields) => advanceAtTown({ post: KINO_BUG, ...fields }, WRIGHT, { now: NOW, roll: ROLL });
+const esc = (s) => s.replace(/[.#/?()]/g, "\\$&");
+
+test("13 · #3757's exact case: briefed, credit wright, linking world#208 (a founder's PR) is refused, and teaches what earns briefed", async () => {
+  const t = await kinoBug();
+  await refusedNothing(t, adv({ to: "briefed", grade: "light", credit: "wright", link: WORLD_208 }), 422,
+    /^https:\/\/github\.com\/postmark-town\/postmark-world\/pull\/208 is a founder's pull request \(GitHub account wright-starforge \(id 306351151\)\), and a founder's pull request never earns briefed briefed is earned by the brief: link the issue comment, the issue, the letter, or the resident's own pull request that holds it; its author is who's credited, and a founder's pull request never earns it — the founders' own builds are paid at fixed/);
+});
+
+test("13 · (RULED, Darko 2026-10-15 19:02 EDT; review-649 § 2) a resident's own PR earns diagnosed and briefed; a founder's PR never does, for anyone, linked as a PR or as the issue GitHub answers as one", async () => {
+  const t = await kinoBug();
+  // a founder's PR, at diagnosed or briefed, for a founder or a resident
+  await refusedNothing(t, adv({ to: "diagnosed", credit: "kinofire", link: pull("wright") }), 422, /is a founder's pull request \(GitHub account wright-starforge \(id 306351151\)\), and a founder's pull request never earns diagnosed/);
+  await refusedNothing(t, adv({ to: "diagnosed", credit: "mari", link: pull("keemin") }), 422, /is a founder's pull request \(GitHub account keeminlee \(id 67605380\)\), and a founder's pull request never earns diagnosed/);
+  await refusedNothing(t, adv({ to: "diagnosed", credit: "wright", link: issue("wright", { pr: true }) }), 422, /is a founder's pull request .* never earns diagnosed/);
+  // another household's PR is still another household's work
+  await refusedNothing(t, adv({ to: "diagnosed", credit: "kinofire", link: pull("errant") }), 422, /of hh:the-harbor, and kinofire stands in hh:house-of-many-doors/);
+  // the resident's own PR, and the housemate's
+  assert.equal((await adv({ to: "diagnosed", credit: "kinofire", link: pull("kinofire") })).credit, "kinofire");
+  assert.equal((await adv({ to: "briefed", grade: "light", credit: "wayward-archivist", link: issue("kinofire", { pr: true }) })).credit, "wayward-archivist");
+  // and a founder's own PR still earns fixed for a founder (Darko 10-07)
+  assert.equal((await adv({ to: "fixed", size: "S", critter: "Sweepling", credit: "wright", link: pull("wright") })).credit, "wright");
+});
+
+test("13 · a comment or issue link is on the bug's own issue when the bug names one; a PR or a letter is not held to it", async () => {
+  const t = setup();
+  await postAtTown({ class: "bug", title: "False sweep warning", body: "The sweep warns about a mark that is fine.", issue: "https://github.com/postmark-town/postmark/issues/3500" }, KINO, { now: NOW, roll: ROLL });
+  await advanceAtTown({ post: KINO_BUG, to: "confirmed" }, WRIGHT, { now: NOW, roll: ROLL });
+  const elsewhere = comment("kinofire", { issue: 3499 });
+  await refusedNothing(t, adv({ to: "diagnosed", credit: "kinofire", link: elsewhere }), 422,
+    new RegExp(`^${esc(elsewhere)} is on postmark#3499, and "kinofire/false-sweep-warning" is postmark#3500 diagnosed is earned by the cause: .* — link the work on this bug's own issue, https://github\\.com/postmark-town/postmark/issues/3500$`));
+  await refusedNothing(t, adv({ to: "diagnosed", credit: "kinofire", link: issue("kinofire", { n: 3498 }) }), 422, /is on postmark#3498, and "kinofire\/false-sweep-warning" is postmark#3500/);
+  assert.equal((await adv({ to: "diagnosed", credit: "kinofire", link: comment("kinofire", { issue: 3500 }) })).credit, "kinofire");
+  assert.equal((await adv({ to: "briefed", grade: "light", credit: "kinofire", link: KINO_PLAN })).credit, "kinofire", "a letter is not held to the issue");
+});
+
+test("13 · briefed with Kino's letter: credit kinofire (or a housemate) passes; credit wright, or another household, is refused; no such letter is refused", async () => {
+  const t = await kinoBug();
+  const brief = { to: "briefed", grade: "light" };
+  await refusedNothing(t, adv({ ...brief, credit: "wright", link: KINO_PLAN }), 422,
+    /^only a founder's own letter earns wright a stage, and letter "kinofire-2026-10-12-to-wright-the-sweep-plan" is from kinofire briefed is earned by the brief/);
+  await refusedNothing(t, adv({ ...brief, credit: "finn", link: KINO_PLAN }), 422,
+    /^letter "kinofire-2026-10-12-to-wright-the-sweep-plan" is from kinofire, of hh:house-of-many-doors, and finn stands in solo:finn/);
+  await refusedNothing(t, adv({ ...brief, credit: "kinofire", link: "kinofire-2026-10-12-to-wright-no-such-letter" }), 422,
+    /^no letter "kinofire-2026-10-12-to-wright-no-such-letter" in the town's mail/);
+  const ok = await adv({ ...brief, credit: "kinofire", link: KINO_PLAN });
+  assert.deepEqual([ok.stage, ok.credit, ok.stamps, ok.link], ["briefed", "kinofire", 10, KINO_PLAN]);
+  assert.equal(t.posts.get(KINO_BUG).fields.links.briefed, KINO_PLAN);
+  // a resident of the sender's household stands in the sender's house
+  await kinoBug();
+  assert.equal((await adv({ ...brief, credit: "wayward-archivist", link: KINO_PLAN })).credit, "wayward-archivist");
+});
+
+test("13 · diagnosed: a comment by another household is refused; the right household passes; an issue counts by its opener", async () => {
+  const t = await kinoBug();
+  const byHarbor = comment("errant");
+  await refusedNothing(t, adv({ to: "diagnosed", credit: "finn", link: byHarbor }), 422,
+    new RegExp(`^${esc(byHarbor)} was written by GitHub account harbor-human \\(id 1001\\), of hh:the-harbor, and finn stands in solo:finn diagnosed is earned by the cause`));
+  const ok = await adv({ to: "diagnosed", credit: "ada", link: byHarbor });
+  assert.deepEqual([ok.credit, ok.stamps], ["ada", 5]);
+  // the issue itself: its opener wrote it, and a solo resident's pin binds their account
+  await kinoBug();
+  assert.equal((await adv({ to: "diagnosed", credit: "finn", link: issue("finn") })).credit, "finn");
+});
+
+test("13 · fixed: an issue-comment link is refused; a founder's PR crediting a resident is refused (a housemate too); a resident's PR crediting their own household passes", async () => {
+  const t = await kinoBug();
+  const fix = { to: "fixed", size: "S", critter: "Sweepling" };
+  await refusedNothing(t, adv({ ...fix, credit: "kinofire", link: comment("kinofire") }), 422,
+    /^fixed is earned by a pull request, and this link is an issue comment fixed is earned by the fix: link its pull request; its author is who's credited/);
+  await refusedNothing(t, adv({ ...fix, credit: "kinofire", link: pull("wright") }), 422,
+    /was written by a founder's account, GitHub account wright-starforge \(id 306351151\), and a founder's work credits only wright or keemin/);
+  // keeminlee's account is bound to starforge, and mari stands there: the founder rule still refuses
+  await refusedNothing(t, adv({ ...fix, credit: "mari", link: pull("keemin") }), 422,
+    /was written by a founder's account, GitHub account keeminlee \(id 67605380\), and a founder's work credits only wright or keemin/);
+  // and only a founder's account earns a founder a stage
+  await refusedNothing(t, adv({ ...fix, credit: "wright", link: pull("kinofire") }), 422,
+    /^only a founder's account earns wright a stage, and .* was written by GitHub account commander-and-chief \(id 334016343\)/);
+  const ok = await adv({ ...fix, credit: "wayward-archivist", link: pull("kinofire") });
+  assert.deepEqual([ok.credit, ok.stamps], ["wayward-archivist", 10]);
+  // a founder's own PR crediting a founder passes (Darko 10-07: fixed on our own builds is ours)
+  await kinoBug();
+  assert.equal((await adv({ ...fix, credit: "wright", link: pull("wright") })).credit, "wright");
+});
+
+test("13 · a missing link is refused for each of diagnosed, briefed and fixed, saying what earns the stage", async () => {
+  const t = await kinoBug();
+  for (const [fields, earned] of [
+    [{ to: "diagnosed", credit: "kinofire" }, /^diagnosed needs a link to the work that earned it diagnosed is earned by the cause/],
+    [{ to: "briefed", credit: "kinofire", grade: "light" }, /^briefed needs a link to the work that earned it briefed is earned by the brief/],
+    [{ to: "fixed", credit: "kinofire", size: "S", critter: "Sweepling" }, /^fixed needs a link to the work that earned it fixed is earned by the fix: link its pull request/],
+  ]) {
+    await refusedNothing(t, adv(fields), 422, earned);
+    await refusedNothing(t, adv({ ...fields, link: "   " }), 422, earned);
+  }
+  // a link the office cannot read as any kind is refused too
+  await refusedNothing(t, adv({ to: "diagnosed", credit: "kinofire", link: "https://github.com/postmark-town/postmark/discussions/7" }), 422,
+    /^diagnosed's link is not one the office can read/);
+  // the stages the hotfix leaves alone still take no link
+  assert.equal((await adv({ to: "reproduced", credit: "finn" })).credit, "finn");
+});
+
+test("13 · no pass on doubt: an unbound author, a link GitHub doesn't have, a comment off its issue, an issue that is a PR, GitHub erroring or down", async () => {
+  const t = await kinoBug();
+  const d = { to: "diagnosed", credit: "kinofire" };
+  await refusedNothing(t, adv({ ...d, link: comment("drifter") }), 422, /was written by GitHub account drifter \(id 1003\), which is bound to no household here/);
+  await refusedNothing(t, adv({ ...d, link: "https://github.com/postmark-town/postmark/issues/3500#issuecomment-404404" }), 422, /is not on GitHub/);
+  const onOther = comment("kinofire", { issue: 3499 }).replace("/issues/3499#", "/issues/3500#");
+  await refusedNothing(t, adv({ ...d, link: onOther }), 422, /^comment \d+ is not on postmark#3500/);
+  await refusedNothing(t, adv({ to: "diagnosed", credit: "wright", link: issue("wright", { pr: true }) }), 422, /is a founder's pull request .* never earns diagnosed/);
+  // GitHub answering 500
+  const id = ++ghSeq;
+  const broken = comment("kinofire", { id });
+  GITHUB.set(`/repos/postmark-town/postmark/issues/comments/${id}`, { status: 500, body: {} });
+  await refusedNothing(t, adv({ ...d, link: broken }), 503, /^GitHub could not be read, so the office cannot prove who wrote .* never pays a stage on doubt/);
+  // GitHub not answering at all: a port nobody holds
+  const gone = createServer();
+  await new Promise((ok) => gone.listen(0, "127.0.0.1", ok));
+  const port = gone.address().port;
+  await new Promise((ok) => gone.close(ok));
+  process.env.GITHUB_API_URL = `http://127.0.0.1:${port}`;
+  try {
+    await refusedNothing(t, adv({ ...d, link: comment("kinofire") }), 503, /^GitHub could not be read/);
+  } finally { process.env.GITHUB_API_URL = GITHUB_UP; }
+  assert.equal((await adv({ ...d, link: comment("kinofire") })).credit, "kinofire", "GitHub back, the same kind of advance passes");
+});
+
+// ── 14 · the recredit: a paid stage, re-credited to the work's author (POS-649, Darko 2026-10-15 12:40 and 12:51) ──
+
+const { resetChainMemo } = await import("../src/post-history.mjs");
+const NOTE = "the brief was Kino's letter, not wright's work (#3757)";
+const BUGCATCHER = { household: "starforge", handles: new Set(["bugcatcher"]) };
+
+/** Kino's bug with briefed credited to wright (wright's own comment, which the advance's law passes) and paid 10 on the chain. */
+async function paidToWright() {
+  const t = await kinoBug();
+  resetChainMemo();
+  const own = comment("wright");
+  await adv({ to: "briefed", grade: "light", credit: "wright", link: own });
+  t.ledger.lines = [stageLine("wright", 10, KINO_BUG, "briefed")];
+  return { ...t, own };
+}
+const rc = (fields, key = WRIGHT) => advanceAtTown({ post: KINO_BUG, to: "briefed", recredit: true, note: NOTE, ...fields }, key, { now: NOW, roll: ROLL });
+
+test("14 · #3757: briefed re-credited to kinofire with Kino's letter is its own act; the stage and the old advance stand; the history and the Hall move the credit", async () => {
+  const t = await paidToWright();
+  const before = JSON.stringify(t.posts.get(KINO_BUG));
+  const r = await rc({ credit: "kinofire", link: KINO_PLAN });
+  assert.deepEqual([r.stage, r.recredit, r.was, r.credit, r.stamps, r.link], ["briefed", true, "wright", "kinofire", 10, KINO_PLAN]);
+  assert.match(r.receipt, /^re-credited: kinofire\/false-sweep-warning's briefed from wright to kinofire by wright's hand; .*The reviewed stage pass reads the town's ledger: it pays kinofire what briefed's line paid wright \(10 stamps, by the office's chain\) \(post:kinofire\/false-sweep-warning\/briefed-recredit\) and burns that mint, together or not at all; this act moves no stamps/);
+  const act = t.pen.rows().at(-1);
+  assert.deepEqual([act.class, act.action, act.actor, act.object], ["bug", "recredit", "wright", KINO_BUG]);
+  assert.deepEqual(JSON.parse(act.payload), { post: KINO_BUG, to: "briefed", was: "wright", credit: "kinofire", link: KINO_PLAN, note: NOTE, paid: 10, hand: "wright" });
+  assert.equal(JSON.stringify(t.posts.get(KINO_BUG)), before, "a recredit moved the stage or changed the post's row");
+  // the rebuild still folds the acts into exactly the rows the pen wrote
+  const out = await dryRun(t.pen);
+  assert.equal(out.equal, true, out.drift.join("\n"));
+
+  // the pass has written its two lines: the history keeps both rows, and says where the credit went
+  resetChainMemo();
+  t.ledger.lines = [...t.ledger.lines, `- 2026-10-15 · MINT → kinofire · 10 · for: post:${KINO_BUG}/briefed-recredit · by: the-town`,
+    `- 2026-10-15 · wright → BURN · 10 · for: correction:${"A".repeat(86)} · by: wright`];
+  const one = (await postsAtOffice({ class: "bug", post: KINO_BUG }, { now: NOW, roll: ROLL })).post;
+  assert.deepEqual(one.history.filter((h) => h.stage === "briefed").map(({ at, ...h }) => h), [
+    { stage: "briefed", hand: "wright", credit: "wright", link: t.own, stamps_paid: 10, recredited_to: "kinofire" },
+    { stage: "briefed", recredit: true, hand: "wright", credit: "kinofire", was: "wright", link: KINO_PLAN, note: NOTE, stamps_paid: 10 },
+  ]);
+  const { catchers } = await postsAtOffice({ class: "bug" }, { now: NOW, roll: ROLL });
+  assert.deepEqual(catchers.find((c) => c.handle === "kinofire"), { handle: "kinofire", stamps: 10, bugs: 1 });
+  assert.equal(catchers.find((c) => c.handle === "wright"), undefined, "the Hall still credits wright with a stage the town burned");
+});
+
+test("14 · a recredit to someone who did not write the linked work is refused, by household and by the founder rule, and writes nothing", async () => {
+  const t = await paidToWright();
+  await refusedNothing(t, rc({ credit: "finn", link: KINO_PLAN }), 422,
+    /^letter "kinofire-2026-10-12-to-wright-the-sweep-plan" is from kinofire, of hh:house-of-many-doors, and finn stands in solo:finn/);
+  await refusedNothing(t, rc({ credit: "kinofire", link: comment("errant") }), 422, /was written by GitHub account harbor-human \(id 1001\), of hh:the-harbor, and kinofire stands in hh:house-of-many-doors/);
+  await refusedNothing(t, rc({ credit: "mari", link: comment("keemin") }), 422, /a founder's work credits only wright or keemin/);
+  await refusedNothing(t, rc({ credit: "mari", link: pull("keemin") }), 422, /is a founder's pull request \(GitHub account keeminlee \(id 67605380\)\), and a founder's pull request never earns briefed/);
+  await refusedNothing(t, rc({ credit: "kinofire" }), 422, /^briefed needs a link to the work that earned it/);
+});
+
+test("14 · a second recredit of the same stage is refused, whoever it names", async () => {
+  const t = await paidToWright();
+  await rc({ credit: "kinofire", link: KINO_PLAN });
+  await refusedNothing(t, rc({ credit: "wayward-archivist", link: KINO_PLAN }), 409, /^"kinofire\/false-sweep-warning"'s briefed was already re-credited, to kinofire one recredit per post and stage, ever/);
+});
+
+test("14 · a stage never passed and a skipped stage are refused, and say what to do instead", async () => {
+  const t = await paidToWright();
+  await refusedNothing(t, advanceAtTown({ post: KINO_BUG, to: "fixed", recredit: true, credit: "kinofire", link: pull("kinofire"), note: NOTE }, WRIGHT, { now: NOW, roll: ROLL }), 409,
+    /^"kinofire\/false-sweep-warning" never passed fixed it stands briefed; advance it to fixed, crediting the right resident, rather than re-crediting/);
+  await refusedNothing(t, advanceAtTown({ post: KINO_BUG, to: "diagnosed", recredit: true, credit: "kinofire", link: KINO_PLAN, note: NOTE }, WRIGHT, { now: NOW, roll: ROLL }), 409,
+    /never passed diagnosed diagnosed was skipped, and a skipped stage paid no one: there is nothing to re-credit/);
+});
+
+test("14 · (review-3842-578 § 1) the door never gates on the store's stamp chain: with no chain (prod today) or a chain without the stage's line, the act records with paid null, and the stage pass reads the ledger", async () => {
+  // prod: the store holds no stamp_lines at all
+  const t = await paidToWright();
+  resetChainMemo();
+  t.ledger.lines = null;
+  const r = await rc({ credit: "kinofire", link: KINO_PLAN });
+  assert.equal(r.stamps, null);
+  assert.match(r.receipt, /it pays kinofire what briefed's line paid wright \(post:kinofire\/false-sweep-warning\/briefed-recredit\) and burns that mint/);
+  assert.match(r.receipt, /If the ledger holds no such line paid to wright, or wright no longer holds its amount in liquid stamps, the pass holds the correction and says why/);
+  assert.equal(JSON.parse(t.pen.rows().at(-1).payload).paid, null, "the act claims an amount the office could not read");
+  // a chain that holds the bug's confirmed but not its briefed: recorded the same way
+  const t2 = await paidToWright();
+  resetChainMemo();
+  t2.ledger.lines = [stageLine("kinofire", 2, KINO_BUG, "confirmed")];
+  assert.equal((await rc({ credit: "kinofire", link: KINO_PLAN })).stamps, null);
+  assert.equal(t2.pen.rows().at(-1).action, "recredit");
+});
+
+test("14 · (review-3842-578 § 3) the recredit locks the bug's row before it reads the stage's acts, so a second recredit of the stage waits and is refused", async () => {
+  const t = await paidToWright();
+  const from = t.pen.asked().length;
+  await rc({ credit: "kinofire", link: KINO_PLAN });
+  const asked = t.pen.asked().slice(from);
+  const lock = asked.findIndex((q) => /^SELECT id FROM posts WHERE id = \$1 AND class = \$2 FOR UPDATE$/i.test(q));
+  const insert = asked.findIndex((q) => /^INSERT INTO acts/i.test(q));
+  assert.ok(lock >= 0, "the recredit took no row lock");
+  const actsRead = asked.findIndex((q, i) => i > lock && /FROM acts WHERE class = \$1 AND object = ANY\(\$2\)/i.test(q));
+  assert.ok(actsRead > lock && insert > actsRead, `the lock (${lock}) must come before the acts read (${actsRead}) and the insert (${insert}) in the write`);
+  // the second, after the first committed, reads the first's act and is refused
+  await refusedNothing(t, rc({ credit: "wayward-archivist", link: KINO_PLAN }), 409, /was already re-credited, to kinofire/);
+});
+
+test("14 · the recredit's own law: wright and keemin only, a note, recredit true, no ladder fields, an earned stage, a new credit; each refusal writes nothing", async () => {
+  const t = await paidToWright();
+  await refusedNothing(t, rc({ credit: "kinofire", link: KINO_PLAN }, BUGCATCHER), 403, /^only wright and keemin re-credit a stage a recredit burns a mint the town paid/);
+  await refusedNothing(t, rc({ credit: "kinofire", link: KINO_PLAN }, KINO), 403, /only the town's hands re-credit a bug's stage/);
+  await refusedNothing(t, rc({ credit: "kinofire", link: KINO_PLAN, note: "  " }), 422, /^a recredit says why note: what the stage's credit got wrong/);
+  await refusedNothing(t, rc({ credit: "kinofire", link: KINO_PLAN, recredit: "yes" }), 422, /^recredit is true, or left off/);
+  await refusedNothing(t, rc({ credit: "kinofire", link: KINO_PLAN, grade: "light" }), 422, /^a recredit takes no grade it pays the stage again at exactly what the stage paid/);
+  await refusedNothing(t, advanceAtTown({ post: KINO_BUG, to: "confirmed", recredit: true, credit: "kinofire", note: NOTE }, WRIGHT, { now: NOW, roll: ROLL }), 422,
+    /^only diagnosed, briefed, fixed are re-credited/);
+  await refusedNothing(t, rc({ link: KINO_PLAN }), 422, /^a recredit names whom it credits/);
+});
+
+test("14 · (Darko 2026-10-15 19:02, \"sure whatever\") a founder may be a recredit's new credit, by a founder's own work only; and it names someone other than the stage's credit", async () => {
+  // a resident's paid stage, re-credited to each founder by that founder's own comment
+  for (const founder of ["wright", "keemin"]) {
+    const b = await kinoBug();
+    resetChainMemo();
+    await adv({ to: "briefed", grade: "light", credit: "kinofire", link: KINO_PLAN });
+    b.ledger.lines = [stageLine("kinofire", 10, KINO_BUG, "briefed")];
+    const link = comment(founder);
+    const r = await rc({ credit: founder, link });
+    assert.deepEqual([r.recredit, r.was, r.credit, r.stamps], [true, "kinofire", founder, 10]);
+    const act = b.pen.rows().at(-1);
+    assert.deepEqual([act.action, JSON.parse(act.payload).credit, JSON.parse(act.payload).was], ["recredit", founder, "kinofire"]);
+  }
+  // the author check still holds for a founder: a resident's letter or comment, or a founder's PR at briefed
+  const t = await kinoBug();
+  resetChainMemo();
+  await adv({ to: "briefed", grade: "light", credit: "kinofire", link: KINO_PLAN });
+  t.ledger.lines = [stageLine("kinofire", 10, KINO_BUG, "briefed")];
+  await refusedNothing(t, rc({ credit: "wright", link: KINO_PLAN }), 422, /^only a founder's own letter earns wright a stage, and letter "kinofire-2026-10-12-to-wright-the-sweep-plan" is from kinofire/);
+  await refusedNothing(t, rc({ credit: "keemin", link: comment("kinofire") }), 422, /^only a founder's account earns keemin a stage, and .* was written by GitHub account/);
+  await refusedNothing(t, rc({ credit: "wright", link: pull("wright") }), 422, /is a founder's pull request \(GitHub account wright-starforge \(id 306351151\)\), and a founder's pull request never earns briefed/);
+  // a founder's stage, re-credited to the same founder
+  const w = await paidToWright();
+  await refusedNothing(w, rc({ credit: "wright", link: comment("wright") }), 422, /^briefed on "kinofire\/false-sweep-warning" already credits wright a recredit names someone else/);
+  // a resident's stage, re-credited to the same resident
+  const k = await kinoBug();
+  resetChainMemo();
+  await adv({ to: "briefed", grade: "light", credit: "kinofire", link: KINO_PLAN });
+  k.ledger.lines = [stageLine("kinofire", 10, KINO_BUG, "briefed")];
+  await refusedNothing(k, rc({ credit: "kinofire", link: KINO_PLAN }), 422, /^briefed on "kinofire\/false-sweep-warning" already credits kinofire a recredit names someone else/);
+});
+
+// ── 15 · the GitHub read's token, and the links it may follow (POS-649 follow-ups, review-649 §§ 4 and 6) ──
+
+const { githubAuthorOf } = await import("../src/bug-credit.mjs");
+const { judgeEarnedLink } = await import("../src/bugs.mjs");
+const { mkdtempSync, writeFileSync: writeFile, rmSync: rmTree } = await import("node:fs");
+const { tmpdir } = await import("node:os");
+const { join: joinPath } = await import("node:path");
+
+/** A fetch that answers `statuses` in turn and records each call's url and headers. */
+function recordingFetch(statuses) {
+  const calls = [];
+  const fetchImpl = async (url, { headers }) => {
+    const status = statuses[calls.length] ?? 200;
+    calls.push({ url, headers: { ...headers } });
+    return { status, ok: status >= 200 && status < 300,
+      json: async () => ({ id: 7, issue_url: "https://api.github.com/repos/postmark-town/postmark/issues/3500", user: { id: 1001, login: "harbor-human" } }) };
+  };
+  return { calls, fetchImpl };
+}
+const LINKED = (() => { const e = judgeEarnedLink("diagnosed", "https://github.com/postmark-town/postmark/issues/3500#issuecomment-7"); return { to: "diagnosed", link: e.link, earned: e.ref }; })();
+
+test("15 · the read token goes to api.github.com only: never to another base, and a refused token (401) is retried once, keyless", async () => {
+  const dir = mkdtempSync(joinPath(tmpdir(), "bug-credit-token-"));
+  const tokenFile = joinPath(dir, "token");
+  writeFile(tokenFile, "tok-not-a-secret\n");
+  try {
+    // another base (the tests' stub, the dev office's): no authorization at all
+    const elsewhere = recordingFetch([200]);
+    await githubAuthorOf(LINKED, { env: { GITHUB_READ_TOKEN_FILE: tokenFile, GITHUB_API_URL: "http://127.0.0.1:9" }, fetchImpl: elsewhere.fetchImpl });
+    assert.equal(elsewhere.calls.length, 1);
+    assert.equal(elsewhere.calls[0].headers.authorization, undefined, "the token went to a base that is not api.github.com");
+    // api.github.com: the token, once
+    const there = recordingFetch([200]);
+    assert.deepEqual(await githubAuthorOf(LINKED, { env: { GITHUB_READ_TOKEN_FILE: tokenFile }, fetchImpl: there.fetchImpl }), { id: 1001, login: "harbor-human", pull: false });
+    assert.deepEqual(there.calls.map((c) => [c.url, c.headers.authorization]),
+      [["https://api.github.com/repos/postmark-town/postmark/issues/comments/7", "Bearer tok-not-a-secret"]]);
+    // a refused token: one keyless retry, which answers
+    const refused = recordingFetch([401, 200]);
+    assert.deepEqual(await githubAuthorOf(LINKED, { env: { GITHUB_READ_TOKEN_FILE: tokenFile }, fetchImpl: refused.fetchImpl }), { id: 1001, login: "harbor-human", pull: false });
+    assert.deepEqual(refused.calls.map((c) => c.headers.authorization), ["Bearer tok-not-a-secret", undefined]);
+    // the keyless retry refused too: no pass on doubt, and no third call
+    const both = recordingFetch([401, 403]);
+    await assert.rejects(githubAuthorOf(LINKED, { env: { GITHUB_READ_TOKEN_FILE: tokenFile }, fetchImpl: both.fetchImpl }),
+      (e) => e.code === 503 && /^the office's GitHub read token was refused, and the keyless retry could not read .* either/.test(e.defect) && /renew the token \(\/srv\/postmark-office\/git-metrics-token\)/.test(e.hint));
+    assert.equal(both.calls.length, 2);
+    // no token file: keyless from the start, and a 401 then is not retried
+    const none = recordingFetch([401]);
+    await assert.rejects(githubAuthorOf(LINKED, { env: { GITHUB_READ_TOKEN_FILE: joinPath(dir, "absent") }, fetchImpl: none.fetchImpl }), (e) => e.code === 503 && /^GitHub could not be read/.test(e.defect));
+    assert.deepEqual(none.calls.map((c) => c.headers.authorization), [undefined]);
+  } finally { rmTree(dir, { recursive: true, force: true }); }
+});
+
+test("15 · a repo name that is a dot, or starts with one, is no link the office reads", () => {
+  for (const link of ["https://github.com/postmark-town/../pull/5", "https://github.com/postmark-town/./pull/5", "https://github.com/postmark-town/.hidden/pull/5"])
+    assert.throws(() => judgeEarnedLink("fixed", link), (e) => e.code === 422 && /fixed's link is not one the office can read/.test(e.defect), link);
+  assert.equal(judgeEarnedLink("fixed", "https://github.com/postmark-town/postmark.town-site/pull/5").ref.repo, "postmark.town-site", "a dot inside a name stays legal");
+});
+
+test("15 · (review-3842-578 nit) an idea award's label is never a bug stage's correction: the town would refuse its line forever", async () => {
+  const { judgeAward } = await import("../src/ideas.mjs");
+  for (const label of ["diagnosed-recredit", "briefed-recredit", "fixed-recredit"])
+    assert.throws(() => judgeAward({ to: "finn", stamps: 5, label }, new Set(["finn"])), (e) => e.code === 422 && /is a bug stage's correction, and an award's label is never one/.test(e.defect), label);
+  assert.equal(judgeAward({ to: "finn", stamps: 5, label: "confirmed-recredit" }, new Set(["finn"])).label, "confirmed-recredit", "only the three corrected stages are reserved");
 });

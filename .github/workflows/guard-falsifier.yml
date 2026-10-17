@@ -126,7 +126,7 @@ jobs:
       # it as the clone the box serves from.
       - uses: actions/checkout@v4
         with:
-          repository: keeminlee/postmark-world
+          repository: postmark-town/postmark-world
           ref: main
           path: world-checkout
           fetch-depth: 1

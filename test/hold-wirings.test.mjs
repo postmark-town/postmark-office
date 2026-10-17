@@ -316,18 +316,78 @@ test("...and the `since:` shelf CARRIES the hold event — driven through happen
       [holdAct(21, new Date().toISOString(), now, "wright", "give", NEAR, "ethan-thorne")],
       async () => {
         const { happenedFor } = await import("../src/world-apex.mjs");
-        const oriented = { standpoint: { x: 0, y: 0, handle: "wright" }, crossing: { n: now } };
-        const block = await happenedFor(oriented, { since: now }, { handles: new Set(["wright"]) });
+        // ⚑ THE STANDPOINT ORIENT REALLY ANSWERS (world.mjs § worldOrient):
+        // `{ ...at, stance }`, and NO `handle`. This probe built one with
+        // `handle: "wright"` until 2026-10-14, which is the one shape the door
+        // never hands it — so it stayed green while the live shelf read
+        // `{ complete: true, count: 0 }` for every resident. The resident is the
+        // one the read names, else the key's only one (`standingHandle`), and
+        // both of those are legs here: a one-resident key with no handle, and a
+        // two-resident key naming wright.
+        const oriented = { standpoint: { x: 0, y: 0, from: "where your walk arrived", stance: "embodied" }, crossing: { n: now } };
+        for (const [args, key] of [
+          [{ since: now }, { handles: new Set(["wright"]) }],
+          [{ since: now, handle: "wright" }, { handles: new Set(["ethan-thorne", "wright"]) }],
+        ]) {
+          const block = await happenedFor(oriented, args, key);
 
-        assert.ok(block, "the happened path answered nothing — the cursor read is off");
+          assert.ok(block, "the happened path answered nothing — the cursor read is off");
+          assert.ok(!block.unavailable, `the delta could not be read: ${block.detail ?? block.unavailable}`);
+          const kinds = (block.to_you?.events ?? []).map((e) => e.kind);
+          assert.ok(kinds.includes("hold-give"),
+            `a give of a thing of mine did not reach happened.to_you (${JSON.stringify(kinds)}, key ${[...key.handles]}) — walk #11's certified zero, back`);
+          const ev = block.to_you.events.find((e) => e.kind === "hold-give");
+          assert.equal(ev.thing, NEAR);
+          assert.equal(ev.from_you, true, "it left wright's hands, and the shelf must say which way");
+          assert.equal(block.to_you.complete, true, "every source answered, so the promise is kept");
+        }
+      });
+  } finally {
+    claims.__setPoolForTest(null);
+    for (const [k, v] of [["WORLD_DYNAMIC_DB", prev.dyn], ["WORLD_MOVEMENT_V2", prev.mv2]])
+      if (v === undefined) delete process.env[k]; else process.env[k] = v;
+  }
+});
+
+test("...and under a cursor, to_you is sliced by the cursor's clock: a hold before it stays out, one after it comes in, and the docket is asked from the same instant", async () => {
+  // review-559 (10-14, Addendum 3): deleting the hold filter under a cursor left
+  // every test green. This drives happenedFor with a cursor whose clock falls
+  // between two gives in the same crossing, and records what the docket was
+  // asked: claims are read from the cursor's instant (sinceInstant), not from
+  // the start of its crossing. The flip is either filter deleted.
+  const prev = { dyn: process.env.WORLD_DYNAMIC_DB, mv2: process.env.WORLD_MOVEMENT_V2 };
+  const dir = mkdtempSync(join(TMP, "cursor-"));
+  process.env.WORLD_DYNAMIC_DB = join(dir, "dynamic.db");
+  process.env.WORLD_MOVEMENT_V2 = "1";
+  const asked = [];
+  const claims = await import("../src/world2-claims.mjs");
+  const query = async (sql, params) => { asked.push({ sql, params }); return { rows: [] }; };
+  claims.__setPoolForTest({ query, connect: async () => ({ query, release: () => {} }) });
+  try {
+    const { currentCrossing } = await import("../src/crossings.mjs");
+    const now = currentCrossing();
+    const T = Date.now() - 3600000;
+    const before = new Date(T - 600000).toISOString();
+    const afterAt = new Date(T + 600000).toISOString();
+    await withRecord(
+      [holdAct(31, before, now, "wright", "give", NEAR, "ethan-thorne"),
+        holdAct(32, afterAt, now, "ethan-thorne", "give", NEAR, "wright")],
+      async () => {
+        const { happenedFor } = await import("../src/world-apex.mjs");
+        const oriented = { standpoint: { x: 0, y: 0, from: "where your walk arrived", stance: "embodied" }, crossing: { n: now } };
+        const key = { handles: new Set(["wright"]) };
+        const open = await happenedFor(oriented, { since: now }, key);
+        assert.deepEqual(open.to_you.events.filter((e) => e.kind === "hold-give").map((e) => e.at).sort(), [before, afterAt],
+          "with no cursor both gives in the crossing stand: the fixture holds two");
+        asked.length = 0;
+        const block = await happenedFor(oriented, { since: now }, key, { cursor: { crossing: now, ms: T, hw: null } });
         assert.ok(!block.unavailable, `the delta could not be read: ${block.detail ?? block.unavailable}`);
-        const kinds = (block.to_you?.events ?? []).map((e) => e.kind);
-        assert.ok(kinds.includes("hold-give"),
-          `a give of a thing of mine did not reach happened.to_you (${JSON.stringify(kinds)}) — walk #11's certified zero, back`);
-        const ev = block.to_you.events.find((e) => e.kind === "hold-give");
-        assert.equal(ev.thing, NEAR);
-        assert.equal(ev.from_you, true, "it left wright's hands, and the shelf must say which way");
-        assert.equal(block.to_you.complete, true, "every source answered, so the promise is kept");
+        assert.deepEqual(block.to_you.events.filter((e) => e.kind === "hold-give").map((e) => e.at), [afterAt],
+          "only the give after the cursor's clock is new to you");
+        // the resident's own claims (the town's headlines are a separate read, by crossing)
+        const docket = asked.filter((a) => /FROM claims\s+WHERE \(claimant/.test(a.sql));
+        assert.equal(docket.length, 1, "your claims were asked once");
+        assert.equal(docket[0].params[2], new Date(T).toISOString(), "from the cursor's own instant, not its crossing's start");
       });
   } finally {
     claims.__setPoolForTest(null);

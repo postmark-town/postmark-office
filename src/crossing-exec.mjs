@@ -32,6 +32,8 @@ import { execFileSync } from "node:child_process";
 import { penCommit } from "./write.mjs";
 import { singleLogEnabled } from "./dynamic-store.mjs";
 import { CLASS_FRAME, appendActFlipped, appendJournal, laneFlipped, settleShadowPens } from "./world-journal.mjs";
+import { faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
+import { arrivalOnceGuard } from "./arrival-entries.mjs"; // an arrival is entered once (WLD-5)
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLONE = process.env.WORLD_CLONE ?? resolve(HERE, "..", "world-clone");
@@ -116,6 +118,9 @@ async function main() {
         ...(p.via ? { via: String(p.via) } : {}),
         ...(p.set_down_at ? { set_down_at: String(p.set_down_at) } : {}),
         ...(p.arrived == null ? {} : { arrived: Boolean(p.arrived) }),
+        // WHICH WALK THIS ENTRY ARRIVED WITH (WLD-5, POS-618): the arrival
+        // tick's enter names its walk act, and the guard below writes it once.
+        ...(p.arrival_of ? { arrival_of: String(p.arrival_of) } : {}),
       },
       effect: "the crossing is declared; the record receives it at the save",
     };
@@ -135,16 +140,25 @@ async function main() {
       // flag: `W2_PEN` decides which function writes, not whether the record is
       // the record, and a 503 that blamed an unset variable would send an
       // operator to the wrong place.
+      // AN ARRIVAL IS ENTERED ONCE (arrival-entries.mjs § arrivalOnceGuard):
+      // inside this write's own transaction, a second enter for the same walk
+      // is refused and names the first, so a tick that re-runs settles, never
+      // enters twice.
+      const guard = p.arrival_of ? arrivalOnceGuard({ walk: String(p.arrival_of), actor: p.handle }) : null;
       try {
         const row = laneFlipped("frame")
-          ? await appendActFlipped(null, entry)
-          : await appendJournal(null, entry);
+          ? await appendActFlipped(null, entry, { guard })
+          : await appendJournal(null, entry, { guard });
         // `seq` IS THE ACT'S ID NOW. There is no sqlite rowid to answer with;
         // the record's own sequence is the one sequence left.
         seq = row.actId;
       } catch (e) {
         if (e?.name === "PenUnreachableError")
           return err(503, e.message, "this door's pen is the office's record; when it cannot be reached the door refuses rather than writing anywhere else — you are exactly where you were, and the crossing is safe to declare again");
+        if (e?.arrival_settled != null)
+          return answer({ error: { code: 409, defect: e.defect, hint: e.hint, arrival_settled: String(e.arrival_settled) } });
+        if (e?.arrival_overtaken)
+          return answer({ error: { code: 409, defect: e.defect, hint: e.hint, arrival_overtaken: true } });
         throw e;
       }
     }
@@ -179,7 +193,7 @@ async function main() {
   // household branch. (2026-07-30, the wandering-pen incident: 17 public ledger
   // lines stranded on draft/jennuhh.)
   try { execFileSync("git", ["-C", CLONE, "switch", "-q", "main"], { encoding: "utf8" }); }
-  catch (e) { return err(500, "the world clone would not stand on main", String(e?.message ?? e).slice(0, 160)); }
+  catch (e) { return err(500, "the world clone would not stand on main", faultLogged("the world clone would not stand on main", e)); } // to this child's stderr, the office's log (POS-578)
   if (process.env.TOWN_PUSH === "1")
     try { execFileSync("git", ["-C", CLONE, "pull", "--rebase", "-q"], { encoding: "utf8" }); } catch { /* offline/behind — serve local */ }
 
@@ -208,4 +222,4 @@ async function main() {
 // the commit, so the resident is exactly where they were and may declare again.
 main().catch((e) => e?.pen
   ? err(e.code, e.defect, e.hint)
-  : err(500, "the crossing pen tripped", String(e?.message ?? e).slice(0, 300)));
+  : err(500, "the crossing pen tripped", faultLogged("the crossing pen tripped", e))); // to this child's stderr, the office's log (POS-578)

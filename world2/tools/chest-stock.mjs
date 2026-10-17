@@ -107,7 +107,13 @@ export async function planFromStore(client) {
   if (!law) return { unreadable: "the store holds no settlement whose law is ingested — the candy labels cannot be read, so nothing is stocked" };
   const candy = law.classes.get("candy") ?? null;
   const chestRec = law.classes.get("chest") ?? null;
-  if (!chestRec) return { unreadable: `the law at S${law.pin.settlement} declares no chest class — nothing to stock` };
+  // A STALLED INGEST IS NOT AN EMPTY LAW (POS-627, review-612 F1): with no chest
+  // class AND a newer blessing whose law is not ingested, the class may be in
+  // that law, so the line names the stall (the keep tick reads it refused
+  // prereq:law) instead of the honest empty (read ok prereq:chest_class).
+  if (!chestRec) return { unreadable: law.pin.newest > law.pin.settlement
+    ? `the law at S${law.pin.settlement} declares no chest class, and S${law.pin.newest}'s law is not ingested yet — nothing is stocked until it is`
+    : `the law at S${law.pin.settlement} declares no chest class — nothing to stock` };
   const dials = typeof chestRec.dials === "string" ? JSON.parse(chestRec.dials) : (chestRec.dials ?? {});
   const admitted = (await client.query(CHESTS_SQL)).rows
     // a row that names no admitting settlement is not admitted, whatever read it

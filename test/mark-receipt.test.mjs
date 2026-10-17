@@ -78,6 +78,39 @@ test("locked: the candle ruled for it, and the receipt does not pretend it is on
   assert.match(r.says, /it reaches the world at the settlement that carries that candle/);
 });
 
+// ── A CANDLE A SETTLEMENT HAS CLOSED (Wright, on office #539) ───────────────
+//
+// A swept mark keeps a locked claim as its newest row. Once a settlement has
+// closed that candle, "it reaches the world at the settlement that carries that
+// candle" is about the past. THE FLIP: drop the `closed` branch and the first
+// two of these red.
+
+test("locked at a candle a settlement has closed, and carried: past tense, names the settlement, says it is gone", () => {
+  const r = receiptFrom({ id: ID, canon: null, published_at: S59, settlement: S59, settled_window: 180,
+    claims: [claim({ status: "locked", window_id: 174 })] });
+  assert.equal(r.status, "locked");
+  assert.match(r.says, /^locked at candle 174 and carried to the world at S59 \(5c2321ae\), but the world does not hold it now: /);
+  assert.match(r.says, /by a withdrawal or by the sweep/);
+  assert.doesNotMatch(r.says, /it reaches the world/, "no promise about a settlement that already ran");
+  assert.equal(r.settlement_sha, S59.sha);
+});
+
+test("locked at a candle a settlement has closed, with no carried row: says so, and invents no S-number", () => {
+  const r = receiptFrom({ id: ID, canon: null, settlement: S59, settled_window: 174,
+    claims: [claim({ status: "locked", window_id: 174 })] });
+  assert.match(r.says, /^locked at candle 174, and a settlement has closed that candle since, but the world does not hold this mark now: /);
+  assert.doesNotMatch(r.says, /carried to the world at S/);
+  assert.doesNotMatch(r.says, /it reaches the world/);
+});
+
+test("locked at a candle no settlement has closed yet, or with no settled window to read: the sentence is unchanged", () => {
+  for (const settled_window of [173, null, undefined]) {
+    const r = receiptFrom({ id: ID, canon: null, settlement: S59, settled_window,
+      claims: [claim({ status: "locked", window_id: 174 })] });
+    assert.match(r.says, /it reaches the world at the settlement that carries that candle/, String(settled_window));
+  }
+});
+
 // ── the three absences, three sentences (walk #7 item 4) ────────────────────
 
 test("PUBLISHED names the settlement that carried it, by number AND sha", () => {
@@ -460,6 +493,74 @@ test("C · a mark whose FILE MOVED names the settlement that carried the MARK, n
   assert.equal(c.sha, shaOfS(7));
 });
 
+// ── TWO MORE LIVES: THE LOOK-ALIKE, AND THE MOVE THAT ALSO EDITS (postmark#3548) ─
+//
+// `git log --follow` does not only follow renames. It runs copy detection too
+// (tree-diff's follow sets find_copies_harder), so a NEW mark whose file is
+// mostly the same as an OLDER mark's file reads as a copy of it, and the walk
+// continues down the older file's history. On the live record that is
+// little-bird/a-second-cold-cup-on-the-long-bench: its file first lands in the
+// S97 commit, its body is the first cup's body, and its receipt named S42, the
+// settlement that added the FIRST cup.
+//
+//   a look-alike of an older mark   truth S10 · answered S9   WRONG
+//
+// The second life here is the guard on the repair. Following exact matches only
+// (`-M100%`) would fix the look-alike and break the real moves: the household
+// un-nesting commit in the world repo (857dc401) renamed 255 mark files and 99
+// of those renames also edited the file. So a move that edits must stay one life.
+
+const TWIN_OLD = "WORLD/marks/wright/the-first-cup/mark.md";
+const TWIN_NEW = "WORLD/marks/wright/the-second-cup/mark.md";
+const EDITED_FROM = "WORLD/marks/let-there-be-light/the-garden/the-re-homed-thing/mark.md";
+const EDITED_TO = "WORLD/marks/wright/the-re-homed-thing/mark.md";
+const cupFile = (date, extra = "") =>
+  `---\nkind: sited\nby: wright\ndate: ${date}\nat: { x: 176, y: 426.5 }\nextent: { w: 1, h: 1 }\n${extra}---\n\n` +
+  "A lidded cup waits cold on the long bench, crooked caramel horn, blue at the rim, gold in the low band, for whoever waits.\n";
+
+lput(TWIN_OLD, cupFile("2026-08-17T01:25:14.888Z"));
+lsettle(9, "sweep 1 published — the first cup arrives");
+
+lput(TWIN_NEW, cupFile("2026-10-07T02:45:23.176Z", "class: thing\n"));
+lsettle(10, "sweep 1 published — a second cup, same words");           // ← truth for D
+
+lput(EDITED_FROM, "---\nkind: sited\nby: wright\ndate: 2026-09-01T00:00:00.000Z\nat: { x: 4, y: 5 }\nextent: { w: 2, h: 2 }\n---\n\nA thing filed by geometry, before the households were un-nested.\n");
+lsettle(11, "sweep 1 published — the re-homed thing arrives");          // ← truth for E
+
+mkdirSync(dirname(join(lives, EDITED_TO)), { recursive: true });
+lgit("mv", EDITED_FROM, EDITED_TO);
+lput(EDITED_TO, "---\nkind: sited\nby: wright\ndate: 2026-09-01T00:00:00.000Z\nat: { x: 4, y: 5 }\nextent: { w: 2, h: 2 }\nparent: wright/the-garden\n---\n\nA thing filed by geometry, before the households were un-nested.\n");
+lsettle(12, "operator repair: un-nest, and write the parent down");
+
+test("RED CONTROL: the look-alike and the edited move are what they say they are", () => {
+  const at = (n, p) => { try { lgit("cat-file", "-e", `settlement/S${n}:${p}`); return true; } catch { return false; } };
+  assert.equal(at(9, TWIN_OLD), true, "the first cup arrives at S9");
+  assert.equal(at(9, TWIN_NEW), false, "the second cup is NOT in S9");
+  assert.equal(at(10, TWIN_NEW), true, "it arrives at S10");
+  assert.equal(at(10, TWIN_OLD), true, "and the first cup is still standing — nothing was moved");
+  // git itself calls the second cup a COPY of the first: that is the whole defect.
+  const followed = lgit("log", "--follow", "--name-status", "--format=", "refs/heads/main", "--", TWIN_NEW);
+  assert.match(followed, /^C\d+\s+\S*the-first-cup\/mark\.md\s+\S*the-second-cup\/mark\.md$/m, "the fixture must really trip copy detection, or D proves nothing");
+  assert.equal(at(11, EDITED_FROM), true, "E arrives at its original path at S11");
+  assert.equal(at(12, EDITED_TO), true, "and stands at the new path at S12");
+  assert.equal(at(12, EDITED_FROM), false, "the old path is gone at S12");
+  assert.notEqual(lgit("rev-parse", `settlement/S11:${EDITED_FROM}`).trim(), lgit("rev-parse", `settlement/S12:${EDITED_TO}`).trim(), "and the move EDITED the file, so an exact-match follow would lose it");
+});
+
+test("D · a LOOK-ALIKE of an older mark names its OWN settlement, not the older mark's", () => {
+  const c = settlementThatCarried(lives, TWIN_NEW, { ref: "refs/heads/main" });
+  assert.equal(c.s, 10, "--follow read the second cup as a copy of the first and answered S9, with a real sha");
+  assert.equal(c.sha, shaOfS(10));
+  const first = settlementThatCarried(lives, TWIN_OLD, { ref: "refs/heads/main" });
+  assert.equal(first.s, 9, "and the older mark still names its own");
+});
+
+test("E · a mark MOVED AND EDITED in one commit is still one life", () => {
+  const c = settlementThatCarried(lives, EDITED_TO, { ref: "refs/heads/main" });
+  assert.equal(c.s, 11, "an exact-match-only follow answers S12 here — the un-nesting, not the arrival");
+  assert.equal(c.sha, shaOfS(11));
+});
+
 // ── the canon-absent FINDING answers `unpublished`, by ruling (postmark#2594) ─
 //
 // For one lap this answered null by the guess-nothing rule; Keemin then named
@@ -490,4 +591,76 @@ test("the guess-nothing rule is UNTOUCHED for the next unclassified check", () =
   const { cause, cause_row } = causeOf("some-check-the-founder-has-not-ruled-on: with a detail");
   assert.equal(cause, null);
   assert.equal(cause_row, 'claims.refusal_check = "some-check-the-founder-has-not-ruled-on: with a detail"');
+});
+
+// ── THE LAST AMEND (POS-612, ruled by Darko 2026-10-14) ─────────────────────
+//
+// keith/waiting-room-stool-2026-09-10 was first carried at S65 (fc74bf68). Keith's
+// amend (act 16921, claim 08a6b024) locked at candle 244 and S104 (a7215b3e)
+// carried it. On 10-14 the receipt still read "published at S65 (fc74bf68)", and
+// it was misread as an amend that never landed. `last_amended` names the
+// settlement that carried the most recent amend, and the sentence names both:
+// "published at S65, last amended at S104". `crossing` stays the first carriage,
+// because `mark_carried` (049) is checked against it on every keep tick.
+//
+// THE CAN-FAIL FLIP: in receiptFrom's published branch, make `amended` always
+// null. The first test goes red on its `says`.
+const STOOL = "keith/waiting-room-stool-2026-09-10";
+const S65 = { s: 65, sha: "fc74bf68909d701f2342b62f2e3f3b16b7aec4ca", at: null };
+const S104_AMEND = { s: 104, sha: "a7215b3ea9a1de16ac038c68f8f16be8de3de653", at: "2026-10-12T06:01:14Z", window: 244 };
+
+test("POS-612 · keith's stool: published at S65, last amended at S104; crossing stays S65 and status stays published", () => {
+  const r = receiptFrom({ id: STOOL, canon: { id: STOOL }, published_at: S65, settlement: S65, claims: [], last_amended: S104_AMEND });
+  assert.equal(r.says, "published at S65, last amended at S104", "short: no shas, no dates, no candle in the sentence");
+  assert.deepEqual(r.last_amended, S104_AMEND, "the sha, the date and the candle are in the field");
+  assert.deepEqual(r.crossing, S65, "crossing is the FIRST carriage: mark_carried is checked against it on the keep tick");
+  assert.equal(r.settlement_sha, S65.sha);
+  assert.equal(r.status, "published", "the enum callers branch on does not move");
+  assert.equal(r.amends, undefined, "nothing is disclosed when the table was read");
+});
+
+test("POS-612 · never amended: the sentence is today's, byte for byte, and last_amended is null", () => {
+  const r = receiptFrom({ id: ID, canon: CANON, published_at: S59, settlement: S59, claims: [], last_amended: null });
+  assert.equal(r.says, "published at S59 (5c2321ae) on 2026-09-06T05:45:00Z");
+  assert.equal(r.last_amended, null);
+});
+
+test("POS-612 · an amend the first carriage itself carried is not a later version", () => {
+  const r = receiptFrom({ id: STOOL, canon: { id: STOOL }, published_at: S65, settlement: S65, claims: [], last_amended: { ...S104_AMEND, s: 65 } });
+  assert.equal(r.last_amended, null);
+  assert.equal(r.says, "published at S65 (fc74bf68)");
+});
+
+test("POS-612 · amend_carried unread: the sentence promises nothing about amends, and the receipt says it could not look", () => {
+  const r = receiptFrom({ id: STOOL, canon: { id: STOOL }, published_at: S65, settlement: S65, claims: [], amends_unread: "the store did not answer" });
+  assert.equal(r.last_amended, null);
+  assert.equal(r.says, "published at S65 (fc74bf68)");
+  assert.deepEqual(Object.keys(r.amends), ["readable", "reason"]);
+  assert.equal(r.amends.readable, false);
+  assert.match(r.amends.reason, /could not read amend_carried \(the store did not answer\)/);
+});
+
+test("POS-612 · tags unreadable but an amend recorded: it names the amend and invents no first S-number", () => {
+  const r = receiptFrom({ id: STOOL, canon: { id: STOOL }, published_at: null, settlement: null, claims: [], last_amended: S104_AMEND });
+  assert.match(r.says, /^published, last amended at S104 — /);
+  assert.match(r.says, /could not be read from the tags/);
+  assert.doesNotMatch(r.says.replace("S104", ""), /S\d/);
+});
+
+test("POS-612 · last_amended belongs to the published tense only", () => {
+  for (const status of ["locked", "pending", "refused"]) {
+    const r = receiptFrom({ id: ID, canon: null, settlement: S59, claims: [claim({ status })], last_amended: S104_AMEND });
+    assert.equal("last_amended" in r, false, status);
+  }
+});
+
+test("POS-612 · UNREAD IS NOT 'NEVER AMENDED': the two answers differ in a field a reader can branch on (Wright 10-14)", () => {
+  const never = receiptFrom({ id: STOOL, canon: { id: STOOL }, published_at: S65, settlement: S65, claims: [], last_amended: null });
+  const unread = receiptFrom({ id: STOOL, canon: { id: STOOL }, published_at: S65, settlement: S65, claims: [], amends_unread: "075 not applied" });
+  assert.equal(never.last_amended, null);
+  assert.equal(unread.last_amended, null, "the field is null either way");
+  assert.equal("amends" in never, false, "never amended: nothing is disclosed");
+  assert.equal(unread.amends.readable, false, "unread: the sibling says the table was not read");
+  assert.equal(never.says, unread.says, "the sentence is today's in both; the disclosure is the field, as `docket` is");
+  assert.notDeepEqual(never, unread);
 });

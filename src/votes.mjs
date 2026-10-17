@@ -22,6 +22,7 @@ import { execUnderTownLock, lockTimedOut, LOCK_BUSY } from "./town-lock.mjs";
 import { ballotsWithVotes, ballotWithVotes, tallyOf } from "./ballots-store.mjs";
 import { headroomOf, appliedBy, STATE_STAKING, STATE_CLOSED } from "./ballots.mjs";
 import { refuse } from "./events.mjs";
+import { faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -146,8 +147,7 @@ export async function stakeViaOffice(clone, { from, topic, candidate, stamps }, 
     out = await execUnderTownLock(exec, payload, env);
   } catch (e) {
     if (lockTimedOut(e)) throw bounce(LOCK_BUSY.code, LOCK_BUSY.defect, LOCK_BUSY.hint);
-    const msg = String(e.stderr ?? e.message ?? e).slice(0, 300);
-    throw bounce(500, "the stake pass tripped", msg);
+    throw bounce(500, "the stake pass tripped", faultLogged("the stake pass tripped", e)); // its stderr goes to the log (POS-578)
   }
   const result = JSON.parse(out.trim().split("\n").at(-1));
   if (result.error) throw bounce(result.error.code ?? 500, result.error.defect, result.error.hint);

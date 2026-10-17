@@ -36,7 +36,9 @@ import {
 } from "./world-stacks.mjs";
 import { holdingsOf, sameHousehold, holdTurn, liveHolder, rowsFor, holdingEntry } from "./world-hold.mjs";
 import { chestRoomGuard } from "./chest-lock.mjs";
-import { dropUndoGuard, undoNonce } from "./drop-recovery.mjs";
+import { dropUndoGuard, undoNonce, dropSequenceGuard } from "./drop-recovery.mjs";
+import { faultLogged, plainReason } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
+import { chestsCandyOn, chestsCandyOffError } from "./chests-candy.mjs"; // WLD-27 ships dark until LOGOS v2's doors replace it
 
 // ── SLOTS HELD FOR AN ACT STILL IN FLIGHT (Bevel's review, finding 3) ───────
 //
@@ -155,7 +157,15 @@ export async function liveUnitDeps() {
     },
     unstake: (r) => stake.runExec({ verb: "unstake", handle: r.handle, mark: r.mark, n: r.stamps, date: new Date().toISOString().slice(0, 10) }),
     withdraw: (m) => world.journalWithdraw(m),
+    markTurn: async (mark, fn) => (await import("./mark-stake-lock.mjs")).withMarkHeld(mark, () => fn(),
+      { refusal: "nothing moved: the stakes on this mark could not be read settled", connection: "pool" }),
     dropsOut: async (actor) => pen.officeRead(async (c) => (await import("./drop-recovery.mjs")).dropsStillOut(c, actor), { by: "dropsOut" }),
+    // a read of the docket under the WITHDRAWING household — the live layer the withdrawal will act on (D)
+    droppedUnit: async ({ mark, by, household }, read) => {
+      const { claimHouseholdFor } = await import("./world2-claims.mjs");
+      const hh = await claimHouseholdFor({ actor: by, household });
+      return pen.officeWrite((c) => read(c, { mark, by }), { household: hh });
+    },
     onActs: () => pen.laneFlipped("hold"),
   };
 }
@@ -241,6 +251,8 @@ async function chestOrThrow(deps, id, view) {
  * key's own resident (callHoldTool § actingHandle); the freeze was asked.
  */
 export async function callUnits(route, args, key, actor, deps) {
+  // DARK BY DEFAULT (chests-candy.mjs): every counted-unit route, before any read
+  if (!chestsCandyOn()) throw chestsCandyOffError();
   const view = deps.classes();
   if (!view.readable) throw bounce(503, "the class layer could not be read, so the office cannot tell candy from anything else",
     "counted units read the candy, chest and thing classes from the record; nothing was recorded — try again when the law is loaded");
@@ -338,7 +350,8 @@ export async function callUnits(route, args, key, actor, deps) {
         const edge = selectLabel(edgesOf(fold, actor), args.label ?? null, { where: "your hands", verb: "set down" });
         refuseIfTaken(topClassOf(fold, actor, view, edge.label), view);
         const moves = [{ from: actor, to: null, label: edge.label, n: 1 }];
-        const w = await writeUnits(deps, key, actor, { action: UNIT_ACTION.drop, object: actor, moves, payload: { label: edge.label, at: stood } });
+        // the set-downs' sequence lock, shared: the tick's cursor never passes a drop still being written (drop-recovery.mjs)
+        const w = await writeUnits(deps, key, actor, { action: UNIT_ACTION.drop, object: actor, moves, payload: { label: edge.label, at: stood } }, { guard: dropSequenceGuard });
         reserve(actor, 1); // the slot is held until the filing settles (finding 3)
         return { label: edge.label, ...w };
       });
@@ -348,7 +361,7 @@ export async function callUnits(route, args, key, actor, deps) {
       try {
         filed = await deps.leave(payload, key, { dropUnit: { actId: dropped.seq, label: dropped.label } });
         if (filed?.error) { why = filed.defect ?? filed.error; filed = null; }
-      } catch (e) { why = String(e?.defect ?? e?.message ?? e).slice(0, 200); }
+      } catch (e) { why = String(e?.defect ?? plainReason(e, "record", "a dropped unit's filing")).slice(0, 200); }
       if (!filed) {
         // THE CALL FAILED; WHAT COMMITTED? (Wright's independent review, F0.)
         // `leaveMarkViaOffice` can throw after its claim committed, so the
@@ -366,7 +379,7 @@ export async function callUnits(route, args, key, actor, deps) {
           } catch (e) {
             if (e?.filed) committed = e.filed;
             else if (e?.undoneAlready) back = { seq: e.undoneAlready, already: true };
-            else stuck = String(e?.defect ?? e?.message ?? e).slice(0, 200);
+            else stuck = String(e?.defect ?? plainReason(e, "record", "a unit's undo")).slice(0, 200);
           } finally { release(actor, 1); }
         });
         if (committed)
@@ -417,17 +430,42 @@ export async function callUnits(route, args, key, actor, deps) {
  * when a return fails or the stakes do not settle.
  */
 const LATE_PASSES = 3;
+
+/**
+ * WHAT A RETURN RECORDED, AS THE ENGINE SAID IT (Wright, 2026-10-13T05:20Z, B).
+ * The exec answers `{ applied, commit, verb }` (world-stake-exec.mjs): `applied`
+ * is what the town's unstake actually moved, clipped to the position still
+ * open, and `commit` is the ledger commit that carries the line — present only
+ * when something was applied. The receipt carries exactly those: no requested
+ * count standing in for an applied one, and no id for a call that recorded
+ * nothing. (It read `out.line`, a field the exec never answers, so every
+ * receipt's line was null on the real path.)
+ */
+/** The mark's holders, read under its lock: the ledger as settled, no change half-landed (mark-stake-lock.mjs § withMarkHeld). */
+const settledHolders = (id, deps) => deps.markTurn(id, () => deps.holders(id));
+
+const appliedOf = (out) => { const n = Number(out?.applied); return Number.isFinite(n) && n > 0 ? n : 0; };
+const receiptOf = (r, out) => {
+  const stamps = appliedOf(out);
+  return { handle: r.handle, stamps, commit: stamps > 0 && typeof out?.commit === "string" && out.commit ? out.commit : null };
+};
 async function lateReturns(id, deps) {
+  // THE NO-NEW-STAKES BOUNDARY, READ SETTLED (WLD-27 A; Bevel's first review
+  // R1). The exit act has committed, so a stake asking now is refused; each
+  // read below is taken under the mark's lock, which every stake and unstake
+  // holds until it has landed or rolled back (mark-stake-lock.mjs). So a read
+  // sees every stake there will ever be on this mark, and never an unstake's
+  // zero that a failed landing then undoes. Nothing is held while the returns run.
   const returned = [];
   for (let pass = 0; pass < LATE_PASSES; pass++) {
-    const plan = returnsAtExit({ mark: id, holders: await deps.holders(id) });
+    const plan = returnsAtExit({ mark: id, holders: await settledHolders(id, deps) });
     if (!plan.length) return returned;
     for (const r of plan) {
       const out = await deps.unstake(r);
       if (out?.error) throw bounce(503, `a late stake by ${r.handle} could not be returned: ${out.defect ?? out.error}`,
         "the mark stands and its withdrawal waits; ask again — what was returned is not returned twice", { returned });
-      const n = Number(out?.applied ?? r.stamps);
-      if (n > 0) returned.push({ handle: r.handle, stamps: n, line: out?.line ?? null });
+      const n = appliedOf(out);
+      if (n > 0) returned.push(receiptOf(r, out));
     }
   }
   throw bounce(409, `stakes kept arriving on ${id} while it was leaving`,
@@ -467,13 +505,13 @@ async function markExit(route, args, key, actor, deps, view, cap) {
     const fold = foldUnits(units);
     if (route === "take-back")
       refuseOverCarry({ who: actor, units: totalOf(fold, actor) + inFlight, things: thingsCarried(attachments, actor), adding: 1, cap });
-    const plan = returnsAtExit({ mark: id, holders: await deps.holders(id) });
+    const plan = returnsAtExit({ mark: id, holders: await settledHolders(id, deps) });
     const returned = [];
     for (const r of plan) {
       const out = await deps.unstake(r);
       if (out?.error) throw bounce(503, `the return to ${r.handle} could not be recorded: ${out.defect ?? out.error}`,
         `${returned.length} of ${plan.length} returns are recorded; the mark stands and nothing else moved. Ask again: the returns already made are not made twice.`, { returned });
-      returned.push({ handle: r.handle, stamps: Number(out?.applied ?? r.stamps), line: out?.line ?? null });
+      if (appliedOf(out) > 0) returned.push(receiptOf(r, out)); // a position already closed returned nothing, and is not a receipt
     }
     const moves = route === "take-back" ? [{ from: null, to: actor, label, n: 1 }] : [];
     const action = route === "take-back" ? UNIT_ACTION.takeBack : UNIT_ACTION.consumeInPlace;
@@ -512,7 +550,7 @@ async function markExit(route, args, key, actor, deps, view, cap) {
           payload: { mark: id, by, exit: cause, ...(acted.already ? { finished_by: actor } : {}), ...(late.length ? { late_returns: late } : {}) } }));
     } catch (e) {
       late = e?.returned ?? late;
-      withdrawn = { withdrawn: false, why: String(e?.defect ?? e?.message ?? e).slice(0, 200),
+      withdrawn = { withdrawn: false, why: String(e?.defect ?? plainReason(e, "record", "a unit's withdrawal")).slice(0, 200),
         retry: "ask again: the unit is not gained and no stake is returned a second time; only the withdrawal is tried again, after any stake still open on the mark is returned" };
     }
   }
@@ -523,6 +561,97 @@ async function markExit(route, args, key, actor, deps, view, cap) {
   return { did: route, units: true, mark: id, label, seq: acted.seq, effect: acted.effect, returns: acted.returned, ...(late.length ? { late_returns: late } : {}),
     returns_note: acted.returned.length ? `${acted.returned.length} staker(s) had their stamps on this mark returned, one line each` : "no stake stood on this mark, so nothing was returned",
     withdrawn, ...(route === "take-back" ? { holds: holdsBlock(acted.after, actor, view) } : {}) };
+}
+
+// ── A DROPPED UNIT'S MARK, WITHDRAWN BEFORE PUBLICATION (WLD-27 D) ─────────
+//
+// Wright (AUTHORITY 2026-10-13T05:20:23Z, D): "withdrawing a dropped unit
+// before it's published returns the unit to the dropper, whether it was a
+// draft or pending … After publication, getting it back is a take-back, never
+// a withdraw." And the carry case, ruled 06:44:41Z: "it's an ADD to their
+// hands and obeys the carry cap of 24 like every add. If the dropper has no
+// free slot, the withdraw is refused before anything is retracted or written …
+// 'your hands are full (24/24): drop, give or consume one, then withdraw'.
+// There's no pending-return state and no over-cap exception."
+//
+// So the withdrawal of such a mark runs IN THE HOLD QUEUE'S TURN, as every add
+// does: the dropper's room is read there (in-flight first, then the held rows,
+// § inFlightFor) and the withdrawal — deed, docket half, and the unit's return
+// in its one transaction (drop-recovery.mjs § withdrawRestoreGuard) — is
+// written before the turn ends, so no other add can take the slot between the
+// check and the write. The tick runs in another process, but it only ever
+// returns a drop still OUT, which the in-flight count already holds a slot for.
+
+const handsFull = (dropper, caller, e) => bounce(409, `${dropper}'s hands are full (${e.carried}/${e.cap}) — the unit this mark is would come back to them`,
+  `${caller === dropper ? "your hands are full" : `${dropper}'s hands are full`} (${e.carried}/${e.cap}): drop, give or consume one, then withdraw. Nothing was withdrawn and nothing was recorded.`,
+  { carried: e.carried, cap: e.cap });
+
+/**
+ * The public withdrawal of `mark` (by its author `by`), when it is a dropped
+ * unit's mark: null for any other mark (the ordinary withdrawal runs). `withdraw`
+ * is the door's journalWithdraw, given the guards it must hold in its write.
+ */
+export async function withdrawDroppedUnit({ mark, by, household, caller = null, guard = null, withdraw }, deps) {
+  const { droppedUnitOf, returnedByWithdrawal, prepublication, takeBackRefusal, withdrawRestoreGuard } = await import("./drop-recovery.mjs");
+  const unit = await deps.droppedUnit({ mark, by, household }, droppedUnitOf);
+  if (!unit || !prepublication(unit) || unit.exited) {
+    if (unit?.published && !unit.exited) throw takeBackRefusal(mark);
+    // A REPLAY of a withdrawal that already brought the unit back answers as
+    // what it is — done, nothing returned now — and is never read as a fresh
+    // add (the carry ruling: "do not confuse a replay … with a fresh add").
+    const before = await deps.droppedUnit({ mark, by, household }, returnedByWithdrawal); // by the mark's own record, not its name (R2)
+    if (before) return { id: mark, withdrawn: true, already: true, unit_returned: 0, returned_before: before.act,
+      note: `${mark} was already withdrawn and its unit already came back (act ${before.act}); nothing was written now` };
+    return null;
+  }
+  const view = deps.classes();
+  if (!view.readable) throw bounce(503, "the class layer could not be read, so the carry cap cannot be asked",
+    "withdrawing a set-down unit's mark brings the unit back to its dropper's hands, and that add is judged against the carry cap; nothing was withdrawn — try again when the law is loaded");
+  const cap = carryOf(view);
+  return holdTurn(async () => {
+    const inFlight = await inFlightFor(unit.dropper, deps); // BEFORE the rows: see inFlightFor
+    const { units, attachments } = await deps.readRows();
+    try {
+      refuseOverCarry({ who: unit.dropper, units: totalOf(foldUnits(units), unit.dropper) + inFlight, things: thingsCarried(attachments, unit.dropper), adding: 1, cap });
+    } catch (e) { if (e?.cap != null) throw handsFull(unit.dropper, caller, e); throw e; }
+    const out = {};
+    const restore = withdrawRestoreGuard({ mark, by, crossing: deps.crossing(), withdrawnBy: caller, out });
+    // the candle and the drop's lock first, then the mark's (mark-stake-lock.mjs § LOCK ORDER)
+    const both = guard ? async (c) => { await restore(c); await guard(c); } : restore;
+    const r = await withdraw({ guard: both });
+    return { ...r, unit_returned: out.restored ?? 0,
+      ...(out.restored ? { unit: { label: unit.label, to: unit.dropper, act: out.act },
+        unit_note: `withdrawn before it was published (${unit.status}), so the 1 ${unit.label} it was came back to ${unit.dropper}` } : {}) };
+  });
+}
+
+export const STORE_ONLY = "dropped-unit-withdraw-store-only";
+
+/**
+ * On the git (non-single-log) withdraw lane: the named refusal for a dropped
+ * unit's mark, or null for any other mark (Wright, 2026-10-13T07:52:24.868Z).
+ * Known from the store when the office has one — the claim's own exact drop
+ * reference, as D reads it — else from the mark's own record on the world. A
+ * store that cannot be asked refuses too: a set-down unit cannot be told apart
+ * there, and this lane must not withdraw one unknowingly.
+ */
+export async function droppedUnitOnGitLane({ mark, by, household }, deps = null) {
+  const refusal = (why) => ({ code: 409, reason: STORE_ONLY,
+    defect: `"${mark}" is a set-down unit's mark, and it is withdrawn only on the store's path (${STORE_ONLY})`,
+    hint: `${why} Withdrawing it returns the unit to its dropper, and only the single-log store path (WORLD_SINGLE_LOG=1) makes that return; this office writes marks on the git lane, so nothing was written. Once it is published it is taken back instead: world_hold { thing: "${mark}" }.` });
+  const { world2Enabled } = await import("./world2-acts.mjs");
+  if (world2Enabled()) {
+    const d = deps ?? await liveUnitDeps();
+    let unit;
+    try { unit = await d.droppedUnit({ mark, by, household }, (await import("./drop-recovery.mjs")).droppedUnitOf); }
+    catch (e) {
+      return { code: 503, reason: STORE_ONLY, defect: `the store could not say whether "${mark}" is a set-down unit's mark`,
+        hint: `a set-down unit's mark is withdrawn only on the store's path, and this lane cannot tell without asking it; nothing was written — try again; ${faultLogged(`the store could not say whether "${mark}" is a set-down unit's mark`, e)}` };
+    }
+    if (unit) return refusal("Its claim names the set-down it is.");
+  }
+  const record = await (await import("./world.mjs")).worldMarkById(String(mark)).then((r) => r.mark).catch(() => null);
+  return isDroppedUnitMark(record) ? refusal("The world's record names the set-down it is.") : null;
 }
 
 // ── THE READS: a holder's card and doorstep, and the map's chests ───────────

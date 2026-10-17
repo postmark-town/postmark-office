@@ -118,7 +118,7 @@ const carriedRows = () => owner(async (c) => (await c.query("SELECT mark, settle
 
 test("the backfill refuses on a planted disagreement — a settlements row whose sha is not the tag's — and writes nothing", { skip }, async () => {
   await owner(async (c) => {
-    await c.query("TRUNCATE mark_carried, settlements");
+    await c.query("TRUNCATE mark_carried, amend_carried, settlements");
     await settleRows(c);
     await c.query("UPDATE settlements SET tag_sha = $1 WHERE number = 2", ["f".repeat(40)]);
   });
@@ -131,7 +131,7 @@ test("the backfill refuses on a planted disagreement — a settlements row whose
 });
 
 test("the backfill fills every answerable mark from 1.0's answer, and the one with no file stays without a row", { skip }, async () => {
-  await owner(async (c) => { await c.query("TRUNCATE mark_carried, settlements"); await settleRows(c); });
+  await owner(async (c) => { await c.query("TRUNCATE mark_carried, amend_carried, settlements"); await settleRows(c); });
   const r = await asApi((c) => recordCarried(c, world, { apply: true }));
   assert.equal(r.verdict, "ok");
   assert.deepEqual(await carriedRows(), ["wright/the-gate@S2", "wright/the-lamp@S1"], "the amended lamp is S1's, not the amend's");
@@ -203,4 +203,35 @@ test("a mark let go keeps its row: the verify counts it kept and compares only w
   assert.equal(v.verdict, "ok", JSON.stringify(v.disagree));
   assert.equal(v.kept, 1);
   assert.equal(v.compared, 3);
+});
+
+// ── A MARK CARRIED AND SINCE GONE (Wright, on office #539) ──────────────────
+//
+// The sweep takes a mark off the world and leaves its newest claim locked. Once
+// a settlement has closed that candle, the twin's receipt must not promise the
+// settlement that carries it: it names the one that did, from the row that
+// outlives the mark. THE FLIP: pass no `settled_window` from twinReceipt, or
+// drop the `closed` branch in mark-receipt.mjs, and this reds.
+test("a mark carried and since gone: the receipt names the settlement that carried it, and promises none", { skip }, async () => {
+  await owner(async (c) => {
+    // Two candles that tile time, as the store requires.
+    for (const [id, opens, closes] of [[299, "2026-09-30T06:00:00Z", "2026-09-30T18:00:00Z"], [300, "2026-09-30T18:00:00Z", "2026-10-01T06:00:00Z"]])
+      await c.query("INSERT INTO windows (id, opens_at, closes_at, status) VALUES ($1, $2, $3, 'closed') ON CONFLICT (id) DO NOTHING", [id, opens, closes]);
+    await c.query("INSERT INTO claims (window_id, slug, class, claimant, status, decided_at) VALUES (300, 'wright/the-gate', 'mark', 'wright', 'locked', now())");
+    await c.query("UPDATE settlements SET window_id = 300 WHERE number = 5");
+  });
+  const { default: pg } = await import("pg");
+  const p = new pg.Pool({ connectionString: store.url("office_api"), max: 2 });
+  try {
+    const gone = await twinReceipt(p, "wright/the-gate", { standing: false });
+    assert.equal(gone.status, "locked");
+    assert.match(gone.says, /^locked at candle 300 and carried to the world at S2 \([0-9a-f]{8}\), but the world does not hold it now: /);
+    assert.doesNotMatch(gone.says, /it reaches the world/);
+    assert.equal(gone.crossing?.s, 2);
+
+    // A candle no settlement has closed yet keeps the future tense.
+    await owner((c) => c.query("UPDATE settlements SET window_id = 299 WHERE number = 5"));
+    const waiting = await twinReceipt(p, "wright/the-gate", { standing: false });
+    assert.match(waiting.says, /it reaches the world at the settlement that carries that candle/);
+  } finally { await p.end(); }
 });

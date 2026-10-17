@@ -992,3 +992,41 @@ test("POS-226: the memory cap bounds how far back an ear can page, and the reply
   assert.deepEqual(r.voices.map((v) => v.said), ["new 3", "new 4", "new 5", "new 6", "new 7"]);
   assert.match(r.hearing_disclosed, /at most 5 voices in memory/);
 });
+
+// ── POS-632 W4: the ear at a point marks nobody present ─────────────────────
+test("heardAt: hears what is in earshot of a point, newest last, and marks nobody present; a carried snapshot hears the same", async () => {
+  const { store } = bench({ near: { x: 0, y: 20 }, far: { x: 0, y: EARSHOT_M + 5 }, sitter: { x: 0, y: 0 } });
+  await store.say("near", "the lamps are lit");
+  await store.say("far", "too far to carry");
+  const before = new Map(store._presence);
+  const heard = await store.heardAt({ x: 0, y: 0 });
+  assert.deepEqual(heard.map((v) => [v.handle, v.said]), [["near", "the lamps are lit"]]);
+  assert.deepEqual(new Map(store._presence), before, "the ear touched no one's presence");
+  const carried = JSON.parse(JSON.stringify(await store.earshotSnapshot()));
+  assert.deepEqual(await store.heardAt({ x: 0, y: 0 }, { snapshot: carried }), heard, "a worker hears the main thread's snapshot the same way");
+  assert.deepEqual(await store.heardAt({ x: 0, y: 0 }, { exclude: "near" }), [], "exclude leaves the reader's own voice out");
+  const listen = await store.hear("sitter");
+  assert.ok(!listen.listeners.includes("anyone-who-only-looked"));
+});
+
+test("earshotSnapshot: memoised for a second, so a burst of handed reads shares one walk; a voice after it is heard on the next", async () => {
+  const { store, tick } = bench({ near: { x: 0, y: 20 }, late: { x: 0, y: 10 } });
+  await store.say("near", "first");
+  const a = await store.earshotSnapshot();
+  assert.equal(await store.earshotSnapshot(), a, "within the second: the same snapshot");
+  tick(15000); // past the flood rule and the memo
+  await store.say("late", "second");
+  const b = await store.earshotSnapshot();
+  assert.notEqual(b, a);
+  assert.deepEqual((await store.heardAt({ x: 0, y: 0 }, { snapshot: b })).map((v) => v.said), ["first", "second"]);
+});
+
+test("earshotSnapshot: a burst that lands before the first walk resolves shares that walk (the in-flight promise is the memo)", async () => {
+  const { store, tick } = bench({ near: { x: 0, y: 20 } });
+  await store.say("near", "first");
+  tick(15000);
+  const rooms = store.room.stats.rooms;
+  const burst = await Promise.all([store.earshotSnapshot(), store.earshotSnapshot(), store.earshotSnapshot()]);
+  assert.equal(store.room.stats.rooms - rooms, 1, "three handed reads at once walk the window once");
+  assert.ok(burst.every((s) => s === burst[0]), "and hear the same snapshot");
+});

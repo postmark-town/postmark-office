@@ -40,7 +40,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import {
-  buildJoinFiles, gangwayState, planRegistryJoin,
+  buildJoinFiles, berthAshore, gangwayState, planRegistryJoin,
 } from "./residency.mjs";
 // The record's readers and the ceremony (POS-158). `ceremony.mjs` is safe to
 // import statically here: it reaches `residency.mjs` through
@@ -52,7 +52,7 @@ import {
   ensureTownJournal, pendingRows, rowIsSettleable, townDrainCursor, TOWN_DRAIN_CURSOR, SETTLE_THRESHOLD,
 } from "./town-journal.mjs";
 import { asPaper } from "./paperwork.mjs";
-import { currentKeysOf, houseKeyLines, appendHouseKey } from "./house-key.mjs";
+import { currentKeysOf, houseKeyLines, appendHouseKey, judgeHouseKey } from "./house-key.mjs";
 import { signedRegistryLines } from "./ledger-pen.mjs";
 
 // ── THE GANGWAY REACHES THE SETTLEMENT ROAD ────────────────────────────────
@@ -94,6 +94,17 @@ export const STORE_WRITE_FAILED = (e) =>
   `this office could not write the town's record for this row (${String(e?.defect ?? e?.message ?? e).slice(0, 160)}) — `
   + "nothing was written for it and it is still pending; the next crossing settles it. "
   + "Nothing about it expires and nothing is lost by waiting.";
+
+// THE POST-STORE KEY JUDGMENT HELD THE ROW (POS-600). A different sentence from
+// STORE_WRITE_FAILED on purpose: here the record MAY already hold the row's pin
+// and membership (the store loop ran), and only this crossing's card, key lines
+// and printed registers were not written. It names the judgment and that
+// state, never a key, a handle's key line or a predicate's detail.
+/** A landed join held by the house-key judgment re-run after the store loop. */
+export const KEY_JUDGEMENT_HELD = (outcome) =>
+  `this crossing's house-key judgment, re-run after the town's record was written, ${outcome}, so this row's card, `
+  + "its key lines and the printed registers were not written at this crossing — the record may already hold its "
+  + "membership and pin. The row is still pending; the next crossing plans it again from the record as it then stands.";
 
 export const UNREACHABLE_RECORD =
   "this office could not read the town's record at this crossing, so nothing was settled and nothing was written — the row is still pending and the next crossing settles it; nothing about it expires and nothing is lost by waiting";
@@ -185,7 +196,10 @@ export async function planTownDrain(odb, clone, { date }) {
   // holds nothing, and stalling the cursor there would stop the town's mail
   // from ever being marked drained for the length of a freeze.
   return {
-    settle, waiting, skipped, plans, registry: working,
+    // `entryRegistry` is the record as this crossing found it, before any row's
+    // plan was folded in (POS-600): the post-store judgment tells a resident who
+    // was already in a house from a queued joiner whose row stalled.
+    settle, waiting, skipped, plans, registry: working, entryRegistry: registry,
     gangway: { state: gangway, held },
     head: rows.length ? rows[rows.length - 1].seq : await townDrainCursor(odb),
   };
@@ -214,6 +228,29 @@ export const joinsOfPlans = (plans) => plans.map(({ row, plan: p }) => {
 export const plannedRegistryLines = (plans, { date, keys }) => houseKeyLines(joinsOfPlans(plans), { date, keys });
 
 /**
+ * The registry the post-store judgment reads (POS-600): the crossing's folded
+ * registry with the joins that did NOT land taken back out. A handle leaves a
+ * house's residents only if its row stalled AND the record did not already list
+ * it there when the crossing began — a resident whose own queued row stalled is
+ * still a resident. A house that did not stand at entry and that no landed row
+ * names is dropped (a stalled row's new house). Without an entry snapshot (a
+ * bare plan), only the stalled handles are removed.
+ */
+export function landedRegistry(plan, landed, stalled) {
+  const finalHouses = plan.registry?.households ?? {};
+  const entry = plan.entryRegistry?.households ?? null;
+  const gone = new Set(stalled.map(({ row }) => row.handle));
+  const named = new Set(landed.map(({ row, plan: p }) => p?.slug ?? row.payload?.slug ?? row.household).filter(Boolean));
+  const households = {};
+  for (const [slug, rec] of Object.entries(finalHouses)) {
+    if (entry && !entry[slug] && !named.has(slug)) continue;
+    const before = new Set(entry?.[slug]?.residents ?? []);
+    households[slug] = { ...rec, residents: (rec?.residents ?? []).filter((h) => !gone.has(h) || before.has(h)) };
+  }
+  return { ...(plan.registry ?? {}), households };
+}
+
+/**
  * Write the crossing. Returns the paths touched, for the ferry's scoped commit.
  *
  * The cursor is NOT advanced here. The ferry commits and pushes first; a cursor
@@ -221,7 +258,7 @@ export const plannedRegistryLines = (plans, { date, keys }) => houseKeyLines(joi
  * household, and it is the same discipline the world drain keeps (its truncate
  * and its cursor advance are one transaction, after the refs are written).
  */
-export async function writeTownDrain(clone, plan, { date, drainWith = collectingDrain }) {
+export async function writeTownDrain(clone, plan, { date, drainWith = collectingDrain, judge = judgeHouseKey }) {
   const touched = [];
   const put = (rel, content) => {
     const abs = join(clone, rel);
@@ -236,14 +273,22 @@ export async function writeTownDrain(clone, plan, { date, drainWith = collecting
   // ledger append then fails is the stranded shape the 08-29 noon ferry wore.
   const ledgerRel = "WHITE_PAGES/stamp-ledger.md";
   const ledgerAbs = join(clone, ledgerRel);
-  let signedLedgerLines = null;
   let planned = null;
+  // THE ENTRY KEYS (POS-600): the town's fold over the clone as this crossing
+  // found it, captured before any persistent write. runTownDrain hands over the
+  // snapshot it planned with; a bare caller's is taken here, still before the
+  // store loop. Never `planned.keys` (already folded with this crossing's lines)
+  // and never a read after the store or the clone moved.
+  let entryKeys = null;
   if (plan.plans.length && existsSync(ledgerAbs)) {
+    entryKeys = plan.entryKeys ?? currentKeysOf(clone);
     // `plan.ledger` and `plan.signed` are what runTownDrain already judged and
     // signed (src/house-key.mjs § judgeHouseKey); a caller that hands a bare
-    // plan gets the same lines, signed here.
-    planned = plan.ledger ?? plannedRegistryLines(plan.plans, { date, keys: currentKeysOf(clone) });
-    signedLedgerLines = plan.signed ?? signedRegistryLines(clone, planned.lines.map((l) => l.line));
+    // plan gets the same lines, signed here. This is the PREFLIGHT: a pen that
+    // cannot sign refuses the whole crossing with nothing written. What is
+    // appended is decided again below, after the store loop.
+    planned = plan.ledger ?? plannedRegistryLines(plan.plans, { date, keys: entryKeys });
+    if (!plan.signed) signedRegistryLines(clone, planned.lines.map((l) => l.line));
   }
 
   // ── THE RECORD FIRST, THE CARDS SECOND (POS-158, review 2/6) ────────
@@ -336,6 +381,40 @@ export async function writeTownDrain(clone, plan, { date, drainWith = collecting
     }
   }
 
+  // ── THE SECOND KEY DECISION (POS-600), after the store loop, before ANY
+  // clone write ────────────────────────────────────────────────────────────
+  //
+  // The lines planned above gave a house's housemate re-keys to its FIRST
+  // PLANNED join. When that join stalled at the store and a later join into
+  // the same house landed, keeping only the landed rows' lines dropped the
+  // housemates' re-keys: on this date the house minted under its old gh: key
+  // and the joiner's hh: key, two daily caps (the town's deriveMints caps per
+  // householdOn(handle, date).key). So the lines are planned AGAIN, from the
+  // joins that LANDED and the ENTRY keys, on this crossing's one date — a
+  // house's re-keys now ride its first landed join — and the WHOLE judgment
+  // runs again on exactly that batch (the tail, the split and shared-key
+  // predicate, the pen, the replay), against the registry as the landed rows
+  // left it. Only the lines it approves and signs are appended.
+  //
+  // IF IT REFUSES OR THROWS, every landed join is HELD: no card, no key line,
+  // no printed register is written for any of them, the cursor holds, and the
+  // mail still sails. The store rows the loop wrote STAY (nothing here rolls
+  // the record back): the row's sentence says the record may hold them, and
+  // the next crossing plans the row again from the record as it then stands.
+  let approved = [];
+  const keyHeld = [];
+  if (planned) {
+    try {
+      const batch = plannedRegistryLines(landed.filter(({ plan: p }) => p), { date, keys: entryKeys });
+      const judged = judge(clone, batch, { date, registry: landedRegistry(plan, landed, stalled) });
+      if (judged?.refusal) throw Object.assign(new Error(judged.refusal.defect), { keyRefusal: judged.refusal });
+      approved = judged?.signed ?? [];
+    } catch (e) {
+      const outcome = e?.keyRefusal ? `refused (${e.keyRefusal.defect})` : "could not run";
+      for (const { row } of landed.splice(0)) keyHeld.push({ row, why: KEY_JUDGEMENT_HELD(outcome) });
+    }
+  }
+
   for (const { row } of landed) {
     // The pen lane's own three files, from the pen lane's own function.
     for (const f of buildJoinFiles({
@@ -348,6 +427,10 @@ export async function writeTownDrain(clone, plan, { date, drainWith = collecting
       since: row.payload?.since,
       note: row.payload?.note,
     })) put(f.path, f.content);
+    // A row the gangway held boarded a berth at its door; settling it marks
+    // that berth ashore in the same crossing (POS-574, residency.mjs § berthAshore).
+    const berth = berthAshore(row.handle, { clone, date });
+    if (berth) put(berth.path, berth.content);
   }
 
   if (landed.length) {
@@ -367,32 +450,24 @@ export async function writeTownDrain(clone, plan, { date, drainWith = collecting
     // (#2040: the bare append was the office's one unsigned ledger writer; the
     // seal chain is the clone's own stamp-mint's, computed above, before any write).
     //
-    // THE LINES OF EACH ROW THAT ACTUALLY LANDED. The lines are signed before
-    // any byte is written (§ THE SIGNING COMES FIRST), over the WHOLE plan, so
-    // a row that stalled at the store has signed lines here that must NOT be
-    // appended: the ledger is append-only and replayed, and a `registry:` line
-    // for a resident the record does not hold would turn that replay red at the
-    // next crossing. Each planned line carries the seq of the row it belongs to
-    // (a join's own line plus its housemates' re-keys, § ONE HOUSEHOLD, ONE
-    // MINT KEY), in the order they were signed.
-    //
-    // A SUBSET IS SIGNED AGAIN. Each signature binds the whole prefix before
-    // it (the seal chain), so once a stalled row's lines are dropped the
-    // signatures after them no longer verify. The kept lines are re-signed
-    // over the ledger as it stands; the pen key was checked before any write.
-    if (signedLedgerLines) {
-      const keep = new Set(landed.map(({ row }) => row.seq));
-      const kept = planned.lines.filter((l) => keep.has(l.seq));
-      const lines = kept.length === planned.lines.length ? signedLedgerLines
-        : kept.length ? signedRegistryLines(clone, kept.map((l) => l.line)) : [];
-      if (appendHouseKey(clone, lines)) touched.push(ledgerRel);
-    }
+    // THE LINES OF THE ROWS THAT LANDED, AND ONLY THEIRS (POS-600). They were
+    // planned and judged again after the store loop (§ THE SECOND KEY
+    // DECISION): a `registry:` line for a resident the record does not hold
+    // would turn the replay red at the next crossing, and a house whose first
+    // planned join stalled still gets every housemate's re-key, through its
+    // first landed join. Each signature binds the whole prefix before it (the
+    // seal chain), so the batch is signed over the ledger as it stands.
+    // POS-600: the lines appended are exactly the batch the second decision
+    // above judged and signed, over the ledger as it stands — never a seq
+    // filter of the preflight's lines, never a different signed payload.
+    if (appendHouseKey(clone, approved)) touched.push(ledgerRel);
   }
   // The stalled rows ride OUT, on the array, for the same reason `refused`
   // does: `runTownDrain` is what holds the cursor and writes the report, and a
   // deferral that did not reach it would be a row dropped under a sentence
   // promising it was kept.
   if (stalled.length) touched.stalled = stalled;
+  if (keyHeld.length) touched.keyHeld = keyHeld;
   return touched;
 }
 

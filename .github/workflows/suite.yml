@@ -32,7 +32,10 @@ name: Office suite (sharded)
 #   · the town and world checkouts at `town-clone/` and `world-clone/`, at the
 #     shas test/clone-pins.json names: HEAD, origin/main and the tags as they
 #     stood at the pin (.github/scripts/suite-clones.sh). The pins move only by
-#     a PR to that file.
+#     a PR to that file. Both are SPARSE (POS-652): only the paths
+#     test/clone-sparse.json names are checked out, and every process here
+#     loads test/helpers/sparse-guard.mjs (NODE_OPTIONS on the shard step), so a suite
+#     that reads, probes or lists a path outside them reds, naming the path.
 #   · Postgres: the suite starts its own, one per file, from the
 #     embedded-postgres devDependency (test/helpers/embedded-store.mjs), so no
 #     service container. The PGlite suites skip by name without
@@ -110,7 +113,7 @@ jobs:
           path: |
             town-clone
             world-clone
-          key: office-clones-${{ hashFiles('test/clone-pins.json', '.github/scripts/suite-clones.sh') }}
+          key: office-clones-${{ hashFiles('test/clone-pins.json', 'test/clone-sparse.json', 'test/helpers/clone-sparse.mjs', '.github/scripts/suite-clones.sh') }}
 
       - if: steps.clones.outputs.cache-hit != 'true'
         run: bash .github/scripts/suite-clones.sh
@@ -148,7 +151,7 @@ jobs:
           path: |
             town-clone
             world-clone
-          key: office-clones-${{ hashFiles('test/clone-pins.json', '.github/scripts/suite-clones.sh') }}
+          key: office-clones-${{ hashFiles('test/clone-pins.json', 'test/clone-sparse.json', 'test/helpers/clone-sparse.mjs', '.github/scripts/suite-clones.sh') }}
           fail-on-cache-miss: true
 
       - run: bash .github/scripts/suite-clones.sh --check
@@ -160,15 +163,27 @@ jobs:
         run: git fetch -q --no-tags --depth=1 origin '+refs/heads/main:refs/remotes/origin/main' '+refs/heads/train/*:refs/remotes/origin/train/*'
 
       # Tests commit into scratch repos; a runner has no git identity of its own.
+      # The runner's git (2.47+) also runs auto-maintenance DETACHED after a
+      # commit, fetch or rebase: the command returns while its child still writes
+      # .git/objects, and a test's teardown rmdir reds ENOTEMPTY (POS-419, POS-580).
+      # In the foreground, a git call has finished with the repo when it returns.
+      # This is the class fix for every test; test/helpers/temp-dir.mjs is the
+      # per-test belt (it sets the same two keys for its importers anywhere).
       - name: Git identity for the suite's scratch repos
         run: |
           git config --global user.name "postmark-office-ci"
           git config --global user.email "postmark-office-ci@users.noreply.github.com"
+          git config --global gc.autoDetach false
+          git config --global maintenance.autoDetach false
 
       # The output goes OUTSIDE the checkout: cli-guard counts the office's files
       # across its run and reds when one appears, and a shard's own TAP landing in
       # the tree beside it is exactly that (CI's first run).
       - name: Shard ${{ matrix.shard }} of ${{ env.SHARDS }}
+        # the sparse guard in every process of the suite (POS-652); on this step
+        # only, so the actions' own node never loads a file from the checkout
+        env:
+          NODE_OPTIONS: --import=${{ github.workspace }}/test/helpers/sparse-guard.mjs
         run: node .github/scripts/suite-shard.mjs --shard ${{ matrix.shard }} --of "$SHARDS" --jobs "$SUITE_JOBS" --out "$RUNNER_TEMP/suite-out"
 
       # A store that would not start says only "pg_ctl start exited 1" in the

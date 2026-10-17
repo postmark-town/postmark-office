@@ -39,6 +39,7 @@ import { lawSnapshot } from "./law-snapshot.mjs";
 // reader stands on its floor and says so.
 import { byId, classRosterGate, classRosterGateValue, jx, openWorldStore, registerTwin, sqlCompare, HYDRATION_STATUS, NO_WORLD } from "./world-graph-db.mjs";
 import { rosterOf, dialsOf, predicatesOf, predicateNodeOf } from "./law-classes.mjs";
+import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
 
 // ── THE FOURTH RUNG, ABOVE THE OTHER THREE (POS-270, 2026-09-27) ─────────────
 // The class layer answers from the STORE first: law_projection at the newest
@@ -132,7 +133,7 @@ export function classRoster() {
   } catch (e) {
     out = {
       roster: new Set(ROSTER_FLOOR), source: "floor", path,
-      disclosed: `the world store would not open (${String(e?.message ?? e).slice(0, 120)}) — the door is standing on its class-roster floor (${ROSTER_FLOOR.join(", ")})`,
+      disclosed: `the world store would not open (${plainReason(e, "files", "the class roster")}) — the door is standing on its class-roster floor (${ROSTER_FLOOR.join(", ")})`,
     };
   }
   _snap = { from: w.snap, out };
@@ -219,7 +220,7 @@ export function ideasTank() {
     db.close();
     return answer(rows, "store", null, law);
   } catch (e) {
-    return answer([], "floor", `the world store would not open (${String(e?.message ?? e).slice(0, 120)}) — the tank could not be read`);
+    return answer([], "floor", `the world store would not open (${plainReason(e, "files", "the tank")}) — the tank could not be read`);
   }
 }
 
@@ -331,7 +332,7 @@ export function civicQuarter() {
     db.close();
     return answer(quarter, "store");
   } catch (e) {
-    return floor(`the world store would not open (${String(e?.message ?? e).slice(0, 120)}) — the quarter could not be read`);
+    return floor(`the world store would not open (${plainReason(e, "files", "the quarter")}) — the quarter could not be read`);
   }
 }
 
@@ -368,7 +369,7 @@ export function bountyBoard() {
     db.close();
     return answer(rows.map((r) => ({ ...r, status: r.status ?? "open" })), "store", null, law);
   } catch (e) {
-    return answer([], "floor", `the world store would not open (${String(e?.message ?? e).slice(0, 120)}) — the board could not be read`);
+    return answer([], "floor", `the world store would not open (${plainReason(e, "files", "the board")}) — the board could not be read`);
   }
 }
 
@@ -435,7 +436,7 @@ export function markClass(markId) {
       defines_class: Boolean(row.defines_class), path };
   } catch (e) {
     return { known: false, path,
-      disclosed: `the world store would not open (${String(e?.message ?? e).slice(0, 120)}) — this door could not read what class "${markId}" carries` };
+      disclosed: `the world store would not open (${plainReason(e, "files", "a mark's class")}) — this door could not read what class "${markId}" carries` };
   }
 }
 
@@ -508,7 +509,7 @@ export function freeCellIn(placeId, seed) {
     return { full: true, cells: cells.length };
   } catch (e) {
     try { db?.close(); } catch { /* already closed */ }
-    return { error: `the world store would not open (${String(e?.message ?? e).slice(0, 120)})` };
+    return { error: `the world store would not open (${plainReason(e, "files", "the world store")})` };
   }
 }
 

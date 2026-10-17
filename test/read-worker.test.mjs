@@ -30,7 +30,7 @@ import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { bootOnFreePort, freePort } from "./spawn-office.mjs";
 import { workerSafe, penTokenFor } from "../src/role.mjs";
 import { openOauthDb } from "../src/oauth.mjs";
@@ -74,7 +74,6 @@ const boot = async (extraArgs, extraEnv = {}) => {
     const p = spawn(process.execPath, [
       join(ROOT, "src", "server.mjs"),
       "--port", String(port),
-      "--db", join(tmp, "fixture.db"),
       "--oauth-db", join(tmp, "oauth.db"),
       "--roles-db", join(tmp, "roles.db"),
       ...extraArgs,
@@ -87,9 +86,8 @@ const boot = async (extraArgs, extraEnv = {}) => {
 
 before(async () => {
   tmp = mkdtempSync(join(tmpdir(), "postmark-read-worker-"));
-  fixtureDb(join(tmp, "fixture.db")).close();
-  // the offices here read their town index from a store seeded from this fixture (POS-268, office-under-test.mjs)
-  IX = await indexStore(join(tmp, "fixture.db"));
+  // the offices here read their town index from a store seeded from the fixture town (POS-268, office-under-test.mjs)
+  IX = await indexStore(fixtureTown());
   dynPath = join(tmp, "dynamic.db");
   // A real dynamic store, built by the ordinary WRITER path, so § 3 has
   // something to make unwritable. Built before the worker boots: a read worker
@@ -168,7 +166,7 @@ test("§0 a read worker refuses to boot without the writer's key store", async (
   const absent = join(tmp, "no-such-oauth.db");
   const p = spawn(process.execPath, [
     join(ROOT, "src", "server.mjs"), "--port", String(await freePort()),
-    "--db", join(tmp, "fixture.db"), "--oauth-db", absent,
+    "--oauth-db", absent,
     "--roles-db", join(tmp, "roles.db"), "--role", "read",
   ], { env: { ...process.env, ...IX?.env, WORLD_GRAPH_NONE: "1", WORLD_DYNAMIC_DB: dynPath,
     TOWN_CLONE: join(ROOT, "town-clone"), WORLD_CLONE: join(tmp, "no-world-clone") },
@@ -195,7 +193,7 @@ test("§0b a read worker refuses to boot on an ABSENT dynamic store", async () =
   const absent = join(tmp, "no-such-dir", "dynamic.db");
   const p = spawn(process.execPath, [
     join(ROOT, "src", "server.mjs"), "--port", String(await freePort()),
-    "--db", join(tmp, "fixture.db"), "--oauth-db", join(tmp, "oauth.db"),
+    "--oauth-db", join(tmp, "oauth.db"),
     "--roles-db", join(tmp, "roles.db"), "--role", "read",
   ], { env: { ...process.env, ...IX?.env, WORLD_GRAPH_NONE: "1", WORLD_DYNAMIC_DB: absent,
     TOWN_CLONE: join(ROOT, "town-clone"), WORLD_CLONE: join(tmp, "no-world-clone") },
@@ -253,7 +251,7 @@ test("§1b the refusal is the ROLE's, not the router's — a writer answers thes
   // untouched.
   const { child: proc, port: WRITER_PORT } = await bootOnFreePort((port) => spawn(process.execPath, [
     join(ROOT, "src", "server.mjs"), "--port", String(port),
-    "--db", join(tmp, "fixture.db"), "--oauth-db", seedStaticKeys(join(tmp, "oauth-w.db"), `${KEY}=keemin:wright`),
+    "--oauth-db", seedStaticKeys(join(tmp, "oauth-w.db"), `${KEY}=keemin:wright`),
     "--roles-db", join(tmp, "roles-w.db"),
   ], {
     env: { ...process.env, ...IX?.env, WORLD_GRAPH_NONE: "1", POSTMARK_PEN_TOKEN: PEN,

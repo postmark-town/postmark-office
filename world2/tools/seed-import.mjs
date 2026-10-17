@@ -57,7 +57,7 @@
 // ── USAGE ───────────────────────────────────────────────────────────────────
 //
 //   git clone --depth 1 --branch sandbox/seed \
-//     https://github.com/keeminlee/postmark-world.git /tmp/frozen
+//     https://github.com/postmark-town/postmark-world.git /tmp/frozen
 //
 //   PGHOST=localhost PGDATABASE=world2_dev PGUSER=world2_owner PGPASSWORD=… \
 //     node world2/tools/seed-import.mjs \

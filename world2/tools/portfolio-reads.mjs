@@ -65,8 +65,10 @@ export const PORTFOLIO_MARKS_SQL = `
  * eight residents. The portfolio's `belongs()` then read the other six's
  * standing marks as somebody else's and dropped them from `published`, and the
  * same six's stakes out of `backed` — a resident's own page, missing their own
- * work, with no refusal and nothing to notice. The store does not re-spell
- * `identities` (its rows are `law_ingester`'s), so the reader takes the set.
+ * work, with no refusal and nothing to notice. Since 055 (POS-350)
+ * `identities` is the registry's view and answers only `hh:<slug>` or
+ * `solo:<handle>`; the reader keeps the set, whose first member is the house's
+ * own key, so a caller holding an older spelling still finds the house.
  */
 export const HOUSEHOLD_HANDLES_SQL =
   "SELECT handle FROM identities WHERE household = ANY($1) ORDER BY handle";

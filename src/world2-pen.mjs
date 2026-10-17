@@ -53,6 +53,7 @@ import { world2Enabled } from "./world2-acts.mjs";
 import { currentCrossing } from "./crossings.mjs";
 import { sessionKeysVia, sessionKeyString } from "./household-deriver.mjs";
 import { nonceForActRow } from "./act-nonce.mjs";
+import { noteActWritten } from "./act-watch.mjs";
 import { storePoolOptions, watchPoolErrors, onPenClient, refuseNested } from "./store-pool.mjs"; // POS-370: the acquire timeout, the server's idle-transaction limit, one pen connection per call chain
 
 // ── A LATE ROW MAY NOT ENTER A CERTIFIED WINDOW (the act-4171 class, 2026-09-04) ─
@@ -256,6 +257,17 @@ export async function officeWrite(fn, { household = null, env = process.env } = 
   });
 }
 
+/**
+ * A connection of the pen's pool for a SESSION-scoped advisory lock (WLD-27,
+ * mark-stake-lock.mjs § withMarkHeld). The caller unlocks and releases it on
+ * every path. It is deliberately not marked as held for the call chain: the
+ * work done under the lock reads the store on its own connections, and the
+ * lock's connection runs no transaction while it waits.
+ */
+export async function penLockConnection(env = process.env) {
+  return (await pool(env)).connect();
+}
+
 /** The one acts INSERT, both eras. `seq` is null for a flipped or lane act —
  *  001's own words: the shadow-era pairing key, dying at cutover.
  *
@@ -294,11 +306,17 @@ export async function officeWrite(fn, { household = null, env = process.env } = 
  * KEY through world2-claims.mjs's one resolver and declares it inside `fn`, so
  * there is exactly one place the two spellings meet.
  */
-export async function officeRead(fn, { env = process.env, pool: given = null, by = "officeRead" } = {}) {
+export async function officeRead(fn, { env = process.env, pool: given = null, by = "officeRead", statementTimeoutMs = null } = {}) {
   refuseNested(by);
   return onPenClient(given ?? await pool(env), by, async (client, discard) => {
     try {
       await client.query("BEGIN READ ONLY");
+      // A read that must not hold its connection past a bound (the office's
+      // index poll, POS-639) says so here, as the transaction's first
+      // statement: Postgres cancels it at the bound and the connection comes
+      // home (static-keys-retire.mjs § the same SET LOCAL).
+      if (statementTimeoutMs != null)
+        await client.query(`SET LOCAL statement_timeout = '${Math.max(1, Math.trunc(statementTimeoutMs))}ms'`);
       const out = await fn(client);
       await client.query("COMMIT");
       return out;
@@ -336,6 +354,9 @@ export async function insertAct(client, rowIn, seq = null, { lateArrival = null 
   // it is ignored here, deliberately and in writing.
   const { text, values } = actsInsert(row, household);
   const { rows: [r] } = await client.query(`${text} RETURNING id`, values);
+  // Inside an act door, the creatures are told what reached the record (POS-637
+  // PR-B; act-watch.mjs § perceived). Outside one, this is nothing.
+  noteActWritten(row, r.id);
   return r.id;
 }
 

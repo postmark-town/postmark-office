@@ -19,6 +19,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { GANGWAY_STATES, gangwayState, insertGangwayAct, GANGWAY_PATH } from "./gangway.mjs";
 import { principalNow } from "./ops.mjs";
+import { trippedError } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 
 export async function callerMayGangway(key, ctx = {}) {
   return key?.ghId != null && (await principalNow(ctx?.rdb ?? null, key));
@@ -75,8 +76,7 @@ async function runUnderTownLock(payload, { clone }) {
     out = await execUnderTownLock(EXEC, JSON.stringify(payload), { ...process.env, TOWN_CLONE: clone });
   } catch (e) {
     if (lockTimedOut(e)) throw Object.assign(new Error(LOCK_BUSY.defect), LOCK_BUSY);
-    throw Object.assign(new Error("the gangway act tripped"),
-      { code: 500, defect: "the gangway act tripped", hint: String(e.stderr ?? e.message ?? e).slice(0, 300) });
+    throw trippedError("the gangway act tripped", e); // its stderr goes to the log (POS-578)
   }
   const result = JSON.parse(out.trim().split("\n").at(-1));
   if (result.error)

@@ -42,6 +42,7 @@ import { isDeepStrictEqual } from "node:util";
 
 import {
   ingest, planIngest, applyIngest, recordDiff, isRecordField, pathsAt, HEAD_KEY, amendClaimId,
+  commitReader, isPrintoutCommit, PRINTOUT_PENS,
 } from "../world2/tools/marks-ingest.mjs";
 import { REFUSED_BY_NAME } from "../world2/tools/backfill-register.mjs";
 import { marksFromRows, inPublishedOrder } from "../src/world2-fold.mjs";
@@ -375,6 +376,170 @@ test("THE EQUALITY — after `marks-ingest --ref B`, fold(rows) deep-equals fold
   const again = await ingest(store.client, { worldRepo: fx.repo, ref: B_TAG });
   assert.equal(again.status, "noop", again.receipt);
   assert.equal(store.writes.length, writes, "the second run wrote");
+});
+
+// ── POS-614: the settlement's own printout is never an input ───────────────
+//
+// S106 (50d1e6eeb) and S107 (0ddc96705) each wrote one `parent` amend into the
+// store, carried by the sweep's own "settlement: sweep" commit: the printout
+// read back as an act. The world pin predates both, so this builds the same
+// shape on the pinned tag through the real `ingest()` and the real `git log`:
+// a printout commit, a hand commit by Wright, and a git-era door commit by the
+// same Pen account, each changing one resident's mark. The real S106/S107
+// history is replayed against the box's own receipts in the lane's paperwork
+// (docs/2026-10-13/rail/POS-614/).
+
+const PEN = { name: "Postmark Pen", email: "301406700+postmark-pen@users.noreply.github.com" };
+const WRIGHT = { name: "Wright", email: "306351151+wright-starforge@users.noreply.github.com" };
+const P_TAG = "pos614-fixture-P";
+let px = null;
+
+async function printoutFixture() {
+  if (px) return px;
+  const pdir = mkdtempSync(join(tmpdir(), "pos614-ingest-"));
+  const repo = join(pdir, "w");
+  execFileSync("git", ["clone", "-q", "--shared", "--no-checkout", WORLD_CLONE, repo], { stdio: "ignore" });
+  git(repo, ["-c", "advice.detachedHead=false", "checkout", "-q", TAG]);
+  const shaA = git(repo, ["rev-parse", "HEAD"]).trim();
+  const { deriveSeed } = await import("../world2/tools/seed-import.mjs");
+  const seed = await deriveSeed({ worldRepo: repo, lawSha: shaA });
+  const { paths } = await pathsAt(repo);
+  const [printed, repaired, doorMade] = seed.marks
+    .filter((m) => m.kind === "sited" && m.owner !== "the-town" && paths.has(m.slug))
+    .map((m) => m.slug).slice(0, 3);
+  assert.ok(printed && repaired && doorMade, "the fixture could not find three resident marks in the tag");
+  const change = (slug, who, subject) => {
+    const f = join(repo, ...paths.get(slug).split("/"));
+    writeFileSync(f, setLine(readFileSync(f, "utf8"), "image", `pos614-${slug.split("/")[1]}.png`));
+    git(repo, ["add", "-A"]);
+    git(repo, ["-c", `user.name=${who.name}`, "-c", `user.email=${who.email}`, "commit", "-q", "-m", subject]);
+    return git(repo, ["rev-parse", "HEAD"]).trim();
+  };
+  const shas = {
+    printed: change(printed, PEN, "settlement: sweep 13 published, 0 unpublished, 0 left drafted, 0 withdrawn, 0 quarantined, 0 dropped, 0 re-framed"),
+    repaired: change(repaired, WRIGHT, `POS-614 fixture: a hand repair of ${repaired} (operator act)`),
+    doorMade: change(doorMade, PEN, `mark: ${doorMade} — by ${doorMade.split("/")[0]} (via world_leave_mark)`),
+  };
+  git(repo, ["tag", P_TAG]);
+  const owners = new Set(seed.marks.map((m) => m.owner));
+  const roll = Object.fromEntries([...owners].map((o) => [`h-${o}`, [o]]));
+  const genesis = { ...seed.window, status: "closed" };
+  const open = { id: genesis.id + 1, status: "open", opens_at: genesis.closes_at, closes_at: new Date(Date.now() + 864e5).toISOString() };
+  const makeStore = () => fakeStore({
+    marks: seed.marks.map((m) => structuredClone(m)), claims: seed.claims.map((c) => ({ id: c.id })), windows: [genesis, open], roll,
+  });
+  const imageAtA = Object.fromEntries([printed, repaired, doorMade].map((s) => [s, seed.marks.find((m) => m.slug === s).data?.image ?? null]));
+  px = { pdir, repo, printed, repaired, doorMade, shas, makeStore, imageAtA };
+  return px;
+}
+after(() => { if (px) rmSync(px.pdir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+
+test("POS-614 · THE LOOP IS CLOSED: the sweep's own commit carries nothing; a hand commit by Wright and a git-era door commit still come in", { skip: WHY_SKIP }, async () => {
+  const p = await printoutFixture();
+  const store = p.makeStore();
+  const r = await ingest(store.client, { worldRepo: p.repo, ref: P_TAG });
+  assert.equal(r.status, "ingested", r.receipt);
+  assert.deepEqual(r.plan.amends.map((a) => a.slug), [p.repaired, p.doorMade].sort(), "exactly the hand commit's and the door's marks are amended");
+  assert.deepEqual(r.plan.adds, [], "nothing is added");
+  const skip = r.plan.skipped.find((s) => s.slug === p.printed);
+  assert.ok(skip, `the printout's mark is not amended:\n${r.receipt}`);
+  assert.match(skip.why, /only the settlement's own printout changed its file \(.{9} settlement: sweep/);
+  assert.match(skip.why, new RegExp(p.shas.printed.slice(0, 9)), "the skip names the printout commit");
+  assert.equal(store.bySlug(p.printed).data.image ?? null, p.imageAtA[p.printed], "the store keeps its own word for the printed mark");
+  assert.equal(store.bySlug(p.repaired).data.image, `pos614-${p.repaired.split("/")[1]}.png`, "Wright's repair reached the store");
+  const pSha = git(p.repo, ["rev-parse", P_TAG]).trim();
+  assert.equal(store.claim(amendClaimId(p.repaired, pSha)).data._ingested_from.sha, p.shas.repaired, "its provenance is the hand commit");
+});
+
+test("POS-614 · commitReader: the printout's path answers printout_only with the printout's sha; the hand repair's path answers the hand commit", { skip: WHY_SKIP }, async () => {
+  const p = await printoutFixture();
+  const base = git(p.repo, ["rev-parse", `${P_TAG}~3`]).trim();
+  const target = git(p.repo, ["rev-parse", P_TAG]).trim();
+  const read = commitReader(p.repo, { base, target });
+  const { paths } = await pathsAt(p.repo);
+  const printed = read({ path: paths.get(p.printed), range: true, deleted: false });
+  assert.equal(printed.printout_only, true);
+  assert.equal(printed.sha, p.shas.printed);
+  const repaired = read({ path: paths.get(p.repaired), range: true, deleted: false });
+  assert.equal(repaired.sha, p.shas.repaired);
+  assert.equal(repaired.printout_only, undefined);
+});
+
+test("POS-614 · the printout is named by author email AND subject: the crossing's commits are; Wright, Bevel and the git-era door's Pen commits are not", () => {
+  const yes = [
+    [PEN.email, "settlement: sweep 9 published, 0 unpublished, 0 left drafted, 0 withdrawn, 0 quarantined, 0 dropped, 0 re-framed"],
+    [PEN.email, "re-home: wright/a-trued-spinning-top-for-little-m from (root) to fabel-of-garrison/the-archway — the paper moved, the ground did not"],
+    [PEN.email, "photograph: windows 246, 246.5"],
+    [PEN.email, "crossing-save 205: 1200 entities, 40 events"],
+    ["pen@postmark.town", "settlement: sweep 2 published, 0 unpublished"],
+    ["postmark-settlement@users.noreply.github.com", "settlement: household registry re-derived from the town at 8b81baa35"],
+    ["301406700+Postmark-Pen@users.noreply.github.com", "settlement: sweep 1 published"],
+  ];
+  const no = [
+    [PEN.email, "mark: rei/the-front-door — by rei (via world_leave_mark)"],
+    [WRIGHT.email, "settlement: sweep 9 published (a hand commit borrowing the words)"],
+    [WRIGHT.email, "POS-446 instance repair: five residents' door amends reach their files"],
+    ["341174930+bevel-starforge[bot]@users.noreply.github.com", "WLD-39: the lifetimes doctrine"],
+    ["postmark-settlement@users.noreply.github.com", "re-home: not this pen's word"],
+    [null, null],
+  ];
+  for (const [email, subject] of yes) assert.equal(isPrintoutCommit({ email, subject }), true, `${email} · ${subject}`);
+  for (const [email, subject] of no) assert.equal(isPrintoutCommit({ email, subject }), false, `${email} · ${subject}`);
+  assert.equal(PRINTOUT_PENS.length, 3, "three pens: the Pen's two emails and the registry's");
+});
+
+test("POS-614 · A HAND COMMIT AND THE PRINTOUT ON ONE FILE: only the hand's fields are carried, the hand's value wins, and the receipt names the printout's fields left out", { skip: WHY_SKIP }, async () => {
+  const mdir = mkdtempSync(join(tmpdir(), "pos614-mixed-"));
+  try {
+    const repo = join(mdir, "w");
+    execFileSync("git", ["clone", "-q", "--shared", "--no-checkout", WORLD_CLONE, repo], { stdio: "ignore" });
+    git(repo, ["-c", "advice.detachedHead=false", "checkout", "-q", TAG]);
+    const shaA = git(repo, ["rev-parse", "HEAD"]).trim();
+    const { deriveSeed } = await import("../world2/tools/seed-import.mjs");
+    const seed = await deriveSeed({ worldRepo: repo, lawSha: shaA });
+    const { paths } = await pathsAt(repo);
+    const slug = seed.marks.find((m) => m.kind === "sited" && m.owner !== "the-town" && paths.has(m.slug) && !m.data?.note).slug;
+    const f = join(repo, ...paths.get(slug).split("/"));
+    const commitAs = (who, subject, edit) => {
+      writeFileSync(f, edit(readFileSync(f, "utf8")));
+      git(repo, ["add", "-A"]);
+      git(repo, ["-c", `user.name=${who.name}`, "-c", `user.email=${who.email}`, "commit", "-q", "-m", subject]);
+      return git(repo, ["rev-parse", "HEAD"]).trim();
+    };
+    // The hand first, then the printout over it: the stricter order, where the ref holds the printout's value.
+    const handSha = commitAs(WRIGHT, `POS-614 fixture: a hand repair of ${slug}`, (t) => setLine(t, "image", "pos614-hand.png"));
+    const printSha = commitAs(PEN, "settlement: sweep 1 published, 0 unpublished, 0 left drafted, 0 withdrawn, 0 quarantined, 0 dropped, 0 re-framed",
+      (t) => setLine(setLine(t, "image", "pos614-printout.png"), "note", "the printout's own word"));
+    git(repo, ["tag", "pos614-fixture-M"]);
+    const owners = new Set(seed.marks.map((m) => m.owner));
+    const genesis = { ...seed.window, status: "closed" };
+    const open = { id: genesis.id + 1, status: "open", opens_at: genesis.closes_at, closes_at: new Date(Date.now() + 864e5).toISOString() };
+    const store = fakeStore({ marks: seed.marks.map((m) => structuredClone(m)), claims: seed.claims.map((c) => ({ id: c.id })),
+      windows: [genesis, open], roll: Object.fromEntries([...owners].map((o) => [`h-${o}`, [o]])) });
+
+    const r = await ingest(store.client, { worldRepo: repo, ref: "pos614-fixture-M" });
+    assert.equal(r.status, "ingested", r.receipt);
+    assert.deepEqual(r.plan.amends.map((a) => [a.slug, a.fields, a.commit.sha]), [[slug, ["image"], handSha]], r.receipt);
+    assert.deepEqual(r.plan.amends[0].printout_fields, ["image", "note"], "the printout changed image and note");
+    assert.equal(store.bySlug(slug).data.image, "pos614-hand.png", "the hand's value wins over the printout's later one");
+    assert.equal(store.bySlug(slug).data.note ?? null, null, "the printout's own field is left out");
+    assert.match(r.receipt, new RegExp(`~ ${slug.replace("/", "\\/")}  fields: image  ${handSha.slice(0, 9)} Wright`));
+    assert.match(r.receipt, new RegExp(`the printout's fields left out: image, note \\(${printSha.slice(0, 9)}\\)`));
+  } finally { rmSync(mdir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
+});
+
+test("POS-614 · planIngest: a path only the printout touched is SKIPPED with its reason, in every arm, and never a STOP", () => {
+  const P = (sha) => ({ sha, author: "Postmark Pen", at: "2026-10-13T18:00:30.000Z", subject: "settlement: sweep 9 published", printout_only: true });
+  const plan = planIngest({
+    derived: [row("a/amended", { body: "printed" }), row("a/added")],
+    storeRows: [row("a/amended", { body: "store" }), row("a/gone")],
+    pathAtRef: new Map([["a/amended", "p/am"], ["a/added", "p/ad"]]),
+    pathAtBase: new Map([["a/gone", "p/g"]]),
+    commitFor: ({ path }) => P(`print-${path}`),
+  });
+  assert.deepEqual([plan.adds, plan.amends, plan.retires, plan.stops], [[], [], [], []]);
+  assert.deepEqual(plan.skipped.map((s) => [s.slug, s.fields[0]]), [["a/added", "(add)"], ["a/amended", "body"], ["a/gone", "(retire)"]]);
+  for (const s of plan.skipped) assert.match(s.why, /^only the settlement's own printout changed its file \(print-p\/\S+ settlement: sweep 9 published\) — .*\(POS-614\)$/);
 });
 
 // ── the plan's gates, without a world ──────────────────────────────────────

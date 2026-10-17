@@ -78,7 +78,7 @@
 
 import { readFileSync } from "node:fs";
 
-import { retireMarks } from "./materialize.mjs";
+import { retireMarks, returnToDrafts } from "./materialize.mjs";
 
 const arg = (n) => { const i = process.argv.indexOf(n); return i === -1 ? null : process.argv[i + 1]; };
 const has = (n) => process.argv.includes(n);
@@ -176,7 +176,7 @@ async function main() {
   // is indistinguishable from a step nobody called. That distinction is the
   // whole lesson of the drain's three caller-less days.
   if (!slugs.length) {
-    process.stdout.write(`${JSON.stringify({ ran: true, retired: [], already_retired: [], absent: [], count: 0 }, null, 1)}\n`);
+    process.stdout.write(`${JSON.stringify({ ran: true, retired: [], already_retired: [], absent: [], count: 0, drafts: { returned: [], kept: [], unreturned: [] } }, null, 1)}\n`);
     process.exit(0);
   }
 
@@ -199,8 +199,13 @@ async function main() {
       windowId = Number(rows[0].id);
     }
     const report = await retireMarks(q, { slugs, windowId, cause: "settlement-unpublish" });
+    // WLD-51 G1 (Darko, 2026-10-15 13:00): each mark this crossing took goes
+    // back to its household's drafts, in the same transaction, so a retirement
+    // and its return commit together or not at all. Only the marks retired NOW:
+    // a re-run retires nothing and so returns nothing twice.
+    const drafts = await returnToDrafts(q, { slugs: report.retired.map((r) => r.slug), windowId });
     await q("COMMIT");
-    process.stdout.write(`${JSON.stringify({ ran: true, ...report, count: report.retired.length }, null, 1)}\n`);
+    process.stdout.write(`${JSON.stringify({ ran: true, ...report, count: report.retired.length, drafts }, null, 1)}\n`);
     process.exit(0);
   } catch (e) {
     try { await q("ROLLBACK"); } catch { /* the connection is already gone */ }

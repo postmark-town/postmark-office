@@ -8,13 +8,17 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { ensureDraftCheckout } from "../src/world-branches.mjs";
+// Imported for its side effect too: every git below (ensureDraftCheckout's
+// included) runs its auto-maintenance in the foreground, so no detached child
+// is still writing pen/.git/objects when after() removes it (POS-580).
+import { removeTempDirSync } from "./helpers/temp-dir.mjs";
 
 const root = mkdtempSync(join(tmpdir(), "postmark-reseat-"));
-after(() => rmSync(root, { recursive: true, force: true }));
+after(() => removeTempDirSync(root));
 
 const g = (repo, ...args) => execFileSync("git", [
   "-C", repo,
@@ -43,6 +47,12 @@ g(seed, "branch", "draft/alpha", "main");
 execFileSync("git", ["clone", "-q", "--bare", seed, origin], { stdio: ["ignore", "pipe", "pipe"] });
 execFileSync("git", ["clone", "-q", origin, keeper], { stdio: ["ignore", "pipe", "pipe"] });
 execFileSync("git", ["clone", "-q", origin, pen], { stdio: ["ignore", "pipe", "pipe"] });
+
+test("the pen's git runs its auto-maintenance in the foreground, so nothing outlives a call into after() (POS-580)", () => {
+  for (const key of ["gc.autoDetach", "maintenance.autoDetach"]) {
+    assert.equal(g(pen, "config", "--get", key), "false", `${key}: a detached child would still be writing pen/.git/objects at teardown`);
+  }
+});
 
 test("stranded local commit is rebased onto the Worldkeeper's rewritten branch and pushes clean", () => {
   // The pen writes a mark on draft/alpha and pushes it... except this one

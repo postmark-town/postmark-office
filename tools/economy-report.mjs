@@ -101,12 +101,16 @@ const equityRows = [...equity.values()].sort((a, b) => b.minted - a.minted || a.
 const M = equityRows.reduce((s, r) => s + r.minted, 0);          // cumulative mint
 const liquidTotal = equityRows.reduce((s, r) => s + r.liquid, 0);
 const escrowTotal = equityRows.reduce((s, r) => s + r.escrow, 0);
+// What the town's correction burns took out of supply (POS-649): the BURN
+// account's balance. With it, liquid + escrow + burned = M.
+const burnedTotal = liquid.get("BURN") ?? 0;
 for (const r of equityRows) r.share = M > 0 ? r.minted / M : 0;
 
 // THE GUARDS, and they are chosen for being able to FAIL.
 //
-// `liquid + escrow = M` is NOT one of them. It is a structural identity of a
-// double-entry fold with MINT/BURN/stake:* excluded — it holds no matter how
+// `liquid + escrow + burned = M` is NOT one of them (`burned` since POS-649's
+// corrections; before any burn it is 0). It is a structural identity of a
+// double-entry fold with MINT/stake:* excluded and BURN counted — it holds no matter how
 // broken the ledger is, so rendering it as a green check would be a lie that
 // looks like assurance. It is printed below as arithmetic, not as a verdict.
 // (Found by test/economy-report.test.mjs, which could not make it go red.)
@@ -158,6 +162,13 @@ const SOURCE_OF = {
   // An award on an idea post (POS-290): a hand pays a credited resident, one
   // line per post and label, written by the reviewed award pass.
   "post-award": "awards",
+  // A quest the town pays by hand-reviewed pass (POS-632): one line per quest
+  // and household, written by tools/quest-pay-plan.mjs.
+  "quest-pay": "quests",
+  // A bug stage paid again to the right resident (POS-649), `for:
+  // post:<post>/<stage>-recredit`. Its twin, the burn of the wrong mint, mints
+  // nothing, so it never reaches this table; it is the supply's `burned`.
+  "post-recredit": "stage corrections",
 };
 // What one ledger line minted, asked of the town's own fold: foldMintCount over
 // that line alone. So a line counts here exactly when it counts in M, and a kind
@@ -481,7 +492,7 @@ ${equityBars}
 ${V.details(`all ${equityRows.length} households, with liquid, escrow and this week's minting`, equityTable)}
 
 <h2>supply</h2>
-<p class="note">One bar, cut where the stamps actually are. <code>liquid + escrow = M</code> is arithmetic here, not a verdict: with MINT, BURN and the <code>stake:*</code> escrow accounts excluded, a double-entry fold sums to M however broken the ledger is, so a green tick on it would be assurance that cannot fail. The two chips below are the guards that can — a household below zero means the clip law was breached, and an account that moved stamps while never minting and never being pinned is money from nowhere.</p>
+<p class="note">One bar, cut where the stamps actually are. <code>liquid + escrow + burned = M</code> is arithmetic here, not a verdict: with MINT and the <code>stake:*</code> escrow accounts excluded and BURN counted as burned (the corrections' burns, POS-649), a double-entry fold sums to M however broken the ledger is, so a green tick on it would be assurance that cannot fail. The two chips below are the guards that can — a household below zero means the clip law was breached, and an account that moved stamps while never minting and never being pinned is money from nowhere.</p>
 ${V.legend([{ name: `liquid, held by households (${comma(liquidTotal)})`, color: V.SERIES[0] },
   { name: `escrowed in open stakes (${comma(escrowTotal)})`, color: V.SERIES[3] }])}
 ${supplyBar}
@@ -522,7 +533,7 @@ writeFileSync(join(OUT_DIR, "data.json"), JSON.stringify({
   generated_at: now, town: townSha, town_ledger_dirty: dirty, world: worldSha, ledger_lines: entries.length,
   equity: { M, households: equityRows.length, gini: Number(gini.toFixed(4)), top10_share: Number(topShare(10).toFixed(4)), rows: equityRows },
   supply: {
-    minted: M, liquid: liquidTotal, escrow: escrowTotal, accounted: liquidTotal + escrowTotal,
+    minted: M, liquid: liquidTotal, escrow: escrowTotal, burned: burnedTotal, accounted: liquidTotal + escrowTotal + burnedTotal,
     negative: negative.map((r) => ({ key: r.key, handles: r.handles, liquid: r.liquid })),
     unknown_accounts: unknown.map((r) => ({ key: r.key, handles: r.handles, liquid: r.liquid })),
     clean: negative.length === 0 && unknown.length === 0,

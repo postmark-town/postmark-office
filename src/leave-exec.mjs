@@ -32,6 +32,8 @@ import { execFileSync } from "node:child_process";
 import { penCommit } from "./write.mjs";
 import { markRecord } from "./mark-record.mjs";
 import { ensureDraftCheckout } from "./world-branches.mjs";
+import { isDroppedUnitMark } from "./world-stacks.mjs";
+import { faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578, POS-617)
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 // WORLD_CLONE is the LEASED WORKTREE when the pool is on (tier 1) and the shared
@@ -63,7 +65,7 @@ const frozenDirOf = (id) => {
 };
 
 const answer = (obj) => { console.log(JSON.stringify(obj)); process.exit(0); };
-const err = (code, defect, hint) => answer({ error: { code, defect, hint } });
+const err = (code, defect, hint, extra = {}) => answer({ error: { code, defect, hint, ...extra } });
 
 // phase stamps for the one [timing] stderr line printed on the success path —
 // the write-path decomposition (lock wait lives in the parent's total).
@@ -93,7 +95,9 @@ async function main() {
   try {
     branch = timed("checkout", () => ensureDraftCheckout(CLONE, p.household, { pooled: !!SLOT, shared: SHARED }));
   } catch (e) {
-    return err(409, "the household sketchbook is not ready", String(e?.message ?? e).slice(0, 300));
+    // git's own words about the checkout (a path on the box, a lock, a ref) go to this
+    // child's stderr, the office's log; the resident reads that nothing of theirs caused it (POS-617)
+    return err(409, "the household sketchbook is not ready", faultLogged("the household sketchbook is not ready", e));
   }
 
   const marks = timed("load", () => loadMarks(MARKS_DIR));
@@ -147,6 +151,17 @@ async function main() {
   if (p.op === "withdraw") {
     const rec = byId.get(id);
     if (!rec) return err(404, `no mark "${id}" in your world`, "ids are <by>/<slug> — you can withdraw your drafts and your published marks; check world_my_marks");
+    // A SET-DOWN UNIT'S MARK IS NOT WITHDRAWN ON THIS LANE (Wright, AUTHORITY
+    // 2026-10-13T07:52:24.868Z; Bevel's revised first review of #503, R3). Asked
+    // HERE, of the very record this withdrawal would delete — the household's
+    // own sketchbook as just checked out, published or not — because the door's
+    // early answers (the store, canon) cannot see a private draft on this branch.
+    // Its unit comes back only on the store's single-log path, so this lane
+    // refuses by name before anything is deleted or committed.
+    if (isDroppedUnitMark(rec) || /^act:[1-9][0-9]*$/.test(String(rec.dropped ?? "")))
+      return err(409, `"${id}" is a set-down unit's mark, and it is withdrawn only on the store's path (dropped-unit-withdraw-store-only)`,
+        `its record names the set-down it is (${rec.dropped}). Withdrawing it returns the unit to its dropper, and only the single-log store path (WORLD_SINGLE_LOG=1) makes that return; this office writes marks on the git lane, so nothing was written. Once it is published it is taken back instead: world_hold { thing: "${id}" }.`,
+        { reason: "dropped-unit-withdraw-store-only" });
     const dir0 = rec._dir;
     if (holdsChildren(dir0, id)) return err(409, `"${id}" still holds marks inside it`,
       "withdraw or move the children first — a withdrawal may not strand what stands on it");

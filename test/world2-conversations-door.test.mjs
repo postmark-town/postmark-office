@@ -95,7 +95,16 @@ test("silence is the good case: a record whose every say composes carries no unp
 });
 
 test("an act no era explains still stops the read: only an unplaceable say is answered around", async () => {
-  const r = await read([...ACTS, { id: 9, at: new Date(T0), actor: null, action: "say", payload: {} }]);
+  // The register's own sentence (which act, which era) goes to the office's
+  // log, not the answer (POS-578): the answer is the office's 500 in its own words.
+  const lines = [];
+  const was = console.error;
+  console.error = (...a) => { lines.push(a.join(" ")); };
+  let r;
+  try { r = await read([...ACTS, { id: 9, at: new Date(T0), actor: null, action: "say", payload: {} }]); }
+  finally { console.error = was; }
   assert.equal(r.code, 500);
-  assert.match(r.body.hint, /match no known era/);
+  assert.equal(r.body.defect, "a voice act matches no known era");
+  assert.match(r.body.hint, /What failed is in the office's log, not in this answer/);
+  assert.match(lines.join("\n"), /match no known era/, "the log says which");
 });

@@ -69,6 +69,62 @@ export function readCrossingLogs(worldClone, fromCrossing, toCrossing) {
   return { lines, covered, absent };
 }
 
+// ── THE LIVE LINES (POS-632 PR-3, the gap read's finding 6) ────────────────
+//
+// The crossing log is written a few minutes after each ferry, so inside a
+// crossing it holds almost nothing of that crossing. A cursor that only read
+// the log would answer "nothing new" for twelve hours. So the window the log
+// has not caught up with is read from the store's act record itself: the acts
+// that make the log's three kinds (walk → departure, say → emission, a take,
+// give or drop → attachment), placed by their witnessed anchor the way the
+// save places them (save-emissions.mjs § emissionRowsFromActs), and read by
+// the primary key: after the cursor's high-water mark, or the newest LIVE_SCAN.
+export const LIVE_KINDS = Object.freeze({ walk: "departure", say: "emission", take: "attachment", give: "attachment", drop: "attachment" });
+export const LIVE_SCAN = 500;
+export const LIVE_HW_SQL = "SELECT max(id)::text AS hw FROM acts";
+// NEWEST FIRST after the cursor (review-559 § 1): a long gap is a capped glance
+// of its NEWEST acts, and the cursor handed back is the top, so nothing between
+// is skipped silently; `complete` says when the gap was cut.
+export const LIVE_AFTER_SQL = `SELECT id::text AS id, actor, action, at, at_anchor, at_dx, at_dy FROM acts
+  WHERE id > $1::bigint AND action = ANY($2::text[]) ORDER BY id DESC LIMIT $3`;
+export const LIVE_NEWEST_SQL = `SELECT id::text AS id, actor, action, at, at_anchor, at_dx, at_dy FROM acts
+  WHERE action = ANY($1::text[]) ORDER BY id DESC LIMIT $2`;
+
+/**
+ * { lines, hw, complete } — the log's line shape for the live window — or null
+ * when the record cannot be read (the caller keeps the log's lines alone).
+ * `afterId`: every kind-act after it (a cursor's hw). Else the newest LIVE_SCAN
+ * at or after `sinceMs`.
+ */
+export async function liveLines({ afterId = null, sinceMs = null, query, centreOf, compose }) {
+  try {
+    const top = await query(LIVE_HW_SQL, []);
+    if (top == null) return null;
+    const hw = top[0]?.hw ?? null;
+    const kinds = Object.keys(LIVE_KINDS);
+    const newest = afterId != null
+      ? await query(LIVE_AFTER_SQL, [afterId, kinds, LIVE_SCAN])
+      : (await query(LIVE_NEWEST_SQL, [kinds, LIVE_SCAN])).filter((r) => sinceMs == null || Date.parse(r.at instanceof Date ? r.at.toISOString() : r.at) >= sinceMs);
+    const capped = (newest?.length ?? 0) >= LIVE_SCAN;
+    const rows = [...(newest ?? [])].reverse();
+    const lines = [];
+    for (const r of rows ?? []) {
+      const pos = compose({ anchor: r.at_anchor, dx: r.at_dx, dy: r.at_dy }, centreOf);
+      if (!pos) continue;
+      lines.push({ at: r.at instanceof Date ? r.at.toISOString() : r.at, type: LIVE_KINDS[r.action], actor: r.actor, payload: { x: pos.x, y: pos.y }, live: true });
+    }
+    // the mark handed back is the highest of the store's top and the newest row
+    // read: an act inserted between the two queries is shown now, never again
+    const big = (v) => { try { return v == null ? null : BigInt(v); } catch { return null; } };
+    const ids = [big(hw), big(rows.at(-1)?.id), big(afterId)].filter((v) => v != null);
+    const mark = ids.length ? ids.reduce((a, b) => (a > b ? a : b)).toString() : null;
+    return { lines, hw: mark, complete: !capped };
+  } catch (e) {
+    console.error(`[world] the live lines could not be read (${String(e?.message ?? e).slice(0, 160)}); happened reads the crossing log alone`);
+    return null;
+  }
+}
+
 /** The newest crossing the log actually holds — the cursor's ceiling. */
 export function latestSavedCrossing(worldClone) {
   const dir = join(worldClone, "STATE", "log");
@@ -85,7 +141,7 @@ export function latestSavedCrossing(worldClone) {
  * reader could disagree with it. The log supplies the displacement half: what
  * the carrier did while you were in its frame.
  */
-export function toYou({ transitions = [], carriedLegs = [], claimEffects = null, holdEffects = null, sinceCrossing, nowCrossing }) {
+export function toYou({ transitions = [], carriedLegs = [], claimEffects = null, holdEffects = null, creatureEffects = null, sinceCrossing, nowCrossing }) {
   const events = [];
   for (const t of transitions) {
     if (t.crossing != null && t.crossing < sinceCrossing) continue;
@@ -129,6 +185,13 @@ export function toYou({ transitions = [], carriedLegs = [], claimEffects = null,
   // when it landed the claim half; it is this lane's.
   for (const e of holdEffects?.events ?? []) events.push(e);
 
+  // ── THE CREATURES' ANSWERS (POS-637 PR-C; C1, Darko 2026-10-15 12:09) ─────
+  //
+  // A creature's reaction to you is an effect on your node, wherever you were
+  // when it was written: a walk is seen when it lands, and the walker who
+  // answers every 12 hours learns here what the wolf did when they got there.
+  for (const e of creatureEffects?.events ?? []) events.push(e);
+
   // ── AND `complete` STOPS BEING UNCONDITIONAL ──────────────────────────────
   //
   // The old sentence — "complete by construction — frame events are rare, so
@@ -142,12 +205,14 @@ export function toYou({ transitions = [], carriedLegs = [], claimEffects = null,
   // whose backlog could be incomplete — so it keeps the promise.
   const docketReadable = claimEffects == null || claimEffects.readable !== false;
   const holdsReadable = holdEffects == null || holdEffects.readable !== false;
+  const creaturesReadable = creatureEffects == null || creatureEffects.readable !== false;
   const unread = [
     ...(docketReadable ? [] : [claimEffects.reason ?? "the docket store could not be read"]),
     ...(holdsReadable ? [] : [holdEffects.reason ?? "the holding record could not be read"]),
+    ...(creaturesReadable ? [] : [creatureEffects.reason ?? "the creatures could not be read"]),
   ];
   return {
-    complete: docketReadable && holdsReadable,
+    complete: docketReadable && holdsReadable && creaturesReadable,
     // ⚑ LANE A'S SENTENCE IS KEPT CONTIGUOUS, and that is not cosmetic: its own
     // test binds "every claim effect on your marks and on your ground rides
     // here too" as one string. My first draft spliced this lane's clause into
@@ -155,7 +220,7 @@ export function toYou({ transitions = [], carriedLegs = [], claimEffects = null,
     // a promise about the words, and the right move is to add after it rather
     // than to loosen the other lane's assertion to fit mine.
     note: unread.length === 0
-      ? "complete for you — frame events are rare by construction, and every claim effect on your marks and on your ground rides here too, and so does every hold on a thing of yours or by your own hand"
+      ? `complete for you — frame events are rare by construction, and every claim effect on your marks and on your ground rides here too, and so does every hold on a thing of yours or by your own hand${creatureEffects ? ", and every creature's answer to you" : ""}`
       : `INCOMPLETE — ${unread.join("; ")}. Frame events below are whole; the shelves named here are missing from this answer, and this line is here so you do not read their absence as nothing having happened.`,
     since_crossing: sinceCrossing,
     through_crossing: nowCrossing,
@@ -246,7 +311,7 @@ export function townShelf({ nowCrossing, latestSettlement = null, notices = [], 
  * The whole `happened` block. Pure over its inputs so the delta-cap invariant
  * can be falsified without a world, a clone, or a store.
  */
-export function happenedBlock({ transitions, carriedLegs, claimEffects = null, holdEffects = null, lines, at, sinceCrossing, nowCrossing, latestSettlement, notices, headlines = null, exclude }) {
+export function happenedBlock({ transitions, carriedLegs, claimEffects = null, holdEffects = null, creatureEffects = null, lines, at, sinceCrossing, nowCrossing, latestSettlement, notices, headlines = null, exclude }) {
   return {
     since: { crossing: sinceCrossing,
       // R4: the cursor's clock, named where the cursor is. `since:` counts the
@@ -254,7 +319,7 @@ export function happenedBlock({ transitions, carriedLegs, claimEffects = null, h
       // the sha it blessed) is a different number on a different beat, and it
       // rides `latest_settlement` below.
       note: "pass the `crossing` from your last reply as since: — the town's clock is the cursor, and it counts the ferry's 00:00/12:00Z crossings (not the keeper's settlement epoch, which rides town.latest_settlement)" },
-    to_you: toYou({ transitions, carriedLegs, claimEffects, holdEffects, sinceCrossing, nowCrossing }),
+    to_you: toYou({ transitions, carriedLegs, claimEffects, holdEffects, creatureEffects, sinceCrossing, nowCrossing }),
     around_you: aroundYou({ lines, at, exclude }),
     town: townShelf({ nowCrossing, latestSettlement, notices, headlines }),
   };

@@ -50,7 +50,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
 import { mcpWorkerTakes, startReadPool, workerTakes } from "../src/read-workers.mjs";
 import { WORLD_CLONE } from "../src/world-store.mjs";
@@ -106,9 +106,8 @@ before(async () => {
   if (!haveClone) return;
   Object.assign(process.env, FLAGS);
   tmp = mkdtempSync(join(tmpdir(), "postmark-read-workers-"));
-  fixtureDb(join(tmp, "fixture.db")).close();
-  // the offices here read their town index from a store seeded from this fixture (POS-268, office-under-test.mjs)
-  IX = await indexStore(join(tmp, "fixture.db"));
+  // the offices here read their town index from a store seeded from the fixture town (POS-268, office-under-test.mjs)
+  IX = await indexStore(fixtureTown());
   // A read-role office refuses to boot without the writer's two stores (see
   // server.mjs § OAUTH_DB_PATH), so they are made here the way the writer makes them.
   const { openDynamic } = await import("../src/dynamic-store.mjs");
@@ -119,7 +118,7 @@ before(async () => {
   pool = startReadPool({
     size: 2,
     entry: new URL("../src/server.mjs", import.meta.url),
-    argv: ["--port", "0", "--db", join(tmp, "fixture.db"), "--oauth-db", join(tmp, "oauth.db"), "--roles-db", join(tmp, "roles.db")],
+    argv: ["--port", "0", "--oauth-db", join(tmp, "oauth.db"), "--roles-db", join(tmp, "roles.db")],
     env: { ...process.env, ...IX?.env, WORLD_GRAPH_NONE: "1", WORLD_DYNAMIC_DB: join(tmp, "dynamic.db"), TOWN_CLONE: join(ROOT, "town-clone") },
     log: { error: () => {} },
   });
@@ -266,7 +265,7 @@ test("§ 4 a real office hands the agents' reads to its worker and keeps the act
   // pool tree on the box shares.
   const { child: proc, port } = await bootOnFreePort((port) => spawn(process.execPath, [
     join(ROOT, "src", "server.mjs"), "--port", String(port),
-    "--db", join(tmp, "fixture.db"), "--oauth-db", join(tmp, "oauth.db"), "--roles-db", join(tmp, "roles.db"),
+    "--oauth-db", join(tmp, "oauth.db"), "--roles-db", join(tmp, "roles.db"),
   ], {
     env: { ...process.env, ...IX?.env, WORLD_GRAPH_NONE: "1", OFFICE_READ_WORKERS: "1",
       WORLD_DYNAMIC_DB: join(tmp, "dynamic.db"), TOWN_CLONE: join(ROOT, "town-clone") },
@@ -316,7 +315,7 @@ test("§ 5 the REST listen is answered by the main thread and hears the say befo
   // pool tree on the box shares.
   const { child: proc, port } = await bootOnFreePort((port) => spawn(process.execPath, [
     join(ROOT, "src", "server.mjs"), "--port", String(port),
-    "--db", join(tmp, "fixture.db"), "--oauth-db", join(tmp, "oauth.db"), "--roles-db", join(tmp, "roles.db"),
+    "--oauth-db", join(tmp, "oauth.db"), "--roles-db", join(tmp, "roles.db"),
   ], {
     env: { ...process.env, ...IX?.env, OFFICE_READ_WORKERS: "1", WORLD_APEX: "1",
       WORLD_GRAPH_ROWS: `${worldDb}.rows.json`, WORLD_STORE_DB: join(tmp, "no-world-db-here.db"),   // the world is the rows (POS-270 lane W 3a)
@@ -369,7 +368,7 @@ test("§ 6 a `before:` page is answered by the main thread; at the door a voice 
   // pool tree on the box shares.
   const { child: proc, port } = await bootOnFreePort((port) => spawn(process.execPath, [
     join(ROOT, "src", "server.mjs"), "--port", String(port),
-    "--db", join(tmp, "fixture.db"), "--oauth-db", join(tmp, "oauth.db"), "--roles-db", join(tmp, "roles.db"),
+    "--oauth-db", join(tmp, "oauth.db"), "--roles-db", join(tmp, "roles.db"),
   ], {
     env: { ...process.env, ...IX?.env, OFFICE_READ_WORKERS: "1", WORLD_APEX: "1",
       WORLD_GRAPH_ROWS: `${worldDb}.rows.json`, WORLD_STORE_DB: join(tmp, "no-world-db-here.db"),   // the world is the rows (POS-270 lane W 3a)
@@ -436,14 +435,13 @@ test("§ 7 a keyed full letter read stays on the main thread; a keyless one goes
   seedStaticKeys(join(tmp, "oauth.db"), `${KEY2}=limen-house:limen`);
   const env = { ...process.env, ...IX?.env, WORLD_GRAPH_NONE: "1", OFFICE_READ_WORKERS: "1", WORLD_APEX: "1",
     WORLD_DYNAMIC_DB: join(tmp, "dynamic.db"), TOWN_CLONE: join(ROOT, "town-clone") };
-  // no record of its own; switched, the index's store is the one store it is given (POS-268)
-  if (!IX?.env.WORLD2_PG) { delete env.WORLD2_PG; delete env.WORLD2_PG_URL; }
+  // no record of its own: the index's store is the one store it is given (POS-268)
   // The port is asked of the OS, never chosen (spawn-office.mjs § the port,
   // asked for); it was a berth derived from the pid, a guess at a door every
   // pool tree on the box shares.
   const { child: proc, port } = await bootOnFreePort((port) => spawn(process.execPath, [
     join(ROOT, "src", "server.mjs"), "--port", String(port),
-    "--db", join(tmp, "fixture.db"), "--oauth-db", join(tmp, "oauth.db"), "--roles-db", join(tmp, "roles.db"),
+    "--oauth-db", join(tmp, "oauth.db"), "--roles-db", join(tmp, "roles.db"),
   ], { env, stdio: ["ignore", "pipe", "pipe"] }), { budgetMs: 30_000 });
   const gone = new Promise((ok) => proc.on("exit", ok));
   try {
@@ -480,4 +478,16 @@ test("§ 7 a keyed full letter read stays on the main thread; a keyless one goes
     proc.kill();
     await gone;
   }
+});
+
+// ── POS-632 W4: which handovers carry the main thread's earshot ─────────────
+test("wantsEarshot: a bare world read at v2 (by the call or the office's default) carries earshot; nothing else does", async () => {
+  const { wantsEarshot } = await import("../src/read-workers.mjs");
+  const call = (name, args) => [{ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }];
+  assert.equal(wantsEarshot(call("world", { read_shape: "v2" })), true);
+  assert.equal(wantsEarshot(call("world", {}), "v2"), true, "the office's default");
+  assert.equal(wantsEarshot(call("world", {}), "v1"), false);
+  assert.equal(wantsEarshot(call("world", { read_shape: "v1" }), "v2"), false, "the call's own shape wins");
+  assert.equal(wantsEarshot(call("world", { read_shape: "v2", read: "view" })), false, "a block read has no heard");
+  assert.equal(wantsEarshot(call("world_orient", {})), false);
 });

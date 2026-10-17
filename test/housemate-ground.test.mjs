@@ -16,7 +16,10 @@
 //      house, so these three tests seed the same house into the store and ask
 //      the office's lookup, the way the doors do.
 //   2. world-apex.mjs § worldHouseholdOf parsed the world's registry once per
-//      process, so a settlement's re-derive waited for a restart.
+//      process, so a settlement's re-derive waited for a restart. Since
+//      POS-350 (2026-10-13) an office with a store asks the store's
+//      `identities` instead (§ worldHouseholds), and only an office with no
+//      store reads the file, per HEAD.
 //   3. standing.mjs § groundVerdict compared the parcel's STORED household with
 //      the candidate's live key: 95 parcels on prod are stored under an older
 //      spelling, and ✦0 marks inside them were refused escrow-absent
@@ -77,7 +80,7 @@ process.env.WORLD_CLONE = world;
 const { householdLookup } = await import(pathToFileURL(join(OFFICE, "src", "households.mjs")).href);
 const { sameHousehold } = await import(pathToFileURL(join(OFFICE, "src", "world-hold.mjs")).href);
 const { publishNoteFor } = await import(pathToFileURL(join(OFFICE, "src", "world.mjs")).href);
-const { worldHouseholdOf } = await import(pathToFileURL(join(OFFICE, "src", "world-apex.mjs")).href);
+const { worldHouseholds, HouseholdsUnreadable } = await import(pathToFileURL(join(OFFICE, "src", "world-apex.mjs")).href);
 const { computeStanding } = await import(pathToFileURL(join(OFFICE, "world2", "tools", "standing.mjs")).href);
 const { liveHouseOfVia, recomputeStanding } = await import(pathToFileURL(join(OFFICE, "world2", "tools", "materialize.mjs")).href);
 const { reCheckGrant } = await import(pathToFileURL(join(OFFICE, "world2", "tools", "review-rule.mjs")).href);
@@ -111,11 +114,32 @@ test("sameHousehold: two housemates on two ledger keys are one household", async
   assert.equal(sameHousehold(LYRA, "stranger", householdOf).same, false);
 });
 
-test("worldHouseholdOf re-reads when the clone's HEAD moves (no process-lifetime cache)", () => {
-  assert.equal(worldHouseholdOf(LYRA), "gh:334016343");
+test("the apex's household is the STORE's identities, not the world file a settlement last pulled (POS-350)", async () => {
+  // The clone still holds the split 06:00Z file; the store already knows the house.
+  const houseOf = await worldHouseholds();
+  assert.equal(houseOf(LYRA), `hh:${HOUSE}`, "the store's house, while the printout still says gh:334016343");
+  assert.equal(houseOf(KINO), houseOf(LYRA));
+  assert.equal(houseOf("stranger"), "solo:stranger", "a handle no house holds is its own household");
+  assert.equal(houseOf(null), null);
+});
+
+test("a store that cannot answer fails loud with a named error, never the printout (POS-350)", async () => {
+  installActsPen({ households: STORE.households, pins: STORE.pins, meta: [], failOn: (q) => /FROM identities/i.test(q) });
+  try {
+    await assert.rejects(worldHouseholds(), (e) => e instanceof HouseholdsUnreadable && e.code === "households-unreadable"
+      && /never guessed from WORLD\/households\.json/.test(e.message) && /told to fail/.test(String(e.cause?.message)));
+  } finally {
+    installActsPen({ households: STORE.households, pins: STORE.pins, meta: [] });
+  }
+});
+
+test("with NO store (a test, a local office) it reads the clone's file, and re-reads when HEAD moves", async () => {
+  const noStore = {};
+  assert.equal((await worldHouseholds({ env: noStore }))(LYRA), "gh:334016343");
   checkout("dc4518d30", JOINED); // the 18:00Z settlement, pulled
-  assert.equal(worldHouseholdOf(LYRA), `hh:${HOUSE}`, "a settlement after boot reaches this reader without a restart");
-  assert.equal(worldHouseholdOf(KINO), worldHouseholdOf(LYRA));
+  const houseOf = await worldHouseholds({ env: noStore });
+  assert.equal(houseOf(LYRA), `hh:${HOUSE}`, "a settlement after boot reaches this reader without a restart");
+  assert.equal(houseOf(KINO), houseOf(LYRA));
 });
 
 // ── the candle ───────────────────────────────────────────────────────────────

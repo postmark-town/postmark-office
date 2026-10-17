@@ -149,7 +149,7 @@ export const DYNAMIC_SCHEMA = `
   -- move is what makes moving residents possible without directory churn. There
   -- is no parent column and there never will be one: an entity has no geometric
   -- parent, ever, and "what am I within" is a query over position answered
-  -- freshly whenever asked (LOGOS/kinds.md).
+  -- freshly whenever asked (LOGOS/lifetimes.md).
   --
   -- \`provenance\` carries the DERIVATION'S INPUT beside its output: the
   -- governing departure record, and how it was read. A row of bare coordinates

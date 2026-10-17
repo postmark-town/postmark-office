@@ -43,6 +43,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   loadManifest,
+  outcomesOf,
   rollcall,
   classifyRow,
   outcomeCounts,
@@ -55,6 +56,8 @@ import {
   DEFAULT_MANIFEST,
   OK,
   PARKED,
+  RETIRED,
+  ALARM_UNRETIRED,
   ALARM_MISSING,
   ALARM_UNBOUNDED,
   ALARM_DISABLED,
@@ -67,6 +70,13 @@ import {
   ALARM_CUSTODY,
   ALARM_TREE,
   ALARM_UNBLESSED,
+  ALARM_ENV,
+  classifyEnv,
+  collectEnv,
+  readEnvFileKeys,
+  parseEnvironmentFiles,
+  envKeyNames,
+  storeSwitchOf,
   HOUR,
   classifyBlessing,
   readBlessing,
@@ -85,6 +95,7 @@ import {
   MINUTE,
 } from "../tools/box-rollcall.mjs";
 import { tempDir } from "./helpers/temp-dir.mjs";
+import { STEPS as KEEP_STEPS } from "../deploy/keep-history.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MANIFEST_PATH = join(HERE, "..", "deploy", "box-rollcall-manifest.json");
@@ -99,6 +110,9 @@ const DEPLOYED_SHA = "b01b3bad946dfb14f5479e9b677e17dad59ebbbe";
 // The retired second checkout, and the commit it was stuck at.
 const LAB_TREE = "/srv/world2-lab/office";
 const LAB_SHA = "7926461a0000000000000000000000000000feed";
+// The unit and file POS-581 is about.
+const USDC_SVC = "postmark-usdc-watch.service";
+const USDC_ENV = "/etc/postmark-usdc-watch.env";
 
 function manifest() {
   return loadManifest(MANIFEST_PATH);
@@ -157,8 +171,9 @@ function healthy(m = manifest()) {
     const halfway = Number.isFinite(hb.stale_after_minutes) ? (hb.stale_after_minutes / 2) * MINUTE : 60 * MINUTE;
     const beatAt = T0 - halfway;
 
-    if (row.stage === "parked") {
-      // A parked unit is honestly ABSENT from the box — which is what "parked"
+    if (row.stage === "parked" || row.stage === "retired") {
+      // A parked unit is honestly ABSENT from the box (and a retired one is, once
+      // its box steps are done: the healthy state) — which is what "parked"
       // means on postmark-stripe-watch today: never installed, by design.
       units[row.unit] = { load_state: "not-found", active_state: "inactive", unit_file_state: "" };
       if (hb.kind === "state_file" && hb.path) files[hb.path] = { exists: false };
@@ -206,8 +221,19 @@ function healthy(m = manifest()) {
     // published, with the backlog going down rather than up. Generated from the
     // row's own thresholds so a manifest that raises `zero_published_runs` gets
     // a longer healthy window without anyone remembering to widen it here.
-    if (row.outcome && row.outcome.history_path) {
-      const n = Math.max(Number(row.outcome.zero_published_runs) || 3, 3) + 2;
+    // POS-524: a keep row is judged from its own receipts (deploy/keep-history.mjs),
+    // so its healthy log is three scheduled ticks with every step ok, the newest
+    // at the heartbeat's own time.
+    for (const spec of outcomesOf(row)) {   // a row may write more than one log (POS-268 5b: the keep row)
+    if (spec.kind === "keep_steps") {
+      const lines = [2, 1, 0].map((i) => JSON.stringify({
+        v: 1, kind: "office-keep", run: `healthy-${i}`, source: "scheduled",
+        started: new Date(beatAt - i * 15 * MINUTE - MINUTE).toISOString(), at: new Date(beatAt - i * 15 * MINUTE).toISOString(),
+        exit: 0, steps: Object.fromEntries(KEEP_STEPS.map((id) => [id, { s: "ok" }])),
+      }));
+      files[spec.history_path] = { exists: true, mtime_ms: beatAt, text: `${lines.join("\n")}\n` };
+    } else if (spec.history_path) {
+      const n = Math.max(Number(spec.zero_published_runs) || 3, 3) + 2;
       const lines = [];
       for (let i = n - 1; i >= 0; i--) {
         lines.push(JSON.stringify({
@@ -224,19 +250,20 @@ function healthy(m = manifest()) {
           // declaration rather than hard-coded, for the same reason the window
           // length is: a manifest that names a third list must not go green here
           // because nobody remembered to widen a fixture.
-          ...Object.fromEntries((row.outcome.alarm_on_nonempty ?? []).map((f) => [f, []])),
+          ...Object.fromEntries((spec.alarm_on_nonempty ?? []).map((f) => [f, []])),
           // …and a row that declares a present-and-false alarm gets the flag
           // TRUE, which is its healthy shape: the check RAN. Generated from the
           // row's own declaration for the same reason as the lists above — a
           // manifest that names a second flag must not go green here because
           // nobody remembered to widen a fixture.
-          ...Object.fromEntries((row.outcome.alarm_on_false ?? []).map((f) => [f, true])),
+          ...Object.fromEntries((spec.alarm_on_false ?? []).map((f) => [f, true])),
           // …and a row that declares a COUNT gets a number, which is its only
           // healthy shape: a count is printed, never judged (postmark#2935).
-          ...Object.fromEntries((row.outcome.report_counts ?? []).map((f) => [f, 0])),
+          ...Object.fromEntries((spec.report_counts ?? []).map((f) => [f, 0])),
         }));
       }
-      files[row.outcome.history_path] = { exists: true, mtime_ms: beatAt, text: `${lines.join("\n")}\n` };
+      files[spec.history_path] = { exists: true, mtime_ms: beatAt, text: `${lines.join("\n")}\n` };
+    }
     }
   }
 
@@ -307,7 +334,20 @@ function healthy(m = manifest()) {
     }
   }
 
-  return { schema: 1, collected_at: new Date(T0).toISOString(), host: "meepo-ec2", discovered, units, services, files, custody, clones, blessings, tree_sources, tree_realpath, releases, file_copies };
+  // §3f: every live unit read, by construction. Most hold neither store key.
+  // The usdc watcher holds both in its own file, the shape the w42 ship's
+  // repair left on the box (POS-581), so the control exercises the
+  // both-or-neither rule rather than passing it vacuously.
+  const env_sources = {};
+  for (const row of m.units) {
+    if (row.stage === "parked") continue;
+    env_sources[serviceOf(row.unit)] = { env_keys: [], env_switch_on: null, files: [], unchecked: null };
+  }
+  if (env_sources[USDC_SVC]) {
+    env_sources[USDC_SVC].files = [{ path: USDC_ENV, optional: false, exists: true, readable: true, keys: ["WORLD2_PG_URL", "WORLD2_PG"], switch_lines: 1, switch_on_lines: 1 }];
+  }
+
+  return { schema: 1, collected_at: new Date(T0).toISOString(), host: "meepo-ec2", discovered, units, services, files, custody, clones, blessings, tree_sources, tree_realpath, releases, file_copies, env_sources };
 }
 
 // Deep-equality guard. A mutation that changes nothing is a falsifier that never
@@ -345,7 +385,10 @@ test("THE CONTROL: the planted healthy state is entirely green and exits 0", () 
   // a verdict rather than an omission. Whether the SHIPPED manifest carries a
   // parked row today is a fact about the town, not about this checker, so the
   // PARKED path itself is proven below over a row this file plants.
-  assert.equal(result.rows.length, m.units.length + (m.custody ?? []).length + (m.clones ?? []).length + (m.blessings ?? []).length + (m.trees?.rows ?? []).length);
+  // +1 is §5f's one row, env:store-switch, which reads OK when no unit's environment alarms.
+  assert.equal(result.rows.length, m.units.length + (m.custody ?? []).length + (m.clones ?? []).length + (m.blessings ?? []).length + (m.trees?.rows ?? []).length + 1);
+  assert.equal(rowFor(result, "env:store-switch").verdict, OK);
+  assert.match(rowFor(result, "env:store-switch").reason, /; 1 hold the store with its switch on/);
   assert.ok((m.custody ?? []).length > 0, "the manifest declares no custody row — §2b is not being run at all");
   assert.ok((m.clones ?? []).length > 0, "the manifest declares no clone row — §2d is not being run at all");
   assert.ok((m.blessings ?? []).length > 0, "the manifest declares no blessing row — §2e is not being run at all");
@@ -562,6 +605,26 @@ test("FALSIFIER (e): a timer firing on time into a service that FAILS is ALARM-f
   assert.match(row.reason, /journalctl -u postmark-harbor-watch\.service/);
 });
 
+test("POS-628: the law row's stamp is ok_at — a held pin (exit 0, a fresh `at`) three ticks running is ALARM-stale", () => {
+  // From 2026-10-11 15:04Z the law pen held the clearing's pin at b0db90f on
+  // every run, exited 0, and stamped `at`: the row read green for three days.
+  const LAW = "postmark-world2-law-ingest.timer";
+  const m = manifest();
+  const hb = m.units.find((r) => r.unit === LAW).heartbeat;
+  assert.equal(hb.stamp_field, "ok_at", "the law row reads `at`, which every run writes, the held and refused ones included");
+  const stateAt = (okAgoMin) => mutate(healthy(m), (s) => {
+    s.files[hb.path].text = JSON.stringify({
+      at: new Date(T0 - 2 * MINUTE).toISOString(), mode: "law", status: "law-pin-held",
+      ok_at: new Date(T0 - okAgoMin * MINUTE).toISOString(),
+      pin: { state: "held", sha: "b0db90f0644ee4a0719f4d02c3c4e3b2cc10fe22" },
+    });
+  });
+  const held = rowFor(rollcall(m, stateAt(50), T0), LAW);
+  assert.equal(held.verdict, ALARM_STALE, `a pin held for 50 minutes read ${held.verdict}: ${held.reason}`);
+  assert.match(held.reason, /law-pin-held/, "the reason names the held pin from the row's stale_means");
+  assert.equal(rowFor(rollcall(m, stateAt(20), T0), LAW).verdict, OK, "one held tick is weather, not the rail");
+});
+
 test("FALSIFIER (f): a state file that does not exist is ALARM-noheartbeat, not ALARM-stale", () => {
   // These are different findings and want different hands: stale means it ran
   // and stopped, absent means it may never have run at all. Collapsing them
@@ -694,6 +757,91 @@ test("a PARKED row is printed, counted apart from OK, and never contributes to t
   assert.match(lines, /parked by design \(/);
 });
 
+// ── §5 RETIRED: ended on purpose, and green only once the box agrees ────────
+//
+// POS-268 part 5b retired the rehydrate unit. A retired rail keeps its row so
+// it can still be asked about, and is judged the other way round from a live
+// one: ABSENT is green, and a box that still loads the unit (enabled, or merely
+// installed) has not finished the retirement. Asserted over a planted row, for
+// the parked rows' reason: whether the town carries a retired rail today is a
+// fact about the town, not about this checker.
+const PLANTED_RETIRED_UNIT = "postmark-example-retired.timer";
+
+function retiredManifest(m = manifest()) {
+  return {
+    ...m,
+    units: [
+      ...m.units,
+      {
+        unit: PLANTED_RETIRED_UNIT,
+        label: "a rail deliberately ended",
+        stage: "retired",
+        activation_owner: "planted by test/box-rollcall.test.mjs — this row is not on the box and never will be",
+        retired_because: "what it built is read from somewhere else now",
+        retire_steps: "systemctl disable --now postmark-example-retired.timer, remove its unit files, daemon-reload",
+      },
+    ],
+  };
+}
+
+test("a RETIRED row the box no longer loads reads RETIRED, is counted apart from OK, and the roll-call stays clean", () => {
+  const m = retiredManifest();
+  const result = rollcall(m, healthy(m), T0);
+  const row = rowFor(result, PLANTED_RETIRED_UNIT);
+  assert.equal(row.verdict, RETIRED);
+  assert.match(row.reason, /is retired — what it built is read from somewhere else now/);
+  assert.equal(result.exitCode, 0);
+  assert.ok(result.counts.RETIRED >= 1, "a retired rail is not a running one");
+  const lines = formatLines(result);
+  assert.match(lines.at(-1), /^roll-call clean — \d+ running, \d+ retired, \d+ parked by design \(/);
+});
+
+test("FALSIFIER: a RETIRED row the box still has ENABLED is ALARM-unretired, and names the steps", () => {
+  // CAN-FAIL: take the retired branch out of classifyRow and this row is judged
+  // as live, which reads OK on an enabled, recently-fired timer.
+  const m = retiredManifest();
+  const live = mutate(healthy(m), (s) => {
+    s.units[PLANTED_RETIRED_UNIT] = {
+      load_state: "loaded", active_state: "active", unit_file_state: "enabled",
+      last_trigger_ms: T0 - 5 * MINUTE, triggers: PLANTED_RETIRED_UNIT.replace(/\.timer$/, ".service"),
+    };
+    s.discovered.push(PLANTED_RETIRED_UNIT);
+  });
+  const result = rollcall(m, live, T0);
+  const row = rowFor(result, PLANTED_RETIRED_UNIT);
+  assert.equal(row.verdict, ALARM_UNRETIRED);
+  assert.match(row.reason, /recorded RETIRED in the manifest but the box still loads it/);
+  assert.match(row.reason, /systemctl disable --now postmark-example-retired\.timer/);
+  assert.equal(result.exitCode, 1);
+});
+
+test("a RETIRED row stopped and disabled but still installed is not retired yet", () => {
+  // The next `enable` would revive it: the unit files leaving the box is the step.
+  const m = retiredManifest();
+  const half = mutate(healthy(m), (s) => {
+    s.units[PLANTED_RETIRED_UNIT] = { load_state: "loaded", active_state: "inactive", unit_file_state: "disabled" };
+  });
+  assert.equal(rowFor(rollcall(m, half, T0), PLANTED_RETIRED_UNIT).verdict, ALARM_UNRETIRED);
+});
+
+test("the manifest refuses a retired row that cannot say why, or that still carries an outcome", () => {
+  const dir = tempDir("rollcall-retired-");
+  try {
+    const base = JSON.parse(readFileSync(MANIFEST_PATH, "utf8"));
+    const planted = retiredManifest(base).units.at(-1);
+    const cases = [
+      [{ ...planted, retired_because: undefined }, /is retired and does not say why or when/],
+      [{ ...planted, outcome: { history_path: "/srv/x.jsonl", unsettled_runs: 0, means: "m", why: "w" } }, /is retired and still carries an outcome — move it to the live row that writes \/srv\/x\.jsonl/],
+      [{ ...planted, outcomes: [{ history_path: "/srv/y.jsonl", unsettled_runs: 0, means: "m", why: "w" }] }, /is retired and still carries an outcome — move it to the live row that writes \/srv\/y\.jsonl/],
+    ];
+    for (const [row, want] of cases) {
+      const p = join(dir, "m.json");
+      writeFileSync(p, JSON.stringify({ ...base, units: [...base.units, row] }));
+      assert.throws(() => loadManifest(p), want);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 // ── §6 THE REVERSE DIRECTION ────────────────────────────────────────────────
 
 test("FALSIFIER (h): a unit on the box that NO manifest row names is ALARM-unmanifested", () => {
@@ -787,8 +935,9 @@ function unrowedDeployUnits(m, files) {
 }
 
 function unfiledRows(m, files) {
+  // a RETIRED row's unit left deploy/ in the change that retired it (POS-268 5b): its row stays, its file does not
   const names = new Set(files.map((f) => f.file));
-  return [...new Set(m.units.filter((r) => !r.box_only && !names.has(r.unit.replace(/@[^.@]+\./, "@."))).map((r) => r.unit))];
+  return [...new Set(m.units.filter((r) => !r.box_only && r.stage !== "retired" && !names.has(r.unit.replace(/@[^.@]+\./, "@."))).map((r) => r.unit))];
 }
 
 test("FALSIFIER (h3): every unit in deploy/ the box could run has a row, and every row's unit is in deploy/ or says where it lives (POS-522)", () => {
@@ -832,7 +981,9 @@ test("the manifest refuses a row with no activation owner — 'a mechanism folds
       typeof row.activation_owner === "string" && row.activation_owner.length > 20,
       `${row.unit} names no activation owner`,
     );
-    assert.ok(typeof row.stale_means === "string" && row.stale_means.length > 20, `${row.unit} does not say what stale means`);
+    // a retired rail has no staleness to describe; it says why it ended instead (POS-268 5b)
+    if (row.stage === "retired") assert.ok(typeof row.retired_because === "string" && row.retired_because.length > 20, `${row.unit} does not say why it was retired`);
+    else assert.ok(typeof row.stale_means === "string" && row.stale_means.length > 20, `${row.unit} does not say what stale means`);
   }
 
   // And the loader is the thing that enforces it, not this test's goodwill —
@@ -845,7 +996,7 @@ test("the manifest refuses a row with no activation owner — 'a mechanism folds
   assert.throws(() => loadManifest(tmp), /names no activation_owner/);
 
   writeFileSync(tmp, JSON.stringify({ units: [{ unit: "x.timer", stage: "someday", activation_owner: "nobody" }] }));
-  assert.throws(() => loadManifest(tmp), /must be "live" or "parked"/);
+  assert.throws(() => loadManifest(tmp), /must be "live", "parked" or "retired"/);
 
   writeFileSync(tmp, JSON.stringify({ units: [{ stage: "live", activation_owner: "nobody" }] }));
   assert.throws(() => loadManifest(tmp), /no unit name/);
@@ -925,7 +1076,8 @@ test("the printed board puts every ALARM above the green rows, and names the cou
   const lines = formatLines(rollcall(m, broken, T0));
 
   assert.match(lines[0], /^ALARM-disabled\s+postmark-settlement-shadow\.timer/);
-  assert.match(lines[lines.length - 1], /^1 ALARM · \d+ ok · \d+ parked by design/);
+  // (a retired row, POS-268 5b, is counted between the ok and the parked ones)
+  assert.match(lines[lines.length - 1], /^1 ALARM · \d+ ok( · \d+ retired)? · \d+ parked by design/);
 });
 
 // ── §9 THE RAIL RAN. WHAT CAME OUT OF IT. (v1 #9, 2026-08-30) ───────────────
@@ -2302,9 +2454,14 @@ test("§2e THE ROW IS STRICT: a blessing row with no allowance or no why is refu
 // that step writes (exercised on the town at d95e81c1c: clean, tool absent, and
 // a ledger with one 07fa74d6a line dropped).
 //
-// THE CAN-FAIL FLIP: drop the outcome block from the rehydrate row; the split
-// and unchecked tests red, the clean one stays green as the control.
-const HK_ROW = manifest().units.find((u) => u.unit === "postmark-office-rehydrate.timer");
+// THE CAN-FAIL FLIP: drop the outcome block from the keep row; the split and
+// unchecked tests red, the clean one stays green as the control. (The row moved
+// off the rehydrate timer when that unit was retired, POS-268 5b: office-keep.sh
+// writes the line, so its timer carries the alarm.)
+// The keep row carries TWO outcome blocks (outcomes[]: the tick's receipt and this line), so the
+// household-keys block is judged as the roll-call judges each: the row with that one block.
+const HK_KEEP = manifest().units.find((u) => u.unit === "postmark-office-keep.timer");
+const HK_ROW = { ...HK_KEEP, outcome: outcomesOf(HK_KEEP).find((o) => /household-keys\.jsonl$/.test(o.history_path ?? "")) };
 const hkLog = (...lines) => ({ files: { [HK_ROW.outcome?.history_path]: { exists: true, text: lines.map((l) => JSON.stringify(l)).join("\n") + "\n" } } });
 const HK_CLEAN = { at: "2026-10-04T04:44:20Z", split_households: [], shared_keys: [], detail: [], checked: true };
 
@@ -2314,6 +2471,27 @@ test("household keys: a split house on the latest line alarms, naming the house"
   assert.ok(said, "a house minting under two keys must not read green");
   assert.match(said, /house-of-many-doors/);
   assert.match(said, /two daily caps/, "the row's own list_means prints");
+});
+
+// EACH LIST ALARM PRINTS ITS OWN WORDS (POS-339). The judge used to put the
+// notary's "The store and canon disagree about marks that stand in the register
+// today." in front of every list row's list_means, so the household-keys alarm
+// opened with a sentence about marks. Both SHIPPED rows, with their SHIPPED
+// list_means: each alarm carries its own words and never the other row's.
+// THE CAN-FAIL FLIP: put the hard-coded sentence back; the first assertion reds.
+test("POS-339: each list alarm prints its own list_means, and never the notary's sentence", () => {
+  const notary = manifest().units.find((u) => u.unit === "postmark-world2-notary.timer");
+  const notaryLog = (o) => ({ files: { [notary.outcome.history_path]: { exists: true, text: JSON.stringify({
+    at: "2026-10-13T12:00:00Z", canon_absent: [], unmaterialized: [], escrow_unbacked: [], escrow_checked: true, ...o }) + "\n" } } });
+  const hk = judgeOutcome(HK_ROW, hkLog({ ...HK_CLEAN, split_households: ["house-of-many-doors"] }));
+  assert.doesNotMatch(hk ?? "", /store and canon/, "a house on two keys is not a store-and-canon disagreement");
+  assert.ok(hk.includes(HK_ROW.outcome.list_means), "the household-keys row prints its own list_means, whole");
+  for (const field of ["canon_absent", "escrow_unbacked"]) {
+    const said = judgeOutcome(notary, notaryLog({ [field]: ["lupi/the-drift-room"] }));
+    assert.match(said ?? "", /lupi\/the-drift-room/, `${field}: the slug is named`);
+    assert.ok(said.includes(notary.outcome.list_means), `${field}: the notary row prints its own list_means, whole`);
+    assert.doesNotMatch(said, /two daily caps/, `${field}: and not the household-keys row's`);
+  }
 });
 
 test("household keys: a key across two houses alarms too", () => {
@@ -2330,4 +2508,217 @@ test("household keys: a line that says the check did not run alarms, and an empt
   assert.match(said ?? "", /checked/);
   assert.match(said ?? "", /older than d95e81c1c/);
   assert.match(judgeOutcome(HK_ROW, { files: {} }) ?? "", /empty or unreadable/);
+});
+
+// ── §5f THE STORE'S URL AND SWITCH, BOTH OR NEITHER (POS-581) ───────────────
+//
+// The w42 ship (2026-10-11): usdc-watch's env file held WORLD2_PG_URL and no
+// WORLD2_PG=1, and src/world2-acts.mjs § world2Enabled needs both, so every
+// store read refused. Each case below starts from the healthy fixture, in
+// which the usdc watcher holds both keys, and breaks exactly one thing.
+
+const envRows = (result) => result.rows.filter((r) => r.unit.startsWith("env:"));
+const usdcFile = (s) => s.env_sources[USDC_SVC].files[0];
+
+test("FALSIFIER (p1): a unit holding the store's URL WITHOUT the switch is ALARM-env, names the file, and exits nonzero (the w42 ship)", () => {
+  const m = manifest();
+  const after = mutate(healthy(m), (s) => {
+    const f = usdcFile(s);
+    f.keys = ["WORLD2_PG_URL"];
+    delete f.switch_lines;
+    delete f.switch_on_lines;
+  });
+  const result = rollcall(m, after, T0);
+  const row = rowFor(result, `env:${USDC_SVC}`);
+  assert.equal(row.verdict, ALARM_ENV);
+  assert.match(row.reason, /holds WORLD2_PG_URL \(in \/etc\/postmark-usdc-watch\.env\) but WORLD2_PG is set nowhere/);
+  assert.match(row.reason, /world2Enabled/);
+  assert.equal(result.exitCode, 1);
+  assert.deepEqual(envRows(result).map((r) => r.unit), [`env:${USDC_SVC}`], "the summary row gives way to the alarm, and no other unit alarms");
+});
+
+test("FALSIFIER (p1b): WORLD2_PG set to anything but 1 is the switch OFF, and two lines that disagree are not on", () => {
+  const m = manifest();
+  const off = mutate(healthy(m), (s) => { usdcFile(s).switch_on_lines = 0; });
+  assert.match(rowFor(rollcall(m, off, T0), `env:${USDC_SVC}`).reason, /WORLD2_PG is not 1 \(set in \/etc\/postmark-usdc-watch\.env\)/);
+  // Names and counts cannot say which of two lines is last, so not on.
+  const mixed = mutate(healthy(m), (s) => { usdcFile(s).switch_lines = 2; });
+  assert.equal(rowFor(rollcall(m, mixed, T0), `env:${USDC_SVC}`).verdict, ALARM_ENV);
+});
+
+test("FALSIFIER (p2): the switch WITHOUT the URL is ALARM-env too: switched on and pointed at nothing", () => {
+  const m = manifest();
+  const after = mutate(healthy(m), (s) => { usdcFile(s).keys = ["WORLD2_PG"]; });
+  const row = rowFor(rollcall(m, after, T0), `env:${USDC_SVC}`);
+  assert.equal(row.verdict, ALARM_ENV);
+  assert.match(row.reason, /sets WORLD2_PG=1 \(in \/etc\/postmark-usdc-watch\.env\) and holds no WORLD2_PG_URL/);
+});
+
+test("(p3) judged per UNIT over the merge: paypal's own file holds neither key, office.env holds both, and that is green", () => {
+  const m = manifest();
+  const PAYPAL = "postmark-paypal-watch.service";
+  const after = mutate(healthy(m), (s) => {
+    s.env_sources[PAYPAL].files = [
+      { path: "/etc/postmark-office.env", optional: false, exists: true, readable: true, keys: ["TOWN_CLONE", "WORLD2_PG", "WORLD2_PG_URL"], switch_lines: 1, switch_on_lines: 1 },
+      { path: "/etc/postmark-paypal-watch.env", optional: false, exists: true, readable: true, keys: ["PAYPAL_CLIENT_ID", "PAYPAL_SECRET", "PAYPAL_ENV"] },
+    ];
+  });
+  const result = rollcall(m, after, T0);
+  assert.deepEqual(envRows(result).map((r) => `${r.verdict} ${r.unit}`), ["OK env:store-switch"]);
+  assert.match(rowFor(result, "env:store-switch").reason, /; 2 hold the store with its switch on/);
+});
+
+test("(p4) systemd's precedence: a later env file overrides Environment= and an earlier file", () => {
+  // The switch in the unit's Environment= and the URL in its file: on.
+  const viaUnit = { env_keys: ["WORLD2_PG"], env_switch_on: true, files: [{ path: "/etc/a.env", keys: ["WORLD2_PG_URL"] }] };
+  assert.equal(storeSwitchOf(viaUnit).switch_on, true);
+  // A later file that says WORLD2_PG=0 wins over the unit's 1 and over an earlier file's 1.
+  const overridden = { env_keys: ["WORLD2_PG"], env_switch_on: true, files: [
+    { path: "/etc/a.env", keys: ["WORLD2_PG", "WORLD2_PG_URL"], switch_lines: 1, switch_on_lines: 1 },
+    { path: "/etc/b.env", keys: ["WORLD2_PG"], switch_lines: 1, switch_on_lines: 0 },
+  ] };
+  const s = storeSwitchOf(overridden);
+  assert.equal(s.switch_on, false);
+  assert.deepEqual(s.switch_in, ["the unit's Environment=", "/etc/a.env", "/etc/b.env"]);
+  // A file that names neither key changes nothing.
+  assert.equal(storeSwitchOf({ ...viaUnit, files: [...viaUnit.files, { path: "/etc/c.env", keys: ["STRIPE_KEY"] }] }).switch_on, true);
+});
+
+test("FALSIFIER (p5): an UNREAD environment is never clean: a refused sudo, a unit with no reading, a snapshot with none", () => {
+  const m = manifest();
+  const refused = mutate(healthy(m), (s) => { s.env_sources[USDC_SVC].unchecked = "sudo -n refused (a password is required)"; });
+  const row = rowFor(rollcall(m, refused, T0), `env:${USDC_SVC}`);
+  assert.equal(row.verdict, ALARM_ENV);
+  assert.match(row.reason, /UNCHECKED: sudo -n refused/);
+
+  const noReading = mutate(healthy(m), (s) => { delete s.env_sources[USDC_SVC]; });
+  assert.match(rowFor(rollcall(m, noReading, T0), `env:${USDC_SVC}`).reason, /no env reading for this unit/);
+
+  const old = mutate(healthy(m), (s) => { delete s.env_sources; });
+  const oldRow = rowFor(rollcall(m, old, T0), "env:store-switch");
+  assert.equal(oldRow.verdict, ALARM_ENV);
+  assert.match(oldRow.reason, /carries no env reading/);
+});
+
+test("FALSIFIER (p6): a REQUIRED env file that is not on the box is ALARM-env; an optional (\"-\") one is not", () => {
+  const m = manifest();
+  const gone = mutate(healthy(m), (s) => { s.env_sources[USDC_SVC].files = [{ path: USDC_ENV, optional: false, exists: false }]; });
+  const row = rowFor(rollcall(m, gone, T0), `env:${USDC_SVC}`);
+  assert.equal(row.verdict, ALARM_ENV);
+  assert.match(row.reason, /EnvironmentFile=\/etc\/postmark-usdc-watch\.env is not on the box/);
+
+  const optional = mutate(healthy(m), (s) => {
+    s.env_sources[USDC_SVC].files.push({ path: "/etc/postmark-world2-clearing.env", optional: true, exists: false });
+  });
+  assert.deepEqual(envRows(rollcall(m, optional, T0)).map((r) => `${r.verdict} ${r.unit}`), ["OK env:store-switch"]);
+});
+
+test("(p7) a parked unit's environment is not judged, as a parked unit's tree is not", () => {
+  const m = parkedManifest();
+  const s = healthy(m);
+  assert.ok(!(serviceOf(PLANTED_PARKED_UNIT) in s.env_sources));
+  assert.deepEqual(envRows(rollcall(m, s, T0)).map((r) => `${r.verdict} ${r.unit}`), ["OK env:store-switch"]);
+});
+
+// ── §3f the collector: KEY NAMES, never a value ─────────────────────────────
+
+test("(p8) parseEnvironmentFiles reads systemd's one-line-per-file shape, in order, with the \"-\" prefix as optional", () => {
+  // As `systemctl show postmark-settlement.service -p EnvironmentFiles` printed it on the box, 2026-10-14.
+  const text = "EnvironmentFiles=/etc/postmark-office.env (ignore_errors=no)\nEnvironmentFiles=/etc/postmark-world2-clearing.env (ignore_errors=yes)\n";
+  assert.deepEqual(parseEnvironmentFiles(text), [
+    { path: "/etc/postmark-office.env", optional: false },
+    { path: "/etc/postmark-world2-clearing.env", optional: true },
+  ]);
+  assert.deepEqual(parseEnvironmentFiles(""), []);
+  assert.deepEqual(envKeyNames('TOWN_CLONE=/srv/x "BOT_NAME=Postmark Pen" WORLD2_PG=1'), ["TOWN_CLONE", "BOT_NAME", "WORLD2_PG"]);
+});
+
+test("(p9) the collector stores no VALUE: a secret in Environment= and in a file never reaches the snapshot", () => {
+  const SECRET = "hunter2-postgres-password";
+  const m = { units: [{ unit: "postmark-x.timer", stage: "live" }, { unit: "postmark-y.timer", stage: "parked" }] };
+  const asked = [];
+  const out = collectEnv(m, {
+    show: (svc) => { asked.push(svc); return `EnvironmentFiles=/etc/x.env (ignore_errors=no)\nEnvironment=WORLD2_STANCE_URL=postgres://u:${SECRET}@h/db WORLD2_PG=1\n`; },
+    // grep as the box answers it: -o prints only "KEY=", -c prints a count.
+    grep: (args) => (args[0] === "-oE" ? { code: 0, out: "WORLD2_PG_URL=\nWORLD2_PG=\n" } : { code: 0, out: "1\n" }),
+    sudo: () => ({ ok: true }),
+    exists: () => true,
+  });
+  assert.deepEqual(asked, ["postmark-x.service"], "the parked unit is not read");
+  const src = out.env_sources["postmark-x.service"];
+  assert.deepEqual(src.env_keys, ["WORLD2_STANCE_URL", "WORLD2_PG"]);
+  assert.equal(src.env_switch_on, true);
+  assert.deepEqual(src.files, [{ path: "/etc/x.env", optional: false, exists: true, readable: true, keys: ["WORLD2_PG_URL", "WORLD2_PG"], switch_lines: 1, switch_on_lines: 1 }]);
+  assert.ok(!JSON.stringify(out).includes(SECRET), "a value reached the snapshot");
+  assert.ok(!JSON.stringify(out).includes("postgres://"), "a value reached the snapshot");
+});
+
+test("(p9b) a refused sudo is UNCHECKED by name, and asked once, not per file", () => {
+  let probes = 0;
+  const m = { units: [{ unit: "postmark-x.timer", stage: "live" }, { unit: "postmark-z.service", stage: "live" }] };
+  const out = collectEnv(m, {
+    show: () => "EnvironmentFiles=/etc/x.env (ignore_errors=no)\nEnvironment=\n",
+    grep: () => { throw new Error("grep must not run once sudo refused"); },
+    sudo: () => { probes += 1; return { ok: false, error: "sudo: a password is required" }; },
+    exists: () => true,
+  });
+  assert.equal(probes, 1);
+  for (const svc of ["postmark-x.service", "postmark-z.service"]) {
+    assert.match(out.env_sources[svc].unchecked, /sudo -n refused \(sudo: a password is required\)/);
+  }
+});
+
+test("(p10) readEnvFileKeys over a real file with real grep: names, the quoted switch, a quoted BOT_NAME, and no value", () => {
+  const dir = tempDir("rollcall-env-");
+  const path = join(dir, "office.env");
+  writeFileSync(path, [
+    "TOWN_CLONE=/srv/postmark-office/town-clone",
+    'BOT_NAME="Postmark Pen"',
+    'WORLD2_PG="1"',
+    "WORLD2_PG_URL=postgres://office_api:s3cret@127.0.0.1/world2_dev",
+    "# a comment line is not a key",
+    "",
+  ].join("\n"));
+  const realGrep = (args) => { const r = spawnSync("grep", args, { encoding: "utf8" }); return { code: r.status ?? 2, out: r.stdout ?? "" }; };
+  const read = readEnvFileKeys(path, { grep: realGrep });
+  assert.deepEqual(read, { readable: true, keys: ["TOWN_CLONE", "BOT_NAME", "WORLD2_PG", "WORLD2_PG_URL"], switch_lines: 1, switch_on_lines: 1 });
+  assert.ok(!JSON.stringify(read).includes("s3cret"));
+  // grep's 2 (could not read) is unreadable, never "no keys".
+  assert.deepEqual(readEnvFileKeys(join(dir, "absent.env"), { grep: realGrep }), { readable: false });
+  // grep's 1 on the names (an empty file) is "no keys", read cleanly.
+  writeFileSync(join(dir, "empty.env"), "");
+  assert.deepEqual(readEnvFileKeys(join(dir, "empty.env"), { grep: realGrep }), { readable: true, keys: [] });
+});
+
+// ── A ROW WITH TWO OUTCOMES (POS-268 5b) ────────────────────────────────────
+//
+// The keep row writes two logs: the tick's receipt (POS-524) and the
+// household-keys line, which rode the rehydrate row until that unit retired.
+// Each block is validated and judged as a lone outcome is, and the verdict
+// names every alarm. THE CAN-FAIL FLIP: judge only the first block; the split
+// house goes green.
+test("outcomes[]: each block on a row is judged, and a split house on the keep row alarms beside a healthy receipt", () => {
+  const m = manifest();
+  const keep = m.units.find((u) => u.unit === "postmark-office-keep.timer");
+  assert.equal(outcomesOf(keep).length, 2);
+  const snap = healthy(m);
+  const hk = outcomesOf(keep).find((o) => /household-keys\.jsonl$/.test(o.history_path));
+  assert.equal(classifyRow(keep, snap, T0).verdict, "OK", "the control: both logs healthy");
+  snap.files[hk.history_path] = { exists: true, mtime_ms: T0, text: JSON.stringify({ at: "x", split_households: ["house-of-many-doors"], shared_keys: [], detail: [], checked: true }) + "\n" };
+  const r = classifyRow(keep, snap, T0);
+  assert.equal(r.verdict, "ALARM-outcome");
+  assert.match(r.reason, /house-of-many-doors/);
+});
+
+test("outcomes[]: the loader refuses both forms on one row, an empty list, and a block that breaks the outcome law", () => {
+  const dir = tempDir("box-rollcall-outcomes-");
+  const tmp = join(dir, "manifest.json");
+  const spec = { history_path: "/srv/x.jsonl", unsettled_runs: 0, means: "m", why: "w" };
+  const row = { unit: "postmark-x.timer", stage: "live", activation_owner: "planted by the test", box_only: { path: "/etc/systemd/system/postmark-x.timer", why: "planted" } };
+  writeFileSync(tmp, JSON.stringify({ units: [{ ...row, outcome: spec, outcomes: [spec] }] }));
+  assert.throws(() => loadManifest(tmp), /declares both outcome and outcomes/);
+  writeFileSync(tmp, JSON.stringify({ units: [{ ...row, outcomes: [] }] }));
+  assert.throws(() => loadManifest(tmp), /outcomes that is not a non-empty list/);
+  writeFileSync(tmp, JSON.stringify({ units: [{ ...row, outcomes: [spec, { ...spec, means: undefined }] }] }));
+  assert.throws(() => loadManifest(tmp), /declares an outcome with no means/, "each block in the list is held to the same law");
 });

@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { execUnderTownLock, lockTimedOut, LOCK_BUSY } from "./town-lock.mjs";
 import { listRoles, roleCheck } from "./roles.mjs";
 import { agentHeld } from "./named-hand.mjs";
+import { faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -108,8 +109,7 @@ export async function giftViaOffice(clone, { handle, amount, slug }, key) {
     out = await execUnderTownLock(exec, payload, env);
   } catch (e) {
     if (lockTimedOut(e)) throw bounce(LOCK_BUSY.code, LOCK_BUSY.defect, LOCK_BUSY.hint);
-    const msg = String(e.stderr ?? e.message ?? e).slice(0, 300);
-    throw bounce(500, "the gift pass tripped", msg);
+    throw bounce(500, "the gift pass tripped", faultLogged("the gift pass tripped", e)); // its stderr goes to the log (POS-578)
   }
   const result = JSON.parse(out.trim().split("\n").at(-1));
   if (result.error) throw bounce(result.error.code ?? 500, result.error.defect, result.error.hint);

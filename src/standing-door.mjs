@@ -50,6 +50,7 @@ import {
 import { standingForHandles, insertStandingActs } from "./standing-store.mjs";
 import { loadRegistryRows } from "./registry-store.mjs";
 import { holdsHand } from "./named-hand.mjs";
+import { trippedError } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 
 export const STANDING_CALLERS = Object.freeze(["registrar", "wright"]);
 
@@ -175,8 +176,7 @@ async function runUnderTownLock(payload, { clone }) {
     out = await execUnderTownLock(EXEC, JSON.stringify(payload), { ...process.env, TOWN_CLONE: clone });
   } catch (e) {
     if (lockTimedOut(e)) throw Object.assign(new Error(LOCK_BUSY.defect), LOCK_BUSY);
-    throw Object.assign(new Error("the standing act tripped"),
-      { code: 500, defect: "the standing act tripped", hint: String(e.stderr ?? e.message ?? e).slice(0, 300) });
+    throw trippedError("the standing act tripped", e); // its stderr goes to the log (POS-578)
   }
   const result = JSON.parse(out.trim().split("\n").at(-1));
   if (result.error)

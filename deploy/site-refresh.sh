@@ -234,7 +234,12 @@ WEBROOT="${SITE_WEBROOT:-/var/www/postmark-town-site}"
 SITE_REMOTE="${SITE_REMOTE:-https://github.com/postmark-town/postmark-site.git}"
 TOWN_REMOTE="${TOWN_REMOTE:-https://github.com/postmark-town/postmark.git}"
 WORLD_REMOTE="${WORLD_REMOTE:-https://github.com/postmark-town/postmark-world.git}"
-API="${POSTMARK_API:-https://postmark.town/api}"
+# The office's box door, never the public URL (Darko 2026-10-13): through
+# nginx every read of a pass spent the box's own keyless bucket, and a day of
+# refreshes drew 17,531 429s. 127.0.0.1:4390 is the office's second listener,
+# bound to loopback and named by no nginx location; a keyless GET that arrives
+# there is not charged (src/bouncer.mjs boxLocal).
+API="${POSTMARK_API:-http://127.0.0.1:4390}"
 OUT="${SITE_REFRESH_REPORT:-/srv/postmark-harbor/site-refresh.json}"
 KEEP="${SITE_REFRESH_KEEP:-5}"
 MAX_PASSES="${SITE_REFRESH_MAX_PASSES:-3}"
@@ -442,7 +447,9 @@ build_once() {
 
   # sync-atlas.yml's three steps, its order, its arguments.
   say "extract: the checkout-coupled half (media, atlas, daily, works, doorstep bundles)"
-  ( cd "$SITE" && GH_TOKEN="${GH_TOKEN:-}" POSTMARK_CROSSING="$crossing" node tools/extract-town.mjs --town "$TOWN" ) \
+  # POSTMARK_API named here, not inherited from the unit: the doorsteps are
+  # read from the same office the rest of the pass reads (2026-10-13).
+  ( cd "$SITE" && GH_TOKEN="${GH_TOKEN:-}" POSTMARK_API="$API" POSTMARK_CROSSING="$crossing" node tools/extract-town.mjs --town "$TOWN" ) \
     || die "extract-town.mjs tripped"
   say "extract: the API-fed half"
   # fetch-town.mjs also writes /data/pin.json (the site's tools/lib/world-pin-publish.mjs),
@@ -456,7 +463,9 @@ build_once() {
   # the build tree may have advanced past it. POS-601: the publish step below
   # keeps this file's floor fields and re-derives world_installed from the BUILD
   # tree, the same answer /build.json's world_sha gives — see "the pin".)
-  ( cd "$SITE" && POSTMARK_API="$API" PUBLIC_CHANNEL=release BUILD_CODE_REF="$TAG" node tools/fetch-town.mjs --town "$TOWN" ) \
+  # The letter cache lives beside the clones, outside the extract tree that is
+  # reset every pass: the next pass reads only the letters that moved.
+  ( cd "$SITE" && POSTMARK_API="$API" POSTMARK_LETTER_CACHE="$ROOT/letter-cache.json" PUBLIC_CHANNEL=release BUILD_CODE_REF="$TAG" node tools/fetch-town.mjs --town "$TOWN" ) \
     || die "fetch-town.mjs tripped"
   say "extract: approved renditions"
   ( cd "$SITE" && node tools/sync-renditions.mjs --town "$TOWN" ) \

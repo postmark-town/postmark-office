@@ -240,6 +240,24 @@ test("a mark is never its own ground", async () => {
   }, "an author does not consent to their own declaration");
 });
 
+// THE 404 POINTS AT A READ THAT ANSWERS (Wright, on office #539). The hint
+// named `world { read: "declare-stance-on" }`, which bounces 422: a stance is
+// spoken from standing, so its inbox is a household read. The read named here
+// is the one the world door's own standing-door table names, so the two cannot
+// drift apart.
+test("a mark that does not exist: 404, and the hint names household { read: \"stances\" }", async () => {
+  const { STANDING_SCOPED_DOORS } = await import("../src/world-apex.mjs");
+  const observe = STANDING_SCOPED_DOORS["declare-stance-on"].observe;
+  assert.equal(observe, 'household { read: "stances" }');
+  await assert.rejects(() => speak({ on: "nobody/no-such-mark", stance: "welcomed" }), (e) => {
+    assert.equal(e.code, 404);
+    assert.match(e.defect, /no mark "nobody\/no-such-mark"/);
+    assert.ok(e.hint.includes(observe), `the hint names the inbox read: ${e.hint}`);
+    assert.doesNotMatch(e.hint, /world \{ read:/, "and not the world read, which bounces 422");
+    return true;
+  });
+});
+
 test("groundFor is pure, and overlap is INTERSECTION not containment", () => {
   const g = groundFor(mark("beta/on-alphas-edge"), [mark("alpha/alphas-parcel")], overlaps);
   assert.deepEqual(g.map((m) => m.id), ["alpha/alphas-parcel"],

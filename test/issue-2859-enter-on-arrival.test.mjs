@@ -2,31 +2,39 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-const source = readFileSync(new URL("../src/world.mjs", import.meta.url), "utf8");
+// WLD-5 (Darko, 2026-10-14) moved the arrival entry out of the walk: the walk
+// door runs a PRE-CHECK that writes nothing, and the office's arrival tick runs
+// the ordinary enter once the walk record says the walker has arrived
+// (src/arrival-entries.mjs). #2859's guarantee holds in both halves: the
+// pre-check is handed no walk hooks at all, and the tick enters only an
+// arrived walk, whose `walking` hook answers live: false, so no second stop.
+const source = readFileSync(new URL("../src/arrival-entries.mjs", import.meta.url), "utf8");
 
-test("#2859: enter_on_arrival does not re-stop the walk that already arrived", () => {
-  const start = source.indexOf("if (enterOnArrival) {");
-  assert.notEqual(start, -1, "walkViaOffice still has the enter_on_arrival branch");
+test("#2859: the arrival entry never re-stops the walk that carried you there", () => {
+  const start = source.indexOf("export async function entryAtTheWalk(");
+  assert.notEqual(start, -1, "the walk's entry still has its composition");
+  const block = source.slice(start, source.indexOf("\n}\n", start));
 
-  const end = source.indexOf("\n  return {", start);
-  assert.notEqual(end, -1, "the enter_on_arrival branch is bounded before the walk reply");
+  const spread = block.indexOf("...base, walking: null, stop: null,");
+  const record = block.indexOf("record: async () => ({ within: [], dry: true }),");
+  assert.notEqual(spread, -1, "the pre-check starts from the ordinary crossing dependencies and disables both walk hooks after spreading them");
+  assert.ok(record > spread, "and its pen writes nothing");
 
-  const block = source.slice(start, end);
-  const spread = block.indexOf("...crossingDeps(),");
-  const walking = block.indexOf("walking: null,");
-  const stop = block.indexOf("stop: null,");
-  const now = block.indexOf("now: () => arrivedAtCrossing,");
+  const tick = source.slice(source.indexOf("export async function arrivalTick("));
+  const arrivedGate = tick.indexOf("if (!a.arrived) {");
+  const entering = tick.indexOf("await enter(row, a)");
+  assert.notEqual(arrivedGate, -1, "the tick asks the walk record whether the walker has arrived");
+  assert.ok(entering > arrivedGate, "before it enters anyone");
 
-  assert.notEqual(spread, -1, "arrival entry still starts from the ordinary crossing dependencies");
-  assert.ok(walking > spread, "arrival entry explicitly disables the manual-entry walking hook after spreading crossingDeps");
-  assert.ok(stop > walking, "arrival entry explicitly disables the manual-entry stop hook too");
-  assert.ok(now > stop, "the arrival-time override remains after the stop hooks are disabled");
+  // and the tick's enter is handed no live walk at all: an arrived walk stops nobody, by construction (review of #541)
+  const atArrival = source.slice(source.indexOf("export async function enterAtArrival("));
+  assert.ok(atArrival.indexOf("walking: async () => null,") > atArrival.indexOf("...base,"), "the tick's deps override walking after spreading the office's own");
 });
 
 // ── THE SAME RULING, READ AS BEHAVIOUR ──────────────────────────────────────
 //
-// The test above reads src/world.mjs as text. That is the one job no behavioural
-// check can do here — `walkViaOffice` composes its deps with a spread and two
+// The test above reads src/arrival-entries.mjs as text. That is the one job no behavioural
+// check can do here — the pre-check composes its deps with a spread and two
 // overrides, and if `...crossingDeps()` ever moved BELOW them it would put the
 // hooks back with nothing to notice. It is also all that test can do: it never
 // runs an entry, so it cannot see whether nulling those two hooks actually stops
@@ -65,7 +73,7 @@ const THE_REFUSAL = "You are within current-the-reader/the-taproom — this walk
 
 /** One office in a closure, with the walk hooks made observable.
  *  `hooks: "manual"` is what crossingDeps() hands an ordinary entry;
- *  `hooks: "arrival"` is what walkViaOffice overrides them to. */
+ *  `hooks: "arrival"` is what the walk's pre-check overrides them to (arrival-entries.mjs). */
 async function officeWith({ hooks, stopThrows = false, standing = { x: -9, y: 35.5 } }) { // POS-220: the post office's anchor — a door is entered only from within its extent, so the walker stands AT it (the old { -30, 40 } was ~21 m off, inside the retired 60 m reach)
   const worldState = JSON.parse(readFileSync(join(CLONE, "WORLD", "world-state.json"), "utf8"));
   const mod = await import(`file:///${join(CLONE, "tools", GRAMMAR).replace(/\\/g, "/")}`);
@@ -86,8 +94,8 @@ async function officeWith({ hooks, stopThrows = false, standing = { x: -9, y: 35
       standpointOf: async (who) => ({ ...standing, name: who }),
       now: () => AT,
       // The one line under test. An ordinary entry gets the hooks; the
-      // arrival-bundled entry is handed null for both, which is exactly the
-      // override src/world.mjs writes after spreading crossingDeps().
+      // pre-check is handed null for both, which is exactly the override
+      // src/arrival-entries.mjs § entryAtTheWalk writes after spreading crossingDeps().
       walking: hooks === "manual" ? walkHook : null,
       stop: hooks === "manual" ? stopHook : null,
       record: async ({ lines, handle }) => {
@@ -129,7 +137,7 @@ test("#2859 · the reported contradiction, reproduced: a successful entry whose 
 test("#2859 · the arrival-bundled entry attempts no stop at all, so it cannot contradict itself",
   { skip: !HAVE_CLONE && WHY_NOT }, async () => {
   // The same door, the same refusing stop hook available in principle — but
-  // walkViaOffice hands the arrival composition `walking: null, stop: null`,
+  // the walk's pre-check is handed `walking: null, stop: null`,
   // and a hook that is never consulted cannot refuse. The walk needs no stop
   // here: it is a departure whose position is a function of the clock, and it
   // has already arrived.

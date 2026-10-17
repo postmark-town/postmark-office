@@ -66,7 +66,12 @@ class TokenBucket {
     this.states = new Map();
   }
 
-  take(id) {
+  // `cost` is how many single reads one request stands for: a bulk read of n
+  // resident cards spends what the n card reads would have (bulkCost, below).
+  // Capped at the burst, so a request the bucket could never hold whole is
+  // still answerable from a full one.
+  take(id, cost = 1) {
+    const need = Math.min(Math.max(1, cost), this.burst);
     const now = this.now();
     let state = this.states.get(id);
     if (!state) state = { tokens: this.burst, at: now };
@@ -75,14 +80,14 @@ class TokenBucket {
     state.tokens = Math.min(this.burst, state.tokens + elapsedMs * this.perMinute / 60_000);
     state.at = now;
 
-    if (state.tokens >= 1) {
-      state.tokens -= 1;
+    if (state.tokens >= need) {
+      state.tokens -= need;
       this.states.set(id, state);
       return 0;
     }
 
     this.states.set(id, state);
-    return Math.max(1, Math.ceil((1 - state.tokens) * 60 / this.perMinute));
+    return Math.max(1, Math.ceil((need - state.tokens) * 60 / this.perMinute));
   }
 }
 
@@ -157,6 +162,53 @@ export const clientIp = (req) => {
   return (xff ? String(xff).split(",").at(-1).trim() : req.socket?.remoteAddress) || "unknown";
 };
 
+// THE BOX ASKING ITSELF (Darko 2026-10-13). The site refresh reads the office
+// about 600 times a pass; through the public URL every one of those spent the
+// box's own keyless bucket, and 17,531 of a day's 54,823 came back 429.
+//
+// BOX-LOCAL IS A DOOR, NOT A HEADER. The office opens a second listener, the
+// box door, bound to 127.0.0.1 only and named by no nginx location
+// (server.mjs § the box door). A request is box-local when its socket was
+// ACCEPTED BY THAT SERVER OBJECT (the box's own connection handler records each
+// one in `boxSockets`) and comes from a loopback address. Not a port number: a
+// number compares equal to the public port the day an env file names the same
+// one twice, and then every request nginx forwards would be box-local (the
+// second review of #516). Nothing a caller writes changes either.
+//
+// The first build read "loopback with no X-Forwarded-For" on the public port,
+// and the first review of #516 got through it:
+// nginx's two root .well-known locations proxy the raw URI with no XFF, and a
+// backslash path that nginx matches as /.well-known/oauth-… the office's URL
+// parse resolves to any door. Everything nginx forwards arrives on the public
+// port, so no path reaches the box door. Only the keyless GET bucket reads
+// this; keys, writes and the claim and berth desks keep every limit they had.
+const LOOPBACK = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
+export const boxLocal = (req, boxSockets) =>
+  boxSockets?.has(req.socket) === true && LOOPBACK.has(req.socket?.remoteAddress);
+
+// THE BULK READS' PRICE (Darko 2026-10-13). A bulk read answers what n single
+// reads answer, so it spends what they would: the cards of a roster page cost
+// the page's limit, the doorsteps cost the handles named. Otherwise one keyless
+// request could ask the office for 200 cards at the price of one. A digest page
+// costs the full letter pages it shapes. The bulletin's entries cost one, as
+// /letters?full=1 always has. Keyed GETs are charged the same cost against
+// their key's read budget (server.mjs, checkCredentialed).
+export const DOORSTEPS_PER_READ = 25;
+/** A comma-separated query list (`?handles=a,b`, `?ids=x,y`), blanks dropped. */
+export const listParam = (params, name) =>
+  String(params.get(name) ?? "").split(",").map((h) => h.trim()).filter(Boolean);
+export const bulkCost = (path, params) => {
+  // residentPageOf's own clamp: 50 by default, 200 at most
+  if (path === "/residents" && params.get("cards") === "1")
+    return Math.min(Math.max(Number(params.get("limit")) || 50, 1), 200);
+  if (path === "/doorsteps") return Math.max(1, Math.min(listParam(params, "handles").length, DOORSTEPS_PER_READ));
+  // a digest page shapes every letter it names, so it costs the full pages of
+  // 200 it stands for: 25 at queries.mjs LETTER_DIGEST_PAGE's 5000 (50 by default)
+  if (path === "/letters" && params.get("digests") === "1")
+    return Math.ceil(Math.min(Math.max(Number(params.get("limit")) || 50, 1), 5000) / 200);
+  return 1;
+};
+
 export const keyIdForToken = (token) =>
   `sha256:${createHash("sha256").update(token).digest("hex").slice(0, 16)}`;
 
@@ -210,12 +262,12 @@ export class Bouncer {
     return { error: "rate", defect, retry_after_s: retryAfterS };
   }
 
-  checkKey({ keyId, verb, write }) {
+  checkKey({ keyId, verb, write, cost = 1 }) {
     const kind = write ? "write" : "read";
     const perMinute = write
       ? this.limits.key.writePerMinute
       : this.limits.key.readPerMinute;
-    const retryAfterS = (write ? this.keyWrite : this.keyRead).take(keyId);
+    const retryAfterS = (write ? this.keyWrite : this.keyRead).take(keyId, cost);
     if (!retryAfterS) return null;
     return this.#throttle(
       "key",
@@ -226,8 +278,8 @@ export class Bouncer {
     );
   }
 
-  checkKeyless({ ip, verb = "GET" }) {
-    const retryAfterS = this.keyless.take(ip);
+  checkKeyless({ ip, verb = "GET", cost = 1 }) {
+    const retryAfterS = this.keyless.take(ip, cost);
     if (!retryAfterS) return null;
     return this.#throttle(
       "keyless",

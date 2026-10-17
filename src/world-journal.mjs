@@ -71,6 +71,7 @@
 import { execFileSync } from "node:child_process";
 
 import { singleLogEnabled } from "./dynamic-store.mjs";
+import { refShaFromDisk } from "./world-branches.mjs";
 import { mirrorAct, mirrorSettled, world2Enabled } from "./world2-acts.mjs";
 import { candleEnabled, claimEligible, claimHouseholdFor, claimTxFromJournal, docketSettled } from "./world2-claims.mjs";
 import { PenUnreachableError, laneFlipped, laneOf, penSettled, penWrite, shadowWrite } from "./world2-pen.mjs";
@@ -1124,7 +1125,26 @@ export function liveChildrenOf(db, id, { household = undefined } = {}) {
 // The manifest carries directories; a caller wants the record, so `/mark.md` is
 // appended here rather than at four call sites.
 let _frozen = null;
-export function frozenFilingAt(repo, sha) {
+
+// THE KEY IS THE COMMIT, NEVER THE NAME IT WAS ASKED BY (the rule
+// `world-branches.mjs § materializeAtRef` states: "a cache key must be the
+// PEELED commit"). `world.mjs` asks both caches here by "refs/heads/main", a
+// name that points at a different tree after every crossing; keyed on the name,
+// the answer read before main moved was handed back after it, until a caller
+// asking by a real commit evicted it. A branch's commit comes off disk with no
+// process (`refShaFromDisk`); anything else asks git once; a ref that resolves
+// to nothing keeps its own text, and the read below answers as it always did.
+function commitAt(repo, ref) {
+  const onDisk = refShaFromDisk(repo, String(ref));
+  if (onDisk) return onDisk;
+  try {
+    return execFileSync("git", ["-C", repo, "rev-parse", "--verify", "-q", `${ref}^{commit}`],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() || String(ref);
+  } catch { return String(ref); }
+}
+
+export function frozenFilingAt(repo, ref) {
+  const sha = commitAt(repo, ref);
   if (_frozen?.repo === repo && _frozen.sha === sha) return _frozen.byId;
   const byId = new Map();
   try {
@@ -1147,7 +1167,8 @@ export function frozenFilingAt(repo, sha) {
 // id genuinely is not derivable from the path — and there an ambiguous slug still
 // resolves to nothing, because a wrong-but-plausible filing is worse than none.
 let _pathIndex = null;
-function publishedPathIndex(repo, sha) {
+function publishedPathIndex(repo, ref) {
+  const sha = commitAt(repo, ref);
   if (_pathIndex?.repo === repo && _pathIndex.sha === sha) return _pathIndex;
   const bySlug = new Map();
   const byId = new Map();
@@ -1177,7 +1198,10 @@ function publishedPathIndex(repo, sha) {
  * manifest does not name — the slug index. `null` is the gate-B case, and it is
  * the ONLY case in which a mark is filed at its id.
  */
-export function filedPathOfAt(repo, sha) {
+export function filedPathOfAt(repo, ref) {
+  // Resolved ONCE, here: the lookup below runs per mark id, and a commit is
+  // answered by both caches without touching the disk again.
+  const sha = commitAt(repo, ref);
   return (id) => {
     const key = String(id);
     const frozen = frozenFilingAt(repo, sha).get(key);

@@ -63,7 +63,7 @@ import { basename, join } from "node:path";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown, metaOf } from "./fixture.mjs";
 import {
   CARD_TEACH, HOUSEHOLD_DISPATCHABLE, HOUSEHOLD_READS, READING_LAW,
   ACT_SHADOW_READS, assertActCardsReachable,
@@ -72,7 +72,7 @@ import {
 import { hotMailBlock, outboxTense, replayLetter, sendLetterAsRow, MAIL_DOOR, NONCE_MAX } from "../src/town-mail.mjs";
 import { pendingRows } from "../src/town-journal.mjs";
 import { enqueueLetter } from "../src/write.mjs";
-import { outboxSettled } from "../src/queries.mjs";
+import { storeAnswer, outboxSettled } from "../src/town-index-store.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 
 delete process.env.TOWN_PUSH; // nothing here may leave the machine
@@ -87,19 +87,14 @@ process.env.WORLD_STORE_DB = join(tmpdir(), "pm-foyer-no-such-world-store.db");
 const trash = [];
 after(() => { for (const d of trash.splice(0)) rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
 
-// NOT in `trash`, and the order is the reason: hooks run in registration order,
-// so the sweep above would delete this directory while the index below still
-// holds its file open — EPERM on Windows, and a green suite that fails to tear
-// down is a suite that will fail on someone else's machine for a reason that
-// has nothing to do with the door.
+// A scratch directory of the file's own (NOT in `trash`: it outlives the sweep).
 const dir = mkdtempSync(join(tmpdir(), "pm-foyer-"));
-const dbPath = join(dir, "fixture.db");
-fixtureDb(dbPath).close();
-const db = new DatabaseSync(dbPath, { readOnly: true });
-after(() => { db.close(); rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+after(() => { rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
 // The doors below run in this process and read their town index from a store
-// seeded from this fixture (POS-268, office-under-test.mjs).
-const IX = await indexStore(dbPath);
+// seeded from the fixture town (POS-268, office-under-test.mjs). The checks
+// are handed no index (null): they ask the store's held probe.
+const town = fixtureTown();
+const IX = await indexStore(town);
 const IX_RESTORE = await IX.useInProcess();
 after(async () => { await IX_RESTORE(); await IX.stop(); });
 
@@ -143,7 +138,9 @@ const { TOOLS } = await import("../src/mcp.mjs");
 const SCHEMAS = Object.fromEntries(TOOLS.map((t) => [t.name, t.inputSchema?.properties ?? {}]));
 const REQUIRED = Object.fromEntries(TOOLS.map((t) => [t.name, t.inputSchema?.required ?? []]));
 
-const ctx = (extra = {}) => ({ db, worldBlock, ...extra });
+const ctx = (extra = {}) => ({ worldBlock, ...extra });
+/** How many letters sit in a resident's outbox, as the store's index holds them (the pending view's settled half). */
+const settledOf = async (handle) => { const r = await storeAnswer((c) => outboxSettled(c, handle)); assert.equal(r.refused, undefined); return r.out; };
 const letter = (over = {}) => ({ from: "wright", to: "limen", title: "a fine hat", body: "Limen —\n\nA test letter.", ...over });
 
 // ── (1) THE FOYER ───────────────────────────────────────────────────────────
@@ -453,6 +450,22 @@ test('F5 · CONTRACT.md: "REST: stable/simple for frozen consumers" — the REST
   const beginLive = full.acts.find((a) => a.act === "begin");
   assert.deepEqual(shapeOf(beginLive), heardShapes[0], "the live begin card asks the question");
   assert.deepEqual(shapeOf(full.acts.find((a) => a.act === "declare")), heardShapes[0]);
+
+  // ⚑ REGENERATED 2026-10-14 FOR POS-574 (the harbor's signs, Wright's ruling
+  // G4a), named here for the same reason. What grew: declare's and begin's
+  // shared shape gained one optional field, `from_town`, the town an agent says
+  // it came from, printed on its berth as its own claim. ADDITIVE and proven so:
+  // the capture diff added exactly `/acts/0/fields/from_town/{type,description}`
+  // and removed or retyped none (docs/2026-10-13/rail/POS-574/). It stays off
+  // the abridged index (household-apex.mjs § OFF_INDEX, F5d). PSA for the
+  // release notes: "declare_household (and begin) take an optional from_town —
+  // the short name of the agent town you already live in, like 1f3d9 — and the
+  // ship's manifest prints it on your berth as your claim."
+  //
+  // The witness: that shared shape carries from_town, in the frozen copy and on
+  // the live door.
+  assert.equal(heardShapes[0].fields.from_town?.type, "string", "the frozen arrival shape carries from_town");
+  assert.equal(beginLive.fields.from_town?.type, "string", "and the live begin card takes it");
 });
 
 test(`F5c · and the answer stays BOUNDED — REST under ${REST_CEILING}B, the connector's bare answer under ${SLIM_CEILING}B`, async () => {
@@ -474,16 +487,16 @@ test(`F5c · and the answer stays BOUNDED — REST under ${REST_CEILING}B, the c
 // Measured on the POS-292 head with them off: connector bare 8,180 B, so the
 // headroom under SLIM_CEILING is 12 B; REST bare 21,668 B under 24,576.
 // POS-570: begin asks the same two fields, on the same rule.
-test("F5d · POS-292 + POS-570: the abridged index leaves declare's and begin's heard fields off, and both cards still carry them", async () => {
+test("F5d · POS-292 + POS-570 + POS-574: the abridged index leaves declare's and begin's heard fields and from_town off, and both cards still carry them", async () => {
   const slim = await householdApex({}, KEY, ctx({ slim: true, schemas: SCHEMAS, schemaRequired: REQUIRED }));
   for (const act of ["declare", "begin"]) {
     const entry = slim.acts.find((a) => a.act === act);
     assert.ok(entry, `${act} is on the index`);
-    for (const f of ["heard", "heard_note"]) assert.equal(f in entry.fields, false, `${act}'s ${f} rides the foyer`);
+    for (const f of ["heard", "heard_note", "from_town"]) assert.equal(f in entry.fields, false, `${act}'s ${f} rides the foyer`);
     assert.ok("household" in entry.fields, `the rest of ${act}'s fields are still listed`);
     const card = await householdApex({ read: act }, KEY, ctx({ slim: true, schemas: SCHEMAS, schemaRequired: REQUIRED }));
     const fields = card.card?.fields ?? card.fields ?? {};
-    for (const f of ["heard", "heard_note"]) assert.ok(f in fields, `${f} is on ${act}'s card: ${JSON.stringify(Object.keys(fields))}`);
+    for (const f of ["heard", "heard_note", "from_town"]) assert.ok(f in fields, `${f} is on ${act}'s card: ${JSON.stringify(Object.keys(fields))}`);
   }
 });
 
@@ -675,7 +688,7 @@ test("F7c4 · THE FORK IS RULED — `window` is at parity AND its doorstep segme
 
   // HALF TWO: the segment the morning page carries IS that read's domain.
   const meta = { as_of: "fixturesha000000000000000000000000000000" };
-  const bctx = { db, key: null, meta, asOf: meta.as_of, canWrite: false, clone: null, pen: null, odb: null, dbPath: null };
+  const bctx = { key: null, asOf: meta.as_of, canWrite: false, clone: null, pen: null, odb: null };
   const d = await doorstepBundle("wright", bctx);
   const seg = Object.fromEntries(Object.entries(d.window).filter(([k]) => !["serves", "args"].includes(k)));
   assert.deepEqual(seg, r.window, "the segment is the read's DOMAIN — the envelope is the apex's and the page never sees it");
@@ -743,7 +756,7 @@ test("F7c5 · THE MORNING PAGE DID NOT FATTEN — the doorstep bundle is byte-id
   Object.assign(process.env, STANCE_ON);
   stancePoolFromJournal(join(mkdtempSync(join(dir, "f7c5-")), "dynamic.db"));
   const meta = { as_of: "fixturesha000000000000000000000000000000" };
-  const bctx = { db, key: null, meta, asOf: meta.as_of, canWrite: false, clone: null, pen: null, odb: null, dbPath: null, nowMs: GOLDEN_NOW_MS };
+  const bctx = { key: null, asOf: meta.as_of, canWrite: false, clone: null, pen: null, odb: null, nowMs: GOLDEN_NOW_MS };
   const now = { full: await doorstepBundle("wright", bctx), slim: await doorstepBundle("wright", { ...bctx, slim: true }) };
   assert.equal(JSON.stringify(now), readFileSync(GOLD, "utf8"),
     "the morning page moved — every byte here is served on every doorstep, and this design exists to keep that number still");
@@ -952,6 +965,78 @@ test("F7c5 · THE MORNING PAGE DID NOT FATTEN — the doorstep bundle is byte-id
   //   full  21848 -> 21924 (+76, +0.35%) = stances +76
   //   slim  19341 -> 19417 (+76, +0.39%) = stances +76
   //
+  // ⚠ AND RE-CAPTURED A TWELFTH TIME, 2026-10-13 (lane plumb-wld5, WLD-5),
+  // because the PR moved the world pin, ddc8cdd2 -> b4e1ab9e (the head of
+  // postmark-world#199, over main d080dcf6), as the tenth note says a pin move
+  // must. The code was cleared by the diff itself, run leaf by leaf BEFORE the
+  // capture: 1043 paths before, 1045 after, 2 removed, 4 added, 100 changed,
+  // and NOT ONE outside `stances`, the world's own data at the pin: a newer
+  // mark, keith/waiting-room-stool-2026-09-10 (Keith's set-down, POS-451),
+  // now heads `stances.awaiting` and the five rows shift down by one;
+  // `stances_awaiting` 61 -> 62. (This lane's office changes touch no doorstep
+  // segment: the crossings, the exit card, the walk fence, the resident reads.)
+  //
+  // Measured from the file:
+  //
+  //   full  21924 -> 21974 (+50, +0.23%) = stances +50
+  //   slim  19417 -> 19467 (+50, +0.26%) = stances +50
+  //
+  // ⚠ AND RE-CAPTURED A THIRTEENTH TIME, 2026-10-14 (lane plumb-arrival, WLD-5),
+  // because the PR moved the world pin, 17b64ef1 -> 01f7c83e (the head of
+  // postmark-world#206, over main 9988b669; then to its merge bdbf1061, which
+  // moved nothing here: F7c5 green on a CI-shaped clone), as the tenth note says a pin move
+  // must. The code was cleared first: at this PR's head with a CI-shaped clone at
+  // the OLD pin (suite-clones.sh's fetch), F7c5 is green. Then the diff, leaf by
+  // leaf at the new pin BEFORE the capture: 1063 paths before and after, NONE
+  // removed or added, 2 changed, both the world's own data at the pin (the new
+  // pin's history carries settlement/S108): `stances.stances_awaiting` 62 -> 61
+  // on both skins.
+  //
+  // Measured from the file:
+  //
+  //   full  21974 -> 21974 (+0) · slim  19467 -> 19467 (+0)
+  //
+  // ⚠ AND RE-CAPTURED A FOURTEENTH TIME, 2026-10-14 (lane plumb-bugs-a,
+  // postmark#3757), for the stakes segment's rule sentence, which is now
+  // Darko's plain sentence (WLD-51, 14:31 EDT), world unpublish-verdict.mjs §
+  // UNPUBLISH_RULE verbatim: "At each settlement, a commons mark with no stamps
+  // behind it leaves the world. A mark standing on your household's ground or
+  // the town's never does, whatever it was first filed as." The world pin moved
+  // bdbf1061 -> c098ecfd (the head of postmark-world#212, tools/ only, blessed
+  // S108 on both). Diffed leaf by leaf BEFORE the capture, on CI-shaped clones
+  // (suite-clones.sh's fetch; a pool tree's clone re-pointed only at HEAD keeps
+  // its old origin/main and shows no move, which red this lane's first try):
+  // against the thirteenth capture, 1063 paths before and after, NONE removed
+  // or added, ONE changed, `full.stakes.rule`. The slim skin drops `rule`.
+  // Re-checked at #218's merge, eb8428e2 (the world pin since POS-637 PR-A2): 0 paths moved.
+  //
+  //   full  21974 -> 21905 (-69, -0.31%) = stakes.rule -69
+  //   slim  19467 -> 19467 (0)
+  //
+  // ⚠ AND RE-CAPTURED A FIFTEENTH TIME, 2026-10-15 (lane plumb-wld51, WLD-51
+  // part 3), because the page dropped bodies: every stakes row named a mark and
+  // left out what it says. Darko, 2026-10-14 22:33: "There's a reason why there
+  // are 150 characters ... We include them in reads." Save size with fewer
+  // marks, never by losing bodies. Diffed leaf by leaf BEFORE the capture, on
+  // CI-shaped clones (suite-clones.sh's fetch at the pins, world daef8487, town
+  // 5efee017): against the fourteenth capture, 1063 -> 1115 paths, NONE removed
+  // or changed, 52 added, and they are exactly `stakes.rows.N.body` for the 26
+  // rows on each skin. The page grows by the bodies and by nothing else.
+  //
+  //   full  21905 -> 24972 (+3067, +14.0%) = 26 bodies
+  //   slim  19467 -> 22534 (+3067, +15.8%) = the same 26 bodies
+  //
+  // ⚠ AND RE-CAPTURED A SIXTEENTH TIME, 2026-10-15 (lane plumb-wld51-alerts,
+  // WLD-51), for `alerts`: the page's notices in one structure, every kind
+  // registered (Darko, 19:06; the shape approved 19:29, "I love the alerts
+  // shape"). ALWAYS PRESENT, so a reader can count on the key: the fixture
+  // office has no store, so it is the empty array. Diffed leaf by leaf BEFORE
+  // the capture, on CI-shaped clones at the pins (world daef8487, town
+  // 5efee017): against the fifteenth capture, 1115 -> 1117 paths, NONE removed
+  // or changed, TWO added, `full.alerts` and `slim.alerts`.
+  //
+  //   full  24972 -> 24984 (+12) · slim  22534 -> 22546 (+12)
+  //
   // So the assertion below is the one that actually carries the promise, and it
   // is stated separately so a future regeneration cannot quietly absorb a card:
   assert.equal(JSON.stringify(now).includes('"card"'), false,
@@ -982,7 +1067,7 @@ test("F7c5b · THE PAGE READS THE CLOCK IT WAS HANDED — two wall clocks twenty
   const { doorstepBundle } = await import("../src/doorstep-bundle.mjs");
   const { GOLDEN_NOW_MS } = await import("../tools/capture-doorstep-golden.mjs");
   const meta = { as_of: "fixturesha000000000000000000000000000000" };
-  const base = { db, key: null, meta, asOf: meta.as_of, canWrite: false, clone: null, pen: null, odb: null, dbPath: null };
+  const base = { key: null, asOf: meta.as_of, canWrite: false, clone: null, pen: null, odb: null };
   const compose = (extra) => async () => JSON.stringify({
     full: await doorstepBundle("wright", { ...base, ...extra }),
     slim: await doorstepBundle("wright", { ...base, ...extra, slim: true }),
@@ -1046,12 +1131,11 @@ test("F7c5d · EVERY CLOCK READ ON THE PAGE IS THREADED — the bare forms are a
     [/nextCrossingForDoorstep\(\s*nowMs\s*\)/, /nextCrossingForDoorstep\(\s*\)/, "the header's boat"],
     [/doorstepRulings\([^)]*\bnowMs\b/, /doorstepRulings\(\s*handle\s*,\s*\{\s*key\s*\}\s*\)/, "the rulings segment's crossing cursor"],
     [/doorstepStakes\([^)]*\bnow:\s*new Date\(\s*nowMs\s*\)/, /doorstepStakes\(\s*handle\s*,\s*\{\s*key\s*\}\s*\)/, "the stakes segment's settlement"],
-    // POS-268: the doorstep's options are built once and handed to whichever
-    // index answers (office.db's doorstep, or the store's through `ix`), so the
-    // instant is pinned where the options are built, and both calls must take them.
+    // POS-268: the doorstep's options are built once and handed to the index
+    // that answers (the store's, through `ix`), so the instant is pinned where
+    // the options are built, and the call must take them.
     [/const opts = \{.*\bnowMs\b.*\};/, null, "the index's PSA window"],
     [/ix\.doorstep\(\s*handle\s*,\s*asOf\s*,\s*opts\s*\)/, null, "the store's doorstep taking the page's options"],
-    [/doorstep\(\s*db\s*,\s*handle\s*,\s*asOf\s*,\s*opts\s*\)/, null, "office.db's doorstep taking the page's options"],
   ]) {
     assert.match(code, present, `${what} is no longer threaded from the page's one instant`);
     if (absent) assert.ok(!absent.test(code), `${what} is called with no instant somewhere in this file — the default puts the wall clock back`);
@@ -1070,10 +1154,10 @@ test('F8 · Hal: a pending read "returning exact standing IDs, recipient, thread
   await flagOn(async () => {
     const odb = logDb();
     const clone = mailClone();
-    const sent = await sendLetterAsRow(letter({ thread: "new" }), KEY, db, clone, odb);
+    const sent = await sendLetterAsRow(letter({ thread: "new" }), KEY, null, clone, odb);
     const r = await householdApex({ read: "mail", view: "pending", handle: "wright" }, KEY, ctx({ odb, clone, slim: true }));
     assert.equal(r.box, "pending");
-    assert.equal(r.total, 1);
+    assert.equal(r.shown, 1);
     const row = r.standing[0];
     assert.equal(row.letter_id, sent.letter_id, "the exact standing ID");
     assert.equal(row.to, "limen", "recipient");
@@ -1085,15 +1169,54 @@ test('F8 · Hal: a pending read "returning exact standing IDs, recipient, thread
   });
 });
 
+test("F8b · postmark#3550: the pending total counts the letters in the outbox too, as the doorstep and the view's own freshness do", async () => {
+  // The Postmaster read `total: 1` beside three letters committed to their
+  // outbox and never carried. A committed outbox letter is settled in the
+  // ladder's sense (indexed) but has not sailed, and `freshness` beside the
+  // total already said pending_outbox = in_outbox + standing_in_log.
+  await flagOn(async () => {
+    const inOutbox = await settledOf("wright");
+    assert.ok(inOutbox > 0, "the fixture must hold a letter in wright's outbox, or this proves nothing");
+    const odb = logDb();
+    const clone = mailClone();
+
+    // nothing standing yet: the outbox half alone
+    const quiet = await householdApex({ read: "mail", view: "pending", handle: "wright" }, KEY, ctx({ odb, clone, slim: true }));
+    assert.equal(quiet.total, inOutbox, "a letter waiting in the outbox has not sailed, so it is pending");
+    assert.equal(quiet.shown, 0);
+    assert.equal(quiet.complete, false, "it is counted and not listed, and the answer must say so");
+    assert.equal(quiet.in_outbox?.count, inOutbox);
+    assert.doesNotMatch(quiet.note, /every letter you have written has sailed/, "the all-clear may not ride beside a waiting letter");
+
+    // one standing in the log: both halves
+    await sendLetterAsRow(letter(), KEY, null, clone, odb);
+    const r = await householdApex({ read: "mail", view: "pending", handle: "wright" }, KEY, ctx({ odb, clone, slim: true }));
+    assert.equal(r.total, inOutbox + 1, "pending total = in_outbox + standing, the doorstep's own number");
+    assert.equal(r.total, r.freshness.in_outbox + r.freshness.standing_in_log, "the total agrees with the ladder printed beside it");
+    assert.equal(r.shown, 1);
+    assert.equal(r.complete, false);
+    odb.close();
+
+    // an empty outbox: nothing counted that is not listed
+    const lodb = logDb();
+    const empty = await householdApex({ read: "mail", view: "pending", handle: "limen" }, LIMEN, ctx({ odb: lodb, clone, slim: true }));
+    assert.equal(await settledOf("limen"), 0);
+    assert.equal(empty.total, 0);
+    assert.equal(empty.complete, true);
+    assert.equal(empty.in_outbox, undefined);
+    lodb.close();
+  });
+});
+
 test("F9 · the pending view is NOT a second tense computer — its ladder is the doorstep's own, called at the same inputs", async () => {
   await flagOn(async () => {
     const odb = logDb();
     const clone = mailClone();
-    await sendLetterAsRow(letter(), KEY, db, clone, odb);
+    await sendLetterAsRow(letter(), KEY, null, clone, odb);
     const r = await householdApex({ read: "mail", view: "pending", handle: "wright" }, KEY, ctx({ odb, clone, slim: true }));
     assert.deepEqual(r.freshness, outboxTense({
-      inOutbox: outboxSettled(db, "wright"), standing: 1,
-      settledAsOf: db.prepare("SELECT value FROM meta WHERE key = 'as_of'").get().value,
+      inOutbox: await settledOf("wright"), standing: 1,
+      settledAsOf: metaOf(town, "as_of"),
     }), "one owner: if the mail law's tense vocabulary changes, both surfaces move together");
     assert.deepEqual(r.standing, (await hotMailBlock(odb, KEY, { handle: "wright" })).standing,
       "and the rows are the doorstep's rows, not a second shaping of them");
@@ -1106,7 +1229,7 @@ test('F10 · `the-town/the-disclosure`: "An answer given without its inputs must
     const odb = logDb();
     const clone = mailClone();
     // limen has a letter standing. wright asks about it.
-    await sendLetterAsRow({ from: "limen", to: "wright", title: "a reply", body: "hello" }, LIMEN, db, clone, odb);
+    await sendLetterAsRow({ from: "limen", to: "wright", title: "a reply", body: "hello" }, LIMEN, null, clone, odb);
     assert.equal((await pendingRows(odb)).length, 1, "there IS something standing — a zero here would be a lie, not an emptiness");
     const r = await householdApex({ read: "mail", view: "pending", handle: "limen" }, KEY, ctx({ odb, clone, slim: true }));
     assert.equal(r.error, "bounce");
@@ -1122,7 +1245,9 @@ test("F10b · and a sender with nothing standing is told a true zero, which must
     const odb = logDb();
     const r = await householdApex({ read: "mail", view: "pending", handle: "wright" }, KEY, ctx({ odb, slim: true }));
     assert.equal(r.error, undefined);
-    assert.equal(r.total, 0);
+    // the true zero is the standing half; the outbox half still counts in total (postmark#3550)
+    assert.equal(r.shown, 0);
+    assert.equal(r.total, await settledOf("wright"));
     assert.match(r.note, /nothing of yours is standing/);
     odb.close();
   });
@@ -1210,8 +1335,8 @@ test("F12c · a nonce cannot be probed across households — limen spending wrig
   await flagOn(async () => {
     const odb = logDb();
     const clone = mailClone();
-    await sendLetterAsRow(letter({ nonce: "shared-word" }), KEY, db, clone, odb);
-    const r = await sendLetterAsRow({ from: "limen", to: "wright", title: "hers", body: "hi", nonce: "shared-word" }, LIMEN, db, clone, odb);
+    await sendLetterAsRow(letter({ nonce: "shared-word" }), KEY, null, clone, odb);
+    const r = await sendLetterAsRow({ from: "limen", to: "wright", title: "hers", body: "hi", nonce: "shared-word" }, LIMEN, null, clone, odb);
     assert.equal(r.duplicate, undefined, "the axis the lookup runs along never carries another household's rows");
     assert.equal((await pendingRows(odb)).length, 2);
     odb.close();
@@ -1222,10 +1347,10 @@ test("F12d · THE DRAIN CANNOT TRIP ON THE NONCE — the replay lane's door is e
   await flagOn(async () => {
     const odb = logDb();
     const clone = mailClone();
-    const sent = await sendLetterAsRow(letter({ nonce: "drain-me" }), KEY, db, clone, odb);
+    const sent = await sendLetterAsRow(letter({ nonce: "drain-me" }), KEY, null, clone, odb);
     const row = (await pendingRows(odb))[0];
     assert.equal(row.payload.args.nonce, "drain-me", "the row stores the caller's arguments verbatim, nonce included");
-    const out = replayLetter(row, { doors: { [MAIL_DOOR]: enqueueLetter }, db, clone });
+    const out = replayLetter(row, { doors: { [MAIL_DOOR]: enqueueLetter }, clone });
     assert.equal(out.skipped, undefined);
     assert.equal(out.result.letter_id, sent.letter_id);
     // The receipt that could only exist if the replay actually wrote: the file
@@ -1265,7 +1390,7 @@ test("F13b · and a send with NO nonce is byte-for-byte the receipt it always wa
   await flagOn(async () => {
     const odb = logDb();
     const clone = mailClone();
-    const r = await sendLetterAsRow(letter(), KEY, db, clone, odb);
+    const r = await sendLetterAsRow(letter(), KEY, null, clone, odb);
     // THE CLAIM IS ABOUT NONCES, and it is asserted directly so it can fail on
     // its own — the key list below is a shape guard, and a shape guard cannot
     // stand in for the claim it sits beside.
@@ -1312,8 +1437,8 @@ test("F15 · TWO CALLS AT ONCE, one nonce: exactly ONE letter is written, and th
     // Promise.all, not await-then-await: both calls must be in flight together,
     // which is the whole condition under test.
     const [a, b] = await Promise.all([
-      sendLetterAsRow(args, KEY, db, clone, odb),
-      sendLetterAsRow(args, KEY, db, clone, odb),
+      sendLetterAsRow(args, KEY, null, clone, odb),
+      sendLetterAsRow(args, KEY, null, clone, odb),
     ]);
     assert.equal((await pendingRows(odb)).length, 1,
       "two overlapping calls wrote two letters — the seam is a sequence, not a seam");
@@ -1329,7 +1454,7 @@ test("F15b · and it holds at five — the map is a gate, not a two-caller speci
     const odb = logDb();
     const clone = mailClone();
     const args = letter({ nonce: "race-5" });
-    const out = await Promise.all([1, 2, 3, 4, 5].map(() => sendLetterAsRow(args, KEY, db, clone, odb)));
+    const out = await Promise.all([1, 2, 3, 4, 5].map(() => sendLetterAsRow(args, KEY, null, clone, odb)));
     assert.equal((await pendingRows(odb)).length, 1);
     assert.equal(out.filter((r) => r.duplicate).length, 4);
     assert.equal(new Set(out.map((r) => r.letter_id)).size, 1, "all five hold the same letter");
@@ -1345,14 +1470,14 @@ test("F15c · a first call that BOUNCES spends no nonce — the waiter tries hon
     // never written, which is the opposite of the seam's promise.
     const doomed = letter({ to: "nobody-here", nonce: "bounce-1" });
     const results = await Promise.allSettled([
-      sendLetterAsRow(doomed, KEY, db, clone, odb),
-      sendLetterAsRow(doomed, KEY, db, clone, odb),
+      sendLetterAsRow(doomed, KEY, null, clone, odb),
+      sendLetterAsRow(doomed, KEY, null, clone, odb),
     ]);
     assert.equal(results.filter((r) => r.status === "rejected").length, 2,
       "both are refused, and neither is handed a duplicate receipt for a letter that does not exist");
     assert.equal((await pendingRows(odb)).length, 0, "and nothing was written");
     // the nonce is not burned: a good letter carrying it still goes
-    const ok = await sendLetterAsRow(letter({ nonce: "bounce-1" }), KEY, db, clone, odb);
+    const ok = await sendLetterAsRow(letter({ nonce: "bounce-1" }), KEY, null, clone, odb);
     assert.equal(ok.duplicate, undefined);
     assert.equal((await pendingRows(odb)).length, 1);
   });
@@ -1363,12 +1488,12 @@ test("F16 · an over-long nonce is REFUSED, never trimmed — two nonces cut to 
     const odb = logDb();
     const clone = mailClone();
     await assert.rejects(
-      () => sendLetterAsRow(letter({ nonce: "x".repeat(NONCE_MAX + 1) }), KEY, db, clone, odb),
+      () => sendLetterAsRow(letter({ nonce: "x".repeat(NONCE_MAX + 1) }), KEY, null, clone, odb),
       (e) => e.code === 422 && /nonce must be under/.test(e.defect),
       "a nonce past the cap bounces by name");
     assert.equal((await pendingRows(odb)).length, 0, "and writes nothing on the way out");
     // exactly at the cap still goes
-    const ok = await sendLetterAsRow(letter({ nonce: "y".repeat(NONCE_MAX) }), KEY, db, clone, odb);
+    const ok = await sendLetterAsRow(letter({ nonce: "y".repeat(NONCE_MAX) }), KEY, null, clone, odb);
     assert.equal(ok.letter_id, "wright-" + ok.letter_id.split("-").slice(1).join("-"));
     assert.equal((await pendingRows(odb)).length, 1, "the cap is a bound, not an off-by-one");
   });
@@ -1441,4 +1566,22 @@ test("F17c · a GOOD store renders with NO warning — the stamp is a disclosure
 test("F14 · the capability index is generated from the acts table, so it cannot name an act the door will not dispatch", () => {
   assert.deepEqual(capabilityIndex().map((a) => a.act), [...HOUSEHOLD_DISPATCHABLE]);
   for (const { teaches } of capabilityIndex()) assert.ok(teaches && teaches.length > 10);
+});
+
+// ── POS-632: explain: covers the household's bare read, every shape ─────────
+test("explain: every key of the household's bare read (full, slim, h1, h2; resident, berth, visitor, anonymous; with the world-write budget) has a row", async () => {
+  const { unexplained } = await import("../src/read-grammar.mjs");
+  const budget = { worldWriteBudget: () => ({ used: 0, cap: 200, per: "hour", resets_at: "2026-10-15T02:00:00.000Z" }) };
+  const BERTH = { berth: true, slug: "newcomer" };
+  const VISITOR = { visitor: true, ghLogin: "someone", handles: new Set() };
+  for (const [who, key] of [["resident", KEY], ["berth", BERTH], ["visitor", VISITOR], ["anonymous", null]])
+    for (const extra of [{}, { slim: true }, { slim: true, readShape: "h1" }, { slim: true, readShape: "h2" }, { slim: true, ...budget }]) {
+      const bare = await householdApex({}, key, ctx(extra));
+      assert.ok(!bare.error, `the bare read answers (${who} ${JSON.stringify(extra)})`);
+      assert.deepEqual(unexplained("household", bare, 1), [], `household ${who} ${JSON.stringify(extra)}`);
+    }
+  const withBudget = await householdApex({}, KEY, ctx({ slim: true, ...budget }));
+  assert.ok("world_writes" in withBudget, "the budget case does carry world_writes, so the row is held");
+  const ex = await householdApex({ explain: "papers" }, KEY, ctx({ slim: true }));
+  assert.equal(ex.explains, "papers");
 });

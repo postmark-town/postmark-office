@@ -1095,7 +1095,7 @@ test("the transport line rides the NARRATIVE eyes shape, not only the diagnostic
   // DIAGNOSTIC. Nothing the town's pages run is allowed to depend on it."
   const src = readFileSync(new URL("../src/world.mjs", import.meta.url), "utf8");
   const sites = [
-    ["orient", "  return { standpoint: { ...at, stance: choice.stance }, crossing: { n: crossing, derivation: CROSSING_DERIVATION }, note, primer,"],
+    ["orient", "  const out = { standpoint: { ...at, stance: choice.stance, ...arrival }, crossing: { n: crossing, derivation: CROSSING_DERIVATION }, note, primer,"],
     ["eyes · diagnostic", "  const full = {"],
     ["eyes · narrative", "    stance: choice.stance, telling, objects,"],
   ];

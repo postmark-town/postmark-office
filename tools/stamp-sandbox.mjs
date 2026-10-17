@@ -23,7 +23,13 @@
 // the box runs. `--town` defaults to this tree's `town-clone/`.
 //
 //   1. THE SANDBOX. A temp directory holding a `git clone --local` of the town
-//      checkout with its remotes REMOVED (nothing can push), a fresh ed25519
+//      checkout with its remotes REMOVED (nothing can push), SPARSE: the whole
+//      town less the letters dated before the synthetic clock's first day, which
+//      no step writes (POS-652, test/helpers/clone-sparse.mjs § standinPatterns;
+//      a full checkout here was ~17,000 files, twice a run). So the residents'
+//      mail history before that day is not on disk: a future step that reads it
+//      (a thread, a reply's parent, "answered" in the town's tools/mail-state.mjs) would see
+//      an empty history and must widen the cutoff first. Then a fresh ed25519
 //      key, and a fresh Postgres from test/helpers/embedded-store.mjs (every
 //      migration, every role, its own port and data directory; WORLD2_PG_URL
 //      and PG* are never read, so no run can reach the dev or prod store).
@@ -76,6 +82,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpath
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { applySparse, standinClone, standinPatterns } from "../test/helpers/clone-sparse.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const OFFICE = resolve(HERE, "..");
@@ -363,11 +370,15 @@ export async function openSandbox({ townSource, log = () => {} } = {}) {
   sb.pubPem = publicKey.export({ type: "spki", format: "pem" });
   writeFileSync(sb.keyPath, sb.keyPem);
 
-  // the town: a local clone with no remote, on its own branch
-  log(`cloning the town at ${sourceSha.slice(0, 9)} (${source})`);
+  // the town: a local clone with no remote, on its own branch, sparse (POS-652): every
+  // letter a step writes is dated on or after the clock's first day, so only the older
+  // ones are left out, and `git add` takes everything the script writes
+  sb.before = clockStart((rel) => git(source, "show", `${sourceSha}:${rel}`));
+  log(`cloning the town at ${sourceSha.slice(0, 9)} (${source}), less the letters dated before ${sb.before}`);
   // LF as the box has it: a Windows machine's autocrlf must not rewrite the ledger's bytes
   execFileSync("git", ["-c", "core.autocrlf=false", "clone", "--local", "--quiet", "--no-checkout", "--config", "core.autocrlf=false", source, sb.town]);
   for (const r of git(sb.town, "remote").split("\n").filter(Boolean)) git(sb.town, "remote", "remove", r);
+  applySparse(sb.town, standinPatterns("town", source, { before: sb.before }), "standin-town");
   git(sb.town, "checkout", "-q", "-B", "sandbox", sourceSha);
   git(sb.town, "config", "user.name", BOT.BOT_NAME);
   git(sb.town, "config", "user.email", BOT.BOT_EMAIL);
@@ -488,7 +499,7 @@ export async function openStore(sb, { log = () => {} } = {}) {
 
   // the town index: the whole history once, in a child, from a snapshot (the box seeded it once too)
   const snap = join(sb.dir, "town-at-setup");
-  execFileSync("git", ["-c", "core.autocrlf=false", "clone", "--local", "--quiet", "--config", "core.autocrlf=false", sb.town, snap]);
+  standinClone("town", sb.town, snap, { before: sb.before }); // sparse as the town is (POS-652)
   const seedSha = sb.sha;
   sb.indexHead = seedSha;
   sb.indexReady = new Promise((ok, no) => {
@@ -666,13 +677,19 @@ export async function runSandbox({ townSource, keep = false, log = () => {} } = 
 
 // ── the context the script drives ────────────────────────────────────────────
 
-async function makeContext(sb, { log }) {
+const addDays = (date, n) => new Date(Date.parse(`${date}T12:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
+
+/** The synthetic clock's first day: the day after the newest line of the stamp and mail ledgers. `read(rel)` answers a file's text. */
+export function clockStart(read) {
   const tail = (rel) => {
-    const m = [...readFileSync(join(sb.town, rel), "utf8").matchAll(/^- (\d{4}-\d{2}-\d{2}) /gm)];
+    const m = [...read(rel).matchAll(/^- (\d{4}-\d{2}-\d{2}) /gm)];
     return m.length ? m.map((x) => x[1]).sort().at(-1) : "1970-01-01";
   };
-  const addDays = (date, n) => new Date(Date.parse(`${date}T12:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
-  const start = addDays([tail(LEDGER_REL), tail("WHITE_PAGES/mail-ledger.md")].sort().at(-1), 1);
+  return addDays([tail(LEDGER_REL), tail("WHITE_PAGES/mail-ledger.md")].sort().at(-1), 1);
+}
+
+async function makeContext(sb, { log }) {
+  const start = clockStart((rel) => readFileSync(join(sb.town, rel), "utf8"));
 
   const ctx = {
     sb, log, town: sb.town, office: OFFICE, keyPath: sb.keyPath, engine: sb.engine,

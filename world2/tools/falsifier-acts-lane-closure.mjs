@@ -191,6 +191,11 @@ const CLASS_LANE_OF = Object.freeze({
   ride: "journal",        // #2986 — naming a destination from inside a vehicle
   voice: "lane",          // check 1 — never written to the journal; see world-journal.mjs
   holding: "lane",        // check 2 — likewise
+  // POS-637 / WLD-56: a creature's spawn, reaction and withdraw. `acts` is its
+  // only pen (src/creatures.mjs § writeReaction and the creature tick), so
+  // there is no first pen to close against. Its payload was checked against
+  // the public export: a reaction row never carries the slice Jev read.
+  creature: "lane",
 });
 
 function checkClassCensus(classesInJournal) {

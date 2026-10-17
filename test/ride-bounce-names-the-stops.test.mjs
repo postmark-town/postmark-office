@@ -64,6 +64,9 @@ before(async () => {
     const text = String(sql).replace(/\s+/g, " ");
     if (/max\(id\) AS hw, count\(\*\) AS n FROM acts/.test(text)) return { rows: [{ hw: null, n: "0" }] };
     if (/SELECT id, at, crossing, actor, action, payload FROM acts/.test(text)) return { rows: [] };
+    // The apex asks the store whose household each ground is (POS-350). This
+    // record holds no registry, so every handle is its own household.
+    if (/^SELECT handle, household FROM identities/.test(text)) return { rows: [] };
     throw new Error(`the record was asked something it does not answer: ${text.slice(0, 160)}`);
   } });
   worldState = JSON.parse(readFileSync(join(CLONE, "WORLD", "world-state.json"), "utf8"));

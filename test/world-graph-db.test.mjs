@@ -34,6 +34,7 @@ import "../src/world-apex.mjs";
 import "../src/portal-ground.mjs";
 import "../src/world-frames.mjs";
 import "../src/world-classes.mjs";
+import "../src/class-read.mjs";
 import "../src/dynamic-store.mjs";
 import "../src/dynamic-entities.mjs";
 

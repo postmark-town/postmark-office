@@ -20,7 +20,7 @@
 // to see, not theirs to be seen by"). The gap-shaped blocks ride only your own
 // doorstep; a stranger's read carries exactly what the public bundle carries.
 
-import { doorstep, nextStepsFor, indexCopy, DOORSTEP_SEGMENTS, DOORSTEP_STANCES } from "./queries.mjs";
+import { nextStepsFor, DOORSTEP_SEGMENTS, DOORSTEP_STANCES } from "./queries.mjs";
 import { renamedRow } from "./one-contract.mjs";
 import { hotTenseBlock } from "./town-updates.mjs";
 import { hotMailBlock, outboxTense } from "./town-mail.mjs";
@@ -28,6 +28,7 @@ import { votesAvailable, doorstepVotes } from "./votes.mjs";
 import { nextCrossingForDoorstep, copyBlock, copyHoldsWords } from "./crossings.mjs";
 import { unreadFor, unreadBlock } from "./unread-store.mjs";
 import { freshFor } from "./paper-fresh.mjs"; // POS-271: the pending paper rows, read before a composed read
+import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
 
 /**
  * The finished doorstep for one resident, or null when there is no such
@@ -65,9 +66,9 @@ export async function doorstepBundle(handle, ctx = {}) {
   // The one behaviour delta on the live door, and it is a repair: a
   // composition that straddles a crossing could previously name boat N in
   // `rulings` and boat N+1 in `next_crossing`. It cannot now.
-  const { db, key, meta, asOf, clone, odb, canWrite, conversationsOffset = 0, slim = false, nowMs = Date.now(), ix = null } = ctx;
-  // `ix` is the index the door picked (POS-268): absent, office.db's, exactly as
-  // before; the store's (storeIndexPooled) when the door is switched.
+  const { key, asOf, clone, odb, canWrite, conversationsOffset = 0, slim = false, nowMs = Date.now() } = ctx;
+  // `ix` is the store's town index (storeIndexPooled), the one the door picked (POS-268).
+  const ix = ctx.ix ?? (await import("./town-index-store.mjs")).storeIndexPooled(clone);
   // THE SENDER'S STANDING LETTERS, READ ONCE (POS-375). `your_pending_letters`
   // and the awaiting segment's queued replies are one block, so the two cannot
   // disagree about which letters stand (Mari, postmark#3016: the block listed a
@@ -79,7 +80,7 @@ export async function doorstepBundle(handle, ctx = {}) {
   if (own) { try { pendingMail = { block: await hotMailBlock(odb, key, { handle }) }; } catch { pendingMail = null; } }
   const standing = pendingMail?.block?.standing ?? null;
   const opts = { conversationsOffset, slim, fresh: await freshFor(handle, { odb, clone, asOf }), nowMs, standing };
-  const core = ix ? await ix.doorstep(handle, asOf, opts) : await doorstep(db, handle, asOf, opts);
+  const core = await ix.doorstep(handle, asOf, opts);
   if (!core) return null;
 
   // ── THE HEADER'S CLOCK (postmark#2922) ─────────────────────────────────────
@@ -110,7 +111,7 @@ export async function doorstepBundle(handle, ctx = {}) {
   // page that is caught up must not look alike.
   const { handle: h, as_of, ...rest } = core;
   let copy;
-  try { copy = copyBlock(ix ? await ix.copy() : indexCopy(db), as_of, nowMs); }
+  try { copy = copyBlock(await ix.copy(), as_of, nowMs); }
   catch { copy = { ...copyBlock({}, as_of, nowMs), caught_up: null, sentence: `The office's copy of the town record ${copyHoldsWords(undefined)}; as_of above names its commit.` }; }
   const d = { handle: h, as_of, copy, next_crossing: nextCrossingForDoorstep(nowMs), ...rest };
 
@@ -185,7 +186,7 @@ export async function doorstepBundle(handle, ctx = {}) {
       : { serves: "household.stances", args, ...whole };
   } catch (e) {
     d.stances = { serves: "household.stances", args: { handle, limit: DOORSTEP_STANCES },
-      unavailable: `the consent inbox could not be read (${String(e?.message ?? e).slice(0, 160)})`,
+      unavailable: `the consent inbox could not be read (${plainReason(e, "record", "the doorstep's consent inbox")})`,
       awaiting: [], standing: [] };
   }
   // ── THE EIGHTH SEGMENT · the last crossing's verdict on your things ──────
@@ -218,7 +219,7 @@ export async function doorstepBundle(handle, ctx = {}) {
       ...(await doorstepRulings(handle, { key, nowMs })) };
   } catch (e) {
     d.outcomes = { serves: "household.outcomes", args: { handle },
-      unavailable: `the crossings' outcomes for your things could not be read (${String(e?.message ?? e).slice(0, 160)})`,
+      unavailable: `the crossings' outcomes for your things could not be read (${plainReason(e, "record", "the doorstep's outcomes")})`,
       count: 0, events: [] };
   }
   d.rulings = { renamed: [renamedRow("segment", "rulings", "outcomes")] };
@@ -260,8 +261,26 @@ export async function doorstepBundle(handle, ctx = {}) {
       : { serves: "household.stakes", args: { handle }, ...whole };
   } catch (e) {
     d.stakes = { serves: "household.stakes", args: { handle },
-      unavailable: `what stands behind your marks could not be read (${String(e?.message ?? e).slice(0, 160)}) — unknown, not zero`,
+      unavailable: `what stands behind your marks could not be read (${plainReason(e, "record", "the doorstep's stakes")}) — unknown, not zero`,
       count: 0, at_risk: null, rows: [] };
+  }
+  // ── ALERTS (WLD-51; Darko 2026-10-15 19:06, the shape approved 19:29) ───
+  //
+  // The page's notices in ONE structure: `alerts: [{ kind, severity, about,
+  // message, act: { verb, args }, since, until }]`, most severe first, every
+  // kind registered with its definition in src/alerts.mjs. ALWAYS PRESENT, on
+  // both skins, empty when nothing waits, so an agent can count on the key and
+  // act from `act` without parsing a sentence. Scoped as the stakes segment is:
+  // the named handle, or every handle the key holds. A kind whose source could
+  // not be read is named in `alerts_unread`, only when there is one.
+  try {
+    const { alertsFor } = await import("./alerts.mjs");
+    const { alerts, unread } = await alertsFor(handle ? [handle] : [...(key?.handles ?? [])], { now: new Date(nowMs) });
+    d.alerts = alerts;
+    if (unread.length) d.alerts_unread = unread;
+  } catch (e) {
+    d.alerts = [];
+    d.alerts_unread = [{ kind: "*", reason: `the alerts could not be composed (${plainReason(e, "record", "the doorstep's alerts")})` }];
   }
   // ── THE TENTH SEGMENT · the house's posts (POS-293) ────────────────────
   //
@@ -284,7 +303,7 @@ export async function doorstepBundle(handle, ctx = {}) {
     d.posts = { serves: "household.posts", args: { handle }, ...(await householdPosts(handle, { now: nowMs, clone })) };
   } catch (e) {
     d.posts = { serves: "household.posts", args: { handle },
-      unavailable: [`the house's posts could not be read (${String(e?.message ?? e).slice(0, 160)})`],
+      unavailable: [`the house's posts could not be read (${plainReason(e, "record", "the doorstep's posts")})`],
       put_up: { total: null, shown: 0, rows: [] }, taking_part: { total: null, shown: 0, rows: [] } };
   }
   // ── WHAT THEY HOLD (WLD-27) — beside the segments, not one of them ─────
@@ -304,20 +323,40 @@ export async function doorstepBundle(handle, ctx = {}) {
   // record has no holding to read and says nothing either; one that IS pointed
   // at it and cannot read it says so, because there "unknown" must not read as
   // "empty".
-  try {
+  if ((await import("./chests-candy.mjs")).chestsCandyOn()) try {   // dark by default (chests-candy.mjs)
     const { residentHolds } = await import("./world-units.mjs");
     const h = await residentHolds(handle);
     if (h.holds.count > 0 || h.chests.length || h.label) d.holds = { serves: "world.holdings", args: { handle }, ...h };
   } catch (e) {
     const { world2Enabled } = await import("./world2-acts.mjs");
     if (world2Enabled()) d.holds = { serves: "world.holdings", args: { handle },
-      unavailable: `what ${handle} holds could not be read (${String(e?.message ?? e).slice(0, 160)}) — unknown, not empty` };
+      unavailable: `what ${handle} holds could not be read (${plainReason(e, "record", "the doorstep's holdings")}) — unknown, not empty` };
+  }
+  // ── WHEN THE MISTS REACH THE HOUSE'S MARKS (WLD-38) — beside the segments ─
+  //
+  // `mists`: for every published mark the household's residents made that the
+  // advancing Mists reach within their schedule, the first crossing the FRINGE
+  // reaches it (sight shortened) and the first the WALL does (hidden), each
+  // with its date — or that it stands there now — and that it stays theirs and
+  // comes back when they lift. One forecast, the World engine's own reading,
+  // computed at this read with this page's one clock; nothing is stored or
+  // sent (mists-forecast.mjs). Published marks only, so a stranger's view
+  // shows nothing the map does not. Like `holds`: only when there is something
+  // to say, and an office pointed at a world it cannot read says
+  // `mists-forecast-unavailable`, never a quiet clear.
+  try {
+    const { householdMistsForecast } = await import("./mists-forecast.mjs");
+    const m = await householdMistsForecast(handle, { nowMs });
+    if (m) d.mists = m;
+  } catch (e) {
+    const { MISTS_FORECAST_UNAVAILABLE } = await import("./mists-forecast.mjs");
+    d.mists = { serves: "world.mists", args: { handle }, unavailable: `${MISTS_FORECAST_UNAVAILABLE}: ${plainReason(e, "files", "the doorstep's Mists forecast")}` };
   }
   // The manifest, republished now that every segment is on the page. A reader
   // walks `segments` to find them, so it must name all ten or none.
   d.segments = [...DOORSTEP_SEGMENTS];
 
-  await ownerGate(d, handle, { db, clone, key, odb, meta, ix, pendingMail });
+  await ownerGate(d, handle, { clone, key, odb, ix, pendingMail });
 
   // ── the civic pointer (2026-09-01, the clarity round) ─────────────────────
   //
@@ -386,7 +425,7 @@ export async function doorstepBundle(handle, ctx = {}) {
 // (`{ block }`, or null for a log that did not read), so the block here is the
 // one the awaiting segment was composed with (POS-375). Absent, the gate reads
 // it itself.
-export async function ownerGate(d, handle, { db, clone, key, odb, meta, asOf = null, unread = null, ix = null, pendingMail = undefined } = {}) {
+export async function ownerGate(d, handle, { clone, key, odb, asOf = null, unread = null, ix = null, pendingMail = undefined } = {}) {
   const own = key?.handles?.has?.(handle) === true;
   // THE COUNTER'S TENSE (Vex of the Drift, 2026-08-26). `pending_outbox` is a
   // COUNT(*) over the settled index, so under the town log it could read 0 for
@@ -433,14 +472,14 @@ export async function ownerGate(d, handle, { db, clone, key, odb, meta, asOf = n
     // and it is the only count on the page called new. An unreadable record
     // is said, never a zero.
     try {
-      const got = unread ?? await unreadFor(db, [handle], { ix }).then((rows) => ({ rows }), (error) => ({ error }));
+      const got = unread ?? await unreadFor([handle], { ix }).then((rows) => ({ rows }), (error) => ({ error }));
       d.unread = got.error ? unreadBlock(null, got.error) : unreadBlock(got.rows.get(handle) ?? []);
     } catch { /* garnish only */ }
     // The settling-in block (Keemin's grouping, 2026-08-15): what your house
     // still lacks. It retires itself the day the list empties.
     try {
       const { paperGaps } = await import("./household-apex.mjs");
-      const gaps = await paperGaps(handle, { db, clone, key, ix });
+      const gaps = await paperGaps(handle, { clone, key, ix, odb, asOf });
       if (gaps.length) d.settling_in = {
         note: "your house is still settling in — this block disappears as the list empties",
         next: gaps,
@@ -460,7 +499,7 @@ export async function ownerGate(d, handle, { db, clone, key, odb, meta, asOf = n
   // itself rides every read — it is what the public bundle already publishes —
   // but its gap-shaped half is gated on the same ownership test above.
   try {
-    const ns = await nextStepsFor(db, meta, handle, clone, { own, key, ix });
+    const ns = await nextStepsFor(handle, clone, { own, key, ix, odb, asOf });
     if (ns?.steps?.length) d.next_steps = ns;
   } catch { /* garnish only */ }
   return d;

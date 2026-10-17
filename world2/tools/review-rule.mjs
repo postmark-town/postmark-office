@@ -140,6 +140,10 @@ import { canonRegisterAt } from "./canon-register.mjs";
 // § THE SECOND DOOR.
 import { escrowAbsentAmong, escrowPresenceAt } from "./escrow-presence.mjs";
 import { computeStanding } from "./standing.mjs";
+// The same operator `marks`' exclusion constraint and the clearing's step 4/5
+// use, so the ruling, the candle and the constraint can never disagree about
+// what "overlaps" means: one owner, imported, never a second copy (POS-599).
+import { OVERLAP } from "./overlap.mjs";
 
 const arg = (n) => { const i = process.argv.indexOf(n); return i === -1 ? null : process.argv[i + 1]; };
 const has = (n) => process.argv.includes(n);
@@ -147,11 +151,6 @@ const has = (n) => process.argv.includes(n);
 export const RULINGS = Object.freeze(["grant", "refuse", "hold"]);
 export const REVIEW_CLASS = "review";     // the acts class — see § THE ACT
 export const REVIEW_ACTION = "rule";      // "a mind RULES" (census D2's own verb)
-
-// The same operator `marks`' exclusion constraint and the clearing's step 4/5
-// use, so the ruling, the candle and the constraint can never disagree about
-// what "overlaps" means.
-const OVERLAP = "a.bbox && b.bbox";
 
 /**
  * THE CONTEST — every claim the ruling is about.

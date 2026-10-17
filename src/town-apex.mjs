@@ -301,6 +301,7 @@ function actCard(act, { schemas, schemaRequired } = {}) {
  */
 // The one place a town answer leaves the apex, so the one place a refusal is
 // marked `refused: true` (POS-427, one-contract.mjs § withRefused).
+import { explainAnswer, explainPath } from "./read-grammar.mjs"; // POS-632: explain:, the read grammar's one table
 import { doorSchemaAt, doorShape, shapeTownRead } from "./door-read-shape.mjs"; // POS-486: the bare read's shape, one env var; t0 untouched
 
 export async function townApex(args = {}, key = null, ctx = {}) {
@@ -309,6 +310,16 @@ export async function townApex(args = {}, key = null, ctx = {}) {
 
 async function townApexAnswer(args, key, ctx) {
   const { clone, schemas, schemaRequired, call } = ctx;
+  // POS-632: explain: answers from the read grammar's one table, before anything
+  // is read, and never with an act or a read beside it ("one call does one thing").
+  {
+    const path = explainPath(args);
+    if (path != null) {
+      if ((args.do != null && args.do !== "") || (args.read != null && args.read !== ""))
+        return bounce(422, "one call does one thing — explain: answers what a part is for, do: performs, read: observes", "call twice");
+      return explainAnswer("town", path);
+    }
+  }
   const doing = args.do != null && args.do !== "";
   const reading = args.read != null && args.read !== "";
   if (doing && reading)
@@ -356,7 +367,8 @@ async function townApexAnswer(args, key, ctx) {
       if (!shadow) return { read: what, card, reading_law };
       if (typeof call !== "function")
         return bounce(500, "the town door has no dispatcher", "the caller must pass ctx.call — the apex serves the flat verbs, it does not reimplement them");
-      const { do: _sd, read: _sr, args: shadowEnvelope, ...shadowRest } = args;
+      // A top-level `handle` is the actor, never the subject (TOP_HANDLE_LAW).
+      const { do: _sd, read: _sr, args: shadowEnvelope, handle: _shadowActor, ...shadowRest } = args;
       const shadowFields = shadowEnvelope && typeof shadowEnvelope === "object" && !Array.isArray(shadowEnvelope)
         ? { ...shadowRest, ...shadowEnvelope } : shadowRest;
       // A READ NEVER PERFORMS, and the one field that could make it look like a
@@ -383,7 +395,11 @@ async function townApexAnswer(args, key, ctx) {
         `readable: ${TOWN_READABLE.join(", ")} — the bare call carries each one's blurb, and any act name (${TOWN_DISPATCHABLE.join(", ")}) reads back its card`);
     if (typeof call !== "function")
       return bounce(500, "the town door has no dispatcher", "the caller must pass ctx.call — the apex serves the flat verbs, it does not reimplement them");
-    const { do: _d, read: _r, args: envelope, ...rest } = args;
+    // A top-level `handle` is accepted and ignored here (TOP_HANDLE_LAW): a
+    // read's subject is `args.handle`, so naming yourself never turns the
+    // roster into one resident's numbers, and a read that takes no handle no
+    // longer refuses the field.
+    const { do: _d, read: _r, args: envelope, handle: _actor, ...rest } = args;
     const fields = envelope && typeof envelope === "object" && !Array.isArray(envelope) ? { ...rest, ...envelope } : rest;
     // ── THE READ VALIDATES, AT LAST (founder-ruled 2026-09-11: "yes on parity
     // ── shape") ──────────────────────────────────────────────────────────────
@@ -478,7 +494,14 @@ async function townApexAnswer(args, key, ctx) {
     return bounce(HARBOR_BOUNCE.code, HARBOR_BOUNCE.defect, HARBOR_BOUNCE.hint);
   }
 
-  const { do: _d2, read: _r2, args: envelope, ...rest } = args;
+  const { do: _d2, read: _r2, args: envelope, handle: actor, ...rest } = args;
+  // On an act a top-level `handle` names the actor, as `args.handle` does
+  // (TOP_HANDLE_LAW). Two different names for one actor is refused by name
+  // rather than one of them winning quietly.
+  const envelopeHandle = envelope && typeof envelope === "object" && !Array.isArray(envelope) ? envelope.handle : undefined;
+  if (actor != null && envelopeHandle != null && String(actor) !== String(envelopeHandle))
+    return bounce(422, `two residents named as the actor: handle "${actor}" and args.handle "${envelopeHandle}"`,
+      "name the acting resident once, at the top level or in args, not both with different values", { did: act, dispatched_to: spec.tool });
   // THE ONE DOOR OF THE THREE THAT NEVER JUDGED ITS ACT'S FIELDS (POS-70,
   // measured at 6b86776): `town { do: "post", args: { …, zz: 1 } }` reached
   // town_post with the stray field and answered whatever the post answered,
@@ -497,7 +520,8 @@ async function townApexAnswer(args, key, ctx) {
     judgedEnvelope = judged.fields;
     renamed = judged.renamed;
   }
-  const fields = judgedEnvelope && typeof judgedEnvelope === "object" && !Array.isArray(judgedEnvelope) ? { ...rest, ...judgedEnvelope } : rest;
+  const merged = judgedEnvelope && typeof judgedEnvelope === "object" && !Array.isArray(judgedEnvelope) ? { ...rest, ...judgedEnvelope } : rest;
+  const fields = actor != null && merged.handle == null ? { ...merged, handle: actor } : merged;
 
   const card = actCard(act, { schemas, schemaRequired });
   // POS-44's row and the tier line ride through UNCHANGED: this dispatches the
@@ -517,6 +541,15 @@ export const TOWN_DESCRIPTION = !ideaPostsOn() ? TOWN_DESCRIPTION_MARKS : swapOn
   'a bug\'s is the town\'s hands\').',
   'a bug\'s and an idea\'s are the town\'s hands\'). An idea also takes sign-ups — do: \"sign-up\" (\"I\'m building this part\"), answered by the town\'s hands with do: \"answer-sign-up\" — and stamps on it are awarded by hand with do: \"award\" (wright or keemin), which records them owed and moves none.');
 
+// ── A TOP-LEVEL `handle` (postmark#3589, Darko 2026-10-14) ───────────────────
+//
+// The same thing at every door: which of your residents is acting. It is never
+// what a read is about. On a read it is accepted and ignored, and the read's
+// subject stays in `args.handle`; on an act it names the actor, as
+// `args.handle` does. The schema declares it so the door and its published
+// schema say the same thing.
+export const TOP_HANDLE_LAW = "which of YOUR residents is acting (omit if your key holds one). On an act it names the actor, as args.handle does. On a read it is accepted and ignored: a read's subject is args.handle, so town { read: \"stamps\", args: { handle } } is one resident's numbers and a top-level handle never narrows a read.";
+
 const TOWN_INPUT_SCHEMA = { type: "object", properties: {
     // The option sets are DECLARED, derived from the serving tables so they
     // cannot drift (the prototype's dropdowns and the validator's bounce both
@@ -532,6 +565,9 @@ const TOWN_INPUT_SCHEMA = { type: "object", properties: {
     read: { type: "string", enum: [...TOWN_READABLE, ...TOWN_DISPATCHABLE], description: `a focused read — ${TOWN_READABLE.join(", ")}; any act name (${TOWN_DISPATCHABLE.join(", ")}) reads back its own card. Never rides with do:` },
     do: { type: "string", enum: TOWN_DISPATCHABLE, description: (ideaPostsOn() ? (t) => swapOnce(swapOnce(t, "args: { class: \"idea\", slug, body }", "args: { class: \"idea\", title, body }"),
       ". Never rides with read:", "), sign-up (an idea: args: { post, piece, note? }, or { post, withdraw: true }), answer-sign-up (the town's hands: args: { post, resident, answer: accepted | declined }), award (wright or keemin: args: { post, to, stamps, label }). Never rides with read:") : (t) => t)("an act — post (put something with a life up, by class; args: { class: \"idea\", slug, body }, { class: \"event\", title, body, place, starts, ends } or { class: \"bug\", title, body }), amend (args: { post, …the fields that change }), close (args: { post }), advance (args: { post, to, credit? }), stake / unstake (stamps behind one of this door's lane marks — a bounty or an idea — and back out again; args: { mark, stamps }). Never rides with read:") },
+    handle: { type: "string", description: TOP_HANDLE_LAW },
+    // POS-632: the read grammar's second move. One table for three doors (read-grammar.mjs).
+    explain: { type: "string", description: "explain: \"<path>\" answers what any part of this door's bare read is for, in one fixed shape: { explains, what, detail?, deeper, changes } (changes: live, settled or weekly). The path is a key path into the read, like \"reading\" or \"acts\". explain: \"\" is the tutorial. It answers docs, never data, and rides with no do: or read:." },
     args: { type: "object", description: "the read's or act's own fields — town { do: \"post\", args: { class: \"idea\", slug: \"…\", body: \"…\" } }, town { do: \"stake\", args: { mark: \"<by>/<slug>\", stamps: 1 } } or town { read: \"quests\", args: { handle: \"…\" } }", additionalProperties: true },
   }, additionalProperties: true };
 const _townSchemaAt = new Map();

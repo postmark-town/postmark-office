@@ -12,8 +12,9 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { fixtureDb } from "./fixture.mjs";
-import { windowRead } from "../src/queries.mjs";
+import { fixtureTown } from "./fixture.mjs";
+import { windowRead } from "../src/town-index-store.mjs";
+import { indexStore } from "./helpers/office-under-test.mjs";
 import { TOOLS } from "../src/mcp.mjs";
 import { WINDOW_PURPOSE, WINDOW_STEP_ONE, WINDOW_POINTER } from "../src/panes.mjs";
 
@@ -21,6 +22,13 @@ delete process.env.TOWN_PUSH; // nothing here may leave the machine
 
 const trash = [];
 test.after(() => { for (const d of trash.splice(0)) rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+
+// The window is read from the store's town index (the suite's embedded store),
+// seeded from the fixture town.
+const town = fixtureTown();
+const IX = await indexStore(town);
+const api = await IX.store.connect("office_api");
+test.after(async () => { await api.end(); await IX.stop(); });
 
 /** A checkout the office CAN look at, with a WINDOW/ shelf and no pane on it. */
 function emptyShelf() {
@@ -30,21 +38,18 @@ function emptyShelf() {
   return dir;
 }
 
-test("the window read, for a resident with no window, leads with its human before the act", () => {
-  const db = fixtureDb();
-  try {
-    const w = windowRead(db, "wright", { clone: emptyShelf() });
-    assert.equal(w.pane.hung, false);
-    const note = w.note;
-    const at = (s) => note.indexOf(s);
-    for (const part of [WINDOW_PURPOSE, WINDOW_STEP_ONE, WINDOW_POINTER]) assert.ok(at(part) >= 0, `the note carries: ${part.slice(0, 60)}`);
-    assert.match(note, /have a conversation with your human/);
-    assert.match(note, /WHITE_PAGES\/TEMPLATE\/WINDOW\/README\.md/);
-    assert.match(note, /AGENT_SETUP\.md/);
-    const act = at(`do: "window"`);
-    assert.ok(act > at(WINDOW_POINTER), "the act that hangs a pane comes AFTER the conversation, never before it");
-    assert.match(note, /^no pane hung yet/, "the frame's own sentence still opens the note (window-truth F2, edit.mjs's replaced warning)");
-  } finally { db.close(); }
+test("the window read, for a resident with no window, leads with its human before the act", async () => {
+  const w = await windowRead(api, "wright", { clone: emptyShelf() });
+  assert.equal(w.pane.hung, false);
+  const note = w.note;
+  const at = (s) => note.indexOf(s);
+  for (const part of [WINDOW_PURPOSE, WINDOW_STEP_ONE, WINDOW_POINTER]) assert.ok(at(part) >= 0, `the note carries: ${part.slice(0, 60)}`);
+  assert.match(note, /have a conversation with your human/);
+  assert.match(note, /WHITE_PAGES\/TEMPLATE\/WINDOW\/README\.md/);
+  assert.match(note, /AGENT_SETUP\.md/);
+  const act = at(`do: "window"`);
+  assert.ok(act > at(WINDOW_POINTER), "the act that hangs a pane comes AFTER the conversation, never before it");
+  assert.match(note, /^no pane hung yet/, "the frame's own sentence still opens the note (window-truth F2, edit.mjs's replaced warning)");
 });
 
 test("update_window's description leads with what a window is for and asking the human, then the mechanics", () => {

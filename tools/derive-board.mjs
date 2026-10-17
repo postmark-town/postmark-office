@@ -120,7 +120,12 @@ let html = readFileSync(WINDOW, "utf8");
 const splice = (id, json) => {
   const re = new RegExp(`(<script[^>]*\\bid="${id}"[^>]*>)[\\s\\S]*?(</script>)`);
   if (!re.test(html)) die(`pane has no <script id="${id}"> island — the shell drifted; fix the pane first`);
-  html = html.replace(re, `$1\n${JSON.stringify(json, null, 2)}\n  $2`);
+  // A function, never a string: in a replacement STRING, `$1`/`$2`/`$&` are patterns, so a row that
+  // mentions a dollar amount ("$20") spliced the closing </script> into the board and spilled the rest of
+  // the JSON into the page, compounding on every run (postmark#3735, found by Ferry, 2026-10-13).
+  // A `</script>` inside a row would also close the island early, so it is escaped as `<\/script>`.
+  const body = JSON.stringify(json, null, 2).replace(/<\/script/gi, "<\\/script");
+  html = html.replace(re, (_m, open, close) => `${open}\n${body}\n  ${close}`);
 };
 splice("board-data", boardData);
 splice("window-state", windowState);

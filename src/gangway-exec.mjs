@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { gangwayUnderLock } from "./gangway-door.mjs";
 import { penTransaction } from "./write.mjs";
+import { faultLogged, isHttpStatus } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLONE = process.env.TOWN_CLONE ?? resolve(HERE, "..", "town-clone");
@@ -31,6 +32,9 @@ async function main() {
       return await gangwayUnderLock({ act, actorGhId, clone: CLONE });
     } catch (e) {
       if (!e?.code) throw e;
+      // a refusal (an HTTP status) speaks its own words; any other coded error (pg's SQLSTATE) is the
+      // office's own fault: its message goes to this child's stderr, the office's log (POS-578)
+      if (!isHttpStatus(e.code)) return { error: { code: 500, defect: "the gangway act tripped", hint: faultLogged("the gangway act tripped", e) } };
       return { error: { code: e.code, defect: e.defect ?? String(e.message), hint: e.hint ?? null } };
     }
   }));

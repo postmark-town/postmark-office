@@ -12,7 +12,10 @@
 // a file that crashed is told apart from one that passed.
 //
 // Writes <out>/shard-<i>.json, <out>/tap/<file>.tap, <out>/events/<file>.jsonl
-// and <out>/stderr/<file>.txt. Exits 0 once every file has run, whatever they
+// and <out>/stderr/<file>.txt. A file's sparse misses (test/helpers/sparse-guard.mjs:
+// a read outside test/clone-sparse.json's set, in the file's process or any process
+// it spawned, POS-652) go to <out>/sparse/<file>.txt and into the record as
+// `sparse`, which the verdict reds. Exits 0 once every file has run, whatever they
 // said: the summary job is the verdict, and it reads every shard. Exits 2 only
 // when the shard itself cannot run.
 
@@ -59,7 +62,7 @@ if (!Number.isInteger(jobs) || jobs < 1) die(`--jobs must be a positive integer,
 
 const mine = planShards(files, timings, of)[shard - 1].files;
 if (!mine.length) die(`shard ${shard} of ${of} was dealt no files (${files.length} in the suite)`);
-for (const d of ["tap", "events", "stderr"]) mkdirSync(join(out, d), { recursive: true });
+for (const d of ["tap", "events", "stderr", "sparse"]) mkdirSync(join(out, d), { recursive: true });
 
 const stem = (f) => basename(f, ".test.mjs");
 const record = { shard, of, jobs, node: process.version, started_at: new Date().toISOString(), files: {} };
@@ -77,19 +80,22 @@ function runOne(file, suffix = "") {
   }
   return new Promise((done) => {
     const errFd = openSync(join(out, "stderr", `${s}.txt`), "w");
+    const missesFile = join(out, "sparse", `${s}.txt`);
     const t0 = Date.now();
     const child = spawn(process.execPath, [
       "--test", `--test-timeout=${cap.ms}`,
       "--test-reporter=tap", `--test-reporter-destination=${join(out, "tap", `${s}.tap`)}`,
       `--test-reporter=${REPORTER}`, `--test-reporter-destination=${join(out, "events", `${s}.jsonl`)}`,
       file,
-    ], { cwd: ROOT, stdio: ["ignore", "ignore", errFd] });
+    ], { cwd: ROOT, stdio: ["ignore", "ignore", errFd], env: { ...process.env, POSTMARK_SPARSE_MISSES: missesFile } });
     const kill = setTimeout(() => child.kill("SIGKILL"), Math.max(FILE_CAP_MS, cap.ms + 30_000));
     child.on("exit", (code, signal) => {
       clearTimeout(kill);
       closeSync(errFd);
       const seconds = (Date.now() - t0) / 1000;
-      done({ exit: code ?? 128, signal: signal ?? null, seconds: Math.round(seconds * 10) / 10,
+      let sparse = [];
+      try { sparse = readFileSync(missesFile, "utf8").split("\n").filter(Boolean); } catch { /* none */ }
+      done({ exit: code ?? 128, signal: signal ?? null, seconds: Math.round(seconds * 10) / 10, ...(sparse.length ? { sparse } : {}),
         ...(cap.declared != null ? { cap: { ms: cap.ms, declared: cap.declared, clamped: cap.clamped } } : {}) });
     });
   });

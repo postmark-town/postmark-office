@@ -312,6 +312,9 @@ function threadOf(cluster, { live, voiceCap }) {
 // between cases would get whichever value the first import happened to see. So
 // the caller hands over a predicate, this module asks it every time, and voices
 // itself stays innocent of what a flag is.
+/** How long the main thread's carried earshot is reused (POS-632 W4). */
+export const EARSHOT_MEMO_MS = 1000;
+
 export function createVoices({
   standpoint,
   place = async () => null,
@@ -522,7 +525,7 @@ export function createVoices({
   // call, as it always paid; the push (say-push.mjs) builds one per landed
   // voice and hands it to every waiter, which is what keeps fifty open waiters
   // at one room per voice rather than fifty.
-  async function snapshot(t) {
+  async function snapshot(t, { clusters: wantClusters = true } = {}) {
     stats.rooms += 1;
     let vessel = null;
     if (vesselAt) { try { vessel = await vesselAt(); } catch { vessel = null; } }
@@ -549,7 +552,8 @@ export function createVoices({
       audible.push({ v, x: heard.x, y: heard.y, structural: false });
     }
     stats.clusters += 1;
-    const clusters = clusterVoices(hydrate(), { earshotM, fadeMs: closeMs });
+    // The ear alone needs no clusters (POS-632 W4's carried earshot skips them).
+    const clusters = wantClusters ? clusterVoices(hydrate(), { earshotM, fadeMs: closeMs }) : null;
     return { t, audible, clusters, window };
   }
 
@@ -563,6 +567,43 @@ export function createVoices({
       if (hit) out.push({ ...a.v, heardFrom: { x: a.x, y: a.y } });
     }
     return out;
+  }
+
+  // ── THE EAR AT A POINT (POS-632 W4; POS-637's creatures read it too) ──────
+  //
+  // What is audible at `at`, newest last, at most `cap`, and NOBODY is marked
+  // present: looking performs nothing (the read grammar), and a creature's ear
+  // is not a resident's attendance. `hear` above is the listen, and it touches;
+  // this never does. `snapshot` is a carried earshot (earshotSnapshot below),
+  // for a read answered off the main thread, where the voices window is not:
+  // the main thread takes it at the call's admission and hands it over.
+  async function heardAt(at, { aboard = false, since = null, cap = hearMax, exclude = null, snapshot: carried = null } = {}) {
+    const t = carried?.t ?? now();
+    const snap = carried ?? await snapshot(t);
+    const fresh = (v) => !(Number.isFinite(since) && v.at <= since) && v.handle !== exclude;
+    const heard = heardBy({ at, aboard }, snap).filter(fresh);
+    return heard.slice(-cap).map((v) => ({
+      handle: v.handle, said: v.text, ago: agoWords(t - v.at),
+      distance: distanceWords(distM(v.heardFrom ?? v, at)), at_ms: v.at,
+    }));
+  }
+
+  /** The earshot as plain data, for a worker to hear from: the instant and every audible voice, no clusters. */
+  // MEMOISED FOR EARSHOT_MEMO_MS (review-559 on #564): the main thread takes one
+  // for every handed v2 bare read, so a burst of reads shares one walk of the
+  // window. A voice landing inside the second is heard on the next read.
+  // The PROMISE is what is kept, from the moment the walk starts, so a burst
+  // that lands before the first walk resolves shares it too (review-559 on
+  // #564, the creatures' law-cache pattern). A walk that fails is forgotten.
+  let memo = null;
+  function earshotSnapshot() {
+    const t = now();
+    if (memo && t - memo.t >= 0 && t - memo.t < EARSHOT_MEMO_MS) return memo.p;
+    const p = snapshot(t, { clusters: false }).then((snap) => ({ t, audible: snap.audible.map(({ v, x, y, structural }) => ({ v: { handle: v.handle, text: v.text, at: v.at, x: v.x, y: v.y, aboard: Boolean(v.aboard) }, x, y, structural })) }));
+    const mine = { t, p };
+    memo = mine;
+    p.catch(() => { if (memo === mine) memo = null; });
+    return p;
   }
 
   // `how` is "spoke" or "listened" — the same touch either way, because the dial
@@ -1011,5 +1052,5 @@ export function createVoices({
     now,
   };
 
-  return { say, hear, conversations, lastPresent, room, log: pathOf, _voices: () => hydrate(), _presence: presence };
+  return { say, hear, heardAt, earshotSnapshot, conversations, lastPresent, room, log: pathOf, _voices: () => hydrate(), _presence: presence };
 }

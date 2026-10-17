@@ -84,11 +84,11 @@ echo "placeholder" > "$SITE_SRC/public/renditions/.keep"
 # extract tree's pin reads this spec, so world_pin and world_spec are the floor F.
 cat > "$SITE_SRC/package.json" <<EOF
 { "name": "fake-site", "version": "0.0.0", "private": true, "scripts": { "build": "true" },
-  "dependencies": { "postmark-world": "github:keeminlee/postmark-world#$WORLD_FLOOR" } }
+  "dependencies": { "postmark-world": "github:postmark-town/postmark-world#$WORLD_FLOOR" } }
 EOF
 cat > "$SITE_SRC/package-lock.json" <<EOF
 { "name": "fake-site", "version": "0.0.0", "lockfileVersion": 3, "requires": true, "packages": {
-  "node_modules/postmark-world": { "resolved": "git+ssh://git@github.com/keeminlee/postmark-world.git#$WORLD_FLOOR" } } }
+  "node_modules/postmark-world": { "resolved": "git+ssh://git@github.com/postmark-town/postmark-world.git#$WORLD_FLOOR" } } }
 EOF
 # The site's own recipe, stubbed to the smallest thing that proves it RAN and
 # proves what it was handed. extract-town writes the crossing it was given, so
@@ -175,7 +175,7 @@ case "${1:-}" in
     for a in "$@"; do
       case "$a" in
         postmark-world@github:*)
-          node -e 'const{writeFileSync}=require("node:fs");const spec="git+ssh://git@github.com/keeminlee/postmark-world.git#"+process.argv[1];writeFileSync("node_modules/.package-lock.json",JSON.stringify({packages:{"node_modules/postmark-world":{resolved:spec}}},null,1));writeFileSync("package-lock.json",JSON.stringify({name:"fake-site",version:"0.0.0",lockfileVersion:3,requires:true,packages:{"node_modules/postmark-world":{resolved:spec}}},null,1))' "${a##*#}"
+          node -e 'const{writeFileSync}=require("node:fs");const spec="git+ssh://git@github.com/postmark-town/postmark-world.git#"+process.argv[1];writeFileSync("node_modules/.package-lock.json",JSON.stringify({packages:{"node_modules/postmark-world":{resolved:spec}}},null,1));writeFileSync("package-lock.json",JSON.stringify({name:"fake-site",version:"0.0.0",lockfileVersion:3,requires:true,packages:{"node_modules/postmark-world":{resolved:spec}}},null,1))' "${a##*#}"
           ;;
       esac
     done
@@ -337,7 +337,7 @@ check "the stamp says the BUILD compiled B" "$(jget "$WEBROOT/build.json" world_
 check "PUBLISHED world_pin is the floor F" "$(jget "$PIN" world_pin)" "$WORLD_FLOOR"
 check "PUBLISHED world_installed is what BUILD installed, B" "$(jget "$PIN" world_installed)" "$WORLD_S47"
 check "and it equals build.json's world_sha" "$(jget "$PIN" world_installed)" "$(jget "$WEBROOT/build.json" world_sha)"
-check "the floor spec is preserved" "$(jget "$PIN" world_spec)" "github:keeminlee/postmark-world#$WORLD_FLOOR"
+check "the floor spec is preserved" "$(jget "$PIN" world_spec)" "github:postmark-town/postmark-world#$WORLD_FLOOR"
 check "the lane is preserved" "$(jget "$PIN" channel)" "release"
 check "and so is code_ref, which is the stamp's" "$(jget "$PIN" code_ref)" "$(jget "$WEBROOT/build.json" code_ref)"
 check "the extract's built_at is kept" "$(jget "$PIN" built_at)" "2026-01-01T00:00:00.000Z"

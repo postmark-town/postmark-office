@@ -284,7 +284,8 @@ test("a refused bundle cannot strand the mint pass's own rows", () => {
   const sh = readFileSync(new URL("../deploy/office-keep.sh", import.meta.url), "utf8");
   const line = sh.split(/\r?\n/).findIndex((l) => l.includes("deploy/welcome-pass.mjs"));
   const around = sh.split(/\r?\n/).slice(line - 1, line + 4).join("\n");
-  assert.match(around, /\|\|\s*echo/,
+  // POS-524: the pass is the condition of an `if` whose else records the refusal and says so; that swallows it too
+  assert.match(around, /\|\|\s*echo|^\s*else keep_step welcome refused[^\n]*\n\s*echo /m,
     "the welcome pass's exit must be swallowed: chained with && alone, one refused bundle stops stamp-verify and the commit, "
     + "stranding the append's own rows unsealed until a later tick");
 });

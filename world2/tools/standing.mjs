@@ -139,7 +139,7 @@
 // ring is present, and 21 marks carry one (the five inland waters among them).
 // Re-deriving it "close enough" would silently widen those to their bounding box.
 export const GEOMETRY_SOURCE = {
-  repo: "keeminlee/postmark-world",
+  repo: "postmark-town/postmark-world",
   path: "tools/geometry.mjs",
   blob: "6539c129f430fa53f071b380ed9447c6dcee0417",
   at: "c701988f9ff937661297a8acc87a48925ba3b37f",

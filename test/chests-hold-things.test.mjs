@@ -19,6 +19,9 @@ import { callUnits, classViewOf, residentHolds, chestsRead, reservedFor } from "
 import { UNIT_ACTION, foldUnits, totalOf } from "../src/world-stacks.mjs";
 import { liveHolder, holdingsOf } from "../src/world-hold.mjs";
 
+// WLD-27's doors ship dark by default (src/chests-candy.mjs); these are their own tests, so they run with them open.
+process.env.WORLD_CHESTS_CANDY = "1";
+
 const LABEL = "test-comets";
 const CLASSES = new Map(Object.entries({
   mark: { extends: null, dials: {} },
@@ -60,6 +63,7 @@ function rig({ marks = {}, stakes = {} } = {}) {
       return { applied: n };
     },
     withdraw: async (m) => { withdrawals.push(m); if (failWithdraw-- > 0) throw new Error("synthetic pen refused"); return { withdrawn: true }; },
+    markTurn: (id, fn) => fn(), // no ledger process here to order against (WLD-27 A runs the real lock in exit-stake-boundary.test.mjs)
   };
   const seedUnits = (to, n, label = LABEL) => acts.push({ id: acts.length + 100, class: "holding", action: UNIT_ACTION.give, object: to, payload: { units: true, moves: [{ from: null, to, label, n }] } });
   const hold = (holder, thing) => attachments.push({ entity: holder, target: thing, policy: "cascade", born_at: new Date(Date.now() - 1000).toISOString() });

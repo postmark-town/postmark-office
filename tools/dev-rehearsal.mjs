@@ -471,7 +471,7 @@ export function plan() {
         const e = ctx.t.env;
         // The flags prod reads the store with (/etc/postmark-office.env, measured 2026-10-07), and
         // STAMP_LINES=store, which the w42 ship sets on prod (POS-341): the rehearsal runs the next tag's path.
-        for (const [k, v] of [["TOWN_INDEX_READS", "store"], ["OFFICE_PAPERWORK_STORE", "1"], ["STATE_LOG_SOURCE", "store"], ["WORLD2_PG", "1"], ["TOWN_SINGLE_LOG", "1"], ["WORLD_SINGLE_LOG", "1"], ["STAMP_LINES", "store"]])
+        for (const [k, v] of [["OFFICE_PAPERWORK_STORE", "1"], ["STATE_LOG_SOURCE", "store"], ["WORLD2_PG", "1"], ["TOWN_SINGLE_LOG", "1"], ["WORLD_SINGLE_LOG", "1"], ["STAMP_LINES", "store"]])
           if (e[k] !== v) p.push(`the dev office runs without ${k}=${v} (prod has it${k === "STAMP_LINES" ? " from the w42 ship" : ""}): a rehearsal on dev would not run the path the box runs`);
         p.push(...(await keyProblems(ctx)));
         if (e.TOWN_PUSH !== "0") p.push(`the dev office's TOWN_PUSH is ${e.TOWN_PUSH ?? "unset"}, not 0: its pen could push the real town`);
@@ -757,7 +757,8 @@ export function plan() {
         // row, and the world's real S<n> arrives later with another sha, so a view
         // carrying every tag would refuse the next rehearsal for the last one's row.
         const view = join(ctx.scratch, `bless-${ctx.blessed}`);
-        execFileSync("git", ["clone", "-q", "--no-tags", "--single-branch", "--branch", "main", ctx.worldBare, view]);
+        // refs only (the backfill reads its tags), so no working tree (POS-652)
+        execFileSync("git", ["clone", "-q", "--no-checkout", "--no-tags", "--single-branch", "--branch", "main", ctx.worldBare, view]);
         git(view, "fetch", "-q", "origin", `refs/tags/${tag}:refs/tags/${tag}`);
         // The blessed commit into the dev world clone too (a tag, never main, never
         // pushed), so the dev office can read the settlement its store now names;
@@ -1294,7 +1295,9 @@ export function crossingContext({ t, s, db, run, scratch, stub = null, stubPort 
         if (branch !== "main") git(ctx.worldBare, "update-ref", "refs/heads/main", git(t.worldClone, "rev-parse", "HEAD"));
         git(ctx.worldBare, "symbolic-ref", "HEAD", "refs/heads/main");
         ctx.worldView = join(scratch, "world-view");
-        execFileSync("git", ["clone", "-q", ctx.worldBare, ctx.worldView]);
+        // settlement-auto.sh reads WORLD_CLONE for its origin URL only, as TOWN_CLONE below:
+        // no working tree (POS-652; the sweep makes its own clone)
+        execFileSync("git", ["clone", "-q", "--no-checkout", ctx.worldBare, ctx.worldView]);
         ctx.townView = join(scratch, "town-view");
         execFileSync("git", ["clone", "-q", "--local", "--no-checkout", t.townClone, ctx.townView]);
         const tb = gitQuiet(t.townClone, "symbolic-ref", "--short", "-q", "HEAD").stdout.trim();

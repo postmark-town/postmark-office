@@ -276,7 +276,7 @@ each tag's message naming the other half:
 
 | half | repo | tag → commit |
 |---|---|---|
-| world | `keeminlee/postmark-world` | `sandbox/seed` → `52c281b8312d0a1d36eb81d03fbd1a36840a4eb1` |
+| world | `postmark-town/postmark-world` | `sandbox/seed` → `52c281b8312d0a1d36eb81d03fbd1a36840a4eb1` |
 | town | `postmark-town/postmark` | `sandbox/seed` → `830a69963d8e4801ad4ed8bb80da38e79fd3fdbf` |
 
 The world half is also `settlement/S47` — the same commit, `settlement: sweep 0
@@ -301,7 +301,7 @@ the only git it runs is `rev-parse`. A `--tag`/`--sha` that disagrees with HEAD 
 refused, not corrected.
 
 ```sh
-git clone --depth 1 --branch sandbox/seed https://github.com/keeminlee/postmark-world.git /tmp/frozen
+git clone --depth 1 --branch sandbox/seed https://github.com/postmark-town/postmark-world.git /tmp/frozen
 
 export PGHOST=localhost PGDATABASE=world2_dev PGUSER=world2_owner
 export PGPASSWORD=…            # /etc/postmark-world2-dev.env, PG_WORLD2_OWNER_PASSWORD
@@ -1083,7 +1083,7 @@ era's acts and its claim set from the two checkouts, ingests both, runs the
 against 1.0's at S(k) with `seed-import.mjs`'s own `compareMarks`.
 
 ```sh
-git clone https://github.com/keeminlee/postmark-world.git ~/world-full   # FULL history
+git clone https://github.com/postmark-town/postmark-world.git ~/world-full   # FULL history
 
 export PGHOST=localhost PGDATABASE=world2_dev PGUSER=world2_owner PGPASSWORD=…
 export WORLD2_CLEARING_URL=postgres://clearing_job:…@localhost/world2_dev
@@ -1556,7 +1556,7 @@ psql -c "DROP VIEW IF EXISTS docket, standing_marks CASCADE;
          DROP FUNCTION IF EXISTS windows_tile() CASCADE;"
 for f in 001_tables 002_grants 004_marks_data 005_candle_tiling 006_claim_identity; do
   psql -f world2/schema/$f.sql; done
-git clone --depth 1 --branch sandbox/seed https://github.com/keeminlee/postmark-world.git ~/frozen-world
+git clone --depth 1 --branch sandbox/seed https://github.com/postmark-town/postmark-world.git ~/frozen-world
 node world2/tools/seed-import.mjs --world-repo ~/frozen-world --tag sandbox/seed \
   --town-sha 830a69963d8e4801ad4ed8bb80da38e79fd3fdbf --with-acts
 WORLD2_PG_URL=…owner… node world2/tools/ledger-backfill.mjs --world-repo ~/frozen-world
@@ -2313,7 +2313,7 @@ postgres is fine to CI."** The scratch database this falsifier needs would be
 pull request (and on dispatch) against a `postgres:16` service that lives for
 one job: the five roles, both databases floored from `world2/schema/` (every
 `NNN_*.sql` in name order as `world2_owner`, 003 skipped — it is a falsifier
-query, not a migration), a shallow read-only checkout of `keeminlee/postmark-world`
+query, not a migration), a shallow read-only checkout of `postmark-town/postmark-world`
 at `main` for `--world-repo`, the run with `--json`. ~2 minutes, most of it
 `npm ci`. The floor loop lives in `.github/scripts/guard-falsifier-floor.sh`
 and the receipt printer in `guard-falsifier-report.mjs`; both are workflow

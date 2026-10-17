@@ -62,6 +62,7 @@
 
 import { publishedState } from "./world-branches.mjs";
 import { WORLD_CLONE } from "./world-store.mjs";
+import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
 
 const bounce = (code, defect, hint, extra = {}) => ({ error: "bounce", code, defect, hint, ...extra });
 
@@ -145,7 +146,7 @@ export async function marksCountsFor(handle, {
   const notes = {};
 
   try { out.published = publishedMarksOf(handle, { repo }).length; }
-  catch (e) { notes.published_unreadable = `the world checkout could not be read (${String(e?.message ?? e).slice(0, 120)})`; }
+  catch (e) { notes.published_unreadable = `the world checkout could not be read (${plainReason(e, "files", "the town's published marks")})`; }
 
   const docket = await docketFor(handle, { repo });
   if (docket.readable) out.docket = docket.rows.length;
@@ -194,7 +195,7 @@ export async function marksRead(handle, {
     let everything = [];
     let bad = null;
     try { everything = rankMarks(publishedMarksTownwide({ repo }), ranked); }
-    catch (e) { bad = `the world checkout could not be read (${String(e?.message ?? e).slice(0, 160)})`; }
+    catch (e) { bad = `the world checkout could not be read (${plainReason(e, "files", "the town's ranked marks")})`; }
     const rows = everything.slice(start, start + n);
     const upto = start + rows.length;
     const done = upto >= everything.length;
@@ -217,7 +218,7 @@ export async function marksRead(handle, {
   let all = [];
   let unreadable = null;
   try { all = publishedMarksOf(who, { repo }); if (ranked) all = rankMarks(all, ranked); }
-  catch (e) { unreadable = `the world checkout could not be read (${String(e?.message ?? e).slice(0, 160)})`; }
+  catch (e) { unreadable = `the world checkout could not be read (${plainReason(e, "files", "a resident's published marks")})`; }
 
   const page = all.slice(start, start + n);
   const next = start + page.length;
@@ -290,7 +291,7 @@ export async function liveDocketFor(handle, _opts = {}) {
   } catch (e) {
     // A store that is CONFIGURED and unreachable is a third state, and it must
     // not read as "nothing pending" either.
-    return { readable: false, reason: `the public docket could not be reached (${String(e?.message ?? e).slice(0, 140)})` };
+    return { readable: false, reason: `the public docket could not be reached (${plainReason(e, "record", "the public docket")})` };
   }
 }
 
@@ -302,6 +303,6 @@ export async function liveDraftsFor(handle, { repo = WORLD_CLONE, key = null } =
     if (delta?.error) return { readable: false, reason: delta.defect ?? "the draft overlay refused this read" };
     return { readable: true, rows: (delta.marks ?? []).filter((m) => m?.by === handle).map(publicRow) };
   } catch (e) {
-    return { readable: false, reason: `your sketchbook could not be read (${String(e?.message ?? e).slice(0, 140)})` };
+    return { readable: false, reason: `your sketchbook could not be read (${plainReason(e, "files", "a household's sketchbook")})` };
   }
 }

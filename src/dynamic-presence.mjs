@@ -49,6 +49,7 @@ import {
   walkModule, worldToolModule, ridesTheVessel, VESSEL_HANDLE,
 } from "./dynamic-entities.mjs";
 import { everyonePlaced, withFrames } from "./positions.mjs";
+import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
 
 export const presenceEnabled = () => process.env.WORLD_PRESENCE === "1";
 
@@ -288,7 +289,7 @@ async function projectedPresence({ repo, atMs, walk, engine, world, where, roll,
       ],
     };
   } catch (e) {
-    return { error: "presence-derivation-failed", detail: String(e?.message ?? e).slice(0, 200) };
+    return { error: "presence-derivation-failed", detail: plainReason(e, "files", "presence's derivation") };
   }
 }
 

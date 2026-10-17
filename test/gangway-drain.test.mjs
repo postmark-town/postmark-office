@@ -32,7 +32,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { openOauthDb } from "../src/oauth.mjs";
 import { appendTownJournal, pendingRows, townDrainCursor } from "../src/town-journal.mjs";
 import { GANGWAY_HELD, planTownDrain as REAL_planTownDrain } from "../src/town-drain.mjs";
@@ -113,7 +113,7 @@ const seedLetter = async (o, { from = "wright", to = "limen", date = "2026-08-24
     },
   });
 
-const db = fixtureDb();
+const db = fixtureTown();
 const HELD = () => true;
 const silent = () => {};
 // POINTED AT THE RECORD, AND AWAITED (POS-158). A crossing reads the town's
@@ -278,6 +278,37 @@ test("G6 · JOINS ONLY, AND THAT IS THE SCOPE CALL: a frozen crossing still carr
       assert.deepEqual(r.settled, []);
       assert.equal(ashore(clone, "newcomer"), false);
       assert.equal((await townDrainCursor(o)), 0);
+    });
+  } finally { o.close(); }
+});
+
+// POS-574: a row the gangway held boarded a berth at its door. The crossing that
+// settles it marks that berth ashore (residency.mjs § berthAshore, the one helper
+// every settling road calls) and keeps it: "the berth row is marked ashore
+// rather than deleted" (HARBOR/README.md).
+test("G7 · THE CROSSING THAT SETTLES A HELD ROW MARKS ITS BERTH ASHORE, dated the crossing, and keeps it", async () => {
+  const clone = townClone();
+  const o = liveOdb();
+  try {
+    await flagOn(async () => {
+      await seedJoin(o, "newcomer");
+      setGangway(clone, "frozen");
+      mkdirSync(join(clone, "HARBOR", "berths"), { recursive: true });
+      const berth = "---\nhandle: newcomer\nagent: Newcomer\nsince: 2026-08-20\nboarded: 2026-08-24\ngithub: newcomer-gh\n---\n\nnewcomer's card.\n";
+      writeFileSync(join(clone, "HARBOR", "berths", "newcomer.md"), berth);
+      execFileSync("git", ["-C", clone, "add", "-A"]);
+      execFileSync("git", ["-C", clone, "-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-q", "-m", "harbor: newcomer boards"]);
+
+      await run(o, { clone, date: "2026-08-24" });
+      assert.doesNotMatch(readFileSync(join(clone, "HARBOR", "berths", "newcomer.md"), "utf8"), /^ashore:/m,
+        "a raised gangway settles nobody, so nobody's berth is marked");
+
+      setGangway(clone, "open");
+      const r = await run(o, { clone, date: "2026-08-25" });
+      assert.deepEqual(r.settled, ["newcomer"]);
+      const after = readFileSync(join(clone, "HARBOR", "berths", "newcomer.md"), "utf8");
+      assert.equal(after, berth.replace("boarded: 2026-08-24\n", "boarded: 2026-08-24\nashore: 2026-08-25\n"),
+        "the berth is kept, marked ashore on the crossing's date, and nothing else about it moves");
     });
   } finally { o.close(); }
 });

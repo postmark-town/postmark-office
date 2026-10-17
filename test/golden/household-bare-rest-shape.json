@@ -18,6 +18,10 @@
      "required": "boolean",
      "type": "string"
     },
+    "from_town": {
+     "description": "string",
+     "type": "string"
+    },
     "handle": {
      "description": "string",
      "required": "boolean",

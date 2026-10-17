@@ -96,17 +96,17 @@
 // ═════════════════════════════════════════════════════════════════════════════
 
 export const VENDOR = Object.freeze({
-  journal: { repo: "keeminlee/postmark-office", path: "src/world-journal.mjs",
+  journal: { repo: "postmark-town/postmark-office", path: "src/world-journal.mjs",
              blob: "70c5a1f8ee751062678c696aee40975fcf969cd7", at: "90d046b255873c57d1e8ec251be20c3f58bd3a7f" },
-  hold: { repo: "keeminlee/postmark-office", path: "src/world-hold.mjs",
+  hold: { repo: "postmark-town/postmark-office", path: "src/world-hold.mjs",
           blob: "7ad265ce8a22c3a2d6df1fae3569b283171bdcec", at: "90d046b255873c57d1e8ec251be20c3f58bd3a7f" },
-  claims: { repo: "keeminlee/postmark-office", path: "src/world2-claims.mjs",
+  claims: { repo: "postmark-town/postmark-office", path: "src/world2-claims.mjs",
             blob: "63602cc76af6c68cbf68b8ca976f410ea1319387", at: "90d046b255873c57d1e8ec251be20c3f58bd3a7f" },
-  rebuild: { repo: "keeminlee/postmark-office", path: "tools/dynamic-rebuild.mjs",
+  rebuild: { repo: "postmark-town/postmark-office", path: "tools/dynamic-rebuild.mjs",
              blob: "a446df474c2110d502d57bcf7f117f7717ad119d", at: "90d046b255873c57d1e8ec251be20c3f58bd3a7f" },
-  entities: { repo: "keeminlee/postmark-office", path: "src/dynamic-entities.mjs",
+  entities: { repo: "postmark-town/postmark-office", path: "src/dynamic-entities.mjs",
               blob: "dc2fa5109d4b7b6e7943cb7324863152429cb792", at: "90d046b255873c57d1e8ec251be20c3f58bd3a7f" },
-  world: { repo: "keeminlee/postmark-office", path: "src/world.mjs",
+  world: { repo: "postmark-town/postmark-office", path: "src/world.mjs",
            blob: "de7f4027b9c3c5057673cbe3203c5f800dd48f31", at: "90d046b255873c57d1e8ec251be20c3f58bd3a7f" },
 });
 
@@ -273,7 +273,10 @@ export function liveMarkOf(row) {
   // slips through it is the one nobody thought to name. Every field the pen
   // adds to `data` gets a line in this destructure, or it reaches the doors as
   // something the resident wrote.
-  const { _journal_seq, _act_id, _deferred_act, ...declared } = data;
+  //
+  // `_returned` joined them 2026-10-15 (WLD-51 G1, 076): the retire step's note
+  // on a draft it wrote back for a mark the settlement took, naming that mark.
+  const { _journal_seq, _act_id, _deferred_act, _returned, ...declared } = data;
 
   const payload = {
     ...declared,
@@ -557,8 +560,9 @@ export async function assertHouseholdDeclared(client, household) {
 // and the overlay lost the other six's withdrawals with nothing to say so.
 //
 // `= ANY($1)` is the spelling set — the same one 024's policy compares against.
-// The store does not re-spell `identities` either: `law_ingester` owns every row
-// of it, which is POS-160's second STOP and not this ship's.
+// Since 055 (POS-350) `identities` is the registry's VIEW and answers only
+// `hh:<slug>` or `solo:<handle>`, the set's first members; the set still
+// matters for the acts' own `household` column, which keeps old spellings.
 export const WITHDRAW_ACT_SELECT =
   `SELECT a.id, a.at, a.actor, a.object, a.household, a.payload
      FROM acts a
@@ -1024,6 +1028,31 @@ export async function pgAttachmentsFor(client, { target = null, until = null, st
  */
 export async function pgHoldingRowsFor(client, thingId) {
   return { rows: await pgHoldingRows(client, { thing: thingId }) };
+}
+
+/**
+ * THE AMENDS A SET-DOWN FILED, on the docket (POS-451) — one row per claim
+ * that carries a drop act's id in `data._set_down.act_id` and that canon will
+ * act on: `pending` (the next clearing locks it) or `locked` (it has). A
+ * private draft is not on the docket for anyone but its household (007's
+ * `claims_read`), and a refused or retracted amend moves nothing, so neither is
+ * asked. `thing` narrows to one mark; without it, every such claim in the town,
+ * which is a handful (one per own-household set-down since POS-138).
+ *
+ * `act_id` is text, as the payload carries it, and the reader compares it as
+ * text to the drop act's id.
+ */
+export async function pgSetDownAmends(client, { thing = null } = {}) {
+  const args = [];
+  let sql = `SELECT slug, data->'_set_down'->>'act_id' AS act_id, status
+               FROM claims
+              WHERE data ? '_set_down' AND status IN ('pending', 'locked')`;
+  if (thing != null) {
+    args.push(String(thing));
+    sql += ` AND slug = $${args.length}`;
+  }
+  const { rows } = await client.query(sql, args);
+  return rows.map((r) => ({ thing: String(r.slug), act_id: r.act_id == null ? null : String(r.act_id), status: String(r.status) }));
 }
 
 /** The class name `readJournal` is asked for — 1.0's own constant, restated here because the port imports nothing from `src/`. */

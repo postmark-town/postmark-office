@@ -63,6 +63,15 @@ export async function baseRpc(method, params, { urls = RPCS, timeoutMs = 15000, 
   throw new Error(`all RPCs failed: ${lastErr?.message ?? lastErr}`);
 }
 
+// THE TOWN CANNOT SEE BASE (POS-617). The payer reads the town's own sentence;
+// what the RPCs said (a public node's error, a timeout) goes to the log, never
+// the answer, where it would read as something about their payment.
+export const BASE_BLIND = "the town cannot reach Base right now — this says nothing about your payment; try again shortly";
+function blind(e, txhash) {
+  console.error(`[usdc-witness] Base unreadable for ${txhash}: ${String(e?.message ?? e).slice(0, 300)}`);
+  return { verified: false, unreadable: true, refused: BASE_BLIND, txhash };
+}
+
 // Returns { verified: true, ... } or { verified: false, refused: <reason> }.
 // It RETURNS a refusal rather than throwing, for the same reason foldFunding
 // surfaces invalid rows: a refusal is an answer the payer is owed verbatim, not
@@ -93,7 +102,7 @@ export async function verifyUsdcPayment({
     // NOT a refusal: the payer's tx may be perfectly good and the town simply
     // cannot see the chain this minute. Refusing here would tell a patron their
     // real payment was not real. Disclose the blindness instead.
-    return { verified: false, unreadable: true, refused: `the town cannot reach Base right now (${String(e.message ?? e).slice(0, 120)}) — this says nothing about your payment; try again shortly`, txhash };
+    return blind(e, txhash);
   }
   if (!receipt) return refuse("no such transaction on Base (or not yet mined)");
   if (receipt.status !== "0x1") return refuse("transaction exists but FAILED (status != 1) — a failed tx moves nothing");
@@ -125,7 +134,7 @@ export async function verifyUsdcPayment({
   try {
     head = BigInt(await rpc("eth_blockNumber", []));
   } catch (e) {
-    return { verified: false, unreadable: true, refused: `the town cannot reach Base right now (${String(e.message ?? e).slice(0, 120)}) — this says nothing about your payment; try again shortly`, txhash };
+    return blind(e, txhash);
   }
   const conf = Number(head - BigInt(receipt.blockNumber));
   if (conf < minConf)

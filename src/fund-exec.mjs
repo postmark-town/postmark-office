@@ -35,6 +35,7 @@ import { execFileSync } from "node:child_process";
 import { penTransaction } from "./write.mjs";
 import { landStamped } from "./stamp-lines.mjs"; // POS-341: the ledger's lines are recorded in the store in the commit's transaction
 import { lastLedgerLine } from "./stamp-tail.mjs";
+import { faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLONE = process.env.TOWN_CLONE ?? resolve(HERE, "..", "town-clone");
@@ -54,11 +55,29 @@ function classifyFatal(stderr) {
     return { code: 409, defect: "that would take the pot past its posted need", hint: (s.split("\n").find((l) => /FATAL/.test(l)) ?? s).replace(/^FATAL:\s*/, "").slice(0, 240) };
   if (/no pot file/.test(s))
     return { code: 404, defect: "no such pot", hint: "the town posts its needs on the board" };
+  // POS-653: the pot is not open (the founder closed it, or has not opened it,
+  // between the door's own gate and this receipt: the same-minute race of two
+  // rails). The words are neutral, because a draft has not asked for anything
+  // yet (review-3896). A once pot that already closed has what it asked for.
+  // The payer is owed the plain answer, never the CLI's sentence.
+  if (/is (closed|draft), not open/.test(s))
+    return { code: 409, defect: "this pot is not taking dollars", hint: "nothing was recorded; your payment is untouched" };
+  if (/has already closed/.test(s))
+    return { code: 409, defect: "this pot has what it asked for", hint: "nothing was recorded; your payment is untouched" };
+  // POS-653: the receipt filled the pot and its file could not be closed. The
+  // label is anchored on the CLI's own "took pot … to its need", so another
+  // "could not be read" never wears it. The pen's transaction keeps nothing,
+  // and the CLI's words (a path, and "appended locally") go to the log, never
+  // to the payer.
+  if (/took pot .* to its need/.test(s) && /could not be (read|closed)/.test(s)) {
+    faultLogged("the receipt filled its pot and the pot could not be closed", { stderr: s });
+    return { code: 500, defect: "the receipt refused", hint: "nothing was recorded; your payment is untouched" };
+  }
   if (/ledger is behind the mail/.test(s))
     return { code: 409, defect: "the ledger is catching up", hint: "the town is mid-crossing — try again in a moment" };
   if (/precedes the ledger tail/.test(s))
     return { code: 409, defect: "the ledger moved ahead of the clock", hint: "try again in a moment" };
-  return { code: 500, defect: "the receipt refused", hint: (s.split("\n").find(Boolean) ?? "unknown").slice(0, 200) };
+  return { code: 500, defect: "the receipt refused", hint: faultLogged("the receipt refused", { stderr: s }) }; // to this child's stderr, the office's log (POS-578)
 }
 
 // The town's own rail set (stamp-mint.mjs KEEPING_RAILS, which the pot-receipt

@@ -74,7 +74,7 @@
 //
 // The law says a give is "a take at arm's length", not "a take at the same
 // place", and residents are entities: an entity has no geometric extent and
-// never will (kinds.md, restated at dynamic-entities.mjs law 2). So the give's
+// never will (lifetimes.md, restated at dynamic-entities.mjs law 2). So the give's
 // reach cannot be a containment test even in principle, and pretending it were
 // one would put a fake footprint on a person.
 

@@ -27,13 +27,18 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { DatabaseSync } from "node:sqlite";
 
-import { stakesRowsFrom, stakesFor, doorstepStakes, stakeEnvelope, REGISTRY_PATH } from "../src/doorstep-stakes.mjs";
+import { stakesRowsFrom, stakesFor, doorstepStakes, stakeEnvelope, REGISTRY_PATH, SWEEP_RULE } from "../src/doorstep-stakes.mjs";
+import { pathAtRef } from "../src/world-branches.mjs";
+import { WORLD_CLONE } from "../src/world-store.mjs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 import { nextSettlement, SETTLEMENT_CLOCK } from "../src/world-forecast.mjs";
 import { DOORSTEP_SEGMENTS } from "../src/queries.mjs";
 import { HOUSEHOLD_READABLE, HOUSEHOLD_READ_ENUM, HOUSEHOLD_READ_FIELDS, HOUSEHOLD_READS } from "../src/household-apex.mjs";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
+import { indexStore } from "./helpers/office-under-test.mjs";
 
 // ── the fixture household ───────────────────────────────────────────────────
 const MARKS = [
@@ -52,7 +57,14 @@ const REGISTRY = {
 };
 const ESCROW = new Map([["berthillon/chez-antoine", 0], ["berthillon/cone-coing", 2], ["berthillon/the-orchard-bench", 0], ["berthillon/the-old-lantern", 0]]);
 const HEAD = "276f1d20fbbea5da5e4f50531c5366f4690eb000";
+// THE SWEEP'S OWN RULE (postmark#3757), from the pinned world clone: the same
+// function the settlement's unpublish loop calls, never a copy of it.
+const VERDICT = await import(pathToFileURL(join(WORLD_CLONE, "tools", "unpublish-verdict.mjs")).href);
+const PRESENT = new Set(Object.values(REGISTRY).map((e) => e.path));   // every registered path is on main here
+const onMain = (path) => PRESENT.has(path);
 const readers = (over = {}) => ({
+  rule: async () => VERDICT.unpublishVerdict,
+  pathAt: async (ref) => { assert.equal(ref, "origin/main", "the path is asked at the ref the registry was read at"); return onMain; },
   world: async () => ({ state: { marks: MARKS }, ref: "origin/main", sha: "abc" }),
   registry: async (ref) => { assert.equal(ref, "origin/main", "the registry is read at the ref the world was"); return REGISTRY; },
   escrow: async () => ({ townSha: HEAD, byMark: ESCROW, reason: null }),
@@ -93,12 +105,13 @@ test("the sweep's other three shapes are NOT at risk: a commons mark with stamps
   assert.ok(!seg.rows.some((r) => r.mark.startsWith("someone-else/")), "another resident's marks are not on this page");
 });
 
-test("the rows are pure over (handles, marks, registry, byMark) — the same four inputs the sweep reads", () => {
-  const rows = stakesRowsFrom({ handles: ["berthillon"], marks: MARKS, registry: REGISTRY, byMark: ESCROW });
+test("the rows are pure over (handles, marks, registry, byMark, rule, pathOnMain) — the sweep's own inputs and its own rule", () => {
+  const pure = { rule: VERDICT.unpublishVerdict, pathOnMain: onMain };
+  const rows = stakesRowsFrom({ handles: ["berthillon"], marks: MARKS, registry: REGISTRY, byMark: ESCROW, ...pure });
   assert.equal(rows.length, 4);
   assert.equal(rows[0].mark, "berthillon/the-orchard-bench");
   // a mark the projection has no row for reads ✦0 — that is `escrowAbsentAmong`'s own reading of the Map
-  const sparse = stakesRowsFrom({ handles: ["berthillon"], marks: MARKS, registry: REGISTRY, byMark: new Map([["berthillon/cone-coing", 2]]) });
+  const sparse = stakesRowsFrom({ handles: ["berthillon"], marks: MARKS, registry: REGISTRY, byMark: new Map([["berthillon/cone-coing", 2]]), ...pure });
   assert.equal(sparse.find((r) => r.mark === "berthillon/the-orchard-bench").escrow, 0);
   assert.equal(sparse.find((r) => r.mark === "berthillon/the-orchard-bench").at_risk, true);
 });
@@ -112,7 +125,7 @@ test("THE TWO ABSENCES · a projection that REFUSED lists the marks with escrow 
   assert.equal(seg.note, undefined, "no 'nothing at risk' sentence on an unmeasured page");
   // and a reader that THROWS is the same absence, disclosed
   const thrown = await stakesFor(["berthillon"], readers({ escrow: async () => { throw new Error("connection refused"); } }));
-  assert.match(thrown.unavailable, /could not be read \(connection refused\)/);
+  assert.match(thrown.unavailable, /could not be read \(the record did not answer\)/); // POS-657: never the error's own text
   assert.equal(thrown.at_risk, null);
 });
 
@@ -142,8 +155,10 @@ test("a quiet page says so, and an empty one points at the portfolio", async () 
 
 test("scope is the stances/rulings grammar: a named handle is one resident, bare is the whole house the key holds", async () => {
   const marks = [...MARKS, { id: "antoine/the-cellar", kind: "sited", by: "antoine", household: "berthillon" }];
-  const reg = { ...REGISTRY, "antoine/the-cellar": { household: "berthillon", path: "x", class: "commons" } };
-  const r = readers({ world: async () => ({ state: { marks }, ref: "origin/main" }), registry: async () => reg });
+  const cellar = "WORLD/marks/antoine/the-cellar/mark.md";
+  const reg = { ...REGISTRY, "antoine/the-cellar": { household: "berthillon", path: cellar, class: "commons" } };
+  const r = readers({ world: async () => ({ state: { marks }, ref: "origin/main" }), registry: async () => reg,
+    pathAt: async () => (path) => path === cellar || onMain(path) });
   const key = { household: "deva-commons", handles: new Set(["berthillon", "antoine"]) };
   const house = await doorstepStakes(null, { key, ...r });
   assert.equal(house.count, 5);
@@ -154,7 +169,7 @@ test("scope is the stances/rulings grammar: a named handle is one resident, bare
 
 test("the world record unreadable is a disclosed absence, not an empty page", async () => {
   const seg = await stakesFor(["berthillon"], readers({ world: async () => { throw new Error("no clone"); } }));
-  assert.match(seg.unavailable, /the world record could not be read \(no clone\)/);
+  assert.match(seg.unavailable, /the world record could not be read \(the world's files could not be read\)/); // POS-657
   assert.equal(seg.count, 0);
   assert.equal(seg.at_risk, null);
   assert.equal(seg.next_settlement.at, "2026-09-18T06:00:00.000Z", "the clock still answers");
@@ -205,13 +220,11 @@ test("the manifest names ten, `stakes` is the ninth, and `household read: \"stak
 
 test("the finished doorstep carries the segment, always — serves, args, and the domain — on both skins", async () => {
   const { doorstepBundle } = await import("../src/doorstep-bundle.mjs");
-  const dir = mkdtempSync(join(tmpdir(), "pm-stakes-"));
-  const dbPath = join(dir, "fixture.db");
-  fixtureDb(dbPath).close();
-  const db = new DatabaseSync(dbPath, { readOnly: true });
+  // the town index the doorstep reads: the store, seeded from the fixture town (POS-656)
+  const ix = await indexStore(fixtureTown(), { db: "stakes_doorstep" });
+  const restore = await ix.useInProcess();
   try {
-    const meta = { as_of: "fixturesha000000000000000000000000000000" };
-    const ctx = { db, key: null, meta, asOf: meta.as_of, canWrite: false, clone: null, pen: null, odb: null, dbPath: null };
+    const ctx = { key: null, asOf: "fixturesha000000000000000000000000000000", canWrite: false, clone: null, pen: null, odb: null };
     for (const slim of [false, true]) {
       const d = await doorstepBundle("wright", { ...ctx, slim });
       assert.ok(d.segments.includes("stakes"));
@@ -229,9 +242,121 @@ test("the finished doorstep carries the segment, always — serves, args, and th
         assert.match(d.stakes.teach_at, /household \{ read: "stakes" \}/);
         assert.match(d.stakes.abridged, /drops `rule` and `read_the_rest`/);
       } else {
-        assert.match(d.stakes.rule, /commons needs escrow > 0/, "REST answers the read whole — the bundle law");
+        assert.match(d.stakes.rule, /a commons mark with no stamps behind it leaves the world/, "REST answers the read whole — the bundle law");
         assert.equal(d.stakes.teach_at, undefined);
       }
     }
-  } finally { db.close(); rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
+  } finally { await restore(); await ix.stop(); }
+});
+
+// ── postmark#3757: THE WARNING IS THE SWEEP'S OWN RULE ──────────────────────
+//
+// kinofire's fireplace and firepit were re-filed under spin-ghar-manor by hand
+// (world #140, 10-04) and their registry rows kept the old root paths and the
+// class commons. The sweep's unpublish loop skips a row whose registered path
+// is not on main, so it never took them; this segment asked only class and
+// escrow, and told Kino at every doorstep that "the next settlement sweeps it
+// first". The verdict is now the world's `unpublishVerdict`, read from the
+// engine; this file measures its inputs.
+const KINO = [
+  { id: "kinofire/the-too-big-fireplace", kind: "predicated", by: "kinofire", household: "kinofire" },
+  { id: "kinofire/the-gloaming", kind: "sited", by: "kinofire", household: "kinofire", at: { x: 5, y: 5 } },
+];
+const KINO_REGISTRY = {
+  // the stale row exactly as world main holds it (9988b669)
+  "kinofire/the-too-big-fireplace": { household: "house-of-many-doors", path: "WORLD/marks/let-there-be-light/the-too-big-fireplace/mark.md", class: "commons" },
+  // an ordinary commons row at a path that is on main: the control
+  "kinofire/the-gloaming": { household: "house-of-many-doors", path: "WORLD/marks/kinofire/the-gloaming/mark.md", class: "commons" },
+};
+const kinoReaders = (over = {}) => readers({
+  world: async () => ({ state: { marks: KINO }, ref: "origin/main" }),
+  registry: async () => KINO_REGISTRY,
+  pathAt: async () => (path) => path === "WORLD/marks/kinofire/the-gloaming/mark.md",
+  escrow: async () => ({ townSha: HEAD, byMark: new Map(), reason: null }),
+  ...over,
+});
+
+test("postmark#3757 · THE FALSIFIER: a commons row whose registered path left main is NOT at risk, because the sweep skips it; the control at a path on main is", async () => {
+  const seg = await stakesFor(["kinofire"], kinoReaders());
+  const by = Object.fromEntries(seg.rows.map((r) => [r.mark, r]));
+  assert.equal(by["kinofire/the-too-big-fireplace"].at_risk, false, "the fireplace is not swept, so it is not warned");
+  assert.equal(by["kinofire/the-too-big-fireplace"].act, undefined, "and no stake is asked for");
+  assert.equal(by["kinofire/the-too-big-fireplace"].class, "commons", "the row still reads as the registry holds it");
+  assert.equal(by["kinofire/the-gloaming"].at_risk, true, "THE CONTROL: commons, ✦0, path on main — swept, and warned");
+  assert.equal(seg.at_risk, 1);
+  // the verdict IS the sweep's: the same function, asked the same row
+  assert.equal(VERDICT.unpublishVerdict(KINO_REGISTRY["kinofire/the-too-big-fireplace"], { escrow: 0, pathOnMain: false, standing: null }).unpublish,
+    by["kinofire/the-too-big-fireplace"].at_risk);
+});
+
+test("postmark#3757 · a registered path the tree could not be asked about is UNJUDGED (null), and the page never calls the house safe", async () => {
+  const seg = await stakesFor(["kinofire"], kinoReaders({ pathAt: async () => () => null }));
+  for (const r of seg.rows) assert.equal(r.at_risk, null, `${r.mark}: unread is not safe`);
+  assert.equal(seg.at_risk, 0, "nothing was found at risk…");
+  assert.equal(seg.note, undefined, "…and still no 'nothing of yours is at risk' sentence over unjudged rows");
+  const thrown = await stakesFor(["kinofire"], kinoReaders({ pathAt: async () => { throw new Error("no clone"); } }));
+  for (const r of thrown.rows) assert.equal(r.at_risk, null, "a path reader that throws is the same absence");
+});
+
+test("postmark#3757 · an engine that carries no unpublish rule judges nothing, and says so", async () => {
+  const seg = await stakesFor(["berthillon"], readers({ rule: async () => null }));
+  assert.match(seg.unavailable, /unpublish rule could not be read from the world engine/);
+  assert.equal(seg.at_risk, null);
+  const by = Object.fromEntries(seg.rows.map((r) => [r.mark, r]));
+  assert.equal(by["berthillon/the-orchard-bench"].at_risk, null, "a registry row goes unjudged");
+  assert.equal(by["berthillon/the-old-lantern"].at_risk, false, "founding estate needs no rule: the registry does not hold it");
+  assert.equal(seg.note, undefined);
+});
+
+test("postmark#3757 · the rule's words are the world's: Darko's plain sentence", () => {
+  assert.equal(SWEEP_RULE, VERDICT.UNPUBLISH_RULE, "the quoted sentence is the world's, at the pinned clone");
+  assert.match(SWEEP_RULE, /^At each settlement, a commons mark with no stamps behind it leaves the world\./, "Darko's sentence (WLD-51, 14:31 EDT)");
+});
+
+test("postmark#3757 · pathAtRef: in the tree, not in it, and a ref this clone cannot resolve", () => {
+  const repo = mkdtempSync(join(tmpdir(), "pm-path-at-ref-"));
+  try {
+    const git = (...args) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    git("init", "-q", "-b", "main");
+    mkdirSync(join(repo, "WORLD", "marks", "kinofire", "spin-ghar-manor", "the-too-big-fireplace"), { recursive: true });
+    writeFileSync(join(repo, "WORLD", "marks", "kinofire", "spin-ghar-manor", "the-too-big-fireplace", "mark.md"), "a fireplace\n");
+    git("add", "-A");
+    git("-c", "user.name=t", "-c", "user.email=t@postmark.test", "commit", "-qm", "the fireplace, filed under its house");
+    assert.equal(pathAtRef(repo, "main", "WORLD/marks/kinofire/spin-ghar-manor/the-too-big-fireplace/mark.md"), true);
+    assert.equal(pathAtRef(repo, "main", "WORLD/marks/let-there-be-light/the-too-big-fireplace/mark.md"), false, "the registry's old root path");
+    assert.equal(pathAtRef(repo, "refs/tags/settlement/S999", "WORLD/marks/x/mark.md"), null, "a ref the clone does not hold is unread, not absent");
+  } finally { rmSync(repo, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
+});
+
+test("postmark#3757 · THE SAFETY HALF: a commons row whose mark now walks home is not at risk at ✦0, and is not warned", async () => {
+  // keith/the-garage's shape (world main 9988b669): admitted as commons, its
+  // row written once, its household's parcel around it now. The sweep walks
+  // its standing at the crossing and keeps it; so does this page.
+  const marks = [
+    { id: "keith/the-garage", kind: "sited", by: "keith", household: "keith", tier: "home" },
+    { id: "keith/a-bench-on-the-road", kind: "sited", by: "keith", household: "keith", tier: "market" },
+  ];
+  const reg = {
+    "keith/the-garage": { household: "keith", path: "WORLD/marks/keith/the-garage/mark.md", class: "commons" },
+    "keith/a-bench-on-the-road": { household: "keith", path: "WORLD/marks/keith/a-bench-on-the-road/mark.md", class: "commons" },
+  };
+  const seg = await stakesFor(["keith"], readers({
+    world: async () => ({ state: { marks }, ref: "origin/main" }), registry: async () => reg,
+    pathAt: async () => () => true, escrow: async () => ({ townSha: HEAD, byMark: new Map(), reason: null }),
+  }));
+  const by = Object.fromEntries(seg.rows.map((r) => [r.mark, r]));
+  assert.equal(by["keith/the-garage"].at_risk, false, "a home is not swept, whatever its row says");
+  assert.equal(by["keith/the-garage"].class, "commons", "the row still reads as the registry holds it");
+  assert.equal(by["keith/a-bench-on-the-road"].at_risk, true, "THE CONTROL: a commons mark that walks market is");
+  assert.match(SWEEP_RULE, /your household's ground or the town's never does/);
+});
+
+test("WLD-51 part 3 · every stakes row carries its mark's whole body (Darko, 2026-10-14 22:33: a read that shows a mark carries its body)", async () => {
+  const body = "A rootwood bookend, carved from a fallen root — the grain still runs the way the tree grew, and it holds up four books.";
+  const marks = MARKS.map((m) => ({ ...m, body: `${m.id}: ${body}` }));
+  const seg = await stakesFor(["berthillon"], readers({ world: async () => ({ state: { marks }, ref: "origin/main", sha: "abc" }) }));
+  assert.equal(seg.rows.length, 4);
+  for (const row of seg.rows) assert.equal(row.body, `${row.mark}: ${body}`, `${row.mark} carries its body, whole`);
+  const bare = stakesRowsFrom({ handles: ["berthillon"], marks: [{ id: "berthillon/x", kind: "sited", by: "berthillon" }], registry: {}, byMark: new Map() });
+  assert.equal(bare[0].body, null, "a mark the fold holds no body for says so: null, never a missing key");
 });

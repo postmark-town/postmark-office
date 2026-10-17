@@ -364,8 +364,9 @@ export async function stanceQuery(text, params = [], env = process.env) {
     const { rows } = await p.query(text, params);
     return { rows };
   } catch (e) {
+    const { plainReason } = await import("./fault-words.mjs"); // POS-657: the plain reason, the raw error to the log
     return { unreachable:
-      `the stance read could not reach the store (${String(e?.message ?? e).slice(0, 160)}) — the candidate list is ` +
+      `the stance read could not reach the store (${plainReason(e, "record", "the stance read")}) — the candidate list is ` +
       `unknown, which is a different fact from "nothing awaits your word" and is said rather than rounded to it` };
   }
 }

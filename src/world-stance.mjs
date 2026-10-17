@@ -83,6 +83,7 @@
 import { singleLogEnabled } from "./dynamic-store.mjs";
 import { WORLD_CLONE } from "./world-store.mjs"; // the standing-scoped inbox door defaults to the office's own world checkout
 import { worldFreezeBounce } from "./freeze.mjs";
+import { ringMovedTo, ringOf } from "./ring-box.mjs";
 import { appendActFlipped, appendJournal, laneFlipped } from "./world-journal.mjs";
 // `stanceQuery` is the stance read's OWN credential (`stance_reader`), and the
 // only place in `src/` that is not `office_api`. It lives beside `actsQuery` so
@@ -97,6 +98,7 @@ import {
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { faultLogged, plainReason } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 
 // ── THE TEACHING LINE (walk #1 item 4 · walk #2, 2026-09-05/06) ─────────────
 //
@@ -1078,7 +1080,7 @@ export async function stancesForHandles(handles, { cursor = null, limit = PAGE_S
     return answer;
   } catch (e) {
     return {
-      unavailable: `the consent inbox could not be read (${String(e?.message ?? e).slice(0, 160)})`,
+      unavailable: `the consent inbox could not be read (${plainReason(e, "record", "the consent inbox")})`,
       awaiting: [], standing: [],
     };
   }
@@ -1146,7 +1148,7 @@ export async function setDownFor(thing, target, marks = [], deps = {}) {
   try {
     rows = deps.readRows ? await deps.readRows(thing)
       : await (await import("./world2-guards.mjs")).standsRowsFromStore(thing);
-  } catch (e) { return { speakerHouse, unreadable: String(e?.message ?? e).slice(0, 160) }; }
+  } catch (e) { return { speakerHouse, unreadable: plainReason(e, "record", "a thing's standing rows") }; }
   if (!rows) return { speakerHouse };
   if (hold.liveHolder(rows.attachments ?? [], String(thing))) return { speakerHouse }; // held, not set down
   const drop = hold.latestDrop(rows.journal ?? [], String(thing));
@@ -1201,7 +1203,7 @@ export async function setDownsAwaiting(handles, { marks = [], stances = [], deps
     byThing = deps.rowsForMakers ? await deps.rowsForMakers(makers)
       : await (await import("./world2-guards.mjs")).setDownRowsForMakers(makers);
   } catch (e) {
-    return { rows: [], unavailable: `the holding record could not be read (${String(e?.message ?? e).slice(0, 160)}) — this is not an answer that nothing waits` };
+    return { rows: [], unavailable: `the holding record could not be read (${plainReason(e, "record", "the makers' set-downs")}) — this is not an answer that nothing waits` };
   }
   if (byThing == null)
     return { rows: [], unavailable: "this office cannot read the holding record — not an answer that nothing waits" };
@@ -1216,6 +1218,13 @@ export async function setDownsAwaiting(handles, { marks = [], stances = [], deps
     });
     if (!sd.drop || !makers.includes(String(sd.madeBy))) continue;
     if (hold.setDownAnswer({ stances, thing, dropSeq: sd.drop.seq ?? null, madeBy: sd.madeBy, householdOf: sd.householdOf })) continue;
+    // A SET-DOWN OF A THING THAT IS NOT STANDING CANNOT BE ANSWERED. `marks` is
+    // the stances read's own `worldForStances` list, the one the answer door
+    // looks `on` up in, so a thing missing here bounces 404 there. little-bird's
+    // box of nine was swept at S86 (a commons mark at ✦0) after neth set it
+    // down, and this group kept offering a welcome the door could only refuse.
+    // The row comes back by itself if the thing stands again.
+    if (!mark) continue;
     const canon = mark?.at && Number.isFinite(Number(mark.at.x)) && Number.isFinite(Number(mark.at.y))
       ? { x: Number(mark.at.x), y: Number(mark.at.y) } : null;
     rows.push({
@@ -1237,6 +1246,23 @@ async function setDownsGroup(key, inbox, deps = {}) {
 }
 
 /**
+ * Was an amend filed that answers this drop? `true`, `false`, or `null` when
+ * the record cannot say. An amend lands in `acts` only when the single log is on
+ * and the mark lane writes there; anywhere else, finding none is not knowing none.
+ */
+async function setDownAmendFiled(on, dropSeq) {
+  if (dropSeq == null || !singleLogEnabled() || !laneFlipped("mark")) return null;
+  try {
+    const [{ actsQuery }, { ACTION_AMEND, CLASS_MARK }] = await Promise.all([import("./world2-acts.mjs"), import("./world-journal.mjs")]);
+    const rows = await actsQuery("SELECT id, payload FROM acts WHERE class = $1 AND action = $2 AND object = ANY($3) ORDER BY id",
+      [CLASS_MARK, ACTION_AMEND, [String(on)]]);
+    if (!Array.isArray(rows)) return null;
+    const payloadOf = (p) => (typeof p === "string" ? JSON.parse(p) : p) ?? {};
+    return rows.some((r) => String(payloadOf(r.payload)._set_down?.act_id) === String(dropSeq));
+  } catch { return null; }
+}
+
+/**
  * The author's house answers a stranger's set-down: one stance row, and on
  * `welcomed` the author's amend. Everything that can refuse refuses BEFORE the
  * row is written, so a refusal leaves nothing behind.
@@ -1251,9 +1277,16 @@ async function answerSetDown({ repo, on, stance, by, key, target, sd, dbPath, wi
 
   const prior = hold.setDownAnswer({
     stances: await stanceRows({ dbPath, worldClone: repo }), thing: on, dropSeq: drop.seq, madeBy, householdOf });
-  if (prior?.stance === "welcomed" && stance === "opposed")
-    throw bounce(409, `your house has already accepted ${setter}'s set-down of ${on}`,
-      `accepting filed the amend that re-sites it in ${madeBy}'s name, so there is no set-down left to refuse — to move it back, amend the mark with world { do: "leave-mark", args: { slug, amend: true, at } }. Nothing was written.`);
+  // A welcome whose amend the door refused moved nothing, so it does not close
+  // the set-down (postmark#3549). Only an amend that answers THIS drop does, and
+  // the record is asked for one; a record that cannot say keeps the refusal.
+  if (prior?.stance === "welcomed" && stance === "opposed") {
+    const filed = await setDownAmendFiled(on, drop.seq);
+    if (filed !== false)
+      throw bounce(409, `your house has already accepted ${setter}'s set-down of ${on}`, filed
+        ? `accepting filed the amend that re-sites it in ${madeBy}'s name, so there is no set-down left to refuse — to move it back, amend the mark with world { do: "leave-mark", args: { slug, amend: true, at } }. Nothing was written.`
+        : `this door could not tell whether the amend that accepting files in ${madeBy}'s name was filed, so it will not record a refusal over one that may stand — try again, or to move it back, amend the mark with world { do: "leave-mark", args: { slug, amend: true, at } }. Nothing was written.`);
+  }
 
   let amendDeps = deps;
   if (stance === "welcomed") {
@@ -1267,6 +1300,14 @@ async function answerSetDown({ repo, on, stance, by, key, target, sd, dbPath, wi
       : (await (await import("./world.mjs")).worldMarkById(on)).mark;
     const built = hold.setDownAmend({ thing: on, mark, stood, actor: setter });
     if (built.refused) throw bounce(409, `${on} cannot be re-sited by an amend at this door`, `${built.refused} — nothing was written`);
+    // The same door refuses a point outside the parent the mark's filing
+    // declares (`world.mjs § declaredParentGuard`, postmark#3020), so that is
+    // asked here too, of the amend as the door will see it: its ring, if it
+    // has one, moved onto the standpoint first (postmark#3549).
+    const next = ringOf(built.payload.points)
+      ? { ...built.payload, points: ringMovedTo(built.payload.points, built.payload.at) } : built.payload;
+    const outside = await (await import("./world.mjs")).declaredParentGuard(on, next);
+    if (outside) throw bounce(outside.code, outside.defect, `${outside.hint} — nothing was written`);
     amendDeps = { ...deps, mark };
   }
 
@@ -1369,7 +1410,7 @@ async function declareTownStance(repo, args, key, { dbPath = null, crossing = nu
     try { lawMarks = lawMarksAt(repo, lawSha.sha); }
     catch (e) {
       throw bounce(503, "the law could not be read at the law sha",
-        `the town's word cites law at ${String(lawSha.sha).slice(0, 12)} (${lawSha.from}), and this office's world clone could not read it (${String(e?.message ?? e).slice(0, 120)}) — nothing was written`);
+        `the town's word cites law at ${String(lawSha.sha).slice(0, 12)} (${lawSha.from}), and this office's world clone could not read it — nothing was written; ${faultLogged("the law could not be read at the law sha", e)}`);
     }
   }
   const law = citeLaw(args.law, { word: stance, lawMarks, sha: lawSha.sha });
@@ -1468,7 +1509,10 @@ export async function declareStanceViaOffice(repo, args = {}, key = null, { dbPa
   if (world.unreachable) throw bounce(503, "the stance candidate list could not be read", world.unreachable);
   const all = world.marks;
   const target = all.find((m) => m.id === on);
-  if (!target) throw bounce(404, `no mark "${on}"`, "ids are <by>/<slug> — see the telling, or your own inbox: world { read: \"" + ACTION_STANCE + "\" }");
+  // The inbox is a household read: a stance is spoken from standing, and
+  // `world { read: "declare-stance-on" }` bounces 422 for that reason (world-apex
+  // § STANDING_SCOPED_DOORS). The hint names the read that answers.
+  if (!target) throw bounce(404, `no mark "${on}"`, "ids are <by>/<slug>: see the telling, or your own inbox, household { read: \"stances\" }");
 
   // ── THE SET-DOWN ARM (POS-138; Keemin, 2026-09-24: "I agree with you here") ─
   //

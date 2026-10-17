@@ -81,6 +81,9 @@ const PUBLISHED = [
   { id: "ana/the-orchard", by: "ana", kind: "parcel", tier: "home", at: ANA_AT, extent: { w: 5, h: 5 }, body: "an orchard" },
   { id: "postmaster/the-waiting-room", by: "postmaster", kind: "sited", tier: "market", at: WAITING_ROOM_AT, extent: { w: 30, h: 30 }, body: "the waiting room" },
   stoolRecord,
+  // Zed's cup (THE NOTE): a thing that stands, far from every parcel, so a
+  // set-down of it can be answered and zed still holds no ground.
+  { id: "zed/a-cup", by: "zed", kind: "sited", tier: "home", class: "thing", at: { x: -6000, y: 6000 }, extent: { w: 1, h: 1 }, body: "a cup" },
 ];
 
 put(repo, "tools/world-build.mjs", `export function assembleWorld({ worldState, skeleton }) { return { ...worldState, skeleton }; }\n`);
@@ -103,6 +106,9 @@ export function containmentChain(pos, marks) {
 }
 export function orient() { return { seen: [] }; }
 export function investigate() { return null; }
+export function pointWithinMark(p, m) {
+  return Boolean(m?.at && m?.extent) && Math.abs(p.x - m.at.x) <= m.extent.w / 2 && Math.abs(p.y - m.at.y) <= m.extent.h / 2;
+}
 `);
 put(repo, "tools/marks-fold.mjs", `
 export function loadMarks() { return []; }
@@ -179,6 +185,7 @@ let pen = await install();
 after(() => { unread(); uninstallActsPen(); claimsPen.__setPoolForTest(null); delete process.env.WORLD2_PG; delete process.env.WORLD2_PG_URL; });
 
 const hold = await import("../src/world-hold.mjs");
+const { resetPathIndex } = await import("../src/world-journal.mjs");
 
 const KEITH = { household: "keithhouse", handles: new Set(["keith", "kin"]) };
 const ANA = { household: "anahouse", handles: new Set(["ana"]) };
@@ -291,6 +298,73 @@ test("set down on ground that is not the author's, with no escrow readable: the 
   assert.doesNotMatch(hold.setDownNote(out), /canon moves it here/, "no promise of a move the verdict did not make");
 });
 
+// ── THE AUTHOR'S OWN DRAFT (postmark#3663, kogane) ──────────────────────────
+//
+// kogane folded draft things at the Well House, carried them to a shrine and
+// set them down before the crossing; they published back at the Well House.
+// The set-down read only canon, found nothing for an unpublished thing, and
+// filed nothing. A PRIVATE DRAFT is now re-sited in place: the same claim row,
+// at the place it was set down. A claim already PUT FORWARD waits on a ruling,
+// and the receipt says that instead of promising an amend that never comes.
+// THE FLIP: drop the live-claim read in `fileAuthorsAmend` and DRAFT reds on
+// "the set-down filed nothing".
+
+const CUP = "keith/a-tin-cup";
+const FOLD_AT = { x: 176, y: 425.5 };   // the Waiting Room: not Keith's ground, so the cup stays a draft
+const MOVED_AT = { x: 185, y: 430 };    // still the Waiting Room, a few steps over
+
+async function cupDraft(p) {
+  const world = await import("../src/world.mjs");
+  await world.leaveMarkViaOffice(repo, { by: "keith", slug: "a-tin-cup", at: FOLD_AT, extent: { w: 1, h: 1 },
+    kind: "sited", class: "thing", body: "A tin cup with a dent in the rim.", portable: true }, KEITH);
+  const rows = p.claims().filter((c) => c.slug === CUP);
+  assert.equal(rows.length, 1, `the cup is one claim: ${JSON.stringify(p.claims())}`);
+  assert.equal(rows[0].status, "draft", "with no stake on ground that is not Keith's, the cup is a private draft");
+  const { liveMarkOf } = await import("../world2/tools/guard-reads.mjs");
+  return liveMarkOf(rows[0]).mark;
+}
+
+test("DRAFT: Keith sets down his own private draft elsewhere, and the same claim is re-sited where he stood", async () => {
+  const p = await fresh();
+  const live = await cupDraft(p);
+  const out = await hold.fileSetDownAmend({
+    did: { thing: CUP, declared_by: "keith", at: "2026-10-10T23:45:10.654Z", did: "drop" },
+    stood: MOVED_AT, key: KEITH, actId: 16113, deps: { householdOf: HOUSES, mark: null, liveClaim: live },
+  });
+  assert.equal(out.amend.filed, true, `the set-down filed nothing: ${JSON.stringify(out)}`);
+  assert.equal(out.amend.draft, true);
+  assert.equal(p.rows().filter((a) => a.object === CUP).length, 0, "a private draft is no public deed: no act is mirrored until it is put forward");
+  // The newest claim for the cup is a private draft at the set-down place. (This
+  // in-memory pen answers every UPDATE with no rows, so it stands a second row
+  // where the real pen rewrites the first; second-amend-replaces-the-first.test.mjs
+  // proves the rewrite against the real store.)
+  const latest = p.claims().filter((c) => c.slug === CUP).at(-1);
+  assert.equal(latest.status, "draft");
+  assert.deepEqual(latest.geometry.at, MOVED_AT, "the draft now carries the place it was set down");
+  assert.equal(parse(latest.data)._set_down.act_id, "16113", "and names the drop that moved it");
+  const deferred = parse(latest.data)._deferred_act;
+  assert.equal(deferred.action, "amend", "the act it holds until it is put forward is Keith's amend");
+  assert.equal(deferred.actor, "keith");
+  assert.match(hold.setDownNote(out), /your private draft is re-sited here, and it publishes here when it is put forward/);
+});
+
+test("PUT FORWARD: a claim already on the docket is not re-sited here, and the receipt says so instead of promising an amend", async () => {
+  const p = await fresh();
+  const live = await cupDraft(p);
+  const before = JSON.stringify(p.claims());
+  const out = await hold.fileSetDownAmend({
+    did: { thing: CUP, declared_by: "keith", at: "2026-10-10T23:45:10.654Z", did: "drop" },
+    stood: MOVED_AT, key: KEITH, actId: 16113,
+    deps: { householdOf: HOUSES, mark: null, liveClaim: { ...live, claim_status: "pending", put_forward: true } },
+  });
+  assert.equal(out.amend.filed, false);
+  assert.equal(out.amend.put_forward_unpublished, true);
+  assert.equal(JSON.stringify(p.claims()), before, "nothing was written");
+  const note = hold.setDownNote(out);
+  assert.match(note, /put forward and not yet published, so it publishes where it was folded/);
+  assert.doesNotMatch(note, /until one is/, "no promise of an amend that will never be filed");
+});
+
 // ── FALSIFIER 2 · a stranger's set-down files nothing, and says so ──────────
 
 test("ANA DROPS KEITH'S STOOL: no amend, no claim, canon unchanged — and the receipt says it is unaccepted", async () => {
@@ -318,9 +392,12 @@ test("THE READ: a stranger's set-down reads 'set down by ana at <place> — unac
   assert.deepEqual(s.canon_at, GARAGE_AT, "canon has not moved");
   assert.equal(s.says, "set down by ana at (176, 425.5) — unaccepted; canon stays at (3978, -398), where keith put it");
 
-  const own = await hold.whereThingStands(STOOL, { attachments, journal: [{ ...journal[0], actor: "keith" }], fold: GARAGE_AT, householdOf: HOUSES });
+  // The promise is made over the amend THIS drop filed, on the docket (POS-451;
+  // set-down-moves-the-stool.test.mjs § E drives the read with the real port).
+  const amends = [{ thing: STOOL, act_id: "9001", status: "pending" }];
+  const own = await hold.whereThingStands(STOOL, { attachments, journal: [{ ...journal[0], actor: "keith" }], fold: GARAGE_AT, householdOf: HOUSES, amends });
   assert.equal(own.accepted, undefined, "the author's own set-down is not a stance question");
-  assert.match(own.says, /the record re-sites the mark at the next fold/, "and its promise is kept now, so it stays word for word");
+  assert.match(own.says, /the record re-sites the mark at the next fold/, "and its promise is kept over its filed amend, word for word");
 });
 
 test("a household record that cannot be read decides neither way: nothing filed, and the read promises nothing", async () => {
@@ -466,12 +543,20 @@ async function speak(word, handle, key, extraDeps = {}) {
 }
 
 /** The read, over the record's own stance rows. */
-async function readStool(drop, fold = GARAGE_AT) {
+// THE DOCKET the read judges "canon follows" against (POS-451): the pen's
+// claims as `guard-reads.mjs § pgSetDownAmends` answers them (pending or
+// locked, carrying `_set_down`); the real query runs on a real store in
+// set-down-moves-the-stool.test.mjs § E and § F.
+const docketOf = (p) => p.claims()
+  .filter((c) => (c.status === "pending" || c.status === "locked") && parse(c.data)?._set_down)
+  .map((c) => ({ thing: c.slug, act_id: String(parse(c.data)._set_down.act_id), status: c.status }));
+
+async function readStool(drop, fold = GARAGE_AT, { escrow = stoolRecord.stamps } = {}) {
   const stances = await stance.stanceRows({ worldClone: repo });
   return hold.whereThingStands(STOOL, {
     attachments: [{ target: STOOL, entity: "ana", policy: "detach", born_at: "2026-09-24T01:00:00Z" }],
     journal: [{ object: STOOL, action: "drop", actor: "ana", seq: drop.id, at: { anchor: null, dx: ANA_AT.x, dy: ANA_AT.y } }],
-    fold, householdOf: HOUSES, stances,
+    fold, householdOf: HOUSES, stances, amends: docketOf(pen), escrowOf: () => escrow,
   });
 }
 
@@ -593,7 +678,60 @@ test("once accepted, a later 'opposed' is refused — the amend is filed in the 
   const r = await speak("opposed", "keith", KEITH);
   assert.equal(r.refused, true, JSON.stringify(r));
   assert.equal(r.code, 409);
+  assert.match(r.hint, /accepting filed the amend/, "the record found the amend, so the refusal may say it was filed");
   assert.equal(p.rows().length, before, "nothing written");
+});
+
+// ── AN UNFILED WELCOME CAN STILL BE OPPOSED (postmark#3549, the second effect) ─
+//
+// A welcome whose amend the door refused moved nothing. The opposed arm used to
+// refuse every later word after a welcome, saying "accepting filed the amend",
+// which is false here: the author's house could neither move the thing nor take
+// the welcome back. It now asks the record whether an amend answering THIS drop
+// was filed, and refuses only when one was.
+//
+// THE FLIP: drop the record check in `answerSetDown` and this reds on "the
+// refusal was refused".
+
+test("AN UNFILED WELCOME CAN STILL BE OPPOSED: no amend answers the drop, so opposed is recorded and the read answers canon", async () => {
+  const p = await fresh();
+  const drop = await anaDrops(p);
+  const refusingDoor = async () => { const e = new Error("3 marks stand on it"); Object.assign(e, { code: 409, defect: "3 marks stand on it" }); throw e; };
+  const ok = await speak("welcomed", "keith", KEITH, { leave: refusingDoor });
+  assert.equal(ok.amend?.filed, false, `the control: the welcome's amend was refused: ${JSON.stringify(ok)}`);
+  const before = p.rows().length;
+
+  const r = await speak("opposed", "keith", KEITH);
+  assert.ok(!r.refused, `the refusal was refused: ${JSON.stringify(r)}`);
+  assert.equal(r.superseded?.stance, "welcomed", "it supersedes the welcome");
+  assert.equal(p.rows().length, before + 1, "one row: the stance itself");
+  assert.equal(p.rows().filter((a) => a.action === "amend").length, 0, "no amend");
+  assert.equal(p.claims().length, 0, "no claim");
+
+  const s = await readStool(drop);
+  assert.equal(s.source, "fold", "the read answers canon");
+  assert.deepEqual(s.where, GARAGE_AT);
+  assert.equal(s.refused_by, "keith");
+});
+
+test("A WELCOME THE DOOR CANNOT CHECK: opposed is still refused, and the refusal does not claim the amend was filed", async () => {
+  const p = await fresh();
+  await anaDrops(p);
+  const refusingDoor = async () => { const e = new Error("3 marks stand on it"); Object.assign(e, { code: 409, defect: "3 marks stand on it" }); throw e; };
+  const ok = await speak("welcomed", "keith", KEITH, { leave: refusingDoor });
+  assert.equal(ok.amend?.filed, false, JSON.stringify(ok));
+  const before = p.rows().length;
+  // The mark lane off the register: an amend would not be in `acts`, so "none
+  // found" there is "could not tell", never "none was filed".
+  process.env.W2_PEN = "hold";
+  try {
+    const r = await speak("opposed", "keith", KEITH);
+    assert.equal(r.refused, true, JSON.stringify(r));
+    assert.equal(r.code, 409);
+    assert.doesNotMatch(r.hint, /accepting filed the amend/, `the refusal claims a filing it did not see: ${r.hint}`);
+    assert.match(r.hint, /could not tell whether/);
+    assert.equal(p.rows().length, before, "nothing written");
+  } finally { process.env.W2_PEN = "mark,hold"; }
 });
 
 test("an answer belongs to ONE drop: a welcome of Ana's first set-down does not accept a later one", () => {
@@ -632,7 +770,69 @@ test("A WELCOME WHOSE AMEND THE DOOR REFUSES: the receipt says it was not filed,
   const s = await readStool(drop);
   assert.equal(s.accepted, true, "the word was spoken, and the read says so");
   assert.doesNotMatch(s.says, /is filed/, `the read claims a filing that did not happen: ${s.says}`);
-  assert.equal(s.says, "set down by ana at (4105, -305) — accepted by keith's house; canon follows when keith's amend publishes at a crossing");
+  // …nor a move nothing filed can make (POS-451): no amend on the docket.
+  assert.doesNotMatch(s.says, /canon follows/, `the read promised a move no amend can make: ${s.says}`);
+  assert.equal(s.says, `set down by ana at (4105, -305) — accepted by keith's house, but no amend from this set-down is on the docket, so canon stays at (3978, -398): keith's amend is a private draft or was refused, and a stake on ${STOOL} by keith's house puts a draft forward`);
+});
+
+// At ✦0 the refused welcome left NO draft, and the read cannot see that: it
+// must hedge exactly as it does at ✦2, never promise "keith's private draft",
+// and never say whose ground it is (it does not look).
+//
+// THE FLIP: restore "keith's amend is keith's private draft at escrow ✦0: on
+// ground that is not keith's household's …" and this reds.
+test("A WELCOME WHOSE AMEND THE DOOR REFUSES, AT ✦0: the read names no draft that does not exist, and asserts no ground it did not read", async () => {
+  const p = await fresh();
+  const drop = await anaDrops(p);
+  const refusingDoor = async () => { const e = new Error("the record carries `loot`"); Object.assign(e, { code: 409, defect: "the record carries `loot`" }); throw e; };
+  const r = await speak("welcomed", "keith", KEITH, { leave: refusingDoor });
+  assert.equal(r.amend.filed, false, "the amend door refused");
+  assert.equal(p.claims().length, 0, "no claim, so no draft either");
+
+  const s = await readStool(drop, GARAGE_AT, { escrow: 0 });
+  assert.equal(s.accepted, true);
+  assert.doesNotMatch(s.says, /canon follows/);
+  assert.doesNotMatch(s.says, /is keith's private draft/, `the read named a draft the door never filed: ${s.says}`);
+  assert.doesNotMatch(s.says, /ground that is not/, `the read asserted a ground it never read: ${s.says}`);
+  assert.equal(s.says, `set down by ana at (4105, -305) — accepted by keith's house, but no amend from this set-down is on the docket, so canon stays at (3978, -398): keith's amend is a private draft or was refused, and ${STOOL} has ✦0 behind it: a draft goes forward with ✦1 behind it, so a stake of ✦1 on ${STOOL} by keith's house puts a draft forward`);
+  assert.equal(s.escrow, 0);
+  assert.equal(s.stake_needed, 1);
+});
+
+// ── A WELCOME OUTSIDE THE DECLARED PARENT (postmark#3549) ────────────────────
+//
+// The amend door refuses an amend that moves a mark outside the parent its
+// FILING declares (`world.mjs § declaredParentGuard`, postmark#3020). A welcome
+// asks that guard before the stance row, so the refusal leaves nothing behind.
+// Before, the row was written, the amend was refused after it, and the receipt
+// said "speak welcomed again to file it", which meets the same refusal.
+//
+// Here the freeze files the stool inside Keith's garage, and Ana sets it down
+// in Keith's yard, outside the garage. The freeze is put back afterwards.
+//
+// THE FLIP: drop the guard call in `answerSetDown` and this reds on "the
+// welcome was recorded".
+
+test("A WELCOME OUTSIDE THE DECLARED PARENT: refused before the stance row, with nothing written", async () => {
+  const freeze = (marks) => {
+    put(repo, "WORLD/filing-freeze.json", JSON.stringify({ frozen_at: "2026-08-25", marks }));
+    git("commit", "-qam", "freeze");
+    resetPathIndex();
+  };
+  freeze({ "keith/the-garage": "WORLD/marks/let-there-be-light/the-garage",
+    [STOOL]: "WORLD/marks/let-there-be-light/the-garage/waiting-room-stool-2026-09-10" });
+  try {
+    const p = await fresh();
+    await anaDrops(p);
+    const before = p.rows().length;
+    const r = await speak("welcomed", "keith", KEITH);
+    assert.equal(r.refused, true, `the welcome was recorded: ${JSON.stringify(r)}`);
+    assert.equal(r.code, 409);
+    assert.equal(r.defect, `(4105, -305) is outside "keith/the-garage", and "${STOOL}" is filed inside it`);
+    assert.match(r.hint, /nothing was written$/);
+    assert.equal(p.rows().length, before, "no stance row, no amend");
+    assert.equal(p.claims().length, 0, "no claim");
+  } finally { freeze({}); }
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -728,6 +928,25 @@ test("PICKED UP: once the stool is in somebody's hands again, nothing waits", as
   assert.equal(free.rows.length, 1, "the same record with no live holder still waits — the control");
 });
 
+// ── SWEPT (little-bird's box of nine) ────────────────────────────────────────
+//
+// neth set down little-bird/a-box-of-nine-at-grove-wharf on 2026-09-26; the box
+// was swept at S86 (a commons mark at ✦0), and the stances read went on listing
+// the set-down with an answer the stance door refused 404, "no mark". The read
+// lists a set-down only when the thing is among the marks the answer door looks
+// in. THE FLIP: drop the `if (!mark) continue` and SWEPT reds.
+test("SWEPT: a set-down of a thing that no longer stands does not wait on a word the door would refuse", async () => {
+  const p = await fresh();
+  await anaDrops(p);
+  const rows = await underRecord(() => guards.setDownRowsForMakers(["keith"]));
+  const rec = rows.get(STOOL);
+  const ask = (marks) => stance.setDownsAwaiting(["keith"], { marks, stances: [], deps: { rowsForMakers: async () => new Map([[STOOL, rec]]) } });
+  assert.equal((await ask(PUBLISHED)).rows.length, 1, "the control: while the stool stands, its set-down waits");
+  const swept = await ask(PUBLISHED.filter((m) => m.id !== STOOL));
+  assert.deepEqual(swept.rows, [], "the stool left canon, so there is nothing to welcome or oppose");
+  assert.equal(swept.unavailable, undefined, "an empty group here is an answer, not a failure to read");
+});
+
 test("OWN DROP: Keith setting down his own stool never waits on his house's word", async () => {
   const p = await fresh();
   hand("keith");
@@ -741,20 +960,22 @@ test("OWN DROP: Keith setting down his own stool never waits on his house's word
 test("THE DOORSTEP CARRIES IT: Keith's morning page lists the waiting set-down, and the segment IS the read", async () => {
   const p = await fresh();
   const drop = await anaDrops(p);
-  const { DatabaseSync } = await import("node:sqlite");
-  const { SCHEMA } = await import("../src/schema.mjs");
+  const { emptyTown, setMeta, put } = await import("./fixture.mjs");
+  const { indexStore } = await import("./helpers/office-under-test.mjs");
   const { SEGMENT_META } = await import("../src/queries.mjs");
   const { doorstepBundle } = await import("../src/doorstep-bundle.mjs");
   const { callTool } = await import("../src/mcp.mjs");
-  const db = new DatabaseSync(":memory:");
+  // The town index is a real store (the suite's embedded one), read through the
+  // index's own pool seam: the record stays this file's in-memory pen.
+  const town = emptyTown();
+  setMeta(town, "as_of", "pos138fixture00000000000000000000000000"); setMeta(town, "town_path", "fixture"); setMeta(town, "hydrated_counts", "{}");
+  setMeta(town, "quest_registry", '{"quests":[]}');
+  put(town, "residents", { handle: "keith", json: JSON.stringify({
+    handle: "keith", is_office: false, last_active: null, address: { data: { since: "2026-01-01", joined: "2026-06-10" } } }) });
+  const IX = await indexStore(town);
+  const restore = await IX.useInProcess();
   try {
-    db.exec(SCHEMA);
-    const m = db.prepare("INSERT INTO meta VALUES (?, ?)");
-    m.run("as_of", "pos138fixture00000000000000000000000000"); m.run("town_path", "fixture"); m.run("hydrated_counts", "{}");
-    db.prepare("INSERT INTO residents VALUES (?, ?)").run("keith", JSON.stringify({
-      handle: "keith", is_office: false, last_active: null, address: { data: { since: "2026-01-01", joined: "2026-06-10" } } }));
-    const ctx = { db, key: KEITH, meta: { as_of: "pos138fixture00000000000000000000000000", quest_registry: '{"quests":[]}' },
-      asOf: "pos138fixture00000000000000000000000000", canWrite: false, clone: null, pen: null, odb: null, dbPath: null };
+    const ctx = { key: KEITH, asOf: "pos138fixture00000000000000000000000000", canWrite: false, clone: null, pen: null, odb: null };
     const seg = await underRecord(async () => (await doorstepBundle("keith", ctx)).stances);
     assert.equal(seg.serves, "household.stances", "no new segment name");
     assert.equal(seg.set_downs_awaiting?.length, 1, `the doorstep carries it: ${JSON.stringify(seg).slice(0, 400)}`);
@@ -762,7 +983,7 @@ test("THE DOORSTEP CARRIES IT: Keith's morning page lists the waiting set-down, 
     const asked = await underRecord(() => callTool("household", { read: "stances", ...seg.args }, ctx));
     const answerOf = (s) => Object.fromEntries(Object.entries(s).filter(([k]) => !SEGMENT_META.includes(k)));
     assert.deepEqual(answerOf(seg), asked, "ask the named read yourself and you get the same object back");
-  } finally { db.close(); }
+  } finally { await restore(); await IX.stop(); }
 });
 
 // ── THE PLACEHOLDER (1626f2f4) ───────────────────────────────────────────────

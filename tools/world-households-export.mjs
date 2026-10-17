@@ -1,11 +1,14 @@
 #!/usr/bin/env node
-// world-households-export.mjs — publish the town's handle → credential-household
-// mapping into the World as WORLD/households.json.
+// world-households-export.mjs — render the store's household registry into the
+// World as WORLD/households.json.
 //
-// ONE vocabulary (ruling 9's lesson): the mapping is derived by the town's own
-// resolver — stamp-mint.mjs householdKeys() over the town clone's pins
-// (tools/github-ids.json) + ADDRESS logins — never by a second implementation.
-// The World's fold consumes it for the parcel-claim cap (Keemin's ruling,
+// THE STORE IS THE RECORD, THE FILE IS ITS RENDERING (POS-350; Darko 2026-10-04,
+// Wright 2026-10-13). The mapping is the store's `identities` view (055: the
+// registry walked by the office's one deriver, household-deriver.mjs §
+// resolveHouse), the store's pins' logins and its declared houses — composed by
+// src/household-logins.mjs § worldHouseholdsFromStore. Until 2026-10-13 its base
+// was the town clone's ledger resolver (stamp-mint.mjs currentHouseholds()), a
+// second derivation of a fact the store already held. The World's fold consumes it for the parcel-claim cap (Keemin's ruling,
 // 2026-07-30: at most 3 parcel claims per credential household; prior estate
 // stands). A handle absent from the registry folds as its own household
 // (solo:<handle>) — registry lag never blocks a new resident, it only groups
@@ -35,9 +38,9 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
-import { pathToFileURL, fileURLToPath } from "node:url";
+import { fileURLToPath } from "node:url";
 
-import { sketchbookKeys, worldHouseholdsAt } from "../src/household-logins.mjs";
+import { sketchbookKeys, worldHouseholdsFromStore } from "../src/household-logins.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
@@ -45,41 +48,32 @@ const opt = (name, def) => { const i = args.indexOf(name); return i >= 0 ? args[
 const TOWN = resolve(opt("--town", process.env.TOWN_CLONE ?? join(HERE, "..", "town-clone")));
 const WORLD = resolve(opt("--world", process.env.WORLD_CLONE ?? join(HERE, "..", "world-clone")));
 
-const { currentHouseholds } = await import(pathToFileURL(join(TOWN, "tools", "stamp-mint.mjs")));
-
-// The derivation itself lives in src/household-logins.mjs § worldHouseholdsAt
-// (moved 2026-10-05, POS-410, so a settlement snapshot derives the same map from
-// its own register rows). Its steps, unchanged from when they lived here:
+// THE STORE, AND NOTHING ELSE (POS-350). `identities` (handle → hh:<slug> or
+// solo:<handle>), the pins (login → the house holding the account, else its
+// gh:<id>) and the declared houses (one key per house, every former slug bound
+// to it). The office's household readers ask the store: the store fold, the 1.0
+// apex's household (world-apex.mjs § worldHouseholds) and every reader of
+// `identities`. What still reads this file: the sweep and lane.yml (until
+// POS-365), the rehydrate's walk (office#433 retires it) and law-ingest's
+// `roster` rows (the pre-064 snapshot fallback, POS-410). A store this tool cannot read is a refusal (exit 2):
+// the crossing then publishes nothing (settlement-auto.sh § REGISTRY EXPORT
+// TRIPPED), never a file from a printout.
 //
-// currentHouseholds, not householdKeys: the base is from-genesis truth, and a
-// household re-key rides the stamp ledger as a dated registry: line — reading
-// the bare base made a ledger-only re-key invisible to the parcel cap
-// (caught 2026-08-07, the cadaeic.space unification).
-//
-// logins: lowercased GitHub login → household key, from the pins, through the
-// same resolver (the PR lane's branch binding and the sweep's authorship wall).
-//
-// ONE KEY PER DECLARED HOUSE (§ oneKeyPerHouse, which carries the reasoning):
-// the ledger spells a house by who joined how, and the wall needs the house.
-//
-// THE STORE'S PINS AND HOUSES (POS-350): this export is the world file's
-// RENDERER, and the registry it renders is the store's (`households` /
-// `household_pins`), never the town clone's printouts. Nothing in the office
-// reads the world file as truth any more (the store fold and `identities` read
-// the registry); the sweep and lane.yml still do, until POS-337 E. A store this
-// tool cannot read is a refusal (exit 2): the crossing then publishes nothing
-// (settlement-auto.sh § REGISTRY EXPORT TRIPPED), never a file from a printout.
-// They go into the shared derivation as its `register`, so the snapshot's road
-// and this one stay one function.
+// The ledger's dated `registry:` re-keys (the cadaeic.space unification,
+// 2026-08-07) were why the ledger was the base. The switch was measured on
+// prod's own store on 2026-10-13: this derivation and the ledger's answered
+// byte-equal `households` and `logins` (POS-350, office#518).
 const { loadRegistry, loadPins } = await import("../src/registry-store.mjs");
-const [storeRegistry, storePins] = await Promise.all([loadRegistry(), loadPins()]).catch((e) => {
+const { actsQuery } = await import("../src/world2-acts.mjs");
+const { IDENTITIES_SQL } = await import("../src/world2-fold.mjs");
+const [storeRegistry, storePins, identities] = await Promise.all([loadRegistry(), loadPins(), actsQuery(IDENTITIES_SQL)]).catch((e) => {
   console.error(`world-households-export: the store's registry could not be read (${e?.message ?? e}) — nothing written`); process.exit(2);
 });
-if (storeRegistry === null || storePins === null) {
+if (storeRegistry === null || storePins === null || identities === null) {
   console.error("world-households-export: this office is not pointed at the store (WORLD2_PG=1 and WORLD2_PG_URL), so it cannot render the registry — nothing written");
   process.exit(2);
 }
-const one = worldHouseholdsAt(TOWN, { currentHouseholds }, { pins: storePins, declared: storeRegistry });
+const one = worldHouseholdsFromStore({ identities, pins: storePins, declared: storeRegistry });
 const households = one.households;
 const logins = one.logins;
 
@@ -130,7 +124,9 @@ for (const u of second.unnameable) {
 // hypothetical: this file sat at `2026-08-07T12:58Z` for thirty-three days while
 // three consumers read it as live, and the date alone could not say so.
 //
-// `town_sha` is the commit of the town clone this run actually read. Resolved
+// `town_sha` is the commit of the town clone the caller pointed this run at
+// (since POS-350 no value is read from it; the stamp stays, so the file's shape
+// does not move and the crossing's guard can still match its pinned town). Resolved
 // HERE, from $TOWN itself, and deliberately NOT accepted as a `--town-sha` flag:
 // a stamp a caller hands in can name a different tree from the one the values
 // came out of, and a stamp naming a source it did not come from is a confident
@@ -156,7 +152,7 @@ const town_sha = (() => {
 const out = {
   generated_at: new Date().toISOString(),
   town_sha,
-  source: "town pins (tools/github-ids.json) + ADDRESS logins, via the town's own resolver: postmark tools/stamp-mint.mjs householdKeys() — the ONE household vocabulary (ruling 9's lesson: never a second resolver); a handle a declared house lists (the store's registry, POS-350) is keyed hh:<that house>, and every spelling of the house resolves to it",
+  source: "the store's household registry (POS-350): identities (055, the office's one deriver over households + household_pins) for every handle, the pins' logins, and one key per declared house — every spelling of a house resolves to its hh:<slug>; no town checkout is read",
   note: "DERIVED registry, refreshed by postmark-office/tools/world-households-export.mjs. Handles absent here fold as their own household (solo:<handle>) — a new resident is never blocked by registry lag, only grouped once the pins know them. Consumed by marks-fold.mjs § parcel admissibility (the claim cap, ruled 2026-07-30); logins consumed by the PR lane (lane-wall, settlement-sweep authorship wall).",
   logins_note: "logins is NOT only GitHub logins. It is the map the authorship wall reads a sketchbook's NAME through, and it binds every household key this registry holds: a pinned handle under its pin's login, and any other key (hh:<house>, solo:<handle>) under the sketchbook name that key carries — the part after its colon. Before 2026-09-09 only gh:/login: keys were bound, so a household of any other shape was invisible to the wall, and invisible SILENTLY: the sweep leaves a branch it cannot bind alone rather than refusing it, so those marks published with their authorship unchecked. A key this file does not bind is a key the export could not name honestly, and it says so on stderr when it happens.",
   households,

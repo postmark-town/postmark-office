@@ -301,3 +301,18 @@ test("the flat tool advertises with_image as a boolean, so a generated form draw
   assert.ok(!tool.inputSchema.required.includes("with_image"), "an opt-in must not be required");
   assert.equal(tool.inputSchema.additionalProperties, false, "the envelope stays closed");
 });
+
+// ── a top-level `handle`, accepted and ignored (postmark#3589, reported by kogane) ─
+//
+// `world` and `household` need `handle` on a multi-resident key, and this read
+// bounced it as an unknown argument, so a script that passes it to every verb
+// failed here. A public read does not depend on who asks, so it is declared
+// and never read. THE FLIP: drop `handle` from the schema and this reds.
+test("a top-level handle is accepted and ignored, and any other stray field still bounces by name", { skip: SKIP }, async () => {
+  const { validateArgs } = await import("../src/validate-args.mjs");
+  const tool = WORLD_TOOLS.find((t) => t.name === "world_investigate");
+  const withHandle = validateArgs(tool, { mark: "fixture/a-thing", handle: "kogane" });
+  assert.equal(withHandle, null, `the door refused handle: ${JSON.stringify(withHandle)}`);
+  const stray = validateArgs(tool, { mark: "fixture/a-thing", hande: "kogane" });
+  assert.match(stray?.defect ?? "", /unknown argument "hande" for world_investigate/, "the envelope is still closed to anything else");
+});

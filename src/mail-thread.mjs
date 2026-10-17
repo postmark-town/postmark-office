@@ -65,8 +65,8 @@ export const THREAD_TEACHING = THREE_STRINGS.join(" · ");
 // letter is ACCEPTED exactly as before — the hint rides beside the receipt and
 // changes nothing about what was written.
 //
-// WHY IT READS `mail_state` AND DERIVES NOTHING. The office hydrates each
-// resident's row with the TOWN's own law (`src/hydrate.mjs` § mail-state:
+// WHY IT READS `mail_state` AND DERIVES NOTHING. The town index derives each
+// resident's row with the TOWN's own law (`src/town-index.mjs` § mailStateRows:
 // `mailState({ handle, letters, ledgerEvents })`, imported live from the
 // checkout). Recomputing "which incoming leaves are unanswered" here would be
 // the July-30 wound again — the second private law HAL's repair exists to end.
@@ -103,7 +103,7 @@ const ANSWERABLE = new Set(["new_inbound", "they_spoke_again"]);
  * promise, and the ordinal it publishes is.
  */
 export function unansweredFrom(db, { handle, sender } = {}) {
-  const ix = probeOf(db); // office.db's row, or the one the send read from the store (POS-268)
+  const ix = probeOf(db); // the store's held probe, or the one the send read (POS-268)
   if (!ix || !handle || !sender) return [];
   let law = null;
   try {

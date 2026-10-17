@@ -116,6 +116,14 @@ export const LANDED = {
   "072_snapshot_stances.sql":      { probe: `${col("world_snapshots", "stances")}` },
   // 073 (POS-570): a berth's parked answer, and the definer function that lands it in arrival_heard.
   "073_berth_heard.sql":           { probe: `${rel("berth_heard")} AND EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'berth_heard_land' AND prosecdef)` },
+  // 074 (WLD-5, POS-618): a walk's enter-on-arrival, queued until the walker arrives and settled once by the tick.
+  "074_arrival_entries.sql":       { probe: `${rel("arrival_entries")} AND ${trig("arrival_entries_settle_once")}` },
+  // 075 (POS-612): which settlement carried each door amend; the receipt's `last_amended`.
+  "075_amend_carried.sql":         { probe: rel("amend_carried") },
+  // 076 (WLD-51): why a mark left (the note), and the clearing's insert policy admitting a returned draft.
+  "076_taken_to_drafts.sql":       { probe: `${col("marks", "retired_cause")} AND ${policy("claims_insert_clearing", " AND with_check LIKE '%draft%'")}` },
+  // 077 (POS-579): arrival_heard_weekly searches the caller's pg_temp last.
+  "077_definer_pg_temp_last.sql":  { probe: "EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'arrival_heard_weekly' AND prosecdef AND proconfig @> ARRAY['search_path=public, pg_temp'])" },
 };
 
 /** The schema files in the order a store takes them — name order, as the CI floor applies them. */

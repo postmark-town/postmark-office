@@ -276,7 +276,7 @@ export function worldStateFromMarkRows(rows = []) {
 // Everything else is a column or a `data` key of the row, spelled the way the
 // fold spells it.
 export const PUBLISHED_SOURCE = Object.freeze({
-  repo: "keeminlee/postmark-world",
+  repo: "postmark-town/postmark-world",
   path: "tools/marks-fold.mjs",
   where: "§ the published mark — the `marks:` map of fold()'s return",
   blob: "1c4a844d851facca8a4b8f90ab48744eb416ab26",

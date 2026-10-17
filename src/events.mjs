@@ -52,6 +52,10 @@ export const ACT_ADVANCE = "advance";
 // The bug's critter image, revealed at ship (POS-236): the post's whole reveal,
 // as the act left it, and nothing else.
 export const ACT_REVEAL = "reveal";
+// A bug stage re-credited to the resident whose work earned it (POS-649): the
+// stage, the old and new credit, the link and the note. It moves no stage and
+// changes no row; the act is the record, as an award's is.
+export const ACT_RECREDIT = "recredit";
 // A post's stored state is what its acts made it. An event's clock phases
 // (announced · doors-open · underway · ended) are `phaseAt`'s, never stored.
 export const STATE_ANNOUNCED = "announced";

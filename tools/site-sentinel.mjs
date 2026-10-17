@@ -49,6 +49,13 @@
 //    it needs comes from `git ls-remote`, which is the git wire protocol and
 //    spends no REST budget at all. (§11 adds one compare call per NEW sweep-
 //    and-tag pair, remembered in its state, so a few a day, never one a tick.)
+//    §13, the Linear handler, reads ONLY WITH THE TOKEN (POS-631, W4): one runs
+//    read per handler repo, six a tick, and one more repo read every tick for
+//    each repo whose workflow 404s (a caller not yet on its default branch, or
+//    a repo the token cannot see): 6 to 12 a tick, 36 to 72 an hour, against
+//    the token's 5,000. Plus a jobs and an annotations read once per NEW
+//    failed run, remembered in its state. Keyless, it spends nothing and its
+//    rows read UNKNOWN, so the two reads above keep the anonymous 60.
 //
 // 2. PROD DOES NOT BUILD FROM MAIN, so "deployed sha vs main tip" is not a
 //    staleness test — it is a permanent false alarm. deploy.yml's release lane
@@ -126,6 +133,19 @@
 //                 receipt; a blessing that cannot be verified an hour on is
 //                 STALE — past the hour, never silent. Tags over ls-remote; descent
 //                 by ONE remembered compare call per new (world, tag) pair.
+// 12. LAW PEN   — the law pen's state (/srv/world2-lab/state/ingest-law.json)
+//                 reads `ok` within 45 min. A law the parser would read
+//                 diminished is refused WHOLE (POS-619), which holds every law
+//                 update until the mark is fixed, so a refusal is DOWN with the
+//                 lint's sentence as its reason; a held pin (law-pin-held,
+//                 POS-628) is DOWN with the pin it stays at; any other failed run is DOWN;
+//                 none, unreadable or older than 45 min is STALE.
+// 13. LINEAR HANDLER — one row per repo that carries the Starforge Linear
+//                 handler's caller: its newest decisive run either succeeded,
+//                 or failed only on its `done line` (the PR author's to fix),
+//                 or it is DOWN, naming the repo, the run and the failed job's
+//                 annotation. No run yet is INFO; a repo the token cannot see
+//                 (postmark-telemetry is private) is UNKNOWN (POS-631).
 //
 // ── ONE ALARM ROUTE (POS-556) ───────────────────────────────────────────────
 //
@@ -214,7 +234,7 @@ export const CONFIG = {
   dailyServed: "https://postmark.town/daily/ferrys-daily.html",
   dailySource: "https://raw.githubusercontent.com/postmark-town/postmark/main/TOWN_BULLETIN/ferrys-daily.md",
 
-  siteRepo: { owner: "keeminlee", name: "postmark-site" },
+  siteRepo: { owner: "postmark-town", name: "postmark-site" },
   townRepo: { owner: "postmark-town", name: "postmark" },
   dailyPath: "TOWN_BULLETIN/ferrys-daily.md",
 
@@ -345,6 +365,30 @@ export const CONFIG = {
     unit: "postmark-settlement.timer",
     slotsUtc: SETTLEMENT_SLOTS_UTC,
     graceMs: SETTLEMENT_GRACE_MS,
+  },
+
+  // §12 — the law pen (POS-619). Its timer fires every 15 minutes and every fire
+  // writes the state, so 45 is three missed fires: the roll-call's own
+  // allowance for this unit (deploy/box-rollcall-manifest.json), carried over.
+  lawPen: {
+    key: "law_pen", label: "the law pen",
+    path: "/srv/world2-lab/state/ingest-law.json",
+    unit: "postmark-world2-law-ingest.timer",
+    staleAfterMs: 45 * MINUTE,
+  },
+
+  // §13 — the Linear handler (POS-631). Every repo that carries the caller,
+  // one row each (W1: alerts are per row, so one shared row would hide a second
+  // repo failing behind the first). postmark-telemetry is private: its row
+  // reads UNKNOWN until the token has Actions: read on it (and Checks: read, for
+  // the annotations a failed run's reason comes from).
+  linearHandler: {
+    keyPrefix: "linear_handler",
+    owner: "postmark-town",
+    repos: ["postmark-office", "postmark-site", "postmark-world", "postmark", "postmark-blueprints", "postmark-telemetry"],
+    workflowFile: "linear-handler.yml",
+    step: "linear",
+    perPage: 10,
   },
 
   requestTimeoutMs: 20_000,
@@ -992,6 +1036,145 @@ export function classifyMeeps({ raw = null, readError = null, nowMs, staleAfterM
   return { verdict: "STALE", reason: `the meeps record's status is ${JSON.stringify(rec.status ?? null)}, which this probe does not read — unread is never healthy`, detail };
 }
 
+// §12 — the law pen. PURE: `raw` is the state file's text, or null when there
+// is none (deploy/world2-ingest.sh writes /srv/world2-lab/state/ingest-law.json
+// at every fire, the idle ones included).
+//
+// WHY IT PAGES (POS-619, Wright 2026-10-14): law-ingest refuses a law the
+// parser would read diminished WHOLE, so one lossy class mark holds EVERY law
+// update until it is fixed (the heist's dial is a class mark). The roll-call
+// reads it as ALARM-failed, but only when somebody runs the roll-call; this
+// file is the one alarm route, so the held law is a probe here. The refusal
+// is the reason verbatim: the lint's own sentence names the mark and the fix.
+// Missing and unreadable are STALE, never UNKNOWN, as with the meeps.
+export function classifyLawPen({ raw = null, readError = null, nowMs, staleAfterMs = 45 * MINUTE, path = "the law pen's state" } = {}) {
+  if (raw == null) {
+    return { verdict: "STALE", reason: `there is no law pen state at ${path}${readError ? ` (${String(readError).slice(0, 80)})` : ""} — the law pen has not run, so nothing is carrying the world's law into the store` };
+  }
+  let st;
+  try { st = JSON.parse(raw); } catch (e) {
+    return { verdict: "STALE", reason: `the law pen state at ${path} does not parse (${String(e?.message ?? e).slice(0, 80)}) — unread is never healthy` };
+  }
+  const at = Date.parse(st?.at ?? "");
+  if (!Number.isFinite(at)) return { verdict: "STALE", reason: `the law pen state at ${path} carries no readable at — it cannot say when the law pen last ran` };
+  const age = nowMs - at;
+  const detail = { status: st.status ?? null, at: st.at, sha: st.law?.sha ?? null, exit: st.law?.exit ?? null };
+  if (age > staleAfterMs) {
+    return { verdict: "STALE", reason: `the law pen last wrote ${humanDuration(age)} ago (${st.at}; stale after ${humanDuration(staleAfterMs)}) — the store's law stops advancing and nothing says so`, detail };
+  }
+  if (st.status === "ok") return { verdict: "OK", reason: `ingested the law at ${String(st.law?.sha ?? "?").slice(0, 9)} (${st.at})`, detail };
+  if (typeof st.refusal === "string" && st.refusal.trim()) {
+    const [first, ...rest] = st.refusal.trim().split("\n");
+    const marks = rest.filter((l) => l.startsWith("  ")).map((l) => l.trim());
+    return { verdict: "DOWN", reason: `the law pen REFUSED the law, and every law update waits until the mark is fixed: ${first}${marks.length ? ` — ${marks.join(" · ")}` : ""}`, detail };
+  }
+  // A HELD PIN (POS-628/POS-635): the rows were written and the run exited 0,
+  // but the clearing's pin did not move, so every settlement seals the old law.
+  if (st.status === "law-pin-held") {
+    const pin = String(st.pin?.sha ?? "?").slice(0, 9);
+    const why = String(st.pin?.why ?? "").replace(/^\[law-ingest\] PIN HELD — /, "").trim();
+    return { verdict: "DOWN", reason: `the law pen HELD the clearing's pin at ${pin}, so every settlement seals that law until it moves${why ? `: ${why.slice(0, 240)}` : ""}`, detail: { ...detail, pin: st.pin?.sha ?? null } };
+  }
+  const tail = String(st.detail ?? "").trim().split("\n").slice(-1)[0] ?? "";
+  return { verdict: "DOWN", reason: `the law pen's last run reads ${JSON.stringify(st.status ?? null)}${st.law?.exit != null ? ` (exit ${st.law.exit})` : ""} — the store's law did not advance${tail ? `: ${tail.slice(0, 200)}` : ""}`, detail };
+}
+
+// ── §13 the Linear handler: did its last finished run act? ───────────────────
+//
+// The Starforge Linear handler (keeminlee/starforge-linear-handler) is the only
+// automatic mover of Linear states. Each caller repo runs it as
+// .github/workflows/linear-handler.yml on pull_request_target, and the job has
+// two steps of ours: `linear` (acts on Linear; it fails only when the handler
+// could not act) and `done line` (fails when the PR's done line needs fixing:
+// the author's to fix, never an alarm). If its runs fail, issues silently stop
+// moving, so a failure is a probe here (POS-631; the shape is Jetto's, 10-14).
+//
+// THE RULE (Wright, 10-14, G1): DOWN when the newest DECISIVE run did not
+// succeed and its `linear` step is not `success`. That counts a checkout that
+// failed first (linear skipped), a startup_failure (no jobs at all) and a
+// timeout: in each one the handler did not act. A `done line` failure after a
+// successful `linear` is OK, and says so.
+//
+// WHAT IT LEARNED FROM THE LIVE RUNS (10-14):
+//   - A `done line` failure makes the whole run's conclusion `failure`, so the
+//     conclusion alone cannot tell the steps apart. A run that SUCCEEDED does
+//     prove `linear` did (neither step is continue-on-error), so the jobs are
+//     read only for a run that did not succeed.
+//   - Cancellations are looked through (INDECISIVE, §5's law): the caller's
+//     concurrency group still cancels a superseded pending run, and a cancelled
+//     newest run must not hide the failure beneath it.
+//   - The job summary, where the handler writes why it failed, has no REST read
+//     (the check run's output.summary is null). The reason comes from the failed
+//     job's annotations instead, past GitHub's generic "Process completed with
+//     exit code N"; the run URL is always there.
+//   - 404 is two answers: the workflow has no run yet (its caller is not on the
+//     repo's default branch, which is where pull_request_target reads it), or
+//     the token cannot see a private repo (postmark-telemetry). One read of the
+//     repo itself tells them apart: the first is INFO, the second UNKNOWN.
+//
+// PURE: the caller reads GitHub, so every branch is falsifiable offline.
+
+/** GitHub's own line for a step that exited non-zero: true, and no reason. */
+const GENERIC_EXIT = /^Process completed with exit code \d+\.?$/;
+
+/**
+ * The reason's last clause: the first failure annotation that says more than
+ * the generic exit line, else the generic line, else a pointer to the summary.
+ */
+export function handlerFailureLine(annotations) {
+  const failures = (Array.isArray(annotations) ? annotations : []).filter((a) => a?.annotation_level === "failure");
+  const told = failures.find((a) => a?.message && !GENERIC_EXIT.test(firstLine(a.message)));
+  if (told) return firstLine(told.message).slice(0, 200);
+  const generic = failures.find((a) => a?.message);
+  return `${generic ? `${firstLine(generic.message).replace(/\.$/, "")}; ` : ""}the reason is in the job summary`;
+}
+
+/**
+ * One repo's row. Inputs, as the adapter read them:
+ *   haveToken   false: nothing was read (W4: keyless, this probe spends nothing).
+ *   readError   the runs read failed for a reason other than 404.
+ *   notFound    the runs read answered 404; `repoVisible` is then true (the repo
+ *               answered: no run yet), false (it 404'd too: the token cannot see
+ *               it) or null (that read failed).
+ *   runs        the workflow's newest completed runs, newest first.
+ *   jobs        the decisive run's jobs, or null when unread (only asked for a
+ *               run that did not succeed).
+ *   annotations the failed job's annotations, or null when unread.
+ */
+export function classifyLinearHandler({ repo, haveToken = true, readError = null, notFound = false, repoVisible = null, runs = [], jobs = null, annotations = null, step = "linear" } = {}) {
+  if (!haveToken) return { verdict: "UNKNOWN", reason: `no GitHub token, so ${repo}'s handler runs are unread: this probe reads only with the token, which leaves the keyless budget to the others` };
+  if (notFound) {
+    if (repoVisible === true) return { verdict: "INFO", reason: `no handler run in ${repo} yet: its caller is not on the default branch, or no PR event has come since it landed` };
+    if (repoVisible === false) return { verdict: "UNKNOWN", reason: `the sentinel's token cannot see ${repo} (404), so its handler runs are unread: the token needs Actions: read and Checks: read on it` };
+    return { verdict: "UNKNOWN", reason: `${repo}'s handler workflow answered 404, and the repo itself could not be read to say why` };
+  }
+  if (readError) return { verdict: "UNKNOWN", reason: `GitHub did not answer for ${repo}'s handler runs: ${firstLine(readError).slice(0, 160)}` };
+  const finished = (runs ?? []).filter((r) => r?.status === "completed");
+  const run = finished.find((r) => !INDECISIVE.has(r?.conclusion));
+  if (!run) {
+    return finished.length
+      ? { verdict: "UNKNOWN", reason: `every recent handler run in ${repo} was cancelled or skipped, so nothing has been decided` }
+      : { verdict: "INFO", reason: `no finished handler run in ${repo} yet` };
+  }
+  const detail = { repo, run_id: run.id ?? null, attempt: run.run_attempt ?? 1, conclusion: run.conclusion, url: run.html_url ?? null };
+  const url = run.html_url ?? `${repo}'s Actions tab`;
+  if (run.conclusion === "success") return { verdict: "OK", reason: `the last finished run succeeded (${run.created_at})`, detail };
+  if (jobs == null) return { verdict: "UNKNOWN", reason: `the last finished run in ${repo} was "${run.conclusion}" and its jobs could not be read, so which step failed is unknown — ${url}`, detail };
+  const steps = (jobs ?? []).flatMap((j) => j?.steps ?? []);
+  const ours = steps.find((s) => s?.name === step);
+  if (ours?.conclusion === "success") {
+    return { verdict: "OK", reason: `the last finished run failed on its done line, which is the PR author's to fix and never an alarm (${run.created_at}) — ${url}`, detail: { ...detail, step: "success" } };
+  }
+  const what = !ours ? "never ran" : ours.conclusion === "skipped" ? "was skipped (a step before it failed)" : `was "${ours.conclusion ?? ours.status}"`;
+  // No jobs at all (a startup_failure): there is no job summary to point at (review N2).
+  const why = (jobs ?? []).length ? `its ${step} step ${what}: ${handlerFailureLine(annotations)}` : "the run never started a job";
+  return {
+    verdict: "DOWN",
+    reason: `the handler could not act in ${repo}: the last finished run was "${run.conclusion}" and ${why} — ${url}`,
+    detail: { ...detail, step: ours?.conclusion ?? null },
+  };
+}
+
 // ── §11 the settlement: the sweep and its blessing ──────────────────────────
 //
 // THE RULING (Darko, 2026-10-11): "If the settlement that we expect has not
@@ -1471,7 +1654,8 @@ export async function ghJson(path, { fetchImpl = fetch, token = null } = {}) {
   };
   if (token) headers.authorization = `Bearer ${token}`;
   const res = await fetchImpl(`https://api.github.com${path}`, { headers, signal: AbortSignal.timeout(CONFIG.requestTimeoutMs) });
-  if (!res.ok) throw new Error(`GET ${path} -> HTTP ${res.status}`);
+  // The status rides on the error: §13 reads a 404 as an answer, not a failure.
+  if (!res.ok) throw Object.assign(new Error(`GET ${path} -> HTTP ${res.status}`), { status: res.status });
   return res.json();
 }
 
@@ -1710,6 +1894,14 @@ export async function tick({
     probes.push({ key: config.meeps.key, label: config.meeps.label, kind: "meeps", verdict: mp.verdict, reason: mp.reason, ...(mp.detail ? { detail: mp.detail } : {}) });
   }
 
+  // §12 — the law pen. A local read of the state its unit writes.
+  if (config.lawPen) {
+    let raw = null, readError = null;
+    try { raw = readFileSync(config.lawPen.path, "utf8"); } catch (e) { readError = e?.code ?? e?.message ?? String(e); }
+    const lp = classifyLawPen({ raw, readError, nowMs, staleAfterMs: config.lawPen.staleAfterMs, path: config.lawPen.path });
+    probes.push({ key: config.lawPen.key, label: config.lawPen.label, kind: "law_pen", verdict: lp.verdict, reason: lp.reason, ...(lp.detail ? { detail: lp.detail } : {}) });
+  }
+
   // §11 — the settlement. A local read of the sweep's receipt, the world's tags
   // over ls-remote (no REST budget), and AT MOST ONE compare call per new
   // (world, tag) pair: whether a commit descends from another never changes,
@@ -1757,6 +1949,71 @@ export async function tick({
     }
     const se = classifySettlement({ receipt, readError, newestTag, covered, held, nowMs, writtenAtMs, tagError, coverError, graceMs: st.graceMs, slotsUtc: st.slotsUtc, path: st.receipt });
     probes.push({ key: st.key, label: st.label, kind: "settlement", verdict: se.verdict, reason: se.reason, ...(se.detail ? { detail: se.detail } : {}) });
+  }
+
+  // §13 — the Linear handler, one row per repo. With a token only (W4): one
+  // runs read per repo a tick, and the jobs and annotations of a run that did
+  // not succeed are read ONCE per (run, attempt) and remembered in
+  // `stamps.linear_handler`, because a finished attempt never changes. A re-run
+  // is a new attempt, so it is read again.
+  if (config.linearHandler) {
+    const lh = config.linearHandler;
+    const memo = stamps.linear_handler ?? {};
+    const nextMemo = {};
+    for (const repo of lh.repos) {
+      const key = `${lh.keyPrefix}_${slug(repo)}`;
+      const label = `the Linear handler in ${repo}`;
+      const base = `/repos/${lh.owner}/${repo}`;
+      let row;
+      if (!token) {
+        row = classifyLinearHandler({ repo, haveToken: false });
+      } else {
+        let runs = [], readError = null, notFound = false, repoVisible = null;
+        try {
+          runs = (await ghJson(`${base}/actions/workflows/${lh.workflowFile}/runs?status=completed&per_page=${lh.perPage}`, { fetchImpl, token }))?.workflow_runs ?? [];
+        } catch (e) {
+          if (e.status === 404) {
+            notFound = true;
+            try { await ghJson(base, { fetchImpl, token }); repoVisible = true; }
+            catch (e2) { repoVisible = e2.status === 404 ? false : null; }
+          } else readError = e.message;
+        }
+        // One GitHub blip must not cost a re-read: the memory outlives an unread tick (review N1).
+        if (readError && memo[repo]) nextMemo[repo] = memo[repo];
+        const run = notFound || readError ? null : runs.find((r) => r?.status === "completed" && !INDECISIVE.has(r?.conclusion));
+        const seen = memo[repo];
+        if (run && run.conclusion !== "success" && seen && seen.run_id === run.id && seen.attempt === (run.run_attempt ?? 1)) {
+          row = { verdict: seen.verdict, reason: seen.reason, detail: seen.detail };
+          nextMemo[repo] = seen;
+        } else {
+          let jobs = null, annotations = null, annotationsRefused = false;
+          if (run && run.conclusion !== "success") {
+            try { jobs = (await ghJson(`${base}/actions/runs/${run.id}/jobs`, { fetchImpl, token }))?.jobs ?? []; }
+            catch (e) { notes.push(`${repo} handler jobs unread: ${e.message}`); }
+            const failed = (jobs ?? []).find((j) => (j?.steps ?? []).some((s) => s?.name === lh.step) && j.conclusion !== "success") ?? (jobs ?? [])[0];
+            const ok = (failed?.steps ?? []).find((s) => s?.name === lh.step)?.conclusion === "success";
+            if (failed?.id != null && !ok) {
+              try { annotations = await ghJson(`${base}/check-runs/${failed.id}/annotations`, { fetchImpl, token }); }
+              catch (e) {
+                notes.push(`${repo} handler annotations unread: ${e.message}`);
+                // A 4xx is the token's answer (no Checks: read), and it will not change by asking again.
+                annotationsRefused = e.status >= 400 && e.status < 500;
+              }
+            }
+            row = classifyLinearHandler({ repo, runs, jobs, annotations, step: lh.step });
+            // Remembered once both reads answered (a 4xx on the annotations counts as an answer), so
+            // only an unread one is asked again next tick.
+            if (jobs != null && (row.verdict !== "DOWN" || annotations != null || annotationsRefused || failed?.id == null)) {
+              nextMemo[repo] = { run_id: run.id, attempt: run.run_attempt ?? 1, verdict: row.verdict, reason: row.reason, detail: row.detail };
+            }
+          } else {
+            row = classifyLinearHandler({ repo, runs, readError, notFound, repoVisible, step: lh.step });
+          }
+        }
+      }
+      probes.push({ key, label, kind: "workflow", verdict: row.verdict, reason: row.reason, ...(row.detail ? { detail: row.detail } : {}) });
+    }
+    stamps.linear_handler = nextMemo;
   }
 
   // the edges
@@ -1841,9 +2098,9 @@ export async function run({
   const { webhook, status: alerting } = alertingStatus(env);
   if (!webhook) errLog("site-sentinel: LOUD DEGRADATION — SENTINEL_DISCORD_WEBHOOK is unset; probes ran, the board was written, and no alert could be delivered.");
 
-  // Optional. Both repos are public, so the watch works keyless at 60 REST/hour
-  // and merely spends less of the shared budget when the box's existing
-  // read-only token is present.
+  // Optional for §1–§12: both repos are public, so they work keyless at 60
+  // REST/hour and merely spend less of the shared budget with the box's
+  // existing read-only token. §13 (the Linear handler) reads only with it.
   let token = null;
   try { token = readFileSync(env.SENTINEL_GITHUB_TOKEN_FILE ?? "/srv/postmark-office/git-metrics-token", "utf8").trim() || null; } catch { token = null; }
 

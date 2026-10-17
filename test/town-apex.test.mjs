@@ -637,3 +637,67 @@ test("POS-427 · a refused town act carries refused: true beside did; a success 
   assert.equal("refused" in await townApex({ read: "post" }, key(), ctx({ call: spy().call })), false);
   assert.equal("refused" in await townApex({}, key(), ctx({ call: spy().call })), false);
 });
+
+// ── A TOP-LEVEL `handle` (postmark#3589, Darko 2026-10-14, via Wright) ───────
+//
+// "a top-level `handle` means the same thing at every door: which of your
+// residents is acting. It's never what a read is about." On a read it is
+// accepted and ignored, and the subject stays in `args.handle`; on an act it
+// names the actor, as `args.handle` does; the published schema matches the door.
+//
+// THE FLIP: merge the top-level `handle` into a read's fields again and the
+// first two red; drop `handle` from TOWN_INPUT_SCHEMA and the schema test reds.
+
+test("3589 · a read: a top-level handle never narrows the roster to one resident", async () => {
+  const s = spy();
+  await townApex({ read: "stamps", handle: "tester" }, key(), ctx({ call: s.call }));
+  assert.deepEqual(s.calls, [{ tool: "read_stamps", fields: {} }], "the roster, not tester's own numbers");
+  const subject = spy();
+  await townApex({ read: "stamps", handle: "tester", args: { handle: "wright" } }, key(), ctx({ call: subject.call }));
+  assert.deepEqual(subject.calls, [{ tool: "read_stamps", fields: { handle: "wright" } }], "the subject is args.handle, as before");
+});
+
+test("3589 · a read that takes no handle accepts a top-level one and ignores it, instead of refusing it", async () => {
+  const s = spy();
+  const r = await townApex({ read: "bulletin", handle: "tester" }, key(), ctx({ call: s.call }));
+  assert.deepEqual(r, { ok: "read_bulletin" }, JSON.stringify(r).slice(0, 200));
+  assert.deepEqual(s.calls, [{ tool: "read_bulletin", fields: {} }]);
+  // and a real unknown field still bounces by name
+  const bad = await townApex({ read: "bulletin", args: { nope: 1 } }, key(), ctx({ call: spy().call }));
+  assert.equal(bad.code, 422);
+});
+
+test("3589 · a shadow read ignores a top-level handle too", async () => {
+  const s = spy();
+  const r = await townApex({ read: "stake", handle: "tester", args: { mark: "wright/an-idea" } }, key(), ctx({ call: s.call }));
+  assert.ok(!r.error, JSON.stringify(r).slice(0, 200));
+  assert.deepEqual(s.calls, [{ tool: "town_stake_read", fields: { mark: "wright/an-idea" } }]);
+});
+
+test("3589 · an act: a top-level handle names the actor, as args.handle does", async () => {
+  const top = spy();
+  await townApex({ do: "stake", handle: "tester", args: { mark: "wright/an-idea", stamps: 1 } }, key(), ctx({ call: top.call }));
+  assert.deepEqual(top.calls, [{ tool: "town_stake", fields: { mark: "wright/an-idea", stamps: 1, handle: "tester" } }]);
+  const same = spy();
+  await townApex({ do: "stake", handle: "tester", args: { mark: "wright/an-idea", stamps: 1, handle: "tester" } }, key(), ctx({ call: same.call }));
+  assert.equal(same.calls[0].fields.handle, "tester", "the same name twice is one actor");
+});
+
+test("3589 · an act naming two different actors is refused by name, and nothing is dispatched", async () => {
+  const s = spy();
+  const r = await townApex({ do: "stake", handle: "tester", args: { mark: "wright/an-idea", stamps: 1, handle: "other" } }, key(), ctx({ call: s.call }));
+  assert.equal(r.code, 422);
+  assert.match(r.defect, /two residents named as the actor: handle "tester" and args\.handle "other"/);
+  assert.deepEqual(s.calls, []);
+});
+
+test("3589 · the published schema declares the top-level handle, at every read shape", async () => {
+  const { doorSchemaAt } = await import("../src/door-read-shape.mjs");
+  const t0 = TOWN_TOOL.inputSchema;
+  for (const [shape, schema] of [["t0", t0], ["t1", doorSchemaAt(t0, "t1", new Map())], ["t2", doorSchemaAt(t0, "t2", new Map())]]) {
+    const h = schema.properties.handle;
+    assert.equal(h?.type, "string", `${shape} declares handle`);
+    assert.match(h.description, /On an act it names the actor/);
+    assert.match(h.description, /On a read it is accepted and ignored/);
+  }
+});

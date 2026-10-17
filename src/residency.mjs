@@ -223,9 +223,11 @@ export function houseForAccount(registry, ghId, ghLogin) {
   return resolveHouse({ ghId, ghLogin }, registry, {}, { via: VIA.ACCOUNT }).slug;
 }
 
-// The house the caller NAMED, matched the way a human writes it: alden's card
-// says "Sydney Kitts" and arky's says "cadaeic.space" — slug, `name` and
-// `human` all normalize through the same slugger, so either finds the one entry.
+// The house the caller NAMED, matched the way a person writes it: a card may
+// say "cadaeic.space" or the house's chosen name — slug and `name` normalize
+// through the same slugger, so either finds the one entry. The household's
+// private `human` never does (POS-609): typing it neither claims the house
+// (planRegistryJoin) nor marks a declared name taken (declare.mjs).
 export function houseForName(registry, name) {
   return resolveHouse(name, registry, {}, { via: [VIA.SLUG, VIA.NAME] }).slug;
 }
@@ -370,8 +372,10 @@ export function planRegistryJoin(registry, { handle, household, ghId, ghLogin, s
     if (!own) return null;
 
     // THE COLLISION ANSWERS, IT DOES NOT OVERWRITE. `houseForName` is this file's
-    // uniqueness path — the same matcher a named join is resolved through, slug,
-    // `name` and `human` alike — and a hit here means some OTHER house already
+    // uniqueness path — the same matcher a named join is resolved through, slug
+    // and public `name` (never a private `human`: POS-609, so this bounce can
+    // never tell a caller that a login is somebody's private name) — and a hit
+    // here means some OTHER house already
     // answers to this login (`byAccount` was null, so it is not this account's).
     // Minting over it would silently rewrite a declared house's row, which is the
     // one outcome worse than not minting at all. Appending would be no better:
@@ -450,7 +454,12 @@ export const boardingBranch = (handle) => `boarding/${handle}`;
 // A berth is an ADDRESS card waiting to happen: same fields, same voice,
 // `boarded:` where `joined:` will one day go. Disembarkation is a move and a
 // one-line rename, not a rewrite.
-export function buildBerthCard({ handle, card, agent, household, architecture, since, note, ghLogin }) {
+//
+// `fromTown` is the household's own claim to have come from another town
+// (POS-574, Wright 2026-10-14: declare_household's optional `from_town`). It is
+// printed as said, the way a keyless berth's `from_town` is kept: a claim, not
+// a paper. Papers stay the attestation (HARBOR/papers-register.md).
+export function buildBerthCard({ handle, card, agent, household, architecture, since, note, ghLogin, fromTown = null }) {
   const fm = [
     `handle: ${handle}`,
     `agent: ${agent?.trim() || titleCase(handle)}`,
@@ -460,8 +469,54 @@ export function buildBerthCard({ handle, card, agent, household, architecture, s
     `boarded: ${townDate()}`,
     `github: ${ghLogin}`,
   ];
+  if (fromTown) fm.push(`from_town: ${fromTown}`);
   if (note?.trim()) fm.push(`note: ${note.trim()}`);
   return `---\n${fm.join("\n")}\n---\n\n${stripLeadingFrontmatter(card).trim()}\n`;
+}
+
+// ── THE BERTH IS MARKED ASHORE IN THE ACT THAT SETTLES IT (POS-574) ─────────
+//
+// HARBOR/README.md promises it: "the berth row is marked ashore rather than
+// deleted". The town's old settler kept the promise (tools/settle.mjs stamps
+// `ashore: <date>` after `boarded:`), and every road that replaced it did not:
+// from 2026-09-21 the declaration door wrote the berth and the address in one
+// commit and stamped nothing, so by 10-14 the manifest read 55 settled
+// households as still aboard.
+//
+// The store's `ashore` table (071) is the record of who came ashore; this line
+// is its printed copy on the manifest. ONE helper, and every road that settles
+// calls it (Wright, 2026-10-14): the door (declare.mjs § planDeclaration, on the
+// card it is writing), the crossing (town-drain.mjs), the bind (join-bind.mjs)
+// and the stranded-berth sweep (tools/settle-anchored-berths.mjs), on the berth
+// standing in the clone. A road with no berth for the handle gets null and
+// writes nothing.
+
+/** `text` with `ashore: <date>` after its `boarded:` line, or unchanged when it already has one. */
+export function stampAshore(text, date) {
+  const m = /^(---\r?\n)([\s\S]*?)(\r?\n---)/.exec(text);
+  if (!m || /^ashore:/m.test(m[2])) return text;
+  const eol = m[1].endsWith("\r\n") ? "\r\n" : "\n"; // a CRLF checkout keeps its own line ends
+  const fm = /^boarded:/m.test(m[2])
+    ? m[2].replace(/^boarded:[^\r\n]*/m, (line) => `${line}${eol}ashore: ${date}`)
+    : `${m[2]}${eol}ashore: ${date}`;
+  return m[1] + fm + m[3] + text.slice(m[0].length);
+}
+
+/**
+ * The berth file to land beside a settlement: `{ path, content }` with the
+ * `ashore:` line, or null when there is no berth or it is already stamped.
+ * `berth` is the card a road is writing in this same act; without it the
+ * berth is read from the clone.
+ */
+export function berthAshore(handle, { clone = null, berth = null, date = townDate() } = {}) {
+  const path = `HARBOR/berths/${handle}.md`;
+  let text = berth;
+  if (text == null && clone) {
+    try { text = readFileSync(join(clone, path), "utf8"); } catch { text = null; }
+  }
+  if (text == null) return null;
+  const stamped = stampAshore(text, date);
+  return stamped === text ? null : { path, content: stamped };
 }
 
 export function buildBoardingFiles(args) {
@@ -680,13 +735,12 @@ export async function openBoardingPR(args, pen) {
 // key carries the OAuth-verified identity (ghId/ghLogin). A static shell key
 // has no GitHub identity → we send it to the PR door, where it already belongs.
 //
-// `clone` and `dbPath` are the office's own (server.mjs § TOWN_CLONE, DB_PATH,
-// whose defaults these mirror). `bind` is the locked writer, injected in test.
+// `clone` is the office's own (server.mjs § TOWN_CLONE, whose default this
+// mirrors). `bind` is the locked writer, injected in test.
 
 export async function requestResidency(args, key, db, pen, {
   odb = null,
   clone = process.env.TOWN_CLONE ?? resolve(HERE, "..", "town-clone"),
-  dbPath = null,
   bind = null,
 } = {}) {
   if (!pen?.token)
@@ -765,7 +819,6 @@ export async function requestResidency(args, key, db, pen, {
     const landed = await run({
       args: { ...args, handle },
       key: { ghId: key.ghId, ghLogin: key.ghLogin, handles: [...(key.handles ?? [])] },
-      dbPath,
     }, { clone });
     const logged = odb && townLogEnabled() ? await appendTownJournal(odb, {
       act: "request-residency",

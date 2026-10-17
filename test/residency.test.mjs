@@ -13,12 +13,11 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown, put, setMeta } from "./fixture.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
 import { indexStore, seedRegistry } from "./helpers/office-under-test.mjs";
 import { serializeRegistry, slugFromName, houseForAccount, houseForName, planRegistryJoin } from "../src/residency.mjs";
 import { BIND_REFUSALS } from "../src/join-bind.mjs";
-import { BOUNCER_LIMITS } from "../src/bouncer.mjs";
 import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 import { tempDir } from "./helpers/temp-dir.mjs";
 
@@ -84,10 +83,10 @@ let child, tmp, ghServer, clone, IX, bare, BARE;
 
 const readBody = (req) => new Promise((r) => { let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => r(b)); });
 
+let town; // the fixture town the office's store is seeded from (§ settleResident)
 before(async () => {
   tmp = tempDir("postmark-office-residency-");
-  const dbPath = join(tmp, "fixture.db");
-  fixtureDb(dbPath).close();
+  town = fixtureTown();
 
   // a git-backed town clone: the pins file the mapping reads + a real repo so
   // the post-merge send can commit through the write spine
@@ -103,7 +102,7 @@ before(async () => {
   // SIGN-IN READS THE STORE'S PINS (POS-343), and refuses when it cannot, so
   // this office is pointed at a store holding the same pin. The same store
   // holds the gangway rows the frozen section writes (POS-353).
-  IX = await indexStore(dbPath);
+  IX = await indexStore(town);
   await seedRegistry(IX.store, null, { wright: { login: "keeminlee", id: 999, pinned: "2026-07-05" } });
 
   // one mock GitHub: OAuth login/user AND the pen's repo API
@@ -163,7 +162,7 @@ before(async () => {
   GH_PORT = ghServer.address().port;
 
   const spawnOffice = (oauthDb, extra) => bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port),
-    "--db", dbPath, "--oauth-db", seedStaticKeys(join(tmp, oauthDb), "statickey=keemin:wright")], {
+    "--oauth-db", seedStaticKeys(join(tmp, oauthDb), "statickey=keemin:wright")], {
     env: {
       ...process.env, WORLD_GRAPH_NONE: "1",
       ...extra,
@@ -180,12 +179,11 @@ before(async () => {
     },
     stdio: ["ignore", "pipe", "pipe"],
   }));
-  // The record's keys and the switch: the town index is the store seeded from
-  // this suite's fixture office.db (POS-268), and a test that writes a resident
-  // into the fixture copies it to the store and moves the store's as-of, as an
-  // ingest would (§ settleResident). The office polls its index every 200 ms
-  // here, so the new row is read at once. OFFICE_TEST_INDEX=office keeps
-  // the old way: no switch, the fixture office.db read live. One read worker:
+  // The record's keys: the town index is the store seeded from this suite's
+  // fixture town (POS-268), and a test that writes a resident into the fixture
+  // copies it to the store and moves the store's as-of, as an ingest would
+  // (§ settleResident). The office polls its index every 200 ms here, so the
+  // new row is read at once. One read worker:
   // switched, every worker keeps a pen pool of its own and polls the store, and
   // at cores − 1 workers one office held ~45 of the test server's 100
   // connections (measured 2026-10-07), so a second office met "remaining
@@ -404,14 +402,14 @@ test("registry blob round-trips byte for byte — a join diff is only what chang
   assert.doesNotMatch(original, /\r/, "the pen writes blobs, and the town's blob is LF");
 });
 
-test("slug + lookup: a house answers to its slug, its name, and its human", () => {
+test("slug + lookup: a house answers to its slug and its name, never its private human (POS-609)", () => {
   const reg = REGISTRY();
   assert.equal(slugFromName("The Trueing House"), "the-trueing-house");
   assert.equal(slugFromName("cadaeic.space"), "cadaeic.space", "a chosen domain is already a name");
   assert.equal(slugFromName("  Liz's  Rookery! "), "lizs-rookery");
   assert.equal(houseForName(reg, "The Trueing House"), "the-trueing-house");
   assert.equal(houseForName(reg, "the-trueing-house"), "the-trueing-house");
-  assert.equal(houseForName(reg, "Keemin"), "the-trueing-house", "the human's name finds the house too");
+  assert.equal(houseForName(reg, reg.households["the-trueing-house"].human), null, "the private human finds no house (POS-609)");
   assert.equal(houseForName(reg, "nobody's house"), null);
   assert.equal(houseForAccount(reg, 999, "keeminlee"), "the-trueing-house");
   assert.equal(houseForAccount(reg, 424242, "some-stranger"), null);
@@ -602,55 +600,56 @@ test("after merge, the same token resolves to the new household with no re-auth"
   // 2026-08-16 ruling) — this test is about token re-resolution for a fully
   // SETTLED resident, so the simulation must settle them.
   // (the pin lands in the store, the record sign-in reads — POS-343)
+  // THE OFFICE SAYS WHEN IT HAS READ THE MERGE (POS-639). It reads the resident
+  // ashore only once its index poll has run, and every wait this test tried was
+  // a clock: a 1 s sleep (red on CI, #453), then sends retried for 20 s (red on
+  // CI under load, office#558, #561, #566). Two things made the poll late or
+  // never: the reseed wrote the new as-of before the new resident, so an office
+  // polling mid-copy held that half index for good (office-under-test.mjs §
+  // seed, now one transaction), and an older store read could land after a
+  // newer one (server.mjs § ONE STORE READ IN FLIGHT). Now the test listens for
+  // the office's own line, "index reloaded — as-of <the merge's>", and sends
+  // ONCE. No clock decides it: a line that never comes is the test's timeout,
+  // and an office that resolves the token at sign-in still answers 403 here.
+  const reloaded = officeSays(/\[office\] index reloaded — as-of fixture-with/);
   await seedRegistry(IX.store, null, {
     wright: { login: "keeminlee", id: 999, pinned: "2026-07-05" },
     arrival: { login: "some-stranger", id: 424242, pinned: "2026-07-08" },
   });
   await settleResident("arrival", { handle: "arrival", github: "some-stranger" });
+  await reloaded;
 
   // the SAME token now resolves to the new household — the send is accepted.
-  // The office reads the resident ashore only once its index poll has run, and a
-  // loaded runner can take longer than any fixed wait (a 1 s sleep went red on
-  // CI, #453; with no wait it is red here too). So the send is retried while,
-  // and only while, the answer is the harbor gate's refusal, which writes
-  // nothing; any other answer is the verdict at once.
-  //
-  // EVERY REFUSED SEND SPENDS A WRITE TOKEN (POS-491). At one send per 200 ms
-  // the loop spent the key's write bucket (40 a minute, burst 40) in about 8 s,
-  // and a runner whose index poll took longer got 429 where 202 was expected:
-  // 2 of 186 CI runs (38013898241 and office#484's first, 38109734885). The
-  // sends are spaced at the bucket's own refill rate, so this loop can never
-  // outrun it, however long the office takes.
-  const SEND_SPACING_MS = Math.ceil(60_000 / BOUNCER_LIMITS.key.writePerMinute);
-  const send = () => fetch(`${BASE}/letters`, {
+  const after = await fetch(`${BASE}/letters`, {
     method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
     body: JSON.stringify({ from: "arrival", to: "wright", title: "first hello", thread: "new", body: "hi" }),
   });
-  let after = await send();
-  for (const deadline = Date.now() + 20_000; after.status === 403 && Date.now() < deadline;) {
-    const refusal = await after.json();
-    assert.equal(refusal.defect, "the harbor is read + ephemeral", `only the harbor gate may be waited out: ${JSON.stringify(refusal)}`);
-    await new Promise((ok) => setTimeout(ok, SEND_SPACING_MS));
-    after = await send();
-  }
   assert.equal(after.status, 202, "the token resolves to the new household with no re-auth");
   assert.ok((await after.json()).letter_id);
 });
 
 /**
+ * Resolves on the first line the office under test writes to stdout that
+ * matches `re`, from now on (the listener is attached before the act it
+ * waits on, so the line cannot pass unseen).
+ */
+function officeSays(re) {
+  return new Promise((ok) => {
+    let seen = "";
+    const hear = (d) => { seen += d; if (re.test(seen)) { child.stdout.off("data", hear); ok(); } };
+    child.stdout.on("data", hear);
+  });
+}
+
+/**
  * A resident lands in the town index, as a join merge lands their ADDRESS: in
- * the fixture office.db, and (switched) in the store the office reads, at a new
- * as-of so the office's held roll and probe read it again. Resolves once the
+ * the fixture town, and in the store the office reads, at a new as-of so the office's held roll and probe read it again. Resolves once the
  * store holds the row; when the office reads it is its poll's business, so the
  * caller waits on the office's own answer, never on a clock.
  */
 async function settleResident(handle, card) {
-  const { DatabaseSync } = await import("node:sqlite");
-  const idx = new DatabaseSync(join(tmp, "fixture.db"));
-  idx.prepare("INSERT OR REPLACE INTO residents (handle, json) VALUES (?, ?)").run(handle, JSON.stringify(card));
-  idx.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('as_of', ?)").run(`fixture-with-${handle}`);
-  idx.close();
-  if (!IX.env.TOWN_INDEX_READS) return;
+  put(town, "residents", { handle, json: JSON.stringify(card) });
+  setMeta(town, "as_of", `fixture-with-${handle}`);
   await IX.reseed();
 }
 

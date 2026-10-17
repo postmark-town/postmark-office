@@ -24,8 +24,7 @@ import { writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
-import { DatabaseSync } from "node:sqlite";
-import { indexSwitched, UNREACHABLE_DEFECT, UNREACHABLE_HINT } from "./index-probe.mjs";
+import { UNREACHABLE_DEFECT, UNREACHABLE_HINT } from "./index-probe.mjs";
 import { penCommit, penTransaction, landOrRefuse } from "./write.mjs";
 import { conformance, planDeclaration, readRegisters, LANDING_GROUND } from "./declare.mjs";
 import { gangwayState } from "./residency.mjs";
@@ -33,6 +32,7 @@ import { mintHousehold, joinHousehold, collectingDrain, NO_DRAIN } from "./cerem
 import { planHouseKey, appendHouseKey, registryWith } from "./house-key.mjs";
 import { heardAnswer, recordHeard, heardReceipt } from "./arrival-heard.mjs";
 import { recordAshore } from "./ashore.mjs";
+import { faultLogged, isHttpStatus } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLONE = process.env.TOWN_CLONE ?? resolve(HERE, "..", "town-clone");
@@ -41,8 +41,18 @@ const answer = (obj) => { console.log(JSON.stringify(obj)); process.exit(0); };
 const refusal = (code, field, defect, hint) => ({ error: { code, field, defect, hint } });
 const err = (code, field, defect, hint) => answer(refusal(code, field, defect, hint));
 
+// THE MINT'S CATCH (POS-578; the review of #525). A refusal (an HTTP status)
+// speaks its own words. Anything else is the office's own fault, whatever it
+// carries: pg's SQLSTATE, or no code at all (a TypeError, pg's "Connection
+// terminated unexpectedly"). Its message goes to this child's stderr, which
+// is the office's log, and never to the defect.
+function mintRefusal(e) {
+  if (!isHttpStatus(e?.code)) return refusal(500, null, "the declaration pass tripped", faultLogged("the declaration pass tripped", e));
+  return refusal(e.code, e.field ?? null, e.defect ?? String(e?.message ?? e), e.hint ?? null);
+}
+
 async function main() {
-  const { args, key, dbPath, heardFrom = null } = JSON.parse(process.argv[2] ?? "{}");
+  const { args, key, heardFrom = null } = JSON.parse(process.argv[2] ?? "{}");
 
   if (!existsSync(CLONE))
     return err(409, null, "not-yet-open", "the office has no town clone to declare into");
@@ -57,14 +67,11 @@ async function main() {
     if (process.env.TOWN_PUSH === "1")
       execFileSync("git", ["-C", CLONE, "pull", "--rebase", "-q"], { encoding: "utf8" });
 
-    // THE INDEX, UNDER THE LOCK (POS-268): with TOWN_INDEX_READS=store the handle
-    // check reads the store's residents, loaded now, and never office.db; a store
-    // that cannot answer refuses the declaration (503) before anything is written.
-    let db = null;
-    if (indexSwitched()) {
-      const { refreshStoreProbe } = await import("./town-index-store.mjs");
-      if (!(await refreshStoreProbe({ letters: false, logins: false }))) return refusal(503, null, UNREACHABLE_DEFECT, UNREACHABLE_HINT);
-    } else db = new DatabaseSync(dbPath ?? process.env.OFFICE_DB ?? resolve(HERE, "..", "office.db"), { readOnly: true });
+    // THE INDEX, UNDER THE LOCK (POS-268): the handle check reads the store's
+    // residents, loaded now; a store that cannot answer refuses the declaration
+    // (503) before anything is written.
+    const { refreshStoreProbe } = await import("./town-index-store.mjs");
+    if (!(await refreshStoreProbe({ letters: false, logins: false }))) return refusal(503, null, UNREACHABLE_DEFECT, UNREACHABLE_HINT);
 
     // THE REGISTERS, FROM THE RECORD, UNDER THE LOCK (POS-158). These two lines
     // used to read the clone's JSON files with an `?? {}` fallback. The registry
@@ -85,7 +92,7 @@ async function main() {
     // whole list anyway rather than trusting the earlier pass.
     let decl;
     try {
-      decl = conformance(args, { db, registry, clone: CLONE, key });
+      decl = conformance(args, { registry, clone: CLONE, key });
     } catch (e) {
       return refusal(e.code ?? 422, e.field ?? null, e.defect, e.hint);
     }
@@ -179,7 +186,7 @@ async function main() {
       // everything landed; this says which half did.
       registryOutcome = joined.registry;
     } catch (e) {
-      return refusal(e.code ?? 500, e.field ?? null, e.defect ?? String(e?.message ?? e), e.hint ?? null);
+      return mintRefusal(e);
     }
     paths.push(...drainedPaths);
     const ledger = appendHouseKey(CLONE, keyed?.signed);

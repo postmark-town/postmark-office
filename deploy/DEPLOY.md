@@ -330,10 +330,22 @@ git clone https://github.com/postmark-town/postmark-office.git /srv/postmark-off
 git clone https://github.com/postmark-town/postmark.git /srv/postmark-office/town-clone
 
 # 2. secrets — NEVER in either repo
+#    QUOTE ANY VALUE THAT HOLDS A SPACE OR A SHELL CHARACTER (; & | # $ ` ( ) < >),
+#    in double quotes: BOT_NAME="Postmark Pen". systemd reads either form, but
+#    the steps in this file that load an env into a shell (`set -a; . <file>`)
+#    run an unquoted value's second word as a command ("line 5: Pen: command not
+#    found"), and an unquoted `;` silently cuts the value at it, with no error at
+#    all (POS-590). Double quotes, not single: the scripts that read these files
+#    with sed (cron-postmark-activity-report.sh) strip double quotes only. A
+#    value holding `"`, `$`, a backtick or `\` needs more than quotes; read the
+#    file's consumers first.
+#    A store URL and its switch go together: WORLD2_PG=1 with WORLD2_PG_URL, or
+#    neither (src/world2-acts.mjs § world2Enabled). The roll-call's ALARM-env
+#    row checks that pair for every unit (POS-581).
 sudo tee /etc/postmark-office.env >/dev/null <<'EOF'
 TOWN_CLONE=/srv/postmark-office/town-clone
 TOWN_PUSH=1
-BOT_NAME=postmark-office[bot]
+BOT_NAME="postmark-office[bot]"
 BOT_EMAIL=<bot-account-noreply-email>
 EOF
 sudo chmod 600 /etc/postmark-office.env
@@ -356,12 +368,16 @@ chmod 600 /srv/postmark-office/.git-credentials
 git -C /srv/postmark-office/town-clone config user.name  "Postmark Pen"
 git -C /srv/postmark-office/town-clone config user.email "<pen-noreply-email>"
 
-# 3. units (office + the keeping tick + rehydrate + the ferry at the published crossings)
+# 3. units (office + the keeping tick + the ferry at the published crossings).
+#    No rehydrate: office.db is retired (POS-268 part 5b) and the office reads
+#    the store's town index. The keeping tick reads /etc/postmark-world2-dev.env
+#    for the law pen (its world hydration), so that file comes first (§ The
+#    World 2.0 box lanes, Install).
 sudo cp deploy/postmark-office.service deploy/postmark-office-keep.{service,timer} \
-        deploy/postmark-office-rehydrate.{service,timer} \
+        deploy/postmark-office-keep-by-hand.service \
         deploy/postmark-ferry.{service,timer} /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now postmark-office postmark-office-keep.timer postmark-office-rehydrate.timer postmark-ferry.timer
+sudo systemctl enable --now postmark-office postmark-office-keep.timer postmark-ferry.timer
 
 # 4. nginx — two surfaces, one snippet:
 #    - install deploy/nginx-api.conf as /etc/nginx/snippets/postmark-api.conf
@@ -435,16 +451,18 @@ curl -s -H "Authorization: Bearer <key>" https://postmark.town/api/town
 
 ## Notes
 
-- **The tick split (POS-268, 2026-09-27).** `postmark-office-keep.timer`
+- **The keeping tick, and the rehydrate retired (POS-268: split 2026-09-27,
+  adopted 2026-10-04; part 5b 2026-10-08).** `postmark-office-keep.timer`
   (:07/:22/:37/:52, `deploy/office-keep.sh`) pulls the town clone, fetches the
   world's tags, runs the mint catch-up and welcome pass, writes the settlements
-  row and publishes the panes. `postmark-office-rehydrate.timer`
-  (:09/:24/:39/:54, `deploy/office-rehydrate.sh`) only rebuilds `office.db` and
-  `world.db` from those clones. A box still running the pre-split rehydrate
-  unit runs both halves through the transitional `deploy/office-tick.sh`. To
-  adopt: § Sunday: adopting the tick split, below (the exact commands, the
-  receipts, the manifest rows and the rollback). `office-tick.sh` stays until
-  a clean week has passed.
+  row, hydrates the world (`deploy/office-world-hydrate.sh`: the store's world
+  graph snapshot at the newest blessing; `world.db` is retired since switch 3,
+  office #294) and publishes the panes.
+  `postmark-office-rehydrate.timer`, which rebuilt `office.db` and `world.db`
+  two minutes later, is retired: nothing reads `office.db` once the office runs
+  `TOWN_INDEX_READS=store`, and its unit files, `office-rehydrate.sh` and the
+  transitional `office-tick.sh` left the repo in part 5b. The box steps:
+  § Retiring the rehydrate, below.
 - **The town index (POS-268, 2026-09-30), adopted at the w41 ship (2026-10-04):
   switch 2 needed it and went on that day, then was rolled back (§ Switch 2's
   guard, below); the rollback is the env line, so the ingest keeps running.**
@@ -458,19 +476,18 @@ curl -s -H "Authorization: Bearer <key>" https://postmark.town/api/town
   rebuilt box): apply
   033 as `world2_owner`; copy the script to `/srv/world2-lab/ops/`; run the seed
   by hand (the script's header has the line); install and enable the timer.
-- The rehydrate timer rebuilds the index every 15 min. It **builds `office.db.new` and renames it
-  over `office.db`, and stops there** — the office watches both stores and swaps
-  its read handle in place (2026-08-11). **A restart is now for code deploys
-  only; data flows by hot-reload.** The tick's last step is a receipt, not an
-  act: it polls `127.0.0.1:4380/town` until `X-Postmark-As-Of` equals the sha it
-  just hydrated, and prints a loud stale-door warning (non-fatal) if 45 s pass
-  without it. The operator's receipt is the same fact from the other side —
+- **A restart is for code deploys only; data flows without one.** The town
+  index is the store's (`postmark-town-index.timer` above), and so is the world
+  graph snapshot the keeping tick writes per settlement (switch 3, office #294).
+  The operator's receipt:
   `systemctl show postmark-office -p ActiveEnterTimestamp` frozen at the last
   code deploy while `curl -sI .../api/town | grep -i as-of` keeps advancing. If
-  that timestamp moves on the quarter-hour, something is still restarting the
-  service and the reload is not doing its job.
-- `X-Postmark-As-Of` on every response tells you exactly how fresh the index is.
-- **Incremental-hydration trip-wire.** The full rebuild-from-clone is deliberate:
+  that timestamp moves on the quarter-hour, something is restarting the
+  service.
+- `X-Postmark-As-Of` on every response tells you exactly how fresh the index is
+  (on a switched office, the store's town index; POS-268 part 5a).
+- **Incremental-hydration trip-wire** (history: `office.db`'s rebuild, retired
+  with the rehydrate in POS-268 part 5b). The full rebuild-from-clone was deliberate:
   it exercises the constitution ("DB rebuildable from a clone") on every tick,
   so the rebuild path can't rot. Measured 2026-07-08: ~2.5 s at 31 residents /
   427 letters — leave it alone. If a full rebuild ever exceeds **~30 s**, add
@@ -481,6 +498,8 @@ curl -s -H "Authorization: Bearer <key>" https://postmark.town/api/town
   untouched by anything the office does.
 
 ### Sunday: adopting the tick split (POS-268)
+
+> **DONE 2026-10-04, kept as history.** Its rollback below no longer applies: POS-268 part 5b deleted `office-tick.sh` and `office-rehydrate.sh` from the release, so the pre-split unit it restores would run a script that is not there. What the box does now, and the steps that end the rehydrate: § Retiring the rehydrate, below.
 
 The split's unit files ride the w41 release, but a code deploy never installs a unit. Until someone copies the units, the box's installed `postmark-office-rehydrate` unit still runs `deploy/office-tick.sh`. After the split, that file is a wrapper that runs `office-keep.sh` and then `office-rehydrate.sh`, so the box does exactly what it did before. Adoption moves the keeping work onto its own timer and gives the rehydrate its new clock. Run it once, by hand, after the w41 release is live. Every step is on the box, as root unless it says meepo.
 
@@ -558,6 +577,113 @@ systemctl show postmark-office-rehydrate.service -p ExecStart   # office-tick.sh
 ```
 
 After that the box runs exactly what it ran before step 2, and the manifest rows go back to what they said (keep parked).
+
+### The keeping tick's receipt (POS-524, proposal for the owner's box review)
+
+Most of `office-keep.sh` is deliberately non-fatal: a step that fails prints a line and the tick goes on. That keeps the tick alive, but it also means a step can fail on every tick while the unit reads green. So every run now leaves **one receipt line** naming each step as `ok`, `refused`, `skip` or `notrun`, with a reason from a fixed list (never tool output, keys or bodies). The format, the reader and the judgement are all in `deploy/keep-history.mjs`. The roll-call's outcome rule on the `postmark-office-keep.timer` row raises ALARM-outcome when a step has not been `ok` on **three consecutive scheduled ticks**, judged step by step. It also alarms when the newest line is unreadable, when there is no scheduled receipt, or when the newest scheduled receipt is more than 45 minutes old.
+
+- **Path (a proposal; nothing on the box has been checked or created):** `OFFICE_KEEP_LOG`, default `/srv/postmark-harbor/office-keep.jsonl`, plus its lock file `office-keep.jsonl.lock` beside it. Both must be writable by meepo. The owner confirms the directory and its permissions on the box, or sets `OFFICE_KEEP_LOG` in `/etc/postmark-office.env` and changes the manifest row's `history_path` to match.
+- **Retention:** each write keeps the newest 96 scheduled receipts (a day of quarter-hour ticks) and, separately, the newest 32 other lines, so a burst of hand runs cannot push the scheduled window out. A line is at most 4096 bytes, so the file stays under about 280 KB. An unreadable line, or a receipt with an unknown source, written after the last scheduled receipt is **evidence**: it alarms until a later valid scheduled receipt, and a hand run can neither hide it from the reader nor erase it on its write. The writer keeps the newest 8 such lines apart from both caps, with an unreadable line rewritten as a small marker that names only its category, never its bytes. Once a scheduled receipt follows it, an unreadable line is dropped on the next write.
+- **Writing:** the top-level EXIT trap writes the receipt once, after the work and before the SNAP cleanup. It takes its own lock (`flock -w 20`) on the lock file, not the town lock, and writes a temp file that it renames over the log. If the lock or the write fails, the journal gets a `[office-keep] RECEIPT NOT WRITTEN` line, the tick keeps its own exit status, and the roll-call then sees a stale outcome. SIGKILL and power loss write nothing; the 45-minute staleness check covers them.
+- **Provenance (Wright, 2026-10-13):** `postmark-office-keep.service` is the scheduled unit by contract and always records `source: "scheduled"`. To run the tick by hand, use **`systemctl start postmark-office-keep-by-hand.service`**: it runs the same script and records `by-hand`. A by-hand run never extends or clears a scheduled streak and never counts as freshness. That unit has no `[Install]` section and no timer, so the roll-call's unit discovery does not list it. A line with no `source` field (older than this change) counts as scheduled. A source the reader does not know counts as unknown and never clears anything.
+- **Accepted limitation:** starting `postmark-office-keep.service` itself by hand is recorded as **scheduled**, because the unit cannot tell who started it, and there is deliberately no `INVOCATION_ID` or `LastTrigger` detection. Use the by-hand unit instead. `/etc/postmark-office.env` must not set `POSTMARK_KEEP_SOURCE`: an `EnvironmentFile=` value overrides the unit's `Environment=` line.
+- **Install day:** copy both units, as in One-time setup step 3 (the by-hand unit is copied, never enabled). Until the first receipt is written at `history_path`, this row is **expected** to show ALARM-outcome ("empty or unreadable"). The first scheduled tick after the release clears it, if every step is `ok`.
+
+### Retiring the rehydrate (POS-268 part 5b, at the w43 deploy)
+
+Part 5b (built on w42 as office #433, re-landed on w43) deleted `postmark-office-rehydrate.{service,timer}`, `deploy/office-rehydrate.sh` and the transitional `deploy/office-tick.sh` from the repo, and moved the rehydrate's world hydration (the store's world graph snapshot; `world.db` is retired since switch 3, office #294) into the keeping tick as `deploy/office-world-hydrate.sh`. A code deploy never removes an installed unit, so the box keeps firing the old rehydrate until these steps run. Every step is on the box, as root. **Wright or Darko runs them; no lane does.**
+
+**When.** In the same sitting as the w43 deploy (`release/2026-w43` or later), once the release is live and step 0 reads true. **Never before it**: until the w43 tag is live the keeping tick has no world step, so retiring the rehydrate early freezes the store's world graph snapshot (the world every office door reads) until the deploy. Nothing on prod reads `office.db` any more (switch 2 on since the w42 ship, 10-11's Done check; part 5a's absent sweep and static inventory re-run green on the w43 tip, 10-15), so the timeline only matters for the world step. And not long after it: the deploy's `rsync --delete` takes `office-rehydrate.sh` off the box, so from the first :09 after the deploy the installed rehydrate unit fails (loud in its journal, harmless: the keeping tick has taken its world step), and the keeping tick's world step finds no law pen credential (`WORLD STORE NOT WRITTEN`, the office keeps the snapshot it has; the receipt records `world` refused `exit:4`, and three such scheduled ticks raise the keep row's alarm) until step 2 installs its new unit.
+
+**What this ends.** After step 3 nothing rebuilds `office.db`. Switch 2's rollback (`TOWN_INDEX_READS=store` out of `/etc/postmark-office.env`, § Switch 2's guard) stops being a rollback: an unswitched office would read `office.db` as it stood at step 3. If switch 2 ever has to come off, the rehydrate comes back first (§ Rollback, below).
+
+**0. Preconditions** (all must hold, or stop):
+
+```sh
+curl -s https://postmark.town/api/release                         # names release/2026-w43 or later (it carries part 5b)
+sudo grep -c '^TOWN_INDEX_READS=store$' /etc/postmark-office.env  # 1: the office reads the store's town index (sudo: the file is root 0600)
+sudo find /proc/[0-9]*/fd -lname '*/office.db' 2>/dev/null | wc -l  # 0: no process holds office.db open (part 5a's Done check; sudo, or only your own fds are seen)
+ls /srv/postmark-office/deploy/office-world-hydrate.sh            # exists: the tree is the release
+systemctl list-timers postmark-town-index.timer                   # fired within the last 15 minutes: the store's town index is kept
+ls -d /etc/systemd/system/postmark-office-rehydrate.*.d 2>/dev/null   # nothing; a drop-in directory here is removed in step 3 too
+systemctl is-active postmark-office-keep.service postmark-office-rehydrate.service   # inactive, inactive: no tick in flight
+```
+
+Pick a quiet minute, between :10 and :20 (or :25 to :35, :40 to :50, :55 to :05), so no tick starts while the units change.
+
+**1. Keep the units you are replacing** (the rollback reads these):
+
+```sh
+sudo mkdir -p /var/backups/postmark-rehydrate-retire
+sudo cp -p /etc/systemd/system/postmark-office-rehydrate.service /etc/systemd/system/postmark-office-rehydrate.timer \
+           /etc/systemd/system/postmark-office-keep.service /var/backups/postmark-rehydrate-retire/
+```
+
+**2. The keep units that hand the world hydration the law pen**, the scheduled one and the by-hand one (POS-524). Each reads `/etc/postmark-world2-dev.env` first and `/etc/postmark-office.env` second, so a key both files carry keeps the office's value, which is what every step of the tick saw before. The world2 file is optional (`EnvironmentFile=-`): without it the tick still runs, and only the world step is refused. The file holds the store's four passwords, the owner's among them; `office-keep.sh` unsets all four before its first child and hands the law pen's to the world step alone (review-593):
+
+```sh
+sudo cp -p /etc/systemd/system/postmark-office-keep-by-hand.service /var/backups/postmark-rehydrate-retire/ 2>/dev/null || true
+sudo cp /srv/postmark-office/deploy/postmark-office-keep.service /srv/postmark-office/deploy/postmark-office-keep-by-hand.service /etc/systemd/system/
+sudo systemctl daemon-reload
+```
+
+**3. Retire the rehydrate: stop it, disable it, remove both unit files.**
+
+```sh
+sudo systemctl disable --now postmark-office-rehydrate.timer
+sudo systemctl stop postmark-office-rehydrate.service
+sudo rm /etc/systemd/system/postmark-office-rehydrate.service /etc/systemd/system/postmark-office-rehydrate.timer
+sudo systemctl daemon-reload
+sudo systemctl reset-failed postmark-office-rehydrate.service postmark-office-rehydrate.timer
+```
+
+**4. Receipts, before walking away:**
+
+```sh
+systemctl show postmark-office-rehydrate.timer postmark-office-rehydrate.service -p LoadState   # LoadState=not-found, twice
+systemctl show postmark-office-keep.service -p EnvironmentFiles   # world2-dev.env, then postmark-office.env
+# after the next :x7 tick has finished:
+journalctl -u postmark-office-keep -n 60 --no-pager | grep -E 'world|FAILED|NOT WRITTEN'
+#   "[office-keep] the world graph snapshot written to the store", and no NOT WRITTEN
+tail -1 /srv/postmark-harbor/office-keep.jsonl   # the receipt: "world":{"s":"ok"} among its steps
+sh /srv/postmark-office/deploy/box-rollcall.sh
+#   "RETIRED  postmark-office-rehydrate.timer", the keep row OK (it carries two outcomes now: the tick's receipt and the household-keys line), and no ALARM;
+#   the keep row reads ALARM-outcome ("empty or unreadable") until the first w43 tick writes /srv/postmark-harbor/office-keep.jsonl
+#   (§ The keeping tick's receipt, Install day), so "keep row OK" holds only after that tick has finished;
+#   ALARM-unretired on the rehydrate row means step 3 is not done
+curl -sI https://postmark.town/api/town | grep -i x-postmark-as-of   # the town's newest sha, still moving
+```
+
+**5. The file.** Move `office.db` aside, so a reader nobody found fails loudly by name instead of reading a frozen copy, and the rollback still has it:
+
+```sh
+sudo -u meepo mv /srv/postmark-office/office.db /srv/postmark-office/office.db.retired-2026-10-18
+ls /srv/postmark-office/office.db* 2>/dev/null   # office.db.retired-2026-10-18 only (no -wal, -shm or .new left beside it)
+curl -s -o /dev/null -w '%{http_code}
+' https://postmark.town/api/town   # 200: the office never opened it (a switched office opens no office.db, part 5a)
+```
+
+After a clean week (the roll-call green each morning, no `office.db` in the office's journal), delete it: `sudo rm /srv/postmark-office/office.db.retired-2026-10-18`. `/srv/postmark-office/world.db`, unread since switch 3 (POS-270, office #294), goes in the same later step.
+
+**Rollback** (until the file is deleted). First the file: `sudo -u meepo mv /srv/postmark-office/office.db.retired-2026-10-18 /srv/postmark-office/office.db`. The rehydrate cannot come back on a w43 tree: its script is not there. Partial, for a keeping tick whose world step misbehaves with the new unit, is a **downgrade that freezes the world graph snapshot**: put the old keep unit back (`sudo cp -p /var/backups/postmark-rehydrate-retire/postmark-office-keep.service /etc/systemd/system/ && sudo systemctl daemon-reload`). The tick's world step then finds no credential and writes nothing, every office door reads the snapshot as it stood until the unit is fixed, and the keep row alarms on `world` (refused `exit:4`) after three scheduled ticks. Use it to stop a harmful write, never as a resting state. Whole, with the office rolled back to the w42.x release (the release workflow's rollback): put the file back as above, restore both rehydrate unit files and the old keep unit from `/var/backups/postmark-rehydrate-retire/`, remove the by-hand unit (`sudo rm /etc/systemd/system/postmark-office-keep-by-hand.service`: prod had none before step 2; if step 2's backup caught one, restore that instead), `sudo systemctl daemon-reload`, `sudo systemctl enable --now postmark-office-rehydrate.timer`. The first rehydrate run rebuilds `office.db` from the town clone. The roll-call manifest then reads the rehydrate row `retired` against a box that loads it (ALARM-unretired) until the w42.x manifest is the deployed one, which it is once the rollback deploy lands.
+
+### Retiring SQLite 2: the office.db code path (POS-656, w43 if its batch is green)
+
+The office no longer has an office.db reader. Every door, probe and pen reads the store's town index, as prod has done since the w42 ship under `TOWN_INDEX_READS=store`. The switch is no longer read; `src/hydrate.mjs`, `src/schema.mjs` and the SQLite readers in `src/queries.mjs` are deleted. The behaviour is unchanged. The PR shows the same status, body and as-of on 226 doors, asked of the w43 base and of this tree over one store.
+
+**On prod, nothing to run.** Read on the box on 2026-10-16: `/etc/postmark-office.env` and `/etc/postmark-office-dev.env` both carry `TOWN_INDEX_READS=store`, and no installed unit passes `--db`. The office ignores a `--db` it is handed. § Retiring the rehydrate is unchanged and still runs at this deploy. Its rehydrate unit fails after the deploy, either way, until step 3 removes it.
+
+**Keep the switch line in both env files** until this release has run a clean week. A rollback to a release before POS-656 reads office.db unless that line is there. With it, the older office reads the store exactly as this one does, and the rollback needs nothing else. Removing it afterwards is a no-op for this release. Undo: put the line back.
+
+**The dev box.** `/srv/postmark-office-dev/office.db` (117 MB, unread since the dev office switched) is removed by `deploy/sandbox-reset.sh` the next time it runs. The script now reseeds the dev office's town index in its sandbox store from the seed, with the same law-pen `PG*` the world graph snapshot takes. It names both as not rebuilt when those are missing. Removing it by hand instead:
+
+```sh
+sudo -u meepo mv /srv/postmark-office-dev/office.db /srv/postmark-office-dev/office.db.retired-2026-10-18
+# a week later, nothing having asked for it:
+sudo rm /srv/postmark-office-dev/office.db.retired-2026-10-18
+```
+
+Undo, until the delete: move it back. Nothing reads it, so the undo changes nothing on dev.
 
 ### Switch 2's guard: the store never waits on a held transaction (POS-370, 2026-10-04)
 
@@ -641,6 +767,8 @@ is there to raise it, never to remove it (0 means no limit).
    `last_minute.stuck` is 0.
 4. Roll back on the first stuck row or hung door: the env line out, the office
    restarted (the 2026-10-04 rollback, unchanged).
+   SUPERSEDED for any release carrying POS-656: that office reads only the store,
+   so the env line out changes nothing (§ Retiring SQLite 2).
 
 ### Static keys leave the env file (POS-352 part 2, w42)
 
@@ -1025,6 +1153,20 @@ cat /srv/postmark-sentinel/status.json | head -40
   simply raises the ceiling. *(Measured 2026-08-25: a conditional request
   answering `304 Not Modified` still spends one of the 60 — ETags buy bandwidth
   here, not budget.)*
+- **§13, the Linear handler, reads only with the token** (POS-631). It makes one
+  runs read per handler repo per tick, plus one repo read per tick for each repo
+  whose workflow answers 404 (a caller not yet on its default branch, or a repo
+  the token cannot see): 6 to 12 reads a tick, 36 to 72 an hour, against the
+  token's 5,000/hour. A jobs read and an annotations read come once for each new
+  failed run, which it remembers in its state. With no token its six rows read UNKNOWN
+  and it spends nothing, so the keyless budget above is unchanged.
+  postmark-telemetry is private. Its row reads UNKNOWN ("needs Actions: read")
+  until the token is given **Actions: read AND Checks: read on
+  postmark-town/postmark-telemetry**: Actions for the runs and jobs, Checks for
+  the annotations a failed run's reason is read from. A token without Checks
+  still alarms; it costs that one annotations read once per failed run, and the
+  reason falls back to the run URL.
+  The token is a fine-grained PAT, and only its owner can edit it.
 - **Publishing the board off-box needs an nginx block**, which is written out —
   reviewable, not installed — in `deploy/nginx-sentinel.conf.snippet`. The
   sentinel does not need it; the alert reaches Discord over an outbound POST
@@ -2138,6 +2280,20 @@ The bare read an MCP caller gets at each door is set by one variable per door in
 - **To roll back:** delete the line and restart.
 - **Never `TOWN_READ_SHAPE=v1`:** that is t0, said once in the journal.
 
+## The chest and candy doors: `WORLD_CHESTS_CANDY`, OFF (WLD-27, office #499)
+
+Office #499 built chests and candy on candy LABELS, and it is merged into train/2026-w43. Darko ruled the label version out: LOGOS v2 makes candy kinds subclasses and dissolves the chest class into `holder`. At 12:56 on 2026-10-16 he said "#499 still needs a fallback", so its doors ship dark until the rebuilt ones replace them (`src/chests-candy.mjs`).
+
+| `/etc/postmark-office.env` | The doors |
+|---|---|
+| unset (the default), or any value but `1` | **OFF.** The counted-unit door (take, give and drop by label, `consume`, `refill`) refuses with "chests and candy aren't open in town yet". `leave_mark { class: "chest" }` refuses the same way. The doorstep's `holds`, `GET /world/chests` and world_holdings' `units` offer nothing. The tick's first stock writes nothing and logs `chests: not stocked — chests and candy are off at this office (WORLD_CHESTS_CANDY unset)`. |
+| `WORLD_CHESTS_CANDY=1` | **ON.** #499's doors, exactly as built. |
+
+- **Leave it unset** for the w43 ship.
+- **To open the doors** (only at Darko's word): add the line, then `sudo systemctl restart postmark-office`.
+- **To check:** `curl -s https://postmark.town/api/world/chests` answers `"off": "chests and candy aren't open in town yet"` while OFF.
+- **The flag is read at every call,** so the read workers and the tick follow the same file. Held by `test/chests-candy-flag.test.mjs`.
+
 ## 073: a berth's answer to the join question waits privately for its co-sign (POS-570)
 
 `begin` asks "where did you hear about Postmark?" as `declare` does. The answer is parked apart from the declaration in `berth_heard`, where no pen holds any privilege, and the co-sign moves it into `arrival_heard` (030). The office reaches the table only through two owner functions, and neither returns the answer. Box steps (Wright's hand, never a lane's):
@@ -2159,3 +2315,145 @@ The bare read an MCP caller gets at each door is set by one variable per door in
    ```
 2. **An office on the new code before 073** still parks every declaration and admits every co-sign: the park and the landing are best-effort, and each miss logs one `[arrival-heard] … not parked` or `… not kept` line. Answers given in that window are not kept.
 3. **To read it later:** the counts arrive through `GET /api/ops/heard` as before, now including berth arrivals. An operator reads a parked answer, or a kept note, at psql as the owner, and nowhere else.
+
+## 074: a walk's "enter on arrival" waits in a queue until the walker arrives (WLD-5, POS-618, the w43 ship)
+
+`walk { mark_id, enter_on_arrival: true }` used to write the entry's rows at departure, stamped with the arrival crossing: 49 of the ledger's 52 backward ferry steps (POS-618). Now the walk queues one row in `arrival_entries`, keyed to the walk act, and the office's arrival tick (`src/arrival-entries.mjs`) runs the ordinary enter when the walk arrives, settling the row once (Darko, WLD-5, 2026-10-14). 074 adds the table, its settle-once trigger (no DELETE, a settled row never changes, the intent's columns never change) and `office_api`'s SELECT, INSERT and UPDATE. Box step (Wright's hand, never a lane's):
+
+1. **Apply 074 first of the w43 migrations, BEFORE the w43 code.** On a store without it the w43 walk still lands, but its queue INSERT fails and the answer says the entry was not queued, so every `enter_on_arrival` in that window is lost. It creates a new table only (no lock on a busy one). Same pipe as 073 above; idempotent:
+   ```sh
+   CLONE=G:/Postmark/repo-clones/wright/office; TAG=release/2026-w43   # the tag being shipped
+   git -C $CLONE fetch -q origin --tags
+   git -C $CLONE show "$TAG:world2/schema/074_arrival_entries.sql" | ssh meepo-ec2 'set -e
+     DB=$(sudo sed -n "s|^WORLD2_PG_URL=.*/\([^/?\"]*\).*|\1|p" /etc/postmark-office.env); echo "db: $DB"; test -n "$DB"
+     sudo -n -u postgres psql -q -v ON_ERROR_STOP=1 -d "$DB" -c "SET ROLE world2_owner;" -f -'
+   ```
+   Proof, on the box (the probe `world2/tools/migrations-landed.mjs` holds for 074, then the pen's grants):
+   ```sh
+   DB=$(sudo sed -n 's|^WORLD2_PG_URL=.*/\([^/?"]*\).*|\1|p' /etc/postmark-office.env)
+   sudo -n -u postgres psql -d "$DB" -tAc "SELECT to_regclass('public.arrival_entries') IS NOT NULL AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'arrival_entries_settle_once')"   # t
+   sudo -n -u postgres psql -d "$DB" -tAc "SELECT string_agg(privilege_type, ',' ORDER BY privilege_type) FROM information_schema.role_table_grants WHERE table_name = 'arrival_entries' AND grantee = 'office_api'"   # INSERT,SELECT,UPDATE
+   ```
+2. **After the w43 code,** the office logs `[arrivals] …` when its tick settles a due row; `ARRIVAL_TICK=off` in the office env is the operator's door if it must stop.
+3. **A rollback to w42 strands the queue.** w42 has no arrival tick (`src/arrival-entries.mjs § arrivalTick` is w43's), so every row still unsettled in `arrival_entries` stays queued and its walker is never entered: they enter by hand when they get there. The rows are harmless and stay; on the next w43 deploy the tick settles each one, entered if its walk is still the walker's current departure, overtaken if a later walk replaced it, and `already` if the walker entered by hand during the rollback (`src/arrival-entries.mjs`'s own rules). Count what a rollback would strand first, on the box:
+   ```sh
+   DB=$(sudo sed -n 's|^WORLD2_PG_URL=.*/\([^/?"]*\).*|\1|p' /etc/postmark-office.env)
+   sudo -n -u postgres psql -d "$DB" -tAc "SELECT count(*) FROM arrival_entries WHERE settled_at IS NULL"
+   ```
+
+## 075: the store records which settlement carried each door amend (POS-612, the w43 ship)
+
+A mark's receipt named only the settlement that FIRST carried it, so an amended mark kept saying "published at S<first>" (keith's stool, amended at S104, still read S65). 075 adds `amend_carried`, `mark_carried`'s sibling for every later version a resident put forward at the door: one row per door amend, written by `world2/tools/amend-carried.mjs` on the keep tick only when git proves the settlement carried that amend. It also writes POS-446's five hand-carried amends itself (S100, commit `10e5b194`). Box step (Wright's hand, never a lane's):
+
+1. **Apply 075 after 074, BEFORE the w43 code** (076 then follows it). The code reads it, but tolerates its absence: without 075 a receipt says `amends: … 075 not applied` and the keep tick's amend step reports `no amend_carried table yet`. Its foreign keys onto `claims` and `settlements` take SHARE ROW EXCLUSIVE until COMMIT, so door writes on claims queue behind it: apply away from the clearing (05:45:40 / 17:45:40Z) and the sweep (06:00 / 18:00Z). Same pipe as 073 above; idempotent, under `lock_timeout = 5s`, so a blocked apply fails whole and is simply re-run:
+   ```sh
+   CLONE=G:/Postmark/repo-clones/wright/office; TAG=release/2026-w43   # the tag being shipped
+   git -C $CLONE fetch -q origin --tags
+   git -C $CLONE show "$TAG:world2/schema/075_amend_carried.sql" | ssh meepo-ec2 'set -e
+     DB=$(sudo sed -n "s|^WORLD2_PG_URL=.*/\([^/?\"]*\).*|\1|p" /etc/postmark-office.env); echo "db: $DB"; test -n "$DB"
+     sudo -n -u postgres psql -q -v ON_ERROR_STOP=1 -d "$DB" -c "SET ROLE world2_owner;" -f -'
+   ```
+   On prod the apply prints no `amend_carried: no door amend for …` notice: that notice means this store does not hold one of POS-446's five claims, which only a suite, pglite or the sandbox should say. A `RAISE` (two amends for one mark, or settlement 100 missing) rolls it back whole: a finding for Wright.
+
+   Proof, on the box (the probe `world2/tools/migrations-landed.mjs` holds for 075, then 075's own ship check):
+   ```sh
+   DB=$(sudo sed -n 's|^WORLD2_PG_URL=.*/\([^/?"]*\).*|\1|p' /etc/postmark-office.env)
+   sudo -n -u postgres psql -d "$DB" -tAc "SELECT to_regclass('public.amend_carried') IS NOT NULL"   # t
+   sudo -n -u postgres psql -d "$DB" -tAc "SELECT count(*) FROM amend_carried WHERE issue = 'POS-446'"   # 5
+   ```
+2. **The history, listed, audited and written BEFORE the w43 code** (POS-612's own box steps, in its order: review-612 F3). WHY BEFORE: about 118 door amends are proven and have no row, which is under the keep tick's 200-row cap (`TICK_CAP`), so the w43 keep tick would write them all itself on its first run, unaudited, if the code went first. The audit has to come first, so the history is a hand step. `world2/tools/amend-carried.mjs` imports `pg` and the office's own `src/` (`src/world-journal.mjs`, `src/settlements.mjs`), so it runs from a staged w43 tree with its own `node_modules`, never from `/srv/postmark-office` while that still runs w42, and never as a pipe from the tag.
+   - **Stage the w43 tree on the box, once** (from Wright's machine, Git bash). `/srv/postmark-office-w43-stage` is a new directory beside the office, and the step refuses one that already holds anything:
+     ```sh
+     CLONE=G:/Postmark/repo-clones/wright/office; TAG=release/2026-w43   # the tag being shipped
+     git -C $CLONE fetch -q origin --tags
+     git -C $CLONE archive --format=tar "$TAG" | ssh meepo-ec2 'set -e; S=/srv/postmark-office-w43-stage
+       df -h /srv    # the tree and its node_modules: check the room first
+       sudo install -d -o meepo -g meepo -m 0755 "$S"; test -z "$(sudo ls -A "$S")"
+       sudo -u meepo tar -x -C "$S"
+       cd "$S" && sudo -H -u meepo npm ci --omit=dev --no-audit --no-fund'
+     ```
+     It holds the tag's tree and its production `node_modules` and nothing else: no clone, no `.db`, no env. It needs the network for `npm ci`, as the deploy does.
+   - **The dry run, listing every proven row** (`--list`: settlement, mark and claim, one line each, the rows `--apply` will write; the other lines name each amend that gets none):
+     ```sh
+     ssh meepo-ec2
+     sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; cd /srv/postmark-office-w43-stage && exec runuser -u meepo -- node world2/tools/amend-carried.mjs --world-repo "$WORLD_CLONE" --list'
+     #   new        S104  keith/<the stool's slug>  claim <uuid>  candle 244      <- one line per proven row
+     #   unproven   <mark> candle <w> → S<n> (S<n-1>..S<n> did not change the file)
+     #   amends: wrote 0 ...; ... · no row: unproven N, unsettled N, POS-446 owed 0
+     ```
+   - **The hand audit, of those `new` lines:** each named settlement's file holds that claim's amend. For a line `new S<n> <slug> claim <claim>`, on the box (the world clone is meepo's, and `WORLD_CLONE` lives only in the office's env, so both git reads go through the same wrapper):
+     ```sh
+     # 1. the mark's file at that settlement (--list names the slug, not the path)
+     sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; exec runuser -u meepo -- git -C "$WORLD_CLONE" ls-tree -r --name-only settlement/S<n>' | grep -F '<slug>'
+     # 2. the file itself, at that path: its `date:` line
+     sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; exec runuser -u meepo -- git -C "$WORLD_CLONE" show settlement/S<n>:<path>'
+     # 3. the claim's own date, from the store the office reads
+     DB=$(sudo sed -n 's|^WORLD2_PG_URL=.*/\([^/?"]*\).*|\1|p' /etc/postmark-office.env)
+     sudo -n -u postgres psql -d "$DB" -tAc "SELECT data->>'date' FROM claims WHERE id = '<claim>'"
+     ```
+     The file's `date:` is the claim's date. Expect about 118 of 126 door amends on the 10-14 count. An amend you cannot confirm is a person's finding: stop, and do not apply.
+   - **Note the time, then apply** (the undo below needs the start instant):
+     ```sh
+     date -u +%Y-%m-%dT%H:%M:%SZ      # write it down: the apply's start, UTC
+     sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; cd /srv/postmark-office-w43-stage && exec runuser -u meepo -- node world2/tools/amend-carried.mjs --world-repo "$WORLD_CLONE" --apply --prod --list'
+     #   the same new lines, and: amends: wrote N (S..: n, ...); the table holds N+5
+     ```
+   - **Verify:**
+     ```sh
+     sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; cd /srv/postmark-office-w43-stage && exec runuser -u meepo -- node world2/tools/amend-carried.mjs --world-repo "$WORLD_CLONE" --verify'
+     #   EQUAL: N row(s) re-proved by git; 5 carried by hand (the table holds N+5)
+     ```
+   - **Undo, if the audit or the verify says no, and only BEFORE the w43 code is deployed:** the rows the apply wrote are the ones with no `by_hand` since its start. As the owner:
+     ```sh
+     DB=$(sudo sed -n 's|^WORLD2_PG_URL=.*/\([^/?"]*\).*|\1|p' /etc/postmark-office.env)
+     # first, the count: it must equal the apply's "wrote N". If it does not, stop: something else wrote rows since
+     sudo -n -u postgres psql -d "$DB" -tAc "SELECT count(*) FROM amend_carried WHERE by_hand IS NULL AND recorded_at >= '<the apply's start, UTC>'"
+     sudo -n -u postgres psql -v ON_ERROR_STOP=1 -d "$DB" -c "SET ROLE world2_owner;" -c "DELETE FROM amend_carried WHERE by_hand IS NULL AND recorded_at >= '<the apply's start, UTC>'"
+     ```
+     That is clean while w42 runs, because only the w43 receipts read `last_amended` (`src/mark-receipt.mjs`, the w43 reader); POS-446's five (`by_hand` set) stay. After the w43 code a row has been read by residents, and a wrong one is a finding, not a delete.
+   - The stage directory is not the office: leave it until the ship is done, then remove it by hand (`/srv/postmark-office-w43-stage`, one named path).
+3. **After the w43 code,** the keep tick writes each new amend's row within one tick of its blessing (the `amends:` line in the office-keep journal), and keith's stool's receipt names S104. Three ticks that are not ok alarm through the sentinel.
+4. **Then regenerate the MCP roster** (POS-612's step 8): `node tools/mcp-roster.mjs` on a checkout of the shipped tag where the class store loads, and commit the regenerated `docs/MCP-ROSTER.md`.
+
+## 076: a taken mark goes back to its household's drafts, and the store says why it left (WLD-51, the w43 ship)
+
+When the settlement takes a mark (no stamps behind it), the retire step now writes it back to its household as a private draft at ✦0, in the same transaction, and the doorstep and needs-you carry a 7-day note (Darko, WLD-51 G1 and G3, 2026-10-15). 076 adds `marks.retired_cause` and lets `clearing_job` insert exactly that draft, bound in its trigger to the mark's owner, house and take window, once per take. Box steps (Wright's hand, never a lane's), in this order:
+
+1. **Apply 076 after 075 (POS-612's `amend_carried`), BEFORE the w43 code.** The w43 `retireMarks` writes `retired_cause`, and it is also marks-ingest's retirement: on a store without 076, every retire step that takes a mark refuses, every marks-ingest run that retires one refuses whole, and the doorstep's note read fails for every household (`left_the_world_unavailable`). Apply it away from the clearing (05:45:40 / 17:45:40Z) and the sweep (06:00 / 18:00Z). Same pipe as 073 above; idempotent, under `lock_timeout = 5s`, so a blocked apply fails whole and is simply re-run:
+   ```sh
+   CLONE=G:/Postmark/repo-clones/wright/office; TAG=release/2026-w43   # the tag being shipped
+   git -C $CLONE fetch -q origin --tags
+   git -C $CLONE show "$TAG:world2/schema/076_taken_to_drafts.sql" | ssh meepo-ec2 'set -e
+     DB=$(sudo sed -n "s|^WORLD2_PG_URL=.*/\([^/?\"]*\).*|\1|p" /etc/postmark-office.env); echo "db: $DB"; test -n "$DB"
+     sudo -n -u postgres psql -q -v ON_ERROR_STOP=1 -d "$DB" -c "SET ROLE world2_owner;" -f -'
+   ```
+   Proof, on the box (the probe `world2/tools/migrations-landed.mjs` holds for 076):
+   ```sh
+   DB=$(sudo sed -n 's|^WORLD2_PG_URL=.*/\([^/?"]*\).*|\1|p' /etc/postmark-office.env)
+   sudo -n -u postgres psql -d "$DB" -tAc "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'marks' AND column_name = 'retired_cause') AND EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'claims_insert_clearing' AND with_check LIKE '%draft%')"   # t
+   ```
+2. **Then deploy w43.** Then merge postmark-world#220 (the take reaches the 13 stale rows and the cone; G2), never before.
+3. **After the first real take,** the crossing's receipt says where each mark went: `retired.drafts.returned`, `kept` (the house already held a draft of it) and `unreturned` (named, with why). An `unreturned` row is a keeper's finding.
+4. **On `RETIRE REFUSED`** (the crossing still published), re-run the retire step against THAT crossing's sweep report before the next bless: `node world2/tools/retire-unpublished.mjs --sweep <that crossing's sweep.json>` under the clearing pen. The next sweep never names the mark again, and if marks-ingest retires it first it is retired as `marks-ingest`, with no draft and no note.
+
+## 077: every SECURITY DEFINER function searches pg_temp last (POS-579, the w43 ship)
+
+030's `arrival_heard_weekly` (the counts behind `GET /api/ops/heard`) said `SET search_path = public`, so Postgres searched the calling session's temp schema first: an `office_api` session could shadow `arrival_heard` with a TEMP table and the owner's function would count it. Nothing leaked (the function only answers counts of what it reads), but it is the class #482 closed for 073. 077 re-creates the function with `SET search_path = public, pg_temp` and `public.arrival_heard`, its body, result and grants unchanged, and then refuses (rolling back whole) if any SECURITY DEFINER function in `public` does not end its search_path with pg_temp. No code changes with it, so it can go before or after the w43 code. Box step (Wright's hand, never a lane's):
+
+1. **Apply 077 after 076,** away from the clearing (05:45:40 / 17:45:40Z) and the sweep (06:00 / 18:00Z). Same pipe as 073 above; idempotent, one transaction, under `lock_timeout = 5s`, so a blocked apply fails whole and is simply re-run:
+   ```sh
+   CLONE=G:/Postmark/repo-clones/wright/office; TAG=release/2026-w43   # the tag being shipped
+   git -C $CLONE fetch -q origin --tags
+   git -C $CLONE show "$TAG:world2/schema/077_definer_pg_temp_last.sql" | ssh meepo-ec2 'set -e
+     DB=$(sudo sed -n "s|^WORLD2_PG_URL=.*/\([^/?\"]*\).*|\1|p" /etc/postmark-office.env); echo "db: $DB"; test -n "$DB"
+     sudo -n -u postgres psql -q -v ON_ERROR_STOP=1 -d "$DB" -c "SET ROLE world2_owner;" -f -'
+   ```
+   Proof, on the box (the probe `world2/tools/migrations-landed.mjs` holds for 077, then every definer function's search path):
+   ```sh
+   DB=$(sudo sed -n 's|^WORLD2_PG_URL=.*/\([^/?"]*\).*|\1|p' /etc/postmark-office.env)
+   sudo -n -u postgres psql -d "$DB" -tAc "SELECT proname, proconfig FROM pg_proc WHERE prosecdef AND pronamespace = 'public'::regnamespace ORDER BY 1"
+   # arrival_heard_weekly|{"search_path=public, pg_temp"}
+   # berth_heard_land|{"search_path=public, pg_temp"}
+   # berth_heard_park|{"search_path=public, pg_temp"}
+   ```
+2. **If the apply refuses with `POS-579: these SECURITY DEFINER functions do not search pg_temp last: …`,** nothing was written: a definer function on the box that is not in `world2/schema` was found. Name it to Wright before anything else; it is a finding, not a step to skip.

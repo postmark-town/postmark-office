@@ -10,7 +10,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
 import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
@@ -18,7 +18,7 @@ import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static k
 // The town index this file's offices read: a store seeded from each fixture
 // office.db (POS-268, office-under-test.mjs). Stopped when the file is done.
 const STORES = [];
-const storeFor = async (dbPath) => { const x = await indexStore(dbPath); STORES.push(x); return x.env; };
+const storeFor = async (town) => { const x = await indexStore(town); STORES.push(x); return x.env; };
 test.after(async () => { for (const x of STORES) await x.stop(); });
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -32,10 +32,9 @@ let child, tmp;
 
 before(async () => {
   tmp = mkdtempSync(join(tmpdir(), "postmark-office-metrics-"));
-  const dbPath = join(tmp, "fixture.db");
-  fixtureDb(dbPath).close();
-  const IX_ENV = await storeFor(dbPath);
-  ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--db", dbPath, "--oauth-db", seedStaticKeys(join(tmp, "oauth.db"), `${KEY}=keemin:wright`)], {
+  const town = fixtureTown();
+  const IX_ENV = await storeFor(town);
+  ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--oauth-db", seedStaticKeys(join(tmp, "oauth.db"), `${KEY}=keemin:wright`)], {
     env: {
       ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV,
       OFFICE_BOUNCER_KEYLESS_PER_MINUTE: "3",
@@ -77,9 +76,11 @@ test("GET /metrics/mail: deterministic as_of, 60 zero-filled days, totals, activ
 });
 
 test("keyless GETs are rate-limited with the exact 429 shape; a key has its own budget", async () => {
-  // Test burst=3: the first three keyless hits pass, the fourth trips.
+  // Test burst=3: the first three keyless hits pass, the fourth trips. The
+  // X-Forwarded-For is nginx's, as a public caller arrives; only the box door
+  // goes uncharged (box-local-keyless.test.mjs).
   let last;
-  for (let i = 0; i < 4; i++) last = await fetch(`${BASE}/town`);
+  for (let i = 0; i < 4; i++) last = await fetch(`${BASE}/town`, { headers: { "x-forwarded-for": "198.51.100.7" } });
   assert.equal(last.status, 429);
   const body = await last.json();
   // `refused` joined 2026-10-06 (POS-427, Darko's option B): every refusal says so, last.

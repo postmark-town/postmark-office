@@ -42,6 +42,7 @@ import { Worker, isMainThread, parentPort, workerData } from "node:worker_thread
 import { availableParallelism } from "node:os";
 import { Writable } from "node:stream";
 import { workerSafe } from "./role.mjs";
+import { faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 
 /** True inside a read worker. Everything that must not run twice keys on this. */
 export const IN_READ_WORKER = !isMainThread && workerData?.readWorker === true;
@@ -130,6 +131,21 @@ export function mcpWorkerTakes(messages) {
   });
 }
 
+/**
+ * Does this handed-over MCP call need the main thread's earshot (POS-632 W4)?
+ * A bare world read at v2 carries `heard`, and the voices window lives on the
+ * main thread. `shape` is the office's default (WORLD_READ_SHAPE).
+ */
+export function wantsEarshot(messages, shape = "v0") {
+  if (!Array.isArray(messages)) return false;
+  return messages.some((m) => {
+    if (m?.params?.name !== "world") return false;
+    const a = m.params?.arguments ?? {};
+    if ((a.do != null && a.do !== "") || (a.read != null && a.read !== "")) return false;
+    return (a.read_shape ?? shape) === "v2";
+  });
+}
+
 /** How many workers: OFFICE_READ_WORKERS if it is a whole number, else cores − 1. */
 export function readWorkerCount(env = process.env, cores = availableParallelism()) {
   const raw = env.OFFICE_READ_WORKERS;
@@ -210,12 +226,12 @@ export function serveReadsInWorker(handle) {
       return;
     }
     if (msg?.type !== "read") return;
-    const { id, method, url, headers, ip, body = null, mcp = false } = msg;
+    const { id, method, url, headers, ip, body = null, mcp = false, earshot = null } = msg;
     // An ended request: a GET's is empty, an agent's MCP read (POS-284) carries
     // the JSON-RPC body the main thread already read, delivered as one chunk
     // before the end.
     const req = new Writable({ write(_c, _e, cb) { cb(); } });
-    Object.assign(req, { method, url, headers, socket: { remoteAddress: ip }, connection: { remoteAddress: ip }, handedMcpRead: Boolean(mcp) });
+    Object.assign(req, { method, url, headers, socket: { remoteAddress: ip }, connection: { remoteAddress: ip }, handedMcpRead: Boolean(mcp), handedEarshot: earshot });
     req.on = ((on) => function (ev, fn) {
       if (ev === "end") { queueMicrotask(() => queueMicrotask(fn)); return this; }
       if (ev === "data") { if (body != null) queueMicrotask(() => fn(body)); return this; }
@@ -229,7 +245,7 @@ export function serveReadsInWorker(handle) {
     try { handle(req, res); }
     catch (e) {
       parentPort.postMessage({ type: "answer", id, status: 500, headers: [["Content-Type", "application/json"]],
-        body: Buffer.from(JSON.stringify({ error: "the read worker tripped", hint: String(e?.message ?? e).slice(0, 200) })).buffer });
+        body: Buffer.from(JSON.stringify({ error: "the read worker tripped", hint: faultLogged("the read worker tripped", e) })).buffer }); // its error goes to the log (POS-578)
     }
   });
   parentPort.postMessage({ type: "ready" });
@@ -364,7 +380,7 @@ export function startReadPool({ size, entry, argv = [], env = process.env, respa
      * main thread already read, and the flag that lets the worker's POST /mcp
      * past the read role's refusal for this call alone.
      */
-    forward(req, res, { body = null, mcp = false } = {}) {
+    forward(req, res, { body = null, mcp = false, earshot = null } = {}) {
       if (stopped) return false;
       return dispatch(res, {
         type: "read",
@@ -373,6 +389,7 @@ export function startReadPool({ size, entry, argv = [], env = process.env, respa
         headers: req.headers,
         ip: req.socket?.remoteAddress ?? null,
         ...(mcp ? { body, mcp: true } : {}),
+        ...(earshot ? { earshot } : {}),
       });
     },
     /** What the pool is, for /release: how many workers are up and what each has served. */

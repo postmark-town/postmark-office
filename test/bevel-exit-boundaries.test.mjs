@@ -8,6 +8,9 @@ import assert from 'node:assert/strict';
 import { callUnits, classViewOf, residentHolds, chestsRead } from '../src/world-units.mjs';
 import { UNIT_ACTION, foldUnits, totalOf } from '../src/world-stacks.mjs';
 
+// WLD-27's doors ship dark by default (src/chests-candy.mjs); these are their own tests, so they run with them open.
+process.env.WORLD_CHESTS_CANDY = "1";
+
 // Independent synthetic collaborator harness; no live pen, database, ledger,
 // resident record or production configuration is invoked.
 const label = 'review-comets';
@@ -49,6 +52,7 @@ function fixture(initialCount = 0) {
       returns.push({ handle: p.handle, stamps: n });
       return { applied: n };
     },
+    markTurn: (id, fn) => fn(), // WLD-27 A: the exit's settled holder reads; no ledger process in this fixture
     withdraw: async () => {
       withdrawals++;
       if (withdrawals === 1) throw new Error('synthetic pen unavailable');

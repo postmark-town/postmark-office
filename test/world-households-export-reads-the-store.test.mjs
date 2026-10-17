@@ -11,13 +11,14 @@
 // there the store and the printouts always agree and neither half of that rule
 // could go red. Here they disagree: the printouts file kin in a house of their
 // own and pin only ana, and the store has moved kin into ana's house and pins
-// both. The derivation is shared with the settlement snapshot
-// (src/household-logins.mjs § worldHouseholdsAt, POS-410), and the store's
-// registry reaches it as its `register`; these hold that seam.
+// both. Since 2026-10-13 the derivation is the store's alone
+// (src/household-logins.mjs § worldHouseholdsFromStore: `identities`, the pins,
+// the declared houses); the settlement snapshot keeps the ledger's road for a
+// past register (§ worldHouseholdsAt, POS-410).
 //
-// THE FLIPS: hand worldHouseholdsAt no `register` (the export reads the
-// printouts) and the first test goes red; drop the exit-2 guards and the
-// refusals write a file.
+// THE FLIPS: read the printouts instead of the store and the first test goes
+// red; drop the exit-2 guards and the refusals write a file; read the town
+// ledger again and the empty-town test goes red.
 //
 //   node --test test/world-households-export-reads-the-store.test.mjs
 
@@ -89,4 +90,42 @@ test("a store the export cannot read refuses: exit 2, nothing written", () => {
   assert.equal(res.status, 2, `expected the refusal, got ${res.status}: ${res.stderr}`);
   assert.match(res.stderr, /could not be read/);
   assert.equal(existsSync(file), false, "a refusal writes no world file");
+});
+
+// ── THE STORE ALONE (POS-350 gap 3, Wright 2026-10-13) ───────────────────────
+//
+// The export's base was the town ledger's resolver (`currentHouseholds` over the
+// town checkout); it is now the store's `identities`. So no value may come from a
+// town checkout at all: with an EMPTY town directory the export still renders the
+// store. THE FLIP: put `worldHouseholdsAt(TOWN, { currentHouseholds }, …)` back
+// and this exits 1 (there is no stamp-mint.mjs to import).
+test("no town checkout is read: an empty town still renders the store's registry", () => {
+  const empty = join(scratch, "no-town");
+  mkdirSync(empty, { recursive: true });
+  const world = join(scratch, "empty-town-world");
+  mkdirSync(join(world, "WORLD"), { recursive: true });
+  const base = { ...process.env };
+  delete base.WORLD2_PG; delete base.WORLD2_PG_URL;
+  const res = spawnSync(process.execPath, [join(OFFICE, "tools", "world-households-export.mjs"), "--town", empty, "--world", world],
+    { encoding: "utf8", env: { ...base, ...REG.env }, timeout: 60_000 });
+  assert.equal(res.status, 0, `the export must complete without a town: ${res.stderr}`);
+  const emitted = JSON.parse(readFileSync(join(world, "WORLD", "households.json"), "utf8"));
+  assert.deepEqual(emitted.households, { ana: "hh:ana-house", kin: "hh:ana-house" });
+  assert.equal(emitted.logins["ana-gh"], "hh:ana-house");
+  assert.equal(emitted.logins["kin-gh"], "hh:ana-house");
+  assert.equal(emitted.town_sha, null, "no town was read, so none is named");
+  assert.deepEqual(Object.keys(emitted), ["generated_at", "town_sha", "source", "note", "logins_note", "households", "logins"],
+    "the file's shape does not move");
+});
+
+// Where the ledger and the store agree (every handle housed, every account on
+// its house), the two derivations answer byte-equal maps. Measured on prod's
+// own store on 2026-10-13 the same way: 262 households and 307 logins, equal.
+test("the store's derivation and the ledger's agree byte for byte on an agreeing registry", async () => {
+  const { worldHouseholdsFromStore, worldHouseholdsAt } = await import("../src/household-logins.mjs");
+  const declared = { households: { "ana-house": { accounts: [ANA, KIN], residents: ["ana", "kin"], formerly: ["anas-old-name"] } } };
+  const pins = { ana: ANA, kin: KIN };
+  const fromStore = worldHouseholdsFromStore({ identities: [{ handle: "kin", household: "hh:ana-house" }, { handle: "ana", household: "hh:ana-house" }], pins, declared });
+  const fromLedger = worldHouseholdsAt(scratch, { currentHouseholds: () => new Map(Object.entries(LEDGER).map(([h, key]) => [h, { key }])) }, { pins, declared });
+  assert.equal(JSON.stringify(fromStore), JSON.stringify(fromLedger));
 });

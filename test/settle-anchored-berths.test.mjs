@@ -149,6 +149,22 @@ test("the address the sweep writes is the BERTH's own words, carried over", asyn
     "their prose is carried, not re-described — this settlement is the one the berth was promised");
 });
 
+// POS-574: every road that settles a berth marks it ashore, through the one
+// helper (residency.mjs § berthAshore), in the same commit as the address.
+test("the berth the sweep settles is marked ashore in the sweep's own commit, and kept", async () => {
+  for (const crlf of [false, true]) {
+    const clone = sweepClone({ crlf });
+    const landed = applySweep(clone, await planSweep(clone));
+    const committed = execFileSync("git", ["-C", clone, "show", "--name-only", "--format=", landed.commit], { encoding: "utf8" });
+    assert.ok(committed.split("\n").includes("HARBOR/berths/castor-vale.md"), "the berth rides the sweep's one commit");
+    const berth = readFileSync(join(clone, "HARBOR", "berths", "castor-vale.md"), "utf8");
+    const eol = crlf ? "\r\n" : "\n";
+    assert.match(berth, new RegExp(`^boarded: 2026-08-24${eol}ashore: \\d{4}-\\d{2}-\\d{2}${eol}`, "m"),
+      `marked ashore right under boarded, in the checkout's own line ends (crlf: ${crlf})`);
+    assert.equal(readBerth(clone, "castor-vale").data.github, "socksandstardust", "the berth still parses");
+  }
+});
+
 test("a berth with NO household row is refused BY HANDLE, never minted an address", async () => {
   // the broken covenant declare-exec names: a household standing in the white
   // pages that the record cannot account for

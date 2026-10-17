@@ -24,6 +24,9 @@ import { TICK_MS, recoverOrphanDrops, dropLiveGuard, dropUndoGuard, dropsStillOu
 import { foldUnits, totalOf, refuseOverCarry, UNIT_ACTION } from "../src/world-stacks.mjs";
 import { inFlightFor } from "../src/world-units.mjs";
 
+// WLD-27's doors ship dark by default (src/chests-candy.mjs); these are their own tests, so they run with them open.
+process.env.WORLD_CHESTS_CANDY = "1";
+
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const store = await startStore({ db: "drop_recovery_test" });
 after(() => store.stop());
@@ -291,7 +294,7 @@ test("DOOR · the filing COMMITS and then throws: nothing is undone, and the rec
   assert.deepEqual(await undos(id), [], "no refund of a filed unit");
   assert.equal(out.filed.status, "pending");
   assert.match(out.stands_note, /the mark WAS filed \(pending\)/);
-  assert.equal(out.office_error_after_filing, "world clone has no main ref");
+  assert.equal(out.office_error_after_filing, "the world's files could not be read", "the plain reason (POS-657); the raw error is in the log");
   assert.equal(await heldBy("sbx-cy"), 2, "one unit on the ground, two in hand — never three");
   assert.deepEqual((await office((c) => recoverOrphanDrops(c, { now: Date.now() + 2 * TICK_MS }))).restored, [], "and the tick agrees");
 });
@@ -340,7 +343,7 @@ test("DOOR · a legitimate set-down files and stays filed: no undo, nothing out"
 const raceDeps = async ({ markById = async () => null, attachments = [], holders = async () => [] } = {}) => {
   const base = await door({ leave: async () => { throw new Error("unused"); } });
   let ran = 0;
-  return { ...base, markById, holders, unstake: async () => ({ applied: 0 }), withdraw: async () => ({ withdrawn: true }),
+  return { ...base, markById, holders, unstake: async () => ({ applied: 0 }), withdraw: async () => ({ withdrawn: true }), markTurn: (id, fn) => fn(),
     readRows: async () => ({ units: await unitActs(), attachments }),
     dropsOut: async (h) => {
       if (ran++ === 0) assert.equal((await office((c) => recoverOrphanDrops(c, {}))).restored.length, 1, "the tick restores in the gap");

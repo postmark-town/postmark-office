@@ -101,6 +101,30 @@
 // EMPTY since 2026-09-24: Keemin ruled `wright/the-lit-name` in ("meant keep it
 // in!"), and it now plans as any other mark does.
 //
+// ── HELD: A VALUE THE PARSER WOULD SILENTLY LOSE (POS-619) ──────────────────
+//
+// The world's parser keeps what it can read and drops the rest without a word:
+// `dials: { stolen: true, clue: "…" }` (bare keys, not strict JSON) reads as
+// {}, a quoted `#` cuts the line, and a `[…]` that is not JSON stays a string.
+// World #200 and #204 name each loss from the raw text (marks-fold.mjs §
+// lossyValues, § lossyMessage), and mark-lint errs on it, but only where a tree
+// is linted: the PR lane. A commit that reaches main past the lane comes in
+// here, so this pen reads each changed mark's raw text at the ref through the
+// ref's OWN helper, and holds a mark with a loss under HELD in the lint's own
+// words, instead of storing the diminished record as if its author wrote it.
+//   · A mixed file (§ POS-614) carries the newest HAND commit's row, so that
+//     commit's text is checked too. The printout writes strict JSON (office
+//     mark-record.mjs § fmtVal) and is never the lossy one.
+//   · A held ADD's children are held with it (§ a held parent): the store
+//     cannot point at a row it does not have, and one lossy mark must never
+//     STOP the town's ingest (Wright 2026-10-14, G2).
+//   · A held AMEND is not re-planned: the head moves on, and the author's fix
+//     is a new commit, which carries it.
+//   · A ref whose marks-fold predates world #204 has no helper to ask, and the
+//     receipt says it was NOT CHECKED (G5).
+// The run still exits 0, and the machine receipt counts `held` (G3).
+// Class marks are LAW and never come here: law-ingest refuses a lossy law.
+//
 // ── THE DRY RUN READS THE STORE; IT CANNOT WRITE IT ─────────────────────────
 //
 // A diff against the store cannot be made without reading the store, so
@@ -125,7 +149,7 @@
 // the argument while the tick holds its lock.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, realpathSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
@@ -226,6 +250,11 @@ export function carriedRow(was, ref, carry) {
 
 // ── the plan: ONE function, both arms ────────────────────────────────────────
 
+/** The HELD line for a mark with a value the parser would lose: the lint's own words. */
+export const lossyWhy = (sentences) =>
+  `HELD: the parser would silently lose a value, so the store would hold less than the file says — ${sentences.join(" · ")} (POS-619)`;
+export const LOSSY_NOT_CHECKED = "lossy values: NOT CHECKED — this ref's marks-fold predates world #204 (no lossyValues/lossyMessage), so a value the parser would lose is not held (POS-619)";
+
 /**
  * What the store must learn to say what the file says at `ref`. PURE.
  *
@@ -234,12 +263,20 @@ export function carriedRow(was, ref, carry) {
  * @param {object[]} o.storeRows   every `marks` row, with `locked_at` (the close of its locked_window)
  * @param {Map}      o.pathAtRef   slug -> repo path of its mark.md at the ref
  * @param {Map|null} o.pathAtBase  slug -> repo path at the base (null: no base, so no retire can be proven)
- * @param {Function} o.commitFor   ({ path, range, deleted }) -> { sha, author, at, subject } | null
+ * @param {Function} o.commitFor   ({ path, range, deleted }) -> { sha, author, at, subject, printout_only? } | null
+ *                                 (`printout_only`: only the settlement's own printout touched the path — § POS-614)
  * @param {Set}      [o.held]      slugs held by name
  * @param {object[]} [o.derivedAtBase] `deriveSeed` rows at the BASE: given, an amend carries only the
  *                                 fields the file changed across the range (§ an amend carries the file's change)
+ * @param {Map|null} [o.lossy]     slug -> [sentence] for each mark whose text the parser would read
+ *                                 diminished (§ HELD: a value the parser would lose); null when the
+ *                                 ref's marks-fold has no helper, so nothing was checked
+ * @param {Map}      [o.mixed]     slug -> { hands, printouts }, each newest first, each entry
+ *                                 { commit, before, after, row } (records before/after that commit, and
+ *                                 its derived row): a file a hand commit AND the printout changed in the
+ *                                 range (`mixedChanges`; § a hand commit and the printout on one file)
  */
-export function planIngest({ derived, storeRows, pathAtRef, pathAtBase = null, commitFor, held = REFUSED_BY_NAME, derivedAtBase = null }) {
+export function planIngest({ derived, storeRows, pathAtRef, pathAtBase = null, commitFor, held = REFUSED_BY_NAME, derivedAtBase = null, mixed = null, lossy = null }) {
   const standing = storeRows.filter((r) => r.status === "standing");
   const bySlug = new Map(storeRows.map((r) => [r.slug, r]));
   const fileRecs = new Map(marksFromRows(derived, []).map((m) => [m.id, m]));
@@ -249,6 +286,10 @@ export function planIngest({ derived, storeRows, pathAtRef, pathAtBase = null, c
 
   const adds = [], amends = [], retires = [], skipped = [], heldOut = [], stops = [];
   const ruledAfter = (row, commit) => row.locked_at && commit?.at && new Date(row.locked_at) > new Date(commit.at);
+  // § THE SETTLEMENT'S OWN PRINTOUT: a path only the printout touched carries nothing.
+  const printoutOnly = (c) => (c?.printout_only
+    ? `only the settlement's own printout changed its file (${c.sha.slice(0, 9)} ${String(c.subject).slice(0, 40)}) — the store's own words read back, never an act (POS-614)`
+    : null);
 
   for (const row of derived) {
     const slug = row.slug;
@@ -259,16 +300,41 @@ export function planIngest({ derived, storeRows, pathAtRef, pathAtBase = null, c
       continue;
     }
     const fields = was ? recordDiff(fileRecs.get(slug), storeRecs.get(slug)) : null;
-    if (was && !fields.length) continue;                       // the store already says it
+    const mix = was ? mixed?.get(slug) : null;
+    if (was && !fields.length && !mix) continue;               // the store already says it
     if (held.has(slug)) { heldOut.push({ slug, why: "HELD by the founder's word — refused by name (backfill-register § REFUSED_BY_NAME)" }); continue; }
+    if (lossy?.has(slug)) { heldOut.push({ slug, lossy: lossy.get(slug), why: lossyWhy(lossy.get(slug)) }); continue; }
+    if (mix) {
+      // § A HAND COMMIT AND THE PRINTOUT ON ONE FILE (POS-614, Wright 2026-10-13: "(a)").
+      // Carry only the fields the hand commits changed, at the NEWEST hand commit's
+      // value (the hand wins a field both changed), wherever that differs from the
+      // store. The printout's fields are named on the receipt as left out.
+      const changedBy = (list) => new Set(list.flatMap((c) => (c.before ? recordDiff(c.before, c.after) : Object.keys(c.after).filter((k) => isRecordField(k, c.after[k])))));
+      const hand = changedBy(mix.hands), printed = [...changedBy(mix.printouts)].sort();
+      const newest = mix.hands[0];
+      const differs = new Set(recordDiff(newest.after, storeRecs.get(slug)));
+      const carry = [...hand].filter((k) => differs.has(k)).sort();
+      const leftOut = { printout_fields: printed, printouts: mix.printouts.map((c) => c.commit.sha) };
+      if (!carry.length) {
+        skipped.push({ slug, fields: fields.length ? fields : ["(none)"], ...leftOut,
+          why: `the hand commit ${newest.commit.sha.slice(0, 9)} changed nothing the store lacks; the printout's ${printed.join(", ") || "(no fields)"} left out (${leftOut.printouts.map((s) => s.slice(0, 9)).join(", ")}) (POS-614)` });
+        continue;
+      }
+      if (ruledAfter(was, newest.commit)) { skipped.push({ slug, fields: carry, ...leftOut, why: `differs, but the store's row was ruled at window ${was.locked_window}, after the hand commit ${newest.commit.sha.slice(0, 9)} — the door's later word stands` }); continue; }
+      amends.push({ slug, row: carriedRow(was, newest.row, new Set(carry)), was, fields: carry, differs: fields, commit: newest.commit,
+        keepParent: carry.includes("parent") ? undefined : was.parent, ...leftOut });
+      continue;
+    }
     const path = pathAtRef.get(slug);
     if (!was) {
       const commit = commitFor({ path, range: false, deleted: false });
+      if (printoutOnly(commit)) { skipped.push({ slug, fields: ["(add)"], why: printoutOnly(commit) }); continue; }
       if (!commit) { stops.push(`${slug}: no commit on the ref's ancestry names its file ${path} — a row with no provenance is not an act`); continue; }
       adds.push({ slug, row, commit });
       continue;
     }
     const commit = commitFor({ path, range: true, deleted: false });
+    if (printoutOnly(commit)) { skipped.push({ slug, fields, why: printoutOnly(commit) }); continue; }
     if (!commit) { skipped.push({ slug, fields, why: "differs, but no commit since the head changed its file — not the file's change to carry (a door-made row the file has not caught up to, or drift that predates the head)" }); continue; }
     if (ruledAfter(was, commit)) { skipped.push({ slug, fields, why: `differs, but the store's row was ruled at window ${was.locked_window} (${new Date(was.locked_at).toISOString()}), after the file's last change ${commit.sha.slice(0, 9)} — the door's later word stands` }); continue; }
     if (baseRecs) {
@@ -292,6 +358,7 @@ export function planIngest({ derived, storeRows, pathAtRef, pathAtBase = null, c
       if (!path) continue;                                       // never in the file at the base: the door's, untouched
       if (held.has(was.slug)) { heldOut.push({ slug: was.slug, why: "HELD by the founder's word — refused by name" }); continue; }
       const commit = commitFor({ path, range: true, deleted: true });
+      if (printoutOnly(commit)) { skipped.push({ slug: was.slug, fields: ["(retire)"], why: printoutOnly(commit) }); continue; }
       if (!commit) { skipped.push({ slug: was.slug, fields: ["(retire)"], why: `absent at this ref, but no commit since the head deleted ${path}` }); continue; }
       if (ruledAfter(was, commit)) { skipped.push({ slug: was.slug, fields: ["(retire)"], why: `absent at this ref, but the store's row was ruled at window ${was.locked_window}, after the deletion ${commit.sha.slice(0, 9)}` }); continue; }
       retires.push({ slug: was.slug, was, commit });
@@ -304,6 +371,26 @@ export function planIngest({ derived, storeRows, pathAtRef, pathAtBase = null, c
   // the edge is re-pointed through the slug at the store's own id, and a parent
   // neither standing in the store nor added by this ingest is a STOP.
   const slugOfDerivedId = new Map(derived.map((r) => [String(r.id), r.slug]));
+
+  // § A HELD PARENT HOLDS ITS CHILDREN (POS-619, G2). A child whose parent is
+  // held and not standing in the store would be a STOP below, refusing the
+  // whole run; it is held with its parent instead, and so on down.
+  const heldSlugs = new Set(heldOut.map((h) => h.slug));
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const list of [adds, amends]) {
+      for (let i = list.length - 1; i >= 0; i--) {
+        const c = list[i];
+        if (c.keepParent !== undefined || !c.row.parent) continue;
+        const pslug = slugOfDerivedId.get(String(c.row.parent));
+        if (!pslug || !heldSlugs.has(pslug) || bySlug.get(pslug)?.status === "standing") continue;
+        list.splice(i, 1);
+        heldSlugs.add(c.slug);
+        heldOut.push({ slug: c.slug, why: `HELD with its parent: ${pslug} is held and not in the store, so this mark has no row to point at (POS-619)` });
+        grew = true;
+      }
+    }
+  }
   const addedSlugs = new Set(adds.map((a) => a.slug));
   for (const c of [...adds, ...amends]) {
     c.parent = null;
@@ -321,6 +408,7 @@ export function planIngest({ derived, storeRows, pathAtRef, pathAtBase = null, c
     adds: adds.sort(sort), amends: amends.sort(sort), retires: retires.sort(sort),
     skipped: skipped.sort(sort), held: heldOut.sort(sort), stops,
     retiresProvable: !!pathAtBase,
+    lossyChecked: lossy !== null,
   };
 }
 
@@ -334,10 +422,14 @@ export function renderPlan(plan, { target, head, base, windowId, classMarks }) {
   out.push(`marks-ingest · ${target.ref} @ ${target.sha.slice(0, 9)} · head ${head ? head.slice(0, 9) : "none"} · ` +
     `base ${base?.sha ? `${base.sha.slice(0, 9)} (${base.source})` : "none — no retire can be proven"} · window ${windowId ?? "?"}`);
   out.push(`class marks at this ref: ${classMarks} — LAW, law-ingest's pen (law_projection), not this one`);
+  if (!plan.lossyChecked) out.push(LOSSY_NOT_CHECKED);
   out.push(`${NL}ADD ${plan.adds.length}:`);
   for (const a of plan.adds) out.push(`  + ${a.slug}  [${a.row.kind}]  ${who(a)}`);
   out.push(`${NL}AMEND ${plan.amends.length}:`);
-  for (const a of plan.amends) out.push(`  ~ ${a.slug}  fields: ${a.fields.join(", ")}  ${who(a)}`);
+  for (const a of plan.amends) {
+    out.push(`  ~ ${a.slug}  fields: ${a.fields.join(", ")}  ${who(a)}`);
+    if (a.printouts) out.push(`      the printout's fields left out: ${a.printout_fields.join(", ") || "(none)"} (${a.printouts.map((s) => s.slice(0, 9)).join(", ")}) — the hand commit's word is carried (POS-614)`);
+  }
   out.push(`${NL}RETIRE ${plan.retires.length}:`);
   for (const r of plan.retires) out.push(`  - ${r.slug}  ${who(r)}`);
   if (plan.held.length) {
@@ -468,32 +560,177 @@ export function checkoutAt(repo, sha, label) {
   return { dir: at, dispose: () => rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }) };
 }
 
-/** slug -> repo-relative path of its mark.md, through the world's own loader at that checkout. */
+/**
+ * slug -> repo-relative path of its mark.md, through the world's own loader at
+ * that checkout; and, through the same checkout's helper, slug -> the lint's
+ * sentences for each mark whose raw text the parser would read diminished
+ * (`lossy`). `lossyOf(text)` asks the same helper of any text (the mixed arm's
+ * hand commit). Both are null when the checkout's marks-fold predates world #204.
+ */
 export async function pathsAt(checkout) {
   const mf = await import(pathToFileURL(join(checkout, "tools", "marks-fold.mjs")).href);
   const recs = mf.loadMarks(join(checkout, "WORLD", "marks"));
+  const lossyOf = typeof mf.lossyValues === "function" && typeof mf.lossyMessage === "function"
+    ? (text) => mf.lossyValues(text).map((l) => mf.lossyMessage(l))
+    : null;
   const paths = new Map();
+  const lossy = lossyOf ? new Map() : null;
   let classMarks = 0;
   for (const r of recs) {
     if (r.kind === "class") { classMarks++; continue; }
     paths.set(r.id, relative(checkout, join(r._dir, "mark.md")).replace(/\\/g, "/"));
+    if (lossyOf) {
+      const found = lossyOf(readFileSync(join(r._dir, "mark.md"), "utf8"));
+      if (found.length) lossy.set(r.id, found);
+    }
   }
-  return { paths, classMarks };
+  return { paths, classMarks, lossy, lossyOf };
 }
 
-/** The commit that carried a file-side change, read from the log. */
+/**
+ * The mixed arm carries the newest HAND commit's row, not the ref's text, so
+ * that commit's text is asked too (POS-619, G2). Returns a new map: `lossy`
+ * plus each mixed slug whose hand text loses a value.
+ */
+export function withLossyHands(repo, lossy, mixed, pathAtRef, lossyOf) {
+  if (!lossy || !mixed?.size) return lossy;
+  const out = new Map(lossy);
+  for (const [slug, mix] of mixed) {
+    const sha = mix.hands[0]?.commit?.sha;
+    const path = pathAtRef.get(slug);
+    if (!sha || !path) continue;
+    const found = lossyOf(git(repo, ["show", `${sha}:${path}`]));
+    if (found.length) out.set(slug, [...new Set([...(out.get(slug) ?? []), ...found])]);
+  }
+  return out;
+}
+
+// ── THE SETTLEMENT'S OWN PRINTOUT IS NEVER AN INPUT (POS-614) ───────────────
+//
+// The crossing writes world main from the store, so a file its commit changed
+// says what the store already said, in the printout's spelling. Read back, it
+// is the store learning its own words as a new act. Measured at S106 and S107:
+// one amend each (`kuaka/exhibit-one-noe`, `current-the-reader/why-the-door-
+// refused-it`, fields `parent`/`_parentMarkId`), each carried by the sweep's own
+// "settlement: sweep" commit (50d1e6eeb, 0ddc96705), where the write-down's
+// framer spells a nested mark's parent its own way.
+//
+// So the commits the crossing writes are not provenance. A commit is the
+// printout when its AUTHOR EMAIL is one of the crossing's pens AND its SUBJECT
+// is one the crossing writes. Both, because the email alone is not enough: the
+// same Pen account was the git-era door's pen, and its 52 "mark: rei/…" commits
+// (2026-07-28, "via world_leave_mark") are a resident's own acts.
+//
+// The crossing's commits on main, by author and subject (world main, measured
+// 2026-10-13 at 0ddc96705):
+//   Postmark Pen         "settlement: sweep …"         the sweep's publish (101 touch WORLD/marks)
+//   Postmark Pen         "re-home: …"                  the sweep's re-home of a filing (27, 08-22..08-25)
+//   Postmark Pen         "photograph: windows …"       STATE/log, settlement-auto.sh § the photograph
+//   Postmark Pen         "crossing-save N: …"          STATE/snapshot, tools/crossing-save.mjs
+//   the settlement sweep (box)  "settlement: household registry …"   WORLD/households.json, deploy/settlement-registry.mjs
+// Only the first two have ever touched WORLD/marks; the rest are named so that
+// a future write of theirs into a mark is read the same way.
+//
+// A hand commit (Wright, a founder, a reviewed PR's merge) matches none of
+// these and is still the change this tool carries.
+export const PRINTOUT_PENS = Object.freeze([
+  { email: "301406700+postmark-pen@users.noreply.github.com", subjects: ["settlement: ", "re-home: ", "photograph: ", "crossing-save "] },
+  { email: "pen@postmark.town", subjects: ["settlement: ", "re-home: ", "photograph: ", "crossing-save "] },
+  { email: "postmark-settlement@users.noreply.github.com", subjects: ["settlement: "] },
+]);
+
+/** Is this commit the settlement's own printout? PURE. */
+export function isPrintoutCommit({ email, subject }) {
+  const e = String(email ?? "").toLowerCase();
+  const s = String(subject ?? "");
+  return PRINTOUT_PENS.some((p) => p.email === e && p.subjects.some((x) => s.startsWith(x)));
+}
+
+/**
+ * The commit that carried a file-side change, read from the log: the newest one
+ * that is not the printout. When only the printout touched the path, it answers
+ * `{ printout_only: true, … }` naming the newest printout commit, so the plan
+ * can say why it carries nothing; otherwise null when nothing touched it.
+ */
 export function commitReader(repo, { base, target }) {
   const SEP = "\x1f";
   return ({ path, range, deleted }) => {
     if (!path) return null;
-    const args = ["log", "-1", `--format=%H${SEP}%an${SEP}%cI${SEP}%s`];
+    const args = ["log", `--format=%H${SEP}%an${SEP}%ae${SEP}%cI${SEP}%s`];
     if (deleted) args.push("--diff-filter=D");
     args.push(range && base ? `${base}..${target}` : target, "--", path);
-    const line = git(repo, args).trim();
-    if (!line) return null;
-    const [sha, author, at, subject] = line.split(SEP);
-    return { sha, author, at: new Date(at).toISOString(), subject };
+    let printout = null;
+    for (const line of git(repo, args).split("\n")) {
+      if (!line.trim()) continue;
+      const [sha, author, email, at, subject] = line.split(SEP);
+      const c = { sha, author, at: new Date(at).toISOString(), subject };
+      if (!isPrintoutCommit({ email, subject })) return c;
+      printout ??= c;
+    }
+    return printout ? { ...printout, printout_only: true } : null;
   };
+}
+
+/**
+ * The mark files a hand commit AND the printout both changed in (base, target]:
+ * path -> { hands, printouts }, each a list of commits, newest first. Usually
+ * empty (7 of 106 blessing intervals up to S72, none since this pen started).
+ */
+export function mixedChanges(repo, { base, target }) {
+  if (!base) return new Map();
+  const SEP = "\x1f", REC = "\x1e";
+  const log = git(repo, ["log", `--format=${REC}%H${SEP}%P${SEP}%an${SEP}%ae${SEP}%cI${SEP}%s`, "--name-only", `${base}..${target}`, "--", "WORLD/marks"]);
+  const byPath = new Map();
+  for (const chunk of log.split(REC)) {
+    const [head, ...files] = chunk.split("\n").map((l) => l.trim()).filter(Boolean);
+    if (!head) continue;
+    const [sha, parents, author, email, at, subject] = head.split(SEP);
+    const commit = { sha, parent: parents.split(" ")[0], author, at: new Date(at).toISOString(), subject };
+    const side = isPrintoutCommit({ email, subject }) ? "printouts" : "hands";
+    for (const f of files) {
+      if (!f.endsWith("/mark.md")) continue;
+      if (!byPath.has(f)) byPath.set(f, { hands: [], printouts: [] });
+      byPath.get(f)[side].push(commit);
+    }
+  }
+  for (const [p, v] of byPath) if (!v.hands.length || !v.printouts.length) byPath.delete(p);
+  return byPath;
+}
+
+/**
+ * For each mixed file at the ref: slug -> { hands, printouts }, each commit with
+ * the mark's record before and after it and its derived row after it. Derives
+ * the world once per sha it needs (`known` holds the ones already derived).
+ */
+export async function mixedRecords(repo, mixedPaths, pathAtRef, known = {}) {
+  const slugOf = new Map([...pathAtRef].map(([slug, p]) => [p, slug]));
+  const rowsAt = new Map(Object.entries(known));
+  const recsAt = new Map();
+  const derive = async (sha) => {
+    if (!rowsAt.has(sha)) {
+      const co = checkoutAt(repo, sha, "mixed");
+      try { rowsAt.set(sha, (await deriveSeed({ worldRepo: co.dir, lawSha: sha })).marks); } finally { co.dispose(); }
+    }
+    if (!recsAt.has(sha)) recsAt.set(sha, new Map(marksFromRows(rowsAt.get(sha), []).map((m) => [m.id, m])));
+    return { rows: rowsAt.get(sha), recs: recsAt.get(sha) };
+  };
+  const out = new Map();
+  for (const [path, { hands, printouts }] of mixedPaths) {
+    const slug = slugOf.get(path);
+    if (!slug) continue;                                       // not a mark at the ref: no amend to shape
+    const entries = async (list) => {
+      const got = [];
+      for (const commit of list) {
+        const after = await derive(commit.sha), before = await derive(commit.parent);
+        const rec = after.recs.get(slug);
+        if (rec) got.push({ commit, before: before.recs.get(slug) ?? null, after: rec, row: after.rows.find((r) => r.slug === slug) });
+      }
+      return got;
+    };
+    const h = await entries(hands);
+    if (h.length) out.set(slug, { hands: h, printouts: await entries(printouts) });
+  }
+  return out;
 }
 
 const isAncestor = (repo, a, b) => {
@@ -558,8 +795,12 @@ export async function ingest(client, { worldRepo, ref = "blessed", since = null,
       const pathAtBase = atBase ? (await pathsAt(atBase.dir)).paths : null;
       const derivedAtBase = atBase ? (await deriveSeed({ worldRepo: atBase.dir, lawSha: base.sha })).marks : null;
       const { rows: storeRows } = await q(MARKS_SQL);
+      const mixedPaths = mixedChanges(repo, { base: base?.sha ?? null, target: target.sha });
+      const known = { [target.sha]: derivedAll.marks, ...(base && derivedAtBase ? { [base.sha]: derivedAtBase } : {}) };
+      const mixed = mixedPaths.size ? await mixedRecords(repo, mixedPaths, ref_.paths, known) : null;
+      const lossy = withLossyHands(repo, ref_.lossy, mixed, ref_.paths, ref_.lossyOf);
       plan = planIngest({
-        derived: derivedAll.marks, storeRows, pathAtRef: ref_.paths, pathAtBase, derivedAtBase,
+        derived: derivedAll.marks, storeRows, pathAtRef: ref_.paths, pathAtBase, derivedAtBase, mixed, lossy,
         commitFor: commitReader(repo, { base: base?.sha ?? null, target: target.sha }),
       });
     } finally {
@@ -616,7 +857,8 @@ async function main() {
     // The last line is the machine receipt the unit's state file keeps.
     console.log(JSON.stringify({
       status: r.status, ref, adds: r.plan?.adds.length ?? 0, amends: r.plan?.amends.length ?? 0,
-      retires: r.plan?.retires.length ?? 0, skipped: r.plan?.skipped.length ?? 0, stops: r.plan?.stops.length ?? 0,
+      retires: r.plan?.retires.length ?? 0, skipped: r.plan?.skipped.length ?? 0, held: r.plan?.held.length ?? 0,
+      stops: r.plan?.stops.length ?? 0,
     }));
     process.exitCode = r.status === "refused" ? 1 : 0;
   } catch (e) {

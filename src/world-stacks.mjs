@@ -48,6 +48,8 @@ export const UNIT_ACTION = Object.freeze({
   takeBack: "units:take-back",     // a dropped unit's mark taken back into a holding
   consumeInPlace: "units:consume-in-place", // a dropped unit's mark consumed where it stands
   exitWithdrawn: "units:exit-withdrawn", // that mark's withdrawal landed — the exit's terminal work is done
+  dropResolved: "units:drop-resolved", // the tick found a set-down's mark filed: settled, never asked again (moves nothing)
+  dropSweep: "units:drop-sweep",   // the tick's low-water cursor: every set-down through this id is settled (moves nothing)
 });
 const UNIT_ACTIONS = new Set(Object.values(UNIT_ACTION));
 export const UNIT_PREFIX = "units:";

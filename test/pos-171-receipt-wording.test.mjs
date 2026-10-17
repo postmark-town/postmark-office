@@ -287,25 +287,27 @@ test("leg 4 — the composer is pure: the door's answer object is not mutated", 
 });
 
 
-test("leg 5 — the real door, 6,865 m out with enter_on_arrival: the receipt is QUEUED and carries no arrived_note", async () => {
+test("leg 5 — the real door, 6,865 m out with enter_on_arrival: a refusing pre-check queues nothing, and carries no arrived_note", async () => {
   const walk = await walkViaOffice(repo, { handle: "alpha", mark_id: FAR, enter_on_arrival: true }, houseA);
 
   assert.equal(walk.position.arrived, false, "the bottle must actually not have arrived, or this leg proves nothing");
   assert.equal(walk.position.remainingM, 6865, "Kogane's own distance");
   assert.ok(walk.ledger?.commit, "the departure was recorded the same as any other walk — the wording changed, the walk did not");
 
-  assert.equal(walk.entry.queued_for_arrival, true);
+  // This bottle carries no enter/exit law, so the PRE-CHECK refuses with
+  // `crossingLaw`'s own 501. Since WLD-5 (Darko's G2, 2026-10-14) a pre-check
+  // that refuses queues nothing, and the receipt says so in the not-yet tense:
+  // no arrived_note, no entered, the refusal in its own words, and why.
+  assert.equal(walk.entry.queued_for_arrival, false, "a pre-check that refuses queues nothing (G2)");
   assert.equal(walk.entry.stop, FAR);
-  assert.equal(walk.entry.eta, walk.departed_at_crossing + walk.eta_crossings,
-    "the eta is the arrival crossing, which is the instant the entry was adjudicated against");
+  const arrivesCrossing = (Date.parse(walk.arrives_at) - Date.UTC(2026, 5, 12)) / (12 * 3600 * 1000);
+  assert.ok(Math.abs(walk.entry.eta - arrivesCrossing) < 3e-5,
+    "the eta is the arrival crossing from the whole-metre remainder: the instant arrives_at names, to the second");
   assert.equal("arrived_note" in walk, false);
   assert.equal("entered" in walk.entry, false);
   assert.doesNotMatch(JSON.stringify(walk), /stepped inside/);
-
-  // This bottle carries no enter/exit law, so the entry refuses with
-  // `crossingLaw`'s own 501 — and that refusal reaches the resident THROUGH the
-  // queued shape, which is the half of leg 3 the wiring can show.
   assert.match(String(walk.entry.refused), /carries no enter\/exit law/);
+  assert.match(walk.entry.note, /^nothing is queued: /, "and the note says why nothing was queued");
 });
 
 test("leg 6 — the SAME door, a walk of 0 m to the mark you stand on, keeps today's immediate entry", async () => {

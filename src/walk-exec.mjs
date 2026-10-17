@@ -25,6 +25,7 @@ import { penCommit } from "./write.mjs";
 import { singleLogEnabled } from "./dynamic-store.mjs";
 import { CLASS_MOVE, appendActFlipped, appendJournal, laneFlipped, settleShadowPens } from "./world-journal.mjs";
 import { departurePace } from "./world-classes.mjs";
+import { faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLONE = process.env.WORLD_CLONE ?? resolve(HERE, "..", "world-clone");
@@ -72,7 +73,7 @@ async function main() {
   // wandering-pen incident (2026-07-30) stranded 17 public ledger lines on
   // draft/jennuhh. Stand on main explicitly before touching the ledger.
   try { execFileSync("git", ["-C", CLONE, "switch", "-q", "main"], { encoding: "utf8" }); }
-  catch (e) { return err(500, "the world clone would not stand on main", String(e?.message ?? e).slice(0, 160)); }
+  catch (e) { return err(500, "the world clone would not stand on main", faultLogged("the world clone would not stand on main", e)); } // to this child's stderr, the office's log (POS-578)
   if (process.env.TOWN_PUSH === "1")
     try { execFileSync("git", ["-C", CLONE, "pull", "--rebase", "-q"], { encoding: "utf8" }); } catch { /* offline/behind — serve local */ }
 
@@ -199,4 +200,4 @@ async function main() {
 // the commit, so the resident is exactly where they were and may declare again.
 main().catch((e) => e?.pen
   ? err(e.code, e.defect, e.hint)
-  : err(500, "the walk pen tripped", String(e?.message ?? e).slice(0, 300)));
+  : err(500, "the walk pen tripped", faultLogged("the walk pen tripped", e))); // to this child's stderr, the office's log (POS-578)

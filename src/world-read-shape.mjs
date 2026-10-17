@@ -28,7 +28,12 @@
 //
 // ── v2 ──────────────────────────────────────────────────────────────────────
 //
-//   v1, with the cards as names only.
+//   THE WORLD READ v2 (POS-632, Darko 2026-10-14), shaped by world-read-v2.mjs
+//   § shapeV2, never here: it is built from reads the apex asks only for it.
+//   A caller opts in per call with read_shape: "v2" (W1), which wins over
+//   WORLD_READ_SHAPE. Until 2026-10-14 "v2" named v1 with the cards as names
+//   only; that shape never ran on prod (the eval picked v1), and cards: "names"
+//   gives it per call, so the name went to the new read.
 
 /** The shapes the switch accepts. */
 export const READ_SHAPES = Object.freeze(["v0", "v1", "v2"]);
@@ -136,7 +141,6 @@ export const titleOf = (id) => String(id ?? "").split("/").pop().replace(/-/g, "
 
 const CARDS_NOTE = {
   v1: 'one line per act. world { read: "<action>" } is the full card for one act (its fields, dials, the class that grants it, the terms); cards: "full" gives every card whole.',
-  v2: 'the acts open here, by name. world { read: "<action>" } is the full card for one act (its fields, dials, the class that grants it, the terms); cards: "full" gives every card whole.',
 };
 
 /**
@@ -147,6 +151,7 @@ const CARDS_NOTE = {
  */
 export function shapeRead(answer, { shape = "v0", cards = null, within = [], named = [], paceKmPerCrossing = null } = {}) {
   if (shape === "v0" || !answer || answer.error) return answer;
+  if (shape === "v2") throw new Error("the v2 read is shaped by world-read-v2.mjs § shapeV2, from reads the apex asks only for it");
   const inside = new Set(within);
   const own = new Set(named);
   const records = {};
@@ -159,10 +164,10 @@ export function shapeRead(answer, { shape = "v0", cards = null, within = [], nam
   for (const [k, v] of Object.entries(answer)) {
     if (k === "records") { out.records = records; out.ground = ground; continue; }
     if (k === "actions" && cards == null) {
-      // the walk pace is law: the class's own dial, handed in by the apex
+      // the walk pace is law: the class's own dial, handed in by the apex (WLD-29)
       const pace = paceKmH({ pace_km_per_crossing: paceKmPerCrossing });
-      out.actions = shape === "v2" ? v.map((e) => e.action) : v.map((e) => oneLine(e, { pace }));
-      out.cards = shape === "v2" ? "names-only" : "one-line";
+      out.actions = v.map((e) => oneLine(e, { pace }));
+      out.cards = "one-line";
       out.cards_note = CARDS_NOTE[shape];
       continue;
     }
@@ -182,7 +187,7 @@ const RECORDS_LEAN = "`records` — each mark `within` and `nearby` names, with 
 export const SIZE_V0 = 'SIZE: a bare call returns roughly 50–80k characters as of 2026-10, most of it `records` and the action cards, so use targeted reads: cards: "names" (the cards alone, shrunk), mark: "<id>" (one mark whole), find: "<q>", or read: "<action>" (one act).';
 const SIZE_LEAN = {
   v1: "SIZE: a bare call is the lean read, roughly 14k characters as of 2026-10 (it grows with what stands near you), with each act as one line: mark: \"<id>\" is one mark whole, find: \"<q>\" finds one, read: \"<action>\" is one act's full card, and cards: \"full\" gives every card whole.",
-  v2: "SIZE: a bare call is the lean read, roughly 13k characters as of 2026-10 (it grows with what stands near you), with the acts by name only: mark: \"<id>\" is one mark whole, find: \"<q>\" finds one, read: \"<action>\" is one act's full card, and cards: \"full\" gives every card whole.",
+  v2: "SIZE: a bare call is the world read v2, roughly 5k characters as of 2026-10: you, now (what happened since the last crossing), view (what fills your eyes, by bearing), who (who is active near you), happening_here, can (each act in one line) and law. mark: \"<id>\" is one mark whole, find: \"<q>\" finds one, read: \"<action>\" is one act's full card, and read_shape: \"v1\" is the lean read.",
 };
 
 let moved = false;

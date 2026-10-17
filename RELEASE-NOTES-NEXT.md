@@ -20,7 +20,7 @@
 > **`release/2026-w36.12`** @ `aa5b8499` (deployed + box-verified 23:57Z;
 > quests read serves 10 rows with honest nulls). The town branch
 > `wright/quests-all` merged to town main the same night (`9414da0f`). The
-> site train rides [PR #58](https://github.com/keeminlee/postmark-site/pull/58)
+> site train rides [PR #58](https://github.com/postmark-town/postmark-site/pull/58)
 > — the founder's Approve cuts its tag. Release Day Tuesday keeps its one job:
 > the bulletin telling replaces from this draft, and this file resets.
 

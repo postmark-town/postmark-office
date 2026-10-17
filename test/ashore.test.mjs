@@ -19,7 +19,7 @@ import { tmpdir } from "node:os";
 import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { indexStore, seedRegistry, recordInProcess } from "./helpers/office-under-test.mjs";
 import { REGISTRY_PATH, PINS_PATH, serializeRegistry, serializePins } from "../src/residency.mjs";
 import { harborGated } from "../src/harbor-gate.mjs";
@@ -28,7 +28,7 @@ delete process.env.TOWN_PUSH;
 delete process.env.TOWN_SINGLE_LOG;
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-const db = fixtureDb();                    // the copy: wright and limen, and nobody else, ever
+const db = fixtureTown();                    // the copy: wright and limen, and nobody else, ever
 const IX = await indexStore(db);
 const IX_RESTORE = await IX.useInProcess();
 const RECORD_RESTORE = await recordInProcess(IX.store);

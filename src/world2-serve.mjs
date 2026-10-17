@@ -42,17 +42,18 @@
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { readDraftClaims, keyHouseholdOf, withHousehold, claimRowsForSlug } from "./world2-claims.mjs";
+import { readDraftClaims, keyHouseholdOf, withHousehold, claimRowsForSlug, lastAmendedRow } from "./world2-claims.mjs";
 import { receiptFrom } from "./mark-receipt.mjs";
 import { sessionKeysVia, resolveHouse, houseRowsVia } from "./household-deriver.mjs";
 
 /**
  * HOW MANY HOUSES the roster knows — counted as HOUSES, through the deriver.
  *
- * `identities` is one row per HANDLE and its `household` column carries
+ * `identities` is one row per HANDLE. Its `household` column used to carry
  * whichever spelling the world repo's copy held when the row landed (measured
  * 2026-09-22: 173 of 190 `gh:<id>`, 17 `hh:<slug>`, umbraliminalis both at
- * once). This figure used to be `idRows.length`, which is the handle count
+ * once); since 055 (POS-350) it is the registry's view and answers `hh:<slug>`
+ * or `solo:<handle>`, so the deriver below names each by its slug. This figure used to be `idRows.length`, which is the handle count
  * wearing a household's name — 190 where the town has 118 houses — and
  * `DISCLOSURES` has nothing to say about a number that is simply a different
  * quantity under the wrong word.
@@ -107,6 +108,7 @@ import { actorRoster } from "./human-actor.mjs";
 import { stopDepartures } from "./world-movement.mjs";
 // WLD-29: a shown house's porch light, from the office's shared activity answer
 import { readHouseholdActivity, litOf, lightsUnknownWhy } from "./household-activity.mjs";
+import { faultLogged, plainReason } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 
 const state = { pool: null };
 
@@ -217,11 +219,10 @@ export async function world2MyMarks(key, { offset = 0, p: injected = null, refus
   const p = injected ?? await pool();
   const { household, households = [], disclosure } = await keyHouseholdOf(p, key);
 
-  // The household's roster, from the store's own `identities` projection — the
-  // registry `roll-ingest.mjs` writes ("census decision 1: roster is
-  // REVIEW-class, repo-first"). 1.0 resolves the same question through the town
-  // clone's dated `currentHouseholdOf`; this is that resolution, already made
-  // at the ingested sha and stored.
+  // The household's roster, from the store's `identities`: since 055 (POS-350)
+  // the registry's VIEW over `households` and `household_pins`, housed by the
+  // office's one deriver, so it answers "which house NOW" as the ceremony last
+  // wrote it.
   // The spelling set, for `HOUSEHOLD_HANDLES_SQL`'s reason: the roster is keyed
   // in whichever spelling the world repo's copy carried, so asking for one
   // returns part of a house and the page silently loses the rest of it.
@@ -460,7 +461,7 @@ export async function docketEscrow(p) {
     ingestedAt = head?.ingested_at ? new Date(head.ingested_at).toISOString() : null;
   } catch (e) {
     return { townSha: null, byMark: null,
-      reason: `the town's projection head could not be read (${String(e?.message ?? e).slice(0, 120)}), so what stands behind these marks is unknown — not zero` };
+      reason: `the town's projection head could not be read (${plainReason(e, "record", "the town's projection head")}), so what stands behind these marks is unknown — not zero` };
   }
   if (!townSha) return { townSha: null, byMark: null,
     reason: "no town sha is ingested, so the store cannot say what stands behind these marks — unknown, not zero" };
@@ -471,7 +472,7 @@ export async function docketEscrow(p) {
     return { townSha, ingestedAt, byMark, reason: null };
   } catch (e) {
     return { townSha, ingestedAt, byMark: null,
-      reason: `the escrow projection could not be read at town ${townSha.slice(0, 8)} (${String(e?.message ?? e).slice(0, 120)}) — unknown, not zero` };
+      reason: `the escrow projection could not be read at town ${townSha.slice(0, 8)} (${plainReason(e, "record", "the escrow projection")}) — unknown, not zero` };
   }
 }
 
@@ -579,11 +580,16 @@ export async function twinReceipt(p, id, { terrain = false, standing = false } =
   const notYetCarried = lockedNewest && windowKnown && Number(newest.window_id) > settled.settledWindow;
   const carriedUndecidable = standing && lockedNewest && !windowKnown;
   const published = standing && !notYetCarried && !carriedUndecidable;
+  // RULED AND CARRIED, AND NO LONGER STANDING (Wright, on office #539): the
+  // newest claim is locked at a candle a settlement has closed, and the mark is
+  // not in the rows. Its `mark_carried` row outlives it, so the receipt can name
+  // the settlement that carried it.
+  const carriedGone = !standing && lockedNewest && windowKnown && Number(newest.window_id) <= settled.settledWindow;
   // WHICH SETTLEMENT CARRIED IT: the recorded row, in 1.0's `{ s, sha, at }`.
   // `at` is looked up in the 20 newest settlements, as 1.0 looks it up in its
   // 20 newest tags; an older settlement's receipt names no date on either door.
   let carried = null;
-  if (published) {
+  if (published || carriedGone) {
     try {
       const { rows: [c] } = await p.query(
         `SELECT c.settlement, s.tag_sha FROM mark_carried c JOIN settlements s ON s.number = c.settlement WHERE c.mark = $1`, [id]);
@@ -593,9 +599,18 @@ export async function twinReceipt(p, id, { terrain = false, standing = false } =
       }
     } catch { carried = null; }
   }
+  // THE LAST AMEND (POS-612): the same `amend_carried` row 1.0's reader asks
+  // for (world2-claims.mjs § lastAmendedRow), so the two doors answer one fact.
+  let last_amended = null, amends_unread = null;
+  if (published) {
+    try { last_amended = await lastAmendedRow(id, { p }); }
+    catch (e) { last_amended = null; amends_unread = e?.code === "42P01" ? "075 not applied" : "the store did not answer"; }
+  }
   const receipt = receiptFrom({
     id, canon: published ? { id } : null, published_at: carried,
     claims, settlement: settled?.current ?? null, site_pin: null,
+    last_amended, amends_unread,
+    settled_window: windowKnown ? settled.settledWindow : null,
   });
   if (carriedUndecidable) {
     const reason = settled ? "the settlements table names no candle a settlement closed" : "the settlements table could not be read";
@@ -606,7 +621,9 @@ export async function twinReceipt(p, id, { terrain = false, standing = false } =
   }
   if (receipt.status === "published" && !carried) {
     Object.assign(receipt, { crossing: null, settlement_sha: null,
-      says: "published — the store holds this mark standing; which settlement carried it is not recorded in the store (see tree_only)" });
+      says: receipt.last_amended
+        ? `published, last amended at S${receipt.last_amended.s} — the store holds this mark standing; which settlement first carried it is not recorded in the store (see tree_only)`
+        : "published — the store holds this mark standing; which settlement carried it is not recorded in the store (see tree_only)" });
   }
   let read_at = null;
   try {
@@ -822,7 +839,7 @@ export async function world2Serve(path, searchParams, { p: injected = null } = {
       // A torn ingest is a REFUSAL, never a fold with whichever k came back
       // first — `stakesFromStore`'s rule, applied to one mark's slice.
       return { code: 503, body: { error: "bounce", defect: "the escrow projection cannot be folded at this sha",
-        hint: String(e?.message ?? e).slice(0, 240) } };
+        hint: faultLogged("the escrow projection cannot be folded at this sha", e) } }; // its error goes to the log (POS-578)
     }
 
     return { code: 200, body: {
@@ -906,7 +923,7 @@ export async function world2Serve(path, searchParams, { p: injected = null } = {
     try { eng = await engine(); }
     catch (e) {
       return { code: 503, body: { error: "bounce", defect: "the world engine cannot be read at this office",
-        hint: `${String(e?.message ?? e).slice(0, 160)}. investigate is the engine's judgment about a mark and its neighbourhood; this door refuses rather than composing one of its own.` } };
+        hint: `${faultLogged("the world engine cannot be read at this office (investigate)", e)} investigate is the engine's judgment about a mark and its neighbourhood; this door refuses rather than composing one of its own.` } };
     }
 
     const world = eng.build.assembleWorld({ worldState, skeleton });
@@ -966,7 +983,7 @@ export async function world2Serve(path, searchParams, { p: injected = null } = {
         WHERE action = ANY($1) ${live.DEPARTURE_ORDER_SQL}`, [live.DEPARTURE_ACTIONS]);
     let derived;
     try { derived = live.departureRecords(rows); }
-    catch (e) { return { code: 500, body: { error: "bounce", defect: "a departure act matches no known era", hint: String(e.message).slice(0, 400) } }; }
+    catch (e) { return { code: 500, body: { error: "bounce", defect: "a departure act matches no known era", hint: faultLogged("a departure act matches no known era", e) } }; }
     const all = derived.records.map((d) => ({
       iso: d.iso, handle: d.handle,
       from: d.from, toward: d.toward, at: d.at,
@@ -1027,7 +1044,7 @@ export async function world2Serve(path, searchParams, { p: injected = null } = {
     const dep = await departuresForEndpoints(p);
     let derived;
     try { derived = dep.records ? dep : live.departureRecords(dep.rows); }
-    catch (e) { return { code: 500, body: { error: "bounce", defect: "a departure act matches no known era", hint: String(e.message).slice(0, 400) } }; }
+    catch (e) { return { code: 500, body: { error: "bounce", defect: "a departure act matches no known era", hint: faultLogged("a departure act matches no known era", e) } }; }
     const fc = live.fractionalCrossing(at.ms);
     return { code: 200, body: {
       what: "every walker's derived position at one instant — position is a function of (record, clock); nothing en route is stored",
@@ -1071,7 +1088,7 @@ export async function world2Serve(path, searchParams, { p: injected = null } = {
     ]);
     let derived;
     try { derived = dep.records ? dep : live.departureRecords(dep.rows); }
-    catch (e) { return { code: 500, body: { error: "bounce", defect: "a departure act matches no known era", hint: String(e.message).slice(0, 400) } }; }
+    catch (e) { return { code: 500, body: { error: "bounce", defect: "a departure act matches no known era", hint: faultLogged("a departure act matches no known era", e) } }; }
     const world = live.worldFromRows({ marks: markRows, identities: idRows });
     const fc = live.fractionalCrossing(at.ms);
     const roll = rollRows.map((r) => r.handle);
@@ -1177,7 +1194,7 @@ export async function world2Serve(path, searchParams, { p: injected = null } = {
     const dials = talk.sayDials(markRows.filter((m) => m.status === "standing"));
     let derived;
     try { derived = talk.voiceRecords(rows, { centreOf: (id) => centres.get(id) ?? null }); }
-    catch (e) { return { code: 500, body: { error: "bounce", defect: "a voice act matches no known era", hint: String(e.message).slice(0, 400) } }; }
+    catch (e) { return { code: 500, body: { error: "bounce", defect: "a voice act matches no known era", hint: faultLogged("a voice act matches no known era", e) } }; }
     const body = talk.conversationsOf(derived.voices, {
       now: at.ms,
       earshotM: dials.earshot_m.value,
@@ -1211,7 +1228,7 @@ export async function world2Serve(path, searchParams, { p: injected = null } = {
         WHERE action = ANY($1) ${live.PASSAGE_ORDER_SQL}`, [live.PASSAGE_ACTIONS]);
     let derived;
     try { derived = live.passageRecords(rows); }
-    catch (e) { return { code: 500, body: { error: "bounce", defect: "a passage act matches no known era", hint: String(e.message).slice(0, 400) } }; }
+    catch (e) { return { code: 500, body: { error: "bounce", defect: "a passage act matches no known era", hint: faultLogged("a passage act matches no known era", e) } }; }
     const fc = live.fractionalCrossing(at.ms);
     const occ = live.occupancyAt(derived.passages, fc);
     const handle = searchParams?.get("handle");
@@ -1331,7 +1348,7 @@ export async function world2Apex(searchParams, { p: injected = null } = {}) {
   try { eng = await engine(); }
   catch (e) {
     return bounce(503, "the world engine cannot be read at this office",
-      `${String(e?.message ?? e).slice(0, 160)}. \`within\` is a containment chain and \`nearby\` a field of view; both are the engine's judgment. This door refuses rather than inventing a spine — a resident told they are somewhere they are not is worse than a resident told nothing.`);
+      `${faultLogged("the world engine cannot be read at this office (orient)", e)} \`within\` is a containment chain and \`nearby\` a field of view; both are the engine's judgment. This door refuses rather than inventing a spine — a resident told they are somewhere they are not is worse than a resident told nothing.`);
   }
 
   const world = eng.build.assembleWorld({ worldState, skeleton });
@@ -1538,7 +1555,7 @@ export async function departuresForEndpoints(p) {
         if (!got.discard) return { records: got.records, eras: got.eras, snapshot: got.snapshot };
         discarded = got.discard;
       }
-    } catch (e) { discarded = `the snapshot could not be read (${String(e?.message ?? e).slice(0, 160)})`; }
+    } catch (e) { discarded = `the snapshot could not be read (${plainReason(e, "record", "the twin's departures snapshot")})`; }
   }
   const { rows } = await p.query(
     `SELECT id, at, crossing, actor, action, payload FROM acts
@@ -1558,7 +1575,7 @@ export async function apexPresent(p, { world, at, engine: eng, roster = "roll" }
   ]);
   let derived;
   try { derived = dep.records ? dep : live.departureRecords(dep.rows); }
-  catch (e) { return { unavailable: "a departure act matches no known era", detail: String(e?.message ?? e).slice(0, 200) }; }
+  catch (e) { return { unavailable: "a departure act matches no known era", detail: plainReason(e, "record", "the twin's departure eras") }; }
   const fc = live.fractionalCrossing(Date.now());
   const roll = roster === "roll" ? rollRows.map((r) => r.handle) : [];
   // BEFORE THE 500 m FILTER, and that ordering is the whole of it (#2900). The

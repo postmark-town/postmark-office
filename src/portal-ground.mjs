@@ -13,7 +13,9 @@
 //   the stride          `walk_min_step`: "within that ground a walk is validated
 //                       and snapped at that granularity instead of the town's
 //                       whole-metre step"
-//   the spawn           `spawn`: a ground sets its entrants down at its own point
+//   the landing         `lands_at`: a ground sets its entrants down at its own point
+//                       (WLD-66: "spawn" is the creatures' word alone; the old
+//                       `spawn` key still reads, so existing marks keep working)
 //   the door's answer   `standpoint.portal`: which room, its space, its stride,
 //                       its body — "so a reader drawing that floor can draw the
 //                       grid the door will actually accept"
@@ -196,52 +198,57 @@ export function strideOnGround({ toward, targetFrom = "" }, place) {
 }
 
 /**
- * WHERE A GROUND SETS AN ENTRANT DOWN — `spawn`, the ground's own dial. Entry
- * writes occupancy and moves nobody, so a hand entering from outside the fence
- * would be inside by the record and outside by geometry; the spawn makes the
- * two agree. The jitter is WITNESSED (ground, hand, crossing), never random, so
- * two entrants land apart and one entrant lands consistently. A spawn outside
- * the ground's own extent is refused and disclosed, never honoured. A ground
- * with no spawn places nobody.
+ * WHERE A GROUND SETS AN ENTRANT DOWN — `lands_at`, the ground's own dial (WLD-66,
+ * Darko 2026-10-15: "spawn" is the creatures' word, for their first coming into
+ * existence; a resident set down by a ground LANDS). The old `spawn` and
+ * `spawn_jitter_m` keys still read when the new ones are absent, so every mark
+ * that declares them keeps working. Entry writes occupancy and moves nobody, so a
+ * hand entering from outside the fence would be inside by the record and outside
+ * by geometry; the landing makes the two agree. The jitter is WITNESSED (ground,
+ * hand, crossing), never random, so two entrants land apart and one entrant lands
+ * consistently. A landing outside the ground's own extent is refused and
+ * disclosed, never honoured. A ground with no landing places nobody.
  */
-export function spawnPointFor(db, place, { who = "", crossing = null } = {}) {
+export function landingPointFor(db, place, { who = "", crossing = null } = {}) {
   if (!place?.row) return null;
   const read = (d) => {
-    const s = parseJson(d, null)?.spawn;
+    const dials = parseJson(d, null);
+    const s = dials?.lands_at ?? dials?.spawn;
     const x = Number(s?.x), y = Number(s?.y);
     return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
   };
-  let spawn = read(place.row.dials ?? place.dials);
-  if (!spawn && db) {
+  let landing = read(place.row.dials ?? place.dials);
+  if (!landing && db) {
     try {
       const row = db.prepare(CLASS_DIALS).all(JSON.stringify([String(place.class ?? place.row.class ?? "")]))[0];
-      spawn = row ? read(row.dials) : null;
-    } catch { spawn = null; }
+      landing = row ? read(row.dials) : null;
+    } catch { landing = null; }
   }
-  if (!spawn) return null;
+  if (!landing) return null;
 
   const g = rectOf(place.row);
   if (!g) return null;
-  if (!inRect(spawn, g))
-    return { refused: `${place.ground} declares a spawn at ${spawn.x},${spawn.y}, which is outside its own extent — ignored`, at: null };
+  if (!inRect(landing, g))
+    return { refused: `${place.ground} declares a landing at ${landing.x},${landing.y}, which is outside its own extent — ignored`, at: null };
 
   const step = Number.isFinite(place.walk_min_step) && place.walk_min_step > 0 ? place.walk_min_step : 0.1;
   const reach = (() => {
-    const declared = Number(parseJson(place.row.dials ?? place.dials, null)?.spawn_jitter_m);
+    const dials = parseJson(place.row.dials ?? place.dials, null);
+    const declared = Number(dials?.lands_at_jitter_m ?? dials?.spawn_jitter_m);
     return Number.isFinite(declared) && declared >= 0 ? declared : step;
   })();
-  if (reach === 0) return { at: { x: snapTo(spawn.x, step), y: snapTo(spawn.y, step) }, jitter: 0 };
+  if (reach === 0) return { at: { x: snapTo(landing.x, step), y: snapTo(landing.y, step) }, jitter: 0 };
 
   const h = createHash("sha256").update(`${place.ground}|${who}|${crossing ?? ""}`).digest();
   const off = (i) => ((h[i] / 255) * 2 - 1) * reach;
   const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
   return {
     at: {
-      x: snapTo(clamp(spawn.x + off(0), g.x0, g.x1), step),
-      y: snapTo(clamp(spawn.y + off(1), g.y0, g.y1), step),
+      x: snapTo(clamp(landing.x + off(0), g.x0, g.x1), step),
+      y: snapTo(clamp(landing.y + off(1), g.y0, g.y1), step),
     },
     jitter: reach,
-    from: spawn,
+    from: landing,
   };
 }
 
