@@ -28,6 +28,7 @@ import { pathToFileURL } from "node:url";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
+import { classNodeNameOf, kindFieldOf, markClassOf } from "./world-grants.mjs"; // the kind rung: a mark's class in both forms (LOGOS v2, O1)
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -131,7 +132,7 @@ export function portalEntryFor(markId, worldState, service) {
   if (!vessel || !named || named === vessel) return null;
   if (!isVehicleStop(named, service)) return null;
   const body = (worldState?.marks ?? []).find((m) => m.id === vessel) ?? null;
-  if (String(body?.class ?? "") !== VEHICLE_CLASS) return null;
+  if (markClassOf(body) !== VEHICLE_CLASS) return null;
   return { vessel, stop: named, body };
 }
 
@@ -153,7 +154,7 @@ export function portalEntryFor(markId, worldState, service) {
  * supplies the class mark and the resolved roster.
  */
 export function groundBlockOf({ classMark = null, lends = [], extras = null } = {}) {
-  const cls = String(classMark?.class ?? "").trim();
+  const cls = String(classNodeNameOf(classMark) ?? "").trim();
   const verbs = [...new Set((lends ?? []).map((v) => String(v)).filter(Boolean))];
   if (!cls || !verbs.length) return null;
   return {
@@ -226,7 +227,7 @@ async function serviceFor(worldClone, worldState, deps = {}) {
  *  class marks and their bodies; it drops `actions:`, which is why the roster is
  *  a dep (the store owns it) and the body is not. */
 const classMarkIn = (worldState, className) =>
-  (worldState?.marks ?? []).find((m) => String(m.class ?? "") === String(className ?? "") && (m.kind === "class" || m.subkind === "class")) ?? null;
+  (worldState?.marks ?? []).find((m) => kindFieldOf(m) === "class" && String(classNodeNameOf(m) ?? "") === String(className ?? "")) ?? null;
 
 /**
  * The `ground` block for a target, or null — assembled from the class mark's own
@@ -240,7 +241,7 @@ const classMarkIn = (worldState, className) =>
 async function groundBlockFor(targetId, { w, service, deps, entryStop = null, standingRide = null, nowMs = Date.now(), knockedAt = null }) {
   if (!deps.lends) return null;
   const target = (w?.marks ?? []).find((m) => m.id === targetId) ?? null;
-  const className = String(target?.class ?? "").trim();
+  const className = String(markClassOf(target) ?? "").trim();
   if (!className) return null;
   let lends = [];
   try { lends = (await deps.lends(targetId)) ?? []; } catch { return null; }
@@ -518,7 +519,7 @@ async function enterAct(worldClone, payload = {}, key = null, deps = {}) {
   // would be the one resident who could not ride.
   const viaOrdinary = answer.entered.find((id) => {
     const m = (w.marks ?? []).find((x) => x.id === id);
-    return String(m?.class ?? "") === VEHICLE_CLASS && isVehicleStop(id, service);
+    return markClassOf(m) === VEHICLE_CLASS && isVehicleStop(id, service);
   }) ?? null;
 
   // THE SUMMARY MUST NOT CALL AN UN-REFUSED ACT A REFUSAL. Entering nothing has
@@ -829,7 +830,7 @@ async function exitAct(worldClone, payload = {}, key = null, deps = {}) {
   const { service, mod } = await serviceFor(worldClone, w, deps);
   const vessel = vesselIdOf(service);
   const target = (w.marks ?? []).find((m) => m.id === markId) ?? null;
-  const isVehicle = Boolean(vessel) && markId === vessel && String(target?.class ?? "") === VEHICLE_CLASS;
+  const isVehicle = Boolean(vessel) && markId === vessel && markClassOf(target) === VEHICLE_CLASS;
   let deposit = null;
   if (isVehicle && deps.acts) {
     const state = rideStateFrom((await deps.acts(who)) ?? [], { vesselId: vessel });

@@ -116,6 +116,8 @@ export const WORLD_ANCHOR = "the-town/let-there-be-light";
 // `frame` is a reparenting (§8's ruling (b)). Both ride one table, and the drain
 // sorts them by this column: marks to the sketchbook, frames to STATE/log.
 import { TOWN_CLASSES } from "./town-journal.mjs";
+import { isSited } from "./world-grants.mjs"; // the kind rung: sited in both forms (LOGOS v2, O1)
+import { classExtendsOf } from "./world-classes.mjs";
 
 export const CLASS_MARK = "mark";
 export const CLASS_FRAME = "frame";
@@ -931,7 +933,7 @@ export function pathFor(record, { parentPathOf = null, publishedPathOf = null } 
   const { by, slug } = idPartsOf(record);
   if (!slug) return null;
 
-  if (record?.kind === "sited" || record?.kind === "parcel") {
+  if (isSited(record, classExtendsOf())) {
     // GATE A: an existing filing never moves.
     const filed = record?.id && typeof publishedPathOf === "function" ? publishedPathOf(record.id) : null;
     if (filed) return filed;

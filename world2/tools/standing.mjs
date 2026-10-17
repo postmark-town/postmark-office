@@ -264,6 +264,138 @@ export const PARCEL_DIAL = { w: 25, h: 25 };           // DIALS.parcel_w / parce
 export const PARCEL_CLAIM_CAP = 3;                     // marks-fold.mjs:529
 export const PARCEL_CAP_LAW_DATE = "2026-07-30";       // marks-fold.mjs:530
 
+// ─────────────────────────────────────────────────────────────────────────────
+// THE KIND RUNG — how a row stands, asked of its CLASS CHAIN (LOGOS v2 part 2,
+// W2 · G12, settled 2026-10-17: "the fold is the record").
+//
+// VENDORED from world `b12b7156` (postmark-world #236) tools/mark-kind.mjs §
+// standingOf / isGroundIn / isSitedIn and tools/class-properties.mjs §
+// classChain, in effect verbatim:
+//
+//   "A standing word still answers for itself (`kind: sited`, `kind: parcel`,
+//    and a post class's instances …). A kind that names a class is answered by
+//    that class's chain, when the chain reaches the root. Only a chain that
+//    cannot answer (no class nodes in hand, or a fixture's partial tree) falls
+//    back to the record's place."
+//
+// W2 re-kinds instance marks (`kind: sited` + `class: thing` → `kind: thing`,
+// and `portal-ground`, `town`, `timetable`, `vehicle`, `note`), and the bless
+// puts them in the store as they are. Before this rung the walk below asked
+// `kind === "sited" || kind === "parcel"`, so every re-kinded row stopped being
+// ground and the marks standing on it went to the root at the next crossing.
+//
+// THE CLASS LAYER IS law_projection's, not the rows'. The world's fold indexes
+// the class nodes among the marks it folds; the store keeps those nodes as law
+// (`law_projection`, kind `class`, keyed by the class name, `extends` in
+// `data`), never in `marks`. `classLayerOf` reads those rows and `classLayerVia`
+// reads them ONLY WHEN THE STORE'S PENS AGREE on one commit (§ classLayerVia).
+// A walk handed no layer is the world's fold with no class nodes in hand: the
+// place answers.
+
+/** The standing words `kind:` wrote before it named the class, and the node kinds (mark-kind.mjs § STANDING_WORDS). */
+export const STANDING_WORDS = Object.freeze(new Set(["sited", "predicated", "predicate", "naming", "parcel", "class", "property", "post"]));
+/** The class every chain that can answer ends at. */
+export const CLASS_ROOT = "postmark-node";
+
+/** law_projection's `class` rows → Map class name → the name it extends (null at the root). First row wins. */
+export function classLayerOf(lawRows) {
+  const layer = new Map();
+  for (const r of lawRows ?? []) {
+    if (r?.kind != null && r.kind !== "class") continue;
+    const name = r?.key ?? r?.data?.class;
+    if (name == null || layer.has(String(name))) continue;
+    const ext = r?.data?.extends;
+    layer.set(String(name), ext == null || String(ext).trim() === "" ? null : String(ext));
+  }
+  return layer;
+}
+
+/** The three commits a class layer can be read at, in one round trip (§ classLayerVia). */
+export const CLASS_LAYER_HEADS_SQL = `
+  SELECT (SELECT sha FROM projection_heads WHERE repo = 'world-marks') AS marks,
+         (SELECT sha FROM projection_heads WHERE repo = 'world-law')   AS law,
+         (SELECT s.tag_sha FROM settlements s
+           WHERE EXISTS (SELECT 1 FROM law_projection l WHERE l.law_sha = s.tag_sha)
+           ORDER BY s.number DESC LIMIT 1)                             AS door`;
+
+/**
+ * The class layer, ONLY WHEN THE STORE'S PENS AGREE on the commit it belongs
+ * to; otherwise null, and the place answers (review-614, B1 and B2).
+ *
+ * The world's fold reads the class nodes of the same commit as the marks it
+ * folds. The store has three readings of "which commit", written by pens on
+ * their own timers, and the clearing ingests none of them itself:
+ *
+ *   world-marks  projection_heads, moved by marks-ingest (:12/:27/:42/:57), the
+ *                commit the `marks` rows were blessed at;
+ *   world-law    projection_heads, moved by law-ingest (:04/:19/:34/:49), the
+ *                clearing's law pin;
+ *   door         the newest settlement whose commit law_projection holds:
+ *                src/law-classes.mjs § LAW_AT_BLESSING_SQL, the pin the doors
+ *                read classes at, and so the form the door writes new claims in.
+ *
+ * Both pens read the newest settlement tag's peeled commit (marks-ingest
+ * `--ref blessed` → src/world-branches.mjs § blessed; world2-ingest.sh `law` →
+ * world2-refresh-clone.sh `world-blessed`, then law-ingest's main run moves the
+ * pin), so at a settlement all three are one sha and the chain answers.
+ *
+ * THEY PART IN BOTH DIRECTIONS, and either way one layer is wrong for some rows:
+ *   · the LAW behind (a bless the law timer has not reached, a lossy law refused
+ *     whole, POS-619, a held pin, POS-635, a parked unit): the pre-W2 rulebook,
+ *     where `thing` extends `mark`, read over W2 rows makes them no ground (B1);
+ *   · the MARKS behind (marks-ingest REFUSED on a STOP or a failed statement,
+ *     likeliest right after the W2 bless) while the door writes the new form at
+ *     W2's pin: the old rulebook read at world-marks over new-form claims makes
+ *     a ✦0 `kind: thing` on its own parcel commons, refused escrow-absent (B2).
+ * So a skew is null: the place answers, which agrees with the chain wherever the
+ * world's lint holds (G13; 1,549 of 1,549 rows on W2), in both directions.
+ */
+export async function classLayerVia(q) {
+  const { rows: [heads] } = await q(CLASS_LAYER_HEADS_SQL);
+  const sha = heads?.marks ?? null;
+  if (sha == null || heads.law !== sha || heads.door !== sha) return null;
+  const { rows } = await q(`SELECT kind, key, data FROM law_projection WHERE law_sha = $1 AND kind = 'class'`, [sha]);
+  return rows.length ? classLayerOf(rows) : null;
+}
+
+/** class-properties.mjs § classChain: the name, then up `extends` while a class row names the next link. */
+export function classChainOf(classes, name) {
+  const out = [];
+  for (let c = String(name); classes?.has(c) && !out.includes(c); c = classes.get(c)) {
+    out.push(c);
+    if (classes.get(c) == null) break;
+  }
+  return out;
+}
+
+/**
+ * How a record stands: "sited", "parcel", "predicate", "naming", "post",
+ * "class", "property", or null. mark-kind.mjs § standingOf, over the store's
+ * class layer (`classes`, from `classLayerOf`).
+ */
+export function standsAs(m, classes = null) {
+  if (!m) return null;
+  const kind = m.kind == null ? null : String(m.kind);
+  if (kind === "class" || kind === "property") return kind;
+  if (kind === "naming") return "naming";
+  if (kind === "predicated" || kind === "predicate") return "predicate";
+  if (kind == null) return null;
+  if (STANDING_WORDS.has(kind)) return kind;
+  const chain = classes ? classChainOf(classes, kind) : [];
+  if (!chain.includes(CLASS_ROOT)) return m.at ? "sited" : null;
+  for (const s of ["post", "naming", "predicate", "parcel", "sited"]) if (chain.includes(s)) return s;
+  return null;
+}
+
+/** mark-kind.mjs § isGroundIn: what can contain. A place, and a sited or parcel standing. */
+export const isGround = (m, classes = null) => {
+  if (!m?.at) return false;
+  const s = standsAs(m, classes);
+  return s === "sited" || s === "parcel";
+};
+/** mark-kind.mjs § isSitedIn: what can be sovereign. A place, and a sited standing. */
+export const isSitedMark = (m, classes = null) => !!m?.at && standsAs(m, classes) === "sited";
+
 /**
  * A `marks` row, read as the 1.0 record the walk was written against.
  *
@@ -313,7 +445,7 @@ export function standingHouseholdOf(mark) {
  *    ranks candidates (strictly larger; smallest containing wins). Returns the
  *    container id, or null when only the world-root contains it."
  */
-export function placementParent(claim, marks, { worldScaleM = WORLD_SCALE_M, ranked = null } = {}) {
+export function placementParent(claim, marks, { worldScaleM = WORLD_SCALE_M, ranked = null, classes = null } = {}) {
   const claimArea = rect(claim).w * rect(claim).h;
   // `ranked` is the same candidate set, ordered smallest-area-first, built once
   // per recompute by `rankCandidates`. THE ANSWER IS IDENTICAL and the argument
@@ -334,7 +466,7 @@ export function placementParent(claim, marks, { worldScaleM = WORLD_SCALE_M, ran
   }
   let best = null, bestArea = Infinity;
   for (const m of marks) {
-    if ((m.kind !== "sited" && m.kind !== "parcel") || !m.at) continue;
+    if (!isGround(m, classes)) continue;                // ground by the class chain (G12, § the kind rung)
     const mr = rect(m), area = mr.w * mr.h;
     if (Math.max(mr.w, mr.h) >= worldScaleM) continue; // the world-root is the frame, never a parent
     if (area <= claimArea) continue;                    // a parent is strictly larger than its child
@@ -344,10 +476,10 @@ export function placementParent(claim, marks, { worldScaleM = WORLD_SCALE_M, ran
 }
 
 /** The candidate parents, smallest first — `placementParent`'s `ranked` input. */
-export function rankCandidates(marks, { worldScaleM = WORLD_SCALE_M } = {}) {
+export function rankCandidates(marks, { worldScaleM = WORLD_SCALE_M, classes = null } = {}) {
   const out = [];
   for (const m of marks) {
-    if ((m.kind !== "sited" && m.kind !== "parcel") || !m.at) continue;
+    if (!isGround(m, classes)) continue;
     const mr = rect(m);
     if (Math.max(mr.w, mr.h) >= worldScaleM) continue;
     out.push({ m, area: mr.w * mr.h });
@@ -366,12 +498,15 @@ export const worldRootOf = (marks) => marks.find((m) => leafSlugOf(m) === WORLD_
  *    class — PREDICATION … `null` means the world root itself. A mark that
  *    nothing tighter holds returns the root's id, never null — a chain that stops
  *    short of the frame is a chain with a hole in it."
+ *
+ * "Geometric" is the class chain's answer (§ the kind rung), as the world's
+ * own containmentParentOf asks it since G12: `isGroundIn(mark, kindIndexOf(marks))`.
  */
-export function containmentParentOf(mark, marks, root = worldRootOf(marks), ranked = null) {
+export function containmentParentOf(mark, marks, root = worldRootOf(marks), ranked = null, classes = null) {
   const rootId = root?.id ?? null;
   if (rootId != null && mark.id === rootId) return null;
-  const geometric = (mark.kind === "sited" || mark.kind === "parcel") && mark.at;
-  const up = geometric ? placementParent(mark, marks, { ranked }) : (mark._parentMarkId ?? null);
+  const geometric = isGround(mark, classes);
+  const up = geometric ? placementParent(mark, marks, { ranked, classes }) : (mark._parentMarkId ?? null);
   return up ?? rootId;
 }
 
@@ -430,6 +565,17 @@ export function groundVerdict(ground, mark, house) {
 // on the LOOSE list: loose marks are scanned the old way as inners, and are
 // offered to every other mark as candidates. So the index is an accelerator for
 // the rows it can speak for and is simply absent for the rows it cannot.
+//
+// THE INDEX'S SET IS NOT THE GROUND (LOGOS v2 part 2, W2). Migration 016's
+// partial index, and the two queries below that match its predicate so the
+// planner can use it, cover `kind IN ('sited','parcel')`. Ground is now the
+// class chain's answer (§ the kind rung), and W2's `thing`, `portal-ground`,
+// `town`, `timetable`, `vehicle` and `note` rows are ground outside that set.
+// The walk does not depend on the predicate: a row the queries do not return
+// is not `covered`, so it is walked the long way as an inner and offered to
+// every mark as an outer (`extras` in `computeStanding`), as a loose row is.
+// The queries keep the predicate on purpose: widening them to every ground
+// kind would stop them matching the index, which is the 16.5 s case below.
 //
 // IT REFUSES TO RUN UNINDEXED. Without `016_marks_bbox_gist.sql` the pair query
 // costs 16.5 s at 10x — slower than the walk it replaces — so the reader checks
@@ -561,6 +707,10 @@ export function markStanding(mark, byId) {
  * the world the walk resolves, and the seed/clearing job both scope their select
  * that way.
  *
+ * `classes` is the class layer (`classLayerOf` / `classLayerVia`), which says
+ * how a row of a class kind stands (§ the kind rung). Without it the place
+ * answers, as the world's fold does with no class nodes in hand.
+ *
  * The three derived fields the walk reads are stamped first, in the fold's own
  * order, because that order is load-bearing: `_cred` before sovereignty (the
  * grain decides whose parcels count as "own"), sovereignty before the walk.
@@ -607,7 +757,7 @@ export function markStanding(mark, byId) {
  * the set. So an `only` naming a slug that is not among `rows` throws here, where
  * the mistake is, instead of passing quietly through a gate.
  */
-export function computeStanding(rows, { only = null, containment = null, houseOf = null } = {}) {
+export function computeStanding(rows, { only = null, containment = null, houseOf = null, classes = null } = {}) {
   const records = rows.map(recordOf);
   // ── ONE HOUSE, WHICHEVER SPELLING ITS ROW WAS STORED UNDER (2026-09-30) ────
   //
@@ -655,8 +805,11 @@ export function computeStanding(rows, { only = null, containment = null, houseOf
     if (!parcelRectsByCred.has(mk._cred)) parcelRectsByCred.set(mk._cred, []);
     parcelRectsByCred.get(mk._cred).push(r);
   }
+  // SITED BY THE CHAIN (§ the kind rung): a W2 `kind: thing` on its own
+  // house's parcel is sovereign exactly as the `kind: sited` it was (the
+  // world's fold: `if (isSited(mk))`, over its class index).
   for (const mk of records) {
-    if (mk.kind === "sited") {
+    if (isSitedMark(mk, classes)) {
       const held = parcelRectsByCred.get(mk._cred) ?? [];
       mk._sovereign = held.some((pr) => contains(pr, rect(mk)));
     }
@@ -670,7 +823,7 @@ export function computeStanding(rows, { only = null, containment = null, houseOf
   // This is the "real spatial query" the ruling names: containment is asked of
   // the GROUND the store holds, not of the directory a record was filed in.
   const root = worldRootOf(records);
-  const ranked = rankCandidates(records);
+  const ranked = rankCandidates(records, { classes });
 
   // ── the candidate set, narrowed by the store's GiST when there is one ──────
   //
@@ -755,7 +908,7 @@ export function computeStanding(rows, { only = null, containment = null, houseOf
     Object.defineProperty(mk, "_containedBy", {
       configurable: true, enumerable: true,
       get() {
-        const v = containmentParentOf(this, records, root, rankedFor(this)) ?? null;
+        const v = containmentParentOf(this, records, root, rankedFor(this), classes) ?? null;
         Object.defineProperty(this, "_containedBy",
           { value: v, writable: true, enumerable: true, configurable: true });
         return v;

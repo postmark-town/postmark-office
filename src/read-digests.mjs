@@ -20,16 +20,17 @@ const isDials = (d) => d && typeof d === "object" && !Array.isArray(d) && Object
  * `kind: property` nodes and empties the class node's `dials:` (the resident's
  * pace becomes resident-pace-km-per-crossing), so a frontmatter-only table
  * would lose the page's stride the day that law is blessed. Any other mark
- * keeps its own frontmatter.
+ * keeps its own frontmatter. `isClass` says which marks are class nodes (the
+ * office hands in world-grants.mjs § kindFieldOf, which reads both forms).
  */
-export function dialsDigestOf(marks = [], { classDialsOf = null } = {}) {
+export function dialsDigestOf(marks = [], { classDialsOf = null, isClass = (m) => m?.kind === "class" } = {}) {
   const out = {};
   for (const m of marks ?? []) {
     const id = m?.id == null ? null : String(m.id);
     if (!id) continue;
     const own = isDials(m.dials) ? m.dials : null;
     let layer = null;
-    if (m.kind === "class" && classDialsOf) {
+    if (classDialsOf && isClass(m)) {
       try { layer = classDialsOf(m); } catch { layer = null; }
     }
     const dials = isDials(layer) ? { ...(own ?? {}), ...layer } : own;

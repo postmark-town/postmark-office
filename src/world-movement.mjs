@@ -45,6 +45,7 @@ import { movementV2Enabled } from "./dynamic-store.mjs";
 import { VESSEL_HANDLE, worldToolModule } from "./dynamic-entities.mjs";
 import { boundariesOnRoad, carriersFrom, carriersWithDisclosure, carrierStateAt, foldFrames, gunwaleWarning, inRect } from "./world-frames.mjs";
 import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
+import { kindFieldOf, markClassOf } from "./world-grants.mjs"; // the kind rung: a mark's class in both forms (LOGOS v2, O1)
 
 // The flag is read from the environment on every call and never latched at
 // import — the discipline `world-serve.mjs` and `dynamic-store.mjs` already use,
@@ -224,7 +225,7 @@ export const worldHasVehicle = (worldState) => {
   if (!Array.isArray(marks)) return false;
   const cached = _hasVehicle.get(marks);
   if (cached !== undefined) return cached;
-  const has = marks.some((m) => String(m?.class ?? "") === VEHICLE_CLASS && m?.kind !== "class" && m?.subkind !== "class");
+  const has = marks.some((m) => markClassOf(m) === VEHICLE_CLASS && kindFieldOf(m) !== "class");
   _hasVehicle.set(marks, has);
   return has;
 };
@@ -234,7 +235,7 @@ export function vehicleWithin(stack = [], worldState = null) {
   const byId = new Map((worldState?.marks ?? []).map((m) => [m.id, m]));
   for (const id of [...(stack ?? [])].reverse()) {
     const m = byId.get(id);
-    if (m && String(m.class ?? "") === VEHICLE_CLASS) return id;
+    if (m && markClassOf(m) === VEHICLE_CLASS) return id;
   }
   return null;
 }

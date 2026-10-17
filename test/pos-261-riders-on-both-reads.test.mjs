@@ -29,13 +29,14 @@
 
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
-import { copyFileSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 
 import { fixtureWorldCloneWithEngine, fixtureWorldDb, mainShaOf, scratchDir, crossingStart } from "./dynamic-fixture.mjs";
 import { NO_WORLD_DB } from "./helpers/world-rows.mjs";
 import { ENGINE_FILES, fixtureMarks } from "./movement-fixture.mjs";
+import { copyEngineFiles } from "./helpers/engine-closure.mjs";
 
 const REAL_CLONE = (await import("../src/world-store.mjs")).WORLD_CLONE;
 const scratch = scratchDir("pos261");
@@ -61,7 +62,8 @@ const DEPARTURES = [
 const repo = fixtureWorldCloneWithEngine({ label: "pos261", marks: MARKS, departures: DEPARTURES });
 // The real engine for the clock, the timetable and the enter/exit grammar; the
 // fixture's verbs, with the one export `crossingLaw` asks for.
-for (const f of [...ENGINE_FILES, "enter-exit.mjs"]) copyFileSync(join(REAL_CLONE, "tools", f), join(repo, "tools", f));
+// The engine and its imports (W2's enter-exit.mjs reads mark-kind.mjs).
+copyEngineFiles(REAL_CLONE, repo, [...ENGINE_FILES, "enter-exit.mjs"]);
 writeFileSync(join(repo, "tools", "world-verbs.mjs"),
   readFileSync(join(repo, "tools", "world-verbs.mjs"), "utf8") + "\nexport function enter() { return null; }\n");
 writeFileSync(join(repo, "WORLD", "enter-exit-ledger-frozen.md"), [

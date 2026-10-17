@@ -472,9 +472,20 @@ async function seedThings(base, houses, log) {
     const key = houses[i].key;
     const by = h.residents[0];
     for (const t of h.things) {
-      const thing = await rest(base, "POST", "/world/marks", { key, body: {
-        by, slug: t.slug, kind: "sited", class: "thing", at: t.at, extent: { w: 1, h: 1 }, body: t.body, stamps: 0,
-      } });
+      // WHO MAY MAKE A THING is read from the class layer now (LOGOS v2, O1: its
+      // `makers`, no floor), and right after the seed's bless the office's class
+      // layer may still be the pre-bless one, where the new class nodes do not yet
+      // stand in the works. The door says so with a 503; the seed waits for the
+      // office's refresh (up to two minutes) rather than failing.
+      let thing = null;
+      for (let tries = 0; tries < 13; tries++) {
+        thing = await rest(base, "POST", "/world/marks", { key, body: {
+          by, slug: t.slug, kind: "sited", class: "thing", at: t.at, extent: { w: 1, h: 1 }, body: t.body, stamps: 0,
+        } });
+        if (!(thing.status === 503 && /could not be read/.test(String(thing.body?.defect ?? "")))) break;
+        log(`thing ${by}/${t.slug}: the class layer is not readable yet (${thing.body.defect}); waiting 10 s for the office's refresh`);
+        await new Promise((r) => setTimeout(r, 10_000));
+      }
       if (thing.status >= 300 || thing.body?.error) throw new Error(`the seed's thing ${t.slug} answered ${said(thing)}`);
       log(`thing ${by}/${t.slug} at ${t.at.x},${t.at.y}`);
     }

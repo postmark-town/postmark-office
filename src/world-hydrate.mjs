@@ -55,6 +55,8 @@ import {
 import { createGraphRows, graphTablesOf, graphCounts, writeRowsFile } from "./world-graph-rows.mjs";
 import { blessed } from "./world-branches.mjs";
 import { readReleaseStamp } from "./release.mjs";
+import { classFieldOf, classNodeNameOf, dialsOfClassNode, kindFieldOf, standingOf } from "./world-grants.mjs"; // the kind rung: one answer for both forms (LOGOS v2, O1)
+import { truth, whole } from "./holding-law.mjs"; // a record's true/false and whole number, in the spellings the parser leaves them
 
 const argOf = (name, fallback) => { const i = process.argv.indexOf(name); return i !== -1 ? process.argv[i + 1] : fallback; };
 const flag = (name) => process.argv.includes(name);
@@ -355,7 +357,10 @@ if (markStanding) {
 }
 
 const relPath = (d) => relative(TREE, d).replace(/\\/g, "/");
-const GEOMETRIC = (m) => m?.kind === "sited" || m?.kind === "parcel";
+// GEOMETRIC is SITED, in either form (LOGOS v2, O1): `kind: sited`/`kind: parcel`,
+// or a `kind: thing` whose class's lineage reaches `sited` (world-grants §
+// standingOf; the lineage is § the kind rung below, read off the marks loaded here).
+const GEOMETRIC = (m) => standingOf(m, extendsOfClass) === "sited";
 
 // THE POSITION CLAUSE, asked of containment rather than of the path (the freeze).
 //
@@ -378,18 +383,47 @@ const standsInWorks = (m) => containmentSource === "containment-map"
   ? (containmentChain.get(m.id) ?? []).includes(KEEPING_WORKS_ID)
   : relPath(m._dir).includes("/the-keeping-works/");
 
+// THE KIND RUNG (LOGOS v2, lane O1). Until the instance migration lands, a
+// mark's class is spelled two ways (`kind: sited` + `class: thing`, or
+// `kind: thing`), and a class node may name itself by `class:` or by its
+// slug under `kind: class`. Each mark's class is read once, by world-grants'
+// resolver, and the store's `class` prop is that one answer, so every store
+// reader keyed on `$.class` reads both forms. The old form projects exactly as
+// it always did. The lineage is the declarations' own `extends`.
+const classDecls = new Map();
+for (const m of marks) {
+  const n = kindFieldOf(m) === "class" || m.class !== undefined ? classNodeNameOf(m) : null;
+  if (n && standsInWorks(m) && !classDecls.has(n)) classDecls.set(n, m.extends ?? null);
+}
+function extendsOfClass(name) { const e = classDecls.get(String(name)); return e == null ? null : String(e); }
+const classOf = (m) => classFieldOf(m) ?? undefined;
+// A thing's own holding word, as its values (the props block's `holdingWordOf` line says why).
+const holdingWordOf = (m) => ({
+  ...(m.holder !== undefined ? { holder: truth(m.holder) } : {}),
+  ...(m.capacity !== undefined ? { capacity: whole(m.capacity) } : {}),
+  ...(m.open !== undefined ? { open: truth(m.open) } : {}),
+  ...(m.portable !== undefined ? { portable: truth(m.portable) } : {}),
+});
+// A class's DIALS are its property nodes first, its old `dials:` second (LOGOS
+// v2, W1 G3/G5: every dial moves to a `kind: property` node named by its key).
+// The projection carries the one merged map, so every `$.dials` reader of the
+// store reads a dial in either form.
+const childrenOf = new Map();
+for (const m of marks) if (m._parentMarkId) { if (!childrenOf.has(m._parentMarkId)) childrenOf.set(m._parentMarkId, []); childrenOf.get(m._parentMarkId).push(m); }
+
 const oddFrontmatter = [];
 for (const m of marks) {
   const problems = [];
   if (m._error) problems.push(`unparseable frontmatter: ${m._error}`);
   if (!m.by) problems.push("no `by:`");
   if (!m.kind) problems.push("no `kind:`");
-  else if (!["sited", "parcel", "predicated", "naming"].includes(m.kind)) problems.push(`unknown kind: ${m.kind}`);
+  else if (!["sited", "parcel", "predicated", "naming", "predicate", "property"].includes(m.kind) && !classDecls.has(String(m.kind)))
+    problems.push(`unknown kind: ${m.kind}`); // the new form's kind names a declared class (the kind rung)
   if (!m.date) problems.push("no `date:`");
   else if (!isValidMarkDate(m.date)) problems.push(`bad date: ${m.date}`);
   if (GEOMETRIC(m) && (m.at?.x == null || m.at?.y == null)) problems.push("geometric kind without `at:`");
-  if (m.kind === "sited" && (m.extent?.w == null || m.extent?.h == null)) problems.push("sited without `extent:`");
-  if (m.kind === "predicated" && (m.slot == null || m.value == null)) problems.push("predicated without slot/value");
+  if (GEOMETRIC(m) && kindFieldOf(m) !== "parcel" && (m.extent?.w == null || m.extent?.h == null)) problems.push("sited without `extent:`");
+  if ((m.kind === "predicated" || m.kind === "predicate") && (m.slot == null || m.value == null)) problems.push("predicated without slot/value");
   if (m.body != null && m.body.length > 150) problems.push(`body ${m.body.length} chars (schema says <=150)`);
   if (m.timetable != null && m.mechanic !== "timetable") problems.push("`timetable:` without `mechanic: timetable`");
   if (m.mechanic === "timetable" && m.timetable == null) problems.push("`mechanic: timetable` without `timetable:`");
@@ -421,6 +455,10 @@ for (const m of marks) {
       // carries no key at all, and the gate falls back to the path there.
       in_works: standsInWorks(m),
       slot: m.slot ?? null, value: m.value ?? null,
+      // A PROPERTY NODE's own fields (LOGOS v2: name, tier, default, body; the
+      // tier is the column). Carried only on `kind: property`, so every other
+      // mark projects exactly as it did.
+      ...(m.kind === "property" ? { name: m.name ?? m.slug ?? null, default: m.default ?? null, of: m.of ?? null } : {}),
       far: m.far === true || m.far === "true" || null,
       feature: m.feature ?? null, mechanic: m.mechanic ?? null, timetable: m.timetable ?? null,
       points: Array.isArray(m.points) ? m.points.length : null,
@@ -439,17 +477,17 @@ for (const m of marks) {
       // `implements:`/`affordances:` ride along because they are the same
       // record's other promises and a class read that had to open the repo for
       // them would not be a store read at all.
-      class: m.class ?? null,
+      class: classOf(m) ?? null,
       // THE DECLARATION FACT (step-1 promotion, 2026-08-18): a class-carrying
       // mark standing in the Keeping Works DECLARES its class; anywhere else
       // it is an INSTANCE (LOGOS/classes.md § Instantiation; the store's
       // WORKS_PATH gates read the same clause). Derived here once so every
       // reader downstream — the lints, the payload, the site lens — reads the
       // fact instead of re-deriving it. Emitted only when true.
-      declares: (m.class !== undefined && standsInWorks(m)) || undefined,
+      declares: (classOf(m) !== undefined && standsInWorks(m)) || undefined,
       class_version: Number.isFinite(Number(m.version)) ? Number(m.version) : null,
       extends: m.extends ?? null,
-      dials: (m.dials && typeof m.dials === "object" && !Array.isArray(m.dials)) ? m.dials : null,
+      dials: classOf(m) !== undefined ? dialsOfClassNode(m, childrenOf.get(m.id)) : ((m.dials && typeof m.dials === "object" && !Array.isArray(m.dials)) ? m.dials : null),
       implements: Array.isArray(m.implements) ? m.implements : null,
       // `actions:` is the key (renamed from `affordances:` 2026-08-15 — the
       // category collapsed: everything a class grants IS an action); the old
@@ -537,6 +575,14 @@ for (const m of marks) {
       // writes the nodes; class-read.mjs reads them, and finds them here.
       // Only on a property, so no other mark's props grow a key.
       ...(m.kind === "property" ? { name: m.name ?? null, default: m.default ?? null } : {}),
+      // A THING'S OWN HOLDING WORD: `holder`, `capacity`, `open` and `portable` (the playground's QA
+      // of LOGOS v2 part 2, fail 2). The FIFTH instance of this block's one class: the four rode in
+      // `keys` and their values were dropped, so sb-ash's pouch, made with `holder: true` and
+      // `capacity: 10`, read `holder` null here. They are sovereign on thing (ruled 16:03) and only
+      // its maker writes them (kind-holding § holderWordOf). Carried only where the record says them,
+      // so no other mark's props grow a key; the booleans in either spelling the parser leaves them,
+      // on the `loot:` precedent, through the holding law's own readers.
+      ...holdingWordOf(m),
       frontmatter_problems: problems.length ? problems : null,
       keys: rawKeys(m),               // see § what the AUTHOR wrote, above
     },
@@ -942,16 +988,17 @@ for (const m of marks)
   // Position by containment, not by path — the same clause `declares:` is
   // stamped from (§ the position clause). A declaration filed at its id after
   // the freeze must still be the one this rail points every instance at.
-  if (m.class !== undefined && standsInWorks(m) && !declOfClass.has(String(m.class)))
-    declOfClass.set(String(m.class), m.id);
+  if (classOf(m) !== undefined && standsInWorks(m) && !declOfClass.has(String(classOf(m))))
+    declOfClass.set(String(classOf(m)), m.id);
 
 const danglingMechanics = [];
 let instanceOf = 0, implementsEdges = 0;
 for (const m of marks) {
   if (m.kind === "parcel") { edge(m.id, PARCEL_CLASS, "instance-of", { via: "kind: parcel" }, typeof m.date === "string" ? m.date : null); instanceOf++; }
-  if (m.class !== undefined && declOfClass.get(String(m.class)) !== m.id) {
-    const decl = declOfClass.get(String(m.class)) ?? `class:${m.class}`;
-    edge(m.id, decl, "instance-of", { via: "class:", declared: declOfClass.has(String(m.class)) }, typeof m.date === "string" ? m.date : null);
+  const cls = classOf(m);
+  if (cls !== undefined && declOfClass.get(String(cls)) !== m.id) {
+    const decl = declOfClass.get(String(cls)) ?? `class:${cls}`;
+    edge(m.id, decl, "instance-of", { via: m.class !== undefined ? "class:" : "kind:", declared: declOfClass.has(String(cls)) }, typeof m.date === "string" ? m.date : null);
     instanceOf++;
   }
   if (m.mechanic) {

@@ -56,7 +56,7 @@
 import test, { after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, unlinkSync, cpSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -70,6 +70,7 @@ import { CLASS_FRAME, CLASS_MOVE, readJournal } from "../src/world-journal.mjs";
 // this file, in the office's own row shape. Nothing below claims a door wrote
 // these rows. See test/journal-seed.mjs.
 import { seedJournalRow } from "./journal-seed.mjs";
+import { copyEngineFiles } from "./helpers/engine-closure.mjs";
 import { __setPoolForTest } from "../src/world2-acts.mjs";
 import {
   LEDGER_NEW, LEDGER_OLD, LEDGER_FROZEN, DEPRECATED_DOOR, ledgerHeaderFrom,
@@ -638,7 +639,8 @@ test("END TO END through the real pen — crossing-exec writes, the mirror carri
   mkdirSync(join(clone, "WORLD"), { recursive: true });
   mkdirSync(join(clone, "tools"), { recursive: true });
   writeFileSync(join(clone, LEDGER_FROZEN), `${FROZEN_HEADER}${FROZEN_A}\n${FROZEN_B}\n`);
-  cpSync(join(WORLD_CLONE_FOR_TEST, GRAMMAR), join(clone, GRAMMAR));
+  // The grammar and what it imports (W2's enter-exit.mjs reads mark-kind.mjs).
+  copyEngineFiles(WORLD_CLONE_FOR_TEST, clone, [GRAMMAR.slice("tools/".length)]);
 
   const penDb = join(scratch, `pen-db-${n}.db`);
   const line = "- 2026-08-26T22:30:00.000Z · wright · enters wright/the-trueing-house · ferry 151.6 · word neutral";
