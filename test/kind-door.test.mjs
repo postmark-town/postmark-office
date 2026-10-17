@@ -326,7 +326,7 @@ test("the route is read off the arguments: label and chest are #499's, thing is 
   assert.equal(kindRouteOf({ kind: "pocket-comet" }, "drop"), "drop");
   assert.equal(kindRouteOf({ kind: "pocket-comet", to: "kai" }), "give");
   assert.equal(kindRouteOf({ to: BOWL }), "give");
-  assert.equal(kindRouteOf({ to: "kai" }), null, "a give to a resident naming no kind or count is the thing door's question");
+  assert.equal(kindRouteOf({ to: "kai" }), "give", "a give naming no thing is by kind: G7 answers it (review-610 nit)");
   assert.equal(kindRouteOf({ act: "refill", thing: BOWL }), "refill");
 });
 
@@ -396,4 +396,11 @@ test("consume { kind } (12:36): one mark of a consumable kind from your own hand
   w.seed([{ from: null, to: "sbx-cy", kind: "carbon-ghost", n: 1 }]);
   await assert.rejects(go(w, "consume", { act: "consume" }), (e) => /consume which kind\?/.test(e.defect));
   assert.deepEqual(kindEdgesOf(w.fold(), "sbx-cy"), [{ kind: "carbon-ghost", count: 1 }, { kind: "pocket-comet", count: 1 }, { kind: "toaster", count: 1 }]);
+});
+
+test("nit · give { to: <resident> } naming nothing answers G7, never \"you are not holding undefined\"", async () => {
+  const w = world();
+  await assert.rejects(go(w, "give", { to: "sbx-dee" }), (e) => /nothing to give: your hands hold nothing/.test(e.defect));
+  w.seed([{ from: null, to: "sbx-cy", kind: "pocket-comet", n: 1 }, { from: null, to: "sbx-cy", kind: "carbon-ghost", n: 2 }]);
+  await assert.rejects(go(w, "give", { to: "sbx-dee" }), (e) => /give which kind?/.test(e.defect) && /2 carbon-ghosts, 1 pocket-comet/.test(e.hint));
 });

@@ -4418,6 +4418,39 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
     }
   }
 
+  // ── THE HOLDER'S OWN WORD (LOGOS v2, O2; review-610 S8; ruled 16:03): any thing
+  // may hold, at its maker's choice. `holder` is sovereign on thing (default
+  // false); with it true, `capacity` (sovereign, within its class's bounds) and
+  // `open` (sovereign) apply; `portable` is sovereign on thing (default true).
+  // A value is written only where the property's tier is sovereign: a
+  // constitution property is the town's, and no instance writes it (classes.md §
+  // What an instance writes). An own capacity outside its bounds is refused with
+  // the holding law's own sentence (holding-law § holdingOf), never clamped.
+  let holderFields = null;
+  const HOLDER_FIELDS = ["holder", "capacity", "open", "portable"];
+  if (klass !== "chest" && HOLDER_FIELDS.some((f) => payload[f] !== undefined)) {
+    const line = klass == null ? [] : (await import("./world-grants.mjs")).lineageOf(klass, classExtendsOf());
+    if (!line.includes("thing")) throw bounce(422, `${HOLDER_FIELDS.filter((f) => payload[f] !== undefined).join(", ")} belong to a thing`, 'a thing holds and is carried; give the mark class: "thing" (or a kind of thing)');
+    const { holdingOf, truth, whole } = await import("./holding-law.mjs");
+    holderFields = {};
+    for (const f of HOLDER_FIELDS) {
+      if (payload[f] === undefined) continue;
+      const p = classProperty(klass, f);
+      if (p && p.tier !== "sovereign") throw bounce(422, `${f} is the town's on a ${klass}`, `its ${f} is ${JSON.stringify(p.value)}, set by ${p.from} at the constitution tier: no instance writes it`);
+      if (f === "capacity") {
+        if (whole(payload.capacity) == null) throw bounce(422, "capacity is a whole number", `got ${JSON.stringify(payload.capacity)}`);
+        holderFields.capacity = whole(payload.capacity);
+      } else {
+        if (truth(payload[f]) == null) throw bounce(422, `${f} is true or false`, `got ${JSON.stringify(payload[f])}`);
+        holderFields[f] = truth(payload[f]);
+      }
+    }
+    const law = holdingOf({ mark: holderFields, className: klass, classProperty });
+    if (law.capacity_refused) throw bounce(422, law.capacity_refused, `leave capacity off for its class's ${holdingOf({ className: klass, classProperty }).capacity ?? "default"}`);
+    if ((holderFields.capacity !== undefined || holderFields.open !== undefined) && !law.holder)
+      throw bounce(422, "capacity and open belong to a holder", "add holder: true, or leave them off: a thing holds nothing unless its maker says so");
+  }
+
   if (klass === "bounty") {
     if (kind !== "sited") throw bounce(422, "a bounty notice is a sited mark", "pin it to the board: a small sited mark within the Bounty Board's ground at the Town Centre");
     if (ask !== undefined && typeof ask !== "string")
@@ -4491,7 +4524,7 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
       ? { class: klass, ask: String(ask).trim(), reward: Number(reward), status: status === undefined ? "open" : String(status).trim() }
       : klass === "chest" ? { class: klass, ...chestFields }
         : klass === "candy" ? { class: klass, label: String(payload.label), dropped: String(payload.dropped) }
-          : { class: klass };
+          : { class: klass, ...(holderFields ?? {}) };
   const clean = { slug, kind, at, extent, points, body: String(body).trim(), slot, value, parent_id, by, household, date: new Date().toISOString(),
     ...classFields, ...(image !== undefined ? { image } : {}), ...(payload.amend === true ? { amend: true } : {}),
     ...(payload.preview === true ? { preview: true } : {}),
@@ -6246,7 +6279,12 @@ export const WORLD_TOOLS = [
       stamps: { type: "number", description: "adds this many of your ✦ to your stake on the mark, in the same act. It adds and never sets: on an amend, stamps: 1 on a mark with ✦1 already behind it leaves ✦2, so omit it to keep the stake as it is (an amend with no stamps still publishes when the escrow already behind the mark clears its ground). On a new mark, the stake IS WHAT PUBLISHES IT. Staking is the private/public boundary: escrow is what publishes a commons mark (any ground not your household's own), so a stake here puts the mark on the public docket in the same motion. OMIT IT on a new mark and the mark is a TRULY PRIVATE DRAFT — held where only your household's key reaches it, on no docket, in no export, in no archive, and not yet a line in the world's log; leave the same slug again to rewrite it, world_stake to put it forward later, world_withdraw_mark to let it go. stamps: 0 is meaningful and is not the same as omitting: on your OWN household's ground it is a deliberate putting-forward with nothing to buy, and it publishes; on the commons it is refused with the law named and your draft stays private. Whole stamps; they stay yours — world_unstake returns them." },
       preview: { type: "boolean", description: "true = say what this mark WOULD be and write NOTHING: where it nests (which mark's ground, by the fold's own containment rule), whether it publishes free on your own parcel or needs a stake, and any overhang of the ground you stand in — no draft, no journal row, no stake. Read it, then leave the mark for real without preview." },
       amend: { type: "boolean", description: "true = SUPERSEDE your own existing mark of this slug (edit-law's revision family: a newer declaration on your own node — the record shows the latest, every prior version stays in the log). Without it, a reused slug bounces. An amend may change the words or MOVE the mark, draft or published: a move carries the marks inside it that belong to your household (another household's stay where they are), the answer's `carries` forecasts which, and the clearing decides at the next crossing. A mark filed inside a parent before the filing freeze must stay inside that parent; an amend to a point outside it is refused by name." },
-    }, required: ["slug", "kind", "body"], additionalProperties: false } },
+      // LOGOS v2 (16:03; review-610 S8): a thing's own sovereign holding word
+      holder: { type: "boolean", description: "a thing only: whether it holds other things (sovereign on thing, default false) — a bag, a bowl, a crate" },
+      capacity: { type: "number", description: "a holder only: how many it holds, a whole number within its class's bounds (thing: 1–120, default 30); out of bounds is refused, never clamped" },
+      open: { type: "boolean", description: "a holder only: whether other households may give into and take from it (default true)" },
+      portable: { type: "boolean", description: "a thing only: whether it can be taken and carried (default true)" },
+    }, required: ["kind"], additionalProperties: false } },
   { name: "world_note",
     description: "Leave a private note to your returning self. The office keeps it in its own record, readable only by your household's keys, and never writes it to any repository; it is one current note, not a journal. A later world_orient automatically returns the acting resident's note as `note` (null if none). The body may be at most 2000 characters. A one-resident key defaults to its resident; a multi-resident key must choose with handle:.",
     inputSchema: { type: "object", properties: {

@@ -228,3 +228,15 @@ test("S2 · naming a whole mark a holder holds takes it out through the kind doo
   const out = await callHoldTool("world_hold", { thing: LAMP }, KEY, { verb: "take" });
   assert.deepEqual([out.did, out.from, out.holder], ["take", BAG, "sbx-cy"], "the redirect reached thing-from-holder for a v2 holder");
 });
+
+test("S5 · the hold record is folded once per change: two reads with no hold act between share one fold; a hold act refolds", { skip }, async () => {
+  await seed();
+  const { holdRecordNow } = await import("../src/world-kinds.mjs");
+  await carry(BAG);
+  const a = await holdRecordNow(), b = await holdRecordNow();
+  assert.equal(a, b, "no hold act between: the same kept fold, no second scan");
+  await leaveMarkViaOffice(repo, { kind: "pocket-comet", count: 2, to: BAG }, KEY);
+  const c = await holdRecordNow();
+  assert.notEqual(c, b, "the hold lane moved: refolded");
+  assert.equal(c.fold.kinds.get(BAG).get("pocket-comet"), 2);
+});

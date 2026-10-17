@@ -57,7 +57,8 @@ export function kindRouteOf(args = {}, verb = null) {
   if (args.thing != null && isHolderId(args.to)) return "thing-into-holder";  // a whole mark into one
   if (args.thing != null) return null;                                 // the thing door's
   if (args.from != null) return "take";
-  if (args.kind == null && args.count == null) return isHolderId(args.to) ? "give" : null; // a holder names no thing
+  // a give that names no thing is a give of what you hold by kind (G7: one kind, or the kinds listed)
+  if (args.kind == null && args.count == null) return args.to != null ? "give" : null;
   if (args.to != null) return "give";
   return verb === "drop" ? "drop" : "take";
 }
@@ -398,18 +399,50 @@ export async function callKinds(route, args, key, actor, deps) {
  * every thing in the actor's hands joins them (a carried bowl is at you).
  */
 export async function usableAt({ actor, here, markIds = [], residents = [] }) {
-  const [guards, { lawSnapshot }, world, { usablePairs }, { classViewOf }, { isUnitRow }] = await Promise.all([
-    import("./world2-guards.mjs"), import("./law-snapshot.mjs"), import("./world.mjs"), import("./usable-verbs.mjs"),
-    import("./world-units.mjs"), import("./world-stacks.mjs"),
+  const [{ lawSnapshot }, world, { usablePairs }, { classViewOf }] = await Promise.all([
+    import("./law-snapshot.mjs"), import("./world.mjs"), import("./usable-verbs.mjs"), import("./world-units.mjs"),
   ]);
-  const [units, attachments] = await Promise.all([guards.storeHoldingRows(), guards.storeAttachmentRows()]);
+  const { fold, attachments, places } = await holdRecordNow();
   const ids = [...new Set([...markIds.map(String), ...holdingsOf(attachments, String(actor))])];
   const marks = (await Promise.all(ids.map((id) => world.worldMarkById(id).then((r) => r.mark, () => null)))).filter(Boolean);
   let householdOf = null;
   try { householdOf = await (await import("./households.mjs")).householdLookup(); } catch { householdOf = null; }
   const pointWithinMark = await world.pointWithinMarkFn().catch(() => null);
-  return usablePairs({ actor, here, marks, residents, fold: foldUnits(units.filter(isUnitRow)), attachments,
+  return usablePairs({ actor, here, marks, residents, fold, attachments, places,
     view: classViewOf(lawSnapshot()), householdOf, pointWithinMark });
+}
+
+// ── THE HOLD RECORD, FOLDED ONCE PER CHANGE (review-610 S5) ─────────────────
+//
+// A bare read used to fold the whole holding and attachment history on every
+// call. Now the fold is kept and re-folded only when the hold lane has moved:
+// one cheap read of its high-water act id answers whether anything changed,
+// and every read between two hold acts reuses the same fold. ⚑ NOT YET THE
+// PER-SETTLEMENT SNAPSHOT the rule asks for (POS-277: a snapshot sealed per
+// clearing, the delta computed since): the hold lane has no sealed snapshot
+// table, and adding one is law-tier DDL — named for Darko on #610.
+const HOLD_TOP_SQL = "SELECT max(id)::text AS top FROM acts WHERE class = 'holding' OR action = ANY($1)";
+let _hold = null;
+export async function holdRecordNow({ fresh = false } = {}) {
+  const [guards, { actsQuery }, { isUnitRow }, { ATTACHMENT_ACTIONS }, journal, world] = await Promise.all([
+    import("./world2-guards.mjs"), import("./world2-acts.mjs"), import("./world-stacks.mjs"), import("../world2/tools/guard-reads.mjs"),
+    import("./world-journal.mjs"), import("./world.mjs"),
+  ]);
+  const top = fresh ? null : (await actsQuery(HOLD_TOP_SQL, [ATTACHMENT_ACTIONS]).catch(() => null))?.[0]?.top ?? null;
+  if (!fresh && top != null && _hold?.top === top) return _hold;
+  const [units, attachments] = await Promise.all([guards.storeHoldingRows(), guards.storeAttachmentRows()]);
+  // where each set-down thing stands now: its latest drop act's witnessed line, by the anchor it names
+  const drops = new Map();
+  for (const r of units) if (r.action === "drop" && r.object != null) drops.set(String(r.object), r);
+  const marks = drops.size ? await world.worldMarksAll().catch(() => []) : [];
+  const places = new Map();
+  for (const [id, r] of drops) {
+    const at = journal.composeAnchor(r.at ?? {}, (mid) => marks.find((m) => m.id === mid)?.at ?? null);
+    if (at) places.set(id, at);
+  }
+  const record = { top, fold: foldUnits(units.filter(isUnitRow)), attachments, places };
+  if (top != null) _hold = record;
+  return record;
 }
 
 /**
@@ -429,8 +462,7 @@ export async function investigateMark(id, usable = null) {
   const law = holderLawOf({ holder: String(id), mark, view });
   const out = { mark: String(id), class: markClassOf(mark), by: ownerOf(mark, id), ...can };
   if (!law.holder) return out;
-  const [units, attachments] = await Promise.all([guards.storeHoldingRows(), guards.storeAttachmentRows()]);
-  const fold = foldUnits(units.filter(isUnitRow));
+  const { fold, attachments } = await holdRecordNow();
   return { ...out, holder: { capacity: law.capacity, open: law.open }, holds: await shownIn(fold, id, attachments, view,
     { markById: async (m) => (await world.worldMarkById(m)).mark }, { sharp: true }) };
 }
@@ -444,7 +476,7 @@ export async function kindsHeldBy(handle) {
   try {
     const [guards, { lawSnapshot }, { classViewOf }, { isUnitRow }] = await Promise.all([
       import("./world2-guards.mjs"), import("./law-snapshot.mjs"), import("./world-units.mjs"), import("./world-stacks.mjs")]);
-    const fold = foldUnits((await guards.storeHoldingRows()).filter(isUnitRow));
+    const { fold } = await holdRecordNow();
     return { holder: String(handle), ...blurOf({ edges: kindEdgesOf(fold, String(handle)), extendsOf: classViewOf(lawSnapshot()).extendsOf, sharp: true }) };
   } catch { return null; }
 }
