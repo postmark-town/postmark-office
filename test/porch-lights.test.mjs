@@ -193,8 +193,12 @@ test("GET /world/dials reads a CLASS's dials through the class layer: a v2 class
   assert.deepEqual(asked.sort(), ["the-town/chest", "the-town/resident"], "only class nodes ask the class layer");
   assert.ok(!("class_layer" in a), "the layer answers from this settlement: nothing to say");
   // the world moved on to S121 before the class layer was ingested: said, and keyed by both
-  const b = dialsPageOf(w("e".repeat(40)), { classDialsOf, law: { settlement: 120, sha: "d".repeat(40) } });
-  assert.match(b.class_layer, /class layer at S120/);
+  const b = dialsPageOf(w("e".repeat(40)), { classDialsOf, law: { settlement: 119, sha: "d".repeat(40) } });
+  assert.match(b.class_layer, /class layer at S119 .*not yet this settlement's/);
+  // the other way round: the class layer already at a newer blessing is never "not yet"
+  const ahead = dialsPageOf(w("9".repeat(40)), { classDialsOf, law: { settlement: 121, sha: "8".repeat(40) } });
+  assert.match(ahead.class_layer, /class layer at S121 .*a newer blessing than the one this world stands on/);
+  assert.doesNotMatch(ahead.class_layer, /not yet/);
   layer.resident.pace_km_per_crossing = 72;
   const c = dialsPageOf(w("e".repeat(40)), { classDialsOf, law: { settlement: 121, sha: "e".repeat(40) } });
   assert.notEqual(c, b, "the class layer catching up is a new answer, not the cached one");

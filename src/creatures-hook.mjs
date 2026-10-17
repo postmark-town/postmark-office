@@ -279,7 +279,8 @@ export function viewKeyNow({ repo = WORLD_CLONE, now = Date.now() } = {}) {
 /** One creature's view, in the blocks buildSlice reads: { view, bodies }, or null when the eyes could not see. */
 export async function seeFrom(creature, { world = null } = {}) {
   const w = world ?? await import("./world.mjs");
-  const seen = await w.worldEyes({ x: creature.x, y: creature.y }, null, { v2: true });
+  // no porch lights (WLD-29): a creature reads no `lit`, so it never waits on the activity batch
+  const seen = await w.worldEyes({ x: creature.x, y: creature.y }, null, { v2: true, lights: false });
   // and the orient the act will ask, once, so its first call after a boot (about 1 s cold, measured) is not on an act
   await Promise.resolve(w.worldOrient?.({ x: creature.x, y: creature.y }, null, { crowd: true })).catch(() => null);
   const rows = seen?._fov?.rows;

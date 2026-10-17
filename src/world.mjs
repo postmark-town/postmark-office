@@ -2317,14 +2317,21 @@ export function dialsPageOf(w, { classDialsOf = null, isClass = undefined, law =
   const sha = b?.sha ?? null;
   const key = sha ? `${sha}|${law?.sha ?? "-"}` : null;
   if (key && _dialsPage?.key === key) return _dialsPage.answer;
-  const behind = law?.sha && sha && law.sha !== sha;
+  // the class layer and the world can stand on different blessings for a
+  // refresh: say which way, never "not yet" of a law that is ahead
+  const skew = law?.sha && sha && law.sha !== sha
+    ? (Number(law.settlement) < Number(b?.n) ? "behind" : Number(law.settlement) > Number(b?.n) ? "ahead" : "other")
+    : null;
+  const layerAt = skew ? `the class layer at S${law.settlement} (${String(law.sha).slice(0, 12)})` : null;
   const answer = {
     settlement: b?.n == null ? null : `S${b.n}`,
     sha,
     dials: dialsDigestOf(w?.marks ?? [], { classDialsOf, ...(isClass ? { isClass } : {}) }),
     means: DIALS_MEANS,
     ...(sha ? {} : { note: "this office's world stands on no blessed settlement, so these dials are its published fold's and are not kept between reads" }),
-    ...(behind ? { class_layer: `the classes' dials are read from the class layer at S${law.settlement} (${String(law.sha).slice(0, 12)}), not yet this settlement's` } : {}),
+    ...(skew === "behind" ? { class_layer: `the classes' dials are read from ${layerAt}, not yet this settlement's` } : {}),
+    ...(skew === "ahead" ? { class_layer: `the classes' dials are read from ${layerAt}, a newer blessing than the one this world stands on` } : {}),
+    ...(skew === "other" ? { class_layer: `the classes' dials are read from ${layerAt}, a different commit from this settlement's` } : {}),
   };
   if (key) _dialsPage = { key, answer };
   return answer;
