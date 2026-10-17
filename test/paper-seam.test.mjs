@@ -32,7 +32,7 @@ import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
 import { openOauthDb } from "../src/oauth.mjs";
@@ -47,7 +47,7 @@ import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static k
 // The town index this file's offices read: a store seeded from each fixture
 // office.db (POS-268, office-under-test.mjs). Stopped when the file is done.
 const STORES = [];
-const storeFor = async (dbPath) => { const x = await indexStore(dbPath); STORES.push(x); return x.env; };
+const storeFor = async (town) => { const x = await indexStore(town); STORES.push(x); return x.env; };
 test.after(async () => { for (const x of STORES) await x.stop(); });
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -81,7 +81,7 @@ function logHome() {
 const dropHomes = () => { for (const d of homes.splice(0)) rmSync(d, { recursive: true, force: true, maxRetries: 5 }); };
 
 const key = { household: "keemin", handles: new Set(["wright"]), ghId: "42", ghLogin: "keeminlee" };
-const db = fixtureDb();
+const db = fixtureTown();
 
 const rowsIn = async (path) => {
   const o = openOauthDb(path);
@@ -105,9 +105,8 @@ test("P1-P4 · EVERY SKIN LOGS: REST PATCH, household apex, flat tool — one ro
   const clone = townClone();
   let child;
   try {
-    const dbPath = join(tmp, "fixture.db");
-    fixtureDb(dbPath).close();
-    const IX_ENV = await storeFor(dbPath);
+    const town = fixtureTown();
+    const IX_ENV = await storeFor(town);
     const odbPath = join(tmp, "oauth.db");
     openOauthDb(odbPath).close();
 
@@ -116,7 +115,7 @@ test("P1-P4 · EVERY SKIN LOGS: REST PATCH, household apex, flat tool — one ro
     let PORT;
     let BASE;
     const KEY = "seamkey";
-    ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--db", dbPath, "--oauth-db", seedStaticKeys(odbPath, `${KEY}=keemin:wright`)], {
+    ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--oauth-db", seedStaticKeys(odbPath, `${KEY}=keemin:wright`)], {
       env: {
         ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV, TOWN_SINGLE_LOG: "1",
         TOWN_CLONE: clone, WORLD_CLONE: join(tmp, "no-world"), VOICES_LOG: join(tmp, "voices.jsonl"), TOWN_PUSH: "",

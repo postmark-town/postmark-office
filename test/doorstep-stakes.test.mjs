@@ -38,7 +38,7 @@ import { pathToFileURL } from "node:url";
 import { nextSettlement, SETTLEMENT_CLOCK } from "../src/world-forecast.mjs";
 import { DOORSTEP_SEGMENTS } from "../src/queries.mjs";
 import { HOUSEHOLD_READABLE, HOUSEHOLD_READ_ENUM, HOUSEHOLD_READ_FIELDS, HOUSEHOLD_READS } from "../src/household-apex.mjs";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 
 // ── the fixture household ───────────────────────────────────────────────────
 const MARKS = [
@@ -221,8 +221,7 @@ test("the manifest names ten, `stakes` is the ninth, and `household read: \"stak
 test("the finished doorstep carries the segment, always — serves, args, and the domain — on both skins", async () => {
   const { doorstepBundle } = await import("../src/doorstep-bundle.mjs");
   const dir = mkdtempSync(join(tmpdir(), "pm-stakes-"));
-  const dbPath = join(dir, "fixture.db");
-  fixtureDb(dbPath).close();
+  const dbPath = fixtureTown();
   const db = new DatabaseSync(dbPath, { readOnly: true });
   try {
     const meta = { as_of: "fixturesha000000000000000000000000000000" };

@@ -17,7 +17,7 @@ import { spawn } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { seedStaticKeys } from "./helpers/static-keys.mjs";
 import { tempDir } from "./helpers/temp-dir.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
@@ -29,10 +29,10 @@ let child, PORT, tmp, dbPath, oauthPath, stderr = "";
 before(async () => {
   tmp = tempDir("postmark-office-pos526-");
   dbPath = join(tmp, "office.db");
-  fixtureDb(dbPath).close();
+  fixtureTown().close();
   oauthPath = seedStaticKeys(join(tmp, "oauth.db"), `${KEY}=pos526house:wright`);
   ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath,
-    [join(ROOT, "src", "server.mjs"), "--port", String(port), "--db", dbPath, "--oauth-db", oauthPath], {
+    [join(ROOT, "src", "server.mjs"), "--port", String(port), "--oauth-db", oauthPath], {
       env: {
         PATH: process.env.PATH, HOME: tmp, WORLD_GRAPH_NONE: "1",
         TOWN_CLONE: join(tmp, "no-town-clone"), TOWN_PUSH: "",

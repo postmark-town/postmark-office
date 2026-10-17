@@ -27,7 +27,7 @@ import { CROSSING_EPOCH_UTC, CROSSING_MS, currentCrossing, nextCrossingAt, nextC
 import { enqueueLetter, nextCrossing } from "../src/write.mjs";
 import { sendLetterAsRow, duplicateReceipt } from "../src/town-mail.mjs";
 import { doorstepBundle } from "../src/doorstep-bundle.mjs";
-import { fixtureDb, tempClone, fixtureKey } from "./fixture.mjs";
+import { tempClone, fixtureKey, fixtureTown } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 
 delete process.env.TOWN_PUSH;
@@ -36,7 +36,7 @@ const onTheBeat = (iso) => { const d = new Date(iso); return d.getUTCMinutes() =
 
 // The doors below run in this process and read their town index from a store
 // seeded from this fixture (POS-268, office-under-test.mjs).
-const IX = await indexStore(fixtureDb());
+const IX = await indexStore(fixtureTown());
 const IX_RESTORE = await IX.useInProcess();
 test.after(async () => { await IX_RESTORE(); await IX.stop(); });
 
@@ -95,7 +95,7 @@ test("the two sentences: the doorstep's is read before writing; the receipt's na
 // ── the receipts, through the doors ─────────────────────────────────────────
 
 test("flag-off · enqueueLetter's receipt carries next_crossing beside expected_crossing, naming ONE boat", () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const clone = tempClone();
   try {
     const r = enqueueLetter({ from: "wright", to: "limen", title: "the boat", thread: "new", body: "Limen —\n\nwhich boat?" }, fixtureKey, db, clone);
@@ -130,7 +130,7 @@ test("flag-on · the town-log receipt carries next_crossing too, and the duplica
   const odb = logDb();
   const clone = mailClone();
   try {
-    const db = fixtureDb();
+    const db = fixtureTown();
     const r = await sendLetterAsRow({ from: "wright", to: "limen", title: "the boat", thread: "new", body: "Limen —\n\nwhich boat?" }, KEY, db, clone, odb);
     assert.equal(r.next_crossing.at, r.expected_crossing);
     assert.match(r.next_crossing.sentence, /^sails at the next crossing, /);
@@ -158,8 +158,7 @@ test("flag-on · the town-log receipt carries next_crossing too, and the duplica
 
 test("the doorstep carries next_crossing right under as_of, on both skins — the same number the receipt will name", async () => {
   const dir = mkdtempSync(join(tmpdir(), "pm-next-crossing-"));
-  const dbPath = join(dir, "fixture.db");
-  fixtureDb(dbPath).close();
+  const dbPath = fixtureTown();
   const db = new DatabaseSync(dbPath, { readOnly: true });
   try {
     const meta = { as_of: "fixturesha000000000000000000000000000000" };

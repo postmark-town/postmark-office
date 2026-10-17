@@ -36,11 +36,11 @@ import { PROFILE_FIELD_DOC, updateProfile, updateProfileAvatar } from "../src/ed
 import { TOOLS } from "../src/mcp.mjs";
 import { householdApex } from "../src/household-apex.mjs";
 import { parseProfile } from "../src/profiles.mjs";
-import { fixtureDb, editClone, fixtureKey } from "./fixture.mjs";
+import { editClone, fixtureKey, fixtureTown } from "./fixture.mjs";
 
 delete process.env.TOWN_PUSH; // nothing here may leave the machine
 
-const db = fixtureDb();
+const db = fixtureTown();
 const key = { household: "keemin", handles: new Set(["wright"]) };
 const schemas = Object.fromEntries(TOOLS.map((t) => [t.name, t.inputSchema?.properties ?? {}]));
 const read = (clone, ...rel) => readFileSync(join(clone, ...rel), "utf8");

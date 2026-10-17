@@ -38,7 +38,7 @@ import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { openOauthDb } from "../src/oauth.mjs";
 import { ensureTownJournal, TOWN_DRAIN_CURSOR } from "../src/town-journal.mjs";
 import { logPaperAct, PAPER_ACTS, PAPER_ACT_NAMES, SETTLES_AT, hotTenseBlock } from "../src/town-updates.mjs";
@@ -130,7 +130,7 @@ const quarantine = async (handle, reason) => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 test("F0 · WRITTEN: the pen's edit reaches the PUBLIC card before the next rehydrate, stamped", async () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const clone = townClone();
   try {
     const before = resident(db, "wright", { clone });
@@ -162,7 +162,7 @@ test("F0 · WRITTEN: the pen's edit reaches the PUBLIC card before the next rehy
 });
 
 test("F0b · WRITTEN reaches home and window too, and each names its own act", async () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const clone = townClone();
   try {
     await updateHome({ handle: "wright", title: "the Trueing-House", body: "the roof is off this week." }, KEY, db, clone);
@@ -187,7 +187,7 @@ test("F0b · WRITTEN reaches home and window too, and each names its own act", a
 // ═══════════════════════════════════════════════════════════════════════════
 
 test("F1 · PENDING is public: a stranger's read of the card carries the tense and the crossing", async () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const clone = townClone();
   const odb = odbFile();
   try {
@@ -214,7 +214,7 @@ test("F1 · PENDING is public: a stranger's read of the card carries the tense a
 });
 
 test("F1b · POST-DRAIN the same field steps DOWN the ladder — pending, then written, then settled", async () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const clone = townClone();
   const odb = odbFile();
   try {
@@ -251,7 +251,7 @@ test("F1b · POST-DRAIN the same field steps DOWN the ladder — pending, then w
 // ═══════════════════════════════════════════════════════════════════════════
 
 test("F2 · a SUSPENDED handle's pending row does not compose, and their record still reads", async () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const clone = townClone();
   const odb = odbFile();
   let lift = null;
@@ -293,7 +293,7 @@ test("F2 · a SUSPENDED handle's pending row does not compose, and their record 
 // ═══════════════════════════════════════════════════════════════════════════
 
 test("F3 · a pending window body SERVES — the pane is not held for a crossing", async () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const clone = townClone();
   const odb = odbFile();
   try {
@@ -344,7 +344,7 @@ test("F4 · `your_pending_edits` is what it was: DISCLOSED to the owner, key-sco
 // ═══════════════════════════════════════════════════════════════════════════
 
 test("F5 · the ROSTER is not composed — a list read never touches the checkout", async () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const clone = townClone();
   try {
     await updateAddressBody({ handle: "wright", body: "fresh prose the roster must not go looking for" }, KEY, db, clone);
@@ -358,7 +358,7 @@ test("F5 · the ROSTER is not composed — a list read never touches the checkou
 });
 
 test("F5b · NO CHECKOUT is a real state and says so — every field settled, never a missing block", () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   try {
     const card = resident(db, "wright");
     assert.ok(card.freshness, "an office with no clone still stamps: an office that cannot tell and an office that checked must not look alike");
@@ -383,7 +383,7 @@ test("F5b · NO CHECKOUT is a real state and says so — every field settled, ne
 // table were wrong. Comparing the table to the doors closes the class.
 
 test("F6 · PAPER_ACTS declares, for every act, the exact file that act's door writes", async () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const clone = townClone();
   const html = '<!doctype html><html><body>pane</body></html>';
   const doors = {

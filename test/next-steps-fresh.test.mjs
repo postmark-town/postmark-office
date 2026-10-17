@@ -23,6 +23,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { fixtureTown } from "./fixture.mjs";
 
 delete process.env.TOWN_INDEX_READS;
 delete process.env.WORLD2_PG;
@@ -52,7 +53,7 @@ const REGISTRY = { quests: ONE_TIME.map(([id, tool]) => ({ id, title: `the ${id}
 // not done either (an unrelated fact that must stay as the index says).
 const STALE = { card: false, home: false, window: false, sent: false, received: true, welcomed: true };
 if (!SKIP) {
-  fixtureDb(dbPath).close();
+  fixtureTown().close();
   const w = new DatabaseSync(dbPath);
   w.prepare("INSERT OR REPLACE INTO meta VALUES (?, ?)").run("quest_registry", JSON.stringify(REGISTRY));
   for (const h of ["wright", "limen"]) w.prepare("INSERT INTO quest_standing VALUES (?, ?)").run(h, JSON.stringify(STALE));

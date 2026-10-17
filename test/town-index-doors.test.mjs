@@ -18,7 +18,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { copyIndexToStore } from "./helpers/index-to-store.mjs";
 
@@ -33,7 +33,7 @@ let store = null, skip = false;
 const offices = {};
 
 function office(name, env) {
-  const child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0", "--db", dbPath,
+  const child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0",
     "--oauth-db", join(tmp, `${name}-oauth.db`), "--roles-db", join(tmp, `${name}-roles.db`)], {
     env: { ...process.env, WORLD_GRAPH_NONE: "1", TOWN_CLONE: join(tmp, "no-clone-here"), WORLD_CLONE: join(tmp, "no-world-clone"),
       VOICES_LOG: join(tmp, `${name}-voices.jsonl`), TOWN_PUSH: "", WORLD_STORE_DB: join(tmp, "no-world.db"),
@@ -53,11 +53,10 @@ function office(name, env) {
 before(async () => {
   store = await startStore();
   if (store.skip) { skip = store.skip; return; }
-  const db = fixtureDb(dbPath);
+  const db = fixtureTown();
   const w = await store.connect("law_ingester");
   await copyIndexToStore(w, db);
   await w.end();
-  db.close();
   await office("plain", {});
   await office("switched", { TOWN_INDEX_READS: "store", WORLD2_PG: "1", WORLD2_PG_URL: store.url("office_api") });
   await office("cut-off", { TOWN_INDEX_READS: "store", WORLD2_PG: "1", WORLD2_PG_URL: "postgres://office_api:x@127.0.0.1:9/none" });
@@ -126,6 +125,5 @@ test("the MCP twins (list_commits, list_regions, read_bulletin, read_home, read_
   } finally {
     if (pool) { (await import("../src/world2-pen.mjs")).__setPoolForTest(null); await pool.end(); }
     for (const [k, v] of Object.entries(keep)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
-    db.close();
   }
 });

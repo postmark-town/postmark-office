@@ -25,7 +25,7 @@ import { indexCopy } from "../src/queries.mjs";
 import { doorstepBundle } from "../src/doorstep-bundle.mjs";
 import { validateLetter, enqueueLetter } from "../src/write.mjs";
 import { sendLetterAsRow } from "../src/town-mail.mjs";
-import { fixtureDb, tempClone, fixtureKey } from "./fixture.mjs";
+import { tempClone, fixtureKey, putValues, fixtureTown } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 
 delete process.env.TOWN_PUSH;
@@ -42,12 +42,12 @@ const BEFORE_NEXT = Date.parse("2026-07-11T20:00:00Z");    // the copy holds the
 const AFTER_NEXT = Date.parse("2026-07-12T09:30:00Z");     // 07-12 00:00Z has sailed by the timetable; the copy lacks it
 
 function copyDb(path = ":memory:", { seals = true } = {}) {
-  const db = fixtureDb(path);
+  const db = fixtureTown();
   if (seals) {
-    const log = db.prepare("INSERT INTO repo_log VALUES (?,?,?,?,?,?)");
-    log.run("s0sha", SEAL_OLD, "Postmark Pen", CROSSING_SEAL_SUBJECT, "M", "WHITE_PAGES/seal.json");
-    log.run("s1sha", SEAL, "Postmark Pen", CROSSING_SEAL_SUBJECT, "M", "WHITE_PAGES/seal.json");
-    log.run("s1sha", SEAL, "Postmark Pen", CROSSING_SEAL_SUBJECT, "M", "WHITE_PAGES/seal.html");
+    const log = (...v) => putValues(db, "repo_log", v);
+    log("s0sha", SEAL_OLD, "Postmark Pen", CROSSING_SEAL_SUBJECT, "M", "WHITE_PAGES/seal.json");
+    log("s1sha", SEAL, "Postmark Pen", CROSSING_SEAL_SUBJECT, "M", "WHITE_PAGES/seal.json");
+    log("s1sha", SEAL, "Postmark Pen", CROSSING_SEAL_SUBJECT, "M", "WHITE_PAGES/seal.html");
   }
   return db;
 }

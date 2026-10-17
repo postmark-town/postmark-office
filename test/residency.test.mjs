@@ -13,7 +13,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
 import { indexStore, seedRegistry } from "./helpers/office-under-test.mjs";
 import { serializeRegistry, slugFromName, houseForAccount, houseForName, planRegistryJoin } from "../src/residency.mjs";
@@ -85,8 +85,7 @@ const readBody = (req) => new Promise((r) => { let b = ""; req.on("data", (c) =>
 
 before(async () => {
   tmp = tempDir("postmark-office-residency-");
-  const dbPath = join(tmp, "fixture.db");
-  fixtureDb(dbPath).close();
+  const town = fixtureTown();
 
   // a git-backed town clone: the pins file the mapping reads + a real repo so
   // the post-merge send can commit through the write spine
@@ -102,7 +101,7 @@ before(async () => {
   // SIGN-IN READS THE STORE'S PINS (POS-343), and refuses when it cannot, so
   // this office is pointed at a store holding the same pin. The same store
   // holds the gangway rows the frozen section writes (POS-353).
-  IX = await indexStore(dbPath);
+  IX = await indexStore(town);
   await seedRegistry(IX.store, null, { wright: { login: "keeminlee", id: 999, pinned: "2026-07-05" } });
 
   // one mock GitHub: OAuth login/user AND the pen's repo API
@@ -162,7 +161,7 @@ before(async () => {
   GH_PORT = ghServer.address().port;
 
   const spawnOffice = (oauthDb, extra) => bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port),
-    "--db", dbPath, "--oauth-db", seedStaticKeys(join(tmp, oauthDb), "statickey=keemin:wright")], {
+    "--oauth-db", seedStaticKeys(join(tmp, oauthDb), "statickey=keemin:wright")], {
     env: {
       ...process.env, WORLD_GRAPH_NONE: "1",
       ...extra,

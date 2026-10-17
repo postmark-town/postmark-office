@@ -20,7 +20,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { copyIndexToStore } from "./helpers/index-to-store.mjs";
 import * as office from "../src/queries.mjs";
@@ -37,7 +37,7 @@ const offices = {};
 before(async () => {
   s = await startStore();
   if (s.skip) { skip = s.skip; return; }
-  db = fixtureDb(dbPath);
+  db = fixtureTown();
   const R = db.prepare("INSERT INTO residents VALUES (?, ?)");
   R.run("_archived", JSON.stringify({ handle: "_archived", address: { data: { joined: "2026-07-13" } } }));
   R.run("Zed", JSON.stringify({ handle: "Zed", display: "Zed of the Lamplight", last_active: "2026-07-13T10:00:00.000Z",

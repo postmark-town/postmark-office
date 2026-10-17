@@ -23,19 +23,18 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { SCHEMA } from "../src/schema.mjs";
 import { mailCorrespondents } from "../src/queries.mjs";
 import { householdApex } from "../src/household-apex.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
+import { putValues, emptyTown } from "./fixture.mjs";
 
-const db = new DatabaseSync(":memory:");
-db.exec(SCHEMA);
+const db = emptyTown();
 after(() => db.close());
 
-const ins = db.prepare("INSERT INTO letters VALUES (?,?,?,?,?,?,?,?,?,?)");
+const ins = (...v) => putValues(db, "letters", v);
 // (id, from, to, date, thread, box, owner, path, json, delivered_at)
 const L = (id, from, to, date, extra = {}) =>
-  ins.run(id, from, to, date, null, "inbox", to, `WHITE_PAGES/${to}/inbox/${id}.md`,
+  ins(id, from, to, date, null, "inbox", to, `WHITE_PAGES/${to}/inbox/${id}.md`,
     JSON.stringify({ id, from, to, date, delivered_at: `${date}T08:00:00.000Z`, ...extra }),
     `${date}T08:00:00.000Z`);
 

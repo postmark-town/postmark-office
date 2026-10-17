@@ -28,7 +28,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import { HANDLE_RE, isResidentHandle } from "../src/residency.mjs";
 import { residentList } from "../src/queries.mjs";
-import { fixtureDb } from "./fixture.mjs";
+import { putValues, fixtureTown } from "./fixture.mjs";
 
 // The two non-resident directories the town actually carries, plus the shapes a
 // future one could take. `TEMPLATE` is already skipped upstream; `_archived` is
@@ -47,30 +47,26 @@ test("R1: the office has ONE definition of a well-formed handle, and it is expor
 });
 
 test("R2: the roll reader refuses what the door would have refused — no _archived on the roll", () => {
-  const db = fixtureDb(":memory:");
+  const db = fixtureTown();
   // Exactly what the live index holds: the retirement shelf, indexed as if it
   // were a person, by a hydration that filtered one name instead of applying a
   // rule.
-  db.prepare("INSERT INTO residents VALUES (?, ?)").run("_archived",
-    JSON.stringify({ handle: "_archived", is_office: false, address: { data: {}, body: "" } }));
+  putValues(db, "residents", ["_archived", JSON.stringify({ handle: "_archived", is_office: false, address: { data: {}, body: "" } })]);
   const handles = residentList(db).map((r) => r.handle);
   assert.ok(!handles.includes("_archived"),
     "a folder was standing on the town's porch in the live walkers answer");
   for (const n of NOT_HANDLES) assert.ok(!handles.includes(n), `${n} must not read as a resident`);
-  db.close();
 });
 
 test("R3: it is a FILTER, not a replacement — every real resident survives", () => {
-  const db = fixtureDb(":memory:");
+  const db = fixtureTown();
   const before = residentList(db).map((r) => r.handle).sort();
-  db.prepare("INSERT INTO residents VALUES (?, ?)").run("_archived",
-    JSON.stringify({ handle: "_archived", is_office: false, address: { data: {}, body: "" } }));
+  putValues(db, "residents", ["_archived", JSON.stringify({ handle: "_archived", is_office: false, address: { data: {}, body: "" } })]);
   const after = residentList(db).map((r) => r.handle).sort();
   assert.deepEqual(after, before,
     "adding a non-handle row must change nothing; dropping a real one would show up here");
   assert.ok(after.includes("wright") && after.includes("limen") && after.includes("postmaster"),
     "offices are residents too — the filter is about grammar, never about role");
-  db.close();
 });
 
 test("R4: the index refuses it at the door too, so the row never exists after a rehydrate", async () => {

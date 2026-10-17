@@ -15,7 +15,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { fixtureDb } from "./fixture.mjs";
+import { putValues, fixtureTown } from "./fixture.mjs";
 import { parseFrontmatter } from "../vendor/tools/lib/town.mjs";
 import { letterAnswer, letter, LETTER_WHOLE_CHECK } from "../src/queries.mjs";
 import { callTool, contentFor } from "../src/mcp.mjs";
@@ -50,12 +50,12 @@ const FILES = {
 };
 
 function seeded() {
-  const db = fixtureDb();
-  const L = db.prepare("INSERT INTO letters VALUES (?,?,?,?,?,?,?,?,?,?)");
+  const db = fixtureTown();
+  const L = (...v) => putValues(db, "letters", v);
   for (const [id, text] of Object.entries(FILES)) {
     const { data, body } = parseFrontmatter(text);   // the index's own read (src/town-index.mjs via readTown)
     const path = `WHITE_PAGES/${data.to}/inbox/${id}.md`;
-    L.run(id, data.from, data.to, data.date, null, "inbox", data.to, path,
+    L(id, data.from, data.to, data.date, null, "inbox", data.to, path,
       JSON.stringify({ id, from: data.from, to: data.to, date: data.date, body, path, box: "inbox" }), null);
   }
   return db;
@@ -76,7 +76,6 @@ test("a letter read carries the body's length and sha256, and the public file pr
     }, `${id}: whole names the original`);
     assert.deepEqual(letter(db, id).whole, l.whole, "the bare letter read (REST /letters/{id}) carries the same proof");
   }
-  db.close();
 });
 
 test("a copy cut midway no longer matches its whole (Limen's case)", () => {
@@ -86,7 +85,6 @@ test("a copy cut midway no longer matches its whole (Limen's case)", () => {
   assert.ok(Buffer.byteLength(cut, "utf8") < l.whole.bytes, "the cut copy is shorter than the original it names");
   assert.notEqual(sha256(cut), l.whole.sha256, "and it does not hash to the original");
   assert.match(l.whole.check, /`source`/, "the check says what to compare against");
-  db.close();
 });
 
 test("chars counts code points, the count a non-JS reader can redo", () => {
@@ -94,7 +92,6 @@ test("chars counts code points, the count a non-JS reader can redo", () => {
   const { body, whole } = letterAnswer(db, "limen-2026-10-02-to-wright-sealed");
   assert.notEqual(whole.chars, body.length, "the emoji is two UTF-16 units and one character");
   assert.equal(whole.chars, Array.from(body).length);
-  db.close();
 });
 
 test("a read_letter answer cut at the body's midpoint still carries its whole (#447 review, finding 1)", async () => {
@@ -112,7 +109,6 @@ test("a read_letter answer cut at the body's midpoint still carries its whole (#
   assert.ok(prefix.includes(`"sha256": "${result.whole.sha256}"`), "the hash survives a cut that leaves half the body");
   assert.ok(prefix.includes(`"bytes": ${result.whole.bytes}`), "and so does the length");
   assert.ok(prefix.indexOf('"whole"') < prefix.indexOf('"body"'), "the proof is written before what it proves");
-  db.close();
 });
 
 test("source is the raw file at the index's own commit, each path segment encoded (#447 review, finding 2)", () => {
@@ -123,8 +119,7 @@ test("source is the raw file at the index's own commit, each path segment encode
   const id = "wren-2026-10-02-to-limen-a #draft?";
   const text = "---\nid: x\nfrom: wren\nto: limen\n---\nA name with a space, a hash and a question mark.\n";
   const path = `WHITE_PAGES/wren/outbox/letter-2026-10-02-a #draft?.md`;
-  db.prepare("INSERT INTO letters VALUES (?,?,?,?,?,?,?,?,?,?)").run(id, "wren", "limen", "2026-10-02", null, "outbox", "wren", path,
-    JSON.stringify({ id, from: "wren", to: "limen", body: parseFrontmatter(text).body, path, box: "outbox" }), null);
+  putValues(db, "letters", [id, "wren", "limen", "2026-10-02", null, "outbox", "wren", path, JSON.stringify({ id, from: "wren", to: "limen", body: parseFrontmatter(text).body, path, box: "outbox" }), null]);
   const { whole } = letterAnswer(db, id);
   assert.equal(whole.source,
     `https://raw.githubusercontent.com/postmark-town/postmark/${AS_OF}/WHITE_PAGES/wren/outbox/letter-2026-10-02-a%20%23draft%3F.md`);
@@ -133,5 +128,4 @@ test("source is the raw file at the index's own commit, each path segment encode
   // An index that cannot say which commit it read names no source rather than main.
   db.prepare("DELETE FROM meta WHERE key = 'as_of'").run();
   assert.equal(letterAnswer(db, id).whole.source, null);
-  db.close();
 });

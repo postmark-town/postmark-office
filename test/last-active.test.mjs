@@ -26,7 +26,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 
-import { fixtureDb, fixtureKey } from "./fixture.mjs";
+import { fixtureKey, fixtureTown } from "./fixture.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { copyIndexToStore } from "./helpers/index-to-store.mjs";
 import { seedStaticKeys } from "./helpers/static-keys.mjs";
@@ -56,7 +56,7 @@ const pick = (r) => ({ last_active: r.last_active, last_active_crossing: r.last_
 before(async () => {
   s = await startStore({ db: "last_active" });
   if (s.skip) { skip = s.skip; return; }
-  db = fixtureDb(dbPath);
+  db = fixtureTown();
   db.prepare("INSERT INTO residents VALUES (?, ?)").run("quiet", JSON.stringify({ handle: "quiet", is_office: false,
     last_active: "2026-07-06T09:00:00.000Z", address: { data: { joined: "2026-07-01", pronouns: "they/them" }, body: "# Quiet" } }));
   db.prepare("INSERT INTO residents VALUES (?, ?)").run("decorator", JSON.stringify({ handle: "decorator", is_office: false,

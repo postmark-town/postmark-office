@@ -21,7 +21,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { SCHEMA } from "../src/schema.mjs";
 import { questBoardFor, standingJoin, standingFor, STANDING_FACT, STANDING_NOTES } from "../src/queries.mjs";
 import { NO_TOWN, townClone, townModuleUrl } from "./fixture-paths.mjs";
 
@@ -365,11 +364,9 @@ test("the two daily rows and an unknown row are left entirely alone", () => {
 // ── the round trip: does any of this actually reach the board? ───────────────
 
 function dbWith(standing, day) {
-  const db = new DatabaseSync(":memory:");
-  db.exec(SCHEMA);
-  db.prepare(`INSERT INTO quest_progress (handle, send, receive, house_size, house_send, house_receive, sent_to, heard_from)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run("wright", 3, 1, 5, 4, 2, JSON.stringify(["a", "b", "c"]), JSON.stringify(["d"]));
-  if (standing) db.prepare("INSERT INTO quest_standing (handle, json) VALUES (?, ?)").run("wright", JSON.stringify(standing));
+  const db = emptyTown();
+  putValues(db, "quest_progress", ["wright", 3, 1, 5, 4, 2, JSON.stringify(["a", "b", "c"]), JSON.stringify(["d"])], ["handle", "send", "receive", "house_size", "house_send", "house_receive", "sent_to", "heard_from"]);
+  if (standing) putValues(db, "quest_standing", ["wright", JSON.stringify(standing)], ["handle", "json"]);
   return db;
 }
 const meta = (day) => ({ quest_registry: REGISTRY, quest_day: day });
@@ -515,8 +512,7 @@ test("a board served off an index without the fold is exactly as unmeasured as i
 test("standingFor survives an index with no such table and an index with no such row", () => {
   const bare = new DatabaseSync(":memory:");
   assert.equal(standingFor(bare, "wright"), null, "no table must be a null, not a throw — an old index still serves boards");
-  const db = new DatabaseSync(":memory:");
-  db.exec(SCHEMA);
+  const db = emptyTown();
   assert.equal(standingFor(db, "nobody"), null);
 });
 
@@ -538,7 +534,7 @@ test("standingFor survives an index with no such table and an index with no such
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { nextStepsFor } from "../src/queries.mjs";
-import { fixtureDb } from "./fixture.mjs";
+import { putValues, emptyTown, fixtureTown } from "./fixture.mjs";
 
 // the office's own resolution order, matching next-steps.test.mjs. It WAS a
 // second order of its own — `process.cwd()/town-clone`, which names a different
@@ -549,8 +545,8 @@ const LIVE_TOWN = TOWN;
 
 async function stepsWith(standing) {
   const { readFileSync } = await import("node:fs");
-  const db = fixtureDb();
-  if (standing) db.prepare("INSERT INTO quest_standing (handle, json) VALUES (?, ?)").run("wright", JSON.stringify(standing));
+  const db = fixtureTown();
+  if (standing) putValues(db, "quest_standing", ["wright", JSON.stringify(standing)], ["handle", "json"]);
   const meta = { quest_registry: readFileSync(join(LIVE_TOWN, "quest-registry.json"), "utf8"), quest_day: "1970-01-01" };
   return nextStepsFor(db, meta, "wright", LIVE_TOWN);
 }
@@ -593,8 +589,8 @@ test("a settled milestone leaves the doorstep list entirely", { skip: SKIP }, as
 
 test("the doorstep and the board agree about the seven arrival rows", { skip: SKIP }, async () => {
   const { readFileSync } = await import("node:fs");
-  const db = fixtureDb();
-  db.prepare("INSERT INTO quest_standing (handle, json) VALUES (?, ?)").run("wright", JSON.stringify(SETTLED));
+  const db = fixtureTown();
+  putValues(db, "quest_standing", ["wright", JSON.stringify(SETTLED)], ["handle", "json"]);
   const meta = { quest_registry: readFileSync(join(LIVE_TOWN, "quest-registry.json"), "utf8"), quest_day: "1970-01-01" };
   const ns = await nextStepsFor(db, meta, "wright", LIVE_TOWN);
   const board = await questBoardFor(db, meta, "wright", LIVE_TOWN);

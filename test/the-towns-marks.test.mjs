@@ -37,7 +37,7 @@ import { REFUSALS } from "../src/ceremony.mjs";
 import { planAdoption } from "../src/solo-adoption.mjs";
 import { conformance, DECLARE_BOUNCES } from "../src/declare.mjs";
 import { validateResidencyRequest } from "../src/residency.mjs";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 
 /** A roll that does NOT name the town: the real roll's shape (121 houses, none holds `the-town`). */
@@ -75,7 +75,7 @@ const refusedAsNoSuchHouse = (who) => (e) => {
 
 // The doors below run in this process and read their town index from a store
 // seeded from this fixture (POS-268, office-under-test.mjs).
-const IX = await indexStore(fixtureDb());
+const IX = await indexStore(fixtureTown());
 const IX_RESTORE = await IX.useInProcess();
 test.after(async () => { await IX_RESTORE(); await IX.stop(); });
 
@@ -163,7 +163,7 @@ const reservedInTheDoorsWords = (e) => {
 };
 
 test("DECLARE: declaring the handle `the-town` refuses 409 on the handle, in the door's words", () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const key = { ghId: 424242, ghLogin: "some-stranger", household: "some-stranger", handles: new Set(), visitor: true };
   const registry = { schema_version: 1, households: {} };
   assert.throws(() => conformance({ household: "The Ordinary Hours", handle: "the-town", card: CARD }, { db, registry, key }),
@@ -178,12 +178,12 @@ test("DECLARE: declaring the handle `the-town` refuses 409 on the handle, in the
 // validator rather than the door so that a flipped run cannot walk on into the
 // store read and the GitHub pen.
 test("ADD-RESIDENT: requesting residency as `the-town` refuses 409 at the door's validator, in the door's words", () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   assert.throws(() => validateResidencyRequest({ handle: "the-town", card: CARD }, db), reservedInTheDoorsWords);
 });
 
 test("the reservation is the exact handle: `the-towns` and `town` stay free at the door", async () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const key = { ghId: 424242, ghLogin: "some-stranger", household: "some-stranger", handles: new Set(), visitor: true };
   const registry = { schema_version: 1, households: {} };
   for (const handle of ["the-towns", "town"])

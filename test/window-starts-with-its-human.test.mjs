@@ -12,7 +12,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { windowRead } from "../src/queries.mjs";
 import { TOOLS } from "../src/mcp.mjs";
 import { WINDOW_PURPOSE, WINDOW_STEP_ONE, WINDOW_POINTER } from "../src/panes.mjs";
@@ -31,7 +31,7 @@ function emptyShelf() {
 }
 
 test("the window read, for a resident with no window, leads with its human before the act", () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   try {
     const w = windowRead(db, "wright", { clone: emptyShelf() });
     assert.equal(w.pane.hung, false);

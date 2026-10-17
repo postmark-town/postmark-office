@@ -44,7 +44,7 @@ import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 
 import { nextStepsFor, onboardingFactsFromStanding, STANDING_FACT } from "../src/queries.mjs";
-import { fixtureDb } from "./fixture.mjs";
+import { putValues, fixtureTown } from "./fixture.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "..");
@@ -77,8 +77,8 @@ const FRESH = {
 };
 
 const withRow = (handle, row) => {
-  const db = fixtureDb();
-  if (row) db.prepare("INSERT INTO quest_standing (handle, json) VALUES (?, ?)").run(handle, JSON.stringify(row));
+  const db = fixtureTown();
+  if (row) putValues(db, "quest_standing", [handle, JSON.stringify(row)], ["handle", "json"]);
   return db;
 };
 const onboardingIds = (ns) => new Set(ns.steps.filter((s) => s.kind === "onboarding").map((s) => s.id));
@@ -164,7 +164,7 @@ test("F2 · the doorstep's onboarding steps follow the ROW, not the clone — bo
 
 test("F3 · a doorstep read with a standing row parses the stamp ledger ZERO times", () => {
   const out = child(`
-    const db = fixtureDb();
+    const db = fixtureTown();
     db.prepare("INSERT INTO quest_standing (handle, json) VALUES (?, ?)").run("wright", JSON.stringify(SETTLED));
     const c0 = count();
     const ns = await nextStepsFor(db, META(), "wright", TOWN);
@@ -210,7 +210,7 @@ test("F4 · with no standing row the block still answers from the clone — unch
 test("F5 · the fallback costs what it always cost — three ledger parses, and it is the ONLY path that parses", () => {
   const out = child(`
     const c0 = count();
-    const ns = await nextStepsFor(fixtureDb(), META(), "wright", TOWN);
+    const ns = await nextStepsFor(fixtureTown(), META(), "wright", TOWN);
     const parses = count() - c0;
     console.log(ns ? ("RESULT parses=" + parses + " steps=" + ns.steps.length) : "RESULT VOID no-compose-next-steps");
   `);

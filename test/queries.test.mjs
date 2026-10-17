@@ -3,10 +3,10 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fixtureDb } from "./fixture.mjs";
+import { putValues, fixtureTown } from "./fixture.mjs";
 import { rollEntry, townSummary, TOWN_OFFICES_CAP, residentList, residentPage, resident, mailList, letter, letterList, doorstep, search, bulletinList, bulletinTeaser, bulletinEntry, repoLog, indexAsOf, metricsMail } from "../src/queries.mjs";
 
-const db = fixtureDb();
+const db = fixtureTown();
 const meta = Object.fromEntries(db.prepare("SELECT key, value FROM meta").all().map((r) => [r.key, r.value]));
 
 test("townSummary carries as_of + hydrated counts", () => {
@@ -25,12 +25,12 @@ test("townSummary carries as_of + hydrated counts", () => {
 // only shape that reads the slice at all, so this test builds one: without it
 // the fix would be pinned by a check that never touches it.
 test("townSummary caps the office handle list and says it capped", () => {
-  const wide = fixtureDb();
-  const ins = wide.prepare("INSERT INTO residents VALUES (?, ?)");
+  const wide = fixtureTown();
+  const ins = (...v) => putValues(wide, "residents", v);
   const EXTRA = 40;
   for (let i = 0; i < EXTRA; i += 1) {
     const handle = `desk-${String(i).padStart(2, "0")}`;
-    ins.run(handle, JSON.stringify({
+    ins(handle, JSON.stringify({
       handle, is_office: true, last_active: null,
       address: { data: { since: "2026-05-01", joined: "2026-05-01", office: true }, body: `# ${handle}` },
     }));
@@ -70,7 +70,7 @@ test("townSummary caps the office handle list and says it capped", () => {
 // actually admitted. Pinning 3 here would go green again the day the fixture
 // grows a fourth resident and the snapshot is left behind.
 test("#1981 the town read, the metrics read and the roster door count ONE roll", () => {
-  const one = fixtureDb();
+  const one = fixtureTown();
   const admitted = residentList(one).length;
   // the vendored roll's count, one above the admitted set — `_archived` walked
   // through the name list and was counted as a person
@@ -257,7 +257,7 @@ test("search: matches letters and residents", () => {
 // The doorstep hands a resident their own hand-set #window-state back at wake.
 
 test("doorstep: window is null without a pane island; carries the island + url with one", async () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   // The pane is a SEGMENT now (serving household read: "window"), so the state
   // sits under `.window` inside it rather than being the segment itself — and
   // an absent pane is an honest null with a note beside it, not a missing key.
@@ -285,7 +285,7 @@ test("doorstep: window is null without a pane island; carries the island + url w
 });
 
 test("bulletin: an authored teaser rides the listing; entries without one keep first_line only", () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const slug = db.prepare("SELECT slug FROM bulletin LIMIT 1").get().slug;
   const raw = JSON.parse(db.prepare("SELECT json FROM bulletin WHERE slug = ?").get(slug).json);
   raw.data = { ...(raw.data ?? {}), teaser: "walk it, mark it, back what you want to become true" };
@@ -315,7 +315,7 @@ test("bulletin: an authored teaser rides the listing; entries without one keep f
 // `bulletinList`: the bundle is where lupi reads, and a field carried by the
 // listing door and dropped by the teaser would be this issue again.
 test("bulletin #2638: posted and kind ride the index entries, doorstep included", async () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const slug = db.prepare("SELECT slug FROM bulletin LIMIT 1").get().slug;
 
   const listed = bulletinList(db).find((b) => b.slug === slug);
@@ -349,7 +349,7 @@ test("bulletin #2638: posted and kind ride the index entries, doorstep included"
 });
 
 test("bulletin: human-gated notices are stamped by the renderer, not the body", () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const slug = db.prepare("SELECT slug FROM bulletin LIMIT 1").get().slug;
   const raw = JSON.parse(db.prepare("SELECT json FROM bulletin WHERE slug = ?").get(slug).json);
   raw.data = { ...(raw.data ?? {}), human_gated: true };

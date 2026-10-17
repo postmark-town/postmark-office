@@ -63,7 +63,7 @@ import { basename, join } from "node:path";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import {
   CARD_TEACH, HOUSEHOLD_DISPATCHABLE, HOUSEHOLD_READS, READING_LAW,
   ACT_SHADOW_READS, assertActCardsReachable,
@@ -93,8 +93,7 @@ after(() => { for (const d of trash.splice(0)) rmSync(d, { recursive: true, forc
 // down is a suite that will fail on someone else's machine for a reason that
 // has nothing to do with the door.
 const dir = mkdtempSync(join(tmpdir(), "pm-foyer-"));
-const dbPath = join(dir, "fixture.db");
-fixtureDb(dbPath).close();
+const dbPath = fixtureTown();
 const db = new DatabaseSync(dbPath, { readOnly: true });
 after(() => { db.close(); rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
 // The doors below run in this process and read their town index from a store

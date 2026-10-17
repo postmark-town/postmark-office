@@ -21,7 +21,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 
-import { fixtureDb, tempClone } from "./fixture.mjs";
+import { tempClone, fixtureTown } from "./fixture.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { copyIndexToStore } from "./helpers/index-to-store.mjs";
 import { seedRegistry, recordInProcess } from "./helpers/office-under-test.mjs";
@@ -49,7 +49,7 @@ const offices = {};
 before(async () => {
   s = await startStore();
   if (s.skip) { skip = s.skip; return; }
-  db = fixtureDb(dbPath);
+  db = fixtureTown();
   const R = db.prepare("INSERT INTO residents VALUES (?, ?)");
   R.run("Zed", JSON.stringify({ handle: "Zed", address: { data: { joined: "2026-07-13", github: "Zed-GH" } } }));
   R.run("_archived", JSON.stringify({ handle: "_archived", address: { data: { joined: "2026-07-13" } } }));
@@ -60,7 +60,7 @@ before(async () => {
   const all = db.prepare("SELECT handle, json FROM residents").all().sort((a, b) => Buffer.compare(Buffer.from(a.handle), Buffer.from(b.handle)));
   db.exec("DELETE FROM residents");
   for (const r of all) R.run(r.handle, r.json);
-  empty = fixtureDb(":memory:");
+  empty = fixtureTown();
   for (const t of ["residents", "letters", "mail_state"]) empty.exec(`DELETE FROM ${t}`);
   const w = await s.connect("law_ingester");
   await copyIndexToStore(w, db);

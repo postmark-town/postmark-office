@@ -24,7 +24,7 @@ import { DatabaseSync } from "node:sqlite";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { VISITOR_RULES, visitorRulesGate, useRulesRecorder, RULES_FIRST } from "../src/visitor-rules.mjs";
 import { WORLD_TOOLS } from "../src/world.mjs";
@@ -33,16 +33,15 @@ import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static k
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const KEY = "residentkey";
 const dir = mkdtempSync(join(tmpdir(), "postmark-visitor-rules-"));
-const dbPath = join(dir, "fixture.db");
-fixtureDb(dbPath).close();
+const town = fixtureTown();
 // the office reads its town index from a store seeded from this fixture (POS-268, office-under-test.mjs)
-const IX = await indexStore(dbPath);
+const IX = await indexStore(town);
 const OAUTH = join(dir, "oauth.db");
 const VOICES = join(dir, "voices.jsonl");
 
 let child = null;
 async function startOffice() {
-  child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0", "--db", dbPath,
+  child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0",
     "--oauth-db", seedStaticKeys(OAUTH, `${KEY}=keemin:wright`), "--roles-db", join(dir, "roles.db")], {
     env: { ...process.env, ...IX.env, WORLD_GRAPH_NONE: "1", TOWN_CLONE: join(dir, "no-clone"), WORLD_CLONE: join(dir, "no-world-clone"), VOICES_LOG: VOICES, TOWN_PUSH: "" },
     stdio: ["ignore", "pipe", "pipe"],

@@ -24,7 +24,7 @@ import {
   ANNOUNCE_WEBHOOK_TRIES, ANNOUNCE_QUIET_MIN, FELL_BACK_NO_ANSWER, KIND_ANNOUNCEMENT,
 } from "../src/earpiece.mjs";
 import { penMailPort, PEN_KEY } from "../src/earpiece-mail.mjs";
-import { fixtureDb, tempClone } from "./fixture.mjs";
+import { tempClone, fixtureTown } from "./fixture.mjs";
 import { runEarpiece, MAIL_STOPPED } from "../world2/tools/earpiece-deliver.mjs";
 import { installActsPen, uninstallActsPen, withRecordOn } from "./acts-pen-stub.mjs";
 import { indexStore, testIndex } from "./helpers/office-under-test.mjs";
@@ -129,7 +129,7 @@ const noSleep = async () => {};
 
 // The doors below run in this process and read their town index from a store
 // seeded from this fixture (POS-268, office-under-test.mjs).
-const IX = await indexStore(fixtureDb());
+const IX = await indexStore(fixtureTown());
 const IX_RESTORE = await IX.useInProcess();
 test.after(async () => { await IX_RESTORE(); await IX.stop(); });
 
@@ -441,7 +441,7 @@ test("decideWake · an event that ends between crossings gets its one letter in 
 });
 
 test("THE FALSIFIER · two mail RSVPs, one webhook, three says: at the crossing exactly two letters from postmark-pen, each carrying the three; the next crossing with nothing new writes nothing", async () => {
-  const db = fixtureDb();                        // residents: wright, limen, postmaster
+  const db = fixtureTown();                        // residents: wright, limen, postmaster
   const clone = tempClone();
   try {
     const C1 = Date.parse("2026-10-04T00:00:00Z"), C2 = Date.parse("2026-10-04T12:00:00Z");
@@ -488,7 +488,7 @@ test("THE FALSIFIER · two mail RSVPs, one webhook, three says: at the crossing 
 });
 
 test("the pen's key: postmark-pen and only postmark-pen; a key that does not hold it bounces 403 at the office's own fence", async () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const clone = tempClone();
   try {
     assert.deepEqual([...PEN_KEY.handles], [PEN_HANDLE]);
@@ -510,7 +510,7 @@ test("a pen bounce is logged failed and uncharged with the fence's own sentence"
   const ev = hallEvent();
   const s = memStore({ events: [ev], rsvps: [{ event: ev.id, handle: "nobody", household: "hh:nobody", harness: "mail", budget: 6 }],
     voice: [sayIn("bo", T0 + 30_000, "hi")] });
-  const db = fixtureDb();
+  const db = fixtureTown();
   const clone = tempClone();
   try {
     await runEarpiece({ now: LETTER, env: ON, store: s, withinFn: withinRect, sendMail: penMailPort({ db, clone }) });

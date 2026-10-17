@@ -20,13 +20,13 @@
 import test, { after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { SCHEMA } from "../src/schema.mjs";
 import { letterAnswer, mailAwaiting, NEW_INBOUND_NOTE } from "../src/queries.mjs";
 import { doorstepBundle } from "../src/doorstep-bundle.mjs";
 import { householdApex } from "../src/household-apex.mjs";
 import { unreadFor, UNREAD_LISTED } from "../src/unread-store.mjs";
 import { installActsPen, uninstallActsPen, RECORD_ON } from "./acts-pen-stub.mjs";
 import { indexStore, testIndex } from "./helpers/office-under-test.mjs";
+import { putValues, emptyTown, fixtureTown } from "./fixture.mjs";
 
 const AS_OF = "unreadfixture000000000000000000000000000";
 // Two households. House A keeps ann and amos; house B keeps bea. With an empty
@@ -41,33 +41,32 @@ const FROM_ANN = [L(5, "ann", "bea", "23")];
 // In the index, but the ferry has not delivered it: no delivery row.
 const UNDELIVERED = L(6, "bea", "ann", "24");
 
-function fixtureDb() {
-  const db = new DatabaseSync(":memory:");
-  db.exec(SCHEMA);
-  const put = db.prepare("INSERT INTO meta VALUES (?, ?)");
-  put.run("as_of", AS_OF);
-  put.run("town_path", "fixture");
-  put.run("hydrated_counts", JSON.stringify({}));
-  const insR = db.prepare("INSERT INTO residents VALUES (?, ?)");
+function fixtureTown() {
+  const db = emptyTown();
+  const put = (...v) => putValues(db, "meta", v);
+  put("as_of", AS_OF);
+  put("town_path", "fixture");
+  put("hydrated_counts", JSON.stringify({}));
+  const insR = (...v) => putValues(db, "residents", v);
   for (const h of ["ann", "amos", "bea"])
-    insR.run(h, JSON.stringify({ handle: h, is_office: false, address: { data: { since: "2026-01-01", joined: "2026-06-01" } } }));
-  const insL = db.prepare("INSERT INTO letters VALUES (?,?,?,?,?,?,?,?,?,?)");
+    insR(h, JSON.stringify({ handle: h, is_office: false, address: { data: { since: "2026-01-01", joined: "2026-06-01" } } }));
+  const insL = (...v) => putValues(db, "letters", v);
   // json is the event itself, as the hydrator writes every ledger line (town-index.mjs § ledgerLines); the store refuses a null
   const insD = db.prepare("INSERT INTO ledger (kind, date, id, from_h, to_h, json) VALUES ('delivery',?,?,?,?,?)");
   for (const l of [...TO_ANN, ...TO_AMOS, ...FROM_ANN, UNDELIVERED]) {
     const at = `${l.date}T12:00:00.000Z`;
-    insL.run(l.id, l.from, l.to, l.date, null, "inbox", l.to, `WHITE_PAGES/${l.to}/inbox/${l.id}.md`,
+    insL(l.id, l.from, l.to, l.date, null, "inbox", l.to, `WHITE_PAGES/${l.to}/inbox/${l.id}.md`,
       JSON.stringify({ ...l, body: `# ${l.id}`, delivered_at: at }), at);
     if (l !== UNDELIVERED) insD.run(l.date, l.id, l.from, l.to, JSON.stringify({ kind: "delivery", date: l.date, id: l.id, from: l.from, to: l.to }));
   }
   // The correspondence law's own row, as the town derives it: ann's newest
   // conversation is bea's, so the law calls it new_inbound.
-  db.prepare("INSERT INTO mail_state VALUES (?, ?)").run("ann", JSON.stringify({
+  putValues(db, "mail_state", ["ann", JSON.stringify({
     handle: "ann", language: "sequence, never debt",
     conversations: [{ conversation: TO_ANN[2].id, attention_state: "new_inbound", next_actor: "you",
       latest_delivered_from: "bea", latest_delivered_id: TO_ANN[2].id, latest_event: { date: "2026-09-22" } }],
     summary: { they_spoke_last: 1, new_inbound: 1, they_spoke_again: 0, reply_queued: 0, last_word_yours: 0, bounced: 0 },
-  }));
+  })]);
   return db;
 }
 
@@ -108,13 +107,13 @@ function opensTable() {
 let db, opens, pen;
 // The doors below run in this process and read their town index from a store
 // seeded from this fixture (POS-268, office-under-test.mjs).
-const IX = await indexStore(fixtureDb());
+const IX = await indexStore(fixtureTown());
 const IX_RESTORE = await IX.useInProcess();
 test.after(async () => { await IX_RESTORE(); await IX.stop(); });
 beforeEach(() => {
   process.env.WORLD2_PG = RECORD_ON.WORLD2_PG;
   process.env.WORLD2_PG_URL = RECORD_ON.WORLD2_PG_URL;
-  db = fixtureDb();
+  db = fixtureTown();
   opens = opensTable();
   pen = installActsPen({ also: opens.also });
 });

@@ -9,10 +9,10 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { letterExcerpt, mailList, letterList, search, bulletinList } from "../src/queries.mjs";
 
-const db = fixtureDb();
+const db = fixtureTown();
 
 // ── (1) THE SHAPES THAT ARE NOT A TEASER ────────────────────────────────────
 

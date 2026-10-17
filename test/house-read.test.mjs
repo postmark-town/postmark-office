@@ -22,7 +22,6 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
-import { SCHEMA } from "../src/schema.mjs";
 import { doorstep } from "../src/queries.mjs";
 import { doorstepBundle } from "../src/doorstep-bundle.mjs";
 import { appendTownJournal } from "../src/town-journal.mjs";
@@ -31,39 +30,39 @@ import { householdApex, HOUSEHOLD_READS, HOUSEHOLD_READ_FIELDS } from "../src/ho
 import { poolFromClone, RECORD_ON } from "./registry-pool-stub.mjs";
 import { __setPoolForTest } from "../src/world2-acts.mjs";
 import { indexStore, testIndex } from "./helpers/office-under-test.mjs";
+import { putValues, emptyTown } from "./fixture.mjs";
 
 const AS_OF = "housefixture0000000000000000000000000000";
 const HOUSE = "fixture-house";
 const MEMBERS = ["r000", "r001", "r002", "r-harbor"];
 
 function houseDb() {
-  const db = new DatabaseSync(":memory:");
-  db.exec(SCHEMA);
-  const put = db.prepare("INSERT INTO meta VALUES (?, ?)");
-  put.run("as_of", AS_OF);
-  put.run("town_path", "fixture");
-  put.run("hydrated_counts", JSON.stringify({}));
-  const insR = db.prepare("INSERT INTO residents VALUES (?, ?)");
+  const db = emptyTown();
+  const put = (...v) => putValues(db, "meta", v);
+  put("as_of", AS_OF);
+  put("town_path", "fixture");
+  put("hydrated_counts", JSON.stringify({}));
+  const insR = (...v) => putValues(db, "residents", v);
   for (const [i, h] of ["r000", "r001", "r002", "r-stranger"].entries()) {
-    insR.run(h, JSON.stringify({ handle: h, is_office: false, last_active: `2026-09-2${i}T10:00:00.000Z`,
+    insR(h, JSON.stringify({ handle: h, is_office: false, last_active: `2026-09-2${i}T10:00:00.000Z`,
       address: { data: { since: "2026-01-01", joined: `2026-06-1${i}` } },
       window_state: { hand_set: "2026-08-24", sections: [{ title: "what I need", body: `pane of ${h}` }] } }));
   }
-  const insL = db.prepare("INSERT INTO letters VALUES (?,?,?,?,?,?,?,?,?,?)");
+  const insL = (...v) => putValues(db, "letters", v);
   for (let i = 0; i < 4; i++) {
     const id = `r001-2026-07-0${i + 1}-to-r000-n${i}`;
-    insL.run(id, "r001", "r000", `2026-07-0${i + 1}`, null, "inbox", "r000",
+    insL(id, "r001", "r000", `2026-07-0${i + 1}`, null, "inbox", "r000",
       `WHITE_PAGES/r000/inbox/${i}.md`, JSON.stringify({ id, from: "r001", to: "r000", body: `# letter ${i}` }), `2026-07-0${i + 1}T08:00:00.000Z`);
   }
-  const insB = db.prepare("INSERT INTO bulletin VALUES (?, ?)");
-  for (let i = 0; i < 4; i++) insB.run(`2026-07-0${i + 1}-n${i}`, JSON.stringify({ slug: `2026-07-0${i + 1}-n${i}`, data: { title: `notice ${i}` }, body: "# notice" }));
-  db.prepare("INSERT INTO ledger (kind, date, id, from_h, to_h, json) VALUES (?,?,?,?,?,?)").run("delivery", "2026-07-04", "l0", "r001", "r000", null);
-  db.prepare("INSERT INTO stamps VALUES (?,?,?,?)").run("r000", 12, 30, 3);
-  db.prepare("INSERT INTO mail_state VALUES (?, ?)").run("r000", JSON.stringify({
+  const insB = (...v) => putValues(db, "bulletin", v);
+  for (let i = 0; i < 4; i++) insB(`2026-07-0${i + 1}-n${i}`, JSON.stringify({ slug: `2026-07-0${i + 1}-n${i}`, data: { title: `notice ${i}` }, body: "# notice" }));
+  putValues(db, "ledger", ["delivery", "2026-07-04", "l0", "r001", "r000", null], ["kind", "date", "id", "from_h", "to_h", "json"]);
+  putValues(db, "stamps", ["r000", 12, 30, 3]);
+  putValues(db, "mail_state", ["r000", JSON.stringify({
     handle: "r000", language: "sequence, never debt", conversations: [],
     unplaced_bounces: [{ date: "2026-06-16", path: "WHITE_PAGES/r000/outbox/x.md", reason: "no resident \"nobody\"" }],
     summary: { they_spoke_last: 0, new_inbound: 0, they_spoke_again: 0, reply_queued: 0, last_word_yours: 0, bounced: 1 },
-  }));
+  })]);
   return db;
 }
 

@@ -22,7 +22,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { fixtureDb, fixtureKey } from "./fixture.mjs";
+import { fixtureKey, putValues } from "./fixture.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { copyIndexToStore } from "./helpers/index-to-store.mjs";
 import { townClone, townModuleUrl } from "./fixture-paths.mjs";
@@ -43,12 +43,11 @@ before(async () => {
   const db = fixtureDb(join(tmp, "office.db"));
   if (TOWN) {
     const { townDay } = await import(townModuleUrl("tools", "quest-progress.mjs"));
-    const put = db.prepare("INSERT OR REPLACE INTO meta VALUES (?, ?)");
-    put.run("quest_registry", readFileSync(join(TOWN, "quest-registry.json"), "utf8"));
-    put.run("quest_day", townDay());
-    db.prepare("INSERT INTO quest_progress (handle, send, receive, house_size, house_send, house_receive, sent_to, heard_from) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-      .run("wright", 2, 1, 1, 2, 1, JSON.stringify(["limen"]), JSON.stringify(["limen"]));
-    db.prepare("INSERT INTO pots VALUES (?, ?)").run("darko-fund", JSON.stringify({ title: "Darko's fund", beneficiary: "keeminlee", target_usd_per_epoch: 100, status: "open", close: "epoch" }));
+    const put = (...v) => putValues(db, "meta", v);
+    put("quest_registry", readFileSync(join(TOWN, "quest-registry.json"), "utf8"));
+    put("quest_day", townDay());
+    putValues(db, "quest_progress", ["wright", 2, 1, 1, 2, 1, JSON.stringify(["limen"]), JSON.stringify(["limen"])], ["handle", "send", "receive", "house_size", "house_send", "house_receive", "sent_to", "heard_from"]);
+    putValues(db, "pots", ["darko-fund", JSON.stringify({ title: "Darko's fund", beneficiary: "keeminlee", target_usd_per_epoch: 100, status: "open", close: "epoch" })]);
   }
   const w = await s.connect("law_ingester");
   await copyIndexToStore(w, db);

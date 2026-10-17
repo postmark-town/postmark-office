@@ -34,7 +34,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 
-import { fixtureDb } from "./fixture.mjs";
+import { putValues, fixtureTown } from "./fixture.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { copyIndexToStore } from "./helpers/index-to-store.mjs";
 import { townClone, townModuleUrl } from "./fixture-paths.mjs";
@@ -44,7 +44,6 @@ const TOWN = townClone();
 const WORLD = process.env.WORLD_CLONE && existsSync(process.env.WORLD_CLONE) ? process.env.WORLD_CLONE : null;
 const NO_WORLD = "WORLD_CLONE names no world clone: the real world read (the positions projection's rebuild) needs one";
 const tmp = mkdtempSync(join(tmpdir(), "town-index-pool-leak-"));
-const dbPath = join(tmp, "office.db");
 const ROUNDS = 4, WIDTH = 12, DEADLINE_MS = 30_000;
 let s = null, su = null, skip = TOWN ? false : "no town clone beside the office: the quest board reads the town's own tools from it";
 let child = null;
@@ -58,19 +57,18 @@ before(async () => {
   s = await startStore({ db: "pool_leak" });
   if (s.skip) { skip = s.skip; return; }
   const { townDay } = await import(townModuleUrl("tools", "quest-progress.mjs"));
-  const db = fixtureDb(dbPath);
-  const put = db.prepare("INSERT OR REPLACE INTO meta VALUES (?, ?)");
-  put.run("quest_registry", readFileSync(join(TOWN, "quest-registry.json"), "utf8"));
-  put.run("quest_day", townDay());
-  const qp = db.prepare("INSERT INTO quest_progress (handle, send, receive, house_size, house_send, house_receive, sent_to, heard_from) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
-  qp.run("wright", 2, 1, 1, 2, 1, JSON.stringify(["limen"]), JSON.stringify(["limen"]));
-  qp.run("limen", 0, 3, 2, 1, 3, "not json", null); // a bent row degrades to no names
-  db.prepare("INSERT INTO quest_standing VALUES (?, ?)").run("wright", JSON.stringify({ facts: { address: true }, since: {} }));
-  db.prepare("INSERT INTO pots VALUES (?, ?)").run("darko-fund", JSON.stringify({ title: "Darko's fund", beneficiary: "keeminlee", target_usd_per_epoch: 100, status: "open", close: "epoch" }));
+  const db = fixtureTown();
+  const put = (...v) => putValues(db, "meta", v);
+  put("quest_registry", readFileSync(join(TOWN, "quest-registry.json"), "utf8"));
+  put("quest_day", townDay());
+  const qp = (...v) => putValues(db, "quest_progress", v, ["handle", "send", "receive", "house_size", "house_send", "house_receive", "sent_to", "heard_from"]);
+  qp("wright", 2, 1, 1, 2, 1, JSON.stringify(["limen"]), JSON.stringify(["limen"]));
+  qp("limen", 0, 3, 2, 1, 3, "not json", null); // a bent row degrades to no names
+  putValues(db, "quest_standing", ["wright", JSON.stringify({ facts: { address: true }, since: {} })]);
+  putValues(db, "pots", ["darko-fund", JSON.stringify({ title: "Darko's fund", beneficiary: "keeminlee", target_usd_per_epoch: 100, status: "open", close: "epoch" })]);
   const w = await s.connect("law_ingester");
   await copyIndexToStore(w, db);
   await w.end();
-  db.close();
   su = await s.connect("postgres", "postgres");
   Object.assign(process.env, { TOWN_INDEX_READS: "store", WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") });
 });
@@ -196,7 +194,7 @@ test("a spawned office with switch 2 and the kept positions on answers GET /ques
   if (skip) return t.skip(skip);
   if (!WORLD) return t.skip(NO_WORLD);
   await endStuck();
-  child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0", "--db", dbPath,
+  child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0",
     "--oauth-db", join(tmp, "oauth.db"), "--roles-db", join(tmp, "roles.db")], {
     env: { ...process.env, TOWN_CLONE: TOWN, WORLD_CLONE: WORLD, VOICES_LOG: join(tmp, "voices.jsonl"),
       TOWN_PUSH: "", WORLD_STORE_DB: join(tmp, "no-world.db"), OFFICE_READ_WORKERS: "0",

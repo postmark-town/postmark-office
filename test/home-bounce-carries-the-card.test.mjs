@@ -31,24 +31,23 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { householdApex } from "../src/household-apex.mjs";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "postmark-home-bounce-"));
-const dbPath = join(dir, "fixture.db");
-fixtureDb(dbPath).close();
+const town = fixtureTown();
 // The doors below run in this process and read their town index from a store
 // seeded from this fixture (POS-268, office-under-test.mjs).
-const IX = await indexStore(dbPath);
+const IX = await indexStore(town);
 const IX_RESTORE = await IX.useInProcess();
 test.after(async () => { await IX_RESTORE(); await IX.stop(); });
-const db = new DatabaseSync(dbPath, { readOnly: true });
+const db = new DatabaseSync(town, { readOnly: true });
 after(() => { db.close(); rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
 
 const keyFor = (handle) => ({ household: "keemin", handles: new Set([handle]) });
 const read = (handle, extra = {}) =>
   householdApex({ read: "home", handle }, keyFor(handle),
-    { db, clone: null, dbPath, schemas: {}, schemaRequired: {}, ...extra });
+    { db, clone: null, town, schemas: {}, schemaRequired: {}, ...extra });
 
 // The fixture town's `wright` holds a home page; nobody else invented here does.
 const WITH_PAGE = "wright";
@@ -102,7 +101,7 @@ test("a card that cannot be built leaves the bounce a plain bounce, never a 500"
   // card by this change (one item, one fix) — it stands here as the control that
   // the change is scoped, and as proof the bounce shape survives without a card.
   const address = await householdApex({ read: "address", handle: NO_PAGE }, keyFor(NO_PAGE),
-    { db, clone: null, dbPath, slim: true, schemas: {}, schemaRequired: {} });
+    { db, clone: null, town, slim: true, schemas: {}, schemaRequired: {} });
 
   assert.equal(address.error, "bounce");
   assert.equal(address.code, 404);

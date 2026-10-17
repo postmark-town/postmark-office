@@ -21,7 +21,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { copyIndexToStore } from "./helpers/index-to-store.mjs";
 import { townClone, townModuleUrl } from "./fixture-paths.mjs";
@@ -46,7 +46,7 @@ before(async () => {
   s = await startStore();
   if (s.skip) { skip = s.skip; return; }
   const { townDay } = await import(townModuleUrl("tools", "quest-progress.mjs"));
-  db = fixtureDb(dbPath);
+  db = fixtureTown();
   const put = db.prepare("INSERT OR REPLACE INTO meta VALUES (?, ?)");
   put.run("quest_registry", readFileSync(join(TOWN, "quest-registry.json"), "utf8"));
   put.run("quest_day", townDay());

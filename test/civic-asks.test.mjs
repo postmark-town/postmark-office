@@ -46,6 +46,7 @@ import { DatabaseSync } from "node:sqlite";
 import { civicQuarter, CIVIC_QUARTER, CIVIC_READING_LAW } from "../src/world-classes.mjs";
 import { TOWN_READS, TOWN_READABLE, townApex } from "../src/town-apex.mjs";
 import { NO_WORLD_DB, clearWorld, publishWorld } from "./helpers/world-rows.mjs";
+import { fixtureTown } from "./fixture.mjs";
 
 // The readers stand on the world graph snapshot (POS-270 lane W 3a): each store
 // built here is published as one, and world.db's path points nowhere.
@@ -280,8 +281,7 @@ test("the doorstep carries a POINTER to the quarter, not the plaques", async () 
   const { doorstepBundle } = await import("../src/doorstep-bundle.mjs");
   const dir = mkdtempSync(join(tmpdir(), "civic-doorstep-"));
   try {
-    const p = join(dir, "fixture.db");
-    fixtureDb(p).close();
+    const p = fixtureTown();
     const db = new DatabaseSync(p, { readOnly: true });
     const meta = { as_of: "fixturesha000000000000000000000000000000" };
     const base = { db, key: null, meta, asOf: meta.as_of, canWrite: false, clone: null, pen: null, odb: null, dbPath: null };

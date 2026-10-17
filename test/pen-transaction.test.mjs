@@ -113,7 +113,7 @@ test.after(() => { for (const d of homes) rmSync(d, { recursive: true, force: tr
 // ═══════════════════════════════════════════════════════════════════════════
 // The doors below run in this process and read their town index from a store
 // seeded from this fixture (POS-268, office-under-test.mjs).
-const IX = await indexStore((await import("./fixture.mjs")).fixtureDb()); // the fixture town holds wright and limen, as mailDb() does
+const IX = await indexStore((await import("./fixture.mjs")).fixtureTown()); // the fixture town holds wright and limen, as mailDb() does
 const IX_RESTORE = await IX.useInProcess();
 test.after(async () => { await IX_RESTORE(); await IX.stop(); });
 
@@ -493,6 +493,7 @@ export function appendHouseKey(clone, signed) {
 const STUB_SETTLE = `
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { fixtureTown } from "./fixture.mjs";
 import { penCommit } from ${JSON.stringify(writeUrl)};
 export async function settleUnderLock({ handle, clone }) {
   const files = ["tools/households.json", "tools/github-ids.json"].map((rel) => join(clone, rel));

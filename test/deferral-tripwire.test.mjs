@@ -51,7 +51,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
 import { openOauthDb } from "../src/oauth.mjs";
@@ -69,7 +69,7 @@ import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static k
 // The town index this file's offices read: a store seeded from each fixture
 // office.db (POS-268, office-under-test.mjs). Stopped when the file is done.
 const STORES = [];
-const storeFor = async (dbPath) => { const x = await indexStore(dbPath); STORES.push(x); return x.env; };
+const storeFor = async (town) => { const x = await indexStore(town); STORES.push(x); return x.env; };
 test.after(async () => { for (const x of STORES) await x.stop(); });
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -142,7 +142,7 @@ const seedLetter = async (o, { from = "wright", to = "limen", date = "2026-08-24
     },
   });
 
-const db = fixtureDb();
+const db = fixtureTown();
 /** The threshold sentences carry em-dashes and parentheses; match them literally. */
 const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 // POINTED AT THE RECORD, AND AWAITED (POS-158). A crossing reads the town's
@@ -332,9 +332,8 @@ test("T5 · THE IDENTITY FENCE: neither join door will append a row without a ve
   const clone = townClone();
   let child;
   try {
-    const dbPath = join(work, "fixture.db");
-    fixtureDb(dbPath).close();
-    const IX_ENV = await storeFor(dbPath);
+    const town = fixtureTown();
+    const IX_ENV = await storeFor(town);
     const odbPath = join(work, "oauth.db");
     openOauthDb(odbPath).close();
 
@@ -343,7 +342,7 @@ test("T5 · THE IDENTITY FENCE: neither join door will append a row without a ve
     let PORT;
     let BASE;
     const STATIC = "statickey";
-    ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--db", dbPath, "--oauth-db", seedStaticKeys(odbPath, `${STATIC}=keemin:wright`)], {
+    ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--oauth-db", seedStaticKeys(odbPath, `${STATIC}=keemin:wright`)], {
       env: {
         ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV, TOWN_SINGLE_LOG: "1",
         TOWN_CLONE: clone, WORLD_CLONE: join(work, "no-world"), VOICES_LOG: join(work, "voices.jsonl"), TOWN_PUSH: "",
@@ -400,9 +399,8 @@ test("T6 · THE BERTH ARC OPENS NO WINDOW: `begin` parks a declaration, it does 
   const clone = townClone();
   let child;
   try {
-    const dbPath = join(work, "fixture.db");
-    fixtureDb(dbPath).close();
-    const IX_ENV = await storeFor(dbPath);
+    const town = fixtureTown();
+    const IX_ENV = await storeFor(town);
     const odbPath = join(work, "oauth.db");
     openOauthDb(odbPath).close();
 
@@ -410,7 +408,7 @@ test("T6 · THE BERTH ARC OPENS NO WINDOW: `begin` parks a declaration, it does 
     // asked for); it was the fixed 43922, a door every pool tree on the box shares.
     let PORT;
     let BASE;
-    ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--db", dbPath, "--oauth-db", seedStaticKeys(odbPath, "unused=keemin:wright")], {
+    ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--oauth-db", seedStaticKeys(odbPath, "unused=keemin:wright")], {
       env: {
         ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV, TOWN_SINGLE_LOG: "1",
         TOWN_CLONE: clone, WORLD_CLONE: join(work, "no-world"), VOICES_LOG: join(work, "voices.jsonl"), TOWN_PUSH: "",

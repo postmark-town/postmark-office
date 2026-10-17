@@ -13,7 +13,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -21,10 +21,9 @@ let child, tmp, BASE;
 
 before(async () => {
   tmp = mkdtempSync(join(tmpdir(), "postmark-office-repo-log-"));
-  const dbPath = join(tmp, "fixture.db");
-  fixtureDb(dbPath).close();
+  const town = fixtureTown();
   let port;
-  ({ child, port } = await bootOnFreePort((p) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(p), "--db", dbPath,
+  ({ child, port } = await bootOnFreePort((p) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(p),
     "--oauth-db", join(tmp, "oauth.db"), "--roles-db", join(tmp, "roles.db")], {
     env: { ...process.env, WORLD_GRAPH_NONE: "1", TOWN_CLONE: join(tmp, "no-clone-here"), WORLD_CLONE: join(tmp, "no-world-clone"),
       VOICES_LOG: join(tmp, "voices.jsonl"), TOWN_PUSH: "", WORLD_STORE_DB: join(tmp, "no-world.db"),

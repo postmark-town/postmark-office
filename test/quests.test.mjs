@@ -10,9 +10,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { SCHEMA } from "../src/schema.mjs";
 import { questBoardFor } from "../src/queries.mjs";
 import { NO_TOWN, townClone, townModuleUrl } from "./fixture-paths.mjs";
+import { putValues, emptyTown } from "./fixture.mjs";
 
 const TOWN = townClone(); // a real checkout — the office imports the town's tool live
 const SKIP = !TOWN && NO_TOWN;
@@ -25,13 +25,9 @@ const REGISTRY = JSON.stringify({
 });
 
 function dbWith(row, day) {
-  const db = new DatabaseSync(":memory:");
-  db.exec(SCHEMA);
+  const db = emptyTown();
   if (row) {
-    db.prepare(`INSERT INTO quest_progress
-      (handle, send, receive, house_size, house_send, house_receive, sent_to, heard_from)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(row.handle, row.send, row.receive, row.house_size, row.house_send, row.house_receive, row.sent_to, row.heard_from);
+    putValues(db, "quest_progress", [row.handle, row.send, row.receive, row.house_size, row.house_send, row.house_receive, row.sent_to, row.heard_from], ["handle", "send", "receive", "house_size", "house_send", "house_receive", "sent_to", "heard_from"]);
   }
   return db;
 }

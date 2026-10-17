@@ -18,7 +18,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { copyIndexToStore } from "./helpers/index-to-store.mjs";
 import { parseFrontmatter } from "../vendor/tools/lib/town.mjs";
@@ -73,7 +73,7 @@ let s = null, skip = false, api, db, postings;
 before(async () => {
   assert.ok(existsSync(BULLETIN_DIR), `the pinned town clone has no TOWN_BULLETIN at ${BULLETIN_DIR}`);
   postings = townPostings();
-  db = fixtureDb();
+  db = fixtureTown();
   db.exec("DELETE FROM bulletin");
   const b = db.prepare("INSERT INTO bulletin VALUES (?, ?)");
   for (const p of postings) b.run(p.slug, JSON.stringify(p));
@@ -121,7 +121,7 @@ const PAPER_WORDS = { "tend-your-home": "HOME page", "hang-your-window": "window
 test("paperGapRows checks exactly three papers, and both descriptions name those three", async () => {
   // a settled resident with nothing done: no home, no window, no parcel
   const gaps = await paperGapRows("nobody-yet", {
-    db: fixtureDb(), clone: null,
+    db: fixtureTown(), clone: null,
     worldBlock: async () => ({ sited: false }),
     parcelClaim: async () => null,
   });

@@ -38,6 +38,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { fixtureTown } from "./fixture.mjs";
 
 delete process.env.TOWN_INDEX_READS;
 delete process.env.TOWN_PUSH; // set only inside the push-refusal test, against its temp origin
@@ -60,21 +61,20 @@ const { ownerGate } = await import("../src/doorstep-bundle.mjs");
 const tis = await import("../src/town-index-store.mjs");
 const acts = await import("../src/world2-acts.mjs");
 
-const dbPath = join(scratch, "office.db");
-fixtureDb(dbPath).close();
+const town = fixtureTown();
 // Two index states, set on the fixture's own rows (no row is invented):
 //   · NO INDEXED HOME: limen's home row is REMOVED, so limen has a card and no page;
 //   · A BLANK INDEXED PAGE: wright's row keeps its title and loses its description,
 //     which is what the papers check reads as "owed".
 {
-  const w = new DatabaseSync(dbPath);
+  const w = new DatabaseSync(town);
   w.prepare("DELETE FROM homes WHERE handle = ?").run("limen");
   const row = JSON.parse(w.prepare("SELECT json FROM homes WHERE handle = ?").get("wright").json);
   w.prepare("UPDATE homes SET json = ? WHERE handle = ?").run(JSON.stringify({ ...row, description: "" }), "wright");
   w.close();
 }
-const db = new DatabaseSync(dbPath, { readOnly: true });
-const IX = await indexStore(dbPath);
+const db = new DatabaseSync(town, { readOnly: true });
+const IX = await indexStore(town);
 const STORE = testIndex() === "store";
 after(async () => { db.close(); await IX.stop(); });
 
@@ -113,7 +113,7 @@ function townLog() {
   return o;
 }
 const keyFor = (...handles) => ({ household: `house-${handles[0]}`, handles: new Set(handles), ghId: "42", ghLogin: "keeminlee" });
-const ctxFor = (clone, odb = null) => ({ db, clone, odb, dbPath, schemas: {}, schemaRequired: {}, canWrite: true, worldBlock: async () => null });
+const ctxFor = (clone, odb = null) => ({ db, clone, odb, town, schemas: {}, schemaRequired: {}, canWrite: true, worldBlock: async () => null });
 const act = (verb, handle, args, clone, odb = null, key = keyFor(handle)) => householdApex({ do: verb, handle, args: { handle, ...args } }, key, ctxFor(clone, odb));
 const read = (what, handle, clone, odb = null, key = keyFor(handle), extra = {}) => householdApex({ read: what, ...(handle ? { handle } : {}), ...extra }, key, ctxFor(clone, odb));
 const okAct = (r, what) => { assert.equal(r.error, undefined, `${what}: ${JSON.stringify(r).slice(0, 300)}`); assert.ok(r.result, what); return r.result; };

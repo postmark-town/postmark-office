@@ -39,7 +39,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync }
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { windowRead } from "../src/queries.mjs";
 import { updateWindow } from "../src/edit.mjs";
 import { readPane } from "../src/panes.mjs";
@@ -90,7 +90,7 @@ const WITH_ISLAND = `<!doctype html><html><body>
 // ═══════════════════════════════════════════════════════════════════════════
 
 test("F1 · a pane that hangs without an island is SAID to hang — never 'no pane hung yet'", () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const clone = townClone();
   try {
     const hung = hangPane(clone, ISLAND_LESS);
@@ -122,7 +122,7 @@ test("F1 · a pane that hangs without an island is SAID to hang — never 'no pa
 // ═══════════════════════════════════════════════════════════════════════════
 
 test("F2 · the office looked and there is genuinely no pane — 'no pane hung yet' survives, and only here", () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const clone = townClone(); // WINDOW/ exists, window.html does not
   try {
     const w = windowRead(db, "wright", { clone });
@@ -139,7 +139,7 @@ test("F2 · the office looked and there is genuinely no pane — 'no pane hung y
 // ═══════════════════════════════════════════════════════════════════════════
 
 test("F3 · a pane with an island hands back the words, and the frame agrees a pane hangs", () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const clone = townClone();
   try {
     const hung = hangPane(clone, WITH_ISLAND);
@@ -158,7 +158,7 @@ test("F3 · a pane with an island hands back the words, and the frame agrees a p
 // ═══════════════════════════════════════════════════════════════════════════
 
 test("F4 · with no readable checkout the read REFUSES to say whether a pane hangs", () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   try {
     const w = windowRead(db, "wright"); // no clone at all — the office cannot look
     assert.equal(w.window, null);
@@ -185,7 +185,7 @@ test("F4b · readPane is the ONE owner, and it never spends 'could not look' as 
 // ═══════════════════════════════════════════════════════════════════════════
 
 test("F5 · replacing an island-less pane WARNS and hands back bytes + the commit the old pane is still in", () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const clone = townClone();
   try {
     const before = hangPane(clone, ISLAND_LESS);
@@ -210,7 +210,7 @@ test("F5 · replacing an island-less pane WARNS and hands back bytes + the commi
 });
 
 test("F5b · the recovery the warning promises is EXECUTED here, not asserted", () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const clone = townClone();
   try {
     const before = hangPane(clone, ISLAND_LESS);
@@ -234,7 +234,7 @@ test("F5b · the recovery the warning promises is EXECUTED here, not asserted", 
 // ═══════════════════════════════════════════════════════════════════════════
 
 test("F6 · a first hang replaces nothing, so nothing is warned about", () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const clone = townClone();
   try {
     const out = updateWindow({ handle: "wright", html: ISLAND_LESS }, KEY, db, clone);
@@ -245,7 +245,7 @@ test("F6 · a first hang replaces nothing, so nothing is warned about", () => {
 });
 
 test("F6b · replacing a pane that CARRIED an island is not warned — that read never lied", () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const clone = townClone();
   try {
     hangPane(clone, WITH_ISLAND);
@@ -261,7 +261,7 @@ test("F6b · replacing a pane that CARRIED an island is not warned — that read
 // ═══════════════════════════════════════════════════════════════════════════
 
 test("F7 · the read's frame and the act's warning are the same fact, taken from one owner", () => {
-  const db = fixtureDb();
+  const db = fixtureTown();
   const clone = townClone();
   try {
     const before = hangPane(clone, ISLAND_LESS);

@@ -33,7 +33,6 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { SCHEMA } from "../src/schema.mjs";
 import { doorstep, DOORSTEP_SEGMENTS, INDEX_SEGMENTS, SEGMENT_META, BUNDLE_LAW, mailAwaiting, windowRead, PSA_SLUG } from "../src/queries.mjs";
 import { doorstepBundle } from "../src/doorstep-bundle.mjs";
 import { LADDER_NOTE } from "../src/paper-fresh.mjs";
@@ -55,50 +54,49 @@ const HANDLE = "r000";
  * awaiting ones parked at indices 25–29, past the page.
  */
 function bundleDb() {
-  const db = new DatabaseSync(":memory:");
-  db.exec(SCHEMA);
-  const put = db.prepare("INSERT INTO meta VALUES (?, ?)");
-  put.run("as_of", AS_OF);
-  put.run("town_path", "fixture");
-  put.run("hydrated_counts", JSON.stringify({}));
+  const db = emptyTown();
+  const put = (...v) => putValues(db, "meta", v);
+  put("as_of", AS_OF);
+  put("town_path", "fixture");
+  put("hydrated_counts", JSON.stringify({}));
 
-  const insR = db.prepare("INSERT INTO residents VALUES (?, ?)");
-  insR.run(HANDLE, JSON.stringify({
+  const insR = (...v) => putValues(db, "residents", v);
+  insR(HANDLE, JSON.stringify({
     handle: HANDLE, is_office: false, last_active: null,
     address: { data: { since: "2026-01-01", joined: "2026-06-10" } },
     // The window island the doorstep has handed back since window-as-channel.
     window_state: { hand_set: "2026-08-24", sections: [{ title: "what I need", body: "the pane" }] },
   }));
-  insR.run("r001", JSON.stringify({ handle: "r001", is_office: false, last_active: null,
+  insR("r001", JSON.stringify({ handle: "r001", is_office: false, last_active: null,
     address: { data: { since: "2026-01-01", joined: "2026-06-11" } } }));
 
-  const insL = db.prepare("INSERT INTO letters VALUES (?,?,?,?,?,?,?,?,?,?)");
+  const insL = (...v) => putValues(db, "letters", v);
   for (let i = 0; i < 40; i++) {
     const id = `r001-2026-07-${String((i % 28) + 1).padStart(2, "0")}-to-r000-n${i}`;
     const at = `2026-07-${String((i % 28) + 1).padStart(2, "0")}T08:00:00.000Z`;
-    insL.run(id, "r001", HANDLE, at.slice(0, 10), null, "inbox", HANDLE,
+    insL(id, "r001", HANDLE, at.slice(0, 10), null, "inbox", HANDLE,
       `WHITE_PAGES/${HANDLE}/inbox/${i}.md`, JSON.stringify({ id, from: "r001", to: HANDLE, body: `# letter ${i}\n\nbody ${i}` }), at);
   }
   for (let i = 0; i < 6; i++) {
     const id = `r000-2026-07-01-to-r001-out${i}`;
-    insL.run(id, HANDLE, "r001", "2026-07-01", null, "outbox", "r001", `x${i}.md`,
+    insL(id, HANDLE, "r001", "2026-07-01", null, "outbox", "r001", `x${i}.md`,
       JSON.stringify({ id, from: HANDLE, to: "r001", body: `# out ${i}\n\nbody` }), "2026-07-01T08:00:00.000Z");
   }
 
-  const insB = db.prepare("INSERT INTO bulletin VALUES (?, ?)");
+  const insB = (...v) => putValues(db, "bulletin", v);
   for (let i = 0; i < 15; i++) {
     const slug = `2026-07-${String(i + 1).padStart(2, "0")}-notice-${i}`;
-    insB.run(slug, JSON.stringify({ slug, data: { title: `notice ${i}` }, body: `# notice ${i}\n\nprose` }));
+    insB(slug, JSON.stringify({ slug, data: { title: `notice ${i}` }, body: `# notice ${i}\n\nprose` }));
   }
 
-  const insLedger = db.prepare("INSERT INTO ledger (kind, date, id, from_h, to_h, json) VALUES (?,?,?,?,?,?)");
+  const insLedger = (...v) => putValues(db, "ledger", v, ["kind", "date", "id", "from_h", "to_h", "json"]);
   for (let i = 0; i < 12; i++) {
     // json is the event itself, as the hydrator writes every ledger line (town-index.mjs § ledgerLines); the store refuses a null
     const date = `2026-07-${String((i % 28) + 1).padStart(2, "0")}`;
-    insLedger.run("delivery", date, `l${i}`, "r001", HANDLE, JSON.stringify({ kind: "delivery", date, id: `l${i}`, from: "r001", to: HANDLE }));
+    insLedger("delivery", date, `l${i}`, "r001", HANDLE, JSON.stringify({ kind: "delivery", date, id: `l${i}`, from: "r001", to: HANDLE }));
   }
 
-  db.prepare("INSERT INTO stamps VALUES (?,?,?,?)").run(HANDLE, 12, 30, 3);
+  putValues(db, "stamps", [HANDLE, 12, 30, 3]);
 
   const conversations = [];
   for (let i = 0; i < 30; i++) {
@@ -111,10 +109,10 @@ function bundleDb() {
       next_actor: i >= 25 ? "you" : "them", others: ["r001"], letters: 2,
     });
   }
-  db.prepare("INSERT INTO mail_state VALUES (?, ?)").run(HANDLE, JSON.stringify({
+  putValues(db, "mail_state", [HANDLE, JSON.stringify({
     handle: HANDLE, language: "sequence, never debt", conversations,
     summary: { they_spoke_last: 5, new_inbound: 5, they_spoke_again: 0, reply_queued: 1, last_word_yours: 25, bounced: 0 },
-  }));
+  })]);
   return db;
 }
 
@@ -800,6 +798,7 @@ test("THE CUT: psa keeps each notice's date, title and url, and never its body",
 // "doorstep" all carry the same block, computed with the page's one clock.
 import { __setMistsDepsForTest } from "../src/mists-forecast.mjs";
 import { crossingSailsAt } from "../src/crossings.mjs";
+import { putValues, emptyTown } from "./fixture.mjs";
 const MISTS_ENGINE = {
   mistsAt: (c, m) => {
     if (c < 300) return null;

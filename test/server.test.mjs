@@ -10,7 +10,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
-import { editClone, fixtureDb } from "./fixture.mjs";
+import { editClone, fixtureTown } from "./fixture.mjs";
 import { worldStoreFixture, AS_OF_WORLD } from "./world-graph-fixture.mjs";
 import { rowsEnv } from "./helpers/world-rows.mjs";
 import { indexStore, testIndex } from "./helpers/office-under-test.mjs";
@@ -27,12 +27,11 @@ let child, tmp, BASE, ix;
 
 before(async () => {
   tmp = mkdtempSync(join(tmpdir(), "postmark-office-srv-"));
-  const dbPath = join(tmp, "fixture.db");
-  fixtureDb(dbPath).close();
+  const town = fixtureTown();
   // The town index the offices read: the store, seeded from this fixture. Every
   // office in this file stands on the same fixture town (fixtureDb is the same
   // town each call), so one store serves them all.
-  ix = await indexStore(dbPath);
+  ix = await indexStore(town);
   // A world store at a KNOWN path, so the window's tests do not depend on
   // whether the machine running them happens to have hydrated one. Pointed at
   // by WORLD_STORE_DB, the same override an operator uses to run an office
@@ -43,7 +42,7 @@ before(async () => {
   // the second office died on `unable to open database file` — the same
   // collision the port had, one directory over. The berth test below already
   // passed its own `--oauth-db`; this is that idiom applied to every spawn here.
-  child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0", "--db", dbPath,
+  child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0",
     "--oauth-db", seedStaticKeys(join(tmp, "oauth.db"), `${KEY}=keemin:wright`), "--roles-db", join(tmp, "roles.db")], {
     env: { ...process.env, TOWN_CLONE: join(tmp, "no-clone-here"), WORLD_CLONE: join(tmp, "no-world-clone"), VOICES_LOG: join(tmp, "voices-log.jsonl"), TOWN_PUSH: "", ...rowsEnv(join(tmp, "world.db"), tmp), ...ix.env },   // the world is the rows (POS-270 lane W 3a), never the file
     stdio: ["ignore", "pipe", "pipe"],
@@ -238,9 +237,8 @@ test("PATCH /profile/{handle}/avatar reaches the REST image door and keeps its b
   let port;
   const clone = editClone();
   const dir = mkdtempSync(join(tmpdir(), "postmark-office-avatar-srv-"));
-  const dbPath = join(dir, "fixture.db");
-  fixtureDb(dbPath).close();
-  const avatarServer = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0", "--db", dbPath,
+  const town = fixtureTown();
+  const avatarServer = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0",
     "--oauth-db", seedStaticKeys(join(dir, "oauth.db"), `${KEY}=keemin:wright`), "--roles-db", join(dir, "roles.db")], {
     env: { ...process.env, WORLD_GRAPH_NONE: "1", TOWN_CLONE: clone, WORLD_CLONE: join(dir, "no-world-clone"), TOWN_PUSH: "", ...ix.env },
     stdio: ["ignore", "pipe", "pipe"],
@@ -810,9 +808,8 @@ test("a stringified number is coerced, not refused — the door does not eat the
 test("POST /berth: one keyless POST mints ephemeral standing; names are single-occupancy; /me knows a berth", async () => {
   let port;
   const dir = mkdtempSync(join(tmpdir(), "postmark-office-berth-srv-"));
-  const dbPath = join(dir, "fixture.db");
-  fixtureDb(dbPath).close();
-  const child2 = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0", "--db", dbPath,
+  const town = fixtureTown();
+  const child2 = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0",
     "--oauth-db", seedStaticKeys(join(dir, "oauth.db"), `${KEY}=keemin:wright`), "--roles-db", join(dir, "roles.db")], {
     env: { ...process.env, WORLD_GRAPH_NONE: "1", TOWN_CLONE: join(dir, "no-clone"), WORLD_CLONE: join(dir, "no-world-clone"), VOICES_LOG: join(dir, "voices.jsonl"), TOWN_PUSH: "", ...ix.env },
     stdio: ["ignore", "pipe", "pipe"],

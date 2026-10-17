@@ -39,6 +39,7 @@ import { DatabaseSync } from "node:sqlite";
 import { installActsPen, uninstallActsPen, RECORD_ON } from "./acts-pen-stub.mjs";
 import { OFFICE_ROOT } from "./fixture-paths.mjs";
 import { tempDir } from "./helpers/temp-dir.mjs";
+import { fixtureTown } from "./fixture.mjs";
 
 const REAL_TOWN = process.env.TOWN_CLONE ?? join(OFFICE_ROOT, "town-clone");
 const haveEngine = existsSync(join(REAL_TOWN, "tools", "world-stake.mjs")) && existsSync(join(REAL_TOWN, "tools", "stamp-mint.mjs"));
@@ -232,8 +233,7 @@ test("6 · the doorstep segment deep-equals household { read: \"posts\" } at the
   const { fixtureDb } = await import("./fixture.mjs");
   const { doorstepBundle } = await import("../src/doorstep-bundle.mjs");
   const { householdApex } = await import("../src/household-apex.mjs");
-  const dbPath = join(DIR, "fixture.db");
-  fixtureDb(dbPath).close();
+  const dbPath = fixtureTown();
   const db = new DatabaseSync(dbPath, { readOnly: true });
   // the town index from a store seeded from this fixture, in this process, as a
   // switched office reads it (POS-268); the record stays this file's stub

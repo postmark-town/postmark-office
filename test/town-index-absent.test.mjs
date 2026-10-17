@@ -18,7 +18,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 
-import { fixtureDb } from "./fixture.mjs";
+import { putValues, fixtureTown } from "./fixture.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { copyIndexToStore } from "./helpers/index-to-store.mjs";
 import { townClone, townModuleUrl } from "./fixture-paths.mjs";
@@ -37,7 +37,7 @@ let store = null, skip = false;
 const offices = {};
 
 function office(name, db, env) {
-  const child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0", "--db", db,
+  const child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0",
     "--oauth-db", seedStaticKeys(join(tmp, `${name}-oauth.db`), `${KEY}=keemin:wright`), "--roles-db", join(tmp, `${name}-roles.db`)], {
     env: { ...process.env, TOWN_CLONE: TOWN ?? join(tmp, "no-clone-here"), WORLD_CLONE: join(tmp, "no-world-clone"),
       VOICES_LOG: join(tmp, `${name}-voices.jsonl`), TOWN_PUSH: "", WORLD_STORE_DB: join(tmp, "no-world.db"),
@@ -59,20 +59,18 @@ function office(name, db, env) {
 before(async () => {
   store = await startStore({ db: "index_absent" });
   if (store.skip) { skip = store.skip; return; }
-  const db = fixtureDb(dbPath);
+  const db = fixtureTown();
   if (TOWN) {
     const { townDay } = await import(townModuleUrl("tools", "quest-progress.mjs"));
-    const put = db.prepare("INSERT OR REPLACE INTO meta VALUES (?, ?)");
-    put.run("quest_registry", readFileSync(join(TOWN, "quest-registry.json"), "utf8"));
-    put.run("quest_day", townDay());
-    db.prepare("INSERT INTO quest_progress (handle, send, receive, house_size, house_send, house_receive, sent_to, heard_from) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-      .run("wright", 2, 1, 1, 2, 1, JSON.stringify(["limen"]), JSON.stringify(["limen"]));
-    db.prepare("INSERT INTO quest_standing VALUES (?, ?)").run("wright", JSON.stringify({ facts: { address: true }, since: {} }));
+    const put = (...v) => putValues(db, "meta", v);
+    put("quest_registry", readFileSync(join(TOWN, "quest-registry.json"), "utf8"));
+    put("quest_day", townDay());
+    putValues(db, "quest_progress", ["wright", 2, 1, 1, 2, 1, JSON.stringify(["limen"]), JSON.stringify(["limen"])], ["handle", "send", "receive", "house_size", "house_send", "house_receive", "sent_to", "heard_from"]);
+    putValues(db, "quest_standing", ["wright", JSON.stringify({ facts: { address: true }, since: {} })]);
   }
   const w = await store.connect("law_ingester");
   await copyIndexToStore(w, db);
   await w.end();
-  db.close();
   // prod has the record (WORLD2_PG) and the switch off; only the switch differs between the two
   await office("plain", dbPath, { WORLD2_PG: "1", WORLD2_PG_URL: store.url("office_api") });
   await office("absent", NO_DB, { TOWN_INDEX_READS: "store", WORLD2_PG: "1", WORLD2_PG_URL: store.url("office_api") });

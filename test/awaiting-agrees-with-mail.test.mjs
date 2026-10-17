@@ -21,7 +21,7 @@
 // hand-edit.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { mailList, mailAwaiting, doorstep } from "../src/queries.mjs";
 
 const CONV = "limen-2026-07-01-to-wright-the-gap";
@@ -83,7 +83,7 @@ const MAIL_STATE_AFTER = {
 // ── F1 · THE SPECIMEN ───────────────────────────────────────────────────────
 
 test("F1 · POS-135: an uncrossed reply is NOT inbox mail, and `awaiting` and `mail` say the same thing about who spoke last", () => {
-  const db = withAnswer(fixtureDb(), { crossed: false });
+  const db = withAnswer(fixtureTown(), { crossed: false });
   const aw = mailAwaiting(db, "limen");
   const row = aw.conversations.find((c) => c.conversation === CONV);
 
@@ -109,7 +109,7 @@ test("F1 · POS-135: an uncrossed reply is NOT inbox mail, and `awaiting` and `m
 });
 
 test("F1b · the count moves with the slice — a total drawn from a wider WHERE is the defect wearing a number", () => {
-  const db = withAnswer(fixtureDb(), { crossed: false });
+  const db = withAnswer(fixtureTown(), { crossed: false });
   const inbox = mailList(db, "limen", "inbox");
   assert.equal(inbox.total, inbox.letters.length,
     "the box is small enough to fit one page, so the total IS the page — if these differ the count is counting the uncrossed letter the slice dropped");
@@ -120,7 +120,7 @@ test("F1b · the count moves with the slice — a total drawn from a wider WHERE
 // ── F2 · IN ONE PAYLOAD ─────────────────────────────────────────────────────
 
 test("F2 · one doorstep payload: the `mail` segment carries nothing the `awaiting` segment has not seen delivered", async () => {
-  const db = withAnswer(fixtureDb(), { crossed: false });
+  const db = withAnswer(fixtureTown(), { crossed: false });
   const page = (await doorstep(db, "limen", "fixturesha000000000000000000000000000000"));
 
   // the two segments, read off ONE payload — which is the whole complaint
@@ -151,7 +151,7 @@ test("F2 · one doorstep payload: the `mail` segment carries nothing the `awaiti
 // ── F3 · AND THEY MOVE TOGETHER ─────────────────────────────────────────────
 
 test("F3 · the crossing moves BOTH segments — agreement is not silence, it is the same answer twice", async () => {
-  const db = withAnswer(fixtureDb(), { crossed: true });
+  const db = withAnswer(fixtureTown(), { crossed: true });
   const page = (await doorstep(db, "limen", "fixturesha000000000000000000000000000000"));
   const row = page.awaiting.conversations.find((c) => c.conversation === CONV);
 
@@ -174,7 +174,7 @@ test("F4 · the summary's DISJOINT states sum to conversations_total — `they_s
   // future summary cannot quietly become six disjoint numbers that do not add
   // up, and so the five-over-four reading has a receipt.
   for (const crossed of [false, true]) {
-    const db = withAnswer(fixtureDb(), { crossed });
+    const db = withAnswer(fixtureTown(), { crossed });
     const aw = mailAwaiting(db, "limen");
     const s = aw.summary;
     assert.equal(s.they_spoke_last, s.new_inbound + s.they_spoke_again,
@@ -190,7 +190,7 @@ test("F4 · the summary's DISJOINT states sum to conversations_total — `they_s
 // ── F5 · AND THE STATES THIS DID NOT TOUCH ──────────────────────────────────
 
 test("F5 · a bounce still reads `bounced`, and a merged-but-unsailed reply still reads `reply_queued` to its SENDER", () => {
-  const db = withAnswer(fixtureDb(), { crossed: false });
+  const db = withAnswer(fixtureTown(), { crossed: false });
   // wright's own view of the fixture's unsent letter — the sender's side of the
   // very tense this lane narrowed on the recipient's side. It must be untouched:
   // "publication is not arrival" cuts both ways, and the author must still see
@@ -205,7 +205,7 @@ test("F5 · a bounce still reads `bounced`, and a merged-but-unsailed reply stil
 });
 
 test("F6 · the OUTBOX view is not narrowed — it still answers everything you wrote, settled or not", () => {
-  const db = withAnswer(fixtureDb(), { crossed: false });
+  const db = withAnswer(fixtureTown(), { crossed: false });
   const sent = mailList(db, "wright", "outbox");
   const ids = sent.letters.map((l) => l.id);
   assert.ok(ids.includes("wright-2026-07-04-to-limen-unsent"), "the uncrossed letter left its author's own sent mail");
@@ -221,7 +221,7 @@ test("F7 · an index hydrated before `box` carried a value still answers its inb
   // readTown writes today is null (readLetterFile always sets box from the
   // directory it read the file in) — this exists so that if one ever is, the
   // failure is a letter shown, not a town of empty mailboxes.
-  const db = withAnswer(fixtureDb(), { crossed: true });
+  const db = withAnswer(fixtureTown(), { crossed: true });
   db.prepare("UPDATE letters SET box = NULL WHERE id = ?").run(ANSWER);
   const inbox = mailList(db, "limen", "inbox");
   assert.ok(inbox.letters.map((l) => l.id).includes(ANSWER),

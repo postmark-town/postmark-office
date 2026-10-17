@@ -21,7 +21,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { copyIndexToStore } from "./helpers/index-to-store.mjs";
 import * as office from "../src/queries.mjs";
@@ -40,7 +40,7 @@ const offices = {};
 before(async () => {
   s = await startStore();
   if (s.skip) { skip = s.skip; return; }
-  db = fixtureDb(dbPath);
+  db = fixtureTown();
   const L = db.prepare("INSERT INTO letters VALUES (?,?,?,?,?,?,?,?,?,?)");
   const letter = (id, from, to, date, at, extra = {}, box = "inbox") =>
     L.run(id, from, to, date, null, box, to, `WHITE_PAGES/${to}/${box}/${id}.md`,

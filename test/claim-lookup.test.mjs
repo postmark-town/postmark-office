@@ -30,7 +30,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { fixtureDb } from "./fixture.mjs";
+import { putValues } from "./fixture.mjs";
 import { indexStore, seedRegistry, recordInProcess } from "./helpers/office-under-test.mjs";
 import { openOauthDb, claimLookup, householdFor, mintClaim, cosignClaim, claimByAsk } from "../src/oauth.mjs";
 
@@ -49,10 +49,10 @@ async function grant(odb, ask, who) {
 async function bench() {
   const tmp = mkdtempSync(join(tmpdir(), "postmark-claim-lookup-"));
   const db = fixtureDb(join(tmp, "fixture.db"));
-  db.prepare("INSERT INTO residents VALUES (?, ?)").run("other-resident", JSON.stringify({
+  putValues(db, "residents", ["other-resident", JSON.stringify({
     handle: "other-resident", is_office: false, last_active: null,
     address: { data: { since: "2026-08-01", github: OTHER.login }, body: "# other-resident" },
-  }));
+  })]);
   const clone = join(tmp, "town-clone");
   mkdirSync(join(clone, "tools"), { recursive: true });
   const odb = openOauthDb(join(tmp, "oauth.db"));

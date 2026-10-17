@@ -19,7 +19,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { SCHEMA } from "../src/schema.mjs";
+import { putValues, emptyTown } from "./fixture.mjs";
 import {
   resident, mailList, letterList, repoLog, residentPage, residentList,
   doorstep, bulletinTeaser, stampsRoster, search, regionList, CARD_MAIL, mailAwaiting,
@@ -37,54 +37,53 @@ const AS_OF = "bigfixture00000000000000000000000000000";
  * and should be re-sized rather than deleted.
  */
 function bigDb() {
-  const db = new DatabaseSync(":memory:");
-  db.exec(SCHEMA);
-  const put = db.prepare("INSERT INTO meta VALUES (?, ?)");
-  put.run("as_of", AS_OF);
-  put.run("town_path", "fixture");
-  put.run("hydrated_counts", JSON.stringify({}));
+  const db = emptyTown();
+  const put = (...v) => putValues(db, "meta", v);
+  put("as_of", AS_OF);
+  put("town_path", "fixture");
+  put("hydrated_counts", JSON.stringify({}));
 
-  const insR = db.prepare("INSERT INTO residents VALUES (?, ?)");
+  const insR = (...v) => putValues(db, "residents", v);
   for (let i = 0; i < 60; i++) {
     const handle = `r${String(i).padStart(3, "0")}`;
     // Half joined in June, half in August — so a `since` filter has a real
     // subset to find, spread across the whole roll rather than bunched at the
     // front where a slice-then-filter bug would accidentally look right.
     const joined = i % 2 === 0 ? "2026-06-10" : "2026-08-20";
-    insR.run(handle, JSON.stringify({
+    insR(handle, JSON.stringify({
       handle, is_office: i === 7, last_active: null,
       address: { data: { since: "2026-01-01", joined, office: i === 7 || undefined } },
     }));
   }
 
-  const insL = db.prepare("INSERT INTO letters VALUES (?,?,?,?,?,?,?,?,?,?)");
+  const insL = (...v) => putValues(db, "letters", v);
   for (let i = 0; i < 40; i++) {
     const id = `r001-2026-07-${String((i % 28) + 1).padStart(2, "0")}-to-r000-n${i}`;
     const at = `2026-07-${String((i % 28) + 1).padStart(2, "0")}T08:00:00.000Z`;
     const json = JSON.stringify({ id, from: "r001", to: "r000", body: `# letter ${i}\n\nbody ${i}` });
-    insL.run(id, "r001", "r000", at.slice(0, 10), null, "inbox", "r000", `WHITE_PAGES/r000/inbox/${i}.md`, json, at);
+    insL(id, "r001", "r000", at.slice(0, 10), null, "inbox", "r000", `WHITE_PAGES/r000/inbox/${i}.md`, json, at);
   }
   // Six letters the other way, so the outbox is a different, smaller set.
   for (let i = 0; i < 6; i++) {
     const id = `r000-2026-07-01-to-r001-out${i}`;
     const json = JSON.stringify({ id, from: "r000", to: "r001", body: `# out ${i}\n\nbody` });
-    insL.run(id, "r000", "r001", "2026-07-01", null, "outbox", "r001", `x${i}.md`, json, "2026-07-01T08:00:00.000Z");
+    insL(id, "r000", "r001", "2026-07-01", null, "outbox", "r001", `x${i}.md`, json, "2026-07-01T08:00:00.000Z");
   }
 
   // 45 commits; commit 0 touches three files so a DISTINCT-sha total cannot be
   // confused with a row count.
-  const insG = db.prepare("INSERT INTO repo_log VALUES (?,?,?,?,?,?)");
+  const insG = (...v) => putValues(db, "repo_log", v);
   for (let i = 0; i < 45; i++) {
     const sha = `sha${String(i).padStart(3, "0")}`;
     const at = `2026-07-${String((i % 28) + 1).padStart(2, "0")}T08:00:00.000Z`;
     const files = i === 0 ? 3 : 1;
-    for (let f = 0; f < files; f++) insG.run(sha, at, "someone", `subject ${i}`, "M", `path/${i}/${f}.md`);
+    for (let f = 0; f < files; f++) insG(sha, at, "someone", `subject ${i}`, "M", `path/${i}/${f}.md`);
   }
 
-  const insB = db.prepare("INSERT INTO bulletin VALUES (?, ?)");
+  const insB = (...v) => putValues(db, "bulletin", v);
   for (let i = 0; i < 15; i++) {
     const slug = `2026-07-${String(i + 1).padStart(2, "0")}-notice-${i}`;
-    insB.run(slug, JSON.stringify({ slug, data: { title: `notice ${i}` }, body: `# notice ${i}\n\nprose` }));
+    insB(slug, JSON.stringify({ slug, data: { title: `notice ${i}` }, body: `# notice ${i}\n\nprose` }));
   }
 
   // 30 conversations. The ones that await a reply sit at indices 25–29 —
@@ -101,10 +100,10 @@ function bigDb() {
       next_actor: i >= 25 ? "you" : "them", others: ["r001"], letters: 2,
     });
   }
-  db.prepare("INSERT INTO mail_state VALUES (?, ?)").run("r000", JSON.stringify({
+  putValues(db, "mail_state", ["r000", JSON.stringify({
     handle: "r000", language: "sequence, never debt", conversations,
     summary: { they_spoke_last: 5, new_inbound: 5, they_spoke_again: 0, reply_queued: 0, last_word_yours: 25, bounced: 0 },
-  }));
+  })]);
   return db;
 }
 
@@ -385,9 +384,8 @@ test("bulletinTeaser: the offset the more_note names actually walks the board", 
 });
 
 test("bulletinTeaser: a board shorter than the bound reports itself complete", () => {
-  const small = new DatabaseSync(":memory:");
-  small.exec(SCHEMA);
-  small.prepare("INSERT INTO bulletin VALUES (?, ?)").run("a", JSON.stringify({ data: {}, body: "# a" }));
+  const small = emptyTown();
+  putValues(small, "bulletin", ["a", JSON.stringify({ data: {}, body: "# a" })]);
   const t = bulletinTeaser(small);
   assert.equal(t.total, 1);
   assert.equal(t.complete, true);
@@ -401,10 +399,9 @@ test("stampsRoster: minted_cumulative is NOT the account count, so the roster ne
   // unit from the list beside it. A reader could not learn from it how many
   // accounts the roster stopped short of, which is the only question a bounded
   // roster raises.
-  const small = new DatabaseSync(":memory:");
-  small.exec(SCHEMA);
-  const insS = small.prepare("INSERT INTO stamps (handle, balance, mint_count, staked) VALUES (?, ?, ?, ?)");
-  for (let i = 0; i < 70; i++) insS.run(`h${String(i).padStart(3, "0")}`, 100 - i, 100 - i, 0);
+  const small = emptyTown();
+  const insS = (...v) => putValues(small, "stamps", v, ["handle", "balance", "mint_count", "staked"]);
+  for (let i = 0; i < 70; i++) insS(`h${String(i).padStart(3, "0")}`, 100 - i, 100 - i, 0);
   const r = stampsRoster(small, { stamps_minted: "9999" }, {});
   assert.equal(r.balances.length, 50);
   assert.equal(r.accounts, 70);
@@ -452,12 +449,11 @@ test("search: a term that fits reports capped false in both buckets", () => {
 });
 
 test("regionList: the region page and the per-region roll are counted separately", () => {
-  const small = new DatabaseSync(":memory:");
-  small.exec(SCHEMA);
-  const insReg = small.prepare("INSERT INTO regions VALUES (?, ?, ?)");
+  const small = emptyTown();
+  const insReg = (...v) => putValues(small, "regions", v);
   for (let i = 0; i < 30; i++) {
     const residents = Array.from({ length: i === 0 ? 40 : 2 }, (_, k) => `r${k}`);
-    insReg.run(`reg-${String(i).padStart(2, "0")}`, `Region ${i}`, JSON.stringify({ body: `Description ${i}`, residents }));
+    insReg(`reg-${String(i).padStart(2, "0")}`, `Region ${i}`, JSON.stringify({ body: `Description ${i}`, residents }));
   }
   const a = regionList(small, {});
   assert.equal(a.shown, 25);

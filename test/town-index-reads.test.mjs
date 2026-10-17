@@ -18,7 +18,7 @@
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { copyIndexToStore } from "./helpers/index-to-store.mjs";
 import * as office from "../src/queries.mjs";
@@ -29,7 +29,7 @@ let s = null, skip = false, api, db;
 before(async () => {
   s = await startStore();
   if (s.skip) { skip = s.skip; return; }
-  db = fixtureDb();
+  db = fixtureTown();
   const log = db.prepare("INSERT INTO repo_log VALUES (?,?,?,?,?,?)");
   // two commits at the same second: sqlite orders the tie by sha
   log.run("b2sha", "2026-07-20T10:00:00.000Z", "Postmark Pen", "ferry: 2 delivered", "A", "WHITE_PAGES/limen/inbox/a.md");

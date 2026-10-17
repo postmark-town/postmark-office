@@ -30,7 +30,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { makePool } from "./registry-pool-stub.mjs";
 import { __setPoolForTest } from "../src/world2-acts.mjs";
 import { requestResidency, REGISTRY_PATH, PINS_PATH, serializeRegistry, serializePins } from "../src/residency.mjs";
@@ -119,7 +119,7 @@ const PEN = () => ({
   token: "a-mock-pen-token", owner: "postmark-town", repo: "postmark", baseBranch: "main",
 });
 
-const db = fixtureDb();
+const db = fixtureTown();
 // The doors below run in this process and read their town index from a store
 // seeded from this fixture (POS-268, office-under-test.mjs).
 const IX = await indexStore(db);
@@ -440,8 +440,7 @@ test("the exec under the town lock answers ONE JSON line, and an unreachable rec
   delete env.WORLD2_PG; delete env.WORLD2_PG_URL; delete env.TOWN_PUSH;
   const dir = mkdtempSync(join(tmpdir(), "join-bind-db-"));
   clones.push(dir);
-  const dbPath = join(dir, "office.db");
-  fixtureDb(dbPath).close();
+  const dbPath = fixtureTown();
   const out = await execUnderTownLock(join(import.meta.dirname, "..", "src", "join-bind-exec.mjs"),
     JSON.stringify({ args: { handle: "tulip", card: "hello" }, key: { ghId: 999, ghLogin: "keeminlee", handles: ["wright"] }, dbPath }), env);
   const lines = out.trim().split("\n");

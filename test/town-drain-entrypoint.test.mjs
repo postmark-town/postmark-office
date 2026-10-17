@@ -51,7 +51,7 @@ import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { openOauthDb } from "../src/oauth.mjs";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { appendTownJournal, ensureTownJournal } from "../src/town-journal.mjs";
 import { letterDate, outboxRelPath } from "../src/write.mjs";
 import { MAIL_ACT } from "../src/town-mail.mjs";
@@ -119,7 +119,7 @@ test.after(() => { for (const d of temps.splice(0)) rmSync(d, { recursive: true,
 // fixture (POS-268, office-under-test.mjs). With the suite's index forced back
 // to office.db there is no store to hand it, and the tool no longer reads one.
 const SKIP = testIndex() === "office" && "OFFICE_TEST_INDEX=office: the drain reads only the store (POS-268 5b)";
-const IX = await indexStore(fixtureDb());
+const IX = await indexStore(fixtureTown());
 const IX_RESTORE = await IX.useInProcess();
 test.after(async () => { await IX_RESTORE(); await IX.stop(); });
 

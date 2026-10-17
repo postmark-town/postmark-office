@@ -25,21 +25,20 @@ import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { Bouncer, WORLD_WRITE_VERBS, BOUNCER_LIMITS, townDayWindow } from "../src/bouncer.mjs";
 import { householdStanding, HOUSEHOLD_READS } from "../src/household-apex.mjs";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 
 const quiet = () => {};
 const HOUSE = "keemin";
 
 const dir = mkdtempSync(join(tmpdir(), "postmark-pos139-"));
-const dbPath = join(dir, "fixture.db");
-fixtureDb(dbPath).close();
+const town = fixtureTown();
 // The doors below run in this process and read their town index from a store
 // seeded from this fixture (POS-268, office-under-test.mjs).
-const IX = await indexStore(dbPath);
+const IX = await indexStore(town);
 const IX_RESTORE = await IX.useInProcess();
 test.after(async () => { await IX_RESTORE(); await IX.stop(); });
-const db = new DatabaseSync(dbPath, { readOnly: true });
+const db = new DatabaseSync(town, { readOnly: true });
 after(() => {
   db.close();
   rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });

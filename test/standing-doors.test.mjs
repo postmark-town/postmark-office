@@ -27,7 +27,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
 import { openOauthDb } from "../src/oauth.mjs";
@@ -59,7 +59,7 @@ test.after(async () => {
 // The town index this file's offices read: a store seeded from each fixture
 // office.db (POS-268, office-under-test.mjs). Stopped when the file is done.
 const STORES = [];
-const storeFor = async (dbPath) => { const x = await indexStore(dbPath); STORES.push(x); return x; };
+const storeFor = async (town) => { const x = await indexStore(town); STORES.push(x); return x; };
 test.after(async () => { for (const x of STORES) await x.stop(); });
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -98,7 +98,7 @@ function townClone({ handles = ["wright", "limen"] } = {}) {
   return dir;
 }
 
-const db = fixtureDb();
+const db = fixtureTown();
 
 test.after(dropAll);
 
@@ -313,8 +313,7 @@ test("S7 · REST AND MCP: writes bounce, reads pass, lift reopens, revoke shuts 
   const clone = townClone();
   let child;
   try {
-    const dbPath = join(work, "fixture.db");
-    fixtureDb(dbPath).close();
+    const dbPath = fixtureTown();
     const IX = await storeFor(dbPath);
     const IX_ENV = { ...IX.env };
     // The spawned office reads standing from its own store; with the suite's
@@ -331,7 +330,7 @@ test("S7 · REST AND MCP: writes bounce, reads pass, lift reopens, revoke shuts 
     let PORT;
     let BASE;
     const KEY = "standingkey";
-    ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--db", dbPath, "--oauth-db", seedStaticKeys(odbPath, `${KEY}=keemin:wright`)], {
+    ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--oauth-db", seedStaticKeys(odbPath, `${KEY}=keemin:wright`)], {
       env: {
         ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV,
         TOWN_CLONE: clone, WORLD_CLONE: join(work, "no-world"), VOICES_LOG: join(work, "voices.jsonl"), TOWN_PUSH: "",

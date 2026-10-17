@@ -60,7 +60,7 @@ import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 // F8-F11 test the reply hint's logic over a mail_state row they write themselves, so
 // they hand the hint that row through an explicit probe; the switch is not theirs.
@@ -78,7 +78,7 @@ import {
 // The town index this file's offices read: a store seeded from each fixture
 // office.db (POS-268, office-under-test.mjs). Stopped when the file is done.
 const STORES = [];
-const storeFor = async (dbPath) => { const x = await indexStore(dbPath); STORES.push(x); return x.env; };
+const storeFor = async (town) => { const x = await indexStore(town); STORES.push(x); return x.env; };
 test.after(async () => { for (const x of STORES) await x.stop(); });
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -95,12 +95,11 @@ const trash = [];
 after(() => { for (const d of trash.splice(0)) rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
 
 const dir = mkdtempSync(join(tmpdir(), "pm-thread-"));
-const dbPath = join(dir, "fixture.db");
-fixtureDb(dbPath).close();
-const db = new DatabaseSync(dbPath, { readOnly: true });
+const town = fixtureTown();
+const db = new DatabaseSync(town, { readOnly: true });
 // The checks this file calls in-process read their town index from a store
 // seeded from this fixture (POS-268, office-under-test.mjs).
-const IX_IN = await indexStore(dbPath);
+const IX_IN = await indexStore(town);
 const IX_IN_RESTORE = await IX_IN.useInProcess();
 test.after(async () => { await IX_IN_RESTORE(); await IX_IN.stop(); });
 after(() => { db.close(); rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
@@ -395,10 +394,9 @@ let child, restTmp;
 
 before(async () => {
   restTmp = mkdtempSync(join(tmpdir(), "pm-thread-rest-"));
-  const p = join(restTmp, "fixture.db");
-  fixtureDb(p).close();
+  const p = fixtureTown();
   const IX_ENV = await storeFor(p);
-  ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--db", p, "--oauth-db", seedStaticKeys(join(restTmp, "oauth.db"), `${REST_KEY}=keemin:wright`)], {
+  ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--oauth-db", seedStaticKeys(join(restTmp, "oauth.db"), `${REST_KEY}=keemin:wright`)], {
     env: { ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV, TOWN_CLONE: mailClone(),
       WORLD_CLONE: join(restTmp, "no-world-clone") },
     stdio: ["ignore", "pipe", "pipe"],

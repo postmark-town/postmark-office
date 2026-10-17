@@ -26,7 +26,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import { NO_WORLD, OFFICE_ROOT, worldClone } from "./fixture-paths.mjs";
 import { publishWorld } from "./helpers/world-rows.mjs";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 
 const CLONE = worldClone();
@@ -51,10 +51,9 @@ let dir;
 
 // the household's fixture and its store (foyer-shrink.test.mjs's rig)
 const hdir = mkdtempSync(join(tmpdir(), "pm-read-shape-"));
-const dbPath = join(hdir, "fixture.db");
-fixtureDb(dbPath).close();
-const db = new DatabaseSync(dbPath, { readOnly: true });
-const IX = await indexStore(dbPath);
+const town = fixtureTown();
+const db = new DatabaseSync(town, { readOnly: true });
+const IX = await indexStore(town);
 const IX_RESTORE = await IX.useInProcess();
 const HKEY = { household: "keemin", handles: new Set(["wright"]), ghId: "42", ghLogin: "keeminlee" };
 const worldBlock = async () => ({ sited: true, unreadable: false, parcel_id: "wright/the-trueing-house-parcel", transport: { line: "a transport line" } });

@@ -36,6 +36,7 @@ import { drainRegistry, checkRegistry, ingestMissing, missingFromStore } from ".
 import { conformance } from "../src/declare.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { tempDir } from "./helpers/temp-dir.mjs";
+import { fixtureTown } from "./fixture.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIX = join(HERE, "fixtures", "registry-2026-09-22");
@@ -152,7 +153,7 @@ const withPool = async (fn, pool = stubPool()) => {
 
 // The doors below run in this process and read their town index from a store
 // seeded from this fixture (POS-268, office-under-test.mjs).
-const IX = await indexStore((await import("./fixture.mjs")).fixtureDb());
+const IX = await indexStore((await import("./fixture.mjs")).fixtureTown());
 const IX_RESTORE = await IX.useInProcess();
 test.after(async () => { await IX_RESTORE(); await IX.stop(); });
 
@@ -675,7 +676,7 @@ test("a mint whose write fails REFUSES the join — never a warn with a false no
   const clone = tempDir("mint-refuses-");
   mkdirSync(join(clone, "WHITE_PAGES"));
   execFileSync("git", ["-C", clone, "init", "-q"]);
-  const db = fixtureDb();
+  const db = fixtureTown();
   const bind = (payload, { clone: c }) => bindUnderLock({ ...payload, clone: c, db, date: "2026-09-29" });
 
   const seeded = stubPool();

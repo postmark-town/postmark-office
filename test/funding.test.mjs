@@ -65,11 +65,11 @@ import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { SCHEMA } from "../src/schema.mjs";
 import { parseLedgerText, foldFunding, classifyFundingRow, readPots, HOLO_CAPTION, HOLO_EXPANSION, WHAT_THIS_BUYS, TEACH } from "../src/funding.mjs";
 import { stampsDetail, potBoard, questBoardFor } from "../src/queries.mjs";
 import { NO_TOWN, townClone, townModuleUrl } from "./fixture-paths.mjs";
 import { tempDir } from "./helpers/temp-dir.mjs";
+import { putValues, emptyTown } from "./fixture.mjs";
 
 const SKIP = !townClone() && NO_TOWN;
 
@@ -403,8 +403,7 @@ test("readPots reads the town's real pot file and surfaces the malformed one", (
 // ── the door reads (what an agent sees from their seat) ──────────────────────
 
 function fundingDb() {
-  const db = new DatabaseSync(":memory:");
-  db.exec(SCHEMA);
+  const db = emptyTown();
   // THE `stamps` TABLE IS THE TOWN'S FOLD, MATERIALIZED — src/hydrate.mjs
   // § Stamps writes it from the town's own foldBalances / foldMintCount /
   // foldStaked. So these rows are seeded as that AMENDED fold will write them
@@ -415,27 +414,27 @@ function fundingDb() {
   //
   // keemin: 10 primary mint + 1 holo = 11 ever minted, 6 staked → 5 liquid,
   // assets 11. (Before the ruling: 10 minted, 4 liquid, assets 10, holo apart.)
-  db.prepare("INSERT INTO stamps (handle, balance, mint_count, staked) VALUES (?,?,?,?)").run("keemin", 5, 11, 6);
-  db.prepare("INSERT INTO stamps (handle, balance, mint_count, staked) VALUES (?,?,?,?)").run("limen", 3, 3, 0);
+  putValues(db, "stamps", ["keemin", 5, 11, 6], ["handle", "balance", "mint_count", "staked"]);
+  putValues(db, "stamps", ["limen", 3, 3, 0], ["handle", "balance", "mint_count", "staked"]);
   // wright: the staker whose 4 burned — 2 minted for keeping came home, and none
   // of it may show up in any of his four tense numbers
-  db.prepare("INSERT INTO stamps (handle, balance, mint_count, staked) VALUES (?,?,?,?)").run("wright", 5, 9, 0);
+  putValues(db, "stamps", ["wright", 5, 9, 0], ["handle", "balance", "mint_count", "staked"]);
   const f = foldFunding(parseLedgerText(LEDGER + GUESSED + RETIRED + LOOSE + FORGED));
   // hydrate's inserts, in miniature — keyed by handle here (no household
   // registry in a fixture; the read answers to slug AND handle)
-  const insHolo = db.prepare("INSERT INTO funding_holo (party, pot, holo, epoch, date, receipt) VALUES (?,?,?,?,?,?)");
-  for (const [party, ms] of f.holoByParty) for (const m of ms) insHolo.run(party, m.pot, m.holo, m.epoch, m.date, m.receipt);
-  const insKeep = db.prepare("INSERT INTO funding_keeping_mint (party, pot, n, epoch, date) VALUES (?,?,?,?,?)");
-  for (const [party, rs] of f.keepingByParty) for (const r of rs) insKeep.run(party, r.pot, r.n, r.epoch, r.date);
-  const insRoll = db.prepare("INSERT INTO funding_roll (patron, pot, usd, date, receipt, holo) VALUES (?,?,?,?,?,?)");
-  for (const [pot, rs] of f.rollByPot) for (const r of rs) insRoll.run(r.patron, pot, r.usd, r.date, r.receipt, r.holo);
-  const insRcpt = db.prepare("INSERT INTO pot_receipts (pot, rail, usd, date, receipt, payer) VALUES (?,?,?,?,?,?)");
-  for (const [pot, rs] of f.receiptsByPot) for (const r of rs) insRcpt.run(pot, r.rail, r.usd, r.date, r.receipt, r.from);
-  for (const [pot, n] of f.potEscrow) db.prepare("INSERT INTO pot_escrow (pot, staked) VALUES (?,?)").run(pot, n);
-  const insStaker = db.prepare("INSERT INTO pot_stakers (pot, handle, staked) VALUES (?,?,?)");
-  for (const [handle, mine] of f.potEscrowByHandle) for (const [pot, n] of mine) if (n > 0) insStaker.run(pot, handle, n);
+  const insHolo = (...v) => putValues(db, "funding_holo", v, ["party", "pot", "holo", "epoch", "date", "receipt"]);
+  for (const [party, ms] of f.holoByParty) for (const m of ms) insHolo(party, m.pot, m.holo, m.epoch, m.date, m.receipt);
+  const insKeep = (...v) => putValues(db, "funding_keeping_mint", v, ["party", "pot", "n", "epoch", "date"]);
+  for (const [party, rs] of f.keepingByParty) for (const r of rs) insKeep(party, r.pot, r.n, r.epoch, r.date);
+  const insRoll = (...v) => putValues(db, "funding_roll", v, ["patron", "pot", "usd", "date", "receipt", "holo"]);
+  for (const [pot, rs] of f.rollByPot) for (const r of rs) insRoll(r.patron, pot, r.usd, r.date, r.receipt, r.holo);
+  const insRcpt = (...v) => putValues(db, "pot_receipts", v, ["pot", "rail", "usd", "date", "receipt", "payer"]);
+  for (const [pot, rs] of f.receiptsByPot) for (const r of rs) insRcpt(pot, r.rail, r.usd, r.date, r.receipt, r.from);
+  for (const [pot, n] of f.potEscrow) putValues(db, "pot_escrow", [pot, n], ["pot", "staked"]);
+  const insStaker = (...v) => putValues(db, "pot_stakers", v, ["pot", "handle", "staked"]);
+  for (const [handle, mine] of f.potEscrowByHandle) for (const [pot, n] of mine) if (n > 0) insStaker(pot, handle, n);
   for (const iv of f.invalid) db.prepare("INSERT INTO funding_invalid (row_kind, line, reason) VALUES (?,?,?)").run(iv.row_kind, iv.line, iv.reason);
-  db.prepare("INSERT INTO pots (id, json) VALUES (?,?)").run("keeping-ec2", JSON.stringify(POT_FILE));
+  putValues(db, "pots", ["keeping-ec2", JSON.stringify(POT_FILE)], ["id", "json"]);
   return db;
 }
 
@@ -640,13 +639,12 @@ test("a household with zero holo reads a well-formed empty section, not an absen
 // live by src/hydrate.mjs), and this repo has no copy of it to flip. The
 // office-side flip that DOES red is the double-count one, above.
 test("THE ESTATE FALSIFIER: primary 10 + holo 3, staked 4 reads minted 13 · liquid 9 · holo 3", async () => {
-  const db = new DatabaseSync(":memory:");
-  db.exec(SCHEMA);
+  const db = emptyTown();
   // 10 primary + 3 holo = 13 minted; 4 staked, so 9 free to spend
-  db.prepare("INSERT INTO stamps (handle, balance, mint_count, staked) VALUES (?,?,?,?)").run("giver", 9, 13, 4);
-  const insHolo = db.prepare("INSERT INTO funding_holo (party, pot, holo, epoch, date, receipt) VALUES (?,?,?,?,?,?)");
-  insHolo.run("giver", "keeping-ec2", 2, "2026-09", "2026-09-30", "ch_one");
-  insHolo.run("giver", "keeping-ec2", 1, "2026-09", "2026-09-30", "ch_two");
+  putValues(db, "stamps", ["giver", 9, 13, 4], ["handle", "balance", "mint_count", "staked"]);
+  const insHolo = (...v) => putValues(db, "funding_holo", v, ["party", "pot", "holo", "epoch", "date", "receipt"]);
+  insHolo("giver", "keeping-ec2", 2, "2026-09", "2026-09-30", "ch_one");
+  insHolo("giver", "keeping-ec2", 1, "2026-09", "2026-09-30", "ch_two");
 
   const d = (await stampsDetail(db, "giver"));
   assert.deepEqual(
@@ -858,14 +856,13 @@ test("POS-218 · the fund door's pot rows name the corrected hand — the receip
   // CONSUMER: hydrate writes receiptsByPot → pot_receipts.payer and rollByPot →
   // funding_roll.patron; potBoard (the town's quest board and the household's
   // own board) reads both. This is that path in miniature.
-  const db = new DatabaseSync(":memory:");
-  db.exec(SCHEMA);
+  const db = emptyTown();
   const f = foldFunding(parseLedgerText(CORRECTED));
-  const insRoll = db.prepare("INSERT INTO funding_roll (patron, pot, usd, date, receipt, holo) VALUES (?,?,?,?,?,?)");
-  for (const [pot, rs] of f.rollByPot) for (const r of rs) insRoll.run(r.patron, pot, r.usd, r.date, r.receipt, r.holo);
-  const insRcpt = db.prepare("INSERT INTO pot_receipts (pot, rail, usd, date, receipt, payer) VALUES (?,?,?,?,?,?)");
-  for (const [pot, rs] of f.receiptsByPot) for (const r of rs) insRcpt.run(pot, r.rail, r.usd, r.date, r.receipt, r.from);
-  db.prepare("INSERT INTO pots (id, json) VALUES (?,?)").run("keeping-ec2", JSON.stringify(POT_FILE));
+  const insRoll = (...v) => putValues(db, "funding_roll", v, ["patron", "pot", "usd", "date", "receipt", "holo"]);
+  for (const [pot, rs] of f.rollByPot) for (const r of rs) insRoll(r.patron, pot, r.usd, r.date, r.receipt, r.holo);
+  const insRcpt = (...v) => putValues(db, "pot_receipts", v, ["pot", "rail", "usd", "date", "receipt", "payer"]);
+  for (const [pot, rs] of f.receiptsByPot) for (const r of rs) insRcpt(pot, r.rail, r.usd, r.date, r.receipt, r.from);
+  putValues(db, "pots", ["keeping-ec2", JSON.stringify(POT_FILE)], ["id", "json"]);
   const pot = potBoard(db).list[0];
   const payers = Object.fromEntries(pot.receipts.list.map((r) => [r.receipt, r.payer]));
   assert.equal(payers["stripe:cs_twice"], "fabel", "the $50 is fabel's on the door, as the close mints it");
@@ -937,8 +934,7 @@ test("POS-184 — a pot nobody has staked answers `stakers: []`, not a missing f
   // "Nobody yet" is an answer a resident can act on; an absent field is a door
   // that did not look. The pot file lands with no stake row anywhere behind it.
   const db = fundingDb();
-  db.prepare("INSERT INTO pots (id, json) VALUES (?,?)")
-    .run("unstaked-pot", JSON.stringify({ ...POT_FILE, pot: "unstaked-pot", title: "Nobody has staked here" }));
+  putValues(db, "pots", ["unstaked-pot", JSON.stringify({ ...POT_FILE, pot: "unstaked-pot", title: "Nobody has staked here" })], ["id", "json"]);
   const pot = potBoard(db).list.find((p) => p.id === "unstaked-pot");
   assert.ok(pot, "the pot is on the board");
   assert.deepEqual(pot.escrow.stakers, [], "an empty list, present");

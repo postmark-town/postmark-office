@@ -23,7 +23,7 @@ import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 
-import { fixtureDb } from "./fixture.mjs";
+import { putValues, fixtureTown } from "./fixture.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
 import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 
@@ -50,15 +50,14 @@ const out = { stdout: "", stderr: "" };
 
 /** A second index: same fixture town, one more resident, a different as_of. */
 function fixtureB(path) {
-  const db = fixtureDb(path);
+  const db = fixtureTown();
   db.prepare("UPDATE meta SET value = ? WHERE key = 'as_of'").run(B_SHA);
   db.prepare("UPDATE meta SET value = ? WHERE key = 'hydrated_counts'")
     .run(JSON.stringify({ residents: 4, letters: 6, threads: 1, ledger: 4, bulletin: 1 }));
-  db.prepare("INSERT INTO residents VALUES (?, ?)").run("newcomer", JSON.stringify({
+  putValues(db, "residents", ["newcomer", JSON.stringify({
     handle: "newcomer", is_office: false, last_active: null,
     address: { data: { since: "2026-08-11" }, body: "# newcomer" },
-  }));
-  db.close();
+  })]);
   return path;
 }
 
@@ -84,7 +83,7 @@ before(async () => {
   bPath = join(tmp, "b.db");
   junkPath = join(tmp, "junk.db");
 
-  fixtureDb(aPath).close();
+  fixtureTown().close();
   fixtureB(bPath);
   writeFileSync(junkPath, "this is not a database, it is a sentence about one\n");
   copyFileSync(aPath, dbPath);

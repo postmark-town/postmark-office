@@ -29,9 +29,8 @@ import { publicRegistry, publicHouse, PRIVATE_HOUSE_KEYS } from "../src/registry
 import { householdsRead } from "../src/households-read.mjs";
 import { householdLookupOf } from "../src/households.mjs";
 import { houseBundle } from "../src/house-bundle.mjs";
-import { SCHEMA } from "../src/schema.mjs";
 import { planRegistryJoin, joinBody, registryNote } from "../src/residency.mjs";
-import { fixtureDb } from "./fixture.mjs";
+import { putValues, emptyTown, fixtureTown } from "./fixture.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
 import { indexStore, seedRegistry } from "./helpers/office-under-test.mjs";
 
@@ -128,9 +127,8 @@ test("§ 3 the household block: no human key, the house and its members kept", (
 // ── § 4 the house bundle ────────────────────────────────────────────────────
 
 test("§ 4 the house bundle names the house and never its human", async () => {
-  const db = new DatabaseSync(":memory:");
-  db.exec(SCHEMA);
-  db.prepare("INSERT INTO meta VALUES (?, ?)").run("as_of", "fixture-as-of");
+  const db = emptyTown();
+  putValues(db, "meta", ["as_of", "fixture-as-of"]);
   const none = async () => ({});
   const readers = {
     registry: { registry: registryFromRows(ROWS), pins: pinsFromRows(ROWS), from: "injected" },
@@ -150,16 +148,15 @@ test("§ 4 the house bundle names the house and never its human", async () => {
 // ── § 5 a booted office on a real store ─────────────────────────────────────
 
 test("§ 5 over REST, public, on a real store: /households and a resident card carry no private name", async () => {
-  const dbPath = join(TMP, "fixture.db");
-  fixtureDb(dbPath).close();
+  const town = fixtureTown();
   const clone = join(TMP, "town-clone");
   mkdirSync(join(clone, "tools"), { recursive: true });
   mkdirSync(join(clone, "WHITE_PAGES"), { recursive: true });
-  const ix = await indexStore(dbPath, { db: "registry_public" });
+  const ix = await indexStore(town, { db: "registry_public" });
   CLEANUP.push(() => ix.stop());
   await seedRegistry(ix.store, REGISTRY, PINS);
   const { child, port } = await bootOnFreePort((p) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(p),
-    "--db", dbPath, "--oauth-db", join(TMP, "oauth.db")], {
+    "--oauth-db", join(TMP, "oauth.db")], {
     env: { ...process.env, WORLD2_PG: ix.env.WORLD2_PG, WORLD2_PG_URL: ix.env.WORLD2_PG_URL, TOWN_INDEX_READS: ix.env.TOWN_INDEX_READS ?? "",
       TOWN_CLONE: clone, TOWN_PUSH: "", OFFICE_READ_WORKERS: "0", WORLD_GRAPH_NONE: "1", OFFICE_KEYS: "" },
     stdio: ["ignore", "pipe", "pipe"],
