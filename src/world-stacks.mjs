@@ -37,6 +37,8 @@
 // it in, for the reason world-hold.mjs gives for `declareHolding`: a falsifier
 // must be able to put a chest at 27 without a store.
 
+import { markClassOf } from "./world-grants.mjs"; // the kind rung: a mark's class in both forms (LOGOS v2, O1)
+
 export const UNIT_ACTION = Object.freeze({
   stock: "units:stock",            // the town stocks a chest at its admitting settlement
   refill: "units:refill",          // the label's creator tops a chest up
@@ -272,7 +274,7 @@ const listing = (edges) => edges.map((e) => `${e.count} ${e.label}`).join(", ");
  * What a resident carries: every held unit costs one slot, every thing they
  * hold whole costs one — and a portable chest is a thing held whole, so it
  * costs ONE whatever it holds (its contents are the chest's edges, not the
- * carrier's). The cap is the thing class's declared `carry_cap`, read by the
+ * carrier's). The cap is the resident's `capacity` (LOGOS v2; the thing class's older `carry_cap` second), read by the
  * caller from the record and handed in; there is no copy of 24 here.
  */
 export const carryLoad = ({ units = 0, things = 0 } = {}) => Number(units) + Number(things);
@@ -282,7 +284,7 @@ export function refuseOverCarry({ who, units, things, adding, cap }) {
   const now = carryLoad({ units, things });
   if (now + adding > cap)
     throw bounce(409, `${who} cannot carry ${adding} more — ${now} of ${cap} carried`,
-      `the thing class's carry_cap is ${cap}: every unit is one slot, every thing held whole is one, a portable chest is one whatever it holds. ${cap - now > 0 ? `${cap - now} more fit.` : "Nothing more fits."} Set something down first. Nothing was recorded.`,
+      `a resident carries ${cap} (the resident class's capacity): every unit is one slot, every thing held whole is one, a portable chest is one whatever it holds. ${cap - now > 0 ? `${cap - now} more fit.` : "Nothing more fits."} Set something down first. Nothing was recorded.`,
       { carried: now, cap });
   return { carried: now + adding, cap };
 }
@@ -432,7 +434,7 @@ export function droppedUnitMark({ actor, label, name = null, actId, at, extent =
 
 /** Is this canon record a dropped unit (a candy mark naming its drop act)? */
 export const isDroppedUnitMark = (mark) =>
-  mark?.class === "candy" && typeof mark?.label === "string" && /^act:[1-9][0-9]*$/.test(String(mark?.dropped ?? ""));
+  markClassOf(mark) === "candy" && typeof mark?.label === "string" && /^act:[1-9][0-9]*$/.test(String(mark?.dropped ?? ""));
 
 // ── THE RETURNS AT A MARK'S EXIT (Wright, 2026-10-13T00:01Z) ────────────────
 //

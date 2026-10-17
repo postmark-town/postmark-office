@@ -118,10 +118,16 @@ test("2 · OFF: the town-only hint does not offer chest among what a resident ma
   const candy = { slug: "a-sweet", kind: "sited", at: { x: 3, y: 4 }, extent: { w: 1, h: 1 }, body: "A sweet.", class: "candy" };
   let hint = null;
   try { await leaveMarkViaOffice(process.env.WORLD_CLONE, candy, one); } catch (e) { hint = String(e.hint ?? ""); }
-  assert.match(hint, /residents may instantiate only \[bounty, thing, note, idea\] today/);
+  // LOGOS v2 (O1): the hand-kept list this hint used to recite is retired; who
+  // may make a class is its own `makers`, and the refusal names where that was
+  // set (or that the class layer could not be read). So the hint offers no list
+  // of classes at all, and so never offers chest, whatever the flag says.
+  assert.ok(hint != null, "the door refused the candy");
+  assert.doesNotMatch(hint, /\bchest\b/);
+  assert.doesNotMatch(hint, /residents may instantiate only/);
   let onHint = null;
   await withFlag("1", async () => { try { await leaveMarkViaOffice(process.env.WORLD_CLONE, candy, one); } catch (e) { onHint = String(e.hint ?? ""); } });
-  assert.match(onHint, /\[bounty, thing, note, idea, chest\]/);
+  assert.doesNotMatch(onHint ?? "", /residents may instantiate only/);
 });
 
 test("3 · OFF, behaviourally: a spawned office's GET /world/chests answers no chest and says why", { timeout: 60_000 }, async (t) => {

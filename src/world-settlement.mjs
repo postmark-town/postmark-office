@@ -71,6 +71,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { snapshotFoldArgs } from "./world-snapshot.mjs";
+import { extendsFromMarks, isSited } from "./world-grants.mjs"; // the kind rung: a mark's class in both forms (LOGOS v2, O1)
 import { faultLogged, plainReason } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 
 const bounce = (code, defect, hint) => { const e = new Error(defect); Object.assign(e, { code, defect, hint }); return e; };
@@ -419,7 +420,9 @@ export function foldWithWords(inputs, words, cleared = null) {
  */
 export function stanceReturnsWhole(inputs, state) {
   if (inputs?.returnsAloneRead) return {};
-  const positioned = new Set((inputs?.args?.marks ?? []).filter((m) => (m?.kind === "sited" || m?.kind === "parcel") && m.at).map((m) => String(m.id)));
+  const marks = inputs?.args?.marks ?? [];
+  const lineage = extendsFromMarks(marks); // sited in either form (LOGOS v2, O1), by the fold's own class nodes
+  const positioned = new Set(marks.filter((m) => isSited(m, lineage) && m.at).map((m) => String(m.id)));
   const whole = (state?.returned ?? [])
     .filter((r) => r?.state === "returned" && !r.law && (r.subtree ?? []).some((s) => positioned.has(String(s))))
     .map((r) => r.mark);

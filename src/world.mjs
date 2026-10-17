@@ -47,7 +47,9 @@ import { guardedDraftsForKey, guardedLiveChildrenOf, guardedLiveMarks } from "./
 import { WORLD_STAKE_TOOLS, actingAs, callWorldStakeTool, emptyPurseRefusalFor, heldAtOffice, worldPortfolioStakeSlice, markStakeBlock } from "./world-stake.mjs"; // P3 draft, append-shaped
 import { toConfirm } from "./stamps-preview.mjs"; // POS-83: the inline stake's half of the confirmation step
 import { visitorRulesGate } from "./visitor-rules.mjs"; // POS-300: a berth reads the town's rules for visitors before its first say
-import { classNames, classRoster, classDials, departurePace, freeCellIn, RESIDENT_INSTANTIABLE, residentMayInstantiate, STRIDE_MARK_ID } from "./world-classes.mjs"; // which classes exist — read from the record, never held
+import { classNodeNameOf, isSited, kindFieldOf, lineageOf, markClassOf } from "./world-grants.mjs"; // the kind rung: a mark's class and standing, in both forms (LOGOS v2, O1)
+import { classNames, classRoster, classDials, classExtendsOf, classProperty, departurePace, freeCellIn, STRIDE_MARK_ID } from "./world-classes.mjs";
+import { makersOf } from "./holding-law.mjs"; // who may make an instance: the class's own makers (LOGOS v2, O1) // which classes exist — read from the record, never held
 import { HOLD_TOOLS, callHoldTool } from "./world-hold.mjs"; // the object primitive: who holds what
 import { createVoices, EARSHOT_M, HEAR_MAX, HEARING_WINDOW, RECORD_KEPT_AT } from "./voices.mjs";
 import { createHearingWindow } from "./hearing-window.mjs"; // earshot: speech at a position (the party line)
@@ -975,12 +977,12 @@ export function placeWordsFrom(marks, { x, y }, verbs) {
  * beside them (POS-632: a mark named is shown whole).
  */
 export function placeMarksFrom(marks, { x, y }, verbs) {
-  const ground = marks.filter((m) => m?.class !== "thing");
+  const ground = marks.filter((m) => markClassOf(m) !== "thing");
   const spine = verbs.containmentChain({ x, y }, ground).filter((m) => m.id !== WORLD_FRAME);
   if (spine.length) return { spine, near: null };
   let best = null, bd = Infinity;
   for (const m of ground) {
-    if (!m.at || !(m.kind === "sited" || m.kind === "parcel")) continue;
+    if (!m.at || !isSited(m, classExtendsOf())) continue;
     const d = Math.hypot(m.at.x - x, m.at.y - y);
     if (d < bd) { bd = d; best = m; }
   }
@@ -2219,9 +2221,24 @@ export async function markRecords(ids = [], w = null) {
   for (const id of [...ids, ...(await groundMarkIds(w)), STRIDE_MARK_ID]) {
     if (id == null || out[id]) continue;
     const mark = byId.get(id);
-    if (mark) out[id] = mark;
+    if (mark) out[id] = withClassDials(mark);
   }
   return out;
+}
+
+// A CLASS RECORD CARRIES ITS DIALS IN EITHER FORM (LOGOS v2, O1; W1 G3/G5):
+// once every dial is a `kind: property` node, a class node carries no `dials:`
+// of its own, and a reader of `record.dials` (the walk ETA's pace, above; the
+// lean read's class records) would find none. Such a record takes its dials
+// from the class layer, which reads the property nodes first and an old
+// `dials:` second. A class node still carrying `dials:` is shown as it is.
+function withClassDials(mark) {
+  if (kindFieldOf(mark) !== "class") return mark;
+  const name = classNodeNameOf(mark);
+  const d = name ? classDials(name) : {};
+  // PROPERTY FIRST, as both projections are (review-606): the class layer's
+  // dials (its property nodes over any old `dials:`) over the record's own.
+  return Object.keys(d).length ? { ...mark, dials: { ...(mark.dials ?? {}), ...d } } : mark;
 }
 
 export async function worldEyes(args = {}, key = null, { roll = [], v2 = false, budget = null, entered: given = undefined } = {}) {
@@ -3783,7 +3800,7 @@ async function journalLeaveMark(clean, { crossing = currentCrossing(), guard = n
     if (clean.kind !== "sited" && clean.kind !== "parcel") {
       const parent = liveById.get(clean.parent_id) ?? canon.byId.get(clean.parent_id);
       if (!parent) throw bounce(422, `no mark "${clean.parent_id}" to describe`, "predicated/naming marks nest under the mark they describe — pass its id as parent_id");
-      if (parent.kind !== "sited" && parent.kind !== "parcel") throw bounce(422, `"${clean.parent_id}" cannot hold a description`, "only sited/parcel marks carry predicated/naming children");
+      if (!isSited(parent, classExtendsOf())) throw bounce(422, `"${clean.parent_id}" cannot hold a description`, "only sited/parcel marks carry predicated/naming children");
     }
 
     // NO FRAME CONVERSION HERE, deliberately. The git path converts world
@@ -4060,7 +4077,7 @@ export async function journalWithdraw({ by, slug, household, cause = null, guard
     // judged under the chest's own lock inside this write's transaction
     // (chest-lock.mjs § chestEmptyGuard), so no give or stock can slip contents
     // in behind the decision. Any other mark withdraws exactly as before.
-    const isChest = (live.find((m) => m.id === id) ?? canon.marks.find((m) => m.id === id))?.class === "chest";
+    const isChest = markClassOf(live.find((m) => m.id === id) ?? canon.marks.find((m) => m.id === id)) === "chest";
     const chestGuard = isChest ? (await import("./chest-lock.mjs")).chestEmptyGuard({ chest: id }) : null;
     // `asked` (WLD-27 A): the door's own check that must hold in this same
     // transaction — the public withdrawal's escrow, read under the mark's lock.
@@ -4312,32 +4329,41 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
       throw bounce(422, `unknown class "${klass}"`,
         `the law knows: ${[...roster].sort().join(", ")}${disclosed ? ` — NOTE: ${disclosed}` : ""}`);
     if (source === "floor") console.error(`[world_leave_mark] class roster from floor: ${disclosed}`);
-    // ── WHO may instantiate (#1797): the roster says a class EXISTS; it does
-    // not say a resident may cite it. Residents instantiate only the ruled
-    // whitelist — the same set board-grammar.test.mjs asserts on the live
-    // tree ("this set grows by ruling, never by drift"). Every caller at THIS
-    // door is a resident household; the town's own class marks arrive by the
-    // town's pen, never here. Found 2026-08-22 when a resident's class: home
-    // sailed through and the settlement shadow caught it as a would-refuse.
-    // ── A HELD UNIT SET DOWN IS NOT A RESIDENT PLACING CANDY (WLD-27; Wright,
-    // 2026-10-13T00:09Z). Candy stays off the whitelist: town alone makes it.
-    // The one road a resident's candy mark arrives by is the hold door's drop
-    // (world-hold.mjs § THE UNIT SET DOWN), which hands its own act in as
-    // `dropUnit` — a parameter no caller's payload can set — and the mark it
-    // files must name that very act and label. Anything else carrying class:
-    // candy falls to the whitelist refusal below, exactly as before.
+    // ── WHO may make it is the CLASS's own answer (LOGOS v2, lane O1). The roster
+    // says a class EXISTS; its `makers` property, inherited down `extends`, says
+    // whether a resident may make one (classes.md § makers, ruled 16:02, shaped
+    // 18:44). The hand-kept whitelist that stood here (#1797; idea 08-30; chest
+    // 10-12) is retired, and so is "candy stays off it": the candy kinds inherit
+    // thing's `makers: true` ("residents may make instances of any of them").
+    // Every caller at THIS door is a resident household; the town's own class
+    // marks arrive by the town's pen, never here.
+    //
+    // A held unit set down (WLD-27) still passes on its own road: the hold
+    // door's drop hands its own act in as `dropUnit`, a parameter no caller's
+    // payload can set, and the mark it files names that very act and label.
     const droppedUnit = klass === "candy" && dropUnit != null
       && payload.dropped === `act:${dropUnit.actId}` && payload.label === dropUnit.label && kind === "sited";
-    // WLD-27's chest ships dark until LOGOS v2's holder replaces it (chests-candy.mjs);
-    // while dark, the town-only hint below doesn't offer it either
+    // WLD-27's chest ships dark until LOGOS v2's holder replaces it (chests-candy.mjs, #608)
     const chestsOpen = (await import("./chests-candy.mjs")).chestsCandyOn();
     if (klass === "chest" && !chestsOpen) {
       const { CHESTS_CANDY_OFF } = await import("./chests-candy.mjs");
       throw bounce(CHESTS_CANDY_OFF.code, CHESTS_CANDY_OFF.defect, CHESTS_CANDY_OFF.hint);
     }
-    if (!droppedUnit && !residentMayInstantiate(klass))
+    // AN UNREADABLE CLASS LAYER IS AN OUTAGE, NOT A REFUSAL (review-606 B2). When
+    // the roster stands on its floor, or the class's lineage dangles (it ends at
+    // a class the layer does not hold), the office cannot tell whether a
+    // resident may make one, and saying "town-only" would be a false sentence.
+    // It says what happened instead, as the roster's own bounce above does.
+    const lineage = droppedUnit ? [] : lineageOf(klass, classExtendsOf());
+    if (!droppedUnit && (source === "floor" || !roster.has(String(lineage[lineage.length - 1] ?? klass))))
+      throw bounce(503, `who may make a "${klass}" could not be read`,
+        `the class layer is not readable here, so the office cannot tell whether this class is a resident's to make; nothing was written — try again shortly${disclosed ? ` — NOTE: ${disclosed}` : ""}`);
+    const makers = droppedUnit ? null : makersOf(klass, classProperty);
+    if (!droppedUnit && !makers.may)
       throw bounce(422, `class "${klass}" is town-only`,
-        `residents may instantiate only [${RESIDENT_INSTANTIABLE.filter((c) => c !== "chest" || chestsOpen).join(", ")}] today (#1797) — the class exists in the law, but citing it on your own mark is the town's act, not a resident's`);
+        makers.read
+          ? `its makers is false (set on ${makers.from}): a resident may make an instance unless it would give them control over something that mints or confers standing (the-town/nothing-you-control-mints), so this class is the town's to make — world { explain: "${klass}" } says who makes what`
+          : `no class in "${klass}"'s lineage states makers, and an unread makers answers false, the root's own answer (postmark-node), so making one is the town's act, not a resident's — world { explain: "${klass}" } says who makes what`);
   }
 
   // ── the thing grammar (the object primitive) ────────────────────────────────
@@ -5107,7 +5133,7 @@ async function sitedWithin(parcel, marks) {
     ? (m) => geom.marksContain(parcel, m)
     : () => true;   // an older engine: the centre test below is the whole answer
   return (marks ?? []).filter((m) =>
-    m.kind === "sited" && m.at && m.id !== parcel.id
+    kindFieldOf(m) !== "parcel" && isSited(m, classExtendsOf()) && m.at && m.id !== parcel.id
     && geom.pointInRect(m.at.x, m.at.y, box)   // cheap first: a parcel is 25 m square
     && holds(m));
 }
@@ -5383,7 +5409,7 @@ async function walkAct(worldClone, payload = {}, key = null) {
     const id = String(payload.mark_id);
     const m = (w.marks ?? []).find((k) => k.id === id);
     if (!m) throw bounce(422, `no mark "${id}"`, "ids are <by>/<slug>, as they appear in the telling");
-    if (m.kind !== "sited") {
+    if (kindFieldOf(m) === "parcel" || !isSited(m, classExtendsOf())) {
       const within = m.kind === "parcel" ? await sitedWithin(m, w.marks) : null;
       const refusal = unwalkableTarget(m, within);
       throw bounce(422, refusal.defect, refusal.hint);
@@ -5602,7 +5628,7 @@ async function walkAct(worldClone, payload = {}, key = null) {
     // The narrowing matters. If the stack also holds a mark that is NOT a
     // vehicle, the refusal stands exactly as it did: this only ever spares a
     // caller the `exit: true` for a hull, never for a room.
-    const vehicleLeaving = leaving.filter((id) => String(byId.get(id)?.class ?? "") === "vehicle");
+    const vehicleLeaving = leaving.filter((id) => markClassOf(byId.get(id)) === "vehicle");
     const allVehicles = leaving.length > 0 && vehicleLeaving.length === leaving.length;
     if (leaving.length) {
       if (payload.exit !== true && !allVehicles) {
@@ -6311,7 +6337,7 @@ export const SAY_RECORD_DISCLOSURE = " And the town remembers out loud: what you
 // commons mark), and an explicit 0 bounces to the world door where private
 // drafts live. The lane opens class by class — `idea` today; a class joins by
 // adding its row to POST_PLACES when its migration is ruled, never by drift
-// (the same growth law as RESIDENT_INSTANTIABLE).
+// (the same growth law the hand-kept whitelist had; `makers` answers who may make, LOGOS v2).
 export const POST_PLACES = Object.freeze({
   idea: "the-town/the-think-tank",
 });

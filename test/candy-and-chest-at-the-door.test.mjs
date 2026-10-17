@@ -23,14 +23,21 @@ process.env.WORLD_CHESTS_CANDY = "1";
 process.env.WORLD_CLONE = join(tmpdir(), "postmark-no-world-clone-wld27");
 const { leaveMarkViaOffice } = await import("../src/world.mjs");
 const { reloadLawSnapshot, resetLawSnapshot, LAW_REFRESH_SQLS } = await import("../src/law-snapshot.mjs");
-const { RESIDENT_INSTANTIABLE } = await import("../src/world-classes.mjs");
 
 const CHEST_DIALS = { capacity: 30, capacity_min: 1, capacity_max: 120, first_stock: 30, portable: true, welcome: "open" };
+// The makers law (LOGOS v2, O1): "`thing`, `note`, `post` and `predicate` answer true
+// … everything under them inherits it (the candy kinds, consumables); a subclass
+// sets false only to be the town's alone" (classes.md § makers, ruled 18:44). The
+// root states false; `the-town-alone` is a synthetic subclass that sets false.
 const CLASS_ROWS = [
-  ["bounty", {}], ["thing", { extends: "mark", dials: { carry_cap: 24 } }], ["note", {}], ["idea", {}],
+  ["postmark-node", { dials: { makers: false } }], ["mark", { extends: "postmark-node" }],
+  ["bounty", { extends: "mark", dials: { makers: true } }], ["thing", { extends: "mark", dials: { carry_cap: 24, makers: true } }],
+  ["note", { extends: "mark", dials: { makers: true } }], ["idea", { extends: "mark", dials: { makers: true } }],
   ["consumable", { extends: "thing", dials: {} }],
   ["candy", { extends: "consumable", dials: {}, labels: [{ label: "test-comets", name: "Test Comets", creator: "alpha" }] }],
+  ["the-town-alone", { extends: "candy", dials: { makers: false } }],
   ["chest", { extends: "thing", dials: CHEST_DIALS }],
+  ["lawless", {}],
 ].map(([key, data]) => ({ number: 250, tag_sha: "f".repeat(40), newest: 250, kind: "class", key, data: { class: key, ...data } }));
 
 await reloadLawSnapshot({ force: true, query: async (sql) =>
@@ -51,18 +58,23 @@ test("the synthetic law is what the door reads (the roster knows candy and chest
   assert.notEqual(await sentence({ ...chest }), 'unknown class "chest"');
 });
 
-test("a resident placing fresh candy is refused — by payload alone, whatever fields it carries", async () => {
-  assert.equal(await sentence({ ...unit }), 'class "candy" is town-only');
-  assert.equal(await sentence({ ...unit, dropped: undefined }), 'class "candy" is town-only');
-  assert.ok(!RESIDENT_INSTANTIABLE.includes("candy"));
+test("WHO MAY MAKE IT is the class's makers, inherited down extends (the hand-kept whitelist is retired)", async () => {
+  // candy inherits thing's makers: true: "The town makes the candy kinds … and residents may make instances of any of them."
+  assert.ok(!/town-only|unknown class/.test(await sentence({ ...unit, dropped: undefined })), "candy passes the class gate on its inherited makers");
+  // a subclass that sets makers: false is the town's alone, whatever it extends
+  assert.equal(await sentence({ ...unit, class: "the-town-alone", dropped: undefined }), 'class "the-town-alone" is town-only');
+  // no class in the lineage states makers: the unread answer is false, the root's own (G2: no floor)
+  assert.equal(await sentence({ ...chest, class: "lawless" }), 'class "lawless" is town-only');
+  // a chest is a thing, and inherits its makers: true
+  assert.ok(!/town-only/.test(await sentence({ ...chest })), "chest inherits thing's makers: true");
 });
 
-test("the drop's own road passes the class gate for its own unit, and only that unit", async () => {
+test("the drop's own road passes the class gate for its own unit", async () => {
   const ok = await sentence({ ...unit }, { dropUnit: { actId: 77, label: "test-comets" } });
   assert.ok(!/town-only|unknown class/.test(ok), `the dropped unit passed the class gate (then: ${ok})`);
-  assert.equal(await sentence({ ...unit }, { dropUnit: { actId: 78, label: "test-comets" } }), 'class "candy" is town-only', "another act's unit");
-  assert.equal(await sentence({ ...unit }, { dropUnit: { actId: 77, label: "other" } }), 'class "candy" is town-only', "another label");
-  assert.equal(await sentence({ ...unit, kind: "parcel", extent: undefined }, { dropUnit: { actId: 77, label: "test-comets" } }), 'class "candy" is town-only', "not sited");
+  // The drop road's own refusals for ANOTHER unit (another act, another label, not
+  // sited) were the hand list's: under the makers law candy is a resident's to
+  // make, so those payloads now pass the class gate on candy's own answer.
 });
 
 test("a chest's capacity is 1..120; portable is a boolean; welcome is open or closed", async () => {
