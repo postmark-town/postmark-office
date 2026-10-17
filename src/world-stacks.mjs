@@ -40,6 +40,7 @@
 import { markClassOf } from "./world-grants.mjs"; // the kind rung: a mark's class in both forms (LOGOS v2, O1)
 
 export const UNIT_ACTION = Object.freeze({
+  make: "units:make",              // LOGOS v2: leave-mark { kind, count, to } makes marks into a holder (refill is its shorthand)
   stock: "units:stock",            // the town stocks a chest at its admitting settlement
   refill: "units:refill",          // the label's creator tops a chest up
   give: "units:give",              // holder → resident or chest
@@ -78,32 +79,41 @@ const movesOf = (r) => {
  * applied and is named in `anomalies` — the doors refuse such a move before it
  * is written, so an anomaly is a record a door did not write, and the fold says
  * so rather than inventing negative candy.
+ *
+ * KINDS (LOGOS v2, lane O2): a move that names `kind` (a class id, "counts are
+ * blur", ruled 15:46) folds into `kinds`, `Map(holder → Map(kind → count))`,
+ * and one that names `label` into `counts`, as #499 wrote it. The two maps
+ * never mix: no label act is ever read as a kind holding, nor the reverse. A
+ * holder's room and carry count both (`totalOf`), because both are held.
  */
 export function foldUnits(rows = []) {
   const counts = new Map();
+  const kinds = new Map();
   const anomalies = [];
-  const bump = (holder, label, n) => {
-    if (!counts.has(holder)) counts.set(holder, new Map());
-    const m = counts.get(holder);
-    const next = (m.get(label) ?? 0) + n;
-    if (next === 0) m.delete(label); else m.set(label, next);
-    if (!m.size) counts.delete(holder);
+  const bump = (map, holder, key, n) => {
+    if (!map.has(holder)) map.set(holder, new Map());
+    const m = map.get(holder);
+    const next = (m.get(key) ?? 0) + n;
+    if (next === 0) m.delete(key); else m.set(key, next);
+    if (!m.size) map.delete(holder);
   };
   for (const r of rows) {
     if (!isUnitRow(r)) continue;
     for (const mv of movesOf(r)) {
       const n = Number(mv?.n);
-      const label = mv?.label == null ? null : String(mv.label);
-      if (!label || !Number.isInteger(n) || n < 1) { anomalies.push({ act: r.id ?? r.seq ?? null, why: "a move with no label or no whole count" }); continue; }
-      if (mv.from != null && countOf(counts, String(mv.from), label) < n) {
-        anomalies.push({ act: r.id ?? r.seq ?? null, why: `${mv.from} held fewer than ${n} ${label}` });
+      const byKind = mv?.kind != null && mv?.label == null;
+      const key = byKind ? String(mv.kind) : mv?.label == null ? null : String(mv.label);
+      const map = byKind ? kinds : counts;
+      if (!key || !Number.isInteger(n) || n < 1) { anomalies.push({ act: r.id ?? r.seq ?? null, why: "a move with no label or kind, or no whole count" }); continue; }
+      if (mv.from != null && countOf(map, String(mv.from), key) < n) {
+        anomalies.push({ act: r.id ?? r.seq ?? null, why: `${mv.from} held fewer than ${n} ${key}` });
         continue;
       }
-      if (mv.from != null) bump(String(mv.from), label, -n);
-      if (mv.to != null) bump(String(mv.to), label, n);
+      if (mv.from != null) bump(map, String(mv.from), key, -n);
+      if (mv.to != null) bump(map, String(mv.to), key, n);
     }
   }
-  return { counts, anomalies };
+  return { counts, kinds, anomalies };
 }
 
 const countOf = (counts, holder, label) => counts.get(holder)?.get(label) ?? 0;
@@ -114,8 +124,15 @@ export function edgesOf(fold, holder) {
   return m ? [...m].map(([label, count]) => ({ label, count })).sort((a, b) => (a.label < b.label ? -1 : a.label > b.label ? 1 : 0)) : [];
 }
 
-/** Everything one holder holds, summed over its labels. */
-export const totalOf = (fold, holder) => edgesOf(fold, holder).reduce((s, e) => s + e.count, 0);
+/** One holder's kinds, kind-sorted: `[{ kind, count }]` (LOGOS v2, O2). */
+export function kindEdgesOf(fold, holder) {
+  const m = fold.kinds?.get(String(holder));
+  return m ? [...m].map(([kind, count]) => ({ kind, count })).sort((a, b) => (a.kind < b.kind ? -1 : a.kind > b.kind ? 1 : 0)) : [];
+}
+
+/** Everything one holder holds, summed over its labels and its kinds. */
+export const totalOf = (fold, holder) => edgesOf(fold, holder).reduce((s, e) => s + e.count, 0)
+  + kindEdgesOf(fold, holder).reduce((s, e) => s + e.count, 0);
 
 /** Has the town stocked this chest? (the first stock is once, ever) */
 export const stockedChests = (rows = []) =>

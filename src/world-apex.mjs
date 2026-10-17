@@ -763,9 +763,11 @@ const DISPATCH = {
   // `class: "thing"`, exactly as a bounty notice is posted — the one live
   // precedent for a resident-declarable class added no verb either. The verb is
   // thin; the class is thick.
-  give: { tool: "world_hold", run: (args, key) => callHoldTool("world_hold", args, key) },
-  drop: { tool: "world_hold", run: (args, key) => callHoldTool("world_hold", args, key) },
-  take: { tool: "world_hold", run: (args, key) => callHoldTool("world_hold", args, key) },
+  // BY KIND (LOGOS v2, O2) the word is passed along beside the args: `{ kind }`
+  // alone is a take from the holder in reach, or with do: "drop" a set-down.
+  give: { tool: "world_hold", run: (args, key) => callHoldTool("world_hold", args, key, { verb: "give" }) },
+  drop: { tool: "world_hold", run: (args, key) => callHoldTool("world_hold", args, key, { verb: "drop" }) },
+  take: { tool: "world_hold", run: (args, key) => callHoldTool("world_hold", args, key, { verb: "take" }) },
   // COUNTED UNITS (WLD-27): consume and refill are the hold lane's two new
   // faces — one held consumable used up, and a candy label's creator topping a
   // chest up. Same tool, same queue; the face rides as `act`.

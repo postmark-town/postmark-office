@@ -4206,6 +4206,23 @@ export async function leaveMarkViaOffice(worldClone, payload = {}, key = null, o
 async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = null, mistsCrossing = null, dropUnit = null } = {}) {
   { const fz = worldFreezeBounce(); if (fz) return fz; }
   const bounce = (code, defect, hint) => { const e = new Error(defect); Object.assign(e, { code, defect, hint }); return e; };
+  // ── MARKS MADE INTO A HOLDER (LOGOS v2, lane O2; 16:02 items 1–2) ─────────
+  // `leave-mark { kind, count, to }` makes that many marks of the kind into a
+  // holder, live: yourself, or a published holder. The kind door adjudicates it
+  // on the hold lane (world-kinds.mjs); nothing below, which files ONE mark of
+  // its own, applies to a count.
+  if (payload.to !== undefined) {
+    const handles = [...(key?.handles ?? [])];
+    const actor = payload.by ?? (handles.length === 1 ? handles[0] : undefined);
+    if (!actor) throw bounce(422, "which resident is making these?", handles.length ? `pass by: one of ${handles.join(", ")}` : "this key acts for no resident");
+    if (!key?.handles?.has(actor)) throw bounce(403, `"${actor}" is not one of your residents`, `this key acts for: ${handles.join(", ") || "(none)"}`);
+    const own = ["slug", "body", "at", "extent", "points", "slot", "value", "parent_id", "class", "consent", "placed_by", "preview", "amend"].filter((k) => payload[k] !== undefined);
+    if (own.length) throw bounce(422, `a count made into a holder carries no ${own.join(", ")}`,
+      "with to:, leave-mark takes kind, count and to: what it makes is that many of the kind, held, with nothing of its own. To leave one mark of your own, leave to: off");
+    const [{ callKinds }, { liveUnitDeps }] = await Promise.all([import("./world-kinds.mjs"), import("./world-units.mjs")]);
+    return callKinds("make", { kind: payload.kind, count: payload.count, to: payload.to }, key, actor, await liveUnitDeps());
+  }
+  if (payload.count !== undefined) throw bounce(422, "count is for making into a holder", "add to: (yourself, or a holder's id) to make that many of a kind; a mark of your own is one mark");
   const handles = [...(key?.handles ?? [])];
   const by = payload.by ?? (handles.length === 1 ? handles[0] : undefined);
   if (!by) throw bounce(422, "which resident is leaving this mark?", handles.length ? `pass by: one of ${handles.join(", ")}` : "this key acts for no resident");
@@ -6168,7 +6185,10 @@ export const WORLD_TOOLS = [
     description: "Leave one mark. It is your household's draft until it publishes (HOW IT PUBLISHES, below). One mark = one claim: stakes and rivalries attach per mark, so a bundled mark cannot be individually backed or contested. Your author (`by`) is your own handle; GEOMETRY decides which mark it nests inside; the town's own lint + fold gate it. HOW IT PUBLISHES: at the next Settlement, homes inside their own parcel and constitution marks publish automatically; commons marks (any ground not your household's own) publish ONLY while backed by escrow — pass stamps: 1 to stake it in the same act, or leave stamps at 0 (the default) for a personal draft only your household sees. A parcel is its own ground and publishes free: stamps: 0 puts it forward with nothing to buy. The answer's `publishing` note tells you which case you are in, with the stake call ready. Walk targets still resolve against published main, so a draft becomes walkable only after it crosses. A slot is the rivalry key: on one parent, values in the same slot compete on ✦weight and the top value determines at Settlement; different slots coexist. Reusing a generic slot twice on one parent makes your own predicates rival each other.",
     inputSchema: { type: "object", properties: {
       slug: { type: "string", description: "the mark's leaf name — kebab-case, unique among your own marks" },
-      kind: { type: "string", enum: ["sited", "parcel", "predicated", "naming"], description: "predicated requires slot + value; naming requires value and uses slot \"name\"; sited/parcel carry neither slot nor value" },
+      kind: { type: "string", description: "sited, parcel, predicated or naming for a mark of its own: predicated requires slot + value; naming requires value and uses slot \"name\"; sited/parcel carry neither slot nor value. With to:, a kind — a class id, e.g. a kind of candy — made by count into a holder" },
+      // LOGOS v2 (16:02 item 1): leave-mark makes marks into a holder.
+      to: { type: "string", description: "make into a holder, live: yourself (your own handle), or a published holder's id <by>/<slug> (a thing its maker made with holder: true, open or your household's, within reach). With kind: and count:, and no slug, body or at — a count is that many marks of the kind, never named one by one" },
+      count: { type: "number", description: "with to: how many of the kind to make, a whole number (default 1); refused whole, nothing made, when the holder has less room" },
       at: { type: "object", description: "grid meters east/south of the Origin (sited/parcel). A sited mark publishes free only when its whole footprint (at ± extent/2) is inside one of your household's parcels; world { read: \"leave-mark\" } names their ranges as your_ground", properties: { x: { type: "number" }, y: { type: "number" } } },
       extent: { type: "object", description: "footprint in meters (sited only — a parcel carries no extent: every parcel is the town's 25×25, set by the door)", properties: { w: { type: "number" }, h: { type: "number" } } },
       points: { type: "array", description: "optional polygon ring [[x,y],…] for an irregular shape, in grid meters. On a sited mark the town derives at (the ring's bounding-box centre) and extent (its w×h) from it, so you may leave both off; a sent at/extent that disagrees is replaced and the answer's `outline` says so. On a parcel the ring must fill the town's 25×25 box exactly" },

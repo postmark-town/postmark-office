@@ -262,6 +262,7 @@ export const HOLD_TOOLS = [
     inputSchema: { type: "object", properties: {
       thing: { type: "string", description: "the thing's mark id, <by>/<slug> — as ids appear in the telling. A unit that was set down is a mark too: name it to take it back, or with act: \"consume\" to eat it where it stands" },
       to: { type: "string", description: "the resident who takes it (a give), or a chest's id to put counted units into it. Omit to set it down where you stand, or to pick up a thing standing on the ground" },
+      kind: { type: "string", description: "BY KIND (LOGOS v2): which kind — a class id, e.g. a kind of candy. A take that names no kind is pot luck over everything the holder holds, and naming one narrows the draw; a give with one kind in hand may omit it. With from: omitted, the one holder in reach that holds it is the source, and several are refused with the candidates listed" },
       label: { type: "string", description: "COUNTED UNITS (candy): which label — e.g. a candy's slug. With one label in hand or in the chest it may be omitted; with several it must be named, and an omission is refused listing what is there" },
       count: { type: "number", description: "COUNTED UNITS: how many, a whole number (default 1). A set-down is always one unit, one mark, one stamp" },
       from: { type: "string", description: "COUNTED UNITS: the chest to take from, <by>/<slug> — you stand within its extent to take" },
@@ -1279,8 +1280,8 @@ export function setDownNote(setDown) {
 }
 
 // POS-637 PR-B: the act, perceived by any creature whose ring holds it (act-watch.mjs § perceived).
-export async function callHoldTool(name, args = {}, key = null) { return perceived(() => holdAct(name, args, key)); }
-async function holdAct(name, args = {}, key = null) {
+export async function callHoldTool(name, args = {}, key = null, { verb = null } = {}) { return perceived(() => holdAct(name, args, key, verb)); }
+async function holdAct(name, args = {}, key = null, verb = null) {
   if (name === "world_hold") { const fz = worldFreezeBounce(); if (fz) return fz; }
   const actor = actingHandle(args, key);
   // ⚑ THE READ ASKS FOR A READ HANDLE, AND ONLY THE WRITE ASKS FOR A WRITE ONE
@@ -1371,6 +1372,14 @@ async function holdAct(name, args = {}, key = null) {
     // — a door that promised enforcement it does not perform would be the exact
     // schema-vs-runtime defect this branch flagged on `leave_mark`'s `tier:`, and
     // it is not better for being mine.
+    // ── BY KIND (LOGOS v2, lane O2) — the kind door, the same lane and queue ──
+    // Every count that names no `label:` is a kind's: take, give and refill by
+    // kind (world-kinds.mjs). A `label:` is #499's door, below.
+    {
+      const { kindRouteOf, callKinds } = await import("./world-kinds.mjs");
+      const route = kindRouteOf(args, verb);
+      if (route) return await callKinds(route, args, key, actor, await (await import("./world-units.mjs")).liveUnitDeps());
+    }
     // ── COUNTED UNITS (WLD-27) — their own door, the same lane and queue ─────
     if (args.thing == null && args.to == null && args.from == null && args.label == null && args.count == null && args.act == null)
       throw bounce(422, "which thing?", "a thing's mark id, <by>/<slug> — or label:/count:/from: for counted units");

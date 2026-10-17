@@ -1,0 +1,248 @@
+// kind-holding.mjs — WHAT A HOLDER HOLDS, BY KIND (LOGOS v2 part 2, lane O2).
+//
+// The law (world #229 + #230, LOGOS/classes.md; SITTING 2026-10-16):
+//
+//   holder   "A holder is anything with `holder: true`" (16:03–16:05): a resident
+//            (capacity 24, constitution), or a thing whose maker set it true
+//            (capacity sovereign, default 30, bounds 1–120; `open`, default true).
+//   make     "Leave-mark makes marks into a holder: `leave-mark { kind, count,
+//            to }`. Making into a published holder is live (holders confer
+//            their state)" — yourself included, a resident being a holder (16:02).
+//   blur     "A holding is a set of marks. A count describes that set at some
+//            resolution, a class and a number; a read gives it at the nearest
+//            common class, and investigate sharpens it." Nothing materializes,
+//            no answer says "piece", and no unit is ever named or listed one by
+//            one (15:46; 18:44 item 4). Compact storage is implementation only:
+//            here, the hold lane's `units:*` moves, each naming its `kind`.
+//   takes    "A take from a holder that names no kind is pot luck over
+//            everything it holds. Naming a kind narrows the draw" (18:44 item 6).
+//   refuse   "An ambiguous object is refused, with nothing changed and the
+//            candidates listed, each by owner, id and distance" (18:44 item 4).
+//   room     Settled for O2 by the lead (2026-10-17): making past a holder's room
+//            refuses WHOLE — nothing made — and says how much room is left
+//            ("the bowl has room for 4, not 10"). Refill behaves the same.
+//   draw     Settled for O2 by the lead: the pot-luck draw is derived from the
+//            act (sha256 of its identity, as the creatures' d20 is), so a replay
+//            or a settlement draws the same.
+//
+// EVERYTHING HERE IS PURE: the fold, the class view and the marks are handed
+// in; the door (world-kinds.mjs) reads the record and writes the act.
+
+import { createHash } from "node:crypto";
+import { kindEdgesOf, totalOf, nearestCommonClass, UNIT_ACTION } from "./world-stacks.mjs";
+import { lineageOf, markClassOf } from "./world-grants.mjs";
+import { holdingOf, makersOf } from "./holding-law.mjs";
+
+const bounce = (code, defect, hint, extra = {}) => {
+  const e = new Error(defect);
+  Object.assign(e, { code, defect, hint, ...extra });
+  return e;
+};
+
+/** The class reader a view hands the holding law: `(class, prop) → property`. */
+const propertyOf = (view) => (n, p) => view.property?.(n, p) ?? null;
+
+// ── THE KIND ────────────────────────────────────────────────────────────────
+
+/**
+ * Is `kind` a class a resident may make by count, into a holder? Its record
+ * must exist; its `makers` must answer true (holding-law § makersOf, inherited
+ * down `extends`); it must be a thing ("A thing is made, held or set down",
+ * the thing class's body); and it must not itself hold — a holder has contents
+ * of its own, which a count cannot carry (O2 gap G2, the lead's call). Returns
+ * `{ kind, lineage }`, or throws the door's refusal, nothing made.
+ */
+export function makeableKind(kind, view) {
+  if (kind == null || String(kind).trim() === "")
+    throw bounce(422, "make what kind?", "kind: a class id, e.g. a kind of candy — explain: \"candy\" lists the kinds. Nothing was made.");
+  const k = String(kind).trim();
+  if (!view.record(k)) throw bounce(422, `no kind "${k}" in the law`, `a kind is a class the town has declared; explain: "thing" shows the tree. Nothing was made.`);
+  const lineage = lineageOf(k, view.extendsOf);
+  const makers = makersOf(k, propertyOf(view));
+  if (!makers.may)
+    throw bounce(422, `"${k}" is the town's to make`, makers.read
+      ? `its makers is false (set on ${makers.from}), under the-town/nothing-you-control-mints. Nothing was made.`
+      : `no class in its lineage states makers, and an unread makers answers false (the root's own answer). Nothing was made.`);
+  if (!lineage.includes("thing"))
+    throw bounce(422, `a ${k} is not a thing, so nothing holds it`, `a holder holds things; a ${k} is left as its own mark (leave-mark with a slug). Nothing was made.`);
+  if (holdingOf({ className: k, classProperty: propertyOf(view) }).holder)
+    throw bounce(422, `a ${k} holds things of its own, so it is not made by count`,
+      `make it as its own mark, with a slug, so what it holds has somewhere to be. Nothing was made.`);
+  return { kind: k, lineage };
+}
+
+// ── THE HOLDER ──────────────────────────────────────────────────────────────
+
+/**
+ * What a holder is by law. A resident (a handle, no "/"): holder, its class's
+ * capacity (24, constitution), no `open` (a give to a resident follows the
+ * general consent law). A mark: its class's `holder`, `capacity` and `open`,
+ * the mark's own sovereign fields counting (holding-law § holdingOf). A mark
+ * that names no thing class holds nothing.
+ */
+export function holderLawOf({ holder, mark = null, view }) {
+  if (!String(holder).includes("/")) {
+    const r = holdingOf({ className: "resident", classProperty: propertyOf(view), legacy: { capacity: view.dials?.("thing")?.carry_cap } });
+    return { resident: true, holder: true, capacity: r.capacity, open: null, className: "resident" };
+  }
+  const className = markClassOf(mark);
+  const thing = className != null && lineageOf(className, view.extendsOf).includes("thing");
+  if (!thing) return { resident: false, holder: false, capacity: null, open: null, className };
+  const h = holdingOf({ mark, className, classProperty: propertyOf(view) });
+  return { resident: false, holder: h.holder === true, capacity: h.capacity, open: h.open !== false, className };
+}
+
+/** Room left in a holder: its capacity less everything it holds (both maps, plus whole things). */
+export const roomIn = ({ capacity, fold, holder, things = 0, inFlight = 0 }) =>
+  (Number.isInteger(capacity) ? capacity - totalOf(fold, holder) - Number(things) - Number(inFlight) : null);
+
+/**
+ * "The bowl has room for 4, not 10." Refuses WHOLE when `n` exceeds the room
+ * (the lead's settlement, 2026-10-17); `name` is how the answer names the holder.
+ */
+export function refuseOverRoom({ n, room, name, capacity, holding, verb = "made" }) {
+  if (room == null || n <= room) return;
+  const left = Math.max(room, 0);
+  throw bounce(409, `${name} has room for ${left}, not ${n}`,
+    `it holds ${holding} of ${capacity}. Nothing was ${verb}.`, { room: left, capacity });
+}
+
+// ── THE BLUR ────────────────────────────────────────────────────────────────
+
+const plural = (word, n) => (n === 1 ? word : /[^aeiou]y$/.test(word) ? `${word.slice(0, -1)}ies` : `${word}s`);
+
+/**
+ * What a holding shows, at the nearest common class and a number: "18
+ * pocket-comets", "21 candies", "22 things" (a toaster beside them). `edges`
+ * are the holder's kinds, `things` the classes of the whole things it holds.
+ * `sharp: true` (investigate) adds each kind with its count — the class
+ * sharpened, never into units.
+ */
+export function blurOf({ edges = [], things = [], extendsOf, sharp = false }) {
+  const classes = [...edges.map((e) => e.kind), ...things.map((t) => t ?? "thing")];
+  const count = edges.reduce((s, e) => s + e.count, 0) + things.length;
+  if (!count) return { count: 0, class: null, shows: "empty" };
+  const klass = nearestCommonClass(classes, extendsOf) ?? "thing";
+  return {
+    count, class: klass, shows: `${count} ${plural(klass, count)}`,
+    ...(sharp ? { kinds: edges.map((e) => ({ kind: e.kind, count: e.count, shows: `${e.count} ${plural(e.kind, e.count)}` })) } : {}),
+  };
+}
+
+// ── CHOOSING ────────────────────────────────────────────────────────────────
+
+/**
+ * Which kind a give moves. Named: it must be held. Omitted: only when one kind
+ * is held; otherwise refused, listing the kinds (each a class and a number —
+ * never a unit), nothing changed (O2 gap G7: pot luck is ruled for take alone).
+ */
+export function selectKind(edges, kind, { where = "your hands", verb = "give" } = {}) {
+  const listing = edges.map((e) => `${e.count} ${plural(e.kind, e.count)}`).join(", ");
+  if (kind != null && kind !== "") {
+    const hit = edges.find((e) => e.kind === String(kind));
+    if (!hit) throw bounce(409, `no ${kind} in ${where}`, edges.length ? `${where} hold ${listing}. Nothing was changed.` : `${where} hold nothing. Nothing was changed.`);
+    return hit;
+  }
+  if (edges.length === 1) return edges[0];
+  if (!edges.length) throw bounce(409, `nothing to ${verb}: ${where} hold nothing`, "Nothing was changed.");
+  throw bounce(409, `${verb} which kind? ${where} hold ${edges.length} kinds`, `${where} hold ${listing}; say which with kind:. Nothing was changed.`, { kinds: edges.map((e) => e.kind) });
+}
+
+/**
+ * THE POT-LUCK DRAW (18:44 item 6; the lead's settlement 2026-10-17). `n`
+ * marks drawn without replacement from a holding of kinds, each kind weighted
+ * by its count, every step's number `sha256(seed · step)`. The seed is the
+ * act's own identity, so a replay of the act draws the same. Naming a kind
+ * narrows the draw to it (then it is no draw at all). Returns the moves'
+ * kinds and counts, kind-sorted.
+ */
+export function potLuck({ edges, n, seed, kind = null }) {
+  const pool = edges.filter((e) => kind == null || e.kind === String(kind)).map((e) => ({ ...e }));
+  const held = pool.reduce((s, e) => s + e.count, 0);
+  if (n > held) return { short: held };
+  const drawn = new Map();
+  for (let step = 0; step < n; step++) {
+    const left = pool.reduce((s, e) => s + e.count, 0);
+    const h = createHash("sha256").update(`${seed}·${step}`).digest();
+    let r = Number(h.readBigUInt64BE(0) % BigInt(left));
+    const hit = pool.find((e) => (r < e.count ? true : ((r -= e.count), false)));
+    hit.count -= 1;
+    drawn.set(hit.kind, (drawn.get(hit.kind) ?? 0) + 1);
+  }
+  return { drawn: [...drawn].map(([k, c]) => ({ kind: k, count: c })).sort((a, b) => (a.kind < b.kind ? -1 : 1)) };
+}
+
+/** The seed of an act's draw: its actor, its holder and its witness stamp (O2 gap G6). */
+export const drawSeed = ({ actor, from, at }) => `${actor}·${from}·${at}`;
+
+/**
+ * THE CANDIDATES, when `from` is omitted and several holders in reach hold the
+ * kind: each by owner, id and distance, nearest first (18:44 item 4). `found`
+ * is `[{ id, owner, distance_m }]`; exactly one is the answer, none or several
+ * refuse with nothing changed.
+ */
+export function oneHolderOf(found, { kind = null, verb = "take" } = {}) {
+  const what = kind == null ? "anything" : String(kind);
+  if (found.length === 1) return found[0].id;
+  if (!found.length) throw bounce(409, `nothing in reach holds ${what}`, `walk to a holder that does, or name it with from:. Nothing was changed.`);
+  const sorted = [...found].sort((a, b) => a.distance_m - b.distance_m || (a.id < b.id ? -1 : 1));
+  throw bounce(409, `${verb} from which? ${sorted.length} holders in reach hold ${what}`,
+    `${sorted.map((c) => `${c.id} (${c.owner}'s, ${c.distance_m} m)`).join(", ")}: name one with from:. Nothing was changed.`,
+    { candidates: sorted.map((c) => ({ id: c.id, owner: c.owner, distance_m: c.distance_m })) });
+}
+
+// ── THE PLANS ───────────────────────────────────────────────────────────────
+//
+// Each returns the act's `{ action, object, moves, edge }` or throws, nothing
+// written. A transfer is ONE paired edge with two ends (11:12–11:14, ruled
+// 16:02 item 7): one act, its `edge` naming giver and receiver, its moves the
+// kinds that crossed it.
+
+/** leave-mark { kind, count, to }: n marks of `kind` made into `to`. */
+export function planMake({ actor, kind, n, to, via = "leave-mark" }) {
+  return { action: UNIT_ACTION.make, object: String(to), via,
+    moves: [{ from: null, to: String(to), kind: String(kind), n }], edge: { giver: null, receiver: String(to), maker: String(actor) } };
+}
+
+/** take { from, kind?, count }: pot luck, or the named kind, from a holder into the taker's hands. */
+export function planTakeKinds({ fold, actor, from, kind = null, n, seed }) {
+  const edges = kindEdgesOf(fold, from);
+  if (kind != null && !edges.some((e) => e.kind === String(kind)))
+    throw bounce(409, `${from} holds no ${kind}`, edges.length ? `it holds ${blurOf({ edges, extendsOf: () => null }).shows} of other kinds. Nothing was changed.` : "it holds nothing. Nothing was changed.");
+  const d = potLuck({ edges, n, seed, kind });
+  if (d.short != null) throw bounce(409, `${from} holds ${d.short}${kind == null ? "" : ` ${kind}`}, not ${n}`, "take at most what it holds. Nothing was changed.", { holds: d.short });
+  return { action: UNIT_ACTION.take, object: String(from), draw: kind == null ? "pot luck" : `pot luck within ${kind}`,
+    moves: d.drawn.map((x) => ({ from: String(from), to: String(actor), kind: x.kind, n: x.count })), edge: { giver: String(from), receiver: String(actor) } };
+}
+
+/** give { kind?, count, to }: from the giver's hands into a resident's or a holder's. */
+export function planGiveKinds({ fold, actor, to, kind = null, n }) {
+  if (to == null || to === "") throw bounce(422, "give to whom?", "to: a resident's handle, or a holder's id <by>/<slug>");
+  if (String(to) === String(actor)) throw bounce(422, "you are already holding them", "give names another resident or a holder");
+  const edge = selectKind(kindEdgesOf(fold, actor), kind, { where: "your hands", verb: "give" });
+  if (edge.count < n) throw bounce(409, `you hold ${edge.count} ${edge.kind}, not ${n}`, "give at most what you hold. Nothing was changed.");
+  return { action: UNIT_ACTION.give, object: String(to),
+    moves: [{ from: String(actor), to: String(to), kind: edge.kind, n }], edge: { giver: String(actor), receiver: String(to) } };
+}
+
+// ── AFFORDED ACTIONS (18:06; 18:44 item 3) ──────────────────────────────────
+
+/**
+ * A class's afforded actions, nearest class first down its lineage: the
+ * record's `actions` (`[{ action, who, from, effect }]`), parsed in either
+ * spelling. The Halloween Candy Bowl declares `refill`; nothing else does.
+ */
+export function affordedActions(className, view) {
+  const out = [];
+  const seen = new Set();
+  for (const c of lineageOf(className, view.extendsOf)) {
+    const raw = view.record(c)?.actions;
+    const list = typeof raw === "string" ? (() => { try { return JSON.parse(raw); } catch { return []; } })() : raw;
+    for (const a of Array.isArray(list) ? list : []) {
+      if (!a || typeof a.action !== "string" || seen.has(a.action)) continue;
+      seen.add(a.action);
+      out.push({ ...a, from_class: c });
+    }
+  }
+  return out;
+}
