@@ -579,6 +579,12 @@ export async function refuseOutOfReach({ thing, to, actor, act, holder, ctx: giv
  */
 export async function armsLengthOrThrow({ thing, to, here, actor, standpointOfOther = null }) {
   const { withinArmsLength } = await import("./reach.mjs");
+  // A give BY KIND ("units") has no set-down to offer: setting a kind down is not built (G8, w44),
+  // so the other way to reach someone is a holder they can take from (the playground's QA of part 2).
+  const byKind = thing === "units";
+  const setDown = byKind
+    ? `give it into a holder where they can take from it — world { do: "give", args: { kind, count, to: "<a holder>" } } (setting a kind down is not built yet)`
+    : null;
   if (!here)
     throw bounce(409, "the record does not place you anywhere",
       `a give is a take at arm's length (the-town/the-reach), and the walk ledger has no position for ${actor} — there is no length to measure. Walk somewhere first.`);
@@ -587,11 +593,11 @@ export async function armsLengthOrThrow({ thing, to, here, actor, standpointOfOt
     : await (await import("./world.mjs")).residentStandpoint(String(to)).catch(() => null);
   if (!theirs?.placed)
     throw bounce(409, `the record does not place ${to} anywhere`,
-      `a give is a take at arm's length (the-town/the-reach) and the town cannot measure the length: ${to} has no position in the walk ledger. Set it down where you both can reach it instead — world { do: "drop", args: { thing: "${thing}" } }.`);
+      `a give is a take at arm's length (the-town/the-reach) and the town cannot measure the length: ${to} has no position in the walk ledger. ${setDown ? `Instead, ${setDown}.` : `Set it down where you both can reach it instead — world { do: "drop", args: { thing: "${thing}" } }.`}`);
   const reach = withinArmsLength(here, { x: theirs.x, y: theirs.y });
   if (!reach.stands)
     throw bounce(409, `${to} is not within arm's length — they stand ${reach.distance_round} m${reach.bearing ? ` ${reach.bearing}` : ""} of you`,
-      `a give is a take at arm's length (the-town/the-reach): giver and receiver stand within earshot of each other, ${reach.earshot_m} m, the town's one measure of beside. Walk to them and hand it over there — world { do: "walk", args: { mark_id: "<their ground>", mode: "center" } } — or set it down where they will find it: world { do: "drop", args: { thing: "${thing}" } }. Nothing was recorded.`);
+      `a give is a take at arm's length (the-town/the-reach): giver and receiver stand within earshot of each other, ${reach.earshot_m} m, the town's one measure of beside. Walk to them and hand it over there — world { do: "walk", args: { mark_id: "<their ground>", mode: "center" } } — or ${setDown ?? `set it down where they will find it: world { do: "drop", args: { thing: "${thing}" } }`}. Nothing was recorded.`);
   return reach;
 }
 

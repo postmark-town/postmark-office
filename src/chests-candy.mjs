@@ -23,11 +23,16 @@ export const CHESTS_CANDY_ENV = "WORLD_CHESTS_CANDY";
 /** Whether WLD-27's chest and candy doors are open at this office. */
 export const chestsCandyOn = (env = process.env) => env[CHESTS_CANDY_ENV] === "1";
 
-/** The office's own words for a closed door: what it is, and that nothing changed. */
+/**
+ * The office's own words for a closed door: what it is, where its work is done now, and that nothing
+ * changed. Candy itself is open: LOGOS v2's kind doors are live (Darko 2026-10-17 10:22), so "chests
+ * and candy aren't open in town yet", said beside a candy refill that works, was false (the
+ * playground's QA of part 2, I1c). What is closed is #499's chest-and-label spelling.
+ */
 export const CHESTS_CANDY_OFF = Object.freeze({
   code: 409,
-  defect: "chests and candy aren't open in town yet",
-  hint: "the town is rebuilding how chests and candy work, and they open with that release — nothing was changed",
+  defect: "the older chest-and-label doors are closed",
+  hint: "candy works by kind now: leave-mark { kind, count, to } makes it, and take, give, refill and consume name a kind and a holder (to:, from: or thing:, never chest: or label:); a chest is any thing made with holder: true — nothing was changed",
 });
 
 /** The refusal as the doors throw it: a refusal-shaped error every door's catch already sends. */
