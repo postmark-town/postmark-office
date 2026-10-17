@@ -667,6 +667,24 @@ After a clean week (the roll-call green each morning, no `office.db` in the offi
 
 **Rollback** (until the file is deleted). First the file: `sudo -u meepo mv /srv/postmark-office/office.db.retired-2026-10-18 /srv/postmark-office/office.db`. The rehydrate cannot come back on a w43 tree: its script is not there. Partial, for a keeping tick whose world step misbehaves with the new unit, is a **downgrade that freezes the world graph snapshot**: put the old keep unit back (`sudo cp -p /var/backups/postmark-rehydrate-retire/postmark-office-keep.service /etc/systemd/system/ && sudo systemctl daemon-reload`). The tick's world step then finds no credential and writes nothing, every office door reads the snapshot as it stood until the unit is fixed, and the keep row alarms on `world` (refused `exit:4`) after three scheduled ticks. Use it to stop a harmful write, never as a resting state. Whole, with the office rolled back to the w42.x release (the release workflow's rollback): put the file back as above, restore both rehydrate unit files and the old keep unit from `/var/backups/postmark-rehydrate-retire/`, remove the by-hand unit (`sudo rm /etc/systemd/system/postmark-office-keep-by-hand.service`: prod had none before step 2; if step 2's backup caught one, restore that instead), `sudo systemctl daemon-reload`, `sudo systemctl enable --now postmark-office-rehydrate.timer`. The first rehydrate run rebuilds `office.db` from the town clone. The roll-call manifest then reads the rehydrate row `retired` against a box that loads it (ALARM-unretired) until the w42.x manifest is the deployed one, which it is once the rollback deploy lands.
 
+### Retiring SQLite 2: the office.db code path (POS-656, w43 if its batch is green)
+
+The office no longer has an office.db reader. Every door, probe and pen reads the store's town index, as prod has done since the w42 ship under `TOWN_INDEX_READS=store`. The switch is no longer read; `src/hydrate.mjs`, `src/schema.mjs` and the SQLite readers in `src/queries.mjs` are deleted. The behaviour is unchanged. The PR shows the same status, body and as-of on 226 doors, asked of the w43 base and of this tree over one store.
+
+**On prod, nothing to run.** Read on the box on 2026-10-16: `/etc/postmark-office.env` and `/etc/postmark-office-dev.env` both carry `TOWN_INDEX_READS=store`, and no installed unit passes `--db`. The office ignores a `--db` it is handed. § Retiring the rehydrate is unchanged and still runs at this deploy. Its rehydrate unit fails after the deploy, either way, until step 3 removes it.
+
+**Keep the switch line in both env files** until this release has run a clean week. A rollback to a release before POS-656 reads office.db unless that line is there. With it, the older office reads the store exactly as this one does, and the rollback needs nothing else. Removing it afterwards is a no-op for this release. Undo: put the line back.
+
+**The dev box.** `/srv/postmark-office-dev/office.db` (117 MB, unread since the dev office switched) is removed by `deploy/sandbox-reset.sh` the next time it runs. The script now reseeds the dev office's town index in its sandbox store from the seed, with the same law-pen `PG*` the world graph snapshot takes. It names both as not rebuilt when those are missing. Removing it by hand instead:
+
+```sh
+sudo -u meepo mv /srv/postmark-office-dev/office.db /srv/postmark-office-dev/office.db.retired-2026-10-18
+# a week later, nothing having asked for it:
+sudo rm /srv/postmark-office-dev/office.db.retired-2026-10-18
+```
+
+Undo, until the delete: move it back. Nothing reads it, so the undo changes nothing on dev.
+
 ### Switch 2's guard: the store never waits on a held transaction (POS-370, 2026-10-04)
 
 On 2026-10-04 switch 2 (`TOWN_INDEX_READS=store`) went on at 16:52Z and the
@@ -749,6 +767,8 @@ is there to raise it, never to remove it (0 means no limit).
    `last_minute.stuck` is 0.
 4. Roll back on the first stuck row or hung door: the env line out, the office
    restarted (the 2026-10-04 rollback, unchanged).
+   SUPERSEDED for any release carrying POS-656: that office reads only the store,
+   so the env line out changes nothing (§ Retiring SQLite 2).
 
 ### Static keys leave the env file (POS-352 part 2, w42)
 

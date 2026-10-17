@@ -17,24 +17,25 @@ import { spawn } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
+import { indexStore } from "./helpers/office-under-test.mjs";
 import { seedStaticKeys } from "./helpers/static-keys.mjs";
 import { tempDir } from "./helpers/temp-dir.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const KEY = "pos526-loopback-key";
-let child, PORT, tmp, dbPath, oauthPath, stderr = "";
+let child, PORT, tmp, ix, oauthPath, stderr = "";
 
 before(async () => {
   tmp = tempDir("postmark-office-pos526-");
-  dbPath = join(tmp, "office.db");
-  fixtureDb(dbPath).close();
+  // the town index the office reads: the store, seeded from the fixture town (POS-656)
+  ix = await indexStore(fixtureTown(), { db: "pos526_loopback" });
   oauthPath = seedStaticKeys(join(tmp, "oauth.db"), `${KEY}=pos526house:wright`);
   ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath,
-    [join(ROOT, "src", "server.mjs"), "--port", String(port), "--db", dbPath, "--oauth-db", oauthPath], {
+    [join(ROOT, "src", "server.mjs"), "--port", String(port), "--oauth-db", oauthPath], {
       env: {
-        PATH: process.env.PATH, HOME: tmp, WORLD_GRAPH_NONE: "1",
+        PATH: process.env.PATH, HOME: tmp, WORLD_GRAPH_NONE: "1", ...ix.env,
         TOWN_CLONE: join(tmp, "no-town-clone"), TOWN_PUSH: "",
         PUBLIC_BASE: `http://127.0.0.1:${port}`,
         POSTMARK_OAUTH_GITHUB_CLIENT_ID: "pos526-mock-app", POSTMARK_OAUTH_GITHUB_CLIENT_SECRET: "pos526-mock-secret",
@@ -44,7 +45,10 @@ before(async () => {
     })));
   child.stderr.on("data", (d) => { stderr += d; });
 });
-after(() => { child?.kill(); });
+after(async () => {
+  if (child && child.exitCode === null) { const gone = new Promise((ok) => child.on("exit", ok)); child.kill(); await gone; }
+  await ix?.stop();
+});
 
 const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
 
@@ -99,16 +103,19 @@ const filler = (n) => {
   return Buffer.concat([Buffer.from(head), Buffer.alloc(n - head.length - tail.length, 0x61), Buffer.from(tail)]);
 };
 const form = (n) => Buffer.concat([Buffer.from("pad="), Buffer.alloc(n - 4, 0x61)]);
-/** Every row in both databases, counted per table: a refused body must change none of them. */
-function rows() {
+/** Every row in the key store and in the office's store, counted per table: a refused body must change none of them. */
+async function rows() {
   const out = {};
-  for (const [name, p] of [["office", dbPath], ["oauth", oauthPath]]) {
-    const d = new DatabaseSync(p, { readOnly: true });
-    try {
-      for (const { name: t } of d.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all())
-        out[`${name}.${t}`] = d.prepare(`SELECT count(*) AS n FROM "${t}"`).get().n;
-    } finally { d.close(); }
-  }
+  const d = new DatabaseSync(oauthPath, { readOnly: true });
+  try {
+    for (const { name: t } of d.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all())
+      out[`oauth.${t}`] = d.prepare(`SELECT count(*) AS n FROM "${t}"`).get().n;
+  } finally { d.close(); }
+  const c = await ix.store.connect("world2_owner");
+  try {
+    const tables = (await c.query("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE' ORDER BY table_name")).rows;
+    for (const { table_name: t } of tables) out[`store.${t}`] = Number((await c.query(`SELECT count(*) AS n FROM "${t}"`)).rows[0].n);
+  } finally { await c.end(); }
   return out;
 }
 const bounce413 = (r, what) => {
@@ -123,7 +130,7 @@ const bounce413 = (r, what) => {
 };
 
 test("REST (the shared reader, POST /berth, 10 000 bytes): one byte over is a whole 413 bounce, by Content-Length and by chunks", async () => {
-  const before = rows();
+  const before = await rows();
   bounce413(await send("/berth", filler(10_001)), "content-length");
   bounce413(await send("/berth", filler(10_001), { chunked: true, chunk: 997 }), "chunked");
   const exact = await send("/berth", Buffer.from(JSON.stringify({ slug: "Not A Slug!", pad: "a".repeat(10_000 - 36) }).padEnd(10_000, " ")));
@@ -132,16 +139,16 @@ test("REST (the shared reader, POST /berth, 10 000 bytes): one byte over is a wh
   const malformed = await send("/berth", "{not json");
   assert.equal(malformed.status, 400, "malformed JSON keeps its 400");
   assert.match(JSON.parse(malformed.text).defect, /not JSON/);
-  assert.deepEqual(rows(), before, "nothing minted or written");
+  assert.deepEqual(await rows(), before, "nothing minted or written");
 });
 
 test("POST /residency and POST /letters (200 000 bytes): one byte over is a whole 413 bounce", async () => {
-  const before = rows();
+  const before = await rows();
   bounce413(await send("/residency", filler(200_001), { headers: auth }), "residency, content-length");
   bounce413(await send("/residency", filler(200_001), { headers: auth, chunked: true }), "residency, chunked");
   bounce413(await send("/letters", filler(200_001), { headers: auth }), "letters, content-length");
   bounce413(await send("/letters", filler(200_001), { headers: auth, chunked: true }), "letters, chunked");
-  assert.deepEqual(rows(), before, "no join PR, no letter, no record");
+  assert.deepEqual(await rows(), before, "no join PR, no letter, no record");
 });
 
 test("the media door keeps its own cap (3 000 000 bytes): over is 413, exactly the cap is read", async () => {
@@ -150,7 +157,7 @@ test("the media door keeps its own cap (3 000 000 bytes): over is 413, exactly t
 });
 
 test("MCP (3 000 000 bytes): one byte over is a whole 413 carrying a JSON-RPC error, no tool run", async () => {
-  const before = rows();
+  const before = await rows();
   for (const chunked of [false, true]) {
     const r = await send("/mcp", filler(3_000_001), { headers: auth, chunked });
     assert.equal(r.status, 413, `chunked=${chunked}`);
@@ -160,11 +167,11 @@ test("MCP (3 000 000 bytes): one byte over is a whole 413 carrying a JSON-RPC er
     assert.equal(b.error.code, -32600);
     assert.match(b.error.message, /the request body is too large/);
   }
-  assert.deepEqual(rows(), before);
+  assert.deepEqual(await rows(), before);
 });
 
 test("OAuth (100 000 bytes): one byte over is a whole 413 { error, error_description } on token, register and the browser's consent", async () => {
-  const before = rows();
+  const before = await rows();
   for (const [path, headers] of [
     ["/oauth/token", { "content-type": "application/x-www-form-urlencoded" }],
     ["/oauth/register", { "content-type": "application/json" }],
@@ -177,7 +184,7 @@ test("OAuth (100 000 bytes): one byte over is a whole 413 { error, error_descrip
     assert.equal(b.error, "invalid_request", path);
     assert.match(b.error_description, /the request body is too large/, path);
   }
-  assert.deepEqual(rows(), before, "no client, code or token written");
+  assert.deepEqual(await rows(), before, "no client, code or token written");
 });
 
 test("valid Unicode survives a byte-split upload through a real door (OAuth registration echoes the name)", async () => {

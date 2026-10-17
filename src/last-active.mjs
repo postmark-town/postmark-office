@@ -191,7 +191,7 @@ async function stampAnswer(kind, answer, stamp) {
   return answer;
 }
 
-/** The office.db path: stamp a door's answer with one store read of its own. */
+/** Stamp a door's answer with one store read of its own (a door that holds no client). */
 export function withLastActive(kind, answer, opts = {}) {
   return stampAnswer(kind, answer, (rows) => stampRows(rows, opts));
 }

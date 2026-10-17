@@ -26,8 +26,8 @@
 // was chosen, and a carry must not undo a choice. The drain runs once at the
 // end, not once per house.
 //
-//   node tools/home-picture-carry.mjs --dry-run --town ./town-clone --oauth-db ./oauth.db --office-db ./office.db
-//   node tools/home-picture-carry.mjs --apply   --town ./town-clone --oauth-db ./oauth.db --office-db ./office.db
+//   node tools/home-picture-carry.mjs --dry-run --town ./town-clone --oauth-db ./oauth.db
+//   node tools/home-picture-carry.mjs --apply   --town ./town-clone --oauth-db ./oauth.db
 //
 // `--dry-run` mints nothing (the R2 PUT is a mock, the ledger a throwaway copy)
 // and writes nothing to the store; it reads the store's current pictures when
@@ -119,7 +119,6 @@ if (isMain) {
   if (DRY === APPLY) { console.error("home-picture-carry: pass exactly one of --dry-run or --apply"); process.exit(2); }
   const TOWN = resolve(opt("--town", process.env.TOWN_CLONE ?? "town-clone"));
   const OAUTH_DB = resolve(opt("--oauth-db", "oauth.db"));
-  const OFFICE_DB = resolve(opt("--office-db", process.env.OFFICE_DB ?? "office.db"));
   if (!existsSync(join(TOWN, "WHITE_PAGES"))) { console.error(`--town must name a town clone holding WHITE_PAGES/ (got: ${TOWN})`); process.exit(2); }
 
   process.env.TOWN_CLONE = TOWN;
@@ -131,7 +130,6 @@ if (isMain) {
   const { loadRegistry, loadPins } = await import("../src/registry-store.mjs");
   const { homePictureIn } = await import("../src/registry-rows.mjs");
   const { drainRegistry } = await import("./registry-drain.mjs");
-  const { DatabaseSync } = await import("node:sqlite");
 
   if (!DRY && !mediaConfigured()) { console.error("the media door has no credentials here — run this on the box"); process.exit(2); }
   const registry = await loadRegistry();
@@ -140,17 +138,18 @@ if (isMain) {
   // The door's resolver, asked the way backfill-home-shelf.mjs asks it: the
   // store's pins first (POS-345: the record, never the printed
   // tools/github-ids.json), the residents index's ADDRESS github binding second.
-  const idx = existsSync(OFFICE_DB) ? new DatabaseSync(OFFICE_DB, { readOnly: true }) : (() => {
-    const d = new DatabaseSync(":memory:"); d.exec("CREATE TABLE residents (handle TEXT PRIMARY KEY, json TEXT)"); return d;
-  })();
+  // The residents index is the store's town index (POS-656: office.db is gone),
+  // loaded the way the office loads it: the held probe, whose GitHub lines are
+  // the cards' own (`github`, else the ADDRESS's). A store that cannot answer
+  // stops the run here, before anything is carried.
+  const { refreshStoreProbe } = await import("../src/town-index-store.mjs");
+  const { heldStoreProbe } = await import("../src/index-probe.mjs");
+  if (!(await refreshStoreProbe({ letters: false }))) { console.error("home-picture-carry: the store's town index could not be read (WORLD2_PG=1 and WORLD2_PG_URL), so the residents' GitHub lines are unknown — nothing carried"); process.exit(2); }
+  const idx = heldStoreProbe();
   const pins = await loadPins();
   if (pins === null) { console.error("home-picture-carry: this office is not pointed at the store (WORLD2_PG=1 and WORLD2_PG_URL), so it cannot read the pins — nothing carried"); process.exit(2); }
   const loginOf = (handle) => {
-    try {
-      const row = idx.prepare("SELECT json FROM residents WHERE handle = ?").get(handle);
-      const d = row ? JSON.parse(row.json) : null;
-      return (d?.github ?? d?.address?.data?.github ?? "") || null;
-    } catch { return null; }
+    try { return idx.loginRows().find((r) => r.handle === handle)?.github || null; } catch { return null; }
   };
   const doorHouseholdFor = (handle) => {
     const pin = pins[handle];

@@ -27,7 +27,7 @@ import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { seedStaticKeys } from "./helpers/static-keys.mjs";
 import { removeTempDir, tempDir } from "./helpers/temp-dir.mjs";
@@ -100,16 +100,15 @@ export async function load(url, context, nextLoad) {
 let ix = null, office = null, admin = null;
 
 before(async () => {
-  const dbPath = join(tmp, "office.db");
-  fixtureDb(dbPath).close();
-  ix = await indexStore(dbPath, { db: "door_codes" });
+  const town = fixtureTown();
+  ix = await indexStore(town, { db: "door_codes" });
   admin = await ix.store.connect("office_api"); // the office's own role, so it may see and end the office's sessions
   admin.on("error", () => {});
   const hooks = join(tmp, "hooks.mjs");
   writeFileSync(hooks, HOOKS);
   const register = join(tmp, "register.mjs");
   writeFileSync(register, `import { register } from "node:module";\nregister(${JSON.stringify(pathToFileURL(hooks).href)});\n`);
-  const child = spawn(process.execPath, ["--import", pathToFileURL(register).href, join(ROOT, "src", "server.mjs"), "--port", "0", "--db", dbPath,
+  const child = spawn(process.execPath, ["--import", pathToFileURL(register).href, join(ROOT, "src", "server.mjs"), "--port", "0",
     "--oauth-db", seedStaticKeys(join(tmp, "oauth.db"), `${KEY}=fixture-house:wright`), "--roles-db", join(tmp, "roles.db")], {
     env: { ...process.env, TOWN_CLONE: join(tmp, "no-clone-here"), WORLD_CLONE: join(tmp, "no-world-clone"), VOICES_LOG: join(tmp, "voices.jsonl"),
       TOWN_PUSH: "", WORLD_APEX: "1", WORLD_STORE_DB: join(tmp, "no-world.db"), ...ix.env },

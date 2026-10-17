@@ -124,9 +124,10 @@
 // balance and never has. Every stamp number the office serves is the TOWN's own
 // fold, imported live from the checkout —
 //
-//   - the `stamps` table (balance/mint_count/staked) is written by
-//     src/hydrate.mjs § Stamps from the town's foldBalances / foldMintCount /
-//     foldStaked, and src/queries.mjs § stampsDetail reads that table;
+//   - the `stamps` table (balance/mint_count/staked) is derived by
+//     src/town-index.mjs § stampFold from the town's foldBalances /
+//     foldMintCount / foldStaked, and src/town-index-store.mjs § stampsDetail
+//     reads that table;
 //   - both stake clips take their balance from the town's ballotState —
 //     src/pot-stake-exec.mjs § clipPotStake and src/stake-exec.mjs via
 //     tools/ballot.mjs § clipApply.

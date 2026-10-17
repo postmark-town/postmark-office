@@ -39,7 +39,7 @@ import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
-import { editClone, fixtureDb } from "./fixture.mjs";
+import { editClone, fixtureTown } from "./fixture.mjs";
 import { awaitListening } from "./spawn-office.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
@@ -50,13 +50,12 @@ let offices = 0; // each office's store is a database of its own
 
 async function office(extraEnv = {}) {
   const tmp = mkdtempSync(join(tmpdir(), "postmark-one-contract-"));
-  const dbPath = join(tmp, "fixture.db");
-  fixtureDb(dbPath).close();
+  const town = fixtureTown();
   // the office reads its town index from a store seeded from this fixture
   // (POS-268, office-under-test.mjs), unless it is asked to have no record at all
-  const ix = extraEnv.WORLD2_PG === "" ? null : await indexStore(dbPath, { db: `one_contract_${++offices}` });
+  const ix = extraEnv.WORLD2_PG === "" ? null : await indexStore(town, { db: `one_contract_${++offices}` });
   const clone = editClone();
-  const child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0", "--db", dbPath,
+  const child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0",
     "--oauth-db", seedStaticKeys(join(tmp, "oauth.db"), `${KEY}=keemin:wright`), "--roles-db", join(tmp, "roles.db")], {
     env: { ...process.env, ...ix?.env, WORLD_GRAPH_NONE: "1", TOWN_CLONE: clone,
       WORLD_CLONE: join(tmp, "no-world-clone"), VOICES_LOG: join(tmp, "voices.jsonl"),

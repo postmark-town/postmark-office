@@ -34,7 +34,7 @@ import { parseOfficeKeys, staticLookup, importStaticKeys } from "../src/static-k
 import { identityOf } from "../src/queries.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -207,9 +207,8 @@ test("§ 4 the CLI prints counts and households, never a key or any part of a ha
 });
 
 test("§ 5 the doors: /me answers each key as it did, and OFFICE_KEYS in the env is not read", async () => {
-  const dbPath = join(TMP, "s5-fixture.db");
-  fixtureDb(dbPath).close();
-  const ix = await indexStore(dbPath, { db: "static_keys_doors" });
+  const town = fixtureTown();
+  const ix = await indexStore(town, { db: "static_keys_doors" });
   CLEANUP.push(() => ix.stop());
   const oauthPath = join(TMP, "s5-oauth.db");
   openOauthDb(oauthPath).close();
@@ -221,7 +220,7 @@ test("§ 5 the doors: /me answers each key as it did, and OFFICE_KEYS in the env
   const stderrOf = new Map(); // child -> what it said on stderr, from its first byte
   const boot = (oauthDb, extra = {}) => bootOnFreePort((port) => {
     const c = spawn(process.execPath, [join(ROOT, "src", "server.mjs"),
-      "--port", String(port), "--db", dbPath, "--oauth-db", oauthDb, "--roles-db", `${oauthDb}.roles.db`], {
+      "--port", String(port), "--oauth-db", oauthDb, "--roles-db", `${oauthDb}.roles.db`], {
       env: { ...process.env, ...ix.env, WORLD_GRAPH_NONE: "1", OFFICE_KEYS: "", TOWN_CLONE: join(TMP, "no-clone"),
         WORLD_CLONE: join(TMP, "no-world-clone"), TOWN_PUSH: "", ...extra },
       stdio: ["ignore", "pipe", "pipe"],

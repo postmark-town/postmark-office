@@ -22,16 +22,16 @@ import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
-import { fixtureDb } from "./fixture.mjs";
+import { putValues, fixtureTown } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { plantStanding, standingStoreFor } from "./helpers/standing-rows.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
 import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 
 // The town index this file's offices read: a store seeded from each fixture
-// office.db (POS-268, office-under-test.mjs). Stopped when the file is done.
+// town (POS-268, office-under-test.mjs). Stopped when the file is done.
 const STORES = [];
-const storeFor = async (dbPath) => { const x = await indexStore(dbPath); STORES.push(x); return x; };
+const storeFor = async (town) => { const x = await indexStore(town); STORES.push(x); return x; };
 // The standing ledger is the store's (POS-347): the store the office reads it from.
 const LEDGER_STORE = { store: null };
 test.after(async () => { for (const x of STORES) await x.stop(); });
@@ -72,12 +72,11 @@ const OAUTH_DB = { path: null };
 
 before(async () => {
   tmp = mkdtempSync(join(tmpdir(), "postmark-claim-ledger-"));
-  const dbPath = join(tmp, "fixture.db");
-  const seed = fixtureDb(dbPath);
-  const resident = (handle, login) => seed.prepare("INSERT INTO residents VALUES (?, ?)").run(handle, JSON.stringify({
+  const seed = fixtureTown();
+  const resident = (handle, login) => putValues(seed, "residents", [handle, JSON.stringify({
     handle, is_office: false, last_active: null,
     address: { data: { since: "2026-08-01", github: login }, body: `# ${handle}` },
-  }));
+  })]);
   resident(QUARANTINED, "quarantined-keeper");
   resident(HOLDER, HOLDER_ACCT.login);
   resident(LAPSER, LAPSER_ACCT.login);
@@ -85,8 +84,7 @@ before(async () => {
   resident(TWIN_A, TWINS_ACCT.login);
   resident(TWIN_B, TWINS_ACCT.login);
   resident(DUAL, DUAL_ACCT.login);
-  seed.close();
-  const IX = await storeFor(dbPath);
+  const IX = await storeFor(seed);
   const IX_ENV = IX.env;
   const LEDGER = await standingStoreFor(IX);
   STORES.push(LEDGER);
@@ -133,7 +131,7 @@ before(async () => {
     // and mints at the key desk — the founder's ruling of 2026-08-26, and lap 3's
     // correction: a pinned static row CAN mint. That is how this file holds a
     // human's key beside a resident's without a browser.
-    "--db", dbPath, "--oauth-db", seedStaticKeys((OAUTH_DB.path = join(tmp, "oauth.db")), `${HUMAN_KEY}=keemin#${DUAL_ACCT.id}:${DUAL}`)], {
+    "--oauth-db", seedStaticKeys((OAUTH_DB.path = join(tmp, "oauth.db")), `${HUMAN_KEY}=keemin#${DUAL_ACCT.id}:${DUAL}`)], {
     env: {
       ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV,
       TOWN_CLONE: clone, TOWN_PUSH: "",

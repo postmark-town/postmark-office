@@ -20,9 +20,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { storeRefresher, STORE_READ_BOUND_MS } from "../src/store-refresh.mjs";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
-import { copyIndexToStore } from "./helpers/index-to-store.mjs";
+import { seedTownIndex } from "./helpers/index-to-store.mjs";
 
 test("1 · a read past the bound holds the guard until it settles: ticks skip, the bound is named once, and the next tick reads", { timeout: 5_000 }, async (t) => {
   // The bound's timer is unref'd, as it must be in the office (a pending bound
@@ -79,9 +79,8 @@ before(async () => {
   s = await startStore();
   if (s.skip) { skip = s.skip; return; }
   tmp = mkdtempSync(join(tmpdir(), "store-refresh-"));
-  const db = fixtureDb(join(tmp, "office.db"));
   const w = await s.connect("law_ingester");
-  try { await copyIndexToStore(w, db); } finally { await w.end(); db.close(); }
+  try { await seedTownIndex(w, fixtureTown()); } finally { await w.end(); }
 });
 after(async () => {
   await s?.stop?.();
@@ -90,8 +89,6 @@ after(async () => {
 
 test("4 · a store that will not answer never lets the poll hold more than its two connections, and Postgres frees them at the bound", { timeout: 30_000 }, async (t) => {
   if (skip) return t.skip(skip);
-  const keep = process.env.TOWN_INDEX_READS;
-  process.env.TOWN_INDEX_READS = "store";
   const { default: pg } = await import("pg");
   const tis = await import("../src/town-index-store.mjs");
   // the pen's own shape: three connections per thread (world2-pen.mjs § pool)
@@ -106,7 +103,6 @@ test("4 · a store that will not answer never lets the poll hold more than its t
     tis.__setTownIndexPoolForTest(null);
     await locker.end().catch(() => {});
     await pool.end().catch(() => {});
-    if (keep === undefined) delete process.env.TOWN_INDEX_READS; else process.env.TOWN_INDEX_READS = keep;
   });
 
   // the index tables locked, as a stuck ingest or a slow disk would hold them

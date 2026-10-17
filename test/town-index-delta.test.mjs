@@ -12,8 +12,9 @@
 //      ferry's move, a parent that arrives, a bridge that goes, a duplicate copy
 //      that survives, an id that changes, a folder letter's attachment, a path
 //      with spaces and accents, a resident who leaves, a commit that changes
-//      nothing, a ledger whose prose is edited) every table equals what
-//      src/hydrate.mjs writes into office.db at the same commit. The seal's
+//      nothing, a ledger whose prose is edited) every table equals the full
+//      derivation (src/town-index.mjs § deriveTownIndex, run in a fresh
+//      process, what office.db was built from until POS-656) at the same commit. The seal's
 //      --snapshot audit repairs a row the deltas could not see, and counts it.
 //   2. ONLY THE DELTA. The same one-letter delta on a town ten times larger
 //      derives the same number of letters and threads: the work is the change's,
@@ -23,9 +24,8 @@ import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
 
 import { startStore } from "./helpers/embedded-store.mjs";
@@ -90,26 +90,40 @@ after(async () => {
   rmSync(tmp, { recursive: true, force: true });
 });
 
-/** Every table: the store's rows (without `digest`) against office.db's at the town's checkout, as sorted multisets. */
-async function assertEqualToHydrate(t, label) {
-  const dbPath = join(tmp, `office-${label.replace(/\W+/g, "-")}.db`);
-  execFileSync(process.execPath, [join(ROOT, "src", "hydrate.mjs"), "--town", t.dir, "--db", dbPath], { stdio: "ignore" });
-  const db = new DatabaseSync(dbPath, { readOnly: true });
-  try {
-    for (const [name, { cols }] of Object.entries(TOWN_TABLES)) {
-      const norm = (rows) => rows.map((r) => JSON.stringify(cols.map((k) => r[k] ?? null))).sort();
-      const office = norm(db.prepare(`SELECT ${cols.join(", ")} FROM ${name}`).all());
-      const stored = norm((await c.query(`SELECT ${cols.join(", ")} FROM town_${name}`)).rows);
-      assert.deepEqual(stored, office, `${label}: town_${name} differs from office.db's ${name}`);
-    }
-  } finally { db.close(); }
+// The full derivation at the checkout, in a process of its own (the town's
+// tools are imported from the checkout, and a module imported once is cached):
+// the rows by table, in TOWN_TABLES' column order.
+const DERIVE = `
+import { writeFileSync } from "node:fs";
+const { deriveTownIndex } = await import(process.env.DERIVE_MODULE);
+const quiet = { log() {}, info() {}, warn() {}, error() {} };
+const { tables } = await deriveTownIndex(process.env.DERIVE_TOWN, { log: quiet });
+writeFileSync(process.env.DERIVE_OUT, JSON.stringify(tables));
+`;
+let derivations = 0;
+function derived(dir) {
+  const out = join(tmp, `derived-${++derivations}.json`);
+  execFileSync(process.execPath, ["--input-type=module", "-e", DERIVE], { stdio: "ignore",
+    env: { ...process.env, DERIVE_MODULE: pathToFileURL(join(ROOT, "src", "town-index.mjs")).href, DERIVE_TOWN: dir, DERIVE_OUT: out } });
+  return JSON.parse(readFileSync(out, "utf8"));
+}
+
+/** Every table: the store's rows (without `digest`) against the full derivation's at the town's checkout, as sorted multisets. */
+async function assertEqualToDerivation(t, label) {
+  const tables = derived(t.dir);
+  for (const [name, { cols }] of Object.entries(TOWN_TABLES)) {
+    const norm = (rows) => rows.map((r) => JSON.stringify(cols.map((k, i) => (Array.isArray(r) ? r[i] : r[k]) ?? null))).sort();
+    const whole = norm(tables[name] ?? []);
+    const stored = norm((await c.query(`SELECT ${cols.join(", ")} FROM town_${name}`)).rows);
+    assert.deepEqual(stored, whole, `${label}: town_${name} differs from the full derivation's ${name}`);
+  }
   const lines = (await c.query("SELECT seq, line FROM town_mail_lines ORDER BY seq")).rows.map((r) => [r.seq, r.line]);
   assert.deepEqual(lines, mailLineRows(t.dir), `${label}: town_mail_lines differs from the mail ledger's lines`);
 }
 
 const step = async (t, label, sha, opts = {}) => {
   const out = await ingest(c, { townRepo: t.dir, sha, ...opts });
-  await assertEqualToHydrate(t, label);
+  await assertEqualToDerivation(t, label);
   return out;
 };
 
@@ -121,7 +135,7 @@ test("letterPathOf names the letter a changed path belongs to", () => {
   assert.equal(letterPathOf("WHITE_PAGES/mail-ledger.md"), null);
 });
 
-test("every transition a letter can make: the delta equals hydrate.mjs, and the seal's audit repairs what a delta cannot see", async (tt) => {
+test("every transition a letter can make: the delta equals the full derivation, and the seal's audit repairs what a delta cannot see", async (tt) => {
   if (skip) return tt.skip(skip);
   const t = makeTown("matrix", ["ada", "bex", "cyd", "dee"]);
   t.put("WHITE_PAGES/ada/inbox/l1.md", letter("l1", "bex", "ada", "2026-09-01"));
@@ -132,7 +146,7 @@ test("every transition a letter can make: the delta equals hydrate.mjs, and the 
   t.deliver("2026-09-02", "l3", "cyd", "dee"); t.deliver("2026-09-03", "l4", "dee", "cyd", "p0");
   const seed = t.commit("the town at its seed");
   await ingest(c, { townRepo: t.dir, sha: seed, seed: true, reseed: true });
-  await assertEqualToHydrate(t, "seed");
+  await assertEqualToDerivation(t, "seed");
 
   // a reply waits in the outbox, then the ferry moves it and writes the ledger
   t.put("WHITE_PAGES/ada/outbox/l5.md", letter("l5", "ada", "bex", "2026-09-04", "l2"));
@@ -280,7 +294,7 @@ async function grownDelta(n) {
   t.put("WHITE_PAGES/bex/inbox/today-re.md", letter("today-re", "ada", "bex", "2026-09-02", "today"));
   t.deliver("2026-09-02", "today-re", "ada", "bex", "today");
   const out = await ingest(c, { townRepo: t.dir, sha: t.commit("ferry: the reply") });
-  await assertEqualToHydrate(t, `grown ${n}`);
+  await assertEqualToDerivation(t, `grown ${n}`);
   return out;
 }
 

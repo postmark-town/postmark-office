@@ -735,13 +735,12 @@ export async function openBoardingPR(args, pen) {
 // key carries the OAuth-verified identity (ghId/ghLogin). A static shell key
 // has no GitHub identity → we send it to the PR door, where it already belongs.
 //
-// `clone` and `dbPath` are the office's own (server.mjs § TOWN_CLONE, DB_PATH,
-// whose defaults these mirror). `bind` is the locked writer, injected in test.
+// `clone` is the office's own (server.mjs § TOWN_CLONE, whose default this
+// mirrors). `bind` is the locked writer, injected in test.
 
 export async function requestResidency(args, key, db, pen, {
   odb = null,
   clone = process.env.TOWN_CLONE ?? resolve(HERE, "..", "town-clone"),
-  dbPath = null,
   bind = null,
 } = {}) {
   if (!pen?.token)
@@ -820,7 +819,6 @@ export async function requestResidency(args, key, db, pen, {
     const landed = await run({
       args: { ...args, handle },
       key: { ghId: key.ghId, ghLogin: key.ghLogin, handles: [...(key.handles ?? [])] },
-      dbPath,
     }, { clone });
     const logged = odb && townLogEnabled() ? await appendTownJournal(odb, {
       act: "request-residency",

@@ -140,7 +140,7 @@ test("a ledger whose past isn't the head's has no tail, so the door folds the wh
   } finally { put("WHITE_PAGES/stamp-ledger.md", real); }
 });
 
-test("heldFor reads the store when the town index is on it, and the whole file when it is not", async (t) => {
+test("heldFor reads the store's town index, and the whole file when the store cannot answer", async (t) => {
   if (skip) return t.skip(skip);
   const entries = mint.parseStampLedger(readFileSync(join(town, "WHITE_PAGES", "stamp-ledger.md"), "utf8"));
   const h = [...mint.foldBalances(entries).keys()].find((a) => a !== "MINT" && a !== "BURN" && !a.startsWith("stake:"));
@@ -152,8 +152,9 @@ test("heldFor reads the store when the town index is on it, and the whole file w
     [h, row.balance + 1000, row.mint_count, row.staked, row.digest]);
   __setTownIndexPoolForTest({ connect: async () => ({ query: (...a) => reader.query(...a), release() {} }) });
   try {
-    assert.deepEqual(await heldFor(town, h, { env: { TOWN_INDEX_READS: "store" } }), { ...whole, liquid: whole.liquid + 1000 }, "the planted row is read");
-    assert.deepEqual(await heldFor(town, h, { env: {} }), whole, "switch off: the whole file, as before");
+    assert.deepEqual(await heldFor(town, h, { env: {} }), { ...whole, liquid: whole.liquid + 1000 }, "the planted row is read");
+    __setTownIndexPoolForTest({ connect: async () => { throw new Error("ECONNREFUSED"); } });
+    assert.deepEqual(await heldFor(town, h, { env: {} }), whole, "the store gone: the whole file, as before");
   } finally {
     __setTownIndexPoolForTest(null);
     await c.query("DELETE FROM town_stamps WHERE handle = $1", [h]);

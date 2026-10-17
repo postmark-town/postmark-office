@@ -44,18 +44,6 @@ export const UNREAD_LISTED = 20;
 export const UNREAD_CLEARS = 'opening a letter in full clears it: household { read: "letter", args: { id } }. household { do: "mark-all-read" } clears every one';
 export const UNREAD_NOTE = "letters delivered to this resident that their household has not opened, newest first. Private to your household: no other key sees this block, and the town's record never holds it. Whose turn it is in a conversation is a different thing, and lives in awaiting's letter threads";
 
-/**
- * The ferry's delivery rows to `handle`, newest first (the ledger's own order),
- * each with the letter's `delivered_at` where the index has it.
- */
-export function deliveredTo(db, handle) {
-  return db.prepare(
-    `SELECT d.id, d.from_h AS "from", d.date, l.delivered_at
-       FROM ledger d LEFT JOIN letters l ON l.id = d.id
-      WHERE d.kind = 'delivery' AND d.to_h = ?
-      ORDER BY d.seq DESC`).all(handle);
-}
-
 /** The recipients of a letter: its `toList` when present, else `to` (the town's `recipientsOf`). */
 const recipientsOf = (l) => (Array.isArray(l?.toList) && l.toList.length ? l.toList : [l?.to]).filter(Boolean);
 
@@ -82,13 +70,14 @@ async function openedIn(client, handles) {
  * this answers it, one household transaction at a time. Throws when the store
  * cannot be read: an unknown count is never a zero.
  */
-export async function unreadFor(db, handles, { env = process.env, ix = null } = {}) {
+export async function unreadFor(handles, { env = process.env, ix = null } = {}) {
+  ix ??= (await import("./town-index-store.mjs")).storeIndexPooled(null, { env });
   const out = new Map();
   if (!handles.length) return out;
   for (const [household, group] of await byHousehold(handles, env)) {
     const opened = await officeWrite((c) => openedIn(c, group), { env, household });
     const seen = new Set(opened.map((r) => `${r.handle}\n${r.letter}`));
-    for (const h of group) out.set(h, (ix ? await ix.deliveredTo(h) : deliveredTo(db, h)).filter((d) => !seen.has(`${h}\n${d.id}`)));
+    for (const h of group) out.set(h, (await ix.deliveredTo(h)).filter((d) => !seen.has(`${h}\n${d.id}`)));
   }
   return out;
 }
@@ -163,7 +152,7 @@ export async function answerOpening(l, key, opts = {}) {
  * the key holds; `handle:` narrows to one. Not an act in `acts`: what a
  * household has read never enters the public record.
  */
-export async function markAllReadAtOffice(db, fields, key, { env = process.env, now = Date.now() } = {}) {
+export async function markAllReadAtOffice(fields, key, { env = process.env, now = Date.now() } = {}) {
   const held = [...(key?.handles ?? [])];
   const named = String(fields?.handle ?? "").trim();
   if (named && !held.includes(named))
@@ -171,14 +160,14 @@ export async function markAllReadAtOffice(db, fields, key, { env = process.env, 
   const handles = named ? [named] : held;
   if (!handles.length) throw refuse(403, "marking mail read is a resident's act", "your key holds no resident — declare a household first");
   const marked = {};
-  // THE DELIVERIES, READ BEFORE THE WRITE (POS-268 5a). Switched, they are the
-  // store's (town-index-store § deliveredTo, its own short transaction), never
-  // office.db's, which a switched office does not open; read here because the
-  // pen's write below holds its connection and may not ask for another (POS-370).
-  const { townIndexReads, storeIndexPooled } = await import("./town-index-store.mjs");
-  const ix = townIndexReads(env) ? storeIndexPooled(null, { env }) : null;
+  // THE DELIVERIES, READ BEFORE THE WRITE (POS-268 5a): the store's
+  // (town-index-store § deliveredTo, its own short transaction), read here
+  // because the pen's write below holds its connection and may not ask for
+  // another (POS-370).
+  const { storeIndexPooled } = await import("./town-index-store.mjs");
+  const ix = storeIndexPooled(null, { env });
   const delivered = new Map();
-  for (const h of handles) delivered.set(h, ix ? await ix.deliveredTo(h) : deliveredTo(db, h));
+  for (const h of handles) delivered.set(h, await ix.deliveredTo(h));
   for (const [household, group] of await byHousehold(handles, env)) {
     await officeWrite(async (c) => {
       const seen = new Set((await openedIn(c, group)).map((r) => `${r.handle}\n${r.letter}`));
