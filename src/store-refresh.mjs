@@ -17,7 +17,8 @@
 // statement_timeout = STORE_READ_BOUND_MS (server.mjs), Postgres cancels a read
 // that runs past it, and the guard is freed only when the read has SETTLED. The
 // poll therefore holds at most the pair's two connections. The JS timer here
-// only names the moment the bound passed, in the journal.
+// only names the moment the bound passed, in the journal. The bound is PER
+// STATEMENT, so a healthy probe of several statements may run past it in all.
 
 /** The bound a store read gets, in the poll and at boot. */
 export const STORE_READ_BOUND_MS = 10_000;
@@ -37,7 +38,7 @@ export function storeRefresher({ read, onRead = () => {}, boundMs = STORE_READ_B
     let late = false;
     const timer = setTimer(() => {
       late = true;
-      log(`[office] the store read has not answered within ${boundMs / 1000}s — the store's statement timeout ends it, and the poll waits for it before reading again`);
+      log(`[office] the store read has not answered within ${boundMs / 1000}s — it is still reading; each statement is bounded at ${boundMs / 1000}s, and the poll waits for it before reading again`);
     }, boundMs);
     timer?.unref?.();
     try {

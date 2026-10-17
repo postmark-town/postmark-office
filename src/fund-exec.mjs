@@ -55,15 +55,21 @@ function classifyFatal(stderr) {
     return { code: 409, defect: "that would take the pot past its posted need", hint: (s.split("\n").find((l) => /FATAL/.test(l)) ?? s).replace(/^FATAL:\s*/, "").slice(0, 240) };
   if (/no pot file/.test(s))
     return { code: 404, defect: "no such pot", hint: "the town posts its needs on the board" };
-  // POS-653: the pot closed (it filled, or the founder closed it) between the
-  // door's own gate and this receipt: the same-minute race of two rails. The
-  // payer is owed the plain answer, never the CLI's sentence.
-  if (/is (closed|draft), not open|has already closed/.test(s))
+  // POS-653: the pot is not open (the founder closed it, or has not opened it,
+  // between the door's own gate and this receipt: the same-minute race of two
+  // rails). The words are neutral, because a draft has not asked for anything
+  // yet (review-3896). A once pot that already closed has what it asked for.
+  // The payer is owed the plain answer, never the CLI's sentence.
+  if (/is (closed|draft), not open/.test(s))
+    return { code: 409, defect: "this pot is not taking dollars", hint: "nothing was recorded; your payment is untouched" };
+  if (/has already closed/.test(s))
     return { code: 409, defect: "this pot has what it asked for", hint: "nothing was recorded; your payment is untouched" };
   // POS-653: the receipt filled the pot and its file could not be closed. The
-  // pen's transaction keeps nothing, and the CLI's words (a path, and "appended
-  // locally") go to the log, never to the payer.
-  if (/could not be (read|closed)/.test(s)) {
+  // label is anchored on the CLI's own "took pot … to its need", so another
+  // "could not be read" never wears it. The pen's transaction keeps nothing,
+  // and the CLI's words (a path, and "appended locally") go to the log, never
+  // to the payer.
+  if (/took pot .* to its need/.test(s) && /could not be (read|closed)/.test(s)) {
     faultLogged("the receipt filled its pot and the pot could not be closed", { stderr: s });
     return { code: 500, defect: "the receipt refused", hint: "nothing was recorded; your payment is untouched" };
   }

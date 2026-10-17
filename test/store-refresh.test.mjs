@@ -44,7 +44,7 @@ test("1 · a read past the bound holds the guard until it settles: ticks skip, t
   assert.equal(r.inFlight(), true, "the guard holds while the read holds its connection");
   assert.equal(await r.tick(), "skipped");
   assert.equal(reads, 1, "no second read while the first is still out");
-  assert.deepEqual(lines, ["[office] the store read has not answered within 0.05s — the store's statement timeout ends it, and the poll waits for it before reading again"]);
+  assert.deepEqual(lines, ["[office] the store read has not answered within 0.05s — it is still reading; each statement is bounded at 0.05s, and the poll waits for it before reading again"]);
 
   // the store's statement timeout ends the read: the guard frees, and the next tick reads
   settle(Object.assign(new Error("canceling statement due to statement timeout"), { code: "57014" }));
