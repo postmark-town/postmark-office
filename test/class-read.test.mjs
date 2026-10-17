@@ -15,7 +15,8 @@
 //       default; a property's own children ride beneath it; a sovereign one is
 //       open to the maker; a subclass standing under its class is no property
 //   C4  afforded actions: who, where, the effect quoted from the residue class,
-//       and the residue's `requires` as the condition
+//       and the residue's `requires` as the condition, read by the grant reader
+//       so explain's actions are the act cards' for the same class
 //   C5  the world door: explain: "<class>" by slug and by full id, a read path
 //       still answering first, an unknown name bounced with the nearest classes
 //   C6  the pointer on a mark read (markPointer): class field, then kind, then
@@ -37,10 +38,10 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 process.env.WORLD_APEX = "1";
-const { withWorld, writeFixtureDb } = await import("./helpers/world-rows.mjs");
+const { withNoWorld, withWorld, writeFixtureDb } = await import("./helpers/world-rows.mjs");
 const { graphDb, twinnedStatements } = await import("../src/world-graph-db.mjs");
 const cr = await import("../src/class-read.mjs");
-const { worldApex } = await import("../src/world-apex.mjs");
+const { worldApex, gatherActions } = await import("../src/world-apex.mjs");
 
 const WORKS = "WORLD/marks/let-there-be-light/the-town-centre/the-keeping-works/postmark-node";
 let seq = 0;
@@ -72,6 +73,10 @@ function layer(form) {
     klass("candy", { extends: "consumable", body: "Candy is a consumable sweet." }),
     klass("parcel", { extends: "mark", dials: dialsFor({ makers: false, extent_m: 25 }), body: "A parcel is sovereign ground." }),
     klass("entity", { extends: "postmark-node", body: "An entity acts." }),
+    // the article goes by the sound: a unit, an hour
+    klass("unit", { extends: "mark" }), klass("widget", { extends: "unit" }),
+    // a town constitution class standing OUTSIDE the Keeping Works is an instance's spelling, not a class
+    node("the-town/stray-class", { class: "stray", body: "not in the works", in_works: false, path: "WORLD/marks/elsewhere/stray" }),
     klass("resident", { extends: "entity", body: "A household's living voice.",
       actions: [{ action: "say", residue: "the-town/say" }, { action: "strike", residue: "the-town/strike" },
         { action: "walk", for: "human", scope: "own-ground", residue: "the-town/depart" }, { action: "wave", residue: "the-town/no-such-residue" }] }),
@@ -199,12 +204,23 @@ test("C4: afforded actions: who, where, the effect quoted from the residue, and 
   const acts = cr.explainClass(dbOf("label"), "resident").actions;
   assert.deepEqual(acts.map((a) => a.action), ["say", "strike", "walk", "wave"]);
   const [say, strike, walk, wave] = acts;
-  assert.deepEqual(say, { action: "say", who: "resident", where: "wherever the class reaches", effect: "Say is the speaking verb.", effect_from: "the-town/say", conditions: null });
+  assert.deepEqual(say, { action: "say", who: "resident", where: "unscoped", effect: "Say is the speaking verb.", effect_from: "the-town/say", conditions: null });
   assert.equal(strike.conditions, "within a portal-ground, while it is spent");
   assert.deepEqual(strike.requires, { within_class: "portal-ground", phase: "spent" });
   assert.deepEqual([walk.who, walk.where], ["human", "own-ground"]);
-  assert.deepEqual([wave.effect, wave.residue_unresolved], [null, "the-town/no-such-residue"], "a residue nothing declares is said, never papered over");
+  assert.deepEqual([wave.effect, wave.residue_unresolved], ["", "the-town/no-such-residue"], "a residue nothing declares is said, never papered over");
   assert.deepEqual(cr.explainClass(dbOf("label"), "candy").actions, [], "a class declaring none answers none");
+});
+
+test("C4b: explain's actions are the act cards' for the same class: the same verbs, the same quote, the same residue", () => {
+  for (const form of FORMS) {
+    const db = dbOf(form);
+    const cards = gatherActions(db, { spineIds: ["the-town/resident"] }).entries.filter((e) => e.from === "the-town/resident");
+    const explained = cr.explainClass(db, "resident").actions;
+    assert.ok(cards.length >= 4, `${form}: the act cards read the class (${cards.length})`);
+    assert.deepEqual(explained.map((a) => [a.action, a.effect, a.effect_from ?? null, a.residue_unresolved ?? null]),
+      cards.map((c) => [c.action, c.blurb, c.blurb_from ?? null, c.residue_unresolved ?? null]), `${form}: one class, one reading`);
+  }
 });
 
 test("C5: the world door: explain: a class by slug and by full id; a read path answers first; an unknown name bounces with the nearest", async () => {
@@ -222,6 +238,23 @@ test("C5: the world door: explain: a class by slug and by full id; a read path a
     assert.ok(!("nearest_classes" in await worldApex({ explain: "zzzzzzzzzz" }, null, {})), "no near name, no list");
     assert.equal((await worldApex({ explain: "candy", do: "say" }, null, {})).code, 422, "one call does one thing");
     assert.equal((await worldApex({ explain: "kai/a-gloamcap" }, null, {})).code, 422, "an instance is not a class: investigate it");
+  });
+});
+
+test("C5b: a class answers by its id exactly when it answers by its name, and an article goes by the sound", () => {
+  const db = dbOf("label");
+  assert.equal(cr.explainClass(db, "stray"), null, "outside the Works, not a class by name");
+  assert.equal(cr.explainClass(db, "the-town/stray-class"), null, "nor by its id");
+  assert.equal(cr.explainClass(db, "the-town/thing").class, "the-town/thing");
+  assert.equal(cr.classPointer(db, "widget"), 'kind: widget · a unit · a mark — explain: "widget"');
+});
+
+test("C5c: with no world store loaded, a class explain is an outage (503), and a path still answers", async () => {
+  await withNoWorld(async () => {
+    const out = await worldApex({ explain: "candy" }, null, {});
+    assert.equal(out.code, 503, JSON.stringify(out).slice(0, 200));
+    assert.match(out.defect, /class layer cannot be read/);
+    assert.equal((await worldApex({ explain: "who" }, null, {})).explains, "who");
   });
 });
 

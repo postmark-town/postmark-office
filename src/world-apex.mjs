@@ -1869,7 +1869,7 @@ async function pointed(answer, klass) {
   try {
     const { namedPointer, withPointer } = await import("./class-read.mjs");
     return withPointer(answer, namedPointer(klass));
-  } catch { return answer; }
+  } catch (e) { console.error(`[class-read] the pointer for ${klass} could not be read: ${e?.message ?? e}`); return answer; }
 }
 
 /** Where the newest crossing save put a resident: { crossing, x, y }, or null (STATE/snapshot/<n>/entities.json). */
@@ -3614,7 +3614,8 @@ async function apexReadAction(args, key, ctx = {}) {
 async function explainClassOr(path, bounced) {
   const { explainClass, nearestClasses } = await import("./class-read.mjs");
   const store = openStore();
-  if (!store.db) return { ...bounced, classes_unreadable: store.unavailable };
+  // no store is an outage, not the reader's mistake: 503, never the grammar's 422
+  if (!store.db) return bounce(503, `the class layer cannot be read: ${store.unavailable}`, "explain: on a path still answers; a class answers once the world store has loaded");
   const answer = explainClass(store.db, path);
   if (answer) return answer;
   const near = nearestClasses(store.db, path);

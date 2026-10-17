@@ -2529,7 +2529,8 @@ export async function worldInvestigate(args = {}, key = null) {
   // the store's class layer (class-read.mjs § markPointer). Absent when the
   // store cannot answer, and a failing class read never fails the investigate.
   let pointer = null;
-  try { pointer = (await import("./class-read.mjs")).markPointer(String(args.mark)); } catch { pointer = null; }
+  try { pointer = (await import("./class-read.mjs")).markPointer(String(args.mark)); }
+  catch (e) { pointer = null; console.error(`[class-read] the pointer for ${args.mark} could not be read: ${e?.message ?? e}`); }
   const classPointer = pointer ? { class_pointer: pointer } : {};
 
   // OPT-IN, and OFF IS BYTE-IDENTICAL. Without with_image: true this branch is

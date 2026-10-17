@@ -38,13 +38,22 @@
 import { CLASS_ROSTER_GATE_SQL } from "./world-store.mjs";
 import { classRosterGate, classRosterGateValue, jx, registerTwin } from "./world-graph-db.mjs";
 import { openStore, residueOf, requiresOf } from "./world-apex.mjs";
+import { entriesOfClass } from "./world-grants.mjs";
 
 const parseJson = (s, fallback) => { if (s != null && typeof s === "object") return s; try { return JSON.parse(s ?? ""); } catch { return fallback; } };
 
 // The class node a class NAME declares: the roster gate (a class-carrying town
-// constitution mark standing in the Keeping Works), the first in record order.
-const CLASS_ID_SQL = `SELECT id FROM nodes WHERE ${CLASS_ROSTER_GATE_SQL} AND json_extract(props, '$.class') = ? LIMIT 1`;
+// constitution mark standing in the Keeping Works), the first in record order
+// (rowid in the file, the snapshot's own order in the twin).
+const CLASS_ID_SQL = `SELECT id FROM nodes WHERE ${CLASS_ROSTER_GATE_SQL} AND json_extract(props, '$.class') = ? ORDER BY rowid LIMIT 1`;
 registerTwin(CLASS_ID_SQL, (g, name) => g.nodes.filter((n) => classRosterGate(n) && jx(n.p, "class") === name).slice(0, 1).map((n) => ({ id: n.id })));
+
+// The same gate asked of a full id, so a class answers by its id exactly when it answers by its name.
+const CLASS_BY_ID_SQL = `SELECT id FROM nodes WHERE id = ? AND ${CLASS_ROSTER_GATE_SQL}`;
+registerTwin(CLASS_BY_ID_SQL, (g, id) => {
+  const n = g.byId.get(String(id));
+  return n && classRosterGate(n) ? [{ id: n.id }] : [];
+});
 
 // Every class name the roster knows, for the nearest-names answer to an unknown one.
 const CLASS_NAMES_SQL = `SELECT DISTINCT json_extract(props, '$.class') AS class FROM nodes WHERE ${CLASS_ROSTER_GATE_SQL} ORDER BY class`;
@@ -54,6 +63,7 @@ registerTwin(CLASS_NAMES_SQL, (g) => [...new Set(g.nodes.filter(classRosterGate)
 // The class's structure: what it extends and the actions it declares. Same
 // authorship and tier gate as residueOf (only the town's constitutional record).
 const CLASS_SHAPE_SQL = `SELECT id,
+         json_extract(props, '$.class')       AS class,
          json_extract(props, '$.extends')     AS extends,
          json_extract(props, '$.actions')     AS actions,
          json_extract(props, '$.affordances') AS affordances
@@ -63,7 +73,7 @@ const CLASS_SHAPE_SQL = `SELECT id,
 registerTwin(CLASS_SHAPE_SQL, (g, id) => {
   const n = g.byId.get(String(id));
   return n && n.by === "the-town" && n.tier === "constitution" && jx(n.p, "class") !== null
-    ? [{ id: n.id, extends: jx(n.p, "extends"), actions: jx(n.p, "actions"), affordances: jx(n.p, "affordances") }] : [];
+    ? [{ id: n.id, class: jx(n.p, "class"), extends: jx(n.p, "extends"), actions: jx(n.p, "actions"), affordances: jx(n.p, "affordances") }] : [];
 });
 
 // The property rung: the town's nodes standing under a class (or under a
@@ -102,7 +112,8 @@ registerTwin(CHILDREN_SQL, (g, id) => g.edges
   .map((p) => ({ id: p.id, kind: p.subkind ?? null, tier: p.tier ?? null, slug: jx(p.p, "slug"), name: jx(p.p, "name"),
     slot: jx(p.p, "slot"), value: jx(p.p, "value"), dflt: jx(p.p, "default"), dflt_type: jtype(p.p, "default"), body: jx(p.p, "body") })));
 
-const ask = (db, sql, ...args) => { try { return db.prepare(sql).all(...args); } catch { return []; } };
+// A statement that fails throws to the door, which logs it: an empty answer would read as "no such class".
+const ask = (db, sql, ...args) => db.prepare(sql).all(...args);
 
 /** The class node id a name (or a full id) declares, or null. */
 export function classIdOf(db, name) {
@@ -111,8 +122,8 @@ export function classIdOf(db, name) {
   if (!s) return null;
   const byName = ask(db, CLASS_ID_SQL, s)[0]?.id ?? null;
   if (byName) return byName;
-  // A full id (`the-town/thing`) always means the class it declares.
-  return s.includes("/") && residueOf(db, s) ? s : null;
+  // A full id (`the-town/thing`) means the class it declares, under the same gate as the name.
+  return s.includes("/") ? (ask(db, CLASS_BY_ID_SQL, s)[0]?.id ?? null) : null;
 }
 
 const MAX_DEPTH = 3; // a property's children, and theirs: the regress stops at the four fixed fields
@@ -168,30 +179,29 @@ const conditionWords = (req) => {
 
 const EFFECT_MAX = 150; // the class grammar's own cap, as the act cards quote it
 
-/** The afforded actions a class declares, each with who, where, its effect and its conditions. */
+/**
+ * The afforded actions a class declares, each with who, where, its effect and
+ * its conditions. The entries are the grant reader's own (world-grants.mjs §
+ * entriesOfClass: `actions ?? affordances`, `for` by kindOf), so explain and
+ * the act cards cannot read one class two ways; the effect is quoted as the act
+ * card quotes its blurb (world-apex § entriesFrom), and the conditions are the
+ * residue's `requires`.
+ */
 export function actionsOf(db, shape) {
-  // `actions` is the key; `affordances` the pre-rename spelling (world-apex § entriesFrom).
-  const declared = parseJson(shape?.actions, null) ?? parseJson(shape?.affordances, []);
-  if (!Array.isArray(declared)) return [];
-  const out = [];
-  for (const a of declared) {
-    const action = String(a?.action ?? a?.subverb ?? "").trim();
-    if (!action) continue;
-    const residueId = String(a?.residue ?? "").trim() || null;
+  return entriesOfClass(shape, { channel: "class", parse: (x) => parseJson(x, null) }).map((e) => {
+    const residueId = String(e.residue ?? "").trim() || null;
     const meaning = residueId ? residueOf(db, residueId) : null;
     const requires = residueId ? requiresOf(db, residueId) : null;
-    out.push({
-      action,
-      // LOGOS § The human class: "Absent means resident".
-      who: a?.for ? String(a.for) : "resident",
-      where: a?.scope ? String(a.scope) : "wherever the class reaches",
-      effect: meaning ? meaning.text.slice(0, EFFECT_MAX) : null,
+    return {
+      action: e.action,
+      who: e.for,
+      where: e.scope == null || String(e.scope).trim() === "" ? "unscoped" : String(e.scope),
+      effect: meaning ? meaning.text.slice(0, EFFECT_MAX) : String(e.blurb ?? "").slice(0, EFFECT_MAX),
       ...(meaning ? { effect_from: meaning.from } : residueId ? { residue_unresolved: residueId } : {}),
       conditions: conditionWords(requires),
       ...(requires ? { requires } : {}),
-    });
-  }
-  return out;
+    };
+  });
 }
 
 /** The extends chain above a class: `[{ class, id }]`, nearest first, stopping at a loop or an unknown name. */
@@ -224,7 +234,13 @@ export function makersOf(db, id, chain = chainOf(db, id)) {
   return { value: null, from: null };
 }
 
-const article = (w) => (/^[aeiou]/i.test(String(w)) ? "an" : "a");
+// "an" by the sound, not the letter: a unit, a user, a one-off; an hour, an heir.
+const article = (w) => {
+  const x = String(w).toLowerCase();
+  if (/^(hour|heir|honest|honou?r)/.test(x)) return "an";
+  if (/^(uni|use|usu|uti|ure|eu|ewe|one|once)/.test(x)) return "a";
+  return /^[aeiou]/.test(x) ? "an" : "a";
+};
 const ROOT = "postmark-node"; // the root of every chain, named by no pointer
 
 /** The one-line class pointer an instance read carries: `kind: thing · a mark — explain: "thing"`. Null when the class is unknown. */
@@ -333,4 +349,4 @@ export const withPointer = (answer, pointer) =>
   answer && !answer.error && pointer ? { ...answer, class_pointer: pointer } : answer;
 
 /** The statements this module asks, each with its twin, for the tests to hold to their SQL. */
-export const CLASS_READ_STATEMENTS = Object.freeze([CLASS_ID_SQL, CLASS_NAMES_SQL, CLASS_SHAPE_SQL, CHILDREN_SQL, MARK_KIND_SQL]);
+export const CLASS_READ_STATEMENTS = Object.freeze([CLASS_ID_SQL, CLASS_BY_ID_SQL, CLASS_NAMES_SQL, CLASS_SHAPE_SQL, CHILDREN_SQL, MARK_KIND_SQL]);
