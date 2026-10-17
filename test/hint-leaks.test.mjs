@@ -321,22 +321,30 @@ for (const [child, defect] of [["src/fund-exec.mjs", "the receipt refused"], ["s
 // locally") reaches the payer as an unclassified 500.
 test("POS-653 src/fund-exec.mjs § classifyFatal: a pot that closed in the same minute is a 409 in plain words; a pot that could not be closed is a fixed 500, its words in the log", async () => {
   const { classifyFatal } = await load("src/fund-exec.mjs");
-  for (const stderr of [
-    `FATAL: pot "meeps-home" is closed, not open — a draft or closed pot takes no dollars; opening one is the founder's word`,
-    `FATAL: pot "meeps-home" is draft, not open — a draft or closed pot takes no dollars; opening one is the founder's word`,
-    `FATAL: pot "meeps-home" takes its need once and has already closed — it takes its need once, ever`,
+  // a pot that is not open: neutral words, for a draft has not asked for anything (review-3896)
+  // and a once pot that already closed has what it asked for
+  for (const [stderr, defect] of [
+    [`FATAL: pot "meeps-home" is closed, not open — a draft or closed pot takes no dollars; opening one is the founder's word`, "this pot is not taking dollars"],
+    [`FATAL: pot "meeps-home" is draft, not open — a draft or closed pot takes no dollars; opening one is the founder's word`, "this pot is not taking dollars"],
+    [`FATAL: pot "meeps-home" takes its need once and has already closed — it takes its need once, ever`, "this pot has what it asked for"],
   ]) {
     const { value, log } = await logged(() => classifyFatal(stderr));
-    assert.deepEqual(value, { code: 409, defect: "this pot has what it asked for", hint: "nothing was recorded; your payment is untouched" }, stderr);
+    assert.deepEqual(value, { code: 409, defect, hint: "nothing was recorded; your payment is untouched" }, stderr);
     keepsOut(value, ["meeps-home", "founder"], "a closed pot's refusal");
     assert.equal(log.length, 0, "an ordinary race is not a fault");
   }
+  // the close-failure label is the CLI's own "took pot … to its need" only: another "could not be read" is the generic 500
+  const other = await logged(() => classifyFatal("FATAL: the dial could not be read (ENOENT)"));
+  assert.equal(other.value.defect, "the receipt refused");
+  assert.ok(!/filled its pot/.test(other.log), "a fatal that filled no pot never wears the fill's label");
+
   const PATH = "/srv/postmark-office/town-clone/WHITE_PAGES/pot-meeps-home.json";
   const stderr = `FATAL: the receipt was appended locally and took pot "meeps-home" to its need, but its file could not be closed (EACCES: permission denied, open '${PATH}'); under the office's recorder nothing lands, and by hand set its status to closed before any other dollar`;
   const { value, log } = await logged(() => classifyFatal(stderr));
   assert.deepEqual(value, { code: 500, defect: "the receipt refused", hint: "nothing was recorded; your payment is untouched" });
   keepsOut(value, [PATH, "appended locally", "is on the ledger"], "a pot that could not be closed");
   logSays(log, [PATH], "a pot that could not be closed");
+  assert.ok(/the receipt filled its pot and the pot could not be closed/.test(log), "the fill's own label is in the log");
 });
 
 // ── the review of #525 ──────────────────────────────────────────────────────
