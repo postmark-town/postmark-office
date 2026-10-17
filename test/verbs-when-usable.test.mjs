@@ -176,7 +176,9 @@ test("24 · THE INVARIANT over busy rooms: can = the object-less verbs ∪ every
 // things in the reader's hands (world-kinds § usableAt) — never the room handed over whole.
 function gathered(room) {
   const where = (m) => room.places?.get?.(m.id) ?? m.at;
-  const within = room.marks.filter((m) => liveHolder(room.attachments, m.id) == null && standsWithin(HERE, { ...m, at: where(m) }).stands);
+  // the footprint holds the reader (a mark's `at` is its centre), never the looser reach of standsWithin
+  const under = (m) => { const a = where(m), e = m.extent ?? { w: 0, h: 0 }; return Math.abs(HERE.x - a.x) <= e.w / 2 && Math.abs(HERE.y - a.y) <= e.h / 2; };
+  const within = room.marks.filter((m) => liveHolder(room.attachments, m.id) == null && under(m));
   const nearby = room.marks.filter((m) => !within.includes(m));
   const ids = new Set([...viewMarkIds({ within, nearby }), ...room.attachments.filter((a) => liveHolder(room.attachments, a.target) === "cy").map((a) => a.target)]);
   return { ...room, marks: room.marks.filter((m) => ids.has(m.id)), within };
