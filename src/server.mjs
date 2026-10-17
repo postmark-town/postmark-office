@@ -1,11 +1,11 @@
 // server.mjs — Postmark's post office, read side (gold plan postmark-doors, P1).
 //
-// Serves the CONTRACT.md read verbs from the hydrated index (office.db).
+// Serves the CONTRACT.md read verbs from the town index (the store's, POS-268).
 // Zero dependencies. Every response carries X-Postmark-As-Of: <commit sha>.
 // Errors use the town's bounce vocabulary. A write this office cannot perform
 // answers 409 not-yet-open (no town clone to write through, a dormant spend).
 //
-//   node src/server.mjs [--port 4380] [--db office.db] [--oauth-db oauth.db]
+//   node src/server.mjs [--port 4380] [--oauth-db oauth.db]
 //
 // Keys are how we know who's at the door; a key may act `from:` only its own
 // residents. AUTH (CONTRACT.md § Auth, POS-525): REST reads are public (P-hub),
@@ -18,10 +18,9 @@
 // node tools/static-keys-import.mjs writes it (src/static-keys.mjs).
 
 import { createServer } from "node:http";
-import { DatabaseSync } from "node:sqlite";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
+import { createReadStream, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { marksCountsFor } from "./town-marks.mjs";
 import { updateAddressBody, updateAddressFields, updateHome, updateHomeImage, updateProfile, updateProfileAvatar, updateWindow } from "./edit.mjs";
@@ -44,12 +43,11 @@ import { standingBounce, standingOf, isSuspended, bounceSentence, STANDING_BOUNC
 import { rolesSchema, roleGate, roleGatesOn, ROLE_SUBSCRIBER } from "./roles.mjs";
 import { openPaper, paperworkStoreOn } from "./paperwork.mjs"; // POS-271: sign-in, roles, the media ledger and the town log, one door
 import { arrivalPage } from "./arrival.mjs";
-import { townSummary, residentList, residentPage, resident, mailList, letter, search, bulletinList, bulletinEntry, townLedger, townDocs, stampsRoster, stampsFor, stampsDetail, questBoardFor, metricsMail, letterList, LETTER_IDS_MAX, regionList, regionOne, home, identityOf, repoLog } from "./queries.mjs";
+import { LETTER_IDS_MAX, identityOf } from "./queries.mjs";
 import { householdsFor, withHouseholdBlock } from "./households.mjs";
 import { storeRefresher, STORE_READ_BOUND_MS } from "./store-refresh.mjs"; // the poll's store read, one in flight and bounded (POS-639)
-import * as townIndexStore from "./town-index-store.mjs"; // the office.db readers moved to the store (POS-268)
-import { probeOf, isUnreachable, UNREACHABLE_DEFECT } from "./index-probe.mjs"; // the write path's questions of the index, office.db's or the store's (POS-268)
-const { townIndexReads } = townIndexStore;
+import * as townIndexStore from "./town-index-store.mjs"; // the town index, the store's (POS-268)
+import { probeOf, isUnreachable, UNREACHABLE_DEFECT } from "./index-probe.mjs"; // the write path's questions of the index (POS-268)
 import { votesAvailable, voteList, voteView, stakeViaOffice } from "./votes.mjs";
 import { doorstepBundle } from "./doorstep-bundle.mjs"; // the doorstep, finished — one implementation, three doors
 import { giftViaOffice, isPrincipal, principalNow, startPrincipalRefresher } from "./ops.mjs";
@@ -83,7 +81,7 @@ import { loopLag } from "./loop-lag.mjs"; // POS-267: how long the one thread ke
 import { storeTxnWatch } from "./store-txn-watch.mjs"; // POS-370: does any office connection sit idle inside a transaction
 import { readReleaseStamp } from "./release.mjs"; // POS-60: the deploy receipt the auto-deploy probes
 import { currentCrossing, CROSSING_DERIVATION } from "./crossings.mjs"; // the town clock, served at the door
-import { withLastActive, withLastActiveOn } from "./last-active.mjs"; // the roster's and the card's last_active, from the store's acts (POS-481)
+import { withLastActiveOn } from "./last-active.mjs"; // the roster's and the card's last_active, from the store's acts (POS-481)
 import { roleFrom, workerSafe, writerAddressFrom, readRoleBounce, penTokenFor, roleDisclosure } from "./role.mjs"; // DEC-4/G3: read-only workers behind nginx
 import { IN_READ_WORKER, announce, mcpWorkerTakes, onAnnounce, readWorkerCount, serveReadsInWorker, startReadPool, workerTakes, wantsEarshot } from "./read-workers.mjs"; // POS-266: reads on the other cores
 import { readShape } from "./world-read-shape.mjs"; // POS-632 W4: the office's default shape decides whether a handover carries earshot
@@ -140,7 +138,6 @@ const READ_ONLY_ROLE = ROLE === "read";
 const WRITER_URL = writerAddressFrom();
 const ROLE_BOUNCE = readRoleBounce(WRITER_URL);
 
-const DB_PATH = resolve(ROOT, arg("--db", "office.db"));
 const TOWN_CLONE = process.env.TOWN_CLONE ?? resolve(ROOT, "town-clone");
 // oauth.db is auth paperwork, not town truth — separate from the rebuildable
 // index by design (gold plan postmark-oauth); wiping it only re-prompts sign-in.
@@ -298,203 +295,37 @@ const STARTED_AT = new Date().toISOString();
 const canWrite = !READ_ONLY_ROLE && existsSync(join(TOWN_CLONE, "WHITE_PAGES"));
 if (!canWrite && !READ_ONLY_ROLE) console.warn(`WARN: no town clone at ${TOWN_CLONE} — POST /letters will answer not-yet-open.`);
 
-// ── the index, and how it is replaced under a running office ─────────────────
+// ── the index: the store's town index (POS-268, POS-656) ─────────────────────
 //
-// office.db is REBUILT every tick: hydrate writes `office.db.new` and the tick
-// renames it over this path. Until 2026-08-11 the tick then ran `systemctl
-// restart postmark-office`, because the boot-time handle WAS the data — the
-// restart was the reload. It also killed every live MCP session on the
-// quarter-hour. So the handle is swapped in place instead, and a restart goes
-// back to meaning the only thing it should mean: new code.
-//
-// THE ORDER IS THE WHOLE DESIGN. The replacement is opened and its `meta` read
-// BEFORE anything is swapped, so a half-written file, a non-database, or an
-// index with no meta table leaves the office serving exactly what it was
-// serving a moment ago — one line on stderr, and another look on the next poll.
-//
-// node:sqlite is synchronous, so no statement is ever in flight ACROSS the
-// swap. What can outlive it is a request that took the handle as an argument
-// and then awaited something slow — `handleOauth` holds one across a GitHub
-// round trip — so a retired index is kept open until its last borrower has
-// answered, not merely until a timer says probably.
+// Every door that reads the town index reads the store (town-index-store.mjs).
+// The office opens no office.db: the file and its rehydrate are retired, and
+// the SQLite readers went with them (POS-656). The as-of every answer's header
+// carries is the store's own (town_meta `as_of`, as the held probe last read
+// it), "unknown" until the first load.
 
-// THE TOWN ROLL, from the office's own reader — never a second resolver.
-// `residentList` is the roll `/residents` and `list_residents` are both cut
-// from — since 2026-09-10 each of them serves it through `residentPage`, which
-// bounds and counts it but never changes what is true —
-// so the roll the position doors ask about is the same roll the town publishes.
-// One named function because three doors need it, and a roll that differed
-// between them would be the split-brain positions.mjs exists to prevent.
-// Answers `null`, never a silent `[]`: the doors disclose an absent roll
-// (`the-town/the-disclosure`), and they cannot disclose what looks like an
-// empty town.
-// ── MEMOISED ON THE INDEX'S OWN STAMP (2026-08-29, the party) ────────────────
-//
-// `residentList` was ~11% of a saturated event loop under the party's load: the
-// whole roll re-read and re-mapped on every position door, for every guest, and
-// it is the same roll for all of them. Keyed on `stampOf()` — (ino, mtime,
-// size) — which is exactly what already tells this file that the index has been
-// swapped. So the roll is recomputed when the record changes and not once more
-// than that; the memo cannot go stale without the stamp saying so.
-//
-// The `null`-on-throw contract above is untouched, and a throw caches nothing:
-// the doors must keep being able to disclose an absent roll rather than an
-// empty town.
-let _roll = { stamp: null, out: null };
-
+// THE TOWN ROLL, from the office's own reader — never a second resolver. The
+// position doors ask about the same roll `/residents` and `list_residents`
+// publish, because a roll that differed between them would be the split-brain
+// positions.mjs exists to prevent. It is the store's, as the poll below last
+// loaded it (town-index-store.mjs § storeRollHandles): `null` until the first
+// load, never a silent `[]`, so the doors disclose an absent roll
+// (`the-town/the-disclosure`) rather than an empty town.
 function townRoll() {
-  // ⚑ `indexStamp`, THE MODULE VARIABLE — not `stampOf()` and not
-  // `stampOf(DB_PATH)`, and both wrong answers are worth naming.
-  //
-  // The first shipped as `stampOf()` with NO argument. `stampOf` takes a path
-  // and has no default, so the bare call is `statSync(undefined)`, which throws,
-  // which the catch turns into `null` — so the key was null on every call, the
-  // guard never held, and the memo recomputed the roll exactly as before. No
-  // crash, contract preserved, relief silently absent. My own "the edit changed
-  // nothing" class, and it took a reviewer to see it.
-  //
-  // `stampOf(DB_PATH)` would run, and would be subtly wrong: it names the FILE
-  // ON DISK, while `residentList(db)` reads the OPEN HANDLE. Those differ for
-  // the whole reload-poll window — and longer if `openIndex` throws, since
-  // `indexStamp` is deliberately not recorded then. Keying on the file would
-  // cache the OLD roll under the NEW stamp and serve it until the next swap.
-  //
-  // `indexStamp` is assigned in the same act as `db` (see `reloadIndex`), and
-  // only when the open succeeded. It names the index the roll is actually read
-  // from, which is the only thing this memo may be keyed on.
-  const stamp = indexStamp;
-  // With the switch on (POS-268) the roll is the store's, as the reload poll
-  // last loaded it (town-index-store.mjs § storeRollHandles): null until the
-  // first load, which the position doors disclose as an absent roll.
-  if (townIndexReads()) return townIndexStore.storeRollHandles();
-  if (stamp !== null && stamp === _roll.stamp) return _roll.out;
-  try {
-    const out = residentList(db).map((r) => r.handle);
-    _roll = { stamp, out };
-    return out;
-  } catch { return null; }
+  return townIndexStore.storeRollHandles();
 }
 
-function openIndex(path = DB_PATH) {
-  const handle = new DatabaseSync(path, { readOnly: true });
-  try {
-    const m = Object.fromEntries(handle.prepare("SELECT key, value FROM meta").all().map((r) => [r.key, r.value]));
-    return { handle, meta: m, asOf: m.as_of ?? "unknown", refs: 0, retiredAt: 0 };
-  } catch (e) {
-    // Every throw past the open closes the handle: on Windows an unclosed one
-    // locks the file, so a bent index would cost a handle per poll forever.
-    try { handle.close(); } catch { /* it never opened far enough to matter */ }
-    throw e;                              // fatal at boot; on a reload, a retry
-  }
-}
-
-// (ino, mtime, size), not mtime alone. The tick's `mv` gives the path a new
-// inode; a test — or a Windows box, where renaming over an open handle is
-// EPERM — overwrites the same inode's bytes instead. Either one is a new index.
-const stampOf = (path) => {
-  try { const s = statSync(path); return `${s.ino}|${s.mtimeMs}|${s.size}`; }
-  catch { return null; }
-};
-
-// ── A SWITCHED OFFICE OPENS NO office.db (POS-268 part 5a) ───────────────────
-// With TOWN_INDEX_READS=store every door reads the store, so the switched
-// office does not open office.db at all: it boots, and answers, with the file
-// gone. In its place stands ABSENT_INDEX, whose every read throws by name, and
-// a meta that throws on any key, so a reader still asking office.db is a loud
-// 500 that names it, never a quiet answer from a file the store replaced
-// (`the-town/the-disclosure`). The as-of every answer's header carries is the
-// store's own (town_meta `as_of`, as the held probe last read it), "unknown"
-// until the first load. Unswitched, nothing here runs and office.db is opened,
-// hot-reloaded and retired exactly as before; rolling back is unsetting the switch.
-const INDEX_SWITCHED = townIndexReads();
-const absent = (what) => () => {
-  throw new Error(`office.db is not opened with TOWN_INDEX_READS=store: ${what} still reads it (POS-268)`);
-};
-const ABSENT_INDEX = Object.freeze({ prepare: absent("a prepared statement"), exec: absent("an exec"), close() {} });
-const ABSENT_META = new Proxy(Object.freeze({}), {
-  get(_t, k) { if (typeof k === "symbol" || k === "then" || k === "toJSON") return undefined; return absent(`office.db's meta \`${String(k)}\``)(); },
-  ownKeys: absent("a copy of office.db's meta"),
-});
 const storeAsOf = () => townIndexStore.storeProbeAsOf() ?? "unknown";
+let AS_OF = "unknown";
 
-let INDEX = INDEX_SWITCHED
-  ? { handle: ABSENT_INDEX, meta: ABSENT_META, asOf: "unknown", refs: 0, retiredAt: 0 }
-  : openIndex();
-// The three names every route below reads. Reassigned together on each swap,
-// and read at CALL time everywhere — nothing captures them in a boot closure.
-let db = INDEX.handle;
-let meta = INDEX.meta;
-let AS_OF = INDEX.asOf;
-
-// Overridable because the numbers are a judgement about how fast a rebuild
-// should show, not a law — and because the reload tests would otherwise spend
-// half a minute each waiting out a production-sized grace.
+// Overridable because the number is a judgement about how fast a new index
+// should show, not a law, and because the tests would otherwise wait it out.
 const msEnv = (name, fallback) => { const n = Number(process.env[name]); return Number.isFinite(n) && n > 0 ? n : fallback; };
-const RELOAD_POLL_MS = msEnv("OFFICE_RELOAD_POLL_MS", 5_000);        // the tick lands 4×/hour; 5s is "before anyone notices"
-const RETIRE_GRACE_MS = msEnv("OFFICE_RETIRE_GRACE_MS", 10_000);     // the floor a retired index waits even with no borrowers
-const RETIRE_CEILING_MS = msEnv("OFFICE_RETIRE_CEILING_MS", 300_000); // ...and the ceiling, past which a stuck borrower loses it
-const RETIRED = [];
-let indexStamp = stampOf(DB_PATH);
-let reloadComplaint = null;
+const RELOAD_POLL_MS = msEnv("OFFICE_RELOAD_POLL_MS", 5_000);        // the ingest lands 4×/hour; 5s is "before anyone notices"
 
 // The journal lines below are the MAIN thread's (POS-266). A read worker runs
-// the same reloads on the same files and would say each line again, once per
-// worker, where an operator reads one office.
+// the same reloads and would say each line again, once per worker, where an
+// operator reads one office.
 const journal = IN_READ_WORKER ? { log() {}, error() {} } : console;
-
-function reloadIndex() {
-  if (INDEX_SWITCHED) return;   // a switched office holds no office.db to reload (§ A SWITCHED OFFICE)
-  const stamp = stampOf(DB_PATH);
-  if (stamp === null || stamp === indexStamp) return;   // vanished, or unchanged
-  let next;
-  try { next = openIndex(); }
-  catch (e) {
-    // The stamp is deliberately NOT recorded: the file is mid-write or bent,
-    // and the next poll has to look again. One line per DISTINCT complaint —
-    // an index that stays broken must not fill the journal at 12 lines a minute.
-    const why = String(e?.message ?? e).slice(0, 160);
-    if (reloadComplaint !== why) {
-      reloadComplaint = why;
-      journal.error(`[office] ${DB_PATH} changed but would not open (${why}) — still serving as-of ${AS_OF.slice(0, 12)}, retrying every ${RELOAD_POLL_MS / 1000}s`);
-    }
-    return;
-  }
-  indexStamp = stamp;
-  reloadComplaint = null;
-  const old = INDEX;
-  INDEX = next;
-  db = next.handle; meta = next.meta; AS_OF = next.asOf;
-  old.retiredAt = Date.now();
-  RETIRED.push(old);
-  journal.log(`[office] index reloaded — as-of ${AS_OF.slice(0, 12)} (was ${old.asOf.slice(0, 12)})`);
-  announce("index");
-}
-
-function sweepRetired(now = Date.now()) {
-  for (let i = RETIRED.length - 1; i >= 0; i--) {
-    const idx = RETIRED[i];
-    const waited = now - idx.retiredAt;
-    if (waited < RETIRE_GRACE_MS) continue;
-    if (idx.refs > 0 && waited < RETIRE_CEILING_MS) continue;
-    // A borrower still holding after five minutes is not a slow request, it is a
-    // leak — and an index kept open forever by one is the worse of the two bugs.
-    if (idx.refs > 0)
-      journal.error(`[office] closing the index as-of ${idx.asOf.slice(0, 12)} with ${idx.refs} request(s) still holding it after ${Math.round(waited / 1000)}s`);
-    try { idx.handle.close(); } catch { /* already gone */ }
-    RETIRED.splice(i, 1);
-    // Printed because a handle that is never released is invisible otherwise —
-    // on Windows it would silently lock the file, and on any box it is the one
-    // half of the swap an operator (or a test) cannot see from the outside.
-    journal.log(`[office] retired index as-of ${idx.asOf.slice(0, 12)} closed`);
-  }
-}
-
-// POS-266: every thread polls the index stamp on its own, and the main thread's
-// reload also tells the workers to look now, so a read handed to a worker after
-// the main thread swapped is not answered from the file before (read-workers.mjs).
-// The world has no stamp to poll: its caches key on the published world graph
-// snapshot, which the "world-graph" announcement below moves (POS-270 lane W 3b).
-onAnnounce("index", reloadIndex);
 
 // ONE STORE READ IN FLIGHT, AND NEVER FOREVER (POS-639; store-refresh.mjs says
 // why): a tick that finds the last roll+probe pair still reading skips. Each
@@ -508,36 +339,32 @@ const storeTick = storeRefresher({
     townIndexStore.refreshStoreProbe({ statementTimeoutMs: STORE_READ_BOUND_MS }).catch(() => {}),
   ]),
   onRead: () => {
-    if (!INDEX_SWITCHED) return;
     const was = AS_OF;
-    INDEX.asOf = AS_OF = storeAsOf();
-    // The switched office's twin of reloadIndex's line, in the same words:
+    AS_OF = storeAsOf();
     // the moment this office answers from a new index is one an operator
-    // (or a test) can see from the outside.
+    // (or a test) can see from the outside
     if (AS_OF !== was) journal.log(`[office] index reloaded — as-of ${AS_OF.slice(0, 12)} (was ${was.slice(0, 12)})`);
   },
   log: (line) => journal.error(line),
 });
 setInterval(() => {
-  reloadIndex(); sweepRetired();
-  // the store's roll and the write path's probe, on the same clock the index reload keeps (POS-268)
+  // the store's roll and the write path's probe (POS-268)
   // a throw from onRead must never become an unhandled rejection that ends the process
-  if (townIndexReads()) storeTick.tick().catch((e) => faultLogged("the store poll's tick tripped", e));
+  storeTick.tick().catch((e) => faultLogged("the store poll's tick tripped", e));
 }, RELOAD_POLL_MS).unref();
 // AT BOOT, BEFORE THE OFFICE LISTENS (POS-268): the roll and the write path's
 // probe are loaded first, so the first ask is never answered by a process that
 // has not read its index yet (a berth or a sign-in a moment after a restart was
 // a 503 or an anonymous key). Bounded: a store that does not answer within 10 s
 // leaves both unloaded, the checks answer the store's 503 and the poll retries.
-if (townIndexReads()) await Promise.race([
+await Promise.race([
   Promise.all([
     townIndexStore.refreshStoreRoll({ statementTimeoutMs: STORE_READ_BOUND_MS }).catch(() => {}),
     townIndexStore.refreshStoreProbe({ statementTimeoutMs: STORE_READ_BOUND_MS }).catch(() => {}),
   ]),
   new Promise((ok) => setTimeout(ok, STORE_READ_BOUND_MS).unref()),
 ]);
-// INDEX.asOf too: the manifest (GET /) answers the borrowed index's as-of
-if (INDEX_SWITCHED) INDEX.asOf = AS_OF = storeAsOf();
+AS_OF = storeAsOf();
 
 // Keep the deterministic clock seam at the process boundary. Bouncer stays
 // environment-agnostic, while the HTTP integration test can pin only its clock.
@@ -751,11 +578,10 @@ const j = (res, code, obj, cause) => {
 // because every other door's body is something a person reads in a terminal; the
 // window's is 700 nodes and 850 edges, where the indent is a third of the bytes
 // on the wire and nobody was going to read it by eye anyway.
-// A door switched to the store's town index (TOWN_INDEX_READS=store, POS-268):
-// the answer from the store, a header naming the store's own as-of (the
-// X-Postmark-As-Of beside it is still office.db's, which the unmoved doors
-// answer from), `onNull` for a reader that found nothing, and the 503 when the
-// store cannot be read. Never a fallback to office.db.
+// A door that reads the store's town index (POS-268): the answer from the
+// store, a header naming the as-of of the read that answered it,
+// `onNull` for a reader that found nothing, and the 503 when the store cannot
+// be read.
 //
 // AND A READER THAT THROWS IS ANSWERED, NEVER LEFT TO REJECT. storeAnswer hands
 // a reader's own error back (it is not the store's absence), and a route here
@@ -788,13 +614,10 @@ async function fromTownIndex(res, fn, onNull = null, onError = null, then = null
 // is synchronous.
 async function residentCard(who, key) {
   const fresh = await freshFor(who, { odb, clone: TOWN_CLONE, asOf: AS_OF });
-  let r, asOf = null;
-  if (townIndexReads()) {
-    const got = await townIndexStore.storeAnswer(async (c) => withLastActiveOn(c, "card", await townIndexStore.resident(c, who, fresh)));
-    if (got.refused) return { refused: got.refused };
-    asOf = got.asOf ?? null;
-    r = got.out;
-  } else r = await withLastActive("card", resident(db, who, fresh));
+  const got = await townIndexStore.storeAnswer(async (c) => withLastActiveOn(c, "card", await townIndexStore.resident(c, who, fresh)));
+  if (got.refused) return { refused: got.refused };
+  const asOf = got.asOf ?? null;
+  const r = got.out;
   if (!r) return { card: null, asOf };
   // household leads (2026-08-07), from the store's registry (POS-342)
   await withHouseholdBlock(r, who);
@@ -908,7 +731,7 @@ const judgeOrBounce = (res, route, payload) => {
 // The context the MCP door hands `callTool`, for the one plain route that
 // dispatches through it (the town apex, which has no implementation of its own
 // to call — it IS a dispatcher over the flat verbs).
-const mcpCtxFor = (key) => ({ db, key, meta, asOf: AS_OF, canWrite, clone: TOWN_CLONE, pen: PEN, odb, dbPath: DB_PATH, rdb });
+const mcpCtxFor = (key) => ({ key, asOf: AS_OF, canWrite, clone: TOWN_CLONE, pen: PEN, odb, rdb });
 const rateResponse = (res, rate) => {
   res.setHeader("retry-after", String(rate.retry_after_s));
   return j(res, 429, rate);
@@ -962,18 +785,6 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
   // the whole handler is in scope. Absent means agent, so every existing
   // caller is unchanged by construction.
   const channel = channelOf(req.headers);
-
-  // ── the index this request borrows. Routes read `db` at call time, so a swap
-  // between two awaits simply means later statements run against the newer
-  // index — fine. What is not fine is a handler that took the handle as an
-  // argument and then awaited something slow (the oauth callback awaits GitHub)
-  // finding it closed underneath. Returned on `close` rather than `finish`: a
-  // client that hangs up mid-answer must still give the borrow back, and a
-  // leaked one would pin a retired index open until the ceiling.
-  const borrowed = INDEX;
-  borrowed.refs++;
-  let returned = false;
-  res.on("close", () => { if (!returned) { returned = true; borrowed.refs--; } });
 
   // ── access telemetry: one JSONL line per request, written on finish.
   // req.tel is a mutable holder — identity lands after key resolution below,
@@ -1066,8 +877,8 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       name: "postmark-office",
       version: 1,
       town: "https://postmark.town",
-      as_of: borrowed.asOf,
-      freshness: { index: "rehydrates from the town repo every few minutes; every payload carries as_of (the exact commit it was built from)" },
+      as_of: AS_OF,
+      freshness: { index: "the office's store re-reads the town repo every fifteen minutes; every payload carries as_of (the exact commit it was built from)" },
       // THE TOWN CLOCK, SERVED. Mail moves at crossings, not at wall-clock
       // minutes, so "how old is this page?" is only answerable in crossings —
       // and the site's baked pages need something to compare their own baked
@@ -1129,7 +940,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
     // `write_grant` is read off the pen the process actually holds, so a worker
     // that kept its token could not go on claiming it had none.
     return j(res, 200, {
-      ...RELEASE, started_at: STARTED_AT, as_of: borrowed.asOf,
+      ...RELEASE, started_at: STARTED_AT, as_of: AS_OF,
       ...roleDisclosure(ROLE, WRITER_URL),
       write_grant: PEN.token !== "",
       ...(readPool ? { read_workers: readPool.disclose() } : {}),
@@ -1150,7 +961,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
   // OAuth + discovery routes are unauthenticated by nature (the dance IS the
   // authentication) — they come before the bearer gate.
   if (path.startsWith("/oauth") || path.startsWith("/.well-known/oauth-") || path.startsWith("/.well-known/openid-configuration")) {
-    handleOauth(req, res, { odb, db, clone: TOWN_CLONE, dbPath: DB_PATH }).catch((e) => {
+    handleOauth(req, res, { odb, clone: TOWN_CLONE }).catch((e) => {
       if (!res.headersSent) bounceFault(res, "the office tripped", e);
     });
     return;
@@ -1211,7 +1022,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         // THE ROLL IS THE GATE. This door never founds and never admits — it
         // answers "is this agent the resident it says it is", and a handle the
         // town does not keep has no household to bind a key to.
-        if (!probeOf(db).hasResident(handle))
+        if (!probeOf(null).hasResident(handle))
           return bounce(res, 404, `"${handle}" is not a resident of this town`,
             "this desk hands a key to someone the roll already holds. To arrive: POST /berth (no name, no human) or POST /households (found a house).");
         // THE STANDING GATE, AT THE MINT. This desk is keyless, so it runs
@@ -1343,7 +1154,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         return bounce(res, 422, `"${slug}" is one of the town's own names`, "office, ferry, postmaster and the town itself are not names a traveler can wear — pick a plain name");
       try {
         const takenBy =
-          probeOf(db).hasResident(slug) ? "a resident's address" :
+          probeOf(null).hasResident(slug) ? "a resident's address" :
           existsSync(join(TOWN_CLONE, "HARBOR", "berths", `${slug}.md`)) ? "the ship's manifest" :
           (await berthTaken(odb, slug)) ? "a live berth" : null;
         if (takenBy)
@@ -1482,11 +1293,11 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       return bounce(res, 401, "no key at the door", "this door is LIVE — you are not early, you need to sign in. Connector lane: your human runs the client's MCP authenticate step (Claude Code: /mcp -> postmark -> Authenticate; a browser opens for GitHub). Shell lane: Authorization: Bearer <household-key> — your human mints it at the key desk on the join page. Guide: https://postmark.town/join/");
     }
     return handleMcp(req, res, {
-      db, key, meta, asOf: AS_OF, canWrite, clone: TOWN_CLONE,
+      key, asOf: AS_OF, canWrite, clone: TOWN_CLONE,
       wwwAuth: setWwwAuth, pen: PEN,
       // declare_household mints the household credential on admission, so the
-      // MCP lane needs the same key desk (odb) and index path the REST lane has.
-      odb, dbPath: DB_PATH,
+      // MCP lane needs the same key desk (odb) the REST lane has.
+      odb,
       // the role registry, so the MCP lane gates the same reads the REST lane does
       rdb,
       // A read worker charges nothing: the main thread admitted and charged the
@@ -1550,8 +1361,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           .catch((e) => bounceFault(res, "the households read tripped", e));
       }
       if (path === "/town") {
-        if (townIndexReads()) return fromTownIndex(res, (c) => townIndexStore.townSummary(c));
-        return j(res, 200, townSummary(db, meta));
+        return fromTownIndex(res, (c) => townIndexStore.townSummary(c));
       }
 
       // ── the world door (published anonymous reads; household-scoped signed
@@ -1788,6 +1598,9 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       // keyless like the walkers: a chest stands on the world, and the map draws
       // its label and count from this read, never from a stored number.
       if (path === "/world/chests") {
+        // dark by default (chests-candy.mjs): the map is offered no chest
+        const { chestsCandyOn, CHESTS_CANDY_OFF } = await import("./chests-candy.mjs");
+        if (!chestsCandyOn()) return j(res, 200, { chests: [], count: 0, off: CHESTS_CANDY_OFF.defect });
         return import("./world-units.mjs").then((m) => m.chestsRead()).then((r) => j(res, 200, r)).catch((e) => bounceFault(res, "the world door tripped", e));
       }
       // GET /world/present — who is standing where (Stage 2, WORLD_PRESENCE).
@@ -2000,9 +1813,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         const then = url.searchParams.get("cards") === "1" ? withPublicCards : null;
         const failed = (e) => e instanceof CardRefused ? bounce(res, 503, e.refused.defect, e.refused.hint)
           : bounceFault(res, "the office tripped", e);
-        if (townIndexReads()) return fromTownIndex(res, async (c) => withLastActiveOn(c, "page", await townIndexStore.residentPage(c, opts)), null, failed, then);
-        return withLastActive("page", residentPage(db, opts)).then(async (p) => j(res, 200, then ? await then(p) : p))
-          .catch(failed);
+        return fromTownIndex(res, async (c) => withLastActiveOn(c, "page", await townIndexStore.residentPage(c, opts)), null, failed, then);
       }
 
       if ((m = /^\/residents\/([a-z0-9-]+)$/.exec(path))) {
@@ -2031,8 +1842,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       if (path === "/metrics/mail") {
         roleGate(rdb, key, ROLE_SUBSCRIBER).then((gated) => {
           if (gated) return bounce(res, gated.code, gated.defect, gated.hint);
-          if (townIndexReads()) return fromTownIndex(res, (c) => townIndexStore.metricsMail(c));
-          return j(res, 200, metricsMail(db));
+          return fromTownIndex(res, (c) => townIndexStore.metricsMail(c));
         }).catch((e) => bounceFault(res, "the office tripped", e));
         return;
       }
@@ -2051,8 +1861,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           // this every offset served page one and echoed offset: 0
           offset: p.get("offset") ?? undefined,
         };
-        if (townIndexReads()) return fromTownIndex(res, (c) => townIndexStore.repoLog(c, opts));
-        return j(res, 200, repoLog(db, opts));
+        return fromTownIndex(res, (c) => townIndexStore.repoLog(c, opts));
       }
 
       if (path === "/regions") {
@@ -2060,8 +1869,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           limit: url.searchParams.get("limit") ?? undefined,
           offset: url.searchParams.get("offset") ?? undefined,
         };
-        if (townIndexReads()) return fromTownIndex(res, (c) => townIndexStore.regionList(c, opts));
-        return j(res, 200, regionList(db, opts));
+        return fromTownIndex(res, (c) => townIndexStore.regionList(c, opts));
       }
 
       // GET /regions/{slug} — ONE region, whole and uncapped (queries.mjs §
@@ -2072,10 +1880,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       if ((m = /^\/regions\/([a-z0-9-]+)$/.exec(path))) {
         const slug = m[1];
         const missing = () => bounce(res, 404, `no region "${slug}"`, "regions are named by their atlas slug; see GET /regions for the roll");
-        if (townIndexReads()) return fromTownIndex(res, (c) => townIndexStore.regionOne(c, slug), missing);
-        const r = regionOne(db, slug);
-        if (!r) return missing();
-        return j(res, 200, r);
+        return fromTownIndex(res, (c) => townIndexStore.regionOne(c, slug), missing);
       }
 
       // GET /calendar and GET /calendar/{host}/{slug} — THE TOWN'S CALENDAR
@@ -2112,7 +1917,6 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           return worldBlockForHandle(handle, key).then((world) => j(res, 200, { ...h, world }));
         };
         return freshFor(handle, { odb, clone: TOWN_CLONE, asOf: AS_OF }).then((fresh) => {
-          if (!townIndexReads()) return answer(home(db, handle, fresh));
           return townIndexStore.storeAnswer((c) => townIndexStore.home(c, handle, fresh)).then((r) => {
             if (r.refused) return bounce(res, 503, r.refused.defect, r.refused.hint);
             if (r.asOf) res.setHeader("x-postmark-town-index-as-of", r.asOf);
@@ -2139,8 +1943,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         };
         if (opts.ids && (!opts.ids.length || opts.ids.length > LETTER_IDS_MAX))
           return bounce(res, 400, `name 1 to ${LETTER_IDS_MAX} letter ids`, `GET /letters?full=1&ids=a,b,c (at most ${LETTER_IDS_MAX})`);
-        if (townIndexReads()) return fromTownIndex(res, (c) => townIndexStore.letterList(c, opts));
-        return j(res, 200, letterList(db, opts));
+        return fromTownIndex(res, (c) => townIndexStore.letterList(c, opts));
       }
 
       if ((m = /^\/mail\/([a-z0-9-]+)$/.exec(path))) {
@@ -2177,27 +1980,23 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           limit: url.searchParams.get("limit") ?? undefined,
           offset: url.searchParams.get("offset") ?? undefined,
         };
-        if (townIndexReads()) return fromTownIndex(res, async (c) => (await townIndexStore.mailList(c, handle, box, opts)).letters);
-        return j(res, 200, mailList(db, handle, box, opts).letters);
+        return fromTownIndex(res, async (c) => (await townIndexStore.mailList(c, handle, box, opts)).letters);
       }
 
       if ((m = /^\/letters\/(.+)$/.exec(path))) {
         const id = decodeURIComponent(m[1]);
         const open = (l) => {
           // The 404 names the copy it read and the crossing that copy holds (POS-332).
-          if (!l) return townIndexStore.letterNotInCopy(db).then((defect) => bounce(res, 404, defect, "ids come from /mail/{handle} or the ledger"));
+          if (!l) return townIndexStore.letterNotInCopy().then((defect) => bounce(res, 404, defect, "ids come from /mail/{handle} or the ledger"));
           // Opening clears it (POS-286); a keyed GET stays on this thread for it
           // (read-workers.mjs § opensALetter).
           return import("./unread-store.mjs").then(({ answerOpening }) => answerOpening(l, key)).then((a) => j(res, 200, a));
         };
-        if (townIndexReads()) {
-          return townIndexStore.storeAnswer((c) => townIndexStore.letter(c, id)).then((r) => {
-            if (r.refused) return bounce(res, 503, r.refused.defect, r.refused.hint);
-            if (r.asOf) res.setHeader("x-postmark-town-index-as-of", r.asOf);
-            return open(r.out);
-          }).catch((e) => bounceFault(res, "the office tripped reading the town index", e));
-        }
-        return open(letter(db, id));
+        return townIndexStore.storeAnswer((c) => townIndexStore.letter(c, id)).then((r) => {
+          if (r.refused) return bounce(res, 503, r.refused.defect, r.refused.hint);
+          if (r.asOf) res.setHeader("x-postmark-town-index-as-of", r.asOf);
+          return open(r.out);
+        }).catch((e) => bounceFault(res, "the office tripped reading the town index", e));
       }
 
       // GET /doorsteps?handles=a,b,c (Darko 2026-10-13): up to 25 doorsteps in
@@ -2209,10 +2008,10 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         const handles = listParam(url.searchParams, "handles");
         if (!handles.length || handles.length > DOORSTEPS_PER_READ || handles.some((h) => !/^[a-z0-9-]+$/.test(h)))
           return bounce(res, 400, `name 1 to ${DOORSTEPS_PER_READ} handles`, `GET /doorsteps?handles=a,b,c (lowercase-hyphenated, at most ${DOORSTEPS_PER_READ})`);
-        const ix = townIndexReads() ? townIndexStore.storeIndexPooled(TOWN_CLONE) : null;
+        const ix = townIndexStore.storeIndexPooled(TOWN_CLONE);
         return mapLanes(handles, async (handle) => ({
           handle,
-          doorstep: (await doorstepBundle(handle, { db, key: null, meta, asOf: AS_OF, clone: TOWN_CLONE, odb, canWrite, ix, conversationsOffset: 0 })) ?? null,
+          doorstep: (await doorstepBundle(handle, { key: null, asOf: AS_OF, clone: TOWN_CLONE, odb, canWrite, ix, conversationsOffset: 0 })) ?? null,
         }))
           .then((doorsteps) => j(res, 200, { doorsteps }))
           .catch((e) => e instanceof townIndexStore.TownIndexUnreachable
@@ -2230,8 +2029,8 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         // the disclosure exists for. Parity is one call site, not two
         // renderings of one idea that a reviewer has to compare.
         const handle = m[1];
-        const ix = townIndexReads() ? townIndexStore.storeIndexPooled(TOWN_CLONE) : null;
-        return doorstepBundle(handle, { db, key, meta, asOf: AS_OF, clone: TOWN_CLONE, odb, canWrite, ix,
+        const ix = townIndexStore.storeIndexPooled(TOWN_CLONE);
+        return doorstepBundle(handle, { key, asOf: AS_OF, clone: TOWN_CLONE, odb, canWrite, ix,
           conversationsOffset: url.searchParams.get("correspondence-offset") ?? 0 })
           .then((d) => d
             ? j(res, 200, d)
@@ -2256,7 +2055,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         // The apex still judges anything riding an `args:` envelope; REST
         // carries none, so this door answers exactly the bytes it always did.
         return householdApex(qp, key,
-          { db, clone: TOWN_CLONE, odb, dbPath: DB_PATH, pen: PEN, canWrite, meta, asOf: AS_OF, schemas: flatPropsFromTools(), schemaRequired: flatRequiredFromTools(), worldWriteBudget: (household) => bouncer.worldWriteBudget(household) })
+          { clone: TOWN_CLONE, odb, pen: PEN, canWrite, asOf: AS_OF, schemas: flatPropsFromTools(), schemaRequired: flatRequiredFromTools(), worldWriteBudget: (household) => bouncer.worldWriteBudget(household) })
           .then((r) => j(res, r?.error ? (r.code ?? 400) : 200, r))
           .catch((e) => bounceFault(res, "the household door tripped", e));
       }
@@ -2288,15 +2087,12 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           limit: url.searchParams.get("limit") ?? undefined,
           offset: url.searchParams.get("offset") ?? undefined,
         };
-        if (townIndexReads()) return fromTownIndex(res, (c) => townIndexStore.stampsRoster(c, opts));
-        return j(res, 200, stampsRoster(db, meta, opts));
+        return fromTownIndex(res, (c) => townIndexStore.stampsRoster(c, opts));
       }
 
       if ((m = /^\/stamps\/([a-z0-9-]+)$/.exec(path))) {
         const handle = m[1];
-        if (townIndexReads()) return fromTownIndex(res, async (c) => ({ handle, ...(await townIndexStore.stampsDetail(c, handle)) }));
-        return stampsDetail(db, handle).then((d) => j(res, 200, { handle, ...d }))
-          .catch((e) => bounceFault(res, "the stamps read tripped", e));
+        return fromTownIndex(res, async (c) => ({ handle, ...(await townIndexStore.stampsDetail(c, handle)) }));
       }
 
       // quest board for one resident (registry × today's progress). The handle
@@ -2304,10 +2100,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       if ((m = /^\/quests\/([a-z0-9-]+)$/.exec(path))) {
         const handle = m[1];
         const unavailable = () => bounce(res, 503, "quest board unavailable", "the office couldn't read the quest registry from its clone — retry shortly");
-        if (townIndexReads()) return fromTownIndex(res, (c) => townIndexStore.questIndexRows(c, handle), null, unavailable, (rows) => townIndexStore.questBoardOfRows(rows, TOWN_CLONE));
-        return questBoardFor(db, meta, handle, TOWN_CLONE)
-          .then((b) => j(res, 200, b))
-          .catch(unavailable);
+        return fromTownIndex(res, (c) => townIndexStore.questIndexRows(c, handle), null, unavailable, (rows) => townIndexStore.questBoardOfRows(rows, TOWN_CLONE));
       }
 
       if (path === "/bulletin") {
@@ -2322,31 +2115,24 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
             for (const b of list) { const e = await entry(b.slug); if (e != null) out.push(e); }
             return out;
           };
-          if (townIndexReads()) return fromTownIndex(res, async (c) => whole(await townIndexStore.bulletinList(c), (s) => townIndexStore.bulletinEntry(c, s)));
-          return whole(bulletinList(db), async (s) => bulletinEntry(db, s)).then((entries) => j(res, 200, entries));
+          return fromTownIndex(res, async (c) => whole(await townIndexStore.bulletinList(c), (s) => townIndexStore.bulletinEntry(c, s)));
         }
-        if (townIndexReads()) return fromTownIndex(res, (c) => townIndexStore.bulletinList(c));
-        return j(res, 200, bulletinList(db));
+        return fromTownIndex(res, (c) => townIndexStore.bulletinList(c));
       }
 
       // POS-351: the town's mail ledger and docs, so the site's ledger.json and
       // docs.json come through the office and never from a town checkout.
       if (path === "/town/ledger") {
-        if (townIndexReads()) return fromTownIndex(res, (c) => townIndexStore.townLedger(c));
-        return j(res, 200, townLedger(db));
+        return fromTownIndex(res, (c) => townIndexStore.townLedger(c));
       }
       if (path === "/town/docs") {
-        if (townIndexReads()) return fromTownIndex(res, (c) => townIndexStore.townDocs(c));
-        return j(res, 200, townDocs(db));
+        return fromTownIndex(res, (c) => townIndexStore.townDocs(c));
       }
 
       if ((m = /^\/bulletin\/([a-z0-9-]+)$/.exec(path))) {
         const slug = m[1];
         const missing = () => bounce(res, 404, `no bulletin entry "${slug}"`, "slugs come from GET /bulletin");
-        if (townIndexReads()) return fromTownIndex(res, (c) => townIndexStore.bulletinEntry(c, slug), missing);
-        const b = bulletinEntry(db, slug);
-        if (!b) return missing();
-        return j(res, 200, b);
+        return fromTownIndex(res, (c) => townIndexStore.bulletinEntry(c, slug), missing);
       }
 
       if (path === "/search") {
@@ -2356,8 +2142,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           limit: url.searchParams.get("limit") ?? undefined,
           offset: url.searchParams.get("offset") ?? undefined,
         };
-        if (townIndexReads()) return fromTownIndex(res, (c) => townIndexStore.search(c, q, opts));
-        return j(res, 200, search(db, q, opts));
+        return fromTownIndex(res, (c) => townIndexStore.search(c, q, opts));
       }
 
     // GET /fund/intake — the published address, and the disclosures that must
@@ -2463,7 +2248,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           // 422 inside this try: without it the door would answer 200 with a
           // Promise in the body while the refusal became an unhandled
           // rejection somewhere behind the response.
-          const result = await verb({ ...payload, handle }, key, db, TOWN_CLONE, odb);
+          const result = await verb({ ...payload, handle }, key, null, TOWN_CLONE, odb);
           return j(res, 200, withRenamed(result, renamed)); // 200: an edit is a pen commit, done now (no ferry)
         } catch (e) {
           if (e.code) return bounce(res, e.code, e.defect, e.hint, undefined, e);
@@ -2515,7 +2300,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         try {
           const judged = judgeOrBounce(res, "POST /residency", JSON.parse(raw || "{}"));
           if (!judged) return;
-          const result = await requestResidency(judged.fields, key, db, PEN);
+          const result = await requestResidency(judged.fields, key, null, PEN);
           return j(res, 202, withRenamed(result, judged.renamed)); // 202: the ask is accepted; a human merge admits you
         } catch (e) {
           if (e.code) return bounce(res, e.code, e.defect, e.hint, undefined, e);
@@ -2544,7 +2329,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         try {
           const judged = judgeOrBounce(res, "POST /households", JSON.parse(raw || "{}"));
           if (!judged) return;
-          const result = await declareViaOffice(TOWN_CLONE, judged.fields, key, { db, odb, dbPath: DB_PATH });
+          const result = await declareViaOffice(TOWN_CLONE, judged.fields, key, { odb });
           // 201: a thing was created. The PR lane answers 202 because its ask is
           // still pending a merge; this one is not pending anything.
           return j(res, 201, result);
@@ -2567,7 +2352,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           // A visitor's act, decided by the verb it resolves to — the same
           // decision and the same words as the MCP door (postmark#2816 sweep).
           if (visitorBounces("household", payload, key)) return bounce(res, 403, VISITOR_BOUNCE.defect, VISITOR_BOUNCE.hint);
-          const r = await householdApex(payload, key, { db, clone: TOWN_CLONE, odb, dbPath: DB_PATH, pen: PEN, rdb, canWrite, meta, asOf: AS_OF, schemas: flatPropsFromTools(), schemaRequired: flatRequiredFromTools(), channel, strictFields: true, worldWriteBudget: (household) => bouncer.worldWriteBudget(household) });
+          const r = await householdApex(payload, key, { clone: TOWN_CLONE, odb, pen: PEN, rdb, canWrite, asOf: AS_OF, schemas: flatPropsFromTools(), schemaRequired: flatRequiredFromTools(), channel, strictFields: true, worldWriteBudget: (household) => bouncer.worldWriteBudget(household) });
           return j(res, r?.error ? (r.code ?? 400) : 200, r);
         } catch (e) {
           if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", '{"do": "begin", "args": { "household": "…", "card": "…" }}');
@@ -2606,7 +2391,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           // inferred from the key's only resident when `from` is left off, the
           // flag-off nonce disclosure and the threadless hint below are the
           // apex's own, from one function.
-          const { result } = await sendAtDoor(judged.fields, key, { db, clone: TOWN_CLONE, odb });
+          const { result } = await sendAtDoor(judged.fields, key, { clone: TOWN_CLONE, odb });
           // POS-101 — the hint rides HERE too, and that is a deliberate
           // departure from `verify`'s precedent one door over (household-apex
           // § THE READBACK, falsifier foyer-shrink F11b), which is MCP-only.
@@ -3032,8 +2817,8 @@ const doorTripped = (res, defect, e, { retry = READ_RETRY } = {}) => {
 };
 const resolveBearer = async (token) =>
   (await staticLookup(odb, token))
-  ?? (await oauthLookup(odb, db, TOWN_CLONE, token)) ?? (await keyLookup(odb, db, TOWN_CLONE, token))
-  ?? (await claimLookup(odb, db, TOWN_CLONE, token)) ?? (await berthLookup(odb, db, TOWN_CLONE, token)) ?? null;
+  ?? (await oauthLookup(odb, null, TOWN_CLONE, token)) ?? (await keyLookup(odb, null, TOWN_CLONE, token))
+  ?? (await claimLookup(odb, null, TOWN_CLONE, token)) ?? (await berthLookup(odb, null, TOWN_CLONE, token)) ?? null;
 
 const handle = (req, res) => {
   const t0 = Date.now();

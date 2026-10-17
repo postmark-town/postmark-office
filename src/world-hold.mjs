@@ -1342,7 +1342,7 @@ async function holdAct(name, args = {}, key = null) {
           : {}),
         holding: page.map((id) => ({ thing: id, made_by: id.split("/")[0] })),
         // THE COUNTED HOLDING (WLD-27): one edge per label, and what it shows.
-        units: await unitsHeldBy(actor),
+        ...((await import("./chests-candy.mjs")).chestsCandyOn() ? { units: await unitsHeldBy(actor) } : {}),
       };
     }
     // ── TWO INPUTS THIS DOOR DOES NOT YET COMPUTE ──────────────────────────

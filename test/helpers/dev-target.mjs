@@ -159,26 +159,26 @@ export async function localDevTarget({
       houses[slug] = { since: "2026-01-01", declared_by: (rec?.residents ?? [])[0] ?? slug, ...rec };
     await seedRegistry(store, { ...doc, households: houses }, read("tools/github-ids.json") ?? {});
 
-    // office.db, as the dev box holds one (the office opens it at boot even with
-    // TOWN_INDEX_READS=store), and the town index copied from it into the store
-    // with its head at the clone's HEAD, so the rehearsal's ingests are deltas
-    // (the suites' seam, test/helpers/index-to-store.mjs; the git-walking seed
-    // costs as much again for the same rows)
+    // the town index, derived from the clone (the one derivation the ingest writes
+    // from, src/town-index.mjs) and written into the store with its head at the
+    // clone's HEAD, so the rehearsal's ingests are deltas (the suites' seam,
+    // test/helpers/index-to-store.mjs; the git-walking seed costs as much again
+    // for the same rows)
     const t0 = Date.now();
-    const officeDb = join(dir, "office.db");
-    execFileSync(process.execPath, [join(OFFICE, "src", "hydrate.mjs"), "--town", town, "--db", officeDb], { cwd: OFFICE, stdio: "ignore", env: { ...process.env, NODE_NO_WARNINGS: "1" } });
-    const { DatabaseSync } = await import("node:sqlite");
-    const { copyIndexToStore } = await import("./index-to-store.mjs");
+    const { deriveTownIndex, TOWN_TABLES } = await import("../../src/town-index.mjs");
+    const { tables } = await deriveTownIndex(town, { log: { log() {}, warn() {}, error() {} } });
+    const rows = Object.fromEntries(Object.entries(TOWN_TABLES).map(([name, { cols }]) =>
+      [name, (tables[name] ?? []).map((r) => Object.fromEntries(cols.map((c, i) => [c, r[i]])))]));
+    const { seedTownIndex } = await import("./index-to-store.mjs");
     const { HEAD_KEY } = await import("../../world2/tools/town-index-ingest.mjs");
     const w = await store.connect("law_ingester");
-    const sdb = new DatabaseSync(officeDb, { readOnly: true });
     try {
       await w.query("BEGIN");
-      await copyIndexToStore(w, sdb);
+      await seedTownIndex(w, rows);
       await w.query("INSERT INTO projection_heads (repo, sha, ingested_at) VALUES ($1, $2, now()) ON CONFLICT (repo) DO UPDATE SET sha = EXCLUDED.sha, ingested_at = now()", [HEAD_KEY, g(town, "rev-parse", "HEAD")]);
       await w.query("COMMIT");
-    } finally { sdb.close(); await w.end(); }
-    log(`store: registry seeded; office.db hydrated and its town index copied in ${Math.round((Date.now() - t0) / 1000)} s`);
+    } finally { await w.end(); }
+    log(`store: registry seeded; the town index derived and written in ${Math.round((Date.now() - t0) / 1000)} s`);
 
     // THE STORE'S STAMP CHAIN, in the box's switch order (066/067, one ingest, one
     // stamp-lines --sync, then STAMP_LINES=store; deploy/DEPLOY.md § The dev
@@ -219,7 +219,7 @@ export async function localDevTarget({
       WORLD2_PG_URL: store.url("office_api"), WORLD2_STANCE_URL: store.url("stance_reader"),
       W2_PEN: "stance,hold,say,walk,frame,mark", W2_GUARDS: "1", WORLD_POSITIONS: "1",
       OFFICE_READ_WORKERS: "0", STAMP_KEY: stampKey, STAMP_LINES: "store",
-      STATE_LOG_SOURCE: "store", OFFICE_PAPERWORK_STORE: "1", TOWN_INDEX_READS: "store",
+      STATE_LOG_SOURCE: "store", OFFICE_PAPERWORK_STORE: "1",
       ...envOverrides,
     };
     for (const [k, v] of Object.entries(env)) if (v === undefined) delete env[k];
@@ -235,7 +235,7 @@ export async function localDevTarget({
       const childEnv = { ...process.env };
       for (const k of Object.keys(childEnv)) if (/^(PG[A-Z]*|WORLD2_[A-Z_]*URL|OFFICE_KEYS)$/.test(k)) delete childEnv[k];
       const child = spawn(process.execPath, [join(OFFICE, "src", "server.mjs"), "--port", String(officePort),
-        "--db", officeDb, "--oauth-db", join(dir, "oauth.db"), "--roles-db", join(dir, "roles.db")],
+        "--oauth-db", join(dir, "oauth.db"), "--roles-db", join(dir, "roles.db")],
       { cwd: OFFICE, env: { ...childEnv, ...env }, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
       // the office writes its instruments under the tree's telemetry/ by port (src/loop-lag.mjs, store-txn-watch.mjs);
       // registered before the kill, so (cleanups run in reverse) they go after the office has stopped writing them

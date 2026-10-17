@@ -23,7 +23,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { removeTempDir, tempDir } from "./helpers/temp-dir.mjs";
 
@@ -32,10 +32,9 @@ const tmp = tempDir("manifest-keyed-reads-");
 let ix = null, office = null;
 
 before(async () => {
-  const dbPath = join(tmp, "office.db");
-  fixtureDb(dbPath).close();
-  ix = await indexStore(dbPath, { db: "manifest_keyed_reads" });
-  const child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0", "--db", dbPath,
+  const town = fixtureTown();
+  ix = await indexStore(town, { db: "manifest_keyed_reads" });
+  const child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0",
     "--oauth-db", join(tmp, "oauth.db"), "--roles-db", join(tmp, "roles.db")], {
     env: { ...process.env, TOWN_CLONE: join(tmp, "no-clone-here"), WORLD_CLONE: join(tmp, "no-world-clone"), VOICES_LOG: join(tmp, "voices.jsonl"),
       TOWN_PUSH: "", WORLD_APEX: "1", WORLD_STORE_DB: join(tmp, "no-world.db"), ...ix.env },

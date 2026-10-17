@@ -46,6 +46,7 @@ import { DatabaseSync } from "node:sqlite";
 import { civicQuarter, CIVIC_QUARTER, CIVIC_READING_LAW } from "../src/world-classes.mjs";
 import { TOWN_READS, TOWN_READABLE, townApex } from "../src/town-apex.mjs";
 import { NO_WORLD_DB, clearWorld, publishWorld } from "./helpers/world-rows.mjs";
+import { fixtureTown } from "./fixture.mjs";
 
 // The readers stand on the world graph snapshot (POS-270 lane W 3a): each store
 // built here is published as one, and world.db's path points nowhere.
@@ -276,15 +277,14 @@ test("the flat verb exists, is DELISTED, and its description is the door's own w
 // ── PART C · THE DOORSTEP POINTER ───────────────────────────────────────────
 
 test("the doorstep carries a POINTER to the quarter, not the plaques", async () => {
-  const { fixtureDb } = await import("./fixture.mjs");
+  const { indexStore } = await import("./helpers/office-under-test.mjs");
   const { doorstepBundle } = await import("../src/doorstep-bundle.mjs");
-  const dir = mkdtempSync(join(tmpdir(), "civic-doorstep-"));
+  // the town index the doorstep reads: the store, seeded from the fixture town (POS-656)
+  const ix = await indexStore(fixtureTown(), { db: "civic_doorstep" });
+  const restore = await ix.useInProcess();
   try {
-    const p = join(dir, "fixture.db");
-    fixtureDb(p).close();
-    const db = new DatabaseSync(p, { readOnly: true });
-    const meta = { as_of: "fixturesha000000000000000000000000000000" };
-    const base = { db, key: null, meta, asOf: meta.as_of, canWrite: false, clone: null, pen: null, odb: null, dbPath: null };
+    const asOf = "fixturesha000000000000000000000000000000";
+    const base = { key: null, asOf, canWrite: false, clone: null, pen: null, odb: null };
     const d = await doorstepBundle("wright", base);
 
     assert.equal(d.civic.read, 'town read:"asks"');
@@ -338,11 +338,9 @@ test("the doorstep carries a POINTER to the quarter, not the plaques", async () 
     // lanes, so it rides a stranger's read exactly as it rides your own.
     const own = await doorstepBundle("wright", { ...base, own: true });
     assert.deepEqual(own.civic, d.civic, "the town's own signage is not withheld from a stranger");
-    db.close();
   } finally {
-    // The fixture db keeps an open handle on Windows past the readOnly close in
-    // some builds; a temp directory that outlives the run is not a failed law.
-    try { rmSync(dir, { recursive: true, force: true }); } catch { /* leave it to the OS */ }
+    await restore();
+    await ix.stop();
   }
 });
 

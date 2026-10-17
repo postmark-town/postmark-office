@@ -30,7 +30,6 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import { DatabaseSync } from "node:sqlite";
 
 const sweep = (d) => { try { rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); } catch { /* litter */ } };
 const scratch = mkdtempSync(join(tmpdir(), "postmark-doorstep-stances-"));
@@ -128,14 +127,14 @@ const key = { household: "alpha", handles: new Set([HANDLE]) };
 
 let doorstepBundle, callTool, declareStanceViaOffice, resetStanceGeometry, stancesForHandles, SEGMENT_META;
 let STANCE_ON, clearStancePool, stancePoolFromJournal;
-let db, ctx, pen;
+let ix, restoreIndex, ctx, pen;
 const { installActsPen, uninstallActsPen, RECORD_ON } = await import("./acts-pen-stub.mjs");
 after(() => {
   uninstallActsPen();
   delete process.env.WORLD2_PG; delete process.env.WORLD2_PG_URL; delete process.env.W2_LATE_ARRIVAL;
 });
-// ONE hook, because the second half depends on the first: the office fixture is
-// built from a SCHEMA that only exists once the dynamic imports have run.
+// ONE hook, because the second half depends on the first: the town index is
+// seeded once the dynamic imports have run.
 before(async () => {
   ({ doorstepBundle } = await import("../src/doorstep-bundle.mjs"));
   ({ callTool } = await import("../src/mcp.mjs"));
@@ -149,22 +148,26 @@ before(async () => {
   Object.assign(process.env, STANCE_ON);
   stancePoolFromJournal(dbPath);
   ({ SEGMENT_META } = await import("../src/queries.mjs"));
-  const { SCHEMA } = await import("../src/schema.mjs");
-
-  db = new DatabaseSync(":memory:");
-  db.exec(SCHEMA);
-  const put2 = db.prepare("INSERT INTO meta VALUES (?, ?)");
-  put2.run("as_of", AS_OF);
-  put2.run("town_path", "fixture");
-  put2.run("hydrated_counts", JSON.stringify({}));
-  db.prepare("INSERT INTO residents VALUES (?, ?)").run(HANDLE, JSON.stringify({
+  // THE TOWN INDEX, FROM THE STORE (POS-656): one resident, read through its
+  // own pool, beside the record's stubbed pen above (useInProcess leaves the
+  // record's env as this file set it).
+  // imported here, not at the top: the fixture's modules read the world's env this file sets
+  const { emptyTown, put: putRow, setMeta } = await import("./fixture.mjs");
+  const { indexStore } = await import("./helpers/office-under-test.mjs");
+  const town = emptyTown();
+  setMeta(town, "as_of", AS_OF);
+  setMeta(town, "town_path", "fixture");
+  setMeta(town, "hydrated_counts", JSON.stringify({}));
+  setMeta(town, "quest_registry", '{"quests":[]}');
+  putRow(town, "residents", { handle: HANDLE, json: JSON.stringify({
     handle: HANDLE, is_office: false, last_active: null,
     address: { data: { since: "2026-01-01", joined: "2026-06-10" } },
-  }));
-  ctx = { db, key, meta: { as_of: AS_OF, quest_registry: '{"quests":[]}' }, asOf: AS_OF,
-    canWrite: false, clone: null, pen: null, odb: null, dbPath: null };
+  }) });
+  ix = await indexStore(town, { db: "doorstep_stances" });
+  restoreIndex = await ix.useInProcess();
+  ctx = { key, asOf: AS_OF, canWrite: false, clone: null, pen: null, odb: null };
 });
-after(() => { try { db?.close(); } catch { /* already gone */ } });
+after(async () => { await restoreIndex?.(); await ix?.stop(); });
 const stamp = async () => ({ at: { anchor: "alpha/alphas-parcel", dx: 1, dy: 2 },
   witnesses: { source: "presence", list: [{ handle: "gamma", anchor: "alpha/alphas-parcel", dx: 0, dy: 0 }] } });
 const speak = (args) => declareStanceViaOffice(repo, args, key, { dbPath, witnessStamp: stamp, crossing: 145 });

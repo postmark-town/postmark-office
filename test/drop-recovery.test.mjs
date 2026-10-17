@@ -24,6 +24,9 @@ import { TICK_MS, recoverOrphanDrops, dropLiveGuard, dropUndoGuard, dropsStillOu
 import { foldUnits, totalOf, refuseOverCarry, UNIT_ACTION } from "../src/world-stacks.mjs";
 import { inFlightFor } from "../src/world-units.mjs";
 
+// WLD-27's doors ship dark by default (src/chests-candy.mjs); these are their own tests, so they run with them open.
+process.env.WORLD_CHESTS_CANDY = "1";
+
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const store = await startStore({ db: "drop_recovery_test" });
 after(() => store.stop());

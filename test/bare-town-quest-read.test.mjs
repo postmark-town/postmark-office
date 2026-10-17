@@ -35,7 +35,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { questBoardFor, townQuestBoard } from "../src/queries.mjs";
+import { questBoardWith, townQuestBoardOf, potBoardOf } from "../src/queries.mjs";
 
 // ── the temp clone: the town's pure board builder, its two documented shapes ──
 const CLONE = mkdtempSync(join(tmpdir(), "quests-clone-"));
@@ -68,26 +68,29 @@ const REGISTRY = {
 };
 const META = { quest_registry: JSON.stringify(REGISTRY), quest_day: "2026-09-13" };
 
-// A database that REMEMBERS what it was asked and refuses an unbound value the
-// way SQLite does, verbatim — so the flip below reproduces Sophia's message
-// rather than an approximation of it.
-function recordingDb() {
+// The board's index reads (questBoardWith's `src`: progressRow, standing, pots,
+// potIds; the store answers them, town-index-store.mjs § heldQuestSource) as a
+// source that REMEMBERS what it was asked and refuses an unbound handle the way
+// SQLite did, verbatim — so the flip below reproduces Sophia's message rather
+// than an approximation of it. An empty town: no progress, no standing, no pots.
+function recordingDb({ potsFail = false } = {}) {
   const asked = [];
+  const keyed = (fn) => (handle) => {
+    asked.push({ fn, handle });
+    if (handle === undefined) throw new TypeError("Provided value cannot be bound to SQLite parameter 1.");
+    return null;
+  };
+  const pots = (fn, answer) => (...a) => { asked.push({ fn }); if (potsFail) throw new Error("no such table: pots"); return answer(...a); };
   return {
     asked,
-    prepare(sql) {
-      return {
-        get: (...binds) => {
-          asked.push({ sql, binds });
-          if (binds.some((b) => b === undefined)) throw new TypeError("Provided value cannot be bound to SQLite parameter 1.");
-          return null;
-        },
-        all: (...binds) => { asked.push({ sql, binds }); return []; },
-      };
-    },
+    progressRow: keyed("progressRow"),
+    standing: keyed("standing"),
+    pots: pots("pots", (extraInvalid) => potBoardOf({ pots: [], invalid: [] }, extraInvalid)),
+    potIds: pots("potIds", () => []),
   };
 }
-const handleKeyed = (db) => db.asked.filter((a) => /WHERE handle = \?/.test(a.sql));
+const handleKeyed = (db) => db.asked.filter((a) => "handle" in a);
+const questBoardFor = (src, meta, handle, clone, opts) => questBoardWith(src, meta, handle, clone, opts);
 
 // ── (a) THE BARE READ — the case that tripped ────────────────────────────────
 
@@ -134,12 +137,7 @@ test("a bounty posting is lifted off the card deck, exactly as it is for a resid
 });
 
 test("an index with no pots table degrades to a note and still answers a board", async () => {
-  const db = recordingDb();
-  db.prepare = (sql) => ({
-    get: () => null,
-    all: () => { if (/pots/.test(sql)) throw new Error("no such table: pots"); return []; },
-  });
-  db.asked = [];
+  const db = recordingDb({ potsFail: true });
   const board = await questBoardFor(db, META, undefined, CLONE);
   assert.ok(board.pots_note, "a missing pots table lost the whole board instead of one section");
   assert.ok(board.quests.length > 0);
@@ -152,7 +150,7 @@ test("a read WITH a handle still asks the store for that handle", async () => {
   await questBoardFor(db, META, "sophia-familiaris", CLONE);
   const keyed = handleKeyed(db);
   assert.ok(keyed.length > 0, "the named read no longer keys anything on the handle — the guard is swallowing it");
-  assert.ok(keyed.every((a) => a.binds.includes("sophia-familiaris")),
+  assert.ok(keyed.every((a) => a.handle === "sophia-familiaris"),
     "a handle-keyed query was bound with something other than the handle asked for");
 });
 
@@ -191,7 +189,7 @@ test("THE RELATION: a board carries a resident's fields exactly when a resident 
 test("the SQLite refusal is what waits below the guard — the stub reproduces it verbatim", () => {
   const db = recordingDb();
   let msg = null;
-  try { db.prepare("SELECT * FROM quest_progress WHERE handle = ?").get(undefined); }
+  try { db.progressRow(undefined); }
   catch (e) { msg = e.message; }
   assert.equal(msg, "Provided value cannot be bound to SQLite parameter 1.",
     "this suite no longer reproduces the message the resident saw");
@@ -199,10 +197,10 @@ test("the SQLite refusal is what waits below the guard — the stub reproduces i
 
 test("townQuestBoard needs no store beyond the pots, so the town's board cannot trip on a resident query", () => {
   const db = recordingDb();
-  const board = townQuestBoard({
-    db, registry: REGISTRY, today: "2026-09-13",
+  const board = townQuestBoardOf({
+    registry: REGISTRY, today: "2026-09-13",
     boardForHandle: (registry, prog, handle, today) => ({ handle, today, quests: [{ id: "x", progress: 0, complete: false, counted: [], household: {} }] }),
-  });
+  }, (extraInvalid) => db.pots(extraInvalid), () => db.potIds());
   assert.equal(handleKeyed(db).length, 0);
   assert.deepEqual(board.quests, [{ id: "x" }], "the resident fields were not the only thing removed");
 });

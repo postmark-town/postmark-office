@@ -17,27 +17,28 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { indexStore, seedRegistry, recordInProcess } from "./helpers/office-under-test.mjs";
 import * as oauth from "../src/oauth.mjs";
 
 const STORE_ONLY = { login: "store-only-gh", id: 4101 };   // bound by the ceremony; the drain has not printed it
 const FILE_ONLY = { login: "file-only-gh", id: 4102 };     // a hand edit to the printout; the record never held it
 
-let tmp, db, clone, ix, restore, unrecord;
+// the probe the lookup asks is the store's held one (null: no probe of its own)
+const db = null;
+let tmp, clone, ix, restore, unrecord;
 before(async () => {
   tmp = mkdtempSync(join(tmpdir(), "pos343-"));
-  db = fixtureDb(join(tmp, "fixture.db"));
   clone = join(tmp, "town-clone");
   mkdirSync(join(clone, "tools"), { recursive: true });
   writeFileSync(join(clone, "tools", "github-ids.json"), JSON.stringify({ "file-resident": { ...FILE_ONLY, pinned: "2026-10-01" } }));
-  ix = await indexStore(db);
+  ix = await indexStore(fixtureTown());
   restore = await ix.useInProcess();
   await seedRegistry(ix.store, null, { "store-resident": { ...STORE_ONLY, pinned: "2026-10-04" } });
   unrecord = await recordInProcess(ix.store);
 });
 after(async () => {
-  await unrecord?.(); await restore?.(); await ix?.stop(); db?.close();
+  await unrecord?.(); await restore?.(); await ix?.stop();
   rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 

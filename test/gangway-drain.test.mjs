@@ -32,7 +32,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { openOauthDb } from "../src/oauth.mjs";
 import { appendTownJournal, pendingRows, townDrainCursor } from "../src/town-journal.mjs";
 import { GANGWAY_HELD, planTownDrain as REAL_planTownDrain } from "../src/town-drain.mjs";
@@ -113,7 +113,7 @@ const seedLetter = async (o, { from = "wright", to = "limen", date = "2026-08-24
     },
   });
 
-const db = fixtureDb();
+const db = fixtureTown();
 const HELD = () => true;
 const silent = () => {};
 // POINTED AT THE RECORD, AND AWAITED (POS-158). A crossing reads the town's

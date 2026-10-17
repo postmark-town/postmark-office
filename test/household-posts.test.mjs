@@ -229,16 +229,13 @@ test("5 · an RSVP's harness and budget never reach the answer, and the read nev
 });
 
 test("6 · the doorstep segment deep-equals household { read: \"posts\" } at the same args", async () => {
-  const { fixtureDb } = await import("./fixture.mjs");
+  const { fixtureTown } = await import("./fixture.mjs");
   const { doorstepBundle } = await import("../src/doorstep-bundle.mjs");
   const { householdApex } = await import("../src/household-apex.mjs");
-  const dbPath = join(DIR, "fixture.db");
-  fixtureDb(dbPath).close();
-  const db = new DatabaseSync(dbPath, { readOnly: true });
-  // the town index from a store seeded from this fixture, in this process, as a
-  // switched office reads it (POS-268); the record stays this file's stub
+  // the town index from a store seeded from the fixture town, in this process,
+  // as the office reads it (POS-268); the record stays this file's stub
   const { indexStore } = await import("./helpers/office-under-test.mjs");
-  const ix = await indexStore(dbPath, { db: "household_posts" });
+  const ix = await indexStore(fixtureTown(), { db: "household_posts" });
   const restore = await ix.useInProcess();
   // THE CLOCK, PINNED TO THE FIXTURE'S WEEK. Both reads keep a week back from
   // the real clock and neither takes one from its caller, so this test read
@@ -247,11 +244,10 @@ test("6 · the doorstep segment deep-equals household { read: \"posts\" } at the
   const realNow = Date.now;
   Date.now = () => NOW;
   try {
-    const { storeIndexPooled, townIndexReads } = await import("../src/town-index-store.mjs");
-    const meta = { as_of: "fixturesha000000000000000000000000000000" };
-    const ctx = { db, key: null, meta, asOf: meta.as_of, canWrite: false, clone: null, pen: null, odb: null, dbPath: null };
-    // the doorstep is handed the store's index, as server.mjs hands it a switched door's
-    const d = await doorstepBundle("wright", { ...ctx, ix: townIndexReads() ? storeIndexPooled(null) : null });
+    const { storeIndexPooled } = await import("../src/town-index-store.mjs");
+    const ctx = { key: null, asOf: "fixturesha000000000000000000000000000000", canWrite: false, clone: null, pen: null, odb: null };
+    // the doorstep is handed the store's index, as server.mjs hands it a door's
+    const d = await doorstepBundle("wright", { ...ctx, ix: storeIndexPooled(null) });
     assert.ok(d.segments.includes("posts"), "the manifest does not name the segment");
     const { serves, args, ...segment } = d.posts;
     assert.equal(serves, "household.posts");
@@ -263,7 +259,6 @@ test("6 · the doorstep segment deep-equals household { read: \"posts\" } at the
     Date.now = realNow;
     await restore();
     await ix.stop();
-    db.close();
   }
 });
 

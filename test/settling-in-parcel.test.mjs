@@ -35,12 +35,12 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "..");
 const WORLD = process.env.WORLD_CLONE ?? resolve(ROOT, "world-clone");
 
-// A db stub the gaps composer can walk: the home row is present (so the
-// `tend-your-home` gap stays quiet and the world gap is the only voice), the
-// letters count answers 0.
-const db = { prepare: () => ({ get: () => ({ n: 0, json: JSON.stringify({ description: "a home" }), description: "a home" }), all: () => [] }) };
+// The town index stubbed (town-index-store.mjs § storeIndexPooled's shape):
+// the home page is present, so the `tend-your-home` gap stays quiet and the
+// world gap is the only voice.
+const ix = { hasResident: async () => true, home: async () => ({ description: "a home" }) };
 const unsited = async () => ({ mark_id: null, x: null, y: null, sited: false });
-const ctx = (extra = {}) => ({ db, clone: null, worldBlock: unsited, parcelClaim: async () => null, ...extra });
+const ctx = (extra = {}) => ({ clone: null, worldBlock: unsited, parcelClaim: async () => null, ix, ...extra });
 
 const worldGap = (rows) => rows.find((r) => r.id === "walk-the-world");
 
@@ -110,7 +110,7 @@ test("an office with no docket store configured answers null for the claim and k
   delete process.env.WORLD2_PG; delete process.env.WORLD2_PG_URL;
   try {
     assert.equal(await parcelClaimForHandle("mari"), null);
-    const rows = await paperGapRows("mari", { db, clone: null, worldBlock: unsited });
+    const rows = await paperGapRows("mari", { clone: null, worldBlock: unsited, ix });
     assert.match(worldGap(rows).text, /no published parcel stands/);
   } finally {
     if (saved.PG !== undefined) process.env.WORLD2_PG = saved.PG;

@@ -22,20 +22,17 @@
 
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
-import { DatabaseSync } from "node:sqlite";
-import { SCHEMA } from "../src/schema.mjs";
-import { mailCorrespondents } from "../src/queries.mjs";
+import { storeAnswer, mailCorrespondents } from "../src/town-index-store.mjs";
 import { householdApex } from "../src/household-apex.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
+import { putValues, emptyTown } from "./fixture.mjs";
 
-const db = new DatabaseSync(":memory:");
-db.exec(SCHEMA);
-after(() => db.close());
+const db = emptyTown();
 
-const ins = db.prepare("INSERT INTO letters VALUES (?,?,?,?,?,?,?,?,?,?)");
+const ins = (...v) => putValues(db, "letters", v);
 // (id, from, to, date, thread, box, owner, path, json, delivered_at)
 const L = (id, from, to, date, extra = {}) =>
-  ins.run(id, from, to, date, null, "inbox", to, `WHITE_PAGES/${to}/inbox/${id}.md`,
+  ins(id, from, to, date, null, "inbox", to, `WHITE_PAGES/${to}/inbox/${id}.md`,
     JSON.stringify({ id, from, to, date, delivered_at: `${date}T08:00:00.000Z`, ...extra }),
     `${date}T08:00:00.000Z`);
 
@@ -54,36 +51,37 @@ L("ferry-2026-08-10-to-the-house-e", "ferry", "wright", "2026-08-10", { toList: 
 // argos must not gain a correspondent from it either way round.
 L("cipher-2026-08-11-to-argos-f", "cipher", "argos", "2026-08-11");
 
-const of = (h, opts) => mailCorrespondents(db, h, opts);
+// the read, from the store holding these letters (town-index-store.mjs § mailCorrespondents)
+const of = async (h, opts) => { const r = await storeAnswer((c) => mailCorrespondents(c, h, opts)); assert.equal(r.refused, undefined); return r.out; };
 const row = (ans, h) => ans.correspondents.find((c) => c.handle === h);
 
 // The doors below run in this process and read their town index from a store
-// seeded from this fixture (POS-268, office-under-test.mjs).
+// seeded from these letters (POS-268, office-under-test.mjs).
 const IX = await indexStore(db);
 const IX_RESTORE = await IX.useInProcess();
 test.after(async () => { await IX_RESTORE(); await IX.stop(); });
 
-test("both directions count, and the list is the people you have exchanged letters with", () => {
-  const a = of("wright");
+test("both directions count, and the list is the people you have exchanged letters with", async () => {
+  const a = await of("wright");
   assert.deepEqual(a.correspondents.map((c) => c.handle).sort(), ["argos", "cipher", "errant", "ferry"]);
   assert.equal(a.total, 4);
   assert.equal(row(a, "errant").count, 3, "two of his and one of mine — the exchange, not the outbox");
   assert.equal(row(a, "cipher").count, 1);
 });
 
-test("a multi-recipient letter counts for EVERY party, including the one no index reaches", () => {
+test("a multi-recipient letter counts for EVERY party, including the one no index reaches", async () => {
   // `to_h` is "wright"; argos exists only inside the json's toList.
-  const a = of("wright");
+  const a = await of("wright");
   assert.equal(row(a, "ferry").count, 1, "the sender");
   assert.equal(row(a, "argos").count, 1, "and the co-recipient, who shares no from/to column with me");
   // And from argos's own side, symmetrically.
-  const b = of("argos");
+  const b = await of("argos");
   assert.deepEqual(b.correspondents.map((c) => c.handle).sort(), ["cipher", "ferry", "wright"]);
   assert.equal(row(b, "wright").count, 1, "one letter, both of us on it");
 });
 
-test("last_word is read off the record's own from-line, and names the newest letter", () => {
-  const a = of("wright");
+test("last_word is read off the record's own from-line, and names the newest letter", async () => {
+  const a = await of("wright");
   assert.equal(row(a, "errant").last_word, "theirs", "errant wrote on the 3rd, after my 2nd");
   assert.equal(row(a, "errant").last_letter_id, "errant-2026-07-03-to-wright-c");
   assert.equal(row(a, "errant").last_at, "2026-07-03T08:00:00.000Z");
@@ -93,16 +91,16 @@ test("last_word is read off the record's own from-line, and names the newest let
   assert.ok(row(a, "cipher"), "cipher is on the list at all, which is the answer");
 });
 
-test("someone you have never written to is ABSENT, not a zero row", () => {
-  const a = of("wright");
+test("someone you have never written to is ABSENT, not a zero row", async () => {
+  const a = await of("wright");
   assert.equal(row(a, "nobody-at-all"), undefined);
   // And a letter between two other residents does not put either of them here.
-  assert.equal(of("wright").correspondents.some((c) => c.handle === "wright"), false,
+  assert.equal((await of("wright")).correspondents.some((c) => c.handle === "wright"), false,
     "and you are never your own correspondent");
 });
 
-test("most-corresponded first, then most-recent — the site's own order", () => {
-  const a = of("wright");
+test("most-corresponded first, then most-recent — the site's own order", async () => {
+  const a = await of("wright");
   assert.equal(a.correspondents[0].handle, "errant", "three letters beats one, however recent the one");
   const counts = a.correspondents.map((c) => c.count);
   for (let i = 1; i < counts.length; i++) assert.ok(counts[i - 1] >= counts[i], "descending by count");
@@ -112,24 +110,24 @@ test("most-corresponded first, then most-recent — the site's own order", () =>
     String(row(a, y).last_at).localeCompare(String(row(a, x).last_at)) || x.localeCompare(y)));
 });
 
-test("it pages, and a cut says so — a bound and its count are one change", () => {
-  const one = of("wright", { limit: 2 });
+test("it pages, and a cut says so — a bound and its count are one change", async () => {
+  const one = await of("wright", { limit: 2 });
   assert.equal(one.shown, 2);
   assert.equal(one.total, 4, "the total is the whole list, never the page");
   assert.equal(one.complete, false);
   assert.equal(one.next_offset, 2);
   assert.match(one.more_note, /2 further correspondents/);
-  const two = of("wright", { limit: 2, offset: 2 });
+  const two = await of("wright", { limit: 2, offset: 2 });
   assert.equal(two.complete, true);
   assert.equal(two.next_offset, undefined);
   // The two pages together are the whole list, with nothing repeated or lost.
   assert.deepEqual([...one.correspondents, ...two.correspondents].map((c) => c.handle),
-    of("wright").correspondents.map((c) => c.handle));
+    (await of("wright")).correspondents.map((c) => c.handle));
 });
 
 test("the view is reachable at the door, and the door's refusal lists it", async () => {
   const key = { household: "keeminlee", handles: new Set(["wright"]) };
-  const ctx = { db, meta: {}, clone: null, asOf: "test" };
+  const ctx = { clone: null, asOf: "test" };
   const a = await householdApex({ read: "mail", view: "correspondents" }, key, ctx);
   assert.equal(a.view, "correspondents");
   assert.equal(a.handle, "wright");

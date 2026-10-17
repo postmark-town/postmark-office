@@ -23,14 +23,14 @@ import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { bootOnFreePort, freePort } from "./spawn-office.mjs";
 import { seedStaticKeys } from "./helpers/static-keys.mjs";
 import { letterDigest } from "../src/queries.mjs";
 
 const STORES = [];
-const storeFor = async (dbPath) => { const x = await indexStore(dbPath); STORES.push(x); return x.env; };
+const storeFor = async (town) => { const x = await indexStore(town); STORES.push(x); return x.env; };
 test.after(async () => { for (const x of STORES) await x.stop(); });
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -42,13 +42,12 @@ let BASE, PUBLIC, child, tmp;
 
 before(async () => {
   tmp = mkdtempSync(join(tmpdir(), "postmark-office-bulk-"));
-  const dbPath = join(tmp, "fixture.db");
-  fixtureDb(dbPath).close();
-  const IX_ENV = await storeFor(dbPath);
+  const town = fixtureTown();
+  const IX_ENV = await storeFor(town);
   const box = await freePort();
   let port;
   ({ child, port } = await bootOnFreePort((p) => spawn(process.execPath, [
-    join(ROOT, "src", "server.mjs"), "--port", String(p), "--db", dbPath,
+    join(ROOT, "src", "server.mjs"), "--port", String(p),
     "--bouncer-now-ms", String(Date.parse("2026-10-13T14:00:00Z")),
     "--oauth-db", seedStaticKeys(join(tmp, "oauth.db"), `${KEY}=keemin:wright`),
   ], {

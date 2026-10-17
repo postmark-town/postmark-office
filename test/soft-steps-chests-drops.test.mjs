@@ -46,6 +46,9 @@ import {
 import { stockChests } from "../world2/tools/chest-stock.mjs";
 import { SOFT_STEPS, STEPS, buildReceipt, appendReceipt, judgeKeep, REASON_RE } from "../deploy/keep-history.mjs";
 
+// WLD-27's doors ship dark by default (src/chests-candy.mjs); these are their own tests, so they run with them open.
+process.env.WORLD_CHESTS_CANDY = "1";
+
 const OFFICE = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 /** A client that answers the law query with `lawRows` and every other query with no rows. */
