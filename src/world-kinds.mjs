@@ -412,38 +412,38 @@ export async function usableAt({ actor, here, markIds = [], residents = [] }) {
     view: classViewOf(lawSnapshot()), householdOf, pointWithinMark });
 }
 
-// ── THE HOLD RECORD, FOLDED ONCE PER CHANGE (review-610 S5) ─────────────────
+// ── THE HOLD RECORD, KEPT AND MOVED BY ITS DELTA (review-610 S5, F1) ───────
 //
-// A bare read used to fold the whole holding and attachment history on every
-// call. Now the fold is kept and re-folded only when the hold lane has moved:
-// one cheap read of its high-water act id answers whether anything changed,
-// and every read between two hold acts reuses the same fold. ⚑ NOT YET THE
-// PER-SETTLEMENT SNAPSHOT the rule asks for (POS-277: a snapshot sealed per
-// clearing, the delta computed since): the hold lane has no sealed snapshot
-// table, and adding one is law-tier DDL — named for Darko on #610.
-const HOLD_TOP_SQL = "SELECT max(id)::text AS top FROM acts WHERE class = 'holding' OR action = ANY($1)";
-let _hold = null;
-export async function holdRecordNow({ fresh = false } = {}) {
-  const [guards, { actsQuery }, { isUnitRow }, { ATTACHMENT_ACTIONS }, journal, world] = await Promise.all([
-    import("./world2-guards.mjs"), import("./world2-acts.mjs"), import("./world-stacks.mjs"), import("../world2/tools/guard-reads.mjs"),
-    import("./world-journal.mjs"), import("./world.mjs"),
+// hold-record.mjs keeps the hold lane's fold as a base plus a re-read window
+// above it: a bare read between two hold acts reuses it, a change applies only
+// the acts above the cutoff (late commits inside the window included), and one
+// rebuild serves every read that arrives while it runs. The keeper's own header
+// says why there is no table.
+let _keeper = null;
+async function keeper() {
+  if (_keeper) return _keeper;
+  const [guards, { actsQuery }, journal, world, { holdRecordKeeper, HOLD_TOP_SQL }] = await Promise.all([
+    import("./world2-guards.mjs"), import("./world2-acts.mjs"), import("./world-journal.mjs"), import("./world.mjs"), import("./hold-record.mjs"),
   ]);
-  const top = fresh ? null : (await actsQuery(HOLD_TOP_SQL, [ATTACHMENT_ACTIONS]).catch(() => null))?.[0]?.top ?? null;
-  if (!fresh && top != null && _hold?.top === top) return _hold;
-  const [units, attachments] = await Promise.all([guards.storeHoldingRows(), guards.storeAttachmentRows()]);
-  // where each set-down thing stands now: its latest drop act's witnessed line, by the anchor it names
-  const drops = new Map();
-  for (const r of units) if (r.action === "drop" && r.object != null) drops.set(String(r.object), r);
-  const marks = drops.size ? await world.worldMarksAll().catch(() => []) : [];
-  const places = new Map();
-  for (const [id, r] of drops) {
-    const at = journal.composeAnchor(r.at ?? {}, (mid) => marks.find((m) => m.id === mid)?.at ?? null);
-    if (at) places.set(id, at);
-  }
-  const record = { top, fold: foldUnits(units.filter(isUnitRow)), attachments, places };
-  if (top != null) _hold = record;
-  return record;
+  _keeper = holdRecordKeeper({
+    readTop: async () => (await actsQuery(HOLD_TOP_SQL, []).catch(() => null))?.[0]?.top ?? null,
+    readHolding: ({ afterId = null } = {}) => guards.storeHoldingRows(afterId != null ? { afterId } : {}),
+    readAttachments: ({ afterId = null } = {}) => guards.storeAttachmentRows(afterId != null ? { afterId } : {}),
+    // where each set-down thing stands now: its latest drop act's witnessed line, by the anchor it names
+    placesOf: async (drops) => {
+      const places = new Map();
+      if (!drops.size) return places;
+      const marks = await world.worldMarksAll().catch(() => []);
+      for (const [id, r] of drops) {
+        const at = journal.composeAnchor(r.at ?? {}, (mid) => marks.find((m) => m.id === mid)?.at ?? null);
+        if (at) places.set(id, at);
+      }
+      return places;
+    },
+  });
+  return _keeper;
 }
+export async function holdRecordNow() { return (await keeper()).now(); }
 
 /**
  * `investigate: "<by>/<slug>"` on a mark: its column of the matrix (`can`, the

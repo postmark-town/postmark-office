@@ -86,10 +86,12 @@ const movesOf = (r) => {
  * never mix: no label act is ever read as a kind holding, nor the reverse. A
  * holder's room and carry count both (`totalOf`), because both are held.
  */
-export function foldUnits(rows = []) {
-  const counts = new Map();
-  const kinds = new Map();
-  const anomalies = [];
+export function foldUnits(rows = [], from = null) {
+  // `from`: a fold to continue (a kept base, hold-record.mjs), copied, never mutated — the fold is additive
+  const copy = (m) => new Map([...(m ?? new Map())].map(([h, inner]) => [h, new Map(inner)]));
+  const counts = from ? copy(from.counts) : new Map();
+  const kinds = from ? copy(from.kinds) : new Map();
+  const anomalies = from ? [...(from.anomalies ?? [])] : [];
   const bump = (map, holder, key, n) => {
     if (!map.has(holder)) map.set(holder, new Map());
     const m = map.get(holder);

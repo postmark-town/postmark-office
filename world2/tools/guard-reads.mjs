@@ -968,12 +968,17 @@ export function assertAttachmentOrder(rows) {
  * read is safe, while a filtered read that also dropped the order would not be.
  * `target` is offered and pushed into SQL for that reason and no other.
  */
-export async function pgAttachmentsFor(client, { target = null, until = null, strict = true } = {}) {
+export async function pgAttachmentsFor(client, { target = null, until = null, strict = true, afterId = null } = {}) {
   const args = [ATTACHMENT_ACTIONS];
   let sql = `SELECT id, at, actor, action, payload FROM acts WHERE action = ANY($1)`;
   if (target != null) {
     args.push(target);
     sql += ` AND COALESCE(payload->'payload'->>'target', payload->>'thing') = $${args.length}`;
+  }
+  // `afterId`: only the acts above a kept base (src/hold-record.mjs — the delta, LOGOS v2 O2)
+  if (Number.isFinite(Number(afterId)) && afterId != null) {
+    args.push(Number(afterId));
+    sql += ` AND id > $${args.length}`;
   }
   const { rows } = await client.query(`${sql} ${ATTACHMENT_ORDER_SQL}`, args);
   const read = attachmentRecords(rows, { strict });
@@ -1217,7 +1222,7 @@ export const HOLDING_ORDER_SQL = "ORDER BY acts.at, acts.id";
  * rows it returns are the holding acts on the house's own things and no others.
  * Pushed AFTER `thing`, for the reason the `thing` clause gives.
  */
-export async function pgHoldingRows(client, { thing = null, since = null, until = null, madeBy = null } = {}) {
+export async function pgHoldingRows(client, { thing = null, since = null, until = null, madeBy = null, afterId = null } = {}) {
   const args = [CLASS_HOLDING];
   let sql = `SELECT id, at, crossing, actor, action, object,
                     at_anchor, at_dx, at_dy, witnesses, class, payload, effect, household
@@ -1247,6 +1252,11 @@ export async function pgHoldingRows(client, { thing = null, since = null, until 
   if (Number.isFinite(Number(until)) && until != null) {
     args.push(Number(until));
     sql += ` AND crossing <= $${args.length}`;
+  }
+  // `afterId`: only the acts above a kept base (src/hold-record.mjs — the delta, LOGOS v2 O2). Pushed last.
+  if (Number.isFinite(Number(afterId)) && afterId != null) {
+    args.push(Number(afterId));
+    sql += ` AND id > $${args.length}`;
   }
   const { rows } = await client.query(`${sql} ${HOLDING_ORDER_SQL}`, args);
   return rows.map(holdingRowOf);
