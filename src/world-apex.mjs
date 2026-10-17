@@ -111,6 +111,7 @@ import { validateReadArgs } from "./validate-args.mjs"; // the flat tools' own v
 // here was reachable: the resident class grants no `subscribe`, `gather` or
 // `hand-to-human`, so no resident could open these doors on any day they stood.
 import { callHoldTool, holdingsOf, liveHolder } from "./world-hold.mjs";
+import { onlyUsable, canOn } from "./usable-verbs.mjs"; // verbs show when usable (LOGOS v2, O2)
 // The stride a placement is stamped with — read off the record like every other
 // departure's, never a constant here (decision 008b).
 import { departurePace } from "./world-classes.mjs";
@@ -1824,9 +1825,31 @@ export function buildTerms({ affording, spine, means = null }) {
  * embodied-only, so the flat tool is the only door a spectator has.)
  */
 /** investigate: on a living thing, or null when the call asked for none (PR-4). */
-async function investigateOn(args, oriented) {
+/**
+ * The matrix of (verb, object) pairs where the reader stands, or null when the
+ * reader is not standing anywhere as a resident (a read from elsewhere trims
+ * nothing) or the hold record cannot be read.
+ */
+async function usableHere(args, key, oriented, nearby = []) {
+  const who = standingHandle(args, key);
+  const sp = oriented?.standpoint;
+  if (!who || sp?.stance !== "embodied" || !Number.isFinite(Number(sp?.x)) || !Number.isFinite(Number(sp?.y))) return null;
+  try {
+    const { usableAt } = await import("./world-kinds.mjs");
+    return await usableAt({ actor: who, here: { x: Number(sp.x), y: Number(sp.y) }, markIds: nearby.map((o) => o.id).filter(Boolean),
+      residents: oriented.present?.residents ?? [] });
+  } catch { return null; }
+}
+
+async function investigateOn(args, oriented, usable = null) {
   if (args.investigate == null || String(args.investigate).trim() === "") return null;
   const kind = entityKindOf(args.investigate);
+  // A MARK, investigated: its column of the matrix (`can`), and, for a holder,
+  // what it holds by kind — the class sharpened, never into units (15:46).
+  if (kind.kind === "mark") {
+    const { investigateMark } = await import("./world-kinds.mjs");
+    return investigateMark(kind.id, usable);
+  }
   if (kind.kind === "creature") {
     // POS-637 PR-C: the creature as of now, its newest reactions with their odds, and the crossing save's row
     const { creaturesForRead, investigateCreature, savedCreatureOf, REACTIONS_SQL } = await import("./creatures-read.mjs");
@@ -1844,7 +1867,7 @@ async function investigateOn(args, oriented) {
   const { actsQuery } = await import("./world2-acts.mjs");
   const { composeAnchor } = await import("./world-journal.mjs");
   const centreOf = await markCentreOf();
-  return investigateResident(kind.handle, {
+  const read = await investigateResident(kind.handle, {
     from: oriented?.standpoint ?? null,
     known: (h) => houseOf(h) != null,
     standpoint: (h) => residentStandpoint(h),
@@ -1860,6 +1883,7 @@ async function investigateOn(args, oriented) {
     placeMarks: (p) => placeMarksAt(p),
     marksOf: (ids) => markRows(ids),
   });
+  return usable && read && !read.error ? { ...read, can: canOn(usable, kind.handle) } : read;
 }
 
 /** Where the newest crossing save put a resident: { crossing, x, y }, or null (STATE/snapshot/<n>/entities.json). */
@@ -2442,6 +2466,15 @@ async function apexRead(args, key, ctx = {}) {
     });
   } finally { store.db?.close(); }
 
+  // ── VERBS SHOW WHEN USABLE (LOGOS v2, lane O2; SITTING 10:30–10:36, 12:01) ──
+  // take, give, drop and refill show only when some object in view makes them
+  // possible (usable-verbs.mjs: one matrix of (verb, object) pairs), and
+  // investigate's `can` is that matrix's column for one object. The DOOR is not
+  // trimmed: a verb tried while hidden reaches its door and is refused with its
+  // reason. Where the matrix cannot be read, nothing is trimmed.
+  const usable = await usableHere(args, key, oriented, nearby);
+  if (usable) actions = onlyUsable(actions, usable);
+
   // ── Stage ② · whose grant opened each door ────────────────────────────────
   //
   // `yours` travels with what you are — the ocap grants on a class you are an
@@ -2515,7 +2548,8 @@ async function apexRead(args, key, ctx = {}) {
   // answers, with a `renamed` row, until train/2026-w42.
   const found = await findOn(args, key);
   // ── THE ENTITY READ (POS-632 PR-4; Sitting E) ───────────────────────────────
-  const investigated = await investigateOn(args, oriented);
+  const investigated = await investigateOn(args, oriented, usable);
+  if (usable && focus && !focus.error && focusArgs(args)) focus.can = canOn(usable, focusArgs(args).mark);
 
   // ── THE RECORDS THIS READ NAMES (2026-09-10) ──────────────────────────────
   const nearbyOut = nearby;

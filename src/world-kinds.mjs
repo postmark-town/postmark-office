@@ -251,3 +251,47 @@ export async function callKinds(route, args, key, actor, deps) {
       throw bounce(422, "not a kind act", "leave-mark { kind, count, to }, take, give, or a class's own action");
   }
 }
+
+/**
+ * THE (VERB, OBJECT) MATRIX AT A STANDPOINT, read live (usable-verbs.mjs §
+ * usablePairs): the bare read's `can` and investigate's `can` both project
+ * this one answer, so they cannot diverge. `markIds` are the marks in view;
+ * every thing in the actor's hands joins them (a carried bowl is at you).
+ */
+export async function usableAt({ actor, here, markIds = [], residents = [] }) {
+  const [guards, { lawSnapshot }, world, { usablePairs }, { classViewOf }, { isUnitRow }] = await Promise.all([
+    import("./world2-guards.mjs"), import("./law-snapshot.mjs"), import("./world.mjs"), import("./usable-verbs.mjs"),
+    import("./world-units.mjs"), import("./world-stacks.mjs"),
+  ]);
+  const [units, attachments] = await Promise.all([guards.storeHoldingRows(), guards.storeAttachmentRows()]);
+  const ids = [...new Set([...markIds.map(String), ...holdingsOf(attachments, String(actor))])];
+  const marks = (await Promise.all(ids.map((id) => world.worldMarkById(id).then((r) => r.mark, () => null)))).filter(Boolean);
+  let householdOf = null;
+  try { householdOf = await (await import("./households.mjs")).householdLookup(); } catch { householdOf = null; }
+  const pointWithinMark = await world.pointWithinMarkFn().catch(() => null);
+  return usablePairs({ actor, here, marks, residents, fold: foldUnits(units.filter(isUnitRow)), attachments,
+    view: classViewOf(lawSnapshot()), householdOf, pointWithinMark });
+}
+
+/**
+ * `investigate: "<by>/<slug>"` on a mark: its column of the matrix (`can`, the
+ * verbs you can do to it now) and, for a holder, what it holds, sharpened to
+ * its kinds — a class and a number each, never a unit (15:46; 18:44 item 4).
+ */
+export async function investigateMark(id, usable = null) {
+  const [world, guards, { lawSnapshot }, { canOn }, { classViewOf }, { isUnitRow }] = await Promise.all([
+    import("./world.mjs"), import("./world2-guards.mjs"), import("./law-snapshot.mjs"), import("./usable-verbs.mjs"),
+    import("./world-units.mjs"), import("./world-stacks.mjs"),
+  ]);
+  const mark = (await world.worldMarkById(String(id))).mark;
+  const can = usable ? { can: canOn(usable, id) } : {};
+  if (!mark) return { mark: String(id), stands: false, note: "no mark by that id stands on the world (a private draft is its household's alone)", ...can };
+  const view = classViewOf(lawSnapshot());
+  const law = holderLawOf({ holder: String(id), mark, view });
+  const out = { mark: String(id), class: markClassOf(mark), by: ownerOf(mark, id), ...can };
+  if (!law.holder) return out;
+  const [units, attachments] = await Promise.all([guards.storeHoldingRows(), guards.storeAttachmentRows()]);
+  const fold = foldUnits(units.filter(isUnitRow));
+  return { ...out, holder: { capacity: law.capacity, open: law.open }, holds: await shownIn(fold, id, attachments, view,
+    { markById: async (m) => (await world.worldMarkById(m)).mark }, { sharp: true }) };
+}
