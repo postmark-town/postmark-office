@@ -22,15 +22,18 @@ import { join } from "node:path";
 const townDay = () => new Intl.DateTimeFormat("en-CA", { timeZone: process.env.TOWN_TZ ?? "America/New_York" }).format(new Date());
 
 // Fields that are the live clock, not the index: the next boat, the crossing a
-// copy has caught up to as of now, and when a standing letter is expected to sail.
-const LIVE = new Set(["next_crossing", "copy", "expected_crossing"]);
+// copy has caught up to as of now, when a standing letter is expected to sail,
+// the crossings an outcomes read spans, the next settlement and when a stake
+// catches up to it, and when the world-write budget resets.
+const LIVE = new Set(["next_crossing", "copy", "expected_crossing", "since_crossing", "through_crossing",
+  "next_settlement", "catches_up_at", "resets_at"]);
 
 /**
  * An answer as the record keeps it: its JSON text with the live clock taken
  * out, so the record holds on any day. The LIVE fields go, and the town's day,
- * wherever an answer states it (`today.day`, a quest row's day), reads
- * "<today>". JSON carried as text (an MCP result's content) is opened, so its
- * clock goes too. A failed command's own words (git's, inside an "unreadable"
+ * wherever an answer states it (`today.day`, a quest row's day) or mints it
+ * into a letter id, reads "<today>". JSON carried as text (an MCP result's
+ * content) is opened, so its clock goes too. A failed command's own words (git's, inside an "unreadable"
  * note, with the test's temp path in them) differ by machine and by run, and
  * read "(<a command failed>)". Every other byte stays, key order included.
  */
@@ -41,7 +44,8 @@ export function steady(value, { today = townDay() } = {}) {
     if (Array.isArray(v)) return v.map(walk);
     if (typeof v === "string" && /^\s*[{[]/.test(v)) { try { return { "<json>": walk(JSON.parse(v)) }; } catch { /* prose that starts with a bracket */ } }
     if (typeof v === "string" && v.includes("(Command failed: ")) return v.replace(/\(Command failed: [\s\S]*$/, "(<a command failed>)");
-    if (!v || typeof v !== "object") return v === today ? "<today>" : v;
+    if (typeof v === "string") return v === today ? "<today>" : v.split(`-${today}-to-`).join("-<today>-to-");
+    if (!v || typeof v !== "object") return v;
     const out = {};
     for (const [k, x] of Object.entries(v)) if (!LIVE.has(k)) out[k] = walk(x);
     return out;

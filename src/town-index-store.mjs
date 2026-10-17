@@ -159,7 +159,7 @@ export async function bulletinList(q) {
   return (await q.query(`SELECT slug, json FROM town_bulletin ORDER BY slug COLLATE "C"`)).rows.map(bulletinListing);
 }
 
-/** queries.bulletinTeaser, from the store (read_bulletin's paged answer; the doorstep keeps office.db's until it moves). */
+/** queries.bulletinTeaser, from the store (read_bulletin's paged answer, and the doorstep's teaser). */
 export async function bulletinTeaser(q, opts = {}) {
   return bulletinTeaserOf(await bulletinList(q), opts);
 }
