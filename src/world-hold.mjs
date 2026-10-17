@@ -62,9 +62,11 @@ import { worldFreezeBounce } from "./freeze.mjs";
 import { readAttachments, declareAttachment } from "./dynamic-entities.mjs";
 import { holdEdgeOnActs } from "./hold-edge.mjs";
 import { IN_READ_WORKER } from "./read-workers.mjs";
-import { classDials } from "./world-classes.mjs";
+import { classDials, classProperty } from "./world-classes.mjs";
+import { holdingOf } from "./holding-law.mjs"; // the resident's capacity, read from the class tree (LOGOS v2, O1)
 import { perceived } from "./act-watch.mjs"; // POS-637 PR-B: every act door perceives creatures
 import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
+import { markClassOf } from "./world-grants.mjs"; // the kind rung: a mark's class in both forms (LOGOS v2, O1)
 
 /** The thing class's own params, read from the record every time (never cached here). */
 export const thingDials = () => classDials("thing");
@@ -1421,7 +1423,7 @@ async function holdAct(name, args = {}, key = null) {
     if (face === "take") {
       let m = null;
       try { m = (await (await import("./world.mjs")).worldMarkById(String(args.thing))).mark; } catch { m = null; }
-      if (m?.class === "chest" && m.portable === false)
+      if (markClassOf(m) === "chest" && m.portable === false)
         throw bounce(409, `${args.thing} is fixed where it stands`, "a chest declared portable: false (a bowl) is not carried — take from it instead: world { do: \"take\", args: { from: \"" + args.thing + "\" } }. Nothing was recorded.");
     }
 
@@ -1586,7 +1588,8 @@ export function holdTurn(fn) {
  * unit is one. The cap is the thing class's declared `carry_cap`, read here.
  */
 async function carryForThings({ who, attachments }) {
-  const cap = thingDials()?.carry_cap;
+  // the resident's own capacity (constitution, 24), property first; the thing class's older carry_cap second (G4)
+  const cap = holdingOf({ className: "resident", classProperty, legacy: { capacity: thingDials()?.carry_cap } }).capacity;
   if (!Number.isInteger(cap)) return;
   const [{ storeHoldingRows }, { foldUnits, totalOf, isUnitRow, refuseOverCarry }] = await Promise.all([import("./world2-guards.mjs"), import("./world-stacks.mjs")]);
   const { inFlightFor } = await import("./world-units.mjs");

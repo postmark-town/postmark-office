@@ -38,7 +38,8 @@ import { lawSnapshot } from "./law-snapshot.mjs";
 // one has loaded there is nothing to open: world.db is retired (3b), and each
 // reader stands on its floor and says so.
 import { byId, classRosterGate, classRosterGateValue, jx, openWorldStore, registerTwin, sqlCompare, HYDRATION_STATUS, NO_WORLD } from "./world-graph-db.mjs";
-import { rosterOf, dialsOf, predicatesOf, predicateNodeOf } from "./law-classes.mjs";
+import { rosterOf, dialsOf, predicatesOf, predicateNodeOf, propertiesOf, snapProperty } from "./law-classes.mjs";
+import { lineageOf } from "./world-grants.mjs"; // the kind rung's lineage walk (LOGOS v2, O1)
 import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
 
 // ── THE FOURTH RUNG, ABOVE THE OTHER THREE (POS-270, 2026-09-27) ─────────────
@@ -57,23 +58,12 @@ const lawFor = () => lawSnapshot();
 // store is also unreadable, and the bounce says which of the two happened.
 export const ROSTER_FLOOR = Object.freeze(["bounty", "thing"]);
 
-// WHO may instantiate (#1797): the roster says a class EXISTS; this says a
-// RESIDENT may cite it. "This set grows by ruling, never by drift"
-// (board-grammar.test.mjs, the live-tree law). Found 2026-08-22: a resident's
-// class: "home" sailed through the exists-check and the settlement shadow
-// caught the crossing as a would-refuse.
-// `idea` joined 2026-08-30 (founder-ruled, the Think Tank): stage 1 of the
-// Idea Lifecycle is a resident publishing an idea mark with their own hand —
-// one call, no git, no founder. The same ruling is carried by name in the
-// world repo's board-grammar.test.mjs whitelist; these two sets are NAME-KEYED
-// TWINS and move together or the door refuses what the law allows (this one
-// nearly shipped stale — caught at the w36 pre-ship risk review).
-// `chest` joined 2026-10-12 (WLD-27, Wright-verified on the issue), its twin in
-// world tools/board-grammar.test.mjs moving with it. Candy does NOT join (Wright,
-// 2026-10-13T00:09Z): town alone makes candy, and a resident's candy mark is only
-// a held unit their drop set down (world.mjs § leaveMarkViaOffice, `dropUnit`).
-export const RESIDENT_INSTANTIABLE = Object.freeze(["bounty", "thing", "note", "idea", "chest"]);
-export const residentMayInstantiate = (klass) => RESIDENT_INSTANTIABLE.includes(String(klass));
+// WHO may instantiate is the CLASS's answer now (LOGOS v2, lane O1): its
+// `makers` property, inherited down `extends` (classes.md § makers, ruled 16:02,
+// shaped 18:44: "It replaces the hand-kept `RESIDENT_INSTANTIABLE` whitelist").
+// The list that stood here (bounty, thing, note, idea, chest; #1797, 08-30,
+// 10-12) is retired, and holding-law.mjs § makersOf reads the property through
+// § classProperty below. An unread makers answers false, the root's own answer.
 
 const ROSTER_SQL = `SELECT DISTINCT json_extract(props, '$.class') AS class
                       FROM nodes WHERE ${CLASS_ROSTER_GATE_SQL}`;
@@ -141,7 +131,94 @@ export function classRoster() {
 }
 
 /** Drop the cached roster — for a test that republishes the same snapshot object. */
-export function resetClassRosterCache() { _snap = null; }
+export function resetClassRosterCache() { _snap = null; _ext = null; }
+
+// ── THE LINEAGE (LOGOS v2, lane O1) ─────────────────────────────────────────
+// A class's `extends`, read from the same rungs the roster reads. It is what
+// world-grants § standingOf walks to tell how a `kind: thing` mark stands, and
+// what § propertyOf walks to find the nearest class that sets a property
+// (makers, holder, capacity, open: "inherited down `extends`", ruled 18:44).
+const CLASS_EXTENDS_SQL = `SELECT json_extract(props, '$.class') AS class, json_extract(props, '$.extends') AS ext
+                             FROM nodes WHERE ${CLASS_ROSTER_GATE_SQL}`;
+let _ext = null;
+
+/** `name → extends` over the class layer; null for a root, an unknown class or an unreadable layer. */
+export function classExtendsOf() {
+  const law = lawFor();
+  if (law?.classes?.size) {
+    return (name) => { const e = law.classes.get(String(name))?.extends; return e == null ? null : String(e); };
+  }
+  const w = openWorldStore();
+  if (!w) return () => null;
+  if (_ext?.from !== w.snap) {
+    const map = new Map();
+    try {
+      const db = w.db;
+      for (const r of db.prepare(CLASS_EXTENDS_SQL).all()) if (r?.class != null && !map.has(String(r.class))) map.set(String(r.class), r.ext == null ? null : String(r.ext));
+      db.close();
+    } catch (e) { plainReason(e, "files", "the class lineage"); }
+    _ext = { from: w.snap, map };
+  }
+  const { map } = _ext;
+  return (name) => map.get(String(name)) ?? null;
+}
+
+// ── THE PROPERTIES (LOGOS v2, lane O1) ──────────────────────────────────────
+// "Every dial becomes a property, and a locked value is its default" (ruled
+// 16:02). A class's own property nodes come first, its predicate children
+// second, its frontmatter `dials:` third: the migration's precedence, stated
+// once (as dialNumber states it for the two older spellings), so a reader
+// works on a record before the property nodes land and after.
+// (PROPERTY_SQL and PROPERTY_CHILD_SQL stand below CLASS_GATE_C, which they read.)
+
+/** A class's OWN property nodes (no lineage): `name -> {default, tier, id, children}`. Empty when it declares none or the layer is unreadable. */
+export function classOwnProperties(name) {
+  const law = lawFor();
+  if (law) return propertiesOf(law, name);
+  const w = openWorldStore();
+  if (!w) return {};
+  try {
+    const db = w.db;
+    const out = {};
+    for (const r of db.prepare(PROPERTY_SQL).all(String(name))) {
+      if (r?.name == null || out[String(r.name)]) continue;
+      const children = {};
+      for (const k of db.prepare(PROPERTY_CHILD_SQL).all(String(r.id))) if (k?.name != null && !children[String(k.name)]) children[String(k.name)] = { default: k.dflt ?? null, tier: k.tier ?? null, id: k.id ?? null };
+      out[String(r.name)] = { default: r.dflt ?? null, tier: r.tier ?? null, id: r.id ?? null, children };
+    }
+    db.close();
+    return out;
+  } catch (e) { plainReason(e, "files", "a class's properties"); return {}; }
+}
+
+/**
+ * A property as a class READS it: the nearest class in its lineage that sets
+ * it (a property is "inherited down `extends`", ruled 18:44; a subclass sets
+ * its own value or bounds), in the precedence above. Returns
+ * `{ value, tier, from, source: "property"|"predicate"|"dial", id, children }`,
+ * or null when no class in the lineage says anything about it. A child bound
+ * (`min`, `max`) is read the same way, nearest first, so a subclass may move
+ * one bound and inherit the other.
+ */
+export function classProperty(className, prop, { extendsOf = null } = {}) {
+  const law = lawFor();
+  if (law && !extendsOf) return snapProperty(law, className, prop);
+  const line = lineageOf(className, extendsOf ?? classExtendsOf());
+  let found = null;
+  for (const c of line) {
+    const own = classOwnProperties(c)[prop];
+    if (own) { found = { value: own.default, tier: own.tier, from: c, source: "property", id: own.id, children: {} }; break; }
+    const pred = classPredicates(c)?.[prop];
+    if (pred !== undefined) { found = { value: pred, tier: null, from: c, source: "predicate", id: dialNode(c, prop), children: {} }; break; }
+    const dial = classDials(c)?.[prop];
+    if (dial !== undefined) { found = { value: dial, tier: null, from: c, source: "dial", id: null, children: {} }; break; }
+  }
+  if (!found) return null;
+  for (const c of line) {
+    for (const [k, v] of Object.entries(classOwnProperties(c)[prop]?.children ?? {})) if (!(k in found.children)) found.children[k] = { value: v.default, tier: v.tier, from: c, id: v.id };
+  }
+  return found;
+}
 
 /**
  * EVERY PUBLISHED IDEA, WHEREVER IT STANDS — the Idea Lifecycle's stage-1
@@ -292,7 +369,7 @@ const CIVIC_PREDICATES_SQL = `
     FROM edges AS e
     JOIN nodes AS p ON p.id = e.dst
    WHERE e.src = ? AND e.type = 'describes'
-     AND p.subkind = 'predicated'
+     AND p.subkind IN ('predicated', 'predicate')
      AND json_extract(p.props, '$.slot') IS NOT NULL
    ORDER BY json_extract(p.props, '$.slot')`;
 
@@ -615,6 +692,25 @@ const DIAL_NODE_SQL = `
      AND json_extract(p.props, '$.slot') = ?
    LIMIT 1`;
 
+// The class's property nodes (§ THE PROPERTIES above), by the same class gate.
+const PROPERTY_SQL = `
+  SELECT json_extract(p.props, '$.name') AS name,
+         json_extract(p.props, '$.default') AS dflt,
+         p.tier AS tier, p.id AS id
+    FROM nodes AS c
+    JOIN edges AS e ON e.src = c.id AND e.type = 'describes'
+    JOIN nodes AS p ON p.id = e.dst
+   WHERE ${CLASS_GATE_C}
+     AND json_extract(c.props, '$.class') = ?
+     AND p.subkind = 'property'`;
+const PROPERTY_CHILD_SQL = `
+  SELECT json_extract(p.props, '$.name') AS name,
+         json_extract(p.props, '$.default') AS dflt,
+         p.tier AS tier, p.id AS id
+    FROM edges AS e
+    JOIN nodes AS p ON p.id = e.dst
+   WHERE e.src = ? AND e.type = 'describes' AND p.subkind = 'property'`;
+
 /**
  * WHERE a class's slot lives — the predicate node's id, as the record spells it.
  *
@@ -771,6 +867,11 @@ registerTwin(ROSTER_SQL, (g) => {
   for (const n of rosterRows(g)) seen.add(jx(n.p, "class"));
   return [...seen].map((c) => ({ class: c }));
 });
+registerTwin(PROPERTY_SQL, (g, klass) => describedBy(g, klass).filter((p) => p.subkind === "property")
+  .map((p) => ({ name: jx(p.p, "name"), dflt: jx(p.p, "default"), tier: p.tier ?? null, id: p.id })));
+registerTwin(PROPERTY_CHILD_SQL, (g, src) => edgesFrom(g, String(src), "describes").map((e) => g.byId.get(e.dst))
+  .filter((p) => p && p.subkind === "property").map((p) => ({ name: jx(p.p, "name"), dflt: jx(p.p, "default"), tier: p.tier ?? null, id: p.id })));
+registerTwin(CLASS_EXTENDS_SQL, (g) => rosterRows(g).map((n) => ({ class: jx(n.p, "class"), ext: jx(n.p, "extends") })));
 registerTwin(IDEA_DECL_SQL, (g) => rosterRows(g, "idea").map((n) => ({ id: n.id, body: jx(n.p, "body") })));
 registerTwin(IDEA_ROWS_SQL, (g, declId) => edgesTo(g, declId, "instance-of")
   .map((e) => g.byId.get(e.src)).filter((n) => n && jx(n.p, "class") === "idea")
@@ -781,7 +882,7 @@ registerTwin(IDEA_ROWS_SQL, (g, declId) => edgesTo(g, declId, "instance-of")
   .sort((a, b) => sqlCompare(a.date ?? "", b.date ?? "") || sqlCompare(a.id, b.id)));
 registerTwin(PLAQUE_SQL, (g, id) => { const n = g.byId.get(String(id)); return n ? [{ body: jx(n.p, "body") }] : []; });
 registerTwin(CIVIC_PREDICATES_SQL, (g, src) => edgesFrom(g, src, "describes")
-  .map((e) => g.byId.get(e.dst)).filter((p) => p && p.subkind === "predicated" && jx(p.p, "slot") !== null)
+  .map((e) => g.byId.get(e.dst)).filter((p) => p && (p.subkind === "predicated" || p.subkind === "predicate") && jx(p.p, "slot") !== null)
   .map((p) => ({ slot: jx(p.p, "slot"), value: jx(p.p, "value") }))
   .sort((a, b) => sqlCompare(a.slot, b.slot)));
 registerTwin(BOUNTY_LAW_SQL, (g) => rosterRows(g, "bounty").map((n) => ({ body: jx(n.p, "body") })));

@@ -62,6 +62,7 @@ import { join, resolve, relative } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 
 import { actionEntriesOf } from "../../src/world-store.mjs";
+import { classNodeNameOf, extendsFromMarks, isSited, kindFieldOf } from "../../src/world-grants.mjs"; // the kind rung (LOGOS v2, O1)
 
 export const LAW_REPO_KEY = "world-law"; // projection_heads.repo for this pen
 
@@ -124,8 +125,11 @@ const standsInTheWorks = (rec, byId) => {
   }
   return false;
 };
+// In either form (LOGOS v2, O1): the old form names the class in `class:`; the
+// new form is `kind: class` and names it by its own slug (ruled 16:02).
 const isClassDeclaration = (m, byId) =>
-  m.by === "the-town" && m.tier === "constitution" && m.class !== undefined && standsInTheWorks(m, byId);
+  m.by === "the-town" && m.tier === "constitution" && (m.class !== undefined || kindFieldOf(m) === "class")
+  && classNodeNameOf(m) != null && standsInTheWorks(m, byId);
 
 // A mark record carries `_dir` as an ABSOLUTE path on the machine that parsed it.
 // Left in `data` it would make the projection machine-dependent — two honest
@@ -245,7 +249,7 @@ export async function deriveLaw({ lawRepo }) {
   // extends, version, body — the fields that make a class mark law).
   const declarations = marks.filter((m) => isClassDeclaration(m, byId));
   for (const m of declarations) {
-    push("class", relPath(repo, join(m._dir, "mark.md")), String(m.class), recordData(m));
+    push("class", relPath(repo, join(m._dir, "mark.md")), String(classNodeNameOf(m)), recordData(m));
   }
 
   // ── kind: grant ────────────────────────────────────────────────────────────
@@ -269,8 +273,8 @@ export async function deriveLaw({ lawRepo }) {
   for (const m of declarations) {
     const path = relPath(repo, join(m._dir, "mark.md"));
     for (const entry of actionEntriesOf({ props: m })) {
-      push("grant", path, grantKey(m.class, entry),
-        { class: String(m.class), ...entry, from: m.id });
+      push("grant", path, grantKey(classNodeNameOf(m), entry),
+        { class: String(classNodeNameOf(m)), ...entry, from: m.id });
     }
   }
 
@@ -295,13 +299,35 @@ export async function deriveLaw({ lawRepo }) {
   // LAST for classPredicates, the FIRST for dialNode's `LIMIT 1` — and `ord`
   // (the loader's order, which is the order the hydrator writes its edges in)
   // lets law-classes.mjs answer the same way.
-  const isGeometric = (m) => m?.kind === "sited" || m?.kind === "parcel";
-  const classOfId = new Map(declarations.map((m) => [m.id, String(m.class)]));
+  const lineage = extendsFromMarks(marks);
+  const isGeometric = (m) => isSited(m, lineage);
+  const classOfId = new Map(declarations.map((m) => [m.id, String(classNodeNameOf(m))]));
   marks.forEach((m, ord) => {
     const klass = classOfId.get(m._parentMarkId);
     if (klass === undefined || isGeometric(m) || m.slot === undefined || m.slot === null) return;
     push("predicate", relPath(repo, join(m._dir, "mark.md")), `${klass}/${m.slot}/${m.id}`,
       { class: klass, slot: m.slot, value: m.value ?? null, id: m.id, ord });
+  });
+
+  // ── kind: property ─────────────────────────────────────────────────────────
+  // A class's PROPERTY NODES (LOGOS v2, lane O1; classes.md § Property: "The
+  // four fields of a property are fixed … a name, a tier, a default and a
+  // body", and "A property may have child properties, each with its own tier").
+  // A `kind: property` mark filed under its class node is the class's own; one
+  // filed under a property node is that property's child (capacity's min, max).
+  // KEYED BY (class, [parent/]name): a class states each property once.
+  const propName = (m) => String(m.name ?? m.slug ?? String(m.id).split("/").pop());
+  marks.forEach((m, ord) => {
+    if (kindFieldOf(m) !== "property") return;
+    const up = byId.get(m._parentMarkId);
+    const own = classOfId.get(m._parentMarkId);
+    const data = { name: propName(m), tier: m.tier ?? null, default: m.default ?? null, id: m.id, ord };
+    if (own !== undefined) {
+      push("property", relPath(repo, join(m._dir, "mark.md")), `${own}/${data.name}`, { class: own, parent: null, ...data });
+    } else if (up && kindFieldOf(up) === "property" && classOfId.has(up._parentMarkId)) {
+      const klass = classOfId.get(up._parentMarkId);
+      push("property", relPath(repo, join(m._dir, "mark.md")), `${klass}/${propName(up)}/${data.name}`, { class: klass, parent: propName(up), ...data });
+    }
   });
 
   // ── kind: threshold ────────────────────────────────────────────────────────

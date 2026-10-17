@@ -47,7 +47,9 @@ import { guardedDraftsForKey, guardedLiveChildrenOf, guardedLiveMarks } from "./
 import { WORLD_STAKE_TOOLS, actingAs, callWorldStakeTool, emptyPurseRefusalFor, heldAtOffice, worldPortfolioStakeSlice, markStakeBlock } from "./world-stake.mjs"; // P3 draft, append-shaped
 import { toConfirm } from "./stamps-preview.mjs"; // POS-83: the inline stake's half of the confirmation step
 import { visitorRulesGate } from "./visitor-rules.mjs"; // POS-300: a berth reads the town's rules for visitors before its first say
-import { classNames, classRoster, classDials, departurePace, freeCellIn, RESIDENT_INSTANTIABLE, residentMayInstantiate, STRIDE_MARK_ID } from "./world-classes.mjs"; // which classes exist — read from the record, never held
+import { isSited, kindFieldOf, markClassOf } from "./world-grants.mjs"; // the kind rung: a mark's class and standing, in both forms (LOGOS v2, O1)
+import { classNames, classRoster, classDials, classExtendsOf, classProperty, departurePace, freeCellIn, STRIDE_MARK_ID } from "./world-classes.mjs";
+import { makersOf } from "./holding-law.mjs"; // who may make an instance: the class's own makers (LOGOS v2, O1) // which classes exist — read from the record, never held
 import { HOLD_TOOLS, callHoldTool } from "./world-hold.mjs"; // the object primitive: who holds what
 import { createVoices, EARSHOT_M, HEAR_MAX, HEARING_WINDOW, RECORD_KEPT_AT } from "./voices.mjs";
 import { createHearingWindow } from "./hearing-window.mjs"; // earshot: speech at a position (the party line)
@@ -975,12 +977,12 @@ export function placeWordsFrom(marks, { x, y }, verbs) {
  * beside them (POS-632: a mark named is shown whole).
  */
 export function placeMarksFrom(marks, { x, y }, verbs) {
-  const ground = marks.filter((m) => m?.class !== "thing");
+  const ground = marks.filter((m) => markClassOf(m) !== "thing");
   const spine = verbs.containmentChain({ x, y }, ground).filter((m) => m.id !== WORLD_FRAME);
   if (spine.length) return { spine, near: null };
   let best = null, bd = Infinity;
   for (const m of ground) {
-    if (!m.at || !(m.kind === "sited" || m.kind === "parcel")) continue;
+    if (!m.at || !isSited(m, classExtendsOf())) continue;
     const d = Math.hypot(m.at.x - x, m.at.y - y);
     if (d < bd) { bd = d; best = m; }
   }
@@ -3774,7 +3776,7 @@ async function journalLeaveMark(clean, { crossing = currentCrossing(), guard = n
     if (clean.kind !== "sited" && clean.kind !== "parcel") {
       const parent = liveById.get(clean.parent_id) ?? canon.byId.get(clean.parent_id);
       if (!parent) throw bounce(422, `no mark "${clean.parent_id}" to describe`, "predicated/naming marks nest under the mark they describe — pass its id as parent_id");
-      if (parent.kind !== "sited" && parent.kind !== "parcel") throw bounce(422, `"${clean.parent_id}" cannot hold a description`, "only sited/parcel marks carry predicated/naming children");
+      if (!isSited(parent, classExtendsOf())) throw bounce(422, `"${clean.parent_id}" cannot hold a description`, "only sited/parcel marks carry predicated/naming children");
     }
 
     // NO FRAME CONVERSION HERE, deliberately. The git path converts world
@@ -4051,7 +4053,7 @@ export async function journalWithdraw({ by, slug, household, cause = null, guard
     // judged under the chest's own lock inside this write's transaction
     // (chest-lock.mjs § chestEmptyGuard), so no give or stock can slip contents
     // in behind the decision. Any other mark withdraws exactly as before.
-    const isChest = (live.find((m) => m.id === id) ?? canon.marks.find((m) => m.id === id))?.class === "chest";
+    const isChest = markClassOf(live.find((m) => m.id === id) ?? canon.marks.find((m) => m.id === id)) === "chest";
     const chestGuard = isChest ? (await import("./chest-lock.mjs")).chestEmptyGuard({ chest: id }) : null;
     // `asked` (WLD-27 A): the door's own check that must hold in this same
     // transaction — the public withdrawal's escrow, read under the mark's lock.
@@ -4319,9 +4321,15 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
     // candy falls to the whitelist refusal below, exactly as before.
     const droppedUnit = klass === "candy" && dropUnit != null
       && payload.dropped === `act:${dropUnit.actId}` && payload.label === dropUnit.label && kind === "sited";
-    if (!droppedUnit && !residentMayInstantiate(klass))
+    // ── WHO may make it is the CLASS's own answer (LOGOS v2, lane O1): its
+    // `makers` property, inherited down `extends`; the hand-kept whitelist that
+    // stood here is retired (classes.md § makers, ruled 16:02 / 18:44).
+    const makers = droppedUnit ? null : makersOf(klass, classProperty);
+    if (!droppedUnit && !makers.may)
       throw bounce(422, `class "${klass}" is town-only`,
-        `residents may instantiate only [${RESIDENT_INSTANTIABLE.join(", ")}] today (#1797) — the class exists in the law, but citing it on your own mark is the town's act, not a resident's`);
+        makers.read
+          ? `its makers is false (set on ${makers.from}): a resident may make an instance unless it would give them control over something that mints or confers standing (the-town/nothing-you-control-mints), so this class is the town's to make — explain: "${klass}" says who makes what`
+          : `no class in "${klass}"'s lineage states makers, and an unread makers answers false, the root's own answer (postmark-node) — the class exists in the law, but making one is the town's act, not a resident's`);
   }
 
   // ── the thing grammar (the object primitive) ────────────────────────────────
@@ -5091,7 +5099,7 @@ async function sitedWithin(parcel, marks) {
     ? (m) => geom.marksContain(parcel, m)
     : () => true;   // an older engine: the centre test below is the whole answer
   return (marks ?? []).filter((m) =>
-    m.kind === "sited" && m.at && m.id !== parcel.id
+    kindFieldOf(m) !== "parcel" && isSited(m, classExtendsOf()) && m.at && m.id !== parcel.id
     && geom.pointInRect(m.at.x, m.at.y, box)   // cheap first: a parcel is 25 m square
     && holds(m));
 }
@@ -5367,7 +5375,7 @@ async function walkAct(worldClone, payload = {}, key = null) {
     const id = String(payload.mark_id);
     const m = (w.marks ?? []).find((k) => k.id === id);
     if (!m) throw bounce(422, `no mark "${id}"`, "ids are <by>/<slug>, as they appear in the telling");
-    if (m.kind !== "sited") {
+    if (kindFieldOf(m) === "parcel" || !isSited(m, classExtendsOf())) {
       const within = m.kind === "parcel" ? await sitedWithin(m, w.marks) : null;
       const refusal = unwalkableTarget(m, within);
       throw bounce(422, refusal.defect, refusal.hint);
@@ -5586,7 +5594,7 @@ async function walkAct(worldClone, payload = {}, key = null) {
     // The narrowing matters. If the stack also holds a mark that is NOT a
     // vehicle, the refusal stands exactly as it did: this only ever spares a
     // caller the `exit: true` for a hull, never for a room.
-    const vehicleLeaving = leaving.filter((id) => String(byId.get(id)?.class ?? "") === "vehicle");
+    const vehicleLeaving = leaving.filter((id) => markClassOf(byId.get(id)) === "vehicle");
     const allVehicles = leaving.length > 0 && vehicleLeaving.length === leaving.length;
     if (leaving.length) {
       if (payload.exit !== true && !allVehicles) {
@@ -6295,7 +6303,7 @@ export const SAY_RECORD_DISCLOSURE = " And the town remembers out loud: what you
 // commons mark), and an explicit 0 bounces to the world door where private
 // drafts live. The lane opens class by class — `idea` today; a class joins by
 // adding its row to POST_PLACES when its migration is ruled, never by drift
-// (the same growth law as RESIDENT_INSTANTIABLE).
+// (the same growth law the hand-kept whitelist had; `makers` answers who may make, LOGOS v2).
 export const POST_PLACES = Object.freeze({
   idea: "the-town/the-think-tank",
 });

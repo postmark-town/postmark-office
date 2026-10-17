@@ -27,7 +27,7 @@ export const LAW_AT_BLESSING_SQL = `
           ORDER BY s.number DESC LIMIT 1)
   SELECT pin.number, pin.tag_sha, newest.n AS newest, l.kind, l.key, l.data
     FROM pin CROSS JOIN newest
-    JOIN law_projection l ON l.law_sha = pin.tag_sha AND l.kind IN ('class', 'predicate')
+    JOIN law_projection l ON l.law_sha = pin.tag_sha AND l.kind IN ('class', 'predicate', 'property')
    ORDER BY l.kind, l.key`;
 
 /**
@@ -52,11 +52,27 @@ export function lawSnapshotFromRows(rows) {
     const seen = predicates.get(k).get(slot);
     predicates.get(k).set(slot, { value: d.value ?? null, id: seen ? seen.id : (d.id ?? null) });
   }
+  // A class's PROPERTY NODES (LOGOS v2: `kind: property`, filed under their
+  // class; a child property under its property). `class → name → {default,
+  // tier, id, children: name → {default, tier, id}}`. Empty on a law that has
+  // none yet, and every reader then stands on the predicate children and dials.
+  const properties = new Map();
+  const props = rows.filter((r) => r.kind === "property").map((r) => r.data ?? {})
+    .sort((a, b) => (Number(a.ord ?? 0) - Number(b.ord ?? 0)));
+  for (const d of props) {
+    const k = String(d.class);
+    if (!properties.has(k)) properties.set(k, new Map());
+    const own = properties.get(k);
+    const entry = { default: d.default ?? null, tier: d.tier ?? null, id: d.id ?? null };
+    if (d.parent == null) { if (!own.has(String(d.name))) own.set(String(d.name), { ...entry, children: new Map() }); else Object.assign(own.get(String(d.name)), entry); continue; }
+    if (!own.has(String(d.parent))) own.set(String(d.parent), { default: null, tier: null, id: null, children: new Map() });
+    own.get(String(d.parent)).children.set(String(d.name), entry);
+  }
   const settlement = Number(number);
   const newestN = newest == null ? settlement : Number(newest);
   return {
     pin: { settlement, sha: String(tag_sha), newest: newestN },
-    classes, predicates,
+    classes, predicates, properties,
     disclosed: newestN > settlement
       ? `the class layer answers from S${settlement} (${String(tag_sha).slice(0, 12)}); S${newestN} is blessed but its law is not ingested yet`
       : null,
@@ -78,6 +94,46 @@ export function predicatesOf(snap, name) {
   const out = {};
   for (const [slot, p] of snap.predicates.get(String(name)) ?? []) out[slot] = p.value;
   return out;
+}
+
+/** A class's own property nodes as `name -> {default, tier, id, children}` — world-classes § classOwnProperties. */
+export function propertiesOf(snap, name) {
+  const out = {};
+  for (const [n, p] of snap.properties?.get(String(name)) ?? []) {
+    const children = {};
+    for (const [c, v] of p.children ?? []) children[c] = { ...v };
+    out[n] = { default: p.default, tier: p.tier, id: p.id, children };
+  }
+  return out;
+}
+
+/**
+ * A property as a class reads it, over ONE snapshot: the nearest class in its
+ * lineage that states it, property node first, predicate child second, dial
+ * third — world-classes § classProperty, pure, for a reader holding one
+ * snapshot (the unit door's class view). Child bounds are read nearest first.
+ */
+export function snapProperty(snap, className, prop) {
+  const line = [];
+  for (let at = className == null ? "" : String(className); at && !line.includes(at) && line.length < 32;) {
+    line.push(at);
+    const up = snap?.classes?.get(at)?.extends;
+    at = up == null ? "" : String(up);
+  }
+  let found = null;
+  for (const c of line) {
+    const own = snap?.properties?.get(c)?.get(String(prop));
+    if (own) { found = { value: own.default, tier: own.tier, from: c, source: "property", id: own.id, children: {} }; break; }
+    const pred = snap?.predicates?.get(c)?.get(String(prop));
+    if (pred) { found = { value: pred.value, tier: null, from: c, source: "predicate", id: pred.id, children: {} }; break; }
+    const dial = dialsOf(snap, c)[prop];
+    if (dial !== undefined) { found = { value: dial, tier: null, from: c, source: "dial", id: null, children: {} }; break; }
+  }
+  if (!found) return null;
+  for (const c of line) {
+    for (const [k, v] of snap?.properties?.get(c)?.get(String(prop))?.children ?? []) if (!(k in found.children)) found.children[k] = { value: v.default, tier: v.tier, from: c, id: v.id };
+  }
+  return found;
 }
 
 /** Where a class's slot lives, as the record spells it — world-classes § dialNode. */

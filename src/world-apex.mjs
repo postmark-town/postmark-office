@@ -129,7 +129,7 @@ import { actorRoster, resolveHumanActor } from "./human-actor.mjs";
 // that one derivation, moved somewhere both doors can read it.
 import { humanHandFor, householdLookup } from "./households.mjs";
 import {
-  classOfInstance, entriesOfClass, guardsPass, heldEntries, kindOf, resolveGrants, resolveForActor,
+  classOfInstance, markClassOf, entriesOfClass, guardsPass, heldEntries, kindOf, resolveGrants, resolveForActor,
 } from "./world-grants.mjs";
 import { exitAllowed, fenceGroundFor, walkAllowed } from "./embodiment.mjs";
 // THE ARENA IS CLOSED (Keemin, 2026-09-30). Its five verbs are still granted
@@ -368,7 +368,7 @@ export function withinWithVehicles(spine = [], occupied = [], markOf = () => nul
   for (const id of occupied) {
     if (!id || have.has(id)) continue;
     const mark = markOf(id);
-    if (!mark || String(mark.class ?? "") !== VEHICLE_CLASS) continue;
+    if (!mark || markClassOf(mark) !== VEHICLE_CLASS) continue;
     have.add(id);
     out.push({ id, by: mark.by, tier: mark.tier, body: mark.body, extentM: Math.max(mark.extent?.w ?? 0, mark.extent?.h ?? 0) });
   }
@@ -2016,7 +2016,7 @@ function aboardVehicleId(here, worldState) {
   const id = here?.frame ?? here?.vehicle ?? null;
   if (!id) return null;
   const body = (worldState?.marks ?? []).find((m) => m.id === id) ?? null;
-  return String(body?.class ?? "") === VEHICLE_CLASS ? id : null;
+  return markClassOf(body) === VEHICLE_CLASS ? id : null;
 }
 
 /** The ride, the arrived notice, and how to leave a VEHICLE — or nothing.
@@ -2145,7 +2145,7 @@ export function rideDoorsOf(service, at = null, marks = [], unreadable = null) {
   return {
     vessel,
     doors,
-    affordable_at: doors.map((d) => ({ mark: d.mark, class: marks.find((m) => m.id === d.mark)?.class ?? null, at: d.at })),
+    affordable_at: doors.map((d) => ({ mark: d.mark, class: markClassOf(marks.find((m) => m.id === d.mark)), at: d.at })),
     sentence: `${lent} Every stop on her timetable is a door into her wherever her hull is, and her own berth${vessel ? ` (${vessel})` : ""} is one while she is alongside${at ? ". Nearest first" : ". They are"}: ${list}. Walk to one with the entry composed: do: "walk", args: { mark_id: "<the stop>", enter_on_arrival: true }. The walk shows her terms at once; walk again with accept: true to board on arrival, and aboard, ride is yours to declare.`,
   };
 }
