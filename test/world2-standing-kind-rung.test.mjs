@@ -145,40 +145,46 @@ test("a W2 `kind: predicate` continues its parent, as `predicated` did (apex-rea
     "a sited kind's directory is no edge");
 });
 
-// ── the layer is the marks' commit's (review-614, B1) ──────────────────────
+// ── the layer only when the pens agree (review-614, B1 and B2) ─────────────
 
-/** A store that answers the two heads and law_projection's class rows, by sha. */
+/** A store that answers the three heads and law_projection's class rows, by sha. */
 const storeOf = ({ heads, law }) => async (text, args = []) => {
-  const head = /FROM projection_heads WHERE repo = '([a-z-]+)'/.exec(text);
-  if (head) return { rows: heads[head[1]] ? [{ sha: heads[head[1]] }] : [] };
+  if (/AS marks,/.test(text) && /AS door/.test(text))
+    return { rows: [{ marks: heads.marks ?? null, law: heads.law ?? null, door: heads.door ?? null }] };
   if (/FROM law_projection WHERE law_sha = \$1 AND kind = 'class'/.test(text)) return { rows: law[args[0]] ?? [] };
   throw new Error(`the stub store does not answer: ${text}`);
 };
 const PRE_W2 = [["postmark-node", null], ["mark", "postmark-node"], ["sited", "mark"], ["parcel", "sited"], ["thing", "mark"]]
   .map(([key, ext]) => ({ kind: "class", key, data: ext == null ? { class: key } : { class: key, extends: ext } }));
 const OLD = "0".repeat(40), NEW = "b".repeat(40);
+const BOTH = { [OLD]: PRE_W2, [NEW]: LAW };
 
-test("a STALE LAW PIN: a pre-W2 rulebook is never read over W2 rows; the marks' commit has none, so the place answers", async () => {
-  // At 7caba61d6 the layer came from projection_heads['world-law']: here the
-  // pre-W2 one, where `thing` extends `mark`, so the chest was no ground and
-  // the letter went to market.
-  const q = storeOf({ heads: { "world-law": OLD, "world-marks": NEW }, law: { [OLD]: PRE_W2 } });
-  const classes = await classLayerVia(q);
-  assert.equal(classes, null, "no class rows at the marks' commit");
+test("B1 · the LAW behind: a pre-W2 pin is never read over W2 rows; the heads disagree, so the place answers", async () => {
+  // At 7caba61d6 the layer came from the law pin: here the pre-W2 one, where
+  // `thing` extends `mark`, so the chest was no ground and the letter went to market.
+  const classes = await classLayerVia(storeOf({ heads: { law: OLD, marks: NEW, door: NEW }, law: BOTH }));
+  assert.equal(classes, null);
   assert.equal(computeStanding(world(), { classes }).get("sable/the-letter"), "home");
 });
 
-test("the layer is read at the marks' commit, whichever pin the law holds", async () => {
-  const q = storeOf({ heads: { "world-law": OLD, "world-marks": NEW }, law: { [OLD]: PRE_W2, [NEW]: LAW } });
-  const classes = await classLayerVia(q);
-  assert.equal(classes?.get("thing"), "sited", "W2's rulebook, the rows' own");
+test("B2 · the MARKS behind: the old rulebook at world-marks is never read over the door's new-form rows", async () => {
+  // At 3ea801d78 the layer came from world-marks: here the pre-W2 one, while
+  // the law pin and the door are on W2 and write `kind: thing`.
+  const classes = await classLayerVia(storeOf({ heads: { law: NEW, marks: OLD, door: NEW }, law: BOTH }));
+  assert.equal(classes, null);
   assert.equal(computeStanding(world(), { classes }).get("sable/the-letter"), "home");
-  assert.equal(await classLayerVia(storeOf({ heads: { "world-law": NEW }, law: { [NEW]: LAW } })), null,
-    "no marks head: the rows' commit is unknown, so the place answers");
+  assert.equal(computeStanding(world(), { classes }).get("rei/the-chest"), "home");
+});
+
+test("the pens agreeing, the chain answers; any head missing or apart is null", async () => {
+  const classes = await classLayerVia(storeOf({ heads: { law: NEW, marks: NEW, door: NEW }, law: BOTH }));
+  assert.equal(classes?.get("thing"), "sited", "W2's rulebook, the rows' own");
+  for (const heads of [{ law: NEW, marks: NEW }, { law: NEW, door: NEW }, { marks: NEW, door: NEW }, { law: NEW, marks: NEW, door: OLD }])
+    assert.equal(await classLayerVia(storeOf({ heads, law: BOTH })), null, JSON.stringify(heads));
 });
 
 test("a real layer whose chain disagrees with the place: the chain answers (a placed post is no ground)", async () => {
-  const q = storeOf({ heads: { "world-law": NEW, "world-marks": NEW }, law: { [NEW]: LAW } });
+  const q = storeOf({ heads: { law: NEW, marks: NEW, door: NEW }, law: { [NEW]: LAW } });
   const notice = row({ slug: "rei/the-notice", kind: "notice", owner: "rei", household: RIGHT,
     at: { x: 1008, y: 992 }, extent: { w: 4, h: 4 }, consent: { "sable/the-poster": "welcomed" } });
   const poster = row({ slug: "sable/the-poster", kind: "sited", owner: "sable", household: SABLE, at: { x: 1008, y: 992 }, extent: { w: 1, h: 1 } });

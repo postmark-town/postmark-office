@@ -36,6 +36,11 @@ export function dropRefId(ref) {
  * claim's `class` is the mark's kind, its `data.class` the class), or `kind: candy`.
  * And by lineage: a class whose chain in `classes` (standing.mjs § classLayerOf)
  * reaches candy is candy, so a kind of candy is proved as candy is.
+ *
+ * IN A SKEW ONLY `candy` ITSELF IS CAUGHT: when the store's pens disagree on the
+ * commit, `classLayerVia` hands the clearing no layer (null), and a subclass of
+ * candy goes unproved. Acceptable today because W2's class tree has no class
+ * under candy; the day it has one, a skew lets that kind's drop pass unchecked.
  */
 const isCandyClass = (name, classes) => name != null
   && (String(name) === "candy" || (classes ? classChainOf(classes, name).includes("candy") : false));

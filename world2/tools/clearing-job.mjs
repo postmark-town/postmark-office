@@ -169,9 +169,10 @@ try {
     throw new Error("no world-law projection head — a clearing computes against law-as-of a sha; run law-ingest first");
   // THE CLASS LAYER THE ROWS WERE WRITTEN UNDER: how a row or a claim of a
   // class kind stands (`kind: thing` and W2's other re-kinded marks are ground
-  // by their chain), for every walk and every ground test below. It is read at
-  // the marks' commit, not at `lawSha`, which may be another commit's rulebook
-  // (standing.mjs § classLayerVia).
+  // by their chain), for every walk and every ground test below. It is read
+  // only when the marks head, the law pin and the doors' class pin are one
+  // commit; in a skew it is null and the place answers (standing.mjs §
+  // classLayerVia).
   const classes = await classLayerVia(q);
   const outcomes = new Map(); // id -> { status, refusal_check }
   const decide = (id, status, check = null) => outcomes.set(id, { status, refusal_check: check });

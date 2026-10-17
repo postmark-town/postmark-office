@@ -26,7 +26,7 @@ import { startStore } from "./helpers/embedded-store.mjs";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const JOB = join(ROOT, "world2", "tools", "clearing-job.mjs");
 const TOWN_SHA = "t".repeat(40);
-const LAW_SHA = "l".repeat(40);        // the blessed commit: both pens at a settlement
+const LAW_SHA = "c".repeat(40);        // the blessed commit: every pen at a settlement
 const OLD_LAW_SHA = "0".repeat(40);    // a law pin left behind on a pre-W2 commit
 const WIN = 240;
 
@@ -52,10 +52,10 @@ const CLASSES = [["postmark-node", null], ["mark", "postmark-node"], ["sited", "
 // The rulebook before W2: `thing` extends `mark`, never `sited` (review-614, B1).
 const PRE_W2 = [["postmark-node", null], ["mark", "postmark-node"], ["sited", "mark"], ["parcel", "sited"], ["thing", "mark"]];
 
-async function seed(claims, { lawHead = LAW_SHA, layers = { [LAW_SHA]: CLASSES } } = {}) {
+async function seed(claims, { lawHead = LAW_SHA, marksHead = LAW_SHA, layers = { [LAW_SHA]: CLASSES } } = {}) {
   const c = await store.connect("world2_owner");
   try {
-    await c.query("TRUNCATE escrow_projection, claims, marks, windows, projection_heads, households, household_pins, law_projection CASCADE");
+    await c.query("TRUNCATE escrow_projection, claims, marks, windows, projection_heads, households, household_pins, law_projection, settlements CASCADE");
     for (const id of [WIN - 1, WIN]) {
       const opens = new Date(Date.UTC(2026, 9, 6, 18) + (id - WIN + 1) * 12 * 3600e3).toISOString();
       await c.query(
@@ -63,10 +63,12 @@ async function seed(claims, { lawHead = LAW_SHA, layers = { [LAW_SHA]: CLASSES }
          VALUES ($1, $2, $2::timestamptz + interval '12 hours', $3, $4)`,
         [id, opens, id === WIN ? "open" : "closed", id === WIN ? null : opens]);
     }
-    // marks-ingest's head is the blessed commit; law-ingest's pin is `lawHead`
+    // marks-ingest's head is `marksHead`, law-ingest's pin `lawHead`; the doors'
+    // class pin is the newest settlement whose commit law_projection holds (S1, the blessed commit)
     await c.query(
       "INSERT INTO projection_heads (repo, sha, ingested_at) VALUES ('world-law', $1, now()), ('world-marks', $2, now()), ('town', $3, now())",
-      [lawHead, LAW_SHA, TOWN_SHA]);
+      [lawHead, marksHead, TOWN_SHA]);
+    await c.query("INSERT INTO settlements (number, tag_sha, published_at) VALUES (1, $1, now())", [LAW_SHA]);
     for (const [sha, layer] of Object.entries(layers))
       for (const [key, ext] of layer)
         await c.query("INSERT INTO law_projection (law_sha, kind, path, key, data) VALUES ($1, 'class', $2, $3, $4)",
@@ -192,7 +194,7 @@ test("A MOVED THING IS A MOVER: it carries its household's coin, and the guest's
   assert.equal(await tierOf("sable/the-letter"), "market");
 });
 
-test("A STALE LAW PIN never reads its rulebook over W2 rows: the layer is the marks' commit's, and none there means the place answers", { skip }, async () => {
+test("B1 · A STALE LAW PIN never reads its rulebook over W2 rows: the pens disagree, so the place answers", { skip }, async () => {
   // review-614, B1. The law pen and the marks pen run on separate timers and
   // the clearing ingests no law, so the law pin can sit on a pre-W2 commit while
   // the rows are W2's. At 7caba61d6 the walk read the pin's layer, where
@@ -203,11 +205,29 @@ test("A STALE LAW PIN never reads its rulebook over W2 rows: the layer is the ma
   let run = clear();
   assert.equal(run.code, 0, run.out);
   assert.equal(await tierOf("sable/the-letter"), "home", "no class rows at the marks' commit: the place answers, and the chest is ground");
-  // the pin held, the blessed commit's rows written beside it (law-ingest writes a sha's rows when it holds the pin)
+  // the pin held, the blessed commit's rows written beside it: still a skew, still the place
   await seed(bench, { lawHead: OLD_LAW_SHA, layers: { [OLD_LAW_SHA]: PRE_W2, [LAW_SHA]: CLASSES } });
   run = clear();
   assert.equal(run.code, 0, run.out);
-  assert.equal(await tierOf("sable/the-letter"), "home", "the marks' commit's own rulebook: thing > sited");
+  assert.equal(await tierOf("sable/the-letter"), "home");
+});
+
+test("B2 · THE MARKS PEN BEHIND: law and door on W2, world-marks on the old commit, and a ✦0 own-parcel `kind: thing` still locks", { skip }, async () => {
+  // review-614's probe at 3ea801d78: marks-ingest REFUSED after the W2 bless, so
+  // world-marks stayed on the old commit while the law pin and the door moved to
+  // W2 (the door writes `kind: thing` since #613). The layer read at world-marks
+  // was the pre-W2 one: Rei's ✦0 thing was refused escrow-absent, the welcomed
+  // letter was refused, and both went to market.
+  const ids = await seed([
+    { slug: "rei/the-new-chest", kind: "thing", owner: "rei", household: "hh:starforge", at: { x: 1008, y: 992 }, ext: { w: 3, h: 3 } },
+    { slug: "sable/the-second-letter", kind: "sited", owner: "sable", household: "hh:rabbit", at: { x: 998, y: 1002 }, ext: { w: 1, h: 1 } },
+  ], { lawHead: LAW_SHA, marksHead: OLD_LAW_SHA, layers: { [OLD_LAW_SHA]: PRE_W2, [LAW_SHA]: CLASSES } });
+  const run = clear();
+  assert.equal(run.code, 0, run.out);
+  assert.equal((await statusOf(ids["rei/the-new-chest"])).status, "locked", "a ✦0 thing on its own house's parcel is home");
+  assert.equal((await statusOf(ids["sable/the-second-letter"])).status, "locked", "welcomed by the chest's holder: home");
+  assert.equal(await tierOf("rei/the-new-chest"), "home");
+  assert.equal(await tierOf("sable/the-letter"), "home");
 });
 
 test("THE CHAIN, NOT THE PLACE, where they disagree: a placed `notice` (post) holds no one, so a guest it welcomes stands on the parcel", { skip }, async () => {

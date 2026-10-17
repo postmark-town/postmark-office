@@ -439,8 +439,8 @@ export async function recomputeStanding(q) {
   const containment = await gistContainment(q);
   const houseOf = await liveHouseOfVia(q);
   // HOW A ROW OF A CLASS KIND STANDS is its class chain's answer, read from the
-  // law of the commit the rows came from, never a stale pin (standing.mjs §
-  // classLayerVia). W2's re-kinded rows (`kind: thing`, `town`, …) are ground by that chain.
+  // law of the commit the rows came from, and only when the pens agree on it
+  // (standing.mjs § classLayerVia). W2's re-kinded rows (`kind: thing`, `town`, …) are ground by that chain.
   const classes = await classLayerVia(q);
   const tiers = computeStanding(standing, { containment, houseOf, classes });
   const moved = [];
