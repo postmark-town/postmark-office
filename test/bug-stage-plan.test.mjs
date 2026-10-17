@@ -164,6 +164,28 @@ test("3 · credit to a meep pays 0 and says meep; the meep's report does not use
   assert.equal(rows.find((x) => x.stage === "confirmed").n, 2);
 });
 
+test("3 · (POS-655) the boundary: a stage advanced BEFORE a rules line named its credit a meep, still unpaid when the line lands, pays nothing and says so; a paid one stays paid", async () => {
+  setup();
+  const id = await confirmed("carol", "The wharf bell");
+  await advanceAtTown({ post: id, to: "reproduced", credit: "carol" }, WRIGHT, { now: NOW, roll: ROLL });
+  const facts = await storeFacts();
+  const advanced = planStages({ acts: facts.acts, houseOf: (h) => facts.houses.get(h) ?? null, isMeep: noMeeps }).find((x) => x.stage === "reproduced").date;
+  // the rules line lands the day after the advance: carol is a meep from then on
+  const lawDay = new Date(Date.parse(`${advanced}T12:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
+  const isMeep = (h, d) => h === "carol" && d >= lawDay;
+  const at = (over) => planStages({ acts: facts.acts, houseOf: (h) => facts.houses.get(h) ?? null, isMeep, ...over });
+
+  // THE FLIP (no payDate, today's code): the advance-day law says owed, and the town's verb would refuse it every tick
+  assert.equal(at({}).find((x) => x.stage === "reproduced").owed, true);
+  // judged at the pay day as the verb judges it: nothing owed, and the row says why
+  const row = at({ payDate: lawDay }).find((x) => x.stage === "reproduced");
+  assert.deepEqual([row.owed, row.n], [false, 0]);
+  assert.equal(row.why, `meep: the meep law at ${lawDay} names carol, and a meep is never paid`);
+  // a stage the ledger already paid stays "already paid", whatever the law says now
+  const paid = at({ payDate: lawDay, paid: new Set([`${id}/reproduced`]) }).find((x) => x.stage === "reproduced");
+  assert.equal(paid.why, "already paid");
+});
+
 test("3 · a resident no household holds pays 0 and says unresolved; two of them are neither paid nor capped together", async () => {
   setup();
   // four each: were they one bucket, the fourth would be "capped"; were they paid, they'd be owed
@@ -375,6 +397,14 @@ test("8 · (Darko 2026-10-15 19:02) a founder may be a correction's new credit: 
     "- 2026-10-15 · MINT → wright · 25 · for: post:ada/other/fixed-recredit · by: the-town",
     `- 2026-10-15 · ada → BURN · 25 · for: correction:${"C".repeat(86)} · by: wright`,
   ]);
+});
+
+test("8 · (POS-655) a recredit whose new credit the meep law names at the pay day is held, though the law did not name them on the recredit's day", () => {
+  const rc = rcAct(21610, { credit: "kinofire" });
+  const plan = (payDate) => planRecredits({ acts: [rc], houseOf: HOUSE, isMeep: (h, d) => h === "kinofire" && d >= "2026-10-16", stageLines: KINO_LINES(),
+    corrected: new Set(), liquid: new Map([["wright", 25]]), payDate });
+  assert.deepEqual(plan(null).map((r) => r.owed), [true], "THE FLIP: judged at the recredit's day alone, it is owed");
+  assert.deepEqual(plan("2026-10-17").map((r) => [r.owed, r.why]), [[false, "meep: a meep never receives stamps, so nothing is paid and nothing is burned"]]);
 });
 
 test("8 · the corrections are bound to their own plan: a count the rows don't match, a header it can't read, or an unreadable row refuses", () => {
