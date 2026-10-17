@@ -105,7 +105,7 @@ test("the chest door reads capacity and open from properties first, the older ch
   const CHEST_DIALS = { capacity: 30, capacity_min: 1, capacity_max: 120, first_stock: 30, portable: true, welcome: "open" };
   const withChest = lawSnapshotFromRows([...[...SNAP.classes].map(([key, data]) => cls(key, data)),
     cls("chest", { extends: "thing", dials: CHEST_DIALS }),
-    ...[...SNAP.properties].flatMap(([klass, own]) => [...own].map(([name, p]) => prop(klass, name, p.default, p.tier, p.parent)))]);
+    ...[...SNAP.properties].flatMap(([klass, own]) => [...own.values()].map((p) => prop(klass, p.name, p.default, p.tier, p.parentName)))]);
   const view = classViewOf(withChest);
   const face = (mark) => chestFace({ mark, fold: foldUnits([]), stocked: new Set(), labels: [], view });
   const at = { x: 0, y: 0 }, extent = { w: 1, h: 1 };
@@ -127,4 +127,13 @@ test("the carry is the resident's capacity, property first and the thing class's
   assert.equal(holdingOf({ className: "resident", classProperty: (n, p) => view.property(n, p), legacy: { capacity: view.dials("thing")?.carry_cap } }).capacity, 24);
   const older = classViewOf(lawSnapshotFromRows([cls("thing", { dials: { carry_cap: 24 } }), cls("resident", {})]));
   assert.equal(holdingOf({ className: "resident", classProperty: (n, p) => older.property(n, p), legacy: { capacity: older.dials("thing")?.carry_cap } }).capacity, 24, "the older record's carry_cap still answers");
+});
+
+test("an own capacity outside its class's bounds is refused, never clamped (review-606)", () => {
+  const bag = holdingOf({ mark: { capacity: 500 }, className: "halloween-candy-bag", classProperty: cp });
+  assert.equal(bag.capacity, null);
+  assert.match(bag.capacity_refused, /500 is outside 1\.\.200/);
+  const ok = holdingOf({ mark: { capacity: 150 }, className: "halloween-candy-bag", classProperty: cp });
+  assert.deepEqual([ok.capacity, ok.capacity_refused], [150, undefined]);
+  assert.equal(holdingOf({ mark: { holder: true, capacity: 0 }, className: "thing", classProperty: cp }).capacity, null, "below thing's min 1");
 });

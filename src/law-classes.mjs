@@ -53,29 +53,34 @@ export function lawSnapshotFromRows(rows) {
     predicates.get(k).set(slot, { value: d.value ?? null, id: seen ? seen.id : (d.id ?? null) });
   }
   // A class's PROPERTY NODES (LOGOS v2: `kind: property`, filed under their
-  // class; a child property under its property). `class → name → {default,
-  // tier, id, children: name → {default, tier, id}}`. Empty on a law that has
+  // class; a child property under its property). `class → path → {name, path,
+  // parent, default, tier, id, children: name → {default, tier, id}}`. Empty on a law that has
   // none yet, and every reader then stands on the predicate children and dials.
   const properties = new Map();
-  const props = rows.filter((r) => r.kind === "property").map((r) => r.data ?? {})
-    .sort((a, b) => (Number(a.ord ?? 0) - Number(b.ord ?? 0)));
-  // Properties nest (holder → capacity → min, max), and a class names each
-  // once, so they are held BY NAME within their class, each with its parent's
-  // name and its direct children.
-  for (const d of props) {
+  // Properties nest (holder → capacity → min, max). They are held BY PATH
+  // within their class (the names down from the class: `holder/capacity/max`),
+  // the key law-ingest gives each row, each with its own name, its parent's
+  // path and its direct children; § propertyNamed finds one by name.
+  for (const r of rows) {
+    if (r.kind !== "property") continue;
+    const d = r.data ?? {};
     const k = String(d.class);
+    const key = String(r.key ?? "");
+    const path = key.startsWith(`${k}/`) ? key.slice(k.length + 1) : String(d.name);
     if (!properties.has(k)) properties.set(k, new Map());
     const own = properties.get(k);
-    const name = String(d.name);
-    if (own.has(name) && own.get(name).id != null) continue; // a second statement of one name: the first stands
-    const prior = own.get(name);
-    own.set(name, { default: d.default ?? null, tier: d.tier ?? null, id: d.id ?? null, parent: d.parent == null ? null : String(d.parent), children: prior?.children ?? new Map() });
+    if (own.has(path)) continue; // a second statement of one path: the first stands
+    const parts = path.split("/");
+    own.set(path, { name: String(d.name ?? parts[parts.length - 1]), path, parentName: d.parent == null ? null : String(d.parent),
+      parent: parts.length > 1 ? parts.slice(0, -1).join("/") : null, default: d.default ?? null, tier: d.tier ?? null, id: d.id ?? null, ord: Number(d.ord ?? 0), children: new Map() });
   }
   for (const own of properties.values()) {
-    for (const [name, p] of own) {
-      if (p.parent == null) continue;
-      if (!own.has(p.parent)) own.set(p.parent, { default: null, tier: null, id: null, parent: null, children: new Map() });
-      own.get(p.parent).children.set(name, { default: p.default, tier: p.tier, id: p.id });
+    for (const p of own.values()) {
+      if (p.parentName == null) { p.parent = null; continue; }
+      // the parent by its path, else by its name (shortest path first)
+      const up = (p.parent != null && own.get(p.parent)) || [...own.values()].filter((q) => q.name === p.parentName).sort((a, b) => a.path.length - b.path.length)[0];
+      p.parent = up ? up.path : null;
+      if (up && !up.children.has(p.name)) up.children.set(p.name, { default: p.default, tier: p.tier, id: p.id });
     }
   }
   const settlement = Number(number);
@@ -100,7 +105,7 @@ export function dialsOf(snap, name) {
   // PROPERTY FIRST (LOGOS v2, W1 G3/G5): the class's own top-level property
   // nodes, each named by its dial's key, over the old frontmatter.
   const props = {};
-  for (const [n, p] of snap.properties?.get(String(name)) ?? []) if (p.parent == null && p.default !== undefined && p.id != null) props[n] = p.default;
+  for (const p of snap.properties?.get(String(name))?.values() ?? []) if (p.parent == null && p.default !== undefined && p.id != null && !(p.name in props)) props[p.name] = p.default;
   return Object.keys(props).length ? { ...old, ...props } : old;
 }
 
@@ -111,13 +116,21 @@ export function predicatesOf(snap, name) {
   return out;
 }
 
+/** A class's property by NAME: the shallowest path that names it, or undefined. */
+export function propertyNamed(snap, className, name) {
+  let best;
+  for (const p of snap?.properties?.get(String(className))?.values() ?? []) if (p.name === String(name) && (!best || p.path.length < best.path.length)) best = p;
+  return best;
+}
+
 /** A class's own property nodes as `name -> {default, tier, id, children}` — world-classes § classOwnProperties. */
 export function propertiesOf(snap, name) {
   const out = {};
-  for (const [n, p] of snap.properties?.get(String(name)) ?? []) {
+  for (const p of [...(snap.properties?.get(String(name))?.values() ?? [])].sort((a, b) => a.path.length - b.path.length)) {
+    if (p.name in out) continue; // by name, the shallowest path first (W1's lint: no two properties share a name)
     const children = {};
     for (const [c, v] of p.children ?? []) children[c] = { ...v };
-    out[n] = { default: p.default, tier: p.tier, id: p.id, parent: p.parent ?? null, children };
+    out[p.name] = { default: p.default, tier: p.tier, id: p.id, parent: p.parent ?? null, path: p.path, children };
   }
   return out;
 }
@@ -137,7 +150,7 @@ export function snapProperty(snap, className, prop) {
   }
   let found = null;
   for (const c of line) {
-    const own = snap?.properties?.get(c)?.get(String(prop));
+    const own = propertyNamed(snap, c, prop);
     if (own) { found = { value: own.default, tier: own.tier, from: c, source: "property", id: own.id, children: {} }; break; }
     const pred = snap?.predicates?.get(c)?.get(String(prop));
     if (pred) { found = { value: pred.value, tier: null, from: c, source: "predicate", id: pred.id, children: {} }; break; }
@@ -146,7 +159,7 @@ export function snapProperty(snap, className, prop) {
   }
   if (!found) return null;
   for (const c of line) {
-    for (const [k, v] of snap?.properties?.get(c)?.get(String(prop))?.children ?? []) if (!(k in found.children)) found.children[k] = { value: v.default, tier: v.tier, from: c, id: v.id };
+    for (const [k, v] of propertyNamed(snap, c, prop)?.children ?? []) if (!(k in found.children)) found.children[k] = { value: v.default, tier: v.tier, from: c, id: v.id };
   }
   return found;
 }
