@@ -369,3 +369,15 @@ test("QA fail 5 · the v2 read's you.holding carries what you hold by kind, besi
     assert.equal(kinds[0].shows, "3 pocket-comets");
   });
 });
+
+test("QA H1 · the office side of consume is ready: with the resident class granting it, consume shows only with a consumable in hand and lands through the apex", { skip }, async () => {
+  await seed();
+  await withApex(async (worldApex) => {
+    assert.ok(!(await worldApex({}, KEY)).actions.some((e) => e.action === "consume"), "nothing consumable in hand: hidden");
+    await leaveMarkViaOffice(repo, { kind: "pocket-comet", count: 2, to: "sbx-cy" }, KEY);
+    assert.ok((await worldApex({}, KEY)).actions.some((e) => e.action === "consume"), "a pocket comet in hand: shown");
+    const ate = await worldApex({ do: "consume", args: { kind: "pocket-comet" } }, KEY);
+    assert.equal(ate.error, undefined, JSON.stringify(ate).slice(0, 400));
+    assert.deepEqual((await unitActs()).map((a) => a.action), ["units:make", "units:consume"]);
+  });
+});
