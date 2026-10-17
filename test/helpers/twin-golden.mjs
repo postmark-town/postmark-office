@@ -33,9 +33,11 @@ const LIVE = new Set(["next_crossing", "copy", "expected_crossing", "since_cross
  * out, so the record holds on any day. The LIVE fields go, and the town's day,
  * wherever an answer states it (`today.day`, a quest row's day) or mints it
  * into a letter id, reads "<today>". JSON carried as text (an MCP result's
- * content) is opened, so its clock goes too. A failed command's own words (git's, inside an "unreadable"
- * note, with the test's temp path in them) differ by machine and by run, and
- * read "(<a command failed>)". Every other byte stays, key order included.
+ * content) is opened, so its clock goes too. A failed command's own words
+ * (git's, inside an "unreadable" note, with the test's temp path in them) and a
+ * checkout's line endings differ by machine and by run: the first reads
+ * "(<a command failed>)", and CRLF reads LF. Every other byte stays, key order
+ * included.
  */
 export function steady(value, { today = townDay() } = {}) {
   const text = typeof value === "string" ? value : JSON.stringify(value);
@@ -44,7 +46,11 @@ export function steady(value, { today = townDay() } = {}) {
     if (Array.isArray(v)) return v.map(walk);
     if (typeof v === "string" && /^\s*[{[]/.test(v)) { try { return { "<json>": walk(JSON.parse(v)) }; } catch { /* prose that starts with a bracket */ } }
     if (typeof v === "string" && v.includes("(Command failed: ")) return v.replace(/\(Command failed: [\s\S]*$/, "(<a command failed>)");
-    if (typeof v === "string") return v === today ? "<today>" : v.split(`-${today}-to-`).join("-<today>-to-");
+    if (typeof v === "string") {
+      // a checkout's line endings are the machine's (git's autocrlf on Windows), not the office's
+      const s = v.replace(/\r\n/g, "\n");
+      return s === today ? "<today>" : s.split(`-${today}-to-`).join("-<today>-to-");
+    }
     if (!v || typeof v !== "object") return v;
     const out = {};
     for (const [k, x] of Object.entries(v)) if (!LIVE.has(k)) out[k] = walk(x);
