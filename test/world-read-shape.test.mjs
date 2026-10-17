@@ -318,11 +318,19 @@ test("PR-4: investigate: on a resident rides the bare read, v1 and v2, with publ
   assert.ok(!("investigated" in await v2At()), "absent when not asked");
   assert.equal((await worldApex({ handle: WHO, investigate: KOGANE_PARCEL }, KEY, {})).code, 422, "a mark is mark:'s");
   // POS-659: and a mark's read (the mark: focus, world_investigate's own answer) points at its class, which explain: climbs
+  // ⚑ EITHER WORLD (LOGOS v2 part 2, W2): the kind rung files parcel under
+  // sited, so the chain and the pointer gain a rung there. Each world's chain is
+  // pinned with the pointer it must print; any other chain is a change to read.
+  const PARCEL_POINTER_BY_CHAIN = {
+    "mark,postmark-node": 'kind: parcel · a mark — explain: "parcel"', // the world CI pins
+    "sited,mark,postmark-node": 'kind: parcel · a sited · a mark — explain: "parcel"', // W2
+  };
   const parcel = (await worldApex({ handle: WHO, mark: KOGANE_PARCEL }, KEY, {})).focus;
-  assert.equal(parcel?.class_pointer, 'kind: parcel · a mark — explain: "parcel"', JSON.stringify(parcel ?? null).slice(0, 200));
   const climbed = await worldApex({ explain: "parcel" }, KEY, {});
   assert.equal(climbed.class, "the-town/parcel");
-  assert.deepEqual(climbed.extends.map((c) => c.class), ["mark", "postmark-node"]);
+  const chain = climbed.extends.map((c) => c.class).join();
+  assert.ok(Object.hasOwn(PARCEL_POINTER_BY_CHAIN, chain), `parcel climbs ${chain}, which neither world files`);
+  assert.equal(parcel?.class_pointer, PARCEL_POINTER_BY_CHAIN[chain], JSON.stringify(parcel ?? null).slice(0, 200));
   assert.equal((await worldApex({ handle: WHO, investigate: WHO, mark: KOGANE_PARCEL }, KEY, {})).code, 422, "one focus at a time");
   assert.equal((await worldApex({ handle: WHO, investigate: WHO, read: "view" }, KEY, {})).code, 422);
   // a creature (POS-637 PR-C): one no fold holds is "no creature", or the law is unreadable and it says so

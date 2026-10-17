@@ -162,4 +162,33 @@ test("FALSIFIER 5 — NO CLASS RIDES BY NAME (WLD-29, the pointer model): the mo
   }
   // ⚑ THE FLIP: put STRIDE_MARK_ID back on markRecords' list → this and
   //   FALSIFIERS 2–4 red on every standpoint.
+
+  // ⚑ THE CLASS LAYER PRODUCTION READS (LOGOS v2, W1 G3/G5), for the page's
+  // table: on a world that files the pace as a `kind: property` node (W2), the
+  // class mark carries no `dials:` of its own, and GET /world/dials takes it
+  // from the class layer (read-digests.mjs § dialsDigestOf). The class layer is
+  // the law snapshot, seeded from the same checkout the fold reads, as the
+  // train's version of this test did for `records` before WLD-29 took the class
+  // out of them. On the world CI pins the frontmatter carries the pace either way.
+  const { deriveLaw } = await import("../world2/tools/law-ingest.mjs");
+  const { reloadLawSnapshot, resetLawSnapshot, LAW_REFRESH_SQLS } = await import("../src/law-snapshot.mjs");
+  const { resetClassRosterCache } = await import("../src/world-classes.mjs");
+  const { rows } = await deriveLaw({ lawRepo: WORLD_CLONE });
+  const law = rows.map((r) => ({ number: 1, tag_sha: "f".repeat(40), newest: 1, ...r }));
+  // the store answers the two statements a refresh sends, and nothing else
+  const answers = new Map([[LAW_REFRESH_SQLS.pin, [{ newest: 1, pinned: 1 }]], [LAW_REFRESH_SQLS.law, law]]);
+  await reloadLawSnapshot({ force: true, query: async (sql) => {
+    if (!answers.has(sql)) throw new Error(`the law stub was asked a statement it does not answer: ${String(sql).slice(0, 80)}`);
+    return { rows: answers.get(sql) };
+  } });
+  resetClassRosterCache();
+  try {
+    const { worldDialsPage } = await import("../src/world.mjs");
+    const page = await worldDialsPage();
+    const pace = Number(page.dials?.[STRIDE_MARK_ID]?.pace_km_per_crossing);
+    assert.ok(Number.isFinite(pace) && pace > 0, `GET /world/dials carries no pace for ${STRIDE_MARK_ID} (${pace})`);
+  } finally { resetLawSnapshot(); resetClassRosterCache(); }
+  // ⚑ THE FLIP: drop the class layer from worldDialsPage (classDialsOf) → the
+  //   pace assertion reds ONLY on W2, with the seed above in place: on the world
+  //   CI pins the class mark's own `dials:` carries the pace, so it stays green.
 });
