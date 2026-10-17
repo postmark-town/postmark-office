@@ -35,7 +35,9 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const SRC = join(resolve(dirname(fileURLToPath(import.meta.url)), ".."), "src");
-const ERROR_TEXT = /\b(e|e2|err|error|cause|failure)\??\.(message|stderr)\b/;
+// ANY NAME, so a renamed variable cannot hide (review-602: `worldUnread?.message`
+// had slipped past the old list of names). A call (`commit.message(…)`) is not text.
+const ERROR_TEXT = /\b\w+\??\.(message|stderr)\b(?!\s*\()/;
 const LOGGED = /console\.(error|warn|log|info)\(|\blog\(|log\.(warn|error|info)\(|warnOnce\(|\bwarn\(|\bnote\(/;
 
 const OWN = "the office's own words, a refusal relayed by its own defect, or plumbing that never reaches an answer";
@@ -54,13 +56,13 @@ const ALLOWED = {
   "dynamic-store.mjs": [1, `${OWN}: a status field`],
   "earpiece.mjs": [1, `${OWN_URL} (what the household's own webhook answered)`],
   "edit.mjs": [1, "a 422 quoting the image decoder on the resident's own upload: KEPT (POS-617), since the decoder's words are about the resident's own bytes and help them fix the file (left with media.mjs's, Wright's G4)"],
-  "events-store.mjs": [2, `${OWN}: LateCrossingError's ruled message; a refusal's \`cause\` field, never sent`],
+  "events-store.mjs": [3, `${OWN}: LateCrossingError's ruled message; a refusal's \`cause\` field, never sent; PenUnreachableError's ruled sentence, as the 503's defect`],
   "events.mjs": [1, `${OWN_URL} (what the household's own echo url answered)`],
   "fault-words.mjs": [5, `${OWN}: errorSaid, the log's reader; causeKind reads an error's text to choose a plain reason and never says it (x2); plainReason hands back an ownWordsError's sentence (the office's own words, POS-657)`],
   "fund-exec.mjs": [1, `${OWN}: classifyFatal's input (its last word is FAULT_LOGGED)`],
   "gangway-exec.mjs": [1, `${OWN}: a refusal (an HTTP status) relayed by its own defect, else its message (KEPT, POS-617: an integer HTTP code is only ever set by the office, so the message is the office's own sentence)`],
   "gift-exec.mjs": [1, `${OWN}: classifyFatal's input (its last word is FAULT_LOGGED)`],
-  "idea-store.mjs": [1, `${OWN}: LateCrossingError's ruled message`],
+  "idea-store.mjs": [2, `${OWN}: LateCrossingError's ruled message; PenUnreachableError's ruled sentence, as the 503's defect`],
   "join-bind-exec.mjs": [1, `${OWN}: a refusal (an HTTP status) relayed by its own defect, else its message (KEPT, POS-617: an integer HTTP code is only ever set by the office, so the message is the office's own sentence)`],
   "join-bind.mjs": [2, `${OWN}: relay, a refusal (a defect or an HTTP status) in its own words`],
   "law-snapshot.mjs": [1, `${OWN}: a status field`],
@@ -82,11 +84,12 @@ const ALLOWED = {
   "town-drain.mjs": [1, `${OPERATOR} (the drain's stalled rows)`],
   "town-lock.mjs": [2, `${OWN}: plumbing (stderr onto the error; the busy test)`],
   "town-posts.mjs": [1, `${OWN}: a refusal's \`cause\` field, never sent`],
-  "usdc-witness.mjs": [1, `${OWN}: the RPC's own error, rethrown inside baseRpc (Base unreachable answers BASE_BLIND and logs the RPC's words since POS-617)`],
+  "usdc-witness.mjs": [2, `${OWN}: the RPC's own error, rethrown inside baseRpc, and the last one onto "all RPCs failed" (Base unreachable answers BASE_BLIND and logs the RPC's words since POS-617)`],
   "walk-exec.mjs": [2, `${OWN}: PenUnreachableError's ruled sentence; the push error a receipt discloses`],
   "world-apex.mjs": [1, `${OWN}: HouseholdsUnreadable's message (its code is foreign, so it is classified)`],
   "world-branches.mjs": [2, `${OWN}: plumbing; a thrown Error with no code, which the last-resort catch logs`],
   "world-drain.mjs": [1, `${OPERATOR} (the drain's archive report)`],
+  "world-filing-order.mjs": [1, `${OWN}: plumbing (git's stderr onto the thrown error, which the settlement's readers plain or log)`],
   "world-graph-snapshot.mjs": [4, `${OWN}: status fields`],
   "world-hold.mjs": [1, `${OWN}: PenUnreachableError's ruled sentence`],
   "world-hydrate.mjs": [5, `${OPERATOR} (the hydrate gate's refusals)`],
@@ -126,4 +129,6 @@ test("every line in src/ that reads an error's text is counted, and its file say
 test("the census counts what it claims to (a positive control)", () => {
   const sample = ["throw bounce(500, \"x\", String(e.stderr ?? e.message ?? e).slice(0, 300));", "console.error(`[office] ${e.message}`);"];
   assert.equal(sample.filter((l) => ERROR_TEXT.test(l) && !LOGGED.test(l)).length, 1, "an answer's hint counts; a log line does not");
+  assert.ok(ERROR_TEXT.test("unavailable: `could not be read (${String(worldUnread?.message ?? worldUnread).slice(0, 120)})`"), "a renamed variable is still counted (review-602)");
+  assert.ok(!ERROR_TEXT.test("await land(client, commit.message(result))"), "a method call is not error text");
 });

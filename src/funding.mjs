@@ -712,7 +712,7 @@ export function readPots(townDir) {
     const idFromName = name.slice(4, -5);
     let d;
     try { d = JSON.parse(readFileSync(join(dir, name), "utf8")); }
-    catch (e) { bad(name, `unparseable JSON (${plainReason(e, "parse", "a funding row file")})`); continue; }
+    catch (e) { bad(name, plainReason(e, "parse", "a funding row file")); continue; }
     const id = d.pot ?? idFromName;
     if (id === TREASURY_POT) { bad(name, `"${TREASURY_POT}" is the reserved direct-to-town pot — it takes direct-to-town receipts only and has no pot file`); continue; }
     const missing = POT_MONEY_FIELDS.filter((f) => d[f] == null);

@@ -337,7 +337,7 @@ async function enterViaPortal(portal, { who, w, at, iso, occupancy, here, thresh
         await deps.stop(who, stood, key);
         walkEnded = { at: stood, recorded: true, note: "you stopped walking when you went in — the walk that carried you here ended at this door" };
       } catch (e) {
-        walkEnded = { at: stood, recorded: false, error: e?.defect ?? plainReason(e, "record", "a crossing's set-down or walk end"),
+        walkEnded = { at: stood, recorded: false, error: String(e?.defect ?? plainReason(e, "record", "a crossing's set-down or walk end")).slice(0, 200),
           note: "the entry stands but the walk that carried you here could not be stopped — you may be carried on; walk to where you stand to end it" };
       }
     }
@@ -574,7 +574,7 @@ async function enterAct(worldClone, payload = {}, key = null, deps = {}) {
         await deps.stop(who, stood, key);
         walkEnded = { at: stood, recorded: true, note: "you stopped walking when you went in — the walk that carried you here ended at this door" };
       } catch (e) {
-        walkEnded = { at: stood, recorded: false, error: e?.defect ?? plainReason(e, "record", "a crossing's set-down or walk end"),
+        walkEnded = { at: stood, recorded: false, error: String(e?.defect ?? plainReason(e, "record", "a crossing's set-down or walk end")).slice(0, 200),
           note: "the entry stands but the walk that carried you here could not be stopped — you may be carried on; walk to where you stand to end it" };
       }
     }
@@ -693,7 +693,7 @@ async function passThroughPortal(answer, { who, w, at, here, markId, verbs, payl
       await deps.stop(who, to, key, { from: to });
       landed = { ...to, mark: answer.landing.mark, clamped: answer.landing.clamped, recorded: true };
     } catch (e) {
-      landed = { ...to, mark: answer.landing.mark, recorded: false, error: e?.defect ?? plainReason(e, "record", "a crossing's set-down or walk end"),
+      landed = { ...to, mark: answer.landing.mark, recorded: false, error: String(e?.defect ?? plainReason(e, "record", "a crossing's set-down or walk end")).slice(0, 200),
                  note: "the passage stands but you could not be set down at its landing; walk there to stand where it leads" };
     }
   }
@@ -763,7 +763,7 @@ async function leaveTheDungeon(answer, { who, at, markId, held, key, deps }) {
       await deps.stop(who, to, key, { from: to });
       setDown = { at: answer.landing.via, ...to, chosen: answer.landing.chosen, recorded: true };
     } catch (e) {
-      setDown = { at: answer.landing.via, ...to, recorded: false, error: e?.defect ?? plainReason(e, "record", "a crossing's set-down or walk end"),
+      setDown = { at: answer.landing.via, ...to, recorded: false, error: String(e?.defect ?? plainReason(e, "record", "a crossing's set-down or walk end")).slice(0, 200),
         note: "you are out of the dungeon, and the office could not write down where you were set down: walk to the portal to say where you stand" };
     }
   }
@@ -891,7 +891,7 @@ async function exitAct(worldClone, payload = {}, key = null, deps = {}) {
       setDown = { at: deposit.stop, x: deposit.anchor.x, y: deposit.anchor.y, arrived: deposit.arrived, recorded: true };
     } catch (e) {
       setDown = { at: deposit.stop, x: deposit.anchor.x, y: deposit.anchor.y, arrived: deposit.arrived, recorded: false,
-        error: e?.defect ?? plainReason(e, "record", "a crossing's set-down or walk end"),
+        error: String(e?.defect ?? plainReason(e, "record", "a crossing's set-down or walk end")).slice(0, 200),
         note: "you are out of her, and the office could not write down where you were set down — walk to the stop to say where you stand" };
     }
   }

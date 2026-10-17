@@ -343,7 +343,11 @@ export async function storedDepartures({ atMs = Date.now(), withActId = false } 
       // Measured 0 of prod's 2,397 on 2026-09-21; if that ever stops being true
       // the doors say so rather than quietly shrinking.
       if (!Number.isFinite(ms)) {
-        return { records: [], absent: `a departure record carries an unreadable instant: ${String(r.iso).slice(0, 60)}` };
+        // `cause` is what the resident's read classifies (POS-657): an instant
+        // that will not parse is a saved record that does not parse, not a
+        // record that did not answer.
+        const absent = `a departure record carries an unreadable instant: ${String(r.iso).slice(0, 60)}`;
+        return { records: [], absent, cause: new SyntaxError(absent) };
       }
       if (ms > atMs) continue;
       cut.push(storedShapeOf(r, { withActId }));
@@ -358,7 +362,7 @@ export async function storedDepartures({ atMs = Date.now(), withActId = false } 
     // OPERATOR's detail (crossing-save reads it through storedDepartureEvents); the
     // resident's read says it plainly (world.mjs § the departures, POS-657).
     const why = e?.cause?.message ? `${e.message} (${e.cause.message})` : String(e?.message ?? e);
-    return { records: [], absent: why.slice(0, 200) };
+    return { records: [], absent: why.slice(0, 200), cause: e };
   }
 }
 

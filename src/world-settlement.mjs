@@ -721,8 +721,8 @@ export async function settlementOrFile({ asked = null, fileAnswer, engaged, pool
     if (!served) reason = number == null ? "the store holds no settlement that names a snapshot yet" : null;
   } catch (e) {
     if (number != null) throw e?.code ? e : bounce(503, `S${number} could not be read`, faultLogged(`S${number} could not be read`, e)); // its error goes to the log (POS-578)
-    reason = `the newest settlement could not be read: ${plainReason(e, "record", "the newest settlement")}`;
-    console.error(`[world-settlement] ${reason} — serving the published file`);
+    // plainReason's one log line says it all; the read serves the published file
+    reason = `the newest settlement could not be read: ${plainReason(e, "record", "the newest settlement (serving the published file)")}`;
   }
   if (served) return served;
   if (number != null) throw bounce(404, `S${number} is not a settlement this store holds a snapshot for`, "GET /world/state with no settlement serves the newest one; GET /world/settlements lists them");
@@ -967,6 +967,6 @@ async function labelsFor(p, header, world, words, { worldRepo, servedKey, seal =
     if (LABELLED.size > 6) LABELLED.delete(LABELLED.keys().next().value);
     return { marks };
   } catch (e) {
-    return { unread: `the labels could not be read: ${e?.defect ?? plainReason(e, "files", "the settlement's labels")}` };
+    return { unread: `the labels could not be read: ${String(e?.defect ?? plainReason(e, "files", "the settlement's labels")).slice(0, 200)}` };
   }
 }

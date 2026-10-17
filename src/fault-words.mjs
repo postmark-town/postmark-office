@@ -41,17 +41,22 @@ export const ownWordsError = (sentence) => Object.assign(new Error(sentence), { 
 
 /**
  * The reason an error's own CAUSE names, when it names one (Wright's brief: map
- * each raw cause to one reason): pg's own code outranks its text (a json
- * column's 22P02 is the record); a parser's error is `parse`; pg's SQLSTATE, a
- * lost or unconfigured store or a refused connection is `record`; git, a missing
- * file or a clone is `files`. Anything else is null, and the site's kind stands.
+ * each raw cause to one reason). The structured fields are read before any text,
+ * because text carries paths and a path says anything (".json", "/pool/"):
+ *   1. pg's SQLSTATE (five characters, never a Node errno), or a lost store: record
+ *   2. a child's stderr (git), or a Node errno (ENOENT, EPERM, EBUSY…): files
+ *   3. a parser's error, or JSON named as a word, never as ".json": parse
+ *   4. only then the text: a refused or lost store, pg's words: record; git's: files
+ * Anything else is null, and the site's kind stands.
  */
 export function causeKind(e) {
+  const code = typeof e?.code === "string" ? e.code : "";
+  if (isStoreLostCode(code) || (/^[0-9A-Z]{5}$/.test(code) && !/^E[A-Z]+$/.test(code))) return "record";
+  if (e?.stderr || /^E[A-Z]+$/.test(code)) return "files";
   const said = `${e?.name ?? ""} ${e?.message ?? ""} ${e?.cause?.message ?? ""}`;
-  if (isStoreLostCode(e?.code) || (typeof e?.code === "string" && /^[0-9A-Z]{5}$/.test(e.code))) return "record";
-  if (e instanceof SyntaxError || /\bJSON\b|Unexpected token|is not valid JSON|parse error/i.test(said)) return "parse";
-  if (/ECONNREFUSED|ETIMEDOUT|ECONNRESET|connection|\bpool\b|\brelation\b|\bcolumn\b|PenUnreachable|GuardsUnreachable|NoRecord|not pointed at a record|record (cannot|is not) (be )?reach/i.test(said)) return "record";
-  if (e?.stderr || e?.code === "ENOENT" || e?.code === "EACCES" || /ENOENT|EACCES|\bgit\b|fatal:|\bclone\b|\brefs?\/|\bref\b|worktree|checkout/i.test(said)) return "files";
+  if (e instanceof SyntaxError || /(?<![.\w])JSON\b|Unexpected token|Unexpected end of JSON|parse error/i.test(said)) return "parse";
+  if (/ECONNREFUSED|ETIMEDOUT|ECONNRESET|(?<![/\\\w])(connection|pool)(?![/\\\w])|\brelation\b|\bcolumn\b|PenUnreachable|GuardsUnreachable|NoRecord|not pointed at a record|record (cannot|is not) (be )?reach/i.test(said)) return "record";
+  if (/ENOENT|EACCES|\bgit\b|fatal:|\bclone\b|\brefs?\/|\bref\b|worktree|checkout/i.test(said)) return "files";
   return null;
 }
 

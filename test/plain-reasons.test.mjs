@@ -64,6 +64,27 @@ test("each raw cause maps to one reason: the cause outranks the site, and the ch
   assert.equal(await said(new Error("something odd"), "files"), "the world's files could not be read", "no named cause: the site's kind stands");
 });
 
+test("the structured fields are read before the text, because a path says anything (review-602 B1)", async () => {
+  const said = async (e, kind) => (await logging(() => plainReason(e, kind, "a read"))).value;
+  const FILES = "the world's files could not be read", RECORD = "the record did not answer", PARSE = "a saved file does not parse";
+  const errno = (code, message) => Object.assign(new Error(message), { code });
+  const git = (stderr) => Object.assign(new Error("Command failed: git show"), { stderr, status: 128 });
+  for (const [what, e, kind, want] of [
+    ["an ENOENT on a .json file is the files, never a parse", errno("ENOENT", "ENOENT: no such file or directory, open 'G:/w/WHITE_PAGES/ballot-x.json'"), "parse", FILES],
+    ["git showing a missing .json is the files", git("fatal: path 'WHITE_PAGES/pot-x.json' does not exist in 'refs/tags/settlement/S9'"), "record", FILES],
+    ["EPERM is a Node errno, not a SQLSTATE", errno("EPERM", "EPERM: operation not permitted, rename"), "record", FILES],
+    ["EBUSY is a Node errno, not a SQLSTATE", errno("EBUSY", "EBUSY: resource busy or locked"), "record", FILES],
+    ["git's own connection error is the files", git("fatal: unable to access 'https://github.com/x/world/': Failed to connect: Connection timed out"), "record", FILES],
+    ["a /pool/ path is the files, not the store's pool", errno("ENOENT", "ENOENT: no such file or directory, open 'G:/Postmark/pool/office-5/world-clone/x'"), "record", FILES],
+    ["a /pool/ path with no errno is not the store's pool", new Error("cannot open G:/Postmark/pool/office-5/world-clone/x"), "files", FILES],
+    ["42P01 is the record", errno("42P01", 'relation "acts" does not exist'), "files", RECORD],
+    ["22P02 is the record, whatever it says about json", errno("22P02", "invalid input syntax for type json"), "files", RECORD],
+    ["a SyntaxError is a parse", new SyntaxError("Unexpected token } in JSON at position 7"), "files", PARSE],
+    ["ECONNREFUSED as a code is the record (a lost store)", errno("ECONNREFUSED", "connect ECONNREFUSED 127.0.0.1:5432"), "files", RECORD],
+    ["ECONNREFUSED said with no code is the record", new Error("connect ECONNREFUSED 127.0.0.1:5432"), "files", RECORD],
+  ]) assert.equal(await said(e, kind), want, what);
+});
+
 test("alerts: a store that cannot be reached, and a query that fails, say the plain reason", async () => {
   const lost = await logging(() => alertsFor(["kai"], { store: async () => boom() }));
   const s = clean(lost.value);
@@ -103,7 +124,7 @@ test("a saved file that does not parse says so, without the parser's words", asy
     writeFileSync(file, "{ \"0xabc\": \"ec2\", oops }");
     const { value, logged } = await logging(() => readIntakeMap(file));
     assert.equal(value.invalid.length, 1);
-    assert.match(value.invalid[0].reason, /^unparseable JSON \(a saved file does not parse\) — every arrival stays pot-ambiguous/);
+    assert.match(value.invalid[0].reason, /^a saved file does not parse — every arrival stays pot-ambiguous/, "said once, never doubled (review-602)");
     assert.doesNotMatch(value.invalid[0].reason, /Unexpected|position|token/);
     assert.match(logged, /deploy\/intake-addresses\.json could not be read/);
   } finally { rmSync(dir, { recursive: true, force: true }); }

@@ -1142,7 +1142,7 @@ export async function fileSetDownAmend({ did, stood, key, actId = null, deps = {
     const amend = await fileAuthorsAmend({ thing, stood, key, actor, actId, writtenAt: did.at ?? null, deps });
     return { ...base, whose: "your household's", amend };
   } catch (e) {
-    return { ...base, whose: "your household's", amend: { filed: false, why: `the amend door refused: ${e?.defect ?? plainReason(e, "record", "a set-down's amend")}` } };
+    return { ...base, whose: "your household's", amend: { filed: false, why: `the amend door refused: ${String(e?.defect ?? plainReason(e, "record", "a set-down's amend")).slice(0, 200)}` } };
   }
 }
 
@@ -1191,7 +1191,7 @@ export async function fileAuthorsAmend({ thing, stood, key, actor, actId = null,
       ...(res?.put_forward === true ? {} : { to_publish: res?.to_publish ?? null }),
     };
   } catch (e) {
-    return { filed: false, why: `the amend door refused: ${e?.defect ?? plainReason(e, "record", "a set-down's amend")}` };
+    return { filed: false, why: `the amend door refused: ${String(e?.defect ?? plainReason(e, "record", "a set-down's amend")).slice(0, 200)}` };
   }
 }
 

@@ -133,7 +133,7 @@ export function readBallotFiles(clone) {
     .filter(Boolean).sort()
     .map((topic) => {
       try { return { topic, json: JSON.parse(readFileSync(join(dir, `ballot-${topic}.json`), "utf8")) }; }
-      catch (e) { return { topic, error: `WHITE_PAGES/ballot-${topic}.json does not parse (${plainReason(e, "files", "a ballot file")})` }; }
+      catch (e) { return { topic, error: `WHITE_PAGES/ballot-${topic}.json: ${plainReason(e, "files", "a ballot file")}` }; }
     });
 }
 

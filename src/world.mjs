@@ -504,14 +504,15 @@ export async function departuresAcrossEras(worldClone = WORLD_CLONE, { atMs = Da
   if (!movementV2Enabled()) return { departures: ledger, eras: ["ledger"], disclosed, ledgerUnreadable };
 
   const newestLedger = ledger.reduce((m, d) => Math.max(m, Date.parse(d.iso) || 0), 0);
-  const { records, absent } = await storedDepartures({ atMs });
+  const { records, absent, cause } = await storedDepartures({ atMs });
   if (absent) {
     // NAMES THE RECORD, NOT THE TABLE (POS-154). This said
     // `movements-unreadable`, which was true of a sqlite file and is false of
     // the store — a disclosure that names the wrong thing sends whoever reads it
     // to look in a place that cannot be the cause.
-    // the departures' own detail goes to the log; the read says a plain reason (POS-657)
-    disclosed.push(`record-unreadable: ${plainReason({ message: absent }, "record", "the store's departures")} — reading the founding era alone`);
+    // the departures' own detail goes to the log; the read says the plain reason
+    // for its CAUSE (POS-657): a store that did not answer, or an instant that does not parse
+    disclosed.push(`record-unreadable: ${plainReason(cause ?? { message: absent }, "record", "the store's departures")} — reading the founding era alone`);
     return { departures: ledger, eras: ["ledger"], disclosed, ledgerUnreadable };
   }
   if (!records.length) return { departures: ledger, eras: ["ledger", "store"], disclosed, ledgerUnreadable };
@@ -4174,7 +4175,7 @@ async function placingOnBehalf(by, payload, key, bounce) {
  */
 async function placementForecast({ worldClone, w, worldUnread, id, ring, mistsCrossing = null }) {
   const { forecastMists, mistsEngine, MISTS_FORECAST_UNAVAILABLE } = await import("./mists-forecast.mjs");
-  if (!w) return { unavailable: `${MISTS_FORECAST_UNAVAILABLE}: the world could not be read (${String(worldUnread?.message ?? worldUnread ?? "no world").slice(0, 120)})` };
+  if (!w) return { unavailable: `${MISTS_FORECAST_UNAVAILABLE}: the world could not be read (${plainReason(worldUnread, "files", "the world, for a placement's Mists forecast")})` };
   const skeleton = w?._raw?.skeleton ?? undefined;
   const engine = skeleton?.mists ? await mistsEngine(worldClone) : null;
   const nowMs = mistsCrossing == null ? Date.now() : Date.parse(crossingSailsAt(mistsCrossing));
@@ -4469,7 +4470,7 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
     // nothing after the commit can turn a written mark into an error. The walk,
     // portal and landing checks keep `mistsGroundCheck` exactly as it was.
     mistsWarning = dialUnread
-      ? { unavailable: `mists-forecast-unavailable: the parcel dial could not be read, so this parcel's ground is unknown (${String(dialUnread?.message ?? dialUnread).slice(0, 120)})` }
+      ? { unavailable: `mists-forecast-unavailable: the parcel dial could not be read, so this parcel's ground is unknown (${plainReason(dialUnread, "files", "the parcel dial, for a placement's Mists forecast")})` }
       : await placementForecast({ worldClone, w, worldUnread, id: `${by}/${slug}`, ring: ground, mistsCrossing });
   }
   const exec = join(HERE, "leave-exec.mjs");
