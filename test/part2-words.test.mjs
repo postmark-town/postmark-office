@@ -50,3 +50,21 @@ test("v2 · the carry lines name part 2's acts: making by count, taking from a h
   assert.match(ONE_LINERS.refill.says, /made/, "refill is the maker's");
   for (const v of ["consume", "refill"]) assert.ok(ACT_GROUPS.carry.includes(v), `${v} rides with the carry acts, not under more`);
 });
+
+test("review-616 nit · the dark door's hint gives consume no holder: it uses up a kind you carry", () => {
+  assert.doesNotMatch(CHESTS_CANDY_OFF.hint, /consume names? a kind and a holder/);
+  assert.match(CHESTS_CANDY_OFF.hint, /consume names the kind you carry/);
+});
+
+test("review-616 SF2 · a class node's grant says \"or carry it\" only of a thing, with the article its name takes", async () => {
+  const { elsewhereHint } = await import("../src/world-apex.mjs");
+  const tree = { "halloween-candy-bowl": "thing", thing: "sited", sited: "mark", arena: "portal-ground", "portal-ground": "sited", mark: "postmark-node" };
+  const extendsOf = (c) => tree[c] ?? null;
+  const at = { x: null, y: null };
+  const bowl = elsewhereHint([{ mark: "the-town/halloween-candy-bowl", class: "halloween-candy-bowl", at, who: "maker" }], { extendsOf });
+  assert.equal(bowl, "It is a halloween-candy-bowl's own action, for its maker: stand within a halloween-candy-bowl's footprint, or carry it, and it appears.");
+  const arena = elsewhereHint([{ mark: "the-town/arena", class: "arena", at }], { extendsOf });
+  assert.equal(arena, "It is an arena's own action: stand within an arena's footprint, and it appears.", "an arena is no thing: nobody carries it, and it takes an");
+  assert.doesNotMatch(elsewhereHint([{ mark: "the-town/halloween-candy-bowl", class: "halloween-candy-bowl", at }]), /carry/, "with the class tree unread, nothing is promised to carry");
+  assert.match(elsewhereHint([{ mark: "x/a-lamp-post", at: { x: 3, y: 4 } }], { extendsOf }), /^It is afforded at x\/a-lamp-post \(3, 4\) — walk there and it appears\.$/, "a placed grant keeps its walk");
+});
