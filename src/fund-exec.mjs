@@ -55,6 +55,18 @@ function classifyFatal(stderr) {
     return { code: 409, defect: "that would take the pot past its posted need", hint: (s.split("\n").find((l) => /FATAL/.test(l)) ?? s).replace(/^FATAL:\s*/, "").slice(0, 240) };
   if (/no pot file/.test(s))
     return { code: 404, defect: "no such pot", hint: "the town posts its needs on the board" };
+  // POS-653: the pot closed (it filled, or the founder closed it) between the
+  // door's own gate and this receipt: the same-minute race of two rails. The
+  // payer is owed the plain answer, never the CLI's sentence.
+  if (/is (closed|draft), not open|has already closed/.test(s))
+    return { code: 409, defect: "this pot has what it asked for", hint: "nothing was recorded; your payment is untouched" };
+  // POS-653: the receipt filled the pot and its file could not be closed. The
+  // pen's transaction keeps nothing, and the CLI's words (a path, and "appended
+  // locally") go to the log, never to the payer.
+  if (/could not be (read|closed)/.test(s)) {
+    faultLogged("the receipt filled its pot and the pot could not be closed", { stderr: s });
+    return { code: 500, defect: "the receipt refused", hint: "nothing was recorded; your payment is untouched" };
+  }
   if (/ledger is behind the mail/.test(s))
     return { code: 409, defect: "the ledger is catching up", hint: "the town is mid-crossing — try again in a moment" };
   if (/precedes the ledger tail/.test(s))
