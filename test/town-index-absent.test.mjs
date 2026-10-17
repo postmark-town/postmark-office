@@ -25,6 +25,12 @@ import { twinGolden, steady } from "./helpers/twin-golden.mjs";
 import { townClone, townModuleUrl } from "./fixture-paths.mjs";
 import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 
+// WLD-27's chest and candy doors ship dark (chests-candy.mjs), so these offices run dark, and the doorstep
+// answers whose record is read with its `holds` stripped are named here (helpers/twin-golden.mjs § withoutHolds).
+delete process.env.WORLD_CHESTS_CANDY;
+const DARK = new Set(["REST /doorstep/wright", "REST /doorstep/wright (keyed)", "REST /doorstep/limen (keyed)",
+  'MCP read_doorstep {"handle":"wright"}', 'MCP household {"read":"doorstep","handle":"wright"}']);
+
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const TWINS = twinGolden("town-index-absent");
 const tmp = mkdtempSync(join(tmpdir(), "town-index-absent-"));
@@ -113,7 +119,7 @@ const CHANGED = {
 // the twin's recorded answer under `label` (helpers/twin-golden.mjs), against this one
 const same = (what, label, answer) => {
   const got = steady(answer);
-  let was = TWINS.of(label);
+  let was = TWINS.of(label, { dark: DARK.has(label) });
   for (const [then, now] of CHANGED[label] ?? []) {
     assert.ok(was.includes(then), `${label}: the record no longer says "${then}", so this substitution is stale`);
     was = was.split(then).join(now);

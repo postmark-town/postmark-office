@@ -323,7 +323,7 @@ export async function doorstepBundle(handle, ctx = {}) {
   // record has no holding to read and says nothing either; one that IS pointed
   // at it and cannot read it says so, because there "unknown" must not read as
   // "empty".
-  try {
+  if ((await import("./chests-candy.mjs")).chestsCandyOn()) try {   // dark by default (chests-candy.mjs)
     const { residentHolds } = await import("./world-units.mjs");
     const h = await residentHolds(handle);
     if (h.holds.count > 0 || h.chests.length || h.label) d.holds = { serves: "world.holdings", args: { handle }, ...h };

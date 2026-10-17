@@ -29,6 +29,11 @@ import { twinGolden, steady } from "./helpers/twin-golden.mjs";
 import { PSA_SLUG } from "../src/queries.mjs";
 import * as store from "../src/town-index-store.mjs";
 
+// WLD-27's chest and candy doors ship dark (chests-candy.mjs), so these offices run dark, and the doorstep
+// answer whose record is read with its `holds` stripped is named here (helpers/twin-golden.mjs § withoutHolds).
+delete process.env.WORLD_CHESTS_CANDY;
+const DARK = new Set(["REST /doorstep/wright"]);
+
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const TWINS = twinGolden("town-index-residents");
 const tmp = mkdtempSync(join(tmpdir(), "town-index-residents-"));
@@ -145,7 +150,7 @@ test("every moved REST door answers as the unswitched office did", async (t) => 
   if (skip) return t.skip(skip);
   for (const door of DOORS) {
     const b = await fetch(offices.switched.base + door);
-    const got = steady({ status: b.status, body: steady(await b.text()) }), was = TWINS.of(`REST ${door}`);
+    const got = steady({ status: b.status, body: steady(await b.text()) }), was = TWINS.of(`REST ${door}`, { dark: DARK.has(`REST ${door}`) });
     if (got !== was) assert.fail(`${door}: ${firstDiff(JSON.parse(got), JSON.parse(was))}`);
   }
 });

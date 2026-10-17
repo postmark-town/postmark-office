@@ -17,6 +17,9 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
+// WLD-27's doors ship dark by default (src/chests-candy.mjs); these are their own tests, so they run with them open.
+process.env.WORLD_CHESTS_CANDY = "1";
+
 process.env.WORLD_CLONE = join(tmpdir(), "postmark-no-world-clone-wld27");
 const { leaveMarkViaOffice } = await import("../src/world.mjs");
 const { reloadLawSnapshot, resetLawSnapshot, LAW_REFRESH_SQLS } = await import("../src/law-snapshot.mjs");
