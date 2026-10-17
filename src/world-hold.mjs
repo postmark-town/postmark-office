@@ -64,6 +64,7 @@ import { holdEdgeOnActs } from "./hold-edge.mjs";
 import { IN_READ_WORKER } from "./read-workers.mjs";
 import { classDials } from "./world-classes.mjs";
 import { perceived } from "./act-watch.mjs"; // POS-637 PR-B: every act door perceives creatures
+import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
 
 /** The thing class's own params, read from the record every time (never cached here). */
 export const thingDials = () => classDials("thing");
@@ -917,7 +918,7 @@ export async function readHoldEffects({ handles = [], sinceCrossing, nowCrossing
     const rows = await storeHoldingRows({ since: sinceCrossing, until: nowCrossing });
     return { readable: true, events: holdEffectsFrom({ rows, handles, sinceCrossing, nowCrossing }) };
   } catch (e) {
-    return { readable: false, events: [], reason: `the holding record could not be read (${String(e?.message ?? e).slice(0, 160)})` };
+    return { readable: false, events: [], reason: `the holding record could not be read (${plainReason(e, "record", "the holding record")})` };
   }
 }
 
@@ -1141,7 +1142,7 @@ export async function fileSetDownAmend({ did, stood, key, actId = null, deps = {
     const amend = await fileAuthorsAmend({ thing, stood, key, actor, actId, writtenAt: did.at ?? null, deps });
     return { ...base, whose: "your household's", amend };
   } catch (e) {
-    return { ...base, whose: "your household's", amend: { filed: false, why: `the amend door refused: ${String(e?.defect ?? e?.message ?? e).slice(0, 200)}` } };
+    return { ...base, whose: "your household's", amend: { filed: false, why: `the amend door refused: ${e?.defect ?? plainReason(e, "record", "a set-down's amend")}` } };
   }
 }
 
@@ -1190,7 +1191,7 @@ export async function fileAuthorsAmend({ thing, stood, key, actor, actId = null,
       ...(res?.put_forward === true ? {} : { to_publish: res?.to_publish ?? null }),
     };
   } catch (e) {
-    return { filed: false, why: `the amend door refused: ${String(e?.defect ?? e?.message ?? e).slice(0, 200)}` };
+    return { filed: false, why: `the amend door refused: ${e?.defect ?? plainReason(e, "record", "a set-down's amend")}` };
   }
 }
 
@@ -1603,6 +1604,6 @@ async function unitsHeldBy(handle) {
       import("./world2-guards.mjs"), import("./world-stacks.mjs"), import("./world-units.mjs"), import("./law-snapshot.mjs")]);
     return holdsBlock(foldUnits((await storeHoldingRows()).filter(isUnitRow)), handle, classViewOf(lawSnapshot()));
   } catch (e) {
-    return { unreadable: `the counted holding could not be read (${String(e?.message ?? e).slice(0, 160)})` };
+    return { unreadable: `the counted holding could not be read (${plainReason(e, "record", "the counted holding")})` };
   }
 }

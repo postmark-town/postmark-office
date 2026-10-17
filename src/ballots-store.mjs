@@ -57,6 +57,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { planStampedCommit, landPlannedVia } from "./stamp-lines.mjs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
 
 const isRefusal = (e) => e && typeof e.code === "number" && typeof e.defect === "string";
 
@@ -132,7 +133,7 @@ export function readBallotFiles(clone) {
     .filter(Boolean).sort()
     .map((topic) => {
       try { return { topic, json: JSON.parse(readFileSync(join(dir, `ballot-${topic}.json`), "utf8")) }; }
-      catch (e) { return { topic, error: `WHITE_PAGES/ballot-${topic}.json does not parse (${String(e?.message ?? e).slice(0, 80)})` }; }
+      catch (e) { return { topic, error: `WHITE_PAGES/ballot-${topic}.json does not parse (${plainReason(e, "files", "a ballot file")})` }; }
     });
 }
 

@@ -41,6 +41,7 @@
 // as a follow-up; this file starts with the two kinds WLD-51 ruled.
 
 import { nextSettlement } from "./world-forecast.mjs";
+import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
 
 export const SEVERITIES = Object.freeze(["urgent", "act", "info"]);
 
@@ -198,16 +199,16 @@ export async function alertsFor(handles, { now = new Date(), store = defaultStor
   if (!scope.length) return { alerts, unread };
   let p = null;
   try { p = await store(); }
-  catch (e) { for (const kind of Object.keys(ALERT_KINDS)) unread.push({ kind, reason: `the store could not be reached (${String(e?.message ?? e).slice(0, 120)})` }); }
+  catch (e) { const why = plainReason(e, "record", "the alerts' store"); for (const kind of Object.keys(ALERT_KINDS)) unread.push({ kind, reason: `the store could not be reached (${why})` }); }
   if (!p) return { alerts, unread };
   try { alerts.push(...markTakenAlerts((await p.query(MARK_TAKEN_SQL, [scope, now.toISOString()])).rows, now)); }
-  catch (e) { unread.push({ kind: "mark-taken", reason: String(e?.message ?? e).slice(0, 160) }); }
+  catch (e) { unread.push({ kind: "mark-taken", reason: plainReason(e, "record", "the mark-taken alerts") }); }
   try {
     const found = (await p.query(ESCROW_ON_MISSING_SQL, [scope])).rows;
     if (found.length) {
       const ids = await worldIds();
       alerts.push(...escrowOnMissingAlerts(found, (id) => ids.has(id)));
     }
-  } catch (e) { unread.push({ kind: "escrow-on-missing-mark", reason: String(e?.message ?? e).slice(0, 160) }); }
+  } catch (e) { unread.push({ kind: "escrow-on-missing-mark", reason: plainReason(e, "record", "the escrow-on-missing-mark alerts") }); }
   return { alerts: sortAlerts(alerts), unread };
 }

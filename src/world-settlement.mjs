@@ -71,7 +71,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { snapshotFoldArgs } from "./world-snapshot.mjs";
-import { faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
+import { faultLogged, plainReason } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 
 const bounce = (code, defect, hint) => { const e = new Error(defect); Object.assign(e, { code, defect, hint }); return e; };
 
@@ -621,7 +621,7 @@ export async function vetoesNow(p, { worldRepo } = {}) {
     if (read.unreachable) return { unread: read.unreachable };
     return vetoesFrom(rows, read.versions);
   } catch (e) {
-    return { unread: String(e?.message ?? e).slice(0, 200) };
+    return { unread: plainReason(e, "record", "the settlement's vetoes") };
   }
 }
 
@@ -721,7 +721,7 @@ export async function settlementOrFile({ asked = null, fileAnswer, engaged, pool
     if (!served) reason = number == null ? "the store holds no settlement that names a snapshot yet" : null;
   } catch (e) {
     if (number != null) throw e?.code ? e : bounce(503, `S${number} could not be read`, faultLogged(`S${number} could not be read`, e)); // its error goes to the log (POS-578)
-    reason = `the newest settlement could not be read: ${String(e?.message ?? e).slice(0, 200)}`;
+    reason = `the newest settlement could not be read: ${plainReason(e, "record", "the newest settlement")}`;
     console.error(`[world-settlement] ${reason} — serving the published file`);
   }
   if (served) return served;
@@ -748,7 +748,7 @@ export async function settledMarkIds({ engaged, pool, worldRepo, townRepo = null
     return { ids: new Set((served.marks ?? []).map((m) => m.id)), settlement: served.meta.as_of.settlement, digest: served.meta.as_of.digest };
   } catch (e) {
     if (e?.code === "42P01") return null;              // a store without 054/065: nothing to narrow to
-    return { unread: String(e?.message ?? e).slice(0, 200) };
+    return { unread: plainReason(e, "record", "the settlement's narrowing") };
   }
 }
 
@@ -967,6 +967,6 @@ async function labelsFor(p, header, world, words, { worldRepo, servedKey, seal =
     if (LABELLED.size > 6) LABELLED.delete(LABELLED.keys().next().value);
     return { marks };
   } catch (e) {
-    return { unread: `the labels could not be read: ${String(e?.defect ?? e?.message ?? e).slice(0, 200)}` };
+    return { unread: `the labels could not be read: ${e?.defect ?? plainReason(e, "files", "the settlement's labels")}` };
   }
 }

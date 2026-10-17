@@ -119,7 +119,7 @@ test("a record that cannot be reached is era-one-only, DISCLOSED, never a throw"
   try {
     const { records, absent } = await storedDepartures({});
     assert.deepEqual(records, []);
-    assert.match(absent, /not reachable/);
+    assert.equal(absent, "the record did not answer"); // POS-657: the plain reason; the error goes to the log
   } finally { restore(); }
 });
 

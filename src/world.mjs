@@ -96,7 +96,7 @@ export { currentCrossing, CROSSING_DERIVATION } from "./crossings.mjs";
 import { arrivesAt, CROSSING_DERIVATION, crossingSailsAt, currentCrossing } from "./crossings.mjs";
 import { myMarksRefused } from "./claim-effects.mjs"; // POS-241 part 5: my-marks hears what the candle refused
 import { ringOf, ringBox, ringAgrees, ringMovedTo, RING_SHAPE_SENTENCE, RING_CLAIM_SENTENCE } from "./ring-box.mjs"; // POS-322: a mark's box is derived from its ring
-import { faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
+import { faultLogged, plainReason } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 
 // ── engine + world cache ─────────────────────────────────────────────────────
 let _mods = null;         // { verbs, build }
@@ -498,7 +498,7 @@ export async function departuresAcrossEras(worldClone = WORLD_CLONE, { atMs = Da
     const { parseWalkLedger } = await engineImport("walk.mjs");
     ({ departures: ledger } = parseWalkLedger(walkLedgerAtMain(worldClone)));
   } catch (e) {
-    ledgerUnreadable = String(e?.message ?? e).slice(0, 120);
+    ledgerUnreadable = plainReason(e, "files", "the walk ledger at main");
     disclosed.push(`walk-ledger-unreadable: ${ledgerUnreadable}`);
   }
   if (!movementV2Enabled()) return { departures: ledger, eras: ["ledger"], disclosed, ledgerUnreadable };
@@ -3065,7 +3065,7 @@ async function noteForHandle(key, handle) {
     return { note: (await noteOf(handle))?.body ?? null };
   } catch (e) {
     if (e?.name === "NoRecordError") return { note: null };
-    return { note: null, unavailable: `${NOTE_UNAVAILABLE} (${String(e?.message ?? e).slice(0, 120)})` };
+    return { note: null, unavailable: `${NOTE_UNAVAILABLE} (${plainReason(e, "record", "a resident's note")})` };
   }
 }
 
@@ -3118,7 +3118,7 @@ export async function worldBlockForHandle(handle, key = null) {
     // read out of a file the engine was never needed for was the one field
     // that answered anyway — the disclosure guard's own shape, one field deep.
     return { mark_id: null, x: null, y: null, sited: false,
-             unreadable: true, unreadable_reason: `${HOME_BLOCK_UNREADABLE} (${String(e?.message ?? e).slice(0, 120)})` };
+             unreadable: true, unreadable_reason: `${HOME_BLOCK_UNREADABLE} (${plainReason(e, "files", "a resident's home")})` };
   }
 
   // ONE derivation, shared with world_orient, and now it is the ONLY one: the
@@ -3328,7 +3328,7 @@ export async function witnessStamp(handle) {
     if (!standing?.placed) return { at: { anchor: null, dx: null, dy: null, unplaced: true }, witnesses: { source: "presence", list: [] } };
     return await witnessStampAt(handle, { x: standing.x, y: standing.y }, w);
   } catch (e) {
-    return unread(`witness-read-threw: ${String(e?.message ?? e).slice(0, 120)}`);
+    return unread(`witness-read-threw: ${plainReason(e, "files", "a witness stamp")}`); // the row is published: never the raw error (POS-657)
   }
 }
 
@@ -3368,7 +3368,7 @@ export async function witnessStampAt(handle, here, known = null) {
       : pinWitnesses({ residents: seen.residents ?? [], centreOf, chainAt });
     return { at, witnesses };
   } catch (e) {
-    return unread(`witness-read-threw: ${String(e?.message ?? e).slice(0, 120)}`);
+    return unread(`witness-read-threw: ${plainReason(e, "files", "a witness stamp")}`); // the row is published: never the raw error (POS-657)
   }
 }
 

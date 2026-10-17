@@ -98,7 +98,7 @@ import {
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
+import { faultLogged, plainReason } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 
 // ── THE TEACHING LINE (walk #1 item 4 · walk #2, 2026-09-05/06) ─────────────
 //
@@ -1080,7 +1080,7 @@ export async function stancesForHandles(handles, { cursor = null, limit = PAGE_S
     return answer;
   } catch (e) {
     return {
-      unavailable: `the consent inbox could not be read (${String(e?.message ?? e).slice(0, 160)})`,
+      unavailable: `the consent inbox could not be read (${plainReason(e, "record", "the consent inbox")})`,
       awaiting: [], standing: [],
     };
   }
@@ -1148,7 +1148,7 @@ export async function setDownFor(thing, target, marks = [], deps = {}) {
   try {
     rows = deps.readRows ? await deps.readRows(thing)
       : await (await import("./world2-guards.mjs")).standsRowsFromStore(thing);
-  } catch (e) { return { speakerHouse, unreadable: String(e?.message ?? e).slice(0, 160) }; }
+  } catch (e) { return { speakerHouse, unreadable: plainReason(e, "record", "a thing's standing rows") }; }
   if (!rows) return { speakerHouse };
   if (hold.liveHolder(rows.attachments ?? [], String(thing))) return { speakerHouse }; // held, not set down
   const drop = hold.latestDrop(rows.journal ?? [], String(thing));
@@ -1203,7 +1203,7 @@ export async function setDownsAwaiting(handles, { marks = [], stances = [], deps
     byThing = deps.rowsForMakers ? await deps.rowsForMakers(makers)
       : await (await import("./world2-guards.mjs")).setDownRowsForMakers(makers);
   } catch (e) {
-    return { rows: [], unavailable: `the holding record could not be read (${String(e?.message ?? e).slice(0, 160)}) — this is not an answer that nothing waits` };
+    return { rows: [], unavailable: `the holding record could not be read (${plainReason(e, "record", "the makers' set-downs")}) — this is not an answer that nothing waits` };
   }
   if (byThing == null)
     return { rows: [], unavailable: "this office cannot read the holding record — not an answer that nothing waits" };

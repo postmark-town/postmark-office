@@ -71,6 +71,7 @@
 // bundle is loaded by every door and every doorstep suite. The same shape the
 // `rulings` segment takes with claim-effects.mjs.
 import { nextSettlement, SETTLEMENT_CLOCK } from "./world-forecast.mjs";
+import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
 
 const defaultWorld = async () => {
   const [{ publishedState }, { WORLD_CLONE }] = await Promise.all([import("./world-branches.mjs"), import("./world.mjs")]);
@@ -187,17 +188,17 @@ export async function stakesFor(handles, {
   let state, ref;
   try { ({ state, ref } = await world()); }
   catch (e) {
-    return { ...base, unavailable: `the world record could not be read (${String(e?.message ?? e).slice(0, 120)}) — what you hold is unknown here, not empty`,
+    return { ...base, unavailable: `the world record could not be read (${plainReason(e, "files", "the stakes' world record")}) — what you hold is unknown here, not empty`,
       escrow_at_town_sha: null, escrow_ingested_at: null, catches_up_at: at, later_stakes: LATER_STAKES, count: 0, at_risk: null, rows: [] };
   }
   let published = {};
   let registryNote = null;
   try { published = (await registry(ref)) ?? {}; }
-  catch (e) { registryNote = `the sweep's registry could not be read at ${String(ref)} (${String(e?.message ?? e).slice(0, 100)}) — every class below reads null, and null is never at risk`; }
+  catch (e) { registryNote = `the sweep's registry could not be read at ${String(ref)} (${plainReason(e, "files", "the sweep's registry")}) — every class below reads null, and null is never at risk`; }
 
   let esc;
   try { esc = await escrow(); }
-  catch (e) { esc = { townSha: null, byMark: null, reason: `the escrow projection could not be read (${String(e?.message ?? e).slice(0, 120)}) — unknown, not zero` }; }
+  catch (e) { esc = { townSha: null, byMark: null, reason: `the escrow projection could not be read (${plainReason(e, "record", "the stakes' escrow projection")}) — unknown, not zero` }; }
 
   let verdict = null;
   try { verdict = await rule(); } catch { verdict = null; }

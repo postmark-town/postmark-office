@@ -498,8 +498,8 @@ test("an unreachable register is disclosed, and the renderer never throws", asyn
   install({ query: async () => { throw new Error("connection refused"); } });
   const { events, absent } = await storedDepartureEvents({ atMs: WINDOW_TO });
   assert.deepEqual(events, []);
-  assert.ok(absent && /connection refused|record cannot be reached/.test(absent),
-    "the cause is carried, not swallowed");
+  // the cause goes to the office's log; the answer says it plainly (POS-657, RULED A)
+  assert.equal(absent, "the record did not answer", "disclosed, not swallowed, and never the error's own text");
 });
 
 test("era one lines on disk are not the store's half and are counted, not compared", () => {

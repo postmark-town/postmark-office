@@ -51,6 +51,7 @@ import { loadRegistryRows } from "./registry-store.mjs";
 import { registryFromRows, pinsFromRows } from "./registry-rows.mjs";
 import { stampRows, LAST_ACTIVE_MEANS } from "./last-active.mjs"; // last_active, once for the house (POS-481)
 import { freshFor } from "./paper-fresh.mjs"; // POS-271: the pending paper rows, read before a composed read
+import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
 
 /** The doorstep keys that are the same on every resident's page: carried once, at the top. */
 export const HOUSE_ONCE = Object.freeze(["clocks", "psa", "town", "bulletin", "town_pulse"]);
@@ -142,7 +143,7 @@ async function standsOf(handles, readers = {}) {
     }
     return { at: roll?.at ?? null, byHandle: out, ...(roll?.disclosed?.length ? { disclosed: roll.disclosed } : {}) };
   } catch (e) {
-    return { unavailable: `the walkers roll could not be read (${String(e?.message ?? e).slice(0, 160)}) — where they stand is unknown here, not nowhere`, byHandle: {} };
+    return { unavailable: `the walkers roll could not be read (${plainReason(e, "record", "the house's walkers roll")}) — where they stand is unknown here, not nowhere`, byHandle: {} };
   }
 }
 
@@ -185,7 +186,7 @@ async function outcomesOf(handles, { stances, key, nowMs, readers = {} }) {
     };
   } catch (e) {
     return { since_crossing: since, through_crossing: now, count: 0, events: [],
-      unavailable: `the crossings' outcomes could not be read (${String(e?.message ?? e).slice(0, 160)})` };
+      unavailable: `the crossings' outcomes could not be read (${plainReason(e, "record", "the house's outcomes")})` };
   }
 }
 
@@ -193,7 +194,7 @@ async function outcomesOf(handles, { stances, key, nowMs, readers = {} }) {
 async function alertsOf(handles, { nowMs, readers = {} }) {
   const { alertsFor } = readers.alertsFor ? { alertsFor: readers.alertsFor } : await import("./alerts.mjs");
   try { return await alertsFor(handles, { now: new Date(nowMs) }); }
-  catch (e) { return { alerts: [], unread: [{ kind: "*", reason: `the alerts could not be composed (${String(e?.message ?? e).slice(0, 160)})` }] }; }
+  catch (e) { return { alerts: [], unread: [{ kind: "*", reason: `the alerts could not be composed (${plainReason(e, "record", "the house's alerts")})` }] }; }
 }
 
 async function stakesOf(handles, { nowMs, readers = {} }) {

@@ -854,7 +854,7 @@ test("WLD-38 · A HOUSE OR A GROUND THAT CANNOT BE READ IS NAMED ON THE PAGE —
   const plain = await doorstepBundle(HANDLE, { ...ctx, nowMs: NOW_303 });       // the same clock: the segments are compared whole
   for (const [why, over, said] of [
     ["the registry", { household: async () => null }, /household registry could not be read/],
-    ["a footprint", { ringOf: async () => { throw new Error("parcel dial unread"); } }, /the ground of r000\/east-shed could not be read \(parcel dial unread\)/],
+    ["a footprint", { ringOf: async () => { throw new Error("parcel dial unread"); } }, /the ground of r000\/east-shed could not be read \(the world's files could not be read\)/], // POS-657: a plain reason
   ]) {
     __setMistsDepsForTest(mistsDeps(over));
     try {

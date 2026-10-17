@@ -141,7 +141,7 @@ import { ARENA_TOOLS, ARENA_VERBS, arenaActViaOffice, arenaClosed } from "./aren
 // THE PORTAL GROUND'S OWN LAW outlived the arena: which room you stand in, its
 // stride and its landing (src/portal-ground.mjs). Rides and vehicles are not this.
 import { cockpitPortal, groundAt, landingPointFor } from "./portal-ground.mjs";
-import { caughtBounce, isHttpStatus, trippedError } from "./fault-words.mjs"; // the office's own words for its own fault (POS-573/578)
+import { caughtBounce, isHttpStatus, trippedError, plainReason } from "./fault-words.mjs"; // the office's own words for its own fault (POS-573/578)
 
 export const apexEnabled = () => process.env.WORLD_APEX === "1";
 
@@ -1617,7 +1617,7 @@ export async function groundWithinReach(oriented, key = null) {
       ...(dis ? { disclosed: dis } : {}),
     };
   } catch (e) {
-    return { unavailable: `the ground could not be read (${String(e?.message ?? e).slice(0, 120)}) — this is not an answer about what lies underfoot` };
+    return { unavailable: `the ground could not be read (${plainReason(e, "files", "the ground underfoot")}) — this is not an answer about what lies underfoot` };
   } finally {
     try { store?.db?.close(); } catch { /* a reader that cannot close still read */ }
   }
@@ -2095,7 +2095,7 @@ async function rideDomain(oriented, key, fields = {}) {
   } catch (e) {
     // SAID, NEVER SWALLOWED — and never spelled like "no ride stands". The
     // reader is told this is a failure to read and not a fact about their ride.
-    return { unreadable: `this office could not read your ride (${String(e?.message ?? e).slice(0, 160)})`, also_at: RIDE_ALSO_AT };
+    return { unreadable: `this office could not read your ride (${plainReason(e, "files", "a resident's ride")})`, also_at: RIDE_ALSO_AT };
   }
 }
 
@@ -2159,7 +2159,7 @@ async function rideDoorsFor(oriented) {
     const why = service ? null : (reason ?? errors?.[0]?.error ?? "no timetable");
     return rideDoorsOf(service, at, w?.marks ?? [], why);
   } catch (e) {
-    return rideDoorsOf(null, at, [], String(e?.message ?? e).slice(0, 160));
+    return rideDoorsOf(null, at, [], plainReason(e, "files", "the vessel's timetable"));
   }
 }
 
@@ -2324,7 +2324,7 @@ export async function happenedFor(oriented, args, key, { town = true, live = fal
     return { ...block, complete, ...(clamped ? { reach: `clamped to the last ${HAPPENED_REACH} crossings (${since}..${nowCrossing}); older is the crossing log, STATE/log/` } : {}),
       log: { crossings_read: covered.length, crossings_absent: absent.length, ...(live ? { live: liveHw != null, live_complete: liveComplete } : {}) }, ...(liveHw != null ? { _hw: liveHw } : {}) };
   } catch (e) {
-    return { unavailable: "the delta could not be read", detail: String(e?.message ?? e).slice(0, 160) };
+    return { unavailable: "the delta could not be read", detail: plainReason(e, "record", "the happened delta") };
   }
 }
 

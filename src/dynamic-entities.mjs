@@ -33,6 +33,7 @@ import { WORLD_CLONE } from "./world-store.mjs";
 import { metaIn, openWorldStore, registerTwin, NO_WORLD } from "./world-graph-db.mjs";
 import { freshestMainRef, materializeAtRef } from "./world-branches.mjs";
 import { servedCanonSha } from "./world-serve.mjs";
+import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
 
 // The vessel appears in the walk ledger as an actor — she is a mark that moves,
 // not a resident. She is never an entity; her position is `derived` mobility,
@@ -221,7 +222,7 @@ export function readDepartureEvents({ repo = WORLD_CLONE } = {}) {
     rows = db.prepare(DEPARTURES_SQL).all();
   } catch (e) {
     db.close();
-    return { refused: { gate: "world-store", detail: `events unreadable (${String(e?.message ?? e).slice(0, 160)})` } };
+    return { refused: { gate: "world-store", detail: `events unreadable (${plainReason(e, "record", "the world store's events")})` } };
   }
   db.close();
 

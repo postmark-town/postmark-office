@@ -31,6 +31,7 @@ import { join } from "node:path";
 import { mediaConfigured, mediaQuota, mediaLedgerRows } from "./media.mjs";
 import { home as homeQ } from "./queries.mjs";
 import { lawOf, openStore } from "./world-apex.mjs";
+import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
 
 const bounce = (code, defect, hint, extra = {}) => ({ error: "bounce", code, defect, hint, ...extra });
 
@@ -90,7 +91,7 @@ export async function embeddedScan({ handles, db, clone, urls }) {
       sweep(mark.body);
     }
   } catch (e) {
-    unreadable.push(`published marks — ${String(e?.message ?? e).slice(0, 120)}`);
+    unreadable.push(`published marks — ${plainReason(e, "files", "the household media's published marks")}`);
   }
 
   for (const handle of handles) {
@@ -104,7 +105,7 @@ export async function embeddedScan({ handles, db, clone, urls }) {
       const h = tis.townIndexReads() ? await tis.storeIndexPooled(clone).home(handle) : db ? homeQ(db, handle) : null;
       if (h) sweep(JSON.stringify(h));
     } catch (e) {
-      unreadable.push(`home (${handle}) — ${String(e?.message ?? e).slice(0, 120)}`);
+      unreadable.push(`home (${handle}) — ${plainReason(e, "files", "the household media's home")}`);
     }
     // ── the window ──────────────────────────────────────────────────────────
     // An absent window is not an unreadable one: most residents have not hung
@@ -113,7 +114,7 @@ export async function embeddedScan({ handles, db, clone, urls }) {
       const file = clone ? join(clone, "WHITE_PAGES", handle, "WINDOW", "window.html") : null;
       if (file && existsSync(file)) sweep(readFileSync(file, "utf8"));
     } catch (e) {
-      unreadable.push(`window (${handle}) — ${String(e?.message ?? e).slice(0, 120)}`);
+      unreadable.push(`window (${handle}) — ${plainReason(e, "files", "the household media's window")}`);
     }
   }
 

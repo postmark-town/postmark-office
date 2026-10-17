@@ -44,6 +44,7 @@ import { WORLD_CLONE } from "./world-store.mjs";
 import { movementV2Enabled } from "./dynamic-store.mjs";
 import { VESSEL_HANDLE, worldToolModule } from "./dynamic-entities.mjs";
 import { boundariesOnRoad, carriersFrom, carriersWithDisclosure, carrierStateAt, foldFrames, gunwaleWarning, inRect } from "./world-frames.mjs";
+import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
 
 // The flag is read from the environment on every call and never latched at
 // import — the discipline `world-serve.mjs` and `dynamic-store.mjs` already use,
@@ -97,7 +98,7 @@ export async function vesselServiceFrom(worldState, { repo = WORLD_CLONE, vessel
     // A world clone that cannot hand over `vessel.mjs` is an office that must
     // still answer. The flag-on path falls back to the flag-off derivation and
     // says why, rather than refusing to tell anyone where they are.
-    out = { service: null, carriers: [], carrierSource: "none", disclosed: [], errors: [{ mark: "(engine)", error: String(e?.message ?? e).slice(0, 200) }], mod: null, walk: null, reason: "the world's tools/vessel.mjs could not be read at a ref" };
+    out = { service: null, carriers: [], carrierSource: "none", disclosed: [], errors: [{ mark: "(engine)", error: plainReason(e, "files", "the vessel's engine") }], mod: null, walk: null, reason: "the world's tools/vessel.mjs could not be read at a ref" };
   }
   _services.set(marks, out);
   return out;
@@ -354,8 +355,7 @@ export async function storedDepartures({ atMs = Date.now(), withActId = false } 
     // cannot be reached"), and it puts the real reason on `cause`. A disclosure
     // that printed only the outer sentence would send an operator looking at the
     // pool when the office is simply pointed at no record.
-    const why = e?.cause?.message ? `${e.message} (${e.cause.message})` : String(e?.message ?? e);
-    return { records: [], absent: why.slice(0, 200) };
+    return { records: [], absent: plainReason(e, "record", "the store's departures") };
   }
 }
 
@@ -386,14 +386,14 @@ export async function storedGoverningDepartures({ atMs = Date.now() } = {}) {
     const { storeDepartureSnapshot } = await import("./world2-guards.mjs");
     snap = await storeDepartureSnapshot({ atMs });
   } catch (e) {
-    return { fallback: `the snapshot could not be read (${String(e?.message ?? e).slice(0, 160)})` };
+    return { fallback: `the snapshot could not be read (${plainReason(e, "record", "the departures snapshot")})` };
   }
   if (!snap) return { fallback: null };
   const { composeSnapshot } = await import("./position-snapshot.mjs");
   const { ledgerRecordOf } = await import("../world2/tools/live-reads.mjs");
   let got;
   try { got = composeSnapshot(snap, { atMs }); }
-  catch (e) { return { fallback: `the delta since window ${snap.window} could not be read (${String(e?.message ?? e).slice(0, 160)})` }; }
+  catch (e) { return { fallback: `the delta since window ${snap.window} could not be read (${plainReason(e, "record", "the departures delta")})` }; }
   if (got.discard) return { fallback: got.discard };
   const records = got.records.map((r) => (r.era === "ledger" ? ledgerRecordOf(r) : storedShapeOf(r)));
   return {

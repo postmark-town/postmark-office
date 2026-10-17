@@ -17,6 +17,36 @@ export const ACT_RETRY = "the office lost its connection to the town's store whi
 // What tripped is the defect, and this is the hint. The error itself is in the office's log.
 export const FAULT_LOGGED = "nothing in your request caused it. What failed is in the office's log, not in this answer; try again shortly, and if it keeps happening, tell the town.";
 
+// THE PLAIN REASONS (POS-657; RULED A, Darko 2026-10-16 20:04 EDT). A read that
+// says a count "could not be read — unknown, not zero" keeps that promise, and
+// its parenthetical is one of these fixed reasons, never the error's own text.
+// The raw error goes to the office's log. Map a site by what it was reading:
+//   record  the office's store (the acts, the docket, the registry, a projection)
+//   files   the world's files (the world clone, git, the engine at a ref)
+//   parse   a saved file that does not parse (a file read whose JSON is bad)
+//   chain   the Base chain (its RPCs)
+export const PLAIN_REASONS = Object.freeze({
+  record: "the record did not answer",
+  files: "the world's files could not be read",
+  parse: "a saved file does not parse",
+  chain: "the chain could not be reached",
+});
+
+/**
+ * An error in the office's OWN words, thrown inside a read to end it (the
+ * engine giving no Mists state, say). It is not a raw error, so a disclosure
+ * may say it as it is: plainReason hands its sentence back.
+ */
+export const ownWordsError = (sentence) => Object.assign(new Error(sentence), { own_words: true });
+
+/** The plain reason for a read that failed on `kind`, with the raw error logged beside `what`. A file read whose JSON is bad is `parse`; the office's own words (ownWordsError) are said as they are. */
+export function plainReason(e, kind, what = "a read") {
+  if (e?.own_words === true) return String(e.message);
+  const k = kind === "files" && e instanceof SyntaxError ? "parse" : (Object.hasOwn(PLAIN_REASONS, kind) ? kind : "record");
+  console.error(`[office] ${String(what).slice(0, 160)} could not be read (${PLAIN_REASONS[k]}): ${errorSaid(e)}`);
+  return PLAIN_REASONS[k];
+}
+
 // How long a lost store asks a caller to wait: REST's Retry-After header, and
 // the MCP body's `retry_after` (a JSON-RPC answer carries no header).
 export const STORE_RETRY_AFTER_S = 30;
