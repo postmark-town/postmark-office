@@ -32,6 +32,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { foldedStateAtRef, mainRef, readJsonAtRef } from "./world-branches.mjs";
+import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
 
 // The sweep's own clock: deploy/postmark-settlement.timer — OnCalendar 06:00 and
 // 18:00 UTC, on the dot (POS-80, the founder 2026-09-14: "make it 6 and 18 UTC
@@ -122,7 +123,7 @@ export async function forecastForMark(mark, { worldClone, townClone, now = new D
     settled = Number(row.weight ?? row.stamps ?? 0);
     published = new Set((state?.marks ?? []).map((m) => m.id));
   } catch (e) {
-    return disclose(`the world record could not be read (${String(e?.message ?? e).slice(0, 120)})`);
+    return disclose(`the world record could not be read (${plainReason(e, "files", "the forecast's world record")})`);
   }
 
   let proposed;

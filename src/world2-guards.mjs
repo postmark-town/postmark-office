@@ -121,6 +121,7 @@
 import { world2Enabled } from "./world2-acts.mjs";
 import { officeRead } from "./world2-pen.mjs";
 import * as port from "../world2/tools/guard-reads.mjs";
+import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
 
 /**
  * The guard port could not answer. Carries D2's sentence, because the resident
@@ -353,7 +354,7 @@ export async function guardedDraftsForKey(repo, key) {
     // This is NOT the permissive direction — the overlay is a READ a resident
     // sees, not a gate that lets a write through — so the door tells the truth
     // rather than refusing a page.
-    return { ...gitDelta, log: { readable: false, source: "acts", reason: String(e?.message ?? e).slice(0, 200) } };
+    return { ...gitDelta, log: { readable: false, source: "acts", reason: plainReason(e, "record", "the acts delta") } };
   }
 
   const byId = new Map();

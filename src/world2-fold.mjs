@@ -234,8 +234,9 @@ export async function worldStateServed({ env = process.env, fileState, storeStat
     if (key != null) { cache.key = key; cache.state = state; }
     return state;
   } catch (e) {
-    const reason = String(e?.message ?? e).slice(0, 300);
-    console.error(`[world2-fold] W2_FOLD=store could not answer (${reason}) — serving the published file`);
+    // what the store said goes to the log; the read says a plain reason (POS-657)
+    const { plainReason } = await import("./fault-words.mjs");
+    const reason = plainReason(e, "record", "W2_FOLD=store's rows fold (serving the published file)");
     const file = await fileState();
     return { ...file, meta: { source: "file", fell_through: reason } };
   } finally {

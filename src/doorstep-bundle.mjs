@@ -28,6 +28,7 @@ import { votesAvailable, doorstepVotes } from "./votes.mjs";
 import { nextCrossingForDoorstep, copyBlock, copyHoldsWords } from "./crossings.mjs";
 import { unreadFor, unreadBlock } from "./unread-store.mjs";
 import { freshFor } from "./paper-fresh.mjs"; // POS-271: the pending paper rows, read before a composed read
+import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
 
 /**
  * The finished doorstep for one resident, or null when there is no such
@@ -185,7 +186,7 @@ export async function doorstepBundle(handle, ctx = {}) {
       : { serves: "household.stances", args, ...whole };
   } catch (e) {
     d.stances = { serves: "household.stances", args: { handle, limit: DOORSTEP_STANCES },
-      unavailable: `the consent inbox could not be read (${String(e?.message ?? e).slice(0, 160)})`,
+      unavailable: `the consent inbox could not be read (${plainReason(e, "record", "the doorstep's consent inbox")})`,
       awaiting: [], standing: [] };
   }
   // ── THE EIGHTH SEGMENT · the last crossing's verdict on your things ──────
@@ -218,7 +219,7 @@ export async function doorstepBundle(handle, ctx = {}) {
       ...(await doorstepRulings(handle, { key, nowMs })) };
   } catch (e) {
     d.outcomes = { serves: "household.outcomes", args: { handle },
-      unavailable: `the crossings' outcomes for your things could not be read (${String(e?.message ?? e).slice(0, 160)})`,
+      unavailable: `the crossings' outcomes for your things could not be read (${plainReason(e, "record", "the doorstep's outcomes")})`,
       count: 0, events: [] };
   }
   d.rulings = { renamed: [renamedRow("segment", "rulings", "outcomes")] };
@@ -260,7 +261,7 @@ export async function doorstepBundle(handle, ctx = {}) {
       : { serves: "household.stakes", args: { handle }, ...whole };
   } catch (e) {
     d.stakes = { serves: "household.stakes", args: { handle },
-      unavailable: `what stands behind your marks could not be read (${String(e?.message ?? e).slice(0, 160)}) — unknown, not zero`,
+      unavailable: `what stands behind your marks could not be read (${plainReason(e, "record", "the doorstep's stakes")}) — unknown, not zero`,
       count: 0, at_risk: null, rows: [] };
   }
   // ── ALERTS (WLD-51; Darko 2026-10-15 19:06, the shape approved 19:29) ───
@@ -279,7 +280,7 @@ export async function doorstepBundle(handle, ctx = {}) {
     if (unread.length) d.alerts_unread = unread;
   } catch (e) {
     d.alerts = [];
-    d.alerts_unread = [{ kind: "*", reason: `the alerts could not be composed (${String(e?.message ?? e).slice(0, 160)})` }];
+    d.alerts_unread = [{ kind: "*", reason: `the alerts could not be composed (${plainReason(e, "record", "the doorstep's alerts")})` }];
   }
   // ── THE TENTH SEGMENT · the house's posts (POS-293) ────────────────────
   //
@@ -302,7 +303,7 @@ export async function doorstepBundle(handle, ctx = {}) {
     d.posts = { serves: "household.posts", args: { handle }, ...(await householdPosts(handle, { now: nowMs, clone })) };
   } catch (e) {
     d.posts = { serves: "household.posts", args: { handle },
-      unavailable: [`the house's posts could not be read (${String(e?.message ?? e).slice(0, 160)})`],
+      unavailable: [`the house's posts could not be read (${plainReason(e, "record", "the doorstep's posts")})`],
       put_up: { total: null, shown: 0, rows: [] }, taking_part: { total: null, shown: 0, rows: [] } };
   }
   // ── WHAT THEY HOLD (WLD-27) — beside the segments, not one of them ─────
@@ -329,7 +330,7 @@ export async function doorstepBundle(handle, ctx = {}) {
   } catch (e) {
     const { world2Enabled } = await import("./world2-acts.mjs");
     if (world2Enabled()) d.holds = { serves: "world.holdings", args: { handle },
-      unavailable: `what ${handle} holds could not be read (${String(e?.message ?? e).slice(0, 160)}) — unknown, not empty` };
+      unavailable: `what ${handle} holds could not be read (${plainReason(e, "record", "the doorstep's holdings")}) — unknown, not empty` };
   }
   // ── WHEN THE MISTS REACH THE HOUSE'S MARKS (WLD-38) — beside the segments ─
   //
@@ -349,7 +350,7 @@ export async function doorstepBundle(handle, ctx = {}) {
     if (m) d.mists = m;
   } catch (e) {
     const { MISTS_FORECAST_UNAVAILABLE } = await import("./mists-forecast.mjs");
-    d.mists = { serves: "world.mists", args: { handle }, unavailable: `${MISTS_FORECAST_UNAVAILABLE}: ${String(e?.message ?? e).slice(0, 160)}` };
+    d.mists = { serves: "world.mists", args: { handle }, unavailable: `${MISTS_FORECAST_UNAVAILABLE}: ${plainReason(e, "files", "the doorstep's Mists forecast")}` };
   }
   // The manifest, republished now that every segment is on the page. A reader
   // walks `segments` to find them, so it must name all ten or none.

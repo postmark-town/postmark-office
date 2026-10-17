@@ -96,7 +96,7 @@ export { currentCrossing, CROSSING_DERIVATION } from "./crossings.mjs";
 import { arrivesAt, CROSSING_DERIVATION, crossingSailsAt, currentCrossing } from "./crossings.mjs";
 import { myMarksRefused } from "./claim-effects.mjs"; // POS-241 part 5: my-marks hears what the candle refused
 import { ringOf, ringBox, ringAgrees, ringMovedTo, RING_SHAPE_SENTENCE, RING_CLAIM_SENTENCE } from "./ring-box.mjs"; // POS-322: a mark's box is derived from its ring
-import { faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
+import { faultLogged, plainReason } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 
 // ── engine + world cache ─────────────────────────────────────────────────────
 let _mods = null;         // { verbs, build }
@@ -498,19 +498,21 @@ export async function departuresAcrossEras(worldClone = WORLD_CLONE, { atMs = Da
     const { parseWalkLedger } = await engineImport("walk.mjs");
     ({ departures: ledger } = parseWalkLedger(walkLedgerAtMain(worldClone)));
   } catch (e) {
-    ledgerUnreadable = String(e?.message ?? e).slice(0, 120);
+    ledgerUnreadable = plainReason(e, "files", "the walk ledger at main");
     disclosed.push(`walk-ledger-unreadable: ${ledgerUnreadable}`);
   }
   if (!movementV2Enabled()) return { departures: ledger, eras: ["ledger"], disclosed, ledgerUnreadable };
 
   const newestLedger = ledger.reduce((m, d) => Math.max(m, Date.parse(d.iso) || 0), 0);
-  const { records, absent } = await storedDepartures({ atMs });
+  const { records, absent, cause } = await storedDepartures({ atMs });
   if (absent) {
     // NAMES THE RECORD, NOT THE TABLE (POS-154). This said
     // `movements-unreadable`, which was true of a sqlite file and is false of
     // the store — a disclosure that names the wrong thing sends whoever reads it
     // to look in a place that cannot be the cause.
-    disclosed.push(`record-unreadable: ${absent} — reading the founding era alone`);
+    // the departures' own detail goes to the log; the read says the plain reason
+    // for its CAUSE (POS-657): a store that did not answer, or an instant that does not parse
+    disclosed.push(`record-unreadable: ${plainReason(cause ?? { message: absent }, "record", "the store's departures")} — reading the founding era alone`);
     return { departures: ledger, eras: ["ledger"], disclosed, ledgerUnreadable };
   }
   if (!records.length) return { departures: ledger, eras: ["ledger", "store"], disclosed, ledgerUnreadable };
@@ -3065,7 +3067,7 @@ async function noteForHandle(key, handle) {
     return { note: (await noteOf(handle))?.body ?? null };
   } catch (e) {
     if (e?.name === "NoRecordError") return { note: null };
-    return { note: null, unavailable: `${NOTE_UNAVAILABLE} (${String(e?.message ?? e).slice(0, 120)})` };
+    return { note: null, unavailable: `${NOTE_UNAVAILABLE} (${plainReason(e, "record", "a resident's note")})` };
   }
 }
 
@@ -3118,7 +3120,7 @@ export async function worldBlockForHandle(handle, key = null) {
     // read out of a file the engine was never needed for was the one field
     // that answered anyway — the disclosure guard's own shape, one field deep.
     return { mark_id: null, x: null, y: null, sited: false,
-             unreadable: true, unreadable_reason: `${HOME_BLOCK_UNREADABLE} (${String(e?.message ?? e).slice(0, 120)})` };
+             unreadable: true, unreadable_reason: `${HOME_BLOCK_UNREADABLE} (${plainReason(e, "files", "a resident's home")})` };
   }
 
   // ONE derivation, shared with world_orient, and now it is the ONLY one: the
@@ -3328,7 +3330,7 @@ export async function witnessStamp(handle) {
     if (!standing?.placed) return { at: { anchor: null, dx: null, dy: null, unplaced: true }, witnesses: { source: "presence", list: [] } };
     return await witnessStampAt(handle, { x: standing.x, y: standing.y }, w);
   } catch (e) {
-    return unread(`witness-read-threw: ${String(e?.message ?? e).slice(0, 120)}`);
+    return unread(`witness-read-threw: ${plainReason(e, "files", "a witness stamp")}`); // the row is published: never the raw error (POS-657)
   }
 }
 
@@ -3368,7 +3370,7 @@ export async function witnessStampAt(handle, here, known = null) {
       : pinWitnesses({ residents: seen.residents ?? [], centreOf, chainAt });
     return { at, witnesses };
   } catch (e) {
-    return unread(`witness-read-threw: ${String(e?.message ?? e).slice(0, 120)}`);
+    return unread(`witness-read-threw: ${plainReason(e, "files", "a witness stamp")}`); // the row is published: never the raw error (POS-657)
   }
 }
 
@@ -4173,7 +4175,7 @@ async function placingOnBehalf(by, payload, key, bounce) {
  */
 async function placementForecast({ worldClone, w, worldUnread, id, ring, mistsCrossing = null }) {
   const { forecastMists, mistsEngine, MISTS_FORECAST_UNAVAILABLE } = await import("./mists-forecast.mjs");
-  if (!w) return { unavailable: `${MISTS_FORECAST_UNAVAILABLE}: the world could not be read (${String(worldUnread?.message ?? worldUnread ?? "no world").slice(0, 120)})` };
+  if (!w) return { unavailable: `${MISTS_FORECAST_UNAVAILABLE}: the world could not be read (${plainReason(worldUnread, "files", "the world, for a placement's Mists forecast")})` };
   const skeleton = w?._raw?.skeleton ?? undefined;
   const engine = skeleton?.mists ? await mistsEngine(worldClone) : null;
   const nowMs = mistsCrossing == null ? Date.now() : Date.parse(crossingSailsAt(mistsCrossing));
@@ -4468,7 +4470,7 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
     // nothing after the commit can turn a written mark into an error. The walk,
     // portal and landing checks keep `mistsGroundCheck` exactly as it was.
     mistsWarning = dialUnread
-      ? { unavailable: `mists-forecast-unavailable: the parcel dial could not be read, so this parcel's ground is unknown (${String(dialUnread?.message ?? dialUnread).slice(0, 120)})` }
+      ? { unavailable: `mists-forecast-unavailable: the parcel dial could not be read, so this parcel's ground is unknown (${plainReason(dialUnread, "files", "the parcel dial, for a placement's Mists forecast")})` }
       : await placementForecast({ worldClone, w, worldUnread, id: `${by}/${slug}`, ring: ground, mistsCrossing });
   }
   const exec = join(HERE, "leave-exec.mjs");

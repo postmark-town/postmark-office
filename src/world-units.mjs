@@ -37,7 +37,7 @@ import {
 import { holdingsOf, sameHousehold, holdTurn, liveHolder, rowsFor, holdingEntry } from "./world-hold.mjs";
 import { chestRoomGuard } from "./chest-lock.mjs";
 import { dropUndoGuard, undoNonce, dropSequenceGuard } from "./drop-recovery.mjs";
-import { faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
+import { faultLogged, plainReason } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 
 // ── SLOTS HELD FOR AN ACT STILL IN FLIGHT (Bevel's review, finding 3) ───────
 //
@@ -358,7 +358,7 @@ export async function callUnits(route, args, key, actor, deps) {
       try {
         filed = await deps.leave(payload, key, { dropUnit: { actId: dropped.seq, label: dropped.label } });
         if (filed?.error) { why = filed.defect ?? filed.error; filed = null; }
-      } catch (e) { why = String(e?.defect ?? e?.message ?? e).slice(0, 200); }
+      } catch (e) { why = String(e?.defect ?? plainReason(e, "record", "a dropped unit's filing")).slice(0, 200); }
       if (!filed) {
         // THE CALL FAILED; WHAT COMMITTED? (Wright's independent review, F0.)
         // `leaveMarkViaOffice` can throw after its claim committed, so the
@@ -376,7 +376,7 @@ export async function callUnits(route, args, key, actor, deps) {
           } catch (e) {
             if (e?.filed) committed = e.filed;
             else if (e?.undoneAlready) back = { seq: e.undoneAlready, already: true };
-            else stuck = String(e?.defect ?? e?.message ?? e).slice(0, 200);
+            else stuck = String(e?.defect ?? plainReason(e, "record", "a unit's undo")).slice(0, 200);
           } finally { release(actor, 1); }
         });
         if (committed)
@@ -547,7 +547,7 @@ async function markExit(route, args, key, actor, deps, view, cap) {
           payload: { mark: id, by, exit: cause, ...(acted.already ? { finished_by: actor } : {}), ...(late.length ? { late_returns: late } : {}) } }));
     } catch (e) {
       late = e?.returned ?? late;
-      withdrawn = { withdrawn: false, why: String(e?.defect ?? e?.message ?? e).slice(0, 200),
+      withdrawn = { withdrawn: false, why: String(e?.defect ?? plainReason(e, "record", "a unit's withdrawal")).slice(0, 200),
         retry: "ask again: the unit is not gained and no stake is returned a second time; only the withdrawal is tried again, after any stake still open on the mark is returned" };
     }
   }

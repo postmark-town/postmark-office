@@ -34,6 +34,7 @@
 import { officeRead, officeWrite } from "./world2-pen.mjs";
 import { householdKeyFor } from "./world2-claims.mjs";
 import { refuse } from "./events.mjs";
+import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
 
 export const HOW_READ = "read";
 export const HOW_MARK_ALL = "mark-all-read";
@@ -96,7 +97,7 @@ export async function unreadFor(db, handles, { env = process.env, ix = null } = 
 export function unreadBlock(rows, err = null) {
   if (err) return {
     count: null,
-    unavailable: `unread lives in the office's record, and the record could not be read (${String(err?.message ?? err).slice(0, 160)}) — unknown, not zero`,
+    unavailable: `unread lives in the office's record, and the record could not be read (${plainReason(err, "record", "the unread count")}) — unknown, not zero`,
     clears: UNREAD_CLEARS,
   };
   const letters = rows.slice(0, UNREAD_LISTED).map((r) => ({ id: r.id, from: r.from, date: r.date, delivered_at: r.delivered_at ?? null }));
