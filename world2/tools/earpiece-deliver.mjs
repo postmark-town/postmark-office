@@ -29,7 +29,7 @@
 // run, not about a resident, and a per-resident row every minute for every
 // announced event would bury the log a resident reads.
 //
-// Usage: node world2/tools/earpiece-deliver.mjs --run [--state <file>] [--db <office.db>] [--oauth-db <oauth.db>]
+// Usage: node world2/tools/earpiece-deliver.mjs --run [--state <file>] [--oauth-db <oauth.db>]
 // Env:   W2_EARPIECE=1 · WORLD2_PG_URL (the office's record) · WORLD_CLONE
 //        (the world engine's containment law) · EARPIECE_STATE (the stamp file)
 //        · TOWN_CLONE, TOWN_PUSH, TOWN_SINGLE_LOG (the pen's, as the office has them)
@@ -242,29 +242,22 @@ async function main(argv) {
   const verbs = await import(pathToFileURL(join(clone, "tools", "world-verbs.mjs"))).catch(() => null);
   const { EARSHOT_M } = await import("../../src/reach.mjs");
   const { pgStore } = await import("../../src/earpiece-store.mjs");
-  // THE PEN's two databases, opened the way tools/town-drain-run.mjs opens
-  // them: the office's index (the recipient check), and the town log only when
-  // the office writes one (flag-on; the box is flag-off).
+  // THE PEN's index and town log: the store's index for the recipient check,
+  // and the town log only when the office writes one (flag-on; the box is flag-off).
   const argOf = (n, d) => { const k = argv.indexOf(n); return k >= 0 ? argv[k + 1] : d; };
-  const dbPath = resolve(argOf("--db", join(ROOT, "office.db")));
   const odbPath = resolve(argOf("--oauth-db", join(ROOT, "oauth.db")));
-  const { DatabaseSync } = await import("node:sqlite");
   const { penMailPort } = await import("../../src/earpiece-mail.mjs");
   const { townLogEnabled } = await import("../../src/town-journal.mjs");
-  // With TOWN_INDEX_READS=store the recipient check reads the store's index,
-  // loaded here, and office.db is not opened (POS-268); a store that cannot
-  // answer leaves the pen's checks refusing, and each letter logs failed.
-  const { indexSwitched } = await import("../../src/index-probe.mjs");
-  let db = null;
-  if (indexSwitched()) await (await import("../../src/town-index-store.mjs")).refreshStoreProbe({ logins: false });
-  else db = existsSync(dbPath) ? new DatabaseSync(dbPath) : null;
+  // The recipient check reads the store's index, loaded here (POS-268); a store
+  // that cannot answer leaves the pen's checks refusing, and each letter logs failed.
+  await (await import("../../src/town-index-store.mjs")).refreshStoreProbe({ logins: false });
   // A paper (POS-271): the store's town log when the office is switched, the
   // file otherwise — the same switch as the office's own.
   const { openPaper, paperworkStoreOn } = await import("../../src/paperwork.mjs");
   const odb = townLogEnabled() && (paperworkStoreOn() || existsSync(odbPath))
     ? await openPaper(odbPath, { schema: (await import("../../src/oauth.mjs")).oauthSchema }) : null;
   const townClone = process.env.TOWN_CLONE ?? join(ROOT, "town-clone");
-  const sendMail = mailEnabled() ? penMailPort({ db, clone: existsSync(townClone) ? townClone : null, odb }) : null;
+  const sendMail = mailEnabled() ? penMailPort({ clone: existsSync(townClone) ? townClone : null, odb }) : null;
   try {
     const out = await runEarpiece({ store: pgStore(), withinFn: verbs?.pointWithinMark ?? null, earshotM: EARSHOT_M, sendMail });
     writeState(state, out);

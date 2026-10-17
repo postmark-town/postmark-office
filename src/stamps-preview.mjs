@@ -124,16 +124,14 @@ export async function heldFor(clone, handle, { env = process.env } = {}) {
     return { liquid: 0, staked: 0, unread: "the office has no town clone carrying the stamp ledger, so what you hold could not be read here" };
   try {
     const mint = await import(pathToFileURL(mintPath));
-    // SNAPSHOT 7 (POS-314): with the town index on the store, town_stamps plus
-    // the ledger's tail. Null (no tip, a tip this clone lacks, no store) folds
-    // the whole file below, as before: the full derivation wins.
-    const { townIndexReads, readTownIndex } = await import("./town-index-store.mjs");
-    if (townIndexReads(env)) {
-      const { heldFromIndex } = await import("./stamp-tail.mjs");
-      const fast = await readTownIndex((q) => heldFromIndex(q, clone, handle, { engine: mint }), { env })
-        .then((r) => r.out, () => null);
-      if (fast) return fast;
-    }
+    // SNAPSHOT 7 (POS-314): the store's town_stamps plus the ledger's tail.
+    // Null (no tip, a tip this clone lacks, no store) folds the whole file
+    // below, as before: the full derivation wins.
+    const { readTownIndex } = await import("./town-index-store.mjs");
+    const { heldFromIndex } = await import("./stamp-tail.mjs");
+    const fast = await readTownIndex((q) => heldFromIndex(q, clone, handle, { engine: mint }), { env })
+      .then((r) => r.out, () => null);
+    if (fast) return fast;
     const entries = mint.parseStampLedger(readFileSync(ledgerPath, "utf8"));
     return {
       liquid: mint.foldBalances(entries).get(handle) ?? 0,

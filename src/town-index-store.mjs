@@ -34,7 +34,6 @@ import {
   potBoardOf, questBoardWith, withGivers,
   excerpt, LETTER_READING_LAW_LINE, withWhole, MAIL_PAGE, SEARCH_LETTERS, SEARCH_RESIDENTS,
   mailListOf, letterListNoRegion, letterListPage, letterPageCap, correspondentsOf, mailAwaitingOf, searchPage, metricsMailOf,
-  indexCopy as officeIndexCopy,
   rollEntry, residentPageOf, townSummaryOf, residentOf, windowReadOf, psaFoldOf, doorstepOf, DOORSTEP_SIZES, PSA_SLUG, CARD_MAIL,
 } from "./queries.mjs";
 import { isResidentHandle } from "./residency.mjs"; // the door's admission grammar, as readRoll filters by it
@@ -51,9 +50,6 @@ export const MOVED = Object.freeze(["repoLog", "regionList", "regionOne", "bulle
   "letter", "letterAnswer", "letterList", "mailList", "mailCorrespondents", "mailAwaiting", "search", "metricsMail", "outboxSettled",
   "residentList", "residentPage", "resident", "townSummary", "officeHandles", "windowRead", "psaFold", "doorstep",
   "hasResident", "hasLetter", "loginIndex", "unansweredFrom", "townLedger", "townDocs"]);
-
-/** Is the switch on? Only the exact value `store` turns it on. */
-export const townIndexReads = (env = process.env) => env.TOWN_INDEX_READS === "store";
 
 const UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ", LOWER = "abcdefghijklmnopqrstuvwxyz";
 /** sqlite's LIKE: ASCII case folded on both sides, nothing else. */
@@ -93,17 +89,15 @@ export async function indexCopy(q) {
 
 /**
  * The 404 for a letter id the door's index does not hold (POS-332): the copy
- * that was read, and the crossing it has caught up to, from the same index the
- * lookup asked (office.db's repo_log, or the store's with the switch on). A
- * history that cannot be read is said; it never turns the 404 into a 500.
+ * that was read, and the crossing it has caught up to, from the store's
+ * repo_log, the index the lookup asked. A history that cannot be read is said;
+ * it never turns the 404 into a 500.
  */
-export async function letterNotInCopy(db, { env = process.env } = {}) {
+export async function letterNotInCopy({ env = process.env } = {}) {
   let copy;
   try {
-    if (townIndexReads(env)) {
-      const r = await storeAnswer((c) => indexCopy(c), { env });
-      copy = r.refused ? undefined : r.out;
-    } else copy = officeIndexCopy(db);
+    const r = await storeAnswer((c) => indexCopy(c), { env });
+    copy = r.refused ? undefined : r.out;
   } catch { copy = undefined; }
   return notInCopyDefect(copy === undefined ? undefined : copyCrossing(copy.seal));
 }
@@ -620,7 +614,7 @@ export async function hasResident(q, handle) {
   return (await q.query("SELECT 1 FROM town_residents WHERE handle = $1", [handle])).rows.length > 0;
 }
 
-/** unread-store § deliveredTo, from the store: the resident's deliveries, newest first. */
+/** The ferry's delivery rows to `handle`, newest first (the ledger's own order), each with the letter's `delivered_at` where the index has it. */
 export async function deliveredTo(q, handle) {
   return (await q.query(`SELECT d.id, d.from_h AS "from", d.date, l.delivered_at
        FROM town_ledger d LEFT JOIN town_letters l ON l.id = d.id

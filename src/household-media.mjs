@@ -29,7 +29,6 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { mediaConfigured, mediaQuota, mediaLedgerRows } from "./media.mjs";
-import { home as homeQ } from "./queries.mjs";
 import { lawOf, openStore } from "./world-apex.mjs";
 
 const bounce = (code, defect, hint, extra = {}) => ({ error: "bounce", code, defect, hint, ...extra });
@@ -67,7 +66,7 @@ export const EMBED_NOT_COVERED = Object.freeze([
  * disclosure guard (`the-town/the-disclosure`) forbids answering "not embedded"
  * when the truthful answer is "could not look".
  */
-export async function embeddedScan({ handles, db, clone, urls }) {
+export async function embeddedScan({ handles, clone, urls }) {
   const hits = new Set();
   const unreadable = [];
   if (!urls.size) return { hits, unreadable };
@@ -98,10 +97,10 @@ export async function embeddedScan({ handles, db, clone, urls }) {
     // The whole record, not just its prose: a home carries a body and named
     // image assets, and which field a URL sits in is not this hint's business.
     try {
-      // with TOWN_INDEX_READS=store, the store's home (POS-268); a store that
-      // cannot answer is an unreadable home, disclosed below like any other
+      // the store's home (POS-268); a store that cannot answer is an
+      // unreadable home, disclosed below like any other
       const tis = await import("./town-index-store.mjs");
-      const h = tis.townIndexReads() ? await tis.storeIndexPooled(clone).home(handle) : db ? homeQ(db, handle) : null;
+      const h = await tis.storeIndexPooled(clone).home(handle);
       if (h) sweep(JSON.stringify(h));
     } catch (e) {
       unreadable.push(`home (${handle}) — ${String(e?.message ?? e).slice(0, 120)}`);
@@ -134,7 +133,7 @@ export async function embeddedScan({ handles, db, clone, urls }) {
 // proposal.
 const MEDIA_PAGE = 25;
 
-export async function mediaRead(key, { odb, db, clone, embedded = embeddedScan, limit, offset } = {}) {
+export async function mediaRead(key, { odb, clone, embedded = embeddedScan, limit, offset } = {}) {
   const store = openStore();
   try {
     const quoted = (mark) => quoteLaw(store.db, mark);
@@ -166,7 +165,7 @@ export async function mediaRead(key, { odb, db, clone, embedded = embeddedScan, 
     const mediaNext = mediaStart + page.length;
 
     const urls = new Set(rows.map((r) => r.url));
-    const { hits, unreadable } = await embedded({ handles, db, clone, urls });
+    const { hits, unreadable } = await embedded({ handles, clone, urls });
     // A surface that would not open makes the hint UNKNOWN, not false — but only
     // where it could actually have changed the answer: a URL already found
     // hanging somewhere readable is embedded whatever the unread surface holds.
