@@ -341,7 +341,7 @@ export function ideasTank() {
  * PREDICATES are the plaque's predicated children, folded off the `describes`
  * edge the hydration writes for directory nesting (world-hydrate.mjs § the
  * predicate nesting). NOTE FOR ANYONE WRITING A FIXTURE: the mark FILE says
- * `kind: predicated`, but the store keys that as **subkind** — `kind` is
+ * `kind: predicated` (W2: `kind: predicate`, both read), but the store keys that as **subkind** — `kind` is
  * `mark` for every one of them. A fixture that invents `kind: 'predicated'`
  * is a fixture that cannot falsify this reader. The query below matches the
  * hydration's own DDL and this reader was checked against a store hydrated from

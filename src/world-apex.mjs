@@ -613,7 +613,8 @@ export function residueOf(db, id) {
 //
 // residueOf above quotes CLASS marks — `kind: class`, carrying a `class:` name,
 // which is why its gate requires one. A standing rule that is not a class of
-// thing is written as a PREDICATED mark instead: `kind: predicated`, a `slot`
+// thing is written as a PREDICATED mark instead: `kind: predicated` (W2: `kind: predicate`; the query
+// below keys on the slot, never on the kind, so it reads both forms), a `slot`
 // naming what it rules and a `value` saying it in short, with the sentence
 // itself as the body. logos/the-media and its two children (world main
 // 674c359c) are exactly that shape, so residueOf cannot see them — its

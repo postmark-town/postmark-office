@@ -30,7 +30,7 @@ import { join, resolve, dirname, relative } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { penCommit } from "./write.mjs";
-import { markRecord } from "./mark-record.mjs";
+import { markRecord, recordKindOf } from "./mark-record.mjs";
 import { ensureDraftCheckout } from "./world-branches.mjs";
 import { isDroppedUnitMark } from "./world-stacks.mjs";
 import { extendsFromMarks, isSited } from "./world-grants.mjs"; // the kind rung (LOGOS v2, O1)
@@ -345,7 +345,8 @@ async function main() {
     const framing = marks.find((m) => m._dir && resolve(m._dir) === resolve(parentDir));
     return framing?.at ?? null;
   };
-  const fileRec = { ...p };
+  // a new description writes `kind: predicate` (W2's rename, WLD-73 G10); the parent check above reads either form
+  const fileRec = { ...p, kind: recordKindOf(p.kind) };
   if (relativeTree) {
     const origin = frameOrigin();
     if (origin) {

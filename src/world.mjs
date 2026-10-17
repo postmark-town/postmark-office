@@ -4232,10 +4232,12 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
     throw bounce(422, "consent and placed_by are for a placement on another resident's behalf",
       `"${by}" is your own resident — leave the mark without them`);
 
-  const { slug, kind, body, tier, slot, value, parent_id } = payload;
+  const { slug, body, tier, slot, value, parent_id } = payload;
+  // W2's spelling is taken at the door (`kind: predicate`, WLD-73 G10) and judged as the old one; the file writer writes the new
+  const kind = payload.kind === "predicate" ? "predicated" : payload.kind;
   let { at, extent, points } = payload;
   if (!slug || !/^[a-z0-9][a-z0-9-]*$/.test(slug)) throw bounce(422, "slug must be kebab-case", `lowercase letters, digits, single hyphens — got "${slug}"`);
-  if (!["sited", "parcel", "predicated", "naming"].includes(kind)) throw bounce(422, "kind must be sited, parcel, predicated, or naming", `got "${kind}"`);
+  if (!["sited", "parcel", "predicated", "naming"].includes(kind)) throw bounce(422, "kind must be sited, parcel, predicate (or predicated), or naming", `got "${kind}"`);
 
   // ── THE RING IS THE TRUTH OF THE SHAPE (POS-322, Keemin 2026-10-02) ───────
   //

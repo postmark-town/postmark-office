@@ -293,6 +293,14 @@ export const EMITS = Object.freeze({
  * differ on that one mark, and only this one keeps the invariant. Same cost,
  * one fewer stated property broken.
  */
+/**
+ * THE KIND A NEW FILE WRITES (LOGOS v2, W2's rename, settled on WLD-73 G10):
+ * a description is `kind: predicate`, never the old `predicated`; every
+ * other kind is written as declared. Readers take both spellings (world-grants
+ * § PREDICATE_KINDS); only what is newly written moves.
+ */
+export const recordKindOf = (kind) => (kind === "predicated" || kind === "predicate" ? "predicate" : kind);
+
 export function markRecord(record, body) {
   const written = (k) => record[k] !== undefined && record[k] !== null && record[k] !== ""
     && (!(k in EMITS) || EMITS[k](record[k], record));
