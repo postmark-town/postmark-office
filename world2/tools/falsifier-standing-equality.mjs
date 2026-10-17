@@ -135,7 +135,7 @@ import { resolve } from "node:path";
 import { existsSync, realpathSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { execFileSync } from "node:child_process";
-import { computeStanding, admissionNotes, GEOMETRY_SOURCE } from "./standing.mjs";
+import { computeStanding, admissionNotes, GEOMETRY_SOURCE, classLayerVia } from "./standing.mjs";
 import { foldDerivedFor } from "./seed-import.mjs";
 import { liveHouseOfVia } from "../../src/household-deriver.mjs";
 
@@ -161,7 +161,7 @@ const MARKS_SELECT =
  * loader records, which is what tells us a slug the DB is missing is a CLASS mark
  * (law, and rightly absent) rather than a mark 2.0 lost.
  */
-export function standingFindings(rows, { records, derive }, { shadowEra = false, houseOf = null } = {}) {
+export function standingFindings(rows, { records, derive }, { shadowEra = false, houseOf = null, classes = null } = {}) {
   const findings = [];
   const attributed = [];
   const born = [];
@@ -176,7 +176,8 @@ export function standingFindings(rows, { records, derive }, { shadowEra = false,
   // THE WALK THE STORE RUNS, house for house (materialize.mjs § liveHouseOfVia):
   // a port checked without the spelling map would call every row the recompute
   // wrote through it a divergence.
-  const walkOf = (rs) => computeStanding(rs, { houseOf });
+  // And with the class layer the recompute reads (standing.mjs § the kind rung).
+  const walkOf = (rs) => computeStanding(rs, { houseOf, classes });
   const walk = walkOf(rows);
   const byRecordId = new Map(records.map((r) => [r.id, r]));
 
@@ -329,12 +330,12 @@ export function standingFindings(rows, { records, derive }, { shadowEra = false,
  * is a fixpoint and not a loop; this makes it a receipt instead of an argument,
  * by writing the answer back in memory and asking again.
  */
-export function idempotenceFindings(rows, { houseOf = null } = {}) {
-  const first = computeStanding(rows, { houseOf });
+export function idempotenceFindings(rows, { houseOf = null, classes = null } = {}) {
+  const first = computeStanding(rows, { houseOf, classes });
   let fed = rows;
   for (let pass = 1; pass <= 3; pass++) {
     fed = fed.map((r) => ({ ...r, data: { ...(r.data ?? {}), tier: first.get(r.slug) } }));
-    const again = computeStanding(fed, { houseOf });
+    const again = computeStanding(fed, { houseOf, classes });
     for (const [slug, t] of first)
       if (again.get(slug) !== t)
         return [`the recompute is NOT idempotent: ${slug} was ${t} and became ${again.get(slug)} on pass ${pass} ` +
@@ -382,10 +383,11 @@ if (isMain) {
 
     const shadowEra = has("--shadow-era");
     const houseOf = await liveHouseOfVia(client);
-    const { findings, attributed, born, compared, worldDiff, notes } = standingFindings(rows, oracle, { shadowEra, houseOf });
+    const classes = await classLayerVia((sql, p) => client.query(sql, p));
+    const { findings, attributed, born, compared, worldDiff, notes } = standingFindings(rows, oracle, { shadowEra, houseOf, classes });
     if (!compared) die("no slug is in both the store and the checkout — the two are not the same world, and an empty comparison is not a pass");
 
-    const idem = has("--idempotence") ? idempotenceFindings(rows, { houseOf }) : [];
+    const idem = has("--idempotence") ? idempotenceFindings(rows, { houseOf, classes }) : [];
     const all = [...findings, ...idem];
 
     out = {
@@ -418,7 +420,7 @@ if (isMain) {
           const res = await client.query(sql, params);
           if (!res.rowCount) { results.push({ mangle: label, touched: 0, findings: null, first: null }); return; }
           const { rows: mangled } = await client.query(MARKS_SELECT);
-          const r = standingFindings(mangled, oracle, { shadowEra, houseOf });
+          const r = standingFindings(mangled, oracle, { shadowEra, houseOf, classes });
           results.push({ mangle: label, touched: res.rowCount, findings: r.findings.length, first: r.findings[0]?.split("\n")[0] ?? null });
         } finally { await client.query("ROLLBACK"); }
       };
@@ -446,7 +448,7 @@ if (isMain) {
                 box(point(8987.5, 8987.5), point(9012.5, 9012.5)), 'standing', locked_window, data
            FROM marks WHERE id = $1`, [parcel.id]);
 
-      const after = standingFindings((await client.query(MARKS_SELECT)).rows, oracle, { shadowEra, houseOf });
+      const after = standingFindings((await client.query(MARKS_SELECT)).rows, oracle, { shadowEra, houseOf, classes });
       out.can_fail = {
         results, restored: after.findings.length === 0,
         silent: results.filter((r) => r.findings === 0).map((r) => r.mangle),
