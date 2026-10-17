@@ -291,7 +291,7 @@ test("DOOR · the filing COMMITS and then throws: nothing is undone, and the rec
   assert.deepEqual(await undos(id), [], "no refund of a filed unit");
   assert.equal(out.filed.status, "pending");
   assert.match(out.stands_note, /the mark WAS filed \(pending\)/);
-  assert.equal(out.office_error_after_filing, "world clone has no main ref");
+  assert.equal(out.office_error_after_filing, "the world's files could not be read", "the plain reason (POS-657); the raw error is in the log");
   assert.equal(await heldBy("sbx-cy"), 2, "one unit on the ground, two in hand — never three");
   assert.deepEqual((await office((c) => recoverOrphanDrops(c, { now: Date.now() + 2 * TICK_MS }))).restored, [], "and the tick agrees");
 });

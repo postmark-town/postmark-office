@@ -190,7 +190,7 @@ test("flag ON — the rows fold answers, and a store that cannot answer falls th
   resetStoreFoldCache();
   const fell = await worldStateServed({ env, fileState: async () => file, storeState: async () => { throw new Error("projection_heads has no 'town' row"); } });
   assert.equal(fell.meta.source, "file");
-  assert.match(fell.meta.fell_through, /projection_heads has no 'town' row/);
+  assert.equal(fell.meta.fell_through, "the record did not answer"); // POS-657: what the store said goes to the log
   assert.deepEqual(fell.marks, file.marks);
   resetStoreFoldCache();
   const empty = await worldStateServed({ env, fileState: async () => file, storeState: async () => ({ marks: [] }) });

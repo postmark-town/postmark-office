@@ -45,6 +45,7 @@ import { openPaper, paperworkStoreOn } from "./paperwork.mjs"; // POS-271: sign-
 import { arrivalPage } from "./arrival.mjs";
 import { LETTER_IDS_MAX, identityOf } from "./queries.mjs";
 import { householdsFor, withHouseholdBlock } from "./households.mjs";
+import { storeRefresher, STORE_READ_BOUND_MS } from "./store-refresh.mjs"; // the poll's store read, one in flight and bounded (POS-639)
 import * as townIndexStore from "./town-index-store.mjs"; // the town index, the store's (POS-268)
 import { probeOf, isUnreachable, UNREACHABLE_DEFECT } from "./index-probe.mjs"; // the write path's questions of the index (POS-268)
 import { votesAvailable, voteList, voteView, stakeViaOffice } from "./votes.mjs";
@@ -57,7 +58,7 @@ import { settlements } from "./settlements.mjs";
 import { worldSummary, worldOrient, worldEyes, worldInvestigate, worldFind, worldStateRaw, worldSkeletonRaw, worldMyMarks, leaveMarkViaOffice, walkViaOffice, worldNoteViaOffice, worldWalkers, worldPresent, worldConversations, worldSay, worldSayHuman, worldSayStream, serveSayStream, whoami, earshotSnapshot, worldBlockForHandle, WORLD_CLONE, MISTS_UNREADABLE, MISTS_RETRY_AFTER_S } from "./world.mjs";
 import { world2MyDrafts, world2MyMarks, world2Pool, world2Serve, world2ServeEnabled } from "./world2-serve.mjs";
 import { isStoreLostCode, isStoreUnreachable } from "./store-pool.mjs"; // POS-544: a store lost mid-request answers 503, not 500
-import { STORE_LOST, READ_RETRY, ACT_RETRY, FAULT_LOGGED, STORE_RETRY_AFTER_S, isHttpStatus, foreignAnswer } from "./fault-words.mjs"; // the office's own words for its own fault, one owner (POS-568, POS-573/578)
+import { STORE_LOST, READ_RETRY, ACT_RETRY, FAULT_LOGGED, STORE_RETRY_AFTER_S, isHttpStatus, foreignAnswer, faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault, one owner (POS-568, POS-573/578)
 import { rowsFixtureActive } from "./world-graph-snapshot.mjs"; // POS-270 lane W 3b: the world graph's switch
 import { blessedSha } from "./world-branches.mjs";
 import { officeStoreFold, storeFingerprint, worldStateServed } from "./world2-fold.mjs"; // POS-142: /world/state from the store's rows, behind W2_FOLD
@@ -326,25 +327,30 @@ const RELOAD_POLL_MS = msEnv("OFFICE_RELOAD_POLL_MS", 5_000);        // the inge
 // operator reads one office.
 const journal = IN_READ_WORKER ? { log() {}, error() {} } : console;
 
-// ONE STORE READ IN FLIGHT (POS-639). The tick used to start a roll and a probe
-// read every RELOAD_POLL_MS whether the last pair had answered or not. On a
-// loaded machine they piled up, and an older read finishing after a newer one
-// put the older index back. A tick that finds the last pair still reading skips.
-let storeReading = false;
+// ONE STORE READ IN FLIGHT, AND NEVER FOREVER (POS-639; store-refresh.mjs says
+// why): a tick that finds the last roll+probe pair still reading skips. Each
+// read carries statement_timeout = STORE_READ_BOUND_MS, so Postgres ends a
+// read that runs past the bound, and the guard is freed only when the pair has
+// settled: the poll holds at most the pair's two of the thread's three pen
+// connections (world2-pen.mjs § pool), whatever the store does.
+const storeTick = storeRefresher({
+  read: () => Promise.all([
+    townIndexStore.refreshStoreRoll({ statementTimeoutMs: STORE_READ_BOUND_MS }).catch(() => {}),
+    townIndexStore.refreshStoreProbe({ statementTimeoutMs: STORE_READ_BOUND_MS }).catch(() => {}),
+  ]),
+  onRead: () => {
+    const was = AS_OF;
+    AS_OF = storeAsOf();
+    // the moment this office answers from a new index is one an operator
+    // (or a test) can see from the outside
+    if (AS_OF !== was) journal.log(`[office] index reloaded — as-of ${AS_OF.slice(0, 12)} (was ${was.slice(0, 12)})`);
+  },
+  log: (line) => journal.error(line),
+});
 setInterval(() => {
   // the store's roll and the write path's probe (POS-268)
-  if (storeReading) return;
-  storeReading = true;
-  Promise.all([
-    townIndexStore.refreshStoreRoll().catch(() => {}),
-    townIndexStore.refreshStoreProbe().then(() => {
-      const was = AS_OF;
-      AS_OF = storeAsOf();
-      // the moment this office answers from a new index is one an operator
-      // (or a test) can see from the outside
-      if (AS_OF !== was) journal.log(`[office] index reloaded — as-of ${AS_OF.slice(0, 12)} (was ${was.slice(0, 12)})`);
-    }).catch(() => {}),
-  ]).finally(() => { storeReading = false; });
+  // a throw from onRead must never become an unhandled rejection that ends the process
+  storeTick.tick().catch((e) => faultLogged("the store poll's tick tripped", e));
 }, RELOAD_POLL_MS).unref();
 // AT BOOT, BEFORE THE OFFICE LISTENS (POS-268): the roll and the write path's
 // probe are loaded first, so the first ask is never answered by a process that
@@ -352,8 +358,11 @@ setInterval(() => {
 // a 503 or an anonymous key). Bounded: a store that does not answer within 10 s
 // leaves both unloaded, the checks answer the store's 503 and the poll retries.
 await Promise.race([
-  Promise.all([townIndexStore.refreshStoreRoll().catch(() => {}), townIndexStore.refreshStoreProbe().catch(() => {})]),
-  new Promise((ok) => setTimeout(ok, 10_000).unref()),
+  Promise.all([
+    townIndexStore.refreshStoreRoll({ statementTimeoutMs: STORE_READ_BOUND_MS }).catch(() => {}),
+    townIndexStore.refreshStoreProbe({ statementTimeoutMs: STORE_READ_BOUND_MS }).catch(() => {}),
+  ]),
+  new Promise((ok) => setTimeout(ok, STORE_READ_BOUND_MS).unref()),
 ]);
 AS_OF = storeAsOf();
 

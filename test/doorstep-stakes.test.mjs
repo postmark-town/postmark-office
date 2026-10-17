@@ -125,7 +125,7 @@ test("THE TWO ABSENCES · a projection that REFUSED lists the marks with escrow 
   assert.equal(seg.note, undefined, "no 'nothing at risk' sentence on an unmeasured page");
   // and a reader that THROWS is the same absence, disclosed
   const thrown = await stakesFor(["berthillon"], readers({ escrow: async () => { throw new Error("connection refused"); } }));
-  assert.match(thrown.unavailable, /could not be read \(connection refused\)/);
+  assert.match(thrown.unavailable, /could not be read \(the record did not answer\)/); // POS-657: never the error's own text
   assert.equal(thrown.at_risk, null);
 });
 
@@ -169,7 +169,7 @@ test("scope is the stances/rulings grammar: a named handle is one resident, bare
 
 test("the world record unreadable is a disclosed absence, not an empty page", async () => {
   const seg = await stakesFor(["berthillon"], readers({ world: async () => { throw new Error("no clone"); } }));
-  assert.match(seg.unavailable, /the world record could not be read \(no clone\)/);
+  assert.match(seg.unavailable, /the world record could not be read \(the world's files could not be read\)/); // POS-657
   assert.equal(seg.count, 0);
   assert.equal(seg.at_risk, null);
   assert.equal(seg.next_settlement.at, "2026-09-18T06:00:00.000Z", "the clock still answers");

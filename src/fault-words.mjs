@@ -17,6 +17,58 @@ export const ACT_RETRY = "the office lost its connection to the town's store whi
 // What tripped is the defect, and this is the hint. The error itself is in the office's log.
 export const FAULT_LOGGED = "nothing in your request caused it. What failed is in the office's log, not in this answer; try again shortly, and if it keeps happening, tell the town.";
 
+// THE PLAIN REASONS (POS-657; RULED A, Darko 2026-10-16 20:04 EDT). A read that
+// says a count "could not be read — unknown, not zero" keeps that promise, and
+// its parenthetical is one of these fixed reasons, never the error's own text.
+// The raw error goes to the office's log. Map a site by what it was reading:
+//   record  the office's store (the acts, the docket, the registry, a projection)
+//   files   the world's files (the world clone, git, the engine at a ref)
+//   parse   a saved file that does not parse (a file read whose JSON is bad)
+//   chain   the Base chain (its RPCs)
+export const PLAIN_REASONS = Object.freeze({
+  record: "the record did not answer",
+  files: "the world's files could not be read",
+  parse: "a saved file does not parse",
+  chain: "the chain could not be reached",
+});
+
+/**
+ * An error in the office's OWN words, thrown inside a read to end it (the
+ * engine giving no Mists state, say). It is not a raw error, so a disclosure
+ * may say it as it is: plainReason hands its sentence back.
+ */
+export const ownWordsError = (sentence) => Object.assign(new Error(sentence), { own_words: true });
+
+/**
+ * The reason an error's own CAUSE names, when it names one (Wright's brief: map
+ * each raw cause to one reason). The structured fields are read before any text,
+ * because text carries paths and a path says anything (".json", "/pool/"):
+ *   1. pg's SQLSTATE (five characters, never a Node errno), or a lost store: record
+ *   2. a child's stderr (git), or a Node errno (ENOENT, EPERM, EBUSY…): files
+ *   3. a parser's error, or JSON named as a word, never as ".json": parse
+ *   4. only then the text: a refused or lost store, pg's words: record; git's: files
+ * Anything else is null, and the site's kind stands.
+ */
+export function causeKind(e) {
+  const code = typeof e?.code === "string" ? e.code : "";
+  if (isStoreLostCode(code) || (/^[0-9A-Z]{5}$/.test(code) && !/^E[A-Z]+$/.test(code))) return "record";
+  if (e?.stderr || /^E[A-Z]+$/.test(code)) return "files";
+  const said = `${e?.name ?? ""} ${e?.message ?? ""} ${e?.cause?.message ?? ""}`;
+  if (e instanceof SyntaxError || /(?<![.\w])JSON\b|Unexpected token|Unexpected end of JSON|parse error/i.test(said)) return "parse";
+  if (/ECONNREFUSED|ETIMEDOUT|ECONNRESET|(?<![/\\\w])(connection|pool)(?![/\\\w])|\brelation\b|\bcolumn\b|PenUnreachable|GuardsUnreachable|NoRecord|not pointed at a record|record (cannot|is not) (be )?reach/i.test(said)) return "record";
+  if (/ENOENT|EACCES|\bgit\b|fatal:|\bclone\b|\brefs?\/|\bref\b|worktree|checkout/i.test(said)) return "files";
+  return null;
+}
+
+/** The plain reason for a read that failed on `kind`, with the raw error logged beside `what`. The error's own cause, when it names one, outranks the site's kind (`causeKind`); the chain stays the chain; the office's own words (ownWordsError) are said as they are. */
+export function plainReason(e, kind, what = "a read") {
+  if (e?.own_words === true) return String(e.message);
+  const site = Object.hasOwn(PLAIN_REASONS, kind) ? kind : "record";
+  const k = site === "chain" ? "chain" : (causeKind(e) ?? site);
+  console.error(`[office] ${String(what).slice(0, 160)} could not be read (${PLAIN_REASONS[k]}): ${errorSaid(e)}`);
+  return PLAIN_REASONS[k];
+}
+
 // How long a lost store asks a caller to wait: REST's Retry-After header, and
 // the MCP body's `retry_after` (a JSON-RPC answer carries no header).
 export const STORE_RETRY_AFTER_S = 30;

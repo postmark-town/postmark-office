@@ -41,6 +41,7 @@
 import { crossingSailsAt, currentCrossing } from "./crossings.mjs";
 import { pathToFileURL } from "node:url";
 import { join } from "node:path";
+import { plainReason, ownWordsError } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
 
 export const MISTS_FORECAST_UNAVAILABLE = "mists-forecast-unavailable";
 const unavailable = (why) => ({ unavailable: `${MISTS_FORECAST_UNAVAILABLE}: ${why}` });
@@ -291,7 +292,7 @@ export function reachOf(eng, mists, poly, now) {
   let fringe = null, wall = null;
   for (let c = Math.max(now, keys[0]); c <= Math.max(last, now); c += 1) {
     const m = eng.mistsAt(c, mists);
-    if (!m) throw new Error(`the engine gives no Mists state for crossing ${c}`);
+    if (!m) throw ownWordsError(`the engine gives no Mists state for crossing ${c}`);
     const st = footprintState(eng, m, poly);
     if (st !== "clear" && fringe == null) fringe = c;
     if (st === "wall") { wall = c; break; }
@@ -351,7 +352,7 @@ export async function forecastMists({ engine, skeleton, footprints = [], nowMs =
   const reaches = [];
   try {
     // the engine must give a state for the season's own first crossing, footprints or none
-    if (!eng.mistsAt(keys[0], skeleton.mists)) throw new Error(`the engine gives no Mists state for crossing ${keys[0]}`);
+    if (!eng.mistsAt(keys[0], skeleton.mists)) throw ownWordsError(`the engine gives no Mists state for crossing ${keys[0]}`);
     for (const f of footprints) {
       const r = reachOf(eng, skeleton.mists, f.ring ?? [], now);
       if (r.fringe == null && r.wall == null) continue;
@@ -359,7 +360,7 @@ export async function forecastMists({ engine, skeleton, footprints = [], nowMs =
       reaches.push({ ...out, says: sentencesFor(f.id, out) });
     }
   } catch (e) {
-    return unavailable(`the engine could not answer (${String(e?.message ?? e).slice(0, 120)})`);
+    return unavailable(`the engine could not answer (${plainReason(e, "files", "the Mists forecast's engine")})`);
   }
   reaches.sort((a, b) => (a.fringe?.crossing ?? a.wall?.crossing) - (b.fringe?.crossing ?? b.wall?.crossing) || String(a.mark).localeCompare(String(b.mark)));
   return { as_of: { crossing: now, date: day(now) }, season_ends: keys[keys.length - 1], reaches };
@@ -393,12 +394,12 @@ export async function householdMistsForecast(handle, { nowMs = Date.now(), deps 
   // should answer and cannot (null, or a throw) is unknown: the house is not
   // quietly shrunk to one resident (Bevel's review, A3).
   let house;
-  try { house = await d.household(handle); } catch (e) { return fail(`the household registry could not be read (${String(e?.message ?? e).slice(0, 120)})`); }
+  try { house = await d.household(handle); } catch (e) { return fail(`the household registry could not be read (${plainReason(e, "record", "the Mists forecast's household registry")})`); }
   if (!house || !Array.isArray(house.residents)) return fail("the household registry could not be read, so the house's residents are unknown");
   const residents = new Set([String(handle), ...house.residents.map(String)]);
   let marks, skeleton;
   try { marks = (d.publishedMarks() ?? []).filter((m) => m?.id && residents.has(String(m.by ?? String(m.id).split("/")[0]))); }
-  catch (e) { return fail(`the house's published marks could not be read (${String(e?.message ?? e).slice(0, 120)})`); }
+  catch (e) { return fail(`the house's published marks could not be read (${plainReason(e, "files", "the Mists forecast's published marks")})`); }
   try { skeleton = d.skeleton(); } catch { skeleton = undefined; }
   if (!marks.length && skeleton != null && typeof skeleton === "object") return null;   // nothing of theirs stands: nothing to say
   const engine = skeleton?.mists ? await d.engine() : null;
@@ -407,7 +408,7 @@ export async function householdMistsForecast(handle, { nowMs = Date.now(), deps 
   const footprints = [];
   for (const m of marks) {
     let ring;
-    try { ring = await d.ringOf(m); } catch (e) { return fail(`the ground of ${m.id} could not be read (${String(e?.message ?? e).slice(0, 120)})`); }
+    try { ring = await d.ringOf(m); } catch (e) { return fail(`the ground of ${m.id} could not be read (${plainReason(e, "files", "the Mists forecast's ground")})`); }
     if (ring?.length) footprints.push({ id: String(m.id), ring });
   }
   const f = await forecastMists({ engine, skeleton, footprints, nowMs });

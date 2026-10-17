@@ -138,7 +138,8 @@ export async function heldFor(clone, handle, { env = process.env } = {}) {
       staked: mint.foldStaked(entries).get(handle) ?? 0,
     };
   } catch (e) {
-    return { liquid: 0, staked: 0, unread: `the stamp ledger could not be folded here: ${String(e?.message ?? e).slice(0, 120)}` };
+    const { plainReason } = await import("./fault-words.mjs"); // POS-657: the plain reason, the raw error to the log
+    return { liquid: 0, staked: 0, unread: `the stamp ledger could not be folded here: ${plainReason(e, "files", "the stamp ledger")}` };
   }
 }
 

@@ -109,7 +109,7 @@ import { stopDepartures } from "./world-movement.mjs";
 // The class every reader IS — 1.0's own constant, so the two apexes name the
 // same mark in `records` (world.mjs § markRecords).
 import { STRIDE_MARK_ID } from "./world-classes.mjs";
-import { faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
+import { faultLogged, plainReason } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 
 const state = { pool: null };
 
@@ -459,7 +459,7 @@ export async function docketEscrow(p) {
     ingestedAt = head?.ingested_at ? new Date(head.ingested_at).toISOString() : null;
   } catch (e) {
     return { townSha: null, byMark: null,
-      reason: `the town's projection head could not be read (${String(e?.message ?? e).slice(0, 120)}), so what stands behind these marks is unknown — not zero` };
+      reason: `the town's projection head could not be read (${plainReason(e, "record", "the town's projection head")}), so what stands behind these marks is unknown — not zero` };
   }
   if (!townSha) return { townSha: null, byMark: null,
     reason: "no town sha is ingested, so the store cannot say what stands behind these marks — unknown, not zero" };
@@ -470,7 +470,7 @@ export async function docketEscrow(p) {
     return { townSha, ingestedAt, byMark, reason: null };
   } catch (e) {
     return { townSha, ingestedAt, byMark: null,
-      reason: `the escrow projection could not be read at town ${townSha.slice(0, 8)} (${String(e?.message ?? e).slice(0, 120)}) — unknown, not zero` };
+      reason: `the escrow projection could not be read at town ${townSha.slice(0, 8)} (${plainReason(e, "record", "the escrow projection")}) — unknown, not zero` };
   }
 }
 
@@ -1536,7 +1536,7 @@ export async function departuresForEndpoints(p) {
         if (!got.discard) return { records: got.records, eras: got.eras, snapshot: got.snapshot };
         discarded = got.discard;
       }
-    } catch (e) { discarded = `the snapshot could not be read (${String(e?.message ?? e).slice(0, 160)})`; }
+    } catch (e) { discarded = `the snapshot could not be read (${plainReason(e, "record", "the twin's departures snapshot")})`; }
   }
   const { rows } = await p.query(
     `SELECT id, at, crossing, actor, action, payload FROM acts
@@ -1556,7 +1556,7 @@ export async function apexPresent(p, { world, at, engine: eng, roster = "roll" }
   ]);
   let derived;
   try { derived = dep.records ? dep : live.departureRecords(dep.rows); }
-  catch (e) { return { unavailable: "a departure act matches no known era", detail: String(e?.message ?? e).slice(0, 200) }; }
+  catch (e) { return { unavailable: "a departure act matches no known era", detail: plainReason(e, "record", "the twin's departure eras") }; }
   const fc = live.fractionalCrossing(Date.now());
   const roll = roster === "roll" ? rollRows.map((r) => r.handle) : [];
   // BEFORE THE 500 m FILTER, and that ordering is the whole of it (#2900). The
