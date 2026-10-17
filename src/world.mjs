@@ -2527,6 +2527,14 @@ export async function worldInvestigate(args = {}, key = null) {
       ...(receipt ? { receipt } : {}) };
   }
 
+  // POS-659: every instance read carries a one-line class pointer, read off
+  // the store's class layer (class-read.mjs § markPointer). Absent when the
+  // store cannot answer, and a failing class read never fails the investigate.
+  let pointer = null;
+  try { pointer = (await import("./class-read.mjs")).markPointer(String(args.mark)); }
+  catch (e) { pointer = null; console.error(`[class-read] the pointer for ${args.mark} could not be read: ${e?.message ?? e}`); }
+  const classPointer = pointer ? { class_pointer: pointer } : {};
+
   // OPT-IN, and OFF IS BYTE-IDENTICAL. Without with_image: true this branch is
   // not entered, nothing is fetched, no field is added, and the answer is the
   // object this door has always returned. The image URL rides in the answer
@@ -2537,6 +2545,7 @@ export async function worldInvestigate(args = {}, key = null) {
     const got = await markImageBytes(r.image);
     return {
       ...r,
+      ...classPointer,
       ...(receipt ? { receipt } : {}),
       image_note: got.note,
       // The transport carrier, not door vocabulary — mcp.mjs lifts these out
@@ -2569,7 +2578,7 @@ export async function worldInvestigate(args = {}, key = null) {
       transportNote = service ? stopAnnotationFor(String(args.mark), service, w) : null;
     }
   } catch { transportNote = null; }
-  return { ...r, ...(receipt ? { receipt } : {}), ...(stands ? { stands } : {}), ...(transportNote ? { transport: transportNote } : {}) };
+  return { ...r, ...classPointer, ...(receipt ? { receipt } : {}), ...(stands ? { stands } : {}), ...(transportNote ? { transport: transportNote } : {}) };
 }
 
 // ── FIND A MARK BY NAME, FROM ANYWHERE (2026-09-26) ─────────────────────────

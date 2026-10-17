@@ -305,6 +305,8 @@ test("PR-4: investigate: on a resident rides the bare read, v1 and v2, with publ
     const r = await worldApex({ handle: WHO, investigate: WHO, ...(shape ? { read_shape: shape } : {}) }, KEY, {});
     assert.ok(!r.error, JSON.stringify(r).slice(0, 300));
     assert.equal(r.investigated?.kind, "resident", `investigated rides ${shape ?? "v0"}`);
+    // POS-659: every instance read carries a one-line class pointer
+    assert.equal(r.investigated.class_pointer, 'kind: resident · an entity — explain: "resident"', `the pointer rides ${shape ?? "v0"}`);
     assert.deepEqual(r.investigated.recent.acts.map((a) => a.did), ["said something"], "the say as the fact of it; the note never");
     assert.ok(!JSON.stringify(r.investigated).includes("note-to-self"));
     const { unbodied } = await import("./helpers/mark-bodies.mjs");
@@ -312,6 +314,12 @@ test("PR-4: investigate: on a resident rides the bare read, v1 and v2, with publ
   }
   assert.ok(!("investigated" in await v2At()), "absent when not asked");
   assert.equal((await worldApex({ handle: WHO, investigate: KOGANE_PARCEL }, KEY, {})).code, 422, "a mark is mark:'s");
+  // POS-659: and a mark's read (the mark: focus, world_investigate's own answer) points at its class, which explain: climbs
+  const parcel = (await worldApex({ handle: WHO, mark: KOGANE_PARCEL }, KEY, {})).focus;
+  assert.equal(parcel?.class_pointer, 'kind: parcel · a mark — explain: "parcel"', JSON.stringify(parcel ?? null).slice(0, 200));
+  const climbed = await worldApex({ explain: "parcel" }, KEY, {});
+  assert.equal(climbed.class, "the-town/parcel");
+  assert.deepEqual(climbed.extends.map((c) => c.class), ["mark", "postmark-node"]);
   assert.equal((await worldApex({ handle: WHO, investigate: WHO, mark: KOGANE_PARCEL }, KEY, {})).code, 422, "one focus at a time");
   assert.equal((await worldApex({ handle: WHO, investigate: WHO, read: "view" }, KEY, {})).code, 422);
   // a creature (POS-637 PR-C): one no fold holds is "no creature", or the law is unreadable and it says so

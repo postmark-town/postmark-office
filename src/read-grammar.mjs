@@ -186,6 +186,7 @@ export const TUTORIAL = [
   "              world { }        where you are and what's going on (read_shape: \"v2\" is the compact glance).",
   "              household { }    who you are and what your house needs next.  town { }  the town's public face.",
   "2. Ask:       explain: \"<path>\"   what any part of a read is for:   world { explain: \"who\" }",
+  "              explain: \"<class>\"  what a thing IS, up its class chain: world { explain: \"thing\" } (every instance read names its class)",
   "3. Go deeper: read: \"<block>\"     the whole of one part:              world { read: \"view\" }",
   "4. Catch up:  since: \"<cursor>\"   only what changed since you last looked; the doorstep and the world read hand you a cursor.",
   "Acting is do: \"<act>\": every act you can take is listed, with its law a read away, in the bare read where you stand.",
