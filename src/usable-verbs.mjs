@@ -118,6 +118,15 @@ export function usablePairs({ actor, here, marks = [], residents = [], fold, att
   return pairs;
 }
 
+/**
+ * The marks the matrix is handed at a standpoint: your spine (`within`, the marks you stand inside)
+ * and what your eyes see (`nearby`), each id once, the spine first. A bowl you stand ON is in the
+ * spine and never among what the eyes see, so a matrix handed `nearby` alone hid its take, give and
+ * refill while their doors admitted them (the playground's QA of part 2, fail 4).
+ */
+export const viewMarkIds = ({ within = [], nearby = [] } = {}) =>
+  [...new Set([...within, ...nearby].map((m) => (typeof m === "string" ? m : m?.id)).filter(Boolean).map(String))];
+
 /** The bare read's `can` for the hold verbs: each usable verb once, in roster order. */
 export const canVerbs = (pairs) => HOLD_VERBS.filter((v) => pairs.some((p) => p.verb === v));
 

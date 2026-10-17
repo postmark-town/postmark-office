@@ -111,7 +111,7 @@ import { validateReadArgs } from "./validate-args.mjs"; // the flat tools' own v
 // here was reachable: the resident class grants no `subscribe`, `gather` or
 // `hand-to-human`, so no resident could open these doors on any day they stood.
 import { callHoldTool, holdingsOf, liveHolder } from "./world-hold.mjs";
-import { onlyUsable, canOn } from "./usable-verbs.mjs"; // verbs show when usable (LOGOS v2, O2)
+import { onlyUsable, canOn, viewMarkIds } from "./usable-verbs.mjs"; // verbs show when usable (LOGOS v2, O2)
 // The stride a placement is stamped with — read off the record like every other
 // departure's, never a constant here (decision 008b).
 import { departurePace } from "./world-classes.mjs";
@@ -1837,7 +1837,8 @@ async function usableHere(args, key, oriented, nearby = []) {
   if (!who || sp?.stance !== "embodied" || !Number.isFinite(Number(sp?.x)) || !Number.isFinite(Number(sp?.y))) return null;
   try {
     const { usableAt } = await import("./world-kinds.mjs");
-    return await usableAt({ actor: who, here: { x: Number(sp.x), y: Number(sp.y) }, markIds: nearby.map((o) => o.id).filter(Boolean),
+    // the spine as well as the eyes: a bowl you stand on is in `within`, never in `nearby` (QA fail 4)
+    return await usableAt({ actor: who, here: { x: Number(sp.x), y: Number(sp.y) }, markIds: viewMarkIds({ within: oriented?.you?.within ?? [], nearby }),
       residents: oriented.present?.residents ?? [] });
   } catch { return null; }
 }
@@ -2946,7 +2947,10 @@ async function apexDo(args, key, ctx = {}) {
       // looking for a place that does not exist. `affordable_at` already encoded
       // the difference and the prose ignored it; now the prose branches on it.
       const elsewhere = affordableAt(store.db, action);
-      const here = entries.map((e) => e.action);
+      // WHAT YOU CAN DO HERE IS THE BARE READ'S OWN LIST, trimmed by the same matrix (QA fail 4: the
+      // untrimmed grants offered refill to a resident who made no bowl). Unread, nothing is trimmed.
+      const usable = await usableHere(args, key, oriented, seen.objects ?? []);
+      const here = (usable ? onlyUsable(entries, usable) : entries).map((e) => e.action);
       const canDo = `From here you can: ${here.join(", ") || "(nothing yet)"}.`;
       // ⚑ A THIRD CONDITION (#2392, 2026-09-02): the act has a STANDING door.
       //

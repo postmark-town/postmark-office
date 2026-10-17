@@ -24,6 +24,8 @@ const WORLD = worldClone();
 const store = await startStore({ db: "kind_door_carried_holder" });
 const skip = store.skip ?? ((!WORLD && NO_WORLD) || false);
 const BAG = "sbx-cy/my-bag", MY_BOWL = "sbx-cy/my-bowl", FAR_BOWL = "sbx-ana/the-bowl", LAMP = "sbx-cy/a-lamp", STONE = "sbx-ana/a-stone", PEBBLE = "sbx-ana/a-pebble";
+// THE SET-OUT BOWLS under cy's feet (the playground's QA, PART2-MCP-QA fail 4): ana's, open, and cy's own
+const ANA_DOOR_BOWL = "sbx-ana/a-door-bowl", CY_DOOR_BOWL = "sbx-cy/a-door-bowl";
 const repo = mkdtempSync(join(tmpdir(), "o2-carried-"));
 const put = (p, content) => { const f = join(repo, p); mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, content); };
 const FLAGS = ["WORLD2_PG", "WORLD2_PG_URL", "W2_PEN", "W2_GUARDS", "WORLD_CLONE", "WORLD_SINGLE_LOG", "WORLD_POOL"];
@@ -73,7 +75,9 @@ export function sourceLabel() { return "home"; }
   const mark = (id, klass, body) => ({ rec: { id, by: id.split("/")[0], slug: id.split("/")[1], kind: "sited", class: klass, at: { x: 10, y: 10 }, extent: { w: 2, h: 2 } }, body });
   const ms = [mark(BAG, "halloween-candy-bag", "A bag for gathering."), mark(MY_BOWL, "halloween-candy-bowl", "My bowl of candy."), mark(FAR_BOWL, "halloween-candy-bowl", "A bowl by a far door."), mark(LAMP, "thing", "A small lamp."),
     { rec: { id: STONE, by: "sbx-ana", slug: "a-stone", kind: "sited", class: "thing", portable: false, at: { x: 1010, y: 10 }, extent: { w: 2, h: 2 } }, body: "A stone too heavy to lift." },
-    { rec: { id: PEBBLE, by: "sbx-ana", slug: "a-pebble", kind: "sited", class: "thing", at: { x: 1010, y: 10 }, extent: { w: 2, h: 2 } }, body: "A pebble." }];
+    { rec: { id: PEBBLE, by: "sbx-ana", slug: "a-pebble", kind: "sited", class: "thing", at: { x: 1010, y: 10 }, extent: { w: 2, h: 2 } }, body: "A pebble." },
+    { rec: { id: ANA_DOOR_BOWL, by: "sbx-ana", slug: "a-door-bowl", kind: "sited", class: "halloween-candy-bowl", portable: false, at: { x: 1010, y: 10 }, extent: { w: 2, h: 2 } }, body: "A carved pumpkin bowl by ana's door." },
+    { rec: { id: CY_DOOR_BOWL, by: "sbx-cy", slug: "a-door-bowl", kind: "sited", class: "halloween-candy-bowl", portable: false, at: { x: 1010, y: 10 }, extent: { w: 2, h: 2 } }, body: "A carved pumpkin bowl by cy's door." }];
   put("WORLD/marks/let-there-be-light/mark.md", markRecord(root, "Synthetic world frame."));
   for (const m of ms) put(`WORLD/marks/${m.rec.id}/mark.md`, markRecord(m.rec, m.body));
   put("WORLD/world-state.json", JSON.stringify({ tick: 0, dials: {}, marks: [root, ...ms.map((m) => m.rec)] }));
@@ -101,6 +105,7 @@ after(async () => {
   if (pool) await pool.end(); await store.stop();
 });
 const KEY = { household: "sbx-cy", handles: new Set(["sbx-cy"]) };
+const KEY_DEE = { household: "sbx-dee", handles: new Set(["sbx-dee"]) };
 const owner = async (fn) => { const c = await store.connect("world2_owner"); try { return await fn(c); } finally { await c.end(); } };
 async function seed() {
   await owner(async (c) => {
@@ -184,14 +189,16 @@ test("S1 · what a resident holds by kind shows in world_holdings, a class and a
 });
 
 // the apex's class layer, as the town's resident class grants these acts ambiently
-async function withApex(fn) {
+async function withApex(fn, { verbs = ["leave-mark", "take", "give", "drop", "consume", "refill"], classes = [] } = {}) {
   const { publishWorldGraphForTest, resetWorldGraph } = await import("../src/world-graph-snapshot.mjs");
   const n = (id, props) => ({ id, kind: "mark", subkind: "sited", tier: "constitution", by: "the-town", at_x: 0, at_y: 0, extent_w: 100000, extent_h: 100000, props: JSON.stringify(props) });
-  const actions = ["leave-mark", "take", "give", "drop", "consume", "refill"].map((action) => ({ action, residue: `the-town/${action}` }));
+  const actions = verbs.map((action) => ({ action, residue: `the-town/${action}` }));
   publishWorldGraphForTest({ meta: [{ key: "hydration_status", value: "OK" }, { key: "as_of_world", value: "o2fixture" }],
     nodes: [n("the-town/let-there-be-light", { slug: "let-there-be-light", body: "Let there be light.", path: "WORLD/marks/let-there-be-light/mark.md" }),
       n("the-town/resident", { slug: "resident", class: "resident", class_version: 1, ambient: true, actions, body: "A household's living voice.",
-        path: "WORLD/marks/let-there-be-light/the-town-centre/the-keeping-works/resident/mark.md" })],
+        path: "WORLD/marks/let-there-be-light/the-town-centre/the-keeping-works/resident/mark.md" }),
+      // a class node the Keeping Works declares stands nowhere: no place, no extent
+      ...classes.map((c) => ({ ...n(c.id, c.props), at_x: null, at_y: null, extent_w: null, extent_h: null }))],
     edges: [], events: [], geometryVersions: [], lintFindings: [] }, { label: "o2-apex" });
   process.env.WORLD_APEX = "1";
   try { return await fn((await import("../src/world-apex.mjs")).worldApex); } finally { delete process.env.WORLD_APEX; resetWorldGraph?.(); }
@@ -204,10 +211,12 @@ test("S2 · the bare read's actions are trimmed by the matrix: with an empty car
     const read = await worldApex({}, KEY);
     const acts = (read.actions ?? []).map((e) => e.action);
     assert.ok(acts.includes("drop"), `a whole thing in hand drops: ${acts}`);
-    assert.ok(!acts.includes("take"), `nothing takeable in reach: take hides, though the resident class grants it (${acts})`);
-    assert.ok(!acts.includes("consume") && !acts.includes("refill"), `${acts}`);
+    // the pebble under cy's feet is in reach, and its door admits the take (F2 below): take shows for it, not for the empty bag
+    assert.ok(acts.includes("take"), `the pebble at your feet is takeable (${acts})`);
+    assert.deepEqual((await worldApex({ mark: BAG }, KEY)).focus?.can, [], "the empty bag in your hands: nothing to take from it, nothing else in hand to give into it");
+    assert.ok(!acts.includes("consume"), `${acts}`);
     assert.ok(acts.includes("leave-mark"), "the always-on roster passes untouched");
-    // fill it: take shows (from the bag in your hands)
+    // fill it: take shows on the bag (from the bag in your hands)
     await leaveMarkViaOffice(repo, { kind: "pocket-comet", count: 2, to: BAG }, KEY);
     const after = (await worldApex({}, KEY)).actions.map((e) => e.action);
     assert.ok(after.includes("take"), `${after}`);
@@ -284,4 +293,49 @@ test("round 4 · the production keeper re-bases from one full read when the cloc
   const after = await holdRecordStats();
   assert.equal(after.epoch, currentCrossing(ahead), "the next settlement's crossing");
   assert.equal(after.fullReads, before.fullReads + 1, "one full read re-bases the record in the new settlement");
+});
+
+// ── THE PLAYGROUND'S QA (Starstory docs/2026-10-18/w43-ship/PART2-MCP-QA.md), driven here ──────────────
+//
+// R4, R10 and K2 (fail 4): standing ON a set-out bowl, the bowl is in your spine (`within`), not among
+// what the eyes see (`nearby`), and the matrix was handed `nearby` alone. So a take from and a give into
+// an open bowl, and its maker's refill, all landed at their doors while the bare read and the close look
+// hid them. H1 (fail 4): a refusal's "From here you can" listed the UNTRIMMED grants, so refill was
+// offered to a resident who made no bowl. R8/R9 (fail 5): the v2 read's `you.holding` left counted kinds out.
+
+test("QA fail 4 · standing on a set-out bowl: the bare read, the close look's can and the doors are one reader", { skip }, async () => {
+  await seed();
+  await withApex(async (worldApex) => {
+    await leaveMarkViaOffice(repo, { kind: "pocket-comet", count: 3, to: "sbx-cy" }, KEY);
+    const into = await callHoldTool("world_hold", { to: ANA_DOOR_BOWL, kind: "pocket-comet", count: 1 }, KEY, { verb: "give" });
+    assert.equal(into.did, "give", "the door admits a give into ana's open bowl under cy's feet");
+    const read = await worldApex({}, KEY);
+    assert.ok((read.within ?? []).some((m) => m.id === ANA_DOOR_BOWL), `the bowl is under cy's feet, in her spine: ${(read.within ?? []).map((m) => m.id)}`);
+    assert.ok(!(read.nearby ?? []).some((o) => o.id === ANA_DOOR_BOWL), "and not among what the eyes see (the case the matrix missed)");
+    const acts = read.actions.map((e) => e.action);
+    for (const v of ["take", "give", "refill"]) assert.ok(acts.includes(v), `${v} is admitted here, so it shows (${acts})`);
+    // the close look's column, one bowl at a time
+    assert.deepEqual((await worldApex({ mark: ANA_DOOR_BOWL }, KEY)).focus?.can, ["take", "give"], "ana's open bowl: take from it and give into it; not cy's to refill");
+    assert.deepEqual((await worldApex({ mark: CY_DOOR_BOWL }, KEY)).focus?.can, ["give", "refill"], "cy's own empty bowl: give into it and refill it; nothing in it to take");
+    // and each verb shown lands at its door
+    const took = await callHoldTool("world_hold", { from: ANA_DOOR_BOWL, count: 1 }, KEY, { verb: "take" });
+    assert.equal(took.did, "take");
+    const refilled = await callHoldTool("world_hold", { act: "refill", thing: CY_DOOR_BOWL, kind: "pocket-comet", count: 2 }, KEY, { verb: "refill" });
+    assert.equal(refilled.did, "refill");
+    assert.deepEqual((await worldApex({ mark: CY_DOOR_BOWL }, KEY)).focus?.can, ["take", "give", "refill"], "refilled, it holds two: take shows too");
+  });
+});
+
+test("QA fail 4 · a refusal's \"From here you can\" is the bare read's own trimmed list: no refill offered to a resident who made no bowl", { skip }, async () => {
+  await seed();
+  // the resident class grants refill (and every hold verb but consume) ambiently, so only the matrix can hide it
+  await withApex(async (worldApex) => {
+    const read = await worldApex({}, KEY_DEE);
+    const shown = read.actions.map((e) => e.action);
+    assert.ok(!shown.includes("refill"), `dee made no bowl: the bare read hides refill (${shown})`);
+    const refused = await worldApex({ do: "consume", args: { kind: "pocket-comet" } }, KEY_DEE);
+    assert.ok(refused.error, "consume is granted by no class here, so the gate refuses it");
+    assert.deepEqual(refused.affordable_here, shown, "the refusal lists exactly what the bare read shows");
+    assert.doesNotMatch(String(refused.hint), /\brefill\b/, `the hint offers no refill: ${refused.hint}`);
+  }, { verbs: ["leave-mark", "take", "give", "drop", "refill"] });
 });
