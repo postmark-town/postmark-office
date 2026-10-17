@@ -281,7 +281,7 @@ export function explainClass(db, name) {
     open: properties.filter((p) => p.tier === "sovereign").map((p) => p.name),
     actions: actionsOf(db, shape),
     makers: makers.value === null
-      ? { value: null, from: null, note: "no class on this chain declares makers yet (WLD-73 part 2 writes it)" }
+      ? { value: null, from: null, note: "not declared on this chain yet (WLD-73 part 2 writes it)" }
       : { value: makers.value, from: makers.from, ...(makers.from !== id ? { inherited: true } : {}) },
     deeper: up ? `explain: "${up}" — the class above, read the same way; each class answers only what it adds` : "this is the root: every class climbs to it",
     changes: "at a settlement that changes the class layer",

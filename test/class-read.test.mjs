@@ -159,7 +159,7 @@ test("C2b: a chain that declares no makers says so, and never answers from code"
   const m = cr.explainClass(graphDb(t), "parcel").makers;
   assert.equal(m.value, null);
   assert.equal(m.from, null);
-  assert.match(m.note, /no class on this chain declares makers yet/);
+  assert.match(m.note, /^not declared on this chain yet/, "the settled words (POS-659 gap 3)");
 });
 
 test("C3: the property rung and the label rung read the same way", () => {
