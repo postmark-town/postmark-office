@@ -44,6 +44,8 @@ import { WORLD_CLONE } from "./world-store.mjs";
 import { movementV2Enabled } from "./dynamic-store.mjs";
 import { VESSEL_HANDLE, worldToolModule } from "./dynamic-entities.mjs";
 import { boundariesOnRoad, carriersFrom, carriersWithDisclosure, carrierStateAt, foldFrames, gunwaleWarning, inRect } from "./world-frames.mjs";
+import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
+import { kindFieldOf, markClassOf } from "./world-grants.mjs"; // the kind rung: a mark's class in both forms (LOGOS v2, O1)
 
 // The flag is read from the environment on every call and never latched at
 // import — the discipline `world-serve.mjs` and `dynamic-store.mjs` already use,
@@ -97,7 +99,7 @@ export async function vesselServiceFrom(worldState, { repo = WORLD_CLONE, vessel
     // A world clone that cannot hand over `vessel.mjs` is an office that must
     // still answer. The flag-on path falls back to the flag-off derivation and
     // says why, rather than refusing to tell anyone where they are.
-    out = { service: null, carriers: [], carrierSource: "none", disclosed: [], errors: [{ mark: "(engine)", error: String(e?.message ?? e).slice(0, 200) }], mod: null, walk: null, reason: "the world's tools/vessel.mjs could not be read at a ref" };
+    out = { service: null, carriers: [], carrierSource: "none", disclosed: [], errors: [{ mark: "(engine)", error: plainReason(e, "files", "the vessel's engine") }], mod: null, walk: null, reason: "the world's tools/vessel.mjs could not be read at a ref" };
   }
   _services.set(marks, out);
   return out;
@@ -223,7 +225,7 @@ export const worldHasVehicle = (worldState) => {
   if (!Array.isArray(marks)) return false;
   const cached = _hasVehicle.get(marks);
   if (cached !== undefined) return cached;
-  const has = marks.some((m) => String(m?.class ?? "") === VEHICLE_CLASS && m?.kind !== "class" && m?.subkind !== "class");
+  const has = marks.some((m) => markClassOf(m) === VEHICLE_CLASS && kindFieldOf(m) !== "class");
   _hasVehicle.set(marks, has);
   return has;
 };
@@ -233,7 +235,7 @@ export function vehicleWithin(stack = [], worldState = null) {
   const byId = new Map((worldState?.marks ?? []).map((m) => [m.id, m]));
   for (const id of [...(stack ?? [])].reverse()) {
     const m = byId.get(id);
-    if (m && String(m.class ?? "") === VEHICLE_CLASS) return id;
+    if (m && markClassOf(m) === VEHICLE_CLASS) return id;
   }
   return null;
 }
@@ -345,7 +347,11 @@ export async function storedDepartures({ atMs = Date.now(), withActId = false } 
       // Measured 0 of prod's 2,397 on 2026-09-21; if that ever stops being true
       // the doors say so rather than quietly shrinking.
       if (!Number.isFinite(ms)) {
-        return { records: [], absent: `a departure record carries an unreadable instant: ${String(r.iso).slice(0, 60)}` };
+        // `cause` is what the resident's read classifies (POS-657): an instant
+        // that will not parse is a saved record that does not parse, not a
+        // record that did not answer.
+        const absent = `a departure record carries an unreadable instant: ${String(r.iso).slice(0, 60)}`;
+        return { records: [], absent, cause: new SyntaxError(absent) };
       }
       if (ms > atMs) continue;
       cut.push(storedShapeOf(r, { withActId }));
@@ -356,9 +362,11 @@ export async function storedDepartures({ atMs = Date.now(), withActId = false } 
     // ruled sentence to every resident whatever went wrong ("the office's record
     // cannot be reached"), and it puts the real reason on `cause`. A disclosure
     // that printed only the outer sentence would send an operator looking at the
-    // pool when the office is simply pointed at no record.
+    // pool when the office is simply pointed at no record. `absent` is the
+    // OPERATOR's detail (crossing-save reads it through storedDepartureEvents); the
+    // resident's read says it plainly (world.mjs § the departures, POS-657).
     const why = e?.cause?.message ? `${e.message} (${e.cause.message})` : String(e?.message ?? e);
-    return { records: [], absent: why.slice(0, 200) };
+    return { records: [], absent: why.slice(0, 200), cause: e };
   }
 }
 
@@ -389,14 +397,14 @@ export async function storedGoverningDepartures({ atMs = Date.now() } = {}) {
     const { storeDepartureSnapshot } = await import("./world2-guards.mjs");
     snap = await storeDepartureSnapshot({ atMs });
   } catch (e) {
-    return { fallback: `the snapshot could not be read (${String(e?.message ?? e).slice(0, 160)})` };
+    return { fallback: `the snapshot could not be read (${plainReason(e, "record", "the departures snapshot")})` };
   }
   if (!snap) return { fallback: null };
   const { composeSnapshot } = await import("./position-snapshot.mjs");
   const { ledgerRecordOf } = await import("../world2/tools/live-reads.mjs");
   let got;
   try { got = composeSnapshot(snap, { atMs }); }
-  catch (e) { return { fallback: `the delta since window ${snap.window} could not be read (${String(e?.message ?? e).slice(0, 160)})` }; }
+  catch (e) { return { fallback: `the delta since window ${snap.window} could not be read (${plainReason(e, "record", "the departures delta")})` }; }
   if (got.discard) return { fallback: got.discard };
   const records = got.records.map((r) => (r.era === "ledger" ? ledgerRecordOf(r) : storedShapeOf(r)));
   return {

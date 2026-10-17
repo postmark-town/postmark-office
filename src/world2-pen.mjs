@@ -306,11 +306,17 @@ export async function penLockConnection(env = process.env) {
  * KEY through world2-claims.mjs's one resolver and declares it inside `fn`, so
  * there is exactly one place the two spellings meet.
  */
-export async function officeRead(fn, { env = process.env, pool: given = null, by = "officeRead" } = {}) {
+export async function officeRead(fn, { env = process.env, pool: given = null, by = "officeRead", statementTimeoutMs = null } = {}) {
   refuseNested(by);
   return onPenClient(given ?? await pool(env), by, async (client, discard) => {
     try {
       await client.query("BEGIN READ ONLY");
+      // A read that must not hold its connection past a bound (the office's
+      // index poll, POS-639) says so here, as the transaction's first
+      // statement: Postgres cancels it at the bound and the connection comes
+      // home (static-keys-retire.mjs § the same SET LOCAL).
+      if (statementTimeoutMs != null)
+        await client.query(`SET LOCAL statement_timeout = '${Math.max(1, Math.trunc(statementTimeoutMs))}ms'`);
       const out = await fn(client);
       await client.query("COMMIT");
       return out;

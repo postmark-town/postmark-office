@@ -20,6 +20,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { INTAKE } from "./usdc-witness.mjs";
+import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const lower = (a) => String(a).toLowerCase();
@@ -40,7 +41,7 @@ export function readIntakeMap(file = INTAKE_MAP_FILE) {
   let d;
   try { d = JSON.parse(readFileSync(file, "utf8")); }
   catch (e) {
-    invalid.push({ kind: "invalid", row_kind: "intake-map", line: "deploy/intake-addresses.json", reason: `unparseable JSON: ${String(e?.message ?? e).slice(0, 80)} — every arrival stays pot-ambiguous until this parses` });
+    invalid.push({ kind: "invalid", row_kind: "intake-map", line: "deploy/intake-addresses.json", reason: `${plainReason(e, "parse", "deploy/intake-addresses.json")} — every arrival stays pot-ambiguous until this parses` });
     return { map, invalid };
   }
   for (const [addr, pot] of Object.entries(d?.addresses ?? {})) {

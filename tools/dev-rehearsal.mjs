@@ -471,7 +471,7 @@ export function plan() {
         const e = ctx.t.env;
         // The flags prod reads the store with (/etc/postmark-office.env, measured 2026-10-07), and
         // STAMP_LINES=store, which the w42 ship sets on prod (POS-341): the rehearsal runs the next tag's path.
-        for (const [k, v] of [["TOWN_INDEX_READS", "store"], ["OFFICE_PAPERWORK_STORE", "1"], ["STATE_LOG_SOURCE", "store"], ["WORLD2_PG", "1"], ["TOWN_SINGLE_LOG", "1"], ["WORLD_SINGLE_LOG", "1"], ["STAMP_LINES", "store"]])
+        for (const [k, v] of [["OFFICE_PAPERWORK_STORE", "1"], ["STATE_LOG_SOURCE", "store"], ["WORLD2_PG", "1"], ["TOWN_SINGLE_LOG", "1"], ["WORLD_SINGLE_LOG", "1"], ["STAMP_LINES", "store"]])
           if (e[k] !== v) p.push(`the dev office runs without ${k}=${v} (prod has it${k === "STAMP_LINES" ? " from the w42 ship" : ""}): a rehearsal on dev would not run the path the box runs`);
         p.push(...(await keyProblems(ctx)));
         if (e.TOWN_PUSH !== "0") p.push(`the dev office's TOWN_PUSH is ${e.TOWN_PUSH ?? "unset"}, not 0: its pen could push the real town`);

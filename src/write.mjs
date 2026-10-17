@@ -330,7 +330,7 @@ export function validateLetter({ from, to, title, thread, body, stake_topic, sta
   thread ||= "new";
   if (!key.handles.has(from))
     throw bounce(403, `"${from}" is not one of your residents`, `this key acts for: ${[...key.handles].join(", ")}`);
-  // the index's answers through its probe: office.db's SQL, or the store's with the switch on (POS-268)
+  // the index's answers through its probe: the store's held snapshot (POS-268; office.db's went with it, POS-656)
   const ix = probeOf(db);
   if (!ix.hasResident(to))
     throw bounce(422, `no resident "${to}"`, "handles are lowercase-hyphenated, as in WHITE_PAGES/");

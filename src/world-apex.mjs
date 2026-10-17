@@ -111,6 +111,7 @@ import { validateReadArgs } from "./validate-args.mjs"; // the flat tools' own v
 // here was reachable: the resident class grants no `subscribe`, `gather` or
 // `hand-to-human`, so no resident could open these doors on any day they stood.
 import { callHoldTool, holdingsOf, liveHolder } from "./world-hold.mjs";
+import { onlyUsable, canOn } from "./usable-verbs.mjs"; // verbs show when usable (LOGOS v2, O2)
 // The stride a placement is stamped with — read off the record like every other
 // departure's, never a constant here (decision 008b).
 import { EARSHOT_M } from "./voices.mjs"; // postmark#3592: the description names both distances
@@ -128,7 +129,7 @@ import { actorRoster, resolveHumanActor } from "./human-actor.mjs";
 // that one derivation, moved somewhere both doors can read it.
 import { humanHandFor, householdLookup } from "./households.mjs";
 import {
-  classOfInstance, entriesOfClass, guardsPass, heldEntries, kindOf, resolveGrants, resolveForActor,
+  classOfInstance, markClassOf, entriesOfClass, guardsPass, heldEntries, kindOf, resolveGrants, resolveForActor,
 } from "./world-grants.mjs";
 import { exitAllowed, fenceGroundFor, walkAllowed } from "./embodiment.mjs";
 // THE ARENA IS CLOSED (Keemin, 2026-09-30). Its five verbs are still granted
@@ -140,7 +141,7 @@ import { ARENA_TOOLS, ARENA_VERBS, arenaActViaOffice, arenaClosed } from "./aren
 // THE PORTAL GROUND'S OWN LAW outlived the arena: which room you stand in, its
 // stride and its landing (src/portal-ground.mjs). Rides and vehicles are not this.
 import { cockpitPortal, groundAt, landingPointFor } from "./portal-ground.mjs";
-import { bounceExtras, caughtBounce, faultLogged, isHttpStatus, trippedError } from "./fault-words.mjs"; // the office's own words for its own fault (POS-573/578)
+import { bounceExtras, caughtBounce, faultLogged, isHttpStatus, plainReason, trippedError } from "./fault-words.mjs"; // the office's own words for its own fault (POS-573/578)
 
 export const apexEnabled = () => process.env.WORLD_APEX === "1";
 
@@ -367,7 +368,7 @@ export function withinWithVehicles(spine = [], occupied = [], markOf = () => nul
   for (const id of occupied) {
     if (!id || have.has(id)) continue;
     const mark = markOf(id);
-    if (!mark || String(mark.class ?? "") !== VEHICLE_CLASS) continue;
+    if (!mark || markClassOf(mark) !== VEHICLE_CLASS) continue;
     have.add(id);
     out.push({ id, by: mark.by, tier: mark.tier, body: mark.body, extentM: Math.max(mark.extent?.w ?? 0, mark.extent?.h ?? 0) });
   }
@@ -619,7 +620,8 @@ export function residueOf(db, id) {
 //
 // residueOf above quotes CLASS marks — `kind: class`, carrying a `class:` name,
 // which is why its gate requires one. A standing rule that is not a class of
-// thing is written as a PREDICATED mark instead: `kind: predicated`, a `slot`
+// thing is written as a PREDICATED mark instead: `kind: predicated` (W2: `kind: predicate`; the query
+// below keys on the slot, never on the kind, so it reads both forms), a `slot`
 // naming what it rules and a `value` saying it in short, with the sentence
 // itself as the body. logos/the-media and its two children (world main
 // 674c359c) are exactly that shape, so residueOf cannot see them — its
@@ -770,9 +772,11 @@ const DISPATCH = {
   // `class: "thing"`, exactly as a bounty notice is posted — the one live
   // precedent for a resident-declarable class added no verb either. The verb is
   // thin; the class is thick.
-  give: { tool: "world_hold", run: (args, key) => callHoldTool("world_hold", args, key) },
-  drop: { tool: "world_hold", run: (args, key) => callHoldTool("world_hold", args, key) },
-  take: { tool: "world_hold", run: (args, key) => callHoldTool("world_hold", args, key) },
+  // BY KIND (LOGOS v2, O2) the word is passed along beside the args: `{ kind }`
+  // alone is a take from the holder in reach, or with do: "drop" a set-down.
+  give: { tool: "world_hold", run: (args, key) => callHoldTool("world_hold", args, key, { verb: "give" }) },
+  drop: { tool: "world_hold", run: (args, key) => callHoldTool("world_hold", args, key, { verb: "drop" }) },
+  take: { tool: "world_hold", run: (args, key) => callHoldTool("world_hold", args, key, { verb: "take" }) },
   // COUNTED UNITS (WLD-27): consume and refill are the hold lane's two new
   // faces — one held consumable used up, and a candy label's creator topping a
   // chest up. Same tool, same queue; the face rides as `act`.
@@ -1624,7 +1628,7 @@ export async function groundWithinReach(oriented, key = null) {
       ...(dis ? { disclosed: dis } : {}),
     };
   } catch (e) {
-    return { unavailable: `the ground could not be read (${String(e?.message ?? e).slice(0, 120)}) — this is not an answer about what lies underfoot` };
+    return { unavailable: `the ground could not be read (${plainReason(e, "files", "the ground underfoot")}) — this is not an answer about what lies underfoot` };
   } finally {
     try { store?.db?.close(); } catch { /* a reader that cannot close still read */ }
   }
@@ -1829,19 +1833,38 @@ export function buildTerms({ affording, spine, means = null }) {
  * embodied-only, so the flat tool is the only door a spectator has.)
  */
 /** investigate: on a living thing, or null when the call asked for none (PR-4). */
-async function investigateOn(args, oriented) {
+/**
+ * The matrix of (verb, object) pairs where the reader stands, or null when the
+ * reader is not standing anywhere as a resident (a read from elsewhere trims
+ * nothing) or the hold record cannot be read.
+ */
+async function usableHere(args, key, oriented, nearby = []) {
+  const who = standingHandle(args, key);
+  const sp = oriented?.standpoint;
+  if (!who || sp?.stance !== "embodied" || !Number.isFinite(Number(sp?.x)) || !Number.isFinite(Number(sp?.y))) return null;
+  try {
+    const { usableAt } = await import("./world-kinds.mjs");
+    return await usableAt({ actor: who, here: { x: Number(sp.x), y: Number(sp.y) }, markIds: nearby.map((o) => o.id).filter(Boolean),
+      residents: oriented.present?.residents ?? [] });
+  } catch { return null; }
+}
+
+async function investigateOn(args, oriented, usable = null) {
   if (args.investigate == null || String(args.investigate).trim() === "") return null;
   const kind = entityKindOf(args.investigate);
   if (kind.kind === "creature") {
     // POS-637 PR-C: the creature as of now, its newest reactions with their odds, and the crossing save's row
     const { creaturesForRead, investigateCreature, savedCreatureOf, REACTIONS_SQL } = await import("./creatures-read.mjs");
     const { actsQuery } = await import("./world2-acts.mjs");
-    return investigateCreature(kind.id, {
-      creatures: await creaturesForRead(),
+    const creatures = await creaturesForRead();
+    const seen = await investigateCreature(kind.id, {
+      creatures,
       from: oriented?.standpoint ?? null,
       rows: (id, n) => actsQuery(REACTIONS_SQL, [id, n]),
       saved: (id) => savedCreatureOf(id),
     });
+    // its class is its kind (`wolf`), off the fold that answered; one no longer held there points nowhere
+    return pointed(seen, creatures?.living?.byId?.get(kind.id)?.kind ?? null);
   }
   // the town's roll says who is a resident; when it cannot be read, nobody is
   // called unknown for it (the standpoint read then says what it can)
@@ -1849,7 +1872,7 @@ async function investigateOn(args, oriented) {
   const { actsQuery } = await import("./world2-acts.mjs");
   const { composeAnchor } = await import("./world-journal.mjs");
   const centreOf = await markCentreOf();
-  return investigateResident(kind.handle, {
+  const seen = await investigateResident(kind.handle, {
     from: oriented?.standpoint ?? null,
     known: (h) => houseOf(h) != null,
     standpoint: (h) => residentStandpoint(h),
@@ -1865,6 +1888,18 @@ async function investigateOn(args, oriented) {
     placeMarks: (p) => placeMarksAt(p),
     marksOf: (ids) => markRows(ids),
   });
+  // what they hold by kind, beside their whole things (review-610 S1): a class and a number each, never a unit
+  const kinds = seen && !seen.error ? await (await import("./world-kinds.mjs")).kindsHeldBy(kind.handle) : null;
+  const read = seen && !seen.error ? { ...seen, ...(kinds?.count ? { holds_by_kind: kinds } : {}), ...(usable ? { can: canOn(usable, kind.handle) } : {}) } : seen;
+  return pointed(read, "resident");
+}
+
+/** POS-659: an investigated resident or creature carries its class pointer (class-read.mjs). */
+async function pointed(answer, klass) {
+  try {
+    const { namedPointer, withPointer } = await import("./class-read.mjs");
+    return withPointer(answer, namedPointer(klass));
+  } catch (e) { console.error(`[class-read] the pointer for ${klass} could not be read: ${e?.message ?? e}`); return answer; }
 }
 
 /** Where the newest crossing save put a resident: { crossing, x, y }, or null (STATE/snapshot/<n>/entities.json). */
@@ -2023,7 +2058,7 @@ function aboardVehicleId(here, worldState) {
   const id = here?.frame ?? here?.vehicle ?? null;
   if (!id) return null;
   const body = (worldState?.marks ?? []).find((m) => m.id === id) ?? null;
-  return String(body?.class ?? "") === VEHICLE_CLASS ? id : null;
+  return markClassOf(body) === VEHICLE_CLASS ? id : null;
 }
 
 /** The ride, the arrived notice, and how to leave a VEHICLE — or nothing.
@@ -2102,7 +2137,7 @@ async function rideDomain(oriented, key, fields = {}) {
   } catch (e) {
     // SAID, NEVER SWALLOWED — and never spelled like "no ride stands". The
     // reader is told this is a failure to read and not a fact about their ride.
-    return { unreadable: `this office could not read your ride (${String(e?.message ?? e).slice(0, 160)})`, also_at: RIDE_ALSO_AT };
+    return { unreadable: `this office could not read your ride (${plainReason(e, "files", "a resident's ride")})`, also_at: RIDE_ALSO_AT };
   }
 }
 
@@ -2152,7 +2187,7 @@ export function rideDoorsOf(service, at = null, marks = [], unreadable = null) {
   return {
     vessel,
     doors,
-    affordable_at: doors.map((d) => ({ mark: d.mark, class: marks.find((m) => m.id === d.mark)?.class ?? null, at: d.at })),
+    affordable_at: doors.map((d) => ({ mark: d.mark, class: markClassOf(marks.find((m) => m.id === d.mark)), at: d.at })),
     sentence: `${lent} Every stop on her timetable is a door into her wherever her hull is, and her own berth${vessel ? ` (${vessel})` : ""} is one while she is alongside${at ? ". Nearest first" : ". They are"}: ${list}. Walk to one with the entry composed: do: "walk", args: { mark_id: "<the stop>", enter_on_arrival: true }. The walk shows her terms at once; walk again with accept: true to board on arrival, and aboard, ride is yours to declare.`,
   };
 }
@@ -2166,7 +2201,7 @@ async function rideDoorsFor(oriented) {
     const why = service ? null : (reason ?? errors?.[0]?.error ?? "no timetable");
     return rideDoorsOf(service, at, w?.marks ?? [], why);
   } catch (e) {
-    return rideDoorsOf(null, at, [], String(e?.message ?? e).slice(0, 160));
+    return rideDoorsOf(null, at, [], plainReason(e, "files", "the vessel's timetable"));
   }
 }
 
@@ -2331,7 +2366,7 @@ export async function happenedFor(oriented, args, key, { town = true, live = fal
     return { ...block, complete, ...(clamped ? { reach: `clamped to the last ${HAPPENED_REACH} crossings (${since}..${nowCrossing}); older is the crossing log, STATE/log/` } : {}),
       log: { crossings_read: covered.length, crossings_absent: absent.length, ...(live ? { live: liveHw != null, live_complete: liveComplete } : {}) }, ...(liveHw != null ? { _hw: liveHw } : {}) };
   } catch (e) {
-    return { unavailable: "the delta could not be read", detail: String(e?.message ?? e).slice(0, 160) };
+    return { unavailable: "the delta could not be read", detail: plainReason(e, "record", "the happened delta") };
   }
 }
 
@@ -2447,6 +2482,15 @@ async function apexRead(args, key, ctx = {}) {
     });
   } finally { store.db?.close(); }
 
+  // ── VERBS SHOW WHEN USABLE (LOGOS v2, lane O2; SITTING 10:30–10:36, 12:01) ──
+  // take, give, drop and refill show only when some object in view makes them
+  // possible (usable-verbs.mjs: one matrix of (verb, object) pairs), and
+  // investigate's `can` is that matrix's column for one object. The DOOR is not
+  // trimmed: a verb tried while hidden reaches its door and is refused with its
+  // reason. Where the matrix cannot be read, nothing is trimmed.
+  const usable = await usableHere(args, key, oriented, nearby);
+  if (usable) actions = onlyUsable(actions, usable);
+
   // ── Stage ② · whose grant opened each door ────────────────────────────────
   //
   // `yours` travels with what you are — the ocap grants on a class you are an
@@ -2520,7 +2564,17 @@ async function apexRead(args, key, ctx = {}) {
   // answers, with a `renamed` row, until train/2026-w42.
   const found = await findOn(args, key);
   // ── THE ENTITY READ (POS-632 PR-4; Sitting E) ───────────────────────────────
-  const investigated = await investigateOn(args, oriented);
+  const investigated = await investigateOn(args, oriented, usable);
+  // THE CLOSE LOOK CARRIES THE MATRIX'S COLUMN (LOGOS v2, O2; 12:01): `can`, the verbs you
+  // can do to this mark now, and for a holder what it holds, sharpened to kinds, never units (15:46).
+  if (focus && !focus.error && focusArgs(args)) {
+    try {
+      const { investigateMark } = await import("./world-kinds.mjs");
+      const close = await investigateMark(focusArgs(args).mark, usable);
+      if (close.can) focus.can = close.can;
+      if (close.holds) Object.assign(focus, { holder: close.holder, holds: close.holds });
+    } catch { /* the close look stands without its column; the doors still answer */ }
+  }
 
   // ── THE RECORDS THIS READ NAMES (2026-09-10) ──────────────────────────────
   const nearbyOut = nearby;
@@ -3619,6 +3673,24 @@ async function apexReadAction(args, key, ctx = {}) {
   } finally { store.db?.close(); }
 }
 
+// POS-659: explain climbs the class. A read-grammar path answers first (above);
+// a name no path carries is asked of the class layer, by its slug or its full
+// id, and a name neither knows keeps the grammar's bounce, with the classes
+// nearest it and where a class name is found (class-read.mjs).
+async function explainClassOr(path, bounced) {
+  const { explainClass, nearestClasses } = await import("./class-read.mjs");
+  const store = openStore();
+  // no store is an outage, not the reader's mistake: 503, never the grammar's 422
+  if (!store.db) return bounce(503, `the class layer cannot be read: ${store.unavailable}`, "explain: on a path still answers; a class answers once the world store has loaded");
+  const answer = explainClass(store.db, path);
+  if (answer) return answer;
+  const near = nearestClasses(store.db, path);
+  return { ...bounced,
+    defect: `nothing here is called "${path}", and no class is either`,
+    hint: `${bounced.hint} A class is explained by its name: every instance read names its kind in class_pointer, like kind: thing · a mark — explain: "thing".`,
+    ...(near.length ? { nearest_classes: near } : {}) };
+}
+
 // THE ONE PLACE A WORLD ANSWER LEAVES THE APEX, so the one place a refusal is
 // marked `refused: true` (POS-427, one-contract.mjs § withRefused). Every
 // return below, the act's catch included, comes back through here.
@@ -3635,7 +3707,8 @@ async function worldApexAnswer(args, key, ctx) {
     if (path != null) {
       if ((args.do != null && args.do !== "") || (args.read != null && args.read !== ""))
         return bounce(422, "one call does one thing — explain: answers what a part is for, do: performs, read: observes", "call twice");
-      return explainAnswer("world", path);
+      const answer = explainAnswer("world", path);
+      return answer.error ? explainClassOr(path, answer) : answer;
     }
   }
   const doing = args.do != null && args.do !== "";
@@ -3769,7 +3842,7 @@ const APEX_INPUT_SCHEMA = { type: "object", properties: {
     beside: { type: "string", description: "with as: \"human\" — which of your residents the human stands beside (optional; omitted, the house chooses the housemate it is awake at). Must be one of your own key's residents." },
     telling: { type: "boolean", description: "true adds the prose telling of what you see; omit for the cheap structural read" },
     // POS-632: the read grammar's second move. One table for three doors (read-grammar.mjs).
-    explain: { type: "string", description: "explain: \"<path>\" answers what any part of this door's bare read is for, in one fixed shape: { explains, what, detail?, deeper, changes } (changes: live, settled or weekly). The path is a key path into the read, like \"who\" or \"now.happened\". explain: \"\" is the tutorial. It answers docs, never data, and rides with no do: or read:." },
+    explain: { type: "string", description: "explain: \"<path>\" answers what any part of this door's bare read is for, in one fixed shape: { explains, what, detail?, deeper, changes } (changes: live, settled or weekly). The path is a key path into the read, like \"who\" or \"now.happened\". explain: \"\" is the tutorial. A class name climbs the class instead (POS-659): explain: \"thing\" answers the class's body, its extends chain, its properties (tier, default, children), its afforded actions with their conditions, and makers; every instance read names its class in class_pointer. It answers docs, never data, and rides with no do: or read:." },
     // POS-632 (W1): the shape, per call. It wins over the office's default.
     read_shape: { type: "string", enum: ["v1", "v2"], description: "read_shape: \"v2\" is the new compact read, opt-in this week: you, now (with what happened since the last crossing), view (what fills your eyes, by bearing), who (who is active near you), happening_here, can (each act in one line) and law, in about 5k characters. Omit it for the read you get today." },
     diagnostics: { type: "boolean", description: "with read_shape: \"v2\", also bring the engine's notes (the full law block, presence's disclosures). v1 always carries them." },

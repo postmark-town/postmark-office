@@ -84,15 +84,14 @@ export async function ashoreOf(handles, env = process.env) {
 // One function, so the two cannot disagree about who lives here.
 
 /**
- * `db` (an office.db handle, a probe, or null on a switched office) for the
+ * `db` (a probe, or null for the store's held one) for the
  * letters to `tos`: itself when the copy knows every recipient or the store
  * holds none of the missing ones ashore, else a probe whose `hasResident` also
  * answers yes for those. A copy that cannot be asked is left to throw in the
  * check's own order.
  */
 export async function recipientsProbe(db, tos, { env = process.env } = {}) {
-  const ix = probeOf(db, { env });
-  if (!ix) return db;
+  const ix = probeOf(db);
   const missing = [];
   for (const to of new Set(tos ?? [])) {
     if (typeof to !== "string" || !to) continue;

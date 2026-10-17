@@ -30,9 +30,10 @@ import { join, resolve, dirname, relative } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { penCommit } from "./write.mjs";
-import { markRecord } from "./mark-record.mjs";
+import { markRecord, recordKindOf } from "./mark-record.mjs";
 import { ensureDraftCheckout } from "./world-branches.mjs";
 import { isDroppedUnitMark } from "./world-stacks.mjs";
+import { extendsFromMarks, isSited } from "./world-grants.mjs"; // the kind rung (LOGOS v2, O1)
 import { faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578, POS-617)
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -241,7 +242,8 @@ async function main() {
     parentId = p.parent_id;
     const parent = byId.get(parentId);
     if (!parent) return err(422, `no mark "${parentId}" to describe`, "predicated/naming marks nest under the mark they describe — pass its id as parent_id");
-    if (parent.kind !== "sited" && parent.kind !== "parcel") return err(422, `"${parentId}" cannot hold a description`, "only sited/parcel marks carry predicated/naming children");
+    // sited in either form: `kind: thing` stands by its class's lineage, read off the clone's own class nodes
+    if (!isSited(parent, extendsFromMarks(marks))) return err(422, `"${parentId}" cannot hold a description`, "only sited/parcel marks carry predicated/naming children");
     parentDir = parent._dir;
   }
 
@@ -343,7 +345,8 @@ async function main() {
     const framing = marks.find((m) => m._dir && resolve(m._dir) === resolve(parentDir));
     return framing?.at ?? null;
   };
-  const fileRec = { ...p };
+  // a new description writes `kind: predicate` (W2's rename, WLD-73 G10); the parent check above reads either form
+  const fileRec = { ...p, kind: recordKindOf(p.kind) };
   if (relativeTree) {
     const origin = frameOrigin();
     if (origin) {

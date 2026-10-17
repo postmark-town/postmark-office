@@ -15,7 +15,7 @@ import { DatabaseSync } from "node:sqlite";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { indexStore, seedRegistry } from "./helpers/office-under-test.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
 import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
@@ -23,7 +23,7 @@ import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static k
 // The town index this file's offices read: a store seeded from each fixture
 // office.db (POS-268, office-under-test.mjs). Stopped when the file is done.
 const STORES = [];
-const storeFor = async (dbPath) => { const x = await indexStore(dbPath); STORES.push(x); return x; };
+const storeFor = async (town) => { const x = await indexStore(town); STORES.push(x); return x; };
 test.after(async () => { for (const x of STORES) await x.stop(); });
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -51,8 +51,7 @@ let child, tmp, ghServer;
 
 before(async () => {
   tmp = mkdtempSync(join(tmpdir(), "postmark-office-oauth-"));
-  const dbPath = join(tmp, "fixture.db");
-  fixtureDb(dbPath).close();
+  const dbPath = fixtureTown();
   const IX = await storeFor(dbPath);
   const IX_ENV = IX.env;
 
@@ -93,7 +92,7 @@ before(async () => {
   GH_PORT = ghServer.address().port;
 
   ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port),
-    "--db", dbPath, "--oauth-db", seedStaticKeys(join(tmp, "oauth.db"), `${KEY}=keemin:wright;${PINNED_KEY}=keemin#999:wright`)], {
+    "--oauth-db", seedStaticKeys(join(tmp, "oauth.db"), `${KEY}=keemin:wright;${PINNED_KEY}=keemin#999:wright`)], {
     env: {
       ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV,
       TOWN_CLONE: clone, TOWN_PUSH: "",

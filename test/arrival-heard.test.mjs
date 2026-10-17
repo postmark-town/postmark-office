@@ -28,7 +28,6 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DatabaseSync } from "node:sqlite";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
@@ -171,14 +170,12 @@ function execTown() {
     "/src/declare-exec.mjs|./ceremony.mjs": put("ceremony.mjs", STUB_CEREMONY),
     "/src/arrival-heard.mjs|./world2-acts.mjs": put("world2-acts.mjs", STUB_ACTS),
   };
-  const dbPath = join(dir, "office.db");
-  new DatabaseSync(dbPath).close();
-  return { dir, origin, clone, register, stubs, dbPath, queries: join(dir, "queries.jsonl") };
+  return { dir, origin, clone, register, stubs, queries: join(dir, "queries.jsonl") };
 }
 
 function declare(t, args, store = "ok", extra = {}) {
   const r = spawnSync(process.execPath, ["--import", pathToFileURL(t.register).href, join(ROOT, "src", "declare-exec.mjs"),
-    JSON.stringify({ args: { handle: "newcomer", household: "Newcomers", card: "I am new here.", ...args }, key: { ghId: 7, ghLogin: "newcomer-gh" }, dbPath: t.dbPath, ...extra })], {
+    JSON.stringify({ args: { handle: "newcomer", household: "Newcomers", card: "I am new here.", ...args }, key: { ghId: 7, ghLogin: "newcomer-gh" }, ...extra })], {
     encoding: "utf8",
     env: { ...process.env, TOWN_CLONE: t.clone, TOWN_PUSH: "1", BOT_NAME: "fixture", BOT_EMAIL: "fixture@test.invalid",
       HEARD_STUBS: JSON.stringify(t.stubs), HEARD_QUERIES: t.queries, HEARD_STORE: store, ...IX.env },
@@ -239,7 +236,7 @@ test("H5b · a co-signed begin (POS-570) lands the berth's parked answer by its 
   assert.match(oauth, /declareViaOffice\(ctx\.clone, \{ \.\.\.decl, handle: pending\.slug \},[\s\S]{0,200}?mint: false, heardFrom: pending\.slug \}\)/,
     "the berth co-sign passes its slug, so the parked answer lands");
   const declareSrc = readFileSync(join(ROOT, "src", "declare.mjs"), "utf8");
-  assert.match(declareSrc, /dbPath,\n\s+\.\.\.\(heardFrom \? \{ heardFrom \} : \{\}\),\n\s+\}\);/, "declareViaOffice hands heardFrom to the exec's payload");
+  assert.match(declareSrc, /key: \{ ghId: key\.ghId, ghLogin: key\.ghLogin \},\n\s+\.\.\.\(heardFrom \? \{ heardFrom \} : \{\}\),\n\s+\}\);/, "declareViaOffice hands heardFrom to the exec's payload");
 });
 
 test("H6 · a join that SKIPS keeps nothing, and still lands", () => {

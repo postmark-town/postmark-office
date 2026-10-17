@@ -9,8 +9,9 @@
 // `outside:*` payer is still an outside gift.
 //
 // The registry here is the store's (acts-pen-stub's three registry SELECTs), and
-// the pot rows are office.db's, so the only way a read can name the house is to
-// ask the store.
+// the pot rows are the town index's (the rows town-index-store.mjs §
+// potBoardRows hands the board, and for the door a real store holding them), so
+// the only way a read can name the house is to ask the registry.
 //
 // THE FLIP: make queries.mjs § withGivers return the board it was handed (drop
 // the lookup) and the household tests go red.
@@ -31,16 +32,17 @@ const STORE = rowsFromRegistry({ schema_version: 1, households: {
 } }, { keith: { login: "noprotocol-keith", id: 302359603 }, deva: { login: "deva-gh", id: 7 } });
 process.env.WORLD2_PG = RECORD_ON.WORLD2_PG;
 process.env.WORLD2_PG_URL = RECORD_ON.WORLD2_PG_URL;
-delete process.env.TOWN_INDEX_READS; // the office.db door; the store's twin shares withGivers
 installActsPen({ households: STORE.households, pins: STORE.pins, meta: [] });
 after(() => { uninstallActsPen(); delete process.env.WORLD2_PG; delete process.env.WORLD2_PG_URL; });
 
 const { giversOf, giverLookup, OUTSIDE_GIFT } = await import("../src/households.mjs");
-const { officeIndex, potBoard } = await import("../src/queries.mjs");
-const { fundRead } = await import("../src/household-stamps.mjs");
+const { potBoardOf, withGivers } = await import("../src/queries.mjs");
+const { fundReadOf } = await import("../src/household-stamps.mjs");
+const { emptyTown, put } = await import("./fixture.mjs");
+const { indexStore } = await import("./helpers/office-under-test.mjs");
 const { householdApex } = await import("../src/household-apex.mjs");
 
-// office.db's pot rows: keith's gift (settled, so it is on the roll too), an
+// The index's pot rows: keith's gift (settled, so it is on the roll too), an
 // outside gift, deva's, and lone's.
 const POT = { pot: "meeps-fund", status: "open", title: "The meeps' fund", beneficiary: "the-town", target_usd_per_epoch: 100, received_usd: 0, epoch_cadence: "monthly", close: "epoch" };
 const RECEIPTS = [
@@ -50,14 +52,22 @@ const RECEIPTS = [
   { rail: "paypal", usd: 5, date: "2026-10-08", receipt: "pp_lone", payer: "lone" },
 ];
 const ROLL = [{ patron: "keith", usd: 15, date: "2026-10-05", receipt: "cs_keith", holo: 2 }];
-const potDb = {
-  prepare: (sql) => ({
-    all: () => (/FROM pots\b/.test(sql) ? [{ id: POT.pot, json: JSON.stringify(POT) }]
-      : /FROM pot_receipts\b/.test(sql) ? RECEIPTS
-      : /FROM funding_roll\b/.test(sql) ? ROLL : []),
-    get: () => undefined,
-  }),
-};
+// The rows as the store's reader hands them to the board (town-index-store.mjs § potBoardRows).
+const rowsOf = (receipts, roll = []) => ({ pots: [{ id: POT.pot, json: JSON.stringify(POT), roll, receipts, staked: 0, stakers: [] }], invalid: [] });
+const POT_ROWS = rowsOf(RECEIPTS, ROLL);
+// The board a door reads: the index's board, the givers' households added once the index has answered.
+const doorBoard = (rows = POT_ROWS) => withGivers(potBoardOf(rows));
+// The money moment's read from that board (household-apex.mjs § the fund read).
+const fundRead = async (rows = POT_ROWS) => { const board = await doorBoard(rows); return fundReadOf(board?.list ?? []); };
+
+// The same rows in a store, for the door itself: the town index this process reads.
+const town = emptyTown();
+put(town, "pots", { id: POT.pot, json: JSON.stringify(POT) });
+for (const r of RECEIPTS) put(town, "pot_receipts", { pot: POT.pot, ...r });
+for (const r of ROLL) put(town, "funding_roll", { pot: POT.pot, ...r });
+const IX = await indexStore(town, { db: "fund_givers" });
+const IX_RESTORE = await IX.useInProcess();
+after(async () => { await IX_RESTORE(); await IX.stop(); });
 
 const SHARD = { household: "shard-house", household_key: "hh:shard-house", handle: "keith" };
 const OUTSIDE = { outside: true, says: OUTSIDE_GIFT };
@@ -73,7 +83,7 @@ test("giversOf: a resident's gift names their household; an outside payer stays 
 });
 
 test("the pot board a door reads names every giver's household, on the roll and on the receipts", async () => {
-  const board = await officeIndex(potDb, {}, null).potBoard();
+  const board = await doorBoard();
   const pot = board.list.find((p) => p.id === "meeps-fund");
   assert.deepEqual(pot.patrons.roll[0].giver, SHARD, "the roll's patron is keith; the giver is his house");
   assert.equal(pot.patrons.roll[0].patron, "keith", "the ledger's handle is kept beside it, unchanged");
@@ -84,11 +94,11 @@ test("the pot board a door reads names every giver's household, on the roll and 
   assert.equal(byRef.pp_deva.giver.household, "Deva's Commons");
   assert.equal(pot.receipts.sum_usd, 50, "the money is untouched");
   // the index's own board carries no giver: the household is added at the door
-  assert.equal(potBoard(potDb).list[0].receipts.list[0].giver, undefined);
+  assert.equal(potBoardOf(POT_ROWS).list[0].receipts.list[0].giver, undefined);
 });
 
 test("household { read: \"fund\" } names the household behind each gift", async () => {
-  const answer = await householdApex({ read: "fund" }, { household: "hh:shard-house", handles: new Set(["keith", "quill"]) }, { db: potDb });
+  const answer = await householdApex({ read: "fund" }, { household: "hh:shard-house", handles: new Set(["keith", "quill"]) }, {});
   assert.equal(answer.read, "fund");
   const pot = answer.pots.find((p) => p.pot === "meeps-fund");
   assert.deepEqual(pot.gifts.list.map((g) => [g.usd, g.giver.outside ? g.giver.says : g.giver.household]),
@@ -102,9 +112,9 @@ test("a store that cannot be asked leaves the board as the index answered it, an
   delete process.env.WORLD2_PG; delete process.env.WORLD2_PG_URL;
   try {
     assert.equal(await giverLookup(), null);
-    const board = await officeIndex(potDb, {}, null).potBoard();
+    const board = await doorBoard();
     assert.equal(board.list[0].receipts.list[0].giver, undefined);
-    const answer = await fundRead(null, { db: potDb });
+    const answer = await fundRead();
     assert.equal(answer.pots[0].gifts.list[0].giver, null, "null is could-not-look, never a guessed house");
   } finally {
     process.env.WORLD2_PG = RECORD_ON.WORLD2_PG; process.env.WORLD2_PG_URL = RECORD_ON.WORLD2_PG_URL;
@@ -114,13 +124,7 @@ test("a store that cannot be asked leaves the board as the index answered it, an
 
 test("the fund read's gifts are bounded: at most 20 per pot, the newest, with the total counting them all", async () => {
   const many = Array.from({ length: 25 }, (_, i) => ({ rail: "stripe", usd: 1, date: `2026-10-${String(i + 1).padStart(2, "0")}`, receipt: `cs_${i}`, payer: i % 2 ? "keith" : "outside:stripe" }));
-  const db = {
-    prepare: (sql) => ({
-      all: () => (/FROM pots\b/.test(sql) ? [{ id: POT.pot, json: JSON.stringify(POT) }] : /FROM pot_receipts\b/.test(sql) ? many : []),
-      get: () => undefined,
-    }),
-  };
-  const pot = (await fundRead(null, { db })).pots[0];
+  const pot = (await fundRead(rowsOf(many))).pots[0];
   assert.equal(pot.gifts.total, 25, "the total counts every receipt");
   assert.equal(pot.gifts.shown, 20);
   assert.equal(pot.gifts.list.length, 20, "the list never grows past the board's 20");

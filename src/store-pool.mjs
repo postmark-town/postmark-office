@@ -66,6 +66,10 @@ export function storePoolOptions(env = process.env, { name, max, connectionStrin
     max,
     connectionTimeoutMillis: acquireMs(env),
     idle_in_transaction_session_timeout: idleTxMs(env),
+    // TCP keepalive on every connection (review-595): a half-open socket, a
+    // store that went away without a FIN, is found by the kernel's probes
+    // and errors, rather than holding a pool slot until the process restarts.
+    keepAlive: true,
     application_name: `postmark-office:${name}:t${threadId}`,
     ...rest,
   };

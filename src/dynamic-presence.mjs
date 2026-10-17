@@ -49,6 +49,7 @@ import {
   walkModule, worldToolModule, ridesTheVessel, VESSEL_HANDLE,
 } from "./dynamic-entities.mjs";
 import { everyonePlaced, withFrames } from "./positions.mjs";
+import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
 // WHERE A RESIDENT STANDS, AT THE RECORD'S OWN PRECISION (WLD-63 row 68 (b)): the
 // walk ledger writes tenths of a metre, and a door's landing stands on a half
 // metre, so a whole-metre round here moved a token by 0.7 m after it landed.
@@ -292,7 +293,7 @@ async function projectedPresence({ repo, atMs, walk, engine, world, where, roll,
       ],
     };
   } catch (e) {
-    return { error: "presence-derivation-failed", detail: String(e?.message ?? e).slice(0, 200) };
+    return { error: "presence-derivation-failed", detail: plainReason(e, "files", "presence's derivation") };
   }
 }
 

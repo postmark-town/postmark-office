@@ -522,7 +522,8 @@ test("AN UNREADABLE RECORD IS NAMED — it must not come back looking like an em
   const broken = await servedEnterExitLedger(repo, { env: RECORD_ON });
   assert.equal(broken.derived.incomplete, true, "a reading that could not reach the record must say so");
   assert.match(broken.derived.journal_unread, /FROZEN ERA ONLY/);
-  assert.match(broken.derived.journal_unread, /acts/, "and it must name what it could not read, not merely that it failed");
+  assert.match(broken.derived.journal_unread, /^the passage record could not be read \(the record did not answer\)/, "and it must name what it could not read, not merely that it failed");
+  assert.doesNotMatch(broken.derived.journal_unread, /relation|does not exist/, "in a plain reason, never the store's own words (POS-657)");
 
   // and the true-empty case must NOT be labelled incomplete, or the label means
   // nothing and every reader learns to ignore it. A record that ANSWERS and

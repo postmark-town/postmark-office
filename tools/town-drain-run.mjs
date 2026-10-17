@@ -37,7 +37,7 @@ import { fileURLToPath } from "node:url";
 import { oauthSchema } from "../src/oauth.mjs";
 import { openPaper } from "../src/paperwork.mjs";
 import { runTownDrain } from "../src/town-bridge.mjs";
-import { indexSwitched, UNREACHABLE_DEFECT } from "../src/index-probe.mjs";
+import { UNREACHABLE_DEFECT } from "../src/index-probe.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const argOf = (n, d = null) => { const i = process.argv.indexOf(n); return i !== -1 ? process.argv[i + 1] : d; };
@@ -61,17 +61,10 @@ if (DATE && !/^\d{4}-\d{2}-\d{2}$/.test(DATE)) {
   process.exit(2);
 }
 
-// THE DOORS' INDEX IS THE STORE'S, ALWAYS (POS-268 part 5b): its resident
-// handles and letter ids, loaded once here. office.db is not built any more, so
-// this process takes the switch itself rather than inheriting it: a ferry unit
-// whose environment lost TOWN_INDEX_READS=store would otherwise replay the log
-// against a file frozen on the day the rehydrate stopped. A store that cannot
-// answer stops the run before a row is replayed, cursor unmoved: replaying
-// against no index would bounce every letter past it.
-if (!indexSwitched()) {
-  console.error(`[town-drain] TOWN_INDEX_READS is ${JSON.stringify(process.env.TOWN_INDEX_READS ?? null)} here; the drain reads the store's town index regardless (office.db is retired, POS-268 5b)`);
-  process.env.TOWN_INDEX_READS = "store";
-}
+// THE DOORS' INDEX IS THE STORE'S (POS-268 part 5b): its resident handles and
+// letter ids, loaded once here. A store that cannot answer stops the run before
+// a row is replayed, cursor unmoved: replaying against no index would bounce
+// every letter past it.
 const { refreshStoreProbe } = await import("../src/town-index-store.mjs");
 if (!(await refreshStoreProbe({ logins: false }))) { console.error(`[town-drain] ${UNREACHABLE_DEFECT}`); process.exit(1); }
 // THE TOWN LOG'S PAPER (POS-271), opened the way the office opens its own:

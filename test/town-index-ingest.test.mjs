@@ -1,5 +1,5 @@
 // town-index-ingest.test.mjs — the town index in the store (POS-268), held to
-// office.db on a real Postgres.
+// the full derivation on a real Postgres.
 //
 //   EMBEDDED_PG_DIR=<dir with embedded-postgres> node --test test/town-index-ingest.test.mjs
 //
@@ -8,8 +8,9 @@
 // snapshot plus the delta equals the full derivation. So a throwaway town is
 // SEEDED at its first commit, carried across a crossing (ingested at the seal
 // with --snapshot), then carried to a later commit as a plain delta, and every
-// table in the store must then equal what src/hydrate.mjs writes into office.db
-// at that same commit.
+// table in the store must then equal the full derivation at that same commit
+// (src/town-index.mjs § deriveTownIndex, what office.db was built from until
+// POS-656), run in a fresh process as the rehydrate ran it.
 //
 // The town's own tools (stamp-mint, mail-state, quest-progress and what they
 // read) are copied from the office's pinned town-clone, and the stamp ledger is
@@ -21,7 +22,6 @@ import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
@@ -107,35 +107,48 @@ after(async () => {
 const at = (s) => git("checkout", "-q", "--detach", s);
 const writesOf = (out) => Object.fromEntries(Object.entries(out.tally).filter(([, t]) => t.inserted || t.deleted));
 
-/** Every table: the store's rows (without `digest`) against office.db's, as sorted multisets. */
-async function assertEqualToHydrate(label) {
-  const dbPath = join(tmp, `office-${label}.db`);
-  execFileSync(process.execPath, [join(ROOT, "src", "hydrate.mjs"), "--town", town, "--db", dbPath], { stdio: "ignore" });
-  const db = new DatabaseSync(dbPath, { readOnly: true });
-  try {
-    for (const [name, { cols }] of Object.entries(TOWN_TABLES)) {
-      const norm = (rows) => rows.map((r) => JSON.stringify(cols.map((k) => r[k] ?? null))).sort();
-      const office = norm(db.prepare(`SELECT ${cols.join(", ")} FROM ${name}`).all());
-      const stored = norm((await c.query(`SELECT ${cols.join(", ")} FROM town_${name}`)).rows);
-      assert.deepEqual(stored, office, `${label}: town_${name} differs from office.db's ${name}`);
-    }
-  } finally { db.close(); }
+// The full derivation at the checkout, in a process of its own (the town's
+// tools are imported from the checkout, and a module imported once is cached):
+// the rows by table, in TOWN_TABLES' column order.
+const DERIVE = `
+import { writeFileSync } from "node:fs";
+const { deriveTownIndex } = await import(process.env.DERIVE_MODULE);
+const quiet = { log() {}, info() {}, warn() {}, error() {} };
+const { tables } = await deriveTownIndex(process.env.DERIVE_TOWN, { log: quiet });
+writeFileSync(process.env.DERIVE_OUT, JSON.stringify(tables));
+`;
+function derived(label) {
+  const out = join(tmp, `derived-${label}.json`);
+  execFileSync(process.execPath, ["--input-type=module", "-e", DERIVE], { stdio: "ignore",
+    env: { ...process.env, DERIVE_MODULE: pathToFileURL(join(ROOT, "src", "town-index.mjs")).href, DERIVE_TOWN: town, DERIVE_OUT: out } });
+  return JSON.parse(readFileSync(out, "utf8"));
 }
 
-test("seed, then the crossing as a snapshot, then a delta: every table equals hydrate.mjs at the same commit", async (t) => {
+/** Every table: the store's rows (without `digest`) against the full derivation's, as sorted multisets. */
+async function assertEqualToDerivation(label) {
+  const tables = derived(label);
+  for (const [name, { cols }] of Object.entries(TOWN_TABLES)) {
+    const norm = (rows) => rows.map((r) => JSON.stringify(cols.map((k, i) => (Array.isArray(r) ? r[i] : r[k]) ?? null))).sort();
+    const whole = norm(tables[name] ?? []);
+    const stored = norm((await c.query(`SELECT ${cols.join(", ")} FROM town_${name}`)).rows);
+    assert.deepEqual(stored, whole, `${label}: town_${name} differs from the full derivation's ${name}`);
+  }
+}
+
+test("seed, then the crossing as a snapshot, then a delta: every table equals the full derivation at the same commit", async (t) => {
   if (skip) return t.skip(skip);
   at(sha.seed);
   await ingest(c, { townRepo: town, sha: sha.seed, seed: true });
-  await assertEqualToHydrate("seed");
+  await assertEqualToDerivation("seed");
 
   at(sha.seal);
   const crossing = await ingest(c, { townRepo: town, sha: sha.seal, snapshot: true });
   assert.ok(crossing.tally.stamps.inserted > 0, "the mint pass's lines were folded in (added to the seed's fold, not refolded)");
-  await assertEqualToHydrate("crossing");
+  await assertEqualToDerivation("crossing");
 
   at(sha.after);
   await ingest(c, { townRepo: town, sha: sha.after });
-  await assertEqualToHydrate("after");
+  await assertEqualToDerivation("after");
 
   const snaps = (await c.query("SELECT sha, kind FROM town_index_snapshots ORDER BY ingested_at")).rows;
   assert.deepEqual(snaps.map((r) => [r.kind, r.sha]), [["seed", sha.seed], ["crossing", sha.seal]], "the seed and the crossing's seal are recorded; a plain delta is not a snapshot");
@@ -170,7 +183,7 @@ test("a delta writes only what moved: one bulletin edit writes the bulletin row,
     bulletin: { inserted: 1, deleted: 1 },    // the one row, replaced
     meta: { inserted: 1, deleted: 1 },        // as_of
   });
-  await assertEqualToHydrate("edit");
+  await assertEqualToDerivation("edit");
 });
 
 test("a restart reads the snapshot: a second ingest at the head writes nothing", async (t) => {

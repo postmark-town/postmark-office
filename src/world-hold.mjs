@@ -62,8 +62,11 @@ import { worldFreezeBounce } from "./freeze.mjs";
 import { readAttachments, declareAttachment } from "./dynamic-entities.mjs";
 import { holdEdgeOnActs } from "./hold-edge.mjs";
 import { IN_READ_WORKER } from "./read-workers.mjs";
-import { classDials } from "./world-classes.mjs";
+import { classDials, classProperty } from "./world-classes.mjs";
+import { holdingOf } from "./holding-law.mjs"; // the resident's capacity, read from the class tree (LOGOS v2, O1)
 import { perceived } from "./act-watch.mjs"; // POS-637 PR-B: every act door perceives creatures
+import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
+import { markClassOf } from "./world-grants.mjs"; // the kind rung: a mark's class in both forms (LOGOS v2, O1)
 
 /** The thing class's own params, read from the record every time (never cached here). */
 export const thingDials = () => classDials("thing");
@@ -259,6 +262,7 @@ export const HOLD_TOOLS = [
     inputSchema: { type: "object", properties: {
       thing: { type: "string", description: "the thing's mark id, <by>/<slug> — as ids appear in the telling. A unit that was set down is a mark too: name it to take it back, or with act: \"consume\" to eat it where it stands" },
       to: { type: "string", description: "the resident who takes it (a give), or a chest's id to put counted units into it. Omit to set it down where you stand, or to pick up a thing standing on the ground" },
+      kind: { type: "string", description: "BY KIND (LOGOS v2): which kind — a class id, e.g. a kind of candy. A take that names no kind is pot luck over everything the holder holds, and naming one narrows the draw; a give with one kind in hand may omit it. With from: omitted, the one holder in reach that holds it is the source, and several are refused with the candidates listed" },
       label: { type: "string", description: "COUNTED UNITS (candy): which label — e.g. a candy's slug. With one label in hand or in the chest it may be omitted; with several it must be named, and an omission is refused listing what is there" },
       count: { type: "number", description: "COUNTED UNITS: how many, a whole number (default 1). A set-down is always one unit, one mark, one stamp" },
       from: { type: "string", description: "COUNTED UNITS: the chest to take from, <by>/<slug> — you stand within its extent to take" },
@@ -917,7 +921,7 @@ export async function readHoldEffects({ handles = [], sinceCrossing, nowCrossing
     const rows = await storeHoldingRows({ since: sinceCrossing, until: nowCrossing });
     return { readable: true, events: holdEffectsFrom({ rows, handles, sinceCrossing, nowCrossing }) };
   } catch (e) {
-    return { readable: false, events: [], reason: `the holding record could not be read (${String(e?.message ?? e).slice(0, 160)})` };
+    return { readable: false, events: [], reason: `the holding record could not be read (${plainReason(e, "record", "the holding record")})` };
   }
 }
 
@@ -1141,7 +1145,7 @@ export async function fileSetDownAmend({ did, stood, key, actId = null, deps = {
     const amend = await fileAuthorsAmend({ thing, stood, key, actor, actId, writtenAt: did.at ?? null, deps });
     return { ...base, whose: "your household's", amend };
   } catch (e) {
-    return { ...base, whose: "your household's", amend: { filed: false, why: `the amend door refused: ${String(e?.defect ?? e?.message ?? e).slice(0, 200)}` } };
+    return { ...base, whose: "your household's", amend: { filed: false, why: `the amend door refused: ${String(e?.defect ?? plainReason(e, "record", "a set-down's amend")).slice(0, 200)}` } };
   }
 }
 
@@ -1190,7 +1194,7 @@ export async function fileAuthorsAmend({ thing, stood, key, actor, actId = null,
       ...(res?.put_forward === true ? {} : { to_publish: res?.to_publish ?? null }),
     };
   } catch (e) {
-    return { filed: false, why: `the amend door refused: ${String(e?.defect ?? e?.message ?? e).slice(0, 200)}` };
+    return { filed: false, why: `the amend door refused: ${String(e?.defect ?? plainReason(e, "record", "a set-down's amend")).slice(0, 200)}` };
   }
 }
 
@@ -1276,8 +1280,8 @@ export function setDownNote(setDown) {
 }
 
 // POS-637 PR-B: the act, perceived by any creature whose ring holds it (act-watch.mjs § perceived).
-export async function callHoldTool(name, args = {}, key = null) { return perceived(() => holdAct(name, args, key)); }
-async function holdAct(name, args = {}, key = null) {
+export async function callHoldTool(name, args = {}, key = null, { verb = null } = {}) { return perceived(() => holdAct(name, args, key, verb)); }
+async function holdAct(name, args = {}, key = null, verb = null) {
   if (name === "world_hold") { const fz = worldFreezeBounce(); if (fz) return fz; }
   const actor = actingHandle(args, key);
   // ⚑ THE READ ASKS FOR A READ HANDLE, AND ONLY THE WRITE ASKS FOR A WRITE ONE
@@ -1339,7 +1343,9 @@ async function holdAct(name, args = {}, key = null) {
           : {}),
         holding: page.map((id) => ({ thing: id, made_by: id.split("/")[0] })),
         // THE COUNTED HOLDING (WLD-27): one edge per label, and what it shows.
-        units: await unitsHeldBy(actor),
+        ...((await import("./chests-candy.mjs")).chestsCandyOn() ? { units: await unitsHeldBy(actor) } : {}),
+        // BY KIND (LOGOS v2, O2; review-610 S1): live whatever WORLD_CHESTS_CANDY says — the kind doors are not #499's
+        kinds: await (await import("./world-kinds.mjs")).kindsHeldBy(actor),
       };
     }
     // ── TWO INPUTS THIS DOOR DOES NOT YET COMPUTE ──────────────────────────
@@ -1368,6 +1374,14 @@ async function holdAct(name, args = {}, key = null) {
     // — a door that promised enforcement it does not perform would be the exact
     // schema-vs-runtime defect this branch flagged on `leave_mark`'s `tier:`, and
     // it is not better for being mine.
+    // ── BY KIND (LOGOS v2, lane O2) — the kind door, the same lane and queue ──
+    // Every count that names no `label:` is a kind's: take, give and refill by
+    // kind (world-kinds.mjs). A `label:` is #499's door, below.
+    {
+      const { kindRouteOf, callKinds } = await import("./world-kinds.mjs");
+      const route = kindRouteOf(args, verb);
+      if (route) return await callKinds(route, args, key, actor, await (await import("./world-units.mjs")).liveUnitDeps());
+    }
     // ── COUNTED UNITS (WLD-27) — their own door, the same lane and queue ─────
     if (args.thing == null && args.to == null && args.from == null && args.label == null && args.count == null && args.act == null)
       throw bounce(422, "which thing?", "a thing's mark id, <by>/<slug> — or label:/count:/from: for counted units");
@@ -1408,10 +1422,12 @@ async function holdAct(name, args = {}, key = null) {
     const { guardedAttachments: guardRows } = await import("./world2-guards.mjs");
     const preRows = await guardRows();
     const preHolder = liveHolder(preRows, String(args.thing));
-    // A THING A CHEST HOLDS (WLD-27): naming it is a take aimed at the chest.
+    // A THING A HOLDER HOLDS (WLD-27; LOGOS v2, O2): naming it takes that mark out
+    // of its holder — the kind door's, whose holder is any thing with holder: true.
     if (preHolder != null && String(preHolder).includes("/") && args.to == null) {
-      const { callUnits, liveUnitDeps } = await import("./world-units.mjs");
-      return await callUnits("thing-from-chest", { ...args, from: String(preHolder) }, key, actor, await liveUnitDeps());
+      const { callKinds } = await import("./world-kinds.mjs");
+      const { liveUnitDeps } = await import("./world-units.mjs");
+      return await callKinds("thing-from-holder", { ...args, from: String(preHolder) }, key, actor, await liveUnitDeps());
     }
     refuseGiveOfUnheld({ thing: args.thing, to: args.to ?? null, actor, holder: preHolder });
     const face = faceOf(preHolder, args.to ?? null);
@@ -1420,8 +1436,9 @@ async function holdAct(name, args = {}, key = null) {
     if (face === "take") {
       let m = null;
       try { m = (await (await import("./world.mjs")).worldMarkById(String(args.thing))).mark; } catch { m = null; }
-      if (m?.class === "chest" && m.portable === false)
-        throw bounce(409, `${args.thing} is fixed where it stands`, "a chest declared portable: false (a bowl) is not carried — take from it instead: world { do: \"take\", args: { from: \"" + args.thing + "\" } }. Nothing was recorded.");
+      // FROM THE thing/portable PROPERTY (sovereign, default true), for any thing (LOGOS v2, O2; review-610 B2)
+      if (m && !(await import("./kind-holding.mjs")).portableMark(m, classProperty))
+        throw bounce(409, `${args.thing} is fixed where it stands`, "its maker made it portable: false, so it is not carried; if it holds things, take from it instead: world { do: \"take\", args: { from: \"" + args.thing + "\" } }. Nothing was recorded.");
     }
 
     // The hold lane is flipped here — the door refused above if it was not —
@@ -1585,7 +1602,8 @@ export function holdTurn(fn) {
  * unit is one. The cap is the thing class's declared `carry_cap`, read here.
  */
 async function carryForThings({ who, attachments }) {
-  const cap = thingDials()?.carry_cap;
+  // the resident's own capacity (constitution, 24), property first; the thing class's older carry_cap second (G4)
+  const cap = holdingOf({ className: "resident", classProperty, legacy: { capacity: thingDials()?.carry_cap } }).capacity;
   if (!Number.isInteger(cap)) return;
   const [{ storeHoldingRows }, { foldUnits, totalOf, isUnitRow, refuseOverCarry }] = await Promise.all([import("./world2-guards.mjs"), import("./world-stacks.mjs")]);
   const { inFlightFor } = await import("./world-units.mjs");
@@ -1603,6 +1621,6 @@ async function unitsHeldBy(handle) {
       import("./world2-guards.mjs"), import("./world-stacks.mjs"), import("./world-units.mjs"), import("./law-snapshot.mjs")]);
     return holdsBlock(foldUnits((await storeHoldingRows()).filter(isUnitRow)), handle, classViewOf(lawSnapshot()));
   } catch (e) {
-    return { unreadable: `the counted holding could not be read (${String(e?.message ?? e).slice(0, 160)})` };
+    return { unreadable: `the counted holding could not be read (${plainReason(e, "record", "the counted holding")})` };
   }
 }

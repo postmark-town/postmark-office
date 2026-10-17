@@ -146,11 +146,15 @@ export function fundGuards({ engine, entries, clone, pot, handle, usd, receiptRe
     treasury: dial?.treasury ?? null,
   });
   if (!intake.ok) {
+    // A once pot (POS-653: it closes at fill) has no next epoch to promise.
+    const once = potMeta?.closes_at_fill === true || potMeta?.epoch_cadence === "once";
     return {
       ok: false, code: 409, defect: intake.error,
       hint: intake.headroom > 0
-        ? `this pot can still take $${intake.headroom} this epoch — send that much and the whole of it converts`
-        : "this pot has what it asked for; the board has others, and the next epoch opens fresh",
+        ? `this pot can still take $${intake.headroom}${once ? "" : " this epoch"} — send that much and the whole of it converts`
+        : once
+          ? "this pot has what it asked for, once and for good; the board has others"
+          : "this pot has what it asked for; the board has others, and the next epoch opens fresh",
       headroom: intake.headroom,
     };
   }

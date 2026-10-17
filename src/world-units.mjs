@@ -37,7 +37,11 @@ import {
 import { holdingsOf, sameHousehold, holdTurn, liveHolder, rowsFor, holdingEntry } from "./world-hold.mjs";
 import { chestRoomGuard } from "./chest-lock.mjs";
 import { dropUndoGuard, undoNonce, dropSequenceGuard } from "./drop-recovery.mjs";
-import { faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
+import { faultLogged, plainReason } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
+import { markClassOf } from "./world-grants.mjs";
+import { holdingOf } from "./holding-law.mjs"; // holder, capacity, open: read from the class tree (LOGOS v2, O1)
+import { snapProperty } from "./law-classes.mjs"; // the kind rung: a mark's class in both forms (LOGOS v2, O1)
+import { chestsCandyOn, chestsCandyOffError } from "./chests-candy.mjs"; // WLD-27 ships dark until LOGOS v2's doors replace it
 
 // ── SLOTS HELD FOR AN ACT STILL IN FLIGHT (Bevel's review, finding 3) ───────
 //
@@ -117,6 +121,7 @@ export function classViewOf(snap) {
     record: (name) => { const r = rec(name); return r ? { ...r, dials: dialsOf(name) } : null; },
     extendsOf: (name) => (rec(name)?.extends ? String(rec(name).extends) : null),
     dials: dialsOf,
+    property: (name, prop) => snapProperty(snap, name, prop),
     labels: () => candyLabels(rec("candy")),
     readable: Boolean(snap?.classes?.size),
   };
@@ -142,9 +147,27 @@ export async function liveUnitDeps() {
       const s = await world.residentStandpoint(String(actor)).catch(() => null);
       return hold.armsLengthOrThrow({ thing: "units", to, here: s?.placed ? { x: s.x, y: s.y } : null, actor });
     },
+    // WHERE A HOLDER IS NOW (LOGOS v2, O2; review-610 B1): in someone's hands, set down, or where it was made
+    holderPlace: async (id, mark) => {
+      const rows = await guards.standsRowsFromStore(String(id)).catch(() => null);
+      if (!rows) return { holder: null, at: mark?.at ?? null, moved: false };
+      const holder = hold.liveHolder(rows.attachments ?? [], String(id));
+      if (holder) return { holder: String(holder), at: null, moved: false };
+      const drop = hold.latestDrop(rows.journal ?? [], String(id));
+      if (!drop) return { holder: null, at: mark?.at ?? null, moved: false };
+      const marks = await world.worldMarksAll().catch(() => []);
+      const at = journal.composeAnchor(drop.at ?? {}, (mid) => marks.find((m) => m.id === mid)?.at ?? null);
+      return at ? { holder: null, at, moved: true } : { holder: null, at: mark?.at ?? null, moved: false };
+    },
     standpoint: async (actor) => { const s = await world.residentStandpoint(String(actor)).catch(() => null); return s?.placed ? { x: s.x, y: s.y } : null; },
     householdOf: await (async () => { try { return await (await import("./households.mjs")).householdLookup(); } catch { return null; } })(),
-    append: (entry, opts = {}) => journal.appendActFlipped(null, entry, opts),
+    // `also`: further acts that commit in the SAME transaction as this one, or none of them do (O2; review-610 S4)
+    append: async (entry, { guard = null, also = [] } = {}) => {
+      if (!also.length) return journal.appendActFlipped(null, entry, guard ? { guard } : {});
+      const { insertAct } = pen;
+      const rows = also.map((e) => journal.normalizeRow(e));
+      return journal.appendActFlipped(null, entry, { guard: async (client) => { if (guard) await guard(client); for (const r of rows) await insertAct(client, r, null); } });
+    },
     stamp: (actor) => world.witnessStamp(actor),
     crossing: () => crossings.currentCrossing(),
     household: (key) => branches.resolvedWorldHousehold(key),
@@ -211,7 +234,7 @@ export function holdsBlock(fold, holder, view, things = []) {
 /** The whole things a holder holds, each with its class from the record. */
 async function thingsHeldBy(attachments, holder, markById) {
   const out = [];
-  for (const id of holdingsOf(attachments, String(holder))) out.push({ thing: id, class: (await markById(id).catch(() => null))?.class ?? "thing" });
+  for (const id of holdingsOf(attachments, String(holder))) out.push({ thing: id, class: markClassOf(await markById(id).catch(() => null)) ?? "thing" });
   return out;
 }
 
@@ -236,13 +259,33 @@ function topClassOf(fold, holder, view, label = null) {
 }
 const refuseIfTaken = (klass, view) => { const r = takenRefusal(klass, view.record, view.extendsOf); if (r) throw r; };
 
-const carryOf = (view) => { const cap = view.dials("thing")?.carry_cap; return Number.isInteger(cap) ? cap : null; };
+// THE CARRY is the resident's own capacity (LOGOS v2: "On `resident`: `holder:
+// true` and `capacity: 24`, both constitution and locked", ruled 16:03–16:05),
+// read from the class tree first and the thing class's older `carry_cap` dial
+// second (G4). Constitution, so no resident's own field moves it.
+const carryOf = (view) => holdingOf({ className: "resident", classProperty: (n, p) => view.property?.(n, p) ?? null, legacy: { capacity: view.dials("thing")?.carry_cap } }).capacity;
+// A holder's dials, in the chest door's shape, PROPERTY FIRST: capacity and its
+// bounds, and open (the chest's `welcome`), from the mark's class lineage and
+// the mark's own sovereign fields; the chest class's older dials second (G4).
+function chestDialsFor(view, mark) {
+  const legacy = view.dials("chest");
+  const className = markClassOf(mark) ?? "chest";
+  const h = holdingOf({ mark, className, classProperty: (n, p) => view.property?.(n, p) ?? null,
+    legacy: { capacity: legacy.capacity, capacity_min: legacy.capacity_min, capacity_max: legacy.capacity_max } });
+  const classCap = holdingOf({ className, classProperty: (n, p) => view.property?.(n, p) ?? null, legacy: { capacity: legacy.capacity } }).capacity;
+  const out = { ...legacy };
+  if (classCap != null) out.capacity = classCap;
+  if (h.min != null) out.capacity_min = h.min;
+  if (h.max != null) out.capacity_max = h.max;
+  if (h.open != null) out.welcome = h.open ? "open" : "closed";
+  return out;
+}
 
 async function chestOrThrow(deps, id, view) {
   const mark = await deps.markById(id);
   if (!mark) throw bounce(404, `${id} does not stand on the world`, "a chest is a published mark; a private draft holds nothing yet. Nothing was recorded.");
-  if (mark.class !== "chest") throw bounce(422, `${id} is not a chest`, `it is ${mark.class ? `a ${mark.class}` : "an unclassed mark"}; units go into chests and residents' hands. Nothing was recorded.`);
-  return { mark, capacity: capacityOf(mark, view.dials("chest")) };
+  if (markClassOf(mark) !== "chest") throw bounce(422, `${id} is not a chest`, `it is ${markClassOf(mark) ? `a ${markClassOf(mark)}` : "an unclassed mark"}; units go into chests and residents' hands. Nothing was recorded.`);
+  return { mark, capacity: capacityOf(mark, chestDialsFor(view, mark)) };
 }
 
 /**
@@ -250,6 +293,8 @@ async function chestOrThrow(deps, id, view) {
  * key's own resident (callHoldTool § actingHandle); the freeze was asked.
  */
 export async function callUnits(route, args, key, actor, deps) {
+  // DARK BY DEFAULT (chests-candy.mjs): every counted-unit route, before any read
+  if (!chestsCandyOn()) throw chestsCandyOffError();
   const view = deps.classes();
   if (!view.readable) throw bounce(503, "the class layer could not be read, so the office cannot tell candy from anything else",
     "counted units read the candy, chest and thing classes from the record; nothing was recorded — try again when the law is loaded");
@@ -259,7 +304,7 @@ export async function callUnits(route, args, key, actor, deps) {
     case "take": {
       const from = String(args.from);
       const { mark } = await chestOrThrow(deps, from, view);
-      if (welcomeOf(mark, view.dials("chest")) !== "open") {
+      if (welcomeOf(mark, chestDialsFor(view, mark)) !== "open") {
         const same = sameHousehold(String(mark.by ?? from.split("/")[0]), actor, deps.householdOf);
         if (!same.same) throw bounce(403, `${from} is closed to other households`, "its welcome is closed: only its maker's household takes from it. Nothing was recorded.");
       }
@@ -358,7 +403,7 @@ export async function callUnits(route, args, key, actor, deps) {
       try {
         filed = await deps.leave(payload, key, { dropUnit: { actId: dropped.seq, label: dropped.label } });
         if (filed?.error) { why = filed.defect ?? filed.error; filed = null; }
-      } catch (e) { why = String(e?.defect ?? e?.message ?? e).slice(0, 200); }
+      } catch (e) { why = String(e?.defect ?? plainReason(e, "record", "a dropped unit's filing")).slice(0, 200); }
       if (!filed) {
         // THE CALL FAILED; WHAT COMMITTED? (Wright's independent review, F0.)
         // `leaveMarkViaOffice` can throw after its claim committed, so the
@@ -376,7 +421,7 @@ export async function callUnits(route, args, key, actor, deps) {
           } catch (e) {
             if (e?.filed) committed = e.filed;
             else if (e?.undoneAlready) back = { seq: e.undoneAlready, already: true };
-            else stuck = String(e?.defect ?? e?.message ?? e).slice(0, 200);
+            else stuck = String(e?.defect ?? plainReason(e, "record", "a unit's undo")).slice(0, 200);
           } finally { release(actor, 1); }
         });
         if (committed)
@@ -475,11 +520,11 @@ async function markExit(route, args, key, actor, deps, view, cap) {
   if (!isDroppedUnitMark(mark)) throw bounce(422, `${id} is not a unit that was set down`, "only a dropped unit's mark goes back into a holding or is consumed where it stands. Nothing was recorded.");
   const label = String(mark.label);
   if (route === "consume-in-place") {
-    const klass = classOfLabelIn(view)(label) ?? String(mark.class);
+    const klass = classOfLabelIn(view)(label) ?? String(markClassOf(mark));
     if (!ancestry(klass, view.extendsOf).includes("consumable"))
       throw bounce(422, `${label} is not a consumable`, "Nothing was recorded.");
   }
-  refuseIfTaken(String(mark.class), view);
+  refuseIfTaken(String(markClassOf(mark)), view);
   await deps.reachTake(id, actor);
   const by = String(mark.by ?? id.split("/")[0]);
   const slug = id.slice(id.indexOf("/") + 1);
@@ -547,7 +592,7 @@ async function markExit(route, args, key, actor, deps, view, cap) {
           payload: { mark: id, by, exit: cause, ...(acted.already ? { finished_by: actor } : {}), ...(late.length ? { late_returns: late } : {}) } }));
     } catch (e) {
       late = e?.returned ?? late;
-      withdrawn = { withdrawn: false, why: String(e?.defect ?? e?.message ?? e).slice(0, 200),
+      withdrawn = { withdrawn: false, why: String(e?.defect ?? plainReason(e, "record", "a unit's withdrawal")).slice(0, 200),
         retry: "ask again: the unit is not gained and no stake is returned a second time; only the withdrawal is tried again, after any stake still open on the mark is returned" };
     }
   }
@@ -664,11 +709,11 @@ export function chestFace({ mark, fold, stocked, labels, view, heldBy = null, th
   const block = holdsBlock(fold, id, view, things);
   const by = String(mark.by ?? id.split("/")[0]);
   let capacity = null;
-  try { capacity = capacityOf(mark, view.dials("chest")); } catch { capacity = null; }
+  try { capacity = capacityOf(mark, chestDialsFor(view, mark)); } catch { capacity = null; }
   const unstocked = !stocked.has(id) && !labelOfCreator(labels, by);
   return {
     chest: id, by, at: mark.at ?? null, extent: mark.extent ?? null,
-    capacity, portable: portableOf(mark, view.dials("chest")), welcome: welcomeOf(mark, view.dials("chest")),
+    capacity, portable: portableOf(mark, view.dials("chest")), welcome: welcomeOf(mark, chestDialsFor(view, mark)),
     count: block.count, class: block.class, shows: block.count ? block.shows : "empty", edges: block.edges,
     ...(block.things ? { things: block.things } : {}),
     ...(heldBy ? { held_by: heldBy, carried_note: `${heldBy} is carrying it; it rides its holder and is drawn on their card, not as a pip of its own` } : {}),
@@ -691,7 +736,7 @@ async function liveReadDeps() {
 
 /** The whole things inside each chest, by chest id, with their classes from the marks in hand. */
 function thingsInChests(attachments, marks) {
-  const classOf = new Map(marks.map((m) => [String(m.id), m.class ?? "thing"]));
+  const classOf = new Map(marks.map((m) => [String(m.id), markClassOf(m) ?? "thing"]));
   const out = new Map();
   for (const t of new Set(attachments.map((r) => String(r.target)))) {
     const h = liveHolder(attachments, t);
@@ -711,7 +756,7 @@ export async function chestsRead(deps = null) {
   const stocked = stockedChests(units);
   const labels = view.labels();
   const inside = thingsInChests(attachments, marks);
-  const chests = marks.filter((m) => m?.class === "chest")
+  const chests = marks.filter((m) => markClassOf(m) === "chest")
     .map((mark) => chestFace({ mark, fold, stocked, labels, view, heldBy: liveHolder(attachments, String(mark.id)), things: inside.get(String(mark.id)) ?? [] }));
   return { chests, count: chests.length,
     reading_law: "a chest shows its label (or its contents' nearest common class) and its live count, folded from the record's acts at this read — never a stored number" };
@@ -734,7 +779,7 @@ export async function residentHolds(handle, deps = null) {
   const mine = labelOfCreator(labels, handle);
   const inside = thingsInChests(attachments, marks);
   const h = String(handle);
-  const chests = marks.filter((m) => m?.class === "chest"
+  const chests = marks.filter((m) => markClassOf(m) === "chest"
       && (String(m.by ?? String(m.id).split("/")[0]) === h || liveHolder(attachments, String(m.id)) === h))
     .map((mark) => chestFace({ mark, fold, stocked, labels, view, heldBy: liveHolder(attachments, String(mark.id)), things: inside.get(String(mark.id)) ?? [] }));
   return {
@@ -757,7 +802,7 @@ async function thingIntoChest(args, key, actor, deps, view) {
   const { capacity } = await chestOrThrow(deps, chestId, view);
   const mark = await deps.markById(thing);
   if (!mark) throw bounce(409, `${thing} does not stand on the world`, "only a published thing goes into a chest; a private draft changes no hands. Nothing was recorded.");
-  refuseIfTaken(String(mark.class ?? "thing"), view);
+  refuseIfTaken(String(markClassOf(mark) ?? "thing"), view);
   await deps.reachTake(chestId, actor);
   return holdTurn(async () => {
     const { units, attachments } = await deps.readRows();
@@ -781,12 +826,12 @@ async function thingIntoChest(args, key, actor, deps, view) {
 async function thingFromChest(args, key, actor, deps, view, cap) {
   const thing = String(args.thing), chestId = String(args.from);
   const { mark: chest } = await chestOrThrow(deps, chestId, view);
-  if (welcomeOf(chest, view.dials("chest")) !== "open") {
+  if (welcomeOf(chest, chestDialsFor(view, chest)) !== "open") {
     const same = sameHousehold(String(chest.by ?? chestId.split("/")[0]), actor, deps.householdOf);
     if (!same.same) throw bounce(403, `${chestId} is closed to other households`, "its welcome is closed: only its maker's household takes from it. Nothing was recorded.");
   }
   const mark = await deps.markById(thing);
-  refuseIfTaken(String(mark?.class ?? "thing"), view);
+  refuseIfTaken(String(markClassOf(mark) ?? "thing"), view);
   await deps.reachTake(chestId, actor);
   return holdTurn(async () => {
     const inFlight = await inFlightFor(actor, deps); // BEFORE the rows: see inFlightFor
@@ -804,14 +849,20 @@ async function thingFromChest(args, key, actor, deps, view, cap) {
  * shape — stamped strictly after the thing's newest holding row, the same
  * guard `declareHolding` keeps against the same-millisecond swallow.
  */
-async function writeThingHolding(deps, key, actor, attachments, { did, thing, holder, previous, madeBy }, { guard = null } = {}) {
+export async function writeThingHolding(deps, key, actor, attachments, change, { guard = null } = {}) {
+  const { entry, at } = await thingHoldingEntry(deps, key, actor, attachments, change);
+  const row = await deps.append(entry, guard ? { guard } : {});
+  return { seq: row?.actId ?? row?.seq ?? null, at, effect: entry.effect };
+}
+
+/** The holding act for a thing changing hands, composed and not written: `{ entry, at }` (LOGOS v2, O2: one transaction may carry several). */
+export async function thingHoldingEntry(deps, key, actor, attachments, { did, thing, holder, previous, madeBy }, stamp = null) {
   const prior = rowsFor(attachments, thing);
   const newest = prior.length ? Date.parse(prior[prior.length - 1].born_at) : NaN;
   const now = Date.now();
   const at = new Date(Number.isFinite(newest) && newest >= now ? newest + 1 : now).toISOString();
-  const { at: anchor, witnesses } = await deps.stamp(actor);
+  const { at: anchor, witnesses } = stamp ?? await deps.stamp(actor);
   const entry = holdingEntry({ did, thing, holder, previous_holder: previous, made_by: madeBy, policy: "cascade", declared_by: actor, at },
     { crossing: deps.crossing(), at: anchor, witnesses, cls: "holding", household: deps.household(key) });
-  const row = await deps.append(entry, guard ? { guard } : {});
-  return { seq: row?.actId ?? row?.seq ?? null, at, effect: entry.effect };
+  return { entry, at };
 }

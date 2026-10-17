@@ -27,7 +27,6 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { DatabaseSync } from "node:sqlite";
 
 import { stakesRowsFrom, stakesFor, doorstepStakes, stakeEnvelope, REGISTRY_PATH, SWEEP_RULE } from "../src/doorstep-stakes.mjs";
 import { pathAtRef } from "../src/world-branches.mjs";
@@ -38,7 +37,8 @@ import { pathToFileURL } from "node:url";
 import { nextSettlement, SETTLEMENT_CLOCK } from "../src/world-forecast.mjs";
 import { DOORSTEP_SEGMENTS } from "../src/queries.mjs";
 import { HOUSEHOLD_READABLE, HOUSEHOLD_READ_ENUM, HOUSEHOLD_READ_FIELDS, HOUSEHOLD_READS } from "../src/household-apex.mjs";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
+import { indexStore } from "./helpers/office-under-test.mjs";
 
 // ── the fixture household ───────────────────────────────────────────────────
 const MARKS = [
@@ -125,7 +125,7 @@ test("THE TWO ABSENCES · a projection that REFUSED lists the marks with escrow 
   assert.equal(seg.note, undefined, "no 'nothing at risk' sentence on an unmeasured page");
   // and a reader that THROWS is the same absence, disclosed
   const thrown = await stakesFor(["berthillon"], readers({ escrow: async () => { throw new Error("connection refused"); } }));
-  assert.match(thrown.unavailable, /could not be read \(connection refused\)/);
+  assert.match(thrown.unavailable, /could not be read \(the record did not answer\)/); // POS-657: never the error's own text
   assert.equal(thrown.at_risk, null);
 });
 
@@ -169,7 +169,7 @@ test("scope is the stances/rulings grammar: a named handle is one resident, bare
 
 test("the world record unreadable is a disclosed absence, not an empty page", async () => {
   const seg = await stakesFor(["berthillon"], readers({ world: async () => { throw new Error("no clone"); } }));
-  assert.match(seg.unavailable, /the world record could not be read \(no clone\)/);
+  assert.match(seg.unavailable, /the world record could not be read \(the world's files could not be read\)/); // POS-657
   assert.equal(seg.count, 0);
   assert.equal(seg.at_risk, null);
   assert.equal(seg.next_settlement.at, "2026-09-18T06:00:00.000Z", "the clock still answers");
@@ -220,13 +220,11 @@ test("the manifest names ten, `stakes` is the ninth, and `household read: \"stak
 
 test("the finished doorstep carries the segment, always — serves, args, and the domain — on both skins", async () => {
   const { doorstepBundle } = await import("../src/doorstep-bundle.mjs");
-  const dir = mkdtempSync(join(tmpdir(), "pm-stakes-"));
-  const dbPath = join(dir, "fixture.db");
-  fixtureDb(dbPath).close();
-  const db = new DatabaseSync(dbPath, { readOnly: true });
+  // the town index the doorstep reads: the store, seeded from the fixture town (POS-656)
+  const ix = await indexStore(fixtureTown(), { db: "stakes_doorstep" });
+  const restore = await ix.useInProcess();
   try {
-    const meta = { as_of: "fixturesha000000000000000000000000000000" };
-    const ctx = { db, key: null, meta, asOf: meta.as_of, canWrite: false, clone: null, pen: null, odb: null, dbPath: null };
+    const ctx = { key: null, asOf: "fixturesha000000000000000000000000000000", canWrite: false, clone: null, pen: null, odb: null };
     for (const slim of [false, true]) {
       const d = await doorstepBundle("wright", { ...ctx, slim });
       assert.ok(d.segments.includes("stakes"));
@@ -248,7 +246,7 @@ test("the finished doorstep carries the segment, always — serves, args, and th
         assert.equal(d.stakes.teach_at, undefined);
       }
     }
-  } finally { db.close(); rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
+  } finally { await restore(); await ix.stop(); }
 });
 
 // ── postmark#3757: THE WARNING IS THE SWEEP'S OWN RULE ──────────────────────

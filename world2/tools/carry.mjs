@@ -42,8 +42,11 @@
 // without a database. The clearing job does the reading and the writing.
 
 import { recordOf, containmentParentOf, worldRootOf, rankCandidates } from "./standing.mjs";
+import { extendsFromMarks, isSited } from "../../src/world-grants.mjs"; // the kind rung (LOGOS v2, O1)
 
-const POSITIONED = new Set(["sited", "parcel"]);
+// POSITIONED is SITED, in either form: `kind: sited`/`parcel`, or a `kind: thing`
+// whose class's lineage (read off the records' own class nodes) reaches sited.
+const positionedIn = (records) => { const lineage = extendsFromMarks(records); return (r) => isSited(r, lineage); };
 const isPoint = (p) => !!p && Number.isFinite(Number(p.x)) && Number.isFinite(Number(p.y));
 
 /** Did the mark's position move, and by how much? null for no move (words only, or extent only). */
@@ -85,6 +88,7 @@ export function carryPlan({ rows, movers, waiting = new Set(), houseOf = null })
 
   const house = (cred) => (typeof houseOf === "function" ? houseOf(cred) ?? cred : cred);
   const records = rows.map(recordOf);
+  const positioned = positionedIn(records);
   const bySlug = new Map();
   for (const [i, r] of records.entries()) if (!bySlug.has(r.slug)) bySlug.set(r.slug, { rec: r, row: rows[i] });
 
@@ -93,7 +97,7 @@ export function carryPlan({ rows, movers, waiting = new Set(), houseOf = null })
   const root = worldRootOf(records);
   const ranked = rankCandidates(records);
   const geoParent = new Map();
-  for (const r of records) if (POSITIONED.has(r.kind) && r.at) geoParent.set(r.slug, containmentParentOf(r, records, root, ranked));
+  for (const r of records) if (positioned(r) && r.at) geoParent.set(r.slug, containmentParentOf(r, records, root, ranked));
   // UP ONE STEP, BOTH WAYS. A mark rides if the mover is above it by any path
   // that mixes the two edges: the lamp filed in the house rides when the house
   // rides, whether the house rides because it stands inside the parcel or
@@ -118,7 +122,7 @@ export function carryPlan({ rows, movers, waiting = new Set(), houseOf = null })
     const moverHouse = house(recordOf(m.row)._cred);
     const riders = [], stayed = [], stuck = [];
     for (const { rec, row } of bySlug.values()) {
-      if (rec.slug === m.slug || !POSITIONED.has(rec.kind)) continue;
+      if (rec.slug === m.slug || !positioned(rec)) continue;
       if (!under(rec.slug, m.slug)) continue;
       if (house(rec._cred) !== moverHouse) { stayed.push({ slug: rec.slug, household: house(rec._cred) }); continue; }
       if (waiting.has(rec.slug)) { stuck.push({ slug: rec.slug, why: "it has its own claim waiting in this window" }); continue; }

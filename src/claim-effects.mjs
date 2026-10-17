@@ -42,6 +42,7 @@
 
 import { currentCrossing } from "./crossings.mjs";
 import { causeOf, refusalCheckOf, opposedLawOf } from "./mark-receipt.mjs";
+import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
 
 /** How many ferry crossings back the doorstep's `outcomes` and my-marks' `refused` look. */
 export const RULINGS_SINCE_CROSSINGS = 2;
@@ -176,7 +177,7 @@ export async function readClaimEffects({ key, handles = [], sinceCrossing, nowCr
     const { claimRowsSince } = await import("./world2-claims.mjs");
     rows = await claimRowsSince(since, { claimants: [...mineSet], slugs: [...onMyGround], key });
   } catch (e) {
-    return { readable: false, events: [], reason: `the docket store could not be read (${String(e?.message ?? e).slice(0, 160)})` };
+    return { readable: false, events: [], reason: `the docket store could not be read (${plainReason(e, "record", "the docket store")})` };
   }
 
   const mine = (id, row) => mineSet.has(row?.claimant) || mineSet.has(String(id).split("/")[0]);
@@ -389,6 +390,6 @@ export async function readHeadlines({ sinceCrossing, cap = 3 } = {}) {
     const rows = await claimRowsDecidedSince(since);
     return { readable: true, store: "docket", rows: headlinesFrom({ rows, cap }) };
   } catch (e) {
-    return { readable: false, rows: [], reason: `the crossing's own published/refused list could not be read (${String(e?.message ?? e).slice(0, 160)})` };
+    return { readable: false, rows: [], reason: `the crossing's own published/refused list could not be read (${plainReason(e, "record", "the crossing's published/refused list")})` };
   }
 }

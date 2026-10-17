@@ -107,6 +107,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { actsQuery } from "./world2-acts.mjs";
+import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
 
 /** The derived record, under its own name. */
 export const LEDGER_NEW = "WORLD/enter-exit-ledger.md";
@@ -396,7 +397,7 @@ export async function livePassageRows({ env = process.env } = {}) {
     _passages = mark ? { mark, rows: out } : null;
     return { rows: out, unread: null };
   } catch (e) {
-    return { rows: [], unread: `the passage record could not be read (${String(e?.message ?? e).slice(0, 160)}) — everything below is the FROZEN ERA ONLY, and any passage made since is missing from this answer rather than absent from the town` };
+    return { rows: [], unread: `the passage record could not be read (${plainReason(e, "record", "the passage record")}) — everything below is the FROZEN ERA ONLY, and any passage made since is missing from this answer rather than absent from the town` };
   }
 }
 

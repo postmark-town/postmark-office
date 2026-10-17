@@ -29,12 +29,12 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir, networkInterfaces } from "node:os";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { bootOnFreePort, freePort } from "./spawn-office.mjs";
 
 const STORES = [];
-const storeFor = async (dbPath) => { const x = await indexStore(dbPath); STORES.push(x); return x.env; };
+const storeFor = async (town) => { const x = await indexStore(town); STORES.push(x); return x.env; };
 test.after(async () => { for (const x of STORES) await x.stop(); });
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -44,9 +44,9 @@ let plain, plainBoot = "";
 let same, SAME, sameErr = "";
 
 // `env` is an object, or a function of the port the office is given.
-const boot = async (dbPath, IX_ENV, env, onOut, onErr = () => {}) => bootOnFreePort((port) => {
+const boot = async (town, IX_ENV, env, onOut, onErr = () => {}) => bootOnFreePort((port) => {
   const c = spawn(process.execPath, [
-    join(ROOT, "src", "server.mjs"), "--port", String(port), "--db", dbPath,
+    join(ROOT, "src", "server.mjs"), "--port", String(port),
     "--bouncer-now-ms", String(Date.parse("2026-10-13T14:00:00Z")),
   ], {
     env: {
@@ -65,16 +65,15 @@ const boot = async (dbPath, IX_ENV, env, onOut, onErr = () => {}) => bootOnFreeP
 
 before(async () => {
   tmp = mkdtempSync(join(tmpdir(), "postmark-office-box-local-"));
-  const dbPath = join(tmp, "fixture.db");
-  fixtureDb(dbPath).close();
-  const IX_ENV = await storeFor(dbPath);
+  const town = fixtureTown();
+  const IX_ENV = await storeFor(town);
   BOX = await freePort();
-  ({ child, port: PORT } = await boot(dbPath, IX_ENV, { OFFICE_BOX_PORT: String(BOX) }, (s) => { bootLine += s; }));
+  ({ child, port: PORT } = await boot(town, IX_ENV, { OFFICE_BOX_PORT: String(BOX) }, (s) => { bootLine += s; }));
   // An office with no OFFICE_BOX_PORT on a port that is not 4380: no box door.
-  ({ child: plain } = await boot(dbPath, IX_ENV, { OFFICE_BOX_PORT: "" }, (s) => { plainBoot += s; }));
+  ({ child: plain } = await boot(town, IX_ENV, { OFFICE_BOX_PORT: "" }, (s) => { plainBoot += s; }));
   // The operator's slip (the second review of #516): OFFICE_BOX_PORT names the
   // office's own --port. Its own bucket, its own office.
-  ({ child: same, port: SAME } = await boot(dbPath, IX_ENV, (port) => ({ OFFICE_BOX_PORT: String(port) }), () => {}, (s) => { sameErr += s; }));
+  ({ child: same, port: SAME } = await boot(town, IX_ENV, (port) => ({ OFFICE_BOX_PORT: String(port) }), () => {}, (s) => { sameErr += s; }));
 });
 
 after(async () => {

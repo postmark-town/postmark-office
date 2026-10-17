@@ -185,6 +185,10 @@ let pen = await install();
 after(() => { unread(); uninstallActsPen(); claimsPen.__setPoolForTest(null); delete process.env.WORLD2_PG; delete process.env.WORLD2_PG_URL; });
 
 const hold = await import("../src/world-hold.mjs");
+// The leave door asks the class's own makers (LOGOS v2, O1): the amend this drop files cites class: thing, so the law it reads states makers.
+const { seedMakersLaw } = await import("./helpers/makers-law.mjs");
+await seedMakersLaw();
+after(async () => (await import("../src/law-snapshot.mjs")).resetLawSnapshot());
 const { resetPathIndex } = await import("../src/world-journal.mjs");
 
 const KEITH = { household: "keithhouse", handles: new Set(["keith", "kin"]) };
@@ -960,20 +964,22 @@ test("OWN DROP: Keith setting down his own stool never waits on his house's word
 test("THE DOORSTEP CARRIES IT: Keith's morning page lists the waiting set-down, and the segment IS the read", async () => {
   const p = await fresh();
   const drop = await anaDrops(p);
-  const { DatabaseSync } = await import("node:sqlite");
-  const { SCHEMA } = await import("../src/schema.mjs");
+  const { emptyTown, setMeta, put } = await import("./fixture.mjs");
+  const { indexStore } = await import("./helpers/office-under-test.mjs");
   const { SEGMENT_META } = await import("../src/queries.mjs");
   const { doorstepBundle } = await import("../src/doorstep-bundle.mjs");
   const { callTool } = await import("../src/mcp.mjs");
-  const db = new DatabaseSync(":memory:");
+  // The town index is a real store (the suite's embedded one), read through the
+  // index's own pool seam: the record stays this file's in-memory pen.
+  const town = emptyTown();
+  setMeta(town, "as_of", "pos138fixture00000000000000000000000000"); setMeta(town, "town_path", "fixture"); setMeta(town, "hydrated_counts", "{}");
+  setMeta(town, "quest_registry", '{"quests":[]}');
+  put(town, "residents", { handle: "keith", json: JSON.stringify({
+    handle: "keith", is_office: false, last_active: null, address: { data: { since: "2026-01-01", joined: "2026-06-10" } } }) });
+  const IX = await indexStore(town);
+  const restore = await IX.useInProcess();
   try {
-    db.exec(SCHEMA);
-    const m = db.prepare("INSERT INTO meta VALUES (?, ?)");
-    m.run("as_of", "pos138fixture00000000000000000000000000"); m.run("town_path", "fixture"); m.run("hydrated_counts", "{}");
-    db.prepare("INSERT INTO residents VALUES (?, ?)").run("keith", JSON.stringify({
-      handle: "keith", is_office: false, last_active: null, address: { data: { since: "2026-01-01", joined: "2026-06-10" } } }));
-    const ctx = { db, key: KEITH, meta: { as_of: "pos138fixture00000000000000000000000000", quest_registry: '{"quests":[]}' },
-      asOf: "pos138fixture00000000000000000000000000", canWrite: false, clone: null, pen: null, odb: null, dbPath: null };
+    const ctx = { key: KEITH, asOf: "pos138fixture00000000000000000000000000", canWrite: false, clone: null, pen: null, odb: null };
     const seg = await underRecord(async () => (await doorstepBundle("keith", ctx)).stances);
     assert.equal(seg.serves, "household.stances", "no new segment name");
     assert.equal(seg.set_downs_awaiting?.length, 1, `the doorstep carries it: ${JSON.stringify(seg).slice(0, 400)}`);
@@ -981,7 +987,7 @@ test("THE DOORSTEP CARRIES IT: Keith's morning page lists the waiting set-down, 
     const asked = await underRecord(() => callTool("household", { read: "stances", ...seg.args }, ctx));
     const answerOf = (s) => Object.fromEntries(Object.entries(s).filter(([k]) => !SEGMENT_META.includes(k)));
     assert.deepEqual(answerOf(seg), asked, "ask the named read yourself and you get the same object back");
-  } finally { db.close(); }
+  } finally { await restore(); await IX.stop(); }
 });
 
 // ── THE PLACEHOLDER (1626f2f4) ───────────────────────────────────────────────

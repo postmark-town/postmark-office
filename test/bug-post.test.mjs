@@ -107,7 +107,7 @@ const HOUSES = [
   { slug: "starforge", ord: 3, residents: ["wright", "mari"], accounts: [GH_ACCOUNT.keemin] },
 ];
 const PINS = [{ handle: "finn", login: "finn-gh", gh_id: 1002 }];
-// The office's residents index (the door reads it from office.db; see mcp.mjs § rollOf).
+// The office's residents index (the door reads the store's roll; see mcp.mjs § rollOf).
 const ROLL = new Set(["wright", "keemin", "errant", "ada", "finn", "kinofire", "wayward-archivist", "mari"]);
 
 // ── GitHub, stubbed: the one GET an earned advance makes (bug-credit.mjs) ────

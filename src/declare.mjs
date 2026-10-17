@@ -825,7 +825,7 @@ export async function declareHousehold(args, key, { db, clone, odb, mintKey, com
 // ops.mjs is the model), then mints the credential from the office's own key
 // desk. Throws { code, field, defect, hint }.
 
-export async function declareViaOffice(clone, args, key, { db, odb, dbPath, mint = true, heardFrom = null } = {}) {
+export async function declareViaOffice(clone, args, key, { db, odb, mint = true, heardFrom = null } = {}) {
   const { join: pjoin, dirname: pdirname } = await import("node:path");
   const { fileURLToPath: p2f } = await import("node:url");
   const { execUnderTownLock, lockTimedOut, LOCK_BUSY } = await import("./town-lock.mjs");
@@ -846,7 +846,6 @@ export async function declareViaOffice(clone, args, key, { db, odb, dbPath, mint
       const payload = JSON.stringify({
         args: { ...args, handle: decl.handle },
         key: { ghId: key.ghId, ghLogin: key.ghLogin },
-        dbPath,
         ...(heardFrom ? { heardFrom } : {}),
       });
       let out;

@@ -14,16 +14,16 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
 import { createLoopLag, LAG_ALARM_MS, MINUTE_MS, stateFileFor } from "../src/loop-lag.mjs";
 import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 
 // The town index this file's offices read: a store seeded from each fixture
-// office.db (POS-268, office-under-test.mjs). Stopped when the file is done.
+// town (POS-268, office-under-test.mjs). Stopped when the file is done.
 const STORES = [];
-const storeFor = async (dbPath) => { const x = await indexStore(dbPath); STORES.push(x); return x.env; };
+const storeFor = async (town) => { const x = await indexStore(town); STORES.push(x); return x.env; };
 test.after(async () => { for (const x of STORES) await x.stop(); });
 
 const T0 = Date.parse("2026-09-27T01:00:00Z");
@@ -137,11 +137,10 @@ let PORT, child, tmp;
 
 before(async () => {
   tmp = mkdtempSync(join(tmpdir(), "postmark-office-loop-lag-"));
-  const dbPath = join(tmp, "fixture.db");
-  fixtureDb(dbPath).close();
-  const IX_ENV = await storeFor(dbPath);
+  const town = fixtureTown();
+  const IX_ENV = await storeFor(town);
   writeFileSync(join(tmp, "release.json"), JSON.stringify({ tag: "t", sha: "s", target: "dev" }));
-  ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--db", dbPath, "--release-root", tmp, "--oauth-db", seedStaticKeys(join(tmp, "oauth.db"), "loop-lag-test-key=keemin:wright")], {
+  ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--release-root", tmp, "--oauth-db", seedStaticKeys(join(tmp, "oauth.db"), "loop-lag-test-key=keemin:wright")], {
     env: { ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV, TOWN_CLONE: join(tmp, "no-clone"), WORLD_CLONE: join(tmp, "no-world") },
     stdio: ["ignore", "pipe", "pipe"],
   })));

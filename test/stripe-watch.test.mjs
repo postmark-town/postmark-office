@@ -120,8 +120,8 @@ function seamTown({ pots = { keep: 1000, small: 5 }, pins = { paz: { login: "p",
 }
 
 const ledgerText = (repo) => readFileSync(join(repo, "WHITE_PAGES", "stamp-ledger.md"), "utf8");
-/** The ledger's words without each line's ` · sig: …`, for a scan that must not match a random signature. */
-const unsigned = (text) => text.replace(/ · sig: \S+/g, "");
+/** The ledger's words without each line's trailing ` · sig: …` (the engine's own split, parseStampLedger: /^(.*) · sig: (\S+)$/), for a scan that must not match a random signature. */
+const unsigned = (text) => text.replace(/ · sig: \S+$/gm, "");
 const entriesOf = (repo) => ENGINE.parseStampLedger(ledgerText(repo));
 const ctx = (town, over = {}) => ({
   engine: ENGINE,

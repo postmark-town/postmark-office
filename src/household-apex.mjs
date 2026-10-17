@@ -42,7 +42,7 @@ import { standingBounce } from "./standing.mjs";
 // owner for every door (src/one-contract.mjs).
 import { judgeActFields, withRenamed, withRefused, renamedRow, READ_FIELDS, READ_TWINS } from "./one-contract.mjs";
 import { validateReadArgs } from "./validate-args.mjs"; // the flat tools' own validator, now at the read branch too
-import { resident as residentQ, home as homeQ, letterAnswer, letterParties, identityOf, indexAsOf, mailList, mailAwaiting, mailCorrespondents, outboxSettled, windowRead, DOORSTEP_SEGMENTS } from "./queries.mjs";
+import { letterParties, identityOf, DOORSTEP_SEGMENTS } from "./queries.mjs";
 import { doorstepBundle } from "./doorstep-bundle.mjs";
 import { worldBlockForHandle } from "./world.mjs";
 import { actionFields, declareStanceAtOffice, openStore, residueOf, parseEnvelope } from "./world-apex.mjs";
@@ -655,7 +655,8 @@ export const householdDispatchToolFor = (act) => ACTS[String(act ?? "").trim()]?
  *  the town's onboarding row already speaks for (2026-08-21): one obligation,
  *  one voice, rather than the same missing paper worded twice by two surfaces.
  *  The ids are the town quest-registry's own row ids, deliberately. */
-export async function paperGapRows(handle, { db, clone, worldBlock = worldBlockForHandle, key = null, parcelClaim = parcelClaimForHandle, ix = null, odb = null, asOf = null, fresh: given = null } = {}) {
+export async function paperGapRows(handle, { clone, worldBlock = worldBlockForHandle, key = null, parcelClaim = parcelClaimForHandle, ix = null, odb = null, asOf = null, fresh: given = null } = {}) {
+  ix ??= (await import("./town-index-store.mjs")).storeIndexPooled(clone);
   const gaps = [];
   let home = null;
   // READ-THROUGH (POS-603): the HOME check reads the page through the same
@@ -664,7 +665,7 @@ export async function paperGapRows(handle, { db, clone, worldBlock = worldBlockF
   // never throws; an unreachable store index still throws from the read.
   // a caller that already built the context (nextStepsFor, POS-603) hands it over: one standing read, not two
   const fresh = given ?? await freshFor(handle, { odb, clone, asOf });
-  try { home = ix ? await ix.home(handle, fresh) : homeQ(db, handle, fresh); }
+  try { home = await ix.home(handle, fresh); }
   catch (e) { if (e?.name === "TownIndexUnreachable") throw e; home = null; }
   if (!home || !home.description)
     gaps.push({ id: "tend-your-home", text: `tend your HOME page — household { do: "home", args: { handle: "${handle}", body: … } }` });
@@ -774,7 +775,7 @@ const berthRow = async (odb, slug) => {
  * The whole standing, tier-shaped. Every tier's `next` names the exact act
  * that moves it — the checklist IS the read.
  */
-export async function householdStanding(key, { db, clone, odb, worldBlock = worldBlockForHandle, worldWriteBudget = null, ix = null } = {}) {
+export async function householdStanding(key, { clone, odb, worldBlock = worldBlockForHandle, worldWriteBudget = null, ix = null } = {}) {
   if (!key) {
     return {
       tier: "anonymous",
@@ -826,16 +827,15 @@ export async function householdStanding(key, { db, clone, odb, worldBlock = worl
   const handles = [...(key.handles ?? [])];
   const settled = [];
   const harbor = [];
+  ix ??= (await import("./town-index-store.mjs")).storeIndexPooled(clone);
   for (const h of handles) {
-    let r = null;
-    if (ix) r = (await ix.hasResident(h)) ? true : null; // TownIndexUnreachable passes to the door's 503
-    else { try { r = residentQ(db, h); } catch { r = null; } }
+    const r = await ix.hasResident(h); // TownIndexUnreachable passes to the door's 503
     (r ? settled : harbor).push(h);
   }
   const papers = {};
   const next = [];
   for (const h of settled) {
-    const gaps = await paperGaps(h, { db, clone, worldBlock, key, ix, odb });
+    const gaps = await paperGaps(h, { clone, worldBlock, key, ix, odb });
     // AWAITED, same defect as paperGaps' and with a louder symptom: an
     // un-awaited Promise spread into this object serialized as `"world": {}`,
     // so the household door has been publishing an empty object where it
@@ -867,7 +867,7 @@ export async function householdStanding(key, { db, clone, odb, worldBlock = worl
   // It rides the HOUSEHOLD tier only, because `key.household` is what the
   // bouncer keys its counter on: a berth or visitor key has no household and
   // therefore no counter to read. And it is a garnish — a ctx without the
-  // injection (every unit test that hands this function a bare `{ db }`) simply
+  // injection (every unit test that hands this function a bare ctx) simply
   // has no block. The three production call sites all wire it, and a falsifier
   // reads the source to keep that true, because an absent budget block is the
   // kind of silence nobody would notice.
@@ -1089,38 +1089,31 @@ function cardOnBounce(what, ctx = {}) {
 // ── the verb ────────────────────────────────────────────────────────────────
 
 /**
- * ctx: { db, clone, odb, dbPath, pen, canWrite, schemas } — schemas is a
+ * ctx: { clone, odb, pen, canWrite, schemas } — schemas is a
  * name→properties map the CALLER builds from its own tool list (mcp owns the
  * flat schemas; passing them down keeps the dependency a line, not a cycle).
  */
 export async function householdApex(args = {}, key = null, ctx = {}) {
-  // `meta` and `asOf` ride the ctx now, and until 2026-08-25 they did not:
-  // this line destructured `meta` and NEITHER SKIN PASSED IT, so every
-  // `questBoardFor(db, undefined, …)` inside the estate read threw into its own
-  // catch and `quest_headroom` came back null for every household that ever
-  // read its books. Silent, because the catch was doing exactly what a garnish
-  // catch should. Both call sites now pass both.
-  // `slim` rides the ctx for ONE read (`doorstep`), and only the MCP skin sets
-  // it — see the note above about `meta`, which is why this one is passed by
-  // exactly one call site on purpose rather than by omission.
-  const { db, clone, odb, dbPath, pen, schemas, schemaRequired, meta, asOf, canWrite, channel, slim = false } = ctx;
-  // THE INDEX, PICKED ONCE (POS-268). With TOWN_INDEX_READS=store the resident,
-  // window, house and doorstep reads below answer from the store through `ix`
-  // (each index read its own short transaction); a store that cannot be
-  // reached answers 503 from the catch at this function's foot. Unset, `ix`
-  // is null and every read is office.db's, exactly as before.
+  // `asOf` rides the ctx (both skins pass it). `slim` rides the ctx for ONE
+  // read (`doorstep`), and only the MCP skin sets it, on purpose rather than
+  // by omission.
+  const { db, clone, odb, pen, schemas, schemaRequired, asOf, canWrite, channel, slim = false } = ctx;
+  // THE INDEX, PICKED ONCE (POS-268): the resident, window, house and doorstep
+  // reads below answer from the store through `ix` (each index read its own
+  // short transaction); a store that cannot be reached answers 503 from the
+  // catch at this function's foot.
   const tis = await import("./town-index-store.mjs");
-  const ix = tis.townIndexReads() ? tis.storeIndexPooled(clone) : null;
+  const ix = tis.storeIndexPooled(clone);
   // The one place a household answer leaves the apex, so the one place a
   // refusal is marked `refused: true` (POS-427, one-contract.mjs § withRefused).
-  try { return withRefused(await householdApexRead(args, key, { ...ctx, ix }, { db, clone, odb, dbPath, pen, schemas, schemaRequired, meta, asOf, canWrite, channel, slim, ix })); }
+  try { return withRefused(await householdApexRead(args, key, { ...ctx, ix }, { db, clone, odb, pen, schemas, schemaRequired, asOf, canWrite, channel, slim, ix })); }
   catch (e) {
     if (e instanceof tis.TownIndexUnreachable) return withRefused(bounce(503, e.refused.defect, e.refused.hint));
     throw e;
   }
 }
 
-async function householdApexRead(args, key, ctx, { db, clone, odb, dbPath, pen, schemas, schemaRequired, meta, asOf, canWrite, channel, slim, ix }) {
+async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas, schemaRequired, asOf, canWrite, channel, slim, ix }) {
   // POS-632: explain: answers from the read grammar's one table, before anything
   // is read, and never with an act or a read beside it ("one call does one thing").
   {
@@ -1260,28 +1253,23 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, dbPath, pen, 
     if (what === "address") {
       if (!handle) return whichResident("address");
       let r = null;
-      // READ-THROUGH, BOTH INDEXES (POS-603): the card composes the record the
-      // pen just wrote (paper-fresh.mjs), on office.db as on the store. Before,
-      // only the store's branch was handed the context, so an office on
-      // office.db answered its owner's own edit from the old index.
+      // READ-THROUGH (POS-603): the card composes the record the pen just
+      // wrote (paper-fresh.mjs).
       const fresh = await freshFor(handle, { odb, clone, asOf });
-      if (ix) r = await ix.resident(handle, fresh);
-      else { try { r = residentQ(db, handle, fresh); } catch { r = null; } }
+      r = await ix.resident(handle, fresh);
       // last_active: the newest act of their own, as /residents/{h} and
       // town { read: "resident" } carry it (last-active.mjs, POS-481)
-      if (r) await withLastActive("card", r, ix ? { find: (handles) => ix.lastActiveFor(handles) } : {});
+      if (r) await withLastActive("card", r, { find: (handles) => ix.lastActiveFor(handles) });
       // household leads (2026-08-07), from the store's registry (POS-342)
       if (r) await withHouseholdBlock(r, handle);
       return r ? shadowReadAnswer("address", { read: "address", of: handle, address: r }, { read: "address", of: handle }, r, ctx) : bounce(404, `no settled address for "${handle}"`, "a harbor resident has no white-pages address yet — that comes with settling");
     }
     if (what === "home") {
       if (!handle) return whichResident("home");
-      let h = null;
       // READ-THROUGH (POS-603): the home page as the pen last wrote it, stamped
-      // with its tense, on either index — the same context the card takes.
+      // with its tense — the same context the card takes.
       const fresh = await freshFor(handle, { odb, clone, asOf });
-      if (ix) h = await ix.home(handle, fresh);
-      else { try { h = homeQ(db, handle, fresh); } catch { h = null; } }
+      const h = await ix.home(handle, fresh);
       return h ? shadowReadAnswer("home", { read: "home", of: handle, home: h }, { read: "home", of: handle }, h, ctx)
         // ── THE BOUNCE CARRIES THE CARD (#2889, kogane's third) ──────────────
         //
@@ -1306,7 +1294,7 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, dbPath, pen, 
     // ── your own letter, by id (POS-70 row 39, ruled 2026-09-24) ────────────
     //
     // The town's read, at the door your correspondence lives behind: the SAME
-    // answer (queries.mjs § letterAnswer, which town { read: "letter" } calls
+    // answer (town-index-store.mjs § letterAnswer, which town { read: "letter" } calls
     // too), for a letter one of this household's residents sent or received.
     // Another household's letter is refused here rather than served — it is
     // the town's public record, and that door is named in the hint. The whole
@@ -1315,17 +1303,13 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, dbPath, pen, 
     if (what === "letter") {
       const id = String(f.id ?? "").trim();
       if (!id) return bounce(422, "which letter?", 'pass id: — ids come from household { read: "mail" } and your doorstep');
-      let l = null;
-      const { townIndexReads, storeAnswer, letterAnswer: letterAnswerFromStore, letterNotInCopy } = await import("./town-index-store.mjs");
-      if (townIndexReads()) {
-        // THE SWITCH (POS-268): the letter from the store; a store that cannot be
-        // reached is the 503, never office.db's copy.
-        const r = await storeAnswer((c) => letterAnswerFromStore(c, id));
-        if (r.refused) return bounce(503, r.refused.defect, r.refused.hint);
-        l = r.out;
-      } else { try { l = letterAnswer(db, id); } catch { l = null; } }
+      const { storeAnswer, letterAnswer, letterNotInCopy } = await import("./town-index-store.mjs");
+      // the letter from the store (POS-268); a store that cannot be reached is the 503
+      const r = await storeAnswer((c) => letterAnswer(c, id));
+      if (r.refused) return bounce(503, r.refused.defect, r.refused.hint);
+      const l = r.out;
       // The 404 names the copy it read and the crossing that copy holds (POS-332).
-      if (!l) return bounce(404, await letterNotInCopy(db), 'ids come from household { read: "mail" } and your doorstep — a letter still standing ahead of the crossing is not in the record yet (read: "mail", view: "pending")');
+      if (!l) return bounce(404, await letterNotInCopy(), 'ids come from household { read: "mail" } and your doorstep — a letter still standing ahead of the crossing is not in the record yet (read: "mail", view: "pending")');
       const mine = new Set(held);
       if (!letterParties(l).some((h) => mine.has(h)))
         return bounce(403, "not a letter your household sent or received",
@@ -1339,20 +1323,17 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, dbPath, pen, 
     // read_stamps stays the PUBLIC roster; these are your household's own books
     // and the town's board. The split is public-record vs. your-books.
     if (what === "stamps" || what === "quests" || what === "fund") {
-      const { estateRead, questsRead, fundRead, fundReadOf } = await import("./household-stamps.mjs");
-      // THE SWITCH (POS-268): with TOWN_INDEX_READS=store the three reads answer
-      // from the store's town index; a store that cannot be reached is a 503,
-      // never office.db's answer.
-      const { townIndexReads, storeIndexPooled, TownIndexUnreachable } = await import("./town-index-store.mjs");
+      const { estateRead, questsRead, fundReadOf } = await import("./household-stamps.mjs");
+      // The three reads answer from the store's town index (POS-268); a store
+      // that cannot be reached is a 503.
+      const { storeIndexPooled, TownIndexUnreachable } = await import("./town-index-store.mjs");
       // Each index read takes its own short transaction (storeIndexPooled's
       // header says why a composed read must not hold one across the rest).
       const fromIndex = async (read) => {
         try { return await read(storeIndexPooled(clone)); }
         catch (e) { if (e instanceof TownIndexUnreachable) return bounce(503, e.refused.defect, e.refused.hint); throw e; }
       };
-      const switched = townIndexReads();
-      // meta rides the ctx every door is called with (mcp.mjs § dispatch)
-      if (what === "stamps") return switched ? fromIndex((ix) => estateRead(key, { db, meta, clone, ix })) : estateRead(key, { db, meta, clone });
+      if (what === "stamps") return fromIndex((ix) => estateRead(key, { clone, ix }));
       // ── ASK, DON'T GUESS — THE ONE READ THAT WAS STILL GUESSING ───────────
       //
       // `handle` was computed thirty lines up and every read below this point
@@ -1372,10 +1353,9 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, dbPath, pen, 
         if (!handle) return bounce(422, "whose quest board? this key holds several residents",
           `name one with handle: — this key acts for ${held.join(", ")}. The pots on the board are the town's, not any one resident's: town { read: "quests" } and household { read: "fund" } answer those with no resident named`,
           { your_residents: held });
-        return switched ? fromIndex((ix) => questsRead(handle, { db, meta, clone, ix })) : questsRead(handle, { db, meta, clone });
+        return fromIndex((ix) => questsRead(handle, { ix }));
       }
-      if (switched) return fromIndex(async (ix) => { let list = []; try { list = (await ix.potBoard())?.list ?? []; } catch (e) { if (e instanceof TownIndexUnreachable) throw e; list = []; } return fundReadOf(list); });
-      return fundRead(key, { db });
+      return fromIndex(async (ix) => { let list = []; try { list = (await ix.potBoard())?.list ?? []; } catch (e) { if (e instanceof TownIndexUnreachable) throw e; list = []; } return fundReadOf(list); });
     }
     // ── media (2026-08-23) ───────────────────────────────────────────────────
     // The media ledger has existed since 2026-08-15 with no door: upload_media
@@ -1384,7 +1364,7 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, dbPath, pen, 
     // "no other house writes on your wall" (world main 674c359c).
     if (what === "media") {
       const { mediaRead } = await import("./household-media.mjs");
-      return mediaRead(key, { odb, db, clone });
+      return mediaRead(key, { odb, clone });
     }
     // ── the mail reads (round 2, 2026-08-25) ────────────────────────────────
     // Your correspondence, in three views. inbox/outbox ARE list_mail — the
@@ -1397,11 +1377,9 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, dbPath, pen, 
     if (what === "mail") {
       if (!handle) return whichResident("mail");
       const view = String(f.view ?? "inbox").trim();
-      // THE SWITCH (POS-268): with TOWN_INDEX_READS=store the four index views
-      // answer from the store, each in one READ ONLY transaction; a store that
-      // cannot be reached is the 503, never office.db's answer.
+      // The four index views answer from the store (POS-268), each in one READ
+      // ONLY transaction; a store that cannot be reached is the 503.
       const tis = await import("./town-index-store.mjs");
-      const switched = tis.townIndexReads();
       const fromStore = async (read) => {
         const r = await tis.storeAnswer(read);
         return r.refused ? bounce(503, r.refused.defect, r.refused.hint) : r.out;
@@ -1409,20 +1387,19 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, dbPath, pen, 
       const pageOpts = { since: f.since, until: f.until, limit: f.limit, offset: f.offset };
       const awaitingOpts = { limit: f.limit, offset: f.offset, hide_bounces_older_than_days: f.hide_bounces_older_than_days };
       if (view === "inbox" || view === "outbox")
-        return switched ? fromStore((c) => tis.mailList(c, handle, view, pageOpts)) : mailList(db, handle, view, pageOpts);
+        return fromStore((c) => tis.mailList(c, handle, view, pageOpts));
       if (view === "awaiting") {
         // A reply its sender has written and the ferry has not carried reads
         // reply_queued here, on the sender's own key only: the same block the
         // doorstep's your_pending_letters lists (POS-375). A log that will not
-        // read leaves the view as the record has it. Read on the store's road
-        // only: office.db's reader takes no standing letters (POS-268).
-        if (switched && key?.handles?.has?.(handle) === true) {
+        // read leaves the view as the record has it.
+        if (key?.handles?.has?.(handle) === true) {
           try {
             const { hotMailBlock } = await import("./town-mail.mjs");
             awaitingOpts.standing = (await hotMailBlock(odb, key, { handle }))?.standing ?? null;
           } catch { /* the record's own answer still stands */ }
         }
-        return switched ? fromStore((c) => tis.mailAwaiting(c, handle, awaitingOpts)) : mailAwaiting(db, handle, awaitingOpts);
+        return fromStore((c) => tis.mailAwaiting(c, handle, awaitingOpts));
       }
       // ── correspondents (walk #2 item 1, 2026-09-06) ───────────────────────
       //
@@ -1436,7 +1413,7 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, dbPath, pen, 
       // wants is about their own correspondence.
       if (view === "correspondents") {
         const listOpts = { limit: f.limit, offset: f.offset };
-        return switched ? fromStore((c) => tis.mailCorrespondents(c, handle, listOpts)) : mailCorrespondents(db, handle, listOpts);
+        return fromStore((c) => tis.mailCorrespondents(c, handle, listOpts));
       }
       // ── the pending view (Hal's third point, 2026-08-26) ──────────────────
       //
@@ -1482,12 +1459,9 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, dbPath, pen, 
         const { nextCrossing } = await import("./write.mjs");
         const block = await hotMailBlock(odb, key, { handle });
         const standing = block ? block.standing : [];
-        let settled;
-        if (switched) {
-          const r = await tis.storeAnswer((c) => tis.outboxSettled(c, handle));
-          if (r.refused) return bounce(503, r.refused.defect, r.refused.hint);
-          settled = { inOutbox: r.out, settledAsOf: r.asOf };
-        } else settled = { inOutbox: outboxSettled(db, handle), settledAsOf: indexAsOf(db) };
+        const r = await tis.storeAnswer((c) => tis.outboxSettled(c, handle));
+        if (r.refused) return bounce(503, r.refused.defect, r.refused.hint);
+        const settled = { inOutbox: r.out, settledAsOf: r.asOf };
         // ── THE TOTAL IS BOTH HALVES (postmark#3550) ──────────────────────────
         //
         // `total` was `standing.length` alone, while `freshness` beside it says
@@ -1506,8 +1480,7 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, dbPath, pen, 
           // settled count this view is the other half of, so the two tenses are
           // named side by side here exactly as they are on the morning page.
           freshness: outboxTense({
-            // the settled half from the index the switch names (the store's own
-            // head beside its count, never office.db's as-of beside the store's rows)
+            // the settled half from the store (its own head beside its count)
             ...settled,
             standing: standing.length,
           }),
@@ -1536,7 +1509,7 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, dbPath, pen, 
     if (what === "window") {
       if (!handle) return whichResident("window");
       const wf = await freshFor(handle, { odb, clone, asOf });
-      const w = ix ? await ix.windowRead(handle, wf) : windowRead(db, handle, wf);
+      const w = await ix.windowRead(handle, wf);
       // the domain is `w` ENTIRE — the same object the doorstep segment carries,
       // so the two cannot drift into two renderings of one read.
       if (w) return shadowReadAnswer("window", w, { read: "window", of: handle }, w, ctx);
@@ -1629,8 +1602,8 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, dbPath, pen, 
     if (what === "house" || what === "needs-you") {
       const { houseBundle, needsYou } = await import("./house-bundle.mjs");
       const r = what === "house"
-        ? await houseBundle({ household: f.household }, { db, key, meta, asOf, clone, odb, ix })
-        : await needsYou({ household: f.household }, { db, key, clone, odb, asOf, ix });
+        ? await houseBundle({ household: f.household }, { key, asOf, clone, odb, ix })
+        : await needsYou({ household: f.household }, { key, clone, odb, asOf, ix });
       return r?.refused ? bounce(...r.refused) : r;
     }
     // ── the house's posts (POS-293) · src/household-posts.mjs ──────────────
@@ -1656,7 +1629,7 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, dbPath, pen, 
     // on down the manifest.
     if (what === "doorstep") {
       if (!handle) return whichResident("doorstep");
-      const d = await doorstepBundle(handle, { db, key, meta, asOf, clone, odb, canWrite, slim, ix,
+      const d = await doorstepBundle(handle, { key, asOf, clone, odb, canWrite, slim, ix,
         conversationsOffset: f.correspondence_offset ?? f.offset ?? 0 });
       return d ?? bounce(404, `no resident "${handle}"`, "handles are lowercase-hyphenated; try town { read: \"residents\" }");
     }
@@ -1804,7 +1777,7 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, dbPath, pen, 
     let result;
     switch (act) {
       case "begin": result = await doBegin(fields, key, ctx); break;
-      case "declare": result = await declareViaOffice(clone, fields, key, { db, odb, dbPath }); break;
+      case "declare": result = await declareViaOffice(clone, fields, key, { db, odb }); break;
       case "add-resident": result = await requestResidency(fields, key, db, pen); break;
       // The four paper acts. `odb` is the town log, and passing it is what
       // makes THIS skin log at all (POS-44, the paper seam) — wave 2 logged in
@@ -1914,7 +1887,7 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, dbPath, pen, 
       }
       case "mark-all-read": {
         const { markAllReadAtOffice } = await import("./unread-store.mjs");
-        result = await markAllReadAtOffice(db, fields, key);
+        result = await markAllReadAtOffice(fields, key);
         break;
       }
       // ── the operator acts (OPERATOR_ACTS: unlisted, gated above) ────────

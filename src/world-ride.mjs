@@ -42,6 +42,7 @@
 
 import { worldFreezeBounce } from "./freeze.mjs";
 import { vesselServiceFrom } from "./world-movement.mjs";
+import { markClassOf } from "./world-grants.mjs"; // the kind rung: a mark's class in both forms (LOGOS v2, O1)
 
 /** Half a day in milliseconds — the town's crossing, the one clock a pace is
  *  quoted against. Declared here rather than imported from the clone because
@@ -448,7 +449,7 @@ function vehicleOf(service, worldState = null) {
   if (!vessel) return null;
   if (!worldState) return vessel;
   const body = (worldState.marks ?? []).find((m) => m.id === vessel) ?? null;
-  return String(body?.class ?? "") === "vehicle" ? vessel : null;
+  return markClassOf(body) === "vehicle" ? vessel : null;
 }
 
 /** Is this mark a stop a vehicle calls at — the derived annotation a card adds

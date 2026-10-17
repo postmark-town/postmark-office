@@ -34,11 +34,10 @@ import { mkdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { copyTownTools } from "./helpers/town-tools.mjs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
-import { testIndex } from "./helpers/office-under-test.mjs";
-import { copyIndexToStore } from "./helpers/index-to-store.mjs";
+import { seedTownIndex } from "./helpers/index-to-store.mjs";
 import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 import { tempDir } from "./helpers/temp-dir.mjs";
 
@@ -58,7 +57,6 @@ async function bootWorker(townClone) {
     ...process.env,
     WORLD_GRAPH_NONE: "1",
     // the town index is the record's own store too, seeded from the fixture below (POS-268)
-    ...(testIndex() === "store" ? { TOWN_INDEX_READS: "store" } : {}),
     WORLD_DYNAMIC_DB: join(tmp, "dynamic.db"),
     TOWN_CLONE: townClone,
     WORLD_CLONE: join(tmp, "no-world-clone"),
@@ -67,7 +65,6 @@ async function bootWorker(townClone) {
   const { child, port } = await bootOnFreePort((port) => spawn(process.execPath, [
     join(ROOT, "src", "server.mjs"),
     "--port", String(port),
-    "--db", join(tmp, "fixture.db"),
     "--oauth-db", join(tmp, "oauth.db"),
     "--roles-db", join(tmp, "roles.db"),
     "--role", "read", "--writer", WRITER,
@@ -108,13 +105,9 @@ before(async () => {
   checked = await check(TOWN, { env });
   const engine = engineClone();
   await ingestBallotFiles(engine, { hand: "keemin", env });
-  const fixture = fixtureDb(join(tmp, "fixture.db"));
-  // the town index, in the same store the ballots are in, seeded from this fixture (POS-268)
-  if (testIndex() === "store") {
-    const w = await store.connect("law_ingester");
-    try { await copyIndexToStore(w, fixture); } finally { await w.end(); }
-  }
-  fixture.close();
+  // the town index, in the same store the ballots are in, seeded from the fixture town (POS-268)
+  const w = await store.connect("law_ingester");
+  try { await seedTownIndex(w, fixtureTown()); } finally { await w.end(); }
   const { openDynamic } = await import("../src/dynamic-store.mjs");
   openDynamic(join(tmp, "dynamic.db")).close();
   const { openOauthDb } = await import("../src/oauth.mjs");

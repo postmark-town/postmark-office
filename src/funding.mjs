@@ -124,9 +124,10 @@
 // balance and never has. Every stamp number the office serves is the TOWN's own
 // fold, imported live from the checkout —
 //
-//   - the `stamps` table (balance/mint_count/staked) is written by
-//     src/hydrate.mjs § Stamps from the town's foldBalances / foldMintCount /
-//     foldStaked, and src/queries.mjs § stampsDetail reads that table;
+//   - the `stamps` table (balance/mint_count/staked) is derived by
+//     src/town-index.mjs § stampFold from the town's foldBalances /
+//     foldMintCount / foldStaked, and src/town-index-store.mjs § stampsDetail
+//     reads that table;
 //   - both stake clips take their balance from the town's ballotState —
 //     src/pot-stake-exec.mjs § clipPotStake and src/stake-exec.mjs via
 //     tools/ballot.mjs § clipApply.
@@ -154,6 +155,7 @@
 
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
 
 // The town's kind strings (classifyEntry), in its own order.
 export const FUNDING_KINDS = ["pot-stake", "pot-return", "pot-unstake", "keeping-burn", "keeping-mint", "pot-receipt", "pot-correction", "holo"];
@@ -711,7 +713,7 @@ export function readPots(townDir) {
     const idFromName = name.slice(4, -5);
     let d;
     try { d = JSON.parse(readFileSync(join(dir, name), "utf8")); }
-    catch (e) { bad(name, `unparseable JSON: ${String(e?.message ?? e).slice(0, 80)}`); continue; }
+    catch (e) { bad(name, plainReason(e, "parse", "a funding row file")); continue; }
     const id = d.pot ?? idFromName;
     if (id === TREASURY_POT) { bad(name, `"${TREASURY_POT}" is the reserved direct-to-town pot — it takes direct-to-town receipts only and has no pot file`); continue; }
     const missing = POT_MONEY_FIELDS.filter((f) => d[f] == null);
