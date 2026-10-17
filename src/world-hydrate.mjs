@@ -56,6 +56,7 @@ import { createGraphRows, graphTablesOf, graphCounts, writeRowsFile } from "./wo
 import { blessed } from "./world-branches.mjs";
 import { readReleaseStamp } from "./release.mjs";
 import { classFieldOf, classNodeNameOf, dialsOfClassNode, kindFieldOf, standingOf } from "./world-grants.mjs"; // the kind rung: one answer for both forms (LOGOS v2, O1)
+import { truth, whole } from "./holding-law.mjs"; // a record's true/false and whole number, in the spellings the parser leaves them
 
 const argOf = (name, fallback) => { const i = process.argv.indexOf(name); return i !== -1 ? process.argv[i + 1] : fallback; };
 const flag = (name) => process.argv.includes(name);
@@ -396,6 +397,13 @@ for (const m of marks) {
 }
 function extendsOfClass(name) { const e = classDecls.get(String(name)); return e == null ? null : String(e); }
 const classOf = (m) => classFieldOf(m) ?? undefined;
+// A thing's own holding word, as its values (the props block's `holdingWordOf` line says why).
+const holdingWordOf = (m) => ({
+  ...(m.holder !== undefined ? { holder: truth(m.holder) } : {}),
+  ...(m.capacity !== undefined ? { capacity: whole(m.capacity) } : {}),
+  ...(m.open !== undefined ? { open: truth(m.open) } : {}),
+  ...(m.portable !== undefined ? { portable: truth(m.portable) } : {}),
+});
 // A class's DIALS are its property nodes first, its old `dials:` second (LOGOS
 // v2, W1 G3/G5: every dial moves to a `kind: property` node named by its key).
 // The projection carries the one merged map, so every `$.dials` reader of the
@@ -567,6 +575,14 @@ for (const m of marks) {
       // writes the nodes; class-read.mjs reads them, and finds them here.
       // Only on a property, so no other mark's props grow a key.
       ...(m.kind === "property" ? { name: m.name ?? null, default: m.default ?? null } : {}),
+      // A THING'S OWN HOLDING WORD: `holder`, `capacity`, `open` and `portable` (the playground's QA
+      // of LOGOS v2 part 2, fail 2). The FIFTH instance of this block's one class: the four rode in
+      // `keys` and their values were dropped, so sb-ash's pouch, made with `holder: true` and
+      // `capacity: 10`, read `holder` null here. They are sovereign on thing (ruled 16:03) and only
+      // its maker writes them (kind-holding § holderWordOf). Carried only where the record says them,
+      // so no other mark's props grow a key; the booleans in either spelling the parser leaves them,
+      // on the `loot:` precedent, through the holding law's own readers.
+      ...holdingWordOf(m),
       frontmatter_problems: problems.length ? problems : null,
       keys: rawKeys(m),               // see § what the AUTHOR wrote, above
     },
