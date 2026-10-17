@@ -4535,8 +4535,14 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
   // `sited`) keeps the old form, as W2 keeps it (WLD-73 G7), and so does every
   // class under a tree with no `sited` class (the pre-W1 record, where every
   // instance class extends `mark`). Asked through O1's resolver (world-grants §
-  // isSited over the class layer's extends), never a list.
-  const newForm = klass !== undefined && kind === "sited" && isSited({ kind: String(klass) }, classExtendsOf());
+  // isSited over the class layer's extends), never a list. A PARCEL LINEAGE IS
+  // NEVER ONE: `kind: parcel` is the town's own standing word, with its dial,
+  // its cap and its overlap law, none of which a classed sited mark was judged
+  // by here, so `kind: sited` + `class: parcel` (or a class under it) keeps
+  // the old form and can never be filed as a parcel.
+  const extendsOfClass = classExtendsOf();
+  const newForm = klass !== undefined && kind === "sited" && isSited({ kind: String(klass) }, extendsOfClass)
+    && !lineageOf(String(klass), extendsOfClass).includes("parcel");
   const { class: _spelled, ...ownFields } = classFields;
   const clean = { slug, kind: newForm ? String(klass) : kind, at, extent, points, body: String(body).trim(), slot, value, parent_id, by, household, date: new Date().toISOString(),
     ...(newForm ? ownFields : classFields), ...(image !== undefined ? { image } : {}), ...(payload.amend === true ? { amend: true } : {}),
