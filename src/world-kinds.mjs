@@ -21,10 +21,10 @@
 // that is not `open` refuses another household at the door.
 
 import { foldUnits, kindEdgesOf, totalOf, unitCount, refuseOverCarry, UNIT_ACTION } from "./world-stacks.mjs";
-import { holdingsOf, sameHousehold, holdTurn } from "./world-hold.mjs";
+import { holdingsOf, sameHousehold, holdTurn, liveHolder } from "./world-hold.mjs";
 import { chestRoomGuard } from "./chest-lock.mjs";
-import { inFlightFor } from "./world-units.mjs";
-import { markClassOf } from "./world-grants.mjs";
+import { inFlightFor, writeThingHolding } from "./world-units.mjs";
+import { markClassOf, lineageOf } from "./world-grants.mjs";
 import {
   makeableKind, holderLawOf, roomIn, refuseOverRoom, blurOf, planMake, planTakeKinds, planGiveKinds,
   oneHolderOf, drawSeed, affordedActions,
@@ -47,6 +47,8 @@ const ownerOf = (mark, id) => String(mark?.by ?? String(id).split("/")[0]);
 export function kindRouteOf(args = {}, verb = null) {
   if (args.label != null || args.chest != null) return null;          // #499's label door (dark, #608)
   if (args.act != null) return String(args.act) === "refill" ? "refill" : null;
+  if (args.thing != null && args.from != null) return "thing-from-holder";   // a whole mark out of a holder
+  if (args.thing != null && isHolderId(args.to)) return "thing-into-holder";  // a whole mark into one
   if (args.thing != null) return null;                                 // the thing door's
   if (args.from != null) return "take";
   if (args.kind == null && args.count == null) return isHolderId(args.to) ? "give" : null; // a holder names no thing
@@ -67,7 +69,7 @@ async function writeKinds(deps, key, actor, plan, { stamp = null, guard = null, 
   const entry = {
     crossing: deps.crossing(), actor, action: plan.action, object: String(plan.object), at, witnesses,
     cls: "holding", household: deps.household(key),
-    payload: { units: true, kinds: true, moves: plan.moves, edge: plan.edge, ...(plan.via ? { via: plan.via } : {}), ...(plan.draw ? { draw: plan.draw, seed: plan.seed } : {}) },
+    payload: { units: true, kinds: true, moves: plan.moves, edge: plan.edge, ...(plan.via ? { via: plan.via } : {}), ...(plan.draw ? { draw: plan.draw, seed: plan.seed, things: plan.things ?? [] } : {}) },
     effect: words,
   };
   const row = await deps.append(entry, guard ? { guard } : {});
@@ -87,6 +89,8 @@ async function holderOrThrow(deps, id, view) {
   if (!mark) throw bounce(404, `${id} does not stand on the world`, "a holder is a published mark; a private draft holds nothing yet. Nothing was changed.");
   const law = holderLawOf({ holder: id, mark, view });
   if (!law.holder) throw bounce(422, `${id} holds nothing`, `it is ${law.className ? `a ${law.className}` : "a mark of no thing class"} whose holder is false; a holder is a thing its maker made with holder: true. Nothing was changed.`);
+  if (law.capacity_refused) throw bounce(422, `${id}'s own capacity is refused`, `${law.capacity_refused}; until its maker sets one within them, nothing goes in or comes out by count. Nothing was changed.`);
+  if (!Number.isInteger(law.capacity)) throw bounce(503, `${id}'s capacity could not be read`, "no class in its lineage states one; nothing was changed — the class tree says what a holder holds");
   return { mark, law };
 }
 
@@ -104,11 +108,14 @@ const carryOf = (view) => holderLawOf({ holder: "resident", view }).capacity;
  * candidates for a take that names no `from` — each with its owner and its
  * distance from where the actor stands.
  */
-async function holdersInReach(fold, actor, kind, deps) {
+async function holdersInReach(fold, attachments, actor, kind, deps, extendsOf = () => null) {
   const here = await deps.standpoint(actor);
   const out = [];
-  for (const [holder, kinds] of fold.kinds ?? []) {
-    if (!isHolderId(holder) || (kind != null && !kinds.has(String(kind)))) continue;
+  const holders = new Map(fold.kinds ?? []);
+  // a holder of whole marks holds too, for a draw that names no kind
+  if (kind == null) for (const r of attachments) { const h = liveHolder(attachments, r.target); if (isHolderId(h) && !holders.has(h)) holders.set(h, new Map()); }
+  for (const [holder, kinds] of holders) {
+    if (!isHolderId(holder) || (kind != null && ![...kinds.keys()].some((k) => lineageOf(k, extendsOf).includes(String(kind))))) continue;
     const mark = await deps.markById(holder).catch(() => null);
     if (!mark) continue;
     try { await deps.reachTake(holder, actor); } catch { continue; }
@@ -149,6 +156,50 @@ async function makeInto({ args, key, actor, deps, view, via = "leave-mark" }) {
     return { did: via === "refill" ? "refill" : "make", kind, count: n, to, ...w, live: true,
       live_note: law.resident ? "made into your hands, live: a resident is a holder" : "made into a published holder, live: a holder confers its state on what it holds",
       holds: await shownIn(after, to, attachments, view, deps) };
+  });
+}
+
+/** A WHOLE MARK INTO A HOLDER: `give { thing, to: <holder> }`, from your hands, its room counting kinds and whole marks alike. */
+async function thingIntoHolder({ args, key, actor, deps, view }) {
+  const thing = String(args.thing), to = String(args.to);
+  if (thing === to) throw bounce(422, "a holder cannot hold itself", "Nothing was changed.");
+  const { mark: holderMark, law } = await holderOrThrow(deps, to, view);
+  refuseIfClosed({ mark: holderMark, id: to, law, actor, deps, verb: "give into" });
+  const mark = await deps.markById(thing);
+  if (!mark) throw bounce(409, `${thing} does not stand on the world`, "only a published thing goes into a holder; a private draft changes no hands. Nothing was changed.");
+  await deps.reachTake(to, actor);
+  return holdTurn(async () => {
+    const { units, attachments } = await deps.readRows();
+    const holder = liveHolder(attachments, thing);
+    if (holder !== String(actor)) throw bounce(409, `you are not holding ${thing}: ${holder ?? "nobody"} is`, "a thing goes into a holder from your hands. Nothing was changed.");
+    for (let h = liveHolder(attachments, to), hops = 0; h && hops < 64; h = liveHolder(attachments, h), hops++)
+      if (h === thing) throw bounce(422, `${to} is inside ${thing}`, "a holder cannot go inside what it is carried in. Nothing was changed.");
+    const fold = foldUnits(units);
+    const things = holdingsOf(attachments, to).length;
+    refuseOverRoom({ n: 1, room: roomIn({ capacity: law.capacity, fold, holder: to, things }), name: `the ${law.className ?? "holder"} ${to}`,
+      capacity: law.capacity, holding: totalOf(fold, to) + things, verb: "changed" });
+    const w = await writeThingHolding(deps, key, actor, attachments, { did: "give", thing, holder: to, previous: String(actor), madeBy: ownerOf(mark, thing) },
+      { guard: chestRoomGuard({ chest: to, capacity: law.capacity, adding: 1 }) });
+    const after = [...attachments, { entity: to, target: thing, policy: "cascade", born_at: w.at }];
+    return { did: "give", thing, to, ...w, edge: { giver: String(actor), receiver: to }, receiver: await shownIn(fold, to, after, view, deps) };
+  });
+}
+
+/** A WHOLE MARK OUT OF A HOLDER: `take { thing, from: <holder> }`, or naming a thing a holder holds: reach, open, the carry. */
+export async function thingFromHolder({ args, key, actor, deps, view }) {
+  const thing = String(args.thing), from = String(args.from);
+  const { mark: holderMark, law } = await holderOrThrow(deps, from, view);
+  refuseIfClosed({ mark: holderMark, id: from, law, actor, deps, verb: "take from" });
+  const mark = await deps.markById(thing);
+  await deps.reachTake(from, actor);
+  return holdTurn(async () => {
+    const inFlight = await inFlightFor(actor, deps); // BEFORE the rows
+    const { units, attachments } = await deps.readRows();
+    const holder = liveHolder(attachments, thing);
+    if (holder !== from) throw bounce(409, `${from} is not holding ${thing}`, holder ? `${holder} is. Nothing was changed.` : "it stands on the ground. Nothing was changed.");
+    refuseOverCarry({ who: actor, units: totalOf(foldUnits(units), actor) + inFlight, things: holdingsOf(attachments, actor).length, adding: 1, cap: carryOf(view) });
+    const w = await writeThingHolding(deps, key, actor, attachments, { did: "take", thing, holder: String(actor), previous: from, madeBy: ownerOf(mark, thing) });
+    return { did: "take", thing, from, holder: String(actor), ...w, edge: { giver: from, receiver: String(actor) } };
   });
 }
 
@@ -194,19 +245,30 @@ export async function callKinds(route, args, key, actor, deps) {
         const { units, attachments } = await deps.readRows();
         const fold = foldUnits(units);
         if (from == null) {
-          from = oneHolderOf(await holdersInReach(fold, actor, kind, deps), { kind, verb: "take" });
+          from = oneHolderOf(await holdersInReach(fold, attachments, actor, kind, deps, view.extendsOf), { kind, verb: "take" });
           const { mark, law } = await holderOrThrow(deps, from, view);
           refuseIfClosed({ mark, id: from, law, actor, deps, verb: "take from" });
         }
         const stamp = await deps.stamp(actor);
         const seed = drawSeed({ actor, from, crossing: deps.crossing(), at: stamp.at, ordinal: units.length });
-        const plan = { ...planTakeKinds({ fold, actor, from, kind, n, seed }), seed };
+        const inside = [];
+        for (const t of holdingsOf(attachments, from)) inside.push({ thing: t, class: markClassOf(await deps.markById(t).catch(() => null)) ?? "thing" });
+        const plan = { ...planTakeKinds({ fold, actor, from, kind, n, seed, things: inside, extendsOf: view.extendsOf }), seed };
         refuseOverCarry({ who: actor, units: totalOf(fold, actor) + inFlight, things: holdingsOf(attachments, actor).length, adding: n, cap });
+        // THE DRAW'S RECORD FIRST (its seed, its kinds, the whole marks it took), then each whole mark's own holding act
         const w = await writeKinds(deps, key, actor, plan, { stamp, words: sentence.take({ actor, n, from }) });
+        const moved = [];
+        let rows = attachments;
+        for (const t of plan.things) {
+          const m = await deps.markById(t).catch(() => null);
+          const tw = await writeThingHolding(deps, key, actor, rows, { did: "take", thing: t, holder: String(actor), previous: from, madeBy: ownerOf(m, t) });
+          rows = [...rows, { entity: String(actor), target: t, policy: "cascade", born_at: tw.at }];
+          moved.push({ thing: t, seq: tw.seq });
+        }
         const after = foldUnits([...units, { class: "holding", action: plan.action, payload: { moves: plan.moves } }]);
-        return { did: "take", count: n, from, draw: plan.draw, ...w,
-          took: blurOf({ edges: plan.moves.map((m) => ({ kind: m.kind, count: m.n })), extendsOf: view.extendsOf }),
-          holds: await shownIn(after, actor, attachments, view, deps), holder: await shownIn(after, from, attachments, view, deps) };
+        return { did: "take", count: n, from, draw: plan.draw, ...w, ...(moved.length ? { whole: moved } : {}),
+          took: blurOf({ edges: plan.moves.map((m) => ({ kind: m.kind, count: m.n })), things: inside.filter((x) => plan.things.includes(x.thing)).map((x) => x.class), extendsOf: view.extendsOf }),
+          holds: await shownIn(after, actor, rows, view, deps), holder: await shownIn(after, from, rows, view, deps) };
       });
     }
     case "give": {
@@ -244,6 +306,8 @@ export async function callKinds(route, args, key, actor, deps) {
           ...(law.resident ? { stands: "neutral: a give between residents needs no consent to land, so it is theirs now" } : {}) };
       });
     }
+    case "thing-into-holder": return thingIntoHolder({ args, key, actor, deps, view });
+    case "thing-from-holder": return thingFromHolder({ args, key, actor, deps, view });
     case "drop":
       throw bounce(501, "setting a kind down is not built yet",
         "give it into a holder, or to a resident; a set-down by kind lands with its own change (one mark, one stamp). Nothing was changed.");

@@ -828,7 +828,7 @@ async function thingFromChest(args, key, actor, deps, view, cap) {
  * shape — stamped strictly after the thing's newest holding row, the same
  * guard `declareHolding` keeps against the same-millisecond swallow.
  */
-async function writeThingHolding(deps, key, actor, attachments, { did, thing, holder, previous, madeBy }, { guard = null } = {}) {
+export async function writeThingHolding(deps, key, actor, attachments, { did, thing, holder, previous, madeBy }, { guard = null } = {}) {
   const prior = rowsFor(attachments, thing);
   const newest = prior.length ? Date.parse(prior[prior.length - 1].born_at) : NaN;
   const now = Date.now();

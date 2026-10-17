@@ -326,3 +326,57 @@ test("the route is read off the arguments: label and chest are #499's, thing is 
   assert.equal(kindRouteOf({ to: "kai" }), null, "a give to a resident naming no kind or count is the thing door's question");
   assert.equal(kindRouteOf({ act: "refill", thing: BOWL }), "refill");
 });
+
+// ── G6 CORRECTED (the lead, 2026-10-17): pot luck draws over EVERYTHING held ──
+
+test("G6 · pot luck draws over the counted kinds AND the whole marks a holder holds, a whole mark counting 1; replayed from the act", async () => {
+  const lamp = "sbx-ana/a-lamp";
+  const w = world({ things: [{ entity: BOWL, target: lamp, policy: "cascade", born_at: "2026-10-17T00:00:00Z" }] });
+  w.seed([{ from: null, to: BOWL, kind: "pocket-comet", n: 2 }]);
+  const r = await go(w, "take", { from: BOWL, count: 3 });
+  assert.equal(r.took.count, 3, "everything: two counted and the lamp");
+  const draw = w.acts.find((a) => a.action === UNIT_ACTION.take);
+  assert.deepEqual(draw.payload.things, [lamp], "the act records the whole mark its draw took");
+  const moved = w.acts.filter((a) => !String(a.action).startsWith("units:"));
+  assert.equal(moved.length, 1, "the whole mark moves by its own holding act");
+  assert.equal(moved[0].object, lamp);
+  const replay = potLuck({ edges: [{ kind: "pocket-comet", count: 2 }], things: [{ thing: lamp, class: "thing" }], n: 3, seed: draw.payload.seed });
+  assert.deepEqual(replay.things, [lamp]);
+  assert.deepEqual(replay.drawn, [{ kind: "pocket-comet", count: 2 }]);
+  // the weights: over many seeds, the lamp (1 of 11) is drawn about a tenth of the time
+  let lampHits = 0;
+  for (let i = 0; i < 2000; i++) if (potLuck({ edges: [{ kind: "pocket-comet", count: 10 }], things: [{ thing: lamp, class: "thing" }], n: 1, seed: `s${i}` }).things.length) lampHits++;
+  assert.ok(lampHits > 120 && lampHits < 250, `a whole mark weighs 1 against 10 counted (${lampHits}/2000)`);
+});
+
+test("G6 · naming a kind narrows the draw by lineage: candy draws every candy kind and no lamp", () => {
+  const extendsOf = classViewOf(SNAP).extendsOf;
+  const d = potLuck({ edges: [{ kind: "pocket-comet", count: 2 }, { kind: "carbon-ghost", count: 2 }], things: [{ thing: "x/lamp", class: "thing" }], n: 4, seed: "q", kind: "candy", extendsOf });
+  assert.deepEqual(d.things, []);
+  assert.equal(d.drawn.reduce((s, x) => s + x.count, 0), 4);
+  assert.deepEqual(potLuck({ edges: [{ kind: "pocket-comet", count: 2 }], things: [{ thing: "x/lamp", class: "thing" }], n: 3, seed: "q", kind: "candy", extendsOf }), { short: 2 }, "the lamp is not candy");
+});
+
+test("a whole mark into a holder and out of it: the holder's room counts kinds and whole marks, and its open answers", async () => {
+  const lamp = "sbx-ana/a-lamp";
+  const w = world({ things: [{ entity: "sbx-cy", target: lamp, policy: "cascade", born_at: "2026-10-17T00:00:00Z" }] });
+  w.seed([{ from: null, to: BOWL, kind: "pocket-comet", n: 30 }]);
+  await assert.rejects(go(w, "thing-into-holder", { thing: lamp, to: BOWL }), (e) => /has room for 0, not 1/.test(e.defect));
+  await assert.rejects(go(w, "thing-into-holder", { thing: lamp, to: CRATE }), (e) => e.code === 403);
+  const w2 = world({ things: [{ entity: "sbx-cy", target: lamp, policy: "cascade", born_at: "2026-10-17T00:00:00Z" }] });
+  const g = await go(w2, "thing-into-holder", { thing: lamp, to: BOWL });
+  assert.deepEqual([g.did, g.edge], ["give", { giver: "sbx-cy", receiver: BOWL }]);
+  const w3 = world({ things: [{ entity: BOWL, target: lamp, policy: "cascade", born_at: "2026-10-17T00:00:00Z" }] });
+  const t = await go(w3, "thing-from-holder", { thing: lamp, from: BOWL });
+  assert.deepEqual([t.did, t.holder], ["take", "sbx-cy"]);
+  assert.equal(kindRouteOf({ thing: lamp, from: BOWL }), "thing-from-holder");
+  assert.equal(kindRouteOf({ thing: lamp, to: BOWL }), "thing-into-holder");
+});
+
+test("a holder's own capacity outside its class's bounds is refused at the door, never trusted (O1's holdingOf)", async () => {
+  const big = "sbx-ana/big-crate";
+  const w = world({ marks: { ...MARKS, [big]: { id: big, by: "sbx-ana", kind: "sited", class: "thing", holder: true, capacity: 500, at: { x: 5, y: 7 } } } });
+  for (const [route, args] of [["make", { kind: "pocket-comet", count: 1, to: big }], ["take", { from: big }], ["give", { to: big, kind: "pocket-comet" }]])
+    await assert.rejects(go(w, route, args, "sbx-ana"), (e) => /own capacity is refused/.test(e.defect) && /outside 1\.\.120/.test(e.hint), route);
+  assert.equal(w.acts.length, 0);
+});

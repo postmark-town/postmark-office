@@ -65,13 +65,14 @@ export function usablePairs({ actor, here, marks = [], residents = [], fold, att
     const welcome = law.open !== false || mine;
     // take the thing itself: portable, in reach, on the ground (held by no one)
     if (heldBy == null && portableOf(m, view)) add("take", m.id);
-    if (law.holder) {
+    // a holder whose own capacity is refused, or unread, takes and gives nothing until it is set (the door refuses alike)
+    if (law.holder && !law.capacity_refused && Number.isInteger(law.capacity)) {
       const holds = kindEdgesOf(fold, m.id).length > 0 || holdingsOf(attachments, m.id).length > 0;
       // take from it: it holds something, and its open or its household lets you
       if (holds && welcome) add("take", m.id);
       // give into it: you carry something, and it has room and lets you
       const room = roomIn({ capacity: law.capacity, fold, holder: m.id, things: holdingsOf(attachments, m.id).length });
-      if (carrying && welcome && (room == null || room > 0)) add("give", m.id);
+      if (carrying && welcome && room > 0) add("give", m.id);
       // its class's own afforded actions (the Candy Bowl's refill): its maker, at it or carrying it
       for (const a of affordedActions(className, view))
         if (a.action === "refill" && (a.who !== "maker" || String(m.by ?? "") === me)) add("refill", m.id);

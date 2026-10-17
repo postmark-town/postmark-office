@@ -1420,10 +1420,12 @@ async function holdAct(name, args = {}, key = null, verb = null) {
     const { guardedAttachments: guardRows } = await import("./world2-guards.mjs");
     const preRows = await guardRows();
     const preHolder = liveHolder(preRows, String(args.thing));
-    // A THING A CHEST HOLDS (WLD-27): naming it is a take aimed at the chest.
+    // A THING A HOLDER HOLDS (WLD-27; LOGOS v2, O2): naming it takes that mark out
+    // of its holder — the kind door's, whose holder is any thing with holder: true.
     if (preHolder != null && String(preHolder).includes("/") && args.to == null) {
-      const { callUnits, liveUnitDeps } = await import("./world-units.mjs");
-      return await callUnits("thing-from-chest", { ...args, from: String(preHolder) }, key, actor, await liveUnitDeps());
+      const { callKinds } = await import("./world-kinds.mjs");
+      const { liveUnitDeps } = await import("./world-units.mjs");
+      return await callKinds("thing-from-holder", { ...args, from: String(preHolder) }, key, actor, await liveUnitDeps());
     }
     refuseGiveOfUnheld({ thing: args.thing, to: args.to ?? null, actor, holder: preHolder });
     const face = faceOf(preHolder, args.to ?? null);
