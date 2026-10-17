@@ -185,6 +185,10 @@ let pen = await install();
 after(() => { unread(); uninstallActsPen(); claimsPen.__setPoolForTest(null); delete process.env.WORLD2_PG; delete process.env.WORLD2_PG_URL; });
 
 const hold = await import("../src/world-hold.mjs");
+// The leave door asks the class's own makers (LOGOS v2, O1): the amend this drop files cites class: thing, so the law it reads states makers.
+const { seedMakersLaw } = await import("./helpers/makers-law.mjs");
+await seedMakersLaw();
+after(async () => (await import("../src/law-snapshot.mjs")).resetLawSnapshot());
 const { resetPathIndex } = await import("../src/world-journal.mjs");
 
 const KEITH = { household: "keithhouse", handles: new Set(["keith", "kin"]) };

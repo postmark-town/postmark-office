@@ -26,6 +26,11 @@ const {
   activeNotices,
 } = await import("../src/world.mjs");
 const { classNames } = await import("../src/world-classes.mjs");
+// The leave door asks the class's own makers (LOGOS v2, O1); this env has no store, so the law it reads is seeded.
+const { seedMakersLaw } = await import("./helpers/makers-law.mjs");
+const { resetLawSnapshot } = await import("../src/law-snapshot.mjs");
+await seedMakersLaw();
+test.after(() => resetLawSnapshot());
 
 const one = { household: "house-a", handles: new Set(["alpha"]) };
 const two = { household: "house-a", handles: new Set(["alpha", "beta"]) };
