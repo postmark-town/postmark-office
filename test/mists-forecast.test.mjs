@@ -22,10 +22,11 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
+import { copyEngineFiles } from "./helpers/engine-closure.mjs";
 
 const SOURCE_WORLD = process.env.WORLD_CLONE;
 const SOURCE_ENGINE = SOURCE_WORLD ? join(SOURCE_WORLD, "tools", "world-engine.mjs") : null;
@@ -62,7 +63,9 @@ const PUBLISHED = [
   ...Object.values(MARKS),
 ];
 
-if (haveEngine) { mkdirSync(join(repo, "tools"), { recursive: true }); copyFileSync(SOURCE_ENGINE, join(repo, "tools", "world-engine.mjs")); }
+// The engine with what it imports (W2's world-engine.mjs reads ./mark-kind.mjs);
+// the stand-ins below are written after it, so they win over any real copy.
+if (haveEngine) copyEngineFiles(SOURCE_WORLD, repo, ["world-engine.mjs"]);
 put("tools/world-build.mjs", `export function assembleWorld({ worldState, skeleton }) { return { ...worldState, skeleton }; }\n`);
 put("tools/where-is.mjs", `
 export const NOWHERE = Object.freeze({ x: null, y: null, placed: false, source: null, mark_id: null });

@@ -1127,7 +1127,8 @@ test("the control lifts the class in EITHER form — the world CI pins and the o
     assert.equal(worldHasVehicle(plain), false, `${form} form: the control holds no vehicle`);
     assert.equal(vehicleWithin([SHIP], plain), null, `${form} form: aboard her is inside nothing`);
     assert.equal(transportAt(WHARF, service, plain), null, `${form} form: the wharf says nothing`);
-    assert.ok(markIn(plain, "the-town/vehicle"), `${form} form: the class node itself is untouched`);
+    assert.ok(markIn(w, "the-town/vehicle"), `${form} form: the world declares the class node`);
+    assert.deepEqual(markIn(plain, "the-town/vehicle"), markIn(w, "the-town/vehicle"), `${form} form: the class node itself is untouched`);
   }
 });
 

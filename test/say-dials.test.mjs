@@ -63,16 +63,25 @@ const storeHasSay = haveStore && (() => {
 // decays (it did: this file asserted fade_min 5 for weeks after the record said
 // 15, unseen, because it only ever ran beside a hand-hydrated world.db).
 const SLOTS = ["earshot_m", "fade_min", "conversation_lull_min", "speak_every_s", "text_max", "hear_max", "presence_min"];
-const EXPECTED = DB == null ? {} : (() => {
-  const db = new DatabaseSync(DB, { readOnly: true });
-  try {
-    const rows = db.prepare(`SELECT json_extract(p.props, '$.slot') AS slot, json_extract(p.props, '$.value') AS value
+// A dial's node, in EITHER form the record has filed it: a `kind: predicated`
+// child (`slot:`, `value:`; W2 spells it `kind: predicate`) or, under LOGOS v2's
+// W2 world, a `kind: property` node named by its key (`name:`, `default:`).
+// "Every dial becomes a property, and a locked value is its default" (ruled
+// 16:02); a class's property answers before its predicate child (W1 G3/G5),
+// so the property rows sort last and win.
+const DIAL_NAME_SQL = (p) => `CASE ${p}.subkind WHEN 'property' THEN json_extract(${p}.props, '$.name') ELSE json_extract(${p}.props, '$.slot') END`;
+const SAY_NODES = (db) => db.prepare(`SELECT ${DIAL_NAME_SQL("p")} AS slot,
+                                CASE p.subkind WHEN 'property' THEN json_extract(p.props, '$.default') ELSE json_extract(p.props, '$.value') END AS value,
+                                p.subkind AS form
                                 FROM nodes c JOIN edges e ON e.src = c.id AND e.type = 'describes'
-                                JOIN nodes p ON p.id = e.dst AND p.subkind = 'predicated'
-                               WHERE ${CLASS_GATE_C} AND json_extract(c.props, '$.class') = 'say'`).all();
-    return Object.fromEntries(rows.filter((r) => SLOTS.includes(String(r.slot))).map((r) => [String(r.slot), Number(r.value)]));
-  } finally { db.close(); }
+                                JOIN nodes p ON p.id = e.dst AND p.subkind IN ('predicated', 'predicate', 'property')
+                               WHERE ${CLASS_GATE_C} AND json_extract(c.props, '$.class') = 'say'
+                               ORDER BY p.subkind = 'property'`).all();
+const SAY_ROWS = DB == null ? [] : (() => {
+  const db = new DatabaseSync(DB, { readOnly: true });
+  try { return SAY_NODES(db); } finally { db.close(); }
 })();
+const EXPECTED = Object.fromEntries(SAY_ROWS.filter((r) => SLOTS.includes(String(r.slot))).map((r) => [String(r.slot), Number(r.value)]));
 
 describe("the say dials, read off the live world store", { skip: storeHasSay ? false : `no world checkout carrying the-town/say at its newest blessing (${NO_WORLD || "the record lacks it"}) — skipping rather than passing on a fallback, which is the bug this file exists to catch` }, () => {
   test("every one of speech's seven numbers reads from the record", () => {
@@ -130,7 +139,8 @@ describe("the say dials, read off the live world store", { skip: storeHasSay ? f
       "the store carries the-town/say, so it must be able to name where presence_min stands");
 
     const db = new DatabaseSync(DB, { readOnly: true });
-    const row = db.prepare("SELECT json_extract(props, '$.slot') AS slot FROM nodes WHERE id = ?")
+    // A predicate child carries its key as `slot`, a property node as `name`.
+    const row = db.prepare(`SELECT ${DIAL_NAME_SQL("n")} AS slot FROM nodes AS n WHERE n.id = ?`)
       .get(PRESENCE_DIAL_NODE);
     db.close();
     assert.ok(row, `the published id "${PRESENCE_DIAL_NODE}" is not a node in the record — a reader sent there finds nothing`);
@@ -180,13 +190,27 @@ test("no world falls back for every dial, and the disclosure names them", async 
   assert.equal(d.value, 999);
 });
 
-test("classDials keeps its old meaning — frontmatter only, predicates are their own question", () => {
+test("classDials reads frontmatter and properties — predicates are their own question", () => {
   // Every dial is a predicate does not say every predicate is a dial: say's
   // `clocks` clause and doorstep's `psa-fold` clause are law, not knobs, and a
   // dials map that carried them would let a sentence answer to a number's name.
-  const frontmatter = classDials(SAY_CLASS_NAME);
-  assert.equal(Object.hasOwn(frontmatter, "earshot_m"), false,
-    "classDials must not have grown a predicate reader — that is classPredicates' question");
+  //
+  // ⚑ AMENDED for LOGOS v2 (W1 G3/G5, ruled 16:02: "every dial becomes a
+  // property, and a locked value is its default"). classDials is property-first
+  // over the frontmatter `dials:` (law-classes § dialsOf), so "frontmatter only"
+  // no longer holds on a world whose say class files its dials as property
+  // nodes. What still holds on every world: a PREDICATE child is never a dial.
+  // On a world that files the seven as predicated children (the pin CI reads)
+  // none of them is in classDials; on W2, where they are properties, each is,
+  // at its default.
+  const dials = classDials(SAY_CLASS_NAME);
+  const predicateOnly = SAY_ROWS.filter((r) => r.form !== "property" && !SAY_ROWS.some((q) => q.form === "property" && q.slot === r.slot));
+  for (const r of predicateOnly)
+    assert.equal(Object.hasOwn(dials, String(r.slot)), false,
+      `${r.slot} is a predicate child, and classDials answered it — that is classPredicates' question`);
+  for (const r of SAY_ROWS.filter((q) => q.form === "property"))
+    assert.equal(String(dials[String(r.slot)]), String(r.value), `${r.slot} is a property of say; classDials answers it at its default`);
+  if (!SAY_ROWS.length) assert.equal(Object.hasOwn(dials, "earshot_m"), false, "no record names no dial");
 });
 
 test("CLASS_GATE_PARITY: the aliased gate in world-classes carries the roster gate's every clause", async () => {

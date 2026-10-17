@@ -93,9 +93,20 @@ const firstDiff = (x, y, p = "$") => {
   for (const k of kx) { const d = firstDiff(x[k], y[k], `${p}.${k}`); if (d) return d; }
   return null;
 };
+// a stakes row's `kind` in the record's form: the twins answered on a world that
+// files a mark's standing there, and W2 files its class (helpers/kind-forms.mjs;
+// the identity on the world CI pins)
+const inRecordForm = async (text) => {
+  let v;
+  try { v = text.includes('"stakes"') ? JSON.parse(text) : null; } catch { v = null; }
+  if (v == null) return text;
+  const { stakeKindsInOldForm, worldExtendsOf } = await import("./helpers/kind-forms.mjs");
+  const { worldClone } = await import("./fixture-paths.mjs");
+  return JSON.stringify(await stakeKindsInOldForm(v, () => worldExtendsOf(worldClone())));
+};
 // the twin's answer as recorded (helpers/twin-golden.mjs), against the store's
 const same = async (label, newAnswer) => {
-  const n = steady(bytes(await newAnswer) ?? "undefined"), o = TWINS.of(label);
+  const n = await inRecordForm(steady(bytes(await newAnswer) ?? "undefined")), o = TWINS.of(label);
   if (n !== o) assert.fail(`${label}: ${firstDiff(JSON.parse(n), JSON.parse(o))}`);
 };
 
