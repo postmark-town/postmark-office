@@ -404,3 +404,34 @@ test("nit · give { to: <resident> } naming nothing answers G7, never \"you are 
   w.seed([{ from: null, to: "sbx-cy", kind: "pocket-comet", n: 1 }, { from: null, to: "sbx-cy", kind: "carbon-ghost", n: 2 }]);
   await assert.rejects(go(w, "give", { to: "sbx-dee" }), (e) => /give which kind?/.test(e.defect) && /2 carbon-ghosts, 1 pocket-comet/.test(e.hint));
 });
+
+test("B1 · a holder in your own hands is in reach wherever you stand: the door asks where it is now, not where it was made", async () => {
+  const w = world({ reach: () => false }); // the canon place is out of reach
+  w.deps.holderPlace = async (id) => ({ holder: id === BAG ? "sbx-cy" : null, at: null, moved: false });
+  const r = await go(w, "make", { kind: "pocket-comet", count: 2, to: BAG });
+  assert.equal(r.holds.count, 2, "in your hands: in reach");
+  await assert.rejects(go(w, "make", { kind: "pocket-comet", count: 1, to: BOWL }, "sbx-ana"), /out of reach/, "not carried: the canon place, out of reach");
+  w.deps.holderPlace = async () => ({ holder: "sbx-dee", at: null, moved: false });
+  await assert.rejects(go(w, "take", { from: BAG }), (e) => /in sbx-dee's hands/.test(e.defect), "another's carried holder is theirs to give from");
+  w.deps.holderPlace = async () => ({ holder: BOWL, at: null, moved: false });
+  await assert.rejects(go(w, "take", { from: BAG }), (e) => /inside sbx-ana\/the-bowl/.test(e.defect));
+});
+
+test("B2 · a holder is a holder by its holder property, and portable is the thing/portable property — never a class named chest", async () => {
+  const { isHolderMark, portableMark } = await import("../src/kind-holding.mjs");
+  const cp = (n, p) => classViewOf(SNAP).property(n, p);
+  assert.equal(isHolderMark(MARKS[BOWL], cp), true, "a Candy Bowl: holder by its class's constitution property");
+  assert.equal(isHolderMark(MARKS[CRATE], cp), true, "a thing whose maker set holder: true");
+  assert.equal(isHolderMark(MARKS["sbx-ana/a-lamp"], cp), false, "a plain thing holds nothing");
+  assert.equal(portableMark(MARKS["sbx-ana/a-lamp"], cp), true, "portable: sovereign, default true");
+  assert.equal(portableMark({ ...MARKS["sbx-ana/a-lamp"], portable: false }, cp), false, "a maker's own portable: false");
+});
+
+test("B2 · [source pin, not a run] the withdraw-only-when-empty guard and the fixed-thing refusal ask the holder and portable properties", async () => {
+  const { readFileSync } = await import("node:fs");
+  const world = readFileSync(new URL("../src/world.mjs", import.meta.url), "utf8");
+  const hold = readFileSync(new URL("../src/world-hold.mjs", import.meta.url), "utf8");
+  assert.match(world, /const isChest = \(await import\("\.\/kind-holding\.mjs"\)\)\.isHolderMark\(/, "journalWithdraw's empty guard is keyed on the holder property");
+  assert.match(hold, /!\(await import\("\.\/kind-holding\.mjs"\)\)\.portableMark\(m, classProperty\)/, "the fixed-thing refusal reads thing/portable");
+  assert.doesNotMatch(hold, /markClassOf\(m\) === "chest" && m\.portable === false/);
+});
