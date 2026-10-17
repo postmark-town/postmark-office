@@ -132,6 +132,7 @@ function busyRoom(seed) {
   // a holder in cy's hands, sometimes; one in another's hands, sometimes
   if (r() < 0.4) attachments.push(held(holders[0], "cy"));
   if (r() < 0.4) attachments.push(held(holders[1], "dee"));
+  if (r() < 0.4) units.push(make(holders[2], 30)); // a full one: no give into it, no refill of it
   if (r() < 0.6) units.push(make("cy", 1 + Math.floor(r() * 4), pick(["pocket-comet", "thing"])));
   if (r() < 0.2) units.push(make("cy", 20, "thing"));
   const residents = ["dee", "eli"].map((handle) => ({ handle, x: Math.round(r() * 30), y: 0 }));

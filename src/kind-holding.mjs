@@ -31,7 +31,7 @@
 import { createHash } from "node:crypto";
 import { kindEdgesOf, totalOf, nearestCommonClass, UNIT_ACTION } from "./world-stacks.mjs";
 import { lineageOf, markClassOf } from "./world-grants.mjs";
-import { holdingOf, makersOf, truth } from "./holding-law.mjs";
+import { holdingOf, makersOf, truth, whole } from "./holding-law.mjs";
 
 const bounce = (code, defect, hint, extra = {}) => {
   const e = new Error(defect);
@@ -115,6 +115,42 @@ export function portableMark(mark, classProperty) {
   // #499's chest marks said portable on themselves, with no property behind them
   const legacy = p == null && typeof mark?.portable === "boolean" ? mark.portable : null;
   return own ?? legacy ?? truth(p?.value) ?? true;
+}
+
+/**
+ * THE HOLDER'S OWN WORD AT THE LEAVE DOOR (LOGOS v2, O2; review-610 S8; ruled
+ * 16:03): any thing may hold, at its maker's choice. `holder` is sovereign on
+ * thing (default false); with it true, `capacity` (sovereign, within its
+ * class's bounds) and `open` (sovereign) apply; `portable` is sovereign on
+ * thing (default true). A value is written only where the property's tier is
+ * sovereign: a constitution property is the town's, and no instance writes it
+ * (classes.md § What an instance writes). An own capacity outside its bounds is
+ * refused with the holding law's own sentence (holding-law § holdingOf), never
+ * clamped. Returns the fields the record carries, or null when none were sent.
+ */
+export const HOLDER_FIELDS = Object.freeze(["holder", "capacity", "open", "portable"]);
+export function holderWordOf({ payload = {}, klass, classProperty, extendsOf }) {
+  const sent = HOLDER_FIELDS.filter((f) => payload[f] !== undefined);
+  if (!sent.length) return null;
+  const line = klass == null ? [] : lineageOf(klass, extendsOf);
+  if (!line.includes("thing")) throw bounce(422, `${sent.join(", ")} belong to a thing`, 'a thing holds and is carried; give the mark class: "thing" (or a kind of thing)');
+  const out = {};
+  for (const f of sent) {
+    const p = classProperty(klass, f);
+    if (p && p.tier !== "sovereign") throw bounce(422, `${f} is the town's on a ${klass}`, `its ${f} is ${JSON.stringify(p.value)}, set by ${p.from} at the constitution tier: no instance writes it`);
+    if (f === "capacity") {
+      if (whole(payload.capacity) == null) throw bounce(422, "capacity is a whole number", `got ${JSON.stringify(payload.capacity)}`);
+      out.capacity = whole(payload.capacity);
+    } else {
+      if (truth(payload[f]) == null) throw bounce(422, `${f} is true or false`, `got ${JSON.stringify(payload[f])}`);
+      out[f] = truth(payload[f]);
+    }
+  }
+  const law = holdingOf({ mark: out, className: klass, classProperty });
+  if (law.capacity_refused) throw bounce(422, law.capacity_refused, `leave capacity off for its class's ${holdingOf({ className: klass, classProperty }).capacity ?? "default"}`);
+  if ((out.capacity !== undefined || out.open !== undefined) && !law.holder)
+    throw bounce(422, "capacity and open belong to a holder", "add holder: true, or leave them off: a thing holds nothing unless its maker says so");
+  return out;
 }
 
 /** Room left in a holder: its capacity less everything it holds (both maps, plus whole things). */

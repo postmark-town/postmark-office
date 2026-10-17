@@ -98,3 +98,15 @@ test("S8 · the record carries the word: a thing left with holder, capacity and 
   assert.match(text, /^capacity: 12$/m);
   assert.match(text, /^open: false$/m);
 });
+
+test("S8 · holderWordOf, the door's one adjudication, pure: the bounds, the tier, the holder", async () => {
+  const { holderWordOf } = await import("../src/kind-holding.mjs");
+  const { lawSnapshotFromRows, snapProperty } = await import("../src/law-classes.mjs");
+  const snap = lawSnapshotFromRows(LAW);
+  const cp = (n, p) => snapProperty(snap, n, p);
+  const ext = (n) => snap.classes.get(String(n))?.extends ?? null;
+  assert.deepEqual(holderWordOf({ payload: { holder: true, capacity: 12, open: false }, klass: "thing", classProperty: cp, extendsOf: ext }), { holder: true, capacity: 12, open: false });
+  assert.equal(holderWordOf({ payload: {}, klass: "thing", classProperty: cp, extendsOf: ext }), null);
+  assert.throws(() => holderWordOf({ payload: { holder: true, capacity: 121 }, klass: "thing", classProperty: cp, extendsOf: ext }), /a capacity of 121 is outside 1\.\.120/);
+  assert.throws(() => holderWordOf({ payload: { holder: false }, klass: "halloween-candy-bowl", classProperty: cp, extendsOf: ext }), /the town's on a halloween-candy-bowl/);
+});

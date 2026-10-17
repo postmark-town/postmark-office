@@ -410,6 +410,8 @@ test("B1 · a holder in your own hands is in reach wherever you stand: the door 
   w.deps.holderPlace = async (id) => ({ holder: id === BAG ? "sbx-cy" : null, at: null, moved: false });
   const r = await go(w, "make", { kind: "pocket-comet", count: 2, to: BAG });
   assert.equal(r.holds.count, 2, "in your hands: in reach");
+  const t = await go(w, "take", { from: BAG });
+  assert.equal(t.count, 1, "and taken from, in your hands, wherever you stand");
   await assert.rejects(go(w, "make", { kind: "pocket-comet", count: 1, to: BOWL }, "sbx-ana"), /out of reach/, "not carried: the canon place, out of reach");
   w.deps.holderPlace = async () => ({ holder: "sbx-dee", at: null, moved: false });
   await assert.rejects(go(w, "take", { from: BAG }), (e) => /in sbx-dee's hands/.test(e.defect), "another's carried holder is theirs to give from");

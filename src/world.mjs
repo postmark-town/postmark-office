@@ -4426,30 +4426,8 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
   // constitution property is the town's, and no instance writes it (classes.md §
   // What an instance writes). An own capacity outside its bounds is refused with
   // the holding law's own sentence (holding-law § holdingOf), never clamped.
-  let holderFields = null;
-  const HOLDER_FIELDS = ["holder", "capacity", "open", "portable"];
-  if (klass !== "chest" && HOLDER_FIELDS.some((f) => payload[f] !== undefined)) {
-    const line = klass == null ? [] : (await import("./world-grants.mjs")).lineageOf(klass, classExtendsOf());
-    if (!line.includes("thing")) throw bounce(422, `${HOLDER_FIELDS.filter((f) => payload[f] !== undefined).join(", ")} belong to a thing`, 'a thing holds and is carried; give the mark class: "thing" (or a kind of thing)');
-    const { holdingOf, truth, whole } = await import("./holding-law.mjs");
-    holderFields = {};
-    for (const f of HOLDER_FIELDS) {
-      if (payload[f] === undefined) continue;
-      const p = classProperty(klass, f);
-      if (p && p.tier !== "sovereign") throw bounce(422, `${f} is the town's on a ${klass}`, `its ${f} is ${JSON.stringify(p.value)}, set by ${p.from} at the constitution tier: no instance writes it`);
-      if (f === "capacity") {
-        if (whole(payload.capacity) == null) throw bounce(422, "capacity is a whole number", `got ${JSON.stringify(payload.capacity)}`);
-        holderFields.capacity = whole(payload.capacity);
-      } else {
-        if (truth(payload[f]) == null) throw bounce(422, `${f} is true or false`, `got ${JSON.stringify(payload[f])}`);
-        holderFields[f] = truth(payload[f]);
-      }
-    }
-    const law = holdingOf({ mark: holderFields, className: klass, classProperty });
-    if (law.capacity_refused) throw bounce(422, law.capacity_refused, `leave capacity off for its class's ${holdingOf({ className: klass, classProperty }).capacity ?? "default"}`);
-    if ((holderFields.capacity !== undefined || holderFields.open !== undefined) && !law.holder)
-      throw bounce(422, "capacity and open belong to a holder", "add holder: true, or leave them off: a thing holds nothing unless its maker says so");
-  }
+  const holderFields = klass === "chest" ? null
+    : (await import("./kind-holding.mjs")).holderWordOf({ payload, klass, classProperty, extendsOf: classExtendsOf() });
 
   if (klass === "bounty") {
     if (kind !== "sited") throw bounce(422, "a bounty notice is a sited mark", "pin it to the board: a small sited mark within the Bounty Board's ground at the Town Centre");
