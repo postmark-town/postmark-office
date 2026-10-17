@@ -20,7 +20,7 @@
 // caller's `q(text, args)` and runs inside the caller's transaction, because a
 // materialization that could commit on its own would be a second candle.
 
-import { computeStanding, admissionNotes, gistContainment } from "./standing.mjs";
+import { computeStanding, admissionNotes, gistContainment, classLayerVia } from "./standing.mjs";
 import { houseKeyOfVia, houseRowsVia, liveHouseOfVia as liveHouseOfStore, sessionKeysVia } from "../../src/household-deriver.mjs";
 import { REFUSALS, refuse } from "../../src/ceremony.mjs";
 
@@ -438,7 +438,11 @@ export async function recomputeStanding(q) {
   // unindexed it is slower than the walk it would replace.
   const containment = await gistContainment(q);
   const houseOf = await liveHouseOfVia(q);
-  const tiers = computeStanding(standing, { containment, houseOf });
+  // HOW A ROW OF A CLASS KIND STANDS is its class chain's answer, read from the
+  // law the store holds at its head (standing.mjs § the kind rung). W2's
+  // re-kinded rows (`kind: thing`, `town`, …) are ground by that chain.
+  const classes = await classLayerVia(q);
+  const tiers = computeStanding(standing, { containment, houseOf, classes });
   const moved = [];
   for (const m of standing) {
     const next = tiers.get(m.slug);

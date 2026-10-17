@@ -62,7 +62,7 @@ import { escrowAbsentAmong, escrowPresenceAt, escrowLines, unbackedStakesAmong }
 // has to be the one to say no. The law itself is the WORLD's and is imported
 // from a checkout, never copied. See step 5.6.
 import { limitsAtClearing } from "./parcel-cap.mjs";
-import { computeStanding, gistContainment } from "./standing.mjs";
+import { computeStanding, gistContainment, classLayerVia, isGround } from "./standing.mjs";
 // THE SEAL (POS-357, R1): a pure SQL copy of the World this window leaves, in
 // this transaction. The module imports nothing; see its header and step 8.
 import { sealSnapshot } from "./world-snapshot-seal.mjs";
@@ -167,6 +167,11 @@ try {
     throw new Error("no town projection head — staked claims cannot be judged without a pinned stamp read; run stamp-ingest first (the census first-step)");
   if (pending.length && !lawSha)
     throw new Error("no world-law projection head — a clearing computes against law-as-of a sha; run law-ingest first");
+  // THE CLASS LAYER AT THE PINNED LAW: how a row or a claim of a class kind
+  // stands (`kind: thing` and W2's other re-kinded marks are ground by their
+  // chain), for every walk and every ground test below (standing.mjs § the
+  // kind rung).
+  const classes = await classLayerVia(q, lawSha);
   const outcomes = new Map(); // id -> { status, refusal_check }
   const decide = (id, status, check = null) => outcomes.set(id, { status, refusal_check: check });
 
@@ -522,7 +527,7 @@ try {
       .map((row) => row.slug));
     const containment = withoutSlugs(await gistContainment(q), movedSlugs);
     const tiers = computeStanding([...standingRows, ...candidates],
-      { only: new Set(candidates.map((c) => c.slug)), containment, houseOf: await liveHouseOfVia(q) });
+      { only: new Set(candidates.map((c) => c.slug)), containment, houseOf: await liveHouseOfVia(q), classes });
     const escrowByMark = await escrowPresenceAt(q, { townSha });
     const verdict = escrowAbsentAmong(
       toJudge.map((c) => ({ id: c.id, slug: slugOf(c) })),
@@ -545,7 +550,8 @@ try {
     for (const line of escrowLines(verdict, townSha)) console.log(`  ⚑ ${line}`);
   }
   // The claims 5.7 reads as movers, by the same test it reads them with.
-  const isMover = (c) => amends.has(String(c.id)) && (c.class === "sited" || c.class === "parcel") && Boolean(c.geometry?.at);
+  // Positioned ground by the class chain: a moved `kind: thing` is a mover exactly as a moved `kind: sited` is.
+  const isMover = (c) => amends.has(String(c.id)) && isGround({ kind: c.class, at: c.geometry?.at }, classes);
   await escrowGate(isMover);   // 5.5a
 
   // 5.7 · THE CARRY (POS-441, ruled by Darko 2026-10-07: "That should just always
@@ -576,7 +582,7 @@ try {
         `SELECT id::text, slug, kind, owner, household, geometry, parent::text, data, body
            FROM marks WHERE status = 'standing'`);
       const waiting = new Set(pending.map((c) => slugOf(c)).filter(Boolean));
-      const plans = carryPlan({ rows: standingRows, movers, waiting, houseOf: await liveHouseOfVia(q) });
+      const plans = carryPlan({ rows: standingRows, movers, waiting, houseOf: await liveHouseOfVia(q), classes });
       const moving = new Set([...plans.values()].flatMap((p) => [p.slug, ...p.riders.map((r) => r.slug)]));
       const notLocking = [...outcomes.keys()].map(String);
       for (const [claimId, plan] of plans) {

@@ -139,7 +139,7 @@ import { canonRegisterAt } from "./canon-register.mjs";
 // The escrow PRESENCE rule — a real blocker here, unlike the canon note. See
 // § THE SECOND DOOR.
 import { escrowAbsentAmong, escrowPresenceAt } from "./escrow-presence.mjs";
-import { computeStanding } from "./standing.mjs";
+import { computeStanding, classLayerVia } from "./standing.mjs";
 // The same operator `marks`' exclusion constraint and the clearing's step 4/5
 // use, so the ruling, the candle and the constraint can never disagree about
 // what "overlaps" means: one owner, imported, never a second copy (POS-599).
@@ -234,7 +234,7 @@ export async function reCheckGrant(q, winner, { townSha = null } = {}) {
       household: await ownerHouseholdFor(q, winner.claimant),
       geometry: winner.geometry, parent: winner.parent, data: winner.data,
     };
-    const tiers = computeStanding([...standingRows, candidate], { houseOf: await liveHouseOfVia(q) });
+    const tiers = computeStanding([...standingRows, candidate], { houseOf: await liveHouseOfVia(q), classes: await classLayerVia(q) });
     const escrowByMark = await escrowPresenceAt(q, { townSha });
     const verdict = escrowAbsentAmong([{ id: winner.id, slug }], { tiers, escrowByMark, townSha });
     if (verdict.refused.length)

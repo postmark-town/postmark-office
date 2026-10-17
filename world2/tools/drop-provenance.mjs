@@ -28,8 +28,13 @@ export function dropRefId(ref) {
   return BigInt(m[1]) <= ACT_ID_MAX ? m[1] : null;
 }
 
-/** Is this pending claim a resident's candy mark (a unit set down)? The town's own candy is not. */
-export const isCandyClaim = (c) => (c?.class === "sited" || c?.class == null) && c?.data?.class === "candy" && c?.claimant !== "the-town";
+/**
+ * Is this pending claim a resident's candy mark (a unit set down)? The town's own candy is not.
+ * In either form (LOGOS v2 part 2, W2): `kind: sited` + `class: candy` (the
+ * claim's `class` is the mark's kind, its `data.class` the class), or `kind: candy`.
+ */
+export const isCandyClaim = (c) => c?.claimant !== "the-town"
+  && (c?.class === "candy" || ((c?.class === "sited" || c?.class == null) && c?.data?.class === "candy"));
 
 /**
  * The refusal check for one candy claim, given the act its reference names (or

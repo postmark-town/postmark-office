@@ -41,12 +41,14 @@
 // PURE. Rows in, a plan out — no store, no clock — so the decision is falsifiable
 // without a database. The clearing job does the reading and the writing.
 
-import { recordOf, containmentParentOf, worldRootOf, rankCandidates } from "./standing.mjs";
-import { extendsFromMarks, isSited } from "../../src/world-grants.mjs"; // the kind rung (LOGOS v2, O1)
+import { recordOf, containmentParentOf, worldRootOf, rankCandidates, standsAs } from "./standing.mjs";
 
-// POSITIONED is SITED, in either form: `kind: sited`/`parcel`, or a `kind: thing`
-// whose class's lineage (read off the records' own class nodes) reaches sited.
-const positionedIn = (records) => { const lineage = extendsFromMarks(records); return (r) => isSited(r, lineage); };
+// POSITIONED stands as sited or parcel, in either form: `kind: sited`/`parcel`,
+// or a `kind: thing` whose class chain reaches sited (standing.mjs § the kind
+// rung). The chain is read from the class layer the caller hands in
+// (law_projection's), never off the rows: the store keeps class nodes as law,
+// so the rows never carry them. A positioned row with no place is stuck below.
+const positionedIn = (classes) => (r) => { const s = standsAs(r, classes); return s === "sited" || s === "parcel"; };
 const isPoint = (p) => !!p && Number.isFinite(Number(p.x)) && Number.isFinite(Number(p.y));
 
 /** Did the mark's position move, and by how much? null for no move (words only, or extent only). */
@@ -72,13 +74,14 @@ export function translated(geometry, { dx, dy }) {
  * `rows`    the STANDING `marks` rows (id, slug, kind, owner, household, geometry, parent, data);
  * `movers`  [{ claimId, slug, next }] — amend claims of standing marks, `next` the claim's geometry;
  * `waiting` the slugs that have their own pending claim in this window;
- * `houseOf` a stored household spelling → the house's live key (identity when absent).
+ * `houseOf` a stored household spelling → the house's live key (identity when absent);
+ * `classes` the class layer (standing.mjs § classLayerOf), which says which rows of a class kind are positioned.
  *
  * Returns Map claimId → { slug, dx, dy, riders: [{ row, slug, owner, from, to, geometry }],
  * stayed: [{ slug, household }], stuck: [{ slug, why }] }. A mover whose position
  * did not change is absent: nothing rides a words-only amend.
  */
-export function carryPlan({ rows, movers, waiting = new Set(), houseOf = null }) {
+export function carryPlan({ rows, movers, waiting = new Set(), houseOf = null, classes = null }) {
   const out = new Map();
   const moving = movers
     .map((m) => ({ ...m, row: rows.find((r) => r.slug === m.slug) ?? null }))
@@ -88,16 +91,16 @@ export function carryPlan({ rows, movers, waiting = new Set(), houseOf = null })
 
   const house = (cred) => (typeof houseOf === "function" ? houseOf(cred) ?? cred : cred);
   const records = rows.map(recordOf);
-  const positioned = positionedIn(records);
+  const positioned = positionedIn(classes);
   const bySlug = new Map();
   for (const [i, r] of records.entries()) if (!bySlug.has(r.slug)) bySlug.set(r.slug, { rec: r, row: rows[i] });
 
   // The containment answer, once, as the standing walk gives it (the same
   // function, the same ranked candidates).
   const root = worldRootOf(records);
-  const ranked = rankCandidates(records);
+  const ranked = rankCandidates(records, { classes });
   const geoParent = new Map();
-  for (const r of records) if (positioned(r) && r.at) geoParent.set(r.slug, containmentParentOf(r, records, root, ranked));
+  for (const r of records) if (positioned(r) && r.at) geoParent.set(r.slug, containmentParentOf(r, records, root, ranked, classes));
   // UP ONE STEP, BOTH WAYS. A mark rides if the mover is above it by any path
   // that mixes the two edges: the lamp filed in the house rides when the house
   // rides, whether the house rides because it stands inside the parcel or
