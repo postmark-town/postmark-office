@@ -286,7 +286,10 @@ export async function amendsOnTick(client, repo, { record = recordAmendsCarried 
  * settlement rows already committed; a store without the unit acts or the law
  * says so. An unstocked chest is a line, not a failure.
  */
-export async function stockedOnTick(client, { stock = stockChests, crossing = currentCrossing } = {}) {
+export async function stockedOnTick(client, { stock = stockChests, crossing = currentCrossing, on = null } = {}) {
+  // dark by default (src/chests-candy.mjs): the first stock writes nothing
+  const open = on ?? (await import("../../src/chests-candy.mjs")).chestsCandyOn();
+  if (!open) return { verdict: "ok", line: "chests: not stocked — chests and candy are off at this office (WORLD_CHESTS_CANDY unset)" };
   try {
     const r = await stock(client, { crossing: crossing() });
     return { verdict: "ok", line: r.line, result: r };

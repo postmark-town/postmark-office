@@ -1788,6 +1788,9 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       // keyless like the walkers: a chest stands on the world, and the map draws
       // its label and count from this read, never from a stored number.
       if (path === "/world/chests") {
+        // dark by default (chests-candy.mjs): the map is offered no chest
+        const { chestsCandyOn, CHESTS_CANDY_OFF } = await import("./chests-candy.mjs");
+        if (!chestsCandyOn()) return j(res, 200, { chests: [], count: 0, off: CHESTS_CANDY_OFF.defect });
         return import("./world-units.mjs").then((m) => m.chestsRead()).then((r) => j(res, 200, r)).catch((e) => bounceFault(res, "the world door tripped", e));
       }
       // GET /world/present — who is standing where (Stage 2, WORLD_PRESENCE).

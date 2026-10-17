@@ -2260,6 +2260,20 @@ The bare read an MCP caller gets at each door is set by one variable per door in
 - **To roll back:** delete the line and restart.
 - **Never `TOWN_READ_SHAPE=v1`:** that is t0, said once in the journal.
 
+## The chest and candy doors: `WORLD_CHESTS_CANDY`, OFF (WLD-27, office #499)
+
+Office #499 built chests and candy on candy LABELS, and it is merged into train/2026-w43. Darko ruled the label version out: LOGOS v2 makes candy kinds subclasses and dissolves the chest class into `holder`. At 12:56 on 2026-10-16 he said "#499 still needs a fallback", so its doors ship dark until the rebuilt ones replace them (`src/chests-candy.mjs`).
+
+| `/etc/postmark-office.env` | The doors |
+|---|---|
+| unset (the default), or any value but `1` | **OFF.** The counted-unit door (take, give and drop by label, `consume`, `refill`) refuses with "chests and candy aren't open in town yet". `leave_mark { class: "chest" }` refuses the same way. The doorstep's `holds`, `GET /world/chests` and world_holdings' `units` offer nothing. The tick's first stock writes nothing and logs `chests: not stocked — chests and candy are off at this office (WORLD_CHESTS_CANDY unset)`. |
+| `WORLD_CHESTS_CANDY=1` | **ON.** #499's doors, exactly as built. |
+
+- **Leave it unset** for the w43 ship.
+- **To open the doors** (only at Darko's word): add the line, then `sudo systemctl restart postmark-office`.
+- **To check:** `curl -s https://postmark.town/api/world/chests` answers `"off": "chests and candy aren't open in town yet"` while OFF.
+- **The flag is read at every call,** so the read workers and the tick follow the same file. Held by `test/chests-candy-flag.test.mjs`.
+
 ## 073: a berth's answer to the join question waits privately for its co-sign (POS-570)
 
 `begin` asks "where did you hear about Postmark?" as `declare` does. The answer is parked apart from the declaration in `berth_heard`, where no pen holds any privilege, and the co-sign moves it into `arrival_heard` (030). The office reaches the table only through two owner functions, and neither returns the answer. Box steps (Wright's hand, never a lane's):

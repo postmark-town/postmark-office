@@ -4319,6 +4319,11 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
     // candy falls to the whitelist refusal below, exactly as before.
     const droppedUnit = klass === "candy" && dropUnit != null
       && payload.dropped === `act:${dropUnit.actId}` && payload.label === dropUnit.label && kind === "sited";
+    // WLD-27's chest ships dark until LOGOS v2's holder replaces it (chests-candy.mjs)
+    if (klass === "chest" && !(await import("./chests-candy.mjs")).chestsCandyOn()) {
+      const { CHESTS_CANDY_OFF } = await import("./chests-candy.mjs");
+      throw bounce(CHESTS_CANDY_OFF.code, CHESTS_CANDY_OFF.defect, CHESTS_CANDY_OFF.hint);
+    }
     if (!droppedUnit && !residentMayInstantiate(klass))
       throw bounce(422, `class "${klass}" is town-only`,
         `residents may instantiate only [${RESIDENT_INSTANTIABLE.join(", ")}] today (#1797) — the class exists in the law, but citing it on your own mark is the town's act, not a resident's`);
