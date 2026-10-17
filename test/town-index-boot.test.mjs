@@ -18,17 +18,15 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const tmp = mkdtempSync(join(tmpdir(), "town-index-boot-"));
-const dbPath = join(tmp, "office.db");
 let ix;
 
 before(async () => {
-  fixtureDb(dbPath).close();
-  ix = await indexStore(dbPath);
+  ix = await indexStore(fixtureTown());
 });
 
 after(async () => {
@@ -39,7 +37,7 @@ after(async () => {
 /** Boot a switched office and send `ask` from the listening line's own handler. */
 function askAtListen(name, ask) {
   return new Promise((ok, no) => {
-    const child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0", "--db", dbPath,
+    const child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0",
       "--oauth-db", join(tmp, `${name}-oauth.db`), "--roles-db", join(tmp, `${name}-roles.db`)], {
       env: { ...process.env, ...ix.env, TOWN_CLONE: join(tmp, "no-clone-here"), WORLD_CLONE: join(tmp, "no-world-clone"),
         VOICES_LOG: join(tmp, `${name}-voices.jsonl`), TOWN_PUSH: "", OFFICE_READ_WORKERS: "0" },

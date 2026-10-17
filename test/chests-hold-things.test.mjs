@@ -19,6 +19,9 @@ import { callUnits, classViewOf, residentHolds, chestsRead, reservedFor } from "
 import { UNIT_ACTION, foldUnits, totalOf } from "../src/world-stacks.mjs";
 import { liveHolder, holdingsOf } from "../src/world-hold.mjs";
 
+// WLD-27's doors ship dark by default (src/chests-candy.mjs); these are their own tests, so they run with them open.
+process.env.WORLD_CHESTS_CANDY = "1";
+
 const LABEL = "test-comets";
 const CLASSES = new Map(Object.entries({
   mark: { extends: null, dials: {} },

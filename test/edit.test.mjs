@@ -8,12 +8,12 @@ import assert from "node:assert/strict";
 import { existsSync, rmSync, readFileSync, readdirSync, writeFileSync, mkdirSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
-import { fixtureDb, editClone, fixtureKey } from "./fixture.mjs";
+import { editClone, fixtureKey, fixtureTown } from "./fixture.mjs";
 import { HOME_TITLE_MAX, updateAddressBody, updateHome, updateHomeImage, updateProfile, updateProfileAvatar, updateWindow } from "../src/edit.mjs";
 
 delete process.env.TOWN_PUSH; // belt and braces: the spine must stay local
 
-const db = fixtureDb();
+const db = fixtureTown();
 const otherKey = { household: "jenna", handles: new Set(["limen"]) };
 const visitorKey = { household: "some-stranger", handles: new Set(), visitor: true };
 

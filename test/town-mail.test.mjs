@@ -16,7 +16,7 @@ import {
 } from "node:fs";
 import { join, resolve } from "node:path";
 
-import { fixtureDb, fixtureKey } from "./fixture.mjs";
+import { fixtureKey, putValues, fixtureTown, drop } from "./fixture.mjs";
 import { copyTownTools } from "./helpers/town-tools.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
@@ -35,9 +35,9 @@ import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static k
 import { tempDir } from "./helpers/temp-dir.mjs";
 
 // The town index this file's offices read: a store seeded from each fixture
-// office.db (POS-268, office-under-test.mjs). Stopped when the file is done.
+// town (POS-268, office-under-test.mjs). Stopped when the file is done.
 const STORES = [];
-const storeFor = async (dbPath) => { const x = await indexStore(dbPath); STORES.push(x); return x.env; };
+const storeFor = async (town) => { const x = await indexStore(town); STORES.push(x); return x.env; };
 test.after(async () => { for (const x of STORES) await x.stop(); });
 
 delete process.env.TOWN_PUSH; // belt and braces: nothing here may leave the machine
@@ -88,7 +88,7 @@ function mailClone() {
   return dir;
 }
 
-const db = fixtureDb();
+const db = fixtureTown();
 // The checks this file calls in-process read their town index from a store
 // seeded from this fixture (POS-268, office-under-test.mjs).
 const IX_IN = await indexStore(db);
@@ -144,9 +144,8 @@ const LIMEN_KEY = "limenkey";
 
 async function office(clone, env, run) {
   const tmp = tempDir("pm-mailsrv-");
-  const dbPath = join(tmp, "fixture.db");
-  fixtureDb(dbPath).close();
-  const IX_ENV = await storeFor(dbPath);
+  const town = fixtureTown();
+  const IX_ENV = await storeFor(town);
   // --oauth-db is a FLAG, not an env var, and it is where the town journal
   // lives: without it every spawned office in this file would share the repo's
   // own oauth.db and read the previous test's pending letters as its own.
@@ -156,7 +155,7 @@ async function office(clone, env, run) {
   const { child, port } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"),
     // two households at the door: wright's, and the recipient's own — the
     // mail law's second half cannot be read without a key that holds limen
-    "--port", String(port), "--db", dbPath, "--oauth-db", seedStaticKeys(join(tmp, "oauth.db"), `${KEY}=keemin:wright;${LIMEN_KEY}=limen-house:limen`)], {
+    "--port", String(port), "--oauth-db", seedStaticKeys(join(tmp, "oauth.db"), `${KEY}=keemin:wright;${LIMEN_KEY}=limen-house:limen`)], {
     env: {
       ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV, TOWN_CLONE: clone,
       WORLD_CLONE: join(tmp, "no-world-clone"), VOICES_LOG: join(tmp, "voices.jsonl"),
@@ -351,7 +350,7 @@ test("THE MAIL LAW: a flag-on send is visible to the SENDER and invisible to the
 
       // and nothing about the recipient changed anywhere in the record
       assert.deepEqual(inboxFiles(clone, "limen"), []);
-      assert.equal(db.prepare("SELECT 1 FROM letters WHERE id = ?").get(mine.standing[0].letter_id), undefined,
+      assert.equal(db.letters.find((l) => l.id === mine.standing[0].letter_id), undefined,
         "no projection row either — the office index learns about a letter when the record does");
     });
   } finally { rmSync(clone, { recursive: true, force: true }); }
@@ -557,10 +556,10 @@ test("the disclosed path survives a hyphenated recipient — it is carried, neve
   const o = odb();
   try {
     // a resident whose handle has a hyphen, in the index and in the clone alike
-    db.prepare("INSERT INTO residents VALUES (?, ?)").run("jetto-walk", JSON.stringify({
+    putValues(db, "residents", ["jetto-walk", JSON.stringify({
       handle: "jetto-walk", is_office: false, last_active: null,
       address: { data: { since: "2026-08-01" }, body: "# jetto-walk" },
-    }));
+    })]);
     await IX_IN.reseed(); // the store holds the new resident too
     mkdirSync(join(clone, "WHITE_PAGES", "jetto-walk"), { recursive: true });
 
@@ -581,7 +580,8 @@ test("the disclosed path survives a hyphenated recipient — it is carried, neve
     assert.ok(existsSync(join(clone, shown)),
       "the disclosed path is the real one — a sender told the wrong address for their own letter is a door lying quietly");
   } finally {
-    db.prepare("DELETE FROM residents WHERE handle = ?").run("jetto-walk");
+    drop(db, "residents", (r) => r.handle === "jetto-walk");
+    await IX_IN.reseed();
     rmSync(clone, { recursive: true, force: true });
   }
 });

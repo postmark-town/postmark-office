@@ -15,6 +15,9 @@ import { __setPoolForTest } from '../src/world2-pen.mjs';
 import { RECORD_ON } from './acts-pen-stub.mjs';
 import { currentCrossing } from '../src/crossings.mjs';
 
+// WLD-27's doors ship dark by default (src/chests-candy.mjs); these are their own tests, so they run with them open.
+process.env.WORLD_CHESTS_CANDY = '1';
+
 const store = await startStore({ db: 'bevel_followup_boundaries' });
 const skip = store.skip ?? false;
 const ACTOR = 'sbx-cy', HH = 'hh:sbx-cy', LABEL = 'test-comets', CHEST = 'sbx-ana/review-chest';

@@ -342,9 +342,6 @@ let BASE = null; // set per office, since each one is handed a different port
 
 async function withOffice(env, fn) {
   const dir = tempDir("postmark-apex-srv-");
-  const officeDb = join(dir, "fixture.db");
-  const { fixtureDb } = await import("./fixture.mjs");
-  fixtureDb(officeDb).close();
   const port = await freePort();
   BASE = `http://127.0.0.1:${port}`;
   // The child gets its OWN temp and its OWN oauth.db. Without the first it
@@ -353,7 +350,7 @@ async function withOffice(env, fn) {
   // second it opens the CHECKOUT's oauth.db (server.mjs defaults `--oauth-db`
   // to the office root), which is a live file the developer's own office holds:
   // a test must not write there, and two test offices must not write it at once.
-  const child = spawn(process.execPath, [new URL("../src/server.mjs", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"), "--port", String(port), "--db", officeDb, "--oauth-db", seedStaticKeys(join(dir, "oauth.db"), "apexkey=house-a:alpha")], {
+  const child = spawn(process.execPath, [new URL("../src/server.mjs", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"), "--port", String(port), "--oauth-db", seedStaticKeys(join(dir, "oauth.db"), "apexkey=house-a:alpha")], {
     env: { ...process.env, ...env, TOWN_CLONE: join(dir, "no-clone"), WORLD_CLONE: repo, ...W.rowsEnv(dbPath, dir), VOICES_LOG: join(dir, "voices.jsonl"), TOWN_PUSH: "", TEMP: dir, TMP: dir, TMPDIR: dir },
     stdio: ["ignore", "pipe", "pipe"],
   });

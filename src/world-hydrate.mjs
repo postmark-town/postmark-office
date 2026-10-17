@@ -450,7 +450,7 @@ for (const m of marks) {
       // A PROPERTY NODE's own fields (LOGOS v2: name, tier, default, body; the
       // tier is the column). Carried only on `kind: property`, so every other
       // mark projects exactly as it did.
-      ...(m.kind === "property" ? { name: m.name ?? m.slug ?? null, default: m.default ?? null } : {}),
+      ...(m.kind === "property" ? { name: m.name ?? m.slug ?? null, default: m.default ?? null, of: m.of ?? null } : {}),
       far: m.far === true || m.far === "true" || null,
       feature: m.feature ?? null, mechanic: m.mechanic ?? null, timetable: m.timetable ?? null,
       points: Array.isArray(m.points) ? m.points.length : null,
@@ -559,6 +559,14 @@ for (const m of marks) {
       ask: m.ask ?? null,
       reward: m.reward ?? null,
       status: m.status ?? null,
+      // A PROPERTY NODE'S TWO OWN FIELDS, `name` and `default` (POS-659). The
+      // FOURTH instance of this block's one class, carried before the first
+      // `kind: property` node exists rather than after it: LOGOS/classes.md
+      // § Property and predicate gives a property four fixed fields (name,
+      // tier, default, body), and tier and body already ride. WLD-73 part 2
+      // writes the nodes; class-read.mjs reads them, and finds them here.
+      // Only on a property, so no other mark's props grow a key.
+      ...(m.kind === "property" ? { name: m.name ?? null, default: m.default ?? null } : {}),
       frontmatter_problems: problems.length ? problems : null,
       keys: rawKeys(m),               // see § what the AUTHOR wrote, above
     },

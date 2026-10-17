@@ -51,7 +51,7 @@ import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { openOauthDb } from "../src/oauth.mjs";
 import { ensureTownJournal, readTownJournal, appendTownJournal } from "../src/town-journal.mjs";
 import { paperActCommits } from "../src/town-updates.mjs";
@@ -97,7 +97,7 @@ function postmasterClone() {
 const logHome = () => join(scratch("2302-odb"), "oauth.db");
 
 const KEY = { household: "office", handles: new Set(["postmaster"]), ghId: "7", ghLogin: "keeminlee" };
-const db = fixtureDb();
+const db = fixtureTown();
 
 // ASYNC-AWARE (POS-158). `return fn(o)` handed back a promise and the `finally`
 // then closed the db and cleared the flag while the drain was still running —

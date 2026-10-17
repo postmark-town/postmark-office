@@ -1,18 +1,16 @@
 // town-ledger-docs.test.mjs — the town's mail ledger and its docs come through
 // the office (POS-351): GET /town/ledger and GET /town/docs, from the town
-// index, on the store and on office.db alike.
+// index (the store's).
 //
 //   node --test test/town-ledger-docs.test.mjs
 //
 //   THE SAME OBJECTS   every ledger entry the office serves is the vendored
 //                      reader's own object (the one the site's ledger.json
 //                      always held), in ledger order; the docs are its docs.
-//   BOTH ROADS         the store (the ingest's seed) and office.db (hydrate)
-//                      answer the same body.
 //   THE DELTA          a new delivery line and an edited README reach the
 //                      store through the ingest's delta, not only its seed.
 //   STAMPS.md          the office serves the town's stamps explainer beside the
-//                      reader's five (OFFICE_DOCS), on both roads and through
+//                      reader's five (OFFICE_DOCS), at the seed and through
 //                      the delta, and household { read: "stamps" } points at it.
 //
 // THE FLIP (after the commit): drop the `docs` meta row from the delta ingest
@@ -21,25 +19,18 @@
 
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
-import { join, resolve, dirname } from "node:path";
+import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { fileURLToPath } from "node:url";
 
-import { indexStoreFromTown } from "./helpers/office-under-test.mjs";
+import { indexStore, indexStoreFromTown } from "./helpers/office-under-test.mjs";
+import { emptyTown, setMeta } from "./fixture.mjs";
 import { readTown } from "../vendor/tools/lib/town.mjs";
 import { townDocsValue } from "../src/town-index.mjs";
 import { townLedger as ledgerFromStore, townDocs as docsFromStore } from "../src/town-index-store.mjs";
-import { townLedger as ledgerFromDb, townDocs as docsFromDb } from "../src/queries.mjs";
 import { estateRead } from "../src/household-stamps.mjs";
 
-const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-// The office.db legs here read office.db, whatever switch the run was started
-// with; the switched legs set TOWN_INDEX_READS themselves (POS-268). These
-// twins go with office.db at 5b.
-delete process.env.TOWN_INDEX_READS;
 const trash = [];
 const stores = [];
 after(async () => {
@@ -72,13 +63,12 @@ async function storeRead(s, fn) {
   try { return await fn(c); } finally { await c.end(); }
 }
 
-test("THE SAME OBJECTS, BOTH ROADS: the store and office.db serve the vendored reader's ledger and docs", async (t) => {
+test("THE SAME OBJECTS: the store serves the vendored reader's ledger and docs", async () => {
   const dir = town();
   const want = readTown(dir);
   // the reader keeps its five; the office adds STAMPS.md in the reader's shape
   const wantDocs = { ...want.docs, STAMPS: { body: "# Stamps\n\nThe town's currency.", path: "STAMPS.md" } };
   const s = await indexStoreFromTown(dir, { db: "ledger_docs_seed" });
-  if (!s.store) return t.skip("the suite's index is forced to office.db");
   stores.push(s);
 
   const ledger = await storeRead(s, ledgerFromStore);
@@ -89,23 +79,11 @@ test("THE SAME OBJECTS, BOTH ROADS: the store and office.db serve the vendored r
   assert.deepEqual(docs.docs, JSON.parse(JSON.stringify(wantDocs)));
   assert.deepEqual(Object.keys(docs.docs), ["JOINING", "README", "STAMPS", "TOWN-RULES"]);
   assert.equal(docs.docs.JOINING.body.includes("title: joining"), false, "the frontmatter is the reader's to strip");
-
-  // office.db, the way the rehydrate tick builds it
-  const dbPath = join(dir, "..", `office-${Date.now()}.db`);
-  trash.push(dbPath);
-  const h = spawnSync(process.execPath, [join(ROOT, "src", "hydrate.mjs"), "--town", dir, "--db", dbPath], { encoding: "utf8" });
-  assert.equal(h.status, 0, h.stderr);
-  const db = new DatabaseSync(dbPath, { readOnly: true });
-  try {
-    assert.deepEqual(ledgerFromDb(db), ledger, "office.db answers the store's body, as_of included");
-    assert.deepEqual(docsFromDb(db), docs);
-  } finally { db.close(); }
 });
 
-test("THE DELTA: a new delivery and an edited README reach the store through the ingest's delta", async (t) => {
+test("THE DELTA: a new delivery and an edited README reach the store through the ingest's delta", async () => {
   const dir = town();
   const s = await indexStoreFromTown(dir, { db: "ledger_docs_delta" });
-  if (!s.store) return t.skip("the suite's index is forced to office.db");
   stores.push(s);
   appendFileSync(join(dir, "WHITE_PAGES", "mail-ledger.md"), L3);
   writeFileSync(join(dir, "README.md"), "# Postmark\n\nA town for agents, revised.\n");
@@ -142,22 +120,21 @@ test("STAMPS.md: household { read: \"stamps\" } points at the explainer the docs
 
 test("town { read: \"docs\" }: the MCP reaches the docs, from the index's one docs value", async () => {
   const dir = town();
-  const dbPath = join(dir, "..", `office-docs-${Date.now()}.db`);
-  trash.push(dbPath);
-  const h = spawnSync(process.execPath, [join(ROOT, "src", "hydrate.mjs"), "--town", dir, "--db", dbPath], { encoding: "utf8" });
-  assert.equal(h.status, 0, h.stderr);
+  const s = await indexStoreFromTown(dir, { db: "ledger_docs_mcp" });
+  stores.push(s);
   const { callTool } = await import("../src/mcp.mjs");
   const { TOWN_READABLE } = await import("../src/town-apex.mjs");
-  const db = new DatabaseSync(dbPath, { readOnly: true });
+  // the MCP door reads the store this process is pointed at
+  const keep = { pg: process.env.WORLD2_PG, url: process.env.WORLD2_PG_URL };
+  Object.assign(process.env, { WORLD2_PG: s.env.WORLD2_PG, WORLD2_PG_URL: s.env.WORLD2_PG_URL });
   try {
-    const meta = { as_of: docsFromDb(db).as_of };
-    const ctx = { db, key: null, meta, asOf: meta.as_of, canWrite: false, clone: null };
+    const served = await storeRead(s, docsFromStore);
+    const ctx = { key: null, asOf: served.as_of, canWrite: false, clone: null };
     const town = (args) => callTool("town", args, ctx);
     assert.ok(TOWN_READABLE.includes("docs"), "the town door names the read");
 
     // the pointer the stamps read carries is the call that answers it
     const one = await town({ read: "docs", args: { doc: "stamps" } });
-    const served = docsFromDb(db);
     assert.deepEqual(one, { as_of: served.as_of, doc: "stamps", path: "STAMPS.md", body: served.docs.STAMPS.body },
       "STAMPS whole, the same body GET /town/docs serves");
     assert.deepEqual(await town({ read: "docs", doc: "stamps" }), one, "from the top level too");
@@ -172,11 +149,16 @@ test("town { read: \"docs\" }: the MCP reaches the docs, from the index's one do
     const bad = await town({ read: "docs", args: { doc: "ledger" } });
     assert.equal(bad.code, 422);
     assert.match(bad.defect, /must be one of: readme, joining, town-rules, mail, contributing, stamps/);
-  } finally { db.close(); }
+  } finally {
+    if (keep.pg === undefined) delete process.env.WORLD2_PG; else process.env.WORLD2_PG = keep.pg;
+    if (keep.url === undefined) delete process.env.WORLD2_PG_URL; else process.env.WORLD2_PG_URL = keep.url;
+  }
 });
 
-test("an index that predates the docs key answers an empty docs object, never a throw", () => {
-  const db = new DatabaseSync(":memory:");
-  db.exec("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT); INSERT INTO meta VALUES ('as_of', 'abc')");
-  assert.deepEqual(docsFromDb(db), { as_of: "abc", docs: {} });
+test("an index that predates the docs key answers an empty docs object, never a throw", async () => {
+  const rows = emptyTown();
+  setMeta(rows, "as_of", "abc");
+  const s = await indexStore(rows, { db: "ledger_docs_predates" });
+  stores.push(s);
+  assert.deepEqual(await storeRead(s, docsFromStore), { as_of: "abc", docs: {} });
 });

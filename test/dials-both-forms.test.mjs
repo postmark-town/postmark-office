@@ -90,3 +90,21 @@ test("a property node wins over an old dial the class still carries, in the clas
     assert.equal(departurePace(), 60);
   } finally { resetLawSnapshot(); resetClassRosterCache(); }
 });
+
+test("a property default's bare words become their values (review-606): true, false and null; text stays text", async () => {
+  const { propertyValue } = await import("../src/world-grants.mjs");
+  assert.equal(propertyValue("true"), true);
+  assert.equal(propertyValue("false"), false);
+  assert.equal(propertyValue("null"), null);
+  assert.equal(propertyValue(60), 60);
+  assert.equal(propertyValue("the quay, when the record places them nowhere else"), "the quay, when the record places them nowhere else");
+  const cls = { id: "the-town/arena", kind: "class", class: "arena" };
+  assert.deepEqual(dialsOfClassNode(cls, [prop("a", "round_boundary_joins", "true"), prop("b", "from_crossing", "null"), prop("c", "beta", "false"), prop("d", "guest_hp", 20)]),
+    { round_boundary_joins: true, from_crossing: null, beta: false, guest_hp: 20 });
+});
+
+test("a child property filed flat beside its class's own (`of:`, W1's settled layout) is no dial of the class", () => {
+  const bag = { id: "the-town/halloween-candy-bag", kind: "class", class: "halloween-candy-bag" };
+  assert.deepEqual(dialsOfClassNode(bag, [prop("the-town/halloween-candy-bag-holder", "holder", "true"),
+    prop("the-town/halloween-candy-bag-capacity", "capacity", 200, { of: "the-town/halloween-candy-bag-holder" })]), { holder: true });
+});

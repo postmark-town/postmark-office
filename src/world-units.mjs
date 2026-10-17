@@ -41,6 +41,7 @@ import { faultLogged, plainReason } from "./fault-words.mjs"; // the office's ow
 import { markClassOf } from "./world-grants.mjs";
 import { holdingOf } from "./holding-law.mjs"; // holder, capacity, open: read from the class tree (LOGOS v2, O1)
 import { snapProperty } from "./law-classes.mjs"; // the kind rung: a mark's class in both forms (LOGOS v2, O1)
+import { chestsCandyOn, chestsCandyOffError } from "./chests-candy.mjs"; // WLD-27 ships dark until LOGOS v2's doors replace it
 
 // ── SLOTS HELD FOR AN ACT STILL IN FLIGHT (Bevel's review, finding 3) ───────
 //
@@ -274,6 +275,8 @@ async function chestOrThrow(deps, id, view) {
  * key's own resident (callHoldTool § actingHandle); the freeze was asked.
  */
 export async function callUnits(route, args, key, actor, deps) {
+  // DARK BY DEFAULT (chests-candy.mjs): every counted-unit route, before any read
+  if (!chestsCandyOn()) throw chestsCandyOffError();
   const view = deps.classes();
   if (!view.readable) throw bounce(503, "the class layer could not be read, so the office cannot tell candy from anything else",
     "counted units read the candy, chest and thing classes from the record; nothing was recorded — try again when the law is loaded");

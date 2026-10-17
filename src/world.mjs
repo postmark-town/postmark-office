@@ -2233,10 +2233,12 @@ export async function markRecords(ids = [], w = null) {
 // from the class layer, which reads the property nodes first and an old
 // `dials:` second. A class node still carrying `dials:` is shown as it is.
 function withClassDials(mark) {
-  if (kindFieldOf(mark) !== "class" || mark.dials) return mark;
+  if (kindFieldOf(mark) !== "class") return mark;
   const name = classNodeNameOf(mark);
   const d = name ? classDials(name) : {};
-  return Object.keys(d).length ? { ...mark, dials: d } : mark;
+  // PROPERTY FIRST, as both projections are (review-606): the class layer's
+  // dials (its property nodes over any old `dials:`) over the record's own.
+  return Object.keys(d).length ? { ...mark, dials: { ...(mark.dials ?? {}), ...d } } : mark;
 }
 
 export async function worldEyes(args = {}, key = null, { roll = [], v2 = false, budget = null, entered: given = undefined } = {}) {
@@ -2542,6 +2544,14 @@ export async function worldInvestigate(args = {}, key = null) {
       ...(receipt ? { receipt } : {}) };
   }
 
+  // POS-659: every instance read carries a one-line class pointer, read off
+  // the store's class layer (class-read.mjs § markPointer). Absent when the
+  // store cannot answer, and a failing class read never fails the investigate.
+  let pointer = null;
+  try { pointer = (await import("./class-read.mjs")).markPointer(String(args.mark)); }
+  catch (e) { pointer = null; console.error(`[class-read] the pointer for ${args.mark} could not be read: ${e?.message ?? e}`); }
+  const classPointer = pointer ? { class_pointer: pointer } : {};
+
   // OPT-IN, and OFF IS BYTE-IDENTICAL. Without with_image: true this branch is
   // not entered, nothing is fetched, no field is added, and the answer is the
   // object this door has always returned. The image URL rides in the answer
@@ -2552,6 +2562,7 @@ export async function worldInvestigate(args = {}, key = null) {
     const got = await markImageBytes(r.image);
     return {
       ...r,
+      ...classPointer,
       ...(receipt ? { receipt } : {}),
       image_note: got.note,
       // The transport carrier, not door vocabulary — mcp.mjs lifts these out
@@ -2584,7 +2595,7 @@ export async function worldInvestigate(args = {}, key = null) {
       transportNote = service ? stopAnnotationFor(String(args.mark), service, w) : null;
     }
   } catch { transportNote = null; }
-  return { ...r, ...(receipt ? { receipt } : {}), ...(stands ? { stands } : {}), ...(transportNote ? { transport: transportNote } : {}) };
+  return { ...r, ...classPointer, ...(receipt ? { receipt } : {}), ...(stands ? { stands } : {}), ...(transportNote ? { transport: transportNote } : {}) };
 }
 
 // ── FIND A MARK BY NAME, FROM ANYWHERE (2026-09-26) ─────────────────────────
@@ -4351,6 +4362,12 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
     // payload can set, and the mark it files names that very act and label.
     const droppedUnit = klass === "candy" && dropUnit != null
       && payload.dropped === `act:${dropUnit.actId}` && payload.label === dropUnit.label && kind === "sited";
+    // WLD-27's chest ships dark until LOGOS v2's holder replaces it (chests-candy.mjs, #608)
+    const chestsOpen = (await import("./chests-candy.mjs")).chestsCandyOn();
+    if (klass === "chest" && !chestsOpen) {
+      const { CHESTS_CANDY_OFF } = await import("./chests-candy.mjs");
+      throw bounce(CHESTS_CANDY_OFF.code, CHESTS_CANDY_OFF.defect, CHESTS_CANDY_OFF.hint);
+    }
     // AN UNREADABLE CLASS LAYER IS AN OUTAGE, NOT A REFUSAL (review-606 B2). When
     // the roster stands on its floor, or the class's lineage dangles (it ends at
     // a class the layer does not hold), the office cannot tell whether a
