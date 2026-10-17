@@ -989,6 +989,7 @@ export async function world2Serve(path, searchParams, { p: injected = null } = {
       era: d.era, act_id: d.act_id,
       line: d.line ?? live.formatDeparture({ ...d, iso: d.iso }),
       ...(d.line ? {} : { line_derived: true }),
+      ...(d.landed ? { landed: d.landed } : {}),   // a placement says what set you down (WLD-63 row 68 B)
     }));
     // THE CUT IS MADE ON THE RENDERED ROWS, NOT IN SQL, and the reason is this
     // derivation's own law. `departureRecords` REFUSES a row it cannot read
@@ -1576,7 +1577,8 @@ export async function apexPresent(p, { world, at, engine: eng, roster = "roll" }
     handle: r.handle, distance_m: r.distance_m, source: r.source,
     bearing: quantizeBearing(bearingDeg(r.x - at.x, r.y - at.y)),
     band: distanceBand(r.distance_m),
-    at: { x: Math.round(r.x), y: Math.round(r.y) },
+    // the record's own tenths of a metre, as /world/present serves them (WLD-63 row 68 (b))
+    at: { x: Math.round(r.x * 10) / 10, y: Math.round(r.y * 10) / 10 },
     moving: r.moving,
     ...(r.moving ? { remaining_m: Math.round(r.remaining_m ?? 0) } : {}),
     place: placeWordsFrom(world.marks, { x: r.x, y: r.y }, eng.verbs),

@@ -361,6 +361,9 @@ export function foldWalks(rows, walkMod) {
   for (const r of rows) {
     if (BigInt(r.id) <= BigInt(arrivals.cursor)) continue;
     arrivals.cursor = String(r.id);
+    // a landing replaces the walk before it, as a stop does: you were placed
+    // (WLD-63 row 68 B), so no arrival of that walk is still to come
+    if (r.action === "land") { arrivals.byActor.delete(r.actor); continue; }
     if (r.action !== "walk") continue;
     const land = landingOf(r, walkMod);
     if (!land) { arrivals.byActor.delete(r.actor); continue; } // a stop replaces the walk before it too

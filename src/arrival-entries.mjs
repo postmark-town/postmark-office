@@ -158,7 +158,7 @@ export async function entryAtTheWalk({ who, key, mark, accept = false, into = nu
   // walk to stop.
   const base = crossingDeps();
   const dry = {
-    ...base, walking: null, stop: null,
+    ...base, walking: null, stop: null, land: null,
     now: () => arrivalCrossing,
     standpointOf: async () => ({ x: target.x, y: target.y, name: who }),
     record: async () => ({ within: [], dry: true }),

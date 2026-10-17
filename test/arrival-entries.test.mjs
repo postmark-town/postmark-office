@@ -206,6 +206,7 @@ const officeDeps = () => ({
   record: async () => { throw new Error("the pre-check WROTE"); },
   walking: async () => { throw new Error("the pre-check asked about the walk"); },
   stop: async () => { throw new Error("the pre-check stopped the walk"); },
+  land: async () => { throw new Error("the pre-check set somebody down"); },
 });
 
 test("ON THE WAY, AND IT WOULD ENTER — the pre-check writes nothing and the intent is queued against the walk", async () => {
@@ -214,7 +215,7 @@ test("ON THE WAY, AND IT WOULD ENTER — the pre-check writes nothing and the in
   const r = await entryAtTheWalk({ ...WALK, arrived: false }, {
     crossingDeps: officeDeps,
     enter: async (payload, key, deps) => {
-      seen = { payload, standpoint: await deps.standpointOf("ann"), now: deps.now(), walking: deps.walking, stop: deps.stop };
+      seen = { payload, standpoint: await deps.standpointOf("ann"), now: deps.now(), walking: deps.walking, stop: deps.stop, land: deps.land };
       await deps.record({ lines: ["x"] });   // the dry pen: answers, writes nothing
       return { entered: ["a/room"], within: [] };
     },
@@ -226,6 +227,7 @@ test("ON THE WAY, AND IT WOULD ENTER — the pre-check writes nothing and the in
   assert.equal(seen.now, 250.5, "at the arrival instant");
   assert.equal(seen.walking, null);
   assert.equal(seen.stop, null);
+  assert.equal(seen.land, null, "and no landing pen: a pre-check sets nobody down");
   assert.deepEqual(queued, [{ walkActId: "42", handle: "ann", household: "ann-house", mark: "a/room", accept: false, into: null, dueAt: WALK.dueAt }]);
 });
 
@@ -315,9 +317,9 @@ async function officeAt({ published = OUTSIDE_FACE, ledger = "" } = {}) {
   const thresholds = await grammarOf();
   const worldState = { marks: marks() };
   let text = ledger;
-  const stops = [], records = [];
+  const stops = [], lands = [], records = [];
   return {
-    stops, records, text: () => text,
+    stops, lands, records, text: () => text,
     base: {
       world: async () => worldState,
       ledger: async () => text,
@@ -333,6 +335,7 @@ async function officeAt({ published = OUTSIDE_FACE, ledger = "" } = {}) {
         return { lines: payload.lines, within: thresholds.occupancyAt(folded, payload.at).get(payload.handle) ?? [], seq: 900 + records.length };
       },
       stop: async (who, to, k, opts = {}) => { stops.push({ who, to, from: opts.from ?? null }); },
+      land: async (who, to, k, opts = {}) => { lands.push({ who, to, via: opts.via ?? null, why: opts.why ?? null }); },
     },
   };
 }
@@ -347,8 +350,11 @@ test("THE TRANSCRIPT · at arrival on the Gilded Doors' outside face, the walker
   assert.equal(o.records[0].via, "spire/doors-outside");
   assert.equal(o.records[0].arrival_of, "4242", "the pen is told which walk this entry arrived with");
   assert.equal(seq, "901");
-  assert.deepEqual(o.stops, [{ who: "ann", to: INSIDE_FACE, from: INSIDE_FACE }], "THE LANDING: set down at the inside face, now");
-  assert.deepEqual(answer.landed, { ...INSIDE_FACE, mark: "spire/doors-inside", clamped: false, recorded: true });
+  // WLD-63 row 68: a LANDING (never a walk), a step in from the inside face: its 2×2 reaches x 861, so 1.5 m past it is 862.5
+  const STEPPED_IN = { x: 862.5, y: 1000 };
+  assert.deepEqual(o.lands, [{ who: "ann", to: STEPPED_IN, via: "spire/doors-outside", why: "passage" }], "THE LANDING: set down a step in from the inside face, now");
+  assert.deepEqual(o.stops, [], "and no walk is written");
+  assert.deepEqual(answer.landed, { ...STEPPED_IN, mark: "spire/doors-inside", clamped: false, recorded: true, via: "spire/doors-outside" });
   assert.equal("walk_ended" in answer, false, "#2859 holds: the arrived walk is not stopped again");
 });
 
@@ -428,6 +434,7 @@ test("THE G4 RACE · walk B declared during the lock wait: the pen refuses, the 
     assert.deepEqual(q.settled, [{ walk: "10", outcome: "overtaken", enter_act_id: null, words: null }], mark);
     assert.equal(o.records.length, 0, `${mark}: nothing written`);
     assert.deepEqual(o.stops, [], `${mark}: walk B is neither stopped nor landed over`);
+    assert.deepEqual(o.lands, [], `${mark}: and no landing is written over it`);
   }
 });
 

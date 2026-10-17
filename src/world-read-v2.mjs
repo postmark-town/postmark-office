@@ -61,6 +61,7 @@ export const AROUND_SHOWN = 3;
 export const PUBLIC_ACTS = Object.freeze({
   say: "said something",
   walk: "walked",
+  land: "landed",
   enter: "went in",
   exit: "came out",
   take: "picked something up",
@@ -217,7 +218,7 @@ export function happenedGlance(h, { sinceCrossing } = {}) {
   if (h.unavailable) return { since: `crossing ${sinceCrossing}`, unavailable: h.unavailable };
   const around = h.around_you ?? {};
   const events = (around.events ?? []).slice(0, AROUND_SHOWN).map((e) => ({
-    who: e.actor, what: e.kind === "departure" ? "set out" : e.kind === "emission" ? "spoke" : e.kind === "attachment" ? "took or left something" : e.kind,
+    who: e.actor, what: e.kind === "departure" ? "set out" : e.kind === "landing" ? "landed" : e.kind === "emission" ? "spoke" : e.kind === "attachment" ? "took or left something" : e.kind,
     when: hourZ(e.at),
   }));
   return {
