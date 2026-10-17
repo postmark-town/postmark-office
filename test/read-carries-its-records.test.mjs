@@ -156,13 +156,38 @@ test("FALSIFIER 5 — the mover's own class rides every read, with its stride (2
   // reader's desk priced legs at the legacy 15 km and wore a "?". The class a
   // reader IS travels with them, the way the town's ground does.
   if (!HAVE_WORLD) return t.skip(NO_WORLD);
-  for (const [where, at] of STANDPOINTS) {
-    const read = await worldEyes(at);
-    const stride = read.records[STRIDE_MARK_ID];
-    assert.ok(stride, `${where}: \`records\` does not carry ${STRIDE_MARK_ID}`);
-    const pace = Number(stride?.dials?.pace_km_per_crossing);
-    assert.ok(Number.isFinite(pace) && pace > 0, `${where}: the stride mark carries no pace dial (${pace})`);
-  }
-  // ⚑ THE FLIP: drop STRIDE_MARK_ID from markRecords' appended list → the first
-  //   assertion reds on every standpoint; FALSIFIER 2 stays green either way.
+  // ⚑ THE CLASS LAYER PRODUCTION READS (LOGOS v2, W1 G3/G5). On a world that
+  // files the pace as a `kind: property` node (W2), the class mark carries no
+  // `dials:` of its own, and the record takes its dials from the class layer
+  // (world.mjs § withClassDials). Production's class layer is the law snapshot,
+  // ingested by the law pen's own deriveLaw, so this seeds it from the same
+  // checkout the fold reads. On the world CI pins the frontmatter carries the
+  // pace either way.
+  const { deriveLaw } = await import("../world2/tools/law-ingest.mjs");
+  const { reloadLawSnapshot, resetLawSnapshot, LAW_REFRESH_SQLS } = await import("../src/law-snapshot.mjs");
+  const { resetClassRosterCache } = await import("../src/world-classes.mjs");
+  const { rows } = await deriveLaw({ lawRepo: WORLD_CLONE });
+  const law = rows.map((r) => ({ number: 1, tag_sha: "f".repeat(40), newest: 1, ...r }));
+  // the store answers the two statements a refresh sends, and nothing else
+  const answers = new Map([[LAW_REFRESH_SQLS.pin, [{ newest: 1, pinned: 1 }]], [LAW_REFRESH_SQLS.law, law]]);
+  await reloadLawSnapshot({ force: true, query: async (sql) => {
+    if (!answers.has(sql)) throw new Error(`the law stub was asked a statement it does not answer: ${String(sql).slice(0, 80)}`);
+    return { rows: answers.get(sql) };
+  } });
+  resetClassRosterCache();
+  try {
+    for (const [where, at] of STANDPOINTS) {
+      const read = await worldEyes(at);
+      const stride = read.records[STRIDE_MARK_ID];
+      assert.ok(stride, `${where}: \`records\` does not carry ${STRIDE_MARK_ID}`);
+      const pace = Number(stride?.dials?.pace_km_per_crossing);
+      assert.ok(Number.isFinite(pace) && pace > 0, `${where}: the stride mark carries no pace dial (${pace})`);
+    }
+  } finally { resetLawSnapshot(); resetClassRosterCache(); }
+  // ⚑ THE FLIPS: drop STRIDE_MARK_ID from markRecords' appended list → the first
+  //   assertion reds on every standpoint, on either world; FALSIFIER 2 stays
+  //   green either way. Drop withClassDials' class-layer merge → the pace
+  //   assertion reds ONLY on W2, and only with the seed above in place: on the
+  //   world CI pins the class mark's own `dials:` carries the pace, so that
+  //   flip stays green there.
 });

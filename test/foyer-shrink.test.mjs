@@ -758,8 +758,25 @@ test("F7c5 · THE MORNING PAGE DID NOT FATTEN — the doorstep bundle is byte-id
   const meta = { as_of: "fixturesha000000000000000000000000000000" };
   const bctx = { key: null, asOf: meta.as_of, canWrite: false, clone: null, pen: null, odb: null, nowMs: GOLDEN_NOW_MS };
   const now = { full: await doorstepBundle("wright", bctx), slim: await doorstepBundle("wright", { ...bctx, slim: true }) };
-  assert.equal(JSON.stringify(now), readFileSync(GOLD, "utf8"),
-    "the morning page moved — every byte here is served on every doorstep, and this design exists to keep that number still");
+  // THE GOLDEN'S WORLD IS BYTE-EXACT; ANOTHER WORLD IS READ FORM-AWARE (LOGOS v2
+  // part 2, W2; the seventeenth note below). On the world test/clone-pins.json
+  // pins, which is the world the golden was captured on, every byte binds, the
+  // stances segment's world data included. On any other world (W2 before its pin
+  // moves), a stakes row's `kind` is read back in the golden's form and the
+  // stances segment's world data is compared by its shape.
+  const { worldClone } = await import("./fixture-paths.mjs");
+  const PINS = JSON.parse(readFileSync(join(import.meta.dirname, "clone-pins.json"), "utf8"));
+  const worldHead = execFileSync("git", ["-C", worldClone(), "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  const gold = readFileSync(GOLD, "utf8");
+  if (worldHead === PINS.world.sha) {
+    assert.equal(JSON.stringify(now), gold,
+      "the morning page moved — every byte here is served on every doorstep, and this design exists to keep that number still");
+  } else {
+    const { stakeKindsInOldForm, worldKinds } = await import("./helpers/kind-forms.mjs");
+    const page = JSON.stringify(worldDataByShape(await stakeKindsInOldForm(structuredClone(now), () => worldKinds(worldClone()))));
+    assert.equal(page, JSON.stringify(worldDataByShape(JSON.parse(gold))),
+      `the morning page moved (read form-aware: the world clone is at ${worldHead.slice(0, 12)}, the golden's world is ${PINS.world.sha.slice(0, 12)}) — every byte here is served on every doorstep, and this design exists to keep that number still`);
+  }
   // ⚠ THE GOLDEN WAS REGENERATED ONCE, 2026-08-31, and this is the honest note
   // about it. The parity change moved the page by exactly TWO paths —
   // `full.the_bundle` and `slim.the_bundle` — because the bundle LAW SENTENCE
@@ -1037,11 +1054,60 @@ test("F7c5 · THE MORNING PAGE DID NOT FATTEN — the doorstep bundle is byte-id
   //
   //   full  24972 -> 24984 (+12) · slim  22534 -> 22546 (+12)
   //
+  // ⚠ AND READ FORM-AWARE OFF ITS OWN WORLD, NOT RE-CAPTURED, 2026-10-17 (lane
+  // plumb-w2-tests, LOGOS v2 part 2), so that the case holds on the world CI
+  // pins and on W2 alike. ON THE GOLDEN'S WORLD NOTHING CHANGED: when the world
+  // clone's HEAD is test/clone-pins.json's world, the compare is byte-exact, as
+  // it always was (review-617: a shape compare there stopped pinning the
+  // stances segment). Diffed leaf by leaf on CI-shaped clones (suite-clones.sh's
+  // fetch, at the pins, world daef8487, town 5efee017): 0 paths moved. On the
+  // regenerated W2 world (#236, b12b7156, its fold tagged settlement/S9999):
+  // 122 paths, and none of them the page's. Two kinds of path, two remedies,
+  // applied only off the golden's world:
+  //   1. `stakes.rows.N.kind`, 7 rows a skin: the mark's own `kind`, which W2's
+  //      kind rung spells as its class (`thing`, `portal-ground`) or as
+  //      `predicate`. Each is read back in the old form's word through the
+  //      world's own class chain (helpers/kind-forms.mjs), and every row is held
+  //      to its mark's own `kind` in the record, so a row that misstates its
+  //      mark still reds.
+  //   2. `stances`, 54 paths a skin: the count awaiting and the five rows, the
+  //      world's own data, which W2 carries newer marks in. They are compared by
+  //      their shape (§ worldDataByShape): every key, every boolean, the row
+  //      count and the ground's size still bind, and the world's values do not.
+  //      The tenth note's rule stands: a PR that moves the pin re-captures here.
+  // The golden's bytes are unchanged (full 24984, slim 22546).
+  //
   // So the assertion below is the one that actually carries the promise, and it
   // is stated separately so a future regeneration cannot quietly absorb a card:
   assert.equal(JSON.stringify(now).includes('"card"'), false,
     "a card reached the doorstep — a token on every morning page ever served, and the cost this whole design was shaped to avoid");
 });
+
+/**
+ * The page with the stances segment's world data put as its shape, for F7c5 on
+ * a world that is not the golden's (the seventeenth note). `stances_awaiting`
+ * by its type; `ground` by its length and its entries' types; each `awaiting`
+ * row by its keys, its nested keys, its booleans and its other leaves' types,
+ * a list in it by its length, except the row's own `on_your_ground`, which
+ * names that mark's world and is held by its entries' types. The keys, the row
+ * count, the ground's size and every other segment's bytes stay as they are, so
+ * a new field, a sixth row or a wider ground still moves the page. A segment
+ * that is absent or unavailable is left alone.
+ */
+function worldDataByShape(bundle) {
+  const leaf = (v) => v === null ? null : typeof v === "boolean" ? v : `<${typeof v}>`;
+  const shape = (v, k = null) => Array.isArray(v)
+    ? (k === "on_your_ground" ? [...new Set(v.map((x) => shape(x)))] : v.map((x) => shape(x)))
+    : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([key, x]) => [key, shape(x, key)])) : leaf(v);
+  for (const skin of ["full", "slim"]) {
+    const s = bundle?.[skin]?.stances;
+    if (!s || typeof s !== "object") continue;
+    if ("stances_awaiting" in s) s.stances_awaiting = shape(s.stances_awaiting);
+    if ("ground" in s) s.ground = shape(s.ground);
+    if (Array.isArray(s.awaiting)) s.awaiting = s.awaiting.map((r) => shape(r));
+  }
+  return bundle;
+}
 
 /**
  * Run `fn` with the WALL clock forced to `ms`: `Date.now()` and a bare

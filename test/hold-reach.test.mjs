@@ -627,12 +627,22 @@ test("the id this lane cites is the convention its live siblings keep", async ()
   // and this asserts the convention it rests on against the record — two
   // predicated children of a class, each `<by>/<leaf-directory>`, so the same
   // reading gives `.../attach/the-reach/mark.md` its id.
+  //
+  // ⚑ EITHER FORM (LOGOS v2 part 2, W2): a class's clause child is `kind:
+  // predicated` on the world CI pins and `kind: property` on W2 ("every dial
+  // becomes a property", ruled 16:02). The id convention is the same in both,
+  // so the siblings may stand in either form, but both in ONE form: the record
+  // filed them together.
   const { worldMarkById } = await import("../src/world.mjs");
+  const CLAUSE_FORMS = ["predicated", "property"];
+  const forms = new Set();
   for (const id of ["the-town/the-anchor", "the-town/the-not-ground"]) {
     const { mark } = await worldMarkById(id);
     assert.ok(mark, `${id} must stand in canon for this convention to be evidence`);
-    assert.equal(mark.kind, "predicated");
+    assert.ok(CLAUSE_FORMS.includes(mark.kind), `${id} is kind ${mark.kind}, not a class's clause child in either form`);
+    forms.add(mark.kind);
   }
+  assert.equal(forms.size, 1, `the two siblings stand in different forms (${[...forms]}) — the record filed them together`);
 });
 
 // ── the since: shelf's WIRING (found by this lane's own flip run) ────────────
