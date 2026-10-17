@@ -199,7 +199,7 @@ export async function callKinds(route, args, key, actor, deps) {
           refuseIfClosed({ mark, id: from, law, actor, deps, verb: "take from" });
         }
         const stamp = await deps.stamp(actor);
-        const seed = drawSeed({ actor, from, at: stamp.at });
+        const seed = drawSeed({ actor, from, crossing: deps.crossing(), at: stamp.at, ordinal: units.length });
         const plan = { ...planTakeKinds({ fold, actor, from, kind, n, seed }), seed };
         refuseOverCarry({ who: actor, units: totalOf(fold, actor) + inFlight, things: holdingsOf(attachments, actor).length, adding: n, cap });
         const w = await writeKinds(deps, key, actor, plan, { stamp, words: sentence.take({ actor, n, from }) });

@@ -172,8 +172,16 @@ export function potLuck({ edges, n, seed, kind = null }) {
   return { drawn: [...drawn].map(([k, c]) => ({ kind: k, count: c })).sort((a, b) => (a.kind < b.kind ? -1 : 1)) };
 }
 
-/** The seed of an act's draw: its actor, its holder and its witness stamp (O2 gap G6). */
-export const drawSeed = ({ actor, from, at }) => `${actor}·${from}·${at}`;
+/**
+ * The seed of an act's draw (O2 gap G6): the act's own identity, as the
+ * creatures' d20 is its trigger act's — its actor, its holder, its crossing,
+ * its witness stamp (an object: serialized) and its ordinal, the number of
+ * unit acts the record held when it was judged. Two takes by one resident
+ * from one bowl in one spot are two ordinals, so they draw apart; a replay of
+ * the act reads the same five and draws the same. Recorded on the act.
+ */
+export const drawSeed = ({ actor, from, crossing = null, at = null, ordinal = null }) =>
+  [actor, from, crossing, typeof at === "string" ? at : JSON.stringify(at ?? null), ordinal].map((x) => String(x ?? "")).join("·");
 
 /**
  * THE CANDIDATES, when `from` is omitted and several holders in reach hold the

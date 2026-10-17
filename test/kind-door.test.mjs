@@ -151,13 +151,17 @@ test("8 · pot luck: a take naming no kind draws from everything held, derived f
     assert.equal(r.draw, "pot luck");
     assert.equal(r.took.count, 5);
     const seed = w.acts.at(-1).payload.seed;
-    assert.equal(seed, drawSeed({ actor: "sbx-cy", from: BOWL, at: w.acts.at(-1).at }), "the seed is the act's own identity, recorded on it");
+    assert.equal(seed, drawSeed({ actor: "sbx-cy", from: BOWL, crossing: 260, at: w.acts.at(-1).at, ordinal: 1 }), "the seed is the act's own identity, recorded on it");
     // the recorded moves are exactly the draw the seed gives: a replay draws the same
     const replay = potLuck({ edges: [{ kind: "carbon-ghost", count: 6 }, { kind: "pocket-comet", count: 6 }], n: 5, seed });
     assert.deepEqual(w.acts.at(-1).payload.moves.map((m) => ({ kind: m.kind, count: m.n })), replay.drawn);
     draws.push(JSON.stringify(w.acts.at(-1).payload.moves));
   }
   assert.equal(draws[0], draws[1], "two offices replaying the same act draw the same");
+  // a witness stamp is an object on the real path: the seed serializes it, never "[object Object]"
+  const placed = drawSeed({ actor: "a", from: BOWL, at: { anchor: "x/y", dx: 1, dy: 2 }, ordinal: 4 });
+  assert.ok(placed.includes(`"anchor":"x/y"`), placed);
+  assert.notEqual(placed, drawSeed({ actor: "a", from: BOWL, at: { anchor: "x/y", dx: 1, dy: 2 }, ordinal: 5 }), "a second take from one spot draws apart");
   // a different seed may draw differently, and every draw is within what is held
   const d = potLuck({ edges: [{ kind: "a", count: 1 }, { kind: "b", count: 100 }], n: 101, seed: "x" });
   assert.deepEqual(d.drawn, [{ kind: "a", count: 1 }, { kind: "b", count: 100 }]);
