@@ -187,7 +187,7 @@ export function classOwnProperties(name) {
     for (let i = 0; i < queue.length && i < 512; i++) {
       const { r, parent } = queue[i];
       if (r?.name == null || out[String(r.name)]) continue;
-      out[String(r.name)] = { default: r.dflt ?? null, tier: r.tier ?? null, id: r.id ?? null, children: {} };
+      out[String(r.name)] = { default: r.dflt ?? null, tier: r.tier ?? null, id: r.id ?? null, parent, children: {} };
       if (parent && out[parent] && !out[parent].children[String(r.name)]) out[parent].children[String(r.name)] = { default: r.dflt ?? null, tier: r.tier ?? null, id: r.id ?? null };
       for (const k of db.prepare(PROPERTY_CHILD_SQL).all(String(r.id))) queue.push({ r: k, parent: String(r.name) });
     }
@@ -738,6 +738,9 @@ const PROPERTY_CHILD_SQL = `
  * point you at.
  */
 export function dialNode(className, slot) {
+  // the dial's PROPERTY NODE first (LOGOS v2: a dial's property node is named by its key), its predicate child second
+  const prop = classOwnProperties(className)[String(slot)]?.id;
+  if (prop) return String(prop);
   const law = lawFor();
   if (law) return predicateNodeOf(law, className, slot);
   const w = openWorldStore();
@@ -779,10 +782,14 @@ export function classDials(name) {
  * Values are TEXT: a predicated mark's `value:` is a string in the record.
  */
 export function classPredicates(name) {
+  // PROPERTY FIRST (LOGOS v2, W1 G3/G5): a predicate child moves to a `kind:
+  // property` node named by its slot, its value the property's default. The
+  // class's own property nodes answer first, its predicate children second.
+  const props = Object.fromEntries(Object.entries(classOwnProperties(name)).filter(([, p]) => p.parent == null).map(([k, p]) => [k, p.default]));
   const law = lawFor();
-  if (law) return predicatesOf(law, name);
+  if (law) return { ...predicatesOf(law, name), ...props };
   const w = openWorldStore();
-  if (!w) return {};
+  if (!w) return props;
   try {
     const db = w.db;
     const out = {};
@@ -790,8 +797,8 @@ export function classPredicates(name) {
       if (r?.slot != null) out[String(r.slot)] = r.value;
     }
     db.close();
-    return out;
-  } catch { return {}; }
+    return { ...out, ...props };
+  } catch { return props; }
 }
 
 /**

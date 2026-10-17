@@ -210,6 +210,27 @@ export function extendsFromMarks(marks) {
   return (name) => ext.get(String(name)) ?? null;
 }
 
+/**
+ * A class node's DIALS, in either form (LOGOS v2, lane O1; W1 G3/G5): "Every
+ * dial becomes a property, and a locked value is its default" (ruled 16:02),
+ * and a dial's property node is named by the dial's key verbatim. So a class's
+ * dials are its own top-level `kind: property` children (name → default),
+ * PROPERTY FIRST, then whatever `dials:` frontmatter the class still carries.
+ * `children` is the class node's direct child marks. Null when neither says
+ * anything, as the projections always stored an absent `dials:`.
+ */
+export function dialsOfClassNode(m, children = []) {
+  const old = m?.dials && typeof m.dials === "object" && !Array.isArray(m.dials) ? m.dials : null;
+  const props = {};
+  for (const c of children ?? []) {
+    if (kindFieldOf(c) !== "property") continue;
+    const name = String(c.name ?? c.slug ?? String(c.id ?? "").split("/").pop() ?? "").trim();
+    if (name && !(name in props) && c.default !== undefined) props[name] = c.default;
+  }
+  if (!old && !Object.keys(props).length) return null;
+  return { ...(old ?? {}), ...props };
+}
+
 /** Is this mark sited, in either form? (`kind === "sited" || kind === "parcel"` before the kind rung.) */
 export const isSited = (m, extendsOf) => standingOf(m, extendsOf) === "sited";
 

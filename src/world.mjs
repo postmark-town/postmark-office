@@ -47,7 +47,7 @@ import { guardedDraftsForKey, guardedLiveChildrenOf, guardedLiveMarks } from "./
 import { WORLD_STAKE_TOOLS, actingAs, callWorldStakeTool, emptyPurseRefusalFor, heldAtOffice, worldPortfolioStakeSlice, markStakeBlock } from "./world-stake.mjs"; // P3 draft, append-shaped
 import { toConfirm } from "./stamps-preview.mjs"; // POS-83: the inline stake's half of the confirmation step
 import { visitorRulesGate } from "./visitor-rules.mjs"; // POS-300: a berth reads the town's rules for visitors before its first say
-import { isSited, kindFieldOf, markClassOf } from "./world-grants.mjs"; // the kind rung: a mark's class and standing, in both forms (LOGOS v2, O1)
+import { classNodeNameOf, isSited, kindFieldOf, markClassOf } from "./world-grants.mjs"; // the kind rung: a mark's class and standing, in both forms (LOGOS v2, O1)
 import { classNames, classRoster, classDials, classExtendsOf, classProperty, departurePace, freeCellIn, STRIDE_MARK_ID } from "./world-classes.mjs";
 import { makersOf } from "./holding-law.mjs"; // who may make an instance: the class's own makers (LOGOS v2, O1) // which classes exist — read from the record, never held
 import { HOLD_TOOLS, callHoldTool } from "./world-hold.mjs"; // the object primitive: who holds what
@@ -2221,9 +2221,22 @@ export async function markRecords(ids = [], w = null) {
   for (const id of [...ids, ...(await groundMarkIds(w)), STRIDE_MARK_ID]) {
     if (id == null || out[id]) continue;
     const mark = byId.get(id);
-    if (mark) out[id] = mark;
+    if (mark) out[id] = withClassDials(mark);
   }
   return out;
+}
+
+// A CLASS RECORD CARRIES ITS DIALS IN EITHER FORM (LOGOS v2, O1; W1 G3/G5):
+// once every dial is a `kind: property` node, a class node carries no `dials:`
+// of its own, and a reader of `record.dials` (the walk ETA's pace, above; the
+// lean read's class records) would find none. Such a record takes its dials
+// from the class layer, which reads the property nodes first and an old
+// `dials:` second. A class node still carrying `dials:` is shown as it is.
+function withClassDials(mark) {
+  if (kindFieldOf(mark) !== "class" || mark.dials) return mark;
+  const name = classNodeNameOf(mark);
+  const d = name ? classDials(name) : {};
+  return Object.keys(d).length ? { ...mark, dials: d } : mark;
 }
 
 export async function worldEyes(args = {}, key = null, { roll = [], v2 = false, budget = null, entered: given = undefined } = {}) {

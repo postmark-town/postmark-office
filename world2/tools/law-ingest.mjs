@@ -62,7 +62,7 @@ import { join, resolve, relative } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 
 import { actionEntriesOf } from "../../src/world-store.mjs";
-import { classNodeNameOf, extendsFromMarks, isSited, kindFieldOf } from "../../src/world-grants.mjs"; // the kind rung (LOGOS v2, O1)
+import { classNodeNameOf, dialsOfClassNode, extendsFromMarks, isSited, kindFieldOf } from "../../src/world-grants.mjs"; // the kind rung (LOGOS v2, O1)
 
 export const LAW_REPO_KEY = "world-law"; // projection_heads.repo for this pen
 
@@ -248,8 +248,16 @@ export async function deriveLaw({ lawRepo }) {
   // whole record the world's own loader built (dials, implements, actions,
   // extends, version, body — the fields that make a class mark law).
   const declarations = marks.filter((m) => isClassDeclaration(m, byId));
+  // A class's DIALS are its property nodes first, its old `dials:` second (LOGOS
+  // v2, W1 G3/G5), so the row carries the one merged map and every reader of a
+  // class row's `dials` reads a dial in either form.
+  const childrenOf = new Map();
+  for (const m of marks) if (m._parentMarkId) { if (!childrenOf.has(m._parentMarkId)) childrenOf.set(m._parentMarkId, []); childrenOf.get(m._parentMarkId).push(m); }
   for (const m of declarations) {
-    push("class", relPath(repo, join(m._dir, "mark.md")), String(classNodeNameOf(m)), recordData(m));
+    const data = recordData(m);
+    const dials = dialsOfClassNode(m, childrenOf.get(m.id));
+    if (dials) data.dials = dials;
+    push("class", relPath(repo, join(m._dir, "mark.md")), String(classNodeNameOf(m)), data);
   }
 
   // ── kind: grant ────────────────────────────────────────────────────────────

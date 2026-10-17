@@ -96,7 +96,12 @@ export const rosterOf = (snap) => new Set(snap.classes.keys());
 export function dialsOf(snap, name) {
   const d = snap.classes.get(String(name))?.dials;
   const v = typeof d === "string" ? (() => { try { return JSON.parse(d); } catch { return null; } })() : d;
-  return (v && typeof v === "object" && !Array.isArray(v)) ? v : {};
+  const old = (v && typeof v === "object" && !Array.isArray(v)) ? v : {};
+  // PROPERTY FIRST (LOGOS v2, W1 G3/G5): the class's own top-level property
+  // nodes, each named by its dial's key, over the old frontmatter.
+  const props = {};
+  for (const [n, p] of snap.properties?.get(String(name)) ?? []) if (p.parent == null && p.default !== undefined && p.id != null) props[n] = p.default;
+  return Object.keys(props).length ? { ...old, ...props } : old;
 }
 
 /** A class's predicate children as `slot -> value` — world-classes § classPredicates. */
@@ -112,7 +117,7 @@ export function propertiesOf(snap, name) {
   for (const [n, p] of snap.properties?.get(String(name)) ?? []) {
     const children = {};
     for (const [c, v] of p.children ?? []) children[c] = { ...v };
-    out[n] = { default: p.default, tier: p.tier, id: p.id, children };
+    out[n] = { default: p.default, tier: p.tier, id: p.id, parent: p.parent ?? null, children };
   }
   return out;
 }

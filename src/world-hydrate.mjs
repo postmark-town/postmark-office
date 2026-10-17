@@ -55,7 +55,7 @@ import {
 import { createGraphRows, graphTablesOf, graphCounts, writeRowsFile } from "./world-graph-rows.mjs";
 import { blessed } from "./world-branches.mjs";
 import { readReleaseStamp } from "./release.mjs";
-import { classFieldOf, classNodeNameOf, kindFieldOf, standingOf } from "./world-grants.mjs"; // the kind rung: one answer for both forms (LOGOS v2, O1)
+import { classFieldOf, classNodeNameOf, dialsOfClassNode, kindFieldOf, standingOf } from "./world-grants.mjs"; // the kind rung: one answer for both forms (LOGOS v2, O1)
 
 const argOf = (name, fallback) => { const i = process.argv.indexOf(name); return i !== -1 ? process.argv[i + 1] : fallback; };
 const flag = (name) => process.argv.includes(name);
@@ -396,6 +396,12 @@ for (const m of marks) {
 }
 function extendsOfClass(name) { const e = classDecls.get(String(name)); return e == null ? null : String(e); }
 const classOf = (m) => classFieldOf(m) ?? undefined;
+// A class's DIALS are its property nodes first, its old `dials:` second (LOGOS
+// v2, W1 G3/G5: every dial moves to a `kind: property` node named by its key).
+// The projection carries the one merged map, so every `$.dials` reader of the
+// store reads a dial in either form.
+const childrenOf = new Map();
+for (const m of marks) if (m._parentMarkId) { if (!childrenOf.has(m._parentMarkId)) childrenOf.set(m._parentMarkId, []); childrenOf.get(m._parentMarkId).push(m); }
 
 const oddFrontmatter = [];
 for (const m of marks) {
@@ -473,7 +479,7 @@ for (const m of marks) {
       declares: (classOf(m) !== undefined && standsInWorks(m)) || undefined,
       class_version: Number.isFinite(Number(m.version)) ? Number(m.version) : null,
       extends: m.extends ?? null,
-      dials: (m.dials && typeof m.dials === "object" && !Array.isArray(m.dials)) ? m.dials : null,
+      dials: classOf(m) !== undefined ? dialsOfClassNode(m, childrenOf.get(m.id)) : ((m.dials && typeof m.dials === "object" && !Array.isArray(m.dials)) ? m.dials : null),
       implements: Array.isArray(m.implements) ? m.implements : null,
       // `actions:` is the key (renamed from `affordances:` 2026-08-15 — the
       // category collapsed: everything a class grants IS an action); the old
