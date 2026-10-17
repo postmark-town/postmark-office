@@ -77,7 +77,7 @@ export const ACT_GROUPS = Object.freeze({
   move: ["walk", "enter", "exit", "ride"],
   make: ["leave-mark", "withdraw"],
   back: ["stake", "unstake"],
-  carry: ["take", "give", "drop"],
+  carry: ["take", "give", "drop", "consume", "refill"],
   self: ["note-to-self"],
 });
 

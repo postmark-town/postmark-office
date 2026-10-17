@@ -340,6 +340,21 @@ test("QA fail 4 · a refusal's \"From here you can\" is the bare read's own trim
   }, { verbs: ["leave-mark", "take", "give", "drop", "refill"] });
 });
 
+test("QA I1 · refill from a step away names where it is used (on, or carrying, a bowl you made), never a class node's (null, null)", { skip }, async () => {
+  await seed();
+  const bowlClass = { id: "the-town/halloween-candy-bowl", props: { slug: "halloween-candy-bowl", class: "halloween-candy-bowl", class_version: 1, body: "A Halloween Candy Bowl is a thing that holds.",
+    actions: [{ action: "refill", who: "maker", from: "reach", effect: "leave-mark { kind, count, to: this bowl }", residue: "the-town/leave-mark" }],
+    path: "WORLD/marks/let-there-be-light/the-town-centre/the-keeping-works/postmark-node/mark/thing/halloween-candy-bowl/mark.md" } };
+  await withApex(async (worldApex) => {
+    const r = await worldApex({ do: "refill", args: { thing: MY_BOWL, kind: "pocket-comet", count: 1 } }, KEY);
+    assert.ok(r.error, JSON.stringify(r).slice(0, 300));
+    assert.doesNotMatch(String(r.hint), /null, null|walk there/, `no direction to a class node with no place: ${r.hint}`);
+    assert.match(String(r.hint), /halloween-candy-bowl/);
+    assert.match(String(r.hint), /footprint/, "say where it is used: standing within the bowl");
+    assert.match(String(r.hint), /its maker/, "and whose it is: the bowl's maker's");
+  }, { verbs: ["leave-mark", "take", "give"], classes: [bowlClass] });
+});
+
 test("QA fail 5 · the v2 read's you.holding carries what you hold by kind, beside your whole things", { skip }, async () => {
   await seed();
   await carry(BAG);

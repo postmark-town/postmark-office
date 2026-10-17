@@ -1712,9 +1712,31 @@ function affordableAt(db, action) {
   for (const row of db.prepare(ACTION_QUERY_ALL).all()) {
     if (!entriesFrom(row, db).some((e) => e.action === action)) continue;
     const node = db.prepare(NODE_AT).get(row.id);
-    where.push({ mark: row.id, class: row.class, at: { x: node?.at_x ?? null, y: node?.at_y ?? null } });
+    // who may take it, as the class declares (the Candy Bowl's refill: its maker)
+    const declared = parseJson(row.actions, null) ?? parseJson(row.affordances, []);
+    const who = Array.isArray(declared) ? declared.find((a) => String(a?.action ?? a?.subverb ?? "").trim() === action)?.who ?? null : null;
+    where.push({ mark: row.id, class: row.class, at: { x: node?.at_x ?? null, y: node?.at_y ?? null }, ...(who ? { who } : {}) });
   }
   return where;
+}
+
+/**
+ * "Not here — there", in words a resident can act on. A grant on a placed mark is somewhere to walk
+ * to. A grant on a class node the Keeping Works declares stands nowhere: it is that class's own
+ * afforded action, used at one of its instances (the playground's QA of part 2, I1: refill's hint
+ * sent the reader to "the-town/halloween-candy-bowl (null, null)", when the answer was "stand on
+ * your bowl"). Exported for the bounce's own test.
+ */
+export function elsewhereHint(elsewhere = []) {
+  const placed = elsewhere.filter((w) => Number.isFinite(w?.at?.x) && Number.isFinite(w?.at?.y));
+  const classes = elsewhere.filter((w) => !placed.includes(w));
+  const said = [];
+  if (placed.length) said.push(`It is afforded at ${placed.map((w) => `${w.mark} (${w.at.x}, ${w.at.y})`).join("; ")} — walk there and it appears.`);
+  for (const w of classes) {
+    const klass = w.class ?? w.mark;
+    said.push(`It is a ${klass}'s own action${w.who === "maker" ? ", for its maker" : ""}: stand within a ${klass}'s footprint, or carry it, and it appears.`);
+  }
+  return said.join(" ");
 }
 
 // ── seam 2 · the terms block ────────────────────────────────────────────────
@@ -2977,7 +2999,7 @@ async function apexDo(args, key, ctx = {}) {
           { ride_doors: ride.doors, affordable_at: ride.affordable_at, ...(ride.timetable_unreadable ? { timetable_unreadable: ride.timetable_unreadable } : {}), affordable_here: here });
       return elsewhere.length
         ? bounce(422, `"${action}" is not afforded where you stand`,
-          `It is afforded at ${elsewhere.map((w) => `${w.mark} (${w.at.x}, ${w.at.y})`).join("; ")} — walk there and it appears. ${canDo}`,
+          `${elsewhereHint(elsewhere)} ${canDo}`,
           { affordable_at: elsewhere, affordable_here: here })
         : bounce(422, `"${action}" is afforded nowhere in the world — no place grants it`,
           `No class mark in the world affords it, so there is nowhere to walk to for it. ${canDo}`,
