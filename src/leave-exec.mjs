@@ -228,7 +228,11 @@ async function main() {
   // deletion. This is the one-line minimum that keeps it from writing a filing
   // the world's own gate B would refuse; nothing else here was brought forward.
   let parentDir, parentId, fossilDir = null;
-  if (p.kind === "sited" || p.kind === "parcel") {
+  // SITED IN EITHER FORM (`kind: thing` as much as `kind: sited`), a parcel included. The door has
+  // judged the standing already (world.mjs § leaveMarkAct, under the office's class layer): a sited
+  // or parcel declaration always carries `at` and a description never does, so the place answers
+  // here, as W2's mark-kind § isSited reads it, and the clone's class nodes cannot disagree with it.
+  if (p.at != null) {
     parentId = null;
     // GATE A BEFORE GATE B. A mark's path is wherever it was born, forever: if
     // this id is in the frozen manifest, its filing is the manifest's and this

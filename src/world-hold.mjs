@@ -670,7 +670,7 @@ export function amendCallFor(thingId, at) {
   return {
     do: "leave-mark", tool: "world_leave_mark",
     args: { by: id.slice(0, cut), slug: id.slice(cut + 1), amend: true, at: { x: Number(at.x), y: Number(at.y) }, preview: true },
-    note: "the author's own pen: send every other line of the mark as it stands (kind, extent, body, class), read the preview, then send it again without preview: true",
+    note: "the author's own pen: send every other line of the mark as it stands (kind, extent, body, and class if it carries one: a thing is kind: thing now, and the old kind: sited with class: thing is still taken), read the preview, then send it again without preview: true",
   };
 }
 
@@ -1090,7 +1090,11 @@ const placeText = (p) => `(${Number(p.x)}, ${Number(p.y)})`;
  * amend). Any key in neither list is an authored line the door cannot carry,
  * and the amend is refused rather than made to drop it.
  */
-export const AMEND_CARRIES = Object.freeze(["kind", "extent", "points", "body", "slot", "value", "class", "ask", "reward", "status", "image", "capacity", "portable", "welcome"]);
+// `kind` and `class` are carried as the record spells them, in either form: the
+// door judges both alike and writes the form the class tree says (world.mjs §
+// THE FORM IT IS WRITTEN IN). `holder` and `open` are a thing's holder word,
+// which the door re-declares (kind-holding § holderWordOf; O2, review-610 S8).
+export const AMEND_CARRIES = Object.freeze(["kind", "extent", "points", "body", "slot", "value", "class", "ask", "reward", "status", "image", "capacity", "portable", "welcome", "holder", "open"]);
 export const AMEND_LEAVES = Object.freeze([
   "id", "by", "at", "tier", "sovereign", "placementParent", "household", "declared_household",
   "stamps", "weight", "weight_parts", "ledger_weight", "date", "signal",
