@@ -11,11 +11,11 @@
 // class chain: a kind whose lineage reaches `sited` reads `sited`, one that
 // reaches the predicate reads `predicated`. A word the old form already used
 // passes unchanged, so on the world the goldens were captured on this is the
-// identity and the comparison is exactly as strict as it was. Two things are
-// left as they are, so the comparison reds on them: a kind whose lineage
-// reaches neither, and a row whose kind is not its mark's own `kind` in the
-// record (the page must still say what the record says; only the form is read
-// back).
+// identity and the comparison is exactly as strict as it was. Two things make
+// the comparison red: a kind whose lineage reaches neither is left as it is,
+// and, once any row is in the new form, a row whose kind is not its mark's own
+// `kind` in the record is marked so (the page must still say what the record
+// says; only the form is read back).
 
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -51,7 +51,7 @@ export function oldFormKind(kind, extendsOf) {
  * clone is read only then.
  */
 export async function stakeKindsInOldForm(value, worldLater) {
-  let world = null;
+  let world;
   const rows = [];
   const find = (v) => {
     if (Array.isArray(v)) { v.forEach(find); return; }
@@ -62,10 +62,16 @@ export async function stakeKindsInOldForm(value, worldLater) {
     }
   };
   find(value);
+  // A page in the old form is the identity and never reads the clone. Once one
+  // row is in the new form, the clone is read and EVERY row that names a mark is
+  // held to that mark's own `kind` (review-617): one that misstates it is marked
+  // so, and the comparison reds on it.
+  if (!rows.some((r) => typeof r.kind === "string" && !OLD_FORM_KINDS.has(r.kind))) return value;
+  world = await worldLater();
   for (const r of rows) {
-    if (typeof r.kind !== "string" || OLD_FORM_KINDS.has(r.kind)) continue;
-    world ??= await worldLater();
-    if (world.kindOf(r.mark) !== r.kind) continue;
+    if (typeof r.kind !== "string" || r.mark == null) continue;
+    const own = world.kindOf(r.mark);
+    if (own !== r.kind) { r.kind = `${r.kind} (the record says ${own ?? "no such mark"})`; continue; }
     r.kind = oldFormKind(r.kind, world.extendsOf);
   }
   return value;

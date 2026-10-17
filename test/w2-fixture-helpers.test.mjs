@@ -34,6 +34,7 @@ test("relativeSpecifiers: from-imports, re-exports, side-effect and dynamic impo
     `const f = await import("./f.mjs");`,
     `import { g } from "node:fs";`,
     `import h from "pg";`,
+    `// a comment that says: import { z } from "./commented.mjs";`,
   ].join("\n");
   assert.deepEqual(relativeSpecifiers(src), ["./a.mjs", "./b.mjs", "./c.mjs", "./d.mjs", "./e.mjs", "./f.mjs"]);
 });
@@ -101,7 +102,11 @@ test("stakeKindsInOldForm rewrites stakes rows only, wherever the segment stands
 test("stakeKindsInOldForm reads back only the FORM: a row that misstates its mark's kind keeps the wrong word, and the golden reds on it", async () => {
   // The flip this closes: the page says portal-ground where the record says
   // thing. Both stand under sited, so a bare read-back would hide the change.
-  const page = { stakes: { rows: [{ mark: "a/w", kind: "portal-ground" }, { mark: "no/such-mark", kind: "thing" }] } };
+  // And once the world is read, an OLD word is held to the record too
+  // (review-617): `sited` on a mark the record files as `thing` is the page
+  // misstating it in the old form.
+  const page = { stakes: { rows: [{ mark: "a/w", kind: "portal-ground" }, { mark: "no/such-mark", kind: "thing" }, { mark: "a/x", kind: "sited" }, { mark: "a/y", kind: "predicate" }] } };
   await stakeKindsInOldForm(page, async () => W2);
-  assert.deepEqual(page.stakes.rows.map((r) => r.kind), ["portal-ground", "thing"]);
+  assert.deepEqual(page.stakes.rows.map((r) => r.kind), [
+    "portal-ground (the record says thing)", "thing (the record says no such mark)", "sited (the record says thing)", "predicated"]);
 });

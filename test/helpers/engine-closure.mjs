@@ -13,10 +13,12 @@ import { dirname, join, posix } from "node:path";
 
 // Every way a module names another by a relative path: `import … from`,
 // `export … from`, a side-effect `import "./x.mjs"` and a dynamic
-// `import("./x.mjs")`, wherever on a line it stands (two imports can share one).
+// `import("./x.mjs")`. A static one starts a statement (a line's start, or
+// after a `;`, so two can share a line), which keeps a comment that mentions
+// one out; a dynamic one stands wherever an expression can.
 const RELATIVE_SPECIFIERS = [
-  /\b(?:import|export)\b[^;'"]*?\bfrom\s*["'](\.\.?\/[^"']+)["']/g,
-  /\bimport\s*["'](\.\.?\/[^"']+)["']/g,
+  /(?:^|;)[ \t]*(?:import|export)\b[^;'"]*?\bfrom\s*["'](\.\.?\/[^"']+)["']/gm,
+  /(?:^|;)[ \t]*import\s*["'](\.\.?\/[^"']+)["']/gm,
   /\bimport\s*\(\s*["'](\.\.?\/[^"']+)["']\s*\)/g,
 ];
 

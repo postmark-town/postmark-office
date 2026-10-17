@@ -168,7 +168,12 @@ test("FALSIFIER 5 — the mover's own class rides every read, with its stride (2
   const { resetClassRosterCache } = await import("../src/world-classes.mjs");
   const { rows } = await deriveLaw({ lawRepo: WORLD_CLONE });
   const law = rows.map((r) => ({ number: 1, tag_sha: "f".repeat(40), newest: 1, ...r }));
-  await reloadLawSnapshot({ force: true, query: async (sql) => ({ rows: sql === LAW_REFRESH_SQLS.pin ? [{ newest: 1, pinned: 1 }] : law }) });
+  // the store answers the two statements a refresh sends, and nothing else
+  const answers = new Map([[LAW_REFRESH_SQLS.pin, [{ newest: 1, pinned: 1 }]], [LAW_REFRESH_SQLS.law, law]]);
+  await reloadLawSnapshot({ force: true, query: async (sql) => {
+    if (!answers.has(sql)) throw new Error(`the law stub was asked a statement it does not answer: ${String(sql).slice(0, 80)}`);
+    return { rows: answers.get(sql) };
+  } });
   resetClassRosterCache();
   try {
     for (const [where, at] of STANDPOINTS) {
@@ -179,7 +184,10 @@ test("FALSIFIER 5 — the mover's own class rides every read, with its stride (2
       assert.ok(Number.isFinite(pace) && pace > 0, `${where}: the stride mark carries no pace dial (${pace})`);
     }
   } finally { resetLawSnapshot(); resetClassRosterCache(); }
-  // ⚑ THE FLIP: drop STRIDE_MARK_ID from markRecords' appended list → the first
-  //   assertion reds on every standpoint; FALSIFIER 2 stays green either way.
-  //   On W2, drop withClassDials' class-layer merge → the pace assertion reds.
+  // ⚑ THE FLIPS: drop STRIDE_MARK_ID from markRecords' appended list → the first
+  //   assertion reds on every standpoint, on either world; FALSIFIER 2 stays
+  //   green either way. Drop withClassDials' class-layer merge → the pace
+  //   assertion reds ONLY on W2, and only with the seed above in place: on the
+  //   world CI pins the class mark's own `dials:` carries the pace, so that
+  //   flip stays green there.
 });
