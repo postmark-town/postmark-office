@@ -36,8 +36,8 @@ const LIVE = new Set(["next_crossing", "copy", "expected_crossing", "since_cross
  * content) is opened, so its clock goes too. A failed command's own words
  * (git's, inside an "unreadable" note, with the test's temp path in them) and a
  * checkout's line endings differ by machine and by run: the first reads
- * "(<a command failed>)", and CRLF reads LF. Every other byte stays, key order
- * included.
+ * "(<a command failed>)", CRLF reads LF, and a hung pane's file size (the
+ * checkout's bytes) is left out. Every other byte stays, key order included.
  */
 export function steady(value, { today = townDay() } = {}) {
   const text = typeof value === "string" ? value : JSON.stringify(value);
@@ -53,7 +53,9 @@ export function steady(value, { today = townDay() } = {}) {
     }
     if (!v || typeof v !== "object") return v;
     const out = {};
-    for (const [k, x] of Object.entries(v)) if (!LIVE.has(k)) out[k] = walk(x);
+    // a hung pane's `bytes` is its file's size in this checkout, line endings and all
+    const checkout = (k) => k === "bytes" && Object.hasOwn(v, "hung");
+    for (const [k, x] of Object.entries(v)) if (!LIVE.has(k) && !checkout(k)) out[k] = walk(x);
     return out;
   };
   try { return JSON.stringify(walk(JSON.parse(text))); } catch { return text.split(today).join("<today>"); }
