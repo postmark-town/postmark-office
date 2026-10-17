@@ -33,11 +33,12 @@ const SNAP = lawSnapshotFromRows([
   prop("postmark-node", "makers", false, "constitution"),
   prop("sited", "makers", true, "constitution"), prop("thing", "makers", true, "constitution"),
   prop("parcel", "makers", false, "constitution"), prop("portal-ground", "makers", false, "constitution"),
-  prop("resident", "holder", true, "constitution"), prop("resident", "capacity", 24, "constitution"),
-  prop("thing", "holder", false, "sovereign"), prop("thing", "capacity", 30, "sovereign"),
+  // W1's shape: properties nest — holder → capacity → min, max; holder → open
+  prop("resident", "holder", true, "constitution"), prop("resident", "capacity", 24, "constitution", "holder"),
+  prop("thing", "holder", false, "sovereign"), prop("thing", "capacity", 30, "sovereign", "holder"),
   prop("thing", "min", 1, "constitution", "capacity"), prop("thing", "max", 120, "constitution", "capacity"),
-  prop("thing", "open", true, "sovereign"),
-  prop("halloween-candy-bag", "holder", true, "constitution"), prop("halloween-candy-bag", "capacity", 200, "sovereign"),
+  prop("thing", "open", true, "sovereign", "holder"),
+  prop("halloween-candy-bag", "holder", true, "constitution"), prop("halloween-candy-bag", "capacity", 200, "sovereign", "holder"),
   prop("halloween-candy-bag", "max", 200, "constitution", "capacity"),
   prop("halloween-candy-bowl", "holder", true, "constitution"),
 ]);
@@ -96,4 +97,34 @@ test("the chest door's older dials stand second, behind every property", () => {
 test("the record's spellings of true/false and whole numbers", () => {
   assert.equal(truth("true"), true); assert.equal(truth(false), false); assert.equal(truth("yes"), null);
   assert.equal(whole("24"), 24); assert.equal(whole(2.5), null); assert.equal(whole(""), null);
+});
+
+test("the chest door reads capacity and open from properties first, the older chest dials second (G4), in both forms", async () => {
+  const { classViewOf, chestFace } = await import("../src/world-units.mjs");
+  const { foldUnits } = await import("../src/world-stacks.mjs");
+  const CHEST_DIALS = { capacity: 30, capacity_min: 1, capacity_max: 120, first_stock: 30, portable: true, welcome: "open" };
+  const withChest = lawSnapshotFromRows([...[...SNAP.classes].map(([key, data]) => cls(key, data)),
+    cls("chest", { extends: "thing", dials: CHEST_DIALS }),
+    ...[...SNAP.properties].flatMap(([klass, own]) => [...own].map(([name, p]) => prop(klass, name, p.default, p.tier, p.parent)))]);
+  const view = classViewOf(withChest);
+  const face = (mark) => chestFace({ mark, fold: foldUnits([]), stocked: new Set(), labels: [], view });
+  const at = { x: 0, y: 0 }, extent = { w: 1, h: 1 };
+  // the old form: a chest-class mark, its numbers from the chest's dials (its class states no holder property)
+  const old = face({ id: "ana/bowl", by: "ana", kind: "sited", class: "chest", at, extent, capacity: 60, welcome: "closed" });
+  assert.deepEqual([old.capacity, old.welcome], [60, "closed"]);
+  // the new form: a thing with holder: true, its numbers from thing's properties, its own sovereign values honoured
+  const neu = face({ id: "ana/bowl", by: "ana", kind: "thing", holder: true, at, extent, capacity: 60, open: false });
+  assert.deepEqual([neu.capacity, neu.welcome], [60, "closed"]);
+  assert.equal(face({ id: "ana/crate", by: "ana", kind: "thing", holder: true, at, extent }).capacity, 30, "thing's default capacity");
+  assert.equal(face({ id: "ana/bag", by: "ana", kind: "halloween-candy-bag", at, extent }).capacity, 200, "the bag's own 200");
+  assert.equal(face({ id: "ana/bag", by: "ana", kind: "halloween-candy-bag", at, extent, capacity: 150 }).capacity, 150, "inside the bag's own bound, above thing's 120");
+  assert.equal(face({ id: "ana/crate", by: "ana", kind: "thing", holder: true, at, extent, capacity: 150 }).capacity, null, "above thing's 120 is refused (capacityOf), so the face shows no capacity");
+});
+
+test("the carry is the resident's capacity, property first and the thing class's carry_cap second", async () => {
+  const { classViewOf } = await import("../src/world-units.mjs");
+  const view = classViewOf(SNAP);
+  assert.equal(holdingOf({ className: "resident", classProperty: (n, p) => view.property(n, p), legacy: { capacity: view.dials("thing")?.carry_cap } }).capacity, 24);
+  const older = classViewOf(lawSnapshotFromRows([cls("thing", { dials: { carry_cap: 24 } }), cls("resident", {})]));
+  assert.equal(holdingOf({ className: "resident", classProperty: (n, p) => older.property(n, p), legacy: { capacity: older.dials("thing")?.carry_cap } }).capacity, 24, "the older record's carry_cap still answers");
 });

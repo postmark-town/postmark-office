@@ -179,12 +179,17 @@ export function classOwnProperties(name) {
   if (!w) return {};
   try {
     const db = w.db;
+    // Properties nest (holder → capacity → min, max): walk down from the
+    // class's own, holding each BY NAME (a class names each once) with its
+    // direct children — the shape law-classes § propertiesOf answers.
     const out = {};
-    for (const r of db.prepare(PROPERTY_SQL).all(String(name))) {
+    const queue = db.prepare(PROPERTY_SQL).all(String(name)).map((r) => ({ r, parent: null }));
+    for (let i = 0; i < queue.length && i < 512; i++) {
+      const { r, parent } = queue[i];
       if (r?.name == null || out[String(r.name)]) continue;
-      const children = {};
-      for (const k of db.prepare(PROPERTY_CHILD_SQL).all(String(r.id))) if (k?.name != null && !children[String(k.name)]) children[String(k.name)] = { default: k.dflt ?? null, tier: k.tier ?? null, id: k.id ?? null };
-      out[String(r.name)] = { default: r.dflt ?? null, tier: r.tier ?? null, id: r.id ?? null, children };
+      out[String(r.name)] = { default: r.dflt ?? null, tier: r.tier ?? null, id: r.id ?? null, children: {} };
+      if (parent && out[parent] && !out[parent].children[String(r.name)]) out[parent].children[String(r.name)] = { default: r.dflt ?? null, tier: r.tier ?? null, id: r.id ?? null };
+      for (const k of db.prepare(PROPERTY_CHILD_SQL).all(String(r.id))) queue.push({ r: k, parent: String(r.name) });
     }
     db.close();
     return out;

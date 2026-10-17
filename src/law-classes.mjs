@@ -59,14 +59,24 @@ export function lawSnapshotFromRows(rows) {
   const properties = new Map();
   const props = rows.filter((r) => r.kind === "property").map((r) => r.data ?? {})
     .sort((a, b) => (Number(a.ord ?? 0) - Number(b.ord ?? 0)));
+  // Properties nest (holder → capacity → min, max), and a class names each
+  // once, so they are held BY NAME within their class, each with its parent's
+  // name and its direct children.
   for (const d of props) {
     const k = String(d.class);
     if (!properties.has(k)) properties.set(k, new Map());
     const own = properties.get(k);
-    const entry = { default: d.default ?? null, tier: d.tier ?? null, id: d.id ?? null };
-    if (d.parent == null) { if (!own.has(String(d.name))) own.set(String(d.name), { ...entry, children: new Map() }); else Object.assign(own.get(String(d.name)), entry); continue; }
-    if (!own.has(String(d.parent))) own.set(String(d.parent), { default: null, tier: null, id: null, children: new Map() });
-    own.get(String(d.parent)).children.set(String(d.name), entry);
+    const name = String(d.name);
+    if (own.has(name) && own.get(name).id != null) continue; // a second statement of one name: the first stands
+    const prior = own.get(name);
+    own.set(name, { default: d.default ?? null, tier: d.tier ?? null, id: d.id ?? null, parent: d.parent == null ? null : String(d.parent), children: prior?.children ?? new Map() });
+  }
+  for (const own of properties.values()) {
+    for (const [name, p] of own) {
+      if (p.parent == null) continue;
+      if (!own.has(p.parent)) own.set(p.parent, { default: null, tier: null, id: null, parent: null, children: new Map() });
+      own.get(p.parent).children.set(name, { default: p.default, tier: p.tier, id: p.id });
+    }
   }
   const settlement = Number(number);
   const newestN = newest == null ? settlement : Number(newest);

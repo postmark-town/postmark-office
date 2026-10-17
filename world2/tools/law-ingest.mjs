@@ -313,21 +313,21 @@ export async function deriveLaw({ lawRepo }) {
   // A class's PROPERTY NODES (LOGOS v2, lane O1; classes.md § Property: "The
   // four fields of a property are fixed … a name, a tier, a default and a
   // body", and "A property may have child properties, each with its own tier").
-  // A `kind: property` mark filed under its class node is the class's own; one
-  // filed under a property node is that property's child (capacity's min, max).
-  // KEYED BY (class, [parent/]name): a class states each property once.
+  // A `kind: property` mark filed under its class node is the class's own, and
+  // properties nest: one filed under a property node is that property's child,
+  // to any depth (holder → capacity → min, max; holder → open). The row names
+  // its class, its own name and its immediate parent property's name.
+  // KEYED BY (class, the names down from the class): a class states each once.
   const propName = (m) => String(m.name ?? m.slug ?? String(m.id).split("/").pop());
   marks.forEach((m, ord) => {
     if (kindFieldOf(m) !== "property") return;
-    const up = byId.get(m._parentMarkId);
-    const own = classOfId.get(m._parentMarkId);
-    const data = { name: propName(m), tier: m.tier ?? null, default: m.default ?? null, id: m.id, ord };
-    if (own !== undefined) {
-      push("property", relPath(repo, join(m._dir, "mark.md")), `${own}/${data.name}`, { class: own, parent: null, ...data });
-    } else if (up && kindFieldOf(up) === "property" && classOfId.has(up._parentMarkId)) {
-      const klass = classOfId.get(up._parentMarkId);
-      push("property", relPath(repo, join(m._dir, "mark.md")), `${klass}/${propName(up)}/${data.name}`, { class: klass, parent: propName(up), ...data });
-    }
+    const path = [propName(m)];
+    let up = byId.get(m._parentMarkId), hops = 0;
+    while (up && kindFieldOf(up) === "property" && hops++ < 16) { path.unshift(propName(up)); up = byId.get(up._parentMarkId); }
+    const klass = up ? classOfId.get(up.id) : undefined;
+    if (klass === undefined) return;
+    push("property", relPath(repo, join(m._dir, "mark.md")), `${klass}/${path.join("/")}`,
+      { class: klass, parent: path.length > 1 ? path[path.length - 2] : null, name: path[path.length - 1], tier: m.tier ?? null, default: m.default ?? null, id: m.id, ord });
   });
 
   // ── kind: threshold ────────────────────────────────────────────────────────
