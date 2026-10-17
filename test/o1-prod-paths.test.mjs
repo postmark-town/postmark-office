@@ -184,6 +184,15 @@ test("THE STORE PATH (no law snapshot): classProperty, makers, holding and dials
   assert.equal(Number(classDials("sound").radius_m), 60);
   assert.deepEqual(classDials("arena"), { round_boundary_joins: true, from_crossing: null, beta: false });
   assert.deepEqual(((h) => [h.holder, h.capacity, h.min, h.max])(holdingOf({ className: "halloween-candy-bag", classProperty })), [true, 200, 1, 200], "the flat layout's `of:` children read by the store path");
+  // THE ACT CARD'S DIALS ROW (plumb-world-ui's check): residueOf quotes a residue class row's
+  // `dials` from the store, so under W1 (no `dials:` on any class node) the row must come from
+  // the hydrator's property-first merge, coerced, or every act card loses it silently.
+  const { residueOf } = await import("../src/world-apex.mjs");
+  const { openWorldStore } = await import("../src/world-graph-db.mjs");
+  const db = openWorldStore().db;
+  assert.equal(residueOf(db, "the-town/sound")?.dials?.radius_m, 60, "a new-form class's act card keeps its dials row, its number a number");
+  assert.deepEqual(residueOf(db, "the-town/arena")?.dials, { round_boundary_joins: true, from_crossing: null, beta: false }, "and its true/null/false as values");
+  assert.deepEqual(residueOf(db, "the-town/say")?.dials, { presence_min: 15 }, "an old-form class's act card is as it was");
   // D6: a class RECORD shown by markRecords takes its dials from the class layer, PROPERTY FIRST
   const { markRecords } = await import("../src/world.mjs");
   const w = { marks: [{ id: "the-town/sound", kind: "class", class: "sound", by: "the-town" }, { id: "the-town/say", kind: "class", class: "say", by: "the-town", dials: { presence_min: 15 } },
