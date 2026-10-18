@@ -70,9 +70,9 @@ test("1 · a holder 70 levels inside the thing is refused: the loop check walks 
   await assert.rejects(give(w, bag("b-0"), bag("b-70")),
     (e) => e.code === 422 && e.defect === `${bag("b-70")} is inside ${bag("b-0")}` && /Nothing was changed\.$/.test(e.hint));
   assert.equal(w.acts.length, 0, "nothing was written");
-  // the helper agrees, and reaches the top
+  // the helper agrees, and reaches the top: b-69 down to b-0, then my hands
   const { chain: up, loop } = hold.holderChain(chain("b", 70), bag("b-70"));
-  assert.deepEqual([up.length, up.at(-2), up.at(-1), loop], [70, bag("b-0"), ME, false]);
+  assert.deepEqual([up.length, up.at(-2), up.at(-1), loop], [71, bag("b-0"), ME, false]);
 });
 
 test("2 · the depth ceiling: a thing at 16 deep stands, at 17 it is refused in the door's voice", { timeout: 10_000 }, async () => {
