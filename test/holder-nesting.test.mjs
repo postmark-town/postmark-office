@@ -76,7 +76,6 @@ test("1 · a holder 70 levels inside the thing is refused: the loop check walks 
 });
 
 test("2 · the depth ceiling: a thing at 16 deep stands, at 17 it is refused in the door's voice", { timeout: 10_000 }, async () => {
-  assert.equal(hold.NEST_DEPTH_MAX, 16);
   // b-0 in my hands holds b-1 one deep, ... b-15 is 15 deep, b-16 is 16 deep
   const at16 = world([...chain("b", 16), row(ME, LAMP)]);
   const ok = await give(at16, LAMP, bag("b-15"));
@@ -85,6 +84,7 @@ test("2 · the depth ceiling: a thing at 16 deep stands, at 17 it is refused in 
   await assert.rejects(give(at17, LAMP, bag("b-16")),
     (e) => e.code === 422 && e.defect === `${LAMP} would be nested 17 deep` && e.hint === "the town holds things at most 16 deep. Nothing was changed.");
   assert.equal(at17.acts.length, 0, "nothing was written");
+  assert.equal(hold.NEST_DEPTH_MAX, 16, "the ceiling is the one constant");
 });
 
 test("2b · the ceiling counts what the thing holds: a bag of 16 levels into another bag is refused, of 15 it stands", { timeout: 10_000 }, async () => {
