@@ -69,16 +69,20 @@ test("POS-620 · every cached location keys on its args, or says why its door re
   assert.ok(cached >= 6, `only ${cached} cached locations were found; the parser has lost the confs`);
 });
 
-/** The location nginx picks for `uri` in one conf: an exact match, else the first
- *  regex in order, else the longest prefix (no `^~` prefixes in these confs). */
+/** The location nginx picks for `uri` in one conf: an exact match; else the longest
+ *  prefix, if it is a `^~` one; else the first regex in order; else that longest prefix. */
 function servedBy(locs, uri) {
   const exact = locs.find((l) => l.where === `= ${uri}`);
   if (exact) return exact;
+  const prefix = locs.map((l) => ({ l, p: /^(\^~\s+)?([^=~@\s]\S*)$/.exec(l.where) }))
+    .filter(({ p }) => p && uri.startsWith(p[2]))
+    .sort((a, b) => b.p[2].length - a.p[2].length)[0] ?? null;
+  if (prefix?.p[1]) return prefix.l;
   for (const l of locs) {
     const m = /^~(\*?)\s+(.+)$/.exec(l.where);
     if (m && new RegExp(m[2], m[1] ? "i" : "").test(uri)) return l;
   }
-  return locs.filter((l) => !/^[=~]/.test(l.where) && uri.startsWith(l.where)).sort((a, b) => b.where.length - a.where.length)[0] ?? null;
+  return prefix?.l ?? null;
 }
 
 // THE WORLD PAGE'S CREATURES (world #240, play fix 35; review-240, 2026-10-18). Every
@@ -88,16 +92,20 @@ function servedBy(locs, uri) {
 // never share a copy) and on the Authorization header (so a keyless copy is never a
 // resident's). Measured on prod 2026-10-18 ~00:05 EDT: a second keyless find
 // answered X-PM-Cache: HIT.
-test("the World page's keyless creature reads are cached, keyed on their args and the key", () => {
-  const locs = locations(readFileSync(CONFS[0], "utf8"));
+for (const conf of CONFS) test(`the World page's keyless creature reads are cached, keyed on their args and the key, never the cookie (${conf.split(/[\\/]/).pop()})`, () => {
+  const locs = locations(readFileSync(conf, "utf8"));
   const apex = servedBy(locs, "/api/world/apex");
-  assert.ok(apex, "nothing in nginx-api.conf serves /api/world/apex");
+  assert.ok(apex, `nothing in ${conf.split(/[\\/]/).pop()} serves /api/world/apex`);
   assert.match(apex.body, /proxy_cache\s+pmworld;/, `location ${apex.where} serves the apex uncached: every open page's creature poll is a whole world read`);
   const key = cacheKeyOf(apex.body) ?? "";
   assert.match(key, /\$is_args\$args/, `the apex cache key "${key}" ignores the query, so a find would answer an investigate`);
   assert.match(key, /\$http_authorization/, `the apex cache key "${key}" ignores the key, so a resident's read could be served keyless`);
+  // the office authenticates by token, never cookies (the live shield, 2026-09-26): a cookie in
+  // the key only splits the cache per visitor, and then every open page's poll misses
+  assert.doesNotMatch(key, /\$http_cookie|\$cookie_/, `the apex cache key "${key}" carries the cookie: one copy per visitor, so the creature poll misses`);
   const valid = /proxy_cache_valid\s+200\s+(\d+)s;/.exec(apex.body);
   assert.ok(valid && Number(valid[1]) >= 15, `the apex copy lives ${valid?.[1] ?? "no"} s; the page polls every 15 s, so under 15 s every poll reaches the office`);
   // ⚑ THE FLIP: drop `apex|` from the shield's regex location → the apex falls to
-  // `location /api/`, uncached → the second assert reds.
+  // `location /api/`, uncached → the second assert reds; put `|$http_cookie` back in the
+  // read pool's apex key → its cookie assert reds.
 });

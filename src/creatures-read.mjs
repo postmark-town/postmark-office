@@ -216,6 +216,7 @@ export function creatureToYou({ living, law }, handle, { sinceMs, nowMs = Date.n
   if (!handle || !living || !lawReady(law)) return { events: [], readable: true };
   const events = [];
   for (const c of living.byId.values()) {
+    if (!(c.spawned_at <= nowMs)) continue; // not out yet: the tick wrote it ahead (livingNow)
     const mine = c.reactions.filter((r) => r.to === handle && r.at > sinceMs && r.at <= nowMs && reactionOf(law, c, r.reaction));
     if (!mine.length) continue;
     const r = mine.reduce((a, b) => (b.at >= a.at ? b : a));
@@ -269,7 +270,9 @@ export async function investigateCreature(id, { creatures, from = null, nowMs = 
   // a row the tick wrote ahead of its arrival is not out yet, so it is not here to look at (livingNow)
   const held = living.byId.get(id);
   const c = held && held.spawned_at <= nowMs ? held : null;
-  const snap = await Promise.resolve(saved(id)).catch(() => null);
+  // and the save's row by the same rule: one the save carries ahead of now is not out yet either
+  const saving = await Promise.resolve(saved(id)).catch(() => null);
+  const snap = saving && !(msOf(saving.row?.spawned_at) > nowMs) ? saving : null;
   if (!c && !snap)
     return { error: "bounce", code: 404, defect: `no creature "${id}"`, hint: 'investigate: takes a creature\'s id as who, find: "creature" and happening_here name it' };
   const kind = c ? law.kindOf(c.kind) : null;

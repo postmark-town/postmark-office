@@ -182,6 +182,26 @@ test("investigate: a creature spawned after now is not here to look at (404), as
   // ⚑ THE FLIP: read `living.byId.get(id)` unfiltered in investigateCreature → the first assert reds.
 });
 
+test("investigate: a crossing save's row spawned after now is not a creature to answer either (review-240 #621)", async () => {
+  const ahead = "creature:wolf-270-9";
+  const cur = fold(spawn(ahead, { x: 10, at: NOW + 600_000 }));
+  const row = (spawned_at) => ({ crossing: 271, row: { at: { x: 10, y: 0 }, kind: "wolf", moods: {}, flags: [], spawned_at, fades_at: iso(NOW + 12 * 3600_000) } });
+  const r = await investigateCreature(ahead, { creatures: cur, nowMs: NOW, saved: () => row(iso(NOW + 600_000)) });
+  assert.equal(r.code, 404, "the save's row answered a creature not out yet: " + JSON.stringify(r).slice(0, 200));
+  const past = await investigateCreature(ahead, { creatures: cur, nowMs: NOW, saved: () => row(iso(NOW - 3600_000)) });
+  assert.equal(past.presence?.last_crossing?.crossing, 271, "a save's row out by now still answers");
+  // ⚑ THE FLIP: take `saved(id)` unfiltered in investigateCreature → the first assert reds.
+});
+
+test("to_you: a creature spawned after now answers nobody, even with a reaction to you on its row", () => {
+  const ahead = "creature:wolf-270-9";
+  const cur = fold(spawn(ahead, { x: 10, at: NOW + 600_000 }), react(ahead, { to: "kai", at: NOW - 60_000 }));
+  assert.ok(cur.living.byId.get(ahead)?.reactions?.some((r) => r.to === "kai"), "the fixture: the ahead row holds a reaction to kai");
+  assert.deepEqual(creatureToYou(cur, "kai", { sinceMs: NOW - 3600_000, nowMs: NOW }).events, [],
+    "to_you told kai of a creature the tick wrote ahead of its arrival");
+  // ⚑ THE FLIP: drop the `spawned_at <= nowMs` skip in creatureToYou's loop → red.
+});
+
 // ── to_you (C1) ─────────────────────────────────────────────────────────────
 
 test("to_you: a creature's answer to you rides your own happened, the arrival named so, wherever you are now", () => {
