@@ -143,9 +143,12 @@ export async function refuseSecondHolder({ who, actor, adding = [], held = [], m
   if (carrying.length + coming.length <= limit) return;
   const mine = String(who) === String(actor);
   if (carrying.length) {
-    const what = `${limit === 1 ? "a holder" : `${carrying.length} holders`} (${carrying.join(", ")})`;
+    // the words follow how many are carried: one from today, or several from before the rule
+    const what = `${carrying.length === 1 ? "a holder" : `${carrying.length} holders`} (${carrying.join(", ")})`;
+    const over = carrying.length + coming.length - limit; // how many must be set down first
+    const setDown = carrying.length === 1 ? "set it down first" : over >= carrying.length ? "set them down first" : `set ${over} of them down first`;
     throw bounce(409, mine ? `you're already carrying ${what}` : `${who} is already carrying ${what}`,
-      `${mine ? "set it down first" : "it goes to them once they set theirs down"}. ${nothing}`, { holders: carrying, limit });
+      `${mine ? setDown : `it goes to them once they set ${carrying.length === 1 ? "theirs" : "those"} down`}. ${nothing}`, { holders: carrying, limit });
   }
   throw bounce(409, `that would put ${coming.length} holders in ${mine ? "your" : `${who}'s`} hands (${coming.join(", ")})`,
     `a resident carries ${limit === 1 ? "one holder" : `${limit} holders`} at a time. ${nothing}`, { holders: coming, limit });

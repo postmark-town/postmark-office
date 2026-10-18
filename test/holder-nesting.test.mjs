@@ -126,6 +126,30 @@ test("1d · a law without the holders dial answers as ruled (1): one holder land
   assert.equal((await go(two, "thing-from-holder", { thing: bag("other"), from: bag("crate") })).did, "take");
 });
 
+test("1e · the verbs matrix offers no take of a second holder (review-620): not one at your feet, not one inside a crate", { timeout: 10_000 }, async () => {
+  const placed = (id) => ({ ...markOf(id), extent: { w: 4, h: 4 } });
+  const marks = [placed(bag("mine")), placed(bag("crate")), placed(bag("other")), placed(bag("loose")), placed(LAMP)];
+  const offered = (rows) => usablePairs({ actor: ME, here: { x: 5, y: 6 }, marks, residents: [], fold: foldUnits([]), attachments: rows, view: classViewOf(SNAP) })
+    .filter((p) => p.verb === "take").map((p) => p.object).sort();
+  // carrying a bag: the bag inside the crate and the loose bag are not offered; the lamp in the crate is, and so the crate's take
+  const full = offered([row(ME, bag("mine")), row(bag("crate"), bag("other")), row(bag("crate"), LAMP)]);
+  assert.deepEqual(full, [bag("crate"), LAMP].sort(), `offered: ${full}`);
+  // empty hands: every take is offered
+  const free = offered([row(bag("crate"), bag("other")), row(bag("crate"), LAMP)]);
+  assert.ok(free.includes(bag("other")) && free.includes(bag("loose")), `offered: ${free}`);
+  // the crate holding only a bag offers no take from it to full hands
+  const onlyBag = offered([row(ME, bag("mine")), row(bag("crate"), bag("other"))]);
+  assert.ok(!onlyBag.includes(bag("crate")) && !onlyBag.includes(bag("other")), `offered: ${onlyBag}`);
+});
+
+test("1f · the full-hands words follow how many are carried: two from before the rule read as two", { timeout: 10_000 }, async () => {
+  const markById = async (id) => markOf(String(id));
+  await assert.rejects(kinds.refuseSecondHolder({ who: ME, actor: ME, adding: [bag("third")], held: [bag("one"), bag("two")], markById, view: classViewOf(SNAP) }),
+    (e) => e.defect === "you're already carrying 2 holders (sbx-cy/one, sbx-cy/two)" && e.hint === "set them down first. Nothing was changed.");
+  await assert.rejects(kinds.refuseSecondHolder({ who: "sbx-dee", actor: ME, adding: [bag("third")], held: [bag("one"), bag("two")], markById, view: classViewOf(SNAP) }),
+    (e) => e.defect === "sbx-dee is already carrying 2 holders (sbx-cy/one, sbx-cy/two)" && /set those down/.test(e.hint));
+});
+
 // ── 2 · COUNTS CONFER UP ────────────────────────────────────────────────────
 
 test("2 · a bag of 30 takes 31 in a chest of 120: refused with 30 room left, given with 31", { timeout: 10_000 }, async () => {

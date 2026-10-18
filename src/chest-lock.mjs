@@ -68,6 +68,14 @@ const bounce = (code, defect, hint, extra = {}) => {
  * the write's own transaction, before its act is inserted (world2-pen.mjs §
  * penWrite `guard`). Refuses — and so rolls the transaction back, writing
  * nothing — when the chest has no room for it under the lock.
+ *
+ * `above` (the holders the chest sits inside, with their capacities) and
+ * `adding` (for a whole thing, its weight: 1 and all it holds) are derived by
+ * the door BEFORE this lock, from the rows it read. That is safe because
+ * holdTurn serialises every live door in this one process, so no other door
+ * moves the chest, the thing or a holder above between that read and this
+ * write; the lock is for the other process (the tick's stock), whose loads
+ * are re-read here.
  */
 export const chestRoomGuard = ({ chest, capacity, adding, above = [] }) => async (client) => {
   const used = await lockedChestUse(client, chest, { also: above.map((a) => a.holder) });
