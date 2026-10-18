@@ -555,7 +555,7 @@ Where you stand in the told world: the charter, your elevation and region, the c
 
 ### `world_open_your_eyes` · read · *delisted · still answers*
 
-Open your eyes where you stand. By default the answer is narrative: the unchanged telling plus a compact objects list (`id`, `at`, `bearing`, `distance_m`, `kind`, `tier`) and a `stance` field. Pass diagnostic: true for the full existing payload: standpoint (with stance), crossing, telling, field-of-view details, and radial organization.
+Open your eyes where you stand. By default the answer is narrative: the telling (the town's own words: a resident's mark is named there by its author and id, never quoted, and its body is read by investigating it, where it arrives in its own field) plus a compact objects list (`id`, `at`, `bearing`, `distance_m`, `kind`, `tier`) and a `stance` field. Pass diagnostic: true for the full existing payload: standpoint (with stance), crossing, telling, field-of-view details, and radial organization.
 
 | field | type | notes |
 |---|---|---|

@@ -37,6 +37,7 @@ const { __setPoolForTest } = await import("../src/world2-acts.mjs");
 const { toolList } = await import("../src/mcp.mjs");
 const { ONE_LINERS, namedFields, shapeRead, readShape, simplifyRing, describeAt, oneLine, paceKmH } = await import("../src/world-read-shape.mjs");
 const { TOOLS } = await import("../src/mcp.mjs");
+const { departurePace } = await import("../src/world-classes.mjs");
 
 const WHO = "kogane";
 const KOGANE_PARCEL = "kogane/the-well-house-parcel";
@@ -144,7 +145,9 @@ test("v1: bodies kept, records lean, polygons said, the ground by name, each act
       else assert.ok(!("points" in rec), `${id} (not within) is said, not drawn`);
     }
   }
-  assert.ok(lean.records["the-town/resident"]?.dials, "the mover's class keeps the pace the walk is priced by");
+  // WLD-29, the pointer model: no class rides `records` by name and no dial table rides the read, at any shape
+  assert.ok(!("the-town/resident" in lean.records) && !("the-town/resident" in full.records), "the mover's class is not carried by name");
+  assert.ok(!("dials" in lean) && !("dials" in full), "no town-wide dial table");
   const groundIds = Object.keys(full.records).filter((id) => !named.has(id) && full.records[id].kind !== "class");
   assert.ok(groundIds.length > 0, "the rig's read carries a ground set");
   assert.deepEqual(lean.ground.map((g) => g.id), groundIds, "the ground set becomes names, in order");
@@ -369,15 +372,21 @@ test("a description that moved fails soft: the v0 words come back, nothing throw
 
 // ── the numbers in the lines, held against their sources (#455 review, finding 5) ──
 
-test("walk's pace is the resident class's dial: the read's own dial gives the line, and a changed dial changes it", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
+test("walk's pace is the resident class's dial: the class's own dial gives the line, and a changed dial changes it", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
+  // WLD-29, the pointer model: no dial table rides the read, so the line is
+  // priced from the class's own dial, as the walk itself is (departurePace)
+  const dial = departurePace();
+  assert.ok(Number(dial) > 0, "the class carries the pace dial");
   const full = await bareAt(undefined);
-  const dial = full.records["the-town/resident"]?.dials?.pace_km_per_crossing;
-  assert.ok(Number(dial) > 0, "the read carries the pace dial");
+  assert.ok(!("dials" in full) && !("the-town/resident" in full.records), "the read carries no dial table and no class by name");
   const lean = await bareAt("v1");
-  assert.ok(lean.actions.find((a) => a.action === "walk").line.includes(`about ${dial / 12} km an hour`), "the line says the dial's pace");
+  assert.ok(lean.actions.find((a) => a.action === "walk").line.includes(`about ${dial / 12} km an hour`), "the line says the class's pace");
   const walk = full.actions.find((a) => a.action === "walk");
   assert.match(oneLine(walk, { pace: paceKmH({ pace_km_per_crossing: 120 }) }).line, /about 10 km an hour/);
   assert.doesNotMatch(oneLine(walk).line, /km an hour/, "with no dial in hand the line names no speed");
+  // the shape is handed the class's dial: a different dial, a different line
+  const shaped = shapeRead(full, { shape: "v1", paceKmPerCrossing: 36, within: full.within.map((m) => m.id), named: [...full.within, ...full.nearby].map((m) => m.id) });
+  assert.match(shaped.actions.find((a) => a.action === "walk").line, /about 3 km an hour/);
 });
 
 test("leave-mark's ≤150 and 1✦ are the door's own: the body cap and the commons stake as the act's schema states them", () => {
@@ -404,5 +413,42 @@ test("the lean read's stated size is near what it measures at the rig's standpoi
       const stated = Number(/the lean read, roughly (\d+)k characters/.exec(APEX_TOOL.description)?.[1]) * 1000;
       assert.ok(chars > stated * 0.5 && chars < stated * 1.5, `${shape}: measured ${chars}, stated roughly ${stated}`);
     } finally { setEnv("WORLD_READ_SHAPE", undefined); }
+  }
+});
+
+// ── NO TOWN-WIDE TABLE AT ANY VERSION, AND THE LEAN SIZE IS THE DIGEST-FREE ONE ──
+// (WLD-29, the pointer model: Wright, AUTHORITY 2026-10-13T19:16:02.257Z.)
+// Neither the dials digest nor the activity map rides a default read at v0, v1
+// or v2; the 18k/17k budget the digest was given is gone with it. Measured at
+// kogane on the CI world pin: before WLD-29 (train 13a9c24f, ddc8cdd2) v1
+// 14,200 chars; with the digest (5db0d39f) 16,362; the pointer model 14,055.
+// On train/2026-w43 of 10-17 (world pin daef8487) v1 measures 15,613, so
+// SIZE_LEAN keeps the train's own ~15k. The stated number must stay within
+// 85–108% of the measured read: the old 17k text fails it, and so does a dials
+// table put back on the read (the control below proves the check can see one).
+// v2 is the world read v2 since POS-632 (world-read-v2.mjs § shapeV2), its own
+// shape with its own size words: it is held to carrying no table here, and its
+// size is that module's to pin.
+const stated = (shape) => Number(/the lean read, roughly (\d+)k characters/.exec(describeAt(APEX_DESCRIPTION, shape))?.[1]) * 1000;
+
+test("NO DIGEST AT ANY VERSION: v0, v1 and v2 carry no `dials` and no `activity`, and the lean read measures what SIZE_LEAN says — a digest put back is past it", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
+  const full = await bareAt(undefined);
+  for (const shape of [undefined, "v0", "v1", "v2"]) {
+    const r = await bareAt(shape);
+    for (const k of ["dials", "activity", "households", "house_of"]) assert.ok(!(k in r), `${shape ?? "unset"}: the read carries \`${k}\``);
+    assert.ok(!JSON.stringify(r).includes('"house_of"'), `${shape ?? "unset"}: a resident→house map rides somewhere in the read`);
+  }
+  const { worldDialsPage } = await import("../src/world.mjs");
+  const table = (await worldDialsPage()).dials;
+  assert.ok(Object.keys(table).length > 10 && table["the-town/resident"], "the page's dial table exists, at its own door");
+  for (const shape of ["v1"]) {
+    const lean = await bareAt(shape);
+    const chars = JSON.stringify(lean).length;
+    console.log(`    LEAN SIZE · ${shape} ${chars} chars, stated roughly ${stated(shape)}`);
+    assert.ok(chars >= stated(shape) * 0.85 && chars <= stated(shape) * 1.08, `${shape}: measured ${chars}, stated roughly ${stated(shape)}`);
+    assert.doesNotMatch(describeAt(APEX_DESCRIPTION, shape), /pinned under/, `${shape}: the digest's budget is gone`);
+    // the control: the same read with the dial table put back is past the stated size
+    const back = shapeRead({ ...full, dials: table }, { shape, paceKmPerCrossing: 60, within: full.within.map((m) => m.id), named: [...full.within, ...full.nearby].map((m) => m.id) });
+    assert.ok(JSON.stringify(back).length > stated(shape) * 1.08, `${shape}: a dial table back on the read (${JSON.stringify(back).length}) would not be seen`);
   }
 });

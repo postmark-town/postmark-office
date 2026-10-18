@@ -55,7 +55,7 @@ import { fundVerifyViaOffice, intakeDisclosure, POT_RE as FUND_POT_RE, INTAKE as
 import { channelOf, countAct, actsByChannel } from "./channel.mjs";
 import { logAccess } from "./telemetry.mjs";
 import { settlements } from "./settlements.mjs";
-import { worldSummary, worldOrient, worldEyes, worldInvestigate, worldFind, worldStateRaw, worldSkeletonRaw, worldMyMarks, leaveMarkViaOffice, walkViaOffice, worldNoteViaOffice, worldWalkers, worldPresent, worldConversations, worldSay, worldSayHuman, worldSayStream, serveSayStream, whoami, earshotSnapshot, worldBlockForHandle, WORLD_CLONE, MISTS_UNREADABLE, MISTS_RETRY_AFTER_S } from "./world.mjs";
+import { worldSummary, worldOrient, worldEyes, worldInvestigate, worldFind, worldDialsPage, worldLights, worldStateRaw, worldSkeletonRaw, worldMyMarks, leaveMarkViaOffice, walkViaOffice, worldNoteViaOffice, worldWalkers, worldPresent, worldConversations, worldSay, worldSayHuman, worldSayStream, serveSayStream, whoami, earshotSnapshot, worldBlockForHandle, WORLD_CLONE, MISTS_UNREADABLE, MISTS_RETRY_AFTER_S } from "./world.mjs";
 import { world2MyDrafts, world2MyMarks, world2Pool, world2Serve, world2ServeEnabled } from "./world2-serve.mjs";
 import { isStoreLostCode, isStoreUnreachable } from "./store-pool.mjs"; // POS-544: a store lost mid-request answers 503, not 500
 import { STORE_LOST, READ_RETRY, ACT_RETRY, FAULT_LOGGED, STORE_RETRY_AFTER_S, isHttpStatus, foreignAnswer, faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault, one owner (POS-568, POS-573/578)
@@ -1447,6 +1447,17 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         const args = { x: p.get("x") ?? undefined, y: p.get("y") ?? undefined, crossing: p.get("crossing") ?? undefined, mark: p.get("mark") ?? undefined, depth: p.get("depth") ?? undefined, name: p.get("name") ?? undefined, handle: p.get("handle") ?? undefined, diagnostic: p.get("diagnostic") === "true" };
         const fn = path === "/world/orient" ? worldOrient(args, key, { roll: townRoll() }) : path === "/world/eyes" ? worldEyes(args, key, { roll: townRoll() }) : worldInvestigate(args, key);
         return fn.then((r) => j(res, r?.error === "bounce" ? 422 : 200, r)).catch((e) => bounceFault(res, "the world door tripped", e));
+      }
+      // GET /world/dials and GET /world/lights — THE PAGE'S TWO SOURCES (WLD-29,
+      // the pointer model; world.mjs § the page's two sources). Keyless, like the
+      // rest of the world's read tier: a published settlement's dials, and which
+      // households are lit — the lit keys only, no members and no acts. A past
+      // crossing or an unread store answers with `lit: null` and says why.
+      if (path === "/world/dials") {
+        return worldDialsPage().then((r) => j(res, 200, r)).catch((e) => bounceFault(res, "the world door tripped", e));
+      }
+      if (path === "/world/lights") {
+        return worldLights(url.searchParams.get("crossing")).then((r) => j(res, 200, r)).catch((e) => bounceFault(res, "the world door tripped", e));
       }
       // GET /world/find?q= — find a mark by name from anywhere; the plain twin of
       // the apex's `find:` focus (2026-09-26; a focus since POS-280, when the
