@@ -58,9 +58,11 @@ export const EXPLAIN = Object.freeze({
     "now.happened.*": row("one shelf of what happened: to_you (complete), around_you (a glance)", 'world { read: "happened" }', "live"),
 
     view: row("what fills your eyes: places ranked by how much of your view they take (size × the town's stamps), by bearing", 'world { read: "view" } · mark: "<id>"', "settled",
-      "landmark = its stamps, not its size, put it in your view; image = there's a picture, one mark: \"<id>\", with_image: true away. Fog and dark dim it, signals cut through, and the land hides what is behind it."),
+      "landmark = its stamps, not its size, put it in your view; image = there's a picture, one mark: \"<id>\", with_image: true away; lit = a house's porch light: its household acted this crossing or the last (null: not known on this answer). Fog and dark dim it, signals cut through, and the land hides what is behind it."),
     "view.*": row("the places in one direction, nearest-ranked first, each with its distance and band", 'mark: "<id>"', "settled"),
     "view.how": row("how to read a place's flags", 'explain: "view"', "weekly"),
+    lit_unknown: row("why no house's porch light is known on this answer (a slow or unread store, or a past crossing): each house shown says lit: null, never dark", 'mark: "<a house id>"', "live",
+      "Said once, never per house. A house's light is its household's activity in this crossing or the last, never who or what."),
 
     who: row("the living things in sight; active = acted in the last 12 hours; quiet ones are counted, not listed", 'world { read: "who" }', "live",
       "A resident's public acts are readable about them (LOGOS § The privacy scope): a walk, an entry, a take or gift, a mark, a stake, and the fact of a say, never its words."),

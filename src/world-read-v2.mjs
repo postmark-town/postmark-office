@@ -142,6 +142,8 @@ export function viewBlock(rows = []) {
       id: r.id, name: r.name ?? r.id, body: r.body ?? "",
       ...distanceOf(r.distM),
       band: r.band,
+      // a house in view carries its porch light (WLD-29; v1's rule): true, false, or null when not known
+      ...(r.lit !== undefined ? { lit: r.lit } : {}),
       ...(r.image ? { image: true } : {}),
       ...(r.lifted && (r.weight ?? 0) >= LANDMARK_WEIGHT_FLOOR ? { landmark: true } : {}),
     };
@@ -385,7 +387,11 @@ export function shapeV2(p) {
     ...(p.here ? { here: p.here } : {}),
     // open ground: the place the words say you are near, whole
     ...(p.near ? { near: p.near } : {}),
-    within: spine.map((m) => p.marks?.get(m.id) ?? { id: m.id, name: m.id, body: m.body ?? "" }),
+    // a house you stand within carries its porch light, as in `view` (WLD-29)
+    within: spine.map((m) => {
+      const row = p.marks?.get(m.id) ?? { id: m.id, name: m.id, body: m.body ?? "" };
+      return p.withinLit?.has(m.id) ? { ...row, lit: p.withinLit.get(m.id) } : row;
+    }),
     // your whole things by id, then what you hold by kind, a kind and a number each, never a unit
     // (the playground's QA of part 2, fail 5: counted kinds were left out of your own hands)
     holding: [...(p.holdings ?? []), ...(p.heldKinds?.kinds ?? []).map(({ kind, count, shows }) => ({ kind, count, shows }))],
@@ -409,6 +415,8 @@ export function shapeV2(p) {
     you,
     now,
     view: viewBlock(p.viewRows),
+    // a light not known on this answer is said ONCE, as v1 says it (WLD-29)
+    ...(p.litUnknown ? { lit_unknown: p.litUnknown } : {}),
     // presence off or failed: say so, never an empty room (presence's own rule: absence ≠ nobody)
     who: p.presenceUnavailable ? { unavailable: p.presenceUnavailable }
       : withCreaturesInWho(whoBlock(p.crowd, p.active, { nowMs: p.nowMs, unavailable: p.activeUnavailable, whole: p.deep?.block === "who" ? p.deep : null }),

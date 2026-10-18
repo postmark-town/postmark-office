@@ -2143,3 +2143,45 @@ test("O2 · do: leave-mark { kind, count, to } reaches the kind door through the
     });
   } finally { resetLawSnapshot(); }
 });
+
+// ── v2's PORCH LIGHTS (Darko 2026-10-17 20:35 EDT, "Recs are good": A) ──────
+// The v2 read lights the houses ITS blocks show — `you.within` and `view` —
+// by v1's rule, from the same one answer, with one `lit_unknown`; a v2 read
+// that shows no house asks for no activity and waits on nothing.
+const HOUSE_AT = { x: -950, y: -800 };   // alpha/quiet-parcel's own centre (the fixture above)
+const v2Lits = (r) => Object.fromEntries([
+  ...(r.you?.within ?? []),
+  ...Object.entries(r.view ?? {}).filter(([k]) => k !== "how").flatMap(([, rows]) => rows),
+].filter((o) => "lit" in o).map((o) => [o.id, o.lit]));
+
+test("v2 LIGHTS: a house in v2's view carries `lit` from ONE batch; a house you stand within carries it too; unknown is null with one lit_unknown; a v2 read showing no house asks nothing", async () => {
+  on();
+  const { resetActivityCache } = await import("../src/household-activity.mjs");
+  await withSpyStore(async ({ asked, count }) => {
+    const r = await worldApex({ ...A, read_shape: "v2" }, null);
+    assert.ok(!r.error, JSON.stringify(r.error ?? r).slice(0, 300));
+    assert.equal(r.read_shape, "v2");
+    assert.equal(count(), 1, `a v2 read asked last-active ${count()} times`);
+    assert.deepEqual(v2Lits(r), { [HOUSE]: true }, "alpha-kin's act lights alpha's house in v2's view");
+    assert.ok(!("lit_unknown" in r), "a known light says nothing more");
+    assert.doesNotMatch(JSON.stringify(r), /"(hh|solo):|alpha-kin|"house_of"|"activity"/, "lit is all that rides");
+    // standing within the house: you.within carries it
+    asked.length = 0; resetActivityCache();
+    const inside = await worldApex({ x: HOUSE_AT.x, y: HOUSE_AT.y, read_shape: "v2" }, null);
+    const w = (inside.you?.within ?? []).find((m) => m.id === HOUSE);
+    assert.ok(w, `the house is in you.within: ${JSON.stringify(inside.you?.within?.map((m) => m.id))}`);
+    assert.equal(w.lit, true);
+    // a v2 read with no house in sight: no batch
+    asked.length = 0; resetActivityCache();
+    const far = await worldApex({ ...FAR, read_shape: "v2" }, null);
+    assert.ok(!far.error);
+    assert.equal(count(), 0, "a v2 read that shows no house asks for no activity");
+    assert.deepEqual(v2Lits(far), {});
+  });
+  // an unread store: null on the house, said once
+  resetActivityCache();
+  const unread = await worldApex({ ...A, read_shape: "v2" }, null);
+  assert.equal(v2Lits(unread)[HOUSE], null, "unknown, never dark");
+  assert.equal(typeof unread.lit_unknown, "string", "said once, at the top");
+  // ⚑ THE FLIP: drop `lit` from viewBlock (or v2's lightsFor) → red.
+});
