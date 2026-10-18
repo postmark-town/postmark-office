@@ -103,14 +103,27 @@ test("1b · a make of a holder kind stays refused (already so on the base: a cou
   await assert.rejects(go(world([]), "make", { kind: "halloween-candy-bag", count: 1, to: ME }), (e) => /holds things of its own/.test(e.defect));
 });
 
-test("1c · the give face names the receiver, and an unread holders dial refuses any holder rather than letting it in", { timeout: 10_000 }, async () => {
+test("1c · the give face names the receiver", { timeout: 10_000 }, async () => {
   const markById = async (id) => markOf(String(id));
   await assert.rejects(kinds.refuseSecondHolder({ who: "sbx-dee", actor: ME, adding: [bag("mine")], held: [bag("theirs")], markById, view: classViewOf(SNAP) }),
     (e) => e.code === 409 && e.defect === "sbx-dee is already carrying a holder (sbx-cy/theirs)" && /Nothing was changed\.$/.test(e.hint));
-  await assert.rejects(kinds.refuseSecondHolder({ who: ME, actor: ME, adding: [bag("mine")], held: [], markById, view: classViewOf(UNREAD) }),
-    (e) => e.code === 503 && /holders/.test(e.defect));
-  // a lamp asks no dial at all, read or not
-  await kinds.refuseSecondHolder({ who: ME, actor: ME, adding: [LAMP], held: [bag("theirs")], markById, view: classViewOf(UNREAD) });
+  // a lamp is not a holder: it comes in beside a bag
+  await kinds.refuseSecondHolder({ who: ME, actor: ME, adding: [LAMP], held: [bag("theirs")], markById, view: classViewOf(SNAP) });
+});
+
+test("1d · a law without the holders dial answers as ruled (1): one holder lands, a second is refused; a dial that is read decides", { timeout: 10_000 }, async () => {
+  // the dial unread: the office and the world land separately, so the office answers Darko's 23:29 number
+  const empty = world([row(bag("crate"), bag("other"))], UNREAD);
+  assert.equal((await go(empty, "thing-from-holder", { thing: bag("other"), from: bag("crate") })).did, "take", "one holder into empty hands");
+  const full = world([row(ME, bag("mine")), row(bag("crate"), bag("other"))], UNREAD);
+  await assert.rejects(go(full, "thing-from-holder", { thing: bag("other"), from: bag("crate") }),
+    (e) => e.code === 409 && e.defect === "you're already carrying a holder (sbx-cy/mine)" && e.hint === "set it down first. Nothing was changed.");
+  assert.equal(full.written(), 0);
+  assert.equal(kinds.RULED_HOLDERS, 1);
+  // the dial read at 2: the dial, not the ruled number, decides
+  const TWO = lawSnapshotFromRows(LAW.map((r) => (r.key === "resident/holder/holders" ? { ...r, data: { ...r.data, default: 2 } } : r)));
+  const two = world([row(ME, bag("mine")), row(bag("crate"), bag("other"))], TWO);
+  assert.equal((await go(two, "thing-from-holder", { thing: bag("other"), from: bag("crate") })).did, "take");
 });
 
 // ── 2 · COUNTS CONFER UP ────────────────────────────────────────────────────

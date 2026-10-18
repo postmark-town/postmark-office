@@ -110,15 +110,22 @@ export function isHolderMark(mark, classProperty) {
 /** How many holders a resident carries at once: `resident/holder/holders`, constitution and locked (1), or null when unread. */
 export const holdersCarriedOf = (classProperty) => whole(classProperty("resident", "holders")?.value);
 
+// THE RULED NUMBER, for a law that does not carry the dial yet: Darko, 2026-10-17
+// 23:29, "yes, rule it, one holder and counts confer up". The office and the world
+// land separately (the lead, 2026-10-18), so until the world's law snapshot
+// carries `resident/holder/holders` the office answers as ruled, never "no
+// holders" and never "any number". Once the dial is read, the dial decides.
+export const RULED_HOLDERS = 1;
+
 /**
  * ONE HOLDER IN A RESIDENT'S HANDS (Darko, 2026-10-17 23:29: "yes, rule it, one
  * holder and counts confer up"; LOGOS/classes.md § The transfer edge). A second
  * holder coming into a resident's hands — by a take, a give or a pot-luck draw —
  * is refused in the full-hands voice. `adding` are the whole marks arriving,
  * `held` the ones already in `who`'s hands, `markById` the record's reader. The
- * number is read from the class tree every time; unread, any holder arriving is
- * refused rather than let through (the dial is law, and there is no copy of it
- * here). A holder named `who` (a mark) is not a resident and is not asked.
+ * number is read from the class tree every time it is there; unread, it is the
+ * ruled number, RULED_HOLDERS (below). A holder named `who` (a mark) is not a
+ * resident and is not asked.
  */
 export async function refuseSecondHolder({ who, actor, adding = [], held = [], markById, view, nothing = "Nothing was changed." }) {
   if (who == null || String(who).includes("/") || !adding.length) return;
@@ -130,10 +137,7 @@ export async function refuseSecondHolder({ who, actor, adding = [], held = [], m
   const coming = [];
   for (const t of adding) if (await holds(t)) coming.push(String(t));
   if (!coming.length) return;
-  const limit = holdersCarriedOf(classProperty);
-  if (limit == null)
-    throw bounce(503, "how many holders a resident carries could not be read",
-      `the resident class's holders property is unread, so no holder goes into anyone's hands until it is. ${nothing}`);
+  const limit = holdersCarriedOf(classProperty) ?? RULED_HOLDERS;
   const carrying = [];
   for (const t of held) if (!coming.includes(String(t)) && await holds(t)) carrying.push(String(t));
   if (carrying.length + coming.length <= limit) return;
