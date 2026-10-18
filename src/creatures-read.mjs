@@ -143,6 +143,7 @@ export function creatureHappening({ living, law }, at, { nowMs = Date.now(), eng
   const rows = [];
   const heard = [];
   for (const c of living.byId.values()) {
+    if (!(c.spawned_at <= nowMs)) continue; // not out yet: the tick wrote it ahead (livingNow)
     if (distanceM(here, c) > dial("emission_m")) continue;
     for (const r of c.reactions) {
       if (!(nowMs - r.at <= dial("emission_ms")) || r.at > nowMs) continue;
@@ -265,7 +266,9 @@ export async function investigateCreature(id, { creatures, from = null, nowMs = 
   const { living, law } = creatures ?? {};
   if (!living || !lawReady(law))
     return { kind: "creature", id, unavailable: "the creatures' law cannot be read at this office's blessed ref, so no creature can be looked at" };
-  const c = living.byId.get(id);
+  // a row the tick wrote ahead of its arrival is not out yet, so it is not here to look at (livingNow)
+  const held = living.byId.get(id);
+  const c = held && held.spawned_at <= nowMs ? held : null;
   const snap = await Promise.resolve(saved(id)).catch(() => null);
   if (!c && !snap)
     return { error: "bounce", code: 404, defect: `no creature "${id}"`, hint: 'investigate: takes a creature\'s id as who, find: "creature" and happening_here name it' };

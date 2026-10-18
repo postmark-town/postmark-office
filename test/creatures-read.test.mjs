@@ -164,6 +164,24 @@ test("find: with no standpoint (the World page's keyless read), a creature spawn
   // ⚑ THE FLIP: restore `living.living(nowMs).map(…)` in findCreatures' no-standpoint branch → the first assert reds.
 });
 
+test("happening_here: a creature spawned after now says nothing, even with a reaction on its row", () => {
+  const ahead = "creature:wolf-270-9";
+  const cur = fold(spawn(ahead, { x: 10, at: NOW + 600_000 }), react(ahead, { at: NOW - 60_000 }));
+  assert.ok(cur.living.byId.get(ahead)?.reactions?.length, "the fixture: the ahead row holds a reaction a reader could tell");
+  assert.deepEqual(creatureHappening(cur, { x: 0, y: 0 }, { nowMs: NOW, engine: ENGINE }), [],
+    "happening_here told a creature the tick wrote ahead of its arrival");
+  // ⚑ THE FLIP: drop the `spawned_at <= nowMs` skip in creatureHappening's loop → red.
+});
+
+test("investigate: a creature spawned after now is not here to look at (404), as no read lists it", async () => {
+  const ahead = "creature:wolf-270-9";
+  const cur = fold(spawn("creature:wolf-270-1", { x: 2000 }), spawn(ahead, { x: 10, at: NOW + 600_000 }));
+  const r = await investigateCreature(ahead, { creatures: cur, nowMs: NOW });
+  assert.equal(r.code, 404, "investigate read a creature the tick wrote ahead of its arrival: " + JSON.stringify(r).slice(0, 200));
+  assert.equal((await investigateCreature("creature:wolf-270-1", { creatures: cur, nowMs: NOW })).kind, "creature", "one out by now still reads");
+  // ⚑ THE FLIP: read `living.byId.get(id)` unfiltered in investigateCreature → the first assert reds.
+});
+
 // ── to_you (C1) ─────────────────────────────────────────────────────────────
 
 test("to_you: a creature's answer to you rides your own happened, the arrival named so, wherever you are now", () => {
