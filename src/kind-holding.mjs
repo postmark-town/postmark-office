@@ -107,6 +107,53 @@ export function isHolderMark(mark, classProperty) {
   return holdingOf({ mark, className, classProperty }).holder === true;
 }
 
+/** How many holders a resident carries at once: `resident/holder/holders`, constitution and locked (1), or null when unread. */
+export const holdersCarriedOf = (classProperty) => whole(classProperty("resident", "holders")?.value);
+
+// THE RULED NUMBER, for a law that does not carry the dial yet: Darko, 2026-10-17
+// 23:29, "yes, rule it, one holder and counts confer up". The office and the world
+// land separately (the lead, 2026-10-18), so until the world's law snapshot
+// carries `resident/holder/holders` the office answers as ruled, never "no
+// holders" and never "any number". Once the dial is read, the dial decides.
+export const RULED_HOLDERS = 1;
+
+/**
+ * ONE HOLDER IN A RESIDENT'S HANDS (Darko, 2026-10-17 23:29: "yes, rule it, one
+ * holder and counts confer up"; LOGOS/classes.md § The transfer edge). A second
+ * holder coming into a resident's hands — by a take, a give or a pot-luck draw —
+ * is refused in the full-hands voice. `adding` are the whole marks arriving,
+ * `held` the ones already in `who`'s hands, `markById` the record's reader. The
+ * number is read from the class tree every time it is there; unread, it is the
+ * ruled number, RULED_HOLDERS (below). A holder named `who` (a mark) is not a
+ * resident and is not asked.
+ */
+export async function refuseSecondHolder({ who, actor, adding = [], held = [], markById, view, nothing = "Nothing was changed." }) {
+  if (who == null || String(who).includes("/") || !adding.length) return;
+  const classProperty = propertyOf(view);
+  const holds = async (id) => {
+    const m = await markById(String(id)).catch(() => null);
+    return m ? isHolderMark(m, classProperty) : false;
+  };
+  const coming = [];
+  for (const t of adding) if (await holds(t)) coming.push(String(t));
+  if (!coming.length) return;
+  const limit = holdersCarriedOf(classProperty) ?? RULED_HOLDERS;
+  const carrying = [];
+  for (const t of held) if (!coming.includes(String(t)) && await holds(t)) carrying.push(String(t));
+  if (carrying.length + coming.length <= limit) return;
+  const mine = String(who) === String(actor);
+  if (carrying.length) {
+    // the words follow how many are carried: one from today, or several from before the rule
+    const what = `${carrying.length === 1 ? "a holder" : `${carrying.length} holders`} (${carrying.join(", ")})`;
+    const over = carrying.length + coming.length - limit; // how many must be set down first
+    const setDown = carrying.length === 1 ? "set it down first" : over >= carrying.length ? "set them down first" : `set ${over} of them down first`;
+    throw bounce(409, mine ? `you're already carrying ${what}` : `${who} is already carrying ${what}`,
+      `${mine ? setDown : `it goes to them once they set ${carrying.length === 1 ? "theirs" : "those"} down`}. ${nothing}`, { holders: carrying, limit });
+  }
+  throw bounce(409, `that would put ${coming.length} holders in ${mine ? "your" : `${who}'s`} hands (${coming.join(", ")})`,
+    `a resident carries ${limit === 1 ? "one holder" : `${limit} holders`} at a time. ${nothing}`, { holders: coming, limit });
+}
+
 /** Is this thing portable? `thing/portable` is sovereign, default true (the lead's settlement, 2026-10-17). */
 export function portableMark(mark, classProperty) {
   const className = markClassOf(mark);

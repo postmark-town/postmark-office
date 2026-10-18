@@ -1570,7 +1570,7 @@ export async function declareHoldingFlipped({ db, thing, to = null, actor, dials
     // THE CARRY CAP (WLD-27), asked of whoever ends up holding it, inside the
     // turn so two holds cannot both pass a cap only one of them fits. Absent
     // (`carry: null`) for a caller that measures no load.
-    if (carry && (did.did === "take" || did.did === "give")) await carry({ who: did.holder, attachments: rows });
+    if (carry && (did.did === "take" || did.did === "give")) await carry({ who: did.holder, attachments: rows, thing: String(thing), actor });
     const { at, witnesses } = await witnessStamp(did.declared_by);
     const row = await appendActFlipped(db, holdingEntry(did, { crossing: currentCrossing(), at, witnesses, cls: CLASS_HOLDING, household: resolvedWorldHousehold(key) }));
     // Which store is the RECORD for this act — said in the answer, as the stance
@@ -1611,7 +1611,14 @@ export function holdTurn(fn) {
  * one slot — a portable chest included, whatever it holds — and every counted
  * unit is one. The cap is the thing class's declared `carry_cap`, read here.
  */
-async function carryForThings({ who, attachments }) {
+async function carryForThings({ who, attachments, thing = null, actor = null }) {
+  // ONE HOLDER IN A RESIDENT'S HANDS (Darko, 2026-10-17 23:29): a holder taken or given to a resident who carries one is refused
+  if (thing != null) {
+    const [{ refuseSecondHolder }, { classViewOf }, { lawSnapshot }, world] = await Promise.all([
+      import("./kind-holding.mjs"), import("./world-units.mjs"), import("./law-snapshot.mjs"), import("./world.mjs")]);
+    await refuseSecondHolder({ who, actor: actor ?? who, adding: [thing], held: holdingsOf(attachments, who), view: classViewOf(lawSnapshot()),
+      markById: async (id) => (await world.worldMarkById(String(id))).mark, nothing: "Nothing was recorded." });
+  }
   // the resident's own capacity (constitution, 24), property first; the thing class's older carry_cap second (G4)
   const cap = holdingOf({ className: "resident", classProperty, legacy: { capacity: thingDials()?.carry_cap } }).capacity;
   if (!Number.isInteger(cap)) return;

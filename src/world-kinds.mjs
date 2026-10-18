@@ -22,13 +22,14 @@
 
 import { foldUnits, kindEdgesOf, totalOf, unitCount, refuseOverCarry, UNIT_ACTION } from "./world-stacks.mjs";
 import { holdingsOf, sameHousehold, holdTurn, liveHolder } from "./world-hold.mjs";
+import { liveHolders, weightOf, refuseNesting } from "./holder-tree.mjs"; // the walks, cycle-safe; counts confer up
 import { chestRoomGuard } from "./chest-lock.mjs";
-import { inFlightFor, writeThingHolding, thingHoldingEntry } from "./world-units.mjs";
+import { inFlightFor, writeThingHolding, thingHoldingEntry, wholeLoadIn, refuseOverRoomAbove } from "./world-units.mjs";
 import { markClassOf, lineageOf } from "./world-grants.mjs";
 import { standsWithin, EARSHOT_M } from "./reach.mjs";
 import {
   makeableKind, holderLawOf, roomIn, refuseOverRoom, blurOf, planMake, planTakeKinds, planGiveKinds,
-  oneHolderOf, drawSeed, affordedActions, selectKind,
+  oneHolderOf, drawSeed, affordedActions, selectKind, refuseSecondHolder,
 } from "./kind-holding.mjs";
 
 const bounce = (code, defect, hint, extra = {}) => {
@@ -201,12 +202,14 @@ async function makeInto({ args, key, actor, deps, view, via = "leave-mark" }) {
     const inFlight = law.resident ? await inFlightFor(to, deps) : 0; // BEFORE the rows (world-units § inFlightFor)
     const { units, attachments } = await deps.readRows();
     const fold = foldUnits(units);
-    const things = holdingsOf(attachments, to).length;
+    // a resident's hands count each thing 1; a holder counts each holder in it 1 and all it holds (counts confer up)
+    const things = law.resident ? holdingsOf(attachments, to).length : wholeLoadIn(attachments, fold, to);
     const room = roomIn({ capacity: law.capacity, fold, holder: to, things, inFlight });
     refuseOverRoom({ n, room, name: law.resident ? to : `the ${law.className ?? "holder"} ${to}`, capacity: law.capacity, holding: totalOf(fold, to) + things + inFlight });
+    const above = law.resident ? [] : await refuseOverRoomAbove({ deps, view, fold, attachments, holder: to, n, nothing: "Nothing was made." });
     const plan = planMake({ actor, kind, n, to, via });
     const w = await writeKinds(deps, key, actor, plan, {
-      guard: law.resident ? null : chestRoomGuard({ chest: to, capacity: law.capacity, adding: n }),
+      guard: law.resident ? null : chestRoomGuard({ chest: to, capacity: law.capacity, adding: n, above }),
       words: sentence[via === "refill" ? "refill" : "make"]({ actor, n, kind, to }),
     });
     const after = foldUnits([...units, { class: "holding", action: plan.action, payload: { moves: plan.moves } }]);
@@ -229,14 +232,16 @@ async function thingIntoHolder({ args, key, actor, deps, view }) {
     const { units, attachments } = await deps.readRows();
     const holder = liveHolder(attachments, thing);
     if (holder !== String(actor)) throw bounce(409, `you are not holding ${thing}: ${holder ?? "nobody"} is`, "a thing goes into a holder from your hands. Nothing was changed.");
-    for (let h = liveHolder(attachments, to), hops = 0; h && hops < 64; h = liveHolder(attachments, h), hops++)
-      if (h === thing) throw bounce(422, `${to} is inside ${thing}`, "a holder cannot go inside what it is carried in. Nothing was changed.");
+    refuseNesting({ rows: attachments, thing, into: to }); // however deep, and a loop already in the rows is refused, never followed
     const fold = foldUnits(units);
-    const things = holdingsOf(attachments, to).length;
-    refuseOverRoom({ n: 1, room: roomIn({ capacity: law.capacity, fold, holder: to, things }), name: `the ${law.className ?? "holder"} ${to}`,
+    // COUNTS CONFER UP (Darko 2026-10-17 23:29): the thing takes 1 and everything it holds, here and in every holder above
+    const n = weightOf({ up: liveHolders(attachments), thing, unitsOf: (h) => totalOf(fold, h) });
+    const things = wholeLoadIn(attachments, fold, to);
+    refuseOverRoom({ n, room: roomIn({ capacity: law.capacity, fold, holder: to, things }), name: `the ${law.className ?? "holder"} ${to}`,
       capacity: law.capacity, holding: totalOf(fold, to) + things, verb: "changed" });
+    const above = await refuseOverRoomAbove({ deps, view, fold, attachments, holder: to, n });
     const w = await writeThingHolding(deps, key, actor, attachments, { did: "give", thing, holder: to, previous: String(actor), madeBy: ownerOf(mark, thing) },
-      { guard: chestRoomGuard({ chest: to, capacity: law.capacity, adding: 1 }) });
+      { guard: chestRoomGuard({ chest: to, capacity: law.capacity, adding: n, above }) });
     const after = [...attachments, { entity: to, target: thing, policy: "cascade", born_at: w.at }];
     return { did: "give", thing, to, ...w, edge: { giver: String(actor), receiver: to }, receiver: await shownIn(fold, to, after, view, deps) };
   });
@@ -255,6 +260,7 @@ export async function thingFromHolder({ args, key, actor, deps, view }) {
     const holder = liveHolder(attachments, thing);
     if (holder !== from) throw bounce(409, `${from} is not holding ${thing}`, holder ? `${holder} is. Nothing was changed.` : "it stands on the ground. Nothing was changed.");
     refuseOverCarry({ who: actor, units: totalOf(foldUnits(units), actor) + inFlight, things: holdingsOf(attachments, actor).length, adding: 1, cap: carryOf(view) });
+    await refuseSecondHolder({ who: actor, actor, adding: [thing], held: holdingsOf(attachments, actor), markById: deps.markById, view });
     const w = await writeThingHolding(deps, key, actor, attachments, { did: "take", thing, holder: String(actor), previous: from, madeBy: ownerOf(mark, thing) });
     return { did: "take", thing, from, holder: String(actor), ...w, edge: { giver: from, receiver: String(actor) } };
   });
@@ -312,6 +318,7 @@ export async function callKinds(route, args, key, actor, deps) {
         for (const t of holdingsOf(attachments, from)) inside.push({ thing: t, class: markClassOf(await deps.markById(t).catch(() => null)) ?? "thing" });
         const plan = { ...planTakeKinds({ fold, actor, from, kind, n, seed, things: inside, extendsOf: view.extendsOf }), seed };
         refuseOverCarry({ who: actor, units: totalOf(fold, actor) + inFlight, things: holdingsOf(attachments, actor).length, adding: n, cap });
+        await refuseSecondHolder({ who: actor, actor, adding: plan.things, held: holdingsOf(attachments, actor), markById: deps.markById, view });
         // ONE EDGE, ONE TRANSACTION (review-610 S4): the draw's record (its seed, its kinds, the whole
         // marks it took) and each whole mark's own holding act commit together, or nothing moves
         const also = [];
@@ -349,14 +356,16 @@ export async function callKinds(route, args, key, actor, deps) {
         const fold = foldUnits(units);
         const plan = planGiveKinds({ fold, actor, to, kind: args.kind ?? null, n });
         if (law.resident) refuseOverCarry({ who: to, units: totalOf(fold, to) + inFlight, things: holdingsOf(attachments, to).length, adding: n, cap });
-        else {
-          const things = holdingsOf(attachments, to).length;
+        let above = [];
+        if (!law.resident) {
+          const things = wholeLoadIn(attachments, fold, to); // each holder in it 1 and all it holds (counts confer up)
           refuseOverRoom({ n, room: roomIn({ capacity: law.capacity, fold, holder: to, things }), name: `the ${law.className ?? "holder"} ${to}`,
             capacity: law.capacity, holding: totalOf(fold, to) + things, verb: "changed" });
+          above = await refuseOverRoomAbove({ deps, view, fold, attachments, holder: to, n });
         }
         const kind = plan.moves[0].kind;
         const w = await writeKinds(deps, key, actor, plan, {
-          guard: law.resident ? null : chestRoomGuard({ chest: to, capacity: law.capacity, adding: n }),
+          guard: law.resident ? null : chestRoomGuard({ chest: to, capacity: law.capacity, adding: n, above }),
           words: sentence.give({ actor, n, kind, to }),
         });
         const after = foldUnits([...units, { class: "holding", action: plan.action, payload: { moves: plan.moves } }]);

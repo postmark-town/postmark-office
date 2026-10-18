@@ -22,7 +22,8 @@ import { standsWithin, withinArmsLength, EARSHOT_M } from "./reach.mjs";
 import { totalOf, kindEdgesOf } from "./world-stacks.mjs";
 import { liveHolder, holdingsOf, sameHousehold } from "./world-hold.mjs";
 import { lineageOf, markClassOf } from "./world-grants.mjs";
-import { holderLawOf, roomIn, affordedActions, portableMark } from "./kind-holding.mjs";
+import { holderLawOf, roomIn, affordedActions, portableMark, isHolderMark, holdersCarriedOf, RULED_HOLDERS } from "./kind-holding.mjs";
+import { liveHolders, wholeLoadOf } from "./holder-tree.mjs";
 
 /** The verbs this calculus decides; every other act keeps its own grant. */
 export const HOLD_VERBS = Object.freeze(["take", "give", "drop", "consume", "refill"]);
@@ -58,7 +59,15 @@ export function usablePairs({ actor, here, marks = [], residents = [], fold, att
   const heldByOf = (id) => { const r = last.get(String(id)); return r?.policy === "cascade" ? String(r.entity) : null; };
   const inside = new Map();
   for (const [t, r] of last) if (r.policy === "cascade") { const e = String(r.entity); if (!inside.has(e)) inside.set(e, []); inside.get(e).push(t); }
+  const up = liveHolders(attachments); // a holder's room counts each holder in it 1 and all it holds (counts confer up)
   const carriedThings = inside.get(me) ?? [];
+  // ONE HOLDER IN HAND (Darko, 2026-10-17 23:29): no take of a holder is offered to hands that already
+  // carry as many as the resident class allows (kind-holding § refuseSecondHolder, the door's own rule)
+  const classProperty = (n, p) => view.property?.(n, p) ?? null;
+  const byId = new Map(marks.filter((x) => x?.id).map((x) => [String(x.id), x]));
+  const isHolder = (id) => { const x = byId.get(String(id)); return x ? isHolderMark(x, classProperty) : false; };
+  const handsFull = carriedThings.filter(isHolder).length >= (holdersCarriedOf(classProperty) ?? RULED_HOLDERS);
+  const takeable = (id) => !(handsFull && isHolder(id));
   const load = (who) => totalOf(fold, who) + (inside.get(String(who))?.length ?? 0);
   const cap = holderLawOf({ holder: "resident", view }).capacity;
   const slots = (who) => (Number.isInteger(cap) ? cap - load(who) : Infinity);
@@ -90,18 +99,18 @@ export function usablePairs({ actor, here, marks = [], residents = [], fold, att
     const atIt = inHand || ground;                                       // take's reach
     const toIt = atIt || (heldBy != null && !inHand && beside(heldBy));  // give's: another's hands, at arm's length
     // take the thing itself: portable, on the ground, in reach, with a slot
-    if (ground && portableOf(m, view) && slots(me) > 0) add("take", m.id);
+    if (ground && portableOf(m, view) && slots(me) > 0 && takeable(m.id)) add("take", m.id);
     const law = holderLawOf({ holder: m.id, mark: m, view });
     // a holder whose own capacity is refused, or unread, takes and gives nothing until it is set (the door refuses alike)
     if (!law.holder || law.capacity_refused || !Number.isInteger(law.capacity)) continue;
     const mine = sameHousehold(String(m.by ?? m.id.split("/")[0]), me, householdOf).same;
     const welcome = law.open !== false || mine;
     const wholeInside = inside.get(m.id) ?? [];
-    const room = roomIn({ capacity: law.capacity, fold, holder: m.id, things: wholeInside.length });
+    const room = roomIn({ capacity: law.capacity, fold, holder: m.id, things: wholeLoadOf({ up, holder: m.id, unitsOf: (h) => totalOf(fold, h) }) });
     if (welcome && atIt && slots(me) > 0) {
       // take from it, by kind or pot luck; and each whole mark inside carries its own take (11:55)
-      if (kindEdgesOf(fold, m.id).length || wholeInside.length) add("take", m.id);
-      for (const t of wholeInside) add("take", t);
+      if (kindEdgesOf(fold, m.id).length || wholeInside.some(takeable)) add("take", m.id);
+      for (const t of wholeInside) if (takeable(t)) add("take", t);
     }
     // give into it: something in your hands besides the holder itself
     if (welcome && toIt && room > 0 && (carryingKinds || carriedThings.some((t) => t !== m.id))) add("give", m.id);
