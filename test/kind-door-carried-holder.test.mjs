@@ -25,6 +25,8 @@ const WORLD = worldClone();
 const store = await startStore({ db: "kind_door_carried_holder" });
 const skip = store.skip ?? ((!WORLD && NO_WORLD) || false);
 const BAG = "sbx-cy/my-bag", MY_BOWL = "sbx-cy/my-bowl", FAR_BOWL = "sbx-ana/the-bowl", LAMP = "sbx-cy/a-lamp", STONE = "sbx-ana/a-stone", PEBBLE = "sbx-ana/a-pebble";
+// A PORTABLE HOLDER AT CY'S FEET (plumb-nest-guard): the take that would put a second holder in her hands
+const BASKET = "sbx-ana/a-basket";
 // THE SET-OUT BOWLS under cy's feet (the playground's QA, PART2-MCP-QA fail 4): ana's, open, and cy's own
 const ANA_DOOR_BOWL = "sbx-ana/a-door-bowl", CY_DOOR_BOWL = "sbx-cy/a-door-bowl";
 // A RESIDENT'S OWN HOLDER (QA fail 2): a thing cy made with holder: true, published by the world's REAL fold
@@ -52,6 +54,7 @@ const LAW = [
   cls("halloween-candy-bag", { extends: "thing" }),
   prop("postmark-node", "makers", false, "constitution"), prop("thing", "makers", true, "constitution"),
   prop("resident", "holder", true, "constitution"), prop("resident", "capacity", 24, "constitution", "holder"),
+  prop("resident", "holders", 1, "constitution", "holder"), // one holder in hand (Darko 2026-10-17 23:29)
   prop("thing", "holder", false, "sovereign"), prop("thing", "capacity", 30, "sovereign", "holder"),
   prop("thing", "min", 1, "constitution", "capacity"), prop("thing", "max", 120, "constitution", "capacity"),
   prop("thing", "open", true, "sovereign", "holder"), prop("thing", "portable", true, "sovereign"),
@@ -84,6 +87,7 @@ export function sourceLabel() { return "home"; }
   const ms = [mark(BAG, "halloween-candy-bag", "A bag for gathering."), mark(MY_BOWL, "halloween-candy-bowl", "My bowl of candy."), mark(FAR_BOWL, "halloween-candy-bowl", "A bowl by a far door."), mark(LAMP, "thing", "A small lamp."),
     { rec: { id: STONE, by: "sbx-ana", slug: "a-stone", kind: "sited", class: "thing", portable: false, at: { x: 1010, y: 10 }, extent: { w: 2, h: 2 } }, body: "A stone too heavy to lift." },
     { rec: { id: PEBBLE, by: "sbx-ana", slug: "a-pebble", kind: "sited", class: "thing", at: { x: 1010, y: 10 }, extent: { w: 2, h: 2 } }, body: "A pebble." },
+    { rec: { id: BASKET, by: "sbx-ana", slug: "a-basket", kind: "sited", class: "halloween-candy-bag", at: { x: 1010, y: 10 }, extent: { w: 2, h: 2 } }, body: "A basket left by the path." },
     { rec: { id: ANA_DOOR_BOWL, by: "sbx-ana", slug: "a-door-bowl", kind: "sited", class: "halloween-candy-bowl", portable: false, at: { x: 1010, y: 10 }, extent: { w: 2, h: 2 } }, body: "A carved pumpkin bowl by ana's door." },
     { rec: { id: CY_DOOR_BOWL, by: "sbx-cy", slug: "a-door-bowl", kind: "sited", class: "halloween-candy-bowl", portable: false, at: { x: 1010, y: 10 }, extent: { w: 2, h: 2 } }, body: "A carved pumpkin bowl by cy's door." }];
   put("WORLD/marks/let-there-be-light/mark.md", markRecord(root, "Synthetic world frame."));
@@ -424,4 +428,27 @@ test("QA fail 1 · end to end: the world's own resident class grants consume, an
     assert.equal(ate.error, undefined, `consume through the apex on the world's own grants (${verbs}): ${JSON.stringify(ate).slice(0, 300)}`);
     assert.deepEqual((await unitActs()).map((a) => a.action), ["units:make", "units:consume"]);
   }, { verbs });
+});
+
+// ── ONE HOLDER IN HAND, through the real hold door (plumb-nest-guard; Darko 2026-10-17 23:29) ──
+test("one holder · carrying a bag, a take of a basket at your feet is refused in the full-hands voice; with empty hands it lands", { skip }, async () => {
+  await seed();
+  await carry(BAG);
+  await assert.rejects(callHoldTool("world_hold", { thing: BASKET }, KEY, { verb: "take" }),
+    (e) => e.code === 409 && e.defect === `you're already carrying a holder (${BAG})` && e.hint === "set it down first. Nothing was recorded.");
+  await seed();
+  const took = await callHoldTool("world_hold", { thing: BASKET }, KEY, { verb: "take" });
+  assert.deepEqual([took.did, took.holder], ["take", "sbx-cy"]);
+});
+
+test("one holder · a give of a bag to a resident who carries a bowl is refused, naming them; to one who carries none it lands", { skip }, async () => {
+  await seed();
+  await carry(BAG);
+  await carry(MY_BOWL, "sbx-dee");
+  await assert.rejects(callHoldTool("world_hold", { thing: BAG, to: "sbx-dee" }, KEY, { verb: "give" }),
+    (e) => e.code === 409 && e.defect === `sbx-dee is already carrying a holder (${MY_BOWL})`);
+  await seed();
+  await carry(BAG);
+  const gave = await callHoldTool("world_hold", { thing: BAG, to: "sbx-dee" }, KEY, { verb: "give" });
+  assert.deepEqual([gave.did, gave.holder ?? gave.to], ["give", "sbx-dee"]);
 });

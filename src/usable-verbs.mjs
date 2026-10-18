@@ -23,6 +23,7 @@ import { totalOf, kindEdgesOf } from "./world-stacks.mjs";
 import { liveHolder, holdingsOf, sameHousehold } from "./world-hold.mjs";
 import { lineageOf, markClassOf } from "./world-grants.mjs";
 import { holderLawOf, roomIn, affordedActions, portableMark } from "./kind-holding.mjs";
+import { liveHolders, wholeLoadOf } from "./holder-tree.mjs";
 
 /** The verbs this calculus decides; every other act keeps its own grant. */
 export const HOLD_VERBS = Object.freeze(["take", "give", "drop", "consume", "refill"]);
@@ -58,6 +59,7 @@ export function usablePairs({ actor, here, marks = [], residents = [], fold, att
   const heldByOf = (id) => { const r = last.get(String(id)); return r?.policy === "cascade" ? String(r.entity) : null; };
   const inside = new Map();
   for (const [t, r] of last) if (r.policy === "cascade") { const e = String(r.entity); if (!inside.has(e)) inside.set(e, []); inside.get(e).push(t); }
+  const up = liveHolders(attachments); // a holder's room counts each holder in it 1 and all it holds (counts confer up)
   const carriedThings = inside.get(me) ?? [];
   const load = (who) => totalOf(fold, who) + (inside.get(String(who))?.length ?? 0);
   const cap = holderLawOf({ holder: "resident", view }).capacity;
@@ -97,7 +99,7 @@ export function usablePairs({ actor, here, marks = [], residents = [], fold, att
     const mine = sameHousehold(String(m.by ?? m.id.split("/")[0]), me, householdOf).same;
     const welcome = law.open !== false || mine;
     const wholeInside = inside.get(m.id) ?? [];
-    const room = roomIn({ capacity: law.capacity, fold, holder: m.id, things: wholeInside.length });
+    const room = roomIn({ capacity: law.capacity, fold, holder: m.id, things: wholeLoadOf({ up, holder: m.id, unitsOf: (h) => totalOf(fold, h) }) });
     if (welcome && atIt && slots(me) > 0) {
       // take from it, by kind or pot luck; and each whole mark inside carries its own take (11:55)
       if (kindEdgesOf(fold, m.id).length || wholeInside.length) add("take", m.id);

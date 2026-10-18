@@ -34,7 +34,9 @@ import {
   planGive, planTake, planConsume, planRefill, refillerLabel, droppedUnitMark, isDroppedUnitMark, returnsAtExit, isChestId, isUnitRow,
   withdrawnMarks, ancestry, selectLabel, stockedChests,
 } from "./world-stacks.mjs";
-import { holdingsOf, sameHousehold, holdTurn, liveHolder, rowsFor, holdingEntry, refuseNesting } from "./world-hold.mjs";
+import { holdingsOf, sameHousehold, holdTurn, liveHolder, rowsFor, holdingEntry } from "./world-hold.mjs";
+import { liveHolders, holdersAbove, wholeLoadOf, weightOf, refuseNesting } from "./holder-tree.mjs"; // the walks, cycle-safe; counts confer up
+import { holderLawOf, refuseSecondHolder } from "./kind-holding.mjs"; // any holder's capacity; one holder in a resident's hands
 import { chestRoomGuard } from "./chest-lock.mjs";
 import { dropUndoGuard, undoNonce, dropSequenceGuard } from "./drop-recovery.mjs";
 import { faultLogged, plainReason } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
@@ -281,6 +283,44 @@ function chestDialsFor(view, mark) {
   return out;
 }
 
+/** Any holder's capacity from its mark: a #499 chest by its chest dials, any other thing by the holder property (holding-law § holdingOf). */
+export function holderCapacityOf(mark, view) {
+  if (markClassOf(mark) === "chest") return capacityOf(mark, chestDialsFor(view, mark));
+  const law = holderLawOf({ holder: String(mark.id), mark, view });
+  return law.holder && !law.capacity_refused ? law.capacity : null;
+}
+
+/** Everything inside `holder` past its own units, as its room counts it: each whole thing at any depth is 1 plus what it holds (holder-tree § wholeLoadOf). */
+export const wholeLoadIn = (attachments, fold, holder) => wholeLoadOf({ up: liveHolders(attachments), holder, unitsOf: (h) => totalOf(fold, h) });
+
+/**
+ * COUNTS CONFER UP, ABOVE THE HOLDER (Darko, 2026-10-17 23:29; holder-tree.mjs
+ * § THE LAW): adding `n` to `holder` adds `n` to every holder it sits inside, up
+ * to but not including a resident's hands, and each must have the room. The
+ * holder's own room is its door's to judge (refuseOverRoom, with wholeLoadIn).
+ * Returns `[{ holder, capacity }]`, for the pen guard to judge again under each
+ * one's lock (chest-lock § chestRoomGuard `above`).
+ */
+export async function refuseOverRoomAbove({ deps, view, fold, attachments, holder, n, nothing = "Nothing was changed." }) {
+  const up = liveHolders(attachments);
+  const { above, loop } = holdersAbove(up, String(holder));
+  if (loop) throw bounce(422, `the record holds a loop above ${holder}`, `its holders lead back to themselves, so the room above it cannot be told. ${nothing}`);
+  const out = [];
+  for (const a of above) {
+    const mark = await deps.markById(a).catch(() => null);
+    const capacity = mark ? holderCapacityOf(mark, view) : null;
+    if (!Number.isInteger(capacity))
+      throw bounce(503, `the room of ${a}, which ${holder} is inside, could not be read`, `a count confers up to every holder above it, and this one's capacity is unread. ${nothing}`);
+    const load = totalOf(fold, a) + wholeLoadOf({ up, holder: a, unitsOf: (h) => totalOf(fold, h) });
+    if (load + n > capacity)
+      throw bounce(409, `${a} has room for ${Math.max(capacity - load, 0)}, not ${n}`,
+        `${holder} is inside it, and a holder counts 1 and everything it holds: ${a} holds ${load} of ${capacity}. ${nothing}`,
+        { room: Math.max(capacity - load, 0), capacity, at: a });
+    out.push({ holder: a, capacity });
+  }
+  return out;
+}
+
 async function chestOrThrow(deps, id, view) {
   const mark = await deps.markById(id);
   if (!mark) throw bounce(404, `${id} does not stand on the world`, "a chest is a published mark; a private draft holds nothing yet. Nothing was recorded.");
@@ -332,14 +372,15 @@ export async function callUnits(route, args, key, actor, deps) {
         const inFlight = (!isChestId(to) ? await inFlightFor(to, deps) : 0); // BEFORE the rows: see inFlightFor
         const { units, attachments } = await deps.readRows();
         const fold = foldUnits(units);
-        // the chest's one capacity is shared by its counted units and the whole things in it
-        const capacityOfTo = chestCap == null ? null : chestCap - holdingsOf(attachments, to).length;
+        // the chest's one capacity is shared by its counted units and the whole things in it, each holder 1 and all it holds
+        const capacityOfTo = chestCap == null ? null : chestCap - wholeLoadIn(attachments, fold, to);
         const plan = planGive({ fold, actor, to, label: args.label ?? null, n, capacityOfTo });
         refuseIfTaken(topClassOf(fold, actor, view, plan.label), view);
         if (!isChestId(to)) refuseOverCarry({ who: to, units: totalOf(fold, to) + inFlight, things: thingsCarried(attachments, to), adding: n, cap });
+        const above = isChestId(to) ? await refuseOverRoomAbove({ deps, view, fold, attachments, holder: to, n, nothing: "Nothing was recorded." }) : [];
         // INTO A CHEST, the room is judged again under the chest's own lock inside
         // the write's transaction — the tick's stock is another process (finding 6)
-        const w = await writeUnits(deps, key, actor, plan, isChestId(to) ? { guard: chestRoomGuard({ chest: to, capacity: chestCap, adding: n }) } : {});
+        const w = await writeUnits(deps, key, actor, plan, isChestId(to) ? { guard: chestRoomGuard({ chest: to, capacity: chestCap, adding: n, above }) } : {});
         const after = foldUnits([...units, { class: "holding", action: plan.action, payload: { moves: plan.moves } }]);
         return { did: "give", units: true, label: plan.label, count: n, to, ...w, holds: holdsBlock(after, actor, view),
           receiver: isChestId(to) ? await chestBlock(after, to, view, attachments, deps) : holdsBlock(after, to, view) };
@@ -368,11 +409,12 @@ export async function callUnits(route, args, key, actor, deps) {
         const { units, attachments } = await deps.readRows();
         const fold = foldUnits(units);
         // refill fills the room left by EVERYTHING in the chest — units of every label and whole things
-        const plan = planRefill({ fold, actor, chest, capacity: capacity - holdingsOf(attachments, chest).length, labels: view.labels(), maker });
+        const plan = planRefill({ fold, actor, chest, capacity: capacity - wholeLoadIn(attachments, fold, chest), labels: view.labels(), maker });
         if (plan.noop) return { did: "refill", units: true, noop: true, note: plan.note, chest: await chestBlock(fold, chest, view, attachments, deps) };
         refuseIfTaken(topClassOf(fold, chest, view) ?? "candy", view);
+        const above = await refuseOverRoomAbove({ deps, view, fold, attachments, holder: chest, n: plan.moves[0].n, nothing: "Nothing was recorded." });
         const w = await writeUnits(deps, key, actor, { ...plan, payload: { label: plan.label, capacity } },
-          { guard: chestRoomGuard({ chest, capacity, adding: plan.moves[0].n }) });
+          { guard: chestRoomGuard({ chest, capacity, adding: plan.moves[0].n, above }) });
         const after = foldUnits([...units, { class: "holding", action: plan.action, payload: { moves: plan.moves } }]);
         return { did: "refill", units: true, label: plan.label, count: plan.moves[0].n, ...w, chest: await chestBlock(after, chest, view, attachments, deps) };
       });
@@ -808,13 +850,17 @@ async function thingIntoChest(args, key, actor, deps, view) {
     const { units, attachments } = await deps.readRows();
     const holder = liveHolder(attachments, thing);
     if (holder !== actor) throw bounce(409, `you are not holding ${thing} — ${holder ?? "nobody"} is`, "a thing goes into a chest from your hands. Nothing was recorded.");
-    // NO CHEST INSIDE ITSELF, however deep, and nothing nested past the ceiling: the hold lane's one check.
+    // NO CHEST INSIDE ITSELF, however deep, and no loop followed: the hold lane's one check (holder-tree.mjs)
     refuseNesting({ rows: attachments, thing, into: chestId, noun: "chest", nothing: "Nothing was recorded." });
     const fold = foldUnits(units);
-    const used = totalOf(fold, chestId) + holdingsOf(attachments, chestId).length;
-    if (used + 1 > capacity) throw bounce(409, `${chestId} has no room — ${used} of ${capacity}`, "its one capacity holds units and whole things alike. Nothing was recorded.");
+    // COUNTS CONFER UP (Darko 2026-10-17 23:29): the thing takes 1 and everything it holds, here and in every holder above
+    const adding = weightOf({ up: liveHolders(attachments), thing, unitsOf: (h) => totalOf(fold, h) });
+    const used = totalOf(fold, chestId) + wholeLoadIn(attachments, fold, chestId);
+    if (used + adding > capacity) throw bounce(409, `${chestId} has no room — ${used} of ${capacity}${adding > 1 ? `, and ${thing} takes ${adding}` : ""}`,
+      "its one capacity holds units and whole things alike, a holder counting 1 and everything it holds. Nothing was recorded.");
+    const above = await refuseOverRoomAbove({ deps, view, fold, attachments, holder: chestId, n: adding, nothing: "Nothing was recorded." });
     const w = await writeThingHolding(deps, key, actor, attachments, { did: "give", thing, holder: chestId, previous: actor, madeBy: String(mark.by ?? thing.split("/")[0]) },
-      { guard: chestRoomGuard({ chest: chestId, capacity, adding: 1 }) });
+      { guard: chestRoomGuard({ chest: chestId, capacity, adding, above }) });
     const after = [...attachments, { entity: chestId, target: thing, policy: "cascade", born_at: w.at }];
     return { did: "give", thing, to: chestId, into_chest: true, ...w,
       chest: holdsBlock(fold, chestId, view, await thingsHeldBy(after, chestId, deps.markById)) };
@@ -838,6 +884,7 @@ async function thingFromChest(args, key, actor, deps, view, cap) {
     const holder = liveHolder(attachments, thing);
     if (holder !== chestId) throw bounce(409, `${chestId} is not holding ${thing}`, holder ? `${holder} is. Nothing was recorded.` : "it stands on the ground. Nothing was recorded.");
     refuseOverCarry({ who: actor, units: totalOf(foldUnits(units), actor) + inFlight, things: thingsCarried(attachments, actor), adding: 1, cap });
+    await refuseSecondHolder({ who: actor, actor, adding: [thing], held: holdingsOf(attachments, actor), markById: deps.markById, view, nothing: "Nothing was recorded." });
     const w = await writeThingHolding(deps, key, actor, attachments, { did: "take", thing, holder: actor, previous: chestId, madeBy: String(mark?.by ?? thing.split("/")[0]) });
     return { did: "take", thing, from: chestId, holder: actor, ...w };
   });

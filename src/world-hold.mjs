@@ -100,74 +100,6 @@ export function holdingsOf(rows, handle) {
   return targets.filter((t) => liveHolder(rows, t) === handle);
 }
 
-// ── HOW DEEP THINGS NEST (plumb-nest-guard, 2026-10-17) ─────────────────────
-//
-// A thing inside a holder is 1 deep; a thing in a bag inside that holder is 2
-// deep. A resident's hands are not counted: a bag you carry holds its things 1
-// deep. Both walks below go the WHOLE way and remember where they have been, so
-// a deep chain cannot outrun the loop check (the old walk stopped after 64
-// holders) and a loop already in the rows ends the walk instead of hanging it.
-//
-// PROPOSED DIAL, FOR DARKO: neither LOGOS nor the class tree names a nesting
-// depth, so this is a constant in code, not law. 16 is far past any bag in a
-// bag a resident would make, and small enough that every walk stays short.
-export const NEST_DEPTH_MAX = 16;
-
-/** Each thing's live holder, in ONE pass over the rows (liveHolder's rule: the last row per thing decides). */
-export function liveHolders(rows) {
-  const last = new Map();
-  for (const r of rows) last.set(String(r.target), r);
-  const up = new Map();
-  for (const [t, r] of last) if (r.policy === "cascade") up.set(t, String(r.entity));
-  return up;
-}
-
-/** The holders above `id`, nearest first, to the top: `{ chain, loop }`, `loop` when the rows lead back on themselves. */
-export function holderChain(rows, id, up = liveHolders(rows)) {
-  const chain = [], seen = new Set([String(id)]);
-  for (let h = up.get(String(id)); h != null; h = up.get(h)) {
-    if (seen.has(h)) return { chain, loop: true };
-    seen.add(h);
-    chain.push(h);
-  }
-  return { chain, loop: false };
-}
-
-/** How many levels of whole things sit inside `id`: 0 when it holds none. Each thing is visited once. */
-export function nestedHeight(rows, id, up = liveHolders(rows)) {
-  const inside = new Map();
-  for (const [t, h] of up) { if (!inside.has(h)) inside.set(h, []); inside.get(h).push(t); }
-  const seen = new Set([String(id)]);
-  let height = 0;
-  for (let level = [String(id)]; ;) {
-    const next = [];
-    for (const h of level) for (const t of inside.get(h) ?? []) if (!seen.has(t)) { seen.add(t); next.push(t); }
-    if (!next.length) return height;
-    height += 1;
-    level = next;
-  }
-}
-
-/**
- * THE NESTING CHECK for a whole thing going into a holder: the kind door's and
- * the chest door's one home. Refuses, in this order: the holder sitting inside
- * the thing (however deep); a loop already in the rows above the holder; and a
- * give that would leave anything nested past NEST_DEPTH_MAX.
- */
-export function refuseNesting({ rows, thing, into, noun = "holder", nothing = "Nothing was changed." }) {
-  const up = liveHolders(rows);
-  const { chain, loop } = holderChain(rows, into, up);
-  if (chain.includes(String(thing)))
-    throw bounce(422, `${into} is inside ${thing}`, `a ${noun} cannot go inside what it is carried in. ${nothing}`);
-  if (loop)
-    throw bounce(422, `the record holds a loop above ${into}`, `its holders lead back to themselves, so how deep it sits cannot be told. ${nothing}`);
-  const height = nestedHeight(rows, thing, up);
-  const deep = chain.filter((h) => h.includes("/")).length + 1 + height;
-  if (deep > NEST_DEPTH_MAX)
-    throw bounce(422, `${height ? `what ${thing} holds` : thing} would be nested ${deep} deep`,
-      `the town holds things at most ${NEST_DEPTH_MAX} deep. ${nothing}`);
-}
-
 /**
  * A held thing's position: its holder's, plus the offset it was taken at.
  *
@@ -1638,7 +1570,7 @@ export async function declareHoldingFlipped({ db, thing, to = null, actor, dials
     // THE CARRY CAP (WLD-27), asked of whoever ends up holding it, inside the
     // turn so two holds cannot both pass a cap only one of them fits. Absent
     // (`carry: null`) for a caller that measures no load.
-    if (carry && (did.did === "take" || did.did === "give")) await carry({ who: did.holder, attachments: rows });
+    if (carry && (did.did === "take" || did.did === "give")) await carry({ who: did.holder, attachments: rows, thing: String(thing), actor });
     const { at, witnesses } = await witnessStamp(did.declared_by);
     const row = await appendActFlipped(db, holdingEntry(did, { crossing: currentCrossing(), at, witnesses, cls: CLASS_HOLDING, household: resolvedWorldHousehold(key) }));
     // Which store is the RECORD for this act — said in the answer, as the stance
@@ -1679,7 +1611,14 @@ export function holdTurn(fn) {
  * one slot — a portable chest included, whatever it holds — and every counted
  * unit is one. The cap is the thing class's declared `carry_cap`, read here.
  */
-async function carryForThings({ who, attachments }) {
+async function carryForThings({ who, attachments, thing = null, actor = null }) {
+  // ONE HOLDER IN A RESIDENT'S HANDS (Darko, 2026-10-17 23:29): a holder taken or given to a resident who carries one is refused
+  if (thing != null) {
+    const [{ refuseSecondHolder }, { classViewOf }, { lawSnapshot }, world] = await Promise.all([
+      import("./kind-holding.mjs"), import("./world-units.mjs"), import("./law-snapshot.mjs"), import("./world.mjs")]);
+    await refuseSecondHolder({ who, actor: actor ?? who, adding: [thing], held: holdingsOf(attachments, who), view: classViewOf(lawSnapshot()),
+      markById: async (id) => (await world.worldMarkById(String(id))).mark, nothing: "Nothing was recorded." });
+  }
   // the resident's own capacity (constitution, 24), property first; the thing class's older carry_cap second (G4)
   const cap = holdingOf({ className: "resident", classProperty, legacy: { capacity: thingDials()?.carry_cap } }).capacity;
   if (!Number.isInteger(cap)) return;
