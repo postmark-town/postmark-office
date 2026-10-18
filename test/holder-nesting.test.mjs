@@ -176,7 +176,7 @@ test("5 · a loop already in the rows ends every walk: the give is refused, and 
   assert.equal(w.written(), 0);
   const up = tree.liveHolders(loopRows);
   assert.deepEqual(tree.holderChain(up, bag("q")), { chain: [bag("p")], loop: true });
-  assert.equal(tree.wholeLoadOf({ up, holder: bag("p") }), 2, "the walk down counts q and p once each, and stops");
+  assert.equal(tree.wholeLoadOf({ up, holder: bag("p") }), 1, "the walk down counts q once and stops when it comes back to p");
   // the verbs matrix counts rooms through the same walk, and returns over the loop
   const view = classViewOf(SNAP);
   const pairs = usablePairs({ actor: ME, here: { x: 5, y: 6 }, marks: [markOf(bag("p")), markOf(bag("q")), markOf(LAMP)], residents: [],
