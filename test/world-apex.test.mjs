@@ -2185,3 +2185,31 @@ test("v2 LIGHTS: a house in v2's view carries `lit` from ONE batch; a house you 
   assert.equal(typeof unread.lit_unknown, "string", "said once, at the top");
   // ⚑ THE FLIP: drop `lit` from viewBlock (or v2's lightsFor) → red.
 });
+
+test("v2 LIGHTS · the deep reads: read: \"view\" carries its rows' lit and, when unknown, the one lit_unknown; read: \"who\" (and happened, happening) shows no house and asks for no activity", async () => {
+  on();
+  const { resetActivityCache } = await import("../src/household-activity.mjs");
+  await withSpyStore(async ({ asked, count }) => {
+    const who = await worldApex({ read: "who" }, KEY_ALPHA);
+    assert.ok(!who.error, JSON.stringify(who).slice(0, 300));
+    assert.equal(who.read, "who");
+    assert.equal(count(), 0, "a deep who asks for no activity, with alpha's house in sight");
+    for (const block of ["happened", "happening"]) {
+      asked.length = 0; resetActivityCache();
+      const r = await worldApex({ read: block }, KEY_ALPHA);
+      assert.ok(!r.error, `${block}: ${JSON.stringify(r).slice(0, 200)}`);
+      assert.equal(count(), 0, `a deep ${block} asks for no activity`);
+    }
+    asked.length = 0; resetActivityCache();
+    const view = await worldApex({ read: "view" }, KEY_ALPHA);
+    assert.equal(view.read, "view");
+    assert.equal(count(), 1, "the deep view lights its rows, in one batch");
+    assert.ok(!("lit_unknown" in view), "a known light says nothing more");
+  });
+  // an unread store: the deep view says so, once
+  resetActivityCache();
+  const slow = await worldApex({ read: "view" }, KEY_ALPHA);
+  const rows = Object.entries(slow.view ?? {}).filter(([k]) => k !== "how").flatMap(([, r]) => r);
+  assert.ok(rows.some((r) => r.lit === null), `a house in the deep view is unknown: ${JSON.stringify(rows.map((r) => [r.id, r.lit]))}`);
+  assert.equal(typeof slow.lit_unknown, "string", "the deep view carries lit_unknown");
+});

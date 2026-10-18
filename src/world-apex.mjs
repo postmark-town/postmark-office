@@ -2629,7 +2629,10 @@ async function apexRead(args, key, ctx = {}) {
   // that shows no house asks for no activity, at either shape.
   const byId = { get: await markLookup() };
   const v2Rows = v2 ? (seen._fov?.rows ?? []) : null;
-  const activity = await lightsFor(v2 ? [...spine, ...v2Rows] : [...spine, ...nearbyOut], args, { byId });
+  // a deep block read that is not `view` (who, happened, happening) shows no
+  // house, so it asks for no activity and never waits on the batch
+  const showsHouses = !(deep && deep.block !== "view");
+  const activity = showsHouses ? await lightsFor(v2 ? [...spine, ...v2Rows] : [...spine, ...nearbyOut], args, { byId }) : null;
 
   const answer = {
     standpoint: {
@@ -2797,7 +2800,9 @@ async function apexRead(args, key, ctx = {}) {
     const whole = deep.block === "happened" ? (happened ?? { unavailable: "the delta is not read at this office" })
       : deep.block === "happening" ? (shaped.happening_here ?? [])
       : shaped[deep.block];
-    return { read: deep.block, [deep.block]: whole, cursor: shaped.cursor, reading_law: shaped.reading_law };
+    // the deep view carries the one light sentence its rows need, as the glance does (WLD-29)
+    const litNote = deep.block === "view" && shaped.lit_unknown ? { lit_unknown: shaped.lit_unknown } : {};
+    return { read: deep.block, [deep.block]: whole, ...litNote, cursor: shaped.cursor, reading_law: shaped.reading_law };
   }
   // THE SHAPE (POS-486) IS THE MCP CALL'S, NEVER THE PROCESS'S (#455 review,
   // finding 1). The MCP door passes WORLD_READ_SHAPE in as ctx.readShape; the
