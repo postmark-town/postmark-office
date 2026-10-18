@@ -34,7 +34,7 @@ import {
   planGive, planTake, planConsume, planRefill, refillerLabel, droppedUnitMark, isDroppedUnitMark, returnsAtExit, isChestId, isUnitRow,
   withdrawnMarks, ancestry, selectLabel, stockedChests,
 } from "./world-stacks.mjs";
-import { holdingsOf, sameHousehold, holdTurn, liveHolder, rowsFor, holdingEntry } from "./world-hold.mjs";
+import { holdingsOf, sameHousehold, holdTurn, liveHolder, rowsFor, holdingEntry, refuseNesting } from "./world-hold.mjs";
 import { chestRoomGuard } from "./chest-lock.mjs";
 import { dropUndoGuard, undoNonce, dropSequenceGuard } from "./drop-recovery.mjs";
 import { faultLogged, plainReason } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
@@ -808,9 +808,8 @@ async function thingIntoChest(args, key, actor, deps, view) {
     const { units, attachments } = await deps.readRows();
     const holder = liveHolder(attachments, thing);
     if (holder !== actor) throw bounce(409, `you are not holding ${thing} — ${holder ?? "nobody"} is`, "a thing goes into a chest from your hands. Nothing was recorded.");
-    // NO CHEST INSIDE ITSELF, however deep: walk the chest's own holders.
-    for (let h = liveHolder(attachments, chestId), hops = 0; h && hops < 64; h = liveHolder(attachments, h), hops++)
-      if (h === thing) throw bounce(422, `${chestId} is inside ${thing}`, "a chest cannot be put inside what it is carried in. Nothing was recorded.");
+    // NO CHEST INSIDE ITSELF, however deep, and nothing nested past the ceiling: the hold lane's one check.
+    refuseNesting({ rows: attachments, thing, into: chestId, noun: "chest", nothing: "Nothing was recorded." });
     const fold = foldUnits(units);
     const used = totalOf(fold, chestId) + holdingsOf(attachments, chestId).length;
     if (used + 1 > capacity) throw bounce(409, `${chestId} has no room — ${used} of ${capacity}`, "its one capacity holds units and whole things alike. Nothing was recorded.");

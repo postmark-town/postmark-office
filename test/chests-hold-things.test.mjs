@@ -188,6 +188,23 @@ test("5c · only what you hold goes in; no chest inside itself, however deep", a
   await assert.rejects(callUnits("thing-into-chest", { thing: "sbx-cy/a-tin", to: CHEST }, KEY("sbx-cy"), "sbx-cy", r.deps), /is inside/);
 });
 
+test("5d · plumb-nest-guard: a chest 70 levels inside the thing is still refused, and nothing nests past 16 deep", { timeout: 10_000 }, async () => {
+  const chests = Object.fromEntries(Array.from({ length: 71 }, (_, k) => [`sbx-cy/c-${k}`, { id: `sbx-cy/c-${k}`, by: "sbx-cy", class: "chest", capacity: 3 }]));
+  const nest = (r, n) => { r.hold("sbx-cy", "sbx-cy/c-0"); for (let k = 1; k <= n; k++) r.hold(`sbx-cy/c-${k - 1}`, `sbx-cy/c-${k}`); };
+  const deep = rig({ marks: chests });
+  nest(deep, 70);
+  await assert.rejects(callUnits("thing-into-chest", { thing: "sbx-cy/c-0", to: "sbx-cy/c-70" }, KEY("sbx-cy"), "sbx-cy", deep.deps),
+    (e) => e.defect === "sbx-cy/c-70 is inside sbx-cy/c-0" && /Nothing was recorded\.$/.test(e.hint));
+  assert.equal(deep.acts.length, 0, "nothing was recorded");
+  // c-16 sits 16 deep: a toaster into it would be 17
+  const tall = rig({ marks: { ...chests, [TOASTER]: thingMarks[TOASTER] } });
+  nest(tall, 16); tall.hold("sbx-cy", TOASTER);
+  await assert.rejects(callUnits("thing-into-chest", { thing: TOASTER, to: "sbx-cy/c-16" }, KEY("sbx-cy"), "sbx-cy", tall.deps),
+    (e) => e.defect === `${TOASTER} would be nested 17 deep` && e.hint === "the town holds things at most 16 deep. Nothing was recorded.");
+  assert.equal(tall.acts.length, 0);
+  assert.equal((await callUnits("thing-into-chest", { thing: TOASTER, to: "sbx-cy/c-15" }, KEY("sbx-cy"), "sbx-cy", tall.deps)).did, "give");
+});
+
 // ── Wright, 2026-10-13T01:19Z: refill reach stays — the REAL reach, not a stub ─
 import { refuseOutOfReach } from "../src/world-hold.mjs";
 import { standsWithin } from "../src/reach.mjs";

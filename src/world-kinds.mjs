@@ -21,7 +21,7 @@
 // that is not `open` refuses another household at the door.
 
 import { foldUnits, kindEdgesOf, totalOf, unitCount, refuseOverCarry, UNIT_ACTION } from "./world-stacks.mjs";
-import { holdingsOf, sameHousehold, holdTurn, liveHolder } from "./world-hold.mjs";
+import { holdingsOf, sameHousehold, holdTurn, liveHolder, refuseNesting } from "./world-hold.mjs";
 import { chestRoomGuard } from "./chest-lock.mjs";
 import { inFlightFor, writeThingHolding, thingHoldingEntry } from "./world-units.mjs";
 import { markClassOf, lineageOf } from "./world-grants.mjs";
@@ -229,8 +229,7 @@ async function thingIntoHolder({ args, key, actor, deps, view }) {
     const { units, attachments } = await deps.readRows();
     const holder = liveHolder(attachments, thing);
     if (holder !== String(actor)) throw bounce(409, `you are not holding ${thing}: ${holder ?? "nobody"} is`, "a thing goes into a holder from your hands. Nothing was changed.");
-    for (let h = liveHolder(attachments, to), hops = 0; h && hops < 64; h = liveHolder(attachments, h), hops++)
-      if (h === thing) throw bounce(422, `${to} is inside ${thing}`, "a holder cannot go inside what it is carried in. Nothing was changed.");
+    refuseNesting({ rows: attachments, thing, into: to }); // however deep; a loop already in the rows; the depth ceiling
     const fold = foldUnits(units);
     const things = holdingsOf(attachments, to).length;
     refuseOverRoom({ n: 1, room: roomIn({ capacity: law.capacity, fold, holder: to, things }), name: `the ${law.className ?? "holder"} ${to}`,
