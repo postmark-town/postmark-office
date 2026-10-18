@@ -155,6 +155,15 @@ test("find: a kind, its name or \"creature\" names the living creatures, nearest
   assert.equal(findCreatures(cur, "snug", { x: 0, y: 0 }, { nowMs: NOW }), null, "a find for a mark names no creature");
 });
 
+test("find: with no standpoint (the World page's keyless read), a creature spawned after now is not listed, as from a standpoint", () => {
+  const cur = fold(spawn("creature:wolf-270-1", { x: 2000 }), spawn("creature:wolf-270-9", { x: 10, at: NOW + 600_000 }));
+  assert.deepEqual(findCreatures(cur, "creature", null, { nowMs: NOW })?.map((h) => h.id), ["creature:wolf-270-1"],
+    "the keyless find lists a creature the tick wrote ahead of its arrival");
+  assert.deepEqual(findCreatures(cur, "creature", { x: 0, y: 0 }, { nowMs: NOW })?.map((h) => h.id), ["creature:wolf-270-1"],
+    "the standpoint find and the keyless one read the same set");
+  // ⚑ THE FLIP: restore `living.living(nowMs).map(…)` in findCreatures' no-standpoint branch → the first assert reds.
+});
+
 // ── to_you (C1) ─────────────────────────────────────────────────────────────
 
 test("to_you: a creature's answer to you rides your own happened, the arrival named so, wherever you are now", () => {

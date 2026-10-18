@@ -91,10 +91,13 @@ function wayTo(from, to, engine) {
   };
 }
 
+/** The creatures out of the Mists at `nowMs`: living, and spawned by then (a row the
+ *  tick wrote ahead of its arrival is not out yet). Every reader reads this one set. */
+const livingNow = (living, nowMs) => living.living(nowMs).filter((c) => c.spawned_at <= nowMs);
+
 /** The living creatures, nearest first, with where they stand from `at`. */
 function livingFrom(living, at, nowMs) {
-  return living.living(nowMs)
-    .filter((c) => c.spawned_at <= nowMs)
+  return livingNow(living, nowMs)
     .map((c) => ({ c, d: distanceM(at, c) }))
     .sort((a, b) => a.d - b.d);
 }
@@ -173,7 +176,7 @@ export function findCreatures({ living, law }, q, at, { nowMs = Date.now(), engi
   if (!words || !living || !lawReady(law)) return null;
   const here = point(at);
   const every = words === "creature" || words === "creatures";
-  const hits = (here ? livingFrom(living, here, nowMs) : living.living(nowMs).map((c) => ({ c, d: null })))
+  const hits = (here ? livingFrom(living, here, nowMs) : livingNow(living, nowMs).map((c) => ({ c, d: null })))
     .filter(({ c }) => {
       if (every) return true;
       const name = String(law.kindOf(c.kind)?.name ?? "").toLowerCase();
