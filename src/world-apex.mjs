@@ -2252,8 +2252,10 @@ export async function happenedFor(oriented, args, key, { town = true, live = fal
   const asked = Number(args.since);
   if (!Number.isFinite(asked)) return null;
   // v2's reach is clamped to the last HAPPENED_REACH crossings, and a clamp is
-  // said (complete: false, `reach`). The old numeric spellings keep theirs
-  // until train/2026-w44 (W3).
+  // said (complete: false, `reach`). The old numeric spellings (since_crossing,
+  // a crossing number in since) on the read they were made for are exempt from
+  // the clamp, permanently: they answer as they always did, with no end date
+  // (POS-687, Darko 2026-10-18). Only the v2 read (live) is clamped.
   const nowForReach = oriented?.crossing?.n ?? currentCrossing();
   const clamped = live && asked < nowForReach - HAPPENED_REACH;
   const since = clamped ? nowForReach - HAPPENED_REACH : asked;
@@ -3702,7 +3704,8 @@ async function apexReadAction(args, key, ctx = {}) {
     }
     // THE ONE CURSOR AT THE SAY ROOM (POS-632 PR-3, W3): a top-level since:
     // "<cursor>" hears only what was said after its clock; the room's own
-    // args: { since } (milliseconds) still answers, renamed, for one train.
+    // args: { since } (milliseconds) still answers, renamed, with no end date
+    // (POS-687).
     const numeric = typeof args.since === "string" && /^\d+(\.\d+)?$/.test(args.since.trim());
     const cursor = typeof args.since === "string" && !numeric ? decodeCursor(args.since) : null;
     if (typeof args.since === "string" && args.since.trim() !== "" && !numeric && !cursor)
@@ -3867,8 +3870,8 @@ export const APEX_DESCRIPTION = "Where you are, and what can be done from here �
 // "full", and the description's records and size sentences say the lean read;
 // at v0 both are these very objects.
 const APEX_INPUT_SCHEMA = { type: "object", properties: {
-    since_crossing: { type: "number", description: "RENAMED: since: \"<cursor>\" is the one cursor now (POS-632). A crossing number still answers, with a renamed row, until train/2026-w44. Before: the crossing number from your last reply — the answer then carries `happened`: what changed for YOU since (complete), a capped glance at what happened around you, and the town's headlines. The delta does not grow with how long you were away. (Not the say room's `args: { since }`, which is a millisecond stamp.)" },
-    since: { type: ["string", "number"], description: "since: \"<cursor>\" — the cursor your last world read handed you (its `cursor` field). The answer's `now.happened` is then only what changed after it: complete for you, a glance around you, read live. A crossing NUMBER here is the old spelling and answers, with a renamed row, until train/2026-w44." },
+    since_crossing: { type: "number", description: "RENAMED: since: \"<cursor>\" is the one cursor now (POS-632). A crossing number here still answers, with a renamed row, and keeps working: no end date is set. Before: the crossing number from your last reply — the answer then carries `happened`: what changed for YOU since (complete), a capped glance at what happened around you, and the town's headlines. The delta does not grow with how long you were away. (Not the say room's `args: { since }`, which is a millisecond stamp.)" },
+    since: { type: ["string", "number"], description: "since: \"<cursor>\" — the cursor your last world read handed you (its `cursor` field). The answer's `now.happened` is then only what changed after it: complete for you, a glance around you, read live. A crossing NUMBER here is the old spelling and still answers, with a renamed row: no end date is set." },
     // NO enum on do:/read:, deliberately — which acts are afforded depends on
     // WHERE YOU STAND (the bare read lists yours), so an enum here would
     // promise acts the ground refuses and bounce nothing useful. `examples`
@@ -3895,7 +3898,7 @@ const APEX_INPUT_SCHEMA = { type: "object", properties: {
     // POS-632: the read grammar's second move. One table for three doors (read-grammar.mjs).
     explain: { type: "string", description: "explain: \"<path>\" answers what any part of this door's bare read is for, in one fixed shape: { explains, what, detail?, deeper, changes } (changes: live, settled or weekly). The path is a key path into the read, like \"who\" or \"now.happened\". explain: \"\" is the tutorial. A class name climbs the class instead (POS-659): explain: \"thing\" answers the class's body, its extends chain, its properties (tier, default, children), its afforded actions with their conditions, and makers; every instance read names its class in class_pointer. It answers docs, never data, and rides with no do: or read:." },
     // POS-632 (W1): the shape, per call. It wins over the office's default.
-    read_shape: { type: "string", enum: ["v1", "v2"], description: "read_shape: \"v2\" is the new compact read, opt-in this week: you, now (with what happened since the last crossing), view (what fills your eyes, by bearing), who (who is active near you), happening_here, can (each act in one line) and law, in about 5k characters. Omit it for the read you get today." },
+    read_shape: { type: "string", enum: ["v1", "v2"], description: "read_shape: \"v2\" is the compact read, opt-in: you, now (with what happened since the last crossing), view (what fills your eyes, by bearing), who (who is active near you), happening_here, can (each act in one line) and law, at about half the size of the default read. Omit it for the older, fuller default." },
     diagnostics: { type: "boolean", description: "with read_shape: \"v2\", also bring the engine's notes (the full law block, presence's disclosures). v1 always carries them." },
     cards: { type: "string", enum: ["names"], description: "cards: \"names\" shrinks `actions` to each act's name, one line, and how it reached you — for a repeat read by a caller who has already learnt the acts. Which acts are afforded is identical either way; only how much is said about each changes. Omit for the full cards, which is the default and carries the fields a caller needs to compose an act." },
   },

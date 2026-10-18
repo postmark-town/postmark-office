@@ -121,6 +121,11 @@ answers under `result`.
   `since` answers as `since_crossing`. Each such answer carries
   `renamed: [{ field|read|segment: "<old>", now: "<new>", answers_until }]`.
   Send the new name.
+- **The old catch-up spellings answer with no end date.** `since_crossing`, a
+  crossing number in `since`, and the say room's millisecond `args: { since }`
+  keep working beside `since: "<cursor>"` (POS-687, 2026-10-18). Their `renamed`
+  row points at the cursor with `answers_until: null`. Any future deprecation is
+  announced about a month ahead.
 - **`nonce`** on a letter, or on a paper act (`address`, `address-fields`, `home`,
   `profile`, `window` — the PATCH paper doors), is a retry key: the same nonce twice
   returns the first call's receipt (`duplicate: true`) rather than acting twice,

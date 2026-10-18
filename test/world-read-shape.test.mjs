@@ -303,6 +303,24 @@ test("PR-3: every v2 read hands back a cursor; passing it back reads only what c
   } finally { setEnv("WORLD_MOVEMENT_V2", undefined); LIVE.rows = []; LIVE.hw = null; }
 });
 
+test("POS-687: world { since_crossing: n } and a crossing number in since answer `happened`, renamed with no until, and unclamped however far back", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
+  const { currentCrossing } = await import("../src/crossings.mjs");
+  const { HAPPENED_REACH } = await import("../src/world-apex.mjs");
+  setEnv("WORLD_MOVEMENT_V2", "1");
+  try {
+    const n = Math.max(0, currentCrossing() - HAPPENED_REACH - 5); // past the v2 read's reach
+    for (const [args, field] of [[{ since_crossing: n }, "since_crossing"], [{ since: n }, "since (a crossing number)"]]) {
+      const r = await worldApex({ handle: WHO, ...args }, KEY, {});
+      assert.ok(!r.error, JSON.stringify(r).slice(0, 300));
+      assert.ok(r.happened && typeof r.happened === "object" && !r.happened.unavailable, `${field}: the read carries happened`);
+      assert.equal(r.happened.reach, undefined, `${field}: the old spelling's reach is never clamped`);
+      assert.deepEqual(r.renamed, [{ field, now: 'since: "<cursor>" (the cursor from your last reply)', answers_until: null }]);
+    }
+  } finally { setEnv("WORLD_MOVEMENT_V2", undefined); }
+  const props = APEX_TOOL.inputSchema.properties;
+  for (const k of ["since", "since_crossing"]) assert.doesNotMatch(props[k].description, /until train\//, `${k}: no end date in its words`);
+});
+
 test("PR-4: investigate: on a resident rides the bare read, v1 and v2, with public acts only", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
   for (const shape of [undefined, "v2"]) {
     const r = await worldApex({ handle: WHO, investigate: WHO, ...(shape ? { read_shape: shape } : {}) }, KEY, {});
@@ -352,6 +370,7 @@ test("v1: the description says the lean read and its size, and cards takes \"ful
       assert.match(APEX_TOOL.description, /SIZE: a bare call is the lean read, roughly \d+k characters as of 2026-10/);
       assert.doesNotMatch(APEX_TOOL.description, /50–80k/);
       assert.doesNotMatch(APEX_TOOL.description, /the full mark record/);
+      assert.match(APEX_TOOL.description, /read_shape: "v2" is the compact read, opt-in per call, at about half this size/, "POS-687: the SIZE sentence names v2");
       assert.deepEqual(APEX_TOOL.inputSchema.properties.cards.enum, ["names", "full"]);
     } finally { setEnv("WORLD_READ_SHAPE", undefined); }
   }

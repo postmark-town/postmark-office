@@ -1850,13 +1850,14 @@ test("a class that opens a verb to two kinds keeps both — the human's grant su
 // `since_crossing`; the old spelling answers one cycle with the contract's
 // `renamed` pointer beside the same answer.
 
-test("POS-632 W3 · both crossing numbers still answer the same read for one train, each with a renamed row pointing at the one cursor", async () => {
+test("POS-687 · both crossing numbers still answer the same read, with no end date: each renamed row points at the one cursor and carries no until", async () => {
   on();
   const sc = await worldApex({ x: String(A.x), y: String(A.y), since_crossing: 1 }, null);
   const old = await worldApex({ x: String(A.x), y: String(A.y), since: 1 }, null);
   assert.ok(!sc.error, JSON.stringify(sc).slice(0, 300));
-  assert.deepEqual(sc.renamed?.map((r) => [r.field, r.answers_until]), [["since_crossing", "train/2026-w44"]]);
-  assert.deepEqual(old.renamed?.map((r) => r.field), ["since (a crossing number)"]);
+  assert.deepEqual(sc.renamed?.map((r) => [r.field, r.answers_until]), [["since_crossing", null]]);
+  assert.deepEqual(old.renamed?.map((r) => [r.field, r.answers_until]), [["since (a crossing number)", null]]);
+  for (const r of [...sc.renamed, ...old.renamed]) assert.ok("answers_until" in r, "the one rename shape, kept");
   for (const r of [...sc.renamed, ...old.renamed]) assert.match(r.now, /since: "<cursor>"/);
   const { renamed: _a, ...scBody } = sc;
   const { renamed: _b, ...oldBody } = old;
@@ -1874,11 +1875,11 @@ test("POS-632 · since: takes the cursor; a string that is not one is refused by
   assert.equal(ok.renamed, undefined, "the cursor is the new word: no pointer");
 });
 
-test("POS-632 W3 · the say room's millisecond since still answers, with a renamed row; a top-level cursor carries its clock", async () => {
+test("POS-632 W3, POS-687 · the say room's millisecond since still answers, with a renamed row and no end date; a top-level cursor carries its clock", async () => {
   on();
   const old = await worldApex({ read: "say", args: { since: 1 } }, KEY_ALPHA);
   assert.ok(!old.error, JSON.stringify(old).slice(0, 300));
-  assert.deepEqual(old.renamed?.map((r) => r.field), ["args.since (milliseconds)"]);
+  assert.deepEqual(old.renamed?.map((r) => [r.field, r.answers_until]), [["args.since (milliseconds)", null]]);
   const cur = await worldApex({ read: "say", since: "c1.250.1.5" }, KEY_ALPHA);
   assert.ok(!cur.error, JSON.stringify(cur).slice(0, 300));
   assert.equal(cur.renamed, undefined);
