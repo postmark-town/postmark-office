@@ -56,7 +56,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { WORLD_CLONE } from "../src/world-store.mjs";
-import { useGuardReader } from "../src/world2-guards.mjs";
+import { useGuardReader, DEPARTURE_HEAD_SQL, DEPARTURE_NEWEST_SQL } from "../src/world2-guards.mjs";
 import { normalizeRow } from "../src/world-journal.mjs";
 import { worldToolModule } from "../src/dynamic-entities.mjs";
 import { positionsAt } from "../src/dynamic-presence.mjs";
@@ -89,7 +89,11 @@ const install = () => {
     query: async (sql, params) => {
       if (!/FROM acts/i.test(String(sql))) return { rows: [] };
       const actions = params?.[0] ?? [];
-      return { rows: STORE.filter((r) => actions.includes(r.action)) };
+      const deps = STORE.filter((r) => actions.includes(r.action));
+      // POS-691: the departure head, ids only, as the store answers it
+      if (sql === DEPARTURE_HEAD_SQL) return { rows: deps.filter((r) => r.id > Number(params[1])).map((r) => ({ id: r.id })) };
+      if (sql === DEPARTURE_NEWEST_SQL) return { rows: deps.slice(-1).map((r) => ({ id: r.id })) };
+      return { rows: deps };
     },
   }));
 };
@@ -365,7 +369,7 @@ test("DOOR: /world/walkers answers the same with the projection on as off", asyn
       at: new Date(setOff).toISOString(), within: null, toMark: null, declaredBy: "still-one", pace: null };
     await fileWalk(m);
     process.env.WORLD_POSITIONS = "1";
-    world.positionProjection.record(recordOfMovement(m));
+    world.positionProjection.record(recordOfMovement(m), { actId: STORE.at(-1).id });
     mock.timers.setTime(setOff + 5_000);
     const moved = await world.worldWalkers(WORLD_CLONE, null, { roll: ROLL });
     delete process.env.WORLD_POSITIONS;
@@ -377,4 +381,55 @@ test("DOOR: /world/walkers answers the same with the projection on as off", asyn
     delete process.env.WORLD_POSITIONS;
     world.positionProjection.invalidate();
   }
+});
+
+// ── POS-691: THE STORE'S DEPARTURE HEAD ──────────────────────────────────────
+// A writer outside the process (the playground's set-down) is heard at the next
+// read, by ids alone; an in-step record with its act id costs no rebuild; a head
+// that cannot be read answers as before.
+function headed() {
+  const store = [{ id: 1, rec: { handle: "a", iso: "1" } }];
+  let rebuilds = 0;
+  const p = createPositionProjection({
+    rebuild: async () => { rebuilds += 1; return { departures: store.map((s) => s.rec), disclosed: [], eras: ["store"] }; },
+    head: async (after) => (after == null ? store.slice(-1).map((s) => s.id) : store.filter((s) => s.id > after).map((s) => s.id)),
+  });
+  return { p, store, rebuilds: () => rebuilds };
+}
+
+test("HEAD: a departure written outside the process is the answer at the very next read", async () => {
+  const { p, store, rebuilds } = headed();
+  assert.deepEqual(await p.departures(), [{ handle: "a", iso: "1" }]);
+  store.push({ id: 2, rec: { handle: "a", iso: "2" } }); // no record(): another process wrote it
+  assert.deepEqual(await p.departures(), [{ handle: "a", iso: "2" }], "the out-of-process set-down governs at once");
+  assert.equal(rebuilds(), 2, "heard by one rebuild, by the one derivation");
+  await p.departures();
+  assert.equal(rebuilds(), 2, "and only once");
+});
+
+test("HEAD: an in-step record with its act id is already heard, and costs no rebuild", async () => {
+  const { p, store, rebuilds } = headed();
+  await p.departures();
+  store.push({ id: 2, rec: { handle: "a", iso: "2" } });
+  p.record({ handle: "a", iso: "2" }, { actId: 2 });
+  assert.deepEqual(await p.departures(), [{ handle: "a", iso: "2" }]);
+  assert.equal(rebuilds(), 1, "the walk door's own write did not rebuild the town");
+  store.push({ id: 3, rec: { handle: "b", iso: "3" } });
+  p.record({ handle: "b", iso: "3" }); // recorded without its id: the head cannot tell it was heard
+  await p.departures();
+  assert.equal(rebuilds(), 2, "an id the projection cannot vouch for is a rebuild");
+});
+
+test("HEAD: a head that cannot be read answers as before, never throws at the reader", async () => {
+  let fail = false, rebuilds = 0;
+  const p = createPositionProjection({
+    rebuild: async () => { rebuilds += 1; return { departures: [{ handle: "a", iso: "1" }], disclosed: [], eras: ["store"] }; },
+    head: async () => { if (fail) throw new Error("the store is away"); return [1]; },
+  });
+  await p.departures();
+  fail = true;
+  const was = console.error; console.error = () => {};
+  try { assert.deepEqual(await p.departures(), [{ handle: "a", iso: "1" }]); }
+  finally { console.error = was; }
+  assert.equal(rebuilds, 1, "trusted for its age, as before POS-691");
 });

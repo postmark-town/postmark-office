@@ -35,7 +35,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { WORLD_CLONE } from "../src/world-store.mjs";
-import { useGuardReader } from "../src/world2-guards.mjs";
+import { useGuardReader, DEPARTURE_HEAD_SQL, DEPARTURE_NEWEST_SQL } from "../src/world2-guards.mjs";
 import { normalizeRow } from "../src/world-journal.mjs";
 import { worldToolModule } from "../src/dynamic-entities.mjs";
 import { recordOfMovement } from "../src/position-projection.mjs";
@@ -46,7 +46,8 @@ const was = Object.fromEntries(FLAGS.map((k) => [k, process.env[k]]));
 
 // ── the fixture store, as `pg` hands acts over ──────────────────────────────
 const STORE = [];
-let storeReads = 0;
+let storeReads = 0;   // reads of departure RECORDS
+let headReads = 0;    // reads of the departure head: ids only (POS-691)
 let restoreReader = null;
 
 before(() => {
@@ -57,9 +58,12 @@ before(() => {
   restoreReader = useGuardReader(async (fn) => fn({
     query: async (sql, params) => {
       if (!/FROM acts/i.test(String(sql))) return { rows: [] };
-      storeReads += 1;
       const actions = params?.[0] ?? [];
-      return { rows: STORE.filter((r) => actions.includes(r.action)) };
+      const deps = STORE.filter((r) => actions.includes(r.action));
+      if (sql === DEPARTURE_HEAD_SQL) { headReads += 1; return { rows: deps.filter((r) => r.id > Number(params[1])).map((r) => ({ id: r.id })) }; }
+      if (sql === DEPARTURE_NEWEST_SQL) { headReads += 1; return { rows: deps.slice(-1).map((r) => ({ id: r.id })) }; }
+      storeReads += 1;
+      return { rows: deps };
     },
   }));
 });
@@ -163,9 +167,11 @@ test("COST: with the positions kept, a walk's read touches the store zero times;
     process.env.WORLD_POSITIONS = "1";
     world.positionProjection.invalidate();
     await world.positionProjection.departures();
-    storeReads = 0;
+    storeReads = 0; headReads = 0;
     for (let i = 0; i < 5; i++) await world.departuresForWalk(WORLD_CLONE);
-    assert.equal(storeReads, 0, "a walk over the kept positions read the store");
+    assert.equal(storeReads, 0, "a walk over the kept positions read the store's records");
+    // POS-691: what it does read is the departure head, ids only, so a writer outside the office is heard
+    assert.ok(headReads >= 1 && headReads <= 5, `the head was read ${headReads} times for 5 walks`);
 
     delete process.env.WORLD_POSITIONS;
     storeReads = 0;
