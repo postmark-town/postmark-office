@@ -264,6 +264,23 @@ async function actsOfActor(who) {
   } catch { return []; }
 }
 
+/**
+ * THE EXIT LOCKS A WALKER'S OWN ACTS HOLD (WLD-5 A): for each dungeon, the newest
+ * exit act that recorded one, `{ dungeon, locked_until, left_at }`. Read from the
+ * STORE, the record, on the actor index. Unlike `actsOfActor` it does NOT fail
+ * open: an unreachable store throws, and the enter door refuses with a 503 rather
+ * than letting a locked-out walker in (Wright, W1). `null` from actsQuery means
+ * no store is configured at all, which writes no exits either: no locks.
+ */
+async function dungeonLocksOf(who) {
+  const { actsQuery } = await import("./world2-acts.mjs");
+  const rows = await actsQuery(
+    `SELECT DISTINCT ON (payload->>'dungeon') payload->>'dungeon' AS dungeon, payload->>'locked_until' AS locked_until, payload->>'left_at' AS left_at
+       FROM acts WHERE actor = $1 AND action = 'exit' AND payload ? 'locked_until'
+      ORDER BY payload->>'dungeon', id DESC`, [String(who)]);
+  return Array.isArray(rows) ? rows : [];
+}
+
 /** A `jsonb` payload as the fold wants it — an object, whichever way the driver hands it over. */
 function actPayload(p) {
   if (p == null) return {};
@@ -494,11 +511,13 @@ export function crossingDeps() {
     nowMs: () => Date.now(),
     crossing: () => currentCrossing(),
     // `arrival_of`: the arrival tick's enter names its walk act (arrival-entries.mjs), and the pen writes it once
-    record: async ({ handle, act, at, lines, summary, mark = null, via = null, set_down_at = null, arrived = null, arrival_of = null }) => {
+    // WLD-5 A: the exit locks this walker's own exit acts hold, newest per dungeon (a throw is the door's 503)
+    dungeonLocks: async (who) => dungeonLocksOf(who),
+    record: async ({ handle, act, at, lines, summary, mark = null, via = null, set_down_at = null, arrived = null, arrival_of = null, dungeon = null, locked_until = null, left_at = null }) => {
       const { execUnderTownLock, lockTimedOut, LOCK_BUSY } = await import("./town-lock.mjs");
       let out;
       try {
-        out = await execUnderTownLock(CROSSING_EXEC, JSON.stringify({ handle, act, at, lines, summary, mark, via, set_down_at, arrived, ...(arrival_of ? { arrival_of } : {}) }),
+        out = await execUnderTownLock(CROSSING_EXEC, JSON.stringify({ handle, act, at, lines, summary, mark, via, set_down_at, arrived, ...(arrival_of ? { arrival_of } : {}), ...(dungeon && locked_until ? { dungeon, locked_until, left_at } : {}) }),
           { ...process.env, WORLD_CLONE });
       } catch (e) {
         if (lockTimedOut(e)) { const err = new Error(LOCK_BUSY.defect); Object.assign(err, LOCK_BUSY); throw err; }
