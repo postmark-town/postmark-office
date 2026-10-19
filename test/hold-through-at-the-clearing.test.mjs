@@ -216,3 +216,34 @@ test("6. 078's acts arm: clearing_job may insert only the return of an opposed t
     await assert.rejects(ret(good, { cls: "voice", action: "say" }), refused, "nor any other act");
   } finally { await c.end(); }
 });
+
+test("7. FALSIFIER (Wright's condition 1): clearing_job's INSERT on acts is the trigger's to refuse — every act that is not a return is refused, and with the trigger dropped the same inserts land", { skip }, async () => {
+  await seed({ from: 100, acts: [take(101, "2026-10-19T01:00:00Z"), opposeTake(102, 101, "2026-10-19T01:30:00Z")] });
+  // the shapes a clearing pen could be asked to write that are not the return of an opposed take
+  const notReturns = [
+    { actor: "the-town", action: "say", object: CONE, cls: "voice", payload: { text: "hello" } },
+    { actor: "the-town", action: "leave-mark", object: CONE, cls: "mark", payload: { thing: CONE } },
+    { actor: "the-town", action: "take", object: CONE, cls: "holding", payload: { thing: CONE, holder: "the-town", policy: "cascade", returned: { take_act: "101", stance_act: "102" } } },
+    { actor: "the-town", action: "drop", object: ROOM, cls: "holding", payload: { thing: ROOM, holder: null, policy: "detach", returned: { take_act: "101", stance_act: "102" } } },
+    { actor: "the-town", action: "drop", object: CONE, cls: "holding", payload: { thing: CONE, holder: null, policy: "detach", returned: { take_act: "102", stance_act: "101" } } },
+    { actor: "berthillon", action: "drop", object: CONE, cls: "holding", payload: { thing: CONE, holder: null, policy: "detach", returned: { take_act: "101", stance_act: "102" } } },
+  ];
+  const insert = (c, a) => c.query(`INSERT INTO acts (at, crossing, actor, action, object, class, payload) VALUES (now(), $1, $2, $3, $4, $5, $6)`,
+    [WIN, a.actor, a.action, a.object, a.cls, JSON.stringify(a.payload)]);
+  const refused = /clearing_job may insert only the return of an opposed take/;
+  const job = await store.connect("clearing_job");
+  const owner = await store.connect("world2_owner");
+  try {
+    for (const a of notReturns) await assert.rejects(insert(job, a), refused, `${a.actor} ${a.action} ${a.object}`);
+    // THE FLIP, in the test: without the trigger the grant alone lets every one of them in
+    await owner.query("DROP TRIGGER acts_insert_return_only ON acts");
+    try {
+      await job.query("BEGIN");
+      for (const a of notReturns) await insert(job, a);
+      await job.query("ROLLBACK");
+    } finally {
+      await owner.query("CREATE TRIGGER acts_insert_return_only BEFORE INSERT ON acts FOR EACH ROW EXECUTE FUNCTION acts_insert_return_only()");
+    }
+    await assert.rejects(insert(job, notReturns[0]), refused, "and back on, it refuses again");
+  } finally { await job.end(); await owner.end(); }
+});

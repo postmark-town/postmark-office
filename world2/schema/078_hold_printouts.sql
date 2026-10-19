@@ -51,8 +51,19 @@
 --   sudo -n -u postgres psql -v ON_ERROR_STOP=1 -d <db> \
 --     -c "SET ROLE world2_owner;" -f world2/schema/078_hold_printouts.sql
 --
--- ⚑ A BOX MIGRATION UNDER THE SOFT FREEZE (SHIPPING § 10) IS DARKO'S CALL
--- (Wright, 2026-10-18): applied to a sandbox store only until he rules.
+-- ⚑ A BOX MIGRATION UNDER THE SOFT FREEZE (SHIPPING § 10) IS DARKO'S CALL:
+-- he ruled yes (2026-10-19 09:21, POS-688), to ship with the hotfix that prints.
+--
+-- WHAT IT ADDS, all of it:
+--   · claims_insert_carry_only(): a third arm, the hold printout (068's and
+--     076's arms verbatim; the trigger keeps its name);
+--   · CHECK sited_marks_have_a_where on marks: one case wider (a sited row
+--     naming its holder may be placeless);
+--   · GRANT INSERT ON acts TO clearing_job;
+--   · FUNCTION acts_insert_return_only() and TRIGGER acts_insert_return_only
+--     BEFORE INSERT ON acts: for clearing_job, the return of an opposed take
+--     and nothing else (every other role passes untouched);
+--   · two registry ruling lines, on claims and on acts.
 --
 -- Ship check:
 --   SELECT prosrc LIKE '%_held_through%' FROM pg_proc WHERE proname = 'claims_insert_carry_only';  -- t
@@ -164,5 +175,7 @@ CREATE TRIGGER acts_insert_return_only BEFORE INSERT ON acts
 
 UPDATE registry SET ruling = ruling || ' + 078: clearing_job prints a hold record through (POS-688, data._held_through): a locked claim superseding its own standing mark, by its owner, changing only where it is or whose hands it is in; a sited row may be placeless when it names its holder'
   WHERE object = 'claims' AND ruling NOT LIKE '%078:%';
+UPDATE registry SET ruling = ruling || ' + 078: clearing_job inserts the return of an opposed take and nothing else (POS-688 D3, trigger acts_insert_return_only): the town''s drop or give of a standing thing, payload.returned naming the take and the maker''s opposed stance on it, once per take'
+  WHERE object = 'acts' AND ruling NOT LIKE '%078:%';
 
 COMMIT;
