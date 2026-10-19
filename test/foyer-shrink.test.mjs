@@ -1100,6 +1100,16 @@ test("F7c5 · THE MORNING PAGE DID NOT FATTEN — the doorstep bundle is byte-id
   //
   //   full  24984 -> 25070 (+86) · slim  22546 -> 22632 (+86)
   //
+  // ⚠ AND CHECKED AN EIGHTEENTH TIME, 2026-10-19 (lane plumb-notary, POS-702),
+  // when office MAIN's world pin moved daef8487 -> 8c4ed291 (postmark-world#252's
+  // merge: the train's POS-703 range, S119 and #252). On main's code, on
+  // CI-shaped clones (suite-clones.sh's fetch, world 8c4ed291, town 5efee017),
+  // the capture leaf-diffed against main's daef8487 golden the same as the
+  // seventeenth (1117 -> 1129 paths: 2 removed, 14 added, 158 changed, stances
+  // and stakes only), and it is BYTE-IDENTICAL to the seventeenth capture
+  // (47,719 bytes), so this golden is that one. #252 moves tiers, which no
+  // doorstep segment prints.
+  //
   // So the assertion below is the one that actually carries the promise, and it
   // is stated separately so a future regeneration cannot quietly absorb a card:
   assert.equal(JSON.stringify(now).includes('"card"'), false,
