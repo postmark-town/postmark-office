@@ -1027,3 +1027,51 @@ test("THE NOTE: with the ground group empty and a set-down waiting, the read nev
   assert.match(none.note ?? "", /nothing awaits your word/, "with both groups empty the note is said");
   assert.equal(none.stances_awaiting, 0);
 });
+
+// ═════════════════════════════════════════════════════════════════════════════
+// POS-688 D3 · THE MAKER'S HOUSE ANSWERS A STRANGER'S TAKE (Darko, 2026-10-19 09:21)
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// "Consent is unchanged: the maker may oppose a take before the settlement, and
+// the thing returns", built "with the SAME existing stance machinery": the set-down
+// arm's door, rows and latest-wins, asked of a take. The return itself is the
+// clearing's (test/hold-through-at-the-clearing.test.mjs § 5).
+//
+// THE FLIP: take the take arm out of `declareStanceViaOffice` and TAKE OPPOSED
+// reds (the door answers "does not stand on your ground", as it did before D3).
+
+const notPrinted = { throughOf: async () => null };
+const takeOf = (p) => { const t = p.rows().filter((a) => a.action === "take" && a.actor === "ana"); return t[t.length - 1]; };
+
+test("TAKE OPPOSED: Keith's house opposes Ana's take before the settlement — one stance row naming that take, nothing else written", async () => {
+  const p = await fresh();
+  hand("ana");
+  const take = takeOf(p);
+  const before = p.rows().length;
+  const r = await speak("opposed", "keith", KEITH, notPrinted);
+  assert.ok(!r.refused, `the opposition was refused: ${JSON.stringify(r)}`);
+  assert.equal(p.rows().length, before + 1, "one row: the stance itself");
+  const said = parse(p.rows().find((a) => a.class === "stance").payload);
+  assert.equal(said.answers, "take");
+  assert.equal(said.stance, "opposed");
+  assert.deepEqual(said.take, { act_id: String(take.id), by: "ana" }, "it names the ONE take it answers");
+  assert.equal(r.effect, `your house opposes ana's take of ${STOOL}: at the next settlement it goes back where it was, out of ana's hands. Until then your word can still change.`);
+  const a = hold.takeAnswer({ stances: await stance.stanceRows({ worldClone: repo }), thing: STOOL, takeSeq: take.id, madeBy: "keith", householdOf: HOUSES });
+  assert.equal(a?.stance, "opposed", "the settlement reads the maker's house's word on that take");
+});
+
+test("TAKE: the taker cannot answer their own take, a take is answered welcomed or opposed, and once printed it is too late", async () => {
+  await fresh();
+  hand("ana");
+  const own = await speak("opposed", "ana", ANA, notPrinted);
+  assert.equal(own.refused, true, "the taker is not the maker's house");
+  const neutral = await speak("neutral", "keith", KEITH, notPrinted);
+  assert.equal(neutral.code, 422);
+  assert.match(neutral.defect, /a take is answered welcomed or opposed/);
+  const late = await speak("opposed", "keith", KEITH, { throughOf: async () => Number.MAX_SAFE_INTEGER });
+  assert.equal(late.code, 409);
+  assert.match(late.defect, /the settlement has already printed .* in ana's hands/);
+  const ok = await speak("welcomed", "keith", KEITH, notPrinted);
+  assert.ok(!ok.refused, `a welcome was refused: ${JSON.stringify(ok)}`);
+  assert.match(ok.effect, /^your house welcomes ana's take/);
+});

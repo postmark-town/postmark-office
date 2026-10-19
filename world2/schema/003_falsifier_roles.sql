@@ -168,6 +168,9 @@ lawful AS (
     -- 068_clearing_carries.sql (POS-441). A carried mark's claim, born locked in
     -- the clearing's own transaction; a trigger narrows it to exactly that.
     ('clearing_job', 'claims',           'INSERT'),
+    -- 078_hold_printouts.sql (POS-688 D3). The return of an opposed take, written by
+    -- the clearing in its own transaction; a trigger narrows it to exactly that act.
+    ('clearing_job', 'acts',             'INSERT'),
     ('clearing_job', 'windows',          'INSERT'),
     ('clearing_job', 'windows',          'UPDATE'),
     ('clearing_job', 'marks',            'INSERT'),

@@ -735,6 +735,7 @@ try {
     materialize: ({ claims, amends, refuseEach }) => materializeClaims(q, { claims, amends, windowId, label: `window ${windowId} hold write-through`, refuseEach }),
   });
   for (const h of held.printed) console.log(`  ⚑ hold: ${h.slug} — ${h.why}`);
+  for (const h of held.returned ?? []) console.log(`  ⚑ hold: ${h.slug} — returned: its maker's house opposed ${h.taker}'s take (act ${h.take_act})`);
   for (const n of held.notes) console.log(`  ⚑ hold, not printed: ${n}`);
 
   // The docket's statuses, written once every claim and every move has settled.
@@ -860,6 +861,7 @@ try {
       // things by (held.mjs § placeOf), what this window printed, and what it would not.
       ...(held.hold_through != null ? { hold_through: held.hold_through } : {}),
       ...(held.printed.length ? { hold_printed: held.printed } : {}),
+      ...(held.returned?.length ? { hold_returned: held.returned } : {}),
       ...(held.notes.length ? { hold_not_printed: held.notes } : {}),
       // The seal's own account: which snapshot this window wrote.
       snapshot: { id: sealed.id, digest: sealed.digest, marks_digest: sealed.marks_digest, marks: sealed.marks, new_versions: sealed.new_versions, register_digest: sealed.register_digest, register_rows: sealed.register_rows },

@@ -206,3 +206,20 @@ test("12. a drop the settlement could not print: canon still names a holder, so 
   assert.equal(m[HELD_BY], undefined); assert.deepEqual(m.at, { x: 10, y: 20 }); assert.deepEqual(m.extent, { w: 1, h: 1 });
   assert.equal(placeOf(CONE, v, coneMark), null, "printed (canon has a place): canon's answer");
 });
+
+test("13. D5: the holder's row in anyone's view says how many things are in their hands, never which (Darko 2026-10-19 09:21)", async () => {
+  const { holdingAct, withActs } = await import("./stands-store-fixture.mjs");
+  const { withCarrying } = await import("../src/held-view.mjs");
+  const acts = [
+    holdingAct({ id: 9001, at: "2026-10-19T01:00:00Z", actor: "sb-ash", action: "take", thing: CONE, holder: "sb-ash", made_by: "berthillon" }),
+    holdingAct({ id: 9002, at: "2026-10-19T01:05:00Z", actor: "sb-ash", action: "take", thing: "sb-ash/a-bag", holder: "sb-ash", made_by: "sb-ash" }),
+  ];
+  const present = { radius_m: 500, residents: [{ handle: "sb-ash", distance_m: 0 }, { handle: "sb-cleo", distance_m: 3 }] };
+  const out = await withActs(acts, () => withCarrying(present));
+  assert.equal(out.residents[0].carrying, 2, "two things in sb-ash's hands");
+  assert.equal("carrying" in out.residents[1], false, "a resident carrying nothing gets no field");
+  assert.equal(JSON.stringify(out).includes(CONE), false, "how many, never which");
+  const src = readFileSync(join(ROOT, "src", "world.mjs"), "utf8");
+  assert.equal((src.match(/withCarryingNow\(await presen(t|ce)Near\(/g) ?? []).length, 3, "orient, the eyes and GET /world/present all carry it");
+  assert.ok(src.includes(", carrying ${r.carrying} ${r.carrying === 1 ? \"thing\" : \"things\"}"), "and the telling says it");
+});

@@ -35,6 +35,17 @@
 //   set down  geometry { at: where the dropper stood, extent: the one it had },
 //             no `held_by`, no `_placed`.
 //
+// AN OPPOSED TAKE RETURNS (POS-688 D3, Darko 2026-10-19 09:21: "the maker may
+// oppose a take before the settlement, and the thing returns"; the opposition is
+// the set-down arm's stance machinery, world-stance.mjs § the take arm). A take
+// the maker's house opposed before this clearing, and that no earlier clearing
+// printed, is never printed in the taker's hands. The clearing RETURNS the thing
+// in this same transaction: one act by the town, `returned: { take_act,
+// stance_act }`, setting it down where its standing row has it (or, when the row
+// was printed held by a holder, giving it back to that holder). So the record and
+// the printout agree the moment the window locks. 078 lets `clearing_job` write
+// exactly that act and no other.
+//
 // WHAT IS NEVER PRINTED (each a note on the window's receipts, by name):
 //   · a thing the store holds no standing row for (an unpublished draft, a
 //     retired mark): there is no mark to print;
@@ -51,6 +62,12 @@ import { HELD_BY, PLACED, heldBy, latestRows, actIdOf, placedCentreOfRow } from 
 import { HOLD_TOP_SQL } from "../../src/hold-record.mjs";
 import { composeAnchor } from "./conversations.mjs";
 import { pgAttachmentsFor, pgHoldingRows } from "./guard-reads.mjs";
+
+/** The newest earlier cutoff: a take at or before it was printed already, and is no longer the maker's to oppose. */
+export const PREV_THROUGH_SQL = `SELECT max((receipts->>'hold_through')::bigint) AS through FROM windows WHERE id < $1 AND receipts ? 'hold_through'`;
+/** The stances that answer a take (world-stance.mjs § answerTake), oldest first: the latest per take act wins. */
+export const TAKE_STANCES_SQL = `SELECT id, at, actor, object, payload FROM acts
+                                  WHERE class = 'stance' AND payload->>'answers' = 'take' ORDER BY at, id`;
 
 /** The cutoff the first clearing that printed sealed: drops at or before it are the POS-138 era's. */
 export const FIRST_THROUGH_SQL = `SELECT min((receipts->>'hold_through')::bigint) AS "from" FROM windows WHERE id < $1 AND receipts ? 'hold_through'`;
@@ -73,7 +90,7 @@ const windowOf = (row) => (row?.crossing == null || !Number.isFinite(Number(row.
  * @param from         the first printing clearing's cutoff, or null when none has printed yet
  * @returns `{ prints: [{ slug, row, geometry, data, why }], notes: [string] }`
  */
-export function holdPrintout({ attachments = [], drops = new Map(), rows = [], from = null }) {
+export function holdPrintout({ attachments = [], drops = new Map(), rows = [], from = null, opposed = new Map(), prevThrough = null, takes = new Map(), returned = new Set() }) {
   const bySlug = new Map(rows.map((r) => [String(r.slug), { ...r, geometry: asObj(r.geometry), data: asObj(r.data) ?? {} }]));
   const centreOf = (id) => placedCentreOfRow(bySlug.get(String(id)) ?? null);
   const framedBy = new Map();   // slug -> marks filed inside it that carry their own place
@@ -81,11 +98,20 @@ export function holdPrintout({ attachments = [], drops = new Map(), rows = [], f
     const up = r.data?._parentMarkId;
     if (up && point(r.geometry?.at) && r.data?._fileAt) framedBy.set(String(up), [...(framedBy.get(String(up)) ?? []), r.slug]);
   }
-  const prints = [], notes = [];
+  const prints = [], notes = [], returns = [];
   for (const [slug, hold] of latestRows(attachments)) {
     const row = bySlug.get(slug);
     if (!row) continue; // no mark to print (a draft, or retired)
     const { _fileAt, _origin, [HELD_BY]: wasHeldBy, [PLACED]: placed, ...rest } = row.data ?? {};
+    // AN OPPOSED TAKE, not printed before and not yet returned: the thing returns, and nothing else prints
+    const opposedTake = (takes.get(slug) ?? []).filter((tk) => opposed.has(String(tk.seq))
+      && !returned.has(String(tk.seq)) && (prevThrough == null || Number(tk.seq) > prevThrough)).pop();
+    if (opposedTake) {
+      const to = heldBy(row.data) ? { [HELD_BY]: heldBy(row.data) } : point(row.geometry?.at) ? { at: point(row.geometry.at) } : null;
+      if (!to) { notes.push(`${slug}: its take was opposed, but its record gives it neither a place nor a holder to return to`); continue; }
+      returns.push({ slug, row, take_act: String(opposedTake.seq), taker: String(opposedTake.actor), stance_act: opposed.get(String(opposedTake.seq)), to });
+      continue;
+    }
     if (hold.policy === "cascade" && hold.entity != null) {
       const holder = String(hold.entity);
       if (heldBy(row.data) === holder && !point(row.geometry?.at)) continue; // printed so already
@@ -112,7 +138,7 @@ export function holdPrintout({ attachments = [], drops = new Map(), rows = [], f
     if (!extent) { notes.push(`${slug}: set down, but no extent is on record to print`); continue; }
     prints.push({ slug, row, geometry: { at: { x: at.x, y: at.y }, extent }, why: `set down by ${drop?.actor ?? "somebody"}`, data: rest });
   }
-  return { prints, notes };
+  return { prints, notes, returns };
 }
 
 /**
@@ -132,8 +158,56 @@ export async function writeHoldThrough(q, { windowId, materialize, houseOrRefusa
   const drops = new Map();
   for (const r of holding) if (r.action === "drop" && Number(r.seq) <= through) drops.set(String(r.object ?? r.payload?.thing), r);
   const { rows } = await q(STANDING_ROWS_SQL, []);
-  const plan = holdPrintout({ attachments: atts, drops, rows, from });
-  const printed = [];
+  // THE TAKES AND THEIR ANSWERS (D3): the maker's house's latest word on each take, the takes, and those already returned
+  const prevRow = (await q(PREV_THROUGH_SQL, [windowId])).rows?.[0];
+  const prevThrough = prevRow?.through == null ? null : Number(prevRow.through);
+  const takes = new Map(), returned = new Set();
+  for (const r of holding) {
+    const id = String(r.object ?? r.payload?.thing);
+    if (r.action === "take" && Number(r.seq) <= through) takes.set(id, [...(takes.get(id) ?? []), r]);
+    const back = r.payload?.returned?.take_act;
+    if (back != null) returned.add(String(back));
+  }
+  const owners = new Map(rows.map((r) => [String(r.slug), String(r.owner)]));
+  const houses = new Map();
+  const houseOf = async (h) => {
+    if (!houses.has(h)) houses.set(h, (await houseOrRefusal(q, h)).household ?? null);
+    return houses.get(h);
+  };
+  const answers = new Map(); // take act -> { stance, stance_act }, the maker's house's latest
+  for (const s of (await q(TAKE_STANCES_SQL, [])).rows ?? []) {
+    const p = asObj(s.payload) ?? {};
+    const take = p.take?.act_id;
+    const maker = owners.get(String(s.object));
+    if (take == null || !maker || (p.stance !== "opposed" && p.stance !== "welcomed")) continue;
+    const [mh, sh] = [await houseOf(maker), await houseOf(String(s.actor))];
+    if (!mh || mh !== sh) continue;
+    answers.set(String(take), { stance: p.stance, stance_act: String(s.id) });
+  }
+  const opposed = new Map([...answers].filter(([, a]) => a.stance === "opposed").map(([k, a]) => [k, a.stance_act]));
+  const plan = holdPrintout({ attachments: atts, drops, rows, from, opposed, prevThrough, takes, returned });
+  const printed = [], returnedNow = [];
+  for (const r of plan.returns) {
+    // ONE RETURN, ONE ACT, under its own savepoint: one the store refuses is a note, never the window
+    await q("SAVEPOINT return_one_take");
+    try {
+      const back = r.to[HELD_BY] != null;
+      await q(
+        `INSERT INTO acts (at, crossing, actor, action, object, at_anchor, at_dx, at_dy, class, payload, effect)
+         VALUES (now(), $1, 'the-town', $2, $3, NULL, $4, $5, 'holding', $6, $7)`,
+        [windowId, back ? "give" : "drop", r.slug, back ? null : r.to.at.x, back ? null : r.to.at.y,
+          JSON.stringify({ thing: r.slug, holder: back ? r.to[HELD_BY] : null, policy: back ? "cascade" : "detach",
+            made_by: r.row.owner, previous_holder: r.taker, returned: { take_act: r.take_act, stance_act: r.stance_act } }),
+          back ? `the maker's house opposed ${r.taker}'s take: the settlement returns it to ${r.to[HELD_BY]}`
+               : `the maker's house opposed ${r.taker}'s take: the settlement returns it where it was`]);
+      await q("RELEASE SAVEPOINT return_one_take");
+      returnedNow.push({ slug: r.slug, take_act: r.take_act, stance_act: r.stance_act, taker: r.taker, to: r.to });
+    } catch (e) {
+      await q("ROLLBACK TO SAVEPOINT return_one_take");
+      await q("RELEASE SAVEPOINT return_one_take");
+      plan.notes.push(`${r.slug}: its opposed take could not be returned (${String(e?.message ?? e).slice(0, 200)})`);
+    }
+  }
   for (const p of plan.prints) {
     const house = await houseOrRefusal(q, p.row.owner);
     if (house.check) { plan.notes.push(`${p.slug}: ${house.check}`); continue; }
@@ -158,5 +232,5 @@ export async function writeHoldThrough(q, { windowId, materialize, houseOrRefusa
     await q("RELEASE SAVEPOINT print_one_hold");
     printed.push({ slug: p.slug, claim: String(claim.id), why: p.why });
   }
-  return { hold_through: through, printed, notes: plan.notes };
+  return { hold_through: through, printed, returned: returnedNow, notes: plan.notes };
 }

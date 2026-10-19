@@ -1161,6 +1161,95 @@ export async function setDownFor(thing, target, marks = [], deps = {}) {
   return { speakerHouse, drop, stood: composeAnchor(drop.at ?? {}, centreOf), householdOf, madeBy };
 }
 
+// ── THE TAKE ARM (POS-688 D3, ruled by Darko 2026-10-19 09:21) ──────────────
+//
+// "Consent is unchanged: the maker may oppose a take before the settlement, and
+// the thing returns." Built "with the SAME existing stance machinery": the
+// set-down arm's, asked of a take. The maker's house speaks on its own thing
+// with `declare-stance-on`; the stance names the ONE take it answers
+// (`take: { act_id, by }`), and the settlement reads it: an opposed take is never
+// printed in the taker's hands, and the clearing returns the thing to where it
+// was printed (world2/tools/hold-through.mjs § the return). Welcomed is the
+// maker's consent said out loud and changes nothing; silence settles neutral.
+
+/**
+ * Is `thing` in the hands of ANOTHER household by a take the settlement has not
+ * printed yet? Returns `{ speakerHouse }` always, plus `take` / `taker` when so,
+ * or `printed` when the take is already on the record (too late to oppose).
+ * Never throws; an unread record opens no arm.
+ */
+export async function takeFor(thing, target, deps = {}) {
+  const hold = await import("./world-hold.mjs");
+  let householdOf = deps.householdOf;
+  if (householdOf === undefined) {
+    try { householdOf = await (await import("./households.mjs")).householdLookup(); } catch { householdOf = null; }
+  }
+  const madeBy = String(target?.by ?? String(thing).split("/")[0]);
+  const speakerHouse = (h) => hold.sameHousehold(madeBy, String(h), householdOf).same;
+  let rows;
+  try {
+    rows = deps.readRows ? await deps.readRows(thing)
+      : await (await import("./world2-guards.mjs")).standsRowsFromStore(thing);
+  } catch (e) { return { speakerHouse, unreadable: plainReason(e, "record", "a thing's holding rows") }; }
+  if (!rows) return { speakerHouse };
+  const holder = hold.liveHolder(rows.attachments ?? [], String(thing));
+  if (!holder) return { speakerHouse }; // not held: nothing taken to answer
+  const takes = (rows.journal ?? []).filter((r) => r.action === "take" && String(r.object) === String(thing));
+  const take = takes[takes.length - 1] ?? null;
+  if (!take || take.actor == null) return { speakerHouse };
+  const taker = hold.sameHousehold(madeBy, String(take.actor), householdOf);
+  if (taker.same || taker.how !== "household") return { speakerHouse };
+  let through = null;
+  try {
+    through = deps.throughOf ? await deps.throughOf()
+      : (await (await import("./held-view.mjs")).heldView())?.through ?? null;
+  } catch { through = null; }
+  const printed = through != null && Number(take.seq) <= Number(through);
+  return { speakerHouse, take, taker: String(take.actor), holder: String(holder), madeBy, householdOf, ...(printed ? { printed: true } : {}) };
+}
+
+/** The maker's house answers a stranger's take: one stance row, and nothing else is written until the settlement. */
+async function answerTake({ repo, on, stance, by, key, tk, dbPath, witnessStamp, crossing }) {
+  const hold = await import("./world-hold.mjs");
+  const { take, taker, madeBy, householdOf } = tk;
+  if (tk.printed)
+    throw bounce(409, `the settlement has already printed ${on} in ${taker}'s hands`,
+      `a take is answered before the settlement that prints it, and this one is on the record now. Ask ${taker} to give it back — nothing was written`);
+  const prior = hold.takeAnswer({ stances: await stanceRows({ dbPath, worldClone: repo }), thing: on, takeSeq: take.seq, madeBy, householdOf });
+  const stamp = witnessStamp ? await witnessStamp(by) : { at: { anchor: null, dx: null, dy: null }, witnesses: { source: "unread", reason: "no witness reader supplied", list: [] } };
+  const answered = { act_id: take.seq == null ? null : String(take.seq), by: taker };
+  let row;
+  {
+    const entry = {
+      crossing, actor: by, household: resolvedWorldHousehold(key) ?? null,
+      action: ACTION_STANCE, object: on, cls: CLASS_STANCE,
+      at: stamp.at, witnesses: stamp.witnesses,
+      payload: { on, stance, by, answers: hold.ANSWERS_TAKE, take: answered },
+      effect: stance === "opposed"
+        ? `the maker's house opposes ${taker}'s take — at the settlement it goes back where ${madeBy}'s record has it`
+        : `the maker's house welcomes ${taker}'s take`,
+    };
+    try {
+      row = laneFlipped("stance") ? await appendActFlipped(null, entry) : await appendJournal(null, entry);
+    } catch (err) {
+      if (err?.name === "PenUnreachableError")
+        throw bounce(503, err.message,
+          "this door's pen is the office's record; when it cannot be reached the door refuses rather than writing anywhere else — your stance is safe to speak again");
+      throw err;
+    }
+  }
+  return {
+    on, stance, by, answers: hold.ANSWERS_TAKE, take: answered,
+    seq: row.actId, crossing: row.crossing, log: row.record ?? "acts",
+    witnesses: row.witnesses ? JSON.parse(row.witnesses) : null,
+    ...(prior ? { superseded: { stance: prior.stance, at: prior.at, seq: prior.seq } } : {}),
+    effect: stance === "opposed"
+      ? `your house opposes ${taker}'s take of ${on}: at the next settlement it goes back where it was, out of ${taker}'s hands. Until then your word can still change.`
+      : `your house welcomes ${taker}'s take of ${on}: the settlement prints it in ${taker}'s hands.`,
+    note: "a take of your house's thing by another household is yours to answer before the settlement: opposed returns it there, welcomed says yes out loud, and silence lets it settle",
+  };
+}
+
 // ── THE SET-DOWNS WAITING ON YOUR HOUSE'S WORD (POS-138, the read) ──────────
 //
 // Keemin, 2026-09-24: an author's house must be told when another household
@@ -1534,6 +1623,14 @@ export async function declareStanceViaOffice(repo, args = {}, key = null, { dbPa
     if (stance === "neutral") throw bounce(422, "a set-down is answered welcomed or opposed",
       `welcomed re-sites it where ${sd.drop.actor} left it, filed in your name; opposed keeps canon where you put it; silence leaves it unaccepted. A declared neutral is a word on ground you hold, and this is your house's own thing — nothing was written`);
     return await answerSetDown({ repo, on, stance, by, key, target, sd, dbPath, witnessStamp, crossing, deps: setDownDeps });
+  }
+
+  // ── THE TAKE ARM (POS-688 D3): the maker's house answers a stranger's take of its thing ─
+  const tk = await takeFor(on, target, setDownDeps);
+  if (tk?.take && tk.speakerHouse(by)) {
+    if (stance === "neutral") throw bounce(422, "a take is answered welcomed or opposed",
+      `opposed returns it at the settlement, out of ${tk.taker}'s hands; welcomed lets the take stand; silence lets it settle. A declared neutral is a word on ground you hold, and this is your house's own thing — nothing was written`);
+    return await answerTake({ repo, on, stance, by, key, tk, dbPath, witnessStamp, crossing });
   }
 
   if (target.by === by) throw bounce(422, "a mark is never its own ground",

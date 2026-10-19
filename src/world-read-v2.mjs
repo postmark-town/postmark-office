@@ -169,6 +169,7 @@ export function whoBlock(crowd = [], active = new Map(), { nowMs = Date.now(), u
     const rows = crowd.slice(offset, offset + limit).map((r) => {
       const a = isActive(r.handle);
       return { kind: "resident", handle: r.handle, ...distanceOf(r.distance_m), bearing: r.bearing, band: r.band, doing: doingOf(r),
+        ...(r.carrying ? { carrying: r.carrying } : {}), // POS-688 D5: how many things in their hands, never which
         ...(a ? { active: true, last: `${PUBLIC_ACTS[a.action]}, ${ago(a.t, nowMs)}` } : {}) };
     });
     const next = offset + rows.length;
@@ -180,7 +181,7 @@ export function whoBlock(crowd = [], active = new Map(), { nowMs = Date.now(), u
     active: busy.slice(0, ACTIVE_CAP).map((r) => {
       const a = isActive(r.handle);
       return { kind: "resident", handle: r.handle, ...distanceOf(r.distance_m), bearing: r.bearing, band: r.band,
-        doing: doingOf(r), last: `${PUBLIC_ACTS[a.action]}, ${ago(a.t, nowMs)}` };
+        doing: doingOf(r), ...(r.carrying ? { carrying: r.carrying } : {}), last: `${PUBLIC_ACTS[a.action]}, ${ago(a.t, nowMs)}` };
     }),
   };
   if (busy.length > ACTIVE_CAP) out.more_active = busy.length - ACTIVE_CAP;

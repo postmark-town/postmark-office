@@ -201,6 +201,9 @@ async function world() {
 // reader of a thing's place asks one owner. A hold record that cannot be read is
 // no overlay: canon's record, as before.
 // `pool`: the store twin's own store (world2-serve.mjs), whose hold record is its answer's, never the office's.
+/** `carrying: N` on each holder's row of a presence block (POS-688 D5; held-view.mjs § withCarrying). */
+async function withCarryingNow(present) { return (await import("./held-view.mjs")).withCarrying(present); }
+
 export async function heldPlaced(w, { pool = null, markRows = null } = {}) {
   const [{ heldView, heldViewFrom }, { unplaceHeld }] = await Promise.all([import("./held-view.mjs"), import("./held.mjs")]);
   return unplaceHeld(w, await (pool ? heldViewFrom(pool, { markRows }) : heldView()));
@@ -1980,7 +1983,7 @@ export async function worldOrient(args = {}, key = null, { roll = [], crowd = fa
   // presence's radius by activity, so v2 asks for every row, uncapped, and
   // without place words (its rows say distance, bearing and what they are
   // doing, never where). v1 asks exactly as it always did.
-  const present = await presentNear(at, {
+  const present = await withCarryingNow(await presentNear(at, {
     ...(crowd ? crowdPresence() : { place: (p) => placeWords(p) }),
     // ⚑ AVAILABLE IS PARKED (2026-09-10, the founder's word). `the-town/available`
     // was world#19, reverted off the record; the derived was voices.mjs's to
@@ -2007,7 +2010,7 @@ export async function worldOrient(args = {}, key = null, { roll = [], crowd = fa
     // with no roll gets the two-term union it always had.
     roll,
     ...(await keptPresence()), // POS-284: the kept positions, as GET /world/present reads them
-  });
+  }));
   const transport = await transportBlock(w, at, { crossing });
   // An entry queued on this walker's walk, or refused at its arrival, on their
   // own standpoint and nowhere else (WLD-5, Darko's G3). Absent otherwise.
@@ -2028,7 +2031,9 @@ function presenceTelling(present) {
   for (const { residents } of byBand(present.residents)) {
     for (const r of residents) {
       const state = r.aboard ? ", aboard the Post Office" : r.moving ? ", on the road" : "";
-      L.push(`  · ${r.distance_m} m ${r.bearing} — ${r.handle}${state}${r.place ? ` (${r.place})` : ""}`);
+      // a held thing is its holder's contents (POS-688 D5): how many, never which
+      const carrying = r.carrying ? `, carrying ${r.carrying} ${r.carrying === 1 ? "thing" : "things"}` : "";
+      L.push(`  · ${r.distance_m} m ${r.bearing} — ${r.handle}${state}${carrying}${r.place ? ` (${r.place})` : ""}`);
     }
   }
   if (present.capped) L.push(`  · …and ${present.count - present.shown} more within ${present.radius_m} m`);
@@ -2415,7 +2420,7 @@ export async function worldEyes(args = {}, key = null, { roll = [], v2 = false, 
   // re-rendering the engine's prose to weave people through it would make the
   // office a second author of the world's voice.
   // v2 (POS-632) reads presence once, through orient's crowd; the eyes skip it.
-  const present = v2 ? null : await presentNear(at, {
+  const present = v2 ? null : await withCarryingNow(await presentNear(at, {
     place: (p) => placeWords(p),
     // (`available` was injected here too — parked; see worldOrient's note.)
     exclude: choice.handle ? [choice.handle] : [],
@@ -2423,7 +2428,7 @@ export async function worldEyes(args = {}, key = null, { roll = [], v2 = false, 
     world: w,
     roll, // DEC-11 — see worldOrient
     ...(await keptPresence()), // POS-284 — see worldOrient
-  });
+  }));
   const section = presenceTelling(present);
   const telling = section ? `${engineTelling ?? ""}\n\n${section}` : engineTelling;
   const transport = await transportBlock(w, at, { crossing });
@@ -2531,7 +2536,7 @@ export async function worldPresent(args = {}, { roll = null } = {}) {
   if (!has) return presenceEveryone({ place, repo: WORLD_CLONE, world: w, roll: roll ?? [], projected, placed });
   const radiusM = Number.isFinite(Number(args.radius_m)) ? Math.max(1, Number(args.radius_m)) : undefined;
   const limit = Number.isFinite(Number(args.limit)) ? Math.max(1, Math.floor(Number(args.limit))) : undefined;
-  return presenceNear({ x, y, place, repo: WORLD_CLONE, world: w, roll: roll ?? [], projected, placed, ...(radiusM ? { radiusM } : {}), ...(limit ? { limit } : {}) });
+  return withCarryingNow(await presenceNear({ x, y, place, repo: WORLD_CLONE, world: w, roll: roll ?? [], projected, placed, ...(radiusM ? { radiusM } : {}), ...(limit ? { limit } : {}) }));
 }
 
 // ── a mark's image, as bytes (world_investigate with_image, 2026-08-23) ──────
