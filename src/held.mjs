@@ -147,6 +147,17 @@ export function isThingMark(m, { classOf, extendsOf }) {
 }
 
 /**
+ * The ground of a containment chain: every link that is not a thing (W4). A link
+ * is known by its FULL record (`byId`), never by the link itself: the engine's
+ * chain hands back slim links (`{ id, by, tier, body, extentM }`, world-verbs §
+ * containmentChain) with no kind and no class, so asked of the link a thing never
+ * reads as one. Found on the playground (2026-10-19): drops anchored on a tin box.
+ */
+export function groundChain(chain = [], byId = new Map(), opts) {
+  return (chain ?? []).filter((link) => !isThingMark(byId.get(link?.id) ?? link, opts));
+}
+
+/**
  * The engine's close look at a mark, with its holder named (POS-688): the engine
  * reads the record's own fields and knows no hold, so the office adds the one
  * word the placed world says. The look gives no place for a held thing already

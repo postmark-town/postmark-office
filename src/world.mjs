@@ -3558,9 +3558,10 @@ export async function witnessStampAt(handle, here, known = null) {
     // NEVER A THING (POS-688, W4): a thing can be picked up, and a held thing has
     // no place for the act to compose against, so the anchor is the innermost
     // ground that is not a thing (the-town/the-not-ground: a thing is not ground).
-    const [{ isThingMark }, { markClassOf }] = await Promise.all([import("./held.mjs"), import("./world-grants.mjs")]);
+    const [{ groundChain }, { markClassOf }] = await Promise.all([import("./held.mjs"), import("./world-grants.mjs")]);
     const thingOpts = { classOf: markClassOf, extendsOf: classExtendsOf() };
-    const groundAt = (p) => chainAt(p).filter((m) => !isThingMark(m, thingOpts));
+    const byId = new Map(marks.map((m) => [m.id, m]));
+    const groundAt = (p) => groundChain(chainAt(p), byId, thingOpts);
     const at = anchorAt(here, { chain: groundAt(here), centreOf });
 
     // `presentNear` is null when the presence layer is switched off at this
