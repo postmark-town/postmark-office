@@ -20,7 +20,7 @@
 // POS-199 — EACH ACT IS READ BACK THROUGH THE READER THAT CAN SEE IT. The first
 // dev run reddened the mark and say classes on green writes because the probe
 // asked the wrong doors: `/world2/investigate` never shows a draft (007), and
-// `/world2/say` reads emissions, never a live `say` act. The stub keeps BOTH of
+// `/world2/say` read emissions, never a live `say` act (until POS-694). The stub keeps BOTH of
 // those doors, answering the way the real ones do (blind to a draft, blind to a
 // fresh say), so a probe pointed back at either reddens here and not on dev.
 
