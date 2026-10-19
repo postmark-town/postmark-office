@@ -113,8 +113,8 @@ import { validateReadArgs } from "./validate-args.mjs"; // the flat tools' own v
 import { callHoldTool, holdingsOf, liveHolder, nearestIds } from "./world-hold.mjs";
 import { termsId, termsOnce } from "./terms-seen.mjs"; // POS-697 G5a: the law you were shown, named on a repeat act
 import { onlyUsable, canOn, viewMarkIds } from "./usable-verbs.mjs"; // verbs show when usable (LOGOS v2, O2)
-// The stride a placement is stamped with — read off the record like every other
-// departure's, never a constant here (decision 008b).
+// The walk's pace, the resident class's own dial (WLD-29): read off the record
+// like every other departure's, never a constant here (decision 008b).
 import { departurePace } from "./world-classes.mjs";
 import { EARSHOT_M } from "./voices.mjs"; // postmark#3592: the description names both distances
 import { PRESENCE_DIALS } from "./dynamic-presence.mjs";
@@ -143,7 +143,7 @@ import { ARENA_TOOLS, ARENA_VERBS, arenaActViaOffice, arenaClosed } from "./aren
 // THE PORTAL GROUND'S OWN LAW outlived the arena: which room you stand in, its
 // stride and its landing (src/portal-ground.mjs). Rides and vehicles are not this.
 import { cockpitPortal, groundAt, landingPointFor } from "./portal-ground.mjs";
-import { caughtBounce, isHttpStatus, trippedError, plainReason } from "./fault-words.mjs"; // the office's own words for its own fault (POS-573/578)
+import { bounceExtras, caughtBounce, faultLogged, isHttpStatus, trippedError, plainReason } from "./fault-words.mjs"; // the office's own words for its own fault (POS-573/578)
 
 export const apexEnabled = () => process.env.WORLD_APEX === "1";
 
@@ -470,6 +470,14 @@ export function crossingDeps() {
     stop: async (who, here, key, opts = {}) => walkViaOffice(WORLD_CLONE, { handle: who, x: here.x, y: here.y,
       ...(opts?.from && Number.isFinite(Number(opts.from.x)) && Number.isFinite(Number(opts.from.y)) ? { __from: { x: Number(opts.from.x), y: Number(opts.from.y) } } : {}),
       ...(opts?.exit === true ? { exit: true } : {}) }, key),
+    // A PLACEMENT IS A LANDING, NOT A WALK (WLD-63 row 68 B, Darko 2026-10-16 19:15).
+    // `land` is the set-down's pen (world.mjs § landAt): a passage, a whole-dungeon
+    // exit, the Post Office's deposit. `stop` above stays the walk door's, for the one
+    // set-down that IS a walk ending: "entering ends the walk".
+    land: async (who, at, key, opts = {}) => {
+      const { landAt } = await import("./world.mjs");
+      return landAt(WORLD_CLONE, { who, at, key, via: opts.via ?? null, why: opts.why, exit: opts.exit === true });
+    },
     // given the door's one reading (world-crossings.mjs § passageInstant), it names that reading's ferry
     now: (ms = Date.now()) => (ms - Date.UTC(2026, 5, 12)) / (12 * 3600 * 1000),
     // THE ACTS THIS ACTOR HAS WRITTEN, oldest first — the ride fold's one input
@@ -2911,17 +2919,14 @@ async function apexRead(args, key, ctx = {}) {
 // because the MCP door's answer classifies the code too).
 export function actCaught(e, done = {}) {
   if (!isHttpStatus(e.code)) return { ...caughtBounce(e), ...done }; // a foreign code (pg's SQLSTATE, Node's ENOENT): its words go to the log (fault-words.mjs § caughtBounce, POS-573)
-  // THE EXTRAS A CALLER READS ARE CARRIED, BY NAME, and this list is the
-  // whole reason to read it twice: this line REBUILDS the bounce, so a
-  // field the door underneath added and this list does not name is dropped
-  // here and reaches nobody. `choices` (which resident?) has ridden since
-  // the multi-resident bounce; `walk` joined 2026-09-11 with the enter
-  // door's reach refusal, because the world page's "walk there and enter"
-  // button reads `walk.mark` off THIS body — the apex is the door it calls.
-  // A value nothing can read is the quiet failure this office has a museum
-  // of; adding a field below without adding it here builds one.
-  return { ...bounce(e.code, e.defect, e.hint,
-    { ...(e.choices ? { choices: e.choices } : {}), ...(e.walk ? { walk: e.walk } : {}) }), ...done };
+  // THE EXTRAS A CALLER READS ARE CARRIED, BY NAME (fault-words.mjs §
+  // BOUNCE_EXTRAS, the one list): this line REBUILDS the bounce, so a field
+  // the door underneath added and that list does not name is dropped here and
+  // reaches nobody. The world page's "walk there and enter" button reads
+  // `walk.mark` off THIS body, and its door picker reads `choose`. A value
+  // nothing can read is the quiet failure this office has a museum of; adding
+  // a field below without adding it there builds one.
+  return { ...bounce(e.code, e.defect, e.hint, bounceExtras(e)), ...done };
 }
 
 async function apexDo(args, key, ctx = {}) {
@@ -3326,68 +3331,79 @@ async function apexDo(args, key, ctx = {}) {
       return actCaught(e, done);
     }
     // ── THE GROUND SETS ITS ENTRANT DOWN (LOGOS § The portal ground) ────────
-    // AFTER the enter and only when it succeeded. The receipt keeps the shape
-    // it had while the arena's wheel rode here too: `joined: { placed }`.
-    if (action === "enter" && !result?.error) {
-      const placed = await landOnEnter(args, key, hand || standingHandle(args, key));
+    // AFTER the enter, and only when the enter actually put the ground on the
+    // entrant's stack (review-shelter, WLD-6 A): refused terms, a refused door,
+    // awaiting and already-within all answer with no `.error`, and none of them
+    // entered anything. The receipt keeps the shape it had while the arena's wheel
+    // rode here too: `joined: { placed }`.
+    if (action === "enter") {
+      const placed = await groundLandsAfterEnter(args, result, key, hand || standingHandle(args, key));
       if (placed) return { ...done, result, joined: { placed }, ...(nonceSays ?? {}) };
     }
     return result?.error === "bounce" ? { ...result, ...done } : { ...done, result, ...(nonceSays ?? {}) };
   } finally { store.db?.close(); }
 }
 
+/** The mark an enter names: landOnEnter's own parse, the one the guard asks about. */
+export function enterTargetOfArgs(args = {}) {
+  return String(args.mark ?? args.mark_id ?? parseEnvelope(args)?.mark ?? parseEnvelope(args)?.mark_id ?? "").trim();
+}
+
+/** Whether this enter's answer put `target` on the entrant's stack: the ONLY case
+ *  a ground sets anyone down (review-shelter, WLD-6 A). */
+export const enteredTheTarget = (result, target) => !!target && !result?.error && Array.isArray(result?.entered) && result.entered.includes(target);
+
+/** After an enter: the ground's landing, or null. `deps` lets a test hand in the
+ *  ground's lookup and the pen; the apex passes none. */
+export async function groundLandsAfterEnter(args, result, key, who, deps = {}) {
+  const target = enterTargetOfArgs(args);
+  if (!enteredTheTarget(result, target)) return null;
+  return landOnEnter(target, key, who, deps);
+}
+
 /**
  * Where a portal ground with a `lands_at` dial sets an entrant down (they LAND:
- * "spawn" is the creatures' word, WLD-66), written as a walk: entry writes
- * occupancy and moves nobody, so a hand entering from outside the fence would be
- * inside by the record and outside by geometry. Null for every ground that
- * declares no landing.
+ * "spawn" is the creatures' word, WLD-66), written as a landing (WLD-63 row 68 B):
+ * entry writes occupancy and moves nobody, so a hand entering from outside the
+ * fence would be inside by the record and outside by geometry. Null for every
+ * ground that declares no landing.
+ *
+ * BEHIND THE WALL TOO (WLD-6 A, RULED by Darko 2026-10-16 20:04): a ground sets
+ * its entrant down at its landing point even when the Mists' wall stands over
+ * it. You entered it; it shelters you. So no wall check is asked here.
  */
-async function landOnEnter(args, key, who) {
-  const target = String(args.mark ?? args.mark_id ?? parseEnvelope(args)?.mark ?? parseEnvelope(args)?.mark_id ?? "").trim();
+async function landOnEnter(target, key, who, { ground = null, landAt: pen = null } = {}) {
   if (!target || !who) return null;
-  const store = openStore();
+  const store = ground ? null : openStore();
+  let place = null;
   try {
-    if (!store.db) return null;
-    const place = groundAt(store.db, [target]);
-    if (!place) return null;
-    const landing = landingPointFor(store.db, place, { who, crossing: currentCrossing() });
-    if (!landing) return null;
+    let landing = null;
+    if (ground) ({ place, landing } = (await ground(target, who)) ?? {});
+    else {
+      if (!store.db) return null;
+      place = groundAt(store.db, [target]);
+      if (place) landing = landingPointFor(store.db, place, { who, crossing: currentCrossing() });
+    }
+    if (!place || !landing) return null;
     if (landing.refused) return { ground: place.ground, refused: landing.refused };
-    // A GROUND NEVER SETS ANYONE DOWN BEHIND THE MISTS (POS-468 B). The landing
-    // writes its own zero-length walk past the walk door's road check, so it
-    // asks the wall itself: a landing point behind it sets nobody down, and the
-    // entrant stays where the entry left them, told why.
-    const { walkEntry, mistsGroundCheck, worldSkeletonRaw, MISTS_UNREADABLE, recordMoved } = await import("./world.mjs");
-    const seen = await mistsGroundCheck(WORLD_CLONE, worldSkeletonRaw, [landing.at], currentCrossing());
-    if (seen?.unreadable) return { ground: place.ground, refused: `${MISTS_UNREADABLE}: this ground sets no one down behind a wall it cannot see; you stay where you entered` };
-    if (seen?.wall)
-      return { ground: place.ground, refused: "this ground's landing point stands behind the wall of the Mists, so it sets no one down there; you stay where you entered" };
-    const { appendJournal } = await import("./world-journal.mjs");
-    const declaredAt = new Date().toISOString();
-    const crossing = currentCrossing(), pace = departurePace();
-    const row = await appendJournal(null, walkEntry({
-      crossing, who, targetMarkId: place.ground,
-      stampAt: null, witnesses: null,
-      from: landing.at, toward: landing.at, pace, targetExtent: null,
-      household: null, writtenAt: declaredAt, declaredBy: who,
-    }));
-    // THE KEPT POSITIONS, IN THE SAME STEP (POS-691): the set-down moves its
-    // entrant as a walk does, so it records as the walk door records (the same
-    // record, announced to every worker), and the act's id tells each head read
-    // this writer was heard. A record that trips never unsays the set-down.
-    try {
-      recordMoved({ at: declaredAt, actor: who, from: landing.at, toward: landing.at, crossing,
-        within: null, toMark: place.ground, pace }, row?.actId ?? null);
-    } catch (e) { console.error(`[world] the set-down's kept position did not record (${String(e?.message ?? e).slice(0, 160)}); the head read will hear it`); }
+    // A GROUND THAT PLACES ITS ENTRANTS WRITES A LANDING (WLD-63 row 68 B), through
+    // the one land pen: never a walk. The pen reads the walk door's own fractional
+    // clock, so the landing is never stamped behind a walk made earlier this crossing.
+    const write = pen ?? (await import("./world.mjs")).landAt;
+    await write(WORLD_CLONE, { who, at: landing.at, via: place.ground, why: "ground", key });
     return {
       ground: place.ground, at: landing.at,
       ...(landing.jitter ? { jitter_m: landing.jitter, from_landing: landing.from } : {}),
       note: `${place.ground} sets its entrants down at its own landing point — you did not walk here, the ground placed you`,
     };
-  } catch { return null; }
+  } catch (e) {
+    // SAID, NEVER SWALLOWED, as the passage and the deposit say theirs: the entry
+    // stands, and the entrant is told they were not set down
+    faultLogged("a ground's landing could not be written", e);
+    return { ground: place?.ground ?? target, refused: "you entered, but the ground could not set you down at its landing point; you stand where you entered" };
+  }
   finally {
-    try { store.db?.close(); } catch { /* a writer that cannot close still wrote */ }
+    try { store?.db?.close(); } catch { /* a writer that cannot close still wrote */ }
   }
 }
 

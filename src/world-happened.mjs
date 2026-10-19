@@ -79,7 +79,7 @@ export function readCrossingLogs(worldClone, fromCrossing, toCrossing) {
 // give or drop → attachment), placed by their witnessed anchor the way the
 // save places them (save-emissions.mjs § emissionRowsFromActs), and read by
 // the primary key: after the cursor's high-water mark, or the newest LIVE_SCAN.
-export const LIVE_KINDS = Object.freeze({ walk: "departure", say: "emission", take: "attachment", give: "attachment", drop: "attachment" });
+export const LIVE_KINDS = Object.freeze({ walk: "departure", land: "landing", say: "emission", take: "attachment", give: "attachment", drop: "attachment" });
 export const LIVE_SCAN = 500;
 export const LIVE_HW_SQL = "SELECT max(id)::text AS hw FROM acts";
 // NEWEST FIRST after the cursor (review-559 § 1): a long gap is a capped glance

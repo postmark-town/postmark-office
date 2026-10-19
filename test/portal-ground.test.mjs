@@ -133,7 +133,8 @@ test("THE WIRING: the walk desk snaps by the ground, the read carries standpoint
   assert.match(world, /strideOnGround\(\{ toward, targetFrom \}, groundHere\(targetMarkId, toward\)\)/, "the walk desk no longer asks the ground for its stride");
   assert.match(apex, /portal = groundAt\(store\.db, spineIds\);/, "the read no longer finds the portal ground it stands in");
   assert.match(apex, /\.\.\.\(portal \? \{ portal: cockpitPortal\(portal\) \} : \{\}\)/, "the standpoint no longer carries `portal`");
-  assert.match(apex, /if \(action === "enter" && !result\?\.error\) \{\s*const placed = await landOnEnter\(/, "an enter is no longer set down at the ground's landing");
+  assert.match(apex, /if \(action === "enter"\) \{\s*const placed = await groundLandsAfterEnter\(args, result,/, "an enter is no longer set down at the ground's landing");
+  assert.match(apex, /if \(!enteredTheTarget\(result, target\)\) return null;/, "and only an enter that put the ground on the stack is (review-shelter, WLD-6 A)");
 });
 
 test("INNERMOST FIRST (Keemin, 2026-09-30): a hand in the vault is told the vault, with its stride; a hand in the parlor outside it, the parlor", () => {

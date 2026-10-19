@@ -231,13 +231,17 @@ test("FRESH: a walk written outside the walk door is the standpoint within one s
 // so the head read knows them heard (POS-691): the walk door, and the enter
 // door's set-down, the issue's prod writer. Read from the source, as WIRED
 // reads the walk door (walk-from-the-kept-positions.test.mjs).
-test("WIRED (POS-691): the walk door and the enter door's set-down record in-step with their act ids", async () => {
+// The enter door's set-down is a LANDING now (WLD-63 row 68 B): landOnEnter hands it
+// to the one land pen, world.mjs § landAt, which every placement shares (a passage, a
+// dungeon exit, a deposit, a ground), so the pin follows the write there (review-wld63).
+test("WIRED (POS-691): the walk door and the land pen record in-step with their act ids", async () => {
   const { readFileSync } = await import("node:fs");
   const { fileURLToPath } = await import("node:url");
   const src = (f) => readFileSync(fileURLToPath(new URL(`../src/${f}`, import.meta.url)), "utf8");
   const bodyOf = (text, head) => { const i = text.indexOf(head); assert.ok(i > 0, `${head} is gone`); const j = text.indexOf("\n}\n", i); return text.slice(i, j); };
-  const land = bodyOf(src("world-apex.mjs"), "async function landOnEnter(");
-  assert.ok(land.indexOf("recordMoved(") > land.indexOf("appendJournal("), "landOnEnter writes its set-down and does not record it");
-  assert.match(land, /recordMoved\([\s\S]*?row\?\.actId/, "landOnEnter records without the act id");
+  const land = bodyOf(src("world.mjs"), "export async function landAt(");
+  assert.ok(land.indexOf("recordMoved(") > land.indexOf("appendJournal("), "landAt writes its landing and does not record it");
+  assert.match(land, /recordMoved\([\s\S]*?row\?\.actId/, "landAt records without the act id");
+  assert.match(bodyOf(src("world-apex.mjs"), "async function landOnEnter("), /\.landAt\b/, "the enter door's set-down does not go through the land pen");
   assert.match(src("world.mjs"), /recordMoved\(movement, walkRow\?\.actId/, "the walk door records without the act id");
 });

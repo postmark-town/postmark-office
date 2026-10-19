@@ -157,6 +157,10 @@ test("the DOOR makes that one read, and hands it to the pen", () => {
 
   const reads = src.match(/const declaredAt = new Date\(\)\.toISOString\(\);/g) ?? [];
   assert.equal(reads.length, 1, "`walkViaOffice` should read the declaration clock exactly once");
+  // the land pen (WLD-63 row 68 B) keeps the same discipline: one read, into the act and the projection
+  assert.equal((src.match(/const landedAt = new Date\(\)\.toISOString\(\);/g) ?? []).length, 1, "`landAt` should read its clock exactly once");
+  assert.match(src, /writtenAt: landedAt, declaredBy: who/, "the landing's act carries that read");
+  assert.match(src, /crossing, at: landedAt,/, "and so does the projection's record");
 
   assert.match(src, /actor: who, from, toward, crossing: at, at: declaredAt,/,
     "the movement object is stamped from that read — it is what the act's instant comes from");

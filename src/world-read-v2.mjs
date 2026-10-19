@@ -62,6 +62,7 @@ export const AROUND_SHOWN = 3;
 export const PUBLIC_ACTS = Object.freeze({
   say: "said something",
   walk: "walked",
+  land: "landed",
   enter: "went in",
   exit: "came out",
   take: "picked something up",
@@ -233,7 +234,7 @@ export function happenedGlance(h, { sinceCrossing } = {}) {
   // departure's destination whole (BODIES, 10-14 22:33). A say stays the fact
   // of it, never its words (G5 kept): those are earshot's, in `heard`.
   const events = (around.events ?? []).slice(0, AROUND_SHOWN).map((e) => ({
-    who: e.actor, what: e.kind === "departure" ? "set out" : e.kind === "emission" ? "spoke" : e.kind === "attachment" ? "took or left something" : e.kind,
+    who: e.actor, what: e.kind === "departure" ? "set out" : e.kind === "landing" ? "landed" : e.kind === "emission" ? "spoke" : e.kind === "attachment" ? "took or left something" : e.kind,
     when: hourZ(e.at),
     ...(e.where ? { where: e.where } : {}),
     ...(Number.isFinite(e.m) ? { m: e.m } : {}),

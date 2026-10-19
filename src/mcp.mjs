@@ -40,7 +40,7 @@ import { uploadMedia } from "./media.mjs";
 import { WINDOW_PURPOSE, WINDOW_STEP_ONE, WINDOW_POINTER } from "./panes.mjs"; // a window starts with its human (POS-248) — one telling, shared with the window read
 import { harborGated, HARBOR_BOUNCE } from "./harbor-gate.mjs";
 import { validateArgs } from "./validate-args.mjs"; // one owner for "does this door take that field" — re-exported below
-import { ACT_RETRY, READ_RETRY, STORE_LOST, STORE_RETRY_AFTER_S, caughtBounce, faultLogged, foreignAnswer, isHttpStatus } from "./fault-words.mjs"; // the office's own words for its own fault (POS-573)
+import { ACT_RETRY, READ_RETRY, STORE_LOST, STORE_RETRY_AFTER_S, bounceExtras, caughtBounce, faultLogged, foreignAnswer, isHttpStatus } from "./fault-words.mjs"; // the office's own words for its own fault (POS-573)
 import { isStoreUnreachable } from "./store-pool.mjs"; // a lost store, said as an outage (POS-573)
 import { standingBounce } from "./standing.mjs";
 import { roleGate, ROLE_SUBSCRIBER } from "./roles.mjs";
@@ -664,14 +664,12 @@ export async function callTool(name, args, ctx) {
       const r = name === "world" ? await worldApex(args, key, { roll: rollFor(), ...(ctx.door === "mcp" ? { readShape: readShape() } : {}), ...(ctx.earshot ? { earshot: ctx.earshot } : {}) }) : await callWorldTool(name, args, key, { roll: rollFor() });
       if (r !== null) return r;
     } catch (e) {
-      // Same hand-picked extras list as world-apex.mjs § the act branch, and it
-      // must stay in step with it: both REBUILD the bounce, so a field named in
-      // one and not the other reaches one door and not the other. `walk` joined
-      // 2026-09-11 with the enter door's reach refusal.
+      // The same extras as world-apex.mjs § the act branch, from the one list
+      // (fault-words.mjs § BOUNCE_EXTRAS): both REBUILD the bounce, so a field
+      // named for one door and not the other would reach one and not the other.
       // A foreign code (pg's SQLSTATE, Node's ENOENT) keeps only its code, and
       // its message and hint go to the log (fault-words.mjs § caughtBounce, POS-573).
-      if (e.code) return caughtBounce(e, { code: e.code, defect: e.defect, hint: e.hint,
-        ...(e.choices ? { choices: e.choices } : {}), ...(e.walk ? { walk: e.walk } : {}) });
+      if (e.code) return caughtBounce(e, { code: e.code, defect: e.defect, hint: e.hint, ...bounceExtras(e) });
       throw e;
     }
   }

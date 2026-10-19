@@ -39,8 +39,9 @@ import { deriveLaw } from "../world2/tools/law-ingest.mjs";
 
 /** W2's kind migration with the G12 fold, as it stands on world main after postmark-world#252 (POS-702:
  *  every town mark stands at the constitution). Was #236's head b12b7156, which predates #252, so the port
- *  (which now answers constitution for every town mark) could no longer equal it. */
-const W2_SHA = "8c4ed2914a9d7ad654c4ff1ff644a339408b3862";
+ *  (which now answers constitution for every town mark) could no longer equal it. Then 8c4ed291 (#252's merge);
+ *  now world main 98213078, the office pin, with the WLD-63 doors stack and the exit lock merged (2026-10-19). */
+const W2_SHA = "98213078bb5ada867dbf4ecb58fd65cbe87d2331";
 
 const git = (repo, args) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 const hasObject = (repo, sha) => { try { git(repo, ["cat-file", "-e", `${sha}^{commit}`]); return true; } catch { return false; } };

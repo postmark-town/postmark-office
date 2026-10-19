@@ -1306,11 +1306,22 @@ export function shelterInPlay({ verbs, w, crossing }) {
   return typeof verbs?.shelterOf === "function" && !!w?.terrain?.mists && Number(crossing) >= MISTS_FIRST_CROSSING;
 }
 
+/** Whether a read needs the reader's enter stack at all: for the Mists' shelter
+ *  (above), or for the frame of sight, which is scoped to the interior of the
+ *  innermost mark you have entered, for ALL marks, Mists or not (WLD-5, Darko
+ *  2026-10-16 19:52). A clone that frames sight says so with `sightFrameOf`; one
+ *  older than the ruling, out of the Mists' season, reads no ledger, as before.
+ *  Found by the WLD-63 playground walk: with the Mists off the read went
+ *  unscoped, and a resident in a room saw twelve seats from outside it. */
+export function enterStackMatters(inPlay = {}) {
+  return shelterInPlay(inPlay) || typeof inPlay?.verbs?.sightFrameOf === "function";
+}
+
 /** What a resident is within now (DEC-5's read), for the eyes and the air; null
- *  when shelter is not in play, the clone carries no enter/exit law or the ledger
- *  will not read. */
+ *  when the stack matters to nothing (enterStackMatters), the clone carries no
+ *  enter/exit law or the ledger will not read. */
 async function enteredNow(handle, inPlay) {
-  if (!handle || !shelterInPlay(inPlay)) return null;
+  if (!handle || !enterStackMatters(inPlay)) return null;
   try {
     const { crossingLaw } = await import("./world-crossings.mjs");
     const { crossingDeps } = await import("./world-apex.mjs");
@@ -1353,6 +1364,91 @@ export function walkEntry({ crossing, who, targetMarkId, stampAt, witnesses, fro
     // fallback rather than the string "null" in the record's first field).
     writtenAt: writtenAt ?? undefined,
   };
+}
+
+/**
+ * A LANDING (WLD-63 row 68 B, Darko 2026-10-16 19:15: "put that in the ledger as
+ * unique from a walk because you went through a portal"). One line written when
+ * something SETS YOU DOWN (the-town/land): a door passed (`why: "passage"`), a
+ * dungeon left whole (`"dungeon-exit"`), a stop you were carried to
+ * (`"deposit"`), a ground that places its entrants (`"ground"`). It is read as
+ * a departure that has already arrived, from = toward = where you stand, so every
+ * reader of position takes it unchanged (live-reads § DEPARTURE_ACTIONS); it
+ * names no stride, because nobody walked. `via` is what placed you.
+ */
+export function landEntry({ crossing, who, at, via = null, why, household = null, writtenAt, declaredBy = null }) {
+  const p = { x: Number(at.x), y: Number(at.y) };
+  return {
+    crossing, actor: who, action: "land",
+    object: via ?? null,
+    at: null, witnesses: null, cls: CLASS_MOVE,
+    payload: {
+      from: p, toward: p, pace: null, within: null, to: null,
+      via: via ?? null, why: String(why),
+      declared_by: declaredBy ?? who,
+    },
+    effect: "you are set down where you landed; nobody walked",
+    household,
+    writtenAt: writtenAt ?? undefined,
+  };
+}
+
+/**
+ * WHAT STANDING AT THIS POINT LEAVES, EXITED FIRST (DEC-5, for a landing that
+ * passes `exit: true`: the Post Office's deposit when the rider is still within
+ * something). The walk door's own judgement, asked by its own two instruments
+ * (`occupiedNowBy`, world-movement § leavingWhileOccupying) over the clone's
+ * point-in-mark law, then each exit made innermost outward by the exit door.
+ * Answers the ids exited.
+ */
+export async function exitWhatThisPointLeaves(worldClone, who, point, key) {
+  const { crossingLaw, exitViaOffice } = await import("./world-crossings.mjs");
+  const { crossingDeps } = await import("./world-apex.mjs");
+  const law = await crossingLaw(worldClone).catch(() => null);
+  if (!law?.thresholds || typeof law.verbs?.pointWithinMark !== "function") return [];
+  const deps = crossingDeps();
+  const stack = await occupiedNowBy(who, law.thresholds, deps);
+  if (!stack.length) return [];
+  const byId = new Map(((await deps.world())?.marks ?? []).map((m) => [m.id, m]));
+  const leaving = leavingWhileOccupying(stack, point, (pt, id) => { const m = byId.get(id); return m ? law.verbs.pointWithinMark(pt, m) : null; });
+  for (const markId of leaving) {
+    const stepped = await exitViaOffice(worldClone, { handle: who, mark: markId }, key, deps);
+    if (stepped?.error) {
+      const defect = `could not exit ${markId} before landing: ${stepped.error.defect ?? stepped.error}`;
+      throw Object.assign(new Error(defect), { code: stepped.error.code ?? 409, defect, hint: stepped.error.hint ?? "exit first" });
+    }
+  }
+  return leaving;
+}
+
+/**
+ * THE LAND PEN (WLD-63 row 68 B): sets a resident down at `at` and writes the
+ * landing, the one pen every placement shares (a passage, a whole-dungeon exit,
+ * the Post Office's deposit, a ground's landing point). It is the walk door's own
+ * write in the walk door's own way (one clock read, the witness stamp, the lane's
+ * pen, the position projection in the same step) and none of its gates: a
+ * placement is not a road, so the walk fence, the occupancy guard and the Mists'
+ * road check, which judge a road, never judge it. A ground keeps its own wall
+ * check (world-apex § landOnEnter). `exit: true` is DEC-5's flag, for a deposit
+ * whose rider is still within something: what the point leaves is exited first.
+ */
+export async function landAt(worldClone, { who, at, via = null, why, key = null, exit = false, household = null }) {
+  const point = { x: Number(at.x), y: Number(at.y) };
+  if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) throw new Error("a landing needs a point");
+  const exited = exit === true ? await exitWhatThisPointLeaves(worldClone, who, point, key) : [];
+  const { fractionalCrossing } = await import(pathToFileURL(join(worldClone, "tools", "walk.mjs")));
+  const crossing = fractionalCrossing();
+  const landedAt = new Date().toISOString();   // ONE clock read (POS-198), carried into the act and the projection
+  const { at: stampAt, witnesses } = await witnessStampAt(who, point);
+  const entry = landEntry({ crossing, who, at: point, via, why, household: household ?? (key ? resolvedWorldHousehold(key) : null), writtenAt: landedAt, declaredBy: who });
+  entry.at = stampAt; entry.witnesses = witnesses;
+  const row = laneFlipped("walk") ? await appendActFlipped(null, entry) : await appendJournal(null, entry);
+  // THE PROJECTION, IN THE SAME STEP (POS-264), in the shape storedDepartures hands it back,
+  // with the written act's id (POS-691): `land` is a departure action, and a departure
+  // recorded without its id is a writer the head read did not hear, so the next read
+  // would rebuild the projection after every landing (review-wld63, finding 4)
+  if (worldClone === WORLD_CLONE) recordMoved({ actor: who, from: point, toward: point, crossing, at: landedAt, within: null, toMark: null, declaredBy: who, pace: null, landed: { via, why: String(why) } }, row?.actId ?? null);
+  return { at: point, via, why, recorded: true, ...(exited.length ? { exited } : {}), ...(row?.seq != null ? { seq: row.seq } : {}) };
 }
 
 function voiceEntry(voice, spoken, { at, witnesses, crossing, nonce = null }) {
@@ -6165,6 +6261,18 @@ async function walkAct(worldClone, payload = {}, key = null) {
  * carry none. `walk` is the engine's walk.mjs (currentDeparture and the
  * constant), passed in so this stays pure.
  */
+/** WHO WAS JUST SET DOWN (WLD-63 row 68 (b)): a standing walker whose current
+ *  departure is a landing carries `landed: { via, why, iso }`, so the page can
+ *  draw the room and the token together the moment it sees a new one. */
+export function walkerLandings(rows, departures = [], walk = {}) {
+  if (!Array.isArray(rows) || typeof walk.currentDeparture !== "function") return rows;
+  return rows.map((r) => {
+    if (r?.moving || r?.aboard) return r;
+    const d = walk.currentDeparture(departures, r.handle);
+    return d?.landed ? { ...r, landed: { ...d.landed, iso: d.iso ?? null } } : r;
+  });
+}
+
 export function walkerPaces(rows, departures = [], walk = {}) {
   if (!Array.isArray(rows) || typeof walk.currentDeparture !== "function") return rows;
   return rows.map((r) => {
@@ -6360,7 +6468,7 @@ export async function worldWalkers(worldClone, key = null, { roll = null } = {})
       : "no town roll supplied to this door — the answer covers residents with a walk record or ground, and cannot include a resident who has neither";
     return {
       at,
-      walkers: walkerPaces(movementV2Enabled() ? await walkersInFrames(walkers, w) : walkers, departures, { currentDeparture, WALK_KM_PER_CROSSING }),
+      walkers: walkerLandings(walkerPaces(movementV2Enabled() ? await walkersInFrames(walkers, w) : walkers, departures, { currentDeparture, WALK_KM_PER_CROSSING }), departures, { currentDeparture }),
       // The disclosure the reader assembled, carried rather than dropped. A door
       // that reads half the record and says nothing is the failure this whole
       // change is about.
