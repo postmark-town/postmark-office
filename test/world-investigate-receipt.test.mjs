@@ -32,7 +32,10 @@ const SOURCE_WORLD = worldClone();
 const HAVE_SOURCE = !!SOURCE_WORLD && existsSync(join(SOURCE_WORLD, "WORLD", "world-state.json"));
 
 const repo = mkdtempSync(join(tmpdir(), "pm-receipt-fixture-"));
-const git = (...args) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" });
+// maxBuffer: the fixture commits the world's own world-state.json, and `git show` hands it back
+// whole; past 1 MiB (the world at the doors stack, 2026-10-19) the default buffer
+// threw ENOBUFS before the test could ask anything (review-wld63 re-pin).
+const git = (...args) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
 
 const HOUSEHOLD = "fixturehouse";
 const KEY = { household: HOUSEHOLD, handles: new Set(["fixture"]) };
