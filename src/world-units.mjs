@@ -903,13 +903,13 @@ export async function writeThingHolding(deps, key, actor, attachments, change, {
 }
 
 /** The holding act for a thing changing hands, composed and not written: `{ entry, at }` (LOGOS v2, O2: one transaction may carry several). */
-export async function thingHoldingEntry(deps, key, actor, attachments, { did, thing, holder, previous, madeBy }, stamp = null) {
+export async function thingHoldingEntry(deps, key, actor, attachments, { did, thing, holder, previous, madeBy, owns = false }, stamp = null) {
   const prior = rowsFor(attachments, thing);
   const newest = prior.length ? Date.parse(prior[prior.length - 1].born_at) : NaN;
   const now = Date.now();
   const at = new Date(Number.isFinite(newest) && newest >= now ? newest + 1 : now).toISOString();
   const { at: anchor, witnesses } = stamp ?? await deps.stamp(actor);
-  const entry = holdingEntry({ did, thing, holder, previous_holder: previous, made_by: madeBy, policy: "cascade", declared_by: actor, at },
+  const entry = holdingEntry({ did, thing, holder, previous_holder: previous, made_by: madeBy, policy: "cascade", declared_by: actor, at, owns },
     { crossing: deps.crossing(), at: anchor, witnesses, cls: "holding", household: deps.household(key) });
   return { entry, at };
 }

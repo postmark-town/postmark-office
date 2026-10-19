@@ -55,20 +55,23 @@
 -- he ruled yes (2026-10-19 09:21, POS-688), to ship with the hotfix that prints.
 --
 -- WHAT IT ADDS, all of it:
---   · claims_insert_carry_only(): a third arm, the hold printout (068's and
+--   · claims_insert_carry_only(): a third arm, the hold printout, which may
+--     change where it is, whose hands it is in and whose it is (owned_by) (068's and
 --     076's arms verbatim; the trigger keeps its name);
 --   · CHECK sited_marks_have_a_where on marks: one case wider (a sited row
 --     naming its holder may be placeless);
 --   · GRANT INSERT ON acts TO clearing_job;
 --   · FUNCTION acts_insert_return_only() and TRIGGER acts_insert_return_only
---     BEFORE INSERT ON acts: for clearing_job, the return of an opposed take
---     and nothing else (every other role passes untouched);
+--     BEFORE INSERT ON acts: for clearing_job, the return of a thing its owner
+--     asked back (an opposed take or set-down) and nothing else (every other
+--     role passes untouched);
 --   · two registry ruling lines, on claims and on acts.
 --
 -- Ship check:
---   SELECT prosrc LIKE '%_held_through%' FROM pg_proc WHERE proname = 'claims_insert_carry_only';  -- t
+--   SELECT prosrc LIKE '%_held_through%' AND prosrc LIKE '%owned_by%' FROM pg_proc WHERE proname = 'claims_insert_carry_only';  -- t
 --   SELECT pg_get_constraintdef(oid) LIKE '%held_by%' FROM pg_constraint WHERE conname = 'sited_marks_have_a_where';  -- t
 --   SELECT has_table_privilege('clearing_job', 'acts', 'INSERT') AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'acts_insert_return_only');  -- t
+--   SELECT prosrc LIKE '%set-down%' FROM pg_proc WHERE proname = 'acts_insert_return_only';  -- t
 --
 -- CONSUMERS: world2/tools/hold-through.mjs § writeHoldThrough (the writer);
 -- world2/tools/clearing-job.mjs step 6.2.
@@ -100,7 +103,7 @@ BEGIN
                                        AND c.data -> '_returned' ->> 'window' = m.retired_window::text)) THEN
     RETURN NEW;
   END IF;
-  -- 078: a hold printout, the same standing mark moved into or out of hands and nothing else (POS-688)
+  -- 078: a hold printout, the same standing mark moved into or out of hands, or to a new owner, and nothing else (POS-688)
   IF NEW.status = 'locked' AND NEW.supersedes IS NOT NULL
      AND NEW.data IS NOT NULL AND NEW.data ? '_held_through'
      AND EXISTS (SELECT 1 FROM marks m
@@ -108,11 +111,11 @@ BEGIN
                     AND m.slug = NEW.slug AND m.owner = NEW.claimant
                     AND m.kind = NEW.class
                     AND m.body IS NOT DISTINCT FROM NEW.body
-                    AND (COALESCE(m.data, '{}'::jsonb) - 'held_by' - '_placed' - '_held_through' - '_fileAt' - '_origin')
-                      = (NEW.data - 'held_by' - '_placed' - '_held_through' - '_fileAt' - '_origin')) THEN
+                    AND (COALESCE(m.data, '{}'::jsonb) - 'held_by' - 'owned_by' - '_placed' - '_held_through' - '_fileAt' - '_origin')
+                      = (NEW.data - 'held_by' - 'owned_by' - '_placed' - '_held_through' - '_fileAt' - '_origin')) THEN
     RETURN NEW;
   END IF;
-  RAISE EXCEPTION 'claims: clearing_job may insert only a carried mark''s claim (status locked, superseding a standing mark, data._carried_by naming the move: POS-441), a taken mark''s return to its author''s drafts, once, in its own house and window (status draft, stake 0, data._returned naming the mark the sweep retired: WLD-51), or a hold printout (status locked, superseding its own standing mark, by its owner, with its kind, body and data but for where it is or whose hands it is in, data._held_through naming the cutoff: POS-688)';
+  RAISE EXCEPTION 'claims: clearing_job may insert only a carried mark''s claim (status locked, superseding a standing mark, data._carried_by naming the move: POS-441), a taken mark''s return to its author''s drafts, once, in its own house and window (status draft, stake 0, data._returned naming the mark the sweep retired: WLD-51), or a hold printout (status locked, superseding its own standing mark, by its owner, with its kind, body and data but for where it is, whose hands it is in or whose it is, data._held_through naming the cutoff: POS-688)';
 END $$;
 
 -- ── A HELD THING IN THE OLD FORM HAS NO WHERE EITHER ───────────────────────────
@@ -128,19 +131,24 @@ ALTER TABLE marks ADD CONSTRAINT sited_marks_have_a_where
   CHECK (kind NOT IN ('sited','parcel') OR (geometry IS NOT NULL AND bbox IS NOT NULL)
          OR (kind = 'sited' AND data ? 'held_by'));
 
--- ── AN OPPOSED TAKE RETURNS AT THE SETTLEMENT (POS-688 D3, Darko 2026-10-19 09:21) ──
+-- ── OPPOSED BRINGS IT BACK AT THE SETTLEMENT (POS-688; Darko 2026-10-19 16:39–16:45) ──
 --
--- "The maker may oppose a take before the settlement, and the thing returns."
--- The opposition is a stance (the set-down arm's machinery, world-stance.mjs §
--- the take arm); the return is ONE act the clearing writes in its own
--- transaction, so the record and the printout agree the moment the window locks
--- (hold-through.mjs § an opposed take returns). `clearing_job` has never held
+-- "Opposed returns it at the next settlement: to the owner's hands if they have
+-- room, otherwise onto the owner's parcel." The owner's word is a stance on the
+-- take or set-down it answers (world-stance.mjs § the owner's word); the return
+-- is ONE act the clearing writes in its own transaction, before it prints, so
+-- the record and the printout agree the moment the window locks
+-- (hold-through.mjs § opposed brings it back). `clearing_job` has never held
 -- INSERT on `acts`: this grants it, narrowed by a trigger to exactly that act —
 --
 --   · the town's own (`actor = 'the-town'`), class holding, a drop or a give;
---   · `payload.returned` names a TAKE of this very thing and the maker's
---     OPPOSED stance on that take, both standing in `acts`;
---   · of a standing mark, once per take (no earlier return names it).
+--   · `payload.returned` names a TAKE OR SET-DOWN of this very thing (`act`)
+--     and an OPPOSED word answering that act (`stance_act`), both in `acts`;
+--   · of a standing mark, once per word (no earlier return names it).
+--
+-- WHO SPOKE is not asked here: the stance door lets only the owner's house speak
+-- on a thing out of its house, and the clearing's fold reads only the owner's
+-- house. Folding ownership in SQL would be a second copy of that one rule.
 --
 -- Every other pen's INSERT on acts is untouched (the function returns at once
 -- for any other role). 003_falsifier_roles.sql lists the grant.
@@ -154,28 +162,28 @@ BEGIN
      AND NEW.payload ->> 'thing' = NEW.object
      AND EXISTS (SELECT 1 FROM marks m WHERE m.slug = NEW.object AND m.status = 'standing')
      AND EXISTS (SELECT 1 FROM acts k
-                  WHERE k.id::text = NEW.payload -> 'returned' ->> 'take_act'
-                    AND k.class = 'holding' AND k.action = 'take' AND k.object = NEW.object)
+                  WHERE k.id::text = NEW.payload -> 'returned' ->> 'act'
+                    AND k.class = 'holding' AND k.action IN ('take', 'drop') AND k.object = NEW.object)
      AND EXISTS (SELECT 1 FROM acts s
                   WHERE s.id::text = NEW.payload -> 'returned' ->> 'stance_act'
                     AND s.class = 'stance' AND s.object = NEW.object
-                    AND s.payload ->> 'answers' = 'take' AND s.payload ->> 'stance' = 'opposed'
-                    AND s.payload -> 'take' ->> 'act_id' = NEW.payload -> 'returned' ->> 'take_act')
+                    AND s.payload ->> 'answers' IN ('take', 'set-down') AND s.payload ->> 'stance' = 'opposed'
+                    AND s.payload -> 'act' ->> 'act_id' = NEW.payload -> 'returned' ->> 'act')
      AND NOT EXISTS (SELECT 1 FROM acts r
                       WHERE r.object = NEW.object AND r.class = 'holding'
-                        AND r.payload -> 'returned' ->> 'take_act' = NEW.payload -> 'returned' ->> 'take_act') THEN
+                        AND r.payload -> 'returned' ->> 'stance_act' = NEW.payload -> 'returned' ->> 'stance_act') THEN
     RETURN NEW;
   END IF;
-  RAISE EXCEPTION 'acts: clearing_job may insert only the return of an opposed take (the town''s drop or give of a standing thing, payload.returned naming the take and the maker''s opposed stance on it, once per take: POS-688)';
+  RAISE EXCEPTION 'acts: clearing_job may insert only the return of an opposed take (the town''s drop or give of a standing thing, payload.returned naming the take or set-down and the owner''s opposed word on it, once per word: POS-688)';
 END $$;
 
 DROP TRIGGER IF EXISTS acts_insert_return_only ON acts;
 CREATE TRIGGER acts_insert_return_only BEFORE INSERT ON acts
   FOR EACH ROW EXECUTE FUNCTION acts_insert_return_only();
 
-UPDATE registry SET ruling = ruling || ' + 078: clearing_job prints a hold record through (POS-688, data._held_through): a locked claim superseding its own standing mark, by its owner, changing only where it is or whose hands it is in; a sited row may be placeless when it names its holder'
+UPDATE registry SET ruling = ruling || ' + 078: clearing_job prints a hold record through (POS-688, data._held_through): a locked claim superseding its own standing mark, by its owner, changing only where it is, whose hands it is in or whose it is (owned_by); a sited row may be placeless when it names its holder'
   WHERE object = 'claims' AND ruling NOT LIKE '%078:%';
-UPDATE registry SET ruling = ruling || ' + 078: clearing_job inserts the return of an opposed take and nothing else (POS-688 D3, trigger acts_insert_return_only): the town''s drop or give of a standing thing, payload.returned naming the take and the maker''s opposed stance on it, once per take'
+UPDATE registry SET ruling = ruling || ' + 078: clearing_job inserts the return of a thing its owner asked back and nothing else (POS-688, trigger acts_insert_return_only): the town''s drop or give of a standing thing, payload.returned naming the take or set-down and the owner''s opposed word on it, once per word'
   WHERE object = 'acts' AND ruling NOT LIKE '%078:%';
 
 COMMIT;

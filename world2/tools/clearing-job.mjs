@@ -731,11 +731,11 @@ try {
   //     under its own savepoint: one the store refuses is a note, never the window.
   //     hold-through.mjs carries the law and the cases it never prints.
   const held = await writeHoldThrough(q, {
-    windowId, houseOrRefusal, boxOf: (g) => boxOf(g.at, g.extent),
+    windowId, houseOrRefusal, boxOf: (g) => boxOf(g.at, g.extent), liveHouseOf: () => liveHouseOfVia(q),
     materialize: ({ claims, amends, refuseEach }) => materializeClaims(q, { claims, amends, windowId, label: `window ${windowId} hold write-through`, refuseEach }),
   });
   for (const h of held.printed) console.log(`  ⚑ hold: ${h.slug} — ${h.why}`);
-  for (const h of held.returned ?? []) console.log(`  ⚑ hold: ${h.slug} — returned: its maker's house opposed ${h.taker}'s take (act ${h.take_act})`);
+  for (const h of held.returned ?? []) console.log(`  ⚑ hold: ${h.slug} — returned to its owner ${h.owner} (${h.to.parcel ? `onto ${h.to.parcel}` : "into their hands"}): they asked for it back (act ${h.act})`);
   for (const n of held.notes) console.log(`  ⚑ hold, not printed: ${n}`);
 
   // The docket's statuses, written once every claim and every move has settled.

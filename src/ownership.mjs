@@ -148,6 +148,20 @@ export function foldOwners(events = [], { houseOf = (h) => h, state = null } = {
   return out;
 }
 
+/**
+ * OUT OF AN OPEN HOLDER THE OWNER PUT IT IN, the taker owns it ("the candy bowl:
+ * whoever takes from it owns it"). True only when the holder is open, the thing
+ * went into THIS holder by the owner's house's own act, and the taker is outside
+ * that house. A thing a borrower put in a bowl is still lent. PURE: the take door
+ * asks it and writes the answer on the act (`payload.owns`), so every fold reads
+ * the door's decision and never needs the holder's law.
+ */
+export function takeOwns(st, { from, actor, open = true, houseOf = (h) => h } = {}) {
+  if (open === false || !st?.putIn || st.putIn.holder !== String(from)) return false;
+  const same = (a, b) => a != null && b != null && houseOf(String(a)) === houseOf(String(b));
+  return same(st.putIn.by, st.owner) && !same(actor, st.owner);
+}
+
 /** One thing's answer from a fold: `{ owner, outing }`, the maker and no outing when the record says nothing. */
 export const ownershipOf = (owners, thing) => {
   const st = owners?.get?.(String(thing));
