@@ -2479,14 +2479,14 @@ async function closeLooks(args, key, oriented, usable) {
 }
 
 /**
- * Which v2 calls are answered by their focus alone (POS-697): a find: with
- * no other focus beside it, and never a read: "<block>". Exported to be
- * falsified bare.
+ * Which v2 calls are answered by their focus alone (POS-697): any call that
+ * asks a focus (find:, and since G2b mark: and investigate:), and never a
+ * read: "<block>". Exported to be falsified bare.
  */
 export function v2FocusAlone(args = {}, { v2 = false, deep = null } = {}) {
   if (!v2 || deep) return false;
   const has = (v) => v != null && String(v).trim() !== "";
-  return has(args.find) && !has(args.mark) && !has(args.investigate);
+  return has(args.find) || has(args.mark) || has(args.investigate);
 }
 
 async function apexRead(args, key, ctx = {}) {
@@ -2506,7 +2506,12 @@ async function apexRead(args, key, ctx = {}) {
   // POS-697 G2a: under v2 a focus asked alone is answered alone: where you
   // stand and the focus, never the glance again (world-read-v2.mjs § shapeV2Focus).
   if (v2FocusAlone(args, { v2, deep })) {
-    const looks = await closeLooks(args, key, oriented, null);
+    // G2b: mark: and investigate: carry the verbs you can do to their thing now,
+    // which the eyes decide (usable-verbs.mjs), so they read the eyes; find: does not
+    const seesThings = [args.mark, args.investigate].some((v) => v != null && String(v).trim() !== "");
+    const eyes = seesThings ? await worldEyes(args, key, { v2, entered: oriented?._entered, lights: false }) : null;
+    const usable = eyes && !eyes.error ? await usableHere(args, key, oriented, eyes.objects ?? []) : null;
+    const looks = await closeLooks(args, key, oriented, usable);
     const sp = oriented.standpoint ?? {};
     return shapeV2Focus({ ...looks, standpoint: sp, here: await placeWords({ x: sp.x, y: sp.y }),
       handle: sp.stance === "embodied" ? standingHandle(args, key) : null });
@@ -2677,7 +2682,7 @@ async function apexRead(args, key, ctx = {}) {
   // it is the first reverse that law forbids. A focus on the bare read is
   // neither: you are still standing where you stand, still being told what you
   // may do; you have simply looked closer at one thing while you were there.
-  // (closeLooks reads all three; under v2 a find: alone never reaches here.)
+  // (closeLooks reads all three; under v2 a focus is answered alone, above.)
   const { focus, found, investigated } = await closeLooks(args, key, oriented, usable);
 
   // ── THE RECORDS THIS READ NAMES (2026-09-10) ──────────────────────────────
@@ -3949,9 +3954,9 @@ const APEX_INPUT_SCHEMA = { type: "object", properties: {
     do: { type: "string", examples: DISPATCHABLE, description: "the action to perform — omit to read. It must be one your standpoint offers; the bare read lists them. Never rides with read:" },
     read: { type: "string", examples: DISPATCHABLE, description: "an action's SHADOW — read its domain instead of performing it: read: \"say\" hears what stands in earshot, \"walk\" shows your position and who stands near you (args: {who} finds one resident anywhere on the roll), \"leave-mark\" your marks (args: {mark} to investigate one), \"stake\" the escrow behind a mark (args: {mark}), \"give\"/\"drop\"/\"take\" your holdings, \"note-to-self\" your private note. (Finding a mark by name is not a read: it is the find: focus.) Anything you can do, you can read — and every answer carries the action's full card (blurb, fields, dials, the terms that would bind it), so the law is readable before you act. A read never performs, and it is not a dry run: to try an act without performing it, pass preview: true in that act's args (leave-mark, stake, unstake). Never rides with do:" },
     args: { type: "object", description: "the action's own fields (with do:) or narrowing fields (with read:), exactly as the entry's `fields` block names them — world { do: \"say\", args: { text: \"hello\" } }. Unknown fields bounce by name. Your standpoint (handle) stays top-level.", additionalProperties: true },
-    mark: { type: "string", description: "FOCUS the bare read on one mark — <by>/<slug>, as ids appear in the telling. The answer is the read you would have got anyway, plus `focus`: the close look at that mark (its body, the properties predicated on it, what stands inside it). It is a focus rather than an action because investigating performs nothing — do: would be a lie, and read: is an action's shadow, so a shadow with no action is the reverse the apex's law forbids. Never rides with do: or read:." },
+    mark: { type: "string", description: "FOCUS the bare read on one mark — <by>/<slug>, as ids appear in the telling. The answer is the read you would have got anyway, plus `focus`: the close look at that mark (its body, the properties predicated on it, what stands inside it); under read_shape: \"v2\", where you are and `focus` alone. It is a focus rather than an action because investigating performs nothing — do: would be a lie, and read: is an action's shadow, so a shadow with no action is the reverse the apex's law forbids. Never rides with do: or read:." },
     find: { type: "string", description: "FIND a mark by name from anywhere — its name, slug or id. The answer is the bare read you would have got anyway, plus `found`: the hits, best match first (an exact id, then names and slugs starting with it, then containing it), each with its place, its distance from you and the stops to ride between. A focus, like mark:, because finding performs nothing and no ground grants it. Under read_shape: \"v2\" a find: alone answers where you are and `found`, never the glance again (the glance is world { read_shape: \"v2\" }). Never rides with do: or read:. (It was read: \"find\" until train/2026-w41; that spelling answers with a `renamed` row until " + FIND_READ_ANSWERS_UNTIL + ".)" },
-    investigate: { type: "string", description: "LOOK CLOSER at a living thing — a resident's handle. The answer is the bare read you would have got anyway, plus `investigated`: where they are now and where the last crossing's save put them, their newest public acts in the last 12 hours (a say is named, never its words), and what they carry. Their household and letters are at household and town. A focus, like mark: (marks) and find:. Creatures join with their class." },
+    investigate: { type: "string", description: "LOOK CLOSER at a living thing — a resident's handle. The answer is the bare read you would have got anyway (under read_shape: \"v2\", where you are alone), plus `investigated`: where they are now and where the last crossing's save put them, their newest public acts in the last 12 hours (a say is named, never its words), and what they carry. Their household and letters are at household and town. A focus, like mark: (marks) and find:. Creatures join with their class." },
     find_offset: { type: "number", description: "with find:, walk past the first hits — the previous answer's found.next_offset" },
     find_limit: { type: "number", description: "with find:, how many hits (default 10, at most 50)" },
     with_image: { type: "boolean", description: "with mark:, also bring that mark's picture back as image bytes if it has one and it fits under the inline cap. The url rides in the answer either way; this only decides whether the office spends the bytes." },

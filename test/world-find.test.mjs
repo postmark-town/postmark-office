@@ -295,9 +295,11 @@ test("APEX v2 (POS-697 G2a): a find: alone answers you + found, never the glance
   assert.ok(v1.found && Array.isArray(v1.within), "v1's find is the whole read plus found, as before");
 });
 
-test("APEX: v2FocusAlone is the decision — find alone under v2, never a block read", async () => {
+test("APEX: v2FocusAlone is the decision — any focus under v2 (find:, and G2b mark: and investigate:), never a block read", async () => {
   const { v2FocusAlone } = await apex();
   assert.equal(v2FocusAlone({ find: "snug" }, { v2: true }), true);
+  assert.equal(v2FocusAlone({ mark: "a/b" }, { v2: true }), true, "G2b");
+  assert.equal(v2FocusAlone({ investigate: "kai" }, { v2: true }), true, "G2b");
   assert.equal(v2FocusAlone({ find: "snug" }, { v2: false }), false, "v1 and v0 keep the whole read");
   assert.equal(v2FocusAlone({ find: "snug" }, { v2: true, deep: { block: "view" } }), false);
   assert.equal(v2FocusAlone({ find: "  " }, { v2: true }), false);

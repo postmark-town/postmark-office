@@ -332,6 +332,9 @@ test("PR-4: investigate: on a resident rides the bare read, v1 and v2, with publ
     assert.ok(!JSON.stringify(r.investigated).includes("note-to-self"));
     const { unbodied } = await import("./helpers/mark-bodies.mjs");
     assert.deepEqual(unbodied(r.investigated), [], "every mark under investigated carries its body");
+    // POS-697 G2b: v2 answers the focus alone; v0 is the whole read plus investigated, as before
+    if (shape === "v2") assert.deepEqual(Object.keys(r), ["you", "investigated", "more", "reading_law", "read_shape"]);
+    else assert.ok(Array.isArray(r.within), "v0 keeps the whole read");
   }
   assert.ok(!("investigated" in await v2At()), "absent when not asked");
   assert.equal((await worldApex({ handle: WHO, investigate: KOGANE_PARCEL }, KEY, {})).code, 422, "a mark is mark:'s");

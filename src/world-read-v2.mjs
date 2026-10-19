@@ -455,7 +455,8 @@ export function shapeV2(p) {
 // characters on prod to learn one mark's place, 695 of them the find. A focus
 // is one question, so v2 answers it with where you are and the answer. The
 // glance is one call away (world { read_shape: "v2" }), which the more line
-// says. No cursor rides here: this answer reads nothing of what happened, so a
+// says. G2b (same ruling): mark: and investigate: are answered the same way.
+// No cursor rides here: this answer reads nothing of what happened, so a
 // cursor from it would skip what the caller has not yet been shown; the
 // caller keeps the cursor from their last glance. v1 and v0 are untouched.
 
