@@ -42,7 +42,7 @@ import { isDeepStrictEqual } from "node:util";
 
 import {
   ingest, planIngest, applyIngest, recordDiff, isRecordField, pathsAt, HEAD_KEY, amendClaimId,
-  commitReader, isPrintoutCommit, PRINTOUT_PENS,
+  commitReader, isPrintoutCommit, PRINTOUT_PENS, carriedRow,
 } from "../world2/tools/marks-ingest.mjs";
 import { REFUSED_BY_NAME } from "../world2/tools/backfill-register.mjs";
 import { marksFromRows, inPublishedOrder } from "../src/world2-fold.mjs";
@@ -684,6 +684,14 @@ test("THE TOWN'S MARK comes in: a town add plans AND applies through the stub as
   await assert.rejects(() => applyIngest(store2.client.query, plan2, { windowId: 7, target: { ref: "B", sha: "b".repeat(40) } }),
     (e) => e.code === 404 && /vireo/.test(e.detail ?? e.message));
   assert.equal(store2.bySlug(stranger), undefined, "the stranger's mark was written");
+});
+
+test("POS-704 · a carried tier brings the property's authored tier with it, and the store's other data stands", () => {
+  const row = (data) => ({ body: "the die", kind: "property", owner: "the-town", household: null, geometry: null, data });
+  const was = row({ tier: "constitution", name: "damage_die", note: "the store's" });
+  const ref = row({ tier: "constitution", _authoredTier: "sovereign", name: "damage_die", note: "the file's" });
+  assert.deepEqual(carriedRow(was, ref, new Set(["tier"])).data, { tier: "constitution", _authoredTier: "sovereign", name: "damage_die", note: "the store's" });
+  assert.deepEqual(carriedRow(was, ref, new Set(["note"])).data, { tier: "constitution", name: "damage_die", note: "the file's" }, "a carry without the tier leaves it");
 });
 
 test("recordDiff compares the record, not the store's stamps", () => {

@@ -244,6 +244,9 @@ export function carriedRow(was, ref, carry) {
     take(k);
   }
   if (carry.has("_parentMarkId")) for (const k of FRAME_BOOKKEEPING) take(k);
+  // a property's record `tier` is its authored line, kept as `_authoredTier`
+  // beside the derived `data.tier` (POS-704), so carrying the tier carries both
+  if (carry.has("tier")) take("_authoredTier");
   row.data = data;
   return row;
 }
